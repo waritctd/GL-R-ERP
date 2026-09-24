@@ -78,14 +78,38 @@ final class ImportRequestFormAssembler {
      *
      * <p>"Request date" is the row's {@code issueDate}, which is null on a DRAFT — a draft preview
      * correctly prints no date, because it has not been raised.
+     *
+     * <p><b>REVIEW ROUND 2, S-B:</b> the printed "Brand" header names the FACTORY, not the brand
+     * snapshot alone — V184 moved the grouping key (and so the whole point of one form per header)
+     * from brand to {@code factoryId}, so a per-factory form that named only a brand would no longer
+     * say which factory it is FOR when a factory carries lines spanning more than one brand (the
+     * exact case {@code sales.import_request.brand}'s own comment describes). See {@link
+     * #factoryHeader}.
+     *
+     * <p>Defaults to the INTERNAL copy — see {@link #fromStored(ImportRequestDtos.ImportRequestDto,
+     * boolean)} for the FACTORY copy (owner decision 09-19 #2).
      */
     static ImportRequestFormData fromStored(ImportRequestDtos.ImportRequestDto row) {
+        return fromStored(row, false);
+    }
+
+    /**
+     * @param factoryCopy OWNER DECISION 09-19 #2, extended by REVIEW ROUND 3 item 5: {@code true}
+     *                    blanks {@code customerName} ("สั่งมาให้"), {@code depositReceivedDate}
+     *                    ("วันที่ได้รับมัดจำ"), AND {@code projectName} — a project name often
+     *                    identifies the customer just as surely as their name would (the same
+     *                    reasoning the order-email subject already applies, owner decision 09-19
+     *                    #2), so the factory copy must not carry it either. Every OTHER field —
+     *                    factory/brand header, requested-by, lines, required-by, vessel ETA, footer
+     *                    — is identical between the two copies; only these three are ever withheld.
+     */
+    static ImportRequestFormData fromStored(ImportRequestDtos.ImportRequestDto row, boolean factoryCopy) {
         return new ImportRequestFormData(
             row.docNumber(),
-            row.brand(),
+            factoryHeader(row.factoryName(), row.brand()),
             row.issueDate(),
-            row.projectName(),
-            row.customerName(),
+            factoryCopy ? null : row.projectName(),
+            factoryCopy ? null : row.customerName(),
             row.requestedByName(),
             row.requiredByNote(),
             row.vesselEtaNote(),
@@ -94,7 +118,7 @@ final class ImportRequestFormAssembler {
             row.approvedByName(),
             row.approvedDate(),
             row.issuedByName(),
-            row.depositReceivedDate(),
+            factoryCopy ? null : row.depositReceivedDate(),
             row.items().stream()
                 .map(it -> new ImportRequestFormData.Line(it.seq(), it.code(), it.size(), it.qty(),
                                                           it.unit(), it.note()))
@@ -103,5 +127,21 @@ final class ImportRequestFormAssembler {
 
     private static String blankToNull(String s) {
         return s == null || s.isBlank() ? null : s.strip();
+    }
+
+    /**
+     * "<Factory>" alone, or "<Factory> (<Brand>)" when the row also carries a brand snapshot worth
+     * showing — REVIEW ROUND 2, S-B. {@code factoryName} is expected non-blank on every STORED row
+     * (the service never inserts one without a resolved factory — see {@code
+     * sales.import_request.factory_id}'s own comment), but falls back to the brand alone rather than
+     * printing nothing if it somehow is blank, so a header field is never simply empty.
+     */
+    private static String factoryHeader(String factoryName, String brand) {
+        String name = blankToNull(factoryName);
+        String brandLabel = blankToNull(brand);
+        if (name == null) {
+            return brandLabel;
+        }
+        return brandLabel == null ? name : name + " (" + brandLabel + ")";
     }
 }

@@ -102,6 +102,11 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
     private long ownerRepId;
     private UserPrincipal ownerRep;
     private UserPrincipal accountActor;
+    /** V184: {@code canWriteDelivery} transferred stages 13-14 to {ceo, owning-rep} only, so every
+     * {@code completeDelivery}/{@code recordPartialDelivery} call below uses {@link #ownerRep}
+     * (every deal here is created with {@code ownerRepId}) rather than this actor — see
+     * DeliveryAuthzIntegrationTest for the dedicated authz pin. Still used for the import-axis
+     * calls ({@code issueImportRequest}, {@code markIrSent}, ...) this file also walks. */
     private UserPrincipal importActor;
 
     @BeforeEach
@@ -161,7 +166,7 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
         walkImportJourneyToDeliveryScheduling(ticketId); // PROCUREMENT -> ... -> DELIVERY_SCHEDULING
 
         ticketService.completeDelivery(ticketId,
-            new CompleteDeliveryRequest("ส่งครบตามสัญญา", "คุณเจ้าของโครงการ"), importActor);
+            new CompleteDeliveryRequest("ส่งครบตามสัญญา", "คุณเจ้าของโครงการ"), ownerRep);
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.DELIVERED);
         assertThat(fulfilmentOf(ticketId)).isEqualTo(FulfilmentStatus.FULLY_DELIVERED);
 
@@ -201,7 +206,7 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
         walkImportJourneyToDeliveryScheduling(ticketId);
 
         ticketService.completeDelivery(ticketId,
-            new CompleteDeliveryRequest("ส่งครบ", "เจ้าของโครงการ"), importActor);
+            new CompleteDeliveryRequest("ส่งครบ", "เจ้าของโครงการ"), ownerRep);
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.DELIVERED);
 
         ticketService.confirmFinalPayment(ticketId, accountActor);
@@ -251,7 +256,7 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
         walkImportJourneyToDeliveryScheduling(ticketId);
 
         ticketService.completeDelivery(ticketId,
-            new CompleteDeliveryRequest("ส่งครบ", "ผู้รับเหมา"), importActor);
+            new CompleteDeliveryRequest("ส่งครบ", "ผู้รับเหมา"), ownerRep);
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.DELIVERED);
 
         ticketService.confirmFinalPayment(ticketId, accountActor);
@@ -300,7 +305,7 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.DELIVERY_SCHEDULING);
 
         ticketService.completeDelivery(ticketId,
-            new CompleteDeliveryRequest("ส่งจากสต็อก", "ลูกค้า"), importActor);
+            new CompleteDeliveryRequest("ส่งจากสต็อก", "ลูกค้า"), ownerRep);
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.DELIVERED);
         assertThat(fulfilmentOf(ticketId)).isEqualTo(FulfilmentStatus.FULLY_DELIVERED);
 
@@ -364,7 +369,7 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
         ticketService.recordPartialDelivery(ticketId,
             new RecordDeliveryRequest("STOCK", "ส่งจากสต็อกก่อน",
                 List.of(new RecordDeliveryRequest.Line(item1, new BigDecimal("40.00"))), "ลูกค้า"),
-            importActor);
+            ownerRep);
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.DELIVERY_SCHEDULING);
         assertThat(fulfilmentOf(ticketId)).isEqualTo(FulfilmentStatus.PARTIALLY_DELIVERED);
 
@@ -373,7 +378,7 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
         // though fulfillment_status just moved off the import axis to PARTIALLY_DELIVERED — that
         // fallback is exactly what lets this second, warehouse-sourced call succeed.
         ticketService.completeDelivery(ticketId,
-            new CompleteDeliveryRequest("ส่งส่วนนำเข้าที่เหลือ", "ลูกค้า"), importActor);
+            new CompleteDeliveryRequest("ส่งส่วนนำเข้าที่เหลือ", "ลูกค้า"), ownerRep);
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.DELIVERED);
         assertThat(fulfilmentOf(ticketId)).isEqualTo(FulfilmentStatus.FULLY_DELIVERED);
 
@@ -408,8 +413,10 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
 
         // Credit terms, decided before the order is confirmed: payment_status is still null here,
         // so waiveDeposit's own "no deposit invoice issued yet" guard holds.
+        // GLA-118: deposit policy is set by the OWNING sales rep (or a sales_manager) now, not account -- driven
+        // as ownerRep (createTicketWithItems's ownerRepId owns this deal).
         ticketService.waiveDeposit(ticketId, DepositPolicy.CREDIT_CUSTOMER,
-            "ลูกค้าเครดิต 30 วัน ตามสัญญาก่อสร้าง", accountActor);
+            "ลูกค้าเครดิต 30 วัน ตามสัญญาก่อสร้าง", ownerRep);
         assertThat(depositPolicyOf(ticketId)).isEqualTo(DepositPolicy.CREDIT_CUSTOMER);
 
         ticketService.confirmCustomer(ticketId, ownerRep);
@@ -422,7 +429,7 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
         walkImportJourneyToDeliveryScheduling(ticketId);
 
         ticketService.completeDelivery(ticketId,
-            new CompleteDeliveryRequest("ส่งของก่อนตามเครดิต", "ลูกค้า"), importActor);
+            new CompleteDeliveryRequest("ส่งของก่อนตามเครดิต", "ลูกค้า"), ownerRep);
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.DELIVERED);
         assertThat(fulfilmentOf(ticketId)).isEqualTo(FulfilmentStatus.FULLY_DELIVERED);
         // DELIVERED precedes CLOSED_PAID: the deal is not fully paid yet at this point.

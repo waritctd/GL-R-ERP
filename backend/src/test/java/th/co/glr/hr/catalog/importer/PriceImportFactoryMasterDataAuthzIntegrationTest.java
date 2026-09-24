@@ -53,6 +53,15 @@ class PriceImportFactoryMasterDataAuthzIntegrationTest extends AbstractPostgresI
     private static final List<String> DENIED_ROLES =
         List.of("employee", "warehouse", "qc", "hr", "sales", "sales_manager", "account");
 
+    /**
+     * PR-B REVIEW ROUND 1, B2: everyone outside {@code requireCountriesReader}'s widened
+     * ceo/import/sales/sales_manager gate for the countries picker specifically. Deliberately a
+     * SEPARATE list from {@link #DENIED_ROLES} above — sales/sales_manager moved from denied to
+     * permitted for THIS ONE endpoint only; every write endpoint above must keep refusing them.
+     */
+    private static final List<String> DENIED_COUNTRIES_READ_ROLES =
+        List.of("employee", "warehouse", "qc", "hr", "account");
+
     private MockMvc mvc;
 
     @BeforeEach
@@ -149,15 +158,64 @@ class PriceImportFactoryMasterDataAuthzIntegrationTest extends AbstractPostgresI
         assertThat(countFactoriesNamed("No Country Factory")).isZero();
     }
 
+    /**
+     * {@code 'XX'} — not {@code 'ZZ'}, since V184 seeded {@code 'ZZ'} (อื่นๆ) as a real, always-
+     * valid catch-all country (owner decision 09-18). This test previously used {@code 'ZZ'} back
+     * when it really was unseeded/unknown; it is now genuinely unknown to price_catalog.country
+     * (there is no more 'XX' sentinel either — see V184's own comment), so it still exercises the
+     * "unknown code" branch of {@code requireValidCountry} rather than accidentally drifting onto
+     * the ZZ-pairing rule ({@link #createFactoryRejectsZzWithNoCountryOtherWith400NotA500} below).
+     */
     @Test
     void createFactoryRejectsAnUnknownCountryCodeWith400NotA500() throws Exception {
         mvc.perform(post("/api/price-import/factories").session(session("import"))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
-                    {"name": "Bad Country Factory", "country": "ZZ", "defaultCurrency": "THB"}
+                    {"name": "Bad Country Factory", "country": "XX", "defaultCurrency": "THB"}
                     """))
             .andExpect(status().isBadRequest());
         assertThat(countFactoriesNamed("Bad Country Factory")).isZero();
+    }
+
+    // ── create: 'ZZ' (อื่นๆ) / countryOther pairing (V184, owner decision 09-18) ───────────────
+
+    @Test
+    void createFactoryRejectsZzWithNoCountryOtherWith400NotA500() throws Exception {
+        mvc.perform(post("/api/price-import/factories").session(session("import"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"name": "ZZ No Text Factory", "country": "ZZ", "defaultCurrency": "THB"}
+                    """))
+            .andExpect(status().isBadRequest());
+        assertThat(countFactoriesNamed("ZZ No Text Factory")).isZero();
+    }
+
+    @Test
+    void createFactoryAcceptsZzWithACountryOther() throws Exception {
+        mvc.perform(post("/api/price-import/factories").session(session("import"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"name": "ZZ With Text Factory", "country": "ZZ", "countryOther": "Farawaystan",
+                     "defaultCurrency": "THB"}
+                    """))
+            .andExpect(status().is2xxSuccessful())
+            .andExpect(jsonPath("$.country").value("ZZ"))
+            .andExpect(jsonPath("$.countryOther").value("Farawaystan"));
+        assertThat(jdbc.queryForObject(
+            "SELECT country_other FROM price_catalog.factories WHERE name = :name",
+            Map.of("name", "ZZ With Text Factory"), String.class)).isEqualTo("Farawaystan");
+    }
+
+    @Test
+    void createFactoryRejectsACountryOtherOnANonZzCountryWith400NotA500() throws Exception {
+        mvc.perform(post("/api/price-import/factories").session(session("import"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"name": "Stray CountryOther Factory", "country": "TH", "countryOther": "should not be here",
+                     "defaultCurrency": "THB"}
+                    """))
+            .andExpect(status().isBadRequest());
+        assertThat(countFactoriesNamed("Stray CountryOther Factory")).isZero();
     }
 
     @Test
@@ -280,18 +338,80 @@ class PriceImportFactoryMasterDataAuthzIntegrationTest extends AbstractPostgresI
             .andExpect(status().isNotFound());
     }
 
+    /** {@code 'XX'}, not {@code 'ZZ'} — see {@link #createFactoryRejectsAnUnknownCountryCodeWith400NotA500}. */
     @Test
     void updateFactoryReturns400ForAnInvalidCountryNotA500() throws Exception {
         long factoryId = seedFactory("Country Validation Factory", "IT", "EUR");
         mvc.perform(put("/api/price-import/factories/" + factoryId).session(session("import"))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
-                    {"name": "Country Validation Factory", "country": "ZZ", "defaultCurrency": "EUR"}
+                    {"name": "Country Validation Factory", "country": "XX", "defaultCurrency": "EUR"}
                     """))
             .andExpect(status().isBadRequest());
         assertThat(jdbc.queryForObject(
             "SELECT country FROM price_catalog.factories WHERE factory_id = :id",
             Map.of("id", factoryId), String.class)).isEqualTo("IT");
+    }
+
+    @Test
+    void updateFactoryReturns400ForZzWithNoCountryOtherNotA500() throws Exception {
+        long factoryId = seedFactory("ZZ Update Validation Factory", "IT", "EUR");
+        mvc.perform(put("/api/price-import/factories/" + factoryId).session(session("import"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"name": "ZZ Update Validation Factory", "country": "ZZ", "defaultCurrency": "EUR"}
+                    """))
+            .andExpect(status().isBadRequest());
+        assertThat(jdbc.queryForObject(
+            "SELECT country FROM price_catalog.factories WHERE factory_id = :id",
+            Map.of("id", factoryId), String.class)).isEqualTo("IT");
+    }
+
+    @Test
+    void updateFactoryAcceptsZzWithACountryOther() throws Exception {
+        long factoryId = seedFactory("ZZ Update Accept Factory", "IT", "EUR");
+        mvc.perform(put("/api/price-import/factories/" + factoryId).session(session("import"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"name": "ZZ Update Accept Factory", "country": "ZZ", "countryOther": "Neverland",
+                     "defaultCurrency": "EUR"}
+                    """))
+            .andExpect(status().is2xxSuccessful())
+            .andExpect(jsonPath("$.country").value("ZZ"))
+            .andExpect(jsonPath("$.countryOther").value("Neverland"));
+        assertThat(jdbc.queryForObject(
+            "SELECT country_other FROM price_catalog.factories WHERE factory_id = :id",
+            Map.of("id", factoryId), String.class)).isEqualTo("Neverland");
+    }
+
+    /**
+     * REVIEW ROUND 1, S6: a ZZ factory that already has a stored {@code countryOther} must stay
+     * EDITABLE from a request that omits the field entirely — today's UI has no text input for it
+     * yet (PR-B adds one; {@code PriceImportPage}'s picker hides 'ZZ' from NEW selections for
+     * exactly this reason). Country UNCHANGED (still 'ZZ') is the case that matters; {@link
+     * #updateFactoryReturns400ForZzWithNoCountryOtherNotA500} above already pins the "country
+     * CHANGED to ZZ" case, which must still demand one.
+     */
+    @Test
+    void updateFactoryKeepsTheStoredCountryOther_whenTheRequestOmitsItAndCountryIsUnchanged() throws Exception {
+        long factoryId = jdbc.queryForObject("""
+            INSERT INTO price_catalog.factories (name, country, country_other, default_currency)
+            VALUES ('ZZ Keep Factory', 'ZZ', 'Farawaystan', 'EUR')
+            RETURNING factory_id
+            """, Map.of(), Long.class);
+
+        mvc.perform(put("/api/price-import/factories/" + factoryId).session(session("import"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"name": "ZZ Keep Factory", "country": "ZZ", "defaultCurrency": "EUR",
+                     "email": "kept@example.com"}
+                    """))
+            .andExpect(status().is2xxSuccessful())
+            .andExpect(jsonPath("$.country").value("ZZ"))
+            .andExpect(jsonPath("$.countryOther").value("Farawaystan"));
+        assertThat(jdbc.queryForObject(
+            "SELECT country_other FROM price_catalog.factories WHERE factory_id = :id",
+            Map.of("id", factoryId), String.class)).isEqualTo("Farawaystan");
     }
 
     @Test
@@ -358,17 +478,29 @@ class PriceImportFactoryMasterDataAuthzIntegrationTest extends AbstractPostgresI
 
     // ── countries picker: authz ───────────────────────────────────────────────────────────────
 
+    /**
+     * PR-B REVIEW ROUND 1, B2: wrong-way-round — roles with no business reason to see the country
+     * picker (employee/warehouse/qc/hr/account) must still 403. sales/sales_manager are
+     * DELIBERATELY EXCLUDED from this list now — see {@link #importCeoSalesSalesManagerCanListCountries}.
+     */
     @Test
-    void nonImportCeoRolesCannotListCountries() throws Exception {
-        for (String role : DENIED_ROLES) {
+    void rolesOutsideTheWidenedCountriesGateCannotListCountries() throws Exception {
+        for (String role : DENIED_COUNTRIES_READ_ROLES) {
             mvc.perform(get("/api/price-import/countries").session(session(role)))
                 .andExpect(status().isForbidden());
         }
     }
 
+    /**
+     * PR-B REVIEW ROUND 1, B2 (owner-approved default): the owning sales rep's new-factory country
+     * picker on {@code ImportRequestFactoryCard} (V184 createDrafts auto-create path) needs to read
+     * this list — country codes are not sensitive, so READ widens to sales + sales_manager
+     * alongside the existing import/ceo. Writes (createFactory/updateFactory) are untouched — see
+     * the DENIED_ROLES-gated tests above, which still include sales/sales_manager.
+     */
     @Test
-    void importAndCeoCanListRealSeededCountries() throws Exception {
-        for (String role : List.of("import", "ceo")) {
+    void importCeoSalesSalesManagerCanListCountries() throws Exception {
+        for (String role : List.of("import", "ceo", "sales", "sales_manager")) {
             mvc.perform(get("/api/price-import/countries").session(session(role)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[?(@.countryCode == 'TH')].nameEn").exists())

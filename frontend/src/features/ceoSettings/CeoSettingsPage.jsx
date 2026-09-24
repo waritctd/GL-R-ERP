@@ -55,9 +55,10 @@ const numberFieldSchema = z
 // never round-trip back into a valid fraction.
 const percentFieldSchema = numberFieldSchema.refine((value) => Number(value) <= 100, 'กรอกได้ไม่เกิน 100%');
 
-// sellingPriceRoundUpTo is the RoundUp() step -- must be strictly positive, or every selling
-// price calculation downstream (branches 3-5) divides by zero.
-const positiveNumberFieldSchema = numberFieldSchema.refine((value) => Number(value) > 0, 'ต้องมากกว่า 0');
+// positiveNumberFieldSchema (used only by sellingPriceRoundUpTo) is REMOVED along with that
+// field from FORMULA_SCALAR_FIELDS below (owner ruling 2026-09-19, Phase 2 CEO pricing) -- the
+// selling-price formula no longer rounds up to it at all, so there is nothing left to validate
+// as "strictly positive" here.
 
 const configFormSchema = z.object({
   freightPerSqm: numberFieldSchema,
@@ -163,150 +164,15 @@ function ConfigEditModal({ config, saving, onClose, onSubmit }) {
 }
 
 // ---------------------------------------------------------------------------
-// V153 thickness defaults.
-//
-// Four of the nine factory workbooks (Vives, Padana, Equipe, Bode) carry no thickness column at
-// all, so ~9,411 catalogue rows have a NULL thickness_mm no parser can recover. Thickness selects
-// the freight band, and a band can differ by ฿50,000 per shipment, so those rows are deliberately
-// unpriceable until a human supplies the number. This panel is where.
-//
-// ONE FORM, ONE SAVE — not a modal per row. 244 (factory, collection) pairs cover every gap; a
-// modal each would make one sitting 244 dialogs. The server returns the refreshed gap list from the
-// save, so this re-renders from server truth rather than patching local state.
-//
-// Rows arrive ordered by how many catalogue rows each would unblock (the repository's own
-// ORDER BY count(*) DESC) and that order is NOT re-sorted here: the CEO works top-down and the
-// biggest wins land first.
-function ThicknessDefaultsPanel({ showToast }) {
-  const queryClient = useQueryClient();
-  const [edits, setEdits] = useState({});
-
-  const { data, isLoading } = useQuery({
-    queryKey: queryKeys.catalogThicknessDefaults(),
-    queryFn: () => api.catalogThicknessDefaults.list(),
-  });
-
-  const saveMutation = useMutation({
-    mutationFn: (payload) => api.catalogThicknessDefaults.save(payload),
-    onSuccess: (result) => {
-      queryClient.setQueryData(queryKeys.catalogThicknessDefaults(), result);
-      setEdits({});
-      showToast('success', `บันทึกความหนาแล้ว ${result.saved} รายการ`);
-    },
-    onError: (e) => showToast('error', e.message || 'บันทึกความหนาไม่สำเร็จ'),
-  });
-
-  const gaps = data?.gaps ?? [];
-  const rowKey = (gap) => `${gap.factoryId}|${gap.collection ?? ''}`;
-  // An edited blank is meaningful: it CLEARS the default rather than saving 0. A stored zero would
-  // silently pick the lowest freight band instead of refusing to price, so '' must survive all the
-  // way to the payload as null — never be coerced to a number here.
-  const valueFor = (gap) => {
-    const key = rowKey(gap);
-    if (key in edits) return edits[key];
-    return gap.currentDefaultMm == null ? '' : String(gap.currentDefaultMm);
-  };
-  const dirtyCount = Object.keys(edits).length;
-
-  function submit(event) {
-    event.preventDefault();
-    const entries = Object.entries(edits).map(([key, raw]) => {
-      const [factoryId, collection] = key.split('|');
-      return {
-        factoryId: Number(factoryId),
-        collection: collection === '' ? null : collection,
-        thicknessMm: raw.trim() === '' ? null : Number(raw),
-      };
-    });
-    if (entries.length > 0) saveMutation.mutate({ entries });
-  }
-
-  return (
-    <Panel
-      flush
-      title="ความหนาเริ่มต้นตามคอลเลกชัน (มม.)"
-      actions={dirtyCount > 0 ? (
-        <Button type="submit" form="thickness-defaults-form" variant="primary" disabled={saveMutation.isPending}>
-          {saveMutation.isPending ? 'กำลังบันทึก…' : `บันทึก ${dirtyCount} รายการ`}
-        </Button>
-      ) : null}
-    >
-      <div className="px-[18px] py-2 text-2xs text-text-muted border-b border-surface-subtle">
-        โรงงานบางแห่งไม่ได้ระบุความหนามาในไฟล์ราคา — ระบบจึงคำนวณค่าขนส่งไม่ได้จนกว่าจะกรอกค่าที่นี่
-        {data ? (
-          <>
-            {' • '}
-            <strong className={data.rowsStillMissingThickness > 0 ? 'text-warning' : 'text-success'}>
-              เหลือ {data.rowsStillMissingThickness.toLocaleString('th-TH')} รายการ
-            </strong>
-            {' ที่ยังคำนวณราคาไม่ได้'}
-          </>
-        ) : null}
-      </div>
-
-      {isLoading ? (
-        <div className="px-[18px] py-4 text-text-muted text-sm">กำลังโหลด…</div>
-      ) : gaps.length === 0 ? (
-        <div className="px-[18px] py-4 text-text-muted text-sm">
-          ไม่มีคอลเลกชันที่ขาดความหนา — ทุกรายการในแคตตาล็อกคำนวณค่าขนส่งได้แล้ว
-        </div>
-      ) : (
-        <SafeForm id="thickness-defaults-form" onSubmit={submit} noValidate>
-          <div className="overflow-x-auto">
-            <table className="w-full border-collapse text-xs">
-              <thead>
-                <tr className="bg-surface-muted">
-                  {['โรงงาน', 'คอลเลกชัน', 'รายการที่รอ', 'ความหนา (มม.)'].map((h) => (
-                    <th key={h} className="px-[14px] py-2 text-left font-semibold text-icon-muted border-b border-border whitespace-nowrap">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {gaps.map((gap) => {
-                  const key = rowKey(gap);
-                  const inputId = `thickness-${key.replace(/[^a-zA-Z0-9]/g, '-')}`;
-                  return (
-                    <tr key={key} className="border-b border-surface-subtle">
-                      <td className="px-[14px] py-2 font-semibold whitespace-nowrap">{gap.factoryName}</td>
-                      <td className="px-[14px] py-2">
-                        {gap.collection ?? <span className="text-text-muted italic">(ไม่ระบุคอลเลกชัน)</span>}
-                        {gap.hasSizeLevelOverride ? (
-                          <span
-                            className="ml-1.5 text-2xs text-text-muted"
-                            title="คอลเลกชันนี้มีค่าเฉพาะขนาดกำหนดไว้ด้วย — การบันทึกที่นี่ไม่ลบค่านั้น"
-                          >
-                            (มีค่าเฉพาะขนาด)
-                          </span>
-                        ) : null}
-                      </td>
-                      <td className="px-[14px] py-2 text-text-muted whitespace-nowrap">
-                        {gap.rowsMissingThickness.toLocaleString('th-TH')}
-                      </td>
-                      <td className="px-[14px] py-2">
-                        <input
-                          id={inputId}
-                          type="number" step="0.1" min="0"
-                          className="w-24"
-                          aria-label={`ความหนา ${gap.factoryName} ${gap.collection ?? ''}`}
-                          value={valueFor(gap)}
-                          onChange={(e) => setEdits((prev) => ({ ...prev, [key]: e.target.value }))}
-                        />
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-          <p className="m-0 px-[18px] py-2 text-2xs text-text-muted border-t border-surface-subtle">
-            เว้นว่างไว้ = ลบค่าที่ตั้งไว้ (ไม่ใช่ 0) — รายการนั้นจะกลับไปเป็น &quot;คำนวณราคาไม่ได้&quot;
-          </p>
-        </SafeForm>
-      )}
-    </Panel>
-  );
-}
-
+// The "ความหนาเริ่มต้นตามคอลเลกชัน (มม.)" panel (V153 thickness defaults) stood here until
+// 2026-09-17, removed on request. IMPORTANT: this was a FRONTEND-ONLY removal, not a data-model
+// one — the backend table (price_catalog.collection_thickness_default), ThicknessDefaultController
+// (GET/PUT /api/catalog/thickness-defaults), and the pricing engine's dependency on it via
+// price_catalog.v_priceable_product's COALESCE(p.thickness_mm, d.thickness_mm) are all still live
+// and unchanged. Existing thickness-default rows keep working exactly as before; there is simply
+// no CEO-facing UI here to add/edit more of them. See V153__catalog_priceable_basis.sql and
+// ThicknessResolutionReachesTheEngineIntegrationTest for why that engine dependency is real and
+// was deliberately left alone rather than removed alongside this UI.
 // ---------------------------------------------------------------------------
 // BRANCH 1 of the sales pricing-formula redesign: config storage + CEO editing UI only.
 // This section edits sales.pricing_formula_config + its 3 child tables (freight/duty/clearance)
@@ -324,7 +190,12 @@ const FORMULA_SCALAR_FIELDS = [
   { key: 'costBuffer', label: 'บัฟเฟอร์ต้นทุนรวม (B2)', hint: 'ตัวคูณดิบ (ค่าเริ่มต้น 1.07) — ไม่ใช่ VAT, ห้ามกรอกเป็น %', schema: numberFieldSchema },
   { key: 'sellingBuffer', label: 'บัฟเฟอร์ราคาขาย (B3)', hint: 'ตัวคูณดิบ (ค่าเริ่มต้น 1.07) — ไม่ใช่ VAT, ห้ามกรอกเป็น %', schema: numberFieldSchema },
   { key: 'defaultMarginPct', label: 'อัตรากำไรเริ่มต้น', hint: '% (เก็บในระบบเป็นเศษส่วน)', schema: percentFieldSchema, isPercent: true },
-  { key: 'sellingPriceRoundUpTo', label: 'ปัดราคาขายขึ้นเป็นทวีคูณของ (บาท)', hint: 'บาท — ต้องมากกว่า 0', schema: positiveNumberFieldSchema },
+  // sellingPriceRoundUpTo REMOVED from this list (owner ruling 2026-09-19, Phase 2 CEO pricing):
+  // the selling-price formula no longer rounds up to this multiple at all -- it rounds HALF_UP
+  // to 2dp instead (PricingFormulaEngine#sellingPrice). The column itself is untouched in the DB
+  // (no migration) and the CEO can no longer edit or see a figure that has stopped doing
+  // anything, which would only invite the question "why isn't my price a multiple of this any
+  // more". See the read-only summary table below, which drops the same field for the same reason.
 ];
 
 const dutyRateRowSchema = z.object({
@@ -419,6 +290,14 @@ function FormulaConfigEditModal({ config, saving, onClose, onSubmit }) {
       const raw = Number(values[field.key]);
       payload[field.key] = field.isPercent ? raw / 100 : raw;
     });
+    // sellingPriceRoundUpTo (owner ruling 2026-09-19, Phase 2 CEO pricing): removed from
+    // FORMULA_SCALAR_FIELDS above, so it is no longer editable or even shown -- but
+    // UpdatePricingFormulaConfigRequest on the backend still declares it @NotNull (the column
+    // and its request field are DELIBERATELY untouched, no migration), so the save would 400 with
+    // a missing-field error if this payload dropped it. Pass the CONFIG's existing (frozen)
+    // value straight through unedited -- the CEO can no longer change it, but a save of every
+    // OTHER field must not accidentally null out a column the backend still requires non-null.
+    payload.sellingPriceRoundUpTo = Number(config.sellingPriceRoundUpTo);
     payload.freightRates = config.freightRates.map((rate) => ({
       originCountryCode: rate.originCountryCode,
       thicknessMinMm: rate.thicknessMinMm,
@@ -1174,17 +1053,18 @@ export function CeoSettingsPage({ showToast }) {
                       <td className="px-2.5 py-1 text-text-muted">อัตรากำไรเริ่มต้น</td>
                       <td className="px-2.5 py-1 font-semibold text-success">{pctDisplay(formulaConfig.defaultMarginPct)}</td>
                     </tr>
-                    <tr>
-                      <td className="px-2.5 py-1 text-text-muted">ปัดราคาขายขึ้นเป็นทวีคูณของ</td>
-                      <td className="px-2.5 py-1 font-semibold">{moneyDisplay(formulaConfig.sellingPriceRoundUpTo)} บาท</td>
-                      <td />
-                      <td />
-                    </tr>
                   </tbody>
                 </table>
               </div>
               <p className="m-0 mt-1.5 text-[10px] text-text-muted">
                 B1/B2/B3 และ 1.15/0.0045 เป็นตัวคูณดิบ (ไม่ใช่ % และไม่ใช่ VAT) — VAT 7% แยกคิดตอนออกใบเสนอราคาลูกค้าเสมอ
+              </p>
+              {/* Owner ruling 2026-09-19 (Phase 2 CEO pricing): "ปัดราคาขายขึ้นเป็นทวีคูณของ" is
+                  removed from this table -- the selling-price formula rounds HALF_UP to 2dp now,
+                  never up to this multiple, so the CEO can no longer edit or read a figure that
+                  no longer affects anything. The column itself is untouched in the database. */}
+              <p className="m-0 mt-1 text-[10px] text-text-muted">
+                ราคาขายปัดทศนิยม 2 ตำแหน่งแบบปกติ (ไม่ปัดขึ้นเป็นทวีคูณอีกต่อไป)
               </p>
             </div>
 
@@ -1307,8 +1187,6 @@ export function CeoSettingsPage({ showToast }) {
           </>
         )}
       </Panel>
-
-      <ThicknessDefaultsPanel showToast={showToast} />
 
       {/* The "ตัวคูณราคาตั้งประมาณการ (หน้าสร้างดีล)" panel stood here until 2026-08-10. It set a
           coarse display multiplier that the deal-create modal applied on top of the raw catalog

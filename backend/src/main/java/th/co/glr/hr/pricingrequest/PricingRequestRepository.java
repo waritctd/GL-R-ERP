@@ -43,7 +43,7 @@ import th.co.glr.hr.pricingrequest.PricingRequestRequests.UpdatePricingRequestRe
 public class PricingRequestRepository {
     private static final String SUMMARY_SELECT = """
         SELECT pr.*, t.code AS ticket_code, t.title AS ticket_title, t.created_by AS ticket_created_by,
-               p.name AS project_name, t.customer_name,
+               p.name AS project_name, t.customer_name, t.customer_id,
                er.first_name_th AS requested_by_first_name_th, er.last_name_th AS requested_by_last_name_th,
                ei.first_name_th AS assigned_import_first_name_th, ei.last_name_th AS assigned_import_last_name_th,
                (SELECT COUNT(*) FROM sales.pricing_request_item i
@@ -94,11 +94,15 @@ public class PricingRequestRepository {
             INSERT INTO sales.pricing_request
                 (request_code, ticket_id, recipient_type, recipient_contact_id, recipient_label,
                  status, requested_by, required_date, customer_target_price, target_currency, note,
-                 client_request_id)
+                 client_request_id, payment_term_mode, credit_days, validity_days,
+                 printed_by_display_id, sales_rep_display_id, dept_code, unit_code,
+                 omit_contact_honorific)
             VALUES
                 (:requestCode, :ticketId, :recipientType, :recipientContactId, :recipientLabel,
                  'DRAFT', :requestedBy, :requiredDate, :customerTargetPrice, :targetCurrency, :note,
-                 CAST(:clientRequestId AS uuid))
+                 CAST(:clientRequestId AS uuid), :paymentTermMode, :creditDays, :validityDays,
+                 :printedByDisplayId, :salesRepDisplayId, :deptCode, :unitCode,
+                 :omitContactHonorific)
             ON CONFLICT (requested_by, client_request_id)
             WHERE client_request_id IS NOT NULL
             DO NOTHING
@@ -115,7 +119,19 @@ public class PricingRequestRepository {
                 .addValue("customerTargetPrice", request.customerTargetPrice())
                 .addValue("targetCurrency", targetCurrency)
                 .addValue("note", request.note())
-                .addValue("clientRequestId", request.clientRequestId()),
+                .addValue("clientRequestId", request.clientRequestId())
+                // GLA-125 header terms — see PricingRequestRequests.CreatePricingRequestRequest's
+                // own Javadoc.
+                .addValue("paymentTermMode", request.paymentTermMode())
+                .addValue("creditDays", request.creditDays())
+                .addValue("validityDays", request.validityDays())
+                .addValue("printedByDisplayId", request.printedByDisplayId())
+                .addValue("salesRepDisplayId", request.salesRepDisplayId())
+                .addValue("deptCode", request.deptCode())
+                .addValue("unitCode", request.unitCode())
+                // Mirrors sales.quotation.omit_contact_honorific's own NOT NULL DEFAULT FALSE —
+                // a null input (the pre-GLA-125 compat constructor's default) reads as false.
+                .addValue("omitContactHonorific", request.omitContactHonorific() != null && request.omitContactHonorific()),
             (rs, rowNum) -> rs.getLong("pricing_request_id"));
         if (ids.isEmpty()) {
             return 0L;
@@ -154,19 +170,56 @@ public class PricingRequestRepository {
                 .addValue("targetDeliveryDate", item.targetDeliveryDate())
                 .addValue("deliveryLocation", item.deliveryLocation())
                 .addValue("specialRequirement", item.specialRequirement())
-                .addValue("sortOrder", i);
+                .addValue("sortOrder", i)
+                // V185 (direct-deal-form parity) — see PricingRequestItemRequest's own class-level
+                // Javadoc. requestedQty/requestedQtySqm/requestedUnit/requestedUnitBasis above are
+                // whatever PricingRequestService#resolveItems already derived onto this same
+                // `item` before this method was ever called (this repository does no derivation
+                // itself — persistence only, per this class's header Javadoc).
+                .addValue("productCode", item.productCode())
+                .addValue("thicknessMm", item.thicknessMm())
+                .addValue("sqmPerPiece", item.sqmPerPiece())
+                .addValue("quantityMode", item.quantityMode())
+                .addValue("areaSqm", item.areaSqm())
+                .addValue("piecesInput", item.piecesInput())
+                .addValue("wastageMode", item.wastageMode())
+                .addValue("wastageValue", item.wastageValue())
+                .addValue("piecesPerBox", item.piecesPerBox())
+                .addValue("sqmPerBox", item.sqmPerBox())
+                .addValue("piecesBeforeWastage", item.piecesBeforeWastage())
+                .addValue("piecesAfterWastage", item.piecesAfterWastage())
+                .addValue("boxes", item.boxes())
+                // Mirrors sales.quotation_item.round_to_full_box's own NOT NULL DEFAULT TRUE — a
+                // null input (never sent by resolveItems, but defensive for any other caller)
+                // reads as true, today's only pre-V185 behaviour.
+                .addValue("roundToFullBox", item.roundToFullBox() == null || item.roundToFullBox())
+                .addValue("originCountry", item.originCountry())
+                .addValue("leadTimeMinDays", item.leadTimeMinDays())
+                .addValue("leadTimeMaxDays", item.leadTimeMaxDays())
+                // GLA-125: whatever PricingRequestService#resolveItem already normalized this to
+                // (null unless originCountry = "อื่นๆ") — this repository does no normalization
+                // itself, matching every other derived/validated item field on this same batch.
+                .addValue("originCountryOther", item.originCountryOther());
         }
         jdbc.batchUpdate("""
             INSERT INTO sales.pricing_request_item
                 (pricing_request_id, source_ticket_item_id, product_id, variant_id,
                  brand, model, product_description, color, texture, size, factory,
                  requested_qty, requested_qty_sqm, requested_unit, requested_unit_basis, quantity_type,
-                 target_delivery_date, delivery_location, special_requirement, sort_order)
+                 target_delivery_date, delivery_location, special_requirement, sort_order,
+                 product_code, thickness_mm, sqm_per_piece, quantity_mode, area_sqm, pieces_input,
+                 wastage_mode, wastage_value, pieces_per_box, sqm_per_box, pieces_before_wastage,
+                 pieces_after_wastage, boxes, round_to_full_box, origin_country,
+                 lead_time_min_days, lead_time_max_days, origin_country_other)
             VALUES
                 (:pricingRequestId, :sourceTicketItemId, :productId, :variantId,
                  :brand, :model, :productDescription, :color, :texture, :size, :factory,
                  :requestedQty, :requestedQtySqm, :requestedUnit, :requestedUnitBasis, :quantityType,
-                 :targetDeliveryDate, :deliveryLocation, :specialRequirement, :sortOrder)
+                 :targetDeliveryDate, :deliveryLocation, :specialRequirement, :sortOrder,
+                 :productCode, :thicknessMm, :sqmPerPiece, :quantityMode, :areaSqm, :piecesInput,
+                 :wastageMode, :wastageValue, :piecesPerBox, :sqmPerBox, :piecesBeforeWastage,
+                 :piecesAfterWastage, :boxes, :roundToFullBox, :originCountry,
+                 :leadTimeMinDays, :leadTimeMaxDays, :originCountryOther)
             """, batch);
     }
 
@@ -297,6 +350,14 @@ public class PricingRequestRepository {
                    customer_target_price = :customerTargetPrice,
                    target_currency       = :targetCurrency,
                    note                  = :note,
+                   payment_term_mode     = :paymentTermMode,
+                   credit_days           = :creditDays,
+                   validity_days         = :validityDays,
+                   printed_by_display_id = :printedByDisplayId,
+                   sales_rep_display_id  = :salesRepDisplayId,
+                   dept_code             = :deptCode,
+                   unit_code             = :unitCode,
+                   omit_contact_honorific = :omitContactHonorific,
                    updated_at            = now()
              WHERE pricing_request_id = :id AND status = 'DRAFT'
             """,
@@ -308,7 +369,18 @@ public class PricingRequestRepository {
                 .addValue("requiredDate", request.requiredDate())
                 .addValue("customerTargetPrice", request.customerTargetPrice())
                 .addValue("targetCurrency", normalizeCurrency(request.targetCurrency()))
-                .addValue("note", request.note()));
+                .addValue("note", request.note())
+                // GLA-125 header terms — a FULL REPLACEMENT like every other editable field on
+                // this UPDATE (this method's own class-level Javadoc: "full replacement... no more
+                // COALESCE"), not a sparse patch.
+                .addValue("paymentTermMode", request.paymentTermMode())
+                .addValue("creditDays", request.creditDays())
+                .addValue("validityDays", request.validityDays())
+                .addValue("printedByDisplayId", request.printedByDisplayId())
+                .addValue("salesRepDisplayId", request.salesRepDisplayId())
+                .addValue("deptCode", request.deptCode())
+                .addValue("unitCode", request.unitCode())
+                .addValue("omitContactHonorific", request.omitContactHonorific() != null && request.omitContactHonorific()));
         if (rows == 1 && request.items() != null) {
             replaceItems(id, request.items());
         }
@@ -341,11 +413,15 @@ public class PricingRequestRepository {
                 (request_code, ticket_id, recipient_type, recipient_contact_id, recipient_label,
                  status, requested_by, required_date, customer_target_price, target_currency, note,
                  parent_pricing_request_id, root_pricing_request_id, revision_no, revision_reason,
-                 client_request_id)
+                 client_request_id, payment_term_mode, credit_days, validity_days,
+                 printed_by_display_id, sales_rep_display_id, dept_code, unit_code,
+                 omit_contact_honorific)
             VALUES
                 (:requestCode, :ticketId, :recipientType, :recipientContactId, :recipientLabel,
                  'DRAFT', :requestedBy, :requiredDate, :customerTargetPrice, :targetCurrency, :note,
-                 :parentId, :rootId, :revisionNo, :revisionReason, CAST(:clientRequestId AS uuid))
+                 :parentId, :rootId, :revisionNo, :revisionReason, CAST(:clientRequestId AS uuid),
+                 :paymentTermMode, :creditDays, :validityDays, :printedByDisplayId,
+                 :salesRepDisplayId, :deptCode, :unitCode, :omitContactHonorific)
             ON CONFLICT (requested_by, client_request_id)
             WHERE client_request_id IS NOT NULL
             DO NOTHING
@@ -366,7 +442,20 @@ public class PricingRequestRepository {
                 .addValue("rootId", rootId)
                 .addValue("revisionNo", nextRevision)
                 .addValue("revisionReason", request.revisionReason())
-                .addValue("clientRequestId", request.clientRequestId()),
+                .addValue("clientRequestId", request.clientRequestId())
+                // GLA-125: the revision's header terms come from WHATEVER the caller sent in
+                // `request` (PricingRequestCreateModal.jsx's mode="revision" seeds these from the
+                // CURRENT parent request, same as every other header field on a revision), never
+                // copied server-side from `parent` directly — matching how every other header
+                // field on this exact INSERT (recipientLabel, note, etc.) already works.
+                .addValue("paymentTermMode", request.paymentTermMode())
+                .addValue("creditDays", request.creditDays())
+                .addValue("validityDays", request.validityDays())
+                .addValue("printedByDisplayId", request.printedByDisplayId())
+                .addValue("salesRepDisplayId", request.salesRepDisplayId())
+                .addValue("deptCode", request.deptCode())
+                .addValue("unitCode", request.unitCode())
+                .addValue("omitContactHonorific", request.omitContactHonorific() != null && request.omitContactHonorific()),
             (rs, rowNum) -> rs.getLong("pricing_request_id"));
         if (ids.isEmpty()) {
             return 0L;
@@ -524,7 +613,11 @@ public class PricingRequestRepository {
                    price_list_version_id, catalog_price_id, catalog_base_price, catalog_currency,
                    catalog_effective_date, resolved_factory_id, resolved_factory_name,
                    catalog_product_code, catalog_brand, catalog_collection, catalog_model,
-                   product_type_override
+                   product_type_override,
+                   product_code, thickness_mm, sqm_per_piece, quantity_mode, area_sqm, pieces_input,
+                   wastage_mode, wastage_value, pieces_per_box, sqm_per_box, pieces_before_wastage,
+                   pieces_after_wastage, boxes, round_to_full_box, origin_country,
+                   lead_time_min_days, lead_time_max_days, origin_country_other
               FROM sales.pricing_request_item
              WHERE pricing_request_id = :id
              ORDER BY sort_order, pricing_request_item_id
@@ -862,6 +955,35 @@ public class PricingRequestRepository {
     }
 
     /**
+     * MINOR fix (Opus review, 2026-09-20), GLA-123 slice S1 — a PRICING_REQUEST-origin (the NEW,
+     * {@code th.co.glr.hr.dealquotation} engine) DRAFT quotation orphaned by a customer-change
+     * revision, mirroring {@link #supersedeOpenPricingDecisionAndQuotation}'s own "DRAFT is in the
+     * predicate deliberately, and it closes a real hole" reasoning — but scoped MUCH narrower than
+     * that method, and NOT the same call: {@code createCustomerChangeRevision} deliberately never
+     * calls {@code supersedeOpenPricingDecisionAndQuotation} itself, because the owner's
+     * reissue-through-CEO-chain ruling keeps an ALREADY-ISSUED legacy (origin IS NULL) quotation
+     * live until the replacement is issued (see that method's own Javadoc and this call's own
+     * comment in {@code PricingRequestService#createCustomerChangeRevision}). That ruling is about
+     * an issued, customer-facing document — it has no bearing on this origin, which in S1 can
+     * NEVER reach ISSUED (submit is refused — {@code DealQuotationService#requireStatusMachineEnabled}),
+     * so DRAFT is the ONLY state to ever clean up here, and there is no "stays live until the
+     * replacement issues" concept to preserve for it. Without this, a DRAFT quotation on this
+     * engine would be left attached to a now-SUPERSEDED parent forever — nothing else in S1 ever
+     * retires it (there is no S2 issue-time supersede for this origin yet). {@code origin =
+     * 'PRICING_REQUEST'} in the predicate is what keeps this from ever touching the legacy
+     * quotation the paragraph above is protecting.
+     */
+    public void supersedeOpenPricingRequestOriginDraft(long pricingRequestId) {
+        jdbc.update("""
+            UPDATE sales.quotation
+               SET doc_status = 'SUPERSEDED'
+             WHERE pricing_request_id = :pricingRequestId
+               AND origin = 'PRICING_REQUEST'
+               AND doc_status = 'DRAFT'
+            """, Map.of("pricingRequestId", pricingRequestId));
+    }
+
+    /**
      * Step 6 (V76): the order-confirmation bridge's own idempotency/state check — read under the
      * same {@link #lockPricingRequest} hold as the guarded update below, exactly like every prior
      * step's create/issue/outcome replay check (e.g. {@code CustomerQuotationRepository
@@ -1091,7 +1213,18 @@ public class PricingRequestRepository {
             cancelledAt != null ? cancelledAt.toInstant() : null,
             rs.getTimestamp("created_at").toInstant(),
             rs.getTimestamp("updated_at").toInstant(),
-            instant(rs, "order_confirmed_at")
+            instant(rs, "order_confirmed_at"),
+            // GLA-125 header terms. SUMMARY_SELECT is `pr.*`, so these columns are always present
+            // in the ResultSet -- no SELECT-list change needed here, only the Java read.
+            rs.getString("payment_term_mode"),
+            nullableInt(rs, "credit_days"),
+            nullableInt(rs, "validity_days"),
+            nullableLong(rs, "printed_by_display_id"),
+            nullableLong(rs, "sales_rep_display_id"),
+            rs.getString("dept_code"),
+            rs.getString("unit_code"),
+            rs.getBoolean("omit_contact_honorific"),
+            nullableLong(rs, "customer_id")
         );
     }
 
@@ -1140,12 +1273,38 @@ public class PricingRequestRepository {
             rs.getString("catalog_brand"),
             rs.getString("catalog_collection"),
             rs.getString("catalog_model"),
-            rs.getString("product_type_override")
+            rs.getString("product_type_override"),
+            rs.getString("product_code"),
+            rs.getBigDecimal("thickness_mm"),
+            rs.getBigDecimal("sqm_per_piece"),
+            rs.getString("quantity_mode"),
+            rs.getBigDecimal("area_sqm"),
+            nullableInt(rs, "pieces_input"),
+            rs.getString("wastage_mode"),
+            rs.getBigDecimal("wastage_value"),
+            nullableInt(rs, "pieces_per_box"),
+            rs.getBigDecimal("sqm_per_box"),
+            nullableInt(rs, "pieces_before_wastage"),
+            nullableInt(rs, "pieces_after_wastage"),
+            nullableInt(rs, "boxes"),
+            rs.getBoolean("round_to_full_box"),
+            rs.getString("origin_country"),
+            nullableInt(rs, "lead_time_min_days"),
+            nullableInt(rs, "lead_time_max_days"),
+            rs.getString("origin_country_other")
         );
     }
 
     private Long nullableLong(ResultSet rs, String column) throws SQLException {
         long value = rs.getLong(column);
+        return rs.wasNull() ? null : value;
+    }
+
+    // V185 (direct-deal-form parity): pieces_input/pieces_per_box/pieces_before_wastage/
+    // pieces_after_wastage/boxes/lead_time_min_days/lead_time_max_days are all nullable INTEGER/
+    // SMALLINT columns — mirrors nullableLong's own pattern for the int-width equivalent.
+    private Integer nullableInt(ResultSet rs, String column) throws SQLException {
+        int value = rs.getInt(column);
         return rs.wasNull() ? null : value;
     }
 
@@ -1170,5 +1329,18 @@ public class PricingRequestRepository {
     private String joinName(String firstNameTh, String lastNameTh) {
         String joined = ((firstNameTh == null ? "" : firstNameTh) + " " + (lastNameTh == null ? "" : lastNameTh)).trim();
         return joined.isEmpty() ? null : joined;
+    }
+
+    /**
+     * Second review pass, finding N5 (2026-09-19): whether {@code employeeId} may be stored as a
+     * {@code printedByDisplayId}/{@code salesRepDisplayId} on this pricing request's header terms.
+     * Delegates to {@link th.co.glr.hr.commission.QuotationDisplayNameEligibility}, the SAME
+     * predicate direct-deal's {@code DealQuotationRepository#isEligibleQuotationDisplayName}
+     * already enforces for its own identically-named fields — so the two forms' eligible-employee
+     * rule can never drift apart. See that class's Javadoc for why this repository takes no new
+     * constructor dependency to reuse it.
+     */
+    public boolean isEligibleQuotationDisplayName(long employeeId, String salesDivisionCode) {
+        return th.co.glr.hr.commission.QuotationDisplayNameEligibility.isEligible(jdbc, employeeId, salesDivisionCode);
     }
 }

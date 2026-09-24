@@ -9,11 +9,13 @@ import { Panel } from '../../components/common/Layout.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { downloadBlob } from '../../utils/download.js';
-import { formatMoney, formatThaiDate, quotationStatusLabel } from '../../utils/format.js';
+import { depositNoticeStatusLabel, formatMoney, formatThaiDate, quotationStatusLabel } from '../../utils/format.js';
 import { canViewCustomerQuotation } from '../pricingRequests/pricingRequestMeta.js';
 import { canViewDealQuotation } from '../quotations/quotationMeta.js';
+import { isRemainingInvoiceReady } from './remainingInvoiceReadiness.js';
 import { buttonVariants } from '../../components/common/Button.jsx';
 import { cn } from '../../utils/cn.js';
+import { RemainingInvoiceDialog } from './RemainingInvoiceDialog.jsx';
 
 /**
  * Slice D ("the เอกสาร document register"): one read-only roll-up of every document a deal can
@@ -94,6 +96,7 @@ export function DealDocumentRegister({
   attachLoading = false,
 }) {
   const [busyKey, setBusyKey] = useState(null);
+  const [remainingInvoiceDialogOpen, setRemainingInvoiceDialogOpen] = useState(false);
 
   // Unchanged from the pre-Slice-D `documents` tab gate (ticketDetailTabs.js) — see this file's
   // own header comment for why it stays a two-part role+section check rather than collapsing to
@@ -102,6 +105,12 @@ export function DealDocumentRegister({
   // Mirrors DepositNoticeService#requireTicketViewer via salesViewScope's own `depositNotice`
   // section id (see header comment) — governs BOTH the deposit notice and the remaining invoice.
   const canViewDepositAndInvoice = Boolean(sections?.depositNotice);
+  // R4 (GLA-99 step 2 review-round-1): the remaining invoice's own WRITE gate — mirrors
+  // RemainingInvoiceService#requireDepositNoticeIssueGate / mockApi's
+  // requireRemainingInvoiceWriteGate exactly (sales role + this deal's own owner, no CEO
+  // carve-out). UI-only convenience for RemainingInvoiceDialog's own button visibility — the
+  // backend gate above is what actually enforces this.
+  const canWriteRemainingInvoice = user?.role === 'sales' && user?.id === summary?.createdById;
 
   const eligiblePricingRequests = useMemo(
     () => (canViewQuotations ? pricingRequests.filter((pr) => canViewCustomerQuotation(user, pr)) : []),
@@ -155,7 +164,7 @@ export function DealDocumentRegister({
   });
   const depositNotices = depositNoticesQuery.data ?? [];
 
-  const remainingInvoiceReady = summary?.status === 'quotation_issued' && summary?.fulfillmentStatus === 'GOODS_RECEIVED';
+  const remainingInvoiceReady = isRemainingInvoiceReady(summary);
 
   async function handleDownload(key, run) {
     setBusyKey(key);
@@ -191,10 +200,8 @@ export function DealDocumentRegister({
     downloadBlob(blob, doc.docNumber ?? 'deposit-notice', format);
   }
 
-  async function downloadRemainingInvoice() {
-    const key = 'remaining-invoice';
-    const blob = await handleDownload(key, () => api.tickets.downloadRemainingInvoice(ticketId));
-    downloadBlob(blob, `remaining-invoice-${ticketId}`, 'xlsx');
+  function openRemainingInvoiceDialog() {
+    setRemainingInvoiceDialogOpen(true);
   }
 
   const hasAnyVisibleSection = canViewQuotations || canViewDepositAndInvoice || canViewDocumentsTab;
@@ -284,8 +291,14 @@ export function DealDocumentRegister({
                   icon="fileText"
                   title={doc.docNumber ?? `ร่างใบแจ้งยอดมัดจำ #${doc.id}`}
                   meta={`มัดจำ ${Math.round(Number(doc.depositPercent ?? 0.5) * 100)}%`}
-                  status={{ label: doc.status === 'ISSUED' ? 'ออกแล้ว' : 'ฉบับร่าง', tone: doc.status === 'ISSUED' ? 'success' : 'neutral' }}
-                  actions={doc.status === 'ISSUED' ? [
+                  status={depositNoticeStatusLabel(doc.status)}
+                  // GLA-117: a SUPERSEDED notice was once ISSUED (DepositNoticeRepository#supersede
+                  // only ever transitions FROM ISSUED, keeping doc_number/pdf_path/xlsx_path
+                  // intact) and DepositNoticeService#getPdf/getXlsx re-render from that persisted
+                  // snapshot with no status guard at all — so it must stay downloadable exactly
+                  // like an ISSUED one. Only DRAFT (never rendered, no doc number yet) has no
+                  // download actions.
+                  actions={doc.status === 'ISSUED' || doc.status === 'SUPERSEDED' ? [
                     { label: 'PDF', busy: busyKey === `deposit-${doc.id}-pdf`, onClick: () => downloadDepositNotice(doc, 'pdf') },
                     { label: 'Excel', busy: busyKey === `deposit-${doc.id}-xlsx`, onClick: () => downloadDepositNotice(doc, 'xlsx') },
                   ] : []}
@@ -297,10 +310,10 @@ export function DealDocumentRegister({
             <DocumentRow
               icon="fileText"
               title="ใบแจ้งหนี้ส่วนที่เหลือ"
-              meta={remainingInvoiceReady ? 'พร้อมดาวน์โหลด' : 'ยังไม่ถึงขั้นตอน (ต้องออกใบเสนอราคาและรับสินค้าครบก่อน)'}
+              meta={remainingInvoiceReady ? 'พร้อมดาวน์โหลด' : 'ยังไม่ถึงขั้นตอน (ต้องออกใบเสนอราคาและสินค้าพร้อมส่งมอบก่อน)'}
               status={{ label: remainingInvoiceReady ? 'พร้อมใช้งาน' : 'รอขั้นตอน', tone: remainingInvoiceReady ? 'success' : 'neutral' }}
               actions={remainingInvoiceReady ? [
-                { label: 'Excel', busy: busyKey === 'remaining-invoice', onClick: downloadRemainingInvoice },
+                { label: 'Excel', busy: false, onClick: openRemainingInvoiceDialog },
               ] : []}
             />
           </div>
@@ -332,6 +345,11 @@ export function DealDocumentRegister({
             </div>
           )}
         </div>
+      ) : null}
+
+      {remainingInvoiceDialogOpen ? (
+        <RemainingInvoiceDialog ticketId={ticketId} canWrite={canWriteRemainingInvoice}
+          onClose={() => setRemainingInvoiceDialogOpen(false)} />
       ) : null}
     </Panel>
   );

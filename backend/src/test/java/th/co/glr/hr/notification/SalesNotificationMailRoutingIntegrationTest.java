@@ -122,28 +122,116 @@ class SalesNotificationMailRoutingIntegrationTest extends AbstractPostgresIntegr
     }
 
     /**
-     * Measured, not assumed: {@code notifyByRoleInternal}'s division switch covers {@code import},
-     * {@code ceo} and {@code sales} and has <b>no {@code account} arm</b>, so an account-role fan-out
-     * writes no in-app row today — and no sales service asks for one. Email deliberately inherits
-     * that silence rather than inventing a channel the in-app side does not have; adding the arm
-     * would be a change to <i>which</i> notifications are raised, which this work is not.
-     *
-     * <p>Pinned so the empty account column in the routing table reads as a known gap rather than as
-     * a router that forgot the role. {@link #theRouterSendsAccountRoleMailToTheSharedBoxIfTheFanOutEverGainsIt}
-     * is the other half: the routing itself is implemented and tested, waiting for a caller.
+     * GLA-32 (2026-09-19): {@code notifyByRoleInternal}'s division switch used to cover only
+     * {@code import}, {@code hr}, {@code ceo}, {@code sales} and {@code sales_manager} — no
+     * {@code account} arm at all, so an account-role fan-out wrote no in-app row and the early
+     * {@code return} meant {@code salesMailer.emailForRole} was never even reached (this test used
+     * to be named {@code anAccountRoleFanOutIsANoOpInBothChannelsToday} and asserted exactly that).
+     * {@code th.co.glr.hr.deposit.DepositNoticeService#issue} (deposit-notice notification, GLA-32)
+     * is the fan-out's first real caller, so the gap is now closed: an {@code account}-division employee gets an
+     * in-app row, and — ruling 1, unchanged — is reached by mail only through the shared box, never
+     * personally. {@link #theRouterSendsAccountRoleMailToTheSharedBoxDirectly} pins
+     * the router half of this same contract in isolation.
      */
     @Test
-    void anAccountRoleFanOutIsANoOpInBothChannelsToday() {
-        insertEmployee("ACC-2", insertDivision("AC", "ฝ่ายบัญชี"), "wichai.account@glr.co.th");
+    void accountRoleFanOutInsertsAnInAppRowAndMailsOnlyTheSharedBox() {
+        long accountEmployee = insertEmployee("ACC-2", insertDivision("AC", "ฝ่ายบัญชี"), "wichai.account@glr.co.th");
 
-        notifications.notifyByRole("account", 7L, "APPROVED", "Ticket PR-2026-0007 ได้รับการอนุมัติราคาแล้ว");
+        notifications.notifyByRole("account", 7L, "DEPOSIT_NOTICE_ISSUED", "ออกใบแจ้งรับมัดจำ GLRD001 แล้ว");
 
-        assertThat(countNotificationRows()).isZero();
-        assertThat(mailer.sent()).isEmpty();
+        assertThat(countNotificationRows()).isEqualTo(1);
+        assertThat(jdbc.queryForObject(
+            "SELECT employee_id FROM hr.notification WHERE employee_id = :id",
+            Map.of("id", accountEmployee), Long.class)).isEqualTo(accountEmployee);
+        assertThat(mailer.recipients()).containsExactly("account@glr.co.th");
+        assertThat(mailer.recipients()).doesNotContain("wichai.account@glr.co.th");
     }
 
+    /**
+     * The precedence guard mirrors {@code DivisionAccessPolicy#roleFor}: an executive-titled
+     * AC-division employee resolves to {@code ceo} in Java (isExecutive is checked BEFORE the
+     * account branch), so this predicate must exclude them too rather than double-notifying — same
+     * shape as {@link #ceoNotificationStillMailsWhenNoManagingDirectorExistsToReceiveAnInAppRow}:
+     * the shared-box email still goes out (ruling 1's "mail even when nobody matched" behaviour),
+     * only the in-app fan-out is empty.
+     */
     @Test
-    void theRouterSendsAccountRoleMailToTheSharedBoxIfTheFanOutEverGainsIt() {
+    void accountRoleFanOutExcludesAnExecutiveTitledAcDivisionEmployee() {
+        long accountDivision = insertDivision("AC", "ฝ่ายบัญชี");
+        long executivePosition = insertPosition("AC-EXEC", "กรรมการ");
+        insertEmployee("ACC-EXEC", accountDivision, executivePosition, "exec.account@glr.co.th", null);
+
+        notifications.notifyByRole("account", 7L, "DEPOSIT_NOTICE_ISSUED", "ออกใบแจ้งรับมัดจำ GLRD001 แล้ว");
+
+        assertThat(countNotificationRows()).isZero();
+        assertThat(mailer.recipients()).containsExactly("account@glr.co.th");
+        assertThat(mailer.recipients()).doesNotContain("exec.account@glr.co.th");
+    }
+
+    /**
+     * Opus review (2026-09-19): pins the predicate against the naive alternative — a division
+     * coded {@code ACX} would satisfy {@code d.source_code ILIKE 'AC%'} but must NOT satisfy the
+     * exact match this predicate actually uses (mirroring {@code DivisionAccessPolicy#roleFor}'s
+     * {@code "ac".equals(divisionCode(employee))}, not a prefix test).
+     *
+     * <p><b>MUTATION-CHECK (actually run).</b> Swapping the predicate's {@code = 'ac'} for
+     * {@code LIKE 'ac%'} turned this test red (the ACX employee got a row) with nothing else in
+     * the class affected; restored and confirmed byte-identical by SHA-256 before continuing.
+     */
+    @Test
+    void accountRoleFanOutExcludesADivisionCodedAcxNotJustAc() {
+        long acxDivision = insertDivision("ACX", "ฝ่ายอื่นที่ขึ้นต้นด้วยเอซี");
+        insertEmployee("ACX-1", acxDivision, "acx.employee@glr.co.th");
+
+        notifications.notifyByRole("account", 7L, "DEPOSIT_NOTICE_ISSUED", "ออกใบแจ้งรับมัดจำ GLRD001 แล้ว");
+
+        assertThat(countNotificationRows()).isZero();
+    }
+
+    /**
+     * The fallback half of the SAME predicate: {@code DivisionAccessPolicy#roleFor}'s
+     * {@code divisionCode} falls back to the {@code name_th} prefix (split on the FIRST
+     * {@code '-'}) whenever {@code source_code} is blank/NULL — real production rows take this
+     * path (see the "hr" case's own Javadoc a few lines up, which this account case mirrors).
+     *
+     * <p><b>MUTATION-CHECK (actually run).</b> Replacing the {@code COALESCE(NULLIF(...), split_part
+     * (...))} fallback with a bare {@code d.source_code = 'ac'} (dropping the name_th fallback
+     * entirely) turned this test red — zero rows instead of one — with nothing else in the class
+     * affected; restored and confirmed byte-identical by SHA-256 before continuing.
+     */
+    @Test
+    void accountRoleFanOutMatchesTheNameThPrefixFallbackWhenSourceCodeIsNull() {
+        long fallbackDivision = insertDivisionWithNullCode("AC-ฝ่ายบัญชี");
+        long accountEmployee = insertEmployee("AC-FALLBACK", fallbackDivision, "fallback.account@glr.co.th");
+
+        notifications.notifyByRole("account", 7L, "DEPOSIT_NOTICE_ISSUED", "ออกใบแจ้งรับมัดจำ GLRD001 แล้ว");
+
+        assertThat(countNotificationRows()).isEqualTo(1);
+        assertThat(jdbc.queryForObject(
+            "SELECT employee_id FROM hr.notification WHERE employee_id = :id",
+            Map.of("id", accountEmployee), Long.class)).isEqualTo(accountEmployee);
+    }
+
+    /** The pre-existing {@code e.is_active = TRUE} guard (shared by every role, not new to this
+     *  predicate) must still exclude a deactivated account-division employee. */
+    @Test
+    void accountRoleFanOutExcludesAnInactiveAccountEmployee() {
+        long accountDivision = insertDivision("AC", "ฝ่ายบัญชี");
+        insertInactiveEmployee("ACC-INACTIVE", accountDivision, "inactive.account@glr.co.th");
+
+        notifications.notifyByRole("account", 7L, "DEPOSIT_NOTICE_ISSUED", "ออกใบแจ้งรับมัดจำ GLRD001 แล้ว");
+
+        assertThat(countNotificationRows()).isZero();
+    }
+
+    /**
+     * Isolates the ROUTER half of the account contract from the fan-out's own division predicate
+     * above — GLA-32 renamed this from {@code theRouterSendsAccountRoleMailToTheSharedBoxIfThe
+     * FanOutEverGainsIt} once {@code DepositNoticeService.issue} became that real caller, so "if
+     * it ever gains one" is no longer accurate.
+     */
+    @Test
+    void theRouterSendsAccountRoleMailToTheSharedBoxDirectly() {
         SalesNotificationMailRouter router = new SalesNotificationMailRouter(
             new NotificationEmailService(mailer, new BrandAssets(), "", "", PORTAL),
             new SalesMailRecipientRepository(jdbc));
@@ -351,6 +439,15 @@ class SalesNotificationMailRoutingIntegrationTest extends AbstractPostgresIntegr
         return id.longValue();
     }
 
+    /** {@code Map.of} rejects a null value outright, so a NULL {@code source_code} — the
+     *  name_th-prefix fallback's own precondition — needs {@link MapSqlParameterSource} instead. */
+    private long insertDivisionWithNullCode(String name) {
+        Number id = jdbc.queryForObject("""
+            INSERT INTO hr.division (source_code, name_th) VALUES (:code, :name) RETURNING division_id
+            """, new MapSqlParameterSource().addValue("code", null).addValue("name", name), Number.class);
+        return id.longValue();
+    }
+
     /** {@code hr.position.source_code} is VARCHAR(10), so the code is short and the Thai title —
      *  the string {@link CeoApproverRule#SQL_PREDICATE} actually matches on — goes in {@code name_th}. */
     private long insertPosition(String code, String nameTh) {
@@ -388,6 +485,23 @@ class SalesNotificationMailRoutingIntegrationTest extends AbstractPostgresIntegr
                 .addValue("divisionId", divisionId)
                 .addValue("positionId", positionId)
                 .addValue("managerId", managerId),
+            Number.class);
+        return id.longValue();
+    }
+
+    /** Same shape as {@link #insertEmployee(String, long, String)}, {@code is_active = FALSE} —
+     *  for pinning the pre-existing {@code e.is_active = TRUE} guard against the account branch. */
+    private long insertInactiveEmployee(String code, long divisionId, String email) {
+        Number id = jdbc.queryForObject("""
+            INSERT INTO hr.employee (employee_code, first_name_th, email, division_id, is_active)
+            VALUES (:code, :name, :email, :divisionId, FALSE)
+            RETURNING employee_id
+            """,
+            new MapSqlParameterSource()
+                .addValue("code", code)
+                .addValue("name", FIRST_NAMES.getOrDefault(code, code))
+                .addValue("email", email)
+                .addValue("divisionId", divisionId),
             Number.class);
         return id.longValue();
     }

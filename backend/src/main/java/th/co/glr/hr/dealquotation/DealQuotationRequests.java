@@ -46,7 +46,11 @@ public final class DealQuotationRequests {
         @Size(max = 255) String color,
         @Size(max = 255) String texture,
         @Size(max = 255) String sizeText,
-        BigDecimal thicknessMm,
+        // Opus review finding #7 (2026-09-18), applied here too as a pure annotation add (same
+        // NUMERIC(6,2) column type as sales.pricing_request_item.thickness_mm, added for the
+        // identical reason on that record): stops an out-of-range value overflowing
+        // sales.quotation_item.thickness_mm as a raw 500 instead of a 400.
+        @DecimalMin("0") @DecimalMax("9999") @Digits(integer = 4, fraction = 2) BigDecimal thicknessMm,
         // Review fix F3 (2026-09-16) — sales.quotation_item.sqm_per_piece is NUMERIC(10,6), exactly
         // like sqmPerBox below; mirrors that field's own @Digits bound. Without it, a direct API
         // call with a 7th decimal prices the line on the UNROUNDED value while the document
@@ -67,8 +71,10 @@ public final class DealQuotationRequests {
         BigDecimal unitPrice,
         @DecimalMin("0") @DecimalMax("100") BigDecimal discountPct,
         @Size(max = 40) String originCountry,
-        Integer leadTimeMinDays,
-        Integer leadTimeMaxDays,
+        // SMALLINT columns (sales.quotation_item.lead_time_min/max_days, V165) — same pure
+        // annotation add as PricingRequestItemRequest's identical fields (Opus review finding #7).
+        @Min(0) @Max(32767) Integer leadTimeMinDays,
+        @Min(0) @Max(32767) Integer leadTimeMaxDays,
         @Size(max = 4000) String itemNotes,
 
         // ── quotation v3 (owner feedback pass 3, 2026-09-11) ──────────────────────────────────
@@ -446,9 +452,24 @@ public final class DealQuotationRequests {
         @NotBlank @Pattern(regexp = "BELOW|BESIDE", message = "ต้องเป็น BELOW หรือ BESIDE") String placement
     ) {}
 
+    // GLA-123 slice S2 REWORK (owner reversed the dual-approval design, 2026-09-20): the
+    // alsoApproveAsSalesManager checkbox is GONE — there is no second slot to fill on anyone's
+    // behalf any more. One approval, by whoever may act, issues the document.
     public record ApproveRequest(@Size(max = 2000) String note) {}
 
     public record RejectRequest(@NotBlank @Size(max = 2000) String reason) {}
 
     public record CancelRequest(@Size(max = 2000) String reason) {}
+
+    /** GLA-123 slice S3 (R9 — customer outcome) — mirrors {@code
+     * CustomerQuotationRequests.RecordQuotationOutcomeRequest} field-for-field; kept as this
+     * package's own record rather than reused across packages, matching this file's existing
+     * convention of one self-contained request-record family per quotation engine. {@code
+     * outcome} is one of {@code ACCEPTED}/{@code REJECTED}/{@code REVISION_REQUESTED} — validated
+     * against {@code DealQuotationService}'s own {@code RECORDABLE_OUTCOMES}, not here. */
+    public record RecordOutcomeRequest(
+        String outcome,
+        @Size(max = 4000) String customerNote,
+        String clientRequestId
+    ) {}
 }

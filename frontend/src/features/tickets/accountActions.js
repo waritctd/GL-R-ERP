@@ -87,18 +87,30 @@ function closeReady(ticket) {
  * `commissionRecorded` may be absent on an old/hand-built row (e.g. a stale cached object) —
  * `!ticket.commissionRecorded` naturally treats `undefined` the same as `false` ("not recorded"),
  * which is the safe default: it never hides a step that might still be needed.
+ *
+ * @param {string} [viewerRole] GLA-118 (owner ruling 2026-09-20, part A): steps 2 and 3 both
+ *   record a payment (ยืนยันรับมัดจำ = confirmDepositPaid, รับชำระส่วนที่เหลือ = confirmFinalPayment),
+ *   which is account ONLY now — the CEO fallback is gone. The CEO can still reach this page
+ *   (canConfirmPayments/`/finance` nav are unchanged, still ['account','ceo']), so without this
+ *   parameter the worklist would offer the CEO a CTA the server now refuses with 403. When
+ *   omitted, steps 2/3 are OFFERED (the caller is asserting an account
+ *   viewer — workState.js's `role === 'account' ? nextAccountAction(deal) ...`); any other passed
+ *   role skips them and the resolver falls through to whichever later step applies, mirroring
+ *   TicketService's PAYMENT_RECORD_ROLES. Every caller that does not already know the viewer is
+ *   account must pass the viewer's role. The server gate is the authority either way.
  */
-export function nextAccountAction(ticket) {
+export function nextAccountAction(ticket, viewerRole) {
   if (!ticket) return null;
   const outstanding = ticket.amountOutstanding != null && Number(ticket.amountOutstanding) > 0;
+  const canRecordPayments = viewerRole === undefined || viewerRole === 'account';
 
   if (ticket.overdue && outstanding) {
     return { key: 'chaseOverdue', label: 'ติดตามชำระ', to: `/tickets/${ticket.id}`, urgent: true };
   }
-  if (ticket.status === 'quotation_issued' && ticket.paymentStatus === 'DEPOSIT_NOTICE_ISSUED') {
+  if (canRecordPayments && ticket.status === 'quotation_issued' && ticket.paymentStatus === 'DEPOSIT_NOTICE_ISSUED') {
     return { key: 'confirmDeposit', label: 'ยืนยันรับมัดจำ', to: `/tickets/${ticket.id}`, urgent: false };
   }
-  if (ticket.status === 'quotation_issued' && finalPaymentDue(ticket)) {
+  if (canRecordPayments && ticket.status === 'quotation_issued' && finalPaymentDue(ticket)) {
     return { key: 'confirmFinalPayment', label: 'รับชำระส่วนที่เหลือ', to: `/tickets/${ticket.id}`, urgent: false };
   }
   if (closeReady(ticket)) {

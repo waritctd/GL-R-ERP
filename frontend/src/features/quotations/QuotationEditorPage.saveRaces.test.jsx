@@ -23,7 +23,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       tickets: { get: vi.fn(), create: vi.fn() },
       dealQuotations: {
         get: vi.fn(), create: vi.fn(), update: vi.fn(), calculateLine: vi.fn(), submit: vi.fn(),
-        approve: vi.fn(), reject: vi.fn(), createRevision: vi.fn(), cancel: vi.fn(),
+        approve: vi.fn(), reject: vi.fn(), createRevision: vi.fn(), createReorder: vi.fn(), cancel: vi.fn(),
         downloadPdf: vi.fn(), downloadXlsx: vi.fn(),
       },
       catalog: { prices: vi.fn() },
@@ -144,6 +144,43 @@ describe('lost edit on save (#932 defect 1)', () => {
     // dirty must have stayed true, so the next debounce tick fires a SECOND PUT carrying it.
     await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalledTimes(2), { timeout: 4000 });
     expect(api.dealQuotations.update.mock.calls[1][1].customerNotes).toBe('second edit');
+  });
+
+  // MAJOR-2 fix (Opus re-review, 2026-09-20): the M5 fix (merging a save response's server-
+  // computed fields into local state so the CEO markers refresh without a reload) originally
+  // spread the WHOLE matched server item onto the local row unconditionally
+  // (`{ ...it, ...server }`), including plain user-editable fields like unitPrice. The test above
+  // only edits `customerNotes`, a HEADER field #mergeServerItemFields never touches -- it could
+  // never have caught this. This one edits an ITEM field instead, and affects DEAL_DIRECT too
+  // (there is nothing PRICING_REQUEST-specific about the bug: any row, any origin).
+  it('MAJOR-2: an item edit typed while a save is in flight is not clobbered by the server echo (M5 merge)', async () => {
+    renderEditor('/quotations/5');
+    const priceInput = await screen.findByLabelText(/^ราคา\/หน่วย/);
+
+    const first = deferred();
+    api.dealQuotations.update.mockImplementationOnce(() => first.promise);
+
+    fireEvent.change(priceInput, { target: { value: '900' } });
+    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalledTimes(1), { timeout: 4000 });
+    expect(api.dealQuotations.update.mock.calls[0][1].items[0].unitPrice).toBe(900);
+
+    // A second edit lands while PUT #1 (built from 900) is still on the wire.
+    fireEvent.change(priceInput, { target: { value: '1234' } });
+    expect(priceInput.value).toBe('1234');
+
+    // PUT #1's server echo resolves AFTER the newer edit — it reflects what was SENT (900), not
+    // what is now on screen.
+    first.resolve({
+      quotation: draft({ items: [{ ...TILE_ITEM, unitPrice: 900, netUnitPrice: 900, lineAmount: 51300 }] }),
+    });
+
+    // The merge must never clobber a field the rep is actively editing, regardless of timing.
+    await waitFor(() => expect(priceInput.value).toBe('1234'));
+
+    // dirty must have stayed true, so the next debounce tick fires a SECOND PUT carrying 1234 —
+    // the bug's OTHER symptom was this PUT silently reverting to send the stale 900 instead.
+    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalledTimes(2), { timeout: 4000 });
+    expect(api.dealQuotations.update.mock.calls[1][1].items[0].unitPrice).toBe(1234);
   });
 
   it('...variant through submit: ส่งขออนุมัติ still saves the newer edit before submitting', async () => {

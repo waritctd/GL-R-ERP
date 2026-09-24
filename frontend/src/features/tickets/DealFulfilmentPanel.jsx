@@ -1,14 +1,90 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
+import { FormField } from '../../components/common/FormField.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatThaiDate, fulfilmentStatusLabel } from '../../utils/format.js';
 import { nextFulfilmentActionCode } from './importActions.js';
+import { ImportRequestFactoryCard } from './ImportRequestFactoryCard.jsx';
 import { procurementPath } from './stageMeta.js';
+
+const MISSING_COUNTRY_PREFIX = 'กรุณาระบุประเทศให้กับโรงงานใหม่: ';
+
+// One factory NAME's country pick, for the createDrafts auto-create path (owner decision 09-18):
+// a real country, or 'ZZ' อื่นๆ with a required typed name — same pairing rule
+// PriceImportService/ImportRequestService enforce server-side.
+function NewFactoryCountryModal({ factoryNames, countries, countriesError, onClose, onSubmit, submitting }) {
+  const [entries, setEntries] = useState(() => Object.fromEntries(
+    factoryNames.map((name) => [name, { countryCode: '', countryOther: '' }]),
+  ));
+  const ready = !countriesError && factoryNames.every((name) => {
+    const e = entries[name];
+    return e?.countryCode && (e.countryCode !== 'ZZ' || e.countryOther?.trim());
+  });
+  return (
+    <Modal
+      title="ระบุประเทศของโรงงานใหม่"
+      subtitle="ดีลนี้มีรายการที่ต้องสร้างใบขอซื้อให้โรงงานที่ยังไม่มีในระบบ"
+      onClose={onClose}
+      footer={(
+        <>
+          <Button type="button" variant="secondary" onClick={onClose}>ยกเลิก</Button>
+          <Button type="button" variant="primary" disabled={!ready || submitting}
+            onClick={() => onSubmit(factoryNames.map((name) => ({
+              factoryName: name, countryCode: entries[name].countryCode,
+              countryOther: entries[name].countryCode === 'ZZ' ? entries[name].countryOther.trim() : null,
+            })))}
+            data-testid="new-factory-country-submit">
+            สร้างใบขอซื้อ
+          </Button>
+        </>
+      )}
+    >
+      {/* PR-B REVIEW ROUND 1, S5: a failed countries fetch must say so — an empty select with no
+          explanation reads as "no countries exist", not as "this request failed", and the submit
+          button above is disabled via `ready` rather than silently letting an empty countryCode
+          through. */}
+      {countriesError ? (
+        <p className="mb-2 text-xs font-bold text-danger" data-testid="new-factory-country-error">
+          โหลดรายชื่อประเทศไม่สำเร็จ — {countriesError.message || 'ลองปิดหน้าต่างนี้แล้วเปิดใหม่'}
+        </p>
+      ) : null}
+      <div className="grid gap-3">
+        {factoryNames.map((name) => (
+          <div key={name} className="grid gap-2 rounded-md border border-border-subtle p-2.5">
+            <strong className="text-sm">{name}</strong>
+            <FormField label="ประเทศ" htmlFor={`new-factory-country-${name}`} required>
+              <select
+                id={`new-factory-country-${name}`}
+                value={entries[name].countryCode}
+                onChange={(e) => setEntries((d) => ({ ...d, [name]: { ...d[name], countryCode: e.target.value } }))}
+              >
+                <option value="">— เลือกประเทศ —</option>
+                {countries.map((c) => (
+                  <option key={c.countryCode} value={c.countryCode}>{c.nameTh} ({c.countryCode})</option>
+                ))}
+              </select>
+            </FormField>
+            {entries[name].countryCode === 'ZZ' ? (
+              <FormField label="ระบุชื่อประเทศ" htmlFor={`new-factory-country-other-${name}`} required>
+                <input
+                  id={`new-factory-country-other-${name}`}
+                  type="text"
+                  value={entries[name].countryOther}
+                  onChange={(e) => setEntries((d) => ({ ...d, [name]: { ...d[name], countryOther: e.target.value } }))}
+                />
+              </FormField>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </Modal>
+  );
+}
 
 const STEP_ROLE_TH = { import: 'ฝ่ายนำเข้า', ceo: 'CEO', sales: 'ฝ่ายขาย', account: 'ฝ่ายบัญชี' };
 
@@ -106,6 +182,16 @@ export function DealFulfilmentPanel({
   const role = user?.role;
   const isImport = ROLE_PERMISSIONS.canPickupTickets.includes(role);
   const isFulfilment = isImport || role === 'ceo';
+  // Stored ใบขอซื้อ (V184, PR-B) role shape — mirrors ImportRequestService, see that class's own
+  // Javadoc for the authoritative matrix. Distinct from `isFulfilment` above (the LEGACY
+  // deal-level chain's import/ceo pair) because the stored aggregate's write gate is the deal's
+  // OWNING sales rep + CEO, not import.
+  const isOwner = role === 'sales' && summary?.createdById === user?.id;
+  const canReadStoredIr = isFulfilment || role === 'sales_manager' || isOwner;
+  const canFullWriteStoredIr = role === 'ceo' || isOwner;
+  const canFooterWriteStoredIr = role === 'ceo';
+  const canAdvanceStoredIr = role === 'import' || role === 'ceo';
+  const canEmailWriteStoredIr = canFullWriteStoredIr || role === 'import';
 
   const hasAction = (action) => availableActions.some((item) => item.action === action);
 
@@ -134,10 +220,106 @@ export function DealFulfilmentPanel({
   // the remainder. `null` (no items loaded yet) means "don't guess", not "import".
   const fromStock = totalOrdered > 0 ? totalFromStock >= totalOrdered : null;
 
-  // ── ใบขอซื้อ (F-SM-001) ───────────────────────────────────────────────────────────────────
+  // ── ใบขอซื้อรายโรงงาน (V184, PR-B) ────────────────────────────────────────────────────────────
+  // The STORED aggregate — one row per (deal, factory). Supersedes the legacy per-brand PREVIEW
+  // block below once the deal has any stored row: that block's own PDF is now superseded by each
+  // card's own download buttons (internal + factory copy), and the four legacy deal-level buttons
+  // in Step 1 above already 409 once any factory here is ISSUED (canIssueImportRequest /
+  // hasLiveImportRequests — see importActions.js's own comment).
+  const storedIrQuery = useQuery({
+    queryKey: queryKeys.storedImportRequests(ticketId),
+    queryFn: () => api.storedImportRequests.listForTicket(ticketId).then((r) => r.importRequests ?? []),
+    enabled: !!ticketId && canReadStoredIr,
+  });
+  const storedIrRows = storedIrQuery.data ?? [];
+  const liveStoredIrRows = storedIrRows
+    .filter((r) => r.status !== 'SUPERSEDED')
+    .sort((a, b) => (a.factoryName ?? '').localeCompare(b.factoryName ?? '', 'th') || a.version - b.version);
+  // PR-B REVIEW ROUND 1, S5: a FAILED fetch must not read as "this deal has zero stored IRs" — an
+  // empty `?? []` on error used to (a) show "ยังไม่มีใบขอซื้อสำหรับดีลนี้" ("no IR yet") where an
+  // error message belonged, and (b) via `hasStoredIrs` being false, resurrect the legacy per-brand
+  // block below, which V184-tracked deals must never show again once the stored aggregate exists.
+  // Treating an ERROR as "has stored IRs" (rather than as "does not") is the safe direction here:
+  // it keeps the legacy block hidden and shows the real error instead of guessing.
+  const hasStoredIrs = storedIrRows.length > 0 || storedIrQuery.isError;
+
+  const [newFactoryNames, setNewFactoryNames] = useState(null); // string[] | null
+  // PR-B REVIEW ROUND 1, S7: the 409's message is parsed for factory names because the backend
+  // doesn't (and per this pass's backend scope, may not) return a structured list — but that
+  // string is not a contract, so this is made as robust as a string-parse can be:
+  //   - names are normalized (trim + collapse internal whitespace) before they're shown or keyed,
+  //     matching ImportRequestService's own normalizeFactoryName casing-insensitivity in spirit;
+  //   - a retry that comes back with the SAME missing-name set (case/space-insensitively) does NOT
+  //     reopen the modal again — that would loop forever if the server's message format or this
+  //     parse ever drift — it surfaces a plain error instead and lets the rep press "สร้างใบขอซื้อ"
+  //     again deliberately.
+  const [missingFactoryRetryKey, setMissingFactoryRetryKey] = useState(null);
+  const countriesQuery = useQuery({
+    queryKey: ['priceImport', 'countries'],
+    queryFn: () => api.priceImport.countries(),
+    enabled: newFactoryNames != null,
+  });
+  const createDraftsMutation = useMutation({
+    mutationFn: (payload) => api.storedImportRequests.createDrafts(ticketId, payload),
+    onSuccess: () => {
+      showToast?.('success', 'สร้างใบขอซื้อแล้ว');
+      setNewFactoryNames(null);
+      setMissingFactoryRetryKey(null);
+      queryClient.invalidateQueries({ queryKey: queryKeys.storedImportRequests(ticketId) });
+      invalidateAfterFulfilmentChange();
+    },
+    onError: (err, variables) => {
+      if (typeof err.message === 'string' && err.message.startsWith(MISSING_COUNTRY_PREFIX)) {
+        const names = err.message.slice(MISSING_COUNTRY_PREFIX.length).split(',')
+          .map((s) => s.trim().replace(/\s+/g, ' '))
+          .filter(Boolean);
+        const key = [...names].map((n) => n.toLowerCase()).sort().join('|');
+        const wasARetry = Boolean(variables?.newFactoryCountries?.length);
+        if (wasARetry && key === missingFactoryRetryKey) {
+          setNewFactoryNames(null);
+          setMissingFactoryRetryKey(null);
+          onError(new Error('ยังระบุโรงงานไม่ครบ — กรุณากดสร้างใบขอซื้ออีกครั้งแล้วลองใหม่'));
+          return;
+        }
+        setMissingFactoryRetryKey(key);
+        setNewFactoryNames(names);
+        return;
+      }
+      onError(err);
+    },
+  });
+
+  // "กำหนดวันที่ต้องการของ" — the DEAL-level value every NEW draft snapshots its own requiredByNote
+  // from (ImportRequestService#setRequiredByNote / #issue's fallback). Write-only from this panel:
+  // there is no GET for it (it lives on ImportRequestQueryRepository's internal TicketSnapshot, not
+  // any ticket DTO the frontend reads), so this is an uncontrolled note a rep types once rather than
+  // an editable display of the current value. Sales (owner) or CEO, from DealStage.ORDER_RECEIVED.
+  const [dealRequiredByDraft, setDealRequiredByDraft] = useState('');
+  // Nit: best-effort READ-BACK — there is still no GET for the deal-level value itself (see above),
+  // but once any factory row exists its OWN requiredByNote was snapshotted FROM that deal-level
+  // value (ImportRequestService#insertDraft), so it is the closest available proxy for "what is
+  // currently set" rather than always showing a blank field a rep might overwrite with an empty
+  // save. Seeded once (not on every row change) so it never clobbers an in-progress edit.
+  const [requiredByNoteSeeded, setRequiredByNoteSeeded] = useState(false);
+  useEffect(() => {
+    if (requiredByNoteSeeded || liveStoredIrRows.length === 0) return;
+    const note = liveStoredIrRows.find((r) => r.requiredByNote)?.requiredByNote;
+    if (note) setDealRequiredByDraft(note);
+    setRequiredByNoteSeeded(true);
+  }, [requiredByNoteSeeded, liveStoredIrRows]);
+  const setDealRequiredByMutation = useMutation({
+    mutationFn: (requiredByNote) => api.storedImportRequests.setRequiredByNote(ticketId, { requiredByNote }),
+    // Nit: does NOT blank the field after a save — the typed value is exactly what is now current
+    // on the deal, so leaving it visible is the correct read-back, not a leftover draft.
+    onSuccess: () => showToast?.('success', 'บันทึกกำหนดวันที่ต้องการของแล้ว'),
+    onError,
+  });
+
+  // ── ใบขอซื้อ (F-SM-001) — legacy PREVIEW, per brand ───────────────────────────────────────────
   // One form per BRAND on the deal (owner ruling), generated on demand — nothing is stored, so the
   // ReF. No. is typed here rather than minted. See ImportRequestQueryRepository's Javadoc for why
-  // the stored aggregate is a separate change.
+  // the stored aggregate is a separate change. Hidden below once `hasStoredIrs` — see that flag's
+  // own comment.
   const [irRef, setIrRef] = useState('');
   const brandsQuery = useQuery({
     queryKey: queryKeys.importRequestBrands(ticketId),
@@ -365,32 +547,48 @@ export function DealFulfilmentPanel({
             {fs ? <StatusBadge tone={fsLabel.tone}>{fsLabel.label}</StatusBadge> : null}
           </div>
 
-          <SubstepChips currentCode={fs} fromStock={fromStock} />
+          {/* V184 (PR-B): once the deal is tracked per-factory, the old deal-level substep chips
+              and the four legacy buttons below them are dead weight — fulfillmentStatus sits at
+              IR_ISSUED for the whole tracking period (only the rollup moves it again, to
+              GOODS_RECEIVED), and the legacy mutations 409 the moment any factory here is ISSUED
+              (see markIrSent/markShipping/markGoodsReceived's own hasLiveImportRequests guard).
+              The "ใบขอซื้อรายโรงงาน" section below is the per-factory replacement. */}
+          {hasStoredIrs ? (
+            <p className="text-xs text-text-muted" data-testid="deal-fulfilment-ir-tracked-note">
+              ดีลนี้ติดตามการนำเข้าแบบรายโรงงาน — ดูและเลื่อนสถานะที่ส่วน “ใบขอซื้อรายโรงงาน” ด้านล่าง
+            </p>
+          ) : (
+            <>
+              <SubstepChips currentCode={fs} fromStock={fromStock} />
 
+              <div className="flex flex-wrap gap-2">
+                {can.issueImportRequest ? (
+                  <Button type="button" variant="primary" disabled={issueIrMutation.isPending}
+                    onClick={() => issueIrMutation.mutate()} data-testid="deal-fulfilment-issue-ir">
+                    ออกคำขอนำเข้า (IR)
+                  </Button>
+                ) : can.markIrSent ? (
+                  <Button type="button" variant="primary" disabled={markIrSentMutation.isPending}
+                    onClick={() => markIrSentMutation.mutate()} data-testid="deal-fulfilment-mark-ir-sent">
+                    ส่งคำขอนำเข้าแล้ว
+                  </Button>
+                ) : can.markShipping ? (
+                  <Button type="button" variant="primary" disabled={markShippingMutation.isPending}
+                    onClick={() => markShippingMutation.mutate()} data-testid="deal-fulfilment-mark-shipping">
+                    สินค้าออกเดินทาง
+                  </Button>
+                ) : can.markGoodsReceived ? (
+                  <Button type="button" variant="primary" disabled={markGoodsReceivedMutation.isPending}
+                    onClick={() => markGoodsReceivedMutation.mutate()} data-testid="deal-fulfilment-mark-goods-received">
+                    รับสินค้าแล้ว
+                  </Button>
+                ) : fs == null ? (
+                  <p className="text-xs text-text-muted">ยังไม่ออกคำขอนำเข้า</p>
+                ) : null}
+              </div>
+            </>
+          )}
           <div className="flex flex-wrap gap-2">
-            {can.issueImportRequest ? (
-              <Button type="button" variant="primary" disabled={issueIrMutation.isPending}
-                onClick={() => issueIrMutation.mutate()} data-testid="deal-fulfilment-issue-ir">
-                ออกคำขอนำเข้า (IR)
-              </Button>
-            ) : can.markIrSent ? (
-              <Button type="button" variant="primary" disabled={markIrSentMutation.isPending}
-                onClick={() => markIrSentMutation.mutate()} data-testid="deal-fulfilment-mark-ir-sent">
-                ส่งคำขอนำเข้าแล้ว
-              </Button>
-            ) : can.markShipping ? (
-              <Button type="button" variant="primary" disabled={markShippingMutation.isPending}
-                onClick={() => markShippingMutation.mutate()} data-testid="deal-fulfilment-mark-shipping">
-                สินค้าออกเดินทาง
-              </Button>
-            ) : can.markGoodsReceived ? (
-              <Button type="button" variant="primary" disabled={markGoodsReceivedMutation.isPending}
-                onClick={() => markGoodsReceivedMutation.mutate()} data-testid="deal-fulfilment-mark-goods-received">
-                รับสินค้าแล้ว
-              </Button>
-            ) : fs == null ? (
-              <p className="text-xs text-text-muted">ยังไม่ออกคำขอนำเข้า</p>
-            ) : null}
             {can.reserveStock ? (
               <Button type="button" variant="secondary" disabled={reserveStockMutation.isPending}
                 onClick={openStockModal} data-testid="deal-fulfilment-reserve-stock">
@@ -406,10 +604,82 @@ export function DealFulfilmentPanel({
           </div>
         </div>
 
-        {/* ใบขอซื้อ (F-SM-001) — the document for step 1, not a step of its own, so no StepNumber.
-            Import/CEO only: ImportRequestService.IR_ROLES is {import, ceo}, so rendering this for
-            sales would offer a control that 403s. */}
-        {isFulfilment ? (
+        {/* ใบขอซื้อรายโรงงาน (V184, PR-B) — the STORED aggregate. Visible to CEO/import/
+            sales_manager unrestricted, and to sales only for a deal they own — mirrors
+            ImportRequestService#requireRead exactly (canReadStoredIr above). */}
+        {canReadStoredIr ? (
+          <div className="flex flex-col gap-2.5 rounded-md border border-border bg-surface p-3"
+            data-testid="deal-fulfilment-stored-ir">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <strong className="text-sm">ใบขอซื้อรายโรงงาน (F-SM-001)</strong>
+                <StepRoleTag owners={['sales', 'ceo']} viewerRole={role} />
+              </div>
+              {canFullWriteStoredIr ? (
+                <Button type="button" size="sm" variant="primary" disabled={createDraftsMutation.isPending}
+                  onClick={() => createDraftsMutation.mutate(undefined)} data-testid="deal-fulfilment-create-ir-drafts">
+                  {/* Nit: once the deal already has rows, "สร้างใบขอซื้อ" ("create a purchase
+                      request") read as though it would create a fresh set for every factory again
+                      — createDrafts actually SKIPS factories already covered (see its own
+                      CONFLICT-on-nothing-new behaviour), so the label now says what it really
+                      does the second time. */}
+                  {liveStoredIrRows.length > 0 ? 'สร้างใบขอซื้อโรงงานที่ยังไม่มี' : 'สร้างใบขอซื้อ'}
+                </Button>
+              ) : null}
+            </div>
+            <p className="text-2xs text-text-muted">
+              หนึ่งใบต่อหนึ่งโรงงาน — สร้างอัตโนมัติจากรายการสินค้าที่ต้องสั่งนำเข้า (ไม่รวมส่วนที่จองจากสต็อก)
+            </p>
+            {canFullWriteStoredIr ? (
+              <label className="flex flex-wrap items-center gap-2 text-xs font-bold text-text-secondary">
+                กำหนดวันที่ต้องการของ (ค่าเริ่มต้นสำหรับใบใหม่)
+                <input
+                  type="text"
+                  className="min-w-48 flex-1"
+                  value={dealRequiredByDraft}
+                  placeholder="เช่น Within 21/5/26"
+                  onChange={(e) => setDealRequiredByDraft(e.target.value)}
+                  data-testid="deal-required-by-note"
+                />
+                <Button type="button" size="sm" variant="secondary" disabled={setDealRequiredByMutation.isPending}
+                  onClick={() => setDealRequiredByMutation.mutate(dealRequiredByDraft)}
+                  data-testid="deal-required-by-note-save">
+                  บันทึก
+                </Button>
+              </label>
+            ) : null}
+            {storedIrQuery.isLoading ? (
+              <p className="text-xs text-text-muted">กำลังโหลดใบขอซื้อ…</p>
+            ) : storedIrQuery.isError ? (
+              <p className="text-xs font-bold text-danger" data-testid="deal-fulfilment-stored-ir-error">
+                โหลดใบขอซื้อรายโรงงานไม่สำเร็จ — {storedIrQuery.error?.message || 'ลองรีเฟรชหน้านี้อีกครั้ง'}
+              </p>
+            ) : liveStoredIrRows.length === 0 ? (
+              <p className="text-xs text-text-muted">ยังไม่มีใบขอซื้อสำหรับดีลนี้</p>
+            ) : (
+              <div className="flex flex-col gap-2.5">
+                {liveStoredIrRows.map((row) => (
+                  <ImportRequestFactoryCard
+                    key={row.id}
+                    row={row}
+                    ticketId={ticketId}
+                    canFullWrite={canFullWriteStoredIr}
+                    canFooterWrite={canFooterWriteStoredIr}
+                    canAdvance={canAdvanceStoredIr}
+                    canEmailWrite={canEmailWriteStoredIr}
+                    showToast={showToast}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        ) : null}
+
+        {/* ใบขอซื้อ (F-SM-001) — legacy PREVIEW, one form per BRAND, not a step of its own, so no
+            StepNumber. Import/CEO only: ImportRequestService.IR_ROLES is {import, ceo}, so
+            rendering this for sales would offer a control that 403s. Hidden once the deal has any
+            STORED row — the section above supersedes it (own download buttons per factory). */}
+        {isFulfilment && !hasStoredIrs ? (
           <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3"
             data-testid="deal-fulfilment-import-request">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -477,12 +747,14 @@ export function DealFulfilmentPanel({
           <div className="flex items-center gap-2">
             <StepNumber no={2} />
             <strong className="text-sm">ส่งมอบสินค้า</strong>
-            {/* Sales is listed FIRST because stages 13-14 are its ruling (2026-08-17); import/ceo
-                remain because #818 was additive. Mirrors TicketService#canWriteDelivery, which is
-                what actually gates the controls below -- a rep arriving here from the new
-                RECORD_DELIVERY CTA must not find the step badged as someone else's work.
-                sales_manager is absent on purpose: read+comment oversight only. */}
-            <StepRoleTag owners={['sales', 'import', 'ceo']} viewerRole={role} />
+            {/* Sales is listed FIRST because stages 13-14 are its ruling (2026-08-17). REVIEW ROUND
+                1, S2 (2026-09-18): import DROPPED from this list -- TicketService#canWriteDelivery
+                (the single source of truth this tag mirrors) is CEO, or the deal's own owning sales
+                rep, ONLY; import's write access to ส่งมอบสินค้า was a transfer to Sales, not an
+                addition, and badging import as a co-owner here would misrepresent who the mutation
+                gate (and the RECORD_PARTIAL_DELIVERY/COMPLETE_DELIVERY actions below) actually let
+                through. sales_manager is absent on purpose too: read+comment oversight only. */}
+            <StepRoleTag owners={['sales', 'ceo']} viewerRole={role} />
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
@@ -691,6 +963,24 @@ export function DealFulfilmentPanel({
             ))}
           </div>
         </Modal>
+      ) : null}
+
+      {newFactoryNames ? (
+        <NewFactoryCountryModal
+          // Nit: keyed on the retry key so a retry that comes back with a DIFFERENT (e.g. wider)
+          // missing-factory set forces a REMOUNT instead of reusing `entries` state seeded (via
+          // useState's lazy initializer, which only ever runs once) for the OLD `factoryNames`
+          // list — that stale state has no entry for a newly-added name, and the `<select>`'s
+          // `value={entries[name].countryCode}` (no optional chaining) throws reading
+          // `.countryCode` off `undefined`.
+          key={missingFactoryRetryKey}
+          factoryNames={newFactoryNames}
+          countries={countriesQuery.data ?? []}
+          countriesError={countriesQuery.isError ? countriesQuery.error : null}
+          submitting={createDraftsMutation.isPending}
+          onClose={() => setNewFactoryNames(null)}
+          onSubmit={(newFactoryCountries) => createDraftsMutation.mutate({ newFactoryCountries })}
+        />
       ) : null}
     </Panel>
   );

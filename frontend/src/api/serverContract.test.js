@@ -261,43 +261,11 @@ const SERVER_ONLY = {
   // ใบเสนอราคา tabs (F5) and the deal card's เลขที่ผู้เสียภาษี / โทร. fields (F7) now call
   // them, so the stale-entry test below is what required deleting them here.
 
-  // ── The STORED ใบขอซื้อ aggregate — capability built backend-first, UI not landed ──────────
-  // Nine routes for one document lifecycle: draft per brand, edit, issue (minting IR<yy><nnn> or
-  // accepting an override), revise, delete, read, and print from the stored snapshot. All gated
-  // {import, ceo} in ImportRequestService except required-by-note, which is SALES's field and carries
-  // its own gate; all proven wrong-way-round against real Postgres by
-  // StoredImportRequestIntegrationTest.
-  //
-  // Deliberately NOT wired into hrApi.js in the same change. This PR is a migration plus nine
-  // endpoints plus fourteen integration tests; bundling the UI would make it unreviewable, and the
-  // preview half of this feature shipped exactly this way (#812 backend, #816 UI) without trouble.
-  // The PREVIEW routes remain live and reachable, so the form is still obtainable meanwhile — what is
-  // missing is only the recorded, numbered version.
-  'POST /api/tickets/{}/import-requests':
-    'Raises one DRAFT per brand on the deal, skipping brands that already have a live form. The '
-    + 'entry point for the stored lifecycle.',
-  'GET /api/tickets/{}/import-requests':
-    'The deal\'s stored forms, all versions, with each one\'s printed sheet count.',
-  'GET /api/import-requests/{}':
-    'One stored form by its own id, with its items and printed sheet count — the read the edit and '
-    + 'issue screens will load before acting on a specific version.',
-  'PATCH /api/import-requests/{}':
-    'Edits a draft\'s body, or the import-owned footer of an issued form (those blocks are filled in '
-    + 'by hand AFTER issue). PATCH semantics — an absent field is left alone, never blanked.',
-  'POST /api/import-requests/{}/issue':
-    'DRAFT -> ISSUED: mints IR<yy><nnn> from sales.document_sequence, or accepts a caller override '
-    + 'without advancing the sequence, and supersedes the version it replaces.',
-  'POST /api/import-requests/{}/revise':
-    'Prepares a correction as a new DRAFT at the next version, copying the issued body. The previous '
-    + 'version stays ISSUED until the replacement issues.',
-  'DELETE /api/import-requests/{}':
-    'Deletes a DRAFT. An issued form is never deleted — it is superseded.',
-  'GET /api/import-requests/{}/file':
-    'Prints a stored form from ITS OWN snapshot, so an issued document keeps saying what it said '
-    + 'when it was signed even if the deal is later edited.',
-  'PUT /api/tickets/{}/required-by-note':
-    'Sets the deal-level "กำหนดวันที่ต้องการของ". The one route in this family that belongs to SALES '
-    + '(deal owner or CEO) rather than import, gated from DealStage.ORDER_RECEIVED onward.',
+  // The STORED ใบขอซื้อ aggregate's twelve routes stood here (createDrafts through
+  // required-by-note) between PR-A (#1008, backend-first) and PR-B, which wired every one of them
+  // into DealFulfilmentPanel's per-factory cards and the /fulfilment งานนำเข้า worklist — see
+  // api.storedImportRequests in hrApi.js. They are gone rather than re-worded: the stale-entry
+  // assertion below is what required deleting them here.
 
   // The three ใบขอซื้อ (F-SM-001) GETs were listed here between #812 and this change, as a
   // capability built backend-first whose UI had not landed. They are gone rather than re-worded:
@@ -305,9 +273,13 @@ const SERVER_ONLY = {
   // ordinary called endpoints and this test refuses to keep an exemption for them.
 
   // GET/PUT /api/catalog/thickness-defaults stood here from #814 until the CEO settings panel
-  // landed. They are gone rather than re-worded: ThicknessDefaultsPanel now calls both through
-  // hrApi.js, so this test's own "is now called by hrApi — delete the entry" assertion fires if
+  // landed. They are gone rather than re-worded: hrApi.js's catalogThicknessDefaults.list/save
+  // call both, so this test's own "is now called by hrApi — delete the entry" assertion fires if
   // they come back. That assertion is what removed them.
+  //
+  // They moved to UNREACHABLE_FROM_UI below on 2026-09-17, when ThicknessDefaultsPanel — hrApi's
+  // only UI caller for those two methods — was itself removed on request. hrApi.js still calls the
+  // endpoints (so they stay out of this list), but no screen calls hrApi anymore.
 
   // GET/PUT /api/deal-estimate-markup were the two entries here until 2026-08-14. They are gone
   // rather than re-worded: issue #748's owner ruling deleted the controller, repository, DTOs, both
@@ -328,6 +300,41 @@ const SERVER_ONLY = {
     'DiscountApprovalService.listPending — a CEO-wide queue across all quotations, not needed for '
     + 'the per-quotation approve/reject flow the task required (see the comment above). Capability '
     + 'built backend-first; wire it up if a cross-deal CEO queue view is ever requested.',
+
+  // GLA-99 step 3 (ใบวางบิล / billing note, V189): the STORED backend + renderer landed on this
+  // branch; the /finance ใบวางบิล tab that calls these eleven routes is step 4, a separate branch
+  // not yet merged. BillingNoteService/BillingNoteController/BillingNoteRenderer are already
+  // covered by BillingNoteServiceIntegrationTest (real Postgres, including the wrong-way-round
+  // authz suite) and BillingNoteRendererTest. Delete this whole block once step 4's screen calls
+  // these through hrApi.js.
+  'GET /api/customers/{}/billing-note-candidates':
+    'BillingNoteService.candidates — the customer-level outstanding-documents picker step 4\'s '
+    + 'ใบวางบิล tab will call before creating a draft. Backend-first; no screen yet.',
+  'GET /api/customers/{}/billing-notes':
+    'BillingNoteService.list — per-customer billing note history. Backend-first; no screen yet.',
+  'POST /api/customers/{}/billing-notes':
+    'BillingNoteService.createDraft. Backend-first; no screen yet.',
+  'GET /api/billing-notes/{}':
+    'BillingNoteService.get. Backend-first; no screen yet.',
+  'PUT /api/billing-notes/{}':
+    'BillingNoteService.updateDraft. Backend-first; no screen yet.',
+  'POST /api/billing-notes/{}/issue':
+    'BillingNoteService.issue — mints the AR_GLR number. Backend-first; no screen yet.',
+  'POST /api/billing-notes/{}/revise':
+    'BillingNoteService.revise — prepares a correction DRAFT. Backend-first; no screen yet.',
+  'POST /api/billing-notes/{}/cancel':
+    'BillingNoteService.cancel — voids an ISSUED note and releases its lines for re-billing. '
+    + 'Backend-first; no screen yet.',
+  'POST /api/billing-notes/{}/mark-received':
+    'BillingNoteService.markReceived — records ผู้รับวางบิล/วันนัดชำระเงิน after the customer '
+    + 'signs on paper. Backend-first; no screen yet.',
+  'POST /api/billing-notes/{}/mark-settled':
+    'BillingNoteService.markSettled — owner ruling C1: the only caller-triggered settlement path, '
+    + 'for an all-MANUAL note (e.g. ค่าขนส่ง) that can never auto-settle. Backend-first; no screen yet.',
+  'DELETE /api/billing-notes/{}':
+    'BillingNoteService.deleteDraft. Backend-first; no screen yet.',
+  'GET /api/billing-notes/{}/file':
+    'BillingNoteService.file — downloads the rendered .xls. Backend-first; no screen yet.',
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -567,10 +574,23 @@ describe('controller surface / hrApi.js contract', () => {
 const UNREACHABLE_FROM_UI = new Set([
   'DELETE /api/factory-quote-attachments/{}',
   'GET /api/catalog',
+  // GET/PUT /api/catalog/thickness-defaults joined this list on 2026-09-17: the CEO settings
+  // "ความหนาเริ่มต้นตามคอลเลกชัน (มม.)" panel — their only hrApi caller — was removed on request,
+  // frontend-only. See the removal note in CeoSettingsPage.jsx: the endpoint, its controller/
+  // repository, the underlying table, and the pricing engine's dependency on it via
+  // price_catalog.v_priceable_product are all untouched, so this is "UI unreachable", not "dead".
+  'GET /api/catalog/thickness-defaults',
   'GET /api/customer-quotations/{}',
   'GET /api/deposit-notices/{}',
   'GET /api/factory-configs',
   'GET /api/factory-quotes/{}',
+  // PR-B (import-request-per-factory UI): DealFulfilmentPanel/ImportFulfilmentPage both read the
+  // stored ใบขอซื้อ list (GET .../import-requests, plural, per ticket) and every mutation already
+  // returns its own full row, so this single-row-by-id GET has no screen that needs it separately.
+  // storedImportRequests.get stays in hrApi.js as a faithful mirror of the controller route
+  // (ImportRequestController#getStored) for completeness/future callers, same reasoning as the
+  // other single-row GETs already in this list (deposit-notices, factory-quotes, ...).
+  'GET /api/import-requests/{}',
   // 'GET /api/leave/policy-document' left this list on 2026-08-14: LeavePolicyDocumentPage.jsx
   // calls policyDocumentAvailable (the HEAD probe the GET mapping answers) and
   // downloadPolicyDocument, so a screen reaches it again for the first time since the reader bar
@@ -584,6 +604,19 @@ const UNREACHABLE_FROM_UI = new Set([
   'GET /api/price-import/staging/{}',
   'GET /api/pricing-costings/{}',
   'GET /api/pricing-decisions/{}',
+  // GET /api/remaining-invoices/{} joined this list with the STORED remaining invoice aggregate
+  // (V188, GLA-99 step 2): RemainingInvoiceDialog reads the full list per ticket
+  // (storedRemainingInvoices.listForTicket, GET .../tickets/{}/remaining-invoices) and every
+  // mutation already returns its own full row, so this single-row-by-id GET has no screen that
+  // needs it separately — same reasoning as GET /api/deposit-notices/{} and
+  // GET /api/import-requests/{} just above/below. storedRemainingInvoices.get stays in hrApi.js
+  // as a faithful mirror of RemainingInvoiceController#get for completeness/future callers.
+  'GET /api/remaining-invoices/{}',
+  // GET /api/tickets/{}/remaining-invoice/file — REMOVED entirely (owner ruling O1, GLA-99 step 2
+  // review-round-1, 2026-09-20), along with DepositNoticeService#getRemainingInvoiceXlsx and
+  // hrApi's own downloadRemainingInvoice. This entry used to document it as "kept but
+  // unreachable"; that reasoning no longer applies now that the route itself is gone, not merely
+  // uncalled from the UI, so the entry is gone too rather than left stale.
   'PATCH /api/profile-requests/{}',
   'POST /api/attendance/cards/backfill',
   'POST /api/commissions',
@@ -613,6 +646,8 @@ const UNREACHABLE_FROM_UI = new Set([
   // is DELETED (manual-RFQ redesign — factory email is a human-copies-and-sends flow now, see
   // FactoryQuoteService.send), not merely wired up, so it is gone from SERVER_KEYS entirely and
   // the "every UNREACHABLE_FROM_UI entry is real" test would flag a stale entry left here.
+  // PUT /api/catalog/thickness-defaults — see the GET entry above for the reason (same removal).
+  'PUT /api/catalog/thickness-defaults',
   'PUT /api/payroll/deduction-obligations/{}',
   'PUT /api/payroll/tax-allowances',
   'PUT /api/payroll/ytd-seed',

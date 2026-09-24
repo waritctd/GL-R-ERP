@@ -953,16 +953,10 @@ class TicketServiceTest {
     }
 
     @Test
-    void confirmDepositPaid_byCeoFallback_isAllowed() {
-        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_NOTICE_ISSUED", null);
-        when(ticketRepo.payableAmount(10L)).thenReturn(new BigDecimal("1000.00"));
-        when(ticketRepo.sumPaid(10L)).thenReturn(BigDecimal.ZERO, new BigDecimal("500.00"));
-        service.confirmDepositPaid(10L, ceoActor);
-        verify(ticketRepo).insertPaymentReceipt(eq(10L), eq("DEPOSIT"),
-            argThat(amount -> amount.compareTo(new BigDecimal("500.00")) == 0),
-            eq(4L), isNull(), eq("ยืนยันรับมัดจำ"), isNull(), isNull());
-        verify(ticketRepo).advancePaymentStatus(
-            10L, DepositPolicy.REQUIRED, "DEPOSIT_NOTICE_ISSUED", PaymentTrack.DEPOSIT_PAID);
+    void confirmDepositPaid_rejectsCeoRole() {
+        // GLA-118 (owner ruling 2026-09-17): the CEO fallback ACCOUNT_ROLES used to grant here
+        // (see the removed confirmDepositPaid_byCeoFallback_isAllowed) is gone — account ONLY now.
+        assertForbidden(() -> service.confirmDepositPaid(10L, ceoActor));
     }
 
     @Test
@@ -1231,13 +1225,16 @@ class TicketServiceTest {
             FulfilmentStatus.GOODS_RECEIVED);
         when(ticketRepo.findById(10L)).thenReturn(Optional.of(initial), Optional.of(updated), Optional.of(updated));
 
+        // V184: canWriteDelivery transferred stages 13-14 to {ceo, owning-rep} only, so this
+        // business-logic (not authz) test now uses salesActor (id 1, this deal's owner) rather
+        // than importActor (id 3) -- see DeliveryAuthzIntegrationTest for the authz pin itself.
         service.recordPartialDelivery(10L, new RecordDeliveryRequest("WAREHOUSE", "ส่งบางส่วน",
-            List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("40.00"))), null), importActor);
+            List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("40.00"))), null), salesActor);
 
-        verify(ticketRepo).insertDeliveryRecord(eq(10L), eq("WAREHOUSE"), eq(3L), eq("ส่งบางส่วน"), any(),
+        verify(ticketRepo).insertDeliveryRecord(eq(10L), eq("WAREHOUSE"), eq(1L), eq("ส่งบางส่วน"), any(),
             argThat(lines -> lines.size() == 1 && lines.get(0).qty().compareTo(new BigDecimal("40.00")) == 0));
         verify(ticketRepo).updateFulfillmentStatus(10L, FulfilmentStatus.PARTIALLY_DELIVERED);
-        verify(ticketRepo).addEventWithDocument(eq(10L), eq(3L), anyString(),
+        verify(ticketRepo).addEventWithDocument(eq(10L), eq(1L), anyString(),
             eq(TicketEventKind.DELIVERY_RECORDED), anyString(), anyString(), argThat(msg -> msg.contains("40/100")),
             eq(RelatedDocumentType.DELIVERY_RECORD), anyLong());
     }
@@ -1254,12 +1251,14 @@ class TicketServiceTest {
         // prior delivery-record source (see warehouseDeliveryAvailable — Case 8 fix).
         when(ticketRepo.hasReceivedGoods(10L)).thenReturn(true);
 
+        // V184: business-logic test, actor swapped to the owning rep -- see the note on
+        // recordPartialDelivery_updatesLineProgressAndStatus above.
         service.recordPartialDelivery(10L, new RecordDeliveryRequest("WAREHOUSE", "ส่งส่วนที่เหลือ",
-            List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("60.00"))), null), importActor);
+            List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("60.00"))), null), salesActor);
 
         verify(ticketRepo).updateFulfillmentStatus(10L, FulfilmentStatus.FULLY_DELIVERED);
         verify(ticketRepo).updateSalesStage(10L, DealStage.DELIVERED);
-        verify(ticketRepo).addEventWithDocument(eq(10L), eq(3L), anyString(),
+        verify(ticketRepo).addEventWithDocument(eq(10L), eq(1L), anyString(),
             eq(TicketEventKind.DELIVERY_COMPLETED), anyString(), anyString(), anyString(),
             eq(RelatedDocumentType.DELIVERY_RECORD), anyLong());
     }
@@ -1272,11 +1271,17 @@ class TicketServiceTest {
 
         RecordDeliveryRequest over = new RecordDeliveryRequest("WAREHOUSE", null,
             List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("70.00"))), null);
-        assertConflict(() -> service.recordPartialDelivery(10L, over, importActor));
+        // V184 update: import USED to get past the gate (the 2026-08-17 widening kept import/CEO
+        // alongside the newly-added owning rep) and land on the over-delivery CONFLICT below, same
+        // as salesActor still does. The later 2026-09/V184 transfer (canWriteDelivery — see
+        // TicketService's own Javadoc) removed import from the gate entirely, so it is now a
+        // FORBIDDEN, never reaching the over-delivery rule at all. See
+        // DeliveryAuthzIntegrationTest#import_noLongerRecordsDelivery... for the dedicated pin.
+        assertForbidden(() -> service.recordPartialDelivery(10L, over, importActor));
         // salesActor is id 1 and this deal's createdById is 1, so it OWNS the deal. Stages 13-14
         // (ส่งมอบสินค้า) are Sales's as of 2026-08-17, so the owning rep gets past the gate and is
-        // stopped by the over-delivery rule instead — a CONFLICT, not a FORBIDDEN. This assertion
-        // flipping is the whole point of that change; `otherSales` below is the refusal that stays.
+        // stopped by the over-delivery rule instead — a CONFLICT, not a FORBIDDEN. `otherSales`
+        // below is the refusal that stays (never owned the deal, never had a path in).
         assertConflict(() -> service.recordPartialDelivery(10L, over, salesActor));
         assertForbidden(() -> service.recordPartialDelivery(10L, over, otherSales));
         assertForbidden(() -> service.recordPartialDelivery(10L, over, accountActor));
@@ -1290,8 +1295,11 @@ class TicketServiceTest {
             "FULLY_PAID", FulfilmentStatus.GOODS_RECEIVED, DealStage.PROCUREMENT, null,
             DealLifecycle.ON_HOLD, DepositPolicy.REQUIRED);
 
+        // V184: salesActor (the owning rep), not importActor -- import no longer passes
+        // requireDeliveryAccess at all, so it would be FORBIDDEN before ever reaching the
+        // inactive-deal CONFLICT this test is actually about.
         assertConflict(() -> service.recordPartialDelivery(10L, new RecordDeliveryRequest("WAREHOUSE", null,
-            List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("10.00"))), null), importActor));
+            List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("10.00"))), null), salesActor));
     }
 
     @Test
@@ -1303,9 +1311,10 @@ class TicketServiceTest {
             FulfilmentStatus.FROM_STOCK);
         when(ticketRepo.findById(10L)).thenReturn(Optional.of(initial), Optional.of(updated), Optional.of(updated));
 
-        service.completeDelivery(10L, new CompleteDeliveryRequest("ส่งครบจากสต็อก", null), importActor);
+        // V184: salesActor, not importActor -- see the note above recordPartialDelivery_updatesLineProgressAndStatus.
+        service.completeDelivery(10L, new CompleteDeliveryRequest("ส่งครบจากสต็อก", null), salesActor);
 
-        verify(ticketRepo).insertDeliveryRecord(eq(10L), eq("STOCK"), eq(3L), eq("ส่งครบจากสต็อก"), any(),
+        verify(ticketRepo).insertDeliveryRecord(eq(10L), eq("STOCK"), eq(1L), eq("ส่งครบจากสต็อก"), any(),
             argThat(lines -> lines.size() == 1 && lines.get(0).qty().compareTo(new BigDecimal("60.00")) == 0));
         verify(ticketRepo).updateFulfillmentStatus(10L, FulfilmentStatus.FULLY_DELIVERED);
     }
@@ -1327,10 +1336,11 @@ class TicketServiceTest {
         // No prior WAREHOUSE delivery record — the goods-received EVENT is the signal.
         when(ticketRepo.hasReceivedGoods(10L)).thenReturn(true);
 
+        // V184: salesActor, not importActor -- see the note above recordPartialDelivery_updatesLineProgressAndStatus.
         service.recordPartialDelivery(10L, new RecordDeliveryRequest("WAREHOUSE", "ส่งของนำเข้าที่เหลือ",
-            List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("60.00"))), null), importActor);
+            List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("60.00"))), null), salesActor);
 
-        verify(ticketRepo).insertDeliveryRecord(eq(10L), eq("WAREHOUSE"), eq(3L), anyString(), any(),
+        verify(ticketRepo).insertDeliveryRecord(eq(10L), eq("WAREHOUSE"), eq(1L), anyString(), any(),
             argThat(lines -> lines.size() == 1 && lines.get(0).qty().compareTo(new BigDecimal("60.00")) == 0));
         verify(ticketRepo).updateFulfillmentStatus(10L, FulfilmentStatus.FULLY_DELIVERED);
     }
@@ -1352,17 +1362,12 @@ class TicketServiceTest {
     }
 
     @Test
-    void confirmFinalPayment_byCeoFallback_isAllowed() {
+    void confirmFinalPayment_rejectsCeoRole() {
+        // GLA-118 (owner ruling 2026-09-20, part A): the CEO fallback ACCOUNT_ROLES used to grant
+        // here (see the removed confirmFinalPayment_byCeoFallback_isAllowed) is gone — recording
+        // ANY payment, including the final one, is account ONLY now.
         stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "AWAITING_FINAL_PAYMENT", "GOODS_RECEIVED");
-        when(ticketRepo.payableAmount(10L)).thenReturn(new BigDecimal("1000.00"));
-        when(ticketRepo.sumPaid(10L)).thenReturn(new BigDecimal("500.00"), new BigDecimal("500.00"),
-            new BigDecimal("1000.00"));
-        service.confirmFinalPayment(10L, ceoActor);
-        verify(ticketRepo).insertPaymentReceipt(eq(10L), eq("BALANCE"),
-            argThat(amount -> amount.compareTo(new BigDecimal("500.00")) == 0),
-            eq(4L), isNull(), eq("ยืนยันชำระส่วนที่เหลือ"), isNull(), isNull());
-        verify(ticketRepo).advancePaymentStatus(
-            10L, DepositPolicy.REQUIRED, "AWAITING_FINAL_PAYMENT", PaymentTrack.FULLY_PAID);
+        assertForbidden(() -> service.confirmFinalPayment(10L, ceoActor));
     }
 
     @Test
@@ -1434,6 +1439,29 @@ class TicketServiceTest {
         assertConflict(() -> service.recordPayment(10L,
             new RecordPaymentRequest("BALANCE", new BigDecimal("100.00"), null, null, null, null, false),
             accountActor));
+    }
+
+    @Test
+    void recordPayment_rejectsCeoRole() {
+        // GLA-118 (owner ruling 2026-09-20, part A): the CEO fallback ACCOUNT_ROLES used to grant
+        // here is gone — recording a payment (deposit or balance alike) is account ONLY now, no
+        // CEO fallback, no owning-rep exception.
+        assertForbidden(() -> service.recordPayment(10L,
+            new RecordPaymentRequest("DEPOSIT", new BigDecimal("100.00"), null, null, null, null, false),
+            ceoActor));
+        assertForbidden(() -> service.recordPayment(10L,
+            new RecordPaymentRequest("BALANCE", new BigDecimal("100.00"), null, null, null, null, false),
+            ceoActor));
+    }
+
+    @Test
+    void recordPayment_rejectsOwningSalesRep() {
+        // GLA-118 part A: recording money received was never a sales-side action, and the owning
+        // rep gets no special exception — unlike deposit-policy Rule B, this gate has no ownership
+        // clause at all.
+        assertForbidden(() -> service.recordPayment(10L,
+            new RecordPaymentRequest("DEPOSIT", new BigDecimal("100.00"), null, null, null, null, false),
+            salesActor));
     }
 
     @Test
@@ -1512,6 +1540,52 @@ class TicketServiceTest {
     @Test
     void create_allowsValidPriority() {
         var request = new CreateTicketRequest("Test deal", "HIGH", "ลูกค้า", null, 77L, null, null, null, List.of());
+        when(ticketRepo.nextTicketCode()).thenReturn("PR-2026-0001");
+        when(ticketRepo.create(request, "PR-2026-0001", 1L, "sales")).thenReturn(10L);
+        stubTicket(10L, 1L, TicketStatus.DRAFT);
+
+        service.create(request, salesActor); // must not throw
+
+        verify(ticketRepo).create(request, "PR-2026-0001", 1L, "sales");
+    }
+
+    // ── create: V183 stock-sourced deal-line pricing ────────────────────────
+    // tickets.create(...) calls TicketRepository#insertItems directly off the raw
+    // TicketItemRequest list -- no DTO merge step exists on this path, so the
+    // stockSalePrice required+positive-iff-sourcedFromStock invariant is validated up front,
+    // before any DB write is attempted (same style as create_rejectsInvalidPriority above).
+
+    @Test
+    void create_rejectsStockSourcedItemWithoutPositivePrice() {
+        TicketItemRequest missingPrice = new TicketItemRequest(
+            "Brand", "Model", "White", "Matte", "60x60", null,
+            BigDecimal.ONE, null, "PIECE", null, null, null, null, "THB",
+            null, null, true, null);
+        var request = createRequest(77L, List.of(missingPrice));
+
+        assertBadRequest(() -> service.create(request, salesActor));
+        verify(ticketRepo, never()).create(any(), anyString(), org.mockito.ArgumentMatchers.anyLong(), anyString());
+    }
+
+    @Test
+    void create_rejectsStockSourcedItemWithZeroOrNegativePrice() {
+        TicketItemRequest zeroPrice = new TicketItemRequest(
+            "Brand", "Model", "White", "Matte", "60x60", null,
+            BigDecimal.ONE, null, "PIECE", null, null, null, null, "THB",
+            null, null, true, BigDecimal.ZERO);
+        var request = createRequest(77L, List.of(zeroPrice));
+
+        assertBadRequest(() -> service.create(request, salesActor));
+        verify(ticketRepo, never()).create(any(), anyString(), org.mockito.ArgumentMatchers.anyLong(), anyString());
+    }
+
+    @Test
+    void create_allowsStockSourcedItemWithValidPrice() {
+        TicketItemRequest fromStock = new TicketItemRequest(
+            "Brand", "Model", "White", "Matte", "60x60", null,
+            BigDecimal.ONE, null, "PIECE", null, null, null, null, "THB",
+            null, null, true, new BigDecimal("500.00"));
+        var request = createRequest(77L, List.of(fromStock));
         when(ticketRepo.nextTicketCode()).thenReturn("PR-2026-0001");
         when(ticketRepo.create(request, "PR-2026-0001", 1L, "sales")).thenReturn(10L);
         stubTicket(10L, 1L, TicketStatus.DRAFT);
@@ -1881,18 +1955,27 @@ class TicketServiceTest {
     }
 
     @Test
-    void waiveDeposit_accountOrCeoOnlyAndIssueImportRequestCanBypassNotice() {
+    void waiveDeposit_ownerOrSalesManagerOnlyAndIssueImportRequestCanBypassNotice() {
+        // GLA-118: deposit policy is set by the OWNING sales rep, or sales_manager as a backup
+        // (owner ruling 2026-09-20, part B). salesActor (id 1L) owns ticket 10L (stubDeal's
+        // createdById), so it grants here where the old ACCOUNT_ROLES gate (account/ceo) used to.
+        // This used to be named waiveDeposit_ownerOnlyAndIssueImportRequestCanBypassNotice, from
+        // when the 2026-09-17 ruling was owner-only with no sales_manager backup.
         stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
             DealStage.ORDER_RECEIVED, null);
 
-        service.waiveDeposit(10L, DepositPolicy.WAIVED, "ลูกค้าเครดิตดี", accountActor);
+        service.waiveDeposit(10L, DepositPolicy.WAIVED, "ลูกค้าเครดิตดี", salesActor);
 
-        verify(ticketRepo).updateDepositPolicy(10L, DepositPolicy.WAIVED, "ลูกค้าเครดิตดี", 5L);
-        verify(ticketRepo).addEvent(eq(10L), eq(5L), anyString(),
+        verify(ticketRepo).updateDepositPolicy(10L, DepositPolicy.WAIVED, "ลูกค้าเครดิตดี", 1L);
+        verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
             eq(TicketEventKind.POLICY_CHANGED), eq(DealStage.ORDER_RECEIVED), eq(DealStage.ORDER_RECEIVED),
             eq("deposit_policy → WAIVED — ลูกค้าเครดิตดี"));
-        assertForbidden(() -> service.waiveDeposit(10L, DepositPolicy.WAIVED, "sales ขอเอง", salesActor));
-        assertBadRequest(() -> service.waiveDeposit(10L, DepositPolicy.WAIVED, " ", accountActor));
+        // account, ceo, and a non-owning sales rep are still refused. sales_manager is NOT in
+        // this list any more — see waiveDeposit_grantsSalesManagerAsBackupOwner below.
+        assertForbidden(() -> service.waiveDeposit(10L, DepositPolicy.WAIVED, "account ขอเอง", accountActor));
+        assertForbidden(() -> service.waiveDeposit(10L, DepositPolicy.WAIVED, "ceo ขอเอง", ceoActor));
+        assertForbidden(() -> service.waiveDeposit(10L, DepositPolicy.WAIVED, "sales อื่นขอเอง", otherSales));
+        assertBadRequest(() -> service.waiveDeposit(10L, DepositPolicy.WAIVED, " ", salesActor));
 
         // Rule 5 (payment-track state machine): null no longer qualifies as "deposit bypassed" on
         // its own — a bypass-policy deal must have actually reached CUSTOMER_CONFIRMED first (via
@@ -1911,6 +1994,47 @@ class TicketServiceTest {
         stubDeal(12L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
             DealStage.ORDER_RECEIVED, null, DealLifecycle.ACTIVE, DepositPolicy.REQUIRED);
         assertConflict(() -> service.issueImportRequest(12L, importActor));
+    }
+
+    @Test
+    void waiveDeposit_grantsSalesManagerAsBackupOwner() {
+        // GLA-118 owner ruling 2026-09-20, part B: sales_manager may set deposit policy as a
+        // backup to the owning rep. The clause reused is EXACTLY requireDealOwnership's /
+        // canDealOwnership's bare "sales_manager".equals(role) check — global, not scoped to
+        // whichever team owns this deal — so salesManagerActor (id 8L) grants here even though it
+        // did not create ticket 14L (owner is 1L).
+        stubDeal(14L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
+            DealStage.ORDER_RECEIVED, null);
+
+        service.waiveDeposit(14L, DepositPolicy.WAIVED, "sales_manager สำรอง", salesManagerActor);
+
+        verify(ticketRepo).updateDepositPolicy(14L, DepositPolicy.WAIVED, "sales_manager สำรอง", 8L);
+        verify(ticketRepo).addEvent(eq(14L), eq(8L), anyString(),
+            eq(TicketEventKind.POLICY_CHANGED), eq(DealStage.ORDER_RECEIVED), eq(DealStage.ORDER_RECEIVED),
+            eq("deposit_policy → WAIVED — sales_manager สำรอง"));
+    }
+
+    @Test
+    void waiveDeposit_sameIdAsOriginalOwnerButRoleNoLongerSales_decidesByRoleNotId() {
+        // Nit case: a user whose id equals createdById but whose CURRENT role is no longer
+        // "sales" (e.g. promoted to sales_manager, or moved to another department entirely) must
+        // be judged by canSetDepositPolicy's role-based clauses, never by the id match alone —
+        // SALES_ROLES.contains(role) is false for "sales_manager"/"account", so the ownership
+        // half of the OR never fires for them; only the separate sales_manager clause can grant.
+        stubDeal(15L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
+            DealStage.ORDER_RECEIVED, null);
+
+        // id 1L (== createdById), role promoted to sales_manager: granted, but via the
+        // sales_manager clause, not the ownership clause (SALES_ROLES excludes "sales_manager").
+        UserPrincipal promotedOwner = actor(1L, "sales_manager");
+        service.waiveDeposit(15L, DepositPolicy.WAIVED, "เลื่อนตำแหน่งแล้ว", promotedOwner);
+        verify(ticketRepo).updateDepositPolicy(15L, DepositPolicy.WAIVED, "เลื่อนตำแหน่งแล้ว", 1L);
+
+        // id 1L (== createdById), role moved to account entirely: refused — account is in neither
+        // clause, and the id match alone grants nothing.
+        UserPrincipal movedToAccount = actor(1L, "account");
+        assertForbidden(() ->
+            service.waiveDeposit(15L, DepositPolicy.WAIVED, "ย้ายแผนกแล้ว", movedToAccount));
     }
 
     @Test
@@ -2027,6 +2151,65 @@ class TicketServiceTest {
             .map(TicketResponses.TicketActionDto::action).toList();
     }
 
+    /**
+     * Review fix: {@code WAIVE_DEPOSIT} must not be offered once a deposit notice exists, matching
+     * Rule 4 — {@link TicketService#waiveDeposit} 409s past that point (see
+     * {@code depositPolicy_cannotChangeAfterNoticeIssued_evenForTheOwner} in
+     * {@code DepositPolicyAuthzIntegrationTest}), so advertising it here would offer a button that
+     * dies on click, the same discipline {@link #actions_offersReserveStockToTheDealOwner_butNotToAnotherRep}
+     * documents for RESERVE_STOCK. This used to be named
+     * actions_offersWaiveDepositToOwnerOnly_andDepositPaidToAccountOnly and asserted the OPPOSITE
+     * for {@code salesActor} — that assertion was wrong; see canSetDepositPolicy's own Javadoc for
+     * why the advertisement and the write gate are deliberately NOT the same predicate.
+     * {@code otherSales} is left out — a non-owning sales rep cannot even call {@code actions()} on
+     * someone else's deal (requireViewAccess is owner-scoped for sales).
+     */
+    @Test
+    void actions_neverOffersWaiveDepositOnceDepositNoticeExists_butStillOffersDepositPaidToAccount() {
+        stubDeal(50L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), "DEPOSIT_NOTICE_ISSUED", null,
+            DealStage.ORDER_RECEIVED, null);
+
+        assertThat(actionCodes(50L, salesActor)).doesNotContain("WAIVE_DEPOSIT", "DEPOSIT_PAID");
+        assertThat(actionCodes(50L, salesManagerActor)).doesNotContain("WAIVE_DEPOSIT", "DEPOSIT_PAID");
+        assertThat(actionCodes(50L, ceoActor)).doesNotContain("WAIVE_DEPOSIT", "DEPOSIT_PAID");
+        assertThat(actionCodes(50L, accountActor)).contains("DEPOSIT_PAID").doesNotContain("WAIVE_DEPOSIT");
+    }
+
+    /**
+     * The positive case {@link #actions_neverOffersWaiveDepositOnceDepositNoticeExists_butStillOffersDepositPaidToAccount}
+     * deliberately does not cover: a deal whose payment track has not started yet (paymentStatus
+     * null) still owes WAIVE_DEPOSIT to the owner and, per Rule B, to sales_manager as a backup —
+     * account/ceo/a non-owning rep still see nothing.
+     */
+    @Test
+    void actions_offersWaiveDepositToOwnerAndSalesManager_whenPaymentTrackNotStarted() {
+        stubDeal(51L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
+            DealStage.ORDER_RECEIVED, null);
+
+        assertThat(actionCodes(51L, salesActor)).contains("WAIVE_DEPOSIT");
+        assertThat(actionCodes(51L, salesManagerActor)).contains("WAIVE_DEPOSIT");
+        assertThat(actionCodes(51L, ceoActor)).doesNotContain("WAIVE_DEPOSIT");
+        assertThat(actionCodes(51L, accountActor)).doesNotContain("WAIVE_DEPOSIT");
+    }
+
+    /**
+     * GLA-118 (owner ruling 2026-09-20, part A): FINAL_PAYMENT must not be advertised to the CEO
+     * any more — the old ACCOUNT_ROLES-based advertisement used to offer it, and offering a button
+     * that now 403s on click is exactly what {@link #canIssueImportRequest}'s "never advertise a
+     * dead action" discipline exists to prevent. (RECORD_PAYMENT's own advertisement,
+     * {@code canRecordPayment}, additionally requires {@code amountPayable > 0}, which the stub
+     * infra here always zeroes — that half of the gate is pinned by
+     * {@code DepositPolicyAuthzIntegrationTest}'s real-DB companion instead, where amountPayable is
+     * computed for real.)
+     */
+    @Test
+    void actions_neverOffersFinalPaymentToCeo_onlyToAccount() {
+        stubTicketWithTracks(52L, 1L, TicketStatus.QUOTATION_ISSUED, "AWAITING_FINAL_PAYMENT", "GOODS_RECEIVED");
+
+        assertThat(actionCodes(52L, ceoActor)).doesNotContain("FINAL_PAYMENT");
+        assertThat(actionCodes(52L, accountActor)).contains("FINAL_PAYMENT");
+    }
+
     @Test
     void actions_neverOffersRetiredLegacyPricingVerbs() {
         // Slice S1 "engine collapse" (feat/deal-workspace-unification): PICKUP/PROPOSE_PRICE/
@@ -2133,7 +2316,8 @@ class TicketServiceTest {
             Optional.of(delivered), Optional.of(delivered));
         when(ticketRepo.hasReceivedGoods(10L)).thenReturn(true);
 
-        service.completeDelivery(10L, new CompleteDeliveryRequest("ส่งครบ", null), importActor);
+        // V184: salesActor, not importActor -- see the note above recordPartialDelivery_updatesLineProgressAndStatus.
+        service.completeDelivery(10L, new CompleteDeliveryRequest("ส่งครบ", null), salesActor);
 
         verify(ticketRepo).updateFulfillmentStatus(10L, FulfilmentStatus.FULLY_DELIVERED);
         verify(ticketRepo).updateSalesStage(10L, DealStage.DELIVERED);
@@ -2387,6 +2571,92 @@ class TicketServiceTest {
         assertForbidden(() -> service.editItems(10L, new EditItemsRequest(List.of(req), null), otherSales));
     }
 
+    // ── editItems: V183 stock-sourced deal-line pricing ─────────────────────
+    // sourcedFromStock/stockSalePrice are LEGITIMATELY sales-writable (unlike proposedPrice/
+    // approvedPrice/calcedCost/manualPrice, which stay guarded to `prior`) — see
+    // mergeEditedItemsPreservingPricing's own comment. These tests cover: (b) an invalid
+    // price is rejected with 400, (c) sourcedFromStock=false forces stockSalePrice to null
+    // even if the request sent one, and (d) a request that omits both fields preserves the
+    // prior row's value instead of resetting it.
+
+    @Test
+    void editItems_rejectsStockSourcedItemWithoutPositivePrice() {
+        TicketItemDto existing = new TicketItemDto(
+            101L, 10L, "Brand", "Model", null, null, null, "Cotto",
+            new BigDecimal("5"), new BigDecimal("10"), null, null, null,
+            null, null, "THB", 0, null, null, null, "PIECE", null, null);
+        stubTicketWithItems(10L, 1L, TicketStatus.IN_REVIEW, List.of(existing));
+
+        TicketItemRequest edited = new TicketItemRequest(
+            "Brand", "Model", null, null, null, "Cotto",
+            new BigDecimal("5"), new BigDecimal("10"), "PIECE",
+            null, null, null, null, "THB", null, null, true, null);
+
+        assertBadRequest(() ->
+            service.editItems(10L, new EditItemsRequest(List.of(edited), null), salesActor));
+    }
+
+    @Test
+    void editItems_sourcedFromStockFalseForcesStockSalePriceNull() {
+        // A prior row that was stock-sourced, un-flagged in this edit but with a stray
+        // price still riding along in the request — the resolved row must not persist that
+        // stray price (never trust a value through when the flag itself is false).
+        TicketItemDto existing = new TicketItemDto(
+            101L, 10L, "Brand", "Model", null, null, null, "Cotto",
+            new BigDecimal("5"), new BigDecimal("10"), null, null, null,
+            null, null, "THB", 0, null, null, null, "PIECE", null, null,
+            BigDecimal.ZERO, BigDecimal.ZERO, null, null, null,
+            null, null, null, null, null, 1, true, new BigDecimal("500.00"));
+        stubTicketWithItems(10L, 1L, TicketStatus.IN_REVIEW, List.of(existing));
+
+        TicketItemRequest edited = new TicketItemRequest(
+            "Brand", "Model", null, null, null, "Cotto",
+            new BigDecimal("5"), new BigDecimal("10"), "PIECE",
+            null, null, null, null, "THB", null, null, false, new BigDecimal("999.00"));
+
+        service.editItems(10L, new EditItemsRequest(List.of(edited), null), salesActor);
+
+        ArgumentCaptor<List<TicketItemDto>> captor = ArgumentCaptor.forClass(List.class);
+        verify(ticketRepo).replaceItemsPreservingPricing(eq(10L), captor.capture());
+        TicketItemDto merged = captor.getValue().get(0);
+        assertThat(merged.sourcedFromStock()).isFalse();
+        assertThat(merged.stockSalePrice()).isNull();
+    }
+
+    @Test
+    void editItems_omittingStockFieldsPreservesPriorValue() {
+        // A request that says nothing about sourcedFromStock (null, the "not specified" value
+        // for this Boolean field, as opposed to an explicit false) must not silently reset a
+        // flag a previous save set — same null-safe-fallback treatment unitBasis already gets.
+        TicketItemDto existing = new TicketItemDto(
+            101L, 10L, "Brand", "Model", null, null, null, "Cotto",
+            new BigDecimal("5"), new BigDecimal("10"), null, null, null,
+            null, null, "THB", 0, null, null, null, "PIECE", null, null,
+            BigDecimal.ZERO, BigDecimal.ZERO, null, null, null,
+            null, null, null, null, null, 1, true, new BigDecimal("500.00"));
+        stubTicketWithItems(10L, 1L, TicketStatus.IN_REVIEW, List.of(existing));
+
+        // Explicit null (via the canonical 18-arg constructor), not the 14-arg compat shape --
+        // that compat constructor resolves sourcedFromStock to an explicit false per its own
+        // Javadoc (mirroring the codebase's existing "compat defaults to a real value" pattern),
+        // which correctly does NOT preserve the prior flag. A real JSON request that simply
+        // omits the field is what Jackson binds to null on the canonical constructor, which is
+        // the case this test means to cover.
+        TicketItemRequest edited = new TicketItemRequest(
+            "NewBrand", "Model", null, null, null, "Cotto",
+            new BigDecimal("6"), new BigDecimal("12"), "PIECE",
+            null, null, null, null, "THB", null, null, null, null);
+
+        service.editItems(10L, new EditItemsRequest(List.of(edited), null), salesActor);
+
+        ArgumentCaptor<List<TicketItemDto>> captor = ArgumentCaptor.forClass(List.class);
+        verify(ticketRepo).replaceItemsPreservingPricing(eq(10L), captor.capture());
+        TicketItemDto merged = captor.getValue().get(0);
+        assertThat(merged.brand()).isEqualTo("NewBrand"); // descriptive field still follows the request
+        assertThat(merged.sourcedFromStock()).isTrue();
+        assertThat(merged.stockSalePrice()).isEqualByComparingTo("500.00");
+    }
+
     // ── overrideItemPrice ────────────────────────────────────────────────
     // 2026-07-16 pricing-integrity audit, finding #3: overriding a price previously left
     // no audit trail at all.
@@ -2514,6 +2784,26 @@ class TicketServiceTest {
             BigDecimal.ONE, null, "PIECE", null, null, null, null, "THB");
 
         assertForbidden(() -> service.editItems(10L, new EditItemsRequest(List.of(req), null), salesManagerActor));
+    }
+
+    // Wrong-way-round authz pin (no behaviour change): mockApi.js's editItems grants role
+    // 'import' write access while the ticket sits IN_REVIEW/PRICE_PROPOSED (a KNOWN mock ->
+    // production divergence, commented at that call site) — but the real salesCanEdit check
+    // above is `SALES_ROLES.contains(actor.role()) && isOwner`, with no import branch at all, so
+    // import gets a real 403 here regardless of status or ownership. Covers a V183 payload
+    // specifically (sourcedFromStock/stockSalePrice) so this new field pair does not accidentally
+    // open a path around the existing role gate.
+    @Test
+    void editItems_rejectsImportRole() {
+        // createdById=1L (salesActor's id, not importActor's 3L) so this is unambiguously the
+        // "wrong-way-round" case — import is rejected on role alone, not merely on ownership.
+        stubTicket(10L, 1L, TicketStatus.IN_REVIEW);
+        TicketItemRequest req = new TicketItemRequest(
+            "Brand", "Model", "Color", "Texture", "Size", "Factory",
+            BigDecimal.ONE, null, "PIECE", null, null, null, null, "THB",
+            null, null, true, new BigDecimal("350.00"));
+
+        assertForbidden(() -> service.editItems(10L, new EditItemsRequest(List.of(req), null), importActor));
     }
 
     @Test

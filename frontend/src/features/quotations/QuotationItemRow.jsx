@@ -10,7 +10,7 @@ import {
   defaultLeadTimeForOrigin, formatQuotationMoney, lineTypeOf, originCountryFromCode,
   piecesPerSqmFromSqmPerPiece, sqmPerPieceFromPiecesPerSqm, isEnglishPerSqm, listPricePerSqmIncVat,
   sqmPerPieceFromSizeCm, sizeTextDiffersFromCatalogFaceSize,
-  roundToFullBoxDisabledReason, roundToFullBoxSummary,
+  roundToFullBoxDisabledReason, roundToFullBoxSummary, isTilePriceChangedFromCeoLocally,
 } from './quotationMeta.js';
 
 // ProductPriceDto's own price_unit for a linear-metre trim (V153: 561 real catalog rows). Its
@@ -148,12 +148,43 @@ function PriceInputWithSuffix({ id, suffix, className, ...inputProps }) {
  * decides that itself. `error={errors.field}` on a FormField renders the red hint + wires
  * aria-invalid; `required` marks the label with `*`, matching the rest of the app.
  */
+/**
+ * GLA-123 slice S1 (coordinator follow-up, 2026-09-20) — the CEO's ORIGINAL price for this line,
+ * formatted per mode exactly as the owner specified: "ราคา CEO: ฿83.00 · ส่วนลด 10%" (NET),
+ * "ราคาพิเศษ CEO: ฿1,350.00/ตร.ม." (SPECIAL_SQM), "ราคาสุทธิ CEO: ฿74.70" (DIRECT_NET). Reads the
+ * `ceo*` fields the server joins onto a linked item (DealQuotationItemDto#ceoListUnitPrice etc.)
+ * — never re-derives them.
+ */
+// Exported (GLA-123 slice S2, coordinator follow-up) so the approve confirm dialog
+// (QuotationEditorPage.jsx) can render the SAME "CEO's original price" text for every
+// priceChangedFromCeo line prominently, in one place, rather than the rep/approver having to
+// scroll the item list to find each row's own inline marker — see that dialog's own comment.
+export function ceoOriginalPriceText(priceMode, item, currency) {
+  if (priceMode === 'SPECIAL_SQM') {
+    return `ราคาพิเศษ CEO: ${formatQuotationMoney(item.ceoSpecialPriceSqm, currency)}/ตร.ม.`;
+  }
+  if (priceMode === 'DIRECT_NET') {
+    return `ราคาสุทธิ CEO: ${formatQuotationMoney(item.ceoDirectNetPrice, currency)}`;
+  }
+  const discountPct = item.ceoDiscountPct ?? 0;
+  return `ราคา CEO: ${formatQuotationMoney(item.ceoListUnitPrice, currency)} · ส่วนลด ${discountPct}%`;
+}
+
 export function QuotationItemRow({
   item, index, readOnly, errors = {}, onChange, onRemove,
   groupId = null, locationGroups = [], recentPicks = [], onMove, onDuplicate, onCatalogPicked,
   // v3: the QUOTATION's tile price mode (one per document — see quotationMeta's PRICE_MODE_OPTIONS)
   // and its currency. Both default to the pre-v3 behaviour so an existing caller is unchanged.
   priceMode = 'NET', currency = 'THB',
+  // MINOR fix (Opus review, 2026-09-20): the CEO's ORIGINAL pricing_decision.price_mode
+  // (DealQuotationDto#ceoPriceMode, header-level, frozen at create) — DISTINCT from `priceMode`
+  // above, which is the document's CURRENT mode and can be switched by sales after create (see
+  // #priceModeChangedFromCeo). ceoOriginalPriceText must format against THIS, not `priceMode`: a
+  // rep who switches SPECIAL_SQM -> NET would otherwise have the marker read
+  // item.ceoSpecialPriceSqm (null — the CEO's own decision was NET) instead of the CEO's actual
+  // ceoListUnitPrice/ceoDiscountPct. Defaults to `priceMode` so a DEAL_DIRECT caller (no
+  // ceoPriceMode concept, and the marker never renders there anyway) is unaffected.
+  ceoPriceMode,
   // Owner decision 2026-09-13: the document's language — SPECIAL_SQM on English is a USD/ตร.ม. price
   // whose quantity is boxes × ตร.ม./กล่อง, so the row asks for that instead of a list price per piece.
   documentLanguage = 'TH',
@@ -162,6 +193,29 @@ export function QuotationItemRow({
   // thumbnail under the row's notes without re-plumbing this component: `(item, index) => node`.
   // Unused today, which renders nothing.
   renderMedia = null,
+  // V185 (PricingRequestCreateModal, Phase 1 of the sales-flow redesign): the PCR item form
+  // reuses this SAME row for every field except price/discount — CEO pricing is a later phase,
+  // not this one. Hides ราคา/หน่วย, ส่วนลด %, ราคาพิเศษ, ราคาสุทธิ (whichever the price mode would
+  // otherwise show) and the live ฿-amount calculation footer, changing nothing about the
+  // direct-deal quotation's own rendering when left at its default `false`.
+  hidePricing = false,
+  // Owner ruling 2026-09-18 (reversed from an earlier ยี่ห้อ ruling): the PCR form labels this
+  // SAME field (the `brand` column, still auto-filled from the catalog pick) โรงงาน instead of
+  // ยี่ห้อ — a label override only, never the field, its storage, or the catalog auto-fill.
+  // Direct-deal keeps saying ยี่ห้อ via the default.
+  brandLabel = 'ยี่ห้อ',
+  // GLA-125 (owner ruling 2026-09-18, "Yes, all of it"): ประเทศต้นทาง (and, when it is "อื่นๆ",
+  // the typed country name) is REQUIRED on the PCR form but stays optional on direct-deal — see
+  // PricingRequestCreateModal.jsx's validateItemFields, which is the only caller that passes
+  // `true`. Purely a `required`-marker + "อื่นๆ" text-input toggle here; the actual required-ness
+  // check itself lives in quotationMeta's validateQuotationItem (requireOriginCountry option),
+  // not in this component.
+  requireOriginCountry = false,
+  // GLA-123 slice S1 (coordinator follow-up, 2026-09-20): a duplicated row has no server id, so
+  // the resulting save would be refused as a new row on a PRICING_REQUEST-origin quotation
+  // (DealQuotationService#update) — the control is hidden rather than left as a dead end.
+  // Defaults false, so DEAL_DIRECT's own rendering is unchanged.
+  hideDuplicate = false,
 }) {
   const perSqm = isEnglishPerSqm(priceMode, documentLanguage);
   // Thai SPECIAL_SQM only -- see PriceInputWithSuffix's own comment above for why this exists.
@@ -336,7 +390,10 @@ export function QuotationItemRow({
 
   function onOriginChange(value) {
     const defaults = defaultLeadTimeForOrigin(value);
-    patch({ originCountry: value, ...defaults });
+    // GLA-125: a typed "อื่นๆ" name belongs to whichever code was selected when it was typed --
+    // switching to a DIFFERENT code (including back to blank) clears it, so a stale name never
+    // survives under a country it was never actually typed for.
+    patch({ originCountry: value, originCountryOther: value === 'อื่นๆ' ? item.originCountryOther : null, ...defaults });
   }
 
   // Groups this row could be moved INTO — every group but its own. Rendered only when there is
@@ -411,21 +468,25 @@ export function QuotationItemRow({
                   ))}
                 </select>
 
-                <label htmlFor={`dup-${index}`} className="sr-only">ทำซ้ำรายการ</label>
-                <select
-                  id={`dup-${index}`}
-                  className="h-8 mobile:h-11 w-full min-w-0 py-0 text-2xs sm:w-auto sm:min-w-[9.5rem] sm:max-w-[13rem]"
-                  value=""
-                  onChange={(e) => { if (e.target.value) onDuplicate?.(e.target.value); }}
-                >
-                  <option value="">ทำซ้ำรายการ…</option>
-                  <option value={groupId}>ในตำแหน่งนี้</option>
-                  {moveTargets.map((group) => (
-                    <option key={group.groupId} value={group.groupId}>ไปยัง {group.label || UNLABELLED_LOCATION_TEXT}</option>
-                  ))}
-                </select>
+                {hideDuplicate ? null : (
+                  <>
+                    <label htmlFor={`dup-${index}`} className="sr-only">ทำซ้ำรายการ</label>
+                    <select
+                      id={`dup-${index}`}
+                      className="h-8 mobile:h-11 w-full min-w-0 py-0 text-2xs sm:w-auto sm:min-w-[9.5rem] sm:max-w-[13rem]"
+                      value=""
+                      onChange={(e) => { if (e.target.value) onDuplicate?.(e.target.value); }}
+                    >
+                      <option value="">ทำซ้ำรายการ…</option>
+                      <option value={groupId}>ในตำแหน่งนี้</option>
+                      {moveTargets.map((group) => (
+                        <option key={group.groupId} value={group.groupId}>ไปยัง {group.label || UNLABELLED_LOCATION_TEXT}</option>
+                      ))}
+                    </select>
+                  </>
+                )}
               </>
-            ) : (
+            ) : hideDuplicate ? null : (
               // One location only: there is nowhere to move to and only one place to copy into,
               // so the duplicate degrades to a plain button rather than a one-option dropdown.
               <Button variant="secondary" size="sm" onClick={() => onDuplicate?.(groupId)}>ทำซ้ำรายการ</Button>
@@ -520,7 +581,7 @@ export function QuotationItemRow({
       ) : null}
 
       <div className="grid grid-cols-4 gap-3 mobile:grid-cols-2">
-        <FormField label="ยี่ห้อ" htmlFor={`brand-${index}`}>
+        <FormField label={brandLabel} htmlFor={`brand-${index}`}>
           <input id={`brand-${index}`} disabled={readOnly} value={item.brand ?? ''} onChange={(e) => patch({ brand: e.target.value })} />
         </FormField>
         <FormField label="สี" htmlFor={`color-${index}`} required error={errors.color}>
@@ -685,7 +746,19 @@ export function QuotationItemRow({
       </div>
 
       <div className="grid grid-cols-2 gap-3 mobile:grid-cols-1">
-        <FormField label="จำนวน" htmlFor={`qty-${index}`} required error={item.quantityMode === 'PIECES' ? errors.piecesInput : errors.areaSqm}>
+        <FormField
+          label="จำนวน"
+          htmlFor={`qty-${index}`}
+          required
+          error={item.quantityMode === 'PIECES' ? errors.piecesInput : errors.areaSqm}
+          // PricingRequestCreateModal-only (Opus review finding #3): a legacy PCR line whose
+          // stored basis was PER_BOX/PER_LINEAR_M has no AREA/PIECES equivalent to seed this
+          // field from -- itemFromExisting sets this CLIENT-ONLY note (never sent on the wire,
+          // same pattern as clientId/catalogSqmPerPiece) so the rep can still see what quantity
+          // was actually requested, instead of the field just opening blank with no explanation.
+          // Always undefined for the direct-deal form and for any PIECES/AREA-basis PCR row.
+          hint={item.legacyQuantityNote || undefined}
+        >
           <div className="flex gap-2">
             <div className="inline-flex overflow-hidden rounded-md border border-border-input">
               {QUANTITY_MODE_OPTIONS.map((opt) => (
@@ -824,8 +897,14 @@ export function QuotationItemRow({
               DIRECT_NET   ราคาสุทธิ/แผ่น + ราคาตั้ง/แผ่น (optional: blank prints "Net")   (unchanged)
             The derived net in SPECIAL_SQM is the SERVER's (calculate-line's netUnitPrice), never
             a JS copy of WastageCalculator#netPerPieceFromSpecialSqm: its rounding order (the 2dp
-            reciprocal first) is exactly what a copy would get subtly wrong. */}
-        {priceMode === 'DIRECT_NET' ? (
+            reciprocal first) is exactly what a copy would get subtly wrong.
+
+            V185 (PricingRequestCreateModal / hidePricing): the PCR item form is this SAME row,
+            minus price/discount — CEO pricing is a later phase. `hidePricing` hides every price
+            input below (DIRECT_NET/NET/SPECIAL_SQM/perSqm) without touching a single line of the
+            direct-deal quotation's own behaviour — ประเทศต้นทาง/ระยะเวลานำเข้า further down stay
+            rendered either way, since both forms treat them the same (optional). */}
+        {hidePricing ? null : priceMode === 'DIRECT_NET' ? (
           <FormField label="ราคาสุทธิ/แผ่น" htmlFor={`direct-net-${index}`} required error={errors.directNetPrice}>
             <input
               id={`direct-net-${index}`} type="number" step="0.01" disabled={readOnly}
@@ -838,7 +917,7 @@ export function QuotationItemRow({
             typed number in a half-width mobile column (97px wide at 375px, 72px of it the unit —
             measured) — so on mobile each spans the whole row. `contents` keeps NET/DIRECT_NET's
             grid placement exactly as it was. */}
-        {perSqm ? null : (
+        {hidePricing || perSqm ? null : (
           <div className={priceMode === 'SPECIAL_SQM' ? 'mobile:col-span-2' : 'contents'}>
             <FormField
               label={
@@ -877,7 +956,7 @@ export function QuotationItemRow({
             </FormField>
           </div>
         )}
-        {priceMode === 'NET' ? (
+        {!hidePricing && priceMode === 'NET' ? (
           <FormField label="ส่วนลด %" htmlFor={`disc-${index}`}>
             <input
               id={`disc-${index}`} type="number" step="0.01" disabled={readOnly}
@@ -886,7 +965,7 @@ export function QuotationItemRow({
             />
           </FormField>
         ) : null}
-        {priceMode === 'SPECIAL_SQM' && !perSqm ? (
+        {!hidePricing && priceMode === 'SPECIAL_SQM' && !perSqm ? (
           <div className="mobile:col-span-2">
             <FormField label="ราคาพิเศษ (บาท/ตร.ม. รวม VAT)" htmlFor={`special-${index}`} required error={errors.specialPriceSqm}>
               <PriceInputWithSuffix
@@ -904,7 +983,7 @@ export function QuotationItemRow({
             </FormField>
           </div>
         ) : null}
-        {perSqm ? (
+        {hidePricing ? null : perSqm ? (
           <>
             {/* English per-sqm (owner decision 2026-09-13): the USD/ตร.ม. is the printed Unit price
                 AND Net price, no VAT; the printed Qty is boxes × ตร.ม./กล่อง when a box area is
@@ -948,12 +1027,72 @@ export function QuotationItemRow({
             </FormField>
           </>
         ) : null}
-        <FormField label="ประเทศต้นทาง" htmlFor={`origin-${index}`}>
+        {/* GLA-123 slice S1 (Phase 3, coordinator follow-up 2026-09-20) — the CEO-comparison
+            marker for a PRICING_REQUEST-origin TILE row linked to a decision item. `item.
+            ceoNetUnitPrice` (from the server's LEFT JOIN, see DealQuotationRepository#mapItem
+            Columns) is non-null exactly on such a row — a DEAL_DIRECT row, or an unlinked
+            PRICING_REQUEST row, always reads it null and renders nothing here. Sales MAY edit
+            these fields (owner ruling revised 2026-09-19 — no server-side lock); this is
+            informational, not a disabled state. */}
+        {!hidePricing && item.ceoNetUnitPrice != null ? (
+          <div className="col-span-2 mobile:col-span-1">
+            {/* Coordinator follow-up (2026-09-20): OR the server's own flag with a LOCAL
+                recomputation over the row's current (possibly unsaved) values, so the marker
+                flips amber the instant the rep types a differing price/discount instead of only
+                after autosave lands — see isTilePriceChangedFromCeoLocally's own Javadoc for why
+                OR (not replace) keeps the server flag authoritative post-save. */}
+            {item.priceChangedFromCeo || isTilePriceChangedFromCeoLocally(item, priceMode) ? (
+              <p className="m-0 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 rounded-md border border-warning-border bg-warning/10 px-3 py-2 text-2xs font-bold text-warning">
+                <span>เปลี่ยนจากราคา CEO — ต้องให้ CEO อนุมัติ</span>
+                <span className="font-normal text-text-muted">{ceoOriginalPriceText(ceoPriceMode ?? priceMode, item, currency)}</span>
+              </p>
+            ) : (
+              <p className="m-0 flex items-center gap-1.5 text-2xs font-bold text-text-muted">
+                {/* NIT fix (Opus review, 2026-09-20): "lock" read as if the price were locked —
+                    it is not (sales may edit it freely, see this block's own ruling comment
+                    above), so a "check" (nothing to flag) reads correctly instead. */}
+                <Icon name="check" size={12} />
+                ราคาจาก CEO
+              </p>
+            )}
+          </div>
+        ) : null}
+        <FormField
+          label="ประเทศต้นทาง"
+          htmlFor={`origin-${index}`}
+          required={requireOriginCountry}
+          error={errors.originCountry}
+        >
           <select id={`origin-${index}`} disabled={readOnly} value={item.originCountry ?? ''} onChange={(e) => onOriginChange(e.target.value)}>
             <option value="">-</option>
             {ORIGIN_COUNTRY_OPTIONS.map((opt) => <option key={opt.code} value={opt.code}>{opt.label}</option>)}
           </select>
         </FormField>
+        {/* GLA-125: "อื่นๆ" (ORIGIN_COUNTRY_OPTIONS' own sentinel code, carrying no default lead
+            time) reveals a typed name — required on the PCR form (validateQuotationItem's
+            requireOriginCountry). Second review pass, finding N4: this box must render ONLY when
+            requireOriginCountry is on. sales.quotation_item has no origin_country_other column at
+            all (only sales.pricing_request_item does, V185) — direct-deal's own
+            `itemInputFromRow` never reads item.originCountryOther, so showing this box there let
+            a rep type a country name that was silently DROPPED on every save, with no error and
+            no indication anything was lost. Cleared (never merely hidden) the moment a rep
+            switches away from อื่นๆ, via onOriginChange's own defaults, so a stale typed name can
+            never linger under a different country code either way. */}
+        {item.originCountry === 'อื่นๆ' && requireOriginCountry ? (
+          <FormField
+            label="ระบุประเทศต้นทาง"
+            htmlFor={`origin-other-${index}`}
+            required={requireOriginCountry}
+            error={errors.originCountryOther}
+          >
+            <input
+              id={`origin-other-${index}`}
+              disabled={readOnly}
+              value={item.originCountryOther ?? ''}
+              onChange={(e) => patch({ originCountryOther: e.target.value })}
+            />
+          </FormField>
+        ) : null}
         {/* #7 (2026-09-14): the CHECK is submit-only (QuotationEditorPage's `submitItemErrorsByRow`
             requires a lead time; `itemErrorsByRow`, which gates saving a draft, does not) — but
             the HINT is not submit-gated. `errors.leadTimeMinDays` arrives as soon as this row is
@@ -989,13 +1128,20 @@ export function QuotationItemRow({
 
       {renderMedia ? renderMedia(item, index) : null}
 
-      {/* Live calculation line -- from calculate-line, debounced by the parent. */}
-      <div className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-surface-subtle px-3 py-2.5">
-        <p className="m-0 min-w-0 flex-1 text-xs text-text-muted">
-          {item.calcPending ? 'กำลังคำนวณ...' : (item.calculationLine || 'กรอกจำนวนและเผื่อเพื่อคำนวณ')}
-        </p>
-        <span className="tabular-nums text-md font-extrabold text-text">{formatQuotationMoney(item.lineAmount, currency)}</span>
-      </div>
+      {/* Live calculation line -- from calculate-line, debounced by the parent. Hidden entirely
+          under hidePricing: the PCR form has no calculate-line preview at all (that endpoint
+          unconditionally requires a positive unitPrice, even on its lenient preview path — see
+          PricingRequestCreateModal.jsx's own note on why), so there is nothing to show here but a
+          permanently-zero ฿ amount, which would read as a real number rather than "not
+          applicable". */}
+      {hidePricing ? null : (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-surface-subtle px-3 py-2.5">
+          <p className="m-0 min-w-0 flex-1 text-xs text-text-muted">
+            {item.calcPending ? 'กำลังคำนวณ...' : (item.calculationLine || 'กรอกจำนวนและเผื่อเพื่อคำนวณ')}
+          </p>
+          <span className="tabular-nums text-md font-extrabold text-text">{formatQuotationMoney(item.lineAmount, currency)}</span>
+        </div>
+      )}
     </li>
   );
 }

@@ -19,6 +19,7 @@ import org.springframework.web.multipart.MultipartFile;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.customer.ContactRepository;
+import th.co.glr.hr.dealquotation.WastageCalculator;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
@@ -196,10 +197,14 @@ class PricingRequestAttachmentDeleteRollbackIntegrationTest extends AbstractPost
                 PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
                 new BigDecimal("1000.00"), "THB", "delete-attachment test request",
                 UUID.randomUUID().toString(),
+                // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/
+                // piecesPerBox/a quantity are now required on every item createDraft persists.
                 List.of(new PricingRequestRequests.PricingRequestItemRequest(null, productId, null, "SCG",
-                    "Tile PrDelete", "SCG Tile PrDelete", null, null, "60x60", "Factory PrDelete",
-                    new BigDecimal("10"), new BigDecimal("10"), "piece", UnitBasis.PER_PIECE,
-                    QuantityType.CONFIRMED, null, null, null))),
+                    "Tile PrDelete", "SCG Tile PrDelete", "White", "Matte", "60x60", "Factory PrDelete",
+                    null, null, null, null, QuantityType.CONFIRMED, null, null, null,
+                    null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+                    null, 10, WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+                    false, "ไทย-สต็อก", 3, 7, null, null, null))),
                 salesRep)
             .summary().id();
     }

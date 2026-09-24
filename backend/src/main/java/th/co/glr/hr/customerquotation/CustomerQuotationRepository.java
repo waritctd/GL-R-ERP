@@ -50,6 +50,39 @@ public class CustomerQuotationRepository {
         jdbc.query("SELECT pg_advisory_xact_lock(:id)", Map.of("id", pricingRequestId), (rs, rowNum) -> 0);
     }
 
+    /**
+     * The next unused revision number for the chain {@code baseNumber} belongs to, scoped to this
+     * pricing request (V74's migration comment: {@code quotation_revision_no} is "a NEW counter,
+     * scoped to the pricing_request") — MAX across every row that has EVER existed under this base
+     * (exact match, or the {@code {base}-N} suffix pattern {@link
+     * th.co.glr.hr.ticket.QuotationNumbering#revisionNumber} produces) plus one.
+     *
+     * <p>Added alongside the {@code {base}-{n}} numbering change (owner ruling 2026-09-18), for
+     * the same reason {@code DealQuotationRepository#nextRevisionNo} exists on the direct-quotation
+     * side: {@code source.quotationRevisionNo() + 1} is only correct while {@code source} is
+     * genuinely the highest revision minted off this base. {@link CustomerQuotationService
+     * #createRevision} reads {@code source} BEFORE taking {@link #lockPricingRequest}'s advisory
+     * lock, so two concurrent calls against the same still-ISSUED quotation can both compute the
+     * SAME stale {@code revisionNo + 1} — before this method, that raced two inserts onto the
+     * SAME {@code {base}-N} string, a real UNIQUE-constraint (V6) duplicate-key crash for the
+     * second caller. Called under the same lock hold {@code createRevision} already takes, so by
+     * the time this query runs, any transaction that won the race has already committed and is
+     * visible — the loser's query legitimately returns one higher, not a collision.
+     */
+    public int nextRevisionNo(long pricingRequestId, String baseNumber) {
+        Integer max = jdbc.queryForObject("""
+            SELECT COALESCE(MAX(quotation_revision_no), 0) FROM sales.quotation
+             WHERE pricing_request_id = :pricingRequestId
+               AND (number = :baseNumber OR number LIKE :basePrefix)
+            """,
+            new MapSqlParameterSource()
+                .addValue("pricingRequestId", pricingRequestId)
+                .addValue("baseNumber", baseNumber)
+                .addValue("basePrefix", baseNumber + "-%"),
+            Integer.class);
+        return (max == null ? 0 : max) + 1;
+    }
+
     public Optional<Long> findIdByClientRequestId(long issuedBy, String clientRequestId) {
         try {
             return Optional.ofNullable(jdbc.queryForObject("""
@@ -76,11 +109,28 @@ public class CustomerQuotationRepository {
     }
 
     /** Step 5: recordOutcome's own idempotency lookup, mirrors {@link #findIdByIssueClientRequestId}. */
+    /**
+     * GLA-123 slice S3 MINOR fix (Opus review, 2026-09-23): now scoped {@code origin IS NULL},
+     * matching every OTHER query in this class ({@link #findById}/{@link #findByPricingRequest}/
+     * {@link #findByTicket}/{@code expireOverdueQuotations} all already exclude the new engine's
+     * rows explicitly). Before this fix, this was the one lookup in the class that stayed
+     * unscoped, which was a real asymmetry against {@code DealQuotationRepository
+     * #findIdByOutcomeClientRequestId}'s OWN {@code origin = 'PRICING_REQUEST'} scope: the SAME
+     * actor reusing a {@code clientRequestId} across the two {@code recordOutcome} endpoints could
+     * have this (unscoped) lookup silently replay-return a LEGACY row for a request that actually
+     * named a PRICING_REQUEST-origin quotation id — or, since V75's own {@code (issued_by,
+     * outcome_client_request_id)} partial unique index is table-wide, hit that constraint outright
+     * on the follow-up UPDATE once the lookup (wrongly) found nothing. Scoping this to {@code
+     * origin IS NULL} — rather than widening the new engine's lookup instead — matches this
+     * class's own established convention everywhere else, so a future reader finds ONE consistent
+     * rule, not two different scoping choices for the two sibling methods.
+     */
     public Optional<Long> findIdByOutcomeClientRequestId(long issuedBy, String outcomeClientRequestId) {
         try {
             return Optional.ofNullable(jdbc.queryForObject("""
                 SELECT quotation_id FROM sales.quotation
                  WHERE issued_by = :issuedBy AND outcome_client_request_id = CAST(:outcomeClientRequestId AS uuid)
+                   AND origin IS NULL
                 """, new MapSqlParameterSource().addValue("issuedBy", issuedBy)
                     .addValue("outcomeClientRequestId", outcomeClientRequestId),
                 Long.class));
@@ -104,8 +154,16 @@ public class CustomerQuotationRepository {
         // having nothing to append after "กระเบื้อง" — restoring all five.
         String brand, String model, String color, String texture, String size, String rawUnit) {}
 
+    /**
+     * {@code number} (added 2026-09-18): the CALLER now computes the full {@code {base}-{n}}
+     * string via {@link th.co.glr.hr.ticket.QuotationNumbering} — this repository no longer mints
+     * it internally (it used to call {@link #nextQuotationCode} unconditionally here, which is
+     * exactly why a revision used to get a brand-new code instead of a suffix bump on its base).
+     * Mirrors {@code DealQuotationRepository.InsertDraftParams}'s own {@code number} field/same
+     * division of responsibility: the repository persists, the service decides the number.
+     */
     public record InsertDraftParams(
-        long ticketId, long pricingRequestId, long pricingDecisionId, String recipientType,
+        long ticketId, String number, long pricingRequestId, long pricingDecisionId, String recipientType,
         String recipientLabel, long actorId, String clientRequestId, String paymentTerms,
         String leadTime, String deliveryTerms, LocalDate validityDate, String customerNotes,
         Long parentQuotationId, int quotationRevisionNo, BigDecimal subtotal, String currency,
@@ -127,7 +185,6 @@ public class CustomerQuotationRepository {
             """, new MapSqlParameterSource().addValue("ticketId", p.ticketId())
                 .addValue("recipientType", p.recipientType()), Integer.class);
         int nextVersion = (maxVersion == null ? 0 : maxVersion) + 1;
-        String number = nextQuotationCode();
 
         GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
         jdbc.update("""
@@ -146,7 +203,7 @@ public class CustomerQuotationRepository {
             """,
             new MapSqlParameterSource()
                 .addValue("ticketId", p.ticketId())
-                .addValue("number", number)
+                .addValue("number", p.number())
                 .addValue("issuedBy", p.actorId())
                 .addValue("totalAmount", p.subtotal())
                 .addValue("currency", p.currency())
@@ -354,12 +411,39 @@ public class CustomerQuotationRepository {
      *       immediate parent.</li>
      *   <li>{@code pr.status = 'SUPERSEDED'} restricts this to requests a revision actually
      *       replaced. Without it a sibling or the issuing request itself could be swept up.</li>
+     *   <li>{@code pr.recipient_type = ...} (GLA-124) scopes this to root <b>and recipient</b>,
+     *       not root alone. A revision chain is only ever meant to hold ONE recipient (designer,
+     *       owner, or buyer) — PR #999 closed the two write paths ({@code
+     *       createCustomerChangeRevision}, {@code updateDraft}) that could put a mismatched
+     *       recipient into a chain — but this UPDATE has no way to know that invariant held for
+     *       every row it might touch. Without this clause, a chain that DOES contain two
+     *       recipients (legacy pre-guard data, or any future write path that reintroduces the
+     *       gap) has the OTHER recipient's still-live, customer-held ISSUED quotation silently
+     *       flipped to SUPERSEDED the moment THIS recipient's quotation issues — a document the
+     *       customer already holds, retired with no warning and no relation to what actually
+     *       happened. {@code sales.pricing_request.recipient_type} is {@code NOT NULL} with a
+     *       CHECK constraint (V59, never relaxed by any later migration) on every row of this
+     *       table, so a plain {@code =} is correct and deliberate here — there is no legal NULL
+     *       on either side for it to silently drop rows against. (This is unlike {@code
+     *       sales.quotation.recipient_type}, which DOES carry a legacy {@code UNSPECIFIED}
+     *       default from V52 — irrelevant here because this predicate compares two {@code
+     *       sales.pricing_request} rows, not {@code sales.quotation} ones.) {@code IS NOT
+     *       DISTINCT FROM} would be the right operator if a NULL were reachable on this column;
+     *       it is not, so plain {@code =} stands.</li>
      *   <li>{@code q.pricing_request_id <> :pricingRequestId} is belt-and-braces on top of that:
      *       the request being issued is never SUPERSEDED at this point, but a future caller
      *       should not have to know that to use this safely.</li>
      *   <li>The {@code doc_status IN (...)} list matches the one the eager path used, so the same
      *       quotations retire — only later.</li>
      * </ul>
+     *
+     * <p>Both correlated subqueries read {@code :pricingRequestId}'s own row, which cannot be
+     * absent: the sole caller ({@code CustomerQuotationService#issue}) has already loaded this
+     * exact pricing request via {@code requirePricingRequest} earlier in the same transaction,
+     * under the same {@link #lockPricingRequest} advisory-lock hold, and nothing in this codebase
+     * ever deletes a {@code sales.pricing_request} row. If that invariant were ever violated, both
+     * subqueries would return NULL, {@code NULL = NULL} is never true in SQL, and the UPDATE would
+     * simply match zero rows — a safe failure (nothing superseded) rather than an unsafe one.
      *
      * @return number of quotations superseded; 0 is the normal case for a first issue.
      */
@@ -374,6 +458,9 @@ public class CustomerQuotationRepository {
                AND COALESCE(pr.root_pricing_request_id, pr.pricing_request_id) = (
                      SELECT COALESCE(root_pricing_request_id, pricing_request_id)
                        FROM sales.pricing_request
+                      WHERE pricing_request_id = :pricingRequestId)
+               AND pr.recipient_type = (
+                     SELECT recipient_type FROM sales.pricing_request
                       WHERE pricing_request_id = :pricingRequestId)
                AND q.doc_status IN ('ISSUED', 'READY_TO_ISSUE', 'SENT', 'REVISION_REQUESTED')
             """, Map.of("pricingRequestId", pricingRequestId));
@@ -396,7 +483,8 @@ public class CustomerQuotationRepository {
                    outcome_recorded_at = now(),
                    outcome_client_request_id = CAST(:outcomeClientRequestId AS uuid),
                    accepted_at = CASE WHEN :outcome = 'ACCEPTED' THEN now() ELSE accepted_at END,
-                   rejected_at = CASE WHEN :outcome = 'REJECTED' THEN now() ELSE rejected_at END
+                   rejected_at = CASE WHEN :outcome = 'REJECTED' THEN now() ELSE rejected_at END,
+                   updated_at = now()
              WHERE quotation_id = :id AND doc_status = 'ISSUED'
             """,
             new MapSqlParameterSource()
@@ -427,6 +515,12 @@ public class CustomerQuotationRepository {
                SET doc_status = 'EXPIRED'
              WHERE doc_status = 'ISSUED'
                AND pricing_request_id IS NOT NULL
+               -- GLA-123 slice S1 (2026-09-19): PRICING_REQUEST-origin rows also set
+               -- pricing_request_id, but their own expiry (D5) is owned by
+               -- DealQuotationService#expireOverdueQuotations instead — origin IS NULL keeps this
+               -- scoped to the LEGACY (customerquotation/) chain this class has always owned,
+               -- exactly like every other query in this file now excludes the new origin explicitly.
+               AND origin IS NULL
                AND validity_date IS NOT NULL
                AND validity_date < CURRENT_DATE
             RETURNING quotation_id, pricing_request_id, ticket_id, number
@@ -437,7 +531,11 @@ public class CustomerQuotationRepository {
 
     public Optional<CustomerQuotationDto> findById(long quotationId) {
         try {
-            CustomerQuotationDto dto = jdbc.queryForObject(baseSelect() + " WHERE q.quotation_id = :id AND q.pricing_request_id IS NOT NULL",
+            // GLA-123 slice S1: origin IS NULL excludes the new PRICING_REQUEST-origin engine's
+            // rows, which also set pricing_request_id but live on DealQuotationRepository/Service
+            // instead — see that class's own origin filter for the mirror image of this exclusion.
+            CustomerQuotationDto dto = jdbc.queryForObject(
+                baseSelect() + " WHERE q.quotation_id = :id AND q.pricing_request_id IS NOT NULL AND q.origin IS NULL",
                 Map.of("id", quotationId), (rs, rowNum) -> mapQuotation(rs, findItems(quotationId)));
             return Optional.ofNullable(dto);
         } catch (EmptyResultDataAccessException e) {
@@ -445,10 +543,37 @@ public class CustomerQuotationRepository {
         }
     }
 
+    /** GLA-123 slice S1 fix (Opus review M2, 2026-09-20) — mutual exclusivity: a PR must never
+     * carry BOTH a live legacy customer quotation and a live PRICING_REQUEST-origin one.
+     * "Live" = not CANCELLED/SUPERSEDED/EXPIRED (the same three terminal-but-not-fulfilled
+     * statuses on both flows' status machines). Used by {@code DealQuotationService
+     * #createFromPricingRequest} to refuse (409) when this legacy chain already has one open. */
+    public boolean hasLiveQuotation(long pricingRequestId) {
+        // MINOR-4 fix (owner ruling, confirmed 2026-09-20, second re-review) — REJECTED added to
+        // the non-live set: a customer who REJECTED the old-flow quotation has, by definition, no
+        // live offer in front of them, so the pricing request must be free to use the NEW engine
+        // instead. Without this, a rejected old-flow quotation permanently blocked
+        // DealQuotationService#createFromPricingRequest with the M2 "already has an old quotation"
+        // 409, even though nothing about it is still live. See #hasLivePricingRequestQuotation's
+        // own comment for the mirror-image consistency this is paired with.
+        Boolean found = jdbc.queryForObject("""
+            SELECT EXISTS (
+                SELECT 1 FROM sales.quotation
+                 WHERE pricing_request_id = :id AND origin IS NULL
+                   AND doc_status NOT IN ('CANCELLED', 'SUPERSEDED', 'EXPIRED', 'REJECTED')
+            )
+            """, Map.of("id", pricingRequestId), Boolean.class);
+        return Boolean.TRUE.equals(found);
+    }
+
     public List<CustomerQuotationDto> findByPricingRequest(long pricingRequestId) {
         List<Long> ids = jdbc.query("""
             SELECT quotation_id FROM sales.quotation
-             WHERE pricing_request_id = :id
+             -- GLA-123 slice S1: origin IS NULL — see #findById's identical exclusion. Without
+             -- this, a request that has BOTH a legacy customerquotation AND a new
+             -- PRICING_REQUEST-origin quotation would return the new row through this
+             -- legacy-shaped DTO/query, which does not know its TILE-line columns.
+             WHERE pricing_request_id = :id AND origin IS NULL
              ORDER BY quotation_revision_no, quotation_id
             """, Map.of("id", pricingRequestId), (rs, rowNum) -> rs.getLong("quotation_id"));
         List<CustomerQuotationDto> result = new ArrayList<>();
@@ -483,9 +608,14 @@ public class CustomerQuotationRepository {
      * it ALONE.
      */
     public List<CustomerQuotationDto> findByTicket(long ticketId) {
+        // GLA-123 slice S1: origin IS NULL — see #findById's identical exclusion. Technically
+        // redundant with #findById's own filter (called per id below, so a PRICING_REQUEST row's
+        // id would already be silently dropped by ifPresent), kept here too so this query doesn't
+        // fetch — and this method's own Javadoc doesn't have to reason about — a row it will
+        // immediately discard.
         List<Long> ids = jdbc.query("""
             SELECT quotation_id FROM sales.quotation
-             WHERE ticket_id = :id AND pricing_request_id IS NOT NULL
+             WHERE ticket_id = :id AND pricing_request_id IS NOT NULL AND origin IS NULL
              ORDER BY quotation_id
             """, Map.of("id", ticketId), (rs, rowNum) -> rs.getLong("quotation_id"));
         List<CustomerQuotationDto> result = new ArrayList<>();

@@ -52,6 +52,7 @@ import { PricingRequestCreateModal } from './PricingRequestCreateModal.jsx';
 import { useUnitBasisCatalog } from './unitBasisCatalog.js';
 import { buttonVariants } from '../../components/common/Button.jsx';
 import { cn } from '../../utils/cn.js';
+import { piecesPerSqmFromSqmPerPiece, PRICE_MODE_OPTIONS } from '../quotations/quotationMeta.js';
 
 // V152 (V109 engine wiring), owner ruling 2026-08-16: the CEO's per-item duty product_type
 // override (LandedCostCalculator defaults every item to TILE — see PricingFormulaEngine's own
@@ -103,6 +104,43 @@ function itemDisplayName(item) {
  * the window in which its missing input can still be supplied.
  */
 const FACTORY_ROUTING_STATUSES = ['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE'];
+
+// ── V185 (direct-deal-form parity) + owner clarification 2026-09-18, FINAL ruling (reversing an
+// earlier "relabel to ยี่ห้อ" instruction this comment used to describe): the label on THIS page
+// stays โรงงาน, for both the sales-entered value below and Import's own SetItemFactoryRequest
+// control — read-only display of the new sales-entered tile fields on each item card. `—` for
+// anything a legacy (pre-V185) item never carried. ─────────────────────────────────────────────
+function formatOrDash(value, suffix = '') {
+  return value == null || value === '' ? '—' : `${value}${suffix}`;
+}
+
+/** แผ่น/ตร.ม. — the RECIPROCAL of the stored sqm_per_piece, same convention the direct-deal
+ * quotation editor displays (QuotationItemRow's own piecesPerSqmDisplay). */
+function formatPiecesPerSqm(item) {
+  if (item?.sqmPerPiece == null) return '—';
+  const reciprocal = piecesPerSqmFromSqmPerPiece(item.sqmPerPiece);
+  return reciprocal == null ? '—' : String(reciprocal);
+}
+
+function formatLeadTime(item) {
+  if (item?.leadTimeMinDays == null && item?.leadTimeMaxDays == null) return '—';
+  const min = item.leadTimeMinDays ?? '?';
+  const max = item.leadTimeMaxDays ?? '?';
+  return `${min}–${max} วัน`;
+}
+
+function formatQuantityAsEntered(item) {
+  if (item?.quantityMode === 'PIECES') return formatOrDash(item.piecesInput, ' แผ่น');
+  if (item?.quantityMode === 'AREA') return formatOrDash(item.areaSqm, ' ตร.ม.');
+  return '—';
+}
+
+function formatWastage(item) {
+  if (!item?.wastageMode || item.wastageMode === 'NONE') return 'ไม่มี';
+  if (item.wastageMode === 'PERCENT') return formatOrDash(item.wastageValue, '%');
+  if (item.wastageMode === 'PIECES') return formatOrDash(item.wastageValue, ' แผ่น');
+  return '—';
+}
 
 function PricingRequestDetailSkeleton() {
   return (
@@ -198,6 +236,52 @@ function generateClientRequestId() {
 function formatCurrency(value, currency = 'THB') {
   if (value == null || value === '') return '-';
   return currency === 'THB' ? formatMoney(value) : `${Number(value).toLocaleString('en-US')} ${currency}`;
+}
+
+// ── Phase 2, CEO pricing method (owner rulings 2026-09-18/19, V187) ───────────────────────────
+// Mirrors PricingDecisionService#isNewFormEligible exactly: the mode picker is offered only when
+// EVERY item of the decision came from a Phase 1 (V185) new-form pricing-request item
+// (requestedUnitBasis PER_PIECE + a non-null sqmPerPiece). A legacy decision keeps today's
+// margin/"ปรับราคาเอง" UI, unchanged, below.
+function isNewFormEligibleDecision(decision) {
+  return Boolean(decision?.items?.length) && decision.items.every(
+    (item) => item.requestedUnitBasis === 'PER_PIECE' && item.sqmPerPiece != null);
+}
+
+function round2(n) {
+  return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+}
+
+// Review finding #4 (2026-09-19): the `max` attribute on each price-mode input mirrors
+// PricingDecisionService's own MAX_PRICE_14_2/MAX_PRICE_12_2 (list/direct NUMERIC(14,2),
+// special NUMERIC(12,2)) — a browser-level nudge only, never authoritative; the server still
+// rejects an oversized value with 400, never a raw overflow 500.
+const PRICE_INPUT_MAX_14_2 = '999999999999.99';
+const PRICE_INPUT_MAX_12_2 = '9999999999.99';
+
+/**
+ * A CLIENT-SIDE PREVIEW ONLY — the server (PricingDecisionService#computeNetUnitPrice, reusing
+ * WastageCalculator) is authoritative and recomputes on every save; this never feeds a stored
+ * value. NET's `round2(list × (1 − pct/100))` has no rounding-order subtlety, so it is safe to
+ * mirror (same reasoning the direct-deal quotation editor's own client math uses). SPECIAL_SQM's
+ * net-per-piece derivation (`WastageCalculator#netPerPieceFromSpecialSqm`) is deliberately NOT
+ * mirrored here — its two-step rounding order IS the algorithm (see that method's own Javadoc) —
+ * so this returns `null` for it, same as `quotationMeta.js` already does for the identical
+ * computation on the direct-deal quotation editor (see that file's own comment on
+ * `piecesPerSqmFromSqmPerPiece`: "SPECIAL_SQM's net-per-piece figure is still always the
+ * SERVER's"). The UI shows "คำนวณเมื่อบันทึก" for that mode instead of a number.
+ */
+function previewCeoNetUnitPrice(priceMode, { listUnitPrice, discountPct, directNetPrice } = {}) {
+  if (priceMode === 'NET') {
+    if (listUnitPrice === '' || listUnitPrice == null) return null;
+    const discount = discountPct === '' || discountPct == null ? 0 : Number(discountPct);
+    return round2(Number(listUnitPrice) * (1 - discount / 100));
+  }
+  if (priceMode === 'DIRECT_NET') {
+    if (directNetPrice === '' || directNetPrice == null) return null;
+    return round2(Number(directNetPrice));
+  }
+  return null;
 }
 
 function cleanResponsePayload(draft) {
@@ -493,7 +577,7 @@ function CostOverrideModal({ item, costingItem, onClose, onSubmit, pending }) {
  * pattern is already established and reviewed here (V141), not because the two overrides mean the
  * same thing.
  */
-function PriceOverrideModal({ item, decision, onClose, onSubmit, pending }) {
+function PriceOverrideModal({ item, decision, onClose, onSubmit, pending, newForm = false }) {
   const hasOverride = item.manualSellingPricePerRequestedUnit != null;
   const [amount, setAmount] = useState(() => String(
     hasOverride ? item.manualSellingPricePerRequestedUnit : item.proposedSellingPricePerRequestedUnit ?? '',
@@ -560,11 +644,18 @@ function PriceOverrideModal({ item, decision, onClose, onSubmit, pending }) {
               </div>
             ) : null}
             <p className="m-0 mt-1 text-2xs text-text-muted">
-              เมื่อปรับแล้ว สูตรจะไม่คำนวณราคาขายของรายการนี้อีก — ราคาที่ปรับจะถูกใช้แทนจนกว่าจะล้างค่า
+              {newForm
+                // Owner ruling B (2026-09-19, Phase 2 CEO pricing), copy tightened per Opus
+                // review minor #1 (2026-09-19): this control is now reachable ONLY under NET mode
+                // (or before a mode is chosen) — DIRECT_NET/SPECIAL_SQM never consult it at all,
+                // so the copy must say "ส่วนลด" specifically, not the generic "วิธีกรอกราคาที่
+                // เลือกไว้" the original wording used (which read as if every mode applied it).
+                ? 'ใช้ได้เฉพาะโหมด "ราคาตั้ง − ส่วนลด %" (NET) เท่านั้น — ค่านี้แทนที่ "ราคาตามสูตร" เป็นราคาตั้ง ส่วนลดที่กรอกไว้ยังคำนวณทับค่านี้ต่อ ไม่ได้ข้ามไปทั้งหมด โหมดราคาพิเศษ บาท/ตร.ม. และราคาสุทธิต่อแผ่นไม่ใช้ค่านี้เลย — รายการที่ไม่มีต้นทุนต้องปรับต้นทุนเอง (ปรับต้นทุนเอง) แทน'
+                : 'เมื่อปรับแล้ว สูตรจะไม่คำนวณราคาขายของรายการนี้อีก — ราคาที่ปรับจะถูกใช้แทนจนกว่าจะล้างค่า'}
             </p>
           </div>
           <FormField
-            label={`ราคาที่ปรับ (${decision.currency}/หน่วยที่ขอ)`}
+            label={newForm ? `ราคาตั้งที่ปรับ (${decision.currency}/แผ่น)` : `ราคาที่ปรับ (${decision.currency}/หน่วยที่ขอ)`}
             htmlFor="price-override-amount"
             error={amountError}
           >
@@ -659,11 +750,12 @@ export function PricingRequestDetailPage({ user, showToast }) {
     enabled: Number.isFinite(pricingRequestId) && canSeeRawPricingDecision(user),
   });
 
-  // V152 (V109 engine wiring): the LIVE selling_buffer/selling_price_round_up_to, so the "วิธี
-  // คำนวณราคานี้" panel's formula text shows the buffer and round-up that actually ran, not the
-  // pre-V109 "cost x (1+margin)" shape. Same read gate as PricingFormulaConfigController itself
-  // ({ceo, import}) — this page's own canSeeRawPricingDecision is a superset, so no new access
-  // is opened up by fetching it here.
+  // V152 (V109 engine wiring): the LIVE selling_buffer, so the "วิธีคำนวณราคานี้" panel's formula
+  // text shows the buffer that actually ran, not the pre-V109 "cost x (1+margin)" shape.
+  // selling_price_round_up_to is dead (owner ruling 2026-09-19, Phase 2 CEO pricing — selling
+  // price now rounds HALF_UP 2dp instead) and is no longer shown here at all. Same read gate as
+  // PricingFormulaConfigController itself ({ceo, import}) — this page's own
+  // canSeeRawPricingDecision is a superset, so no new access is opened up by fetching it here.
   const formulaConfigQuery = useQuery({
     queryKey: queryKeys.pricingFormulaConfig(),
     queryFn: () => api.pricingFormulaConfig.get().then((r) => r.formulaConfig),
@@ -689,6 +781,22 @@ export function PricingRequestDetailPage({ user, showToast }) {
     queryFn: () => api.pricingRequests.listCustomerQuotations(pricingRequestId).then((r) => r.items ?? []),
     enabled: Number.isFinite(pricingRequestId) && canViewCustomerQuotation(user, detailQuery.data?.summary),
   });
+  // GLA-123 slice S1 M1 fix (Opus review, 2026-09-20) — the NEW engine's counterpart of the query
+  // above, for the SAME "ใบเสนอราคาลูกค้า" panel below. Enabled-gate used to just be
+  // canViewCustomerQuotation (this comment used to say PRICING_REQUEST_VIEW_ROLES and
+  // CustomerQuotationService.VIEW_ROLES were "the exact same role set" — true when M3 shipped,
+  // no longer true since MAJOR-4/MINOR-1 (owner ruling, confirmed 2026-09-20, second re-review)
+  // removed import from PRICING_REQUEST_VIEW_ROLES specifically, leaving the LEGACY engine's own
+  // VIEW_ROLES — which canViewCustomerQuotation mirrors — untouched. `&& !isImport(user)` is what
+  // keeps this query from firing a call the server would now 403 for import: the backend gate is
+  // what actually enforces this either way, but there is no reason to let import's browser make a
+  // doomed request and surface a raw error where the panel should simply not query at all.
+  const dealQuotationForPrQuery = useQuery({
+    queryKey: queryKeys.dealQuotationForPricingRequest(pricingRequestId),
+    queryFn: () => api.dealQuotations.findForPricingRequest(pricingRequestId).then((r) => r.quotation ?? null),
+    enabled: Number.isFinite(pricingRequestId) && canViewCustomerQuotation(user, detailQuery.data?.summary)
+      && !isImport(user),
+  });
 
   // Pricing Request attachments (V69, review remediation COMMIT 4): Sales-level supporting
   // attachments on the request itself — every viewer role can see the list (requireViewable's
@@ -712,6 +820,15 @@ export function PricingRequestDetailPage({ user, showToast }) {
     queryClient.invalidateQueries({ queryKey: queryKeys.pricingDecisions(pricingRequestId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.pricingDecisionSalesView(pricingRequestId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.customerQuotations(pricingRequestId) });
+    // GLA-123 S3 review round 5 fix (NEW-A): the NEW engine's counterpart of the invalidation
+    // above. dealQuotationForPrQuery backs both the outcome-recording panel AND the recreate gate
+    // (['EXPIRED','REVISION_REQUESTED','REJECTED'].includes(dealQuotationForPr?.docStatus)) further
+    // down this file. ['pricingRequests','detail',id] does NOT prefix-match
+    // ['pricingRequests','dealQuotationForPricingRequest',id] — these are siblings, not a parent/
+    // child pair — so without this line the outcome mutation's success toast fires but the DTO
+    // backing the recreate button stays stale until a manual reload or the 30s staleTime lapses
+    // (api/queryClient.js). Nothing else in the app invalidates this key.
+    queryClient.invalidateQueries({ queryKey: queryKeys.dealQuotationForPricingRequest(pricingRequestId) });
     // discountApprovals is keyed by quotation id, not pricingRequestId — invalidate the whole
     // family with the shared 'discountApprovals' prefix rather than needing the current
     // quotation's id here too (this function is called from mutations that may have just
@@ -856,6 +973,15 @@ export function PricingRequestDetailPage({ user, showToast }) {
   // decision item is "ปรับราคาเอง", which opens PriceOverrideModal per item — no draft state is
   // needed for it (the modal owns its own form state, same pattern as costOverrideItem below).
   const [priceOverrideItem, setPriceOverrideItem] = useState(null);
+  // Phase 2 (owner rulings 2026-09-18/19, V187): per-item draft state for the CEO price-mode
+  // inputs (list price/discount, ราคาพิเศษ, or ราคาสุทธิ) — keyed by pricingDecisionItemId, only
+  // ever populated for a new-form-eligible decision. Kept in local state (rather than firing a
+  // mutation per keystroke) so the CEO can type before saving; "บันทึกราคา" below sends the
+  // whole row in one PUT, mirroring how the legacy override modal collects input before submit.
+  const [ceoPriceDrafts, setCeoPriceDrafts] = useState({});
+  function updateCeoPriceDraft(itemId, patch) {
+    setCeoPriceDrafts((prev) => ({ ...prev, [itemId]: { ...prev[itemId], ...patch } }));
+  }
   const [approveClientRequestId, setApproveClientRequestId] = useState(() => generateClientRequestId());
   // Step 4: Customer Quotation Generation and Issuance.
   const [createQuotationClientRequestId, setCreateQuotationClientRequestId] = useState(() => generateClientRequestId());
@@ -903,6 +1029,43 @@ export function PricingRequestDetailPage({ user, showToast }) {
         }],
       }),
     'บันทึกราคาที่ปรับแล้ว',
+  );
+  // Phase 2 (owner rulings 2026-09-18/19, V187): the mode picker — one PUT that sets priceMode
+  // header-side (only the first time; the request omits it once already set, matching the
+  // "choose once" rule) — separate from the per-item price mutation below so switching modes
+  // never accidentally also sends a stale item draft.
+  const setCeoPriceMode = useActionMutation(
+    ({ decision, priceMode }) => api.pricingRequests.updatePricingDecision(decision.id, { priceMode }),
+    'เลือกวิธีกรอกราคาแล้ว',
+  );
+  // Saves one item's price-mode inputs (list price/discount, ราคาพิเศษ, or ราคาสุทธิ, depending
+  // on the decision's priceMode) — mirrors PricingDecisionService#applyItemUpdates's own field
+  // set exactly. The server derives and returns netUnitPrice; this component never computes the
+  // stored value itself (previewCeoNetUnitPrice above is a preview only).
+  // Review finding #6 (2026-09-19): `clears` carries the explicit "really clear this field"
+  // signals (clearDiscountPct/clearSpecialPriceSqm/clearDirectNetPrice) -- sending `null` for a
+  // value is indistinguishable from "not touched" on the server (COALESCE), so a genuine clear
+  // (e.g. "ล้างส่วนลด") must set the matching `clearXxx` flag instead.
+  // Owner correction (2026-09-19): `listUnitPrice`/`clearListUnitPrice` are GONE from this payload
+  // entirely -- the list price (ราคาตั้ง) is never CEO-typed (ruling A), it is always the
+  // server-computed formula price, refreshed server-side by overrideItemCost/recalculateCost/
+  // overrideItemProductType. Sending it from here was the original (wrong) design this component
+  // built to "protect a CEO-typed value from being clobbered" -- there was never such a value to
+  // protect, and freezing it client-side only reintroduced the uncosted-item deadlock through a
+  // second door. "ปรับราคาเอง" (sellingPriceOverride, above) remains the CEO's one real lever.
+  const saveCeoItemPrice = useActionMutation(
+    ({ decision, item, draft, clears = {} }) => api.pricingRequests.updatePricingDecision(decision.id, {
+      items: [{
+        pricingDecisionItemId: item.id,
+        discountPct: clears.clearDiscountPct ? null : cleanNumber(draft.discountPct),
+        clearDiscountPct: Boolean(clears.clearDiscountPct),
+        specialPriceSqm: clears.clearSpecialPriceSqm ? null : cleanNumber(draft.specialPriceSqm),
+        clearSpecialPriceSqm: Boolean(clears.clearSpecialPriceSqm),
+        directNetPrice: clears.clearDirectNetPrice ? null : cleanNumber(draft.directNetPrice),
+        clearDirectNetPrice: Boolean(clears.clearDirectNetPrice),
+      }],
+    }),
+    'บันทึกราคาแล้ว',
   );
   // V141 ("CEO owns costing", PR #702): recomputes the bound costing in place, preserving every
   // per-line override — see recalculatePricingDecisionCost's own doc comment in hrApi.js. Never
@@ -965,6 +1128,20 @@ export function PricingRequestDetailPage({ user, showToast }) {
     },
     onError: (error) => showToast?.('error', error.message || 'ดำเนินการไม่สำเร็จ'),
   });
+  // GLA-123 slice S1 (Phase 3, 2026-09-19) — "เขียนใบเสนอราคาจากคำขอราคา": the direct-deal
+  // engine, prefilled from this request's CEO-approved decision. A legacy (pre-V187) decision is
+  // refused server-side with a clear Thai 409 — this button is offered whenever the request is
+  // otherwise eligible (canCreateCustomerQuotation's own gate), and the error surfaces as a toast
+  // rather than being hidden client-side, so a legacy request still tells the rep why instead of
+  // silently doing nothing.
+  const createDealQuotationFromRequest = useMutation({
+    mutationFn: () => api.dealQuotations.createFromPricingRequest(pricingRequestId),
+    onSuccess: (result) => {
+      const quotation = result?.quotation;
+      if (quotation?.id) navigate(`/quotations/${quotation.id}`);
+    },
+    onError: (error) => showToast?.('error', error.message || 'ดำเนินการไม่สำเร็จ'),
+  });
   const saveQuotation = useActionMutation((quotation) => api.pricingRequests.updateCustomerQuotation(quotation.id, {
     paymentTerms: quotationHeaderDraft.paymentTerms ?? quotation.paymentTerms,
     leadTime: quotationHeaderDraft.leadTime ?? quotation.leadTime,
@@ -1024,6 +1201,26 @@ export function PricingRequestDetailPage({ user, showToast }) {
   // Step 5: Customer Decision and Commercial Revisions.
   const recordQuotationOutcome = useMutation({
     mutationFn: ({ quotation, outcome }) => api.pricingRequests.recordCustomerQuotationOutcome(quotation.id, {
+      outcome,
+      customerNote: outcomeNote || null,
+      clientRequestId: outcomeClientRequestId,
+    }),
+    onSuccess: () => {
+      setOutcomeClientRequestId(generateClientRequestId());
+      setOutcomeNote('');
+      showToast?.('success', 'บันทึกผลใบเสนอราคาแล้ว');
+      invalidate();
+    },
+    onError: (error) => showToast?.('error', error.message || 'ดำเนินการไม่สำเร็จ'),
+  });
+  // GLA-123 slice S3 (R9) — the SAME outcome action as recordQuotationOutcome above, on the
+  // NEW-engine (PRICING_REQUEST-origin) quotation instead of the legacy one. Shares
+  // outcomeNote/outcomeClientRequestId state with recordQuotationOutcome: M2 already guarantees a
+  // pricing request can never carry a live quotation on BOTH engines at once, so only one of the
+  // two outcome UI blocks below is ever rendered for a given request, and the two mutations never
+  // race over the same state.
+  const recordDealQuotationOutcome = useMutation({
+    mutationFn: ({ quotation, outcome }) => api.dealQuotations.recordOutcome(quotation.id, {
       outcome,
       customerNote: outcomeNote || null,
       clientRequestId: outcomeClientRequestId,
@@ -1174,6 +1371,13 @@ export function PricingRequestDetailPage({ user, showToast }) {
     () => customerQuotations.find((q) => isCustomerQuotationEditable(q)) ?? [...customerQuotations].reverse()[0] ?? null,
     [customerQuotations],
   );
+  // GLA-123 slice S1 M1 fix (Opus review, 2026-09-20): the NEW engine's counterpart of
+  // currentCustomerQuotation above. M2's mutual exclusivity means these are never both LIVE at
+  // once, but a CANCELLED legacy quotation can coexist alongside a live new-engine one (or vice
+  // versa) — checking dealQuotationForPr first, and only falling back to the legacy quotation
+  // display when it is absent, is what keeps the panel showing "the one that matters" rather than
+  // a stale cancelled row.
+  const dealQuotationForPr = dealQuotationForPrQuery.data ?? null;
   // CEO discount-approval workflow, Phase 2 (V155): per-line status for the CURRENT quotation
   // only — placed here (not grouped with the other useQuery calls above) because its key/enabled
   // genuinely depend on currentCustomerQuotation's id, and re-deriving that id independently here
@@ -1323,6 +1527,24 @@ export function PricingRequestDetailPage({ user, showToast }) {
           <div className="text-sm"><strong>ต้องการภายใน</strong> {formatThaiDate(summary.requiredDate)}</div>
           <div className="text-sm"><strong>ฝ่ายนำเข้า</strong> ผู้รับเรื่องและประสานราคาโรงงาน</div>
         </div>
+        {/* GLA-125 (owner ruling 2026-09-18): header terms, read-only for every viewer including
+            Import — they carry no price or discount, only when/how the eventual quotation would
+            be paid for and printed. Rendered only when at least one is actually set, so a
+            pre-GLA-125 request (every field null) shows nothing extra here. NOT yet reflected on
+            the quotation itself — see V185's migration header (Phase 3). */}
+        {(summary.paymentTermMode || summary.validityDays != null || summary.deptCode
+          || summary.unitCode || summary.printedByDisplayId != null || summary.salesRepDisplayId != null
+          || summary.omitContactHonorific) ? (
+          <div className="grid gap-x-4 gap-y-1 border-t border-border p-4 pt-3 text-xs text-text-muted sm:grid-cols-3">
+            <span>เงื่อนไขการชำระเงิน: {summary.paymentTermMode === 'CREDIT'
+              ? `เครดิต ${summary.creditDays ?? '—'} วัน`
+              : summary.paymentTermMode === 'ON_DELIVERY' ? 'ชำระเมื่อส่งมอบ' : '—'}</span>
+            <span>ยืนราคา: {summary.validityDays != null ? `${summary.validityDays} วัน` : '—'}</span>
+            <span>ฝ่าย: {summary.deptCode || '—'}</span>
+            <span>หน่วยงาน / รหัสผู้ออกแบบ: {summary.unitCode || '—'}</span>
+            <span>ไม่เติม &quot;คุณ&quot; หน้าชื่อผู้รับ: {summary.omitContactHonorific ? 'ใช่' : 'ไม่ใช่'}</span>
+          </div>
+        ) : null}
       </Panel>
 
       <Panel flush title="รายการสินค้าและราคาตั้งต้น">
@@ -1351,6 +1573,31 @@ export function PricingRequestDetailPage({ user, showToast }) {
             // ORDER BY sort_order, pricing_request_item_id and groupByFactory's sort is stable on
             // sortOrder, so "รายการที่ N" means this exact row on both sides.
             const position = index + 1;
+            // Owner ruling 2026-09-18 (reversed from an earlier ยี่ห้อ ruling): the label on this
+            // panel is โรงงาน, not ยี่ห้อ — matching the PCR form's own `brandLabel="โรงงาน"`
+            // override (PricingRequestCreateModal.jsx). Two DIFFERENT values both say โรงงาน here,
+            // so (Opus review finding #6, 2026-09-18) they are shown as two SEPARATE lines rather
+            // than one falling back to the other:
+            //   - `salesBrandValue`: exactly what Sales typed/picked (`brand`), never anything
+            //     else — a card whose rep left this blank now correctly shows "—", not whatever
+            //     factory routing happened to resolve to.
+            //   - `factoryName` (below): the factory this line is actually ROUTED to — the
+            //     catalog snapshot's resolvedFactoryName, or Import's own SetItemFactoryRequest
+            //     gap-fill (both land in the SAME `factory` column via itemFactoryName's
+            //     precedence) — shown on its own line, amber + "ยังไม่ได้ระบุ" when neither has
+            //     set one yet, matching the owner's own suggested disambiguation ("the assigned
+            //     one is the control, the sales value is read-only text beside it"). Import's OWN
+            //     factory-assignment control below also says โรงงาน; this line is what tells
+            //     Import (or anyone) what it currently holds without scrolling to the control.
+            //     The underlying "is a factory resolved for routing" check (missingFactoryItems,
+            //     canSetItemFactory, setItemFactory) is UNCHANGED.
+            const salesBrandValue = item.brand?.trim() || null;
+            const productCode = item.productCode?.trim() || item.catalogProductCode || null;
+            // Owner ruling: nothing discount-related exists in Phase 1, and Import never sees
+            // เผื่อ (wastage) or the pre-wastage quantity — only the FINAL order quantity (pieces
+            // after wastage + full-box rounding, boxes, sqm equivalent). Sales/CEO/everyone else
+            // keeps the full breakdown. UI scoping only — no backend authz change.
+            const showWastageDetail = !isImport(user);
             return (
               <div
                 key={item.id}
@@ -1365,12 +1612,49 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   <span className="text-xs text-text-muted">{item.requestedQty} {item.requestedUnit}</span>
                 </div>
                 <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-muted">
+                  <span>{`โรงงาน (ที่ฝ่ายขายกรอก): ${salesBrandValue ?? '—'}`}</span>
                   <span className={factoryName ? undefined : 'font-bold text-warning-dark'}>
-                    {`Factory: ${factoryName ?? 'ยังไม่ได้ระบุ'}`}
+                    {`โรงงานที่กำหนด (Import): ${factoryName ?? 'ยังไม่ได้ระบุ'}`}
                   </span>
-                  <span>Catalog: {item.catalogProductCode ?? '-'}</span>
+                  <span>รหัสสินค้า: {productCode ?? '-'}</span>
                   <span>Base: {item.catalogBasePrice != null ? `${formatCurrency(item.catalogBasePrice, item.catalogCurrency ?? 'THB')} (preliminary)` : '-'}</span>
                 </div>
+                {/* V185: the sales-entered tile fields, read-only for every viewer — legacy
+                    (pre-V185) items show "—" for whichever of these they never carried. */}
+                <div className="mt-1.5 grid grid-cols-2 gap-x-4 gap-y-1 border-t border-border pt-1.5 text-xs text-text-muted sm:grid-cols-3">
+                  <span>สี: {formatOrDash(item.color)}</span>
+                  <span>ผิว: {formatOrDash(item.texture)}</span>
+                  <span>ขนาด: {formatOrDash(item.size)}</span>
+                  <span>ความหนา: {formatOrDash(item.thicknessMm, ' มม.')}</span>
+                  <span>แผ่น/ตร.ม.: {formatPiecesPerSqm(item)}</span>
+                  <span>แผ่น/กล่อง: {formatOrDash(item.piecesPerBox)}</span>
+                  <span>ขายแผ่นไม่เต็มกล่อง: {item.piecesPerBox != null ? (item.roundToFullBox === false ? 'ใช่' : 'ไม่ใช่') : '—'}</span>
+                  <span>
+                    ประเทศต้นทาง: {formatOrDash(item.originCountry)}
+                    {/* GLA-125 item 2: the typed name is the actual answer once origin_country
+                        is the "อื่นๆ" sentinel -- showing just "อื่นๆ" alone would tell Import
+                        nothing. */}
+                    {item.originCountry === 'อื่นๆ' ? ` (${formatOrDash(item.originCountryOther)})` : ''}
+                  </span>
+                  <span>ระยะเวลานำเข้า: {formatLeadTime(item)}</span>
+                </div>
+                {/* Final order quantity — what Import must actually order — shown to EVERY
+                    viewer: pieces after wastage + full-box rounding (the request's own
+                    requestedQty/requestedUnit, already shown in the header above), plus boxes and
+                    the ตร.ม. equivalent. */}
+                <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 border-t border-border pt-1.5 text-xs text-text-muted">
+                  <span className="font-bold text-text">จำนวนสั่งซื้อ: {item.requestedQty ?? '—'} {item.requestedUnit ?? ''}</span>
+                  <span>กล่อง: {formatOrDash(item.boxes)}</span>
+                  <span>เทียบ ตร.ม.: {formatOrDash(item.requestedQtySqm, ' ตร.ม.')}</span>
+                </div>
+                {/* เผื่อ (wastage) and the AS-ENTERED (pre-wastage) quantity — sales/CEO only, per
+                    owner ruling 2026-09-18: Import sees only the final order quantity above. */}
+                {showWastageDetail ? (
+                  <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-muted">
+                    <span>จำนวนที่กรอก: {formatQuantityAsEntered(item)}</span>
+                    <span>เผื่อ (wastage): {formatWastage(item)}</span>
+                  </div>
+                ) : null}
                 {/* Import's escape hatch. Only offered on a line that has NO factory: the backend
                     refuses to re-route one that does (a factory quote may already be grouped under
                     that name), so offering an editable value here would promise something the
@@ -1495,7 +1779,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   per-field mobile caption spans in the item-row map below), so an empty header
                   strip would have nothing to head. */}
               <div className={cn('hidden items-center gap-3 border-b border-border-subtle bg-surface-subtle px-5 py-2.5 text-xs font-bold uppercase tracking-wide text-text-muted md:grid', FACTORY_ITEM_GRID)}>
-                <span>ยี่ห้อ / รุ่น</span>
+                {/* Owner ruling (2026-09-19): โรงงาน on PCR screens, not ยี่ห้อ -- PCR page only,
+                    TicketDetailPage's own identical header is untouched. */}
+                <span>โรงงาน / รุ่น</span>
                 <span>สี / เนื้อผิว</span>
                 <span>จำนวน</span>
                 <span>ราคาที่เสนอ (แก้ไข)</span>
@@ -1960,7 +2246,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
               // block approval here any more. A "ปรับราคาเอง" override needs no margin at all —
               // its price is fixed directly, mirroring PricingDecisionService#approve's own
               // missingMargin exemption for an overridden item.
-              const missingBeforeApprove = decision.items.filter((item) => {
+              // Phase 2: a new-form decision never carries a margin at all — its OWN gate
+              // (missingCeoPrice, declared below once newForm is known) replaces this one.
+              const missingBeforeApprove = isNewFormEligibleDecision(decision) ? [] : decision.items.filter((item) => {
                 const hasPriceOverride = item.manualSellingPricePerRequestedUnit != null;
                 return !hasPriceOverride && (item.proposedMarginPct == null || item.proposedMarginPct === '');
               });
@@ -1970,6 +2258,17 @@ export function PricingRequestDetailPage({ user, showToast }) {
               const staleOverrideItems = decision.items.filter(
                 (item) => decisionCostingItems.get(item.pricingCostingItemId)?.overrideStale,
               );
+              // Phase 2 (owner rulings 2026-09-18/19, V187): a new-form decision is priced
+              // entirely through the mode picker below — margin/"ปรับราคาเอง" never apply to it.
+              const newForm = isNewFormEligibleDecision(decision);
+              const missingCeoPrice = newForm ? decision.items.filter((item) => item.netUnitPrice == null) : [];
+              // Opus review finding #1 (2026-09-19): mirrors PricingDecisionService.approve's own
+              // uncosted gate EXACTLY (an item with no frozen cost AND no "ปรับราคาเอง" override
+              // blocks approval, legacy OR new-form alike) — this was previously only implied by
+              // a badge with no wired disabled state, so the UI could offer "อนุมัติราคาขาย" on a
+              // decision the server would still 422.
+              const missingCost = decision.items.filter((item) =>
+                item.frozenLandedCostPerRequestedUnitThb == null && item.manualSellingPricePerRequestedUnit == null);
               return (
                 <div key={decision.id} className="rounded-md border border-border bg-surface p-3">
                   <div className="flex flex-wrap items-center gap-2">
@@ -1980,6 +2279,48 @@ export function PricingRequestDetailPage({ user, showToast }) {
                       {decision.currency} · อัตราแลกเปลี่ยน {decision.fxRateUsed} ({decision.fxSource}, {decision.fxEffectiveDate})
                     </span>
                   </div>
+                  {newForm ? (
+                    <div className="mt-3">
+                      <FormField
+                        label="วิธีกรอกราคา"
+                        hint={(decision.priceMode === 'NET'
+                          // The shared direct-quote hint says "กรอกราคาตั้ง…"; here the list price is
+                          // auto-calculated from the CEO's formula, so only the discount is typed.
+                          ? 'ราคาตั้งคำนวณจากสูตรอัตโนมัติ — กรอกเฉพาะส่วนลด %'
+                          : PRICE_MODE_OPTIONS.find((opt) => opt.code === decision.priceMode)?.hint)
+                          ?? 'เลือกวิธีกรอกราคาสำหรับมติราคานี้ — เปลี่ยนได้ ใช้กับทุกรายการในมติราคานี้'}
+                      >
+                        <div className="flex flex-wrap gap-2" role="group" aria-label="วิธีกรอกราคา">
+                          {PRICE_MODE_OPTIONS.map((opt) => (
+                            <Button
+                              key={opt.code}
+                              type="button"
+                              variant={decision.priceMode === opt.code ? 'primary' : 'secondary'}
+                              size="sm"
+                              disabled={!editable || setCeoPriceMode.isPending || decision.priceMode === opt.code}
+                              aria-pressed={decision.priceMode === opt.code}
+                              onClick={() => {
+                                // Review finding #2 (2026-09-19): switching AWAY from an
+                                // already-chosen mode discards every item's net under the OLD
+                                // mode (the server recomputes from each item's stored inputs for
+                                // the NEW one, nulling out whatever it lacks) — confirm first, so
+                                // the CEO is never surprised by a price silently disappearing.
+                                // Picking a mode for the FIRST time needs no confirmation.
+                                if (decision.priceMode != null) {
+                                  setConfirmAction({ type: 'switchPriceMode', decision, priceMode: opt.code });
+                                } else {
+                                  setCeoPriceMode.mutate({ decision, priceMode: opt.code });
+                                }
+                              }}
+                              data-testid={`pcr-ceo-price-mode-${opt.code}`}
+                            >
+                              {opt.label}
+                            </Button>
+                          ))}
+                        </div>
+                      </FormField>
+                    </div>
+                  ) : null}
                   <div className="mt-3 flex flex-col gap-3">
                     {decision.items.map((item) => {
                       // V141: the bound costing line this decision item was frozen from — may
@@ -1996,6 +2337,353 @@ export function PricingRequestDetailPage({ user, showToast }) {
                       const effectivePrice = item.approvedSellingPricePerRequestedUnit
                         ?? (hasPriceOverride ? item.manualSellingPricePerRequestedUnit : item.proposedSellingPricePerRequestedUnit);
                       const effectiveMargin = item.approvedMarginPct ?? item.proposedMarginPct;
+                      // ── Phase 2 (owner rulings 2026-09-18/19, V187) ─────────────────────────
+                      if (newForm) {
+                        const draft = ceoPriceDrafts[item.id] ?? {};
+                        // Owner correction (2026-09-19): listUnitPrice is never in `draft` any
+                        // more (the CEO cannot type it) -- the preview always reads the
+                        // server-maintained item.listUnitPrice, with only discountPct/
+                        // directNetPrice possibly overridden by an in-progress edit.
+                        const previewNet = previewCeoNetUnitPrice(decision.priceMode, {
+                          listUnitPrice: item.listUnitPrice,
+                          discountPct: draft.discountPct ?? item.discountPct,
+                          directNetPrice: draft.directNetPrice,
+                        });
+                        const savedNet = item.netUnitPrice;
+                        // Opus review minor #7 (2026-09-19): this used to be `savedNet ?? previewNet`,
+                        // which showed the STALE saved net (already populated the moment NET mode
+                        // is picked, via ruling A's auto-fill) even while the CEO was actively
+                        // typing an unsaved discount — once anything had ever been saved, the live
+                        // preview became permanently unreachable (repro: NET item with
+                        // listUnitPrice=83, saved net=83 from the zero-discount auto-fill, typing
+                        // 10% still showed ฿83.00 instead of ฿74.70). A pending, unsaved draft edit
+                        // must always win over the last-saved figure.
+                        const hasPendingDraft = Object.keys(draft).length > 0;
+                        const displayNet = hasPendingDraft ? previewNet : savedNet;
+                        const showingUnsavedPreview = hasPendingDraft && displayNet != null;
+                        // SPECIAL_SQM's net is never previewed client-side (previewCeoNetUnitPrice
+                        // returns null for it on purpose — its two-step rounding order IS the
+                        // algorithm) — a pending edit there must say "computed on save", never
+                        // silently keep showing the pre-edit saved figure as if it were current.
+                        const showingUncomputedPreview = hasPendingDraft && displayNet == null
+                          && decision.priceMode === 'SPECIAL_SQM';
+                        const lineTotal = displayNet != null ? round2(Number(item.requestedQuantity) * displayNet) : null;
+                        // Owner ruling B (2026-09-19): "ปรับราคาเอง" replaces the AUTO list price
+                        // for this item, so the badge/label below reuse the same variable name
+                        // (hasPriceOverride, computed above for the whole item) the legacy branch
+                        // uses — it means the same underlying column either way.
+                        const hasListPriceOverride = hasPriceOverride;
+                        // Opus review minor #1 (2026-09-19): "ปรับราคาเอง" only ever affects the
+                        // approved price under NET mode (ruling B — it becomes NET's effective
+                        // list price) or before a mode is chosen at all. Under DIRECT_NET/
+                        // SPECIAL_SQM it is NEVER consulted by computeNetUnitPrice, so offering the
+                        // control there let the CEO believe it priced the line when it did not —
+                        // the probe that exposed this: an uncosted DIRECT_NET item with
+                        // directNetPrice=100 and an override of 300 approved at 100 with NO cost
+                        // backing it (see PricingDecisionService#approve's own uncosted-gate fix).
+                        // A DIRECT_NET/SPECIAL_SQM item with no cost must clear the uncosted gate
+                        // with a REAL cost (ปรับต้นทุนเอง) — this button is hidden, not merely
+                        // relabelled, so there is no path to the misleading state at all.
+                        const showsPriceOverrideControl = decision.priceMode == null
+                          || decision.priceMode === 'NET';
+                        // Owner ruling A (2026-09-19): shown BOTH per แผ่น and per ตร.ม. — a plain
+                        // division, not the SPECIAL_SQM VAT-stripping algorithm, so it is safe to
+                        // compute here directly rather than through previewCeoNetUnitPrice.
+                        const formulaPricePerSqm = item.proposedSellingPricePerRequestedUnit != null && item.sqmPerPiece > 0
+                          ? round2(Number(item.proposedSellingPricePerRequestedUnit) / Number(item.sqmPerPiece))
+                          : null;
+                        // NIT: per-ITEM pending state, not the mutation's shared isPending --
+                        // otherwise saving item A shows every OTHER item's button spinning too.
+                        const savingThisItem = saveCeoItemPrice.isPending
+                          && saveCeoItemPrice.variables?.item?.id === item.id;
+                        const clearingThisDiscount = savingThisItem && saveCeoItemPrice.variables?.clears?.clearDiscountPct;
+                        function saveThisItem(clears) {
+                          saveCeoItemPrice.mutate({ decision, item, draft, clears }, {
+                            // NIT: clear the local draft once the server has confirmed the save,
+                            // so the input falls back to showing the freshly-saved stored value
+                            // instead of a stale draft the CEO already submitted.
+                            onSuccess: () => setCeoPriceDrafts((prev) => {
+                              const next = { ...prev };
+                              delete next[item.id];
+                              return next;
+                            }),
+                          });
+                        }
+                        return (
+                          <div key={item.id} className="rounded-md border border-border-subtle p-3">
+                            <div className="flex flex-wrap items-center gap-2 text-xs text-text-muted">
+                              <strong className="text-text">{[item.brand, item.model].filter(Boolean).join(' ') || item.productDescription || '-'}</strong>
+                              <span>{item.factoryName ?? '-'}</span>
+                              <span>{item.requestedQuantity} แผ่น</span>
+                              {hasListPriceOverride ? <span className="font-bold text-override">ราคาตั้งปรับเอง</span> : null}
+                              {costingItem?.overrideStale ? <StatusBadge tone="warning">ต้นทุนที่ปรับล้าสมัย</StatusBadge> : null}
+                              {/* V156, still true for a new-form item: the freight table could
+                                  not be looked up for this line, so it arrives with NO cost —
+                                  the CEO must supply one with "ปรับต้นทุนเอง" below (Opus review
+                                  finding #1, 2026-09-19: this control was missing from this card
+                                  entirely; it is restored here, unconditionally, same as legacy). */}
+                              {costingItem?.uncostableReason ? (
+                                <StatusBadge tone="warning">ต้องระบุต้นทุนเอง</StatusBadge>
+                              ) : null}
+                              {item.netUnitPrice == null ? (
+                                <StatusBadge tone="warning">ยังไม่มีราคา</StatusBadge>
+                              ) : (
+                                <StatusBadge tone="success">มีราคาแล้ว</StatusBadge>
+                              )}
+                            </div>
+                            {/* Opus review minors #6/#8 (2026-09-19): the formula (auto) price and
+                                the ปรับต้นทุนเอง/ปรับราคาตั้งเอง/duty controls used to live ONLY
+                                inside the collapsed "วิธีคำนวณราคานี้" section below — from a
+                                screenshot of the mock demo, a CEO who never expands it sees only
+                                "ต้นทุนโรงงาน (ฐาน)" and nothing else, with no way to tell what
+                                ราคาตั้ง (สูตร) actually is, or to reach the overrides, without
+                                expanding anything. Both now render in the card's main body. */}
+                            <div className="mt-2 flex flex-wrap items-baseline gap-x-6 gap-y-1">
+                              <span className="text-xs text-text-muted">
+                                ต้นทุนโรงงาน (ฐาน):{' '}
+                                {costingItem?.uncostableReason ? (
+                                  <span className="font-bold text-warning">คำนวณอัตโนมัติไม่ได้</span>
+                                ) : (
+                                  <code>{formatCurrency(item.frozenLandedCostPerRequestedUnitThb, 'THB')}</code>
+                                )}
+                              </span>
+                              <span className="text-xs text-text-muted">
+                                ราคาตั้ง (สูตร):{' '}
+                                <code className="text-info">{formatCurrency(item.proposedSellingPricePerRequestedUnit, decision.currency)}</code>
+                                {' / แผ่น · '}
+                                <code className="text-info">{formatCurrency(formulaPricePerSqm, decision.currency)}</code>
+                                {' / ตร.ม.'}
+                              </span>
+                            </div>
+                            {costingItem?.uncostableReason ? (
+                              <p className="mt-2 text-xs text-warning">{costingItem.uncostableReason}</p>
+                            ) : null}
+                            {showsPriceOverrideControl && hasListPriceOverride ? (
+                              <p className="mt-1 text-xs text-text-muted">
+                                ราคาตั้งนี้ถูก <span className="font-bold text-override">ปรับเอง</span> เป็น{' '}
+                                <code className="font-bold text-override">{formatCurrency(item.manualSellingPricePerRequestedUnit, decision.currency)}</code>
+                                {' '}— ส่วนลดยังคำนวณทับค่านี้ต่อ
+                              </p>
+                            ) : null}
+                            {/* Read-only, shown regardless of `editable` (an approved/non-DRAFT
+                                decision still needs to show a duty override that already applied,
+                                even though the <select> below to CHANGE it is edit-only). */}
+                            {costingItem?.productType && costingItem.productType !== 'TILE' ? (
+                              <p className="mt-1 text-xs text-text-muted">
+                                ประเภทสินค้า (สำหรับอากรขาเข้า):{' '}
+                                <code className="font-bold text-override">{DUTY_PRODUCT_TYPE_LABELS[costingItem.productType] ?? costingItem.productType}</code>
+                                <span className="ml-1 text-2xs text-override">ปรับเอง</span>
+                              </p>
+                            ) : null}
+                            {editable ? (
+                              <div className="mt-2 flex flex-wrap items-center gap-2">
+                                <Button
+                                  type="button"
+                                  variant="secondary"
+                                  size="sm"
+                                  onClick={() => setCostOverrideItem({ decision, item, costingItem })}
+                                  data-testid={`pcr-ceo-cost-override-${item.id}`}
+                                >
+                                  {hasCostOverride ? 'แก้ไขต้นทุนที่ปรับ' : 'ปรับต้นทุนเอง'}
+                                </Button>
+                                {costingItem ? (
+                                  <select
+                                    className="form-select text-xs"
+                                    value=""
+                                    disabled={overrideItemProductType.isPending}
+                                    onChange={(e) => {
+                                      const value = e.target.value;
+                                      e.target.value = '';
+                                      if (!value) return;
+                                      overrideItemProductType.mutate({
+                                        decision, item, productType: value === '__CLEAR__' ? null : value,
+                                      });
+                                    }}
+                                    data-testid={`pcr-ceo-product-type-override-${item.id}`}
+                                  >
+                                    <option value="">เปลี่ยนประเภทสินค้า…</option>
+                                    {DUTY_PRODUCT_TYPE_OPTIONS.map((opt) => (
+                                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                    ))}
+                                    {costingItem.productType && costingItem.productType !== 'TILE' ? (
+                                      <option value="__CLEAR__">ล้างการปรับ (กลับเป็น TILE)</option>
+                                    ) : null}
+                                  </select>
+                                ) : null}
+                                {showsPriceOverrideControl ? (
+                                  <Button
+                                    type="button"
+                                    variant="secondary"
+                                    size="sm"
+                                    onClick={() => setPriceOverrideItem({ decision, item })}
+                                    data-testid={`pcr-ceo-price-override-${item.id}`}
+                                  >
+                                    {hasListPriceOverride ? 'แก้ไขราคาตั้งที่ปรับ' : 'ปรับราคาตั้งเอง'}
+                                  </Button>
+                                ) : null}
+                              </div>
+                            ) : null}
+                            <div className="mt-2 grid gap-3 sm:grid-cols-2">
+                              {decision.priceMode === 'NET' ? (
+                                <>
+                                  {/* Owner correction (2026-09-19): no list-price input here any
+                                      more -- ราคาตั้ง (สูตร) above already shows the
+                                      server-computed list price read-only (per แผ่น and per
+                                      ตร.ม.); the CEO's only editable lever for NET mode is the
+                                      discount, and ปรับราคาตั้งเอง for a genuine override. */}
+                                  <FormField label="ส่วนลด %" htmlFor={`pcr-ceo-discount-${item.id}`}>
+                                    <div className="flex items-center gap-1.5">
+                                      <input
+                                        id={`pcr-ceo-discount-${item.id}`}
+                                        type="number"
+                                        min="0"
+                                        max="100"
+                                        step="0.01"
+                                        className="flex-1"
+                                        disabled={!editable}
+                                        value={draft.discountPct ?? item.discountPct ?? ''}
+                                        onChange={(e) => updateCeoPriceDraft(item.id, { discountPct: e.target.value })}
+                                        data-testid={`pcr-ceo-discount-${item.id}`}
+                                      />
+                                      {/* Review finding #6: an explicit clear -- blanking the
+                                          input and saving sends discountPct: null, which a plain
+                                          COALESCE would read as "unchanged", not "reset to 0". */}
+                                      {editable && item.discountPct != null ? (
+                                        <Button
+                                          type="button"
+                                          variant="secondary"
+                                          size="sm"
+                                          loading={clearingThisDiscount}
+                                          onClick={() => {
+                                            updateCeoPriceDraft(item.id, { discountPct: '' });
+                                            saveThisItem({ clearDiscountPct: true });
+                                          }}
+                                          data-testid={`pcr-ceo-clear-discount-${item.id}`}
+                                        >
+                                          ล้างส่วนลด
+                                        </Button>
+                                      ) : null}
+                                    </div>
+                                  </FormField>
+                                </>
+                              ) : null}
+                              {decision.priceMode === 'SPECIAL_SQM' ? (
+                                <FormField
+                                  label="ราคาพิเศษ บาท/ตร.ม. (รวม VAT)"
+                                  htmlFor={`pcr-ceo-special-sqm-${item.id}`}
+                                  hint={item.sqmPerPiece != null ? `ตร.ม./แผ่น ${item.sqmPerPiece}` : 'รายการนี้ไม่มี ตร.ม./แผ่น จึงใช้โหมดนี้ไม่ได้'}
+                                >
+                                  <input
+                                    id={`pcr-ceo-special-sqm-${item.id}`}
+                                    type="number"
+                                    min="0"
+                                    max={PRICE_INPUT_MAX_12_2}
+                                    step="0.01"
+                                    disabled={!editable || item.sqmPerPiece == null}
+                                    value={draft.specialPriceSqm ?? item.specialPriceSqm ?? ''}
+                                    onChange={(e) => updateCeoPriceDraft(item.id, { specialPriceSqm: e.target.value })}
+                                    data-testid={`pcr-ceo-special-sqm-${item.id}`}
+                                  />
+                                </FormField>
+                              ) : null}
+                              {decision.priceMode === 'DIRECT_NET' ? (
+                                <FormField label="ราคาสุทธิต่อแผ่น" htmlFor={`pcr-ceo-direct-net-${item.id}`}>
+                                  <input
+                                    id={`pcr-ceo-direct-net-${item.id}`}
+                                    type="number"
+                                    min="0"
+                                    max={PRICE_INPUT_MAX_14_2}
+                                    step="0.01"
+                                    disabled={!editable}
+                                    value={draft.directNetPrice ?? item.directNetPrice ?? ''}
+                                    onChange={(e) => updateCeoPriceDraft(item.id, { directNetPrice: e.target.value })}
+                                    data-testid={`pcr-ceo-direct-net-${item.id}`}
+                                  />
+                                </FormField>
+                              ) : null}
+                            </div>
+                            {/* Opus review minor #9 (2026-09-19): "รวมเป็นเงิน" used to sit in its
+                                own row paired with "ต้นทุนโรงงาน (ฐาน)" near the TOP of the card,
+                                detached from the price/net figures it is actually derived from —
+                                it now sits directly beside "ราคาสุทธิ/แผ่น", the figure it
+                                multiplies by quantity. */}
+                            <div className="mt-2 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
+                              <span className="text-xs text-text-muted">
+                                ราคาสุทธิ/แผ่น (ก่อน VAT):{' '}
+                                {showingUncomputedPreview ? (
+                                  <span className="italic text-text-muted">คำนวณเมื่อบันทึก</span>
+                                ) : (
+                                  <code className="font-bold text-text">{formatCurrency(displayNet, decision.currency)}</code>
+                                )}
+                                {showingUnsavedPreview ? (
+                                  <span className="ml-1 text-2xs text-text-muted">(ตัวอย่าง ยังไม่บันทึก)</span>
+                                ) : null}
+                              </span>
+                              <span className="text-[length:var(--text-base)] font-bold text-text">
+                                รวมเป็นเงิน: {lineTotal != null ? formatCurrency(lineTotal, decision.currency) : '-'}
+                              </span>
+                            </div>
+                            {editable ? (
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                size="sm"
+                                className="mt-2"
+                                disabled={Object.keys(draft).length === 0}
+                                loading={savingThisItem && !clearingThisDiscount}
+                                onClick={() => saveThisItem()}
+                                data-testid={`pcr-ceo-save-price-${item.id}`}
+                              >
+                                บันทึกราคา
+                              </Button>
+                            ) : null}
+                            {/* The interactive controls above (ปรับต้นทุนเอง/ประเภทสินค้า/
+                                ปรับราคาตั้งเอง) moved to the main body (minors #6/#8) — this stays
+                                only for supplementary, read-only detail a CEO does not need to see
+                                by default: the PRE-override computed cost, the override reason
+                                text, and the staleness explanation. */}
+                            <CollapsibleSection
+                              title="รายละเอียดต้นทุนเพิ่มเติม"
+                              defaultOpen={false}
+                              id={`pcr-ceo-derivation-${item.id}`}
+                            >
+                              <div className="flex flex-col gap-2 text-xs">
+                                {costingItem ? (
+                                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-md border border-border-subtle bg-surface-subtle p-2">
+                                    <span>
+                                      ต้นทุนคำนวณ/ชิ้น:{' '}
+                                      <code className="text-info">{formatCurrency(costingItem.landedCostPerUnitThb, 'THB')}</code>
+                                    </span>
+                                    {hasCostOverride ? (
+                                      <span className="flex min-w-0 items-baseline gap-1.5">
+                                        ต้นทุนที่ปรับ/ชิ้น:{' '}
+                                        <code className="font-bold text-override">{formatCurrency(costingItem.manualLandedCostPerUnitThb, 'THB')}</code>
+                                        <span className="text-2xs text-override">ปรับเอง</span>
+                                        {costingItem.overrideReason ? (
+                                          <span
+                                            className="min-w-0 max-w-[220px] truncate text-2xs text-text-muted"
+                                            title={costingItem.overrideReason}
+                                          >
+                                            ({costingItem.overrideReason})
+                                          </span>
+                                        ) : null}
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                ) : null}
+                                {costingItem?.overrideStale ? (
+                                  <p className="m-0 text-2xs text-warning-dark">
+                                    อัตราแลกเปลี่ยนหรือค่าคำนวณเปลี่ยนไปหลังปรับต้นทุน — ต้องคำนวณต้นทุนใหม่หรือยืนยันค่าที่ปรับอีกครั้งก่อนอนุมัติ
+                                  </p>
+                                ) : null}
+                                <p className="m-0 text-2xs text-text-muted">
+                                  ราคาตั้ง (สูตร) เป็นค่าอ้างอิงตามสูตรของ CEO — ราคาที่ใช้อนุมัติจริงคือราคาสุทธิที่คำนวณจากวิธีกรอกราคาด้านบน
+                                </p>
+                              </div>
+                            </CollapsibleSection>
+                          </div>
+                        );
+                      }
                       return (
                         <div key={item.id} className="rounded-md border border-border-subtle p-3">
                           <div className="flex flex-wrap items-center gap-2 text-xs text-text-muted">
@@ -2127,13 +2815,16 @@ export function PricingRequestDetailPage({ user, showToast }) {
                                     {' '}— สูตรด้านล่างไม่ได้ใช้คำนวณราคานี้อีกต่อไป
                                   </p>
                                 ) : null}
+                                {/* Owner ruling 2026-09-19 (Phase 2 CEO pricing): SP is no longer
+                                    rounded UP to a ฿ multiple — it rounds HALF_UP to 2dp, full
+                                    stop. selling_price_round_up_to has no effect on this figure
+                                    any more (see CeoSettingsPage's own removal of the field). */}
                                 <p className="m-0 mt-1">
-                                  ราคาขาย/หน่วยที่ขอ = ปัดขึ้น[ ต้นทุน/หน่วยที่ขอ × (1 + อัตรากำไร) × ตัวคูณราคาขาย ,
-                                  ให้เป็นทวีคูณของ ฿{formulaConfigQuery.data?.sellingPriceRoundUpTo ?? '10'} ]
+                                  ราคาขาย/หน่วยที่ขอ = ปัดทศนิยม 2 ตำแหน่ง[ ต้นทุน/หน่วยที่ขอ × (1 + อัตรากำไร) × ตัวคูณราคาขาย ]
                                   {decision.currency !== 'THB' ? ' ÷ อัตราแลกเปลี่ยน' : ''}
                                 </p>
                                 <p className="m-0 mt-1">
-                                  = ปัดขึ้น[{formatCurrency(item.frozenLandedCostPerRequestedUnitThb, 'THB')} × (1 + {item.proposedMarginPct ?? '-'}) × {formulaConfigQuery.data?.sellingBuffer ?? '-'}]
+                                  = ปัดทศนิยม 2 ตำแหน่ง[{formatCurrency(item.frozenLandedCostPerRequestedUnitThb, 'THB')} × (1 + {item.proposedMarginPct ?? '-'}) × {formulaConfigQuery.data?.sellingBuffer ?? '-'}]
                                   {decision.currency !== 'THB' ? ` ÷ ${decision.fxRateUsed}` : ''}
                                   {' = '}
                                   <code>{formatCurrency(item.proposedSellingPricePerRequestedUnit, decision.currency)}</code>
@@ -2170,7 +2861,10 @@ export function PricingRequestDetailPage({ user, showToast }) {
                         <Button
                           type="button"
                           variant="primary"
-                          disabled={approveDecision.isPending || missingBeforeApprove.length > 0 || staleOverrideItems.length > 0}
+                          disabled={approveDecision.isPending || missingBeforeApprove.length > 0
+                            || staleOverrideItems.length > 0 || missingCeoPrice.length > 0
+                            || missingCost.length > 0
+                            || (newForm && decision.priceMode == null)}
                           onClick={() => setConfirmAction({ type: 'approveDecision', decision })}
                           data-testid="pcr-ceo-approve"
                         >
@@ -2187,6 +2881,17 @@ export function PricingRequestDetailPage({ user, showToast }) {
                       </div>
                       {missingBeforeApprove.length > 0 ? (
                         <span className="text-xs text-danger">ทุกรายการต้องมีอัตรากำไรก่อนอนุมัติ (หรือปรับราคาเอง)</span>
+                      ) : null}
+                      {newForm && decision.priceMode == null ? (
+                        <span className="text-xs text-danger">กรุณาเลือกวิธีกรอกราคาก่อนอนุมัติ</span>
+                      ) : null}
+                      {missingCeoPrice.length > 0 ? (
+                        <span className="text-xs text-danger">ทุกรายการต้องมีราคาตามวิธีกรอกราคาที่เลือกก่อนอนุมัติ</span>
+                      ) : null}
+                      {missingCost.length > 0 ? (
+                        <span className="text-xs text-danger">
+                          ทุกรายการต้องมีต้นทุนก่อนอนุมัติ — กรุณาระบุต้นทุนเอง หรือปรับราคาตั้งเอง (ดู &quot;วิธีคำนวณราคานี้&quot; ของรายการที่ต้องระบุต้นทุนเอง)
+                        </span>
                       ) : null}
                       {staleOverrideItems.length > 0 ? (
                         <span className="text-xs text-danger">
@@ -2240,7 +2945,12 @@ export function PricingRequestDetailPage({ user, showToast }) {
         <Panel
           flush
           title="ใบเสนอราคาลูกค้า"
-          actions={currentCustomerQuotation ? (
+          actions={dealQuotationForPr ? (
+            (() => {
+              const status = quotationStatusLabel(dealQuotationForPr.docStatus);
+              return <StatusBadge tone={status.tone}>{status.label}</StatusBadge>;
+            })()
+          ) : currentCustomerQuotation ? (
             (() => {
               const status = quotationStatusLabel(currentCustomerQuotation.docStatus);
               return (
@@ -2252,18 +2962,148 @@ export function PricingRequestDetailPage({ user, showToast }) {
           ) : null}
         >
           <div className="flex flex-col gap-3 p-4">
-            {!currentCustomerQuotation && canCreateCustomerQuotation(user, summary) ? (
-              <Button type="button" variant="primary" className="self-start" onClick={() => createQuotation.mutate()} disabled={createQuotation.isPending}>
-                สร้างร่างใบเสนอราคาลูกค้า
-              </Button>
+            {/* GLA-123 slice S1 M1 fix (Opus review, 2026-09-20): the NEW engine's quotation for
+                this request, shown in THIS SAME panel rather than a separate one — one pricing
+                request only ever carries one "ใบเสนอราคาลูกค้า" concept to a viewer regardless of
+                which engine wrote it, and M2 already guarantees the two chains cannot both be
+                live, so splitting them into two panels would just make a rep hunt for the right
+                one. number/status/link, matching what the legacy block below shows. */}
+            {dealQuotationForPr ? (
+              <div className="flex flex-col gap-1">
+                <div className="text-sm"><strong>เลขที่</strong> {dealQuotationForPr.number}</div>
+                <Link
+                  to={`/quotations/${dealQuotationForPr.id}`}
+                  className="self-start text-sm font-medium text-primary underline-offset-2 hover:underline"
+                >
+                  เปิดใบเสนอราคา
+                </Link>
+              </div>
             ) : null}
-            {!currentCustomerQuotation && !canCreateCustomerQuotation(user, summary) ? (
+
+            {/* GLA-123 slice S3 (R9) — the SAME outcome-recording action the legacy block below
+                offers (canRecordCustomerQuotationOutcome is origin-agnostic: sales + ticket owner,
+                docStatus === 'ISSUED'), now also reachable for the NEW engine's own quotation. R8
+                (only one finalized quotation per deal, across both คำขอราคา origins) is enforced
+                server-side by DealQuotationService#recordOutcome, not here. */}
+            {canRecordCustomerQuotationOutcome(user, summary, dealQuotationForPr) ? (
+              <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3">
+                <strong className="text-sm">บันทึกผลจากลูกค้า</strong>
+                <textarea
+                  className="rounded border border-border p-2 text-sm"
+                  placeholder="หมายเหตุจากลูกค้า (ถ้ามี)"
+                  value={outcomeNote}
+                  onChange={(e) => setOutcomeNote(e.target.value)}
+                />
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" variant="primary" disabled={recordDealQuotationOutcome.isPending}
+                    onClick={() => recordDealQuotationOutcome.mutate({ quotation: dealQuotationForPr, outcome: 'ACCEPTED' })}>
+                    ลูกค้ายอมรับ
+                  </Button>
+                  <Button type="button" variant="danger" disabled={recordDealQuotationOutcome.isPending}
+                    onClick={() => recordDealQuotationOutcome.mutate({ quotation: dealQuotationForPr, outcome: 'REJECTED' })}>
+                    ลูกค้าปฏิเสธ
+                  </Button>
+                  <Button type="button" variant="secondary" disabled={recordDealQuotationOutcome.isPending}
+                    onClick={() => recordDealQuotationOutcome.mutate({ quotation: dealQuotationForPr, outcome: 'REVISION_REQUESTED' })}>
+                    ลูกค้าขอแก้ไข
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+
+            {/* Read-only outcome summary — mirrors the legacy block's identical read-only
+                summary below (visible to everyone with view access, once the customer's response
+                has been recorded or the document moved past ISSUED for any other reason). */}
+            {dealQuotationForPr
+              && ['ACCEPTED', 'REJECTED', 'REVISION_REQUESTED', 'EXPIRED'].includes(dealQuotationForPr.docStatus) ? (
+              <p className="text-sm text-text-muted">
+                ผลใบเสนอราคา: <strong>{quotationStatusLabel(dealQuotationForPr.docStatus).label}</strong>
+              </p>
+            ) : null}
+            {/* MAJOR-3 fix (owner ruling via coordinator, 2026-09-20 — "the expiry escape hatch"),
+                widened by the S3 round-3 review (NEW-1, MAJOR, 2026-09-23): once the linked
+                NEW-engine quotation has EXPIRED (D5), was REJECTED, or the customer asked for a
+                REVISION, sales may write a FRESH one from the SAME approved decision —
+                DealQuotationService#createFromPricingRequest tolerates all three cases
+                server-side (its own PR-status check treats them identically: none of the three
+                move the PR off QUOTATION_ISSUED — see that method's own comment), and
+                DealQuotationRepository#hasLivePricingRequestQuotation excludes all three from
+                its own "live" set for the same reason. This gate used to only cover EXPIRED,
+                which left REVISION_REQUESTED and REJECTED — both reachable via this same PR's
+                own outcome-recording buttons just above — as UI dead ends: the backend accepted
+                a recreate, but nothing on screen offered it. Gated on canManageCustomerQuotation
+                (sales + ticket owner, no PR-status check) rather than canCreateCustomerQuotation,
+                which requires pr.status === 'APPROVED_FOR_QUOTATION' — a PR in any of these three
+                states sits at QUOTATION_ISSUED instead (the backend deliberately does not roll PR
+                status back), so that stricter gate would incorrectly hide this button in exactly
+                the states it needs to appear. Reuses the SAME createDealQuotationFromRequest
+                mutation the first-ever create button below already uses (same
+                navigate-on-success behaviour), since the server-side call is identical in every
+                case — only the PR's current state differs. */}
+            {['EXPIRED', 'REVISION_REQUESTED', 'REJECTED'].includes(dealQuotationForPr?.docStatus)
+              && canManageCustomerQuotation(user, summary) ? (
+              <div className="flex flex-col items-start gap-2">
+                <p className="m-0 text-sm text-warning">
+                  {dealQuotationForPr.docStatus === 'EXPIRED'
+                    ? 'ใบเสนอราคาหมดอายุแล้ว — เขียนใบใหม่ได้'
+                    : dealQuotationForPr.docStatus === 'REVISION_REQUESTED'
+                      ? 'ลูกค้าขอแก้ไขใบเสนอราคา — เขียนใบใหม่ได้'
+                      : 'ลูกค้าปฏิเสธใบเสนอราคา — เขียนใบใหม่ได้'}
+                </p>
+                <Button
+                  type="button"
+                  variant="primary"
+                  className="self-start"
+                  onClick={() => createDealQuotationFromRequest.mutate()}
+                  disabled={createDealQuotationFromRequest.isPending}
+                >
+                  เขียนใบเสนอราคาใหม่จากคำขอราคา
+                </Button>
+              </div>
+            ) : null}
+            {!dealQuotationForPr && !currentCustomerQuotation && canCreateCustomerQuotation(user, summary) ? (
+              <div className="flex flex-wrap items-center gap-2">
+                {/* GLA-123 slice S1 M2 fix (Opus review, 2026-09-20), field narrowed by MINOR-1
+                    (owner ruling, confirmed 2026-09-20, second re-review): the OLD button is
+                    hidden, not merely de-emphasized, once the request's decision is new-form
+                    (decisionSalesView.newFormPricing — V187) — the NEW engine
+                    (createFromPricingRequest) is the only path offered from here on, since the
+                    two paths are now server-side mutually exclusive (M2) and a new-form PR's
+                    quotation cannot be issued until S2 anyway, so steering everyone through the
+                    OLD button on a new-form PR would just mean a wasted click once S2 ships. A
+                    legacy decision (newFormPricing false) keeps BOTH buttons exactly as before —
+                    decisionSalesView is undefined until the query resolves, so this defaults to
+                    "still legacy-shaped" rather than flashing the new-only state first. This used
+                    to read the CEO's own price_mode string directly; MINOR-1 replaced that whole
+                    field with this plain boolean so the endpoint (also legitimately callable by
+                    import, for an unrelated reason) never carries a price-shaped fact at all —
+                    see PricingDecisionSalesViewDto#newFormPricing's own Javadoc. */}
+                {!decisionSalesView?.newFormPricing ? (
+                  <Button type="button" variant="secondary" className="self-start" onClick={() => createQuotation.mutate()} disabled={createQuotation.isPending}>
+                    สร้างร่างใบเสนอราคาลูกค้า
+                  </Button>
+                ) : null}
+                {/* GLA-123 slice S1 — the direct-deal engine, prefilled from the CEO's decision.
+                    Preferred path for a new-form (V185/V187) request; a legacy one gets a clear
+                    409 toast rather than this button being hidden. */}
+                <Button
+                  type="button"
+                  variant="primary"
+                  className="self-start"
+                  onClick={() => createDealQuotationFromRequest.mutate()}
+                  disabled={createDealQuotationFromRequest.isPending}
+                >
+                  เขียนใบเสนอราคาจากคำขอราคา
+                </Button>
+              </div>
+            ) : null}
+            {!dealQuotationForPr && !currentCustomerQuotation && !canCreateCustomerQuotation(user, summary) ? (
               <p className="text-sm text-text-muted">
                 ยังไม่มีใบเสนอราคาลูกค้า — ต้องรออนุมัติราคาขาย (APPROVED_FOR_QUOTATION) ก่อนจึงจะสร้างได้
               </p>
             ) : null}
 
-            {currentCustomerQuotation ? (() => {
+            {!dealQuotationForPr && currentCustomerQuotation ? (() => {
               const quotation = currentCustomerQuotation;
               const quotationStatus = quotationStatusLabel(quotation.docStatus);
               const editable = isCustomerQuotationEditable(quotation) && canManageCustomerQuotation(user, summary);
@@ -2555,6 +3395,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
           : confirmAction?.type === 'issueQuotation' ? 'ออกใบเสนอราคาลูกค้า'
           : confirmAction?.type === 'approveDiscount' ? 'อนุมัติส่วนลด'
           : confirmAction?.type === 'rejectDiscount' ? 'ปฏิเสธส่วนลด'
+          : confirmAction?.type === 'switchPriceMode' ? 'เปลี่ยนวิธีกรอกราคา'
           // Manual-RFQ redesign: this dialog used to confirm the app SENDING the factory email
           // (it never did — see FactoryQuoteService.send's own javadoc, "Was BROKEN"). The title,
           // message and confirmLabel below now say plainly that this RECORDS a send the user
@@ -2570,18 +3411,22 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 ? `อนุมัติส่วนลดรายการที่ ${confirmAction?.approval?.quotationItemId} ที่ราคา ${formatCurrency(confirmAction?.approval?.requestedFinalUnitPrice, currentCustomerQuotation?.currency)} — เมื่ออนุมัติแล้ว ใบเสนอราคานี้จะออกได้ตราบใดที่ไม่มีการแก้ไขราคาอีก`
                 : confirmAction?.type === 'rejectDiscount'
                   ? 'ระบุเหตุผลที่ปฏิเสธส่วนลดนี้ — ฝ่ายขายจะเห็นเหตุผลนี้และต้องแก้ไขราคาหรือถอนส่วนลดก่อนออกใบเสนอราคาได้'
-                  : `ยืนยันว่าคุณส่งอีเมลคำขอราคานี้ให้ ${confirmAction?.quote?.factoryName ?? 'โรงงาน'} เรียบร้อยแล้วด้วยตัวเอง — ระบบไม่ได้ส่งอีเมลนี้ให้ เมื่อยืนยันแล้วสถานะคำขอราคาโรงงานนี้จะเปลี่ยนเป็น "ส่งคำขอแล้ว"`}
+                  : confirmAction?.type === 'switchPriceMode'
+                    ? 'ค่าที่กรอกไว้ของวิธีเดิมจะไม่ถูกใช้ — ราคาสุทธิของทุกรายการจะคำนวณใหม่ตามวิธีที่เลือก และรายการที่ยังไม่มีข้อมูลของวิธีใหม่จะว่างจนกว่าจะกรอก'
+                    : `ยืนยันว่าคุณส่งอีเมลคำขอราคานี้ให้ ${confirmAction?.quote?.factoryName ?? 'โรงงาน'} เรียบร้อยแล้วด้วยตัวเอง — ระบบไม่ได้ส่งอีเมลนี้ให้ เมื่อยืนยันแล้วสถานะคำขอราคาโรงงานนี้จะเปลี่ยนเป็น "ส่งคำขอแล้ว"`}
         confirmLabel={confirmAction?.type === 'approveDecision' ? 'อนุมัติ'
           : confirmAction?.type === 'returnDecision' ? 'ตีกลับ'
           : confirmAction?.type === 'issueQuotation' ? 'ออกใบเสนอราคา'
           : confirmAction?.type === 'approveDiscount' ? 'อนุมัติส่วนลด'
           : confirmAction?.type === 'rejectDiscount' ? 'ปฏิเสธส่วนลด'
+          : confirmAction?.type === 'switchPriceMode' ? 'เปลี่ยนวิธีกรอกราคา'
           : 'บันทึกว่าส่งแล้ว'}
         tone={confirmAction?.type === 'returnDecision' || confirmAction?.type === 'rejectDiscount' ? 'danger' : 'default'}
         requireReason={confirmAction?.type === 'returnDecision' || confirmAction?.type === 'rejectDiscount'}
         reasonLabel={confirmAction?.type === 'rejectDiscount' ? 'เหตุผลที่ปฏิเสธส่วนลด' : 'เหตุผลที่ตีกลับ'}
         busy={sendQuote.isPending || approveDecision.isPending || returnDecisionToImport.isPending
-          || issueQuotation.isPending || approveDiscount.isPending || rejectDiscount.isPending}
+          || issueQuotation.isPending || approveDiscount.isPending || rejectDiscount.isPending
+          || setCeoPriceMode.isPending}
         onCancel={() => setConfirmAction(null)}
         onConfirm={(reason) => {
           const action = confirmAction;
@@ -2592,6 +3437,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
           if (action?.type === 'issueQuotation') issueQuotation.mutate(action.quotation);
           if (action?.type === 'approveDiscount') approveDiscount.mutate(action.approval);
           if (action?.type === 'rejectDiscount') rejectDiscount.mutate({ approval: action.approval, reason });
+          if (action?.type === 'switchPriceMode') setCeoPriceMode.mutate({ decision: action.decision, priceMode: action.priceMode });
         }}
       />
 
@@ -2641,6 +3487,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
           item={priceOverrideItem.item}
           decision={priceOverrideItem.decision}
           pending={overrideSellingPrice.isPending}
+          newForm={priceOverrideItem.decision.priceMode != null}
           onClose={() => setPriceOverrideItem(null)}
           onSubmit={(payload) => overrideSellingPrice.mutate(
             { decision: priceOverrideItem.decision, item: priceOverrideItem.item, ...payload },
@@ -2653,6 +3500,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
         <PricingRequestCreateModal
           mode="revision"
           initialValue={request}
+          showToast={showToast}
           onClose={() => setRevisionModalOpen(false)}
           onCreated={(result) => {
             setRevisionModalOpen(false);

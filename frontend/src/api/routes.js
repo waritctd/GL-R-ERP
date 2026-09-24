@@ -85,6 +85,7 @@ export const API_ROUTES = {
     usage: '/api/special-money/usage',
     types: '/api/special-money/types',
     approve: (id) => `/api/special-money/${id}/approve`,
+    approvalPreview: (id) => `/api/special-money/${id}/approval-preview`,
     reject: (id) => `/api/special-money/${id}/reject`,
     cancel: (id) => `/api/special-money/${id}/cancel`,
     attachments: (id) => `/api/special-money/${id}/attachments`,
@@ -173,7 +174,14 @@ export const API_ROUTES = {
     issue: (id) => `/api/deposit-notices/${id}/issue`,
     file: (id, fmt) => `/api/deposit-notices/${id}/file?format=${fmt}`,
     noteTemplates: '/api/document-note-templates',
-    remainingInvoiceFile: (ticketId) => `/api/tickets/${ticketId}/remaining-invoice/file`,
+    // `quotationId` (optional): live-preview a specific qualifying quotation — see
+    // RemainingInvoiceOptionsDto's own quotationOptions/defaultQuotationId Javadoc. The sibling
+    // `remainingInvoiceFile` stateless download route builder was REMOVED here (owner ruling O1,
+    // GLA-99 step 2 review-round-1, 2026-09-20) along with the backend route it built a URL for —
+    // GET /api/tickets/{ticketId}/remaining-invoice/file. Only an ISSUED/SUPERSEDED STORED
+    // remaining invoice is downloadable now, via `storedRemainingInvoices.file` below.
+    remainingInvoiceOptions: (ticketId, quotationId) =>
+      `/api/tickets/${ticketId}/remaining-invoice/options${quotationId != null ? `?quotationId=${quotationId}` : ''}`,
   },
   // ใบขอซื้อ (F-SM-001) — one form per BRAND on a deal, generated on demand. Read-only: there is no
   // POST, because nothing is stored. `ref` and `requiredBy` are caller-supplied for the same reason —
@@ -193,6 +201,42 @@ export const API_ROUTES = {
       if (requiredBy) p.set('requiredBy', requiredBy);
       return `/api/tickets/${ticketId}/import-request${p.toString() ? `?${p}` : ''}`;
     },
+  },
+  // The STORED ใบขอซื้อ aggregate (V184, PR-A backend #1008 / PR-B UI) — one row per (deal,
+  // factory), draft/issue/revise/advance-step lifecycle. PLURAL paths throughout, mirroring
+  // ImportRequestController's own singular/plural split — see that class's Javadoc. Distinct from
+  // `importRequests` above, which stays the legacy read-only preview-per-brand family.
+  storedImportRequests: {
+    forTicket: (ticketId) => `/api/tickets/${ticketId}/import-requests`,
+    get: (id) => `/api/import-requests/${id}`,
+    issue: (id) => `/api/import-requests/${id}/issue`,
+    revise: (id) => `/api/import-requests/${id}/revise`,
+    advanceStep: (id) => `/api/import-requests/${id}/advance-step`,
+    leadTime: (id) => `/api/import-requests/${id}/lead-time`,
+    emailDraft: (id) => `/api/import-requests/${id}/email-draft`,
+    markEmailSent: (id) => `/api/import-requests/${id}/mark-email-sent`,
+    // `copy`: 'factory' downloads the factory copy (no customer/project/deposit date); anything
+    // else (including omitted) downloads the internal copy. See ImportRequestController#storedFile.
+    file: (id, copy) => `/api/import-requests/${id}/file${copy ? `?copy=${encodeURIComponent(copy)}` : ''}`,
+    requiredByNote: (ticketId) => `/api/tickets/${ticketId}/required-by-note`,
+  },
+  // Mirrors RemainingInvoiceController — the STORED ใบแจ้งหนี้ส่วนที่เหลือ aggregate (V188,
+  // GLA-99 step 2). One row per (deal, issued document), DRAFT -> ISSUED -> SUPERSEDED, minted on
+  // the shared sales.document_sequence (doc_type AR_GLR, format GLR<yy><5-digit seq>-<version>).
+  // The pre-existing STATELESS preview route (depositNotices.remainingInvoiceOptions above) is
+  // unchanged and stays in place as the prefill source a new draft snapshots from — its own
+  // stateless .../file sibling route is GONE (owner ruling O1, GLA-99 step 2 review-round-1,
+  // 2026-09-20; see remainingInvoiceOptions' own comment above); only an ISSUED/SUPERSEDED STORED
+  // document is downloadable now, via `file` below. Authorisation is entirely
+  // DepositNoticeService's own issue-deposit-notice gate (write) / requireTicketViewer (read)
+  // reused verbatim — see RemainingInvoiceService's own Javadoc. These methods carry no gate of
+  // their own.
+  storedRemainingInvoices: {
+    forTicket: (ticketId) => `/api/tickets/${ticketId}/remaining-invoices`,
+    get: (id) => `/api/remaining-invoices/${id}`,
+    issue: (id) => `/api/remaining-invoices/${id}/issue`,
+    revise: (id) => `/api/remaining-invoices/${id}/revise`,
+    file: (id) => `/api/remaining-invoices/${id}/file`,
   },
   catalog: {
     search: (q) => `/api/catalog${q ? `?q=${encodeURIComponent(q)}` : ''}`,
@@ -486,6 +530,16 @@ export const API_ROUTES = {
   dealQuotations: {
     listForTicket: (ticketId) => `/api/tickets/${ticketId}/deal-quotations`,
     create: (ticketId) => `/api/tickets/${ticketId}/deal-quotations`,
+    // GLA-123 slice S1 — "เขียนใบเสนอราคาจากคำขอราคา": creates a PRICING_REQUEST-origin
+    // quotation on this SAME engine, prefilled from an approved pricing request's CEO decision.
+    // Mirrors DealQuotationController#createFromPricingRequest. NOT
+    // `/pricing-requests/{id}/quotations` -- that exact path is already
+    // customerQuotations.create (the legacy path this sits beside, not inside).
+    createFromPricingRequest: (pricingRequestId) => `/api/pricing-requests/${pricingRequestId}/deal-quotations`,
+    // M1 fix (Opus review, 2026-09-20) — read-only counterpart of the POST above: no create side
+    // effect, just "does this PR already have a new-engine quotation". Mirrors
+    // DealQuotationController#findForPricingRequest. Same path, GET instead of POST.
+    findForPricingRequest: (pricingRequestId) => `/api/pricing-requests/${pricingRequestId}/deal-quotations`,
     // Approver queue / role-scoped list. `status` filters by docStatus; sales is scoped to its own
     // deals server-side.
     //
@@ -514,9 +568,19 @@ export const API_ROUTES = {
     submit: (id) => `/api/deal-quotations/${id}/submit`,
     approve: (id) => `/api/deal-quotations/${id}/approve`,
     reject: (id) => `/api/deal-quotations/${id}/reject`,
+    // GLA-123 slice S3 (R9) — records what the customer said about an ISSUED
+    // PRICING_REQUEST-origin quotation. Mirrors DealQuotationController#recordOutcome.
+    outcome: (id) => `/api/deal-quotations/${id}/outcome`,
     revisions: (id) => `/api/deal-quotations/${id}/revisions`,
+    // GLA-74 part 1 ("สร้างจากใบเดิม" / สั่งเหมือนเดิม) -- clone an APPROVED quotation into a new,
+    // independent DRAFT. Mirrors DealQuotationController#createReorder. Plural, sibling to
+    // `revisions` above, for the same reason: one source may be cloned any number of times.
+    reorders: (id) => `/api/deal-quotations/${id}/reorders`,
     cancel: (id) => `/api/deal-quotations/${id}/cancel`,
     file: (id, format) => `/api/deal-quotations/${id}/file?format=${format}`,
+    // M4(d) fix (Opus review, 2026-09-20) — "คืนรายการ": re-adds a CEO-linked line a prior save
+    // dropped. Mirrors DealQuotationController#restoreRemovedItem.
+    restoreRemovedItem: (id, pricingDecisionItemId) => `/api/deal-quotations/${id}/items/${pricingDecisionItemId}/restore`,
   },
 };
 

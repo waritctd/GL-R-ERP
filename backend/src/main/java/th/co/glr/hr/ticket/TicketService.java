@@ -3,6 +3,7 @@ package th.co.glr.hr.ticket;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.LocalDate;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -60,7 +61,27 @@ public class TicketService {
     // manager-or-CEO, and the more granular per-item control has no reason to be MORE restrictive.
     private static final Set<String> ITEM_WEIGHT_ROLES = Set.of("sales_manager", "ceo");
     // Money-receipt confirmations belong to ฝ่ายบัญชี (accounting), with CEO as fallback.
+    // NOTE: the CEO fallback here still governs SET_BILLING (and read access generally) — it does
+    // NOT govern payment recording or deposit confirmation any more; see PAYMENT_RECORD_ROLES and
+    // DEPOSIT_CONFIRM_ROLES below, both of which deliberately do NOT reuse this constant.
     private static final Set<String> ACCOUNT_ROLES = Set.of("account", "ceo");
+    // GLA-118 (owner ruling 2026-09-17): ยืนยันรับมัดจำ (confirmDepositPaid) is account ONLY —
+    // the CEO fallback ACCOUNT_ROLES still grants SET_BILLING (and read access generally) but is
+    // deliberately NOT extended here. Its own constant rather than reusing ACCOUNT_ROLES, so a
+    // future widening of ACCOUNT_ROLES cannot silently re-grant this one back to the CEO. Also NOT
+    // the same literal object as CLOSE_CONFIRM_ROLES or PAYMENT_RECORD_ROLES below even though all
+    // three happen to read Set.of("account") today — each constant exists for an unrelated reason
+    // (see each one's own Javadoc) and all must be free to diverge independently.
+    private static final Set<String> DEPOSIT_CONFIRM_ROLES = Set.of("account");
+    // GLA-118 (owner ruling 2026-09-20, part A): recording ANY payment — RECORD_PAYMENT (deposit
+    // or balance receipts alike, see recordPaymentInternal's PAYMENT_RECEIPT_KINDS) and
+    // FINAL_PAYMENT (confirmFinalPayment, which either calls recordPaymentInternal directly or
+    // advances payment_status straight to FULLY_PAID when nothing is outstanding) — is account
+    // ONLY. The CEO fallback ACCOUNT_ROLES is deliberately NOT extended here, same reasoning as
+    // DEPOSIT_CONFIRM_ROLES: a future widening of ACCOUNT_ROLES must not silently re-grant payment
+    // recording to the CEO. Every other role (sales/sales_manager/import, including the owning
+    // rep) is refused too — recording money received was never a sales-side action.
+    private static final Set<String> PAYMENT_RECORD_ROLES = Set.of("account");
     // Step 1 of the three-party close. Deliberately EXCLUDES ceo, unlike ACCOUNT_ROLES:
     // the CEO signs the second half (verifyClose), so letting them sign the first half
     // too would collapse a two-signature gate into one person. Same reasoning as
@@ -215,6 +236,21 @@ public class TicketService {
                 && !Priority.isValid(request.priority())) {
             throw new ApiException(HttpStatus.BAD_REQUEST,
                 "ไม่รองรับระดับความสำคัญ '" + request.priority() + "'");
+        }
+        // V183 (stock-sourced deal-line pricing): tickets.create(...) below calls
+        // TicketRepository#insertItems directly off the raw TicketItemRequest list — there is no
+        // DTO merge step (like editItems' mergeEditedItemsPreservingPricing) to hook validation
+        // into before persistence, so the invariant chk_ticket_item_stock_sale_price enforces at
+        // the DB layer is checked here instead, before any DB write, same style as the
+        // priority/entryChannel guards immediately above.
+        if (request.items() != null) {
+            for (TicketItemRequest item : request.items()) {
+                if (Boolean.TRUE.equals(item.sourcedFromStock())
+                        && !isStorablePositivePrice(item.stockSalePrice())) {
+                    throw new ApiException(HttpStatus.BAD_REQUEST,
+                        "ต้องระบุราคาขายเมื่อเลือกสินค้าจากสต็อก");
+                }
+            }
         }
         String code = tickets.nextTicketCode();
         long id = tickets.create(request, code, actor.id(), actor.name());
@@ -750,7 +786,9 @@ public class TicketService {
 
     @Transactional
     public TicketDto confirmDepositPaid(long ticketId, UserPrincipal actor) {
-        requireRole(actor, ACCOUNT_ROLES);
+        // GLA-118: account only — see DEPOSIT_CONFIRM_ROLES's own Javadoc for why this is not
+        // ACCOUNT_ROLES (which would still let the CEO through).
+        requireRole(actor, DEPOSIT_CONFIRM_ROLES);
         TicketDto ticket = requireTicket(ticketId);
         TicketSummaryDto s = ticket.summary();
         requireActive(s);
@@ -770,11 +808,41 @@ public class TicketService {
         return recordPaymentInternal(ticketId, request, actor);
     }
 
-    @Transactional
-    public TicketDto issueImportRequest(long ticketId, UserPrincipal actor) {
-        requireRole(actor, FULFILMENT_ROLES);
-        TicketSummaryDto s = requireTicket(ticketId).summary();
-        requireActive(s);
+    /**
+     * The deposit/status readiness gate an import request must clear before it may be issued —
+     * extracted (V184) from what was this method's own inline check, so {@link ImportRequestService
+     * } (the per-factory stored aggregate's {@code issue}) can share EXACTLY this rule rather than
+     * re-deriving it in a sibling package, the same "one predicate, never two copies" discipline this
+     * class already applies elsewhere (e.g. {@link #canIssueImportRequest} documents it for itself).
+     *
+     * <p>Deliberately does NOT include the {@code fulfillmentStatus == null} check that used to sit
+     * beside this in {@link #issueImportRequest} — that check means "never restart an in-flight
+     * DEAL-level fulfilment track", which makes sense for the legacy one-shot deal-level IR but not
+     * for a per-factory issue: a deal's second, third, ... factory is issued perfectly legitimately
+     * while {@code fulfillment_status} already reads {@code IR_ISSUED} from the first. Callers that DO
+     * need that narrower rule (this method, {@link #canIssueImportRequest}) apply it themselves on top.
+     */
+    public void requireImportRequestIssuable(TicketSummaryDto s) {
+        requireImportRequestIssuable(s, false);
+    }
+
+    /**
+     * @param allowAdvancedPayment (REVIEW ROUND 2, S-C) {@code false} keeps the ORIGINAL gate — the
+     *      three states this method has always accepted, unchanged — for the deal's very-first-IR
+     *      semantics: the legacy one-shot {@link #issueImportRequest} and {@link
+     *      #canIssueImportRequest} (the fulfilment-worklist action-availability check) both call the
+     *      narrow overload above and must keep doing so, since "the deal's FIRST IR may issue" is a
+     *      narrower question than "may THIS factory's IR issue" once a deal can have several. {@code
+     *      true} — used ONLY by {@link th.co.glr.hr.importrequest.ImportRequestService#issue}, the
+     *      per-factory STORED path — WIDENS {@code depositReady} to any payment status AT OR AFTER
+     *      deposit-ready ({@code AWAITING_FINAL_PAYMENT}, {@code FULLY_PAID} too): a deal's second,
+     *      third, ... factory's first issue, or ANY factory's revision issue, must not be blocked
+     *      just because the customer finished paying the REST of the deal in the meantime — the
+     *      original three-state gate was written back when one deal had at most one IR ever, so
+     *      "payment has since moved past deposit" could only mean the deal's ONE IR was already long
+     *      issued; per-factory, it can just as easily mean a LATER factory has not been touched yet.
+     */
+    public void requireImportRequestIssuable(TicketSummaryDto s, boolean allowAdvancedPayment) {
         // DEPOSIT_PAID is also acceptable: the customer often pays (and accounting
         // confirms) before import gets to the IR — requiring DEPOSIT_NOTICE_ISSUED
         // exactly deadlocked the fulfillment track in that ordering.
@@ -787,13 +855,26 @@ public class TicketService {
             && "CUSTOMER_CONFIRMED".equals(s.paymentStatus());
         boolean depositReady = "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus())
             || "DEPOSIT_PAID".equals(s.paymentStatus())
-            || depositPolicyBypassesNotice;
+            || depositPolicyBypassesNotice
+            || (allowAdvancedPayment
+                && ("AWAITING_FINAL_PAYMENT".equals(s.paymentStatus()) || "FULLY_PAID".equals(s.paymentStatus())));
         if (!TicketStatus.QUOTATION_ISSUED.equals(s.status()) || !depositReady) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "ออกใบขอนำเข้า (IR) ได้เฉพาะเมื่อออกใบเสนอราคาแล้วและรับชำระมัดจำแล้ว (หรือได้รับการยกเว้นมัดจำ) เท่านั้น");
         }
+    }
+
+    @Transactional
+    public TicketDto issueImportRequest(long ticketId, UserPrincipal actor) {
+        requireRole(actor, FULFILMENT_ROLES);
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        requireActive(s);
+        requireImportRequestIssuable(s);
         // Never restart an in-flight fulfillment track: re-issuing the IR would
-        // downgrade IR_SENT/SHIPPING/GOODS_RECEIVED back to IR_ISSUED.
+        // downgrade IR_SENT/SHIPPING/GOODS_RECEIVED back to IR_ISSUED. Also refuses correctly (V184)
+        // once the per-factory stored aggregate (ImportRequestService) has issued this deal's FIRST
+        // factory IR: that path sets fulfillment_status=IR_ISSUED too (recordFirstImportRequestIssued),
+        // so this legacy one-shot action now 409s exactly as it should on an IR-tracked deal.
         if (s.fulfillmentStatus() != null) {
             throw new ApiException(HttpStatus.CONFLICT, "คำขอนำเข้านี้ถูกออกไปแล้ว");
         }
@@ -807,6 +888,99 @@ public class TicketService {
         return requireTicket(ticketId);
     }
 
+    /**
+     * The DEAL-level side effects of a per-factory ใบขอซื้อ's FIRST issue for this deal (V184):
+     * {@code fulfillment_status -> IR_ISSUED} (only while still null — a no-op on every later
+     * factory's own issue, so {@link ImportRequestService#issue} may call this unconditionally after
+     * every successful per-factory issue), the {@code IR_ISSUED} event naming the row that produced
+     * it, and {@code autoAdvanceStage(PROCUREMENT)} — the same three effects {@link
+     * #issueImportRequest} already writes for the legacy one-shot action, so a deal cannot tell which
+     * path raised its first import request.
+     *
+     * <p><strong>Not a controller entry point.</strong> Same contract as {@link
+     * #applyPurchaseOrderRollup}/{@link #applyImportRequestRollup}: no {@link #requireRole} here —
+     * {@code ImportRequestService} has already authorised the caller against the specific ใบขอซื้อ row
+     * before this fires, and this method is reachable only from that service.
+     */
+    @Transactional
+    public void recordFirstImportRequestIssued(long ticketId, long importRequestId, UserPrincipal actor) {
+        // Cheap nit (REVIEW ROUND 2): LOCK before the fulfilment check, not after — two factories on
+        // the SAME deal both racing to be recognised as "the first" must not both read
+        // fulfillmentStatus==null and both proceed to write it (the second write would be harmless
+        // in isolation, but the ticket_event/autoAdvanceStage side effects are not idempotent against
+        // running twice). Same ordering discipline REVIEW ROUND 1's S5 already applies to
+        // ImportRequestService#advanceStep's own lock-before-write.
+        tickets.lockTicketForUpdate(ticketId);
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        if (s.fulfillmentStatus() != null) {
+            return;
+        }
+        tickets.updateFulfillmentStatus(ticketId, FulfilmentStatus.IR_ISSUED);
+        tickets.addEventWithDocument(ticketId, actor.id(), actor.name(),
+            TicketEventKind.IR_ISSUED, s.status(), s.status(), null,
+            RelatedDocumentType.IMPORT_REQUEST, importRequestId);
+        autoAdvanceStage(s, DealStage.PROCUREMENT, actor);
+    }
+
+    /**
+     * Rolls the per-factory ใบขอซื้อ progress (V184, {@code ImportRequestService}) up into {@code
+     * fulfillment_status}. Called by {@code ImportRequestService#advanceStep} once — and ONLY once
+     * that caller has itself confirmed, AFTER locking the ticket row ({@code
+     * TicketRepository#lockTicketForUpdate}, called directly since {@code ImportRequestService}
+     * already depends on {@code TicketRepository} for read access), that every factory the deal
+     * actually needs an import for now has an ISSUED row at {@link
+     * th.co.glr.hr.importrequest.ImportRequestStep#RECEIVED}. This method does not re-derive that
+     * check itself — it would need {@code sales.import_request}, which lives in the {@code
+     * importrequest} package, and reaching into it from here would create the exact package cycle
+     * {@code ImportRequestService}'s own dependency on {@code TicketService} already runs the other
+     * way. The lock is what actually prevents the race (two concurrent "last factory just reached
+     * RECEIVED" advances both deciding they are the one to fire): it is a real row lock, so the second
+     * caller blocks until the first COMMITS and then re-reads fresh, post-commit state before it
+     * repeats its own "is every factory received" check.
+     *
+     * <p><strong>Firewall: {@link FulfilmentStatus#isImportAxis} + monotonic</strong>, the identical
+     * shape {@link #applyPurchaseOrderRollup} already uses — this works here because {@link
+     * #recordFirstImportRequestIssued} guarantees {@code fulfillment_status} is never null by the time
+     * any factory can reach RECEIVED (issuing IS what sets it).
+     *
+     * <p><strong>Owner decision 3 (mixed stock+import deal) is the one case NOT covered by that
+     * firewall</strong>: a deal already {@code PARTIALLY_DELIVERED} (some lines delivered from stock
+     * before the imported remainder arrived — Case 8) is on the DELIVERY axis, so the firewall would
+     * otherwise skip it entirely and the imported remainder could never become deliverable. For
+     * exactly that one status this method writes ONLY the {@code GOODS_RECEIVED} event — no status,
+     * stage or payment write — so {@code TicketRepository#hasReceivedGoods} flips true and {@code
+     * TicketService#warehouseDeliveryAvailable} lets the remainder be delivered, without disturbing a
+     * delivery that is already under way. {@code FULLY_DELIVERED} needs no write at all: the deal is
+     * already fully delivered, so there is nothing left to unlock.
+     *
+     * <p><strong>Not a controller entry point</strong> — same contract as {@link
+     * #applyPurchaseOrderRollup}/{@link #recordFirstImportRequestIssued}: authorisation already
+     * happened inside {@code ImportRequestService}.
+     */
+    @Transactional
+    public void applyImportRequestRollup(long ticketId, UserPrincipal actor) {
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        String cur = s.fulfillmentStatus();
+        if (FulfilmentStatus.PARTIALLY_DELIVERED.equals(cur)) {
+            // Owner decision 3: write ONLY the event. No status/stage/payment write — the delivery
+            // already under way must not be disturbed.
+            tickets.addEvent(ticketId, actor.id(), actor.name(),
+                TicketEventKind.GOODS_RECEIVED, s.status(), s.status(), null);
+            return;
+        }
+        if (FulfilmentStatus.FULLY_DELIVERED.equals(cur)) {
+            // Already fully delivered — nothing left to unlock, nothing to write.
+            return;
+        }
+        if (!FulfilmentStatus.isImportAxis(cur)) {
+            return;
+        }
+        if (FulfilmentStatus.importRank(FulfilmentStatus.GOODS_RECEIVED) <= FulfilmentStatus.importRank(cur)) {
+            return;
+        }
+        applyGoodsReceived(s, actor);
+    }
+
     @Transactional
     public TicketDto markIrSent(long ticketId, UserPrincipal actor) {
         requireRole(actor, FULFILMENT_ROLES);
@@ -816,6 +990,15 @@ public class TicketService {
         // below): IR_SENT is a pre-shipment milestone the POs say nothing about yet —
         // TicketRepository#deriveImportStatus returns null while every live PO is still OPEN — so
         // a ticket-level IR_SENT can never contradict the PO rollup.
+        //
+        // IR-tracked refusal (V184): follows hasLivePurchaseOrders's own refuse-don't-delegate
+        // reasoning below — a ticket-level click cannot say which per-factory ใบขอซื้อ this concerns,
+        // and the per-factory rollup (applyImportRequestRollup) is the source of truth for this axis
+        // once any factory IR has been issued through the stored aggregate.
+        if (tickets.hasLiveImportRequests(ticketId)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ดีลนี้ติดตามการนำเข้าด้วยใบขอซื้อรายโรงงาน — ต้องบันทึกความคืบหน้าที่ใบขอซื้อของแต่ละโรงงาน");
+        }
         if (!FulfilmentStatus.IR_ISSUED.equals(s.fulfillmentStatus())) {
             throw new ApiException(HttpStatus.CONFLICT, "ต้องออกใบขอนำเข้า (IR) ก่อนจึงจะทำเครื่องหมายว่าส่ง IR แล้วได้");
         }
@@ -841,6 +1024,12 @@ public class TicketService {
             throw new ApiException(HttpStatus.CONFLICT,
                 "ดีลนี้ติดตามการนำเข้าด้วยใบสั่งซื้อโรงงาน — ต้องบันทึกการขนส่งที่ใบสั่งซื้อของแต่ละโรงงาน");
         }
+        // IR-tracked refusal (V184) — same reasoning as the PO guard immediately above, for the
+        // per-factory ใบขอซื้อ aggregate instead of the (dormant) PO one.
+        if (tickets.hasLiveImportRequests(ticketId)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ดีลนี้ติดตามการนำเข้าด้วยใบขอซื้อรายโรงงาน — ต้องบันทึกความคืบหน้าที่ใบขอซื้อของแต่ละโรงงาน");
+        }
         if (!FulfilmentStatus.IR_SENT.equals(s.fulfillmentStatus())) {
             throw new ApiException(HttpStatus.CONFLICT, "ต้องส่งใบขอนำเข้า (IR) ก่อนจึงจะทำเครื่องหมายว่าเริ่มจัดส่งได้");
         }
@@ -859,6 +1048,11 @@ public class TicketService {
         if (tickets.hasLivePurchaseOrders(ticketId)) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "ดีลนี้ติดตามการนำเข้าด้วยใบสั่งซื้อโรงงาน — ต้องบันทึกรับสินค้าที่ใบสั่งซื้อของแต่ละโรงงาน");
+        }
+        // IR-tracked refusal (V184) — same reasoning, for the per-factory ใบขอซื้อ aggregate.
+        if (tickets.hasLiveImportRequests(ticketId)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ดีลนี้ติดตามการนำเข้าด้วยใบขอซื้อรายโรงงาน — ต้องบันทึกความคืบหน้าที่ใบขอซื้อของแต่ละโรงงาน");
         }
         if (!FulfilmentStatus.SHIPPING.equals(s.fulfillmentStatus())) {
             throw new ApiException(HttpStatus.CONFLICT, "ดีลต้องอยู่ในขั้นตอนจัดส่งก่อนจึงจะทำเครื่องหมายว่าได้รับสินค้าได้");
@@ -1294,7 +1488,9 @@ public class TicketService {
 
     @Transactional
     public TicketDto confirmFinalPayment(long ticketId, UserPrincipal actor) {
-        requireRole(actor, ACCOUNT_ROLES);
+        // GLA-118 (owner ruling 2026-09-20, part A): account only — see PAYMENT_RECORD_ROLES's own
+        // Javadoc. This used to be ACCOUNT_ROLES, which let the CEO through.
+        requireRole(actor, PAYMENT_RECORD_ROLES);
         TicketDto ticket = requireTicket(ticketId);
         TicketSummaryDto s = ticket.summary();
         requireActive(s);
@@ -1324,7 +1520,9 @@ public class TicketService {
 
     @Transactional
     public TicketDto recordPayment(long ticketId, RecordPaymentRequest request, UserPrincipal actor) {
-        requireRole(actor, ACCOUNT_ROLES);
+        // GLA-118 (owner ruling 2026-09-20, part A): account only — see PAYMENT_RECORD_ROLES's own
+        // Javadoc. This used to be ACCOUNT_ROLES, which let the CEO through.
+        requireRole(actor, PAYMENT_RECORD_ROLES);
         return recordPaymentInternal(ticketId, request, actor);
     }
 
@@ -1341,7 +1539,10 @@ public class TicketService {
     }
 
     private TicketDto recordPaymentInternal(long ticketId, RecordPaymentRequest request, UserPrincipal actor) {
-        requireRole(actor, ACCOUNT_ROLES);
+        // GLA-118 (owner ruling 2026-09-20, part A): account only, re-checked here even though
+        // every caller (recordPayment, confirmFinalPayment, confirmDepositPaid) already checks its
+        // own role — see PAYMENT_RECORD_ROLES's own Javadoc.
+        requireRole(actor, PAYMENT_RECORD_ROLES);
         if (request == null) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุข้อมูลรับชำระเงิน");
         }
@@ -2122,9 +2323,13 @@ public class TicketService {
         if (reason == null || reason.isBlank()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุเหตุผลนโยบายมัดจำ");
         }
-        requireRole(actor, ACCOUNT_ROLES);
+        // GLA-118: deposit policy is set by the OWNING sales rep, or sales_manager as a backup
+        // (owner ruling 2026-09-20, part B — see canSetDepositPolicy's own Javadoc). This used to
+        // be ACCOUNT_ROLES (account or CEO); account, ceo and every non-owning sales rep are still
+        // refused.
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireActive(s);
+        requireDepositPolicyWriteAccess(s, actor);
         // Rule 4 (payment-track state machine): once a deposit invoice has actually been issued
         // (or paid, or further), waiving the deposit policy after the fact is no longer a policy
         // change a rep/account can make retroactively — the customer already has a real document
@@ -2176,6 +2381,39 @@ public class TicketService {
 
     private void requireQuotationWriteAccess(TicketSummaryDto s, UserPrincipal actor) {
         if (!canManageQuotation(s, actor)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
+    }
+
+    /**
+     * GLA-118: who may write {@code sales.ticket.deposit_policy} — the OWNING sales rep, OR
+     * {@code sales_manager} as a backup (owner ruling 2026-09-20, part B; the original 2026-09-17
+     * ruling was owner-only, see git history). Narrower than the old gate ({@code ACCOUNT_ROLES} —
+     * {@code account}/{@code ceo}): account, ceo and every non-owning sales rep are still refused.
+     * account/ceo keep READ access (the summary field is never hidden), just not the write.
+     *
+     * <p>The {@code sales_manager} clause is reused VERBATIM from {@link #requireDealOwnership} /
+     * {@link #canDealOwnership} — a bare {@code "sales_manager".equals(role)} check with no
+     * team/division scoping, so this grant is global across every sales_manager, not limited to
+     * whichever team owns the deal. Do not invent a narrower team-scoped variant here; if
+     * sales_manager scoping is ever tightened, it must happen in the one shared clause, not here.
+     *
+     * <p>Single decision shared by {@link #waiveDeposit}'s write gate and (together with the
+     * Rule-4 {@code paymentStatus} check) {@link #addPolicyActions}'s {@code WAIVE_DEPOSIT}
+     * advertisement. The two are NOT quite the same predicate any more: the advertisement also
+     * requires {@code paymentStatus} to still be null/{@code CUSTOMER_CONFIRMED}, because once a
+     * deposit notice exists {@link #waiveDeposit} 409s (Rule 4) rather than 403s — advertising the
+     * action there would offer a button that dies on click, the same "never offer a dead action"
+     * discipline {@link #canIssueImportRequest} documents for its own 409 case.
+     */
+    private boolean canSetDepositPolicy(TicketSummaryDto s, UserPrincipal actor) {
+        String role = actor.role();
+        return (SALES_ROLES.contains(role) && s.createdById() == actor.id())
+            || "sales_manager".equals(role);
+    }
+
+    private void requireDepositPolicyWriteAccess(TicketSummaryDto s, UserPrincipal actor) {
+        if (!canSetDepositPolicy(s, actor)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }
@@ -2260,6 +2498,24 @@ public class TicketService {
         return requireTicket(ticketId);
     }
 
+    /**
+     * V183: is this a stock sale price that will still be positive once Postgres has STORED it?
+     *
+     * <p>{@code sales.ticket_item.stock_sale_price} is {@code numeric(14,2)}, and Postgres rounds
+     * a value to the column's scale BEFORE {@code chk_ticket_item_stock_sale_price} sees it. A
+     * bare {@code signum() > 0} therefore does NOT match the CHECK: {@code 0.004} is positive in
+     * Java, is stored as {@code 0.00}, and the constraint then rejects the row — surfacing as a
+     * {@link org.springframework.dao.DataIntegrityViolationException}, which
+     * {@code ApiExceptionHandler.handleDataAccess} reports as a 500 (with the raw driver message),
+     * not the clean Thai 400 this validation exists to give. Rounding HALF_UP at scale 2 is
+     * exactly Postgres' own numeric rounding, so this predicate agrees with the CHECK for every
+     * input. Verified against real Postgres 17: {@code 0.004} violates the constraint,
+     * {@code 0.005} stores as {@code 0.01}.
+     */
+    private static boolean isStorablePositivePrice(BigDecimal price) {
+        return price != null && price.setScale(2, RoundingMode.HALF_UP).signum() > 0;
+    }
+
     private List<TicketItemDto> mergeEditedItemsPreservingPricing(
             long ticketId, List<TicketItemDto> existingItems, List<TicketItemRequest> requestItems) {
         List<TicketItemDto> merged = new ArrayList<>(requestItems.size());
@@ -2278,6 +2534,33 @@ public class TicketService {
             String currency = prior != null
                 ? prior.currency()
                 : ((r.currency() != null && !r.currency().isBlank()) ? r.currency() : "THB");
+            // V183: unlike proposedPrice/approvedPrice/calcedCost/manualPrice (guarded, "prior
+            // always wins" because only import/CEO may set them), sourcedFromStock/stockSalePrice
+            // are a sales decision made at deal-entry/edit time -- the request WINS, mirroring
+            // unitBasis's own null-safe-fallback treatment just above: a request that says
+            // nothing about these fields (r.sourcedFromStock() == null) inherits the prior row's
+            // value rather than silently resetting the flag to "not from stock" on every
+            // unrelated edit.
+            boolean sourcedFromStock = r.sourcedFromStock() != null
+                ? r.sourcedFromStock()
+                : (prior != null && prior.sourcedFromStock());
+            BigDecimal stockSalePrice = r.sourcedFromStock() != null
+                ? r.stockSalePrice()
+                : (prior != null ? prior.stockSalePrice() : null);
+            // Same invariant chk_ticket_item_stock_sale_price enforces at the DB layer --
+            // checked here too so a bad request 400s with a clear Thai message instead of
+            // reaching replaceItemsPreservingPricing and failing as an opaque 500 from a
+            // constraint violation.
+            if (sourcedFromStock) {
+                if (!isStorablePositivePrice(stockSalePrice)) {
+                    throw new ApiException(HttpStatus.BAD_REQUEST,
+                        "ต้องระบุราคาขายเมื่อเลือกสินค้าจากสต็อก");
+                }
+            } else {
+                // Force-null regardless of what the request sent — never trust a stray price
+                // through when the item isn't flagged as stock-sourced.
+                stockSalePrice = null;
+            }
             merged.add(new TicketItemDto(
                 prior != null ? prior.id() : 0L,
                 ticketId,
@@ -2302,6 +2585,10 @@ public class TicketService {
                 // this stays a pure passthrough with no merge logic of its own.
                 BigDecimal.ZERO, BigDecimal.ZERO, null,
                 r.catalogPriceId(), r.catalogProductCode(),
+                // source/catalogPrice/catalogCurrency/catalogPriceUnit/sqmPerPiece are read-path-only
+                // (resolved by findItemsByTicketId's LEFT JOIN, never written back) — same derivation
+                // the compat constructors use.
+                r.catalogPriceId() != null ? "catalog" : "custom", null, null, null, null,
                 // V148: weightMultiplier is a sales_manager/CEO decision (setItemWeightMultipliers),
                 // never something this sales/import item-edit request carries an opinion on -- same
                 // "guarded, prior wins" treatment as proposedPrice/approvedPrice/calcedCost above,
@@ -2309,7 +2596,8 @@ public class TicketService {
                 // gives every edited row a brand-new item_id (DELETE + re-INSERT), so this is the
                 // ONLY thing standing between an innocuous item edit and silently resetting a
                 // manager-approved weight back to the column default of 1.
-                prior != null ? prior.weightMultiplier() : 1
+                prior != null ? prior.weightMultiplier() : 1,
+                sourcedFromStock, stockSalePrice
             ));
         }
         return merged;
@@ -2412,7 +2700,8 @@ public class TicketService {
         // surfaced these anyway.
         if (canConfirmCustomer(s, actor)) actions.add(new TicketActionDto("CONFIRM_CUSTOMER", "payment", "ลูกค้ายืนยัน"));
         if (canCreateDepositNotice(s, actor)) actions.add(new TicketActionDto("ISSUE_DEPOSIT_NOTICE", "doc", "ออกใบแจ้งมัดจำ"));
-        if (ACCOUNT_ROLES.contains(actor.role()) && "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus())) {
+        // GLA-118: account only — see DEPOSIT_CONFIRM_ROLES's own Javadoc.
+        if (DEPOSIT_CONFIRM_ROLES.contains(actor.role()) && "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus())) {
             actions.add(new TicketActionDto("DEPOSIT_PAID", "payment", "รับมัดจำ"));
         }
         if (canRecordPayment(s, actor)) {
@@ -2426,13 +2715,21 @@ public class TicketService {
         if (FULFILMENT_ROLES.contains(actor.role()) && canIssueImportRequest(s)) {
             actions.add(new TicketActionDto("ISSUE_IMPORT_REQUEST", "fulfillment", "ออก IR"));
         }
-        if (FULFILMENT_ROLES.contains(actor.role()) && FulfilmentStatus.IR_ISSUED.equals(s.fulfillmentStatus())) {
+        // V184: once the deal is tracked per-factory (>= 1 ISSUED sales.import_request row), these
+        // three deal-level buttons all 409 (see markIrSent/markShipping/markGoodsReceived's own
+        // hasLiveImportRequests guard) — advertising a dead action is worse than not offering it,
+        // the same discipline canIssueImportRequest already documents for itself.
+        boolean irTracked = tickets.hasLiveImportRequests(s.id());
+        if (FULFILMENT_ROLES.contains(actor.role()) && !irTracked
+                && FulfilmentStatus.IR_ISSUED.equals(s.fulfillmentStatus())) {
             actions.add(new TicketActionDto("IR_SENT", "fulfillment", "ส่ง IR"));
         }
-        if (FULFILMENT_ROLES.contains(actor.role()) && FulfilmentStatus.IR_SENT.equals(s.fulfillmentStatus())) {
+        if (FULFILMENT_ROLES.contains(actor.role()) && !irTracked
+                && FulfilmentStatus.IR_SENT.equals(s.fulfillmentStatus())) {
             actions.add(new TicketActionDto("SHIPPING", "fulfillment", "สินค้าเดินทาง"));
         }
-        if (FULFILMENT_ROLES.contains(actor.role()) && FulfilmentStatus.SHIPPING.equals(s.fulfillmentStatus())) {
+        if (FULFILMENT_ROLES.contains(actor.role()) && !irTracked
+                && FulfilmentStatus.SHIPPING.equals(s.fulfillmentStatus())) {
             actions.add(new TicketActionDto("GOODS_RECEIVED", "fulfillment", "รับสินค้า"));
         }
         if (canReserveStock(ticket, actor)) {
@@ -2448,7 +2745,9 @@ public class TicketService {
                 List.of("source", "lines")));
             actions.add(new TicketActionDto("COMPLETE_DELIVERY", "fulfillment", "ส่งมอบครบ"));
         }
-        if (ACCOUNT_ROLES.contains(actor.role()) && canConfirmFinalPaymentNow(s)) {
+        // GLA-118 (owner ruling 2026-09-20, part A): account only — see PAYMENT_RECORD_ROLES's own
+        // Javadoc. This used to be ACCOUNT_ROLES, which let the CEO through.
+        if (PAYMENT_RECORD_ROLES.contains(actor.role()) && canConfirmFinalPaymentNow(s)) {
             actions.add(new TicketActionDto("FINAL_PAYMENT", "payment", "รับเงินครบ"));
         }
         if (canConfirmClose(s, actor)) {
@@ -2519,7 +2818,13 @@ public class TicketService {
             actions.add(new TicketActionDto("SET_ENTRY_CHANNEL", "policy", "ตั้งค่า entry channel",
                 entryChannelIsStated(s) ? List.of("value", "note") : List.of("value")));
         }
-        if (ACCOUNT_ROLES.contains(actor.role())) {
+        // GLA-118: owning sales rep or sales_manager — see canSetDepositPolicy's own Javadoc. Also
+        // gated on paymentStatus, matching Rule 4: once a deposit notice has actually been issued
+        // (or paid, or further), waiveDeposit 409s instead of writing, so advertising the action
+        // past that point would offer a button that dies on click.
+        boolean depositWaivableNow = s.paymentStatus() == null
+            || PaymentTrack.CUSTOMER_CONFIRMED.equals(s.paymentStatus());
+        if (canSetDepositPolicy(s, actor) && depositWaivableNow) {
             actions.add(new TicketActionDto("WAIVE_DEPOSIT", "policy", "นโยบายมัดจำ", List.of("policy", "reason")));
         }
     }
@@ -2543,24 +2848,25 @@ public class TicketService {
     }
 
     /**
-     * Mirrors {@link #issueImportRequest}'s own deposit-readiness check EXACTLY (down to the
-     * rule-5 null tightening) — this predicate exists only to decide whether to advertise
-     * ISSUE_IMPORT_REQUEST in {@link #actions}. Letting the two drift would advertise an action
-     * that immediately 409s on click, which is worse than not offering it at all (same "never
-     * offer a dead action" discipline {@link #addOperationalActions} already documents for the
-     * removed legacy actions).
+     * Shares {@link #requireImportRequestIssuable} EXACTLY (down to the rule-5 null tightening) —
+     * this predicate exists only to decide whether to advertise ISSUE_IMPORT_REQUEST in {@link
+     * #actions}. Letting the two drift would advertise an action that immediately 409s on click,
+     * which is worse than not offering it at all (same "never offer a dead action" discipline
+     * {@link #addOperationalActions} already documents for the removed legacy actions).
      */
     private boolean canIssueImportRequest(TicketSummaryDto s) {
-        boolean depositPolicyBypassesNotice = DepositPolicy.bypassesDepositNotice(s.depositPolicy())
-            && "CUSTOMER_CONFIRMED".equals(s.paymentStatus());
-        boolean depositReady = "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus())
-            || "DEPOSIT_PAID".equals(s.paymentStatus())
-            || depositPolicyBypassesNotice;
-        return TicketStatus.QUOTATION_ISSUED.equals(s.status()) && depositReady && s.fulfillmentStatus() == null;
+        try {
+            requireImportRequestIssuable(s);
+        } catch (ApiException e) {
+            return false;
+        }
+        return s.fulfillmentStatus() == null;
     }
 
     private boolean canRecordPayment(TicketSummaryDto s, UserPrincipal actor) {
-        return ACCOUNT_ROLES.contains(actor.role())
+        // GLA-118 (owner ruling 2026-09-20, part A): account only — see PAYMENT_RECORD_ROLES's own
+        // Javadoc. This used to be ACCOUNT_ROLES, which let the CEO through.
+        return PAYMENT_RECORD_ROLES.contains(actor.role())
             && s.amountPayable() != null
             && s.amountPayable().signum() > 0
             && !PaymentStage.FULLY_PAID.equals(s.paymentStage());
@@ -2614,11 +2920,18 @@ public class TicketService {
      * Stages 13–14 (ส่งมอบสินค้า) belong to Sales — owner ruling 2026-08-17, the counterpart to
      * stage 12 (PROCUREMENT) belonging to Import.
      *
-     * <p><strong>Additive, not a transfer.</strong> Import and the CEO KEEP delivery access; the
-     * owning rep gains it. Narrowing would have been the tidier reading of the ruling, but it would
-     * remove a live capability the moment it deployed, and no evidence was available that nobody in
-     * import records deliveries today. Widening cannot break anyone. Whether import should later
-     * lose it is a separate, deliberate decision — see this branch's PR body.
+     * <p><strong>A transfer to Sales (owner decision 2026-09, V184).</strong> The owning rep and the
+     * CEO record deliveries; Import no longer does — it owns the import axis (per-factory
+     * PROCUREMENT, {@code ImportRequestService}), Sales owns delivery. This supersedes the earlier
+     * additive reading that kept import's access "until a deliberate decision"; that decision is now
+     * made. Ported from {@code origin/feat/per-factory-import-tracking} commit {@code 83f4fa78} by
+     * Yang.Pongburit, where this exact change (and only this change, from that commit) originates —
+     * everything else in that commit is superseded by the {@code sales.import_request}-based rebuild
+     * (V184) this branch implements instead of {@code sales.factory_import_progress}.
+     *
+     * <p>Deliberately NOT {@link #isFulfilmentOrOwningRep}, which still admits import — that helper
+     * stays as-is for {@link #canDeclareStockCoverage}, its other caller: stock-coverage declaration
+     * is unaffected by this transfer.
      *
      * <p>The single source of truth for BOTH {@code recordPartialDelivery}/{@code completeDelivery}'s
      * gate AND whether {@link #actions} advertises RECORD_PARTIAL_DELIVERY/COMPLETE_DELIVERY, so the
@@ -2626,7 +2939,8 @@ public class TicketService {
      * {@link #canDeclareStockCoverage} already documents.
      */
     private boolean canWriteDelivery(TicketSummaryDto s, UserPrincipal actor) {
-        return isFulfilmentOrOwningRep(s, actor);
+        return CEO_ROLES.contains(actor.role())
+            || (SALES_ROLES.contains(actor.role()) && s.createdById() == actor.id());
     }
 
     private void requireDeliveryAccess(TicketSummaryDto s, UserPrincipal actor) {

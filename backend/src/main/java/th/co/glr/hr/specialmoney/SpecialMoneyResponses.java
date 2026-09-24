@@ -12,6 +12,9 @@ public final class SpecialMoneyResponses {
     public record SpecialMoneyDetailResponse(SpecialMoneyRequestDto request) {
     }
 
+    public record SpecialMoneyApprovalPreviewResponse(SpecialMoneyApprovalPreviewDto preview) {
+    }
+
     public record SpecialMoneyUsageResponse(SpecialMoneyUsageDto usage) {
     }
 

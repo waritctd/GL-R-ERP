@@ -33,6 +33,7 @@ import th.co.glr.hr.customerquotation.CustomerQuotationRequests.CreateCustomerQu
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.IssueCustomerQuotationRequest;
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.RecordQuotationOutcomeRequest;
 import th.co.glr.hr.customerquotation.CustomerQuotationService;
+import th.co.glr.hr.dealquotation.WastageCalculator;
 import th.co.glr.hr.deposit.DepositNoticeDto;
 import th.co.glr.hr.deposit.DepositNoticeRenderer;
 import th.co.glr.hr.deposit.DepositNoticeRepository;
@@ -320,10 +321,14 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
 
         // ── Hard constraint, wrong-way-round: deliver only PART of the 15, and confirm the deal
         //    is NOT marked delivered while an open quantity remains ─────────────────────────
+        // V184: completeDelivery/recordPartialDelivery's gate (canWriteDelivery) transferred to
+        // {ceo, owning-rep} only -- salesActor (the deal owner, see the fixture below), not
+        // importActor. See DeliveryAuthzIntegrationTest for the authz pin itself; this file is
+        // about quantity reconciliation, not authz.
         TicketDto afterPartial = ticketService.recordPartialDelivery(deal.ticketId,
             new RecordDeliveryRequest("STOCK", "ส่งบางส่วน",
                 List.of(new RecordDeliveryRequest.Line(deal.ticketItemId, new BigDecimal("9"))), null),
-            importActor);
+            salesActor);
         assertThat(afterPartial.summary().fulfillmentStatus()).isEqualTo(FulfilmentStatus.PARTIALLY_DELIVERED);
         // Must NOT have auto-advanced to DELIVERED — 6 of the reconciled 15 units are still open.
         assertThat(afterPartial.summary().salesStage()).isEqualTo(DealStage.DELIVERY_SCHEDULING);
@@ -331,7 +336,7 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         // completeDelivery ships exactly the remaining 6 (15 - 9), computed against the
         // RECONCILED qty — and only THEN does the deal reach DELIVERED.
         TicketDto afterComplete = ticketService.completeDelivery(deal.ticketId,
-            new CompleteDeliveryRequest("ส่งครบ", "คุณลูกค้า"), importActor);
+            new CompleteDeliveryRequest("ส่งครบ", "คุณลูกค้า"), salesActor);
         assertThat(afterComplete.summary().fulfillmentStatus()).isEqualTo(FulfilmentStatus.FULLY_DELIVERED);
         assertThat(afterComplete.summary().salesStage()).isEqualTo(DealStage.DELIVERED);
         assertThat(afterComplete.items().get(0).qtyDelivered()).isEqualByComparingTo("15");
@@ -360,10 +365,10 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
                 new StockReservationRequest.Line(deal.ticketItemId, new BigDecimal("4"), null))),
             importActor);
 
-        ticketService.completeDelivery(deal.ticketId, new CompleteDeliveryRequest("ส่งครบ", null), importActor);
+        ticketService.completeDelivery(deal.ticketId, new CompleteDeliveryRequest("ส่งครบ", null), salesActor);
 
         assertThatThrownBy(() -> ticketService.completeDelivery(
-            deal.ticketId, new CompleteDeliveryRequest("ส่งซ้ำ", null), importActor))
+            deal.ticketId, new CompleteDeliveryRequest("ส่งซ้ำ", null), salesActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
     }
 
@@ -406,7 +411,7 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         ticketService.recordPartialDelivery(deal.ticketId,
             new RecordDeliveryRequest("STOCK", null,
                 List.of(new RecordDeliveryRequest.Line(deal.ticketItemId, new BigDecimal("6"))), null),
-            importActor);
+            salesActor);
         assertThat(ticketItemQtyDelivered(deal.ticketItemId)).isEqualByComparingTo("6");
 
         // A revision now asks for only 3 — below the 6 already physically delivered. It is refused
@@ -453,10 +458,17 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         assertThat(ticketItemQty(deal.ticketItemBId)).isEqualByComparingTo("1");
 
         // The revision keeps item A (qty unchanged) but DROPS item B entirely — only A is listed.
+        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
+        // quantity are now required on every item PricingRequestService's resolveItems persists —
+        // requestedQty/requestedUnit/requestedUnitBasis are derived instead. roundToFullBox=false +
+        // piecesInput=10 keeps the derived requestedQty byte-identical to the original 10.
         PricingRequestRequests.PricingRequestItemRequest revisedItemA = new PricingRequestRequests.PricingRequestItemRequest(
-            deal.ticketItemAId, deal.catalogProductIdA, null, "SCG", "Tile A", "SCG Tile A", null, null,
-            "60x60", FACTORY, new BigDecimal("10"), new BigDecimal("10"), "piece", UnitBasis.PER_PIECE,
-            QuantityType.CONFIRMED, null, null, null);
+            deal.ticketItemAId, deal.catalogProductIdA, null, "SCG", "Tile A", "SCG Tile A",
+            "White", "Matte", "60x60", FACTORY, null, null, null, null,
+            QuantityType.CONFIRMED, null, null, null,
+            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+            null, 10, WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+            false, "ไทย-สต็อก", 3, 7, null, null, null);
         CustomerChangeRevisionRequest revisionRequest = new CustomerChangeRevisionRequest(
             "ลูกค้าขอตัดรายการ B ออก", UUID.randomUUID().toString(), PricingRequestRecipient.DESIGNER, null,
             "Designer Co.", LocalDate.now().plusDays(14), new BigDecimal("5000.00"), "THB",
@@ -487,7 +499,7 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
                 new StockReservationRequest.Line(deal.ticketItemAId, new BigDecimal("10"), null))),
             importActor);
         TicketDto delivered = ticketService.completeDelivery(
-            deal.ticketId, new CompleteDeliveryRequest("ส่งครบ", null), importActor);
+            deal.ticketId, new CompleteDeliveryRequest("ส่งครบ", null), salesActor);
         // Reaches FULLY_DELIVERED / DealStage.DELIVERED — the exact outcome B's phantom open
         // balance used to make permanently unreachable.
         assertThat(delivered.summary().fulfillmentStatus()).isEqualTo(FulfilmentStatus.FULLY_DELIVERED);
@@ -528,13 +540,20 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         ticketService.recordPartialDelivery(deal.ticketId,
             new RecordDeliveryRequest("STOCK", null,
                 List.of(new RecordDeliveryRequest.Line(deal.ticketItemBId, new BigDecimal("2"))), null),
-            importActor);
+            salesActor);
         assertThat(ticketItemQtyDelivered(deal.ticketItemBId)).isEqualByComparingTo("2");
 
+        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
+        // quantity are now required on every item PricingRequestService's resolveItems persists —
+        // requestedQty/requestedUnit/requestedUnitBasis are derived instead. roundToFullBox=false +
+        // piecesInput=10 keeps the derived requestedQty byte-identical to the original 10.
         PricingRequestRequests.PricingRequestItemRequest revisedItemA = new PricingRequestRequests.PricingRequestItemRequest(
-            deal.ticketItemAId, deal.catalogProductIdA, null, "SCG", "Tile A", "SCG Tile A", null, null,
-            "60x60", FACTORY, new BigDecimal("10"), new BigDecimal("10"), "piece", UnitBasis.PER_PIECE,
-            QuantityType.CONFIRMED, null, null, null);
+            deal.ticketItemAId, deal.catalogProductIdA, null, "SCG", "Tile A", "SCG Tile A",
+            "White", "Matte", "60x60", FACTORY, null, null, null, null,
+            QuantityType.CONFIRMED, null, null, null,
+            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+            null, 10, WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+            false, "ไทย-สต็อก", 3, 7, null, null, null);
         CustomerChangeRevisionRequest revisionRequest = new CustomerChangeRevisionRequest(
             "ลูกค้าขอตัดรายการ B ออก", UUID.randomUUID().toString(), PricingRequestRecipient.DESIGNER, null,
             "Designer Co.", LocalDate.now().plusDays(14), new BigDecimal("5000.00"), "THB",
@@ -598,14 +617,24 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         long ticketItemAId = created.items().get(0).id();
         long ticketItemBId = created.items().get(1).id();
 
+        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
+        // quantity are now required on every item PricingRequestService#createDraft persists —
+        // requestedQty/requestedUnit/requestedUnitBasis are derived instead. roundToFullBox=false +
+        // piecesInput=qty keeps the derived requestedQty byte-identical to `qtyA`/`qtyB`.
         PricingRequestRequests.PricingRequestItemRequest itemA = new PricingRequestRequests.PricingRequestItemRequest(
-            ticketItemAId, catalogProductIdA, null, "SCG", "Tile A", "SCG Tile A", null, null,
-            "60x60", FACTORY, qtyA, qtyA, "piece", UnitBasis.PER_PIECE,
-            QuantityType.CONFIRMED, null, null, null);
+            ticketItemAId, catalogProductIdA, null, "SCG", "Tile A", "SCG Tile A",
+            "White", "Matte", "60x60", FACTORY, null, null, null, null,
+            QuantityType.CONFIRMED, null, null, null,
+            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+            null, qtyA.intValueExact(), WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+            false, "ไทย-สต็อก", 3, 7, null, null, null);
         PricingRequestRequests.PricingRequestItemRequest itemB = new PricingRequestRequests.PricingRequestItemRequest(
-            ticketItemBId, catalogProductIdB, null, "SCG", "Tile B", "SCG Tile B", null, null,
-            "60x60", FACTORY, qtyB, qtyB, "piece", UnitBasis.PER_PIECE,
-            QuantityType.CONFIRMED, null, null, null);
+            ticketItemBId, catalogProductIdB, null, "SCG", "Tile B", "SCG Tile B",
+            "White", "Matte", "60x60", FACTORY, null, null, null, null,
+            QuantityType.CONFIRMED, null, null, null,
+            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+            null, qtyB.intValueExact(), WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+            false, "ไทย-สต็อก", 3, 7, null, null, null);
         PricingRequestRequests.CreatePricingRequestRequest request = new PricingRequestRequests.CreatePricingRequestRequest(
             PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
             new BigDecimal("5000.00"), "THB", "step 8 two-item walk", UUID.randomUUID().toString(),
@@ -712,10 +741,17 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         long ticketId = created.summary().id();
         long ticketItemId = created.items().get(0).id();
 
+        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
+        // quantity are now required on every item PricingRequestService#createDraft persists —
+        // requestedQty/requestedUnit/requestedUnitBasis are derived instead. roundToFullBox=false +
+        // piecesInput=quantity keeps the derived requestedQty byte-identical to `quantity`.
         PricingRequestRequests.PricingRequestItemRequest item = new PricingRequestRequests.PricingRequestItemRequest(
-            ticketItemId, catalogProductId, null, "SCG", "Tile Inventory", "SCG Tile Inventory", null, null,
-            "60x60", FACTORY, quantity, quantity, "piece", UnitBasis.PER_PIECE,
-            QuantityType.CONFIRMED, null, null, null);
+            ticketItemId, catalogProductId, null, "SCG", "Tile Inventory", "SCG Tile Inventory",
+            "White", "Matte", "60x60", FACTORY, null, null, null, null,
+            QuantityType.CONFIRMED, null, null, null,
+            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+            null, quantity.intValueExact(), WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+            false, "ไทย-สต็อก", 3, 7, null, null, null);
         PricingRequestRequests.CreatePricingRequestRequest request = new PricingRequestRequests.CreatePricingRequestRequest(
             PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
             new BigDecimal("5000.00"), "THB", "step 8 acceptance walk", UUID.randomUUID().toString(), List.of(item));
@@ -739,10 +775,17 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
      * fixture in one direction and the subject under test in the other.
      */
     private long createRevisionAndDriveToQuotationAccepted(Deal deal, BigDecimal newQuantity) {
+        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
+        // quantity are now required on every item resolveItems persists — requestedQty/
+        // requestedUnit/requestedUnitBasis are derived instead. roundToFullBox=false +
+        // piecesInput=newQuantity keeps the derived requestedQty byte-identical to `newQuantity`.
         PricingRequestRequests.PricingRequestItemRequest revisedItem = new PricingRequestRequests.PricingRequestItemRequest(
-            deal.ticketItemId, deal.catalogProductId, null, "SCG", "Tile Inventory", "SCG Tile Inventory", null, null,
-            "60x60", FACTORY, newQuantity, newQuantity, "piece", UnitBasis.PER_PIECE,
-            QuantityType.CONFIRMED, null, null, null);
+            deal.ticketItemId, deal.catalogProductId, null, "SCG", "Tile Inventory", "SCG Tile Inventory",
+            "White", "Matte", "60x60", FACTORY, null, null, null, null,
+            QuantityType.CONFIRMED, null, null, null,
+            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+            null, newQuantity.intValueExact(), WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+            false, "ไทย-สต็อก", 3, 7, null, null, null);
         CustomerChangeRevisionRequest revisionRequest = new CustomerChangeRevisionRequest(
             "ลูกค้าขอเปลี่ยนจำนวน", UUID.randomUUID().toString(), PricingRequestRecipient.DESIGNER, null,
             "Designer Co.", LocalDate.now().plusDays(14), new BigDecimal("5000.00"), "THB",

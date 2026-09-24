@@ -33,6 +33,7 @@ import th.co.glr.hr.customerquotation.CustomerQuotationRequests.CreateCustomerQu
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.IssueCustomerQuotationRequest;
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.RecordQuotationOutcomeRequest;
 import th.co.glr.hr.customerquotation.CustomerQuotationService;
+import th.co.glr.hr.dealquotation.WastageCalculator;
 import th.co.glr.hr.deposit.DepositNoticeDto;
 import th.co.glr.hr.deposit.DepositNoticeRenderer;
 import th.co.glr.hr.deposit.DepositNoticeRepository;
@@ -361,8 +362,10 @@ class DerivedFulfilmentRollupIntegrationTest extends AbstractPostgresIntegration
         assertThat(tickets.findById(deal.ticketId).orElseThrow().summary().fulfillmentStatus())
             .isEqualTo(FulfilmentStatus.GOODS_RECEIVED);
 
+        // V184: completeDelivery's gate transferred to {ceo, owning-rep} only -- salesActor, not
+        // importActor. See DeliveryAuthzIntegrationTest for the authz pin itself.
         TicketDto afterDelivery = ticketService.completeDelivery(
-            deal.ticketId, new CompleteDeliveryRequest(null, null), importActor);
+            deal.ticketId, new CompleteDeliveryRequest(null, null), salesActor);
         assertThat(afterDelivery.summary().fulfillmentStatus()).isEqualTo(FulfilmentStatus.FULLY_DELIVERED);
 
         // Both POs are now RECEIVED — a terminal (CLOSED) PO status, so neither
@@ -414,7 +417,7 @@ class DerivedFulfilmentRollupIntegrationTest extends AbstractPostgresIntegration
 
         procurement.recordGoodsReceived(poA.id(), new RecordGoodsReceivedRequest(BigDecimal.TEN, null), importActor);
         procurement.recordGoodsReceived(poB.id(), new RecordGoodsReceivedRequest(BigDecimal.TEN, null), importActor);
-        ticketService.completeDelivery(deal.ticketId, new CompleteDeliveryRequest(null, null), importActor);
+        ticketService.completeDelivery(deal.ticketId, new CompleteDeliveryRequest(null, null), salesActor);
         ticketService.confirmFinalPayment(deal.ticketId, accountActor);
         insertInvoiceAttachment(deal.ticketId, accountUserId);
 
@@ -524,14 +527,23 @@ class DerivedFulfilmentRollupIntegrationTest extends AbstractPostgresIntegration
             salesActor);
         long ticketId = created.summary().id();
 
+        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
+        // quantity are now required on every item PricingRequestService#createDraft persists —
+        // requestedQty/requestedUnit/requestedUnitBasis are derived instead.
         PricingRequestRequests.PricingRequestItemRequest itemA = new PricingRequestRequests.PricingRequestItemRequest(
-            null, catalogProductIdA, null, "SCG", "Tile Rollup A", "SCG Tile Rollup A", null, null, "60x60", factoryA,
-            new BigDecimal("10"), new BigDecimal("10"), "piece", UnitBasis.PER_PIECE,
-            QuantityType.CONFIRMED, null, null, null);
+            null, catalogProductIdA, null, "SCG", "Tile Rollup A", "SCG Tile Rollup A",
+            "White", "Matte", "60x60", factoryA, null, null, null, null,
+            QuantityType.CONFIRMED, null, null, null,
+            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+            null, 10, WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+            false, "ไทย-สต็อก", 3, 7, null, null, null);
         PricingRequestRequests.PricingRequestItemRequest itemB = new PricingRequestRequests.PricingRequestItemRequest(
-            null, catalogProductIdB, null, "SCG", "Tile Rollup B", "SCG Tile Rollup B", null, null, "80x80", factoryB,
-            new BigDecimal("5"), new BigDecimal("5"), "piece", UnitBasis.PER_PIECE,
-            QuantityType.CONFIRMED, null, null, null);
+            null, catalogProductIdB, null, "SCG", "Tile Rollup B", "SCG Tile Rollup B",
+            "White", "Matte", "80x80", factoryB, null, null, null, null,
+            QuantityType.CONFIRMED, null, null, null,
+            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+            null, 5, WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+            false, "ไทย-สต็อก", 3, 7, null, null, null);
         PricingRequestRequests.CreatePricingRequestRequest request = new PricingRequestRequests.CreatePricingRequestRequest(
             PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
             new BigDecimal("5000.00"), "THB", "derived-fulfilment rollup fixture", UUID.randomUUID().toString(), List.of(itemA, itemB));

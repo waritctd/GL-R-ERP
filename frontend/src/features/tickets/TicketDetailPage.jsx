@@ -12,6 +12,7 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { Skeleton, SkeletonText } from '../../components/common/Skeleton.jsx';
+import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { Tabs, TabPanel } from '../../components/common/Tabs.jsx';
 import { cn } from '../../utils/cn.js';
 import {
@@ -30,6 +31,7 @@ import { ContextSection, FieldRow } from './DealMetaFields.jsx';
 import { DealAttachmentsPanel } from './DealAttachmentsPanel.jsx';
 import { DealDepositPanel } from './DealDepositPanel.jsx';
 import { DealDocumentRegister } from './DealDocumentRegister.jsx';
+import { RemainingInvoiceDialog } from './RemainingInvoiceDialog.jsx';
 import { DealFulfilmentPanel } from './DealFulfilmentPanel.jsx';
 import { DealHistoryPanel } from './DealHistoryPanel.jsx';
 import { DealLegacyQuotations } from './DealLegacyQuotations.jsx';
@@ -48,6 +50,23 @@ import { nextStageIn, useStageCatalog } from './stageCatalog.js';
 import {
   resolveTicketDetailTab, TICKET_DETAIL_TABS, visibleTicketDetailTabIds,
 } from './ticketDetailTabs.js';
+import { isRemainingInvoiceReady } from './remainingInvoiceReadiness.js';
+import {
+  applyCatalogPick,
+  applyDescriptiveFieldEdit,
+  CatalogAutocompleteField,
+  isStockSalePriceMissing,
+  ITEM_FIELD_META,
+  ItemField,
+  ItemFieldLabel,
+  isRequiredItemField,
+  missingQtyMessage,
+  REQUIRED_ITEM_FIELD_LABELS,
+  requiredItemFieldErrors,
+  requiredQtyField,
+  searchCatalog,
+  stockSalePriceError,
+} from './ticketItemFields.jsx';
 import { resolveWorkState } from './workState.js';
 
 // Ticket-detail IA rebuild Phase 1 (see
@@ -121,6 +140,47 @@ function scrollToSection(id) {
   // only under a real browser's absence of it.
   el.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
   el.focus?.({ preventScroll: true });
+}
+
+// Read-only items table (V183, gap B): a saved จากสต็อก line otherwise shows no indication
+// outside edit mode — the ราคาที่อนุมัติ/ราคาขาย cell just reads "-" whenever the line happens to
+// have no approvedPrice/calced price of its own yet. sourcedFromStock is CAPTURE-ONLY today
+// (nothing downstream reads it — see ticketItemFields.jsx's own comment), so a flagged line is
+// NOT guaranteed to lack a real price: it can still be attached to, and priced through, an
+// ordinary PricingRequest exactly like any other line. That is exactly why this component takes
+// BOTH `primary` (today's real price, if any) and `children` (today's rendering of it) instead of
+// assuming primary is always null for a stock-sourced line — see the branches below, which handle
+// primary null and non-null identically regardless of why primary is null. `children` is exactly
+// what this cell renders TODAY for a non-stock-sourced (or already-priced) line — unchanged in
+// every branch except the one gap this fills. `primary` is whatever value that rendering is built
+// from: approvedPrice for the plain ราคาที่อนุมัติ column, manualPrice ?? calcedPrice for the
+// calc-breakdown ราคาขาย (THB/ชิ้น) column — so this can tell "nothing to show yet" (primary ==
+// null) from "already has a real price" without re-deriving either column's own logic.
+// No new grid column (would break itemsGridCols and the mobile card reflow's data-label wiring,
+// which requires data-label on a DIRECT child of .data-row) — this only adds a secondary <small>
+// line inside the existing cell, same nesting the ราคาขาย (THB/ชิ้น) column already uses for its
+// own "override" line.
+function StockAwarePriceCell({ item, primary, children }) {
+  if (!item.sourcedFromStock || item.stockSalePrice == null) return children;
+  if (primary == null) {
+    // formatMoney (not a currency-aware helper): every other price in this table — approvedPrice,
+    // proposedPrice, calcedPrice/manualPrice — already renders through the same ฿-prefixed,
+    // currency-agnostic formatter regardless of the item's own `currency`, so this stays
+    // consistent with the column it fills in for rather than inventing per-item currency display
+    // this table doesn't otherwise have.
+    return (
+      <>
+        <code className="font-bold text-success">{formatMoney(item.stockSalePrice)}</code>
+        <small className="block text-2xs text-text-muted">ราคาสต็อก</small>
+      </>
+    );
+  }
+  return (
+    <>
+      {children}
+      <small className="block text-2xs text-text-muted">ราคาสต็อก: {formatMoney(item.stockSalePrice)}</small>
+    </>
+  );
 }
 
 // Ticket-detail IA rebuild Phase 2: the "ประวัติการดำเนินการ" events panel that
@@ -253,6 +313,40 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const [editMode, setEditMode] = useState(false);
   const [editDraft, setEditDraft] = useState([]);
   const [editNote, setEditNote] = useState('');
+  // Catalog autocomplete for the ยี่ห้อ/รุ่น fields in edit mode — same shape as
+  // TicketCreateModal's catalogResults/catalogFocus (`{ index, field }`), kept as this page's own
+  // state because edit-items and create are two separate mounted trees.
+  const [editCatalogResults, setEditCatalogResults] = useState([]);
+  const [editCatalogFocus, setEditCatalogFocus] = useState(null);
+  // Mirrors TicketCreateModal's onCatalogInput/applyCatalogItem — brand/model typing searches the
+  // catalog (debounced), a pick fills the row via the shared applyCatalogPick and clears that row's
+  // required-field errors.
+  //
+  // Real keystroke: mutates the row AND searches. Kept separate from onEditCatalogFieldFocus below
+  // — review round 2 caught a regression where re-focusing an already-filled ยี่ห้อ/รุ่น box (no
+  // keystroke, value unchanged) used to run through this same mutating path, silently re-running
+  // the brand→factory lockstep and catalog-link CLEAR on every focus. For a row loaded from the
+  // server with a real catalog link (catalogPriceId/catalogProductCode), simply tabbing into and
+  // back out of the field wiped that link before save — a data-loss bug proved end-to-end (focus
+  // brand+model, then save, dropped catalogPriceId and reset factory from the unchanged brand).
+  function onEditCatalogInput(index, field, value) {
+    setEditDraft((d) => d.map((r, i) => (i === index ? applyDescriptiveFieldEdit(r, field, value) : r)));
+    clearFieldError(`editItems.${field}.${index}`);
+    setEditCatalogFocus({ index, field });
+    searchCatalog(value, setEditCatalogResults);
+  }
+  // Focus-only: search-only, no row mutation. Safe to call on every focus, including a re-focus of
+  // a field the rep never actually retyped.
+  function onEditCatalogFieldFocus(index, field, value) {
+    setEditCatalogFocus({ index, field });
+    if (value) searchCatalog(value, setEditCatalogResults);
+  }
+  function applyEditCatalogPick(index, cat) {
+    setEditDraft((d) => d.map((r, i) => (i === index ? applyCatalogPick(r, cat) : r)));
+    Object.keys(REQUIRED_ITEM_FIELD_LABELS).forEach((f) => clearFieldError(`editItems.${f}.${index}`));
+    setEditCatalogResults([]);
+    setEditCatalogFocus(null);
+  }
 
   // Revision form
   const [showReviseForm, setShowReviseForm] = useState(false);
@@ -261,9 +355,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
 
   // UX-03 (slice 5a + 5b): inline field-level validation for the payment /
   // delivery modals, plus (5b) the revise form (a modal since Slice C2a) and
-  // the edit-items quantities. One shared dict, keyed per-form/per-row so a stale error can
+  // the edit-items rows. One shared dict, keyed per-form/per-row so a stale error can
   // never bleed into another: 'payment.amount' | 'revise.reason' |
-  // 'editItems.qty.<rowIndex>' (per-row — see the edit-items save handler).
+  // 'editItems.<field>.<rowIndex>' (per-row, per-field — brand/model/size/qty; see the
+  // fix/ticket-edit-items-required-markers required-field check and the edit-items save handler).
   // ('quotation.*'/'reject.reason'/'override.<itemId>' were retired along
   // with ticket-native pricing/quotation — Phase 2 Slice S1/S2; 'delivery.lines'
   // moved out along with the delivery/stock modals themselves — Phase 3 Slice
@@ -341,7 +436,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // one shared flag that would disable every download button at once. Not
   // server-state mutations (no cache to invalidate), so left as local state.
   const [downloadingQuotationKey, setDownloadingQuotationKey] = useState(null); // `${quotationId}-${format}` | null
-  const [downloadingInvoice, setDownloadingInvoice] = useState(false);
+  const [remainingInvoiceDialogOpen, setRemainingInvoiceDialogOpen] = useState(false);
 
   const ticketQuery = useQuery({
     queryKey: queryKeys.ticketDetail(ticketId),
@@ -731,6 +826,12 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const fs = summary.fulfillmentStatus;
   const isSales   = ROLE_PERMISSIONS.canCreateTickets.includes(role);
   const isAccount = ROLE_PERMISSIONS.canConfirmPayments.includes(role);
+  // GLA-118 (owner ruling 2026-09-20, part A): recording ANY payment — confirmFinalPayment/
+  // recordPayment alike — is account ONLY now, no CEO fallback. `isAccount` above still includes
+  // ceo (canConfirmPayments is unchanged and still backs SET_BILLING, which DID keep its CEO
+  // fallback), so it is deliberately NOT reused for the payment-recording flags below — mirrors
+  // TicketService's new PAYMENT_RECORD_ROLES exactly.
+  const isMoneyRecorder = role === 'account';
   // (deliveryDone / dualTrackDone removed with the single-step close: the close
   // gate is now the server's three-party sequence, surfaced via availableActions.)
   // Slice A "chip diet": DealStagePanel's own read-only "ส่งมอบ x/y" badge
@@ -804,10 +905,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     editItems: hasAction('EDIT_ITEMS') && EDITABLE_STATUSES.includes(st) && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner,
     // Dual-track (ข้อ 13)
     confirmCustomer:    hasAction('CONFIRM_CUSTOMER') && st === 'quotation_issued' && (ps == null || ps === 'CUSTOMER_CONFIRMED') && isSales,
-    confirmFinalPayment:hasAction('FINAL_PAYMENT') && st === 'quotation_issued' && isAccount,
-    recordPayment:      hasAction('RECORD_PAYMENT') && isAccount,
+    confirmFinalPayment:hasAction('FINAL_PAYMENT') && st === 'quotation_issued' && isMoneyRecorder,
+    recordPayment:      hasAction('RECORD_PAYMENT') && isMoneyRecorder,
     setBilling:         hasAction('SET_BILLING') && isAccount,
-    downloadRemainingInvoice: st === 'quotation_issued' && fs === 'GOODS_RECEIVED' && isSales,
+    downloadRemainingInvoice: isRemainingInvoiceReady({ status: st, fulfillmentStatus: fs }) && isSales,
   };
 
   // Slice C2b: the FIX 2 (Opus review) per-instance เอกสาร (attachments)
@@ -863,19 +964,23 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // Kept to the fact only (design law: brief — who/what, not
   // what-to-do-about-it-by-when).
   const closeConfirmedAt = summary?.closeConfirmedAt ?? null;
-  // !isAccount on the two payment-wait lines (P3, review round 2): account
-  // is the role that CLEARS these two waits (confirmDeposit/
-  // confirmFinalPayment — see nextAccountAction in accountActions.js) — for
-  // account specifically, this line would otherwise read "รอชำระมัดจำ" right
-  // next to their own resolver-derived "ยืนยันรับมัดจำ" primary CTA button,
-  // stating the same fact twice (once as a call to action, once as a
-  // blocker) instead of pairing the blocker with a role that ISN'T the one
-  // who can act on it — exactly the contradiction this line's own doc
+  // !isMoneyRecorder on the two payment-wait lines (P3, review round 2): account is the ONLY role
+  // that CLEARS these two waits (confirmDeposit/confirmFinalPayment — see nextAccountAction in
+  // accountActions.js) — for account specifically, this line would otherwise read "รอชำระมัดจำ"
+  // right next to their own resolver-derived "ยืนยันรับมัดจำ" primary CTA button, stating the same
+  // fact twice (once as a call to action, once as a blocker) instead of pairing the blocker with a
+  // role that ISN'T the one who can act on it — exactly the contradiction this line's own doc
   // comment above warns against.
+  //
+  // GLA-118 review fix: this used to read `!isAccount`, which ALSO suppressed the blocker for the
+  // CEO — isAccount (canConfirmPayments) still includes ceo for SET_BILLING's sake, but
+  // recording/confirming a payment is account-only now (see isMoneyRecorder above), so the CEO no
+  // longer clears either wait and must see the same read-only status a sales/import viewer does,
+  // not silence.
   const blocker = closeConfirmedAt && !can.verifyClose
     ? 'รอ CEO ตรวจสอบปิดงาน'
-    : ps === 'DEPOSIT_NOTICE_ISSUED' && !isAccount ? 'รอชำระมัดจำ'
-      : ps === 'AWAITING_FINAL_PAYMENT' && !isAccount ? 'รอชำระส่วนที่เหลือ'
+    : ps === 'DEPOSIT_NOTICE_ISSUED' && !isMoneyRecorder ? 'รอชำระมัดจำ'
+      : ps === 'AWAITING_FINAL_PAYMENT' && !isMoneyRecorder ? 'รอชำระส่วนที่เหลือ'
         : null;
 
   // The cockpit's primary action: the ONE workflow button for this viewer's
@@ -1238,18 +1343,6 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     }
   }
 
-  async function handleDownloadRemainingInvoice() {
-    setDownloadingInvoice(true);
-    try {
-      const blob = await api.tickets.downloadRemainingInvoice(ticketId);
-      downloadBlob(blob, `remaining-invoice-${ticketId}`, 'xlsx');
-    } catch (err) {
-      showToast('error', err.message || 'ดาวน์โหลดไม่สำเร็จ');
-    } finally {
-      setDownloadingInvoice(false);
-    }
-  }
-
   async function handleComment() {
     if (!commentText.trim()) return;
     await doAction(() => api.tickets.comment(ticketId, { message: commentText.trim() }), 'เพิ่มความคิดเห็นแล้ว');
@@ -1424,9 +1517,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               </Button>
             )}
             {can.downloadRemainingInvoice && (
-              <Button type="button" variant="secondary" disabled={downloadingInvoice}
-                onClick={handleDownloadRemainingInvoice}>
-                {downloadingInvoice ? 'กำลังดาวน์โหลด…' : 'ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ'}
+              <Button type="button" variant="secondary" onClick={() => setRemainingInvoiceDialogOpen(true)}>
+                ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ
               </Button>
             )}
           </>
@@ -1520,7 +1612,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                   setEditDraft(items.map((item) => ({ ...item })));
                   setEditNote('');
                   setEditMode(true);
-                  setFieldErrorsForPrefix('editItems.qty.', {});
+                  setFieldErrorsForPrefix('editItems.', {});
                 }}>
                 <Icon name="pencil" size={14} />
                 แก้ไขรายการสินค้า
@@ -1545,11 +1637,15 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                               let changed = false;
                               const next = {};
                               Object.entries(prev).forEach(([k, v]) => {
-                                const m = k.match(/^editItems\.qty\.(\d+)$/);
+                                // Any editItems.<field>.<rowIndex> key — brand/model/size/qty —
+                                // not just qty, so a required-field error never ends up pinned to
+                                // the wrong (now different) row after a delete.
+                                const m = k.match(/^editItems\.([a-zA-Z]+)\.(\d+)$/);
                                 if (!m) { next[k] = v; return; }
-                                const idx = Number(m[1]);
+                                const [, field, idxStr] = m;
+                                const idx = Number(idxStr);
                                 if (idx === index) { changed = true; return; }
-                                if (idx > index) { next[`editItems.qty.${idx - 1}`] = v; changed = true; return; }
+                                if (idx > index) { next[`editItems.${field}.${idx - 1}`] = v; changed = true; return; }
                                 next[k] = v;
                               });
                               return changed ? next : prev;
@@ -1560,31 +1656,80 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                       )}
                     </div>
                     <div className="grid grid-cols-2 gap-2">
-                      {[
-                        { key: 'brand', label: 'ชื่อยี่ห้อ', placeholder: 'เช่น SCG, Cotto' },
-                        { key: 'model', label: 'ชื่อรุ่น', placeholder: 'ชื่อรุ่น' },
-                        { key: 'color', label: 'สี', placeholder: 'เช่น ขาว, เทา' },
-                        { key: 'texture', label: 'เนื้อผิว', placeholder: 'เช่น ด้าน, มัน' },
-                        { key: 'size', label: 'ขนาด', placeholder: 'เช่น 60x60 ซม.' },
-                        { key: 'factory', label: 'โรงงาน', placeholder: 'เช่น SCG Ceramics' },
-                      ].map(({ key, label, placeholder }) => (
-                        <label key={key} className="m-0">
-                          <span className="text-xs">{label}</span>
-                          <input value={item[key] || ''} placeholder={placeholder}
-                            onChange={(e) => setEditDraft((d) => d.map((r, i) => {
-                              if (i !== index) return r;
-                              const next = { ...r, [key]: e.target.value };
-                              // A hand-edit to a descriptive field invalidates a catalog link
-                              // picked at deal-creation time — what's typed no longer
-                              // necessarily matches what the link points at. Mirrors
-                              // TicketCreateModal.jsx's updateItem/PricingRequestCreateModal's
-                              // updateItem, same rule.
-                              next.catalogPriceId = null;
-                              next.catalogProductCode = '';
-                              return next;
-                            }))} />
-                        </label>
-                      ))}
+                      {/* Fields/labels/placeholders and the catalog autocomplete on ยี่ห้อ/รุ่น now
+                          come from ticketItemFields.jsx, shared with TicketCreateModal.jsx — this
+                          used to be a hand-rolled 6-field map (including its own separate โรงงาน
+                          input, no asterisks, no catalog search) that had drifted from create's
+                          labels ('ชื่อยี่ห้อ' vs 'ยี่ห้อ / โรงงาน') and dropped required-field
+                          validation entirely (UAT: reopening a deal to edit items showed no red
+                          asterisks and only failed with a backend 400). ยี่ห้อ and โรงงาน are one
+                          field, same as create — see applyDescriptiveFieldEdit's brand branch. */}
+                      <CatalogAutocompleteField
+                        id={`edit-item-${index}-brand`}
+                        label={ITEM_FIELD_META.brand.label}
+                        placeholder={ITEM_FIELD_META.brand.placeholder}
+                        required={isRequiredItemField('brand')}
+                        value={item.brand || ''}
+                        onInput={(value) => onEditCatalogInput(index, 'brand', value)}
+                        onFocusSearch={() => onEditCatalogFieldFocus(index, 'brand', item.brand)}
+                        onBlur={() => setTimeout(() => setEditCatalogFocus(null), 180)}
+                        expanded={editCatalogFocus?.index === index && editCatalogFocus?.field === 'brand'}
+                        results={editCatalogResults}
+                        onPick={(cat) => applyEditCatalogPick(index, cat)}
+                        error={fieldErrors[`editItems.brand.${index}`]}
+                        inputRef={(el) => { fieldRefs.current[`editItems.brand.${index}`] = el; }}
+                      />
+                      <CatalogAutocompleteField
+                        id={`edit-item-${index}-model`}
+                        label={ITEM_FIELD_META.model.label}
+                        placeholder={ITEM_FIELD_META.model.placeholder}
+                        required={isRequiredItemField('model')}
+                        value={item.model || ''}
+                        onInput={(value) => onEditCatalogInput(index, 'model', value)}
+                        onFocusSearch={() => onEditCatalogFieldFocus(index, 'model', item.model)}
+                        onBlur={() => setTimeout(() => setEditCatalogFocus(null), 180)}
+                        expanded={editCatalogFocus?.index === index && editCatalogFocus?.field === 'model'}
+                        results={editCatalogResults}
+                        onPick={(cat) => applyEditCatalogPick(index, cat)}
+                        error={fieldErrors[`editItems.model.${index}`]}
+                        inputRef={(el) => { fieldRefs.current[`editItems.model.${index}`] = el; }}
+                      />
+                      <ItemField
+                        id={`edit-item-${index}-size`}
+                        label={ITEM_FIELD_META.size.label}
+                        required={isRequiredItemField('size')}
+                        error={fieldErrors[`editItems.size.${index}`]}
+                      >
+                        <input
+                          id={`edit-item-${index}-size`}
+                          ref={(el) => { fieldRefs.current[`editItems.size.${index}`] = el; }}
+                          value={item.size || ''}
+                          placeholder={ITEM_FIELD_META.size.placeholder}
+                          aria-required="true"
+                          aria-invalid={fieldErrors[`editItems.size.${index}`] ? true : undefined}
+                          aria-describedby={fieldErrors[`editItems.size.${index}`] ? fieldErrorId(`edit-item-${index}-size`) : undefined}
+                          onChange={(e) => {
+                            setEditDraft((d) => d.map((r, i) => (i === index ? applyDescriptiveFieldEdit(r, 'size', e.target.value) : r)));
+                            clearFieldError(`editItems.size.${index}`);
+                          }}
+                        />
+                      </ItemField>
+                      <ItemField id={`edit-item-${index}-color`} label={ITEM_FIELD_META.color.label} hint={ITEM_FIELD_META.color.hint}>
+                        <input
+                          id={`edit-item-${index}-color`}
+                          value={item.color || ''}
+                          placeholder={ITEM_FIELD_META.color.placeholder}
+                          onChange={(e) => setEditDraft((d) => d.map((r, i) => (i === index ? applyDescriptiveFieldEdit(r, 'color', e.target.value) : r)))}
+                        />
+                      </ItemField>
+                      <ItemField id={`edit-item-${index}-texture`} label={ITEM_FIELD_META.texture.label} hint={ITEM_FIELD_META.texture.hint}>
+                        <input
+                          id={`edit-item-${index}-texture`}
+                          value={item.texture || ''}
+                          placeholder={ITEM_FIELD_META.texture.placeholder}
+                          onChange={(e) => setEditDraft((d) => d.map((r, i) => (i === index ? applyDescriptiveFieldEdit(r, 'texture', e.target.value) : r)))}
+                        />
+                      </ItemField>
                       {/* Unit basis toggle */}
                       <div className="col-span-full m-0">
                         <span className="mb-1 block text-xs">หน่วยที่ใช้สั่ง</span>
@@ -1615,8 +1760,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                       {/* Qty inputs */}
                       {(item.unitBasis || 'PIECE') === 'PIECE' ? (
                         <>
-                          <label className="m-0">
-                            <span className="text-xs">จำนวน (แผ่น)</span>
+                          <label className="m-0 text-xs" htmlFor={`edit-item-qty-${index}`}>
+                            <ItemFieldLabel label="จำนวน (แผ่น)" required={requiredQtyField(item.unitBasis) === 'qty'} />
                             <input type="number" value={item.qty ?? ''} step="1"
                               id={`edit-item-qty-${index}`}
                               ref={(el) => { fieldRefs.current[`editItems.qty.${index}`] = el; }}
@@ -1629,6 +1774,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                                 }));
                                 clearFieldError(`editItems.qty.${index}`);
                               }}
+                              aria-required={requiredQtyField(item.unitBasis) === 'qty' ? 'true' : undefined}
                               aria-invalid={fieldErrors[`editItems.qty.${index}`] ? true : undefined}
                               aria-describedby={fieldErrors[`editItems.qty.${index}`] ? fieldErrorId(`edit-item-qty-${index}`) : undefined}
                             />
@@ -1647,8 +1793,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                         </>
                       ) : (
                         <>
-                          <label className="m-0">
-                            <span className="text-xs">พื้นที่ (ตร.ม.)</span>
+                          <label className="m-0 text-xs" htmlFor={`edit-item-qtysqm-${index}`}>
+                            <ItemFieldLabel label="พื้นที่ (ตร.ม.)" required={requiredQtyField(item.unitBasis) === 'qtySqm'} />
                             {/* Governs qty when this row is in SQM mode (qty is
                                 derived from qtySqm × sqmPerPiece below) — so the
                                 per-row qty error, if any, attaches here rather
@@ -1665,6 +1811,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                                 }));
                                 clearFieldError(`editItems.qty.${index}`);
                               }}
+                              aria-required={requiredQtyField(item.unitBasis) === 'qtySqm' ? 'true' : undefined}
                               aria-invalid={fieldErrors[`editItems.qty.${index}`] ? true : undefined}
                               aria-describedby={fieldErrors[`editItems.qty.${index}`] ? fieldErrorId(`edit-item-qtysqm-${index}`) : undefined}
                             />
@@ -1691,11 +1838,67 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                             onChange={(e) => setEditDraft((d) => d.map((r, i) => i === index ? { ...r, proposedPrice: e.target.value === '' ? null : Number(e.target.value) } : r))} />
                         </label>
                       )}
+                      {/* Stock-sourced pricing (owner ruling, V183): sales may flag this line "from
+                          warehouse" and type in its own selling price — matches
+                          TicketCreateModal.jsx's item editor (same labels/copy/validation), so the
+                          flag can be set/changed both at deal-creation time and afterward here.
+                          CAPTURE-ONLY today: nothing downstream (PricingRequest, quotation,
+                          commission) reads this pair yet, so a flagged line can still be attached
+                          to, and priced through, an ordinary PricingRequest exactly as before —
+                          wiring it into that chain is a later follow-up. Reuses
+                          ticketItemFields.jsx's ItemField for the price input, same as every other
+                          field in this row, so its error markup/aria wiring is identical. */}
+                      <div className="col-span-full flex flex-col gap-1.5 rounded-md border border-border-input bg-surface-muted px-3 py-2.5">
+                        <label className="m-0 flex cursor-pointer items-center gap-2 text-sm">
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4 cursor-pointer accent-info-dot"
+                            checked={Boolean(item.sourcedFromStock)}
+                            onChange={(e) => {
+                              const checked = e.target.checked;
+                              setEditDraft((d) => d.map((r, i) => i === index
+                                ? { ...r, sourcedFromStock: checked, stockSalePrice: checked ? r.stockSalePrice : '' }
+                                : r));
+                              // Unchecking clears any stale error the same way every other
+                              // per-row field error is cleared on edit above.
+                              if (!checked) clearFieldError(`editItems.stockSalePrice.${index}`);
+                            }} />
+                          <strong>จากสต็อก</strong>
+                        </label>
+                        <p className="m-0 pl-6 text-2xs font-semibold text-text-muted">
+                          สินค้าที่มีอยู่ในคลัง — ฝ่ายขายระบุราคาขายเอง
+                        </p>
+                        {item.sourcedFromStock ? (
+                          <ItemField
+                            id={`edit-item-stock-sale-price-${index}`}
+                            label="ราคาขาย (สต็อก)"
+                            required
+                            error={fieldErrors[`editItems.stockSalePrice.${index}`]}
+                          >
+                            <input type="number" min="0" step="0.01"
+                              id={`edit-item-stock-sale-price-${index}`}
+                              ref={(el) => { fieldRefs.current[`editItems.stockSalePrice.${index}`] = el; }}
+                              value={item.stockSalePrice ?? ''}
+                              placeholder="เช่น 350.00"
+                              onChange={(e) => {
+                                setEditDraft((d) => d.map((r, i) => i === index ? { ...r, stockSalePrice: e.target.value } : r));
+                                clearFieldError(`editItems.stockSalePrice.${index}`);
+                              }}
+                              aria-required="true"
+                              aria-invalid={fieldErrors[`editItems.stockSalePrice.${index}`] ? true : undefined}
+                              aria-describedby={fieldErrors[`editItems.stockSalePrice.${index}`] ? fieldErrorId(`edit-item-stock-sale-price-${index}`) : undefined}
+                            />
+                          </ItemField>
+                        ) : null}
+                      </div>
                     </div>
                   </div>
                 ))}
                 <Button type="button" variant="secondary"
-                  onClick={() => setEditDraft((d) => [...d, { brand: '', model: '', color: '', texture: '', size: '', qty: 1, proposedPrice: null }])}
+                  onClick={() => setEditDraft((d) => [...d, {
+                    brand: '', model: '', color: '', texture: '', size: '', qty: 1, proposedPrice: null,
+                    sourcedFromStock: false, stockSalePrice: '',
+                  }])}
                   className="mb-3">
                   <Icon name="plus" size={14} /> เพิ่มรายการ
                 </Button>
@@ -1706,24 +1909,72 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                 <div className="flex gap-2">
                   <Button type="button" variant="primary" disabled={actionLoading}
                     onClick={() => {
-                      // UX-03 (slice 5b): this used to be one toast covering every
-                      // row ("กรุณากรอกจำนวนสินค้าให้ครบทุกรายการ") — the exact
-                      // "one message for many fields" defect the finding names.
-                      // Flag each offending row's own qty input instead, keyed by
-                      // row index, so the user sees exactly which rows are wrong.
-                      const qtyErrors = {};
+                      // UX-03 (slice 5b) covered qty only ("กรุณากรอกจำนวนสินค้าให้ครบทุกรายการ" →
+                      // one message per row). fix/ticket-edit-items-required-markers adds the
+                      // ยี่ห้อ/รุ่น/ขนาด required-field check that TicketCreateModal has always had
+                      // and edit-items never did — the UAT report this branch fixes. Errors are
+                      // built row-then-field (brand, model, size, then qty/qtySqm), which is also
+                      // the order focusFirstInvalid walks to land on the first invalid control
+                      // top-to-bottom.
+                      const rowErrors = {};
+                      const order = [];
                       editDraft.forEach((item, i) => {
-                        if (!item.qty || Number(item.qty) <= 0) {
-                          qtyErrors[`editItems.qty.${i}`] = 'กรุณากรอกจำนวนสินค้าของรายการนี้ให้ถูกต้อง';
+                        const itemErrors = requiredItemFieldErrors(item);
+                        for (const field of ['brand', 'model', 'size']) {
+                          if (itemErrors[field]) {
+                            const key = `editItems.${field}.${i}`;
+                            rowErrors[key] = itemErrors[field];
+                            order.push(key);
+                          }
+                        }
+                        // Qty rule now matches create's basis-aware requiredQtyField — a review
+                        // round found the OLD rule (always check item.qty, regardless of basis)
+                        // could deadlock the SQM branch: for a catalog row with NO ตร.ม./แผ่น
+                        // factor, "จำนวน (แผ่น)" renders as a read-only derived display in SQM
+                        // mode (never an input), so a rep who filled พื้นที่ (ตร.ม.) correctly
+                        // could never satisfy a check on a field they had no way to edit.
+                        // Confirmed safe to align rather than leave as a known gap: create's own
+                        // zod schema (ticketItemFields.jsx's missingQtyMessage call site in
+                        // TicketCreateModal.jsx's makeItemSchema) never validates qty for SQM
+                        // basis either, and the backend already accepts that shape —
+                        // TicketItemRequest.java's qty/qtySqm (backend/src/main/java/th/co/glr/hr/
+                        // ticket/TicketItemRequest.java:24-25) carry no @NotNull/@Positive,
+                        // TicketService#mergeEditedItemsPreservingPricing (TicketService.java:
+                        // 2263-2316) passes both straight through, and sales.ticket_item.qty is
+                        // NOT NULL with no CHECK > 0 (db/migration/V6__sales_ticket_schema.sql:46;
+                        // the only qty>0 CHECKs in the schema are on unrelated tables —
+                        // sales.delivery_record_item, V54__fulfilment_and_delivery.sql:26, and
+                        // sales.pricing_request_item, V59__pricing_request_foundation.sql:77, a
+                        // later-stage entity with its own DB-enforced positive qty that a ticket
+                        // item's qty never feeds into directly). Both create's and edit's payloads
+                        // already coerce to `qty: Number(item.qty) || 0` regardless, so this is a
+                        // shape create already sends and the backend already accepts via the same
+                        // editItems endpoint — not a new contract.
+                        const qtyField = requiredQtyField(item.unitBasis);
+                        const qtyValue = item[qtyField];
+                        if (!qtyValue || Number(qtyValue) <= 0) {
+                          const key = `editItems.qty.${i}`;
+                          rowErrors[key] = missingQtyMessage(item.unitBasis, i + 1);
+                          order.push(key);
+                        }
+                        // V183: a จากสต็อก-flagged row must carry a real, positive price — same
+                        // invariant TicketService enforces server-side in
+                        // mergeEditedItemsPreservingPricing (this is UX, not the source of truth).
+                        // No row-number suffix here — stockSalePriceError() mirrors
+                        // requiredItemFieldErrors' inline-under-the-field convention, not
+                        // missingQtyMessage's toast-style one.
+                        if (isStockSalePriceMissing(item)) {
+                          const key = `editItems.stockSalePrice.${i}`;
+                          rowErrors[key] = stockSalePriceError(item);
+                          order.push(key);
                         }
                       });
-                      const order = Object.keys(qtyErrors);
                       if (order.length > 0) {
-                        setFieldErrorsForPrefix('editItems.qty.', qtyErrors);
+                        setFieldErrorsForPrefix('editItems.', rowErrors);
                         focusFirstInvalid(order[0]);
                         return;
                       }
-                      setFieldErrorsForPrefix('editItems.qty.', {});
+                      setFieldErrorsForPrefix('editItems.', {});
                       doAction(() => api.tickets.editItems(ticketId, {
                         items: editDraft.map((item) => ({
                           brand: item.brand, model: item.model, color: item.color,
@@ -1739,6 +1990,14 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                           // it), and the row inputs above clear it on any descriptive hand-edit.
                           catalogPriceId: item.catalogPriceId ?? null,
                           catalogProductCode: item.catalogProductCode?.trim() || null,
+                          // Stock-sourced pricing (V183) — see this row's own UI comment above.
+                          // Sent unconditionally (both true and false) so an edit that un-flags a
+                          // previously stock-sourced line actually reaches the backend as false,
+                          // not merely as an absent field the merge would read as "unspecified,
+                          // inherit prior".
+                          sourcedFromStock: Boolean(item.sourcedFromStock),
+                          stockSalePrice: item.sourcedFromStock && item.stockSalePrice !== ''
+                            ? Number(item.stockSalePrice) : null,
                         })),
                         note: editNote.trim() || null,
                       }), 'บันทึกการแก้ไขแล้ว');
@@ -1746,7 +2005,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                     บันทึกการแก้ไข
                   </Button>
                   <Button type="button" variant="secondary" disabled={actionLoading}
-                    onClick={() => { setEditMode(false); setEditDraft([]); setEditNote(''); setFieldErrorsForPrefix('editItems.qty.', {}); }}>
+                    onClick={() => { setEditMode(false); setEditDraft([]); setEditNote(''); setFieldErrorsForPrefix('editItems.', {}); }}>
                     ยกเลิก
                   </Button>
                 </div>
@@ -1780,6 +2039,12 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                       <strong>{item.brand}</strong>
                       {item.model && <small className="text-text-muted">{item.model}</small>}
                       {item.factory && <small className="text-2xs text-text-muted">{item.factory}</small>}
+                      {/* Gap B (V183): a saved จากสต็อก line otherwise shows no indication in the
+                          read-only table — see StockAwarePriceCell's own comment for the price
+                          side of this fix. */}
+                      {item.sourcedFromStock ? (
+                        <span className="mt-0.5 block w-fit"><StatusBadge tone="warning">จากสต็อก</StatusBadge></span>
+                      ) : null}
                     </span>
                     <span data-label="สี / เนื้อผิว" className="flex flex-col gap-0.5">
                       {item.color && <span>{item.color}</span>}
@@ -1817,19 +2082,27 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                         </span>
                         <code data-label="ต้นทุน (THB/ชิ้น)" className="text-info">{item.calcedCost != null ? formatMoney(item.calcedCost) : '—'}</code>
                         <span data-label="ราคาขาย (THB/ชิ้น)">
-                          <code className={cn('font-bold', item.manualPrice != null ? 'text-override' : 'text-success')}>
-                            {item.manualPrice != null ? formatMoney(item.manualPrice) : item.calcedPrice != null ? formatMoney(item.calcedPrice) : '—'}
-                          </code>
-                          {/* CEO manual-override entry (D10) was ticket-native and retired along
-                              with calculatePrices/approve — this is now a read-only readout of
-                              whatever the 3 stranded legacy tickets already carry. */}
-                          {item.manualPrice != null && <small className="block text-2xs text-override">override</small>}
+                          <StockAwarePriceCell item={item} primary={item.manualPrice ?? item.calcedPrice ?? null}>
+                            <code className={cn('font-bold', item.manualPrice != null ? 'text-override' : 'text-success')}>
+                              {item.manualPrice != null ? formatMoney(item.manualPrice) : item.calcedPrice != null ? formatMoney(item.calcedPrice) : '—'}
+                            </code>
+                            {/* CEO manual-override entry (D10) was ticket-native and retired along
+                                with calculatePrices/approve — this is now a read-only readout of
+                                whatever the 3 stranded legacy tickets already carry. */}
+                            {item.manualPrice != null && <small className="block text-2xs text-override">override</small>}
+                          </StockAwarePriceCell>
                         </span>
                       </>
                     ) : (
                       <>
                         {showProposed && <code data-label="ราคาที่เสนอ">{formatMoney(item.proposedPrice)}</code>}
-                        {showApproved && <code data-label="ราคาที่อนุมัติ">{formatMoney(item.approvedPrice)}</code>}
+                        {showApproved && (
+                          <span data-label="ราคาที่อนุมัติ">
+                            <StockAwarePriceCell item={item} primary={item.approvedPrice}>
+                              <code>{formatMoney(item.approvedPrice)}</code>
+                            </StockAwarePriceCell>
+                          </span>
+                        )}
                       </>
                     )}
                   </div>
@@ -1862,7 +2135,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               this panel. */}
           <div id="pricing-request-panel" tabIndex={-1} className="scroll-mt-[300px] mobile:scroll-mt-[420px] outline-none">
             {canViewPricingRequests && Boolean(sections.pricingRequest) ? (
-              <PricingRequestPanel ref={pricingRequestPanelRef} ticketId={ticketId} deal={summary} ticketItems={items} user={user} />
+              <PricingRequestPanel ref={pricingRequestPanelRef} ticketId={ticketId} deal={summary} ticketItems={items} user={user} showToast={showToast} />
             ) : null}
           </div>
       </TabPanel>
@@ -2330,6 +2603,13 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
 
       {/* Delivery/stock-reservation modals moved into DealFulfilmentPanel
           (Phase 3 Slice S4). */}
+
+      {remainingInvoiceDialogOpen ? (
+        // R4 (GLA-99 step 2 review-round-1): mirrors RemainingInvoiceService's own write gate —
+        // sales role + this deal's own owner, see DealDocumentRegister.jsx's identical predicate.
+        <RemainingInvoiceDialog ticketId={ticketId} canWrite={role === 'sales' && isOwner}
+          onClose={() => setRemainingInvoiceDialogOpen(false)} />
+      ) : null}
 
       <ConfirmDialog
         open={confirm?.kind === 'deleteAttachment'}

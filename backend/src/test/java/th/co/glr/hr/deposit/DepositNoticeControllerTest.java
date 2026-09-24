@@ -71,25 +71,32 @@ class DepositNoticeControllerTest {
             .andExpect(status().isUnauthorized());
     }
 
-    @Test
-    void remainingInvoiceFileReturnsHonestXlsContentTypeAndFilename() throws Exception {
-        // Same BIFF8-template mismatch as above, but for RemainingInvoiceRenderer
-        // (templates/remaining_invoice_template.xls) via
-        // GET /api/tickets/{ticketId}/remaining-invoice/file.
-        when(service.getRemainingInvoiceXlsx(eq(10L), any(UserPrincipal.class))).thenReturn(OLE2_MAGIC_BYTES);
+    // Every remainingInvoiceFile* test below this comment (11 tests: content-type/filename,
+    // auth, the four malformed-query-param 400s, and the null/blank/empty reference+noteIds
+    // tri-state tests) was REMOVED here (owner ruling O1, GLA-99 step 2 review-round-1,
+    // 2026-09-20) along with the route and service method they pinned — GET
+    // /api/tickets/{ticketId}/remaining-invoice/file and DepositNoticeService#getRemainingInvoiceXlsx
+    // are both gone. Only an ISSUED/SUPERSEDED STORED remaining invoice is downloadable now, via
+    // RemainingInvoiceController's own GET /api/remaining-invoices/{id}/file (see that class),
+    // which has no query-param tri-state semantics to pin — it renders the row's own frozen
+    // snapshot with no caller-supplied overrides at all. remainingInvoiceOptionsPassesQuotationIdThrough
+    // below is UNCHANGED — /options survives as the create-flow prefill.
 
-        mvc.perform(get("/api/tickets/10/remaining-invoice/file").session(session()))
-            .andExpect(status().isOk())
-            .andExpect(header().string(HttpHeaders.CONTENT_DISPOSITION,
-                "attachment; filename=\"remaining-invoice-10.xls\""))
-            .andExpect(content().contentType("application/vnd.ms-excel"))
-            .andExpect(content().bytes(OLE2_MAGIC_BYTES));
+    @Test
+    void remainingInvoiceOptionsPassesQuotationIdThrough() throws Exception {
+        when(service.getRemainingInvoiceOptions(eq(10L), eq(42L), any(UserPrincipal.class)))
+            .thenReturn(optionsDto());
+
+        mvc.perform(get("/api/tickets/10/remaining-invoice/options?quotationId=42").session(session()))
+            .andExpect(status().isOk());
     }
 
-    @Test
-    void remainingInvoiceFileRequiresAuthentication() throws Exception {
-        mvc.perform(get("/api/tickets/10/remaining-invoice/file"))
-            .andExpect(status().isUnauthorized());
+    private RemainingInvoiceOptionsDto optionsDto() {
+        return new RemainingInvoiceOptionsDto(
+            "GLRI69001", LocalDate.of(2026, 9, 1), null, List.of(), null, List.of(),
+            List.of(), 0, RemainingInvoiceRenderer.MAX_ITEM_ROWS,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            List.of(), null, null);
     }
 
     @Test

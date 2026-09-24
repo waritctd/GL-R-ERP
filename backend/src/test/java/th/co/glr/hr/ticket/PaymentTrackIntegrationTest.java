@@ -34,6 +34,7 @@ import th.co.glr.hr.customerquotation.CustomerQuotationRequests.CreateCustomerQu
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.IssueCustomerQuotationRequest;
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.RecordQuotationOutcomeRequest;
 import th.co.glr.hr.customerquotation.CustomerQuotationService;
+import th.co.glr.hr.dealquotation.WastageCalculator;
 import th.co.glr.hr.deposit.DepositNoticeDraftRequest;
 import th.co.glr.hr.deposit.DepositNoticeDto;
 import th.co.glr.hr.deposit.DepositNoticeItemRequest;
@@ -240,7 +241,9 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
         Deal deal = buildDealToQuotationAccepted("bypass");
         // waiveDeposit while paymentStatus is still null — legal (rule 4's guard only fires once
         // paymentStatus is non-null and not CUSTOMER_CONFIRMED).
-        ticketService.waiveDeposit(deal.ticketId(), DepositPolicy.WAIVED, "ทดสอบ bypass path", accountActor);
+        // GLA-118: deposit policy is set by the OWNING sales rep (or a sales_manager) now -- salesActor owns
+        // this deal (buildDealToQuotationAccepted creates it under salesRepId).
+        ticketService.waiveDeposit(deal.ticketId(), DepositPolicy.WAIVED, "ทดสอบ bypass path", salesActor);
         assertThat(depositPolicyOf(deal.ticketId())).isEqualTo(DepositPolicy.WAIVED);
 
         // site 1: null -> CUSTOMER_CONFIRMED (the bypass path's entry edge is identical to REQUIRED's).
@@ -296,7 +299,8 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void bypassDeal_partiallyPaid_becomesVisibleToAccountRoleListScope() {
         Deal deal = buildDealToQuotationAccepted("authz");
-        ticketService.waiveDeposit(deal.ticketId(), DepositPolicy.WAIVED, "ทดสอบ authz visibility", accountActor);
+        // GLA-118: owning rep only -- see the note on the bypass-path test above.
+        ticketService.waiveDeposit(deal.ticketId(), DepositPolicy.WAIVED, "ทดสอบ authz visibility", salesActor);
         orderConfirmation.confirmOrder(
             deal.pricingRequestId(), new ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
         assertThat(paymentStatusOf(deal.ticketId())).isEqualTo(PaymentTrack.CUSTOMER_CONFIRMED);
@@ -340,7 +344,8 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void bypassDeal_secondPartialPayment_isRecorded_andPaymentStatusStaysOnPath() {
         Deal deal = buildDealToQuotationAccepted("twopay");
-        ticketService.waiveDeposit(deal.ticketId(), DepositPolicy.WAIVED, "ทดสอบชำระสองงวด", accountActor);
+        // GLA-118: owning rep only -- see the note on the bypass-path test above.
+        ticketService.waiveDeposit(deal.ticketId(), DepositPolicy.WAIVED, "ทดสอบชำระสองงวด", salesActor);
         orderConfirmation.confirmOrder(
             deal.pricingRequestId(), new ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
 
@@ -506,8 +511,12 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
         long ticketId = createBareTicket();
         tickets.updatePaymentStatusUnchecked(ticketId, PaymentTrack.DEPOSIT_NOTICE_ISSUED);
 
+        // GLA-118: driven as salesActor (the deal's owner, createBareTicket's salesRepId) rather
+        // than accountActor as before -- accountActor is no longer allowed to touch the deposit
+        // policy at all, so it would now 403 on the ownership gate before ever reaching this
+        // guard. salesActor IS the owner, so this still isolates guard c (FR-A-05) on its own.
         assertThatThrownBy(() -> ticketService.waiveDeposit(
-                ticketId, DepositPolicy.WAIVED, "สายเกินไป", accountActor))
+                ticketId, DepositPolicy.WAIVED, "สายเกินไป", salesActor))
             .isInstanceOfSatisfying(ApiException.class,
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
 
@@ -643,10 +652,17 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
         long ticketItemId = created.items().get(0).id();
 
         BigDecimal quantity = new BigDecimal("10");
+        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
+        // quantity are now required on every item PricingRequestService#createDraft persists —
+        // requestedQty/requestedUnit/requestedUnitBasis are derived instead. roundToFullBox=false +
+        // piecesInput=quantity keeps the derived requestedQty byte-identical to `quantity`.
         PricingRequestRequests.PricingRequestItemRequest item = new PricingRequestRequests.PricingRequestItemRequest(
-            ticketItemId, catalogProductId, null, "SCG", "Tile PaymentTrack", "SCG Tile PaymentTrack", null, null,
-            "60x60", FACTORY, quantity, quantity, "piece", UnitBasis.PER_PIECE,
-            QuantityType.CONFIRMED, null, null, null);
+            ticketItemId, catalogProductId, null, "SCG", "Tile PaymentTrack", "SCG Tile PaymentTrack",
+            "White", "Matte", "60x60", FACTORY, null, null, null, null,
+            QuantityType.CONFIRMED, null, null, null,
+            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+            null, quantity.intValueExact(), WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+            false, "ไทย-สต็อก", 3, 7, null, null, null);
         PricingRequestRequests.CreatePricingRequestRequest request = new PricingRequestRequests.CreatePricingRequestRequest(
             PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
             new BigDecimal("5000.00"), "THB", "payment-track walk " + uniqueTag, UUID.randomUUID().toString(),

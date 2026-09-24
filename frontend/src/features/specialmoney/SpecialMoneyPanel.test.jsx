@@ -1,6 +1,6 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, within, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, within, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SpecialMoneyPanel } from './SpecialMoneyPanel.jsx';
 import { TYPE_GROUPS } from './specialMoneyRules.js';
@@ -250,6 +250,57 @@ describe('SpecialMoneyPanel', () => {
     });
   });
 
+  // The submit-for picker never had a live path: SpecialMoneyEmployeeOption.directReport is
+  // hardcoded false in Java (SpecialMoneyRepository -- "directReport is now ALWAYS false -- nobody
+  // may file for anybody") and resolveTargetEmployee refuses any target but self for every role,
+  // so even a stale/hypothetical GET /employees payload with a second roster row must never
+  // surface a picker -- there is only ever the requester's own name, disabled.
+  describe('submit-for picker: self-only, no on-behalf select', () => {
+    function rosterWithStaleSecondEntry() {
+      return {
+        employees: [
+          { employeeId: 1, employeeName: 'พนักงาน ทดสอบ', employeeCode: 'GLR-001', self: true, directReport: false },
+          // Hypothetical stale payload shaped like the old on-behalf list -- directReport: true
+          // (or self: false) can no longer happen for real, but the frontend must not react to it
+          // even if a future regression somehow reintroduced it server-side.
+          { employeeId: 8, employeeName: 'ผู้จัดการ', employeeCode: 'GLR-008', self: false, directReport: true },
+        ],
+      };
+    }
+
+    it('renders only the disabled display input, never a <select>/combobox, against a roster with a second entry', async () => {
+      api.specialMoney.employees.mockResolvedValue(rosterWithStaleSecondEntry());
+      const { queryClient } = renderPanel();
+
+      // The display input shows user.name before GET /employees resolves, so waiting on it alone
+      // would assert against an empty roster and pass even with the old picker back in place.
+      // Wait until the two-entry roster is in the cache, then let React commit the re-render.
+      await waitFor(() => expect(queryClient.getQueryData(queryKeys.specialMoneyEmployees())).toHaveLength(2));
+      await act(async () => {});
+      await screen.findByDisplayValue('พนักงาน ทดสอบ');
+      expect(screen.queryByRole('combobox', { name: /พนักงาน/ })).toBeNull();
+      expect(document.getElementById('smr-employee')).toBeNull();
+      expect(document.getElementById('smr-employee-display')).not.toBeNull();
+      expect(document.getElementById('smr-employee-display').disabled).toBe(true);
+    });
+
+    // A regression pin, not proof of the picker's removal: the old select also defaulted to the
+    // caller's own id, so this passes on either code. The render test above is the one that can fail.
+    it('submits the viewer\'s own employeeId regardless of the extra roster entry', async () => {
+      api.specialMoney.employees.mockResolvedValue(rosterWithStaleSecondEntry());
+      renderPanel();
+
+      await selectType('AID_WEDDING');
+      fireEvent.change(await screen.findByLabelText(/วันที่เกิดเหตุการณ์/), { target: { value: '2026-07-01' } });
+      fireEvent.change(screen.getByLabelText(/เหตุผล/), { target: { value: 'ทดสอบระบบ' } });
+      fireEvent.click(screen.getByRole('button', { name: /ส่งคำขอ/ }));
+
+      await waitFor(() => expect(api.specialMoney.create).toHaveBeenCalledTimes(1));
+      const payload = api.specialMoney.create.mock.calls[0][0];
+      expect(payload.employeeId).toBe(1);
+    });
+  });
+
   // Backend contract trap (`detail` is Map<String,String> on the wire): every value sent, numeric
   // or boolean, must already be a string by the time it reaches create()'s payload.
   describe('detail payload string-typing per type', () => {
@@ -412,6 +463,63 @@ describe('SpecialMoneyPanel', () => {
       await waitFor(() => expect(api.specialMoney.attachments).toHaveBeenCalledWith(4001));
       // canUpload (requester, still SUBMITTED) renders FileUploadField's own upload affordance.
       expect(await screen.findByText('เลือกไฟล์')).not.toBeNull();
+    });
+  });
+
+  // Mirrors SpecialMoneyService.cancel() / requireCanAttach(): the owning employee only, only
+  // while SUBMITTED. The old "or whoever filed on their behalf" (requested_by_id) disjunct was
+  // removed in Java 2026-08-10 (SpecialMoneyScopeIntegrationTest's
+  // aLegacyOnBehalfFilerCanNoLongerCancelOrAttachToTheRow) -- these pin the frontend button gate
+  // to match, wrong-way-round first.
+  describe('cancel/attach gate: owner-only, not requester-only', () => {
+    it('offers a legacy on-behalf filer (requestedById matches the viewer) no cancel or upload control on someone else\'s row', async () => {
+      const hrUser = { employeeId: 7, name: 'ฝ่ายบุคคล', role: 'hr', manager: false };
+      api.specialMoney.list.mockResolvedValue({
+        requests: [submittedRequest({ employeeId: 1, requestedById: 7 })],
+      });
+      renderPanel(hrUser);
+
+      // The row must actually render before the absence of its buttons means anything -- otherwise
+      // this assertion would also pass if the row (or the whole panel) failed to render at all.
+      await screen.findByText(/พนักงาน ทดสอบ ·/);
+
+      expect(screen.queryByRole('button', { name: 'ยกเลิกคำขอ' })).toBeNull();
+      expect(screen.queryByText('เลือกไฟล์')).toBeNull();
+    });
+
+    it('offers the owning employee both cancel and upload on their own SUBMITTED row, even though someone else is recorded as requestedById', async () => {
+      api.specialMoney.list.mockResolvedValue({
+        requests: [submittedRequest({ employeeId: 1, requestedById: 7 })],
+      });
+      renderPanel(user); // user.employeeId === 1, the row's owning employee
+
+      await screen.findByText(/พนักงาน ทดสอบ ·/);
+      await waitFor(() => expect(api.specialMoney.attachments).toHaveBeenCalledWith(4001));
+
+      expect(await screen.findByRole('button', { name: 'ยกเลิกคำขอ' })).not.toBeNull();
+      expect(await screen.findByText('เลือกไฟล์')).not.toBeNull();
+    });
+
+    it('offers a user with no employee record no cancel or upload control, even on a row whose employeeId is also missing', async () => {
+      const noEmployeeUser = { employeeId: null, name: 'ผู้ดูแลระบบ', role: 'hr', manager: false };
+      api.specialMoney.list.mockResolvedValue({
+        requests: [submittedRequest({ employeeId: null, requestedById: null })],
+      });
+      renderPanel(noEmployeeUser);
+
+      await screen.findByText(/พนักงาน ทดสอบ ·/);
+      expect(screen.queryByRole('button', { name: 'ยกเลิกคำขอ' })).toBeNull();
+      expect(screen.queryByText('เลือกไฟล์')).toBeNull();
+    });
+
+    it('offers the owning employee no cancel button once their own row is no longer SUBMITTED', async () => {
+      api.specialMoney.list.mockResolvedValue({
+        requests: [submittedRequest({ employeeId: 1, requestedById: 7, status: 'APPROVED', approvedAmount: 5000 })],
+      });
+      renderPanel(user);
+
+      await screen.findByText(/พนักงาน ทดสอบ ·/);
+      expect(screen.queryByRole('button', { name: 'ยกเลิกคำขอ' })).toBeNull();
     });
   });
 
@@ -713,6 +821,222 @@ describe('SpecialMoneyPanel', () => {
       const [{ from, to }] = wideWindowCall;
       expect(from <= '2020-01-15').toBe(true);
       expect(to >= '2020-01-15').toBe(true);
+    });
+  });
+
+  // The dead-end SpecialMoneyApproveDeadEndIntegrationTest.java pins server-side: the CEO's only
+  // in-UI approve action used to send an empty review (approve(id, {})), which 400s whenever the
+  // amount exceeds the policy cap and leaves the row stuck SUBMITTED forever. This dialog is the
+  // fix -- it exposes both API-only escape routes the IT demonstrates (a lower approvedAmount, or
+  // a capOverrideReason) to the CEO.
+  describe('CEO approve dialog', () => {
+    beforeEach(() => {
+      // attachmentCount: 1 -- AID_WEDDING is evidenceRequired (see TYPES fixture above), and the
+      // approve button is disabled without an attachment (unrelated "approval gating" coverage
+      // above); this dialog's own tests need it enabled.
+      api.specialMoney.list.mockResolvedValue({
+        requests: [submittedRequest({ requestedAmount: 5000, attachmentCount: 1 })],
+      });
+      api.specialMoney.approve.mockResolvedValue({ request: { id: 4001, status: 'APPROVED' } });
+    });
+
+    async function openApproveDialog() {
+      renderPanel(ceoUser);
+      fireEvent.click(await screen.findByRole('button', { name: 'CEO อนุมัติ' }));
+      const dialog = await screen.findByRole('dialog', { name: 'ยืนยันการอนุมัติ' });
+      return dialog;
+    }
+
+    it('opens with the amount pre-filled to requestedAmount, and confirming unchanged sends it with no override reason', async () => {
+      const dialog = await openApproveDialog();
+
+      const amountField = within(dialog).getByLabelText(/จำนวนเงินที่อนุมัติ/);
+      expect(amountField.value).toBe('5000');
+      // Wired via Modal's `initialFocusRef` prop (see useDialogFocus.js), not a separate effect --
+      // jsdom alone can't reproduce the real-browser StrictMode race that motivated the fix (no
+      // React.StrictMode wrapper here, see main.jsx), but this still pins that the target reaches
+      // Modal and wins focus over the header's close button, its own default.
+      expect(document.activeElement).toBe(amountField);
+
+      fireEvent.click(within(dialog).getByRole('button', { name: 'อนุมัติ' }));
+
+      await waitFor(() => expect(api.specialMoney.approve).toHaveBeenCalledTimes(1));
+      expect(api.specialMoney.approve).toHaveBeenCalledWith(4001, { approvedAmount: 5000, capOverrideReason: null });
+    });
+
+    it('sends a lowered amount when the CEO edits the amount field down', async () => {
+      const dialog = await openApproveDialog();
+
+      fireEvent.change(within(dialog).getByLabelText(/จำนวนเงินที่อนุมัติ/), { target: { value: '1960' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'อนุมัติ' }));
+
+      await waitFor(() => expect(api.specialMoney.approve).toHaveBeenCalledTimes(1));
+      expect(api.specialMoney.approve).toHaveBeenCalledWith(4001, { approvedAmount: 1960, capOverrideReason: null });
+    });
+
+    it('trims a typed override reason with surrounding whitespace before sending it', async () => {
+      const dialog = await openApproveDialog();
+
+      fireEvent.change(within(dialog).getByLabelText(/เหตุผลในการอนุมัติเกินเพดาน/), {
+        target: { value: '  อนุมัติตามดุลยพินิจ CEO  ' },
+      });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'อนุมัติ' }));
+
+      await waitFor(() => expect(api.specialMoney.approve).toHaveBeenCalledTimes(1));
+      expect(api.specialMoney.approve).toHaveBeenCalledWith(
+        4001, { approvedAmount: 5000, capOverrideReason: 'อนุมัติตามดุลยพินิจ CEO' },
+      );
+    });
+
+    it('sends a whitespace-only reason as null rather than a blank string', async () => {
+      const dialog = await openApproveDialog();
+
+      fireEvent.change(within(dialog).getByLabelText(/เหตุผลในการอนุมัติเกินเพดาน/), { target: { value: '   ' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'อนุมัติ' }));
+
+      await waitFor(() => expect(api.specialMoney.approve).toHaveBeenCalledTimes(1));
+      expect(api.specialMoney.approve).toHaveBeenCalledWith(4001, { approvedAmount: 5000, capOverrideReason: null });
+    });
+
+    // Amount 0/empty/negative must never reach the API -- Confirm stays disabled instead.
+    it.each([['0', '0'], ['', 'empty'], ['-5', 'negative']])(
+      'disables Confirm and never calls approve for a %s (%s) amount',
+      async (value) => {
+        const dialog = await openApproveDialog();
+
+        fireEvent.change(within(dialog).getByLabelText(/จำนวนเงินที่อนุมัติ/), { target: { value } });
+        const confirmButton = within(dialog).getByRole('button', { name: 'อนุมัติ' });
+        expect(confirmButton.disabled).toBe(true);
+
+        fireEvent.click(confirmButton);
+        expect(api.specialMoney.approve).not.toHaveBeenCalled();
+      },
+    );
+
+    it('keeps the dialog open with the server error inline on a refused approval, clears it on edit, and succeeds on retry', async () => {
+      const refusalMessage = 'ต้องระบุเหตุผลเมื่อจำนวนเงินที่อนุมัติเกินเพดานตามนโยบายหรือเกินจำนวนที่พนักงานขอเบิก';
+      api.specialMoney.approve.mockRejectedValueOnce(new Error(refusalMessage));
+      const dialog = await openApproveDialog();
+
+      fireEvent.click(within(dialog).getByRole('button', { name: 'อนุมัติ' }));
+
+      expect(await within(dialog).findByText(refusalMessage)).not.toBeNull();
+      // The dialog is still open, on the values the CEO already had -- not reset.
+      expect(within(dialog).getByLabelText(/จำนวนเงินที่อนุมัติ/).value).toBe('5000');
+
+      // Editing the reason clears the stale server error before a second attempt.
+      fireEvent.change(within(dialog).getByLabelText(/เหตุผลในการอนุมัติเกินเพดาน/), {
+        target: { value: 'อนุมัติตามดุลยพินิจ CEO' },
+      });
+      expect(within(dialog).queryByText(refusalMessage)).toBeNull();
+
+      fireEvent.click(within(dialog).getByRole('button', { name: 'อนุมัติ' }));
+
+      await waitFor(() => expect(api.specialMoney.approve).toHaveBeenCalledTimes(2));
+      expect(api.specialMoney.approve).toHaveBeenLastCalledWith(
+        4001, { approvedAmount: 5000, capOverrideReason: 'อนุมัติตามดุลยพินิจ CEO' },
+      );
+      // Success closes the dialog.
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'ยืนยันการอนุมัติ' })).toBeNull());
+    });
+
+    // Opus review: a CEO who cancels one row's dialog and opens a DIFFERENT row's must not see the
+    // first row's half-typed amount or reason leak into the second.
+    it('resets to the new request\'s own amount, with an empty reason, when reopened for a different row', async () => {
+      const requestA = submittedRequest({ id: 4001, requestedAmount: 5000, attachmentCount: 1 });
+      const requestB = submittedRequest({
+        id: 4002, requestedAmount: 800, status: 'MANAGER_APPROVED', requestType: 'MEDICAL',
+        employeeName: 'พนักงาน คนที่สอง', attachmentCount: 1,
+      });
+      api.specialMoney.list.mockResolvedValue({ requests: [requestA, requestB] });
+      renderPanel(ceoUser);
+
+      const approveButtons = await screen.findAllByRole('button', { name: 'CEO อนุมัติ' });
+      expect(approveButtons).toHaveLength(2);
+
+      // Open A, type into both fields, then back out via ยกเลิก (not อนุมัติ) -- nothing is sent.
+      fireEvent.click(approveButtons[0]);
+      let dialog = await screen.findByRole('dialog', { name: 'ยืนยันการอนุมัติ' });
+      fireEvent.change(within(dialog).getByLabelText(/จำนวนเงินที่อนุมัติ/), { target: { value: '1234' } });
+      fireEvent.change(within(dialog).getByLabelText(/เหตุผลในการอนุมัติเกินเพดาน/), { target: { value: 'เหตุผลของ A' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'ยกเลิก' }));
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'ยืนยันการอนุมัติ' })).toBeNull());
+      expect(api.specialMoney.approve).not.toHaveBeenCalled();
+
+      // Open B -- its OWN requestedAmount (800), and an EMPTY reason, not A's leftovers.
+      const approveButtonsAgain = await screen.findAllByRole('button', { name: 'CEO อนุมัติ' });
+      fireEvent.click(approveButtonsAgain[1]);
+      dialog = await screen.findByRole('dialog', { name: 'ยืนยันการอนุมัติ' });
+      expect(within(dialog).getByLabelText(/จำนวนเงินที่อนุมัติ/).value).toBe('800');
+      expect(within(dialog).getByLabelText(/เหตุผลในการอนุมัติเกินเพดาน/).value).toBe('');
+
+      fireEvent.click(within(dialog).getByRole('button', { name: 'อนุมัติ' }));
+      await waitFor(() => expect(api.specialMoney.approve).toHaveBeenCalledTimes(1));
+      expect(api.specialMoney.approve).toHaveBeenCalledWith(4002, { approvedAmount: 800, capOverrideReason: null });
+    });
+
+    // Opus review: `busy` (approveMutation.isPending) only flips a render AFTER the first click's
+    // mutateAsync call has actually started, so a burst of clicks landing before that re-render
+    // previously each fired their own approve() call.
+    it('sends exactly one approve call for a rapid burst of clicks on Confirm', async () => {
+      const dialog = await openApproveDialog();
+      const confirmButton = within(dialog).getByRole('button', { name: 'อนุมัติ' });
+
+      fireEvent.click(confirmButton);
+      fireEvent.click(confirmButton);
+      fireEvent.click(confirmButton);
+
+      await waitFor(() => expect(api.specialMoney.approve).toHaveBeenCalledTimes(1));
+      // Let any stray microtask from a would-be second/third call settle before the final check.
+      await new Promise((resolve) => { setTimeout(resolve, 0); });
+      expect(api.specialMoney.approve).toHaveBeenCalledTimes(1);
+    });
+
+    describe('amount edge cases (NUMERIC(12,2) column)', () => {
+      it('disables Confirm with a decimal-precision message for more than 2 decimal places, without role="alert"', async () => {
+        const dialog = await openApproveDialog();
+        const amountField = within(dialog).getByLabelText(/จำนวนเงินที่อนุมัติ/);
+        fireEvent.change(amountField, { target: { value: '1960.004' } });
+
+        const confirmButton = within(dialog).getByRole('button', { name: 'อนุมัติ' });
+        expect(confirmButton.disabled).toBe(true);
+
+        const message = within(dialog).getByText('ระบุทศนิยมได้ไม่เกิน 2 ตำแหน่ง');
+        expect(message).not.toBeNull();
+        // NOT role="alert": a live region on every keystroke would re-announce this to a screen
+        // reader on each digit typed, rather than only when the field itself is reached.
+        expect(message.getAttribute('role')).not.toBe('alert');
+        expect(amountField.getAttribute('aria-invalid')).toBe('true');
+        expect(amountField.getAttribute('aria-describedby')).toBe(message.id);
+
+        fireEvent.click(confirmButton);
+        expect(api.specialMoney.approve).not.toHaveBeenCalled();
+      });
+
+      it('disables Confirm with a short message above the NUMERIC(12,2) ceiling (9,999,999,999.99)', async () => {
+        const dialog = await openApproveDialog();
+        fireEvent.change(within(dialog).getByLabelText(/จำนวนเงินที่อนุมัติ/), { target: { value: '10000000000' } });
+
+        const confirmButton = within(dialog).getByRole('button', { name: 'อนุมัติ' });
+        expect(confirmButton.disabled).toBe(true);
+        const message = within(dialog).getByText('จำนวนเงินเกินขีดจำกัดที่ระบบรองรับ');
+        expect(message.getAttribute('role')).not.toBe('alert');
+
+        fireEvent.click(confirmButton);
+        expect(api.specialMoney.approve).not.toHaveBeenCalled();
+      });
+
+      it('accepts exactly 2 decimal places as valid', async () => {
+        const dialog = await openApproveDialog();
+        fireEvent.change(within(dialog).getByLabelText(/จำนวนเงินที่อนุมัติ/), { target: { value: '1960.50' } });
+
+        const confirmButton = within(dialog).getByRole('button', { name: 'อนุมัติ' });
+        expect(confirmButton.disabled).toBe(false);
+
+        fireEvent.click(confirmButton);
+        await waitFor(() => expect(api.specialMoney.approve).toHaveBeenCalledTimes(1));
+        expect(api.specialMoney.approve).toHaveBeenCalledWith(4001, { approvedAmount: 1960.5, capOverrideReason: null });
+      });
     });
   });
 

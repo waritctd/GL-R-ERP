@@ -38,6 +38,7 @@ import th.co.glr.hr.pricingrequest.PricingRequestRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestStatus;
 import th.co.glr.hr.pricingrequest.UnitBasis;
 import th.co.glr.hr.ticket.DealLifecycle;
+import th.co.glr.hr.ticket.QuotationNumbering;
 import th.co.glr.hr.ticket.QuotationRenderer;
 import th.co.glr.hr.ticket.QuotationStatus;
 import th.co.glr.hr.ticket.RelatedDocumentType;
@@ -100,6 +101,12 @@ public class CustomerQuotationService {
     private final QuotationRenderer renderer;
     private final NotificationRepository notifications;
     private final DiscountApprovalRepository discountApprovals;
+    // GLA-123 slice S1 fix (Opus review M2, 2026-09-20) — mutual exclusivity with the NEW
+    // (DealQuotationService#createFromPricingRequest) create path for the same pricing request.
+    // Setter-injected, not a constructor parameter, so every existing hand-wired
+    // `new CustomerQuotationService(...)` test call site (20 of them) keeps compiling unchanged —
+    // same device as DealQuotationService's own #wirePricingRequestDependencies.
+    private th.co.glr.hr.dealquotation.DealQuotationRepository dealQuotations;
 
     public CustomerQuotationService(CustomerQuotationRepository quotations, PricingRequestRepository pricingRequests,
                                     PricingDecisionRepository decisions, TicketRepository tickets,
@@ -115,6 +122,13 @@ public class CustomerQuotationService {
         this.renderer = renderer;
         this.notifications = notifications;
         this.discountApprovals = discountApprovals;
+    }
+
+    /** See {@link #dealQuotations}'s own Javadoc. {@code required = false} so a deployment (or a
+     * hand-wired test) that never exercises the M2 mutual-exclusivity check is unaffected. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void wireDealQuotationRepository(th.co.glr.hr.dealquotation.DealQuotationRepository dealQuotations) {
+        this.dealQuotations = dealQuotations;
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -143,6 +157,13 @@ public class CustomerQuotationService {
         }
         PricingDecisionSalesViewDto salesView = decisions.findApprovedSalesView(pricingRequestId)
             .orElseThrow(() -> new ApiException(HttpStatus.CONFLICT, "ยังไม่มีราคาขายที่ CEO อนุมัติสำหรับคำขอราคานี้"));
+        // GLA-123 slice S1 fix (Opus review M2, 2026-09-20): mutual exclusivity — refuse starting
+        // the OLD chain if the NEW one (DealQuotationService#createFromPricingRequest) already
+        // has a live quotation for this PR. Mirror image of that method's own check.
+        if (dealQuotations != null && dealQuotations.hasLivePricingRequestQuotation(pricingRequestId)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "คำขอราคานี้มีใบเสนอราคา (แบบใหม่) อยู่แล้ว ไม่สามารถสร้างใบเสนอราคาแบบเดิมซ้ำได้");
+        }
 
         List<NewItem> items = new ArrayList<>();
         for (PricingDecisionSalesItemDto item : salesView.items()) {
@@ -153,8 +174,13 @@ public class CustomerQuotationService {
         TicketSummaryDto ticket = requireTicketSummary(summary.ticketId());
         CustomerDto customer = ticket.customerId() != null ? customers.findById(ticket.customerId()).orElse(null) : null;
 
+        // Owner ruling 2026-09-18: the FIRST quotation on this chain is numbered exactly like the
+        // direct quotation flow already is — "QT-<year>-<seq>-1", the suffix starting at 1 from
+        // the very first document, not a bare number. QuotationNumbering is shared with
+        // DealQuotationRepository so the two flows can never drift on this format.
+        String number = QuotationNumbering.revisionNumber(quotations.nextQuotationCode(), 1);
         long id = quotations.insertDraft(new InsertDraftParams(
-            summary.ticketId(), pricingRequestId, salesView.pricingDecisionId(), summary.recipientType(),
+            summary.ticketId(), number, pricingRequestId, salesView.pricingDecisionId(), summary.recipientType(),
             summary.recipientLabel(), actor.id(), clientRequestId, blankToNull(request.paymentTerms()),
             blankToNull(request.leadTime()), blankToNull(request.deliveryTerms()), request.validityDate(),
             blankToNull(request.customerNotes()), null, 1, subtotal, salesView.currency(),
@@ -467,11 +493,28 @@ public class CustomerQuotationService {
         TicketSummaryDto ticket = requireTicketSummary(summary.ticketId());
         CustomerDto customer = ticket.customerId() != null ? customers.findById(ticket.customerId()).orElse(null) : null;
 
+        // Owner ruling 2026-09-18: a revision is versioning, not a new document — it keeps the
+        // SAME base number and bumps the "-n" suffix, exactly like the direct quotation flow
+        // (DealQuotationRepository#baseNumber/#revisionNumber, shared here via
+        // QuotationNumbering). This used to call quotations.nextQuotationCode() and mint an
+        // entirely unrelated number for every revision.
+        //
+        // baseNumber() also carries the legacy-bare-number fallback: a quotation issued BEFORE
+        // this change has no "-1" suffix at revisionNo == 1 (those rows are never rewritten — see
+        // QuotationNumbering's Javadoc), so revising one produces "{bare}-2", not "{bare}-1" and
+        // not a fresh code.
+        // nextRevisionNo (not source.quotationRevisionNo() + 1) — see that repository method's own
+        // Javadoc: source is read before lockPricingRequest's advisory lock, so a concurrent second
+        // caller against the same still-ISSUED quotation must not recompute the SAME revision
+        // number a winning racer already committed.
+        String baseNumber = QuotationNumbering.baseNumber(source.number(), source.quotationRevisionNo());
+        int newRevisionNo = quotations.nextRevisionNo(summary.id(), baseNumber);
+        String number = QuotationNumbering.revisionNumber(baseNumber, newRevisionNo);
         long newId = quotations.insertDraft(new InsertDraftParams(
-            summary.ticketId(), summary.id(), salesView.pricingDecisionId(), summary.recipientType(),
+            summary.ticketId(), number, summary.id(), salesView.pricingDecisionId(), summary.recipientType(),
             summary.recipientLabel(), actor.id(), clientRequestId, source.paymentTerms(), source.leadTime(),
             source.deliveryTerms(), source.validityDate(), source.customerNotes(), source.id(),
-            source.quotationRevisionNo() + 1, subtotal, salesView.currency(), ticket.customerName(),
+            newRevisionNo, subtotal, salesView.currency(), ticket.customerName(),
             customer != null ? customer.address() : null, customer != null ? customer.taxId() : null,
             customer != null ? customer.phone() : null, ticket.projectName(), items));
 
@@ -480,7 +523,7 @@ public class CustomerQuotationService {
         quotations.supersede(source.id());
 
         addPricingRequestEvent(summary, actor, PricingRequestEventKind.CUSTOMER_QUOTATION_REVISED,
-            "สร้างใบเสนอราคาลูกค้า revision " + (source.quotationRevisionNo() + 1)
+            "สร้างใบเสนอราคาลูกค้า revision " + newRevisionNo
                 + (request.reason() != null && !request.reason().isBlank() ? " — " + request.reason().trim() : ""));
         CustomerQuotationDto created = requireQuotation(newId);
         // Currently inert here too (see create()'s identical comment) — every item on a revision
@@ -521,11 +564,33 @@ public class CustomerQuotationService {
         }
         CustomerQuotationDto quotation = requireQuotation(quotationId);
         requireEditAccess(quotation, actor);
+        // GLA-123 slice S3 MAJOR 3 fix (Opus review against real Postgres, 2026-09-23): this used
+        // to take lockTicketForUpdate (FOR UPDATE on sales.ticket) BEFORE lockPricingRequest (the
+        // advisory lock on the PR id) — the OPPOSITE order every other path in this class
+        // (#issue) and DealQuotationService#approveAndIssuePricingRequestOrigin already takes:
+        // advisory lock first, THEN a ticket-row touch later in the same transaction (addEvent's
+        // own FK acquires FOR KEY SHARE on sales.ticket). Two transactions taking the SAME two
+        // locks in opposite orders is a textbook deadlock, and it reproduced live against real
+        // Postgres: "ERROR: deadlock detected ... FOR KEY SHARE OF x". Swapped to match every
+        // other path — pricing-request advisory lock FIRST, ticket-row lock second. R8 still
+        // serialises correctly: hasAcceptedQuotation is checked below AFTER both locks are held,
+        // so it does not matter which one was acquired first, only that the ticket row IS locked
+        // before that check runs — which it still is.
         quotations.lockPricingRequest(quotation.pricingRequestId());
+        tickets.lockTicketForUpdate(quotation.ticketId());
         String outcomeClientRequestId = validateUuid(request.clientRequestId());
         if (outcomeClientRequestId != null) {
             Optional<Long> replay = quotations.findIdByOutcomeClientRequestId(actor.id(), outcomeClientRequestId);
             if (replay.isPresent()) {
+                // MINOR-2 fix (Opus review, 2026-09-23) — mirrors #issue's own identical guard
+                // (:337): a replay resolving to a DIFFERENT quotation than the one this call
+                // actually named is a genuine conflict, not a silent "success" — without this, the
+                // caller would get back some OTHER quotation's DTO with no outcome recorded on the
+                // one they meant to act on, and no error to notice it by.
+                if (replay.get() != quotationId) {
+                    throw new ApiException(HttpStatus.CONFLICT,
+                        "clientRequestId ถูกใช้ไปแล้วกับใบเสนอราคาอื่น");
+                }
                 return requireQuotation(replay.get());
             }
         }
@@ -534,8 +599,29 @@ public class CustomerQuotationService {
             throw new ApiException(HttpStatus.CONFLICT,
                 "บันทึกผลได้เฉพาะใบเสนอราคาที่ออกแล้วเท่านั้น (ปัจจุบัน: " + fresh.docStatus() + ")");
         }
-        int rows = quotations.recordOutcome(quotationId, request.outcome(), blankToNull(request.customerNote()),
-            actor.id(), outcomeClientRequestId);
+        // R8: refused when ANY quotation on this TICKET is already ACCEPTED — the new
+        // PRICING_REQUEST-origin engine included, since both write the SAME sales.quotation table.
+        if (QuotationStatus.ACCEPTED.equals(request.outcome()) && tickets.hasAcceptedQuotation(fresh.ticketId())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ดีลนี้มีใบเสนอราคาที่ลูกค้ายอมรับแล้วฉบับหนึ่ง — ยอมรับซ้ำอีกฉบับไม่ได้ (R8)");
+        }
+        // MINOR-3 fix (Opus review, 2026-09-23): V75's own (issued_by, outcome_client_request_id)
+        // partial unique index is TABLE-WIDE (both origins share sales.quotation), but the two
+        // engines' own #findIdByOutcomeClientRequestId lookups are now each origin-scoped (this
+        // one origin IS NULL, DealQuotationRepository's origin = 'PRICING_REQUEST' — see that
+        // method's own MINOR-2 Javadoc). So the SAME actor reusing a clientRequestId across the
+        // two recordOutcome endpoints no longer replay-matches on EITHER side, and instead
+        // deterministically hits the DB constraint here as a bare DataIntegrityViolationException
+        // — a 500 with no Thai message. Scoping the index itself by origin (a migration) was
+        // judged not worth it for this slice; catching the violation and turning it into the same
+        // clean 409 #issue's own wrong-quotation guard above already uses is the cheaper fix.
+        int rows;
+        try {
+            rows = quotations.recordOutcome(quotationId, request.outcome(), blankToNull(request.customerNote()),
+                actor.id(), outcomeClientRequestId);
+        } catch (org.springframework.dao.DataIntegrityViolationException e) {
+            throw new ApiException(HttpStatus.CONFLICT, "clientRequestId ถูกใช้ไปแล้วกับใบเสนอราคาอื่น");
+        }
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาถูกเปลี่ยนแปลงโดยผู้ใช้อื่น");
         }

@@ -30,15 +30,24 @@
 // edge already has -- just reached from a DRAFT parent instead of an APPROVED one. Hence DRAFT's
 // own SUPERSEDED edge below (mirrors DealQuotationRepository#supersede's own WHERE clause, widened
 // the same way and for the same reason).
+// GLA-123 slice S2 — a PRICING_REQUEST-origin quotation's own tail, added onto the SAME shared
+// map: DRAFT -> PENDING_APPROVAL -> (one approval, by sales_manager or ceo) -> ISSUED ->
+// (validity_date passes) -> EXPIRED. `ISSUED`/`EXPIRED` are UNREACHABLE for a DEAL_DIRECT row in practice (its
+// own single-shot approve() only ever requests the APPROVED edge, and D5 says a DEAL_DIRECT
+// quotation never expires) — widening this shared abstract graph does not loosen what a
+// DEAL_DIRECT row can actually reach, since that is decided by which edge a caller requests, not
+// by which edges the table allows.
 export const DEAL_QUOTATION_TRANSITIONS = {
   DRAFT: ['PENDING_APPROVAL', 'CANCELLED', 'SUPERSEDED'],
-  PENDING_APPROVAL: ['APPROVED', 'DRAFT'],
+  PENDING_APPROVAL: ['APPROVED', 'DRAFT', 'ISSUED'],
   // The APPROVED/DRAFT -> SUPERSEDED edges are the side effect of a child revision being
   // approved, not a status a caller ever requests directly (there is no "supersede" endpoint in
   // the plan).
   APPROVED: ['SUPERSEDED'],
   SUPERSEDED: [],
   CANCELLED: [],
+  ISSUED: ['EXPIRED'],
+  EXPIRED: [],
 };
 
 export function canTransitionDealQuotation(from, to) {
@@ -60,6 +69,10 @@ const DEAL_QUOTATION_STATUS_LABELS = {
   // the plain, unremarkable end state it actually is.
   SUPERSEDED: { label: 'ฉบับที่ไม่ได้ใช้แล้ว', tone: 'neutral' },
   CANCELLED: { label: 'ยกเลิก', tone: 'danger' },
+  // GLA-123 slice S2 — only ever reached by a PRICING_REQUEST-origin row (D5: DEAL_DIRECT never
+  // expires and never separately "issues" — its own APPROVED is terminal-until-revised).
+  ISSUED: { label: 'ออกใบแล้ว', tone: 'success' },
+  EXPIRED: { label: 'หมดอายุ', tone: 'neutral' },
 };
 
 export function dealQuotationStatusLabel(status) {
@@ -155,6 +168,34 @@ export function canDecideDealQuotation(user, quotation) {
   return canApproveDealQuotation(user) && quotation?.docStatus === 'PENDING_APPROVAL';
 }
 
+// ── GLA-123 slice S2, REWORKED (owner reversed the dual-approval design, 2026-09-20). There is no
+// second slot any more: canDecideDealQuotation/canApproveDealQuotation above already gate a
+// PRICING_REQUEST-origin quotation's approval exactly the same as a DEAL_DIRECT one (either role,
+// one call, done) — the ONE thing this origin adds on top is the CEO-required-when-changed gate
+// below, which the editor uses to explain (not merely block) a sales_manager's disabled button.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+
+/** Whether this PRICING_REQUEST-origin quotation no longer matches the CEO's own decision — ANY
+ * line's price/discount, the header price mode, or a removed CEO-linked line — mirrors
+ * DealQuotationService#requireCeoApprovalIfChanged's own comparison exactly (client-side echo for
+ * UI wording ONLY; the server recomputes this itself and never trusts a flag from here). Always
+ * `false` for a DEAL_DIRECT quotation, which has no CEO decision to compare against. */
+export function dealQuotationRequiresCeoApproval(quotation) {
+  if (!quotation || quotation.origin !== 'PRICING_REQUEST') return false;
+  return Boolean(quotation.priceModeChangedFromCeo)
+    || (quotation.items ?? []).some((item) => item.priceChangedFromCeo)
+    || (quotation.itemsRemovedFromCeoCount ?? 0) > 0;
+}
+
+/** canDecideDealQuotation, further refused for a sales_manager once the quotation no longer
+ * matches the CEO's decision — the one case an otherwise-eligible sales_manager may NOT approve.
+ * Always agrees with canDecideDealQuotation for a ceo (the CEO's own authority is never gated by
+ * this) or a DEAL_DIRECT quotation (dealQuotationRequiresCeoApproval is always false there). */
+export function canApproveDealQuotationNow(user, quotation) {
+  if (!canDecideDealQuotation(user, quotation)) return false;
+  return user?.role === 'ceo' || !dealQuotationRequiresCeoApproval(quotation);
+}
+
 /** Mirrors the plan's "view/list/download" role set exactly: sales (own deals), sales_manager,
  * ceo, import, account (the latter two read-only) -- OR a canCreateQuotation-granted employee,
  * who may view any deal (DealQuotationService.requireViewAccess: the grant already lets them
@@ -230,6 +271,11 @@ export const WASTAGE_PERCENT_PRESETS = [0, 5, 10];
 
 // ประเทศต้นทาง select + its default lead-time range (min/max days), editable per line. Mirrors
 // the plan's "อิตาลี/สเปน/จีน/ไทย-สต็อก/อื่นๆ" list exactly, in that order.
+//
+// Mirrored (NOT shared) by backend/src/main/java/th/co/glr/hr/importrequest/LeadTimeDefaults.java,
+// which autofills the same four ranges onto a per-factory ใบขอซื้อ DRAFT (V184, owner decision
+// 09-18 #2). Two independent copies of the same numbers, one per runtime -- there is no guard
+// against them drifting apart; see that class's own Javadoc.
 export const ORIGIN_COUNTRY_OPTIONS = [
   { code: 'อิตาลี', label: 'อิตาลี', leadTimeMinDays: 75, leadTimeMaxDays: 90 },
   { code: 'สเปน', label: 'สเปน', leadTimeMinDays: 75, leadTimeMaxDays: 90 },
@@ -301,6 +347,70 @@ export function defaultDealQuotationStatusTab(user) {
 
 export function dealQuotationStatusTab(key) {
   return DEAL_QUOTATION_STATUS_TABS.find((tab) => tab.key === key) ?? null;
+}
+
+// ── Global list scope (owner ruling 2026-09-24) ─────────────────────────────────────────────
+// Mirrors DealQuotationService.listOwnerScope / LIST_SEE_ALL_ROLES: on the GLOBAL LIST only,
+// sales_manager/ceo see every deal's quotations; everyone else (sales, import, account, and any
+// canCreateQuotation grant-holder) sees only quotations on deals they created. This is a
+// PRESENTATION HINT ONLY -- it drives whether the rep filter dropdown is shown; the server (and
+// mockApi.js's scopedDealQuotationsFor) has already scoped the rows before they ever reach the
+// client, so getting this predicate wrong could at most show/hide a filter control, never leak a
+// row. Do not treat this as an authz check.
+
+/** Whether this user's global `/quotations` list already contains every deal (so a "filter by
+ * rep" control makes sense), per the 2026-09-24 ruling. */
+export function dealQuotationListSeesAll(user) {
+  return user?.role === 'sales_manager' || user?.role === 'ceo';
+}
+
+/** Distinct `{ id, name }` options for the rep filter dropdown, derived from the ROWS actually on
+ * the list (not a department/role listing) -- so a non-sales grant-holder who owns a visible
+ * quotation is offered as an option too, and no option is ever offered for someone who owns
+ * nothing on the current list. Skips rows with no `salesRepId`, dedupes by id, and sorts by name
+ * with Thai collation. */
+export function dealQuotationRepOptions(rows) {
+  const byId = new Map();
+  (rows ?? []).forEach((row) => {
+    if (row?.salesRepId == null) return;
+    const id = String(row.salesRepId);
+    if (!byId.has(id)) byId.set(id, { id, name: row.salesRepName ?? id });
+  });
+  return Array.from(byId.values()).sort((a, b) => a.name.localeCompare(b.name, 'th'));
+}
+
+/** The ยอดรวม (grand total) filter boundary (owner ask 2026-09-24): a row is "ต่ำกว่าหนึ่งล้าน"
+ * when grandTotal < this, and "มากกว่าหนึ่งล้านบาท" when >= this. `>=` (not `>`) owns the exact
+ * 1,000,000 boundary so no row is ever unclassifiable between the two buckets. */
+export const DEAL_QUOTATION_AMOUNT_THRESHOLD = 1000000;
+
+/** The two ยอดรวม filter options offered to see-all roles (sales_manager/ceo), in display order.
+ * `''` ("ทั้งหมด") is added by the caller as the leading option. */
+export const DEAL_QUOTATION_AMOUNT_OPTIONS = [
+  { value: 'lt1m', label: 'ต่ำกว่าหนึ่งล้าน' },
+  { value: 'gte1m', label: 'มากกว่าหนึ่งล้านบาท' },
+];
+
+/** Client-side, presentation-only narrowing of an already-server-scoped row list -- NOT a
+ * security boundary (see the section comment above). `repId` filters on `row.salesRepId`
+ * (string-compared, so `''`/`null`/`undefined` all mean "no filter"); `text` matches
+ * case-insensitively against `${customerName} ${projectName}`; `amount` is `'lt1m'` (grandTotal
+ * below {@link DEAL_QUOTATION_AMOUNT_THRESHOLD}) or `'gte1m'` (at/above it), anything else meaning
+ * "no filter". All three compose with AND, each is a no-op when empty/absent, and the function is
+ * null-safe throughout. */
+export function filterDealQuotationRows(rows, { repId = '', text = '', amount = '' } = {}) {
+  let list = rows ?? [];
+  if (repId) list = list.filter((row) => String(row?.salesRepId ?? '') === String(repId));
+  const needle = (text ?? '').trim().toLowerCase();
+  if (needle) {
+    list = list.filter((row) => `${row?.customerName ?? ''} ${row?.projectName ?? ''}`.toLowerCase().includes(needle));
+  }
+  if (amount === 'lt1m') {
+    list = list.filter((row) => Number(row?.grandTotal ?? 0) < DEAL_QUOTATION_AMOUNT_THRESHOLD);
+  } else if (amount === 'gte1m') {
+    list = list.filter((row) => Number(row?.grandTotal ?? 0) >= DEAL_QUOTATION_AMOUNT_THRESHOLD);
+  }
+  return list;
 }
 
 // ── ตำแหน่งติดตั้ง location groups (owner feedback F1, 2026-09-10) ────────────────────────────
@@ -414,6 +524,67 @@ export function emptyLocationGroupIds(groups, items) {
  */
 export function isDealQuotationNeedingRework(row) {
   return row?.docStatus === 'DRAFT' && (row.approvalNote != null || row.parentQuotationId != null);
+}
+
+// ── CEO-comparison marker: LOCAL, unsaved-window mirror (coordinator follow-up, 2026-09-20) ──
+// Bug: QuotationItemRow's "เปลี่ยนจากราคา CEO" marker read ONLY `item.priceChangedFromCeo`, a
+// server-computed flag that is frozen at whatever the last successful save carried. A row with
+// validation errors never autosaves (QuotationEditorPage gates autosave on
+// !hasValidationErrors), so editing ส่วนลด on such a row left the badge reading "✓ ราคาจาก CEO"
+// — "this is the CEO's own price" — right next to a number the rep had just typed something
+// else into. The fix is a client-side mirror of the exact same comparison, evaluated against the
+// CURRENT (possibly unsaved) local field values, so the marker updates the instant the field
+// changes rather than only after a round trip.
+
+/** Null-safe numeric equality for a CEO-comparison field. Mirrors
+ * `DealQuotationRepository#moneyEquals`'s BigDecimal `compareTo` (scale-insensitive: 10 and 10.00
+ * are the same value) using a tiny epsilon instead of a decimal type, since these are plain typed
+ * JS numbers, not persisted NUMERIC columns — there is no scale to normalize, only float
+ * representation to tolerate. Treats `''`/`null`/`undefined` uniformly as "nothing typed yet". */
+function localMoneyEquals(a, b) {
+  const na = a === '' || a == null ? null : Number(a);
+  const nb = b === '' || b == null ? null : Number(b);
+  if (na == null || nb == null) return na === nb;
+  if (Number.isNaN(na) || Number.isNaN(nb)) return false;
+  return Math.abs(na - nb) < 1e-6;
+}
+
+/**
+ * Client-side mirror of `DealQuotationRepository#priceChangedFromCeo`, evaluated against the
+ * item's CURRENT local editor fields (`unitPrice`/`discountPct`/`specialPriceSqm`/
+ * `directNetPrice` — the exact fields QuotationItemRow's own inputs `patch`) instead of what is
+ * on disk. Reuses the SAME `ceo*` fields the server already joined onto the item (never
+ * re-derives them) and the SAME per-mode field selection, zeroIfNull convention on
+ * `discountPct`, and "unrecognised mode always reads changed" default as the backend — see that
+ * method's own Javadoc for why each rule exists. `priceMode` must be the DOCUMENT's CURRENT mode
+ * (`docSettings.priceMode`, which may itself be an unsaved local switch), not the CEO's frozen
+ * `ceoPriceMode` — exactly like the backend compares against its own currently-SAVED price_mode,
+ * never the CEO's original one.
+ *
+ * Callers OR this with the server's `item.priceChangedFromCeo` (never replace it) so the server
+ * flag stays authoritative once a save lands — after a successful save, `ceo*` and the local
+ * fields are both in sync (MAJOR-2's whitelist merge refreshes `ceo*` from the response; the
+ * local fields already equal whatever was just PUT), so this function and the server flag are
+ * guaranteed to agree; OR-ing only changes anything during the unsaved window this fix targets.
+ */
+export function isTilePriceChangedFromCeoLocally(item, priceMode) {
+  if (item.ceoListUnitPrice == null && item.ceoDiscountPct == null
+      && item.ceoSpecialPriceSqm == null && item.ceoDirectNetPrice == null) {
+    // Unlinked row (no decision item) — nothing to compare against, mirrors the backend's own
+    // "every ceo_* column came back null" short-circuit.
+    return false;
+  }
+  if (priceMode === 'SPECIAL_SQM') {
+    return !localMoneyEquals(item.specialPriceSqm, item.ceoSpecialPriceSqm);
+  }
+  if (priceMode === 'DIRECT_NET') {
+    return !localMoneyEquals(item.directNetPrice, item.ceoDirectNetPrice);
+  }
+  if (priceMode === 'NET') {
+    return !localMoneyEquals(item.unitPrice, item.ceoListUnitPrice)
+      || !localMoneyEquals(item.discountPct ?? 0, item.ceoDiscountPct ?? 0);
+  }
+  return true;
 }
 
 // ── แผ่น/ตร.ม. (owner feedback 2026-09-12) ───────────────────────────────────────────────────────
@@ -769,7 +940,8 @@ export function sizeTextDiffersFromCatalogFaceSize(sizeText, catalogSizeText) {
 // checklist that blocks บันทึกร่าง/ส่งขออนุมัติ alike (buildQuotationChecklist's `itemErrorsByRow`)
 // must keep calling this with the default. Only a SUBMIT-specific caller passes `true` — see
 // QuotationEditorPage's own `submitItemErrorsByRow`.
-export function validateQuotationItem(item, priceMode = 'NET', documentLanguage = 'TH', { requireLeadTime = false } = {}) {
+export function validateQuotationItem(item, priceMode = 'NET', documentLanguage = 'TH',
+  { requireLeadTime = false, skipPricing = false, requireOriginCountry = false } = {}) {
   if (lineTypeOf(item) === LINE_TYPE_PLAIN) return validatePlainItem(item);
   // English per-sqm (owner decision 2026-09-13): the USD/ตร.ม. IS the unit price.
   const perSqm = isEnglishPerSqm(priceMode, documentLanguage);
@@ -788,20 +960,27 @@ export function validateQuotationItem(item, priceMode = 'NET', documentLanguage 
     errors.piecesPerBox = 'กรุณาระบุแผ่น/กล่อง';
   }
   if (!(Number(item?.sqmPerPiece) > 0)) errors.sqmPerPiece = 'กรุณาระบุแผ่น/ตร.ม.';
-  if (priceMode === 'DIRECT_NET') {
-    if (!(Number(item?.directNetPrice) > 0)) errors.directNetPrice = 'กรุณาระบุราคาสุทธิ/แผ่น';
-    // Optional here, but a typed one must still be positive — the server refuses a non-positive
-    // unitPrice on every TILE row whatever the mode.
-    if (item?.unitPrice !== '' && item?.unitPrice != null && !(Number(item.unitPrice) > 0)) {
-      errors.unitPrice = 'ราคาตั้งต้องมากกว่าศูนย์';
+  // skipPricing (V185, PricingRequestCreateModal): the PCR item form has NO price/discount inputs
+  // at all in this phase (CEO pricing is a later phase) — every check below this line is about a
+  // price field this form never renders, so none of them apply. Everything ABOVE (model through
+  // sqmPerPiece/piecesPerBox) and BELOW (quantity, lead time) still does — the PCR form requires
+  // the exact same non-price fields the direct-deal form does (owner ruling).
+  if (!skipPricing) {
+    if (priceMode === 'DIRECT_NET') {
+      if (!(Number(item?.directNetPrice) > 0)) errors.directNetPrice = 'กรุณาระบุราคาสุทธิ/แผ่น';
+      // Optional here, but a typed one must still be positive — the server refuses a non-positive
+      // unitPrice on every TILE row whatever the mode.
+      if (item?.unitPrice !== '' && item?.unitPrice != null && !(Number(item.unitPrice) > 0)) {
+        errors.unitPrice = 'ราคาตั้งต้องมากกว่าศูนย์';
+      }
+    } else if (!perSqm && !(Number(item?.unitPrice) > 0)) {
+      errors.unitPrice = priceMode === 'SPECIAL_SQM' ? 'กรุณาระบุราคาตั้ง (บาท/แผ่น)' : 'กรุณาระบุราคา/หน่วย';
     }
-  } else if (!perSqm && !(Number(item?.unitPrice) > 0)) {
-    errors.unitPrice = priceMode === 'SPECIAL_SQM' ? 'กรุณาระบุราคาตั้ง (บาท/แผ่น)' : 'กรุณาระบุราคา/หน่วย';
-  }
-  if (priceMode === 'SPECIAL_SQM') {
-    if (!(Number(item?.specialPriceSqm) > 0)) {
-      errors.specialPriceSqm = perSqm ? 'กรุณาระบุราคา (USD/ตร.ม.)' : 'กรุณาระบุราคาพิเศษ (บาท/ตร.ม.)';
-    } else if (!withinDecimals(item.specialPriceSqm, 2)) errors.specialPriceSqm = 'ทศนิยมได้ไม่เกิน 2 ตำแหน่ง';
+    if (priceMode === 'SPECIAL_SQM') {
+      if (!(Number(item?.specialPriceSqm) > 0)) {
+        errors.specialPriceSqm = perSqm ? 'กรุณาระบุราคา (USD/ตร.ม.)' : 'กรุณาระบุราคาพิเศษ (บาท/ตร.ม.)';
+      } else if (!withinDecimals(item.specialPriceSqm, 2)) errors.specialPriceSqm = 'ทศนิยมได้ไม่เกิน 2 ตำแหน่ง';
+    }
   }
   // ตร.ม./กล่อง itself is now OPTIONAL (Option B) — no "required" check here at all, only a
   // decimal-places check on whatever value IS typed. A blank value derives the printed sqm
@@ -843,6 +1022,15 @@ export function validateQuotationItem(item, priceMode = 'NET', documentLanguage 
   // — SUBMIT only (see this function's own Javadoc for why the default leaves it off).
   if (requireLeadTime && (item?.leadTimeMinDays == null || item?.leadTimeMaxDays == null)) {
     errors.leadTimeMinDays = 'กรุณาระบุระยะเวลานำเข้า (วัน)';
+  }
+  // GLA-125 (owner ruling 2026-09-18): ประเทศต้นทาง is required on the PCR form only
+  // (requireOriginCountry) — direct-deal keeps it optional (default false, unchanged).
+  if (requireOriginCountry) {
+    if (!item?.originCountry?.trim()) {
+      errors.originCountry = 'กรุณาระบุประเทศต้นทาง';
+    } else if (item.originCountry === 'อื่นๆ' && !item?.originCountryOther?.trim()) {
+      errors.originCountryOther = 'กรุณาระบุชื่อประเทศต้นทาง';
+    }
   }
   return errors;
 }

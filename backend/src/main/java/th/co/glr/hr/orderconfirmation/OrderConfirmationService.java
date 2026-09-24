@@ -1,5 +1,6 @@
 package th.co.glr.hr.orderconfirmation;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -81,6 +82,17 @@ public class OrderConfirmationService {
     private final CustomerQuotationRepository quotations;
     private final DepositNoticeService depositNotices;
     private final NotificationRepository notifications;
+    // GLA-123 slice S3 BLOCKER 2 fix — read-only dependency onto the new engine, used ONLY by
+    // #reconcileTicketItems to prefer an ACCEPTED PRICING_REQUEST-origin quotation's own line
+    // quantities over the PR item's authored ones. SETTER-injected (not a constructor parameter),
+    // matching DealQuotationService's own established device (see its
+    // #wirePricingRequestDependencies Javadoc): 12 existing hand-wired
+    // `new OrderConfirmationService(...)` test call sites keep compiling unchanged, Spring wires
+    // it automatically via the @Autowired setter in production, and #reconcileTicketItems
+    // null-guards so an unwired test (every one of the 12 that never exercises a
+    // PRICING_REQUEST-origin PR) is unaffected either way — falling back to the PR item's own
+    // quantity, which is what those tests' legacy-origin fixtures need regardless.
+    private th.co.glr.hr.dealquotation.DealQuotationRepository dealQuotations;
 
     public OrderConfirmationService(PricingRequestRepository pricingRequests, TicketRepository tickets,
                                     TicketService ticketService, CustomerQuotationRepository quotations,
@@ -91,6 +103,14 @@ public class OrderConfirmationService {
         this.quotations = quotations;
         this.depositNotices = depositNotices;
         this.notifications = notifications;
+    }
+
+    /** GLA-123 slice S3 BLOCKER 2 fix — see {@link #dealQuotations}'s own Javadoc for why this is
+     * setter- rather than constructor-injected. {@code required = false} so a hand-wired test that
+     * never exercises a PRICING_REQUEST-origin confirmOrder is unaffected either way. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void wireDealQuotationRepository(th.co.glr.hr.dealquotation.DealQuotationRepository dealQuotations) {
+        this.dealQuotations = dealQuotations;
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -268,14 +288,43 @@ public class OrderConfirmationService {
      */
     private void reconcileTicketItems(long pricingRequestId, long ticketId, UserPrincipal actor) {
         List<PricingRequestItemDto> items = pricingRequests.findItems(pricingRequestId);
+        // GLA-123 slice S3 BLOCKER 2 fix — see DealQuotationRepository
+        // #findAcceptedItemQuantitiesByPricingRequest's own Javadoc. Empty (not merely unwired)
+        // whenever this PR's accepted quotation is on the LEGACY engine or there is none yet — the
+        // legacy engine has no per-line quantity edit at all, so falling back to the PR item's own
+        // requestedQty()/requestedQtySqm() below is correct there, not a compromise.
+        java.util.Map<Long, th.co.glr.hr.dealquotation.DealQuotationRepository.AcceptedItemQty> acceptedByPrItemId =
+            dealQuotations != null
+                ? dealQuotations.findAcceptedItemQuantitiesByPricingRequest(pricingRequestId)
+                : java.util.Map.of();
         boolean anyChange = false;
         for (PricingRequestItemDto item : items) {
             String unitBasis = mapUnitBasisToTicketItem(item.requestedUnitBasis());
+            // The customer ACCEPTED this quantity on the quotation, not necessarily what the PR
+            // was authored with (S1 explicitly lets sales edit qty/เผื่อ on a PRICING_REQUEST-origin
+            // quotation without CEO re-approval — see requireCeoApprovalIfChanged's own exclusion).
+            th.co.glr.hr.dealquotation.DealQuotationRepository.AcceptedItemQty accepted =
+                acceptedByPrItemId.get(item.id());
+            BigDecimal reconciledQty = accepted != null ? accepted.qty() : item.requestedQty();
+            // GLA-123 slice S3 MAJOR-B fix (Opus review against real Postgres, 2026-09-23): qty
+            // used to move (BLOCKER 2's own fix) while qty_sqm silently kept the PR's ORIGINAL,
+            // pre-edit area — reproduced live: qty=25.00 (correct) alongside qty_sqm=3.6000 (still
+            // the stale 10-piece area), a genuine contradiction between the two columns on the
+            // SAME row. Derives qty_sqm from the SAME accepted qty via the shared {@code
+            // WastageCalculator#sqmQuantityFromPieces} (never reimplemented here) whenever a
+            // sqm/piece basis is available on the accepted line; falls back to the PR item's own
+            // requestedQtySqm() when there is no accepted new-engine quotation (legacy engine —
+            // correct already, see comment above) or the accepted line has no sqm/piece basis
+            // (defensive only — every TILE row on this origin has one).
+            BigDecimal reconciledQtySqm = (accepted != null && accepted.sqmPerPiece() != null)
+                ? th.co.glr.hr.dealquotation.WastageCalculator.sqmQuantityFromPieces(
+                    reconciledQty.intValueExact(), accepted.sqmPerPiece())
+                : item.requestedQtySqm();
             if (item.sourceTicketItemId() != null) {
                 boolean changed;
                 try {
                     changed = tickets.reconcileItemQty(
-                        ticketId, item.sourceTicketItemId(), item.requestedQty(), item.requestedQtySqm());
+                        ticketId, item.sourceTicketItemId(), reconciledQty, reconciledQtySqm);
                 } catch (DataIntegrityViolationException e) {
                     throw new ApiException(HttpStatus.CONFLICT,
                         "ไม่สามารถปรับจำนวนสินค้า (item " + item.sourceTicketItemId()
@@ -287,7 +336,7 @@ public class OrderConfirmationService {
                 // to reconcile against, so one is created now (once), before it becomes visible
                 // to reserveStock/completeDelivery.
                 tickets.insertReconciledItem(ticketId, resolveBrand(item), item.model(), item.color(),
-                    item.texture(), item.size(), item.factory(), item.requestedQty(), item.requestedQtySqm(),
+                    item.texture(), item.size(), item.factory(), reconciledQty, reconciledQtySqm,
                     unitBasis);
                 anyChange = true;
             }

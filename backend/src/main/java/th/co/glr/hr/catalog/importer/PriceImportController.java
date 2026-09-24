@@ -46,6 +46,21 @@ public class PriceImportController {
         return user;
     }
 
+    /**
+     * PR-B REVIEW ROUND 1, B2: the owning sales rep hitting {@code ImportRequestFactoryCard}'s
+     * new-factory country picker (V184 createDrafts auto-create path, DealFulfilmentPanel.jsx) has
+     * no other way to read this list — {@link #requireImporter} left them 403'd and the picker
+     * rendered permanently empty. Country codes/names are not sensitive (unlike factory pricing),
+     * so READ widens to sales + sales_manager; every write on this controller (createFactory,
+     * updateFactory, and the factories list itself) stays import/ceo-only via
+     * {@link #requireImporter} above, unchanged.
+     */
+    private UserPrincipal requireCountriesReader(HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        sessions.requireAnyRole(user, "ceo", "import", "sales", "sales_manager");
+        return user;
+    }
+
     @GetMapping("/factories")
     List<Map<String, Object>> factories(HttpSession session) {
         requireImporter(session);
@@ -58,12 +73,13 @@ public class PriceImportController {
         String name = body.get("name");
         if (name == null || name.isBlank())
             throw new ApiException(HttpStatus.BAD_REQUEST, "ชื่อโรงงานห้ามว่าง");
-        return svc.createFactory(name, body.get("country"), body.get("defaultCurrency"),
-            body.get("email"), body.get("unit"));
+        return svc.createFactory(name, body.get("country"), body.get("countryOther"),
+            body.get("defaultCurrency"), body.get("email"), body.get("unit"));
     }
 
     /** Country is REQUIRED and validated — see {@code PriceImportService#createFactory}'s javadoc
-     * for the 500 this replaces. */
+     * for the 500 this replaces. {@code countryOther} (V184) follows the same {@code 'ZZ'}-pairing
+     * rule — see {@code PriceImportService#requireValidCountryOther}. */
     @PutMapping("/factories/{factoryId}")
     Map<String, Object> updateFactory(
         @PathVariable long factoryId,
@@ -74,15 +90,16 @@ public class PriceImportController {
         String name = body.get("name");
         if (name == null || name.isBlank())
             throw new ApiException(HttpStatus.BAD_REQUEST, "ชื่อโรงงานห้ามว่าง");
-        return svc.updateFactory(factoryId, name, body.get("country"), body.get("defaultCurrency"),
-            body.get("email"), body.get("unit"));
+        return svc.updateFactory(factoryId, name, body.get("country"), body.get("countryOther"),
+            body.get("defaultCurrency"), body.get("email"), body.get("unit"));
     }
 
     /** Backs the factory editor's country select, so a typo/unseeded free-text country can no
-     * longer reach {@code createFactory}/{@code updateFactory} and 500. */
+     * longer reach {@code createFactory}/{@code updateFactory} and 500. Also backs the STORED
+     * ใบขอซื้อ new-factory country picker (V184, PR-B) — see {@link #requireCountriesReader}. */
     @GetMapping("/countries")
     List<Map<String, Object>> countries(HttpSession session) {
-        requireImporter(session);
+        requireCountriesReader(session);
         return svc.listCountries();
     }
 

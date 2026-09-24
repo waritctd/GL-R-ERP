@@ -16,8 +16,16 @@ import { canCreateDealQuotation, dealQuotationStatusLabel } from './quotationMet
 /**
  * "ใบเสนอราคา" (Quotation v2, QUOTATION-V2-PLAN.md) -- this deal's direct quotations, mounted on
  * TicketDetailPage's documents tab ABOVE the PCR-chain DealQuotationPanel (which stays untouched
- * and unrelated: that panel renders CustomerQuotation rows off the PricingRequest chain; this one
- * renders `origin = 'DEAL_DIRECT'` rows the bypass feature writes -- the two never share a row).
+ * and unrelated: that panel renders CustomerQuotation rows off the PricingRequest chain).
+ *
+ * CORRECTION (S3 round-3 review, NEW-6, 2026-09-23): this used to say this panel renders ONLY
+ * `origin = 'DEAL_DIRECT'` rows and the two panels "never share a row" -- that stopped being true
+ * once round 1's MAJOR-4 fix widened DealQuotationRepository#findByTicket (which
+ * api.dealQuotations.listForTicket above reads from) to also return `origin = 'PRICING_REQUEST'`
+ * rows. DealQuotationService#listForTicket now filters those PRICING_REQUEST rows by
+ * #canViewPricingRequestOriginRow (sales-owner, sales_manager, ceo only -- see that method's own
+ * Javadoc), so for those roles THIS panel's `rows` can include a PRICING_REQUEST-origin quotation
+ * alongside any DEAL_DIRECT ones on the same deal, not only the latter.
  */
 export function DealDirectQuotationPanel({ ticketId, deal, user, showToast }) {
   const [downloadingKey, setDownloadingKey] = useState(null);
@@ -80,6 +88,15 @@ export function DealDirectQuotationPanel({ ticketId, deal, user, showToast }) {
                   <span className="text-2xs text-text-muted">
                     {q.approvedByName ? `อนุมัติโดย ${q.approvedByName} · ${formatThaiDate(q.approvedAt)}` : `สร้างเมื่อ ${formatThaiDate(q.createdAt)}`}
                   </span>
+                  {/* GLA-74 part 1 ("สร้างจากใบเดิม" / สั่งเหมือนเดิม) -- this family already sorts
+                      together by number (a clone shares its source's base), but carries no
+                      parentQuotationId, so without this note it would be indistinguishable from an
+                      ordinary first-issue document at a glance. */}
+                  {q.derivedFromQuotationId ? (
+                    <span className="text-2xs text-text-muted">
+                      สั่งเหมือนเดิมจาก {q.derivedFromQuotationNumber ?? `#${q.derivedFromQuotationId}`}
+                    </span>
+                  ) : null}
                 </div>
                 <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
                 <div className="flex gap-2">

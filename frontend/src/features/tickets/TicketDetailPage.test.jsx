@@ -4,6 +4,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TicketDetailPage } from './TicketDetailPage.jsx';
+import { ITEM_FIELD_META, missingQtyMessage } from './ticketItemFields.jsx';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 
@@ -45,6 +46,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         editItems: vi.fn(),
         downloadQuotationXlsx: vi.fn(),
         downloadQuotationPdf: vi.fn(),
+        remainingInvoiceOptions: vi.fn(),
         // Deal tracking (V83, Slice B1/B2 "kill the weekly report" — handoff 103).
         listActivities: vi.fn(),
         addActivity: vi.fn(),
@@ -91,6 +93,11 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         downloadCustomerQuotationPdf: vi.fn(),
         downloadCustomerQuotationXlsx: vi.fn(),
       },
+      // GLA-125: PricingRequestCreateModal's header-terms section fetches the same
+      // eligible-display-name list the direct-deal quotation editor uses.
+      dealQuotations: {
+        displayNameOptions: vi.fn().mockResolvedValue({ items: [] }),
+      },
       // Deposit (Phase 3 Slice S3 — handoff 105): DealDepositPanel reads/writes
       // this namespace directly, same pattern as pricingRequests above.
       depositNotices: {
@@ -99,6 +106,20 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         preview: vi.fn(),
         downloadXlsx: vi.fn(),
         downloadPdf: vi.fn(),
+        noteTemplates: vi.fn(),
+      },
+      // The STORED remaining invoice aggregate (V188, GLA-99 step 2) — RemainingInvoiceDialog
+      // always checks this first, so an undefined namespace would throw before it ever reaches
+      // the stateless preview (tickets.remainingInvoiceOptions) these tests exercise. Defaults to
+      // "no live document yet", matching every fixture below (none seeds a stored row).
+      storedRemainingInvoices: {
+        listForTicket: vi.fn().mockResolvedValue({ remainingInvoices: [] }),
+        createDraft: vi.fn(),
+        update: vi.fn(),
+        issue: vi.fn(),
+        revise: vi.fn(),
+        deleteDraft: vi.fn(),
+        download: vi.fn(),
       },
       // The items table converts a foreign-currency factory price to baht. Mocked because an
       // unmocked namespace makes every fxRates.list() call throw (api.fxRates is undefined),
@@ -113,6 +134,38 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         brands: vi.fn(),
         pages: vi.fn(),
         download: vi.fn(),
+      },
+      // PR-B REVIEW ROUND 1, S5: the STORED ใบขอซื้อรายโรงงาน (V184) section DealFulfilmentPanel
+      // added queries this for every canReadStoredIr viewer (sales owner/CEO/import/sales_manager)
+      // — same reason `importRequests` above is mocked: an undefined namespace throws a TypeError
+      // rather than resolving, which used to be silently swallowed into "no stored IRs" (S5's own
+      // fix now surfaces that as a genuine error instead, so this gap had to be closed here too).
+      // Defaults to an empty list — the everyday "not IR-tracked" case every legacy-chain test in
+      // this file assumes — and individual tests override with mockResolvedValueOnce where the
+      // per-factory aggregate itself is what's under test.
+      storedImportRequests: {
+        listForTicket: vi.fn().mockResolvedValue({ importRequests: [] }),
+        createDrafts: vi.fn(),
+        get: vi.fn(),
+        update: vi.fn(),
+        issue: vi.fn(),
+        revise: vi.fn(),
+        deleteDraft: vi.fn(),
+        advanceStep: vi.fn(),
+        setLeadTime: vi.fn(),
+        updateEmailDraft: vi.fn(),
+        markEmailSent: vi.fn(),
+        download: vi.fn(),
+        setRequiredByNote: vi.fn(),
+      },
+      priceImport: {
+        countries: vi.fn().mockResolvedValue([]),
+      },
+      // fix/ticket-edit-items-required-markers: edit-items mode's ยี่ห้อ/รุ่น fields now share
+      // TicketCreateModal's CatalogAutocompleteField, which searches this on every keystroke
+      // (debounced). Previously absent from this mock entirely — edit-items had no catalog search.
+      catalog: {
+        prices: vi.fn(),
       },
     },
   };
@@ -255,6 +308,9 @@ describe('TicketDetailPage', () => {
     api.tickets.completeDelivery.mockResolvedValue({ ticket: buildTicket() });
     api.tickets.revision.mockResolvedValue({ ticket: buildTicket() });
     api.tickets.editItems.mockResolvedValue({ ticket: buildTicket() });
+    // Default: no catalog matches. Tests that exercise the edit-items brand/model autocomplete
+    // set their own — see the "edit-items required fields" describe block below.
+    api.catalog.prices.mockResolvedValue({ items: [] });
     api.pricingRequests.listForTicket.mockResolvedValue({ items: [] });
     api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [] });
     api.tickets.listActivities.mockResolvedValue({ items: [] });
@@ -761,6 +817,11 @@ describe('TicketDetailPage', () => {
     expect(screen.getAllByText('฿400.00').length).toBeGreaterThan(0);
   });
 
+  // GLA-118 (owner ruling 2026-09-20, part A): renderTicketDetailPage()'s default actor is
+  // ceoUser, but confirmFinalPayment is account-only now (PAYMENT_RECORD_ROLES has no CEO
+  // fallback) — explicitly renders as accountUser so this UX-34 regression test still exercises
+  // a viewer who can actually reach the button, rather than silently asserting against a viewer
+  // who no longer can.
   it('UX-34: Final Payment opens a confirm dialog with the real outstanding amount instead of firing the mutation on click', async () => {
     api.tickets.get.mockResolvedValueOnce({
       ticket: buildTicket({
@@ -795,7 +856,7 @@ describe('TicketDetailPage', () => {
       }),
     });
 
-    renderTicketDetailPage();
+    renderTicketDetailPage(accountUser);
 
     const finalPaymentButton = await screen.findByRole('button', { name: 'ยืนยันชำระครบ (Final Payment)' });
     fireEvent.click(finalPaymentButton);
@@ -900,6 +961,10 @@ describe('TicketDetailPage', () => {
   // modals — see TicketCreateModal.jsx / DepositNoticePage.jsx for the same
   // aria-invalid + aria-describedby + role="alert" contract this mirrors. ──
 
+  // GLA-118 (owner ruling 2026-09-20, part A): renderTicketDetailPage()'s default actor is
+  // ceoUser, but recordPayment is account-only now (PAYMENT_RECORD_ROLES has no CEO fallback) —
+  // explicitly renders as accountUser so this inline-validation test still exercises a viewer who
+  // can actually reach the button.
   it('payment modal: submitting with an empty amount marks the amount field inline and does not call recordPayment', async () => {
     api.tickets.actions.mockResolvedValueOnce({
       currentState: {
@@ -908,7 +973,7 @@ describe('TicketDetailPage', () => {
       availableActions: [{ action: 'RECORD_PAYMENT', kind: 'payment', label: 'บันทึกรับชำระเงิน' }],
     });
 
-    renderTicketDetailPage();
+    renderTicketDetailPage(accountUser);
     // "บันทึกรับชำระเงิน" lives in the "การเงิน" tab's payment section now —
     // the Modal itself, once opened, stays mounted regardless of the active
     // tab (it's not inside any TabPanel).
@@ -993,9 +1058,13 @@ describe('TicketDetailPage', () => {
     api.tickets.get.mockResolvedValueOnce({
       ticket: buildTicket({
         summary: { status: 'submitted', createdById: 1 },
+        // brand/model/size all filled — fix/ticket-edit-items-required-markers added a
+        // ยี่ห้อ/รุ่น/ขนาด required-field check alongside this qty one (see the dedicated
+        // required-field describe block below), so this fixture stays valid on those three to
+        // isolate what this test is actually about: per-row qty errors, not required fields.
         items: [
-          { id: 70101, brand: 'SCG', model: 'A1', qty: 0, qtyDelivered: 0, qtyFromStock: 0, approvedPrice: null },
-          { id: 70102, brand: 'Cotto', model: 'B2', qty: 0, qtyDelivered: 0, qtyFromStock: 0, approvedPrice: null },
+          { id: 70101, brand: 'SCG', model: 'A1', size: '60x60', qty: 0, qtyDelivered: 0, qtyFromStock: 0, approvedPrice: null },
+          { id: 70102, brand: 'Cotto', model: 'B2', size: '30x30', qty: 0, qtyDelivered: 0, qtyFromStock: 0, approvedPrice: null },
         ],
       }),
     });
@@ -1016,9 +1085,13 @@ describe('TicketDetailPage', () => {
 
     // This is the headline assertion for this slice: the old code showed ONE
     // toast covering every row ("กรุณากรอกจำนวนสินค้าให้ครบทุกรายการ"); now
-    // each offending row gets its own inline error message and input.
-    const errors = await screen.findAllByText('กรุณากรอกจำนวนสินค้าของรายการนี้ให้ถูกต้อง');
-    expect(errors).toHaveLength(2);
+    // each offending row gets its own inline error message and input. The message text itself
+    // (fix/ticket-edit-items-required-markers, review round 2) is now the same basis-aware
+    // missingQtyMessage create uses — row-numbered, not the old generic
+    // "กรุณากรอกจำนวนสินค้าของรายการนี้ให้ถูกต้อง" — see the save handler's own comment for why
+    // aligning was evidence-backed rather than a silent behaviour change.
+    expect(await screen.findByText('กรุณากรอกจำนวน (แผ่น) ในรายการที่ 1')).toBeTruthy();
+    expect(await screen.findByText('กรุณากรอกจำนวน (แผ่น) ในรายการที่ 2')).toBeTruthy();
 
     const qtyInput0 = document.getElementById('edit-item-qty-0');
     const qtyInput1 = document.getElementById('edit-item-qty-1');
@@ -1032,7 +1105,8 @@ describe('TicketDetailPage', () => {
     fireEvent.change(qtyInput0, { target: { value: '3' } });
     await waitFor(() => expect(qtyInput0.getAttribute('aria-invalid')).toBeNull());
     expect(qtyInput1.getAttribute('aria-invalid')).toBe('true');
-    expect(screen.getAllByText('กรุณากรอกจำนวนสินค้าของรายการนี้ให้ถูกต้อง')).toHaveLength(1);
+    expect(screen.queryByText('กรุณากรอกจำนวน (แผ่น) ในรายการที่ 1')).toBeNull();
+    expect(screen.getByText('กรุณากรอกจำนวน (แผ่น) ในรายการที่ 2')).toBeTruthy();
 
     // Fixing row 2 too lets the save through with the unchanged payload shape.
     fireEvent.change(qtyInput1, { target: { value: '2' } });
@@ -1041,6 +1115,466 @@ describe('TicketDetailPage', () => {
     await waitFor(() => expect(api.tickets.editItems).toHaveBeenCalledTimes(1));
     expect(api.tickets.editItems.mock.calls[0][0]).toBe(701);
     expect(api.tickets.editItems.mock.calls[0][1].items.map((it) => it.qty)).toEqual([3, 2]);
+  });
+
+  // V183 (stock-sourced deal-line pricing, owner ruling): this is the post-creation edit
+  // screen — TicketCreateModal.jsx only covers deal-creation time, and the product owner asked
+  // for the same "จากสต็อก" flag + price to be settable here too, since TicketDetailPage is the
+  // only route into editItems/mergeEditedItemsPreservingPricing after a deal already exists.
+  it('edit-items: flagging a row "จากสต็อก" without a price blocks save, then submits with the price once filled', async () => {
+    api.tickets.get.mockResolvedValueOnce({
+      ticket: buildTicket({
+        summary: { status: 'submitted', createdById: 1 },
+        items: [
+          { id: 70101, brand: 'SCG', model: 'A1', size: '60x60', qty: 5, qtyDelivered: 0, qtyFromStock: 0, approvedPrice: null, sourcedFromStock: false, stockSalePrice: null },
+        ],
+      }),
+    });
+    api.tickets.actions.mockResolvedValueOnce({
+      currentState: {
+        lifecycle: 'ACTIVE', salesStage: 'LEAD', paymentStatus: null, fulfillmentStatus: null, status: 'submitted',
+      },
+      availableActions: [{ action: 'EDIT_ITEMS', kind: 'operational', label: 'แก้ไขรายการสินค้า' }],
+    });
+
+    renderTicketDetailPage(salesOwnerUser);
+
+    await openTab(/สินค้าและราคา/);
+    fireEvent.click(await screen.findByRole('button', { name: 'แก้ไขรายการสินค้า' }));
+
+    const checkbox = await screen.findByRole('checkbox', { name: 'จากสต็อก' });
+    expect(checkbox.checked).toBe(false);
+    fireEvent.click(checkbox);
+
+    // Checking the box reveals the required price input, empty by default.
+    const priceInput = document.getElementById('edit-item-stock-sale-price-0');
+    expect(priceInput).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
+    expect(await screen.findByText('กรุณากรอกราคาขายเมื่อเลือกสินค้าจากสต็อก')).toBeTruthy();
+    expect(priceInput.getAttribute('aria-invalid')).toBe('true');
+    expect(api.tickets.editItems).not.toHaveBeenCalled();
+
+    fireEvent.change(priceInput, { target: { value: '420.50' } });
+    await waitFor(() => expect(priceInput.getAttribute('aria-invalid')).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
+
+    await waitFor(() => expect(api.tickets.editItems).toHaveBeenCalledTimes(1));
+    expect(api.tickets.editItems.mock.calls[0][1].items[0]).toMatchObject({
+      sourcedFromStock: true,
+      stockSalePrice: 420.5,
+    });
+  });
+
+  it('edit-items: unchecking "จากสต็อก" on a previously stock-sourced row sends sourcedFromStock:false and a null price', async () => {
+    api.tickets.get.mockResolvedValueOnce({
+      ticket: buildTicket({
+        summary: { status: 'submitted', createdById: 1 },
+        items: [
+          { id: 70101, brand: 'SCG', model: 'A1', size: '60x60', qty: 5, qtyDelivered: 0, qtyFromStock: 0, approvedPrice: null, sourcedFromStock: true, stockSalePrice: 500 },
+        ],
+      }),
+    });
+    api.tickets.actions.mockResolvedValueOnce({
+      currentState: {
+        lifecycle: 'ACTIVE', salesStage: 'LEAD', paymentStatus: null, fulfillmentStatus: null, status: 'submitted',
+      },
+      availableActions: [{ action: 'EDIT_ITEMS', kind: 'operational', label: 'แก้ไขรายการสินค้า' }],
+    });
+
+    renderTicketDetailPage(salesOwnerUser);
+
+    await openTab(/สินค้าและราคา/);
+    fireEvent.click(await screen.findByRole('button', { name: 'แก้ไขรายการสินค้า' }));
+
+    const checkbox = await screen.findByRole('checkbox', { name: 'จากสต็อก' });
+    expect(checkbox.checked).toBe(true);
+    expect(document.getElementById('edit-item-stock-sale-price-0').value).toBe('500');
+
+    fireEvent.click(checkbox);
+    expect(document.getElementById('edit-item-stock-sale-price-0')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
+    await waitFor(() => expect(api.tickets.editItems).toHaveBeenCalledTimes(1));
+    expect(api.tickets.editItems.mock.calls[0][1].items[0]).toMatchObject({
+      sourcedFromStock: false,
+      stockSalePrice: null,
+    });
+  });
+
+  // Review follow-up (V183): deleting a row must re-key a later row's stockSalePrice error the
+  // same way every other per-row field error is already re-keyed (the reindex regex in
+  // TicketDetailPage.jsx is generic — `/^editItems\.([a-zA-Z]+)\.(\d+)$/` — so no code change was
+  // needed for this field specifically, but the branch had no test at all covering it before this).
+  // Without it a stockSalePrice error would survive a delete under its OLD index and end up
+  // pinned to a row the user never flagged (or to no row at all, silently swallowing a real
+  // validation failure).
+  it('edit-items: deleting a row re-pins a later row\'s "จากสต็อก" price error to its new index', async () => {
+    api.tickets.get.mockResolvedValueOnce({
+      ticket: buildTicket({
+        summary: { status: 'submitted', createdById: 1 },
+        items: [
+          { id: 70101, brand: 'SCG', model: 'A1', size: '60x60', qty: 5, qtyDelivered: 0, qtyFromStock: 0, approvedPrice: null, sourcedFromStock: false, stockSalePrice: null },
+          { id: 70102, brand: 'Cotto', model: 'B2', size: '30x30', qty: 5, qtyDelivered: 0, qtyFromStock: 0, approvedPrice: null, sourcedFromStock: false, stockSalePrice: null },
+        ],
+      }),
+    });
+    api.tickets.actions.mockResolvedValueOnce({
+      currentState: {
+        lifecycle: 'ACTIVE', salesStage: 'LEAD', paymentStatus: null, fulfillmentStatus: null, status: 'submitted',
+      },
+      availableActions: [{ action: 'EDIT_ITEMS', kind: 'operational', label: 'แก้ไขรายการสินค้า' }],
+    });
+
+    renderTicketDetailPage(salesOwnerUser);
+
+    await openTab(/สินค้าและราคา/);
+    fireEvent.click(await screen.findByRole('button', { name: 'แก้ไขรายการสินค้า' }));
+
+    // Flag the SECOND row only, leaving its required price blank.
+    const checkboxes = await screen.findAllByRole('checkbox', { name: 'จากสต็อก' });
+    expect(checkboxes).toHaveLength(2);
+    fireEvent.click(checkboxes[1]);
+
+    // Save pins the error to row index 1 (both rows' qty is valid, so this is the only error).
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
+    expect(await screen.findByText('กรุณากรอกราคาขายเมื่อเลือกสินค้าจากสต็อก')).toBeTruthy();
+    expect(document.getElementById('edit-item-stock-sale-price-1').getAttribute('aria-invalid')).toBe('true');
+    expect(api.tickets.editItems).not.toHaveBeenCalled();
+
+    // Delete the FIRST row — the flagged row shifts from index 1 to index 0, and its error must
+    // travel with it rather than staying pinned to the vacated index.
+    fireEvent.click(screen.getByRole('button', { name: 'ลบรายการที่ 1' }));
+
+    const movedInput = document.getElementById('edit-item-stock-sale-price-0');
+    expect(movedInput).toBeTruthy();
+    await waitFor(() => expect(movedInput.getAttribute('aria-invalid')).toBe('true'));
+    // Exactly one error, on the one surviving row — not duplicated, not orphaned.
+    expect(screen.getAllByText('กรุณากรอกราคาขายเมื่อเลือกสินค้าจากสต็อก')).toHaveLength(1);
+    expect(document.getElementById('edit-item-stock-sale-price-1')).toBeNull();
+
+    // And the row still saves correctly once the price is supplied at its new index.
+    fireEvent.change(movedInput, { target: { value: '420.50' } });
+    await waitFor(() => expect(movedInput.getAttribute('aria-invalid')).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
+
+    await waitFor(() => expect(api.tickets.editItems).toHaveBeenCalledTimes(1));
+    const sent = api.tickets.editItems.mock.calls[0][1].items;
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ model: 'B2', sourcedFromStock: true, stockSalePrice: 420.5 });
+  });
+
+  // Gap B (task): the read-only items table showed no indication of a saved จากสต็อก line at
+  // all — no badge, and the approved-price cell just read "-" whenever a stock-sourced line
+  // happened to have no approvedPrice of its own (nothing downstream sets one yet — the flag is
+  // capture-only today, see ticketItemFields.jsx's own comment — but a flagged line can equally
+  // still go through the ordinary PricingRequest chain and end up with a real approvedPrice; the
+  // "approvedPrice set too" case is covered separately below).
+  it('read mode: a จากสต็อก line shows the orange badge and its stock price; a normal line shows neither', async () => {
+    api.tickets.get.mockResolvedValueOnce({
+      ticket: buildTicket({
+        summary: { status: 'submitted', createdById: 1 },
+        items: [
+          { id: 70101, brand: 'SCG', model: 'A1', size: '60x60', qty: 5, qtyDelivered: 0, qtyFromStock: 0, approvedPrice: null, sourcedFromStock: true, stockSalePrice: 420.5 },
+          { id: 70102, brand: 'Cotto', model: 'B2', size: '30x30', qty: 5, qtyDelivered: 0, qtyFromStock: 0, approvedPrice: 300, sourcedFromStock: false, stockSalePrice: null },
+        ],
+      }),
+    });
+    api.tickets.actions.mockResolvedValueOnce({
+      currentState: {
+        lifecycle: 'ACTIVE', salesStage: 'LEAD', paymentStatus: null, fulfillmentStatus: null, status: 'submitted',
+      },
+      availableActions: [],
+    });
+
+    renderTicketDetailPage(ceoUser);
+    await openTab(/สินค้าและราคา/);
+
+    expect(await screen.findByText('จากสต็อก')).toBeTruthy();
+    expect(screen.getByText('ราคาสต็อก')).toBeTruthy();
+    // formatMoney's ฿-prefixed, 2-decimal shape.
+    expect(screen.getByText('฿420.50')).toBeTruthy();
+    // The non-stock row's own approved price still renders normally, with no "ราคาสต็อก" line.
+    expect(screen.getByText('฿300.00')).toBeTruthy();
+    expect(screen.queryByText(/ราคาสต็อก:/)).toBeNull();
+  });
+
+  // Gap B, review follow-up: a จากสต็อก flag does not stop a line from ALSO going through the
+  // ordinary PricingRequest chain and picking up a real approvedPrice (the flag is capture-only
+  // today — nothing downstream reads it, see ticketItemFields.jsx). StockAwarePriceCell must not
+  // replace an existing price with the stock one; it only adds the stock price as a secondary
+  // line underneath.
+  it('read mode: a จากสต็อก line with approvedPrice already set shows BOTH — approvedPrice as usual, plus a secondary ราคาสต็อก line', async () => {
+    api.tickets.get.mockResolvedValueOnce({
+      ticket: buildTicket({
+        summary: { status: 'submitted', createdById: 1 },
+        items: [
+          { id: 70101, brand: 'SCG', model: 'A1', size: '60x60', qty: 5, qtyDelivered: 0, qtyFromStock: 0, approvedPrice: 999, sourcedFromStock: true, stockSalePrice: 420.5 },
+        ],
+      }),
+    });
+    api.tickets.actions.mockResolvedValueOnce({
+      currentState: {
+        lifecycle: 'ACTIVE', salesStage: 'LEAD', paymentStatus: null, fulfillmentStatus: null, status: 'submitted',
+      },
+      availableActions: [],
+    });
+
+    renderTicketDetailPage(ceoUser);
+    await openTab(/สินค้าและราคา/);
+
+    expect(await screen.findByText('จากสต็อก')).toBeTruthy();
+    // approvedPrice still renders as the primary figure, unchanged...
+    expect(screen.getByText('฿999.00')).toBeTruthy();
+    // ...with the stock price added as a labelled secondary line, never replacing it.
+    expect(screen.getByText('ราคาสต็อก: ฿420.50')).toBeTruthy();
+  });
+
+  // Gap B, review follow-up: the calc-breakdown variant (CEO view, at least one item on the
+  // ticket has calcedCost set) renders a DIFFERENT ราคาขาย (THB/ชิ้น) cell than the plain
+  // ราคาที่อนุมัติ column the tests above exercise — StockAwarePriceCell is wired into both, and
+  // this pins the calc-breakdown one specifically (a stock line with no calced/manual price of
+  // its own yet, same "fills the placeholder" case as the very first test above, but through the
+  // other cell).
+  it('read mode: calc-breakdown variant (CEO, calcedCost set) also fills the ราคาขาย cell for a stock line with no calced price yet', async () => {
+    api.tickets.get.mockResolvedValueOnce({
+      ticket: buildTicket({
+        summary: { status: 'submitted', createdById: 1 },
+        items: [
+          {
+            id: 70101, brand: 'SCG', model: 'A1', size: '60x60', qty: 5, qtyDelivered: 0, qtyFromStock: 0,
+            approvedPrice: null, calcedCost: 100, calcedPrice: null, manualPrice: null,
+            sourcedFromStock: true, stockSalePrice: 420.5,
+          },
+        ],
+      }),
+    });
+    api.tickets.actions.mockResolvedValueOnce({
+      currentState: {
+        lifecycle: 'ACTIVE', salesStage: 'LEAD', paymentStatus: null, fulfillmentStatus: null, status: 'submitted',
+      },
+      availableActions: [],
+    });
+
+    renderTicketDetailPage(ceoUser);
+    await openTab(/สินค้าและราคา/);
+
+    // Calc-breakdown headers confirm the CEO variant rendered, not the plain ราคาที่อนุมัติ one.
+    expect(await screen.findByText('ต้นทุน (THB/ชิ้น)')).toBeTruthy();
+    expect(screen.getByText('ราคาขาย (THB/ชิ้น)')).toBeTruthy();
+    expect(screen.getByText('จากสต็อก')).toBeTruthy();
+    // No calced/manual price yet — the stock price fills the placeholder, with its own label.
+    expect(screen.getByText('฿420.50')).toBeTruthy();
+    expect(screen.getByText('ราคาสต็อก')).toBeTruthy();
+  });
+
+  // fix/ticket-edit-items-required-markers: the UAT report this branch fixes — "เวลาเรียกดีลมาแก้
+  // ดาวแดงหายไป ไม่เหมือนเดิม" — reopening a deal to edit its items showed none of the create
+  // modal's required-field asterisks/validation, and a blank ยี่ห้อ/รุ่น/ขนาด only failed with a
+  // backend 400. These pin the fix: shared markers, shared catalog autocomplete, a real inline
+  // required-field guard before the API is ever called.
+  describe('edit-items: required-field markers (ยี่ห้อ/รุ่น/ขนาด) match create, and catalog autocomplete', () => {
+    function mockCatalogProduct(overrides = {}) {
+      return {
+        priceId: 501,
+        productCode: 'BNFJ30126CA',
+        factoryName: 'Bode',
+        grade: null,
+        collection: 'Stone gallary',
+        productName: null,
+        color: null,
+        surface: 'MATT',
+        sizeRaw: '600x1200',
+        price: 8.8,
+        currency: 'USD',
+        priceUnit: 'per_sqm',
+        sqmPerPiece: null,
+        ...overrides,
+      };
+    }
+
+    // item0Overrides lets a test seed row 0 with fields the default fixture doesn't carry (e.g. a
+    // real catalogPriceId/catalogProductCode, for the focus-does-not-mutate regression test below).
+    async function openEditMode(item0Overrides = {}) {
+      api.tickets.get.mockResolvedValueOnce({
+        ticket: buildTicket({
+          summary: { status: 'submitted', createdById: 1 },
+          items: [
+            {
+              id: 70101, brand: 'SCG', model: 'A1', size: '60x60', factory: 'SCG Ceramics',
+              color: 'ขาว', texture: 'ด้าน', qty: 10, qtyDelivered: 0, qtyFromStock: 0, approvedPrice: null,
+              ...item0Overrides,
+            },
+            {
+              id: 70102, brand: 'Cotto', model: 'B2', size: '30x30', factory: 'Cotto Industry',
+              color: null, texture: null, qty: 5, qtyDelivered: 0, qtyFromStock: 0, approvedPrice: null,
+            },
+          ],
+        }),
+      });
+      api.tickets.actions.mockResolvedValueOnce({
+        currentState: { lifecycle: 'ACTIVE', salesStage: 'LEAD', paymentStatus: null, fulfillmentStatus: null, status: 'submitted' },
+        availableActions: [{ action: 'EDIT_ITEMS', kind: 'operational', label: 'แก้ไขรายการสินค้า' }],
+      });
+      renderTicketDetailPage(salesOwnerUser);
+      await openTab(/สินค้าและราคา/);
+      fireEvent.click(await screen.findByRole('button', { name: 'แก้ไขรายการสินค้า' }));
+      // Confirms edit mode has actually mounted before a test starts poking at row fields — the
+      // save button is unique (unlike the per-row ยี่ห้อ label/placeholder, which repeats once per
+      // row and would make findByLabelText/findByPlaceholderText throw on "multiple elements").
+      await screen.findByRole('button', { name: 'บันทึกการแก้ไข' });
+    }
+
+    it('ยี่ห้อ/รุ่น/ขนาด carry the red required asterisk; สี/เนื้อผิว do not', async () => {
+      await openEditMode();
+      const brandLabel = document.querySelector('label[for="edit-item-0-brand"]');
+      const modelLabel = document.querySelector('label[for="edit-item-0-model"]');
+      const sizeLabel = document.querySelector('label[for="edit-item-0-size"]');
+      const colorLabel = document.querySelector('label[for="edit-item-0-color"]');
+      const textureLabel = document.querySelector('label[for="edit-item-0-texture"]');
+      expect(brandLabel.textContent).toContain('*');
+      expect(modelLabel.textContent).toContain('*');
+      expect(sizeLabel.textContent).toContain('*');
+      expect(colorLabel.textContent).not.toContain('*');
+      expect(textureLabel.textContent).not.toContain('*');
+    });
+
+    // Review round 2: the source-text pin test alone (ticketItemFields.test.jsx) does not catch a
+    // hand-typed literal passed into CatalogAutocompleteField's own `label` prop — the component
+    // happily renders whatever string it's given, imported or not. A reviewer proved this: edit's
+    // brand label was changed to a hand-typed `label="ชื่อยี่ห้อ"` and every existing test (including
+    // the source-text pin) stayed green. This asserts the actual RENDERED text instead, which a
+    // hand-typed label cannot fake past.
+    it('ยี่ห้อ/รุ่น labels render the exact canonical text from ITEM_FIELD_META — not a hand-typed drift like ชื่อยี่ห้อ', async () => {
+      await openEditMode();
+      const brandLabel = document.querySelector('label[for="edit-item-0-brand"]');
+      const modelLabel = document.querySelector('label[for="edit-item-0-model"]');
+      expect(brandLabel.textContent).toBe(ITEM_FIELD_META.brand.label + ' *');
+      expect(modelLabel.textContent).toBe(ITEM_FIELD_META.model.label + ' *');
+      expect(screen.queryByText('ชื่อยี่ห้อ')).toBeNull();
+      expect(screen.queryByText('ชื่อรุ่น')).toBeNull();
+    });
+
+    it('there is no separate โรงงาน input — ยี่ห้อ and โรงงาน are one field, same as create', async () => {
+      await openEditMode();
+      expect(document.getElementById('edit-item-0-factory')).toBeNull();
+      // A standalone "โรงงาน" label (as opposed to "ยี่ห้อ / โรงงาน") would mean the old separate
+      // input came back.
+      expect(screen.queryByText('โรงงาน')).toBeNull();
+    });
+
+    it('clearing ยี่ห้อ and saving blocks the save with an inline required-field error', async () => {
+      await openEditMode();
+      const brandInput = document.getElementById('edit-item-0-brand');
+      fireEvent.change(brandInput, { target: { value: '' } });
+      fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
+
+      expect(await screen.findByText('กรุณากรอกยี่ห้อ / โรงงาน')).toBeTruthy();
+      expect(brandInput.getAttribute('aria-invalid')).toBe('true');
+      expect(api.tickets.editItems).not.toHaveBeenCalled();
+    });
+
+    it('typing into ยี่ห้อ then picking a catalog result fills model/size and carries the catalog link + factory into the payload; an untouched row keeps its original factory', async () => {
+      api.catalog.prices.mockResolvedValue({ items: [mockCatalogProduct()] });
+      await openEditMode();
+
+      const brandInput = document.getElementById('edit-item-0-brand');
+      fireEvent.change(brandInput, { target: { value: 'Bode' } });
+      const leaf = await screen.findByText('Bode');
+      fireEvent.mouseDown(leaf.parentElement);
+      await waitFor(() => expect(brandInput.value).toBe('Bode'));
+
+      fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
+      await waitFor(() => expect(api.tickets.editItems).toHaveBeenCalledTimes(1));
+
+      const payloadItems = api.tickets.editItems.mock.calls[0][1].items;
+      expect(payloadItems[0]).toMatchObject({
+        brand: 'Bode',
+        factory: 'Bode',
+        model: 'Stone gallary',
+        size: '600x1200',
+        catalogPriceId: 501,
+        catalogProductCode: 'BNFJ30126CA',
+      });
+      // Row 1 was never touched — its factory must round-trip unchanged, not fall back to null or
+      // pick up row 0's newly-picked factory.
+      expect(payloadItems[1]).toMatchObject({ brand: 'Cotto', factory: 'Cotto Industry' });
+    });
+
+    // Review round 2 (HIGH): a reviewer proved onFocusSearch ran through the SAME mutating path a
+    // real keystroke does (onEditCatalogInput -> applyDescriptiveFieldEdit), so merely re-focusing
+    // an already-filled ยี่ห้อ/รุ่น box — no retyping, value unchanged — silently re-ran the
+    // brand->factory lockstep and cleared the row's catalog link. Concretely: row {factory: 'Bode
+    // Factory', catalogPriceId: 501, catalogProductCode: 'BN1'}, focus brand then model, save ->
+    // payload factory became 'Bode' (from the raw brand string, dropping ' Factory') and
+    // catalogPriceId went null. That corrupts persisted data
+    // PricingRequestCreateModal.emptyItemFromTicketItem seeds its own catalog link from.
+    it('re-focusing ยี่ห้อ/รุ่น on a row that already has a catalog link does NOT clear it (search-only focus, no row mutation)', async () => {
+      await openEditMode({
+        brand: 'Bode', model: 'Stone gallary', factory: 'Bode Factory',
+        catalogPriceId: 501, catalogProductCode: 'BN1',
+      });
+
+      const brandInput = document.getElementById('edit-item-0-brand');
+      const modelInput = document.getElementById('edit-item-0-model');
+      // Re-focus both fields with no keystroke in between — simulates tabbing back through the row.
+      fireEvent.focus(brandInput);
+      fireEvent.focus(modelInput);
+
+      fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
+      await waitFor(() => expect(api.tickets.editItems).toHaveBeenCalledTimes(1));
+
+      const payloadItems = api.tickets.editItems.mock.calls[0][1].items;
+      expect(payloadItems[0]).toMatchObject({
+        brand: 'Bode',
+        factory: 'Bode Factory',
+        catalogPriceId: 501,
+        catalogProductCode: 'BN1',
+      });
+    });
+
+    it('deleting a row re-indexes a required-field error to the row that shifted into its place', async () => {
+      await openEditMode();
+      const brandInput1 = document.getElementById('edit-item-1-brand');
+      fireEvent.change(brandInput1, { target: { value: '' } });
+      fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
+      expect(await screen.findByText('กรุณากรอกยี่ห้อ / โรงงาน')).toBeTruthy();
+      expect(document.getElementById('edit-item-1-brand').getAttribute('aria-invalid')).toBe('true');
+      expect(api.tickets.editItems).not.toHaveBeenCalled();
+
+      // Delete row 0 (the row WITHOUT the error) — row 1 shifts down to index 0, and its error
+      // must follow it, not stay pinned to the old index or vanish.
+      fireEvent.click(screen.getByRole('button', { name: 'ลบรายการที่ 1' }));
+
+      await waitFor(() => {
+        expect(document.getElementById('edit-item-0-brand').getAttribute('aria-invalid')).toBe('true');
+      });
+      expect(screen.getByText('กรุณากรอกยี่ห้อ / โรงงาน')).toBeTruthy();
+    });
+
+    // Review round 3 (MEDIUM): the qty rule now uses requiredQtyField/missingQtyMessage — same as
+    // create — instead of unconditionally checking item.qty. This pins the actual behaviour change
+    // rather than just the plumbing: a SQM-basis row with NO ตร.ม./แผ่น factor (qty is a read-only
+    // derived display in that mode, never an input) must not be blocked on a qty=0 it has no way to
+    // fill, and must send exactly what the rep typed into พื้นที่ (ตร.ม.).
+    it('SQM-basis row with no ตร.ม./แผ่น factor: qty 0 is not required — save sends the row as typed', async () => {
+      await openEditMode({ unitBasis: 'SQM', qty: 0, qtySqm: 12, sqmPerPiece: null });
+      fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
+
+      await waitFor(() => expect(api.tickets.editItems).toHaveBeenCalledTimes(1));
+      const payloadItems = api.tickets.editItems.mock.calls[0][1].items;
+      expect(payloadItems[0]).toMatchObject({ qty: 0, qtySqm: 12 });
+    });
+
+    it('SQM-basis row with no factor and a blank พื้นที่ (ตร.ม.) is blocked with the basis-aware message, not the old generic one', async () => {
+      await openEditMode({ unitBasis: 'SQM', qty: 0, qtySqm: '', sqmPerPiece: null });
+      fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
+
+      // The real missingQtyMessage output, not a hand-typed copy of it — this is exactly the
+      // string the save handler must produce for row 1 in SQM basis.
+      expect(await screen.findByText(missingQtyMessage('SQM', 1))).toBeTruthy();
+      expect(api.tickets.editItems).not.toHaveBeenCalled();
+    });
   });
 
   it('revise form: opens as a modal, the confirm button is disabled on a blank reason (pre-existing guard, unchanged), and submits once filled', async () => {
@@ -1483,12 +2017,15 @@ describe('TicketDetailPage', () => {
   // would otherwise mask the same bug by giving account a real primary action
   // instead (see workState.test.js's own account/ORDER_RECEIVED case).
   //
-  // The "shows it to someone else" side uses sales_manager, not ceo — ROLE_
-  // PERMISSIONS.canConfirmPayments (src/api/routes.js) is `['account', 'ceo']`,
-  // so `isAccount` is ALSO true for ceo (they can confirm payments too); using
-  // ceo here would have silently exercised the exact same guard as the
-  // account case instead of a genuine "someone who isn't account" control.
-  describe('blocker line respects !isAccount (P3)', () => {
+  // The "shows it to someone else" side originally used sales_manager, not ceo — ROLE_
+  // PERMISSIONS.canConfirmPayments (src/api/routes.js) is `['account', 'ceo']`, so the OLD
+  // `isAccount` guard was ALSO true for ceo, which silently suppressed the blocker for them too
+  // (using ceo here would have exercised the exact same guard as the account case instead of a
+  // genuine "someone who isn't account" control) — this was itself the bug GLA-118 found: the
+  // page now uses `isMoneyRecorder` (role === 'account' exactly) for this guard, not `isAccount`,
+  // specifically so the CEO stops being silently lumped in with account. See the ceo-specific
+  // case below, added for that fix.
+  describe('blocker line respects !isMoneyRecorder (P3, tightened by GLA-118)', () => {
     function legacyDepositWaitingTicket() {
       return buildTicket({
         summary: {
@@ -1526,6 +2063,25 @@ describe('TicketDetailPage', () => {
 
       await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
       expect(screen.queryByText(/รอชำระมัดจำ/)).toBeNull();
+    });
+
+    // GLA-118 review fix: this is the case the old `!isAccount` guard got wrong — canConfirmPayments
+    // (and so the old `isAccount`) still includes ceo, but recording/confirming a payment is
+    // account-only now (PAYMENT_RECORD_ROLES/DEPOSIT_CONFIRM_ROLES have no CEO fallback), so the
+    // CEO no longer clears this wait and must see the same read-only "รอชำระมัดจำ" status a
+    // sales_manager viewer does, not silence.
+    it('shows "รอชำระมัดจำ" to ceo too — the CEO can no longer confirm the deposit either', async () => {
+      api.tickets.get.mockResolvedValue({ ticket: legacyDepositWaitingTicket() });
+      api.tickets.actions.mockResolvedValue({
+        currentState: {
+          lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', paymentStatus: 'DEPOSIT_NOTICE_ISSUED', fulfillmentStatus: null, status: 'document_issued',
+        },
+        availableActions: [],
+      });
+
+      renderTicketDetailPage(ceoUser);
+
+      expect((await screen.findAllByText(/รอชำระมัดจำ/)).length).toBeGreaterThan(0);
     });
   });
 
@@ -1857,14 +2413,19 @@ describe('TicketDetailPage', () => {
       expect(section.getByText('รับชำระมัดจำ')).not.toBeNull();
     });
 
-    it('account can change the deposit policy via api.tickets.setDepositPolicy', async () => {
+    // GLA-118 (owner ruling 2026-09-17): deposit policy is set by the OWNING sales rep only now
+    // — not account. This used to be named
+    // 'account can change the deposit policy via api.tickets.setDepositPolicy' and drove it as
+    // accountUser; renamed and switched to salesOwnerUser (id 1, matching buildTicket's default
+    // summary.createdById) because the gate flipped from account/ceo-only to owning-rep-only.
+    it('the owning rep can change the deposit policy via api.tickets.setDepositPolicy', async () => {
       api.tickets.actions.mockResolvedValueOnce({
         currentState: { lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', paymentStatus: null, fulfillmentStatus: null, status: 'price_proposed' },
         availableActions: [{ action: 'WAIVE_DEPOSIT', kind: 'policy', label: 'นโยบายมัดจำ' }],
       });
       api.tickets.setDepositPolicy.mockResolvedValue({ ticket: buildTicket({ summary: { depositPolicy: 'WAIVED', depositPolicyReason: 'ลูกค้าประจำ' } }) });
 
-      renderTicketDetailPage(accountUser);
+      renderTicketDetailPage(salesOwnerUser);
       const section = await depositSection();
       fireEvent.click(await section.findByRole('button', { name: 'เปลี่ยนนโยบายมัดจำ…' }));
 
@@ -1874,6 +2435,59 @@ describe('TicketDetailPage', () => {
       await waitFor(() => expect(api.tickets.setDepositPolicy).toHaveBeenCalledWith(
         701, { policy: 'WAIVED', reason: 'ลูกค้าประจำ' },
       ));
+    });
+
+    // GLA-118 owner ruling 2026-09-20, part B: sales_manager may set the deposit policy too, as a
+    // backup to the owning rep — DealDepositPanel's canSetPolicy now reads
+    // `role === 'sales_manager' || (isSales && isOwner)`, not isOwner alone.
+    it('sales_manager can also change the deposit policy via api.tickets.setDepositPolicy', async () => {
+      const salesManagerUser = { id: 11, employeeId: 11, name: 'ผจก.ขาย', role: 'sales_manager' };
+      api.tickets.actions.mockResolvedValueOnce({
+        currentState: { lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', paymentStatus: null, fulfillmentStatus: null, status: 'price_proposed' },
+        availableActions: [{ action: 'WAIVE_DEPOSIT', kind: 'policy', label: 'นโยบายมัดจำ' }],
+      });
+      api.tickets.setDepositPolicy.mockResolvedValue({ ticket: buildTicket({ summary: { depositPolicy: 'CREDIT_CUSTOMER', depositPolicyReason: 'สำรองโดยผจก.' } }) });
+
+      renderTicketDetailPage(salesManagerUser);
+      const section = await depositSection();
+      fireEvent.click(await section.findByRole('button', { name: 'เปลี่ยนนโยบายมัดจำ…' }));
+
+      fireEvent.change(screen.getByLabelText('เหตุผล *'), { target: { value: 'สำรองโดยผจก.' } });
+      fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+
+      await waitFor(() => expect(api.tickets.setDepositPolicy).toHaveBeenCalledWith(
+        701, { policy: 'WAIVED', reason: 'สำรองโดยผจก.' },
+      ));
+    });
+
+    // Wrong-way-round (CLAUDE.md "permission changes must ship evidence"): the component must
+    // not blindly trust an advertised action. Even if the API response advertises WAIVE_DEPOSIT
+    // (e.g. a stale cache, or a bug on the server), account must not see the button — DealDepositPanel's
+    // own isSales/isOwner check (defense in depth) must refuse it independently of hasAction().
+    it('never offers the policy-change button to account, even if the API wrongly advertises WAIVE_DEPOSIT', async () => {
+      api.tickets.actions.mockResolvedValueOnce({
+        currentState: { lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', paymentStatus: null, fulfillmentStatus: null, status: 'price_proposed' },
+        availableActions: [{ action: 'WAIVE_DEPOSIT', kind: 'policy', label: 'นโยบายมัดจำ' }],
+      });
+
+      renderTicketDetailPage(accountUser);
+      const section = await depositSection();
+
+      expect(section.queryByRole('button', { name: 'เปลี่ยนนโยบายมัดจำ…' })).toBeNull();
+    });
+
+    // Same wrong-way-round proof for ceo, which lost the fallback entirely (used to be
+    // account/ceo).
+    it('never offers the policy-change button to ceo, even if the API wrongly advertises WAIVE_DEPOSIT', async () => {
+      api.tickets.actions.mockResolvedValueOnce({
+        currentState: { lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', paymentStatus: null, fulfillmentStatus: null, status: 'price_proposed' },
+        availableActions: [{ action: 'WAIVE_DEPOSIT', kind: 'policy', label: 'นโยบายมัดจำ' }],
+      });
+
+      renderTicketDetailPage(ceoUser);
+      const section = await depositSection();
+
+      expect(section.queryByRole('button', { name: 'เปลี่ยนนโยบายมัดจำ…' })).toBeNull();
     });
 
     it('a waived deposit policy renders the notice/payment steps as skipped, with the reason', async () => {
@@ -1906,6 +2520,25 @@ describe('TicketDetailPage', () => {
       fireEvent.click(await section.findByRole('button', { name: 'ยืนยันรับมัดจำ' }));
 
       await waitFor(() => expect(api.tickets.confirmDepositPaid).toHaveBeenCalledWith(701));
+    });
+
+    // GLA-118: the CEO fallback on confirmDepositPaid is gone. Wrong-way-round + defense in
+    // depth, same shape as the WAIVE_DEPOSIT proofs above: even if the API wrongly advertises
+    // DEPOSIT_PAID to a ceo viewer, DealDepositPanel's own role === 'account' check must still
+    // hide the button.
+    it('never offers the confirm-deposit button to ceo, even if the API wrongly advertises DEPOSIT_PAID', async () => {
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({ summary: { status: 'quotation_issued', paymentStatus: 'DEPOSIT_NOTICE_ISSUED' } }),
+      });
+      api.tickets.actions.mockResolvedValue({
+        currentState: { lifecycle: 'ACTIVE', salesStage: 'DEPOSIT_RECEIVED', paymentStatus: 'DEPOSIT_NOTICE_ISSUED', fulfillmentStatus: null, status: 'quotation_issued' },
+        availableActions: [{ action: 'DEPOSIT_PAID', kind: 'payment', label: 'รับมัดจำ' }],
+      });
+
+      renderTicketDetailPage(ceoUser);
+      const section = await depositSection();
+
+      expect(section.queryByRole('button', { name: 'ยืนยันรับมัดจำ' })).toBeNull();
     });
 
     it('import (no business in the deposit section) never gets a "การเงิน" tab at all', async () => {
@@ -2681,6 +3314,78 @@ describe('TicketDetailPage', () => {
       // separate histories any more.
       expect(await screen.findByText('สร้างดีล')).not.toBeNull();
       expect(screen.getByText('โทรติดตามลูกค้า')).not.toBeNull();
+    });
+  });
+
+  // Finding 6 (both entry points must open the dialog, not download directly): this is one of
+  // the two entry points — DealDocumentRegister.test.jsx pins the other.
+  describe('remaining invoice download entry point (docActions button)', () => {
+    it('clicking "ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ" opens the RemainingInvoiceDialog rather than downloading directly', async () => {
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({
+          summary: { status: 'quotation_issued', fulfillmentStatus: 'GOODS_RECEIVED' },
+        }),
+      });
+      api.tickets.remainingInvoiceOptions.mockResolvedValue({
+        options: {
+          docNumber: 'GLRI69001', defaultIssueDate: '2026-09-01', defaultReference: null,
+          referenceOptions: [], defaultDepositReference: null, depositReferenceOptions: [],
+          noteTemplates: [], itemCount: 1, maxItems: 22, itemsTotal: 100, depositAmount: 0,
+          netAmount: 100, vatAmount: 7, totalPayable: 107,
+          quotationOptions: [], defaultQuotationId: null, blockingReason: null,
+        },
+      });
+
+      renderTicketDetailPage(salesOwnerUser);
+
+      const button = await screen.findByRole('button', { name: 'ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ' });
+      fireEvent.click(button);
+
+      // The button only ever opens the dialog — it never downloads directly.
+      expect(await screen.findByTestId('remaining-invoice-dialog')).not.toBeNull();
+    });
+  });
+
+  // ── Remaining-invoice download gate (stock-delivered deals) ─────────────────────────────────
+  //
+  // The gate used to be `fulfillmentStatus === 'GOODS_RECEIVED'`, a value only the import axis
+  // writes — so a from-stock deal (FROM_STOCK → …_DELIVERED) never got the button, and an import
+  // deal lost it at its first recorded delivery. Rule now lives in remainingInvoiceReadiness.js.
+  // UI readiness only: DepositNoticeService#getRemainingInvoiceXlsx gates on ticket status alone.
+  describe('remaining-invoice download gate', () => {
+    const INVOICE_BUTTON = 'ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ';
+
+    it.each(['FROM_STOCK', 'PARTIALLY_DELIVERED', 'FULLY_DELIVERED', 'GOODS_RECEIVED'])(
+      'offers the download to the sales owner once fulfilment is %s',
+      async (fulfillmentStatus) => {
+        api.tickets.get.mockResolvedValueOnce({
+          ticket: buildTicket({ summary: { status: 'quotation_issued', fulfillmentStatus, createdById: 1 } }),
+        });
+        renderTicketDetailPage(salesOwnerUser);
+        expect(await screen.findByRole('button', { name: INVOICE_BUTTON })).not.toBeNull();
+      },
+    );
+
+    // Wrong-way-round: widening must not make the button unconditional.
+    it.each([null, 'IR_ISSUED', 'IR_SENT', 'SHIPPING'])(
+      'withholds the download while fulfilment is %s',
+      async (fulfillmentStatus) => {
+        api.tickets.get.mockResolvedValueOnce({
+          ticket: buildTicket({ summary: { status: 'quotation_issued', fulfillmentStatus, createdById: 1 } }),
+        });
+        renderTicketDetailPage(salesOwnerUser);
+        expect(await screen.findByRole('heading', { level: 1 })).not.toBeNull();
+        expect(screen.queryByRole('button', { name: INVOICE_BUTTON })).toBeNull();
+      },
+    );
+
+    it('withholds the download from a non-sales role even on a delivered stock deal', async () => {
+      api.tickets.get.mockResolvedValueOnce({
+        ticket: buildTicket({ summary: { status: 'quotation_issued', fulfillmentStatus: 'FULLY_DELIVERED', createdById: 1 } }),
+      });
+      renderTicketDetailPage(accountUser);
+      expect(await screen.findByRole('heading', { level: 1 })).not.toBeNull();
+      expect(screen.queryByRole('button', { name: INVOICE_BUTTON })).toBeNull();
     });
   });
 });

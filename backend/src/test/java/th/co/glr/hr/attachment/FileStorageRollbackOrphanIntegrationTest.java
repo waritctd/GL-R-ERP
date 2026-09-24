@@ -32,6 +32,7 @@ import th.co.glr.hr.commission.CommissionRepository;
 import th.co.glr.hr.commission.CommissionService;
 import th.co.glr.hr.commission.SubmitCommissionRequest;
 import th.co.glr.hr.customer.ContactRepository;
+import th.co.glr.hr.dealquotation.WastageCalculator;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
@@ -45,7 +46,6 @@ import th.co.glr.hr.pricingrequest.PricingRequestRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.pricingrequest.QuantityType;
-import th.co.glr.hr.pricingrequest.UnitBasis;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.CreateTicketRequest;
 import th.co.glr.hr.ticket.DealStage;
@@ -329,10 +329,18 @@ class FileStorageRollbackOrphanIntegrationTest extends AbstractPostgresIntegrati
             .createDraft(ticketId, new PricingRequestRequests.CreatePricingRequestRequest(
                 PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
                 new BigDecimal("1000.00"), "THB", "orphan-file test request", UUID.randomUUID().toString(),
+                // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
+                // quantity are now required on every item PricingRequestService#createDraft persists —
+                // requestedQty/requestedUnit/requestedUnitBasis are derived instead, so this fixture
+                // supplies the tile fields directly (PIECES mode, 10 pieces, no wastage, no box
+                // rounding) rather than the pre-V185 bare shape.
                 List.of(new PricingRequestRequests.PricingRequestItemRequest(null, productId, null, "SCG",
-                    "Tile Orphan", "SCG Tile Orphan", null, null, "60x60", "Factory Orphan",
-                    new BigDecimal("10"), new BigDecimal("10"), "piece", UnitBasis.PER_PIECE,
-                    QuantityType.CONFIRMED, null, null, null))),
+                    "Tile Orphan", "SCG Tile Orphan", "White", "Matte", "60x60", "Factory Orphan",
+                    null, null, null, null,
+                    QuantityType.CONFIRMED, null, null, null,
+                    null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+                    null, 10, WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+                    false, "ไทย-สต็อก", 3, 7, null, null, null))),
                 sales)
             .summary().id();
     }

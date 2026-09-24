@@ -35,6 +35,7 @@ import th.co.glr.hr.customerquotation.CustomerQuotationRequests.CreateRevisionRe
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.IssueCustomerQuotationRequest;
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.RecordQuotationOutcomeRequest;
 import th.co.glr.hr.customerquotation.CustomerQuotationService;
+import th.co.glr.hr.dealquotation.WastageCalculator;
 import th.co.glr.hr.deposit.DepositNoticeDraftRequest;
 import th.co.glr.hr.deposit.DepositNoticeDto;
 import th.co.glr.hr.deposit.DepositNoticeRenderer;
@@ -405,7 +406,33 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
         // PR#2 (created SECOND, raw factory price 250.00 — deliberately different so its line
         // item is distinguishable from PR#1's): its own first-ever quotation, revision 1 — a
         // LOWER revision_no than PR#1's, but a HIGHER quotation_id (created strictly later).
-        long pr2Id = driveToQuotationAccepted(new BigDecimal("250.00"));
+        //
+        // GLA-123 slice S3 MAJOR 5 fix (Opus review, 2026-09-23): this used to call the shared
+        // driveToQuotationAccepted(rawUnitPrice) helper, which (in an earlier, now-reverted fix)
+        // superseded PR#1's own ACCEPTED row via raw SQL before accepting PR#2 through the real
+        // API — self-consistent, but it made THIS test vacuous: with only one ACCEPTED row ever
+        // existing, DepositNoticeService#createDraft's own "pick the newest accepted chain, not
+        // the higher revision_no" selection logic never had two real ACCEPTED candidates to
+        // discriminate between. R8 (recordOutcome's own guard) correctly refuses a second
+        // ACCEPTED through the real API while PR#1's is still live — no production caller can
+        // reach "two rows ACCEPTED at once" — but that DB shape is exactly what this test needs
+        // to prove createDraft's selection query is correct, independent of R8. So: drive PR#2 to
+        // ISSUED through the real API (unchanged), then flip it to ACCEPTED with a DIRECT SQL
+        // UPDATE — bypassing recordOutcome (and therefore R8) deliberately and explicitly. PR#1's
+        // own row is left untouched — genuinely still ACCEPTED, exactly as the test's own name
+        // ("PICKS the newer... not the one with the higher revision no") requires.
+        long pr2Id = driveToQuotationIssuedNotYetAccepted(new BigDecimal("250.00"));
+        CustomerQuotationDto pr2Issued = quotationRepository.findByPricingRequest(pr2Id).stream()
+            .filter(q -> QuotationStatus.ISSUED.equals(q.docStatus())).findFirst().orElseThrow();
+        jdbc.update("UPDATE sales.quotation SET doc_status = 'ACCEPTED', accepted_at = now() WHERE quotation_id = :id",
+            Map.of("id", pr2Issued.id()));
+        // recordOutcome ALSO transitions the pricing request's own status (QUOTATION_ISSUED ->
+        // QUOTATION_ACCEPTED) — confirmOrder gates on THIS column, not sales.quotation.doc_status,
+        // so the raw-SQL bypass above must carry that write too or confirmOrder below 409s.
+        jdbc.update("UPDATE sales.pricing_request SET status = 'QUOTATION_ACCEPTED' WHERE pricing_request_id = :id",
+            Map.of("id", pr2Id));
+        assertThat(pricingRequestService.get(pr2Id, salesActor).summary().status())
+            .isEqualTo(PricingRequestStatus.QUOTATION_ACCEPTED);
         orderConfirmation.confirmOrder(pr2Id, new OrderConfirmationRequests.ConfirmOrderRequest(null), salesActor);
         CustomerQuotationDto pr2Accepted = quotationRepository.findByPricingRequest(pr2Id).stream()
             .filter(q -> QuotationStatus.ACCEPTED.equals(q.docStatus())).findFirst().orElseThrow();
@@ -452,11 +479,12 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     /**
-     * Reuses the existing, real backend authz gate on {@code confirmDepositPaid}/{@code
-     * recordPayment} (ACCOUNT_ROLES = {account, ceo}) — cited, not re-proven: {@code
-     * TicketServiceTest.confirmDepositPaid_rejectsSalesRole}/{@code confirmDepositPaid_rejectsImportRole}
-     * already cover this at the unit level. This test only proves it holds for a NEW-CHAIN deal
-     * specifically (real DB, real quotation-sourced payable amount).
+     * Reuses the existing, real backend authz gate on {@code confirmDepositPaid} (GLA-118:
+     * {@code DEPOSIT_CONFIRM_ROLES} = {@code {account}}, no CEO fallback) — cited, not re-proven:
+     * {@code TicketServiceTest.confirmDepositPaid_rejectsSalesRole}/{@code
+     * confirmDepositPaid_rejectsImportRole} already cover this at the unit level. This test only
+     * proves it holds for a NEW-CHAIN deal specifically (real DB, real quotation-sourced payable
+     * amount).
      */
     @Test
     void confirmDepositPaid_salesActor_cannotReach_onNewChainDeal() {
@@ -502,8 +530,10 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
         long pricingRequestId = driveToQuotationAccepted();
         orderConfirmation.confirmOrder(pricingRequestId, new OrderConfirmationRequests.ConfirmOrderRequest(null), salesActor);
 
+        // GLA-118: deposit policy is set by the OWNING sales rep (or a sales_manager) now, not account -- salesActor
+        // owns ticketId (created via ticketService.create(..., salesActor) in setUp).
         TicketDto waived = ticketService.waiveDeposit(ticketId, DepositPolicy.CREDIT_CUSTOMER,
-            "ลูกค้าเครดิตชั้นดี อนุมัติเทอมเครดิตแทนมัดจำ", accountActor);
+            "ลูกค้าเครดิตชั้นดี อนุมัติเทอมเครดิตแทนมัดจำ", salesActor);
         assertThat(waived.summary().depositPolicy()).isEqualTo(DepositPolicy.CREDIT_CUSTOMER);
 
         TicketDto afterIr = ticketService.issueImportRequest(ticketId, importActor);
@@ -725,10 +755,16 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     private long driveToQuotationIssuedNotYetAccepted(BigDecimal rawUnitPrice) {
+        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
+        // quantity are now required on every item PricingRequestService#createDraft persists —
+        // requestedQty/requestedUnit/requestedUnitBasis are derived instead.
         PricingRequestRequests.PricingRequestItemRequest item = new PricingRequestRequests.PricingRequestItemRequest(
-            null, catalogProductId, null, "SCG", "Tile OC", "SCG Tile OC", null, null, "60x60", FACTORY,
-            new BigDecimal("10"), new BigDecimal("10"), "piece", UnitBasis.PER_PIECE,
-            QuantityType.CONFIRMED, null, null, null);
+            null, catalogProductId, null, "SCG", "Tile OC", "SCG Tile OC", "White", "Matte", "60x60", FACTORY,
+            null, null, null, null,
+            QuantityType.CONFIRMED, null, null, null,
+            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+            null, 10, WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+            false, "ไทย-สต็อก", 3, 7, null, null, null);
         PricingRequestRequests.CreatePricingRequestRequest request = new PricingRequestRequests.CreatePricingRequestRequest(
             PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
             new BigDecimal("1000.00"), "THB", "step 6 acceptance walk", UUID.randomUUID().toString(), List.of(item));

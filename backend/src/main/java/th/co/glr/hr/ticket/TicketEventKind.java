@@ -77,5 +77,40 @@ public final class TicketEventKind {
     // see NotificationRepository.TICKET_EVENT_TITLES and DealQuotationService#notifySubmitted.
     public static final String DEAL_QUOTATION_REVISION_SUBMITTED = "DEAL_QUOTATION_REVISION_SUBMITTED";
 
+    // Per-factory ใบขอซื้อ progress (V184, GLA-100): one event kind for every step advance, with
+    // the actual step (th.co.glr.hr.importrequest.ImportRequestStep) named in the free-text
+    // message/note rather than as a distinct kind per step -- see that class's own Javadoc for why
+    // step names are never event kinds. related_document_type=IMPORT_REQUEST,
+    // related_document_id=the sales.import_request row. chk_event_kind re-declared for this in V184.
+    public static final String IMPORT_STEP_ADVANCED = "IMPORT_STEP_ADVANCED";
+
+    // Per-factory ใบขอซื้อ order-email draft (V184, owner decision 09-18 #3 §B): written once when
+    // the draft is marked sent (ImportRequestService#markEmailSent). The email itself is never sent
+    // by this system -- a human copies the draft and sends it by hand -- so this event records only
+    // that a human DID, not that the system did. chk_event_kind re-declared for this in V184, the
+    // SAME re-declaration that adds IMPORT_STEP_ADVANCED just above. Coordinated with the pricing
+    // session's V186 (import-request-per-factory-PLAN.md's "chk_event_kind COORDINATION" section) --
+    // use exactly this name; do not invent another.
+    public static final String IMPORT_REQUEST_EMAIL_SENT = "IMPORT_REQUEST_EMAIL_SENT";
+
+    // GLA-74 part 1 ("สร้างจากใบเดิม" / สั่งเหมือนเดิม, V186): a REAL sales.ticket_event.kind value
+    // (unlike the three DEAL_QUOTATION_* notification-only kinds above) -- chk_event_kind was
+    // widened for it in V186. Written once, by DealQuotationService#createReorder, when an
+    // APPROVED direct-deal quotation is cloned into a new independent DRAFT. Deliberately NOT a
+    // reuse of REVISION_REQUESTED: a reorder never revises, rejects, or supersedes its source, so
+    // sharing that kind would misdescribe it in DealHistoryPanel.jsx's EVENT_KIND_LABEL ("ขอแก้ไข").
+    public static final String DEAL_QUOTATION_REORDERED = "DEAL_QUOTATION_REORDERED";
+
+    // Owner ruling (2026-09-19): a deal may hold only ONE APPROVED DEAL_DIRECT quotation at a
+    // time -- approving a new one (a first issue, a revision, or a reorder clone) supersedes
+    // every OTHER currently-APPROVED DEAL_DIRECT quotation on the same ticket. A REAL
+    // sales.ticket_event.kind value (chk_event_kind widened for it in V186, still unmerged as of
+    // this writing so edited in place rather than a new migration). Written once per superseded
+    // sibling, by DealQuotationService#approve, message "ใบ {old} ถูกแทนที่ด้วย {new}" -- the
+    // pre-existing ancestor-chain supersede walk (a DIFFERENT, older rule: climbing a
+    // REJECTED/DRAFT parentQuotationId lineage) stays silent, as it always has; this kind is only
+    // for the NEW same-ticket sweep.
+    public static final String DEAL_QUOTATION_SUPERSEDED = "DEAL_QUOTATION_SUPERSEDED";
+
     private TicketEventKind() {}
 }

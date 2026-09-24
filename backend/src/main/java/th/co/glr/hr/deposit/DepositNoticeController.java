@@ -130,19 +130,28 @@ public class DepositNoticeController {
             .body(bytes);
     }
 
-    // Remaining invoice download (ข้อ 13.5)
-    @GetMapping("/tickets/{ticketId}/remaining-invoice/file")
-    ResponseEntity<byte[]> remainingInvoiceFile(
+    // Remaining invoice: prefill + preview for the download dialog (ข้อ 13.5). Same viewer gate
+    // and status check as the /file download below (service enforces both) — this never throws
+    // for an over-capacity item list, only reports itemCount/maxItems, so the dialog can always
+    // render a preview alongside a capacity refusal instead of a failed round trip.
+    // `quotationId` is optional — see DepositNoticeService#getRemainingInvoiceOptions's own
+    // Javadoc: lets the dialog live-preview a specific qualifying quotation when several exist.
+    @GetMapping("/tickets/{ticketId}/remaining-invoice/options")
+    Map<String, RemainingInvoiceOptionsDto> remainingInvoiceOptions(
         @PathVariable long ticketId,
+        @RequestParam(required = false) Long quotationId,
         HttpSession session
     ) {
         UserPrincipal user = sessions.requireUser(session);
-        byte[] bytes = service.getRemainingInvoiceXlsx(ticketId, user);
-        String filename = "remaining-invoice-" + ticketId + ".xls";
-        return ResponseEntity.ok()
-            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
-            .contentType(MediaType.parseMediaType(
-                "application/vnd.ms-excel"))
-            .body(bytes);
+        return Map.of("options", service.getRemainingInvoiceOptions(ticketId, quotationId, user));
     }
+
+    // The stateless GET /tickets/{ticketId}/remaining-invoice/file download route was REMOVED
+    // here (owner ruling O1, GLA-99 step 2 review-round-1, 2026-09-20): only an ISSUED/SUPERSEDED
+    // STORED remaining invoice is downloadable now, via RemainingInvoiceController's own
+    // GET /remaining-invoices/{id}/file, which renders the document's own frozen snapshot rather
+    // than recomputing it live on every call. /options above is UNCHANGED and stays — it is still
+    // how the create-flow dialog prefills a NEW draft before RemainingInvoiceController#createDraft
+    // stores it. requireReasonableLength/parseIssueDate/parseNoteIds, which existed only to parse
+    // this route's own query params, were removed with it.
 }

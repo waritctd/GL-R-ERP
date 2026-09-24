@@ -74,9 +74,14 @@ describe('canTransitionDealQuotation', () => {
     expect(canTransitionDealQuotation('DRAFT', undefined)).toBe(false);
   });
 
-  it('DEAL_QUOTATION_TRANSITIONS covers exactly the five statuses the plan defines', () => {
+  // GLA-123 slice S2 — widened from five to seven: ISSUED/EXPIRED are the PRICING_REQUEST-origin
+  // tail (PENDING_APPROVAL -> ISSUED on one approval, by sales_manager or ceo; ISSUED -> EXPIRED
+  // past validity_date, D5). Unreachable in practice for a DEAL_DIRECT row — see
+  // DEAL_QUOTATION_TRANSITIONS' own comment for why widening this shared abstract graph does not
+  // loosen what a DEAL_DIRECT row can actually reach.
+  it('DEAL_QUOTATION_TRANSITIONS covers exactly the seven statuses the plan (+ S2) defines', () => {
     expect(Object.keys(DEAL_QUOTATION_TRANSITIONS).sort()).toEqual(
-      ['APPROVED', 'CANCELLED', 'DRAFT', 'PENDING_APPROVAL', 'SUPERSEDED'].sort(),
+      ['APPROVED', 'CANCELLED', 'DRAFT', 'EXPIRED', 'ISSUED', 'PENDING_APPROVAL', 'SUPERSEDED'].sort(),
     );
   });
 });
@@ -88,6 +93,9 @@ describe('dealQuotationStatusLabel', () => {
     expect(dealQuotationStatusLabel('APPROVED')).toEqual({ label: 'อนุมัติแล้ว', tone: 'success' });
     expect(dealQuotationStatusLabel('SUPERSEDED')).toEqual({ label: 'ฉบับที่ไม่ได้ใช้แล้ว', tone: 'neutral' });
     expect(dealQuotationStatusLabel('CANCELLED')).toEqual({ label: 'ยกเลิก', tone: 'danger' });
+    // GLA-123 slice S2 — only ever reached by a PRICING_REQUEST-origin row.
+    expect(dealQuotationStatusLabel('ISSUED')).toEqual({ label: 'ออกใบแล้ว', tone: 'success' });
+    expect(dealQuotationStatusLabel('EXPIRED')).toEqual({ label: 'หมดอายุ', tone: 'neutral' });
   });
 
   it('falls back gracefully for an unknown status', () => {
@@ -1006,6 +1014,96 @@ describe('DEAL_QUOTATION_STATUS_TABS (F5)', () => {
   it('every tab names a countKey the counts DTO carries', () => {
     expect(meta.DEAL_QUOTATION_STATUS_TABS.map((t) => t.countKey))
       .toEqual(['all', 'pendingApproval', 'needsRework', 'cancelled', 'approved']);
+  });
+});
+
+// ── Global list scope (owner ruling 2026-09-24) — mirrors DealQuotationService.listOwnerScope /
+// LIST_SEE_ALL_ROLES. These are presentation hints only, never an authz boundary on their own —
+// see DealQuotationIntegrationTest for the authoritative evidence.
+describe('dealQuotationListSeesAll', () => {
+  it('is true only for sales_manager and ceo', () => {
+    expect(meta.dealQuotationListSeesAll({ role: 'sales_manager' })).toBe(true);
+    expect(meta.dealQuotationListSeesAll({ role: 'ceo' })).toBe(true);
+  });
+
+  it('is false for sales, import, account, a grant-holder, and no user at all', () => {
+    expect(meta.dealQuotationListSeesAll({ role: 'sales' })).toBe(false);
+    expect(meta.dealQuotationListSeesAll({ role: 'import' })).toBe(false);
+    expect(meta.dealQuotationListSeesAll({ role: 'account' })).toBe(false);
+    expect(meta.dealQuotationListSeesAll({ role: 'qc', canCreateQuotation: true })).toBe(false);
+    expect(meta.dealQuotationListSeesAll(null)).toBe(false);
+    expect(meta.dealQuotationListSeesAll(undefined)).toBe(false);
+  });
+});
+
+describe('dealQuotationRepOptions', () => {
+  it('returns distinct, name-sorted options and skips rows with no salesRepId', () => {
+    const rows = [
+      { salesRepId: 9, salesRepName: 'ผึ้ง' },
+      { salesRepId: 6, salesRepName: 'คุณสมหมาย ขายดี' },
+      { salesRepId: null, salesRepName: 'ไม่มีเจ้าของ' },
+      { salesRepId: 9, salesRepName: 'ผึ้ง' }, // duplicate of the first row
+    ];
+    expect(meta.dealQuotationRepOptions(rows)).toEqual([
+      { id: '6', name: 'คุณสมหมาย ขายดี' },
+      { id: '9', name: 'ผึ้ง' },
+    ]);
+  });
+
+  it('is null-safe and returns an empty array for no rows', () => {
+    expect(meta.dealQuotationRepOptions(null)).toEqual([]);
+    expect(meta.dealQuotationRepOptions([])).toEqual([]);
+    expect(meta.dealQuotationRepOptions(undefined)).toEqual([]);
+  });
+});
+
+describe('filterDealQuotationRows', () => {
+  const rows = [
+    { id: 1, salesRepId: 6, customerName: 'บริษัท แฟชั่นไอส์แลนด์ จำกัด', projectName: 'Fashion Island' },
+    { id: 2, salesRepId: 9, customerName: 'บริษัท เดโม จำกัด', projectName: null },
+    { id: 3, salesRepId: 6, customerName: 'บริษัท อื่น จำกัด', projectName: 'Other Project' },
+  ];
+
+  it('filters by repId, string-comparing so a numeric id and a string id both match', () => {
+    expect(meta.filterDealQuotationRows(rows, { repId: 6 }).map((r) => r.id)).toEqual([1, 3]);
+    expect(meta.filterDealQuotationRows(rows, { repId: '6' }).map((r) => r.id)).toEqual([1, 3]);
+  });
+
+  it('filters by text, case-insensitively, against customerName + projectName', () => {
+    expect(meta.filterDealQuotationRows(rows, { text: 'fashion' }).map((r) => r.id)).toEqual([1]);
+    expect(meta.filterDealQuotationRows(rows, { text: 'เดโม' }).map((r) => r.id)).toEqual([2]);
+  });
+
+  it('combines repId and text (AND, not OR)', () => {
+    expect(meta.filterDealQuotationRows(rows, { repId: 6, text: 'other' }).map((r) => r.id)).toEqual([3]);
+    expect(meta.filterDealQuotationRows(rows, { repId: 9, text: 'other' })).toEqual([]);
+  });
+
+  it('filters by amount: lt1m is < threshold, gte1m owns the exact 1,000,000 boundary', () => {
+    const amountRows = [
+      { id: 1, grandTotal: 999999.99 },
+      { id: 2, grandTotal: 1000000 },
+      { id: 3, grandTotal: 2500000 },
+      { id: 4, grandTotal: 0 },
+    ];
+    expect(meta.filterDealQuotationRows(amountRows, { amount: 'lt1m' }).map((r) => r.id)).toEqual([1, 4]);
+    expect(meta.filterDealQuotationRows(amountRows, { amount: 'gte1m' }).map((r) => r.id)).toEqual([2, 3]);
+    // Unknown amount value is a no-op, and amount composes with repId/text (AND).
+    expect(meta.filterDealQuotationRows(amountRows, { amount: 'nonsense' }).map((r) => r.id)).toEqual([1, 2, 3, 4]);
+    expect(meta.filterDealQuotationRows(rows, { repId: 6, amount: 'gte1m' })).toEqual([]);
+  });
+
+  it('is a no-op when both filters are empty/absent', () => {
+    expect(meta.filterDealQuotationRows(rows)).toEqual(rows);
+    expect(meta.filterDealQuotationRows(rows, {})).toEqual(rows);
+    expect(meta.filterDealQuotationRows(rows, { repId: '', text: '' })).toEqual(rows);
+  });
+
+  it('is null-safe on rows and on each row', () => {
+    expect(meta.filterDealQuotationRows(null)).toEqual([]);
+    expect(meta.filterDealQuotationRows(undefined, { text: 'x' })).toEqual([]);
+    expect(meta.filterDealQuotationRows([{ id: 1 }], { text: 'x' })).toEqual([]);
+    expect(meta.filterDealQuotationRows([{ id: 1 }], { repId: '' })).toEqual([{ id: 1 }]);
   });
 });
 

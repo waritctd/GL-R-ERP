@@ -35,25 +35,40 @@ describe('nextImportAction', () => {
     expect(action).toEqual({ code: 'pickupPricingRequest', label: 'รับงาน · ขอราคา', to: '/pricing-requests' });
   });
 
+  // PR-B REVIEW ROUND 1, S8: IR_ISSUED is the status every IR-TRACKED deal (V184 per-factory)
+  // sits at for its whole tracking period — the old "ส่งคำขอนำเข้าแล้ว" label implied a single
+  // legacy click /fulfilment no longer performs (the real control is a per-factory tracker), so
+  // the label must be the neutral one regardless of what triggered nextImportAction to reach it.
+  it('uses the neutral IR-tracking label for markIrSent, not the legacy "mark sent" wording', () => {
+    const ticket = { id: 5, status: 'quotation_issued', fulfillmentStatus: 'IR_ISSUED' };
+    expect(nextImportAction(ticket)).toEqual({ code: 'markIrSent', label: 'อัปเดตสถานะนำเข้า', to: '/fulfilment' });
+  });
+
   it('ignores non-SUBMITTED pricing requests and falls through to the fulfilment chain', () => {
     const ticket = { id: 5, status: 'quotation_issued', fulfillmentStatus: null };
     const action = nextImportAction(ticket, [{ status: 'IMPORT_REVIEWING' }]);
-    expect(action).toEqual({ code: 'issueImportRequest', label: 'ออกคำขอนำเข้า', to: '/fulfilment' });
+    // PR-B REVIEW ROUND 2, X1: issueImportRequest now routes to the deal page — the rewritten
+    // /fulfilment (per-factory tracker) can't act on it and doesn't even list a
+    // null-fulfillmentStatus deal. See importActions.js's `to` table doc comment.
+    expect(action).toEqual({ code: 'issueImportRequest', label: 'ออกคำขอนำเข้า', to: '/tickets/5' });
   });
 
-  // Every CTA must land on a page that can PERFORM the action. All four import
-  // steps are performed in place on /fulfilment, so none of them may deep-link to
-  // a deal page any more — that was the round trip งานนำเข้า exists to remove.
-  it('points all four import-chain actions at the /fulfilment workspace', () => {
+  // PR-B REVIEW ROUND 2, X1: only markIrSent still routes to /fulfilment (its legacy section
+  // lists a non-tracked IR_ISSUED deal with a link out). The rewritten per-factory
+  // ImportFulfilmentPage cannot perform issueImportRequest/markShipping/markGoodsReceived at
+  // all — those three now route to the deal page, where DealFulfilmentPanel still performs
+  // them. This test used to assert all four landed on /fulfilment, back when that page
+  // performed each as a single deal-level click.
+  it('routes markIrSent to /fulfilment and the other three legacy codes to the deal page', () => {
     const cases = [
-      [null, 'issueImportRequest', 'ออกคำขอนำเข้า'],
-      ['IR_ISSUED', 'markIrSent', 'ส่งคำขอนำเข้าแล้ว'],
-      ['IR_SENT', 'markShipping', 'บันทึกออกเดินทาง'],
-      ['SHIPPING', 'markGoodsReceived', 'ยืนยันรับเข้าคลัง'],
+      [null, 'issueImportRequest', 'ออกคำขอนำเข้า', '/tickets/7'],
+      ['IR_ISSUED', 'markIrSent', 'อัปเดตสถานะนำเข้า', '/fulfilment'],
+      ['IR_SENT', 'markShipping', 'บันทึกออกเดินทาง', '/tickets/7'],
+      ['SHIPPING', 'markGoodsReceived', 'ยืนยันรับเข้าคลัง', '/tickets/7'],
     ];
-    cases.forEach(([fulfillmentStatus, code, label]) => {
+    cases.forEach(([fulfillmentStatus, code, label, to]) => {
       const ticket = { id: 7, status: 'quotation_issued', fulfillmentStatus };
-      expect(nextImportAction(ticket)).toEqual({ code, label, to: '/fulfilment' });
+      expect(nextImportAction(ticket)).toEqual({ code, label, to });
     });
   });
 

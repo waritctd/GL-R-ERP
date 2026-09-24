@@ -173,9 +173,10 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
      * landed cost/piece   = UC x sqmPerPiece(1)                        = 915.3702 (money4)
      * total landed cost   = 915.3702 x 100 pieces                      = 91,537.0200
      *
-     * Selling price (margin 20%, no manual override):
+     * Selling price (margin 20%, no manual override) — owner ruling 2026-09-19 (Phase 2 CEO
+     * pricing) replaced the old RoundUp-to-nearest-฿10 rule with HALF_UP 2dp:
      * raw = 915.3702 x 1.20 x selling_buffer(1.07) = 1175.3353368
-     * RoundUp to nearest ฿10: 1175.3353368 / 10 = 117.53... -> ceiling 118 -> x10             = 1,180.0000
+     * HALF_UP 2dp: 1175.3353368                                                          = 1,175.34
      * </pre>
      */
     @Test
@@ -204,7 +205,7 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
 
         assertThat(item.frozenLandedCostPerRequestedUnitThb()).isEqualByComparingTo("915.3702");
         assertThat(item.proposedMarginPct()).isEqualByComparingTo("0.20");
-        assertThat(item.proposedSellingPricePerRequestedUnit()).isEqualByComparingTo("1180.0000");
+        assertThat(item.proposedSellingPricePerRequestedUnit()).isEqualByComparingTo("1175.34");
     }
 
     /**
@@ -492,7 +493,10 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
             new ApprovePricingDecisionRequest("อนุมัติ", UUID.randomUUID().toString()), ceoActor);
         BigDecimal approvedPriceBefore = approved.items().get(0).approvedSellingPricePerRequestedUnit();
         BigDecimal approvedMarginBefore = approved.items().get(0).approvedMarginPct();
-        assertThat(approvedPriceBefore).isEqualByComparingTo("1180.0000");
+        // Owner ruling 2026-09-19 (Phase 2 CEO pricing): HALF_UP 2dp, not RoundUp to nearest ฿10
+        // -- same 915.3702 base cost / 20% margin / 1.07 buffer as singleItem_fullFormulaPipeline
+        // _everyStepHandVerified's own hand-computed derivation.
+        assertThat(approvedPriceBefore).isEqualByComparingTo("1175.34");
 
         // Publish a new config version with DIFFERENT numbers.
         publishNewFormulaConfigVersion();
@@ -651,7 +655,21 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
         CreatePricingRequestRequest request = new CreatePricingRequestRequest(
             PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
             null, "THB", "V109 formula test", UUID.randomUUID().toString(), List.of(item));
-        long pricingRequestId = pricingRequestService.createDraft(ticketId, request, salesActor).summary().id();
+        // V185: bypasses PricingRequestService.createDraft on purpose -- that method now forces
+
+        // every item.s requestedUnitBasis to PER_PIECE (the new sales form never types a unit/basis
+
+        // directly), which would make it impossible to construct a PER_SQM/PER_BOX/PER_LINEAR_M-basis
+
+        // item for this costing-conversion test. PricingRequestRepository.create performs the exact
+
+        // same DB write createDraft would (persistence only, per that class.s own header Javadoc), just
+
+        // without the sales-form-specific derivation/validation -- LandedCostCalculator does not care
+
+        // how an item.s requested_unit_basis got set, only what it does with the value.
+
+        long pricingRequestId = pricingRequests.create(ticketId, pricingRequests.nextRequestCode(), request, salesRepId);
         pricingRequestService.submit(pricingRequestId, salesActor);
         pricingRequestService.pickup(pricingRequestId, importActor);
         FactoryQuoteDto draft = factoryQuoteService.generateDrafts(pricingRequestId, importActor).stream()
@@ -684,7 +702,21 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
         CreatePricingRequestRequest request = new CreatePricingRequestRequest(
             PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
             null, "THB", "V109 multi-item test", UUID.randomUUID().toString(), List.of(itemA, itemB));
-        long pricingRequestId = pricingRequestService.createDraft(ticketId, request, salesActor).summary().id();
+        // V185: bypasses PricingRequestService.createDraft on purpose -- that method now forces
+
+        // every item.s requestedUnitBasis to PER_PIECE (the new sales form never types a unit/basis
+
+        // directly), which would make it impossible to construct a PER_SQM/PER_BOX/PER_LINEAR_M-basis
+
+        // item for this costing-conversion test. PricingRequestRepository.create performs the exact
+
+        // same DB write createDraft would (persistence only, per that class.s own header Javadoc), just
+
+        // without the sales-form-specific derivation/validation -- LandedCostCalculator does not care
+
+        // how an item.s requested_unit_basis got set, only what it does with the value.
+
+        long pricingRequestId = pricingRequests.create(ticketId, pricingRequests.nextRequestCode(), request, salesRepId);
         pricingRequestService.submit(pricingRequestId, salesActor);
         pricingRequestService.pickup(pricingRequestId, importActor);
         FactoryQuoteDto draft = factoryQuoteService.generateDrafts(pricingRequestId, importActor).stream()

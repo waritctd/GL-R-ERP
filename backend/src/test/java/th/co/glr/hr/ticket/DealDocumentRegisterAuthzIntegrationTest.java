@@ -34,6 +34,7 @@ import th.co.glr.hr.customer.ProjectDto;
 import th.co.glr.hr.customer.ProjectRepository;
 import th.co.glr.hr.customerquotation.CustomerQuotationRepository;
 import th.co.glr.hr.customerquotation.CustomerQuotationService;
+import th.co.glr.hr.dealquotation.WastageCalculator;
 import th.co.glr.hr.deposit.DepositNoticeRenderer;
 import th.co.glr.hr.deposit.DepositNoticeRepository;
 import th.co.glr.hr.deposit.DepositNoticeService;
@@ -49,7 +50,6 @@ import th.co.glr.hr.pricingrequest.PricingRequestRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.pricingrequest.QuantityType;
-import th.co.glr.hr.pricingrequest.UnitBasis;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
 /**
@@ -70,7 +70,7 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  *
  * <ul>
  *   <li><b>The remaining invoice shares {@link DepositNoticeService}'s deposit-notice gate, NOT
- *       the attachments gate.</b> {@code getRemainingInvoiceXlsx} calls {@code
+ *       the attachments gate.</b> {@code getRemainingInvoiceOptions} calls {@code
  *       requireTicketViewer} FIRST, before its own {@code quotation_issued} status check — so the
  *       403 fires (or does not) purely off the same role/participation rule as {@code
  *       listByTicket}, independent of the ticket's business status. This branch's brief originally
@@ -200,10 +200,16 @@ class DealDocumentRegisterAuthzIntegrationTest extends AbstractPostgresIntegrati
 
         long catalogPriceId = insertCatalogProduct("Factory Doc Register", "TH", "DOCREG-001",
             new BigDecimal("100.00"), "THB", "per_piece");
+        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
+        // quantity are now required on every item PricingRequestService#createDraft persists —
+        // requestedQty/requestedUnit/requestedUnitBasis are derived instead.
         var item = new PricingRequestRequests.PricingRequestItemRequest(null, catalogPriceId, null,
-            "Brand", "Model", "Brand Model", null, null, "60x60", "Factory Doc Register",
-            new BigDecimal("10"), new BigDecimal("10"), "piece", UnitBasis.PER_PIECE,
-            QuantityType.CONFIRMED, null, null, null);
+            "Brand", "Model", "Brand Model", "White", "Matte", "60x60", "Factory Doc Register",
+            null, null, null, null,
+            QuantityType.CONFIRMED, null, null, null,
+            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+            null, 10, WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+            false, "ไทย-สต็อก", 3, 7, null, null, null);
         var createPrRequest = new PricingRequestRequests.CreatePricingRequestRequest(
             PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
             null, "THB", "doc register authz test", UUID.randomUUID().toString(), List.of(item));
@@ -266,7 +272,12 @@ class DealDocumentRegisterAuthzIntegrationTest extends AbstractPostgresIntegrati
     void nonParticipantSalesRep_cannotReachAnotherRepsDocuments() throws Exception {
         assertForbidden(() -> ticketService.get(ticketId, salesOtherActor));
         assertForbidden(() -> depositNoticeService.listByTicket(ticketId, salesOtherActor));
-        assertForbidden(() -> depositNoticeService.getRemainingInvoiceXlsx(ticketId, salesOtherActor));
+        // O1 (GLA-99 step 2 review-round-1): the stateless getRemainingInvoiceXlsx this used to
+        // also assert here is gone — /options shares the SAME requireTicketViewer gate (finding 4,
+        // still true) and is the one still-live stateless entry point, so it alone still proves
+        // this. The STORED write/read gate (RemainingInvoiceService, package th.co.glr.hr.deposit)
+        // has its own real-DB wrong-way-round coverage in RemainingInvoiceServiceIntegrationTest.
+        assertForbidden(() -> depositNoticeService.getRemainingInvoiceOptions(ticketId, salesOtherActor));
         assertForbidden(() -> pricingRequestService.get(pricingRequestId, salesOtherActor));
         assertForbidden(() -> quotationService.listForPricingRequest(pricingRequestId, salesOtherActor));
         assertAttachmentsForbidden(salesOtherActor);
@@ -281,7 +292,7 @@ class DealDocumentRegisterAuthzIntegrationTest extends AbstractPostgresIntegrati
         for (UserPrincipal actor : List.of(hrActor, employeeActor)) {
             assertForbidden(() -> ticketService.get(ticketId, actor));
             assertForbidden(() -> depositNoticeService.listByTicket(ticketId, actor));
-            assertForbidden(() -> depositNoticeService.getRemainingInvoiceXlsx(ticketId, actor));
+            assertForbidden(() -> depositNoticeService.getRemainingInvoiceOptions(ticketId, actor));
             assertForbidden(() -> pricingRequestService.get(pricingRequestId, actor));
             assertForbidden(() -> quotationService.listForPricingRequest(pricingRequestId, actor));
             assertAttachmentsForbidden(actor);
@@ -329,10 +340,10 @@ class DealDocumentRegisterAuthzIntegrationTest extends AbstractPostgresIntegrati
         // does not help here — DepositNoticeService#requireTicketViewer 403s import outright,
         // before it ever asks who created or picked up the ticket.
         assertForbidden(() -> depositNoticeService.listByTicket(ticketId, importAssigneeActor));
-        // getRemainingInvoiceXlsx calls requireTicketViewer FIRST, so this 403s even though the
+        // getRemainingInvoiceOptions calls requireTicketViewer FIRST, so this 403s even though the
         // ticket is nowhere near 'quotation_issued' — the auth check never reaches the status
         // check for a caller requireTicketViewer already refuses.
-        assertForbidden(() -> depositNoticeService.getRemainingInvoiceXlsx(ticketId, importAssigneeActor));
+        assertForbidden(() -> depositNoticeService.getRemainingInvoiceOptions(ticketId, importAssigneeActor));
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -352,8 +363,43 @@ class DealDocumentRegisterAuthzIntegrationTest extends AbstractPostgresIntegrati
         assertThatCode(() -> ticketService.get(ticketId, importNonParticipantActor)).doesNotThrowAnyException();
         assertThat(ticketService.get(ticketId, importNonParticipantActor).quotations()).isEmpty();
         assertForbidden(() -> depositNoticeService.listByTicket(ticketId, importNonParticipantActor));
-        assertForbidden(() -> depositNoticeService.getRemainingInvoiceXlsx(ticketId, importNonParticipantActor));
+        assertForbidden(() -> depositNoticeService.getRemainingInvoiceOptions(ticketId, importNonParticipantActor));
         assertAttachmentsForbidden(importNonParticipantActor);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // REQUIRED CASE (owner ruling A — quotation selection, 2026-09-17): a `quotationId` that does
+    // not belong to (or does not qualify for) THIS ticket must be refused with 400, even for the
+    // deal's own owner — "never allow picking another ticket's quotation" is the load-bearing
+    // guarantee, proven here against the REAL findQualifyingQuotations query on real Postgres, not
+    // a mock that could be made to "pass" while the SQL/lookup did something else.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void ownerCannotPickAQuotationIdThatDoesNotQualifyForThisTicket() {
+        // No CustomerQuotation exists at all yet for this ticket's pricing request (it is still
+        // SUBMITTED, not through PricingDecision/CustomerQuotation issue+accept) — so ANY
+        // quotationId, including one that belongs to a wholly different ticket/pricing request
+        // elsewhere in the same database, is necessarily outside this ticket's qualifying set.
+        // The owner otherwise has full access to this ticket (requireTicketViewer passes) — the
+        // 400 below is entirely the quotationId cross-reference guard, not a viewer-role refusal.
+        //
+        // Ticket status is force-set to quotation_issued directly (fixture-only shortcut, same
+        // pattern as this class's own `assigned_to` UPDATE above) so this test isolates the
+        // quotationId gate from the separate status gate (requireQuotationIssuedForRemainingInvoice)
+        // — driving a real deal all the way to quotation_issued through PricingDecision/
+        // CustomerQuotation/OrderConfirmationService is out of scope for what THIS test needs to
+        // prove, and that status gate already has its own coverage elsewhere.
+        jdbc.update("UPDATE sales.ticket SET status = 'quotation_issued' WHERE ticket_id = :ticketId",
+            Map.of("ticketId", ticketId));
+
+        // getRemainingInvoiceOptions with an explicit invalid quotationId refuses outright
+        // (400) rather than silently falling back to a default — see resolveRemainingInvoice's
+        // own Javadoc: a caller-supplied id always wins or is refused, never ignored.
+        assertThatThrownBy(() -> depositNoticeService.getRemainingInvoiceOptions(
+                ticketId, 999999L, salesOwnerActor))
+            .isInstanceOfSatisfying(ApiException.class, e ->
+                assertThat(e.getStatus()).isEqualTo(org.springframework.http.HttpStatus.BAD_REQUEST));
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────

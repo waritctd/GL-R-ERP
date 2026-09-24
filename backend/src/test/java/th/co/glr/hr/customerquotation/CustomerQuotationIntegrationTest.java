@@ -33,6 +33,7 @@ import th.co.glr.hr.customerquotation.CustomerQuotationRequests.IssueCustomerQuo
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.RecordQuotationOutcomeRequest;
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.UpdateCustomerQuotationItemRequest;
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.UpdateCustomerQuotationRequest;
+import th.co.glr.hr.dealquotation.WastageCalculator;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
@@ -377,22 +378,24 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         // per piece = 91537.0200/200 = 457.6851, and 9153.7020*10 == 457.6851*200 exactly.
         //
         // But the LINE TOTAL below is no longer basis-invariant, and that is now CORRECT, not a
-        // regression: V109's RoundUp[cost x (1+margin) x selling_buffer, nearest ฿10] rounds at
-        // the PER-REQUESTED-UNIT level, BEFORE multiplying by quantity — so the same underlying
-        // cost rounds up by a different RELATIVE amount depending on how large the per-unit price
-        // is, and that per-unit rounding slop gets multiplied by a different quantity (10 boxes
-        // vs 200 pieces) on each side. Hand-verified at margin=0.10 (approvedSingleItemPricingRequest's
-        // own default), sellingBuffer=1.07:
-        //   per-box:   9153.7020 x 1.10 x 1.07 = 10773.907254 -> RoundUp/10 -> ฿10,780.0000/box
-        //              x 10 boxes   = ฿107,800.0000
-        //   per-piece:  457.6851 x 1.10 x 1.07 =   538.6953827 -> RoundUp/10 -> ฿540.0000/piece
-        //              x 200 pieces = ฿108,000.0000
-        // A genuine ฿200 difference on a ฿108k order (≈0.19%) — the price of rounding granularity,
-        // not a computation error; asserting the two independently-derived expectations (rather
-        // than asserting the two totals equal EACH OTHER, which is no longer true) is what proves
-        // that.
-        assertThat(perBoxItem.lineSubtotal()).isEqualByComparingTo("107800.0000");
-        assertThat(perPieceItem.lineSubtotal()).isEqualByComparingTo("108000.0000");
+        // regression. Owner ruling 2026-09-19 (Phase 2 CEO pricing) replaced V109's original rule
+        // — cost x (1+margin) x selling_buffer, rounded UP to the nearest ฿10 — with HALF_UP 2dp
+        // (see PricingFormulaEngine#sellingPrice, formerly roundUpSellingPrice). It still
+        // rounds at the PER-REQUESTED-UNIT level, BEFORE multiplying by quantity, so the same
+        // underlying cost still rounds by a different RELATIVE amount depending on how large the
+        // per-unit price is, and that per-unit rounding slop still gets multiplied by a different
+        // quantity (10 boxes vs 200 pieces) on each side — only the rounding RULE changed, not
+        // this structural non-invariance. Hand-verified at margin=0.10
+        // (approvedSingleItemPricingRequest's own default), sellingBuffer=1.07:
+        //   per-box:   9153.7020 x 1.10 x 1.07 = 10773.907254 -> HALF_UP 2dp -> ฿10,773.91/box
+        //              x 10 boxes   = ฿107,739.10
+        //   per-piece:  457.6851 x 1.10 x 1.07 =   538.6953827 -> HALF_UP 2dp -> ฿538.70/piece
+        //              x 200 pieces = ฿107,740.00
+        // A genuine ฿0.90 difference on a ฿107.7k order — the price of rounding granularity, not a
+        // computation error; asserting the two independently-derived expectations (rather than
+        // asserting the two totals equal EACH OTHER, which is not true) is what proves that.
+        assertThat(perBoxItem.lineSubtotal()).isEqualByComparingTo("107739.10");
+        assertThat(perPieceItem.lineSubtotal()).isEqualByComparingTo("107740.00");
         assertThat(perBoxQuotation.subtotalAmount()).isEqualByComparingTo(perBoxItem.lineSubtotal());
         assertThat(perPieceQuotation.subtotalAmount()).isEqualByComparingTo(perPieceItem.lineSubtotal());
     }
@@ -480,6 +483,87 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
         List<CustomerQuotationDto> all = quotationService.listForPricingRequest(pricingRequestId, salesActor);
         assertThat(all).hasSize(2);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Quotation numbering (owner ruling 2026-09-18): "{base}-{n}" from the very first document,
+    // matching the direct quotation flow (DealQuotationRepository#baseNumber/#revisionNumber,
+    // shared via QuotationNumbering). See that class's Javadoc for the full rule, including the
+    // legacy-bare-number fallback pinned by createRevision_ofLegacyBareNumberedQuotation_* below.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void create_firstQuotation_getsDashOneSuffix() {
+        long pricingRequestId = approvedPricingRequest();
+        CustomerQuotationDto draft = quotationService.create(pricingRequestId,
+            new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
+        // "QT-<year>-<4-digit seq>-1" -- the suffix from the very first document, not a bare
+        // number. Regex (not a literal seq value) because the sequence is shared, real-DB state.
+        assertThat(draft.number()).matches("QT-\\d{4}-\\d{4}-1");
+    }
+
+    @Test
+    void createRevision_bumpsSameBaseNumber_dash2ThenDash3() {
+        long pricingRequestId = approvedPricingRequest();
+        CustomerQuotationDto draft = quotationService.create(pricingRequestId,
+            new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
+        CustomerQuotationDto issued = quotationService.issue(draft.id(), new IssueCustomerQuotationRequest(null), salesActor);
+        String base = issued.number().substring(0, issued.number().length() - "-1".length());
+        assertThat(issued.number()).isEqualTo(base + "-1");
+
+        CustomerQuotationDto rev2 = quotationService.createRevision(issued.id(),
+            new CreateRevisionRequest(null, UUID.randomUUID().toString()), salesActor);
+        assertThat(rev2.number()).isEqualTo(base + "-2");
+
+        CustomerQuotationDto rev2Issued = quotationService.issue(rev2.id(), new IssueCustomerQuotationRequest(null), salesActor);
+        CustomerQuotationDto rev3 = quotationService.createRevision(rev2Issued.id(),
+            new CreateRevisionRequest(null, UUID.randomUUID().toString()), salesActor);
+        assertThat(rev3.number()).isEqualTo(base + "-3");
+    }
+
+    @Test
+    void createRevision_ofLegacyBareNumberedQuotation_getsDashTwo() {
+        long pricingRequestId = approvedPricingRequest();
+        CustomerQuotationDto draft = quotationService.create(pricingRequestId,
+            new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
+        CustomerQuotationDto issued = quotationService.issue(draft.id(), new IssueCustomerQuotationRequest(null), salesActor);
+
+        // Simulate a quotation issued BEFORE this change: a bare number, no "-1" suffix, at
+        // revisionNo == 1 -- exactly the shape a pre-2026-09-18 production row carries. Writing
+        // directly to sales.quotation (never renamed/migrated by app code per the owner ruling) is
+        // the only way to reproduce that legacy shape in a fresh test fixture.
+        String bareNumber = issued.number().substring(0, issued.number().length() - "-1".length());
+        jdbc.update("UPDATE sales.quotation SET number = :number WHERE quotation_id = :id",
+            Map.of("number", bareNumber, "id", issued.id()));
+
+        CustomerQuotationDto rev2 = quotationService.createRevision(issued.id(),
+            new CreateRevisionRequest(null, UUID.randomUUID().toString()), salesActor);
+        // {bare}-2 -- treating the bare original as version 1. NOT {bare}-1 (would collide
+        // conceptually with the original) and NOT a freshly-minted, unrelated code.
+        assertThat(rev2.number()).isEqualTo(bareNumber + "-2");
+    }
+
+    @Test
+    void quotationNumbers_areNeverReusedAcrossRevisions() {
+        long pricingRequestId = approvedPricingRequest();
+        CustomerQuotationDto draft = quotationService.create(pricingRequestId,
+            new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
+        CustomerQuotationDto rev1 = quotationService.issue(draft.id(), new IssueCustomerQuotationRequest(null), salesActor);
+        CustomerQuotationDto rev2 = quotationService.createRevision(rev1.id(),
+            new CreateRevisionRequest(null, UUID.randomUUID().toString()), salesActor);
+        CustomerQuotationDto rev2Issued = quotationService.issue(rev2.id(), new IssueCustomerQuotationRequest(null), salesActor);
+        CustomerQuotationDto rev3 = quotationService.createRevision(rev2Issued.id(),
+            new CreateRevisionRequest(null, UUID.randomUUID().toString()), salesActor);
+
+        List<String> numbers = List.of(rev1.number(), rev2.number(), rev3.number());
+        assertThat(numbers).doesNotHaveDuplicates();
+
+        // The UNIQUE constraint (V6 sales.quotation.number) is the real enforcement -- confirm the
+        // three rows actually persisted three distinct strings, not just three distinct DTOs.
+        Long distinctCount = jdbc.queryForObject(
+            "SELECT COUNT(DISTINCT number) FROM sales.quotation WHERE quotation_id IN (:ids)",
+            Map.of("ids", List.of(rev1.id(), rev2.id(), rev3.id())), Long.class);
+        assertThat(distinctCount).isEqualTo(3L);
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -1052,10 +1136,17 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     private long approvedSingleItemPricingRequestWithRenderFields(
         String model, String color, String texture, String size
     ) {
+        // V185 (direct-deal-form parity): thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now
+        // required on every item PricingRequestService#createDraft persists — requestedQty/
+        // requestedUnit/requestedUnitBasis are derived instead. color/texture/size are the values
+        // this test itself is exercising, so they still flow through untouched.
         PricingRequestRequests.PricingRequestItemRequest item = new PricingRequestRequests.PricingRequestItemRequest(
             null, catalogProductIdFactoryC, null, "RenderBrand4", model, "RenderBrand4 " + model,
-            color, texture, size, "Factory C4", new BigDecimal("1"), new BigDecimal("1"), "piece",
-            UnitBasis.PER_PIECE, QuantityType.CONFIRMED, null, null, null);
+            color, texture, size, "Factory C4", null, null, null, null,
+            QuantityType.CONFIRMED, null, null, null,
+            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+            null, 1, WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+            false, "ไทย-สต็อก", 3, 7, null, null, null);
         PricingRequestRequests.CreatePricingRequestRequest request = new PricingRequestRequests.CreatePricingRequestRequest(
             PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
             null, "THB", "step 4 render-fields unit test", UUID.randomUUID().toString(), List.of(item));
@@ -1105,7 +1196,11 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         PricingRequestRequests.CreatePricingRequestRequest request = new PricingRequestRequests.CreatePricingRequestRequest(
             PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
             null, "THB", "step 4 unit test", UUID.randomUUID().toString(), List.of(item));
-        long pricingRequestId = pricingRequestService.createDraft(ticketId, request, salesActor).summary().id();
+        // V185: bypasses PricingRequestService.createDraft on purpose -- that method now forces every
+        // item's requestedUnitBasis to PER_PIECE, which would make it impossible to construct the
+        // non-PER_PIECE requestedUnitBasis this unit-conversion matrix exists to test.
+        // PricingRequestRepository.create performs the exact same DB write createDraft would.
+        long pricingRequestId = pricingRequests.create(ticketId, pricingRequests.nextRequestCode(), request, salesRepId);
         pricingRequestService.submit(pricingRequestId, salesActor);
         pricingRequestService.pickup(pricingRequestId, importActor);
         FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Factory C4");
@@ -1179,9 +1274,16 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         Long productId = "Factory A4".equals(factory) ? catalogProductIdFactoryA
             : "Factory B4".equals(factory) ? catalogProductIdFactoryB
             : "Factory C4".equals(factory) ? catalogProductIdFactoryC : null;
+        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
+        // quantity are now required on every item PricingRequestService#createDraft persists —
+        // requestedQty/requestedUnit/requestedUnitBasis are derived instead. roundToFullBox=false +
+        // piecesInput=qty keeps the derived requestedQty byte-identical to `qty`.
         return new PricingRequestRequests.PricingRequestItemRequest(null, productId, null, brand, model,
-            brand + " " + model, null, null, "60x60", factory, qty, qty, "piece", UnitBasis.PER_PIECE,
-            QuantityType.CONFIRMED, null, null, null);
+            brand + " " + model, "White", "Matte", "60x60", factory, null, null, null, null,
+            QuantityType.CONFIRMED, null, null, null,
+            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+            null, qty.intValueExact(), WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+            false, "ไทย-สต็อก", 3, 7, null, null, null);
     }
 
     private TicketItemRequest ticketItem(String brand, String model, String factory) {

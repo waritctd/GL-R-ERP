@@ -944,10 +944,18 @@ export async function setEntryChannel(sessions, ticketId, value, { note = null }
 
 /**
  * POST /api/tickets/{id}/deposit-policy — TicketController.depositPolicy (ticket/
- * TicketController.java:271-277); TicketService.waiveDeposit (ticket/TicketService.java:2032-2057)
- * requires ACCOUNT_ROLES (account, ceo) and a non-blank reason, and refuses (409) once a real
- * deposit notice has actually been issued — paymentStatus must still be null or CUSTOMER_CONFIRMED
- * (DepositPolicy.NON_REQUIRED = {NOT_REQUIRED, WAIVED, CREDIT_CUSTOMER}).
+ * TicketController.java:271-277); TicketService.waiveDeposit requires the OWNING sales rep, or
+ * sales_manager as a backup (GLA-118, owner ruling 2026-09-20, part B — see
+ * TicketService#canSetDepositPolicy; the original 2026-09-17 ruling was owner-only) and a
+ * non-blank reason, and refuses (409) once a real deposit notice has actually been issued —
+ * paymentStatus must still be null or CUSTOMER_CONFIRMED (DepositPolicy.NON_REQUIRED =
+ * {NOT_REQUIRED, WAIVED, CREDIT_CUSTOMER}).
+ *
+ * ⚠️ This used to read `sessions.account` (the pre-GLA-118 gate was ACCOUNT_ROLES — account/ceo).
+ * It is now `sessions.sales`, which is correct and not a workaround: every deal this file drives
+ * is created via createDeal(sessions.sales, ...) (see the comment on completeDelivery below —
+ * "sessions.sales is therefore always the deal's createdById"), so sessions.sales is also always
+ * the OWNING rep TicketService#canSetDepositPolicy requires.
  *
  * ⚠️ Needed BEFORE, not merely "at some point before", any deposit-gated step this slice reaches
  * without ever running the real DepositNoticeService document flow:
@@ -961,11 +969,11 @@ export async function setEntryChannel(sessions, ticketId, value, { note = null }
  * @param opts.policy default 'NOT_REQUIRED' — the literal every case in this slice uses.
  */
 export async function waiveDeposit(sessions, ticketId, { policy = 'NOT_REQUIRED', reason }) {
-  const response = await apiWrite(sessions.account, 'post', `/api/tickets/${ticketId}/deposit-policy`, {
+  const response = await apiWrite(sessions.sales, 'post', `/api/tickets/${ticketId}/deposit-policy`, {
     policy,
     reason,
   });
-  expect(response.status(), `account POST /api/tickets/${ticketId}/deposit-policy -> ${policy}`).toBe(200);
+  expect(response.status(), `sales POST /api/tickets/${ticketId}/deposit-policy -> ${policy}`).toBe(200);
   const { ticket } = await response.json();
   return ticket;
 }
@@ -1104,22 +1112,29 @@ export async function declareStockCoverage(sessions, role, ticketId, lines) {
  * fully paid before delivery finished (:1199-1203; never the case in this slice, since
  * {@link confirmFinalPayment} always runs after this).
  */
+// REVIEW ROUND 1, B1 (2026-09-18): called as sessions.sales, not sessions.import. TicketService#
+// canWriteDelivery is now CEO, or the deal's OWN owning sales rep -- import's write access to
+// ส่งมอบสินค้า was a TRANSFER to Sales (owner ruling 2026-08-17), not an addition, so calling this
+// as import now 403s. Every deal this file drives is created via createTicket(sessions.sales, ...)
+// (sessions.sales is therefore always the deal's createdById), so sessions.sales is also always
+// the owning rep for every call site in this suite.
 export async function completeDelivery(sessions, ticketId, { note, recipientName } = {}) {
-  const response = await apiWrite(sessions.import, 'post', `/api/tickets/${ticketId}/deliveries/complete`, {
+  const response = await apiWrite(sessions.sales, 'post', `/api/tickets/${ticketId}/deliveries/complete`, {
     note: note ?? null,
     recipientName: recipientName ?? null,
   });
-  expect(response.status(), `import POST /api/tickets/${ticketId}/deliveries/complete`).toBe(200);
+  expect(response.status(), `sales (owning rep) POST /api/tickets/${ticketId}/deliveries/complete`).toBe(200);
   const { ticket } = await response.json();
   return ticket;
 }
 
 /**
  * POST /api/tickets/{id}/final-payment — TicketController.confirmFinalPayment (ticket/
- * TicketController.java:400-404); TicketService.confirmFinalPayment (:1210-1238) requires
- * ACCOUNT_ROLES and canConfirmFinalPaymentNow (:1470-1481: paymentStatus AWAITING_FINAL_PAYMENT or
+ * TicketController.java:400-404); TicketService.confirmFinalPayment requires PAYMENT_RECORD_ROLES
+ * (GLA-118, owner ruling 2026-09-20, part A: account ONLY, no CEO fallback — this used to be
+ * ACCOUNT_ROLES) and canConfirmFinalPaymentNow (paymentStatus AWAITING_FINAL_PAYMENT or
  * DEPOSIT_PAID, or a bypass deposit policy with paymentStatus CUSTOMER_CONFIRMED — see
- * {@link waiveDeposit}).
+ * {@link waiveDeposit}). Always called as sessions.account below — never sessions.ceo.
  *
  * Records the full outstanding balance via recordPaymentInternal -> reconcilePaymentStatus, or —
  * if the deal is somehow already fully covered — advances the payment track directly (:1220-1234);

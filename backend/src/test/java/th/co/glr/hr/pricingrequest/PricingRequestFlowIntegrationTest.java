@@ -28,6 +28,7 @@ import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.customer.ProjectDto;
 import th.co.glr.hr.customer.ProjectRepository;
+import th.co.glr.hr.dealquotation.WastageCalculator;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
@@ -537,9 +538,18 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
             List.of(pricingItem("Honda", "Civic")));
     }
 
+    // V185 (direct-deal-form parity): requestedQty/requestedQtySqm/requestedUnit/requestedUnitBasis
+    // are no longer sent — PricingRequestService#resolveItems derives them from the tile fields
+    // below. color/texture/size/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now REQUIRED
+    // (owner ruling), so this fixture supplies all of them (PIECES mode, 1 piece, no wastage, no
+    // box rounding) rather than the pre-V185 bare brand/model/requestedQty shape.
     private PricingRequestItemRequest pricingItem(String brand, String model) {
-        return new PricingRequestItemRequest(null, catalogProductId, null, brand, model, brand + " " + model, null, null, null, null,
-            new BigDecimal("1"), null, "PIECE", UnitBasis.PER_PIECE, QuantityType.REFERENCE, null, null, null);
+        return new PricingRequestItemRequest(null, catalogProductId, null, brand, model, brand + " " + model,
+            "สีทดสอบ", "ผิวทดสอบ", "60x60", null,
+            null, null, null, null, QuantityType.REFERENCE, null, null, null,
+            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+            null, 1, WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+            null, "ไทย-สต็อก", 3, 7, null, null, null);
     }
 
     private static MockMultipartFile sampleFile() {

@@ -213,6 +213,29 @@ class ImportRequestRendererTest {
         assertThat(text).contains("บริษัท").contains("ยู่ฮุย").contains("อินทีเรีย").contains("จำกัด");
     }
 
+    /**
+     * Direct {@link ImportRequestRenderer#rowsRequired} capacity test (owner decision 09-18 #3 §A):
+     * a line with no note costs ONE row, a line WITH a note costs TWO — the note occupies a second,
+     * indivisible row rather than sharing its line's row. Asserted on the row count itself rather
+     * than indirectly through pagination, so a future capacity regression fails here first instead
+     * of only showing up as an off-by-one on some later page-count test.
+     */
+    @Test
+    void rowsRequired_countsANoteAsASecondRow() {
+        Line withoutNote = new Line(1, "Plain Line", "60x60", new BigDecimal("10"), "pcs", null);
+        Line withNote = new Line(1, "Noted Line", "60x60", new BigDecimal("10"), "pcs", "สั่งตามPO");
+
+        ImportRequestFormData oneLineNoNote = withLines(List.of(withoutNote));
+        ImportRequestFormData oneLineWithNote = withLines(List.of(withNote));
+        ImportRequestFormData twoLinesOneNoted = withLines(List.of(withoutNote, withNote));
+
+        assertThat(ImportRequestRenderer.rowsRequired(oneLineNoNote)).isEqualTo(1);
+        assertThat(ImportRequestRenderer.rowsRequired(oneLineWithNote))
+            .as("a note is a second, indivisible row")
+            .isEqualTo(2);
+        assertThat(ImportRequestRenderer.rowsRequired(twoLinesOneNoted)).isEqualTo(3);
+    }
+
     @Test
     void aFormThatFitsIsASingleSheetAndCarriesNoPageMarker() throws Exception {
         try (PDDocument doc = Loader.loadPDF(renderer.render(ir69068()))) {

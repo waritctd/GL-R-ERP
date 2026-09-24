@@ -29,6 +29,7 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.customer.ContactDto;
 import th.co.glr.hr.customer.ContactRepository;
+import th.co.glr.hr.dealquotation.WastageCalculator;
 import th.co.glr.hr.factoryquote.FactoryQuoteCarryForward;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestAttachmentDto;
@@ -36,6 +37,7 @@ import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestItemDto;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestSummaryDto;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.CancelPricingRequestRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.CreatePricingRequestRequest;
+import th.co.glr.hr.pricingrequest.PricingRequestRequests.CustomerChangeRevisionRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.PricingRequestItemRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.UpdatePricingRequestAttachmentRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.UpdatePricingRequestRequest;
@@ -197,12 +199,12 @@ class PricingRequestServiceTest {
         when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
         CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
             List.of(sampleItemRequest(501L, QuantityType.REFERENCE)));
-        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L))).thenReturn(20L);
+        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L))).thenReturn(20L);
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
 
         service.createDraft(10L, request, salesActor);
 
-        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L));
+        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L));
         verify(requestRepo).addEvent(eq(20L), eq(10L), eq(1L), any(),
             eq(PricingRequestEventKind.PRICING_REQUEST_CREATED), eq(null), eq(PricingRequestStatus.DRAFT),
             eq(null), eq(null));
@@ -215,7 +217,7 @@ class PricingRequestServiceTest {
         when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
         CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
             List.of(sampleItemRequest(null, QuantityType.REFERENCE)));
-        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L))).thenReturn(20L);
+        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L))).thenReturn(20L);
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
 
         service.createDraft(10L, request, salesActor);
@@ -263,14 +265,20 @@ class PricingRequestServiceTest {
         stubTicket(10L, 1L, DealLifecycle.ACTIVE);
         when(requestRepo.findItemIdsForTicket(10L)).thenReturn(List.of(501L));
         when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
+        // V185: model is now unconditionally required (see itemRequestWithIdentity's own
+        // Javadoc) — this test isolates sourceTicketItemId as the identity signal, ALONGSIDE the
+        // now-mandatory model, not instead of it.
         CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
-            List.of(itemRequestWithIdentity(501L, null, null, null, null)));
-        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L))).thenReturn(20L);
+            List.of(itemRequestWithIdentity(501L, null, null, "Model (baseline)", null)));
+        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L))).thenReturn(20L);
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
 
         service.createDraft(10L, request, salesActor);
 
-        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L));
+        // any(), not eq(request): resolveItems() derives requestedQty/Unit/Basis and the wastage
+        // audit columns onto a NEW PricingRequestItemRequest before this call, so the object the
+        // repository actually receives is never equal to the one this test built.
+        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L));
     }
 
     @Test
@@ -278,14 +286,15 @@ class PricingRequestServiceTest {
         stubTicket(10L, 1L, DealLifecycle.ACTIVE);
         when(requestRepo.findItemIdsForTicket(10L)).thenReturn(List.of());
         when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
+        // V185: see createDraft_acceptsItemIdentifiedBySourceTicketItemIdAlone's identical comment.
         CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
-            List.of(itemRequestWithIdentity(null, 77L, null, null, null)));
-        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L))).thenReturn(20L);
+            List.of(itemRequestWithIdentity(null, 77L, null, "Model (baseline)", null)));
+        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L))).thenReturn(20L);
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
 
         service.createDraft(10L, request, salesActor);
 
-        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L));
+        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L));
     }
 
     @Test
@@ -295,12 +304,12 @@ class PricingRequestServiceTest {
         when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
         CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
             List.of(itemRequestWithIdentity(null, null, null, "Model X", null)));
-        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L))).thenReturn(20L);
+        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L))).thenReturn(20L);
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
 
         service.createDraft(10L, request, salesActor);
 
-        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L));
+        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L));
     }
 
     @Test
@@ -317,13 +326,16 @@ class PricingRequestServiceTest {
         stubTicket(10L, 1L, DealLifecycle.ACTIVE);
         when(requestRepo.findItemIdsForTicket(10L)).thenReturn(List.of());
         when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
+        // V185: see createDraft_acceptsItemIdentifiedBySourceTicketItemIdAlone's identical comment
+        // — model is now unconditionally required alongside whatever else identifies the item.
         CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
-            List.of(itemRequestWithIdentity(null, null, null, null, null, "กระเบื้องพอร์ซเลน 60x60 สีขาว")));
-        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L))).thenReturn(20L);
+            List.of(itemRequestWithIdentity(null, null, null, "Model (baseline)", null,
+                "กระเบื้องพอร์ซเลน 60x60 สีขาว")));
+        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L))).thenReturn(20L);
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
         service.createDraft(10L, request, salesActor);
 
-        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L));
+        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L));
     }
 
     @Test
@@ -362,12 +374,15 @@ class PricingRequestServiceTest {
         when(requestRepo.findItems(20L)).thenReturn(List.of());
         when(requestRepo.findEvents(20L)).thenReturn(List.of());
         when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
-        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), eq(sampleCreateRequest()), eq(1L))).thenReturn(0L);
+        // any(), not eq(sampleCreateRequest()): resolveItems() derives requestedQty/Unit/Basis
+        // onto a new item object before this call, so the actual argument is never equal to a
+        // fresh sampleCreateRequest() call's own (unresolved) items.
+        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L))).thenReturn(0L);
 
         var replay = service.createDraft(10L, sampleCreateRequest(), salesActor);
 
         assertThat(replay.summary().id()).isEqualTo(20L);
-        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), eq(sampleCreateRequest()), eq(1L));
+        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L));
         verify(requestRepo, never()).replaceItems(anyLong(), any());
         verify(requestRepo, never()).addEvent(anyLong(), anyLong(), anyLong(), any(), any(), any(), any(), any(), any());
     }
@@ -486,12 +501,12 @@ class PricingRequestServiceTest {
         when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
         CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
             List.of(sampleItemRequest(null, QuantityType.REFERENCE)));
-        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L))).thenReturn(20L);
+        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L))).thenReturn(20L);
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
 
         service.createDraft(10L, request, salesActor);
 
-        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L));
+        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L));
     }
 
     @Test
@@ -521,12 +536,12 @@ class PricingRequestServiceTest {
         when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
         CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
             List.of(sampleItemRequest(null, QuantityType.REFERENCE)));
-        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L))).thenReturn(20L);
+        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L))).thenReturn(20L);
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
 
         service.createDraft(10L, request, salesActor);
 
-        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L));
+        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L));
         verifyNoInteractions(contactRepo);
     }
 
@@ -672,6 +687,66 @@ class PricingRequestServiceTest {
         verify(requestRepo).addEvent(eq(20L), eq(10L), eq(1L), any(),
             eq(PricingRequestEventKind.PRICING_REQUEST_UPDATED), eq(PricingRequestStatus.DRAFT),
             eq(PricingRequestStatus.DRAFT), eq(null), eq(null));
+    }
+
+    // ── updateDraft (GLA-102 part 2: recipient guard closed on the OTHER route) ────────────
+    //
+    // createCustomerChangeRevision refuses a revision child whose recipientType differs from its
+    // parent's, but that guard alone was reachable sideways: nothing stopped a plain PUT
+    // (updateDraft) on an already-created child from repointing recipient_type afterward, and
+    // PricingRequestRepository.updateDraft writes it unconditionally on any DRAFT row. Submit ->
+    // CEO approve -> issue would then take the recipient from the mismatched value, and
+    // CustomerQuotationService's supersedeSupersededChainQuotations — keyed only on
+    // root_pricing_request_id, never recipient_type — would retire the OTHER recipient's already-
+    // issued, already-delivered quotation. Same GLA-102 bug, reached through the other door.
+
+    @Test
+    void updateDraft_rejectsDifferentRecipientTypeOnRevisionChildAndMutatesNothing() {
+        stubPricingRequestRevisionChild(21L, 10L, 1L, PricingRequestStatus.DRAFT,
+            PricingRequestRecipient.DESIGNER, 20L);
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        UpdatePricingRequestRequest request = new UpdatePricingRequestRequest(
+            PricingRequestRecipient.OWNER, null, null, null, null, null, null, null);
+
+        assertConflict(() -> service.updateDraft(21L, request, salesActor));
+
+        // The guard must fire BEFORE either mutating repository call in this method — enumerated
+        // from PricingRequestService#updateDraft itself, not guessed: the row write and its event.
+        verify(requestRepo, never()).updateDraft(anyLong(), any());
+        verify(requestRepo, never()).addEvent(anyLong(), anyLong(), anyLong(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void updateDraft_allowsSameRecipientTypeOnRevisionChild_unchangedBehaviour() {
+        stubPricingRequestRevisionChild(21L, 10L, 1L, PricingRequestStatus.DRAFT,
+            PricingRequestRecipient.DESIGNER, 20L);
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        UpdatePricingRequestRequest request = validUpdateRequest(); // recipientType DESIGNER — matches the stub
+        when(requestRepo.updateDraft(21L, request)).thenReturn(true);
+
+        service.updateDraft(21L, request, salesActor);
+
+        verify(requestRepo).updateDraft(21L, request);
+    }
+
+    @Test
+    void updateDraft_allowsRecipientTypeChangeOnRootPricingRequest_scopeBoundaryPinned() {
+        // Deliberate scope boundary: a ROOT pricing request (parentPricingRequestId == null) may
+        // still have its recipientType changed via updateDraft — fixing a mistake before
+        // submission is legitimate, and it is provably safe HERE specifically because updateDraft
+        // only ever reaches a row still in DRAFT, and DRAFT has no outgoing SUPERSEDED edge
+        // (PricingRequestStatus.ALLOWED), so a root in DRAFT cannot yet have spawned any
+        // customer-change-revision child — there is nothing downstream for a recipient change to
+        // orphan. This pins that reasoning against a future regression that widens the guard to
+        // roots without re-deriving it.
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT); // recipientType BUYER, parentPricingRequestId null
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        UpdatePricingRequestRequest request = validUpdateRequest(); // recipientType DESIGNER — DIFFERENT from BUYER
+        when(requestRepo.updateDraft(20L, request)).thenReturn(true);
+
+        service.updateDraft(20L, request, salesActor);
+
+        verify(requestRepo).updateDraft(20L, request);
     }
 
     @Test
@@ -837,6 +912,75 @@ class PricingRequestServiceTest {
 
         verify(requestRepo).transition(20L, PricingRequestStatus.DRAFT, PricingRequestStatus.CANCELLED, null, 1L);
         verify(ticketRepo, never()).findById(anyLong());
+    }
+
+    // ── createCustomerChangeRevision (GLA-102 recipient guard) ─────────────
+    //
+    // Bug: createCustomerChangeRevision let the caller pass a DIFFERENT recipientType than the
+    // parent's own, with nothing checking they matched. The parent got marked SUPERSEDED anyway,
+    // and later, when the child's quotation was issued, CustomerQuotationService#issue's
+    // supersedeSupersededChainQuotations retires every OTHER issued quotation sharing the same
+    // root_pricing_request_id — including a different recipient's already-delivered quotation.
+    // Quoting a second recipient is createDraft's job (an independent PricingRequest that never
+    // supersedes anything); a revision must only ever change the SAME recipient's terms.
+
+    @Test
+    void createCustomerChangeRevision_rejectsDifferentRecipientTypeAndMutatesNothing() {
+        // Mirrors the bug's own narrative: an ISSUED quotation to the DESIGNER, "revised" into a
+        // request addressed to the OWNER instead.
+        stubPricingRequestWithRecipient(20L, 10L, 1L, PricingRequestStatus.QUOTATION_ISSUED,
+            PricingRequestRecipient.DESIGNER);
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+
+        assertConflict(() -> service.createCustomerChangeRevision(
+            20L, customerChangeRevisionRequest(PricingRequestRecipient.OWNER), salesActor));
+
+        // The guard must fire BEFORE any state change: nothing about the parent or a new row may
+        // be touched once the recipientType mismatch is detected.
+        verify(requestRepo, never()).createCustomerChangeRevision(any(), any(), anyLong());
+        verify(requestRepo, never()).supersedeForCustomerRevision(anyLong(), any(), anyLong());
+        verify(requestRepo, never()).cancelOpenStep2Children(anyLong(), any(), anyLong());
+        verify(requestRepo, never()).supersedeOpenPricingDecision(anyLong());
+        verify(requestRepo, never()).addEvent(anyLong(), anyLong(), anyLong(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void createCustomerChangeRevision_allowsSameRecipientType_unchangedBehaviour() {
+        stubPricingRequestWithRecipient(20L, 10L, 1L, PricingRequestStatus.QUOTATION_ISSUED,
+            PricingRequestRecipient.DESIGNER);
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        when(requestRepo.createCustomerChangeRevision(any(), any(), anyLong())).thenReturn(21L);
+        when(requestRepo.supersedeForCustomerRevision(20L, PricingRequestStatus.QUOTATION_ISSUED, 21L))
+            .thenReturn(1);
+        stubPricingRequestWithRecipient(21L, 10L, 1L, PricingRequestStatus.DRAFT,
+            PricingRequestRecipient.DESIGNER);
+
+        var result = service.createCustomerChangeRevision(
+            20L, customerChangeRevisionRequest(PricingRequestRecipient.DESIGNER), salesActor);
+
+        assertThat(result.summary().id()).isEqualTo(21L);
+        verify(requestRepo).createCustomerChangeRevision(any(), any(), anyLong());
+        verify(requestRepo).supersedeForCustomerRevision(20L, PricingRequestStatus.QUOTATION_ISSUED, 21L);
+    }
+
+    @Test
+    void createCustomerChangeRevision_nullRecipientType_stillRejectedAsBadRequestNotByTheNewGuard() {
+        // request.recipientType() is @NotBlank on the wire (CustomerChangeRevisionRequest,
+        // enforced by @Valid at the controller), so a real caller can never reach this method with
+        // recipientType == null — it is not an "unchanged" signal, it is invalid input. A direct
+        // service call (as a test, or any future caller that skips bean validation) with null
+        // must keep failing the way it always did — validateRecipient()'s existing 400 — and NOT
+        // be reclassified as this new guard's 409, which would be reachable only for a non-null,
+        // differing value.
+        stubPricingRequestWithRecipient(20L, 10L, 1L, PricingRequestStatus.QUOTATION_ISSUED,
+            PricingRequestRecipient.DESIGNER);
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+
+        assertBadRequest(() -> service.createCustomerChangeRevision(
+            20L, customerChangeRevisionRequest(null), salesActor));
+
+        verify(requestRepo, never()).createCustomerChangeRevision(any(), any(), anyLong());
+        verify(requestRepo, never()).supersedeForCustomerRevision(anyLong(), any(), anyLong());
     }
 
     // ── read scoping ─────────────────────────────────────────────────────
@@ -1417,6 +1561,40 @@ class PricingRequestServiceTest {
         return summary;
     }
 
+    /** Variant for GLA-102: caller controls recipientType directly instead of the hardcoded BUYER default. */
+    private PricingRequestSummaryDto stubPricingRequestWithRecipient(long id, long ticketId, long ticketCreatedById,
+                                                                      String status, String recipientType) {
+        PricingRequestSummaryDto summary = new PricingRequestSummaryDto(
+            id, "PCR-2026-0001", ticketId, "PR-2026-0001", "Test Project", "Test Customer",
+            ticketCreatedById, recipientType, 1L, null,
+            status, ticketCreatedById, "Sales User", null, null, null, null, null, null,
+            1, 1, null, null, null, null, Instant.now(), Instant.now(), null);
+        when(requestRepo.findSummary(id)).thenReturn(java.util.Optional.of(summary));
+        return summary;
+    }
+
+    /**
+     * Variant for GLA-102 part 2: a revision CHILD — parentPricingRequestId is non-null, exactly
+     * the signal PricingRequestService#updateDraft's new guard keys on.
+     */
+    private PricingRequestSummaryDto stubPricingRequestRevisionChild(long id, long ticketId, long ticketCreatedById,
+                                                                      String status, String recipientType,
+                                                                      long parentPricingRequestId) {
+        PricingRequestSummaryDto summary = new PricingRequestSummaryDto(
+            id, "PCR-2026-0002", ticketId, "PR-2026-0001", "Test Project", "Test Customer",
+            ticketCreatedById, recipientType, 1L, "Designer Co.",
+            status, ticketCreatedById, "Sales User", null, null, null, null, null, null,
+            1, 2, parentPricingRequestId, null, null, null, Instant.now(), Instant.now(), null);
+        when(requestRepo.findSummary(id)).thenReturn(java.util.Optional.of(summary));
+        return summary;
+    }
+
+    private static CustomerChangeRevisionRequest customerChangeRevisionRequest(String recipientType) {
+        return new CustomerChangeRevisionRequest(
+            "ลูกค้าเปลี่ยนใจ", clientRequestId(), recipientType, 1L, "Recipient Co.", null, null, null, null,
+            List.of(sampleItemRequest(null, QuantityType.REFERENCE)));
+    }
+
     /**
      * Catalog snapshot fields (positions 20-25: priceListVersionId, catalogPriceId,
      * catalogBasePrice, catalogCurrency, resolvedFactoryId, resolvedFactoryName) are fully
@@ -1428,12 +1606,33 @@ class PricingRequestServiceTest {
         return itemDtoWithIdentity(sourceTicketItemId, null, "Brand", "Model", null);
     }
 
+    // V185 (direct-deal-form parity): color/texture/size/thicknessMm/sqmPerPiece/piecesPerBox/a
+    // quantity are now REQUIRED on every item reaching PricingRequestService#resolveItems (every
+    // createDraft/updateDraft/createCustomerChangeRevision item, unconditionally) — see that
+    // method's own Javadoc. sampleItemRequest and itemRequestWithIdentity below supply a complete
+    // baseline of those fields so every "accepts ..." test in this file (which reaches
+    // resolveItems on its happy path) keeps passing; the "rejects ..." identity tests never reach
+    // that far (validateItems' isProductIdentified check throws first), so the baseline is inert
+    // for them either way.
     private static PricingRequestItemRequest sampleItemRequest(Long sourceTicketItemId, String quantityType) {
-        return new PricingRequestItemRequest(sourceTicketItemId, null, null, "Brand", "Model", null, null, null, null, null,
-            new BigDecimal("1"), null, "PIECE", UnitBasis.PER_PIECE, quantityType, null, null, null);
+        return new PricingRequestItemRequest(sourceTicketItemId, null, null, "Brand", "Model", null,
+            "สี", "ผิว", "60x60", null,
+            null, null, null, null, quantityType, null, null, null,
+            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+            null, 1, WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+            null, "ไทย-สต็อก", 3, 7, null, null, null);
     }
 
-    /** Lets each Part 1 identity test set exactly one identifying field and leave the rest null. */
+    /** Lets each Part 1 identity test set exactly one identifying field and leave the rest null —
+     * INCLUDING {@code model}, so a "rejects" test isolating sourceTicketItemId/productId/
+     * productDescription/brand/specialRequirement alone still hits {@code isProductIdentified}'s
+     * rejection exactly as before V185 (that check runs BEFORE {@code resolveItems}, so a null
+     * model here never reaches the new completeness gate on those tests). An "accepts ... alone"
+     * test that isolates a NON-model field DOES reach {@code resolveItems} on its happy path and
+     * must pass its own real {@code model} value at the call site instead — see e.g.
+     * {@code createDraft_acceptsItemIdentifiedByProductIdAlone} below, which no longer describes
+     * "productId with model blank" (impossible now that model is unconditionally required) but
+     * "productId identifies the item, on top of the now-mandatory baseline fields". */
     private static PricingRequestItemRequest itemRequestWithIdentity(Long sourceTicketItemId, Long productId,
                                                                      String brand, String model, String specialRequirement) {
         return itemRequestWithIdentity(sourceTicketItemId, productId, brand, model, specialRequirement, null);
@@ -1442,8 +1641,12 @@ class PricingRequestServiceTest {
     private static PricingRequestItemRequest itemRequestWithIdentity(Long sourceTicketItemId, Long productId,
                                                                      String brand, String model, String specialRequirement,
                                                                      String productDescription) {
-        return new PricingRequestItemRequest(sourceTicketItemId, productId, null, brand, model, productDescription, null, null, null, null,
-            new BigDecimal("1"), null, "PIECE", UnitBasis.PER_PIECE, QuantityType.REFERENCE, null, null, specialRequirement);
+        return new PricingRequestItemRequest(sourceTicketItemId, productId, null, brand, model,
+            productDescription, "สี", "ผิว", "60x60", null,
+            null, null, null, null, QuantityType.REFERENCE, null, null, specialRequirement,
+            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+            null, 1, WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+            null, "ไทย-สต็อก", 3, 7, null, null, null);
     }
 
     /** Same as {@link #sampleItem}, but with every identity field controllable for the Part 1 submit-recheck tests. */

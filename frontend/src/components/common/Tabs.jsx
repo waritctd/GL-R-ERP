@@ -11,9 +11,16 @@ import { Icon } from './Icon.jsx';
  * a tab is cheap and non-destructive — every panel is already-fetched data,
  * so arrow-to-activate never costs the user a request or loses input.
  *
- * `items`: `[{ id, label, helper, badge }]`
- *   - `helper` — an optional short sub-label for context.
- *   - `badge`  — a count (or short string) shown when the tab holds real data.
+ * `items`: `[{ id, label, helper, badge, badgeLabel }]`
+ *   - `helper`    — an optional short sub-label for context.
+ *   - `badge`     — a count (or short string) shown when the tab holds real data. Omit/leave
+ *     `null`/`undefined` while the count is unknown (loading, disabled, errored) — do not pass `0`
+ *     as a stand-in for "no count yet", it renders as a real, confident zero.
+ *   - `badgeLabel` — optional accessible text for the badge (e.g. `"2 รายการ"`). Without it, the
+ *     raw `badge` value is read as part of the tab's name (`Tabs.jsx`'s own `helper` is
+ *     `aria-hidden` for the same reason a bare number is not: a screen reader announcing
+ *     "งานของฉัน2" back-to-back reads as one run-on word, not "2 items"). Pass it whenever `badge`
+ *     is a plain count so the announced name is "<label> <badgeLabel>" instead.
  *
  * Every tab a caller passes in is fully functional and in the normal tab
  * order — this component has no "reachable but not ready yet" visual state.
@@ -203,9 +210,18 @@ export function Tabs({ items, value, onChange, ariaLabel, idPrefix, onSurface = 
                 ) : null}
               </span>
               {item.badge != null ? (
-                <span className="rounded-full bg-surface-subtle px-1.5 py-0.5 text-2xs font-extrabold text-text-secondary">
+                <span
+                  className="rounded-full bg-surface-subtle px-1.5 py-0.5 text-2xs font-extrabold text-text-secondary"
+                  // Hidden from the accessible name whenever the caller supplied a proper
+                  // `badgeLabel` to say the same thing in words instead (see the badgeLabel doc
+                  // above) — otherwise left in-band, unchanged, for a caller that has none.
+                  aria-hidden={item.badgeLabel ? 'true' : undefined}
+                >
                   {item.badge}
                 </span>
+              ) : null}
+              {item.badge != null && item.badgeLabel ? (
+                <span className="sr-only">{item.badgeLabel}</span>
               ) : null}
             </button>
           );
