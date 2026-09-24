@@ -467,10 +467,14 @@ describe('mock dealQuotations authz -- #H4 canCreateQuotation grant', () => {
     await expect(api.dealQuotations.list()).rejects.toThrow('ไม่มีสิทธิ์เข้าถึงรายการนี้');
   });
 
-  it('a canCreateQuotation-granted employee sees EVERY deal\'s quotations, not just their own (there is no "own")', async () => {
+  it('a canCreateQuotation-granted employee sees ONLY quotations on deals they created on the global list (owner ruling 2026-09-24: the grant no longer widens LIST scope)', async () => {
     await api.auth.login(grantedEmployee);
     const { items } = await api.dealQuotations.list();
-    expect(items.length).toBeGreaterThanOrEqual(2); // the two seeded rows on ticket 18
+    // The grant-holder created none of the seeded ticket-18 rows, so the global list is empty
+    // for them -- the grant still lets them create on / get an individual deal (next two tests),
+    // it just no longer shows EVERY deal here. Mirrors DealQuotationService.listOwnerScope and
+    // DealQuotationIntegrationTest#grantHolder_search_seesOnlyOwnDeals_butCanStillGetAnotherRepsQuotationIndividually.
+    expect(items).toHaveLength(0);
   });
 
   it('a canCreateQuotation-granted employee may create on a deal they do not own', async () => {
