@@ -992,31 +992,36 @@ export function validateQuotationItem(item, priceMode = 'NET', documentLanguage 
     if (!(Number(item?.piecesInput) >= 1)) errors.piecesInput = 'กรุณาระบุจำนวนแผ่น';
   } else if (!(Number(item?.areaSqm) > 0)) {
     errors.areaSqm = 'กรุณาระบุพื้นที่ (ตร.ม.)';
+  } else if (item?.piecesBeforeWastage === 0) {
+    // Wording-scan fix 4 (2026-09-17): mirrors DealQuotationService's new AREA-mode "computes to
+    // zero pieces" refusal. `piecesBeforeWastage` arrives from the debounced calculate-line
+    // preview merge (QuotationEditorPage), so this is null (unknown, not yet computed) until a
+    // preview has actually run -- never mistaken for a genuine zero from an unrelated row.
+    errors.areaSqm = 'พื้นที่น้อยเกินไป คำนวณได้ 0 แผ่น';
+  }
+  // Wording-scan fix 5 (2026-09-17): mirrors DealQuotationService's new PIECES-wastage
+  // whole-number refusal -- PERCENT wastage is untouched, a percentage genuinely can be
+  // fractional (2.5%).
+  if (item?.wastageMode === 'PIECES' && item?.wastageValue !== '' && item?.wastageValue != null
+    && Number.isFinite(Number(item.wastageValue)) && !Number.isInteger(Number(item.wastageValue))) {
+    errors.wastageValue = 'จำนวนแผ่นที่เผื่อต้องเป็นจำนวนเต็ม';
+  }
+  // Wording-scan fix 3 (2026-09-17): mirrors DealQuotationService#requireValidLeadTime -- once a
+  // lead time is ENTERED (both fields present), min must be >= 1 day and max must be >= min.
+  // Refused on SAVE (blocking, see QUOTATION_CHECK.ITEMS below), unlike the missing-lead-time
+  // check right after it, which is submit-only. A lone value (the other field still blank) is an
+  // incompleteness question for the `requireLeadTime` branch below, not this one.
+  if (item?.leadTimeMinDays != null && item?.leadTimeMaxDays != null) {
+    const leadMin = Number(item.leadTimeMinDays);
+    const leadMax = Number(item.leadTimeMaxDays);
+    if (!(leadMin >= 1) || !(leadMax >= leadMin)) {
+      errors.leadTimeMinDays = 'ระยะเวลานำเข้าต้องไม่น้อยกว่า 1 วัน และค่าสูงสุดต้องไม่น้อยกว่าค่าต่ำสุด';
+    }
   }
   // Owner feedback #7 (2026-09-14): mirrors DealQuotationService#requireEveryTileItemHasALeadTime
   // — SUBMIT only (see this function's own Javadoc for why the default leaves it off).
   if (requireLeadTime && (item?.leadTimeMinDays == null || item?.leadTimeMaxDays == null)) {
     errors.leadTimeMinDays = 'กรุณาระบุระยะเวลานำเข้า (วัน)';
-  }
-  // Second review pass, finding N6 (2026-09-19): min <= max used to be checked UNCONDITIONALLY
-  // ("a genuine data error on either form" -- true in isolation, but it reached direct-deal too,
-  // where nobody asked for it: an EXISTING draft with min > max could no longer be saved at all,
-  // and QuotationEditorPage's own submit banner (missingLeadTimeSeqs, keyed on any truthy
-  // errors.leadTimeMinDays) reported it with the WRONG sentence -- "กรุณาระบุระยะเวลานำเข้า" (please
-  // fill this in), the MISSING message, for a row that was not missing anything.
-  //
-  // Gated to requireOriginCountry -- the PCR-only flag (same signal N4 gates the
-  // ระบุประเทศต้นทาง box on) -- so direct-deal's two validateQuotationItem call sites
-  // (itemErrorsByRow's draft-save default, and submitItemErrorsByRow's requireLeadTime-only call;
-  // neither ever passes requireOriginCountry) can never produce this error, and both the stale-draft
-  // and wrong-banner symptoms disappear there. The PCR form (which always passes
-  // requireOriginCountry: true, see PricingRequestCreateModal#validateItemFields) keeps the check,
-  // and already renders fieldErrors.leadTimeMinDays verbatim per-row instead of flattening it into
-  // a boolean banner -- so it already carries its OWN correct, distinct message here
-  // ('ระยะเวลานำเข้าต่ำสุดต้องไม่มากกว่าสูงสุด') with nothing further to change there.
-  else if (requireOriginCountry && item?.leadTimeMinDays != null && item?.leadTimeMaxDays != null
-      && Number(item.leadTimeMinDays) > Number(item.leadTimeMaxDays)) {
-    errors.leadTimeMinDays = 'ระยะเวลานำเข้าต่ำสุดต้องไม่มากกว่าสูงสุด';
   }
   // GLA-125 (owner ruling 2026-09-18): ประเทศต้นทาง is required on the PCR form only
   // (requireOriginCountry) — direct-deal keeps it optional (default false, unchanged).
@@ -1037,7 +1042,7 @@ export function validateQuotationItem(item, priceMode = 'NET', documentLanguage 
 const QUOTATION_ITEM_FIELD_ORDER = [
   'description', 'model', 'color', 'texture', 'sizeText', 'thicknessMm', 'sqmPerPiece', 'piecesPerBox',
   'sqmPerBox', 'unitPrice', 'specialPriceSqm', 'directNetPrice', 'quantity', 'unit', 'areaSqm', 'piecesInput',
-  'adjustmentPct', 'adjustmentAmount', 'leadTimeMinDays',
+  'wastageValue', 'adjustmentPct', 'adjustmentAmount', 'leadTimeMinDays',
 ];
 const QUOTATION_ITEM_FIELD_LABELS = {
   model: 'รุ่น', color: 'สี', texture: 'ผิว', sizeText: 'ขนาด', thicknessMm: 'ความหนา',
@@ -1049,6 +1054,8 @@ const QUOTATION_ITEM_FIELD_LABELS = {
   adjustmentPct: 'เปอร์เซ็นต์ส่วนลด', adjustmentAmount: 'จำนวนเงินส่วนลด',
   // #7 (2026-09-14): submit-only, see validateQuotationItem's `requireLeadTime`.
   leadTimeMinDays: 'ระยะเวลานำเข้า (วัน)',
+  // Wording-scan fix 5 (2026-09-17): the fractional-PIECES-wastage refusal.
+  wastageValue: 'เผื่อ (จำนวนแผ่น)',
 };
 
 /** "รายการที่ {index+1}: ขาด {field1}, {field2}" or null once `errors` (validateQuotationItem's
@@ -1429,6 +1436,16 @@ export function validatePlainItem(item) {
   else if (!withinDecimals(item.quantity, 2)) errors.quantity = 'จำนวนทศนิยมได้ไม่เกิน 2 ตำแหน่ง';
   if (!item?.unit?.trim()) errors.unit = 'กรุณาเลือกหน่วย';
   if (!(Number(item?.unitPrice) > 0)) errors.unitPrice = 'กรุณาระบุราคา/หน่วย';
+  // Wording-scan fix 3 (2026-09-17): the SAME lead-time value rule as a TILE row (D1, 2026-09-16:
+  // a PLAIN row's lead time is optional but, once entered, must still be a real range) — mirrors
+  // DealQuotationService#requireValidLeadTime, called unconditionally for both line types there.
+  if (item?.leadTimeMinDays != null && item?.leadTimeMaxDays != null) {
+    const leadMin = Number(item.leadTimeMinDays);
+    const leadMax = Number(item.leadTimeMaxDays);
+    if (!(leadMin >= 1) || !(leadMax >= leadMin)) {
+      errors.leadTimeMinDays = 'ระยะเวลานำเข้าต้องไม่น้อยกว่า 1 วัน และค่าสูงสุดต้องไม่น้อยกว่าค่าต่ำสุด';
+    }
+  }
   return errors;
 }
 
@@ -1480,6 +1497,12 @@ export const QUOTATION_CHECK = Object.freeze({
   PRICE_MODE_LANGUAGE: 'priceModeLanguage',
   ITEMS: 'items',
   FULL_PAYMENT_TERM: 'fullPaymentTerm',
+  // Wording-scan fix 6 (2026-09-17): CREDIT_DAYS is the blank-on-draft reminder (non-blocking,
+  // mirrors FULL_PAYMENT_TERM's own role above); CREDIT_DAYS_INVALID is an EXPLICIT invalid value
+  // (0 or negative) — blocking, since the backend already refuses that on every save, not just
+  // submit. Two check names so the two severities can never share one blocking/non-blocking flag.
+  CREDIT_DAYS: 'creditDays',
+  CREDIT_DAYS_INVALID: 'creditDaysInvalid',
 });
 
 /** THE blocking set — the one place that decides which checklist entries disable บันทึกร่าง and
@@ -1491,6 +1514,7 @@ export const QUOTATION_BLOCKING_CHECKS = Object.freeze(new Set([
   QUOTATION_CHECK.LOCATION_LABELS,
   QUOTATION_CHECK.PRICE_MODE_LANGUAGE,
   QUOTATION_CHECK.ITEMS,
+  QUOTATION_CHECK.CREDIT_DAYS_INVALID,
 ]));
 
 /** DOM id of each editor field the checklist can focus. The three customer-detail ids are the
@@ -1515,8 +1539,14 @@ const ITEM_FIELD_ID_PREFIX = {
     directNetPrice: 'direct-net', areaSqm: 'qty', piecesInput: 'qty',
     // Matches QuotationItemRow's `lead-${index}` input id.
     leadTimeMinDays: 'lead',
+    // Wording-scan fix 5 (2026-09-17): matches QuotationItemRow's `waste-${index}` input id.
+    wastageValue: 'waste',
   },
-  PLAIN: { description: 'plain-desc', quantity: 'plain-qty', unit: 'plain-unit', unitPrice: 'plain-price' },
+  PLAIN: {
+    description: 'plain-desc', quantity: 'plain-qty', unit: 'plain-unit', unitPrice: 'plain-price',
+    // Wording-scan fix 3 (2026-09-17): matches QuotationPlainItemRow's `plain-lead-${index}` id.
+    leadTimeMinDays: 'plain-lead',
+  },
   ADJUSTMENT: { adjustmentPct: 'adj-pct', adjustmentAmount: 'adj-amount' },
 };
 
@@ -1596,6 +1626,10 @@ export function buildQuotationChecklist({
   depositPercentCustom = false,
   depositPercent = '',
   fullPaymentTerm = '',
+  // Wording-scan fix 6 (2026-09-17): mirrors DealQuotationService's credit-days rule — see
+  // QUOTATION_CHECK.CREDIT_DAYS/CREDIT_DAYS_INVALID above for the two severities.
+  remainderMode = '',
+  creditDays = '',
 } = {}) {
   const entries = [];
   const push = (check, message, targetId = null) => {
@@ -1643,6 +1677,16 @@ export function buildQuotationChecklist({
   }
   if (isEffectiveZeroDeposit({ noDeposit, depositPercentCustom, depositPercent }) && blankValue(fullPaymentTerm)) {
     push(QUOTATION_CHECK.FULL_PAYMENT_TERM, 'มัดจำ 0% กรุณาเลือกเงื่อนไขการชำระเงิน', 'fullPaymentTerm');
+  }
+  // Wording-scan fix 6 (2026-09-17): mirrors DealQuotationService's credit-days rule. Skipped
+  // entirely at effective-zero-deposit, where remainderMode is forced null server-side regardless
+  // of what is still displayed (buildUpsertPayload's own `terms.noDeposit ? null : ...` ternary).
+  if (!isEffectiveZeroDeposit({ noDeposit, depositPercentCustom, depositPercent }) && remainderMode === 'CREDIT') {
+    if (!blankValue(creditDays) && Number(creditDays) <= 0) {
+      push(QUOTATION_CHECK.CREDIT_DAYS_INVALID, 'กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน', 'creditDays');
+    } else if (blankValue(creditDays)) {
+      push(QUOTATION_CHECK.CREDIT_DAYS, 'กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน', 'creditDays');
+    }
   }
 
   if (items.length === 0) {

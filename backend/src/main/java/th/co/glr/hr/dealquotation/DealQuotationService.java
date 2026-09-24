@@ -274,6 +274,7 @@ public class DealQuotationService {
         boolean noDeposit = isZeroDeposit(request.depositPercent());
         String remainderMode = noDeposit ? null : blankToNull(request.remainderMode());
         Integer creditDays = noDeposit ? null : request.creditDays();
+        requireValidCreditDays(remainderMode, creditDays);
         String fullPaymentTerm = resolveFullPaymentTerm(request.depositPercent(), request.fullPaymentTerm());
         // Owner feedback 2026-09-11 ("มีรันเลข -1 -2 ต่อท้ายตี้วแต่แรก" / "ใบแรกเป็น QT-2026-0014-1"):
         // the FIRST issued document now carries the revision suffix too, so a fresh sequence value
@@ -825,6 +826,7 @@ public class DealQuotationService {
         boolean noDeposit = isZeroDeposit(request.depositPercent());
         String remainderMode = noDeposit ? null : blankToNull(request.remainderMode());
         Integer creditDays = noDeposit ? null : request.creditDays();
+        requireValidCreditDays(remainderMode, creditDays);
         String fullPaymentTerm = resolveFullPaymentTerm(request.depositPercent(), request.fullPaymentTerm());
         // Item 2 ("ไม่เติม “คุณ”", V180) — the editor always sends its CURRENT value (the checkbox
         // is always rendered, never omitted), so, same as printedByDisplayId/projectName, there is
@@ -1115,6 +1117,19 @@ public class DealQuotationService {
         // is null, so this condition can only ever fire on a genuinely zero-deposit document.
         if (isZeroDeposit(quotation.depositPercent()) && isBlank(quotation.fullPaymentTerm())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาเลือกเงื่อนไขการชำระเงินเต็มจำนวน");
+        }
+        // Wording-scan fix 6 (2026-09-17) — the submit-time half of the credit-days rule, the exact
+        // "create/update permissive, submit strict" split the fullPaymentTerm gate just above uses:
+        // create/update already refuse an explicit invalid VALUE (0 or negative — #requireValidCreditDays),
+        // but still let a CREDIT-remainder draft save with creditDays left BLANK; submit is what
+        // actually requires it be filled in before an approver ever sees the document. Deliberately
+        // NOT re-checked for a value that is not exactly null (an explicit invalid one could only
+        // reach a stored row from before this fix existed, and re-validating every stored value here
+        // would be the same defensive re-check #requireStoredItemComplete already does for items,
+        // which this quotation-level field does not need — a value already accepted by create/update
+        // going forward is never invalid).
+        if ("CREDIT".equals(quotation.remainderMode()) && quotation.creditDays() == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน");
         }
         // V178: a DATE-mode validity deadline that has already passed must not go to an approver —
         // create/update already refuse one before the quotation's OWN date, but time keeps moving
@@ -2451,6 +2466,23 @@ public class DealQuotationService {
         return isZeroDeposit(depositPercent) ? blankToNull(fullPaymentTerm) : null;
     }
 
+    /**
+     * Wording-scan fix 6 (2026-09-17) — the save-time half of the credit-days rule; the submit-time
+     * half (a BLANK value, once {@code remainderMode} is CREDIT, may not advance past DRAFT) lives
+     * inline in {@link #submit}, matching {@link #resolveFullPaymentTerm}'s own "create/update
+     * permissive, submit strict" split for the zero-deposit payment term — the precedent this fix
+     * was asked to follow. The two halves differ in ONE way {@code fullPaymentTerm} has no
+     * equivalent for: an explicit non-blank but INVALID value (0 or negative) is refused HERE,
+     * immediately, on every save — there is no "let a wrong number sit in a draft" case to permit,
+     * unlike a merely blank one, which still may (create/update never call this for a blank value —
+     * see the {@code creditDays <= 0} guard below, which a null short-circuits past).
+     */
+    private void requireValidCreditDays(String remainderMode, Integer creditDays) {
+        if ("CREDIT".equals(remainderMode) && creditDays != null && creditDays <= 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน");
+        }
+    }
+
     /** V178: {@code null}/blank reads as DAYS — today's behaviour, and what every pre-V178 row
      * (and the whole legacy customer-quotation path) stores. */
     private String resolveValidityMode(String validityMode) {
@@ -2566,6 +2598,14 @@ public class DealQuotationService {
         // ALWAYS, including the lenient preview path — see #requirePriceValidForType's Javadoc for
         // why this is not gated on rowNumber the way the completeness check is.
         requirePriceValidForType(input, lineType, priceMode, documentLanguage, rowNumber);
+        // Wording-scan fix 3 (2026-09-17): an invalid lead-time VALUE (min < 1, or max < min) is
+        // refused unconditionally, the same "always, including the lenient preview" reasoning as
+        // requirePriceValidForType above — these are wrong values, not an incomplete row, so there
+        // is no honest number to preview either. Applies to TILE and PLAIN rows alike (an
+        // ADJUSTMENT row has no lead-time concept at all — see WastageCalculator.LINE_TYPE_ADJUSTMENT).
+        if (!WastageCalculator.LINE_TYPE_ADJUSTMENT.equals(lineType)) {
+            requireValidLeadTime(input.leadTimeMinDays(), input.leadTimeMaxDays(), rowNumber);
+        }
         // v3b: the stored per-item vat/line_total columns follow the DOCUMENT's language, so an EN
         // row stores 0.00 VAT rather than a 7% figure nothing on that document ever charges. These
         // two columns are internal (neither is on DealQuotationItemDto, and the renderer never
@@ -2624,6 +2664,18 @@ public class DealQuotationService {
                     + "ราคาต่อ ตร.ม. (เอกสารภาษาอังกฤษ) ที่ระบุ ตร.ม./กล่อง ต้องปัดขึ้นเต็มกล่องเสมอ ไม่รองรับการขายแผ่นไม่เต็มกล่อง");
             }
         }
+        // Wording-scan fix 5 (2026-09-17): PIECES wastage must be a whole number of แผ่น — a
+        // fractional value (e.g. 0.5) saved today, but WastageCalculator#applyWastage's PIECES
+        // branch silently ROUNDS it (HALF_UP) for the arithmetic while the STORED/PRINTED
+        // wastageValue stays the untouched fraction, so the printed "+ เผื่อ 0.5 แผ่น" disagrees
+        // with the piece count the document actually adds. Refused here, before the value ever
+        // reaches WastageCalculator, so it can never be stored at all. PERCENT wastage is
+        // untouched — a percentage genuinely can be fractional (2.5%).
+        if (WastageCalculator.WASTAGE_MODE_PIECES.equals(input.wastageMode()) && input.wastageValue() != null
+            && input.wastageValue().stripTrailingZeros().scale() > 0) {
+            String where = rowNumber == null ? "" : "รายการที่ " + rowNumber + ": ";
+            throw new ApiException(HttpStatus.BAD_REQUEST, where + "จำนวนแผ่นที่เผื่อต้องเป็นจำนวนเต็ม");
+        }
         WastageCalculator.Result result;
         try {
             result = WastageCalculator.calculate(new WastageCalculator.Input(
@@ -2641,6 +2693,15 @@ public class DealQuotationService {
             // that does not fit exactly -- an absurd piecesInput/areaSqm/wastageValue combination
             // otherwise reached the generic 500 handler instead of this 400.
             throw new ApiException(HttpStatus.BAD_REQUEST, "ข้อมูลรายการไม่ถูกต้อง: " + e.getMessage());
+        }
+        // Wording-scan fix 4 (2026-09-17): an AREA-mode row whose typed area rounds to ZERO pieces
+        // before wastage saves today ("(พื้นที่ 0.01 ตร.ม.ๆละ 2.78 แผ่น รวม 0 แผ่น ...)") — a document
+        // line selling nothing. Checked on every path that reaches this point, the preview
+        // (rowNumber == null) included, consistently with how #requirePriceValidForType already
+        // behaves on the preview.
+        if (WastageCalculator.QUANTITY_MODE_AREA.equals(input.quantityMode()) && result.piecesBeforeWastage() == 0) {
+            String where = rowNumber == null ? "" : "รายการที่ " + rowNumber + ": ";
+            throw new ApiException(HttpStatus.BAD_REQUEST, where + "พื้นที่น้อยเกินไป คำนวณได้ 0 แผ่น");
         }
 
         // v3: the PIECE arithmetic above is mode-independent — only the money changes. WastageCalculator
@@ -3060,6 +3121,34 @@ public class DealQuotationService {
         if (WastageCalculator.PRICE_MODE_DIRECT_NET.equals(priceMode)
             && (input.directNetPrice() == null || input.directNetPrice().signum() <= 0)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, where + "ราคาสุทธิต้องมากกว่าศูนย์");
+        }
+    }
+
+    /**
+     * Wording-scan fix 3 (2026-09-17) — a lead-time range is only validated once it is actually
+     * ENTERED (both {@code min}/{@code max} present): a lone value, or neither, is an incompleteness
+     * question for {@link #requireItemComplete}/{@link #requireEveryTileItemHasALeadTime} to answer
+     * (submit-only, unchanged by this fix), not an invalid-value one. Once both are present:
+     * {@code min} must be at least 1 day (a lead time of 0 or negative days is not a real range) and
+     * {@code max} must be at least {@code min} (so "90-75" cannot be saved as a range that runs
+     * backwards). Refused on save — these are wrong VALUES, not a gap to fill in later — with the
+     * exact message the frontend validator mirrors, so a rep sees the same sentence whichever side
+     * catches it.
+     *
+     * <p>A stored row that predates this fix (0, or min &gt; max) is untouched by this check — it
+     * only ever runs on a freshly-submitted {@code ItemInput}, never re-validates an
+     * already-persisted {@link DealQuotationItemDto} — so an old row with such values still RENDERS
+     * exactly as it always did (see {@code DealQuotationRenderAdapter#flushLeadTimeGroup}, which
+     * prints whatever it is given rather than validating it).
+     */
+    private void requireValidLeadTime(Integer leadTimeMinDays, Integer leadTimeMaxDays, Integer rowNumber) {
+        if (leadTimeMinDays == null || leadTimeMaxDays == null) {
+            return;
+        }
+        if (leadTimeMinDays < 1 || leadTimeMaxDays < leadTimeMinDays) {
+            String where = rowNumber == null ? "" : "รายการที่ " + rowNumber + ": ";
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                where + "ระยะเวลานำเข้าต้องไม่น้อยกว่า 1 วัน และค่าสูงสุดต้องไม่น้อยกว่าค่าต่ำสุด");
         }
     }
 

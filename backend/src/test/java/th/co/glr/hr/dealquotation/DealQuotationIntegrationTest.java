@@ -1985,9 +1985,235 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .hasMessageContaining("กรุณาระบุระยะเวลานำเข้า");
     }
 
+    // ── Wording-scan fix 3 (2026-09-17): an ENTERED lead-time range must be min>=1, max>=min ────
+
+    /** {@code ประมาณ 0-3 วัน} saved on 2 approved quotations, and {@code 90-75}/negatives would too
+     * -- refused on save now, TILE row, the exact message the frontend validator mirrors. */
+    @Test
+    void create_refusesATileLeadTimeMinBelowOne() {
+        assertThatThrownBy(() -> quotationService.create(ticketId,
+            upsertRequest(List.of(itemMutated(m -> m.withLeadTime(0, 3)))), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("รายการที่ 1")
+            .hasMessageContaining("ระยะเวลานำเข้าต้องไม่น้อยกว่า 1 วัน และค่าสูงสุดต้องไม่น้อยกว่าค่าต่ำสุด");
+    }
+
+    /** Same rule, the "max < min" half -- "90-75" is a range running backwards. */
+    @Test
+    void create_refusesATileLeadTimeMaxBelowMin() {
+        assertThatThrownBy(() -> quotationService.create(ticketId,
+            upsertRequest(List.of(itemMutated(m -> m.withLeadTime(90, 75)))), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("ระยะเวลานำเข้าต้องไม่น้อยกว่า 1 วัน และค่าสูงสุดต้องไม่น้อยกว่าค่าต่ำสุด");
+    }
+
+    /** A negative min is refused the same way as zero. */
+    @Test
+    void create_refusesANegativeTileLeadTimeMin() {
+        assertThatThrownBy(() -> quotationService.create(ticketId,
+            upsertRequest(List.of(itemMutated(m -> m.withLeadTime(-5, 10)))), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("ระยะเวลานำเข้าต้องไม่น้อยกว่า 1 วัน และค่าสูงสุดต้องไม่น้อยกว่าค่าต่ำสุด");
+    }
+
+    /** The SAME rule applies to a PLAIN (สินค้า/บริการอื่น) row's optional lead time, not only TILE. */
+    @Test
+    void create_refusesAnInvalidLeadTimeOnAPlainRowToo() {
+        assertThatThrownBy(() -> quotationService.create(ticketId,
+            upsertRequest(List.of(plainItemWithLeadTime("สุขภัณฑ์", "1", "ชุด", "5000.00", 0, 3))),
+            salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("ระยะเวลานำเข้าต้องไม่น้อยกว่า 1 วัน และค่าสูงสุดต้องไม่น้อยกว่าค่าต่ำสุด");
+    }
+
+    /** Wrong-way-round: a valid range (including the min==max exact-day case) is untouched -- this
+     * rule refuses only genuinely invalid values, never a well-formed one. */
+    @Test
+    void create_acceptsAValidLeadTimeRange_minEqualsMaxIncluded() {
+        DealQuotationDto range = quotationService.create(ticketId,
+            upsertRequest(List.of(itemMutated(m -> m.withLeadTime(75, 90)))), salesActor);
+        assertThat(range.items().get(0).leadTimeMinDays()).isEqualTo(75);
+        DealQuotationDto exact = quotationService.create(ticketId,
+            upsertRequest(List.of(itemMutated(m -> m.withLeadTime(1, 1)))), salesActor);
+        assertThat(exact.items().get(0).leadTimeMinDays()).isEqualTo(1);
+        assertThat(exact.items().get(0).leadTimeMaxDays()).isEqualTo(1);
+    }
+
+    /** A lone value (the OTHER field still blank) is an INCOMPLETENESS question, not an invalid
+     * one -- this rule must not fire until BOTH fields are entered (the "is it required at all"
+     * rules are unchanged and untested here; see the #7 section above). */
+    @Test
+    void create_doesNotValidateAPartiallyEnteredLeadTime() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(itemMutated(m -> m.withLeadTime(0, null)))), salesActor);
+        assertThat(created.items().get(0).leadTimeMinDays()).isEqualTo(0);
+        assertThat(created.items().get(0).leadTimeMaxDays()).isNull();
+    }
+
+    // ── Wording-scan fix 4 (2026-09-17): an AREA-mode row that computes to ZERO pieces ──────────
+
+    /** {@code (พื้นที่ 0.01 ตร.ม.ๆละ 2.78 แผ่น รวม 0 แผ่น ...)} saved today -- a document line
+     * selling nothing. sqmPerPiece 0.36 (sampleItem's fixed value) -> ~2.78 pcs/sqm; 0.01 sqm
+     * rounds to 0 pieces before wastage (round2(0.01 x 2.78) = round(0.0278) = 0). */
+    @Test
+    void create_refusesAnAreaThatComputesToZeroPieces() {
+        assertThatThrownBy(() -> quotationService.create(ticketId,
+            upsertRequest(List.of(itemMutated(m -> m.withAreaMode(new BigDecimal("0.01"))))), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("รายการที่ 1")
+            .hasMessageContaining("พื้นที่น้อยเกินไป คำนวณได้ 0 แผ่น");
+    }
+
+    /** The same check on the LENIENT calculate-line preview -- consistent with how every other
+     * item error already behaves there (#requirePriceValidForType's own precedent). */
+    @Test
+    void calculateLine_refusesAnAreaThatComputesToZeroPieces() {
+        assertThatThrownBy(() -> quotationService.calculateLine(
+            itemMutated(m -> m.withAreaMode(new BigDecimal("0.01"))), "TH", salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("พื้นที่น้อยเกินไป คำนวณได้ 0 แผ่น");
+    }
+
+    /** Wrong-way-round: an area that rounds to exactly 1 piece (not 0) is accepted -- this rule
+     * refuses only a genuine zero, never a small-but-real quantity. */
+    @Test
+    void create_acceptsAnAreaThatComputesToExactlyOnePiece() {
+        // 0.36 sqm/piece (sampleItem) -> 2.78 pcs/sqm; 0.36 sqm x 2.78 = 1.0008 -> rounds to 1.
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(itemMutated(m -> m.withAreaMode(new BigDecimal("0.36"))))), salesActor);
+        assertThat(created.items().get(0).piecesBeforeWastage()).isEqualTo(1);
+    }
+
+    // ── Wording-scan fix 5 (2026-09-17): PIECES wastage must be a whole number ────────────────
+
+    /** {@code + เผื่อ 0.5 แผ่น} saved today. Refused now, whole-number PIECES wastage only. */
+    @Test
+    void create_refusesAFractionalPiecesWastageValue() {
+        assertThatThrownBy(() -> quotationService.create(ticketId,
+            upsertRequest(List.of(itemMutated(m ->
+                m.withWastage(WastageCalculator.WASTAGE_MODE_PIECES, new BigDecimal("0.5"))))),
+            salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("รายการที่ 1")
+            .hasMessageContaining("จำนวนแผ่นที่เผื่อต้องเป็นจำนวนเต็ม");
+    }
+
+    /** Wrong-way-round: a whole-number PIECES wastage (including one written "2.00") is untouched. */
+    @Test
+    void create_acceptsAWholeNumberPiecesWastageValue_evenWithATrailingZeroScale() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(itemMutated(m ->
+                m.withWastage(WastageCalculator.WASTAGE_MODE_PIECES, new BigDecimal("2.00"))))),
+            salesActor);
+        assertThat(created.items().get(0).piecesAfterWastage())
+            .isEqualTo(created.items().get(0).piecesBeforeWastage() + 2);
+    }
+
+    /** PERCENT wastage keeps accepting decimals -- this rule is PIECES-mode only. */
+    @Test
+    void create_stillAcceptsAFractionalPercentWastageValue() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(itemMutated(m ->
+                m.withWastage(WastageCalculator.WASTAGE_MODE_PERCENT, new BigDecimal("2.5"))))),
+            salesActor);
+        assertThat(created.items().get(0)).isNotNull();
+    }
+
+    // ── Wording-scan fix 6 (2026-09-17): CREDIT remainder needs at least 1 credit day ──────────
+
+    /** {@code ส่วนที่เหลือเครดิต 0 วัน} can print today. An explicit 0 (or negative) is refused on
+     * SAVE (create/update), matching the "invalid value" half of the rule; a BLANK value still
+     * saves (see {@link #submit_refusesACreditRemainderWithNoCreditDays} for the submit-time half,
+     * mirroring how {@code fullPaymentTerm} is gated for a zero-deposit document). */
+    @Test
+    void create_refusesZeroCreditDaysWhenRemainderModeIsCredit() {
+        assertThatThrownBy(() -> quotationService.create(ticketId,
+            new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 0, 30,
+                "หมายเหตุทดสอบ", List.of(sampleItem("100.00", 10))),
+            salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน");
+    }
+
+    /** A negative creditDays is refused the same way (bean {@code @Min(0)} already blocks anything
+     * below -1... this proves the SERVICE rule, not the bean bound, is what actually names zero). */
+    @Test
+    void update_refusesZeroCreditDaysWhenRemainderModeIsCredit() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+
+        assertThatThrownBy(() -> quotationService.update(created.id(),
+            new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 0, 30,
+                "หมายเหตุทดสอบ", List.of(sampleItem("100.00", 10))),
+            salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน");
+    }
+
+    /** The blank-on-draft half: create/update still accept a CREDIT remainder with NO creditDays
+     * typed yet (a draft may be incomplete) -- only {@link #submit} refuses to advance it, the
+     * EXACT "create/update permissive, submit strict" split {@code fullPaymentTerm} already uses. */
+    @Test
+    void create_stillAcceptsACreditRemainderWithBlankCreditDays() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", null, 30,
+                "หมายเหตุทดสอบ", List.of(sampleItem("100.00", 10))),
+            salesActor);
+        assertThat(created.remainderMode()).isEqualTo("CREDIT");
+        assertThat(created.creditDays()).isNull();
+    }
+
+    /** The submit-time half: a CREDIT-remainder draft with creditDays still blank may not advance
+     * past DRAFT. */
+    @Test
+    void submit_refusesACreditRemainderWithNoCreditDays() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", null, 30,
+                "หมายเหตุทดสอบ", List.of(sampleItem("100.00", 10))),
+            salesActor);
+
+        assertThatThrownBy(() -> quotationService.submit(created.id(), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน");
+    }
+
+    /** Wrong-way-round: a positive creditDays, or a non-CREDIT remainder mode with creditDays left
+     * however it likes, is completely untouched by this rule. */
+    @Test
+    void create_acceptsAPositiveCreditDays_andANonCreditRemainderModeRegardlessOfCreditDays() {
+        DealQuotationDto credit = quotationService.create(ticketId,
+            new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 1, 30,
+                "หมายเหตุทดสอบ", List.of(sampleItem("100.00", 10))),
+            salesActor);
+        assertThat(credit.creditDays()).isEqualTo(1);
+
+        DealQuotationDto delivery = quotationService.create(ticketId,
+            new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "ON_DELIVERY", 0, 30,
+                "หมายเหตุทดสอบ", List.of(sampleItem("100.00", 10))),
+            salesActor);
+        assertThat(delivery.remainderMode()).isEqualTo("ON_DELIVERY");
+    }
+
     /** Builder-shaped helper over the complete {@link #sampleItem} fixture, for one-field-at-a-time
      * incompleteness tests -- avoids a 21-argument constructor call per test case. */
     private ItemInput itemMissing(java.util.function.UnaryOperator<ItemInputBuilder> mutate) {
+        return mutate.apply(new ItemInputBuilder(sampleItem("100.00", 10))).build();
+    }
+
+    /** Same builder, different name for a mutation that is not about INCOMPLETENESS (a value the
+     * validation rejects while every required field is still present) -- shares the exact same
+     * fixture and mechanism as {@link #itemMissing}. */
+    private ItemInput itemMutated(java.util.function.UnaryOperator<ItemInputBuilder> mutate) {
         return mutate.apply(new ItemInputBuilder(sampleItem("100.00", 10))).build();
     }
 
@@ -2025,6 +2251,14 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         ItemInputBuilder withPiecesInput(Integer v) { piecesInput = v; return this; }
         // #7 (2026-09-14): submit's new lead-time requirement.
         ItemInputBuilder withNoLeadTime() { leadTimeMinDays = null; leadTimeMaxDays = null; return this; }
+        // Wording-scan fix 3 (2026-09-17): an explicit (possibly invalid) lead-time range.
+        ItemInputBuilder withLeadTime(Integer min, Integer max) { leadTimeMinDays = min; leadTimeMaxDays = max; return this; }
+        // Wording-scan fix 4 (2026-09-17): AREA quantity mode with a caller-chosen area.
+        ItemInputBuilder withAreaMode(BigDecimal area) {
+            quantityMode = WastageCalculator.QUANTITY_MODE_AREA; areaSqm = area; piecesInput = null; return this;
+        }
+        // Wording-scan fix 5 (2026-09-17): a caller-chosen wastage mode/value.
+        ItemInputBuilder withWastage(String mode, BigDecimal value) { wastageMode = mode; wastageValue = value; return this; }
 
         ItemInput build() {
             return new ItemInput(locationLabel, catalogPriceId, productCode, brand, model, color, texture,
@@ -3754,6 +3988,26 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(model.remarkLines().get(2)).isEqualTo(
             "3.กรณีโรงงานผู้ผลิตมีสินค้าพร้อมจัดส่ง ระยะเวลานำเข้า รายการที่ 1 ประมาณ 75-90 วัน "
                 + "หลังจากได้รับมัดจำ 30% เรียบร้อยแล้ว");
+    }
+
+    /** Wording-scan fix 2 (2026-09-17): at 100% deposit the non-tile remark 3's own
+     * "หลังจากได้รับมัดจำ N% เรียบร้อยแล้ว" clause is replaced with "หลังจากได้รับชำระเงินเรียบร้อยแล้ว"
+     * -- naming a "deposit" percentage at 100% is naming money that was never separate from the
+     * full price. Exercised through the REAL create() -> render path, not a hand-built DTO. */
+    @Test
+    void plainRow_hundredPercentDeposit_nonTileRemark_statesFullPaymentReceived_notADeposit() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 100, "CREDIT", 45, 30,
+                "หมายเหตุทดสอบ", List.of(plainItemWithLeadTime("สุขภัณฑ์", "1", "ชุด", "5000.00", 75, 90))),
+            salesActor);
+
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(created, null, null);
+        assertThat(model.remarkLines().get(1)).isEqualTo("2.บริษัทขอรับเงินค่าสินค้า 100% เมื่อสั่งซื้อสินค้า");
+        assertThat(model.remarkLines().get(2)).isEqualTo(
+            "3.กรณีโรงงานผู้ผลิตมีสินค้าพร้อมจัดส่ง ระยะเวลานำเข้า รายการที่ 1 ประมาณ 75-90 วัน "
+                + "หลังจากได้รับชำระเงินเรียบร้อยแล้ว");
+        // Wrong-way-round: no "มัดจำ 100%"/credit-days wording anywhere in the remark block.
+        assertThat(model.remarkLines()).noneMatch(l -> l.contains("มัดจำ 100%") || l.contains("เครดิต 45"));
     }
 
     /** D1 twin: a PLAIN row saved with NO lead time (today's ordinary case) still saves exactly as

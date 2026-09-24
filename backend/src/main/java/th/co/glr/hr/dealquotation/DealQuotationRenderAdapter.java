@@ -476,6 +476,15 @@ public final class DealQuotationRenderAdapter {
      */
     private static String depositLine(int depositPct, String fullPaymentTerm, String remainderMode,
                                        Integer creditDays, String remainderText) {
+        // Wording-scan fix 2 (2026-09-17): a 100% deposit is full payment, not "a deposit, with a
+        // remainder" -- remainderMode/creditDays describe money that, at 100%, does not exist, and
+        // printing them anyway ("...ส่วนที่เหลือขอรับก่อนส่งมอบสินค้าหรือเมื่อส่งมอบสินค้า" on top of
+        // a 100% figure) is what 6 real quotations printed before this fix. This is a DIFFERENT
+        // sentence from Item 4's fullPaymentTerm-selected text below (which only ever applies at
+        // 0%): 100% is charged UP FRONT, 0% (Item 4) is charged with none up front at all.
+        if (depositPct == 100) {
+            return "2.บริษัทขอรับเงินค่าสินค้า 100% เมื่อสั่งซื้อสินค้า";
+        }
         if (depositPct != 0) {
             return "2.บริษัทฯ ขอรับมัดจำ " + depositPct + "% เมื่อสั่งซื้อสินค้า ส่วนที่เหลือ" + remainderText;
         }
@@ -547,8 +556,17 @@ public final class DealQuotationRenderAdapter {
             return NON_TILE_LINE3_FALLBACK;
         }
         String groups = String.join("  ", leadTimeGroups(items, false));
-        String depositClause = depositPct == 0 ? ""
-            : " หลังจากได้รับมัดจำ " + depositPct + "% เรียบร้อยแล้ว";
+        // Wording-scan fix 2 (2026-09-17): at 100% deposit there is no "deposit" left to name a
+        // percentage of -- the whole price was already collected -- so this states that plainly
+        // ("after full payment is received") instead of the misleading "...มัดจำ 100%...".
+        String depositClause;
+        if (depositPct == 0) {
+            depositClause = "";
+        } else if (depositPct == 100) {
+            depositClause = " หลังจากได้รับชำระเงินเรียบร้อยแล้ว";
+        } else {
+            depositClause = " หลังจากได้รับมัดจำ " + depositPct + "% เรียบร้อยแล้ว";
+        }
         return "3.กรณีโรงงานผู้ผลิตมีสินค้าพร้อมจัดส่ง ระยะเวลานำเข้า " + groups + depositClause;
     }
 
@@ -747,7 +765,12 @@ public final class DealQuotationRenderAdapter {
         String days = min.equals(max) ? String.valueOf(min) : min + "-" + max;
         if (english) {
             String range = first.equals(last) ? "item " + first : "items " + first + "-" + last;
-            groups.add(range + " approximately " + days + " days");
+            // Wording-scan fix 7 (2026-09-17): a single-value exact lead time (min == max) is
+            // pluralized by that value -- "approximately 1 day", not "approximately 1 days". A
+            // RANGE ("75-90") is always plural regardless of its endpoints, so only the single-value
+            // branch routes through the shared helper.
+            String dayWord = min.equals(max) ? DealQuotationLines.plural(min, "day", "days") : "days";
+            groups.add(range + " approximately " + days + " " + dayWord);
         } else {
             String range = first.equals(last) ? String.valueOf(first) : first + "-" + last;
             groups.add("รายการที่ " + range + " ประมาณ " + days + " วัน");
@@ -789,6 +812,11 @@ public final class DealQuotationRenderAdapter {
      * ternaries" reason {@link #englishLeadTimeLine} gives for its own Thai twin. */
     private static String englishDepositLine(int depositPct, String fullPaymentTerm, String remainderMode,
                                               Integer creditDays, String remainderText) {
+        // Wording-scan fix 2 (2026-09-17) — English twin of the Thai branch above; see its own
+        // comment for why 100% and Item 4's 0% fullPaymentTerm sentences are different cases.
+        if (depositPct == 100) {
+            return "2.Full payment (100%) is required upon order confirmation.";
+        }
         if (depositPct != 0) {
             return "2.A deposit of " + depositPct + "% is required upon order confirmation, " + remainderText + ".";
         }
@@ -797,9 +825,13 @@ public final class DealQuotationRenderAdapter {
         if (termText != null) {
             return "2." + termText;
         }
-        return "CREDIT".equals(remainderMode)
-            ? "2.Full payment is due on " + (creditDays != null ? creditDays : 0) + " days credit."
-            : "2.Full payment is due before or upon delivery.";
+        if ("CREDIT".equals(remainderMode)) {
+            // Wording-scan fix 7 (2026-09-17): singular "day credit" at exactly 1 day.
+            int days = creditDays != null ? creditDays : 0;
+            return "2.Full payment is due on " + days + " " + DealQuotationLines.plural(days, "day", "days")
+                + " credit.";
+        }
+        return "2.Full payment is due before or upon delivery.";
     }
 
     /** The English twin of {@link #fullPaymentTermThaiText} — same three codes, same
@@ -820,10 +852,17 @@ public final class DealQuotationRenderAdapter {
     private static List<String> englishRemarkLines(DealQuotationDto quotation, List<String> bankBlockLines) {
         LocalDate offerDate = quotation.offerDate() != null ? quotation.offerDate() : LocalDate.now(BANGKOK);
         int depositPct = quotation.depositPercent() != null ? quotation.depositPercent() : 30;
-        String remainderText = "CREDIT".equals(quotation.remainderMode())
-            ? "the balance on " + (quotation.creditDays() != null ? quotation.creditDays() : 0) + " days credit"
-            : "the balance before or upon delivery";
+        // Wording-scan fix 7 (2026-09-17): singular "day credit" at exactly 1 day.
+        String remainderText;
+        if ("CREDIT".equals(quotation.remainderMode())) {
+            int creditDays = quotation.creditDays() != null ? quotation.creditDays() : 0;
+            remainderText = "the balance on " + creditDays + " " + DealQuotationLines.plural(creditDays, "day", "days")
+                + " credit";
+        } else {
+            remainderText = "the balance before or upon delivery";
+        }
         int validityDays = quotation.validityDays() != null ? quotation.validityDays() : 30;
+        String validityDayWord = DealQuotationLines.plural(validityDays, "day", "days");
         // V178, English twin of the Thai line7 branch above — same guard, same byte-identical
         // DAYS-mode output.
         boolean validityIsDate = WastageCalculator.VALIDITY_MODE_DATE.equals(quotation.validityMode())
@@ -864,7 +903,7 @@ public final class DealQuotationRenderAdapter {
             lines.add(validityIsDate
                 ? "4.Special price for orders with deposit paid by " + validityUntilEn
                     + "; sizes may vary slightly within ISO and TIS tolerances."
-                : "4.Price validity : " + validityDays + " days from the date of this quotation; "
+                : "4.Price validity : " + validityDays + " " + validityDayWord + " from the date of this quotation; "
                     + "sizes may vary slightly within ISO and TIS tolerances.");
             lines.add("5.Colours may vary slightly between production lots. "
                 + "Goods sold are not returnable or exchangeable.");
@@ -874,7 +913,7 @@ public final class DealQuotationRenderAdapter {
             lines.add(BANK_BLOCK_PLACEHOLDER_LINE);
             lines.add(validityIsDate
                 ? "5.Special price for orders with deposit paid by " + validityUntilEn + "."
-                : "5.Price validity : " + validityDays + " days from the date of this quotation.");
+                : "5.Price validity : " + validityDays + " " + validityDayWord + " from the date of this quotation.");
             lines.add("6.Actual tile sizes may vary slightly from the sizes stated above, within ISO "
                 + "and TIS tolerances.");
             lines.add("7.Colours and patterns may vary slightly from the samples, as goods come from "
@@ -926,18 +965,29 @@ public final class DealQuotationRenderAdapter {
             return EN_NON_TILE_LINE3_FALLBACK;
         }
         String groups = String.join("  ", leadTimeGroups(items, true));
-        return depositPct == 0
-            ? "3.If the factory has the goods ready to ship, the import lead time is " + groups + "."
-            : "3.If the factory has the goods ready to ship, the import lead time is " + groups
-                + ", after the " + depositPct + "% deposit is received.";
+        String prefix = "3.If the factory has the goods ready to ship, the import lead time is " + groups;
+        // Wording-scan fix 2 (2026-09-17) — English twin of the Thai branch above.
+        if (depositPct == 0) {
+            return prefix + ".";
+        }
+        if (depositPct == 100) {
+            return prefix + ", after full payment is received.";
+        }
+        return prefix + ", after the " + depositPct + "% deposit is received.";
     }
 
     /** The English twin of {@link #nonTileRemarkLines}. */
     private static List<String> englishNonTileRemarkLines(DealQuotationDto quotation, List<String> bankBlockLines) {
         int depositPct = quotation.depositPercent() != null ? quotation.depositPercent() : 30;
-        String remainderText = "CREDIT".equals(quotation.remainderMode())
-            ? "the balance on " + (quotation.creditDays() != null ? quotation.creditDays() : 0) + " days credit"
-            : "the balance before or upon delivery";
+        // Wording-scan fix 7 (2026-09-17): singular "day credit" at exactly 1 day.
+        String remainderText;
+        if ("CREDIT".equals(quotation.remainderMode())) {
+            int creditDays = quotation.creditDays() != null ? quotation.creditDays() : 0;
+            remainderText = "the balance on " + creditDays + " " + DealQuotationLines.plural(creditDays, "day", "days")
+                + " credit";
+        } else {
+            remainderText = "the balance before or upon delivery";
+        }
         boolean hasBankBlock = bankBlockLines != null && bankBlockLines.size() == 3
             && bankBlockLines.stream().noneMatch(DealQuotationRenderAdapter::blank);
 

@@ -30,6 +30,7 @@ import {
   sqmPerPieceFromSizeCm,
   sizeTextMatchesCatalogFaceSize,
   sizeTextDiffersFromCatalogFaceSize,
+  validatePlainItem,
   validateQuotationItem,
 } from './quotationMeta.js';
 
@@ -440,40 +441,87 @@ describe('validateQuotationItem (#M4, owner ruling 2026-09-10)', () => {
       expect(validateQuotationItem(item, 'NET', 'TH', { requireLeadTime: true })).toEqual({});
     });
 
-    it('a zero lead time (an exact same-day range) is a valid value, not a missing one', () => {
+    // Wording-scan fix 3 (2026-09-17): a lead time of 0 (or negative) used to be read as a valid
+    // "exact same-day" value once BOTH fields were present, not a missing one — this test now pins
+    // the OPPOSITE: 0 is a genuinely INVALID value (min must be >= 1 day), refused with the same
+    // message the backend uses, unconditionally (not gated on `requireLeadTime`).
+    it('a zero lead time is refused as an invalid value, not accepted as an exact same-day range', () => {
       const item = completeItem({ leadTimeMinDays: 0, leadTimeMaxDays: 0 });
+      expect(validateQuotationItem(item, 'NET', 'TH', { requireLeadTime: true }))
+        .toEqual({ leadTimeMinDays: 'ระยะเวลานำเข้าต้องไม่น้อยกว่า 1 วัน และค่าสูงสุดต้องไม่น้อยกว่าค่าต่ำสุด' });
+    });
+
+    /** Wrong-way-round: the SMALLEST genuinely valid exact-day range (1, 1) passes. */
+    it('an exact one-day lead time (1, 1) is a valid value', () => {
+      const item = completeItem({ leadTimeMinDays: 1, leadTimeMaxDays: 1 });
       expect(validateQuotationItem(item, 'NET', 'TH', { requireLeadTime: true })).toEqual({});
     });
   });
 
-  // Second review pass, finding N6 (2026-09-19): min <= max used to be checked UNCONDITIONALLY
-  // on every caller, including direct-deal's own itemErrorsByRow (no options at all) and
-  // submitItemErrorsByRow ({ requireLeadTime: true } only, still no requireOriginCountry) --
-  // silently blocking an EXISTING direct-deal draft whose lead-time range happened to be
-  // min > max, and surfacing the wrong sentence ("please fill this in") on the submit banner
-  // because QuotationEditorPage's missingLeadTimeSeqs treats any truthy errors.leadTimeMinDays as
-  // "missing". Gated to requireOriginCountry, the PCR-only flag, so direct-deal is byte-for-byte
-  // unchanged and only the PCR form (which always passes requireOriginCountry: true) enforces it.
-  describe('lead-time min <= max (GLA-125, gated to requireOriginCountry -- second review pass N6)', () => {
-    it('direct-deal (no requireOriginCountry) does NOT flag min > max, even though both values are present', () => {
-      const item = completeItem({ leadTimeMinDays: 45, leadTimeMaxDays: 30 });
-      expect(validateQuotationItem(item)).toEqual({});
+  // ── Wording-scan fix 3 (2026-09-17): an ENTERED lead-time range must be min>=1, max>=min ──────
+  describe('lead-time value validity (owner-approved wording-scan finding 3)', () => {
+    it('refuses min < 1 unconditionally (not gated on requireLeadTime)', () => {
+      const item = completeItem({ leadTimeMinDays: 0, leadTimeMaxDays: 3 });
+      expect(validateQuotationItem(item, 'NET', 'TH'))
+        .toEqual({ leadTimeMinDays: 'ระยะเวลานำเข้าต้องไม่น้อยกว่า 1 วัน และค่าสูงสุดต้องไม่น้อยกว่าค่าต่ำสุด' });
     });
 
-    it('direct-deal SUBMIT (requireLeadTime, still no requireOriginCountry) does NOT flag min > max either', () => {
-      const item = completeItem({ leadTimeMinDays: 45, leadTimeMaxDays: 30 });
-      expect(validateQuotationItem(item, 'NET', 'TH', { requireLeadTime: true })).toEqual({});
+    it('refuses max < min', () => {
+      const item = completeItem({ leadTimeMinDays: 90, leadTimeMaxDays: 75 });
+      expect(validateQuotationItem(item, 'NET', 'TH').leadTimeMinDays)
+        .toBe('ระยะเวลานำเข้าต้องไม่น้อยกว่า 1 วัน และค่าสูงสุดต้องไม่น้อยกว่าค่าต่ำสุด');
     });
 
-    it('the PCR form (requireOriginCountry: true) DOES flag min > max, with its own distinct message', () => {
-      const item = completeItem({ leadTimeMinDays: 45, leadTimeMaxDays: 30, originCountry: 'จีน' });
-      expect(validateQuotationItem(item, 'NET', 'TH', { requireOriginCountry: true }))
-        .toEqual({ leadTimeMinDays: 'ระยะเวลานำเข้าต่ำสุดต้องไม่มากกว่าสูงสุด' });
+    it('does not fire on a partially-entered lead time (the other field still blank)', () => {
+      const item = completeItem({ leadTimeMinDays: 0, leadTimeMaxDays: null });
+      expect(validateQuotationItem(item, 'NET', 'TH').leadTimeMinDays).toBeUndefined();
     });
 
-    it('the PCR form still accepts a valid min <= max range', () => {
-      const item = completeItem({ leadTimeMinDays: 30, leadTimeMaxDays: 45, originCountry: 'จีน' });
-      expect(validateQuotationItem(item, 'NET', 'TH', { requireOriginCountry: true })).toEqual({});
+    it('the SAME rule applies to a PLAIN row (validatePlainItem)', () => {
+      const plain = { description: 'สุขภัณฑ์', quantity: 1, unit: 'ชุด', unitPrice: 5000, leadTimeMinDays: 0, leadTimeMaxDays: 3 };
+      expect(validatePlainItem(plain).leadTimeMinDays)
+        .toBe('ระยะเวลานำเข้าต้องไม่น้อยกว่า 1 วัน และค่าสูงสุดต้องไม่น้อยกว่าค่าต่ำสุด');
+    });
+
+    it('wrong-way-round: a valid range on a PLAIN row is untouched', () => {
+      const plain = { description: 'สุขภัณฑ์', quantity: 1, unit: 'ชุด', unitPrice: 5000, leadTimeMinDays: 75, leadTimeMaxDays: 90 };
+      expect(validatePlainItem(plain).leadTimeMinDays).toBeUndefined();
+    });
+  });
+
+  // ── Wording-scan fix 4 (2026-09-17): an AREA-mode row that computes to ZERO pieces ────────────
+  describe('AREA-mode zero-pieces rejection (owner-approved wording-scan finding 4)', () => {
+    it('refuses when the debounced preview reports piecesBeforeWastage === 0', () => {
+      const item = completeItem({ quantityMode: 'AREA', areaSqm: 0.01, piecesBeforeWastage: 0 });
+      expect(validateQuotationItem(item, 'NET', 'TH').areaSqm).toBe('พื้นที่น้อยเกินไป คำนวณได้ 0 แผ่น');
+    });
+
+    it('wrong-way-round: a positive piecesBeforeWastage is untouched', () => {
+      const item = completeItem({ quantityMode: 'AREA', areaSqm: 0.36, piecesBeforeWastage: 1 });
+      expect(validateQuotationItem(item, 'NET', 'TH').areaSqm).toBeUndefined();
+    });
+
+    it('does not fire before a preview has run (piecesBeforeWastage still null/undefined)', () => {
+      const item = completeItem({ quantityMode: 'AREA', areaSqm: 0.01 });
+      expect(validateQuotationItem(item, 'NET', 'TH').areaSqm).toBeUndefined();
+    });
+  });
+
+  // ── Wording-scan fix 5 (2026-09-17): PIECES wastage must be a whole number ────────────────────
+  describe('fractional PIECES-wastage rejection (owner-approved wording-scan finding 5)', () => {
+    it('refuses a fractional value in PIECES mode', () => {
+      const item = completeItem({ wastageMode: 'PIECES', wastageValue: 0.5 });
+      expect(validateQuotationItem(item, 'NET', 'TH').wastageValue).toBe('จำนวนแผ่นที่เผื่อต้องเป็นจำนวนเต็ม');
+    });
+
+    it('wrong-way-round: a whole-number PIECES value is untouched', () => {
+      const item = completeItem({ wastageMode: 'PIECES', wastageValue: 2 });
+      expect(validateQuotationItem(item, 'NET', 'TH').wastageValue).toBeUndefined();
+    });
+
+    it('PERCENT wastage keeps accepting a fractional value', () => {
+      const item = completeItem({ wastageMode: 'PERCENT', wastageValue: 2.5 });
+      expect(validateQuotationItem(item, 'NET', 'TH').wastageValue).toBeUndefined();
     });
   });
 });
@@ -1367,11 +1415,15 @@ describe('buildQuotationChecklist', () => {
   const warnings = (entries) => entries.filter((e) => !e.blocking).map((e) => e.check);
 
   it('pins the blocking set to what the backend already refuses — nothing the owner has not ruled on', () => {
+    // Wording-scan fix 6 (2026-09-17): creditDaysInvalid joins the set — the backend already
+    // refuses an explicit invalid (<=0) creditDays on every save, not just submit. creditDays
+    // itself (the BLANK-on-draft reminder) stays a warning, same as fullPaymentTerm.
     expect([...meta.QUOTATION_BLOCKING_CHECKS].sort()).toEqual(
-      ['contact', 'customer', 'items', 'locationLabels', 'priceModeLanguage', 'project'],
+      ['contact', 'creditDaysInvalid', 'customer', 'items', 'locationLabels', 'priceModeLanguage', 'project'],
     );
-    // Wrong-way-round: none of the header fields a customer might simply not have is blocking.
-    ['customerAddress', 'customerTaxId', 'customerPhone', 'contactPhone', 'contactEmail', 'dealProject']
+    // Wrong-way-round: none of the header fields a customer might simply not have is blocking,
+    // and the blank-creditDays reminder is a warning, not a blocker (fix 6).
+    ['customerAddress', 'customerTaxId', 'customerPhone', 'contactPhone', 'contactEmail', 'dealProject', 'creditDays']
       .forEach((check) => expect(meta.QUOTATION_BLOCKING_CHECKS.has(check)).toBe(false));
   });
 
@@ -1491,6 +1543,43 @@ describe('buildQuotationChecklist', () => {
     expect(meta.buildQuotationChecklist({ ...complete, noDeposit: true, fullPaymentTerm: 'CREDIT_30' })).toEqual([]);
     expect(meta.buildQuotationChecklist({
       ...complete, noDeposit: false, depositPercentCustom: true, depositPercent: '0', fullPaymentTerm: 'CREDIT_30',
+    })).toEqual([]);
+  });
+
+  // ── Wording-scan fix 6 (2026-09-17): CREDIT remainder needs at least 1 credit day ────────────
+  it('BLOCKS an explicit invalid (0) creditDays under a CREDIT remainder', () => {
+    const entries = meta.buildQuotationChecklist({ ...complete, remainderMode: 'CREDIT', creditDays: 0 });
+    expect(entries).toEqual([{
+      check: 'creditDaysInvalid', message: 'กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน',
+      targetId: 'creditDays', blocking: true,
+    }]);
+  });
+
+  it('BLOCKS an explicit negative creditDays too', () => {
+    expect(blocking(meta.buildQuotationChecklist({ ...complete, remainderMode: 'CREDIT', creditDays: -1 })))
+      .toEqual(['creditDaysInvalid']);
+  });
+
+  it('lists (but does not block) a BLANK creditDays under a CREDIT remainder', () => {
+    const entries = meta.buildQuotationChecklist({ ...complete, remainderMode: 'CREDIT', creditDays: '' });
+    expect(entries).toEqual([{
+      check: 'creditDays', message: 'กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน',
+      targetId: 'creditDays', blocking: false,
+    }]);
+  });
+
+  it('does NOT list it for a positive creditDays', () => {
+    expect(meta.buildQuotationChecklist({ ...complete, remainderMode: 'CREDIT', creditDays: 1 })).toEqual([]);
+  });
+
+  it('does NOT list it for a non-CREDIT remainder mode, whatever creditDays holds', () => {
+    expect(meta.buildQuotationChecklist({ ...complete, remainderMode: 'ON_DELIVERY', creditDays: 0 })).toEqual([]);
+    expect(meta.buildQuotationChecklist({ ...complete, remainderMode: '', creditDays: '' })).toEqual([]);
+  });
+
+  it('is skipped entirely at an effective zero deposit, even with a stale CREDIT/0 left on screen', () => {
+    expect(meta.buildQuotationChecklist({
+      ...complete, noDeposit: true, fullPaymentTerm: 'CREDIT_30', remainderMode: 'CREDIT', creditDays: 0,
     })).toEqual([]);
   });
 });
