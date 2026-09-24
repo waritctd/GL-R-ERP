@@ -5,12 +5,15 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
+import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
 
 /**
@@ -42,18 +45,43 @@ public class BotFxFetchService {
         this.objectMapper = objectMapper;
     }
 
+    /**
+     * What a fetch changed: how many of the {@link #TRACKED_CURRENCIES} got a rate written, out of
+     * how many were attempted, for which BOT publication date. Returned by {@link #fetchNow} so the
+     * CEO console can report "อัปเดต N/5 สกุล" instead of guessing from a bare 200.
+     */
+    public record FxFetchResult(int updated, int total, String asOf, List<String> updatedCurrencies) {}
+
+    /**
+     * The daily scheduled fetch. Delegates to {@link #fetchNow} and swallows its "not configured"
+     * refusal as a warn — a {@code @Scheduled} method must never throw. Behaviour with a configured
+     * token is byte-for-byte what it always was.
+     */
     @Scheduled(cron = "0 0 18 * * *", zone = "Asia/Bangkok")
     public void fetchDailyRates() {
+        try {
+            fetchNow();
+        } catch (ApiException e) {
+            log.warn("BOT FX scheduled fetch skipped: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Fetch today's BOT rates on demand (the CEO console's "ดึงเรตตอนนี้" button), returning what
+     * changed. Unlike the scheduled path this THROWS when the token is missing, so a manual caller
+     * is told the config is incomplete rather than silently doing nothing.
+     */
+    public FxFetchResult fetchNow() {
         String token = props.getBot().getFxApiToken();
         if (token == null || token.isBlank()) {
-            log.warn("BOT_FX_API_TOKEN not configured — skipping FX auto-fetch");
-            return;
+            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE,
+                "ยังไม่ได้ตั้งค่า BOT_FX_API_TOKEN — ตั้งค่าก่อนจึงจะดึงอัตราจาก BOT ได้");
         }
 
         LocalDate today = LocalDate.now();
         String dateStr = today.toString(); // yyyy-MM-dd
 
-        int fetched = 0;
+        List<String> updated = new ArrayList<>();
         for (String currency : TRACKED_CURRENCIES) {
             try {
                 String url = BOT_BASE_URL + "?start_period=" + dateStr + "&end_period=" + dateStr
@@ -70,13 +98,14 @@ public class BotFxFetchService {
                     continue;
                 }
                 fxRates.upsertFromBot(currency, rate, today);
-                fetched++;
+                updated.add(currency);
                 log.info("BOT FX: updated {} = {} THB ({})", currency, rate, dateStr);
             } catch (Exception e) {
                 log.warn("BOT FX: failed to fetch {} — {}", currency, e.getMessage());
             }
         }
-        log.info("BOT FX fetch completed: {}/{} currencies updated", fetched, TRACKED_CURRENCIES.size());
+        log.info("BOT FX fetch completed: {}/{} currencies updated", updated.size(), TRACKED_CURRENCIES.size());
+        return new FxFetchResult(updated.size(), TRACKED_CURRENCIES.size(), dateStr, updated);
     }
 
     private BigDecimal parseRate(String json) throws Exception {

@@ -631,6 +631,7 @@ export const api = {
   fxRates: {
     list: () => apiRequest(API_ROUTES.fxRates.list),
     upsert: (currency, payload) => apiRequest(API_ROUTES.fxRates.upsert(currency), { method: 'PUT', body: payload }),
+    fetchNow: () => apiRequest(API_ROUTES.fxRates.fetchNow, { method: 'POST' }),
   },
   priceCalcConfigs: {
     list: () => apiRequest(API_ROUTES.priceCalcConfigs.list),

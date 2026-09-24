@@ -118,7 +118,8 @@ class CatalogPricingReadAuthzIntegrationTest extends AbstractPostgresIntegration
             sessions), jsonMapper);
         priceConfigMvc = standalone(
             new PriceCalcConfigController(new PriceCalcConfigRepository(jdbc), sessions), jsonMapper);
-        fxMvc = standalone(new FxRateController(new FxRateRepository(jdbc), sessions), jsonMapper);
+        fxMvc = standalone(new FxRateController(
+            new FxRateRepository(jdbc), sessions, mock(th.co.glr.hr.pricing.BotFxFetchService.class)), jsonMapper);
         factoryMvc = standalone(
             new FactoryConfigController(new FactoryConfigRepository(jdbc), sessions), jsonMapper);
 

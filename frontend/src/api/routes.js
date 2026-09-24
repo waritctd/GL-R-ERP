@@ -295,6 +295,7 @@ export const API_ROUTES = {
   fxRates: {
     list: '/api/fx-rates',
     upsert: (currency) => `/api/fx-rates/${currency}`,
+    fetchNow: '/api/fx-rates/fetch-now',
   },
   priceCalcConfigs: {
     list: '/api/price-calc-configs',

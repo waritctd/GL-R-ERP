@@ -11388,6 +11388,28 @@ export const api = {
       mockFxRates.push(newRate);
       return delay({ fxRate: structuredClone(newRate) });
     },
+    // Mirrors FxRateController.fetchNow -> BotFxFetchService.fetchNow (CEO-only). The real path
+    // calls the Bank of Thailand API; the mock cannot, so this SIMULATES a successful fetch:
+    // it refreshes each tracked currency's row to today with source=BOT (clearing the staleness
+    // warning) without inventing new rates, and returns the same {result} shape. Not a rate
+    // computation — just plumbing so the button, toast and refetch are exercisable in mock mode.
+    async fetchNow() {
+      hasRole('ceo');
+      const tracked = ['USD', 'EUR', 'JPY', 'CNY', 'GBP'];
+      const asOf = new Date().toISOString().slice(0, 10);
+      const now = new Date().toISOString();
+      const updated = [];
+      for (const currency of tracked) {
+        const row = mockFxRates.find((r) => r.currency === currency);
+        if (!row) continue;
+        row.effectiveDate = asOf;
+        row.updatedAt = now;
+        row.fetchedAt = now;
+        row.source = 'BOT';
+        updated.push(currency);
+      }
+      return delay({ result: { updated: updated.length, total: tracked.length, asOf, updatedCurrencies: updated } });
+    },
   },
 
   // Mirrors PriceCalcConfigController (pricing/).
