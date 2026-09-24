@@ -207,6 +207,27 @@ describe('PricingRequestQueuePage', () => {
       expect(within(tabByName('งานของฉัน')).getByText('2')).not.toBeNull();
     });
 
+    // owner ask 2026-09-24: รอรับเรื่อง now shows its own count badge too, from the same
+    // unclaimed (SUBMITTED) query — and, like งานของฉัน, without needing to open the tab first.
+    it('shows the รอรับเรื่อง badge count (unclaimed SUBMITTED requests)', async () => {
+      api.pricingRequests.queue.mockImplementation((params) => {
+        if (params?.status === 'SUBMITTED') {
+          return Promise.resolve({
+            items: [
+              row({ id: 21, requestCode: 'PCR-2026-0021', status: 'SUBMITTED' }),
+              row({ id: 22, requestCode: 'PCR-2026-0022', status: 'SUBMITTED' }),
+              row({ id: 23, requestCode: 'PCR-2026-0023', status: 'SUBMITTED' }),
+            ],
+          });
+        }
+        return Promise.resolve({ items: [row({ id: 11, status: 'IMPORT_REVIEWING', assignedImportId: 5 })] });
+      });
+      renderQueuePage(importUser);
+
+      // Default tab is งานของฉัน — the รอรับเรื่อง badge appears without opening it.
+      await waitFor(() => expect(within(tabByName('รอรับเรื่อง')).getByText('3')).not.toBeNull());
+    });
+
     it('รอรับเรื่อง calls the API with status SUBMITTED and offers the pickup button', async () => {
       api.pricingRequests.queue.mockImplementation((params) => {
         if (params?.status === 'SUBMITTED') {

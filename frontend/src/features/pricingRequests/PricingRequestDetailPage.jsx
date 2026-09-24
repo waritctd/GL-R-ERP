@@ -40,6 +40,7 @@ import {
   canRecordCustomerQuotationOutcome,
   canSeePricingDecisionSalesView,
   canSeeRawPricingDecision,
+  canPickupPricingRequest,
   canStartCeoReview,
   canViewCustomerQuotation,
   isCustomerQuotationEditable,
@@ -867,6 +868,10 @@ export function PricingRequestDetailPage({ user, showToast }) {
     ({ itemId, factory }) => api.pricingRequests.setItemFactory(pricingRequestId, itemId, { factory }),
     'บันทึกโรงงานแล้ว',
   );
+  // รับเรื่อง (pickup) from the request page itself — a SUBMITTED request landed here (e.g. from a
+  // notification link) with no way to claim it except going back to the คิวขอราคา queue. Same
+  // endpoint + canPickupPricingRequest gate as the queue and the deal panel; server is the authority.
+  const pickupRequest = useActionMutation(() => api.pricingRequests.pickup(pricingRequestId), 'รับเรื่องแล้ว');
   const generateDrafts = useActionMutation(() => api.pricingRequests.generateFactoryEmailDrafts(pricingRequestId), 'สร้างร่างอีเมลแล้ว');
   const updateQuote = useActionMutation(({ quote, draft }) => api.pricingRequests.updateFactoryQuote(quote.id, draft), 'บันทึกร่างอีเมลแล้ว');
   // Manual-RFQ redesign: records that Import already sent this email themselves — see
@@ -1321,6 +1326,20 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const canSetItemFactory = isImport(user) && FACTORY_ROUTING_STATUSES.includes(summary?.status);
   const factoryQuotes = useMemo(() => factoryQuery.data ?? [], [factoryQuery.data]);
   const factoryGroups = useMemo(() => groupFactoryQuotesByFactory(factoryQuotes), [factoryQuotes]);
+  // Before any ร่างอีเมล has been generated there are no factory quotes, so the price section used
+  // to render a bare "ยังไม่มีราคาโรงงาน" — Import had no idea what they were about to price (owner
+  // UX ask 2026-09-24). This groups the request's OWN items by the factory each is routed to, so the
+  // section shows "what needs a price, per factory" up front; it is read-only preview only — the
+  // real price inputs still appear (and unlock per the email-sent nudge) once drafts are generated.
+  const pricePreviewGroups = useMemo(() => {
+    const map = new Map();
+    (request?.items ?? []).forEach((item) => {
+      const name = itemFactoryName(item) || 'ยังไม่ได้ระบุโรงงาน';
+      if (!map.has(name)) map.set(name, { key: name, factoryName: name, items: [] });
+      map.get(name).items.push(item);
+    });
+    return [...map.values()];
+  }, [request]);
   const factoryItemCount = useMemo(
     () => factoryGroups.reduce((sum, group) => sum + (group.current.items?.length ?? 0), 0),
     [factoryGroups],
@@ -1513,10 +1532,18 @@ export function PricingRequestDetailPage({ user, showToast }) {
         title={summary.requestCode}
         subtitle={`${summary.customerName ?? '-'}${summary.projectName ? ` · ${summary.projectName}` : ''}`}
         actions={(
-          <Button type="button" variant="secondary" onClick={() => navigate(-1)}>
-            <Icon name="chevronLeft" size={14} />
-            กลับ
-          </Button>
+          <>
+            {canPickupPricingRequest(user, summary) ? (
+              <Button type="button" variant="primary" disabled={pickupRequest.isPending}
+                onClick={() => pickupRequest.mutate()} data-testid="pcr-detail-pickup">
+                รับเรื่อง
+              </Button>
+            ) : null}
+            <Button type="button" variant="secondary" onClick={() => navigate(-1)}>
+              <Icon name="chevronLeft" size={14} />
+              กลับ
+            </Button>
+          </>
         )}
       />
 
@@ -1769,7 +1796,33 @@ export function PricingRequestDetailPage({ user, showToast }) {
           ) : null}
         >
           {factoryGroups.length === 0 ? (
-            <p className="p-4 text-sm text-text-muted">ยังไม่มีราคาโรงงาน</p>
+            <div className="flex flex-col gap-3 p-4" data-testid="pcr-price-preview">
+              <p className="rounded-md border border-warning-border bg-warning-bg-soft p-3 text-xs text-warning-dark">
+                ยังไม่ได้สร้างร่างอีเมลขอราคา — ด้านล่างคือรายการที่ต้องขอราคา จัดกลุ่มตามโรงงาน
+                {isImport(user) ? ' · กด “สร้างร่างอีเมล” ด้านบนเพื่อเริ่ม แล้วจึงกรอกราคาได้หลังกดส่งอีเมล' : ''}
+              </p>
+              {pricePreviewGroups.map((group) => (
+                <div key={group.key} className="rounded-md border border-border bg-surface" data-testid="pcr-price-preview-group">
+                  <div className="flex flex-wrap items-center gap-2 border-b border-border-subtle bg-surface-subtle px-3 py-2">
+                    <strong className="text-sm text-text">{group.factoryName}</strong>
+                    <span className="text-xs text-text-muted">({group.items.length} รายการ)</span>
+                    <span className="ml-auto text-2xs text-text-muted">กรอกราคาได้หลังส่งอีเมล</span>
+                  </div>
+                  <div className="flex flex-col gap-1 p-3 text-xs text-text-secondary">
+                    {group.items.map((item) => {
+                      const variant = [item.size, item.color, item.texture].filter(Boolean).join(' · ');
+                      return (
+                        <div key={item.id} className="flex flex-wrap items-baseline gap-x-2">
+                          <strong className="text-text">{itemDisplayName(item)}</strong>
+                          {variant ? <span>{variant}</span> : null}
+                          <span className="text-text-muted">· {item.requestedQty ?? '—'} {item.requestedUnit ?? ''}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
           ) : (
             <div className="flex flex-col">
               {/* Column headers (DESIGN.md §13's .table-head idiom: surface-muted band, overline
@@ -1808,12 +1861,23 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 const dirty = Boolean(responseDrafts[current.id]);
                 const editable = isImport(user) && current.current
                   && ['DRAFT', 'REQUESTED', 'RESPONSE_RECEIVED', 'NEGOTIATING', 'READY_FOR_COSTING'].includes(current.status);
+                // Owner UX ask (2026-09-24): the price grid must not invite a quoted price before
+                // Import has actually SENT the request email to this factory — a DRAFT quote means
+                // "not sent yet" (the ร่างอีเมล → "ส่งแล้ว" action is what leaves DRAFT, → REQUESTED).
+                // So while DRAFT the ราคาที่เสนอ inputs stay locked (dimmed + a nudge to send first)
+                // and ยืนยันราคาเสนอ is withheld, without hard-hiding the grid — it stays the visible
+                // primary surface (owner ruling 2026-08-16), just not fillable out of order.
+                const emailSent = current.status !== 'DRAFT';
                 // READY_FOR_COSTING only offers ยืนยันราคาเสนอ again while dirty — see
                 // confirmFactoryQuote's doc comment for why an undirtied re-click must not be
                 // offered at all (it would either no-op-fail against markReady's own guard, or,
                 // if this branch called receive() unconditionally, spuriously bump the revision).
-                const canConfirm = isImport(user) && current.current
-                  && (['DRAFT', 'REQUESTED', 'RESPONSE_RECEIVED', 'NEGOTIATING'].includes(current.status)
+                // Withheld until the email is sent (emailSent): confirming a price before the
+                // request has gone out is exactly the out-of-order flow this nudge closes. DRAFT is
+                // the only !emailSent status the old list carried, so dropping it + AND emailSent is
+                // the whole change.
+                const canConfirm = isImport(user) && current.current && emailSent
+                  && (['REQUESTED', 'RESPONSE_RECEIVED', 'NEGOTIATING'].includes(current.status)
                     || (current.status === 'READY_FOR_COSTING' && dirty));
                 const canNegotiate = isImport(user) && current.status === 'RESPONSE_RECEIVED' && current.current;
                 const canOpenEmailDraft = isImport(user) && current.status === 'DRAFT';
@@ -1880,6 +1944,17 @@ export function PricingRequestDetailPage({ user, showToast }) {
                         </Button>
                       ) : null}
                     </div>
+
+                    {/* Nudge (owner UX ask 2026-09-24): while this factory's request email is still
+                        a DRAFT (not sent), the price grid below is locked. Point Import at the
+                        ร่างอีเมล → "ส่งแล้ว" action in the header rather than letting them type a
+                        price out of order. Shown only to the role that can act (import, editable). */}
+                    {editable && !emailSent ? (
+                      <div className="flex flex-wrap items-center gap-2 border-b border-warning-border bg-warning-bg-soft px-5 py-2.5 text-xs text-warning-dark mobile:px-4" data-testid={`pcr-await-email-${current.id}`}>
+                        <Icon name="mail" size={14} />
+                        ส่งอีเมลขอราคาให้โรงงานนี้ก่อน จึงจะกรอกราคาที่เสนอได้ — กด “ร่างอีเมล” ด้านบน แล้วกด “ส่งแล้ว”
+                      </div>
+                    ) : null}
 
                     {/* Per-factory control row — สกุลเงิน + หน่วยราคา, shared by every item below
                         instead of a per-line picker (owner-supplied mockup). Static text once the
@@ -1969,7 +2044,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                           </div>
                           <div className="min-w-0">
                             <span className="mb-1 block text-2xs font-bold uppercase text-text-muted md:hidden">ราคาที่เสนอ (แก้ไข)</span>
-                            {editable ? (
+                            {editable && emailSent ? (
                               <div className="flex flex-wrap items-center gap-1.5">
                                 <input
                                   id={`pcr-quote-price-${current.id}-${line.pricingRequestItemId}`}
@@ -1998,6 +2073,19 @@ export function PricingRequestDetailPage({ user, showToast }) {
                                   />
                                 ) : null}
                               </div>
+                            ) : editable ? (
+                              // Import, but the request email is still a DRAFT — a dimmed, disabled
+                              // stand-in so the column reads "you'll fill this after sending", not a
+                              // usable field. The group-level banner above says why.
+                              <input
+                                className="w-full opacity-50 md:w-32"
+                                type="text"
+                                disabled
+                                value=""
+                                placeholder="ส่งอีเมลก่อน"
+                                aria-label={`ราคาที่เสนอ ${itemRef} — ส่งอีเมลขอราคาก่อน`}
+                                data-testid={`pcr-quote-price-locked-${current.id}-${line.pricingRequestItemId}`}
+                              />
                             ) : (
                               <span className="text-sm text-text-secondary">{formatCurrency(line.rawUnitPrice, line.currency)}</span>
                             )}

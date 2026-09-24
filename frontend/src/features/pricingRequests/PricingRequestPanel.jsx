@@ -10,7 +10,7 @@ import { Modal } from '../../components/common/Modal.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatThaiDate, pricingRequestStatusLabel } from '../../utils/format.js';
 import {
-  canCancelPricingRequest, canCreatePricingRequest,
+  canCancelPricingRequest, canCreatePricingRequest, canPickupPricingRequest,
   canSubmitPricingRequest, canUpdatePricingRequest, pricingRequestRecipientLabel,
 } from './pricingRequestMeta.js';
 import { PricingRequestCreateModal } from './PricingRequestCreateModal.jsx';
@@ -108,6 +108,14 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
     mutationFn: ({ id, reason }) => api.pricingRequests.cancel(id, { reason }),
     onSuccess: () => { invalidate(); setCancelDraft(null); },
   });
+  // Import รับเรื่อง (pickup) straight from the deal, not only from the คิวขอราคา queue — a
+  // SUBMITTED request on a deal an import user is looking at had no รับเรื่อง affordance here at
+  // all. Same api.pricingRequests.pickup + canPickupPricingRequest gate the queue page uses; the
+  // server (PricingRequestService.pickup: any import user, SUBMITTED only) stays the authority.
+  const pickupMutation = useMutation({
+    mutationFn: (id) => api.pricingRequests.pickup(id),
+    onSuccess: invalidate,
+  });
 
   const canCreate = canCreatePricingRequest(user, deal);
 
@@ -158,8 +166,19 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
                   </span>
                 </button>
 
-                {(canUpdatePricingRequest(user, pr) || canSubmitPricingRequest(user, pr) || canCancelPricingRequest(user, pr)) ? (
+                {(canPickupPricingRequest(user, pr) || canUpdatePricingRequest(user, pr) || canSubmitPricingRequest(user, pr) || canCancelPricingRequest(user, pr)) ? (
                   <div className="flex flex-wrap items-center gap-2 border-t border-border px-3 py-2">
+                    {canPickupPricingRequest(user, pr) ? (
+                      <Button
+                        type="button"
+                        variant="primary"
+                        disabled={pickupMutation.isPending}
+                        onClick={() => pickupMutation.mutate(pr.id)}
+                        data-testid={`pcr-pickup-${pr.id}`}
+                      >
+                        รับเรื่อง
+                      </Button>
+                    ) : null}
                     {canUpdatePricingRequest(user, pr) ? (
                       <Button type="button" variant="secondary" onClick={() => setEditingId(pr.id)}>
                         แก้ไขร่าง
@@ -189,6 +208,7 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
                         submit is the only action fired straight from this row, so it is the only
                         one that reports here. */}
                     <MutationError mutation={submitMutation} match={submitMutation.variables === pr.id} />
+                    <MutationError mutation={pickupMutation} match={pickupMutation.variables === pr.id} />
                   </div>
                 ) : null}
 
