@@ -969,6 +969,96 @@ describe('DEAL_QUOTATION_STATUS_TABS (F5)', () => {
   });
 });
 
+// ── Global list scope (owner ruling 2026-09-24) — mirrors DealQuotationService.listOwnerScope /
+// LIST_SEE_ALL_ROLES. These are presentation hints only, never an authz boundary on their own —
+// see DealQuotationIntegrationTest for the authoritative evidence.
+describe('dealQuotationListSeesAll', () => {
+  it('is true only for sales_manager and ceo', () => {
+    expect(meta.dealQuotationListSeesAll({ role: 'sales_manager' })).toBe(true);
+    expect(meta.dealQuotationListSeesAll({ role: 'ceo' })).toBe(true);
+  });
+
+  it('is false for sales, import, account, a grant-holder, and no user at all', () => {
+    expect(meta.dealQuotationListSeesAll({ role: 'sales' })).toBe(false);
+    expect(meta.dealQuotationListSeesAll({ role: 'import' })).toBe(false);
+    expect(meta.dealQuotationListSeesAll({ role: 'account' })).toBe(false);
+    expect(meta.dealQuotationListSeesAll({ role: 'qc', canCreateQuotation: true })).toBe(false);
+    expect(meta.dealQuotationListSeesAll(null)).toBe(false);
+    expect(meta.dealQuotationListSeesAll(undefined)).toBe(false);
+  });
+});
+
+describe('dealQuotationRepOptions', () => {
+  it('returns distinct, name-sorted options and skips rows with no salesRepId', () => {
+    const rows = [
+      { salesRepId: 9, salesRepName: 'ผึ้ง' },
+      { salesRepId: 6, salesRepName: 'คุณสมหมาย ขายดี' },
+      { salesRepId: null, salesRepName: 'ไม่มีเจ้าของ' },
+      { salesRepId: 9, salesRepName: 'ผึ้ง' }, // duplicate of the first row
+    ];
+    expect(meta.dealQuotationRepOptions(rows)).toEqual([
+      { id: '6', name: 'คุณสมหมาย ขายดี' },
+      { id: '9', name: 'ผึ้ง' },
+    ]);
+  });
+
+  it('is null-safe and returns an empty array for no rows', () => {
+    expect(meta.dealQuotationRepOptions(null)).toEqual([]);
+    expect(meta.dealQuotationRepOptions([])).toEqual([]);
+    expect(meta.dealQuotationRepOptions(undefined)).toEqual([]);
+  });
+});
+
+describe('filterDealQuotationRows', () => {
+  const rows = [
+    { id: 1, salesRepId: 6, customerName: 'บริษัท แฟชั่นไอส์แลนด์ จำกัด', projectName: 'Fashion Island' },
+    { id: 2, salesRepId: 9, customerName: 'บริษัท เดโม จำกัด', projectName: null },
+    { id: 3, salesRepId: 6, customerName: 'บริษัท อื่น จำกัด', projectName: 'Other Project' },
+  ];
+
+  it('filters by repId, string-comparing so a numeric id and a string id both match', () => {
+    expect(meta.filterDealQuotationRows(rows, { repId: 6 }).map((r) => r.id)).toEqual([1, 3]);
+    expect(meta.filterDealQuotationRows(rows, { repId: '6' }).map((r) => r.id)).toEqual([1, 3]);
+  });
+
+  it('filters by text, case-insensitively, against customerName + projectName', () => {
+    expect(meta.filterDealQuotationRows(rows, { text: 'fashion' }).map((r) => r.id)).toEqual([1]);
+    expect(meta.filterDealQuotationRows(rows, { text: 'เดโม' }).map((r) => r.id)).toEqual([2]);
+  });
+
+  it('combines repId and text (AND, not OR)', () => {
+    expect(meta.filterDealQuotationRows(rows, { repId: 6, text: 'other' }).map((r) => r.id)).toEqual([3]);
+    expect(meta.filterDealQuotationRows(rows, { repId: 9, text: 'other' })).toEqual([]);
+  });
+
+  it('filters by amount: lt1m is < threshold, gte1m owns the exact 1,000,000 boundary', () => {
+    const amountRows = [
+      { id: 1, grandTotal: 999999.99 },
+      { id: 2, grandTotal: 1000000 },
+      { id: 3, grandTotal: 2500000 },
+      { id: 4, grandTotal: 0 },
+    ];
+    expect(meta.filterDealQuotationRows(amountRows, { amount: 'lt1m' }).map((r) => r.id)).toEqual([1, 4]);
+    expect(meta.filterDealQuotationRows(amountRows, { amount: 'gte1m' }).map((r) => r.id)).toEqual([2, 3]);
+    // Unknown amount value is a no-op, and amount composes with repId/text (AND).
+    expect(meta.filterDealQuotationRows(amountRows, { amount: 'nonsense' }).map((r) => r.id)).toEqual([1, 2, 3, 4]);
+    expect(meta.filterDealQuotationRows(rows, { repId: 6, amount: 'gte1m' })).toEqual([]);
+  });
+
+  it('is a no-op when both filters are empty/absent', () => {
+    expect(meta.filterDealQuotationRows(rows)).toEqual(rows);
+    expect(meta.filterDealQuotationRows(rows, {})).toEqual(rows);
+    expect(meta.filterDealQuotationRows(rows, { repId: '', text: '' })).toEqual(rows);
+  });
+
+  it('is null-safe on rows and on each row', () => {
+    expect(meta.filterDealQuotationRows(null)).toEqual([]);
+    expect(meta.filterDealQuotationRows(undefined, { text: 'x' })).toEqual([]);
+    expect(meta.filterDealQuotationRows([{ id: 1 }], { text: 'x' })).toEqual([]);
+    expect(meta.filterDealQuotationRows([{ id: 1 }], { repId: '' })).toEqual([{ id: 1 }]);
+  });
+});
+
 // ── Quotation v3 / v3b (owner feedback pass 3, 2026-09-11) ─────────────────────────────────────
 describe('v3/v3b document settings', () => {
   it('offers all three tile price modes on a Thai document', () => {

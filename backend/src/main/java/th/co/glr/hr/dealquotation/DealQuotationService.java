@@ -123,6 +123,17 @@ public class DealQuotationService {
     // it is touched by this set.
     private static final Set<String> PRICING_REQUEST_VIEW_ROLES = Set.of("sales", "sales_manager", "ceo");
 
+    /** Owner ruling 2026-09-24: on the GLOBAL LIST ({@link #search}/{@link #counts}) ONLY,
+     * sales_manager and ceo see every deal's quotations; everyone else (sales, import, account,
+     * and any {@code canCreateQuotation} grant-holder) sees only quotations on deals they created.
+     * This narrows import/account/grant-holders, who previously saw the whole list here. Scope
+     * boundary: this affects ONLY {@link #listOwnerScope} (and therefore search/counts) — {@link
+     * #requireViewAccess}, {@link #get}, {@link #listForTicket} and {@link #renderPdf} are
+     * unchanged, so import/account/grant-holders still read individual quotations from the deal
+     * page. A grant no longer widens the LIST scope; it still widens create/edit/detail access via
+     * {@link #requireViewAccess}. */
+    private static final Set<String> LIST_SEE_ALL_ROLES = Set.of("sales_manager", "ceo");
+
     private final DealQuotationRepository quotations;
     private final TicketRepository tickets;
     private final CustomerRepository customers;
@@ -673,9 +684,10 @@ public class DealQuotationService {
         return visible;
     }
 
-    /** The approver queue (sales_manager/ceo/import/account see everything; sales sees only their
-     * own deals' quotations; a {@code canCreateQuotation}-granted employee sees everything, same
-     * as sales_manager — the grant is "any deal", not "own deal only"). */
+    /** The approver queue (owner ruling 2026-09-24: sales_manager/ceo see everything; sales,
+     * import, account, and any {@code canCreateQuotation}-granted employee see only quotations on
+     * deals THEY created — the grant lets them reach this endpoint but no longer widens the LIST
+     * scope, only detail/create/edit access elsewhere). */
     public List<DealQuotationDto> search(List<String> statuses, boolean needsRework, UserPrincipal actor) {
         return quotations.search(statuses, listOwnerScope(actor), needsRework);
     }
@@ -688,18 +700,20 @@ public class DealQuotationService {
     }
 
     /**
-     * The ONE list-scope decision {@link #search} and {@link #counts} share: a
-     * {@code canCreateQuotation}-granted employee sees everything (the grant is "any deal");
-     * otherwise the caller must hold a {@link #VIEW_ROLES} role, and {@code sales} is scoped to
-     * deals they created (returns their own id as the owner filter); every other view role is
-     * unrestricted (null).
+     * The ONE list-scope decision {@link #search} and {@link #counts} share (owner ruling
+     * 2026-09-24, see {@link #LIST_SEE_ALL_ROLES}): the caller must hold a {@link #VIEW_ROLES}
+     * role OR a {@code canCreateQuotation} grant to pass the entry gate; having passed it, only
+     * {@code sales_manager}/{@code ceo} see every deal (returns {@code null}, unrestricted) —
+     * everyone else, including a grant-holder, is scoped to deals they created (returns their own
+     * id as the owner filter). This deliberately narrowed import/account/grant-holders, who
+     * previously saw the whole list here.
      */
     private Long listOwnerScope(UserPrincipal actor) {
         boolean grant = hasQuotationGrant(actor);
         if (!grant) {
             requireRole(actor, VIEW_ROLES);
         }
-        return (!grant && "sales".equals(actor.role())) ? actor.id() : null;
+        return LIST_SEE_ALL_ROLES.contains(actor.role()) ? null : actor.id();
     }
 
     /** Rule: server recomputes every number, always — this is the stateless preview the item

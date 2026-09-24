@@ -349,6 +349,70 @@ export function dealQuotationStatusTab(key) {
   return DEAL_QUOTATION_STATUS_TABS.find((tab) => tab.key === key) ?? null;
 }
 
+// ── Global list scope (owner ruling 2026-09-24) ─────────────────────────────────────────────
+// Mirrors DealQuotationService.listOwnerScope / LIST_SEE_ALL_ROLES: on the GLOBAL LIST only,
+// sales_manager/ceo see every deal's quotations; everyone else (sales, import, account, and any
+// canCreateQuotation grant-holder) sees only quotations on deals they created. This is a
+// PRESENTATION HINT ONLY -- it drives whether the rep filter dropdown is shown; the server (and
+// mockApi.js's scopedDealQuotationsFor) has already scoped the rows before they ever reach the
+// client, so getting this predicate wrong could at most show/hide a filter control, never leak a
+// row. Do not treat this as an authz check.
+
+/** Whether this user's global `/quotations` list already contains every deal (so a "filter by
+ * rep" control makes sense), per the 2026-09-24 ruling. */
+export function dealQuotationListSeesAll(user) {
+  return user?.role === 'sales_manager' || user?.role === 'ceo';
+}
+
+/** Distinct `{ id, name }` options for the rep filter dropdown, derived from the ROWS actually on
+ * the list (not a department/role listing) -- so a non-sales grant-holder who owns a visible
+ * quotation is offered as an option too, and no option is ever offered for someone who owns
+ * nothing on the current list. Skips rows with no `salesRepId`, dedupes by id, and sorts by name
+ * with Thai collation. */
+export function dealQuotationRepOptions(rows) {
+  const byId = new Map();
+  (rows ?? []).forEach((row) => {
+    if (row?.salesRepId == null) return;
+    const id = String(row.salesRepId);
+    if (!byId.has(id)) byId.set(id, { id, name: row.salesRepName ?? id });
+  });
+  return Array.from(byId.values()).sort((a, b) => a.name.localeCompare(b.name, 'th'));
+}
+
+/** The ยอดรวม (grand total) filter boundary (owner ask 2026-09-24): a row is "ต่ำกว่าหนึ่งล้าน"
+ * when grandTotal < this, and "มากกว่าหนึ่งล้านบาท" when >= this. `>=` (not `>`) owns the exact
+ * 1,000,000 boundary so no row is ever unclassifiable between the two buckets. */
+export const DEAL_QUOTATION_AMOUNT_THRESHOLD = 1000000;
+
+/** The two ยอดรวม filter options offered to see-all roles (sales_manager/ceo), in display order.
+ * `''` ("ทั้งหมด") is added by the caller as the leading option. */
+export const DEAL_QUOTATION_AMOUNT_OPTIONS = [
+  { value: 'lt1m', label: 'ต่ำกว่าหนึ่งล้าน' },
+  { value: 'gte1m', label: 'มากกว่าหนึ่งล้านบาท' },
+];
+
+/** Client-side, presentation-only narrowing of an already-server-scoped row list -- NOT a
+ * security boundary (see the section comment above). `repId` filters on `row.salesRepId`
+ * (string-compared, so `''`/`null`/`undefined` all mean "no filter"); `text` matches
+ * case-insensitively against `${customerName} ${projectName}`; `amount` is `'lt1m'` (grandTotal
+ * below {@link DEAL_QUOTATION_AMOUNT_THRESHOLD}) or `'gte1m'` (at/above it), anything else meaning
+ * "no filter". All three compose with AND, each is a no-op when empty/absent, and the function is
+ * null-safe throughout. */
+export function filterDealQuotationRows(rows, { repId = '', text = '', amount = '' } = {}) {
+  let list = rows ?? [];
+  if (repId) list = list.filter((row) => String(row?.salesRepId ?? '') === String(repId));
+  const needle = (text ?? '').trim().toLowerCase();
+  if (needle) {
+    list = list.filter((row) => `${row?.customerName ?? ''} ${row?.projectName ?? ''}`.toLowerCase().includes(needle));
+  }
+  if (amount === 'lt1m') {
+    list = list.filter((row) => Number(row?.grandTotal ?? 0) < DEAL_QUOTATION_AMOUNT_THRESHOLD);
+  } else if (amount === 'gte1m') {
+    list = list.filter((row) => Number(row?.grandTotal ?? 0) >= DEAL_QUOTATION_AMOUNT_THRESHOLD);
+  }
+  return list;
+}
+
 // ── ตำแหน่งติดตั้ง location groups (owner feedback F1, 2026-09-10) ────────────────────────────
 // "if there were to be a ตำแหน่งติดตั้ง there might be multiple รายการ in one ตำแหน่งติดตั้ง".
 //

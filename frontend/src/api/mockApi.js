@@ -5509,8 +5509,14 @@ function requireDealQuotationWriteAccess(ticket, user, origin = 'DEAL_DIRECT') {
 // The rows GET /api/deal-quotations would return for this caller BEFORE any status filter --
 // factored out so list() and counts() (owner feedback F5, 2026-09-10) read the exact same set.
 // Two independent copies of this scope is precisely how a tab count ends up promising rows the
-// list then refuses to show. Mirrors DealQuotationService.list: sales is scoped to its own deals;
-// a canCreateQuotation grant sees everything, same as sales_manager (#H4).
+// list then refuses to show. Mirrors DealQuotationService.listOwnerScope (owner ruling
+// 2026-09-24): on this GLOBAL LIST only, sales_manager/ceo see everything; everyone else (sales,
+// import, account, and any canCreateQuotation grant-holder) is scoped to deals THEY created — the
+// grant still passes the access gate below, but no longer widens the list scope (it still widens
+// per-deal/detail access via requireViewAccess, which this mock's get()/listForTicket() are
+// unaffected by; see DealQuotationService.LIST_SEE_ALL_ROLES for the authoritative rule). This
+// mock's authz is NOT authoritative -- DealQuotationIntegrationTest against real Postgres is the
+// evidence for the actual scope.
 // MINOR fix (Opus review, 2026-09-20) — mirrors DealQuotationRepository#findByTicket/#search/
 // #counts's own deliberate `origin = 'DEAL_DIRECT'` scoping (see
 // directDealSearch_doesNotIncludePricingRequestOriginRows on the backend IT): the DEAL_DIRECT-only
@@ -5520,14 +5526,16 @@ function isDealDirectOrigin(q) {
   return (q.origin || 'DEAL_DIRECT') === 'DEAL_DIRECT';
 }
 
+const DEAL_QUOTATION_LIST_SEE_ALL_ROLES = ['sales_manager', 'ceo'];
+
 function scopedDealQuotationsFor(user) {
   const grant = hasDealQuotationMockGrant(user);
   if (!grant && !DEAL_QUOTATION_VIEWER_ROLES.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
   const base = mockDealQuotations.filter(isDealDirectOrigin);
-  if (!grant && user.role === 'sales') {
-    return base.filter((q) => db.tickets.find((t) => t.id === q.ticketId)?.createdById === user.id);
+  if (DEAL_QUOTATION_LIST_SEE_ALL_ROLES.includes(user.role)) {
+    return base;
   }
-  return base;
+  return base.filter((q) => db.tickets.find((t) => t.id === q.ticketId)?.createdById === user.id);
 }
 
 // V179 (owner feedback #4, 2026-09-14) -- ผู้พิมพ์/พนักงานขาย print-name override. Mirrors

@@ -261,6 +261,12 @@ export function DataTable({
   retryLabel = 'ลองอีกครั้ง',
   onRetry,
   emptyState,
+  // Opt-in: keep the desktop <thead> mounted even when the (filtered) result is empty, rendering
+  // the empty-state message BELOW it instead of replacing the whole table. Needed when a caller
+  // puts an interactive control (a filter dropdown) INSIDE a column header — without this, a
+  // filter that narrows to zero rows would unmount its own control and trap the user in the empty
+  // state. Default false, so every existing caller keeps the full-table EmptyState swap unchanged.
+  retainHeaderWhenEmpty = false,
   // FIX G: the pre-DataTable `.ticket-result-count` band showed "ตรงเงื่อนไข
   // N จาก M รายการ" (N matched out of M total), so a filter's own effect
   // (how much it hid) stayed visible. This footer's own N (`sortedRows.length`
@@ -716,9 +722,17 @@ export function DataTable({
   }
 
   function renderTable() {
+    const emptyStateNode = hasError ? null : (
+      <EmptyState
+        icon={emptyState?.icon}
+        title={emptyState?.title ?? DEFAULT_EMPTY_MESSAGE}
+        description={emptyState?.description}
+        titleAnnouncedElsewhere
+      />
+    );
     return (
       <Panel flush className={panelClassName} aria-busy={loading ? 'true' : undefined}>
-        {(loading || sortedRows.length > 0) ? (
+        {(loading || sortedRows.length > 0 || (retainHeaderWhenEmpty && !hasError)) ? (
           <table className="data-table-table w-full border-separate border-spacing-0">
             {caption ? <caption className="sr-only">{caption}</caption> : null}
             {/* `display: block` on thead/tbody/tfoot opts them out of the native table
@@ -852,16 +866,12 @@ export function DataTable({
               </tfoot>
             ) : null}
           </table>
-        ) : (
-          hasError ? null : (
-            <EmptyState
-              icon={emptyState?.icon}
-              title={emptyState?.title ?? DEFAULT_EMPTY_MESSAGE}
-              description={emptyState?.description}
-              titleAnnouncedElsewhere
-            />
-          )
-        )}
+        ) : null}
+        {!loading && sortedRows.length === 0 ? (
+          retainHeaderWhenEmpty ? (
+            <div className="px-4 py-6">{emptyStateNode}</div>
+          ) : emptyStateNode
+        ) : null}
         {showPagination ? renderPagination() : null}
       </Panel>
     );

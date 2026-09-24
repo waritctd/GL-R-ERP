@@ -2071,10 +2071,11 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
      * regardless of how many ids it was asked for. Two quotations here only make the fixture
      * legible (which row is "first" is otherwise arbitrary) -- the SAME bug drops the first line
      * item of a SINGLE quotation too, e.g. {@code findByTicket} on a ticket with exactly one
-     * quotation renders that quotation missing its own first item. {@code search} here (import
-     * reads every deal, unscoped) routes through {@code DealQuotationService#search ->
-     * DealQuotationRepository#hydrate -> #findItemsForQuotations}, the same path {@code
-     * findByTicket} and the approver queue use. {@link #findById} (single-quotation {@code GET})
+     * quotation renders that quotation missing its own first item. {@code search} here (ceo reads
+     * every deal, unscoped -- see {@code LIST_SEE_ALL_ROLES}, owner ruling 2026-09-24) routes
+     * through {@code DealQuotationService#search -> DealQuotationRepository#hydrate ->
+     * #findItemsForQuotations}, the same path {@code findByTicket} and the approver queue use.
+     * {@link #findById} (single-quotation {@code GET})
      * uses the unbatched {@code #findItems} instead and is unaffected -- this test is what proves
      * the batched path specifically. */
     @Test
@@ -2087,7 +2088,10 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         // assertions below are checking the row the bug actually drops, not by luck.
         assertThat(first.id()).isLessThan(second.id());
 
-        List<DealQuotationDto> results = quotationService.search(null, false, importActor);
+        // ceoActor, NOT importActor (owner ruling 2026-09-24): the global list is now scoped to
+        // sales_manager/ceo for "see everything" -- import is scoped to its own deals (created
+        // none here), which would make this fixture's own assertions vacuous.
+        List<DealQuotationDto> results = quotationService.search(null, false, ceoActor);
 
         // Ties the fixture to the bug's actual trigger (the SMALLEST quotation_id in the whole
         // result set, not just relative to `second`) -- guards against this test going silently
@@ -2695,10 +2699,15 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
     // ─────────────────────────────────────────────────────────────────────────────────────
     // H5 — read-side authz: get/listForTicket/search/renderPdf, wrong-way-round.
-    // Mutation-checked (see the class Javadoc's "H5 mutation check" note at the bottom of this
-    // file / the PR body) by deleting the owner scope in DealQuotationService#requireViewAccess
-    // AND the ownerFilter branch in #search, confirming these tests (and only these) go red, then
+    // Mutation-checked by deleting the owner scope in DealQuotationService#requireViewAccess AND
+    // the ownerFilter branch in #search, confirming these tests (and only these) go red, then
     // reverting.
+    //
+    // Owner ruling 2026-09-24 (LIST_SEE_ALL_ROLES) — mutation-checked separately, by editing
+    // #listOwnerScope to `return null;` (always "see all"): confirms ONLY the global-list scope
+    // tests below (search_seesOnlyOwnDeals, listSeeAll_*, importAndAccount_..._butGlobalListScoped
+    // ToOwn, grantHolder_search...) go red, then reverting by hand (never `git checkout`) and
+    // re-running with `clean`. See the PR body for the recorded run.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
@@ -2727,6 +2736,69 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(results).extracting(DealQuotationDto::id).doesNotContain(others.id());
     }
 
+    /** Owner ruling 2026-09-24 — positive case: sales_manager and ceo see BOTH reps' quotations
+     * on the global list, unlike sales above. */
+    @Test
+    void listSeeAllRoles_salesManagerAndCeo_seeBothRepsQuotationsOnTheGlobalList() {
+        DealQuotationDto own = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        DealQuotationDto others = quotationService.create(otherTicketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), otherSalesActor);
+
+        for (UserPrincipal seesAll : List.of(salesManagerActor, ceoActor)) {
+            List<DealQuotationDto> results = quotationService.search(null, false, seesAll);
+            assertThat(results).extracting(DealQuotationDto::id).contains(own.id(), others.id());
+        }
+    }
+
+    /** Owner ruling 2026-09-24, wrong-way-round: import created NOTHING (salesActor owns
+     * ticketId), so the global list is empty for import even though salesActor's quotation
+     * exists. Distinct from {@link #importAndAccount_readIndividualDeals_butGlobalListScopedToOwn}
+     * above, which proves the SAME row is still readable individually. */
+    @Test
+    void listSeeAllRoles_import_doesNotSeeAnotherRepsQuotationOnTheGlobalList() {
+        quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+
+        assertThat(quotationService.search(null, false, importActor)).isEmpty();
+    }
+
+    /** Same guard as above, for {@code account}. */
+    @Test
+    void listSeeAllRoles_account_doesNotSeeAnotherRepsQuotationOnTheGlobalList() {
+        quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+
+        assertThat(quotationService.search(null, false, accountActor)).isEmpty();
+    }
+
+    /** Owner ruling 2026-09-24 — the KEY new guard: a {@code canCreateQuotation} grant-holder
+     * (qc, ภิญญดา's own capability, V166) may still READ any deal's quotation individually via
+     * {@link DealQuotationService#get} (the grant still widens detail access, unchanged) — but on
+     * the GLOBAL LIST, the grant no longer widens scope: it sees only quotations on deals IT
+     * created, not {@code salesActor}'s. */
+    @Test
+    void grantHolder_search_seesOnlyOwnDeals_butCanStillGetAnotherRepsQuotationIndividually() {
+        grantQuotationCapability(qcUserId);
+        long projectId = projects.findByCustomer(customer.id()).get(0).id();
+        long grantHolderTicketId = createTicket("ดีล QC คิว", projectId, contact.id(), qcActor);
+        DealQuotationDto ownQuotation = quotationService.create(grantHolderTicketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), qcActor);
+        DealQuotationDto salesActorsQuotation = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("200.00", 5))), salesActor);
+
+        List<DealQuotationDto> results = quotationService.search(null, false, qcActor);
+        assertThat(results).extracting(DealQuotationDto::id).contains(ownQuotation.id());
+        assertThat(results).extracting(DealQuotationDto::id).doesNotContain(salesActorsQuotation.id());
+
+        // Detail access via requireViewAccess is UNCHANGED -- the grant still lets qcActor read
+        // salesActor's quotation individually, even though it is now absent from qcActor's list.
+        assertThat(quotationService.get(salesActorsQuotation.id(), qcActor).id())
+            .isEqualTo(salesActorsQuotation.id());
+
+        // counts().all() must always equal the size of the list that tab would show (F5) -- same
+        // scope decision, so this must equal 1 (ownQuotation only), never 2.
+        assertThat(quotationService.counts(qcActor).all()).isEqualTo(results.size());
+    }
+
     @Test
     void sales_cannotRenderPdfForAnotherRepsQuotation() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -2748,16 +2820,23 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertForbidden(() -> quotationService.search(null, false, qcActor));
     }
 
+    /** Owner ruling 2026-09-24: import/account may still read an INDIVIDUAL deal's quotation(s)
+     * via {@link DealQuotationService#get}/{@link DealQuotationService#listForTicket} — that is
+     * unchanged, per-deal viewing on the deal page. But the GLOBAL LIST ({@link
+     * DealQuotationService#search}) is now scoped to deals THEY created, and neither import nor
+     * account created this deal, so it is empty for them there. */
     @Test
-    void importAndAccount_canReadAnyDeal_readOnly() {
+    void importAndAccount_readIndividualDeals_butGlobalListScopedToOwn() {
         DealQuotationDto created = quotationService.create(ticketId,
             upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
         for (UserPrincipal reader : List.of(importActor, accountActor)) {
             assertThat(quotationService.get(created.id(), reader).id()).isEqualTo(created.id());
             assertThat(quotationService.listForTicket(ticketId, reader))
                 .extracting(DealQuotationDto::id).contains(created.id());
+            // NEW guard (2026-09-24): the global list no longer includes a deal this reader did
+            // not create, even though get()/listForTicket() above still can.
             assertThat(quotationService.search(null, false, reader))
-                .extracting(DealQuotationDto::id).contains(created.id());
+                .extracting(DealQuotationDto::id).doesNotContain(created.id());
             // Still read-only: neither role may create/edit/approve.
             assertForbidden(() -> quotationService.update(created.id(),
                 upsertRequest(List.of(sampleItem("1.00", 1))), reader));
