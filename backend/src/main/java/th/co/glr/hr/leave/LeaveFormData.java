@@ -2,6 +2,7 @@ package th.co.glr.hr.leave;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.LocalTime;
 
 /**
@@ -39,6 +40,17 @@ public record LeaveFormData(
     BigDecimal usedTotalDays,
     BigDecimal usedPersonalDays,
     BigDecimal usedSickDays,
-    BigDecimal usedVacationDays
+    BigDecimal usedVacationDays,
+    // Approval outcome (2026-09, auto-filled ความเห็นผู้บังคับบัญชา / HR-receipt boxes). All three are
+    // null on the SUBMITTED form emailed to HR (the boxes render blank for a human to sign); they are
+    // populated only when the form is regenerated after a manual decision, so the copy emailed to the
+    // employee shows the ticked box, the approver's signature, and the decision date/time.
+    // decision: "APPROVED" | "REJECTED" | null (pending -- boxes blank).
+    // approverName: the ผู้อนุมัติ signature -- the employee's reports-to manager on file.
+    // approvedAt: the decision timestamp (Bangkok), null when pending; carries both the date and the
+    //   time the HR-receipt box prints.
+    String decision,
+    String approverName,
+    LocalDateTime approvedAt
 ) {
 }

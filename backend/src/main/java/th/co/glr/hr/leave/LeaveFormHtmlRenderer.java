@@ -3,7 +3,6 @@ package th.co.glr.hr.leave;
 import java.io.IOException;
 import java.io.InputStream;
 import java.math.BigDecimal;
-import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.Base64;
@@ -36,6 +35,10 @@ public class LeaveFormHtmlRenderer {
         "ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.",
         "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."
     };
+
+    // ผู้รับ/ผู้บันทึก on the HR-receipt box: owner ruling (2026-09) that HR always records the ใบลา
+    // under this name. A constant, not data, precisely because it does not vary per request.
+    private static final String HR_RECORDER = "ฟ้าใส อิฐรัตน์";
 
     private final String fontRegularBase64 = base64("fonts/Sarabun-Regular.ttf");
     private final String fontBoldBase64 = base64("fonts/Sarabun-Bold.ttf");
@@ -79,15 +82,25 @@ public class LeaveFormHtmlRenderer {
         }
         h.append("</div>");
 
-        // Dates / times
-        h.append("<div class=\"line nogrow\"><span class=\"lbl\">ระหว่างวันที่</span>").append(box(thaiDate(d.startDate())))
-            .append("<span class=\"lbl\">ถึงวันที่</span>").append(box(thaiDate(d.endDate())))
-            .append("<span class=\"lbl\">ตั้งแต่เวลา</span>").append(box(timeOrBlank(d.startTime())))
-            .append("<span class=\"lbl\">ถึงเวลา</span>").append(box(timeOrBlank(d.endTime())))
+        // Dates / times. A multi-day TIMED request binds each time to its own date so it cannot be
+        // misread as "t1-t2 on each day"; whole-day and single-day-timed keep the compact grid.
+        boolean timed = d.startTime() != null && d.endTime() != null;
+        boolean multiDay = d.endDate() != null && !d.endDate().equals(d.startDate());
+        if (timed && multiDay) {
+            h.append("<div class=\"line nogrow\"><span class=\"lbl\">ตั้งแต่วันที่</span>").append(box(thaiDate(d.startDate())))
+                .append("<span class=\"lbl\">เวลา</span>").append(box(timeOrBlank(d.startTime()))).append("<span class=\"unit\">น.</span>")
+                .append("<span class=\"lbl\">ถึงวันที่</span>").append(box(thaiDate(d.endDate())))
+                .append("<span class=\"lbl\">เวลา</span>").append(box(timeOrBlank(d.endTime()))).append("<span class=\"unit\">น.</span>")
+                .append("</div>");
+        } else {
+            h.append("<div class=\"line nogrow\"><span class=\"lbl\">ระหว่างวันที่</span>").append(box(thaiDate(d.startDate())))
+                .append("<span class=\"lbl\">ถึงวันที่</span>").append(box(thaiDate(d.endDate())))
+                .append("<span class=\"lbl\">ตั้งแต่เวลา</span>").append(box(timeOrBlank(d.startTime())))
+                .append("<span class=\"lbl\">ถึงเวลา</span>").append(box(timeOrBlank(d.endTime())))
+                .append("</div>");
+        }
+        h.append("<div class=\"line nogrow\"><span class=\"lbl\">รวมวันลา</span>").append(box(LeaveDayMath.formatDuration(d.totalDays())))
             .append("</div>");
-        h.append("<div class=\"line nogrow\"><span class=\"lbl\">รวมวันลา</span>").append(box(days(d.totalDays())))
-            .append("<span class=\"unit\">วัน</span><span class=\"lbl\">รวมเวลา</span>").append(box(hours(d)))
-            .append("<span class=\"unit\">ชั่วโมง</span></div>");
 
         // Reason
         h.append("<div class=\"line\"><span class=\"lbl\">เหตุผลในการลา</span>").append(fill(esc(d.reason()))).append("</div>");
@@ -109,30 +122,41 @@ public class LeaveFormHtmlRenderer {
             .append(box(days(d.usedVacationDays()))).append(" วัน</div>");
         h.append("</div>");
         h.append("<div class=\"sig\">")
-            .append("<div>ลงชื่อ ").append(dots()).append("</div>")
-            .append("<div>( ").append(esc(nn(d.employeeName()))).append(" )</div>")
+            .append("<div>ลงชื่อ ").append(esc(nn(d.employeeName()))).append("</div>")
             .append("<div>พนักงานผู้ยื่นใบลา</div>")
             .append("</div>");
         h.append("</div>");
 
+        // Approval / HR receipt. Blank on the SUBMITTED form (HR signs it); auto-filled once a decision
+        // has stamped the DTO, so the copy re-rendered for the employee shows the ticked box, the
+        // ผู้อนุมัติ signature and the decision date/time. "เพราะ" is intentionally left blank.
+        boolean approved = "APPROVED".equals(d.decision());
+        boolean rejected = "REJECTED".equals(d.decision());
+        boolean decided = approved || rejected;
+        String decDate = d.approvedAt() == null ? "" : thaiDate(d.approvedAt().toLocalDate());
+        String decTime = d.approvedAt() == null ? "" : timeOrBlank(d.approvedAt().toLocalTime());
+        String decDateTime = d.approvedAt() == null ? "" : decDate + " เวลา " + decTime + " น.";
+        String approverSig = decided && d.approverName() != null ? esc(d.approverName().trim()) : "";
+        String recorder = decided ? HR_RECORDER : "";
+
         // Supervisor opinion
         h.append("<div class=\"apprv\">");
         h.append("<div class=\"bold\">ความเห็นผู้บังคับบัญชา</div>");
-        h.append("<div class=\"line\"><span class=\"opt\">").append(cb(false)).append(" เห็นควรอนุมัติ</span>")
-            .append("<span class=\"opt\">").append(cb(false)).append(" เห็นควรไม่อนุมัติ เพราะ</span>").append(fill("")).append("</div>");
-        h.append("<div class=\"line end\"><span class=\"lbl\">ลงชื่อ</span>").append(dots())
-            .append("<span class=\"lbl\">ผู้อนุมัติ</span><span class=\"lbl\">วันที่</span>").append(dots()).append("</div>");
+        h.append("<div class=\"line\"><span class=\"opt\">").append(cb(approved)).append(" เห็นควรอนุมัติ</span>")
+            .append("<span class=\"opt\">").append(cb(rejected)).append(" เห็นควรไม่อนุมัติ เพราะ</span>").append(fill("")).append("</div>");
+        h.append("<div class=\"line end\"><span class=\"lbl\">ลงชื่อ</span>").append(fill(approverSig))
+            .append("<span class=\"lbl\">ผู้อนุมัติ</span><span class=\"lbl\">วันที่</span>").append(fill(decDate)).append("</div>");
         h.append("</div>");
 
         // HR admin box
         h.append("<div class=\"apprv\">");
         h.append("<div class=\"bold\">สำหรับฝ่ายทรัพยากรบุคคลและธุรการ</div>");
-        h.append("<div class=\"line\"><span class=\"opt\">").append(cb(false)).append(" อนุมัติ</span>")
-            .append("<span class=\"opt\">").append(cb(false)).append(" ไม่อนุมัติ</span>")
-            .append("<span class=\"lbl\">ได้รับเอกสารวันที่</span>").append(fill(""))
-            .append("<span class=\"lbl\">เวลา</span>").append(fill("")).append("</div>");
-        h.append("<div class=\"line\"><span class=\"lbl\">• บันทึกลงเครื่องฯ แล้วเมื่อ</span>").append(fill(""))
-            .append("<span class=\"lbl\">ลงชื่อ</span>").append(fill("")).append("<span class=\"lbl\">ผู้รับ/ผู้บันทึก</span></div>");
+        h.append("<div class=\"line\"><span class=\"opt\">").append(cb(approved)).append(" อนุมัติ</span>")
+            .append("<span class=\"opt\">").append(cb(rejected)).append(" ไม่อนุมัติ</span>")
+            .append("<span class=\"lbl\">ได้รับเอกสารวันที่</span>").append(fill(decDate))
+            .append("<span class=\"lbl\">เวลา</span>").append(fill(decTime)).append("</div>");
+        h.append("<div class=\"line\"><span class=\"lbl\">• บันทึกลงเครื่องฯ แล้วเมื่อ</span>").append(fill(decDateTime))
+            .append("<span class=\"lbl\">ลงชื่อ</span>").append(fill(recorder)).append("<span class=\"lbl\">ผู้รับ/ผู้บันทึก</span></div>");
         h.append("</div>");
 
         h.append("</div>"); // .body
@@ -152,7 +176,7 @@ public class LeaveFormHtmlRenderer {
             // PDF is a single page snug to the content with no awkward blank A4 tail. A valid two-length
             // size is required — `size: <w> auto` is invalid CSS and silently falls back to the default
             // page. Chromium honours this because ChromiumPdfPrinter prints with preferCSSPageSize=true.
-            + "@page{size:210mm 180mm;margin:8mm;}"
+            + "@page{size:210mm 200mm;margin:8mm;}"
             + "*{box-sizing:border-box;}"
             + "body{margin:0;font-family:'Sarabun',sans-serif;font-size:12.5px;color:#000;}"
             // The bordered box wraps its content (no forced full-page height).
@@ -163,8 +187,8 @@ public class LeaveFormHtmlRenderer {
             + ".filed{font-size:12px;white-space:nowrap;}"
             // Every field row is a wrapping flex line, so a long value grows into the free width and
             // NEVER overflows the box (which used to clip the right border).
-            + ".line{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px;margin:7px 0;}"
-            + ".row{display:flex;flex-wrap:wrap;gap:4px 20px;margin:7px 0;}"
+            + ".line{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px;margin:11px 0;}"
+            + ".row{display:flex;flex-wrap:wrap;gap:4px 20px;margin:11px 0;}"
             + ".cell{flex:1 1 240px;display:flex;align-items:baseline;gap:6px;min-width:0;}"
             + ".lbl{font-weight:600;white-space:nowrap;}"
             + ".opt{white-space:nowrap;}"
@@ -175,7 +199,6 @@ public class LeaveFormHtmlRenderer {
             // Fixed-value boxes (dates/times/counts) stay compact and never grow/shrink.
             + ".vb{flex:0 0 auto;border-bottom:1px solid #000;min-width:78px;padding:0 8px;text-align:center;font-weight:600;white-space:nowrap;}"
             // A blank signature/date underline: fixed-ish, may shrink but not grow.
-            + ".dots{flex:0 1 180px;border-bottom:1px dotted #000;min-height:1.25em;}"
             + ".line.end{justify-content:flex-end;}"
             + ".cb{display:inline-block;width:13px;height:13px;border:1.2px solid #000;text-align:center;line-height:11px;font-size:11px;}"
             + ".hist{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-end;gap:12px;margin-top:10px;border-top:1px solid #000;padding-top:8px;}"
@@ -183,7 +206,7 @@ public class LeaveFormHtmlRenderer {
             + ".histL .vb{min-width:56px;}"
             + ".bold{font-weight:700;margin-bottom:2px;}"
             + ".sig{flex:0 1 auto;min-width:220px;text-align:center;}"
-            + ".sig>div{margin:2px 0;}"
+            + ".sig>div{margin:5px 0;}"
             + ".apprv{margin-top:10px;border:1px solid #000;padding:8px 12px;}"
             // Footer flows right after the content (page height tracks content — see @page).
             + ".foot{margin-top:10px;display:flex;justify-content:space-between;gap:10px;font-size:11px;border-top:1.5px solid #000;padding-top:6px;}"
@@ -203,27 +226,12 @@ public class LeaveFormHtmlRenderer {
         return "<span class=\"vb\">" + (value == null || value.isBlank() ? "&nbsp;" : value) + "</span>";
     }
 
-    private String dots() {
-        return "<span class=\"dots\">&nbsp;</span>";
-    }
-
     private String cb(boolean checked) {
         return "<span class=\"cb\">" + (checked ? "✓" : "&nbsp;") + "</span>";
     }
 
     private String timeOrBlank(LocalTime t) {
         return t == null ? "" : String.format("%02d:%02d", t.getHour(), t.getMinute());
-    }
-
-    private String hours(LeaveFormData d) {
-        if (d.startTime() == null || d.endTime() == null) {
-            return "";
-        }
-        long minutes = Duration.between(d.startTime(), d.endTime()).toMinutes();
-        if (minutes <= 0) {
-            return "";
-        }
-        return stripZeros(BigDecimal.valueOf(minutes).divide(BigDecimal.valueOf(60)));
     }
 
     private String days(BigDecimal value) {
