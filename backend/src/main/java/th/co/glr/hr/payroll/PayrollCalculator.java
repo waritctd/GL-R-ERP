@@ -732,6 +732,48 @@ public class PayrollCalculator {
             .subtract(money(yearToDate.cumulativeLimbWithholdingTax()))
             .max(ZERO);
 
+        // CROSS-LIMB CEILING (fix, 2026-09-26): restores the legacy #calculate()'s collectableThisYear
+        // guard (see that method's own comment above, ~line 292) for this classified engine, which
+        // dropped it in the rewrite. Each limb above is floored at ZERO independently against its OWN
+        // prior YTD withholding on THAT limb only -- so when one limb has already been over-withheld
+        // (its YTD withholding on that limb exceeds its own projected annual tax), the ZERO floor
+        // destroys the excess instead of letting it offset a DIFFERENT limb's charge this period. A
+        // salaried employee whose regular-limb withholding already exceeds the year's FULL liability
+        // (regular + known + cumulative combined) still gets charged the full commission (cumulative
+        // limb) tax the moment one lands, because withholdCumulative only floors against its own YTD,
+        // never against what the regular limb already over-collected -- the double-charge this fix
+        // closes.
+        //
+        // collectableThisYear is the tax still owed for the WHOLE year across ALL three limbs: the
+        // full annual liability once this period's cumulative-limb income is known
+        // (annualTaxWithCumulativeYtd) minus EVERYTHING already withheld this tax year on ANY limb
+        // (yearToDate.withholdingTax() -- the combined YTD total, not any one limb's own column).
+        // Capping the SUM of this period's three limbs at that figure is exactly ข้อ 2.9's principle:
+        // total withholding for the year must equal the tax actually due, in any period, not merely
+        // trued up in December.
+        //
+        // Any reduction is walked off the limbs cumulative-first, then known, then regular -- the same
+        // "regular is the catch-all" convention the rounding residual below already uses -- so the
+        // persisted limb columns (withholdingTaxRegularLimb, withholdingTaxCumulativeLimb) stay
+        // consistent with the capped total instead of silently drifting from it.
+        BigDecimal collectableThisYear = money(
+            annualTaxWithCumulativeYtd.subtract(money(yearToDate.withholdingTax())).max(ZERO));
+        BigDecimal uncappedWithholding = money(withholdRegular.add(withholdKnown).add(withholdCumulative));
+        BigDecimal crossLimbReduction = uncappedWithholding.subtract(collectableThisYear).max(ZERO);
+        if (crossLimbReduction.signum() > 0) {
+            BigDecimal reduceCumulative = min(crossLimbReduction, withholdCumulative);
+            withholdCumulative = withholdCumulative.subtract(reduceCumulative);
+            crossLimbReduction = crossLimbReduction.subtract(reduceCumulative);
+
+            BigDecimal reduceKnown = min(crossLimbReduction, withholdKnown);
+            withholdKnown = withholdKnown.subtract(reduceKnown);
+            crossLimbReduction = crossLimbReduction.subtract(reduceKnown);
+
+            BigDecimal reduceRegular = min(crossLimbReduction, withholdRegular);
+            withholdRegular = withholdRegular.subtract(reduceRegular);
+            crossLimbReduction = crossLimbReduction.subtract(reduceRegular);
+        }
+
         // Whole-baht withholding (owner decision, 2026-08-28). The ภ.ง.ด.1 figure and the KBank PCT
         // transfer amount are both rendered straight from the stored columns -- Pnd1Exporter emits
         // withholding_tax with two decimals, KBankPctExporter emits net_amount as satang -- so a
