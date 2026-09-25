@@ -214,6 +214,20 @@ public class LeaveRepository {
      * employee's CURRENT {@code hr.employee_address} row (LEFT JOIN: a missing address just leaves
      * those fields null, it doesn't fail the lookup). See LeaveService#contactDefaults.
      */
+    /** The employee's ชื่อเล่น (nickname), for the leave-submission email subject/body. Separate from
+     * {@link #findContactDefaults} (which supplies position/department/division for the ใบลา header)
+     * because the nickname is the only field the leave form/email needs that neither
+     * {@link LeaveRequestDto} nor that method already carries. Empty when the row has no nickname. */
+    public Optional<String> findNickname(long employeeId) {
+        return jdbc.query(
+            "SELECT NULLIF(TRIM(nickname), '') AS nickname FROM hr.employee WHERE employee_id = :employeeId",
+            Map.of("employeeId", employeeId),
+            (rs, rowNum) -> rs.getString("nickname"))
+            .stream()
+            .filter(java.util.Objects::nonNull)
+            .findFirst();
+    }
+
     public Optional<LeaveContactDefaultsDto> findContactDefaults(long employeeId) {
         return jdbc.query("""
             SELECT e.employee_id,

@@ -138,3 +138,9 @@ services:
       # with an unmodified subject line — the owner-confirmed intent for production mail. Setting
       # either here would redirect real notifications (leave/OT/commission/attendance, and
       # PayslipDistributionService's payslips) to a test inbox or mark them as test mail.
+      # Shared HR inbox the auto-generated leave-submission email (ใบลา F-HR-020 PDF) is addressed TO
+      # (requester + manager CC'd). application.yml defaults it to jobs.glr.co.th@gmail.com, so an
+      # unset var still routes correctly; declared here so an operator can repoint it on the
+      # dashboard without a rebuild.
+      - key: APP_LEAVE_SUBMISSION_INBOX
+        sync: false

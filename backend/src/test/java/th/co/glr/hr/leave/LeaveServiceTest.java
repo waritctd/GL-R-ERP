@@ -137,8 +137,8 @@ class LeaveServiceTest {
         // is awaiting approval; the manager (99L, the requestDto() fixture's hardcoded manager, !=
         // actor 10L) is told a request is pending THEIR review -- LEAVE_PENDING_APPROVAL, not
         // LEAVE_AUTO_APPROVED (nothing auto-approves any more).
-        verify(notificationService).notify(eq(10L), eq("LEAVE_SUBMITTED"), any(String.class), any(String.class), eq("/leave"), eq(true));
-        verify(notificationService).notify(eq(99L), eq("LEAVE_PENDING_APPROVAL"), any(String.class), any(String.class), eq("/leave"), eq(true));
+        verify(notificationService).notify(eq(10L), eq("LEAVE_SUBMITTED"), any(String.class), any(String.class), eq("/leave"), eq(false));
+        verify(notificationService).notify(eq(99L), eq("LEAVE_PENDING_APPROVAL"), any(String.class), any(String.class), eq("/leave"), eq(false));
     }
 
     @Test
@@ -170,7 +170,7 @@ class LeaveServiceTest {
         assertThat(paidDays.getValue()).isEqualByComparingTo("1.00");
         assertThat(unpaidDays.getValue()).isEqualByComparingTo("1.00");
         assertThat(remainingAfter.getValue()).isEqualByComparingTo("0.00");
-        verify(notificationService).notify(eq(10L), eq("LEAVE_SUBMITTED"), any(String.class), any(String.class), eq("/leave"), eq(true));
+        verify(notificationService).notify(eq(10L), eq("LEAVE_SUBMITTED"), any(String.class), any(String.class), eq("/leave"), eq(false));
     }
 
     @Test
@@ -1113,9 +1113,9 @@ class LeaveServiceTest {
 
         leaveService.submit(request, user("employee", 10010L));
 
-        verify(notificationService).notify(eq(10010L), eq("LEAVE_SUBMITTED"), any(String.class), any(String.class), eq("/leave"), eq(true));
-        verify(notificationService).notify(eq(10200L), eq("LEAVE_PENDING_APPROVAL"), any(String.class), any(String.class), eq("/leave"), eq(true));
-        verify(notificationService).notify(eq(10201L), eq("LEAVE_PENDING_APPROVAL"), any(String.class), any(String.class), eq("/leave"), eq(true));
+        verify(notificationService).notify(eq(10010L), eq("LEAVE_SUBMITTED"), any(String.class), any(String.class), eq("/leave"), eq(false));
+        verify(notificationService).notify(eq(10200L), eq("LEAVE_PENDING_APPROVAL"), any(String.class), any(String.class), eq("/leave"), eq(false));
+        verify(notificationService).notify(eq(10201L), eq("LEAVE_PENDING_APPROVAL"), any(String.class), any(String.class), eq("/leave"), eq(false));
     }
 
     /**
@@ -1144,7 +1144,7 @@ class LeaveServiceTest {
         leaveService.submit(request, user("employee", 10010L));
 
         ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
-        verify(notificationService).notify(eq(10010L), eq("LEAVE_SUBMITTED"), any(String.class), body.capture(), eq("/leave"), eq(true));
+        verify(notificationService).notify(eq(10010L), eq("LEAVE_SUBMITTED"), any(String.class), body.capture(), eq("/leave"), eq(false));
         assertThat(body.getValue()).contains("รอฝ่ายบุคคลอนุมัติ").doesNotContain("รอผู้จัดการอนุมัติ");
     }
 
@@ -1167,7 +1167,7 @@ class LeaveServiceTest {
         leaveService.submit(request, user("employee", 10010L));
 
         ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
-        verify(notificationService).notify(eq(10010L), eq("LEAVE_SUBMITTED"), any(String.class), body.capture(), eq("/leave"), eq(true));
+        verify(notificationService).notify(eq(10010L), eq("LEAVE_SUBMITTED"), any(String.class), body.capture(), eq("/leave"), eq(false));
         assertThat(body.getValue()).contains("รอผู้จัดการอนุมัติ").doesNotContain("รอฝ่ายบุคคลอนุมัติ");
     }
 
@@ -1198,7 +1198,7 @@ class LeaveServiceTest {
         leaveService.submit(request, user("employee", 10010L));
 
         ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
-        verify(notificationService).notify(eq(99L), eq("LEAVE_PENDING_APPROVAL"), any(String.class), body.capture(), eq("/leave"), eq(true));
+        verify(notificationService).notify(eq(99L), eq("LEAVE_PENDING_APPROVAL"), any(String.class), body.capture(), eq("/leave"), eq(false));
         assertThat(body.getValue())
             .contains("คำขอนี้ผิดระเบียบ 2 ข้อ")
             .contains("ยื่นล่วงหน้าไม่ทันกำหนด แจ้งเตือนที่หนึ่ง")
@@ -1232,7 +1232,7 @@ class LeaveServiceTest {
         leaveService.submit(request, user("employee", 10L));
 
         ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
-        verify(notificationService).notify(eq(99L), eq("LEAVE_PENDING_APPROVAL"), any(String.class), body.capture(), eq("/leave"), eq(true));
+        verify(notificationService).notify(eq(99L), eq("LEAVE_PENDING_APPROVAL"), any(String.class), body.capture(), eq("/leave"), eq(false));
         String period = th.co.glr.hr.common.ThaiText.dateRange(request.startDate(), request.endDate());
         assertThat(body.getValue()).isEqualTo(
             "Test Employee ขอVacation " + period + " (2 วัน)"
@@ -1272,7 +1272,7 @@ class LeaveServiceTest {
         // 10099L, so the actor is the request's only manager-of-record.
         leaveService.submit(request, user("hr", 10099L));
 
-        verify(notificationService).notify(eq(10010L), eq("LEAVE_SUBMITTED"), any(String.class), any(String.class), eq("/leave"), eq(true));
+        verify(notificationService).notify(eq(10010L), eq("LEAVE_SUBMITTED"), any(String.class), any(String.class), eq("/leave"), eq(false));
         verify(notificationService, org.mockito.Mockito.never())
             .notify(eq(10099L), eq("LEAVE_PENDING_APPROVAL"), any(String.class), any(String.class), any(String.class), org.mockito.ArgumentMatchers.anyBoolean());
         // findHrEmployeeIds is the OTHER branch (no manager of record) -- must not even be consulted
