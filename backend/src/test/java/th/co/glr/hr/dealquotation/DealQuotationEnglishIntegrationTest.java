@@ -179,7 +179,10 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
         Sheet sheet = renderSheet(approved.id());
         assertThat(str(sheet, 0, 7).strip()).isEqualTo("QUOTATION");
         assertThat(str(sheet, 3, 1)).matches("[A-Z][a-z]+ \\d{1,2}, 20\\d\\d");   // English month, CE year
-        assertThat(str(sheet, 3, 1)).doesNotContain("25");                        // no BE year leaked
+        // no BE year leaked (e.g. "September 8, 2569"). Assert against the actual BE year of the
+        // rendered (today's) date, not the bare substring "25" -- "25" collided with day-of-month
+        // (e.g. the 25th of a month, or the year 2025), failing this test on those dates for no reason.
+        assertThat(str(sheet, 3, 1)).doesNotContain(String.valueOf(java.time.Year.now().getValue() + 543));
         assertThat(str(sheet, 6, 8)).isEqualTo("Amount (USD)");
         assertThat(str(sheet, 6, 1)).isEqualTo("Description & Conditions");
         assertThat(str(sheet, 33, 4)).isEqualTo("Grand Total (USD)");             // TOTAL_ROW 40-7
