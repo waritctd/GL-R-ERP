@@ -83,6 +83,28 @@ final class OverrideRedirectingMailer implements Mailer {
         delegate.sendWithAttachments(overrideTo, subject, plainNote(body, to), attachments);
     }
 
+    @Override
+    public void send(OutgoingEmail email) {
+        // CC is DROPPED, not redirected: a UAT deployment must never mail a real manager via the CC
+        // list, so the whole message collapses to the single override inbox. The dropped recipients
+        // (to + cc) are named in the redirect note so the test inbox still shows who it was FOR - the
+        // same "a redirected email must never look like a delivered one" property the other methods
+        // hold, extended to CC. See this class's Javadoc / issue #782.
+        log.info("app.mail.override-to active: redirecting mail from {} (cc dropped: {}) to {}",
+            describe(email.to()), email.cc(), overrideTo);
+        String recipients = email.cc().isEmpty()
+            ? email.to()
+            : describe(email.to()) + " (cc: " + String.join(", ", email.cc()) + ")";
+        delegate.send(new OutgoingEmail(
+            overrideTo,
+            List.of(),
+            email.subject(),
+            htmlNote(email.htmlBody(), recipients),
+            plainNote(email.textBody(), recipients),
+            email.inlineImages(),
+            email.attachments()));
+    }
+
     /** Appends the redirect note as a plain trailing paragraph - used for every non-HTML body. */
     private String plainNote(String body, String originalTo) {
         String base = body == null ? "" : body;
