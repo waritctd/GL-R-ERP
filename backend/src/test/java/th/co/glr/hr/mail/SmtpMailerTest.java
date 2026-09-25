@@ -149,6 +149,35 @@ class SmtpMailerTest {
     }
 
     @Test
+    void richSendSetsCcAndCarriesTheFileAttachment() throws Exception {
+        JavaMailSender sender = mock(JavaMailSender.class);
+        MimeMessage mimeMessage = newMimeMessage();
+        when(sender.createMimeMessage()).thenReturn(mimeMessage);
+        SmtpMailer mailer = new SmtpMailer("job@glr.co.th", sender);
+
+        mailer.send(new Mailer.OutgoingEmail(
+            "hr-inbox@example.com",
+            List.of("employee.personal@gmail.com", "manager@glr.co.th"),
+            "leave submitted",
+            "<p>letter</p>", "letter",
+            List.of(),
+            List.of(new Mailer.Attachment("leaveform.pdf", "%PDF".getBytes(), "application/pdf"))));
+
+        verify(sender).send(mimeMessage);
+        mimeMessage.saveChanges();
+        assertThat(mimeMessage.getRecipients(jakarta.mail.Message.RecipientType.TO)[0].toString())
+            .isEqualTo("hr-inbox@example.com");
+        assertThat(java.util.Arrays.stream(mimeMessage.getRecipients(jakarta.mail.Message.RecipientType.CC))
+            .map(Object::toString).toList())
+            .containsExactly("employee.personal@gmail.com", "manager@glr.co.th");
+        var writer = new java.io.ByteArrayOutputStream();
+        mimeMessage.writeTo(writer);
+        String raw = writer.toString(java.nio.charset.StandardCharsets.UTF_8);
+        assertThat(raw).contains("leaveform.pdf");
+        assertThat(raw).contains("<p>letter</p>");
+    }
+
+    @Test
     void replyToIsOmittedWhenBlank() {
         // No address is ever invented - the 2-arg test-seam constructor defaults replyTo to blank,
         // mirroring app.mail.reply-to being unset.

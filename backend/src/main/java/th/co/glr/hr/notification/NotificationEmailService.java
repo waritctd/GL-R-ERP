@@ -113,6 +113,40 @@ public class NotificationEmailService {
         }
     }
 
+    /**
+     * The auto-generated leave-submission email (2026-09): the ใบลา F-HR-020 PDF (plus any medical
+     * certificate) mailed to the shared HR inbox ({@code to}) while CC'ing the requester and their
+     * manager. {@code letterBody} is the formal Thai leave letter, supplied as plain text and rendered
+     * into both the plain-text alternative and the branded HTML shell here (so escaping and the shell
+     * stay in one place, exactly as {@link #send} does for a notification body). {@code subject} is
+     * used as given - NOT prefixed with {@code [GL&R HR] }, because the requested subject already
+     * leads with the employee code/nickname - but the {@code app.mail.subject-suffix} UAT marker is
+     * still appended. Best-effort: a transport failure is logged, never thrown, so a mail outage never
+     * fails a leave submission that already committed.
+     */
+    @Async
+    public void sendLeaveSubmission(String to, List<String> cc, String subject, String letterBody,
+                                    String link, List<Mailer.Attachment> attachments) {
+        List<String> ccList = cc == null ? List.of() : cc;
+        boolean noRecipient = (to == null || to.isBlank()) && ccList.isEmpty();
+        if (noRecipient && !overrideConfigured) {
+            log.info("Leave submission email skipped: no recipient and no override configured");
+            return;
+        }
+        String finalSubject = clean(subject) + subjectSuffix;
+        String htmlBody = wrapShell(letterHtmlContent(letterBody, link));
+        String textBody = letterTextContent(letterBody, link);
+        try {
+            mailer.send(new Mailer.OutgoingEmail(to, ccList, finalSubject, htmlBody, textBody,
+                logoInlineImages, attachments == null ? List.of() : attachments));
+            log.info("Leave submission email dispatched: to={} cc={} attachments={}",
+                to, ccList.size(), attachments == null ? 0 : attachments.size());
+        } catch (Exception exception) {
+            log.error("Failed to send leave submission email: to={} cc={} error={}",
+                to, ccList, exception.getMessage());
+        }
+    }
+
     public void sendWithAttachment(String to, String subject, String body, String filename, byte[] bytes) {
         if ((to == null || to.isBlank()) && !overrideConfigured) {
             throw new IllegalArgumentException("Email recipient is required");
@@ -168,6 +202,38 @@ public class NotificationEmailService {
             : "เรียน คุณ" + escapeHtml(cleanName) + ",";
         String messageHtml = escapeHtml(clean(body)).replace("\r\n", "\n").replace("\n", "<br>");
         String cta = ctaHtml(link);
+        return wrapShell(
+            "<p style=\"margin:0 0 16px 0;\">" + greeting + "</p>"
+                + "<p style=\"margin:0;\">" + messageHtml + "</p>"
+                + cta);
+    }
+
+    /** Plain-text alternative for the leave-submission letter: the letter verbatim (control chars are
+     * sanitized downstream by the PDF/mail layer), the portal link, and the standard auto-mail footer
+     * {@link #textBody} uses. The letter already carries its own greeting and signature, so no {@code
+     * เรียน คุณ...} line is prepended. */
+    private String letterTextContent(String letterBody, String link) {
+        StringBuilder message = new StringBuilder(clean(letterBody)).append("\n\n");
+        String cleanLink = clean(link);
+        if (!cleanLink.isBlank()) {
+            message.append("ดูรายละเอียดในระบบ: ").append(appBaseUrl).append(normalizeLink(cleanLink)).append("\n\n");
+        }
+        message.append("ระบบบริหารงานบุคคล GL&R (GL&R HR Portal)\n")
+            .append("— อีเมลฉบับนี้ส่งจากระบบอัตโนมัติ กรุณาอย่าตอบกลับ");
+        return message.toString();
+    }
+
+    /** HTML content (the inner block placed inside {@link #wrapShell}) for the leave-submission letter:
+     * the letter HTML-escaped with newlines turned into {@code <br>}, plus the portal CTA. */
+    private String letterHtmlContent(String letterBody, String link) {
+        String letterHtml = escapeHtml(clean(letterBody)).replace("\r\n", "\n").replace("\n", "<br>");
+        return "<p style=\"margin:0;\">" + letterHtml + "</p>" + ctaHtml(link);
+    }
+
+    /** Wraps caller-supplied content HTML in the shared branded shell (inline logo header, brand rule,
+     * auto-mail footer). Extracted from {@link #htmlBody} so the notification body and the
+     * leave-submission letter render in one identical shell instead of two copies that can drift. */
+    private String wrapShell(String contentHtml) {
         String logoSrc = "cid:" + LOGO_CONTENT_ID;
 
         // The GL&R artwork is black-on-white with NO alpha channel, so the header band stays white
@@ -201,8 +267,6 @@ public class NotificationEmailService {
                         </tr>
                         <tr>
                           <td style="padding:32px;font-family:%s;font-size:15px;line-height:1.6;color:#111827;">
-                            <p style="margin:0 0 16px 0;">%s</p>
-                            <p style="margin:0;">%s</p>
                             %s
                           </td>
                         </tr>
@@ -219,8 +283,7 @@ public class NotificationEmailService {
                 </table>
               </body>
             </html>
-            """.formatted(BRAND_COLOR, logoSrc, FONT_STACK, FONT_STACK, greeting, messageHtml, cta, FONT_STACK,
-                FONT_STACK);
+            """.formatted(BRAND_COLOR, logoSrc, FONT_STACK, FONT_STACK, contentHtml, FONT_STACK, FONT_STACK);
     }
 
     /** Bulletproof CTA: a background-colored {@code <table>} with a padded {@code <a>}, not a styled

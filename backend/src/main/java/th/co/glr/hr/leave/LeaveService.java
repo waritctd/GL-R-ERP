@@ -19,7 +19,11 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.attendance.schedule.WorkSchedule;
@@ -33,6 +37,7 @@ import th.co.glr.hr.specialmoney.SpecialMoneyPolicyEvaluator;
 
 @Service
 public class LeaveService {
+    private static final Logger log = LoggerFactory.getLogger(LeaveService.class);
     private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Bangkok");
     private static final Set<String> LEAVE_ATTACHMENT_MIME_TYPES = Set.of(
         "application/pdf",
@@ -146,6 +151,11 @@ public class LeaveService {
     // EmployeeRepository#findHrEmployeeIds was added by this same change for that purpose --
     // #notifyPendingApproval is its only caller. No other method on this class touches it.
     private final EmployeeRepository employeeRepository;
+    // Auto-generated leave-submission email (2026-09): renders the ใบลา PDF and mails it to the shared
+    // HR inbox, CC'ing requester + manager. Wired only through the @Autowired constructor; the
+    // package-private test constructor leaves it null so unit tests exercise submit without email (see
+    // #notifyPendingApproval, which no-ops the send when this is null).
+    private final LeaveSubmissionMailer leaveSubmissionMailer;
     private final Clock clock;
 
     // §5 leave-rules-as-data (V116): advance notice used to be a single global
@@ -160,9 +170,27 @@ public class LeaveService {
                         FileStorageService fileStorage,
                         AuditService auditService,
                         NotificationService notificationService,
+                        EmployeeRepository employeeRepository,
+                        LeaveSubmissionMailer leaveSubmissionMailer) {
+        this(leaveRepository, leaveAttachments, fileStorage, auditService, notificationService,
+            employeeRepository, Clock.system(BUSINESS_ZONE), leaveSubmissionMailer);
+    }
+
+    // Existing test constructor signatures kept intact so the integration/unit tests that call them
+    // need no change: some construct with the six collaborators only (the pre-2026-09 @Autowired
+    // shape), others add a fixed Clock. Neither wires a LeaveSubmissionMailer -- those tests drive
+    // submit under mocked collaborators and assert the in-app notifications / leave logic, not the
+    // email fan-out (which #notifyPendingApproval no-ops when the mailer is null). Public because some
+    // callers live in other packages (e.g. payroll integration tests) -- this is the pre-2026-09
+    // @Autowired six-arg shape, now unannotated so Spring uses the mailer-carrying constructor above.
+    public LeaveService(LeaveRepository leaveRepository,
+                        LeaveAttachmentRepository leaveAttachments,
+                        FileStorageService fileStorage,
+                        AuditService auditService,
+                        NotificationService notificationService,
                         EmployeeRepository employeeRepository) {
         this(leaveRepository, leaveAttachments, fileStorage, auditService, notificationService,
-            employeeRepository, Clock.system(BUSINESS_ZONE));
+            employeeRepository, Clock.system(BUSINESS_ZONE), null);
     }
 
     LeaveService(LeaveRepository leaveRepository,
@@ -172,12 +200,25 @@ public class LeaveService {
                  NotificationService notificationService,
                  EmployeeRepository employeeRepository,
                  Clock clock) {
+        this(leaveRepository, leaveAttachments, fileStorage, auditService, notificationService,
+            employeeRepository, clock, null);
+    }
+
+    private LeaveService(LeaveRepository leaveRepository,
+                         LeaveAttachmentRepository leaveAttachments,
+                         FileStorageService fileStorage,
+                         AuditService auditService,
+                         NotificationService notificationService,
+                         EmployeeRepository employeeRepository,
+                         Clock clock,
+                         LeaveSubmissionMailer leaveSubmissionMailer) {
         this.leaveRepository = leaveRepository;
         this.leaveAttachments = leaveAttachments;
         this.fileStorage = fileStorage;
         this.auditService = auditService;
         this.notificationService = notificationService;
         this.employeeRepository = employeeRepository;
+        this.leaveSubmissionMailer = leaveSubmissionMailer;
         this.clock = clock;
     }
 
@@ -2636,6 +2677,12 @@ public class LeaveService {
             approvers.addAll(employeeRepository.findHrEmployeeIds());
         }
 
+        // sendEmail=false on both in-app notifications (2026-09): the per-recipient submit emails are
+        // replaced by ONE consolidated email carrying the ใบลา PDF to the shared HR inbox, CC'ing the
+        // requester and their manager (see #emailLeaveSubmission below). Leaving these true would
+        // double-mail the manager (once here, once via the CC) and mail the requester twice. The
+        // in-app rows themselves are unchanged -- the portal queue still shows the requester their
+        // submission and the approver their pending item.
         notificationService.notify(
             request.employeeId(),
             "LEAVE_SUBMITTED",
@@ -2643,7 +2690,7 @@ public class LeaveService {
             "ส่งคำขอ" + type + " " + period + " (" + days + " วัน) แล้ว"
                 + "\nอยู่ระหว่างรอ" + (goesToHr ? "ฝ่ายบุคคล" : "ผู้จัดการ") + "อนุมัติ ระบบจะแจ้งผลให้ทราบ",
             "/leave",
-            true);
+            false);
 
         approvers.remove(actorEmployeeId);
         for (Long approverId : approvers) {
@@ -2655,8 +2702,91 @@ public class LeaveService {
                     + "\nกรุณาพิจารณาอนุมัติหรือปฏิเสธในระบบ"
                     + ruleWarningsBlock(request),
                 "/leave",
-                true);
+                false);
         }
+
+        emailLeaveSubmission(request);
+    }
+
+    /**
+     * Schedules the auto-generated leave-submission email (ใบลา PDF to the shared HR inbox, CC
+     * requester + manager) for after the submit transaction commits -- mail cannot be un-sent, so it
+     * must not go out for a submission a later constraint rolls back (same rule {@link
+     * NotificationService} defers its own sends by). No-op when {@link #leaveSubmissionMailer} is
+     * absent (the unit-test constructor), so submit stays email-free under mocks. The PDF render and
+     * recipient lookups run in the after-commit callback and any failure is swallowed-and-logged: a
+     * mail problem must never fail a leave submission that already succeeded.
+     */
+    private void emailLeaveSubmission(LeaveRequestDto request) {
+        if (leaveSubmissionMailer == null) {
+            return;
+        }
+        runAfterCommit(() -> {
+            try {
+                leaveSubmissionMailer.send(request, buildLeaveForm(request));
+            } catch (Exception exception) {
+                log.error("Leave submission email failed: request={} error={}", request.id(),
+                    exception.getMessage());
+            }
+        });
+    }
+
+    /** Assembles the ใบลา F-HR-020 fields: the request itself, the employee's nickname/position/
+     * department/division (two read-only lookups), and year-to-date approved usage per type (the
+     * balance math this class owns). Runs post-commit; the just-submitted request is SUBMITTED, so it
+     * contributes to pending -- not approved -- usage and never inflates its own history figures. */
+    private LeaveFormData buildLeaveForm(LeaveRequestDto request) {
+        long employeeId = request.employeeId();
+        int year = request.quotaYear();
+        LeaveContactDefaultsDto defaults = leaveRepository.findContactDefaults(employeeId).orElse(null);
+        String nickName = leaveRepository.findNickname(employeeId).orElse(null);
+        BigDecimal usedPersonal = usedDaysThisYear(employeeId, year, "PERSONAL");
+        BigDecimal usedSick = usedDaysThisYear(employeeId, year, "SICK");
+        BigDecimal usedVacation = usedDaysThisYear(employeeId, year, "VACATION");
+        BigDecimal usedTotal = leaveRepository.findLeaveTypes().stream()
+            .map(type -> usedDaysThisYear(employeeId, year, type.code()))
+            .reduce(BigDecimal.ZERO, BigDecimal::add);
+        return new LeaveFormData(
+            request.employeeCode(), request.employeeName(), nickName,
+            defaults == null ? null : defaults.positionTh(),
+            defaults == null ? null : defaults.departmentTh(),
+            defaults == null ? null : defaults.divisionTh(),
+            request.leaveTypeCode(), request.leaveTypeNameTh(),
+            request.createdAt() == null ? LocalDate.now(clock) : request.createdAt().toLocalDate(),
+            request.startDate(), request.endDate(), request.startTime(), request.endTime(),
+            request.totalDays(), request.reason(),
+            request.contactHouseNo(), request.contactSubdistrict(), request.contactDistrict(),
+            request.contactProvince(), request.contactPhone(),
+            usedTotal, usedPersonal, usedSick, usedVacation);
+    }
+
+    /** Approved days used for one type in one quota year -- the "ประวัติการลาในรอบปีนี้" figures on the
+     * form. A PURE READ ({@link LeaveRepository#sumUsedDays} over {@code APPROVED} only): deliberately
+     * NOT {@link #balanceFor}, which computes carry-forward and can WRITE a {@code hr.leave_carryover}
+     * grant row -- unwanted from this after-commit email path. APPROVED-only (not
+     * {@link #ACTIVE_QUOTA_STATUSES}) excludes the just-submitted SUBMITTED request, so a request never
+     * inflates its own history figure. */
+    private BigDecimal usedDaysThisYear(long employeeId, int year, String leaveTypeCode) {
+        BigDecimal used = leaveRepository.sumUsedDays(employeeId, leaveTypeCode, year, Set.of(LeaveStatus.APPROVED));
+        return used == null ? BigDecimal.ZERO : used;
+    }
+
+    /** Runs {@code action} after the current transaction commits, or immediately when none is active
+     * (unit tests, non-transactional callers) -- the same rule {@code AfterCommit} applies in the
+     * notification package, replicated here to avoid a cross-package dependency on a package-private
+     * helper. "Defer forever" is never the outcome: a swallowed side effect is worse than an early
+     * one. */
+    private void runAfterCommit(Runnable action) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            action.run();
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                action.run();
+            }
+        });
     }
 
     /**
