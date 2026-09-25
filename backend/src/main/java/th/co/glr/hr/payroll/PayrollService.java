@@ -571,7 +571,13 @@ public class PayrollService {
         List<PayrollLineDto> lines = period.lines();
         Set<Long> employeeIds = lines.stream().map(PayrollLineDto::employeeId).collect(Collectors.toSet());
         Map<Long, PayrollDetailIdentityDto> identities = payrollRepository.findDetailIdentity(employeeIds);
-        return payrollDetailExporter.export(lines, identities, period);
+        // The workbook's การคำนวณภาษี tab needs each employee's YTD cumulative income/withholding
+        // (see PayrollDetailExporter's Ctx#cumulativeIncomeBeforeThisPeriod) -- the same
+        // findYearToDateByEmployee lookup #calculateLine already uses for the live annual projection,
+        // reused here purely for display so the export never re-derives it a second way.
+        Map<Long, PayrollYearToDate> yearToDateByEmployee =
+            payrollRepository.findYearToDateByEmployee(period.payrollMonth());
+        return payrollDetailExporter.export(lines, identities, period, yearToDateByEmployee);
     }
 
     /**
