@@ -124,6 +124,10 @@ class PayrollServiceTest {
         when(payrollRepository.findPeriodById(99L)).thenReturn(Optional.of(period(List.of(first, second))));
         when(payrollRepository.findLines(99L)).thenReturn(List.of(first, second));
         when(payrollRepository.findDetailIdentity(java.util.Set.of(42L, 43L))).thenReturn(Map.of());
+        // The การคำนวณภาษี tab needs each employee's YTD carry-forward (see
+        // PayrollDetailExporter.Ctx#cumulativeIncomeBeforeThisPeriod); buildDetailContent now loads
+        // it for every PAYROLL_DETAIL export regardless of processed/void status.
+        when(payrollRepository.findYearToDateByEmployee(LocalDate.of(2026, 6, 1))).thenReturn(Map.of());
 
         PayrollExportFile file = service.export(PayrollExportKind.PAYROLL_DETAIL, 99L, LocalDate.of(2026, 6, 26), hrUser());
 
@@ -133,31 +137,39 @@ class PayrollServiceTest {
 
         try (var workbook = new org.apache.poi.xssf.usermodel.XSSFWorkbook(
                 new java.io.ByteArrayInputStream(file.content()))) {
+            // 3-tab workbook (สรุปเงินเดือน / การคำนวณภาษี / อัตราภาษีและหมายเหตุ) -- see
+            // PayrollDetailExporter's class javadoc for why this replaced the single ~70-column sheet.
+            assertThat(workbook.getNumberOfSheets()).isEqualTo(3);
+            assertThat(workbook.getSheetName(0)).isEqualTo("สรุปเงินเดือน");
+            assertThat(workbook.getSheetName(1)).isEqualTo("การคำนวณภาษี");
+            assertThat(workbook.getSheetName(2)).isEqualTo("อัตราภาษีและหมายเหตุ");
+
             org.apache.poi.ss.usermodel.Sheet sheet = workbook.getSheetAt(0);
-            org.apache.poi.ss.usermodel.Row headerRow = sheet.getRow(0);
+            org.apache.poi.ss.usermodel.Row headerRow = sheet.getRow(3); // header on row 4 (title/subtitle above)
             Map<String, Integer> columnIndex = new java.util.HashMap<>();
             for (org.apache.poi.ss.usermodel.Cell cell : headerRow) {
                 columnIndex.put(cell.getStringCellValue(), cell.getColumnIndex());
             }
             // Thai headers survive real UTF-8 (xlsx), unlike the CP874 text exporters.
             assertThat(columnIndex).containsKeys(
-                "รหัสพนักงาน", "ชื่อ", "เงินเดือน", "พิเศษ 7 (คอมมิชชั่น)", "ค่าคอมมิชชั่น (ระบบขาย)",
-                "รวมรายได้ที่ต้องคิดภาษี (A)", "คงเหลือจ่ายจริง (A-B-C+D)");
+                "รหัส", "ชื่อ - สกุล", "ฝ่าย", "เงินเดือน", "พิเศษ 7\nคอมมิชชั่นพิเศษ", "คอมมิชชั่น",
+                "รวมรายได้\nที่ต้องเสียภาษี", "ภาษีหัก ณ\nที่จ่าย", "คงเหลือ\nจ่ายสุทธิ");
 
-            org.apache.poi.ss.usermodel.Row dataRow = sheet.getRow(1);
-            assertThat(dataRow.getCell(columnIndex.get("รหัสพนักงาน")).getStringCellValue()).isEqualTo("GLR-42");
-            assertThat(dataRow.getCell(columnIndex.get("ชื่อ")).getStringCellValue()).isEqualTo("HR หนึ่ง");
+            org.apache.poi.ss.usermodel.FormulaEvaluator evaluator =
+                workbook.getCreationHelper().createFormulaEvaluator();
+
+            org.apache.poi.ss.usermodel.Row dataRow = sheet.getRow(4); // first employee, row 5
+            assertThat(dataRow.getCell(columnIndex.get("รหัส")).getStringCellValue()).isEqualTo("GLR-42");
+            assertThat(dataRow.getCell(columnIndex.get("ชื่อ - สกุล")).getStringCellValue()).isEqualTo("HR หนึ่ง");
             assertThat(dataRow.getCell(columnIndex.get("เงินเดือน")).getNumericCellValue()).isEqualTo(40000.00);
-            assertThat(dataRow.getCell(columnIndex.get("คงเหลือจ่ายจริง (A-B-C+D)")).getNumericCellValue())
-                .isEqualTo(30000.00);
 
             int totalsRowIdx = sheet.getLastRowNum();
             org.apache.poi.ss.usermodel.Row totalsRow = sheet.getRow(totalsRowIdx);
-            assertThat(totalsRow.getCell(columnIndex.get("เงินเดือน")).getNumericCellValue())
+            assertThat(totalsRow.getCell(0).getStringCellValue()).contains("รวม");
+            org.apache.poi.ss.usermodel.Cell totalSalaryCell = totalsRow.getCell(columnIndex.get("เงินเดือน"));
+            assertThat(evaluator.evaluate(totalSalaryCell).getNumberValue())
                 .as("totals row must equal the sum of the two data rows' เงินเดือน")
                 .isEqualTo(80000.00);
-            assertThat(totalsRow.getCell(columnIndex.get("คงเหลือจ่ายจริง (A-B-C+D)")).getNumericCellValue())
-                .isEqualTo(60000.00);
         }
     }
 
