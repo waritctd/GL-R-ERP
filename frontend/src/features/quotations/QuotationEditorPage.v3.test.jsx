@@ -220,6 +220,55 @@ describe('v3/v3b document settings', () => {
     expect(payload.items[1]).toMatchObject({ lineType: 'PLAIN', unitPrice: 700, quantity: 1 });
   }, 25000);
 
+  // Owner decision 2026-09-26: เผื่อ (wastage) no longer has its own rep-set toggle -- its %/แผ่น
+  // unit is DERIVED from วิธีกรอกราคากระเบื้อง (docSettings.priceMode). A percent and a piece count
+  // are never comparable numbers (the same reasoning the removed per-row toggle used to reset on a
+  // manual mode click), so `applyPriceMode` resets every tile row's `wastageValue` to 0 whenever the
+  // switch flips the DERIVED unit -- but only then.
+  describe('เผื่อ (wastage) value reset on a price-mode switch that flips the derived unit', () => {
+    it('NET (แผ่น) → SPECIAL_SQM (%) resets wastageValue to 0', async () => {
+      api.dealQuotations.get.mockResolvedValue({
+        quotation: draft({ priceMode: 'NET', items: [{ ...TILE_ITEM, wastageValue: 10 }] }),
+      });
+      renderEditor('/quotations/5');
+      await waitFor(() => expect(byId('waste-0')?.value).toBe('10'));
+
+      fireEvent.click(within(group('วิธีกรอกราคากระเบื้อง')).getByRole('button', { name: 'ราคาพิเศษ บาท/ตร.ม.' }));
+
+      await waitFor(() => expect(byId('waste-0').value).toBe('0'));
+    });
+
+    it('NET (แผ่น) → DIRECT_NET (แผ่น) does NOT reset wastageValue — the unit stays the same', async () => {
+      api.dealQuotations.get.mockResolvedValue({
+        quotation: draft({ priceMode: 'NET', items: [{ ...TILE_ITEM, wastageValue: 10 }] }),
+      });
+      renderEditor('/quotations/5');
+      await waitFor(() => expect(byId('waste-0')?.value).toBe('10'));
+
+      fireEvent.click(within(group('วิธีกรอกราคากระเบื้อง')).getByRole('button', { name: 'ราคาสุทธิต่อแผ่น' }));
+
+      // Give the debounced preview a tick to run, same as this file's other price-mode-switch
+      // assertions -- proves the value truly survived rather than the assertion racing the switch.
+      await flushPreviewDebounce();
+      expect(byId('waste-0').value).toBe('10');
+    });
+
+    it('SPECIAL_SQM (%) → NET (แผ่น) resets wastageValue to 0', async () => {
+      api.dealQuotations.get.mockResolvedValue({
+        quotation: draft({
+          priceMode: 'SPECIAL_SQM',
+          items: [{ ...TILE_ITEM, wastageValue: 15, specialPriceSqm: 1350, netUnitPrice: 453.84 }],
+        }),
+      });
+      renderEditor('/quotations/5');
+      await waitFor(() => expect(byId('waste-0')?.value).toBe('15'));
+
+      fireEvent.click(within(group('วิธีกรอกราคากระเบื้อง')).getByRole('button', { name: 'ราคาตั้ง − ส่วนลด %' }));
+
+      await waitFor(() => expect(byId('waste-0').value).toBe('0'));
+    });
+  });
+
   it('switching back does NOT restore any cleared price', async () => {
     api.dealQuotations.get.mockResolvedValue({
       quotation: draft({ priceMode: 'SPECIAL_SQM', items: [{ ...TILE_ITEM, specialPriceSqm: 1350, netUnitPrice: 453.84 }, PLAIN_ITEM] }),

@@ -508,20 +508,50 @@ describe('validateQuotationItem (#M4, owner ruling 2026-09-10)', () => {
   });
 
   // ── Wording-scan fix 5 (2026-09-17): PIECES wastage must be a whole number ────────────────────
+  // Owner decision 2026-09-26: the PIECES/PERCENT unit this check applies to is now DERIVED from
+  // `priceMode` (wastageModeForPriceMode) -- NET/DIRECT_NET derive PIECES, SPECIAL_SQM derives
+  // PERCENT -- never read off the item's own (possibly stale) `wastageMode` field.
   describe('fractional PIECES-wastage rejection (owner-approved wording-scan finding 5)', () => {
-    it('refuses a fractional value in PIECES mode', () => {
-      const item = completeItem({ wastageMode: 'PIECES', wastageValue: 0.5 });
+    it('refuses a fractional value under a PIECES-derived price mode (NET)', () => {
+      const item = completeItem({ wastageValue: 0.5 });
       expect(validateQuotationItem(item, 'NET', 'TH').wastageValue).toBe('จำนวนแผ่นที่เผื่อต้องเป็นจำนวนเต็ม');
     });
 
-    it('wrong-way-round: a whole-number PIECES value is untouched', () => {
-      const item = completeItem({ wastageMode: 'PIECES', wastageValue: 2 });
+    it('refuses a fractional value under DIRECT_NET too', () => {
+      const item = completeItem({ wastageValue: 0.5, unitPrice: null, directNetPrice: 500 });
+      expect(validateQuotationItem(item, 'DIRECT_NET', 'TH').wastageValue).toBe('จำนวนแผ่นที่เผื่อต้องเป็นจำนวนเต็ม');
+    });
+
+    it('wrong-way-round: a whole-number PIECES-derived value is untouched', () => {
+      const item = completeItem({ wastageValue: 2 });
       expect(validateQuotationItem(item, 'NET', 'TH').wastageValue).toBeUndefined();
     });
 
-    it('PERCENT wastage keeps accepting a fractional value', () => {
+    it('a PERCENT-derived price mode (SPECIAL_SQM) keeps accepting a fractional value', () => {
+      const item = completeItem({ wastageValue: 2.5, specialPriceSqm: 1000 });
+      expect(validateQuotationItem(item, 'SPECIAL_SQM', 'TH').wastageValue).toBeUndefined();
+    });
+
+    it("a stale stored item.wastageMode never overrides the priceMode-derived unit", () => {
+      // A loaded quotation's row may carry a stored wastageMode that disagrees with the CURRENT
+      // price mode (e.g. saved under SPECIAL_SQM, then the document's price mode changed) -- the
+      // check must still follow priceMode, not the stale field.
       const item = completeItem({ wastageMode: 'PERCENT', wastageValue: 2.5 });
-      expect(validateQuotationItem(item, 'NET', 'TH').wastageValue).toBeUndefined();
+      expect(validateQuotationItem(item, 'NET', 'TH').wastageValue).toBe('จำนวนแผ่นที่เผื่อต้องเป็นจำนวนเต็ม');
+    });
+  });
+
+  describe('wastageModeForPriceMode (owner decision 2026-09-26)', () => {
+    it('SPECIAL_SQM derives PERCENT', () => {
+      expect(meta.wastageModeForPriceMode('SPECIAL_SQM')).toBe('PERCENT');
+    });
+
+    it('NET derives PIECES', () => {
+      expect(meta.wastageModeForPriceMode('NET')).toBe('PIECES');
+    });
+
+    it('DIRECT_NET derives PIECES', () => {
+      expect(meta.wastageModeForPriceMode('DIRECT_NET')).toBe('PIECES');
     });
   });
 });
