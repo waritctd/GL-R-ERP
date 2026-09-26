@@ -161,7 +161,7 @@ public class LeaveSubmissionMailer {
 
     private String body(LeaveRequestDto request, LeaveFormData formData) {
         String fullName = nn(request.employeeName());
-        return "เรียนฝ่ายบุคคล,\n\n"
+        return "เรียนฝ่ายบุคคลและหัวหน้างาน,\n\n"
             + fullName + " รหัสพนักงาน " + nn(request.employeeCode()) + " ขอแจ้งลา"
             + leaveWord(request.leaveTypeNameTh()) + " เนื่องจาก " + nn(request.reason()) + "\n\n"
             + "วันที่ลา: " + dateSpan(request) + "\n"
