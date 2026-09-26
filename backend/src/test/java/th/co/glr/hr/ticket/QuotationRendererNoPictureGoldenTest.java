@@ -155,23 +155,39 @@ class QuotationRendererNoPictureGoldenTest {
         // any of the five fixtures, is that one "col 8 w=" line). paginated is excluded from this
         // list: its case is skipped by the Assumptions.assumeTrue column-unit guard above on this
         // machine already, independently of this fix.
-        // Re-pinned 2026-09-26 (task 4, owner tuning): SIGNATURE_LIFT_ABOVE_RULE_MM raised
-        // 0.4mm -> 1.5mm so the ink sits clear above the rule. The regenerated .txt dumps for the
-        // four signature-bearing fixtures differ from their prior version ONLY in the signature
-        // picture's vertical anchor (same md5 image content, same x-column) -- confirmed by
-        // `git diff` on the golden .txt files. legacy-shape has no signature block, so its hash is
-        // unchanged. These four hashes are the post-lift bytes.
+        // Re-pinned 2026-09-27 (signature-block equal-length-lines + drift fix, owner feedback):
+        // #writeSignatureBlock now gives every slot's underscore line the SAME character count
+        // (was: pad each label to fill whatever pixel width its OWN slot had left, so the
+        // shortest label got the longest line) and centres the label+line unit, the name and the
+        // date within their slot instead of independently re-deriving each block's own nominal
+        // target — see the class comment above QuotationRenderer#SIG_LABELS and
+        // #appendAtTarget's own Javadoc for why the old per-row-independent centring drifted
+        // left slot by slot. The regenerated .txt dumps for the four signature-bearing fixtures
+        // differ from their prior version ONLY in the labels/names/dates row text (now carrying
+        // leading/interstitial spaces from the per-slot centring) and the signature picture's
+        // horizontal anchor (it still tracks runStart[SIG_APPROVER_INDEX]/runEnd[...], which
+        // moved because the line it anchors to moved) -- confirmed by `git diff` on the golden
+        // .txt files. legacy-shape has no signature block, so its hash is unchanged.
+        // Re-pinned AGAIN 2026-09-27 (same task, second pass): #SIGNATURE_SPACE_TO_UNDERSCORE_SCALE
+        // added after the first re-pin above -- a small empirically-measured correction for the
+        // SPACE glyph's own AWT-vs-LibreOffice rendering gap (see that constant's own Javadoc),
+        // which further reduces the residual name/date left-drift the first pass didn't fully
+        // remove. Confirmed by diffing the regenerated .txt goldens against their first-pass
+        // version: every changed line is the names/dates row text (one leading space more or
+        // fewer per slot) or the signature picture's horizontal anchor (still tracking the same
+        // runStart/runEnd, which shifted by the same small amount); legacy-shape (no signature
+        // block) is byte-identical to the very first pre-feature baseline.
         java.util.Map<String, String> preFeatureSha256 = java.util.Map.of(
-            "single-page", "f155e2a39b4d449f55c950b575deb77a61283801f6cc7216b9d45109c831e395",
-            "one-page-scaled", "094d8973f9091afbfebee5b9efb4eaf92b361c065f174e0b1632f7c9596f9845",
-            "paginated", "0f9b7f136a44193970846940a95df088ea093865ea5240b10e69b8a748c6b55f",
+            "single-page", "7062aa6be41308fe6f4bd4cf2f67571b5b1c019fdfd4c3e131b8a241615fcdee",
+            "one-page-scaled", "17ede12207020eec5f4c044148632310da69de7a040631bd5270a62d4e843df2",
+            "paginated", "02350a0a3af5c5939f68b2325d825ed90dd1e062d12452f09f0f75feeb55489e",
             // Re-pinned on develop 80f2484e: #930 deliberately changed the English form's output.
             // Re-pinned again 2026-09-13 (owner ruling 2): QuotationRenderer#applyEnglishTotals now
             // strips every border from the emptied subtotal/VAT rows and hides them, so Grand Total
             // sits directly under the table box. The regenerated english.txt differs from its prior
             // version ONLY in those two rows (hidden, b=NONE) plus the style indices the new
             // borderless styles shift; the four Thai fixtures are byte-identical.
-            "english", "c083845a8a023048a53cef8cbcff841a3e480a58ebc0c36aee9c4408dc661b92",
+            "english", "10c1fe2783de61a994af2fec5ffe76ecdcac1b93a0019792f0edff56196a19c1",
             "legacy-shape", "a92e576f622abb6fd0c2a49051e5513ae162adadbfb4b21636f56b7484de28fe");
         byte[] xls = renderer.toXls(model(fixture));
         String expectedUnit = Files.readString(Path.of("src/test/resources/quotation-golden", fixture + ".txt"),
