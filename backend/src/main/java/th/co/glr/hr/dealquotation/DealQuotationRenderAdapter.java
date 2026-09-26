@@ -64,6 +64,26 @@ public final class DealQuotationRenderAdapter {
                                                       String approverSignatureMime,
                                                       List<String> bankBlockLines,
                                                       java.util.Map<Long, DealQuotationRepository.PictureImage> itemPictures) {
+        return toRenderModel(quotation, approverSignaturePng, approverSignatureMime, bankBlockLines, itemPictures,
+            null, null, null, null);
+    }
+
+    /**
+     * Task 4 (slot signatures, 2026-09-26): the full overload, additionally threading the
+     * ผู้พิมพ์ (slot 0) and พนักงานขาย (slot 1) signature image bytes — resolved LIVE by the
+     * caller ({@code DealQuotationService#toRenderModel}) the same way {@code approverSignaturePng}
+     * always has been, just never frozen into an approval snapshot the way the approver's is.
+     * Either pair may be null independently (that person has no signature on file, or the caller
+     * chose not to resolve one) — the corresponding slot then prints text-only, exactly as every
+     * slot always has. Kept as a SEPARATE overload (rather than adding params to the one above) so
+     * every existing caller of the five-argument overload keeps compiling unchanged.
+     */
+    public static QuotationRenderModel toRenderModel(DealQuotationDto quotation, byte[] approverSignaturePng,
+                                                      String approverSignatureMime,
+                                                      List<String> bankBlockLines,
+                                                      java.util.Map<Long, DealQuotationRepository.PictureImage> itemPictures,
+                                                      byte[] printedBySignaturePng, String printedBySignatureMime,
+                                                      byte[] salesRepSignaturePng, String salesRepSignatureMime) {
         // B4 (header วันที่) = the date the SALES REP CREATED the quotation, for every status —
         // owner feedback F8, 2026-09-10: "for วันที่ at the top of the page it should be the date
         // it was created by the sale". It used to print the APPROVED date once approved (and
@@ -200,7 +220,9 @@ public final class DealQuotationRenderAdapter {
             displayName(quotation.approvedByName(), quotation.approvedByNameEn(), english),
             orderedByName(quotation),
             approverSignaturePng, approverSignatureMime,
-            bangkokDate(quotation.createdAt()), bangkokDate(quotation.submittedAt()), bangkokDate(quotation.approvedAt()));
+            bangkokDate(quotation.createdAt()), bangkokDate(quotation.submittedAt()), bangkokDate(quotation.approvedAt()),
+            printedBySignaturePng, printedBySignatureMime,
+            salesRepSignaturePng, salesRepSignatureMime);
 
         // V182 (owner request, 2026-09-16): a document with NO tile line at all (sanitaryware sold
         // on ชุด/PLAIN lines) prints a different, shorter หมายเหตุ block — the tile-oriented remarks

@@ -2178,7 +2178,19 @@ public class DealQuotationService {
      * <p>GLA-123 slice S2 REWORK (owner reversed the dual-approval design, 2026-09-20): this read
      * is now shared verbatim by BOTH origins — whoever approves a PRICING_REQUEST-origin
      * quotation freezes into the SAME single snapshot row DEAL_DIRECT's own {@code #approve}
-     * writes, so there is no origin branching left here at all. */
+     * writes, so there is no origin branching left here at all.
+     *
+     * <p>Task 4 (slot signatures, 2026-09-26): ผู้พิมพ์ (slot 0) and พนักงานขาย (slot 1) each also
+     * get a signature image, resolved LIVE — {@code signatures.find(id)} straight off
+     * {@code hr.employee_signature} — every time this renders, NEVER frozen into a snapshot the
+     * way the approver's is (there is no approval event that would even define when to freeze
+     * these two). The id resolved is whichever the rep actually selected: the display override
+     * when set ({@code printedByDisplayId}/{@code salesRepDisplayId} — the same V179 ids the name
+     * override already reads), else the real deal-ownership id ({@code createdById}/
+     * {@code salesRepId}). A missing signature for that id, or the id happening to equal the
+     * approver's, is handled the same uneventful way: {@code signatures.find} returns empty and
+     * the slot just prints its text-only name, exactly as it always has — no special-casing
+     * needed, each slot's resolution is fully independent of the other two. */
     private th.co.glr.hr.ticket.QuotationRenderModel toRenderModel(DealQuotationDto quotation) {
         byte[] signaturePng = null;
         String signatureMime = null;
@@ -2198,8 +2210,31 @@ public class DealQuotationService {
         Map<Long, PictureImage> itemPictures = quotation.items().stream().anyMatch(DealQuotationItemDto::hasPicture)
             ? quotations.findPictureImagesForQuotation(quotation.id())
             : Map.of();
+
+        long printedById = quotation.printedByDisplayId() != null
+            ? quotation.printedByDisplayId() : quotation.createdById();
+        byte[] printedBySignaturePng = null;
+        String printedBySignatureMime = null;
+        var printedBySignature = signatures.find(printedById);
+        if (printedBySignature.isPresent()) {
+            printedBySignaturePng = printedBySignature.get().image();
+            printedBySignatureMime = printedBySignature.get().mimeType();
+        }
+
+        long salesRepId = quotation.salesRepDisplayId() != null
+            ? quotation.salesRepDisplayId() : quotation.salesRepId();
+        byte[] salesRepSignaturePng = null;
+        String salesRepSignatureMime = null;
+        var salesRepSignature = signatures.find(salesRepId);
+        if (salesRepSignature.isPresent()) {
+            salesRepSignaturePng = salesRepSignature.get().image();
+            salesRepSignatureMime = salesRepSignature.get().mimeType();
+        }
+
         return DealQuotationRenderAdapter.toRenderModel(quotation, signaturePng, signatureMime,
-            bankBlockLines, itemPictures);
+            bankBlockLines, itemPictures,
+            printedBySignaturePng, printedBySignatureMime,
+            salesRepSignaturePng, salesRepSignatureMime);
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
