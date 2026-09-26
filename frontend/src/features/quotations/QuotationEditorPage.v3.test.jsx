@@ -552,15 +552,19 @@ describe('"ข้อมูลที่ยังไม่ครบ" checklist (ow
     expect(screen.getByRole('button', { name: 'ส่งขออนุมัติ' }).disabled).toBe(false);
   });
 
-  it('a missing ผู้สั่งซื้อ BLOCKS ส่งขออนุมัติ', async () => {
+  // Owner-directed reversal of F2/V167 (2026-09-26): a missing ผู้สั่งซื้อ used to BLOCK
+  // ส่งขออนุมัติ here — it no longer produces any checklist entry, blocking or otherwise, and
+  // ส่งขออนุมัติ stays enabled.
+  it('a missing ผู้สั่งซื้อ no longer blocks ส่งขออนุมัติ, or appears in the checklist at all', async () => {
     api.dealQuotations.get.mockResolvedValue({ quotation: draft({ contactId: null, contactName: null, contactPhone: null, contactEmail: null }) });
     api.tickets.get.mockResolvedValue({
       ticket: { summary: { id: 18, createdById: 6, customerName: CUSTOMER.name, customerId: 5, projectName: 'โครงการ A', contactId: null } },
     });
     renderEditor('/quotations/5');
-    const blocking = await screen.findByTestId('checklist-blocking');
-    expect(within(blocking).getByText('กรุณาระบุผู้สั่งซื้อ')).not.toBeNull();
-    expect(screen.getByRole('button', { name: 'ส่งขออนุมัติ' }).disabled).toBe(true);
+    await screen.findByTestId('checklist-warnings'); // the unrelated ที่อยู่ warning still renders
+    expect(screen.queryByTestId('checklist-blocking')).toBeNull();
+    expect(screen.queryByText('กรุณาระบุผู้สั่งซื้อ')).toBeNull();
+    expect(screen.getByRole('button', { name: 'ส่งขออนุมัติ' }).disabled).toBe(false);
   });
 
   it('clicking an entry focuses its field', async () => {
@@ -578,17 +582,17 @@ describe('"ข้อมูลที่ยังไม่ครบ" checklist (ow
 });
 
 describe('customer address + repeat-customer autofill (owner, 2026-09-11)', () => {
-  it('a repeat customer on the ?ticket= path arrives with its saved details; the ผู้สั่งซื้อ\'s โทร./อีเมล too', async () => {
+  it('a repeat customer on the ?ticket= path arrives with its saved details', async () => {
     api.customers.search.mockResolvedValue({ customers: [{ ...CUSTOMER, address: '201 ซอยสุขุมวิท 63' }] });
     renderEditor('/quotations/new?ticket=18');
     await waitFor(() => expect(document.getElementById('deal-customer-address')?.value).toBe('201 ซอยสุขุมวิท 63'));
     expect(document.getElementById('deal-customer-tax-id').value).toBe('0105551234567');
     expect(document.getElementById('deal-customer-phone').value).toBe('02-000-0000');
-    // The details are now editable in place (gap fix, prod QT-2026-0041-1) — asserted on the
-    // input VALUES, not textContent (an <input>'s value is not a text node).
-    await waitFor(() => expect(screen.getByLabelText('แก้ไขโทรศัพท์ผู้สั่งซื้อ').value).toBe('086-222-3333'));
-    expect(screen.getByLabelText('แก้ไขอีเมลผู้สั่งซื้อ').value).toBe('nattapong@fashionisland.co.th');
-    // Resolving the seeded ผู้สั่งซื้อ is not an edit: the pristine page stays quiet.
+    // Owner-directed reversal of F2/V167 (2026-09-26): the ผู้สั่งซื้อ contact-picker (and its
+    // editable โทร./อีเมล fields, gap fix QT-2026-0041-1) is gone from this editor entirely —
+    // ผู้สั่งซื้อ is now a single optional free-text input, unaffected by the customer/ticket data
+    // this test seeds. Resolving the customer autofill is not an edit: the pristine page stays
+    // quiet either way.
     expect(screen.queryByTestId('quotation-checklist')).toBeNull();
   });
 

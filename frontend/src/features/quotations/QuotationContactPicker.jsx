@@ -23,20 +23,19 @@ function emptyNewContact() {
  * ผู้สั่งซื้อ picker — owner feedback F2, 2026-09-10 ("change ผู้ติดต่อ -> ผู้สั่งซื้อ, make
  * mandatory and use that name to auto fill in the name for signature in the quotation pdf").
  *
- * ONE component, deliberately, because the editor needs this control in THREE different places:
- * inside DealCustomerCard on the inline-create path, and inside the read-only deal summary on both
- * the `?ticket=` and the existing-DRAFT paths. The previous version of this markup lived only
- * inside DealCustomerCard; copying it into the summary panel would have created exactly the
- * inline-copy divergence this repo has been bitten by before (a fix to the component never reaches
- * its pasted twins). The required-ness, the Thai copy and the inline-add fields are therefore
- * defined once, here.
+ * ⚠️ Owner-directed reversal of F2/V167 (2026-09-26): the direct-deal quotation editor
+ * (QuotationEditorPage/DealCustomerCard) no longer renders this at all — ผู้สั่งซื้อ there is now a
+ * single optional free-text field (`terms.orderedByName`), and the required-ness this component
+ * enforces does not apply to that flow any more. The ONE remaining consumer is
+ * PricingRequestCreateModal (GLA-125 follow-up, 2026-09-18), which reuses this component AS-IS for
+ * its own, separate ผู้สั่งซื้อ requirement on a pricing request — do not remove this component
+ * while that import exists, and do not assume a change here is scoped to quotations only.
  *
  * Contract with the parent: `value` is a contact OBJECT (or null) and the parent owns it, same
- * controlled-field shape DealCustomerCard/QuotationItemRow already use. `value` may be a partial
- * stand-in — `{ id, firstName }` seeded from a DealQuotationDto's frozen `contactId`/`contactName`
- * snapshot — so a selected contact that is not (yet) in the loaded option list is injected as its
- * own option rather than falling back to a blank select, which would read as "nobody chosen" for
- * a quotation that in fact has one.
+ * controlled-field shape QuotationItemRow uses. `value` may be a partial stand-in — `{ id,
+ * firstName }` seeded from a frozen `contactId`/`contactName` snapshot — so a selected contact
+ * that is not (yet) in the loaded option list is injected as its own option rather than falling
+ * back to a blank select, which would read as "nobody chosen" for a request that in fact has one.
  */
 export const QuotationContactPicker = forwardRef(function QuotationContactPicker({
   customerId, customerName, value, onChange, error, showToast, disabled = false, idPrefix = 'deal-contact', onResolve,

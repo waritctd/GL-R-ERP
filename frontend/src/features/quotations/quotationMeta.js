@@ -1474,13 +1474,14 @@ export function validateAdjustment(adjustment) {
 
 // ── "ข้อมูลที่ยังไม่ครบ" checklist (owner, 2026-09-11) ──────────────────────────────────────────
 // "validate with the quotation which field have not been filled yet". The fields are the ones her
-// reference documents print in their HEADER — customer name, ที่อยู่, เลขที่ผู้เสียภาษี, โทร., the
-// ผู้สั่งซื้อ and its โทร./อีเมล, โครงการ — plus each item's own completeness.
+// reference documents print in their HEADER — customer name, ที่อยู่, เลขที่ผู้เสียภาษี, โทร.,
+// โครงการ — plus each item's own completeness. ผู้สั่งซื้อ used to be here too (its own
+// contact/โทร./อีเมล checks) until the owner-directed reversal of F2/V167 (2026-09-26) made it a
+// single optional free-text field with nothing left to validate.
 //
 // ⚠️ Two tiers, and the split is deliberately NOT invented here. A check BLOCKS บันทึกร่าง /
 // ส่งขออนุมัติ only when the backend ALREADY refuses the same state:
 //   customer / project   → TicketService.create ("ต้องเลือกโครงการก่อนสร้างดีล"), inline path only
-//   contact              → DealQuotationService#resolveContact / #submit ("กรุณาระบุผู้สั่งซื้อ")
 //   items                → #buildItem / #requireStoredItemComplete, and "at least one row"
 //   locationLabels       → the editor's own MED-4 rule (an unsaveable-without-loss state, pre-existing)
 //   priceModeLanguage    → #requirePriceModeAvailableInLanguage (SPECIAL_SQM on EN → 400)
@@ -1495,9 +1496,8 @@ export const QUOTATION_CHECK = Object.freeze({
   CUSTOMER: 'customer',
   PROJECT: 'project',
   DEAL_PROJECT: 'dealProject',
-  CONTACT: 'contact',
-  CONTACT_PHONE: 'contactPhone',
-  CONTACT_EMAIL: 'contactEmail',
+  // CONTACT / CONTACT_PHONE / CONTACT_EMAIL removed — owner-directed reversal of F2/V167
+  // (2026-09-26): ผู้สั่งซื้อ is no longer a required contact, so there is nothing left to check.
   CUSTOMER_ADDRESS: 'customerAddress',
   CUSTOMER_TAX_ID: 'customerTaxId',
   CUSTOMER_PHONE: 'customerPhone',
@@ -1518,7 +1518,6 @@ export const QUOTATION_CHECK = Object.freeze({
 export const QUOTATION_BLOCKING_CHECKS = Object.freeze(new Set([
   QUOTATION_CHECK.CUSTOMER,
   QUOTATION_CHECK.PROJECT,
-  QUOTATION_CHECK.CONTACT,
   QUOTATION_CHECK.LOCATION_LABELS,
   QUOTATION_CHECK.PRICE_MODE_LANGUAGE,
   QUOTATION_CHECK.ITEMS,
@@ -1591,13 +1590,12 @@ export function isEffectiveZeroDeposit({ noDeposit = false, depositPercentCustom
  * The checklist, as `{ check, message, targetId, blocking }` entries, in the order the editor
  * reads top to bottom. Pure: every input is editor state the caller already holds.
  *
- * `customer` / `contact` carry the details the document prints. A field whose value is
- * `undefined` is UNKNOWN (still loading, or a stand-in seeded from a name only) and produces no
- * warning — only a known-empty one (null / '') does, so the list never flashes "missing" at a
- * value that simply has not arrived yet.
+ * `customer` carries the details the document prints. A field whose value is `undefined` is
+ * UNKNOWN (still loading) and produces no warning — only a known-empty one (null / '') does, so
+ * the list never flashes "missing" at a value that simply has not arrived yet.
  *
- * The blocking messages are the exact strings the editor showed before this checklist existed
- * (and, for ผู้สั่งซื้อ, the backend's own 400 wording), so a rep sees one sentence for one problem.
+ * The blocking messages are the exact strings the editor showed before this checklist existed, so
+ * a rep sees one sentence for one problem.
  */
 export function buildQuotationChecklist({
   isInlineCreate = false,
@@ -1605,8 +1603,6 @@ export function buildQuotationChecklist({
   hasProject = false,
   // undefined = not loaded yet (the deal is still in flight) → no warning; null/'' = no project.
   projectName = undefined,
-  contact = null,
-  contactFieldId = 'quotation-contact',
   items = [],
   itemErrorsByRow = [],
   adjustments = [],
@@ -1650,7 +1646,10 @@ export function buildQuotationChecklist({
   } else if (projectName !== undefined && blankValue(projectName)) {
     push(QUOTATION_CHECK.DEAL_PROJECT, 'ดีลนี้ยังไม่มีโครงการ (แก้ได้ที่หน้ารายละเอียดดีล)');
   }
-  if (!contact?.id) push(QUOTATION_CHECK.CONTACT, 'กรุณาระบุผู้สั่งซื้อ', contactFieldId);
+  // ผู้สั่งซื้อ is no longer checked here at all — owner-directed reversal of F2/V167 (2026-09-26)
+  // dropped QUOTATION_CHECK.CONTACT/CONTACT_PHONE/CONTACT_EMAIL along with the required
+  // contact-picker they gated: ผู้สั่งซื้อ is now a single optional free-text field
+  // (`terms.orderedByName`) that can never be "missing" in a way worth flagging.
   // ผู้ออกแบบ (unitCode) and ฝ่าย (deptCode) are deliberately NOT checked — owner ruling 2026-09-16,
   // "make ผู้ออกแบบ optional including ฝ่าย". The backend never required either; this list used to
   // warn "ยังไม่ได้เลือกผู้ออกแบบ", which read as a required field.
@@ -1666,15 +1665,6 @@ export function buildQuotationChecklist({
       push(QUOTATION_CHECK.CUSTOMER_PHONE, 'ยังไม่ได้กรอกเบอร์โทรลูกค้า', QUOTATION_FIELD_IDS.customerPhone);
     }
   }
-  if (contact?.id) {
-    if (contact.phone !== undefined && blankValue(contact.phone)) {
-      push(QUOTATION_CHECK.CONTACT_PHONE, 'ผู้สั่งซื้อยังไม่มีเบอร์โทร', contactFieldId);
-    }
-    if (contact.email !== undefined && blankValue(contact.email)) {
-      push(QUOTATION_CHECK.CONTACT_EMAIL, 'ผู้สั่งซื้อยังไม่มีอีเมล', contactFieldId);
-    }
-  }
-
   if (duplicateGroupIndex != null) {
     push(QUOTATION_CHECK.LOCATION_LABELS,
       'ชื่อตำแหน่งติดตั้งซ้ำกัน กรุณาตั้งชื่อให้ต่างกัน (ตำแหน่งที่ชื่อซ้ำจะถูกรวมเป็นตำแหน่งเดียวในเอกสาร)',

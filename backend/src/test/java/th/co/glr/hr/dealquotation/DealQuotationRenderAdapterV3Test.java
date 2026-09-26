@@ -1059,6 +1059,33 @@ class DealQuotationRenderAdapterV3Test {
             .isNotEqualTo("สมหญิง ใจดี");
     }
 
+    /** ⚠️ Owner-directed reversal of V167/F2 (2026-09-26), the full scenario the frontend change
+     * produces on EVERY quotation now that the required contact-picker is gone: contactName is
+     * null (DealQuotationService#resolveContact's blank snapshot), so the greeting falls back to
+     * printing the customer alone -- exactly as {@link #printContactPart} already guarantees for a
+     * blank contactName -- while the ผู้สั่งซื้อ signature slot prints whatever the rep typed into
+     * `orderedByName`, entirely independently of there being no contact at all. */
+    @Test
+    void noContact_greetingFallsBackToCustomer_andSignatureSlotPrintsTheTypedOrderedByName() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithContact(null, "บริษัท ทดสอบ จำกัด", null)
+                .withOrderedByName("คุณวิชัย มั่นคง"), null, null);
+        assertThat(model.attnLine()).as("greeting reads just the customer, no contact part")
+            .isEqualTo("บริษัท ทดสอบ จำกัด");
+        assertThat(model.signatories().orderedBy()).isEqualTo("คุณวิชัย มั่นคง");
+    }
+
+    /** Same no-contact scenario, but nobody typed a ผู้สั่งซื้อ name either -- the signature slot
+     * must stay null (the dotted placeholder), never invent one from the customer name just
+     * because there is no contact to have omitted it from. */
+    @Test
+    void noContact_andNoOrderedByName_signatureSlotStaysNullForTheDottedPlaceholder() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithContact(null, "บริษัท ทดสอบ จำกัด", null), null, null);
+        assertThat(model.attnLine()).isEqualTo("บริษัท ทดสอบ จำกัด");
+        assertThat(model.signatories().orderedBy()).isNull();
+    }
+
     // ── fix (2026-09-15): customer phone falls back to the contact phone; contact e-mail prints ──
 
     /** The exact production example: customer_phone=null, contact_phone="062-328-7555",

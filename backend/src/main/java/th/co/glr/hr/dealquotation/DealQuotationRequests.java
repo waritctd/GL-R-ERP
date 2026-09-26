@@ -235,11 +235,16 @@ public final class DealQuotationRequests {
 
     /**
      * {@code contactId} (owner feedback F2, 2026-09-10 — ผู้สั่งซื้อ) is OPTIONAL on the wire and
-     * defaults to the deal's own contact ({@code sales.ticket.contact_id}); what is REQUIRED is
-     * that one resolves — create/update/submit answer 400 "กรุณาระบุผู้สั่งซื้อ" otherwise. The
-     * chosen contact must belong to the deal's customer; its name/phone/email are snapshotted onto
-     * the quotation (V167). Enforced in {@code DealQuotationService}, not by bean validation, because
-     * the default is a DB lookup.
+     * defaults to the deal's own contact ({@code sales.ticket.contact_id}).
+     *
+     * ⚠️ Owner-directed reversal of V167/F2 (2026-09-26): resolving to a contact is no longer
+     * REQUIRED either — the frontend's required contact-picker dropdown this field used to back is
+     * gone (replaced by an unrelated, always-optional free-text signature name, {@code
+     * orderedByName}), so create/update/submit no longer refuse a quotation with no contact
+     * anywhere in the resolution chain. A contact id that IS given (or inherited) must still belong
+     * to the deal's customer, refused as 400 otherwise; its name/phone/email are snapshotted onto
+     * the quotation same as before (V167). Enforced in {@code DealQuotationService#resolveContact},
+     * not by bean validation, because the default is a DB lookup.
      */
     public record UpsertDealQuotationRequest(
         Long contactId,

@@ -141,9 +141,14 @@ describe('download flushes unsaved edits before rendering the document (2026-09-
   // nothing this flush needs to save, so it must still download the stored document exactly as it
   // could before this whole fix landed. Refusal is now gated on there being unsaved work the flush
   // actually cannot save (dirty AND invalid) -- see the next test for that case.
-  it('a CLEAN, untouched quotation with a blocking validation error (no ผู้สั่งซื้อ) still downloads the stored document -- nothing to flush (D1 fix)', async () => {
+  // Owner-directed reversal of F2/V167 (2026-09-26): a missing ผู้สั่งซื้อ used to be exactly this
+  // kind of blocking validation error -- it no longer is (ผู้สั่งซื้อ is a single optional
+  // free-text field now), so these two D1/D1-dirty cases are reproduced with "no items" instead
+  // (QUOTATION_CHECK.ITEMS, still blocking) -- the SAME "clean vs dirty" distinction the fix is
+  // actually about, just via a check that is still blocking today.
+  it('a CLEAN, untouched quotation with a blocking validation error (no items) still downloads the stored document -- nothing to flush (D1 fix)', async () => {
     api.dealQuotations.get.mockResolvedValue({
-      quotation: draft({ contactId: null, contactName: null, contactPhone: null, contactEmail: null }),
+      quotation: draft({ items: [] }),
     });
     const showToast = renderEditor('/quotations/5');
     await screen.findByText('ข้อมูลที่ยังไม่ครบ');
@@ -155,9 +160,9 @@ describe('download flushes unsaved edits before rendering the document (2026-09-
     expect(showToast).not.toHaveBeenCalledWith('error', expect.anything());
   });
 
-  it('a DIRTY quotation with a blocking validation error (no ผู้สั่งซื้อ) still refuses the download outright -- no PDF call, a Thai toast instead', async () => {
+  it('a DIRTY quotation with a blocking validation error (no items) still refuses the download outright -- no PDF call, a Thai toast instead', async () => {
     api.dealQuotations.get.mockResolvedValue({
-      quotation: draft({ contactId: null, contactName: null, contactPhone: null, contactEmail: null }),
+      quotation: draft({ items: [] }),
     });
     const showToast = renderEditor('/quotations/5');
     await screen.findByText('ข้อมูลที่ยังไม่ครบ');

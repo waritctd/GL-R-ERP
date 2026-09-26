@@ -716,12 +716,9 @@ describe('QuotationEditorPage inline deal creation', () => {
     return { ...result, showToast, queryClient };
   }
 
-  const testContact = { id: 3, customerId: 1, firstName: 'ปรีชา', lastName: 'วงศ์สกุล', phone: '083-555-6666', email: 'preecha@tld.co.th' };
-
   async function selectCustomerAndProject() {
     api.customers.search.mockResolvedValue({ customers: [testCustomer] });
     api.customers.projects.mockResolvedValue({ projects: [testProject] });
-    api.customers.contacts.mockResolvedValue({ contacts: [testContact] });
 
     fireEvent.change(await screen.findByLabelText(/^ลูกค้า/), { target: { value: 'ก้าวหน้า' } });
     // role="option" since V4 (2026-09-10) — the typeahead popup is a listbox.
@@ -742,12 +739,6 @@ describe('QuotationEditorPage inline deal creation', () => {
   async function fillOneValidItem() {
     fireEvent.click(screen.getByRole('button', { name: /เพิ่มรายการ/ }));
     await fillCompleteQuotationItem();
-  }
-
-  // ผู้สั่งซื้อ, REQUIRED since owner feedback F2 (2026-09-10). Separate from
-  // selectCustomerAndProject so the gating test can observe the state BETWEEN the two.
-  async function selectContact() {
-    fireEvent.change(await screen.findByLabelText(/^ผู้สั่งซื้อ/), { target: { value: String(testContact.id) } });
   }
 
   beforeEach(() => {
@@ -774,17 +765,12 @@ describe('QuotationEditorPage inline deal creation', () => {
     expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(true);
     expect(screen.getByText('ต้องมีรายการสินค้าอย่างน้อย 1 รายการ')).not.toBeNull();
 
-    // F2: ผู้สั่งซื้อ is its own gate on top of ลูกค้า/โครงการ and item completeness.
+    // Owner-directed reversal of F2/V167 (2026-09-26): ผู้สั่งซื้อ used to be its own gate here,
+    // on top of ลูกค้า/โครงการ and item completeness -- filling the item alone now unblocks
+    // บันทึกร่าง, with no separate ผู้สั่งซื้อ requirement left to satisfy.
     await fillOneValidItem();
-    expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(true);
-    expect(screen.getAllByText('กรุณาระบุผู้สั่งซื้อ').length).toBeGreaterThan(0);
-
-    await selectContact();
     await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
-    // Custom timeout (matches the autosave tests' own convention below): this test drives a
-    // typeahead ลูกค้า/โครงการ pick, a full item fill AND a ผู้สั่งซื้อ pick with its now-editable
-    // โทร./อีเมล fields (gap fix, prod QT-2026-0041-1) in one run — genuinely more render/jsdom
-    // work than the default 5000ms budget, not a hang.
+    expect(screen.queryByText('กรุณาระบุผู้สั่งซื้อ')).toBeNull();
   }, 10000);
 
   it('บันทึกร่าง creates the ticket, then the quotation on it, then navigates to /quotations/{id}', async () => {
@@ -795,7 +781,6 @@ describe('QuotationEditorPage inline deal creation', () => {
 
     renderInlineCreate();
     await selectCustomerAndProject();
-    await selectContact();
     await fillOneValidItem();
     await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
 
@@ -808,7 +793,9 @@ describe('QuotationEditorPage inline deal creation', () => {
       customerName: testCustomer.name,
       customerId: testCustomer.id,
       projectId: testProject.id,
-      contactId: testContact.id,
+      // Owner-directed reversal of F2 (2026-09-26): the inline-create card no longer collects a
+      // ผู้สั่งซื้อ contact at all -- always null now.
+      contactId: null,
       entryChannel: 'UNSPECIFIED',
       priority: 'NORMAL',
       items: [],
@@ -830,7 +817,6 @@ describe('QuotationEditorPage inline deal creation', () => {
 
     const { showToast } = renderInlineCreate();
     await selectCustomerAndProject();
-    await selectContact();
     await fillOneValidItem();
     await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
 
@@ -851,7 +837,6 @@ describe('QuotationEditorPage inline deal creation', () => {
 
     const { showToast } = renderInlineCreate();
     await selectCustomerAndProject();
-    await selectContact();
     await fillOneValidItem();
     await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
 
@@ -1107,20 +1092,26 @@ describe('QuotationEditorPage ตำแหน่งติดตั้ง groups 
   });
 });
 
-describe('QuotationEditorPage ผู้สั่งซื้อ (owner feedback F2, 2026-09-10)', () => {
+// Owner-directed reversal of F2/V167 (2026-09-26): ผู้สั่งซื้อ is no longer a required
+// contact-picker dropdown -- these tests used to prove the picker prefilled/switched/blocked on a
+// contact; they now prove the OPPOSITE. ผู้สั่งซื้อ is a single optional free-text input writing
+// `terms.orderedByName`, `contactId` is always sent as `null`, and nothing about ผู้สั่งซื้อ can
+// ever block บันทึกร่าง/ส่งขออนุมัติ any more.
+describe('QuotationEditorPage ผู้สั่งซื้อ (owner-directed reversal of F2/V167, 2026-09-26)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.customers.contacts.mockResolvedValue({ contacts: CONTACT_OPTIONS });
     api.dealQuotations.calculateLine.mockResolvedValue({ item: {} });
   });
 
-  it('prefills from the deal\'s contact on the ?ticket= path and sends contactId on create', async () => {
+  it('renders ผู้สั่งซื้อ as a plain optional text input (no contact dropdown) and sends contactId: null', async () => {
     api.tickets.get.mockResolvedValue(ticketFixture());
     api.dealQuotations.create.mockResolvedValue({ quotation: { id: 9 } });
     renderEditor('/quotations/new?ticket=18');
 
-    const picker = await screen.findByLabelText(/^ผู้สั่งซื้อ/);
-    await waitFor(() => expect(picker.value).toBe('6'));
+    const field = await screen.findByLabelText(/^ผู้สั่งซื้อ/);
+    expect(field.tagName).toBe('INPUT'); // not the old <select> contact-picker
+    expect(field.value).toBe(''); // never auto-fills from the deal's own ticket contact any more
 
     fireEvent.click(screen.getByRole('button', { name: /เพิ่มรายการในตำแหน่งนี้/ }));
     await fillCompleteQuotationItem();
@@ -1128,17 +1119,17 @@ describe('QuotationEditorPage ผู้สั่งซื้อ (owner feedback 
     fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
 
     await waitFor(() => expect(api.dealQuotations.create).toHaveBeenCalledTimes(1));
-    expect(api.dealQuotations.create.mock.calls[0][1].contactId).toBe(6);
+    expect(api.dealQuotations.create.mock.calls[0][1].contactId).toBeNull();
+    expect(api.dealQuotations.create.mock.calls[0][1].orderedByName).toBeNull();
   });
 
-  it('is changeable, and the chosen contact is what gets sent', async () => {
+  it('what the rep types into ผู้สั่งซื้อ is sent as orderedByName, never as a contact', async () => {
     api.tickets.get.mockResolvedValue(ticketFixture());
     api.dealQuotations.create.mockResolvedValue({ quotation: { id: 9 } });
     renderEditor('/quotations/new?ticket=18');
 
-    const picker = await screen.findByLabelText(/^ผู้สั่งซื้อ/);
-    await waitFor(() => expect(picker.value).toBe('6'));
-    fireEvent.change(picker, { target: { value: '7' } });
+    const field = await screen.findByLabelText(/^ผู้สั่งซื้อ/);
+    fireEvent.change(field, { target: { value: 'คุณวิชัย มั่นคง' } });
 
     fireEvent.click(screen.getByRole('button', { name: /เพิ่มรายการในตำแหน่งนี้/ }));
     await fillCompleteQuotationItem();
@@ -1146,36 +1137,48 @@ describe('QuotationEditorPage ผู้สั่งซื้อ (owner feedback 
     fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
 
     await waitFor(() => expect(api.dealQuotations.create).toHaveBeenCalledTimes(1));
-    expect(api.dealQuotations.create.mock.calls[0][1].contactId).toBe(7);
+    expect(api.dealQuotations.create.mock.calls[0][1].orderedByName).toBe('คุณวิชัย มั่นคง');
+    expect(api.dealQuotations.create.mock.calls[0][1].contactId).toBeNull();
   });
 
-  // The gate itself, wrong-way-round: a deal with NO contact must not be saveable, and must say
-  // why in the same Thai the backend uses.
-  it('blocks บันทึกร่าง with "กรุณาระบุผู้สั่งซื้อ" when the deal has no contact', async () => {
+  // The gate itself is GONE, wrong-way-round: a deal with no ticket-level contact at all, and no
+  // ผู้สั่งซื้อ typed either, must still be saveable with no "กรุณาระบุผู้สั่งซื้อ" anywhere.
+  it('never blocks บันทึกร่าง on a missing ผู้สั่งซื้อ, and never shows "กรุณาระบุผู้สั่งซื้อ"', async () => {
     api.tickets.get.mockResolvedValue(ticketFixture({ contactId: null, contactName: null }));
+    api.dealQuotations.create.mockResolvedValue({ quotation: { id: 9 } });
     renderEditor('/quotations/new?ticket=18');
 
     fireEvent.click(await screen.findByRole('button', { name: /เพิ่มรายการในตำแหน่งนี้/ }));
     await fillCompleteQuotationItem();
 
-    await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(true));
-    expect(screen.getAllByText('กรุณาระบุผู้สั่งซื้อ').length).toBeGreaterThan(0);
-    expect(api.dealQuotations.create).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
+    expect(screen.queryByText('กรุณาระบุผู้สั่งซื้อ')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+
+    await waitFor(() => expect(api.dealQuotations.create).toHaveBeenCalledTimes(1));
+    expect(api.dealQuotations.create.mock.calls[0][1].contactId).toBeNull();
   });
 
-  // A saved quotation carries only contactId/contactName (no customerId), so the picker must show
-  // the frozen snapshot rather than falling back to a blank "nobody chosen".
-  it('shows an existing draft\'s frozen contact snapshot even before the option list loads', async () => {
+  // An existing draft's own `orderedByName` (not a contact snapshot) is what prefills the field.
+  it('prefills the field from an existing draft\'s own orderedByName', async () => {
     api.tickets.get.mockResolvedValue(ticketFixture());
-    api.customers.contacts.mockReturnValue(new Promise(() => {})); // never resolves
     api.dealQuotations.get.mockResolvedValue({
-      quotation: baseQuotation({ contactId: 7, contactName: 'พิมพ์ใจ บุญมาก' }),
+      quotation: baseQuotation({ orderedByName: 'คุณพิมพ์ใจ บุญมาก' }),
     });
     renderEditor('/quotations/5');
 
-    const picker = await screen.findByLabelText(/^ผู้สั่งซื้อ/);
-    await waitFor(() => expect(picker.value).toBe('7'));
-    expect(screen.getByRole('option', { name: 'พิมพ์ใจ บุญมาก' })).not.toBeNull();
+    const field = await screen.findByLabelText(/^ผู้สั่งซื้อ/);
+    await waitFor(() => expect(field.value).toBe('คุณพิมพ์ใจ บุญมาก'));
+  });
+
+  it('an inline-create quotation (no ticket yet) also renders ผู้สั่งซื้อ as an optional text input, not on DealCustomerCard', async () => {
+    renderEditor('/quotations/new');
+
+    // DealCustomerCard itself no longer renders a ผู้สั่งซื้อ control at all -- the field lives
+    // on the editor, right next to the card, same as the ticket/existing-draft path.
+    await screen.findByLabelText(/^ลูกค้า/);
+    const field = screen.getByLabelText(/^ผู้สั่งซื้อ/);
+    expect(field.tagName).toBe('INPUT');
   });
 });
 
@@ -1378,35 +1381,25 @@ describe('QuotationEditorPage terms card — item 2 + item 4 (owner ruling 2026-
     });
   }
 
-  it('"ไม่เติม “คุณ”" checkbox defaults unticked and sends false on save', async () => {
+  // Owner-directed reversal of F2/V167 (2026-09-26): the "ไม่เติม “คุณ”" checkbox lived under the
+  // ผู้สั่งซื้อ contact-picker, which is gone -- there is no contact name left for it to prefix, so
+  // the checkbox itself is gone from the editor too. `omitContactHonorific` is still a real field
+  // on the wire (DealQuotationService#resolveOmitContactHonorific still reads it), so this proves
+  // the editor now always sends it explicit `false` rather than reviving the removed control.
+  it('no longer renders the "ไม่เติม “คุณ”" checkbox, and always sends omitContactHonorific: false', async () => {
     api.dealQuotations.get.mockResolvedValue({ quotation: existingDraftWithOneItem() });
     api.dealQuotations.update.mockResolvedValue({ quotation: existingDraftWithOneItem() });
     renderEditor('/quotations/5');
 
-    const checkbox = await screen.findByRole('checkbox', { name: /ไม่เติม/ });
-    expect(checkbox.checked).toBe(false);
+    await waitFor(() => expect(screen.getByLabelText(/^ตำแหน่งติดตั้งที่ 1/).value).toBe('ชั้น 1'));
+    expect(screen.queryByRole('checkbox', { name: /ไม่เติม/ })).toBeNull();
 
-    // Dirty the form some OTHER way (ticking a checkbox that is already unticked would be a no-op
-    // patch) so บันทึกร่าง has something to send.
     fireEvent.change(screen.getByLabelText(/^ตำแหน่งติดตั้งที่ 1/), { target: { value: 'ชั้น 1 - โซน A' } });
     await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
     fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
 
     await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalledTimes(1));
     expect(api.dealQuotations.update.mock.calls[0][1].omitContactHonorific).toBe(false);
-  });
-
-  it('ticking "ไม่เติม “คุณ”" sends true on save', async () => {
-    api.dealQuotations.get.mockResolvedValue({ quotation: existingDraftWithOneItem() });
-    api.dealQuotations.update.mockResolvedValue({ quotation: existingDraftWithOneItem() });
-    renderEditor('/quotations/5');
-
-    fireEvent.click(await screen.findByRole('checkbox', { name: /ไม่เติม/ }));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
-
-    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalledTimes(1));
-    expect(api.dealQuotations.update.mock.calls[0][1].omitContactHonorific).toBe(true);
   });
 
   it('ticking "ไม่รับมัดจำ" hides the % chips and ส่วนที่เหลือ, and shows the three payment terms', async () => {

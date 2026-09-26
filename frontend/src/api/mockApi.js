@@ -5577,16 +5577,21 @@ function mockDealQuotationDisplayEmployee(id) {
 }
 
 // ผู้สั่งซื้อ resolution + the frozen snapshot V167 stores (owner feedback F2, 2026-09-10).
-// Mirrors DealQuotationService: `contactId` is OPTIONAL on the wire and defaults to the deal's own
-// `sales.ticket.contact_id`; what is REQUIRED is that one RESOLVES, and the chosen contact must
-// belong to the deal's customer. 400 "กรุณาระบุผู้สั่งซื้อ" otherwise — the same Thai string the
-// frontend's own pre-save check uses.
+// Mirrors DealQuotationService#resolveContact: `contactId` is OPTIONAL on the wire and defaults to
+// the deal's own `sales.ticket.contact_id`.
+//
+// ⚠️ Owner-directed reversal of V167/F2 (2026-09-26): resolving to a contact is no longer REQUIRED
+// either — this used to fail 400 "กรุณาระบุผู้สั่งซื้อ" when nothing resolved; it now mirrors the
+// relaxed Java method exactly and returns a blank snapshot instead. A contact id that IS given (or
+// inherited) still must belong to the deal's customer, still refused as 400 otherwise.
 //
 // ⚠️ AUTHZ CAVEAT (CLAUDE.md "Mock API contract"): the customer-ownership check below approximates
 // the Java service's and is NOT authoritative. Verify it against DealQuotationService, never here.
 function resolveDealQuotationContact(ticket, payload, current = null) {
   const requested = payload?.contactId ?? current?.contactId ?? ticket?.contactId ?? null;
-  if (requested == null) fail('กรุณาระบุผู้สั่งซื้อ', 400);
+  if (requested == null) {
+    return { contactId: null, contactName: null, contactPhone: null, contactEmail: null };
+  }
   const contact = mockContacts.find((c) => c.id === Number(requested));
   if (!contact) fail('กรุณาระบุผู้สั่งซื้อ', 400);
   if (ticket?.customerId != null && contact.customerId !== ticket.customerId) {
@@ -15002,9 +15007,10 @@ export const api = {
       if (!canTransitionDealQuotation(row.docStatus, 'PENDING_APPROVAL')) {
         fail(`ส่งขออนุมัติไม่ได้ในสถานะ '${row.docStatus}'`, 409);
       }
-      // F2: submit REQUIRES a ผู้สั่งซื้อ too, not just create/update -- a pre-V167 row can carry
-      // none, and that document cannot go for approval with an empty signature slot.
-      if (row.contactId == null) fail('กรุณาระบุผู้สั่งซื้อ', 400);
+      // ⚠️ Owner-directed reversal of V167/F2 (2026-09-26): submit used to REQUIRE a ผู้สั่งซื้อ too
+      // ("กรุณาระบุผู้สั่งซื้อ" -- a pre-V167 row could carry none, and that document could not go
+      // for approval with an empty signature slot). That refusal is gone, mirroring
+      // DealQuotationService#submit: a row with no contact at all now submits successfully.
       // Item 4 (V181, "ไม่รับมัดจำ", owner ruling 2026-09-16): a zero-deposit document must name a
       // payment term before an approver ever sees it -- create/update allow a DRAFT with none
       // chosen yet. Mirrors DealQuotationService#submit exactly.

@@ -68,13 +68,15 @@ describe('DealCustomerCard', () => {
 
     expect(screen.getByText(testCustomer.name)).not.toBeNull();
     expect(screen.queryByLabelText(/^ลูกค้า/)).toBeNull(); // the search input is gone, replaced by the chip
-    // Loads โครงการ/ผู้ติดต่อ for the newly-picked customer.
+    // Loads โครงการ for the newly-picked customer. Owner-directed reversal of F2/V167
+    // (2026-09-26): this card no longer fetches ผู้ติดต่อ at all -- the ผู้สั่งซื้อ contact-picker
+    // it used to render (and load contacts for) is gone.
     await waitFor(() => expect(api.customers.projects).toHaveBeenCalledWith(testCustomer.id));
-    await waitFor(() => expect(api.customers.contacts).toHaveBeenCalledWith(testCustomer.id));
+    expect(api.customers.contacts).not.toHaveBeenCalled();
   });
 
-  it('clearing the selected customer resets โครงการ/ผู้ติดต่อ too', async () => {
-    render(wrap(<Harness initial={{ customer: testCustomer, project: testProject, contact: testContact, entryChannel: 'UNSPECIFIED' }} />));
+  it('clearing the selected customer resets โครงการ too', async () => {
+    render(wrap(<Harness initial={{ customer: testCustomer, project: testProject, entryChannel: 'UNSPECIFIED' }} />));
 
     fireEvent.click(screen.getByRole('button', { name: 'ล้างลูกค้าที่เลือก' }));
 
