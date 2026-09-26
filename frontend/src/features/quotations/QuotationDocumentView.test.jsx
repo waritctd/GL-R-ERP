@@ -316,18 +316,33 @@ describe('QuotationDocumentView ตำแหน่งติดตั้ง group
   });
 });
 
-describe('QuotationDocumentView ผู้สั่งซื้อ signature slot (F2)', () => {
-  it('prints the frozen contact name as the fourth signature slot', () => {
-    const { getByText } = render(<QuotationDocumentView quotation={docQuotation()} />);
-    // Scoped to the signature panel: since 2026-09-11 the contact name ALSO heads the customer
-    // block (ติดต่อผู้สั่งซื้อ), exactly as the printed header does, so an unscoped query is ambiguous.
+describe('QuotationDocumentView ผู้สั่งซื้อ signature slot -- owner-directed reversal of F2 (2026-09-26)', () => {
+  it('prints the manually-typed orderedByName as the fourth signature slot', () => {
+    const { getByText } = render(
+      <QuotationDocumentView quotation={docQuotation({ orderedByName: 'คุณวิชัย มั่นคง' })} />,
+    );
+    // Scoped to the signature panel: the contact name ALSO heads the customer block
+    // (ติดต่อผู้สั่งซื้อ), exactly as the printed header does, so an unscoped query is ambiguous.
     const signatures = within(getByText('ผู้เกี่ยวข้อง').closest('section'));
     expect(signatures.getByText('ผู้สั่งซื้อ')).not.toBeNull();
-    expect(signatures.getByText('ณัฐพงศ์ ศรีวิไล')).not.toBeNull();
+    expect(signatures.getByText('คุณวิชัย มั่นคง')).not.toBeNull();
   });
 
-  it('falls back to a dash rather than an empty slot when the snapshot is missing', () => {
-    const { getByText, container } = render(<QuotationDocumentView quotation={docQuotation({ contactName: null })} />);
+  /** F2-reversal regression guard: this fixture's contactName ('ณัฐพงศ์ ศรีวิไล') must NEVER
+   * appear in the signature slot any more, even though it is present on the quotation -- the
+   * slot no longer auto-fills from it at all. */
+  it('never falls back to the contact name any more, even when one is recorded', () => {
+    const { getByText } = render(<QuotationDocumentView quotation={docQuotation()} />);
+    const signatures = within(getByText('ผู้เกี่ยวข้อง').closest('section'));
+    expect(signatures.getByText('ผู้สั่งซื้อ')).not.toBeNull();
+    expect(signatures.queryByText('ณัฐพงศ์ ศรีวิไล')).toBeNull();
+    expect(signatures.getByText('-')).not.toBeNull();
+  });
+
+  it('falls back to a dash rather than an empty slot when no manual name was typed', () => {
+    const { getByText, container } = render(
+      <QuotationDocumentView quotation={docQuotation({ orderedByName: null })} />,
+    );
     expect(getByText('ผู้สั่งซื้อ')).not.toBeNull();
     expect(container.textContent).toContain('-');
   });

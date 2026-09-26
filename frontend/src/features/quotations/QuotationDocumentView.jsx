@@ -285,11 +285,13 @@ export function QuotationDocumentView({ quotation }) {
         ) : null}
       </Panel>
 
-      {/* Four slots, matching the printed form's own signature block — ผู้สั่งซื้อ is the fourth
-          (owner feedback F2, 2026-09-10: "use that name to auto fill in the name for signature in
-          the quotation pdf"). The name shown here is the FROZEN `contactName` snapshot the DTO
-          carries, which is exactly what the renderer prints, so screen and paper cannot disagree
-          even if the customer's contact record is edited later. */}
+      {/* Four slots, matching the printed form's own signature block — ผู้สั่งซื้อ is the fourth.
+          Owner-directed REVERSAL of F2 (2026-09-10, hardened 2026-09-15, reversed 2026-09-26):
+          F2 used to auto-fill this slot from the contact/customer name; it never does any more.
+          The slot shows ONLY the rep's manually-typed `orderedByName` (see the "เขียนผู้สั่งซื้อ
+          เอง" field in the editor) and falls back to "-" here (the dotted signature line in the
+          actual PDF/XLSX) when left blank — mirroring exactly what
+          DealQuotationRenderAdapter#orderedByName prints, so screen and paper can never disagree. */}
       <Panel title="ผู้เกี่ยวข้อง">
         <div className="grid grid-cols-4 gap-4 tablet:grid-cols-2 mobile:grid-cols-1 text-center text-sm">
           <div>
@@ -308,7 +310,7 @@ export function QuotationDocumentView({ quotation }) {
           </div>
           <div>
             <span className="block text-2xs font-bold uppercase text-text-muted">{labels.orderedBy}</span>
-            <strong className="block mt-6 border-t border-border pt-2">{quotation.contactName ?? '-'}</strong>
+            <strong className="block mt-6 border-t border-border pt-2">{quotation.orderedByName ?? '-'}</strong>
           </div>
         </div>
       </Panel>

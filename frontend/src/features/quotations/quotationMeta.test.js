@@ -508,20 +508,50 @@ describe('validateQuotationItem (#M4, owner ruling 2026-09-10)', () => {
   });
 
   // ── Wording-scan fix 5 (2026-09-17): PIECES wastage must be a whole number ────────────────────
+  // Owner decision 2026-09-26: the PIECES/PERCENT unit this check applies to is now DERIVED from
+  // `priceMode` (wastageModeForPriceMode) -- NET/DIRECT_NET derive PIECES, SPECIAL_SQM derives
+  // PERCENT -- never read off the item's own (possibly stale) `wastageMode` field.
   describe('fractional PIECES-wastage rejection (owner-approved wording-scan finding 5)', () => {
-    it('refuses a fractional value in PIECES mode', () => {
-      const item = completeItem({ wastageMode: 'PIECES', wastageValue: 0.5 });
+    it('refuses a fractional value under a PIECES-derived price mode (NET)', () => {
+      const item = completeItem({ wastageValue: 0.5 });
       expect(validateQuotationItem(item, 'NET', 'TH').wastageValue).toBe('จำนวนแผ่นที่เผื่อต้องเป็นจำนวนเต็ม');
     });
 
-    it('wrong-way-round: a whole-number PIECES value is untouched', () => {
-      const item = completeItem({ wastageMode: 'PIECES', wastageValue: 2 });
+    it('refuses a fractional value under DIRECT_NET too', () => {
+      const item = completeItem({ wastageValue: 0.5, unitPrice: null, directNetPrice: 500 });
+      expect(validateQuotationItem(item, 'DIRECT_NET', 'TH').wastageValue).toBe('จำนวนแผ่นที่เผื่อต้องเป็นจำนวนเต็ม');
+    });
+
+    it('wrong-way-round: a whole-number PIECES-derived value is untouched', () => {
+      const item = completeItem({ wastageValue: 2 });
       expect(validateQuotationItem(item, 'NET', 'TH').wastageValue).toBeUndefined();
     });
 
-    it('PERCENT wastage keeps accepting a fractional value', () => {
+    it('a PERCENT-derived price mode (SPECIAL_SQM) keeps accepting a fractional value', () => {
+      const item = completeItem({ wastageValue: 2.5, specialPriceSqm: 1000 });
+      expect(validateQuotationItem(item, 'SPECIAL_SQM', 'TH').wastageValue).toBeUndefined();
+    });
+
+    it("a stale stored item.wastageMode never overrides the priceMode-derived unit", () => {
+      // A loaded quotation's row may carry a stored wastageMode that disagrees with the CURRENT
+      // price mode (e.g. saved under SPECIAL_SQM, then the document's price mode changed) -- the
+      // check must still follow priceMode, not the stale field.
       const item = completeItem({ wastageMode: 'PERCENT', wastageValue: 2.5 });
-      expect(validateQuotationItem(item, 'NET', 'TH').wastageValue).toBeUndefined();
+      expect(validateQuotationItem(item, 'NET', 'TH').wastageValue).toBe('จำนวนแผ่นที่เผื่อต้องเป็นจำนวนเต็ม');
+    });
+  });
+
+  describe('wastageModeForPriceMode (owner decision 2026-09-26)', () => {
+    it('SPECIAL_SQM derives PERCENT', () => {
+      expect(meta.wastageModeForPriceMode('SPECIAL_SQM')).toBe('PERCENT');
+    });
+
+    it('NET derives PIECES', () => {
+      expect(meta.wastageModeForPriceMode('NET')).toBe('PIECES');
+    });
+
+    it('DIRECT_NET derives PIECES', () => {
+      expect(meta.wastageModeForPriceMode('DIRECT_NET')).toBe('PIECES');
     });
   });
 });
@@ -1407,9 +1437,8 @@ describe('roundToFullBoxSummary', () => {
 // ── "ข้อมูลที่ยังไม่ครบ" checklist (owner, 2026-09-11) ─────────────────────────────────────────
 describe('buildQuotationChecklist', () => {
   const customer = { id: 5, name: 'บริษัท ก จำกัด', address: '1 ถนนสุขุมวิท', taxId: '0105551234567', phone: '02-000-0000' };
-  const contact = { id: 6, firstName: 'ธนพล', phone: '081-234-5678', email: 'a@b.co' };
   const complete = {
-    customer, projectName: 'โครงการ A', contact, items: [{ lineType: 'TILE' }], itemErrorsByRow: [{}],
+    customer, projectName: 'โครงการ A', items: [{ lineType: 'TILE' }], itemErrorsByRow: [{}],
   };
   const blocking = (entries) => entries.filter((e) => e.blocking).map((e) => e.check);
   const warnings = (entries) => entries.filter((e) => !e.blocking).map((e) => e.check);
@@ -1418,13 +1447,20 @@ describe('buildQuotationChecklist', () => {
     // Wording-scan fix 6 (2026-09-17): creditDaysInvalid joins the set — the backend already
     // refuses an explicit invalid (<=0) creditDays on every save, not just submit. creditDays
     // itself (the BLANK-on-draft reminder) stays a warning, same as fullPaymentTerm.
+    //
+    // Owner-directed reversal of F2/V167 (2026-09-26): 'contact' is GONE from this set —
+    // ผู้สั่งซื้อ is now a single optional free-text field with nothing left to block on.
     expect([...meta.QUOTATION_BLOCKING_CHECKS].sort()).toEqual(
-      ['contact', 'creditDaysInvalid', 'customer', 'items', 'locationLabels', 'priceModeLanguage', 'project'],
+      ['creditDaysInvalid', 'customer', 'items', 'locationLabels', 'priceModeLanguage', 'project'],
     );
     // Wrong-way-round: none of the header fields a customer might simply not have is blocking,
     // and the blank-creditDays reminder is a warning, not a blocker (fix 6).
-    ['customerAddress', 'customerTaxId', 'customerPhone', 'contactPhone', 'contactEmail', 'dealProject', 'creditDays']
+    ['customerAddress', 'customerTaxId', 'customerPhone', 'dealProject', 'creditDays']
       .forEach((check) => expect(meta.QUOTATION_BLOCKING_CHECKS.has(check)).toBe(false));
+    // The CONTACT/CONTACT_PHONE/CONTACT_EMAIL check names themselves no longer exist at all.
+    expect(Object.values(meta.QUOTATION_CHECK)).not.toContain('contact');
+    expect(Object.values(meta.QUOTATION_CHECK)).not.toContain('contactPhone');
+    expect(Object.values(meta.QUOTATION_CHECK)).not.toContain('contactEmail');
   });
 
   it('is empty for a complete quotation', () => {
@@ -1441,10 +1477,12 @@ describe('buildQuotationChecklist', () => {
     expect(Object.values(meta.QUOTATION_CHECK)).not.toContain('designer');
   });
 
-  it('BLOCKS on a missing ผู้สั่งซื้อ, with the backend\'s own wording, and targets the picker', () => {
-    const entries = meta.buildQuotationChecklist({ ...complete, contact: null });
-    expect(blocking(entries)).toEqual(['contact']);
-    expect(entries[0]).toMatchObject({ message: 'กรุณาระบุผู้สั่งซื้อ', targetId: 'quotation-contact' });
+  // Owner-directed reversal of F2/V167 (2026-09-26): ผู้สั่งซื้อ used to be its own blocking check
+  // here ("กรุณาระบุผู้สั่งซื้อ", targeting the picker) — it produces NO entry at all now, blocking
+  // or otherwise, regardless of whether a contact-shaped value is even passed in.
+  it('never checks ผู้สั่งซื้อ any more, whether or not a contact-shaped value is passed', () => {
+    expect(meta.buildQuotationChecklist({ ...complete, contact: null })).toEqual([]);
+    expect(meta.buildQuotationChecklist(complete)).toEqual([]);
   });
 
   it('does NOT block on a missing ที่อยู่ — it is a warning that targets the address field', () => {
@@ -1453,25 +1491,24 @@ describe('buildQuotationChecklist', () => {
     expect(entries).toEqual([{ check: 'customerAddress', message: 'ยังไม่ได้กรอกที่อยู่ลูกค้า', targetId: 'deal-customer-address', blocking: false }]);
   });
 
-  it('does NOT block on a missing เลขที่ผู้เสียภาษี (F7: a customer without one stays quotable), nor on any phone/email', () => {
+  it('does NOT block on a missing เลขที่ผู้เสียภาษี (F7: a customer without one stays quotable), nor on any phone', () => {
     const entries = meta.buildQuotationChecklist({
       ...complete,
       customer: { ...customer, taxId: null, phone: '  ' },
-      contact: { ...contact, phone: null, email: '' },
     });
     expect(blocking(entries)).toEqual([]);
-    expect(warnings(entries)).toEqual(['customerTaxId', 'customerPhone', 'contactPhone', 'contactEmail']);
+    expect(warnings(entries)).toEqual(['customerTaxId', 'customerPhone']);
   });
 
   it('raises nothing for a value that is merely UNKNOWN yet (undefined), only for a known-empty one', () => {
     const entries = meta.buildQuotationChecklist({
-      ...complete, customer: { id: 5, name: 'x' }, contact: { id: 6, firstName: 'y' }, projectName: undefined,
+      ...complete, customer: { id: 5, name: 'x' }, projectName: undefined,
     });
     expect(entries).toEqual([]);
   });
 
   it('on the inline path BLOCKS on ลูกค้า and โครงการ, targeting their controls', () => {
-    const entries = meta.buildQuotationChecklist({ ...complete, isInlineCreate: true, customer: null, hasProject: false, contactFieldId: 'deal-contact' });
+    const entries = meta.buildQuotationChecklist({ ...complete, isInlineCreate: true, customer: null, hasProject: false });
     expect(entries.slice(0, 2)).toEqual([
       { check: 'customer', message: 'ต้องเลือกลูกค้าก่อนบันทึกร่าง', targetId: 'deal-customer', blocking: true },
       { check: 'project', message: 'ต้องเลือกโครงการก่อนบันทึกร่าง', targetId: 'deal-project', blocking: true },

@@ -64,6 +64,26 @@ public final class DealQuotationRenderAdapter {
                                                       String approverSignatureMime,
                                                       List<String> bankBlockLines,
                                                       java.util.Map<Long, DealQuotationRepository.PictureImage> itemPictures) {
+        return toRenderModel(quotation, approverSignaturePng, approverSignatureMime, bankBlockLines, itemPictures,
+            null, null, null, null);
+    }
+
+    /**
+     * Task 4 (slot signatures, 2026-09-26): the full overload, additionally threading the
+     * ผู้พิมพ์ (slot 0) and พนักงานขาย (slot 1) signature image bytes — resolved LIVE by the
+     * caller ({@code DealQuotationService#toRenderModel}) the same way {@code approverSignaturePng}
+     * always has been, just never frozen into an approval snapshot the way the approver's is.
+     * Either pair may be null independently (that person has no signature on file, or the caller
+     * chose not to resolve one) — the corresponding slot then prints text-only, exactly as every
+     * slot always has. Kept as a SEPARATE overload (rather than adding params to the one above) so
+     * every existing caller of the five-argument overload keeps compiling unchanged.
+     */
+    public static QuotationRenderModel toRenderModel(DealQuotationDto quotation, byte[] approverSignaturePng,
+                                                      String approverSignatureMime,
+                                                      List<String> bankBlockLines,
+                                                      java.util.Map<Long, DealQuotationRepository.PictureImage> itemPictures,
+                                                      byte[] printedBySignaturePng, String printedBySignatureMime,
+                                                      byte[] salesRepSignaturePng, String salesRepSignatureMime) {
         // B4 (header วันที่) = the date the SALES REP CREATED the quotation, for every status —
         // owner feedback F8, 2026-09-10: "for วันที่ at the top of the page it should be the date
         // it was created by the sale". It used to print the APPROVED date once approved (and
@@ -200,7 +220,9 @@ public final class DealQuotationRenderAdapter {
             displayName(quotation.approvedByName(), quotation.approvedByNameEn(), english),
             orderedByName(quotation),
             approverSignaturePng, approverSignatureMime,
-            bangkokDate(quotation.createdAt()), bangkokDate(quotation.submittedAt()), bangkokDate(quotation.approvedAt()));
+            bangkokDate(quotation.createdAt()), bangkokDate(quotation.submittedAt()), bangkokDate(quotation.approvedAt()),
+            printedBySignaturePng, printedBySignatureMime,
+            salesRepSignaturePng, salesRepSignatureMime);
 
         // V182 (owner request, 2026-09-16): a document with NO tile line at all (sanitaryware sold
         // on ชุด/PLAIN lines) prints a different, shorter หมายเหตุ block — the tile-oriented remarks
@@ -1072,20 +1094,26 @@ public final class DealQuotationRenderAdapter {
         return thai;
     }
 
-    // ── Fix (2026-09-15, production complaint): ผู้สั่งซื้อ signature-name fallback ────────────
+    // ── Owner-directed reversal of F2 (2026-09-26) ────────────────────────────────────────────
+    // F2 (2026-09-10, "use that name to auto fill in the name for signature") auto-filled the
+    // ผู้สั่งซื้อ signature slot from the deal's contact snapshot, and a 2026-09-15 production fix
+    // widened that to fall back to the CUSTOMER name when a deal recorded no separate contact.
+    // The owner has now REVERSED both of those: this slot must NEVER auto-fill from
+    // contactName/customerName any more. It always prints the dotted
+    // {@code QuotationRenderer#BLANK_NAME_PLACEHOLDER} by default — the customer signs on paper —
+    // unless a sales rep has typed a manual name into {@code DealQuotationDto#orderedByName}
+    // ({@code sales.quotation.ordered_by_name}, V192), in which case THAT exact text prints here
+    // instead. Deliberately does NOT touch #printContactPart/the "เรียน ..." greeting line above,
+    // which still reads contactName/customerName exactly as before — this reversal is scoped to
+    // the SIGNATURE slot only.
 
-    /** The ผู้สั่งซื้อ (F2) signature-slot name: the deal's contact snapshot when there is one,
-     * else the CUSTOMER name -- production printed the dotted {@code
-     * QuotationRenderer#BLANK_NAME_PLACEHOLDER} on the signature line whenever a deal recorded no
-     * separate contact, even though the customer being quoted to is right there on the same
-     * document. {@code QuotationRenderer} only ever falls back to the placeholder when THIS
-     * returns null, i.e. when both fields are blank. Shared by both TH/EN documents -- {@code
-     * Signatories} is built once above for either language. */
+    /** The ผู้สั่งซื้อ signature-slot name: the rep's manually-typed {@link
+     * DealQuotationDto#orderedByName}, or null (the dotted placeholder) when they left it blank.
+     * {@code QuotationRenderer} only ever falls back to the placeholder when THIS returns null.
+     * Shared by both TH/EN documents -- {@code Signatories} is built once above for either
+     * language. */
     static String orderedByName(DealQuotationDto quotation) {
-        if (!blank(quotation.contactName())) {
-            return quotation.contactName().trim();
-        }
-        return blank(quotation.customerName()) ? null : quotation.customerName().trim();
+        return blank(quotation.orderedByName()) ? null : quotation.orderedByName().trim();
     }
 
     // ── V179 (owner feedback #4, 2026-09-14): ผู้พิมพ์/พนักงานขาย print-name override ──────────

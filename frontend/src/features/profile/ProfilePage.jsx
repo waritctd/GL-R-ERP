@@ -15,9 +15,20 @@ import { SignatureCard } from './SignatureCard.jsx';
 // Quotation v2's approver signature card (QUOTATION-V2-PLAN.md): "self, ceo, or admin capability"
 // may WRITE it, but this card only ever renders for the user's OWN profile (there is no
 // view-someone-else's-profile page), so the narrower "self" half of that gate is all this needs
-// -- restricted further to the plan's two approver roles so a sales/import/account/hr viewer
-// (who never approves a quotation) doesn't see a card with nothing to do.
-const SIGNATURE_CARD_ROLES = new Set(['ceo', 'sales_manager']);
+// -- restricted further to the roles who can appear in a quotation's signature block at all, so a
+// import/account/hr viewer (who never appears there) doesn't see a card with nothing to do.
+//
+// Task 4 (slot signatures, 2026-09-26): widened to include 'sales' -- the rep now draws in the
+// ผู้พิมพ์/พนักงานขาย slots too (QuotationRenderer#writeSignatureBlock), and
+// EmployeeSignatureService#upload already permits "self" regardless of role, so this was purely a
+// frontend gate lagging the backend's actual capability. Backend authz is untouched here.
+//
+// NOTE (flagged, out of scope for this widen): a QC user with `can_create_quotation` (e.g.
+// ภิญญดา) can also be picked as printedBy/salesRep on a display override and is therefore
+// picker-eligible the same way -- but QC is not a role this list covers, and adding a
+// capability-based (rather than role-based) gate here is a separate, deliberate change left for
+// its own task.
+const SIGNATURE_CARD_ROLES = new Set(['ceo', 'sales_manager', 'sales']);
 
 const MY_REQUESTS_TABLE_GRID = 'grid-cols-[minmax(0,1.2fr)_minmax(0,2fr)_minmax(0,2fr)_minmax(0,0.9fr)_minmax(0,1fr)] nav-drawer:min-w-[900px] reflow-cards';
 

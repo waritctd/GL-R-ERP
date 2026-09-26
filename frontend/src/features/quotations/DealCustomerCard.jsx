@@ -8,7 +8,6 @@ import { Modal } from '../../components/common/Modal.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { entryChannelLabel } from '../../utils/format.js';
 import { CustomerDetailsFields } from './CustomerDetailsFields.jsx';
-import { QuotationContactPicker } from './QuotationContactPicker.jsx';
 
 // ช่องทางรับงาน (owner ask 2026-09-10): the same four codes th.co.glr.hr.ticket.EntryChannel
 // stores, in the order the spec lists them. Deliberately includes UNSPECIFIED as a pickable
@@ -25,16 +24,20 @@ function emptyNewCustomer() {
  * "ลูกค้าและโครงการ" -- the inline deal-creation card at the top of QuotationEditorPage when a
  * sales rep opens `/quotations/new` with no `?ticket=` (owner ask 2026-09-10,
  * `inline-deal-spec.md`). Lets the rep pick or create a customer, then a project under it, then
- * the ผู้สั่งซื้อ (REQUIRED since owner feedback F2, 2026-09-10 -- rendered by the shared
- * QuotationContactPicker, which the editor also uses on the paths where this card is absent), and
- * pick the entry channel -- everything TicketService.create needs
- * that isn't already implied by the quotation items themselves. The parent owns the selected
- * values (`value`/`onChange`, the same controlled-field contract QuotationItemRow.jsx uses for
- * its own patch-upward pattern); this component owns only its own transient search/create UI
- * state, exactly like QuotationItemRow's catalog typeahead.
+ * pick the entry channel -- everything TicketService.create needs that isn't already implied by
+ * the quotation items themselves. The parent owns the selected values (`value`/`onChange`, the
+ * same controlled-field contract QuotationItemRow.jsx uses for its own patch-upward pattern); this
+ * component owns only its own transient search/create UI state, exactly like QuotationItemRow's
+ * catalog typeahead.
+ *
+ * Owner-directed reversal of F2/V167 (2026-09-26): ผู้สั่งซื้อ used to be required here too,
+ * rendered by the shared QuotationContactPicker (still used elsewhere -- see its own header
+ * comment -- just no longer here). ผู้สั่งซื้อ is now a single optional free-text field
+ * (`terms.orderedByName`) the editor itself renders next to this card, not something this card
+ * collects at all.
  */
 export function DealCustomerCard({ value, onChange, errors, showToast }) {
-  const { customer, project, contact, entryChannel, omitContactHonorific } = value;
+  const { customer, project, entryChannel } = value;
 
   // ── ลูกค้า typeahead ──────────────────────────────────────────────────────────────────────
   const [customerSearch, setCustomerSearch] = useState('');
@@ -141,9 +144,6 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
     }
   }
 
-  // ผู้สั่งซื้อ itself now lives in QuotationContactPicker (owner feedback F2, 2026-09-10) --
-  // including its own contact fetch -- because the editor needs the same control on the
-  // `?ticket=` and existing-DRAFT paths, where this card is not rendered at all.
   useEffect(() => {
     if (!customer) {
       setProjectOptions([]);
@@ -174,10 +174,10 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
   }
 
   function selectCustomer(next) {
-    // Picking a NEW customer always resets โครงการ/ผู้ติดต่อ -- either was scoped to the
-    // previous customer and cannot carry over. Also drops any in-progress โครงการ filter text/popup
-    // state, which otherwise would go on filtering the NEW customer's project list.
-    onChange({ customer: next, project: null, contact: null });
+    // Picking a NEW customer always resets โครงการ -- it was scoped to the previous customer and
+    // cannot carry over. Also drops any in-progress โครงการ filter text/popup state, which
+    // otherwise would go on filtering the NEW customer's project list.
+    onChange({ customer: next, project: null });
     setCustomerSearch('');
     setCustomerResults([]);
     setCustomerOpen(false);
@@ -187,7 +187,7 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
   }
 
   function clearCustomer() {
-    onChange({ customer: null, project: null, contact: null });
+    onChange({ customer: null, project: null });
     setProjectSearch('');
     closeProjectDropdown();
   }
@@ -506,33 +506,20 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
         </Modal>
       ) : null}
 
-      <div className="mt-3 grid grid-cols-2 gap-3 mobile:grid-cols-1">
-        <QuotationContactPicker
-          customerId={customer?.id ?? null}
-          customerName={customer?.name ?? null}
-          value={contact}
-          onChange={(next) => onChange({ contact: next })}
-          error={errors?.contact}
-          showToast={showToast}
-          omitContactHonorific={omitContactHonorific}
-          onChangeOmitContactHonorific={(next) => onChange({ omitContactHonorific: next })}
-        />
-
-        <div>
-          <span className="mb-1 block text-xs">ช่องทางรับงาน</span>
-          <div className="flex flex-wrap gap-2">
-            {ENTRY_CHANNEL_CODES.map((code) => (
-              <button
-                key={code}
-                type="button"
-                aria-pressed={entryChannel === code}
-                className={`min-h-[38px] mobile:min-h-[44px] rounded-md border px-3 text-xs font-bold ${entryChannel === code ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface'}`}
-                onClick={() => onChange({ entryChannel: code })}
-              >
-                {entryChannelLabel(code).label}
-              </button>
-            ))}
-          </div>
+      <div className="mt-3">
+        <span className="mb-1 block text-xs">ช่องทางรับงาน</span>
+        <div className="flex flex-wrap gap-2">
+          {ENTRY_CHANNEL_CODES.map((code) => (
+            <button
+              key={code}
+              type="button"
+              aria-pressed={entryChannel === code}
+              className={`min-h-[38px] mobile:min-h-[44px] rounded-md border px-3 text-xs font-bold ${entryChannel === code ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface'}`}
+              onClick={() => onChange({ entryChannel: code })}
+            >
+              {entryChannelLabel(code).label}
+            </button>
+          ))}
         </div>
       </div>
 

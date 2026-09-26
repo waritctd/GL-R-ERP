@@ -301,7 +301,10 @@ public class DealQuotationService {
             resolveOmitContactHonorific(request.omitContactHonorific()), fullPaymentTerm,
             // A brand-new document is neither a revision (parentQuotationId) nor a reorder clone
             // (derivedFromQuotationId) — both null.
-            subtotal, null, 1, null, items));
+            subtotal, null, 1, null, items,
+            // Owner-directed reversal of F2 (2026-09-26) — manual, optional buyer name; blank
+            // clears it to null, same discipline as every other free-text header field here.
+            blankToNull(request.orderedByName())));
         return requireQuotation(id);
     }
 
@@ -500,7 +503,11 @@ public class DealQuotationService {
             summary.omitContactHonorific(), null,
             subtotal, null, revisionNo, null, items,
             "PRICING_REQUEST", summary.recipientType(), summary.recipientLabel(),
-            summary.id(), decision.id()));
+            summary.id(), decision.id(),
+            // Owner-directed reversal of F2 (2026-09-26) — nothing to inherit on a brand-new
+            // PRICING_REQUEST-origin create; the rep sets a manual name later via #update, same
+            // as any DEAL_DIRECT document.
+            null));
 
         pricingRequests.addEvent(summary.id(), summary.ticketId(), actor.id(), actor.name(),
             PricingRequestEventKind.CUSTOMER_QUOTATION_CREATED, summary.status(), summary.status(),
@@ -852,7 +859,11 @@ public class DealQuotationService {
             // case — blankToNull(null) clears it, exactly like every other free-text header field
             // on this same call (customerNotes, deptCode, unitCode).
             blankToNull(request.projectName()),
-            omitContactHonorific, fullPaymentTerm);
+            omitContactHonorific, fullPaymentTerm,
+            // Owner-directed reversal of F2 (2026-09-26) — manual, optional buyer name; the
+            // editor always sends its current value, so blank genuinely clears it back to the
+            // dotted placeholder, same discipline as projectName/customerNotes above.
+            blankToNull(request.orderedByName()));
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงแก้ไขไม่ได้");
         }
@@ -1095,17 +1106,17 @@ public class DealQuotationService {
         DealQuotationDto quotation = requireQuotation(id);
         requireEditAccessForQuotation(actor, quotation);
         // GLA-123 slice S2: submit is now LIVE for BOTH origins — every validation below (item
-        // completeness, ผู้สั่งซื้อ, payment term, validity date) is origin-agnostic and applies
-        // unchanged; only approve/reject/issue diverge (see #approve/#reject's own origin branch).
+        // completeness, payment term, validity date) is origin-agnostic and applies unchanged;
+        // only approve/reject/issue diverge (see #approve/#reject's own origin branch).
         if (quotation.items().isEmpty()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ใบเสนอราคาต้องมีอย่างน้อยหนึ่งรายการก่อนส่งขออนุมัติ");
         }
-        // ผู้สั่งซื้อ is mandatory (owner feedback F2): create/update already refuse a draft with no
-        // resolvable contact, so this only ever catches a row that predates V167 on a ticket that
-        // had no contact -- it stays a draft until the rep saves it with one.
-        if (quotation.contactId() == null || isBlank(quotation.contactName())) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาระบุผู้สั่งซื้อ");
-        }
+        // ⚠️ Owner-directed reversal of V167/F2 (2026-09-26): ผู้สั่งซื้อ used to be mandatory here
+        // ("กรุณาระบุผู้สั่งซื้อ" refused a submit with no resolvable contact) — the frontend's
+        // required contact-picker dropdown is gone, replaced by a single optional free-text
+        // signature-name field (`orderedByName`, unrelated to `contactId`/`contactName`), so a
+        // quotation with no contact at all must now submit successfully. See #resolveContact's own
+        // comment for the matching create/update-side relaxation.
         // Item 4 ("ไม่รับมัดจำ", V181, owner ruling 2026-09-16): a zero-deposit document must name
         // ONE of the three payment terms before an approver ever sees it — create/update allow a
         // DRAFT to be saved with no term chosen yet (isZeroDeposit(...) ? blankToNull(...) : null),
@@ -2001,7 +2012,10 @@ public class DealQuotationService {
             // zero-deposit term the rep already picked on the source document.
             source.omitContactHonorific(), source.fullPaymentTerm(),
             source.subtotalAmount(), parentQuotationId,
-            nextRevisionNo, derivedFromQuotationId, items));
+            nextRevisionNo, derivedFromQuotationId, items,
+            // Owner-directed reversal of F2 (2026-09-26) — the copy inherits the source's manual
+            // buyer name VERBATIM, same "copy every header field" rule as everything else here.
+            source.orderedByName()));
         // GLA-75: "the copy carries the source's items verbatim" includes their pictures — the new
         // row's items point at the source's (immutable, shared) picture rows, matched by seq.
         // Shared by revisions and reorder clones alike.
@@ -2164,7 +2178,19 @@ public class DealQuotationService {
      * <p>GLA-123 slice S2 REWORK (owner reversed the dual-approval design, 2026-09-20): this read
      * is now shared verbatim by BOTH origins — whoever approves a PRICING_REQUEST-origin
      * quotation freezes into the SAME single snapshot row DEAL_DIRECT's own {@code #approve}
-     * writes, so there is no origin branching left here at all. */
+     * writes, so there is no origin branching left here at all.
+     *
+     * <p>Task 4 (slot signatures, 2026-09-26): ผู้พิมพ์ (slot 0) and พนักงานขาย (slot 1) each also
+     * get a signature image, resolved LIVE — {@code signatures.find(id)} straight off
+     * {@code hr.employee_signature} — every time this renders, NEVER frozen into a snapshot the
+     * way the approver's is (there is no approval event that would even define when to freeze
+     * these two). The id resolved is whichever the rep actually selected: the display override
+     * when set ({@code printedByDisplayId}/{@code salesRepDisplayId} — the same V179 ids the name
+     * override already reads), else the real deal-ownership id ({@code createdById}/
+     * {@code salesRepId}). A missing signature for that id, or the id happening to equal the
+     * approver's, is handled the same uneventful way: {@code signatures.find} returns empty and
+     * the slot just prints its text-only name, exactly as it always has — no special-casing
+     * needed, each slot's resolution is fully independent of the other two. */
     private th.co.glr.hr.ticket.QuotationRenderModel toRenderModel(DealQuotationDto quotation) {
         byte[] signaturePng = null;
         String signatureMime = null;
@@ -2184,8 +2210,31 @@ public class DealQuotationService {
         Map<Long, PictureImage> itemPictures = quotation.items().stream().anyMatch(DealQuotationItemDto::hasPicture)
             ? quotations.findPictureImagesForQuotation(quotation.id())
             : Map.of();
+
+        long printedById = quotation.printedByDisplayId() != null
+            ? quotation.printedByDisplayId() : quotation.createdById();
+        byte[] printedBySignaturePng = null;
+        String printedBySignatureMime = null;
+        var printedBySignature = signatures.find(printedById);
+        if (printedBySignature.isPresent()) {
+            printedBySignaturePng = printedBySignature.get().image();
+            printedBySignatureMime = printedBySignature.get().mimeType();
+        }
+
+        long salesRepId = quotation.salesRepDisplayId() != null
+            ? quotation.salesRepDisplayId() : quotation.salesRepId();
+        byte[] salesRepSignaturePng = null;
+        String salesRepSignatureMime = null;
+        var salesRepSignature = signatures.find(salesRepId);
+        if (salesRepSignature.isPresent()) {
+            salesRepSignaturePng = salesRepSignature.get().image();
+            salesRepSignatureMime = salesRepSignature.get().mimeType();
+        }
+
         return DealQuotationRenderAdapter.toRenderModel(quotation, signaturePng, signatureMime,
-            bankBlockLines, itemPictures);
+            bankBlockLines, itemPictures,
+            printedBySignaturePng, printedBySignatureMime,
+            salesRepSignaturePng, salesRepSignatureMime);
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -2287,19 +2336,27 @@ public class DealQuotationService {
      * Resolves the ผู้สั่งซื้อ for a create/update and returns the FROZEN snapshot to store —
      * precedence: the request's own {@code contactId}, else the contact the draft already carries
      * ({@code existingContactId}, update only), else the deal's contact
-     * ({@code sales.ticket.contact_id}). None → 400 "กรุณาระบุผู้สั่งซื้อ" (the owner's rule: a
-     * quotation cannot be saved without one). The contact must exist and belong to the deal's
-     * customer — a contact id from another customer is a client bug or a probe, refused as 400 with
-     * the same wording so nothing about other customers' contacts leaks. The name/phone/email are
-     * read NOW and written onto the quotation; a later edit of the contact row never changes the
-     * document (see V167's header for why that matters for an approved, emailed PDF).
+     * ({@code sales.ticket.contact_id}).
+     *
+     * ⚠️ Owner-directed reversal of V167/F2 (2026-09-26): a resolvable contact is NO LONGER
+     * required. This used to throw 400 "กรุณาระบุผู้สั่งซื้อ" when nothing in the precedence chain
+     * resolved (the owner's original rule: a quotation could not be saved without one) — the
+     * frontend's required contact-picker dropdown that rule existed for is gone (ผู้สั่งซื้อ is now
+     * a single optional free-text signature-name field, `orderedByName`, tracked entirely
+     * separately from this contact snapshot), so a create/update/submit with no contact anywhere in
+     * the chain now returns a blank snapshot instead of refusing. A contact id that IS given (or
+     * inherited) is still validated exactly as before: it must exist and belong to the deal's
+     * customer — a contact id from another customer is a client bug or a probe, still refused as
+     * 400 with the same wording so nothing about other customers' contacts leaks. The name/phone/
+     * email are read NOW and written onto the quotation; a later edit of the contact row never
+     * changes the document (see V167's header for why that matters for an approved, emailed PDF).
      */
     private ContactSnapshot resolveContact(Long requestedContactId, Long existingContactId, TicketSummaryDto ticket) {
         Long contactId = requestedContactId != null ? requestedContactId
             : existingContactId != null ? existingContactId
             : ticket.contactId();
         if (contactId == null) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาระบุผู้สั่งซื้อ");
+            return new ContactSnapshot(null, null, null, null);
         }
         ContactDto contact = contacts.findById(contactId)
             .filter(c -> ticket.customerId() != null && c.customerId() == ticket.customerId())

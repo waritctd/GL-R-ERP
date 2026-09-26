@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { api } from '../../api/index.js';
 import {
@@ -14,8 +14,8 @@ vi.mock('../../api/index.js', () => ({
 
 function renderRow(itemOverrides = {}, onChange = vi.fn()) {
   const item = { ...emptyQuotationItem(), ...itemOverrides };
-  render(<QuotationItemRow item={item} index={0} onChange={onChange} onRemove={vi.fn()} />);
-  return { item, onChange };
+  const { container } = render(<QuotationItemRow item={item} index={0} onChange={onChange} onRemove={vi.fn()} />);
+  return { item, onChange, container };
 }
 
 describe('QuotationItemRow — English per-sqm (owner decision 2026-09-13)', () => {
@@ -241,15 +241,77 @@ describe('QuotationItemRow', () => {
     expect(onChange).not.toHaveBeenCalledWith(expect.objectContaining({ productCode: expect.anything() }));
   });
 
-  // #L4: "กำหนดเอง" must open the custom input, not silently write an arbitrary 12%.
-  it('"กำหนดเอง" opens the custom wastage input without changing the item value', () => {
-    const { onChange } = renderRow({ wastageMode: 'PERCENT', wastageValue: 0 });
+  // Owner decision 2026-09-26: the %/แผ่น unit is no longer a rep-set toggle -- it is DERIVED from
+  // the document's price mode (wastageModeForPriceMode) and shown read-only. The manual "กรอกเอง"
+  // box stays always visible, as it was after the #L4 redesign.
+  describe('เผื่อ (wastage) — unit derived from priceMode, read-only', () => {
+    // The จำนวน quantity-mode toggle above this field ALSO has a button labelled "แผ่น" (ตร.ม./
+    // แผ่น), so every query here is scoped with `within` to this field's own FormField root
+    // (found via its label) rather than the whole row.
+    function wastageField() {
+      return within(screen.getByText('เผื่อ (wastage)').closest('label').parentElement);
+    }
 
-    fireEvent.click(screen.getByRole('button', { name: 'กำหนดเอง' }));
+    function renderWithPriceMode(priceMode, itemOverrides = {}) {
+      const onChange = vi.fn();
+      const item = { ...emptyQuotationItem(), ...itemOverrides };
+      const { container } = render(
+        <QuotationItemRow item={item} index={0} onChange={onChange} onRemove={vi.fn()} priceMode={priceMode} />,
+      );
+      return { onChange, container };
+    }
 
-    expect(onChange).not.toHaveBeenCalled();
-    // The custom input is now showing (there was none before, since 0 is itself a preset).
-    expect(screen.getByLabelText('เผื่อ (wastage)')).not.toBeNull();
+    it('SPECIAL_SQM: manual box has a % suffix and the 0/5/10/15/20 presets render', () => {
+      const { container } = renderWithPriceMode('SPECIAL_SQM');
+      expect(screen.getByLabelText('เผื่อ (wastage)')).not.toBeNull();
+      expect(container.querySelector(`#waste-0 + span`).textContent).toBe('%');
+      ['0%', '5%', '10%', '15%', '20%'].forEach((label) => {
+        expect(wastageField().getByRole('button', { name: label })).not.toBeNull();
+      });
+    });
+
+    it('NET: manual box has a แผ่น suffix and no % presets render', () => {
+      const { container } = renderWithPriceMode('NET');
+      expect(container.querySelector(`#waste-0 + span`).textContent).toBe('แผ่น');
+      expect(wastageField().queryByRole('button', { name: '5%' })).toBeNull();
+    });
+
+    it('DIRECT_NET: manual box has a แผ่น suffix and no % presets render', () => {
+      const { container } = renderWithPriceMode('DIRECT_NET');
+      expect(container.querySelector(`#waste-0 + span`).textContent).toBe('แผ่น');
+      expect(wastageField().queryByRole('button', { name: '5%' })).toBeNull();
+    });
+
+    it('has no %/แผ่น mode-switch toggle left to click', () => {
+      renderWithPriceMode('SPECIAL_SQM');
+      expect(wastageField().queryByRole('button', { name: '%' })).toBeNull();
+      expect(wastageField().queryByRole('button', { name: 'แผ่น' })).toBeNull();
+    });
+
+    it('a stale stored item.wastageMode never affects the rendered unit', () => {
+      // Loaded-quotation edge case: the row's own stored wastageMode may disagree with what the
+      // CURRENT price mode derives (e.g. a quotation saved under NET, loaded, then switched to
+      // SPECIAL_SQM before this row re-synced) -- the unit always follows priceMode, never the
+      // stale field.
+      const { container } = renderWithPriceMode('SPECIAL_SQM', { wastageMode: 'PIECES', wastageValue: 4 });
+      expect(container.querySelector(`#waste-0 + span`).textContent).toBe('%');
+    });
+
+    it('clicking a preset chip patches only wastageValue, not wastageMode', () => {
+      const { onChange } = renderWithPriceMode('SPECIAL_SQM');
+
+      fireEvent.click(wastageField().getByRole('button', { name: '15%' }));
+
+      expect(onChange).toHaveBeenCalledWith({ wastageValue: 15 });
+    });
+
+    it('typing into the manual box patches only wastageValue', () => {
+      const { onChange } = renderWithPriceMode('NET');
+
+      fireEvent.change(screen.getByLabelText('เผื่อ (wastage)'), { target: { value: '3' } });
+
+      expect(onChange).toHaveBeenCalledWith({ wastageValue: 3 });
+    });
   });
 
   // #L1: the max lead-time input needs its OWN accessible name, not just the shared FormField
@@ -1024,10 +1086,9 @@ describe('QuotationItemRow — hidePricing (V185)', () => {
     expect(screen.getByLabelText(/^แผ่น\/ตร\.ม\./)).not.toBeNull();
     expect(screen.getByLabelText(/^แผ่น\/กล่อง/)).not.toBeNull();
     expect(screen.getByLabelText(/^จำนวน/)).not.toBeNull();
-    // "เผื่อ (wastage)"'s FormField htmlFor points at an input that only renders once a
-    // "กำหนดเอง"/PIECES custom value is in play — getByLabelText has nothing to pair with on a
-    // fresh row, so the label text itself is what is asserted here instead.
-    expect(screen.getByText('เผื่อ (wastage)')).not.toBeNull();
+    // %/แผ่น redesign: the manual "กรอกเอง" box is now always rendered (no more
+    // "กำหนดเอง"/PIECES-only gating), so getByLabelText resolves directly on a fresh row.
+    expect(screen.getByLabelText('เผื่อ (wastage)')).not.toBeNull();
     expect(screen.getByLabelText(/^ประเทศต้นทาง/)).not.toBeNull();
     expect(screen.getByLabelText(/^ระยะเวลานำเข้า \(วัน\)/)).not.toBeNull();
   });

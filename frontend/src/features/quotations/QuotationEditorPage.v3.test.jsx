@@ -220,6 +220,55 @@ describe('v3/v3b document settings', () => {
     expect(payload.items[1]).toMatchObject({ lineType: 'PLAIN', unitPrice: 700, quantity: 1 });
   }, 25000);
 
+  // Owner decision 2026-09-26: เผื่อ (wastage) no longer has its own rep-set toggle -- its %/แผ่น
+  // unit is DERIVED from วิธีกรอกราคากระเบื้อง (docSettings.priceMode). A percent and a piece count
+  // are never comparable numbers (the same reasoning the removed per-row toggle used to reset on a
+  // manual mode click), so `applyPriceMode` resets every tile row's `wastageValue` to 0 whenever the
+  // switch flips the DERIVED unit -- but only then.
+  describe('เผื่อ (wastage) value reset on a price-mode switch that flips the derived unit', () => {
+    it('NET (แผ่น) → SPECIAL_SQM (%) resets wastageValue to 0', async () => {
+      api.dealQuotations.get.mockResolvedValue({
+        quotation: draft({ priceMode: 'NET', items: [{ ...TILE_ITEM, wastageValue: 10 }] }),
+      });
+      renderEditor('/quotations/5');
+      await waitFor(() => expect(byId('waste-0')?.value).toBe('10'));
+
+      fireEvent.click(within(group('วิธีกรอกราคากระเบื้อง')).getByRole('button', { name: 'ราคาพิเศษ บาท/ตร.ม.' }));
+
+      await waitFor(() => expect(byId('waste-0').value).toBe('0'));
+    });
+
+    it('NET (แผ่น) → DIRECT_NET (แผ่น) does NOT reset wastageValue — the unit stays the same', async () => {
+      api.dealQuotations.get.mockResolvedValue({
+        quotation: draft({ priceMode: 'NET', items: [{ ...TILE_ITEM, wastageValue: 10 }] }),
+      });
+      renderEditor('/quotations/5');
+      await waitFor(() => expect(byId('waste-0')?.value).toBe('10'));
+
+      fireEvent.click(within(group('วิธีกรอกราคากระเบื้อง')).getByRole('button', { name: 'ราคาสุทธิต่อแผ่น' }));
+
+      // Give the debounced preview a tick to run, same as this file's other price-mode-switch
+      // assertions -- proves the value truly survived rather than the assertion racing the switch.
+      await flushPreviewDebounce();
+      expect(byId('waste-0').value).toBe('10');
+    });
+
+    it('SPECIAL_SQM (%) → NET (แผ่น) resets wastageValue to 0', async () => {
+      api.dealQuotations.get.mockResolvedValue({
+        quotation: draft({
+          priceMode: 'SPECIAL_SQM',
+          items: [{ ...TILE_ITEM, wastageValue: 15, specialPriceSqm: 1350, netUnitPrice: 453.84 }],
+        }),
+      });
+      renderEditor('/quotations/5');
+      await waitFor(() => expect(byId('waste-0')?.value).toBe('15'));
+
+      fireEvent.click(within(group('วิธีกรอกราคากระเบื้อง')).getByRole('button', { name: 'ราคาตั้ง − ส่วนลด %' }));
+
+      await waitFor(() => expect(byId('waste-0').value).toBe('0'));
+    });
+  });
+
   it('switching back does NOT restore any cleared price', async () => {
     api.dealQuotations.get.mockResolvedValue({
       quotation: draft({ priceMode: 'SPECIAL_SQM', items: [{ ...TILE_ITEM, specialPriceSqm: 1350, netUnitPrice: 453.84 }, PLAIN_ITEM] }),
@@ -552,15 +601,19 @@ describe('"ข้อมูลที่ยังไม่ครบ" checklist (ow
     expect(screen.getByRole('button', { name: 'ส่งขออนุมัติ' }).disabled).toBe(false);
   });
 
-  it('a missing ผู้สั่งซื้อ BLOCKS ส่งขออนุมัติ', async () => {
+  // Owner-directed reversal of F2/V167 (2026-09-26): a missing ผู้สั่งซื้อ used to BLOCK
+  // ส่งขออนุมัติ here — it no longer produces any checklist entry, blocking or otherwise, and
+  // ส่งขออนุมัติ stays enabled.
+  it('a missing ผู้สั่งซื้อ no longer blocks ส่งขออนุมัติ, or appears in the checklist at all', async () => {
     api.dealQuotations.get.mockResolvedValue({ quotation: draft({ contactId: null, contactName: null, contactPhone: null, contactEmail: null }) });
     api.tickets.get.mockResolvedValue({
       ticket: { summary: { id: 18, createdById: 6, customerName: CUSTOMER.name, customerId: 5, projectName: 'โครงการ A', contactId: null } },
     });
     renderEditor('/quotations/5');
-    const blocking = await screen.findByTestId('checklist-blocking');
-    expect(within(blocking).getByText('กรุณาระบุผู้สั่งซื้อ')).not.toBeNull();
-    expect(screen.getByRole('button', { name: 'ส่งขออนุมัติ' }).disabled).toBe(true);
+    await screen.findByTestId('checklist-warnings'); // the unrelated ที่อยู่ warning still renders
+    expect(screen.queryByTestId('checklist-blocking')).toBeNull();
+    expect(screen.queryByText('กรุณาระบุผู้สั่งซื้อ')).toBeNull();
+    expect(screen.getByRole('button', { name: 'ส่งขออนุมัติ' }).disabled).toBe(false);
   });
 
   it('clicking an entry focuses its field', async () => {
@@ -578,17 +631,17 @@ describe('"ข้อมูลที่ยังไม่ครบ" checklist (ow
 });
 
 describe('customer address + repeat-customer autofill (owner, 2026-09-11)', () => {
-  it('a repeat customer on the ?ticket= path arrives with its saved details; the ผู้สั่งซื้อ\'s โทร./อีเมล too', async () => {
+  it('a repeat customer on the ?ticket= path arrives with its saved details', async () => {
     api.customers.search.mockResolvedValue({ customers: [{ ...CUSTOMER, address: '201 ซอยสุขุมวิท 63' }] });
     renderEditor('/quotations/new?ticket=18');
     await waitFor(() => expect(document.getElementById('deal-customer-address')?.value).toBe('201 ซอยสุขุมวิท 63'));
     expect(document.getElementById('deal-customer-tax-id').value).toBe('0105551234567');
     expect(document.getElementById('deal-customer-phone').value).toBe('02-000-0000');
-    // The details are now editable in place (gap fix, prod QT-2026-0041-1) — asserted on the
-    // input VALUES, not textContent (an <input>'s value is not a text node).
-    await waitFor(() => expect(screen.getByLabelText('แก้ไขโทรศัพท์ผู้สั่งซื้อ').value).toBe('086-222-3333'));
-    expect(screen.getByLabelText('แก้ไขอีเมลผู้สั่งซื้อ').value).toBe('nattapong@fashionisland.co.th');
-    // Resolving the seeded ผู้สั่งซื้อ is not an edit: the pristine page stays quiet.
+    // Owner-directed reversal of F2/V167 (2026-09-26): the ผู้สั่งซื้อ contact-picker (and its
+    // editable โทร./อีเมล fields, gap fix QT-2026-0041-1) is gone from this editor entirely —
+    // ผู้สั่งซื้อ is now a single optional free-text input, unaffected by the customer/ticket data
+    // this test seeds. Resolving the customer autofill is not an edit: the pristine page stays
+    // quiet either way.
     expect(screen.queryByTestId('quotation-checklist')).toBeNull();
   });
 
@@ -683,5 +736,40 @@ describe('ยืนราคา — จำนวนวัน / ระบุว�
     await waitFor(() => expect(screen.queryByLabelText('ยืนราคาถึงวันที่')).toBeNull());
     expect(document.getElementById('validityDays')).not.toBeNull();
     expect(within(group('ยืนราคา')).queryByRole('button', { name: 'ระบุวันที่' })).toBeNull();
+  });
+});
+
+describe('เขียนผู้สั่งซื้อเอง — owner-directed reversal of F2 (2026-09-26)', () => {
+  it('starts blank on a brand-new quotation even though the deal has a contact', async () => {
+    renderEditor('/quotations/new?ticket=18');
+    await waitFor(() => expect(document.getElementById('deal-customer-address')).not.toBeNull());
+    expect(document.getElementById('orderedByNameCard').value).toBe('');
+  });
+
+  it('seeds from the stored orderedByName on an existing draft, and round-trips it on save', async () => {
+    api.dealQuotations.get.mockResolvedValue({ quotation: draft({ orderedByName: 'คุณวิชัย มั่นคง' }) });
+    renderEditor('/quotations/5');
+    await screen.findByTestId('checklist-warnings');
+    expect(document.getElementById('orderedByNameCard').value).toBe('คุณวิชัย มั่นคง');
+
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalled());
+    expect(api.dealQuotations.update.mock.calls[0][1].orderedByName).toBe('คุณวิชัย มั่นคง');
+  });
+
+  it('is optional -- typing a name never blocks or appears in the checklist, and blank saves as null', async () => {
+    renderEditor('/quotations/5');
+    const checklist = await screen.findByTestId('checklist-warnings');
+    expect(within(checklist).queryByText(/ผู้สั่งซื้อเอง/)).toBeNull();
+
+    fireEvent.change(document.getElementById('orderedByNameCard'), { target: { value: 'คุณวิชัย มั่นคง' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
+    expect(within(screen.getByTestId('checklist-warnings')).queryByText(/ผู้สั่งซื้อเอง/)).toBeNull();
+
+    // Clearing it back out is a real request to clear -- the save payload sends null, not "".
+    fireEvent.change(document.getElementById('orderedByNameCard'), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalled());
+    expect(api.dealQuotations.update.mock.calls[0][1].orderedByName).toBeNull();
   });
 });

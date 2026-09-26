@@ -796,6 +796,40 @@ describe('mock dealQuotations ผู้สั่งซื้อ snapshot -- owne
     expect(quotation.contactId).toBe(7);
     expect(quotation.contactName).toBe('พิมพ์ใจ บุญมาก');
   });
+
+  // ⚠️ Owner-directed reversal of V167/F2 (2026-09-26): create/update/submit used to REFUSE a deal
+  // with no resolvable ผู้สั่งซื้อ at all ("กรุณาระบุผู้สั่งซื้อ") -- the frontend's required
+  // contact-picker dropdown that rule existed for is gone (ผู้สั่งซื้อ is now a single optional
+  // free-text signature-name field, unrelated to this contact snapshot), so this proves the
+  // OPPOSITE: a deal ticket with no contact of its own, and no contactId ever sent on the wire,
+  // creates/updates/submits successfully with a blank contact snapshot throughout. Mirrors
+  // DealQuotationIntegrationTest#create_withNoResolvableContact_succeedsWithABlankContactSnapshot
+  // and #submit_succeedsOnARowWithNoContactSnapshot on the Java side.
+  it('create/update/submit all succeed with a blank contact snapshot when the deal has no ผู้สั่งซื้อ at all', async () => {
+    await api.auth.login(salesUser);
+    const { customer } = await api.customers.create({
+      name: 'บริษัท ไม่มีผู้สั่งซื้อ ทดสอบ จำกัด', taxId: '0100000098', address: '1 ถนนทดสอบ',
+      branch: 'สาขาทดสอบ', phone: '02-888-8888',
+    });
+    const { project } = await api.customers.createProject(customer.id, { name: 'โครงการไม่มีผู้สั่งซื้อ' });
+    const { ticket: noContactTicket } = await api.tickets.create({
+      title: 'ดีลไม่มีผู้สั่งซื้อ ทดสอบ', priority: 'NORMAL', customerName: customer.name,
+      customerId: customer.id, projectId: project.id,
+      items: [{ brand: 'SCG', model: 'Tile Mock', qty: 10, currency: 'THB' }],
+    });
+    const noContactTicketId = noContactTicket.summary.id;
+
+    const created = await api.dealQuotations.create(noContactTicketId, { items: [ONE_ITEM] });
+    expect(created.quotation.contactId).toBeNull();
+    expect(created.quotation.contactName).toBeNull();
+
+    const updated = await api.dealQuotations.update(created.quotation.id, { items: [ONE_ITEM] });
+    expect(updated.quotation.contactId).toBeNull();
+
+    const submitted = await api.dealQuotations.submit(created.quotation.id);
+    expect(submitted.quotation.contactId).toBeNull();
+    expect(submitted.quotation.docStatus).toBe('PENDING_APPROVAL');
+  });
 });
 
 describe('mock catalog.prices originCountryCode -- owner feedback F1', () => {

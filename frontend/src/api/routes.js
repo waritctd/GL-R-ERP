@@ -259,6 +259,9 @@ export const API_ROUTES = {
   designers: {
     search: (q) => `/api/designers${q ? `?q=${encodeURIComponent(q)}` : ''}`,
     byCode: (code) => `/api/designers/${encodeURIComponent(code)}`,
+    // POST /api/designers — reversal of the original read-only ruling (owner ask relayed
+    // 2026-09-26, task "designer-add-from-ui"). See DesignerController's own Javadoc.
+    create: '/api/designers',
   },
   factoryConfigs: {
     list: '/api/factory-configs',

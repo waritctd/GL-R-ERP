@@ -545,7 +545,12 @@ public class DealQuotationRepository {
         // existing recipient->stage mapping unchanged. pricingRequestId/pricingDecisionId: the
         // source request/decision, null for DEAL_DIRECT.
         String origin, String recipientType, String recipientLabel,
-        Long pricingRequestId, Long pricingDecisionId) {
+        Long pricingRequestId, Long pricingDecisionId,
+        // Owner-directed reversal of F2 (2026-09-26) — see DealQuotationDtos#orderedByName's own
+        // Javadoc. Optional/nullable; null on every call site that has no manual name to carry
+        // over yet (a brand-new PRICING_REQUEST-origin create has nothing to inherit — the rep
+        // sets it later via #update, same as any other DEAL_DIRECT document).
+        String orderedByName) {
 
         /** The pre-GLA-123 shape — every DEAL_DIRECT call site. Defaults origin to
          * {@code DEAL_DIRECT}, recipientType to {@code UNSPECIFIED} (this class's own historic
@@ -562,13 +567,14 @@ public class DealQuotationRepository {
             boolean omitContactHonorific, String fullPaymentTerm,
             BigDecimal subtotal, Long parentQuotationId, int revisionNo,
             Long derivedFromQuotationId,
-            List<NewItem> items) {
+            List<NewItem> items, String orderedByName) {
             this(ticketId, number, createdById, salesRepId, customerName, customerAddress, customerTaxId,
                 customerPhone, contact, projectName, deptCode, unitCode, offerDate, depositPercent,
                 remainderMode, creditDays, validityDays, validityMode, validityUntil, customerNotes,
                 priceMode, documentLanguage, currency, printedByDisplayId, salesRepDisplayId,
                 omitContactHonorific, fullPaymentTerm, subtotal, parentQuotationId, revisionNo,
-                derivedFromQuotationId, items, "DEAL_DIRECT", "UNSPECIFIED", null, null, null);
+                derivedFromQuotationId, items, "DEAL_DIRECT", "UNSPECIFIED", null, null, null,
+                orderedByName);
         }
     }
 
@@ -591,7 +597,7 @@ public class DealQuotationRepository {
                  printed_by_display_id, sales_rep_display_id,
                  omit_contact_honorific, full_payment_term,
                  parent_quotation_id, derived_from_quotation_id, updated_at,
-                 pricing_request_id, pricing_decision_id)
+                 pricing_request_id, pricing_decision_id, ordered_by_name)
             VALUES
                 (:ticketId, :number, :salesRepId, now(), :totalAmount, :currency, :version,
                  'DRAFT', :recipientType, :recipientLabel, :revisionNo, :origin, :createdById, :salesRepId,
@@ -602,7 +608,7 @@ public class DealQuotationRepository {
                  :printedByDisplayId, :salesRepDisplayId,
                  :omitContactHonorific, :fullPaymentTerm,
                  :parentQuotationId, :derivedFromQuotationId, now(),
-                 :pricingRequestId, :pricingDecisionId)
+                 :pricingRequestId, :pricingDecisionId, :orderedByName)
             """,
             new MapSqlParameterSource()
                 .addValue("ticketId", p.ticketId())
@@ -651,7 +657,9 @@ public class DealQuotationRepository {
                 .addValue("omitContactHonorific", p.omitContactHonorific())
                 .addValue("fullPaymentTerm", p.fullPaymentTerm())
                 .addValue("parentQuotationId", p.parentQuotationId())
-                .addValue("derivedFromQuotationId", p.derivedFromQuotationId()),
+                .addValue("derivedFromQuotationId", p.derivedFromQuotationId())
+                // Owner-directed reversal of F2 (2026-09-26) — see DealQuotationDtos#orderedByName.
+                .addValue("orderedByName", p.orderedByName()),
             keyHolder, new String[]{"quotation_id"});
         long quotationId = keyHolder.getKey().longValue();
         insertItems(quotationId, p.items());
@@ -877,7 +885,13 @@ public class DealQuotationRepository {
                             // forcing fullPaymentTerm/remainderMode/creditDays null where they don't
                             // apply) before calling this method, so there is nothing left to default
                             // here.
-                            boolean omitContactHonorific, String fullPaymentTerm) {
+                            boolean omitContactHonorific, String fullPaymentTerm,
+                            // Owner-directed reversal of F2 (2026-09-26) — see
+                            // DealQuotationDtos#orderedByName's own Javadoc. Same "editor always
+                            // sends its current value" discipline as projectName just above: a
+                            // null/blank here genuinely CLEARS the manual name back to the dotted
+                            // placeholder, it does not leave a stale one in place.
+                            String orderedByName) {
         return jdbc.update("""
             UPDATE sales.quotation
                SET contact_id = :contactId, contact_name = :contactName,
@@ -893,6 +907,7 @@ public class DealQuotationRepository {
                    document_language = :documentLanguage, currency = :currency,
                    printed_by_display_id = :printedByDisplayId, sales_rep_display_id = :salesRepDisplayId,
                    omit_contact_honorific = :omitContactHonorific, full_payment_term = :fullPaymentTerm,
+                   ordered_by_name = :orderedByName,
                    total_amount = :subtotal, updated_at = now()
              -- GLA-123 slice S1: widened from origin = 'DEAL_DIRECT' — this is the ONE shared
              -- draft-header save both origins use (DealQuotationService#update). Every OTHER
@@ -931,6 +946,7 @@ public class DealQuotationRepository {
                 .addValue("salesRepDisplayId", salesRepDisplayId)
                 .addValue("omitContactHonorific", omitContactHonorific)
                 .addValue("fullPaymentTerm", fullPaymentTerm)
+                .addValue("orderedByName", orderedByName)
                 .addValue("subtotal", subtotal));
     }
 
@@ -1664,7 +1680,11 @@ public class DealQuotationRepository {
                    pr.request_code AS pricing_request_code,
                    -- GLA-123 slice S1 M4(c) (V191): count of CEO-linked lines dropped since
                    -- creation — see DealQuotationDtos#itemsRemovedFromCeoCount's own Javadoc.
-                   q.items_removed_from_ceo_count
+                   q.items_removed_from_ceo_count,
+                   -- Owner-directed reversal of F2 (V192, 2026-09-26): the manual, optional
+                   -- ผู้สั่งซื้อ signature-slot name — see DealQuotationDtos#orderedByName's own
+                   -- Javadoc. NULL on every pre-V192 row.
+                   q.ordered_by_name
               FROM sales.quotation q
               LEFT JOIN hr.employee cb  ON cb.employee_id = q.created_by
               LEFT JOIN hr.employee rep ON rep.employee_id = q.sales_rep_id
@@ -1796,7 +1816,10 @@ public class DealQuotationRepository {
             // for a single-row PRICING_REQUEST-origin lookup only; every OTHER read path (list/
             // search, both DEAL_DIRECT-only) never needs it, so it stays empty straight out of
             // this shared mapper rather than paying a second query per row in a list loop.
-            List.of()
+            List.of(),
+            // Owner-directed reversal of F2 (V192, 2026-09-26) — see
+            // DealQuotationDtos#orderedByName's own Javadoc. NULL prints the dotted placeholder.
+            rs.getString("ordered_by_name")
         );
     }
 

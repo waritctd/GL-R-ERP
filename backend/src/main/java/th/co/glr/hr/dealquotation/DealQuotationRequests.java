@@ -235,11 +235,16 @@ public final class DealQuotationRequests {
 
     /**
      * {@code contactId} (owner feedback F2, 2026-09-10 — ผู้สั่งซื้อ) is OPTIONAL on the wire and
-     * defaults to the deal's own contact ({@code sales.ticket.contact_id}); what is REQUIRED is
-     * that one resolves — create/update/submit answer 400 "กรุณาระบุผู้สั่งซื้อ" otherwise. The
-     * chosen contact must belong to the deal's customer; its name/phone/email are snapshotted onto
-     * the quotation (V167). Enforced in {@code DealQuotationService}, not by bean validation, because
-     * the default is a DB lookup.
+     * defaults to the deal's own contact ({@code sales.ticket.contact_id}).
+     *
+     * ⚠️ Owner-directed reversal of V167/F2 (2026-09-26): resolving to a contact is no longer
+     * REQUIRED either — the frontend's required contact-picker dropdown this field used to back is
+     * gone (replaced by an unrelated, always-optional free-text signature name, {@code
+     * orderedByName}), so create/update/submit no longer refuse a quotation with no contact
+     * anywhere in the resolution chain. A contact id that IS given (or inherited) must still belong
+     * to the deal's customer, refused as 400 otherwise; its name/phone/email are snapshotted onto
+     * the quotation same as before (V167). Enforced in {@code DealQuotationService#resolveContact},
+     * not by bean validation, because the default is a DB lookup.
      */
     public record UpsertDealQuotationRequest(
         Long contactId,
@@ -357,8 +362,36 @@ public final class DealQuotationRequests {
         @Pattern(regexp = "BEFORE_DELIVERY|ON_DELIVERY|ON_OR_BEFORE_DELIVERY",
             message = "ต้องเป็น BEFORE_DELIVERY, ON_DELIVERY หรือ ON_OR_BEFORE_DELIVERY")
         String fullPaymentTerm,
+        /**
+         * Owner-directed reversal of F2 (2026-09-10, hardened 2026-09-15, reversed 2026-09-26):
+         * the ผู้สั่งซื้อ signature slot no longer auto-fills from the contact/customer name at
+         * all — this is the ONLY thing it ever prints there. Optional/nullable on the wire, and
+         * genuinely editable the same "editor always sends its current value" way as
+         * {@link #projectName} — a null/blank on a PUT is a real request to clear it back to the
+         * dotted placeholder, not "leave alone". {@code null} on CREATE means the same thing: a
+         * brand-new document starts with no manual name, i.e. the dotted line.
+         */
+        @Size(max = 255) String orderedByName,
         @NotEmpty List<@Valid ItemInput> items
     ) {
+        /** The pre-orderedByName shape (today's canonical, minus {@link #orderedByName}) — kept
+         * so every existing construction site (tests, mostly) compiles unchanged. Defaults to
+         * null, which reads as "no manual name" — the dotted placeholder — correct for every one
+         * of those fixtures (nothing before this feature ever set it). */
+        public UpsertDealQuotationRequest(Long contactId, String deptCode, String unitCode,
+                                          LocalDate offerDate, Integer depositPercent,
+                                          String remainderMode, Integer creditDays,
+                                          Integer validityDays, String validityMode, LocalDate validityUntil,
+                                          String customerNotes, String priceMode, String documentLanguage,
+                                          String currency, Long printedByDisplayId, Long salesRepDisplayId,
+                                          String projectName, Boolean omitContactHonorific,
+                                          String fullPaymentTerm, List<ItemInput> items) {
+            this(contactId, deptCode, unitCode, offerDate, depositPercent, remainderMode,
+                creditDays, validityDays, validityMode, validityUntil, customerNotes, priceMode,
+                documentLanguage, currency, printedByDisplayId, salesRepDisplayId, projectName,
+                omitContactHonorific, fullPaymentTerm, null, items);
+        }
+
         /** The pre-V180/V181 shape (no {@link #omitContactHonorific}/{@link #fullPaymentTerm}) —
          * kept so every existing construction site (tests, mostly) compiles unchanged. Defaults
          * omitContactHonorific to null (read as {@code false} — UNticked, today's only behaviour)

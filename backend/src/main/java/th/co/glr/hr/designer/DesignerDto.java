@@ -9,5 +9,12 @@ package th.co.glr.hr.designer;
  * {@code sales.quotation.unit_code}. See {@code DealQuotationRenderAdapter} for how little of the
  * quotation aggregate that render path already touches: it reads {@code quotation.unitCode()} as
  * a plain String and never looks anywhere near this table.
+ *
+ * <p>⚠️ REVERSAL (owner ask relayed 2026-09-26, task "designer-add-from-ui"): {@code sales.designer}
+ * is no longer strictly read-only from the application -- see {@link DesignerRepository#create} and
+ * {@link DesignerController}'s own class Javadoc for the new write path and its authz gate. This
+ * confidentiality guarantee is unaffected by that reversal: a row created through the new endpoint
+ * is a {@code DesignerDto} exactly like an Excel-imported one, and the "never reaches a rendered
+ * document" rule above governs it identically.
  */
 public record DesignerDto(String code, String name, boolean active) {}

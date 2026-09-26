@@ -5577,16 +5577,21 @@ function mockDealQuotationDisplayEmployee(id) {
 }
 
 // ผู้สั่งซื้อ resolution + the frozen snapshot V167 stores (owner feedback F2, 2026-09-10).
-// Mirrors DealQuotationService: `contactId` is OPTIONAL on the wire and defaults to the deal's own
-// `sales.ticket.contact_id`; what is REQUIRED is that one RESOLVES, and the chosen contact must
-// belong to the deal's customer. 400 "กรุณาระบุผู้สั่งซื้อ" otherwise — the same Thai string the
-// frontend's own pre-save check uses.
+// Mirrors DealQuotationService#resolveContact: `contactId` is OPTIONAL on the wire and defaults to
+// the deal's own `sales.ticket.contact_id`.
+//
+// ⚠️ Owner-directed reversal of V167/F2 (2026-09-26): resolving to a contact is no longer REQUIRED
+// either — this used to fail 400 "กรุณาระบุผู้สั่งซื้อ" when nothing resolved; it now mirrors the
+// relaxed Java method exactly and returns a blank snapshot instead. A contact id that IS given (or
+// inherited) still must belong to the deal's customer, still refused as 400 otherwise.
 //
 // ⚠️ AUTHZ CAVEAT (CLAUDE.md "Mock API contract"): the customer-ownership check below approximates
 // the Java service's and is NOT authoritative. Verify it against DealQuotationService, never here.
 function resolveDealQuotationContact(ticket, payload, current = null) {
   const requested = payload?.contactId ?? current?.contactId ?? ticket?.contactId ?? null;
-  if (requested == null) fail('กรุณาระบุผู้สั่งซื้อ', 400);
+  if (requested == null) {
+    return { contactId: null, contactName: null, contactPhone: null, contactEmail: null };
+  }
   const contact = mockContacts.find((c) => c.id === Number(requested));
   if (!contact) fail('กรุณาระบุผู้สั่งซื้อ', 400);
   if (ticket?.customerId != null && contact.customerId !== ticket.customerId) {
@@ -6414,6 +6419,11 @@ function buildDealQuotationDto(row) {
     contactName: row.contactName,
     contactPhone: row.contactPhone ?? null,
     contactEmail: row.contactEmail ?? null,
+    // Owner-directed reversal of F2 (2026-09-26): the ผู้สั่งซื้อ SIGNATURE slot no longer reads
+    // contactName at all -- it prints ONLY this manual, optional rep-typed field (V192's
+    // ordered_by_name column), null when nobody has typed one (the dotted placeholder). Mirrors
+    // DealQuotationDto#orderedByName / DealQuotationRenderAdapter#orderedByName exactly.
+    orderedByName: row.orderedByName ?? null,
     // Item 2 (V180, "ไม่เติม “คุณ”", owner ruling 2026-09-16): NOT NULL DEFAULT FALSE on the real
     // column — a stored/never-set value normalises to false here, same device as priceMode/
     // documentLanguage above. Mirrors DealQuotationDto#omitContactHonorific.
@@ -11313,12 +11323,18 @@ export const api = {
     },
   },
 
-  // Mirrors DesignerController (designer/) — READ-ONLY. Owner ruling "อ่านอย่างเดียว อัปเดตจาก
-  // Excel" is enforced by construction: there is no create/update/delete method in this namespace
-  // and there must never be one. Open to any authenticated user, same as catalog above — a sales
-  // rep filling in a quotation needs to search this, and #205's own reasoning applies (see
-  // DesignerController's Javadoc): the confidentiality requirement is about the PRINTED DOCUMENT,
-  // not about which role may search the directory.
+  // Mirrors DesignerController (designer/). search/getByCode stay open to any authenticated user,
+  // same as catalog above — a sales rep filling in a quotation needs to search this, and #205's own
+  // reasoning applies (see DesignerController's Javadoc): the confidentiality requirement is about
+  // the PRINTED DOCUMENT, not about which role may search the directory.
+  //
+  // ⚠️ REVERSAL (owner ask relayed 2026-09-26, task "designer-add-from-ui"): this namespace used to
+  // say READ-ONLY was enforced by construction (no create/update/delete method, and there must
+  // never be one). create() below is the fresh write path the owner asked for — gated by
+  // requireDealEntry(), mirroring DealEntryAccess.requireCanEnterDeal exactly like
+  // customers.create's own gate. There is still no update()/delete() here — only create was asked
+  // for. ⚠️ AUTHZ CAVEAT (same as customers.create above): this gate approximates the Java one and
+  // is NOT authoritative — verify against DealEntryAccess, never here.
   designers: {
     // Ordering mirrors DesignerRepository.search: `ORDER BY code LIMIT 30`. Active-only, exactly
     // like the Java WHERE clause — a designer marked ยกเลิก must not be offered for a NEW pick.
@@ -11341,6 +11357,21 @@ export const api = {
       const found = mockDesigners.find((d) => d.code === String(code ?? '').trim());
       if (!found) fail('ไม่พบผู้ออกแบบรหัสนี้', 404);
       return delay({ ...found });
+    },
+    // NEW (reversal, see this namespace's own comment above). Mirrors DesignerController#create:
+    // gated by requireDealEntry() (same as customers.create), a duplicate code is a 409 mirroring
+    // the real controller's DuplicateKeyException→CONFLICT mapping, and a brand-new row is always
+    // active: true — there is no way to create one pre-cancelled, matching DesignerRepository#create.
+    async create(payload = {}) {
+      requireDealEntry();
+      const code = String(payload.code ?? '').trim();
+      const name = String(payload.name ?? '').trim();
+      if (!code) fail('code ไม่ถูกต้อง', 400);
+      if (!name) fail('name ไม่ถูกต้อง', 400);
+      if (mockDesigners.some((d) => d.code === code)) fail('รหัสผู้ออกแบบนี้มีอยู่แล้ว', 409);
+      const designer = { code, name, active: true };
+      mockDesigners.push(designer);
+      return delay({ designer: { ...designer } });
     },
   },
 
@@ -14628,6 +14659,10 @@ export const api = {
         // Item 2 (V180, "ไม่เติม “คุณ”", owner ruling 2026-09-16) — UNticked is the only behaviour
         // on CREATE, same device as DealQuotationService#create.
         omitContactHonorific: payload.omitContactHonorific === true,
+        // Owner-directed reversal of F2 (2026-09-26) — manual, optional ผู้สั่งซื้อ signature
+        // name; blank/omitted stores null (the dotted placeholder), mirrors
+        // DealQuotationService#create's blankToNull(request.orderedByName()).
+        orderedByName: blankToNullMock(payload.orderedByName),
         items,
         createdAt: now, updatedAt: now,
       };
@@ -14864,6 +14899,11 @@ export const api = {
         // above, which is out of scope here -- so "" and whitespace-only both clear the field
         // exactly as they do against the real backend.
         projectName: blankToNullMock(payload.projectName),
+        // Owner-directed reversal of F2 (2026-09-26) — same #M7 DIRECT-assignment discipline as
+        // projectName just above: the editor always sends its current value, so blankToNullMock
+        // genuinely clears it back to the dotted placeholder, mirroring
+        // DealQuotationService#update's blankToNull(request.orderedByName()).
+        orderedByName: blankToNullMock(payload.orderedByName),
         items,
         // M4(c) fix (Opus review, 2026-09-20) — mirrors
         // DealQuotationRepository#incrementItemsRemovedFromCeo's GREATEST(0, ...) floor.
@@ -14967,9 +15007,10 @@ export const api = {
       if (!canTransitionDealQuotation(row.docStatus, 'PENDING_APPROVAL')) {
         fail(`ส่งขออนุมัติไม่ได้ในสถานะ '${row.docStatus}'`, 409);
       }
-      // F2: submit REQUIRES a ผู้สั่งซื้อ too, not just create/update -- a pre-V167 row can carry
-      // none, and that document cannot go for approval with an empty signature slot.
-      if (row.contactId == null) fail('กรุณาระบุผู้สั่งซื้อ', 400);
+      // ⚠️ Owner-directed reversal of V167/F2 (2026-09-26): submit used to REQUIRE a ผู้สั่งซื้อ too
+      // ("กรุณาระบุผู้สั่งซื้อ" -- a pre-V167 row could carry none, and that document could not go
+      // for approval with an empty signature slot). That refusal is gone, mirroring
+      // DealQuotationService#submit: a row with no contact at all now submits successfully.
       // Item 4 (V181, "ไม่รับมัดจำ", owner ruling 2026-09-16): a zero-deposit document must name a
       // payment term before an approver ever sees it -- create/update allow a DRAFT with none
       // chosen yet. Mirrors DealQuotationService#submit exactly.

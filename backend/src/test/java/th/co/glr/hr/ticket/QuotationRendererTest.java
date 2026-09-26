@@ -537,6 +537,95 @@ class QuotationRendererTest {
         }
     }
 
+    /**
+     * Task 4 (slot signatures, 2026-09-26): {@link QuotationRenderModel.Signatories}'s
+     * {@code printedBySignaturePng} (slot 0, ผู้พิมพ์) and {@code salesRepSignaturePng} (slot 1,
+     * พนักงานขาย) now anchor a picture the same way {@code approverSignaturePng} (slot 2,
+     * ผู้จัดการฝ่ายขาย) always has — placed on their OWN slot's underscore run via the
+     * generalized {@code runStart[]/runEnd[]} capture in {@code writeSignatureBlock} and the
+     * renamed {@code anchorSlotSignature} (ex-{@code anchorApproverSignature}), which is not
+     * approver-specific internally. Mirrors
+     * {@code modelPath_approverSignatureImage_anchorsWithinTheApproverSlot_notOverCustomerSlot}'s
+     * own technique: bucket each anchored picture's CENTRE pixel into one of the four equal-width
+     * quarters of the A..I row and assert exactly one per populated slot, none in slot 3
+     * (ผู้สั่งซื้อ, which never draws a picture).
+     */
+    @Test
+    void modelPath_printedByAndSalesRepSignatureImages_anchorWithinTheirOwnSlots_likeTheApprovers() throws Exception {
+        QuotationRenderModel.RenderItem item = renderItem(null, threeLines("A"), BigDecimal.ONE,
+            BigDecimal.TEN, "Net", BigDecimal.TEN, BigDecimal.TEN);
+        QuotationRenderModel model = modelWithItems(List.of(item), List.of("1.x"),
+            new QuotationRenderModel.Signatories("A", "B", "ราม อิฐรัตน์", null,
+                onePixelPng(), "image/png", null, null, null,
+                onePixelPng(), "image/png", onePixelPng(), "image/png"));
+
+        byte[] xlsx = renderer.toXls(model);
+        try (var wb = org.apache.poi.ss.usermodel.WorkbookFactory.create(new ByteArrayInputStream(xlsx))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            var hssf = (org.apache.poi.hssf.usermodel.HSSFSheet) sheet;
+            List<org.apache.poi.hssf.usermodel.HSSFPicture> signaturePics = new ArrayList<>();
+            for (var shape : hssf.getDrawingPatriarch().getChildren()) {
+                if (shape instanceof org.apache.poi.hssf.usermodel.HSSFPicture pic
+                    && pic.getClientAnchor().getRow1() >= 40) { // the letterhead/cert images sit near row 0
+                    signaturePics.add(pic);
+                }
+            }
+            assertThat(signaturePics).as("ผู้พิมพ์, พนักงานขาย and ผู้จัดการฝ่ายขาย each draw a picture")
+                .hasSize(3);
+
+            double totalWidthPx = 0;
+            for (int c = 0; c <= 8; c++) totalWidthPx += sheet.getColumnWidthInPixels(c);
+            double quarterPx = totalWidthPx / 4;
+
+            int[] slotCounts = new int[4];
+            for (var pic : signaturePics) {
+                var anchor = pic.getClientAnchor();
+                double startPx = anchorXPixels(sheet, anchor.getCol1(), anchor.getDx1());
+                double endPx = anchorXPixels(sheet, anchor.getCol2(), anchor.getDx2());
+                double centrePx = (startPx + endPx) / 2;
+                int slot = (int) Math.min(3, Math.floor(centrePx / quarterPx));
+                slotCounts[slot]++;
+            }
+            assertThat(slotCounts[0]).as("ผู้พิมพ์ slot (0-25%%) has exactly one signature picture").isEqualTo(1);
+            assertThat(slotCounts[1]).as("พนักงานขาย slot (25-50%%) has exactly one signature picture").isEqualTo(1);
+            assertThat(slotCounts[2]).as("ผู้จัดการฝ่ายขาย slot (50-75%%) has exactly one signature picture").isEqualTo(1);
+            assertThat(slotCounts[3]).as("ผู้สั่งซื้อ slot (75-100%%) never draws a picture").isEqualTo(0);
+        }
+    }
+
+    /**
+     * The independent-per-slot half of the same contract: ผู้พิมพ์ has NO signature on file while
+     * พนักงานขาย and ผู้จัดการฝ่ายขาย both do. Only two pictures should be anchored — a slot with
+     * no image bytes must draw nothing (the text-only name stands alone), and the other two slots
+     * must be entirely unaffected by their neighbour's absence.
+     */
+    @Test
+    void modelPath_slotWithNoSignatureOnFile_drawsNoPicture_otherSlotsUnaffected() throws Exception {
+        QuotationRenderModel.RenderItem item = renderItem(null, threeLines("A"), BigDecimal.ONE,
+            BigDecimal.TEN, "Net", BigDecimal.TEN, BigDecimal.TEN);
+        // printedBySignaturePng deliberately null — that person has no signature on file.
+        QuotationRenderModel model = modelWithItems(List.of(item), List.of("1.x"),
+            new QuotationRenderModel.Signatories("A", "B", "ราม อิฐรัตน์", null,
+                onePixelPng(), "image/png", null, null, null,
+                null, null, onePixelPng(), "image/png"));
+
+        byte[] xlsx = renderer.toXls(model);
+        try (var wb = org.apache.poi.ss.usermodel.WorkbookFactory.create(new ByteArrayInputStream(xlsx))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            var hssf = (org.apache.poi.hssf.usermodel.HSSFSheet) sheet;
+            int signatureCount = 0;
+            for (var shape : hssf.getDrawingPatriarch().getChildren()) {
+                if (shape instanceof org.apache.poi.hssf.usermodel.HSSFPicture pic
+                    && pic.getClientAnchor().getRow1() >= 40) {
+                    signatureCount++;
+                }
+            }
+            assertThat(signatureCount)
+                .as("only พนักงานขาย + ผู้จัดการฝ่ายขาย draw pictures; ผู้พิมพ์ has none on file")
+                .isEqualTo(2);
+        }
+    }
+
     // ── owner feedback pass 1 (2026-09-10): F2 slot-4 name, F4 dates, F6 picture on the rule ──
 
     @Test
@@ -685,8 +774,10 @@ class QuotationRendererTest {
                 double bottomPt = anchorYPoints(sheet, labelsRow, anchor.getRow2(), anchor.getDy2());
                 double topPt = anchorYPoints(sheet, labelsRow, anchor.getRow1(), anchor.getDy1());
                 assertThat(rulePt - bottomPt)
-                    .as("the ink RESTS ON the rule: bottom just above it, never crossing it")
-                    .isBetween(0.0, mmToPoints(1.0));
+                    .as("the ink sits CLEAR ABOVE the rule (SIGNATURE_LIFT_ABOVE_RULE_MM raised to "
+                        + "1.5mm, task 4 owner tuning 2026-09-26): a visible gap above the line, "
+                        + "never crossing it")
+                    .isBetween(mmToPoints(0.5), mmToPoints(2.5));
                 assertThat(bottomPt - topPt).as("at most 8 mm tall, and a real box")
                     .isPositive()
                     .isLessThanOrEqualTo(mmToPoints(8.0) + 1);
@@ -1148,7 +1239,7 @@ class QuotationRendererTest {
      * above already makes) would NOT have caught the bug this guards against: the degenerate
      * (zero-width) provisional anchor a decode failure used to leave behind is a shape POI's own
      * object model keeps without complaint, but that LibreOffice's PDF export silently drops —
-     * see {@link QuotationRenderer#anchorApproverSignature}'s Javadoc for the full chain,
+     * see {@link QuotationRenderer#anchorSlotSignature}'s Javadoc for the full chain,
      * confirmed by reading {@code org.apache.poi.ss.util.ImageUtils}'s bytecode and reproducing
      * end-to-end. The template itself carries exactly two pictures (logo, ISO badge — see
      * {@code modelPath_approverSignatureImage_survivesTemplatePictures} above); a THIRD real
@@ -1176,7 +1267,7 @@ class QuotationRendererTest {
      * #getImageDimension} (what {@link org.apache.poi.ss.usermodel.Picture#getImageDimension()}
      * calls) SWALLOWS an image ImageIO has no reader for — an unsupported or corrupt format — and
      * returns {@code Dimension(0, 0)} rather than throwing. Before the fix,
-     * {@code QuotationRenderer#anchorApproverSignature} still created a picture shape for such
+     * {@code QuotationRenderer#anchorSlotSignature} still created a picture shape for such
      * bytes and left it on its PROVISIONAL anchor, which is deliberately ZERO-WIDTH
      * ({@code col1==col2}, {@code dx1==dx2}: same offset repeated, see the method's own comment).
      * POI's model keeps a shape like that without complaint (which is exactly why a POI-only test

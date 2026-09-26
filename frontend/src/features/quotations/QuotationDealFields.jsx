@@ -6,7 +6,7 @@ import { DesignerPicker } from './DesignerPicker.jsx';
  * Kept shared between standalone creation and an existing deal/draft so the two
  * entry paths cannot drift apart visually or in how they update quotation terms.
  */
-export function QuotationDealFields({ terms, onChange, disabled = false, idPrefix = 'quotation' }) {
+export function QuotationDealFields({ terms, onChange, disabled = false, idPrefix = 'quotation', showToast }) {
   const setTerm = (key, value) => onChange({ [key]: value });
 
   return (
@@ -25,6 +25,7 @@ export function QuotationDealFields({ terms, onChange, disabled = false, idPrefi
         onSelectCode={(code) => setTerm('unitCode', code)}
         idPrefix={`${idPrefix}-designer-picker`}
         label="หน่วยงาน / ผู้ออกแบบ"
+        showToast={showToast}
       />
     </div>
   );

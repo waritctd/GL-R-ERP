@@ -103,8 +103,10 @@ test.describe('direct-deal ใบเสนอราคา — the real service',
     expect(ticket.status(), 'POST /api/tickets').toBe(200);
     ticketId = (await ticket.json()).ticket.summary.id;
 
-    // ผู้สั่งซื้อ is MANDATORY since V167 (owner feedback F2) and a freshly created customer has no
-    // contact at all, so the journey has to create one rather than assume the seed provides it.
+    // Owner-directed reversal of V167/F2 (2026-09-26): ผู้สั่งซื้อ is no longer mandatory — a
+    // contact is still created here because "sales creates a draft, and the ผู้สั่งซื้อ snapshot
+    // is frozen onto it" below wants a real one to freeze, not because create/submit would refuse
+    // without one.
     const created = await apiWrite(sessions.sales, 'post', `/api/customers/${customerId}/contacts`, {
       firstName: 'ธนพล', lastName: `ศรีวัฒนกุล ${tag}`, phone: '081-234-5678', email: `e2e.${tag}@demo.invalid`,
     });
@@ -133,16 +135,22 @@ test.describe('direct-deal ใบเสนอราคา — the real service',
     expect(Number(quotation.grandTotal)).toBeGreaterThan(0);
   });
 
-  test('a quotation cannot be created without a ผู้สั่งซื้อ', async () => {
-    // The wrong-way-round half of F2. `contactId: null` with a deal whose ticket has no contact
-    // must be refused by DealQuotationService, not merely hidden by a disabled button.
+  // Owner-directed reversal of V167/F2 (2026-09-26): `contactId: null` on a deal whose ticket
+  // carries no contact used to be refused by DealQuotationService ("กรุณาระบุผู้สั่งซื้อ", 400) —
+  // the frontend's required contact-picker dropdown that rule existed for is gone (ผู้สั่งซื้อ is
+  // now a single optional free-text signature-name field, unrelated to this contactId at all), so
+  // this now proves the OPPOSITE: the create succeeds (201) with a blank contact snapshot. Mirrors
+  // the backend's own flip,
+  // DealQuotationIntegrationTest#create_withNoResolvableContact_succeedsWithABlankContactSnapshot.
+  test('a quotation can be created with no ผู้สั่งซื้อ at all, and freezes a blank contact snapshot', async () => {
     const response = await apiWrite(
       sessions.sales, 'post', `/api/tickets/${ticketId}/deal-quotations`,
       { ...draftBody(contactId), contactId: null },
     );
-    // 200 only if the TICKET itself carries a contact to fall back on; this deal does not.
-    expect(response.status(), 'create with no contact must be refused').toBe(400);
-    expect((await response.json()).message).toContain('ผู้สั่งซื้อ');
+    expect(response.status(), 'create with no contact now succeeds').toBe(201);
+    const { quotation } = await response.json();
+    expect(quotation.contactId).toBeNull();
+    expect(quotation.contactName).toBeNull();
   });
 
   test('a non-sales role cannot create a quotation on the deal', async () => {
@@ -476,15 +484,14 @@ test.describe('quotation editor UI — v3 controls, ที่อยู่, and t
     // The checklist: the address is a WARNING (listed, not blocking); ส่งขออนุมัติ stays enabled.
     const checklist = page.getByTestId('quotation-checklist');
     await expect(checklist.getByTestId('checklist-warnings')).toContainText('ยังไม่ได้กรอกที่อยู่ลูกค้า');
-    await expect(checklist.getByTestId('checklist-warnings')).toContainText('ผู้สั่งซื้อยังไม่มีอีเมล');
     await expect(checklist.getByTestId('checklist-blocking')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'ส่งขออนุมัติ' })).toBeEnabled();
-    // The ผู้สั่งซื้อ's own โทร./อีเมล, prefilled from the contact record and editable in place
-    // (feat/quotation-contact-edit, 2026-09-15) — no longer a plain read-only text summary.
-    const contactDetails = page.getByTestId('quotation-contact-details');
-    await expect(contactDetails.getByRole('textbox', { name: 'แก้ไขโทรศัพท์ผู้สั่งซื้อ' })).toHaveValue('089-111-2222');
-    await expect(contactDetails.getByRole('textbox', { name: 'แก้ไขอีเมลผู้สั่งซื้อ' })).toHaveValue('');
-    await expect(contactDetails).toContainText('อีเมล (ยังไม่มี)');
+    // Owner-directed reversal of V167/F2 (2026-09-26): the ผู้สั่งซื้อ contact-picker (its
+    // editable โทร./อีเมล fields, and the "ผู้สั่งซื้อยังไม่มีอีเมล" checklist warning asserted
+    // just above until this reversal) is gone from the editor entirely -- ผู้สั่งซื้อ is now a
+    // single optional free-text input, blank by default (this quotation was created via the API
+    // with a contactId, but the field no longer reads it at all).
+    await expect(page.getByLabel(/^ผู้สั่งซื้อ/)).toHaveValue('');
 
     // Clicking the entry lands on the field; typing + leaving it saves to the customer master…
     await checklist.getByRole('button', { name: 'ยังไม่ได้กรอกที่อยู่ลูกค้า' }).click();
