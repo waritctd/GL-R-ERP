@@ -6,7 +6,8 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { formatMoney } from '../../utils/format.js';
 import {
   LINE_TYPE_ADJUSTMENT, LINE_TYPE_PLAIN, LINE_TYPE_TILE,
-  ORIGIN_COUNTRY_OPTIONS, QUANTITY_MODE_OPTIONS, UNLABELLED_LOCATION_TEXT, WASTAGE_PERCENT_PRESETS,
+  ORIGIN_COUNTRY_OPTIONS, QUANTITY_MODE_OPTIONS, UNLABELLED_LOCATION_TEXT, WASTAGE_MODE_OPTIONS,
+  WASTAGE_PERCENT_PRESETS,
   defaultLeadTimeForOrigin, formatQuotationMoney, lineTypeOf, originCountryFromCode,
   piecesPerSqmFromSqmPerPiece, sqmPerPieceFromPiecesPerSqm, isEnglishPerSqm, listPricePerSqmIncVat,
   sqmPerPieceFromSizeCm, sizeTextDiffersFromCatalogFaceSize,
@@ -231,12 +232,6 @@ export function QuotationItemRow({
   const roundLooseSummary = roundToFullBoxSummary(item);
   const [catalogResults, setCatalogResults] = useState([]);
   const [catalogOpen, setCatalogOpen] = useState(false);
-  // #L4: "กำหนดเอง" opens the custom input -- UI-only state, never written onto `item` itself.
-  // The old version jammed `wastageValue: 12` on click (an arbitrary number nobody chose, whose
-  // only purpose was to fail the presets check below so the custom input would render). Resets
-  // whenever a preset or the +N mode is picked, so it never lingers after the user picks a
-  // normal option.
-  const [wastageCustomOpen, setWastageCustomOpen] = useState(false);
   // #L2: PER-ROW debounce timer (one ref per mounted row), not a module-level singleton -- the
   // old `_catalogTimer` was shared across every row on the page, so typing in one row's รุ่น
   // field cancelled (and could starve) whatever another row's typeahead had queued.
@@ -789,55 +784,64 @@ export function QuotationItemRow({
         </FormField>
 
         <FormField label="เผื่อ (wastage)" htmlFor={`waste-${index}`} error={errors.wastageValue}>
-          <div className="flex flex-wrap gap-2">
-            {WASTAGE_PERCENT_PRESETS.map((pct) => (
-              <button
-                key={pct}
-                type="button"
-                disabled={readOnly}
-                aria-pressed={item.wastageMode === 'PERCENT' && !wastageCustomOpen && Number(item.wastageValue) === pct}
-                className={`min-h-[38px] mobile:min-h-[44px] rounded-md border px-3 text-xs font-bold ${
-                  item.wastageMode === 'PERCENT' && !wastageCustomOpen && Number(item.wastageValue) === pct
-                    ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface'
-                }`}
-                onClick={() => { setWastageCustomOpen(false); patch({ wastageMode: 'PERCENT', wastageValue: pct }); }}
-              >
-                {pct}%
-              </button>
-            ))}
-            <button
-              type="button"
-              disabled={readOnly}
-              aria-pressed={item.wastageMode === 'PIECES'}
-              className={`min-h-[38px] mobile:min-h-[44px] rounded-md border px-3 text-xs font-bold ${
-                item.wastageMode === 'PIECES' ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface'
-              }`}
-              onClick={() => { setWastageCustomOpen(false); patch({ wastageMode: 'PIECES', wastageValue: item.wastageMode === 'PIECES' ? item.wastageValue : 0 }); }}
-            >
-              +N แผ่น
-            </button>
-            {(item.wastageMode === 'PERCENT' && (wastageCustomOpen || !WASTAGE_PERCENT_PRESETS.includes(Number(item.wastageValue))))
-            || item.wastageMode === 'PIECES' ? (
-              <input
+          <div className="flex flex-col gap-2">
+            <div className="flex flex-wrap gap-2">
+              {/* Mode switch -- styled identically to the จำนวน ตร.ม./แผ่น segmented control
+                  above, so the two mutually-exclusive-mode controls on this row read as one
+                  family. Re-clicking the already-active mode is a no-op on `wastageValue`
+                  (preserves a typed number); switching mode resets it to 0, since a percent and
+                  a piece count are never comparable numbers. */}
+              <div className="inline-flex overflow-hidden rounded-md border border-border-input">
+                {WASTAGE_MODE_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.code}
+                    type="button"
+                    disabled={readOnly}
+                    aria-pressed={item.wastageMode === opt.code}
+                    className={`min-h-[38px] mobile:min-h-[44px] px-3 text-xs font-bold ${item.wastageMode === opt.code ? 'bg-primary text-surface' : 'bg-surface text-icon-muted'}`}
+                    onClick={() => patch({
+                      wastageMode: opt.code,
+                      wastageValue: item.wastageMode === opt.code ? item.wastageValue : 0,
+                    })}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              {item.wastageMode === 'PERCENT' ? WASTAGE_PERCENT_PRESETS.map((pct) => (
+                <button
+                  key={pct}
+                  type="button"
+                  disabled={readOnly}
+                  aria-pressed={Number(item.wastageValue) === pct}
+                  className={`min-h-[38px] mobile:min-h-[44px] rounded-md border px-3 text-xs font-bold ${
+                    Number(item.wastageValue) === pct
+                      ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface'
+                  }`}
+                  onClick={() => patch({ wastageMode: 'PERCENT', wastageValue: pct })}
+                >
+                  {pct}%
+                </button>
+              )) : null}
+            </div>
+            {/* Manual box is always visible in both modes now (no more "กำหนดเอง" toggle -- a rep
+                overriding a preset, or typing any PIECES value, used to need an extra click to
+                even see where to type). The trailing unit -- % vs แผ่น -- is what used to be
+                ambiguous about this single box; PriceInputWithSuffix already renders exactly that
+                adornment for the price fields above, so it is reused here rather than inventing a
+                second version of the same pattern. */}
+            <div>
+              <span className="block text-2xs font-bold text-text-muted">กรอกเอง</span>
+              <PriceInputWithSuffix
                 id={`waste-${index}`}
                 type="number"
                 disabled={readOnly}
-                className="w-20"
+                className="w-32"
+                suffix={item.wastageMode === 'PIECES' ? 'แผ่น' : '%'}
                 value={item.wastageValue ?? ''}
                 onChange={(e) => patch({ wastageValue: e.target.value === '' ? 0 : Number(e.target.value) })}
               />
-            ) : null}
-            {item.wastageMode === 'PERCENT' ? (
-              <button
-                type="button"
-                disabled={readOnly}
-                aria-pressed={wastageCustomOpen || !WASTAGE_PERCENT_PRESETS.includes(Number(item.wastageValue))}
-                className="min-h-[38px] mobile:min-h-[44px] rounded-md border border-border bg-surface px-3 text-xs font-bold text-text-muted"
-                onClick={() => setWastageCustomOpen(true)}
-              >
-                กำหนดเอง
-              </button>
-            ) : null}
+            </div>
           </div>
         </FormField>
       </div>
