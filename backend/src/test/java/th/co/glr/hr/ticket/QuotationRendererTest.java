@@ -809,11 +809,25 @@ class QuotationRendererTest {
     /**
      * The ผู้จัดการฝ่ายขาย slot's underscore run — {@code [startPx, endPx]} in the same absolute
      * anchor-pixel space {@link #anchorXPixels} returns — derived from the labels string the
-     * renderer actually WROTE into the sheet (split on the four label words), measured with the
-     * row's own font, and converted from font pixels to anchor pixels through LibreOffice's column
-     * model. The conversion is what makes the two comparable at all: text is placed by font
-     * advances, an anchor by column widths, and LibreOffice does not size a column the way POI's
-     * {@code getColumnWidthInPixels} does.
+     * renderer actually WROTE into the sheet, measured with the row's own font, and converted from
+     * font pixels to anchor pixels through LibreOffice's column model. The conversion is what makes
+     * the two comparable at all: text is placed by font advances, an anchor by column widths, and
+     * LibreOffice does not size a column the way POI's {@code getColumnWidthInPixels} does.
+     *
+     * <p>Measures each boundary as the pixel width of the STRING'S OWN PREFIX up to that character
+     * offset ({@code line.substring(0, idx)}) rather than replaying {@code writeSignatureBlock}'s
+     * internal per-slot algorithm (leading-space centring, the shared underscore count, …) a second
+     * time here. A prefix-width measurement is correct however the renderer laid the row out —
+     * including the label+line unit now being CENTRED within its own nominal slot rather than
+     * left-flush (owner feedback, 2026-09-27) — because it only assumes the four label words appear
+     * in the string, in order, which {@code writeSignatureBlock}'s own contract already guarantees
+     * and this file already asserts elsewhere.
+     *
+     * <p>The run's END is the end of the CONTIGUOUS run of {@code '_'} immediately after the label
+     * — not "wherever the next label starts" (line.indexOf(labels[3], …)), which would also count
+     * slot 3's own LEADING SPACES (its label+line unit is centred in its slot too, same as every
+     * other slot now) as part of slot 2's line, over-measuring runEnd by however many of those
+     * there are.
      */
     private double[] approverUnderscoreRun(org.apache.poi.ss.usermodel.Sheet sheet, int labelsRow)
             throws Exception {
@@ -831,23 +845,12 @@ class QuotationRendererTest {
         var frc = new java.awt.image.BufferedImage(1, 1, java.awt.image.BufferedImage.TYPE_INT_ARGB)
             .createGraphics().getFontRenderContext();
 
-        double cursor = 0;
-        double runStart = 0;
-        double runEnd = 0;
-        int at = 0;
-        for (int i = 0; i < labels.length; i++) {
-            int labelAt = line.indexOf(labels[i], at);
-            int slotEnd = i + 1 < labels.length ? line.indexOf(labels[i + 1], labelAt + labels[i].length())
-                : line.length();
-            String slot = line.substring(labelAt, slotEnd);
-            double slotPx = awtFont.getStringBounds(slot, frc).getWidth() * 96.0 / 72.0;
-            if (i == 2) {
-                runStart = cursor + awtFont.getStringBounds(labels[i], frc).getWidth() * 96.0 / 72.0;
-                runEnd = cursor + slotPx;
-            }
-            cursor += slotPx;
-            at = slotEnd;
-        }
+        int approverAt = line.indexOf(labels[2]);
+        int approverLabelEnd = approverAt + labels[2].length();
+        int underscoreEnd = approverLabelEnd;
+        while (underscoreEnd < line.length() && line.charAt(underscoreEnd) == '_') underscoreEnd++;
+        double runStart = awtFont.getStringBounds(line.substring(0, approverLabelEnd), frc).getWidth() * 96.0 / 72.0;
+        double runEnd = awtFont.getStringBounds(line.substring(0, underscoreEnd), frc).getWidth() * 96.0 / 72.0;
 
         int charWidthTwips = th.co.glr.hr.common.sheet.LibreOfficeMetrics.charWidthTwips(sheet.getWorkbook());
         long loTwips = 0;
