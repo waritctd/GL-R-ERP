@@ -1245,6 +1245,62 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             .containsExactlyInAnyOrder("Factory A", "Factory B");
     }
 
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Import/CEO fills a blank ความหนา (PricingRequestService#setItemThickness, owner ruling
+    // 2026-09-26). A NEW write endpoint, so per CLAUDE.md it is pinned here through the real service
+    // AND repository against real Postgres, refusals wrong-way-round, every assertion on the
+    // PERSISTED row. Unlike setItemFactory the gate is import AND ceo (the CEO discovers the gap
+    // while costing) — that difference is exactly what the wrong-way-round case guards.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void setItemThickness_importAndCeoMayFillTheBlank_butSalesAndSalesManagerAreRefused() {
+        long pricingRequestId = pricingRequestWithOneBlankFactoryLine();
+        long itemId = blankFactoryItemId(pricingRequestId);
+        // Precondition: a China/Italy line whose factory never supplied a thickness.
+        jdbc.update("UPDATE sales.pricing_request_item SET thickness_mm = NULL WHERE pricing_request_item_id = :id",
+            Map.of("id", itemId));
+
+        // Wrong-way-round: the sales owner and sales_manager may READ this request in full but must
+        // not fill this field.
+        assertThatThrownBy(() -> pricingRequestService.setItemThickness(pricingRequestId, itemId,
+            new PricingRequestRequests.SetItemThicknessRequest(new BigDecimal("9.00")), salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        assertThatThrownBy(() -> pricingRequestService.setItemThickness(pricingRequestId, itemId,
+            new PricingRequestRequests.SetItemThicknessRequest(new BigDecimal("9.00")), salesManagerActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        assertThat(jdbc.queryForObject(
+            "SELECT thickness_mm FROM sales.pricing_request_item WHERE pricing_request_item_id = :id",
+            Map.of("id", itemId), BigDecimal.class)).isNull();
+
+        // CEO is allowed here (the difference from setItemFactory), and the row actually changes.
+        pricingRequestService.setItemThickness(pricingRequestId, itemId,
+            new PricingRequestRequests.SetItemThicknessRequest(new BigDecimal("9.00")), ceoActor);
+        assertThat(jdbc.queryForObject(
+            "SELECT thickness_mm FROM sales.pricing_request_item WHERE pricing_request_item_id = :id",
+            Map.of("id", itemId), BigDecimal.class)).isEqualByComparingTo("9.00");
+        assertThat(jdbc.queryForObject("""
+            SELECT COUNT(*) FROM sales.pricing_request_event
+             WHERE pricing_request_id = :id AND event_kind = 'PRICING_REQUEST_ITEM_THICKNESS_SET'
+            """, Map.of("id", pricingRequestId), Long.class)).isEqualTo(1L);
+    }
+
+    @Test
+    void setItemThickness_isAGapFill_refusingToOverwriteALineThatAlreadyHasOne() {
+        long pricingRequestId = pricingRequestWithOneBlankFactoryLine();
+        long itemId = blankFactoryItemId(pricingRequestId);
+        jdbc.update("UPDATE sales.pricing_request_item SET thickness_mm = 8.00 WHERE pricing_request_item_id = :id",
+            Map.of("id", itemId));
+
+        assertThatThrownBy(() -> pricingRequestService.setItemThickness(pricingRequestId, itemId,
+            new PricingRequestRequests.SetItemThicknessRequest(new BigDecimal("12.00")), importActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        // Unchanged — the compare-and-set WHERE clause refused it.
+        assertThat(jdbc.queryForObject(
+            "SELECT thickness_mm FROM sales.pricing_request_item WHERE pricing_request_item_id = :id",
+            Map.of("id", itemId), BigDecimal.class)).isEqualByComparingTo("8.00");
+    }
+
     @Test
     void setItemFactory_isRefusedForTheSalesRepWhoOwnsTheDeal_andForTheCeo() {
         long pricingRequestId = pricingRequestWithOneBlankFactoryLine();

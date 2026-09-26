@@ -608,6 +608,10 @@ export function PricingRequestCreateModal({
         // unconditionally since a PricingRequest has no separate submit-time gate to defer to.
         requireLeadTime: true,
         requireOriginCountry: true,
+        // owner ruling 2026-09-26: a factory (China/Italy) may not give a thickness — Sales may
+        // submit it blank, and import/CEO fill it (setItemThickness) before costing. See
+        // QuotationItemRow's thicknessRequired={false} below (same reversal, on the input's marker).
+        thicknessOptional: true,
       });
       // Opus review finding #2 (2026-09-18): a cheap, DISPLAY-ONLY early warning for the same
       // case PricingRequestService#resolveItem now rejects server-side with a 400 -- AREA mode
@@ -986,6 +990,7 @@ export function PricingRequestCreateModal({
                 index={index}
                 hidePricing
                 brandLabel="โรงงาน"
+                thicknessRequired={false}
                 // GLA-125 (owner ruling 2026-09-18): ประเทศต้นทาง (and its "อื่นๆ" typed name) and
                 // ระยะเวลานำเข้า are required on THIS form only — direct-deal keeps both optional.
                 requireOriginCountry

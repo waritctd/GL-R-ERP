@@ -941,7 +941,7 @@ export function sizeTextDiffersFromCatalogFaceSize(sizeText, catalogSizeText) {
 // must keep calling this with the default. Only a SUBMIT-specific caller passes `true` — see
 // QuotationEditorPage's own `submitItemErrorsByRow`.
 export function validateQuotationItem(item, priceMode = 'NET', documentLanguage = 'TH',
-  { requireLeadTime = false, skipPricing = false, requireOriginCountry = false } = {}) {
+  { requireLeadTime = false, skipPricing = false, requireOriginCountry = false, thicknessOptional = false } = {}) {
   if (lineTypeOf(item) === LINE_TYPE_PLAIN) return validatePlainItem(item);
   // English per-sqm (owner decision 2026-09-13): the USD/ตร.ม. IS the unit price.
   const perSqm = isEnglishPerSqm(priceMode, documentLanguage);
@@ -955,7 +955,11 @@ export function validateQuotationItem(item, priceMode = 'NET', documentLanguage 
   if (!item?.color?.trim()) errors.color = 'กรุณาระบุสี';
   if (!item?.texture?.trim()) errors.texture = 'กรุณาระบุผิว';
   if (!item?.sizeText?.trim()) errors.sizeText = 'กรุณาระบุขนาด';
-  if (!(Number(item?.thicknessMm) > 0)) errors.thicknessMm = 'กรุณาระบุความหนา (มม.)';
+  // thicknessOptional (owner ruling 2026-09-26, PricingRequestCreateModal only): a factory in
+  // China/Italy may not supply a thickness, and blocking Sales on a value they cannot know stalls
+  // the request. The PCR flow lets it through blank; import/CEO fill it (setItemThickness) before
+  // costing. Direct-deal quotation leaves this at the default (still required).
+  if (!thicknessOptional && !(Number(item?.thicknessMm) > 0)) errors.thicknessMm = 'กรุณาระบุความหนา (มม.)';
   if (!(perSqm && !hasBoxArea) && !(Number(item?.piecesPerBox) >= 1)) {
     errors.piecesPerBox = 'กรุณาระบุแผ่น/กล่อง';
   }

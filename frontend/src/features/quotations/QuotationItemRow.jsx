@@ -211,6 +211,11 @@ export function QuotationItemRow({
   // check itself lives in quotationMeta's validateQuotationItem (requireOriginCountry option),
   // not in this component.
   requireOriginCountry = false,
+  // Owner ruling 2026-09-26 (PCR form only): ความหนา is OPTIONAL when a factory (China/Italy) did
+  // not supply one — Sales may leave it blank and import/CEO fill it before costing. A marker +
+  // hint toggle only; the actual optionality lives in quotationMeta's validateQuotationItem
+  // (thicknessOptional). Direct-deal keeps the default (required).
+  thicknessRequired = true,
   // GLA-123 slice S1 (coordinator follow-up, 2026-09-20): a duplicated row has no server id, so
   // the resulting save would be refused as a new row on a PRICING_REQUEST-origin quotation
   // (DealQuotationService#update) — the control is hidden rather than left as a dead end.
@@ -688,7 +693,15 @@ export function QuotationItemRow({
             }}
           />
         </FormField>
-        <FormField label="ความหนา (มม.)" htmlFor={`thickness-${index}`} required error={errors.thicknessMm}>
+        <FormField
+          label="ความหนา (มม.)"
+          htmlFor={`thickness-${index}`}
+          required={thicknessRequired}
+          error={errors.thicknessMm}
+          hint={!thicknessRequired && !(Number(item.thicknessMm) > 0)
+            ? 'ถ้าโรงงานไม่ได้ให้ความหนา เว้นว่างได้ — ฝ่ายนำเข้า/CEO จะกรอกให้เพื่อคำนวณค่าขนส่ง'
+            : undefined}
+        >
           <input
             id={`thickness-${index}`} type="number" step="0.1" disabled={readOnly}
             value={item.thicknessMm ?? ''}

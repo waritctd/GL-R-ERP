@@ -125,13 +125,17 @@ describe('PricingRequestCreateModal', () => {
     expect(screen.queryByLabelText(/^ส่วนลด/)).toBeNull();
   });
 
-  it('blocks submission with a per-row error when a required field (ความหนา/แผ่น-ตร.ม./แผ่น-กล่อง) is left blank', async () => {
+  it('blocks submission with a per-row error when a required field (แผ่น-ตร.ม./แผ่น-กล่อง) is blank — ความหนา is now optional', async () => {
     const { createFn } = renderModal();
     fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
 
     fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
 
-    expect(await screen.findByText('กรุณาระบุความหนา (มม.)')).not.toBeNull();
+    // A still-required field blocks…
+    expect(await screen.findByText('กรุณาระบุแผ่น/ตร.ม.')).not.toBeNull();
+    // …but ความหนา no longer does (owner ruling 2026-09-26: a factory may not supply it, and
+    // import/CEO fill it before costing — see quotationMeta's thicknessOptional).
+    expect(screen.queryByText('กรุณาระบุความหนา (มม.)')).toBeNull();
     expect(createFn).not.toHaveBeenCalled();
   });
 
@@ -156,13 +160,13 @@ describe('PricingRequestCreateModal', () => {
     const { createFn } = renderModal();
     fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
     fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
-    await screen.findByText('กรุณาระบุความหนา (มม.)');
+    await screen.findByText('กรุณาระบุแผ่น/ตร.ม.');
 
     fillRequiredFields();
     fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
 
     await waitFor(() => expect(createFn).toHaveBeenCalledTimes(1));
-    expect(screen.queryByText('กรุณาระบุความหนา (มม.)')).toBeNull();
+    expect(screen.queryByText('กรุณาระบุแผ่น/ตร.ม.')).toBeNull();
   });
 
   it('sends the derived payload shape — no requestedQty/requestedUnit/requestedUnitBasis, notes carried as productDescription', async () => {

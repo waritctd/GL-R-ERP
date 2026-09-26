@@ -1,5 +1,6 @@
 package th.co.glr.hr.pricingrequest;
 
+import java.math.BigDecimal;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
@@ -675,6 +676,26 @@ public class PricingRequestRepository {
                 .addValue("id", pricingRequestItemId)
                 .addValue("pricingRequestId", pricingRequestId)
                 .addValue("factory", factory));
+    }
+
+    /**
+     * Gap-fill the ความหนา on one line (import/CEO), mirroring {@link #fillItemFactory}. The WHERE
+     * clause is the compare-and-set guard: it writes ONLY while the line still has no positive
+     * thickness, so a sales-entered thickness is never silently overwritten and two importers
+     * racing the same blank cannot both win. Returns rows updated (0 = the gap was already filled).
+     */
+    public int fillItemThickness(long pricingRequestId, long pricingRequestItemId, BigDecimal thicknessMm) {
+        return jdbc.update("""
+            UPDATE sales.pricing_request_item
+               SET thickness_mm = :thickness
+             WHERE pricing_request_item_id = :id
+               AND pricing_request_id = :pricingRequestId
+               AND (thickness_mm IS NULL OR thickness_mm <= 0)
+            """,
+            new MapSqlParameterSource()
+                .addValue("id", pricingRequestItemId)
+                .addValue("pricingRequestId", pricingRequestId)
+                .addValue("thickness", thicknessMm));
     }
 
     /**

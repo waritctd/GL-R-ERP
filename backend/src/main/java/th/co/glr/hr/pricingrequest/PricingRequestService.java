@@ -33,6 +33,7 @@ import th.co.glr.hr.pricingrequest.PricingRequestRequests.CreatePricingRequestRe
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.CustomerChangeRevisionRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.PricingRequestItemRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.SetItemFactoryRequest;
+import th.co.glr.hr.pricingrequest.PricingRequestRequests.SetItemThicknessRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.UpdatePricingRequestAttachmentRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.UpdatePricingRequestRequest;
 import th.co.glr.hr.ticket.DealLifecycle;
@@ -77,6 +78,19 @@ public class PricingRequestService {
     private static final Set<String> FACTORY_ROUTING_STATUSES = Set.of(
         PricingRequestStatus.IMPORT_REVIEWING,
         PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
+    /** Import AND CEO may fill a missing thickness ({@link #setItemThickness}) — unlike the factory
+     *  gap-fill, which is Import's alone, because the CEO is the one who discovers it is missing
+     *  during costing. Not {@link #IMPORT_ROLES} (import-only). */
+    private static final Set<String> THICKNESS_FILL_ROLES = Set.of("import", "ceo");
+    /** The whole costing window: import prepares (IMPORT_REVIEWING/AWAITING_FACTORY_RESPONSE) and
+     *  CEO costs (READY_FOR_CEO_REVIEW/CEO_REVIEWING). Thickness only feeds the freight lookup, so
+     *  filling it is safe anywhere before the price is approved — wider than FACTORY_ROUTING_STATUSES
+     *  on purpose. */
+    private static final Set<String> THICKNESS_FILL_STATUSES = Set.of(
+        PricingRequestStatus.IMPORT_REVIEWING,
+        PricingRequestStatus.AWAITING_FACTORY_RESPONSE,
+        PricingRequestStatus.READY_FOR_CEO_REVIEW,
+        PricingRequestStatus.CEO_REVIEWING);
     /**
      * Statuses in which Sales may upload/delete a Pricing Request attachment (V69, review
      * remediation COMMIT 4). A DRAFT is the rep's own scratchpad. Once past it, the request has
@@ -519,6 +533,52 @@ public class PricingRequestService {
         requests.addEvent(id, summary.ticketId(), actor.id(), actor.name(),
             PricingRequestEventKind.PRICING_REQUEST_ITEM_FACTORY_SET, summary.status(), summary.status(),
             "ระบุโรงงาน '" + factory + "' ให้รายการ " + item.displayName(), null);
+        return detail(id);
+    }
+
+    /**
+     * Import/CEO fills the ความหนา on a line whose factory never supplied one (owner ruling
+     * 2026-09-26). Sales may now submit such a line blank (see {@link #requireItemFieldsComplete}),
+     * and {@code LandedCostCalculator} (V156) marks it uncostable until this runs — so this is what
+     * makes the freight lookup possible, after which the CEO recalculates the costing.
+     *
+     * <p>Mirrors {@link #setItemFactory}: a gap-FILL, not a correction. The repository's WHERE
+     * clause is the compare-and-set guard, so a sales-entered thickness is never overwritten and a
+     * race between two fillers cannot double-apply. Unlike setItemFactory the gate is
+     * {@link #THICKNESS_FILL_ROLES} (import <em>and</em> ceo) over {@link #THICKNESS_FILL_STATUSES}
+     * (the whole costing window).
+     */
+    @Transactional
+    public PricingRequestDetailDto setItemThickness(long id, long itemId, SetItemThicknessRequest request,
+                                                    UserPrincipal actor) {
+        requireRole(actor, THICKNESS_FILL_ROLES);
+        PricingRequestSummaryDto summary = requireViewable(id, actor);
+        if (!THICKNESS_FILL_STATUSES.contains(summary.status())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "กรอกความหนาได้เฉพาะระหว่างที่ฝ่ายนำเข้า/CEO กำลังทำราคาเท่านั้น (สถานะปัจจุบัน: '"
+                    + summary.status() + "')");
+        }
+        requireActive(requireTicket(summary.ticketId()));
+
+        PricingRequestItemDto item = requests.findItems(id).stream()
+            .filter(candidate -> candidate.id() == itemId)
+            .findFirst()
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบรายการสินค้านี้ในคำขอราคานี้"));
+        if (item.thicknessMm() != null && item.thicknessMm().signum() > 0) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "รายการนี้มีความหนาอยู่แล้ว (" + item.thicknessMm() + " มม.) — หากต้องแก้ไข ต้องสร้างคำขอราคารอบใหม่");
+        }
+
+        int rows = requests.fillItemThickness(id, itemId, request.thicknessMm());
+        if (rows == 0) {
+            // Compare-and-set miss — another filler won the same blank between the read and this
+            // write. Same shape/message as every other race in this class.
+            throw new ApiException(HttpStatus.CONFLICT,
+                "คำขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
+        }
+        requests.addEvent(id, summary.ticketId(), actor.id(), actor.name(),
+            PricingRequestEventKind.PRICING_REQUEST_ITEM_THICKNESS_SET, summary.status(), summary.status(),
+            "กรอกความหนา " + request.thicknessMm() + " มม. ให้รายการ " + item.displayName(), null);
         return detail(id);
     }
 
@@ -1128,7 +1188,11 @@ public class PricingRequestService {
         if (!hasText(item.color())) missing.add("สี");
         if (!hasText(item.texture())) missing.add("ผิว");
         if (!hasText(item.size())) missing.add("ขนาด");
-        if (item.thicknessMm() == null || item.thicknessMm().signum() <= 0) missing.add("ความหนา");
+        // ความหนา is NO LONGER required at submit (owner ruling 2026-09-26, reversing the earlier
+        // "required" ruling): factories in China/Italy often do not supply it, and blocking Sales on
+        // a value they cannot know stalls the whole request. A blank thickness is allowed through and
+        // flagged downstream — LandedCostCalculator (V156) marks the line uncostable with a stated
+        // reason, and import/CEO fill it via setItemThickness before the costing is recalculated.
         if (item.piecesPerBox() == null || item.piecesPerBox() < 1) missing.add("จำนวนแผ่นต่อกล่อง");
         if (item.sqmPerPiece() == null || item.sqmPerPiece().signum() <= 0) missing.add("ตร.ม./แผ่น");
         if (!hasItemQuantity(item.quantityMode(), item.areaSqm(), item.piecesInput())) missing.add("จำนวน");

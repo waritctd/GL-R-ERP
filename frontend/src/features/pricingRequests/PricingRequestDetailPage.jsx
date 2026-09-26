@@ -104,6 +104,10 @@ function itemDisplayName(item) {
  * the window in which its missing input can still be supplied.
  */
 const FACTORY_ROUTING_STATUSES = ['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE'];
+// Import/CEO may fill a missing ความหนา across the whole costing window — wider than
+// FACTORY_ROUTING_STATUSES, since the CEO is often the one who discovers it is missing during
+// costing. Mirrors PricingRequestService.THICKNESS_FILL_STATUSES.
+const THICKNESS_FILL_STATUSES = ['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE', 'READY_FOR_CEO_REVIEW', 'CEO_REVIEWING'];
 
 // ── V185 (direct-deal-form parity) + owner clarification 2026-09-18, FINAL ruling (reversing an
 // earlier "relabel to ยี่ห้อ" instruction this comment used to describe): the label on THIS page
@@ -867,6 +871,10 @@ export function PricingRequestDetailPage({ user, showToast }) {
     ({ itemId, factory }) => api.pricingRequests.setItemFactory(pricingRequestId, itemId, { factory }),
     'บันทึกโรงงานแล้ว',
   );
+  const setItemThickness = useActionMutation(
+    ({ itemId, thicknessMm }) => api.pricingRequests.setItemThickness(pricingRequestId, itemId, { thicknessMm }),
+    'บันทึกความหนาแล้ว',
+  );
   const generateDrafts = useActionMutation(() => api.pricingRequests.generateFactoryEmailDrafts(pricingRequestId), 'สร้างร่างอีเมลแล้ว');
   const updateQuote = useActionMutation(({ quote, draft }) => api.pricingRequests.updateFactoryQuote(quote.id, draft), 'บันทึกร่างอีเมลแล้ว');
   // Manual-RFQ redesign: records that Import already sent this email themselves — see
@@ -1298,6 +1306,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
   // itemId -> the factory name Import is typing for that line. Same shape as `responseDrafts`
   // above: a key exists only once a change handler has written to it.
   const [factoryDrafts, setFactoryDrafts] = useState({});
+  const [thicknessDrafts, setThicknessDrafts] = useState({}); // itemId → draft ความหนา string (import/CEO gap-fill)
   // pricingRequestItemId -> the sales-side item it came from. Feeds both defaultResponseItems'
   // autofill and the read-only "what Sales asked for" echo on each response row. Declared here
   // rather than beside the mutations above because it reads `request`, which is assigned just
@@ -1319,6 +1328,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
   // decision — PricingRequestService#setItemFactory is — just whether to offer an input that would
   // otherwise be refused.
   const canSetItemFactory = isImport(user) && FACTORY_ROUTING_STATUSES.includes(summary?.status);
+  // Thickness gap-fill is import AND CEO (unlike factory, which is import's alone), across the whole
+  // costing window — mirrors PricingRequestService.setItemThickness's gate. Not authoritative; the
+  // input only appears where the server would accept it, but the server re-checks.
+  const canSetItemThickness = (isImport(user) || user?.role === 'ceo')
+    && THICKNESS_FILL_STATUSES.includes(summary?.status);
   const factoryQuotes = useMemo(() => factoryQuery.data ?? [], [factoryQuery.data]);
   const factoryGroups = useMemo(() => groupFactoryQuotesByFactory(factoryQuotes), [factoryQuotes]);
   const factoryItemCount = useMemo(
@@ -1625,7 +1639,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   <span>สี: {formatOrDash(item.color)}</span>
                   <span>ผิว: {formatOrDash(item.texture)}</span>
                   <span>ขนาด: {formatOrDash(item.size)}</span>
-                  <span>ความหนา: {formatOrDash(item.thicknessMm, ' มม.')}</span>
+                  <span className={!(Number(item.thicknessMm) > 0) ? 'font-bold text-warning-dark' : undefined}>
+                    ความหนา: {Number(item.thicknessMm) > 0
+                      ? formatOrDash(item.thicknessMm, ' มม.')
+                      : 'ไม่ระบุ — คำนวณค่าขนส่งไม่ได้ ต้องกรอกก่อน'}
+                  </span>
                   <span>แผ่น/ตร.ม.: {formatPiecesPerSqm(item)}</span>
                   <span>แผ่น/กล่อง: {formatOrDash(item.piecesPerBox)}</span>
                   <span>ขายแผ่นไม่เต็มกล่อง: {item.piecesPerBox != null ? (item.roundToFullBox === false ? 'ใช่' : 'ไม่ใช่') : '—'}</span>
@@ -1686,6 +1704,46 @@ export function PricingRequestDetailPage({ user, showToast }) {
                       disabled={setItemFactory.isPending || !(factoryDrafts[item.id] ?? '').trim()}
                     >
                       บันทึกโรงงาน
+                    </Button>
+                  </SafeForm>
+                ) : null}
+                {/* Import/CEO fill for a line whose factory gave no thickness (owner ruling
+                    2026-09-26). Only offered while the line still has none — filling it lets the
+                    freight lookup run so the line stops being uncostable. */}
+                {canSetItemThickness && !(Number(item.thicknessMm) > 0) ? (
+                  <SafeForm
+                    className="mt-2 flex flex-wrap items-end gap-2"
+                    onSubmit={() => setItemThickness.mutate(
+                      { itemId: item.id, thicknessMm: Number(thicknessDrafts[item.id]) },
+                      { onSuccess: () => setThicknessDrafts((current) => {
+                        const next = { ...current };
+                        delete next[item.id];
+                        return next;
+                      }) },
+                    )}
+                  >
+                    <FormField
+                      label="ระบุความหนา (มม.)"
+                      htmlFor={`pcr-item-thickness-${item.id}`}
+                      hint="โรงงานไม่ได้ให้ความหนา — กรอกเพื่อให้คำนวณค่าขนส่งได้"
+                    >
+                      <input
+                        id={`pcr-item-thickness-${item.id}`}
+                        type="number"
+                        step="0.1"
+                        min="0"
+                        value={thicknessDrafts[item.id] ?? ''}
+                        placeholder="เช่น 9"
+                        onChange={(event) => setThicknessDrafts((current) => ({ ...current, [item.id]: event.target.value }))}
+                      />
+                    </FormField>
+                    <Button
+                      type="submit"
+                      variant="secondary"
+                      disabled={setItemThickness.isPending || !(Number(thicknessDrafts[item.id]) > 0)}
+                      data-testid={`pcr-item-thickness-save-${item.id}`}
+                    >
+                      บันทึกความหนา
                     </Button>
                   </SafeForm>
                 ) : null}

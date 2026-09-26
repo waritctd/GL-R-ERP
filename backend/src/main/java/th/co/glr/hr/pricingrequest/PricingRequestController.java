@@ -30,6 +30,7 @@ import th.co.glr.hr.pricingrequest.PricingRequestRequests.CancelPricingRequestRe
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.CreatePricingRequestRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.CustomerChangeRevisionRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.SetItemFactoryRequest;
+import th.co.glr.hr.pricingrequest.PricingRequestRequests.SetItemThicknessRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.UpdatePricingRequestAttachmentRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.UpdatePricingRequestRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestResponses.PricingRequestDetailResponse;
@@ -127,6 +128,22 @@ public class PricingRequestController {
     ) {
         UserPrincipal user = sessions.requireUser(session);
         return new PricingRequestDetailResponse(pricingRequests.setItemFactory(id, itemId, request, user));
+    }
+
+    /**
+     * Import/CEO fills the ความหนา on a line whose factory never supplied one, so landed-cost freight
+     * can be looked up — see {@code PricingRequestService#setItemThickness}. Shaped like
+     * {@link #setItemFactory}: one field, one line, PUT.
+     */
+    @PutMapping("/pricing-requests/{id}/items/{itemId}/thickness")
+    PricingRequestDetailResponse setItemThickness(
+        @PathVariable long id,
+        @PathVariable long itemId,
+        @Valid @RequestBody SetItemThicknessRequest request,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new PricingRequestDetailResponse(pricingRequests.setItemThickness(id, itemId, request, user));
     }
 
     @PostMapping("/pricing-requests/{id}/cancel")

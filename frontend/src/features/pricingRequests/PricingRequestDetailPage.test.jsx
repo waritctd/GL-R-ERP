@@ -31,6 +31,7 @@ vi.mock('../../api/index.js', () => ({
       attachmentUrl: (id) => `#attachment-${id}`,
       factoryQuoteAttachmentUrl: (id) => `#quote-attachment-${id}`,
       setItemFactory: vi.fn(),
+      setItemThickness: vi.fn(),
       generateFactoryEmailDrafts: vi.fn(),
       updateFactoryQuote: vi.fn(),
       sendFactoryQuote: vi.fn(),
@@ -2408,7 +2409,9 @@ describe('PricingRequestDetailPage item card — V185 sales-entered fields', () 
 
     expect(screen.getByText('สี: —')).not.toBeNull();
     expect(screen.getByText('ผิว: —')).not.toBeNull();
-    expect(screen.getByText('ความหนา: —')).not.toBeNull();
+    // ความหนา now flags itself (owner ruling 2026-09-26) instead of a bare — when missing, so
+    // import/CEO know it blocks freight costing until filled.
+    expect(screen.getByText(/ความหนา: ไม่ระบุ/)).not.toBeNull();
     expect(screen.getByText('แผ่น/กล่อง: —')).not.toBeNull();
     // The legacy row's OWN requestedQty/requestedUnit (client-typed under the old form) still
     // renders in the final-order-quantity line — this never depended on the new columns.
@@ -3089,6 +3092,29 @@ describe('PricingRequestDetailPage blank-factory lines', () => {
 
     await waitFor(() => expect(api.pricingRequests.setItemFactory).toHaveBeenCalledWith(
       501, 2, { factory: 'Cotto Industry' },
+    ));
+  });
+
+  // owner ruling 2026-09-26: a line whose factory gave no thickness is flagged, and import/CEO fill
+  // it (setItemThickness) so freight can be costed. Sales may now submit such a line blank.
+  it('flags a missing ความหนา and lets Import fill it via the per-item thickness endpoint', async () => {
+    const request = buildRequest({ items: [{
+      id: 8001, brand: 'Cotto', model: 'A1', color: 'ขาว', texture: 'ด้าน', size: '60x60',
+      thicknessMm: null, sqmPerPiece: 0.36, piecesPerBox: 4, requestedQty: 100, requestedUnit: 'แผ่น',
+      resolvedFactoryName: 'Cotto Industry', factory: 'Cotto Industry',
+    }] });
+    api.pricingRequests.setItemThickness.mockResolvedValue({ pricingRequest: request });
+    renderDetailPage({ user: importUser, request });
+    await waitForLoaded(request);
+
+    // The remark tells import/CEO the line blocks freight costing until filled.
+    expect(screen.getByText(/ความหนา: ไม่ระบุ/)).not.toBeNull();
+
+    fireEvent.change(screen.getByLabelText('ระบุความหนา (มม.)'), { target: { value: '9' } });
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกความหนา' }));
+
+    await waitFor(() => expect(api.pricingRequests.setItemThickness).toHaveBeenCalledWith(
+      501, 8001, { thicknessMm: 9 },
     ));
   });
 

@@ -1066,6 +1066,10 @@ export const api = {
     // see PricingRequestService#setItemFactory.
     setItemFactory: (id, itemId, payload) =>
       apiRequest(API_ROUTES.pricingRequests.itemFactory(id, itemId), { method: 'PUT', body: payload }),
+    // import/CEO fills a blank ความหนา (gap-fill only; the service 409s an already-set line) so the
+    // freight lookup can run — `payload` is { thicknessMm }. See PricingRequestService#setItemThickness.
+    setItemThickness: (id, itemId, payload) =>
+      apiRequest(API_ROUTES.pricingRequests.itemThickness(id, itemId), { method: 'PUT', body: payload }),
     generateFactoryEmailDrafts: (id) => apiRequest(API_ROUTES.pricingRequests.factoryEmailDrafts(id), { method: 'POST' }),
     listFactoryQuotes: (id) => apiRequest(API_ROUTES.pricingRequests.factoryQuotes(id)),
     getFactoryQuote: (id) => apiRequest(API_ROUTES.pricingRequests.factoryQuote(id)),

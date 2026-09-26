@@ -12712,6 +12712,29 @@ export const api = {
       return delay({ pricingRequest: buildPricingRequestDetail(pr) });
     },
 
+    // Mirrors PricingRequestService.setItemThickness: import AND ceo, over the whole costing window,
+    // gap-fill only (never overwrites a set thickness). Authz is NOT authoritative here — verify the
+    // role/status gate against the Java service, not this mock.
+    async setItemThickness(id, itemId, payload) {
+      const user = hasRole('import', 'ceo');
+      const pr = findPricingRequestRaw(id);
+      if (!['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE', 'READY_FOR_CEO_REVIEW', 'CEO_REVIEWING'].includes(pr.status)) {
+        fail(`กรอกความหนาได้เฉพาะระหว่างที่ฝ่ายนำเข้า/CEO กำลังทำราคาเท่านั้น (สถานะปัจจุบัน: '${pr.status}')`, 409);
+      }
+      requirePricingRequestDealActive(db.tickets.find((t) => t.id === pr.ticketId));
+      const thickness = Number(payload?.thicknessMm);
+      if (!(thickness > 0)) fail('ความหนาต้องมากกว่า 0', 400);
+      const item = pr.items.find((candidate) => candidate.id === itemId);
+      if (!item) fail('ไม่พบรายการสินค้านี้ในคำขอราคานี้', 404);
+      if (item.thicknessMm != null && Number(item.thicknessMm) > 0) {
+        fail(`รายการนี้มีความหนาอยู่แล้ว (${item.thicknessMm} มม.) — หากต้องแก้ไข ต้องสร้างคำขอราคารอบใหม่`, 409);
+      }
+      item.thicknessMm = thickness;
+      pr.updatedAt = new Date().toISOString();
+      pushPricingRequestEvent(pr, user, 'PRICING_REQUEST_ITEM_THICKNESS_SET', pr.status, pr.status);
+      return delay({ pricingRequest: buildPricingRequestDetail(pr) });
+    },
+
     // Manual-RFQ redesign: mirrors FactoryQuoteService.generateDrafts, which now generates a draft
     // for every factory that DOES resolve instead of refusing the whole batch when some lines
     // don't (owner decision) — only an entirely-unresolved request (byFactory empty) still 422s.
