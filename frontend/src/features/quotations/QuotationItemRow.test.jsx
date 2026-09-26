@@ -241,70 +241,76 @@ describe('QuotationItemRow', () => {
     expect(onChange).not.toHaveBeenCalledWith(expect.objectContaining({ productCode: expect.anything() }));
   });
 
-  // Wastage %/แผ่น redesign (replaces the old "กำหนดเอง" toggle, #L4): the manual "กรอกเอง" box is
-  // now always visible in both modes -- there is no more hidden-until-opened state to test for.
-  describe('เผื่อ (wastage) %/แผ่น mode switch', () => {
+  // Owner decision 2026-09-26: the %/แผ่น unit is no longer a rep-set toggle -- it is DERIVED from
+  // the document's price mode (wastageModeForPriceMode) and shown read-only. The manual "กรอกเอง"
+  // box stays always visible, as it was after the #L4 redesign.
+  describe('เผื่อ (wastage) — unit derived from priceMode, read-only', () => {
     // The จำนวน quantity-mode toggle above this field ALSO has a button labelled "แผ่น" (ตร.ม./
     // แผ่น), so every query here is scoped with `within` to this field's own FormField root
-    // (found via its label) rather than the whole row -- an unscoped getByRole('button', { name:
-    // 'แผ่น' }) matches both toggles and throws on the ambiguity.
+    // (found via its label) rather than the whole row.
     function wastageField() {
       return within(screen.getByText('เผื่อ (wastage)').closest('label').parentElement);
     }
 
-    // The mode-switch buttons themselves are labelled "%"/"แผ่น" too, so the manual box's own
-    // trailing-unit span (rendered aria-hidden, same as every other PriceInputWithSuffix use in
-    // this row) is asserted via the input's own DOM neighbour rather than getByText, which would
-    // otherwise match both the button and the suffix.
-    it('always renders the manual input, with a % suffix in PERCENT mode', () => {
-      const { container } = renderRow({ wastageMode: 'PERCENT', wastageValue: 0 });
-      const input = screen.getByLabelText('เผื่อ (wastage)');
-      expect(input).not.toBeNull();
+    function renderWithPriceMode(priceMode, itemOverrides = {}) {
+      const onChange = vi.fn();
+      const item = { ...emptyQuotationItem(), ...itemOverrides };
+      const { container } = render(
+        <QuotationItemRow item={item} index={0} onChange={onChange} onRemove={vi.fn()} priceMode={priceMode} />,
+      );
+      return { onChange, container };
+    }
+
+    it('SPECIAL_SQM: manual box has a % suffix and the 0/5/10/15/20 presets render', () => {
+      const { container } = renderWithPriceMode('SPECIAL_SQM');
+      expect(screen.getByLabelText('เผื่อ (wastage)')).not.toBeNull();
+      expect(container.querySelector(`#waste-0 + span`).textContent).toBe('%');
+      ['0%', '5%', '10%', '15%', '20%'].forEach((label) => {
+        expect(wastageField().getByRole('button', { name: label })).not.toBeNull();
+      });
+    });
+
+    it('NET: manual box has a แผ่น suffix and no % presets render', () => {
+      const { container } = renderWithPriceMode('NET');
+      expect(container.querySelector(`#waste-0 + span`).textContent).toBe('แผ่น');
+      expect(wastageField().queryByRole('button', { name: '5%' })).toBeNull();
+    });
+
+    it('DIRECT_NET: manual box has a แผ่น suffix and no % presets render', () => {
+      const { container } = renderWithPriceMode('DIRECT_NET');
+      expect(container.querySelector(`#waste-0 + span`).textContent).toBe('แผ่น');
+      expect(wastageField().queryByRole('button', { name: '5%' })).toBeNull();
+    });
+
+    it('has no %/แผ่น mode-switch toggle left to click', () => {
+      renderWithPriceMode('SPECIAL_SQM');
+      expect(wastageField().queryByRole('button', { name: '%' })).toBeNull();
+      expect(wastageField().queryByRole('button', { name: 'แผ่น' })).toBeNull();
+    });
+
+    it('a stale stored item.wastageMode never affects the rendered unit', () => {
+      // Loaded-quotation edge case: the row's own stored wastageMode may disagree with what the
+      // CURRENT price mode derives (e.g. a quotation saved under NET, loaded, then switched to
+      // SPECIAL_SQM before this row re-synced) -- the unit always follows priceMode, never the
+      // stale field.
+      const { container } = renderWithPriceMode('SPECIAL_SQM', { wastageMode: 'PIECES', wastageValue: 4 });
       expect(container.querySelector(`#waste-0 + span`).textContent).toBe('%');
     });
 
-    it('switching to แผ่น mode resets wastageValue to 0', () => {
-      const { onChange } = renderRow({ wastageMode: 'PERCENT', wastageValue: 10 });
-
-      fireEvent.click(wastageField().getByRole('button', { name: 'แผ่น' }));
-
-      expect(onChange).toHaveBeenCalledWith({ wastageMode: 'PIECES', wastageValue: 0 });
-    });
-
-    // onChange is mocked in renderRow, so the item prop never re-renders after a click -- the
-    // suffix swap is instead asserted against a row rendered already in PIECES mode.
-    it('renders a แผ่น suffix on the manual box when already in PIECES mode', () => {
-      const { container } = renderRow({ wastageMode: 'PIECES', wastageValue: 3 });
-      expect(container.querySelector(`#waste-0 + span`).textContent).toBe('แผ่น');
-    });
-
-    it('re-clicking the already-active mode preserves the typed value instead of resetting it', () => {
-      const { onChange } = renderRow({ wastageMode: 'PERCENT', wastageValue: 7 });
-
-      fireEvent.click(wastageField().getByRole('button', { name: '%' }));
-
-      expect(onChange).toHaveBeenCalledWith({ wastageMode: 'PERCENT', wastageValue: 7 });
-    });
-
-    it('switching to % mode resets wastageValue to 0', () => {
-      const { onChange } = renderRow({ wastageMode: 'PIECES', wastageValue: 12 });
-
-      fireEvent.click(wastageField().getByRole('button', { name: '%' }));
-
-      expect(onChange).toHaveBeenCalledWith({ wastageMode: 'PERCENT', wastageValue: 0 });
-    });
-
-    it('clicking a preset chip sets wastageValue without needing a separate custom-input toggle', () => {
-      const { onChange } = renderRow({ wastageMode: 'PERCENT', wastageValue: 0 });
+    it('clicking a preset chip patches only wastageValue, not wastageMode', () => {
+      const { onChange } = renderWithPriceMode('SPECIAL_SQM');
 
       fireEvent.click(wastageField().getByRole('button', { name: '15%' }));
 
-      expect(onChange).toHaveBeenCalledWith({ wastageMode: 'PERCENT', wastageValue: 15 });
+      expect(onChange).toHaveBeenCalledWith({ wastageValue: 15 });
     });
 
-    it('does not render % presets in PIECES mode', () => {
-      renderRow({ wastageMode: 'PIECES', wastageValue: 3 });
-      expect(wastageField().queryByRole('button', { name: '5%' })).toBeNull();
+    it('typing into the manual box patches only wastageValue', () => {
+      const { onChange } = renderWithPriceMode('NET');
+
+      fireEvent.change(screen.getByLabelText('เผื่อ (wastage)'), { target: { value: '3' } });
+
+      expect(onChange).toHaveBeenCalledWith({ wastageValue: 3 });
     });
   });
 

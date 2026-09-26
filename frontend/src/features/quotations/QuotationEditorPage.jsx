@@ -26,7 +26,7 @@ import {
   duplicateLocationLabelGroupIds, emptyLocationGroupIds,
   locationGroupsFromItems, newLocationGroupId,
   REMAINDER_MODE_OPTIONS, UNLABELLED_LOCATION_TEXT, validateQuotationItem, VALIDITY_DAYS_OPTIONS,
-  VALIDITY_MODE_OPTIONS, FULL_PAYMENT_TERM_OPTIONS,
+  VALIDITY_MODE_OPTIONS, FULL_PAYMENT_TERM_OPTIONS, wastageModeForPriceMode,
 } from './quotationMeta.js';
 import { CustomerDetailsFields } from './CustomerDetailsFields.jsx';
 import { DealCustomerCard } from './DealCustomerCard.jsx';
@@ -544,6 +544,16 @@ export function QuotationEditorPage({ user, showToast }) {
     // for the same reason. A row with NO box area keeps whatever roundToFullBox it already had —
     // that combination is legal now, so resetting it would silently discard a rep's choice.
     const perSqm = isEnglishPerSqm(priceMode, documentLanguage);
+    // Owner decision 2026-09-26: เผื่อ (wastage) is now DERIVED from the price mode
+    // (wastageModeForPriceMode), one unit for the whole document — a percent and a piece count are
+    // never comparable numbers (the same reasoning the removed per-row toggle used), so a switch
+    // that flips the derived unit must reset every tile row's stored `wastageValue` to 0. `priceMode`
+    // here is the NEW mode; `docSettings.priceMode` is still the OLD one — `setDocSettings` in the
+    // caller (changePriceMode/changeLanguage) has not flushed by the time this function runs, so
+    // reading it here is safe. Only a genuine unit flip resets — switching between two PIECES modes
+    // (NET ↔ DIRECT_NET) leaves a rep-typed piece count untouched.
+    const nextWastageMode = wastageModeForPriceMode(priceMode);
+    const wastageUnitFlipped = wastageModeForPriceMode(docSettings.priceMode) !== nextWastageMode;
     const next = (clearPrices ? rowsWithPricesCleared(items) : items).map((it) => {
       if (lineTypeOf(it) !== LINE_TYPE_TILE) return it;
       const carried = prefill && priceMode === 'DIRECT_NET'
@@ -554,6 +564,7 @@ export function QuotationEditorPage({ user, showToast }) {
       return {
         ...it, ...carried, netUnitPrice: null, lineAmount: null, specialPriceLine: null, calcPending: true,
         ...(perSqm && Number(it.sqmPerBox) > 0 ? { roundToFullBox: true } : {}),
+        ...(wastageUnitFlipped ? { wastageMode: nextWastageMode, wastageValue: 0 } : {}),
       };
     });
     setItems(next);
