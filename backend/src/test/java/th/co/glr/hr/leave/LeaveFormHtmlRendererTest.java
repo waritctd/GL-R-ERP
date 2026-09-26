@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.LocalTime;
 import org.junit.jupiter.api.Test;
 
@@ -25,7 +26,8 @@ class LeaveFormHtmlRendererTest {
             LocalTime.of(8, 30), LocalTime.of(17, 30),
             new BigDecimal("1.00"), "เจ็บขา",
             "12", "พระโขนง", "คลองเตย", "กรุงเทพ", "0917949655",
-            new BigDecimal("11"), new BigDecimal("1"), new BigDecimal("7"), new BigDecimal("3"));
+            new BigDecimal("11"), new BigDecimal("1"), new BigDecimal("7"), new BigDecimal("3"),
+            null, null, null);
     }
 
     @Test
@@ -49,6 +51,35 @@ class LeaveFormHtmlRendererTest {
         assertThat(html).contains(">11<").contains(">7<");
     }
 
+    private LeaveFormData approved() {
+        return new LeaveFormData(
+            "EMP009", "สมชาย ใจดี", "ชาย",
+            "พนักงานขาย", "ทีมขาย", "ฝ่ายขาย",
+            "PERSONAL", "ลากิจ",
+            LocalDate.parse("2026-09-20"),
+            LocalDate.parse("2026-09-22"), LocalDate.parse("2026-09-22"), null, null,
+            new BigDecimal("1.00"), "ธุระ",
+            null, null, null, null, "0800000000",
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            "APPROVED", "จินตนา หาญมนตรี", LocalDateTime.of(2026, 9, 21, 9, 15));
+    }
+
+    @Test
+    void fillsApprovalBoxesWhenApproved() {
+        String html = renderer.render(approved());
+        // The ผู้อนุมัติ signature is the (dynamic) reports-to manager; the HR recorder is the fixed name.
+        assertThat(html).contains("จินตนา หาญมนตรี").contains("ฟ้าใส อิฐรัตน์");
+        assertThat(html).contains("2569").contains("09:15");
+        // Three ticks on an APPROVED form: the leave type (ลากิจ) + เห็นควรอนุมัติ + อนุมัติ (HR).
+        assertThat(html.split("✓", -1).length - 1).isEqualTo(3);
+    }
+
+    @Test
+    void leavesApprovalBoxesBlankWhenPending() {
+        // sick() has no decision -> only the leave-type box is ticked, approval boxes stay empty.
+        assertThat(renderer.render(sick()).split("✓", -1).length - 1).isEqualTo(1);
+    }
+
     @Test
     void marksTheMatchingLeaveTypeBoxOnly() {
         String html = renderer.render(sick());
@@ -63,7 +94,8 @@ class LeaveFormHtmlRendererTest {
             LocalDate.parse("2026-09-08"), LocalDate.parse("2026-09-07"), LocalDate.parse("2026-09-07"),
             null, null, new BigDecimal("1"), "reason & <script>",
             null, null, null, null, null,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            null, null, null);
         String html = renderer.render(d);
         assertThat(html).contains("reason &amp; &lt;script&gt;").doesNotContain("<script>");
         assertThat(html).contains("A &lt;b&gt;x&lt;/b&gt;");

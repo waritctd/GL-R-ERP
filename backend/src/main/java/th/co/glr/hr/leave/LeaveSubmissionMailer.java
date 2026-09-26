@@ -88,6 +88,52 @@ public class LeaveSubmissionMailer {
             body(request, formData), PORTAL_LINK, attachments);
     }
 
+    /**
+     * Emails the employee their completed ใบลา after a manual decision -- the same F-HR-020, now
+     * carrying the ticked ความเห็นผู้บังคับบัญชา / HR-receipt boxes ({@code formData} already reflects
+     * the decision, assembled post-commit by {@link LeaveService#buildLeaveForm}). TO the employee
+     * ONLY (owner decision 2026-09-26); a no-op when they have no address on file. Reuses the
+     * attachment-carrying {@code sendLeaveSubmission} transport with the employee as the sole TO.
+     */
+    @Async
+    public void sendDecision(LeaveRequestDto request, LeaveFormData formData) {
+        String to = notifications.findEmployeeRecipient(request.employeeId())
+            .map(EmailRecipient::email)
+            .filter(email -> email != null && !email.isBlank())
+            .orElse(null);
+        if (to == null) {
+            log.info("Leave decision email skipped: employee={} has no address", request.employeeId());
+            return;
+        }
+        List<Mailer.Attachment> attachments = new ArrayList<>();
+        attachments.add(new Mailer.Attachment(formPdfName(request), formPdf.toPdf(formData), "application/pdf"));
+        emailService.sendLeaveSubmission(to, List.of(), decisionSubject(request),
+            decisionBody(request), PORTAL_LINK, attachments);
+    }
+
+    private String decisionSubject(LeaveRequestDto request) {
+        boolean approved = "APPROVED".equals(request.status());
+        return "[" + nn(request.employeeCode()) + "] " + (approved ? "อนุมัติ" : "ไม่อนุมัติ")
+            + "ใบลา" + leaveWord(request.leaveTypeNameTh()) + " "
+            + ThaiText.dateRange(request.startDate(), request.endDate());
+    }
+
+    private String decisionBody(LeaveRequestDto request) {
+        boolean approved = "APPROVED".equals(request.status());
+        String verdict = approved ? "ได้รับการอนุมัติแล้ว" : "ไม่ได้รับการอนุมัติ";
+        StringBuilder b = new StringBuilder();
+        b.append("เรียน ").append(nn(request.employeeName())).append(",\n\n")
+            .append("ใบลา").append(leaveWord(request.leaveTypeNameTh())).append(" ")
+            .append(dateSpan(request)).append(" ").append(verdict).append("\n\n");
+        if (!approved && request.reviewerNote() != null && !request.reviewerNote().isBlank()) {
+            b.append("เหตุผล: ").append(request.reviewerNote().trim()).append("\n\n");
+        }
+        b.append("ได้แนบใบลาที่ระบุผลการพิจารณามาพร้อมอีเมลนี้แล้ว\n\n")
+            .append("จึงเรียนมาเพื่อทราบ\n\n")
+            .append("ฝ่ายบุคคล");
+        return b.toString();
+    }
+
     private void addSupportingDocument(LeaveRequestDto request, List<Mailer.Attachment> attachments) {
         if (request.attachmentId() == null) {
             return;
@@ -115,19 +161,42 @@ public class LeaveSubmissionMailer {
 
     private String body(LeaveRequestDto request, LeaveFormData formData) {
         String fullName = nn(request.employeeName());
-        return "เรียนฝ่ายบุคคล,\n\n"
+        return "เรียนฝ่ายบุคคลและหัวหน้างาน,\n\n"
             + fullName + " รหัสพนักงาน " + nn(request.employeeCode()) + " ขอแจ้งลา"
             + leaveWord(request.leaveTypeNameTh()) + " เนื่องจาก " + nn(request.reason()) + "\n\n"
-            + "วันที่ลา: " + ThaiText.dateRange(request.startDate(), request.endDate()) + "\n"
+            + "วันที่ลา: " + dateSpan(request) + "\n"
             + "ระยะเวลา: " + durationLabel(request) + "\n\n"
             + "ได้แนบใบลามาพร้อมอีเมลนี้แล้ว\n\n"
-            + "จึงเรียนมาเพื่อให้ทราบ\n\n"
+            + "จึงเรียนมาเพื่อโปรดพิจารณา และขอความกรุณาหัวหน้างานพิจารณาอนุมัติการลาดังกล่าวด้วย "
+            + "จะขอบพระคุณยิ่ง\n\n"
             + fullName + "\n"
             + nn(formData.nickName());
     }
 
+    /**
+     * The leave span for the email. A multi-day TIMED request binds each clock time to its own date --
+     * "ตั้งแต่ X เวลา t1 น. ถึง Y เวลา t2 น." -- so it cannot be misread as "t1-t2 on each day" (the
+     * leave runs continuously from t1 on the first day to t2 on the last). Whole-day and
+     * single-day-timed requests keep the plain date range; durationLabel carries any single-day times.
+     */
+    private String dateSpan(LeaveRequestDto request) {
+        boolean timed = request.startTime() != null && request.endTime() != null;
+        boolean multiDay = request.endDate() != null && !request.endDate().equals(request.startDate());
+        if (timed && multiDay) {
+            return "ตั้งแต่ " + ThaiText.date(request.startDate()) + " เวลา " + hhmm(request.startTime()) + " น."
+                + " ถึง " + ThaiText.date(request.endDate()) + " เวลา " + hhmm(request.endTime()) + " น.";
+        }
+        return ThaiText.dateRange(request.startDate(), request.endDate());
+    }
+
     private String durationLabel(LeaveRequestDto request) {
+        boolean multiDay = request.endDate() != null && !request.endDate().equals(request.startDate());
         if (request.startTime() != null && request.endTime() != null) {
+            // A multi-day timed span's "duration" is the total leave, not the single day's clock window
+            // (that window is now shown per-date on the วันที่ลา line above).
+            if (multiDay) {
+                return LeaveDayMath.formatDuration(request.totalDays());
+            }
             return "เวลา " + hhmm(request.startTime()) + "–" + hhmm(request.endTime()) + " น.";
         }
         BigDecimal days = request.totalDays() == null ? BigDecimal.ZERO : request.totalDays();

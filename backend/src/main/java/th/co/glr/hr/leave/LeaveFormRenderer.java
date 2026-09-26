@@ -2,7 +2,6 @@ package th.co.glr.hr.leave;
 
 import java.io.IOException;
 import java.math.BigDecimal;
-import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import org.apache.pdfbox.pdmodel.font.PDFont;
@@ -42,6 +41,16 @@ public class LeaveFormRenderer {
     private static final float SUBTITLE_SIZE = 12f;
     private static final float BODY_SIZE = 11f;
     private static final float SMALL_SIZE = 9f;
+    // Extra vertical space added after each body row so the form reads less cramped. Local to this
+    // form -- deliberately NOT a change to PdfDocumentWriter.LINE_FACTOR, which every PDF shares.
+    private static final float ROW_GAP = 4f;
+
+    // ผู้รับ/ผู้บันทึก on the HR-receipt box: owner ruling (2026-09) that HR always records the ใบลา
+    // under this name. A constant, not data, precisely because it does not vary per request.
+    private static final String HR_RECORDER = "ฟ้าใส อิฐรัตน์";
+    private static final String SIG_BLANK = "..................................................";
+    private static final String DATE_BLANK = "...........................";
+    private static final String TIME_BLANK = "...................";
 
     public byte[] toPdf(LeaveFormData data) {
         try (PdfDocumentWriter pdf = new PdfDocumentWriter()) {
@@ -81,9 +90,8 @@ public class LeaveFormRenderer {
             pdf.gap(4);
 
             // --- Dates / times ---------------------------------------------------------------------
-            line(pdf, regular, "ระหว่างวันที่ " + thaiDate(data.startDate())
-                + "  ถึงวันที่ " + thaiDate(data.endDate()) + timeClause(data));
-            line(pdf, regular, "รวมวันลา " + days(data.totalDays()) + " วัน" + hoursClause(data));
+            line(pdf, regular, dateTimeLine(data));
+            line(pdf, regular, "รวมวันลา " + LeaveDayMath.formatDuration(data.totalDays()));
             pdf.gap(2);
 
             // --- Reason ----------------------------------------------------------------------------
@@ -105,27 +113,41 @@ public class LeaveFormRenderer {
                 + " · ลาป่วย " + days(data.usedSickDays()) + " วัน"
                 + " · พักร้อน " + days(data.usedVacationDays()) + " วัน)");
             pdf.gap(4);
-            line(pdf, regular, "ลงชื่อ ..................................................  พนักงานผู้ยื่นใบลา");
-            pdf.textRight(regular, SMALL_SIZE, right, "( " + nn(data.employeeName()) + " )");
-            pdf.newLine(SMALL_SIZE);
+            // The applicant is known (this form is auto-generated from their own submission), so their
+            // name is printed on the ลงชื่อ line rather than left as a blank underline. The approver and
+            // HR-receipt ลงชื่อ lines below stay blank -- those are signed by hand.
+            line(pdf, regular, "ลงชื่อ " + nn(data.employeeName()) + "  พนักงานผู้ยื่นใบลา");
             pdf.gap(12);
             pdf.rule(left, right);
             pdf.gap(10);
 
-            // --- Approval / HR receipt (blank for signature) ---------------------------------------
+            // --- Approval / HR receipt --------------------------------------------------------------
+            // Blank on the SUBMITTED form (a human signs the paper); auto-filled once a decision has
+            // stamped the DTO, so the copy re-rendered for the employee shows the ticked box, the
+            // ผู้อนุมัติ signature and the decision date/time. "เพราะ" is intentionally left blank.
+            boolean approved = "APPROVED".equals(data.decision());
+            boolean rejected = "REJECTED".equals(data.decision());
+            boolean decided = approved || rejected;
+            String decisionDate = data.approvedAt() == null ? null : thaiDate(data.approvedAt().toLocalDate());
+            String decisionTime = data.approvedAt() == null ? null : hhmm(data.approvedAt().toLocalTime());
+            String decisionDateTime = data.approvedAt() == null ? null
+                : decisionDate + " เวลา " + decisionTime + " น.";
+
             pdf.textAt(bold, BODY_SIZE, left, "ความเห็นผู้บังคับบัญชา");
             pdf.newLine(BODY_SIZE);
-            line(pdf, regular, checkbox(false) + " เห็นควรอนุมัติ        " + checkbox(false)
+            line(pdf, regular, checkbox(approved) + " เห็นควรอนุมัติ        " + checkbox(rejected)
                 + " เห็นควรไม่อนุมัติ เพราะ ......................................................");
             pdf.gap(2);
-            line(pdf, regular, "ลงชื่อ ..................................................  ผู้อนุมัติ"
-                + "        วันที่ ...........................");
+            line(pdf, regular, "ลงชื่อ " + orBlank(decided ? data.approverName() : null, SIG_BLANK)
+                + "  ผู้อนุมัติ        วันที่ " + orBlank(decisionDate, DATE_BLANK));
             pdf.gap(8);
             pdf.textAt(bold, SMALL_SIZE, left, "สำหรับฝ่ายทรัพยากรบุคคลและธุรการ");
             pdf.newLine(SMALL_SIZE);
-            line(pdf, regular, checkbox(false) + " อนุมัติ    " + checkbox(false)
-                + " ไม่อนุมัติ        ได้รับเอกสารวันที่ ........................... เวลา ...................");
-            line(pdf, regular, "ลงชื่อ ..................................................  ผู้รับ/ผู้บันทึก");
+            line(pdf, regular, checkbox(approved) + " อนุมัติ    " + checkbox(rejected)
+                + " ไม่อนุมัติ        ได้รับเอกสารวันที่ " + orBlank(decisionDate, DATE_BLANK)
+                + " เวลา " + orBlank(decisionTime, TIME_BLANK));
+            line(pdf, regular, "บันทึกลงเครื่องฯ แล้วเมื่อ " + orBlank(decisionDateTime, SIG_BLANK)
+                + "  ลงชื่อ " + orBlank(decided ? HR_RECORDER : null, SIG_BLANK) + "  ผู้รับ/ผู้บันทึก");
 
             pdf.gap(14);
             pdf.rule(left, right);
@@ -142,6 +164,7 @@ public class LeaveFormRenderer {
     private void line(PdfDocumentWriter pdf, PDFont font, String value) throws IOException {
         pdf.textAt(font, BODY_SIZE, pdf.left(), value);
         pdf.newLine(BODY_SIZE);
+        pdf.gap(ROW_GAP);
     }
 
     /** Wraps a long value to the printable width, paginating per line (see LeaveReportRenderer). */
@@ -162,7 +185,29 @@ public class LeaveFormRenderer {
         return "PERSONAL".equals(code) || "SICK".equals(code) || "VACATION".equals(code);
     }
 
-    /** " ตั้งแต่เวลา hh:mm ถึงเวลา hh:mm" for a sub-day request; empty for a whole-day one. */
+    /**
+     * The date/time span line. A multi-day TIMED request binds each clock time to its own date --
+     * "ตั้งแต่วันที่ X เวลา t1 น. ถึงวันที่ Y เวลา t2 น." -- so it can never be misread as
+     * "t1-t2 on each day" (the leave is continuous: t1 on the first day through t2 on the last).
+     * Whole-day and single-day-timed requests keep the compact "ระหว่างวันที่ ... ถึงวันที่ ..." form,
+     * where a single time window unambiguously belongs to the one day it is printed beside.
+     */
+    private String dateTimeLine(LeaveFormData data) {
+        boolean timed = data.startTime() != null && data.endTime() != null;
+        boolean multiDay = data.endDate() != null && !data.endDate().equals(data.startDate());
+        if (timed && multiDay) {
+            String s = "ตั้งแต่วันที่ " + thaiDate(data.startDate()) + " เวลา " + hhmm(data.startTime()) + " น.";
+            s += "  ถึงวันที่ " + thaiDate(data.endDate());
+            if (data.endTime() != null) {
+                s += " เวลา " + hhmm(data.endTime()) + " น.";
+            }
+            return s;
+        }
+        return "ระหว่างวันที่ " + thaiDate(data.startDate())
+            + "  ถึงวันที่ " + thaiDate(data.endDate()) + timeClause(data);
+    }
+
+    /** " ตั้งแต่เวลา hh:mm ถึงเวลา hh:mm" for a single-day sub-day request; empty for a whole-day one. */
     private String timeClause(LeaveFormData data) {
         if (data.startTime() == null) {
             return "";
@@ -172,19 +217,6 @@ public class LeaveFormRenderer {
             clause += " ถึงเวลา " + hhmm(data.endTime());
         }
         return clause;
-    }
-
-    /** " รวมเวลา N ชั่วโมง" for a sub-day request; empty when no times were given. */
-    private String hoursClause(LeaveFormData data) {
-        if (data.startTime() == null || data.endTime() == null) {
-            return "";
-        }
-        long minutes = Duration.between(data.startTime(), data.endTime()).toMinutes();
-        if (minutes <= 0) {
-            return "";
-        }
-        String hours = stripZeros(BigDecimal.valueOf(minutes).divide(BigDecimal.valueOf(60)));
-        return "   รวมเวลา " + hours + " ชั่วโมง";
     }
 
     private String contactLine(LeaveFormData data) {
@@ -227,5 +259,10 @@ public class LeaveFormRenderer {
 
     private String nn(String value) {
         return value == null || value.isBlank() ? "-" : value.trim();
+    }
+
+    /** The value trimmed, or the dotted underline placeholder when it is null/blank. */
+    private String orBlank(String value, String blank) {
+        return value == null || value.isBlank() ? blank : value.trim();
     }
 }
