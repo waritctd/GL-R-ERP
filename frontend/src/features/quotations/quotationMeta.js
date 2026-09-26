@@ -267,21 +267,15 @@ export const QUANTITY_MODE_OPTIONS = [
   { code: 'PIECES', label: 'แผ่น' },
 ];
 
-export const WASTAGE_PERCENT_PRESETS = [0, 5, 10, 15, 20];
+// เผื่อ (wastage) mode switch — mirrors QUANTITY_MODE_OPTIONS' own segmented-control shape exactly
+// (QuotationItemRow renders both with the same styling). PERCENT/PIECES are WastageCalculator's
+// own mode codes; this is a label mapping only, not a source of truth for validation.
+export const WASTAGE_MODE_OPTIONS = [
+  { code: 'PERCENT', label: '%' },
+  { code: 'PIECES', label: 'แผ่น' },
+];
 
-/**
- * Owner decision 2026-09-26: the rep no longer picks the เผื่อ (wastage) unit by hand — it now
- * FOLLOWS the document's price mode (`docSettings.priceMode`), for the whole document, one unit at
- * a time. SPECIAL_SQM prices by the square metre, so its wastage is a PERCENT of that area; NET and
- * DIRECT_NET both price by the แผ่น, so their wastage is a PIECES count. PERCENT/PIECES are still
- * exactly WastageCalculator's own mode codes on the wire — this only decides which one applies,
- * replacing the removed WASTAGE_MODE_OPTIONS segmented toggle as the single source of truth for the
- * unit (QuotationItemRow's display, validateQuotationItem's PIECES-integer check, and
- * itemInputFromRow's wire value all call this instead of reading a rep-set `item.wastageMode`).
- */
-export function wastageModeForPriceMode(priceMode) {
-  return priceMode === 'SPECIAL_SQM' ? 'PERCENT' : 'PIECES';
-}
+export const WASTAGE_PERCENT_PRESETS = [0, 5, 10, 15, 20];
 
 // ประเทศต้นทาง select + its default lead-time range (min/max days), editable per line. Mirrors
 // the plan's "อิตาลี/สเปน/จีน/ไทย-สต็อก/อื่นๆ" list exactly, in that order.
@@ -1015,11 +1009,8 @@ export function validateQuotationItem(item, priceMode = 'NET', documentLanguage 
   }
   // Wording-scan fix 5 (2026-09-17): mirrors DealQuotationService's new PIECES-wastage
   // whole-number refusal -- PERCENT wastage is untouched, a percentage genuinely can be
-  // fractional (2.5%). Owner decision 2026-09-26: the unit is no longer a rep-set
-  // `item.wastageMode` -- it is DERIVED from the document's price mode (wastageModeForPriceMode),
-  // same as the display and the wire value, so all three can never disagree about which rows this
-  // check applies to.
-  if (wastageModeForPriceMode(priceMode) === 'PIECES' && item?.wastageValue !== '' && item?.wastageValue != null
+  // fractional (2.5%).
+  if (item?.wastageMode === 'PIECES' && item?.wastageValue !== '' && item?.wastageValue != null
     && Number.isFinite(Number(item.wastageValue)) && !Number.isInteger(Number(item.wastageValue))) {
     errors.wastageValue = 'จำนวนแผ่นที่เผื่อต้องเป็นจำนวนเต็ม';
   }
