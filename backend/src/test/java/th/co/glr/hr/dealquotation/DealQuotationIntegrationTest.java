@@ -2552,16 +2552,20 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         return out;
     }
 
+    /** ⚠️ Owner-directed reversal of V167/F2 (2026-09-26): create used to refuse a deal with no
+     * resolvable contact ("กรุณาระบุผู้สั่งซื้อ") -- the frontend's required contact-picker dropdown
+     * that rule existed for is gone (ผู้สั่งซื้อ is now a single optional free-text signature-name
+     * field, unrelated to this contact snapshot), so this now proves the OPPOSITE: create succeeds
+     * with a blank contact snapshot. See #resolveContact's own Javadoc for the relaxed rule. */
     @Test
-    void create_withoutAnyResolvableContact_isBadRequest() {
+    void create_withNoResolvableContact_succeedsWithABlankContactSnapshot() {
         ProjectDto project = projects.create(customer.id(), "โครงการไม่มีผู้ติดต่อ");
         long noContactTicket = createTicket("ดีลไม่มีผู้สั่งซื้อ", project.id(), null, salesActor);
-        assertThatThrownBy(() -> quotationService.create(noContactTicket,
-                upsertRequest(List.of(sampleItem("100.00", 10))), salesActor))
-            .isInstanceOf(ApiException.class)
-            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
-            .hasMessage("กรุณาระบุผู้สั่งซื้อ");
-        assertThat(quotationRepository.findByTicket(noContactTicket)).as("nothing was inserted").isEmpty();
+        DealQuotationDto created = quotationService.create(noContactTicket,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        assertThat(created.contactId()).isNull();
+        assertThat(created.contactName()).isNull();
+        assertThat(quotationRepository.findByTicket(noContactTicket)).as("the draft was inserted").isNotEmpty();
     }
 
     /** An explicit {@code contactId} overrides the deal's default — and a contact of ANOTHER
@@ -2646,18 +2650,20 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(cleared.projectName()).isNull();
     }
 
-    /** submit is the last gate: a row that predates V167 (no snapshot) cannot go to an approver.
-     * Reproduced by blanking the snapshot straight in the DB. */
+    /** ⚠️ Owner-directed reversal of V167/F2 (2026-09-26): submit used to be the last gate refusing
+     * a row with no contact snapshot (predating V167, or -- since this reversal -- any row created
+     * with none at all now that create/update allow it). That refusal ("กรุณาระบุผู้สั่งซื้อ") is
+     * gone; this now proves submit SUCCEEDS on a row with a blanked contact snapshot, reproduced by
+     * blanking it straight in the DB exactly as before. */
     @Test
-    void submit_refusesARowWithNoContactSnapshot() {
+    void submit_succeedsOnARowWithNoContactSnapshot() {
         DealQuotationDto created = quotationService.create(ticketId,
             upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
         jdbc.update("UPDATE sales.quotation SET contact_id = NULL, contact_name = NULL WHERE quotation_id = :id",
             java.util.Map.of("id", created.id()));
-        assertThatThrownBy(() -> quotationService.submit(created.id(), salesActor))
-            .isInstanceOf(ApiException.class)
-            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
-            .hasMessage("กรุณาระบุผู้สั่งซื้อ");
+        DealQuotationDto submitted = quotationService.submit(created.id(), salesActor);
+        assertThat(submitted.contactId()).isNull();
+        assertThat(submitted.docStatus()).isEqualTo(QuotationStatus.PENDING_APPROVAL);
     }
 
     @Test

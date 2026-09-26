@@ -1106,17 +1106,17 @@ public class DealQuotationService {
         DealQuotationDto quotation = requireQuotation(id);
         requireEditAccessForQuotation(actor, quotation);
         // GLA-123 slice S2: submit is now LIVE for BOTH origins — every validation below (item
-        // completeness, ผู้สั่งซื้อ, payment term, validity date) is origin-agnostic and applies
-        // unchanged; only approve/reject/issue diverge (see #approve/#reject's own origin branch).
+        // completeness, payment term, validity date) is origin-agnostic and applies unchanged;
+        // only approve/reject/issue diverge (see #approve/#reject's own origin branch).
         if (quotation.items().isEmpty()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ใบเสนอราคาต้องมีอย่างน้อยหนึ่งรายการก่อนส่งขออนุมัติ");
         }
-        // ผู้สั่งซื้อ is mandatory (owner feedback F2): create/update already refuse a draft with no
-        // resolvable contact, so this only ever catches a row that predates V167 on a ticket that
-        // had no contact -- it stays a draft until the rep saves it with one.
-        if (quotation.contactId() == null || isBlank(quotation.contactName())) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาระบุผู้สั่งซื้อ");
-        }
+        // ⚠️ Owner-directed reversal of V167/F2 (2026-09-26): ผู้สั่งซื้อ used to be mandatory here
+        // ("กรุณาระบุผู้สั่งซื้อ" refused a submit with no resolvable contact) — the frontend's
+        // required contact-picker dropdown is gone, replaced by a single optional free-text
+        // signature-name field (`orderedByName`, unrelated to `contactId`/`contactName`), so a
+        // quotation with no contact at all must now submit successfully. See #resolveContact's own
+        // comment for the matching create/update-side relaxation.
         // Item 4 ("ไม่รับมัดจำ", V181, owner ruling 2026-09-16): a zero-deposit document must name
         // ONE of the three payment terms before an approver ever sees it — create/update allow a
         // DRAFT to be saved with no term chosen yet (isZeroDeposit(...) ? blankToNull(...) : null),
@@ -2336,19 +2336,27 @@ public class DealQuotationService {
      * Resolves the ผู้สั่งซื้อ for a create/update and returns the FROZEN snapshot to store —
      * precedence: the request's own {@code contactId}, else the contact the draft already carries
      * ({@code existingContactId}, update only), else the deal's contact
-     * ({@code sales.ticket.contact_id}). None → 400 "กรุณาระบุผู้สั่งซื้อ" (the owner's rule: a
-     * quotation cannot be saved without one). The contact must exist and belong to the deal's
-     * customer — a contact id from another customer is a client bug or a probe, refused as 400 with
-     * the same wording so nothing about other customers' contacts leaks. The name/phone/email are
-     * read NOW and written onto the quotation; a later edit of the contact row never changes the
-     * document (see V167's header for why that matters for an approved, emailed PDF).
+     * ({@code sales.ticket.contact_id}).
+     *
+     * ⚠️ Owner-directed reversal of V167/F2 (2026-09-26): a resolvable contact is NO LONGER
+     * required. This used to throw 400 "กรุณาระบุผู้สั่งซื้อ" when nothing in the precedence chain
+     * resolved (the owner's original rule: a quotation could not be saved without one) — the
+     * frontend's required contact-picker dropdown that rule existed for is gone (ผู้สั่งซื้อ is now
+     * a single optional free-text signature-name field, `orderedByName`, tracked entirely
+     * separately from this contact snapshot), so a create/update/submit with no contact anywhere in
+     * the chain now returns a blank snapshot instead of refusing. A contact id that IS given (or
+     * inherited) is still validated exactly as before: it must exist and belong to the deal's
+     * customer — a contact id from another customer is a client bug or a probe, still refused as
+     * 400 with the same wording so nothing about other customers' contacts leaks. The name/phone/
+     * email are read NOW and written onto the quotation; a later edit of the contact row never
+     * changes the document (see V167's header for why that matters for an approved, emailed PDF).
      */
     private ContactSnapshot resolveContact(Long requestedContactId, Long existingContactId, TicketSummaryDto ticket) {
         Long contactId = requestedContactId != null ? requestedContactId
             : existingContactId != null ? existingContactId
             : ticket.contactId();
         if (contactId == null) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาระบุผู้สั่งซื้อ");
+            return new ContactSnapshot(null, null, null, null);
         }
         ContactDto contact = contacts.findById(contactId)
             .filter(c -> ticket.customerId() != null && c.customerId() == ticket.customerId())
