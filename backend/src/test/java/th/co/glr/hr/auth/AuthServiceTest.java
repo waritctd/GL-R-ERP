@@ -111,6 +111,18 @@ class AuthServiceTest {
     }
 
     @Test
+    void loginSurfacesCanIssueBillingNoteGrantAsAUiHint() {
+        when(employees.findByEmail("hr@glr.co.th"))
+            .thenReturn(Optional.of(employee(17L, encoder.encode("Str0ngPass!"), false)));
+        when(employees.canIssueBillingNote(42L)).thenReturn(true);
+
+        AuthResponse response = service.login(
+            new LoginRequest("hr@glr.co.th", "Str0ngPass!", null), new MockHttpServletRequest());
+
+        assertThat(response.canIssueBillingNote()).isTrue();
+    }
+
+    @Test
     void surfacesMustChangePasswordFlagFromTemporaryHash() {
         when(employees.findByEmail("employee@glr.co.th"))
             .thenReturn(Optional.of(employee(3L, encoder.encode("GLR-42"), true)));

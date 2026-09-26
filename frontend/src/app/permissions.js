@@ -94,7 +94,15 @@ const PATH_GUARDS = [
   // Account's money-lifecycle worklist (งานการเงิน) — mirrors ROLE_PERMISSIONS
   // .canConfirmPayments exactly (account/ceo), same audience as the ticket
   // confirmDepositPaid/confirmFinalPayment/confirmCloseReady actions this
-  // page's rows drive.
+  // page's rows drive. Deliberately NOT OR'd with isBillingNoteReleaseUser
+  // (GLA-129) yet — AccountFinancePage.jsx has no internal tab scoping today,
+  // so opening this guard for a can_issue_billing_note grant holder before
+  // that scoping exists would hand a plain `employee` grant holder the WHOLE
+  // finance worklist (payment-confirmation queue, close-ready actions, etc.),
+  // not just ใบวางบิล — caught in review (GLA-129 branch 1, 2026-09-23). The
+  // step-4 UI branch adds this OR at the SAME time it adds the page's own
+  // tab-level gate, so the two land atomically and there is no window where
+  // the page is reachable but unscoped.
   { test: (p) => p === '/finance', can: (u) => hasPermission(u.role, 'canConfirmPayments') },
   // Split (issue #390): mirrors PayrollController exactly -- every GET plus the non-persisting
   // POST /preview and /preview/export/{kind} are hasAnyRole('HR','CEO'); every write stays
@@ -240,6 +248,24 @@ function isQuotationPath(path) {
   // Pathname only, and the prefix needs its slash: `/quotations-archive` must not ride along.
   const pathname = path.split(/[?#]/)[0];
   return pathname === '/quotations' || pathname.startsWith('/quotations/');
+}
+
+// Billing-note release predicate (GLA-99/GLA-129, owner ruling, Ploy 2026-09-19): identifies a
+// holder of the per-employee can_issue_billing_note grant (BillingNoteService.hasWriteGrant),
+// which — like canCreateQuotation above — can land on a role none of the other guards would admit
+// (e.g. a plain `employee`). Grant-driven, not role-driven, same shape as isQuotationReleaseUser —
+// and deliberately NOT account/ceo here: `account` is NOT exempt from the self-service lockdown
+// (only hr/ceo are, SELF_SERVICE_EXEMPT_ROLES above), so a caller wiring this predicate into a
+// lockdown exemption must never let it un-hide a path for a plain account role while locked.
+//
+// NOT YET WIRED into PATH_GUARDS, the lockdown bypass below, or AppShell's nav — deliberately, per
+// review (GLA-129 branch 1, 2026-09-23): AccountFinancePage.jsx has no internal tab-level scoping
+// today, so opening /finance's route guard for a grant holder before that scoping exists would
+// expose the WHOLE finance worklist, not just ใบวางบิล. The step-4 UI branch wires this predicate
+// into PATH_GUARDS' /finance entry, the lockdown exemption, and AppShell's nav item in the SAME
+// change that adds AccountFinancePage.jsx's own tab gate, so the three always land together.
+export function isBillingNoteReleaseUser(user) {
+  return Boolean(user?.canIssueBillingNote);
 }
 
 export function canAccessPath(path, user) {
