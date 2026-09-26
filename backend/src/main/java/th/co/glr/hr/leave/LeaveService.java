@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Clock;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
@@ -840,6 +841,7 @@ public class LeaveService {
                 + "\nโควตาคงเหลือ " + formatDays(after.quotaRemainingAfter()) + " วัน",
             "/leave",
             true);
+        emailLeaveDecision(after);
         return withCanReviewFlag(after, user);
     }
 
@@ -864,6 +866,7 @@ public class LeaveService {
                 + "\nหากต้องการยื่นใหม่ กรุณาส่งคำขออีกครั้งในระบบ",
             "/leave",
             true);
+        emailLeaveDecision(after);
         return withCanReviewFlag(after, user);
     }
 
@@ -2731,11 +2734,34 @@ public class LeaveService {
         });
     }
 
+    /**
+     * Schedules the completed ใบลา (now carrying the filled ความเห็นผู้บังคับบัญชา / HR-receipt boxes)
+     * to the employee after an APPROVE/REJECT commits -- same after-commit + null-guard + swallow-and-log
+     * rule as {@link #emailLeaveSubmission}. {@code buildLeaveForm} runs post-commit, so it reads the
+     * reviewed request (status + reviewedAt + manager) and fills the decision boxes.
+     */
+    private void emailLeaveDecision(LeaveRequestDto request) {
+        if (leaveSubmissionMailer == null) {
+            return;
+        }
+        runAfterCommit(() -> {
+            try {
+                leaveSubmissionMailer.sendDecision(request, buildLeaveForm(request));
+            } catch (Exception exception) {
+                log.error("Leave decision email failed: request={} error={}", request.id(),
+                    exception.getMessage());
+            }
+        });
+    }
+
     /** Assembles the ใบลา F-HR-020 fields: the request itself, the employee's nickname/position/
      * department/division (two read-only lookups), and year-to-date approved usage per type (the
      * balance math this class owns). Runs post-commit; the just-submitted request is SUBMITTED, so it
      * contributes to pending -- not approved -- usage and never inflates its own history figures. */
-    private LeaveFormData buildLeaveForm(LeaveRequestDto request) {
+    // Package-private for LeaveServiceTest: the DTO -> LeaveFormData mapping (decision derivation,
+    // approverName = reports-to manager, reviewedAt -> Bangkok LocalDateTime) is otherwise only
+    // exercised through the after-commit email path, which the unit test wires with a null mailer.
+    LeaveFormData buildLeaveForm(LeaveRequestDto request) {
         long employeeId = request.employeeId();
         int year = request.quotaYear();
         LeaveContactDefaultsDto defaults = leaveRepository.findContactDefaults(employeeId).orElse(null);
@@ -2746,6 +2772,14 @@ public class LeaveService {
         BigDecimal usedTotal = leaveRepository.findLeaveTypes().stream()
             .map(type -> usedDaysThisYear(employeeId, year, type.code()))
             .reduce(BigDecimal.ZERO, BigDecimal::add);
+        // Approval outcome: null on a SUBMITTED form (boxes render blank for HR to sign); populated
+        // once a human APPROVE/REJECT has stamped reviewedAt, so the copy re-rendered for the employee
+        // carries the ticked box, the ผู้อนุมัติ signature (the reports-to manager) and the decision
+        // date/time. AUTO_REJECTED has no reviewer, so its status is deliberately not mapped here.
+        String decision = "APPROVED".equals(request.status()) ? "APPROVED"
+            : "REJECTED".equals(request.status()) ? "REJECTED" : null;
+        LocalDateTime approvedAt = request.reviewedAt() == null ? null
+            : request.reviewedAt().atZoneSameInstant(BUSINESS_ZONE).toLocalDateTime();
         return new LeaveFormData(
             request.employeeCode(), request.employeeName(), nickName,
             defaults == null ? null : defaults.positionTh(),
@@ -2757,7 +2791,8 @@ public class LeaveService {
             request.totalDays(), request.reason(),
             request.contactHouseNo(), request.contactSubdistrict(), request.contactDistrict(),
             request.contactProvince(), request.contactPhone(),
-            usedTotal, usedPersonal, usedSick, usedVacation);
+            usedTotal, usedPersonal, usedSick, usedVacation,
+            decision, request.managerName(), approvedAt);
     }
 
     /** Approved days used for one type in one quota year -- the "ประวัติการลาในรอบปีนี้" figures on the

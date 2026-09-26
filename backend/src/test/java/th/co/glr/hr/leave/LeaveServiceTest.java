@@ -17,6 +17,7 @@ import java.time.DayOfWeek;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
+import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.util.Collection;
@@ -2968,6 +2969,47 @@ class LeaveServiceTest {
     // making every test carry every real seeded value. The real seeded values (VACATION notice=3,
     // min-service=12; PERSONAL notice=1, min-service=4, max-consecutive=3; etc.) are covered by
     // LeaveTypeRuleIntegrationTest against the real V116-migrated schema.
+    @Test
+    void buildLeaveFormMapsDecisionApproverAndConvertsTimestampToBangkok() {
+        when(leaveRepository.findContactDefaults(anyLong())).thenReturn(Optional.empty());
+        when(leaveRepository.findNickname(anyLong())).thenReturn(Optional.empty());
+        when(leaveRepository.findLeaveTypes()).thenReturn(List.of());
+
+        // 02:15Z == 09:15 Asia/Bangkok; the reports-to manager becomes the ผู้อนุมัติ signature.
+        LeaveFormData approved = leaveService.buildLeaveForm(
+            reviewedDto("APPROVED", "จินตนา หาญมนตรี", OffsetDateTime.parse("2026-09-21T02:15:00Z")));
+        assertThat(approved.decision()).isEqualTo("APPROVED");
+        assertThat(approved.approverName()).isEqualTo("จินตนา หาญมนตรี");
+        assertThat(approved.approvedAt()).isEqualTo(LocalDateTime.of(2026, 9, 21, 9, 15));
+
+        // A pending SUBMITTED form leaves the approval boxes blank.
+        LeaveFormData pending = leaveService.buildLeaveForm(reviewedDto("SUBMITTED", "จินตนา หาญมนตรี", null));
+        assertThat(pending.decision()).isNull();
+        assertThat(pending.approvedAt()).isNull();
+
+        // AUTO_REJECTED is a system outcome with no human reviewer -> must NOT tick a box.
+        assertThat(leaveService.buildLeaveForm(reviewedDto("AUTO_REJECTED", null, null)).decision()).isNull();
+    }
+
+    private LeaveRequestDto reviewedDto(String status, String managerName, OffsetDateTime reviewedAt) {
+        OffsetDateTime ts = OffsetDateTime.parse("2026-09-20T09:00:00+07:00");
+        return new LeaveRequestDto(
+            77L, 10L, "EMP001", "พลอย วริศ",
+            "SICK", "ลาป่วย", "Sick leave",
+            LocalDate.parse("2026-09-22"), LocalDate.parse("2026-09-22"), null, null,
+            new BigDecimal("1.00"), new BigDecimal("1.00"), new BigDecimal("0.00"),
+            2026, "เจ็บขา", null, null, status,
+            new BigDecimal("6.00"), new BigDecimal("5.00"), null,
+            10L, "พลอย วริศ", ts,
+            reviewedAt == null ? null : 99L, managerName, reviewedAt, null, null,
+            99L, managerName,
+            ts, ts,
+            "12", "พระโขนง", "คลองเตย", "กรุงเทพ", "0917949655",
+            null, false, null, Map.of(), false,
+            null, null,
+            List.of(), BigDecimal.ZERO);
+    }
+
     private LeaveTypeDto vacationType() {
         // proratedFirstYear=false here (deliberate, same "no restriction on fields not under test"
         // convention as every other field in this fixture): pro-ration is covered by its own
