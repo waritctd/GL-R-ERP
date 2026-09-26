@@ -155,17 +155,23 @@ class QuotationRendererNoPictureGoldenTest {
         // any of the five fixtures, is that one "col 8 w=" line). paginated is excluded from this
         // list: its case is skipped by the Assumptions.assumeTrue column-unit guard above on this
         // machine already, independently of this fix.
+        // Re-pinned 2026-09-26 (task 4, owner tuning): SIGNATURE_LIFT_ABOVE_RULE_MM raised
+        // 0.4mm -> 1.5mm so the ink sits clear above the rule. The regenerated .txt dumps for the
+        // four signature-bearing fixtures differ from their prior version ONLY in the signature
+        // picture's vertical anchor (same md5 image content, same x-column) -- confirmed by
+        // `git diff` on the golden .txt files. legacy-shape has no signature block, so its hash is
+        // unchanged. These four hashes are the post-lift bytes.
         java.util.Map<String, String> preFeatureSha256 = java.util.Map.of(
-            "single-page", "a144c7d73b3ef35a672b50803eb2d66a83576a6a333bd7c52963ffa0fcd96761",
-            "one-page-scaled", "0b5d2600234181677dd118ba713badc989872fa267c46304bf94cb6d9dd678a1",
-            "paginated", "e85b9df1fdd2d9dccb5bd6a300bb6afb22f62e7ab862c1ea124a4ea9ca3d5317",
+            "single-page", "f155e2a39b4d449f55c950b575deb77a61283801f6cc7216b9d45109c831e395",
+            "one-page-scaled", "094d8973f9091afbfebee5b9efb4eaf92b361c065f174e0b1632f7c9596f9845",
+            "paginated", "0f9b7f136a44193970846940a95df088ea093865ea5240b10e69b8a748c6b55f",
             // Re-pinned on develop 80f2484e: #930 deliberately changed the English form's output.
             // Re-pinned again 2026-09-13 (owner ruling 2): QuotationRenderer#applyEnglishTotals now
             // strips every border from the emptied subtotal/VAT rows and hides them, so Grand Total
             // sits directly under the table box. The regenerated english.txt differs from its prior
             // version ONLY in those two rows (hidden, b=NONE) plus the style indices the new
             // borderless styles shift; the four Thai fixtures are byte-identical.
-            "english", "0bfe7ba2d9a493026b979e991768b392773d88511d8293a8a16f7e8667f06dff",
+            "english", "c083845a8a023048a53cef8cbcff841a3e480a58ebc0c36aee9c4408dc661b92",
             "legacy-shape", "a92e576f622abb6fd0c2a49051e5513ae162adadbfb4b21636f56b7484de28fe");
         byte[] xls = renderer.toXls(model(fixture));
         String expectedUnit = Files.readString(Path.of("src/test/resources/quotation-golden", fixture + ".txt"),

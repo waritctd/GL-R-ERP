@@ -13,6 +13,7 @@ import java.io.InputStream;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import javax.imageio.ImageIO;
@@ -76,6 +77,11 @@ class DealQuotationApproverSnapshotIntegrationTest extends AbstractPostgresInteg
     private EmployeeSignatureRepository signatureRepository;
 
     private long managerId;
+    // Task 4 (slot signatures, 2026-09-26): the ticket's creator/sales-rep id, needed by the two
+    // new tests below (createSubmittedApproved's ticket is always created by salesActor, so
+    // createdById == salesRepId == salesId on this fixture — see those tests' own Javadoc).
+    private long salesId;
+    private EmployeeRepository employeeRepository;
     private UserPrincipal salesActor;
     private UserPrincipal managerActor;
     private long ticketId;
@@ -89,6 +95,7 @@ class DealQuotationApproverSnapshotIntegrationTest extends AbstractPostgresInteg
         ProjectRepository projects = new ProjectRepository(jdbc);
         EmployeeRepository employees = new EmployeeRepository(
             jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
+        employeeRepository = employees;
         TicketService ticketService = new TicketService(tickets, notifications, new ObjectMapper(), customers,
             new QuotationRenderer(), null, new EmployeeAuthRepository(jdbc));
         signatureRepository = new EmployeeSignatureRepository(jdbc);
@@ -113,7 +120,7 @@ class DealQuotationApproverSnapshotIntegrationTest extends AbstractPostgresInteg
             new CatalogRepository(jdbc), "https://portal.test", "", "", "");
         signatureService = new EmployeeSignatureService(signatureRepository, new ActivityLogRepository(jdbc));
 
-        long salesId = createEmployee(employees, "พนักงานขาย สแนป", "sales-snap@glr.co.th", "SALES", "แผนกขาย", null);
+        salesId = createEmployee(employees, "พนักงานขาย สแนป", "sales-snap@glr.co.th", "SALES", "แผนกขาย", null);
         managerId = createEmployee(employees, "ผู้จัดการ สแนป", "manager-snap@glr.co.th", "SALES", "ฝ่ายขาย",
             "ผู้จัดการฝ่ายขาย");
         renameApprover("สมชาย", "อนุมัติ", "Somchai", "Approver");
@@ -287,6 +294,78 @@ class DealQuotationApproverSnapshotIntegrationTest extends AbstractPostgresInteg
         return row != null ? row.getHeightInPoints() : sheet.getDefaultRowHeightInPoints();
     }
 
+    // ── Task 4 (slot signatures, 2026-09-26): ผู้พิมพ์/พนักงานขาย resolve LIVE, never snapshotted ──
+
+    /**
+     * The DEFAULT (no display override) path: {@code createdById} and {@code salesRepId} both
+     * resolve to {@code salesId} on this fixture's ticket ({@code createSubmittedApproved} is
+     * always created by {@code salesActor}, and {@code ticketService.create}'s own creator IS the
+     * ticket's {@code salesRepId} — see {@code DealQuotationService#create}'s
+     * {@code InsertDraftParams}). Uploading ONE signature for {@code salesId} must therefore make
+     * BOTH the ผู้พิมพ์ (slot 0) and พนักงานขาย (slot 1) pictures print it — proving
+     * {@code DealQuotationService#toRenderModel}'s new {@code printedById}/{@code salesRepId}
+     * resolution actually reaches the render, live, with NO approval event involved at all (unlike
+     * the approver's snapshot-frozen bytes, this is re-resolved on every single render).
+     */
+    @Test
+    void printedByAndSalesRepSlots_resolveTheRealCreatedByAndSalesRepId_liveOnEveryRender() throws Exception {
+        signatureService.upload(salesId, png(signatureA()), salesActor);
+        byte[] storedA = signatureRepository.find(salesId).orElseThrow().image();
+
+        DealQuotationDto approved = createSubmittedApproved();
+        assertThat(approved.approverHasSignature()).as("manager never uploaded one for this test").isFalse();
+
+        Map<Integer, byte[]> bySlot = signaturePicturesBySlot(render(approved));
+        assertThat(bySlot).as("ผู้พิมพ์ (0) and พนักงานขาย (1) both print salesId's signature; no approver picture")
+            .containsOnlyKeys(0, 1);
+        assertThat(bySlot.get(0)).as("ผู้พิมพ์ slot").isEqualTo(storedA);
+        assertThat(bySlot.get(1)).as("พนักงานขาย slot").isEqualTo(storedA);
+
+        // LIVE, not frozen: replacing the signature AFTER approval must change what a fresh render
+        // prints — the opposite of the approver's V175 snapshot behaviour pinned by the tests above.
+        signatureService.upload(salesId, png(signatureB()), salesActor);
+        byte[] storedB = signatureRepository.find(salesId).orElseThrow().image();
+        Map<Integer, byte[]> afterReplace = signaturePicturesBySlot(render(approved));
+        assertThat(afterReplace.get(0)).as("live re-resolution: now B, not A").isEqualTo(storedB);
+        assertThat(afterReplace.get(1)).isEqualTo(storedB);
+    }
+
+    /**
+     * The DISPLAY-OVERRIDE path (V179 {@code printedByDisplayId}): a rep may pick a DIFFERENT
+     * eligible employee's name for the ผู้พิมพ์ slot, and {@code DealQuotationService#toRenderModel}
+     * must resolve THAT id's signature — not {@code createdById}'s — independently of slot 1, which
+     * keeps resolving the real {@code salesRepId} exactly as the test above pins. The override
+     * employee needs a division whose {@code source_code} lower-cases to
+     * {@code DivisionAccessPolicy.SALES_DIVISION_CODE} ("sa") to pass
+     * {@code requireEligibleDisplayEmployeeId} — {@code "SA"} does that; this fixture's other
+     * employees deliberately do NOT ({@code "SALES"} lower-cases to "sales", not "sa"), so this is
+     * the one case in this file that needs a purpose-built eligible employee.
+     */
+    @Test
+    void printedByDisplaySlot_resolvesTheSelectedEmployeesSignature_independentlyOfSalesRepSlot() throws Exception {
+        long displayId = createEmployee(employeeRepository, "พนักงานขาย สอง", "sales2-snap@glr.co.th", "SA",
+            "ฝ่ายขาย2", null);
+        UserPrincipal displayActor = actor(displayId, "sales");
+        signatureService.upload(salesId, png(signatureA()), salesActor);
+        byte[] storedA = signatureRepository.find(salesId).orElseThrow().image();
+        signatureService.upload(displayId, png(signatureB()), displayActor);
+        byte[] storedB = signatureRepository.find(displayId).orElseThrow().image();
+        assertThat(storedB).isNotEqualTo(storedA);
+
+        DealQuotationDto created = quotationService.create(ticketId, upsertRequestWithPrintedByDisplayId(displayId),
+            salesActor);
+        assertThat(created.printedByDisplayId()).isEqualTo(displayId);
+        quotationService.submit(created.id(), salesActor);
+        DealQuotationDto approved = quotationService.approve(created.id(), new ApproveRequest(null), managerActor);
+
+        Map<Integer, byte[]> bySlot = signaturePicturesBySlot(render(approved));
+        assertThat(bySlot).containsOnlyKeys(0, 1);
+        assertThat(bySlot.get(0)).as("ผู้พิมพ์: the DISPLAY override employee's signature, not salesId's")
+            .isEqualTo(storedB);
+        assertThat(bySlot.get(1)).as("พนักงานขาย: unaffected -- still the real salesRepId (salesId)")
+            .isEqualTo(storedA);
+    }
+
     // ── V175 BACKFILL (owner ruling 2026-09-13, "Freeze them unsigned.") ─────────────────────
 
     /**
@@ -429,6 +508,43 @@ class DealQuotationApproverSnapshotIntegrationTest extends AbstractPostgresInteg
         }
     }
 
+    /**
+     * Task 4 (slot signatures, 2026-09-26): every signature picture anchored on the labels row,
+     * bucketed by which of the four equal-width slots (0=ผู้พิมพ์..3=ผู้สั่งซื้อ) its CENTRE pixel
+     * falls in — same anchor-row filter as {@link #signatureBytes}, generalized to more than one
+     * picture and keyed by slot instead of asserting "at most one" for the whole row. Fails loudly
+     * if two pictures land in the same slot (a real bug, never an expected shape here).
+     */
+    private static Map<Integer, byte[]> signaturePicturesBySlot(byte[] xls) throws Exception {
+        try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xls))) {
+            Sheet sheet = sheet(wb);
+            int labels = labelsRow(sheet);
+            double totalWidthPx = 0;
+            for (int c = 0; c <= 8; c++) totalWidthPx += sheet.getColumnWidthInPixels(c);
+            double quarterPx = totalWidthPx / 4;
+
+            Map<Integer, byte[]> bySlot = new HashMap<>();
+            for (var shape : ((HSSFSheet) sheet).getDrawingPatriarch().getChildren()) {
+                if (shape instanceof HSSFPicture pic
+                    && pic.getClientAnchor().getRow1() <= labels
+                    && pic.getClientAnchor().getRow2() >= labels
+                    && pic.getClientAnchor().getRow2() <= labels + 1) {
+                    var anchor = pic.getClientAnchor();
+                    double startPx = 0;
+                    for (int c = 0; c < anchor.getCol1(); c++) startPx += sheet.getColumnWidthInPixels(c);
+                    startPx += anchor.getDx1() / 1024.0 * sheet.getColumnWidthInPixels(anchor.getCol1());
+                    double endPx = 0;
+                    for (int c = 0; c < anchor.getCol2(); c++) endPx += sheet.getColumnWidthInPixels(c);
+                    endPx += anchor.getDx2() / 1024.0 * sheet.getColumnWidthInPixels(anchor.getCol2());
+                    int slot = (int) Math.min(3, Math.floor(((startPx + endPx) / 2) / quarterPx));
+                    assertThat(bySlot).as("at most one signature picture per slot").doesNotContainKey(slot);
+                    bySlot.put(slot, pic.getPictureData().getData());
+                }
+            }
+            return bySlot;
+        }
+    }
+
     private static String signatureNames(byte[] xls) throws Exception {
         try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xls))) {
             Sheet sheet = sheet(wb);
@@ -466,6 +582,19 @@ class DealQuotationApproverSnapshotIntegrationTest extends AbstractPostgresInteg
             new BigDecimal("100.00"), BigDecimal.ZERO, "ไทย-สต็อก", 30, 45, null);
         return new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
             "หมายเหตุทดสอบ", List.of(item));
+    }
+
+    /** Same fixture as {@link #upsertRequest} plus a ผู้พิมพ์ display-name override (V179) —
+     * the canonical (20-arg) constructor is needed here since none of the legacy overloads carry
+     * {@code printedByDisplayId}/{@code salesRepDisplayId} without carrying every field before it. */
+    private UpsertDealQuotationRequest upsertRequestWithPrintedByDisplayId(Long printedByDisplayId) {
+        ItemInput item = new ItemInput(null, null, null, "Brand A", "Model A", "White", "Matte", "60x60",
+            new BigDecimal("10"), new BigDecimal("0.36"),
+            WastageCalculator.QUANTITY_MODE_PIECES, null, 10, WastageCalculator.WASTAGE_MODE_NONE, null, 1,
+            new BigDecimal("100.00"), BigDecimal.ZERO, "ไทย-สต็อก", 30, 45, null);
+        return new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
+            null, null, "หมายเหตุทดสอบ", null, null, null, printedByDisplayId, null, null, null, null,
+            List.of(item));
     }
 
     private long createEmployee(EmployeeRepository employees, String nameTh, String email,
