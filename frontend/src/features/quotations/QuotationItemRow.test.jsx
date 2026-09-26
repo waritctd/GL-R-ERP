@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { api } from '../../api/index.js';
 import {
@@ -14,8 +14,8 @@ vi.mock('../../api/index.js', () => ({
 
 function renderRow(itemOverrides = {}, onChange = vi.fn()) {
   const item = { ...emptyQuotationItem(), ...itemOverrides };
-  render(<QuotationItemRow item={item} index={0} onChange={onChange} onRemove={vi.fn()} />);
-  return { item, onChange };
+  const { container } = render(<QuotationItemRow item={item} index={0} onChange={onChange} onRemove={vi.fn()} />);
+  return { item, onChange, container };
 }
 
 describe('QuotationItemRow — English per-sqm (owner decision 2026-09-13)', () => {
@@ -241,15 +241,71 @@ describe('QuotationItemRow', () => {
     expect(onChange).not.toHaveBeenCalledWith(expect.objectContaining({ productCode: expect.anything() }));
   });
 
-  // #L4: "กำหนดเอง" must open the custom input, not silently write an arbitrary 12%.
-  it('"กำหนดเอง" opens the custom wastage input without changing the item value', () => {
-    const { onChange } = renderRow({ wastageMode: 'PERCENT', wastageValue: 0 });
+  // Wastage %/แผ่น redesign (replaces the old "กำหนดเอง" toggle, #L4): the manual "กรอกเอง" box is
+  // now always visible in both modes -- there is no more hidden-until-opened state to test for.
+  describe('เผื่อ (wastage) %/แผ่น mode switch', () => {
+    // The จำนวน quantity-mode toggle above this field ALSO has a button labelled "แผ่น" (ตร.ม./
+    // แผ่น), so every query here is scoped with `within` to this field's own FormField root
+    // (found via its label) rather than the whole row -- an unscoped getByRole('button', { name:
+    // 'แผ่น' }) matches both toggles and throws on the ambiguity.
+    function wastageField() {
+      return within(screen.getByText('เผื่อ (wastage)').closest('label').parentElement);
+    }
 
-    fireEvent.click(screen.getByRole('button', { name: 'กำหนดเอง' }));
+    // The mode-switch buttons themselves are labelled "%"/"แผ่น" too, so the manual box's own
+    // trailing-unit span (rendered aria-hidden, same as every other PriceInputWithSuffix use in
+    // this row) is asserted via the input's own DOM neighbour rather than getByText, which would
+    // otherwise match both the button and the suffix.
+    it('always renders the manual input, with a % suffix in PERCENT mode', () => {
+      const { container } = renderRow({ wastageMode: 'PERCENT', wastageValue: 0 });
+      const input = screen.getByLabelText('เผื่อ (wastage)');
+      expect(input).not.toBeNull();
+      expect(container.querySelector(`#waste-0 + span`).textContent).toBe('%');
+    });
 
-    expect(onChange).not.toHaveBeenCalled();
-    // The custom input is now showing (there was none before, since 0 is itself a preset).
-    expect(screen.getByLabelText('เผื่อ (wastage)')).not.toBeNull();
+    it('switching to แผ่น mode resets wastageValue to 0', () => {
+      const { onChange } = renderRow({ wastageMode: 'PERCENT', wastageValue: 10 });
+
+      fireEvent.click(wastageField().getByRole('button', { name: 'แผ่น' }));
+
+      expect(onChange).toHaveBeenCalledWith({ wastageMode: 'PIECES', wastageValue: 0 });
+    });
+
+    // onChange is mocked in renderRow, so the item prop never re-renders after a click -- the
+    // suffix swap is instead asserted against a row rendered already in PIECES mode.
+    it('renders a แผ่น suffix on the manual box when already in PIECES mode', () => {
+      const { container } = renderRow({ wastageMode: 'PIECES', wastageValue: 3 });
+      expect(container.querySelector(`#waste-0 + span`).textContent).toBe('แผ่น');
+    });
+
+    it('re-clicking the already-active mode preserves the typed value instead of resetting it', () => {
+      const { onChange } = renderRow({ wastageMode: 'PERCENT', wastageValue: 7 });
+
+      fireEvent.click(wastageField().getByRole('button', { name: '%' }));
+
+      expect(onChange).toHaveBeenCalledWith({ wastageMode: 'PERCENT', wastageValue: 7 });
+    });
+
+    it('switching to % mode resets wastageValue to 0', () => {
+      const { onChange } = renderRow({ wastageMode: 'PIECES', wastageValue: 12 });
+
+      fireEvent.click(wastageField().getByRole('button', { name: '%' }));
+
+      expect(onChange).toHaveBeenCalledWith({ wastageMode: 'PERCENT', wastageValue: 0 });
+    });
+
+    it('clicking a preset chip sets wastageValue without needing a separate custom-input toggle', () => {
+      const { onChange } = renderRow({ wastageMode: 'PERCENT', wastageValue: 0 });
+
+      fireEvent.click(wastageField().getByRole('button', { name: '15%' }));
+
+      expect(onChange).toHaveBeenCalledWith({ wastageMode: 'PERCENT', wastageValue: 15 });
+    });
+
+    it('does not render % presets in PIECES mode', () => {
+      renderRow({ wastageMode: 'PIECES', wastageValue: 3 });
+      expect(wastageField().queryByRole('button', { name: '5%' })).toBeNull();
+    });
   });
 
   // #L1: the max lead-time input needs its OWN accessible name, not just the shared FormField
@@ -1024,10 +1080,9 @@ describe('QuotationItemRow — hidePricing (V185)', () => {
     expect(screen.getByLabelText(/^แผ่น\/ตร\.ม\./)).not.toBeNull();
     expect(screen.getByLabelText(/^แผ่น\/กล่อง/)).not.toBeNull();
     expect(screen.getByLabelText(/^จำนวน/)).not.toBeNull();
-    // "เผื่อ (wastage)"'s FormField htmlFor points at an input that only renders once a
-    // "กำหนดเอง"/PIECES custom value is in play — getByLabelText has nothing to pair with on a
-    // fresh row, so the label text itself is what is asserted here instead.
-    expect(screen.getByText('เผื่อ (wastage)')).not.toBeNull();
+    // %/แผ่น redesign: the manual "กรอกเอง" box is now always rendered (no more
+    // "กำหนดเอง"/PIECES-only gating), so getByLabelText resolves directly on a fresh row.
+    expect(screen.getByLabelText('เผื่อ (wastage)')).not.toBeNull();
     expect(screen.getByLabelText(/^ประเทศต้นทาง/)).not.toBeNull();
     expect(screen.getByLabelText(/^ระยะเวลานำเข้า \(วัน\)/)).not.toBeNull();
   });

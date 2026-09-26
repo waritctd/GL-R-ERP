@@ -267,7 +267,15 @@ export const QUANTITY_MODE_OPTIONS = [
   { code: 'PIECES', label: 'แผ่น' },
 ];
 
-export const WASTAGE_PERCENT_PRESETS = [0, 5, 10];
+// เผื่อ (wastage) mode switch — mirrors QUANTITY_MODE_OPTIONS' own segmented-control shape exactly
+// (QuotationItemRow renders both with the same styling). PERCENT/PIECES are WastageCalculator's
+// own mode codes; this is a label mapping only, not a source of truth for validation.
+export const WASTAGE_MODE_OPTIONS = [
+  { code: 'PERCENT', label: '%' },
+  { code: 'PIECES', label: 'แผ่น' },
+];
+
+export const WASTAGE_PERCENT_PRESETS = [0, 5, 10, 15, 20];
 
 // ประเทศต้นทาง select + its default lead-time range (min/max days), editable per line. Mirrors
 // the plan's "อิตาลี/สเปน/จีน/ไทย-สต็อก/อื่นๆ" list exactly, in that order.
