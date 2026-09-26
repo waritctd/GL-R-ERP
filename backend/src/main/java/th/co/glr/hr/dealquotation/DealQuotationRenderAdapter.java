@@ -1072,20 +1072,26 @@ public final class DealQuotationRenderAdapter {
         return thai;
     }
 
-    // ── Fix (2026-09-15, production complaint): ผู้สั่งซื้อ signature-name fallback ────────────
+    // ── Owner-directed reversal of F2 (2026-09-26) ────────────────────────────────────────────
+    // F2 (2026-09-10, "use that name to auto fill in the name for signature") auto-filled the
+    // ผู้สั่งซื้อ signature slot from the deal's contact snapshot, and a 2026-09-15 production fix
+    // widened that to fall back to the CUSTOMER name when a deal recorded no separate contact.
+    // The owner has now REVERSED both of those: this slot must NEVER auto-fill from
+    // contactName/customerName any more. It always prints the dotted
+    // {@code QuotationRenderer#BLANK_NAME_PLACEHOLDER} by default — the customer signs on paper —
+    // unless a sales rep has typed a manual name into {@code DealQuotationDto#orderedByName}
+    // ({@code sales.quotation.ordered_by_name}, V192), in which case THAT exact text prints here
+    // instead. Deliberately does NOT touch #printContactPart/the "เรียน ..." greeting line above,
+    // which still reads contactName/customerName exactly as before — this reversal is scoped to
+    // the SIGNATURE slot only.
 
-    /** The ผู้สั่งซื้อ (F2) signature-slot name: the deal's contact snapshot when there is one,
-     * else the CUSTOMER name -- production printed the dotted {@code
-     * QuotationRenderer#BLANK_NAME_PLACEHOLDER} on the signature line whenever a deal recorded no
-     * separate contact, even though the customer being quoted to is right there on the same
-     * document. {@code QuotationRenderer} only ever falls back to the placeholder when THIS
-     * returns null, i.e. when both fields are blank. Shared by both TH/EN documents -- {@code
-     * Signatories} is built once above for either language. */
+    /** The ผู้สั่งซื้อ signature-slot name: the rep's manually-typed {@link
+     * DealQuotationDto#orderedByName}, or null (the dotted placeholder) when they left it blank.
+     * {@code QuotationRenderer} only ever falls back to the placeholder when THIS returns null.
+     * Shared by both TH/EN documents -- {@code Signatories} is built once above for either
+     * language. */
     static String orderedByName(DealQuotationDto quotation) {
-        if (!blank(quotation.contactName())) {
-            return quotation.contactName().trim();
-        }
-        return blank(quotation.customerName()) ? null : quotation.customerName().trim();
+        return blank(quotation.orderedByName()) ? null : quotation.orderedByName().trim();
     }
 
     // ── V179 (owner feedback #4, 2026-09-14): ผู้พิมพ์/พนักงานขาย print-name override ──────────

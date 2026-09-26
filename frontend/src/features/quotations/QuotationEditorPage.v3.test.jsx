@@ -685,3 +685,38 @@ describe('ยืนราคา — จำนวนวัน / ระบุว�
     expect(within(group('ยืนราคา')).queryByRole('button', { name: 'ระบุวันที่' })).toBeNull();
   });
 });
+
+describe('เขียนผู้สั่งซื้อเอง — owner-directed reversal of F2 (2026-09-26)', () => {
+  it('starts blank on a brand-new quotation even though the deal has a contact', async () => {
+    renderEditor('/quotations/new?ticket=18');
+    await waitFor(() => expect(document.getElementById('deal-customer-address')).not.toBeNull());
+    expect(document.getElementById('orderedByNameCard').value).toBe('');
+  });
+
+  it('seeds from the stored orderedByName on an existing draft, and round-trips it on save', async () => {
+    api.dealQuotations.get.mockResolvedValue({ quotation: draft({ orderedByName: 'คุณวิชัย มั่นคง' }) });
+    renderEditor('/quotations/5');
+    await screen.findByTestId('checklist-warnings');
+    expect(document.getElementById('orderedByNameCard').value).toBe('คุณวิชัย มั่นคง');
+
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalled());
+    expect(api.dealQuotations.update.mock.calls[0][1].orderedByName).toBe('คุณวิชัย มั่นคง');
+  });
+
+  it('is optional -- typing a name never blocks or appears in the checklist, and blank saves as null', async () => {
+    renderEditor('/quotations/5');
+    const checklist = await screen.findByTestId('checklist-warnings');
+    expect(within(checklist).queryByText(/ผู้สั่งซื้อเอง/)).toBeNull();
+
+    fireEvent.change(document.getElementById('orderedByNameCard'), { target: { value: 'คุณวิชัย มั่นคง' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
+    expect(within(screen.getByTestId('checklist-warnings')).queryByText(/ผู้สั่งซื้อเอง/)).toBeNull();
+
+    // Clearing it back out is a real request to clear -- the save payload sends null, not "".
+    fireEvent.change(document.getElementById('orderedByNameCard'), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalled());
+    expect(api.dealQuotations.update.mock.calls[0][1].orderedByName).toBeNull();
+  });
+});

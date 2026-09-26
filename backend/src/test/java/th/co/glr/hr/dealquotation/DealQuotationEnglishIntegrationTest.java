@@ -191,7 +191,12 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(str(sheet, 37, 0))
             .contains("Printed by").contains("Quoted by").contains("Approved by").contains("Ordered by");
         assertThat(str(sheet, 38, 0))
-            .contains("(Jennet Longsakul)").contains("(Rarm Itarat)").contains("(Aisha Rahman)");
+            .contains("(Jennet Longsakul)").contains("(Rarm Itarat)");
+        // Owner-directed reversal of F2 (2026-09-26), F2-reversal regression guard: a contact
+        // ("Aisha Rahman") IS recorded on this deal, but no manual orderedByName was ever set on
+        // this request -- the ผู้สั่งซื้อ/"Ordered by" slot must stay the dotted placeholder,
+        // never fall back to the contact name any more.
+        assertThat(str(sheet, 38, 0)).doesNotContain("(Aisha Rahman)").contains("(..........................)");
         // No VAT row survived onto the sheet.
         assertThat(allText(sheet)).noneMatch(t -> t.contains("ภาษีมูลค่าเพิ่ม"));
     }
@@ -842,7 +847,15 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
 
         String names = str(renderSheet(approved.id()), 38, 0);
         assertThat(names).contains("(สมชาย ไม่มีชื่ออังกฤษ)");
-        assertThat(names).doesNotContain("(..........................)");
+        // Owner-directed reversal of F2 (2026-09-26): the placeholder's PRESENCE is no longer a
+        // signal about this fallback -- the ผู้สั่งซื้อ/"Ordered by" slot always prints it now
+        // (no manual orderedByName was set on this fixture), independent of the approver-name
+        // fallback this test is actually about. Assert the fallback name landed in the APPROVER
+        // slot specifically, rather than a blanket "no placeholder anywhere" that would no longer
+        // hold.
+        assertThat(names.indexOf("(สมชาย ไม่มีชื่ออังกฤษ)"))
+            .as("the fallback name replaces the approver's own dotted slot, not the ผู้สั่งซื้อ one")
+            .isLessThan(names.indexOf("(..........................)"));
     }
 
     /**

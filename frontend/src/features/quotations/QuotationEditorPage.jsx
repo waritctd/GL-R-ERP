@@ -137,6 +137,11 @@ function emptyTerms(defaults = null) {
     // Item 2 ("ไม่เติม “คุณ”", V180, owner ruling 2026-09-16) — per-quotation, NOT remembered (see
     // this field's own comment on the request DTO): a brand-new quotation always starts UNticked.
     omitContactHonorific: false,
+    // Owner-directed reversal of F2 (2026-09-26) — manual, OPTIONAL ผู้สั่งซื้อ signature name.
+    // NOT remembered (same reasoning as printedByDisplayId/omitContactHonorific above): it is a
+    // per-document fact a rep types deliberately, not a rep-wide preference, so a brand-new
+    // quotation always starts blank -- the dotted signature line, exactly as before this feature.
+    orderedByName: '',
   };
 }
 
@@ -432,6 +437,10 @@ export function QuotationEditorPage({ user, showToast }) {
         printedByDisplayId: quotation.printedByDisplayId ?? '',
         salesRepDisplayId: quotation.salesRepDisplayId ?? '',
         projectName: quotation.projectName ?? '',
+        // Owner-directed reversal of F2 (2026-09-26) — manual, optional ผู้สั่งซื้อ signature
+        // name; null (every pre-V192 row, and any document nobody has typed one into) reads as
+        // blank, same "no value stored" convention as every other field here.
+        orderedByName: quotation.orderedByName ?? '',
       });
       setDirty(false);
       setInitializedFor(key);
@@ -1017,6 +1026,10 @@ export function QuotationEditorPage({ user, showToast }) {
     // discipline as printedByDisplayId/projectName above): the checkbox is always rendered, so a
     // full PUT always carries the payload's own current value, false included.
     omitContactHonorific: !!terms.omitContactHonorific,
+    // Owner-directed reversal of F2 (2026-09-26) — manual, OPTIONAL ผู้สั่งซื้อ signature name.
+    // Always sent explicitly, blank included, same "no missing-keeps-stored" discipline as
+    // projectName/customerNotes above: a blank genuinely clears it back to the dotted line.
+    orderedByName: terms.orderedByName || null,
     // F1: still the FLAT items array the API has always taken, in group order — `items` is
     // already stored that way (see insertIntoGroup), so this is a plain map with no sort. Each
     // row's `locationLabel` is stamped from ITS GROUP, which is the only place that text lives
@@ -2009,6 +2022,23 @@ export function QuotationEditorPage({ user, showToast }) {
                   omitContactHonorific={terms.omitContactHonorific}
                   onChangeOmitContactHonorific={(next) => { setTerms((t) => ({ ...t, omitContactHonorific: next })); setDirty(true); }}
                 />
+                {/* Owner-directed reversal of F2 (2026-09-26) — the ผู้สั่งซื้อ signature slot on
+                    the printed document no longer auto-fills from the contact above at all; it
+                    ALWAYS prints the dotted line unless a rep types a name here. Optional, never a
+                    checklist blocker — placed right next to the contact picker since it is the
+                    manual override for the same slot. */}
+                <FormField
+                  label="เขียนผู้สั่งซื้อเอง"
+                  htmlFor="orderedByNameCard"
+                  hint="ถ้าเว้นว่าง จะเป็นเส้นประให้ลูกค้าเซ็นเอง"
+                >
+                  <input
+                    id="orderedByNameCard"
+                    value={terms.orderedByName}
+                    maxLength={255}
+                    onChange={(e) => { setTerms((t) => ({ ...t, orderedByName: e.target.value })); setDirty(true); }}
+                  />
+                </FormField>
                 <QuotationDealFields
                   terms={terms}
                   onChange={(patch) => { setTerms((current) => ({ ...current, ...patch })); setDirty(true); }}

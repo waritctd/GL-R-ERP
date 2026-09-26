@@ -203,7 +203,15 @@ public final class DealQuotationDtos {
          * SINGLE PRICING_REQUEST-origin row (findById/update/restoreRemovedItem), never inside
          * the list/search loops (which stay DEAL_DIRECT-only) — see
          * {@code DealQuotationService#requireQuotation}. */
-        List<DealQuotationRepository.RemovedLinkedItemDto> removedCeoItems
+        List<DealQuotationRepository.RemovedLinkedItemDto> removedCeoItems,
+        /** Owner-directed reversal of F2 (2026-09-10, hardened 2026-09-15, reversed 2026-09-26) —
+         * see {@code DealQuotationRenderAdapter#orderedByName}'s own Javadoc for the full history.
+         * The ผู้สั่งซื้อ signature slot no longer auto-fills from {@link #contactName}/
+         * {@link #customerName} at all: this is the ONLY source it ever prints, and it is a
+         * manual, OPTIONAL field a sales rep types in the editor ({@code sales.quotation.ordered_by_name},
+         * V192). Null/blank (the default, and every pre-V192 row) prints the dotted placeholder —
+         * the customer signs on paper — exactly like every other signature slot with nothing set. */
+        String orderedByName
     ) {
         /** This DTO carrying {@link #removedCeoItems} — same device as {@code
          * DealQuotationItemDto#withCeoComparison} (appended field written after the shorter
@@ -224,7 +232,27 @@ public final class DealQuotationDtos {
                 salesRepDisplayPhone, omitContactHonorific, fullPaymentTerm, derivedFromQuotationId,
                 derivedFromQuotationNumber, derivedFromQuotationStatus, items, createdAt, updatedAt, origin,
                 pricingRequestId, priceModeChangedFromCeo, ceoPriceMode, pricingRequestCode,
-                itemsRemovedFromCeoCount, removedItems);
+                itemsRemovedFromCeoCount, removedItems, orderedByName);
+        }
+
+        /** This DTO carrying {@code value} as its {@link #orderedByName} — same appended-field
+         * device as {@link #withRemovedCeoItems}, added purely so a test/call site built from an
+         * older legacy constructor (none of which know about this field) can still set it without
+         * repeating this record's entire 66-argument canonical constructor by hand. */
+        public DealQuotationDto withOrderedByName(String value) {
+            return new DealQuotationDto(id, number, ticketId, docStatus, revisionNo, parentQuotationId,
+                createdById, createdByName, createdByNameEn, salesRepId, salesRepName, salesRepNameEn,
+                salesRepPhone, submittedAt, approvedById, approvedByName, approvedByNameEn, approvedAt,
+                approvalNote, quotationDate, customerName, customerAddress, customerTaxId, customerPhone,
+                contactId, contactName, contactPhone, contactEmail, projectName, deptCode, unitCode, offerDate,
+                depositPercent, remainderMode, creditDays, validityDays, validityDate, validityMode,
+                validityUntil, customerNotes, priceMode, documentLanguage, subtotalAmount, vatAmount,
+                grandTotal, currency, approverHasSignature, printedByDisplayId, printedByDisplayName,
+                printedByDisplayNameEn, salesRepDisplayId, salesRepDisplayName, salesRepDisplayNameEn,
+                salesRepDisplayPhone, omitContactHonorific, fullPaymentTerm, derivedFromQuotationId,
+                derivedFromQuotationNumber, derivedFromQuotationStatus, items, createdAt, updatedAt, origin,
+                pricingRequestId, priceModeChangedFromCeo, ceoPriceMode, pricingRequestCode,
+                itemsRemovedFromCeoCount, removedCeoItems, value);
         }
 
         /** The pre-M4(c) shape (no {@link #itemsRemovedFromCeoCount}) — kept so every existing
@@ -261,7 +289,7 @@ public final class DealQuotationDtos {
                 salesRepDisplayId, salesRepDisplayName, salesRepDisplayNameEn, salesRepDisplayPhone,
                 omitContactHonorific, fullPaymentTerm, derivedFromQuotationId, derivedFromQuotationNumber,
                 derivedFromQuotationStatus, items, createdAt, updatedAt, origin, pricingRequestId,
-                priceModeChangedFromCeo, ceoPriceMode, pricingRequestCode, 0, List.of());
+                priceModeChangedFromCeo, ceoPriceMode, pricingRequestCode, 0, List.of(), null);
         }
 
         /** The pre-GLA-123 shape (no {@link #origin}/{@link #pricingRequestId}/CEO-comparison
