@@ -1549,6 +1549,32 @@ public class QuotationRenderer {
     // width, regardless of the slot's actual pixel width, since all four slots are equal.
     private static final double SIGNATURE_APPROVER_SLOT_CENTER_FRACTION =
         (SIG_APPROVER_INDEX + 0.5) / SIG_LABELS.length;
+    // Measured (not guessed), 2026-09-27, via soffice --convert-to pdf + PDFBox on this exact
+    // template/font: AWT's OWN estimate of a SPACE glyph's width is a slightly different fraction
+    // of what LibreOffice actually renders it at than AWT's estimate of an UNDERSCORE glyph's
+    // width is. Isolated by rendering a real quotation and measuring, on the SAME row, (a) the
+    // pixel gap a run of N leading spaces produces before a name block and (b) the pixel length
+    // of the 17-underscore signature line itself: space's real/AWT-estimated ratio came out
+    // ≈0.6634 (four independent slots, all within 0.001 of each other) against underscore's
+    // ≈0.6528 (73.98pt measured / (17 × 6.667px) AWT-estimated) — a small but real and highly
+    // repeatable ~1.6% gap. Both {@link #appendAtTarget} targets (nominal slot boundaries AND
+    // {@code runStart[]}/{@code runEnd[]}) are computed in units calibrated to the UNDERSCORE
+    // scale (they derive from the labels row's own underscore-filled content), so leaving
+    // spaceWidthPx at its raw AWT estimate makes every SPACE-padded row (names, dates, and the
+    // labels row's own leading gaps) drift from that reference by this same ~1.6% per space
+    // character used — worse for a slot further from the row's start, since more spaces have
+    // accumulated by then. This is exactly the "progressively worse toward the right" shape the
+    // owner reported (confirmed by measurement: the un-scaled estimate consistently OVERSHOOTS
+    // rightward, more so the more spaces a slot needed). Scaling spaceWidthPx UP by (space ratio
+    // / underscore ratio) — space renders relatively WIDER than underscore does relative to
+    // AWT's own estimate, so fewer spaces are needed to cover the same real distance than a
+    // naive AWT count implies — makes each space travel the SAME effective real distance, per
+    // AWT pixel, that an underscore does, eliminating the growing gap rather than merely
+    // shrinking it. Like every other constant in this class derived this way, it is a property
+    // of THIS font/LibreOffice build, not a law of nature — recalibrate with the same PDFBox
+    // technique if the licensed fonts or LibreOffice version change and the on-page drift
+    // reappears.
+    private static final double SIGNATURE_SPACE_TO_UNDERSCORE_SCALE = 0.6634 / 0.6528;
     // AWT's unscaled Graphics2D#getFontRenderContext() measures glyph advances at ~72 DPI (1 unit =
     // 1/72in), while POI's Sheet#getColumnWidthInPixels — the other pixel figure this class works
     // in — assumes 96 DPI screen pixels (its own javadoc says so). Scale every AWT measurement up so
@@ -1640,7 +1666,27 @@ public class QuotationRenderer {
         double totalWidthPx = totalColumnWidthPixelsLibreOffice(sh, 0, 8);
         double slotWidthPx = totalWidthPx * SIGNATURE_ROW_FILL_FRACTION / labels.length;
         double underscoreWidthPx = charRunWidthPx(fontMetrics, '_');
-        double spaceWidthPx = charRunWidthPx(fontMetrics, ' ');
+        // See #SIGNATURE_SPACE_TO_UNDERSCORE_SCALE's own Javadoc for why the raw AWT estimate is
+        // corrected here rather than used as-is.
+        double spaceWidthPx = charRunWidthPx(fontMetrics, ' ') * SIGNATURE_SPACE_TO_UNDERSCORE_SCALE;
+
+        // Owner feedback (2026-09-27), problem 2: every slot's underscore RUN uses the SAME
+        // character count, sized off the LONGEST label so even ผู้จัดการฝ่ายขาย's own line still
+        // fits its nominal slot. The OLD #padLabelSlotPx instead filled whatever pixel width was
+        // LEFT in the slot after each label — so the shortest label (ผู้พิมพ์) got the longest
+        // line and the longest label the shortest, the opposite of "same length". Because it is
+        // literally the same substring repeated the same number of times, this line's real
+        // rendered width is equal across all four slots REGARDLESS of any AWT-vs-LibreOffice
+        // measurement gap — no font metric has to agree with LibreOffice for equal-length lines
+        // to hold, unlike the centring below.
+        double maxLabelPx = 0;
+        for (String label : labels) {
+            maxLabelPx = Math.max(maxLabelPx, textWidthPx(fontMetrics, label));
+        }
+        int underscoreCount = underscoreWidthPx > 0
+            ? Math.max(1, (int) Math.round(Math.max(underscoreWidthPx, slotWidthPx - maxLabelPx) / underscoreWidthPx))
+            : 1;
+        String underscoreRun = "_".repeat(underscoreCount);
 
         String[] names = {
             sig != null ? sig.printedBy() : null,
@@ -1680,23 +1726,54 @@ public class QuotationRenderer {
         // {@code sig.salesRepSignaturePng()} — so every slot's run is captured the same way; the
         // approver-index geometry itself (which is what actually got the owner's F6 sign-off) is
         // untouched.
+        //
+        // Owner feedback (2026-09-27), problem 1 + 3: names drifted progressively LEFT of their
+        // slot centre from slot 1 onward. Root cause — each row used to centre its OWN block
+        // against a freshly re-derived "i * slotWidthPx" NOMINAL target, independently of what
+        // the labels row's own text actually measured out to; S1's filler (underscores) and
+        // S2/S3's filler (spaces) do not drift from AWT's estimate by the same amount when
+        // LibreOffice actually lays the row out, so the two rows' ACTUAL boundaries quietly
+        // diverged slot by slot even though both nominally targeted the same numbers.
+        //
+        // Fix: every row now targets the SAME reference number for slot i — either the nominal
+        // slot boundary (labels row, below) or, for names/dates, {@code runStart[i]}/{@code
+        // runEnd[i]} that the labels row ITSELF just produced — via #appendAtTarget, which pads
+        // from the row's own current cursor straight to that ABSOLUTE target rather than re-
+        // deriving "centre within my own nominal width" independently. An absolute target means
+        // slot i's rounding error can never carry into slot i+1's target the way a chain of
+        // independently-centred blocks does — see #appendAtTarget's own Javadoc. Centring the
+        // label+line UNIT within its own nominal slot (rather than left-flush, as before) is the
+        // Goal's own suggested shape ("the label + line unit ... centred within each equal
+        // slot"); centring the name/date on runStart[i]/runEnd[i] keeps it locked to the SAME
+        // line the signature picture anchors to below, not to a separately-drifting nominal slot.
         double[] runStart = new double[labels.length];
         double[] runEnd = new double[labels.length];
-        double cursorPx = 0;
+        double labelCursorPx = 0;
         for (int i = 0; i < labels.length; i++) {
-            String labelSlot = padLabelSlotPx(fontMetrics, labels[i], slotWidthPx, underscoreWidthPx);
-            labelsLine.append(labelSlot);
-            double labelSlotPx = textWidthPx(fontMetrics, labelSlot);
-            runStart[i] = cursorPx + textWidthPx(fontMetrics, labels[i]);
-            runEnd[i] = cursorPx + labelSlotPx;
-            cursorPx += labelSlotPx;
+            String unit = labels[i] + underscoreRun;
+            double unitPx = textWidthPx(fontMetrics, unit);
+            double targetUnitStart = i * slotWidthPx + Math.max(0, (slotWidthPx - unitPx) / 2.0);
+            labelCursorPx = appendAtTarget(fontMetrics, labelsLine, labelCursorPx, unit, targetUnitStart,
+                spaceWidthPx);
+            runStart[i] = labelCursorPx - unitPx + textWidthPx(fontMetrics, labels[i]);
+            runEnd[i] = labelCursorPx;
+        }
+
+        double nameCursorPx = 0;
+        double dateCursorPx = 0;
+        for (int i = 0; i < labels.length; i++) {
+            double runCentrePx = (runStart[i] + runEnd[i]) / 2.0;
 
             String name = names[i];
             String nameText = name != null && !name.isBlank() ? "(" + name.trim() + ")" : BLANK_NAME_PLACEHOLDER;
-            namesLine.append(centerInSlotPx(fontMetrics, nameText, slotWidthPx, spaceWidthPx));
+            double namePx = textWidthPx(fontMetrics, nameText);
+            nameCursorPx = appendAtTarget(fontMetrics, namesLine, nameCursorPx, nameText,
+                runCentrePx - namePx / 2.0, spaceWidthPx);
 
-            datesLine.append(centerInSlotPx(fontMetrics, signatureDateText(dates[i], english),
-                slotWidthPx, spaceWidthPx));
+            String dateText = signatureDateText(dates[i], english);
+            double datePx = textWidthPx(fontMetrics, dateText);
+            dateCursorPx = appendAtTarget(fontMetrics, datesLine, dateCursorPx, dateText,
+                runCentrePx - datePx / 2.0, spaceWidthPx);
         }
         writeFixedWidthRow(sh, labelsRow, labelsLine.toString());
         writeFixedWidthRow(sh, nameRow, namesLine.toString());
@@ -1839,29 +1916,32 @@ public class QuotationRenderer {
         return textUnits(s);
     }
 
-    /** S1's left/underscore padding: appends {@code label} + enough '_' (at {@code underscorePx}
-     * each) to land as close as possible to {@code slotWidthPx} without exceeding it. */
-    private String padLabelSlotPx(SignatureFontMetrics metrics, String label, double slotWidthPx,
-            double underscorePx) {
-        double labelPx = textWidthPx(metrics, label);
-        double remainingPx = Math.max(0, slotWidthPx - labelPx);
-        int underscoreCount = underscorePx > 0 ? (int) Math.round(remainingPx / underscorePx) : 0;
-        return label + "_".repeat(Math.max(0, underscoreCount));
-    }
-
-    /** S2/S3's centring: space-pads {@code text} on both sides (at {@code spacePx} each) to land as
-     * close as possible to {@code slotWidthPx} — the proportional-font equivalent of Excel's own
-     * CENTER alignment, computed by hand because all four slots live in ONE cell (a real per-cell
-     * alignment would centre the whole concatenated string, not each slot within it). Approximate in
-     * a proportional font — acceptable per layout-spec §5 — but measuring each row's OWN padding
-     * character at the SAME font keeps the four slots landing at consistent physical x positions
-     * across all three rows (see the class comment above {@link #SIG_LABELS}). */
-    private String centerInSlotPx(SignatureFontMetrics metrics, String text, double slotWidthPx, double spacePx) {
-        double textPx = textWidthPx(metrics, text);
-        double padPx = Math.max(0, slotWidthPx - textPx);
-        int leftCount = spacePx > 0 ? (int) Math.round(padPx / 2 / spacePx) : 0;
-        int rightCount = spacePx > 0 ? (int) Math.round((padPx - leftCount * spacePx) / spacePx) : 0;
-        return " ".repeat(Math.max(0, leftCount)) + text + " ".repeat(Math.max(0, rightCount));
+    /**
+     * Appends {@code text} to {@code line}, left-padded with just enough {@code spacePx}-wide
+     * spaces to land its start at the ABSOLUTE {@code targetStartPx} — this row's own AWT-pixel
+     * coordinate space, measured from the merged cell's left edge — given the row's current
+     * cursor {@code cursorPx}. Returns the new cursor (the appended text's own end), threaded
+     * into the next call.
+     *
+     * <p>The load-bearing property is that {@code targetStartPx} is an ABSOLUTE number computed
+     * fresh for slot i (either {@code i * slotWidthPx}, or a {@code runStart[i]}/{@code
+     * runEnd[i]} the labels-row loop already produced) — never "wherever the previous slot's own
+     * rounding happened to leave the cursor". Two calls across DIFFERENT rows that both target
+     * the same absolute number land at the same place even if an earlier slot in one of those
+     * rows rounded its own padding by half a space; the error never carries forward into the
+     * next slot's target the way it did when S2/S3 used to re-derive "centre within MY OWN
+     * nominal {@code slotWidthPx}" independently per block (owner feedback 2026-09-27: names
+     * drifting progressively left of their slot centre from slot 1 onward — see the class
+     * comment above {@link #SIG_LABELS} and the call site in {@link #writeSignatureBlock}). A
+     * negative gap (this row is already past the target — e.g. an unusually long name) clamps to
+     * zero spaces rather than backing up, matching every other best-effort width estimate in
+     * this class. */
+    private double appendAtTarget(SignatureFontMetrics metrics, StringBuilder line, double cursorPx,
+            String text, double targetStartPx, double spacePx) {
+        int leftSpaces = spacePx > 0 ? (int) Math.round(Math.max(0, targetStartPx - cursorPx) / spacePx) : 0;
+        line.append(" ".repeat(Math.max(0, leftSpaces)));
+        line.append(text);
+        return cursorPx + leftSpaces * spacePx + textWidthPx(metrics, text);
     }
 
     /** Writes one already-fully-padded S1/S2/S3 string into its merged A:I cell — LEFT aligned (the
