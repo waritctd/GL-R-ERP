@@ -575,7 +575,7 @@ export function QuotationItemRow({
         </p>
       ) : null}
 
-      <div className="grid grid-cols-4 gap-3 mobile:grid-cols-2">
+      <div className="grid grid-cols-4 gap-3 mobile:grid-cols-1">
         <FormField label={brandLabel} htmlFor={`brand-${index}`}>
           <input id={`brand-${index}`} disabled={readOnly} value={item.brand ?? ''} onChange={(e) => patch({ brand: e.target.value })} />
         </FormField>
@@ -886,7 +886,7 @@ export function QuotationItemRow({
         ) : null}
       </div>
 
-      <div className="grid grid-cols-4 gap-3 mobile:grid-cols-2">
+      <div className="grid grid-cols-4 gap-3 mobile:grid-cols-1">
         {/* v3: the two price fields follow the QUOTATION's price mode, chosen once in the
             "รูปแบบเอกสาร" block — never per row, because every tile row of every one of the owner's
             nine documents shares one mode. Each mode asks for exactly what the rep has in hand:
@@ -922,7 +922,7 @@ export function QuotationItemRow({
             measured) — so on mobile each spans the whole row. `contents` keeps NET/DIRECT_NET's
             grid placement exactly as it was. */}
         {hidePricing || perSqm ? null : (
-          <div className={priceMode === 'SPECIAL_SQM' ? 'mobile:col-span-2' : 'contents'}>
+          <div className={priceMode === 'SPECIAL_SQM' ? 'mobile:col-span-1' : 'contents'}>
             <FormField
               label={
                 priceMode === 'NET' ? 'ราคา/หน่วย'
@@ -970,7 +970,7 @@ export function QuotationItemRow({
           </FormField>
         ) : null}
         {!hidePricing && priceMode === 'SPECIAL_SQM' && !perSqm ? (
-          <div className="mobile:col-span-2">
+          <div className="mobile:col-span-1">
             <FormField label="ราคาพิเศษ (บาท/ตร.ม. รวม VAT)" htmlFor={`special-${index}`} required error={errors.specialPriceSqm}>
               <PriceInputWithSuffix
                 id={`special-${index}`} type="number" step="0.01" disabled={readOnly} suffix="บาท/ตร.ม."
