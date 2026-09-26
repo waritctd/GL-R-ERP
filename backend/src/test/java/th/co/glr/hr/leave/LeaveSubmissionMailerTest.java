@@ -62,7 +62,7 @@ class LeaveSubmissionMailerTest {
         assertThat(attachments.getValue().get(0).filename()).startsWith("ใบลา-EMP001-");
         assertThat(attachments.getValue().get(0).bytes()).isEqualTo(FORM_PDF);
         assertThat(subject.getValue()).contains("EMP001").contains("ก้อย").contains("ลาป่วย");
-        assertThat(body.getValue()).contains("เรียนฝ่ายบุคคล,").contains("รหัสพนักงาน EMP001").contains("ก้อย");
+        assertThat(body.getValue()).contains("เรียนฝ่ายบุคคลและหัวหน้างาน,").contains("รหัสพนักงาน EMP001").contains("ก้อย");
     }
 
     @Test
