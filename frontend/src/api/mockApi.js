@@ -6414,6 +6414,11 @@ function buildDealQuotationDto(row) {
     contactName: row.contactName,
     contactPhone: row.contactPhone ?? null,
     contactEmail: row.contactEmail ?? null,
+    // Owner-directed reversal of F2 (2026-09-26): the ผู้สั่งซื้อ SIGNATURE slot no longer reads
+    // contactName at all -- it prints ONLY this manual, optional rep-typed field (V192's
+    // ordered_by_name column), null when nobody has typed one (the dotted placeholder). Mirrors
+    // DealQuotationDto#orderedByName / DealQuotationRenderAdapter#orderedByName exactly.
+    orderedByName: row.orderedByName ?? null,
     // Item 2 (V180, "ไม่เติม “คุณ”", owner ruling 2026-09-16): NOT NULL DEFAULT FALSE on the real
     // column — a stored/never-set value normalises to false here, same device as priceMode/
     // documentLanguage above. Mirrors DealQuotationDto#omitContactHonorific.
@@ -14628,6 +14633,10 @@ export const api = {
         // Item 2 (V180, "ไม่เติม “คุณ”", owner ruling 2026-09-16) — UNticked is the only behaviour
         // on CREATE, same device as DealQuotationService#create.
         omitContactHonorific: payload.omitContactHonorific === true,
+        // Owner-directed reversal of F2 (2026-09-26) — manual, optional ผู้สั่งซื้อ signature
+        // name; blank/omitted stores null (the dotted placeholder), mirrors
+        // DealQuotationService#create's blankToNull(request.orderedByName()).
+        orderedByName: blankToNullMock(payload.orderedByName),
         items,
         createdAt: now, updatedAt: now,
       };
@@ -14864,6 +14873,11 @@ export const api = {
         // above, which is out of scope here -- so "" and whitespace-only both clear the field
         // exactly as they do against the real backend.
         projectName: blankToNullMock(payload.projectName),
+        // Owner-directed reversal of F2 (2026-09-26) — same #M7 DIRECT-assignment discipline as
+        // projectName just above: the editor always sends its current value, so blankToNullMock
+        // genuinely clears it back to the dotted placeholder, mirroring
+        // DealQuotationService#update's blankToNull(request.orderedByName()).
+        orderedByName: blankToNullMock(payload.orderedByName),
         items,
         // M4(c) fix (Opus review, 2026-09-20) — mirrors
         // DealQuotationRepository#incrementItemsRemovedFromCeo's GREATEST(0, ...) floor.

@@ -357,8 +357,36 @@ public final class DealQuotationRequests {
         @Pattern(regexp = "BEFORE_DELIVERY|ON_DELIVERY|ON_OR_BEFORE_DELIVERY",
             message = "ต้องเป็น BEFORE_DELIVERY, ON_DELIVERY หรือ ON_OR_BEFORE_DELIVERY")
         String fullPaymentTerm,
+        /**
+         * Owner-directed reversal of F2 (2026-09-10, hardened 2026-09-15, reversed 2026-09-26):
+         * the ผู้สั่งซื้อ signature slot no longer auto-fills from the contact/customer name at
+         * all — this is the ONLY thing it ever prints there. Optional/nullable on the wire, and
+         * genuinely editable the same "editor always sends its current value" way as
+         * {@link #projectName} — a null/blank on a PUT is a real request to clear it back to the
+         * dotted placeholder, not "leave alone". {@code null} on CREATE means the same thing: a
+         * brand-new document starts with no manual name, i.e. the dotted line.
+         */
+        @Size(max = 255) String orderedByName,
         @NotEmpty List<@Valid ItemInput> items
     ) {
+        /** The pre-orderedByName shape (today's canonical, minus {@link #orderedByName}) — kept
+         * so every existing construction site (tests, mostly) compiles unchanged. Defaults to
+         * null, which reads as "no manual name" — the dotted placeholder — correct for every one
+         * of those fixtures (nothing before this feature ever set it). */
+        public UpsertDealQuotationRequest(Long contactId, String deptCode, String unitCode,
+                                          LocalDate offerDate, Integer depositPercent,
+                                          String remainderMode, Integer creditDays,
+                                          Integer validityDays, String validityMode, LocalDate validityUntil,
+                                          String customerNotes, String priceMode, String documentLanguage,
+                                          String currency, Long printedByDisplayId, Long salesRepDisplayId,
+                                          String projectName, Boolean omitContactHonorific,
+                                          String fullPaymentTerm, List<ItemInput> items) {
+            this(contactId, deptCode, unitCode, offerDate, depositPercent, remainderMode,
+                creditDays, validityDays, validityMode, validityUntil, customerNotes, priceMode,
+                documentLanguage, currency, printedByDisplayId, salesRepDisplayId, projectName,
+                omitContactHonorific, fullPaymentTerm, null, items);
+        }
+
         /** The pre-V180/V181 shape (no {@link #omitContactHonorific}/{@link #fullPaymentTerm}) —
          * kept so every existing construction site (tests, mostly) compiles unchanged. Defaults
          * omitContactHonorific to null (read as {@code false} — UNticked, today's only behaviour)

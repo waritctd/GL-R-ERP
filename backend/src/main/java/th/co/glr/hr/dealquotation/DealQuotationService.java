@@ -301,7 +301,10 @@ public class DealQuotationService {
             resolveOmitContactHonorific(request.omitContactHonorific()), fullPaymentTerm,
             // A brand-new document is neither a revision (parentQuotationId) nor a reorder clone
             // (derivedFromQuotationId) — both null.
-            subtotal, null, 1, null, items));
+            subtotal, null, 1, null, items,
+            // Owner-directed reversal of F2 (2026-09-26) — manual, optional buyer name; blank
+            // clears it to null, same discipline as every other free-text header field here.
+            blankToNull(request.orderedByName())));
         return requireQuotation(id);
     }
 
@@ -500,7 +503,11 @@ public class DealQuotationService {
             summary.omitContactHonorific(), null,
             subtotal, null, revisionNo, null, items,
             "PRICING_REQUEST", summary.recipientType(), summary.recipientLabel(),
-            summary.id(), decision.id()));
+            summary.id(), decision.id(),
+            // Owner-directed reversal of F2 (2026-09-26) — nothing to inherit on a brand-new
+            // PRICING_REQUEST-origin create; the rep sets a manual name later via #update, same
+            // as any DEAL_DIRECT document.
+            null));
 
         pricingRequests.addEvent(summary.id(), summary.ticketId(), actor.id(), actor.name(),
             PricingRequestEventKind.CUSTOMER_QUOTATION_CREATED, summary.status(), summary.status(),
@@ -852,7 +859,11 @@ public class DealQuotationService {
             // case — blankToNull(null) clears it, exactly like every other free-text header field
             // on this same call (customerNotes, deptCode, unitCode).
             blankToNull(request.projectName()),
-            omitContactHonorific, fullPaymentTerm);
+            omitContactHonorific, fullPaymentTerm,
+            // Owner-directed reversal of F2 (2026-09-26) — manual, optional buyer name; the
+            // editor always sends its current value, so blank genuinely clears it back to the
+            // dotted placeholder, same discipline as projectName/customerNotes above.
+            blankToNull(request.orderedByName()));
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงแก้ไขไม่ได้");
         }
@@ -2001,7 +2012,10 @@ public class DealQuotationService {
             // zero-deposit term the rep already picked on the source document.
             source.omitContactHonorific(), source.fullPaymentTerm(),
             source.subtotalAmount(), parentQuotationId,
-            nextRevisionNo, derivedFromQuotationId, items));
+            nextRevisionNo, derivedFromQuotationId, items,
+            // Owner-directed reversal of F2 (2026-09-26) — the copy inherits the source's manual
+            // buyer name VERBATIM, same "copy every header field" rule as everything else here.
+            source.orderedByName()));
         // GLA-75: "the copy carries the source's items verbatim" includes their pictures — the new
         // row's items point at the source's (immutable, shared) picture rows, matched by seq.
         // Shared by revisions and reorder clones alike.

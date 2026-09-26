@@ -2705,25 +2705,42 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         return "วันที่ " + d.getDayOfMonth() + "/" + d.getMonthValue() + "/" + (d.getYear() + 543);
     }
 
+    /** Owner-directed reversal of F2 (2026-09-26): a DRAFT with a contact snapshot but no manual
+     * orderedByName must print the DOTTED placeholder in slot 4, never the contact's name any
+     * more -- this is the F2-reversal regression guard, end-to-end through the real service and
+     * repository (not just the adapter unit tests). */
     @Test
-    void render_draft_printsContactNameInSlot4_andOnlyThePrintedOnDate() throws Exception {
+    void render_draft_neverAutoFillsContactNameInSlot4_evenThoughOneIsRecorded() throws Exception {
         DealQuotationDto created = quotationService.create(ticketId,
             upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        assertThat(created.contactName()).as("a contact IS recorded on this deal").isEqualTo("สมหญิง ใจดี");
         String[] rows = signatureRows(quotationService.renderXlsx(created.id(), salesActor));
         String names = rows[1];
         String dates = rows[2];
-        assertThat(names).contains("(สมหญิง ใจดี)");
-        // Slot 4 is the LAST slot: the contact's name comes after the sales rep's.
-        assertThat(names.indexOf("(สมหญิง ใจดี)")).isGreaterThan(names.indexOf("(" + created.salesRepName() + ")"));
-        // Draft: no approver name yet -> one dotted name placeholder (slot 3).
-        assertThat(names).containsOnlyOnce("(..........................)");
+        assertThat(names).doesNotContain("(สมหญิง ใจดี)");
+        // Draft: no approver name yet AND no manual ผู้สั่งซื้อ name -- two dotted placeholders.
+        assertThat(names.split("\\(\\.{26}\\)", -1)).hasSize(3);
         // Dates: ผู้พิมพ์ = created date; the other three slots stay dotted.
         assertThat(dates).contains(thaiShort(created.createdAt()));
         assertThat(dates.split("วันที่........./........./.........", -1)).as("three dotted date slots").hasSize(4);
     }
 
+    /** The manual override this reversal adds: a rep-typed {@code orderedByName} on the request
+     * reaches the printed signature slot exactly as typed, end-to-end (create -> render), even
+     * though the deal ALSO carries a contact snapshot the slot must NOT fall back to. */
     @Test
-    void render_approved_printsAllThreeDates_andOrderedByStaysDotted() throws Exception {
+    void render_draft_printsTheManualOrderedByNameWhenSet_notTheContactName() throws Exception {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequestWithOrderedByName("คุณวิชัย มั่นคง", List.of(sampleItem("100.00", 10))), salesActor);
+        assertThat(created.orderedByName()).isEqualTo("คุณวิชัย มั่นคง");
+        assertThat(created.contactName()).as("still a contact IS recorded on this deal").isEqualTo("สมหญิง ใจดี");
+        String[] rows = signatureRows(quotationService.renderXlsx(created.id(), salesActor));
+        String names = rows[1];
+        assertThat(names).contains("(คุณวิชัย มั่นคง)").doesNotContain("(สมหญิง ใจดี)");
+    }
+
+    @Test
+    void render_approved_printsAllThreeDates_andOrderedByStaysDottedWithNoManualName() throws Exception {
         DealQuotationDto approved = createSubmittedApproved(ticketId, salesActor, salesManagerActor);
         String[] rows = signatureRows(quotationService.renderXlsx(approved.id(), salesActor));
         String dates = rows[2];
@@ -2733,7 +2750,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         // ผู้สั่งซื้อ never gets a date -- the customer signs and dates on paper.
         assertThat(dates.split("วันที่........./........./.........", -1)).as("exactly one dotted date slot").hasSize(2);
         assertThat(dates.lastIndexOf("วันที่........./........./.........")).isGreaterThan(dates.lastIndexOf(thaiShort(approved.approvedAt())));
-        assertThat(rows[1]).contains("(สมหญิง ใจดี)").contains("(" + approved.approvedByName() + ")");
+        // F2-reversal regression guard: NO manual name was set on this fixture, so the ผู้สั่งซื้อ
+        // slot stays the dotted placeholder even though a contact ("สมหญิง ใจดี") is recorded.
+        assertThat(rows[1]).contains("(" + approved.approvedByName() + ")").doesNotContain("(สมหญิง ใจดี)");
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -4941,6 +4960,14 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     private UpsertDealQuotationRequest upsertRequestWithProjectName(String projectName, List<ItemInput> items) {
         return new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
             null, null, "หมายเหตุทดสอบ", null, null, null, null, null, projectName, items);
+    }
+
+    /** Owner-directed reversal of F2 (2026-09-26) — the full canonical constructor, for the one
+     * field (orderedByName) none of this class's other helpers thread through. Every other field
+     * left at its "use the default" value. */
+    private UpsertDealQuotationRequest upsertRequestWithOrderedByName(String orderedByName, List<ItemInput> items) {
+        return new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
+            null, null, "หมายเหตุทดสอบ", null, null, null, null, null, null, null, null, orderedByName, items);
     }
 
     /** {@link #sampleItem} (60x60 -> 0.36 ตร.ม./แผ่น, piecesPerBox 1) plus a ราคาพิเศษ. */
