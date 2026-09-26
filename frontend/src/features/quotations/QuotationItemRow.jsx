@@ -6,13 +6,12 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { formatMoney } from '../../utils/format.js';
 import {
   LINE_TYPE_ADJUSTMENT, LINE_TYPE_PLAIN, LINE_TYPE_TILE,
-  ORIGIN_COUNTRY_OPTIONS, QUANTITY_MODE_OPTIONS, UNLABELLED_LOCATION_TEXT,
+  ORIGIN_COUNTRY_OPTIONS, QUANTITY_MODE_OPTIONS, UNLABELLED_LOCATION_TEXT, WASTAGE_MODE_OPTIONS,
   WASTAGE_PERCENT_PRESETS,
   defaultLeadTimeForOrigin, formatQuotationMoney, lineTypeOf, originCountryFromCode,
   piecesPerSqmFromSqmPerPiece, sqmPerPieceFromPiecesPerSqm, isEnglishPerSqm, listPricePerSqmIncVat,
   sqmPerPieceFromSizeCm, sizeTextDiffersFromCatalogFaceSize,
   roundToFullBoxDisabledReason, roundToFullBoxSummary, isTilePriceChangedFromCeoLocally,
-  wastageModeForPriceMode,
 } from './quotationMeta.js';
 
 // ProductPriceDto's own price_unit for a linear-metre trim (V153: 561 real catalog rows). Its
@@ -220,9 +219,6 @@ export function QuotationItemRow({
   hideDuplicate = false,
 }) {
   const perSqm = isEnglishPerSqm(priceMode, documentLanguage);
-  // Owner decision 2026-09-26: the เผื่อ (wastage) unit follows the document's price mode -- see
-  // wastageModeForPriceMode's own comment.
-  const wastageMode = wastageModeForPriceMode(priceMode);
   // Thai SPECIAL_SQM only -- see PriceInputWithSuffix's own comment above for why this exists.
   // DISPLAY-ONLY: never patched onto `item`, never sent in a payload builder.
   const listPerSqm = priceMode === 'SPECIAL_SQM' && !perSqm
@@ -787,18 +783,32 @@ export function QuotationItemRow({
           </div>
         </FormField>
 
-        <FormField
-          label="เผื่อ (wastage)"
-          htmlFor={`waste-${index}`}
-          error={errors.wastageValue}
-          hint="หน่วยเผื่อตามวิธีกรอกราคา (% สำหรับราคา/ตร.ม. · แผ่น สำหรับราคา/แผ่น)"
-        >
+        <FormField label="เผื่อ (wastage)" htmlFor={`waste-${index}`} error={errors.wastageValue}>
           <div className="flex flex-col gap-2">
-            {/* Owner decision 2026-09-26: the %/แผ่น unit is no longer a rep-set toggle -- it
-                FOLLOWS the document's price mode (wastageModeForPriceMode) for the whole document,
-                shown read-only via the hint above and the presets/suffix below. */}
             <div className="flex flex-wrap gap-2">
-              {wastageMode === 'PERCENT' ? WASTAGE_PERCENT_PRESETS.map((pct) => (
+              {/* Mode switch -- styled identically to the จำนวน ตร.ม./แผ่น segmented control
+                  above, so the two mutually-exclusive-mode controls on this row read as one
+                  family. Re-clicking the already-active mode is a no-op on `wastageValue`
+                  (preserves a typed number); switching mode resets it to 0, since a percent and
+                  a piece count are never comparable numbers. */}
+              <div className="inline-flex overflow-hidden rounded-md border border-border-input">
+                {WASTAGE_MODE_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.code}
+                    type="button"
+                    disabled={readOnly}
+                    aria-pressed={item.wastageMode === opt.code}
+                    className={`min-h-[38px] mobile:min-h-[44px] px-3 text-xs font-bold ${item.wastageMode === opt.code ? 'bg-primary text-surface' : 'bg-surface text-icon-muted'}`}
+                    onClick={() => patch({
+                      wastageMode: opt.code,
+                      wastageValue: item.wastageMode === opt.code ? item.wastageValue : 0,
+                    })}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              {item.wastageMode === 'PERCENT' ? WASTAGE_PERCENT_PRESETS.map((pct) => (
                 <button
                   key={pct}
                   type="button"
@@ -808,18 +818,18 @@ export function QuotationItemRow({
                     Number(item.wastageValue) === pct
                       ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface'
                   }`}
-                  onClick={() => patch({ wastageValue: pct })}
+                  onClick={() => patch({ wastageMode: 'PERCENT', wastageValue: pct })}
                 >
                   {pct}%
                 </button>
               )) : null}
             </div>
-            {/* Manual box is always visible (no more mode toggle -- a rep overriding a preset, or
-                typing any PIECES value, used to need an extra click to even see where to type).
-                The trailing unit -- % vs แผ่น -- is what used to be ambiguous about this single
-                box; PriceInputWithSuffix already renders exactly that adornment for the price
-                fields above, so it is reused here rather than inventing a second version of the
-                same pattern. */}
+            {/* Manual box is always visible in both modes now (no more "กำหนดเอง" toggle -- a rep
+                overriding a preset, or typing any PIECES value, used to need an extra click to
+                even see where to type). The trailing unit -- % vs แผ่น -- is what used to be
+                ambiguous about this single box; PriceInputWithSuffix already renders exactly that
+                adornment for the price fields above, so it is reused here rather than inventing a
+                second version of the same pattern. */}
             <div>
               <span className="block text-2xs font-bold text-text-muted">กรอกเอง</span>
               <PriceInputWithSuffix
@@ -827,7 +837,7 @@ export function QuotationItemRow({
                 type="number"
                 disabled={readOnly}
                 className="w-32"
-                suffix={wastageMode === 'PIECES' ? 'แผ่น' : '%'}
+                suffix={item.wastageMode === 'PIECES' ? 'แผ่น' : '%'}
                 value={item.wastageValue ?? ''}
                 onChange={(e) => patch({ wastageValue: e.target.value === '' ? 0 : Number(e.target.value) })}
               />
@@ -1187,11 +1197,6 @@ export function itemInputFromRow(item, priceMode = 'NET', documentLanguage = 'TH
     id: item.id ?? null,
     ...tileInputFromRow(item),
     lineType: LINE_TYPE_TILE,
-    // Owner decision 2026-09-26: the wastage unit is DERIVED from the document's price mode, not
-    // read off the row's own (possibly stale, pre-redesign) `wastageMode` -- forced here so the
-    // backend always receives the unit that matches what the rep saw on screen, regardless of what
-    // a loaded quotation's stored value happens to be.
-    wastageMode: wastageModeForPriceMode(priceMode),
     // DIRECT_NET: a blank ราคาตั้ง is sent as the net itself — one field typed instead of two,
     // and DealQuotationRenderAdapter#discountLabel then prints "Net" because the two are equal,
     // which is the honest reading of "the rep only has a net price".
@@ -1303,9 +1308,6 @@ export function emptyQuotationItem(groupId = null, defaults = null) {
     // typed into it directly -- see the `sqm-${index}` input's own comment in the render below.
     catalogSqmPerPiece: null, catalogPriceUnit: null, catalogSizeText: null, sqmPerPieceSource: null, piecesPerSqmDisplay: null,
     quantityMode: 'AREA', areaSqm: '', piecesInput: '',
-    // Owner decision 2026-09-26: the unit is now DERIVED from the document's price mode
-    // (wastageModeForPriceMode), not picked here -- this stored value is display-irrelevant, kept
-    // only so the object shape stays valid until itemInputFromRow overwrites it on the wire.
     wastageMode: 'PERCENT', wastageValue: 0, piecesPerBox: '',
     // Owner-approved "sell loose pieces" (V182): default OFF — every new row rounds up to a full
     // box, exactly today's only behaviour, unless the rep opts out.
