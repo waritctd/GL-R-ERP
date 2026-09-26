@@ -100,7 +100,7 @@ export function QuotationPlainItemRow({
         />
       </FormField>
 
-      <div className="grid grid-cols-4 gap-3 mobile:grid-cols-2">
+      <div className="grid grid-cols-4 gap-3 mobile:grid-cols-1">
         <FormField label="จำนวน" htmlFor={`plain-qty-${index}`} required error={errors.quantity}>
           <input
             id={`plain-qty-${index}`} type="number" step="0.01" min="0" disabled={readOnly}
