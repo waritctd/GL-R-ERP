@@ -543,7 +543,7 @@ row 43 h=405
   c10 BLANK style=100 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
   c12 BLANK style=142 b=NONE/NONE/NONE/NONE font=15 wrap=false al=GENERAL : 
 row 44 h=405
-  c0 STRING style=173 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : "ผู้พิมพ์_________________________พนักงานขาย____________________ผู้จัดการฝ่ายขาย_________________ผู้สั่งซื้อ_________________________"
+  c0 STRING style=173 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : "       ผู้พิมพ์_________________         พนักงานขาย_________________   ผู้จัดการฝ่ายขาย_________________      ผู้สั่งซื้อ_________________"
   c1 BLANK style=93 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
   c2 BLANK style=97 b=NONE/NONE/NONE/NONE font=13 wrap=false al=CENTER : 
   c3 BLANK style=93 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
@@ -556,7 +556,7 @@ row 44 h=405
   c10 BLANK style=115 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
   c12 BLANK style=143 b=NONE/NONE/NONE/NONE font=15 wrap=false al=GENERAL : 
 row 45 h=405
-  c0 STRING style=174 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : "                    (จินตนา)                                      (จุฑาทิพ)                                           (ผึ้ง)                                      (สมหญิง ใจดี)                "
+  c0 STRING style=174 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : "                        (จินตนา)                                          (จุฑาทิพ)                                             (ผึ้ง)                               (สมหญิง ใจดี)"
   c1 BLANK style=96 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
   c2 BLANK style=67 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
   c3 BLANK style=96 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
@@ -569,7 +569,7 @@ row 45 h=405
   c10 BLANK style=121 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
   c12 BLANK style=142 b=NONE/NONE/NONE/NONE font=15 wrap=false al=GENERAL : 
 row 46 h=405
-  c0 STRING style=175 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : "               วันที่ 10/9/2569                              วันที่ 10/9/2569                              วันที่ 11/9/2569                       วันที่........./........./.........        "
+  c0 STRING style=175 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : "                   วันที่ 10/9/2569                                  วันที่ 10/9/2569                                 วันที่ 11/9/2569                 วันที่........./........./........."
   c1 BLANK style=96 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
   c2 BLANK style=99 b=NONE/NONE/NONE/NONE font=13 wrap=false al=CENTER : 
   c3 BLANK style=96 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
@@ -604,4 +604,4 @@ row 55 h=225
 merges=[A45:I45, A46:I46, A47:I47, B30:H30, B31:H31, B32:H32, B33:H33, B34:H34, B35:H35, B36:H36, B37:H37, B38:H38, B5:G5, B6:G6, C43:I43, E40:G40, F7:G7, H6:I6, K1:K6]
 picture r0+41 c0+213 -> r2+164 c1+199 md5=37c268c5f55b95434005f145ab9f68f6
 picture r0+81 c3+363 -> r2+114 c6+465 md5=cd52dfb83fa021c48b4eb6b18f57fc10
-picture r43+165 c2+503 -> r44+166 c4+18 md5=c55f225dbf14a022d81c0ea1ba629d41
+picture r43+165 c2+584 -> r44+166 c4+89 md5=c55f225dbf14a022d81c0ea1ba629d41
