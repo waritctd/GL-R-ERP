@@ -11318,12 +11318,18 @@ export const api = {
     },
   },
 
-  // Mirrors DesignerController (designer/) — READ-ONLY. Owner ruling "อ่านอย่างเดียว อัปเดตจาก
-  // Excel" is enforced by construction: there is no create/update/delete method in this namespace
-  // and there must never be one. Open to any authenticated user, same as catalog above — a sales
-  // rep filling in a quotation needs to search this, and #205's own reasoning applies (see
-  // DesignerController's Javadoc): the confidentiality requirement is about the PRINTED DOCUMENT,
-  // not about which role may search the directory.
+  // Mirrors DesignerController (designer/). search/getByCode stay open to any authenticated user,
+  // same as catalog above — a sales rep filling in a quotation needs to search this, and #205's own
+  // reasoning applies (see DesignerController's Javadoc): the confidentiality requirement is about
+  // the PRINTED DOCUMENT, not about which role may search the directory.
+  //
+  // ⚠️ REVERSAL (owner ask relayed 2026-09-26, task "designer-add-from-ui"): this namespace used to
+  // say READ-ONLY was enforced by construction (no create/update/delete method, and there must
+  // never be one). create() below is the fresh write path the owner asked for — gated by
+  // requireDealEntry(), mirroring DealEntryAccess.requireCanEnterDeal exactly like
+  // customers.create's own gate. There is still no update()/delete() here — only create was asked
+  // for. ⚠️ AUTHZ CAVEAT (same as customers.create above): this gate approximates the Java one and
+  // is NOT authoritative — verify against DealEntryAccess, never here.
   designers: {
     // Ordering mirrors DesignerRepository.search: `ORDER BY code LIMIT 30`. Active-only, exactly
     // like the Java WHERE clause — a designer marked ยกเลิก must not be offered for a NEW pick.
@@ -11346,6 +11352,21 @@ export const api = {
       const found = mockDesigners.find((d) => d.code === String(code ?? '').trim());
       if (!found) fail('ไม่พบผู้ออกแบบรหัสนี้', 404);
       return delay({ ...found });
+    },
+    // NEW (reversal, see this namespace's own comment above). Mirrors DesignerController#create:
+    // gated by requireDealEntry() (same as customers.create), a duplicate code is a 409 mirroring
+    // the real controller's DuplicateKeyException→CONFLICT mapping, and a brand-new row is always
+    // active: true — there is no way to create one pre-cancelled, matching DesignerRepository#create.
+    async create(payload = {}) {
+      requireDealEntry();
+      const code = String(payload.code ?? '').trim();
+      const name = String(payload.name ?? '').trim();
+      if (!code) fail('code ไม่ถูกต้อง', 400);
+      if (!name) fail('name ไม่ถูกต้อง', 400);
+      if (mockDesigners.some((d) => d.code === code)) fail('รหัสผู้ออกแบบนี้มีอยู่แล้ว', 409);
+      const designer = { code, name, active: true };
+      mockDesigners.push(designer);
+      return delay({ designer: { ...designer } });
     },
   },
 

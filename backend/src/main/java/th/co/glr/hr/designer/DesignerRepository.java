@@ -8,10 +8,17 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 /**
- * READ-ONLY access to {@code sales.designer} (V173). There is no write method on this class and
- * there must never be one -- the owner's ruling was "อ่านอย่างเดียว อัปเดตจาก Excel" (read-only,
- * refreshed by re-importing the Excel), so the table's contents change only via a future
- * migration, never through this application. See V173's own header for the full seeding story.
+ * Access to {@code sales.designer} (V173).
+ *
+ * <p>⚠️ REVERSAL (owner ask relayed 2026-09-26, task "designer-add-from-ui"): this class used to
+ * say there was no write method here and there must never be one -- the owner's original ruling
+ * was "อ่านอย่างเดียว อัปเดตจาก Excel" (read-only, refreshed by re-importing the Excel). The owner
+ * has now explicitly asked for an inline "add a new designer" flow on the quotation editor's
+ * DesignerPicker, mirroring DealCustomerCard's "+ เพิ่มลูกค้าใหม่". {@link #create} below is that
+ * fresh write path -- see {@link DesignerController}'s class Javadoc for the authz gate. The bulk
+ * of this table (~1,100 rows) still only ever changes via a future Excel re-import migration; only
+ * ROWS ADDED THROUGH THIS METHOD are UI-authored, tagged {@code source_sheet = 'UI'} to keep that
+ * distinction visible in the data itself. See V173's own header for the original seeding story.
  */
 @Repository
 public class DesignerRepository {
@@ -66,5 +73,29 @@ public class DesignerRepository {
             Map.of("code", code.trim()),
             (rs, i) -> new DesignerDto(rs.getString("code"), rs.getString("name"), rs.getBoolean("active"))
         ).stream().findFirst();
+    }
+
+    /**
+     * Insert a brand-new designer row (REVERSAL of the original read-only ruling -- see this
+     * class's own Javadoc and {@link DesignerController}'s). {@code code} is the table's PK
+     * (VARCHAR(20), no format CHECK -- V173's own header notes real codes are not one consistent
+     * shape: 'A001', '1001', 'FL1', 'ก001' are all real), so a duplicate is left to the DB's own PK
+     * constraint to reject as a {@link org.springframework.dao.DuplicateKeyException} rather than a
+     * racy SELECT-then-INSERT check here -- the controller maps that to 409. {@code source_sheet}
+     * is the literal {@code 'UI'} for anything created this way, so a UI-authored row stays
+     * distinguishable at a glance from an Excel-imported one; {@code active} is always {@code TRUE}
+     * for a brand-new row (there is no way to create one pre-cancelled).
+     */
+    public DesignerDto create(String code, String name) {
+        jdbc.update(
+            """
+            INSERT INTO sales.designer (code, name, active, source_sheet, imported_at)
+            VALUES (:code, :name, TRUE, 'UI', now())
+            """,
+            new MapSqlParameterSource()
+                .addValue("code", code)
+                .addValue("name", name)
+        );
+        return new DesignerDto(code, name, true);
     }
 }

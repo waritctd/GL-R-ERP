@@ -588,6 +588,10 @@ export const api = {
   designers: {
     search: (q) => apiRequest(API_ROUTES.designers.search(q ?? '')),
     getByCode: (code) => apiRequest(API_ROUTES.designers.byCode(code)),
+    // Reversal of the original read-only ruling (owner ask relayed 2026-09-26, task
+    // "designer-add-from-ui") — mirrors customers.create's shape exactly (a single payload arg,
+    // POST). Gated server-side by DealEntryAccess.requireCanEnterDeal, same as customers.create.
+    create: (payload) => apiRequest(API_ROUTES.designers.create, { method: 'POST', body: payload }),
   },
   // Mirrors DealStageMetaController (ticket/). The deal pipeline's shape — stages with their
   // display number, S-sheet code, phase, write gate and auto-advance flag, plus the phase list and

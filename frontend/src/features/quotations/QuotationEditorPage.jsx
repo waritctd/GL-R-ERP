@@ -1940,6 +1940,7 @@ export function QuotationEditorPage({ user, showToast }) {
                   terms={terms}
                   onChange={(patch) => { setTerms((current) => ({ ...current, ...patch })); setDirty(true); }}
                   idPrefix="inline-quotation"
+                  showToast={showToast}
                 />
               </Panel>
             </>
@@ -2043,6 +2044,7 @@ export function QuotationEditorPage({ user, showToast }) {
                   terms={terms}
                   onChange={(patch) => { setTerms((current) => ({ ...current, ...patch })); setDirty(true); }}
                   idPrefix="quotation"
+                  showToast={showToast}
                 />
               </div>
             </Panel>
