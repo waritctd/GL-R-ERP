@@ -252,6 +252,19 @@ public final class PricingRequestRequests {
         @NotBlank @Size(max = 255) String factory
     ) {}
 
+    /**
+     * Import/CEO fills in the ความหนา (มม.) on a line whose factory never provided one, so the
+     * landed-cost freight lookup can run — see {@code PricingRequestService#setItemThickness}. A
+     * gap-FILL, not a correction (that needs a new pricing-request round). {@code @Digits}/{@code
+     * @DecimalMax} mirror {@code sales.pricing_request_item.thickness_mm} (NUMERIC(6,2)) so an
+     * out-of-range value 400s here instead of overflowing the column as a raw 500; the exclusive
+     * min rejects 0/negative (a real tile has a positive thickness).
+     */
+    public record SetItemThicknessRequest(
+        @NotNull @DecimalMin(value = "0", inclusive = false) @DecimalMax("9999")
+        @Digits(integer = 4, fraction = 2) BigDecimal thicknessMm
+    ) {}
+
     /** Import-only toggle on a Pricing Request attachment (V69, review remediation COMMIT 4). */
     public record UpdatePricingRequestAttachmentRequest(
         @NotNull Boolean includeInFactoryEmail

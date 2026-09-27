@@ -364,6 +364,13 @@ describe('validateQuotationItem (#M4, owner ruling 2026-09-10)', () => {
     expect(validateQuotationItem(completeItem({ thicknessMm: 0 }))).toEqual({ thicknessMm: 'กรุณาระบุความหนา (มม.)' });
   });
 
+  // owner ruling 2026-09-26 (PCR flow only): a factory (China/Italy) may not supply a thickness, so
+  // the PricingRequestCreateModal caller passes thicknessOptional and a blank one no longer errors.
+  it('treats ความหนา as optional when thicknessOptional is set', () => {
+    expect(validateQuotationItem(completeItem({ thicknessMm: null }), 'NET', 'TH', { thicknessOptional: true })).toEqual({});
+    expect(validateQuotationItem(completeItem({ thicknessMm: 0 }), 'NET', 'TH', { thicknessOptional: true })).toEqual({});
+  });
+
   it('flags a missing or non-positive แผ่น/ตร.ม.', () => {
     expect(validateQuotationItem(completeItem({ sqmPerPiece: null }))).toEqual({ sqmPerPiece: 'กรุณาระบุแผ่น/ตร.ม.' });
     expect(validateQuotationItem(completeItem({ sqmPerPiece: 0 }))).toEqual({ sqmPerPiece: 'กรุณาระบุแผ่น/ตร.ม.' });
