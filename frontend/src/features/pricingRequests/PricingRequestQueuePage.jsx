@@ -449,7 +449,7 @@ export function PricingRequestQueuePage({ user, showToast }) {
   // from a genuinely-empty one).
   const badgeCount = hasTaskTabs && badgeQuery.isSuccess ? badgeRows.length : null;
   // รอรับเรื่อง carries its OWN badge (owner ask 2026-09-24 — matching งานของฉัน) from the
-  // unclaimedCount already computed below for the empty-work prompt; badgeCount is the role's
+  // unclaimedCount already computed above for the empty-work prompt; badgeCount is the role's
   // first-tab count. unclaimedCount is import-only (its query is enabled for import alone) and
   // null for ceo, which has no รอรับเรื่อง tab anyway.
   const tabBadgeCount = (key) => (key === 'UNCLAIMED' ? unclaimedCount : badgeCount);
