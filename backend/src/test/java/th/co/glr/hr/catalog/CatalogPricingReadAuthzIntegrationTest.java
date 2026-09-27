@@ -1,7 +1,12 @@
 package th.co.glr.hr.catalog;
 
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -24,6 +29,7 @@ import th.co.glr.hr.catalog.importer.PriceImportService;
 import th.co.glr.hr.common.ApiExceptionHandler;
 import th.co.glr.hr.factory.FactoryConfigController;
 import th.co.glr.hr.factory.FactoryConfigRepository;
+import th.co.glr.hr.pricing.BotFxFetchService;
 import th.co.glr.hr.pricing.FxRateController;
 import th.co.glr.hr.pricing.FxRateRepository;
 import th.co.glr.hr.pricing.PriceCalcConfigController;
@@ -90,6 +96,7 @@ class CatalogPricingReadAuthzIntegrationTest extends AbstractPostgresIntegration
     private MockMvc priceConfigMvc;
     private MockMvc fxMvc;
     private MockMvc factoryMvc;
+    private BotFxFetchService botFxFetchService;
 
     @BeforeEach
     void wireRealCollaborators() {
@@ -118,8 +125,9 @@ class CatalogPricingReadAuthzIntegrationTest extends AbstractPostgresIntegration
             sessions), jsonMapper);
         priceConfigMvc = standalone(
             new PriceCalcConfigController(new PriceCalcConfigRepository(jdbc), sessions), jsonMapper);
+        botFxFetchService = mock(BotFxFetchService.class);
         fxMvc = standalone(new FxRateController(
-            new FxRateRepository(jdbc), sessions, mock(th.co.glr.hr.pricing.BotFxFetchService.class)), jsonMapper);
+            new FxRateRepository(jdbc), sessions, botFxFetchService), jsonMapper);
         factoryMvc = standalone(
             new FactoryConfigController(new FactoryConfigRepository(jdbc), sessions), jsonMapper);
 
@@ -236,6 +244,37 @@ class CatalogPricingReadAuthzIntegrationTest extends AbstractPostgresIntegration
                     {"rateToThb": 38.5, "effectiveDate": "2026-08-02"}
                     """))
             .andExpect(status().isForbidden());
+    }
+
+    /**
+     * {@code POST /api/fx-rates/fetch-now} (added 2026-09-24, commit 94e258c9 — CEO console
+     * "ดึงเรตจาก BOT ตอนนี้" button) is gated exactly like {@link
+     * FxRateController#upsert}: CEO-only, because it writes rates too. Written wrong-way-round
+     * per CLAUDE.md: {@code sales} and {@code import} — both members of {@code
+     * FxRateController.READ_ROLES}, so
+     * this proves the read widening does not leak into the new write — are refused, and the
+     * refusal is proven to reach no further than the role gate by asserting {@code
+     * BotFxFetchService} was <b>never invoked</b> for either of them (a Mockito verification, not
+     * merely the 403 status). {@code ceo} is the positive control: it reaches the real write
+     * path and the service's result is echoed back through the real controller.
+     */
+    @Test
+    void fetchNowIsCeoOnly_forbiddenRolesNeverInvokeTheBotFetch_ceoDoes() throws Exception {
+        for (String role : List.of("sales", "import")) {
+            fxMvc.perform(post("/api/fx-rates/fetch-now").session(sessionFor(role)))
+                .andExpect(status().isForbidden());
+        }
+        verifyNoInteractions(botFxFetchService);
+
+        when(botFxFetchService.fetchNow()).thenReturn(new BotFxFetchService.FxFetchResult(
+            3, 5, LocalDate.now().toString(), List.of("USD", "EUR", "JPY")));
+
+        fxMvc.perform(post("/api/fx-rates/fetch-now").session(sessionFor("ceo")))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.result.updated").value(3))
+            .andExpect(jsonPath("$.result.total").value(5));
+
+        verify(botFxFetchService, times(1)).fetchNow();
     }
 
     @Test
