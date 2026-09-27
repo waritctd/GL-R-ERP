@@ -11,6 +11,13 @@ import { Modal } from '../../components/common/Modal.jsx';
 import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
 import { Panel, PageStack } from '../../components/common/Layout.jsx';
 import { SafeForm } from '../../components/common/SafeForm.jsx';
+// Shared with HolidaysTab's identical "ดึงข้อมูลจาก ธปท." cooldown affordance -- both
+// BotFxFetchService and BotHolidayFetchService throw the same "...(ประมาณ N วินาที)" 429 shape
+// (see BotFxFetchService.MANUAL_FETCH_COOLDOWN's review-fix javadoc), so this pure helper is
+// reused across features rather than duplicated. Kept as a direct cross-feature import rather than
+// moved to a shared location -- it is dependency-free (no React, no feature-specific imports) and
+// re-exporting it would be a bigger diff than this one import line.
+import { parseCooldownSeconds } from '../attendanceCalendar/holidayFetch.js';
 
 function pctDisplay(val) {
   return val != null ? `${(Number(val) * 100).toFixed(2)}%` : '-';
@@ -763,6 +770,63 @@ export function CeoSettingsPage({ showToast }) {
     onError: (e) => showToast('error', e.message || 'บันทึกไม่สำเร็จ'),
   });
 
+  // S1 (review fix, 2026-09-28): BOT publishes DAILY_AVG_EXG_RATE late in the day, so
+  // updated === 0 is the DOMINANT case for a fetch run any time before then, and is also what an
+  // invalid/expired token looks like -- never a green "success" toast for a 0/N no-op. Mirrors
+  // HolidaysTab's identical honest-zero-row handling.
+  // B1 (review fix): BotFxFetchService.fetchNow() now enforces a 10-minute manual-fetch cooldown
+  // and throws a 429 while it's active -- handled the same way HolidaysTab handles its own BOT
+  // fetcher's identical cooldown, via the shared parseCooldownSeconds helper.
+  const DEFAULT_FX_COOLDOWN_SECONDS = 600; // matches BotFxFetchService.MANUAL_FETCH_COOLDOWN (10 min)
+  const [fxCooldownUntil, setFxCooldownUntil] = useState(null);
+  const [fxCooldownMessage, setFxCooldownMessage] = useState('');
+  const [fxNowTick, setFxNowTick] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!fxCooldownUntil) return undefined;
+    const timer = window.setInterval(() => setFxNowTick(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [fxCooldownUntil]);
+
+  const fxCooldownSecondsLeft = fxCooldownUntil ? Math.max(0, Math.ceil((fxCooldownUntil - fxNowTick) / 1000)) : 0;
+  useEffect(() => {
+    if (fxCooldownUntil && fxCooldownSecondsLeft <= 0) setFxCooldownUntil(null);
+  }, [fxCooldownSecondsLeft, fxCooldownUntil]);
+
+  // Trigger the BOT FX fetch on demand instead of waiting for the 18:00 schedule
+  // (POST /api/fx-rates/fetch-now — CEO-only, same gate as the manual upsert above).
+  const fetchFxNowMutation = useMutation({
+    mutationFn: () => api.fxRates.fetchNow(),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.fxRates() });
+      const r = data?.result;
+      if (r && r.updated === 0) {
+        // Never a success toast for a 0/N no-op -- the exact same failure shape HolidaysTab
+        // guards against for its own BOT fetcher (HTTP 200, nothing actually updated).
+        showToast('info', `ดึงเรตจาก BOT แล้ว แต่ยังไม่มีอัตราใหม่ (ณ ${r.asOf}) — ธปท. อาจยังไม่ประกาศเรตของวันนี้ ลองใหม่อีกครั้งหลัง 18:00`);
+      } else if (r) {
+        showToast('success', `ดึงเรตจาก BOT แล้ว — อัปเดต ${r.updated}/${r.total} สกุล (${r.asOf})`);
+      } else {
+        showToast('success', 'ดึงเรตจาก BOT แล้ว');
+      }
+    },
+    onError: (e) => {
+      if (e?.status === 429) {
+        const seconds = parseCooldownSeconds(e.message) ?? DEFAULT_FX_COOLDOWN_SECONDS;
+        const now = Date.now();
+        setFxCooldownMessage(e.message || '');
+        setFxCooldownUntil(now + seconds * 1000);
+        // fxNowTick's initial value is only set once, at mount -- by the time this error lands it
+        // can be arbitrarily stale (however long the request took), which would inflate the very
+        // first countdown render. Reset it here so the first render is accurate instead of
+        // waiting a tick for the interval above to correct it.
+        setFxNowTick(now);
+        return;
+      }
+      showToast('error', e.message || 'ดึงเรตจาก BOT ไม่สำเร็จ');
+    },
+  });
+
   // A single shared mutation acts on whichever currency row is being saved —
   // this reads the in-flight variables back out to know which row's button
   // should show a busy state (there's no per-row mutation instance).
@@ -851,7 +915,21 @@ export function CeoSettingsPage({ showToast }) {
       </header>
 
       {/* FX Rates */}
-      <Panel flush title="อัตราแลกเปลี่ยน (1 หน่วย = ? บาท)">
+      <Panel
+        flush
+        title="อัตราแลกเปลี่ยน (1 หน่วย = ? บาท)"
+        actions={(
+          <Button
+            type="button"
+            variant="secondary"
+            disabled={fetchFxNowMutation.isPending || fxCooldownSecondsLeft > 0}
+            onClick={() => fetchFxNowMutation.mutate()}
+            data-testid="fx-fetch-now"
+          >
+            {fetchFxNowMutation.isPending ? 'กำลังดึงเรต…' : 'ดึงเรตจาก BOT ตอนนี้'}
+          </Button>
+        )}
+      >
         {/* P0 fix follow-up (2026-09): this used to read "...ติดต่อผู้ดูแลระบบหากยังไม่เปิดใช้งาน
             การดึงอัตราอัตโนมัติ", which implied the CEO had to wait on an admin before costing
             would work at all. That is no longer true — FxResolver no longer requires source ===
@@ -861,6 +939,17 @@ export function CeoSettingsPage({ showToast }) {
           <span>ดึงอัตโนมัติจากธนาคารแห่งประเทศไทยทุกวัน 18:00 (เวลาไทย) เป็นความสะดวกเสริมเท่านั้น</span>
           <span>• อัตราที่กรอกเอง (กรอกเอง) ใช้คำนวณต้นทุนได้ตามปกติทันที ไม่ต้องรอเปิดใช้งานการดึงอัตราอัตโนมัติ</span>
         </div>
+        {fxCooldownSecondsLeft > 0 ? (
+          // B1 review fix: BotFxFetchService.MANUAL_FETCH_COOLDOWN 429 -- a timed, non-error state
+          // (mirrors HolidaysTab's identical cooldown banner for its own BOT fetcher), not a
+          // failure toast.
+          <div
+            data-testid="fx-fetch-cooldown"
+            className="px-[18px] py-2 text-2xs text-warning-dark bg-warning-bg-soft border-b border-surface-subtle"
+          >
+            รอสักครู่ก่อนลองดึงเรตจาก BOT อีกครั้ง (เหลืออีกประมาณ {fxCooldownSecondsLeft} วินาที) — {fxCooldownMessage}
+          </div>
+        ) : null}
         <div className="overflow-x-auto">
         <table className="w-full border-collapse text-sm">
           <thead>
