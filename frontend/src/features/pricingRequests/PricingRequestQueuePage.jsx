@@ -88,7 +88,7 @@ function byOldestFirst(a, b) {
 const TASK_TABS_BY_ROLE = {
   import: [
     { key: 'MY_WORK', label: 'งานของฉัน', hasBadge: true, emptyTitle: 'ไม่มีงานที่คุณรับเรื่องค้างอยู่' },
-    { key: 'UNCLAIMED', label: 'รอรับเรื่อง', emptyTitle: 'ไม่มีคำขอที่รอรับเรื่อง' },
+    { key: 'UNCLAIMED', label: 'รอรับเรื่อง', hasBadge: true, emptyTitle: 'ไม่มีคำขอที่รอรับเรื่อง' },
     { key: 'ALL', label: 'ทั้งหมด', emptyTitle: 'ไม่มีคำขอราคาในเงื่อนไขนี้' },
   ],
   ceo: [
@@ -352,10 +352,10 @@ export function PricingRequestQueuePage({ user, showToast }) {
   // needs to know THIS count too (to offer "ไม่มีงานค้าง … ดูคำขอที่รอรับเรื่อง" instead of a
   // bare empty state, see showEmptyWorkPrompt below), so it must be known before its own
   // tab is ever opened, and import now always fetches this list once on load rather than
-  // only after opening the tab. No badge is added here on purpose (still exactly one badge
-  // on this page) — this is the SAME query/cache key as the (now-retired-as-a-default)
-  // SUBMITTED chip, so nothing is fetched here that this page didn't already sometimes fetch
-  // before.
+  // only after opening the tab. This count now ALSO shows as the รอรับเรื่อง tab's own badge
+  // (owner ask 2026-09-24 — matching งานของฉัน), reusing this exact query rather than adding a
+  // new fetch: it is the SAME query/cache key as the (now-retired-as-a-default) SUBMITTED chip,
+  // so nothing is fetched here that this page didn't already sometimes fetch before.
   //
   // ⚠️ Freshness trade-off (review finding, 2026-09-19): because `enabled` no longer flips
   // false->true when this tab is opened, react-query's own "refetch on a query becoming
@@ -448,14 +448,22 @@ export function PricingRequestQueuePage({ user, showToast }) {
   // page defaults to `[]` before the first response, making an unloaded badge indistinguishable
   // from a genuinely-empty one).
   const badgeCount = hasTaskTabs && badgeQuery.isSuccess ? badgeRows.length : null;
-  const tabItems = taskTabs?.map((tab) => ({
-    id: tab.key,
-    label: tab.label,
-    badge: tab.hasBadge ? badgeCount : undefined,
-    // Read as "<label> N รายการ" instead of the ambiguous "<label>N" a bare number would produce
-    // — see Tabs.jsx's own badgeLabel doc.
-    badgeLabel: tab.hasBadge && badgeCount != null ? `${badgeCount} รายการ` : undefined,
-  })) ?? [];
+  // รอรับเรื่อง carries its OWN badge (owner ask 2026-09-24 — matching งานของฉัน) from the
+  // unclaimedCount already computed below for the empty-work prompt; badgeCount is the role's
+  // first-tab count. unclaimedCount is import-only (its query is enabled for import alone) and
+  // null for ceo, which has no รอรับเรื่อง tab anyway.
+  const tabBadgeCount = (key) => (key === 'UNCLAIMED' ? unclaimedCount : badgeCount);
+  const tabItems = taskTabs?.map((tab) => {
+    const count = tab.hasBadge ? tabBadgeCount(tab.key) : null;
+    return {
+      id: tab.key,
+      label: tab.label,
+      badge: count ?? undefined,
+      // Read as "<label> N รายการ" instead of the ambiguous "<label>N" a bare number would produce
+      // — see Tabs.jsx's own badgeLabel doc.
+      badgeLabel: count != null ? `${count} รายการ` : undefined,
+    };
+  }) ?? [];
 
   const pickupMutation = useMutation({
     mutationFn: (id) => api.pricingRequests.pickup(id),

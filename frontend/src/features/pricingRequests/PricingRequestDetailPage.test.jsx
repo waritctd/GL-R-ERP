@@ -31,6 +31,7 @@ vi.mock('../../api/index.js', () => ({
       attachmentUrl: (id) => `#attachment-${id}`,
       factoryQuoteAttachmentUrl: (id) => `#quote-attachment-${id}`,
       setItemFactory: vi.fn(),
+      pickup: vi.fn(),
       generateFactoryEmailDrafts: vi.fn(),
       updateFactoryQuote: vi.fn(),
       sendFactoryQuote: vi.fn(),
@@ -788,6 +789,76 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     // step, not a decorative afterthought beside the button that actually changes state.
     expect(within(dialog).getByRole('button', { name: /คัดลอกข้อความ/ })).not.toBeNull();
     expect(within(dialog).getByRole('button', { name: 'ส่งแล้ว' })).not.toBeNull();
+  });
+
+  // Owner UX ask 2026-09-24: the price grid must not invite a quoted price before the request
+  // email has actually been sent to this factory (a DRAFT quote = not sent yet). Nudge, not hide:
+  // the grid stays visible with a locked/dimmed price input + a "send the email first" banner.
+  it('locks the price grid with a nudge while the factory email is still a DRAFT', async () => {
+    renderDetailPage({ user: importUser, factoryQuotes: [buildFactoryQuote()] }); // default status DRAFT
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    expect(screen.getByTestId('pcr-await-email-91')).not.toBeNull();     // the nudge banner
+    // The price field (shared aria-label prefix) is the DISABLED stand-in, not an editable input.
+    expect(screen.getByLabelText(/^ราคาที่เสนอ/).disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: 'ยืนยันราคาเสนอ' })).toBeNull(); // and no confirm
+  });
+
+  it('unlocks the price grid once the factory email is sent (REQUESTED)', async () => {
+    renderDetailPage({ user: importUser, factoryQuotes: [buildFactoryQuote({ status: 'REQUESTED' })] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    expect(screen.queryByTestId('pcr-await-email-91')).toBeNull();       // banner gone
+    expect(screen.getByLabelText(/^ราคาที่เสนอ/).disabled).toBe(false);  // editable input back
+    expect(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' })).not.toBeNull();
+  });
+
+  // #2 (owner ask 2026-09-24): before any ร่างอีเมล is generated the price section used to be a
+  // bare "ยังไม่มีราคาโรงงาน" — now it previews what needs pricing, grouped by the routed factory,
+  // read-only (no editable price input yet).
+  it('previews what needs pricing (grouped by factory) before any ร่างอีเมล is generated', async () => {
+    renderDetailPage({ user: importUser }); // no factoryQuotes → nothing generated yet
+    await waitForLoaded();
+
+    const preview = await screen.findByTestId('pcr-price-preview');
+    expect(screen.getAllByTestId('pcr-price-preview-group').length).toBeGreaterThan(0);
+    expect(within(preview).getByText('SCG Ceramics')).not.toBeNull();   // the routed factory group
+    expect(screen.queryByLabelText(/^ราคาที่เสนอ/)).toBeNull();          // no editable price yet
+  });
+
+  // #1 (owner ask 2026-09-24): a SUBMITTED request opened here (e.g. from a link) had no รับเรื่อง
+  // affordance on the page itself — only in the คิวขอราคา queue.
+  it('lets an import user รับเรื่อง a SUBMITTED request from the request-page header', async () => {
+    api.pricingRequests.pickup.mockResolvedValue({ pricingRequest: buildRequest({ summary: { status: 'IMPORT_REVIEWING' } }) });
+    renderDetailPage({ user: importUser, request: buildRequest({ summary: { status: 'SUBMITTED' } }) });
+    await waitForLoaded();
+
+    fireEvent.click(screen.getByTestId('pcr-detail-pickup'));
+    await waitFor(() => expect(api.pricingRequests.pickup).toHaveBeenCalledWith(501));
+  });
+
+  it('shows no รับเรื่อง on the request page once it is already picked up (IMPORT_REVIEWING)', async () => {
+    renderDetailPage({ user: importUser, request: buildRequest() }); // default IMPORT_REVIEWING
+    await waitForLoaded();
+    expect(screen.queryByTestId('pcr-detail-pickup')).toBeNull();
+  });
+
+  // owner ask 2026-09-24: after ส่งแล้ว, Import can still reopen the RFQ email — read-only (view +
+  // copy), labelled ดูอีเมล; the ส่งแล้ว transition is gone.
+  it('reopens a SENT factory RFQ email read-only (ดูอีเมล, copy kept, no ส่งแล้ว)', async () => {
+    renderDetailPage({ user: importUser, factoryQuotes: [buildFactoryQuote({ status: 'REQUESTED' })] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    const openBtn = screen.getByTestId('pcr-open-email-draft-91');
+    expect(openBtn.textContent).toContain('ดูอีเมล');
+    fireEvent.click(openBtn);
+
+    const dialog = await screen.findByTestId('factory-email-draft-modal');
+    expect(within(dialog).getByTestId('pcr-copy-factory-email')).not.toBeNull();          // copy kept
+    expect(within(dialog).queryByTestId('pcr-mark-factory-email-sent')).toBeNull();       // no ส่งแล้ว
   });
 
   it('records a factory response revision entry via receiveFactoryQuote with a fresh clientRequestId', async () => {
