@@ -815,6 +815,33 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     expect(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' })).not.toBeNull();
   });
 
+  // Opus review of #1062 (2026-09-28): the lock above read only the QUOTE's own status, never the
+  // PRICING REQUEST's. FactoryQuoteService.send only succeeds while the request itself sits in
+  // DRAFT_STATUSES = {IMPORT_REVIEWING, AWAITING_FACTORY_RESPONSE} (FactoryQuoteService.java:47-49,
+  // guarded at :242). receive()'s window is wider (RESPONSE_STATUSES, :50-53, adds
+  // READY_FOR_CEO_REVIEW) and explicitly still accepts a DRAFT quote (:402, :408). This is a
+  // defensive guard, not a claim of a specific reproduction — PricingRequestService#setItemFactory
+  // is a gap-FILL only (a line that already has a factory 409s), so no confirmed live path was found
+  // that lands a DRAFT quote outside send()'s window today. But whatever combination does, the UI
+  // must never lock the grid behind a "send first" banner whose only action would 409 while
+  // receive() would accept the very same confirm — so outside send()'s window the grid must behave
+  // as it did before #1062: enabled, no banner, AND (since receive() explicitly still accepts a
+  // DRAFT quote there) the ยืนยันราคาเสนอ confirm button restored too — see the follow-up fix to
+  // canConfirm's own disjunction, which this test also covers.
+  it('does not lock the price grid for a surviving DRAFT quote once the request is past send()\'s window (READY_FOR_CEO_REVIEW)', async () => {
+    renderDetailPage({
+      user: importUser,
+      request: buildRequest({ summary: { status: 'READY_FOR_CEO_REVIEW' } }),
+      factoryQuotes: [buildFactoryQuote()], // still DRAFT
+    });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    expect(screen.queryByTestId('pcr-await-email-91')).toBeNull();       // no banner
+    expect(screen.getByLabelText(/^ราคาที่เสนอ/).disabled).toBe(false);  // input enabled, not locked
+    expect(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' })).not.toBeNull(); // confirm restored too
+  });
+
   // #2 (owner ask 2026-09-24): before any ร่างอีเมล is generated the price section used to be a
   // bare "ยังไม่มีราคาโรงงาน" — now it previews what needs pricing, grouped by the routed factory,
   // read-only (no editable price input yet).
@@ -826,6 +853,48 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     expect(screen.getAllByTestId('pcr-price-preview-group').length).toBeGreaterThan(0);
     expect(within(preview).getByText('SCG Ceramics')).not.toBeNull();   // the routed factory group
     expect(screen.queryByLabelText(/^ราคาที่เสนอ/)).toBeNull();          // no editable price yet
+  });
+
+  // Opus review of #1062 (2026-09-28): the preview used to be gated on `factoryGroups.length ===
+  // 0`, so it vanished entirely the instant ANY factory quote existed anywhere on the request. An
+  // item whose factory was blank until Import gap-filled it (canSetItemFactory, still within
+  // FACTORY_ROUTING_STATUSES — never a re-route of an already-set line, per setItemFactory's own
+  // Javadoc) AFTER drafts were already generated for other items has no factory-quote row of its
+  // own, so it appeared in neither the (suppressed) preview nor the quote grid — invisible. The
+  // preview must now cover exactly the items no CURRENT factory quote already lists, independent of
+  // whether other items already have one — and its banner copy must not claim "no draft generated
+  // at all" in this mixed case, and the panel's item count must include these previewed items too.
+  it('previews an item with no factory-quote row yet even once other items already have one', async () => {
+    const base = buildRequest().items[0];
+    const items = [
+      { ...base, id: 1, resolvedFactoryName: 'SCG Ceramics' }, // A — quoted below
+      { ...base, id: 2, resolvedFactoryName: 'SCG Ceramics', model: 'A2' }, // B — quoted below
+      { ...base, id: 3, resolvedFactoryName: 'Cotto', model: 'C1' }, // C — gap-filled, not quoted yet
+    ];
+    const quote = buildFactoryQuote({
+      items: [
+        { ...buildFactoryQuote().items[0], id: 911, pricingRequestItemId: 1 },
+        { ...buildFactoryQuote().items[0], id: 912, pricingRequestItemId: 2 },
+      ],
+    });
+    const request = buildRequest({ items });
+    renderDetailPage({ user: importUser, request, factoryQuotes: [quote] });
+    await waitForLoaded(request);
+
+    const preview = await screen.findByTestId('pcr-price-preview');
+    expect(within(preview).getByText('Cotto')).not.toBeNull();          // C's factory shows
+    expect(within(preview).queryByText('SCG Ceramics')).toBeNull();     // A/B's factory does not
+    // Mixed case (A/B already quoted, C only just previewed): the banner must not claim no draft
+    // was ever generated — that would be false for A/B's already-drafted factory.
+    expect(within(preview).getByText(/รายการที่ยังไม่ได้ขอราคาจากโรงงาน/)).not.toBeNull();
+    expect(within(preview).queryByText(/ยังไม่ได้สร้างร่างอีเมลขอราคา/)).toBeNull();
+
+    // A and B still render as their own quote-grid rows (locked, since request stays
+    // IMPORT_REVIEWING and the quote stays DRAFT) rather than being hidden by C's preview.
+    expect(screen.getAllByLabelText(/^ราคาที่เสนอ/).length).toBe(2);
+
+    // Panel title counts all three items (2 quoted + 1 previewed), not just the quoted ones.
+    expect(screen.getByText('รายการสินค้า (3 รายการ)')).not.toBeNull();
   });
 
   // #1 (owner ask 2026-09-24): a SUBMITTED request opened here (e.g. from a link) had no รับเรื่อง
@@ -859,6 +928,33 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     const dialog = await screen.findByTestId('factory-email-draft-modal');
     expect(within(dialog).getByTestId('pcr-copy-factory-email')).not.toBeNull();          // copy kept
     expect(within(dialog).queryByTestId('pcr-mark-factory-email-sent')).toBeNull();       // no ส่งแล้ว
+  });
+
+  // Opus review of #1062 (2026-09-28), second pass: FactoryEmailDraftModal's own two flags
+  // (canEditFields / canOfferSendActions) used to read only the QUOTE's status — the identical gap
+  // the price grid had before the first review pass, reachable through the exact same state (request
+  // outside send()'s window, quote still DRAFT). The group header already shows "ดูอีเมล" there
+  // (view-only, per the grid's emailSent fix), but the modal itself still offered "ส่งแล้ว" (→
+  // FactoryQuoteService.send → 409) and "บันทึกร่างอีเมล" (→ updateDraft, guarded by the identical
+  // DRAFT_STATUSES → 409). Both now also require `inSendWindow`.
+  it('reopens the RFQ email modal read-only for a DRAFT quote once the request is past send()\'s window (READY_FOR_CEO_REVIEW)', async () => {
+    renderDetailPage({
+      user: importUser,
+      request: buildRequest({ summary: { status: 'READY_FOR_CEO_REVIEW' } }),
+      factoryQuotes: [buildFactoryQuote()], // still DRAFT
+    });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    const openBtn = screen.getByTestId('pcr-open-email-draft-91');
+    expect(openBtn.textContent).toContain('ดูอีเมล'); // header already reads view-only here
+    fireEvent.click(openBtn);
+
+    const dialog = await screen.findByTestId('factory-email-draft-modal');
+    expect(within(dialog).queryByRole('button', { name: 'ส่งแล้ว' })).toBeNull();          // no send
+    expect(within(dialog).queryByRole('button', { name: 'บันทึกร่างอีเมล' })).toBeNull();  // no save
+    expect(within(dialog).getByTestId('pcr-copy-factory-email')).not.toBeNull();           // copy kept
+    expect(within(dialog).getByLabelText('อีเมลโรงงาน (ถ้ามี)').disabled).toBe(true);       // fields locked
   });
 
   it('records a factory response revision entry via receiveFactoryQuote with a fresh clientRequestId', async () => {
