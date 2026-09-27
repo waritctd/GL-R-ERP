@@ -11450,6 +11450,9 @@ export const api = {
     // computation — just plumbing so the button, toast and refetch are exercisable in mock mode.
     async fetchNow() {
       hasRole('ceo');
+      // Hardcodes BotFxFetchService.TRACKED_CURRENCIES's five currencies rather than importing it
+      // (this file has no access to backend source) -- contract.test.js's arity check cannot see
+      // this drift if the real list ever changes, so keep this in sync by hand.
       const tracked = ['USD', 'EUR', 'JPY', 'CNY', 'GBP'];
       const asOf = new Date().toISOString().slice(0, 10);
       const now = new Date().toISOString();

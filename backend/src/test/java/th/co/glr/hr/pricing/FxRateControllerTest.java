@@ -10,12 +10,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import java.time.LocalDate;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.common.ApiExceptionHandler;
 
 /**
@@ -112,6 +114,21 @@ class FxRateControllerTest {
             .thenReturn(new BotFxFetchService.FxFetchResult(2, 5, "2026-09-24", List.of("USD", "EUR")));
         mvc.perform(post("/api/fx-rates/fetch-now").session(session("ceo")))
             .andExpect(status().is2xxSuccessful());
+    }
+
+    /**
+     * B1 (review fix, 2026-09-28): {@code BotFxFetchService.fetchNow()} now throws a 429 {@link
+     * ApiException} when the CEO console's manual-fetch cooldown is still active. This proves the
+     * controller layer propagates that status verbatim rather than translating it into something
+     * else — {@code ApiExceptionHandler} is wired into this class's {@code mvc} exactly as
+     * production wires it, so a mismatch here would be a real regression, not a test artifact.
+     */
+    @Test
+    void manualFxFetchPropagatesA429FromTheServiceAsIs() throws Exception {
+        when(botFx.fetchNow()).thenThrow(new ApiException(HttpStatus.TOO_MANY_REQUESTS,
+            "รอสักครู่ก่อนเรียกดึงอัตราแลกเปลี่ยนจากธนาคารแห่งประเทศไทยอีกครั้ง (ประมาณ 300 วินาที)"));
+        mvc.perform(post("/api/fx-rates/fetch-now").session(session("ceo")))
+            .andExpect(status().isTooManyRequests());
     }
 
     /** Wrong-way-round: everyone but CEO must be refused — the case that catches a widened gate. */
