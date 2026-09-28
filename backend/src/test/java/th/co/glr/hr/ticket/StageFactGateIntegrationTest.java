@@ -494,7 +494,10 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
             long itemId = onlyItemId(ticketId);
             tickets.updateSalesStage(ticketId, stage);
 
-            for (UserPrincipal actor : List.of(ownerRep, importActor, ceo)) {
+            // Only the two roles that CAN declare (owning rep + CEO) reach the stage floor's 409;
+            // import is no longer a declarer at all (owner decision 2026-09-28) and is refused with a
+            // 403 before the floor — see StockDeclarationAuthzIntegrationTest.
+            for (UserPrincipal actor : List.of(ownerRep, ceo)) {
                 assertThatThrownBy(() -> ticketService.reserveStock(ticketId, declare(itemId, "100.00"), actor))
                     .describedAs("%s must not declare stock coverage at %s", actor.role(), stage)
                     .isInstanceOfSatisfying(ApiException.class,
@@ -540,7 +543,7 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
         long below = createDealWithOneItem();
         tickets.updateSalesStage(below, DealStage.NEGOTIATION);
         assertThat(actionCodes(below, ownerRep)).doesNotContain("RESERVE_STOCK");
-        assertThat(actionCodes(below, importActor)).doesNotContain("RESERVE_STOCK");
+        assertThat(actionCodes(below, ceo)).doesNotContain("RESERVE_STOCK");
         // …and the advertiser agrees with the gate on the very same deal.
         assertThatThrownBy(() ->
             ticketService.reserveStock(below, declare(onlyItemId(below), "100.00"), ownerRep))
@@ -549,7 +552,10 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
         long above = createDealWithOneItem();
         tickets.updateSalesStage(above, DealStage.ORDER_RECEIVED);
         assertThat(actionCodes(above, ownerRep)).contains("RESERVE_STOCK");
-        assertThat(actionCodes(above, importActor)).contains("RESERVE_STOCK");
+        assertThat(actionCodes(above, ceo)).contains("RESERVE_STOCK");
+        // import lost RESERVE_STOCK entirely on 2026-09-28 (S18 is Sales's) — not offered it even
+        // above the floor.
+        assertThat(actionCodes(above, importActor)).doesNotContain("RESERVE_STOCK");
         assertThatCode(() ->
             ticketService.reserveStock(above, declare(onlyItemId(above), "100.00"), ownerRep))
             .doesNotThrowAnyException();

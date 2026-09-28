@@ -1077,8 +1077,10 @@ class TicketServiceTest {
         stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item),
             "DEPOSIT_PAID", null, DealStage.ORDER_RECEIVED, null);
 
+        // S18 owner decision 2026-09-28: stock coverage is the owning rep's (or CEO's), not import's.
+        // This is a routing test, so it declares as salesActor (id 1L, this deal's owner).
         service.reserveStock(10L, new StockReservationRequest(List.of(
-            new StockReservationRequest.Line(1L, new BigDecimal("100.00"), "พร้อมจากสต็อก"))), importActor);
+            new StockReservationRequest.Line(1L, new BigDecimal("100.00"), "พร้อมจากสต็อก"))), salesActor);
 
         verify(ticketRepo).reserveStock(eq(10L), argThat(lines ->
             lines.size() == 1 && lines.get(0).qtyFromStock().compareTo(new BigDecimal("100.00")) == 0));
@@ -1087,7 +1089,7 @@ class TicketServiceTest {
         // deal jumps past PROCUREMENT straight to DELIVERY_SCHEDULING (S18).
         verify(ticketRepo).updateSalesStage(10L, DealStage.DELIVERY_SCHEDULING);
         verify(ticketRepo, never()).updateSalesStage(10L, DealStage.PROCUREMENT);
-        verify(ticketRepo).addEvent(eq(10L), eq(3L), anyString(),
+        verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
             eq(TicketEventKind.STOCK_RESERVED), anyString(), anyString(), anyString());
     }
 
@@ -1097,8 +1099,10 @@ class TicketServiceTest {
         stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item),
             "DEPOSIT_PAID", null, DealStage.ORDER_RECEIVED, null);
 
+        // S18 owner decision 2026-09-28: import can no longer declare, so this actor-agnostic
+        // quantity-validation case declares as the owning rep (salesActor, id 1L).
         assertBadRequest(() -> service.reserveStock(10L, new StockReservationRequest(List.of(
-            new StockReservationRequest.Line(1L, new BigDecimal("101.00"), null))), importActor));
+            new StockReservationRequest.Line(1L, new BigDecimal("101.00"), null))), salesActor));
     }
 
     // ── who may declare stock coverage (owner ruling 2026-08-13) ──────────────
@@ -1170,8 +1174,10 @@ class TicketServiceTest {
         // Every stage before ORDER_RECEIVED, for the roles that would otherwise be allowed.
         for (String stage : DealStage.ORDER.subList(0, DealStage.indexOf(DealStage.ORDER_RECEIVED))) {
             stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item), null, null, stage, null);
+            // The two roles that CAN declare (owning rep + CEO) hit the stage floor with a 409.
+            // import is no longer a declarer at all (owner decision 2026-09-28) — its refusal is a
+            // 403 before this floor, pinned in StockDeclarationAuthzIntegrationTest, not here.
             assertConflict(() -> service.reserveStock(10L, request, salesActor));
-            assertConflict(() -> service.reserveStock(10L, request, importActor));
             assertConflict(() -> service.reserveStock(10L, request, ceoActor));
         }
 
@@ -1207,13 +1213,17 @@ class TicketServiceTest {
         TicketItemDto item = deliveryItem(1L, "100.00", "0.00", "0.00");
         stubDeal(41L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item), null, null,
             DealStage.NEGOTIATION, null);
+        // The floor is checked through the two roles that CAN declare (owning rep + CEO); import is
+        // no longer offered RESERVE_STOCK at all (owner decision 2026-09-28), asserted below the loop.
         assertThat(actionCodes(41L, salesActor)).doesNotContain("RESERVE_STOCK");
-        assertThat(actionCodes(41L, importActor)).doesNotContain("RESERVE_STOCK");
+        assertThat(actionCodes(41L, ceoActor)).doesNotContain("RESERVE_STOCK");
 
         stubDeal(42L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item), null, null,
             DealStage.ORDER_RECEIVED, null);
         assertThat(actionCodes(42L, salesActor)).contains("RESERVE_STOCK");
-        assertThat(actionCodes(42L, importActor)).contains("RESERVE_STOCK");
+        assertThat(actionCodes(42L, ceoActor)).contains("RESERVE_STOCK");
+        // import is above the floor here yet still not offered it — the S18 narrowing, at the advertiser.
+        assertThat(actionCodes(42L, importActor)).doesNotContain("RESERVE_STOCK");
     }
 
     @Test
@@ -2138,7 +2148,9 @@ class TicketServiceTest {
             "DEPOSIT_PAID", null, DealStage.ORDER_RECEIVED, null);
 
         assertThat(actionCodes(40L, salesActor)).contains("RESERVE_STOCK");
-        assertThat(actionCodes(40L, importActor)).contains("RESERVE_STOCK");
+        // CEO keeps it as oversight/override; import lost it on 2026-09-28 (S18 is Sales's).
+        assertThat(actionCodes(40L, ceoActor)).contains("RESERVE_STOCK");
+        assertThat(actionCodes(40L, importActor)).doesNotContain("RESERVE_STOCK");
         // otherSales cannot even read this deal (requireViewAccess is owner-scoped for sales),
         // so the advertiser is exercised through the roles that CAN see it and still must not
         // be offered it.

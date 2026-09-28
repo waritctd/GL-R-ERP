@@ -7068,8 +7068,12 @@ export const api = {
     },
 
     async reserveStock(id, payload) {
-      const user = hasRole('import', 'ceo');
       const ticket = findTicketRaw(Number(id));
+      // S18 owner decision 2026-09-28: stock coverage is the owning sales rep's (or CEO's), not
+      // import's -- mirrors TicketService#canDeclareStockCoverage. import was DROPPED here; leaving
+      // `hasRole('import', 'ceo')` left the mock MORE permissive than production, the one direction
+      // CLAUDE.md calls dangerous. Same predicate as recordDelivery's requireOwningRepOrCeo.
+      const user = requireOwningRepOrCeo(ticket);
       requireActive(ticket);
       reserveStockForTicket(ticket, user, payload ?? {});
       return delay({ ticket: buildTicketDetail(ticket) });
@@ -7179,7 +7183,11 @@ export const api = {
         if (['import', 'ceo'].includes(user.role) && !irTracked && ticket.fulfillmentStatus === 'IR_ISSUED') add('IR_SENT', 'fulfillment', 'ส่งคำขอนำเข้าแล้ว');
         if (['import', 'ceo'].includes(user.role) && !irTracked && ticket.fulfillmentStatus === 'IR_SENT') add('SHIPPING', 'fulfillment', 'สินค้าเดินทาง');
         if (['import', 'ceo'].includes(user.role) && !irTracked && ticket.fulfillmentStatus === 'SHIPPING') add('GOODS_RECEIVED', 'fulfillment', 'รับสินค้า');
-        if (['import', 'ceo'].includes(user.role) && (ticket.items ?? []).length > 0 && hasRemainingDelivery(ticket)
+        // S18 owner decision 2026-09-28: CEO or the deal's owning sales rep -- NOT import (dropped
+        // from `['import', 'ceo']`), mirroring TicketService#canReserveStock -> canDeclareStockCoverage
+        // and the reserveStock mutation gate above. `owner` is the same limb the delivery
+        // advertisement uses just below; advertising it to import would offer a button that 403s.
+        if ((user.role === 'ceo' || owner) && (ticket.items ?? []).length > 0 && hasRemainingDelivery(ticket)
             && ticket.fulfillmentStatus !== 'FULLY_DELIVERED') {
           add('RESERVE_STOCK', 'fulfillment', 'จองสินค้าจากสต็อก', { requiredFields: ['lines'] });
         }
