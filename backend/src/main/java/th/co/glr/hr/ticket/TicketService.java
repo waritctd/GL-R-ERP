@@ -41,14 +41,16 @@ public class TicketService {
     private static final Set<String> IMPORT_ROLES = Set.of("import");
     private static final Set<String> CEO_ROLES    = Set.of("ceo");
     private static final Set<String> FULFILMENT_ROLES = Set.of("import", "ceo");
-    // Coarse pre-filter for the stock-coverage declaration only (owner ruling 2026-08-13,
-    // "Sales declares, Import can correct" — see reserveStock). DERIVED from the two sets
-    // canDeclareStockCoverage actually tests, never hand-written, so it cannot silently drift
-    // from them if either is ever changed. It is only the first of two gates: passing this set
-    // says "your role could declare on SOME deal", not "on THIS one" — a sales rep still has to
-    // own the deal. See requireViewAccess for the same two-stage role-then-row shape.
+    // Coarse pre-filter for the stock-coverage declaration only. Owner decision 2026-09-28 removed
+    // import from this gate — "Sales declares, CEO may correct/override" (S18 is Sales's; the earlier
+    // 2026-08-13 "Import can correct" reading is superseded, the same direction V184 took delivery).
+    // DERIVED from the two sets canDeclareStockCoverage actually tests ({@link #CEO_ROLES} +
+    // {@link #SALES_ROLES}), never hand-written, so it cannot silently drift from them if either is
+    // ever changed. It is only the first of two gates: passing this set says "your role could declare
+    // on SOME deal", not "on THIS one" — a sales rep still has to own the deal. See requireViewAccess
+    // for the same two-stage role-then-row shape.
     private static final Set<String> STOCK_DECLARATION_ROLES =
-        Stream.concat(FULFILMENT_ROLES.stream(), SALES_ROLES.stream())
+        Stream.concat(CEO_ROLES.stream(), SALES_ROLES.stream())
             .collect(Collectors.toUnmodifiableSet());
     // V148 (per-item stock-commission weighting): a DIFFERENT gate from STOCK_DECLARATION_ROLES
     // above, deliberately. qty_from_stock is the rep's own DECLARATION (owner ruling "Sales
@@ -2878,41 +2880,25 @@ public class TicketService {
      * cannot drift into offering an action that immediately 403s (the same discipline {@link
      * #canIssueImportRequest} documents for 409s).
      *
+     * <p><strong>S18 is Sales's, not Import's — owner decision 2026-09-28.</strong> The access
+     * {@code import} used to have here is removed: scheduling delivery / declaring stock coverage
+     * (S18 จัดตารางส่งมอบ) is now the owning sales rep — or the CEO as oversight/override — and no one
+     * else. This is the S18 counterpart to V184's transfer of delivery-recording (S19,
+     * {@link #canWriteDelivery}) to Sales: Import keeps the import axis (per-factory PROCUREMENT /
+     * {@code ImportRequestService}), Sales owns the delivery axis end to end. Before this the gate
+     * ran through {@code FULFILMENT_ROLES} ({@code import}+{@code ceo}) via a shared helper; that
+     * helper is gone with its only caller.
+     *
      * <p>Ownership is expressed exactly as {@link #requireDealOwnership}, {@link
      * #canManageQuotation} and {@link #canConfirmCustomer} express it: a {@code sales} role that
      * created this deal. {@code sales_manager} is deliberately NOT included even though {@link
      * #requireDealOwnership} grants it — the ruling is "Sales declares", and the declaration feeds
      * the owning rep's own STOCK_BONUS input, so letting oversight write another rep's commission
-     * input is a wider grant than was asked for. {@code ceo} keeps access through {@link
-     * #FULFILMENT_ROLES}, not through ownership.
+     * input is a wider grant than was asked for. {@code ceo} keeps access through {@link #CEO_ROLES}
+     * as an oversight/override, not through ownership — the same shape as {@link #canWriteDelivery}.
      */
     private boolean canDeclareStockCoverage(TicketSummaryDto s, UserPrincipal actor) {
-        return isFulfilmentOrOwningRep(s, actor);
-    }
-
-    /**
-     * "Import and the CEO, or the {@code sales} rep who owns this deal."
-     *
-     * <p>ONE definition, because two separate owner rulings landed on exactly this set and two copies
-     * of an authorization expression is how they drift: {@link #canDeclareStockCoverage} (stock
-     * declaration) and {@link #canWriteDelivery} (stages 13–14, ส่งมอบสินค้า). Both call this; neither
-     * restates it.
-     *
-     * <p><strong>{@code sales_manager} is deliberately absent</strong>, and for a stated rule rather
-     * than an analogy: {@code ROLE_PERMISSIONS} in {@code frontend/src/api/routes.js} records that
-     * sales_manager "is read+comment oversight ONLY (a project-manager-style follow-up role for the
-     * sales team) — it must never be added to" the write permissions. Recording a delivery is a
-     * write. Note the asymmetry this creates on purpose: {@code requireStageWriteAccess} DOES let
-     * sales_manager set {@code DELIVERY_SCHEDULING}/{@code DELIVERED} by hand, because that is the
-     * manual stage-correction fallback, not the operational act. Oversight may correct the pipeline;
-     * it may not record that goods went out.
-     *
-     * <p>Ownership is expressed exactly as {@link #requireDealOwnership}, {@link #canManageQuotation}
-     * and {@link #canConfirmCustomer} express it: a {@code sales} role that created this deal. CEO
-     * keeps access through {@link #FULFILMENT_ROLES}, not through ownership.
-     */
-    private boolean isFulfilmentOrOwningRep(TicketSummaryDto s, UserPrincipal actor) {
-        return FULFILMENT_ROLES.contains(actor.role())
+        return CEO_ROLES.contains(actor.role())
             || (SALES_ROLES.contains(actor.role()) && s.createdById() == actor.id());
     }
 
@@ -2929,9 +2915,20 @@ public class TicketService {
      * everything else in that commit is superseded by the {@code sales.import_request}-based rebuild
      * (V184) this branch implements instead of {@code sales.factory_import_progress}.
      *
-     * <p>Deliberately NOT {@link #isFulfilmentOrOwningRep}, which still admits import — that helper
-     * stays as-is for {@link #canDeclareStockCoverage}, its other caller: stock-coverage declaration
-     * is unaffected by this transfer.
+     * <p>Identical in shape to {@link #canDeclareStockCoverage} (S18): both are "CEO, or the owning
+     * sales rep", import excluded. They were once a single shared helper admitting import; the
+     * 2026-09-28 S18 decision removed import from stock coverage too, so the two now agree — but they
+     * stay SEPARATE methods on purpose (V184 split them precisely so S19 and S18 can diverge again
+     * without one silently dragging the other). Do NOT re-merge them into one predicate.
+     *
+     * <p><strong>{@code sales_manager} is deliberately absent</strong>, and for a stated rule rather
+     * than an analogy: {@code ROLE_PERMISSIONS} in {@code frontend/src/api/routes.js} records that
+     * sales_manager "is read+comment oversight ONLY (a project-manager-style follow-up role for the
+     * sales team) — it must never be added to" the write permissions. Recording a delivery is a
+     * write. Note the asymmetry this creates on purpose: {@code requireStageWriteAccess} DOES let
+     * sales_manager set {@code DELIVERY_SCHEDULING}/{@code DELIVERED} by hand, because that is the
+     * manual stage-correction fallback, not the operational act. Oversight may correct the pipeline;
+     * it may not record that goods went out.
      *
      * <p>The single source of truth for BOTH {@code recordPartialDelivery}/{@code completeDelivery}'s
      * gate AND whether {@link #actions} advertises RECORD_PARTIAL_DELIVERY/COMPLETE_DELIVERY, so the

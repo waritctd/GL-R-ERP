@@ -34,18 +34,25 @@ import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
 /**
- * Owner ruling 2026-08-13 — <b>"Sales declares, Import can correct."</b> Real-DB enforcement
- * coverage for {@link TicketService#reserveStock}'s widened gate, which is the required evidence
- * under {@code CLAUDE.md}'s "permission changes must ship evidence": a role gate needs a real-DB
- * integration test through the real service AND the real repository, because Mockito cannot reach
- * this — a mocked {@link TicketRepository} passes happily while the {@code UPDATE} does something
- * else entirely. {@link TicketServiceTest}'s companion cases pin which branch is chosen; only
- * these prove the decision survives into the SQL.
+ * Owner decision 2026-09-28 — <b>"Sales declares; the CEO may correct/override; Import is
+ * excluded."</b> S18 (จัดตารางส่งมอบ / stock coverage) belongs to Sales, the same direction V184 took
+ * delivery recording (S19). This SUPERSEDES the 2026-08-13 "Sales declares, Import can correct"
+ * ruling this suite was originally written for — import no longer declares OR corrects stock
+ * coverage; only the owning sales rep declares, with the CEO as oversight/override.
+ *
+ * <p>Real-DB enforcement coverage for {@link TicketService#reserveStock}'s gate, which is the
+ * required evidence under {@code CLAUDE.md}'s "permission changes must ship evidence": a role gate
+ * needs a real-DB integration test through the real service AND the real repository, because
+ * Mockito cannot reach this — a mocked {@link TicketRepository} passes happily while the
+ * {@code UPDATE} does something else entirely. {@link TicketServiceTest}'s companion cases pin which
+ * branch is chosen; only these prove the decision survives into the SQL.
  *
  * <p><b>Written wrong-way-round on purpose.</b> The tests that matter are the refusals, and each
  * one re-reads {@code sales.ticket_item.qty_from_stock} (plus the deal's fulfilment status, stage
  * and event log) straight out of Postgres afterwards to prove nothing moved. "The owner can
- * declare their own deal" is necessary but is not the evidence.
+ * declare their own deal" is necessary but is not the evidence. {@code importRole_isRefused_...} is
+ * the case the 2026-09-28 narrowing exists for: import used to be able to correct here and now must
+ * not, re-read from Postgres to prove its number never landed.
  *
  * <p>Why {@code qty_from_stock} is worth this much care: it is the sole input to the owning rep's
  * own STOCK_BONUS ({@code CommissionRepository#sumActiveStockActualReceived} =
@@ -53,28 +60,19 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  * rep's row — or a role with no business here at all — would be writing someone's pay. The last
  * test closes that loop through the real, unmodified commission SQL.
  *
- * <p><b>MUTATION-CHECK RECORD (actually run, not simulated; {@code rm -rf target/classes} before
- * each so no stale class could mask the mutation).</b> Three mutations of
- * {@link TicketService#reserveStock}'s gate, each restored to a byte-identical file afterwards:
- * <ol>
- *   <li><b>Per-row ownership check deleted</b> ({@code if (!canDeclareStockCoverage(...)) throw}):
- *       exactly 3 red — {@code salesRepWhoDoesNotOwnTheDeal_isRefused_andTheRowIsUnmoved},
- *       {@code refusedDeclaration_doesNotOverwriteTheDeclarationAlreadyOnFile}, and
- *       {@code TicketServiceTest.reserveStock_salesRepWhoIsNotTheDealOwner_isForbiddenAndWritesNothing}.
- *       Nothing else moved; {@code roleWithNeitherOwnershipNorFulfilment_...} correctly stayed
- *       green, since the coarse pre-filter already refuses those roles.</li>
- *   <li><b>Coarse {@code requireRole(actor, STOCK_DECLARATION_ROLES)} deleted</b>: exactly 1 red —
- *       {@code roleThatCanNeverDeclare_isRefusedBeforeTheTicketIsRead} (404 instead of 403). That
- *       line would otherwise be an unfalsifiable guard, which is why that test exists.</li>
- *   <li><b>Gate reverted to the pre-change {@code requireRole(actor, FULFILMENT_ROLES)}</b>:
- *       exactly 6 red — every grant case ({@code dealOwner_declares_...},
- *       {@code importCorrectsTheOwnersDeclaration_...}, {@code fullCoverage_routesIdentically...},
- *       {@code ownersOwnDeclaration_feedsTheRealStockBonusCommissionInput},
- *       {@code refusedDeclaration_...}'s setup, and the unit-level
- *       {@code reserveStock_dealOwner_mayDeclare}), all with 403 {@code ไม่มีสิทธิ์เข้าถึงรายการนี้};
- *       every refusal case stayed green. This is what proves the suite exercises the WIDENING and
- *       not merely the refusals.</li>
- * </ol>
+ * <p><b>Mutation-check.</b> The gate has two layers, each with a test that fails alone if the layer
+ * is deleted: the coarse {@code requireRole(actor, STOCK_DECLARATION_ROLES)} is pinned by
+ * {@code roleThatCanNeverDeclare_isRefusedBeforeTheTicketIsRead} (403-not-404, and import is now in
+ * that set), and the per-row {@code canDeclareStockCoverage} by
+ * {@code salesRepWhoDoesNotOwnTheDeal_...} / {@code importRole_isRefused_...} /
+ * {@code refusedDeclaration_...}. Reverting {@code canDeclareStockCoverage} to the pre-change
+ * {@code FULFILMENT_ROLES}-based gate turns {@code importRole_isRefused_andTheRowIsUnmoved} red
+ * (import would be granted again) while the owner/CEO grants stay green — that opposition is what
+ * proves the suite exercises the NARROWING and not merely the refusals. (Historical: the original
+ * 2026-08-13 widening's own three-mutation record — per-row check, coarse filter, and a revert to
+ * {@code FULFILMENT_ROLES} — is in this file's git history at the commit before the S18 change.)
+ * This class's integration tests run against real Postgres in CI (Testcontainers /
+ * {@code TEST_DB_URL}); they were not run on the authoring machine, which had neither.
  *
  * <p>Mirrors {@code th.co.glr.hr.attendance.AttendanceScopeIntegrationTest} and
  * {@link DealTrackingAndActivityIntegrationTest}. Note the suite-wide trap documented on {@link
@@ -180,7 +178,10 @@ class StockDeclarationAuthzIntegrationTest extends AbstractPostgresIntegrationTe
         long neverCreated = 9_999_999L;
         assertThat(tickets.findById(neverCreated)).isEmpty();
 
-        for (UserPrincipal stranger : List.of(accountUser, hrUser, salesManagerUser)) {
+        // import joined this set on 2026-09-28: it left STOCK_DECLARATION_ROLES entirely, so it is
+        // now refused at the coarse pre-filter (403) before the ticket is read, exactly like the
+        // roles that could never declare.
+        for (UserPrincipal stranger : List.of(accountUser, hrUser, salesManagerUser, importUser)) {
             assertThatThrownBy(() -> ticketService.reserveStock(neverCreated, declare(1L, "1.00"), stranger))
                 .describedAs("role %s must get 403 (not 404) for a ticket it may never touch", stranger.role())
                 .isInstanceOfSatisfying(ApiException.class,
@@ -223,15 +224,34 @@ class StockDeclarationAuthzIntegrationTest extends AbstractPostgresIntegrationTe
         assertThat(stockReservedEvents(ticketId)).isEqualTo(1);
     }
 
-    /** The second half of the ruling: import can correct a rep's figure after the fact. */
+    /**
+     * The case the 2026-09-28 narrowing exists for: import used to be able to correct a rep's figure
+     * after the fact, and now must not. Driven AFTER a legitimate owner declaration, so the assertion
+     * is that import's number did not overwrite the owner's — a stronger check than "still zero",
+     * which a no-op would also satisfy — and re-read straight from Postgres.
+     */
     @Test
-    void importCorrectsTheOwnersDeclaration_andCeoCanToo() {
+    void importRole_isRefused_andTheRowIsUnmoved() {
         long ticketId = createTicketWithOneItem();
         long itemId = onlyItemId(ticketId);
         ticketService.reserveStock(ticketId, declare(itemId, "80.00"), owner);
+        assertThat(qtyFromStock(itemId)).isEqualByComparingTo("80.00");
 
-        ticketService.reserveStock(ticketId, declare(itemId, "25.00"), importUser);
-        assertThat(qtyFromStock(itemId)).isEqualByComparingTo("25.00");
+        assertThatThrownBy(() -> ticketService.reserveStock(ticketId, declare(itemId, "25.00"), importUser))
+            .isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+
+        assertThat(qtyFromStock(itemId))
+            .describedAs("import may no longer correct stock coverage (owner decision 2026-09-28)")
+            .isEqualByComparingTo("80.00");
+    }
+
+    /** The CEO keeps the correction/override path — through oversight, not ownership. */
+    @Test
+    void ceoCorrectsTheOwnersDeclaration() {
+        long ticketId = createTicketWithOneItem();
+        long itemId = onlyItemId(ticketId);
+        ticketService.reserveStock(ticketId, declare(itemId, "80.00"), owner);
 
         ticketService.reserveStock(ticketId, declare(itemId, "30.00"), ceoUser);
         assertThat(qtyFromStock(itemId)).isEqualByComparingTo("30.00");
@@ -240,7 +260,8 @@ class StockDeclarationAuthzIntegrationTest extends AbstractPostgresIntegrationTe
     /**
      * The routing half of the ruling: "auto-routing behaviour stays identical, whoever declares."
      * Two deals in the same starting state, full coverage declared on one by the owner and on the
-     * other by import — both must land on exactly the same fulfilment status and sales stage.
+     * other by the CEO — both must land on exactly the same fulfilment status and sales stage.
+     * (Was owner-vs-import before the 2026-09-28 narrowing removed import from this gate.)
      *
      * <p>Both start at {@code ORDER_RECEIVED}. They used to start at {@code LEAD_APPROACH}, and
      * this Javadoc used to record the residual risk that came with it: {@code autoAdvanceStage} has
@@ -254,19 +275,19 @@ class StockDeclarationAuthzIntegrationTest extends AbstractPostgresIntegrationTe
     @Test
     void fullCoverage_routesIdenticallyWhicheverRoleDeclares() {
         long ownerDeclared = createTicketWithOneItem();
-        long importDeclared = createTicketWithOneItem();
+        long ceoDeclared = createTicketWithOneItem();
         assertThat(salesStage(ownerDeclared)).isEqualTo(DealStage.ORDER_RECEIVED);
-        assertThat(salesStage(importDeclared)).isEqualTo(DealStage.ORDER_RECEIVED);
+        assertThat(salesStage(ceoDeclared)).isEqualTo(DealStage.ORDER_RECEIVED);
 
         ticketService.reserveStock(ownerDeclared, declare(onlyItemId(ownerDeclared), "100.00"), owner);
-        ticketService.reserveStock(importDeclared, declare(onlyItemId(importDeclared), "100.00"), importUser);
+        ticketService.reserveStock(ceoDeclared, declare(onlyItemId(ceoDeclared), "100.00"), ceoUser);
 
         assertThat(fulfillmentStatus(ownerDeclared)).isEqualTo(FulfilmentStatus.FROM_STOCK);
-        assertThat(fulfillmentStatus(importDeclared)).isEqualTo(FulfilmentStatus.FROM_STOCK);
+        assertThat(fulfillmentStatus(ceoDeclared)).isEqualTo(FulfilmentStatus.FROM_STOCK);
         assertThat(salesStage(ownerDeclared)).isEqualTo(DealStage.DELIVERY_SCHEDULING);
-        assertThat(salesStage(importDeclared)).isEqualTo(DealStage.DELIVERY_SCHEDULING);
+        assertThat(salesStage(ceoDeclared)).isEqualTo(DealStage.DELIVERY_SCHEDULING);
         // PROCUREMENT is skipped either way — a fully-stocked deal has no import journey.
-        assertThat(salesStage(ownerDeclared)).isEqualTo(salesStage(importDeclared));
+        assertThat(salesStage(ownerDeclared)).isEqualTo(salesStage(ceoDeclared));
     }
 
     /**

@@ -457,10 +457,12 @@ class CommissionAutoCreateIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(issuedNotice.status()).isEqualTo("ISSUED");
         ticketService.confirmDepositPaid(ticketId, accountActor);
 
+        // S18 owner decision 2026-09-28: import no longer declares stock coverage. This is setup for
+        // a commission test, so the CEO (allowed on any deal) stands in for the declarer.
         ticketService.reserveStock(ticketId,
             new StockReservationRequest(List.of(
                 new StockReservationRequest.Line(ticketItemId, quantity, "จองครบจากสต็อก"))),
-            importActor);
+            ceoActor);
         // V184: completeDelivery's gate (canWriteDelivery) transferred from {import,ceo,owning-rep}
         // to {ceo, owning-rep} only -- import no longer completes delivery. salesActor (the deal
         // owner) is used here instead of importActor; this fixture is not testing delivery authz.
