@@ -1,8 +1,25 @@
 import React from 'react';
-import { act, render, screen } from '@testing-library/react';
+import {
+  act, fireEvent, render, screen, waitFor,
+} from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it, vi } from 'vitest';
 import { DEAL_STAGE_CATALOG } from '../../data/dealStageCatalog.js';
+import { api } from '../../api/index.js';
+import { STAGE_ADVANCE_GATE_MESSAGE } from './dealTrackingMeta.js';
 import { DealStagePanel } from './DealStagePanel.jsx';
+
+// The guided-advance flow calls api.tickets.{updateTracking,addActivity} directly (then defers the
+// actual stage move to the parent's onUpdateStage), so the module is mocked here (vitest hoists
+// vi.mock above the imports). Other tests in this file are presentational and never touch it.
+vi.mock('../../api/index.js', () => ({
+  api: {
+    tickets: {
+      updateTracking: vi.fn().mockResolvedValue({}),
+      addActivity: vi.fn().mockResolvedValue({}),
+    },
+  },
+}));
 
 globalThis.React = React;
 
@@ -48,6 +65,16 @@ const noopHandlers = {
   onSetEntryChannel: vi.fn(),
 };
 
+// DealStagePanel now calls useQueryClient/useMutation (the guided-advance flow), so it must render
+// inside a QueryClientProvider — at runtime the app root supplies one. A fresh client per render
+// keeps tests isolated; rerender() inherits this wrapper automatically.
+function QueryWrapper({ children }) {
+  const [client] = React.useState(() => new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  }));
+  return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+}
+
 function renderPanel(props = {}) {
   return render(
     <DealStagePanel
@@ -58,6 +85,7 @@ function renderPanel(props = {}) {
       {...noopHandlers}
       {...props}
     />,
+    { wrapper: QueryWrapper },
   );
 }
 
@@ -73,6 +101,7 @@ function renderPanelWithRef(props = {}) {
       {...noopHandlers}
       {...props}
     />,
+    { wrapper: QueryWrapper },
   );
   return { ref, ...utils };
 }
@@ -376,5 +405,77 @@ describe('DealStagePanel entry channel', () => {
     expect(screen.queryByRole('option', { name: 'ยังไม่ระบุช่องทาง' })).toBeNull();
     expect(screen.getByRole('option', { name: 'ผู้ออกแบบนำดีล' })).not.toBeNull();
     expect(screen.getByRole('option', { name: 'ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง' })).not.toBeNull();
+  });
+});
+
+// Bug 4 (fix/stage-advance-readiness-ux): when the ONLY thing blocking the next stage is the
+// readiness gate (a follow-up date + a logged activity since the last stage change), the panel used
+// to hide the advance button and show the misleading "ขั้นถัดไปอัปเดตโดยฝ่ายขาย" hint — dead text
+// the rep is actually allowed to act on. The guided-advance flow replaces that with a button that
+// collects exactly what the gate needs, then satisfies it (updateTracking → addActivity) and moves
+// the stage through the parent's onUpdateStage, so the gate/business-logic is unchanged.
+describe('DealStagePanel guided advance (readiness gate)', () => {
+  // Next after PRESENTATION (S2) is SPEC_APPROVED (S3), gate=sales, auto=false — a manual sales
+  // move, exactly the case the readiness gate applies to.
+  const readinessBlocked = allAllowed.map((decision) => (
+    decision.stage === 'SPEC_APPROVED'
+      ? {
+        ...decision, allowed: false, requiresReason: false, blockedReason: STAGE_ADVANCE_GATE_MESSAGE,
+      }
+      : decision
+  ));
+
+  it('replaces the dead hint with a guided button that fills the gate then advances', async () => {
+    api.tickets.updateTracking.mockClear();
+    api.tickets.addActivity.mockClear();
+    const onUpdateStage = vi.fn().mockResolvedValue({});
+    renderPanel({
+      summary: baseSummary({ id: 501 }),
+      availableActions: [],
+      stageDecisions: readinessBlocked,
+      onUpdateStage,
+    });
+
+    // The misleading "อัปเดตโดย…" hint is gone; the guided opener stands in its place.
+    expect(screen.queryByText(/อัปเดตโดย/)).toBeNull();
+    fireEvent.click(screen.getByTestId('guided-advance-open'));
+    expect(screen.getByTestId('guided-advance-modal')).not.toBeNull();
+
+    // Submit stays disabled until both gate inputs are present.
+    expect(screen.getByTestId('guided-advance-submit').disabled).toBe(true);
+    fireEvent.change(screen.getByTestId('guided-advance-followup'), { target: { value: '2026-10-05' } });
+    fireEvent.change(screen.getByTestId('guided-advance-note'), { target: { value: 'โทรติดตามลูกค้า' } });
+    expect(screen.getByTestId('guided-advance-submit').disabled).toBe(false);
+
+    fireEvent.click(screen.getByTestId('guided-advance-submit'));
+
+    // The move goes through the parent (preserving its invalidation/toast) with the next stage code…
+    await waitFor(() => expect(onUpdateStage).toHaveBeenCalledWith({ stage: 'SPEC_APPROVED' }));
+    // …and only after the gate was satisfied first.
+    expect(api.tickets.updateTracking).toHaveBeenCalledWith(
+      501,
+      expect.objectContaining({ nextFollowUpAt: '2026-10-05', winProbability: null }),
+    );
+    expect(api.tickets.addActivity).toHaveBeenCalledWith(
+      501,
+      expect.objectContaining({ kind: 'CALL', note: 'โทรติดตามลูกค้า' }),
+    );
+  });
+
+  it('does not show the guided opener when the next stage is blocked for another reason', () => {
+    const otherBlock = allAllowed.map((decision) => (
+      decision.stage === 'SPEC_APPROVED'
+        ? {
+          ...decision, allowed: false, requiresReason: false, blockedReason: 'ดีลถูกพักไว้',
+        }
+        : decision
+    ));
+    renderPanel({
+      summary: baseSummary({ id: 502 }),
+      availableActions: [],
+      stageDecisions: otherBlock,
+      onUpdateStage: vi.fn(),
+    });
+    expect(screen.queryByTestId('guided-advance-open')).toBeNull();
   });
 });

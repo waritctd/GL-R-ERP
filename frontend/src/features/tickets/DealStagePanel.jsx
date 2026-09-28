@@ -1,10 +1,14 @@
 import { forwardRef, useImperativeHandle, useState } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { api } from '../../api/index.js';
+import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { dealLifecycleLabel, dealLostReasonLabel, dealStageLabel, entryChannelLabel, formatThaiDate, tenderRequirementLabel } from '../../utils/format.js';
+import { ACTIVITY_KINDS, STAGE_ADVANCE_GATE_MESSAGE } from './dealTrackingMeta.js';
 import { DealStageStepper, PhaseTracker } from './DealStageStepper.jsx';
 import { MarkLostModal } from './MarkLostModal.jsx';
 import { EMPTY_STAGE_CATALOG, findStage, nextStageIn } from './stageCatalog.js';
@@ -176,6 +180,11 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   const [noteAction, setNoteAction] = useState(null);
   const [note, setNote] = useState('');
   const [showSteps, setShowSteps] = useState(false);
+  // Guided advance (owner ask 2026-09-28): the readiness gate stays, but instead of a dead hint the
+  // rep gets one flow that collects the two things it needs, then advances.
+  const [guidedOpen, setGuidedOpen] = useState(false);
+  const [guidedDraft, setGuidedDraft] = useState({ nextFollowUpAt: '', kind: 'CALL', activityNote: '', winProbability: '' });
+  const queryClient = useQueryClient();
 
   const hasAction = (action, targetStage = null) => availableActions.some((item) =>
     item.action === action && (targetStage == null || item.targetStage === targetStage));
@@ -194,6 +203,38 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
     && stageDecisions.some((decision) => decision.allowed) && !lost;
   const canLost = hasAction('MARK_LOST') && !lost && summary.salesStage !== 'CLOSED_PAID';
   const canAdvance = Boolean(next) && !next.auto && hasAction('ADVANCE_STAGE', next.code);
+  // The next stage is reachable EXCEPT the readiness gate (a follow-up date + a logged activity
+  // since the last stage change) is unmet — the ONE block the acting sales rep clears themselves.
+  // Detected off the server's own reason (STAGE_ADVANCE_GATE_MESSAGE verbatim) so it can never
+  // disagree with the backend; distinct from an auto stage or a block owned by another role, which
+  // the rep cannot act on. When true, the guided-advance flow replaces the dead "อัปเดตโดย…" hint.
+  const nextDecision = next ? stageDecisions.find((decision) => decision.stage === next.code) : null;
+  const readinessBlocked = Boolean(next) && !next.auto && !canAdvance
+    && Boolean(nextDecision) && !nextDecision.allowed
+    && nextDecision.blockedReason === STAGE_ADVANCE_GATE_MESSAGE;
+  // One click, three writes IN ORDER: set the follow-up date (+ optional win%), log the activity,
+  // then advance through the PARENT's own onUpdateStage so its invalidation + toast still run. The
+  // gate itself is unchanged — this just satisfies it in one place instead of two scattered panels.
+  const guidedAdvance = useMutation({
+    mutationFn: async () => {
+      await api.tickets.updateTracking(summary.id, {
+        nextFollowUpAt: guidedDraft.nextFollowUpAt || null,
+        winProbability: guidedDraft.winProbability === '' ? null : Number(guidedDraft.winProbability),
+      });
+      await api.tickets.addActivity(summary.id, {
+        activityDate: new Date().toISOString().slice(0, 10),
+        kind: guidedDraft.kind,
+        note: guidedDraft.activityNote.trim() || null,
+      });
+      await onUpdateStage({ stage: next.code });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(summary.id) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.ticketActions(summary.id) });
+      setGuidedOpen(false);
+      setGuidedDraft({ nextFollowUpAt: '', kind: 'CALL', activityNote: '', winProbability: '' });
+    },
+  });
   const canHold = hasAction('PLACE_ON_HOLD');
   const canDormant = hasAction('MARK_DORMANT');
   const canResume = hasAction('RESUME');
@@ -406,7 +447,19 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
                       (FIX 2) and TicketDetailPage's `openAdvance` handler.
                       `canAdvance`/`advanceReady` still gate it there, byte-
                       identical to before; only where it renders changed. */}
-                  {nextHint ? (
+                  {readinessBlocked ? (
+                    // Not a dead hint: the rep CAN advance — they just have to log the follow-up +
+                    // an activity first, which this button collects and then advances, in one go.
+                    <Button
+                      type="button"
+                      variant="primary"
+                      disabled={actionLoading}
+                      onClick={() => setGuidedOpen(true)}
+                      data-testid="guided-advance-open"
+                    >
+                      เลื่อนไป: {next.no}. {dealStageLabel(next.code).label}
+                    </Button>
+                  ) : nextHint ? (
                     <span className="rounded-lg border border-border bg-surface-subtle px-3 py-2 text-xs text-text-muted">
                       <Icon name="clock" size={12} /> {nextHint}
                     </span>
@@ -490,6 +543,78 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
             หมายเหตุ (ถ้ามี)
             <textarea className="min-h-20" value={note} onChange={(event) => setNote(event.target.value)} />
           </label>
+        </Modal>
+      ) : null}
+      {guidedOpen && next ? (
+        <Modal
+          title={`เลื่อนไปขั้น ${next.no}. ${dealStageLabel(next.code).label}`}
+          subtitle="ก่อนเลื่อนขั้น ระบุวันติดตามครั้งถัดไป และบันทึกกิจกรรมล่าสุดอย่างน้อย 1 รายการ"
+          onClose={() => setGuidedOpen(false)}
+          testId="guided-advance-modal"
+          footer={(
+            <>
+              <Button type="button" variant="secondary" onClick={() => setGuidedOpen(false)}>ยกเลิก</Button>
+              <Button
+                type="button"
+                variant="primary"
+                disabled={guidedAdvance.isPending
+                  || !guidedDraft.nextFollowUpAt
+                  || !guidedDraft.activityNote.trim()}
+                onClick={() => guidedAdvance.mutate()}
+                data-testid="guided-advance-submit"
+              >
+                {guidedAdvance.isPending ? 'กำลังเลื่อน…' : 'บันทึกและเลื่อนขั้น'}
+              </Button>
+            </>
+          )}
+        >
+          <div className="grid gap-3">
+            <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
+              วันติดตามครั้งถัดไป *
+              <input
+                type="date"
+                value={guidedDraft.nextFollowUpAt}
+                onChange={(event) => setGuidedDraft((d) => ({ ...d, nextFollowUpAt: event.target.value }))}
+                data-testid="guided-advance-followup"
+              />
+            </label>
+            <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
+              ประเภทกิจกรรม
+              <select
+                value={guidedDraft.kind}
+                onChange={(event) => setGuidedDraft((d) => ({ ...d, kind: event.target.value }))}
+              >
+                {ACTIVITY_KINDS.map((k) => (
+                  <option key={k.code} value={k.code}>{k.label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
+              บันทึกกิจกรรม *
+              <textarea
+                className="min-h-20"
+                placeholder="เช่น โทรติดตามลูกค้า / ส่งอีเมลใบเสนอราคา"
+                value={guidedDraft.activityNote}
+                onChange={(event) => setGuidedDraft((d) => ({ ...d, activityNote: event.target.value }))}
+                data-testid="guided-advance-note"
+              />
+            </label>
+            <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
+              โอกาสปิดการขาย % (ถ้ามี)
+              <input
+                type="number"
+                min="0"
+                max="100"
+                value={guidedDraft.winProbability}
+                onChange={(event) => setGuidedDraft((d) => ({ ...d, winProbability: event.target.value }))}
+              />
+            </label>
+            {guidedAdvance.isError ? (
+              <p className="rounded-md border border-danger-border bg-danger-bg px-3 py-2 text-xs text-danger-dark">
+                {guidedAdvance.error?.message ?? 'เลื่อนสถานะไม่สำเร็จ'}
+              </p>
+            ) : null}
+          </div>
         </Modal>
       ) : null}
     </Panel>
