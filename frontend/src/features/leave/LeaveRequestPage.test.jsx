@@ -276,6 +276,100 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     expect(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }).disabled).toBe(false);
   });
 
+  // Owner ruling (2026-09-28): PERSONAL filed as ลากิจฉุกเฉิน is exempt from the past-start-date
+  // block the same way SICK is above, but gated on the checkbox itself rather than unconditional --
+  // ticking it IS the "yes, this is an emergency" confirmation. isStartDateBlockedAsPast's own
+  // comment covers why the backend needs no matching change for this.
+  it('step 2: PERSONAL start date in the past is blocked until ลากิจฉุกเฉิน is ticked, then advances to step 3', async () => {
+    renderComposer();
+    // No "ประเภทอื่นๆ" disclosure needed -- ลากิจ (PERSONAL) is a top-level type button, same as
+    // the "preview call that fails outright" test above confirms with the same query.
+    fireEvent.click(await screen.findByRole('button', { name: /ลากิจ/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'ถัดไป' }));
+    await screen.findByText(/ขั้นตอนที่ 2\/3/);
+
+    fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: '2020-01-01' } });
+    // Anchored so this doesn't ALSO match PERSONAL's own "เหตุผลการลากิจ (ถ้ามี)" select, which
+    // shares the same leading substring -- a plain /เหตุผลการลา/ is ambiguous only on this type.
+    fireEvent.change(screen.getByLabelText(/^เหตุผลการลา(?!กิจ)/), { target: { value: 'ธุระด่วนที่บ้าน' } });
+    expect(await screen.findByText('วันที่เริ่มลาต้องไม่ก่อนวันนี้ หากเป็นลากิจฉุกเฉิน ให้เลือก “ลากิจฉุกเฉิน” ด้านล่างก่อน')).not.toBeNull();
+    expect(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }).disabled).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }));
+    expect(screen.queryByText(/ขั้นตอนที่ 3\/3/)).toBeNull();
+
+    fireEvent.click(screen.getByLabelText(/ลากิจฉุกเฉิน/));
+    await waitFor(() => expect(screen.queryByText(/วันที่เริ่มลาต้องไม่ก่อนวันนี้/)).toBeNull());
+    expect(screen.getByLabelText(/วันที่เริ่ม/).getAttribute('aria-invalid')).not.toBe('true');
+    expect(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }).disabled).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }));
+    expect(await screen.findByText(/ขั้นตอนที่ 3\/3/)).not.toBeNull();
+
+    await waitFor(() => expect(api.leave.preview).toHaveBeenCalledWith(
+      expect.objectContaining({ leaveTypeCode: 'PERSONAL', startDate: '2020-01-01', requestedAsEmergency: true }),
+      expect.anything(),
+    ));
+  });
+
+  it('step 2: unticking ลากิจฉุกเฉิน re-blocks a past PERSONAL start date', async () => {
+    renderComposer();
+    fireEvent.click(await screen.findByRole('button', { name: /ลากิจ/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'ถัดไป' }));
+    await screen.findByText(/ขั้นตอนที่ 2\/3/);
+
+    fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: '2020-01-01' } });
+    fireEvent.change(screen.getByLabelText(/^เหตุผลการลา(?!กิจ)/), { target: { value: 'ธุระด่วนที่บ้าน' } });
+    expect(await screen.findByText(/วันที่เริ่มลาต้องไม่ก่อนวันนี้/)).not.toBeNull();
+
+    const emergencyCheckbox = screen.getByLabelText(/ลากิจฉุกเฉิน/);
+    fireEvent.click(emergencyCheckbox);
+    await waitFor(() => expect(screen.queryByText(/วันที่เริ่มลาต้องไม่ก่อนวันนี้/)).toBeNull());
+
+    fireEvent.click(emergencyCheckbox);
+    expect(await screen.findByText(/วันที่เริ่มลาต้องไม่ก่อนวันนี้/)).not.toBeNull();
+    expect(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }).disabled).toBe(true);
+  });
+
+  // Wrong-way-round: the exemption is keyed on `leaveTypeCode === 'PERSONAL'` AND the checkbox, not
+  // on "the employee ticked the box at some point in this session" -- selectType already resets
+  // requestedAsEmergency to false and re-triggers startDate on every type switch (see its own
+  // comment), so this pins that a leftover tick from PERSONAL cannot silently carry over as an
+  // exemption for a type that never earned one.
+  it('step 2: the ลากิจฉุกเฉิน exemption does not leak into another type', async () => {
+    renderComposer();
+    fireEvent.click(await screen.findByRole('button', { name: /ลากิจ/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'ถัดไป' }));
+    await screen.findByText(/ขั้นตอนที่ 2\/3/);
+
+    fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: '2020-01-01' } });
+    fireEvent.change(screen.getByLabelText(/^เหตุผลการลา(?!กิจ)/), { target: { value: 'ธุระด่วนที่บ้าน' } });
+    fireEvent.click(screen.getByLabelText(/ลากิจฉุกเฉิน/));
+    await waitFor(() => expect(screen.queryByText(/วันที่เริ่มลาต้องไม่ก่อนวันนี้/)).toBeNull());
+
+    fireEvent.click(screen.getByRole('button', { name: 'ย้อนกลับ' }));
+    fireEvent.click(await screen.findByRole('button', { name: /ลาพักร้อน/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'ถัดไป' }));
+    await screen.findByText(/ขั้นตอนที่ 2\/3/);
+
+    expect(await screen.findByText('วันที่เริ่มลาต้องไม่ก่อนวันนี้')).not.toBeNull();
+    expect(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }).disabled).toBe(true);
+
+    // The leg that actually exercises selectType's reset. The VACATION leg above is satisfied by
+    // the type gate alone (VACATION is never exempt, ticked or not), so on its own it stays green
+    // with the reset deleted -- found by the reviewer's own mutation check. Coming BACK to PERSONAL
+    // is where a surviving tick would re-open the exemption: the past date must be blocked again
+    // and the box must render unticked, or the reset is not doing its job.
+    fireEvent.click(screen.getByRole('button', { name: 'ย้อนกลับ' }));
+    fireEvent.click(await screen.findByRole('button', { name: /ลากิจ/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'ถัดไป' }));
+    await screen.findByText(/ขั้นตอนที่ 2\/3/);
+
+    expect(screen.getByLabelText(/ลากิจฉุกเฉิน/).checked).toBe(false);
+    expect(await screen.findByText(/วันที่เริ่มลาต้องไม่ก่อนวันนี้/)).not.toBeNull();
+    expect(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }).disabled).toBe(true);
+  });
+
   it('step 2: honestly surfaces coverageEvaluated=false under the debounced QUICK preview', async () => {
     await goToStep2ForVacation();
     fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: '2099-12-31' } });
