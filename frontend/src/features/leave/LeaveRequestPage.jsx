@@ -44,6 +44,7 @@ import { formatDate, formatDays, todayIso, yearFrom } from './leaveFormatting.js
 // after cancel/back/submit).
 
 const LEAVE_START_PAST_MESSAGE = 'วันที่เริ่มลาต้องไม่ก่อนวันนี้';
+const LEAVE_START_PAST_PERSONAL_MESSAGE = 'วันที่เริ่มลาต้องไม่ก่อนวันนี้ หากเป็นลากิจฉุกเฉิน ให้เลือก “ลากิจฉุกเฉิน” ด้านล่างก่อน';
 const LEAVE_TIME_ORDER_MESSAGE = 'เวลาสิ้นสุดต้องหลังเวลาเริ่ม';
 
 // Owner ruling (2026-09-09): "ลาป่วยย้อนหลังได้ตลอด พนักงานยื่นได้" -- SICK, and only SICK, is
@@ -52,7 +53,8 @@ const LEAVE_TIME_ORDER_MESSAGE = 'เวลาสิ้นสุดต้อง�
 // features/overtime/OvertimePanel.jsx). It is also not HR-only -- an employee filing for themselves
 // gets the same exemption, which is the case that prompted the ruling (paper F-HR-020 sick forms
 // were reaching HR days late and could not be entered through this form at all). Every OTHER type
-// keeps the block: a widening to all types was considered on the same day and explicitly dropped.
+// keeps the block, EXCEPT PERSONAL filed as ลากิจฉุกเฉิน -- see the second ruling below -- so a
+// widening to all types unconditionally was considered on the same day and explicitly dropped.
 //
 // The backend applies its own §5.1 gates, which this exemption does not touch and which surface in
 // the preview response at BOTH step 2 and step 3 (step2FieldTarget below already routes the SICK
@@ -74,12 +76,38 @@ const LEAVE_TIME_ORDER_MESSAGE = 'เวลาสิ้นสุดต้อง�
 // non-zero ones), so the backend would accept a backdated request for any of those five.
 const BACKDATE_ALLOWED_LEAVE_TYPE_CODES = new Set(['SICK']);
 
+// Owner ruling (2026-09-28): "ลากิจฉุกเฉิน" -- PERSONAL filed with the ลากิจฉุกเฉิน checkbox ticked
+// (`requestedAsEmergency === true`) -- gets the SAME exemption as SICK above: no retroactive window,
+// and not HR-only (an employee filing for themselves is the whole point, e.g. filed on the 28th for
+// leave taken on the 26th). The backend already accepts this shape with no frontend change:
+// LeaveService#autoRejectNote's §5.2 emergency branch treats a backdated PERSONAL request
+// (startDate.isBefore(today + advanceNoticeDays), true for PERSONAL since advance_notice_days=1)
+// as an emergency exception when requestedAsEmergency is set and the monthly tolerance (3
+// occurrences) has not been exhausted -- approved with emergencyFilingApplied=true. Once that
+// tolerance is exhausted the outcome becomes EMERGENCY_TOLERANCE_EXHAUSTED, which since V164 is
+// WARN_UNPAID_ALL (submits, unpaid if approved), not a rejection -- so there is no backend window to
+// mirror here, same as SICK. No backend change ships with this frontend fix.
+//
+// A backdated PERSONAL request WITHOUT the box ticked stays blocked here: the backend would only
+// ever raise ADVANCE_NOTICE for that shape (a WARN_UNPAID_* outcome, not the emergency exception),
+// so the client-side block is a UX choice -- steering the employee to tick the box when that is what
+// they mean -- not a mirror of a backend rejection.
+const EMERGENCY_BACKDATE_LEAVE_TYPE_CODES = new Set(['PERSONAL']);
+
 // Single source of truth for the past-start-date rule -- both the zod schema and the render-time
 // `startDateInPast` derivation below call THIS, so the exemption cannot drift between the two.
-function isStartDateBlockedAsPast(leaveTypeCode, startDate, minStartDate) {
+function isStartDateBlockedAsPast(leaveTypeCode, startDate, minStartDate, requestedAsEmergency) {
   if (!startDate || !minStartDate) return false;
   if (BACKDATE_ALLOWED_LEAVE_TYPE_CODES.has(leaveTypeCode)) return false;
+  if (EMERGENCY_BACKDATE_LEAVE_TYPE_CODES.has(leaveTypeCode) && requestedAsEmergency === true) return false;
   return startDate < minStartDate;
+}
+
+// Paired with isStartDateBlockedAsPast above -- PERSONAL gets its own message pointing at the
+// ลากิจฉุกเฉิน checkbox as the way out, since "just wait" is not the right instruction for a type
+// that DOES have an exemption, unlike every other still-blocked type.
+function pastStartMessage(leaveTypeCode) {
+  return EMERGENCY_BACKDATE_LEAVE_TYPE_CODES.has(leaveTypeCode) ? LEAVE_START_PAST_PERSONAL_MESSAGE : LEAVE_START_PAST_MESSAGE;
 }
 
 // Step 1's secondary disclosure leads each rare type with its own gating condition (the brief's
@@ -185,8 +213,8 @@ function createLeaveFormSchema({ requireEmployeeId, minStartDate }) {
     if (requireEmployeeId && !data.employeeId) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ['employeeId'], message: 'กรุณาเลือกพนักงาน' });
     }
-    if (isStartDateBlockedAsPast(data.leaveTypeCode, data.startDate, minStartDate)) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ['startDate'], message: LEAVE_START_PAST_MESSAGE });
+    if (isStartDateBlockedAsPast(data.leaveTypeCode, data.startDate, minStartDate, data.requestedAsEmergency)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['startDate'], message: pastStartMessage(data.leaveTypeCode) });
     }
     // Partial-day span (V166, 2026-09-10): `allDay === false` (not merely falsy -- the default is
     // `true`) is when times are required. A timed span may now cross calendar days, so the
@@ -416,8 +444,8 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
   // That alone only clears the DERIVED half (this flag, and with it the button's disabled state);
   // a message already written into `errors.startDate` by the previous type is cleared by
   // selectType's explicit trigger('startDate') below. Both halves are needed -- see that comment.
-  const startDateInPast = isStartDateBlockedAsPast(leaveTypeCode, startDate, todayIso());
-  const startDateError = startDateInPast ? LEAVE_START_PAST_MESSAGE : errors.startDate?.message;
+  const startDateInPast = isStartDateBlockedAsPast(leaveTypeCode, startDate, todayIso(), requestedAsEmergency);
+  const startDateError = startDateInPast ? pastStartMessage(leaveTypeCode) : errors.startDate?.message;
 
   // Seed the acting employee once options load, same convention as the pre-A2 form.
   useEffect(() => {
@@ -744,6 +772,15 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
       if (!getValues('startTime')) setValue('startTime', '08:30', { shouldDirty: true, shouldValidate: true });
       if (!getValues('endTime')) setValue('endTime', '17:30', { shouldDirty: true, shouldValidate: true });
     }
+  }
+
+  // Same trap as selectType's own trigger('startDate') above: `setValue`/RHF's internal onChange
+  // for THIS field rewrites only requestedAsEmergency's own error, never startDate's, so a past-
+  // date error already written into errors.startDate (rendered via startDateInPast, which reads
+  // requestedAsEmergency) would otherwise survive ticking or unticking the ลากิจฉุกเฉิน checkbox
+  // until some OTHER field's change happened to re-run validation. Re-validate startDate here too.
+  function handleEmergencyToggle() {
+    if (getValues('startDate')) trigger('startDate');
   }
 
   const showTimedFields = !allDay;
@@ -1074,7 +1111,7 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
                         id="leave-requested-as-emergency"
                         type="checkbox"
                         className="h-4 w-4"
-                        {...register('requestedAsEmergency')}
+                        {...register('requestedAsEmergency', { onChange: handleEmergencyToggle })}
                       />
                     </FormField>
                     {step2BlockingTarget === 'emergency' && step2Blocking ? (
