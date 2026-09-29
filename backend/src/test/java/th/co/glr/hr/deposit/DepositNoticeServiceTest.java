@@ -947,6 +947,38 @@ class DepositNoticeServiceTest {
         verify(quotationRepo, never()).findByTicket(10L);
     }
 
+    /**
+     * Proves the final fallback's wiring (2026-09-29 fix): when the legacy ticket-item path AND
+     * the CustomerQuotation {@code pickQuotation} path both yield nothing (no approved_price on
+     * any ticket item, and {@code quotationRepo.findByTicket} returns an empty list — no {@code
+     * origin IS NULL} quotation at all), {@code buildItemsFromRequest} must return EXACTLY what
+     * {@code docs.findDealQuotationItemsForDeposit(ticketId)} returns, not an empty list (the old
+     * {@code return List.of();} this branch replaced). The sentinel item below ("V2 deal quotation
+     * item", unit price 999) is deliberately unlike anything else in this file so a test bug that
+     * accidentally sourced items from elsewhere would show up as the wrong description/price
+     * rather than merely "some non-empty list".
+     */
+    @Test
+    void createDraft_fallsBackToDealQuotationRepositoryWhenLegacyAndPickQuotationBothYieldNothing() {
+        stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED"); // items: List.of() — no approved_price
+        when(quotationRepo.findByTicket(10L)).thenReturn(List.of()); // pickQuotation -> null
+        DepositNoticeItemRequest sentinel = new DepositNoticeItemRequest(
+            1, "V2 deal quotation item", new BigDecimal("3"), "แผ่น",
+            new BigDecimal("999"), null, new BigDecimal("999"));
+        when(docs.findDealQuotationItemsForDeposit(10L)).thenReturn(List.of(sentinel));
+        when(docs.createDraft(eq(10L), any(), any())).thenReturn(206L);
+        stubDraft(206L, 10L);
+
+        service.createDraft(10L,
+            new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), owner);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<DepositNoticeItemRequest>> itemsCaptor = ArgumentCaptor.forClass(List.class);
+        verify(docs).createDraft(eq(10L), any(), itemsCaptor.capture());
+        assertThat(itemsCaptor.getValue()).containsExactly(sentinel);
+        verify(docs).findDealQuotationItemsForDeposit(10L);
+    }
+
     private static void assertForbidden(org.assertj.core.api.ThrowableAssert.ThrowingCallable action) {
         assertThatThrownBy(action)
             .isInstanceOfSatisfying(ApiException.class, e ->

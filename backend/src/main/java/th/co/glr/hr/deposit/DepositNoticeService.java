@@ -1185,7 +1185,13 @@ public class DepositNoticeService {
         if (chosen != null) {
             return itemsFromQuotation(chosen.items());
         }
-        return List.of();
+
+        // V2 deal-quotation chain (2026-09-29 fix): the pickQuotation/findByTicket source above is
+        // scoped to origin IS NULL, so it never returns a DEAL_DIRECT or PRICING_REQUEST quotation
+        // — every deal issued through the deal-quotation flow fell through to an empty item list.
+        // docs.findDealQuotationItemsForDeposit reads the ticket's live deal quotation (ACCEPTED,
+        // else ISSUED) directly; see that method's Javadoc for the selection and column choices.
+        return docs.findDealQuotationItemsForDeposit(ticketId);
     }
 
     private List<DepositNoticeItemRequest> buildLegacyItems(long ticketId) {
