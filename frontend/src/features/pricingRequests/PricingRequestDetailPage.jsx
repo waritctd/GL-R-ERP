@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { hasPermission } from '../../app/permissions.js';
@@ -387,13 +387,30 @@ function ImportFactoryPicker({
   itemId, factories, countries, loading, loadFailed, value, onChangeValue, onSave, saving, onFactoryAdded,
 }) {
   const [addOpen, setAddOpen] = useState(false);
+  const [emptyWarned, setEmptyWarned] = useState(false);
+  // QA BUG-20: hard lock against a double-submit. `saving` is the mutation's isPending, which only
+  // flips on the NEXT render — a fast second click (or Enter) can fire between the first mutate()
+  // and that re-render, and setItemFactory answers the second call with a confusing 409 ("ระบุ
+  // โรงงานไว้แล้ว") even though the save succeeded. This ref closes that window synchronously; it is
+  // released once `saving` returns to false (the mutation settled, success or error).
+  const inFlight = useRef(false);
+  useEffect(() => { if (!saving) inFlight.current = false; }, [saving]);
   const options = useMemo(
     () => factories.map((f) => ({ code: String(f.factoryId), nameTh: f.name })),
     [factories],
   );
+
+  function handleSubmit(event) {
+    if (saving || inFlight.current) return; // already submitting — swallow the repeat click/Enter
+    if (!value) { setEmptyWarned(true); return; } // QA BUG-20: an empty save now says why
+    setEmptyWarned(false);
+    inFlight.current = true;
+    onSave(event);
+  }
+
   return (
     <>
-      <SafeForm className="mt-2 flex flex-wrap items-end gap-2" onSubmit={onSave}>
+      <SafeForm className="mt-2 flex flex-wrap items-end gap-2" onSubmit={handleSubmit}>
         <div className="w-[min(320px,100%)]">
           <FormField label="ระบุโรงงาน" htmlFor={`pcr-item-factory-${itemId}`}>
             <SearchableCombobox
@@ -404,7 +421,7 @@ function ImportFactoryPicker({
               loading={loading}
               disabled={saving}
               placeholder={loading ? 'กำลังโหลดรายชื่อโรงงาน…' : 'พิมพ์ค้นหาโรงงาน…'}
-              onChange={onChangeValue}
+              onChange={(code) => { setEmptyWarned(false); onChangeValue(code); }}
             />
           </FormField>
           {/* Distinguishes "the fetch failed" from "the roster really is empty" — SearchableCombobox's
@@ -413,9 +430,15 @@ function ImportFactoryPicker({
           {loadFailed ? (
             <p className="m-0 mt-1 text-xs font-bold text-danger">โหลดรายชื่อโรงงานไม่สำเร็จ — ลองรีเฟรชหน้านี้</p>
           ) : null}
+          {emptyWarned ? (
+            <p className="m-0 mt-1 text-xs font-bold text-warning-dark">เลือกโรงงานจากรายการก่อนกดบันทึก</p>
+          ) : null}
         </div>
-        <Button type="submit" variant="secondary" disabled={saving || !value}>
-          บันทึกโรงงาน
+        {/* QA BUG-20: NOT disabled on an empty value — a disabled button is exactly the "no
+            feedback" the report flagged (nothing happens, no reason given). It stays clickable so
+            handleSubmit can say เลือกโรงงานก่อน; `saving` still blocks the in-flight repeat. */}
+        <Button type="submit" variant="secondary" disabled={saving}>
+          {saving ? 'กำลังบันทึก…' : 'บันทึกโรงงาน'}
         </Button>
         <Button type="button" variant="text" onClick={() => setAddOpen(true)} disabled={saving}>
           <Icon name="plus" size={13} />
@@ -1832,6 +1855,14 @@ export function PricingRequestDetailPage({ user, showToast }) {
                     service would 409.
                     B6 (GLA-135): a picker over the real factory master list, not a free-text
                     input — see ImportFactoryPicker's own comment for why. */}
+                {/* QA BUG-20: a line that already has a factory offers no picker (re-routing is
+                    refused by the backend — a factory quote may already be grouped under that name).
+                    Rather than a silent dead-end, say WHY and what to do instead of guessing. */}
+                {canSetItemFactory && factoryName ? (
+                  <p className="mt-2 text-xs text-text-muted">
+                    ต้องการเปลี่ยนโรงงาน? ต้องสร้างคำขอราคารอบใหม่ — ระบบล็อกไว้กันใบขอราคาที่จัดกลุ่มตามโรงงานเพี้ยน
+                  </p>
+                ) : null}
                 {canSetItemFactory && !factoryName ? (
                   <ImportFactoryPicker
                     itemId={item.id}
