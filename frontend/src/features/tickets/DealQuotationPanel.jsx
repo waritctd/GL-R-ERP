@@ -113,6 +113,11 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticke
   const queryClient = useQueryClient();
   const [outcomeNote, setOutcomeNote] = useState('');
   const [downloadingFormat, setDownloadingFormat] = useState(null);
+  // openRecordOutcome's scroll target — the "บันทึกผลจากลูกค้า" accept/reject/
+  // revision block below (only rendered while canRecordCustomerQuotationOutcome
+  // is true). Same "attach a ref, guard scrollIntoView for jsdom" convention as
+  // TicketDetailPage's own focusFirstInvalid.
+  const outcomeControlsRef = useRef(null);
 
   const pr = useMemo(() => pickRelevantPricingRequest(pricingRequests), [pricingRequests]);
   const canView = pr != null && canViewCustomerQuotation(user, pr);
@@ -278,6 +283,26 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticke
         showToast?.('error', 'ยังยืนยันคำสั่งซื้อไม่ได้ — ตรวจสอบสถานะคำขอราคาในส่วน "ราคาและใบเสนอราคา" ด้านล่าง');
       }
     },
+    // salesActions.js's RECORD_QUOTATION_OUTCOME bucket fires off `pr.status === 'QUOTATION_ISSUED'`
+    // alone (it has no visibility into the quotation document itself — see that bucket's own
+    // comment) — the real gate, canRecordCustomerQuotationOutcome, additionally requires
+    // `current.docStatus === 'ISSUED'`, which is only known once this panel's own quotationsQuery
+    // has resolved. Unlike openIssueQuotation/openConfirmOrder this never fires a mutation itself:
+    // the outcome (accept/reject/revision) is the rep's own judgment call, not something a single
+    // click can safely default — so this only ever scrolls the existing controls into view, same as
+    // FIX 2's rationale for keeping this panel the sole gate + mutation owner. Falls back to a toast
+    // (matching openConfirmOrder's own fallback copy/style) whenever the controls aren't actually on
+    // screen: the query hasn't settled yet, or the PR/quotation no longer qualifies (e.g. a stale
+    // sticky button click racing an outcome someone already recorded in another tab).
+    openRecordOutcome: () => {
+      const node = outcomeControlsRef.current;
+      if (node && canRecordCustomerQuotationOutcome(user, pr, current)) {
+        if (typeof node.scrollIntoView === 'function') node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        node.focus?.({ preventScroll: true });
+      } else {
+        showToast?.('error', 'ยังบันทึกผลใบเสนอราคาไม่ได้ — ตรวจสอบสถานะคำขอราคาในส่วน "ราคาและใบเสนอราคา" ด้านล่าง');
+      }
+    },
   }));
 
   async function handleDownload(format) {
@@ -383,7 +408,11 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticke
             ) : null}
 
             {canRecordCustomerQuotationOutcome(user, pr, current) ? (
-              <div className="flex flex-col gap-2 border-t border-border-subtle pt-3">
+              // ref + tabIndex: openRecordOutcome's scroll-and-focus target (the sticky header's
+              // "บันทึกผลใบเสนอราคา" CTA, salesActions.js's RECORD_QUOTATION_OUTCOME bucket) — see
+              // this component's useImperativeHandle above. tabIndex={-1} makes the section
+              // programmatically focusable without adding it to the page's normal tab order.
+              <div ref={outcomeControlsRef} tabIndex={-1} data-testid="deal-quotation-outcome-controls" className="flex flex-col gap-2 border-t border-border-subtle pt-3 outline-none">
                 <strong className="text-sm">บันทึกผลจากลูกค้า</strong>
                 <textarea
                   className="rounded border border-border p-2 text-sm"
