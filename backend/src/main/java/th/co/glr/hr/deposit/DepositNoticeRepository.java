@@ -368,6 +368,78 @@ public class DepositNoticeRepository {
         }
     }
 
+    /**
+     * Deal-quotation (V2) item source for deposit-notice autofill (2026-09-29 fix). The legacy
+     * autofill knew only two sources: {@code sales.ticket_item.approved_price} (never written by
+     * the pricing-request chain) and {@code CustomerQuotationRepository#findByTicket} (scoped to
+     * {@code origin IS NULL}, which excludes BOTH {@code DEAL_DIRECT} and {@code PRICING_REQUEST}
+     * rows). Every deal whose quotation was issued through the V2 deal-quotation flow therefore got
+     * an EMPTY deposit-notice item list — the reported "รายการ not autofilled" bug.
+     *
+     * <p><b>Selection covers BOTH V2 origins, whose live-terminal doc_status differs</b> — the two
+     * never share a {@code ticket_id} (see {@code DealQuotationRepository#nextRevisionNo}), so the
+     * union below is unambiguous per ticket:
+     * <ul>
+     *   <li>{@code PRICING_REQUEST} runs the customer-response lifecycle DRAFT → PENDING_APPROVAL →
+     *       ISSUED → ACCEPTED, so it mirrors {@link DepositNoticeService#pickQuotation} exactly:
+     *       prefer ACCEPTED (the customer-accepted document a deposit is raised against), else the
+     *       latest ISSUED.</li>
+     *   <li>{@code DEAL_DIRECT} has no customer-response lifecycle in the model today — it ends at
+     *       APPROVED (terminal-until-revised; see {@code QuotationStatus.APPROVED}), which is the
+     *       only "live" state it ever reaches. Without APPROVED here, every direct-deal deposit
+     *       would still autofill empty.</li>
+     * </ul>
+     * SUPERSEDED / CANCELLED / REJECTED / EXPIRED / DRAFT / PENDING_APPROVAL / REVISION_REQUESTED
+     * rows are never chosen. Preference ACCEPTED &gt; ISSUED &gt; APPROVED, then newest by id.
+     * <b>Owner-confirmable:</b> that a deposit may autofill from an ISSUED-but-not-yet-ACCEPTED
+     * PRICING_REQUEST quote (legacy parity) and from an APPROVED DEAL_DIRECT quote — this is item
+     * <em>autofill</em> for a draft the user reviews before saving, not the deposit gate itself.
+     *
+     * <p>Reads the RESOLVED display columns the quotation itself prints
+     * ({@code qty}/{@code raw_unit}/{@code unit_price}/{@code final_unit_price}), NOT the legacy
+     * {@code requested_*}/{@code approved_unit_price} columns the V2 chain leaves null. The
+     * discount-label wording matches {@link DepositNoticeService#itemsFromQuotation}.
+     */
+    public List<DepositNoticeItemRequest> findDealQuotationItemsForDeposit(long ticketId) {
+        List<Long> ids = jdbc.query("""
+            SELECT quotation_id FROM sales.quotation
+             WHERE ticket_id = :ticketId
+               AND origin IN ('PRICING_REQUEST', 'DEAL_DIRECT')
+               AND doc_status IN ('ACCEPTED', 'ISSUED', 'APPROVED')
+             ORDER BY CASE doc_status
+                          WHEN 'ACCEPTED' THEN 0
+                          WHEN 'ISSUED'   THEN 1
+                          ELSE 2
+                      END, quotation_id DESC
+             LIMIT 1
+            """, Map.of("ticketId", ticketId), (rs, i) -> rs.getLong("quotation_id"));
+        if (ids.isEmpty()) {
+            return List.of();
+        }
+        return jdbc.query("""
+            SELECT seq, description, qty, raw_unit, unit_price, sales_discount, final_unit_price
+              FROM sales.quotation_item
+             WHERE quotation_id = :quotationId
+             ORDER BY seq
+            """, Map.of("quotationId", ids.get(0)), (rs, i) -> {
+                String description = rs.getString("description");
+                if (description == null || description.isBlank()) {
+                    description = "รายการสินค้า";
+                }
+                String unit = rs.getString("raw_unit");
+                if (unit == null || unit.isBlank()) {
+                    unit = "หน่วย";
+                }
+                BigDecimal discount = rs.getBigDecimal("sales_discount");
+                String discountLabel = discount != null && discount.signum() > 0
+                    ? "ส่วนลด " + discount.stripTrailingZeros().toPlainString() + " ต่อหน่วย"
+                    : null;
+                return new DepositNoticeItemRequest(
+                    rs.getInt("seq"), description, rs.getBigDecimal("qty"), unit,
+                    rs.getBigDecimal("unit_price"), discountLabel, rs.getBigDecimal("final_unit_price"));
+            });
+    }
+
     private List<DepositNoticeItemDto> findItems(long docId) {
         return jdbc.query(
             "SELECT * FROM sales.deposit_notice_item WHERE deposit_notice_id = :id ORDER BY seq",
