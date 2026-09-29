@@ -89,6 +89,74 @@ public class DepositNoticeRepository {
         );
     }
 
+    /**
+     * Owner ruling (2026-09-29): the deposit PERCENTAGE on a deposit notice is LOCKED to the
+     * source quotation's own {@code sales.quotation.deposit_percent} — the value sales set when
+     * creating the quotation — and is never entered or edited at the deposit-notice stage.
+     * {@code deposit_percent} is a nullable SMALLINT whole-number percent (30/50/100); this
+     * returns it as a fraction (50 -&gt; 0.50) via {@code BigDecimal.valueOf(pct, 2)}, which is
+     * exact for any integer/100 (denominator 100 = 2^2*5^2 always terminates).
+     *
+     * <p>Pick order deliberately mirrors {@link DepositNoticeService}'s own quotation selection
+     * for deposit-notice ITEMS, so the percent this returns always comes from the same row the
+     * items would be sourced from:
+     * <ul>
+     *   <li>legacy customer-quotation chain ({@code origin IS NULL}, {@code pricing_request_id
+     *       IS NOT NULL} — the exact scope {@code CustomerQuotationRepository#findByTicket} uses):
+     *       ACCEPTED preferred, else ISSUED — the same rule {@code
+     *       DepositNoticeService#pickQuotation} applies for items. Read as raw SQL rather than via
+     *       {@code CustomerQuotationRepository}'s own DTO because {@code CustomerQuotationDto}
+     *       does not carry {@code deposit_percent} at all (it predates that column and nothing
+     *       else on that DTO's surface needed it) — adding a field there would widen every one of
+     *       that repository's other read paths for a value only this one caller needs.</li>
+     *   <li>v2 deal-quotation chain ({@code origin IN ('PRICING_REQUEST','DEAL_DIRECT')}): the
+     *       single live quotation, preferring ACCEPTED, then ISSUED, then APPROVED (DEAL_DIRECT's
+     *       own only live terminal state), newest by id.</li>
+     * </ul>
+     * A given ticket's quotations are only ever ALL-legacy or ALL-origin-tagged (each engine
+     * stamps {@code origin} consistently for every row it writes), so at most one branch below
+     * ever matches — trying legacy first is a fixed, harmless order, not a real preference
+     * between the two lineages. Returns empty when there is no live (ACCEPTED/ISSUED/APPROVED)
+     * quotation for this ticket, or its {@code deposit_percent} is null — the caller ({@link
+     * DepositNoticeService#createDraft}) falls back to 0.50 in that case, this document's
+     * long-standing default.
+     */
+    public Optional<BigDecimal> findDealQuotationDepositPercent(long ticketId) {
+        Integer legacyPct = firstOrNull(jdbc.query("""
+            SELECT deposit_percent FROM sales.quotation
+             WHERE ticket_id = :ticketId AND pricing_request_id IS NOT NULL AND origin IS NULL
+               AND doc_status IN ('ACCEPTED','ISSUED')
+             ORDER BY CASE doc_status WHEN 'ACCEPTED' THEN 0 ELSE 1 END, quotation_id DESC
+             LIMIT 1
+            """, Map.of("ticketId", ticketId),
+            (rs, i) -> (Integer) rs.getObject("deposit_percent")
+        ));
+        if (legacyPct != null) {
+            return Optional.of(BigDecimal.valueOf(legacyPct, 2));
+        }
+
+        Integer v2Pct = firstOrNull(jdbc.query("""
+            SELECT deposit_percent FROM sales.quotation
+             WHERE ticket_id = :ticketId AND origin IN ('PRICING_REQUEST','DEAL_DIRECT')
+               AND doc_status IN ('ACCEPTED','ISSUED','APPROVED')
+             ORDER BY CASE doc_status WHEN 'ACCEPTED' THEN 0 WHEN 'ISSUED' THEN 1 ELSE 2 END,
+                      quotation_id DESC
+             LIMIT 1
+            """, Map.of("ticketId", ticketId),
+            (rs, i) -> (Integer) rs.getObject("deposit_percent")
+        ));
+        return v2Pct != null ? Optional.of(BigDecimal.valueOf(v2Pct, 2)) : Optional.empty();
+    }
+
+    /** {@code list.stream().findFirst()} throws NPE the moment the single mapped row's own value
+     * is {@code null} ({@code Stream.findFirst}/{@code Optional.of} both reject a null element
+     * outright) — exactly the case a LIVE quotation with a not-yet-set {@code deposit_percent}
+     * hits. A plain index avoids that without changing what "no row" vs "row, null value" mean to
+     * the caller (both still read as "nothing usable here"). */
+    private static <T> T firstOrNull(List<T> rows) {
+        return rows.isEmpty() ? null : rows.get(0);
+    }
+
     @Transactional
     public long createDraft(long ticketId, DepositNoticeDraftRequest req, List<DepositNoticeItemRequest> items) {
         BigDecimal depositPct = req.depositPercent() != null ? req.depositPercent() : new BigDecimal("0.50");
