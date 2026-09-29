@@ -646,8 +646,25 @@ public class PricingRequestRepository {
     }
 
     /**
-     * Fills in the free-text {@code factory} on ONE line that has none, so Import can route it to a
-     * factory email. Returns the number of rows written — 0 means the WHERE clause rejected it.
+     * Resolves a {@code price_catalog.factories} master row's canonical name by id — the picker
+     * (B6/GLA-135) sends a factoryId, and this is what {@code PricingRequestService#setItemFactory}
+     * uses to validate it and recover the exact name to persist. {@code Optional.empty()} when the
+     * id does not exist; the service turns that into a 404 rather than trusting an arbitrary id.
+     */
+    public Optional<String> findFactoryNameById(long factoryId) {
+        try {
+            return Optional.ofNullable(jdbc.queryForObject(
+                "SELECT name FROM price_catalog.factories WHERE factory_id = :id",
+                Map.of("id", factoryId), String.class));
+        } catch (EmptyResultDataAccessException e) {
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * Fills in the {@code factory}/{@code resolved_factory_id} on ONE line that has none, so
+     * Import can route it to a factory email. Returns the number of rows written — 0 means the
+     * WHERE clause rejected it.
      *
      * <p>The guard is IN THE SQL on purpose, not only in the service: the {@code WHERE} requires
      * the row to belong to {@code :pricingRequestId} AND to still have no factory of any kind. That
@@ -658,15 +675,26 @@ public class PricingRequestRepository {
      * and raises the precise 4xx; a 0 here after those checks passed is a lost race, and its caller
      * turns it into the same 409 {@link #transition} uses.
      *
-     * <p>{@code resolved_factory_name} is deliberately NOT written. That column is the price-catalog
-     * snapshot ({@link #snapshotCatalogSelections}) and a hand-typed name is not a catalog
-     * resolution; every downstream reader already falls back to {@code factory} via
+     * <p><b>B6 (GLA-135) fix:</b> {@code factoryId} is now written to {@code resolved_factory_id} —
+     * the column downstream readers ({@code FactoryQuoteService#groupByFactory} /
+     * {@code factoryConfigs.findByName(factoryName)}) actually key their factory-email + CEO
+     * landed-cost lookup on. Before this fix only the free-text {@code factory} column was written,
+     * so a typed name that did not exactly match a master row left {@code resolved_factory_id} NULL
+     * and dead-ended those lookups. {@code factory} is still written too — with the CALLER-RESOLVED
+     * canonical master name (see {@code findFactoryNameById} above), not raw user input, so every
+     * existing reader of the free-text column keeps working unchanged.
+     *
+     * <p>{@code resolved_factory_name} stays deliberately NOT written. That column is the
+     * price-catalog PRODUCT snapshot ({@link #snapshotCatalogSelections}) — a manually-picked
+     * factory (even now that it is master-row-resolved) is not a catalog product resolution; every
+     * downstream reader already falls back to {@code factory} via
      * {@code firstText(resolvedFactoryName, factory)}.
      */
-    public int fillItemFactory(long pricingRequestId, long pricingRequestItemId, String factory) {
+    public int fillItemFactory(long pricingRequestId, long pricingRequestItemId, long factoryId, String factory) {
         return jdbc.update("""
             UPDATE sales.pricing_request_item
-               SET factory = :factory
+               SET factory = :factory,
+                   resolved_factory_id = :factoryId
              WHERE pricing_request_item_id = :id
                AND pricing_request_id = :pricingRequestId
                AND COALESCE(NULLIF(BTRIM(resolved_factory_name), ''), NULLIF(BTRIM(factory), '')) IS NULL
@@ -674,7 +702,8 @@ public class PricingRequestRepository {
             new MapSqlParameterSource()
                 .addValue("id", pricingRequestItemId)
                 .addValue("pricingRequestId", pricingRequestId)
-                .addValue("factory", factory));
+                .addValue("factory", factory)
+                .addValue("factoryId", factoryId));
     }
 
     /**

@@ -77,6 +77,13 @@ vi.mock('../../api/index.js', () => ({
     catalog: {
       prices: vi.fn(),
     },
+    // B6 (GLA-135): the import factory picker's master list + country roster + in-flow
+    // add-factory form (ImportFactoryPicker, reusing catalog PriceImportPage's FactoryFormModal).
+    priceImport: {
+      factories: vi.fn(),
+      countries: vi.fn(),
+      createFactory: vi.fn(),
+    },
     meta: {
       unitBases: vi.fn(),
     },
@@ -298,6 +305,16 @@ function setApiDefaults() {
   });
   api.pricingRequests.createDepositNoticeFromQuotation.mockResolvedValue({ depositNotice: { id: 9901, status: 'DRAFT' } });
   api.catalog.prices.mockResolvedValue({ items: [] });
+  // B6 (GLA-135): a small real-looking factory roster — enough for the picker + duplicate-name
+  // tests below without pulling in the full catalog fixture this file doesn't otherwise need.
+  api.priceImport.factories.mockResolvedValue([
+    { factoryId: 601, name: 'SCG Ceramics', country: 'TH', countryOther: null, defaultCurrency: 'THB', email: null, unit: 'piece' },
+    { factoryId: 602, name: 'Cotto Industry', country: 'TH', countryOther: null, defaultCurrency: 'THB', email: null, unit: 'piece' },
+  ]);
+  api.priceImport.countries.mockResolvedValue([
+    { countryCode: 'TH', nameEn: 'Thailand', nameTh: 'ไทย' },
+    { countryCode: 'IT', nameEn: 'Italy', nameTh: 'อิตาลี' },
+  ]);
   // Mirrors UnitBasisMetaController's GET /api/meta/unit-bases — the backend catalog the
   // factory-quote response unit select is built from at runtime (item 3 of this task's brief).
   api.meta.unitBases.mockResolvedValue({
@@ -3248,16 +3265,20 @@ describe('PricingRequestDetailPage blank-factory lines', () => {
     expect(screen.getByText('รายการที่ 2')).toBeTruthy();
   });
 
-  it('lets Import name the factory on the blank line and sends it to the per-item endpoint', async () => {
+  // B6 (GLA-135): the field is now a picker over the real factory master list (SearchableCombobox),
+  // not a free-text <input> — selecting an option sends the master row's factoryId, never a typed
+  // name. Opening the combobox (focus) reveals every option because the query starts empty.
+  it('lets Import PICK the factory on the blank line from the master list and sends its id to the per-item endpoint', async () => {
     const request = buildRequestWithBlankFactoryLine();
     renderDetailPage({ user: importUser, request });
     await waitForLoaded(request);
 
-    fireEvent.change(screen.getByLabelText('ระบุโรงงาน'), { target: { value: ' Cotto Industry ' } });
+    fireEvent.focus(screen.getByLabelText('ระบุโรงงาน'));
+    fireEvent.click(await screen.findByRole('option', { name: 'Cotto Industry' }));
     fireEvent.click(screen.getByRole('button', { name: 'บันทึกโรงงาน' }));
 
     await waitFor(() => expect(api.pricingRequests.setItemFactory).toHaveBeenCalledWith(
-      501, 2, { factory: 'Cotto Industry' },
+      501, 2, { factoryId: 602 },
     ));
   });
 
@@ -3266,18 +3287,63 @@ describe('PricingRequestDetailPage blank-factory lines', () => {
     renderDetailPage({ user: importUser, request });
     await waitForLoaded(request);
 
-    // Two lines, one blank: exactly one input, and it belongs to the blank one.
+    // Two lines, one blank: exactly one picker, and it belongs to the blank one.
     expect(screen.getAllByLabelText('ระบุโรงงาน')).toHaveLength(1);
     expect(screen.getByLabelText('ระบุโรงงาน').id).toBe('pcr-item-factory-2');
   });
 
-  it('shows Sales the same blocking lines but no input — Import owns the field', async () => {
+  it('shows Sales the same blocking lines but no picker and no add-factory affordance — Import owns the field', async () => {
     const request = buildRequestWithBlankFactoryLine();
     renderDetailPage({ user: salesOwner, request });
     await waitForLoaded(request);
 
     expect(screen.getByText(/ฝ่ายนำเข้าเป็นผู้ระบุโรงงานให้ในขั้นตอนนี้/)).toBeTruthy();
     expect(screen.queryByLabelText('ระบุโรงงาน')).toBeNull();
+    // B6: the inline "add a brand-new factory" affordance is part of the same import-only
+    // control — Sales must not see it either, not merely the picker's input.
+    expect(screen.queryByRole('button', { name: /เพิ่มโรงงานใหม่/ })).toBeNull();
+  });
+
+  // B6 (GLA-135): Import may add a factory that genuinely doesn't exist yet, in-flow, rather than
+  // being stuck typing a name the backend can never resolve. Reuses PriceImportPage's own
+  // FactoryFormModal (name/country/currency/unit/email) — this proves the picker's own wiring:
+  // create -> refetch the master list -> auto-select the new row for this line.
+  it('lets Import add a brand-new factory in-flow and auto-selects it for the blank line', async () => {
+    const request = buildRequestWithBlankFactoryLine();
+    renderDetailPage({ user: importUser, request });
+    await waitForLoaded(request);
+
+    api.priceImport.createFactory.mockResolvedValue({
+      factoryId: 603, name: 'New Factory Co', country: 'TH', countryOther: null,
+      defaultCurrency: 'THB', email: null, unit: 'piece',
+    });
+    // The picker's initial fetch already ran (and resolved with setApiDefaults' 601/602 pair)
+    // before this point — this ONE queued value is for the invalidate-triggered REFETCH that
+    // follows onFactoryAdded, so the picker's options genuinely come from a fresh server read,
+    // not a client-side splice of the create response into stale cache data.
+    api.priceImport.factories.mockResolvedValueOnce([
+      { factoryId: 601, name: 'SCG Ceramics', country: 'TH', countryOther: null, defaultCurrency: 'THB', email: null, unit: 'piece' },
+      { factoryId: 602, name: 'Cotto Industry', country: 'TH', countryOther: null, defaultCurrency: 'THB', email: null, unit: 'piece' },
+      { factoryId: 603, name: 'New Factory Co', country: 'TH', countryOther: null, defaultCurrency: 'THB', email: null, unit: 'piece' },
+    ]);
+
+    fireEvent.click(screen.getByRole('button', { name: /เพิ่มโรงงานใหม่/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'เพิ่มโรงงานใหม่' });
+    fireEvent.change(within(dialog).getByLabelText(/ชื่อโรงงาน/), { target: { value: 'New Factory Co' } });
+    fireEvent.change(within(dialog).getByLabelText(/ประเทศ/), { target: { value: 'TH' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
+
+    await waitFor(() => expect(api.priceImport.createFactory).toHaveBeenCalledWith(
+      'New Factory Co', 'TH', null, 'EUR', '', 'piece',
+    ));
+    // The dialog closes and the line's picker now shows the newly-created, auto-selected factory.
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'เพิ่มโรงงานใหม่' })).toBeNull());
+    expect(await screen.findByDisplayValue('New Factory Co')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกโรงงาน' }));
+    await waitFor(() => expect(api.pricingRequests.setItemFactory).toHaveBeenCalledWith(
+      501, 2, { factoryId: 603 },
+    ));
   });
 
   it('offers nothing once the request has left Import\'s hands', async () => {

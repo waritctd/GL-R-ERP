@@ -12846,6 +12846,11 @@ export const api = {
     // NOTE (CLAUDE.md, "Authorization is NOT authoritative"): the role/status gates below
     // approximate the Java service and are not evidence about it. The real gate is pinned by
     // PricingFactoryQuoteCostingIntegrationTest#setItemFactory_* against a real Postgres.
+    //
+    // B6 (GLA-135): `payload` is now `{ factoryId }`, resolved against `mockPriceImportFactories` —
+    // mirrors PricingRequestRepository#findFactoryNameById/#fillItemFactory writing BOTH
+    // resolved_factory_id and the canonical name, instead of trusting a free-typed one. A
+    // factoryId with no matching row is a 404, same as the real service.
     async setItemFactory(id, itemId, payload) {
       const user = hasRole('import');
       const pr = findPricingRequestRaw(id);
@@ -12853,15 +12858,17 @@ export const api = {
         fail(`ระบุโรงงานได้เฉพาะคำขอราคาที่อยู่ระหว่างการดำเนินการของฝ่ายนำเข้าเท่านั้น (สถานะปัจจุบัน: '${pr.status}')`, 409);
       }
       requirePricingRequestDealActive(db.tickets.find((t) => t.id === pr.ticketId));
-      const factory = payload?.factory?.trim();
-      if (!factory) fail('ชื่อโรงงานต้องไม่เว้นว่าง', 400);
+      const factoryId = Number(payload?.factoryId);
+      const factoryMaster = mockPriceImportFactories.find((f) => f.factoryId === factoryId);
+      if (!factoryId || !factoryMaster) fail('ไม่พบโรงงานนี้ในระบบ', 404);
       const item = pr.items.find((candidate) => candidate.id === itemId);
       if (!item) fail('ไม่พบรายการสินค้านี้ในคำขอราคานี้', 404);
       const existing = pricingRequestItemFactory(item);
       if (existing) {
         fail(`รายการนี้ระบุโรงงานไว้แล้ว (${existing}) — หากต้องการเปลี่ยนโรงงาน ต้องสร้างคำขอราคารอบใหม่`, 409);
       }
-      item.factory = factory;
+      item.factory = factoryMaster.name;
+      item.resolvedFactoryId = factoryMaster.factoryId;
       pr.updatedAt = new Date().toISOString();
       pushPricingRequestEvent(pr, user, 'PRICING_REQUEST_ITEM_FACTORY_SET', pr.status, pr.status);
       return delay({ pricingRequest: buildPricingRequestDetail(pr) });

@@ -477,6 +477,12 @@ public class PricingRequestService {
      * quote change shape to cover it. See {@link PricingRequestRepository#hasFactoryQuotePastDraft}
      * and {@code FactoryQuoteService#generateDrafts}'s own Javadoc for the other half of this same
      * invariant.
+     *
+     * <p><b>B6 (GLA-135) — factoryId, resolved against the master row.</b> {@code request} now
+     * carries a {@code factoryId} rather than a free-typed name (see
+     * {@code SetItemFactoryRequest}'s own Javadoc for why). A factoryId that does not exist is a
+     * 404: sales/import may only pick from existing factories, so an unresolvable id here means
+     * the caller sent something this endpoint never offered, not a value worth silently accepting.
      */
     @Transactional
     public PricingRequestDetailDto setItemFactory(long id, long itemId, SetItemFactoryRequest request,
@@ -490,10 +496,9 @@ public class PricingRequestService {
         }
         requireActive(requireTicket(summary.ticketId()));
 
-        String factory = request.factory() == null ? "" : request.factory().trim();
-        if (factory.isEmpty()) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "ชื่อโรงงานต้องไม่เว้นว่าง");
-        }
+        long factoryId = request.factoryId();
+        String factory = requests.findFactoryNameById(factoryId)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบโรงงานนี้ในระบบ"));
         PricingRequestItemDto item = requests.findItems(id).stream()
             .filter(candidate -> candidate.id() == itemId)
             .findFirst()
@@ -508,7 +513,7 @@ public class PricingRequestService {
                 "ได้ส่งคำขอราคาไปยังโรงงาน '" + factory + "' แล้ว — หากต้องการเพิ่มรายการนี้ให้โรงงานนี้ ต้องสร้างคำขอราคารอบใหม่");
         }
 
-        int rows = requests.fillItemFactory(id, itemId, factory);
+        int rows = requests.fillItemFactory(id, itemId, factoryId, factory);
         if (rows == 0) {
             // Lost race against another Import user filling the same blank between the read above
             // and this write — the repository's own WHERE clause is what caught it. Same shape and

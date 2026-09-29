@@ -1074,9 +1074,13 @@ export const api = {
     queue: (params) => apiRequest(API_ROUTES.pricingRequests.queue(params)),
     get: (id) => apiRequest(API_ROUTES.pricingRequests.detail(id)),
     update: (id, payload) => apiRequest(API_ROUTES.pricingRequests.detail(id), { method: 'PUT', body: payload }),
-    // Import-only, and only while the request is in Import's hands. `payload` is { factory }.
-    // Fills a blank factory; it never re-routes a line that already has one (the service 409s) —
-    // see PricingRequestService#setItemFactory.
+    // Import-only, and only while the request is in Import's hands. `payload` is { factoryId } —
+    // B6 (GLA-135): a real price_catalog.factories row's id, picked from the SearchableCombobox
+    // in PricingRequestDetailPage, not a free-typed name (a typed name that didn't exactly match a
+    // master row used to leave resolved_factory_id NULL and dead-end the factory-email/CEO-costing
+    // lookups that key on it). Fills a blank factory; it never re-routes a line that already has
+    // one (the service 409s), and 404s when factoryId does not resolve — see
+    // PricingRequestService#setItemFactory.
     setItemFactory: (id, itemId, payload) =>
       apiRequest(API_ROUTES.pricingRequests.itemFactory(id, itemId), { method: 'PUT', body: payload }),
     generateFactoryEmailDrafts: (id) => apiRequest(API_ROUTES.pricingRequests.factoryEmailDrafts(id), { method: 'POST' }),

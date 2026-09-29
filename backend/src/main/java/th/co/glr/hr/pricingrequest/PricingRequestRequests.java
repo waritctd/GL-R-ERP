@@ -244,12 +244,22 @@ public final class PricingRequestRequests {
      * {@code PricingRequestService#setItemFactory} for the full set of guards and why this is a
      * gap-FILL rather than a re-route.
      *
-     * <p>The 255 cap matches {@code sales.pricing_request_item.factory VARCHAR(255)} (V59): the
-     * column would otherwise reject the write as a raw constraint violation (500) instead of the
-     * 400 a too-long name deserves.
+     * <p><b>B6 (GLA-135) — factoryId, not a free-text name.</b> Until this fix the field was a
+     * free-typed {@code String factory}, so a name that did not exactly match a
+     * {@code price_catalog.factories} row saved with {@code resolved_factory_id} left NULL — the
+     * direct cause of the reported "brand-new factory → factory config error": downstream
+     * {@code FactoryConfigRepository.findByName} (factory-email + CEO landed-cost lookups) had
+     * nothing to match. The picker now sends the id of a real master row instead; the service
+     * resolves it and stores BOTH {@code resolved_factory_id} and the canonical
+     * {@code factory} name (see {@code PricingRequestService#setItemFactory} /
+     * {@code PricingRequestRepository#fillItemFactory}). factoryId-only, not
+     * factoryId-or-name: grepping every caller (backend integration tests, the frontend
+     * {@code hrApi}/{@code mockApi} pair, e2e) found none outside this one flow, and sales/import
+     * must pick from existing factories only — a brand-new one is added in-flow via
+     * {@code POST /api/price-import/factories} (import/ceo-only), never typed here.
      */
     public record SetItemFactoryRequest(
-        @NotBlank @Size(max = 255) String factory
+        @NotNull Long factoryId
     ) {}
 
     /** Import-only toggle on a Pricing Request attachment (V69, review remediation COMMIT 4). */
