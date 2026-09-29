@@ -126,3 +126,6 @@ ERP-Knowledgebase.zip
 # via --roster; it must never be committed to this PUBLIC repo.
 agents/attendance/*roster*.json
 agents/attendance/*roster*.csv
+
+# Hallmark design-skill project memory (local run log; not a build artifact).
+.hallmark/

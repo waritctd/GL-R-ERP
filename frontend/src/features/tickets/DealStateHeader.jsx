@@ -205,7 +205,7 @@ export function DealStateHeader({
   }
 
   return (
-    <section data-testid="deal-state-header" data-condensed="false" className="flex flex-col gap-4 bg-surface p-4 sm:p-5 mobile:gap-3 mobile:rounded-lg mobile:border mobile:border-border mobile:p-3">
+    <section data-testid="deal-state-header" data-condensed="false" className="flex flex-col gap-4 bg-surface p-4 sm:p-5 mobile:gap-3 mobile:rounded-md mobile:border mobile:border-border mobile:p-3">
       <div className="relative flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 mobile:pr-12">
           <div className="flex flex-wrap items-center gap-2">
@@ -309,7 +309,7 @@ export function DealStateHeader({
           // fixed bar would be unreadable), so it keeps its own bg/border/
           // padding/shadow/safe-area there regardless of bannerText.
           className={bannerText
-            ? 'flex flex-wrap items-center justify-between gap-3 rounded-lg border border-info-border bg-info-bg px-4 py-3 mobile:fixed mobile:inset-x-0 mobile:bottom-0 mobile:z-20 mobile:rounded-none mobile:border-x-0 mobile:border-b-0 mobile:px-4 mobile:py-3 mobile:shadow-lg mobile:[padding-bottom:max(18px,env(safe-area-inset-bottom))]'
+            ? 'flex flex-wrap items-center justify-between gap-3 rounded-md border border-info-border bg-info-bg px-4 py-3 mobile:fixed mobile:inset-x-0 mobile:bottom-0 mobile:z-20 mobile:rounded-none mobile:border-x-0 mobile:border-b-0 mobile:px-4 mobile:py-3 mobile:shadow-lg mobile:[padding-bottom:max(18px,env(safe-area-inset-bottom))]'
             : 'flex flex-wrap items-center justify-end gap-3 mobile:fixed mobile:inset-x-0 mobile:bottom-0 mobile:z-20 mobile:bg-surface mobile:border-t mobile:border-border mobile:px-4 mobile:py-3 mobile:shadow-lg mobile:[padding-bottom:max(18px,env(safe-area-inset-bottom))]'}
         >
           {bannerText ? (
