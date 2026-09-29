@@ -158,6 +158,11 @@ export const queryKeys = {
   // V153 thickness fallbacks. The gap list is derived from the catalogue, so it changes whenever a
   // price list is re-imported — not only when the CEO saves.
   catalogThicknessDefaults: () => ['catalogThicknessDefaults'],
+  // B6 (GLA-135): the price_catalog.factories master list — the import factory picker on
+  // PricingRequestDetailPage reads it (and invalidates it after adding a new factory in-flow).
+  // No params: GET /api/price-import/factories takes none and returns the whole roster.
+  priceImportFactories: () => ['priceImport', 'factories'],
+  priceImportCountries: () => ['priceImport', 'countries'],
   // Commit 6 (pricing-request-foundation)
   pricingRequestsByTicket: (ticketId) => ['pricingRequests', 'byTicket', ticketId],
   pricingRequestQueue: (filters = {}) => ['pricingRequests', 'queue', filters.status ?? '', filters.assignedImportId ?? '', filters.activeOnly ?? true],

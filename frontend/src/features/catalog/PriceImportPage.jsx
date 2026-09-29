@@ -109,7 +109,10 @@ function selectableCountries(countries) {
   return countries;
 }
 
-function FactoryFormModal({ factory, countries, onClose, onSaved }) {
+// Exported (B6, GLA-135): PricingRequestDetailPage's import factory picker reuses this exact
+// form for its inline "เพิ่มโรงงานใหม่" affordance rather than a second, drifting copy of the
+// same five fields + validation — see that page's own comment at the picker call site.
+export function FactoryFormModal({ factory, countries, onClose, onSaved }) {
   const isEdit = Boolean(factory);
   const [name, setName]         = useState(factory?.name ?? '');
   const [country, setCountry]   = useState(factory?.country ?? '');

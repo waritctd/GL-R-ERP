@@ -54,6 +54,10 @@ import { useUnitBasisCatalog } from './unitBasisCatalog.js';
 import { buttonVariants } from '../../components/common/Button.jsx';
 import { cn } from '../../utils/cn.js';
 import { piecesPerSqmFromSqmPerPiece, PRICE_MODE_OPTIONS } from '../quotations/quotationMeta.js';
+import { SearchableCombobox } from '../../components/common/SearchableCombobox.jsx';
+// B6 (GLA-135): reuses the catalog page's own add-factory dialog rather than a second, drifting
+// copy of the same five fields + validation — see ImportFactoryPicker's own comment below.
+import { FactoryFormModal } from '../catalog/PriceImportPage.jsx';
 
 // V152 (V109 engine wiring), owner ruling 2026-08-16: the CEO's per-item duty product_type
 // override (LandedCostCalculator defaults every item to TILE — see PricingFormulaEngine's own
@@ -361,6 +365,77 @@ function groupFactoryQuotesByFactory(factoryQuotes) {
 // silently losing data off the edge (see Layout.jsx's own Panel comment on why that clip is
 // scroll, not hidden).
 const FACTORY_ITEM_GRID = 'md:grid-cols-[minmax(150px,1.6fr)_minmax(120px,1.1fr)_100px_170px_150px] md:min-w-[720px]';
+
+/**
+ * Import's factory-routing control for ONE blank line (rendered only when `canSetItemFactory &&
+ * !factoryName` — see the item-card call site). B6 (GLA-135, owner ruling): a typed factory name
+ * that did not exactly match a `price_catalog.factories` master row used to save with
+ * `resolved_factory_id` NULL, dead-ending the downstream factory-email + CEO landed-cost lookups
+ * that key on it — the reported "brand-new factory → factory config error". Sales/import now pick
+ * from EXISTING factories only, via {@link SearchableCombobox} over the real master list
+ * (`factories`, from `GET /api/price-import/factories`) rather than a free-text `<input>`.
+ *
+ * Import (the only role that reaches this control) may still add a genuinely new factory
+ * IN-FLOW — the owner ruling is that import/CEO are the ones who may add one, not that this page
+ * can never need one it doesn't already have — via the "เพิ่มโรงงานใหม่" affordance, which reuses
+ * {@link FactoryFormModal} (the catalog PriceImportPage's own add/edit form: name, country,
+ * countryOther, currency, unit, email) rather than a second, drifting copy of the same fields and
+ * validation. `Modal` is `position: fixed` + focus-trapped (see Modal.jsx), so this dialog is
+ * fully reachable regardless of the item card's own layout — never a clipped absolute dropdown.
+ */
+function ImportFactoryPicker({
+  itemId, factories, countries, loading, loadFailed, value, onChangeValue, onSave, saving, onFactoryAdded,
+}) {
+  const [addOpen, setAddOpen] = useState(false);
+  const options = useMemo(
+    () => factories.map((f) => ({ code: String(f.factoryId), nameTh: f.name })),
+    [factories],
+  );
+  return (
+    <>
+      <SafeForm className="mt-2 flex flex-wrap items-end gap-2" onSubmit={onSave}>
+        <div className="w-[min(320px,100%)]">
+          <FormField label="ระบุโรงงาน" htmlFor={`pcr-item-factory-${itemId}`}>
+            <SearchableCombobox
+              id={`pcr-item-factory-${itemId}`}
+              label="โรงงาน"
+              value={value}
+              options={options}
+              loading={loading}
+              disabled={saving}
+              placeholder={loading ? 'กำลังโหลดรายชื่อโรงงาน…' : 'พิมพ์ค้นหาโรงงาน…'}
+              onChange={onChangeValue}
+            />
+          </FormField>
+          {/* Distinguishes "the fetch failed" from "the roster really is empty" — SearchableCombobox's
+              own empty state (ไม่พบข้อมูล) reads as the latter, which would be a misleading dead end
+              for the one control that unblocks the whole request. */}
+          {loadFailed ? (
+            <p className="m-0 mt-1 text-xs font-bold text-danger">โหลดรายชื่อโรงงานไม่สำเร็จ — ลองรีเฟรชหน้านี้</p>
+          ) : null}
+        </div>
+        <Button type="submit" variant="secondary" disabled={saving || !value}>
+          บันทึกโรงงาน
+        </Button>
+        <Button type="button" variant="text" onClick={() => setAddOpen(true)} disabled={saving}>
+          <Icon name="plus" size={13} />
+          เพิ่มโรงงานใหม่
+        </Button>
+      </SafeForm>
+      {addOpen ? (
+        <FactoryFormModal
+          factory={null}
+          countries={countries}
+          onClose={() => setAddOpen(false)}
+          onSaved={(saved) => {
+            onFactoryAdded(saved);
+            setAddOpen(false);
+          }}
+        />
+      ) : null}
+    </>
+  );
+}
 
 /**
  * The factory-quote email composer, relocated into a modal behind each factory group's header
@@ -737,6 +812,24 @@ export function PricingRequestDetailPage({ user, showToast }) {
     enabled: Number.isFinite(pricingRequestId) && canSeeRaw(user),
   });
 
+  // B6 (GLA-135): the factory master list + country roster feeding ImportFactoryPicker below.
+  // Gated on the ROLE alone (isImport(user), no summary/status dependency) rather than the fuller
+  // canSetItemFactory (computed further down, after `summary` resolves) — an import user should
+  // not wait on the detail fetch before this starts, and the picker itself is never rendered for
+  // anyone else regardless. `countries()` is read-widened to import already (PriceImportService).
+  const factoriesQuery = useQuery({
+    queryKey: queryKeys.priceImportFactories(),
+    queryFn: () => api.priceImport.factories(),
+    enabled: isImport(user),
+    staleTime: 60 * 1000,
+  });
+  const countriesQuery = useQuery({
+    queryKey: queryKeys.priceImportCountries(),
+    queryFn: () => api.priceImport.countries(),
+    enabled: isImport(user),
+    staleTime: 5 * 60 * 1000,
+  });
+
   // The สกุลเงิน select on the ราคาโรงงาน per-factory control row (owner-supplied mockup,
   // 2026-08-16): options come from the real FX rate table Import/CEO already read elsewhere
   // (CeoSettingsPage's own fxRates query, same queryKeys.fxRates()/api.fxRates.list()), not a
@@ -872,8 +965,10 @@ export function PricingRequestDetailPage({ user, showToast }) {
     });
   }
 
+  // B6 (GLA-135): payload is now { factoryId } — a real price_catalog.factories row's id, picked
+  // from ImportFactoryPicker's SearchableCombobox — not a free-typed name.
   const setItemFactory = useActionMutation(
-    ({ itemId, factory }) => api.pricingRequests.setItemFactory(pricingRequestId, itemId, { factory }),
+    ({ itemId, factoryId }) => api.pricingRequests.setItemFactory(pricingRequestId, itemId, { factoryId }),
     'บันทึกโรงงานแล้ว',
   );
   // รับเรื่อง (pickup) from the request page itself — a SUBMITTED request landed here (e.g. from a
@@ -1314,8 +1409,10 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const request = detailQuery.data;
   const summary = request?.summary;
   const status = pricingRequestStatusLabel(summary?.status);
-  // itemId -> the factory name Import is typing for that line. Same shape as `responseDrafts`
-  // above: a key exists only once a change handler has written to it.
+  // itemId -> the factoryId Import has picked (as a string, matching SearchableCombobox's own
+  // `code` convention) for that line. B6 (GLA-135): this used to hold the free-typed factory
+  // NAME; it holds an id now, resolved server-side to the canonical master name on save. Same
+  // shape as `responseDrafts` above: a key exists only once a change handler has written to it.
   const [factoryDrafts, setFactoryDrafts] = useState({});
   // pricingRequestItemId -> the sales-side item it came from. Feeds both defaultResponseItems'
   // autofill and the read-only "what Sales asked for" echo on each response row. Declared here
@@ -1637,7 +1734,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
               {`ยังไม่ได้ระบุโรงงาน ${missingFactoryItems.length} รายการ — ระบบจะสร้างร่างอีเมลให้เฉพาะรายการที่ระบุโรงงานแล้ว ส่วนรายการต่อไปนี้ต้องระบุโรงงานก่อนจึงจะขอราคาได้: `}
               {missingFactoryItems.map((entry) => `รายการที่ ${entry.position} (${itemDisplayName(entry.item)})`).join(', ')}
               {canSetItemFactory
-                ? ' — กรอกชื่อโรงงานในรายการด้านล่างแล้วกดบันทึก'
+                ? ' — เลือกโรงงานในรายการด้านล่างแล้วกดบันทึก'
                 : ' — ฝ่ายนำเข้าเป็นผู้ระบุโรงงานให้ในขั้นตอนนี้'}
             </p>
           ) : null}
@@ -1732,36 +1829,33 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 {/* Import's escape hatch. Only offered on a line that has NO factory: the backend
                     refuses to re-route one that does (a factory quote may already be grouped under
                     that name), so offering an editable value here would promise something the
-                    service would 409. */}
+                    service would 409.
+                    B6 (GLA-135): a picker over the real factory master list, not a free-text
+                    input — see ImportFactoryPicker's own comment for why. */}
                 {canSetItemFactory && !factoryName ? (
-                  <SafeForm
-                    className="mt-2 flex flex-wrap items-end gap-2"
-                    onSubmit={() => setItemFactory.mutate(
-                      { itemId: item.id, factory: (factoryDrafts[item.id] ?? '').trim() },
+                  <ImportFactoryPicker
+                    itemId={item.id}
+                    factories={factoriesQuery.data ?? []}
+                    countries={countriesQuery.data ?? []}
+                    loading={factoriesQuery.isLoading}
+                    loadFailed={factoriesQuery.isError}
+                    value={factoryDrafts[item.id] ?? ''}
+                    onChangeValue={(code) => setFactoryDrafts((current) => ({ ...current, [item.id]: code }))}
+                    saving={setItemFactory.isPending}
+                    onSave={() => setItemFactory.mutate(
+                      { itemId: item.id, factoryId: Number(factoryDrafts[item.id]) },
                       { onSuccess: () => setFactoryDrafts((current) => {
                         const next = { ...current };
                         delete next[item.id];
                         return next;
                       }) },
                     )}
-                  >
-                    <FormField label="ระบุโรงงาน" htmlFor={`pcr-item-factory-${item.id}`}>
-                      <input
-                        id={`pcr-item-factory-${item.id}`}
-                        value={factoryDrafts[item.id] ?? ''}
-                        maxLength={255}
-                        placeholder="ชื่อโรงงานที่จะขอราคา"
-                        onChange={(event) => setFactoryDrafts((current) => ({ ...current, [item.id]: event.target.value }))}
-                      />
-                    </FormField>
-                    <Button
-                      type="submit"
-                      variant="secondary"
-                      disabled={setItemFactory.isPending || !(factoryDrafts[item.id] ?? '').trim()}
-                    >
-                      บันทึกโรงงาน
-                    </Button>
-                  </SafeForm>
+                    onFactoryAdded={(saved) => {
+                      queryClient.invalidateQueries({ queryKey: queryKeys.priceImportFactories() });
+                      setFactoryDrafts((current) => ({ ...current, [item.id]: String(saved.factoryId) }));
+                      showToast?.('success', `เพิ่มโรงงาน "${saved.name}" แล้ว`);
+                    }}
+                  />
                 ) : null}
               </div>
             );
