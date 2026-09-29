@@ -1,3 +1,8 @@
+/* Hallmark · genre: modern-minimal · macrostructure: Workbench · design-system: design.md · designed-as-app
+ * conformance-pass: radius normalized to the §8 scale (card/panel surfaces → --radius-md;
+ * rounded-lg/xl/[6px] were off the sm/md/lg/pill scale — "20px is reserved, not a default").
+ * No logic, data, permission, or layout-metric changes. See DESIGN.md §8 (shape) / §20 (anti-patterns).
+ */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -1456,7 +1461,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         data-testid="ticket-detail-sticky-chrome"
         className="sticky top-[calc(var(--deal-scroll-pad-y)*-1)] z-10 bg-surface pt-[var(--deal-scroll-pad-y)] mobile:static mobile:bg-transparent mobile:pt-0"
       >
-        <div className="overflow-hidden rounded-lg border border-border bg-surface mobile:overflow-visible mobile:border-0 mobile:bg-transparent">
+        <div className="overflow-hidden rounded-md border border-border bg-surface mobile:overflow-visible mobile:border-0 mobile:bg-transparent">
           <DealStateHeader
             summary={summary}
             pricingRequests={pricingRequests}
@@ -1573,7 +1578,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               the now-deleted TicketContextPanel.jsx sticky rail — same fields,
               same labels, same assignedImport role-scoped readout. */}
           <div className="grid gap-4 sm:grid-cols-2">
-            <section className="rounded-lg border border-border bg-surface p-4">
+            <section className="rounded-md border border-border bg-surface p-4">
               <ContextSection title="วันสำคัญ" helper="Key dates" icon="calendar">
                 <dl className="m-0">
                   <FieldRow label="ติดตามครั้งถัดไป" value={formatThaiDate(summary.nextFollowUpAt)} />
@@ -1584,7 +1589,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                 </dl>
               </ContextSection>
             </section>
-            <section className="rounded-lg border border-border bg-surface p-4">
+            <section className="rounded-md border border-border bg-surface p-4">
               <ContextSection title="ผู้เกี่ยวข้อง" helper="ทีมที่เกี่ยวข้อง" icon="users">
                 <dl className="m-0">
                   <FieldRow label="เจ้าของดีล" value={summary.createdByName} />
@@ -1808,7 +1813,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                           </label>
                           <div className="m-0">
                             <span className="mb-1 block text-xs">พื้นที่รวม (ตร.ม.)</span>
-                            <div className={cn('rounded-[6px] border border-border-subtle bg-surface-muted px-2.5 py-[7px] text-sm', item.qtySqm ? 'text-icon-muted' : 'text-text-muted')}>
+                            <div className={cn('rounded-md border border-border-subtle bg-surface-muted px-2.5 py-[7px] text-sm', item.qtySqm ? 'text-icon-muted' : 'text-text-muted')}>
                               {item.qtySqm ? `${Number(item.qtySqm).toFixed(3)} ตร.ม.` : '—'}
                             </div>
                           </div>
@@ -1845,7 +1850,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                           </label>
                           <div className="m-0">
                             <span className="mb-1 block text-xs">จำนวน (แผ่น)</span>
-                            <div className={cn('rounded-[6px] border border-border-subtle bg-surface-muted px-2.5 py-[7px] text-sm', item.qty ? 'text-icon-muted' : 'text-text-muted')}>
+                            <div className={cn('rounded-md border border-border-subtle bg-surface-muted px-2.5 py-[7px] text-sm', item.qty ? 'text-icon-muted' : 'text-text-muted')}>
                               {item.qty ? `${item.qty} แผ่น` : '—'}
                             </div>
                           </div>
@@ -2036,7 +2041,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               <>
                 {fromPricingChain ? (
                   <div className="p-[14px_18px_0]">
-                    <div className="flex items-start gap-2 rounded-lg border border-info-border bg-info-bg px-3 py-2.5 text-xs text-info-dark" data-testid="items-pricing-chain-banner">
+                    <div className="flex items-start gap-2 rounded-md border border-info-border bg-info-bg px-3 py-2.5 text-xs text-info-dark" data-testid="items-pricing-chain-banner">
                       <Icon name="info" size={15} className="mt-0.5 shrink-0" />
                       <span>รายการจากใบเสนอราคา — จะยืนยันเป็นรายการจริงเมื่อยืนยันคำสั่งซื้อ (แก้ไขได้ที่คำขอราคา/ใบเสนอราคา)</span>
                     </div>
@@ -2146,7 +2151,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                 table. */}
             {st === 'draft' && isOwner && items.length === 0 && (
               <div className="p-[0_18px_16px]">
-                <span className="rounded-lg border border-border bg-surface-subtle px-3 py-2 text-xs text-text-muted">
+                <span className="rounded-md border border-border bg-surface-subtle px-3 py-2 text-xs text-text-muted">
                   ดีลนี้ยังไม่มีรายการสินค้า — กด “แก้ไขรายการสินค้า” เพื่อเพิ่มก่อนส่งขอราคา
                 </span>
               </div>
@@ -2409,7 +2414,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           modals), only demoted from sitting inline among the day-to-day
           pipeline controls. */}
       {(canLostDeal || can.cancel) ? (
-        <section className="rounded-xl border border-danger-border bg-danger-bg p-4 sm:p-5" aria-labelledby="deal-danger-zone-heading">
+        <section className="rounded-md border border-danger-border bg-danger-bg p-4 sm:p-5" aria-labelledby="deal-danger-zone-heading">
           <h2 id="deal-danger-zone-heading" className="m-0 text-sm font-extrabold text-danger-dark">จัดการดีล</h2>
           <p className="mt-1 text-xs text-danger-dark">การดำเนินการเหล่านี้ส่งผลต่อทั้งดีล และบางรายการย้อนกลับไม่ได้ — ใช้เมื่อจำเป็นเท่านั้น</p>
           <div className="mt-3 flex flex-wrap gap-2">
