@@ -162,7 +162,23 @@ public class TicketService {
     }
 
     public TicketDto get(long id, UserPrincipal actor) {
-        return requireViewAccess(id, actor);
+        TicketDto ticket = requireViewAccess(id, actor);
+        // B5 fix: display-only fallback, scoped to THIS single read endpoint on purpose. Every
+        // other reader of ticket.items() (actions()'s canReserveStock/canRecordDelivery/
+        // hasRemainingDelivery, editItems' merge-by-position, commission/delivery calculations,
+        // ...) must keep seeing the real (possibly empty) sales.ticket_item rows -- those all
+        // read qtyDelivered/qtyFromStock and stage/action gates that a borrowed quotation line
+        // knows nothing about, so folding this into requireViewAccess or TicketRepository#findById
+        // would leak fallback items into action-availability and edit-merge logic that assumes
+        // ticket-native rows. See TicketDto#fromPricingChain's own Javadoc.
+        if (ticket.items().isEmpty()) {
+            List<TicketItemDto> fallback = tickets.findPricingChainFallbackItems(id);
+            if (!fallback.isEmpty()) {
+                return new TicketDto(ticket.summary(), fallback, ticket.events(),
+                    ticket.quotation(), ticket.quotations(), true);
+            }
+        }
+        return ticket;
     }
 
     public List<PaymentReceiptDto> listPayments(long ticketId, UserPrincipal actor) {

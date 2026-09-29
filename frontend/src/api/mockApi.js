@@ -1355,6 +1355,85 @@ function mockPickTicketQuotationForDepositNotice(ticketId) {
   return latestAccepted ?? latestIssued ?? null;
 }
 
+// B5 fix ("รายการสินค้า shows 0 รายการ while a deal is still in the pricing/quotation phase"):
+// mirrors TicketRepository#findPricingChainFallbackItems (real backend) -- when a deal's
+// ticket_item is still empty (pre-order-confirmation), tickets.get()'s items grid falls back to
+// the deal's live PRICING_REQUEST/DEAL_DIRECT quotation line items, read-only. Checks BOTH mock
+// arrays explicitly -- see mockHasAcceptedQuotationForTicket's own comment just above on why the
+// mock keeps these origins in separate arrays (mockCustomerQuotations / mockDealQuotations)
+// where the real backend has one shared sales.quotation table.
+const MOCK_ITEM_FALLBACK_STATUS_RANK = { ACCEPTED: 0, ISSUED: 1, APPROVED: 2 };
+
+function mockPickLiveQuotationForItemFallback(ticketId) {
+  const candidates = [];
+  for (const q of mockCustomerQuotations) {
+    if (q.ticketId !== ticketId) continue;
+    const rank = MOCK_ITEM_FALLBACK_STATUS_RANK[q.docStatus];
+    if (rank == null) continue;
+    candidates.push({ origin: 'PRICING_REQUEST', rank, id: q.id, quotation: q });
+  }
+  for (const q of mockDealQuotations) {
+    if (q.ticketId !== ticketId) continue;
+    const rank = MOCK_ITEM_FALLBACK_STATUS_RANK[q.docStatus];
+    if (rank == null) continue;
+    candidates.push({ origin: q.origin || 'DEAL_DIRECT', rank, id: q.id, quotation: q });
+  }
+  if (candidates.length === 0) return null;
+  // ACCEPTED beats ISSUED beats APPROVED (rank ascending); most recent id wins a tie -- same
+  // priority findDealQuotationItemsForDeposit's CASE doc_status / ORDER BY quotation_id DESC
+  // encodes server-side.
+  candidates.sort((a, b) => (a.rank - b.rank) || (b.id - a.id));
+  return candidates[0];
+}
+
+// TicketItemDto's full read shape (see TicketRepository#findPricingChainFallbackItems on the
+// backend) with every pricing-approval-history field at its "not a real ticket_item row"
+// default -- these lines are borrowed from a quotation, not something CEO/import approved on
+// THIS ticket.
+function mockPricingChainFallbackItemShape({ id, brand, model, color, texture, size, qty, sortOrder }) {
+  return {
+    id, brand: brand ?? null, model: model ?? null, color: color ?? null, texture: texture ?? null,
+    size: size ?? null, factory: null,
+    qty: qty ?? null, qtySqm: null, rawPrice: null, rawCurrency: null, rawUnit: null,
+    proposedPrice: null, approvedPrice: null, currency: null, sortOrder,
+    calcedCost: null, calcedPrice: null, calcConfigVersion: null, unitBasis: null,
+    manualPrice: null, manualOverrideReason: null,
+    qtyDelivered: null, qtyFromStock: null, stockNote: null,
+    catalogPriceId: null, catalogProductCode: null,
+    source: 'custom', catalogPrice: null, catalogCurrency: null, catalogPriceUnit: null,
+    sqmPerPiece: null, weightMultiplier: 1, sourcedFromStock: false, stockSalePrice: null,
+  };
+}
+
+function mockPricingChainFallbackItems(ticketId) {
+  const picked = mockPickLiveQuotationForItemFallback(ticketId);
+  if (!picked) return [];
+  if (picked.origin === 'PRICING_REQUEST') {
+    // mockCustomerQuotations items carry no brand/model/color/texture/size of their own (only
+    // description/requestedQuantity/requestedUnitBasis) -- resolve via the linked
+    // pricingRequestItemId, mirroring buildDealQuotationDto's removedCeoItems lookup above.
+    const pr = mockPricingRequests.find((p) => p.id === picked.quotation.pricingRequestId);
+    const priById = new Map((pr?.items ?? []).map((i) => [i.id, i]));
+    return (picked.quotation.items ?? []).map((it, idx) => {
+      const pri = priById.get(it.pricingRequestItemId) ?? {};
+      return mockPricingChainFallbackItemShape({
+        id: it.id, brand: pri.brand, model: pri.model, color: pri.color,
+        texture: pri.texture, size: pri.size,
+        qty: it.requestedQuantity, sortOrder: it.seq ?? idx + 1,
+      });
+    });
+  }
+  // mockDealQuotations shape (either origin, v2 unified editor): brand/model/color/texture/
+  // sizeText/quantity/unit are spread straight from the line's own input by
+  // computeDealQuotationLine/computeDealQuotationV3Line -- mirrors
+  // DealQuotationRepository's own legacy-column writes (brand/model/color/texture/size/qty).
+  return (picked.quotation.items ?? []).map((it, idx) => mockPricingChainFallbackItemShape({
+    id: it.id, brand: it.brand, model: it.model, color: it.color,
+    texture: it.texture, size: it.sizeText ?? it.size,
+    qty: it.quantity, sortOrder: it.seq ?? idx + 1,
+  }));
+}
+
 // Branch fix: mirrors DepositNoticeService.createDraft's header autofill — customerTaxId/
 // customerAddress/projectName were never populated for a deal created through the pricing-
 // request chain. A caller-supplied non-blank value always wins; ticket.customerId == null
@@ -7040,7 +7119,19 @@ export const api = {
       const ticket = structuredClone(db.tickets.find((t) => t.id === Number(id)));
       if (!ticket) fail('ไม่พบดีลนี้', 404);
       if (user.role === 'sales' && ticket.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      return delay({ ticket: projectTicketDetailForRole(buildTicketDetail(ticket), user.role) });
+      const detail = projectTicketDetailForRole(buildTicketDetail(ticket), user.role);
+      // B5 fix: read-path-only fallback (mirrors TicketService#get on the backend) -- every
+      // OTHER mock mutation that returns buildTicketDetail(ticket) directly (recordPayment,
+      // reserveStock, editItems, ...) must keep seeing the real (possibly empty) items array,
+      // so this stays local to get() rather than moving into buildTicketDetail itself. See
+      // mockPricingChainFallbackItems's own comment.
+      if (detail.items.length === 0) {
+        const fallbackItems = mockPricingChainFallbackItems(Number(id));
+        if (fallbackItems.length > 0) {
+          return delay({ ticket: { ...detail, items: fallbackItems, fromPricingChain: true } });
+        }
+      }
+      return delay({ ticket: detail });
     },
 
     async listPayments(id) {

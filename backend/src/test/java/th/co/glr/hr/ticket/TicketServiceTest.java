@@ -169,6 +169,55 @@ class TicketServiceTest {
         assertThat(seen.quotations()).containsExactly(quotation);
     }
 
+    // ── B5 fix: read-path fallback to the deal's live quotation items when
+    //    sales.ticket_item is still empty (pre-order-confirmation) ──────────
+
+    @Test
+    void get_fallsBackToQuotationItemsWhenTicketItemIsEmpty() {
+        TicketDto ticket = stubTicket(10L, 1L, TicketStatus.QUOTATION_ISSUED); // items: List.of()
+        TicketItemDto fallbackItem = new TicketItemDto(9001L, 10L, "SCG", "A1", "ขาว", "ด้าน",
+            "60x60", null, new BigDecimal("20"), null, null, null, "sqm",
+            null, null, null, 0, null, null, null, null, null, null);
+        when(ticketRepo.findPricingChainFallbackItems(10L)).thenReturn(List.of(fallbackItem));
+
+        TicketDto seen = service.get(10L, salesActor);
+
+        assertThat(seen.items()).containsExactly(fallbackItem);
+        assertThat(seen.fromPricingChain()).isTrue();
+        // Nothing else about the ticket changes — same summary/events/quotation(s) object,
+        // only `items`/`fromPricingChain` are swapped for the display fallback.
+        assertThat(seen.summary()).isEqualTo(ticket.summary());
+    }
+
+    @Test
+    void get_doesNotFallBackWhenTicketItemAlreadyHasRows() {
+        TicketItemDto realItem = new TicketItemDto(1L, 10L, "Existing", "Model", null, null,
+            null, null, new BigDecimal("5"), null, null, null, null, null,
+            null, "THB", 0, null, null, null, "PIECE", null, null);
+        stubTicketWithItems(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(realItem));
+
+        TicketDto seen = service.get(10L, salesActor);
+
+        assertThat(seen.items()).containsExactly(realItem);
+        assertThat(seen.fromPricingChain()).isFalse();
+        // The fallback lookup is a read-path-only concern gated on an empty items list — a
+        // ticket that already has real ticket_item rows must never even ask the quotation
+        // chain (mirrors "wrong-way-round" discipline: prove the fallback path is NOT taken,
+        // not just that the happy path renders correctly).
+        verify(ticketRepo, org.mockito.Mockito.never()).findPricingChainFallbackItems(anyLong());
+    }
+
+    @Test
+    void get_staysEmptyWhenNeitherTicketItemNorAnyQuotationExists() {
+        stubTicket(10L, 1L, TicketStatus.DRAFT); // items: List.of()
+        when(ticketRepo.findPricingChainFallbackItems(10L)).thenReturn(List.of());
+
+        TicketDto seen = service.get(10L, salesActor);
+
+        assertThat(seen.items()).isEmpty();
+        assertThat(seen.fromPricingChain()).isFalse();
+    }
+
     @Test
     void comment_importSeesTicketButQuotationIsProjectedOut() {
         QuotationDto quotation = quotationOf(1L, 10L, "QT-2026-0001");

@@ -211,6 +211,9 @@ function buildTicket(overrides = {}) {
       { id: 1, kind: 'SUBMITTED', actorName: 'สมชาย ใจดี', createdAt: '2026-07-01T09:00:00.000Z' },
     ],
     quotations: overrides.quotations ?? [],
+    // B5 fix: read-only fallback-to-quotation-items flag (TicketDto#fromPricingChain on the
+    // backend). Defaults to false/absent, same as every ticket before this fix existed.
+    fromPricingChain: overrides.fromPricingChain ?? false,
   };
 }
 
@@ -499,6 +502,86 @@ describe('TicketDetailPage', () => {
       await screen.findByText('Custom');
       expect(screen.queryByText('ราคาตั้ง')).toBeNull();
       expect(screen.queryByText(/ยังคำนวณไม่ได้/)).toBeNull();
+    });
+  });
+
+  // B5 fix ("รายการสินค้า shows 0 รายการ while a deal is still in the pricing/quotation
+  // phase"): sales.ticket_item stays empty until order confirmation, so a deal still working
+  // its pricing-request/quotation chain has no rows for the items grid — even though its real
+  // items already exist on the deal's quotation. The backend now falls back to those items
+  // (TicketDto#fromPricingChain) when ticket_item is empty; this describes the frontend's
+  // read-only rendering of that fallback.
+  describe('items grid: read-only fallback to pricing-chain quotation items (B5 fix)', () => {
+    it('shows the fallback quotation items read-only, with the banner, and hides the edit button', async () => {
+      api.tickets.get.mockResolvedValueOnce({
+        ticket: buildTicket({
+          summary: { status: 'submitted', createdById: 1 },
+          items: [
+            { id: 90001, brand: 'SCG', model: 'Elegance', color: 'ขาว', texture: 'ด้าน', size: '60x60', qty: 20, qtyDelivered: 0, qtyFromStock: 0, proposedPrice: null, approvedPrice: null },
+          ],
+          fromPricingChain: true,
+        }),
+      });
+      api.tickets.actions.mockResolvedValueOnce({
+        currentState: {
+          lifecycle: 'ACTIVE', salesStage: 'LEAD', paymentStatus: null, fulfillmentStatus: null, status: 'submitted',
+        },
+        availableActions: [{ action: 'EDIT_ITEMS', kind: 'operational', label: 'แก้ไขรายการสินค้า' }],
+      });
+
+      renderTicketDetailPage(salesOwnerUser);
+      await openTab(/สินค้าและราคา/);
+
+      // The borrowed line renders, read-only, with the count reflecting it.
+      expect(await screen.findByRole('heading', { level: 2, name: 'รายการสินค้า (1 รายการ)' })).not.toBeNull();
+      expect(screen.getByText('SCG')).not.toBeNull();
+      expect(screen.getByText('Elegance')).not.toBeNull();
+
+      // The banner is present...
+      expect(screen.getByTestId('items-pricing-chain-banner')).not.toBeNull();
+      expect(screen.getByText(/รายการจากใบเสนอราคา/)).not.toBeNull();
+      // ...and the edit affordance (the only entry point to edit mode / the add-item control)
+      // is gone, even though the actions() response advertises EDIT_ITEMS and the role/status/
+      // ownership gate would otherwise allow it — proves the fallback-specific guard, not just
+      // the pre-existing role gate.
+      expect(screen.queryByRole('button', { name: 'แก้ไขรายการสินค้า' })).toBeNull();
+    });
+
+    it('a deal WITH real ticket_item rows stays fully editable, with no banner', async () => {
+      api.tickets.get.mockResolvedValueOnce({
+        ticket: buildTicket({
+          summary: { status: 'submitted', createdById: 1 },
+          items: [
+            { id: 70101, brand: 'SCG', model: 'A1', size: '60x60', qty: 10, qtyDelivered: 0, qtyFromStock: 0, proposedPrice: null, approvedPrice: null },
+          ],
+          fromPricingChain: false,
+        }),
+      });
+      api.tickets.actions.mockResolvedValueOnce({
+        currentState: {
+          lifecycle: 'ACTIVE', salesStage: 'LEAD', paymentStatus: null, fulfillmentStatus: null, status: 'submitted',
+        },
+        availableActions: [{ action: 'EDIT_ITEMS', kind: 'operational', label: 'แก้ไขรายการสินค้า' }],
+      });
+
+      renderTicketDetailPage(salesOwnerUser);
+      await openTab(/สินค้าและราคา/);
+
+      expect(await screen.findByRole('button', { name: 'แก้ไขรายการสินค้า' })).not.toBeNull();
+      expect(screen.queryByTestId('items-pricing-chain-banner')).toBeNull();
+    });
+
+    it('a deal with neither ticket_item nor a fallback keeps the existing empty state', async () => {
+      api.tickets.get.mockResolvedValueOnce({
+        ticket: buildTicket({ items: [], fromPricingChain: false }),
+      });
+
+      renderTicketDetailPage(salesOwnerUser);
+      await openTab(/สินค้าและราคา/);
+
+      expect(await screen.findByRole('heading', { level: 2, name: 'รายการสินค้า (0 รายการ)' })).not.toBeNull();
+      expect(screen.getByText('ไม่มีรายการสินค้า')).not.toBeNull();
+      expect(screen.queryByTestId('items-pricing-chain-banner')).toBeNull();
     });
   });
 
