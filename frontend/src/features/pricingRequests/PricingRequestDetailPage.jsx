@@ -1076,6 +1076,12 @@ export function PricingRequestDetailPage({ user, showToast }) {
         clearSpecialPriceSqm: Boolean(clears.clearSpecialPriceSqm),
         directNetPrice: clears.clearDirectNetPrice ? null : cleanNumber(draft.directNetPrice),
         clearDirectNetPrice: Boolean(clears.clearDirectNetPrice),
+        // QA fix (2026-09-28): the backend's UpdatePricingDecisionItemRequest declares
+        // clearSellingPriceOverride as a primitive boolean. Omitting it here fails Jackson
+        // deserialization and the whole request 400s with a bare "คำขอไม่ถูกต้อง" -- every
+        // price-mode save on this page was broken. sellingPriceOverride itself stays untouched
+        // (this mutation never sets/clears it), so false ("no change") is always correct.
+        clearSellingPriceOverride: false,
       }],
     }),
     'บันทึกราคาแล้ว',

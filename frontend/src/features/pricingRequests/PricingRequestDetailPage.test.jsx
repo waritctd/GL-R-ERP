@@ -2367,6 +2367,7 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
             clearSpecialPriceSqm: false,
             directNetPrice: null,
             clearDirectNetPrice: false,
+            clearSellingPriceOverride: false,
           }],
         },
       ));
@@ -2400,6 +2401,7 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
             clearSpecialPriceSqm: false,
             directNetPrice: null,
             clearDirectNetPrice: false,
+            clearSellingPriceOverride: false,
           }],
         },
       ));

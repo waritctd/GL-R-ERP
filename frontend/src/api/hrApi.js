@@ -732,9 +732,17 @@ export const api = {
       formData.append('withholdingTax', String(payload.withholdingTax ?? 0));
       formData.append('overpayment', String(payload.overpayment ?? 0));
       if (payload.invoiceAttachment) formData.append('invoiceAttachment', payload.invoiceAttachment);
+      // Hand-rolled multipart fetch() must attach X-XSRF-TOKEN itself — apiRequest() does it for
+      // JSON calls, but this bypasses it for the file upload. Omitting it makes CsrfCookieFilter
+      // reject POST /api/commissions/from-deal with 403 "Invalid CSRF token". Same block as
+      // priceImport.upload below (see the leave-submit regression note at the top of this file).
+      const csrfToken = document.cookie.split('; ')
+        .find((c) => c.startsWith('XSRF-TOKEN='))
+        ?.split('=')[1];
       const res = await fetch(API_ROUTES.commissions.createFromDeal, {
         method: 'POST',
         credentials: 'include',
+        headers: csrfToken ? { 'X-XSRF-TOKEN': csrfToken } : {},
         body: formData,
       });
       if (!res.ok) {
