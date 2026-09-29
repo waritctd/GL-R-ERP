@@ -400,6 +400,16 @@ public class OrderConfirmationService {
      * itself, and leaves the header fields {@code null} for {@code createDraft} to autofill from
      * the ticket's own customer/project, same as the ticket-level route) — see {@code
      * DepositNoticeService.createDraft}'s own comments for what changed and why.
+     *
+     * <p><strong>Deposit percent (owner ruling, 2026-09-29):</strong> {@code
+     * request.depositPercent()} below is passed through but {@link
+     * DepositNoticeService#createDraft} now IGNORES it unconditionally and re-derives the percent
+     * itself from {@code accepted}'s own {@code sales.quotation.deposit_percent} via {@code
+     * DepositNoticeRepository#findDealQuotationDepositPercent(ticketId)} — this call site needs no
+     * separate fix because it already funnels through that one shared method. Left the field on
+     * {@link CreateDepositNoticeFromQuotationRequest} itself unremoved (an older frontend build
+     * may still send it) rather than making it a breaking DTO change for a value that is now a
+     * no-op either way.
      */
     @Transactional
     public DepositNoticeDto createDepositNoticeFromQuotation(long pricingRequestId,
@@ -418,6 +428,8 @@ public class OrderConfirmationService {
         // class's own new-chain item fallback in buildItemsFromRequest — see its Javadoc.
         List<DepositNoticeItemRequest> items = DepositNoticeService.itemsFromQuotation(accepted.items());
 
+        // request.depositPercent() is deliberately still passed through here even though
+        // createDraft now ignores it as the source — see this method's own Javadoc above.
         DepositNoticeDraftRequest draftRequest = new DepositNoticeDraftRequest(
             null, null, null, null, accepted.number(),
             request != null ? request.depositPercent() : null, null, items);

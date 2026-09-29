@@ -118,11 +118,25 @@ public class DepositNoticeService {
         // address/tax id differently.
         CustomerHeaderInfo header = resolveCustomerHeader(s, req.customerTaxId(), req.customerAddress(), req.projectName());
 
+        // Owner ruling (2026-09-29, sales business-logic change, authorised per CLAUDE.md's
+        // "deposit-notice flow is UNFROZEN"): the deposit PERCENT is LOCKED to the source
+        // quotation's own sales.quotation.deposit_percent — the value sales set when creating the
+        // quotation — and is never editable at the deposit-notice stage. A caller-supplied
+        // req.depositPercent() is deliberately IGNORED as the source here (the quotation always
+        // wins); DepositNoticeDraftRequest still carries the field only because it round-trips
+        // through the DTO the frontend/OrderConfirmationService already send. Falls back to the
+        // document's long-standing 0.50 default only when the ticket has no live quotation to
+        // read a percent from at all (e.g. a manually-approved legacy ticket with no quotation
+        // chain) — see DepositNoticeRepository#findDealQuotationDepositPercent's own Javadoc for
+        // the full pick order.
+        BigDecimal effectiveDepositPercent = docs.findDealQuotationDepositPercent(ticketId)
+            .orElse(new BigDecimal("0.50"));
+
         var effective = new DepositNoticeDraftRequest(
             req.customerName() != null ? req.customerName() : s.customerName(),
             header.taxId(), header.address(),
             header.projectName(), req.reference(),
-            req.depositPercent() != null ? req.depositPercent() : new BigDecimal("0.50"),
+            effectiveDepositPercent,
             notes, items
         );
 
@@ -134,7 +148,18 @@ public class DepositNoticeService {
     public DepositNoticeDto update(long docId, DepositNoticeDraftRequest req, UserPrincipal actor) {
         DepositNoticeDto doc = requireDraft(docId);
         requireTicketOwner(doc.ticketId(), actor);
-        docs.update(docId, req);
+        // Same owner ruling as createDraft above: the deposit percent is locked to the quotation
+        // at draft-creation time and must NEVER change on update. The frontend no longer offers a
+        // control for it, but a client (or a stale/forged request) sending a different value must
+        // not be trusted either — override whatever req carries with the draft's own already-
+        // stored depositPercent() before persisting.
+        var effective = new DepositNoticeDraftRequest(
+            req.customerName(), req.customerTaxId(), req.customerAddress(),
+            req.projectName(), req.reference(),
+            doc.depositPercent(),
+            req.notes(), req.items()
+        );
+        docs.update(docId, effective);
         return docs.findById(docId).orElseThrow();
     }
 
