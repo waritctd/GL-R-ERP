@@ -1818,6 +1818,106 @@ describe('TicketDetailPage', () => {
     });
   });
 
+  // Deal-page discoverability fix: a PR sitting at QUOTATION_ISSUED used to fall through
+  // salesActions.js's cascade all the way to follow-up/log-activity — the sticky CTA never told the
+  // owning rep the customer's accept/reject/revision decision was waiting to be recorded, even
+  // though the controls already existed on DealQuotationPanel. Unlike ISSUE_QUOTATION/CONFIRM_ORDER
+  // this CTA never fires a mutation itself (the outcome is the rep's own judgment call) — it only
+  // surfaces the existing controls, so these tests assert a scroll (success) or a toast (fallback),
+  // never a mutation call.
+  describe('sticky header primary CTA — RECORD_QUOTATION_OUTCOME surfaces the existing outcome controls', () => {
+    function quotationIssuedTicket() {
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({ summary: { lifecycle: 'ACTIVE', salesStage: 'QUOTE_BUYER', createdById: 1 } }),
+      });
+      api.tickets.actions.mockResolvedValue({
+        currentState: { lifecycle: 'ACTIVE', salesStage: 'QUOTE_BUYER', paymentStatus: null, fulfillmentStatus: null, status: 'quotation_issued' },
+        availableActions: [],
+      });
+      api.pricingRequests.listForTicket.mockResolvedValue({
+        items: [{
+          id: 501, requestCode: 'PCR-2026-0501', ticketId: 701, ticketCreatedById: 1,
+          status: 'QUOTATION_ISSUED', recipientType: 'BUYER', recipientLabel: null, orderConfirmedAt: null,
+        }],
+      });
+    }
+
+    it('renders exactly one "บันทึกผลใบเสนอราคา" sticky primary, and clicking it scrolls the outcome controls into view without firing any mutation', async () => {
+      quotationIssuedTicket();
+      api.pricingRequests.listCustomerQuotations.mockResolvedValue({
+        items: [{ id: 9101, docStatus: 'ISSUED', quotationRevisionNo: 1, grandTotal: 1000 }],
+      });
+
+      // Records WHICH element was scrolled (by its own data-testid), not merely that something was —
+      // same convention as the fulfilment-panel scroll tests below.
+      const scrolledTestIds = [];
+      const original = Element.prototype.scrollIntoView;
+      Element.prototype.scrollIntoView = function scrollIntoViewSpy() {
+        scrolledTestIds.push(this.getAttribute('data-testid'));
+      };
+      try {
+        renderTicketDetailPage(salesOwnerUser);
+
+        const stickyButtons = await screen.findAllByRole('button', { name: /บันทึกผลใบเสนอราคา/ });
+        expect(stickyButtons).toHaveLength(1);
+        expect(stickyButtons[0].getAttribute('data-action')).toBe('record_quotation_outcome');
+
+        // Open "เอกสาร" (DealQuotationPanel's home tab) and wait for its own quotationsQuery to
+        // settle BEFORE clicking, so the click exercises the real "controls are on screen" branch
+        // instead of racing the query — same convention the ISSUE_QUOTATION tests above use.
+        await openTab(/เอกสาร/);
+        await screen.findByTestId('deal-quotation-outcome-controls');
+
+        fireEvent.click(stickyButtons[0]);
+
+        await waitFor(() => expect(scrolledTestIds).toContain('deal-quotation-outcome-controls'));
+        // This CTA only surfaces the existing accept/reject/revision buttons — it never records an
+        // outcome on its own.
+        expect(api.pricingRequests.recordCustomerQuotationOutcome).not.toHaveBeenCalled();
+        expect(screen.getAllByRole('button', { name: /บันทึกผลใบเสนอราคา/ })).toHaveLength(1);
+      } finally {
+        Element.prototype.scrollIntoView = original;
+      }
+    });
+
+    it('shows an error toast instead of scrolling when clicked before the outcome controls have actually mounted (cross-tab race, no retry-queue for this CTA)', async () => {
+      quotationIssuedTicket();
+      api.pricingRequests.listCustomerQuotations.mockResolvedValue({
+        items: [{ id: 9101, docStatus: 'ISSUED', quotationRevisionNo: 1, grandTotal: 1000 }],
+      });
+      const showToast = vi.fn();
+      const scrolledTestIds = [];
+      const original = Element.prototype.scrollIntoView;
+      Element.prototype.scrollIntoView = function scrollIntoViewSpy() {
+        scrolledTestIds.push(this.getAttribute('data-testid'));
+      };
+      try {
+        renderTicketDetailPage(salesOwnerUser, showToast);
+
+        // Wait for the resolver to settle on RECORD_QUOTATION_OUTCOME (it renders CREATE_PCR first,
+        // before api.pricingRequests.listForTicket resolves) — same convention as the handoff-117
+        // ISSUE_QUOTATION tests below.
+        await waitFor(() => {
+          expect(screen.getByTestId('ticket-primary-action').getAttribute('data-action')).toBe('record_quotation_outcome');
+        });
+        const stickyButton = screen.getByTestId('ticket-primary-action');
+
+        // Deliberately NOT calling openTab(/เอกสาร/) first — DealQuotationPanel and its
+        // quotationsQuery have not mounted yet, so `current`/the outcome-controls ref are both still
+        // null the instant runOnTab's callback runs. Unlike openIssueQuotation (FIX 3), this ref
+        // never queues a retry: the rep sees the toast and can click again once the panel settles.
+        fireEvent.click(stickyButton);
+
+        await waitFor(() => expect(showToast).toHaveBeenCalledWith(
+          'error', 'ยังบันทึกผลใบเสนอราคาไม่ได้ — ตรวจสอบสถานะคำขอราคาในส่วน "ราคาและใบเสนอราคา" ด้านล่าง',
+        ));
+        expect(scrolledTestIds).not.toContain('deal-quotation-outcome-controls');
+      } finally {
+        Element.prototype.scrollIntoView = original;
+      }
+    });
+  });
+
   // Handoff 117 follow-up ("A second, real bug found while making the specs
   // actually pass"): the describe block above proves the STEADY-STATE happy
   // path — a draft customer quotation already exists when the sticky

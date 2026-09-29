@@ -97,10 +97,34 @@ describe('nextSalesAction — RECORD_DELIVERY (stages 13-14, owner ruling 2026-0
   });
 });
 
-// Baseline pass over the rest of the cascade — establishes that inserting bucket 4 did not disturb
-// buckets 1-3/5-6, each exercised through a deal/PR shape that clears every earlier bucket without
-// matching it.
-describe('nextSalesAction — full cascade baseline (buckets 1-3, 5-6)', () => {
+describe('nextSalesAction — RECORD_QUOTATION_OUTCOME (bucket 4, deal-page CTA discoverability fix)', () => {
+  it('returns RECORD_QUOTATION_OUTCOME for a live PR at QUOTATION_ISSUED (previously fell through to follow-up/activity)', () => {
+    const prs = [{ id: 1, ticketId: 1, status: 'QUOTATION_ISSUED' }];
+    expect(nextSalesAction(baseDeal(), prs)).toEqual({
+      key: SALES_ACTION.RECORD_QUOTATION_OUTCOME,
+      label: 'บันทึกผลใบเสนอราคา',
+    });
+  });
+
+  it('CONFIRM_ORDER still wins when one PR is QUOTATION_ACCEPTED even alongside a stale sibling PR still at QUOTATION_ISSUED', () => {
+    const prs = [
+      { id: 1, ticketId: 1, status: 'QUOTATION_ISSUED' },
+      { id: 2, ticketId: 1, status: 'QUOTATION_ACCEPTED', orderConfirmedAt: null },
+    ];
+    expect(nextSalesAction(baseDeal(), prs)).toMatchObject({ key: SALES_ACTION.CONFIRM_ORDER });
+  });
+
+  it('RECORD_QUOTATION_OUTCOME outranks RECORD_DELIVERY when both could apply (bucket 4 fires before bucket 5 is ever checked)', () => {
+    const deal = baseDeal({ status: 'quotation_issued', fulfillmentStatus: 'GOODS_RECEIVED' });
+    const prs = [{ id: 1, ticketId: 1, status: 'QUOTATION_ISSUED' }];
+    expect(nextSalesAction(deal, prs)).toMatchObject({ key: SALES_ACTION.RECORD_QUOTATION_OUTCOME });
+  });
+});
+
+// Baseline pass over the rest of the cascade — establishes that inserting buckets 4/5 did not
+// disturb buckets 1-3/6-7, each exercised through a deal/PR shape that clears every earlier bucket
+// without matching it.
+describe('nextSalesAction — full cascade baseline (buckets 1-3, 6-7)', () => {
   it('CREATE_PCR — no live pricing request, no price evidence', () => {
     expect(nextSalesAction(baseDeal(), [])).toMatchObject({ key: SALES_ACTION.CREATE_PCR });
   });
@@ -136,7 +160,7 @@ describe('nextSalesAction — full cascade baseline (buckets 1-3, 5-6)', () => {
   });
 });
 
-describe('sortWorklist — RECORD_DELIVERY rank (4) relative to CONFIRM_ORDER (1) and FOLLOW_UP (5)', () => {
+describe('sortWorklist — RECORD_DELIVERY rank relative to CONFIRM_ORDER and FOLLOW_UP', () => {
   it('places a delivery row after a confirm-order row but before a non-overdue follow-up row', () => {
     const items = [
       { deal: { id: 3, stageUpdatedAt: '2026-07-01T00:00:00.000Z' }, action: { key: SALES_ACTION.FOLLOW_UP, label: 'x', followUp: 'today' } },
@@ -144,6 +168,16 @@ describe('sortWorklist — RECORD_DELIVERY rank (4) relative to CONFIRM_ORDER (1
       { deal: { id: 2, stageUpdatedAt: '2026-07-01T00:00:00.000Z' }, action: { key: SALES_ACTION.CONFIRM_ORDER, label: 'x' } },
     ];
     expect(sortWorklist(items).map((item) => item.deal.id)).toEqual([2, 1, 3]);
+  });
+
+  it('places RECORD_QUOTATION_OUTCOME between ISSUE_QUOTATION and CREATE_PCR, ahead of RECORD_DELIVERY', () => {
+    const items = [
+      { deal: { id: 1, stageUpdatedAt: '2026-07-01T00:00:00.000Z' }, action: { key: SALES_ACTION.RECORD_DELIVERY, label: 'x' } },
+      { deal: { id: 2, stageUpdatedAt: '2026-07-01T00:00:00.000Z' }, action: { key: SALES_ACTION.CREATE_PCR, label: 'x' } },
+      { deal: { id: 3, stageUpdatedAt: '2026-07-01T00:00:00.000Z' }, action: { key: SALES_ACTION.RECORD_QUOTATION_OUTCOME, label: 'x' } },
+      { deal: { id: 4, stageUpdatedAt: '2026-07-01T00:00:00.000Z' }, action: { key: SALES_ACTION.ISSUE_QUOTATION, label: 'x' } },
+    ];
+    expect(sortWorklist(items).map((item) => item.deal.id)).toEqual([4, 3, 2, 1]);
   });
 
   it('an OVERDUE follow-up still leads ahead of a delivery row, despite RECORD_DELIVERY outranking FOLLOW_UP under equal urgency', () => {

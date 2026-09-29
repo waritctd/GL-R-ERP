@@ -39,9 +39,10 @@ const TODAY = bangkokTodayIso();
 const OVERDUE_DATE = addDays(TODAY, -5);
 const THIS_MONTH = `${TODAY.slice(0, 7)}-01`;
 
-// One deal per next-action bucket (now including RECORD_DELIVERY — deal I),
-// plus a "nothing to do" deal (G) and a non-ACTIVE deal (H) that must be
-// excluded from both the pulse and the worklist entirely.
+// One deal per next-action bucket (now including RECORD_DELIVERY — deal I —
+// and RECORD_QUOTATION_OUTCOME — deal J), plus a "nothing to do" deal (G)
+// and a non-ACTIVE deal (H) that must be excluded from both the pulse and
+// the worklist entirely.
 const deals = [
   { id: 601, code: 'PR-2026-0601', customerName: 'บริษัท เอ จำกัด', title: 'ดีลเอ', lifecycle: 'ACTIVE', amountPayable: 100000, stale: false, nextFollowUpAt: null, stageUpdatedAt: '2026-07-01T00:00:00.000Z' },
   { id: 602, code: 'PR-2026-0602', customerName: 'บริษัท บี จำกัด', title: 'ดีลบี', lifecycle: 'ACTIVE', amountPayable: 200000, stale: false, nextFollowUpAt: null, stageUpdatedAt: '2026-07-01T00:00:00.000Z' },
@@ -58,6 +59,10 @@ const deals = [
   // than parking this on CREATE_PCR (see salesActions.js bucket 1's own comment, and
   // salesActions.test.js's dedicated bucket-1-interaction cases).
   { id: 609, code: 'PR-2026-0609', customerName: 'บริษัท ไอ จำกัด', title: 'ดีลไอ', lifecycle: 'ACTIVE', amountPayable: 300000, stale: false, nextFollowUpAt: null, stageUpdatedAt: '2026-07-01T00:00:00.000Z', status: 'quotation_issued', fulfillmentStatus: 'GOODS_RECEIVED', paymentStatus: 'AWAITING_FINAL_PAYMENT' },
+  // Deal J: the quotation was issued to the customer but nobody has recorded the outcome yet
+  // (deal-page discoverability fix — this used to fall through to follow-up/log-activity; see
+  // salesActions.js bucket 4's own comment, and salesActions.test.js's dedicated cases).
+  { id: 610, code: 'PR-2026-0610', customerName: 'บริษัท เจ จำกัด', title: 'ดีลเจ', lifecycle: 'ACTIVE', amountPayable: 120000, stale: false, nextFollowUpAt: null, stageUpdatedAt: '2026-07-01T00:00:00.000Z' },
 ];
 
 const pricingRequests = [
@@ -65,8 +70,12 @@ const pricingRequests = [
   { id: 2, ticketId: 603, status: 'QUOTATION_ACCEPTED', orderConfirmedAt: null },
   { id: 3, ticketId: 604, status: 'SUBMITTED', orderConfirmedAt: null },
   { id: 4, ticketId: 605, status: 'IMPORT_REVIEWING', orderConfirmedAt: null },
-  { id: 5, ticketId: 606, status: 'QUOTATION_ISSUED', orderConfirmedAt: null },
+  // CEO_REVIEWING, not QUOTATION_ISSUED: deal F is the dedicated "stale, nothing else pending"
+  // LOG_ACTIVITY fixture below, and QUOTATION_ISSUED now has its own bucket (see deal J's PR
+  // below) — a live-but-unmatched status keeps deal F actually exercising the fall-through path.
+  { id: 5, ticketId: 606, status: 'CEO_REVIEWING', orderConfirmedAt: null },
   { id: 6, ticketId: 607, status: 'IMPORT_REVIEWING', orderConfirmedAt: null },
+  { id: 7, ticketId: 610, status: 'QUOTATION_ISSUED', orderConfirmedAt: null },
   // Deal 601 deliberately has no pricing request at all.
 ];
 
@@ -129,9 +138,9 @@ describe('SalesOverview', () => {
     await waitFor(() => {
       const pipelineValue = screen.getByText('มูลค่า pipeline').parentElement.querySelector('.stat-value');
       // Sum of amountPayable across ACTIVE deals only (excludes deal H,
-      // CLOSED_LOST, despite its huge amountPayable) — now includes deal I's
-      // 300,000 (610,000 + 300,000).
-      expect(pipelineValue.textContent).toBe('฿910,000.00');
+      // CLOSED_LOST, despite its huge amountPayable) — includes deal I's
+      // 300,000 and deal J's 120,000 (610,000 + 300,000 + 120,000).
+      expect(pipelineValue.textContent).toBe('฿1,030,000.00');
     });
 
     // Overdue follow-up: only deal D (604, follow-up date before today).
@@ -163,6 +172,7 @@ describe('SalesOverview', () => {
     expect(within(ctaFor('บริษัท อี จำกัด')).getByText('ติดตามลูกค้า')).not.toBeNull(); // follow-up due today
     expect(within(ctaFor('บริษัท เอฟ จำกัด')).getByText('บันทึกกิจกรรม')).not.toBeNull(); // stale, no follow-up
     expect(within(ctaFor('บริษัท ไอ จำกัด')).getByText('บันทึกส่งมอบ')).not.toBeNull(); // GOODS_RECEIVED, priced outside the PCR chain
+    expect(within(ctaFor('บริษัท เจ จำกัด')).getByText('บันทึกผลใบเสนอราคา')).not.toBeNull(); // QUOTATION_ISSUED, outcome not recorded yet
 
     // Deal G has a pricing request sitting with import and nothing else
     // pending — it needs nothing from the rep right now, so it must not
@@ -178,16 +188,18 @@ describe('SalesOverview', () => {
 
     const names = worklist.getAllByText(/^บริษัท .+ จำกัด$/).map((el) => el.textContent);
     // D (overdue follow-up) leads despite CONFIRM_ORDER/ISSUE_QUOTATION/
-    // CREATE_PCR/RECORD_DELIVERY normally outranking a bare follow-up in the
-    // action cascade — "overdue" is a cross-cutting urgency signal that
-    // always sorts first. I (RECORD_DELIVERY, rank 4) sits between A
-    // (CREATE_PCR, rank 3) and E (FOLLOW_UP due today, rank 5) — the same
-    // relative ordering salesActions.test.js's own sortWorklist cases pin
-    // directly against synthetic fixtures.
+    // RECORD_QUOTATION_OUTCOME/CREATE_PCR/RECORD_DELIVERY normally outranking
+    // a bare follow-up in the action cascade — "overdue" is a cross-cutting
+    // urgency signal that always sorts first. J (RECORD_QUOTATION_OUTCOME,
+    // rank 3) sits between B (ISSUE_QUOTATION, rank 2) and A (CREATE_PCR,
+    // rank 4); I (RECORD_DELIVERY, rank 5) sits between A and E (FOLLOW_UP
+    // due today, rank 6) — the same relative ordering salesActions.test.js's
+    // own sortWorklist cases pin directly against synthetic fixtures.
     expect(names).toEqual([
       'บริษัท ดี จำกัด',
       'บริษัท ซี จำกัด',
       'บริษัท บี จำกัด',
+      'บริษัท เจ จำกัด',
       'บริษัท เอ จำกัด',
       'บริษัท ไอ จำกัด',
       'บริษัท อี จำกัด',

@@ -11,7 +11,7 @@
 // (`pricingRequests`, as returned by api.pricingRequests.queue) — so this
 // never triggers a per-ticket detail fetch.
 //
-// The 6 CTA buckets below are a priority cascade, evaluated in pipeline
+// The 7 CTA buckets below are a priority cascade, evaluated in pipeline
 // order (earliest-unblocked-step wins): a deal with no live pricing request
 // normally needs "สร้างคำขอราคา" first, even if it also happens to be overdue
 // on follow-up — there is nothing to follow up ABOUT yet. Once a deal has a
@@ -22,17 +22,27 @@
 // comment below for why, and for why the guard is narrower than it first
 // looks.
 //
-// Bucket 4 (RECORD_DELIVERY — stages 13-14 ส่งมอบสินค้า handed to sales, owner
-// ruling 2026-08-17) is the newest addition and reuses importActions.js's
-// nextFulfilmentActionCode rather than keeping a second copy of the
-// delivery-ready status list — see that module's own header for the "shared
-// with sales" note. It sits AFTER bucket 1, not before: a delivery-ready deal
-// that also matches bucket 1's guard (zero pricing requests, no evidence a
-// price ever went out) still gets CREATE_PCR, because bucket 1's early
-// `return` fires first — same earliest-unblocked-step cascade principle as
-// everything else here, not a special case carved out for delivery. See
-// bucket 4's own comment below for why that interaction was checked, on
-// purpose, and left alone.
+// Bucket 4 (RECORD_QUOTATION_OUTCOME) is a discoverability fix, not a new
+// capability: the accept/reject/revision controls already existed on
+// DealQuotationPanel's "ราคาและใบเสนอราคา" section (the "เอกสาร" tab), but a PR
+// sitting at QUOTATION_ISSUED used to fall all the way through this cascade
+// to follow-up/log-activity — the top sticky CTA never told the owning rep
+// the customer's decision was waiting to be recorded, so an issued quotation
+// could sit un-accepted indefinitely with nothing on the page pointing at the
+// controls that would advance it. Placed AFTER bucket 3 (CONFIRM_ORDER) so an
+// already-accepted PR still prioritises confirming the order. See its own
+// comment below.
+//
+// Bucket 5 (RECORD_DELIVERY — stages 13-14 ส่งมอบสินค้า handed to sales, owner
+// ruling 2026-08-17) reuses importActions.js's nextFulfilmentActionCode
+// rather than keeping a second copy of the delivery-ready status list — see
+// that module's own header for the "shared with sales" note. It sits AFTER
+// bucket 1, not before: a delivery-ready deal that also matches bucket 1's
+// guard (zero pricing requests, no evidence a price ever went out) still gets
+// CREATE_PCR, because bucket 1's early `return` fires first — same
+// earliest-unblocked-step cascade principle as everything else here, not a
+// special case carved out for delivery. See bucket 5's own comment below for
+// why that interaction was checked, on purpose, and left alone.
 
 import { bangkokTodayIso } from '../../utils/format.js';
 import { nextFulfilmentActionCode } from './importActions.js';
@@ -41,6 +51,7 @@ export const SALES_ACTION = {
   CREATE_PCR: 'create_pcr',
   ISSUE_QUOTATION: 'issue_quotation',
   CONFIRM_ORDER: 'confirm_order',
+  RECORD_QUOTATION_OUTCOME: 'record_quotation_outcome',
   RECORD_DELIVERY: 'record_delivery',
   FOLLOW_UP: 'follow_up',
   LOG_ACTIVITY: 'log_activity',
@@ -50,6 +61,12 @@ const ACTION_LABEL = {
   [SALES_ACTION.CREATE_PCR]: 'สร้างคำขอราคา',
   [SALES_ACTION.ISSUE_QUOTATION]: 'ออกใบเสนอราคา',
   [SALES_ACTION.CONFIRM_ORDER]: 'ยืนยันคำสั่งซื้อ',
+  // "Record the quotation outcome" — deliberately not "ติดตามผล"/"ติดตามลูกค้า" (that's
+  // FOLLOW_UP's own label, a nudge to go chase the customer): by the time this bucket fires, the
+  // quotation is already out and canRecordCustomerQuotationOutcome's own gate is what the button
+  // opens, so the verb is the recording action itself, matching CREATE_PCR/ISSUE_QUOTATION/
+  // CONFIRM_ORDER's terse imperative-verb tone (2-4 words, no subject, no punctuation).
+  [SALES_ACTION.RECORD_QUOTATION_OUTCOME]: 'บันทึกผลใบเสนอราคา',
   // Same wording IMPORT_ACTION_LABELS.recordDelivery (importActions.js) already uses for the
   // identical real-world action. Deliberately NOT imported from there: the two labels live in two
   // independent cascades (this module's SALES_ACTION vs. import's fulfilment codes), and this
@@ -61,17 +78,23 @@ const ACTION_LABEL = {
 };
 
 // Sort weight when two deals need DIFFERENT actions (lower = more urgent). A
-// pending confirm-order/issue-quotation/record-delivery is a task sitting
+// pending confirm-order/issue-quotation/record-quotation-outcome/record-delivery is a task sitting
 // entirely in the rep's own hands with no external dependency, so each
 // outranks a bare follow-up/log-activity nudge — mirrors the cascade order
-// above.
+// above. RECORD_QUOTATION_OUTCOME ranks alongside that group (just after
+// CONFIRM_ORDER/ISSUE_QUOTATION): a decision sitting unrecorded is exactly
+// the kind of stall this whole worklist exists to surface, and recording it
+// takes one click once the rep knows the answer — no less urgent than the
+// other "just do it" buckets, and well ahead of CREATE_PCR (which requires
+// building something new) or a bare nudge.
 const ACTION_RANK = {
   [SALES_ACTION.CONFIRM_ORDER]: 1,
   [SALES_ACTION.ISSUE_QUOTATION]: 2,
-  [SALES_ACTION.CREATE_PCR]: 3,
-  [SALES_ACTION.RECORD_DELIVERY]: 4,
-  [SALES_ACTION.FOLLOW_UP]: 5,
-  [SALES_ACTION.LOG_ACTIVITY]: 6,
+  [SALES_ACTION.RECORD_QUOTATION_OUTCOME]: 3,
+  [SALES_ACTION.CREATE_PCR]: 4,
+  [SALES_ACTION.RECORD_DELIVERY]: 5,
+  [SALES_ACTION.FOLLOW_UP]: 6,
+  [SALES_ACTION.LOG_ACTIVITY]: 7,
 };
 
 /**
@@ -96,14 +119,15 @@ export function followUpStatus(deal, todayIso = bangkokTodayIso()) {
 // precisely by being OUTSIDE this set (see hasLivePr below: `!LIVE_PR_STATUSES.has(pr.status)`).
 //
 // The eight statuses that ARE live this way split further: APPROVED_FOR_QUOTATION and
-// QUOTATION_ACCEPTED have their own buckets below (2 and 3); the other six — SUBMITTED,
-// IMPORT_REVIEWING, AWAITING_FACTORY_RESPONSE, READY_FOR_CEO_REVIEW, CEO_REVIEWING,
-// QUOTATION_ISSUED — fall through to follow-up/activity, same as a deal with no pending
-// pricing-request action at all. COSTING_REVISION_REQUIRED does NOT belong in that list any more:
-// V141 retired it, so no live request can carry it. V140 is the migration that retired
+// QUOTATION_ACCEPTED have their own buckets below (2 and 3), and QUOTATION_ISSUED now does too
+// (bucket 4, RECORD_QUOTATION_OUTCOME — see that bucket's own comment for why it used to fall
+// through instead). The remaining five — SUBMITTED, IMPORT_REVIEWING, AWAITING_FACTORY_RESPONSE,
+// READY_FOR_CEO_REVIEW, CEO_REVIEWING — fall through to follow-up/activity, same as a deal with no
+// pending pricing-request action at all. COSTING_REVISION_REQUIRED does NOT belong in that list
+// any more: V141 retired it, so no live request can carry it. V140 is the migration that retired
 // COSTING_IN_PROGRESS and MORE_INFO_REQUIRED; the latter was the one genuine sales action in that
 // old list ("answer import's question"), and with the ขอข้อมูลเพิ่มเติม round-trip retired there is
-// no sixth CTA bucket waiting to be built here.
+// no extra CTA bucket waiting to be built for that specific gap.
 const LIVE_PR_STATUSES = new Set(['DRAFT', 'CANCELLED', 'SUPERSEDED']);
 
 // Ticket statuses that prove a customer-facing price already went out. NOT
@@ -119,7 +143,7 @@ const QUOTED_STATUSES = new Set(['quotation_issued', 'document_issued']);
 
 /**
  * The one next action `deal` needs from its owning sales rep right now, or
- * null if nothing in the 6-bucket cascade applies (e.g. the request is with
+ * null if nothing in the 7-bucket cascade applies (e.g. the request is with
  * import/CEO and the deal isn't due for a follow-up or stale).
  *
  * `pricingRequests` is the rep's OWN pricing-request queue (already scoped
@@ -190,8 +214,33 @@ export function nextSalesAction(deal, pricingRequests = []) {
     return { key: SALES_ACTION.CONFIRM_ORDER, label: ACTION_LABEL[SALES_ACTION.CONFIRM_ORDER] };
   }
 
-  // 4. The deal is delivery-ready (goods received / from stock / mid-
-  //    delivery) and nothing upstream of it (buckets 1-3) is still open.
+  // 4. The quotation went out to the customer but nobody has recorded what the customer said yet —
+  //    canRecordCustomerQuotationOutcome's own gate (pricingRequestMeta.js) requires the customer
+  //    quotation's docStatus to be ISSUED, but that document-level detail isn't available here (this
+  //    module is deliberately built from the ticket-list row + PR queue alone, never a per-ticket
+  //    fetch — see this file's own module doc comment). pr.status === 'QUOTATION_ISSUED' is the
+  //    PR-level proxy: CustomerQuotationService.issue is what sets it, and it stays QUOTATION_ISSUED
+  //    until recordOutcome runs (an ACCEPTED outcome moves it to QUOTATION_ACCEPTED, handled by
+  //    bucket 3 above; REJECTED/REVISION_REQUESTED leave the PR itself at a terminal/superseded
+  //    status that falls out of `ownPrs` entirely once a revision exists, or stops matching this
+  //    bucket once recorded). Before this bucket existed, a deal parked here fell all the way
+  //    through to follow-up/log-activity — the sticky CTA never told the rep the accept/reject/
+  //    revision controls (DealQuotationPanel, "ราคาและใบเสนอราคา") were the actual next step, so an
+  //    issued quotation could sit un-decided indefinitely with no prompt anywhere on the page.
+  //
+  //    Placed AFTER bucket 3 (CONFIRM_ORDER), not before: a customer-change revision can leave one
+  //    sibling PR at QUOTATION_ISSUED (a stale, since-superseded round) while another reaches
+  //    QUOTATION_ACCEPTED — CONFIRM_ORDER must win that race, same earliest-unblocked-step principle
+  //    as the rest of this cascade.
+  if (ownPrs.some((pr) => pr.status === 'QUOTATION_ISSUED')) {
+    return {
+      key: SALES_ACTION.RECORD_QUOTATION_OUTCOME,
+      label: ACTION_LABEL[SALES_ACTION.RECORD_QUOTATION_OUTCOME],
+    };
+  }
+
+  // 5. The deal is delivery-ready (goods received / from stock / mid-
+  //    delivery) and nothing upstream of it (buckets 1-4) is still open.
   //    Reuses nextFulfilmentActionCode (importActions.js) — the SAME
   //    decision DealFulfilmentPanel's own `can.recordDelivery`/
   //    `can.completeDelivery` gates and (formerly) ImportOverview's worklist
@@ -228,13 +277,13 @@ export function nextSalesAction(deal, pricingRequests = []) {
     return { key: SALES_ACTION.RECORD_DELIVERY, label: ACTION_LABEL[SALES_ACTION.RECORD_DELIVERY] };
   }
 
-  // 5. Follow-up due today or overdue.
+  // 6. Follow-up due today or overdue.
   const followUp = followUpStatus(deal);
   if (followUp) {
     return { key: SALES_ACTION.FOLLOW_UP, label: ACTION_LABEL[SALES_ACTION.FOLLOW_UP], followUp };
   }
 
-  // 6. No activity logged in STALE_ACTIVITY_DAYS days — `deal.stale` is
+  // 7. No activity logged in STALE_ACTIVITY_DAYS days — `deal.stale` is
   //    already computed server/mock-side (mirrors TicketRepository.enrichSummary,
   //    see dealTrackingMeta.js's computeStale) and included on every
   //    api.tickets.list() row, so it is reused here rather than recomputed.

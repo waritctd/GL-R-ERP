@@ -1122,6 +1122,19 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         </Button>
       );
       stickyPrimaryLabel = workStateAction.label;
+    } else if (actionKey === 'record_quotation_outcome') {
+      // salesActions.js's RECORD_QUOTATION_OUTCOME bucket (a QUOTATION_ISSUED PR whose customer
+      // decision hasn't been recorded yet). Unlike issue_quotation/confirm_order this never fires a
+      // mutation directly — the accept/reject/revision decision is the rep's own judgment call, not
+      // something a single click can default — so openRecordOutcome only scrolls DealQuotationPanel's
+      // existing outcome controls into view (same "DealQuotationPanel lives inside the เอกสาร tab"
+      // pattern as the two branches above).
+      stickyPrimaryAction = (
+        <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => runOnTab('documents', () => dealQuotationPanelRef.current?.openRecordOutcome())}>
+          {workStateAction.label}
+        </Button>
+      );
+      stickyPrimaryLabel = workStateAction.label;
     } else if (jumpId) {
       // Every IN_PAGE_JUMP_TARGET id now lives inside a tab — JUMP_TARGET_TAB
       // names which one, so runOnTab can switch there before scrolling.
