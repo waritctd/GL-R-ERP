@@ -309,7 +309,7 @@ export function DealStateHeader({
           // fixed bar would be unreadable), so it keeps its own bg/border/
           // padding/shadow/safe-area there regardless of bannerText.
           className={bannerText
-            ? 'flex flex-wrap items-center justify-between gap-3 rounded-lg border border-info-border bg-info-bg px-4 py-3 mobile:fixed mobile:inset-x-0 mobile:bottom-0 mobile:z-20 mobile:rounded-none mobile:border-x-0 mobile:border-b-0 mobile:px-4 mobile:py-3 mobile:shadow-lg mobile:[padding-bottom:max(18px,env(safe-area-inset-bottom))]'
+            ? 'flex flex-wrap items-center justify-between gap-3 rounded-md border border-info-border bg-info-bg px-4 py-3 mobile:fixed mobile:inset-x-0 mobile:bottom-0 mobile:z-20 mobile:rounded-none mobile:border-x-0 mobile:border-b-0 mobile:px-4 mobile:py-3 mobile:shadow-lg mobile:[padding-bottom:max(18px,env(safe-area-inset-bottom))]'
             : 'flex flex-wrap items-center justify-end gap-3 mobile:fixed mobile:inset-x-0 mobile:bottom-0 mobile:z-20 mobile:bg-surface mobile:border-t mobile:border-border mobile:px-4 mobile:py-3 mobile:shadow-lg mobile:[padding-bottom:max(18px,env(safe-area-inset-bottom))]'}
         >
           {bannerText ? (
