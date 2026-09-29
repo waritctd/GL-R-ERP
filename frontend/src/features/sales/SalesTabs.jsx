@@ -1,3 +1,7 @@
+/* Hallmark · component: tab-nav · genre: modern-minimal · theme: design.md (primary selection tint)
+ * states: default · hover · focus-visible · active (aria-current)
+ * contrast: active #4f46e5 on #e0e7ff ~6:1 (pass) · ring outline-2 primary, offset -2px
+ */
 import { NavLink } from 'react-router-dom';
 import { hasPermission } from '../../app/permissions.js';
 
@@ -57,8 +61,8 @@ export function SalesTabs({ role }) {
         <NavLink
           key={tab.path}
           to={tab.path}
-          className={({ isActive }) => `rounded-lg px-3.5 py-1.5 text-sm font-bold no-underline ${
-            isActive ? 'bg-info-bg-alt text-info' : 'text-text-muted hover:text-text'
+          className={({ isActive }) => `rounded-lg px-3.5 py-1.5 text-sm no-underline transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-primary ${
+            isActive ? 'bg-primary-bg font-bold text-primary' : 'font-semibold text-text-muted hover:text-text'
           }`}
         >
           {tab.label}
