@@ -810,6 +810,80 @@ public class TicketRepository {
             });
     }
 
+    /**
+     * B5 fix ("รายการสินค้า shows 0 รายการ while a deal is still in the pricing/quotation
+     * phase"): {@code sales.ticket_item} stays empty until order confirmation writes it (see
+     * {@code OrderConfirmationService#reconcileTicketItems}), so a deal still working its
+     * pricing-request/quotation chain has no rows for {@link #findItemsByTicketId} to return even
+     * though its real items already exist on {@code sales.quotation_item}. Owner ruling: when
+     * {@code ticket_item} is empty, the READ path (only -- see {@link TicketDto#fromPricingChain}'s
+     * own Javadoc on why this must not reach {@link #findById}/mutation call sites) falls back to
+     * the deal's live quotation's line items, rendered READ-ONLY.
+     *
+     * <p>"Live" is picked with the EXACT SAME rule as {@code DepositNoticeRepository
+     * #findDealQuotationItemsForDeposit} (ACCEPTED beats ISSUED beats APPROVED, across both
+     * PRICING_REQUEST and DEAL_DIRECT origins, most recent id wins a tie) -- duplicated here
+     * rather than called cross-package because deposit-notice and ticket-detail are separate
+     * bounded contexts, but it is the SAME business rule and must be changed in lockstep if that
+     * one ever changes.
+     *
+     * <p>Only brand/model/color/texture/size/qty/qtySqm/unitBasis/rawUnit are mapped -- pricing
+     * fields (proposedPrice/approvedPrice/calcedCost/manualPrice/...) are deliberately left at
+     * their TicketItemDto defaults (null / not-from-stock / weight 1) because these rows are NOT
+     * committed ticket_item rows and carry none of that ticket-native pricing-approval history;
+     * showing a borrowed price under those columns would misrepresent it as something CEO/import
+     * approved on THIS ticket. qty_sqm/unit_basis are selected for completeness but are null in
+     * practice today -- neither CustomerQuotationRepository#insertItems nor
+     * DealQuotationRepository's item INSERT writes those two legacy columns (both write qty +
+     * raw_unit only), so the grid's SQM sub-line simply does not render for a fallback row; this
+     * is an accepted, pre-existing quotation_item data gap, not something this fix invents.
+     */
+    public List<TicketItemDto> findPricingChainFallbackItems(long ticketId) {
+        List<Long> liveQuotationId = jdbc.query("""
+            SELECT quotation_id FROM sales.quotation
+             WHERE ticket_id = :ticketId
+               AND origin IN ('PRICING_REQUEST', 'DEAL_DIRECT')
+               AND doc_status IN ('ACCEPTED', 'ISSUED', 'APPROVED')
+             ORDER BY CASE doc_status
+                          WHEN 'ACCEPTED' THEN 0
+                          WHEN 'ISSUED'   THEN 1
+                          ELSE 2
+                      END, quotation_id DESC
+             LIMIT 1
+            """, Map.of("ticketId", ticketId), (rs, i) -> rs.getLong("quotation_id"));
+        if (liveQuotationId.isEmpty()) {
+            return List.of();
+        }
+        return jdbc.query("""
+            SELECT quotation_item_id, seq, brand, model, color, texture, size,
+                   qty, qty_sqm, unit_basis, raw_unit
+              FROM sales.quotation_item
+             WHERE quotation_id = :quotationId
+             ORDER BY seq
+            """, Map.of("quotationId", liveQuotationId.get(0)), (rs, i) -> new TicketItemDto(
+                rs.getLong("quotation_item_id"),
+                ticketId,
+                rs.getString("brand"),
+                rs.getString("model"),
+                rs.getString("color"),
+                rs.getString("texture"),
+                rs.getString("size"),
+                null, // factory -- sales.quotation_item has no factory column
+                rs.getBigDecimal("qty"),
+                rs.getBigDecimal("qty_sqm"),
+                null, null, // rawPrice/rawCurrency -- not a costing input on a borrowed row
+                rs.getString("raw_unit"),
+                null, null, // proposedPrice/approvedPrice -- see method Javadoc
+                null, // currency
+                rs.getInt("seq"),
+                null, null, null, // calcedCost/calcedPrice/calcConfigVersion
+                rs.getString("unit_basis"),
+                null, null, // manualPrice/manualOverrideReason
+                null, null, null, // qtyDelivered/qtyFromStock/stockNote
+                null, null // catalogPriceId/catalogProductCode
+            ));
+    }
+
     public void updateItemCalcResults(long itemId, BigDecimal calcedCost,
                                       BigDecimal calcedPrice, int configVersion,
                                       BigDecimal proposedPrice) {

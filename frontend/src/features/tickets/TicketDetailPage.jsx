@@ -799,6 +799,11 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   }
 
   const { summary, items, events, quotations } = ticket;
+  // B5 fix: when sales.ticket_item is still empty (pre-order-confirmation), the items grid
+  // below falls back to the deal's live pricing-request/quotation line items instead of
+  // showing "0 รายการ" — see TicketService#get (backend) for the exact pick rule. Those rows
+  // are NOT ticket_item, so they render read-only: no edit affordance, no add-item control.
+  const fromPricingChain = ticket.fromPricingChain ?? false;
   const st = summary.status;
   const isOwner = user.id === summary.createdById;
   // Issue #389: reading a deal's documents is now the same question as reading the deal (so
@@ -902,7 +907,11 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     verifyClose:        hasAction('VERIFY_CLOSE'),
     cancel:           hasAction('CANCEL') && !TERMINAL.includes(st)   && isOwner,
     comment:          !TERMINAL.includes(st),
-    editItems: hasAction('EDIT_ITEMS') && EDITABLE_STATUSES.includes(st) && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner,
+    // B5 fix: a fallback (fromPricingChain) grid shows borrowed quotation lines, not real
+    // ticket_item rows — there is nothing here for editItems to save, so the affordance (and,
+    // since it is the only entry point into edit mode, the add-item control inside it) is
+    // hidden rather than left to fail server-side.
+    editItems: hasAction('EDIT_ITEMS') && EDITABLE_STATUSES.includes(st) && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner && !fromPricingChain,
     // Dual-track (ข้อ 13)
     confirmCustomer:    hasAction('CONFIRM_CUSTOMER') && st === 'quotation_issued' && (ps == null || ps === 'CUSTOMER_CONFIRMED') && isSales,
     confirmFinalPayment:hasAction('FINAL_PAYMENT') && st === 'quotation_issued' && isMoneyRecorder,
@@ -2025,6 +2034,14 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               </div>
             ) : (
               <>
+                {fromPricingChain ? (
+                  <div className="p-[14px_18px_0]">
+                    <div className="flex items-start gap-2 rounded-lg border border-info-border bg-info-bg px-3 py-2.5 text-xs text-info-dark" data-testid="items-pricing-chain-banner">
+                      <Icon name="info" size={15} className="mt-0.5 shrink-0" />
+                      <span>รายการจากใบเสนอราคา — จะยืนยันเป็นรายการจริงเมื่อยืนยันคำสั่งซื้อ (แก้ไขได้ที่คำขอราคา/ใบเสนอราคา)</span>
+                    </div>
+                  </div>
+                ) : null}
                 <div className="ticket-items-table table-head" style={{ gridTemplateColumns: itemsGridCols }}>
                   <span>ยี่ห้อ / รุ่น</span>
                   <span>สี / เนื้อผิว</span>
