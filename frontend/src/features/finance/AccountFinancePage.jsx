@@ -24,7 +24,7 @@ const ACTION_FILTERS = [
   { key: 'confirmDeposit', label: 'ยืนยันรับมัดจำ' },
   { key: 'confirmFinalPayment', label: 'รับชำระส่วนที่เหลือ' },
   { key: 'confirmCloseReady', label: 'ยืนยันพร้อมปิดงาน' },
-  { key: 'recordInvoiceCommission', label: 'บันทึกใบกำกับ + ออกค่าคอม' },
+  { key: 'recordInvoiceCommission', label: 'บันทึกใบกำกับ' },
 ];
 
 const money = (value) => (value == null ? '—' : formatMoney(value));

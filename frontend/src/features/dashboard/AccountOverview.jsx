@@ -27,7 +27,7 @@ const MONEY_BUCKETS = [
   { key: 'depositPending', label: 'รอรับมัดจำ', icon: 'clock', tone: 'amber', amountField: 'amountOutstanding' },
   { key: 'finalPaymentPending', label: 'รอชำระส่วนที่เหลือ', icon: 'badgeDollar', tone: 'teal', amountField: 'amountOutstanding', live: true },
   { key: 'closeReady', label: 'รอปิดงาน', icon: 'check', tone: 'indigo', amountField: 'amountPayable' },
-  { key: 'commissionPending', label: 'ออกค่าคอม', icon: 'fileText', tone: 'blue', amountField: 'amountPayable' },
+  { key: 'commissionPending', label: 'บันทึกใบกำกับ', icon: 'fileText', tone: 'blue', amountField: 'amountPayable' },
 ];
 
 const CTA_VARIANT = {
@@ -71,7 +71,7 @@ function startOfMonth() {
  * amountOutstanding = 0 by definition, so neither condition is ever true).
  * That scope was a deliberate, reviewed authz decision (handoff 100), not a
  * bug this branch introduces, and per CLAUDE.md this task must never loosen
- * it. Consequence: "รอปิดงาน"/"ออกค่าคอม" below will read 0 under the
+ * it. Consequence: "รอปิดงาน"/"บันทึกใบกำกับ" below will read 0 under the
  * current backend scope even when such deals exist — the salesStage=
  * CLOSED_PAID query is kept anyway (mirrors CommissionPage's own
  * "eligibleTickets" picker) so this becomes correct for free if that scope

@@ -2,16 +2,18 @@
 /* Hallmark · pre-emit critique: P4 H4 E4 S4 R3 V3 (scores /5 after fixes; R and V are by code reading only — not browser-verified) */
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
-import { Button, buttonVariants } from '../../components/common/Button.jsx';
+import { Button } from '../../components/common/Button.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { OverflowMenu } from '../../components/common/OverflowMenu.jsx';
 import { cn } from '../../utils/cn.js';
 import { dealStageLabel, formatBangkokTime, formatThaiDate } from '../../utils/format.js';
+import { InvoiceFromDealForm } from '../commissions/InvoiceFromDealForm.jsx';
+import { emptyInvoiceForm, prepareInvoiceAttachment, toCreateFromDealPayload } from '../commissions/invoiceFromDeal.js';
 import { findStage, useStageCatalog } from '../tickets/stageCatalog.js';
 import {
   RecordPaymentModal, RevokeCloseModal, StageModal,
@@ -24,6 +26,7 @@ const ACTION_LABEL = {
   FINAL_PAYMENT: 'รับชำระส่วนที่เหลือ',
   RECORD_PAYMENT: 'บันทึกรับชำระ',
   CONFIRM_CLOSE: 'ยืนยันพร้อมปิดงาน',
+  RECORD_INVOICE: 'บันทึกใบกำกับ',
   UPDATE_STAGE: 'แก้ไขสถานะ',
   REVOKE_CLOSE_CONFIRM: 'ยกเลิกการยืนยันปิดงาน',
 };
@@ -182,13 +185,14 @@ function CommentsSection({ deal, onPosted }) {
  */
 export function FinanceDealPage() {
   const { id } = useParams();
-  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { catalog } = useStageCatalog();
   const key = queryKeys.financeDeal(id);
   const [flow, setFlow] = useState(null);
   const [flowError, setFlowError] = useState('');
   const [downloadError, setDownloadError] = useState('');
+  const [invoiceForm, setInvoiceForm] = useState(null); // RECORD_INVOICE form state while it is open
+  const [invoiceFileKey, setInvoiceFileKey] = useState(0);
 
   const dealQuery = useQuery({
     queryKey: key,
@@ -212,6 +216,24 @@ export function FinanceDealPage() {
       setFlowError('');
     },
     onError: (err) => setFlowError(err.message || 'ดำเนินการไม่สำเร็จ'),
+  });
+  // RECORD_INVOICE: the existing POST /api/commissions/from-deal (account only), then the deal is re-read so
+  // milestone 5 shows the recorded invoice and the action disappears. Not a finance endpoint: no new write API.
+  const invoiceMutation = useMutation({
+    mutationFn: async ({ ticketId, form }) => {
+      const invoiceAttachment = await prepareInvoiceAttachment(form.invoiceAttachment);
+      return api.commissions.createFromDeal(toCreateFromDealPayload(ticketId, form, invoiceAttachment));
+    },
+    onSuccess: async () => {
+      setFlow(null);
+      setInvoiceForm(null);
+      setFlowError('');
+      queryClient.invalidateQueries({ queryKey: ['tickets'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboardSummary() });
+      queryClient.invalidateQueries({ queryKey: ['payroll'] });
+      await queryClient.invalidateQueries({ queryKey: key });
+    },
+    onError: (err) => setFlowError(err.message || 'บันทึกใบกำกับไม่สำเร็จ'),
   });
   const busy = actionMutation.isPending;
 
@@ -246,7 +268,6 @@ export function FinanceDealPage() {
   const offered = (deal.availableActions ?? []).filter((a) => a.action !== 'SET_BILLING');
   const actions = orderActions(offered);
   const primary = pickPrimaryAction(offered);
-  const showCommission = deal.salesStage === 'CLOSED_PAID' && !deal.money.commissionRecorded;
 
   function actionLabel(a) {
     if (a.action === 'ADVANCE_STAGE') {
@@ -258,15 +279,18 @@ export function FinanceDealPage() {
 
   function startAction(a) {
     setFlowError('');
+    if (a.action === 'RECORD_INVOICE') {
+      // ex-VAT default (the invoice is raised before VAT); fall back to the payable only for an older payload.
+      const gross = deal.money.amountPayableExVat ?? deal.money.amountPayable;
+      setInvoiceForm(emptyInvoiceForm(gross != null ? String(gross) : ''));
+      setInvoiceFileKey((k) => k + 1);
+    }
     setFlow({ action: a });
   }
 
   const overflowItems = actions
     .filter((a) => a !== primary)
     .map((a) => ({ key: a.action + (a.targetStage ?? ''), label: actionLabel(a), onSelect: () => startAction(a) }));
-  if (showCommission && primary) {
-    overflowItems.push({ key: 'commission', label: 'บันทึกใบกำกับ + ออกค่าคอม', onSelect: () => navigate(`/commissions?ticketId=${deal.id}`) });
-  }
 
   function run(call) {
     if (busy) return;
@@ -335,13 +359,6 @@ export function FinanceDealPage() {
               <Button type="button" className="whitespace-nowrap pointer-coarse:min-h-11 mobile:flex-1" onClick={() => startAction(primary)}>
                 {actionLabel(primary)}
               </Button>
-            ) : showCommission ? (
-              <Link
-                to={`/commissions?ticketId=${deal.id}`}
-                className={cn(buttonVariants({ variant: 'primary' }), 'whitespace-nowrap pointer-coarse:min-h-11 mobile:flex-1')}
-              >
-                บันทึกใบกำกับ + ออกค่าคอม
-              </Link>
             ) : null}
             {overflowItems.length ? <OverflowMenu items={overflowItems} /> : null}
           </div>
@@ -355,6 +372,30 @@ export function FinanceDealPage() {
           <Icon name="triangleAlert" size={16} className="mt-0.5 shrink-0" />
           <span>{downloadError}</span>
         </p>
+      ) : null}
+      {activeAction?.action === 'RECORD_INVOICE' && invoiceForm ? (
+        <section aria-labelledby="fin-invoice-title" className="grid gap-3 rounded-md border border-primary bg-surface p-5 mobile:p-4">
+          <h2 id="fin-invoice-title" className="m-0 text-lg font-extrabold text-text">บันทึกใบกำกับภาษี</h2>
+          {flowError ? (
+            <p role="alert" className="m-0 flex items-start gap-2 text-sm font-bold text-danger">
+              <Icon name="triangleAlert" size={16} className="mt-0.5 shrink-0" />
+              <span>{flowError}</span>
+            </p>
+          ) : null}
+          <InvoiceFromDealForm
+            form={invoiceForm}
+            onChange={(field, value) => setInvoiceForm((current) => ({ ...current, [field]: value }))}
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!invoiceMutation.isPending) invoiceMutation.mutate({ ticketId: deal.id, form: invoiceForm });
+            }}
+            saving={invoiceMutation.isPending}
+            fileInputKey={invoiceFileKey}
+            fileInputId="fin-invoice-file"
+            submitLabel="บันทึกใบกำกับ"
+            onCancel={() => { setFlow(null); setInvoiceForm(null); setFlowError(''); }}
+          />
+        </section>
       ) : null}
       <MilestoneSections deal={deal} onError={setDownloadError} />
 

@@ -74,7 +74,7 @@ function closeReady(ticket) {
  *   4. close-ready (fully paid + fully delivered, not yet confirmed)
  *                                                      -> "ยืนยันพร้อมปิดงาน"
  *   5. CLOSED_PAID, commission not yet recorded
- *                                                      -> "บันทึกใบกำกับ + ออกค่าคอม"
+ *                                                      -> "บันทึกใบกำกับ" (recorded on the finance deal page)
  *
  * Step 5 is gated on `!ticket.commissionRecorded`. The flag is now served by the backend
  * (TicketSummaryDto.commissionRecorded, issue #736) and answers the exact same question
@@ -126,8 +126,8 @@ export function nextAccountAction(ticket, viewerRole) {
   if (ticket.salesStage === 'CLOSED_PAID' && !ticket.commissionRecorded) {
     return {
       key: 'recordInvoiceCommission',
-      label: 'บันทึกใบกำกับ + ออกค่าคอม',
-      to: `/commissions?ticketId=${ticket.id}`,
+      label: 'บันทึกใบกำกับ',
+      to: dealPath,
       urgent: false,
     };
   }

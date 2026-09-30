@@ -289,11 +289,64 @@ function DeliveryBody({ deal, awaiting, onError }) {
   );
 }
 
+// Where the recorded tax invoice's commission request stands (FinanceDealDto.CommissionInvoice.approvalStatus).
+// Status only -- finance never sees a commission amount, weight or approver.
+const COMMISSION_APPROVAL = {
+  SUBMITTED: { label: 'รอผู้จัดการฝ่ายขายอนุมัติ', tone: 'warning' },
+  MANAGER_APPROVED: { label: 'รอ CEO อนุมัติ', tone: 'info' },
+  APPROVED: { label: 'อนุมัติแล้ว', tone: 'success' },
+  REJECTED: { label: 'ถูกตีกลับ', tone: 'danger' },
+};
+
+const INVOICE_FIELDS = [
+  ['grossAmount', 'ยอดรวม (ก่อน VAT)'],
+  ['bankFees', 'ค่าธรรมเนียมธนาคาร'],
+  ['suspenseVat', 'ภาษีพัก (Suspense VAT)'],
+  ['transportFee', 'ค่าขนส่ง'],
+  ['cutFee', 'ค่าตัด'],
+  ['shortfall', 'รับเงินขาด'],
+  ['withholdingTax', 'หัก ณ ที่จ่าย'],
+  ['overpayment', 'รับเงินเกิน'],
+];
+
+function CommissionInvoiceBlock({ invoice, onError }) {
+  const approval = COMMISSION_APPROVAL[invoice.approvalStatus] ?? { label: invoice.approvalStatus, tone: 'neutral' };
+  const { base, ext } = splitFileName(invoice.fileName);
+  return (
+    <SubList label="ใบกำกับที่บันทึกแล้ว">
+      <div className="grid gap-3 py-2">
+        <p className="m-0 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-text">
+          <strong className="font-bold [overflow-wrap:anywhere]">{invoice.invoiceNumber}</strong>
+          <span className="text-text-muted">{formatThaiDate(invoice.invoiceDate)}</span>
+          <StatusBadge tone={approval.tone}>{approval.label}</StatusBadge>
+        </p>
+        {invoice.approvalStatus === 'REJECTED' && invoice.rejectionReason ? (
+          <p role="note" className="m-0 text-sm font-bold text-danger [overflow-wrap:anywhere]">{`เหตุผล: ${invoice.rejectionReason}`}</p>
+        ) : null}
+        <dl className="m-0 grid grid-cols-4 gap-x-4 gap-y-2 mobile:grid-cols-2">
+          {INVOICE_FIELDS.map(([key, label]) => (
+            <div key={key} className="grid min-w-0 gap-0.5">
+              <dt className="text-sm text-text-muted">{label}</dt>
+              <dd className="m-0 tabular-nums font-bold text-text">{money(invoice[key])}</dd>
+            </div>
+          ))}
+        </dl>
+        {invoice.downloadPath ? (
+          <div className="max-w-56">
+            <DownloadButton path={invoice.downloadPath} name={invoice.fileName ?? invoice.invoiceNumber} filenameBase={base} format={ext} onError={onError} />
+          </div>
+        ) : null}
+      </div>
+    </SubList>
+  );
+}
+
 function ClosedBody({ deal, onError }) {
   const { taxInvoices } = deal.documents;
   const m = deal.money;
   return (
     <>
+      {deal.commissionInvoice ? <CommissionInvoiceBlock invoice={deal.commissionInvoice} onError={onError} /> : null}
       {taxInvoices.length ? <SubList label="ใบกำกับภาษี"><FileRows files={taxInvoices} onError={onError} /></SubList> : null}
       <ul className="m-0 grid list-none gap-1 p-0 text-sm text-text">
         <li>{`ใบกำกับภาษี: ${m.invoiceOnFile ? 'มีแล้ว' : 'ยังไม่มี'}`}</li>
@@ -314,7 +367,7 @@ function hasData(index, deal) {
     case 2: return d.depositNotices.length > 0 || m.payments.some((p) => p.kind === 'DEPOSIT');
     case 3: return m.fulfillmentStatus != null;
     case 4: return d.remainingInvoices.length > 0 || d.billingNotes.length > 0 || m.payments.some((p) => p.kind !== 'DEPOSIT');
-    case 5: return d.taxInvoices.length > 0 || m.invoiceOnFile || m.closeConfirmedAt != null || m.commissionRecorded;
+    case 5: return d.taxInvoices.length > 0 || m.invoiceOnFile || m.closeConfirmedAt != null || m.commissionRecorded || deal.commissionInvoice != null;
     default: return false;
   }
 }
