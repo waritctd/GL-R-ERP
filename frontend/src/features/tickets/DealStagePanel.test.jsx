@@ -8,6 +8,8 @@ import { DEAL_STAGE_CATALOG } from '../../data/dealStageCatalog.js';
 import { api } from '../../api/index.js';
 import { STAGE_ADVANCE_GATE_MESSAGE } from './dealTrackingMeta.js';
 import { DealStagePanel } from './DealStagePanel.jsx';
+import { nextStageIn } from './stageCatalog.js';
+import { AUTO_STAGE_HINT, GATE_LABEL } from './stageMeta.js';
 
 // The guided-advance flow calls api.tickets.{updateTracking,addActivity} directly (then defers the
 // actual stage move to the parent's onUpdateStage), so the module is mocked here (vitest hoists
@@ -60,9 +62,6 @@ const noopHandlers = {
   onDormant: vi.fn(),
   onResume: vi.fn(),
   onSetTenderRequirement: vi.fn(),
-  // TicketDetailPage always passes this (issue #740); the panel treats a missing handler as
-  // "cannot set", so omitting it here would silently render the read-only branch everywhere.
-  onSetEntryChannel: vi.fn(),
 };
 
 // DealStagePanel now calls useQueryClient/useMutation (the guided-advance flow), so it must render
@@ -324,87 +323,110 @@ describe('DealStagePanel Slice A "chip diet" — removed sub-status rows stay go
 });
 
 /**
- * ช่องทางรับงาน (issue #740).
+ * The stage headline says who the stage is dealing with, in the title itself — there is no separate
+ * counterparty row. Stages 4-8 already name the party in their own label; ORDER_RECEIVED did not
+ * ("ได้รับใบสั่งซื้อ"), so this panel's headline for it names who the order came from.
  *
- * The defect had two halves and these cover both: the channel was rendered NOWHERE (utils/format.js
- * had an `entryChannelLabel` map with no caller at all), and `api.tickets.setEntryChannel` — which
- * the server advertises to every deal owner as SET_ENTRY_CHANNEL — had no caller either, so a deal
- * sitting on the V144 UNSPECIFIED default could not be corrected from this portal.
- *
- * Every gate below is read off `availableActions`, exactly as the panel does. Nothing here asserts
- * a rule the frontend owns, because after this change it owns none: whether a reason is required
- * comes from the action's own `requiredFields`, which TicketService.entryChannelIsStated populates.
+ * This also replaced ช่องทางรับงาน (entry channel, once an editable select — issue #740), which is no
+ * longer shown here, and never offers a control.
  */
-describe('DealStagePanel entry channel', () => {
+describe('DealStagePanel headline names the counterparty', () => {
   const owner = [{ action: 'SET_ENTRY_CHANNEL', kind: 'policy', label: 'ตั้งค่า entry channel', requiredFields: ['value'] }];
-  const ownerStated = [{ action: 'SET_ENTRY_CHANNEL', kind: 'policy', label: 'ตั้งค่า entry channel', requiredFields: ['value', 'note'] }];
 
-  it('renders the channel read-only when the server does not offer the action', () => {
-    renderPanel({ summary: baseSummary({ entryChannel: 'OWNER_DIRECT' }), availableActions: [] });
-    expect(screen.getByText('ช่องทางรับงาน')).not.toBeNull();
-    expect(screen.getByText('เจ้าของติดต่อโดยตรง')).not.toBeNull();
-    // Read-only means read-only: no control to fire.
-    expect(screen.queryByRole('combobox')).toBeNull();
+  it('reads "ได้รับใบสั่งซื้อจากผู้รับเหมา/ผู้ซื้อ" at ORDER_RECEIVED', () => {
+    renderPanel({ summary: baseSummary({ salesStage: 'ORDER_RECEIVED' }) });
+    expect(screen.getByText('ได้รับใบสั่งซื้อจากผู้รับเหมา/ผู้ซื้อ')).not.toBeNull();
+    expect(screen.queryByText('ได้รับใบสั่งซื้อ')).toBeNull();
   });
 
-  it('shows ยังไม่ระบุช่องทาง and offers a correction when the deal sits on the V144 default', () => {
-    const onSetEntryChannel = vi.fn();
+  // Wrong-way-round: the override is for ONE stage; every other headline is the stage's own label.
+  it.each(['QUOTE_DESIGN_SIDE', 'QUOTE_OWNER', 'QUOTE_BUYER', 'PRESENTATION', 'DEPOSIT_RECEIVED'])(
+    'leaves the %s headline as the stage label',
+    (salesStage) => {
+      renderPanel({ summary: baseSummary({ salesStage }) });
+      expect(screen.queryByText(/จากผู้รับเหมา\/ผู้ซื้อ/)).toBeNull();
+    },
+  );
+
+  // One concise line under the title: the department that owns the stage, read off the catalog gate.
+  it.each(['PRESENTATION', 'ORDER_RECEIVED', 'DEPOSIT_RECEIVED', 'PROCUREMENT', 'CLOSED_PAID'])(
+    'shows "ผู้รับผิดชอบ: <department>" under the title at %s',
+    (salesStage) => {
+      renderPanel({ summary: baseSummary({ salesStage }) });
+      const gate = catalog.stages.find((stage) => stage.code === salesStage).gate;
+      expect(screen.getByTestId('deal-stage-owner').textContent).toBe(`ผู้รับผิดชอบ: ${GATE_LABEL[gate]}`);
+    },
+  );
+
+  it('shows no owner line while the stage catalog has not loaded (nothing to read the gate from)', () => {
+    renderPanel({ catalog: { stages: [], phases: [] } });
+    expect(screen.queryByTestId('deal-stage-owner')).toBeNull();
+  });
+
+  // The primary action lives in the sticky header, so with no `primaryAction` the panel must not
+  // leave an empty flex row behind — each empty row still costs a full gap-3 of dead space.
+  it('renders no empty placeholder rows when there is no primaryAction', () => {
+    renderPanel({ summary: baseSummary({ salesStage: 'ORDER_RECEIVED' }), docActions: <a href="#doc">doc</a> });
+    expect(screen.getByTestId('deal-stage-panel').querySelectorAll('div:empty')).toHaveLength(0);
+  });
+
+  it('has no separate counterparty / approver / channel row', () => {
+    renderPanel({ summary: baseSummary({ salesStage: 'QUOTE_DESIGN_SIDE', entryChannel: 'OWNER_DIRECT' }) });
+    expect(screen.queryByTestId('deal-stage-counterparty')).toBeNull();
+    expect(screen.queryByText(/ขั้นนี้ติดต่อ|อนุมัติโดย|ช่องทางรับงาน/)).toBeNull();
+    expect(screen.queryByText('เจ้าของติดต่อโดยตรง')).toBeNull();
+  });
+
+  it('never renders a control, even when the server offers SET_ENTRY_CHANNEL', () => {
     renderPanel({
-      summary: baseSummary({ entryChannel: 'UNSPECIFIED' }),
+      summary: baseSummary({ salesStage: 'QUOTE_DESIGN_SIDE', entryChannel: 'BUYER_DIRECT' }),
       availableActions: owner,
-      onSetEntryChannel,
+      onSetEntryChannel: vi.fn(),
     });
+    expect(screen.queryByRole('combobox')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'เปลี่ยน' })).toBeNull();
+  });
+});
 
-    const select = screen.getByRole('combobox');
-    expect(select.value).toBe('UNSPECIFIED');
-    // The stored-only default is visible but NOT choosable — setEntryChannel 400s on it.
-    expect(screen.getByRole('option', { name: 'ยังไม่ระบุช่องทาง' }).disabled).toBe(true);
+/**
+ * Redesign (GLA-156 follow-up): the default view answers three questions — which stage, whose move,
+ * what comes next — and everything else is one click away. These pin what was taken OFF the default
+ * view so it cannot creep back, plus the two controls that were demoted rather than removed.
+ */
+describe('DealStagePanel focused default view', () => {
+  const phaseCount = catalog.phases.length;
+  const meta = catalog.stages.find((stage) => stage.code === 'PRESENTATION');
 
-    act(() => { select.value = 'OWNER_DIRECT'; select.dispatchEvent(new Event('change', { bubbles: true })); });
-
-    // No reason demanded: the server said requiredFields is ['value'] only, because UNSPECIFIED is
-    // an UNSTATED channel. Demanding one here would put friction on the first statement of a
-    // channel for every new deal.
-    expect(onSetEntryChannel).toHaveBeenCalledWith({ value: 'OWNER_DIRECT', note: null });
+  it('shows ONE "เฟส N จาก M" summary, not a per-phase bar for every phase', () => {
+    renderPanel();
+    expect(screen.getByText(`เฟส ${meta.phase} จาก ${phaseCount}`, { exact: false })).not.toBeNull();
+    // The old tracker and badge each rendered a bare "เฟส N" span.
+    expect(screen.queryAllByText(/^เฟส \d$/)).toHaveLength(0);
   });
 
-  it('collects a reason BEFORE calling when the server says one is required', () => {
-    const onSetEntryChannel = vi.fn();
-    renderPanel({
-      summary: baseSummary({ entryChannel: 'BUYER_DIRECT' }),
-      availableActions: ownerStated,
-      onSetEntryChannel,
-    });
-
-    const select = screen.getByRole('combobox');
-    act(() => { select.value = 'OWNER_DIRECT'; select.dispatchEvent(new Event('change', { bubbles: true })); });
-
-    // Wrong-way-round, and the point of the test: the call must NOT have been made yet. Firing a
-    // request the server has already told us it will refuse produces a red toast on a click the UI
-    // itself invited.
-    expect(onSetEntryChannel).not.toHaveBeenCalled();
-    const save = screen.getByRole('button', { name: 'บันทึก' });
-    expect(save.disabled).toBe(true);
-
-    const reason = screen.getByLabelText('เหตุผลที่เปลี่ยนช่องทางรับงาน');
-    act(() => {
-      Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')
-        .set.call(reason, 'ผู้รับเหมาเข้ามาแทนเจ้าของ');
-      reason.dispatchEvent(new Event('input', { bubbles: true }));
-    });
-    act(() => { screen.getByRole('button', { name: 'บันทึก' }).click(); });
-
-    expect(onSetEntryChannel).toHaveBeenCalledWith({
-      value: 'OWNER_DIRECT', note: 'ผู้รับเหมาเข้ามาแทนเจ้าของ',
-    });
+  it('brings the full phase tracker back inside "ดูขั้นตอนทั้งหมด"', () => {
+    renderPanel();
+    act(() => { screen.getByRole('button', { name: /ดูขั้นตอนทั้งหมด/ }).click(); });
+    expect(screen.getAllByText(/^เฟส \d$/).length).toBeGreaterThanOrEqual(phaseCount);
   });
 
-  it('never offers UNSPECIFIED as a choice — it is valid stored, refused as input', () => {
-    renderPanel({ summary: baseSummary({ entryChannel: 'DESIGNER_LED' }), availableActions: owner });
-    // Not merely disabled: on a deal already off the default it is not rendered at all.
-    expect(screen.queryByRole('option', { name: 'ยังไม่ระบุช่องทาง' })).toBeNull();
-    expect(screen.getByRole('option', { name: 'ผู้ออกแบบนำดีล' })).not.toBeNull();
-    expect(screen.getByRole('option', { name: 'ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง' })).not.toBeNull();
+  it('does not render the unlabeled gate chip next to the stage name', () => {
+    renderPanel({ summary: baseSummary({ salesStage: 'ORDER_RECEIVED' }) });
+    // Exact match: the merged next-step line may still MENTION a department, the chip was the
+    // bare label on its own.
+    expect(screen.queryByText('ฝ่ายขาย')).toBeNull();
+    expect(screen.queryByText('ฝ่ายบัญชี')).toBeNull();
+  });
+
+  it('says what comes next and who moves it in ONE element, once', () => {
+    const { container } = renderPanel({ summary: baseSummary({ salesStage: 'ORDER_RECEIVED' }) });
+    const next = nextStageIn(catalog, 'ORDER_RECEIVED');
+    const hint = AUTO_STAGE_HINT[next.code];
+    expect(hint).toBeTruthy();
+    const line = screen.getByTestId('deal-stage-next');
+    expect(line.textContent).toContain('ถัดไป');
+    expect(line.textContent).toContain(hint);
+    expect(container.textContent.split(hint)).toHaveLength(2); // exactly one occurrence
   });
 });
 

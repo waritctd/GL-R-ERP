@@ -107,7 +107,7 @@ function lastChipSpanClass(count) {
  * only surfaces what TicketDetailPage already computed, once, at the top.
  *
  * `bannerText`: the ONE work-state line (already composed by the parent —
- * "รอฝ่ายนำเข้า — รอชำระมัดจำ" / a bare blocker / etc.), or null when there is
+ * a descriptive next-action sentence / a bare blocker / etc.), or null when there is
  * nothing to say — either because the deal is on hold/dormant/lost
  * (DealStagePanel already renders a dedicated banner for those states), or
  * because `primaryAction` already exists and carries the same message on its

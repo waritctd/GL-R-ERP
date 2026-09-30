@@ -211,7 +211,16 @@ public final class DealQuotationDtos {
          * manual, OPTIONAL field a sales rep types in the editor ({@code sales.quotation.ordered_by_name},
          * V192). Null/blank (the default, and every pre-V192 row) prints the dotted placeholder —
          * the customer signs on paper — exactly like every other signature slot with nothing set. */
-        String orderedByName
+        String orderedByName,
+        /** {@code sales.quotation.recipient_type} — who this quotation is FOR: the source pricing
+         * request's {@code DESIGNER/OWNER/BUYER} for a PRICING_REQUEST-origin row, {@code
+         * UNSPECIFIED} for a DEAL_DIRECT row (see {@code DealQuotationRepository.InsertDraftParams}).
+         * Read-only exposure of an already-persisted column (Round 8, owner-approved 2026-09-30):
+         * the register shows it as a chip. Null only on a row read through a path that predates it. */
+        String recipientType,
+        /** {@code sales.quotation.recipient_label} — the free-text recipient name that goes with
+         * {@link #recipientType} (e.g. "คุณสมชาย (ผู้ออกแบบ)"). Nullable. */
+        String recipientLabel
     ) {
         /** This DTO carrying {@link #removedCeoItems} — same device as {@code
          * DealQuotationItemDto#withCeoComparison} (appended field written after the shorter
@@ -232,7 +241,7 @@ public final class DealQuotationDtos {
                 salesRepDisplayPhone, omitContactHonorific, fullPaymentTerm, derivedFromQuotationId,
                 derivedFromQuotationNumber, derivedFromQuotationStatus, items, createdAt, updatedAt, origin,
                 pricingRequestId, priceModeChangedFromCeo, ceoPriceMode, pricingRequestCode,
-                itemsRemovedFromCeoCount, removedItems, orderedByName);
+                itemsRemovedFromCeoCount, removedItems, orderedByName, recipientType, recipientLabel);
         }
 
         /** This DTO carrying {@code value} as its {@link #orderedByName} — same appended-field
@@ -252,7 +261,7 @@ public final class DealQuotationDtos {
                 salesRepDisplayPhone, omitContactHonorific, fullPaymentTerm, derivedFromQuotationId,
                 derivedFromQuotationNumber, derivedFromQuotationStatus, items, createdAt, updatedAt, origin,
                 pricingRequestId, priceModeChangedFromCeo, ceoPriceMode, pricingRequestCode,
-                itemsRemovedFromCeoCount, removedCeoItems, value);
+                itemsRemovedFromCeoCount, removedCeoItems, value, recipientType, recipientLabel);
         }
 
         /** The pre-M4(c) shape (no {@link #itemsRemovedFromCeoCount}) — kept so every existing
@@ -289,7 +298,7 @@ public final class DealQuotationDtos {
                 salesRepDisplayId, salesRepDisplayName, salesRepDisplayNameEn, salesRepDisplayPhone,
                 omitContactHonorific, fullPaymentTerm, derivedFromQuotationId, derivedFromQuotationNumber,
                 derivedFromQuotationStatus, items, createdAt, updatedAt, origin, pricingRequestId,
-                priceModeChangedFromCeo, ceoPriceMode, pricingRequestCode, 0, List.of(), null);
+                priceModeChangedFromCeo, ceoPriceMode, pricingRequestCode, 0, List.of(), null, null, null);
         }
 
         /** The pre-GLA-123 shape (no {@link #origin}/{@link #pricingRequestId}/CEO-comparison

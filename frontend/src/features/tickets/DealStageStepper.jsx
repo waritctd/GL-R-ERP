@@ -179,6 +179,34 @@ export function PhaseTracker({ catalog = EMPTY_STAGE_CATALOG, salesStage, lost =
   );
 }
 
+/**
+ * One-line "where are we" for the default deal view: "เฟส 4 จาก 5 · <phase name>" over a single-colour
+ * bar. PhaseTracker's five hues and five labels encode nothing a user decides on, so it now lives
+ * only inside the expanded stepper.
+ */
+export function PhaseSummary({ catalog = EMPTY_STAGE_CATALOG, salesStage, lost = false }) {
+  const currentIdx = stageIndexIn(catalog, salesStage);
+  const phases = catalog.phases.filter((phaseId) => stagesInPhase(catalog, phaseId).length > 0);
+  const currentPhase = phases.find((phaseId) => {
+    const steps = stagesInPhase(catalog, phaseId);
+    return currentIdx >= stageIndexIn(catalog, steps[0].code)
+      && currentIdx <= stageIndexIn(catalog, steps[steps.length - 1].code);
+  });
+  if (currentPhase == null || lost) return null;
+  const total = catalog.stages.length;
+  return (
+    <div className="flex min-w-0 flex-col gap-1.5">
+      <span className="text-xs font-bold text-text-muted">
+        เฟส {currentPhase} จาก {phases.length} · {phaseName(currentPhase)}
+      </span>
+      <div className="h-1.5 overflow-hidden rounded-full bg-surface-subtle" aria-hidden="true">
+        <span className="block h-full rounded-full bg-info" style={{ width: `${((currentIdx + 1) / total) * 100}%` }} />
+      </div>
+      <span className="sr-only">ขั้นที่ {currentIdx + 1} จาก {total}</span>
+    </div>
+  );
+}
+
 /** Compact per-row progress bar for the list page (one proportional segment per phase). */
 export function StageProgressBar({ catalog = EMPTY_STAGE_CATALOG, salesStage, lost = false }) {
   const currentIdx = stageIndexIn(catalog, salesStage);
