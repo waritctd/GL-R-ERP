@@ -45,6 +45,10 @@ export const EVENT_KIND_LABEL = {
   // same-ticket sweep DealQuotationService#approve fires once per sibling it actually
   // supersedes. Missing here would leave the raw kind string on screen (Opus review finding).
   DEAL_QUOTATION_SUPERSEDED: 'ใบเสนอราคาถูกแทนที่',
+  // GLA-136 (V193) -- DealQuotationService#promoteToDeal: a quotation-only deal entered the
+  // pipeline from its APPROVED direct quotation. Not ORDER_CONFIRMED_FROM_QUOTATION's wording:
+  // no customer outcome was recorded on a pricing-request quotation here.
+  DEAL_PROMOTED_FROM_QUOTATION: 'สร้างดีลจากใบเสนอราคา',
   CLOSED:             'ปิดเรื่อง',
   CANCELLED:          'ยกเลิก',
   EDITED:             'แก้ไขรายการสินค้า',

@@ -1245,6 +1245,11 @@ export const api = {
     // GLA-74 part 1 ("สร้างจากใบเดิม" / สั่งเหมือนเดิม) -- clone an APPROVED quotation into a new,
     // independent DRAFT. The source stays APPROVED; see DealQuotationService#createReorder.
     createReorder: (id, payload = {}) => apiRequest(API_ROUTES.dealQuotations.reorders(id), { method: 'POST', body: payload }),
+    // GLA-136 (owner ruling 2026-09-30) -- "สร้างดีลจากใบเสนอราคา". No request body. Responds
+    // `{ result: { ticketId, ticket: TicketSummaryDto, quotation: DealQuotationDto } }`
+    // (DealQuotationDtos.PromoteToDealResultDto). Idempotent server-side: a replay on an
+    // already-promoted deal returns the same shape. See DealQuotationService#promoteToDeal.
+    promoteToDeal: (id) => apiRequest(API_ROUTES.dealQuotations.promoteToDeal(id), { method: 'POST' }),
     cancel: (id, payload = {}) => apiRequest(API_ROUTES.dealQuotations.cancel(id), { method: 'POST', body: payload }),
     // M4(d) fix (Opus review, 2026-09-20) — no request body: everything is rebuilt server-side
     // from the same approved decision item.

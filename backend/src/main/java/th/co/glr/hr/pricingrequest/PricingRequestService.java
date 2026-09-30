@@ -125,6 +125,12 @@ public class PricingRequestService {
             return detail(requireSameTicket(existing, ticketId).id());
         }
         requireActive(ticket);
+        // GLA-136 (owner ruling 2026-09-30): a quotation-only container ticket (V193) is not a
+        // pipeline deal; opening a pricing request on it would silently make it a mixed-origin deal
+        // that the deal list still hides. The only way in is promoting an APPROVED direct
+        // quotation. Placed after the owner check and the replay short-circuit, so a non-owner
+        // still gets 403 and an idempotent replay still returns its original result.
+        th.co.glr.hr.ticket.QuotationOnlyTickets.requirePipelineDeal(ticket);
         // Validate BEFORE persisting — an unvalidated value hits a CHECK
         // constraint in the repository and fails closed (500), same reasoning
         // as TicketService.create's Priority guard.

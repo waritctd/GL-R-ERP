@@ -7,6 +7,7 @@ import {
   canCreateDealQuotationStandalone,
   canDecideDealQuotation,
   canEditDealQuotation,
+  canPromoteDealQuotationToDeal,
   canReviseDealQuotation,
   canSubmitDealQuotation,
   canTransitionDealQuotation,
@@ -221,6 +222,35 @@ describe('canSubmitDealQuotation / canCancelDealQuotation / canReviseDealQuotati
     expect(canReviseDealQuotation(salesOwner, quotation({ docStatus: 'DRAFT' }))).toBe(false);
     expect(canReviseDealQuotation(salesOwner, quotation({ docStatus: 'PENDING_APPROVAL' }))).toBe(false);
     expect(canReviseDealQuotation(otherSales, quotation({ docStatus: 'APPROVED' }))).toBe(false);
+  });
+});
+
+// GLA-136 (owner ruling 2026-09-30) — display gate for "สร้างดีลจากใบเสนอราคา". Mirrors
+// DealQuotationService#promoteToDeal's own gate (requireEditAccess + DEAL_DIRECT + APPROVED);
+// the authoritative, real-DB proof is DealQuotationPromoteIntegrationTest.
+describe('canPromoteDealQuotationToDeal', () => {
+  it('owner (edit rights) on an APPROVED direct quotation', () => {
+    expect(canPromoteDealQuotationToDeal(salesOwner, quotation({ docStatus: 'APPROVED' }))).toBe(true);
+    // A stored-null/absent origin reads as DEAL_DIRECT, exactly like the server DTO.
+    expect(canPromoteDealQuotationToDeal(salesOwner, quotation({ docStatus: 'APPROVED', origin: undefined }))).toBe(true);
+  });
+
+  it('never before APPROVED, and never after it was superseded/cancelled', () => {
+    for (const docStatus of ['DRAFT', 'PENDING_APPROVAL', 'SUPERSEDED', 'CANCELLED']) {
+      expect(canPromoteDealQuotationToDeal(salesOwner, quotation({ docStatus }))).toBe(false);
+    }
+  });
+
+  it('never a PRICING_REQUEST-origin quotation', () => {
+    expect(canPromoteDealQuotationToDeal(salesOwner,
+      quotation({ docStatus: 'APPROVED', origin: 'PRICING_REQUEST' }))).toBe(false);
+  });
+
+  it('never a user without edit rights (wrong-way-round)', () => {
+    expect(canPromoteDealQuotationToDeal(otherSales, quotation({ docStatus: 'APPROVED' }))).toBe(false);
+    expect(canPromoteDealQuotationToDeal({ id: 8, role: 'ceo' }, quotation({ docStatus: 'APPROVED' }))).toBe(false);
+    expect(canPromoteDealQuotationToDeal({ id: 7, role: 'import' }, quotation({ docStatus: 'APPROVED' }))).toBe(false);
+    expect(canPromoteDealQuotationToDeal(null, quotation({ docStatus: 'APPROVED' }))).toBe(false);
   });
 });
 

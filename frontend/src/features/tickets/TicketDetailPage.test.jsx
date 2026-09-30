@@ -585,6 +585,33 @@ describe('TicketDetailPage', () => {
     });
   });
 
+  // GLA-136 (owner ruling 2026-09-30): a quotation-only container ticket (V193) is not a pipeline
+  // deal. The list never shows it, but a direct link still reaches it — the page must say so and
+  // offer no pipeline control (the server 409s every manual pipeline write on it regardless).
+  describe('quotation-only deal (GLA-136)', () => {
+    it('shows the "not in the pipeline" banner and hides the stage panel and the primary CTA', async () => {
+      api.tickets.get.mockResolvedValueOnce({
+        ticket: buildTicket({ summary: { status: 'draft', salesStage: 'LEAD_APPROACH', createdById: 1, quotationOnly: true } }),
+      });
+      renderTicketDetailPage(salesOwnerUser);
+
+      const banner = await screen.findByTestId('ticket-quotation-only-banner');
+      expect(within(banner).getByText('ดีลนี้เป็นดีลใบเสนอราคาเท่านั้น — ยังไม่เข้า pipeline')).not.toBeNull();
+      expect(screen.queryByTestId('deal-stage-panel')).toBeNull();
+      expect(screen.queryByTestId('ticket-primary-action')).toBeNull();
+    });
+
+    it('an ordinary pipeline deal keeps its stage panel and shows no banner (wrong-way-round)', async () => {
+      api.tickets.get.mockResolvedValueOnce({
+        ticket: buildTicket({ summary: { status: 'draft', salesStage: 'LEAD_APPROACH', createdById: 1, quotationOnly: false } }),
+      });
+      renderTicketDetailPage(salesOwnerUser);
+
+      expect(await screen.findByTestId('deal-stage-panel')).not.toBeNull();
+      expect(screen.queryByTestId('ticket-quotation-only-banner')).toBeNull();
+    });
+  });
+
   // Ticket-workspace IA rebuild Slice B ("retire the context rail, one comment
   // composer"): วันสำคัญ / ผู้เกี่ยวข้อง moved here verbatim from the deleted
   // TicketContextPanel.jsx sticky rail — same fields, same labels, same

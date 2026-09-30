@@ -28,8 +28,31 @@ public record CreateTicketRequest(
      * all, and the rep met that refusal on their very first action with no clue it was coming.
      * Collecting it here is what makes a freshly created deal actually movable.
      */
-    LocalDate nextFollowUpAt
+    LocalDate nextFollowUpAt,
+    /**
+     * GLA-136 (owner ruling 2026-09-30): optional; {@code true} marks the new ticket as a
+     * quotation-only container ({@code sales.ticket.quotation_only}, V193) — the quotation editor's
+     * inline "new customer + project" create at {@code /quotations/new} is the ONLY caller that
+     * sends it. Such a ticket is not a pipeline deal: it is left out of the deal list/count and the
+     * dashboard, and manual pipeline writes refuse it, until the rep promotes an APPROVED direct
+     * quotation on it ({@code POST /api/deal-quotations/{id}/promote-to-deal}). Null/absent/false
+     * means an ordinary pipeline deal — exactly the behaviour every existing caller already gets.
+     */
+    Boolean quotationOnly
 ) {
+    /**
+     * The pre-GLA-136 ten-argument shape, kept so every existing call site that passes
+     * {@code nextFollowUpAt} keeps compiling unchanged — a deal created through it is an ordinary
+     * pipeline deal ({@code quotationOnly = null}). Jackson binds request bodies through the
+     * canonical constructor, so the wire format gains the optional field either way.
+     */
+    public CreateTicketRequest(String title, String priority, String customerName, Long customerId,
+                               Long projectId, Long contactId, String note, String entryChannel,
+                               List<TicketItemRequest> items, LocalDate nextFollowUpAt) {
+        this(title, priority, customerName, customerId, projectId, contactId, note, entryChannel,
+            items, nextFollowUpAt, null);
+    }
+
     /**
      * The pre-existing nine-argument shape, kept so the 56 call sites that predate
      * {@code nextFollowUpAt} keep compiling unchanged. A deal created through this constructor has
@@ -41,6 +64,6 @@ public record CreateTicketRequest(
                                Long projectId, Long contactId, String note, String entryChannel,
                                List<TicketItemRequest> items) {
         this(title, priority, customerName, customerId, projectId, contactId, note, entryChannel,
-            items, null);
+            items, null, null);
     }
 }

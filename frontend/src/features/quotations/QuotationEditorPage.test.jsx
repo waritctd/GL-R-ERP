@@ -800,6 +800,9 @@ describe('QuotationEditorPage inline deal creation', () => {
       priority: 'NORMAL',
       items: [],
       nextFollowUpAt: expectedFollowUp,
+      // GLA-136 (owner ruling 2026-09-30): the inline-created deal is a quotation-only container,
+      // not a pipeline deal, until an APPROVED quotation on it is promoted.
+      quotationOnly: true,
     }));
 
     // The ticket envelope's id lives at `.summary.id` -- the SAME unwrap this test suite's own

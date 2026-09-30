@@ -469,6 +469,19 @@ public final class DealQuotationDtos {
         long approved
     ) {}
 
+    /**
+     * GLA-136 — {@code POST /api/deal-quotations/{id}/promote-to-deal}'s result: the promoted deal's
+     * id (the SAME ticket the quotation always hung off — promotion never mints a second one), its
+     * summary AFTER promotion ({@code quotationOnly=false}, status {@code quotation_issued}, stage
+     * {@code ORDER_RECEIVED}, payment {@code CUSTOMER_CONFIRMED}), and the quotation itself. An
+     * idempotent replay returns the same shape describing the current state.
+     */
+    public record PromoteToDealResultDto(
+        long ticketId,
+        th.co.glr.hr.ticket.TicketSummaryDto ticket,
+        DealQuotationDto quotation
+    ) {}
+
     /** {@link DealQuotationRequests.ItemInput}'s fields, plus what the server computed for it. */
     public record DealQuotationItemDto(
         long id,

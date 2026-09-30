@@ -26,6 +26,7 @@ import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationCountsDto;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationItemDto;
+import th.co.glr.hr.dealquotation.DealQuotationDtos.PromoteToDealResultDto;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.ApproveRequest;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.CancelRequest;
 import th.co.glr.hr.dealquotation.DealQuotationRepository.PictureImage;
@@ -202,6 +203,17 @@ public class DealQuotationController {
                                                 HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return Map.of("quotation", quotations.recordOutcome(id, request, user));
+    }
+
+    /** GLA-136 (owner ruling 2026-09-30) — "สร้างดีลจากใบเสนอราคา": promotes an APPROVED direct
+     * quotation's quotation-only container ticket into the deal pipeline at ORDER_RECEIVED. No
+     * request body. Idempotent. See {@code DealQuotationService#promoteToDeal}. Deliberately not
+     * {@code /outcome} or a confirm-order route: R10 stands — a direct quotation still has no
+     * customer-outcome concept; promotion is the rep's own decision that the customer ordered. */
+    @PostMapping("/deal-quotations/{id}/promote-to-deal")
+    Map<String, PromoteToDealResultDto> promoteToDeal(@PathVariable long id, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("result", quotations.promoteToDeal(id, user));
     }
 
     @PostMapping("/deal-quotations/{id}/cancel")

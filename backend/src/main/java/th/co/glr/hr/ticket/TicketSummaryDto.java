@@ -103,8 +103,52 @@ public record TicketSummaryDto(
      * sales.ticket.reopen_count}, {@code INTEGER NOT NULL DEFAULT 0}). {@code 0} for a deal that
      * has never been lost-then-reopened. See {@link #reopenedAt}.
      */
-    int reopenCount
+    int reopenCount,
+    /**
+     * GLA-136 (owner ruling 2026-09-30, V193 {@code sales.ticket.quotation_only}): {@code true}
+     * when this ticket exists only as the container of a direct (DEAL_DIRECT) quotation written at
+     * {@code /quotations/new} — it is NOT a pipeline deal. The deal list/count and the dashboard
+     * leave such a ticket out, and manual pipeline writes refuse it; {@code GET /api/tickets/{id}}
+     * still serves it (the quotation editor reads this summary). Flips to {@code false} when the rep
+     * promotes an APPROVED direct quotation into the pipeline
+     * ({@code DealQuotationService#promoteToDeal}).
+     */
+    boolean quotationOnly
 ) {
+    /**
+     * The pre-GLA-136 full-arity shape, kept so every existing {@code new TicketSummaryDto(...)}
+     * call site (mostly test fixtures) keeps compiling unchanged — they all describe ordinary
+     * pipeline deals, so {@link #quotationOnly} defaults to {@code false}. Only
+     * {@code TicketRepository#mapSummary} reads the real column.
+     */
+    public TicketSummaryDto(
+        long id, String code, String type, String title, String status, String priority,
+        long createdById, String createdByName, Long assignedToId, String assignedToName,
+        String customerName, Long customerId, Long projectId, String projectName,
+        Long contactId, String contactName, String note,
+        Instant createdAt, Instant updatedAt, Instant closedAt, int itemCount, boolean hasEdits,
+        String paymentStatus, String fulfillmentStatus,
+        String salesStage, String lostReason, Instant lostAt, Instant stageUpdatedAt,
+        String lifecycle, String tenderRequirement, String depositPolicy, String depositPolicyReason,
+        String entryChannel, LocalDate billingDate, LocalDate dueDate, Integer creditTermDays,
+        LocalDate lastFollowUpAt, LocalDate nextFollowUpAt, String paymentStage,
+        BigDecimal amountPayable, BigDecimal amountPaid, BigDecimal amountOutstanding, boolean overdue,
+        Instant closeConfirmedAt, String closeConfirmedByName, boolean invoiceOnFile,
+        String cancelReason, Instant cancelledAt,
+        Integer winProbabilityOverride, String designerName, String ownerName, String buyerName,
+        boolean stale, boolean commissionRecorded, Instant reopenedAt, int reopenCount
+    ) {
+        this(id, code, type, title, status, priority, createdById, createdByName, assignedToId,
+            assignedToName, customerName, customerId, projectId, projectName, contactId, contactName,
+            note, createdAt, updatedAt, closedAt, itemCount, hasEdits, paymentStatus, fulfillmentStatus,
+            salesStage, lostReason, lostAt, stageUpdatedAt, lifecycle, tenderRequirement, depositPolicy,
+            depositPolicyReason, entryChannel, billingDate, dueDate, creditTermDays, lastFollowUpAt,
+            nextFollowUpAt, paymentStage, amountPayable, amountPaid, amountOutstanding, overdue,
+            closeConfirmedAt, closeConfirmedByName, invoiceOnFile, cancelReason, cancelledAt,
+            winProbabilityOverride, designerName, ownerName, buyerName, stale, commissionRecorded,
+            reopenedAt, reopenCount, false);
+    }
+
     /**
      * Override wins when set, else the {@link DealStage}-derived default. Never a blocker.
      *
@@ -165,6 +209,6 @@ public record TicketSummaryDto(
             creditTermDays, lastFollowUpAt, nextFollowUpAt, paymentStage, amountPayable, amountPaid,
             amountOutstanding, overdue, closeConfirmedAt, closeConfirmedByName, invoiceOnFile,
             cancelReason, cancelledAt, winProbabilityOverride, designerName, ownerName, buyerName, stale,
-            commissionRecorded, reopenedAt, reopenCount);
+            commissionRecorded, reopenedAt, reopenCount, quotationOnly);
     }
 }

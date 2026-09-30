@@ -54,10 +54,14 @@ import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestSummaryDto;
 import th.co.glr.hr.pricingrequest.PricingRequestEventKind;
 import th.co.glr.hr.pricingrequest.PricingRequestRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestStatus;
+import th.co.glr.hr.dealquotation.DealQuotationDtos.PromoteToDealResultDto;
+import th.co.glr.hr.ticket.DealLifecycle;
 import th.co.glr.hr.ticket.QuotationStatus;
 import th.co.glr.hr.ticket.RelatedDocumentType;
 import th.co.glr.hr.ticket.TicketEventKind;
+import th.co.glr.hr.ticket.TicketItemRequest;
 import th.co.glr.hr.ticket.TicketRepository;
+import th.co.glr.hr.ticket.TicketStatus;
 import th.co.glr.hr.ticket.TicketSummaryDto;
 
 /**
@@ -1773,6 +1777,190 @@ public class DealQuotationService {
             case QuotationStatus.REVISION_REQUESTED -> "ลูกค้าขอแก้ไข";
             default -> "มีการอัปเดตผล";
         };
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // GLA-136 (owner ruling, Ploy 2026-09-30) — "สร้างดีลจากใบเสนอราคา": promote an APPROVED direct
+    // quotation's quotation-only container ticket into the pipeline at S10 ORDER_RECEIVED.
+    //
+    // Direct (DEAL_DIRECT) and pipeline (PRICING_REQUEST) quotations STAY SEPARATE, and R10 stands:
+    // there is still no recordOutcome/confirmOrder for DEAL_DIRECT (see #recordOutcome). A direct
+    // quotation is quotation-only until the rep decides the customer has ordered — THIS is that
+    // decision. It lives here rather than in a new service because every authz decision for this
+    // engine already lives on this class (#requireEditAccess is the audience, reused verbatim, not
+    // re-derived) and #ticketService is already wired here for #approveAndIssuePricingRequestOrigin;
+    // a sibling service would have to either duplicate that gate or reach into this one.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    /** ticket_item column widths (V6/V8/V9/V25): brand 255, model/color/texture/size 80, raw_unit 30.
+     * quotation_item's own were widened to 255 by V162, so a long catalogue text is clipped here
+     * rather than failing the promotion on a length error; the quotation keeps the full text. */
+    private static final int TICKET_ITEM_BRAND_MAX = 255;
+    private static final int TICKET_ITEM_TEXT_MAX = 80;
+    private static final int TICKET_ITEM_RAW_UNIT_MAX = 30;
+
+    /**
+     * Promotes the quotation-only container ticket this APPROVED direct quotation hangs off into
+     * the deal pipeline, in ONE transaction, mirroring {@code OrderConfirmationService#confirmOrder}'s
+     * own bridge sequence (never a second implementation of it):
+     *
+     * <ol>
+     *   <li>lock the ticket row ({@link TicketRepository#lockTicketForUpdate}) and re-read it — every
+     *       precondition below is checked against the LOCKED read;</li>
+     *   <li>{@code quotation_only TRUE -> FALSE} ({@link TicketRepository#markPromotedToPipeline});</li>
+     *   <li>{@code status draft -> quotation_issued} — the SAME bridge write
+     *       ({@link TicketRepository#markQuotationIssuedForOrderConfirmation}) confirmOrder uses, the
+     *       only thing every downstream ticket-keyed gate (deposit notice, IR, close) keys on;</li>
+     *   <li>{@code sales.ticket_item} written from the quotation's own goods lines (see
+     *       {@link #ticketItemsFromQuotation}) — the delivery machinery's quantity source;</li>
+     *   <li>{@code TicketService#confirmCustomerForPromotedQuotation} — the unmodified
+     *       confirmCustomer body: {@code payment_status = CUSTOMER_CONFIRMED}, stage auto-advanced to
+     *       {@code ORDER_RECEIVED}.</li>
+     * </ol>
+     *
+     * <p><strong>Authz</strong> (403 "ไม่มีสิทธิ์เข้าถึงรายการนี้"): exactly {@link #requireEditAccess}
+     * against the container ticket — the owning {@code sales} rep, any {@code sales_manager}, or a
+     * {@code can_create_quotation} grantee; the same people who may write the direct quotation. Checked
+     * BEFORE any 409, so a caller with no access learns nothing about the quotation's state.
+     *
+     * <p><strong>Preconditions</strong> (409 unless noted): quotation exists on this engine (404);
+     * {@code origin = DEAL_DIRECT}; ticket {@code quotation_only}; {@code doc_status = APPROVED};
+     * ticket lifecycle {@code ACTIVE}; ticket status {@code draft}.
+     *
+     * <p><strong>Idempotent</strong>: a ticket that is no longer quotation-only AND carries a
+     * {@link TicketEventKind#DEAL_PROMOTED_FROM_QUOTATION} event was already promoted by this path —
+     * a replay (a double click, a retried request, a second tab) returns the current state and writes
+     * nothing. A ticket that is not quotation-only and never was promoted is an ordinary pipeline deal
+     * — 409, never a silent success.
+     */
+    @Transactional
+    public PromoteToDealResultDto promoteToDeal(long quotationId, UserPrincipal actor) {
+        if (ticketService == null) {
+            // Same defensive shape as #approveAndIssuePricingRequestOrigin's own guard — only
+            // reachable if a deployment wires this bean without #wireTicketService.
+            throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "ฟีเจอร์นี้ยังไม่พร้อมใช้งาน");
+        }
+        DealQuotationDto quotation = requireQuotation(quotationId);
+        long ticketId = quotation.ticketId();
+        // Authz first — see this method's Javadoc.
+        requireEditAccess(actor, requireTicketSummary(ticketId));
+        if (!"DEAL_DIRECT".equals(quotation.origin())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "สร้างดีลจากใบเสนอราคาได้เฉพาะใบเสนอราคาตรง (ไม่ผ่านคำขอราคา) เท่านั้น");
+        }
+
+        // Serialize every promotion (and every other writer that takes this lock) on this deal.
+        tickets.lockTicketForUpdate(ticketId);
+        TicketSummaryDto locked = requireTicketSummary(ticketId);
+
+        if (!locked.quotationOnly()) {
+            if (tickets.hasPromotionFromQuotationEvent(ticketId)) {
+                return promotionResult(ticketId, quotationId); // idempotent replay — no writes
+            }
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ดีลนี้อยู่ใน pipeline อยู่แล้ว — ไม่ต้องสร้างดีลจากใบเสนอราคา");
+        }
+        DealQuotationDto fresh = requireQuotation(quotationId);
+        if (!QuotationStatus.APPROVED.equals(fresh.docStatus())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "สร้างดีลได้เฉพาะใบเสนอราคาที่อนุมัติแล้วเท่านั้น (ปัจจุบัน: " + fresh.docStatus() + ")");
+        }
+        if (!DealLifecycle.ACTIVE.equals(locked.lifecycle())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ดีลไม่ได้อยู่ในสถานะ ACTIVE (" + locked.lifecycle() + ") จึงสร้างดีลจากใบเสนอราคาไม่ได้");
+        }
+        if (!TicketStatus.DRAFT.equals(locked.status())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "สร้างดีลจากใบเสนอราคาไม่ได้ — สถานะดีลเดิม (" + locked.status() + ") ขัดแย้งกับขั้นตอนนี้");
+        }
+
+        // Both compare-and-sets run under the row lock, so a 0 here is unreachable through the API;
+        // it is checked, not assumed, and rolls the whole promotion back.
+        if (tickets.markPromotedToPipeline(ticketId) != 1
+                || tickets.markQuotationIssuedForOrderConfirmation(ticketId) != 1) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "สถานะดีลถูกเปลี่ยนโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
+        }
+        tickets.addEventWithDocument(ticketId, actor.id(), actor.name(),
+            TicketEventKind.DEAL_PROMOTED_FROM_QUOTATION, TicketStatus.DRAFT, TicketStatus.QUOTATION_ISSUED,
+            "สร้างดีลจากใบเสนอราคา " + fresh.number(), RelatedDocumentType.QUOTATION, quotationId);
+        // The quotation is the agreed order, so it REPLACES whatever preliminary lines the
+        // container carried (a quotation-only ticket normally has none — the inline create sends
+        // items: [] — but a backfilled one created from the deal page may). Safe at this point: the
+        // ticket is still pre-order (no pricing request can exist on a quotation-only ticket, no
+        // delivery or stock reservation exists before quotation_issued), so nothing references them.
+        tickets.replaceItems(ticketId, ticketItemsFromQuotation(fresh));
+        ticketService.confirmCustomerForPromotedQuotation(ticketId, actor);
+        return promotionResult(ticketId, quotationId);
+    }
+
+    private PromoteToDealResultDto promotionResult(long ticketId, long quotationId) {
+        return new PromoteToDealResultDto(ticketId, requireTicketSummary(ticketId), requireQuotation(quotationId));
+    }
+
+    /**
+     * The quotation's lines as {@code sales.ticket_item} rows — the same field set {@link
+     * TicketRepository#findPricingChainFallbackItems} maps and {@code
+     * OrderConfirmationService#reconcileTicketItems} writes: brand/model/color/texture/size, qty,
+     * qty_sqm, unit_basis, raw_unit. NO pricing field is copied (proposed/approved/raw price stay
+     * null) — those columns carry the legacy ticket-native approval history, and a direct
+     * quotation's typed price was never "approved" on this ticket in that sense; money documents
+     * read the quotation itself ({@code DepositNoticeRepository#findDealQuotationItemsForDeposit}).
+     *
+     * <p>Only goods lines: an {@code ADJUSTMENT} row (a negative discount/surcharge line, quantity −1)
+     * is money, not something to deliver, and a non-positive quantity would violate
+     * {@code chk_ticket_item_qty_delivered} anyway. A TILE line's quantity is its final piece count
+     * ({@code quantity}), and its area is derived from that SAME count via the shared {@link
+     * WastageCalculator#sqmQuantityFromPieces} — exactly as reconcileTicketItems derives it — so qty
+     * and qty_sqm can never disagree. {@code unit_basis} is PIECE for every row: ticket_item's CHECK
+     * allows only PIECE/SQM, and qty here is always a count (pieces, or the PLAIN row's own unit,
+     * kept verbatim in raw_unit).
+     */
+    private List<TicketItemRequest> ticketItemsFromQuotation(DealQuotationDto quotation) {
+        List<TicketItemRequest> rows = new ArrayList<>();
+        for (DealQuotationItemDto item : quotation.items()) {
+            if (WastageCalculator.LINE_TYPE_ADJUSTMENT.equals(item.lineType())) {
+                continue;
+            }
+            BigDecimal qty = item.quantity();
+            if (qty == null || qty.signum() <= 0) {
+                continue;
+            }
+            boolean tile = !WastageCalculator.LINE_TYPE_PLAIN.equals(item.lineType());
+            BigDecimal qtySqm = tile && item.sqmPerPiece() != null && item.sqmPerPiece().signum() > 0
+                ? WastageCalculator.sqmQuantityFromPieces(qty.intValue(), item.sqmPerPiece())
+                : null;
+            rows.add(new TicketItemRequest(
+                clip(firstNonBlank(item.brand(), item.model(), item.descriptionLine(), "รายการจากใบเสนอราคา"),
+                    TICKET_ITEM_BRAND_MAX),
+                clip(item.model(), TICKET_ITEM_TEXT_MAX),
+                clip(item.color(), TICKET_ITEM_TEXT_MAX),
+                clip(item.texture(), TICKET_ITEM_TEXT_MAX),
+                clip(item.sizeText(), TICKET_ITEM_TEXT_MAX),
+                null, // factory — a direct quotation line carries none
+                qty, qtySqm, "PIECE",
+                null, null, // rawPrice/rawCurrency — not a costing input, see Javadoc
+                clip(item.unit(), TICKET_ITEM_RAW_UNIT_MAX),
+                null, // proposedPrice — see Javadoc
+                "THB"));
+        }
+        return rows;
+    }
+
+    private static String firstNonBlank(String... values) {
+        for (String v : values) {
+            if (v != null && !v.isBlank()) {
+                return v.trim();
+            }
+        }
+        return null;
+    }
+
+    private static String clip(String value, int max) {
+        if (value == null) {
+            return null;
+        }
+        return value.length() <= max ? value : value.substring(0, max);
     }
 
     /**

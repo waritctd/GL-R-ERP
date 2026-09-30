@@ -4,7 +4,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { api } from '../../api/index.js';
 import { canAccessPath } from '../../app/permissions.js';
 import { queryKeys } from '../../api/queryKeys.js';
-import { Button } from '../../components/common/Button.jsx';
+import { Button, buttonVariants } from '../../components/common/Button.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Panel, PageStack } from '../../components/common/Layout.jsx';
@@ -12,12 +12,13 @@ import { Modal } from '../../components/common/Modal.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { RouteFallback } from '../../components/common/RouteFallback.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
+import { cn } from '../../utils/cn.js';
 import { downloadBlob } from '../../utils/download.js';
 import { addDaysIso, bangkokTodayIso } from '../../utils/format.js';
 import {
   canApproveDealQuotation, canApproveDealQuotationNow, canCancelDealQuotation, canCreateDealQuotation,
   canCreateDealQuotationStandalone, canDecideDealQuotation, canEditDealQuotation,
-  canReviseDealQuotation, canSubmitDealQuotation, DEPOSIT_PERCENT_PRESETS,
+  canPromoteDealQuotationToDeal, canReviseDealQuotation, canSubmitDealQuotation, DEPOSIT_PERCENT_PRESETS,
   availablePriceModes, PRICE_MODE_OPTIONS, adjustmentDescriptionPreview, buildQuotationChecklist, currencyForLanguage, DOCUMENT_LANGUAGE_OPTIONS,
   isEffectiveZeroDeposit,
   estimateAdjustmentAmount, formatQuotationMoney, hasSpecialPricing, isEnglishPerSqm, LINE_TYPE_ADJUSTMENT, LINE_TYPE_PLAIN, LINE_TYPE_TILE,
@@ -225,6 +226,23 @@ export function QuotationEditorPage({ user, showToast }) {
     enabled: !!effectiveTicketId && (!id || quotation?.docStatus === 'DRAFT'),
   });
   const ticket = ticketQuery.data ?? null;
+
+  // GLA-136 (owner ruling 2026-09-30) — "สร้างดีลจากใบเสนอราคา". An APPROVED direct quotation's
+  // container ticket is either still quotation-only (offer the promotion) or already promoted
+  // (offer "ไปที่ดีล" instead). Only fetched for a user who could promote, and under its OWN key
+  // suffix: ticketQuery above caches the bare summary under queryKeys.ticketDetail(id) while
+  // TicketDetailPage caches the whole TicketDto under that same key, so reading ticketQuery here
+  // would see whichever shape happened to be cached. retry:false — a 403 (e.g. a quotation-grant
+  // holder whose role cannot read tickets) just means "unknown", and the button then falls back
+  // to promotion, which the server answers idempotently for an already-promoted deal anyway.
+  const canPromoteToDeal = canPromoteDealQuotationToDeal(user, quotation);
+  const promotionTicketQuery = useQuery({
+    queryKey: [...queryKeys.ticketDetail(quotation?.ticketId), 'promotionSummary'],
+    queryFn: () => api.tickets.get(quotation.ticketId).then((r) => r.ticket?.summary ?? null),
+    enabled: canPromoteToDeal && quotation?.ticketId != null,
+    retry: false,
+  });
+  const promotedDealId = promotionTicketQuery.data?.quotationOnly === false ? quotation?.ticketId ?? null : null;
 
   // The deal's customer MASTER row (owner, 2026-09-11: fill in the address, "autofill in later on
   // if they get the same customer"). On the ?ticket= and existing-draft paths the rep can now edit
@@ -1376,6 +1394,10 @@ export function QuotationEditorPage({ user, showToast }) {
           priority: 'NORMAL',
           items: [],
           nextFollowUpAt: addDaysIso(todayIso(), 7),
+          // GLA-136 (owner ruling 2026-09-30): a deal minted here exists only to hold this direct
+          // quotation — it is quotation-only, NOT a pipeline deal, until the rep promotes an
+          // APPROVED quotation ("สร้างดีลจากใบเสนอราคา"). See CreateTicketRequest#quotationOnly.
+          quotationOnly: true,
         });
         // TicketDto envelope (see the ticketQuery fix above) -- the new ticket's id lives at
         // `.summary.id`, never `.ticket.id`/`.id`.
@@ -1412,6 +1434,8 @@ export function QuotationEditorPage({ user, showToast }) {
   const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
   // GLA-74 part 1 ("สร้างจากใบเดิม" / สั่งเหมือนเดิม).
   const [reorderConfirmOpen, setReorderConfirmOpen] = useState(false);
+  // GLA-136 — "สร้างดีลจากใบเสนอราคา" confirm dialog.
+  const [promoteConfirmOpen, setPromoteConfirmOpen] = useState(false);
   const approveMutation = useMutation({
     mutationFn: (payload) => api.dealQuotations.approve(id, payload || {}),
     onSuccess: (res) => {
@@ -1480,6 +1504,35 @@ export function QuotationEditorPage({ user, showToast }) {
       navigate(`/quotations/${res.quotation.id}`);
     },
     onError: (error) => showToast('error', error.message || 'สร้างจากใบเดิมไม่สำเร็จ'),
+  });
+
+  // GLA-136 (owner ruling 2026-09-30) — promote this APPROVED direct quotation's quotation-only
+  // container ticket into the pipeline (DealQuotationService#promoteToDeal), then open the deal.
+  // The deal-page cache for this ticket is DROPPED (not merely invalidated) before navigating:
+  // this page may have cached a bare summary under the same queryKeys.ticketDetail key that
+  // TicketDetailPage reads as a whole TicketDto, and it must not render that shape even once.
+  // Every failure — 403 and 409 included — surfaces the server's own Thai message (GLA-138: a
+  // silent 409 is exactly what this must not do); a 409 also refetches, since the quotation or
+  // the deal changed under this screen.
+  const promoteMutation = useMutation({
+    mutationFn: () => api.dealQuotations.promoteToDeal(id),
+    onSuccess: (res) => {
+      const dealId = res?.result?.ticketId ?? quotation?.ticketId;
+      queryClient.removeQueries({ queryKey: queryKeys.ticketDetail(dealId) });
+      queryClient.invalidateQueries({ queryKey: ['tickets'] });
+      queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
+      setPromoteConfirmOpen(false);
+      showToast('success', 'สร้างดีลจากใบเสนอราคาแล้ว');
+      navigate(`/tickets/${dealId}`);
+    },
+    onError: (error) => {
+      if (error.status === 409) {
+        quotationQuery.refetch();
+        promotionTicketQuery.refetch();
+      }
+      setPromoteConfirmOpen(false);
+      showToast('error', error.message || 'สร้างดีลจากใบเสนอราคาไม่สำเร็จ');
+    },
   });
 
   /** M4(d) fix (Opus review, 2026-09-20) — "คืนรายการ": re-adds a CEO-linked line a prior save
@@ -1800,6 +1853,31 @@ export function QuotationEditorPage({ user, showToast }) {
                 offered together on an approved document. */}
             {quotation && canReviseDealQuotation(user, quotation) ? (
               <Button variant="secondary" onClick={() => setReorderConfirmOpen(true)}>สร้างจากใบเดิม (สั่งเหมือนเดิม)</Button>
+            ) : null}
+            {/* GLA-136 (owner ruling 2026-09-30): the ONE way a direct quotation's deal enters the
+                pipeline. Primary — on an APPROVED direct quotation it is the next thing the rep
+                does once the customer orders. Once promoted, the same slot becomes a plain link
+                to the deal instead, so the action is never offered twice. */}
+            {canPromoteToDeal ? (
+              promotedDealId != null ? (
+                <Link
+                  to={`/tickets/${promotedDealId}`}
+                  className={cn(buttonVariants({ variant: 'secondary' }))}
+                  data-testid="quotation-go-to-deal"
+                >
+                  <Icon name="chevronRight" size={14} />
+                  ไปที่ดีล
+                </Link>
+              ) : (
+                <Button
+                  variant="primary"
+                  loading={promoteMutation.isPending}
+                  onClick={() => setPromoteConfirmOpen(true)}
+                  data-testid="quotation-promote-to-deal"
+                >
+                  สร้างดีลจากใบเสนอราคา
+                </Button>
+              )
             ) : null}
             {quotation && canCancelDealQuotation(user, quotation) ? (
               <Button variant="danger" onClick={() => setCancelConfirmOpen(true)}>ยกเลิกร่าง</Button>
@@ -2759,6 +2837,33 @@ export function QuotationEditorPage({ user, showToast }) {
           only until SOME quotation in the deal is approved next, at which point THAT one replaces
           it (DealQuotationService#approve's same-ticket sweep, which supersedes every OTHER
           APPROVED sibling regardless of which one triggered it). */}
+      {/* GLA-136 — promotion is not reversible (nothing un-promotes a deal), so it is confirmed,
+          and the dialog says exactly where the deal lands and what it carries over. */}
+      {promoteConfirmOpen ? (
+        <Modal
+          title="สร้างดีลจากใบเสนอราคา"
+          onClose={() => setPromoteConfirmOpen(false)}
+          footer={(
+            <>
+              <Button variant="secondary" onClick={() => setPromoteConfirmOpen(false)}>ปิด</Button>
+              <Button
+                variant="primary"
+                loading={promoteMutation.isPending}
+                onClick={() => promoteMutation.mutate()}
+                data-testid="quotation-promote-to-deal-confirm"
+              >
+                ยืนยันสร้างดีล
+              </Button>
+            </>
+          )}
+        >
+          <p className="m-0">
+            ระบบจะนำดีลของใบเสนอราคา {quotation?.number} เข้าสู่ขั้นตอนการขาย ที่ขั้น <strong>ได้รับคำสั่งซื้อ</strong>
+            {' '}พร้อมรายการสินค้าตามใบเสนอราคานี้ — จากนั้นออกใบแจ้งรับมัดจำ สั่งสินค้า และส่งมอบได้ตามปกติ
+            การดำเนินการนี้ย้อนกลับไม่ได้
+          </p>
+        </Modal>
+      ) : null}
       {reorderConfirmOpen ? (
         <Modal
           title="สร้างใบเสนอราคาจากใบเดิม"
