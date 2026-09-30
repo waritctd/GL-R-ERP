@@ -83,6 +83,7 @@ describe('mock quotation-first ticket (GLA-136 flag, slice-1 semantics)', () => 
 
   it('editItems and a pricing-request create 409 while a LIVE direct quotation exists — keyed on the quotation, not the flag', async () => {
     const { ticket: plain } = await api.tickets.create({
+      entryChannel: 'DESIGNER_LED',
       title: 'ดีลปกติ', customerName: 'ลูกค้า', projectId: 1, items: [], nextFollowUpAt: '2026-10-07',
     });
     const dealId = plain.summary.id;
