@@ -318,7 +318,7 @@ class DealQuotationDisplayNameIntegrationTest extends AbstractPostgresIntegratio
             WastageCalculator.QUANTITY_MODE_PIECES, null, 10, WastageCalculator.WASTAGE_MODE_NONE, null, 1,
             new BigDecimal("100.00"), BigDecimal.ZERO, "ไทย-สต็อก", 30, 45, null);
         return new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
-            null, null, "หมายเหตุทดสอบ", null, null, null, printedByDisplayId, salesRepDisplayId, List.of(item));
+            null, null, "หมายเหตุทดสอบ", null, null, null, printedByDisplayId, salesRepDisplayId, List.of(item)).withRecipientType("OWNER");
     }
 
     private long createEmployee(EmployeeRepository employees, String nameTh, String email,

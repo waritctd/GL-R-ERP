@@ -345,7 +345,9 @@ class DealQuotationSearchOriginsIntegrationTest extends AbstractPostgresIntegrat
      * to a real pricing_request row (the origin/pricing_request_id columns are what every read keys
      * on) — the same device {@code DealQuotationConfirmOrderIntegrationTest} uses. */
     private long pricingRequestOrigin(long ticketId, UserPrincipal creator, String status) {
-        long id = quotationService.create(ticketId, directDraft(), creator).id();
+        // Slice 2's N6: dealB already holds a live direct draft — see LegacyDirectQuotationFixtures.
+        long id = LegacyDirectQuotationFixtures.createAlongsideLive(jdbc, quotationService, ticketId, directDraft(),
+            creator).id();
         long pricingRequestId = jdbc.queryForObject("""
             INSERT INTO sales.pricing_request (request_code, ticket_id, recipient_type, requested_by)
             VALUES (:code, :ticketId, 'DESIGNER', :by)
@@ -386,7 +388,7 @@ class DealQuotationSearchOriginsIntegrationTest extends AbstractPostgresIntegrat
             3, 7, null, WastageCalculator.LINE_TYPE_TILE, null, null, null, null, null, null, null, null,
             null, null, false);
         return new UpsertDealQuotationRequest(null, null, null, null, 50, "CASH_ON_DELIVERY",
-            0, 30, null, "NET", "TH", "THB", List.of(tile));
+            0, 30, null, "NET", "TH", "THB", List.of(tile)).withRecipientType("OWNER");
     }
 
     private String code(long ticketId) {

@@ -1232,7 +1232,10 @@ public class TicketRepository {
             s.winProbabilityOverride(), s.designerName(), s.ownerName(), s.buyerName(), stale,
             hasRecordedCommission(s.id()), s.reopenedAt(), s.reopenCount(), s.quotationOnly(),
             due == null ? null : due.date(), due == null ? null : due.basis(),
-            due == null ? null : due.creditDays());
+            due == null ? null : due.creditDays(),
+            // Slice 2 (S2-B4): one more per-row query, the same shape as hasRecordedCommission —
+            // see findLiveDirectQuotation's Javadoc for why it is not batched.
+            findLiveDirectQuotation(s.id()).orElse(null));
     }
 
     /**
@@ -2064,8 +2067,69 @@ public class TicketRepository {
         Boolean value = jdbc.queryForObject("""
             SELECT EXISTS(SELECT 1 FROM sales.quotation
                            WHERE ticket_id = :ticketId
+            """ + LIVE_DIRECT_QUOTATION_PREDICATE + ")",
+            Map.of("ticketId", ticketId), Boolean.class);
+        return Boolean.TRUE.equals(value);
+    }
+
+    /**
+     * The ONE definition of a "live" direct quotation, shared as SQL text by
+     * {@link #hasLiveDirectQuotation} (slice 1's lock) and {@link #findLiveDirectQuotation} (slice 2's
+     * N6 refusal and {@link TicketSummaryDto#liveDirectQuotation}) so the two can never disagree about
+     * which rows count. Appended after a {@code WHERE ticket_id = :ticketId} clause.
+     */
+    private static final String LIVE_DIRECT_QUOTATION_PREDICATE = """
                              AND origin = 'DEAL_DIRECT'
-                             AND doc_status IN ('DRAFT', 'PENDING_APPROVAL', 'APPROVED'))
+                             AND doc_status IN ('DRAFT', 'PENDING_APPROVAL', 'APPROVED')
+        """;
+
+    /**
+     * Quotation ↔ deal linking slice 2 (S2-B3 / S2-B4) — the NEWEST live direct quotation on the
+     * deal (highest {@code quotation_id}), or empty. Newest matters because a deal can legitimately
+     * hold two live rows — an APPROVED parent and its DRAFT revision, or an APPROVED source and its
+     * reorder clone — and the client acts on the one being worked on.
+     *
+     * <p>Called once per row by {@link #enrichSummary} — deliberately the same per-row shape as
+     * {@link #hasRecordedCommission}/{@link #hasInvoiceAttachment}/{@link #isStale}/{@code payableAmount}/
+     * {@code sumPaid}/{@code hasBalanceReceipt}, which that method already runs for every list row
+     * (so a 500-row page already costs ~7 queries a row; this adds one). Not batched into
+     * {@link #findSummaries}' SELECT: that query is shared with {@link #findSummaryById} through
+     * {@code SUMMARY_SELECT} and its {@code GROUP BY}, and a LATERAL join there would change the
+     * one query every deal read goes through for one nullable field — the risk is not worth it while
+     * every sibling field is per-row anyway; batching {@code enrichSummary} as a whole is the fix
+     * if list latency ever matters. Each call is an index lookup on
+     * {@code idx_quotation_deal_direct_ticket} (V165: {@code (ticket_id) WHERE origin = 'DEAL_DIRECT'}).
+     */
+    public Optional<LiveDirectQuotationDto> findLiveDirectQuotation(long ticketId) {
+        List<LiveDirectQuotationDto> rows = jdbc.query("""
+            SELECT quotation_id, number, doc_status, recipient_type
+              FROM sales.quotation
+             WHERE ticket_id = :ticketId
+            """ + LIVE_DIRECT_QUOTATION_PREDICATE + """
+             ORDER BY quotation_id DESC
+             LIMIT 1
+            """, Map.of("ticketId", ticketId),
+            (rs, rowNum) -> new LiveDirectQuotationDto(rs.getLong("quotation_id"), rs.getString("number"),
+                rs.getString("doc_status"), rs.getString("recipient_type")));
+        return rows.stream().findFirst();
+    }
+
+    /**
+     * Quotation ↔ deal linking slice 2 — one pricing route per deal (owner ruling 2026-09-30): does
+     * this deal have a LIVE pricing request, i.e. any {@code sales.pricing_request} whose status is
+     * neither {@code CANCELLED} nor {@code SUPERSEDED}? A private {@code DRAFT} and a finished
+     * {@code QUOTATION_ACCEPTED} both count. The one predicate behind
+     * {@link DirectQuotationLocks#requireNoLivePricingRequest}.
+     *
+     * <p>Deliberately NOT {@link #PRICING_REQUEST_TERMINAL_STATUSES} (import's list scope), which also
+     * treats {@code QUOTATION_ACCEPTED} as finished: for that worklist an accepted request is done,
+     * but for "which pricing route is this deal on" it is very much the route in use.
+     */
+    public boolean hasLivePricingRequest(long ticketId) {
+        Boolean value = jdbc.queryForObject("""
+            SELECT EXISTS(SELECT 1 FROM sales.pricing_request
+                           WHERE ticket_id = :ticketId
+                             AND status NOT IN ('CANCELLED', 'SUPERSEDED'))
             """, Map.of("ticketId", ticketId), Boolean.class);
         return Boolean.TRUE.equals(value);
     }

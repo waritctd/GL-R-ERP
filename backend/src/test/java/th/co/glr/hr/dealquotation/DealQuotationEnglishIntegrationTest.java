@@ -231,7 +231,7 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
     void requestWithoutALanguage_defaultsToThaiAndBaht() {
         DealQuotationDto created = quotationService.create(ticketId,
             new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
-                null, List.of(tileItem("100.00", 10))),
+                null, List.of(tileItem("100.00", 10))).withRecipientType("OWNER"),
             salesActor);
         assertThat(created.documentLanguage()).isEqualTo("TH");
         assertThat(created.currency()).isEqualTo("THB");
@@ -413,8 +413,9 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(quotationService.submit(created.id(), salesActor).docStatus())
             .isEqualTo(QuotationStatus.PENDING_APPROVAL);
 
-        // update: the same combination onto an existing (NET) document.
-        DealQuotationDto net = quotationService.create(ticketId,
+        // update: the same combination onto an existing (NET) document. (Slice 2's N6: the deal
+        // already holds the live quotation above — see LegacyDirectQuotationFixtures.)
+        DealQuotationDto net = LegacyDirectQuotationFixtures.createAlongsideLive(jdbc, quotationService, ticketId,
             englishRequest(List.of(tileItem("100.00", 10))), salesActor);
         DealQuotationDto updated = quotationService.update(net.id(),
             englishRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM, List.of(row)), salesActor);
@@ -941,7 +942,7 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
     private UpsertDealQuotationRequest request(String language, String currency, String priceMode,
                                                List<ItemInput> items) {
         return new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
-            null, priceMode, language, currency, items);
+            null, priceMode, language, currency, items).withRecipientType("OWNER");
     }
 
     /** 60x60 -> 0.36 ตร.ม./แผ่น (explicit -- ตร.ม./แผ่น is never derived from sizeText any more;
