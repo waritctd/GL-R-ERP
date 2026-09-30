@@ -405,11 +405,15 @@ describe('mockApi.dealQuotations.listForTicket/list/counts — origin scoping (m
       expect(await idsFor('ceo@glr.co.th', ticketId)).toContain(id);
     });
 
-    it('import, account and a can_create_quotation grant holder do NOT see it', async () => {
+    // 2026-09-30 owner ruling (reverses M3 FOR ACCOUNT ONLY): account may read a PR-origin row, but only on a
+    // deal inside its list scope (live, S10+). This deal is still below S10, so account is refused the list
+    // outright (403), exactly as DealQuotationService.listForTicket does; import and a grant holder still get
+    // the row filtered out. The in-scope allow-case is pinned by the real-DB DealQuotationOutcomeIntegrationTest.
+    it('import and a can_create_quotation grant holder do NOT see it; account is refused below S10', async () => {
       const { ticketId, id } = await ticketWithPrRow();
       expect(await idsFor('import@glr.co.th', ticketId)).not.toContain(id);
       await api.auth.login({ role: 'account' });
-      expect((await api.dealQuotations.listForTicket(ticketId)).items.map((q) => q.id)).not.toContain(id);
+      await expect(api.dealQuotations.listForTicket(ticketId)).rejects.toMatchObject({ status: 403 });
       // employee@glr.co.th carries canCreateQuotation: the grant must NOT bypass the PR-origin gate.
       expect(await idsFor('employee@glr.co.th', ticketId)).not.toContain(id);
     });

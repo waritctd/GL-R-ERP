@@ -66,6 +66,7 @@ const ROUTES = [
   '/import/deals/1', // Import's own per-deal page (GET /api/import/deals/{id}; import/ceo, import row-scoped)
   '/commissions',
   '/finance',
+  '/finance/deals/1', // Account's own per-deal finance page (GET /api/finance/deals/{id}; account/ceo, account row-scoped)
   '/price-import',
   '/ceo-settings',
   '/catalog',

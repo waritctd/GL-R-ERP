@@ -24,6 +24,7 @@ import {
   ticketStatusLabel,
 } from '../../utils/format.js';
 import { StageProgressBar } from './DealStageStepper.jsx';
+import { dealHref } from '../finance/dealHref.js';
 import { dealInScope } from './salesViewScope.js';
 import {
   EMPTY_STAGE_CATALOG, findStage, routePositionForChannel, stageIndexIn, useStageCatalog,
@@ -546,7 +547,7 @@ function buildDealColumns({ role, isManagerView, catalog }) {
       render: (deal) => (
         <span className="flex min-w-0 flex-col gap-0.5">
           <Link
-            to={`/tickets/${deal.id}`}
+            to={dealHref(role, deal.id)}
             className="block truncate font-bold text-link underline decoration-1 underline-offset-2 hover:decoration-2"
           >
             {deal.customerName || deal.title}
@@ -653,8 +654,8 @@ export function TicketListPage({ user, showToast }) {
   const loading = ticketsQuery.isLoading;
   const refreshing = ticketsQuery.isFetching && !ticketsQuery.isLoading;
   const openDeal = useCallback((deal) => {
-    navigate(`/tickets/${deal.id}`);
-  }, [navigate]);
+    navigate(dealHref(user.role, deal.id));
+  }, [navigate, user.role]);
 
   useEffect(() => {
     if (ticketsQuery.error) showToast('error', ticketsQuery.error.message || 'โหลดข้อมูลไม่สำเร็จ');

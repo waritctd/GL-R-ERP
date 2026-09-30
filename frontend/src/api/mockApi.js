@@ -3226,10 +3226,17 @@ function mockPayrollLine(employee) {
 // Mirrors TicketService.requireViewAccess: viewer role required, sales reps
 // only see their own tickets. Used by every read/render path. sales_manager is
 // read+comment-only oversight — never add it to a write-action role list.
-function requireTicketViewer(id) {
+function requireTicketViewer(id, { accountScoped = false } = {}) {
   const user = hasRole('sales', 'import', 'ceo', 'account', 'sales_manager');
   const ticket = findTicketRaw(Number(id));
   if (user.role === 'sales' && ticket.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  // H1 lockdown: account no longer reads a deal through the ticket routes (get / actions / payments /
+  // deliveries / comments) at all. The row-scoped document reads (deposit notices, remaining invoices) opt in
+  // with accountScoped, where account is admitted only inside its list scope.
+  if (user.role === 'account') {
+    if (!accountScoped) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+    requireMockAccountScope(user, ticket);
+  }
   return { user, ticket };
 }
 
@@ -3240,7 +3247,7 @@ function requireTicketViewer(id) {
 // this separate from requireTicketViewer so listDeliveries/actions (which import
 // DOES need) never accidentally inherit the deposit-notice denial.
 function requireDepositNoticeViewer(ticketId) {
-  const result = requireTicketViewer(ticketId);
+  const result = requireTicketViewer(ticketId, { accountScoped: true });
   if (result.user.role === 'import') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
   return result;
 }
@@ -3274,13 +3281,32 @@ function importListScopeIncludes(ticket) {
   return hasActivePricingRequest || dealStageIndex(ticket.salesStage) >= IMPORT_STAGE_SCOPE_START;
 }
 
-// account: a deposit or final-payment confirmation is awaited, or the deal is
-// overdue on an outstanding balance — same fields derivePaymentFields already
-// computes for every list row (paymentStatus / overdue), so this just filters on them.
+// account (H1) -- mirrors TicketRepository#appendRoleScope's account branch: every LIVE order from
+// ORDER_RECEIVED (S10) through CLOSED_PAID (history stays listed), UNIONED with the older rule
+// (a deposit or final-payment confirmation is awaited, or the deal is overdue on an outstanding
+// balance) so nothing account saw before disappears. Only lost / cancelled deals are excluded from
+// the stage disjunct -- a `closed` STATUS (CEO close-confirm) is not. The old scope keyed on
+// paymentStatus alone and hid a PROCUREMENT deal at DEPOSIT_PAID (S12-S17).
+const ACCOUNT_ORDER_STAGE_SCOPE_START = dealStageIndex('ORDER_RECEIVED');
 function accountListScopeIncludes(ticket) {
+  const live = !['CLOSED_LOST', 'CANCELLED'].includes(ticket.lifecycle) && ticket.status !== 'cancelled';
+  if (live && dealStageIndex(ticket.salesStage) >= ACCOUNT_ORDER_STAGE_SCOPE_START) return true;
   if (ACCOUNT_PENDING_PAYMENT_STATUSES.includes(ticket.paymentStatus)) return true;
   return Boolean(derivePaymentFields(ticket).overdue);
 }
+
+// Mirrors th.co.glr.hr.ticket.MoneyMilestone -- the five money milestones and the stage each covers.
+const FINANCE_MONEY_TRACK = [
+  { key: 'ORDER_RECEIVED', index: 1, label: 'ได้รับคำสั่งซื้อ' },
+  { key: 'DEPOSIT_RECEIVED', index: 2, label: 'ได้รับมัดจำ' },
+  { key: 'PROCUREMENT', index: 3, label: 'รอสินค้า / นำเข้า' },
+  { key: 'DELIVERY', index: 4, label: 'ส่งมอบ — รอชำระส่วนที่เหลือ' },
+  { key: 'CLOSED_PAID', index: 5, label: 'ชำระครบ ปิดงาน' },
+];
+const FINANCE_STAGE_TO_MILESTONE = {
+  ORDER_RECEIVED: 'ORDER_RECEIVED', DEPOSIT_RECEIVED: 'DEPOSIT_RECEIVED', PROCUREMENT: 'PROCUREMENT',
+  DELIVERY_SCHEDULING: 'DELIVERY', DELIVERED: 'DELIVERY', CLOSED_PAID: 'CLOSED_PAID',
+};
 
 function findTicketRaw(id) {
   const ticket = db.tickets.find((t) => t.id === id);
@@ -3342,6 +3368,8 @@ function requireAttachmentTicketAccess(ticketId, { write = false } = {}) {
     ? ATTACHMENT_WRITER_ROLES.includes(user.role)
     : ATTACHMENT_VIEWER_ROLES.includes(user.role));
   if (!allowed) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  // H1 lockdown: account reads a deal's documents only inside its list scope (all four attach types).
+  requireMockAccountScope(user, ticket);
   return { user, ticket };
 }
 
@@ -3417,6 +3445,8 @@ function derivePaymentFields(ticket) {
   return {
     billingDate: ticket.billingDate ?? null,
     dueDate: ticket.dueDate ?? null,
+    // Mock approximation: no quotation-terms/delivery derivation, so the demo billing due date stands in.
+    paymentDueDate: ticket.dueDate ?? null, paymentDueBasis: null, paymentDueCreditDays: null,
     creditTermDays: ticket.creditTermDays ?? null,
     lastFollowUpAt: ticket.lastFollowUpAt ?? null,
     nextFollowUpAt: ticket.nextFollowUpAt ?? null,
@@ -5676,7 +5706,22 @@ function hasDealQuotationMockGrant(user) {
 // permissive than production" shape CLAUDE.md names (#199); it does not make the mock authz
 // evidence — see the file header — it only stops the mock from actively lying in the dangerous
 // direction while devs/QA drive it.
-function requireDealQuotationViewAccess(ticket, user, origin = 'DEAL_DIRECT') {
+// 2026-09-30 owner ruling, mirrors DealQuotationService.ACCOUNT_VISIBLE_STATUSES: account sees a deal quotation only
+// once it went to the customer -- APPROVED (DEAL_DIRECT post-approval), ISSUED (PRICING_REQUEST's), SENT, ACCEPTED.
+const ACCOUNT_VISIBLE_DEAL_QUOTATION_STATUSES = ['APPROVED', 'ISSUED', 'SENT', 'ACCEPTED'];
+
+function requireDealQuotationViewAccess(ticket, user, origin = 'DEAL_DIRECT', docStatus = null) {
+  // H1 lockdown + 2026-09-30 owner ruling (reverses M3 for account ONLY): account is row-scoped on BOTH origins
+  // -- refused outside its list scope, and allowed on a PRICING_REQUEST-origin row inside it. Checked before the
+  // grant bypass, like DealQuotationService#requireViewAccess.
+  if (user.role === 'account') {
+    requireMockAccountScope(user, ticket);
+    // docStatus is null only for the list-entry gate (no row yet); every row read passes its own status.
+    if (docStatus != null && !ACCOUNT_VISIBLE_DEAL_QUOTATION_STATUSES.includes(docStatus)) {
+      fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+    }
+    return;
+  }
   if (origin === 'PRICING_REQUEST') {
     if (!['sales', 'sales_manager', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
     if (user.role === 'sales' && ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
@@ -5831,7 +5876,7 @@ function requireDealQuotationRowViewable(id) {
   const row = mockDealQuotations.find((q) => q.id === Number(id));
   if (!row) fail('ไม่พบใบเสนอราคานี้', 404);
   const ticket = db.tickets.find((t) => t.id === row.ticketId);
-  requireDealQuotationViewAccess(ticket, user, row.origin);
+  requireDealQuotationViewAccess(ticket, user, row.origin, row.docStatus);
   return row;
 }
 
@@ -6529,6 +6574,29 @@ function dealQuotationTotals(items, documentLanguage = 'TH') {
   return { subtotalAmount, vatAmount, grandTotal };
 }
 
+// Mirrors DealQuotationService#forViewer / DealQuotationDtos#withoutPriceInternals (ruling 3, 2026-09-30):
+// `account` sees a quotation's number, totals and each line's NET unit price / line amount -- never the list
+// price, discount or CEO pricing metadata, on every origin. Same convention as Java: keys kept, values emptied
+// (null / false / 0 / []). Every other role gets the DTO unchanged.
+function forDealQuotationViewer(dto, user) {
+  if (user?.role !== 'account') return dto;
+  return {
+    ...dto,
+    priceMode: null,
+    ceoPriceMode: null,
+    priceModeChangedFromCeo: false,
+    itemsRemovedFromCeoCount: 0,
+    removedCeoItems: [],
+    items: (dto.items ?? []).map((item) => ({
+      ...item,
+      catalogPriceId: null, unitPrice: null, discountPct: null, specialPriceSqm: null, adjustmentPct: null,
+      adjustmentAmount: null, specialPriceLine: null, calculationLine: null, priceChangedFromCeo: false,
+      ceoListUnitPrice: null, ceoDiscountPct: null, ceoSpecialPriceSqm: null, ceoDirectNetPrice: null,
+      ceoNetUnitPrice: null,
+    })),
+  };
+}
+
 function buildDealQuotationDto(row) {
   // GLA-123 slice S1 — origin & the CEO-comparison flags, recomputed fresh on every read (never
   // stored), mirroring DealQuotationRepository#mapQuotation/#mapItemColumns. A DEAL_DIRECT row
@@ -6886,6 +6954,419 @@ function leavePreviewWarnings(leaveType, totalDays) {
     // here, unpaid_by_rule_days is simply that code's own full-request figure.
     unpaidByRuleDays: totalDays,
   };
+}
+
+// H1 lockdown -- the account role's ROW scope on the finance paths. Mirrors TicketRepository#isInAccountScope
+// (the SAME predicate as the list scope, accountListScopeIncludes above), plus the quotation-only container
+// exclusion the list applies. Enforced inside the shared money functions, like TicketService.requireAccountScope.
+function requireMockAccountScope(user, ticket) {
+  if (user.role === 'account' && (ticket.quotationOnly === true || !accountListScopeIncludes(ticket))) {
+    fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  }
+}
+
+// The shared money-action bodies (payment / close / billing / stage). Each is the ONE implementation behind both
+// its /api/tickets entrypoint and its finance entrypoint (api.finance.*), like the Java TicketService methods.
+async function mockRecordPayment(id, payload) {
+  // GLA-118 (owner ruling 2026-09-20, part A): account only now — the CEO fallback is gone.
+  // Mirrors TicketService's new PAYMENT_RECORD_ROLES, for every receipt kind (deposit,
+  // balance, ...) alike. This used to be hasRole('account', 'ceo').
+  const user = hasRole('account');
+  const ticket = findTicketRaw(Number(id));
+  requireMockAccountScope(user, ticket);
+  requireActive(ticket);
+  recordPaymentForTicket(ticket, user, payload ?? {});
+  return delay({ ticket: buildTicketDetail(ticket) });
+}
+
+async function mockSetBilling(id, payload, viaFinance = false) {
+  // /api/tickets entrypoint: ceo only since the H1 lockdown; the finance entrypoint keeps account + ceo.
+  const user = viaFinance ? hasRole('account', 'ceo') : hasRole('ceo');
+  const ticket = findTicketRaw(Number(id));
+  requireMockAccountScope(user, ticket);
+  requireActive(ticket);
+  ticket.billingDate = payload.billingDate ?? null;
+  ticket.dueDate = payload.dueDate ?? null;
+  ticket.creditTermDays = payload.creditTermDays ?? null;
+  ticket.lastFollowUpAt = payload.lastFollowUpAt ?? null;
+  ticket.nextFollowUpAt = payload.nextFollowUpAt ?? null;
+  ticket.updatedAt = new Date().toISOString().slice(0, 10);
+  pushEvent(ticket, user, 'BILLING_UPDATED', ticket.status, ticket.status,
+    `billing_date=${ticket.billingDate}, due_date=${ticket.dueDate}`);
+  return delay({ ticket: buildTicketDetail(ticket) });
+}
+
+async function mockConfirmCloseReady(id) {
+  const user = requireSession();
+  hasRole('account'); // NOT ceo — the CEO signs the second half
+  const ticket = findTicketRaw(Number(id));
+  requireMockAccountScope(user, ticket);
+  requireActive(ticket);
+  if (ticket.closeConfirmedAt) fail('ยืนยันปิดงานไปแล้ว — รอ CEO ตรวจสอบ', 409);
+  requireClosePrerequisites(ticket);
+  ticket.closeConfirmedAt = new Date().toISOString();
+  ticket.closeConfirmedByName = user.name;
+  ticket.updatedAt = new Date().toISOString().slice(0, 10);
+  pushEvent(ticket, user, 'CLOSE_CONFIRMED', ticket.status, ticket.status,
+    'ฝ่ายบัญชียืนยันพร้อมปิดงาน — รอ CEO ตรวจสอบ');
+  return delay({ ticket: buildTicketDetail(ticket) });
+}
+
+async function mockRevokeCloseConfirmation(id, payload = {}, viaFinance = false) {
+  const user = requireSession();
+  if (viaFinance) hasRole('account', 'ceo'); else hasRole('ceo');
+  const ticket = findTicketRaw(Number(id));
+  requireMockAccountScope(user, ticket);
+  requireActive(ticket);
+  if (!ticket.closeConfirmedAt) fail('ดีลนี้ยังไม่ได้ยืนยันปิดงาน', 409);
+  ticket.closeConfirmedAt = null;
+  ticket.closeConfirmedByName = null;
+  pushEvent(ticket, user, 'CLOSE_CONFIRM_REVOKED', ticket.status, ticket.status,
+    (payload.note || '').trim() || null);
+  return delay({ ticket: buildTicketDetail(ticket) });
+}
+
+async function mockConfirmDepositPaid(id) {
+  // GLA-118 (owner ruling 2026-09-17): account only now — the CEO fallback is gone. Mirrors
+  // TicketService's DEPOSIT_CONFIRM_ROLES. RECORD_PAYMENT/FINAL_PAYMENT are account-only too
+  // (PAYMENT_RECORD_ROLES, owner ruling 2026-09-20); ACCOUNT_ROLES (['account','ceo']) now only
+  // covers SET_BILLING and similar non-payment actions.
+  const user = hasRole('account');
+  const ticket = findTicketRaw(Number(id));
+  requireMockAccountScope(user, ticket);
+  requireActive(ticket);
+  if (ticket.paymentStatus !== 'DEPOSIT_NOTICE_ISSUED') fail('ต้องออกใบแจ้งรับมัดจำก่อนจึงจะยืนยันรับชำระมัดจำได้', 409);
+  const notice = latestIssuedDepositNotice(ticket.id);
+  const amount = notice?.depositAmount ?? moneyValue(payableAmount(ticket) * 0.5);
+  if (amount <= 0) fail('ไม่พบยอดมัดจำสำหรับบันทึกรับชำระ', 409);
+  recordPaymentForTicket(ticket, user, {
+    kind: 'DEPOSIT',
+    amount,
+    note: 'ยืนยันรับมัดจำ',
+    depositNoticeId: notice?.id ?? null,
+  });
+  return delay({ ticket: buildTicketDetail(ticket) });
+}
+
+async function mockConfirmFinalPayment(id) {
+  // GLA-118 (owner ruling 2026-09-20, part A): account only now — the CEO fallback is gone.
+  // Mirrors TicketService's new PAYMENT_RECORD_ROLES (confirmFinalPayment is a payment-
+  // recording entry point too, whether or not it ends up calling recordPaymentInternal). This
+  // used to be hasRole('account', 'ceo') (TicketService.ACCOUNT_ROLES).
+  const user = hasRole('account');
+  const ticket = findTicketRaw(Number(id));
+  requireMockAccountScope(user, ticket);
+  requireActive(ticket);
+  const allowed = ['AWAITING_FINAL_PAYMENT', 'DEPOSIT_PAID'].includes(ticket.paymentStatus)
+    || (depositBypassesNotice(ticket) && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED'));
+  if (!allowed) fail('ต้องรับชำระมัดจำแล้วหรือรอชำระเงินงวดสุดท้าย (หรือดีลนี้ได้รับการยกเว้นมัดจำ) ก่อนจึงจะยืนยันรับชำระเงินครบถ้วนได้', 409);
+  const outstanding = moneyValue(payableAmount(ticket) - sumPaid(ticket.id));
+  if (outstanding <= 0) {
+    if (ticket.paymentStatus !== 'FULLY_PAID') {
+      ticket.paymentStatus = 'FULLY_PAID';
+      ticket.updatedAt = new Date().toISOString().slice(0, 10);
+      pushEvent(ticket, user, 'FULLY_PAID', ticket.status, ticket.status, null);
+      maybeAdvanceClosedPaid(ticket, user);
+    }
+  } else {
+    recordPaymentForTicket(ticket, user, {
+      kind: 'BALANCE',
+      amount: outstanding,
+      note: 'ยืนยันชำระส่วนที่เหลือ',
+    });
+  }
+  return delay({ ticket: buildTicketDetail(ticket) });
+}
+
+async function mockUpdateStage(id, payload, viaFinance = false) {
+  const user = requireSession();
+  // /api/tickets entrypoint refuses account outright (H1 lockdown); account reaches a MONEY stage only via
+  // the finance entrypoint (TicketService.financeUpdateStage).
+  if (user.role === 'account' && !viaFinance) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  if (viaFinance) {
+    if (!['account', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+    if (dealStageIndex(payload.stage) >= 0 && !['DEPOSIT_RECEIVED', 'CLOSED_PAID'].includes(payload.stage)) {
+      fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+    }
+  }
+  const ticket = findTicketRaw(Number(id));
+  requireMockAccountScope(user, ticket);
+  requireActive(ticket);
+  if (dealStageIndex(payload.stage) < 0) fail(`ไม่รองรับสถานะขั้นตอนการขาย '${payload.stage}'`, 400);
+  // Enforced from the SAME decision list actions() serves, never re-derived — so an option the
+  // mock offered is an option the mock accepts, and there is one place to read. The status is
+  // approximated (403 for the permission message, 409 otherwise) because the mock's decisions
+  // carry a reason, not a status code; the real service's codes are pinned by
+  // StageDecisionIntegrationTest.
+  const decision = mockStageDecisions(ticket, user).find((d) => d.stage === payload.stage);
+  if (!decision.allowed) {
+    fail(decision.blockedReason, decision.blockedReason === 'ไม่มีสิทธิ์เข้าถึงรายการนี้' ? 403 : 409);
+  }
+  // NO note requirement here. DealStage.requiresJustification is a backend decision and the
+  // mock does not mirror it — see the "what this mock will and will not decide" block above.
+  const fromStage = ticket.salesStage;
+  ticket.salesStage = payload.stage;
+  ticket.stageUpdatedAt = new Date().toISOString();
+  pushEvent(ticket, user, 'STAGE_CHANGED', fromStage, payload.stage, (payload.note || '').trim() || null);
+  return delay({ ticket: buildTicketDetail(ticket) });
+}
+
+// The action list for a deal as seen by `user` -- shared by api.tickets.actions and the finance deal view
+// (api.finance.getDeal's availableActions), like TicketService.buildActions.
+function buildTicketActions(user, ticket) {
+  const active = (ticket.lifecycle ?? 'ACTIVE') === 'ACTIVE';
+  // Computed once and used for both halves of the response: the ADVANCE_STAGE/UPDATE_STAGE
+  // verbs below are derived from it, and it ships to the client as stageDecisions.
+  const stageDecisions = mockStageDecisions(ticket, user);
+  const availableActions = [];
+  const add = (action, kind, label, extra = {}) => availableActions.push({ action, kind, label, ...extra });
+  const owner = user.role === 'sales' && ticket.createdById === user.id;
+  const dealOwner = owner || user.role === 'sales_manager' || user.role === 'ceo';
+  const canIssueIr = ticket.status === 'quotation_issued'
+    && ticket.fulfillmentStatus == null
+    && (['DEPOSIT_NOTICE_ISSUED', 'DEPOSIT_PAID'].includes(ticket.paymentStatus)
+      || (depositBypassesNotice(ticket) && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED')));
+
+  if (active) {
+    // Ticket-level SUBMIT/PICKUP/PROPOSE_PRICE/CALCULATE_PRICES/OVERRIDE_ITEM_PRICE/
+    // APPROVE/REJECT/GENERATE_QUOTATION/MARK_QUOTATION_SENT/ACCEPTED/REJECTED are retired
+    // (Phase 2 Slice S1/S2 "engine collapse" — mirrors TicketController/TicketService's own
+    // pruning of these verbs from actions(), see docs/agent-handoffs/104): never advertised,
+    // so the UI never shows a button that would now 404 on click. Pricing/quotation runs
+    // through the PricingRequest chain instead (api.pricingRequests.*).
+    if (owner && ticket.status === 'quotation_issued' && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED')) add('CONFIRM_CUSTOMER', 'payment', 'ลูกค้ายืนยัน');
+    if (owner && ticket.status === 'quotation_issued' && ticket.paymentStatus === 'CUSTOMER_CONFIRMED' && !depositBypassesNotice(ticket)) add('ISSUE_DEPOSIT_NOTICE', 'doc', 'ออกใบแจ้งมัดจำ');
+    // GLA-118: account only -- the CEO fallback is gone for DEPOSIT_PAID (owner ruling
+    // 2026-09-17, DEPOSIT_CONFIRM_ROLES) AND, as of 2026-09-20 part A, for RECORD_PAYMENT/
+    // FINAL_PAYMENT too (PAYMENT_RECORD_ROLES) -- recording ANY payment is account-only now.
+    // SET_BILLING below is the one payment-adjacent action that DID keep the CEO fallback
+    // (['account','ceo'], unchanged) -- it sets billing/due dates, it never records money.
+    if (user.role === 'account' && ticket.paymentStatus === 'DEPOSIT_NOTICE_ISSUED') add('DEPOSIT_PAID', 'payment', 'รับมัดจำ');
+    const paymentFields = derivePaymentFields(ticket);
+    if (user.role === 'account' && paymentFields.amountPayable > 0 && paymentFields.paymentStage !== 'FULLY_PAID') {
+      add('RECORD_PAYMENT', 'payment', 'บันทึกรับชำระเงิน', { requiredFields: ['kind', 'amount'] });
+    }
+    if (['account', 'ceo'].includes(user.role)) add('SET_BILLING', 'payment', 'ตั้งค่าการวางบิล', { requiredFields: ['dueDate'] });
+    if (['import', 'ceo'].includes(user.role) && canIssueIr) add('ISSUE_IMPORT_REQUEST', 'fulfillment', 'ออกคำขอนำเข้า');
+    // V184 (PR-B): once the deal is tracked per-factory (>= 1 ISSUED sales.import_request
+    // row), these three deal-level buttons all 409 — mirrors TicketService#addOperationalActions'
+    // own `irTracked` guard. canIssueIr already excludes a tracked deal on its own (the first
+    // factory issue sets fulfillmentStatus, so it is no longer null), matching the real
+    // canIssueImportRequest, which is why ISSUE_IMPORT_REQUEST above needs no separate check.
+    const irTracked = mockHasLiveImportRequests(ticket.id);
+    if (['import', 'ceo'].includes(user.role) && !irTracked && ticket.fulfillmentStatus === 'IR_ISSUED') add('IR_SENT', 'fulfillment', 'ส่งคำขอนำเข้าแล้ว');
+    if (['import', 'ceo'].includes(user.role) && !irTracked && ticket.fulfillmentStatus === 'IR_SENT') add('SHIPPING', 'fulfillment', 'สินค้าเดินทาง');
+    if (['import', 'ceo'].includes(user.role) && !irTracked && ticket.fulfillmentStatus === 'SHIPPING') add('GOODS_RECEIVED', 'fulfillment', 'รับสินค้า');
+    // S18 owner decision 2026-09-28: CEO or the deal's owning sales rep -- NOT import (dropped
+    // from `['import', 'ceo']`), mirroring TicketService#canReserveStock -> canDeclareStockCoverage
+    // and the reserveStock mutation gate above. `owner` is the same limb the delivery
+    // advertisement uses just below; advertising it to import would offer a button that 403s.
+    if ((user.role === 'ceo' || owner) && (ticket.items ?? []).length > 0 && hasRemainingDelivery(ticket)
+        && ticket.fulfillmentStatus !== 'FULLY_DELIVERED') {
+      add('RESERVE_STOCK', 'fulfillment', 'จองสินค้าจากสต็อก', { requiredFields: ['lines'] });
+    }
+    // V148 (per-item stock-commission weighting): sales_manager/ceo only -- mirrors
+    // TicketService#canSetItemWeightMultiplier exactly (ITEM_WEIGHT_ROLES, no ownership/stage
+    // nuance beyond the ticket being ACTIVE, which the enclosing `if (active)` already is).
+    if (['sales_manager', 'ceo'].includes(user.role)) {
+      add('SET_ITEM_WEIGHT_MULTIPLIER', 'fulfillment', 'ตั้งน้ำหนักคอมมิชชั่นต่อรายการ', { requiredFields: ['lines'] });
+    }
+    // Mirrors TicketService#canRecordDelivery -> canWriteDelivery exactly (REVIEW ROUND 1, S2,
+    // 2026-09-18): CEO, or the deal's own owning sales rep -- the advertisement and the
+    // mutation gate must come off the same predicate or the UI offers a button that instantly
+    // 403s. `owner` (above) is exactly the Java's second limb -- deliberately NOT `dealOwner`,
+    // which also admits sales_manager/ceo: Java's SALES_ROLES is Set.of("sales") and
+    // sales_manager is read+comment oversight only, so widening here would make the mock MORE
+    // permissive than production, the one direction CLAUDE.md calls dangerous.
+    //
+    // import was DROPPED from this condition (previously `['import', 'ceo'].includes(user.role)
+    // || owner`) -- it used to be additive to Sales (#818), but the 2026-08-17 ruling was a
+    // TRANSFER, not an addition: ส่งมอบสินค้า write access moved FROM import TO Sales, and
+    // requireOwningRepOrCeo (backing recordDelivery/completeDelivery's own mutation gate just
+    // above in this file) already reflects that. Leaving `import` here left the mock MORE
+    // permissive than the real TicketService#canWriteDelivery -- a real divergence this review
+    // caught, not a hypothetical one.
+    if ((user.role === 'ceo' || owner) && hasRemainingDelivery(ticket) && deliveryAvailable(ticket)) {
+      add('RECORD_PARTIAL_DELIVERY', 'fulfillment', 'บันทึกการส่งสินค้า', { requiredFields: ['source', 'lines'] });
+      add('COMPLETE_DELIVERY', 'fulfillment', 'ส่งมอบครบ');
+    }
+    const finalPaymentAllowed = ['AWAITING_FINAL_PAYMENT', 'DEPOSIT_PAID'].includes(ticket.paymentStatus)
+      || (depositBypassesNotice(ticket) && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED'));
+    // GLA-118 (owner ruling 2026-09-20, part A): account only -- see the PAYMENT_RECORD_ROLES
+    // comment above RECORD_PAYMENT. This used to be ['account', 'ceo'].
+    if (user.role === 'account' && finalPaymentAllowed) add('FINAL_PAYMENT', 'payment', 'รับเงินครบ');
+    // Three-party close: account confirms, CEO verifies. Sales is not involved.
+    let closeReady = true;
+    try { requireClosePrerequisites(ticket); } catch { closeReady = false; }
+    if (user.role === 'account' && !ticket.closeConfirmedAt && closeReady) {
+      add('CONFIRM_CLOSE', 'operational', 'ยืนยันพร้อมปิดงาน');
+    }
+    if (['account', 'ceo'].includes(user.role) && ticket.closeConfirmedAt) {
+      add('REVOKE_CLOSE_CONFIRM', 'operational', 'ยกเลิกการยืนยันปิดงาน');
+    }
+    if (user.role === 'ceo' && ticket.closeConfirmedAt && closeReady) {
+      add('VERIFY_CLOSE', 'operational', 'ตรวจสอบและปิดงาน');
+    }
+    if (ticket.createdById === user.id && !['closed', 'cancelled'].includes(ticket.status)) add('CANCEL', 'operational', 'ยกเลิก');
+    if (owner && ['draft', 'submitted', 'in_review', 'price_proposed'].includes(ticket.status)) add('EDIT_ITEMS', 'operational', 'แก้ไขรายการ');
+    // Mirrors TicketService.addStageActions: derived from the decisions, so the mock can
+    // never advertise a stage it would then refuse. The hardcoded 14-stage array that used to
+    // live here was the third copy of DealStage.ORDER and had gone stale on QUOTE_OWNER.
+    for (const decision of stageDecisions.filter((d) => d.allowed)) {
+      add('ADVANCE_STAGE', 'stage', 'เลื่อนสถานะ', { targetStage: decision.stage });
+    }
+    if (availableActions.some((a) => a.kind === 'stage')) add('UPDATE_STAGE', 'stage', 'แก้ไขสถานะ', { requiredFields: ['stage'] });
+    if (dealOwner) {
+      add('MARK_LOST', 'lifecycle', 'เสียงาน', { requiredFields: ['reason'] });
+      add('PLACE_ON_HOLD', 'lifecycle', 'พักดีลไว้');
+      add('MARK_DORMANT', 'lifecycle', 'พัก dormant');
+      add('SET_TENDER_REQUIREMENT', 'policy', 'ตั้งค่าสถานะประมูล', { requiredFields: ['value'] });
+      // requiredFields carries the note rule, exactly as TicketService.addPolicyActions does:
+      // a channel that was actually STATED needs a reason to change, an unstated one (the V144
+      // UNSPECIFIED default, or the never-backfilled pre-V144 DESIGNER_LED) does not. Same
+      // predicate as setEntryChannel below — see TicketService.entryChannelIsStated.
+      add('SET_ENTRY_CHANNEL', 'policy', 'ตั้งค่า entry channel', {
+        requiredFields: mockEntryChannelIsStated(ticket) ? ['value', 'note'] : ['value'],
+      });
+    }
+    // GLA-118: the OWNING sales rep, or sales_manager as a backup (owner ruling 2026-09-20,
+    // part B) -- not account, not ceo, not any other sales rep. Mirrors
+    // TicketService.canSetDepositPolicy exactly: deliberately `owner || user.role ===
+    // 'sales_manager'` here, NOT `dealOwner` (which also admits ceo, see MARK_LOST/
+    // SET_TENDER_REQUIREMENT/SET_ENTRY_CHANNEL above) -- the ruling text is explicit that
+    // deposit policy is narrower than the usual "deal ownership" grant.
+    //
+    // Review fix: also gated on paymentStatus, matching Rule 4 -- once a deposit notice has
+    // actually been issued (or paid, or further), setDepositPolicy 409s instead of writing
+    // (see the Rule 4 check just above in this file's setDepositPolicy), so advertising the
+    // action past that point would offer a button that dies on click.
+    const depositWaivableNow = ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED';
+    if ((owner || user.role === 'sales_manager') && depositWaivableNow) {
+      add('WAIVE_DEPOSIT', 'policy', 'นโยบายมัดจำ', { requiredFields: ['policy', 'reason'] });
+    }
+  } else if (['ON_HOLD', 'DORMANT'].includes(ticket.lifecycle) && dealOwner) {
+    add('RESUME', 'lifecycle', 'ดำเนินการต่อ');
+    if (ticket.lifecycle === 'ON_HOLD') add('MARK_DORMANT', 'lifecycle', 'พัก dormant');
+  } else if (ticket.lifecycle === 'CLOSED_LOST' && dealOwner) {
+    add('REOPEN', 'lifecycle', 'เปิดดีลใหม่');
+  }
+  return {
+    currentState: {
+      lifecycle: ticket.lifecycle ?? 'ACTIVE',
+      salesStage: ticket.salesStage,
+      paymentStatus: ticket.paymentStatus ?? null,
+      fulfillmentStatus: ticket.fulfillmentStatus ?? null,
+      status: ticket.status,
+    },
+    availableActions,
+    stageDecisions,
+  };
+}
+
+// The money actions THIS caller can take on the deal right now -- the ticket action list (buildTicketActions,
+// the mock's one readiness rule) narrowed to money actions, and to ADVANCE_STAGE / UPDATE_STAGE only for the two
+// money stages. Mirrors FinanceDealService#availableActions.
+function mockFinanceAvailableActions(user, ticket) {
+  const all = buildTicketActions(user, ticket).availableActions;
+  const MONEY = ['DEPOSIT_PAID', 'RECORD_PAYMENT', 'FINAL_PAYMENT', 'CONFIRM_CLOSE', 'REVOKE_CLOSE_CONFIRM'];
+  const moneyStage = (a) => a.action === 'ADVANCE_STAGE' && ['DEPOSIT_RECEIVED', 'CLOSED_PAID'].includes(a.targetStage);
+  const anyMoneyStage = all.some(moneyStage);
+  return all
+    .filter((a) => MONEY.includes(a.action) || moneyStage(a) || (a.action === 'UPDATE_STAGE' && anyMoneyStage))
+    .map((a) => ({ action: a.action, label: a.label, targetStage: a.targetStage ?? null, requiredFields: a.requiredFields ?? [] }));
+}
+
+// FinanceDealService#requireFinanceAccess: role (403), existence (404), then account's row scope (403).
+function requireMockFinanceAccess(id) {
+  const user = requireSession();
+  if (!['account', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  const raw = db.tickets.find((t) => t.id === Number(id));
+  if (!raw) fail('ไม่พบดีลนี้', 404);
+  requireMockAccountScope(user, raw);
+  return { user, raw };
+}
+
+// The finance view of one deal -- an explicit allowlist (no pricing requests, costs, tracking, events).
+function buildFinanceDeal(raw, user) {
+  const ticket = structuredClone(raw);
+  const s = buildTicketDetail(ticket).summary;
+  const currentKey = FINANCE_STAGE_TO_MILESTONE[s.salesStage] ?? null;
+  const track = FINANCE_MONEY_TRACK.map((m) => ({
+    ...m,
+    skipped: m.index === 2 && depositBypassesNotice(ticket),
+    current: m.key === currentKey,
+  }));
+  const quotations = buildTicketDetail(ticket).quotations ?? [];
+  const quotation = quotations.find((q) => q.docStatus === 'ACCEPTED')
+    ?? quotations.find((q) => ['ISSUED', 'SENT'].includes(q.docStatus)) ?? null;
+  const files = mockAttachments.filter((a) => a.ticketId === ticket.id);
+  const fileDoc = (a) => ({
+    id: a.id, fileName: a.fileName, attachType: a.attachType, uploadedAt: a.uploadedAt ?? null,
+    fileSize: a.fileSize ?? null, downloadPath: `/api/attachments/${a.id}/file`,
+  });
+  const deal = {
+    id: s.id, code: s.code, title: s.title, salesStage: s.salesStage, lifecycle: s.lifecycle, status: s.status,
+    moneyMilestone: track.find((m) => m.current) ?? null,
+    milestoneTrack: track,
+    customerName: s.customerName, customerId: s.customerId, projectName: s.projectName, contactName: s.contactName,
+    items: (ticket.items ?? []).map((it) => ({
+      description: [it.brand, it.model, it.color, it.texture, it.size].filter(Boolean).join(' ') || null,
+      qty: it.qty ?? null, unit: it.unitBasis ?? null,
+      unitPrice: it.approvedPrice ?? null,
+      lineTotal: it.approvedPrice == null ? null : moneyValue(Number(it.approvedPrice) * Number(it.qty ?? 0)),
+      vatBasis: 'EXCLUDING_VAT',
+    })),
+    money: {
+      amountPayable: s.amountPayable, amountPaid: s.amountPaid, amountOutstanding: s.amountOutstanding,
+      // The real server's payable is the VAT-INCLUSIVE grand total (owner ruling 2026-09-30). The mock does
+      // not reimplement that money math: its payable stays the pre-VAT sum, and says so.
+      amountVatBasis: 'EXCLUDING_VAT',
+      depositPolicy: s.depositPolicy, paymentStatus: s.paymentStatus, paymentStage: s.paymentStage,
+      fulfillmentStatus: s.fulfillmentStatus,
+      // The real server derives these from the quotation's terms + the delivery date. The mock has no
+      // delivery-based terms, so it only echoes its demo billing date as the due date (no basis).
+      paymentDueDate: s.paymentDueDate ?? null, paymentDueBasis: s.paymentDueBasis ?? null,
+      paymentDueCreditDays: s.paymentDueCreditDays ?? null, overdue: s.overdue,
+      closeConfirmedAt: s.closeConfirmedAt, invoiceOnFile: s.invoiceOnFile,
+      commissionRecorded: hasRecordedCommission(ticket),
+      payments: receiptsForTicket(ticket.id).map((r) => ({
+        id: r.receiptId, kind: r.kind, amount: r.amount, currency: r.currency ?? 'THB', receivedAt: r.receivedAt,
+        receiptRef: r.receiptRef ?? null, note: r.note ?? null, depositNoticeId: r.depositNoticeId ?? null,
+        recordedByName: r.recordedByName ?? null,
+      })),
+    },
+    documents: {
+      acceptedQuotation: quotation && {
+        id: quotation.id, number: quotation.number, status: quotation.docStatus,
+        totalAmount: quotation.totalAmount, vatBasis: 'EXCLUDING_VAT', currency: quotation.currency ?? 'THB',
+        issuedAt: quotation.issuedAt ?? null, acceptedAt: quotation.acceptedAt ?? null,
+        downloadPath: `/api/tickets/${ticket.id}/quotations/${quotation.id}/file`,
+      },
+      depositNotices: mockDepositNotices
+        .filter((d) => d.ticketId === ticket.id && d.status !== 'DRAFT')
+        .map((d) => ({
+          id: d.id, docNumber: d.docNumber ?? null, version: d.version ?? 1, status: d.status,
+          issueDate: d.issueDate ?? null, depositAmount: d.depositAmount ?? null, totalPayable: d.totalPayable ?? null, totalPayableVatBasis: 'INCLUDING_VAT',
+          downloadPath: `/api/deposit-notices/${d.id}/file`,
+        })),
+      remainingInvoices: mockRemainingInvoices
+        .filter((r) => r.ticketId === ticket.id && r.status !== 'DRAFT')
+        .map((r) => ({
+          id: r.id, docNumber: r.docNumber ?? null, version: r.version ?? 1, status: r.status,
+          docDate: r.docDate ?? null, grandTotal: r.grandTotal ?? null, grandTotalVatBasis: 'INCLUDING_VAT',
+          downloadPath: `/api/remaining-invoices/${r.id}/file`,
+        })),
+      taxInvoices: files.filter((a) => a.attachType === 'INVOICE').map(fileDoc),
+      billingNotes: [],
+      purchaseOrders: files.filter((a) => a.attachType === 'PO').map(fileDoc),
+      contracts: files.filter((a) => ['SIGNED_QUOTATION', 'OTHER'].includes(a.attachType)).map(fileDoc),
+    },
+  comments: ticket.events
+      .filter((e) => e.kind === 'COMMENTED')
+      .map((e) => ({ id: e.id, authorName: e.actorName, createdAt: e.createdAt, message: e.message })),
+  availableActions: mockFinanceAvailableActions(user, ticket),
+};
+  return deal;
 }
 
 export const api = {
@@ -7259,12 +7740,13 @@ export const api = {
 
     async get(id) {
       const user = requireSession();
-      // Mirrors TicketService.get: the whole-deal read is REFUSED to import (it carries the
-      // customer price and the quotation chain) — import is served GET /api/import/deals/{id}
-      // (importDeals.get below) instead. Checked before the row lookup so a missing id and a real
-      // one answer alike (no existence oracle). Authz here is an approximation, never the evidence.
-      if (user.role === 'import') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      if (!['sales', 'ceo', 'account', 'sales_manager'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      // Mirrors TicketService.get / requireViewAccess: the whole-deal read is REFUSED to import (it
+      // carries the customer price and the quotation chain; import is served importDeals.get) and to
+      // account (H1 lockdown; account reads deals through api.finance.getDeal only). Checked before the
+      // row lookup so a missing id and a real one answer alike (no existence oracle). Authz here is an
+      // approximation, never the evidence.
+      if (user.role === 'import' || user.role === 'account') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!['sales', 'ceo', 'sales_manager'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const ticket = structuredClone(db.tickets.find((t) => t.id === Number(id)));
       if (!ticket) fail('ไม่พบดีลนี้', 404);
       if (user.role === 'sales' && ticket.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
@@ -7297,14 +7779,7 @@ export const api = {
     },
 
     async recordPayment(id, payload) {
-      // GLA-118 (owner ruling 2026-09-20, part A): account only now — the CEO fallback is gone.
-      // Mirrors TicketService's new PAYMENT_RECORD_ROLES, for every receipt kind (deposit,
-      // balance, ...) alike. This used to be hasRole('account', 'ceo').
-      const user = hasRole('account');
-      const ticket = findTicketRaw(Number(id));
-      requireActive(ticket);
-      recordPaymentForTicket(ticket, user, payload ?? {});
-      return delay({ ticket: buildTicketDetail(ticket) });
+      return api.finance.recordPayment(id, payload);
     },
 
     async reserveStock(id, payload) {
@@ -7364,169 +7839,13 @@ export const api = {
     },
 
     async setBilling(id, payload) {
-      const user = hasRole('account', 'ceo');
-      const ticket = findTicketRaw(Number(id));
-      requireActive(ticket);
-      ticket.billingDate = payload.billingDate ?? null;
-      ticket.dueDate = payload.dueDate ?? null;
-      ticket.creditTermDays = payload.creditTermDays ?? null;
-      ticket.lastFollowUpAt = payload.lastFollowUpAt ?? null;
-      ticket.nextFollowUpAt = payload.nextFollowUpAt ?? null;
-      ticket.updatedAt = new Date().toISOString().slice(0, 10);
-      pushEvent(ticket, user, 'BILLING_UPDATED', ticket.status, ticket.status,
-        `billing_date=${ticket.billingDate}, due_date=${ticket.dueDate}`);
-      return delay({ ticket: buildTicketDetail(ticket) });
+      // /api/tickets entrypoint: ceo only since the H1 lockdown (account uses api.finance.setBilling).
+      return mockSetBilling(id, payload);
     },
 
     async actions(id) {
       const { user, ticket } = requireTicketViewer(id);
-      const active = (ticket.lifecycle ?? 'ACTIVE') === 'ACTIVE';
-      // Computed once and used for both halves of the response: the ADVANCE_STAGE/UPDATE_STAGE
-      // verbs below are derived from it, and it ships to the client as stageDecisions.
-      const stageDecisions = mockStageDecisions(ticket, user);
-      const availableActions = [];
-      const add = (action, kind, label, extra = {}) => availableActions.push({ action, kind, label, ...extra });
-      const owner = user.role === 'sales' && ticket.createdById === user.id;
-      const dealOwner = owner || user.role === 'sales_manager' || user.role === 'ceo';
-      const canIssueIr = ticket.status === 'quotation_issued'
-        && ticket.fulfillmentStatus == null
-        && (['DEPOSIT_NOTICE_ISSUED', 'DEPOSIT_PAID'].includes(ticket.paymentStatus)
-          || (depositBypassesNotice(ticket) && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED')));
-
-      if (active) {
-        // Ticket-level SUBMIT/PICKUP/PROPOSE_PRICE/CALCULATE_PRICES/OVERRIDE_ITEM_PRICE/
-        // APPROVE/REJECT/GENERATE_QUOTATION/MARK_QUOTATION_SENT/ACCEPTED/REJECTED are retired
-        // (Phase 2 Slice S1/S2 "engine collapse" — mirrors TicketController/TicketService's own
-        // pruning of these verbs from actions(), see docs/agent-handoffs/104): never advertised,
-        // so the UI never shows a button that would now 404 on click. Pricing/quotation runs
-        // through the PricingRequest chain instead (api.pricingRequests.*).
-        if (owner && ticket.status === 'quotation_issued' && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED')) add('CONFIRM_CUSTOMER', 'payment', 'ลูกค้ายืนยัน');
-        if (owner && ticket.status === 'quotation_issued' && ticket.paymentStatus === 'CUSTOMER_CONFIRMED' && !depositBypassesNotice(ticket)) add('ISSUE_DEPOSIT_NOTICE', 'doc', 'ออกใบแจ้งมัดจำ');
-        // GLA-118: account only -- the CEO fallback is gone for DEPOSIT_PAID (owner ruling
-        // 2026-09-17, DEPOSIT_CONFIRM_ROLES) AND, as of 2026-09-20 part A, for RECORD_PAYMENT/
-        // FINAL_PAYMENT too (PAYMENT_RECORD_ROLES) -- recording ANY payment is account-only now.
-        // SET_BILLING below is the one payment-adjacent action that DID keep the CEO fallback
-        // (['account','ceo'], unchanged) -- it sets billing/due dates, it never records money.
-        if (user.role === 'account' && ticket.paymentStatus === 'DEPOSIT_NOTICE_ISSUED') add('DEPOSIT_PAID', 'payment', 'รับมัดจำ');
-        const paymentFields = derivePaymentFields(ticket);
-        if (user.role === 'account' && paymentFields.amountPayable > 0 && paymentFields.paymentStage !== 'FULLY_PAID') {
-          add('RECORD_PAYMENT', 'payment', 'บันทึกรับชำระเงิน', { requiredFields: ['kind', 'amount'] });
-        }
-        if (['account', 'ceo'].includes(user.role)) add('SET_BILLING', 'payment', 'ตั้งค่าการวางบิล', { requiredFields: ['dueDate'] });
-        if (['import', 'ceo'].includes(user.role) && canIssueIr) add('ISSUE_IMPORT_REQUEST', 'fulfillment', 'ออกคำขอนำเข้า');
-        // V184 (PR-B): once the deal is tracked per-factory (>= 1 ISSUED sales.import_request
-        // row), these three deal-level buttons all 409 — mirrors TicketService#addOperationalActions'
-        // own `irTracked` guard. canIssueIr already excludes a tracked deal on its own (the first
-        // factory issue sets fulfillmentStatus, so it is no longer null), matching the real
-        // canIssueImportRequest, which is why ISSUE_IMPORT_REQUEST above needs no separate check.
-        const irTracked = mockHasLiveImportRequests(ticket.id);
-        if (['import', 'ceo'].includes(user.role) && !irTracked && ticket.fulfillmentStatus === 'IR_ISSUED') add('IR_SENT', 'fulfillment', 'ส่งคำขอนำเข้าแล้ว');
-        if (['import', 'ceo'].includes(user.role) && !irTracked && ticket.fulfillmentStatus === 'IR_SENT') add('SHIPPING', 'fulfillment', 'สินค้าเดินทาง');
-        if (['import', 'ceo'].includes(user.role) && !irTracked && ticket.fulfillmentStatus === 'SHIPPING') add('GOODS_RECEIVED', 'fulfillment', 'รับสินค้า');
-        // S18 owner decision 2026-09-28: CEO or the deal's owning sales rep -- NOT import (dropped
-        // from `['import', 'ceo']`), mirroring TicketService#canReserveStock -> canDeclareStockCoverage
-        // and the reserveStock mutation gate above. `owner` is the same limb the delivery
-        // advertisement uses just below; advertising it to import would offer a button that 403s.
-        if ((user.role === 'ceo' || owner) && (ticket.items ?? []).length > 0 && hasRemainingDelivery(ticket)
-            && ticket.fulfillmentStatus !== 'FULLY_DELIVERED') {
-          add('RESERVE_STOCK', 'fulfillment', 'จองสินค้าจากสต็อก', { requiredFields: ['lines'] });
-        }
-        // V148 (per-item stock-commission weighting): sales_manager/ceo only -- mirrors
-        // TicketService#canSetItemWeightMultiplier exactly (ITEM_WEIGHT_ROLES, no ownership/stage
-        // nuance beyond the ticket being ACTIVE, which the enclosing `if (active)` already is).
-        if (['sales_manager', 'ceo'].includes(user.role)) {
-          add('SET_ITEM_WEIGHT_MULTIPLIER', 'fulfillment', 'ตั้งน้ำหนักคอมมิชชั่นต่อรายการ', { requiredFields: ['lines'] });
-        }
-        // Mirrors TicketService#canRecordDelivery -> canWriteDelivery exactly (REVIEW ROUND 1, S2,
-        // 2026-09-18): CEO, or the deal's own owning sales rep -- the advertisement and the
-        // mutation gate must come off the same predicate or the UI offers a button that instantly
-        // 403s. `owner` (above) is exactly the Java's second limb -- deliberately NOT `dealOwner`,
-        // which also admits sales_manager/ceo: Java's SALES_ROLES is Set.of("sales") and
-        // sales_manager is read+comment oversight only, so widening here would make the mock MORE
-        // permissive than production, the one direction CLAUDE.md calls dangerous.
-        //
-        // import was DROPPED from this condition (previously `['import', 'ceo'].includes(user.role)
-        // || owner`) -- it used to be additive to Sales (#818), but the 2026-08-17 ruling was a
-        // TRANSFER, not an addition: ส่งมอบสินค้า write access moved FROM import TO Sales, and
-        // requireOwningRepOrCeo (backing recordDelivery/completeDelivery's own mutation gate just
-        // above in this file) already reflects that. Leaving `import` here left the mock MORE
-        // permissive than the real TicketService#canWriteDelivery -- a real divergence this review
-        // caught, not a hypothetical one.
-        if ((user.role === 'ceo' || owner) && hasRemainingDelivery(ticket) && deliveryAvailable(ticket)) {
-          add('RECORD_PARTIAL_DELIVERY', 'fulfillment', 'บันทึกการส่งสินค้า', { requiredFields: ['source', 'lines'] });
-          add('COMPLETE_DELIVERY', 'fulfillment', 'ส่งมอบครบ');
-        }
-        const finalPaymentAllowed = ['AWAITING_FINAL_PAYMENT', 'DEPOSIT_PAID'].includes(ticket.paymentStatus)
-          || (depositBypassesNotice(ticket) && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED'));
-        // GLA-118 (owner ruling 2026-09-20, part A): account only -- see the PAYMENT_RECORD_ROLES
-        // comment above RECORD_PAYMENT. This used to be ['account', 'ceo'].
-        if (user.role === 'account' && finalPaymentAllowed) add('FINAL_PAYMENT', 'payment', 'รับเงินครบ');
-        // Three-party close: account confirms, CEO verifies. Sales is not involved.
-        let closeReady = true;
-        try { requireClosePrerequisites(ticket); } catch { closeReady = false; }
-        if (user.role === 'account' && !ticket.closeConfirmedAt && closeReady) {
-          add('CONFIRM_CLOSE', 'operational', 'ยืนยันพร้อมปิดงาน');
-        }
-        if (['account', 'ceo'].includes(user.role) && ticket.closeConfirmedAt) {
-          add('REVOKE_CLOSE_CONFIRM', 'operational', 'ยกเลิกการยืนยันปิดงาน');
-        }
-        if (user.role === 'ceo' && ticket.closeConfirmedAt && closeReady) {
-          add('VERIFY_CLOSE', 'operational', 'ตรวจสอบและปิดงาน');
-        }
-        if (ticket.createdById === user.id && !['closed', 'cancelled'].includes(ticket.status)) add('CANCEL', 'operational', 'ยกเลิก');
-        if (owner && ['draft', 'submitted', 'in_review', 'price_proposed'].includes(ticket.status)) add('EDIT_ITEMS', 'operational', 'แก้ไขรายการ');
-        // Mirrors TicketService.addStageActions: derived from the decisions, so the mock can
-        // never advertise a stage it would then refuse. The hardcoded 14-stage array that used to
-        // live here was the third copy of DealStage.ORDER and had gone stale on QUOTE_OWNER.
-        for (const decision of stageDecisions.filter((d) => d.allowed)) {
-          add('ADVANCE_STAGE', 'stage', 'เลื่อนสถานะ', { targetStage: decision.stage });
-        }
-        if (availableActions.some((a) => a.kind === 'stage')) add('UPDATE_STAGE', 'stage', 'แก้ไขสถานะ', { requiredFields: ['stage'] });
-        if (dealOwner) {
-          add('MARK_LOST', 'lifecycle', 'เสียงาน', { requiredFields: ['reason'] });
-          add('PLACE_ON_HOLD', 'lifecycle', 'พักดีลไว้');
-          add('MARK_DORMANT', 'lifecycle', 'พัก dormant');
-          add('SET_TENDER_REQUIREMENT', 'policy', 'ตั้งค่าสถานะประมูล', { requiredFields: ['value'] });
-          // requiredFields carries the note rule, exactly as TicketService.addPolicyActions does:
-          // a channel that was actually STATED needs a reason to change, an unstated one (the V144
-          // UNSPECIFIED default, or the never-backfilled pre-V144 DESIGNER_LED) does not. Same
-          // predicate as setEntryChannel below — see TicketService.entryChannelIsStated.
-          add('SET_ENTRY_CHANNEL', 'policy', 'ตั้งค่า entry channel', {
-            requiredFields: mockEntryChannelIsStated(ticket) ? ['value', 'note'] : ['value'],
-          });
-        }
-        // GLA-118: the OWNING sales rep, or sales_manager as a backup (owner ruling 2026-09-20,
-        // part B) -- not account, not ceo, not any other sales rep. Mirrors
-        // TicketService.canSetDepositPolicy exactly: deliberately `owner || user.role ===
-        // 'sales_manager'` here, NOT `dealOwner` (which also admits ceo, see MARK_LOST/
-        // SET_TENDER_REQUIREMENT/SET_ENTRY_CHANNEL above) -- the ruling text is explicit that
-        // deposit policy is narrower than the usual "deal ownership" grant.
-        //
-        // Review fix: also gated on paymentStatus, matching Rule 4 -- once a deposit notice has
-        // actually been issued (or paid, or further), setDepositPolicy 409s instead of writing
-        // (see the Rule 4 check just above in this file's setDepositPolicy), so advertising the
-        // action past that point would offer a button that dies on click.
-        const depositWaivableNow = ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED';
-        if ((owner || user.role === 'sales_manager') && depositWaivableNow) {
-          add('WAIVE_DEPOSIT', 'policy', 'นโยบายมัดจำ', { requiredFields: ['policy', 'reason'] });
-        }
-      } else if (['ON_HOLD', 'DORMANT'].includes(ticket.lifecycle) && dealOwner) {
-        add('RESUME', 'lifecycle', 'ดำเนินการต่อ');
-        if (ticket.lifecycle === 'ON_HOLD') add('MARK_DORMANT', 'lifecycle', 'พัก dormant');
-      } else if (ticket.lifecycle === 'CLOSED_LOST' && dealOwner) {
-        add('REOPEN', 'lifecycle', 'เปิดดีลใหม่');
-      }
-      return delay({
-        currentState: {
-          lifecycle: ticket.lifecycle ?? 'ACTIVE',
-          salesStage: ticket.salesStage,
-          paymentStatus: ticket.paymentStatus ?? null,
-          fulfillmentStatus: ticket.fulfillmentStatus ?? null,
-          status: ticket.status,
-        },
-        availableActions,
-        stageDecisions,
-      });
+      return delay(buildTicketActions(user, ticket));
     },
 
     async create(payload) {
@@ -7713,31 +8032,12 @@ export const api = {
     // Three-party close (V55). Mirrors TicketService.confirmCloseReady /
     // revokeCloseConfirmation / verifyClose. Sales is not part of the sequence.
     async confirmCloseReady(id) {
-      const user = requireSession();
-      hasRole('account'); // NOT ceo — the CEO signs the second half
-      const ticket = findTicketRaw(Number(id));
-      requireActive(ticket);
-      if (ticket.closeConfirmedAt) fail('ยืนยันปิดงานไปแล้ว — รอ CEO ตรวจสอบ', 409);
-      requireClosePrerequisites(ticket);
-      ticket.closeConfirmedAt = new Date().toISOString();
-      ticket.closeConfirmedByName = user.name;
-      ticket.updatedAt = new Date().toISOString().slice(0, 10);
-      pushEvent(ticket, user, 'CLOSE_CONFIRMED', ticket.status, ticket.status,
-        'ฝ่ายบัญชียืนยันพร้อมปิดงาน — รอ CEO ตรวจสอบ');
-      return delay({ ticket: buildTicketDetail(ticket) });
+      return api.finance.confirmCloseReady(id);
     },
 
     async revokeCloseConfirmation(id, payload = {}) {
-      const user = requireSession();
-      hasRole('account', 'ceo');
-      const ticket = findTicketRaw(Number(id));
-      requireActive(ticket);
-      if (!ticket.closeConfirmedAt) fail('ดีลนี้ยังไม่ได้ยืนยันปิดงาน', 409);
-      ticket.closeConfirmedAt = null;
-      ticket.closeConfirmedByName = null;
-      pushEvent(ticket, user, 'CLOSE_CONFIRM_REVOKED', ticket.status, ticket.status,
-        (payload.note || '').trim() || null);
-      return delay({ ticket: buildTicketDetail(ticket) });
+      // /api/tickets entrypoint: ceo only since the H1 lockdown (account uses api.finance.revokeCloseConfirmation).
+      return mockRevokeCloseConfirmation(id, payload);
     },
 
     async verifyClose(id) {
@@ -7907,24 +8207,7 @@ export const api = {
     //  that advances the payment track to DEPOSIT_NOTICE_ISSUED.)
 
     async confirmDepositPaid(id) {
-      // GLA-118 (owner ruling 2026-09-17): account only now — the CEO fallback is gone. Mirrors
-      // TicketService's DEPOSIT_CONFIRM_ROLES. RECORD_PAYMENT/FINAL_PAYMENT are account-only too
-      // (PAYMENT_RECORD_ROLES, owner ruling 2026-09-20); ACCOUNT_ROLES (['account','ceo']) now only
-      // covers SET_BILLING and similar non-payment actions.
-      const user = hasRole('account');
-      const ticket = findTicketRaw(Number(id));
-      requireActive(ticket);
-      if (ticket.paymentStatus !== 'DEPOSIT_NOTICE_ISSUED') fail('ต้องออกใบแจ้งรับมัดจำก่อนจึงจะยืนยันรับชำระมัดจำได้', 409);
-      const notice = latestIssuedDepositNotice(ticket.id);
-      const amount = notice?.depositAmount ?? moneyValue(payableAmount(ticket) * 0.5);
-      if (amount <= 0) fail('ไม่พบยอดมัดจำสำหรับบันทึกรับชำระ', 409);
-      recordPaymentForTicket(ticket, user, {
-        kind: 'DEPOSIT',
-        amount,
-        note: 'ยืนยันรับมัดจำ',
-        depositNoticeId: notice?.id ?? null,
-      });
-      return delay({ ticket: buildTicketDetail(ticket) });
+      return api.finance.confirmDepositPaid(id);
     },
 
     async issueImportRequest(id) {
@@ -8004,32 +8287,7 @@ export const api = {
     },
 
     async confirmFinalPayment(id) {
-      // GLA-118 (owner ruling 2026-09-20, part A): account only now — the CEO fallback is gone.
-      // Mirrors TicketService's new PAYMENT_RECORD_ROLES (confirmFinalPayment is a payment-
-      // recording entry point too, whether or not it ends up calling recordPaymentInternal). This
-      // used to be hasRole('account', 'ceo') (TicketService.ACCOUNT_ROLES).
-      const user = hasRole('account');
-      const ticket = findTicketRaw(Number(id));
-      requireActive(ticket);
-      const allowed = ['AWAITING_FINAL_PAYMENT', 'DEPOSIT_PAID'].includes(ticket.paymentStatus)
-        || (depositBypassesNotice(ticket) && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED'));
-      if (!allowed) fail('ต้องรับชำระมัดจำแล้วหรือรอชำระเงินงวดสุดท้าย (หรือดีลนี้ได้รับการยกเว้นมัดจำ) ก่อนจึงจะยืนยันรับชำระเงินครบถ้วนได้', 409);
-      const outstanding = moneyValue(payableAmount(ticket) - sumPaid(ticket.id));
-      if (outstanding <= 0) {
-        if (ticket.paymentStatus !== 'FULLY_PAID') {
-          ticket.paymentStatus = 'FULLY_PAID';
-          ticket.updatedAt = new Date().toISOString().slice(0, 10);
-          pushEvent(ticket, user, 'FULLY_PAID', ticket.status, ticket.status, null);
-          maybeAdvanceClosedPaid(ticket, user);
-        }
-      } else {
-        recordPaymentForTicket(ticket, user, {
-          kind: 'BALANCE',
-          amount: outstanding,
-          note: 'ยืนยันชำระส่วนที่เหลือ',
-        });
-      }
-      return delay({ ticket: buildTicketDetail(ticket) });
+      return api.finance.confirmFinalPayment(id);
     },
 
     // ── Deal pipeline (V50): mirrors TicketService.updateStage/markLost/reopenDeal.
@@ -8037,26 +8295,8 @@ export const api = {
     // the Java service and is NOT authoritative (CLAUDE.md).
 
     async updateStage(id, payload) {
-      const user = requireSession();
-      const ticket = findTicketRaw(Number(id));
-      requireActive(ticket);
-      if (dealStageIndex(payload.stage) < 0) fail(`ไม่รองรับสถานะขั้นตอนการขาย '${payload.stage}'`, 400);
-      // Enforced from the SAME decision list actions() serves, never re-derived — so an option the
-      // mock offered is an option the mock accepts, and there is one place to read. The status is
-      // approximated (403 for the permission message, 409 otherwise) because the mock's decisions
-      // carry a reason, not a status code; the real service's codes are pinned by
-      // StageDecisionIntegrationTest.
-      const decision = mockStageDecisions(ticket, user).find((d) => d.stage === payload.stage);
-      if (!decision.allowed) {
-        fail(decision.blockedReason, decision.blockedReason === 'ไม่มีสิทธิ์เข้าถึงรายการนี้' ? 403 : 409);
-      }
-      // NO note requirement here. DealStage.requiresJustification is a backend decision and the
-      // mock does not mirror it — see the "what this mock will and will not decide" block above.
-      const fromStage = ticket.salesStage;
-      ticket.salesStage = payload.stage;
-      ticket.stageUpdatedAt = new Date().toISOString();
-      pushEvent(ticket, user, 'STAGE_CHANGED', fromStage, payload.stage, (payload.note || '').trim() || null);
-      return delay({ ticket: buildTicketDetail(ticket) });
+      // /api/tickets entrypoint: refuses account (H1 lockdown); account uses api.finance.updateStage.
+      return mockUpdateStage(id, payload);
     },
 
     async markLost(id, payload) {
@@ -11934,6 +12174,63 @@ export const api = {
     },
   },
 
+  // Mirrors FinanceDealController + FinanceDealService (finance/): GET /api/finance/deals/{id} and the money
+  // actions under it (H1 lockdown), for `account` and `ceo` ONLY. account is row-scoped to the same scope as the
+  // deal list (accountListScopeIncludes, never a quotation-only container); ceo reads any deal. Each action is the
+  // SAME shared body as its /api/tickets twin (mockRecordPayment, mockSetBilling, ...), which keeps TODAY's role gate
+  // (deposit-paid / final-payment / payments / close-confirm: account only; billing / close-revoke / stage:
+  // account + ceo). The mock APPROXIMATES the documents block (items at approved price, billing notes not
+  // modelled); authz here is never authoritative -- FinanceDealIntegrationTest / FinanceDealLockdownIntegrationTest
+  // are the evidence.
+  finance: {
+    async getDeal(id) {
+      const { user, raw } = requireMockFinanceAccess(id);
+      return delay({ deal: buildFinanceDeal(raw, user) });
+    },
+
+    async addComment(id, payload) {
+      const { user, raw } = requireMockFinanceAccess(id);
+      pushEvent(raw, user, 'COMMENTED', null, null, payload.message);
+      return delay({ deal: buildFinanceDeal(raw, user) });
+    },
+
+    async confirmDepositPaid(id) {
+      const { user, raw } = requireMockFinanceAccess(id);
+      await mockConfirmDepositPaid(id);
+      return delay({ deal: buildFinanceDeal(raw, user) });
+    },
+
+    async confirmFinalPayment(id) {
+      const { user, raw } = requireMockFinanceAccess(id);
+      await mockConfirmFinalPayment(id);
+      return delay({ deal: buildFinanceDeal(raw, user) });
+    },
+
+    async recordPayment(id, payload) {
+      const { user, raw } = requireMockFinanceAccess(id);
+      await mockRecordPayment(id, payload);
+      return delay({ deal: buildFinanceDeal(raw, user) });
+    },
+
+    async confirmCloseReady(id) {
+      const { user, raw } = requireMockFinanceAccess(id);
+      await mockConfirmCloseReady(id);
+      return delay({ deal: buildFinanceDeal(raw, user) });
+    },
+
+    async revokeCloseConfirmation(id, payload = {}) {
+      const { user, raw } = requireMockFinanceAccess(id);
+      await mockRevokeCloseConfirmation(id, payload, true);
+      return delay({ deal: buildFinanceDeal(raw, user) });
+    },
+
+    async updateStage(id, payload) {
+      const { user, raw } = requireMockFinanceAccess(id);
+      await mockUpdateStage(id, payload, true);
+      return delay({ deal: buildFinanceDeal(raw, user) });
+    },
+  },
+
   // Mirrors AttachmentController + FileStorageService (attachment/).
   attachments: {
     async list(ticketId) {
@@ -14894,12 +15191,16 @@ export const api = {
       // DealQuotationService#listForTicket's per-row canViewPricingRequestOriginRow — it is dropped
       // (not field-stripped) unless the viewer is the owning sales rep, sales_manager or ceo; the
       // can_create_quotation grant does NOT bypass it (unlike a DEAL_DIRECT row).
-      const canSeePricingRequestRows = ['sales', 'sales_manager', 'ceo'].includes(user.role)
-        && (user.role !== 'sales' || ticket.createdById === user.id);
+      // 2026-09-30 owner ruling (reverses M3 for account ONLY): account also sees them, but only inside its list
+      // scope -- requireDealQuotationViewAccess above already refused account outside it.
+      const canSeePricingRequestRows = user.role === 'account'
+        || (['sales', 'sales_manager', 'ceo'].includes(user.role)
+          && (user.role !== 'sales' || ticket.createdById === user.id));
       const items = mockDealQuotations
-        .filter((q) => q.ticketId === ticket.id && (isDealDirectOrigin(q) || canSeePricingRequestRows))
+        .filter((q) => q.ticketId === ticket.id && (isDealDirectOrigin(q) || canSeePricingRequestRows)
+          && (user.role !== 'account' || ACCOUNT_VISIBLE_DEAL_QUOTATION_STATUSES.includes(q.docStatus)))
         .sort((a, b) => b.id - a.id)
-        .map(buildDealQuotationDto);
+        .map((q) => forDealQuotationViewer(buildDealQuotationDto(q), user));
       return delay({ items });
     },
 
@@ -14914,8 +15215,11 @@ export const api = {
         (!params.status || q.docStatus === params.status)
         && (!params.needsRework || isDealQuotationNeedingRework(q))
       ));
-      const sorted = [...filtered].sort((a, b) => b.id - a.id);
-      return delay({ items: sorted.map(buildDealQuotationDto) });
+      const viewer = requireSession();
+      const sorted = [...filtered]
+        .filter((q) => viewer.role !== 'account' || ACCOUNT_VISIBLE_DEAL_QUOTATION_STATUSES.includes(q.docStatus))
+        .sort((a, b) => b.id - a.id);
+      return delay({ items: sorted.map((q) => forDealQuotationViewer(buildDealQuotationDto(q), viewer)) });
     },
 
     // Per-status counts for the tab labels (owner feedback F5, 2026-09-10). Computed from the
@@ -14956,7 +15260,7 @@ export const api = {
 
     async get(id) {
       const row = requireDealQuotationRowViewable(id);
-      return delay({ quotation: buildDealQuotationDto(row) });
+      return delay({ quotation: forDealQuotationViewer(buildDealQuotationDto(row), requireSession()) });
     },
 
     async create(ticketId, payload = {}) {
@@ -15189,8 +15493,8 @@ export const api = {
         (q) => q.pricingRequestId === pr.id && q.origin === 'PRICING_REQUEST' && q.docStatus === 'DRAFT');
       if (!row) return delay({ quotation: null });
       const ticket = db.tickets.find((t) => t.id === row.ticketId);
-      requireDealQuotationViewAccess(ticket, user, row.origin);
-      return delay({ quotation: buildDealQuotationDto(row) });
+      requireDealQuotationViewAccess(ticket, user, row.origin, row.docStatus);
+      return delay({ quotation: forDealQuotationViewer(buildDealQuotationDto(row), user) });
     },
 
     // Full replace of `items` (plan: "PUT ... body = UpsertDealQuotationRequest (FULL replace of

@@ -398,7 +398,10 @@ export const api = {
     create: (payload) => apiRequest(API_ROUTES.tickets.create, { method: 'POST', body: payload }),
     get: (id) => apiRequest(API_ROUTES.tickets.detail(id)),
     listPayments: (id) => apiRequest(API_ROUTES.tickets.payments(id)),
-    recordPayment: (id, payload) => apiRequest(API_ROUTES.tickets.payments(id), { method: 'POST', body: payload }),
+    // H1 lockdown: the four account-only money calls below were REMOVED from /api/tickets (their routes are
+    // gone) and now go to the finance routes; the method names stay so existing callers keep working.
+    // Response shape changes from { ticket } to { deal } (the finance view).
+    recordPayment: (id, payload) => apiRequest(API_ROUTES.finance.action(id, 'payments'), { method: 'POST', body: payload }),
     setBilling: (id, payload) => apiRequest(API_ROUTES.tickets.billing(id), { method: 'POST', body: payload }),
     listDeliveries: (id) => apiRequest(API_ROUTES.tickets.deliveries(id)),
     reserveStock: (id, payload) => apiRequest(API_ROUTES.tickets.reserveStock(id), { method: 'POST', body: payload }),
@@ -417,8 +420,7 @@ export const api = {
     // downloadQuotationXlsx/Pdf — so the 3 legacy pre-redesign quotations remain visible.
     // Three-party close (V55): ฝ่ายบัญชี confirms, then the CEO verifies. There is no
     // single-step close any more — sales is not part of the sequence.
-    confirmCloseReady: (id) =>
-      apiRequest(API_ROUTES.tickets.action(id, 'close/confirm'), { method: 'POST' }),
+    confirmCloseReady: (id) => apiRequest(API_ROUTES.finance.action(id, 'close/confirm'), { method: 'POST' }),
     revokeCloseConfirmation: (id, body) =>
       apiRequest(API_ROUTES.tickets.action(id, 'close/revoke'), { method: 'POST', body }),
     verifyClose: (id) =>
@@ -440,12 +442,12 @@ export const api = {
     // backend route — RemainingInvoiceDialog now downloads through storedRemainingInvoices.file
     // instead, an ISSUED/SUPERSEDED document's own frozen snapshot.
     confirmCustomer: (id) => apiRequest(API_ROUTES.tickets.action(id, 'confirm-customer'), { method: 'POST' }),
-    confirmDepositPaid: (id) => apiRequest(API_ROUTES.tickets.action(id, 'deposit-paid'), { method: 'POST' }),
+    confirmDepositPaid: (id) => apiRequest(API_ROUTES.finance.action(id, 'deposit-paid'), { method: 'POST' }),
     issueImportRequest: (id) => apiRequest(API_ROUTES.tickets.action(id, 'import-request'), { method: 'POST' }),
     markIrSent: (id) => apiRequest(API_ROUTES.tickets.action(id, 'ir-sent'), { method: 'POST' }),
     markShipping: (id) => apiRequest(API_ROUTES.tickets.action(id, 'shipping'), { method: 'POST' }),
     markGoodsReceived: (id) => apiRequest(API_ROUTES.tickets.action(id, 'goods-received'), { method: 'POST' }),
-    confirmFinalPayment: (id) => apiRequest(API_ROUTES.tickets.action(id, 'final-payment'), { method: 'POST' }),
+    confirmFinalPayment: (id) => apiRequest(API_ROUTES.finance.action(id, 'final-payment'), { method: 'POST' }),
     // Deal pipeline (V50): manual stage change / lost / reopen on the deal itself.
     updateStage: (id, payload) => apiRequest(API_ROUTES.tickets.action(id, 'stage'), { method: 'POST', body: payload }),
     markLost: (id, payload) => apiRequest(API_ROUTES.tickets.action(id, 'lost'), { method: 'POST', body: payload }),
@@ -661,6 +663,21 @@ export const api = {
   catalogThicknessDefaults: {
     list: () => apiRequest(API_ROUTES.catalog.thicknessDefaults),
     save: (payload) => apiRequest(API_ROUTES.catalog.thicknessDefaults, { method: 'PUT', body: payload }),
+  },
+  // Finance-only deal read (account + ceo) -- mirrors FinanceDealController.
+  // Also the money actions (H1 lockdown): each delegates server-side to the existing ticket business method and
+  // returns { deal }. account: row-scoped to its list scope; deposit-paid / final-payment / payments /
+  // close-confirm are account-only, billing / close-revoke / stage / comments are account + ceo.
+  finance: {
+    getDeal: (id) => apiRequest(API_ROUTES.finance.deal(id)),
+    addComment: (id, payload) => apiRequest(API_ROUTES.finance.action(id, 'comments'), { method: 'POST', body: payload }),
+    confirmDepositPaid: (id) => apiRequest(API_ROUTES.finance.action(id, 'deposit-paid'), { method: 'POST' }),
+    confirmFinalPayment: (id) => apiRequest(API_ROUTES.finance.action(id, 'final-payment'), { method: 'POST' }),
+    recordPayment: (id, payload) => apiRequest(API_ROUTES.finance.action(id, 'payments'), { method: 'POST', body: payload }),
+    confirmCloseReady: (id) => apiRequest(API_ROUTES.finance.action(id, 'close/confirm'), { method: 'POST' }),
+    revokeCloseConfirmation: (id, body) =>
+      apiRequest(API_ROUTES.finance.action(id, 'close/revoke'), { method: 'POST', body }),
+    updateStage: (id, payload) => apiRequest(API_ROUTES.finance.action(id, 'stage'), { method: 'POST', body: payload }),
   },
   attachments: {
     list: (ticketId) => apiRequest(API_ROUTES.attachments.list(ticketId)),

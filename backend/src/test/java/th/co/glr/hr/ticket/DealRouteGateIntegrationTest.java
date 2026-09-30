@@ -65,6 +65,7 @@ class DealRouteGateIntegrationTest extends AbstractPostgresIntegrationTest {
     private long ownerRepId;
     private UserPrincipal ownerRep;
     private UserPrincipal accountActor;
+    private UserPrincipal ceoActor;
 
     @BeforeEach
     void wireRealCollaborators() {
@@ -83,6 +84,7 @@ class DealRouteGateIntegrationTest extends AbstractPostgresIntegrationTest {
         ownerRepId = createEmployee(employees, "เจ้าของดีล เส้นทางดีล", "dealroute-owner@glr.co.th");
         ownerRep = principal(ownerRepId, "sales");
         accountActor = principal(createEmployee(employees, "ฝ่ายบัญชี เส้นทางดีล", "dealroute-account@glr.co.th"), "account");
+        ceoActor = principal(createEmployee(employees, "ซีอีโอ เส้นทางดีล", "dealroute-ceo@glr.co.th"), "ceo");
     }
 
     // ═══ Part A — what an owner-direct / buyer-direct deal CANNOT reach ═══════
@@ -213,7 +215,9 @@ class DealRouteGateIntegrationTest extends AbstractPostgresIntegrationTest {
     void aMissingDeposit_reportsTheFactGate_notTheRoute() {
         long ticketId = dealAt(EntryChannel.OWNER_DIRECT, DealStage.NEGOTIATION);
 
-        assertThatThrownBy(() -> ticketService.updateStage(ticketId, DealStage.DEPOSIT_RECEIVED, "เหตุผล", accountActor))
+        // H1: account's money-stage moves go through the finance route now (and only in its list scope), so the
+        // /tickets stage path is exercised with the CEO, who keeps it and meets the same fact-gate ladder.
+        assertThatThrownBy(() -> ticketService.updateStage(ticketId, DealStage.DEPOSIT_RECEIVED, "เหตุผล", ceoActor))
             .isInstanceOfSatisfying(ApiException.class, e -> {
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
                 assertThat(e.getMessage()).contains("ยังไม่ได้รับชำระมัดจำ").doesNotContain("แก้ช่องทางดีล");

@@ -73,6 +73,12 @@ class TicketServiceTest {
         // real Postgres in TicketStatusMachineIntegrationTest. What this file still checks is the
         // SERVICE composition: which (expected -> next) pair each write site asks for.
         when(ticketRepo.transitionStatus(anyLong(), any(), any())).thenReturn(1);
+        // H1 lockdown: account's money actions now also require the deal to be inside account's
+        // list scope (TicketRepository.isInAccountScope -- a SQL predicate this Mockito file cannot
+        // prove; FinanceDealLockdownIntegrationTest proves it against real Postgres). Default IN so
+        // the pre-existing account happy paths below keep testing their own logic; the
+        // *_outOfAccountScope_* tests flip it OFF per test.
+        when(ticketRepo.isInAccountScope(anyLong())).thenReturn(true);
     }
     private final TicketService service = new TicketService(
         ticketRepo, notifRepo, new ObjectMapper(), customerRepo, quotationRenderer,
@@ -234,11 +240,13 @@ class TicketServiceTest {
         assertForbidden(() -> service.listPayments(10L, importActor));
     }
 
+    // H1 lockdown: account no longer reads the payment ledger through /tickets (it reads it inside the
+    // finance deal view, GET /api/finance/deals/{id}); ceo is unchanged. This used to assert BOTH allowed.
     @Test
-    void listPayments_accountAndCeoAllowed() {
+    void listPayments_ceoAllowed_accountRefused() {
         stubTicket(10L, 99L, TicketStatus.QUOTATION_ISSUED);
-        // Just proving the gate doesn't throw — the actual rows come from the repository.
-        service.listPayments(10L, accountActor);
+        assertForbidden(() -> service.listPayments(10L, accountActor));
+        // Just proving the ceo gate doesn't throw — the actual rows come from the repository.
         service.listPayments(10L, ceoActor);
     }
 
@@ -258,10 +266,58 @@ class TicketServiceTest {
         assertForbidden(() -> service.get(10L, employeeActor));
     }
 
+    // H1 lockdown: account used to read ANY ticket through GET /tickets/{id}; it now reads deals only
+    // through the finance view, so the ticket read refuses it -- even on a deal inside its list scope.
     @Test
-    void get_accountRoleCanViewAnyTicket() {
-        TicketDto ticket = stubTicket(10L, 1L, TicketStatus.QUOTATION_ISSUED);
-        assertThat(service.get(10L, accountActor)).isEqualTo(ticket);
+    void get_accountRoleIsRefused_evenWhenTheDealIsInAccountScope() {
+        stubTicket(10L, 1L, TicketStatus.QUOTATION_ISSUED);
+        assertForbidden(() -> service.get(10L, accountActor));
+        assertForbidden(() -> service.actions(10L, accountActor));
+        assertForbidden(() -> service.listDeliveries(10L, accountActor));
+        assertForbidden(() -> service.comment(10L, new CommentRequest("hi"), accountActor));
+    }
+
+    @Test
+    void confirmDepositPaid_byAccount_outOfAccountScope_isRefusedBeforeAnyWrite() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_NOTICE_ISSUED", null);
+        when(ticketRepo.isInAccountScope(10L)).thenReturn(false);
+
+        assertForbidden(() -> service.confirmDepositPaid(10L, accountActor));
+
+        verify(ticketRepo, never()).insertPaymentReceipt(anyLong(), anyString(), any(), anyLong(), any(), any(), any(), any());
+    }
+
+    @Test
+    void moneyWrites_byAccount_outOfAccountScope_areAllRefused() {
+        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "AWAITING_FINAL_PAYMENT", "GOODS_RECEIVED");
+        when(ticketRepo.isInAccountScope(10L)).thenReturn(false);
+
+        assertForbidden(() -> service.confirmFinalPayment(10L, accountActor));
+        assertForbidden(() -> service.confirmCloseReady(10L, accountActor));
+        assertForbidden(() -> service.recordPayment(10L,
+            new RecordPaymentRequest("DEPOSIT", new BigDecimal("1.00"), null, null, null, null, false), accountActor));
+        assertForbidden(() -> service.financeRevokeCloseConfirmation(10L, null, accountActor));
+        assertForbidden(() -> service.financeUpdateStage(10L, DealStage.CLOSED_PAID, null, accountActor));
+        assertForbidden(() -> service.financeComment(10L, new CommentRequest("hi"), accountActor));
+
+        verify(ticketRepo, never()).insertPaymentReceipt(anyLong(), anyString(), any(), anyLong(), any(), any(), any(), any());
+        verify(ticketRepo, never()).confirmClose(anyLong(), anyLong());
+    }
+
+    // The /tickets entrypoints of the actions ceo still owns must refuse account (the finance path has its own).
+    @Test
+    void ticketsEntrypoints_setBillingRevokeAndStage_refuseAccount() {
+        stubTicket(10L, 1L, TicketStatus.QUOTATION_ISSUED);
+        assertForbidden(() -> service.setBilling(10L, new BillingRequest(null, null, null, null, null), accountActor));
+        assertForbidden(() -> service.revokeCloseConfirmation(10L, null, accountActor));
+        assertForbidden(() -> service.updateStage(10L, DealStage.CLOSED_PAID, null, accountActor));
+    }
+
+    @Test
+    void financeUpdateStage_refusesANonMoneyStage_evenForCeo() {
+        stubTicket(10L, 1L, TicketStatus.QUOTATION_ISSUED);
+        assertForbidden(() -> service.financeUpdateStage(10L, DealStage.NEGOTIATION, null, ceoActor));
+        assertForbidden(() -> service.financeUpdateStage(10L, DealStage.NEGOTIATION, null, accountActor));
     }
 
     @Test
@@ -902,7 +958,7 @@ class TicketServiceTest {
     void revokeCloseConfirmation_clearsTheCeoQueue() {
         stubAwaitingCeo(10L);
 
-        service.revokeCloseConfirmation(10L, "ลูกค้าขอคืนสินค้า", accountActor);
+        service.financeRevokeCloseConfirmation(10L, "ลูกค้าขอคืนสินค้า", accountActor);
 
         verify(ticketRepo).clearCloseConfirmation(10L);
         verify(ticketRepo).addEvent(eq(10L), eq(accountActor.id()), anyString(),
@@ -1676,9 +1732,10 @@ class TicketServiceTest {
         assertForbidden(() -> service.updateStage(10L, DealStage.PROCUREMENT, null, salesActor));
         assertForbidden(() -> service.updateStage(10L, DealStage.CLOSED_PAID, null, salesActor));
         // account only money stages; import only PROCUREMENT
-        assertForbidden(() -> service.updateStage(10L, DealStage.SPEC_APPROVED, null, accountActor));
+        // H1 lockdown: account reaches updateStage only via the finance entrypoint (money stages only).
+        assertForbidden(() -> service.financeUpdateStage(10L, DealStage.SPEC_APPROVED, null, accountActor));
         assertForbidden(() -> service.updateStage(10L, DealStage.SPEC_APPROVED, null, importActor));
-        service.updateStage(10L, DealStage.DEPOSIT_RECEIVED, "บัญชีแก้ย้อนหลังจากเอกสารรับเงิน", accountActor);
+        service.financeUpdateStage(10L, DealStage.DEPOSIT_RECEIVED, "บัญชีแก้ย้อนหลังจากเอกสารรับเงิน", accountActor);
         service.updateStage(10L, DealStage.PROCUREMENT, "นำเข้าเริ่มออก IR แล้ว", importActor);
         verify(ticketRepo).updateSalesStage(10L, DealStage.DEPOSIT_RECEIVED);
         verify(ticketRepo).updateSalesStage(10L, DealStage.PROCUREMENT);
@@ -1848,11 +1905,11 @@ class TicketServiceTest {
     void updateStage_closedPaid_needsDeliveryAsWellAsPayment() {
         stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), PaymentTrack.FULLY_PAID,
             FulfilmentStatus.GOODS_RECEIVED, DealStage.DELIVERY_SCHEDULING, null);
-        assertConflict(() -> service.updateStage(10L, DealStage.CLOSED_PAID, "รับเงินครบ", accountActor));
+        assertConflict(() -> service.financeUpdateStage(10L, DealStage.CLOSED_PAID, "รับเงินครบ", accountActor));
 
         stubDeal(11L, 1L, TicketStatus.DRAFT, List.of(), PaymentTrack.FULLY_PAID, null,
             DealStage.DELIVERY_SCHEDULING, null);
-        assertConflict(() -> service.updateStage(11L, DealStage.CLOSED_PAID, "รับเงินครบ", accountActor));
+        assertConflict(() -> service.financeUpdateStage(11L, DealStage.CLOSED_PAID, "รับเงินครบ", accountActor));
 
         verify(ticketRepo, never()).updateSalesStage(anyLong(), anyString());
 
@@ -1860,7 +1917,7 @@ class TicketServiceTest {
         // stepped over, so no note is needed and the facts are the only thing permitting it.
         stubDeal(12L, 1L, TicketStatus.DRAFT, List.of(), PaymentTrack.FULLY_PAID,
             FulfilmentStatus.FULLY_DELIVERED, DealStage.DELIVERED, null);
-        service.updateStage(12L, DealStage.CLOSED_PAID, null, accountActor);
+        service.financeUpdateStage(12L, DealStage.CLOSED_PAID, null, accountActor);
         verify(ticketRepo).updateSalesStage(12L, DealStage.CLOSED_PAID);
     }
 
@@ -2195,9 +2252,12 @@ class TicketServiceTest {
         assertThat(actionCodes(40L, salesManagerActor)).doesNotContain("RESERVE_STOCK");
     }
 
+    // H1 lockdown: account gets its action list from financeActions (same gates, no ticket view-access check).
     private List<String> actionCodes(long ticketId, UserPrincipal actor) {
-        return service.actions(ticketId, actor).availableActions().stream()
-            .map(TicketResponses.TicketActionDto::action).toList();
+        var response = "account".equals(actor.role())
+            ? service.financeActions(ticketId, actor)
+            : service.actions(ticketId, actor);
+        return response.availableActions().stream().map(TicketResponses.TicketActionDto::action).toList();
     }
 
     /**

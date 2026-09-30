@@ -199,8 +199,17 @@ class AttachmentTicketAccessIntegrationTest extends AbstractPostgresIntegrationT
         assertThat(attachments.findById(attachmentId)).isPresent();
     }
 
+    // H1 lockdown: account is ROW-SCOPED to its list scope. The fixture deal is at the default (lead)
+    // stage, so it is refused until the deal is put inside the scope (S12); all four attach types stay
+    // readable there (AttachType is exactly {PO, SIGNED_QUOTATION, INVOICE, OTHER}, so no type filter).
     @Test
-    void accountCanNowOpenTheDocumentItMustConfirmMoneyAgainst() {
+    void accountCanOpenTheDocumentItMustConfirmMoneyAgainst_onlyInsideItsListScope() {
+        assertForbidden(() -> controller.list(ticketId, sessionFor(account)));
+        assertForbidden(() -> controller.download(attachmentId, sessionFor(account)));
+
+        jdbc.update("UPDATE sales.ticket SET sales_stage = 'PROCUREMENT' WHERE ticket_id = :id",
+            Map.of("id", ticketId));
+
         assertThat(controller.list(ticketId, sessionFor(account)).get("attachments"))
             .extracting(AttachmentDto::id)
             .containsExactly(attachmentId);

@@ -91,9 +91,12 @@ class ImportCommentAndDocumentAuthzIntegrationTest extends AbstractPostgresInteg
     private static final String MANUAL_PRICE = "543210.98";
     private static final String STOCK_SALE_PRICE = "432109.87";
     // Summary money totals (customer payable / received / outstanding): 123456.78 quoted, 45678.90 received.
-    private static final String PAYABLE = "123456.78";
+    /** The quotation's persisted pre-VAT subtotal. */
+    private static final String QUOTATION_SUBTOTAL = "123456.78";
+    /** Payable is VAT-inclusive (owner ruling 2026-09-30): 123456.78 + round2(123456.78 x 0.07) = 123456.78 + 8641.97. */
+    private static final String PAYABLE = "132098.75";
     private static final String PAID = "45678.90";
-    private static final String OUTSTANDING = "77777.88";
+    private static final String OUTSTANDING = "86419.85";
 
     private static final String OVERRIDE_NOTE = "ราคา manual override = 543210.98";
 
@@ -267,8 +270,12 @@ class ImportCommentAndDocumentAuthzIntegrationTest extends AbstractPostgresInteg
             TicketSummaryDto viaComment = ticketService.comment(inScopeId, new CommentRequest("hi"), actor).summary();
             assertThat(viaComment.amountPayable()).as(actor.role() + " comment payable").isEqualByComparingTo(PAYABLE);
         }
-        // account reads the deal (its own worklist scope needs a pending payment, so use the deal read).
-        TicketSummaryDto asAccount = ticketService.get(inScopeId, accountUser).summary();
+        // account reads the deal's money through its finance view since the H1 lockdown (GET /tickets/{id}
+        // refuses account); the deal sits at S10, inside account's list scope.
+        th.co.glr.hr.finance.FinanceDealService finance = new th.co.glr.hr.finance.FinanceDealService(tickets,
+            new th.co.glr.hr.finance.FinanceDealRepository(jdbc), new th.co.glr.hr.deposit.DepositNoticeRepository(jdbc),
+            new th.co.glr.hr.deposit.RemainingInvoiceRepository(jdbc), new AttachmentRepository(jdbc), ticketService);
+        var asAccount = finance.get(inScopeId, accountUser).money();
         assertThat(asAccount.amountPayable()).isEqualByComparingTo(PAYABLE);
         assertThat(asAccount.amountPaid()).isEqualByComparingTo(PAID);
         assertThat(asAccount.amountOutstanding()).isEqualByComparingTo(OUTSTANDING);
@@ -433,7 +440,7 @@ class ImportCommentAndDocumentAuthzIntegrationTest extends AbstractPostgresInteg
         tickets.addEvent(id, ownerId, "พนักงานขาย", TicketEventKind.PRICE_OVERRIDDEN, null, null, OVERRIDE_NOTE);
         tickets.addEvent(id, ownerId, "พนักงานขาย", TicketEventKind.COMMENTED, null, null, "ลูกค้าขอเลื่อนส่งของ");
         // Real summary money: an ISSUED quotation drives amountPayable, a receipt drives amountPaid.
-        tickets.createQuotation(id, "QT-" + code, ownerId, new BigDecimal(PAYABLE));
+        tickets.createQuotation(id, "QT-" + code, ownerId, new BigDecimal(QUOTATION_SUBTOTAL));
         tickets.insertPaymentReceipt(id, "DEPOSIT", new BigDecimal(PAID), ownerId, null, null, null, null);
         return id;
     }

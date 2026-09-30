@@ -236,6 +236,13 @@ describe('canAccessPath', () => {
     expect(canAccessPath('/finance', employee)).toBe(false);
   });
 
+  it('scopes the per-deal finance page /finance/deals/:id exactly like /finance (fails open if unclaimed)', () => {
+    expect(canAccessPath('/finance/deals/501', account)).toBe(true);
+    expect(canAccessPath('/finance/deals/501', ceo)).toBe(true);
+    expect(canAccessPath('/finance/deals/501', sales)).toBe(false);
+    expect(canAccessPath('/finance/deals/501', employee)).toBe(false);
+  });
+
   it('allows self-service paths for any user linked to an employee', () => {
     expect(canAccessPath('/profile', employee)).toBe(true);
     // overtime/leave are allowed for a linked employee even without the view-all permission

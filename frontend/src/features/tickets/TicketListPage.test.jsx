@@ -324,6 +324,17 @@ describe('TicketListPage', () => {
     await waitFor(() => expect(screen.getByText('บริษัท ทดสอบ จำกัด')).toBeTruthy());
   });
 
+  it('H1: account row links open the finance deal page; other roles keep the ticket page', async () => {
+    const first = renderTicketListPage(accountUser);
+    const accountLink = await screen.findByRole('link', { name: 'บริษัท เกินกำหนด จำกัด' });
+    expect(accountLink.getAttribute('href')).toBe('/finance/deals/503');
+    first.unmount();
+
+    renderTicketListPage(salesUser);
+    const salesLink = await screen.findByRole('link', { name: 'บริษัท เกินกำหนด จำกัด' });
+    expect(salesLink.getAttribute('href')).toBe('/tickets/503');
+  });
+
   it('initializes import/account worklist scope from the URL', async () => {
     renderTicketListPage(importUser, ['/tickets?inbox=0']);
 

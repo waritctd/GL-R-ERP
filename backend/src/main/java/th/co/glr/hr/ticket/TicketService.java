@@ -220,11 +220,33 @@ public class TicketService {
      */
     private TicketDto requireViewAccess(long ticketId, UserPrincipal actor) {
         requireRole(actor, VIEWER_ROLES);
+        // H1 lockdown (owner decision, 2026-09-30): account no longer reads a deal through the ticket
+        // routes AT ALL -- not even one inside its list scope. It reads the finance deal view
+        // (FinanceDealService, GET /api/finance/deals/{id}), which carries no cost/pricing/tracking
+        // internals. Refused here, in the service, so that every caller of requireViewAccess (get,
+        // actions, listPayments, listDeliveries, comment, the quotation file) inherits it and the
+        // /tickets controller needs no check of its own.
+        if ("account".equals(actor.role())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
         TicketDto ticket = requireTicket(ticketId);
         if ("sales".equals(actor.role()) && ticket.summary().createdById() != actor.id()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         return projectForRole(ticket, actor.role());
+    }
+
+    /**
+     * The account role's ROW scope for the finance paths: {@code account} may act on / read a deal
+     * only when it is inside its list scope ({@link TicketRepository#isInAccountScope} -- the SAME
+     * predicate that filters {@code GET /api/tickets} for account). Any other role passes through
+     * untouched. Enforced here, in the shared business methods, so that a caller reaching them by
+     * any path (the finance controller today) cannot skip it.
+     */
+    private void requireAccountScope(long ticketId, UserPrincipal actor) {
+        if ("account".equals(actor.role()) && !tickets.isInAccountScope(ticketId)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
     }
 
     /**
@@ -636,7 +658,16 @@ public class TicketService {
     private record QuotationRenderContext(TicketDto ticket, QuotationDto quotation, CustomerDto customer) {}
 
     private QuotationRenderContext loadQuotationContext(long ticketId, long quotationId, UserPrincipal actor) {
-        TicketDto ticket = requireViewAccess(ticketId, actor);
+        // H1 lockdown: requireViewAccess refuses account outright, but the finance view links the deal's
+        // accepted quotation here, so account gets a SCOPED path -- the deal must be inside its list scope.
+        TicketDto ticket;
+        if ("account".equals(actor.role())) {
+            requireRole(actor, VIEWER_ROLES);
+            ticket = requireTicket(ticketId);
+            requireAccountScope(ticketId, actor);
+        } else {
+            ticket = requireViewAccess(ticketId, actor);
+        }
         // Phase B: explicit denial rather than relying on projectForRole's stripped
         // quotations list to fall through to a "quotation not found" 404 — import
         // downloading a quotation file is a permission question, not a lookup miss.
@@ -731,6 +762,7 @@ public class TicketService {
     @Transactional
     public TicketDto confirmCloseReady(long ticketId, UserPrincipal actor) {
         requireRole(actor, CLOSE_CONFIRM_ROLES);
+        requireAccountScope(ticketId, actor);
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireActive(s);
         if (s.closeConfirmedAt() != null) {
@@ -744,10 +776,25 @@ public class TicketService {
         return requireTicket(ticketId);
     }
 
-    /** Withdraw the confirmation before the CEO acts (account or CEO). */
+    /**
+     * Withdraw the confirmation before the CEO acts. The {@code /api/tickets} entrypoint: ceo only since
+     * the H1 lockdown -- account revokes through {@link #financeRevokeCloseConfirmation} instead.
+     */
     @Transactional
     public TicketDto revokeCloseConfirmation(long ticketId, String note, UserPrincipal actor) {
+        requireRole(actor, CEO_ROLES);
+        return revokeCloseConfirmationInternal(ticketId, note, actor);
+    }
+
+    /** The finance entrypoint (account or ceo; account row-scoped) -- same business logic. */
+    @Transactional
+    public TicketDto financeRevokeCloseConfirmation(long ticketId, String note, UserPrincipal actor) {
         requireRole(actor, ACCOUNT_ROLES);
+        requireAccountScope(ticketId, actor);
+        return revokeCloseConfirmationInternal(ticketId, note, actor);
+    }
+
+    private TicketDto revokeCloseConfirmationInternal(long ticketId, String note, UserPrincipal actor) {
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireActive(s);
         if (s.closeConfirmedAt() == null) {
@@ -889,6 +936,7 @@ public class TicketService {
         // GLA-118: account only — see DEPOSIT_CONFIRM_ROLES's own Javadoc for why this is not
         // ACCOUNT_ROLES (which would still let the CEO through).
         requireRole(actor, DEPOSIT_CONFIRM_ROLES);
+        requireAccountScope(ticketId, actor);
         TicketDto ticket = requireTicket(ticketId);
         TicketSummaryDto s = ticket.summary();
         requireActive(s);
@@ -1591,6 +1639,7 @@ public class TicketService {
         // GLA-118 (owner ruling 2026-09-20, part A): account only — see PAYMENT_RECORD_ROLES's own
         // Javadoc. This used to be ACCOUNT_ROLES, which let the CEO through.
         requireRole(actor, PAYMENT_RECORD_ROLES);
+        requireAccountScope(ticketId, actor);
         TicketDto ticket = requireTicket(ticketId);
         TicketSummaryDto s = ticket.summary();
         requireActive(s);
@@ -1623,12 +1672,18 @@ public class TicketService {
         // GLA-118 (owner ruling 2026-09-20, part A): account only — see PAYMENT_RECORD_ROLES's own
         // Javadoc. This used to be ACCOUNT_ROLES, which let the CEO through.
         requireRole(actor, PAYMENT_RECORD_ROLES);
+        requireAccountScope(ticketId, actor);
         return recordPaymentInternal(ticketId, request, actor);
     }
 
+    /** The {@code /api/tickets} entrypoint: ceo only since the H1 lockdown (billing is out of scope for the finance page). */
     @Transactional
     public TicketDto setBilling(long ticketId, BillingRequest request, UserPrincipal actor) {
-        requireRole(actor, ACCOUNT_ROLES);
+        requireRole(actor, CEO_ROLES);
+        return setBillingInternal(ticketId, request, actor);
+    }
+
+    private TicketDto setBillingInternal(long ticketId, BillingRequest request, UserPrincipal actor) {
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireActive(s);
         tickets.updateBilling(ticketId, request.billingDate(), request.dueDate(), request.creditTermDays(),
@@ -1879,8 +1934,37 @@ public class TicketService {
     // copy used to be a hand-maintained literal in the frontend's stageMeta.js, which is the drift
     // this refactor exists to end.
 
+    /**
+     * The {@code /api/tickets} entrypoint. H1 lockdown: refuses {@code account} outright -- account moves a
+     * money stage through {@link #financeUpdateStage}, on deals inside its list scope only.
+     */
     @Transactional
     public TicketDto updateStage(long ticketId, String targetStage, String note, UserPrincipal actor) {
+        if ("account".equals(actor.role())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
+        return updateStageInternal(ticketId, targetStage, note, actor);
+    }
+
+    /**
+     * The finance entrypoint: account or ceo, a MONEY stage only ({@link DealStage#ACCOUNT_TARGET_STAGES}:
+     * DEPOSIT_RECEIVED / CLOSED_PAID), account row-scoped. The stage rules themselves -- write gate, fact
+     * gates, note rule, tracking readiness -- are the untouched {@link #updateStageInternal}.
+     */
+    @Transactional
+    public TicketDto financeUpdateStage(long ticketId, String targetStage, String note, UserPrincipal actor) {
+        requireRole(actor, ACCOUNT_ROLES);
+        if (!DealStage.isValid(targetStage)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับสถานะขั้นตอนการขาย '" + targetStage + "'");
+        }
+        if (!DealStage.ACCOUNT_TARGET_STAGES.contains(targetStage)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
+        requireAccountScope(ticketId, actor);
+        return updateStageInternal(ticketId, targetStage, note, actor);
+    }
+
+    private TicketDto updateStageInternal(long ticketId, String targetStage, String note, UserPrincipal actor) {
         if (!DealStage.isValid(targetStage)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับสถานะขั้นตอนการขาย '" + targetStage + "'");
         }
@@ -2750,6 +2834,20 @@ public class TicketService {
     }
 
     /**
+     * The finance entrypoint for a deal comment: account or ceo, account row-scoped. Writes the same
+     * COMMENTED event as {@link #comment}; the caller (FinanceDealService) returns the finance view,
+     * never the full ticket.
+     */
+    @Transactional
+    public void financeComment(long ticketId, CommentRequest request, UserPrincipal actor) {
+        requireRole(actor, ACCOUNT_ROLES);
+        requireAccountScope(ticketId, actor);
+        requireTicket(ticketId);
+        tickets.addEvent(ticketId, actor.id(), actor.name(),
+            TicketEventKind.COMMENTED, null, null, request.message());
+    }
+
+    /**
      * Deprecated: manual price override for a legacy {@code ticket_item} row. Superseded by
      * editing sale price on the PricingDecision aggregate — see
      * {@link th.co.glr.hr.pricingdecision.PricingDecisionService#update}. Reachable only for
@@ -2788,7 +2886,33 @@ public class TicketService {
     // FactoryQuoteService.send, which is gated by its own IMPORT_ROLES check — see that class.
 
     public TicketActionsResponse actions(long ticketId, UserPrincipal actor) {
-        TicketDto ticket = requireViewAccess(ticketId, actor);
+        return buildActions(requireViewAccess(ticketId, actor), actor);
+    }
+
+    /**
+     * The finance entrypoint for the action list: account or ceo (account row-scoped). Runs the SAME
+     * {@link #buildActions} as {@link #actions} -- one readiness rule, no second copy -- without the
+     * ticket view-access check that refuses account. FinanceDealService narrows the result to money actions.
+     */
+    public TicketActionsResponse financeActions(long ticketId, UserPrincipal actor) {
+        requireRole(actor, ACCOUNT_ROLES);
+        TicketDto ticket = requireTicket(ticketId);
+        requireAccountScope(ticketId, actor);
+        return buildActions(ticket, actor);
+    }
+
+    /**
+     * {@link #financeActions} minus the account row-scope re-check, for a caller that has ALREADY authorised and
+     * scoped the request (FinanceDealService). Needed because an authorised account action may legitimately move
+     * the deal out of account's list scope; re-checking scope when rebuilding the response would 403 AFTER the
+     * write committed. Role is still enforced.
+     */
+    public TicketActionsResponse financeActionsAlreadyScoped(long ticketId, UserPrincipal actor) {
+        requireRole(actor, ACCOUNT_ROLES);
+        return buildActions(requireTicket(ticketId), actor);
+    }
+
+    private TicketActionsResponse buildActions(TicketDto ticket, UserPrincipal actor) {
         TicketSummaryDto s = ticket.summary();
         List<TicketActionDto> actions = new ArrayList<>();
         List<StageDecisionDto> decisions = stageDecisions(s, actor);

@@ -404,8 +404,8 @@ test.describe('@uat-sales refusal matrix — stage/note/readiness/role guards', 
     // state. Deliberately excludes CEO so the two-signature close (account confirms, then CEO
     // verifies — verifyClose, :642-644, requires CEO_ROLES) cannot collapse into one person
     // confirming their own review.
-    const response = await apiWrite(sessions.ceo, 'post', `/api/tickets/${deal.id}/close/confirm`);
-    expect(response.status(), 'ceo POST /close/confirm').toBe(403);
+    const response = await apiWrite(sessions.ceo, 'post', `/api/finance/deals/${deal.id}/close/confirm`);
+    expect(response.status(), 'ceo POST /api/finance/deals/{id}/close/confirm').toBe(403);
     const body = await response.json();
     expect(body.message).toContain('ไม่มีสิทธิ์เข้าถึงรายการนี้');
 

@@ -629,6 +629,39 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
     }
 
+    /**
+     * 2026-09-30 owner ruling (#6): account may download the FILE of an ISSUED customer quotation on a deal inside
+     * its list scope -- and nothing else in this service (get / list / create stay 403, asserted above).
+     */
+    @Test
+    void accountRole_canDownloadOnlyTheFileOfAnIssuedQuotation_onAnInScopeDeal() {
+        long pricingRequestId = approvedPricingRequest();
+        CustomerQuotationDto draft = quotationService.create(pricingRequestId,
+            new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
+        setStage("PROCUREMENT");
+
+        // a DRAFT is never the document the customer received
+        assertThatThrownBy(() -> quotationService.renderPdf(draft.id(), accountActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+
+        quotationService.issue(draft.id(), new IssueCustomerQuotationRequest(UUID.randomUUID().toString()), salesActor);
+        setStage("PROCUREMENT"); // issuing advances the stage back to the quotation stages
+
+        assertThat(quotationService.renderPdf(draft.id(), accountActor)).isNotEmpty();
+        assertThat(quotationService.renderXlsx(draft.id(), accountActor)).isNotEmpty();
+        assertThatThrownBy(() -> quotationService.get(draft.id(), accountActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+
+        setStage("NEGOTIATION"); // below S10 -> out of scope
+        assertThatThrownBy(() -> quotationService.renderPdf(draft.id(), accountActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+    }
+
+    private void setStage(String stage) {
+        jdbc.update("UPDATE sales.ticket SET sales_stage = :s WHERE ticket_id = :t",
+            Map.of("s", stage, "t", ticketId));
+    }
+
     @Test
     void ceoAndImport_canReadButNeverEditOrIssue() {
         long pricingRequestId = approvedPricingRequest();

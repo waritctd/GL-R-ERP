@@ -34,6 +34,9 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         list: vi.fn().mockResolvedValue({ tickets: [] }),
         get: vi.fn(),
       },
+      finance: {
+        getDeal: vi.fn(),
+      },
     },
   };
 });
@@ -411,13 +414,14 @@ describe('CommissionPage — monthly tier summary comes from the server, not cli
 
 const accountUser = { id: 20, employeeId: 20, name: 'บัญชี ทดสอบ', role: 'account' };
 
-function closedPaidTicket(overrides = {}) {
+// The FinanceDealDto shape (backend finance/FinanceDealDto.java): the amount lives under `money`.
+function financeDeal(overrides = {}) {
   return {
     id: 42,
     code: 'TCK-0042',
     customerName: 'บริษัท ทดสอบ จำกัด',
     salesStage: 'CLOSED_PAID',
-    amountPayable: 3210000,
+    money: { amountPayable: 3210000 },
     ...overrides,
   };
 }
@@ -440,7 +444,9 @@ describe('CommissionPage — account create-from-deal tax invoice upload', () =>
   beforeEach(() => {
     vi.clearAllMocks();
     showToast = vi.fn();
-    api.tickets.get.mockResolvedValue({ ticket: { summary: closedPaidTicket() } });
+    // H1 lockdown: account reads a deal through the finance view only (api.tickets.get 403s for it).
+    api.finance.getDeal.mockResolvedValue({ deal: financeDeal() });
+    api.tickets.get.mockRejectedValue(new Error('account must not call api.tickets.get'));
     api.commissions.createFromDeal.mockResolvedValue({ commission: { id: 900, invoiceDetails: invoiceDetails() } });
   });
 
@@ -448,14 +454,47 @@ describe('CommissionPage — account create-from-deal tax invoice upload', () =>
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
-    return render(
+    const utils = render(
       <MemoryRouter>
         <QueryClientProvider client={queryClient}>
           <CommissionPage user={accountUser} showToast={showToast} />
         </QueryClientProvider>
       </MemoryRouter>,
     );
+    return { ...utils, queryClient };
   }
+
+  it('the Linked Deal lookup goes through api.finance.getDeal for account, never api.tickets.get', async () => {
+    renderAccountPage();
+    await loadEligibleDeal('42');
+    expect(api.finance.getDeal).toHaveBeenCalledWith(42);
+    expect(api.tickets.get).not.toHaveBeenCalled();
+    // fields are mapped from the finance view: code, customer, and the amount from `money`
+    expect(screen.getByText('TCK-0042')).not.toBeNull();
+    expect(screen.getByText(/฿3,210,000.00/)).not.toBeNull();
+    expect((screen.getByLabelText(/Gross Amount/)).value).toBe('3210000');
+  });
+
+  it('a finance-view deal that has not reached CLOSED_PAID is refused with the stage in the message', async () => {
+    api.finance.getDeal.mockResolvedValue({ deal: financeDeal({ salesStage: 'DELIVERY_SCHEDULING' }) });
+    renderAccountPage();
+    fireEvent.change(screen.getByLabelText(/เลขที่ Ticket ID/), { target: { value: '42' } });
+    fireEvent.click(screen.getByRole('button', { name: /โหลดข้อมูลดีล/ }));
+    expect(await screen.findByText(/ยังไม่ถึงขั้นตอนปิดงาน/)).not.toBeNull();
+  });
+
+  it('a successful create-from-deal invalidates the finance deal cache too, so the commission CTA is not stale', async () => {
+    const { queryClient } = renderAccountPage();
+    const spy = vi.spyOn(queryClient, 'invalidateQueries');
+    await loadEligibleDeal();
+    fireEvent.change(screen.getByLabelText('Invoice Number *'), { target: { value: 'INV-0042' } });
+    const original = new File(['x'], 'tax-invoice-0042.jpg', { type: 'image/jpeg' });
+    fireEvent.change(document.getElementById('commission-invoice-file'), { target: { files: [original] } });
+    fireEvent.change(screen.getByLabelText(/Gross Amount/), { target: { value: '3210000' } });
+    fireEvent.submit(screen.getByRole('button', { name: 'บันทึกและสร้างคำขอค่าคอม' }).closest('form'));
+    await waitFor(() => expect(api.commissions.createFromDeal).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(spy).toHaveBeenCalledWith({ queryKey: ['finance'] }));
+  });
 
   it('re-wraps the compressed invoice image so createFromDeal receives the original filename, not "blob"', async () => {
     renderAccountPage();

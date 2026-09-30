@@ -305,7 +305,8 @@ class ImportDealAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThatCode(() -> ticketService.get(ticketId, ceoUser)).doesNotThrowAnyException();
         assertThatCode(() -> ticketService.get(ticketId, owner)).doesNotThrowAnyException();
         assertThatCode(() -> ticketService.get(ticketId, salesManager)).doesNotThrowAnyException();
-        assertThatCode(() -> ticketService.get(ticketId, accountUser)).doesNotThrowAnyException();
+        // account is refused too since the H1 lockdown (it reads GET /api/finance/deals/{id} instead).
+        assertForbidden(() -> ticketService.get(ticketId, accountUser));
     }
 
     /** Sub-paths import still needs are NOT blocked by the tickets-get guard. */

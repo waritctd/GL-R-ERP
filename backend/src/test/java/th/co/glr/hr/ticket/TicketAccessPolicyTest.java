@@ -40,8 +40,17 @@ class TicketAccessPolicyTest {
     }
 
     @Test
-    void accountCanReadTheDocumentItMustConfirmMoneyAgainst() {
-        assertThat(TicketAccessPolicy.canViewDocuments(summary(), stranger("account"))).isTrue();
+    void accountCanReadTheDocumentItMustConfirmMoneyAgainst_onlyWhenTheDealIsInItsListScope() {
+        // H1 lockdown: the role alone no longer opens a deal's documents to account -- the caller must
+        // ALSO establish that the deal is inside account's list scope (a SQL predicate, so the policy
+        // takes it as a flag). The scope-less overload therefore refuses account.
+        assertThat(TicketAccessPolicy.canViewDocuments(summary(), stranger("account"))).isFalse();
+        assertThat(TicketAccessPolicy.canViewDocuments(summary(), stranger("account"), false)).isFalse();
+        assertThat(TicketAccessPolicy.canViewDocuments(summary(), stranger("account"), true)).isTrue();
+        // The flag is the ACTOR'S OWN list scope: it also admits import (develop's import row-scope ruling,
+        // merged into the same flag) and is meaningless for every other role.
+        assertThat(TicketAccessPolicy.canViewDocuments(summary(), stranger("hr"), true)).isFalse();
+        assertThat(TicketAccessPolicy.canViewDocuments(summary(), stranger("import"), true)).isTrue();
     }
 
     @Test

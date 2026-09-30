@@ -102,6 +102,15 @@ public class TicketRepository {
     // overdue on an outstanding balance. Mirrors TicketEventKind's payment-status values.
     private static final List<String> ACCOUNT_PENDING_PAYMENT_STATUSES =
         List.of("DEPOSIT_NOTICE_ISSUED", "AWAITING_FINAL_PAYMENT");
+    // account (H1): every live order from ORDER_RECEIVED (S10) through CLOSED_PAID (S20), stage
+    // alone. The payment-status disjunct above missed a deal sitting at DEPOSIT_PAID through
+    // PROCUREMENT (S12-S17), a deposit-bypass deal (null / CUSTOMER_CONFIRMED), FULLY_PAID-but-not-
+    // close-confirmed, and CLOSED_PAID history -- all of which the account worklist must show. The
+    // old disjuncts stay as a UNION so nothing account saw before disappears. CLOSED_PAID is
+    // deliberately IN (history); a `closed` STATUS (CEO close-confirm) is NOT excluded either --
+    // only lost / cancelled deals are, matching the import scope's terminal guard minus 'closed'.
+    private static final List<String> ACCOUNT_ORDER_STAGE_SCOPE =
+        DealStage.ORDER.subList(DealStage.indexOf(DealStage.ORDER_RECEIVED), DealStage.ORDER.size());
 
     public TicketRepository(NamedParameterJdbcTemplate jdbc) {
         this.jdbc = jdbc;
@@ -216,13 +225,39 @@ public class TicketRepository {
             params.addValue("prTerminalStatuses", PRICING_REQUEST_TERMINAL_STATUSES);
             params.addValue("importStages", IMPORT_STAGE_SCOPE);
         } else if ("account".equals(actorRole)) {
-            sql.append(" AND (t.payment_status IN (:accountPendingStatuses) OR (t.due_date IS NOT NULL AND t.due_date < CURRENT_DATE AND ((")
+            sql.append("""
+                   AND (
+                     (t.lifecycle NOT IN ('CLOSED_LOST', 'CANCELLED')
+                      AND t.status <> 'cancelled'
+                      AND t.sales_stage IN (:accountOrderStages))
+                     OR t.payment_status IN (:accountPendingStatuses)
+                     OR (""")
+               .append(paymentDueDateScalarSql("t.ticket_id"))
+               .append(" < ").append(BANGKOK_TODAY_SQL)
+               .append(" AND t.payment_status IS DISTINCT FROM 'DEPOSIT_NOTICE_ISSUED' AND ((")
                .append(payableAmountSelect("t.ticket_id"))
                .append(") - (")
                .append(paidAmountSelect("t.ticket_id"))
                .append(")) > 0)) ");
+            params.addValue("accountOrderStages", ACCOUNT_ORDER_STAGE_SCOPE);
             params.addValue("accountPendingStatuses", ACCOUNT_PENDING_PAYMENT_STATUSES);
         }
+    }
+
+    /**
+     * Is this deal inside the account role's list scope? The single-deal twin of the list
+     * predicate: it runs the SAME {@link #appendRoleScope} fragment (and, like the list since the
+     * deal-route-staging rework, no quotation_only filter -- see {@link #isInImportScope}), so the
+     * finance deal read can never disagree with the list about what account may see.
+     */
+    public boolean isInAccountScope(long ticketId) {
+        // Trailing space is load-bearing: the account fragment appended below is a text block that starts
+        // flush with "AND (", so without it the SQL reads ":idAND" (it used to borrow PIPELINE_ONLY's space).
+        StringBuilder sql = new StringBuilder("SELECT COUNT(*) FROM sales.ticket t WHERE t.ticket_id = :id ");
+        MapSqlParameterSource params = new MapSqlParameterSource().addValue("id", ticketId);
+        appendRoleScope(sql, params, "account");
+        Integer n = jdbc.queryForObject(sql.toString(), params, Integer.class);
+        return n != null && n > 0;
     }
 
     /**
@@ -745,7 +780,7 @@ public class TicketRepository {
 
     // --- private helpers ---
 
-    private Optional<TicketSummaryDto> findSummaryById(long id) {
+    public Optional<TicketSummaryDto> findSummaryById(long id) {
         try {
             TicketSummaryDto summary = jdbc.queryForObject(
                 SUMMARY_SELECT + """
@@ -1168,7 +1203,13 @@ public class TicketRepository {
         }
         boolean balanceReceipt = hasBalanceReceipt(s.id());
         String stage = derivePaymentStage(s, payable, paid, outstanding, balanceReceipt);
-        boolean overdue = s.dueDate() != null && s.dueDate().isBefore(LocalDate.now()) && outstanding.signum() > 0;
+        // OVERDUE comes from the payable quotation's terms + the delivery date (owner ruling 2026-09-30),
+        // never from the stored billing due_date. An unpaid deposit is never overdue.
+        PaymentDue due = paymentDue(s.id()).orElse(null);
+        boolean overdue = due != null && due.date() != null
+            && LocalDate.now(BANGKOK).isAfter(due.date())
+            && outstanding.signum() > 0
+            && !"DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus());
         // Staleness only means anything for a deal actively being worked — a DRAFT that hasn't
         // started or a CLOSED_LOST/CANCELLED/COMPLETED deal is never flagged (Slice B1, handoff 103).
         boolean stale = DealLifecycle.ACTIVE.equals(s.lifecycle()) && isStale(s.id());
@@ -1189,7 +1230,9 @@ public class TicketRepository {
             // hasInvoiceAttachment above as another per-row query enrichSummary runs to fill in a
             // field mapSummary alone cannot answer from sales.ticket.
             s.winProbabilityOverride(), s.designerName(), s.ownerName(), s.buyerName(), stale,
-            hasRecordedCommission(s.id()), s.reopenedAt(), s.reopenCount(), s.quotationOnly());
+            hasRecordedCommission(s.id()), s.reopenedAt(), s.reopenCount(), s.quotationOnly(),
+            due == null ? null : due.date(), due == null ? null : due.basis(),
+            due == null ? null : due.creditDays());
     }
 
     /**
@@ -1539,6 +1582,17 @@ public class TicketRepository {
         return Boolean.TRUE.equals(value);
     }
 
+    /**
+     * The PRE-VAT quotation total — exactly what {@link #payableAmount} returned before payable became
+     * VAT-inclusive (owner ruling 2026-09-30). COMMISSION reads this and only this: commission is
+     * computed on the ex-VAT figure and must not move when payable does.
+     */
+    public BigDecimal payableAmountExVat(long ticketId) {
+        BigDecimal value = jdbc.queryForObject(payableAmountExVatSelect(":ticketId"),
+            Map.of("ticketId", ticketId), BigDecimal.class);
+        return value == null ? BigDecimal.ZERO : value;
+    }
+
     public BigDecimal payableAmount(long ticketId) {
         BigDecimal value = jdbc.queryForObject(payableAmountSelect(":ticketId"),
             Map.of("ticketId", ticketId), BigDecimal.class);
@@ -1553,9 +1607,41 @@ public class TicketRepository {
      * contexts can never drift apart; this is the exact SQL {@link #payableAmount} always ran.
      */
     private static String payableAmountSelect(String ticketIdRef) {
+        return payableAmountSelect(ticketIdRef, true);
+    }
+
+    /** Same SELECT, PRE-VAT — what {@code payableAmountSelect} returned before payable became VAT-inclusive. */
+    private static String payableAmountExVatSelect(String ticketIdRef) {
+        return payableAmountSelect(ticketIdRef, false);
+    }
+
+    /**
+     * The VAT rate every quotation document applies (Thai documents; an EN document has none). Read from
+     * {@link th.co.glr.hr.dealquotation.WastageCalculator} -- the same constant the quotation's own
+     * grand total uses -- never a second "0.07" here.
+     */
+    private static final String THAI_VAT_RATE =
+        th.co.glr.hr.dealquotation.WastageCalculator.vatRateFor(
+            th.co.glr.hr.dealquotation.WastageCalculator.DOCUMENT_LANGUAGE_TH).toPlainString();
+
+    /**
+     * Every branch is made VAT-inclusive the same way the quotation DTOs compute their grand total:
+     * {@code total_amount} is the persisted SUBTOTAL for every origin (DEAL_DIRECT, the PCR customer quotation
+     * and legacy ticket quotations alike), VAT = round2(subtotal x rate), rate 0 for an EN document
+     * ({@code document_language}; NULL = TH, V169). A deposit notice's {@code total_payable} is already VAT
+     * inclusive; the ticket-item fallback is a pre-VAT sum and takes the Thai rate.
+     */
+    private static String payableAmountSelect(String ticketIdRef, boolean inclVat) {
+        String quotationAmount = inclVat
+            ? "q.total_amount + ROUND(q.total_amount * CASE WHEN q.document_language = 'EN' THEN 0 ELSE " + THAI_VAT_RATE + " END, 2)"
+            : "q.total_amount";
+        String itemsSum = "COALESCE(SUM(COALESCE(ti.approved_price, 0) * ti.qty), 0)";
+        String itemsAmount = inclVat
+            ? "(SELECT " + itemsSum + " + ROUND(" + itemsSum + " * " + THAI_VAT_RATE + ", 2)"
+            : "(SELECT " + itemsSum;
         return """
             SELECT COALESCE(
-                (SELECT q.total_amount
+                (SELECT QUOTATION_AMOUNT
                    FROM sales.quotation q
                   WHERE q.ticket_id = %1$s AND q.doc_status = 'ACCEPTED'
                   ORDER BY CASE q.recipient_type
@@ -1567,7 +1653,7 @@ public class TicketRepository {
                            q.issued_at DESC,
                            q.quotation_id DESC
                   LIMIT 1),
-                (SELECT q.total_amount
+                (SELECT QUOTATION_AMOUNT
                    FROM sales.quotation q
                   WHERE q.ticket_id = %1$s AND q.doc_status IN ('ISSUED','SENT')
                   ORDER BY CASE q.recipient_type
@@ -1583,12 +1669,93 @@ public class TicketRepository {
                   WHERE d.ticket_id = %1$s AND d.status = 'ISSUED'
                   ORDER BY d.version DESC, d.deposit_notice_id DESC
                   LIMIT 1),
-                (SELECT COALESCE(SUM(COALESCE(ti.approved_price, 0) * ti.qty), 0)
+                ITEMS_AMOUNT
                    FROM sales.ticket_item ti
                   WHERE ti.ticket_id = %1$s),
                 0
             )
+            """.formatted(ticketIdRef)
+            .replace("QUOTATION_AMOUNT", quotationAmount)
+            .replace("ITEMS_AMOUNT", itemsAmount);
+    }
+
+    /** Every payment-due calculation uses the Bangkok calendar, explicitly -- never the server default zone. */
+    private static final java.time.ZoneId BANGKOK = java.time.ZoneId.of("Asia/Bangkok");
+
+    /** Bangkok "today" in SQL, matching {@link #BANGKOK} in Java. */
+    private static final String BANGKOK_TODAY_SQL = "(now() AT TIME ZONE 'Asia/Bangkok')::date";
+
+    /**
+     * One row (or none) describing WHEN the balance is due, from the payable quotation's own terms
+     * (owner ruling 2026-09-30). The quotation is the same one {@link #payableAmountSelect} picks (accepted
+     * first, else issued/sent; same recipient ordering); a deposit-notice / ticket-item payable has no terms,
+     * so no row. Terms:
+     * <ul>
+     *   <li>{@code remainder_mode = CREDIT} with {@code credit_days} N: due = delivery date + N
+     *       ({@code CREDIT_FROM_DELIVERY});</li>
+     *   <li>any other non-null {@code remainder_mode} (the remainder is due before/on delivery), or a
+     *       zero-deposit {@code full_payment_term} (BEFORE_DELIVERY / ON_DELIVERY / ON_OR_BEFORE_DELIVERY):
+     *       due = the delivery date ({@code ON_DELIVERY});</li>
+     *   <li>anything else (legacy / free-text terms): no row -- never overdue.</li>
+     * </ul>
+     * The delivery date is the Bangkok calendar date of the LATEST delivery record, and only once the deal is
+     * {@code FULLY_DELIVERED}; until then there is no due date. Columns: days, basis, credit_days, delivered_on.
+     */
+    private static String paymentTermsRowSql(String ticketIdRef) {
+        return """
+            SELECT tq.days, tq.basis, tq.credit_days, dv.delivered_on
+              FROM (SELECT CASE
+                               WHEN q.remainder_mode = 'CREDIT' AND q.credit_days IS NOT NULL THEN q.credit_days::int
+                               WHEN q.full_payment_term IN ('BEFORE_DELIVERY', 'ON_DELIVERY', 'ON_OR_BEFORE_DELIVERY') THEN 0
+                               WHEN q.remainder_mode IS NOT NULL AND q.remainder_mode <> 'CREDIT' THEN 0
+                           END AS days,
+                           CASE
+                               WHEN q.remainder_mode = 'CREDIT' AND q.credit_days IS NOT NULL THEN 'CREDIT_FROM_DELIVERY'
+                               WHEN q.full_payment_term IN ('BEFORE_DELIVERY', 'ON_DELIVERY', 'ON_OR_BEFORE_DELIVERY') THEN 'ON_DELIVERY'
+                               WHEN q.remainder_mode IS NOT NULL AND q.remainder_mode <> 'CREDIT' THEN 'ON_DELIVERY'
+                           END AS basis,
+                           CASE WHEN q.remainder_mode = 'CREDIT' AND q.credit_days IS NOT NULL THEN q.credit_days::int END AS credit_days
+                      FROM sales.quotation q
+                     WHERE q.ticket_id = %1$s AND q.doc_status IN ('ACCEPTED', 'ISSUED', 'SENT')
+                     ORDER BY CASE WHEN q.doc_status = 'ACCEPTED' THEN 0 ELSE 1 END,
+                              CASE q.recipient_type
+                                  WHEN 'BUYER' THEN 0
+                                  WHEN 'OWNER' THEN 1
+                                  ELSE 2
+                              END,
+                              CASE WHEN q.doc_status = 'ACCEPTED' THEN q.accepted_at END DESC NULLS LAST,
+                              q.issued_at DESC,
+                              q.quotation_id DESC
+                     LIMIT 1) tq
+             CROSS JOIN (SELECT (MAX(dr.delivered_at) AT TIME ZONE 'Asia/Bangkok')::date AS delivered_on
+                           FROM sales.delivery_record dr
+                          WHERE dr.ticket_id = %1$s
+                            AND (SELECT t2.fulfillment_status FROM sales.ticket t2 WHERE t2.ticket_id = %1$s)
+                                = 'FULLY_DELIVERED') dv
             """.formatted(ticketIdRef);
+    }
+
+    /** The derived due DATE as a scalar subquery (NULL when there is none) -- the list-scope predicate's twin. */
+    private static String paymentDueDateScalarSql(String ticketIdRef) {
+        return "(SELECT x.delivered_on + x.days FROM (" + paymentTermsRowSql(ticketIdRef) + ") x)";
+    }
+
+    /** When the balance is due and on what basis; see {@link #paymentTermsRowSql}. */
+    public record PaymentDue(LocalDate date /* null until delivered */, String basis, Integer creditDays) {}
+
+    public Optional<PaymentDue> paymentDue(long ticketId) {
+        List<PaymentDue> rows = jdbc.query(paymentTermsRowSql(":ticketId"), Map.of("ticketId", ticketId),
+            (rs, n) -> {
+                String basis = rs.getString("basis");
+                if (basis == null) return null; // legacy / free-text terms: nothing structured
+                int days = rs.getInt("days");
+                java.sql.Date delivered = rs.getDate("delivered_on");
+                int credit = rs.getInt("credit_days");
+                Integer creditDays = rs.wasNull() ? null : credit;
+                // Structured terms but not (fully) delivered yet: the basis is known, the date is not.
+                return new PaymentDue(delivered == null ? null : delivered.toLocalDate().plusDays(days), basis, creditDays);
+            });
+        return rows.stream().filter(java.util.Objects::nonNull).findFirst();
     }
 
     /** Full "amount paid" SELECT statement — see {@link #payableAmountSelect} for the correlation contract. */

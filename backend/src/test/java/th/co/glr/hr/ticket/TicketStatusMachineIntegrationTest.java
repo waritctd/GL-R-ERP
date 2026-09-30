@@ -244,6 +244,9 @@ class TicketStatusMachineIntegrationTest extends AbstractPostgresIntegrationTest
     void verifyClose_stillReachesClosedAndStillStampsClosedAt() {
         long ticketId = createTicket();
         seedStatus(ticketId, TicketStatus.DOCUMENT_ISSUED);
+        // H1 lockdown: account confirms a close only on a deal inside its list scope (live, S10+).
+        jdbc.update("UPDATE sales.ticket SET sales_stage = 'DELIVERED' WHERE ticket_id = :id",
+            new org.springframework.jdbc.core.namedparam.MapSqlParameterSource("id", ticketId));
 
         ticketService.confirmCloseReady(ticketId, accountActor);
         assertThat(statusOf(ticketId)).as("the account confirmation must not move the status")

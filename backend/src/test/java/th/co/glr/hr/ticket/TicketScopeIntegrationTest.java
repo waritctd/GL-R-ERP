@@ -260,15 +260,120 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(idsIn(listPage(accountUser))).contains(ticketId);
     }
 
+    // Moved from DELIVERED to NEGOTIATION (S9) when the account list scope gained the "every ORDER
+    // stage from ORDER_RECEIVED" disjunct: DELIVERED is now in scope for stage alone, so it could
+    // no longer prove "past due date but fully paid is not returned". The intent is unchanged --
+    // the overdue disjunct must not fire on a settled balance -- so the deal now sits below S10
+    // where stage cannot admit it either.
     @Test
     void accountListPage_pastDueDateButFullyPaid_isNotReturned() {
-        long ticketId = createTicket(DealStage.DELIVERED);
+        long ticketId = createTicket(DealStage.NEGOTIATION);
         tickets.createQuotation(ticketId, "QT-SCOPE-0002", salesRepId, new BigDecimal("50000.00"));
         tickets.updateBilling(ticketId, LocalDate.now().minusDays(30), LocalDate.now().minusDays(1),
             30, null, null);
         recordFullPayment(ticketId, new BigDecimal("50000.00"));
 
         assertThat(idsIn(listPage(accountUser))).doesNotContain(ticketId);
+    }
+
+    // ── account list scoping: the money worklist is every live order from S10 on (H1) ───────
+    //
+    // The old scope keyed only on payment_status (DEPOSIT_NOTICE_ISSUED / AWAITING_FINAL_PAYMENT)
+    // or overdue-with-balance, so a deal sitting at DEPOSIT_PAID through PROCUREMENT (S12-S17)
+    // vanished from account's list at exactly the stage where it is waiting on goods, and
+    // bypass-policy / fully-paid / closed-paid deals never appeared at all.
+
+    @Test
+    void accountListPage_orderReceivedWithNoPaymentStatus_isReturned() {
+        long ticketId = createTicket(DealStage.ORDER_RECEIVED);
+
+        assertThat(idsIn(listPage(accountUser))).contains(ticketId);
+    }
+
+    /** The S15 bug: PROCUREMENT + DEPOSIT_PAID matched neither old disjunct. */
+    @Test
+    void accountListPage_procurementDepositPaid_s15_isReturned() {
+        long ticketId = createTicket(DealStage.PROCUREMENT);
+        tickets.updatePaymentStatusUnchecked(ticketId, "DEPOSIT_PAID");
+
+        assertThat(idsIn(listPage(accountUser))).contains(ticketId);
+    }
+
+    @Test
+    void accountListPage_bypassPolicyOrderReceivedCustomerConfirmed_isReturned() {
+        long ticketId = createTicket(DealStage.ORDER_RECEIVED);
+        tickets.updateDepositPolicy(ticketId, DepositPolicy.CREDIT_CUSTOMER, "credit customer", salesRepId);
+        tickets.updatePaymentStatusUnchecked(ticketId, "CUSTOMER_CONFIRMED");
+
+        assertThat(idsIn(listPage(accountUser))).contains(ticketId);
+    }
+
+    @Test
+    void accountListPage_deliveredFullyPaidNotYetCloseConfirmed_isReturned() {
+        long ticketId = createTicket(DealStage.DELIVERED);
+        tickets.updatePaymentStatusUnchecked(ticketId, "FULLY_PAID");
+
+        assertThat(idsIn(listPage(accountUser))).contains(ticketId);
+    }
+
+    /** History stays listed: CLOSED_PAID, both with the default status and after the CEO closed it. */
+    @Test
+    void accountListPage_closedPaid_isReturnedAsHistory_evenWhenStatusIsClosed() {
+        long openStatus = createTicket(DealStage.CLOSED_PAID);
+        long closedStatus = createTicket(DealStage.CLOSED_PAID);
+        jdbc.update("UPDATE sales.ticket SET status = 'closed' WHERE ticket_id = :id",
+            new MapSqlParameterSource("id", closedStatus));
+
+        assertThat(idsIn(listPage(accountUser))).contains(openStatus, closedStatus);
+    }
+
+    @Test
+    void accountListPage_lostProcurementDeal_isNotReturned() {
+        long ticketId = createTicket(DealStage.PROCUREMENT);
+        tickets.updatePaymentStatusUnchecked(ticketId, "DEPOSIT_PAID");
+        tickets.updateLifecycle(ticketId, DealLifecycle.CLOSED_LOST);
+
+        assertThat(idsIn(listPage(accountUser))).doesNotContain(ticketId);
+    }
+
+    @Test
+    void accountListPage_cancelledProcurementDeal_isNotReturned_byLifecycleOrByStatus() {
+        long byLifecycle = createTicket(DealStage.PROCUREMENT);
+        tickets.updateLifecycle(byLifecycle, DealLifecycle.CANCELLED);
+        long byStatus = createTicket(DealStage.PROCUREMENT);
+        jdbc.update("UPDATE sales.ticket SET status = 'cancelled' WHERE ticket_id = :id",
+            new MapSqlParameterSource("id", byStatus));
+
+        List<Long> ids = idsIn(listPage(accountUser));
+        assertThat(ids).doesNotContain(byLifecycle, byStatus);
+    }
+
+    /**
+     * Forces the COUNT branch: a page that is exactly full skips the "rows.size() &lt; size"
+     * shortcut, so {@code countSummaries} really runs and must apply the identical fragment.
+     * The out-of-scope rows (lost / NEGOTIATION / cancelled) would inflate a count that
+     * drifted from the row query. (The quotation_only exclusion was dropped by develop's
+     * deal-route staging, so a quotation-only container is no longer an out-of-scope fixture.)
+     */
+    @Test
+    void accountListPage_countPathAgreesWithRows() {
+        createTicket(DealStage.ORDER_RECEIVED);
+        long procurement = createTicket(DealStage.PROCUREMENT);
+        createTicket(DealStage.DELIVERED);
+        createTicket(DealStage.CLOSED_PAID);
+        createTicket(DealStage.NEGOTIATION);
+        long lost = createTicket(DealStage.PROCUREMENT);
+        tickets.updateLifecycle(lost, DealLifecycle.CLOSED_LOST);
+        long cancelled = createTicket(DealStage.PROCUREMENT);
+        tickets.updateLifecycle(cancelled, DealLifecycle.CANCELLED);
+
+        int inScopeTotal = listPage(accountUser).size();
+        assertThat(inScopeTotal).isGreaterThanOrEqualTo(4);
+        assertThat(idsIn(listPage(accountUser))).contains(procurement).doesNotContain(lost, cancelled);
+
+        var firstPage = ticketService.listPage(null, accountUser, PageRequest.resolve(0, 2));
+        assertThat(firstPage.items()).hasSize(2);
+        assertThat(firstPage.total()).isEqualTo(inScopeTotal);
     }
 
     // ── import: quotation is not part of its read surface ───────────────────
@@ -317,8 +422,11 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThatThrownBy(() -> ticketService.listPayments(ticketId, importUser))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(403));
 
-        // Positive control: account (the ledger's own role) is unaffected.
-        assertThat(ticketService.listPayments(ticketId, accountUser)).isEmpty();
+        // Positive control: ceo can read the ledger. (H1 lockdown: account no longer reads it through
+        // /tickets -- it reads it inside the finance deal view.)
+        assertThat(ticketService.listPayments(ticketId, ceoUser)).isEmpty();
+        assertThatThrownBy(() -> ticketService.listPayments(ticketId, accountUser))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(403));
     }
 
     // ── import: deposit notice is entirely off-limits ────────────────────────

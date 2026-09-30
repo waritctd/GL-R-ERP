@@ -88,7 +88,7 @@ public final class TicketAccessPolicy {
      *       rather than left to be discovered. It preserves the pre-#389 participant grant.</li>
      *   <li><b>{@code import} is admitted only for a deal inside its import scope (or as a
      *       participant).</b> Owner ruling 2026-09-30 — it supersedes the blanket refusal issue #389's
-     *       review pinned here. {@code importInScope} is {@code TicketRepository#isInImportScope}, the
+     *       review pinned here. {@code inRoleScope} is {@code TicketRepository#isInImportScope} for import, the
      *       SAME predicate as import's worklist, and is computed by the caller (this class is pure,
      *       no DB); the 2-arg overload passes {@code false}. The reasoning below records why the
      *       blanket read was withheld; what changed is that import's other cost exposures are now
@@ -118,9 +118,10 @@ public final class TicketAccessPolicy {
         return canViewDocuments(summary, actor, false);
     }
 
-    /** @param importInScope whether the deal is inside import's list scope; consulted for {@code import} only. */
+    /** @param inRoleScope whether the deal is inside the ACTOR'S OWN list scope ({@code TicketRepository#isInImportScope}
+     *        for import, {@code #isInAccountScope} for account); consulted for those two roles only. */
 
-    public static boolean canViewDocuments(TicketSummaryDto summary, UserPrincipal actor, boolean importInScope) {
+    public static boolean canViewDocuments(TicketSummaryDto summary, UserPrincipal actor, boolean inRoleScope) {
         if (actor == null) {
             return false;
         }
@@ -132,9 +133,12 @@ public final class TicketAccessPolicy {
         }
         // A sales rep reaches only their OWN deals; on someone else's they are not a participant,
         // so being in VIEWER_ROLES is not enough (same rule as requireViewAccess). import is
-        // row-scoped: admitted only for a deal inside its import scope (see this method's javadoc).
-        if ("import".equals(actor.role())) {
-            return importInScope;
+        // row-scoped roles: import (owner ruling 2026-09-30) and account (H1 lockdown, 2026-09-30) are
+        // admitted only for a deal inside THEIR OWN list scope. The caller computes that one flag for the
+        // actor's role (TicketRepository#isInImportScope for import, #isInAccountScope for account); this
+        // class is pure and cannot run the SQL itself.
+        if ("import".equals(actor.role()) || "account".equals(actor.role())) {
+            return inRoleScope;
         }
         return !"sales".equals(actor.role());
     }

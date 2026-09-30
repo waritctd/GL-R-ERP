@@ -1129,8 +1129,10 @@ export async function completeDelivery(sessions, ticketId, { note, recipientName
 }
 
 /**
- * POST /api/tickets/{id}/final-payment — TicketController.confirmFinalPayment (ticket/
- * TicketController.java:400-404); TicketService.confirmFinalPayment requires PAYMENT_RECORD_ROLES
+ * POST /api/finance/deals/{id}/final-payment — FinanceDealController.confirmFinalPayment (finance/), which
+ * delegates to TicketService.confirmFinalPayment. H1 lockdown (2026-09-30): the old
+ * POST /api/tickets/{id}/final-payment route was REMOVED, and the response is now the finance view
+ * `{ deal }` (deal.salesStage, deal.money.*) instead of `{ ticket }`. TicketService.confirmFinalPayment requires PAYMENT_RECORD_ROLES
  * (GLA-118, owner ruling 2026-09-20, part A: account ONLY, no CEO fallback — this used to be
  * ACCOUNT_ROLES) and canConfirmFinalPaymentNow (paymentStatus AWAITING_FINAL_PAYMENT or
  * DEPOSIT_PAID, or a bypass deposit policy with paymentStatus CUSTOMER_CONFIRMED — see
@@ -1145,10 +1147,10 @@ export async function completeDelivery(sessions, ticketId, { note, recipientName
  * them delivery-then-payment.
  */
 export async function confirmFinalPayment(sessions, ticketId) {
-  const response = await apiWrite(sessions.account, 'post', `/api/tickets/${ticketId}/final-payment`);
-  expect(response.status(), `account POST /api/tickets/${ticketId}/final-payment`).toBe(200);
-  const { ticket } = await response.json();
-  return ticket;
+  const response = await apiWrite(sessions.account, 'post', `/api/finance/deals/${ticketId}/final-payment`);
+  expect(response.status(), `account POST /api/finance/deals/${ticketId}/final-payment`).toBe(200);
+  const { deal } = await response.json();
+  return deal;
 }
 
 /**

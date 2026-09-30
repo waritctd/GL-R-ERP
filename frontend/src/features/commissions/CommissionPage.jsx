@@ -303,6 +303,18 @@ function CommissionCard({ record, canReview, isCeoReview, saving, expanded, onTo
   );
 }
 
+// The subset of a ticket summary the create-from-deal form reads, taken from FinanceDealDto.
+function summaryFromFinanceDeal(deal) {
+  if (!deal) return null;
+  return {
+    id: deal.id,
+    code: deal.code,
+    customerName: deal.customerName,
+    salesStage: deal.salesStage,
+    amountPayable: deal.money?.amountPayable ?? null,
+  };
+}
+
 export function CommissionPage({ user, showToast }) {
   const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
@@ -742,8 +754,13 @@ export function CommissionPage({ user, showToast }) {
     setTicketLookupLoading(true);
     setTicketLookupError('');
     try {
-      const response = await api.tickets.get(ticketId);
-      const summary = response.ticket?.summary;
+      // H1 lockdown: account is refused on api.tickets.get and reads the deal through the finance
+      // view (api.finance.getDeal, FinanceDealDto). Only the fields this form uses are mapped —
+      // id, code, customerName, salesStage and the amount, which lives under `money` there. Every
+      // other role keeps the ticket read unchanged.
+      const summary = user.role === 'account'
+        ? summaryFromFinanceDeal((await api.finance.getDeal(ticketId)).deal)
+        : (await api.tickets.get(ticketId)).ticket?.summary;
       if (!summary) {
         setLoadedTicket(null);
         setTicketLookupError('ไม่พบดีลนี้');
@@ -809,6 +826,9 @@ export function CommissionPage({ user, showToast }) {
       // ['tickets','detail','16'] and the invalidation would silently no-op. The
       // prefix also correctly refreshes the ticket lists, whose stage/scope changed.
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
+      // Account reads the deal through the finance view (['finance','deal',id]); its
+      // commissionRecorded flag drives the "บันทึกใบกำกับ + ออกค่าคอม" CTA, so it must go stale too.
+      queryClient.invalidateQueries({ queryKey: ['finance'] });
       invalidatePayrollUpstream();
       setCreateForm(emptyCreateForm);
       setFileInputKey((key) => key + 1);

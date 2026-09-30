@@ -264,7 +264,7 @@ public class CommissionService {
         if (commissions.hasActiveCommissionForTicket(ticketId)) {
             throw new ApiException(HttpStatus.CONFLICT, "มีรายการค่าคอมมิชชั่นสำหรับดีลนี้อยู่แล้ว");
         }
-        BigDecimal effectiveGrossAmount = grossAmount != null ? grossAmount : tickets.payableAmount(ticketId);
+        BigDecimal effectiveGrossAmount = grossAmount != null ? grossAmount : tickets.payableAmountExVat(ticketId);
 
         SubmitCommissionRequest request = new SubmitCommissionRequest(
             ticketId,
@@ -383,7 +383,7 @@ public class CommissionService {
             throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                 "ดีลนี้ยังไม่ถึงขั้นตอนรับชำระเงินครบถ้วน (CLOSED_PAID) จึงยังยื่นค่าคอมมิชชั่นไม่ได้");
         }
-        BigDecimal payable = tickets.payableAmount(ticketId);
+        BigDecimal payable = tickets.payableAmountExVat(ticketId);
         boolean mismatch = isMismatch(request.grossAmount(), payable);
         return new DealLinkage(payable, mismatch);
     }

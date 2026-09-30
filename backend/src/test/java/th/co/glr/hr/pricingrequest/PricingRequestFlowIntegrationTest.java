@@ -465,10 +465,13 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
 
 
     @Test
-    void accountingCanReadDealPaymentInfoButCannotReadPricingRequests() {
-        TicketDto deal = ticketService.get(ticketId, accountActor);
-        assertThat(deal.summary().id()).isEqualTo(ticketId);
-        assertThat(ticketService.listPayments(ticketId, accountActor)).isEmpty();
+    void accountingCannotReadTheTicketPaymentInfoOrPricingRequests() {
+        // H1 lockdown: account no longer reads a deal or its ledger through the ticket service at all
+        // (it reads the finance deal view); this used to assert it could read both.
+        assertThatThrownBy(() -> ticketService.get(ticketId, accountActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        assertThatThrownBy(() -> ticketService.listPayments(ticketId, accountActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
 
         long id = pricingRequestService.createDraft(ticketId, designerCreateRequest(), salesActor).summary().id();
         pricingRequestService.submit(id, salesActor);
