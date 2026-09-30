@@ -1918,54 +1918,67 @@ export function PricingRequestDetailPage({ user, showToast }) {
         ? (!isStockLine && hasPriceOverride)
         : currentList == null || listDraftNumber !== Number(currentList));
       const otherDraftDirty = Object.keys(draft).some((k) => k !== 'listUnitPrice');
-      const saveDisabled = listInvalid || !(otherDraftDirty || listChanged);
+      // A stock line's ราคาตั้ง saved under DIRECT_NET/SPECIAL_SQM makes applyItemUpdates re-derive
+      // the net, which 400s while that mode's own input is still empty — so ask for it first.
+      const modeInputBlank = (value) => value === '' || value == null;
+      const missingModeInputForList = listChanged && isStockLine && (
+        (decision.priceMode === 'DIRECT_NET' && modeInputBlank(draft.directNetPrice ?? item.directNetPrice))
+        || (decision.priceMode === 'SPECIAL_SQM' && modeInputBlank(draft.specialPriceSqm ?? item.specialPriceSqm)));
+      const saveDisabled = listInvalid || missingModeInputForList || !(otherDraftDirty || listChanged);
       const costForcedOpen = showCost && Boolean(costingItem?.uncostableReason || costingItem?.overrideStale);
       const listPriceField = (
-    <div className="flex flex-col gap-1">
-      <FormField label="ราคาตั้ง/แผ่น" htmlFor={`pcr-ceo-list-price-${item.id}`}>
-        <input
-          id={`pcr-ceo-list-price-${item.id}`}
-          type="number"
-          min="0"
-          max={PRICE_INPUT_MAX_12_2}
-          step="0.01"
-          disabled={!editable}
-          value={listInputValue}
-          onChange={(e) => updateCeoPriceDraft(item.id, { listUnitPrice: e.target.value })}
-          data-testid={`pcr-ceo-list-price-${item.id}`}
-        />
-      </FormField>
-      {listInvalid ? (
-        <span role="alert" className="text-2xs text-danger">ราคาตั้งต้องมากกว่า 0</span>
-      ) : null}
-      {item.proposedSellingPricePerRequestedUnit != null ? (
-        <span className="text-2xs text-text-muted">
-          สูตร: {formatCurrency(item.proposedSellingPricePerRequestedUnit, decision.currency)} / แผ่น
-          {formulaPricePerSqm != null ? ` · ${formatCurrency(formulaPricePerSqm, decision.currency)} / ตร.ม.` : ''}
-        </span>
-      ) : null}
-      {hasPriceOverride && !isStockLine ? (
-        <span className="flex flex-wrap items-center gap-1.5 text-2xs">
-          <span className="font-bold text-override">ปรับเอง</span>
-          {editable ? (
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              loading={clearingThisOverride}
-              disabled={savingThisItem}
-              onClick={() => saveThisItem({ clearSellingPriceOverride: true })}
-              data-testid={`pcr-ceo-use-formula-price-${item.id}`}
-            >
-              ใช้ราคาตามสูตร
-            </Button>
+        <div className="flex flex-col gap-1">
+          <FormField label="ราคาตั้ง/แผ่น" htmlFor={`pcr-ceo-list-price-${item.id}`}>
+            <input
+              id={`pcr-ceo-list-price-${item.id}`}
+              type="number"
+              min="0"
+              max={PRICE_INPUT_MAX_12_2}
+              step="0.01"
+              disabled={!editable}
+              value={listInputValue}
+              onChange={(e) => updateCeoPriceDraft(item.id, { listUnitPrice: e.target.value })}
+              data-testid={`pcr-ceo-list-price-${item.id}`}
+            />
+          </FormField>
+          {listInvalid ? (
+            <span role="alert" className="text-2xs text-danger">ราคาตั้งต้องมากกว่า 0</span>
           ) : null}
-        </span>
-      ) : null}
-        {decision.priceMode !== 'NET' ? (
-          <span className="text-2xs text-text-muted">ต้องมีราคาตั้งสำหรับรายการสต็อก</span>
-        ) : null}
-    </div>
+          {missingModeInputForList ? (
+            <span role="alert" className="text-2xs text-danger">
+              {decision.priceMode === 'DIRECT_NET'
+                ? 'กรอกราคาสุทธิต่อแผ่นด้วยก่อนบันทึก'
+                : 'กรอกราคาพิเศษ บาท/ตร.ม. ด้วยก่อนบันทึก'}
+            </span>
+          ) : null}
+          {item.proposedSellingPricePerRequestedUnit != null ? (
+            <span className="text-2xs text-text-muted">
+              สูตร: {formatCurrency(item.proposedSellingPricePerRequestedUnit, decision.currency)} / แผ่น
+              {formulaPricePerSqm != null ? ` · ${formatCurrency(formulaPricePerSqm, decision.currency)} / ตร.ม.` : ''}
+            </span>
+          ) : null}
+          {hasPriceOverride && !isStockLine ? (
+            <span className="flex flex-wrap items-center gap-1.5 text-2xs">
+              <span className="font-bold text-override">ปรับเอง</span>
+              {editable ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  loading={clearingThisOverride}
+                  disabled={savingThisItem}
+                  onClick={() => saveThisItem({ clearSellingPriceOverride: true })}
+                  data-testid={`pcr-ceo-use-formula-price-${item.id}`}
+                >
+                  ใช้ราคาตามสูตร
+                </Button>
+              ) : null}
+            </span>
+          ) : null}
+          {decision.priceMode !== 'NET' ? (
+            <span className="text-2xs text-text-muted">ต้องมีราคาตั้งสำหรับรายการสต็อก</span>
+          ) : null}
+        </div>
       );
       const netAndTotal = (
         <div className="flex flex-col gap-1">
@@ -2424,6 +2437,10 @@ export function PricingRequestDetailPage({ user, showToast }) {
               type="button"
               variant="primary"
               loading={startCeoReview.isPending}
+              // Wait for the formula config, so an early click cannot start the review at the
+              // 0.30 fallback instead of the CEO's configured default. A failed read is not
+              // pending, so the fallback still applies then.
+              disabled={decisionDefaultMargin == null && formulaConfigQuery.isPending}
               onClick={() => startCeoReview.mutate()}
               data-testid="pcr-ceo-start-review"
             >

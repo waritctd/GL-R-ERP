@@ -3935,7 +3935,44 @@ describe('CEO pricing inside รายการสินค้าและรา
       expect(screen.queryByText(/ประเภทสินค้า/)).toBeNull();
     });
 
+    it('LOW-1: a stock line under DIRECT_NET with no ราคาสุทธิ cannot save ราคาตั้ง alone (Java 400s it) until the net is typed', async () => {
+      await renderCeo({
+        priceMode: 'DIRECT_NET',
+        items: [{ ...stockDirectNet(), directNetPrice: null, netUnitPrice: null }],
+      });
+      const panel = within(getPanel());
+      fireEvent.change(panel.getByTestId('pcr-ceo-list-price-8001'), { target: { value: '150' } });
+      expect(panel.getByTestId('pcr-ceo-save-price-8001').disabled).toBe(true);
+      expect(panel.getByText('กรอกราคาสุทธิต่อแผ่นด้วยก่อนบันทึก')).not.toBeNull();
+      fireEvent.change(panel.getByTestId('pcr-ceo-direct-net-8001'), { target: { value: '120' } });
+      expect(panel.getByTestId('pcr-ceo-save-price-8001').disabled).toBe(false);
+      fireEvent.click(panel.getByTestId('pcr-ceo-save-price-8001'));
+      await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalled());
+      expect(lastSavedItem().listUnitPrice).toBe(150);
+      expect(lastSavedItem().directNetPrice).toBe(120);
+    });
+
+    it('LOW-1: same for SPECIAL_SQM with no ราคาพิเศษ', async () => {
+      await renderCeo({
+        priceMode: 'SPECIAL_SQM',
+        items: [{ ...stockDirectNet(), directNetPrice: null, specialPriceSqm: null, netUnitPrice: null }],
+      });
+      const panel = within(getPanel());
+      fireEvent.change(panel.getByTestId('pcr-ceo-list-price-8001'), { target: { value: '150' } });
+      expect(panel.getByTestId('pcr-ceo-save-price-8001').disabled).toBe(true);
+      expect(panel.getByText('กรอกราคาพิเศษ บาท/ตร.ม. ด้วยก่อนบันทึก')).not.toBeNull();
+    });
+
     describe('อัตรากำไรเริ่มต้น default (owner 2026-10-01: read the formula config, fall back to 0.30)', () => {
+      it('LOW-2: เริ่มพิจารณาราคาขาย waits for the config, so an early click cannot send the fallback', async () => {
+        let resolveConfig;
+        api.pricingFormulaConfig = { get: vi.fn(() => new Promise((r) => { resolveConfig = r; })) };
+        await startReview();
+        expect(screen.getByTestId('pcr-ceo-start-review').disabled).toBe(true);
+        resolveConfig({ formulaConfig: { defaultMarginPct: 0.24 } });
+        await waitFor(() => expect(screen.getByTestId('pcr-ceo-start-review').disabled).toBe(false));
+      });
+
       afterEach(() => { delete api.pricingFormulaConfig; });
       const startReview = async () => {
         const request = buildRequest({ summary: { status: 'READY_FOR_CEO_REVIEW' } });
