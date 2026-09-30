@@ -1465,7 +1465,7 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
 
     await waitFor(() => expect(api.pricingRequests.startPricingDecision).toHaveBeenCalledWith(
       request.summary.id,
-      expect.objectContaining({ defaultMarginPct: 0.2, clientRequestId: expect.any(String) }),
+      expect.objectContaining({ defaultMarginPct: 0.3, clientRequestId: expect.any(String) }),
     ));
   });
 
@@ -1744,6 +1744,9 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
             pricingDecisionItemId: 8001,
             sellingPriceOverride: 90,
             clearSellingPriceOverride: false,
+            clearDiscountPct: false,
+            clearSpecialPriceSqm: false,
+            clearDirectNetPrice: false,
             decisionNote: 'ลูกค้าต่อรองราคาสุดท้าย',
           }],
         },
@@ -1772,6 +1775,9 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
             pricingDecisionItemId: 8001,
             sellingPriceOverride: null,
             clearSellingPriceOverride: true,
+            clearDiscountPct: false,
+            clearSpecialPriceSqm: false,
+            clearDirectNetPrice: false,
             decisionNote: 'กลับไปใช้ราคาอัตโนมัติ',
           }],
         },
@@ -2152,7 +2158,9 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       expect(screen.queryByTestId('pcr-ceo-cost-override-8001')).toBeNull();
       fireEvent.click(screen.getByRole('button', { name: /^ต้นทุน/ }));
       expect(screen.getByTestId('pcr-ceo-cost-override-8001')).not.toBeNull();
-      expect(screen.getByTestId('pcr-ceo-product-type-override-8001')).not.toBeNull();
+      // GLA-152: the duty product-type select is gone (owner: "it's only tiles") — see the
+      // dedicated test in the 2026-10-01 describe.
+      expect(screen.queryByTestId('pcr-ceo-product-type-override-8001')).toBeNull();
     });
 
     it('forces the ต้นทุน disclosure open when a line has a cost BLOCKER (uncostable or stale override), so the blocker is never hidden', async () => {
@@ -3799,6 +3807,180 @@ describe('CEO pricing inside รายการสินค้าและรา
       renderDetailPage({ user: importUser, request });
       await waitForLoaded(request);
       await waitFor(() => expect(api.pricingRequests.listFactoryQuotes).toHaveBeenCalled());
+    });
+  });
+
+  describe('fix round 2 (2026-10-01)', () => {
+    const stockDirectNet = () => newFormItem({
+      stockSource: 'IN_THAILAND', frozenLandedCostPerRequestedUnitThb: null,
+      listUnitPrice: null, directNetPrice: 100, netUnitPrice: 100,
+    });
+
+    it('stock line under DIRECT_NET with no ราคาตั้ง: input present, approve blocked, message shown (Java 422 stockWithoutListPrice)', async () => {
+      await renderCeo({ priceMode: 'DIRECT_NET', items: [stockDirectNet()] });
+      const panel = within(getPanel());
+      expect(panel.getByTestId('pcr-ceo-list-price-8001')).not.toBeNull();
+      expect(panel.getByText('ต้องมีราคาตั้งสำหรับรายการสต็อก')).not.toBeNull();
+      expect(panel.getByTestId('pcr-ceo-approve').disabled).toBe(true);
+      expect(panel.getByText(/รายการจากสต็อกต้องมีราคาตั้ง \(มากกว่า 0\) ก่อนอนุมัติ/)).not.toBeNull();
+    });
+
+    it('stock line under DIRECT_NET: typing ราคาตั้ง 150 and saving sends listUnitPrice 150', async () => {
+      await renderCeo({ priceMode: 'DIRECT_NET', items: [stockDirectNet()] });
+      const panel = within(getPanel());
+      fireEvent.change(panel.getByTestId('pcr-ceo-list-price-8001'), { target: { value: '150' } });
+      fireEvent.click(panel.getByTestId('pcr-ceo-save-price-8001'));
+      await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalled());
+      expect(lastSavedItem().listUnitPrice).toBe(150);
+      expect(lastSavedItem().sellingPriceOverride == null).toBe(true);
+    });
+
+    it('stock line under SPECIAL_SQM also shows the ราคาตั้ง input; an IMPORT line under DIRECT_NET does not', async () => {
+      await renderCeo({ priceMode: 'SPECIAL_SQM', items: [stockDirectNet()] });
+      expect(within(getPanel()).getByTestId('pcr-ceo-list-price-8001')).not.toBeNull();
+      cleanup();
+      vi.clearAllMocks();
+      setApiDefaults();
+      await renderCeo({ priceMode: 'DIRECT_NET', items: [newFormItem({ directNetPrice: 100, netUnitPrice: 100 })] });
+      expect(within(getPanel()).queryByTestId('pcr-ceo-list-price-8001')).toBeNull();
+    });
+
+    it('stock line with a positive ราคาตั้ง under DIRECT_NET is approvable', async () => {
+      await renderCeo({
+        priceMode: 'DIRECT_NET',
+        items: [{ ...stockDirectNet(), listUnitPrice: 150 }],
+      });
+      expect(within(getPanel()).getByTestId('pcr-ceo-approve').disabled).toBe(false);
+    });
+
+    it('"ใช้ราคาตามสูตร" sends an EMPTY draft (no pending discount), clears the override, and spins on its own button', async () => {
+      await renderCeo({
+        items: [newFormItem({ manualSellingPricePerRequestedUnit: 150, listUnitPrice: 100, netUnitPrice: 150 })],
+      });
+      const panel = within(getPanel());
+      fireEvent.change(panel.getByTestId('pcr-ceo-discount-8001'), { target: { value: '10' } });
+      fireEvent.click(panel.getByTestId('pcr-ceo-use-formula-price-8001'));
+      await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalled());
+      const sent = lastSavedItem();
+      expect(sent.clearSellingPriceOverride).toBe(true);
+      expect(sent.decisionNote).toMatch(/\S/);
+      expect(sent.discountPct).toBeNull();
+    });
+
+    it('nit: บันทึกราคา stays disabled for an untouched/identical or blank-stock ราคาตั้ง draft', async () => {
+      await renderCeo({ items: [newFormItem({ listUnitPrice: 100, netUnitPrice: 100 })] });
+      const panel = within(getPanel());
+      const save = panel.getByTestId('pcr-ceo-save-price-8001');
+      const input = panel.getByTestId('pcr-ceo-list-price-8001');
+      fireEvent.change(input, { target: { value: '100' } });
+      expect(save.disabled).toBe(true);
+      fireEvent.change(input, { target: { value: '120' } });
+      expect(save.disabled).toBe(false);
+      fireEvent.change(input, { target: { value: '100' } });
+      expect(save.disabled).toBe(true);
+      // Blank with no override: nothing to clear.
+      fireEvent.change(input, { target: { value: '' } });
+      expect(save.disabled).toBe(true);
+    });
+
+    it('nit: บันทึกราคา is disabled for a blank ราคาตั้ง draft on a stock line', async () => {
+      await renderCeo({ items: [newFormItem({ stockSource: 'IN_THAILAND', frozenLandedCostPerRequestedUnitThb: null, listUnitPrice: 150, netUnitPrice: 150 })] });
+      const panel = within(getPanel());
+      fireEvent.change(panel.getByTestId('pcr-ceo-list-price-8001'), { target: { value: '' } });
+      expect(panel.getByTestId('pcr-ceo-save-price-8001').disabled).toBe(true);
+    });
+
+    it('nit: the CEO does not fetch fxRates (import-only)', async () => {
+      api.fxRates = { list: vi.fn().mockResolvedValue({ fxRates: [] }) };
+      try {
+        await renderCeo();
+        expect(api.fxRates.list).not.toHaveBeenCalled();
+      } finally {
+        delete api.fxRates;
+      }
+    });
+
+    it('GLA-152: no ประเภทสินค้า select or line on a CEO card (import line and stock line)', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      const c1 = buildCostingItemWithOverride({ id: 1, productType: 'GLASS_MOSAIC' });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({
+          priceMode: 'NET',
+          items: [
+            newFormItem({ pricingCostingItemId: 1, listUnitPrice: 100, netUnitPrice: 100 }),
+            newFormItem({ id: 8002, pricingRequestItemId: 99, stockSource: 'IN_THAILAND', frozenLandedCostPerRequestedUnitThb: null, listUnitPrice: 150, netUnitPrice: 150 }),
+          ],
+        })],
+      });
+      renderDetailPage({ user: ceoUser, request, costings: [buildCosting({ id: 601, items: [c1] })] });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+      fireEvent.click(screen.getByRole('button', { name: /^ต้นทุน/ }));
+      expect(screen.queryByTestId('pcr-ceo-product-type-override-8001')).toBeNull();
+      expect(screen.queryByTestId('pcr-ceo-product-type-override-8002')).toBeNull();
+      expect(screen.queryByText(/ประเภทสินค้า/)).toBeNull();
+    });
+
+    it('GLA-152: legacy decision cards have no ประเภทสินค้า select either', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      const c1 = buildCostingItemWithOverride({ id: 1 });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({ items: [buildDecisionItem({ pricingCostingItemId: 1 })] })],
+      });
+      renderDetailPage({ user: ceoUser, request, costings: [buildCosting({ id: 601, items: [c1] })] });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+      fireEvent.click(screen.getByRole('button', { name: 'วิธีคำนวณราคานี้' }));
+      expect(screen.queryByTestId('pcr-ceo-product-type-override-8001')).toBeNull();
+      expect(screen.queryByText(/ประเภทสินค้า/)).toBeNull();
+    });
+
+    describe('อัตรากำไรเริ่มต้น default (owner 2026-10-01: read the formula config, fall back to 0.30)', () => {
+      afterEach(() => { delete api.pricingFormulaConfig; });
+      const startReview = async () => {
+        const request = buildRequest({ summary: { status: 'READY_FOR_CEO_REVIEW' } });
+        renderDetailPage({ user: ceoUser, request });
+        await waitForLoaded(request);
+        return screen.findByPlaceholderText('0.30');
+      };
+
+      it('(a) shows the config defaultMarginPct and startPricingDecision sends it', async () => {
+        api.pricingFormulaConfig = { get: vi.fn().mockResolvedValue({ formulaConfig: { defaultMarginPct: 0.24, sellingBuffer: 1 } }) };
+        const input = await startReview();
+        await waitFor(() => expect(input.value).toBe('0.24'));
+        fireEvent.click(screen.getByTestId('pcr-ceo-start-review'));
+        await waitFor(() => expect(api.pricingRequests.startPricingDecision).toHaveBeenCalledWith(
+          501, expect.objectContaining({ defaultMarginPct: 0.24 }),
+        ));
+      });
+
+      it('(b) falls back to 0.30 when the config read fails, and sends 0.30', async () => {
+        api.pricingFormulaConfig = { get: vi.fn().mockRejectedValue(new Error('boom')) };
+        const input = await startReview();
+        expect(input.value).toBe('0.30');
+        fireEvent.click(screen.getByTestId('pcr-ceo-start-review'));
+        await waitFor(() => expect(api.pricingRequests.startPricingDecision).toHaveBeenCalledWith(
+          501, expect.objectContaining({ defaultMarginPct: 0.3 }),
+        ));
+      });
+
+      it('(c) keeps what the CEO typed, even after the config arrives', async () => {
+        api.pricingFormulaConfig = { get: vi.fn().mockResolvedValue({ formulaConfig: { defaultMarginPct: 0.24 } }) };
+        const input = await startReview();
+        fireEvent.change(input, { target: { value: '0.35' } });
+        await waitFor(() => expect(api.pricingFormulaConfig.get).toHaveBeenCalled());
+        expect(input.value).toBe('0.35');
+        fireEvent.click(screen.getByTestId('pcr-ceo-start-review'));
+        await waitFor(() => expect(api.pricingRequests.startPricingDecision).toHaveBeenCalledWith(
+          501, expect.objectContaining({ defaultMarginPct: 0.35 }),
+        ));
+      });
+
+      it('the config query is enabled for the CEO before any decision exists', async () => {
+        api.pricingFormulaConfig = { get: vi.fn().mockResolvedValue({ formulaConfig: { defaultMarginPct: 0.24 } }) };
+        await startReview();
+        await waitFor(() => expect(api.pricingFormulaConfig.get).toHaveBeenCalledTimes(1));
+      });
     });
   });
 
