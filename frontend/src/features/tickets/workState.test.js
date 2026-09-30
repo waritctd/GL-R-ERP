@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { DEAL_STAGE_CATALOG } from '../../data/dealStageCatalog.js';
 import { resolveWorkState } from './workState.js';
 
-// The stage's owning department (`waitingRoleLabel`) is read off the backend catalog now — see
-// stageCatalog.js. This is the same canned payload mockApi serves, pinned against DealStage.java
+// There is no waiting-on-department fallback any more (GLA-156) — see workState.js.
+// `catalog` is the same canned payload mockApi serves, pinned against DealStage.java
 // by stageCatalog.test.js.
 const catalog = DEAL_STAGE_CATALOG;
 import { nextSalesAction } from './salesActions.js';
@@ -23,17 +23,17 @@ function baseDeal(overrides = {}) {
 describe('resolveWorkState', () => {
   it('returns nothing when the deal is not ACTIVE (ON_HOLD/DORMANT/lost already have their own banner)', () => {
     const deal = baseDeal({ lifecycle: 'ON_HOLD' });
-    expect(resolveWorkState({ role: 'sales' }, deal, [], catalog)).toEqual({ action: null, waitingRoleLabel: null });
+    expect(resolveWorkState({ role: 'sales' }, deal, [])).toEqual({ action: null });
   });
 
   it('returns nothing when there is no deal at all', () => {
-    expect(resolveWorkState({ role: 'sales' }, null, [], catalog)).toEqual({ action: null, waitingRoleLabel: null });
+    expect(resolveWorkState({ role: 'sales' }, null, [])).toEqual({ action: null });
   });
 
   it('sales viewer on a sales-gated stage falls through to nextSalesAction (CREATE_PCR — no live PR)', () => {
     const deal = baseDeal();
-    const result = resolveWorkState({ role: 'sales' }, deal, [], catalog);
-    expect(result.waitingRoleLabel).toBeNull();
+    const result = resolveWorkState({ role: 'sales' }, deal, []);
+    expect(result).not.toHaveProperty('waitingRoleLabel');
     expect(result.action).toMatchObject({ key: 'create_pcr' });
   });
 
@@ -46,12 +46,12 @@ describe('resolveWorkState', () => {
     const deal = baseDeal({
       status: 'quotation_issued', fulfillmentStatus: 'GOODS_RECEIVED', paymentStatus: 'AWAITING_FINAL_PAYMENT',
     });
-    const result = resolveWorkState({ role: 'sales' }, deal, [], catalog);
-    expect(result.waitingRoleLabel).toBeNull();
+    const result = resolveWorkState({ role: 'sales' }, deal, []);
+    expect(result).not.toHaveProperty('waitingRoleLabel');
     expect(result.action).toMatchObject({ key: 'record_delivery' });
   });
 
-  it('sales viewer on an import-gated stage with genuinely nothing pending (a live, in-review PR; no stale/follow-up) falls through to the stage-gate banner — รอฝ่ายนำเข้า', () => {
+  it('sales viewer on an import-gated stage with genuinely nothing pending (a live, in-review PR; no stale/follow-up) has nothing to say (no waiting banner any more)', () => {
     // FIX 1 rewrite: resolveWorkState now calls nextSalesAction FIRST,
     // unconditionally — it no longer skips the resolver just because the
     // CURRENT stage (PROCUREMENT: gate 'import', auto: true) isn't sales'.
@@ -69,13 +69,13 @@ describe('resolveWorkState', () => {
     const pricingRequests = [{ id: 1, ticketId: deal.id, status: 'IMPORT_REVIEWING' }];
     const result = resolveWorkState({ role: 'sales' }, deal, pricingRequests, catalog);
     expect(result.action).toBeNull();
-    expect(result.waitingRoleLabel).toBe('ฝ่ายนำเข้า');
+    expect(result).not.toHaveProperty('waitingRoleLabel');
   });
 
   it('import viewer on an import-gated stage falls through to nextImportAction', () => {
     const deal = { id: 1, lifecycle: 'ACTIVE', salesStage: 'PROCUREMENT', status: 'quotation_issued', fulfillmentStatus: null };
-    const result = resolveWorkState({ role: 'import' }, deal, [], catalog);
-    expect(result.waitingRoleLabel).toBeNull();
+    const result = resolveWorkState({ role: 'import' }, deal, []);
+    expect(result).not.toHaveProperty('waitingRoleLabel');
     expect(result.action).toMatchObject({ code: 'issueImportRequest' });
   });
 
@@ -91,16 +91,16 @@ describe('resolveWorkState', () => {
       id: 1, lifecycle: 'ACTIVE', salesStage: 'DEPOSIT_RECEIVED',
       status: 'quotation_issued', fulfillmentStatus: null,
     };
-    const result = resolveWorkState({ role: 'import' }, deal, [], catalog);
-    expect(result.waitingRoleLabel).toBeNull();
+    const result = resolveWorkState({ role: 'import' }, deal, []);
+    expect(result).not.toHaveProperty('waitingRoleLabel');
     expect(result.action).toMatchObject({ code: 'issueImportRequest' });
   });
 
-  it('import viewer on a sales-gated stage reads as รอฝ่ายขาย (nextImportAction runs first, correctly finds nothing — fulfilment hasn\'t started)', () => {
+  it('import viewer on a sales-gated stage has no action and no waiting banner (nextImportAction runs first, correctly finds nothing — fulfilment hasn\'t started)', () => {
     const deal = baseDeal(); // QUOTE_DESIGN_SIDE, gate: sales
-    const result = resolveWorkState({ role: 'import' }, deal, [], catalog);
+    const result = resolveWorkState({ role: 'import' }, deal, []);
     expect(result.action).toBeNull();
-    expect(result.waitingRoleLabel).toBe('ฝ่ายขาย');
+    expect(result).not.toHaveProperty('waitingRoleLabel');
   });
 
   it('account viewer on an account-gated stage falls through to nextAccountAction', () => {
@@ -108,8 +108,8 @@ describe('resolveWorkState', () => {
       id: 1, lifecycle: 'ACTIVE', salesStage: 'DEPOSIT_RECEIVED',
       status: 'quotation_issued', paymentStatus: 'DEPOSIT_NOTICE_ISSUED',
     };
-    const result = resolveWorkState({ role: 'account' }, deal, [], catalog);
-    expect(result.waitingRoleLabel).toBeNull();
+    const result = resolveWorkState({ role: 'account' }, deal, []);
+    expect(result).not.toHaveProperty('waitingRoleLabel');
     expect(result.action).toMatchObject({ key: 'confirmDeposit' });
   });
 
@@ -125,8 +125,8 @@ describe('resolveWorkState', () => {
       id: 1, lifecycle: 'ACTIVE', salesStage: 'ORDER_RECEIVED',
       status: 'quotation_issued', paymentStatus: 'DEPOSIT_NOTICE_ISSUED',
     };
-    const result = resolveWorkState({ role: 'account' }, deal, [], catalog);
-    expect(result.waitingRoleLabel).toBeNull();
+    const result = resolveWorkState({ role: 'account' }, deal, []);
+    expect(result).not.toHaveProperty('waitingRoleLabel');
     expect(result.action).toMatchObject({ key: 'confirmDeposit' });
   });
 
@@ -139,37 +139,37 @@ describe('resolveWorkState', () => {
       id: 1, lifecycle: 'ACTIVE', salesStage: 'ORDER_RECEIVED',
       overdue: true, amountOutstanding: 5000,
     };
-    const result = resolveWorkState({ role: 'account' }, deal, [], catalog);
-    expect(result.waitingRoleLabel).toBeNull();
+    const result = resolveWorkState({ role: 'account' }, deal, []);
+    expect(result).not.toHaveProperty('waitingRoleLabel');
     expect(result.action).toMatchObject({ key: 'chaseOverdue' });
   });
 
-  it('account viewer on a sales-gated stage with nothing pending falls through to the stage-gate banner — รอฝ่ายขาย (nextAccountAction runs first, correctly finds nothing)', () => {
+  it('account viewer on a sales-gated stage with nothing pending has no action and no waiting banner (nextAccountAction runs first, correctly finds nothing)', () => {
     const deal = baseDeal();
-    const result = resolveWorkState({ role: 'account' }, deal, [], catalog);
+    const result = resolveWorkState({ role: 'account' }, deal, []);
     expect(result.action).toBeNull();
-    expect(result.waitingRoleLabel).toBe('ฝ่ายขาย');
+    expect(result).not.toHaveProperty('waitingRoleLabel');
   });
 
   it('ceo always passes the stage-gate check, but has no resolver of its own (the two-signature close button lives elsewhere)', () => {
     const importStage = baseDeal({ salesStage: 'PROCUREMENT' });
-    const result = resolveWorkState({ role: 'ceo' }, importStage, [], catalog);
+    const result = resolveWorkState({ role: 'ceo' }, importStage, []);
     expect(result.action).toBeNull();
-    expect(result.waitingRoleLabel).toBeNull();
+    expect(result).not.toHaveProperty('waitingRoleLabel');
   });
 
   it('sales_manager passes a sales-gated stage but has no resolver of its own either', () => {
     const deal = baseDeal();
-    const result = resolveWorkState({ role: 'sales_manager' }, deal, [], catalog);
+    const result = resolveWorkState({ role: 'sales_manager' }, deal, []);
     expect(result.action).toBeNull();
-    expect(result.waitingRoleLabel).toBeNull();
+    expect(result).not.toHaveProperty('waitingRoleLabel');
   });
 
   it('an unrecognised role (e.g. hr, which should never reach this page) is treated as never its turn', () => {
     const deal = baseDeal();
-    const result = resolveWorkState({ role: 'hr' }, deal, [], catalog);
+    const result = resolveWorkState({ role: 'hr' }, deal, []);
     expect(result.action).toBeNull();
-    expect(result.waitingRoleLabel).toBe('ฝ่ายขาย');
+    expect(result).not.toHaveProperty('waitingRoleLabel');
   });
 });
 

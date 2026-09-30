@@ -1048,9 +1048,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // ready for account) that this page has no dedicated `can.*` button for —
   // rendered as a "jump to the real control" convenience (in-page scroll,
   // or a real route when the control lives elsewhere), never a duplicate of
-  // the mutation itself. See workState.js's own doc comment for why it can
-  // also say "not your turn" (`waitingRoleLabel`), which nextSalesAction/
-  // nextImportAction/nextAccountAction alone cannot express.
+  // the mutation itself.
   //
   // CREATE_PCR/ISSUE_QUOTATION/CONFIRM_ORDER are the exceptions to "jump,
   // don't duplicate" (FIX 1 + FIX 2, Phase-1 clutter follow-up rounds 1/2):
@@ -1060,7 +1058,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // directly via a forwardRef (pricingRequestPanelRef / dealQuotationPanelRef),
   // and that panel no longer renders a trigger of its own — the sticky bar
   // is the only copy of each label on the page.
-  const workState = resolveWorkState(user, summary, pricingRequests, stageCatalog);
+  const workState = resolveWorkState(user, summary, pricingRequests);
   const workStateAction = workState.action;
   let stickyPrimaryLabel = nextAction;
   let stickyPrimaryAction = primaryAction;
@@ -1192,9 +1190,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     ? nextAction
     : stickyPrimaryLabel
       ? null
-      : workState.waitingRoleLabel
-        ? `รอ${workState.waitingRoleLabel}${blocker ? ` — ${blocker}` : ''}`
-        : blocker;
+      : blocker;
 
   // Overflow-menu / danger-zone availability — mirrors DealStagePanel's own
   // canEditStage/canLost/canHold/canDormant gates byte-for-byte (same
@@ -1540,12 +1536,6 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         onDormant={(payload) => doAction(() => api.tickets.dormant(ticketId, payload), 'พัก dormant แล้ว')}
         onResume={(payload) => doAction(() => api.tickets.resume(ticketId, payload), 'ดำเนินการต่อแล้ว')}
         onSetTenderRequirement={(payload) => doAction(() => api.tickets.setTenderRequirement(ticketId, payload), 'บันทึกสถานะประมูลแล้ว')}
-        // Issue #740: api.tickets.setEntryChannel had NO caller anywhere in frontend/src, while
-        // TicketService.addPolicyActions advertised SET_ENTRY_CHANNEL to every deal owner — so a
-        // deal stuck at ยังไม่ระบุช่องทาง (the V144 stored default) could not be corrected from this
-        // portal at all. Neither contract guard could see it: both start from hrApi.js and never
-        // trace a call from a component.
-        onSetEntryChannel={(payload) => doAction(() => api.tickets.setEntryChannel(ticketId, payload), 'บันทึกช่องทางรับงานแล้ว')}
         docActions={(can.downloadRemainingInvoice || (sections.quotation && latestQuotation)) ? (
           <>
             {/* Import/account (role-scoped views, Phase A): the view-only
@@ -1556,7 +1546,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                 Import Request button moved to DealFulfilmentPanel (Phase 3
                 Slice S4). */}
             {sections.quotation && latestQuotation && (
-              <Button type="button" variant="secondary"
+              <Button type="button" variant="text" size="sm" className="min-h-0 gap-1.5 text-sm font-bold"
                 disabled={downloadingQuotationKey === `${latestQuotation.id}-pdf`}
                 onClick={() => handleDownloadQuotation(latestQuotation.id, latestQuotation.number, 'pdf')}>
                 <Icon name="fileText" size={14} />
@@ -1566,7 +1556,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               </Button>
             )}
             {can.downloadRemainingInvoice && (
-              <Button type="button" variant="secondary" onClick={() => setRemainingInvoiceDialogOpen(true)}>
+              <Button type="button" variant="text" size="sm" className="min-h-0 gap-1.5 text-sm font-bold" onClick={() => setRemainingInvoiceDialogOpen(true)}>
+                <Icon name="fileText" size={14} />
                 ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ
               </Button>
             )}

@@ -3,115 +3,19 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
-import { Icon } from '../../components/common/Icon.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
-import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { dealLifecycleLabel, dealLostReasonLabel, dealStageLabel, entryChannelLabel, formatThaiDate, tenderRequirementLabel } from '../../utils/format.js';
+import { dealLifecycleLabel, dealLostReasonLabel, dealStageLabel, formatThaiDate, tenderRequirementLabel } from '../../utils/format.js';
 import { ACTIVITY_KINDS, STAGE_ADVANCE_GATE_MESSAGE } from './dealTrackingMeta.js';
-import { DealStageStepper, PhaseTracker } from './DealStageStepper.jsx';
+import { DealStageStepper, PhaseSummary, PhaseTracker } from './DealStageStepper.jsx';
 import { MarkLostModal } from './MarkLostModal.jsx';
 import { EMPTY_STAGE_CATALOG, findStage, nextStageIn } from './stageCatalog.js';
-import { AUTO_STAGE_HINT, GATE_LABEL } from './stageMeta.js';
+import { AUTO_STAGE_HINT, GATE_LABEL, STAGE_HEADLINE } from './stageMeta.js';
 import { UpdateStageModal } from './UpdateStageModal.jsx';
 
 function daysSince(iso) {
   if (!iso) return null;
   return Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86400000));
-}
-
-/**
- * The three channels EntryChannel.java accepts as INPUT. UNSPECIFIED is deliberately absent: it is
- * valid as STORED (the V144 column default) but `TicketService.setEntryChannel` 400s on it, because
- * once a channel has been stated it must not be possible to un-state it. Offering it would be
- * offering an action that dies on click.
- */
-const SETTABLE_ENTRY_CHANNELS = ['DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT'];
-
-/**
- * "ช่องทางรับงาน" — how this deal arrived, and the control that corrects it.
- *
- * Issue #740: `api.tickets.setEntryChannel` existed, `TicketService.addPolicyActions` advertised
- * SET_ENTRY_CHANNEL to every deal owner, and NO component anywhere called it. V144 made
- * UNSPECIFIED the stored default and #711 made the create modal demand a choice — but only
- * client-side, so a deal created before #711, or by any other client, sat at ยังไม่ระบุช่องทาง with
- * the server offering a correction the UI could not fire. The channel was not even DISPLAYED: the
- * `entryChannelLabel` map in utils/format.js had no caller at all.
- *
- * This component decides nothing. `editable` is the server's own availableActions entry and
- * `reasonRequired` is that entry's `requiredFields` — TicketService.entryChannelIsStated is what
- * populates it, so the reason rule lives in exactly one place and this side is told the answer
- * rather than keeping a copy of it. The read-only branch still renders the value, because a viewer
- * who cannot change the channel still needs to see which route the deal came in on.
- */
-function EntryChannelControl({ entryChannel, editable, reasonRequired, disabled, onSubmit }) {
-  const [pending, setPending] = useState(null); // the picked channel awaiting its reason
-  const [reason, setReason] = useState('');
-  const current = entryChannel ?? 'UNSPECIFIED';
-
-  if (!editable) {
-    return (
-      <span className="flex min-w-0 items-center gap-2 text-xs font-bold text-text-muted">
-        ช่องทางรับงาน
-        <span className="font-normal text-text">{entryChannelLabel(current).label}</span>
-      </span>
-    );
-  }
-
-  function pick(value) {
-    if (value === current) return;
-    // The server said a reason is required, so collect one BEFORE calling — the alternative is
-    // firing a request we have been told will 400 and surfacing it as a red toast.
-    if (reasonRequired) { setPending(value); setReason(''); return; }
-    onSubmit({ value, note: null });
-  }
-
-  return (
-    <span className="flex min-w-0 flex-wrap items-center gap-2">
-      <label className="flex min-w-0 items-center gap-2 text-xs font-bold text-text-muted">
-        ช่องทางรับงาน
-        <select
-          value={pending ?? current}
-          disabled={disabled}
-          onChange={(event) => pick(event.target.value)}
-        >
-          {/* The stored-only default is rendered as an option ONLY while the deal is still on it,
-              so the select can show where the deal actually stands. It is disabled, so it cannot
-              be chosen — picking it would 400. */}
-          {current === 'UNSPECIFIED' ? (
-            <option value="UNSPECIFIED" disabled>{entryChannelLabel('UNSPECIFIED').label}</option>
-          ) : null}
-          {SETTABLE_ENTRY_CHANNELS.map((value) => (
-            <option key={value} value={value}>{entryChannelLabel(value).label}</option>
-          ))}
-        </select>
-      </label>
-      {pending ? (
-        <span className="flex min-w-0 flex-wrap items-center gap-2">
-          <input
-            type="text"
-            className="min-w-0"
-            aria-label="เหตุผลที่เปลี่ยนช่องทางรับงาน"
-            placeholder="เหตุผลที่เปลี่ยน"
-            value={reason}
-            disabled={disabled}
-            onChange={(event) => setReason(event.target.value)}
-          />
-          <Button
-            type="button"
-            variant="primary"
-            disabled={disabled || !reason.trim()}
-            onClick={() => { onSubmit({ value: pending, note: reason.trim() }); setPending(null); setReason(''); }}
-          >
-            บันทึก
-          </Button>
-          <Button type="button" variant="ghost" onClick={() => { setPending(null); setReason(''); }}>
-            ยกเลิก
-          </Button>
-        </span>
-      ) : null}
-    </span>
-  );
 }
 
 /**
@@ -173,7 +77,6 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   docActions, primaryAction, actionLoading,
   advanceReady = true,
   onUpdateStage, onMarkLost, onReopen, onHold, onDormant, onResume, onSetTenderRequirement,
-  onSetEntryChannel,
 }, ref) {
   const [editOpen, setEditOpen] = useState(false);
   const [lostOpen, setLostOpen] = useState(false);
@@ -239,16 +142,6 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   const canDormant = hasAction('MARK_DORMANT');
   const canResume = hasAction('RESUME');
   const canTender = hasAction('SET_TENDER_REQUIREMENT') && summary.salesStage === 'AWAITING_BUYER';
-  // Entry channel (issue #740). Unlike ประมูล this is NOT stage-gated — "how did this deal arrive"
-  // is true of the deal at every stage, and a deal stuck at UNSPECIFIED needs correcting wherever
-  // it happens to sit. `entryChannelAction` is the server's own advertisement; its requiredFields
-  // is what says whether a reason is needed, so nothing here re-derives that rule.
-  const entryChannelAction = availableActions.find((item) => item.action === 'SET_ENTRY_CHANNEL');
-  const canSetEntryChannel = Boolean(entryChannelAction) && Boolean(onSetEntryChannel);
-  // Shown read-only to anyone else with the deal open: the channel was previously rendered
-  // NOWHERE, so even a viewer who cannot change it had no way to see which route the deal came in
-  // on. Hidden only when there is genuinely nothing to say.
-  const showEntryChannel = canSetEntryChannel || Boolean(summary.entryChannel);
   const isDone = !lost && summary.salesStage === 'CLOSED_PAID';
 
   useImperativeHandle(ref, () => ({
@@ -280,7 +173,9 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
 
   // When the next stage isn't one this user can one-click into, explain who or
   // what advances it instead of showing a dead end.
-  const nextHint = next && !canAdvance
+  // Suppressed while the guided-advance button stands in for it: that button IS the way forward, so
+  // "อัปเดตโดย<ฝ่าย>" would be a misleading dead end next to it.
+  const nextHint = next && !canAdvance && !readinessBlocked
     ? (next.auto ? AUTO_STAGE_HINT[next.code] : `ขั้นถัดไปอัปเดตโดย${GATE_LABEL[next.gate]}`)
     : null;
 
@@ -310,7 +205,7 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
       actions={(
         <Button
           type="button"
-          variant="secondary"
+          variant="ghost"
           style={{ fontSize: 12 }}
           onClick={() => setShowSteps((v) => !v)}
         >
@@ -319,8 +214,6 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
       )}
     >
       <div className="flex flex-col gap-4 px-4 py-4 sm:px-5">
-        <PhaseTracker catalog={catalog} salesStage={summary.salesStage} lost={lost} />
-
         {/* Closing the deal does NOT create the rep's commission. Only the accountant recording
             the tax invoice does (POST /api/commissions/from-deal, account-only), and that same
             upload is what flips invoiceOnFile. Until then a CLOSED_PAID deal has earned the rep
@@ -386,33 +279,29 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
                 {meta?.no ?? '-'}
               </span>
               <div className="min-w-0 flex-1">
-                <div className="text-base font-extrabold leading-snug text-text">{label.label}</div>
-                <div className="mt-1 flex flex-wrap items-center gap-2">
-                  <StatusBadge tone={label.tone}>เฟส {meta?.phase ?? '-'}</StatusBadge>
-                  {meta ? (
-                    <span className="rounded-full bg-surface-subtle px-2 py-0.5 text-2xs font-bold text-text-muted">
-                      {GATE_LABEL[meta.gate]}
-                    </span>
-                  ) : null}
-                  {days != null ? (
-                    <span className="text-xs text-text-muted">อยู่ในขั้นนี้ {days === 0 ? 'วันนี้' : `${days} วัน`}</span>
-                  ) : null}
+                <div className="text-base font-extrabold leading-snug text-text">{STAGE_HEADLINE[summary.salesStage] ?? label.label}</div>
+                {meta && GATE_LABEL[meta.gate] ? (
+                  <div data-testid="deal-stage-owner" className="mt-0.5 text-xs font-bold text-text-muted">
+                    {`ผู้รับผิดชอบ: ${GATE_LABEL[meta.gate]}`}
+                  </div>
+                ) : null}
+                <div className="mt-1">
+                  <PhaseSummary catalog={catalog} salesStage={summary.salesStage} lost={lost} />
                 </div>
+                {days != null ? (
+                  <div className="mt-1 text-xs text-text-muted">อยู่ในขั้นนี้ {days === 0 ? 'วันนี้' : `${days} วัน`}</div>
+                ) : null}
               </div>
             </div>
 
-            {/* Compact "next step" line — keeps the default view to current + next
-                only. Used to be suppressed when canAdvance (the explicit
-                "เลื่อนไป:" button used to render right below it) to avoid
-                saying it twice; that button moved into the header overflow
-                menu (FIX 2), so this line is now the only next-stage context
-                left in the panel and always shows when there is one. */}
+            {/* ONE "what happens next, and who moves it" line. It used to be a small "ถัดไป:" pill
+                plus a separate grey hint pill further down, with the hint — the only sentence that
+                says whose move it is — styled as the least important thing on screen. */}
             {next && !isDone ? (
-              <div className="flex items-center gap-2 text-xs">
-                <span className="font-bold text-text-muted">ถัดไป:</span>
-                <span className="rounded-full bg-info-bg px-2.5 py-0.5 text-2xs font-bold text-info">
-                  {next.no}. {dealStageLabel(next.code).label}
-                </span>
+              <div data-testid="deal-stage-next" className="text-sm leading-snug text-text">
+                <span className="font-bold text-text-muted">ถัดไป: </span>
+                <span className="font-extrabold">{next.no}. {dealStageLabel(next.code).label}</span>
+                {nextHint ? <span className="text-text-secondary"> — {nextHint}</span> : null}
               </div>
             ) : null}
 
@@ -437,62 +326,40 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
                   <div className="flex flex-wrap items-center gap-2">{primaryAction}</div>
                 ) : null}
               </div>
-            ) : (
-              <div className="flex flex-col gap-2">
-                <div className="flex flex-wrap items-center gap-2">
-                  {primaryAction}
-                  {/* The "เลื่อนไป: <next stage>" primary advance button (and its
-                      disabled-with-why gate hint) moved into the header
-                      overflow menu — see this component's own doc comment
-                      (FIX 2) and TicketDetailPage's `openAdvance` handler.
-                      `canAdvance`/`advanceReady` still gate it there, byte-
-                      identical to before; only where it renders changed. */}
-                  {readinessBlocked ? (
-                    // Not a dead hint: the rep CAN advance — they just have to log the follow-up +
-                    // an activity first, which this button collects and then advances, in one go.
-                    <Button
-                      type="button"
-                      variant="primary"
-                      disabled={actionLoading}
-                      onClick={() => setGuidedOpen(true)}
-                      data-testid="guided-advance-open"
-                    >
-                      เลื่อนไป: {next.no}. {dealStageLabel(next.code).label}
-                    </Button>
-                  ) : nextHint ? (
-                    <span className="rounded-lg border border-border bg-surface-subtle px-3 py-2 text-xs text-text-muted">
-                      <Icon name="clock" size={12} /> {nextHint}
-                    </span>
-                  ) : null}
-                </div>
-              </div>
-            )}
-
-            {canTender || showEntryChannel ? (
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-3 border-t border-border pt-3">
-                {canTender ? (
-                  <label className="flex min-w-0 items-center gap-2 text-xs font-bold text-text-muted">
-                    ประมูล
-                    <select
-                      value={summary.tenderRequirement ?? 'UNKNOWN'}
-                      disabled={actionLoading}
-                      onChange={(event) => onSetTenderRequirement({ value: event.target.value })}
-                    >
-                      {['UNKNOWN', 'REQUIRED', 'NOT_REQUIRED'].map((value) => (
-                        <option key={value} value={value}>{tenderRequirementLabel(value).label}</option>
-                      ))}
-                    </select>
-                  </label>
-                ) : null}
-                {showEntryChannel ? (
-                  <EntryChannelControl
-                    entryChannel={summary.entryChannel}
-                    editable={canSetEntryChannel}
-                    reasonRequired={entryChannelAction?.requiredFields?.includes('note') ?? false}
+            ) : primaryAction || readinessBlocked ? (
+              <div className="flex flex-wrap items-center gap-2">
+                {primaryAction}
+                {/* Not a dead hint: the rep CAN advance — they just have to log the follow-up + an
+                    activity first, which this button collects and then advances, in one go. The
+                    "who moves it" hint for everyone else is part of the ถัดไป line above. */}
+                {readinessBlocked ? (
+                  <Button
+                    type="button"
+                    variant="primary"
                     disabled={actionLoading}
-                    onSubmit={onSetEntryChannel}
-                  />
+                    onClick={() => setGuidedOpen(true)}
+                    data-testid="guided-advance-open"
+                  >
+                    เลื่อนไป: {next.no}. {dealStageLabel(next.code).label}
+                  </Button>
                 ) : null}
+              </div>
+            ) : null}
+
+            {canTender ? (
+              <div className="flex flex-wrap items-center border-t border-border pt-3">
+                <label className="flex min-w-0 items-center gap-2 text-xs font-bold text-text-muted">
+                  ประมูล
+                  <select
+                    value={summary.tenderRequirement ?? 'UNKNOWN'}
+                    disabled={actionLoading}
+                    onChange={(event) => onSetTenderRequirement({ value: event.target.value })}
+                  >
+                    {['UNKNOWN', 'REQUIRED', 'NOT_REQUIRED'].map((value) => (
+                      <option key={value} value={value}>{tenderRequirementLabel(value).label}</option>
+                    ))}
+                  </select>
+                </label>
               </div>
             ) : null}
 
@@ -500,7 +367,7 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
                 deal (quotation at the quote stages, deposit notice at order,
                 IR at procurement...) — parent renders them from real `can` flags. */}
             {docActions ? (
-              <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
+              <div className="flex flex-wrap items-center gap-2">
                 <span className="text-xs font-bold text-text-muted">เอกสารของขั้นนี้:</span>
                 {docActions}
               </div>
@@ -508,7 +375,12 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
           </div>
         )}
 
-        {showSteps ? <DealStageStepper catalog={catalog} salesStage={summary.salesStage} lost={lost} /> : null}
+        {showSteps ? (
+          <div className="flex flex-col gap-4 border-t border-border pt-4">
+            <PhaseTracker catalog={catalog} salesStage={summary.salesStage} lost={lost} />
+            <DealStageStepper catalog={catalog} salesStage={summary.salesStage} lost={lost} />
+          </div>
+        ) : null}
       </div>
 
       {editOpen ? (

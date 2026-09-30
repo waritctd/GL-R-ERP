@@ -639,9 +639,12 @@ const UNREACHABLE_FROM_UI = new Set([
   'POST /api/pricing-costings/{}/recalculate',
   'POST /api/pricing-costings/{}/submit',
   'POST /api/pricing-requests/{}/costings',
-  // 'POST /api/tickets/{}/entry-channel' was here until issue #740 wired DealStagePanel's
-  // ช่องทางรับงาน control. The `UNREACHABLE_FROM_UI entry is real and still unreachable` test is
-  // what demanded this deletion — it is not an optional tidy-up.
+  // POST /api/tickets/{}/entry-channel left this list at #740 (DealStagePanel's ช่องทางรับงาน
+  // control) and is back on 2026-09-30: that control was removed on request — the channel follows
+  // the deal's stage, so DealStagePanel no longer shows or edits it. Frontend-only; the endpoint,
+  // TicketService.setEntryChannel and the SET_ENTRY_CHANNEL action are untouched, so this is "UI
+  // unreachable", not "dead". Deals stuck on UNSPECIFIED can no longer be corrected from the portal.
+  'POST /api/tickets/{}/entry-channel',
   // 'POST /api/tickets/{}/factory-emails/send' left this list on 2026-09-06: the endpoint itself
   // is DELETED (manual-RFQ redesign — factory email is a human-copies-and-sends flow now, see
   // FactoryQuoteService.send), not merely wired up, so it is gone from SERVER_KEYS entirely and

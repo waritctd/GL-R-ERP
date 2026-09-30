@@ -39,9 +39,9 @@ function wrap(ui) {
   return <QueryClientProvider client={client}>{ui}</QueryClientProvider>;
 }
 
-function Harness({ initial, showToast = vi.fn() }) {
+function Harness({ initial, showToast = vi.fn(), errors }) {
   const [value, setValue] = React.useState(initial ?? { customer: null, project: null, contact: null, entryChannel: 'UNSPECIFIED' });
-  return <DealCustomerCard value={value} onChange={(patch) => setValue((prev) => ({ ...prev, ...patch }))} showToast={showToast} />;
+  return <DealCustomerCard value={value} onChange={(patch) => setValue((prev) => ({ ...prev, ...patch }))} showToast={showToast} errors={errors} />;
 }
 
 describe('DealCustomerCard', () => {
@@ -212,15 +212,37 @@ describe('DealCustomerCard', () => {
     expect(screen.getByPlaceholderText('บริษัท … จำกัด').value).toBe('บริษัท ซ้ำ จำกัด');
   });
 
-  it('ช่องทางรับงาน defaults to ไม่ระบุ and toggles to the picked code on click', () => {
+  // ยังไม่ระบุช่องทาง is a stored default, never a choice: the rep picks one of the three real channels.
+  it('ช่องทางรับงาน offers only the three real channels — no ไม่ระบุ option', () => {
     render(wrap(<Harness />));
-    const unspecified = screen.getByRole('button', { name: /ไม่ระบุ/ });
-    expect(unspecified.getAttribute('aria-pressed')).toBe('true');
+    expect(screen.queryByRole('button', { name: /ไม่ระบุ/ })).toBeNull();
+    expect(screen.getAllByRole('button').filter((b) => b.hasAttribute('aria-pressed'))).toHaveLength(3);
+  });
 
-    const designerLed = screen.getAllByRole('button').find((b) => b.textContent.includes('ผู้ออกแบบ'));
+  it('ช่องทางรับงาน starts with nothing pressed and toggles to the picked code on click', () => {
+    render(wrap(<Harness />));
+    const channels = screen.getAllByRole('button').filter((b) => b.hasAttribute('aria-pressed'));
+    expect(channels.every((b) => b.getAttribute('aria-pressed') === 'false')).toBe(true);
+
+    const designerLed = channels.find((b) => b.textContent.includes('ผู้ออกแบบ'));
     fireEvent.click(designerLed);
     expect(designerLed.getAttribute('aria-pressed')).toBe('true');
-    expect(unspecified.getAttribute('aria-pressed')).toBe('false');
+    const buyer = channels.find((b) => b.textContent.includes('ผู้ซื้อ'));
+    fireEvent.click(buyer);
+    expect(buyer.getAttribute('aria-pressed')).toBe('true');
+    expect(designerLed.getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('ช่องทางรับงาน shows the inline hint when told it is missing, and exposes the control the checklist targets', () => {
+    render(wrap(<Harness errors={{ entryChannel: 'ต้องเลือกช่องทางรับงานก่อนบันทึกร่าง' }} />));
+    expect(screen.getByText('ต้องเลือกช่องทางรับงานก่อนบันทึกร่าง')).not.toBeNull();
+    expect(document.getElementById('deal-entry-channel')).not.toBeNull();
+  });
+
+  it('ช่องทางรับงาน shows no hint when there is no error', () => {
+    render(wrap(<Harness />));
+    expect(screen.queryByText('ต้องเลือกช่องทางรับงานก่อนบันทึกร่าง')).toBeNull();
+    expect(document.getElementById('deal-entry-channel')).not.toBeNull();
   });
 
   // ── F7 (owner, 2026-09-10): เลขที่ผู้เสียภาษี / โทร. on the SELECTED customer ────────────────
