@@ -638,3 +638,59 @@ describe('CommissionPage — manual-commission rep picker (issue #737)', () => {
     expect(screen.getByText('หรือเลือกจากพนักงานขาย (นอกฝ่ายขายให้กรอกรหัสพนักงานด้านบน)')).not.toBeNull();
   });
 });
+
+// dealStageLabel() returns { label, tone } -- never a string. Interpolating the call directly
+// into a template literal therefore renders the literal text "[object Object]" where the Thai
+// stage name belongs, and the message loses the one fact it exists to convey: which stage the
+// deal is actually at. Every other call site in the codebase reaches for .label; this one did
+// not. The assertions below are written against the RENDERED text rather than the format helper
+// so they fail on the component's own interpolation -- a unit test of dealStageLabel would have
+// stayed green throughout.
+describe('CommissionPage — ineligible-deal lookup error names the Thai stage', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function renderAccountPageForLookup() {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    return render(
+      <MemoryRouter>
+        <QueryClientProvider client={queryClient}>
+          <CommissionPage user={accountUser} showToast={vi.fn()} />
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  async function lookupAndReadError(summary) {
+    api.tickets.get.mockResolvedValue({ ticket: { summary } });
+    renderAccountPageForLookup();
+
+    fireEvent.change(screen.getByLabelText(/เลขที่ Ticket ID/), { target: { value: '42' } });
+    fireEvent.click(screen.getByRole('button', { name: /โหลดข้อมูลดีล/ }));
+
+    return (await screen.findByText(/ยังไม่ถึงขั้นตอนปิดงาน/)).textContent;
+  }
+
+  // DELIVERED is the realistic near-miss: the goods are out but the money is not in, which is
+  // exactly when ฝ่ายบัญชี tries to record the commission early and needs to be told what is
+  // still outstanding.
+  it('names the Thai stage in the ineligible-deal error, not "[object Object]"', async () => {
+    const message = await lookupAndReadError(closedPaidTicket({ salesStage: 'DELIVERED' }));
+
+    expect(message).toContain('ส่งมอบสินค้าครบถ้วน');
+    expect(message).not.toContain('[object Object]');
+  });
+
+  // dealStageLabel()'s fallback limb returns an object too, so a fix that only handles the known
+  // stages would leak "[object Object]" here instead. Asserting the raw code surfaces keeps the
+  // fallback's deliberate "render the code rather than throw" behaviour intact.
+  it('renders the raw code, still not "[object Object]", for a stage with no Thai copy', async () => {
+    const message = await lookupAndReadError(closedPaidTicket({ salesStage: 'FUTURE_STAGE' }));
+
+    expect(message).toContain('FUTURE_STAGE');
+    expect(message).not.toContain('[object Object]');
+  });
+});

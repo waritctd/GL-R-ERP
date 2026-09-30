@@ -751,7 +751,7 @@ export function CommissionPage({ user, showToast }) {
       }
       if (summary.salesStage !== 'CLOSED_PAID') {
         setLoadedTicket(null);
-        setTicketLookupError(`ดีลนี้ยังไม่ถึงขั้นตอนปิดงาน/รับเงินครบ (สถานะปัจจุบัน: ${dealStageLabel(summary.salesStage)}) จึงยังบันทึกค่าคอมไม่ได้`);
+        setTicketLookupError(`ดีลนี้ยังไม่ถึงขั้นตอนปิดงาน/รับเงินครบ (สถานะปัจจุบัน: ${dealStageLabel(summary.salesStage).label}) จึงยังบันทึกค่าคอมไม่ได้`);
         return;
       }
       setLoadedTicket(summary);
