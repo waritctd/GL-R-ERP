@@ -197,6 +197,7 @@ export function CommissionPage({ user, showToast }) {
   const [pickedRepId, setPickedRepId] = useState('');
   const [repSummary, setRepSummary] = useState(null);
   const repSummaryRequestId = useRef(0);
+  const [repSummaryNonce, setRepSummaryNonce] = useState(0); // bumped to force a reload of the picked rep's statement
 
   // account: "record invoice" / create-from-deal flow
   const [ticketIdInput, setTicketIdInput] = useState(searchParams.get('ticketId') || '');
@@ -291,6 +292,13 @@ export function CommissionPage({ user, showToast }) {
     return response;
   }
 
+  // A weight change moves the month's base: reload the records table and the picked rep's statement
+  // so "สรุปรายคน" and the table are not left showing the old figures.
+  function reloadAfterWeightChange() {
+    load();
+    setRepSummaryNonce((n) => n + 1);
+  }
+
   function replacePendingEntry(updated) {
     setPending((current) => (current ?? []).map((entry) => (entry.commission.id === updated.commission.id ? updated : entry)));
   }
@@ -352,7 +360,7 @@ export function CommissionPage({ user, showToast }) {
       .then((response) => { if (repSummaryRequestId.current === requestId) setRepSummary(response.summary ?? null); })
       .catch(() => { if (repSummaryRequestId.current === requestId) setRepSummary(null); });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- canReview is fixed for the page's lifetime.
-  }, [pickedRepId, month]);
+  }, [pickedRepId, month, repSummaryNonce]);
 
   // Best-effort convenience picker for account: the deals TicketRepository's account-role list
   // scoping surfaces are money-PENDING deals, so a CLOSED_PAID deal (already fully paid) often
@@ -983,6 +991,7 @@ export function CommissionPage({ user, showToast }) {
           canReviewRecord={canManagerReview}
           onAdjust={adjustWeights}
           onEntryUpdate={replacePendingEntry}
+          onSaved={reloadAfterWeightChange}
           onApprove={setApproveId}
           onReject={reject}
         />
@@ -1505,6 +1514,9 @@ function ManagerReviewEditPanel({ record, draft, onChange, preview, saving, onSa
           <span id="record-weight-label">น้ำหนักฐานคอมของรายการนี้</span>
           <WeightSegmented
             label="น้ำหนักฐานคอม"
+            labelledBy="record-weight-label"
+            disabled={saving}
+            busy={saving}
             value={Number(draft.weightMultiplier)}
             onChange={(weight) => onChange('weightMultiplier', weight)}
             describedBy="record-weight-hint"

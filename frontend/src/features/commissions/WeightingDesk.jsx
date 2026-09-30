@@ -25,7 +25,7 @@ const SAVED_FLASH_MS = 2500;
  * segment, and an inline alert names the line(s). `lineState` is per line, so a save locks only the
  * line being saved.
  */
-function PendingEntry({ entry, canAdjust, canReview, busyElsewhere, onAdjust, onEntryUpdate, onApprove, onReject }) {
+function PendingEntry({ entry, canAdjust, canReview, busyElsewhere, onAdjust, onEntryUpdate, onSaved, onApprove, onReject }) {
   const { commission: record, items = [] } = entry;
   const [optimistic, setOptimistic] = useState({});
   const [lineState, setLineState] = useState({}); // itemId -> 'saving' | 'saved' | 'error'
@@ -46,10 +46,15 @@ function PendingEntry({ entry, canAdjust, canReview, busyElsewhere, onAdjust, on
   }
 
   async function change(lines) {
-    // Never re-send a line that is already at that weight, and never touch a line that is mid-save.
+    // The WHOLE entry is one write at a time. Two parallel item-weights requests for one record race
+    // in the backend (no row lock), the frozen effective weight can then ignore one of the lines, and
+    // the later response could overwrite the earlier one. So nothing is accepted while anything of
+    // this entry is saving -- the controls are disabled too, this is the belt to their braces.
+    if (anySaving) return;
+    // Never re-send a line that is already at that weight.
     const todo = lines.filter((l) => {
       const item = items.find((i) => i.itemId === l.itemId);
-      return item && lineState[l.itemId] !== 'saving' && weightOf(item) !== l.weightMultiplier;
+      return item && weightOf(item) !== l.weightMultiplier;
     });
     if (todo.length === 0) return;
     const ids = todo.map((l) => l.itemId);
@@ -61,6 +66,8 @@ function PendingEntry({ entry, canAdjust, canReview, busyElsewhere, onAdjust, on
     try {
       const response = await onAdjust(record.id, { lines: todo });
       onEntryUpdate(response.pending);
+      // The month's records and any picked rep's statement moved with this weight: reload them.
+      onSaved?.();
       setOptimistic((current) => {
         const next = { ...current };
         ids.forEach((id) => { delete next[id]; });
@@ -114,7 +121,8 @@ function PendingEntry({ entry, canAdjust, canReview, busyElsewhere, onAdjust, on
                 size="sm"
                 className="whitespace-nowrap pointer-coarse:min-h-11 mobile:min-h-11 aria-disabled:cursor-not-allowed aria-disabled:opacity-[0.55]"
                 aria-disabled={anySaving ? 'true' : undefined}
-                onClick={() => { if (!anySaving) change(stockLines.map((item) => ({ itemId: item.itemId, weightMultiplier: 2 }))); }}
+                // A line already at ×3 is skipped: this action only ever RAISES a line to ×2.
+                onClick={() => change(stockLines.filter((item) => weightOf(item) < 2).map((item) => ({ itemId: item.itemId, weightMultiplier: 2 })))}
               >
                 สต็อกทั้งหมด ×2
               </Button>
@@ -148,13 +156,21 @@ function PendingEntry({ entry, canAdjust, canReview, busyElsewhere, onAdjust, on
                       label={groupLabel}
                       value={stock ? weightOf(item) : 1}
                       onChange={(weight) => change([{ itemId: item.itemId, weightMultiplier: weight }])}
-                      disabled={!canAdjust || !stock || state === 'saving'}
+                      disabled={!canAdjust || !stock || anySaving}
                       busy={state === 'saving'}
                       invalid={state === 'error'}
                       describedBy={state === 'error' ? errorId : undefined}
                     />
                     <span className="min-w-[5.5rem] text-sm" aria-live="polite">
-                      {state === 'saving' ? <span className="text-text-muted">กำลังบันทึก…</span> : null}
+                      {state === 'saving' ? (
+                        <span className="inline-flex items-center gap-1.5 text-text-muted">
+                          <span
+                            aria-hidden="true"
+                            className="h-3.5 w-3.5 rounded-pill border-2 border-current border-r-transparent animate-[button-loading-spin_700ms_linear_infinite] motion-reduce:animate-none"
+                          />
+                          กำลังบันทึก…
+                        </span>
+                      ) : null}
                       {state === 'saved' ? (
                         <span className="inline-flex items-center gap-1 text-success"><Icon name="check" size={14} />บันทึกแล้ว</span>
                       ) : null}
@@ -175,7 +191,7 @@ function PendingEntry({ entry, canAdjust, canReview, busyElsewhere, onAdjust, on
         <dl className="m-0 grid grid-cols-[repeat(auto-fit,minmax(11rem,1fr))] gap-x-6 gap-y-3 rounded-md bg-surface-muted p-3">
           <div className="grid min-w-0 content-start gap-0.5">
             <dt className="text-sm text-text-muted">ฐานค่าคอม ก่อนถ่วง → หลังถ่วง</dt>
-            <dd className="m-0 text-md font-extrabold tabular-nums text-text [overflow-wrap:anywhere]">
+            <dd className="m-0 text-xl font-extrabold tabular-nums text-text [overflow-wrap:anywhere]">
               {`${formatMoney(record.commissionableBase)} → ${formatMoney(entry.weightedCommissionableBase)}`}
             </dd>
           </div>
@@ -184,8 +200,8 @@ function PendingEntry({ entry, canAdjust, canReview, busyElsewhere, onAdjust, on
             <dd className="m-0 text-md font-extrabold tabular-nums text-text">{Number(entry.effectiveWeight ?? 0).toFixed(2)}</dd>
           </div>
           <div className="grid min-w-0 content-start gap-0.5">
-            <dt className="text-sm text-text-muted">ค่าคอมที่คำนวณได้</dt>
-            <dd className="m-0 text-xl font-extrabold tabular-nums text-text [overflow-wrap:anywhere]">{formatMoney(entry.estimatedCommission)}</dd>
+            <dt className="text-sm text-text-muted">ค่าคอมโดยประมาณ (ส่วนเพิ่มของเดือน)</dt>
+            <dd className="m-0 text-md font-extrabold tabular-nums text-text [overflow-wrap:anywhere]">{formatMoney(entry.estimatedCommission)}</dd>
           </div>
         </dl>
 
@@ -223,7 +239,7 @@ function PendingEntry({ entry, canAdjust, canReview, busyElsewhere, onAdjust, on
  * her page ("รอคุณอนุมัติ (n)"); for the CEO it is a read-only view of the same queue. `entries` is
  * null until first loaded.
  */
-export function WeightingDesk({ title, entries, loading, canAdjust, busy, canReviewRecord, onAdjust, onEntryUpdate, onApprove, onReject }) {
+export function WeightingDesk({ title, entries, loading, canAdjust, busy, canReviewRecord, onAdjust, onEntryUpdate, onSaved, onApprove, onReject }) {
   const heading = entries == null ? title : `${title} (${entries.length})`;
   return (
     <section aria-labelledby="weighting-desk-heading" className="grid min-w-0 gap-3">
@@ -248,6 +264,7 @@ export function WeightingDesk({ title, entries, loading, canAdjust, busy, canRev
               busyElsewhere={busy}
               onAdjust={onAdjust}
               onEntryUpdate={onEntryUpdate}
+              onSaved={onSaved}
               onApprove={onApprove}
               onReject={onReject}
             />

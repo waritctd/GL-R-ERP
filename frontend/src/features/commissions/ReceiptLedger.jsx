@@ -10,6 +10,7 @@ import { ReceiptChain } from './ReceiptChain.jsx';
 import {
   MANUAL_KIND_LABELS,
   baseContribution,
+  countsTowardBase,
   formatWeight,
   isManualKind,
   kindLabel,
@@ -53,7 +54,7 @@ function Identity({ record }) {
 
 function WeightChip({ record }) {
   const weight = recordWeight(record);
-  if (isManualKind(record.kind) || weight === 1) return null;
+  if (!countsTowardBase(record) || weight === 1) return null;
   return <StatusBadge tone="info">{formatWeight(weight)}</StatusBadge>;
 }
 
@@ -94,6 +95,7 @@ export function ReceiptLedger({ records, loading }) {
           {records.map((record) => {
             const status = statusInfo(record.status);
             const manual = isManualKind(record.kind);
+            const counts = countsTowardBase(record);
             return (
               <li key={record.id} data-testid={`receipt-row-${record.id}`} className="grid min-w-0 gap-3 rounded-md border border-border bg-surface p-3">
                 <div className="flex min-w-0 items-start justify-between gap-3">
@@ -107,7 +109,7 @@ export function ReceiptLedger({ records, loading }) {
                     <dt className="text-text-muted">ยอดไม่รวม VAT</dt>
                     <dd className="m-0 text-right font-bold tabular-nums [overflow-wrap:anywhere]">{formatMoney(record.commissionableBase)}</dd>
                     <dt className="text-text-muted">ที่เข้าฐาน</dt>
-                    <dd className="m-0 text-right font-bold tabular-nums [overflow-wrap:anywhere]">{formatMoney(baseContribution(record))}</dd>
+                    <dd className="m-0 text-right font-bold tabular-nums [overflow-wrap:anywhere]">{counts ? formatMoney(baseContribution(record)) : 'ไม่เข้าฐาน'}</dd>
                     <dt className="text-text-muted">วันที่</dt>
                     <dd className="m-0 text-right">{dateOf(record)}</dd>
                   </dl>
@@ -138,6 +140,7 @@ export function ReceiptLedger({ records, loading }) {
             {records.map((record) => {
               const status = statusInfo(record.status);
               const manual = isManualKind(record.kind);
+              const counts = countsTowardBase(record);
               const expanded = expandedId === record.id;
               return (
                 <tbody key={record.id} className="border-t border-border-subtle">
@@ -148,8 +151,8 @@ export function ReceiptLedger({ records, loading }) {
                     <td className="px-3 py-2"><StatusBadge tone={status.tone}>{status.label}</StatusBadge></td>
                     <td className={cn('px-3 py-2 text-right tabular-nums', manual && 'text-text-muted')}>{manual ? '—' : formatMoney(record.commissionableBase)}</td>
                     <td className="px-3 py-2"><WeightChip record={record} /></td>
-                    <td className={cn('px-3 py-2 text-right font-bold tabular-nums', manual && 'font-normal text-text-muted')}>
-                      {manual ? 'ไม่เข้าฐาน' : formatMoney(baseContribution(record))}
+                    <td className={cn('px-3 py-2 text-right font-bold tabular-nums', !counts && 'font-normal text-text-muted')}>
+                      {counts ? formatMoney(baseContribution(record)) : 'ไม่เข้าฐาน'}
                     </td>
                   </tr>
                   {expanded ? (

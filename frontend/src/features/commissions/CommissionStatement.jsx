@@ -42,6 +42,17 @@ function Row({ testId, op, label, hint, amount, tone, children, strong = false, 
   );
 }
 
+// Why a recipient's team row can read 0.00, derived ONLY from API fields (there is no suppression
+// flag): the company total is at or under the threshold, or -- when it cleared the bar -- a
+// hand-entered team commission (kind MANAGER) replaced the computed one. Returns null when the
+// amount is non-zero (nothing to explain) or the threshold is unknown (nothing to compare).
+function teamOverrideReason(summary) {
+  if (Number(summary.teamOverrideAmount) !== 0 || summary.teamOverrideThresholdBase == null) return null;
+  return Number(summary.companyCommissionableBase) <= Number(summary.teamOverrideThresholdBase)
+    ? 'ยอดรับทั้งบริษัทยังไม่ถึงเกณฑ์'
+    : 'แทนที่ด้วยรายการที่บันทึกเอง (ดูรายการปรับปรุง)';
+}
+
 /** The bands the base actually reached (commission != 0), as range · rate · amount. */
 function ReachedBands({ tiers }) {
   const reached = (tiers ?? []).filter((row) => nonZero(row.commission));
@@ -136,7 +147,12 @@ export function CommissionStatement({ summary, heading = 'ค่าคอมข�
             testId="statement-team-override"
             op="+"
             label="ค่าคอมทีม"
-            hint={`(ยอดรับทั้งบริษัท ${formatMoney(summary.companyCommissionableBase)} − ${formatMoney(summary.teamOverrideThresholdBase)}) × ${formatRate(summary.teamOverrideRatePercent)}`}
+            hint={(
+              <>
+                {`(ยอดรับทั้งบริษัท ${formatMoney(summary.companyCommissionableBase)} − ${formatMoney(summary.teamOverrideThresholdBase)}) × ${formatRate(summary.teamOverrideRatePercent)}`}
+                {teamOverrideReason(summary) ? <span className="mt-0.5 block font-bold text-text-secondary">{teamOverrideReason(summary)}</span> : null}
+              </>
+            )}
             amount={summary.teamOverrideAmount}
           />
         ) : null}

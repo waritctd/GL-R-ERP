@@ -27,6 +27,7 @@ export const WEIGHT_OPTIONS = [1, 2, 3];
  */
 export function WeightSegmented({
   label,
+  labelledBy,
   value,
   onChange,
   options = WEIGHT_OPTIONS,
@@ -43,6 +44,13 @@ export function WeightSegmented({
   }
 
   function handleKeyDown(event, index) {
+    // Busy / locked / read-only: swallow the key (so arrows do not scroll the page) but move NOTHING.
+    // Focus used to jump to the next segment before select() refused, leaving focus on one segment
+    // while another was checked.
+    if (disabled) {
+      if (['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp', 'Home', 'End', 'Enter', ' '].includes(event.key)) event.preventDefault();
+      return;
+    }
     let next = null;
     if (event.key === 'ArrowRight' || event.key === 'ArrowDown') next = Math.min(index + 1, options.length - 1);
     else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') next = Math.max(index - 1, 0);
@@ -64,14 +72,14 @@ export function WeightSegmented({
   return (
     <div
       role="radiogroup"
-      aria-label={label}
+      aria-label={labelledBy ? undefined : label}
+      aria-labelledby={labelledBy}
       aria-busy={busy ? 'true' : undefined}
       aria-invalid={invalid ? 'true' : undefined}
       aria-describedby={describedBy}
       className={cn(
         'inline-flex w-fit max-w-full divide-x divide-border-input rounded-md border-[1.5px] bg-surface',
         invalid ? 'border-danger' : 'border-border-input',
-        busy && 'opacity-80',
       )}
     >
       {options.map((option, index) => {
@@ -95,7 +103,10 @@ export function WeightSegmented({
               checked
                 ? 'bg-primary-bg text-primary hover:bg-primary-bg active:bg-primary-bg'
                 : 'bg-surface text-text-secondary hover:bg-surface-subtle active:bg-info-bg-alt',
-              'aria-disabled:cursor-not-allowed aria-disabled:opacity-55 aria-disabled:hover:bg-inherit aria-disabled:active:bg-inherit',
+              // A locked segment is dimmed; the one whose own save is in flight (busy) keeps its full
+              // selected tint so it reads as "working", not "locked" -- the caller adds the spinner.
+              'aria-disabled:cursor-not-allowed aria-disabled:hover:bg-inherit aria-disabled:active:bg-inherit',
+              !busy && 'aria-disabled:opacity-55',
             )}
           >
             {`×${option}`}

@@ -50,6 +50,12 @@ export function weightExplanation(record) {
   return null;
 }
 
+// Does this record put anything into the month's base? A rejected or voided receipt never does, and a
+// manual entry never does (it is added on top of the ladder, not run through it). The API gives the
+// status, so this is a display rule, not a computation.
+const NON_COUNTING_STATUSES = ['REJECTED', 'VOID'];
+export const countsTowardBase = (record) => !isManualKind(record?.kind) && !NON_COUNTING_STATUSES.includes(record?.status);
+
 // Display-only: what this receipt puts into the month's base. Rounded to satang per receipt, which
 // is why the ledger carries a note that the column's sum can differ from ฐานคิดค่าคอม by a few satang.
 export function baseContribution(record) {

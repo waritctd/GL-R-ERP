@@ -209,7 +209,11 @@ describe('weighting desk — ×1/×2/×3 segmented control per line (sales_manag
     await act(async () => { resolve({ pending: pendingDto({ 11: 3 }) }); });
   });
 
-  it('per-line saving state: only the line being saved is disabled, its siblings stay usable', async () => {
+  // Review fix (HIGH): two parallel item-weights writes to ONE entry race in the backend (no row
+  // lock) and the frozen effective weight can ignore a line, and the later response could overwrite
+  // the earlier one. So the WHOLE entry is locked while any of its lines is saving -- siblings and
+  // the bulk button included. (This replaces the earlier "only that line is disabled" test.)
+  it('locks the WHOLE entry while one line saves: sibling lines and the bulk button are disabled, and a click on a sibling sends nothing', async () => {
     let resolve;
     api.commissions.adjustItemWeights.mockImplementation(() => new Promise((r) => { resolve = r; }));
     await openDesk();
@@ -219,12 +223,97 @@ describe('weighting desk — ×1/×2/×3 segmented control per line (sales_manag
     await waitFor(() => {
       within(group(STOCK_A)).getAllByRole('radio').forEach((r) => expect(isDisabled(r)).toBe(true));
     });
-    within(group(STOCK_C)).getAllByRole('radio').forEach((r) => expect(isDisabled(r)).toBe(false));
+    within(group(STOCK_C)).getAllByRole('radio').forEach((r) => expect(isDisabled(r)).toBe(true));
+    expect(isDisabled(screen.getByRole('button', { name: 'สต็อกทั้งหมด ×2' }))).toBe(true);
+
+    fireEvent.click(radio(STOCK_C, '×2'));
+    fireEvent.click(screen.getByRole('button', { name: 'สต็อกทั้งหมด ×2' }));
+    expect(api.commissions.adjustItemWeights).toHaveBeenCalledTimes(1);
+    expect(isChecked(radio(STOCK_C, '×2'))).toBe(false); // no optimistic flip either
 
     await act(async () => { resolve({ pending: pendingDto({ 11: 2 }) }); });
     await waitFor(() => {
-      within(group(STOCK_A)).getAllByRole('radio').forEach((r) => expect(isDisabled(r)).toBe(false));
+      within(group(STOCK_C)).getAllByRole('radio').forEach((r) => expect(isDisabled(r)).toBe(false));
     });
+    expect(isDisabled(screen.getByRole('button', { name: 'สต็อกทั้งหมด ×2' }))).toBe(false);
+  });
+
+  it('a saving line is visibly different from a locked one: it keeps its selected tint (aria-checked) and says "กำลังบันทึก…"', async () => {
+    let resolve;
+    api.commissions.adjustItemWeights.mockImplementation(() => new Promise((r) => { resolve = r; }));
+    await openDesk();
+    // The import line is locked and says nothing about saving.
+    expect(within(group(IMPORT_B).closest('li')).queryByText('กำลังบันทึก…')).toBeNull();
+
+    fireEvent.click(radio(STOCK_A, '×2'));
+
+    expect(await within(group(STOCK_A).closest('li')).findByText('กำลังบันทึก…')).not.toBeNull();
+    expect(isChecked(radio(STOCK_A, '×2'))).toBe(true);
+    expect(group(STOCK_A).getAttribute('aria-busy')).toBe('true');
+    expect(group(IMPORT_B).getAttribute('aria-busy')).toBeNull();
+
+    await act(async () => { resolve({ pending: pendingDto({ 11: 2 }) }); });
+  });
+
+  // Review fix (MEDIUM): focus used to move to the next segment BEFORE select() refused the change,
+  // leaving focus on the old segment while the new one was checked.
+  it('keyboard during a save: focus stays put and nothing is selected or sent', async () => {
+    let resolve;
+    api.commissions.adjustItemWeights.mockImplementation(() => new Promise((r) => { resolve = r; }));
+    await openDesk();
+    fireEvent.click(radio(STOCK_A, '×2'));
+    await waitFor(() => expect(isDisabled(radio(STOCK_A, '×2'))).toBe(true));
+
+    radio(STOCK_A, '×2').focus();
+    fireEvent.keyDown(radio(STOCK_A, '×2'), { key: 'ArrowRight' });
+
+    expect(document.activeElement).toBe(radio(STOCK_A, '×2'));
+    expect(isChecked(radio(STOCK_A, '×3'))).toBe(false);
+    expect(api.commissions.adjustItemWeights).toHaveBeenCalledTimes(1);
+
+    await act(async () => { resolve({ pending: pendingDto({ 11: 2 }) }); });
+  });
+
+  it('keyboard on a locked (import) line: arrow keys do not move focus off the checked segment', async () => {
+    await openDesk();
+    radio(IMPORT_B, '×1').focus();
+    fireEvent.keyDown(radio(IMPORT_B, '×1'), { key: 'ArrowRight' });
+    expect(document.activeElement).toBe(radio(IMPORT_B, '×1'));
+    expect(isChecked(radio(IMPORT_B, '×1'))).toBe(true);
+    expect(api.commissions.adjustItemWeights).not.toHaveBeenCalled();
+  });
+
+  it('"สต็อกทั้งหมด ×2" never LOWERS a line that is already ×3: it is skipped', async () => {
+    api.commissions.pendingApproval.mockResolvedValue({ commissions: [pendingDto({ 11: 3 })] });
+    echoAdjust();
+    await openDesk();
+
+    fireEvent.click(screen.getByRole('button', { name: 'สต็อกทั้งหมด ×2' }));
+
+    await waitFor(() => expect(api.commissions.adjustItemWeights).toHaveBeenCalledTimes(1));
+    expect(api.commissions.adjustItemWeights.mock.calls[0][1].lines).toEqual([{ itemId: 13, weightMultiplier: 2 }]);
+  });
+
+  // Review fix (MEDIUM-LOW): the month table and the picked rep's statement were stale after a
+  // weight change, because only the pending entry was refreshed.
+  it("after a weight change, reloads the month's records and the picked rep's statement", async () => {
+    echoAdjust();
+    api.commissions.reps.mockResolvedValue({ reps: [{ id: 10, name: 'พนักงานขาย ทดสอบ' }] });
+    api.commissions.monthlySummary.mockResolvedValue({ summary: null });
+    renderAt(salesManagerUser, '/commissions');
+    await screen.findByText('INV-PEND-0701');
+    const picker = await screen.findByLabelText('เลือกพนักงานขาย');
+    await within(picker).findByText('พนักงานขาย ทดสอบ');
+    fireEvent.change(picker, { target: { value: '10' } });
+    await waitFor(() => expect(api.commissions.monthlySummary).toHaveBeenCalled());
+    const listCalls = api.commissions.list.mock.calls.length;
+    const summaryCalls = api.commissions.monthlySummary.mock.calls.length;
+
+    fireEvent.click(radio(STOCK_A, '×2'));
+
+    await waitFor(() => expect(api.commissions.list.mock.calls.length).toBeGreaterThan(listCalls));
+    await waitFor(() => expect(api.commissions.monthlySummary.mock.calls.length).toBeGreaterThan(summaryCalls));
+    expect(api.commissions.monthlySummary).toHaveBeenLastCalledWith(expect.objectContaining({ salesRepId: 10 }));
   });
 
   it('an import line (qtyFromStock 0) is locked at ×1 and says "ของสั่ง — ไม่คิด 2x"; clicking it never calls the API', async () => {
@@ -345,7 +434,8 @@ describe('record-level weight (records with NO deal lines) uses the same segment
     await screen.findByText('INV-LEGACY-601');
     fireEvent.click(screen.getByRole('button', { name: 'แก้ไขค่าหัก' }));
 
-    const weightGroup = await screen.findByRole('radiogroup', { name: 'น้ำหนักฐานคอม' });
+    // Named through aria-labelledby -> the panel's visible label (id record-weight-label).
+    const weightGroup = await screen.findByRole('radiogroup', { name: 'น้ำหนักฐานคอมของรายการนี้' });
     // Inside the edit panel only: the page's own rep picker is (legitimately) a combobox.
     const panel = screen.getByRole('heading', { name: /แก้ไขข้อมูลใบกำกับ/ }).closest('section');
     expect(within(panel).queryAllByRole('combobox')).toHaveLength(0);
@@ -363,5 +453,23 @@ describe('record-level weight (records with NO deal lines) uses the same segment
       weightMultiplier: 2,
       reason: 'ปรับน้ำหนักตามสต็อก',
     }));
+  });
+
+  it('the record-level control is disabled while the save is in flight', async () => {
+    let resolve;
+    api.commissions.updateDeductions.mockImplementation(() => new Promise((r) => { resolve = r; }));
+    renderAt(salesManagerUser, '/commissions');
+    await screen.findByText('INV-LEGACY-601');
+    fireEvent.click(screen.getByRole('button', { name: 'แก้ไขค่าหัก' }));
+    const weightGroup = await screen.findByRole('radiogroup', { name: 'น้ำหนักฐานคอมของรายการนี้' });
+    fireEvent.change(screen.getByLabelText(/เหตุผลในการแก้ไข/), { target: { value: 'ปรับ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+
+    await waitFor(() => expect(api.commissions.updateDeductions).toHaveBeenCalled());
+    within(weightGroup).getAllByRole('radio').forEach((r) => expect(isDisabled(r)).toBe(true));
+    fireEvent.click(within(weightGroup).getByRole('radio', { name: '×3' }));
+    expect(isChecked(within(weightGroup).getByRole('radio', { name: '×3' }))).toBe(false);
+
+    await act(async () => { resolve({}); });
   });
 });

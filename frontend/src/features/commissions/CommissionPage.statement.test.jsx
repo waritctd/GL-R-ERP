@@ -238,7 +238,10 @@ describe('rep statement — "ค่าคอมของฉัน" builds the to
     expect(text(team)).toContain('(ยอดรับทั้งบริษัท ฿9,500,000.00 − ฿3,000,000.00) × 0.075%');
   });
 
-  it('keeps the ค่าคอมทีม row for a recipient whose company total is below the threshold (amount 0, base non-null)', async () => {
+  // Review fix (MEDIUM): a 0.00 team row needs a reason, derived ONLY from API fields (the API has
+  // no suppression flag): company base <= threshold means the company total is under the bar;
+  // otherwise a 0 amount with a cleared bar means a hand-entered team commission replaced it.
+  it('a recipient whose company total is BELOW the threshold: row stays, amount 0, with "ยอดรับทั้งบริษัทยังไม่ถึงเกณฑ์"', async () => {
     api.commissions.monthlySummary.mockResolvedValue({
       summary: summary({
         teamOverrideAmount: 0,
@@ -251,6 +254,39 @@ describe('rep statement — "ค่าคอมของฉัน" builds the to
     const team = await screen.findByTestId('statement-team-override');
     expect(text(team)).toContain('฿0.00');
     expect(text(team)).toContain('฿2,500,000.00');
+    expect(text(team)).toContain('ยอดรับทั้งบริษัทยังไม่ถึงเกณฑ์');
+    expect(text(team)).not.toContain('แทนที่ด้วยรายการที่บันทึกเอง');
+  });
+
+  it('a recipient above the threshold whose amount is still 0: "แทนที่ด้วยรายการที่บันทึกเอง (ดูรายการปรับปรุง)"', async () => {
+    api.commissions.monthlySummary.mockResolvedValue({
+      summary: summary({
+        teamOverrideAmount: 0,
+        companyCommissionableBase: 9500000,
+        teamOverrideThresholdBase: 3000000,
+        teamOverrideRatePercent: 0.075,
+      }),
+    });
+    await openAugust();
+    const team = await screen.findByTestId('statement-team-override');
+    expect(text(team)).toContain('฿0.00');
+    expect(text(team)).toContain('แทนที่ด้วยรายการที่บันทึกเอง (ดูรายการปรับปรุง)');
+    expect(text(team)).not.toContain('ยังไม่ถึงเกณฑ์');
+  });
+
+  it('a recipient above the threshold WITH an amount: no reason line at all', async () => {
+    api.commissions.monthlySummary.mockResolvedValue({
+      summary: summary({
+        teamOverrideAmount: 4875,
+        companyCommissionableBase: 9500000,
+        teamOverrideThresholdBase: 3000000,
+        teamOverrideRatePercent: 0.075,
+      }),
+    });
+    await openAugust();
+    const team = await screen.findByTestId('statement-team-override');
+    expect(text(team)).not.toContain('ยังไม่ถึงเกณฑ์');
+    expect(text(team)).not.toContain('แทนที่ด้วยรายการที่บันทึกเอง');
   });
 
   it('WRONG-WAY: a rep who is not an override recipient never sees ค่าคอมทีม, even if a stray teamOverrideAmount arrives', async () => {
@@ -431,6 +467,48 @@ describe('rep receipt ledger — where each figure comes from', () => {
       expect(chainText).toContain(label);
       expect(chainText).toContain(value);
     });
+  });
+});
+
+describe('rep receipt ledger — a rejected or void receipt puts nothing into the base', () => {
+  const rejected = saleRecord({
+    id: 601,
+    status: 'REJECTED',
+    commissionableBase: 1000000,
+    weightMultiplier: 2,
+    invoiceDetails: invoiceDetails({ id: 601, invoiceNumber: 'INV-REJECTED-601' }),
+  });
+  const voided = saleRecord({
+    id: 602,
+    status: 'VOID',
+    commissionableBase: 1000000,
+    weightMultiplier: 2,
+    invoiceDetails: invoiceDetails({ id: 602, invoiceNumber: 'INV-VOID-602' }),
+  });
+  const live = saleRecord({ id: 603, status: 'SUBMITTED', commissionableBase: 1000000, invoiceDetails: invoiceDetails({ id: 603, invoiceNumber: 'INV-LIVE-603' }) });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.commissions.list.mockResolvedValue({ commissions: [rejected, voided, live] });
+    api.commissions.monthlySummary.mockResolvedValue({ summary: summary() });
+  });
+
+  it.each([[601], [602]])('receipt %s shows ไม่เข้าฐาน in its row and chain, never the positive contribution a x2 weight would give (฿2,000,000.00)', async (id) => {
+    await openAugust();
+    const rowEl = await screen.findByTestId(`receipt-row-${id}`);
+    expect(text(rowEl)).toContain('ไม่เข้าฐาน');
+    expect(text(rowEl)).not.toContain('฿2,000,000.00');
+    fireEvent.click(within(rowEl).getByRole('button', { name: 'ดูรายละเอียดการคำนวณ' }));
+    const chain = await screen.findByTestId(`receipt-chain-${id}`);
+    expect(text(chain)).toContain('ไม่เข้าฐาน');
+    expect(text(chain)).not.toContain('฿2,000,000.00');
+  });
+
+  it('a live (submitted) receipt still shows its contribution', async () => {
+    await openAugust();
+    const rowEl = await screen.findByTestId('receipt-row-603');
+    expect(text(rowEl)).not.toContain('ไม่เข้าฐาน');
+    expect(text(rowEl)).toContain('฿1,000,000.00');
   });
 });
 

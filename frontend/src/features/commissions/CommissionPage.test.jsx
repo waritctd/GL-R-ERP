@@ -790,7 +790,10 @@ describe('CommissionPage — รออนุมัติ pending-approval view',
     expect(entry.textContent).toContain('฿4,800,000.00');
     expect(screen.getByText(/น้ำหนักรวม/)).not.toBeNull();
     expect(screen.getByText('1.60')).not.toBeNull();
-    expect(screen.getByText(/ค่าคอมที่คำนวณได้/)).not.toBeNull();
+    // Relabelled (review fix): it is an ESTIMATE of the month's increment, and the weighted base
+    // -- the figure the manager is changing -- is the headline of the card, not this one.
+    expect(screen.getByText('ค่าคอมโดยประมาณ (ส่วนเพิ่มของเดือน)')).not.toBeNull();
+    expect(screen.queryByText(/ค่าคอมที่คำนวณได้/)).toBeNull();
     expect(screen.getByText(/฿95,000\.50/)).not.toBeNull();
   });
 

@@ -4,6 +4,7 @@ import { commissionStatusLabel as statusInfo, formatMoney, formatThaiDate } from
 import {
   MANUAL_KIND_LABELS,
   baseContribution,
+  countsTowardBase,
   describeCommissionWeight,
   formatWeight,
   isManualKind,
@@ -97,7 +98,7 @@ export function ReceiptChain({ record, compact = false }) {
         <Line op="÷" label="แยกภาษีมูลค่าเพิ่ม (VAT)" value="" muted />
         <Line op="=" label="ยอดไม่รวม VAT" value={formatMoney(record.commissionableBase)} strong />
         {showWeight ? <Line op="×" label="น้ำหนัก" value={formatWeight(weight)} /> : null}
-        <Line op="=" label="ที่เข้าฐาน" value={formatMoney(baseContribution(record))} strong />
+        <Line op="=" label="ที่เข้าฐาน" value={countsTowardBase(record) ? formatMoney(baseContribution(record)) : 'ไม่เข้าฐาน'} strong />
       </dl>
       {explanation ? <p className="m-0 text-sm text-text-muted">{explanation}</p> : null}
       <div className="grid grid-cols-2 gap-3 text-sm text-text-muted sm:grid-cols-4">
