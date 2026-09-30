@@ -108,7 +108,33 @@ public final class PricingDecisionRequests {
         BigDecimal sellingPriceOverride, boolean clearSellingPriceOverride,
         BigDecimal discountPct, boolean clearDiscountPct,
         BigDecimal specialPriceSqm, boolean clearSpecialPriceSqm,
-        BigDecimal directNetPrice, boolean clearDirectNetPrice) {
+        BigDecimal directNetPrice, boolean clearDirectNetPrice,
+        // Slice 1 of the stock-line feature (V194): the CEO's ราคาตั้ง for a STOCK line (IN_THAILAND /
+        // IN_TRANSIT). Stock lines have no cost and therefore no formula price, so the CEO types it;
+        // it becomes the item's list_unit_price and the decision's single price mode then applies
+        // (NET: net = list x (1 - discount%)). Deliberately NOT a reuse of sellingPriceOverride:
+        // that field demands a reason on every touch, is only consulted under NET (ignored by
+        // SPECIAL_SQM/DIRECT_NET, so the number approve() gates on would not be the number typed),
+        // and never writes list_unit_price. Set-only: a stock line cannot be un-priced, and sending
+        // this for an IMPORT line must be refused (list_unit_price stays server-maintained for
+        // costed lines - see the owner correction of 2026-09-19 above).
+        // TEST-FIRST SCAFFOLDING: the field exists so the tests compile; nothing reads it yet.
+        BigDecimal listUnitPrice) {
+        /** The pre-stock-line shape - the 12-field constructor that existed before listUnitPrice
+         * was appended. Defaults it to null (leave untouched). */
+        public UpdatePricingDecisionItemRequest(
+            long pricingDecisionItemId, BigDecimal marginPct,
+            BigDecimal minimumSellingPrice, String decisionNote,
+            BigDecimal sellingPriceOverride, boolean clearSellingPriceOverride,
+            BigDecimal discountPct, boolean clearDiscountPct,
+            BigDecimal specialPriceSqm, boolean clearSpecialPriceSqm,
+            BigDecimal directNetPrice, boolean clearDirectNetPrice) {
+            this(pricingDecisionItemId, marginPct, minimumSellingPrice, decisionNote,
+                sellingPriceOverride, clearSellingPriceOverride,
+                discountPct, clearDiscountPct, specialPriceSqm, clearSpecialPriceSqm,
+                directNetPrice, clearDirectNetPrice, null);
+        }
+
         /** The pre-Phase-2 shape (no price-mode fields at all) — every call site before this
          * feature, including ~40 integration tests across other packages that construct this
          * positionally. Defaults every new field to null/false (COALESCE "unchanged"/"do not
