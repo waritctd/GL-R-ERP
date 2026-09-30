@@ -427,6 +427,7 @@ describe('mock dealQuotations.createReorder -- GLA-74 part 1', () => {
     const { project } = await api.customers.createProject(customer.id, { name: 'โครงการดีลอื่น' });
     const { contact } = await api.customers.createContact(customer.id, { name: 'ผู้สั่งซื้อ ทดสอบดีลอื่น' });
     const { ticket: otherTicket } = await api.tickets.create({
+      entryChannel: 'DESIGNER_LED',
       title: 'ดีลอื่น ทดสอบ GLA-74', priority: 'NORMAL', customerName: customer.name,
       customerId: customer.id, projectId: project.id, contactId: contact.id,
       items: [{ brand: 'SCG', model: 'Tile Mock', qty: 10, currency: 'THB' }],
@@ -857,6 +858,7 @@ describe('mock dealQuotations ผู้สั่งซื้อ snapshot -- owne
     });
     const { project } = await api.customers.createProject(customer.id, { name: 'โครงการไม่มีผู้สั่งซื้อ' });
     const { ticket: noContactTicket } = await api.tickets.create({
+      entryChannel: 'DESIGNER_LED',
       title: 'ดีลไม่มีผู้สั่งซื้อ ทดสอบ', priority: 'NORMAL', customerName: customer.name,
       customerId: customer.id, projectId: project.id,
       items: [{ brand: 'SCG', model: 'Tile Mock', qty: 10, currency: 'THB' }],
