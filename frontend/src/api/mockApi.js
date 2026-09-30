@@ -11003,6 +11003,64 @@ export const api = {
     },
   },
 
+  // Mirrors ImportDealService / ImportDealDtos — GET /api/import/deals/{id}, the import-only
+  // per-deal view. The DTO is built FIELD BY FIELD from the mock ticket (never a spread of the
+  // ticket item), so a price/cost/margin/weighting field the mock item happens to hold can never
+  // leak through — the same "fresh projection, nothing to forget to strip" construction the Java
+  // side uses. Authz here is an APPROXIMATION of the service (NOT authoritative — real coverage is
+  // ImportDealAuthzIntegrationTest): role import/ceo checked FIRST; import is then row-scoped to
+  // the SAME set the import worklist (tickets.list) returns, via importListScopeIncludes, and a
+  // deal outside it or missing both answer 403 (no existence oracle); ceo is unscoped, so a
+  // missing deal is an ordinary 404.
+  importDeals: {
+    async get(ticketId) {
+      const user = hasRole('import', 'ceo');
+      const raw = db.tickets.find((t) => t.id === Number(ticketId));
+      if (user.role === 'import' && !(raw && importListScopeIncludes(raw))) {
+        fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      }
+      if (!raw) fail('ไม่พบดีลนี้', 404);
+      // Same display-only fallback tickets.get() applies: ticket_item stays empty until order
+      // confirmation, so a pricing-phase deal shows the live quotation's lines instead.
+      let lines = raw.items ?? [];
+      if (lines.length === 0) lines = mockPricingChainFallbackItems(raw.id);
+      const project = raw.projectId ? mockProjects.find((p) => p.id === raw.projectId) : null;
+      return delay({
+        deal: {
+          id: raw.id,
+          code: raw.code,
+          title: raw.title,
+          status: raw.status,
+          lifecycle: raw.lifecycle ?? 'ACTIVE',
+          salesStage: raw.salesStage,
+          customerName: raw.customerName ?? null,
+          projectName: project?.name ?? raw.projectName ?? null,
+          createdByName: raw.createdByName ?? null,
+          fulfillmentStatus: raw.fulfillmentStatus ?? null,
+          items: lines.map((i) => ({
+            id: i.id,
+            brand: i.brand ?? null,
+            model: i.model ?? null,
+            color: i.color ?? null,
+            texture: i.texture ?? null,
+            size: i.size ?? null,
+            code: i.catalogProductCode ?? null,
+            qty: i.qty ?? null,
+            qtySqm: i.qtySqm ?? null,
+            unit: i.unitBasis ?? null,
+            qtyDelivered: i.qtyDelivered ?? null,
+          })),
+          // ImportRequestService#list for import/ceo is unrestricted.
+          importRequests: mockImportRequestsForTicket(raw.id),
+          // ONLY the human comment thread — the raw event feed quotes prices in its notes.
+          comments: (raw.events ?? [])
+            .filter((e) => e.kind === 'COMMENTED')
+            .map((e) => ({ id: e.id, actorName: e.actorName, message: e.message, createdAt: e.createdAt })),
+        },
+      });
+    },
+  },
+
   // Mirrors ImportRequestController's PLURAL routes — the STORED ใบขอซื้อ aggregate (V184, PR-A
   // #1008 / PR-B, GLA-100/105). Role gates mirror ImportRequestService (see the helpers just above
   // requireDealEntry). PDF rendering is a "not supported in mock mode" stub, same as the legacy

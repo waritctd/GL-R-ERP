@@ -220,6 +220,12 @@ export const API_ROUTES = {
     file: (id, copy) => `/api/import-requests/${id}/file${copy ? `?copy=${encodeURIComponent(copy)}` : ''}`,
     requiredByNote: (ticketId) => `/api/tickets/${ticketId}/required-by-note`,
   },
+  // The per-deal IMPORT view (ImportDealController) — the import-only projection of ONE deal
+  // (factories, per-factory ใบขอซื้อ rows, items WITHOUT prices, read-only delivery status, the
+  // COMMENTED thread). import is refused the whole-deal GET /api/tickets/{id}; this replaces it.
+  importDeals: {
+    get: (ticketId) => `/api/import/deals/${ticketId}`,
+  },
   // Mirrors RemainingInvoiceController — the STORED ใบแจ้งหนี้ส่วนที่เหลือ aggregate (V188,
   // GLA-99 step 2). One row per (deal, issued document), DRAFT -> ISSUED -> SUPERSEDED, minted on
   // the shared sales.document_sequence (doc_type AR_GLR, format GLR<yy><5-digit seq>-<version>).

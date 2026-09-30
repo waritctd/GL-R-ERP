@@ -134,6 +134,9 @@ export const queryKeys = {
   // param (string) or an already-numeric field.
   storedImportRequests: (ticketId) => ['importRequests', 'byTicket', ticketId == null ? ticketId : Number(ticketId)],
   storedImportRequestDetail: (id) => ['importRequests', 'detail', id],
+  // The import-only per-deal view (GET /api/import/deals/{id}). Number() for the same route-param
+  // string vs numeric-field reason as ticketDetail above.
+  importDeal: (ticketId) => ['importDeal', Number(ticketId)],
   ticketAttachments: (id) => ['tickets', 'attachments', id],
   // Deal tracking (V83, Slice B1/B2 "kill the weekly report" — handoff 103).
   ticketActivities: (id) => ['tickets', 'activities', id],

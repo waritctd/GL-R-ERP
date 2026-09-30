@@ -233,7 +233,6 @@ const SERVER_ONLY = {
   'GET /api/deal-quotations/{}/items/{}/picture': 'GLA-75 quotation item pictures (V170), built BACKEND-FIRST: the per-item picture endpoints landed before the quotation editor UI that calls them (a separate frontend branch). Gated like editing / viewing the quotation and covered by DealQuotationPictureIntegrationTest. LIVE, not dead — delete this entry when hrApi.js calls it.',
   'POST /api/deal-quotations/{}/confirm-order': 'Quotation ↔ deal linking slice 1 (IA §7, 2026-09-30), built BACKEND-FIRST: the real name of GLA-136\'s promote-to-deal, which DealQuotationController maps to the SAME handler as a one-release alias. hrApi.js still calls …/promote-to-deal (identical behaviour) until the slice-1 frontend switches it over. Covered by DealQuotationConfirmOrderIntegrationTest and DealQuotationControllerTest. LIVE, not dead — delete this entry when hrApi.js calls it.',
 
-  'GET /api/import/deals/{}': 'Per-deal IMPORT view (ImportDealController), built BACKEND-FIRST: the import-only projection of one deal (factories, per-factory ใบขอซื้อ rows, items without prices, read-only delivery status, comment thread) that replaces import reading the whole deal via GET /api/tickets/{}. The page that calls it lands in a later slice on this branch; import is refused GET /api/tickets/{} in the same change. Role/row-scope covered by ImportDealAuthzIntegrationTest. LIVE, not dead — delete this entry when hrApi.js calls it.',
 
   // ── Formerly dormant, now GONE: ProcurementController ─────────────────────
   // Eight entries stood here — all of ProcurementController's mappings. PR #683 (ebaf6888,
@@ -594,6 +593,13 @@ const UNREACHABLE_FROM_UI = new Set([
   // (ImportRequestController#getStored) for completeness/future callers, same reasoning as the
   // other single-row GETs already in this list (deposit-notices, factory-quotes, ...).
   'GET /api/import-requests/{}',
+  // GET /api/import/deals/{} (ImportDealController) is WIRED in hrApi (importDeals.get) and mockApi
+  // but no screen calls it YET: the per-deal import page that consumes it is the next slice on
+  // feat/import-own-page (backend -> API layer -> UI, in that order). TEMPORARY by construction --
+  // the stale-entry test below fails the moment a component calls api.importDeals.get, which is
+  // the prompt to delete this line. Not a "dead endpoint": import is already refused the
+  // whole-deal GET /api/tickets/{} in favour of it.
+  'GET /api/import/deals/{}',
   // 'GET /api/leave/policy-document' left this list on 2026-08-14: LeavePolicyDocumentPage.jsx
   // calls policyDocumentAvailable (the HEAD probe the GET mapping answers) and
   // downloadPolicyDocument, so a screen reaches it again for the first time since the reader bar
