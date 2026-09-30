@@ -210,6 +210,96 @@ class FactoryContactFlowIntegrationTest extends Cr1FixtureSupport {
     }
 
     // ═════════════════════════════════════════════════════════════════════════════════════════
+    // round 2 — review fixes
+    // ═════════════════════════════════════════════════════════════════════════════════════════
+
+    /** A price revision is a NEW quote row: it must keep who contacted the factory, when, and the note. */
+    @Test
+    void aRevisedReceiveKeepsTheContactedFieldsOnTheNewRevisionRow() {
+        long prId = requestInImportReview(line("Tile A", "Factory A", 10, null, null, null, null));
+        FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(prId, importActor), "Factory A");
+        LocalDate yesterday = todayBangkok().minusDays(1);
+        factoryQuoteService.markContacted(draft.id(), new MarkFactoryContactedRequest(yesterday, "โทรคุณ Marco"), importActor);
+        FactoryQuoteDto first = factoryQuoteService.receive(draft.id(), receiveAll(draft, "THB", "PER_PIECE"), importActor);
+
+        FactoryQuoteDto revised = factoryQuoteService.receive(first.id(), receiveAll(first, "THB", "PER_PIECE"), importActor);
+
+        assertThat(revised.id()).isNotEqualTo(first.id());
+        assertThat(revised.current()).isTrue();
+        assertThat(revised.contactedOn()).isEqualTo(yesterday);
+        assertThat(revised.contactedNote()).isEqualTo("โทรคุณ Marco");
+        assertThat(revised.contactedBy()).isEqualTo(importUserId);
+        assertThat(revised.contactedAt()).isNotNull();
+    }
+
+    /** Reissue carry-forward copies READY_FOR_COSTING quotes onto the revision: contacted fields ride along. */
+    @Test
+    void carryForwardCopiesTheContactedFields() {
+        long fromPr = requestInImportReview(line("Tile A", "Factory A", 10, null, null, null, null));
+        FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(fromPr, importActor), "Factory A");
+        LocalDate yesterday = todayBangkok().minusDays(1);
+        factoryQuoteService.markContacted(draft.id(), new MarkFactoryContactedRequest(yesterday, "note"), importActor);
+        FactoryQuoteDto received = factoryQuoteService.receive(draft.id(), receiveAll(draft, "THB", "PER_PIECE"), importActor);
+        factoryQuoteService.markReadyForCosting(received.id(), importActor);
+        long toPr = pricingRequestService.createDraft(ticketId,
+            request(line("Tile A", "Factory A", 10, null, null, null, null)), salesActor).summary().id();
+        long fromItem = received.items().get(0).pricingRequestItemId();
+        long toItem = pricingRequestService.get(toPr, salesActor).items().get(0).id();
+
+        List<Long> copied = factoryQuoteRepository.copyReadyQuotesToRevision(fromPr, toPr, Map.of(fromItem, toItem), importUserId);
+
+        assertThat(copied).hasSize(1);
+        FactoryQuoteDto copy = factoryQuoteRepository.find(copied.get(0)).orElseThrow();
+        assertThat(copy.contactedOn()).isEqualTo(yesterday);
+        assertThat(copy.contactedNote()).isEqualTo("note");
+        assertThat(copy.contactedBy()).isEqualTo(importUserId);
+        assertThat(copy.contactedAt()).isNotNull();
+    }
+
+    /** The CEO who performs the step is not told about their own action; another CEO-role user still is. */
+    @Test
+    void ceoMarkingContactedDoesNotNotifyThemselves_butAnotherCeoIsStillNotified() {
+        long otherCeoId = createSecondCeo();
+        long prId = requestInImportReview(line("Tile A", "Factory A", 10, null, null, null, null));
+        FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(prId, ceoActor), "Factory A");
+        assertThat(notificationCount(ceoUserId, PricingRequestEventKind.FACTORY_EMAIL_READY))
+            .as("generateDrafts by the CEO must not notify that CEO").isZero();
+        assertThat(notificationCount(otherCeoId, PricingRequestEventKind.FACTORY_EMAIL_READY)).isEqualTo(1L);
+
+        factoryQuoteService.markContacted(draft.id(), new MarkFactoryContactedRequest(todayBangkok(), null), ceoActor);
+
+        assertThat(notificationCount(ceoUserId, PricingRequestEventKind.FACTORY_CONTACTED)).isZero();
+        assertThat(notificationCount(otherCeoId, PricingRequestEventKind.FACTORY_CONTACTED)).isEqualTo(1L);
+    }
+
+    /** Control: import marking contacted still notifies the CEO. */
+    @Test
+    void importMarkingContactedStillNotifiesTheCeo() {
+        long prId = requestInImportReview(line("Tile A", "Factory A", 10, null, null, null, null));
+        FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(prId, importActor), "Factory A");
+
+        factoryQuoteService.markContacted(draft.id(), new MarkFactoryContactedRequest(todayBangkok(), null), importActor);
+
+        assertThat(notificationCount(ceoUserId, PricingRequestEventKind.FACTORY_CONTACTED)).isEqualTo(1L);
+    }
+
+    private long notificationCount(long employeeId, String type) {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM hr.notification WHERE employee_id = :e AND type = :t",
+            Map.of("e", employeeId, "t", type), Long.class);
+    }
+
+    private long createSecondCeo() {
+        th.co.glr.hr.employee.EmployeeRepository employees = new th.co.glr.hr.employee.EmployeeRepository(
+            jdbc, new th.co.glr.hr.employee.EmployeeReferenceRepository(jdbc),
+            new th.co.glr.hr.employee.EmployeeCodeGenerator(jdbc));
+        return employees.create(new th.co.glr.hr.employee.UpsertEmployeeRequest(
+            null, null, "ผู้บริหาร คนที่สอง", null, null, null, null, null, null, null,
+            "ceo2-cr1@glr.co.th", null, "MD", "ผู้บริหาร", "ผู้บริหาร",
+            "กรรมการผู้จัดการ", null, null, "ACT", new java.math.BigDecimal("30000"),
+            null, null, null, null, null, null, null));
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════════════════════
     // B — currency + price unit locked from the sales request
     // ═════════════════════════════════════════════════════════════════════════════════════════
 

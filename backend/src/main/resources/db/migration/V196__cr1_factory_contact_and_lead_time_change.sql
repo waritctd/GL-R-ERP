@@ -21,7 +21,10 @@ UPDATE sales.factory_quote
        contacted_at = COALESCE(email_sent_at, requested_at, received_at, created_at),
        contacted_by = sent_by
  WHERE status <> 'DRAFT'
-   AND contacted_on IS NULL;
+   AND contacted_on IS NULL
+   -- a DRAFT that was later CANCELLED/SUPERSEDED never had a sent/requested/received time, and was
+   -- never contacted: leave it NULL rather than invent a date from created_at.
+   AND COALESCE(email_sent_at, requested_at, received_at) IS NOT NULL;
 
 COMMENT ON COLUMN sales.factory_quote.contacted_on IS 'Date (Asia/Bangkok) import or the CEO contacted the factory. NULL = not contacted yet (DRAFT). Final: there is no undo.';
 COMMENT ON COLUMN sales.factory_quote.contacted_at IS 'When the contacted step was recorded in the system.';
@@ -52,6 +55,8 @@ CREATE TABLE sales.lead_time_change (
     decided_at          TIMESTAMPTZ,
     decision_reason     TEXT,
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- optimistic concurrency: bumped on every import edit; approve/reject must quote the version they saw
+    version             INTEGER NOT NULL DEFAULT 1,
     CONSTRAINT chk_lead_time_change_status CHECK (status IN ('PENDING', 'APPROVED', 'REJECTED', 'WITHDRAWN'))
 );
 
@@ -72,3 +77,14 @@ CREATE TABLE sales.lead_time_change_line (
 
 COMMENT ON TABLE sales.lead_time_change IS 'CR-1: import-raised request to change the lead time of a factory quote''s lines; decided once, as a whole, by the owning rep or a sales manager. Never blocks the pricing chain.';
 COMMENT ON TABLE sales.lead_time_change_line IS 'CR-1: one ticked line of a lead-time change, with the old value snapshotted at request time.';
+
+-- 4) The IR's lead time comes from the deal's current QUOTATION items (owner ruling B-R4/B-R5). The
+--    quotation-derived value the IR was built from is stored beside the live lead time so that a
+--    revise can tell "the quotation changed" (take the new value) from "import edited it by hand"
+--    (keep the manual value). NULL = built from the country default, or created before this column.
+ALTER TABLE sales.import_request
+    ADD COLUMN derived_lead_time_min_days SMALLINT,
+    ADD COLUMN derived_lead_time_max_days SMALLINT;
+
+COMMENT ON COLUMN sales.import_request.derived_lead_time_min_days IS 'Min lead time (days) derived from the deal''s current quotation items when this IR was built. NULL = country default or pre-V196. Lets revise tell a changed quotation from a manual lead-time edit.';
+COMMENT ON COLUMN sales.import_request.derived_lead_time_max_days IS 'Max lead time (days) derived from the deal''s current quotation items when this IR was built. See derived_lead_time_min_days.';

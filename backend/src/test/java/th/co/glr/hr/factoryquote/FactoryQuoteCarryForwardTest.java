@@ -179,6 +179,45 @@ class FactoryQuoteCarryForwardTest {
             .containsExactly(Map.entry(1L, 11L));
     }
 
+    /**
+     * CR-1: the currency Sales asked the factory to quote in is part of what a factory price means.
+     * A revision that changes ONLY EUR -> USD must not carry the EUR quotes forward as ready.
+     */
+    @Test
+    void aChangedRequestedCurrency_makesTheListsInequivalent_evenWhenEveryOtherFieldMatches() {
+        assertThat(FactoryQuoteCarryForward.equivalentItemMapping(
+            List.of(itemWithTerms(1L, "EUR", UnitBasis.PER_SQM)),
+            List.of(itemWithTerms(11L, "USD", UnitBasis.PER_SQM)))).isNull();
+    }
+
+    /** Likewise a revision that changes ONLY the requested price unit basis. */
+    @Test
+    void aChangedRequestedPriceUnitBasis_makesTheListsInequivalent_evenWhenEveryOtherFieldMatches() {
+        assertThat(FactoryQuoteCarryForward.equivalentItemMapping(
+            List.of(itemWithTerms(1L, "EUR", UnitBasis.PER_SQM)),
+            List.of(itemWithTerms(11L, "EUR", UnitBasis.PER_PIECE)))).isNull();
+    }
+
+    /** Control: identical terms still carry forward (and two legacy null-null rows are still equal). */
+    @Test
+    void identicalRequestedTerms_stillMapEveryParentItemOntoItsChild() {
+        assertThat(FactoryQuoteCarryForward.equivalentItemMapping(
+            List.of(itemWithTerms(1L, "EUR", UnitBasis.PER_SQM)),
+            List.of(itemWithTerms(11L, "EUR", UnitBasis.PER_SQM)))).containsExactly(Map.entry(1L, 11L));
+        assertThat(FactoryQuoteCarryForward.equivalentItemMapping(
+            List.of(itemWithTerms(1L, null, null)), List.of(itemWithTerms(11L, null, null))))
+            .containsExactly(Map.entry(1L, 11L));
+    }
+
+private static PricingRequestItemDto itemWithTerms(long id, String currency, String unitBasis) {
+        return new PricingRequestItemDto(id, 99L, null, 555L, null, "SCG", "Tile A", "SCG Tile A",
+            null, null, "60x60", "Factory X", new BigDecimal("10"), new BigDecimal("10"), "piece",
+            UnitBasis.PER_PIECE, QuantityType.CONFIRMED, null, null, null, 0, null, null, null, null,
+            null, null, null, null, null, null, null, null,
+            null, null, null, null, null, null, null, null, null, null, null, null, null,
+            true, null, null, null, null, null, null, currency, unitBasis);
+    }
+
     private static PricingRequestItemDto item(long id, String qty) {
         return new PricingRequestItemDto(id, 99L, null, 555L, null, "SCG", "Tile A", "SCG Tile A",
             null, null, "60x60", "Factory X", new BigDecimal(qty), new BigDecimal(qty), "piece",

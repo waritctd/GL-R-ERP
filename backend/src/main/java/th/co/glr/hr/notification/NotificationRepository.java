@@ -243,6 +243,16 @@ public class NotificationRepository {
         insertEmployeeNotification(employeeId, type, message, "/pricing-requests/" + pricingRequestId);
     }
 
+    /**
+     * {@link #notifyByRoleForPricingRequest} that skips {@code excludeEmployeeId}: the person who did
+     * the thing (e.g. the CEO marking a factory contacted) is not told about their own action. Other
+     * members of the role still are. The role mailbox is only mailed when somebody else received a row.
+     */
+    public void notifyByRoleForPricingRequestExcluding(String role, long pricingRequestId, String type,
+                                                       String message, long excludeEmployeeId) {
+        notifyByRoleInternal(role, type, message, "/pricing-requests/" + pricingRequestId, true, excludeEmployeeId);
+    }
+
     /** In-app-only counterpart of {@link #notifyByRoleForPricingRequest}; see above. */
     public void notifyByRoleForPricingRequestInAppOnly(String role, long pricingRequestId, String type, String message) {
         notifyByRoleInternal(role, type, message, "/pricing-requests/" + pricingRequestId, false);
@@ -330,6 +340,11 @@ public class NotificationRepository {
     }
 
     private void notifyByRoleInternal(String role, String type, String message, String link, boolean email) {
+        notifyByRoleInternal(role, type, message, link, email, null);
+    }
+
+    private void notifyByRoleInternal(String role, String type, String message, String link, boolean email,
+                                      Long excludeEmployeeId) {
         String divisionFilter = switch (role) {
             case "import" -> "d.source_code ILIKE 'PCIM%'";
             // Mirrors DivisionAccessPolicy#roleFor's hr branch ("hr".equals(divisionCode(employee))),
@@ -388,15 +403,18 @@ public class NotificationRepository {
               LEFT JOIN hr.division d ON d.division_id = e.division_id
               LEFT JOIN hr.position p ON p.position_id = e.position_id
              WHERE (%s) AND e.is_active = TRUE
+               AND (CAST(:excludeEmployeeId AS BIGINT) IS NULL OR e.employee_id <> :excludeEmployeeId)
             RETURNING employee_id
             """.formatted(divisionFilter),
             new MapSqlParameterSource()
                 .addValue("type", type)
                 .addValue("title", title)
                 .addValue("message", message)
-                .addValue("link", link),
+                .addValue("link", link)
+                .addValue("excludeEmployeeId", excludeEmployeeId),
             Long.class);
-        if (email) {
+        // With an exclusion the role mailbox is only worth mailing when somebody ELSE was notified.
+        if (email && (excludeEmployeeId == null || !notified.isEmpty())) {
             salesMailer.emailForRole(role, notified, title, message, link);
         }
     }

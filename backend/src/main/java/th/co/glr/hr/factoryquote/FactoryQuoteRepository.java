@@ -229,6 +229,17 @@ public class FactoryQuoteRepository {
      *     alive), not a failure.
      */
     public int cancelOpenForPricingRequest(long pricingRequestId, String reason, long actorId) {
+        int cancelled = cancelOpenQuoteRows(pricingRequestId, reason, actorId);
+        if (cancelled > 0) {
+            // CR-1: pending lead-time changes on the dead request's quotes are withdrawn with them.
+            jdbc.update(th.co.glr.hr.pricingrequest.LeadTimeChangeRepository.AUTO_WITHDRAW_SQL
+                .formatted("c.pricing_request_id = :pricingRequestId"), Map.of("pricingRequestId", pricingRequestId,
+                    "autoReason", th.co.glr.hr.pricingrequest.LeadTimeChangeRepository.AUTO_WITHDRAW_REASON));
+        }
+        return cancelled;
+    }
+
+    private int cancelOpenQuoteRows(long pricingRequestId, String reason, long actorId) {
         return jdbc.update("""
             UPDATE sales.factory_quote
                SET status = 'CANCELLED',
@@ -288,13 +299,15 @@ public class FactoryQuoteRepository {
                  email_to, email_subject, email_body, email_sent_at, sent_by, requested_at,
                  supplier_quote_ref, default_currency, payment_terms, lead_time_text,
                  revision_reason, negotiation_note, received_at, root_factory_quote_id,
-                 parent_factory_quote_id, revision_no, is_current, created_by)
+                 parent_factory_quote_id, revision_no, is_current, created_by,
+                 contacted_on, contacted_note, contacted_by, contacted_at)
             VALUES
                 (:quoteCode, :pricingRequestId, :factoryId, :factoryName, 'RESPONSE_RECEIVED',
                  :emailTo, :emailSubject, :emailBody, :emailSentAt, :sentBy, :requestedAt,
                  :supplierQuoteRef, :currency, :paymentTerms, :leadTimeText,
                  :revisionReason, :negotiationNote, now(), :rootId,
-                 :parentId, :revisionNo, TRUE, :createdBy)
+                 :parentId, :revisionNo, TRUE, :createdBy,
+                 :contactedOn, :contactedNote, :contactedBy, :contactedAt)
             RETURNING factory_quote_id
             """,
             new MapSqlParameterSource()
@@ -317,7 +330,13 @@ public class FactoryQuoteRepository {
                 .addValue("rootId", previous.rootFactoryQuoteId())
                 .addValue("parentId", previous.id())
                 .addValue("revisionNo", nextRevision)
-                .addValue("createdBy", actorId),
+                .addValue("createdBy", actorId)
+                // CR-1: a price revision is the same conversation with the same factory, so who
+                // contacted it, when and the note ride along (they are never re-entered).
+                .addValue("contactedOn", previous.contactedOn())
+                .addValue("contactedNote", previous.contactedNote())
+                .addValue("contactedBy", previous.contactedBy())
+                .addValue("contactedAt", timestamp(previous.contactedAt())),
             Long.class);
         return id == null ? 0L : id;
     }
@@ -352,7 +371,7 @@ public class FactoryQuoteRepository {
      *     supersedable status. The caller MUST treat 0 as a refusal, not silently ignore it.
      */
     public int supersede(long quoteId) {
-        return jdbc.update("""
+        int rows = jdbc.update("""
             UPDATE sales.factory_quote
                SET status = 'SUPERSEDED',
                    is_current = FALSE,
@@ -360,6 +379,13 @@ public class FactoryQuoteRepository {
              WHERE factory_quote_id = :quoteId
                AND status IN ('DRAFT','REQUESTED','RESPONSE_RECEIVED','NEGOTIATING','READY_FOR_COSTING')
             """, Map.of("quoteId", quoteId));
+        if (rows > 0) {
+            // CR-1: a lead-time change raised on a row that is no longer current dies with it.
+            jdbc.update(th.co.glr.hr.pricingrequest.LeadTimeChangeRepository.AUTO_WITHDRAW_SQL
+                .formatted("c.factory_quote_id = :quoteId"), Map.of("quoteId", quoteId,
+                    "autoReason", th.co.glr.hr.pricingrequest.LeadTimeChangeRepository.AUTO_WITHDRAW_REASON));
+        }
+        return rows;
     }
 
     public void replaceResponseItems(long quoteId, List<ReceiveFactoryQuoteItemRequest> items) {
@@ -571,12 +597,14 @@ public class FactoryQuoteRepository {
                      email_to, email_subject, email_body, email_provider_message_id, email_sent_at,
                      sent_by, supplier_quote_ref, default_currency, payment_terms, lead_time_text,
                      note, negotiation_note, requested_at, received_at, revision_no,
-                     revision_reason, is_current, created_by)
+                     revision_reason, is_current, created_by,
+                     contacted_on, contacted_note, contacted_by, contacted_at)
                 SELECT :quoteCode, :to, factory_id, factory_name_snapshot, 'READY_FOR_COSTING',
                        email_to, email_subject, email_body, email_provider_message_id, email_sent_at,
                        sent_by, supplier_quote_ref, default_currency, payment_terms, lead_time_text,
                        note, negotiation_note, requested_at, received_at, 1,
-                       'Carried forward from pricing request ' || :from, TRUE, :actorId
+                       'Carried forward from pricing request ' || :from, TRUE, :actorId,
+                       contacted_on, contacted_note, contacted_by, contacted_at
                   FROM sales.factory_quote
                  WHERE factory_quote_id = :sourceQuoteId
                 RETURNING factory_quote_id

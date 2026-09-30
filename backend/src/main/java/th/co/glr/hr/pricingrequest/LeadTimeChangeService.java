@@ -24,6 +24,7 @@ import th.co.glr.hr.pricingrequest.LeadTimeChangeRequests.LineInput;
 import th.co.glr.hr.pricingrequest.LeadTimeChangeRequests.RejectLeadTimeChangeRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestItemDto;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestSummaryDto;
+import th.co.glr.hr.ticket.DealLifecycle;
 import th.co.glr.hr.ticket.TicketRepository;
 
 /**
@@ -76,6 +77,12 @@ public class LeadTimeChangeService {
                 "ขอเปลี่ยนระยะเวลานำเข้าได้เฉพาะใบเสนอราคาโรงงานฉบับล่าสุดที่ยังไม่ถูกยกเลิก");
         }
         PricingRequestSummaryDto summary = requirePricingRequest(quote.pricingRequestId());
+        // the quote row can still be "current" while its request is already dead (status forced or
+        // cascade not yet reached it); a dead request or an inactive deal takes no new changes
+        if (DEAD_REQUEST_STATUSES.contains(summary.status())) {
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอราคานี้ถูกยกเลิกหรือถูกแทนที่แล้ว ไม่สามารถขอเปลี่ยนระยะเวลานำเข้าได้");
+        }
+        requireActiveDeal(summary.ticketId());
         String reason = validReason(request == null ? null : request.reason());
         List<LineWrite> lines = validLines(quote, summary, request == null ? null : request.lines());
         long changeId;
@@ -131,16 +138,17 @@ public class LeadTimeChangeService {
 
     /** Owning rep or sales manager accepts the WHOLE request: the listed lines take the new values. */
     @Transactional
-    public LeadTimeChangeDto approve(long changeId, UserPrincipal actor) {
+    public LeadTimeChangeDto approve(long changeId, Integer expectedVersion, UserPrincipal actor) {
         LeadTimeChangeDto change = requireChange(changeId);
         PricingRequestSummaryDto summary = requirePricingRequest(change.pricingRequestId());
         requireDecider(summary, actor);
+        int version = requireExpectedVersion(expectedVersion);
         requirePending(change);
         if (DEAD_REQUEST_STATUSES.contains(summary.status())) {
             throw new ApiException(HttpStatus.CONFLICT, "คำขอราคานี้ถูกยกเลิกหรือถูกแทนที่แล้ว ไม่สามารถอนุมัติได้");
         }
-        if (changes.decidePending(changeId, LeadTimeChangeStatus.APPROVED, actor.id(), null) == 0) {
-            throw notPending();
+        if (changes.decidePending(changeId, LeadTimeChangeStatus.APPROVED, actor.id(), null, version) == 0) {
+            throw staleVersion();
         }
         changes.applyLinesToItems(changeId);
         addEvent(summary, actor, PricingRequestEventKind.LEAD_TIME_CHANGE_APPROVED,
@@ -164,9 +172,10 @@ public class LeadTimeChangeService {
         if (reason.length() > REASON_MAX) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "เหตุผลต้องไม่เกิน " + REASON_MAX + " ตัวอักษร");
         }
+        int version = requireExpectedVersion(request.expectedVersion());
         requirePending(change);
-        if (changes.decidePending(changeId, LeadTimeChangeStatus.REJECTED, actor.id(), reason) == 0) {
-            throw notPending();
+        if (changes.decidePending(changeId, LeadTimeChangeStatus.REJECTED, actor.id(), reason, version) == 0) {
+            throw staleVersion();
         }
         addEvent(summary, actor, PricingRequestEventKind.LEAD_TIME_CHANGE_REJECTED,
             "Lead-time change rejected: " + reason);
@@ -266,6 +275,26 @@ public class LeadTimeChangeService {
     private void requirePending(LeadTimeChangeDto change) {
         if (!LeadTimeChangeStatus.PENDING.equals(change.status())) {
             throw notPending();
+        }
+    }
+
+    private static int requireExpectedVersion(Integer expectedVersion) {
+        if (expectedVersion == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาระบุ expectedVersion");
+        }
+        return expectedVersion;
+    }
+
+    /** The row was PENDING when read but the guarded UPDATE matched nothing: import edited it in between. */
+    private ApiException staleVersion() {
+        return new ApiException(HttpStatus.CONFLICT, "คำขอถูกแก้ไขแล้ว กรุณาตรวจสอบอีกครั้ง");
+    }
+
+    private void requireActiveDeal(long ticketId) {
+        boolean active = tickets.findById(ticketId)
+            .map(t -> DealLifecycle.ACTIVE.equals(t.summary().lifecycle())).orElse(false);
+        if (!active) {
+            throw new ApiException(HttpStatus.CONFLICT, "ดีลต้นทางต้องอยู่ในสถานะ ACTIVE");
         }
     }
 

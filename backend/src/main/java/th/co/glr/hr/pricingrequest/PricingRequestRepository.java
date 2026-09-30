@@ -519,7 +519,7 @@ public class PricingRequestRepository {
                 "Illegal pricing request status transition: " + expected + " -> "
                     + PricingRequestStatus.SUPERSEDED);
         }
-        return jdbc.update("""
+        int rows = jdbc.update("""
             UPDATE sales.pricing_request
                SET status = 'SUPERSEDED',
                    superseded_at = now(),
@@ -531,6 +531,13 @@ public class PricingRequestRepository {
                 .addValue("id", id)
                 .addValue("expected", expected)
                 .addValue("supersededBy", supersededByPricingRequestId));
+        if (rows > 0) {
+            // CR-1: a pending lead-time change dies with the superseded request.
+            jdbc.update(LeadTimeChangeRepository.AUTO_WITHDRAW_SQL.formatted("c.pricing_request_id = :id"),
+                new MapSqlParameterSource().addValue("id", id)
+                    .addValue("autoReason", LeadTimeChangeRepository.AUTO_WITHDRAW_REASON));
+        }
+        return rows;
     }
 
     public void addEvent(long pricingRequestId, long ticketId, Long actorId, String actorName,

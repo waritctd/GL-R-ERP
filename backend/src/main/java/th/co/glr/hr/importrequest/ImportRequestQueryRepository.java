@@ -97,42 +97,46 @@ public class ImportRequestQueryRepository {
     ) {}
 
     /**
-     * CR-1 (GLA-167), part D: the lead time APPROVED on each deal line, read from the same
-     * order-confirmed ({@code QUOTATION_ACCEPTED}) pricing request {@link #factoryResolutionCandidates}
-     * uses, found via {@code source_ticket_item_id} (latest item row wins). Keyed by ticket_item id;
-     * a line whose pricing-request item carries no lead time maps to {@code null}/absent so the caller
-     * can tell "no lead time" from "0". An approved lead-time change has already been written onto
-     * these rows ({@code LeadTimeChangeService#approve}), so this always reflects the current approval.
+     * CR-1 (GLA-167), owner rulings B-R4/B-R5: the lead times on the deal's CURRENT QUOTATION items --
+     * never the pricing-request lines. "Current" is route-specific:
+     * <ul>
+     *   <li>PRICING_REQUEST route: the ACCEPTED quotation ({@code DealQuotationRepository
+     *       #findAcceptedItemQuantitiesByPricingRequest}'s own definition). An item reaches its factory
+     *       through {@code pricing_request_item_id} -> that line's {@code source_ticket_item_id}, which
+     *       is exactly the ticket item the factory-resolution cascade groups on, so the two can never
+     *       disagree about which factory a line belongs to.
+     *   <li>direct route: the APPROVED DEAL_DIRECT quotation. An item reaches its factory through
+     *       {@code catalog_price_id} -> {@code product_prices.factory_id}; a hand-typed line has no
+     *       link, is not returned, and so never counts.
+     * </ul>
+     * The legacy engine ({@code origin IS NULL}) carries no per-item lead time and is ignored. Only
+     * items with BOTH min and max set are returned. Exactly one of {@code ticketItemId}/{@code
+     * factoryId} is non-null per row, matching the route that produced it.
      */
-    public Map<Long, LineLeadTime> acceptedLeadTimesByTicketItem(long ticketId) {
-        Map<Long, LineLeadTime> byItem = new java.util.HashMap<>();
-        jdbc.query("""
-            SELECT ti.item_id, pri.lead_time_min_days, pri.lead_time_max_days
-              FROM sales.ticket_item ti
-              JOIN LATERAL (
-                  SELECT pri2.lead_time_min_days, pri2.lead_time_max_days
-                    FROM sales.pricing_request_item pri2
-                    JOIN sales.pricing_request pr2
-                      ON pr2.pricing_request_id = pri2.pricing_request_id
-                   WHERE pri2.source_ticket_item_id = ti.item_id
-                     AND pr2.ticket_id = ti.ticket_id
-                     AND pr2.status = 'QUOTATION_ACCEPTED'
-                   ORDER BY pri2.pricing_request_item_id DESC
-                   LIMIT 1
-              ) pri ON true
-             WHERE ti.ticket_id = :id
-            """, Map.of("id", ticketId), rs -> {
-                Number min = (Number) rs.getObject("lead_time_min_days");
-                Number max = (Number) rs.getObject("lead_time_max_days");
-                if (min != null && max != null) {
-                    byItem.put(rs.getLong("item_id"), new LineLeadTime(min.intValue(), max.intValue()));
-                }
-            });
-        return byItem;
+    public List<QuotationLeadTimeRow> currentQuotationLeadTimes(long ticketId) {
+        return jdbc.query("""
+            SELECT pri.source_ticket_item_id AS ticket_item_id, NULL::bigint AS factory_id,
+                   qi.lead_time_min_days, qi.lead_time_max_days
+              FROM sales.quotation q
+              JOIN sales.quotation_item qi ON qi.quotation_id = q.quotation_id
+              JOIN sales.pricing_request_item pri ON pri.pricing_request_item_id = qi.pricing_request_item_id
+             WHERE q.ticket_id = :id AND q.origin = 'PRICING_REQUEST' AND q.doc_status = 'ACCEPTED'
+               AND pri.source_ticket_item_id IS NOT NULL
+               AND qi.lead_time_min_days IS NOT NULL AND qi.lead_time_max_days IS NOT NULL
+            UNION ALL
+            SELECT NULL::bigint, pp.factory_id, qi.lead_time_min_days, qi.lead_time_max_days
+              FROM sales.quotation q
+              JOIN sales.quotation_item qi ON qi.quotation_id = q.quotation_id
+              JOIN price_catalog.product_prices pp ON pp.price_id = qi.catalog_price_id
+             WHERE q.ticket_id = :id AND q.origin = 'DEAL_DIRECT' AND q.doc_status = 'APPROVED'
+               AND qi.lead_time_min_days IS NOT NULL AND qi.lead_time_max_days IS NOT NULL
+            """, Map.of("id", ticketId), (rs, n) -> new QuotationLeadTimeRow(
+                (Long) rs.getObject("ticket_item_id"), (Long) rs.getObject("factory_id"),
+                rs.getInt("lead_time_min_days"), rs.getInt("lead_time_max_days")));
     }
 
-    /** One line's approved lead-time range, in days. */
-    public record LineLeadTime(int minDays, int maxDays) {}
+    /** One quotation item's lead time, attributed to a ticket item (PR route) or a factory (direct route). */
+    public record QuotationLeadTimeRow(Long ticketItemId, Long factoryId, int minDays, int maxDays) {}
 
     /**
      * Per-line factory resolution inputs for the STORED (factory-grained) ใบขอซื้อ path — replaces

@@ -162,7 +162,7 @@ public class FactoryQuoteService {
             quotes.insertDraftItems(quoteId, entry.getValue().stream().map(PricingRequestItemDto::id).toList());
             addEvent(summary, actor, PricingRequestEventKind.FACTORY_EMAIL_READY, summary.status(), summary.status(),
                 "Factory email draft ready for " + factoryName);
-            notifyCeo(summary, PricingRequestEventKind.FACTORY_EMAIL_READY,
+            notifyCeo(summary, actor, PricingRequestEventKind.FACTORY_EMAIL_READY,
                 "คำขอราคา " + summary.requestCode() + " สร้างร่างอีเมลโรงงาน " + factoryName);
         }
         return list(pricingRequestId, actor);
@@ -202,7 +202,7 @@ public class FactoryQuoteService {
         addEvent(summary, actor, PricingRequestEventKind.FACTORY_EMAIL_READY, summary.status(), summary.status(),
             "Factory email draft for " + factoryName + " updated with " + newItemIds.size()
                 + " newly-routed item(s)");
-        notifyCeo(summary, PricingRequestEventKind.FACTORY_EMAIL_READY,
+        notifyCeo(summary, actor, PricingRequestEventKind.FACTORY_EMAIL_READY,
             "คำขอราคา " + summary.requestCode() + " เพิ่มรายการในร่างอีเมลโรงงาน " + factoryName);
     }
 
@@ -281,7 +281,7 @@ public class FactoryQuoteService {
         PricingRequestSummaryDto currentSummary = requirePricingRequest(summary.id());
         addEvent(currentSummary, actor, PricingRequestEventKind.FACTORY_CONTACTED, summary.status(),
             currentSummary.status(), "Factory contacted: " + quote.factoryName() + " on " + contactedOn);
-        notifyCeo(currentSummary, PricingRequestEventKind.FACTORY_CONTACTED,
+        notifyCeo(currentSummary, actor, PricingRequestEventKind.FACTORY_CONTACTED,
             "คำขอราคา " + currentSummary.requestCode() + " ติดต่อโรงงาน " + quote.factoryName() + "แล้ว");
         return requireQuote(quoteId);
     }
@@ -809,6 +809,11 @@ public class FactoryQuoteService {
 
     private void notifyCeo(PricingRequestSummaryDto summary, String type, String message) {
         notifications.notifyByRoleForPricingRequest("ceo", summary.id(), type, message);
+    }
+
+    /** CR-1: the CEO may run the contact step themselves; they are not notified of their own action. */
+    private void notifyCeo(PricingRequestSummaryDto summary, UserPrincipal actor, String type, String message) {
+        notifications.notifyByRoleForPricingRequestExcluding("ceo", summary.id(), type, message, actor.id());
     }
 
     /**

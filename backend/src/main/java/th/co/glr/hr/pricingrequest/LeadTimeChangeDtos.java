@@ -26,6 +26,8 @@ public final class LeadTimeChangeDtos {
         Long decidedBy,
         Instant decidedAt,
         String decisionReason,
-        List<LeadTimeChangeLineDto> lines
+        List<LeadTimeChangeLineDto> lines,
+        // optimistic concurrency: import edits bump it; approve/reject must quote the version they saw
+        int version
     ) {}
 }

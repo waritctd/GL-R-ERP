@@ -161,7 +161,7 @@ class LeadTimeChangeIntegrationTest extends Cr1FixtureSupport {
     @Test
     void updateAndWithdrawOfAChangeThatIsNoLongerPendingAre409() {
         LeadTimeChangeDto change = leadTimeChangeService.create(quoteA.id(), body("r1", line(a1, 100, 120)), importActor);
-        leadTimeChangeService.approve(change.id(), salesActor);
+        leadTimeChangeService.approve(change.id(), change.version(), salesActor);
 
         assertThatThrownBy(() -> leadTimeChangeService.update(change.id(), body("late", line(a1, 1, 2)), importActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
@@ -177,7 +177,7 @@ class LeadTimeChangeIntegrationTest extends Cr1FixtureSupport {
         LeadTimeChangeDto change = leadTimeChangeService.create(quoteA.id(),
             body("r1", line(a1, 100, 120), line(a2, 150, 180)), importActor);
 
-        LeadTimeChangeDto approved = leadTimeChangeService.approve(change.id(), salesActor);
+        LeadTimeChangeDto approved = leadTimeChangeService.approve(change.id(), change.version(), salesActor);
 
         assertThat(approved.status()).isEqualTo(LeadTimeChangeStatus.APPROVED);
         assertThat(approved.decidedBy()).isEqualTo(salesRepId);
@@ -192,7 +192,7 @@ class LeadTimeChangeIntegrationTest extends Cr1FixtureSupport {
     void aSalesManagerMayApprove() {
         LeadTimeChangeDto change = leadTimeChangeService.create(quoteA.id(), body("r1", line(a1, 100, 120)), importActor);
 
-        LeadTimeChangeDto approved = leadTimeChangeService.approve(change.id(), salesManagerActor);
+        LeadTimeChangeDto approved = leadTimeChangeService.approve(change.id(), change.version(), salesManagerActor);
 
         assertThat(approved.status()).isEqualTo(LeadTimeChangeStatus.APPROVED);
         assertThat(approved.decidedBy()).isEqualTo(salesManagerUserId);
@@ -206,7 +206,7 @@ class LeadTimeChangeIntegrationTest extends Cr1FixtureSupport {
         LeadTimeChangeDto change = leadTimeChangeService.create(quoteA.id(), body("r1", line(a1, 100, 120)), importActor);
 
         for (UserPrincipal forbidden : List.of(otherSalesActor, importActor, ceoActor, accountActor)) {
-            assertThatThrownBy(() -> leadTimeChangeService.approve(change.id(), forbidden))
+            assertThatThrownBy(() -> leadTimeChangeService.approve(change.id(), change.version(), forbidden))
                 .as("approve as %s", forbidden.role())
                 .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
         }
@@ -221,7 +221,7 @@ class LeadTimeChangeIntegrationTest extends Cr1FixtureSupport {
 
         for (UserPrincipal forbidden : List.of(otherSalesActor, importActor, ceoActor, accountActor)) {
             assertThatThrownBy(() -> leadTimeChangeService.reject(change.id(),
-                    new RejectLeadTimeChangeRequest("ไม่อนุมัติ"), forbidden))
+                    new RejectLeadTimeChangeRequest("ไม่อนุมัติ", change.version()), forbidden))
                 .as("reject as %s", forbidden.role())
                 .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
         }
@@ -236,7 +236,7 @@ class LeadTimeChangeIntegrationTest extends Cr1FixtureSupport {
         LeadTimeChangeDto change = leadTimeChangeService.create(quoteA.id(), body("r1", line(a1, 100, 120)), importActor);
 
         for (String blank : new String[] {null, "", "   "}) {
-            assertThatThrownBy(() -> leadTimeChangeService.reject(change.id(), new RejectLeadTimeChangeRequest(blank), salesActor))
+            assertThatThrownBy(() -> leadTimeChangeService.reject(change.id(), new RejectLeadTimeChangeRequest(blank, change.version()), salesActor))
                 .as("reason=%s", blank)
                 .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
         }
@@ -244,7 +244,7 @@ class LeadTimeChangeIntegrationTest extends Cr1FixtureSupport {
             .isEqualTo(LeadTimeChangeStatus.PENDING);
 
         LeadTimeChangeDto rejected = leadTimeChangeService.reject(change.id(),
-            new RejectLeadTimeChangeRequest("ลูกค้าไม่รับระยะเวลานี้"), salesActor);
+            new RejectLeadTimeChangeRequest("ลูกค้าไม่รับระยะเวลานี้", change.version()), salesActor);
         assertThat(rejected.status()).isEqualTo(LeadTimeChangeStatus.REJECTED);
         assertThat(rejected.decisionReason()).isEqualTo("ลูกค้าไม่รับระยะเวลานี้");
         assertThat(rejected.decidedBy()).isEqualTo(salesRepId);
@@ -255,19 +255,20 @@ class LeadTimeChangeIntegrationTest extends Cr1FixtureSupport {
 
     @Test
     void approveOrRejectOfAChangeThatIsNotPendingIs409() {
-        LeadTimeChangeDto approved = leadTimeChangeService.approve(
-            leadTimeChangeService.create(quoteA.id(), body("r1", line(a1, 100, 120)), importActor).id(), salesActor);
-        assertConflict(() -> leadTimeChangeService.approve(approved.id(), salesActor));
-        assertConflict(() -> leadTimeChangeService.reject(approved.id(), new RejectLeadTimeChangeRequest("late"), salesActor));
+        LeadTimeChangeDto pending1 = leadTimeChangeService.create(quoteA.id(), body("r1", line(a1, 100, 120)), importActor);
+        LeadTimeChangeDto approved = leadTimeChangeService.approve(pending1.id(), pending1.version(), salesActor);
+        assertConflict(() -> leadTimeChangeService.approve(approved.id(), approved.version(), salesActor));
+        assertConflict(() -> leadTimeChangeService.reject(approved.id(),
+            new RejectLeadTimeChangeRequest("late", approved.version()), salesActor));
 
-        LeadTimeChangeDto rejected = leadTimeChangeService.reject(
-            leadTimeChangeService.create(quoteA.id(), body("r2", line(a2, 100, 120)), importActor).id(),
-            new RejectLeadTimeChangeRequest("no"), salesActor);
-        assertConflict(() -> leadTimeChangeService.approve(rejected.id(), salesActor));
+        LeadTimeChangeDto pending2 = leadTimeChangeService.create(quoteA.id(), body("r2", line(a2, 100, 120)), importActor);
+        LeadTimeChangeDto rejected = leadTimeChangeService.reject(pending2.id(),
+            new RejectLeadTimeChangeRequest("no", pending2.version()), salesActor);
+        assertConflict(() -> leadTimeChangeService.approve(rejected.id(), rejected.version(), salesActor));
 
-        LeadTimeChangeDto withdrawn = leadTimeChangeService.withdraw(
-            leadTimeChangeService.create(quoteA.id(), body("r3", line(a3, 100, 120)), importActor).id(), importActor);
-        assertConflict(() -> leadTimeChangeService.approve(withdrawn.id(), salesActor));
+        LeadTimeChangeDto pending3 = leadTimeChangeService.create(quoteA.id(), body("r3", line(a3, 100, 120)), importActor);
+        LeadTimeChangeDto withdrawn = leadTimeChangeService.withdraw(pending3.id(), importActor);
+        assertConflict(() -> leadTimeChangeService.approve(withdrawn.id(), withdrawn.version(), salesActor));
         assertLeadTime(a2, 60, 90);
         assertLeadTime(a3, 10, 20);
     }
@@ -305,6 +306,102 @@ class LeadTimeChangeIntegrationTest extends Cr1FixtureSupport {
         }
         assertThatThrownBy(() -> leadTimeChangeService.listForPricingRequest(prId, otherSalesActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+    }
+
+    // ── round 2: guards the first review found untested ──────────────────────────────────────
+
+    /** Approve is refused (409) once the request is CANCELLED or SUPERSEDED, and writes nothing. */
+    @Test
+    void approveIsRefusedWhenThePricingRequestIsCancelledOrSuperseded_andLeadTimesStayUntouched() {
+        LeadTimeChangeDto change = leadTimeChangeService.create(quoteA.id(), body("r1", line(a1, 100, 120)), importActor);
+
+        for (String deadStatus : new String[] {"CANCELLED", "SUPERSEDED"}) {
+            // forced by SQL so THIS guard, not the quote cascade or auto-withdraw, is what refuses
+            jdbc.update("UPDATE sales.pricing_request SET status = :s, cancelled_at = now() WHERE pricing_request_id = :id",
+                java.util.Map.of("s", deadStatus, "id", prId));
+            assertConflict(() -> leadTimeChangeService.approve(change.id(), change.version(), salesActor));
+        }
+        assertLeadTime(a1, 30, 45);
+        assertThat(leadTimeChangeService.listForPricingRequest(prId, importActor).get(0).status())
+            .isEqualTo(LeadTimeChangeStatus.PENDING);
+    }
+
+    /** A stock line can never be part of a lead-time change (it has no factory lead time). */
+    @Test
+    void aStockLineInAChangeIs400() {
+        jdbc.update("UPDATE sales.pricing_request_item SET stock_source = 'IN_THAILAND' WHERE pricing_request_item_id = :id",
+            java.util.Map.of("id", a3));
+
+        assertBadRequest(body("ok", line(a3, 100, 120)));
+        assertThat(leadTimeChangeService.listForPricingRequest(prId, importActor)).isEmpty();
+    }
+
+    /** create is refused (409) when the request is CANCELLED/SUPERSEDED even though the quote row is still current. */
+    @Test
+    void createIsRefusedWhenThePricingRequestIsSuperseded() {
+        jdbc.update("UPDATE sales.pricing_request SET status = 'SUPERSEDED' WHERE pricing_request_id = :id",
+            java.util.Map.of("id", prId));
+
+        assertConflict(() -> leadTimeChangeService.create(quoteA.id(), body("r1", line(a1, 100, 120)), importActor));
+        assertThat(leadTimeChangeService.listForPricingRequest(prId, importActor)).isEmpty();
+    }
+
+    /** create is refused (409) when the deal is no longer ACTIVE. */
+    @Test
+    void createIsRefusedWhenTheDealIsNotActive() {
+        jdbc.update("UPDATE sales.ticket SET lifecycle = 'ON_HOLD' WHERE ticket_id = :id", java.util.Map.of("id", ticketId));
+
+        assertConflict(() -> leadTimeChangeService.create(quoteA.id(), body("r1", line(a1, 100, 120)), importActor));
+        assertThat(leadTimeChangeService.listForPricingRequest(prId, importActor)).isEmpty();
+    }
+
+    // ── round 2: a price revision retires the quote row the change was raised on ─────────────
+
+    @Test
+    void aPriceRevisionAutoWithdrawsThePendingChangeOnTheOldQuoteRow_andImportCanOpenANewOneOnTheNewRow() {
+        FactoryQuoteDto v1 = factoryQuoteService.receive(quoteA.id(), receiveAll(quoteA, "THB", "PER_PIECE"), importActor);
+        LeadTimeChangeDto change = leadTimeChangeService.create(v1.id(), body("r1", line(a1, 100, 120)), importActor);
+
+        FactoryQuoteDto v2 = factoryQuoteService.receive(v1.id(), receiveAll(v1, "THB", "PER_PIECE"), importActor);
+        assertThat(v2.id()).as("a second receive on a RESPONSE_RECEIVED quote is a revision row").isNotEqualTo(v1.id());
+
+        LeadTimeChangeDto old = leadTimeChangeService.listForPricingRequest(prId, importActor).stream()
+            .filter(c -> c.id() == change.id()).findFirst().orElseThrow();
+        assertThat(old.status()).isEqualTo(LeadTimeChangeStatus.WITHDRAWN);
+        assertThat(old.decisionReason()).isEqualTo("ใบราคาถูกแก้ไข — คำขอเดิมถูกยกเลิกอัตโนมัติ");
+        assertThat(eventCount(prId, PricingRequestEventKind.LEAD_TIME_CHANGE_WITHDRAWN)).isEqualTo(1L);
+        // the owning rep can no longer approve the dead request, and nothing was applied
+        assertConflict(() -> leadTimeChangeService.approve(old.id(), old.version(), salesActor));
+        assertLeadTime(a1, 30, 45);
+        // import may raise a fresh one on the NEW current row, but not on the retired one
+        assertThat(leadTimeChangeService.create(v2.id(), body("r2", line(a1, 110, 130)), importActor).status())
+            .isEqualTo(LeadTimeChangeStatus.PENDING);
+        assertConflict(() -> leadTimeChangeService.create(v1.id(), body("r3", line(a2, 110, 130)), importActor));
+    }
+
+    // ── round 2: optimistic concurrency between import's edit and the approver's decision ────
+
+    @Test
+    void approveOrRejectWithAStaleVersionIs409_afterImportEdited_andNothingIsApplied() {
+        LeadTimeChangeDto change = leadTimeChangeService.create(quoteA.id(), body("r1", line(a1, 100, 120)), importActor);
+        assertThat(change.version()).isEqualTo(1);
+        LeadTimeChangeDto edited = leadTimeChangeService.update(change.id(), body("r1 edited", line(a2, 150, 180)), importActor);
+        assertThat(edited.version()).as("an import edit bumps the version").isEqualTo(2);
+
+        // the approver still holds version 1
+        assertConflict(() -> leadTimeChangeService.approve(change.id(), 1, salesActor));
+        assertConflict(() -> leadTimeChangeService.reject(change.id(), new RejectLeadTimeChangeRequest("no", 1), salesActor));
+        assertLeadTime(a1, 30, 45);
+        assertLeadTime(a2, 60, 90);
+        assertThat(leadTimeChangeService.listForPricingRequest(prId, importActor).get(0).status())
+            .isEqualTo(LeadTimeChangeStatus.PENDING);
+
+        // a missing expectedVersion is a caller bug (400), and the current version still works
+        assertThatThrownBy(() -> leadTimeChangeService.approve(change.id(), null, salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
+        assertThat(leadTimeChangeService.approve(change.id(), edited.version(), salesActor).status())
+            .isEqualTo(LeadTimeChangeStatus.APPROVED);
+        assertLeadTime(a2, 150, 180);
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────────────────────

@@ -12,5 +12,8 @@ public final class LeadTimeChangeRequests {
     /** Used for both create and update (import edits while PENDING). */
     public record CreateLeadTimeChangeRequest(String reason, List<LineInput> lines) {}
 
-    public record RejectLeadTimeChangeRequest(String reason) {}
+    /** Body of approve: the version the approver loaded. */
+    public record ApproveLeadTimeChangeRequest(Integer expectedVersion) {}
+
+    public record RejectLeadTimeChangeRequest(String reason, Integer expectedVersion) {}
 }

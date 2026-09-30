@@ -116,3 +116,8 @@ Section title: **ราคาจากโรงงาน**, with one card per fa
   4. Sales creates or revises the IR.
 
   Only step 4 picks up the value. An approved change without a new quotation does not change the IR.
+- **B-R5 (scope of B-R4):** the IR reads each factory's lead time from the deal's **current quotation items**. The current quotation is:
+  - on the pricing-request route, the ACCEPTED quotation, whose items link to their factory through `pricing_request_item_id`;
+  - on the direct route, the APPROVED quotation, with items resolved through `catalog_price_id`. Hand-typed direct lines fall back to the country default.
+
+  CR-1 does **not** build a way to issue a new quotation after acceptance. That is filed as a separate issue. Until it exists, a lead-time change approved after acceptance does not reach the IR.

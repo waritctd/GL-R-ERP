@@ -26,6 +26,30 @@ public class LeadTimeChangeRepository {
     /** One line to store: the new range plus the old range snapshotted from the item at request time. */
     public record LineWrite(long pricingRequestItemId, Integer oldMin, Integer oldMax, int newMin, int newMax) {}
 
+    /** Stored as decision_reason when a change is withdrawn by the system because its quote row died. */
+    public static final String AUTO_WITHDRAW_REASON = "ใบราคาถูกแก้ไข — คำขอเดิมถูกยกเลิกอัตโนมัติ";
+
+    /**
+     * System withdrawal of PENDING changes matching one predicate ({@code %s}, written against alias
+     * {@code c}) plus one audit event per change, in a single statement. Used by the repositories
+     * that retire a quote row / close a request, so the change can never outlive what it was about.
+     * Binds {@code :autoReason}; the caller binds whatever the predicate names.
+     */
+    public static final String AUTO_WITHDRAW_SQL = """
+        WITH w AS (
+            UPDATE sales.lead_time_change c
+               SET status = 'WITHDRAWN', decision_reason = :autoReason,
+                   version = c.version + 1, updated_at = now()
+             WHERE %s AND c.status = 'PENDING'
+            RETURNING c.lead_time_change_id, c.pricing_request_id
+        )
+        INSERT INTO sales.pricing_request_event
+            (pricing_request_id, ticket_id, event_kind, from_status, to_status, message)
+        SELECT w.pricing_request_id, pr.ticket_id, 'LEAD_TIME_CHANGE_WITHDRAWN', pr.status, pr.status,
+               'Lead-time change withdrawn automatically: its factory quote was revised or the request closed'
+          FROM w JOIN sales.pricing_request pr ON pr.pricing_request_id = w.pricing_request_id
+        """;
+
     private final NamedParameterJdbcTemplate jdbc;
 
     public LeadTimeChangeRepository(NamedParameterJdbcTemplate jdbc) {
@@ -59,7 +83,7 @@ public class LeadTimeChangeRepository {
     public int updatePending(long changeId, String reason, List<LineWrite> lines) {
         int rows = jdbc.update("""
             UPDATE sales.lead_time_change
-               SET reason = :reason, updated_at = now()
+               SET reason = :reason, version = version + 1, updated_at = now()
              WHERE lead_time_change_id = :id AND status = 'PENDING'
             """, new MapSqlParameterSource().addValue("id", changeId).addValue("reason", reason));
         if (rows == 1) {
@@ -80,18 +104,20 @@ public class LeadTimeChangeRepository {
     }
 
     /** PENDING -> APPROVED/REJECTED (status is a code constant, never user input). */
-    public int decidePending(long changeId, String newStatus, long decidedBy, String decisionReason) {
+    public int decidePending(long changeId, String newStatus, long decidedBy, String decisionReason,
+                             int expectedVersion) {
         return jdbc.update("""
             UPDATE sales.lead_time_change
                SET status = :status, decided_by = :decidedBy, decided_at = now(),
-                   decision_reason = :decisionReason, updated_at = now()
-             WHERE lead_time_change_id = :id AND status = 'PENDING'
+                   decision_reason = :decisionReason, version = version + 1, updated_at = now()
+             WHERE lead_time_change_id = :id AND status = 'PENDING' AND version = :expectedVersion
             """,
             new MapSqlParameterSource()
                 .addValue("id", changeId)
                 .addValue("status", newStatus)
                 .addValue("decidedBy", decidedBy)
-                .addValue("decisionReason", decisionReason));
+                .addValue("decisionReason", decisionReason)
+                .addValue("expectedVersion", expectedVersion));
     }
 
     /** Writes each line's new range onto its pricing_request_item (the approve step). */
@@ -118,7 +144,7 @@ public class LeadTimeChangeRepository {
     private List<LeadTimeChangeDto> query(String where, Map<String, Object> params) {
         List<LeadTimeChangeDto> headers = jdbc.query("""
             SELECT c.lead_time_change_id, c.factory_quote_id, c.pricing_request_id, c.status, c.reason,
-                   c.requested_by, c.requested_at, c.decided_by, c.decided_at, c.decision_reason
+                   c.requested_by, c.requested_at, c.decided_by, c.decided_at, c.decision_reason, c.version
               FROM sales.lead_time_change c
             """ + where + """
 
@@ -128,7 +154,7 @@ public class LeadTimeChangeRepository {
         for (LeadTimeChangeDto header : headers) {
             result.add(new LeadTimeChangeDto(header.id(), header.factoryQuoteId(), header.pricingRequestId(),
                 header.status(), header.reason(), header.requestedBy(), header.requestedAt(), header.decidedBy(),
-                header.decidedAt(), header.decisionReason(), findLines(header.id())));
+                header.decidedAt(), header.decisionReason(), findLines(header.id()), header.version()));
         }
         return result;
     }
@@ -174,7 +200,8 @@ public class LeadTimeChangeRepository {
         return new LeadTimeChangeDto(
             rs.getLong("lead_time_change_id"), rs.getLong("factory_quote_id"), rs.getLong("pricing_request_id"),
             rs.getString("status"), rs.getString("reason"), rs.getLong("requested_by"), requestedAt,
-            decidedBy, decidedAt == null ? null : decidedAt.toInstant(), rs.getString("decision_reason"), List.of());
+            decidedBy, decidedAt == null ? null : decidedAt.toInstant(), rs.getString("decision_reason"), List.of(),
+            rs.getInt("version"));
     }
 
     private Integer nullableInt(ResultSet rs, String column) throws SQLException {

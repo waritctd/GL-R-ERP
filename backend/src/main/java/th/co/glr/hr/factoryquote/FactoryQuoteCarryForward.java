@@ -171,6 +171,11 @@ public class FactoryQuoteCarryForward {
             && Objects.equals(a.factory(), b.factory())
             && Objects.equals(a.requestedUnit(), b.requestedUnit())
             && Objects.equals(a.requestedUnitBasis(), b.requestedUnitBasis())
+            // CR-1: the currency / price unit Sales asked the factory to quote in. A factory price is
+            // only meaningful in those terms, so a revision that changes just these must not carry
+            // the old quotes forward as ready.
+            && Objects.equals(a.requestedCurrency(), b.requestedCurrency())
+            && Objects.equals(a.requestedPriceUnitBasis(), b.requestedPriceUnitBasis())
             && Objects.equals(a.quantityType(), b.quantityType())
             && Objects.equals(a.productCode(), b.productCode())
             && Objects.equals(a.originCountry(), b.originCountry())

@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.RestController;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.pricingrequest.LeadTimeChangeDtos.LeadTimeChangeDto;
+import th.co.glr.hr.pricingrequest.LeadTimeChangeRequests.ApproveLeadTimeChangeRequest;
 import th.co.glr.hr.pricingrequest.LeadTimeChangeRequests.CreateLeadTimeChangeRequest;
 import th.co.glr.hr.pricingrequest.LeadTimeChangeRequests.RejectLeadTimeChangeRequest;
 
@@ -55,9 +56,13 @@ public class LeadTimeChangeController {
     }
 
     @PostMapping("/lead-time-changes/{changeId}/approve")
-    Map<String, LeadTimeChangeDto> approve(@PathVariable long changeId, HttpSession session) {
+    Map<String, LeadTimeChangeDto> approve(
+        @PathVariable long changeId,
+        @RequestBody ApproveLeadTimeChangeRequest request,
+        HttpSession session
+    ) {
         UserPrincipal user = sessions.requireUser(session);
-        return Map.of("leadTimeChange", service.approve(changeId, user));
+        return Map.of("leadTimeChange", service.approve(changeId, request.expectedVersion(), user));
     }
 
     @PostMapping("/lead-time-changes/{changeId}/reject")
