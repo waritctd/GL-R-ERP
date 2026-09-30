@@ -187,10 +187,12 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     // Acceptance
     // ─────────────────────────────────────────────────────────────────────────────────────
 
-    /** Round 8: a DEAL_DIRECT row stores recipient_type = 'UNSPECIFIED'; the DTO must serve it
-     * (read-only exposure of an already-persisted column) through listForTicket's real query. */
+    /** Round 8: the DTO serves a DEAL_DIRECT row's persisted recipient_type through listForTicket's
+     * real query. Slice 2 (quotation ↔ deal linking) made the recipient REQUIRED on a direct create —
+     * it used to be stored as 'UNSPECIFIED' — so this now pins the value the request sent. OWNER is
+     * deliberately not the column's old default, so a query that dropped the column would fail here. */
     @Test
-    void listForTicket_servesUnspecifiedRecipientForADealDirectRow() {
+    void listForTicket_servesTheStoredRecipientForADealDirectRow() {
         DealQuotationDto created = quotationService.create(ticketId,
             upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
 
@@ -198,7 +200,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .filter(q -> q.id() == created.id()).findFirst().orElseThrow();
 
         assertThat(listed.origin()).isEqualTo("DEAL_DIRECT");
-        assertThat(listed.recipientType()).isEqualTo("UNSPECIFIED");
+        assertThat(listed.recipientType()).isEqualTo("OWNER");
     }
 
     @Test
@@ -2842,8 +2844,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         String[] rows = signatureRows(xls);
         assertThat(rows[1]).contains("(" + approved.approvedByName() + ")");
 
-        // A draft on the same deal (no approver yet) must NOT carry the image.
-        DealQuotationDto draft = quotationService.create(ticketId,
+        // A draft on the same deal (no approver yet) must NOT carry the image. Stacked beside the
+        // live approved row on purpose, so it bypasses N6 via the test-only fixture.
+        DealQuotationDto draft = createAlongsideLive(ticketId,
             upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
         assertThat(signaturePicture(quotationService.renderXlsx(draft.id(), salesActor))).isNull();
 
@@ -3207,17 +3210,19 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void account_seesADealQuotationOnlyOnceItWentToTheCustomer() {
         setSalesStage(ticketId, "PROCUREMENT");
+        // Every create after the first stacks another live direct quotation on this one deal on
+        // purpose (one per status under test), so those go through the N6-bypassing test fixture.
         DealQuotationDto draft = quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
         DealQuotationDto submitted = quotationService.submit(
-            quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor).id(), salesActor);
-        DealQuotationDto rejected = quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
-        DealQuotationDto cancelled = quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+            createAlongsideLive(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor).id(), salesActor);
+        DealQuotationDto rejected = createAlongsideLive(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        DealQuotationDto cancelled = createAlongsideLive(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
         setDocStatus(rejected.id(), "REJECTED");
         setDocStatus(cancelled.id(), "CANCELLED");
         DealQuotationDto approved = quotationService.approve(
-            quotationService.submit(quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))),
+            quotationService.submit(createAlongsideLive(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))),
                 salesActor).id(), salesActor).id(), new ApproveRequest(null), salesManagerActor);
-        DealQuotationDto accepted = quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        DealQuotationDto accepted = createAlongsideLive(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
         setDocStatus(accepted.id(), "ACCEPTED");
         assertThat(approved.docStatus()).isEqualTo("APPROVED");
         assertThat(submitted.docStatus()).isEqualTo("PENDING_APPROVAL");
