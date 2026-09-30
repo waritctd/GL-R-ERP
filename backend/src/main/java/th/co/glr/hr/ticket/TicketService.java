@@ -1500,7 +1500,10 @@ public class TicketService {
      * {@code sales.commission_record.effective_weight_multiplier}'s migration comment, V148) --
      * editing this value after a commission already exists for this ticket never moves that
      * commission's money, by the same "freeze, never recompute live" discipline {@code
-     * pricing_decision} (V72) already established for landed cost.
+     * pricing_decision} (V72) already established for landed cost. The ONE sanctioned exception
+     * is {@code CommissionService#adjustItemWeights}: the sales_manager may re-weight a SUBMITTED
+     * commission's lines (owner ruling 2026-10-01) and the frozen blend is recomputed with the
+     * same calculator call; once MANAGER_APPROVED it is frozen again.
      *
      * <p>Two gates in the same order {@link #reserveStock} uses: the coarse {@link
      * #ITEM_WEIGHT_ROLES} role check runs BEFORE the ticket is loaded, so a role that can never
