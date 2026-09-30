@@ -118,4 +118,41 @@ public class FinanceDealRepository {
                 rs.getLong("event_id"), rs.getString("actor_name"),
                 rs.getTimestamp("created_at").toInstant(), rs.getString("message")));
     }
+
+    /**
+     * The deal's LATEST (highest commission_id) non-VOID SALE commission joined to its invoice, as the
+     * finance view may see it: invoice fields and approval status only. Explicit allowlist -- never a
+     * commission amount, weight, tier, payroll month or rep. {@code downloadPath} points at the deal's
+     * INVOICE ticket attachment whose file_path equals the commission invoice file's (createFromDeal
+     * writes the same physical file to both); the highest such attachment id wins, null when none.
+     */
+    public Optional<FinanceDealDto.CommissionInvoice> findCommissionInvoice(long ticketId) {
+        return jdbc.query("""
+            SELECT inv.invoice_number, inv.invoice_date, inv.gross_amount, inv.bank_fees, inv.suspense_vat,
+                   inv.transport_fee, inv.cut_fee, inv.shortfall, inv.withholding_tax, inv.overpayment,
+                   fa.file_name AS file_name,
+                   (SELECT MAX(a.attachment_id) FROM sales.attachment a
+                     WHERE a.ticket_id = cr.source_ticket_id AND a.attach_type = 'INVOICE'
+                       AND a.file_path = fa.file_path) AS ticket_attachment_id,
+                   cr.status, cr.rejection_reason, cr.created_at
+              FROM sales.commission_record cr
+              JOIN sales.invoice_details inv ON inv.invoice_id = cr.invoice_id
+              LEFT JOIN hr.file_attachment fa ON fa.attachment_id = inv.invoice_attachment_id
+             WHERE cr.source_ticket_id = :id AND cr.kind = 'SALE' AND cr.status <> 'VOID'
+             ORDER BY cr.commission_id DESC
+             LIMIT 1
+            """, Map.of("id", ticketId), (rs, n) -> {
+                Long attachmentId = (Long) rs.getObject("ticket_attachment_id");
+                String status = rs.getString("status");
+                return new FinanceDealDto.CommissionInvoice(
+                    rs.getString("invoice_number"), rs.getObject("invoice_date", LocalDate.class),
+                    rs.getBigDecimal("gross_amount"), rs.getBigDecimal("bank_fees"), rs.getBigDecimal("suspense_vat"),
+                    rs.getBigDecimal("transport_fee"), rs.getBigDecimal("cut_fee"), rs.getBigDecimal("shortfall"),
+                    rs.getBigDecimal("withholding_tax"), rs.getBigDecimal("overpayment"),
+                    rs.getString("file_name"),
+                    attachmentId == null ? null : "/api/attachments/" + attachmentId + "/file",
+                    status, "REJECTED".equals(status) ? rs.getString("rejection_reason") : null,
+                    rs.getTimestamp("created_at").toInstant());
+            }).stream().findFirst();
+    }
 }

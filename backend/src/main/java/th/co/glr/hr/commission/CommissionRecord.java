@@ -54,7 +54,9 @@ public record CommissionRecord(
     // backward-compatibility rationale. NULL for every record that predates this feature and for
     // every record this feature does not apply to (unlinked/manual, no items, zero item value);
     // non-null only for a SALE/CLAWBACK whose ticket had priced, stock-covered items at the moment
-    // the record was created. Use #effectiveWeight() below to read "the weight payroll actually
+    // the record was created. Frozen after creation, with ONE sanctioned exception: the sales
+    // manager's CommissionService#adjustItemWeights recomputes it while the record is SUBMITTED
+    // (owner ruling 2026-10-01). Use #effectiveWeight() below to read "the weight payroll actually
     // uses" -- never read weightMultiplier() directly expecting it to be authoritative.
     BigDecimal effectiveWeightMultiplier
 ) {

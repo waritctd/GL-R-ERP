@@ -4302,6 +4302,29 @@ function isManualCommissionKind(kind) {
   return MANUAL_COMMISSION_KINDS.includes(kind);
 }
 
+// CommissionService#PendingCommissionDto shape. Item rows mirror the real query (description =
+// brand/model/color/texture/size; qtyFromStock; weightMultiplier). The three figures are NOT recomputed here -- see
+// commissions.pendingApproval.
+function buildMockPendingCommission(record) {
+  const ticket = db.tickets.find((t) => t.id === record.sourceTicketId);
+  const commission = buildCommissionRecord(record);
+  return structuredClone({
+    commission,
+    ticketCode: ticket?.code ?? null,
+    customerName: ticket?.customerName ?? null,
+    items: (ticket?.items ?? []).map((it) => ({
+      itemId: it.id,
+      description: [it.brand, it.model, it.color, it.texture, it.size].filter(Boolean).join(' '),
+      qty: it.qty ?? 0,
+      qtyFromStock: it.qtyFromStock ?? 0,
+      weightMultiplier: it.weightMultiplier ?? 1,
+    })),
+    effectiveWeight: record.effectiveWeight ?? commission.weightMultiplier ?? 1,
+    weightedCommissionableBase: record.commissionableBase ?? null,
+    estimatedCommission: record.estimatedCommission ?? null,
+  });
+}
+
 function buildCommissionRecord(record) {
   // A manual-kind record has no invoice_id on the real backend, so RECORD_SELECT's LEFT JOIN
   // yields a null CommissionRecord.invoiceDetails() — mirror that exactly rather than defaulting
@@ -7273,7 +7296,34 @@ function mockFinanceAvailableActions(user, ticket) {
   const anyMoneyStage = all.some(moneyStage);
   return all
     .filter((a) => MONEY.includes(a.action) || moneyStage(a) || (a.action === 'UPDATE_STAGE' && anyMoneyStage))
-    .map((a) => ({ action: a.action, label: a.label, targetStage: a.targetStage ?? null, requiredFields: a.requiredFields ?? [] }));
+    .map((a) => ({ action: a.action, label: a.label, targetStage: a.targetStage ?? null, requiredFields: a.requiredFields ?? [] }))
+    // RECORD_INVOICE is not a ticket action: FinanceDealService appends it when actor is account AND the deal is
+    // CLOSED_PAID AND no live SALE commission exists (the write itself is the existing POST /api/commissions/from-deal).
+    .concat(user.role === 'account' && ticket.salesStage === 'CLOSED_PAID' && !hasRecordedCommission(ticket)
+      ? [{ action: 'RECORD_INVOICE', label: 'บันทึกใบกำกับ', targetStage: null, requiredFields: [] }]
+      : []);
+}
+
+// FinanceDealDto.CommissionInvoice: the LATEST non-VOID SALE commission's invoice as finance may see it -- the
+// exact 15-key allowlist, and never a commission amount / base / weight / rep / approver.
+function mockFinanceCommissionInvoice(ticket) {
+  const record = db.commissions
+    .filter((c) => c.sourceTicketId === ticket.id && c.kind === 'SALE' && c.status !== 'VOID')
+    .sort((a, b) => b.id - a.id)[0];
+  if (!record?.invoiceDetails) return null;
+  const inv = record.invoiceDetails;
+  const attachments = mockAttachments.filter((a) => a.ticketId === ticket.id && a.attachType === 'INVOICE');
+  const file = attachments.find((a) => a.fileName === inv.invoiceAttachmentFileName) ?? attachments[attachments.length - 1] ?? null;
+  return {
+    invoiceNumber: inv.invoiceNumber, invoiceDate: inv.invoiceDate,
+    grossAmount: inv.grossAmount, bankFees: inv.bankFees, suspenseVat: inv.suspenseVat, transportFee: inv.transportFee,
+    cutFee: inv.cutFee, shortfall: inv.shortfall, withholdingTax: inv.withholdingTax, overpayment: inv.overpayment,
+    fileName: inv.invoiceAttachmentFileName ?? file?.fileName ?? null,
+    downloadPath: file ? `/api/attachments/${file.id}/file` : null,
+    approvalStatus: record.status,
+    rejectionReason: record.status === 'REJECTED' ? (record.rejectionReason ?? null) : null,
+    recordedAt: inv.createdAt ?? record.createdAt ?? null,
+  };
 }
 
 // FinanceDealService#requireFinanceAccess: role (403), existence (404), then account's row scope (403).
@@ -7304,6 +7354,7 @@ function buildFinanceDeal(raw, user) {
     id: a.id, fileName: a.fileName, attachType: a.attachType, uploadedAt: a.uploadedAt ?? null,
     fileSize: a.fileSize ?? null, downloadPath: `/api/attachments/${a.id}/file`,
   });
+  const payableInclVat = s.amountPayable == null ? null : moneyValue(Number(s.amountPayable) * 1.07);
   const deal = {
     id: s.id, code: s.code, title: s.title, salesStage: s.salesStage, lifecycle: s.lifecycle, status: s.status,
     moneyMilestone: track.find((m) => m.current) ?? null,
@@ -7317,10 +7368,16 @@ function buildFinanceDeal(raw, user) {
       vatBasis: 'EXCLUDING_VAT',
     })),
     money: {
-      amountPayable: s.amountPayable, amountPaid: s.amountPaid, amountOutstanding: s.amountOutstanding,
-      // The real server's payable is the VAT-INCLUSIVE grand total (owner ruling 2026-09-30). The mock does
-      // not reimplement that money math: its payable stays the pre-VAT sum, and says so.
-      amountVatBasis: 'EXCLUDING_VAT',
+      // Mirrors FinanceDealDto's VAT-basis javadoc (FinanceDealService): `amountPayable` is the VAT-INCLUSIVE
+      // grand total with amountVatBasis 'INCLUDING_VAT', and `amountPayableExVat` is
+      // TicketRepository#payableAmountExVat. The mock's own summary figure is the pre-VAT sum, so it becomes
+      // amountPayableExVat and the inclusive payable is that x 1.07 (2dp) -- a shape stand-in only; the real VAT
+      // math stays on the server. Outstanding = max(payable - paid, 0).
+      amountPayable: payableInclVat,
+      amountPayableExVat: s.amountPayable,
+      amountPaid: s.amountPaid,
+      amountOutstanding: payableInclVat == null ? null : moneyValue(Math.max(payableInclVat - Number(s.amountPaid ?? 0), 0)),
+      amountVatBasis: 'INCLUDING_VAT',
       depositPolicy: s.depositPolicy, paymentStatus: s.paymentStatus, paymentStage: s.paymentStage,
       fulfillmentStatus: s.fulfillmentStatus,
       // The real server derives these from the quotation's terms + the delivery date. The mock has no
@@ -7365,6 +7422,7 @@ function buildFinanceDeal(raw, user) {
       .filter((e) => e.kind === 'COMMENTED')
       .map((e) => ({ id: e.id, authorName: e.actorName, createdAt: e.createdAt, message: e.message })),
   availableActions: mockFinanceAvailableActions(user, ticket),
+  commissionInvoice: mockFinanceCommissionInvoice(ticket),
 };
   return deal;
 }
@@ -9786,7 +9844,8 @@ export const api = {
     },
   },
 
-  // Mirrors CommissionController + CommissionService (commission/).
+  // Mirrors CommissionController + CommissionService (commission/), including GET /pending-approval and
+  // POST /{id}/item-weights (CommissionService#listPendingApproval / #adjustItemWeights).
   commissions: {
     // Mirrors CommissionController#list PreAuthorize exactly: SALES, SALES_MANAGER, CEO only.
     // Neither ACCOUNT nor HR may call this — account only ever gets createFromDeal, hr reads via
@@ -9799,6 +9858,46 @@ export const api = {
       if (user.role === 'sales') list = list.filter((item) => item.salesRepId === user.id);
       if (params.payrollMonth) list = list.filter((item) => commissionMonth(item.payrollMonth) === params.payrollMonth.slice(0, 7));
       return delay({ commissions: list.map(buildCommissionRecord) });
+    },
+
+    // Mirrors CommissionController#pendingApproval / CommissionService#listPendingApproval: every SALE record
+    // with status SUBMITTED, ANY payroll month, ORDER BY commission_id ASC. sales_manager + ceo only (403 else).
+    // effectiveWeight / weightedCommissionableBase / estimatedCommission are SERVER computations (calculator +
+    // the rep's month totals) and the mock deliberately does not reimplement them (CLAUDE.md: a mock that
+    // mirrors a computation is no evidence). It echoes what the record already carries and null where absent.
+    async pendingApproval() {
+      const user = requireSession();
+      if (!['sales_manager', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const pending = db.commissions
+        .filter((item) => item.kind === 'SALE' && item.status === 'SUBMITTED')
+        .sort((a, b) => a.id - b.id)
+        .map(buildMockPendingCommission);
+      return delay({ commissions: pending });
+    },
+
+    // Mirrors CommissionService#adjustItemWeights. sales_manager ONLY (ceo is refused), before any read; the record
+    // must exist (404), be a ticket-linked SALE and still SUBMITTED (409), lines non-empty and each item must belong
+    // to the record's deal (400). Writes the per-item weight multipliers (same store as the ticket's own
+    // setItemWeightMultipliers). The real service then re-derives the record's effective weight with
+    // CommissionCalculator#itemDerivedWeight; the mock does NOT recompute it (not supported in mock mode) --
+    // effectiveWeight / estimatedCommission stay whatever the record already had.
+    async adjustItemWeights(id, payload = {}) {
+      const user = requireSession();
+      if (user.role !== 'sales_manager') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const record = db.commissions.find((item) => item.id === Number(id));
+      if (!record) fail('ไม่พบรายการค่าคอมนี้', 404);
+      if (record.kind !== 'SALE' || record.sourceTicketId == null) fail('รายการนี้ไม่ได้เชื่อมกับดีล', 409);
+      if (record.status !== 'SUBMITTED') fail('ปรับน้ำหนักได้เฉพาะรายการที่รอผู้จัดการฝ่ายขายอนุมัติ', 409);
+      const lines = payload.lines ?? [];
+      if (!lines.length) fail('ต้องระบุรายการสินค้า', 400);
+      const ticket = db.tickets.find((t) => t.id === record.sourceTicketId);
+      if (!ticket) fail('ไม่พบดีลนี้', 404);
+      for (const line of lines) {
+        if (!(ticket.items ?? []).some((it) => it.id === Number(line.itemId))) fail('รายการสินค้าไม่อยู่ในดีลนี้', 400);
+        if (![1, 2, 3].includes(Number(line.weightMultiplier))) fail('น้ำหนักคอมมิชชั่นต้องเป็น 1, 2 หรือ 3', 400);
+      }
+      updateItemWeightMultipliersForTicket(ticket, user, payload);
+      return delay({ pending: buildMockPendingCommission(record) });
     },
 
     // Slice A2 (AUTHZ CHANGE): sales removed from SUBMIT_ROLES — account replaces it as the
@@ -12189,7 +12288,8 @@ export const api = {
     },
   },
 
-  // Mirrors FinanceDealController + FinanceDealService (finance/): GET /api/finance/deals/{id} and the money
+  // Mirrors FinanceDealController + FinanceDealService (finance/): GET /api/finance/deals/{id} (incl. money.amountPayableExVat,
+  // commissionInvoice and the RECORD_INVOICE action) and the money
   // actions under it (H1 lockdown), for `account` and `ceo` ONLY. account is row-scoped to the same scope as the
   // deal list (accountListScopeIncludes, never a quotation-only container); ceo reads any deal. Each action is the
   // SAME shared body as its /api/tickets twin (mockRecordPayment, mockSetBilling, ...), which keeps TODAY's role gate

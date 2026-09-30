@@ -772,6 +772,45 @@ public class CommissionRepository {
      * time (the invoice_number UNIQUE constraint alone would not catch a genuine second invoice
      * number for the same deal).
      */
+    /**
+     * Freezes a recomputed blended weight onto a record, but ONLY while it is still SUBMITTED. The sole
+     * sanctioned post-creation write to {@code effective_weight_multiplier} (owner ruling 2026-10-01): the
+     * sales manager's {@link CommissionService#adjustItemWeights}. Returns rows updated; 0 means the record
+     * left SUBMITTED underneath the caller.
+     */
+    public int updateEffectiveWeightMultiplierIfSubmitted(long commissionId, BigDecimal weight) {
+        return jdbc.update("""
+            UPDATE sales.commission_record
+               SET effective_weight_multiplier = :weight, updated_at = now()
+             WHERE commission_id = :id AND status = 'SUBMITTED'
+            """, new MapSqlParameterSource().addValue("id", commissionId).addValue("weight", weight));
+    }
+
+    /** Every SALE record awaiting the sales manager, any payroll month, oldest first. */
+    public List<CommissionRecord> findSubmittedSaleRecords() {
+        return jdbc.query(
+            RECORD_SELECT + """
+             WHERE cr.kind = 'SALE' AND cr.status = 'SUBMITTED'
+             ORDER BY cr.commission_id ASC
+            """,
+            Map.of(),
+            (rs, rowNum) -> mapRecord(rs));
+    }
+
+    /** A deal's lines for the pending card; description mirrors FinanceDealRepository's item description. */
+    public List<PendingCommissionItemDto> findPendingItems(long ticketId) {
+        return jdbc.query("""
+            SELECT ti.item_id,
+                   TRIM(CONCAT_WS(' ', ti.brand, ti.model, ti.color, ti.texture, ti.size)) AS description,
+                   ti.qty, ti.qty_from_stock, ti.weight_multiplier
+              FROM sales.ticket_item ti
+             WHERE ti.ticket_id = :ticketId
+             ORDER BY ti.sort_order, ti.item_id
+            """, Map.of("ticketId", ticketId), (rs, rowNum) -> new PendingCommissionItemDto(
+                rs.getLong("item_id"), rs.getString("description"), rs.getBigDecimal("qty"),
+                rs.getBigDecimal("qty_from_stock"), rs.getInt("weight_multiplier")));
+    }
+
     public boolean hasActiveCommissionForTicket(long ticketId) {
         Boolean value = jdbc.queryForObject("""
             SELECT EXISTS(

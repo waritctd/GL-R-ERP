@@ -709,6 +709,10 @@ export const api = {
   },
   commissions: {
     list: (params) => apiRequest(withQuery(API_ROUTES.commissions.list, params)),
+    // sales_manager/ceo รออนุมัติ view: -> { commissions: [PendingCommissionDto] }.
+    pendingApproval: () => apiRequest(API_ROUTES.commissions.pendingApproval),
+    // sales_manager only: { lines: [{ itemId, weightMultiplier }] } -> { pending: PendingCommissionDto }.
+    adjustItemWeights: (id, payload) => apiRequest(API_ROUTES.commissions.itemWeights(id), { method: 'POST', body: payload }),
     create: async (payload) => {
       if (!Object.prototype.hasOwnProperty.call(payload, 'invoiceAttachment')) {
         return apiRequest(API_ROUTES.commissions.create, { method: 'POST', body: payload });

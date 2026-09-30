@@ -337,6 +337,10 @@ export const API_ROUTES = {
     // Slice A2: the accountant's auto-create trigger at deal close. Mirrors
     // CommissionController's POST /api/commissions/from-deal (ACCOUNT-only).
     createFromDeal: '/api/commissions/from-deal',
+    // sales_manager/ceo รออนุมัติ view: every SUBMITTED sale record (any payroll month), and the
+    // sales_manager-only per-item weight adjustment. Mirrors CommissionController#pendingApproval / #itemWeights.
+    pendingApproval: '/api/commissions/pending-approval',
+    itemWeights: (id) => `/api/commissions/${id}/item-weights`,
     deductions: (id) => `/api/commissions/${id}/deductions`,
     approve: (id) => `/api/commissions/${id}/approve`,
     reject: (id) => `/api/commissions/${id}/reject`,

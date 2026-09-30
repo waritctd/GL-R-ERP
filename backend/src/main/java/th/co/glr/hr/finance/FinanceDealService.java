@@ -154,7 +154,7 @@ public class FinanceDealService {
             .map(r -> new FinanceDealDto.Payment(r.receiptId(), r.kind(), r.amount(), r.currency(), r.receivedAt(),
                 r.receiptRef(), r.note(), r.depositNoticeId(), r.recordedByName()))
             .toList();
-        var money = new FinanceDealDto.Money(s.amountPayable(), s.amountPaid(), s.amountOutstanding(),
+        var money = new FinanceDealDto.Money(s.amountPayable(), tickets.payableAmountExVat(ticketId), s.amountPaid(), s.amountOutstanding(),
             s.depositPolicy(), s.paymentStatus(), s.paymentStage(), s.fulfillmentStatus(),
             s.paymentDueDate(), s.paymentDueBasis(), s.paymentDueCreditDays(), s.overdue(),
             s.closeConfirmedAt(), s.invoiceOnFile(), s.commissionRecorded(), FinanceDealDto.INCLUDING_VAT, payments);
@@ -181,7 +181,7 @@ public class FinanceDealService {
 
         return new FinanceDealDto(s.id(), s.code(), s.title(), s.salesStage(), s.lifecycle(), s.status(),
             currentMilestone, track, s.customerName(), s.customerId(), s.projectName(), s.contactName(),
-            items, money, documents, finance.findComments(ticketId), availableActions(ticketId, actor));
+            items, money, documents, finance.findComments(ticketId), availableActions(ticketId, actor, s), finance.findCommissionInvoice(ticketId).orElse(null));
     }
 
     /**
@@ -189,17 +189,24 @@ public class FinanceDealService {
      * financeActions} -- the same gate/readiness logic, not a second copy) narrowed to money actions, and to
      * ADVANCE_STAGE / UPDATE_STAGE only for the two money stages.
      */
-    private List<FinanceDealDto.Action> availableActions(long ticketId, UserPrincipal actor) {
+    private List<FinanceDealDto.Action> availableActions(long ticketId, UserPrincipal actor, TicketSummaryDto s) {
         // Scope was enforced up front (requireFinanceAccess); an authorised action may have moved the deal out of it.
         var all = ticketService.financeActionsAlreadyScoped(ticketId, actor).availableActions();
         boolean anyMoneyStage = all.stream().anyMatch(a -> "ADVANCE_STAGE".equals(a.action())
             && DealStage.ACCOUNT_TARGET_STAGES.contains(a.targetStage()));
-        return all.stream()
+        List<FinanceDealDto.Action> actions = new java.util.ArrayList<>(all.stream()
             .filter(a -> MONEY_ACTIONS.contains(a.action())
                 || ("ADVANCE_STAGE".equals(a.action()) && DealStage.ACCOUNT_TARGET_STAGES.contains(a.targetStage()))
                 || ("UPDATE_STAGE".equals(a.action()) && anyMoneyStage))
             .map(FinanceDealService::toAction)
-            .toList();
+            .toList());
+        // Recording the invoice goes through CommissionService#createFromDeal, which is account-only and
+        // needs CLOSED_PAID with no active commission -- so never offered to ceo.
+        if ("account".equals(actor.role()) && DealStage.CLOSED_PAID.equals(s.salesStage())
+                && !s.commissionRecorded()) {
+            actions.add(new FinanceDealDto.Action("RECORD_INVOICE", "บันทึกใบกำกับ", null, List.of()));
+        }
+        return actions;
     }
 
     private static FinanceDealDto.Action toAction(TicketActionDto a) {
