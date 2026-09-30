@@ -9,12 +9,12 @@ import { Panel } from '../../components/common/Layout.jsx';
 import { entryChannelLabel } from '../../utils/format.js';
 import { CustomerDetailsFields } from './CustomerDetailsFields.jsx';
 
-// ช่องทางรับงาน (owner ask 2026-09-10): the same four codes th.co.glr.hr.ticket.EntryChannel
-// stores, in the order the spec lists them. Deliberately includes UNSPECIFIED as a pickable
-// option and defaults to it -- unlike TicketCreateModal.jsx's own ENTRY_CHANNEL_OPTIONS (which
-// never offers it, per that file's own comment), this card is reached earlier in the flow, often
-// before the rep even knows how the lead came in.
-const ENTRY_CHANNEL_CODES = ['UNSPECIFIED', 'DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT'];
+// ช่องทางรับงาน (owner ask 2026-09-10): the three real channels th.co.glr.hr.ticket.EntryChannel
+// accepts as INPUT. UNSPECIFIED is deliberately NOT offered — it is the stored default, and the
+// server refuses it as a setEntryChannel input — so it is never a button, matching
+// TicketCreateModal.jsx's own ENTRY_CHANNEL_OPTIONS. The form's initial value stays UNSPECIFIED
+// (nothing pressed) until the rep picks one.
+const ENTRY_CHANNEL_CODES = ['DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT'];
 
 function emptyNewCustomer() {
   return { name: '', taxId: '', phone: '', address: '', ...emptyThaiAddress() };
@@ -508,7 +508,7 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
 
       <div className="mt-3">
         <span className="mb-1 block text-xs">ช่องทางรับงาน</span>
-        <div className="flex flex-wrap gap-2">
+        <div id="deal-entry-channel" role="group" aria-label="ช่องทางรับงาน" aria-describedby={errors?.entryChannel ? 'deal-entry-channel-error' : undefined} tabIndex={-1} className="flex flex-wrap gap-2">
           {ENTRY_CHANNEL_CODES.map((code) => (
             <button
               key={code}
@@ -521,6 +521,7 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
             </button>
           ))}
         </div>
+        {errors?.entryChannel ? <p id="deal-entry-channel-error" role="alert" className="mt-1 text-xs text-danger">{errors.entryChannel}</p> : null}
       </div>
 
     </Panel>

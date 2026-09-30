@@ -163,3 +163,13 @@ export function assertStageLabelsComplete(codes) {
   }
   console.error(message);
 }
+
+/**
+ * Headline overrides for DealStagePanel, for stages whose own label does not say who the stage is
+ * dealing with. S4-S8 already do ("เสนอราคาผู้ออกแบบ", "เสนอราคาเจ้าของโครงการ", ...), so only
+ * ORDER_RECEIVED needs one. DISPLAY ONLY — the shared label in utils/format.js is unchanged, so
+ * lists and history keep saying "ได้รับใบสั่งซื้อ".
+ */
+export const STAGE_HEADLINE = {
+  ORDER_RECEIVED: 'ได้รับใบสั่งซื้อจากผู้รับเหมา/ผู้ซื้อ',
+};

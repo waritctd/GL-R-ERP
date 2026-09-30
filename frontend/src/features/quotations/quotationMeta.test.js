@@ -1450,8 +1450,13 @@ describe('buildQuotationChecklist', () => {
     //
     // Owner-directed reversal of F2/V167 (2026-09-26): 'contact' is GONE from this set —
     // ผู้สั่งซื้อ is now a single optional free-text field with nothing left to block on.
+    //
+    // Owner ruling 2026-09-30: 'entryChannel' joins the set on the INLINE-CREATE path — a rep must
+    // pick one of the three real ช่องทางรับงาน before บันทึกร่าง creates the deal. This is the ONE
+    // entry here the backend does NOT refuse (TicketService.create accepts UNSPECIFIED, the V144
+    // default): it is a deliberate frontend-only product rule, ruled on, not a mirror.
     expect([...meta.QUOTATION_BLOCKING_CHECKS].sort()).toEqual(
-      ['creditDaysInvalid', 'customer', 'items', 'locationLabels', 'priceModeLanguage', 'project'],
+      ['creditDaysInvalid', 'customer', 'entryChannel', 'items', 'locationLabels', 'priceModeLanguage', 'project'],
     );
     // Wrong-way-round: none of the header fields a customer might simply not have is blocking,
     // and the blank-creditDays reminder is a warning, not a blocker (fix 6).
@@ -1513,6 +1518,24 @@ describe('buildQuotationChecklist', () => {
       { check: 'customer', message: 'ต้องเลือกลูกค้าก่อนบันทึกร่าง', targetId: 'deal-customer', blocking: true },
       { check: 'project', message: 'ต้องเลือกโครงการก่อนบันทึกร่าง', targetId: 'deal-project', blocking: true },
     ]);
+  });
+
+  it('on the inline path BLOCKS until a ช่องทางรับงาน is picked, targeting its control', () => {
+    const entries = meta.buildQuotationChecklist({
+      ...complete, isInlineCreate: true, customer: { id: 5, name: 'x' }, hasProject: true, hasEntryChannel: false,
+    });
+    expect(entries).toEqual([
+      { check: 'entryChannel', message: 'ต้องเลือกช่องทางรับงานก่อนบันทึกร่าง', targetId: 'deal-entry-channel', blocking: true },
+    ]);
+  });
+
+  // Wrong-way-round: existing callers never pass it, and a deal that already exists has its channel.
+  it('raises nothing about ช่องทางรับงาน when it is picked, omitted, or the deal already exists', () => {
+    const inline = { ...complete, isInlineCreate: true, customer: { id: 5, name: 'x' }, hasProject: true };
+    expect(meta.buildQuotationChecklist({ ...inline, hasEntryChannel: true })).toEqual([]);
+    expect(meta.buildQuotationChecklist(inline)).toEqual([]);
+    expect(meta.buildQuotationChecklist({ ...complete, hasEntryChannel: false })
+      .some((e) => e.check === 'entryChannel')).toBe(false);
   });
 
   it('on a deal with no โครงการ only WARNS — the quotation service does not refuse it, and it is not editable here', () => {

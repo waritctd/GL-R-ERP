@@ -212,6 +212,15 @@ public final class DealQuotationDtos {
          * V192). Null/blank (the default, and every pre-V192 row) prints the dotted placeholder —
          * the customer signs on paper — exactly like every other signature slot with nothing set. */
         String orderedByName,
+        /** {@code sales.quotation.recipient_type} — who this quotation is FOR: the source pricing
+         * request's {@code DESIGNER/OWNER/BUYER} for a PRICING_REQUEST-origin row, {@code
+         * UNSPECIFIED} for a DEAL_DIRECT row (see {@code DealQuotationRepository.InsertDraftParams}).
+         * Read-only exposure of an already-persisted column (Round 8, owner-approved 2026-09-30):
+         * the register shows it as a chip. Null only on a row read through a path that predates it. */
+        String recipientType,
+        /** {@code sales.quotation.recipient_label} — the free-text recipient name that goes with
+         * {@link #recipientType} (e.g. "คุณสมชาย (ผู้ออกแบบ)"). Nullable. */
+        String recipientLabel,
         // ── Quotation ↔ deal linking, slice 1 (IA approved 2026-09-30, .design/quotation-deal-link) ──
         /** {@code sales.ticket.code} of the deal this quotation hangs off ({@link #ticketId}) — joined
          * in on list AND detail so {@code /quotations} and the editor header can print "ดีล
@@ -263,7 +272,49 @@ public final class DealQuotationDtos {
                 omitContactHonorific, fullPaymentTerm, derivedFromQuotationId, derivedFromQuotationNumber,
                 derivedFromQuotationStatus, items, createdAt, updatedAt, origin, pricingRequestId,
                 priceModeChangedFromCeo, ceoPriceMode, pricingRequestCode, itemsRemovedFromCeoCount,
-                removedCeoItems, orderedByName, null, null, false);
+                removedCeoItems, orderedByName, null, null, null, null, false);
+        }
+
+        /** #1084's shape (recipient chip, merged into develop the same day as slice 1) — with
+         * {@link #recipientType}/{@link #recipientLabel} but no slice-1 fields —
+         * kept so every existing construction site (tests, mostly) compiles unchanged, the same
+         * device {@code TicketSummaryDto} used in #1083. Defaults to null/null/false, which is what
+         * every one of those fixtures means (none of them is a LEGACY row). */
+        public DealQuotationDto(
+            long id, String number, long ticketId, String docStatus, int revisionNo,
+            Long parentQuotationId, long createdById, String createdByName, String createdByNameEn,
+            long salesRepId, String salesRepName, String salesRepNameEn, String salesRepPhone,
+            Instant submittedAt, Long approvedById, String approvedByName, String approvedByNameEn,
+            Instant approvedAt, String approvalNote, LocalDate quotationDate, String customerName,
+            String customerAddress, String customerTaxId, String customerPhone, Long contactId,
+            String contactName, String contactPhone, String contactEmail, String projectName,
+            String deptCode, String unitCode, LocalDate offerDate, Integer depositPercent,
+            String remainderMode, Integer creditDays, Integer validityDays, LocalDate validityDate,
+            String validityMode, LocalDate validityUntil,
+            String customerNotes, String priceMode, String documentLanguage, BigDecimal subtotalAmount,
+            BigDecimal vatAmount, BigDecimal grandTotal, String currency, boolean approverHasSignature,
+            Long printedByDisplayId, String printedByDisplayName, String printedByDisplayNameEn,
+            Long salesRepDisplayId, String salesRepDisplayName, String salesRepDisplayNameEn,
+            String salesRepDisplayPhone, boolean omitContactHonorific, String fullPaymentTerm,
+            Long derivedFromQuotationId, String derivedFromQuotationNumber, String derivedFromQuotationStatus,
+            List<DealQuotationItemDto> items, Instant createdAt, Instant updatedAt,
+            String origin, Long pricingRequestId, boolean priceModeChangedFromCeo, String ceoPriceMode,
+            String pricingRequestCode, int itemsRemovedFromCeoCount,
+            List<DealQuotationRepository.RemovedLinkedItemDto> removedCeoItems, String orderedByName,
+            String recipientType, String recipientLabel) {
+            this(id, number, ticketId, docStatus, revisionNo, parentQuotationId, createdById, createdByName,
+                createdByNameEn, salesRepId, salesRepName, salesRepNameEn, salesRepPhone, submittedAt,
+                approvedById, approvedByName, approvedByNameEn, approvedAt, approvalNote, quotationDate,
+                customerName, customerAddress, customerTaxId, customerPhone, contactId, contactName,
+                contactPhone, contactEmail, projectName, deptCode, unitCode, offerDate, depositPercent,
+                remainderMode, creditDays, validityDays, validityDate, validityMode, validityUntil,
+                customerNotes, priceMode, documentLanguage, subtotalAmount, vatAmount, grandTotal, currency,
+                approverHasSignature, printedByDisplayId, printedByDisplayName, printedByDisplayNameEn,
+                salesRepDisplayId, salesRepDisplayName, salesRepDisplayNameEn, salesRepDisplayPhone,
+                omitContactHonorific, fullPaymentTerm, derivedFromQuotationId, derivedFromQuotationNumber,
+                derivedFromQuotationStatus, items, createdAt, updatedAt, origin, pricingRequestId,
+                priceModeChangedFromCeo, ceoPriceMode, pricingRequestCode, itemsRemovedFromCeoCount,
+                removedCeoItems, orderedByName, recipientType, recipientLabel, null, null, false);
         }
 
         /** This DTO carrying {@link #removedCeoItems} — same device as {@code
@@ -285,7 +336,7 @@ public final class DealQuotationDtos {
                 salesRepDisplayPhone, omitContactHonorific, fullPaymentTerm, derivedFromQuotationId,
                 derivedFromQuotationNumber, derivedFromQuotationStatus, items, createdAt, updatedAt, origin,
                 pricingRequestId, priceModeChangedFromCeo, ceoPriceMode, pricingRequestCode,
-                itemsRemovedFromCeoCount, removedItems, orderedByName, ticketCode, dealStage, readOnly);
+                itemsRemovedFromCeoCount, removedItems, orderedByName, recipientType, recipientLabel, ticketCode, dealStage, readOnly);
         }
 
         /** This DTO carrying {@code value} as its {@link #orderedByName} — same appended-field
@@ -305,7 +356,7 @@ public final class DealQuotationDtos {
                 salesRepDisplayPhone, omitContactHonorific, fullPaymentTerm, derivedFromQuotationId,
                 derivedFromQuotationNumber, derivedFromQuotationStatus, items, createdAt, updatedAt, origin,
                 pricingRequestId, priceModeChangedFromCeo, ceoPriceMode, pricingRequestCode,
-                itemsRemovedFromCeoCount, removedCeoItems, value, ticketCode, dealStage, readOnly);
+                itemsRemovedFromCeoCount, removedCeoItems, value, recipientType, recipientLabel, ticketCode, dealStage, readOnly);
         }
 
         /** The pre-M4(c) shape (no {@link #itemsRemovedFromCeoCount}) — kept so every existing
@@ -342,7 +393,7 @@ public final class DealQuotationDtos {
                 salesRepDisplayId, salesRepDisplayName, salesRepDisplayNameEn, salesRepDisplayPhone,
                 omitContactHonorific, fullPaymentTerm, derivedFromQuotationId, derivedFromQuotationNumber,
                 derivedFromQuotationStatus, items, createdAt, updatedAt, origin, pricingRequestId,
-                priceModeChangedFromCeo, ceoPriceMode, pricingRequestCode, 0, List.of(), null);
+                priceModeChangedFromCeo, ceoPriceMode, pricingRequestCode, 0, List.of(), null, null, null);
         }
 
         /** The pre-GLA-123 shape (no {@link #origin}/{@link #pricingRequestId}/CEO-comparison

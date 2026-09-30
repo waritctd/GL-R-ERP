@@ -1263,6 +1263,24 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
         assertThat(forTicket.get(0).origin()).isEqualTo("PRICING_REQUEST");
     }
 
+    /** Round 8: sales.quotation.recipient_type/recipient_label were always persisted (copied from
+     * the source pricing request) but DealQuotationDto omitted them, so DealDocumentRegister could
+     * not say who a PRICING_REQUEST-origin quotation is for. Through the real service + repository
+     * (the row mapper and every SELECT feeding the DTO), listForTicket must serve them. */
+    @Test
+    void listForTicket_servesTheSourcePricingRequestsRecipient() {
+        PricingDecisionDto decision = approvedDecision("NET", id -> List.of());
+        jdbc.update("UPDATE sales.pricing_request SET recipient_type = 'BUYER', recipient_label = :label"
+            + " WHERE pricing_request_id = :id", Map.of("label", "คุณสมชาย (ผู้ซื้อ)", "id", decision.pricingRequestId()));
+        DealQuotationDto created = quotationService.createFromPricingRequest(decision.pricingRequestId(), salesActor);
+
+        DealQuotationDto listed = quotationService.listForTicket(ticketId, salesActor).stream()
+            .filter(q -> q.id() == created.id()).findFirst().orElseThrow();
+
+        assertThat(listed.recipientType()).isEqualTo("BUYER");
+        assertThat(listed.recipientLabel()).isEqualTo("คุณสมชาย (ผู้ซื้อ)");
+    }
+
     // ─────────────────────────────────────────────────────────────────────────────────────
     // Helpers
     // ─────────────────────────────────────────────────────────────────────────────────────
