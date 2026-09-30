@@ -1,3 +1,5 @@
+/* Hallmark · genre: modern-minimal · macrostructure: Split Studio · tone: utilitarian · theme: project system (Sarabun + indigo, owner-locked) · redesign */
+/* Hallmark · pre-emit critique: P4 H4 E4 S4 R4 V4 (pending cards split identity+lines from figures+actions via container query; list view keeps DataTable; account panel splits deal lookup from invoice form) */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
@@ -291,77 +293,96 @@ const formatQty = (value) => Number(value ?? 0).toLocaleString('th-TH', { maximu
 
 function PendingCommissionCard({ entry, canAdjust, adjusting, saving, canReviewRecord, onAdjust, onApprove, onReject }) {
   const { commission: record, items = [] } = entry;
+  const reviewable = canReviewRecord(record);
   return (
-    <article className="grid min-w-0 gap-3 rounded-md border border-border bg-surface p-4 mobile:p-3">
-      <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1">
-        <div className="grid min-w-0 gap-0.5">
-          <strong className="text-md font-extrabold text-text [overflow-wrap:anywhere]">{record.invoiceDetails?.invoiceNumber}</strong>
-          <span className="text-sm text-text-muted [overflow-wrap:anywhere]">{record.salesRepName || record.salesRepId}</span>
-          <span className="text-sm text-text-muted [overflow-wrap:anywhere]">{[entry.ticketCode, entry.customerName].filter(Boolean).join(' · ')}</span>
-        </div>
-        <StatusBadge tone="warning">รอผู้จัดการฝ่ายขายอนุมัติ</StatusBadge>
-      </header>
+    <article className="@container min-w-0 overflow-hidden rounded-md border border-border bg-surface">
+      <div className="grid min-w-0 @min-[46rem]:grid-cols-[minmax(0,1.7fr)_minmax(15rem,1fr)]">
+        {/* Left half: who and which deal, then the weighted lines. */}
+        <div className="grid min-w-0 content-start gap-4 p-4 mobile:p-3">
+          <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+            <div className="grid min-w-0 gap-0.5">
+              <strong className="text-lg font-extrabold text-text [overflow-wrap:anywhere]">{record.invoiceDetails?.invoiceNumber}</strong>
+              <span className="text-sm text-text-secondary [overflow-wrap:anywhere]">{record.salesRepName || record.salesRepId}</span>
+              <span className="text-sm text-text-muted [overflow-wrap:anywhere]">{[entry.ticketCode, entry.customerName].filter(Boolean).join(' · ')}</span>
+            </div>
+            <StatusBadge tone="warning">รอผู้จัดการฝ่ายขายอนุมัติ</StatusBadge>
+          </header>
 
-      <div className="min-w-0 overflow-x-auto">
-        <table className="w-full text-left text-sm">
-          <thead>
-            <tr className="text-text-muted">
-              <th scope="col" className="py-1 pr-3 font-bold">สินค้า</th>
-              <th scope="col" className="py-1 pr-3 text-right font-bold">จำนวน</th>
-              <th scope="col" className="py-1 pr-3 text-right font-bold">จากสต็อก</th>
-              <th scope="col" className="py-1 font-bold">น้ำหนัก</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((item) => (
-              <tr key={item.itemId} className="border-t border-border">
-                <td className="py-1.5 pr-3 [overflow-wrap:anywhere]">{item.description}</td>
-                <td className="py-1.5 pr-3 text-right tabular-nums">{formatQty(item.qty)}</td>
-                <td className="py-1.5 pr-3 text-right tabular-nums">{formatQty(item.qtyFromStock)}</td>
-                <td className="py-1.5">
-                  <select
-                    aria-label={`น้ำหนัก ${item.description}`}
-                    className="pointer-coarse:min-h-11"
-                    value={String(item.weightMultiplier)}
-                    disabled={!canAdjust || adjusting}
-                    onChange={(event) => onAdjust(record.id, item.itemId, Number(event.target.value))}
-                  >
-                    {WEIGHT_OPTIONS.map((w) => <option key={w} value={w}>{`×${w}`}</option>)}
-                  </select>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+          <div className="min-w-0 overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead>
+                <tr className="border-b border-border text-text-muted">
+                  <th scope="col" className="py-1.5 pr-3 font-bold">สินค้า</th>
+                  <th scope="col" className="py-1.5 pr-3 text-right font-bold">จำนวน</th>
+                  <th scope="col" className="py-1.5 pr-3 text-right font-bold">จากสต็อก</th>
+                  <th scope="col" className="py-1.5 font-bold">น้ำหนัก</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((item) => (
+                  <tr key={item.itemId} className="border-t border-border first:border-t-0">
+                    <td className="py-2 pr-3 [overflow-wrap:anywhere]">{item.description}</td>
+                    <td className="py-2 pr-3 text-right tabular-nums">{formatQty(item.qty)}</td>
+                    <td className="py-2 pr-3 text-right tabular-nums">{formatQty(item.qtyFromStock)}</td>
+                    <td className="py-2">
+                      <select
+                        aria-label={`น้ำหนัก ${item.description}`}
+                        className="min-w-[4.5rem] hover:border-border-muted disabled:cursor-not-allowed disabled:bg-surface-subtle disabled:text-text-muted pointer-coarse:min-h-11"
+                        value={String(item.weightMultiplier)}
+                        disabled={!canAdjust || adjusting}
+                        onChange={(event) => onAdjust(record.id, item.itemId, Number(event.target.value))}
+                      >
+                        {WEIGHT_OPTIONS.map((w) => <option key={w} value={w}>{`×${w}`}</option>)}
+                      </select>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Right half: the server-computed figures and the decision. */}
+        <div className="grid min-w-0 content-between gap-4 border-t border-border bg-surface-muted p-4 @min-[46rem]:border-l @min-[46rem]:border-t-0 mobile:p-3">
+          <dl className="m-0 grid gap-3">
+            <div className="grid gap-0.5">
+              <dt className="text-sm text-text-muted">ค่าคอมที่คำนวณได้</dt>
+              <dd className="m-0 text-2xl font-extrabold leading-tight tabular-nums text-text [overflow-wrap:anywhere]">{formatMoney(entry.estimatedCommission)}</dd>
+            </div>
+            <div className="grid grid-cols-2 gap-3 border-t border-border pt-3">
+              <div className="grid min-w-0 content-start gap-0.5">
+                <dt className="text-sm text-text-muted">น้ำหนักรวม</dt>
+                <dd className="m-0 text-md font-extrabold tabular-nums text-text">{Number(entry.effectiveWeight ?? 0).toFixed(2)}</dd>
+              </div>
+              <div className="grid min-w-0 content-start gap-0.5">
+                <dt className="text-sm text-text-muted">ฐานค่าคอมถ่วงน้ำหนัก</dt>
+                <dd className="m-0 text-md font-extrabold tabular-nums text-text [overflow-wrap:anywhere]">{formatMoney(entry.weightedCommissionableBase)}</dd>
+              </div>
+            </div>
+          </dl>
+
+          {reviewable ? (
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button" variant="secondary"
+                className="min-w-0 flex-1 whitespace-nowrap border-success text-success hover:bg-success-bg active:bg-success-bg pointer-coarse:min-h-11 mobile:min-h-11"
+                disabled={saving || adjusting} onClick={() => onApprove(record.id)}
+              >
+                <Icon name="check" size={14} />
+                ผู้จัดการอนุมัติ
+              </Button>
+              <Button
+                type="button" variant="secondary"
+                className="min-w-0 flex-1 whitespace-nowrap border-danger text-danger hover:bg-danger-bg active:bg-danger-bg pointer-coarse:min-h-11 mobile:min-h-11"
+                disabled={saving || adjusting} onClick={() => onReject(record.id)}
+              >
+                <Icon name="close" size={14} />
+                ไม่อนุมัติ
+              </Button>
+            </div>
+          ) : null}
+        </div>
       </div>
-
-      <dl className="m-0 grid grid-cols-3 gap-3 mobile:grid-cols-1">
-        <div className="grid gap-0.5">
-          <dt className="text-xs text-text-muted">น้ำหนักรวม</dt>
-          <dd className="m-0 text-md font-extrabold tabular-nums">{Number(entry.effectiveWeight ?? 0).toFixed(2)}</dd>
-        </div>
-        <div className="grid gap-0.5">
-          <dt className="text-xs text-text-muted">ฐานค่าคอมถ่วงน้ำหนัก</dt>
-          <dd className="m-0 text-md font-extrabold tabular-nums">{formatMoney(entry.weightedCommissionableBase)}</dd>
-        </div>
-        <div className="grid gap-0.5">
-          <dt className="text-xs text-text-muted">ค่าคอมที่คำนวณได้</dt>
-          <dd className="m-0 text-md font-extrabold tabular-nums">{formatMoney(entry.estimatedCommission)}</dd>
-        </div>
-      </dl>
-
-      {canReviewRecord(record) ? (
-        <div className="flex flex-wrap gap-2">
-          <Button type="button" variant="secondary" className="min-h-11 text-success border-success" disabled={saving || adjusting} onClick={() => onApprove(record.id)}>
-            <Icon name="check" size={14} />
-            ผู้จัดการอนุมัติ
-          </Button>
-          <Button type="button" variant="secondary" className="min-h-11 text-danger border-danger" disabled={saving || adjusting} onClick={() => onReject(record.id)}>
-            <Icon name="close" size={14} />
-            ไม่อนุมัติ
-          </Button>
-        </div>
-      ) : null}
     </article>
   );
 }
@@ -374,7 +395,8 @@ function PendingApprovalView({ entries, loading, canAdjust, adjustingId, saving,
     return <EmptyState icon="badge" title="ไม่มีรายการรออนุมัติ" description="ใบกำกับที่ฝ่ายบัญชีบันทึกและรอผู้จัดการฝ่ายขายอนุมัติจะแสดงที่นี่ ทุกรอบเดือน" />;
   }
   return (
-    <div className="grid gap-3">
+    <div className="grid gap-4">
+      <p className="m-0 text-sm text-text-muted">{`${entries.length} รายการรออนุมัติ จากทุกรอบเดือน — ปรับน้ำหนักสินค้าแล้วระบบคำนวณค่าคอมใหม่ให้`}</p>
       {entries.map((entry) => (
         <PendingCommissionCard
           key={entry.commission.id}
@@ -1158,43 +1180,47 @@ export function CommissionPage({ user, showToast }) {
 
   return (
     <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
-      <PageHeader
-        title="ค่าคอมมิชชัน"
-        subtitle="Sales & Commission Management"
-        actions={!canCreateFromDeal ? (
-          <div className="flex flex-wrap items-center gap-3">
-            <label className="inline-flex items-center gap-2 text-sm font-bold">
-              รอบเดือน
-              <input type="month" value={month} onChange={(event) => setMonth(event.target.value)} className="w-[150px]" />
-            </label>
-            {/* A tax invoice recorded in month M lands in payroll month M+1, so a rep who closes a
-                deal and checks this page on the same day sees nothing — and the table's empty state
-                cannot warn them, because the CURRENT month usually has other rows and so is not
-                empty. Measured 2026-08-28: an invoice dated 27 Aug produced payroll_month 2026-09.
-                Hence a standing hint plus a one-click jump, rather than an empty-state message. */}
+      <PageHeader title="ค่าคอมมิชชัน" subtitle="ตรวจสอบ อนุมัติ และติดตามค่าคอมมิชชันของฝ่ายขาย" />
+
+      {!canCreateFromDeal ? (
+        <div className="flex flex-wrap items-end gap-x-3 gap-y-3 border-b border-border pb-4">
+          <label className="grid w-[220px] gap-1.5 text-sm font-bold mobile:w-full">
+            รอบเดือน
+            <input type="month" value={month} onChange={(event) => setMonth(event.target.value)} className="hover:border-border-muted pointer-coarse:min-h-11" />
+          </label>
+          {/* A tax invoice recorded in month M lands in payroll month M+1, so a rep who closes a
+              deal and checks this page on the same day sees nothing — and the table's empty state
+              cannot warn them, because the CURRENT month usually has other rows and so is not
+              empty. Measured 2026-08-28: an invoice dated 27 Aug produced payroll_month 2026-09.
+              Hence a standing hint plus a one-click jump, rather than an empty-state message. */}
+          <Button
+            type="button"
+            variant="secondary"
+            className="whitespace-nowrap pointer-coarse:min-h-11 mobile:flex-1"
+            data-testid="commission-next-cycle"
+            title="ค่าคอมจากใบกำกับที่บันทึกเดือนนี้ จะอยู่ในรอบเดือนถัดไป"
+            onClick={() => {
+              const [y, m] = month.split('-').map(Number);
+              const next = new Date(Date.UTC(y, m, 1));
+              setMonth(next.toISOString().slice(0, 7));
+            }}
+          >
+            รอบถัดไป
+            <Icon name="chevronRight" size={14} />
+          </Button>
+          {canCreateManual && (
             <Button
               type="button"
               variant="secondary"
-              data-testid="commission-next-cycle"
-              title="ค่าคอมจากใบกำกับที่บันทึกเดือนนี้ จะอยู่ในรอบเดือนถัดไป"
-              onClick={() => {
-                const [y, m] = month.split('-').map(Number);
-                const next = new Date(Date.UTC(y, m, 1));
-                setMonth(next.toISOString().slice(0, 7));
-              }}
+              className="whitespace-nowrap pointer-coarse:min-h-11 mobile:flex-1 min-[721px]:ml-auto"
+              onClick={() => (showManualForm ? setShowManualForm(false) : openManualForm())}
             >
-              รอบถัดไป
-              <Icon name="chevronRight" size={14} />
+              <Icon name="plus" size={14} />
+              เพิ่มค่าคอมด้วยตนเอง
             </Button>
-            {canCreateManual && (
-              <Button type="button" variant="secondary" onClick={() => (showManualForm ? setShowManualForm(false) : openManualForm())}>
-                <Icon name="plus" size={14} />
-                เพิ่มค่าคอมด้วยตนเอง
-              </Button>
-            )}
-          </div>
-        ) : undefined}
-      />
+          )}
+        </div>
+      ) : null}
 
       {payrollOnly ? (
         <PayrollSummary summary={summary} loading={loading} />
@@ -1244,14 +1270,24 @@ export function CommissionPage({ user, showToast }) {
             />
           ) : (
             <>
-          <CompactStatRow
-            items={[
-              { key: 'base', label: 'ฐานค่าคอมเดือนนี้', value: formatMoney(totals.base), helper: 'Commissionable base' },
-              { key: 'approved', label: 'อนุมัติแล้ว', value: totals.approved, helper: 'Approved records' },
-              { key: 'submitted', label: 'รอผู้จัดการ', value: totals.submitted, helper: 'Submitted records' },
-              { key: 'managerApproved', label: 'รอ CEO', value: totals.managerApproved, helper: 'Manager approved' },
-            ]}
-          />
+          <section aria-label="สรุปค่าคอมเดือนนี้" className="grid min-w-0 grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] items-end gap-x-8 gap-y-4 nav-drawer:grid-cols-[minmax(0,1fr)]">
+            <div className="grid min-w-0 gap-1">
+              <p className="m-0 text-sm font-bold text-text-secondary">ฐานค่าคอมเดือนนี้</p>
+              <p className="m-0 text-4xl font-extrabold leading-tight tabular-nums text-text [overflow-wrap:anywhere] mobile:text-3xl">{formatMoney(totals.base)}</p>
+            </div>
+            <dl className="m-0 grid grid-cols-3 gap-x-4 gap-y-2 mobile:grid-cols-1">
+              {[
+                ['approved', 'อนุมัติแล้ว', totals.approved],
+                ['submitted', 'รอผู้จัดการ', totals.submitted],
+                ['managerApproved', 'รอ CEO', totals.managerApproved],
+              ].map(([key, label, value]) => (
+                <div key={key} className="grid min-w-0 gap-0.5">
+                  <dt className="text-sm text-text-muted">{label}</dt>
+                  <dd className="m-0 text-lg font-extrabold tabular-nums text-text">{`${value} รายการ`}</dd>
+                </div>
+              ))}
+            </dl>
+          </section>
 
           {canCreateManual && showManualForm && (
             <ManualCommissionForm
@@ -1410,65 +1446,78 @@ function AccountCreateFromDeal({
   return (
     <>
       <Panel flush title="บันทึกใบกำกับภาษี / สร้างคำขอค่าคอมจากดีล">
-        <div className="grid gap-4 p-[18px]">
-          <div className="grid gap-2">
-            <label htmlFor="commission-ticket-lookup" className="text-sm font-bold">
-              เลขที่ Ticket ID ของดีลที่ปิดงาน/รับเงินครบแล้ว (CLOSED_PAID)
-            </label>
-            <div className="flex flex-wrap items-center gap-2">
-              <input
-                id="commission-ticket-lookup"
-                type="number"
-                min="1"
-                value={ticketIdInput}
-                onChange={(event) => setTicketIdInput(event.target.value)}
-                placeholder="เช่น 42"
-                className="max-w-[160px]"
-              />
-              <Button type="button" variant="secondary" disabled={ticketLookupLoading || !ticketIdInput} onClick={onLookup}>
-                <Icon name="search" size={14} />
-                {ticketLookupLoading ? 'กำลังโหลดข้อมูลดีล…' : 'โหลดข้อมูลดีล'}
-              </Button>
-            </div>
-            {eligibleTickets.length > 0 ? (
-              <label className="grid gap-1.5 text-sm">
-                หรือเลือกจากดีลที่ปรากฏในรายการ
-                <select value="" onChange={(event) => onSelectEligible(event.target.value)}>
-                  <option value="">— เลือกดีล —</option>
-                  {eligibleTickets.map((ticket) => (
-                    <option key={ticket.id} value={ticket.id}>
-                      {ticket.code} · {ticket.customerName || 'ไม่ระบุลูกค้า'}
-                    </option>
-                  ))}
-                </select>
+        <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,1.8fr)] nav-drawer:grid-cols-[minmax(0,1fr)]">
+          {/* Left half: which deal this invoice belongs to. */}
+          <div className="grid min-w-0 content-start gap-3 bg-surface-muted p-[18px] mobile:p-4 min-[1041px]:border-r min-[1041px]:border-border nav-drawer:border-b nav-drawer:border-border">
+            <h3 className="m-0 text-md font-extrabold text-text">ดีลที่จะบันทึกใบกำกับ</h3>
+            <div className="grid gap-2">
+              <label htmlFor="commission-ticket-lookup" className="text-sm font-bold">
+                เลขที่ Ticket ID ของดีลที่ปิดงาน/รับเงินครบแล้ว (CLOSED_PAID)
               </label>
-            ) : (
-              <p className="m-0 text-xs text-text-muted">
-                ดีลที่ปิดงาน/รับเงินครบแล้วอาจไม่ปรากฏในรายการอัตโนมัติ (รายการนี้แสดงเฉพาะดีลที่ยังรอดำเนินการด้านการเงิน) — กรอกเลขที่ Ticket ID ด้วยตนเองด้านบนได้เสมอ
-              </p>
-            )}
-            {ticketLookupError ? <StatusBadge tone="danger">{ticketLookupError}</StatusBadge> : null}
-            {loadedTicket ? (
-              <div className="rounded-md border border-border bg-surface-subtle p-3 text-sm">
-                <strong>{loadedTicket.code}</strong> · {loadedTicket.customerName || 'ไม่ระบุลูกค้า'}
-                <div className="mt-1 flex items-center justify-between">
-                  <span className="text-text-muted">ยอดที่ต้องชำระของดีล</span>
-                  <code className="font-mono">{formatMoney(loadedTicket.amountPayable)}</code>
-                </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  id="commission-ticket-lookup"
+                  type="number"
+                  min="1"
+                  value={ticketIdInput}
+                  onChange={(event) => setTicketIdInput(event.target.value)}
+                  placeholder="เช่น 42"
+                  className="max-w-[160px] hover:border-border-muted pointer-coarse:min-h-11"
+                />
+                <Button type="button" variant="secondary" className="whitespace-nowrap pointer-coarse:min-h-11" disabled={ticketLookupLoading || !ticketIdInput} onClick={onLookup}>
+                  <Icon name="search" size={14} />
+                  {ticketLookupLoading ? 'กำลังโหลดข้อมูลดีล…' : 'โหลดข้อมูลดีล'}
+                </Button>
               </div>
-            ) : null}
+              {eligibleTickets.length > 0 ? (
+                <label className="grid gap-1.5 text-sm">
+                  หรือเลือกจากดีลที่ปรากฏในรายการ
+                  <select value="" className="hover:border-border-muted pointer-coarse:min-h-11" onChange={(event) => onSelectEligible(event.target.value)}>
+                    <option value="">— เลือกดีล —</option>
+                    {eligibleTickets.map((ticket) => (
+                      <option key={ticket.id} value={ticket.id}>
+                        {ticket.code} · {ticket.customerName || 'ไม่ระบุลูกค้า'}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : (
+                <p className="m-0 text-xs text-text-muted">
+                  ดีลที่ปิดงาน/รับเงินครบแล้วอาจไม่ปรากฏในรายการอัตโนมัติ (รายการนี้แสดงเฉพาะดีลที่ยังรอดำเนินการด้านการเงิน) — กรอกเลขที่ Ticket ID ด้วยตนเองด้านบนได้เสมอ
+                </p>
+              )}
+              {ticketLookupError ? <StatusBadge tone="danger">{ticketLookupError}</StatusBadge> : null}
+              {loadedTicket ? (
+                <div className="rounded-md border border-success-border bg-surface p-3 text-sm">
+                  <strong>{loadedTicket.code}</strong> · {loadedTicket.customerName || 'ไม่ระบุลูกค้า'}
+                  <div className="mt-1 flex items-center justify-between gap-3">
+                    <span className="text-text-muted">ยอดที่ต้องชำระของดีล</span>
+                    <code className="font-mono">{formatMoney(loadedTicket.amountPayable)}</code>
+                  </div>
+                </div>
+              ) : null}
+            </div>
           </div>
 
-          <InvoiceFromDealForm
-            form={createForm}
-            onChange={updateCreateForm}
-            onSubmit={onSubmit}
-            saving={saving}
-            disabled={!loadedTicket}
-            fileInputKey={fileInputKey}
-            fileInputId="commission-invoice-file"
-            submitLabel="บันทึกและสร้างคำขอค่าคอม"
-          />
+          {/* Right half: the invoice itself. */}
+          <div className="grid min-w-0 content-start gap-4 p-[18px] mobile:p-4">
+            {!loadedTicket ? (
+              <p className="m-0 flex items-start gap-2 text-sm text-text-muted">
+                <Icon name="info" size={16} className="mt-0.5 shrink-0" />
+                <span>โหลดข้อมูลดีลก่อน จึงจะบันทึกใบกำกับได้ — กรอกฟอร์มไว้ล่วงหน้าได้</span>
+              </p>
+            ) : null}
+            <InvoiceFromDealForm
+              form={createForm}
+              onChange={updateCreateForm}
+              onSubmit={onSubmit}
+              saving={saving}
+              disabled={!loadedTicket}
+              fileInputKey={fileInputKey}
+              fileInputId="commission-invoice-file"
+              submitLabel="บันทึกและสร้างคำขอค่าคอม"
+            />
+          </div>
         </div>
       </Panel>
 

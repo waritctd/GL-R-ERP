@@ -1,5 +1,5 @@
-/* Hallmark · genre: modern-minimal · macrostructure: Narrative Workflow · tone: utilitarian · theme: project system (Sarabun + indigo accent, preserved) · enrichment: none · nav: AppShell (existing) · footer: none */
-/* Hallmark · pre-emit critique: P4 H4 E4 S4 R3 V3 (scores /5 after fixes; R and V are by code reading only — not browser-verified) */
+/* Hallmark · genre: modern-minimal · macrostructure: Feature Stack · tone: utilitarian · theme: project system (Sarabun + indigo, owner-locked) · redesign */
+/* Hallmark · pre-emit critique: P4 H4 E4 S4 R4 V4 (rendered at 375/1280 and scroll-width checked at 320/375/414/768; Feature Stack's sticky pane collapses to one column at <=1040px with money first) */
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
@@ -40,24 +40,30 @@ function Bone({ className }) {
 }
 
 function PageSkeleton() {
-  const panel = 'grid gap-3 rounded-md border border-border bg-surface p-5 mobile:p-4';
   return (
-    <div className="grid w-full min-w-0 max-w-[960px] gap-3" aria-busy="true" aria-label="กำลังโหลดดีล">
-      <div className="mb-3 grid gap-2">
+    <div
+      className="grid w-full min-w-0 max-w-[1200px] items-start gap-x-6 gap-y-4 grid-cols-[minmax(17rem,21rem)_minmax(0,1fr)] nav-drawer:grid-cols-[minmax(0,1fr)]"
+      aria-busy="true" aria-label="กำลังโหลดดีล"
+    >
+      <div className="grid gap-4 rounded-md border border-border bg-surface p-5 mobile:p-4">
         <Bone className="h-4 w-24" />
-        <Bone className="h-7 w-2/3" />
+        <Bone className="h-6 w-2/3" />
         <Bone className="h-4 w-1/2" />
+        <Bone className="mt-2 h-10 w-full" />
+        <Bone className="h-4 w-full" />
+        <Bone className="h-4 w-5/6" />
       </div>
-      <div className={panel}><Bone className="h-16 w-full" /></div>
-      {[0, 1, 2, 3, 4].map((i) => (
-        <div key={i} className={panel}>
-          <div className="flex items-center gap-3">
-            <Bone className="size-6 !rounded-pill" />
-            <Bone className="h-5 w-1/3" />
+      <div className="grid min-w-0 gap-px rounded-md border border-border bg-border">
+        {[0, 1, 2, 3, 4].map((i) => (
+          <div key={i} className="grid gap-3 bg-surface p-5 mobile:p-4">
+            <div className="flex items-center gap-3">
+              <Bone className="size-6 !rounded-pill" />
+              <Bone className="h-5 w-1/3" />
+            </div>
+            {i < 2 ? <><Bone className="h-4 w-full" /><Bone className="h-4 w-5/6" /></> : null}
           </div>
-          {i < 2 ? <><Bone className="h-4 w-full" /><Bone className="h-4 w-5/6" /></> : null}
-        </div>
-      ))}
+        ))}
+      </div>
     </div>
   );
 }
@@ -92,39 +98,43 @@ function MoneyBand({ deal }) {
   let dueText = null;
   if (m.paymentDueDate) dueText = `ครบกำหนด ${formatThaiDate(m.paymentDueDate)}${basisText ? ` · ${basisText}` : ''}`;
   else if (basisText) dueText = 'ยังไม่ถึงกำหนด — รอส่งมอบ';
-  const slot = 'grid min-w-0 content-start gap-1 px-5 first:pl-0 mobile:px-0 mobile:py-3 mobile:first:pt-0';
+  const row = 'flex min-w-0 items-baseline justify-between gap-3';
   return (
-    <div role="group" aria-label="สรุปยอดเงิน" className="grid gap-3 rounded-md border border-border bg-surface p-5 mobile:p-4">
-      <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.6fr)] divide-x divide-border mobile:grid-cols-1 mobile:divide-x-0 mobile:divide-y">
-        <div className={slot}>
+    <div role="group" aria-label="สรุปยอดเงิน" className="grid gap-4 border-t border-border pt-4">
+      <div className="grid min-w-0 gap-1">
+        <span className="text-sm font-bold text-text">คงค้าง</span>
+        <span className={cn('text-4xl font-extrabold leading-tight tabular-nums [overflow-wrap:anywhere]', m.overdue ? 'text-danger' : 'text-text')}>
+          {money(m.amountOutstanding)}
+        </span>
+      </div>
+      <div className="grid gap-1.5">
+        <div className={row}>
           <span className="text-sm font-bold text-text-secondary">ยอดที่ต้องชำระ</span>
-          <span className="text-right text-xl font-bold tabular-nums text-text [overflow-wrap:anywhere]">{money(m.amountPayable)}</span>
+          <span className="text-right text-md font-bold tabular-nums text-text [overflow-wrap:anywhere]">{money(m.amountPayable)}</span>
         </div>
-        <div className={slot}>
+        <div className={row}>
           <span className="text-sm font-bold text-text-secondary">รับแล้ว</span>
-          <span className="text-right text-xl font-bold tabular-nums text-text [overflow-wrap:anywhere]">{money(m.amountPaid)}</span>
-        </div>
-        <div className={cn(slot, 'mobile:order-first')}>
-          <span className="text-sm font-bold text-text">คงค้าง</span>
-          <span className="text-right text-3xl font-extrabold tabular-nums text-text [overflow-wrap:anywhere]">{money(m.amountOutstanding)}</span>
+          <span className="text-right text-md font-bold tabular-nums text-text [overflow-wrap:anywhere]">{money(m.amountPaid)}</span>
         </div>
       </div>
-      <p className="m-0 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-text-muted">
-        {caption ? <span>{caption}</span> : null}
-        {dueText ? <span>{dueText}</span> : null}
-        {m.overdue ? (
-          <span className="inline-flex items-center gap-1 font-bold text-danger">
-            <Icon name="triangleAlert" size={14} />
-            <span>เกินกำหนดชำระ</span>
-          </span>
-        ) : null}
-        {m.closeConfirmedAt ? (
-          <span className="inline-flex items-center gap-1 font-bold text-success">
-            <Icon name="check" size={14} />
-            <span>{`ยืนยันพร้อมปิดงานแล้ว ${formatThaiDate(m.closeConfirmedAt)}`}</span>
-          </span>
-        ) : null}
-      </p>
+      {caption || dueText || m.overdue || m.closeConfirmedAt ? (
+        <p className="m-0 grid gap-1 rounded-md bg-surface-muted px-3 py-2.5 text-sm text-text-muted">
+          {caption ? <span>{caption}</span> : null}
+          {dueText ? <span className="[overflow-wrap:anywhere]">{dueText}</span> : null}
+          {m.overdue ? (
+            <span className="inline-flex items-center gap-1 font-bold text-danger">
+              <Icon name="triangleAlert" size={14} />
+              <span>เกินกำหนดชำระ</span>
+            </span>
+          ) : null}
+          {m.closeConfirmedAt ? (
+            <span className="inline-flex items-center gap-1 font-bold text-success">
+              <Icon name="check" size={14} />
+              <span>{`ยืนยันพร้อมปิดงานแล้ว ${formatThaiDate(m.closeConfirmedAt)}`}</span>
+            </span>
+          ) : null}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -337,15 +347,17 @@ export function FinanceDealPage() {
   const defaultPaymentKind = (Number(deal.money.amountPaid) > 0 || deal.milestoneTrack.some((step) => step.skipped)) ? 'BALANCE' : 'DEPOSIT';
 
   return (
-    <div className="grid w-full min-w-0 max-w-[960px] gap-3">
-      <header className="mb-3 grid gap-2">
-        <BackLink />
-        <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
-          <div className="grid min-w-0 flex-1 basis-72 gap-1.5">
+    <div className="grid w-full min-w-0 max-w-[1200px] items-start gap-x-6 gap-y-4 grid-cols-[minmax(17rem,21rem)_minmax(0,1fr)] nav-drawer:grid-cols-[minmax(0,1fr)]">
+      {/* Sticky identity + money pane: the figures and the primary action stay in view while the five
+          milestones scroll past. Below the nav-drawer breakpoint it is an ordinary first block. */}
+      <aside className="grid min-w-0 gap-4 self-start rounded-md border border-border bg-surface p-5 sticky top-4 nav-drawer:static mobile:p-4">
+        <header className="grid gap-2">
+          <BackLink />
+          <div className="grid min-w-0 gap-1.5">
             <h1 className="m-0 min-w-0 text-xl font-extrabold leading-snug text-text [overflow-wrap:anywhere]">
               <span className="tabular-nums">{deal.code}</span>{' '}<span className="font-bold">{deal.title}</span>
             </h1>
-            <p className="m-0 flex min-w-0 flex-wrap gap-x-2.5 gap-y-0.5 text-sm text-text-muted [overflow-wrap:anywhere]">
+            <p className="m-0 grid min-w-0 gap-0.5 text-sm text-text-muted [overflow-wrap:anywhere]">
               {[deal.customerName, deal.projectName, deal.contactName].filter(Boolean).map((part, i) => (
                 <span key={i} className="min-w-0">{part}</span>
               ))}
@@ -354,19 +366,23 @@ export function FinanceDealPage() {
               {stageCode ? `${stageCode} · ` : ''}{stageText}
             </p>
           </div>
-          <div className="flex shrink-0 flex-wrap items-center gap-2 mobile:w-full">
+        </header>
+
+        <MoneyBand deal={deal} />
+
+        {primary || overflowItems.length ? (
+          <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
             {primary ? (
-              <Button type="button" className="whitespace-nowrap pointer-coarse:min-h-11 mobile:flex-1" onClick={() => startAction(primary)}>
+              <Button type="button" className="min-w-0 flex-1 whitespace-nowrap pointer-coarse:min-h-11" onClick={() => startAction(primary)}>
                 {actionLabel(primary)}
               </Button>
             ) : null}
             {overflowItems.length ? <OverflowMenu items={overflowItems} /> : null}
           </div>
-        </div>
-      </header>
+        ) : null}
+      </aside>
 
-      <MoneyBand deal={deal} />
-
+      <div className="grid min-w-0 gap-4">
       {downloadError ? (
         <p role="alert" className="m-0 flex items-start gap-2 text-sm font-bold text-danger">
           <Icon name="triangleAlert" size={16} className="mt-0.5 shrink-0" />
@@ -374,8 +390,11 @@ export function FinanceDealPage() {
         </p>
       ) : null}
       {activeAction?.action === 'RECORD_INVOICE' && invoiceForm ? (
-        <section aria-labelledby="fin-invoice-title" className="grid gap-3 rounded-md border border-primary bg-surface p-5 mobile:p-4">
-          <h2 id="fin-invoice-title" className="m-0 text-lg font-extrabold text-text">บันทึกใบกำกับภาษี</h2>
+        <section aria-labelledby="fin-invoice-title" className="grid gap-4 rounded-md border-2 border-primary bg-surface p-5 mobile:p-4">
+          <div className="grid gap-1">
+            <h2 id="fin-invoice-title" className="m-0 text-lg font-extrabold text-text">บันทึกใบกำกับภาษี</h2>
+            <p className="m-0 text-sm text-text-muted">กรอกข้อมูลเอกสาร แล้วตามด้วยยอดและรายการหัก ระบบจะสร้างคำขอค่าคอมมิชชันจากใบกำกับนี้</p>
+          </div>
           {flowError ? (
             <p role="alert" className="m-0 flex items-start gap-2 text-sm font-bold text-danger">
               <Icon name="triangleAlert" size={16} className="mt-0.5 shrink-0" />
@@ -400,6 +419,7 @@ export function FinanceDealPage() {
       <MilestoneSections deal={deal} onError={setDownloadError} />
 
       <CommentsSection deal={deal} onPosted={applyDeal} />
+      </div>
 
       {confirm ? (
         <ConfirmDialog

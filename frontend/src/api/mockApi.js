@@ -7354,6 +7354,7 @@ function buildFinanceDeal(raw, user) {
     id: a.id, fileName: a.fileName, attachType: a.attachType, uploadedAt: a.uploadedAt ?? null,
     fileSize: a.fileSize ?? null, downloadPath: `/api/attachments/${a.id}/file`,
   });
+  const payableInclVat = s.amountPayable == null ? null : moneyValue(Number(s.amountPayable) * 1.07);
   const deal = {
     id: s.id, code: s.code, title: s.title, salesStage: s.salesStage, lifecycle: s.lifecycle, status: s.status,
     moneyMilestone: track.find((m) => m.current) ?? null,
@@ -7367,11 +7368,16 @@ function buildFinanceDeal(raw, user) {
       vatBasis: 'EXCLUDING_VAT',
     })),
     money: {
-      amountPayable: s.amountPayable, amountPayableExVat: s.amountPayable,
-      amountPaid: s.amountPaid, amountOutstanding: s.amountOutstanding,
-      // The real server's payable is the VAT-INCLUSIVE grand total (owner ruling 2026-09-30). The mock does
-      // not reimplement that money math: its payable stays the pre-VAT sum, and says so.
-      amountVatBasis: 'EXCLUDING_VAT',
+      // Mirrors FinanceDealDto's VAT-basis javadoc (FinanceDealService): `amountPayable` is the VAT-INCLUSIVE
+      // grand total with amountVatBasis 'INCLUDING_VAT', and `amountPayableExVat` is
+      // TicketRepository#payableAmountExVat. The mock's own summary figure is the pre-VAT sum, so it becomes
+      // amountPayableExVat and the inclusive payable is that x 1.07 (2dp) -- a shape stand-in only; the real VAT
+      // math stays on the server. Outstanding = max(payable - paid, 0).
+      amountPayable: payableInclVat,
+      amountPayableExVat: s.amountPayable,
+      amountPaid: s.amountPaid,
+      amountOutstanding: payableInclVat == null ? null : moneyValue(Math.max(payableInclVat - Number(s.amountPaid ?? 0), 0)),
+      amountVatBasis: 'INCLUDING_VAT',
       depositPolicy: s.depositPolicy, paymentStatus: s.paymentStatus, paymentStage: s.paymentStage,
       fulfillmentStatus: s.fulfillmentStatus,
       // The real server derives these from the quotation's terms + the delivery date. The mock has no

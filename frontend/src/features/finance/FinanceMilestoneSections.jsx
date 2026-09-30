@@ -1,3 +1,5 @@
+/* Hallmark · genre: modern-minimal · macrostructure: Feature Stack (scrolling pane) · tone: utilitarian · theme: project system (Sarabun + indigo, owner-locked) · redesign */
+/* Hallmark · pre-emit critique: P4 H4 E4 S4 R4 V4 (rows and item table respond to the pane's own width via container queries, not the viewport) */
 import { useState } from 'react';
 import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
@@ -68,20 +70,20 @@ function DownloadButton({ path, name, filenameBase, format = 'pdf', onError }) {
 // on the left, a fixed-width amount column, a fixed-width button column. Because the tracks are
 // fixed-width and right-anchored, amounts and buttons share the same right edges across all panels.
 // Compact (mobile): title + meta full width, then amount (left) and button (right) on one row.
-const DOC_ROW_GRID = 'grid grid-cols-[minmax(0,1fr)_9rem_7rem] items-center gap-x-4 gap-y-2 py-3 mobile:grid-cols-[minmax(0,1fr)_auto]';
+const DOC_ROW_GRID = 'grid grid-cols-[minmax(0,1fr)_9rem_7rem] items-center gap-x-4 gap-y-2 py-3 @max-[34rem]:grid-cols-[minmax(0,1fr)_auto]';
 
 function DocRow({ title, meta, badge, amount, basis, download }) {
   return (
     <li data-doc-row="v1" className={DOC_ROW_GRID}>
-      <div className="grid min-w-0 gap-0.5 mobile:col-span-2">
+      <div className="grid min-w-0 gap-0.5 @max-[34rem]:col-span-2">
         <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
           <span className="min-w-0 font-bold text-text [overflow-wrap:anywhere]">{title}</span>
           {badge}
         </span>
         {meta ? <span className="min-w-0 text-sm text-text-muted [overflow-wrap:anywhere]">{meta}</span> : null}
       </div>
-      {amount !== undefined ? <Amount value={amount} basis={basis} className="mobile:items-start mobile:text-left" /> : <span aria-hidden="true" className="mobile:hidden" />}
-      {download ? <div className="min-w-0 mobile:col-start-2">{download}</div> : <span aria-hidden="true" className="mobile:hidden" />}
+      {amount !== undefined ? <Amount value={amount} basis={basis} className="@max-[34rem]:items-start @max-[34rem]:text-left" /> : <span aria-hidden="true" className="@max-[34rem]:hidden" />}
+      {download ? <div className="min-w-0 @max-[34rem]:col-start-2">{download}</div> : <span aria-hidden="true" className="@max-[34rem]:hidden" />}
     </li>
   );
 }
@@ -140,11 +142,11 @@ function PaymentRows({ payments }) {
 function ItemsTable({ items }) {
   if (!items.length) return <Empty>ยังไม่มีรายการสินค้า</Empty>;
   const num = 'text-right tabular-nums whitespace-nowrap';
-  const cell = 'py-2 pl-3 first:pl-0 mobile:flex mobile:items-baseline mobile:justify-between mobile:gap-3 mobile:py-0.5 mobile:pl-0 mobile:before:text-sm mobile:before:text-text-muted mobile:before:content-[attr(data-label)]';
+  const cell = 'py-2 pl-3 first:pl-0 @max-[34rem]:flex @max-[34rem]:items-baseline @max-[34rem]:justify-between @max-[34rem]:gap-3 @max-[34rem]:py-0.5 @max-[34rem]:pl-0 @max-[34rem]:before:text-sm @max-[34rem]:before:text-text-muted @max-[34rem]:before:content-[attr(data-label)]';
   return (
-    <table className="w-full border-collapse text-sm mobile:block">
+    <table className="w-full border-collapse text-sm @max-[34rem]:block">
       <caption className="sr-only">รายการสินค้าในดีล</caption>
-      <thead className="mobile:sr-only">
+      <thead className="@max-[34rem]:sr-only">
         <tr className="border-b border-border text-sm text-text-muted">
           <th scope="col" className="py-1.5 text-left font-bold">รายการ</th>
           <th scope="col" className={cn('py-1.5 pl-3 font-bold', num)}>จำนวน</th>
@@ -152,10 +154,10 @@ function ItemsTable({ items }) {
           <th scope="col" className={cn('py-1.5 pl-3 font-bold', num)}>รวม</th>
         </tr>
       </thead>
-      <tbody className="mobile:block">
+      <tbody className="@max-[34rem]:block">
         {items.map((it, i) => (
-          <tr key={i} className="border-b border-border last:border-b-0 mobile:block mobile:py-2.5">
-            <td data-label="รายการ" className={cn(cell, 'min-w-0 font-medium text-text [overflow-wrap:anywhere] mobile:font-bold')}>{it.description || '—'}</td>
+          <tr key={i} className="border-b border-border last:border-b-0 @max-[34rem]:block @max-[34rem]:py-2.5">
+            <td data-label="รายการ" className={cn(cell, 'min-w-0 font-medium text-text [overflow-wrap:anywhere] @max-[34rem]:flex-col @max-[34rem]:items-start @max-[34rem]:gap-0 @max-[34rem]:font-bold')}>{it.description || '—'}</td>
             <td data-label="จำนวน" className={cn(cell, num)}>{it.qty == null ? '—' : `${Number(it.qty).toLocaleString('en-US')}${it.unit ? ` ${it.unit}` : ''}`}</td>
             <td data-label="ราคาต่อหน่วย" className={cn(cell, num)}>{money(it.unitPrice)}</td>
             <td data-label="รวม" className={cn(cell, num, 'font-bold text-text')}>{money(it.lineTotal)}</td>
@@ -312,22 +314,32 @@ const INVOICE_FIELDS = [
 function CommissionInvoiceBlock({ invoice, onError }) {
   const approval = COMMISSION_APPROVAL[invoice.approvalStatus] ?? { label: invoice.approvalStatus, tone: 'neutral' };
   const { base, ext } = splitFileName(invoice.fileName);
+  const [gross, ...deductions] = INVOICE_FIELDS;
   return (
     <SubList label="ใบกำกับที่บันทึกแล้ว">
-      <div className="grid gap-3 py-2">
-        <p className="m-0 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-text">
-          <strong className="font-bold [overflow-wrap:anywhere]">{invoice.invoiceNumber}</strong>
-          <span className="text-text-muted">{formatThaiDate(invoice.invoiceDate)}</span>
+      <div className="grid gap-4 rounded-md border border-border bg-surface-muted p-4">
+        <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+          <p className="m-0 grid min-w-0 gap-0.5">
+            <strong className="text-lg font-extrabold text-text [overflow-wrap:anywhere]">{invoice.invoiceNumber}</strong>
+            <span className="text-sm text-text-muted">{formatThaiDate(invoice.invoiceDate)}</span>
+          </p>
           <StatusBadge tone={approval.tone}>{approval.label}</StatusBadge>
-        </p>
+        </div>
         {invoice.approvalStatus === 'REJECTED' && invoice.rejectionReason ? (
-          <p role="note" className="m-0 text-sm font-bold text-danger [overflow-wrap:anywhere]">{`เหตุผล: ${invoice.rejectionReason}`}</p>
+          <p role="note" className="m-0 flex items-start gap-2 text-sm font-bold text-danger [overflow-wrap:anywhere]">
+            <Icon name="triangleAlert" size={16} className="mt-0.5 shrink-0" />
+            <span>{`เหตุผล: ${invoice.rejectionReason}`}</span>
+          </p>
         ) : null}
-        <dl className="m-0 grid grid-cols-4 gap-x-4 gap-y-2 mobile:grid-cols-2">
-          {INVOICE_FIELDS.map(([key, label]) => (
+        <dl className="m-0 grid gap-x-4 gap-y-3 border-t border-border pt-3 grid-cols-[repeat(auto-fit,minmax(9rem,1fr))]">
+          <div key={gross[0]} className="grid min-w-0 gap-0.5 col-span-full">
+            <dt className="text-sm text-text-muted">{gross[1]}</dt>
+            <dd className="m-0 text-xl font-extrabold tabular-nums text-text [overflow-wrap:anywhere]">{money(invoice[gross[0]])}</dd>
+          </div>
+          {deductions.map(([key, label]) => (
             <div key={key} className="grid min-w-0 gap-0.5">
               <dt className="text-sm text-text-muted">{label}</dt>
-              <dd className="m-0 tabular-nums font-bold text-text">{money(invoice[key])}</dd>
+              <dd className="m-0 tabular-nums font-bold text-text [overflow-wrap:anywhere]">{money(invoice[key])}</dd>
             </div>
           ))}
         </dl>
@@ -410,8 +422,9 @@ function MilestoneSection({ step, position, subject, deal, onError }) {
       data-state={state}
       data-emphasis={emphasised ? 'true' : 'false'}
       className={cn(
-        'min-w-0 rounded-md border bg-surface p-5 mobile:p-4',
-        emphasised ? 'border-primary' : 'border-border',
+        'min-w-0 bg-surface p-5 mobile:p-4',
+        emphasised && 'shadow-[inset_3px_0_0_var(--color-primary)]',
+        collapsed && 'bg-surface-muted',
       )}
     >
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
@@ -448,7 +461,7 @@ export function MilestoneSections({ deal, onError }) {
   const track = deal.milestoneTrack ?? [];
   const currentIndex = track.find((m) => m.current)?.index ?? 0;
   return (
-    <div className="grid gap-3">
+    <div className="@container grid min-w-0 divide-y divide-border overflow-hidden rounded-md border border-border">
       {track.map((step) => {
         let position = 'upcoming';
         if (currentIndex && step.index < currentIndex) position = 'past';
