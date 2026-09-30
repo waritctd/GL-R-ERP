@@ -232,6 +232,8 @@ const SERVER_ONLY = {
   'DELETE /api/deal-quotations/{}/items/{}/picture': 'GLA-75 quotation item pictures (V170), built BACKEND-FIRST: the per-item picture endpoints landed before the quotation editor UI that calls them (a separate frontend branch). Gated like editing / viewing the quotation and covered by DealQuotationPictureIntegrationTest. LIVE, not dead — delete this entry when hrApi.js calls it.',
   'GET /api/deal-quotations/{}/items/{}/picture': 'GLA-75 quotation item pictures (V170), built BACKEND-FIRST: the per-item picture endpoints landed before the quotation editor UI that calls them (a separate frontend branch). Gated like editing / viewing the quotation and covered by DealQuotationPictureIntegrationTest. LIVE, not dead — delete this entry when hrApi.js calls it.',
 
+  'GET /api/import/deals/{}': 'Per-deal IMPORT view (ImportDealController), built BACKEND-FIRST: the import-only projection of one deal (factories, per-factory ใบขอซื้อ rows, items without prices, read-only delivery status, comment thread) that replaces import reading the whole deal via GET /api/tickets/{}. The page that calls it lands in a later slice on this branch; import is refused GET /api/tickets/{} in the same change. Role/row-scope covered by ImportDealAuthzIntegrationTest. LIVE, not dead — delete this entry when hrApi.js calls it.',
+
   // ── Formerly dormant, now GONE: ProcurementController ─────────────────────
   // Eight entries stood here — all of ProcurementController's mappings. PR #683 (ebaf6888,
   // 2026-08-11) had deleted the จัดซื้อ & นำเข้า page and every client layer while keeping the

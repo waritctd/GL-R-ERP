@@ -135,27 +135,14 @@ class TicketServiceTest {
         assertForbidden(() -> service.get(10L, salesActor));
     }
 
+    /** import has its own per-deal endpoint (GET /api/import/deals/{id}); the whole-deal read is refused. */
     @Test
-    void get_importCanViewAnyTicket() {
-        TicketDto ticket = stubTicket(10L, 99L, TicketStatus.SUBMITTED);
-        assertThat(service.get(10L, importActor)).isEqualTo(ticket);
+    void get_importIsRefusedTheWholeDealRead() {
+        stubTicket(10L, 99L, TicketStatus.SUBMITTED);
+        assertForbidden(() -> service.get(10L, importActor));
     }
 
     // ── Phase B: role-scoped views (import quotation projection) ───────────
-
-    @Test
-    void get_importSeesTicketButQuotationIsProjectedOut() {
-        QuotationDto quotation = quotationOf(1L, 10L, "QT-2026-0001");
-        stubDealWithQuotations(10L, 99L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
-            DealStage.QUOTE_DESIGN_SIDE, DealLifecycle.ACTIVE, List.of(quotation));
-
-        TicketDto seen = service.get(10L, importActor);
-
-        assertThat(seen.quotation()).isNull();
-        assertThat(seen.quotations()).isEmpty();
-        // A projection, not a wholesale redaction — everything else is unchanged.
-        assertThat(seen.summary().id()).isEqualTo(10L);
-    }
 
     @Test
     void get_salesStillSeesTheFullQuotationChain() {
@@ -223,6 +210,7 @@ class TicketServiceTest {
         QuotationDto quotation = quotationOf(1L, 10L, "QT-2026-0001");
         stubDealWithQuotations(10L, 99L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
             DealStage.QUOTE_DESIGN_SIDE, DealLifecycle.ACTIVE, List.of(quotation));
+        when(ticketRepo.isInImportScope(10L)).thenReturn(true);
 
         TicketDto seen = service.comment(10L, new CommentRequest("hi"), importActor);
 
@@ -2755,11 +2743,23 @@ class TicketServiceTest {
     void comment_addsCommentEventWithoutStatusChange() {
         when(ticketRepo.existsById(10L)).thenReturn(true);
         stubTicket(10L, 1L, TicketStatus.IN_REVIEW);
+        when(ticketRepo.isInImportScope(10L)).thenReturn(true);
 
         service.comment(10L, new CommentRequest("ช่วยตรวจราคาใหม่ด้วย"), importActor);
 
         verify(ticketRepo).addEvent(eq(10L), eq(3L), anyString(),
             eq(TicketEventKind.COMMENTED), isNull(), isNull(), eq("ช่วยตรวจราคาใหม่ด้วย"));
+    }
+
+    /** Leak B (2026-09-30): import's comment path is row-scoped; out of scope -> 403 and NO write. */
+    @Test
+    void comment_importOutOfScopeIsForbidden_andWritesNothing() {
+        stubTicket(10L, 1L, TicketStatus.IN_REVIEW);
+        when(ticketRepo.isInImportScope(10L)).thenReturn(false);
+
+        assertForbidden(() -> service.comment(10L, new CommentRequest("x"), importActor));
+
+        verify(ticketRepo, never()).addEvent(anyLong(), anyLong(), anyString(), anyString(), any(), any(), any());
     }
 
     @Test

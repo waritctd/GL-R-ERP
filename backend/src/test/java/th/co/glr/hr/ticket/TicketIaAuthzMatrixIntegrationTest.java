@@ -221,6 +221,16 @@ class TicketIaAuthzMatrixIntegrationTest extends AbstractPostgresIntegrationTest
     // ภาพรวม — TicketService.get() / requireViewAccess (VIEWER_ROLES + sales-owner-only)
     // ─────────────────────────────────────────────────────────────────────────────────────
 
+    /**
+     * import has its OWN per-deal endpoint (GET /api/import/deals/{id}, ImportDealService — see
+     * ImportDealAuthzIntegrationTest) and is refused the whole-deal read, mirroring the account
+     * finance-view ruling. Pinned here beside the rows it differs from.
+     */
+    @Test
+    void overview_importCannotReadTheWholeDeal() {
+        assertForbidden(() -> ticketService.get(ticketId, importActor));
+    }
+
     @Test
     void overview_hrCannotReadTheTicket() {
         assertForbidden(() -> ticketService.get(ticketId, hrActor));
@@ -237,9 +247,8 @@ class TicketIaAuthzMatrixIntegrationTest extends AbstractPostgresIntegrationTest
     }
 
     @Test
-    void overview_ownerImportCeoAccountSalesManagerCanAllReadIt() {
+    void overview_ownerCeoAccountSalesManagerCanAllReadIt() {
         assertThatCode(() -> ticketService.get(ticketId, salesOwnerActor)).doesNotThrowAnyException();
-        assertThatCode(() -> ticketService.get(ticketId, importActor)).doesNotThrowAnyException();
         assertThatCode(() -> ticketService.get(ticketId, ceoActor)).doesNotThrowAnyException();
         assertThatCode(() -> ticketService.get(ticketId, accountActor)).doesNotThrowAnyException();
         assertThatCode(() -> ticketService.get(ticketId, salesManagerActor)).doesNotThrowAnyException();
@@ -489,25 +498,29 @@ class TicketIaAuthzMatrixIntegrationTest extends AbstractPostgresIntegrationTest
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     /**
-     * THE PIN for import's refusal (issue #389 review). Import can read the deal SHELL — the
-     * assertion below proves it — and that is deliberately NOT enough to read the deal's
-     * documents. {@code AttachType} is {@code {PO, SIGNED_QUOTATION, INVOICE, OTHER}}, so a
-     * document read hands over the countersigned quotation and the ใบกำกับภาษี, both carrying the
-     * approved customer price; this matrix already pins import's 403 on the quotation FILE
-     * ({@code quotationFile_importCannotDownloadIt}-style cases), on the payment ledger
-     * ({@code ledger_*}) and on deposit notices, and {@code TicketService#projectForRole} nulls
-     * quotations out of import's DTO entirely.
+     * Import's document access is ROW-SCOPED (owner ruling 2026-09-30, superseding the blanket
+     * refusal that issue #389's review pinned here). It may read every attachment type
+     * ({@code PO, SIGNED_QUOTATION, INVOICE, OTHER}) of a deal inside its own import scope
+     * ({@code TicketRepository#isInImportScope} — the same predicate as its worklist) and is still
+     * refused a deal outside it. This matrix deal carries a live SUBMITTED pricing request, so it is
+     * in scope; the out-of-scope refusal is proven against a second, pipeline-early deal.
      *
-     * <p>An earlier revision of this branch granted import document reads on the reasoning "it
-     * already reads the deal". That was refuted in review: it reads the shell, not the customer
-     * documents. If this test goes red because someone re-added import to
-     * {@code TicketAccessPolicy#canViewDocuments}, that is a customer-price exposure, not a
-     * regression to patch around.
+     * <p>Widening the DOCUMENT read does not widen anything import is refused elsewhere: the
+     * quotation FILE, the payment ledger and deposit notices stay 403 (pinned by their own cases
+     * in this class). Per-type coverage of the download is in
+     * {@code ImportCommentAndDocumentAuthzIntegrationTest}.
      */
     @Test
-    void attachments_importCanReadTheDealShellButNotItsCustomerFacingDocuments() throws Exception {
-        assertThatCode(() -> ticketService.get(ticketId, importActor)).doesNotThrowAnyException();
-        assertAttachmentsForbidden(importActor);
+    void attachments_importReadsAnInScopeDealsDocumentsButNotAnOutOfScopeDeals() throws Exception {
+        assertAttachmentsOk(importActor);
+
+        long outOfScopeTicketId = jdbc.queryForObject(
+            "INSERT INTO sales.ticket (code, title, created_by) VALUES ('IAM-OOS-1', 'out of import scope', :by) "
+                + "RETURNING ticket_id",
+            Map.of("by", salesOwnerActor.id()), Long.class);
+        mvc.perform(get("/api/tickets/{ticketId}/attachments", outOfScopeTicketId)
+                .session(sessionFor(importActor)))
+            .andExpect(status().isForbidden());
     }
 
     @Test

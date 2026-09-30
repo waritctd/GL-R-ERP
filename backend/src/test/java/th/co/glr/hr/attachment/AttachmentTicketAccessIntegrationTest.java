@@ -225,20 +225,17 @@ class AttachmentTicketAccessIntegrationTest extends AbstractPostgresIntegrationT
     }
 
     /**
-     * THE PIN for import's refusal (issue #389 review), enforced end-to-end. Import reads the deal
-     * shell but is refused its documents: {@code AttachType} is
-     * {@code {PO, SIGNED_QUOTATION, INVOICE, OTHER}} and {@code findByTicketId} applies no type
-     * filter, so a document read would hand import the countersigned quotation and the ใบกำกับภาษี
-     * — the approved customer price — on a deal whose quotation file, payment ledger and deposit
-     * notices it is refused by {@code TicketService}/{@code DepositNoticeService}.
-     *
-     * <p>An earlier revision of this branch granted the read. If this test goes red, import has
-     * been re-added to {@code TicketAccessPolicy#canViewDocuments} and customer pricing is exposed.
+     * Import's refusal (issue #389 review), enforced end-to-end, now bounded by ROW SCOPE (owner
+     * ruling 2026-09-30): import reads a deal's documents only when the deal is inside its import
+     * scope ({@code TicketRepository#isInImportScope}) or it is the deal's participant. The
+     * fixture deal here is a bare early-pipeline ticket (default stage, no pricing request) — OUTSIDE
+     * import's scope — so a non-participant import is still refused everything, including every
+     * write. The in-scope grant is pinned in {@code ImportCommentAndDocumentAuthzIntegrationTest}.
      * {@code importUser} here is NOT this deal's assignee; the separate {@code assignee} actor
      * (also role {@code import}) proves the participant grant still works.
      */
     @Test
-    void importIsRefusedDocumentsOnADealItHasNotPickedUp() {
+    void importIsRefusedDocumentsOnAnOutOfScopeDealItHasNotPickedUp() {
         assertForbidden(() -> controller.list(ticketId, sessionFor(importUser)));
         assertForbidden(() -> controller.download(attachmentId, sessionFor(importUser)));
         assertForbidden(() -> controller.upload(ticketId, pdfFile(), "OTHER", null, sessionFor(importUser)));
