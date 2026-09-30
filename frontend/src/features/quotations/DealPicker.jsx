@@ -10,7 +10,29 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { cn } from '../../utils/cn.js';
 import { dealStageLabel } from '../../utils/format.js';
-import { canCreateDealQuotation, dealQuotationStatusLabel, isLiveDirectQuotation } from './quotationMeta.js';
+import {
+  canCreateDealQuotation, dealQuotationStatusLabel, hasLivePricingRequest, isLiveDirectQuotation,
+  LIVE_PRICING_REQUEST_BLOCK_MESSAGE,
+} from './quotationMeta.js';
+
+/**
+ * One pricing route per deal (owner ruling 2026-09-30): does the deal `ticketId` hold a LIVE pricing
+ * request (quotationMeta.hasLivePricingRequest — any status but CANCELLED / SUPERSEDED)? Reads the
+ * deal's own requests through the existing api.pricingRequests.listForTicket (the same read the deal
+ * page makes; ticket list rows carry no pricing-request info, and one deal's list is exact where the
+ * rep-wide queue would be N rows to filter). Shared by DealPicker's notice and the editor's checklist
+ * under one query key, so it is one request. retry:false — a role that cannot read pricing requests
+ * (403) reads as "none known", and DealQuotationService#create's own 409 is the backstop.
+ */
+export function useDealHasLivePricingRequest(ticketId, enabled = true) {
+  const query = useQuery({
+    queryKey: queryKeys.pricingRequestsByTicket(ticketId),
+    queryFn: () => api.pricingRequests.listForTicket(ticketId).then((r) => r?.items ?? []),
+    enabled: enabled && ticketId != null,
+    retry: false,
+  });
+  return hasLivePricingRequest(query.data ?? [], ticketId);
+}
 
 const LIST_ID = 'deal-picker-list';
 
@@ -131,6 +153,7 @@ export function DealPicker({ user, selected = null, error, showToast }) {
   }
 
   const live = selected && isLiveDirectQuotation(selected.liveDirectQuotation) ? selected.liveDirectQuotation : null;
+  const livePricingRequest = useDealHasLivePricingRequest(selected?.id ?? null, Boolean(selected));
   const canRevise = live?.docStatus === 'APPROVED' && canCreateDealQuotation(user, selected);
   const reviseMutation = useMutation({
     mutationFn: () => api.dealQuotations.createRevision(live.id, {}),
@@ -187,6 +210,19 @@ export function DealPicker({ user, selected = null, error, showToast }) {
                 ) : null}
               </div>
             </div>
+          </div>
+        ) : null}
+        {livePricingRequest ? (
+          // One pricing route per deal (owner ruling 2026-09-30) — the same inline-notice pattern as
+          // the live direct quotation above: never a modal (DESIGN.md §16), and the editor disables
+          // บันทึกร่าง with this exact sentence (DESIGN.md §14).
+          <div
+            role="status"
+            data-testid="deal-picker-live-pricing-request"
+            className="flex items-start gap-2 rounded-md border border-info-border bg-info-bg px-3 py-2.5 text-sm text-info-dark"
+          >
+            <Icon name="info" size={16} className="mt-0.5 shrink-0" />
+            <strong className="min-w-0 break-words">{LIVE_PRICING_REQUEST_BLOCK_MESSAGE}</strong>
           </div>
         ) : null}
       </div>

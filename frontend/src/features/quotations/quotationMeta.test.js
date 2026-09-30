@@ -1461,9 +1461,12 @@ describe('buildQuotationChecklist', () => {
     // Slice 2 (SLICE-2-FLOW-A.md, IA D1–D7 owner-approved 2026-09-30): 'deal', 'recipient' and
     // 'liveDirectQuotation' join — each mirrors a create refusal the server makes (no ticket to
     // hang the quotation on; S2-B1's 400 on a direct create without a recipient; S2-B3's N6 409).
+    //
+    // Owner ruling 2026-09-30 (one pricing route per deal): 'livePricingRequest' joins — it mirrors
+    // DealQuotationService#create's 409 on a deal holding a live pricing request.
     expect([...meta.QUOTATION_BLOCKING_CHECKS].sort()).toEqual(
-      ['creditDaysInvalid', 'customer', 'deal', 'entryChannel', 'items', 'liveDirectQuotation', 'locationLabels',
-        'priceModeLanguage', 'project', 'recipient'],
+      ['creditDaysInvalid', 'customer', 'deal', 'entryChannel', 'items', 'liveDirectQuotation', 'livePricingRequest',
+        'locationLabels', 'priceModeLanguage', 'project', 'recipient'],
     );
     // Wrong-way-round: none of the header fields a customer might simply not have is blocking,
     // and the blank-creditDays reminder is a warning, not a blocker (fix 6).
@@ -1518,6 +1521,29 @@ describe('buildQuotationChecklist', () => {
     expect(meta.stageForQuotationRecipient('UNSPECIFIED')).toBeNull();
     expect(meta.recipientForDealStage('QUOTE_OWNER')).toBe('OWNER');
     expect(meta.recipientForDealStage('NEGOTIATION')).toBe('');
+  });
+
+  // Owner ruling 2026-09-30 — one pricing route per deal: the ONE definition of "live pricing request".
+  it('hasLivePricingRequest: any status but CANCELLED/SUPERSEDED on THIS deal counts', () => {
+    const pr = (status, ticketId = 18) => ({ id: 1, ticketId, status });
+    ['DRAFT', 'SUBMITTED', 'IMPORT_REVIEWING', 'APPROVED_FOR_QUOTATION', 'QUOTATION_ISSUED', 'QUOTATION_ACCEPTED']
+      .forEach((status) => expect(meta.hasLivePricingRequest([pr(status)], 18)).toBe(true));
+    expect(meta.hasLivePricingRequest([pr('CANCELLED'), pr('SUPERSEDED')], 18)).toBe(false);
+    // Another deal's request never counts; ids compare as numbers (a useParams string is fine).
+    expect(meta.hasLivePricingRequest([pr('DRAFT', 19)], 18)).toBe(false);
+    expect(meta.hasLivePricingRequest([pr('DRAFT')], '18')).toBe(true);
+    expect(meta.hasLivePricingRequest(null, 18)).toBe(false);
+    expect(meta.LIVE_PRICING_REQUEST_BLOCK_MESSAGE)
+      .toBe('ดีลนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน');
+  });
+
+  it('the checklist blocks a NEW quotation on a deal with a live pricing request, with that sentence', () => {
+    expect(meta.buildQuotationChecklist({ ...complete, livePricingRequest: true })).toEqual([expect.objectContaining({
+      check: 'livePricingRequest',
+      blocking: true,
+      message: 'ดีลนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน',
+    })]);
+    expect(meta.buildQuotationChecklist({ ...complete, livePricingRequest: false })).toEqual([]);
   });
 
   // Owner ruling 2026-09-30 #2: the channel pre-fills the recipient on a new deal.

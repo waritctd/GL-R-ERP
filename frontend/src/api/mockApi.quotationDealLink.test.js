@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { api } from './mockApi.js';
+import { api, setPricingRequestStatusForTests } from './mockApi.js';
 
 // Slice 2 — flow A (SLICE-2-FLOW-A.md Part 1, S2-B1…S2-B4): pins the MOCK's mirror of the slice-2
 // backend contract so VITE_USE_MOCKS=true drives the same flow the Java service will serve —
@@ -278,5 +278,90 @@ describe('mock tickets — liveDirectQuotation on the summary (S2-B4)', () => {
     await api.dealQuotations.cancel(draft.id);
     expect((await listRow(ticketId)).liveDirectQuotation).toBeNull();
     expect((await summaryOf(ticketId)).liveDirectQuotation).toBeNull();
+  });
+});
+
+// Owner ruling 2026-09-30 — ONE PRICING ROUTE PER DEAL, both directions. Slice 1 refuses a คำขอราคา
+// while a live direct quotation exists; this pins the reverse on dealQuotations.create: while the
+// deal has a LIVE pricing request — ANY status but CANCELLED / SUPERSEDED (DRAFT and
+// QUOTATION_ACCEPTED count) — a direct quotation is refused 409. Checked after the recipient
+// validation (a malformed request is a 400 whatever the deal holds) and before N6.
+// Mock plumbing only — the Java mirror is DealQuotationService#create (slice-2 backend).
+describe('mock dealQuotations.create — one pricing route per deal (a live pricing request blocks)', () => {
+  const LIVE_PR_MESSAGE = 'ดีลนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน';
+
+  /** A deal owned by `sales` with one line, plus a DRAFT pricing request on it. */
+  async function dealWithDraftPricingRequest() {
+    await asRole('sales');
+    const { customer } = await api.customers.create({
+      name: `บริษัท one-route ${crypto.randomUUID()}`, taxId: '0100000000398', address: '1 ถนนทดสอบ', phone: '02-111-1398',
+    });
+    const { project } = await api.customers.createProject(customer.id, { name: 'โครงการ one-route' });
+    const { ticket: created } = await api.tickets.create({
+      title: 'ดีล one-route', priority: 'NORMAL', customerName: customer.name, customerId: customer.id,
+      projectId: project.id, contactId: null,
+      items: [{ brand: 'SCG', model: 'Tile one-route', qty: 10, currency: 'THB' }],
+    });
+    const ticketId = created.summary.id;
+    const { pricingRequest } = await api.pricingRequests.create(ticketId, {
+      recipientType: 'OWNER', recipientLabel: 'เจ้าของ one-route', clientRequestId: crypto.randomUUID(),
+      items: [{
+        sourceTicketItemId: created.items[0].id, productId: 1, brand: 'SCG', model: 'Tile one-route', factory: 'Panaria SpA',
+        color: 'ขาว', texture: 'ด้าน', size: '60x60', thicknessMm: 10, sqmPerPiece: 0.36, quantityMode: 'PIECES',
+        piecesInput: 10, wastageMode: 'NONE', piecesPerBox: 4, roundToFullBox: false, originCountry: 'ไทย-สต็อก',
+        leadTimeMinDays: 3, leadTimeMaxDays: 7, quantityType: 'ESTIMATE',
+      }],
+    });
+    return { ticketId, prId: pricingRequest.summary.id };
+  }
+
+  beforeEach(async () => { await asRole('sales'); });
+
+  it('a DRAFT pricing request blocks: 409 with the Thai reason, and nothing is stored', async () => {
+    const { ticketId } = await dealWithDraftPricingRequest();
+    await expect(api.dealQuotations.create(ticketId, { recipientType: 'OWNER', items: [TILE] }))
+      .rejects.toMatchObject({ status: 409, message: LIVE_PR_MESSAGE });
+    const { items } = await api.dealQuotations.listForTicket(ticketId);
+    expect(items).toHaveLength(0);
+  });
+
+  it('a SUBMITTED one blocks too (real submit)', async () => {
+    const { ticketId, prId } = await dealWithDraftPricingRequest();
+    await api.pricingRequests.submit(prId);
+    await expect(api.dealQuotations.create(ticketId, { recipientType: 'OWNER', items: [TILE] }))
+      .rejects.toMatchObject({ status: 409, message: LIVE_PR_MESSAGE });
+  });
+
+  it('QUOTATION_ACCEPTED still counts as live (test seam for the status)', async () => {
+    const { ticketId, prId } = await dealWithDraftPricingRequest();
+    setPricingRequestStatusForTests(prId, 'QUOTATION_ACCEPTED');
+    await expect(api.dealQuotations.create(ticketId, { recipientType: 'OWNER', items: [TILE] }))
+      .rejects.toMatchObject({ status: 409, message: LIVE_PR_MESSAGE });
+  });
+
+  it('the recipient 400 still wins over the pricing-request 409 (validated first)', async () => {
+    const { ticketId } = await dealWithDraftPricingRequest();
+    await expect(api.dealQuotations.create(ticketId, { items: [TILE] }))
+      .rejects.toMatchObject({ status: 400, message: 'ต้องระบุผู้รับใบเสนอราคา' });
+  });
+
+  it('wrong-way-round: a CANCELLED pricing request (real cancel) does NOT block', async () => {
+    const { ticketId, prId } = await dealWithDraftPricingRequest();
+    await api.pricingRequests.cancel(prId, { reason: 'ลูกค้าขอราคาเอง' });
+    const created = await createDirect(ticketId, 'OWNER');
+    expect(created).toMatchObject({ ticketId, origin: 'DEAL_DIRECT', docStatus: 'DRAFT' });
+  });
+
+  it('wrong-way-round: a SUPERSEDED pricing request does NOT block (test seam for the status)', async () => {
+    const { ticketId, prId } = await dealWithDraftPricingRequest();
+    setPricingRequestStatusForTests(prId, 'SUPERSEDED');
+    const created = await createDirect(ticketId, 'OWNER');
+    expect(created).toMatchObject({ ticketId, docStatus: 'DRAFT' });
+  });
+
+  it('another deal\'s pricing request never blocks this one', async () => {
+    await dealWithDraftPricingRequest();
+    const ticketId = await freshDeal();
+    await expect(createDirect(ticketId, 'OWNER')).resolves.toMatchObject({ ticketId });
   });
 });

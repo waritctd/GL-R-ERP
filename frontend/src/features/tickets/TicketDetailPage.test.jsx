@@ -3678,6 +3678,44 @@ describe('TicketDetailPage', () => {
       expect(within(quotationPanel()).queryByText(/ใบเสนอราคาตรง = กรอกราคาเอง/)).toBeNull();
     });
 
+    // Owner ruling 2026-09-30 — ONE PRICING ROUTE PER DEAL, both directions. Slice 1 blocks a
+    // คำขอราคา while a live direct quotation exists; this is the reverse: while the deal has a LIVE
+    // pricing request (any status but CANCELLED / SUPERSEDED — DRAFT and QUOTATION_ACCEPTED count),
+    // no direct quotation may be started, so ใบเสนอราคาตรง is not offered. สร้างคำขอราคา is unchanged.
+    function prOnDeal(status) {
+      return {
+        id: 501, requestCode: 'PCR-2026-0501', ticketId: 701, ticketCreatedById: 1,
+        status, recipientType: 'BUYER', recipientLabel: null, orderConfirmedAt: null,
+      };
+    }
+
+    it.each([['DRAFT'], ['SUBMITTED'], ['APPROVED_FOR_QUOTATION'], ['QUOTATION_ACCEPTED']])(
+      'ใบเสนอราคาตรง is hidden while the deal has a live pricing request (%s); the helper line goes with it',
+      async (status) => {
+        activeDeal();
+        api.pricingRequests.listForTicket.mockResolvedValue({ items: [prOnDeal(status)] });
+        renderTicketDetailPage(salesOwnerUser);
+        await openTab(/เอกสาร/);
+        await waitFor(() => expect(quotationPanel()).not.toBeNull());
+        await waitFor(() => expect(api.pricingRequests.listForTicket).toHaveBeenCalled());
+        await new Promise((resolve) => { setTimeout(resolve, 0); });
+        expect(within(quotationPanel()).queryByRole('link', { name: 'ใบเสนอราคาตรง' })).toBeNull();
+        expect(within(quotationPanel()).queryByText(/ใบเสนอราคาตรง = กรอกราคาเอง/)).toBeNull();
+      },
+    );
+
+    it.each([['CANCELLED'], ['SUPERSEDED']])(
+      'wrong-way-round: a %s pricing request does NOT hide ใบเสนอราคาตรง',
+      async (status) => {
+        activeDeal();
+        api.pricingRequests.listForTicket.mockResolvedValue({ items: [prOnDeal(status)] });
+        renderTicketDetailPage(salesOwnerUser);
+        await openTab(/เอกสาร/);
+        await waitFor(() => expect(quotationPanel()).not.toBeNull());
+        expect(await within(quotationPanel()).findByRole('link', { name: 'ใบเสนอราคาตรง' })).not.toBeNull();
+      },
+    );
+
     it('a role that may not create a quotation on this deal gets neither button', async () => {
       activeDeal();
       renderTicketDetailPage(accountUser);

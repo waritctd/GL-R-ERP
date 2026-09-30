@@ -56,7 +56,7 @@ import {
   hasSpecialPricing,
   // Slice 2 (S2-B1/S2-B3): the recipient table (code -> Thai label) and the live DEAL_DIRECT status
   // set, shared with the editor so the mock validates and labels recipients exactly as the pills do.
-  isLiveDirectQuotation, quotationRecipientOption,
+  isLiveDirectQuotation, quotationRecipientOption, hasLivePricingRequest, LIVE_PRICING_REQUEST_BLOCK_MESSAGE,
 } from '../features/quotations/quotationMeta.js';
 // fix/commission-figures-from-backend: mock mode no longer imports the commission tier math —
 // see the fenced MOCK COMMISSION FIXTURES block near the `commissions` namespace below for why,
@@ -4025,6 +4025,30 @@ export function retireLiveDirectQuotationsForTests(ticketId) {
   for (const q of mockDealQuotations) {
     if (q.ticketId === Number(ticketId) && isDealDirectOrigin(q) && isLiveDirectQuotation(q)) q.docStatus = 'CANCELLED';
   }
+}
+
+/**
+ * TEST-ONLY seam — not part of `api`, never called by the app. The sibling of
+ * retireLiveDirectQuotationsForTests for the reverse lock (one pricing route per deal, owner ruling
+ * 2026-09-30): the older suites create direct quotations on demo ticket 18, whose seed also carries
+ * live pricing requests. This CANCELs every live one on the ticket — the state a rep reaches by
+ * cancelling the คำขอราคา — so a create there may legally land.
+ */
+export function retireLivePricingRequestsForTests(ticketId) {
+  for (const pr of mockPricingRequests) {
+    if (pr.ticketId === Number(ticketId) && hasLivePricingRequest([pr], ticketId)) pr.status = 'CANCELLED';
+  }
+}
+
+/**
+ * TEST-ONLY seam — not part of `api`, never called by the app. Puts one pricing request straight
+ * into `status`, for the states a test cannot cheaply drive through the real chain (SUPERSEDED,
+ * QUOTATION_ACCEPTED). contract.test.js compares `api` only, so this cannot widen the mocked API.
+ */
+export function setPricingRequestStatusForTests(prId, status) {
+  const pr = mockPricingRequests.find((row) => row.id === Number(prId));
+  if (!pr) throw new Error(`no pricing request ${prId}`);
+  pr.status = status;
 }
 
 function mockLiveDirectQuotation(ticketId) {
@@ -14871,6 +14895,12 @@ export const api = {
       const recipientType = payload.recipientType ?? null;
       if (recipientType == null || String(recipientType).trim() === '') fail('ต้องระบุผู้รับใบเสนอราคา', 400);
       if (!quotationRecipientOption(recipientType)) fail(`ไม่รองรับผู้รับใบเสนอราคา '${recipientType}'`, 400);
+      // Mirrors DealQuotationService#create (slice 2 contract — one pricing route per deal, owner
+      // ruling 2026-09-30): the reverse of slice 1's DirectQuotationLocks. While the deal has a LIVE
+      // pricing request (any status but CANCELLED / SUPERSEDED — quotationMeta.hasLivePricingRequest,
+      // the one definition), a direct quotation may not be started. After the recipient 400 (a
+      // malformed request is a 400 whatever the deal holds), before N6.
+      if (hasLivePricingRequest(mockPricingRequests, ticket.id)) fail(LIVE_PRICING_REQUEST_BLOCK_MESSAGE, 409);
       // Mirrors DealQuotationService#create's N6 guard (slice 2 contract, SLICE-2-FLOW-A.md Part 1,
       // S2-B3; slice 1's DirectQuotationLocks predicate): a deal already holding a LIVE DEAL_DIRECT
       // quotation gets a 409 whose body names it, so the client can offer "แก้ไขฉบับนั้น" /

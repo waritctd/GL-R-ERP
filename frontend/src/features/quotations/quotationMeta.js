@@ -282,6 +282,26 @@ export function isRecipientOffRoute(route, recipientCode) {
   return !route.some((row) => row?.code === stage);
 }
 
+// ── One pricing route per deal (owner ruling 2026-09-30, both directions) ──────────────────────────
+// Slice 1 refuses a คำขอราคา while a live direct quotation exists (DirectQuotationLocks). The reverse:
+// while the deal has a LIVE pricing request, no direct quotation may be started — the deal page hides
+// ใบเสนอราคาตรง, the /quotations/new picker shows an inline notice and disables บันทึกร่าง, and the
+// server 409s DealQuotationService#create with the sentence below. "Live" = any status except the two
+// dead ends, so a private DRAFT and a finished QUOTATION_ACCEPTED both count. This is the ONE
+// definition; every surface above (and mockApi's create) reads it from here.
+const DEAD_PRICING_REQUEST_STATUSES = Object.freeze(new Set(['CANCELLED', 'SUPERSEDED']));
+
+export const LIVE_PRICING_REQUEST_BLOCK_MESSAGE =
+  'ดีลนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน';
+
+/** True when `pricingRequests` holds a live request ON `ticketId` (ids compared as numbers). */
+export function hasLivePricingRequest(pricingRequests, ticketId) {
+  if (!Array.isArray(pricingRequests) || ticketId == null) return false;
+  return pricingRequests.some((pr) => pr != null
+    && Number(pr.ticketId) === Number(ticketId)
+    && !DEAD_PRICING_REQUEST_STATUSES.has(pr.status));
+}
+
 /** The live DEAL_DIRECT statuses — DealQuotationService's N6 predicate (slice 1's
  * DirectQuotationLocks) and TicketSummaryDto.liveDirectQuotation both key on exactly these. */
 export const LIVE_DIRECT_QUOTATION_STATUSES = Object.freeze(new Set(['DRAFT', 'PENDING_APPROVAL', 'APPROVED']));
@@ -1612,6 +1632,9 @@ export const QUOTATION_CHECK = Object.freeze({
   DEAL: 'deal',
   RECIPIENT: 'recipient',
   LIVE_DIRECT_QUOTATION: 'liveDirectQuotation',
+  // One pricing route per deal (owner ruling 2026-09-30): the reverse of slice 1's lock — the
+  // picked deal has a live pricing request, which DealQuotationService#create refuses (409).
+  LIVE_PRICING_REQUEST: 'livePricingRequest',
 });
 
 /** THE blocking set — the one place that decides which checklist entries disable บันทึกร่าง and
@@ -1620,6 +1643,7 @@ export const QUOTATION_BLOCKING_CHECKS = Object.freeze(new Set([
   QUOTATION_CHECK.DEAL,
   QUOTATION_CHECK.RECIPIENT,
   QUOTATION_CHECK.LIVE_DIRECT_QUOTATION,
+  QUOTATION_CHECK.LIVE_PRICING_REQUEST,
   QUOTATION_CHECK.CUSTOMER,
   QUOTATION_CHECK.PROJECT,
   QUOTATION_CHECK.ENTRY_CHANNEL,
@@ -1754,6 +1778,8 @@ export function buildQuotationChecklist({
   recipientRequired = false,
   recipientType = '',
   liveDirectQuotation = null,
+  // One pricing route per deal: the picked deal has a live pricing request (hasLivePricingRequest).
+  livePricingRequest = false,
 } = {}) {
   const entries = [];
   const push = (check, message, targetId = null) => {
@@ -1764,6 +1790,7 @@ export function buildQuotationChecklist({
   if (isLiveDirectQuotation(liveDirectQuotation)) {
     push(QUOTATION_CHECK.LIVE_DIRECT_QUOTATION, liveDirectQuotationBlockMessage(liveDirectQuotation));
   }
+  if (livePricingRequest) push(QUOTATION_CHECK.LIVE_PRICING_REQUEST, LIVE_PRICING_REQUEST_BLOCK_MESSAGE);
   if (recipientRequired && !quotationRecipientOption(recipientType)) {
     push(QUOTATION_CHECK.RECIPIENT, 'ต้องเลือกผู้รับใบเสนอราคา', QUOTATION_FIELD_IDS.recipient);
   }

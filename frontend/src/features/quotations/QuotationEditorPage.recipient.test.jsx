@@ -25,6 +25,8 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       // The served stage catalog (with `routes`) — the same guarded fixture mockApi serves.
       meta: { dealStages: vi.fn().mockResolvedValue(DEAL_STAGE_CATALOG) },
       tickets: { get: vi.fn(), create: vi.fn(), list: vi.fn() },
+      // One pricing route per deal (owner ruling 2026-09-30): the picked deal's pricing requests.
+      pricingRequests: { listForTicket: vi.fn() },
       dealQuotations: {
         get: vi.fn(), create: vi.fn(), update: vi.fn(), calculateLine: vi.fn(), submit: vi.fn(),
         approve: vi.fn(), reject: vi.fn(), createRevision: vi.fn(), createReorder: vi.fn(), cancel: vi.fn(),
@@ -141,6 +143,7 @@ beforeEach(() => {
   api.customers.contacts.mockResolvedValue({ contacts: [] });
   api.customers.projects.mockResolvedValue({ projects: [] });
   api.dealQuotations.calculateLine.mockResolvedValue({ item: {} });
+  api.pricingRequests.listForTicket.mockResolvedValue({ items: [] });
 });
 
 describe('/quotations/new — step 1 is "ดีล" (slice 2 §A)', () => {
@@ -399,6 +402,38 @@ describe('a direct-quotation status change refreshes the deal (liveDirectQuotati
     await waitFor(() => expect(api.dealQuotations.cancel).toHaveBeenCalled());
     await waitFor(() => expect(dealCachesInvalidated()).toEqual([true, true]));
   });
+});
+
+// Owner ruling 2026-09-30 — ONE PRICING ROUTE PER DEAL, both directions: a deal with a LIVE pricing
+// request (any status but CANCELLED / SUPERSEDED) may not start a direct quotation. Picking one shows
+// the same inline-notice pattern as a live direct quotation, and บันทึกร่าง is disabled with the
+// reason (DESIGN.md §14).
+describe('/quotations/new?ticket= — a deal with a live pricing request (one pricing route per deal)', () => {
+  const LIVE_PR_MESSAGE = 'ดีลนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน';
+  const pr = (status) => ({ id: 501, requestCode: 'PCR-2026-0501', ticketId: 18, status });
+
+  it.each([['DRAFT'], ['SUBMITTED'], ['QUOTATION_ACCEPTED']])('%s: inline notice + บันทึกร่าง disabled with the reason', async (status) => {
+    api.tickets.get.mockResolvedValue({ ticket: { summary: ticketSummary({ salesStage: 'QUOTE_DESIGN_SIDE' }) } });
+    api.pricingRequests.listForTicket.mockResolvedValue({ items: [pr(status)] });
+    renderEditor('/quotations/new?ticket=18');
+    const notice = await screen.findByTestId('deal-picker-live-pricing-request');
+    expect(notice.getAttribute('role')).toBe('status');
+    expect(notice.textContent).toContain(LIVE_PR_MESSAGE);
+    await fillCompleteQuotationItem();
+    expect(saveButton().disabled).toBe(true);
+    expect(saveButton().title).toContain(LIVE_PR_MESSAGE);
+  }, 10000);
+
+  it.each([['CANCELLED'], ['SUPERSEDED']])('wrong-way-round: a %s pricing request does not block', async (status) => {
+    api.tickets.get.mockResolvedValue({ ticket: { summary: ticketSummary({ salesStage: 'QUOTE_DESIGN_SIDE' }) } });
+    api.pricingRequests.listForTicket.mockResolvedValue({ items: [pr(status)] });
+    renderEditor('/quotations/new?ticket=18');
+    await waitFor(() => expect(api.pricingRequests.listForTicket).toHaveBeenCalledWith(18));
+    await screen.findByTestId('quotation-deal-strip');
+    await fillCompleteQuotationItem();
+    await waitFor(() => expect(saveButton().disabled).toBe(false));
+    expect(screen.queryByTestId('deal-picker-live-pricing-request')).toBeNull();
+  }, 10000);
 });
 
 const OFF_ROUTE_NOTE = 'ผู้รับนี้ไม่อยู่ในเส้นทางของดีล — ขั้นของดีลจะไม่ขยับ';

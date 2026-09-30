@@ -11,15 +11,21 @@ import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 //           and a create on 18 first retires whatever is live there — the state a rep reaches by
 //           cancelling it. A test that needs two live quotations on one deal builds the second
 //           through createReorder/createRevision, the only routes N6 leaves open.
+//   One pricing route per deal (owner ruling 2026-09-30) — the reverse lock: a deal with a LIVE
+//           pricing request refuses a direct create (409). Ticket 18's seed carries live คำขอราคา
+//           too, so createOn18 also retires those first (mockApi.quotationDealLink.test.js pins the
+//           rule itself, wrong-way-round included).
 let api;
 let retireLiveDirectQuotationsForTests;
+let retireLivePricingRequestsForTests;
 beforeEach(async () => {
   vi.resetModules();
-  ({ api, retireLiveDirectQuotationsForTests } = await import('./mockApi.js'));
+  ({ api, retireLiveDirectQuotationsForTests, retireLivePricingRequestsForTests } = await import('./mockApi.js'));
 });
 
 async function createOn18(payload) {
   retireLiveDirectQuotationsForTests(18);
+  retireLivePricingRequestsForTests(18);
   return api.dealQuotations.create(18, { recipientType: 'DESIGNER', ...payload });
 }
 

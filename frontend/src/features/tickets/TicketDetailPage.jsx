@@ -6,6 +6,9 @@
  * sibling header buttons (no dialog, §16) + one muted helper line; three direct-quotation CTA states
  * through the existing sticky slot + ConfirmDialog; GLA-136 quotation-only banner removed (IA §7).
  * Tokens only, no new colour/font/radius. pre-emit critique: P4 H4 E4 S4 R4 V5.
+ * conformance-pass (one pricing route per deal, owner ruling 2026-09-30): ใบเสนอราคาตรง is hidden
+ * while the deal holds a live คำขอราคา (and while those load); the route-comparison helper line
+ * already goes with it. No new control, colour or layout. pre-emit critique: P4 H4 E4 S4 R4 V5.
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -51,7 +54,7 @@ import { DealQuotationPanel } from './DealQuotationPanel.jsx';
 // never overlap that panel's rows.
 import { DealDirectQuotationPanel } from '../quotations/DealDirectQuotationPanel.jsx';
 import {
-  canCreateDealQuotation, canViewDealQuotation, CONFIRM_ORDER_FROM_QUOTATION_COPY, isLiveDirectQuotation,
+  canCreateDealQuotation, canViewDealQuotation, CONFIRM_ORDER_FROM_QUOTATION_COPY, hasLivePricingRequest, isLiveDirectQuotation,
 } from '../quotations/quotationMeta.js';
 import { DealStagePanel } from './DealStagePanel.jsx';
 import { DealStateHeader } from './DealStateHeader.jsx';
@@ -1247,10 +1250,17 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // canCreateDealQuotation (the quotation editor's own). The direct route disappears while a live
   // direct quotation exists — a second one would be refused anyway (N6), and the panel's row for
   // the live one is the way in. null when this viewer has neither, so the helper line goes too.
+  // Owner ruling 2026-09-30 — one pricing route per deal, both directions: it is ALSO hidden while
+  // the deal has a live pricing request (quotationMeta.hasLivePricingRequest — any status but
+  // CANCELLED/SUPERSEDED; DealQuotationService#create 409s it), and while those requests are still
+  // loading, so it never flashes up only to vanish. สร้างคำขอราคา is unchanged.
   const showCreatePricingRequest = canCreatePricingRequest(user, summary);
+  const pricingRequestsPending = canViewPricingRequests && pricingRequestsQuery.isLoading;
   const showDirectQuotation = canCreateDealQuotation(user, summary)
     && (summary.lifecycle ?? 'ACTIVE') === 'ACTIVE'
-    && !isLiveDirectQuotation(summary.liveDirectQuotation);
+    && !isLiveDirectQuotation(summary.liveDirectQuotation)
+    && !pricingRequestsPending
+    && !hasLivePricingRequest(pricingRequests, ticketId);
   const quotationRouteActions = showCreatePricingRequest || showDirectQuotation ? (
     <div className="flex flex-wrap gap-2">
       {showCreatePricingRequest ? (

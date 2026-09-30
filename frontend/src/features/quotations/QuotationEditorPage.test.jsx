@@ -15,6 +15,9 @@ vi.mock('../../api/index.js', async (importOriginal) => {
     ...actual,
     api: {
       tickets: { get: vi.fn(), create: vi.fn() },
+      // One pricing route per deal (owner ruling 2026-09-30): a NEW quotation on a picked deal reads
+      // the deal's pricing requests. None here — every test in this file is about the editor itself.
+      pricingRequests: { listForTicket: vi.fn().mockResolvedValue({ items: [] }) },
       dealQuotations: {
         get: vi.fn(),
         create: vi.fn(),
