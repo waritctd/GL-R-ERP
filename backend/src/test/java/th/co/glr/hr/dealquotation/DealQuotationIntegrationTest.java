@@ -187,6 +187,20 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     // Acceptance
     // ─────────────────────────────────────────────────────────────────────────────────────
 
+    /** Round 8: a DEAL_DIRECT row stores recipient_type = 'UNSPECIFIED'; the DTO must serve it
+     * (read-only exposure of an already-persisted column) through listForTicket's real query. */
+    @Test
+    void listForTicket_servesUnspecifiedRecipientForADealDirectRow() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+
+        DealQuotationDto listed = quotationService.listForTicket(ticketId, salesActor).stream()
+            .filter(q -> q.id() == created.id()).findFirst().orElseThrow();
+
+        assertThat(listed.origin()).isEqualTo("DEAL_DIRECT");
+        assertThat(listed.recipientType()).isEqualTo("UNSPECIFIED");
+    }
+
     @Test
     void acceptanceScenario_createUpdateSubmitApprove() {
         DealQuotationDto created = quotationService.create(ticketId,

@@ -28,6 +28,15 @@ describe('mock dealQuotations -- items are @NotEmpty, as on the service', () => 
   });
 });
 
+describe('mock dealQuotations -- recipient (Round 8)', () => {
+  it('a DEAL_DIRECT row serves recipientType UNSPECIFIED, as the repository stores it', async () => {
+    await api.auth.login(salesUser);
+    const { quotation } = await api.dealQuotations.create(18, { items: [ONE_ITEM] });
+    expect(quotation.recipientType).toBe('UNSPECIFIED');
+    expect(quotation.recipientLabel ?? null).toBeNull();
+  });
+});
+
 describe('mock dealQuotations -- item lines follow the document language (owner ruling 2026-09-13)', () => {
   const THAI = /[\u0E00-\u0E7F]/;
   const ADJUSTMENT = { lineType: 'ADJUSTMENT', adjustmentPct: 3, adjustmentDeadline: '2026-07-31' };

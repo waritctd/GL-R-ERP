@@ -1648,6 +1648,7 @@ public class DealQuotationRepository {
                    -- full-payment-term code — see each column's own COMMENT ON COLUMN.
                    q.omit_contact_honorific, q.full_payment_term,
                    q.total_amount, q.currency, q.issued_at AS created_at, q.updated_at,
+                   q.recipient_type, q.recipient_label,
                    CASE WHEN aps.quotation_id IS NOT NULL THEN aps.signature_image IS NOT NULL
                         ELSE EXISTS (SELECT 1 FROM hr.employee_signature es WHERE es.employee_id = q.approved_by)
                    END AS approver_has_signature,
@@ -1819,7 +1820,12 @@ public class DealQuotationRepository {
             List.of(),
             // Owner-directed reversal of F2 (V192, 2026-09-26) — see
             // DealQuotationDtos#orderedByName's own Javadoc. NULL prints the dotted placeholder.
-            rs.getString("ordered_by_name")
+            rs.getString("ordered_by_name"),
+            // Round 8 — sales.quotation.recipient_type/recipient_label, already persisted (see
+            // InsertDraftParams); read-only exposure so the เอกสาร register can show who the
+            // quotation is for. NOT NULL column for every row, so recipientType is never null here.
+            rs.getString("recipient_type"),
+            rs.getString("recipient_label")
         );
     }
 

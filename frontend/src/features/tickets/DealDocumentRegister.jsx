@@ -9,7 +9,9 @@ import { Panel } from '../../components/common/Layout.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { downloadBlob } from '../../utils/download.js';
-import { depositNoticeStatusLabel, formatMoney, formatThaiDate, quotationStatusLabel } from '../../utils/format.js';
+import {
+  depositNoticeStatusLabel, formatMoney, formatThaiDate, quotationRecipientLabel, quotationStatusLabel,
+} from '../../utils/format.js';
 import { canViewCustomerQuotation } from '../pricingRequests/pricingRequestMeta.js';
 import { canViewDealQuotation, dealQuotationStatusLabel } from '../quotations/quotationMeta.js';
 import { isRemainingInvoiceReady } from './remainingInvoiceReadiness.js';
@@ -261,6 +263,7 @@ export function DealDocumentRegister({
     status: quotationStatusLabel(q.docStatus),
     date: q.issuedAt ?? q.createdAt,
     amount: q.grandTotal,
+    recipient: quotationRecipientLabel(q.recipientType ?? 'UNSPECIFIED').label,
     meta: `ครั้งที่ ${q.quotationRevisionNo ?? 1}`,
     // Download gate unchanged: only ISSUED / ACCEPTED chain rows.
     actions: q.docStatus === 'ISSUED' || q.docStatus === 'ACCEPTED'
@@ -273,6 +276,7 @@ export function DealDocumentRegister({
     status: quotationStatusLabel(q.docStatus),
     date: q.issuedAt,
     amount: q.totalAmount,
+    recipient: quotationRecipientLabel(q.recipientType ?? 'UNSPECIFIED').label,
     meta: 'เอกสารเดิม',
     actions: pdfXlsx('legacy', downloadLegacyQuotation, q),
   });
@@ -283,6 +287,9 @@ export function DealDocumentRegister({
     status: dealQuotationStatusLabel(q.docStatus),
     date: q.approvedAt ?? q.createdAt,
     amount: q.grandTotal,
+    // DealQuotationDto#recipientType (Round 8). An older backend omits it: undefined -> no chip
+    // (never a wrong one) — the frontend deploys before the backend image.
+    recipient: q.recipientType ? quotationRecipientLabel(q.recipientType).label : null,
     meta: `ครั้งที่ ${q.revisionNo ?? 1}`,
     // Mirrors DealDirectQuotationPanel: PDF + Excel for every status.
     actions: pdfXlsx('direct', downloadDirectQuotation, q),
@@ -346,7 +353,8 @@ export function DealDocumentRegister({
       ) : null}
 
       {canViewDepositAndInvoice ? (
-        <RegisterSection testId="register-deposit-and-invoice" title="ใบแจ้งยอดมัดจำ และใบแจ้งหนี้ส่วนที่เหลือ">
+        <RegisterSection testId="register-deposit" title="ใบแจ้งยอดมัดจำ"
+          count={depositNoticesQuery.data?.length ? depositGroups.length : 0} unit="เอกสาร">
           {depositNoticesQuery.isLoading ? (
             <Skeleton height={40} />
           ) : depositGroups[0]?.versions.length ? (
@@ -354,18 +362,30 @@ export function DealDocumentRegister({
           ) : (
             <p className="text-xs text-text-muted">ยังไม่มีใบแจ้งยอดมัดจำสำหรับดีลนี้</p>
           )}
-          <div className="flex flex-col gap-3 border-t border-border-subtle pt-3">
-            <DocumentRow
-              icon="fileText"
-              title="ใบแจ้งหนี้ส่วนที่เหลือ"
-              meta={remainingInvoiceReady ? 'พร้อมดาวน์โหลด' : 'ยังไม่ถึงขั้นตอน (ต้องออกใบเสนอราคาและสินค้าพร้อมส่งมอบก่อน)'}
-              status={{ label: remainingInvoiceReady ? 'พร้อมใช้งาน' : 'รอขั้นตอน', tone: remainingInvoiceReady ? 'success' : 'neutral' }}
-              actions={remainingInvoiceReady ? [
-                { label: 'Excel', busy: false, onClick: openRemainingInvoiceDialog },
-              ] : []}
-            />
-            {renderGroups(remainingGroups, remainingItem)}
-          </div>
+        </RegisterSection>
+      ) : null}
+
+      {canViewDepositAndInvoice ? (
+        <RegisterSection testId="register-remaining-invoice" title="ใบแจ้งหนี้ส่วนที่เหลือ" count={remainingGroups.length} unit="เอกสาร">
+          {/* The readiness row (create/download via the dialog) always leads the section; the
+              stored versions follow. Its title says what the button DOES, so it does not repeat
+              the section heading. */}
+          <DocumentRow
+            icon="fileText"
+            title="ออกใบแจ้งหนี้ส่วนที่เหลือ"
+            meta={remainingInvoiceReady ? 'พร้อมดาวน์โหลด' : 'ยังไม่ถึงขั้นตอน (ต้องออกใบเสนอราคาและสินค้าพร้อมส่งมอบก่อน)'}
+            status={{ label: remainingInvoiceReady ? 'พร้อมใช้งาน' : 'รอขั้นตอน', tone: remainingInvoiceReady ? 'success' : 'neutral' }}
+            actions={remainingInvoiceReady ? [
+              { label: 'Excel', busy: false, onClick: openRemainingInvoiceDialog },
+            ] : []}
+          />
+          {remainingGroups.length > 0 ? (
+            renderGroups(remainingGroups, remainingItem)
+          ) : remainingInvoicesQuery.isLoading ? (
+            <Skeleton height={40} />
+          ) : (
+            <p className="text-xs text-text-muted">ยังไม่มีใบแจ้งหนี้ส่วนที่เหลือสำหรับดีลนี้</p>
+          )}
         </RegisterSection>
       ) : null}
 
@@ -409,7 +429,7 @@ function RegisterSection({ testId, title, count, unit, children }) {
     <section className="flex flex-col gap-3 px-5 py-4 mobile:px-4 mobile:py-3.5 [&+&]:border-t [&+&]:border-border-subtle" data-testid={testId}>
       <div className="flex items-baseline gap-2">
         <strong className="text-sm font-bold text-text">{title}</strong>
-        {count > 0 ? <span className="text-2xs text-text-muted">{`${count} ${unit}`}</span> : null}
+        {count > 0 ? <span className="text-xs text-text-muted">{`${count} ${unit}`}</span> : null}
       </div>
       {children}
     </section>
@@ -423,7 +443,7 @@ function DocumentGroup({ items }) {
     <div className="flex flex-col gap-1.5" data-testid="document-group">
       <DocumentRow icon="fileText" {...current} />
       {older.length > 0 ? (
-        <div className="ml-1.5 flex flex-col gap-1 border-l border-border-subtle pl-6">
+        <div className="ml-1.5 flex flex-col gap-1 border-l border-border-subtle pl-6 mobile:pl-3">
           {older.map((v) => <DocumentRow key={v.testId} muted {...v} />)}
         </div>
       ) : null}
@@ -431,35 +451,52 @@ function DocumentGroup({ items }) {
   );
 }
 
-function DocumentRow({ testId, icon, title, meta, status, date, amount, actions = [], muted = false }) {
+// Below desktop (<=1040px, the `nav-drawer` band) every button/link is a 44px touch target; the
+// 8px gap between them is kept by `gap-2`. Desktop stays compact.
+const TOUCH_TARGET = 'nav-drawer:min-h-11 nav-drawer:min-w-11';
+
+function DocumentRow({ testId, icon, title, meta, status, date, amount, recipient, actions = [], muted = false }) {
   const hasAmount = amount !== undefined && amount !== null;
+  const metaText = [date ? formatThaiDate(date) : null, meta].filter(Boolean).join(' · ');
   return (
-    // Line 1: number + status. Line 2: date/meta on the left, amount + actions on the right (they
-    // wrap onto their own line only when the row is too narrow to hold them).
+    // Line 1: number + status + recipient (wraps). Line 2: date/meta. Line 3 (mobile) / right side
+    // of line 2 (desktop): amount on the left, actions on the right.
     <div data-testid={testId} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-      <div className="flex min-w-0 max-w-full items-center gap-2">
+      <div className="flex min-w-0 max-w-full flex-wrap items-center gap-x-2 gap-y-1">
         {!muted && icon ? <Icon name={icon} size={13} style={{ color: 'var(--color-text-muted)', flexShrink: 0 }} /> : null}
-        <span className={cn('min-w-0 truncate', muted ? 'text-xs text-text-muted' : 'text-sm font-bold text-text')}>{title}</span>
+        <span className={cn('min-w-0 truncate mobile:whitespace-normal mobile:break-all', muted ? 'text-xs text-text-muted' : 'text-sm font-bold text-text')}>{title}</span>
         {status ? <StatusBadge tone={status.tone}>{status.label}</StatusBadge> : null}
+        {/* Recipient of the whole document: shown on the current (top) row only. */}
+        {recipient && !muted ? (
+          <span data-testid="document-recipient" title={`สำหรับ: ${recipient}`}
+            className="max-w-full truncate rounded-pill border border-border-subtle bg-surface-muted px-2 text-xs font-bold text-text-secondary">
+            <span className="sr-only">สำหรับ: </span>{recipient}
+          </span>
+        ) : null}
       </div>
-      <div className="flex min-w-0 flex-1 basis-full flex-wrap items-center justify-between gap-x-3 gap-y-1">
-        <span className="text-2xs text-text-muted">{[date ? formatThaiDate(date) : null, meta].filter(Boolean).join(' · ')}</span>
-        <div className="ml-auto flex items-center gap-2">
+      <div className="flex min-w-0 flex-1 basis-full flex-wrap items-center justify-between gap-x-3 gap-y-2">
+        {metaText ? <span className="text-xs text-text-muted mobile:basis-full">{metaText}</span> : null}
+        <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-x-3 gap-y-2 mobile:w-full mobile:basis-full mobile:justify-between">
           {hasAmount ? (
             <span className={cn('tabular-nums', muted ? 'text-xs text-text-muted' : 'text-sm text-text')}>{formatMoney(amount)}</span>
           ) : null}
-          {actions.map((action) => (action.href ? (
-            // Not a <Button>: this is a real navigation link (target="_blank" to
-            // a file URL) — Button renders a <button>, which has no href.
-            <a key={action.label} href={action.href} target="_blank" rel="noreferrer" className={cn(buttonVariants({ variant: 'secondary' }), 'px-2.5 py-1 text-xs')}>
-              {action.label}
-            </a>
-          ) : (
-            <Button key={action.label} type="button" variant="secondary" style={{ fontSize: 12, padding: '4px 10px' }}
-              disabled={action.busy} onClick={action.onClick}>
-              {action.busy ? 'กำลังดาวน์โหลด…' : action.label}
-            </Button>
-          )))}
+          {actions.length > 0 ? (
+            <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+              {actions.map((action) => (action.href ? (
+                // Not a <Button>: this is a real navigation link (target="_blank" to
+                // a file URL) — Button renders a <button>, which has no href.
+                <a key={action.label} href={action.href} target="_blank" rel="noreferrer"
+                  className={cn(buttonVariants({ variant: 'secondary' }), 'px-2.5 py-1 text-xs', TOUCH_TARGET)}>
+                  {action.label}
+                </a>
+              ) : (
+                <Button key={action.label} type="button" variant="secondary" className={TOUCH_TARGET}
+                  style={{ fontSize: 12, padding: '4px 10px' }} disabled={action.busy} onClick={action.onClick}>
+                  {action.busy ? 'กำลังดาวน์โหลด…' : action.label}
+                </Button>
+              )))}
+            </div>
+          ) : null}
         </div>
       </div>
     </div>

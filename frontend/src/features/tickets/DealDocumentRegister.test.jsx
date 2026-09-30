@@ -102,7 +102,8 @@ describe('DealDocumentRegister', () => {
     expect(await screen.findByTestId('deal-document-register')).not.toBeNull();
     expect(screen.getByText('ไม่มีเอกสารให้แสดงในมุมมองนี้')).not.toBeNull();
     expect(screen.queryByTestId('register-quotations')).toBeNull();
-    expect(screen.queryByTestId('register-deposit-and-invoice')).toBeNull();
+    expect(screen.queryByTestId('register-deposit')).toBeNull();
+    expect(screen.queryByTestId('register-remaining-invoice')).toBeNull();
     expect(screen.queryByTestId('register-attachments')).toBeNull();
     // Never fire a query that would 403 — a swallowed 403 rendering an empty
     // register reads as "no documents exist", which is worse than the
@@ -128,7 +129,8 @@ describe('DealDocumentRegister', () => {
     expect(await screen.findByTestId('register-quotations')).not.toBeNull();
     // Legacy rows are held back until the chain queries settle (so a chain-duplicated row never flashes).
     expect(await screen.findByText('QT-2026-0901')).not.toBeNull();
-    expect(await screen.findByTestId('register-deposit-and-invoice')).not.toBeNull();
+    expect(await screen.findByTestId('register-deposit')).not.toBeNull();
+    expect(await screen.findByTestId('register-remaining-invoice')).not.toBeNull();
     expect(await screen.findByTestId('register-attachments')).not.toBeNull();
     expect(screen.getByText('po.pdf')).not.toBeNull();
     await waitFor(() => expect(api.pricingRequests.listCustomerQuotations).toHaveBeenCalledWith(501));
@@ -212,7 +214,7 @@ describe('DealDocumentRegister', () => {
     });
 
     await screen.findAllByText('QT-2026-0016-3');
-    await screen.findByTestId('register-deposit-and-invoice'); // let every query settle
+    await screen.findByTestId('register-deposit'); // let every query settle
     expect(screen.getAllByText('QT-2026-0016-3')).toHaveLength(1);
     expect(screen.queryByTestId('document-version-legacy-3')).toBeNull();
   });
@@ -508,6 +510,91 @@ describe('DealDocumentRegister', () => {
     expect(await screen.findByText('QT-2026-0500')).not.toBeNull();
   });
 
+  // ── Recipient chip: who each quotation DOCUMENT is for (current/top row only) ──────────────
+  it('chain: a DESIGNER document shows one ผู้ออกแบบ chip on its current row, not on older versions', async () => {
+    api.pricingRequests.listCustomerQuotations.mockResolvedValue({
+      items: [
+        { id: 1, number: 'QT-R-1', docStatus: 'SUPERSEDED', quotationRevisionNo: 1, recipientType: 'DESIGNER', grandTotal: 1 },
+        { id: 2, number: 'QT-R-2', docStatus: 'ISSUED', quotationRevisionNo: 2, recipientType: 'DESIGNER', grandTotal: 2 },
+      ],
+    });
+    renderRegister({ ...SALES, pricingRequests: CHAIN_PR });
+
+    await screen.findByTestId('document-version-chain-2');
+    expect(screen.getAllByTestId('document-recipient')).toHaveLength(1);
+    const chip = within(screen.getByTestId('document-version-chain-2')).getByTestId('document-recipient');
+    expect(chip.textContent).toBe('สำหรับ: ผู้ออกแบบ');
+    expect(within(screen.getByTestId('document-version-chain-1')).queryByTestId('document-recipient')).toBeNull();
+  });
+
+  it('legacy: OWNER shows เจ้าของ; a null recipientType shows ไม่ระบุ', async () => {
+    renderRegister({
+      ...SALES,
+      legacyQuotations: [
+        { id: 81, number: 'QT-2026-0810', recipientType: 'OWNER', quotationVersion: 1, docStatus: 'ISSUED', totalAmount: 1 },
+        { id: 82, number: 'QT-2026-0820', recipientType: null, quotationVersion: 1, docStatus: 'ISSUED', totalAmount: 2 },
+      ],
+    });
+    await screen.findByTestId('document-version-legacy-81');
+    expect(within(screen.getByTestId('document-version-legacy-81')).getByTestId('document-recipient').textContent).toContain('เจ้าของ');
+    expect(within(screen.getByTestId('document-version-legacy-82')).getByTestId('document-recipient').textContent).toContain('ไม่ระบุ');
+  });
+
+  it('direct: a PRICING_REQUEST-origin row shows its own recipient (ผู้ออกแบบ)', async () => {
+    api.dealQuotations.listForTicket.mockResolvedValue({
+      items: [{ id: 91, number: 'QT-2026-0910-1', docStatus: 'APPROVED', revisionNo: 1, grandTotal: 1, origin: 'PRICING_REQUEST', recipientType: 'DESIGNER', recipientLabel: 'X' }],
+    });
+    renderRegister({ ...SALES });
+    const row = within(await screen.findByTestId('document-version-direct-91'));
+    expect(row.getByTestId('document-recipient').textContent).toContain('ผู้ออกแบบ');
+  });
+
+  it('direct: a DEAL_DIRECT row (UNSPECIFIED) shows ไม่ระบุ, same wording as the other families', async () => {
+    api.dealQuotations.listForTicket.mockResolvedValue({
+      items: [{ id: 92, number: 'QT-2026-0920-1', docStatus: 'APPROVED', revisionNo: 1, grandTotal: 1, origin: 'DEAL_DIRECT', recipientType: 'UNSPECIFIED' }],
+    });
+    renderRegister({ ...SALES });
+    const row = within(await screen.findByTestId('document-version-direct-92'));
+    expect(row.getByTestId('document-recipient').textContent).toContain('ไม่ระบุ');
+    expect(row.queryByText(/ไม่ระบุผู้รับ/)).toBeNull();
+  });
+
+  // Deploy safety: the frontend ships before the backend image, so an older backend omits the
+  // field. No chip is better than a wrong one.
+  it('direct: recipientType absent (older backend) renders NO chip', async () => {
+    api.dealQuotations.listForTicket.mockResolvedValue({
+      items: [{ id: 93, number: 'QT-2026-0930-1', docStatus: 'APPROVED', revisionNo: 1, grandTotal: 1, origin: 'DEAL_DIRECT' }],
+    });
+    renderRegister({ ...SALES });
+    const row = within(await screen.findByTestId('document-version-direct-93'));
+    expect(row.queryByTestId('document-recipient')).toBeNull();
+  });
+
+  it('the chip exposes its context to screen readers as sr-only text, not an aria-label on a span', async () => {
+    api.dealQuotations.listForTicket.mockResolvedValue({
+      items: [{ id: 94, number: 'QT-2026-0940-1', docStatus: 'APPROVED', revisionNo: 1, grandTotal: 1, recipientType: 'OWNER' }],
+    });
+    renderRegister({ ...SALES });
+    const chip = (await screen.findByTestId('document-recipient'));
+    expect(chip.textContent).toBe('สำหรับ: เจ้าของ');
+    expect(chip.getAttribute('aria-label')).toBeNull();
+    expect(chip.querySelector('.sr-only').textContent).toBe('สำหรับ: ');
+  });
+
+  it('deposit notice, remaining invoice and attachment rows carry no recipient chip', async () => {
+    api.depositNotices.listByTicket.mockResolvedValue({
+      depositNotices: [{ id: 31, status: 'ISSUED', docNumber: 'DN-1', version: 1, depositPercent: 0.5, recipientType: 'OWNER' }],
+    });
+    api.storedRemainingInvoices.listForTicket.mockResolvedValue({
+      remainingInvoices: [{ id: 41, baseNumber: 'GLR1', version: 1, docNumber: 'GLR1-1', status: 'ISSUED', recipientType: 'OWNER' }],
+    });
+    renderRegister({ ...ACCOUNT, attachments: [{ id: 1, fileName: 'po.pdf', attachType: 'PO' }] });
+    await screen.findByText('GLR1-1');
+    await screen.findByText('DN-1');
+    expect(screen.getByText('po.pdf')).not.toBeNull();
+    expect(screen.queryAllByTestId('document-recipient')).toHaveLength(0);
+  });
+
   it('keeps already-shown legacy rows visible when a NEW pricing request query starts loading (hold-back is first-settle only)', async () => {
     api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [] });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -552,7 +639,7 @@ describe('DealDocumentRegister', () => {
     renderRegister({ user: { id: 5, role: 'account' }, sections: ACCOUNT_SECTIONS, canViewPricingRequests: false, canViewDocumentsTab: true });
 
     await screen.findByText('DN-2026-0011');
-    const groups = within(screen.getByTestId('register-deposit-and-invoice')).getAllByTestId('document-group');
+    const groups = within(screen.getByTestId('register-deposit')).getAllByTestId('document-group');
     expect(groups).toHaveLength(1); // one deposit notice per deal, many versions
     const [p3, p2, p1] = positionsInDom(['document-version-deposit-33', 'document-version-deposit-32', 'document-version-deposit-31']);
     expect(p3).toBeGreaterThanOrEqual(0);
@@ -615,7 +702,8 @@ describe('DealDocumentRegister', () => {
     expect(await screen.findByTestId('register-attachments')).not.toBeNull();
     expect(screen.getByText('po.pdf')).not.toBeNull();
     expect(screen.queryByTestId('register-quotations')).toBeNull();
-    expect(screen.queryByTestId('register-deposit-and-invoice')).toBeNull();
+    expect(screen.queryByTestId('register-deposit')).toBeNull();
+    expect(screen.queryByTestId('register-remaining-invoice')).toBeNull();
     expect(screen.queryByText('QT-2026-0901')).toBeNull();
     expect(api.pricingRequests.listCustomerQuotations).not.toHaveBeenCalled();
     expect(api.depositNotices.listByTicket).not.toHaveBeenCalled();
@@ -664,7 +752,7 @@ describe('DealDocumentRegister', () => {
       canViewDocumentsTab: true,
     });
 
-    const section = within(await screen.findByTestId('register-deposit-and-invoice'));
+    const section = within(await screen.findByTestId('register-deposit'));
 
     // The bug: SUPERSEDED must read ถูกแทนที่, and never fall back to ฉบับร่าง. Wait for the
     // deposit-notice rows themselves (the section testid mounts immediately in its loading
@@ -690,6 +778,60 @@ describe('DealDocumentRegister', () => {
     await waitFor(() => expect(api.depositNotices.downloadXlsx).toHaveBeenCalledWith(11));
   });
 
+  // ── Round 9: two sections instead of one combined block ───────────────────────────────────
+  it('account sees TWO sections: ใบแจ้งยอดมัดจำ then ใบแจ้งหนี้ส่วนที่เหลือ, each with its own empty state', async () => {
+    renderRegister({ ...ACCOUNT });
+
+    const deposit = await screen.findByTestId('register-deposit');
+    const remaining = await screen.findByTestId('register-remaining-invoice');
+    expect(deposit.compareDocumentPosition(remaining) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(deposit).getByText('ใบแจ้งยอดมัดจำ')).not.toBeNull();
+    expect(within(remaining).getByText('ใบแจ้งหนี้ส่วนที่เหลือ')).not.toBeNull();
+    expect(await within(deposit).findByText('ยังไม่มีใบแจ้งยอดมัดจำสำหรับดีลนี้')).not.toBeNull();
+    // Empty stored list: the readiness row stays at the top, the empty sentence sits beneath it.
+    expect(await within(remaining).findByText('ยังไม่มีใบแจ้งหนี้ส่วนที่เหลือสำหรับดีลนี้')).not.toBeNull();
+    expect(within(remaining).getByText('ออกใบแจ้งหนี้ส่วนที่เหลือ')).not.toBeNull();
+    expect(screen.queryByTestId('register-deposit-and-invoice')).toBeNull();
+  });
+
+  it('deposit groups live only in register-deposit; remaining groups and readiness only in register-remaining-invoice', async () => {
+    api.depositNotices.listByTicket.mockResolvedValue({
+      depositNotices: [{ id: 31, status: 'ISSUED', docNumber: 'DN-1', version: 1, depositPercent: 0.5 }],
+    });
+    api.storedRemainingInvoices.listForTicket.mockResolvedValue({
+      remainingInvoices: [
+        { id: 41, baseNumber: 'GLR1', version: 1, docNumber: 'GLR1-1', status: 'SUPERSEDED' },
+        { id: 42, baseNumber: 'GLR1', version: 2, docNumber: 'GLR1-2', status: 'ISSUED' },
+        { id: 43, baseNumber: 'GLR2', version: 1, docNumber: 'GLR2-1', status: 'ISSUED' },
+      ],
+    });
+    renderRegister({ ...ACCOUNT, summary: { status: 'quotation_issued', fulfillmentStatus: 'GOODS_RECEIVED' } });
+
+    const deposit = within(await screen.findByTestId('register-deposit'));
+    const remaining = within(await screen.findByTestId('register-remaining-invoice'));
+    await deposit.findByText('DN-1');
+    await remaining.findByText('GLR1-2');
+    expect(deposit.queryByText('GLR1-2')).toBeNull();
+    expect(remaining.queryByText('DN-1')).toBeNull();
+    expect(remaining.getAllByTestId('document-group')).toHaveLength(2);
+    expect(deposit.getAllByTestId('document-group')).toHaveLength(1);
+    expect(remaining.getByText('พร้อมใช้งาน')).not.toBeNull();
+    expect(deposit.queryByText('พร้อมใช้งาน')).toBeNull();
+  });
+
+  it('each section shows its own document count (remaining counts stored documents, not the readiness row)', async () => {
+    api.storedRemainingInvoices.listForTicket.mockResolvedValue({
+      remainingInvoices: [
+        { id: 41, baseNumber: 'GLR1', version: 1, docNumber: 'GLR1-1', status: 'SUPERSEDED' },
+        { id: 42, baseNumber: 'GLR1', version: 2, docNumber: 'GLR1-2', status: 'ISSUED' },
+        { id: 43, baseNumber: 'GLR2', version: 1, docNumber: 'GLR2-1', status: 'ISSUED' },
+      ],
+    });
+    renderRegister({ ...ACCOUNT });
+    const remaining = within(await screen.findByTestId('register-remaining-invoice'));
+    expect(await remaining.findByText('2 เอกสาร')).not.toBeNull();
+  });
+
   it('shows the remaining-invoice row as ready only once quotation_issued + GOODS_RECEIVED, still under the deposit/invoice gate', async () => {
     const { rerender } = renderRegister({
       user: { id: 5, role: 'account' },
@@ -697,7 +839,7 @@ describe('DealDocumentRegister', () => {
       canViewDocumentsTab: true,
       summary: { status: 'price_proposed', fulfillmentStatus: null },
     });
-    const section = within(await screen.findByTestId('register-deposit-and-invoice'));
+    const section = within(await screen.findByTestId('register-remaining-invoice'));
     expect(section.getByText('รอขั้นตอน')).not.toBeNull();
     expect(section.queryByRole('button', { name: 'Excel' })).toBeNull();
 
@@ -718,7 +860,7 @@ describe('DealDocumentRegister', () => {
         />
       </QueryClientProvider>,
     );
-    const readySection = within(await screen.findByTestId('register-deposit-and-invoice'));
+    const readySection = within(await screen.findByTestId('register-remaining-invoice'));
     expect(readySection.getByText('พร้อมใช้งาน')).not.toBeNull();
     expect(readySection.getByRole('button', { name: 'Excel' })).not.toBeNull();
   });
@@ -742,7 +884,7 @@ describe('DealDocumentRegister', () => {
       summary: { status: 'quotation_issued', fulfillmentStatus: 'GOODS_RECEIVED' },
     });
 
-    const section = within(await screen.findByTestId('register-deposit-and-invoice'));
+    const section = within(await screen.findByTestId('register-remaining-invoice'));
     fireEvent.click(section.getByRole('button', { name: 'Excel' }));
 
     // account is not this deal's owning sales rep, so R4 shows the "waiting for sales" state
@@ -767,7 +909,7 @@ describe('DealDocumentRegister', () => {
       canViewDocumentsTab: true,
       summary: { status: 'quotation_issued', fulfillmentStatus },
     });
-    const section = within(await screen.findByTestId('register-deposit-and-invoice'));
+    const section = within(await screen.findByTestId('register-remaining-invoice'));
     if (ready) {
       expect(section.getByText('พร้อมใช้งาน')).not.toBeNull();
       expect(section.getByRole('button', { name: 'Excel' })).not.toBeNull();

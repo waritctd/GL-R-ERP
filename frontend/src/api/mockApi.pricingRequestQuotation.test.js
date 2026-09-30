@@ -203,6 +203,17 @@ describe('mockApi.dealQuotations.createFromPricingRequest', () => {
     expect(item.priceChangedFromCeo).toBe(false);
   });
 
+  // Round 8: DealQuotationDto now serves recipientType/recipientLabel (already persisted; copied
+  // from the source pricing request for PRICING_REQUEST-origin rows). Mock parity.
+  it('serves the source pricing request recipient on the created row and on listForTicket', async () => {
+    const { ticketId, prId } = await approvedNetPricingRequest();
+    const { quotation } = await api.dealQuotations.createFromPricingRequest(prId);
+    expect(quotation.recipientType).toBe('DESIGNER');
+    expect(quotation.recipientLabel).toBe('ผู้ออกแบบทดสอบ PCRQ');
+    const { items } = await api.dealQuotations.listForTicket(ticketId);
+    expect(items.find((q) => q.id === quotation.id).recipientType).toBe('DESIGNER');
+  });
+
   // MINOR (Opus review, 2026-09-20) — mock parity: a second call for the same PR (a double-click;
   // this endpoint takes no clientRequestId to dedupe on) must not mint a duplicate DRAFT. Mirrors
   // DealQuotationService#createFromPricingRequest's own idempotent-replay guard
@@ -358,13 +369,17 @@ describe('mockApi.dealQuotations.update/restoreRemovedItem — M4(c)/(d) drop fl
 // #counts, which are deliberately DEAL_DIRECT-only (see directDealSearch_doesNotIncludePricingRequestOriginRows
 // on the backend IT). A PRICING_REQUEST-origin quotation has its own separate display surface
 // (PricingRequestDetailPage's panel, M1) and must never leak into this one.
-describe('mockApi.dealQuotations.listForTicket/list/counts — exclude PRICING_REQUEST origin (mock parity)', () => {
-  it('listForTicket never returns a PRICING_REQUEST-origin row for the same ticket', async () => {
+describe('mockApi.dealQuotations.listForTicket/list/counts — origin scoping (mock parity)', () => {
+  // CHANGED (Round 8): listForTicket now INCLUDES the PRICING_REQUEST-origin row, mirroring
+  // DealQuotationRepository#findByTicket's `origin IN ('DEAL_DIRECT','PRICING_REQUEST')` (GLA-123
+  // S3 MAJOR 4 fix; the backend IT is directDealSearch_includesPricingRequestOriginRows). list()/
+  // counts() below stay DEAL_DIRECT-only, as #search/#counts do.
+  it('listForTicket returns the PRICING_REQUEST-origin row for the same ticket', async () => {
     const { ticketId, prId } = await approvedNetPricingRequest();
-    await api.dealQuotations.createFromPricingRequest(prId);
+    const { quotation } = await api.dealQuotations.createFromPricingRequest(prId);
 
     const { items } = await api.dealQuotations.listForTicket(ticketId);
-    expect(items).toHaveLength(0);
+    expect(items.map((q) => q.id)).toEqual([quotation.id]);
   });
 
   it('list()/counts() never include a PRICING_REQUEST-origin row', async () => {
