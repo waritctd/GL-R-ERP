@@ -809,6 +809,13 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // showing "0 รายการ" — see TicketService#get (backend) for the exact pick rule. Those rows
   // are NOT ticket_item, so they render read-only: no edit affordance, no add-item control.
   const fromPricingChain = ticket.fromPricingChain ?? false;
+  // GLA-136 (owner ruling 2026-09-30): a quotation-only container ticket (V193) exists only to
+  // hold a direct quotation written at /quotations — it is NOT a pipeline deal. It never appears
+  // in the deal list, but a direct link still reaches it, so this page says so and offers no
+  // pipeline control: no stage panel, no primary CTA, no overflow (the server 409s every manual
+  // pipeline write on it anyway — TicketService / QuotationOnlyTickets). The way in is
+  // "สร้างดีลจากใบเสนอราคา" on the APPROVED quotation.
+  const quotationOnly = summary.quotationOnly === true;
   const st = summary.status;
   const isOwner = user.id === summary.createdById;
   // Issue #389: reading a deal's documents is now the same question as reading the deal (so
@@ -1441,7 +1448,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // DealFulfilmentPanel (Phase 3 Slice S4).
 
   return (
-    <div className={`grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px] ${bannerText || stickyPrimaryAction || overflowItems.length > 0 ? 'mobile:pb-28' : ''}`}>
+    <div className={`grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px] ${!quotationOnly && (bannerText || stickyPrimaryAction || overflowItems.length > 0) ? 'mobile:pb-28' : ''}`}>
       {/* F-14 (ticket-detail IA rebuild Phase 1): the breadcrumb is the single
           up-nav — a full-width "กลับ" bar underneath it just repeated the same
           affordance as page chrome. Verified safe to drop: every e2e "กลับ"
@@ -1466,9 +1473,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             summary={summary}
             pricingRequests={pricingRequests}
             role={role}
-            primaryAction={stickyPrimaryAction}
-            bannerText={bannerText}
-            overflowItems={overflowItems}
+            primaryAction={quotationOnly ? null : stickyPrimaryAction}
+            bannerText={quotationOnly ? null : bannerText}
+            overflowItems={quotationOnly ? [] : overflowItems}
             onRefresh={refreshTicket}
             condensed={ticketChromeCondensed}
           />
@@ -1499,6 +1506,21 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           Generation buttons reuse the exact handlers/permissions of the action
           row; once a document exists (quotation / ใบแจ้งยอดมัดจำ) it stays
           reachable from here through the later stages too. */}
+      {quotationOnly ? (
+        <div
+          className="flex items-start gap-2 rounded-md border border-info-border bg-info-bg px-3 py-2.5 text-sm text-info-dark"
+          data-testid="ticket-quotation-only-banner"
+          role="status"
+        >
+          <Icon name="info" size={16} className="mt-0.5 shrink-0" />
+          <div className="flex min-w-0 flex-col gap-0.5">
+            <strong>ดีลนี้เป็นดีลใบเสนอราคาเท่านั้น — ยังไม่เข้า pipeline</strong>
+            <span className="text-xs">
+              เมื่อลูกค้าสั่งซื้อ ให้กด &ldquo;สร้างดีลจากใบเสนอราคา&rdquo; ที่ใบเสนอราคาที่อนุมัติแล้ว
+            </span>
+          </div>
+        </div>
+      ) : (
       <div className="min-w-0">
       <DealStagePanel
         ref={dealStagePanelRef}
@@ -1552,6 +1574,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         ) : null}
       />
       </div>
+      )}
 
       {/* Ticket-detail IA rebuild Phase 2 built the seven role-projected tabs
           from docs/ui-repair/02-information-architecture/TICKET_INFORMATION_ARCHITECTURE.md

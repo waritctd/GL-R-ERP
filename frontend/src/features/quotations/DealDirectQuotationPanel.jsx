@@ -3,15 +3,13 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
-import { Button, buttonVariants } from '../../components/common/Button.jsx';
+import { Button } from '../../components/common/Button.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
-import { Icon } from '../../components/common/Icon.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { cn } from '../../utils/cn.js';
 import { downloadBlob } from '../../utils/download.js';
 import { formatMoney, formatThaiDate } from '../../utils/format.js';
-import { canCreateDealQuotation, dealQuotationStatusLabel } from './quotationMeta.js';
+import { dealQuotationStatusLabel } from './quotationMeta.js';
 
 /**
  * "ใบเสนอราคา" (Quotation v2, QUOTATION-V2-PLAN.md) -- this deal's direct quotations, mounted on
@@ -26,8 +24,15 @@ import { canCreateDealQuotation, dealQuotationStatusLabel } from './quotationMet
  * #canViewPricingRequestOriginRow (sales-owner, sales_manager, ceo only -- see that method's own
  * Javadoc), so for those roles THIS panel's `rows` can include a PRICING_REQUEST-origin quotation
  * alongside any DEAL_DIRECT ones on the same deal, not only the latter.
+ *
+ * GLA-136 (owner ruling 2026-09-30): this panel no longer CREATES a direct quotation. Direct
+ * quotations are quotation-only documents written at /quotations (the list page's own "สร้าง"
+ * entry, which mints a quotation-only container ticket), never from inside a pipeline deal — a
+ * pipeline deal is priced through its คำขอราคา chain instead. The "สร้างใบเสนอราคา" link that used
+ * to sit in this panel's header is gone; the list below is unchanged. TicketDetailPage still
+ * passes `deal`/`user`; they are no longer read here.
  */
-export function DealDirectQuotationPanel({ ticketId, deal, user, showToast }) {
+export function DealDirectQuotationPanel({ ticketId, showToast }) {
   const [downloadingKey, setDownloadingKey] = useState(null);
 
   const listQuery = useQuery({
@@ -35,7 +40,6 @@ export function DealDirectQuotationPanel({ ticketId, deal, user, showToast }) {
     queryFn: () => api.dealQuotations.listForTicket(ticketId).then((r) => r.items ?? []),
   });
 
-  const canCreate = canCreateDealQuotation(user, deal);
   const rows = listQuery.data ?? [];
 
   async function handleDownload(quotation, format) {
@@ -54,22 +58,14 @@ export function DealDirectQuotationPanel({ ticketId, deal, user, showToast }) {
   }
 
   return (
-    <Panel
-      title="ใบเสนอราคา"
-      actions={canCreate ? (
-        <Link to={`/quotations/new?ticket=${ticketId}`} className={cn(buttonVariants({ variant: 'secondary', size: 'sm' }))}>
-          <Icon name="plus" size={14} />
-          สร้างใบเสนอราคา
-        </Link>
-      ) : null}
-    >
+    <Panel title="ใบเสนอราคา">
       {listQuery.isLoading ? (
         <p className="text-xs text-text-muted">กำลังโหลด...</p>
       ) : rows.length === 0 ? (
         <EmptyState
           icon="fileText"
           title="ยังไม่มีใบเสนอราคา"
-          description={canCreate ? 'กด "สร้างใบเสนอราคา" เพื่อเริ่มต้น' : undefined}
+          description="สร้างได้จากหน้า ใบเสนอราคา"
         />
       ) : (
         <ul className="grid gap-2.5">

@@ -46,7 +46,8 @@ public class TicketRepository {
                NULLIF(TRIM(CONCAT_WS(' ', ecc.first_name_th, ecc.last_name_th)), '') AS close_confirmed_by_name,
                t.cancel_reason, t.cancelled_at,
                t.reopened_at, t.reopen_count,
-               t.win_probability, t.designer_name, t.owner_name, t.buyer_name
+               t.win_probability, t.designer_name, t.owner_name, t.buyer_name,
+               t.quotation_only
           FROM sales.ticket t
           JOIN hr.employee ec ON ec.employee_id = t.created_by
           LEFT JOIN hr.employee ea ON ea.employee_id = t.assigned_to
@@ -102,6 +103,17 @@ public class TicketRepository {
     private static final List<String> ACCOUNT_PENDING_PAYMENT_STATUSES =
         List.of("DEPOSIT_NOTICE_ISSUED", "AWAITING_FINAL_PAYMENT");
 
+    /**
+     * GLA-136 (owner ruling 2026-09-30, V193): the deal LIST and its COUNT are the pipeline, and a
+     * quotation-only container ticket ({@code sales.ticket.quotation_only}) is not part of it — it
+     * exists only because {@code sales.quotation.ticket_id} is NOT NULL. One shared fragment so
+     * {@link #findSummaries} and {@link #countSummaries} can never disagree about which rows the
+     * page holds versus how many pages there are. Deliberately NOT applied to {@link #findById}:
+     * reading a single ticket by id (the quotation editor's ticket summary, the deal page banner)
+     * must still work.
+     */
+    private static final String PIPELINE_ONLY = " AND t.quotation_only = FALSE ";
+
     public TicketRepository(NamedParameterJdbcTemplate jdbc) {
         this.jdbc = jdbc;
     }
@@ -128,7 +140,7 @@ public class TicketRepository {
              WHERE (:status::varchar IS NULL OR t.status = :status)
                AND (:salesStage::varchar IS NULL OR t.sales_stage = :salesStage)
                AND (:createdBy::bigint IS NULL OR t.created_by = :createdBy)
-            """);
+            """).append(PIPELINE_ONLY);
         MapSqlParameterSource params = new MapSqlParameterSource()
             .addValue("status", status)
             .addValue("salesStage", salesStage)
@@ -166,7 +178,7 @@ public class TicketRepository {
              WHERE (:status::varchar IS NULL OR t.status = :status)
                AND (:salesStage::varchar IS NULL OR t.sales_stage = :salesStage)
                AND (:createdBy::bigint IS NULL OR t.created_by = :createdBy)
-            """);
+            """).append(PIPELINE_ONLY);
         MapSqlParameterSource params = new MapSqlParameterSource()
             .addValue("status", status)
             .addValue("salesStage", salesStage)
@@ -278,10 +290,10 @@ public class TicketRepository {
         jdbc.update("""
             INSERT INTO sales.ticket
                 (code, title, status, priority, created_by, customer_name, customer_id, project_id, contact_id, note, entry_channel,
-                 next_follow_up_at)
+                 next_follow_up_at, quotation_only)
             VALUES
                 (:code, :title, :status, :priority, :createdBy, :customerName, :customerId, :projectId, :contactId, :note, :entryChannel,
-                 :nextFollowUpAt)
+                 :nextFollowUpAt, :quotationOnly)
             """,
             new MapSqlParameterSource()
                 .addValue("code", code)
@@ -297,6 +309,9 @@ public class TicketRepository {
                 // Null stays legal (a draft may genuinely not have a date yet); it simply leaves
                 // the deal un-advanceable until one is set, which is the pre-existing behaviour.
                 .addValue("nextFollowUpAt", request.nextFollowUpAt())
+                // GLA-136: only the quotation editor's inline create sends TRUE; null/false (every
+                // other caller) is an ordinary pipeline deal. See CreateTicketRequest#quotationOnly.
+                .addValue("quotationOnly", Boolean.TRUE.equals(request.quotationOnly()))
                 // V144: an omitted channel lands UNSPECIFIED ("not stated"), not DESIGNER_LED.
                 // Defaulting to a real route made every unattended row assert one, so a deliberate
                 // DESIGNER_LED was indistinguishable from silence — see EntryChannel's Javadoc and
@@ -1129,7 +1144,8 @@ public class TicketRepository {
             false, // stale — recomputed by enrichSummary, which alone knows deal_activity
             false, // commissionRecorded — recomputed by enrichSummary, which alone queries commission_record
             rs.getTimestamp("reopened_at") != null ? rs.getTimestamp("reopened_at").toInstant() : null,
-            rs.getInt("reopen_count")
+            rs.getInt("reopen_count"),
+            rs.getBoolean("quotation_only")
         );
     }
 
@@ -1163,7 +1179,7 @@ public class TicketRepository {
             // hasInvoiceAttachment above as another per-row query enrichSummary runs to fill in a
             // field mapSummary alone cannot answer from sales.ticket.
             s.winProbabilityOverride(), s.designerName(), s.ownerName(), s.buyerName(), stale,
-            hasRecordedCommission(s.id()), s.reopenedAt(), s.reopenCount());
+            hasRecordedCommission(s.id()), s.reopenedAt(), s.reopenCount(), s.quotationOnly());
     }
 
     /**
@@ -1859,6 +1875,42 @@ public class TicketRepository {
      */
     public int markQuotationIssuedForOrderConfirmation(long ticketId) {
         return transitionStatus(ticketId, TicketStatus.DRAFT, TicketStatus.QUOTATION_ISSUED);
+    }
+
+    /**
+     * GLA-136 — the one write that turns a quotation-only container ticket (V193) into a pipeline
+     * deal: {@code quotation_only TRUE -> FALSE}, as a compare-and-set so a lost race (a concurrent
+     * promotion already flipped it) yields 0 rows rather than a silent double write. Called ONLY by
+     * {@code DealQuotationService#promoteToDeal}, under {@link #lockTicketForUpdate}, immediately
+     * before the same {@link #markQuotationIssuedForOrderConfirmation} bridge write
+     * {@code OrderConfirmationService#confirmOrder} performs. Never sets the flag back to TRUE:
+     * nothing in the product un-promotes a deal.
+     *
+     * @return the rowcount (0 or 1).
+     */
+    public int markPromotedToPipeline(long ticketId) {
+        return jdbc.update("""
+            UPDATE sales.ticket
+               SET quotation_only = FALSE, updated_at = now()
+             WHERE ticket_id = :id AND quotation_only = TRUE
+            """, Map.of("id", ticketId));
+    }
+
+    /**
+     * GLA-136 — has this ticket already been promoted into the pipeline from a direct quotation
+     * ({@link TicketEventKind#DEAL_PROMOTED_FROM_QUOTATION}, written exactly once per promotion by
+     * {@code DealQuotationService#promoteToDeal})? The discriminator for that method's idempotent
+     * replay: a ticket with {@code quotation_only = FALSE} AND this event was promoted by that path
+     * (a replay returns it unchanged), while a ticket with {@code quotation_only = FALSE} and NO such
+     * event was always a pipeline deal (a promotion attempt is a 409, not a silent success).
+     */
+    public boolean hasPromotionFromQuotationEvent(long ticketId) {
+        Boolean value = jdbc.queryForObject("""
+            SELECT EXISTS(SELECT 1 FROM sales.ticket_event
+                           WHERE ticket_id = :ticketId AND kind = :kind)
+            """, Map.of("ticketId", ticketId, "kind", TicketEventKind.DEAL_PROMOTED_FROM_QUOTATION),
+            Boolean.class);
+        return Boolean.TRUE.equals(value);
     }
 
     /**

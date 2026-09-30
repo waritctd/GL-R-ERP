@@ -643,7 +643,7 @@ public class TicketService {
             s.closeConfirmedAt(), s.closeConfirmedByName(), s.invoiceOnFile(),
             s.cancelReason(), s.cancelledAt(),
             s.winProbabilityOverride(), s.designerName(), s.ownerName(), s.buyerName(), s.stale(),
-            s.commissionRecorded(), s.reopenedAt(), s.reopenCount());
+            s.commissionRecorded(), s.reopenedAt(), s.reopenCount(), s.quotationOnly());
     }
 
     /**
@@ -745,6 +745,40 @@ public class TicketService {
         TicketSummaryDto s = loadAndVerifyStatus(ticketId, TicketStatus.QUOTATION_ISSUED);
         requireActive(s);
         requireOwner(s, actor);
+        return applyCustomerConfirmation(ticketId, s, actor);
+    }
+
+    /**
+     * GLA-136 — the SAME customer-confirmation effects as {@link #confirmCustomer} (payment track
+     * {@code null -> CUSTOMER_CONFIRMED}, stage auto-advance to {@code ORDER_RECEIVED}), for the
+     * ONE caller that has already made its own authorization decision:
+     * {@code DealQuotationService#promoteToDeal}.
+     *
+     * <p><strong>Why a second entry point instead of calling {@link #confirmCustomer}:</strong>
+     * that method's gate is sales-role AND deal-owner only. Promotion's audience is wider by owner
+     * ruling — the owning rep, any {@code sales_manager}, or a {@code can_create_quotation} grantee
+     * (the same audience that may write the direct quotation, {@code
+     * DealQuotationService#requireEditAccess}) — and a sales_manager promoting a rep's approved
+     * quotation would otherwise hit {@link #confirmCustomer}'s owner 403 halfway through the
+     * promotion transaction. {@link #confirmCustomer}'s own public gate is left exactly as it was;
+     * this method simply skips the role/owner half, keeping the status ({@code quotation_issued})
+     * and lifecycle ({@code ACTIVE}) preconditions.
+     *
+     * <p><strong>Performs NO authorization of its own.</strong> It is not routed by any controller
+     * and must never be: every caller is responsible for having authorized {@code actor} against
+     * this ticket first. Today that is exactly one call site, inside the same transaction as the
+     * gate it relies on.
+     */
+    @Transactional
+    public TicketDto confirmCustomerForPromotedQuotation(long ticketId, UserPrincipal actor) {
+        TicketSummaryDto s = loadAndVerifyStatus(ticketId, TicketStatus.QUOTATION_ISSUED);
+        requireActive(s);
+        return applyCustomerConfirmation(ticketId, s, actor);
+    }
+
+    /** The shared body of {@link #confirmCustomer} and {@link #confirmCustomerForPromotedQuotation}
+     * — moved here verbatim (GLA-136) so the two cannot drift; behaviour is unchanged. */
+    private TicketDto applyCustomerConfirmation(long ticketId, TicketSummaryDto s, UserPrincipal actor) {
         // Never downgrade the payment track: once past CUSTOMER_CONFIRMED, re-confirming
         // would reset paymentStatus and deadlock the later transitions.
         if (s.paymentStatus() != null && !"CUSTOMER_CONFIRMED".equals(s.paymentStatus())) {
@@ -1858,6 +1892,12 @@ public class TicketService {
      */
     private void requireStageMoveAllowed(TicketSummaryDto s, String targetStage, UserPrincipal actor) {
         requireStageWriteAccess(s, targetStage, actor);
+        // GLA-136: a quotation-only container is not in the pipeline, so no stage move is possible
+        // on it by hand — only promotion (DealQuotationService#promoteToDeal) moves it. AFTER the
+        // write-access check on purpose: a caller with no right to touch this deal still gets the
+        // 403, never a 409 that would confirm what kind of ticket it is. Being inside this shared
+        // gate also makes stageDecisions() refuse every target, so the UI offers no stage move.
+        QuotationOnlyTickets.requirePipelineDeal(s);
         // Keyed on the lifecycle, not on lost_reason: since V58 the reason SURVIVES
         // a reopen, so a live reopened deal still carries one. Checked before
         // requireActive so a lost deal gets this specific message.
@@ -2294,6 +2334,7 @@ public class TicketService {
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireDealOwnership(s, actor);
         requireActive(s);
+        QuotationOnlyTickets.requirePipelineDeal(s); // GLA-136 — see that class's Javadoc
         tickets.updateTenderRequirement(ticketId, value);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.POLICY_CHANGED, s.salesStage(), s.salesStage(),
@@ -2312,6 +2353,7 @@ public class TicketService {
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireDealOwnership(s, actor);
         requireActive(s);
+        QuotationOnlyTickets.requirePipelineDeal(s); // GLA-136 — see that class's Javadoc
         // "Changing a STATED channel needs a reason." Both DESIGNER_LED and UNSPECIFIED count as
         // unstated here and neither requires a note: UNSPECIFIED is the V144 default, and
         // DESIGNER_LED is the pre-V144 default that was never backfilled (V144's data cutoff), so
@@ -2503,6 +2545,9 @@ public class TicketService {
         if (!salesCanEdit) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์แก้ไขรายการสินค้าในสถานะนี้");
         }
+        // GLA-136: a quotation-only container's lines live on its direct quotation; ticket_item is
+        // written from that quotation at promotion, not typed in here beforehand.
+        QuotationOnlyTickets.requirePipelineDeal(s);
         // Sales editing items (brand/model/qty/etc.) must NOT be able to clobber import's
         // proposed price or CEO's approved/manual price — only proposePrice (import) is
         // allowed to replace pricing wholesale. Merge request items onto the ticket's

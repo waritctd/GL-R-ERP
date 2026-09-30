@@ -154,6 +154,19 @@ export function canReviseDealQuotation(user, quotation) {
   return canEditDealQuotation(user, quotation) && quotation?.docStatus === 'APPROVED';
 }
 
+/** GLA-136 (owner ruling 2026-09-30) — "สร้างดีลจากใบเสนอราคา": only an APPROVED direct
+ * (DEAL_DIRECT) quotation may be promoted into the pipeline, by the same audience that may write
+ * it (canEditDealQuotation mirrors DealQuotationService#requireEditAccess, which is exactly
+ * promoteToDeal's own gate). A PRICING_REQUEST-origin quotation never qualifies — it has its own
+ * confirm-order step. Whether the deal is ALREADY promoted is the caller's second question
+ * (ticket.quotationOnly); the server answers a replay idempotently either way. Display-only —
+ * the server re-checks all of it. */
+export function canPromoteDealQuotationToDeal(user, quotation) {
+  return canEditDealQuotation(user, quotation)
+    && quotation?.docStatus === 'APPROVED'
+    && (quotation?.origin ?? 'DEAL_DIRECT') === 'DEAL_DIRECT';
+}
+
 /** Mirrors DealQuotationService.approve/reject's gate: sales_manager or ceo, role-only (the
  * plan states "No self-exclusion (matches repo convention; flagged)") -- the caller combines
  * this with canDecideDealQuotation below, or its own PENDING_APPROVAL check, before rendering a

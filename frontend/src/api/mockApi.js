@@ -3281,6 +3281,15 @@ function findTicketRaw(id) {
   return ticket;
 }
 
+// GLA-136 (owner ruling 2026-09-30) -- mirrors th.co.glr.hr.ticket.QuotationOnlyTickets: a
+// quotation-only container ticket (V193 sales.ticket.quotation_only, written only by the quotation
+// editor's inline create) is not a pipeline deal, so manual pipeline writes refuse it with 409.
+const QUOTATION_ONLY_REFUSAL =
+  'ดีลนี้เป็นดีลใบเสนอราคาเท่านั้น — ยังไม่เข้า pipeline กรุณาสร้างดีลจากใบเสนอราคาที่อนุมัติแล้วก่อน';
+function requirePipelineDeal(ticket) {
+  if (ticket?.quotationOnly === true) fail(QUOTATION_ONLY_REFUSAL, 409);
+}
+
 // Mirrors AttachmentController + TicketAccessPolicy (ticket/TicketAccessPolicy.java). Issue #389
 // split one blanket MANAGER_ROLES {hr, sales_manager, ceo} — wrong in both directions — into two
 // questions:
@@ -3911,6 +3920,10 @@ function mockStageDecisions(ticket, user) {
     let blockedReason = null;
     if (!mockCanWriteStage(user, ticket, code)) {
       blockedReason = 'ไม่มีสิทธิ์เข้าถึงรายการนี้';
+    } else if (ticket.quotationOnly === true) {
+      // GLA-136: TicketService#requireStageMoveAllowed refuses a quotation-only container right
+      // after the write-access check (409), so no stage is ever offered on one.
+      blockedReason = QUOTATION_ONLY_REFUSAL;
     } else if (ticket.lifecycle === 'CLOSED_LOST') {
       blockedReason = 'ดีลถูกทำเครื่องหมายเสียงานแล้ว — เปิดดีลใหม่ก่อนแก้ไขสถานะ';
     } else if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') {
@@ -4048,6 +4061,8 @@ function buildTicketDetail(ticket) {
       // Existence-only flag (issue #736) — see hasRecordedCommission's own comment. Never an
       // amount; amounts stay behind commissions.list()'s own role gate.
       commissionRecorded: hasRecordedCommission(ticket),
+      // GLA-136 -- TicketSummaryDto.quotationOnly (V193).
+      quotationOnly: ticket.quotationOnly === true,
       ...paymentFields,
     },
     items: ticket.items, events: ticket.events,
@@ -7046,7 +7061,9 @@ export const api = {
       // requireTicketViewer) to match the existing inline-array pattern; must move
       // in lockstep with requireTicketViewer/get() and TicketService.VIEWER_ROLES.
       if (!['sales', 'import', 'ceo', 'account', 'sales_manager'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      let list = structuredClone(db.tickets);
+      // GLA-136: mirrors TicketRepository#PIPELINE_ONLY -- the deal list is the pipeline, and a
+      // quotation-only container ticket is not part of it (get() below still serves it).
+      let list = structuredClone(db.tickets).filter((t) => t.quotationOnly !== true);
       if (user.role === 'sales') list = list.filter((t) => t.createdById === user.id);
       // Phase B (role-scoped views): import/account only see the slice of the deal
       // pipeline relevant to their own worklist — see importListScopeIncludes /
@@ -7108,6 +7125,7 @@ export const api = {
         // too because accountActions.js's worklist is built from list rows, not detail fetches
         // (issue #736).
         commissionRecorded: hasRecordedCommission(t),
+        quotationOnly: t.quotationOnly === true,
         ...derivePaymentFields(t),
       }));
       return delay({ tickets });
@@ -7428,6 +7446,9 @@ export const api = {
         // argument the real API honours — the "mock drops an argument" shape CLAUDE.md names —
         // and both TicketCreateModal and the inline deal step on /quotations/new send it.
         nextFollowUpAt: payload.nextFollowUpAt ?? null,
+        // GLA-136: mirrors TicketRepository.create's `quotation_only` write -- only the quotation
+        // editor's inline create sends `quotationOnly: true`; absent/false is a pipeline deal.
+        quotationOnly: payload.quotationOnly === true,
         createdAt: now.slice(0, 10), updatedAt: now.slice(0, 10), closedAt: null,
         items: (payload.items || []).map((item, i) => ({
           id: nextId * 100 + i, ticketId: nextId,
@@ -7471,6 +7492,8 @@ export const api = {
       // items here before submit().
       const salesCanEdit = user.role === 'sales' && isOwner
         && ['draft', 'submitted', 'in_review', 'price_proposed'].includes(st);
+      // GLA-136: after the authz check, mirroring TicketService.editItems' own order.
+      if (salesCanEdit) requirePipelineDeal(ticket);
       // KNOWN MOCK-MORE-PERMISSIVE GAP (pre-existing, not touched by V183): the real
       // TicketService.editItems only ever checks `SALES_ROLES.contains(actor.role()) && isOwner`
       // — there is no import branch at all — so role 'import' gets a real 403 here, regardless of
@@ -7967,6 +7990,7 @@ export const api = {
       const ticket = findTicketRaw(Number(id));
       if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       requireActive(ticket);
+      requirePipelineDeal(ticket); // GLA-136
       if (!['REQUIRED', 'NOT_REQUIRED', 'UNKNOWN'].includes(payload.value)) fail(`ไม่รองรับเงื่อนไขการประมูล '${payload.value}'`, 400);
       ticket.tenderRequirement = payload.value;
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
@@ -7979,6 +8003,7 @@ export const api = {
       const ticket = findTicketRaw(Number(id));
       if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       requireActive(ticket);
+      requirePipelineDeal(ticket); // GLA-136
       if (!['DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT'].includes(payload.value)) fail(`ไม่รองรับช่องทางรับงาน '${payload.value}'`, 400);
       if (mockEntryChannelIsStated(ticket) && ticket.entryChannel !== payload.value && !(payload.note || '').trim()) {
         fail('การเปลี่ยน entry channel ต้องระบุเหตุผล', 400);
@@ -12575,6 +12600,9 @@ export const api = {
         if (existing.ticketId !== Number(ticketId)) fail('clientRequestId นี้ถูกใช้ไปแล้วกับดีลอื่น', 409);
         return delay({ pricingRequest: buildPricingRequestDetail(existing) });
       }
+      // GLA-136: mirrors PricingRequestService.createDraft -- after the owner check and the replay
+      // short-circuit, before any field validation.
+      requirePipelineDeal(ticket);
       if (!PRICING_REQUEST_RECIPIENT_VALUES.includes(payload.recipientType)) {
         fail(`ไม่รองรับประเภทผู้รับ '${payload.recipientType}'`, 400);
       }
@@ -15440,6 +15468,79 @@ export const api = {
       const clone = mintDealQuotationReorder(source, user);
       mockDealQuotations.push(clone);
       return delay({ quotation: buildDealQuotationDto(clone) });
+    },
+
+    // GLA-136 (owner ruling 2026-09-30) -- "สร้างดีลจากใบเสนอราคา".
+    // Mirrors DealQuotationService#promoteToDeal: same precondition ORDER (404 -> authz 403 ->
+    // origin 409 -> idempotent replay / not-quotation-only 409 -> APPROVED 409 -> ACTIVE 409 ->
+    // draft 409) and the same effects (quotationOnly false, draft -> quotation_issued, ticket items
+    // from the quotation's goods lines, CUSTOMER_CONFIRMED + ORDER_RECEIVED). Authorization here is
+    // NOT authoritative (CLAUDE.md) -- DealQuotationPromoteIntegrationTest against real Postgres is
+    // the evidence for who may promote.
+    async promoteToDeal(id) {
+      const user = requireSession();
+      const row = mockDealQuotations.find((q) => q.id === Number(id));
+      if (!row) fail('ไม่พบใบเสนอราคานี้', 404);
+      const ticket = findTicketRaw(row.ticketId);
+      // DealQuotationService#requireEditAccess (the DEAL_DIRECT audience), BEFORE any 409.
+      requireDealQuotationWriteAccess(ticket, user, 'DEAL_DIRECT');
+      if ((row.origin || 'DEAL_DIRECT') !== 'DEAL_DIRECT') {
+        fail('สร้างดีลจากใบเสนอราคาได้เฉพาะใบเสนอราคาตรง (ไม่ผ่านคำขอราคา) เท่านั้น', 409);
+      }
+      const result = () => delay({
+        result: { ticketId: ticket.id, ticket: buildTicketDetail(ticket).summary, quotation: buildDealQuotationDto(row) },
+      });
+      if (ticket.quotationOnly !== true) {
+        if (ticket.events.some((e) => e.kind === 'DEAL_PROMOTED_FROM_QUOTATION')) return result();
+        fail('ดีลนี้อยู่ใน pipeline อยู่แล้ว — ไม่ต้องสร้างดีลจากใบเสนอราคา', 409);
+      }
+      if (row.docStatus !== 'APPROVED') {
+        fail(`สร้างดีลได้เฉพาะใบเสนอราคาที่อนุมัติแล้วเท่านั้น (ปัจจุบัน: ${row.docStatus})`, 409);
+      }
+      if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') {
+        fail(`ดีลไม่ได้อยู่ในสถานะ ACTIVE (${ticket.lifecycle}) จึงสร้างดีลจากใบเสนอราคาไม่ได้`, 409);
+      }
+      if (ticket.status !== 'draft') {
+        fail(`สร้างดีลจากใบเสนอราคาไม่ได้ — สถานะดีลเดิม (${ticket.status}) ขัดแย้งกับขั้นตอนนี้`, 409);
+      }
+      // The backend runs this guard LAST and rolls the whole transaction back when it fails; the
+      // mock has no transaction, so it checks it up front to leave the same (untouched) state.
+      if (ticket.paymentStatus != null && ticket.paymentStatus !== 'CUSTOMER_CONFIRMED') {
+        fail('ขั้นตอนการรับชำระเงินผ่านสถานะ CUSTOMER_CONFIRMED ไปแล้ว', 409);
+      }
+      const now = new Date().toISOString();
+      ticket.quotationOnly = false;
+      ticket.status = 'quotation_issued';
+      ticket.updatedAt = now;
+      pushEvent(ticket, user, 'DEAL_PROMOTED_FROM_QUOTATION', 'draft', 'quotation_issued',
+        `สร้างดีลจากใบเสนอราคา ${row.number}`);
+      // DealQuotationService#ticketItemsFromQuotation: goods lines only (no ADJUSTMENT, no
+      // non-positive quantity), no pricing field copied, qty_sqm from the same piece count.
+      ticket.items = (row.items ?? [])
+        .filter((it) => (it.lineType ?? 'TILE') !== 'ADJUSTMENT' && Number(it.quantity) > 0)
+        .map((it, i) => {
+          const tile = (it.lineType ?? 'TILE') !== 'PLAIN';
+          const sqmPerPiece = Number(it.sqmPerPiece);
+          return {
+            id: ticket.id * 100 + i, ticketId: ticket.id,
+            brand: [it.brand, it.model, it.descriptionLine, it.description].find((v) => v && String(v).trim())
+              ?? 'รายการจากใบเสนอราคา',
+            model: it.model ?? null, color: it.color ?? null, texture: it.texture ?? null,
+            size: it.sizeText ?? it.size ?? null, factory: null,
+            qty: Number(it.quantity),
+            qtySqm: tile && sqmPerPiece > 0 ? Math.round(Number(it.quantity) * sqmPerPiece * 100) / 100 : null,
+            unitBasis: 'PIECE', rawUnit: it.unit ?? null,
+            proposedPrice: null, approvedPrice: null, currency: 'THB', sortOrder: i,
+            catalogPriceId: null, catalogProductCode: null, sourcedFromStock: false, stockSalePrice: null,
+          };
+        });
+      // TicketService#confirmCustomerForPromotedQuotation -- the confirmCustomer body.
+      if (ticket.paymentStatus == null) {
+        ticket.paymentStatus = 'CUSTOMER_CONFIRMED';
+        pushEvent(ticket, user, 'CUSTOMER_CONFIRMED', ticket.status, ticket.status, null);
+      }
+      autoAdvanceStage(ticket, 'ORDER_RECEIVED', user);
+      return result();
     },
 
     async cancel(id, payload = {}) {
