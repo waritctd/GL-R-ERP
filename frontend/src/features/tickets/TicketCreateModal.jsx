@@ -101,7 +101,7 @@ function draftSaveNoticeCopy(reason) {
   return 'เบราว์เซอร์นี้ไม่รองรับการบันทึกร่าง';
 }
 
-// ── ช่องทางดีล (entry channel) — backend th.co.glr.hr.ticket.EntryChannel ──
+// ── เสนอแก่ — backend th.co.glr.hr.ticket.EntryChannel ──
 const ENTRY_CHANNEL_OPTIONS = [
   { code: 'DESIGNER_LED', label: 'ผู้ออกแบบนำ', sub: 'Designer-led' },
   { code: 'OWNER_DIRECT', label: 'เจ้าของตรง', sub: 'Owner-direct' },
@@ -159,7 +159,7 @@ const customerRequiredSchema = z.any().refine((v) => v != null, 'กรุณา
 const projectRequiredSchema = z.any().refine((v) => v != null, 'กรุณาเลือกโครงการ (1 ดีล = 1 Ticket ภายใต้โครงการ)');
 // Descriptive-only by owner ruling (it drives no behaviour), but it must be STATED — see the
 // no-default comment on the entryChannel state below.
-const entryChannelRequiredSchema = z.any().refine((v) => v != null, 'กรุณาเลือกช่องทางดีล (ระบุว่าดีลนี้เข้ามาทางไหน)');
+const entryChannelRequiredSchema = z.any().refine((v) => v != null, 'กรุณาเลือกว่าดีลนี้เสนอแก่ใคร');
 
 /**
  * Validates the whole form and returns every invalid field, plus `order`:
@@ -1168,7 +1168,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
             onClick={() => setView('project')}
           />
           <HubRow
-            title="ผู้ติดต่อ & ช่องทางดีล"
+            title="ผู้ติดต่อ & เสนอแก่"
             required
             done={sectionDone.contact}
             subtitle={[selectedContact ? `${selectedContact.firstName} ${selectedContact.lastName}`.trim() : null, entryChannelLabel].filter(Boolean).join(' · ')}
@@ -1380,7 +1380,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
 
         <div>
           <span className="mb-1 block text-sm font-bold text-text-secondary">
-            ช่องทางดีล (entry channel)
+            เสนอแก่
             <span className="text-danger" aria-hidden="true"> *</span>
           </span>
           {/* Why this is asked, so a forced choice does not become a random one. */}
@@ -1390,7 +1390,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
           <div
             className="grid grid-cols-3 gap-1.5"
             role="radiogroup"
-            aria-label="ช่องทางดีล"
+            aria-label="เสนอแก่"
             aria-required="true"
             aria-invalid={fieldErrors.entryChannel ? true : undefined}
             aria-describedby={fieldErrors.entryChannel ? fieldErrorId('entry-channel') : undefined}

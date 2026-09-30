@@ -211,7 +211,7 @@ describe('EntryChannelFix — accessibility and layout hooks', () => {
     const panelId = toggle().getAttribute('aria-controls');
     expect(panelId).toBeTruthy();
     expect(document.getElementById(panelId)).toBe(screen.getByTestId('entry-channel-fix-panel'));
-    expect(within(screen.getByTestId('entry-channel-fix-panel')).getByRole('radiogroup', { name: /ช่องทางรับงาน/ })).toBeTruthy();
+    expect(within(screen.getByTestId('entry-channel-fix-panel')).getByRole('radiogroup', { name: /เสนอแก่/ })).toBeTruthy();
   });
 
   it('carries the row it belongs to into the button name, so four identical buttons are distinguishable', () => {
