@@ -38,5 +38,13 @@ public record CommissionMonthlySummaryDto(
     BigDecimal manualTotal,
     BigDecimal totalCommission,
     boolean belowFloor,
-    List<CommissionTierRowDto> tiers
+    List<CommissionTierRowDto> tiers,
+    // Team override + full-detail additions (V197).
+    BigDecimal rawCommissionableBase,
+    BigDecimal weightUpliftBase,
+    BigDecimal stockBonusAmount,
+    BigDecimal teamOverrideAmount,
+    BigDecimal companyCommissionableBase,
+    BigDecimal teamOverrideThresholdBase,
+    BigDecimal teamOverrideRatePercent
 ) {}

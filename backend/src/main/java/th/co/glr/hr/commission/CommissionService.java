@@ -957,7 +957,9 @@ public class CommissionService {
             tierCommission, incentiveAmount, manualTotal,
             tierCommission.add(incentiveAmount).add(manualTotal),
             belowFloor,
-            tierRows(base, tiers));
+            tierRows(base, tiers),
+            // STEP-1 COMPILE STUBS for the team-override / full-detail fields.
+            zero, zero, zero, zero, null, null, null);
     }
 
     /**
@@ -1007,7 +1009,7 @@ public class CommissionService {
         for (RepPayrollCommission rep : reps) {
             repSummaries.add(new SalesRepCommissionSummaryDto(
                 rep.salesRepId(), rep.salesRepName(), rep.tierCommissionableBase(), rep.totalCommission(),
-                rep.manualAdjustmentAmount(), rep.incentiveAmount(), rep.stockBonusAmount()));
+                rep.manualAdjustmentAmount(), rep.incentiveAmount(), rep.stockBonusAmount(), rep.teamOverrideAmount()));
             totalBase = totalBase.add(rep.tierCommissionableBase());
             totalCommission = totalCommission.add(rep.totalCommission());
             totalIncentive = totalIncentive.add(rep.incentiveAmount());
@@ -1015,7 +1017,9 @@ public class CommissionService {
         }
         repSummaries.sort(Comparator.comparing(SalesRepCommissionSummaryDto::salesRepName, Comparator.nullsLast(String::compareTo)));
         return new PayrollCommissionSummaryDto(
-            month, "PAYROLL_READY", totalBase, totalCommission, totalIncentive, totalStockBonus, repSummaries);
+            month, "PAYROLL_READY", totalBase, totalCommission, totalIncentive, totalStockBonus,
+            BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP), BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP), // STEP-1 STUBS
+            repSummaries);
     }
 
     /**
@@ -1120,7 +1124,7 @@ public class CommissionService {
                 : calculator.stockSaleBonus(commissions.sumActiveStockActualReceived(rep.salesRepId, payrollMonth), stockBonusConfig);
             BigDecimal finalCommission = tierCommission.add(incentiveAmount).add(stockBonusAmount).add(manualAmount);
             results.add(new RepPayrollCommission(
-                rep.salesRepId, rep.salesRepName, displayBase, manualAmount, incentiveAmount, stockBonusAmount, finalCommission));
+                rep.salesRepId, rep.salesRepName, displayBase, manualAmount, incentiveAmount, stockBonusAmount, zero /* STEP-1 STUB */, finalCommission));
             repIds.add(rep.salesRepId);
         }
         // A rep whose ONLY approved commission this month is a manual entry (e.g. a MANAGER
@@ -1137,7 +1141,7 @@ public class CommissionService {
             BigDecimal manualAmount = entry.getValue();
             results.add(new RepPayrollCommission(
                 entry.getKey(), manualOnlyRepNames.get(entry.getKey()),
-                zero, manualAmount, zero, zero, manualAmount));
+                zero, manualAmount, zero, zero, zero, manualAmount));
         }
         return results;
     }
@@ -1173,6 +1177,7 @@ public class CommissionService {
         BigDecimal manualAdjustmentAmount,
         BigDecimal incentiveAmount,
         BigDecimal stockBonusAmount,
+        BigDecimal teamOverrideAmount,
         BigDecimal totalCommission) {}
 
     private CommissionRecord requireRecord(long id) {

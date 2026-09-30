@@ -192,6 +192,11 @@ public class CommissionCalculator {
         return blocks.multiply(config.bonusPerBlock()).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
     }
 
+    /** STEP-1 COMPILE STUB -- returns zero; real behaviour lands in step 2. */
+    public BigDecimal teamOverride(BigDecimal companyCommissionableBase, TeamOverrideConfig config) {
+        return BigDecimal.ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+    }
+
     /**
      * V148 (per-item stock-commission weighting). Blends each line's own STOCK-EARNED weight into
      * ONE record-level effective weight, cash-weighted by each item's own share of the deal's
