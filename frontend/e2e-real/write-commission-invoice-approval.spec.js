@@ -266,11 +266,12 @@ test.describe('commission invoice approval journey (real stack)', () => {
     const card = page.locator('article').filter({ hasText: invoiceNo });
     await test.step('pending view shows the invoice card with its lines', async () => {
       await expect(card).toBeVisible({ timeout: 30_000 });
-      const rows = card.locator('tbody tr');
-      expect(await rows.count(), 'card lists the deal lines').toBeGreaterThan(0);
-      firstItem = card.locator('select[aria-label^="น้ำหนัก"]').first();
+      // Weighting desk: one ×1/×2/×3 radiogroup per deal line (was a <select> per line).
+      const lines = card.getByRole('radiogroup');
+      expect(await lines.count(), 'card lists the deal lines').toBeGreaterThan(0);
+      firstItem = lines.first();
       await expect(firstItem).toBeVisible();
-      await expect(firstItem).toBeEnabled();
+      await expect(firstItem.getByRole('radio', { name: '×3' })).not.toHaveAttribute('aria-disabled', 'true');
       await shot(page, '05-manager-pending-card');
     });
 
@@ -282,7 +283,7 @@ test.describe('commission invoice approval journey (real stack)', () => {
       const posted = page.waitForResponse(
         (r) => /\/api\/commissions\/\d+\/item-weights$/.test(r.url()) && r.request().method() === 'POST'
       );
-      await firstItem.selectOption('3');
+      await firstItem.getByRole('radio', { name: '×3' }).click();
       const response = await posted;
       expect(response.status(), await response.text()).toBe(200);
       expect(response.url()).toContain(`/api/commissions/${commissionId}/item-weights`);
@@ -294,7 +295,7 @@ test.describe('commission invoice approval journey (real stack)', () => {
 
       await expect(weightDd).toHaveText(Number(effectiveAfter).toFixed(2));
       expect((await weightDd.innerText()).trim()).not.toBe(weightBefore);
-      await expect(firstItem).toHaveValue('3');
+      await expect(firstItem.getByRole('radio', { name: '×3' })).toHaveAttribute('aria-checked', 'true');
       await shot(page, '06-manager-weight-x3');
     });
 
