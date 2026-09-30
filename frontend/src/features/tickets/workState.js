@@ -42,8 +42,6 @@
 // leads the sticky bar, and what the header banner says when there isn't
 // one for this viewer.
 
-import { EMPTY_STAGE_CATALOG, findStage } from './stageCatalog.js';
-import { GATE_LABEL } from './stageMeta.js';
 import { nextSalesAction } from './salesActions.js';
 import { nextImportAction } from './importActions.js';
 import { nextAccountAction } from './accountActions.js';
@@ -57,45 +55,22 @@ import { nextAccountAction } from './accountActions.js';
  * nextImportAction (see their own doc comments for the expected shape —
  * the ticket's own scoped list, e.g. `api.pricingRequests.listForTicket`).
  *
- * Returns `{ action, waitingRoleLabel }`:
- * - `action` is whatever the matching resolver returned for sales/import/
- *   account viewers — checked FIRST, before any stage-gate reasoning (FIX 1
- *   above). `null` for every other role (ceo's own two-signature-close
- *   action already has a real, server-gated button on the page — see
- *   TicketDetailPage's own `primaryAction` — this module does not duplicate
- *   it; sales_manager has no worklist resolver of its own yet).
- * - `waitingRoleLabel` (Thai, from stageMeta's GATE_LABEL) is set only when
- *   `action` is null — either because the resolver had nothing pending
- *   (sales/import/account) or because the role has no resolver at all
- *   (anything other than ceo/sales_manager, which get neither) — read off
- *   the deal's CURRENT stage gate. Never set alongside a real `action`.
- *
- * A CLOSED_LOST / ON_HOLD / DORMANT deal returns `{ action: null,
- * waitingRoleLabel: null }`: DealStagePanel already renders a dedicated,
- * unambiguous state banner for those (reopen / resume / dormant), so this
- * module stays out of the way rather than saying something that would
- * compete with it.
+ * Returns `{ action }` — whatever the matching resolver returned for sales/
+ * import/account viewers, `null` for every other role and for any deal that is
+ * not ACTIVE. There is deliberately no "waiting on <department>" fallback: the
+ * "รอฝ่ายขาย" banner looked expandable, did nothing and named no next step
+ * (GLA-156), so it was removed rather than fixed.
  */
-export function resolveWorkState(user, deal, pricingRequests = [], catalog = EMPTY_STAGE_CATALOG) {
+export function resolveWorkState(user, deal, pricingRequests = []) {
   const role = user?.role;
-  if (!deal || deal.lifecycle !== 'ACTIVE') return { action: null, waitingRoleLabel: null };
+  if (!deal || deal.lifecycle !== 'ACTIVE') return { action: null };
 
   const action = role === 'sales' ? nextSalesAction(deal, pricingRequests)
     : role === 'import' ? nextImportAction(deal, pricingRequests)
       : role === 'account' ? nextAccountAction(deal)
         : null;
 
-  if (action) return { action, waitingRoleLabel: null };
+  if (action) return { action };
 
-  // ceo always has its own dedicated close-action button elsewhere; sales_manager
-  // has no worklist resolver of its own yet. Neither gets a "waiting on someone
-  // else" banner — showing one to a role that never has a resolver-driven action
-  // in the first place would read as a permission statement this module doesn't
-  // make (see the module's own doc comment).
-  if (role === 'ceo' || role === 'sales_manager') return { action: null, waitingRoleLabel: null };
-
-  // The stage's owning department is the backend's `gate` (from TicketService's three
-  // *_TARGET_STAGES sets), read off the catalog — not a local table. Null while it loads.
-  const meta = findStage(catalog, deal.salesStage);
-  return { action: null, waitingRoleLabel: meta ? GATE_LABEL[meta.gate] : null };
+  return { action: null };
 }

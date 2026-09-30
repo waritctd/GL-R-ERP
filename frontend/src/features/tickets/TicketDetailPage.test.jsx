@@ -699,6 +699,25 @@ describe('TicketDetailPage', () => {
     await waitFor(() => expect(api.tickets.comment).toHaveBeenCalledWith(701, { message: 'จดไว้จากแท็บกิจกรรม' }));
   });
 
+  // The stage panel's "เอกสารของขั้นนี้" row used to carry this as a full-size bordered secondary
+  // button, heavier than the stage headline above it. It is a link to a document, not an action.
+  it('offers the quotation PDF as a compact inline link, not a full-size bordered button', async () => {
+    api.tickets.get.mockResolvedValueOnce({
+      ticket: buildTicket({
+        quotations: [{
+          id: 9001, ticketId: 701, number: 'QT-2026-0901', issuedById: 1, issuedByName: 'สมชาย ใจดี',
+          issuedAt: '2026-07-03T09:00:00.000Z', totalAmount: 1000, currency: 'THB', quotationVersion: 1,
+          docStatus: 'ISSUED', recipientType: 'DESIGNER', recipientLabel: 'Design Studio',
+        }],
+      }),
+    });
+    renderTicketDetailPage(salesOwnerUser);
+    const link = await screen.findByRole('button', { name: /^ใบเสนอราคา QT-2026-0901 \(PDF\)$/ });
+    expect(link.className).not.toContain('border-border-input');
+    expect(link.className).toContain('text-primary');
+    expect(link.className).toContain('min-h-0');
+  });
+
   it('renders legacy quotation revisions read-only — no revise/mark-sent/mark-decision buttons', async () => {
     api.tickets.get.mockResolvedValueOnce({
       ticket: buildTicket({
