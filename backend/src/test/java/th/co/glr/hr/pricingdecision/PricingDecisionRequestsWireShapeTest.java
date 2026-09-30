@@ -58,15 +58,17 @@ class PricingDecisionRequestsWireShapeTest {
     }
 
     @Test
-    void explicitTrueClearFlagStillRoundTripsTrue() throws Exception {
+    void explicitTrueClearFlagsAllRoundTripTrue() throws Exception {
         UpdatePricingDecisionItemRequest item = mapper.readValue(
-            "{\"pricingDecisionItemId\":1,\"clearDiscountPct\":true}",
+            "{\"pricingDecisionItemId\":1,\"clearSellingPriceOverride\":true,"
+                + "\"clearDiscountPct\":true,\"clearSpecialPriceSqm\":true,"
+                + "\"clearDirectNetPrice\":true}",
             UpdatePricingDecisionItemRequest.class);
 
+        assertThat(item.clearSellingPriceOverride()).isTrue();
         assertThat(item.clearDiscountPct()).isTrue();
-        assertThat(item.clearSellingPriceOverride()).isFalse();
-        assertThat(item.clearSpecialPriceSqm()).isFalse();
-        assertThat(item.clearDirectNetPrice()).isFalse();
+        assertThat(item.clearSpecialPriceSqm()).isTrue();
+        assertThat(item.clearDirectNetPrice()).isTrue();
     }
 
     @Test
