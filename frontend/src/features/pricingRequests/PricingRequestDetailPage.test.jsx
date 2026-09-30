@@ -3282,6 +3282,31 @@ describe('PricingRequestDetailPage blank-factory lines', () => {
     ));
   });
 
+  // QA BUG-20: pressing บันทึกโรงงาน with nothing picked used to be a silent no-op (the button was
+  // disabled — no click, no hint why). Now it stays clickable and says what to do, and still does
+  // NOT fire a NaN factoryId at the endpoint.
+  it('warns instead of calling the endpoint when บันทึกโรงงาน is pressed with no factory selected', async () => {
+    const request = buildRequestWithBlankFactoryLine();
+    renderDetailPage({ user: importUser, request });
+    await waitForLoaded(request);
+
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกโรงงาน' }));
+
+    expect(screen.getByText('เลือกโรงงานจากรายการก่อนกดบันทึก')).toBeTruthy();
+    expect(api.pricingRequests.setItemFactory).not.toHaveBeenCalled();
+  });
+
+  // QA BUG-20: a line that already has a factory is a silent dead-end no more — it explains that
+  // changing means a new revision (the backend refuses an in-place re-route), instead of leaving
+  // Import to guess why the picker vanished.
+  it('tells Import how to change a factory once one is set, without offering a re-route', async () => {
+    const request = buildRequestWithBlankFactoryLine();
+    renderDetailPage({ user: importUser, request });
+    await waitForLoaded(request);
+
+    expect(screen.getByText(/ระบบล็อกไว้กันใบขอราคาที่จัดกลุ่มตามโรงงานเพี้ยน/)).toBeTruthy();
+  });
+
   it('offers no input on a line that already names a factory — the backend refuses a re-route', async () => {
     const request = buildRequestWithBlankFactoryLine();
     renderDetailPage({ user: importUser, request });
