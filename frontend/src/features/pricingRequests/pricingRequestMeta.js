@@ -79,7 +79,9 @@ export const ALLOWED_TRANSITIONS = {
   SUBMITTED: ['IMPORT_REVIEWING', 'READY_FOR_CEO_REVIEW', 'CANCELLED', 'SUPERSEDED'],
   // V140: Import's states. COSTING_IN_PROGRESS merged into AWAITING_FACTORY_RESPONSE
   // (เจรจาราคากับโรงงาน) and MORE_INFO_REQUIRED left the product.
-  IMPORT_REVIEWING: ['AWAITING_FACTORY_RESPONSE', 'CANCELLED', 'SUPERSEDED'],
+  // Stock lines (V194): IMPORT_REVIEWING -> READY_FOR_CEO_REVIEW mirrors the backend edge added by
+  // #1094 for a request with nothing left for Import to quote (see PricingRequestStatus.ALLOWED).
+  IMPORT_REVIEWING: ['AWAITING_FACTORY_RESPONSE', 'READY_FOR_CEO_REVIEW', 'CANCELLED', 'SUPERSEDED'],
   // V141: FactoryQuoteService.markReadyForCosting auto-advances straight to READY_FOR_CEO_REVIEW
   // once every item's quote is resolvable — there is no Import-driven costing step in between.
   AWAITING_FACTORY_RESPONSE: ['READY_FOR_CEO_REVIEW', 'CANCELLED', 'SUPERSEDED'],
