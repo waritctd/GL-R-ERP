@@ -11,14 +11,19 @@ globalThis.React = React;
 
 // Slice 2 — flow A (SLICE-2-FLOW-A.md §A-§C): the quotation is linked to its deal from the first
 // screen. Step 1 is "ดีล" (pick an existing deal, or create one), ผู้รับใบเสนอราคา* is required for a
-// DEAL_DIRECT quotation and travels in the create/update payload (the server moves the stage from
-// it — S2-B2), the editor carries a deal header strip, and a PRICING_REQUEST row shows its recipient
-// read-only. A separate file because QuotationEditorPage.test.jsx is already ~1,500 lines.
+// DEAL_DIRECT quotation and travels in the create/update payload (persisted only — owner ruling
+// 2026-09-30 took S2-B2's stage move out of this slice), the editor carries a deal header strip, and
+// a PRICING_REQUEST row shows its recipient read-only. A separate file because
+// QuotationEditorPage.test.jsx is already ~1,500 lines.
 vi.mock('../../api/index.js', async (importOriginal) => {
   const actual = await importOriginal();
+  // Imported inside the factory, not at the top of the file: vi.mock is hoisted above every import.
+  const { DEAL_STAGE_CATALOG } = await import('../../data/dealStageCatalog.js');
   return {
     ...actual,
     api: {
+      // The served stage catalog (with `routes`) — the same guarded fixture mockApi serves.
+      meta: { dealStages: vi.fn().mockResolvedValue(DEAL_STAGE_CATALOG) },
       tickets: { get: vi.fn(), create: vi.fn(), list: vi.fn() },
       dealQuotations: {
         get: vi.fn(), create: vi.fn(), update: vi.fn(), calculateLine: vi.fn(), submit: vi.fn(),
@@ -332,5 +337,152 @@ describe('recipient on an existing DRAFT (slice 2 §C)', () => {
     renderEditor('/quotations/5');
     await screen.findByText(/QT-2026-0005-1/);
     expect(screen.queryByRole('radiogroup', { name: 'ผู้รับใบเสนอราคา' })).toBeNull();
+  });
+
+  it('owner ruling #1: an existing DRAFT on a buyer-direct deal with recipient OWNER shows the off-route note (and stays editable)', async () => {
+    api.dealQuotations.get.mockResolvedValue({ quotation: draft({ recipientType: 'OWNER' }) });
+    api.tickets.get.mockResolvedValue({ ticket: { summary: ticketSummary({ entryChannel: 'BUYER_DIRECT' }) } });
+    renderEditor('/quotations/5');
+    expect(await screen.findByText(OFF_ROUTE_NOTE)).not.toBeNull();
+    expect(screen.getByRole('radio', { name: 'ผู้ออกแบบ' }).disabled).toBe(false);
+  });
+});
+
+// Found in the browser while capturing the slice-2 screenshots: the deal page's sticky CTA and the
+// worklist key on TicketSummaryDto.liveDirectQuotation (S2-B4), so every docStatus change of a
+// direct quotation changes the DEAL's data too. The editor invalidated only ['dealQuotations'] after
+// submit/approve/…, so the deal page kept showing "ส่งขออนุมัติใบเสนอราคา" after the rep had already
+// submitted. Each such action must invalidate the deal caches (['tickets', …]) as well.
+describe('a direct-quotation status change refreshes the deal (liveDirectQuotation, S2-B4)', () => {
+  const ceoUser = { id: 1, name: 'CEO', role: 'ceo', employeeId: null };
+
+  function seedDealCache() {
+    lastQueryClient.setQueryData(queryKeys.ticketDetail(18), { summary: ticketSummary() });
+    lastQueryClient.setQueryData(['tickets', 'list', {}], { tickets: [ticketSummary()] });
+  }
+  const dealCachesInvalidated = () => [queryKeys.ticketDetail(18), ['tickets', 'list', {}]]
+    .map((key) => lastQueryClient.getQueryState(key)?.isInvalidated);
+
+  it('ส่งขออนุมัติ', async () => {
+    api.dealQuotations.get.mockResolvedValue({ quotation: draft() });
+    api.dealQuotations.update.mockImplementation(async () => ({ quotation: draft() }));
+    api.dealQuotations.submit.mockResolvedValue({ quotation: draft({ docStatus: 'PENDING_APPROVAL' }) });
+    renderEditor('/quotations/5');
+    await screen.findByRole('button', { name: 'ส่งขออนุมัติ' });
+    seedDealCache();
+    fireEvent.click(screen.getByRole('button', { name: 'ส่งขออนุมัติ' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'ส่งขออนุมัติ' }));
+    await waitFor(() => expect(api.dealQuotations.submit).toHaveBeenCalled());
+    await waitFor(() => expect(dealCachesInvalidated()).toEqual([true, true]));
+  });
+
+  it('อนุมัติ', async () => {
+    api.dealQuotations.get.mockResolvedValue({ quotation: draft({ docStatus: 'PENDING_APPROVAL' }) });
+    api.dealQuotations.approve.mockResolvedValue({ quotation: draft({ docStatus: 'APPROVED' }) });
+    renderEditor('/quotations/5', { user: ceoUser });
+    await screen.findByRole('button', { name: 'อนุมัติ' });
+    seedDealCache();
+    fireEvent.click(screen.getByRole('button', { name: 'อนุมัติ' }));
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันอนุมัติ' }));
+    await waitFor(() => expect(api.dealQuotations.approve).toHaveBeenCalled());
+    await waitFor(() => expect(dealCachesInvalidated()).toEqual([true, true]));
+  });
+
+  it('ยกเลิกร่าง', async () => {
+    api.dealQuotations.get.mockResolvedValue({ quotation: draft() });
+    api.dealQuotations.cancel.mockResolvedValue({ quotation: draft({ docStatus: 'CANCELLED' }) });
+    renderEditor('/quotations/5');
+    await screen.findByRole('button', { name: 'ยกเลิกร่าง' });
+    seedDealCache();
+    fireEvent.click(screen.getByRole('button', { name: 'ยกเลิกร่าง' }));
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันยกเลิก' }));
+    await waitFor(() => expect(api.dealQuotations.cancel).toHaveBeenCalled());
+    await waitFor(() => expect(dealCachesInvalidated()).toEqual([true, true]));
+  });
+});
+
+const OFF_ROUTE_NOTE = 'ผู้รับนี้ไม่อยู่ในเส้นทางของดีล — ขั้นของดีลจะไม่ขยับ';
+const checkedRecipients = () => within(recipientGroup()).getAllByRole('radio').map((r) => r.getAttribute('aria-checked'));
+
+// Owner ruling 2026-09-30 #2 — on the NEW-deal card the channel pre-fills the recipient
+// (DESIGNER_LED→ผู้ออกแบบ, OWNER_DIRECT→เจ้าของโครงการ, BUYER_DIRECT→ผู้ซื้อ / ผู้รับเหมา), editable. A later
+// channel change re-fills it ONLY while the rep hasn't picked a recipient themselves. Two fields stay.
+describe('new-deal card — ช่องทางรับงาน pre-fills ผู้รับใบเสนอราคา (owner ruling #2)', () => {
+  async function openCreateCard() {
+    renderEditor('/quotations/new');
+    fireEvent.click(await screen.findByRole('button', { name: 'สร้างดีลใหม่' }));
+    await screen.findByLabelText(/^ลูกค้า/);
+  }
+
+  it.each([
+    ['ผู้ออกแบบนำดีล', ['true', 'false', 'false']],
+    ['เจ้าของติดต่อโดยตรง', ['false', 'true', 'false']],
+    ['ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง', ['false', 'false', 'true']],
+  ])('choosing %s pre-fills the matching recipient', async (channel, expected) => {
+    await openCreateCard();
+    expect(checkedRecipients()).toEqual(['false', 'false', 'false']);
+    fireEvent.click(screen.getByRole('button', { name: channel }));
+    await waitFor(() => expect(checkedRecipients()).toEqual(expected));
+    // Two separate fields remain: the channel keeps its own pressed state.
+    expect(screen.getByRole('button', { name: channel }).getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('while the rep has not picked a recipient, changing the channel re-fills it', async () => {
+    await openCreateCard();
+    fireEvent.click(screen.getByRole('button', { name: 'ผู้ออกแบบนำดีล' }));
+    await waitFor(() => expect(checkedRecipients()).toEqual(['true', 'false', 'false']));
+    fireEvent.click(screen.getByRole('button', { name: 'เจ้าของติดต่อโดยตรง' }));
+    await waitFor(() => expect(checkedRecipients()).toEqual(['false', 'true', 'false']));
+  });
+
+  it('doesn\'t overwrite a deliberate pick: a later channel change leaves the rep\'s recipient (and the off-route note says so)', async () => {
+    await openCreateCard();
+    fireEvent.click(screen.getByRole('button', { name: 'ผู้ออกแบบนำดีล' }));
+    await waitFor(() => expect(checkedRecipients()).toEqual(['true', 'false', 'false']));
+    // The rep deliberately picks เจ้าของโครงการ…
+    fireEvent.click(screen.getByRole('radio', { name: 'เจ้าของโครงการ' }));
+    // …then corrects the channel to buyer-direct: the pick stands.
+    fireEvent.click(screen.getByRole('button', { name: 'ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง' }).getAttribute('aria-pressed')).toBe('true'));
+    expect(checkedRecipients()).toEqual(['false', 'true', 'false']);
+    // OWNER's stage is off the buyer-direct route: allowed, with the inline note.
+    expect(await screen.findByText(OFF_ROUTE_NOTE)).not.toBeNull();
+  });
+});
+
+describe('/quotations/new?ticket= — channel fallback + off-route note (owner rulings #1, #2)', () => {
+  it.each([
+    ['OWNER_DIRECT', 'เจ้าของโครงการ'],
+    ['BUYER_DIRECT', 'ผู้ซื้อ / ผู้รับเหมา'],
+    ['DESIGNER_LED', 'ผู้ออกแบบ'],
+  ])('a deal at a non-quote stage falls back to its channel: %s preselects %s', async (entryChannel, radioName) => {
+    api.tickets.get.mockResolvedValue({ ticket: { summary: ticketSummary({ salesStage: 'PRESENTATION', entryChannel }) } });
+    renderEditor('/quotations/new?ticket=18');
+    await waitFor(() => expect(screen.getByRole('radio', { name: radioName }).getAttribute('aria-checked')).toBe('true'));
+  });
+
+  it('the deal\'s stage still wins over its channel when it is a quote stage', async () => {
+    api.tickets.get.mockResolvedValue({ ticket: { summary: ticketSummary({ salesStage: 'QUOTE_BUYER', entryChannel: 'DESIGNER_LED' }) } });
+    renderEditor('/quotations/new?ticket=18');
+    await waitFor(() => expect(screen.getByRole('radio', { name: 'ผู้ซื้อ / ผู้รับเหมา' }).getAttribute('aria-checked')).toBe('true'));
+  });
+
+  it('an unstated channel at a non-quote stage still leaves the choice empty', async () => {
+    api.tickets.get.mockResolvedValue({ ticket: { summary: ticketSummary({ salesStage: 'PRESENTATION', entryChannel: 'UNSPECIFIED' }) } });
+    renderEditor('/quotations/new?ticket=18');
+    await screen.findByTestId('quotation-deal-strip');
+    await waitFor(() => expect(api.tickets.get).toHaveBeenCalled());
+    expect(checkedRecipients()).toEqual(['false', 'false', 'false']);
+  });
+
+  it('picking ผู้ออกแบบ on an owner-direct deal is allowed, with the inline note (no block, no dialog)', async () => {
+    api.tickets.get.mockResolvedValue({ ticket: { summary: ticketSummary({ salesStage: 'PRESENTATION', entryChannel: 'OWNER_DIRECT' }) } });
+    renderEditor('/quotations/new?ticket=18');
+    await waitFor(() => expect(screen.getByRole('radio', { name: 'เจ้าของโครงการ' }).getAttribute('aria-checked')).toBe('true'));
+    expect(screen.queryByText(OFF_ROUTE_NOTE)).toBeNull();
+    fireEvent.click(screen.getByRole('radio', { name: 'ผู้ออกแบบ' }));
+    expect(screen.getByRole('radio', { name: 'ผู้ออกแบบ' }).getAttribute('aria-checked')).toBe('true');
+    expect(await screen.findByText(OFF_ROUTE_NOTE)).not.toBeNull();
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 });

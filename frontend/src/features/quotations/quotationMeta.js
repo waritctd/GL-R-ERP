@@ -256,6 +256,32 @@ export function recipientForDealStage(stage) {
   return QUOTATION_RECIPIENT_OPTIONS.find((o) => o.stage === stage)?.code ?? '';
 }
 
+/** Owner ruling 2026-09-30 #2 — on a NEW deal the entry channel pre-fills ผู้รับใบเสนอราคา (editable;
+ * the editor re-fills only while the rep has not picked one). This pairs a channel with the party it
+ * names; it says nothing about the ROUTE, which is only ever read from the served catalog below.
+ * '' for UNSPECIFIED / unknown — the rep is then asked, never guessed for. */
+const RECIPIENT_FOR_ENTRY_CHANNEL = Object.freeze({
+  DESIGNER_LED: 'DESIGNER',
+  OWNER_DIRECT: 'OWNER',
+  BUYER_DIRECT: 'BUYER',
+});
+
+export function recipientForEntryChannel(entryChannel) {
+  return RECIPIENT_FOR_ENTRY_CHANNEL[entryChannel] ?? '';
+}
+
+/** Owner ruling 2026-09-30 #1 — "off-route recipient → allow + inline note". `route` is the deal's
+ * route as served (`routeForChannel(catalog, channel)` from features/tickets/stageCatalog.js — this
+ * module deliberately does not import it: mockApi imports this file, and stageCatalog imports the
+ * api). True only when a recipient is chosen, the route is known (non-empty — an unloaded catalog
+ * reads as "no opinion", never as "everything off-route"), and the recipient's quote stage is not on
+ * it. A hint for the UI only: nothing is blocked on it, and the server moves no stage from it. */
+export function isRecipientOffRoute(route, recipientCode) {
+  const stage = stageForQuotationRecipient(recipientCode);
+  if (!stage || !Array.isArray(route) || route.length === 0) return false;
+  return !route.some((row) => row?.code === stage);
+}
+
 /** The live DEAL_DIRECT statuses — DealQuotationService's N6 predicate (slice 1's
  * DirectQuotationLocks) and TicketSummaryDto.liveDirectQuotation both key on exactly these. */
 export const LIVE_DIRECT_QUOTATION_STATUSES = Object.freeze(new Set(['DRAFT', 'PENDING_APPROVAL', 'APPROVED']));

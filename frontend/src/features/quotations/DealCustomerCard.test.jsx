@@ -11,9 +11,15 @@ globalThis.React = React;
 
 vi.mock('../../api/index.js', async (importOriginal) => {
   const actual = await importOriginal();
+  // Imported inside the factory, not at the top of the file: vi.mock is hoisted above every import.
+  const { DEAL_STAGE_CATALOG } = await import('../../data/dealStageCatalog.js');
   return {
     ...actual,
     api: {
+      // The ผู้รับ field reads the deal's route (owner ruling 2026-09-30 #1) from the served stage
+      // catalog — the SAME canned payload mockApi serves (data/dealStageCatalog.js, pinned against
+      // DealStage.java / DealRoute.java by stageCatalog.test.js), never a fixture of its own.
+      meta: { dealStages: vi.fn().mockResolvedValue(DEAL_STAGE_CATALOG) },
       locations: { provinces: vi.fn(), districts: vi.fn(), subdistricts: vi.fn() },
       customers: {
         search: vi.fn(),
@@ -561,6 +567,101 @@ describe('DealCustomerCard — ดีล step (slice 2)', () => {
     renderCard({ errors: { recipient: 'กรุณาเลือกผู้รับใบเสนอราคา' } });
     expect(screen.getByRole('alert').textContent).toBe('กรุณาเลือกผู้รับใบเสนอราคา');
     expect(screen.getByRole('radiogroup', { name: 'ผู้รับใบเสนอราคา' }).getAttribute('aria-invalid')).toBe('true');
+  });
+
+  // Owner ruling 2026-09-30 #1 — off-route recipient: ALLOW + inline note. All three pills stay
+  // selectable on every deal; when the chosen recipient's quote stage is not on the deal's route
+  // (read from the served catalog via routeForChannel), a quiet info line says so. No block, no modal.
+  // On the new-deal card the deal's channel is the one being chosen on that card.
+  describe('off-route recipient note (owner ruling #1)', () => {
+    const OFF_ROUTE_NOTE = 'ผู้รับนี้ไม่อยู่ในเส้นทางของดีล — ขั้นของดีลจะไม่ขยับ';
+
+    function createValue(entryChannel, recipientType) {
+      return { customer: null, project: null, entryChannel, recipientType };
+    }
+
+    it.each([
+      ['OWNER_DIRECT', 'DESIGNER'],
+      ['BUYER_DIRECT', 'DESIGNER'],
+      ['BUYER_DIRECT', 'OWNER'],
+    ])('new deal on %s with recipient %s: the note shows, as a status line under the pills', async (entryChannel, recipientType) => {
+      renderCard({ initialMode: 'create', initialValue: createValue(entryChannel, recipientType) });
+      const note = await screen.findByText(OFF_ROUTE_NOTE);
+      expect(note.closest('[role="status"]')).not.toBeNull();
+      const group = screen.getByRole('radiogroup', { name: 'ผู้รับใบเสนอราคา' });
+      expect(group.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    it.each([
+      ['DESIGNER_LED', 'DESIGNER'], ['DESIGNER_LED', 'OWNER'], ['DESIGNER_LED', 'BUYER'],
+      ['OWNER_DIRECT', 'OWNER'], ['OWNER_DIRECT', 'BUYER'],
+      ['BUYER_DIRECT', 'BUYER'],
+      ['UNSPECIFIED', 'DESIGNER'],
+    ])('new deal on %s with recipient %s: on-route (or no stated route) — no note', async (entryChannel, recipientType) => {
+      renderCard({ initialMode: 'create', initialValue: createValue(entryChannel, recipientType) });
+      // Let the catalog query settle before asserting absence.
+      await waitFor(() => expect(api.meta.dealStages).toHaveBeenCalled());
+      await new Promise((resolve) => { setTimeout(resolve, 0); });
+      expect(screen.queryByText(OFF_ROUTE_NOTE)).toBeNull();
+    });
+
+    it('never blocks: on a buyer-direct deal every recipient pill stays enabled and pickable', async () => {
+      renderCard({ initialMode: 'create', initialValue: createValue('BUYER_DIRECT', '') });
+      const radios = within(screen.getByRole('radiogroup', { name: 'ผู้รับใบเสนอราคา' })).getAllByRole('radio');
+      radios.forEach((radio) => expect(radio.disabled).toBe(false));
+      fireEvent.click(screen.getByRole('radio', { name: 'ผู้ออกแบบ' }));
+      expect(screen.getByRole('radio', { name: 'ผู้ออกแบบ' }).getAttribute('aria-checked')).toBe('true');
+      expect(await screen.findByText(OFF_ROUTE_NOTE)).not.toBeNull();
+      // Picking an on-route recipient clears it.
+      fireEvent.click(screen.getByRole('radio', { name: 'ผู้ซื้อ / ผู้รับเหมา' }));
+      await waitFor(() => expect(screen.queryByText(OFF_ROUTE_NOTE)).toBeNull());
+    });
+
+    it('changing the new deal\'s channel re-evaluates the note against the NEW route', async () => {
+      renderCard({ initialMode: 'create', initialValue: createValue('DESIGNER_LED', 'DESIGNER') });
+      await waitFor(() => expect(api.meta.dealStages).toHaveBeenCalled());
+      expect(screen.queryByText(OFF_ROUTE_NOTE)).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'เจ้าของติดต่อโดยตรง' }));
+      expect(await screen.findByText(OFF_ROUTE_NOTE)).not.toBeNull();
+    });
+  });
+});
+
+describe('DealCustomerCard — off-route note on a PICKED deal (owner ruling #1)', () => {
+  const OFF_ROUTE_NOTE = 'ผู้รับนี้ไม่อยู่ในเส้นทางของดีล — ขั้นของดีลจะไม่ขยับ';
+  const salesUser = { id: 6, name: 'คุณสมหมาย ขายดี', role: 'sales' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.tickets.list.mockResolvedValue({ tickets: [] });
+  });
+
+  function renderPicked(selectedDeal, recipientType) {
+    return render(wrap(
+      <MemoryRouter initialEntries={['/quotations/new?ticket=18']}>
+        <DealCustomerCard
+          user={salesUser}
+          mode="pick"
+          onModeChange={vi.fn()}
+          selectedDeal={selectedDeal}
+          value={{ customer: null, project: null, entryChannel: 'UNSPECIFIED', recipientType }}
+          onChange={vi.fn()}
+          showToast={vi.fn()}
+        />
+      </MemoryRouter>,
+    ));
+  }
+
+  it('reads the PICKED deal\'s own channel: an owner-direct deal + ผู้ออกแบบ shows the note', async () => {
+    renderPicked({ id: 18, code: 'DL-2026-0018', customerName: 'ก', salesStage: 'PRESENTATION', entryChannel: 'OWNER_DIRECT' }, 'DESIGNER');
+    expect(await screen.findByText(OFF_ROUTE_NOTE)).not.toBeNull();
+  });
+
+  it('a designer-led deal + ผู้ออกแบบ: no note', async () => {
+    renderPicked({ id: 18, code: 'DL-2026-0018', customerName: 'ก', salesStage: 'PRESENTATION', entryChannel: 'DESIGNER_LED' }, 'DESIGNER');
+    await waitFor(() => expect(api.meta.dealStages).toHaveBeenCalled());
+    await new Promise((resolve) => { setTimeout(resolve, 0); });
+    expect(screen.queryByText(OFF_ROUTE_NOTE)).toBeNull();
   });
 });
 

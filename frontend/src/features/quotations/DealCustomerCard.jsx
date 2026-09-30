@@ -11,7 +11,8 @@ import { cn } from '../../utils/cn.js';
 import { entryChannelLabel } from '../../utils/format.js';
 import { CustomerDetailsFields } from './CustomerDetailsFields.jsx';
 import { DealPicker } from './DealPicker.jsx';
-import { QUOTATION_RECIPIENT_OPTIONS } from './quotationMeta.js';
+import { QUOTATION_RECIPIENT_OPTIONS, isRecipientOffRoute } from './quotationMeta.js';
+import { routeForChannel, useStageCatalog } from '../tickets/stageCatalog.js';
 
 // The app's one pill-choice voice (ช่องทางรับงาน below, and the ดีล / ผู้รับ choices added in
 // slice 2): indigo tint when chosen, --radius-md, 38px desktop / 44px phone. `whitespace-nowrap`
@@ -36,8 +37,17 @@ const DEAL_MODES = [
  * Owner ruling 2026-09-30 (slice-2 scope reduction): the deal-stage rule is owned by another
  * session, so this field no longer moves — or promises to move — the deal's stage. The spec's live
  * "ดีลจะอยู่ที่ขั้น …" helper line under the pills was removed for that reason.
+ *
+ * Owner ruling 2026-09-30 #1 — off-route recipient: ALLOW + inline note. Every pill stays
+ * selectable on every deal. `entryChannel` is the deal's channel (on the new-deal card: the one being
+ * chosen there); when the chosen recipient's quote stage is not on that channel's route — READ from
+ * the served stage catalog via routeForChannel, never a local table — one quiet info line says so
+ * under the pills. No block, no modal. With no `entryChannel` there is no route to compare against,
+ * so no note.
  */
-export function QuotationRecipientField({ value, onChange, error, idPrefix = 'quotation-recipient' }) {
+export function QuotationRecipientField({ value, onChange, error, idPrefix = 'quotation-recipient', entryChannel = null }) {
+  const { catalog } = useStageCatalog();
+  const offRoute = Boolean(entryChannel) && isRecipientOffRoute(routeForChannel(catalog, entryChannel), value);
   const groupId = `${idPrefix}-group`;
   const checkedIndex = QUOTATION_RECIPIENT_OPTIONS.findIndex((o) => o.code === value);
   const focusIndex = checkedIndex >= 0 ? checkedIndex : 0;
@@ -89,9 +99,22 @@ export function QuotationRecipientField({ value, onChange, error, idPrefix = 'qu
           </button>
         ))}
       </div>
+      {/* A persistent polite live region: the note is announced when it appears, and the empty
+          region takes no space when it does not. 13px (text-sm), info tone, icon + words — status
+          is text, never colour alone (DESIGN.md §2.7). */}
+      <div role="status" aria-live="polite">
+        {offRoute ? (
+          <p className="mt-1.5 mb-0 flex items-start gap-1.5 text-sm text-info">
+            <Icon name="info" size={14} className="mt-[3px] shrink-0" />
+            <span>{OFF_ROUTE_RECIPIENT_NOTE}</span>
+          </p>
+        ) : null}
+      </div>
     </FormField>
   );
 }
+
+const OFF_ROUTE_RECIPIENT_NOTE = 'ผู้รับนี้ไม่อยู่ในเส้นทางของดีล — ขั้นของดีลจะไม่ขยับ';
 
 // ช่องทางรับงาน (owner ask 2026-09-10): the three real channels th.co.glr.hr.ticket.EntryChannel
 // accepts as INPUT. UNSPECIFIED is deliberately NOT offered — it is the stored default, and the
@@ -653,12 +676,15 @@ export function DealCustomerCard({
 
       {/* ผู้รับใบเสนอราคา* — both branches, below the deal choice and (on a new deal) below
           ช่องทางรับงาน. Required on a direct quotation (S2-B1). No stage promise: which stage the deal
-          sits at is owned elsewhere (owner ruling 2026-09-30, slice-2 scope reduction). */}
+          sits at is owned elsewhere (owner ruling 2026-09-30, slice-2 scope reduction). The route the
+          off-route note compares against is the channel being chosen here on a NEW deal, the picked
+          deal's own channel otherwise (owner ruling #1). */}
       <div className="mt-4">
         <QuotationRecipientField
           value={value.recipientType ?? ''}
           onChange={(code) => onChange({ recipientType: code })}
           error={errors?.recipient}
+          entryChannel={creating ? entryChannel : (selectedDeal?.entryChannel ?? null)}
         />
       </div>
 

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as meta from './quotationMeta.js';
+import { DEAL_STAGE_CATALOG } from '../../data/dealStageCatalog.js';
+import { routeForChannel } from '../tickets/stageCatalog.js';
 import {
   canApproveDealQuotation,
   canCancelDealQuotation,
@@ -1516,6 +1518,29 @@ describe('buildQuotationChecklist', () => {
     expect(meta.stageForQuotationRecipient('UNSPECIFIED')).toBeNull();
     expect(meta.recipientForDealStage('QUOTE_OWNER')).toBe('OWNER');
     expect(meta.recipientForDealStage('NEGOTIATION')).toBe('');
+  });
+
+  // Owner ruling 2026-09-30 #2: the channel pre-fills the recipient on a new deal.
+  it('owner ruling #2: each real entry channel names its recipient; UNSPECIFIED/unknown name none', () => {
+    expect(meta.recipientForEntryChannel('DESIGNER_LED')).toBe('DESIGNER');
+    expect(meta.recipientForEntryChannel('OWNER_DIRECT')).toBe('OWNER');
+    expect(meta.recipientForEntryChannel('BUYER_DIRECT')).toBe('BUYER');
+    expect(meta.recipientForEntryChannel('UNSPECIFIED')).toBe('');
+    expect(meta.recipientForEntryChannel(null)).toBe('');
+  });
+
+  // Owner ruling 2026-09-30 #1: the route is READ from the served catalog (routeForChannel), never a
+  // local table — so this is exercised against the guarded fixture mockApi serves.
+  it('owner ruling #1: a recipient is off-route exactly when its quote stage is not on the channel\'s served route', () => {
+    const offRoute = (channel, recipient) => meta.isRecipientOffRoute(routeForChannel(DEAL_STAGE_CATALOG, channel), recipient);
+    expect(['DESIGNER', 'OWNER', 'BUYER'].map((r) => offRoute('DESIGNER_LED', r))).toEqual([false, false, false]);
+    expect(['DESIGNER', 'OWNER', 'BUYER'].map((r) => offRoute('OWNER_DIRECT', r))).toEqual([true, false, false]);
+    expect(['DESIGNER', 'OWNER', 'BUYER'].map((r) => offRoute('BUYER_DIRECT', r))).toEqual([true, true, false]);
+    expect(['DESIGNER', 'OWNER', 'BUYER'].map((r) => offRoute('UNSPECIFIED', r))).toEqual([false, false, false]);
+    // No recipient chosen, or the catalog not loaded yet (empty route): never a note.
+    expect(offRoute('BUYER_DIRECT', '')).toBe(false);
+    expect(meta.isRecipientOffRoute([], 'DESIGNER')).toBe(false);
+    expect(meta.isRecipientOffRoute(undefined, 'DESIGNER')).toBe(false);
   });
 
   // Owner ruling (2026-09-16): "make ผู้ออกแบบ optional including ฝ่าย". Both were already optional on

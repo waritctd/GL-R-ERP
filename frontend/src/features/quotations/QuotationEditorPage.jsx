@@ -20,7 +20,7 @@ import {
   canApproveDealQuotation, canApproveDealQuotationNow, canCancelDealQuotation, canCreateDealQuotation,
   canCreateDealQuotationStandalone, canDecideDealQuotation, canEditDealQuotation,
   canPromoteDealQuotationToDeal, canReviseDealQuotation, canSubmitDealQuotation, DEPOSIT_PERCENT_PRESETS,
-  CONFIRM_ORDER_FROM_QUOTATION_COPY, quotationRecipientOption, recipientForDealStage,
+  CONFIRM_ORDER_FROM_QUOTATION_COPY, quotationRecipientOption, recipientForDealStage, recipientForEntryChannel,
   availablePriceModes, PRICE_MODE_OPTIONS, adjustmentDescriptionPreview, buildQuotationChecklist, currencyForLanguage, DOCUMENT_LANGUAGE_OPTIONS,
   isEffectiveZeroDeposit,
   estimateAdjustmentAmount, formatQuotationMoney, hasSpecialPricing, isEnglishPerSqm, LINE_TYPE_ADJUSTMENT, LINE_TYPE_PLAIN, LINE_TYPE_TILE,
@@ -336,6 +336,13 @@ export function QuotationEditorPage({ user, showToast }) {
     // deal-form state, so it is split out to its own setter.
     const { recipientType: nextRecipient, ...dealPatch } = patch;
     if (nextRecipient !== undefined) changeRecipient(nextRecipient);
+    // Owner ruling 2026-09-30 #2: on the new-deal card the channel pre-fills ผู้รับ (DESIGNER_LED →
+    // ผู้ออกแบบ, OWNER_DIRECT → เจ้าของโครงการ, BUYER_DIRECT → ผู้ซื้อ / ผู้รับเหมา) and a later channel
+    // change re-fills it — but ONLY while the rep has not picked a recipient themselves. A pre-fill is
+    // not a pick: it leaves recipientTouchedRef alone, so it never outranks a deliberate choice.
+    if (dealPatch.entryChannel !== undefined && !recipientTouchedRef.current) {
+      setRecipientType(recipientForEntryChannel(dealPatch.entryChannel));
+    }
     if (Object.keys(dealPatch).length === 0) return;
     setDealForm((prev) => ({ ...prev, ...dealPatch }));
     setDirty(true);
@@ -546,12 +553,14 @@ export function QuotationEditorPage({ user, showToast }) {
   // Slice 2 — flow B's preselect (SLICE-2-FLOW-A.md §A, IA §4): a deal already sitting at a quote
   // stage (S4 / S5 / S8) names its own recipient; any other stage leaves the choice empty so the rep
   // is asked, never guessed for. Same once-per-ticket shape as the โครงการ seed above, and never
-  // over a choice the rep has already made themselves.
+  // over a choice the rep has already made themselves. Owner ruling 2026-09-30 #2: when the stage is
+  // not a quote stage, the deal's own entry channel names the recipient instead (UNSPECIFIED names
+  // none, so the rep is still asked).
   useEffect(() => {
     if (id || !ticket?.id || recipientSeededForTicket.current === ticket.id) return;
     recipientSeededForTicket.current = ticket.id;
     if (recipientTouchedRef.current) return;
-    setRecipientType(recipientForDealStage(ticket.salesStage));
+    setRecipientType(recipientForDealStage(ticket.salesStage) || recipientForEntryChannel(ticket.entryChannel));
   }, [id, ticket]);
 
   function updateItem(clientId, patch) {
@@ -1356,6 +1365,15 @@ export function QuotationEditorPage({ user, showToast }) {
   }, [runUpdateAsync]);
 
   const [submitConfirmOpen, setSubmitConfirmOpen] = useState(false);
+  // Slice 2 (S2-B4): the deal page's sticky CTA and the sales worklist key on the deal summary's
+  // liveDirectQuotation, so every docStatus change of a direct quotation (submit / approve / reject
+  // / revise / reorder / cancel) changes the DEAL's data too. Invalidating only ['dealQuotations']
+  // left the deal page offering "ส่งขออนุมัติใบเสนอราคา" after the rep had already submitted (found
+  // in the browser). ['tickets'] is every deal query — list rows, the deal page's TicketDto, and this
+  // page's own deal summary.
+  function invalidateDealViews() {
+    queryClient.invalidateQueries({ queryKey: ['tickets'] });
+  }
 
   const submitMutation = useMutation({
     // Unsaved edits are SAVED first. Submit acts on the STORED quotation, and the autosave is a
@@ -1401,6 +1419,7 @@ export function QuotationEditorPage({ user, showToast }) {
       // with it (and a refresh would then re-fetch the OLD, now-superseded-in-waiting row).
       if (String(res.quotation.id) !== id) {
         queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
+        invalidateDealViews();
         showToast('success', 'ส่งขออนุมัติแล้ว (ฉบับแก้ไขใหม่ ' + res.quotation.number + ')');
         setSubmitConfirmOpen(false);
         navigate(`/quotations/${res.quotation.id}`);
@@ -1408,6 +1427,7 @@ export function QuotationEditorPage({ user, showToast }) {
       }
       queryClient.setQueryData(queryKeys.dealQuotationDetail(id), res.quotation);
       queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
+      invalidateDealViews();
       showToast('success', 'ส่งขออนุมัติแล้ว');
       setSubmitConfirmOpen(false);
     },
@@ -1549,6 +1569,7 @@ export function QuotationEditorPage({ user, showToast }) {
     onSuccess: (res) => {
       queryClient.setQueryData(queryKeys.dealQuotationDetail(id), res.quotation);
       queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
+      invalidateDealViews();
       // GLA-123 slice S2, REWORKED (owner reversed the dual-approval design, 2026-09-20): ONE
       // approval always issues a PRICING_REQUEST-origin quotation now (there is no second slot to
       // wait on), same as DEAL_DIRECT's own APPROVED outcome — one message either way.
@@ -1571,6 +1592,7 @@ export function QuotationEditorPage({ user, showToast }) {
     onSuccess: (res) => {
       queryClient.setQueryData(queryKeys.dealQuotationDetail(id), res.quotation);
       queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
+      invalidateDealViews();
       showToast('success', 'บันทึกการไม่อนุมัติแล้ว');
       setRejectOpen(false);
       setRejectReason('');
@@ -1586,6 +1608,7 @@ export function QuotationEditorPage({ user, showToast }) {
     mutationFn: () => api.dealQuotations.createRevision(id, {}),
     onSuccess: (res) => {
       queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
+      invalidateDealViews();
       showToast('success', 'สร้างฉบับแก้ไขแล้ว');
       navigate(`/quotations/${res.quotation.id}`);
     },
@@ -1607,6 +1630,7 @@ export function QuotationEditorPage({ user, showToast }) {
     mutationFn: () => api.dealQuotations.createReorder(id, {}),
     onSuccess: (res) => {
       queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
+      invalidateDealViews();
       showToast('success', 'สร้างใบเสนอราคาจากใบเดิมแล้ว');
       setReorderConfirmOpen(false);
       navigate(`/quotations/${res.quotation.id}`);
@@ -1671,6 +1695,7 @@ export function QuotationEditorPage({ user, showToast }) {
     onSuccess: (res) => {
       queryClient.setQueryData(queryKeys.dealQuotationDetail(id), res.quotation);
       queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
+      invalidateDealViews();
       showToast('success', 'ยกเลิกร่างแล้ว');
       setCancelConfirmOpen(false);
     },
@@ -2012,8 +2037,9 @@ export function QuotationEditorPage({ user, showToast }) {
       />
 
       {/* Slice 2 §B — "ดีล <code> · <customer> · <stage> · เปิดดีล". One flat row ON the page (never a
-          card inside a card), directly under the header, so the stage a recipient just moved the
-          deal to is visible where the rep is working. เปิดดีล is the ONE deal link on this page
+          card inside a card), directly under the header, so the deal's current stage is visible
+          where the rep is working (it is only ever DISPLAYED here — owner ruling 2026-09-30: nothing
+          on this page moves it). เปิดดีล is the ONE deal link on this page
           (IA §8: "เปิดดีล — everywhere, one verb"), hidden for a role that cannot open the deal. */}
       {!isInlineCreate && stripDeal ? (
         <div
@@ -2227,6 +2253,9 @@ export function QuotationEditorPage({ user, showToast }) {
                         value={recipientType}
                         onChange={changeRecipient}
                         idPrefix="quotation-recipient-edit"
+                        // Owner ruling #1: the off-route note reads this draft's deal's channel
+                        // (the deal summary is fetched for a DRAFT — see ticketQuery).
+                        entryChannel={ticket?.entryChannel ?? null}
                       />
                     </div>
                   )
