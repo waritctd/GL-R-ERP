@@ -1023,4 +1023,287 @@ describe('TicketListPage', () => {
     expect(within(phase3Chip).getByText('0')).toBeTruthy();
     expect(within(phase5Chip).getByText('1')).toBeTruthy();
   });
+  // A deal follows a ROUTE fixed by its entry channel. The list used to call dealStageLabel with
+  // one argument, so an owner-direct deal at S3 read "ผู้ออกแบบอนุมัติสเปค" here while its own
+  // detail page said "เจ้าของตกลงตามสเปคแล้ว"; and a rep could not tell a designer-led deal from a
+  // buyer-direct one without opening it. The stage stays the primary signal — the route name is
+  // a subordinate line, and it is rendered ONLY for the three channels that actually have a route.
+  describe('route-aware stage label and route marker', () => {
+    const OWNER_S3 = 'เจ้าของตกลงตามสเปคแล้ว';
+    const BUYER_S3 = 'ผู้ซื้อ/ผู้รับเหมาตกลงตามสเปคแล้ว';
+    const DESIGNER_S3 = 'ผู้ออกแบบอนุมัติสเปค';
+    const ROUTE_NAMES = ['ผู้ออกแบบนำดีล', 'เจ้าของติดต่อโดยตรง', 'ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง'];
+
+    function routeDeal(id, name, salesStage, entryChannel) {
+      const deal = {
+        id,
+        code: `PR-2026-09${id}`,
+        title: `โครงการ ${name}`,
+        customerName: name,
+        status: 'draft',
+        createdByName: 'สมชาย ใจดี',
+        createdAt: '2026-07-01T09:00:00.000Z',
+        salesStage,
+        lifecycle: 'ACTIVE',
+        lostReason: null,
+        overdue: false,
+        fulfillmentStatus: null,
+        stageUpdatedAt: '2026-07-01T09:00:00.000Z',
+      };
+      // `entryChannel` absent means the key is absent — not `undefined`, not null.
+      if (entryChannel !== ABSENT) deal.entryChannel = entryChannel;
+      return deal;
+    }
+    const ABSENT = Symbol('absent');
+
+    async function renderRows(deals) {
+      api.tickets.list.mockResolvedValueOnce({ tickets: deals });
+      const view = renderTicketListPage(salesUser);
+      await screen.findByText(deals[0].customerName);
+      return view;
+    }
+    function rowOf(container, customerName) {
+      return Array.from(container.querySelectorAll('tr.data-row'))
+        .find((row) => row.textContent.includes(customerName));
+    }
+    function stageCellOfRow(container, customerName) {
+      return rowOf(container, customerName).querySelector('td[data-label="ขั้นตอน / เหตุผลงาน"]');
+    }
+
+    it('a ROW for an owner-direct deal at SPEC_APPROVED reads เจ้าของตกลงตามสเปคแล้ว', async () => {
+      const { container } = await renderRows([routeDeal(1, 'ลูกค้าเจ้าของ', 'SPEC_APPROVED', 'OWNER_DIRECT')]);
+      const cell = stageCellOfRow(container, 'ลูกค้าเจ้าของ');
+      expect(cell.textContent).toContain(OWNER_S3);
+      expect(cell.textContent).not.toContain(DESIGNER_S3);
+    });
+
+    it('a ROW for a buyer-direct deal at SPEC_APPROVED reads ผู้ซื้อ/ผู้รับเหมาตกลงตามสเปคแล้ว', async () => {
+      const { container } = await renderRows([routeDeal(2, 'ลูกค้าผู้ซื้อ', 'SPEC_APPROVED', 'BUYER_DIRECT')]);
+      const cell = stageCellOfRow(container, 'ลูกค้าผู้ซื้อ');
+      expect(cell.textContent).toContain(BUYER_S3);
+      expect(cell.textContent).not.toContain(DESIGNER_S3);
+    });
+
+    it('a mobile CARD for an owner-direct deal at SPEC_APPROVED reads เจ้าของตกลงตามสเปคแล้ว', async () => {
+      stubMobile();
+      await renderRows([routeDeal(3, 'ลูกค้าเจ้าของการ์ด', 'SPEC_APPROVED', 'OWNER_DIRECT')]);
+      const card = await screen.findByRole('listitem');
+      expect(within(card).getByText(new RegExp(OWNER_S3))).toBeTruthy();
+      expect(within(card).queryByText(new RegExp(DESIGNER_S3))).toBeNull();
+    });
+
+    it('a mobile CARD for a buyer-direct deal at SPEC_APPROVED reads the buyer wording', async () => {
+      stubMobile();
+      await renderRows([routeDeal(4, 'ลูกค้าผู้ซื้อการ์ด', 'SPEC_APPROVED', 'BUYER_DIRECT')]);
+      const card = await screen.findByRole('listitem');
+      expect(within(card).getByText(new RegExp(BUYER_S3))).toBeTruthy();
+    });
+
+    it('designer-led, UNSPECIFIED, unknown and absent channels keep ผู้ออกแบบอนุมัติสเปค', async () => {
+      const { container } = await renderRows([
+        routeDeal(5, 'ลูกค้าดีไซเนอร์', 'SPEC_APPROVED', 'DESIGNER_LED'),
+        routeDeal(6, 'ลูกค้ายังไม่ระบุ', 'SPEC_APPROVED', 'UNSPECIFIED'),
+        routeDeal(7, 'ลูกค้าช่องทางแปลก', 'SPEC_APPROVED', 'SOMETHING_NEW'),
+        routeDeal(8, 'ลูกค้าไม่มีช่องทาง', 'SPEC_APPROVED', ABSENT),
+      ]);
+      for (const name of ['ลูกค้าดีไซเนอร์', 'ลูกค้ายังไม่ระบุ', 'ลูกค้าช่องทางแปลก', 'ลูกค้าไม่มีช่องทาง']) {
+        expect(stageCellOfRow(container, name).textContent).toContain(DESIGNER_S3);
+      }
+    });
+
+    it.each([
+      ['DESIGNER_LED', 'ผู้ออกแบบนำดีล'],
+      ['OWNER_DIRECT', 'เจ้าของติดต่อโดยตรง'],
+      ['BUYER_DIRECT', 'ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง'],
+    ])('a ROW shows the Thai route name for %s', async (channel, routeName) => {
+      const { container } = await renderRows([routeDeal(9, 'ลูกค้าเส้นทาง', 'PRESENTATION', channel)]);
+      const marker = within(stageCellOfRow(container, 'ลูกค้าเส้นทาง')).getByTestId('deal-route-marker');
+      expect(marker.textContent).toBe(routeName);
+    });
+
+    it.each([
+      ['DESIGNER_LED', 'ผู้ออกแบบนำดีล'],
+      ['OWNER_DIRECT', 'เจ้าของติดต่อโดยตรง'],
+      ['BUYER_DIRECT', 'ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง'],
+    ])('a mobile CARD shows the Thai route name for %s', async (channel, routeName) => {
+      stubMobile();
+      await renderRows([routeDeal(10, 'ลูกค้าเส้นทางการ์ด', 'PRESENTATION', channel)]);
+      const card = await screen.findByRole('listitem');
+      expect(within(card).getByTestId('deal-route-marker').textContent).toBe(routeName);
+    });
+
+    it.each([
+      ['UNSPECIFIED', 'UNSPECIFIED'],
+      ['an unknown channel', 'SOMETHING_NEW'],
+      ['an absent channel', ABSENT],
+      ['a null channel', null],
+    ])('renders NO route marker at all for %s — a route is never invented', async (_name, channel) => {
+      const { container } = await renderRows([routeDeal(11, 'ลูกค้าไม่มีเส้นทาง', 'PRESENTATION', channel)]);
+      const cell = stageCellOfRow(container, 'ลูกค้าไม่มีเส้นทาง');
+      expect(within(cell).queryByTestId('deal-route-marker')).toBeNull();
+      for (const name of [...ROUTE_NAMES, 'ยังไม่ระบุช่องทาง', 'SOMETHING_NEW']) {
+        expect(cell.textContent).not.toContain(name);
+      }
+    });
+
+    it('renders NO route marker on a mobile CARD for UNSPECIFIED / unknown / absent channels', async () => {
+      stubMobile();
+      await renderRows([
+        routeDeal(12, 'ลูกค้าการ์ดยังไม่ระบุ', 'PRESENTATION', 'UNSPECIFIED'),
+        routeDeal(13, 'ลูกค้าการ์ดแปลก', 'PRESENTATION', 'SOMETHING_NEW'),
+        routeDeal(14, 'ลูกค้าการ์ดไม่มี', 'PRESENTATION', ABSENT),
+      ]);
+      const cards = await screen.findAllByRole('listitem');
+      expect(cards.length).toBeGreaterThanOrEqual(3);
+      expect(screen.queryAllByTestId('deal-route-marker')).toHaveLength(0);
+    });
+
+    it('a designer-led row is unchanged apart from the route marker', async () => {
+      const { container } = await renderRows([
+        routeDeal(15, 'ลูกค้าดีไซเนอร์เทียบ', 'QUOTE_DESIGN_SIDE', 'DESIGNER_LED'),
+        routeDeal(16, 'ลูกค้าไม่มีช่องทางเทียบ', 'QUOTE_DESIGN_SIDE', ABSENT),
+      ]);
+      const withRoute = stageCellOfRow(container, 'ลูกค้าดีไซเนอร์เทียบ').textContent;
+      const withoutRoute = stageCellOfRow(container, 'ลูกค้าไม่มีช่องทางเทียบ').textContent;
+      expect(withoutRoute).toContain('4. เสนอราคาผู้ออกแบบ');
+      expect(withRoute.replace('ผู้ออกแบบนำดีล', '')).toBe(withoutRoute);
+    });
+
+    it('a CLOSED_LOST row keeps its เสียงาน badge and shows no route marker', async () => {
+      const lost = { ...routeDeal(17, 'ลูกค้าเสียงาน', 'PRESENTATION', 'OWNER_DIRECT'), lifecycle: 'CLOSED_LOST', lostReason: 'PRICE' };
+      const { container } = await renderRows([lost]);
+      const cell = stageCellOfRow(container, 'ลูกค้าเสียงาน');
+      expect(cell.textContent).toContain('เสียงาน');
+      expect(within(cell).queryByTestId('deal-route-marker')).toBeNull();
+    });
+  });
+  // The list's progress readout used the CATALOG-wide denominator, so a buyer-direct deal at S8
+  // read "ขั้นตอน 8/15" here while its own deal page read "ขั้นที่ 4 จาก 11". A row has no per-deal
+  // decisions payload (fetching one per row would be an N+1), so the position comes from the
+  // routes the stage-catalog endpoint serves, keyed by the row's own `entryChannel`.
+  describe('route-aware progress readout and bar', () => {
+    const NO_CHANNEL = Symbol('no-channel');
+
+    function progressDeal(id, name, salesStage, entryChannel, extra = {}) {
+      const deal = {
+        id,
+        code: `PR-2026-08${id}`,
+        title: `โครงการ ${name}`,
+        customerName: name,
+        status: 'draft',
+        createdByName: 'สมชาย ใจดี',
+        createdAt: '2026-07-01T09:00:00.000Z',
+        salesStage,
+        lifecycle: 'ACTIVE',
+        lostReason: null,
+        overdue: false,
+        fulfillmentStatus: null,
+        stageUpdatedAt: '2026-07-01T09:00:00.000Z',
+        ...extra,
+      };
+      if (entryChannel !== NO_CHANNEL) deal.entryChannel = entryChannel;
+      return deal;
+    }
+
+    async function renderProgressRows(deals) {
+      api.tickets.list.mockResolvedValueOnce({ tickets: deals });
+      const view = renderTicketListPage(salesUser);
+      await screen.findByText(deals[0].customerName);
+      return view;
+    }
+
+    function progressCellFor(container, customerName) {
+      const row = Array.from(container.querySelectorAll('tr.data-row'))
+        .find((r) => r.textContent.includes(customerName));
+      return row.querySelector('td[data-label="ความคืบหน้า"]');
+    }
+
+    // The bar's per-phase segments: flex-grow is the phase's on-route stage count.
+    const segmentGrows = (cell) => Array.from(cell.querySelector('[aria-hidden="true"]').children)
+      .map((seg) => Number(seg.style.flexGrow));
+
+    it('a buyer-direct row at QUOTE_BUYER reads ขั้นตอน 4/11 — not 8/15', async () => {
+      const { container } = await renderProgressRows([
+        progressDeal(1, 'ลูกค้าผู้ซื้อตรง', 'QUOTE_BUYER', 'BUYER_DIRECT'),
+      ]);
+      const text = progressCellFor(container, 'ลูกค้าผู้ซื้อตรง').textContent;
+      expect(text).toContain('ขั้นตอน 4/11');
+      expect(text).not.toContain('8/15');
+    });
+
+    it('an owner-direct row at QUOTE_OWNER reads ขั้นตอน 4/14', async () => {
+      const { container } = await renderProgressRows([
+        progressDeal(2, 'ลูกค้าเจ้าของตรง', 'QUOTE_OWNER', 'OWNER_DIRECT'),
+      ]);
+      expect(progressCellFor(container, 'ลูกค้าเจ้าของตรง').textContent).toContain('ขั้นตอน 4/14');
+    });
+
+    it('designer-led, UNSPECIFIED, unknown, null and absent channels are unchanged at 8/15', async () => {
+      const { container } = await renderProgressRows([
+        progressDeal(3, 'ลูกค้าดีไซเนอร์นำ', 'QUOTE_BUYER', 'DESIGNER_LED'),
+        progressDeal(4, 'ลูกค้ายังไม่ระบุช่อง', 'QUOTE_BUYER', 'UNSPECIFIED'),
+        progressDeal(5, 'ลูกค้าช่องทางแปลกใหม่', 'QUOTE_BUYER', 'SOMETHING_NEW'),
+        progressDeal(6, 'ลูกค้าช่องทางว่างเปล่า', 'QUOTE_BUYER', null),
+        progressDeal(7, 'ลูกค้าไม่มีช่องทางเลย', 'QUOTE_BUYER', NO_CHANNEL),
+      ]);
+      for (const name of [
+        'ลูกค้าดีไซเนอร์นำ', 'ลูกค้ายังไม่ระบุช่อง', 'ลูกค้าช่องทางแปลกใหม่',
+        'ลูกค้าช่องทางว่างเปล่า', 'ลูกค้าไม่มีช่องทางเลย',
+      ]) {
+        expect(progressCellFor(container, name).textContent, name).toContain('ขั้นตอน 8/15');
+      }
+    });
+
+    it('keeps the lifecycle prefix: a buyer-direct ON_HOLD row reads พักไว้ชั่วคราว · ขั้นตอน 4/11', async () => {
+      const { container } = await renderProgressRows([
+        progressDeal(8, 'ลูกค้าผู้ซื้อพักไว้', 'QUOTE_BUYER', 'BUYER_DIRECT', { lifecycle: 'ON_HOLD' }),
+      ]);
+      expect(progressCellFor(container, 'ลูกค้าผู้ซื้อพักไว้').textContent)
+        .toContain('พักไว้ชั่วคราว · ขั้นตอน 4/11');
+    });
+
+    it('keeps the CLOSED_LOST copy for a buyer-direct row — no fraction at all', async () => {
+      const { container } = await renderProgressRows([
+        progressDeal(9, 'ลูกค้าผู้ซื้อเสียงาน', 'QUOTE_BUYER', 'BUYER_DIRECT', {
+          lifecycle: 'CLOSED_LOST', lostReason: 'PRICE',
+        }),
+      ]);
+      const text = progressCellFor(container, 'ลูกค้าผู้ซื้อเสียงาน').textContent;
+      expect(text).toContain('ไม่คืบหน้า (เสียงาน)');
+      expect(text).not.toMatch(/\d+\/\d+/);
+    });
+
+    it('keeps the no-stage cases: a buyer-direct row with no salesStage says ยังไม่ระบุขั้นตอน', async () => {
+      const { container } = await renderProgressRows([
+        progressDeal(10, 'ลูกค้าผู้ซื้อไม่มีขั้น', null, 'BUYER_DIRECT'),
+        progressDeal(11, 'ลูกค้าผู้ซื้อยกเลิกไม่มีขั้น', null, 'BUYER_DIRECT', { lifecycle: 'CANCELLED' }),
+      ]);
+      expect(progressCellFor(container, 'ลูกค้าผู้ซื้อไม่มีขั้น').textContent)
+        .toContain('ยังไม่ระบุขั้นตอน');
+      const cancelled = progressCellFor(container, 'ลูกค้าผู้ซื้อยกเลิกไม่มีขั้น').textContent;
+      expect(cancelled).toContain('ยกเลิก');
+      expect(cancelled).not.toMatch(/\d+\/\d+/);
+    });
+
+    it('the bar says the same thing as the text: buyer-direct segments count on-route stages (2,1,2,3,3 = 11)', async () => {
+      const { container } = await renderProgressRows([
+        progressDeal(12, 'ลูกค้าแถบผู้ซื้อ', 'QUOTE_BUYER', 'BUYER_DIRECT'),
+        progressDeal(13, 'ลูกค้าแถบดีไซเนอร์', 'QUOTE_BUYER', 'DESIGNER_LED'),
+      ]);
+      expect(segmentGrows(progressCellFor(container, 'ลูกค้าแถบผู้ซื้อ'))).toEqual([2, 1, 2, 3, 3]);
+      // The majority route's bar is untouched: 2,4,3,3,3 = 15.
+      expect(segmentGrows(progressCellFor(container, 'ลูกค้าแถบดีไซเนอร์'))).toEqual([2, 4, 3, 3, 3]);
+    });
+
+    it('the mobile CARD bar follows the route too', async () => {
+      stubMobile();
+      api.tickets.list.mockResolvedValueOnce({
+        tickets: [progressDeal(14, 'ลูกค้าการ์ดผู้ซื้อ', 'QUOTE_BUYER', 'BUYER_DIRECT')],
+      });
+      renderTicketListPage(salesUser);
+      const card = await screen.findByRole('listitem');
+      const bar = card.querySelector('[aria-hidden="true"].flex');
+      expect(Array.from(bar.children).map((seg) => Number(seg.style.flexGrow))).toEqual([2, 1, 2, 3, 3]);
+    });
+  });
 });
