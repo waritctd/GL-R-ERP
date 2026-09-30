@@ -1,7 +1,7 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CommissionPage } from './CommissionPage.jsx';
 import { api } from '../../api/index.js';
@@ -63,6 +63,11 @@ function renderPage(user) {
     </MemoryRouter>,
   );
 }
+
+// The ×1/×2/×3 segmented control may be native radios or role="radio" buttons -- the contract is
+// the ARIA state, not the element type.
+const isChecked = (el) => el.checked === true || el.getAttribute('aria-checked') === 'true';
+const isDisabled = (el) => el.disabled === true || el.getAttribute('aria-disabled') === 'true';
 
 const hrUser = { id: 900, employeeId: 900, name: 'HR Test', role: 'hr' };
 const salesUser = { id: 10, employeeId: 10, name: 'พนักงานขาย ทดสอบ', role: 'sales' };
@@ -269,10 +274,12 @@ describe('CommissionPage — sales rep monthly incentive line renders the server
     await waitFor(() => expect(api.commissions.list).toHaveBeenCalled());
     await setMonthInput('2026-08');
 
-    expect(await screen.findByText('อินเซนทีฟ (นอกขั้นบันได)')).not.toBeNull();
-    // Two 15,000.00 occurrences would also be plausible depending on layout; assert the exact
-    // incentive figure is present at least once.
-    expect(screen.getAllByText('฿15,000.00').length).toBeGreaterThan(0);
+    // Redesign: the incentive is one limb of the "ค่าคอมของฉัน" statement ("+ Incentive ข้อ 12"),
+    // not a free-floating "อินเซนทีฟ (นอกขั้นบันได)" line. Scoped to the row because ฿15,000.00
+    // can legitimately also appear elsewhere (a receipt row, the tier panel).
+    const incentiveRow = await screen.findByTestId('statement-incentive');
+    expect(incentiveRow.textContent).toContain('Incentive ข้อ 12');
+    expect(incentiveRow.textContent).toContain('฿15,000.00');
   });
 
   it('hides the incentive line when the server reports incentiveAmount as zero', async () => {
@@ -296,10 +303,10 @@ describe('CommissionPage — sales rep monthly incentive line renders the server
     await waitFor(() => expect(api.commissions.list).toHaveBeenCalled());
     await setMonthInput('2026-08');
 
-    // Wait for the panel (proves records loaded and the month change took effect) before
-    // asserting the suppressed line is absent.
-    expect(await screen.findByText('ขั้นบันไดค่าคอมเดือนนี้ (ประมาณการ)')).not.toBeNull();
-    expect(screen.queryByText('อินเซนทีฟ (นอกขั้นบันได)')).toBeNull();
+    // Wait for the statement (proves records loaded and the month change took effect) before
+    // asserting the suppressed limb is absent.
+    expect(await screen.findByTestId('statement-total')).not.toBeNull();
+    expect(screen.queryByTestId('statement-incentive')).toBeNull();
   });
 });
 
@@ -339,8 +346,12 @@ describe('CommissionPage — monthly tier summary comes from the server, not cli
     await waitFor(() => expect(api.commissions.list).toHaveBeenCalled());
     await setMonthInput('2026-08');
 
-    expect(await screen.findByText('฿99,999.99')).not.toBeNull();
-    expect(screen.getByText('฿1,200,000.00')).not.toBeNull();
+    // Scoped to statement rows: 99,999.99 is BOTH the tier limb and the total here, so a bare
+    // getByText would now match twice. The point is unchanged -- the exact SERVER figure renders,
+    // not one recomputed from `records`.
+    expect((await screen.findByTestId('statement-tier')).textContent).toContain('฿99,999.99');
+    expect(screen.getByTestId('statement-total').textContent).toContain('฿99,999.99');
+    expect(screen.getByTestId('statement-base').textContent).toContain('฿1,200,000.00');
   });
 
   it('follows the server figure when it changes -- proves the render is wired to the DTO, not a frozen snapshot', async () => {
@@ -364,8 +375,9 @@ describe('CommissionPage — monthly tier summary comes from the server, not cli
     await waitFor(() => expect(api.commissions.list).toHaveBeenCalled());
     await setMonthInput('2026-08');
 
-    expect(await screen.findByText('฿4,567.89')).not.toBeNull();
-    expect(screen.getByText('฿654,321.09')).not.toBeNull();
+    expect((await screen.findByTestId('statement-tier')).textContent).toContain('฿4,567.89');
+    expect(screen.getByTestId('statement-total').textContent).toContain('฿4,567.89');
+    expect(screen.getByTestId('statement-base').textContent).toContain('฿654,321.09');
   });
 
   // The three cases above all stub `tiers: []` (what mock mode returns, since it has no DB tier
@@ -390,6 +402,8 @@ describe('CommissionPage — monthly tier summary comes from the server, not cli
           { tierNumber: 1, lowerBound: 0, upperBound: 250000, ratePercent: 0.25, highRoller: false, commission: 625 },
           // ratePercent as a STRING, and the open-ended top tier (upperBound null -> "ขึ้นไป").
           { tierNumber: 2, lowerBound: 250000, upperBound: null, ratePercent: '0.5000', highRoller: true, commission: 250.5 },
+          // A band the base never reached: commission 0 -> not listed in the disclosure.
+          { tierNumber: 3, lowerBound: 500000, upperBound: 750000, ratePercent: 0.75, highRoller: false, commission: 0 },
         ],
       },
     });
@@ -399,8 +413,13 @@ describe('CommissionPage — monthly tier summary comes from the server, not cli
     await waitFor(() => expect(api.commissions.list).toHaveBeenCalled());
     await setMonthInput('2026-08');
 
-    expect(await screen.findByText('ขั้นบันไดค่าคอมเดือนนี้ (ประมาณการ)')).not.toBeNull();
-    fireEvent.click(screen.getByTitle('ขยาย'));
+    // Redesign: the bands are a disclosure under the statement's "ค่าคอมตามขั้นบันได" limb, and it
+    // lists only the bands actually reached (commission != 0) -- hence the zero-commission band
+    // added to the fixture below, which must NOT appear.
+    const disclosure = await screen.findByRole('button', { name: /ขั้นบันไดที่ได้รับ/ });
+    expect(disclosure.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(disclosure);
+    expect(disclosure.getAttribute('aria-expanded')).toBe('true');
 
     // Rates come straight from the server rows, formatted but never recomputed.
     expect(await screen.findByText('0.25%')).not.toBeNull();
@@ -409,6 +428,8 @@ describe('CommissionPage — monthly tier summary comes from the server, not cli
     expect(screen.getByText('฿250.50')).not.toBeNull();
     // The open-ended top tier renders its bound as "ขึ้นไป", not "null".
     expect(screen.getByText(/ขึ้นไป/)).not.toBeNull();
+    // Only bands actually reached are listed.
+    expect(screen.queryByText('0.75%')).toBeNull();
     // The mock-mode empty state must NOT appear when the server did supply rows.
     expect(screen.queryByText('ไม่มีรายละเอียดขั้นบันไดค่าคอมให้แสดงในขณะนี้')).toBeNull();
   });
@@ -637,7 +658,9 @@ describe('CommissionPage — manual-commission rep picker (issue #737)', () => {
     fireEvent.click(screen.getByRole('button', { name: /เพิ่มค่าคอมด้วยตนเอง/ }));
 
     // Present by name alone -- proves the rep with no deal reached the option list.
-    expect(await screen.findByText('ผู้จัดการ ไม่มีดีลเลย')).not.toBeNull();
+    // Scoped to the manual form's picker: the page's own "สรุปรายคน" picker now lists the same
+    // reps, so a bare findByText would match both.
+    expect(await within(await screen.findByLabelText(/หรือเลือกจากพนักงานขาย/)).findByText('ผู้จัดการ ไม่มีดีลเลย')).not.toBeNull();
 
     // api.tickets.list resolves { tickets: [] } by default (top-level mock) -- the OLD
     // ticket-derived picker could never have shown a rep with no deal. This picker never calls
@@ -672,7 +695,7 @@ describe('CommissionPage — manual-commission rep picker (issue #737)', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /เพิ่มค่าคอมด้วยตนเอง/ }));
 
-    expect(await screen.findByText('พนักงานขาย ตัวอย่าง')).not.toBeNull();
+    expect(await within(await screen.findByLabelText(/หรือเลือกจากพนักงานขาย/)).findByText('พนักงานขาย ตัวอย่าง')).not.toBeNull();
     // Concise (Ploy's request) but still names the scope (ฝ่ายขาย) and still points at the
     // numeric Employee-ID field for anyone the picker excludes -- dropping either would either
     // overclaim completeness or silently strand a caller with no way to reach someone.
@@ -704,6 +727,7 @@ describe('CommissionPage — รออนุมัติ pending-approval view',
     approvedById: null, approvedAt: null,
     managerApprovedBy: null, managerApprovedByName: null, managerApprovedAt: null,
     ceoApprovedBy: null, ceoApprovedByName: null, ceoApprovedAt: null,
+    commissionableBase: 4000000, // ex-VAT, BEFORE weighting (weightedCommissionableBase below is after)
     invoiceDetails: invoiceDetails({ id: 701, invoiceNumber: 'INV-PEND-0701' }),
   });
   const pendingDto = (over = {}) => ({
@@ -747,18 +771,23 @@ describe('CommissionPage — รออนุมัติ pending-approval view',
     expect(screen.queryByText('INV-OTHER-MGRAPPR')).toBeNull();
   });
 
-  it('each pending card shows product, qty, qty from stock, a ×1/×2/×3 weight select, total weight (2dp) and the estimated commission', async () => {
+  it('each pending card shows product, qty, qty from stock, a ×1/×2/×3 weight segmented control, total weight (2dp) and the estimated commission', async () => {
     renderAt(salesManagerUser, '/commissions?view=pending');
     await screen.findByText('INV-PEND-0701');
     expect(screen.getByText('PADANA 60x60 ผิวเงา')).not.toBeNull();
     expect(screen.getByText('PADANA 30x60 ผิวด้าน')).not.toBeNull();
-    expect(screen.getAllByText(/จากสต็อก/).length).toBeGreaterThan(0);
-    expect(screen.getByText('120')).not.toBeNull();
-    expect(screen.getByText('30')).not.toBeNull();
-    const selects = screen.getAllByRole('combobox');
-    expect(selects).toHaveLength(2);
-    expect(Array.from(selects[0].options).map((o) => o.textContent.trim())).toEqual(['×1', '×2', '×3']);
-    expect(selects[0].value).toBe('1');
+    // Redesign: "สต็อก n/qty" replaces the separate จำนวน / จากสต็อก columns, and the native
+    // <select> becomes a ×1/×2/×3 segmented radiogroup per line.
+    expect(screen.getByText('สต็อก 30/120')).not.toBeNull();
+    expect(screen.queryAllByRole('combobox')).toHaveLength(0);
+    const groups = screen.getAllByRole('radiogroup');
+    expect(groups).toHaveLength(2);
+    expect(within(groups[0]).getAllByRole('radio').map((r) => r.textContent.trim())).toEqual(['×1', '×2', '×3']);
+    expect(isChecked(within(groups[0]).getByRole('radio', { name: '×1' }))).toBe(true);
+    // The manager sees the effect of her key-in: base before weighting -> base after weighting.
+    const entry = screen.getByTestId('pending-entry-701');
+    expect(entry.textContent).toContain('฿4,000,000.00');
+    expect(entry.textContent).toContain('฿4,800,000.00');
     expect(screen.getByText(/น้ำหนักรวม/)).not.toBeNull();
     expect(screen.getByText('1.60')).not.toBeNull();
     expect(screen.getByText(/ค่าคอมที่คำนวณได้/)).not.toBeNull();
@@ -778,27 +807,43 @@ describe('CommissionPage — รออนุมัติ pending-approval view',
     });
     renderAt(salesManagerUser, '/commissions?view=pending');
     await screen.findByText('INV-PEND-0701');
-    fireEvent.change(screen.getAllByRole('combobox')[0], { target: { value: '3' } });
+    const line11 = () => within(screen.getByRole('radiogroup', { name: 'น้ำหนัก PADANA 60x60 ผิวเงา' }));
+    fireEvent.click(line11().getByRole('radio', { name: '×3' }));
     await waitFor(() => expect(api.commissions.adjustItemWeights).toHaveBeenCalledTimes(1));
     expect(api.commissions.adjustItemWeights).toHaveBeenCalledWith(701, { lines: [{ itemId: 11, weightMultiplier: 3 }] });
     expect(await screen.findByText('2.20')).not.toBeNull();
     expect(screen.queryByText('1.60')).toBeNull();
-    expect(screen.getAllByRole('combobox')[0].value).toBe('3');
+    expect(isChecked(line11().getByRole('radio', { name: '×3' }))).toBe(true);
   });
 
   it('ceo sees the pending card but the weight selects are read-only (adjust is sales_manager only) and never call the API', async () => {
     renderAt(ceoUser, '/commissions?view=pending');
     await screen.findByText('INV-PEND-0701');
     expect(api.commissions.pendingApproval).toHaveBeenCalled();
-    const selects = screen.queryAllByRole('combobox');
-    selects.forEach((select) => expect(select.disabled).toBe(true));
+    // Read-only for the CEO: the segmented control is still rendered (she can see the weights)
+    // but every radio is disabled, and clicking one never reaches the API.
+    const radios = screen.getAllByRole('radio');
+    expect(radios.length).toBeGreaterThan(0);
+    radios.forEach((radio) => expect(isDisabled(radio)).toBe(true));
     expect(screen.getByText('1.60')).not.toBeNull();
-    if (selects.length) fireEvent.change(selects[0], { target: { value: '2' } });
+    fireEvent.click(within(screen.getByRole('radiogroup', { name: 'น้ำหนัก PADANA 60x60 ผิวเงา' })).getByRole('radio', { name: '×2' }));
     expect(api.commissions.adjustItemWeights).not.toHaveBeenCalled();
   });
 
-  it('sales_manager has a รออนุมัติ tab on the default view that switches to the pending view', async () => {
+  // Deliberately rewritten (worklist-first redesign): the sales_manager no longer has a tab to
+  // REACH the queue -- the queue leads the default page. The CEO keeps the old tab behaviour.
+  it('sales_manager: the รออนุมัติ queue leads the default view (no tab to click), above the month\'s records', async () => {
     renderAt(salesManagerUser, '/commissions');
+    expect(await screen.findByText('INV-PEND-0701')).not.toBeNull();
+    expect(api.commissions.pendingApproval).toHaveBeenCalled();
+    expect(pendingTab()).toBeNull();
+    // the month's records are still on the same page, after the queue
+    const other = await screen.findByText('INV-OTHER-APPROVED');
+    expect(screen.getByText('INV-PEND-0701').compareDocumentPosition(other) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('ceo still has a รออนุมัติ tab on the default view that switches to the pending view', async () => {
+    renderAt(ceoUser, '/commissions');
     await waitFor(() => expect(api.commissions.list).toHaveBeenCalled());
     const tab = pendingTab();
     expect(tab).not.toBeNull();

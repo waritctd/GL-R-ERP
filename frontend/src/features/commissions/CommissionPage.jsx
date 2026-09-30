@@ -1,5 +1,3 @@
-/* Hallmark · genre: modern-minimal · macrostructure: Split Studio · tone: utilitarian · theme: project system (Sarabun + indigo, owner-locked) · redesign */
-/* Hallmark · pre-emit critique: P4 H4 E4 S4 R4 V4 (pending cards split identity+lines from figures+actions via container query; list view keeps DataTable; account panel splits deal lookup from invoice form) */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
@@ -18,8 +16,15 @@ import { Tabs } from '../../components/common/Tabs.jsx';
 import { cn } from '../../utils/cn.js';
 import { InvoiceFromDealForm } from './InvoiceFromDealForm.jsx';
 import { emptyInvoiceForm, prepareInvoiceAttachment, toCreateFromDealPayload } from './invoiceFromDeal.js';
-import { commissionStatusLabel as statusInfo, dealStageLabel, formatMoney, formatThaiDate } from '../../utils/format.js';
+import { commissionStatusLabel as statusInfo, dealStageLabel, formatMoney, formatThaiDate, formatThaiMonthYearFromMonthInputValue } from '../../utils/format.js';
+import { CommissionStatement } from './CommissionStatement.jsx';
+import { MANUAL_KIND_LABELS, MANUAL_KINDS, describeCommissionWeight, isManualKind, kindLabel } from './commissionRecord.js';
+import { ReceiptChain } from './ReceiptChain.jsx';
+import { ReceiptLedger } from './ReceiptLedger.jsx';
+import { WeightSegmented } from './WeightSegmented.jsx';
+import { WeightingDesk } from './WeightingDesk.jsx';
 
+/* Hallmark · redesign · system: design.md (Operations Control Desk) · pre-emit critique: P4 H4 E3 S4 R4 V3 (V: design.md locks the system, so variety is deliberately low; E3: the stock-line segmented states are proven by tests, but only the locked import-line state was seen in a browser) */
 const thisMonth = new Date().toISOString().slice(0, 7);
 
 const emptyCreateForm = emptyInvoiceForm();
@@ -37,43 +42,6 @@ const emptyDeductionDraft = {
   reason: '',
 };
 
-// Manual commission entries (feat/commission-manual-adjustments): ALL FOUR kinds are hand-typed
-// for now — owner decision: manual across the UI until the CEO-confirmed auto-config lands to
-// prefill suggestions for specific ones later (not implemented here, no auto-computation exists
-// anywhere in this form). Mirrors backend/.../commission/CommissionKind.java's four constants.
-const MANUAL_KIND_LABELS = {
-  ADJUSTMENT: 'ปรับปรุง/รับช่วงงาน',
-  MANAGER: 'ค่าคอมผู้จัดการ/ทีม',
-  STOCK_BONUS: 'โบนัสขายสต็อก',
-  INCENTIVE: 'Incentive ตามเป้า',
-};
-const MANUAL_KINDS = Object.keys(MANUAL_KIND_LABELS);
-
-function isManualKind(kind) {
-  return Object.prototype.hasOwnProperty.call(MANUAL_KIND_LABELS, kind);
-}
-
-// V148 (per-item stock-commission weighting): a record's weight badge now has two possible
-// sources — the frozen, blended per-item weight (effectiveWeightMultiplier, non-null only for a
-// SALE/CLAWBACK whose ticket had priced, stock-covered items at creation time) when one exists,
-// else the plain manager-set weightMultiplier fallback exactly as before this feature. When the
-// frozen weight is present it is authoritative for payroll (CommissionRepository
-// #sumActiveWeightedActualReceived's COALESCE) — editing the record-level dropdown below has no
-// effect on this record's money, so the badge must show the number that actually counts, not the
-// possibly-stale fallback field. Returns null when the effective weight is exactly 1 (nothing to
-// call out).
-function describeCommissionWeight(record) {
-  const itemDerived = record?.effectiveWeightMultiplier !== null && record?.effectiveWeightMultiplier !== undefined;
-  const value = Number(itemDerived ? record.effectiveWeightMultiplier : record?.weightMultiplier);
-  if (!(value > 1)) return null;
-  const formatted = Number.isInteger(value) ? String(value) : value.toFixed(2);
-  return {
-    itemDerived,
-    label: itemDerived ? `น้ำหนักจากรายการสินค้า ${formatted} เท่า` : `น้ำหนักฐานคอม ${formatted} เท่า`,
-    compactLabel: itemDerived ? `${formatted}x (รายการ)` : `${formatted}x`,
-  };
-}
-
 const emptyManualForm = {
   salesRepId: '',
   kind: 'ADJUSTMENT',
@@ -81,12 +49,6 @@ const emptyManualForm = {
   payrollMonth: '',
   reason: '',
 };
-
-function kindLabel(kind) {
-  if (kind === 'CLAWBACK') return 'คืน/ยกเลิก';
-  if (isManualKind(kind)) return MANUAL_KIND_LABELS[kind];
-  return 'ขาย';
-}
 
 // Debounces `value` by `delayMs` -- mirrors OvertimePanel.jsx/LeaveRequestPage.jsx's identically
 // named private helper (same reason: don't fire one request per keystroke). Kept as its own small
@@ -98,96 +60,6 @@ function useDebouncedValue(value, delayMs) {
     return () => clearTimeout(timer);
   }, [value, delayMs]);
   return debounced;
-}
-
-/**
- * Waterfall calculation-detail view — gross -> each deduction (including WHT) -> actualReceived
- * -> ÷1.07 -> commissionableBase, plus the weight multiplier (when >1) and status/owner. This is
- * the "clear calc breakdown" the sales read-only view needs (Slice A3), and is reused for
- * manager/CEO's row expansion too since every value here is display-only (the fields are exactly
- * what CommissionCalculator.calculateInvoice consumed server-side, not re-derived).
- */
-function CommissionCalcBreakdown({ record }) {
-  const status = statusInfo(record.status);
-  if (isManualKind(record.kind)) {
-    const amount = Number(record.manualAmount || 0);
-    return (
-      <div className="grid gap-3 text-sm">
-        <div className="flex flex-wrap items-center gap-2">
-          <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-          <StatusBadge tone="info">{MANUAL_KIND_LABELS[record.kind] || record.kind}</StatusBadge>
-        </div>
-        <div className="grid gap-1.5 rounded-md border border-border bg-surface-subtle p-3">
-          <div className="flex items-center justify-between gap-3 font-bold">
-            <span>จำนวนเงิน (พิมพ์เอง — ไม่ผ่านการคำนวณอัตโนมัติ)</span>
-            <code className={cn('font-mono', amount < 0 && 'text-danger')}>
-              {formatMoney(amount)}
-            </code>
-          </div>
-          <div className="flex items-start justify-between gap-3">
-            <span className="text-text-muted">เหตุผล</span>
-            <span className="text-right">{record.manualReason || '-'}</span>
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-3 text-xs text-text-muted sm:grid-cols-4">
-          <span>ผู้จัดการ: {record.managerApprovedAt ? `${record.managerApprovedByName || '-'} · ${formatThaiDate(record.managerApprovedAt)}` : '-'}</span>
-          <span>CEO: {record.ceoApprovedAt ? `${record.ceoApprovedByName || '-'} · ${formatThaiDate(record.ceoApprovedAt)}` : '-'}</span>
-        </div>
-      </div>
-    );
-  }
-  const invoice = record.invoiceDetails;
-  const lines = [
-    { label: 'ยอดใบกำกับ (Gross)', value: invoice.grossAmount, sign: '' },
-    { label: 'ค่าธรรมเนียมธนาคาร', value: invoice.bankFees, sign: '-' },
-    { label: 'ภาษีรอใช้สิทธิ (Suspense VAT)', value: invoice.suspenseVat, sign: '-' },
-    { label: 'ค่าขนส่ง', value: invoice.transportFee, sign: '-' },
-    { label: 'ค่าตัด', value: invoice.cutFee, sign: '-' },
-    { label: 'รับเงินขาด', value: invoice.shortfall, sign: '-' },
-    { label: 'หัก ณ ที่จ่าย (WHT)', value: invoice.withholdingTax, sign: '-' },
-    { label: 'รับเงินเกิน', value: invoice.overpayment, sign: '+' },
-  ];
-  return (
-    <div className="grid gap-3 text-sm">
-      <div className="flex flex-wrap items-center gap-2">
-        <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-        {describeCommissionWeight(record) ? (
-          <StatusBadge tone="info">{describeCommissionWeight(record).label}</StatusBadge>
-        ) : null}
-        {record.dealAmountMismatch ? <StatusBadge tone="warning">ยอดต่างจากยอดที่เรียกเก็บ</StatusBadge> : null}
-      </div>
-      <div className="grid gap-1.5 rounded-md border border-border bg-surface-subtle p-3">
-        {lines.map((line) => (
-          <div key={line.label} className="flex items-center justify-between gap-3">
-            <span className="text-text-muted">{line.label}</span>
-            <code className="font-mono">{line.sign}{formatMoney(line.value)}</code>
-          </div>
-        ))}
-        <div className="mt-1 flex items-center justify-between gap-3 border-t border-border pt-1.5 font-bold">
-          <span>= ยอดรับจริง (Actual Received)</span>
-          <code className="font-mono">{formatMoney(record.actualReceived)}</code>
-        </div>
-        <div className="flex items-center justify-between gap-3 text-text-muted">
-          {/* The VAT divisor itself is a policy number owned by CommissionCalculator, so it is
-              not restated here — both figures either side of this line are server-computed
-              columns off the record, and naming the divisor in JS is exactly the kind of stale
-              copy this branch removed from the monthly-tier panel's below-floor badge. */}
-          <span>÷ แยกภาษีมูลค่าเพิ่ม (VAT)</span>
-          <span />
-        </div>
-        <div className="flex items-center justify-between gap-3 font-bold">
-          <span>= ฐานค่าคอม (Commissionable Base)</span>
-          <code className="font-mono">{formatMoney(record.commissionableBase)}</code>
-        </div>
-      </div>
-      <div className="grid grid-cols-2 gap-3 text-xs text-text-muted sm:grid-cols-4">
-        <span>Invoice: {invoice.invoiceNumber} · {formatThaiDate(invoice.invoiceDate)}</span>
-        <span>ผู้จัดการ: {record.managerApprovedAt ? `${record.managerApprovedByName || '-'} · ${formatThaiDate(record.managerApprovedAt)}` : '-'}</span>
-        <span>CEO: {record.ceoApprovedAt ? `${record.ceoApprovedByName || '-'} · ${formatThaiDate(record.ceoApprovedAt)}` : '-'}</span>
-        <span>ไฟล์: {invoice.invoiceAttachmentFileName || '-'}</span>
-      </div>
-    </div>
-  );
 }
 
 /**
@@ -288,132 +160,6 @@ function CommissionCard({ record, canReview, isCeoReview, saving, expanded, onTo
   );
 }
 
-const WEIGHT_OPTIONS = [1, 2, 3];
-const formatQty = (value) => Number(value ?? 0).toLocaleString('th-TH', { maximumFractionDigits: 2 });
-
-function PendingCommissionCard({ entry, canAdjust, adjusting, saving, canReviewRecord, onAdjust, onApprove, onReject }) {
-  const { commission: record, items = [] } = entry;
-  const reviewable = canReviewRecord(record);
-  return (
-    <article className="@container min-w-0 overflow-hidden rounded-md border border-border bg-surface">
-      <div className="grid min-w-0 @min-[46rem]:grid-cols-[minmax(0,1.7fr)_minmax(15rem,1fr)]">
-        {/* Left half: who and which deal, then the weighted lines. */}
-        <div className="grid min-w-0 content-start gap-4 p-4 mobile:p-3">
-          <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
-            <div className="grid min-w-0 gap-0.5">
-              <strong className="text-lg font-extrabold text-text [overflow-wrap:anywhere]">{record.invoiceDetails?.invoiceNumber}</strong>
-              <span className="text-sm text-text-secondary [overflow-wrap:anywhere]">{record.salesRepName || record.salesRepId}</span>
-              <span className="text-sm text-text-muted [overflow-wrap:anywhere]">{[entry.ticketCode, entry.customerName].filter(Boolean).join(' · ')}</span>
-            </div>
-            <StatusBadge tone="warning">รอผู้จัดการฝ่ายขายอนุมัติ</StatusBadge>
-          </header>
-
-          <div className="min-w-0 overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="border-b border-border text-text-muted">
-                  <th scope="col" className="py-1.5 pr-3 font-bold">สินค้า</th>
-                  <th scope="col" className="py-1.5 pr-3 text-right font-bold">จำนวน</th>
-                  <th scope="col" className="py-1.5 pr-3 text-right font-bold">จากสต็อก</th>
-                  <th scope="col" className="py-1.5 font-bold">น้ำหนัก</th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((item) => (
-                  <tr key={item.itemId} className="border-t border-border first:border-t-0">
-                    <td className="py-2 pr-3 [overflow-wrap:anywhere]">{item.description}</td>
-                    <td className="py-2 pr-3 text-right tabular-nums">{formatQty(item.qty)}</td>
-                    <td className="py-2 pr-3 text-right tabular-nums">{formatQty(item.qtyFromStock)}</td>
-                    <td className="py-2">
-                      <select
-                        aria-label={`น้ำหนัก ${item.description}`}
-                        className="min-w-[4.5rem] hover:border-border-muted disabled:cursor-not-allowed disabled:bg-surface-subtle disabled:text-text-muted pointer-coarse:min-h-11"
-                        value={String(item.weightMultiplier)}
-                        disabled={!canAdjust || adjusting}
-                        onChange={(event) => onAdjust(record.id, item.itemId, Number(event.target.value))}
-                      >
-                        {WEIGHT_OPTIONS.map((w) => <option key={w} value={w}>{`×${w}`}</option>)}
-                      </select>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        {/* Right half: the server-computed figures and the decision. */}
-        <div className="grid min-w-0 content-between gap-4 border-t border-border bg-surface-muted p-4 @min-[46rem]:border-l @min-[46rem]:border-t-0 mobile:p-3">
-          <dl className="m-0 grid gap-3">
-            <div className="grid gap-0.5">
-              <dt className="text-sm text-text-muted">ค่าคอมที่คำนวณได้</dt>
-              <dd className="m-0 text-2xl font-extrabold leading-tight tabular-nums text-text [overflow-wrap:anywhere]">{formatMoney(entry.estimatedCommission)}</dd>
-            </div>
-            <div className="grid grid-cols-2 gap-3 border-t border-border pt-3">
-              <div className="grid min-w-0 content-start gap-0.5">
-                <dt className="text-sm text-text-muted">น้ำหนักรวม</dt>
-                <dd className="m-0 text-md font-extrabold tabular-nums text-text">{Number(entry.effectiveWeight ?? 0).toFixed(2)}</dd>
-              </div>
-              <div className="grid min-w-0 content-start gap-0.5">
-                <dt className="text-sm text-text-muted">ฐานค่าคอมถ่วงน้ำหนัก</dt>
-                <dd className="m-0 text-md font-extrabold tabular-nums text-text [overflow-wrap:anywhere]">{formatMoney(entry.weightedCommissionableBase)}</dd>
-              </div>
-            </div>
-          </dl>
-
-          {reviewable ? (
-            <div className="flex flex-wrap gap-2">
-              <Button
-                type="button" variant="secondary"
-                className="min-w-0 flex-1 whitespace-nowrap border-success text-success hover:bg-success-bg active:bg-success-bg pointer-coarse:min-h-11 mobile:min-h-11"
-                disabled={saving || adjusting} onClick={() => onApprove(record.id)}
-              >
-                <Icon name="check" size={14} />
-                ผู้จัดการอนุมัติ
-              </Button>
-              <Button
-                type="button" variant="secondary"
-                className="min-w-0 flex-1 whitespace-nowrap border-danger text-danger hover:bg-danger-bg active:bg-danger-bg pointer-coarse:min-h-11 mobile:min-h-11"
-                disabled={saving || adjusting} onClick={() => onReject(record.id)}
-              >
-                <Icon name="close" size={14} />
-                ไม่อนุมัติ
-              </Button>
-            </div>
-          ) : null}
-        </div>
-      </div>
-    </article>
-  );
-}
-
-function PendingApprovalView({ entries, loading, canAdjust, adjustingId, saving, canManagerReview, onAdjust, onApprove, onReject }) {
-  if (entries == null) {
-    return <p className="m-0 text-sm text-text-muted" aria-busy={loading}>กำลังโหลดรายการรออนุมัติ…</p>;
-  }
-  if (entries.length === 0) {
-    return <EmptyState icon="badge" title="ไม่มีรายการรออนุมัติ" description="ใบกำกับที่ฝ่ายบัญชีบันทึกและรอผู้จัดการฝ่ายขายอนุมัติจะแสดงที่นี่ ทุกรอบเดือน" />;
-  }
-  return (
-    <div className="grid gap-4">
-      <p className="m-0 text-sm text-text-muted">{`${entries.length} รายการรออนุมัติ จากทุกรอบเดือน — ปรับน้ำหนักสินค้าแล้วระบบคำนวณค่าคอมใหม่ให้`}</p>
-      {entries.map((entry) => (
-        <PendingCommissionCard
-          key={entry.commission.id}
-          entry={entry}
-          canAdjust={canAdjust}
-          adjusting={adjustingId === entry.commission.id}
-          saving={saving}
-          canReviewRecord={canManagerReview}
-          onAdjust={onAdjust}
-          onApprove={onApprove}
-          onReject={onReject}
-        />
-      ))}
-    </div>
-  );
-}
-
 // The subset of a ticket summary the create-from-deal form reads, taken from FinanceDealDto.
 function summaryFromFinanceDeal(deal) {
   if (!deal) return null;
@@ -445,7 +191,12 @@ export function CommissionPage({ user, showToast }) {
   // months (GET /api/commissions/pending-approval) -- independent of the month filter above.
   const [pending, setPending] = useState(null); // null = not loaded yet
   const [pendingLoading, setPendingLoading] = useState(false);
-  const [adjustingId, setAdjustingId] = useState(null);
+
+  // sales_manager / ceo "สรุปรายคน": the same statement the rep sees, for a chosen rep. The
+  // request counter drops a slow response for a previously picked rep / month.
+  const [pickedRepId, setPickedRepId] = useState('');
+  const [repSummary, setRepSummary] = useState(null);
+  const repSummaryRequestId = useRef(0);
 
   // account: "record invoice" / create-from-deal flow
   const [ticketIdInput, setTicketIdInput] = useState(searchParams.get('ticketId') || '');
@@ -500,6 +251,11 @@ export function CommissionPage({ user, showToast }) {
   const isSales = user.role === 'sales';
   const view = canReview && searchParams.get('view') === 'pending' ? 'pending' : 'all';
   const canAdjustWeights = user.role === 'sales_manager'; // CommissionService#adjustItemWeights: sales_manager only
+  // Worklist first: the sales_manager's queue (every SUBMITTED sale, any month) leads her page.
+  // The CEO's queue is the MANAGER_APPROVED records in the table below, so she keeps the old
+  // ทั้งหมด / รออนุมัติ tabs, where "รออนุมัติ" is the same queue read-only.
+  const isSalesManager = user.role === 'sales_manager';
+  const showWorklist = isSalesManager || view === 'pending';
 
   function selectView(next) {
     const params = new URLSearchParams(searchParams);
@@ -521,24 +277,22 @@ export function CommissionPage({ user, showToast }) {
   }
 
   useEffect(() => {
-    if (view !== 'pending') return;
+    if (!showWorklist) return;
     loadPending();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fetch on entering the view; showToast is stable enough.
-  }, [view]);
+  }, [showWorklist]);
 
-  async function adjustWeight(recordId, itemId, weightMultiplier) {
-    if (!canAdjustWeights || adjustingId != null) return;
-    setAdjustingId(recordId);
-    try {
-      const response = await api.commissions.adjustItemWeights(recordId, { lines: [{ itemId, weightMultiplier }] });
-      // The server recomputes effectiveWeight / estimatedCommission; the card is replaced, never patched locally.
-      setPending((current) => (current ?? []).map((entry) => (entry.commission.id === recordId ? response.pending : entry)));
-      invalidatePayrollUpstream();
-    } catch (error) {
-      showToast('error', error.message || 'ปรับน้ำหนักไม่สำเร็จ');
-    } finally {
-      setAdjustingId(null);
-    }
+  // The desk owns the optimistic state; this only performs the write and keeps payroll fresh. The
+  // server recomputes effectiveWeight / weightedCommissionableBase / estimatedCommission and the
+  // entry is replaced with its answer, never patched locally.
+  async function adjustWeights(recordId, payload) {
+    const response = await api.commissions.adjustItemWeights(recordId, payload);
+    invalidatePayrollUpstream();
+    return response;
+  }
+
+  function replacePendingEntry(updated) {
+    setPending((current) => (current ?? []).map((entry) => (entry.commission.id === updated.commission.id ? updated : entry)));
   }
 
   async function load() {
@@ -586,6 +340,19 @@ export function CommissionPage({ user, showToast }) {
   // is intentionally omitted from the dependency array (re-running per render would be a no-op).
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, [month]);
+
+  // "สรุปรายคน": re-fetch the chosen rep's statement whenever the rep or the month changes.
+  useEffect(() => {
+    if (!canReview || !pickedRepId) {
+      setRepSummary(null);
+      return;
+    }
+    const requestId = (repSummaryRequestId.current += 1);
+    api.commissions.monthlySummary({ payrollMonth: month, salesRepId: Number(pickedRepId) })
+      .then((response) => { if (repSummaryRequestId.current === requestId) setRepSummary(response.summary ?? null); })
+      .catch(() => { if (repSummaryRequestId.current === requestId) setRepSummary(null); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- canReview is fixed for the page's lifetime.
+  }, [pickedRepId, month]);
 
   // Best-effort convenience picker for account: the deals TicketRepository's account-role list
   // scoping surfaces are money-PENDING deals, so a CLOSED_PAID deal (already fully paid) often
@@ -1130,7 +897,7 @@ export function CommissionPage({ user, showToast }) {
       showToast('success', 'อนุมัติค่าคอมแล้ว');
       invalidatePayrollUpstream();
       await load();
-      if (view === 'pending') await loadPending();
+      if (showWorklist) await loadPending();
     } catch (error) {
       showToast('error', error.message || 'อนุมัติไม่สำเร็จ');
     } finally {
@@ -1150,7 +917,7 @@ export function CommissionPage({ user, showToast }) {
       showToast('success', 'ปฏิเสธค่าคอมแล้ว');
       invalidatePayrollUpstream();
       await load();
-      if (view === 'pending') await loadPending();
+      if (showWorklist) await loadPending();
     } catch (error) {
       showToast('error', error.message || 'ปฏิเสธไม่สำเร็จ');
     } finally {
@@ -1178,47 +945,102 @@ export function CommissionPage({ user, showToast }) {
     }
   }
 
+  // Commission paid in payroll month N comes from money RECEIVED in month N-1 — the one rule every
+  // figure on this page hangs on, so it is stated at the top of every month-scoped view.
+  const receiptMonth = (() => {
+    const match = /^(\d{4})-(\d{2})$/.exec(month);
+    if (!match) return null;
+    const [year, monthNumber] = [Number(match[1]), Number(match[2])];
+    return monthNumber === 1 ? `${year - 1}-12` : `${year}-${String(monthNumber - 1).padStart(2, '0')}`;
+  })();
+  const pickedRepName = repOptions.find((rep) => String(rep.id) === String(pickedRepId))?.name;
+  const monthScoped = !canCreateFromDeal && view === 'all';
+
   return (
     <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
       <PageHeader title="ค่าคอมมิชชัน" subtitle="ตรวจสอบ อนุมัติ และติดตามค่าคอมมิชชันของฝ่ายขาย" />
 
-      {!canCreateFromDeal ? (
-        <div className="flex flex-wrap items-end gap-x-3 gap-y-3 border-b border-border pb-4">
-          <label className="grid w-[220px] gap-1.5 text-sm font-bold mobile:w-full">
-            รอบเดือน
-            <input type="month" value={month} onChange={(event) => setMonth(event.target.value)} className="hover:border-border-muted pointer-coarse:min-h-11" />
-          </label>
-          {/* A tax invoice recorded in month M lands in payroll month M+1, so a rep who closes a
-              deal and checks this page on the same day sees nothing — and the table's empty state
-              cannot warn them, because the CURRENT month usually has other rows and so is not
-              empty. Measured 2026-08-28: an invoice dated 27 Aug produced payroll_month 2026-09.
-              Hence a standing hint plus a one-click jump, rather than an empty-state message. */}
-          <Button
-            type="button"
-            variant="secondary"
-            className="whitespace-nowrap pointer-coarse:min-h-11 mobile:flex-1"
-            data-testid="commission-next-cycle"
-            title="ค่าคอมจากใบกำกับที่บันทึกเดือนนี้ จะอยู่ในรอบเดือนถัดไป"
-            onClick={() => {
-              const [y, m] = month.split('-').map(Number);
-              const next = new Date(Date.UTC(y, m, 1));
-              setMonth(next.toISOString().slice(0, 7));
-            }}
-          >
-            รอบถัดไป
+      {user.role === 'ceo' ? (
+        <Tabs
+          ariaLabel="มุมมองค่าคอม"
+          idPrefix="commission-view"
+          value={view}
+          onChange={selectView}
+          items={[
+            { id: 'all', label: 'ทั้งหมด' },
+            { id: 'pending', label: 'รออนุมัติ', badge: pending ? pending.length : undefined, badgeLabel: pending ? `${pending.length} รายการ` : undefined },
+          ]}
+        />
+      ) : null}
+
+      {showWorklist ? (
+        <WeightingDesk
+          title={isSalesManager ? 'รอคุณอนุมัติ' : 'รอผู้จัดการฝ่ายขายอนุมัติ'}
+          entries={pending}
+          loading={pendingLoading}
+          canAdjust={canAdjustWeights}
+          busy={saving}
+          canReviewRecord={canManagerReview}
+          onAdjust={adjustWeights}
+          onEntryUpdate={replacePendingEntry}
+          onApprove={setApproveId}
+          onReject={reject}
+        />
+      ) : null}
+
+      {isSalesManager && view === 'pending' ? (
+        <div>
+          <Button type="button" variant="text" className="whitespace-nowrap mobile:min-h-11" onClick={() => selectView('all')}>
+            ดูสรุปรายคนและรายการทั้งเดือน
             <Icon name="chevronRight" size={14} />
           </Button>
-          {canCreateManual && (
+        </div>
+      ) : null}
+
+      {monthScoped ? (
+        <div className="grid gap-2 border-b border-border pb-4">
+          <div className="flex flex-wrap items-end gap-x-3 gap-y-3">
+            <label className="grid w-[220px] gap-1.5 text-sm font-bold mobile:w-full">
+              รอบเดือน
+              <input type="month" value={month} onChange={(event) => setMonth(event.target.value)} className="hover:border-border-muted pointer-coarse:min-h-11" />
+            </label>
+            {/* A tax invoice recorded in month M lands in payroll month M+1, so a rep who closes a
+                deal and checks this page on the same day sees nothing — and the table's empty state
+                cannot warn them, because the CURRENT month usually has other rows and so is not
+                empty. Measured 2026-08-28: an invoice dated 27 Aug produced payroll_month 2026-09.
+                Hence a standing hint plus a one-click jump, rather than an empty-state message. */}
             <Button
               type="button"
               variant="secondary"
-              className="whitespace-nowrap pointer-coarse:min-h-11 mobile:flex-1 min-[721px]:ml-auto"
-              onClick={() => (showManualForm ? setShowManualForm(false) : openManualForm())}
+              className="whitespace-nowrap pointer-coarse:min-h-11 mobile:flex-1"
+              data-testid="commission-next-cycle"
+              title="ค่าคอมจากใบกำกับที่บันทึกเดือนนี้ จะอยู่ในรอบเดือนถัดไป"
+              onClick={() => {
+                const [y, m] = month.split('-').map(Number);
+                const next = new Date(Date.UTC(y, m, 1));
+                setMonth(next.toISOString().slice(0, 7));
+              }}
             >
-              <Icon name="plus" size={14} />
-              เพิ่มค่าคอมด้วยตนเอง
+              รอบถัดไป
+              <Icon name="chevronRight" size={14} />
             </Button>
-          )}
+            {canCreateManual && (
+              <Button
+                type="button"
+                variant="secondary"
+                className="whitespace-nowrap pointer-coarse:min-h-11 mobile:flex-1 min-[721px]:ml-auto"
+                onClick={() => (showManualForm ? setShowManualForm(false) : openManualForm())}
+              >
+                <Icon name="plus" size={14} />
+                เพิ่มค่าคอมด้วยตนเอง
+              </Button>
+            )}
+          </div>
+          {receiptMonth ? (
+            <p className="m-0 text-md font-bold text-text-secondary [overflow-wrap:anywhere]">
+              {`รอบจ่าย ${formatThaiMonthYearFromMonthInputValue(month)} · จากยอดรับเงินเดือน ${formatThaiMonthYearFromMonthInputValue(receiptMonth)}`}
+            </p>
+          ) : null}
         </div>
       ) : null}
 
@@ -1241,54 +1063,8 @@ export function CommissionPage({ user, showToast }) {
           saving={saving}
           recentlyCreated={recentlyCreated}
         />
-      ) : (
+      ) : view === 'all' ? (
         <>
-          {canReview ? (
-            <Tabs
-              ariaLabel="มุมมองค่าคอม"
-              idPrefix="commission-view"
-              value={view}
-              onChange={selectView}
-              items={[
-                { id: 'all', label: 'ทั้งหมด' },
-                { id: 'pending', label: 'รออนุมัติ', badge: pending ? pending.length : undefined, badgeLabel: pending ? `${pending.length} รายการ` : undefined },
-              ]}
-            />
-          ) : null}
-
-          {view === 'pending' ? (
-            <PendingApprovalView
-              entries={pending}
-              loading={pendingLoading}
-              canAdjust={canAdjustWeights}
-              adjustingId={adjustingId}
-              saving={saving}
-              canManagerReview={canManagerReview}
-              onAdjust={adjustWeight}
-              onApprove={setApproveId}
-              onReject={reject}
-            />
-          ) : (
-            <>
-          <section aria-label="สรุปค่าคอมเดือนนี้" className="grid min-w-0 grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] items-end gap-x-8 gap-y-4 nav-drawer:grid-cols-[minmax(0,1fr)]">
-            <div className="grid min-w-0 gap-1">
-              <p className="m-0 text-sm font-bold text-text-secondary">ฐานค่าคอมเดือนนี้</p>
-              <p className="m-0 text-4xl font-extrabold leading-tight tabular-nums text-text [overflow-wrap:anywhere] mobile:text-3xl">{formatMoney(totals.base)}</p>
-            </div>
-            <dl className="m-0 grid grid-cols-3 gap-x-4 gap-y-2 mobile:grid-cols-1">
-              {[
-                ['approved', 'อนุมัติแล้ว', totals.approved],
-                ['submitted', 'รอผู้จัดการ', totals.submitted],
-                ['managerApproved', 'รอ CEO', totals.managerApproved],
-              ].map(([key, label, value]) => (
-                <div key={key} className="grid min-w-0 gap-0.5">
-                  <dt className="text-sm text-text-muted">{label}</dt>
-                  <dd className="m-0 text-lg font-extrabold tabular-nums text-text">{`${value} รายการ`}</dd>
-                </div>
-              ))}
-            </dl>
-          </section>
-
           {canCreateManual && showManualForm && (
             <ManualCommissionForm
               form={manualForm}
@@ -1300,56 +1076,103 @@ export function CommissionPage({ user, showToast }) {
             />
           )}
 
-          {monthlyTierSummary ? <MonthlyTierPanel summary={monthlyTierSummary} /> : null}
+          {isSales ? (
+            <>
+              {monthlyTierSummary ? <CommissionStatement summary={monthlyTierSummary} /> : null}
+              <ReceiptLedger records={records} loading={loading} />
+            </>
+          ) : (
+            <>
+              <section aria-label="สรุปค่าคอมเดือนนี้" className="grid min-w-0 grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] items-end gap-x-8 gap-y-4 nav-drawer:grid-cols-[minmax(0,1fr)]">
+                <div className="grid min-w-0 gap-1">
+                  <p className="m-0 text-sm font-bold text-text-secondary">ฐานค่าคอมเดือนนี้</p>
+                  <p className="m-0 text-4xl font-extrabold leading-tight tabular-nums text-text [overflow-wrap:anywhere] mobile:text-3xl">{formatMoney(totals.base)}</p>
+                </div>
+                <dl className="m-0 grid grid-cols-3 gap-x-4 gap-y-2 mobile:grid-cols-1">
+                  {[
+                    ['approved', 'อนุมัติแล้ว', totals.approved],
+                    ['submitted', 'รอผู้จัดการ', totals.submitted],
+                    ['managerApproved', 'รอ CEO', totals.managerApproved],
+                  ].map(([key, label, value]) => (
+                    <div key={key} className="grid min-w-0 gap-0.5">
+                      <dt className="text-sm text-text-muted">{label}</dt>
+                      <dd className="m-0 text-lg font-extrabold tabular-nums text-text">{`${value} รายการ`}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </section>
 
-          <DataTable
-            columns={commissionColumns}
-            rows={records}
-            getRowKey={(record) => record.id}
-            gridClassName="commission-table"
-            renderExpanded={(record) => (record.id === expandedId ? <CommissionCalcBreakdown record={record} /> : null)}
-            mobileCard={(record) => (
-              <CommissionCard
-                record={record}
-                canReview={canReview && canReviewRecord(record)}
-                isCeoReview={canCeoReview(record)}
-                saving={saving}
-                expanded={expandedId === record.id}
-                onToggleExpand={() => setExpandedId((current) => (current === record.id ? null : record.id))}
-                onApprove={() => setApproveId(record.id)}
-                onReject={() => reject(record.id)}
-              />
-            )}
-            pageSize={20}
-            searchable
-            searchPlaceholder="ค้นหาเลขที่ใบกำกับ / ชื่อ Sales"
-            loading={loading}
-            emptyState={{
-              icon: 'badge',
-              title: 'ยังไม่มีรายการค่าคอม',
-              description: 'ค่าคอมจากใบกำกับที่บันทึกเดือนนี้จะอยู่ในรอบเดือนถัดไป — ลองกด "รอบถัดไป" หรือรอฝ่ายบัญชีบันทึกใบกำกับ',
-            }}
-          />
+              <section aria-labelledby="by-rep-heading" className="grid min-w-0 gap-3">
+                <h2 id="by-rep-heading" className="m-0 text-lg font-extrabold text-text">สรุปรายคน</h2>
+                <div className="grid w-[320px] max-w-full gap-1.5 mobile:w-full">
+                  <label htmlFor="commission-rep-picker" className="text-sm font-bold">เลือกพนักงานขาย</label>
+                  <select
+                    id="commission-rep-picker"
+                    value={pickedRepId}
+                    onChange={(event) => setPickedRepId(event.target.value)}
+                    className="hover:border-border-muted pointer-coarse:min-h-11"
+                  >
+                    <option value="">— เลือกพนักงานขาย —</option>
+                    {repOptions.map((rep) => <option key={rep.id} value={String(rep.id)}>{rep.name}</option>)}
+                  </select>
+                </div>
+                {pickedRepId && repSummary ? (
+                  <CommissionStatement summary={repSummary} heading={`ค่าคอมของ ${pickedRepName ?? 'พนักงานขาย'}`} />
+                ) : (
+                  <p className="m-0 text-sm text-text-muted">
+                    {pickedRepId ? 'กำลังโหลดสรุปค่าคอม…' : 'เลือกพนักงานขายเพื่อดูสรุปค่าคอมเดือนนี้ในรูปแบบเดียวกับที่พนักงานเห็น'}
+                  </p>
+                )}
+              </section>
 
-          {editingId != null && (() => {
-            const editingRecord = records.find((record) => record.id === editingId);
-            if (!editingRecord) return null;
-            return (
-              <ManagerReviewEditPanel
-                record={editingRecord}
-                draft={deductionDraft}
-                onChange={updateDeductionDraft}
-                preview={deductionPreview}
-                saving={saving}
-                onSave={() => saveDeductions(editingRecord.id)}
-                onCancel={() => setEditingId(null)}
+              <DataTable
+                columns={commissionColumns}
+                rows={records}
+                getRowKey={(record) => record.id}
+                gridClassName="commission-table"
+                renderExpanded={(record) => (record.id === expandedId ? <ReceiptChain record={record} /> : null)}
+                mobileCard={(record) => (
+                  <CommissionCard
+                    record={record}
+                    canReview={canReview && canReviewRecord(record)}
+                    isCeoReview={canCeoReview(record)}
+                    saving={saving}
+                    expanded={expandedId === record.id}
+                    onToggleExpand={() => setExpandedId((current) => (current === record.id ? null : record.id))}
+                    onApprove={() => setApproveId(record.id)}
+                    onReject={() => reject(record.id)}
+                  />
+                )}
+                pageSize={20}
+                searchable
+                searchPlaceholder="ค้นหาเลขที่ใบกำกับ / ชื่อ Sales"
+                loading={loading}
+                emptyState={{
+                  icon: 'badge',
+                  title: 'ยังไม่มีรายการค่าคอม',
+                  description: 'ค่าคอมจากใบกำกับที่บันทึกเดือนนี้จะอยู่ในรอบเดือนถัดไป — ลองกด "รอบถัดไป" หรือรอฝ่ายบัญชีบันทึกใบกำกับ',
+                }}
               />
-            );
-          })()}
+
+              {editingId != null && (() => {
+                const editingRecord = records.find((record) => record.id === editingId);
+                if (!editingRecord) return null;
+                return (
+                  <ManagerReviewEditPanel
+                    record={editingRecord}
+                    draft={deductionDraft}
+                    onChange={updateDeductionDraft}
+                    preview={deductionPreview}
+                    saving={saving}
+                    onSave={() => saveDeductions(editingRecord.id)}
+                    onCancel={() => setEditingId(null)}
+                  />
+                );
+              })()}
             </>
           )}
         </>
-      )}
+      ) : null}
 
       <ConfirmDialog
         open={approveId != null}
@@ -1678,18 +1501,16 @@ function ManagerReviewEditPanel({ record, draft, onChange, preview, saving, onSa
             />
           </label>
         ))}
-        <label className="text-xs font-bold">
-          น้ำหนักฐานคอม (Weight Multiplier)
-          <select
-            value={draft.weightMultiplier}
-            onChange={(event) => onChange('weightMultiplier', Number(event.target.value))}
-            className="mt-1"
-          >
-            <option value={1}>1 เท่า (ปกติ)</option>
-            <option value={2}>2 เท่า (ยืนยันนโยบายแล้ว)</option>
-            <option value={3}>3 เท่า (ยืนยันนโยบายแล้ว)</option>
-          </select>
-        </label>
+        <div className="grid content-start gap-1.5 text-xs font-bold">
+          <span id="record-weight-label">น้ำหนักฐานคอมของรายการนี้</span>
+          <WeightSegmented
+            label="น้ำหนักฐานคอม"
+            value={Number(draft.weightMultiplier)}
+            onChange={(weight) => onChange('weightMultiplier', weight)}
+            describedBy="record-weight-hint"
+          />
+          <span id="record-weight-hint" className="text-sm font-normal text-text-muted">×2 และ ×3 ใช้เมื่อยืนยันนโยบายแล้วเท่านั้น</span>
+        </div>
       </div>
       {record.effectiveWeightMultiplier !== null && record.effectiveWeightMultiplier !== undefined ? (
         // V148 (per-item stock-commission weighting): this record already carries a FROZEN,
@@ -1736,97 +1557,9 @@ function ManagerReviewEditPanel({ record, draft, onChange, preview, saving, onSa
   );
 }
 
-/**
- * sales-only: informational tier-by-tier breakdown of the currently selected payroll month.
- * `summary` is CommissionMonthlySummaryDto exactly, as returned by
- * GET /api/commissions/monthly-summary (CommissionService#monthlySummary) — every figure here is
- * server-computed, never re-derived client-side.
- */
-function MonthlyTierPanel({ summary }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <Panel
-      title="ขั้นบันไดค่าคอมเดือนนี้ (ประมาณการ)"
-      actions={(
-        <Button type="button" variant="icon" onClick={() => setOpen((current) => !current)} aria-expanded={open} title={open ? 'ย่อ' : 'ขยาย'}>
-          <Icon name={open ? 'chevronUp' : 'chevronDown'} size={16} />
-        </Button>
-      )}
-    >
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <span>
-          <small className="block text-text-muted">ฐานค่าคอมรวมเดือนนี้ (น้ำหนักรวมแล้ว)</small>
-          <code className="font-mono text-base font-bold">{formatMoney(summary.commissionableBase)}</code>
-        </span>
-        <span className="text-right">
-          <small className="block text-text-muted">ค่าคอมประมาณการ</small>
-          <code className="font-mono text-base font-bold">{formatMoney(summary.totalCommission)}</code>
-        </span>
-      </div>
-      {summary.incentiveAmount ? (
-        // Issue #405: the auto-computed INCENTIVE ladder amount, already folded into
-        // "ค่าคอมประมาณการ" on top of the tier commission — server-computed by the same call.
-        <div className="mt-2 flex items-center justify-between gap-3 text-sm">
-          <span className="text-text-muted">อินเซนทีฟ (นอกขั้นบันได)</span>
-          <code className="font-mono">{formatMoney(summary.incentiveAmount)}</code>
-        </div>
-      ) : null}
-      {summary.manualTotal ? (
-        // Manual entries (feat/commission-manual-adjustments) never feed the tier calc above —
-        // this is the rep's own APPROVED manual amount, already folded into "ค่าคอมประมาณการ"
-        // on top of the tier commission.
-        <div className="mt-2 flex items-center justify-between gap-3 text-sm">
-          <span className="text-text-muted">ค่าคอมปรับปรุง/โบนัสที่อนุมัติแล้ว (นอกขั้นบันได)</span>
-          <code className={cn('font-mono', summary.manualTotal < 0 && 'text-danger')}>
-            {formatMoney(summary.manualTotal)}
-          </code>
-        </div>
-      ) : null}
-      {summary.belowFloor ? (
-        // The floor amount itself is a policy number that must not live in the frontend — see
-        // CLAUDE.md's mock API contract note on commission constants. Named generically here.
-        <p className="mt-2">
-          <StatusBadge tone="neutral">ฐานเดือนนี้ต่ำกว่าเกณฑ์ขั้นต่ำตามนโยบาย — ยังไม่มีค่าคอมในเดือนนี้</StatusBadge>
-        </p>
-      ) : null}
-      {open ? (
-        summary.tiers.length === 0 ? (
-          // Mock mode (VITE_USE_MOCKS=true) does not know the real tier config — see mockApi.js's
-          // commissions.monthlySummary fixture. The totals above still render (they are the mock's
-          // own canned/summed figures); only the per-tier breakdown is unavailable.
-          <p className="mt-3 text-sm text-text-muted">ไม่มีรายละเอียดขั้นบันไดค่าคอมให้แสดงในขณะนี้</p>
-        ) : (
-          <div className="mt-3 overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="text-text-muted">
-                  <th className="pb-1 pr-3 font-semibold">ขั้น</th>
-                  <th className="pb-1 pr-3 font-semibold">ช่วง (บาท)</th>
-                  <th className="pb-1 pr-3 font-semibold text-right">อัตรา</th>
-                  <th className="pb-1 font-semibold text-right">ค่าคอมในขั้นนี้</th>
-                </tr>
-              </thead>
-              <tbody>
-                {summary.tiers.map((row) => (
-                  <tr key={row.tierNumber} className="border-t border-border">
-                    <td className="py-1 pr-3">{row.tierNumber}</td>
-                    <td className="py-1 pr-3">
-                      {formatMoney(row.lowerBound)} – {row.upperBound == null ? 'ขึ้นไป' : formatMoney(row.upperBound)}
-                    </td>
-                    {/* ratePercent arrives as a JSON number/string from a server BigDecimal —
-                        Number(...) first so a string value doesn't throw calling .toFixed. */}
-                    <td className="py-1 pr-3 text-right">{Number(row.ratePercent).toFixed(2)}%</td>
-                    <td className="py-1 text-right"><code className="font-mono">{formatMoney(row.commission)}</code></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )
-      ) : null}
-    </Panel>
-  );
-}
+// Six columns now (ค่าคอมทีม added). A Tailwind utility beats the legacy 5-column
+// `.commission-payroll-table` rule in styles.css (layer order), so the override lives here.
+const PAYROLL_TABLE_COLUMNS = 'grid-cols-[minmax(0,1.8fr)_repeat(5,minmax(0,1fr))]';
 
 function PayrollSummary({ summary, loading }) {
   if (loading) {
@@ -1845,7 +1578,7 @@ function PayrollSummary({ summary, loading }) {
         ]}
       />
       <Panel flush>
-        <div className="commission-payroll-table table-head">
+        <div className={cn('commission-payroll-table table-head', PAYROLL_TABLE_COLUMNS)}>
           <span>Sales Rep</span>
           <span>ฐานค่าคอม</span>
           {/* Issue #405: the auto-computed INCENTIVE ladder + STOCK_BONUS, already folded into
@@ -1854,19 +1587,38 @@ function PayrollSummary({ summary, loading }) {
               all-zero until the CEO enables sales.stock_bonus_config -- that is expected. */}
           <span>อินเซนทีฟ</span>
           <span>โบนัสขายของในสต๊อค</span>
+          {/* The team override (ค่าคอมทีม) is already folded into the "ค่าคอม" total column — only
+              the override recipients carry a non-zero amount, so the column is mostly empty by
+              design rather than broken. */}
+          <span>ค่าคอมทีม</span>
           <span>ค่าคอม</span>
         </div>
         {(summary.salesReps ?? []).length === 0 ? (
           <EmptyState icon="badge" title="ไม่มีรายการอนุมัติ" description="ยังไม่มีค่าคอมที่พร้อมเข้า Payroll ในเดือนนี้" />
         ) : summary.salesReps.map((rep) => (
-          <div key={rep.salesRepId} className="commission-payroll-table data-row">
+          <div key={rep.salesRepId} className={cn('commission-payroll-table data-row', PAYROLL_TABLE_COLUMNS)}>
             <strong>{rep.salesRepName || rep.salesRepId}</strong>
             <code>{formatMoney(rep.commissionableBase)}</code>
             <code>{formatMoney(rep.incentiveAmount)}</code>
             <code>{formatMoney(rep.stockBonusAmount)}</code>
+            <code>{formatMoney(rep.teamOverrideAmount)}</code>
             <code>{formatMoney(rep.commissionAmount)}</code>
           </div>
         ))}
+        {summary.totalTeamOverrideAmount != null || summary.companyCommissionableBase != null ? (
+          <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 border-t border-border-subtle bg-surface-muted px-5 py-3 text-md mobile:px-4">
+            {summary.companyCommissionableBase != null ? (
+              <span className="text-text-secondary">
+                ยอดรับทั้งบริษัท (ไม่รวม VAT) <strong className="tabular-nums text-text">{formatMoney(summary.companyCommissionableBase)}</strong>
+              </span>
+            ) : <span />}
+            {summary.totalTeamOverrideAmount != null ? (
+              <span data-testid="payroll-team-override-total" className="text-text-secondary">
+                รวมค่าคอมทีม <strong className="tabular-nums text-text">{formatMoney(summary.totalTeamOverrideAmount)}</strong>
+              </span>
+            ) : null}
+          </div>
+        ) : null}
       </Panel>
     </>
   );
