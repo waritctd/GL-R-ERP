@@ -25,6 +25,9 @@
 //     under frontend/ (CSS, HTML, assets) goes FULL. Some of them read BACKEND Java files
 //     (stageCatalog.test.js parses DealStage.java), so a changed backend/src/main/java file
 //     also pulls in every fs-reading test whose content mentions that file's path or basename.
+//   * serverContract.test.js is always added whenever frontend code changed (it scans every
+//     screen via apiSurface.js), and any docs/api/** change is a FULL trigger (status-catalog
+//     and api-surface are read through helpers no heuristic can attribute to a test).
 
 const HR_MAIN = 'backend/src/main/java/th/co/glr/hr/';
 const HR_TEST = 'backend/src/test/java/th/co/glr/hr/';
@@ -152,6 +155,10 @@ const FRONTEND_CODE_EXT = /\.(js|jsx|ts|tsx|json)$/;
 function isFrontendFullTrigger(path) {
   if (path === '.github/workflows/frontend-ci.yml') return true;
   if (path.startsWith('.github/scripts/')) return true;
+  // docs/api/** is read by several tests through helpers (statusCatalog.js, apiSurface.js)
+  // that the fs-reading heuristic cannot attribute to a test file, so it is FULL, not a
+  // targeted pick (PR #1099 review).
+  if (path.startsWith('docs/api/')) return true;
   if (!path.startsWith('frontend/')) return false;
   if (path === 'frontend/package.json' || path === 'frontend/package-lock.json') return true;
   if (path.startsWith('frontend/vite.config.') || path.startsWith('frontend/vitest.config.')) return true;
@@ -199,11 +206,13 @@ export function selectFrontendTests({ changedFiles, testFilesReadingFs, isPullRe
   // Every fs reader when frontend code changed (the import graph cannot see them); otherwise
   // only the readers tied to the changed backend files.
   const extras = frontendChanged ? testFilesReadingFs.map(({ path }) => path) : [...javaReaders];
-  if (contractTriggered) extras.push(SERVER_CONTRACT_TEST);
+  // serverContract.test.js scans every screen through apiSurface.js's readdirSync, so ANY
+  // frontend change can break it — the scan sits in a helper the fs-reading heuristic misses.
+  if (contractTriggered || frontendChanged) extras.push(SERVER_CONTRACT_TEST);
   return {
     mode: 'changed',
     reason: `${frontendChanged ? `frontend code changed (${testFilesReadingFs.length} fs-reading tests appended)` : 'no frontend change'}; ${
-      contractTriggered ? 'API surface changed → serverContract test added' : 'API surface untouched'}; ${
+      contractTriggered ? 'API surface changed → serverContract test added' : frontendChanged ? 'serverContract test always added with frontend code' : 'API surface untouched'}; ${
       javaReaders.length} test(s) read a changed backend Java file`,
     extraTestFiles: uniqSorted(extras),
   };

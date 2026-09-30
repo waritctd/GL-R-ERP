@@ -367,6 +367,7 @@ describe('selectFrontendTests — full-suite triggers', () => {
     ['.env.example', 'frontend/.env.example'],
     ['frontend-ci workflow file', '.github/workflows/frontend-ci.yml'],
     ['the selection script itself', '.github/scripts/select-tests.mjs'],
+    ['API surface doc (docs/api/**)', 'docs/api/api-surface.json'],
     ['global CSS (read by tests via fs, invisible to the import graph)', 'frontend/src/styles.css'],
     ['tokens CSS', 'frontend/src/index.css'],
     ['a non-JS asset under frontend', 'frontend/public/favicon.svg'],
@@ -383,10 +384,10 @@ describe('selectFrontendTests — full-suite triggers', () => {
 });
 
 describe('selectFrontendTests — changed mode', () => {
-  it('JS-only source change → changed, with every fs-reading test as an extra', () => {
+  it('JS-only source change → changed, with every fs-reading test plus serverContract as extras', () => {
     const r = frontend({ changedFiles: ['frontend/src/features/leave/LeavePage.jsx'] });
     assert.equal(r.mode, 'changed');
-    assert.deepEqual(r.extraTestFiles, FS_READING_PATHS);
+    assert.deepEqual(r.extraTestFiles, [...FS_READING_PATHS, SERVER_CONTRACT].sort());
   });
 
   it('JS/JSX/TS/TSX/JSON changes all stay in changed mode', () => {
@@ -407,9 +408,9 @@ describe('selectFrontendTests — changed mode', () => {
     assert.equal(r.mode, 'changed');
   });
 
-  it('wrong-way-round: serverContract test is NOT added for a plain frontend change', () => {
-    const r = frontend({ changedFiles: ['frontend/src/features/leave/LeavePage.jsx'] });
-    assert.ok(!r.extraTestFiles.includes(SERVER_CONTRACT));
+  it('wrong-way-round: serverContract test is NOT added when neither frontend nor the API surface changed', () => {
+    const r = frontend({ changedFiles: [`${MAIN}/ticket/DealStage.java`] });
+    assert.ok(!r.extraTestFiles.includes(SERVER_CONTRACT), `got ${r.extraTestFiles}`);
   });
 
   it('a *Controller.java change adds serverContract test (backend-only diff)', () => {
@@ -418,15 +419,21 @@ describe('selectFrontendTests — changed mode', () => {
     assert.ok(r.extraTestFiles.includes(SERVER_CONTRACT), `got ${r.extraTestFiles}`);
   });
 
-  it('a docs/api/** change adds serverContract test', () => {
-    const r = frontend({ changedFiles: ['docs/api/api-surface.json'] });
+  it('PR #1099 review gap A: a .jsx-only screen change still pulls in serverContract (it scans every screen via apiSurface.js)', () => {
+    const r = frontend({ changedFiles: ['frontend/src/features/tickets/DealPage.jsx'] });
     assert.equal(r.mode, 'changed');
     assert.ok(r.extraTestFiles.includes(SERVER_CONTRACT), `got ${r.extraTestFiles}`);
   });
 
+  it('PR #1099 review gap B: docs/api/status-catalog.json alone → full (statusCatalog.test.js / format.test.js read it)', () => {
+    const r = frontend({ changedFiles: ['docs/api/status-catalog.json'] });
+    assert.equal(r.mode, 'full');
+    assert.match(r.reason, /docs\/api/);
+  });
+
   it('serverContract extra is deduped when it is also an fs-reading test', () => {
     const r = frontend({
-      changedFiles: ['docs/api/api-surface.json'],
+      changedFiles: ['frontend/src/features/leave/LeavePage.jsx'],
       testFilesReadingFs: [...FS_READING_TESTS, { path: SERVER_CONTRACT, content: 'readFileSync("docs/api/api-surface.json")' }],
     });
     assert.equal(r.extraTestFiles.filter((f) => f === SERVER_CONTRACT).length, 1);

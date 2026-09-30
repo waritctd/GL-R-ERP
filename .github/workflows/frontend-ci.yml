@@ -21,6 +21,7 @@ name: Frontend CI
 # always runs all ~2,700 tests on a PR. `.github/scripts/select-tests.mjs` picks a mode:
 #   full     — package.json / package-lock.json / vite or vitest config / src/test/** (setup
 #              and fixtures) / .env* / this workflow / the picker itself changed, OR any file
+#              under docs/api/ changed (status-catalog / api-surface are read through helpers), OR any file
 #              under frontend/ that is not .js/.jsx/.ts/.tsx/.json changed (CSS, HTML, assets:
 #              a dozen tests read those through fs, which the import graph cannot see), OR the
 #              PR carries the `full-ci` label, OR the PR targets `main` (merging to main
@@ -28,8 +29,8 @@ name: Frontend CI
 #              picker printed anything but a known mode → `npm test`.
 #   changed  — code-only diff → `vitest run --changed <base>` (tests whose import graph reaches
 #              a changed file) PLUS a second invocation for the tests that read source via fs,
-#              and src/api/serverContract.test.js whenever docs/api/** or a *Controller.java
-#              changed, and every fs-reading test that PARSES a changed backend Java file
+#              and src/api/serverContract.test.js whenever frontend code or a *Controller.java
+#              changed (it scans every screen via apiSurface.js), and every fs-reading test that PARSES a changed backend Java file
 #              (stageCatalog.test.js reads DealStage.java, and so on). Two invocations because
 #              a positional file filter RESTRICTS `--changed` rather than adding to it
 #              (verified against vitest 4.1, 2026-10-01).
