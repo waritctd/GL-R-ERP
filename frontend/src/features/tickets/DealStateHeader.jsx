@@ -123,7 +123,7 @@ export function DealStateHeader({
 }) {
   const lifecycle = dealLifecycleLabel(summary.lifecycle ?? 'ACTIVE');
   const status = ticketStatusLabel(summary.status);
-  const stage = dealStageLabel(summary.salesStage);
+  const stage = dealStageLabel(summary.salesStage, summary.entryChannel);
   const payment = paymentStageLabel(summary.paymentStage);
   const fulfilment = summary.fulfillmentStatus ? fulfilmentStatusLabel(summary.fulfillmentStatus) : null;
   const hasDealValue = Number(summary.amountPayable ?? 0) > 0;

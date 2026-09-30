@@ -701,14 +701,70 @@ public class DealQuotationService {
      * deals THEY created — the grant lets them reach this endpoint but no longer widens the LIST
      * scope, only detail/create/edit access elsewhere). */
     public List<DealQuotationDto> search(List<String> statuses, boolean needsRework, UserPrincipal actor) {
-        return quotations.search(statuses, listOwnerScope(actor), needsRework);
+        return search(statuses, needsRework, null, actor);
+    }
+
+    /**
+     * {@code GET /api/deal-quotations} — every origin since quotation ↔ deal linking slice 1 (owner
+     * decision D4, 2026-09-30; it was DEAL_DIRECT only): DEAL_DIRECT and PRICING_REQUEST rows as
+     * editable rows, legacy v1 rows ({@code origin IS NULL}) tagged {@code LEGACY} and
+     * {@code readOnly}. Every row carries its deal's {@code ticketCode}/{@code dealStage}.
+     *
+     * <p>{@code origin} (optional) narrows to exactly one of {@code DEAL_DIRECT},
+     * {@code PRICING_REQUEST}, {@code LEGACY}; blank reads as absent; anything else is 400. The
+     * scope is {@link #listOwnerScope}, unchanged, applied to every origin; on top of it the
+     * price-bearing origins keep their narrower read rule (see {@link #canViewPricedOriginsOnList}).
+     */
+    public List<DealQuotationDto> search(List<String> statuses, boolean needsRework, String origin,
+                                         UserPrincipal actor) {
+        Long owner = listOwnerScope(actor);
+        return quotations.search(statuses, owner, needsRework, parseListOrigin(origin),
+            canViewPricedOriginsOnList(actor));
     }
 
     /** Per-status counts for the list page's tab labels (owner feedback F5, 2026-09-10) — the
      * SAME scope decision as {@link #search}, so a tab's count is always the size of the list
      * that tab would show. */
     public DealQuotationCountsDto counts(UserPrincipal actor) {
-        return quotations.counts(listOwnerScope(actor));
+        return counts(null, actor);
+    }
+
+    /** {@link #counts(UserPrincipal)} under the same optional {@code origin} filter {@link #search}
+     * takes — widened and validated identically, so tabs and list agree under a filter too. */
+    public DealQuotationCountsDto counts(String origin, UserPrincipal actor) {
+        Long owner = listOwnerScope(actor);
+        return quotations.counts(owner, parseListOrigin(origin), canViewPricedOriginsOnList(actor));
+    }
+
+    private static final Set<String> LIST_ORIGIN_FILTERS = Set.of(DealQuotationRepository.ORIGIN_DEAL_DIRECT,
+        DealQuotationRepository.ORIGIN_PRICING_REQUEST, DealQuotationRepository.ORIGIN_LEGACY);
+
+    /** null/blank → no filter; exact (case-sensitive) member of {@link #LIST_ORIGIN_FILTERS}; else 400. */
+    private static String parseListOrigin(String origin) {
+        if (origin == null || origin.isBlank()) {
+            return null;
+        }
+        String value = origin.trim();
+        if (!LIST_ORIGIN_FILTERS.contains(value)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "ไม่รองรับประเภทใบเสนอราคา '" + origin + "' (ใช้ได้: DEAL_DIRECT, PRICING_REQUEST, LEGACY)");
+        }
+        return value;
+    }
+
+    /**
+     * Slice 1 — may this caller see PRICING_REQUEST and LEGACY rows on the widened LIST? Both carry
+     * a pricing-chain price (the CEO's approved price/discount on a PRICING_REQUEST row; the v1
+     * chain's approved price on a LEGACY one), so the list applies the SAME role rule
+     * {@link #canViewPricingRequestOriginRow} applies to a single PRICING_REQUEST row:
+     * {@link #PRICING_REQUEST_VIEW_ROLES} only, no {@link #hasQuotationGrant} bypass. The
+     * "sales sees only their own deal" half of that rule is already {@link #listOwnerScope}'s own
+     * (sales is always owner-scoped on the list), so a role check is all that is left to add here.
+     * Without it, widening the list would print to import/account/grant-holders a price the
+     * detail endpoint refuses them (403).
+     */
+    private boolean canViewPricedOriginsOnList(UserPrincipal actor) {
+        return PRICING_REQUEST_VIEW_ROLES.contains(actor.role());
     }
 
     /**
@@ -1780,61 +1836,65 @@ public class DealQuotationService {
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // GLA-136 (owner ruling, Ploy 2026-09-30) — "สร้างดีลจากใบเสนอราคา": promote an APPROVED direct
-    // quotation's quotation-only container ticket into the pipeline at S10 ORDER_RECEIVED.
+    // "ยืนยันคำสั่งซื้อ" on a direct quotation — GLA-136 (owner ruling, Ploy 2026-09-30), reshaped by
+    // quotation ↔ deal linking slice 1 (IA §7, same day): an APPROVED direct quotation's deal moves
+    // to S10 ORDER_RECEIVED with the quotation's lines.
     //
-    // Direct (DEAL_DIRECT) and pipeline (PRICING_REQUEST) quotations STAY SEPARATE, and R10 stands:
-    // there is still no recordOutcome/confirmOrder for DEAL_DIRECT (see #recordOutcome). A direct
-    // quotation is quotation-only until the rep decides the customer has ordered — THIS is that
-    // decision. It lives here rather than in a new service because every authz decision for this
-    // engine already lives on this class (#requireEditAccess is the audience, reused verbatim, not
-    // re-derived) and #ticketService is already wired here for #approveAndIssuePricingRequestOrigin;
-    // a sibling service would have to either duplicate that gate or reach into this one.
+    // Direct (DEAL_DIRECT) and pipeline (PRICING_REQUEST) quotations keep separate PRICING routes, and
+    // R10 stands: there is still no recordOutcome for DEAL_DIRECT (see #recordOutcome), and this is
+    // the rep's own decision that the customer ordered (owner decision D3 — no signature capture).
+    // Slice 1 dropped GLA-136's "the ticket must be quotation-only" precondition: a quotation-first
+    // deal is a real deal now (V193 quotation_only is provenance only), and an ordinary deal with a
+    // direct quotation confirms the same way. It lives here rather than in a new service because
+    // every authz decision for this engine already lives on this class (#requireEditAccess is the
+    // audience, reused verbatim, not re-derived) and #ticketService is already wired here for
+    // #approveAndIssuePricingRequestOrigin.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     /** ticket_item column widths (V6/V8/V9/V25): brand 255, model/color/texture/size 80, raw_unit 30.
      * quotation_item's own were widened to 255 by V162, so a long catalogue text is clipped here
-     * rather than failing the promotion on a length error; the quotation keeps the full text. */
+     * rather than failing the confirmation on a length error; the quotation keeps the full text. */
     private static final int TICKET_ITEM_BRAND_MAX = 255;
     private static final int TICKET_ITEM_TEXT_MAX = 80;
     private static final int TICKET_ITEM_RAW_UNIT_MAX = 30;
 
     /**
-     * Promotes the quotation-only container ticket this APPROVED direct quotation hangs off into
-     * the deal pipeline, in ONE transaction, mirroring {@code OrderConfirmationService#confirmOrder}'s
-     * own bridge sequence (never a second implementation of it):
+     * {@code POST /api/deal-quotations/{id}/confirm-order} (and its one-release alias
+     * {@code …/promote-to-deal}) — confirms the customer's order from an APPROVED direct quotation,
+     * moving the deal it hangs off to S10 ORDER_RECEIVED in ONE transaction, mirroring
+     * {@code OrderConfirmationService#confirmOrder}'s own bridge sequence (never a second
+     * implementation of it):
      *
      * <ol>
      *   <li>lock the ticket row ({@link TicketRepository#lockTicketForUpdate}) and re-read it — every
-     *       precondition below is checked against the LOCKED read;</li>
-     *   <li>{@code quotation_only TRUE -> FALSE} ({@link TicketRepository#markPromotedToPipeline});</li>
+     *       ticket precondition below is checked against the LOCKED read;</li>
      *   <li>{@code status draft -> quotation_issued} — the SAME bridge write
      *       ({@link TicketRepository#markQuotationIssuedForOrderConfirmation}) confirmOrder uses, the
      *       only thing every downstream ticket-keyed gate (deposit notice, IR, close) keys on;</li>
-     *   <li>{@code sales.ticket_item} written from the quotation's own goods lines (see
-     *       {@link #ticketItemsFromQuotation}) — the delivery machinery's quantity source;</li>
+     *   <li>best-effort {@code quotation_only TRUE -> FALSE} ({@link TicketRepository#markPromotedToPipeline})
+     *       — provenance only; its rowcount is ignored (an ordinary deal is already FALSE);</li>
+     *   <li>{@code sales.ticket_item} replaced by the quotation's own goods lines (see
+     *       {@link #ticketItemsFromQuotation}) — the delivery machinery's quantity source; the
+     *       quotation is the agreed order, so it replaces any preliminary lines the deal carried;</li>
      *   <li>{@code TicketService#confirmCustomerForPromotedQuotation} — the unmodified
      *       confirmCustomer body: {@code payment_status = CUSTOMER_CONFIRMED}, stage auto-advanced to
      *       {@code ORDER_RECEIVED}.</li>
      * </ol>
      *
-     * <p><strong>Authz</strong> (403 "ไม่มีสิทธิ์เข้าถึงรายการนี้"): exactly {@link #requireEditAccess}
-     * against the container ticket — the owning {@code sales} rep, any {@code sales_manager}, or a
-     * {@code can_create_quotation} grantee; the same people who may write the direct quotation. Checked
-     * BEFORE any 409, so a caller with no access learns nothing about the quotation's state.
+     * <p><strong>Order of checks</strong>: quotation exists on this engine (404 — a LEGACY
+     * {@code origin IS NULL} id is a 404 here too, via {@link #requireQuotation}) → authz
+     * {@link #requireEditAccess} against the deal (403: the owning {@code sales} rep, any
+     * {@code sales_manager}, or a {@code can_create_quotation} grantee; checked BEFORE any 409, so a
+     * caller with no access learns nothing about the quotation's state) → {@code origin = DEAL_DIRECT}
+     * (409) → [lock] → idempotent replay: a {@link TicketEventKind#DEAL_PROMOTED_FROM_QUOTATION}
+     * event already exists on the deal → return the current state, write nothing → {@code doc_status
+     * = APPROVED} (409) → deal lifecycle {@code ACTIVE} (409) → deal status {@code draft} (409).
      *
-     * <p><strong>Preconditions</strong> (409 unless noted): quotation exists on this engine (404);
-     * {@code origin = DEAL_DIRECT}; ticket {@code quotation_only}; {@code doc_status = APPROVED};
-     * ticket lifecycle {@code ACTIVE}; ticket status {@code draft}.
-     *
-     * <p><strong>Idempotent</strong>: a ticket that is no longer quotation-only AND carries a
-     * {@link TicketEventKind#DEAL_PROMOTED_FROM_QUOTATION} event was already promoted by this path —
-     * a replay (a double click, a retried request, a second tab) returns the current state and writes
-     * nothing. A ticket that is not quotation-only and never was promoted is an ordinary pipeline deal
-     * — 409, never a silent success.
+     * <p>The event kind keeps its GLA-136 name ({@code DEAL_PROMOTED_FROM_QUOTATION}) — it is pinned
+     * by the {@code chk_event_kind} DB CHECK.
      */
     @Transactional
-    public PromoteToDealResultDto promoteToDeal(long quotationId, UserPrincipal actor) {
+    public PromoteToDealResultDto confirmOrderFromDirectQuotation(long quotationId, UserPrincipal actor) {
         if (ticketService == null) {
             // Same defensive shape as #approveAndIssuePricingRequestOrigin's own guard — only
             // reachable if a deployment wires this bean without #wireTicketService.
@@ -1844,51 +1904,48 @@ public class DealQuotationService {
         long ticketId = quotation.ticketId();
         // Authz first — see this method's Javadoc.
         requireEditAccess(actor, requireTicketSummary(ticketId));
-        if (!"DEAL_DIRECT".equals(quotation.origin())) {
+        if (!DealQuotationRepository.ORIGIN_DEAL_DIRECT.equals(quotation.origin())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "สร้างดีลจากใบเสนอราคาได้เฉพาะใบเสนอราคาตรง (ไม่ผ่านคำขอราคา) เท่านั้น");
+                "ยืนยันคำสั่งซื้อจากหน้านี้ได้เฉพาะใบเสนอราคาตรง (ไม่ผ่านคำขอราคา) เท่านั้น");
         }
 
-        // Serialize every promotion (and every other writer that takes this lock) on this deal.
+        // Serialize every confirmation (and every other writer that takes this lock) on this deal.
         tickets.lockTicketForUpdate(ticketId);
         TicketSummaryDto locked = requireTicketSummary(ticketId);
 
-        if (!locked.quotationOnly()) {
-            if (tickets.hasPromotionFromQuotationEvent(ticketId)) {
-                return promotionResult(ticketId, quotationId); // idempotent replay — no writes
-            }
-            throw new ApiException(HttpStatus.CONFLICT,
-                "ดีลนี้อยู่ใน pipeline อยู่แล้ว — ไม่ต้องสร้างดีลจากใบเสนอราคา");
+        if (tickets.hasPromotionFromQuotationEvent(ticketId)) {
+            return promotionResult(ticketId, quotationId); // idempotent replay — no writes
         }
         DealQuotationDto fresh = requireQuotation(quotationId);
         if (!QuotationStatus.APPROVED.equals(fresh.docStatus())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "สร้างดีลได้เฉพาะใบเสนอราคาที่อนุมัติแล้วเท่านั้น (ปัจจุบัน: " + fresh.docStatus() + ")");
+                "ยืนยันคำสั่งซื้อได้เฉพาะใบเสนอราคาที่อนุมัติแล้วเท่านั้น (ปัจจุบัน: " + fresh.docStatus() + ")");
         }
         if (!DealLifecycle.ACTIVE.equals(locked.lifecycle())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ดีลไม่ได้อยู่ในสถานะ ACTIVE (" + locked.lifecycle() + ") จึงสร้างดีลจากใบเสนอราคาไม่ได้");
+                "ดีลไม่ได้อยู่ในสถานะ ACTIVE (" + locked.lifecycle() + ") จึงยืนยันคำสั่งซื้อไม่ได้");
         }
         if (!TicketStatus.DRAFT.equals(locked.status())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "สร้างดีลจากใบเสนอราคาไม่ได้ — สถานะดีลเดิม (" + locked.status() + ") ขัดแย้งกับขั้นตอนนี้");
+                "ยืนยันคำสั่งซื้อไม่ได้ — สถานะดีล (" + locked.status() + ") ผ่านขั้นออกใบเสนอราคาไปแล้ว");
         }
 
-        // Both compare-and-sets run under the row lock, so a 0 here is unreachable through the API;
-        // it is checked, not assumed, and rolls the whole promotion back.
-        if (tickets.markPromotedToPipeline(ticketId) != 1
-                || tickets.markQuotationIssuedForOrderConfirmation(ticketId) != 1) {
+        // The status compare-and-set runs under the row lock, so a 0 here is unreachable through the
+        // API; it is checked, not assumed, and rolls the whole confirmation back.
+        if (tickets.markQuotationIssuedForOrderConfirmation(ticketId) != 1) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "สถานะดีลถูกเปลี่ยนโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
+        // Provenance only (V193): flips a quotation-first deal's flag; a no-op (0 rows) on an
+        // ordinary deal. Nothing reads the flag any more, so its rowcount is deliberately ignored.
+        tickets.markPromotedToPipeline(ticketId);
         tickets.addEventWithDocument(ticketId, actor.id(), actor.name(),
             TicketEventKind.DEAL_PROMOTED_FROM_QUOTATION, TicketStatus.DRAFT, TicketStatus.QUOTATION_ISSUED,
-            "สร้างดีลจากใบเสนอราคา " + fresh.number(), RelatedDocumentType.QUOTATION, quotationId);
-        // The quotation is the agreed order, so it REPLACES whatever preliminary lines the
-        // container carried (a quotation-only ticket normally has none — the inline create sends
-        // items: [] — but a backfilled one created from the deal page may). Safe at this point: the
-        // ticket is still pre-order (no pricing request can exist on a quotation-only ticket, no
-        // delivery or stock reservation exists before quotation_issued), so nothing references them.
+            "ยืนยันคำสั่งซื้อจากใบเสนอราคา " + fresh.number(), RelatedDocumentType.QUOTATION, quotationId);
+        // The quotation is the agreed order, so it REPLACES whatever preliminary lines the deal
+        // carried. Safe at this point: the deal is still pre-order (status was draft, so no delivery
+        // or stock reservation exists — both key on quotation_issued or later), and the only other
+        // reference to a ticket_item, pricing_request_item.source_ticket_item_id, is ON DELETE SET NULL.
         tickets.replaceItems(ticketId, ticketItemsFromQuotation(fresh));
         ticketService.confirmCustomerForPromotedQuotation(ticketId, actor);
         return promotionResult(ticketId, quotationId);

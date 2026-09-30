@@ -10,15 +10,17 @@ import org.junit.jupiter.api.Test;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
 /**
- * GLA-136 (owner ruling 2026-09-30, V193): every dashboard ticket figure is a PIPELINE figure, so a
- * quotation-only container ticket ({@code sales.ticket.quotation_only = TRUE}) must not be counted —
- * in any scope. Real SQL against real Postgres: the exclusion lives in {@code
- * DashboardRepository#whereTicketScope}'s WHERE root, which only the database can evaluate.
+ * Quotation ↔ deal linking, slice 1 (IA §7, owner decision 2026-09-30): the GLA-136 "hide a
+ * quotation-first deal" rule is REVERSED. A deal created from {@code /quotations/new}
+ * ({@code sales.ticket.quotation_only = TRUE}, V193 — now provenance only) is a real pipeline deal,
+ * so every dashboard ticket figure COUNTS it, in every scope. Real SQL against real Postgres: the
+ * figures come from {@code DashboardRepository#whereTicketScope}'s WHERE root, which only the
+ * database can evaluate.
  *
- * <p>Wrong-way-round: each scope holds one pipeline draft and one quotation-only draft by the same
- * rep in the same division, and the assertion is that the quotation-only one is NOT counted.
+ * <p>Each scope holds one ordinary draft and one quotation-first draft by the same rep in the same
+ * division; the assertion is that BOTH are counted (the GLA-136 version asserted 1).
  */
-class DashboardQuotationOnlyExclusionIntegrationTest extends AbstractPostgresIntegrationTest {
+class DashboardQuotationFirstDealCountsIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final LocalDate MONTH_START = LocalDate.of(2026, 9, 1);
     private static final OffsetDateTime OVERDUE_BEFORE = OffsetDateTime.parse("2026-09-27T09:00:00+07:00");
 
@@ -37,33 +39,33 @@ class DashboardQuotationOnlyExclusionIntegrationTest extends AbstractPostgresInt
             VALUES ('EMP-136', 'EMP-136', :divisionId, TRUE) RETURNING employee_id
             """, Map.of("divisionId", divisionId), Number.class).longValue();
         insertDraftTicket("PR-136-PIPE", false);
-        insertDraftTicket("PR-136-QONLY", true);
+        insertDraftTicket("PR-136-QFIRST", true);
     }
 
     @Test
-    void allScope_countsOnlyThePipelineDraft() {
+    void allScope_countsTheQuotationFirstDeal() {
         TicketSummaryDto all = repository.tickets(DashboardQueryScope.all(), MONTH_START, OVERDUE_BEFORE);
-        assertThat(all.total()).isEqualTo(1);
-        assertThat(all.draft()).isEqualTo(1);
-        assertThat(all.totalOpen()).isEqualTo(1);
+        assertThat(all.total()).isEqualTo(2);
+        assertThat(all.draft()).isEqualTo(2);
+        assertThat(all.totalOpen()).isEqualTo(2);
     }
 
     @Test
-    void divisionScope_countsOnlyThePipelineDraft() {
+    void divisionScope_countsTheQuotationFirstDeal() {
         TicketSummaryDto division = repository.tickets(DashboardQueryScope.division(divisionId), MONTH_START,
             OVERDUE_BEFORE);
-        assertThat(division.total()).isEqualTo(1);
+        assertThat(division.total()).isEqualTo(2);
     }
 
     @Test
-    void selfScope_countsOnlyThePipelineDraft() {
+    void selfScope_countsTheQuotationFirstDeal() {
         TicketSummaryDto self = repository.tickets(DashboardQueryScope.self(repId), MONTH_START, OVERDUE_BEFORE);
-        assertThat(self.total()).isEqualTo(1);
+        assertThat(self.total()).isEqualTo(2);
     }
 
-    /** Positive control: once the container is promoted (flag cleared), it counts again. */
+    /** The provenance flag has no bearing on the figure: clearing it changes nothing. */
     @Test
-    void afterPromotion_theTicketCountsAgain() {
+    void theProvenanceFlag_doesNotChangeTheFigure() {
         jdbc.update("UPDATE sales.ticket SET quotation_only = FALSE", Map.of());
         assertThat(repository.tickets(DashboardQueryScope.all(), MONTH_START, OVERDUE_BEFORE).total()).isEqualTo(2);
     }

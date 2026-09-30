@@ -3857,6 +3857,36 @@ function mockThaiMoney(amount) {
 //     rendering of it is covered by UpdateStageModal.test.jsx driving a hand-built payload.
 //
 // Mirrors TicketService.stageDecisions / requireStageMoveAllowed (backend ticket/).
+
+// Mirrors DealRoute (backend ticket/DealRoute.java) — the PARTY route per entry channel.
+// ⚠️ Mirror only: route ENFORCEMENT is proved against the real Java service by
+// DealRouteGateIntegrationTest, never here (CLAUDE.md: a mock can validate plumbing, never an
+// algorithm it mirrors). This exists so the feature is VISIBLE in mock mode and so a mock-driven
+// test cannot pass vacuously by seeing every stage as on-route.
+// UNSPECIFIED / unknown / absent have an EMPTY set on purpose: legacy and quotation-first deals
+// must never be gated (design §13.1c) — there is no in-portal remedy for them.
+const MOCK_OFF_ROUTE_STAGES = {
+  DESIGNER_LED: [],
+  OWNER_DIRECT: ['QUOTE_DESIGN_SIDE'],
+  BUYER_DIRECT: ['QUOTE_DESIGN_SIDE', 'QUOTE_OWNER', 'OWNER_SIGNOFF', 'AWAITING_BUYER'],
+};
+
+const MOCK_ENTRY_CHANNEL_PHRASE = {
+  DESIGNER_LED: 'ผู้ออกแบบนำดีล',
+  OWNER_DIRECT: 'เจ้าของติดต่อโดยตรง',
+  BUYER_DIRECT: 'ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง',
+};
+
+function mockIsOnRoute(entryChannel, stage) {
+  return !(MOCK_OFF_ROUTE_STAGES[entryChannel] ?? []).includes(stage);
+}
+
+/** Mirrors DealRoute.refusalMessage — names the channel, the stage BY DISPLAY NUMBER, and the remedy. */
+function mockRouteRefusal(entryChannel, stage) {
+  const no = DEAL_STAGE_CATALOG.stages.find((s) => s.code === stage)?.no ?? '';
+  return `ดีลนี้เป็น${MOCK_ENTRY_CHANNEL_PHRASE[entryChannel] ?? 'ดีลที่ระบุช่องทางไว้'}`
+    + ` — ขั้นที่ ${no} ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน`;
+}
 /**
  * The stages a manual move is closed to in mock mode — a literal mirror of the four
  * `DealStage.X.equals(targetStage)` guards in TicketService.requireStageFactsHold, NOT a
@@ -3942,6 +3972,12 @@ function mockStageDecisions(ticket, user) {
       // The stub, not a copy of requireStageFactsHold — see the block comment above.
       blockedReason = `เลื่อนไปขั้นตอน ${code} ไม่ได้: ขั้นตอนนี้อัปเดตอัตโนมัติจากขั้นตอนของดีล`
         + ' (โหมดจำลองไม่รองรับการตั้งค่าด้วยมือ)';
+    } else if (!mockIsOnRoute(ticket.entryChannel, code)) {
+      // Rung 6 — the deal's entry-channel route. AFTER the fact gate on purpose: a deal missing
+      // its deposit must report the FACT gate, not blame the route. Tests the TARGET only, never
+      // ticket.salesStage — a deal may legitimately be SITTING on an off-route stage after its
+      // channel was corrected, and gating the current stage would strand it.
+      blockedReason = mockRouteRefusal(ticket.entryChannel, code);
     } else if (dealStageIndex(code) > dealStageIndex(ticket.salesStage)) {
       const sinceIso = dealLastStageChangeAt(ticket.events, ticket.createdAt);
       const hasRecentActivity = dealHasActivitySince(dealActivitiesForTicket(ticket.id), sinceIso);
@@ -3950,7 +3986,8 @@ function mockStageDecisions(ticket, user) {
       }
     }
     // requiresReason is deliberately always false here — see the block comment above.
-    return { stage: code, no, allowed: blockedReason === null, requiresReason: false, blockedReason };
+    return { stage: code, no, allowed: blockedReason === null, requiresReason: false, blockedReason,
+      onRoute: mockIsOnRoute(ticket.entryChannel, code) };
   });
 }
 

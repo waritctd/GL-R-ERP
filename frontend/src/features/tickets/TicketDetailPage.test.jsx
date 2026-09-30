@@ -7,6 +7,7 @@ import { TicketDetailPage } from './TicketDetailPage.jsx';
 import { ITEM_FIELD_META, missingQtyMessage } from './ticketItemFields.jsx';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
+import { DEAL_STAGE_CATALOG } from '../../data/dealStageCatalog.js';
 
 globalThis.React = React;
 
@@ -42,6 +43,8 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         // DealStagePanel's own onUpdateStage prop — see the "stage-advance
         // readiness travels with เลื่อนไป" describe block.
         updateStage: vi.fn(),
+        // แก้ช่องทางดีล (EntryChannelFix): the remedy for the route gate's "— แก้ช่องทางดีลก่อน" refusal.
+        setEntryChannel: vi.fn(),
         revision: vi.fn(),
         editItems: vi.fn(),
         downloadQuotationXlsx: vi.fn(),
@@ -3736,6 +3739,194 @@ describe('TicketDetailPage', () => {
       fireEvent.click(screen.getByTestId('ticket-primary-action'));
       fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'ยืนยันคำสั่งซื้อ' }));
       await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'ดีลไม่ได้อยู่ในสถานะ ACTIVE'));
+    });
+  });
+
+  // A deal follows a ROUTE fixed by its entry channel. The overflow menu's "เลื่อนไป" target was
+  // computed with the route-BLIND nextStageIn, so on an owner-direct deal at S3 it named S4
+  // (เสนอราคาผู้ออกแบบ) — a stage the backend refuses with a 409 (DealRoute). It now steps over
+  // off-route stages via nextOnRoute, reading the server's per-stage `onRoute` verdict.
+  //
+  // Two server shapes are pinned, deliberately:
+  //   * FAITHFUL — TicketService.addStageActions advertises ADVANCE_STAGE only for stages whose
+  //     decision is `allowed`, and DealRoute makes an off-route stage `allowed:false`. Route-blind,
+  //     the target (S4) is then not advertised at all, so the item silently DISAPPEARS and the rep
+  //     has no way to advance from S3.
+  //   * LAX — a server/mock that advertises ADVANCE_STAGE for the off-route stage too. Route-blind,
+  //     the item appears and names the refused stage: the "invites a click it is about to reject"
+  //     case.
+  describe('overflow เลื่อนไป follows the deal route', () => {
+    const OFF_ROUTE = {
+      DESIGNER_LED: [],
+      OWNER_DIRECT: ['QUOTE_DESIGN_SIDE'],
+      BUYER_DIRECT: ['QUOTE_DESIGN_SIDE', 'QUOTE_OWNER', 'OWNER_SIGNOFF', 'AWAITING_BUYER'],
+    };
+    const ROUTE_NAME = {
+      QUOTE_DESIGN_SIDE: 'เสนอราคาผู้ออกแบบ',
+      QUOTE_OWNER: 'เสนอราคาเจ้าของโครงการ',
+      QUOTE_BUYER: 'เสนอราคาผู้ซื้อ/ผู้รับเหมา',
+    };
+
+    function routeActions({ channel, salesStage, lax = false }) {
+      const off = new Set(OFF_ROUTE[channel] ?? []);
+      const stageDecisions = DEAL_STAGE_CATALOG.stages.map((stage) => {
+        const onRoute = !off.has(stage.code);
+        return {
+          stage: stage.code,
+          no: stage.no,
+          allowed: stage.code !== salesStage && (onRoute || lax),
+          requiresReason: false,
+          blockedReason: onRoute || lax ? null : 'ขั้นตอนนี้ไม่อยู่ในเส้นทางของดีลนี้',
+          onRoute,
+        };
+      });
+      return {
+        currentState: {
+          lifecycle: 'ACTIVE', salesStage, paymentStatus: null, fulfillmentStatus: null, status: 'price_proposed',
+        },
+        availableActions: [
+          ...stageDecisions.filter((d) => d.allowed).map((d) => ({ action: 'ADVANCE_STAGE', targetStage: d.stage })),
+          { action: 'UPDATE_STAGE' },
+        ],
+        stageDecisions,
+      };
+    }
+
+    async function openMenuItem({ channel, salesStage, lax }) {
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({ summary: { salesStage, entryChannel: channel, nextFollowUpAt: '2026-07-15' } }),
+      });
+      api.tickets.actions.mockResolvedValue(routeActions({ channel, salesStage, lax }));
+      api.tickets.listActivities.mockResolvedValue({
+        items: [{
+          id: 1, ticketId: 701, activityDate: '2026-07-03', kind: 'CALL', note: 'โทรติดตาม',
+          createdById: 9, createdByName: 'CEO ทดสอบ', createdAt: '2026-07-03T09:00:00.000Z',
+        }],
+      });
+      api.tickets.updateStage.mockResolvedValue({});
+      renderTicketDetailPage(ceoUser);
+      fireEvent.click(await screen.findByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
+      return screen.findByTestId('deal-stage-advance');
+    }
+
+    it.each([false, true])('owner-direct at SPEC_APPROVED offers S5, not S4 (lax server: %s)', async (lax) => {
+      const item = await openMenuItem({ channel: 'OWNER_DIRECT', salesStage: 'SPEC_APPROVED', lax });
+      expect(item.textContent).toContain(`เลื่อนไป: ${ROUTE_NAME.QUOTE_OWNER}`);
+      expect(item.textContent).not.toContain(ROUTE_NAME.QUOTE_DESIGN_SIDE);
+    });
+
+    it.each([false, true])('buyer-direct at SPEC_APPROVED offers S8, not S4 (lax server: %s)', async (lax) => {
+      const item = await openMenuItem({ channel: 'BUYER_DIRECT', salesStage: 'SPEC_APPROVED', lax });
+      expect(item.textContent).toContain(`เลื่อนไป: ${ROUTE_NAME.QUOTE_BUYER}`);
+      expect(item.textContent).not.toContain(ROUTE_NAME.QUOTE_DESIGN_SIDE);
+      expect(item.textContent).not.toContain(ROUTE_NAME.QUOTE_OWNER);
+    });
+
+    it('designer-led at SPEC_APPROVED still offers S4 (majority-route regression guard)', async () => {
+      const item = await openMenuItem({ channel: 'DESIGNER_LED', salesStage: 'SPEC_APPROVED' });
+      expect(item.textContent).toContain(`เลื่อนไป: ${ROUTE_NAME.QUOTE_DESIGN_SIDE}`);
+    });
+
+    it('an UNSPECIFIED / absent-channel deal at SPEC_APPROVED still offers S4', async () => {
+      const item = await openMenuItem({ channel: 'UNSPECIFIED', salesStage: 'SPEC_APPROVED' });
+      expect(item.textContent).toContain(`เลื่อนไป: ${ROUTE_NAME.QUOTE_DESIGN_SIDE}`);
+    });
+
+    it('the advance click sends the ON-route stage, never the off-route one', async () => {
+      const item = await openMenuItem({ channel: 'OWNER_DIRECT', salesStage: 'SPEC_APPROVED', lax: true });
+      fireEvent.click(item);
+      await waitFor(() => expect(api.tickets.updateStage).toHaveBeenCalledWith(701, { stage: 'QUOTE_OWNER' }));
+      expect(api.tickets.updateStage).not.toHaveBeenCalledWith(701, { stage: 'QUOTE_DESIGN_SIDE' });
+    });
+
+    it('the S3 wording in the menu follows the route too (owner-direct at PRESENTATION -> เจ้าของตกลงตามสเปคแล้ว)', async () => {
+      const item = await openMenuItem({ channel: 'OWNER_DIRECT', salesStage: 'PRESENTATION' });
+      expect(item.textContent).toContain('เลื่อนไป: เจ้าของตกลงตามสเปคแล้ว');
+      expect(item.textContent).not.toContain('ผู้ออกแบบอนุมัติสเปค');
+    });
+  });
+
+  // The gate refuses an off-route stage with "… — แก้ช่องทางดีลก่อน", and the control that answered it
+  // (EntryChannelControl) was deleted by GLA-156. EntryChannelFix puts it back where the refusal is
+  // read. Driven end to end here so the WIRING is pinned, not just the pieces: the advertisement
+  // gates it, the click reaches api.tickets.setEntryChannel, and the ticket + actions the rep is
+  // looking at refresh WITHOUT a reload — the route, the off-route group and the ribbon follow.
+  describe('แก้ช่องทางดีล — the remedy for an off-route refusal', () => {
+    const OWNER_OFF = new Set(['QUOTE_DESIGN_SIDE']);
+    const FIRST = { action: 'SET_ENTRY_CHANNEL', kind: 'policy', label: 'ตั้งค่า entry channel', requiredFields: ['value'] };
+    const STATED = { action: 'SET_ENTRY_CHANNEL', kind: 'policy', label: 'ตั้งค่า entry channel', requiredFields: ['value', 'note'] };
+
+    function actionsFor(off, extra) {
+      const stageDecisions = DEAL_STAGE_CATALOG.stages.map((stage) => ({
+        stage: stage.code,
+        no: stage.no,
+        allowed: stage.code !== 'SPEC_APPROVED' && !off.has(stage.code),
+        requiresReason: false,
+        blockedReason: off.has(stage.code)
+          ? 'ดีลนี้เป็นเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน'
+          : null,
+        onRoute: !off.has(stage.code),
+      }));
+      return {
+        currentState: {
+          lifecycle: 'ACTIVE', salesStage: 'SPEC_APPROVED', paymentStatus: null, fulfillmentStatus: null, status: 'price_proposed',
+        },
+        availableActions: [{ action: 'UPDATE_STAGE' }, ...extra],
+        stageDecisions,
+      };
+    }
+
+    async function openSteps(extra) {
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({ summary: { salesStage: 'SPEC_APPROVED', entryChannel: 'OWNER_DIRECT', nextFollowUpAt: '2026-07-15' } }),
+      });
+      api.tickets.actions.mockResolvedValue(actionsFor(OWNER_OFF, extra));
+      api.tickets.listActivities.mockResolvedValue({ items: [] });
+      renderTicketDetailPage(ceoUser);
+      fireEvent.click(await screen.findByRole('button', { name: /ดูขั้นตอนทั้งหมด/ }));
+      return screen.findByTestId('off-route-group');
+    }
+
+    it('shows nothing when the server did not advertise SET_ENTRY_CHANNEL', async () => {
+      const group = await openSteps([]);
+      expect(within(group).queryByRole('button', { name: /แก้ช่องทางดีล/ })).toBeNull();
+      expect(api.tickets.setEntryChannel).not.toHaveBeenCalled();
+    });
+
+    it('a first correction needs no note: it calls the API, then the route refreshes without a reload', async () => {
+      const group = await openSteps([FIRST]);
+      // What the server answers once the channel is corrected: the new ticket, and — on the refetch —
+      // a route with nothing off it.
+      api.tickets.setEntryChannel.mockResolvedValue({
+        ticket: buildTicket({ summary: { salesStage: 'SPEC_APPROVED', entryChannel: 'DESIGNER_LED', nextFollowUpAt: '2026-07-15' } }),
+      });
+      api.tickets.actions.mockResolvedValue(actionsFor(new Set(), [FIRST]));
+      const before = api.tickets.actions.mock.calls.length;
+
+      fireEvent.click(within(group).getByRole('button', { name: /แก้ช่องทางดีล/ }));
+      expect(screen.queryByTestId('entry-channel-fix-reason')).toBeNull();
+      fireEvent.click(screen.getByRole('radio', { name: /ผู้ออกแบบนำดีล/ }));
+      fireEvent.click(screen.getByRole('button', { name: 'บันทึกช่องทางใหม่' }));
+
+      await waitFor(() => expect(api.tickets.setEntryChannel).toHaveBeenCalledWith(701, { value: 'DESIGNER_LED', note: null }));
+      await waitFor(() => expect(api.tickets.actions.mock.calls.length).toBeGreaterThan(before));
+      await waitFor(() => expect(screen.queryByTestId('off-route-group')).toBeNull());
+      expect(screen.getByTestId('deal-route-line').textContent).toContain('ผู้ออกแบบนำดีล');
+    });
+
+    it('changing a stated channel asks for the reason the server listed, and sends it', async () => {
+      const group = await openSteps([STATED]);
+      api.tickets.setEntryChannel.mockResolvedValue({
+        ticket: buildTicket({ summary: { salesStage: 'SPEC_APPROVED', entryChannel: 'DESIGNER_LED', nextFollowUpAt: '2026-07-15' } }),
+      });
+      fireEvent.click(within(group).getByRole('button', { name: /แก้ช่องทางดีล/ }));
+      fireEvent.click(screen.getByRole('radio', { name: /ผู้ออกแบบนำดีล/ }));
+      expect(screen.getByRole('button', { name: 'บันทึกช่องทางใหม่' }).disabled).toBe(true);
+      fireEvent.change(screen.getByTestId('entry-channel-fix-reason'), { target: { value: 'มีผู้ออกแบบเข้ามาร่วมจริง' } });
+      fireEvent.click(screen.getByRole('button', { name: 'บันทึกช่องทางใหม่' }));
+      await waitFor(() => expect(api.tickets.setEntryChannel).toHaveBeenCalledWith(701, {
+        value: 'DESIGNER_LED', note: 'มีผู้ออกแบบเข้ามาร่วมจริง',
+      }));
     });
   });
 });

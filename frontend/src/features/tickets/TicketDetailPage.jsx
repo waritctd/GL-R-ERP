@@ -57,7 +57,7 @@ import { DealStagePanel } from './DealStagePanel.jsx';
 import { DealStateHeader } from './DealStateHeader.jsx';
 import { DealTrackingPanel } from './DealTrackingPanel.jsx';
 import { visibleSections } from './salesViewScope.js';
-import { nextStageIn, useStageCatalog } from './stageCatalog.js';
+import { nextOnRoute, useStageCatalog } from './stageCatalog.js';
 import {
   resolveTicketDetailTab, TICKET_DETAIL_TABS, visibleTicketDetailTabIds,
 } from './ticketDetailTabs.js';
@@ -1305,7 +1305,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // through the single-arg version. Checked directly against
   // `availableActions` here so this stays byte-identical to DealStagePanel's
   // gate, not just same-named.
-  const next = isActiveLifecycle && !lost ? nextStageIn(stageCatalog, summary.salesStage) : null;
+  const next = isActiveLifecycle && !lost ? nextOnRoute(stageCatalog, summary.salesStage, stageDecisions) : null;
   const hasAdvanceStageAction = Boolean(next) && availableActions.some(
     (item) => item.action === 'ADVANCE_STAGE' && item.targetStage === next.code,
   );
@@ -1379,7 +1379,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     // same fix, so the item doesn't invite a click it's about to reject.
     canAdvance && {
       key: 'advanceStage',
-      label: `เลื่อนไป: ${next ? dealStageLabel(next.code).label : ''}`,
+      label: `เลื่อนไป: ${next ? dealStageLabel(next.code, summary.entryChannel).label : ''}`,
       icon: 'chevronRight',
       disabled: !readyToAdvance || actionLoading,
       disabledReason: !readyToAdvance ? STAGE_ADVANCE_GATE_HINT : undefined,
@@ -1599,6 +1599,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         onDormant={(payload) => doAction(() => api.tickets.dormant(ticketId, payload), 'พัก dormant แล้ว')}
         onResume={(payload) => doAction(() => api.tickets.resume(ticketId, payload), 'ดำเนินการต่อแล้ว')}
         onSetTenderRequirement={(payload) => doAction(() => api.tickets.setTenderRequirement(ticketId, payload), 'บันทึกสถานะประมูลแล้ว')}
+        onSetEntryChannel={(payload) => doAction(() => api.tickets.setEntryChannel(ticketId, payload), 'บันทึกช่องทางรับงานแล้ว')}
         docActions={(can.downloadRemainingInvoice || (sections.quotation && latestQuotation)) ? (
           <>
             {/* Import/account (role-scoped views, Phase A): the view-only

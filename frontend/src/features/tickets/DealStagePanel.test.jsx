@@ -1,6 +1,6 @@
 import React from 'react';
 import {
-  act, fireEvent, render, screen, waitFor,
+  act, fireEvent, render, screen, waitFor, within,
 } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it, vi } from 'vitest';
@@ -377,7 +377,7 @@ describe('DealStagePanel headline names the counterparty', () => {
     expect(screen.queryByText('เจ้าของติดต่อโดยตรง')).toBeNull();
   });
 
-  it('never renders a control, even when the server offers SET_ENTRY_CHANNEL', () => {
+  it('renders no permanent channel control on the default view, even when the server offers SET_ENTRY_CHANNEL', () => {
     renderPanel({
       summary: baseSummary({ salesStage: 'QUOTE_DESIGN_SIDE', entryChannel: 'BUYER_DIRECT' }),
       availableActions: owner,
@@ -499,5 +499,305 @@ describe('DealStagePanel guided advance (readiness gate)', () => {
       onUpdateStage: vi.fn(),
     });
     expect(screen.queryByTestId('guided-advance-open')).toBeNull();
+  });
+});
+
+/**
+ * Route-aware navigation (deal-route-staging). The deal's entry channel decides which stages it
+ * visits; the server serves the verdict per stage as `onRoute` on stageDecisions (StageDecisionDto)
+ * and `entryChannel` on the summary. These tests build both by hand and pass them DIRECTLY as
+ * props — never through mockApi.js, which does not emit `onRoute`: a mock-driven test would see
+ * every stage on-route and pass vacuously.
+ */
+describe('DealStagePanel route awareness', () => {
+  const OWNER_OFF = ['QUOTE_DESIGN_SIDE'];
+  const BUYER_OFF = ['QUOTE_DESIGN_SIDE', 'QUOTE_OWNER', 'OWNER_SIGNOFF', 'AWAITING_BUYER'];
+  const routeDecisions = (off) => catalog.stages.map((stage, index) => ({
+    stage: stage.code,
+    no: index + 1,
+    allowed: !off.includes(stage.code),
+    requiresReason: false,
+    blockedReason: off.includes(stage.code)
+      ? `ดีลนี้ไม่ผ่านเส้นทาง — ขั้นที่ ${index + 1} ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน`
+      : null,
+    onRoute: !off.includes(stage.code),
+  }));
+  const routeLine = () => screen.queryByTestId('deal-route-line');
+
+  describe('route line', () => {
+    it.each([
+      ['DESIGNER_LED', [], 'QUOTE_BUYER', 'เส้นทาง · ผู้ออกแบบนำดีล', 'ขั้นที่ 8 จาก 15'],
+      ['OWNER_DIRECT', OWNER_OFF, 'SPEC_APPROVED', 'เส้นทาง · เจ้าของติดต่อโดยตรง', 'ขั้นที่ 3 จาก 14'],
+      ['BUYER_DIRECT', BUYER_OFF, 'QUOTE_BUYER', 'เส้นทาง · ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง', 'ขั้นที่ 4 จาก 11'],
+    ])('%s names the route and the honest position', (channel, off, salesStage, name, position) => {
+      renderPanel({
+        summary: baseSummary({ salesStage, entryChannel: channel }),
+        stageDecisions: routeDecisions(off),
+      });
+      expect(routeLine()).not.toBeNull();
+      expect(routeLine().textContent).toContain(name);
+      expect(routeLine().textContent).toContain(position);
+    });
+
+    // Never invent a route: UNSPECIFIED, an unknown value and an absent field all render NOTHING.
+    it.each([
+      ['UNSPECIFIED', { entryChannel: 'UNSPECIFIED' }],
+      ['an unknown value', { entryChannel: 'SOMETHING_NEW' }],
+      ['null', { entryChannel: null }],
+      ['absent', {}],
+    ])('renders no route line at all when the channel is %s', (_name, extra) => {
+      renderPanel({ summary: baseSummary({ salesStage: 'SPEC_APPROVED', ...extra }) });
+      expect(routeLine()).toBeNull();
+      expect(screen.queryByText(/เส้นทาง ·/)).toBeNull();
+    });
+  });
+
+  it('threads the route to PhaseSummary: buyer-direct at S8 reads ขั้นที่ 4 จาก 11, not 8 จาก 15', () => {
+    renderPanel({
+      summary: baseSummary({ salesStage: 'QUOTE_BUYER', entryChannel: 'BUYER_DIRECT' }),
+      stageDecisions: routeDecisions(BUYER_OFF),
+    });
+    // The bar's own text (PhaseSummary), distinct from the route line's longer sentence.
+    expect(screen.getByText('ขั้นที่ 4 จาก 11')).not.toBeNull();
+    expect(screen.queryByText('ขั้นที่ 8 จาก 15')).toBeNull();
+  });
+
+  describe('ถัดไป follows the route', () => {
+    const nextText = () => screen.getByTestId('deal-stage-next').textContent;
+
+    it('owner-direct at S3 offers S5 (เสนอราคาเจ้าของโครงการ), not S4', () => {
+      renderPanel({
+        summary: baseSummary({ salesStage: 'SPEC_APPROVED', entryChannel: 'OWNER_DIRECT' }),
+        stageDecisions: routeDecisions(OWNER_OFF),
+      });
+      expect(nextText()).toContain('5. เสนอราคาเจ้าของโครงการ');
+      expect(nextText()).not.toContain('เสนอราคาผู้ออกแบบ');
+    });
+
+    it('buyer-direct at S3 offers S8 (เสนอราคาผู้ซื้อ/ผู้รับเหมา)', () => {
+      renderPanel({
+        summary: baseSummary({ salesStage: 'SPEC_APPROVED', entryChannel: 'BUYER_DIRECT' }),
+        stageDecisions: routeDecisions(BUYER_OFF),
+      });
+      expect(nextText()).toContain('8. เสนอราคาผู้ซื้อ/ผู้รับเหมา');
+    });
+
+    it('designer-led at S3 still offers S4 (majority-route regression guard)', () => {
+      renderPanel({
+        summary: baseSummary({ salesStage: 'SPEC_APPROVED', entryChannel: 'DESIGNER_LED' }),
+        stageDecisions: routeDecisions([]),
+      });
+      expect(nextText()).toContain('4. เสนอราคาผู้ออกแบบ');
+    });
+
+    it('the guided-advance opener names the ROUTE\'s next stage when the readiness gate is the only block', () => {
+      const gated = routeDecisions(OWNER_OFF).map((decision) => (
+        decision.stage === 'QUOTE_OWNER'
+          ? { ...decision, allowed: false, blockedReason: STAGE_ADVANCE_GATE_MESSAGE }
+          : decision
+      ));
+      renderPanel({
+        summary: baseSummary({ id: 601, salesStage: 'SPEC_APPROVED', entryChannel: 'OWNER_DIRECT' }),
+        availableActions: [],
+        stageDecisions: gated,
+      });
+      expect(screen.getByTestId('guided-advance-open').textContent).toContain('5. เสนอราคาเจ้าของโครงการ');
+    });
+  });
+
+  describe('an off-route target is never one click away', () => {
+    it('openAdvance() does not move to S4 on an owner-direct deal even if the server listed ADVANCE_STAGE for it', () => {
+      noopHandlers.onUpdateStage.mockClear();
+      const { ref } = renderPanelWithRef({
+        summary: baseSummary({ salesStage: 'SPEC_APPROVED', entryChannel: 'OWNER_DIRECT' }),
+        stageDecisions: routeDecisions(OWNER_OFF),
+        availableActions: [{ action: 'ADVANCE_STAGE', targetStage: 'QUOTE_DESIGN_SIDE' }],
+      });
+      act(() => ref.current.openAdvance());
+      expect(noopHandlers.onUpdateStage).not.toHaveBeenCalled();
+    });
+
+    it('openAdvance() moves to the ON-route S5 when that is the stage the server offers', () => {
+      noopHandlers.onUpdateStage.mockClear();
+      const { ref } = renderPanelWithRef({
+        summary: baseSummary({ salesStage: 'SPEC_APPROVED', entryChannel: 'OWNER_DIRECT' }),
+        stageDecisions: routeDecisions(OWNER_OFF),
+        availableActions: [{ action: 'ADVANCE_STAGE', targetStage: 'QUOTE_OWNER' }],
+      });
+      act(() => ref.current.openAdvance());
+      expect(noopHandlers.onUpdateStage).toHaveBeenCalledWith({ stage: 'QUOTE_OWNER' });
+    });
+  });
+
+  describe('S3 wording follows the channel', () => {
+    it.each([
+      ['OWNER_DIRECT', 'เจ้าของตกลงตามสเปคแล้ว'],
+      ['BUYER_DIRECT', 'ผู้ซื้อ/ผู้รับเหมาตกลงตามสเปคแล้ว'],
+      ['DESIGNER_LED', 'ผู้ออกแบบอนุมัติสเปค'],
+      ['UNSPECIFIED', 'ผู้ออกแบบอนุมัติสเปค'],
+      [undefined, 'ผู้ออกแบบอนุมัติสเปค'],
+    ])('the headline at S3 for %s reads %s', (channel, wording) => {
+      renderPanel({ summary: baseSummary({ salesStage: 'SPEC_APPROVED', entryChannel: channel }) });
+      expect(screen.getByText(wording)).not.toBeNull();
+    });
+
+    it('also words S3 inside the ON_HOLD branch, which builds its own label', () => {
+      renderPanel({
+        summary: baseSummary({ salesStage: 'SPEC_APPROVED', lifecycle: 'ON_HOLD', entryChannel: 'OWNER_DIRECT' }),
+      });
+      expect(screen.getByText(/เจ้าของตกลงตามสเปคแล้ว/)).not.toBeNull();
+      expect(screen.queryByText(/ผู้ออกแบบอนุมัติสเปค/)).toBeNull();
+    });
+  });
+
+  describe('ดูขั้นตอนทั้งหมด is threaded with the route', () => {
+    it('buyer-direct: the expander shows the eleven-pip ribbon and the labelled off-route group', () => {
+      renderPanel({
+        summary: baseSummary({ salesStage: 'QUOTE_BUYER', entryChannel: 'BUYER_DIRECT' }),
+        stageDecisions: routeDecisions(BUYER_OFF),
+      });
+      fireEvent.click(screen.getByRole('button', { name: /ดูขั้นตอนทั้งหมด/ }));
+      expect(screen.getAllByTestId('route-pip')).toHaveLength(11);
+      expect(within(screen.getByTestId('off-route-group')).getByText('ไม่อยู่ในเส้นทางนี้ (4)')).not.toBeNull();
+    });
+
+    it('the expander button counts the route\'s stages, not the catalog\'s', () => {
+      renderPanel({
+        summary: baseSummary({ salesStage: 'QUOTE_BUYER', entryChannel: 'BUYER_DIRECT' }),
+        stageDecisions: routeDecisions(BUYER_OFF),
+      });
+      expect(screen.getByRole('button', { name: 'ดูขั้นตอนทั้งหมด (11 ขั้น)' })).not.toBeNull();
+    });
+
+    it('designer-led / no decisions: the button still says 15 and there is no off-route group', () => {
+      renderPanel({ summary: baseSummary({ salesStage: 'QUOTE_BUYER', entryChannel: 'DESIGNER_LED' }) });
+      fireEvent.click(screen.getByRole('button', { name: /ดูขั้นตอนทั้งหมด/ }));
+      expect(screen.getAllByTestId('route-pip')).toHaveLength(15);
+      expect(screen.queryByTestId('off-route-group')).toBeNull();
+    });
+  });
+});
+
+/**
+ * แก้ช่องทางดีล — the remedy for the route gate's own refusal ("… — แก้ช่องทางดีลก่อน"). GLA-156 took
+ * the standing ช่องทางรับงาน row off this panel on purpose and that stays true: nothing renders on
+ * the default view. The remedy is threaded down to where the refusal is READ — the stepper's
+ * off-route rows and UpdateStageModal's blocked list — and only when the server advertised
+ * SET_ENTRY_CHANNEL. `onRoute` is built by hand (mockApi does not emit it).
+ */
+describe('DealStagePanel แก้ช่องทางดีล wiring', () => {
+  const OWNER_OFF = ['QUOTE_DESIGN_SIDE'];
+  const decisionsOff = (off) => catalog.stages.map((stage, index) => ({
+    stage: stage.code,
+    no: index + 1,
+    allowed: !off.includes(stage.code),
+    requiresReason: false,
+    blockedReason: off.includes(stage.code)
+      ? `ดีลนี้เป็นเจ้าของติดต่อโดยตรง — ขั้นที่ ${index + 1} ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน`
+      : null,
+    onRoute: !off.includes(stage.code),
+  }));
+  const FIRST = { action: 'SET_ENTRY_CHANNEL', kind: 'policy', requiredFields: ['value'] };
+  const STATED = { action: 'SET_ENTRY_CHANNEL', kind: 'policy', requiredFields: ['value', 'note'] };
+  const UPDATE = { action: 'UPDATE_STAGE' };
+  const ownerDeal = () => baseSummary({ salesStage: 'SPEC_APPROVED', entryChannel: 'OWNER_DIRECT' });
+  const toggles = () => screen.queryAllByRole('button', { name: /แก้ช่องทางดีล/ });
+  // Asserts the control exists BEFORE clicking, so a missing remedy fails as an assertion.
+  const firstToggle = () => {
+    expect(toggles().length).toBeGreaterThan(0);
+    return toggles()[0];
+  };
+  const showSteps = () => fireEvent.click(screen.getByRole('button', { name: /ดูขั้นตอนทั้งหมด/ }));
+
+  it('adds nothing to the default view (the GLA-156 diet stands)', () => {
+    renderPanel({
+      summary: ownerDeal(),
+      availableActions: [UPDATE, FIRST],
+      stageDecisions: decisionsOff(OWNER_OFF),
+      onSetEntryChannel: vi.fn(),
+    });
+    expect(toggles()).toHaveLength(0);
+    expect(screen.queryByText(/ช่องทางรับงาน/)).toBeNull();
+  });
+
+  it('puts the remedy on the off-route row once the steps are shown, and saves through the handler', () => {
+    const onSetEntryChannel = vi.fn();
+    renderPanel({
+      summary: ownerDeal(),
+      availableActions: [UPDATE, FIRST],
+      stageDecisions: decisionsOff(OWNER_OFF),
+      onSetEntryChannel,
+    });
+    showSteps();
+    expect(within(screen.getByTestId('off-route-group')).getAllByRole('button', { name: /แก้ช่องทางดีล/ })).toHaveLength(1);
+    fireEvent.click(firstToggle());
+    fireEvent.click(screen.getByRole('radio', { name: /ผู้ออกแบบนำดีล/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกช่องทางใหม่' }));
+    expect(onSetEntryChannel).toHaveBeenCalledWith({ value: 'DESIGNER_LED', note: null });
+  });
+
+  it('renders it nowhere when SET_ENTRY_CHANNEL is not advertised — even with a handler and off-route rows', () => {
+    renderPanel({
+      summary: ownerDeal(),
+      availableActions: [UPDATE],
+      stageDecisions: decisionsOff(OWNER_OFF),
+      onSetEntryChannel: vi.fn(),
+    });
+    showSteps();
+    expect(screen.getByTestId('off-route-group')).toBeTruthy();
+    expect(toggles()).toHaveLength(0);
+  });
+
+  it('asks for the reason only when the server\'s advertisement lists note', () => {
+    const { unmount } = renderPanel({
+      summary: ownerDeal(),
+      availableActions: [UPDATE, FIRST],
+      stageDecisions: decisionsOff(OWNER_OFF),
+      onSetEntryChannel: vi.fn(),
+    });
+    showSteps();
+    fireEvent.click(firstToggle());
+    expect(screen.queryByTestId('entry-channel-fix-reason')).toBeNull();
+    unmount();
+
+    renderPanel({
+      summary: ownerDeal(),
+      availableActions: [UPDATE, STATED],
+      stageDecisions: decisionsOff(OWNER_OFF),
+      onSetEntryChannel: vi.fn(),
+    });
+    showSteps();
+    fireEvent.click(firstToggle());
+    expect(screen.getByTestId('entry-channel-fix-reason')).toBeTruthy();
+  });
+
+  it('is reachable from UpdateStageModal\'s blocked list too, inline inside that one dialog', () => {
+    const onSetEntryChannel = vi.fn();
+    const { ref } = renderPanelWithRef({
+      summary: ownerDeal(),
+      availableActions: [UPDATE, STATED],
+      stageDecisions: decisionsOff(OWNER_OFF),
+      onSetEntryChannel,
+    });
+    act(() => ref.current.openEditStage());
+    fireEvent.click(screen.getByTestId('update-stage-blocked-toggle'));
+    fireEvent.click(within(screen.getByTestId('update-stage-blocked-list')).getByRole('button', { name: /แก้ช่องทางดีล/ }));
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('radio', { name: /ผู้ออกแบบนำดีล/ }));
+    fireEvent.change(screen.getByTestId('entry-channel-fix-reason'), { target: { value: 'มีผู้ออกแบบจริง' } });
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกช่องทางใหม่' }));
+    expect(onSetEntryChannel).toHaveBeenCalledWith({ value: 'DESIGNER_LED', note: 'มีผู้ออกแบบจริง' });
+  });
+
+  it('is absent from UpdateStageModal when not advertised', () => {
+    const { ref } = renderPanelWithRef({
+      summary: ownerDeal(),
+      availableActions: [UPDATE],
+      stageDecisions: decisionsOff(OWNER_OFF),
+      onSetEntryChannel: vi.fn(),
+    });
+    act(() => ref.current.openEditStage());
+    fireEvent.click(screen.getByTestId('update-stage-blocked-toggle'));
+    expect(toggles()).toHaveLength(0);
   });
 });

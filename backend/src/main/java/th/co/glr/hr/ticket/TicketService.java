@@ -752,7 +752,7 @@ public class TicketService {
      * GLA-136 — the SAME customer-confirmation effects as {@link #confirmCustomer} (payment track
      * {@code null -> CUSTOMER_CONFIRMED}, stage auto-advance to {@code ORDER_RECEIVED}), for the
      * ONE caller that has already made its own authorization decision:
-     * {@code DealQuotationService#promoteToDeal}.
+     * {@code DealQuotationService#confirmOrderFromDirectQuotation}.
      *
      * <p><strong>Why a second entry point instead of calling {@link #confirmCustomer}:</strong>
      * that method's gate is sales-role AND deal-owner only. Promotion's audience is wider by owner
@@ -1892,12 +1892,6 @@ public class TicketService {
      */
     private void requireStageMoveAllowed(TicketSummaryDto s, String targetStage, UserPrincipal actor) {
         requireStageWriteAccess(s, targetStage, actor);
-        // GLA-136: a quotation-only container is not in the pipeline, so no stage move is possible
-        // on it by hand — only promotion (DealQuotationService#promoteToDeal) moves it. AFTER the
-        // write-access check on purpose: a caller with no right to touch this deal still gets the
-        // 403, never a 409 that would confirm what kind of ticket it is. Being inside this shared
-        // gate also makes stageDecisions() refuse every target, so the UI offers no stage move.
-        QuotationOnlyTickets.requirePipelineDeal(s);
         // Keyed on the lifecycle, not on lost_reason: since V58 the reason SURVIVES
         // a reopen, so a live reopened deal still carries one. Checked before
         // requireActive so a lost deal gets this specific message.
@@ -1915,6 +1909,19 @@ public class TicketService {
         // the misleading pair "write a note" -> "…now the fact is missing", and would have let a
         // reader mistake the note rule for the thing doing the work.
         requireStageFactsHold(s, targetStage);
+        // Rung 6 of the precedence ladder (design §12.1): the deal's ENTRY-CHANNEL route. Last on
+        // purpose — a deal missing its deposit must report the FACT gate, not blame the route.
+        //
+        // ⚠️ Tests the TARGET only, NEVER s.salesStage(). A deal may legitimately be SITTING on an
+        // off-route stage (it got there before someone corrected the channel); gating the current
+        // stage would strand it with no legal move. Reads the channel off the already-loaded
+        // summary: no repository call may be added to any gate (see stageDecisions' Javadoc — it
+        // would turn one query into fifteen). UNSPECIFIED / DESIGNER_LED / unknown / null have an
+        // EMPTY off-route set, so this is a no-op for them (DealRoute's class Javadoc).
+        if (!DealRoute.isOnRoute(s.entryChannel(), targetStage)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                DealRoute.refusalMessage(s.entryChannel(), targetStage));
+        }
     }
 
     /**
@@ -1985,7 +1992,7 @@ public class TicketService {
             decisions.add(new StageDecisionDto(target, DealStage.displayNoOf(target),
                 blockedReason == null,
                 DealStage.requiresJustification(s.salesStage(), target),
-                blockedReason));
+                blockedReason, DealRoute.isOnRoute(s.entryChannel(), target)));
         }
         return decisions;
     }
@@ -2274,6 +2281,15 @@ public class TicketService {
         if (DealStage.indexOf(targetStage) <= DealStage.indexOf(s.salesStage())) {
             return;
         }
+        // An off-route target is a silent no-op, exactly like a non-forward one above — never a
+        // throw, which would fail an unrelated caller (e.g. quotation creation). Reachable ONLY for
+        // party-axis stages: DealRoute.ROUTE_VARIABLE (S4–S8) is the only set an off-route table
+        // may contain, so an OPERATIONAL advance (ORDER_RECEIVED, DEPOSIT_RECEIVED, PROCUREMENT,
+        // DELIVERY_SCHEDULING, DELIVERED, CLOSED_PAID) can never vanish here with its fact already
+        // written. DealRouteTest pins that invariant; do not weaken it without revisiting this.
+        if (!DealRoute.isOnRoute(s.entryChannel(), targetStage)) {
+            return;
+        }
         tickets.updateSalesStage(s.id(), targetStage);
         tickets.addEvent(s.id(), actor.id(), actor.name(),
             TicketEventKind.STAGE_CHANGED, s.salesStage(), targetStage, "อัตโนมัติจากขั้นตอนของดีล");
@@ -2334,7 +2350,6 @@ public class TicketService {
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireDealOwnership(s, actor);
         requireActive(s);
-        QuotationOnlyTickets.requirePipelineDeal(s); // GLA-136 — see that class's Javadoc
         tickets.updateTenderRequirement(ticketId, value);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.POLICY_CHANGED, s.salesStage(), s.salesStage(),
@@ -2353,7 +2368,6 @@ public class TicketService {
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireDealOwnership(s, actor);
         requireActive(s);
-        QuotationOnlyTickets.requirePipelineDeal(s); // GLA-136 — see that class's Javadoc
         // "Changing a STATED channel needs a reason." Both DESIGNER_LED and UNSPECIFIED count as
         // unstated here and neither requires a note: UNSPECIFIED is the V144 default, and
         // DESIGNER_LED is the pre-V144 default that was never backfilled (V144's data cutoff), so
@@ -2545,9 +2559,10 @@ public class TicketService {
         if (!salesCanEdit) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์แก้ไขรายการสินค้าในสถานะนี้");
         }
-        // GLA-136: a quotation-only container's lines live on its direct quotation; ticket_item is
-        // written from that quotation at promotion, not typed in here beforehand.
-        QuotationOnlyTickets.requirePipelineDeal(s);
+        // Quotation <-> deal linking slice 1: while a LIVE direct quotation exists the deal's lines
+        // live on it (ticket_item is written from it when the order is confirmed), so they are not
+        // typed in here — see DirectQuotationLocks. AFTER the 403 above on purpose.
+        DirectQuotationLocks.requireNoLiveDirectQuotation(tickets, ticketId);
         // Sales editing items (brand/model/qty/etc.) must NOT be able to clobber import's
         // proposed price or CEO's approved/manual price — only proposePrice (import) is
         // allowed to replace pricing wholesale. Merge request items onto the ticket's
