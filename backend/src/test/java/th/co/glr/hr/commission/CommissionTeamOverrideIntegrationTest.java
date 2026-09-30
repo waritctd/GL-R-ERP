@@ -358,8 +358,9 @@ class CommissionTeamOverrideIntegrationTest extends AbstractPostgresIntegrationT
         PayrollCommissionSummaryDto summary = commissionService.payrollReadySummary(MARCH_2027, hrActor);
 
         assertThat(summary.totalTeamOverrideAmount()).isEqualByComparingTo(ZERO2);
-        assertThat(repRow(summary, recipient1).map(SalesRepCommissionSummaryDto::teamOverrideAmount).orElse(ZERO2))
-            .isEqualByComparingTo(ZERO2);
+        // A zero override with nothing else to pay creates NO payroll row for the recipient.
+        assertThat(repRow(summary, recipient1)).isEmpty();
+        assertThat(commissionService.payrollCommissionTotalsByEmployee(MARCH_2027)).doesNotContainKey(recipient1);
     }
 
     @Test
@@ -565,6 +566,22 @@ class CommissionTeamOverrideIntegrationTest extends AbstractPostgresIntegrationT
         assertThat(viaManager.teamOverrideAmount()).isEqualByComparingTo("750.00");
         assertThat(viaCeo.companyCommissionableBase()).isNotNull();
         assertThat(viaCeo.companyCommissionableBase()).isEqualByComparingTo("4000000.00");
+    }
+
+    @Test
+    void monthlySummary_aDisabledGenerationIsTreatedAsNotARecipient_nullBaseAndZeroOverride() {
+        wireService();
+        insertConfig(MARCH_2027, false, "3000000.00", "0.0750", recipient1);
+        seedApproved(repA, TWO_M_EX_VAT, MARCH_2027);
+        seedApproved(repB, TWO_M_EX_VAT, MARCH_2027);
+
+        CommissionMonthlySummaryDto dto = commissionService.monthlySummary(recipient1, MARCH_2027, principal(recipient1, "sales"));
+
+        assertThat(dto.companyCommissionableBase()).isNull();
+        assertThat(dto.teamOverrideThresholdBase()).isNull();
+        assertThat(dto.teamOverrideRatePercent()).isNull();
+        assertThat(dto.teamOverrideAmount()).isNotNull();
+        assertThat(dto.teamOverrideAmount()).isEqualByComparingTo(ZERO2);
     }
 
     @Test
