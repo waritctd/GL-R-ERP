@@ -211,4 +211,23 @@ public record TicketSummaryDto(
             cancelReason, cancelledAt, winProbabilityOverride, designerName, ownerName, buyerName, stale,
             commissionRecorded, reopenedAt, reopenCount, quotationOnly);
     }
+
+    /**
+     * Copy with the customer money totals ({@code amountPayable}, {@code amountPaid},
+     * {@code amountOutstanding}) nulled — every other field unchanged. Applied for the {@code
+     * import} role wherever it receives a summary (owner ruling 2026-09-30: import must not be
+     * handed pricing, and the deal's payable/received totals are the customer price). Null rather
+     * than zero, so a client cannot mistake "not disclosed" for "nothing owed".
+     */
+    public TicketSummaryDto withoutMoney() {
+        return new TicketSummaryDto(id, code, type, title, status, priority, createdById, createdByName,
+            assignedToId, assignedToName, customerName, customerId, projectId, projectName,
+            contactId, contactName, note, createdAt, updatedAt, closedAt, itemCount, hasEdits,
+            paymentStatus, fulfillmentStatus, salesStage, lostReason, lostAt, stageUpdatedAt, lifecycle,
+            tenderRequirement, depositPolicy, depositPolicyReason, entryChannel, billingDate, dueDate,
+            creditTermDays, lastFollowUpAt, nextFollowUpAt, paymentStage, null, null,
+            null, overdue, closeConfirmedAt, closeConfirmedByName, invoiceOnFile,
+            cancelReason, cancelledAt, winProbabilityOverride, designerName, ownerName, buyerName, stale,
+            commissionRecorded, reopenedAt, reopenCount, quotationOnly);
+    }
 }

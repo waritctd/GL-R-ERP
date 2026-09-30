@@ -30,6 +30,7 @@ import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.common.ApiExceptionHandler;
+import th.co.glr.hr.common.PageRequest;
 import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.notification.NotificationRepository;
@@ -45,6 +46,7 @@ import th.co.glr.hr.ticket.TicketEventKind;
 import th.co.glr.hr.ticket.TicketItemDto;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
+import th.co.glr.hr.ticket.TicketSummaryDto;
 
 /**
  * Authorization evidence for the two cost leaks that survived the import per-deal page slice, and
@@ -88,6 +90,11 @@ class ImportCommentAndDocumentAuthzIntegrationTest extends AbstractPostgresInteg
     private static final String CALCED_PRICE = "555555.55";
     private static final String MANUAL_PRICE = "543210.98";
     private static final String STOCK_SALE_PRICE = "432109.87";
+    // Summary money totals (customer payable / received / outstanding): 123456.78 quoted, 45678.90 received.
+    private static final String PAYABLE = "123456.78";
+    private static final String PAID = "45678.90";
+    private static final String OUTSTANDING = "77777.88";
+
     private static final String OVERRIDE_NOTE = "ราคา manual override = 543210.98";
 
     private static final List<String> ATTACH_TYPES = List.of("PO", "SIGNED_QUOTATION", "INVOICE", "OTHER");
@@ -103,6 +110,7 @@ class ImportCommentAndDocumentAuthzIntegrationTest extends AbstractPostgresInteg
     private UserPrincipal importUser;
     private UserPrincipal ceoUser;
     private UserPrincipal hrUser;
+    private UserPrincipal accountUser;
 
     /** Inside import's scope (ORDER_RECEIVED), items carrying real cost data. */
     private long inScopeId;
@@ -133,6 +141,7 @@ class ImportCommentAndDocumentAuthzIntegrationTest extends AbstractPostgresInteg
         importUser = principal(insertEmployee("IMPCD-IMP"), "import");
         ceoUser = principal(insertEmployee("IMPCD-CEO"), "ceo");
         hrUser = principal(insertEmployee("IMPCD-HR"), "hr");
+        accountUser = principal(insertEmployee("IMPCD-ACC"), "account");
 
         inScopeId = insertDealWithCosts("IMPCD-IN", DealStage.ORDER_RECEIVED);
         outOfScopeId = insertDealWithCosts("IMPCD-OUT", DealStage.LEAD_APPROACH);
@@ -197,6 +206,72 @@ class ImportCommentAndDocumentAuthzIntegrationTest extends AbstractPostgresInteg
             assertThat(response.events()).as(actor.role() + " events").extracting(e -> e.kind())
                 .contains(TicketEventKind.PRICE_OVERRIDDEN);
         }
+    }
+
+    // ── Summary money totals: null for import everywhere it receives a TicketSummaryDto ─────────
+
+    @Test
+    void importCommentResponseSummary_hasNoMoneyTotals_butKeepsTheRestOfTheSummary() throws Exception {
+        TicketDto response = ticketService.comment(inScopeId, new CommentRequest("hi"), importUser);
+
+        TicketSummaryDto summary = response.summary();
+        assertThat(summary.amountPayable()).as("amountPayable").isNull();
+        assertThat(summary.amountPaid()).as("amountPaid").isNull();
+        assertThat(summary.amountOutstanding()).as("amountOutstanding").isNull();
+        // Everything import legitimately works with is intact (non-vacuous: a real, populated summary).
+        assertThat(summary.id()).isEqualTo(inScopeId);
+        assertThat(summary.code()).isEqualTo("IMPCD-IN");
+        assertThat(summary.customerName()).isEqualTo("บริษัท ทดสอบ จำกัด");
+        assertThat(summary.salesStage()).isEqualTo(DealStage.ORDER_RECEIVED);
+        String json = new ObjectMapper().findAndRegisterModules().writeValueAsString(response);
+        assertThat(json).doesNotContain(PAYABLE, PAID, OUTSTANDING);
+    }
+
+    @Test
+    void importWorklistRows_haveNoMoneyTotals_onBothListPaths() {
+        // Precondition (wrong-way-round control): the same deal DOES carry money for the ceo.
+        TicketSummaryDto asCeo = pageRow(ceoUser, inScopeId);
+        assertThat(asCeo.amountPayable()).isEqualByComparingTo(PAYABLE);
+
+        TicketSummaryDto paged = pageRow(importUser, inScopeId);
+        assertThat(paged.code()).isEqualTo("IMPCD-IN");
+        assertThat(paged.amountPayable()).as("listPage amountPayable").isNull();
+        assertThat(paged.amountPaid()).as("listPage amountPaid").isNull();
+        assertThat(paged.amountOutstanding()).as("listPage amountOutstanding").isNull();
+
+        TicketSummaryDto plain = ticketService.list(null, importUser).stream()
+            .filter(r -> r.id() == inScopeId).findFirst().orElseThrow();
+        assertThat(plain.amountPayable()).as("list amountPayable").isNull();
+        assertThat(plain.amountPaid()).as("list amountPaid").isNull();
+        assertThat(plain.amountOutstanding()).as("list amountOutstanding").isNull();
+    }
+
+    /** The strip must not disturb the worklist itself: same rows, same total, still scoped. */
+    @Test
+    void importWorklistStillListsTheInScopeDealAndNotTheOutOfScopeOne() {
+        var page = ticketService.listPage(null, importUser, PageRequest.resolve(0, 100));
+
+        assertThat(page.items()).extracting(TicketSummaryDto::id).contains(inScopeId).doesNotContain(outOfScopeId);
+        assertThat(page.total()).isEqualTo(page.items().size());
+    }
+
+    /** Positive controls: the strip is import-only. */
+    @Test
+    void otherRolesStillSeeTheMoneyTotals() {
+        for (UserPrincipal actor : List.of(ceoUser, owner, salesManager)) {
+            TicketSummaryDto row = pageRow(actor, inScopeId);
+            assertThat(row.amountPayable()).as(actor.role() + " list payable").isEqualByComparingTo(PAYABLE);
+            assertThat(row.amountPaid()).as(actor.role() + " list paid").isEqualByComparingTo(PAID);
+            assertThat(row.amountOutstanding()).as(actor.role() + " list outstanding").isEqualByComparingTo(OUTSTANDING);
+
+            TicketSummaryDto viaComment = ticketService.comment(inScopeId, new CommentRequest("hi"), actor).summary();
+            assertThat(viaComment.amountPayable()).as(actor.role() + " comment payable").isEqualByComparingTo(PAYABLE);
+        }
+        // account reads the deal (its own worklist scope needs a pending payment, so use the deal read).
+        TicketSummaryDto asAccount = ticketService.get(inScopeId, accountUser).summary();
+        assertThat(asAccount.amountPayable()).isEqualByComparingTo(PAYABLE);
+        assertThat(asAccount.amountPaid()).isEqualByComparingTo(PAID);
+        assertThat(asAccount.amountOutstanding()).isEqualByComparingTo(OUTSTANDING);
     }
 
     // ── Leak B: import's comment path is row-scoped ─────────────────────────────────────────────
@@ -308,6 +383,12 @@ class ImportCommentAndDocumentAuthzIntegrationTest extends AbstractPostgresInteg
         return ids;
     }
 
+    private TicketSummaryDto pageRow(UserPrincipal actor, long ticketId) {
+        return ticketService.listPage(null, actor, PageRequest.resolve(0, 100)).items().stream()
+            .filter(r -> r.id() == ticketId).findFirst()
+            .orElseThrow(() -> new AssertionError("deal " + ticketId + " not on " + actor.role() + "'s list"));
+    }
+
     private int commentCount(long ticketId, String message) {
         return jdbc.queryForObject(
             "SELECT COUNT(*) FROM sales.ticket_event WHERE ticket_id = :t AND kind = 'COMMENTED' AND message = :m",
@@ -351,6 +432,9 @@ class ImportCommentAndDocumentAuthzIntegrationTest extends AbstractPostgresInteg
         insertCostBearingItem(id, "Terrazzo White Nat", "30x60 cm", "120", 1);
         tickets.addEvent(id, ownerId, "พนักงานขาย", TicketEventKind.PRICE_OVERRIDDEN, null, null, OVERRIDE_NOTE);
         tickets.addEvent(id, ownerId, "พนักงานขาย", TicketEventKind.COMMENTED, null, null, "ลูกค้าขอเลื่อนส่งของ");
+        // Real summary money: an ISSUED quotation drives amountPayable, a receipt drives amountPaid.
+        tickets.createQuotation(id, "QT-" + code, ownerId, new BigDecimal(PAYABLE));
+        tickets.insertPaymentReceipt(id, "DEPOSIT", new BigDecimal(PAID), ownerId, null, null, null, null);
         return id;
     }
 

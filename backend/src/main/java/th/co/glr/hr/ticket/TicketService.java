@@ -136,7 +136,18 @@ public class TicketService {
     public List<TicketSummaryDto> list(String status, UserPrincipal actor) {
         requireRole(actor, VIEWER_ROLES);
         Long createdByFilter = "sales".equals(actor.role()) ? actor.id() : null;
-        return tickets.findSummaries(status, null, createdByFilter, actor.role(), null);
+        return forRole(tickets.findSummaries(status, null, createdByFilter, actor.role(), null), actor.role());
+    }
+
+    /**
+     * Owner ruling 2026-09-30: import receives no customer money totals on any summary it is
+     * handed. Applied after the query, so ordering, paging and counts are untouched.
+     */
+    private static List<TicketSummaryDto> forRole(List<TicketSummaryDto> rows, String role) {
+        if (!IMPORT_ROLES.contains(role)) {
+            return rows;
+        }
+        return rows.stream().map(TicketSummaryDto::withoutMoney).toList();
     }
 
     public Page<TicketSummaryDto> listPage(String status, UserPrincipal actor, PageRequest page) {
@@ -153,7 +164,8 @@ public class TicketService {
         // Phase B (role-scoped views): import/account only see the slice of the deal
         // pipeline relevant to their own worklist — see TicketRepository.appendRoleScope.
         // ceo/sales_manager/sales are unaffected (the repository ignores any other role).
-        List<TicketSummaryDto> rows = tickets.findSummaries(status, salesStage, createdByFilter, actor.role(), page);
+        List<TicketSummaryDto> rows =
+            forRole(tickets.findSummaries(status, salesStage, createdByFilter, actor.role(), page), actor.role());
         // Skip the COUNT round-trip when the whole result set fits on page 0.
         int total = (page.page() == 0 && rows.size() < page.size())
             ? rows.size()
@@ -239,12 +251,13 @@ public class TicketService {
         // Owner ruling 2026-09-30: import must never be handed pricing. Beyond the quotation chain
         // this also strips (a) every item's cost/price columns and (b) every event that is not a
         // human comment — PRICE_* / override events quote prices in their note and item snapshot,
-        // exactly what ImportDealService already withholds from the import view.
+        // exactly what ImportDealService already withholds from the import view — and (c) the
+        // summary's customer money totals (withoutMoney).
         List<TicketItemDto> items = ticket.items().stream().map(TicketService::withoutCosts).toList();
         List<TicketEventDto> events = ticket.events().stream()
             .filter(e -> TicketEventKind.COMMENTED.equals(e.kind()))
             .toList();
-        return new TicketDto(ticket.summary(), items, events, null, List.of());
+        return new TicketDto(ticket.summary().withoutMoney(), items, events, null, List.of());
     }
 
     /**
