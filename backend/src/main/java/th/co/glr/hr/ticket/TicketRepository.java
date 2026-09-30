@@ -1213,6 +1213,9 @@ public class TicketRepository {
         // Staleness only means anything for a deal actively being worked — a DRAFT that hasn't
         // started or a CLOSED_LOST/CANCELLED/COMPLETED deal is never flagged (Slice B1, handoff 103).
         boolean stale = DealLifecycle.ACTIVE.equals(s.lifecycle()) && isStale(s.id());
+        // Slice 2 (S2-B4): liveDirectQuotation rides in the SAME statement as commissionRecorded
+        // rather than adding a query of its own — see recordedCommissionAndLiveDirectQuotation.
+        CommissionAndLiveQuotation facts = recordedCommissionAndLiveDirectQuotation(s.id());
         return new TicketSummaryDto(
             s.id(), s.code(), s.type(), s.title(), s.status(), s.priority(),
             s.createdById(), s.createdByName(), s.assignedToId(), s.assignedToName(),
@@ -1230,12 +1233,10 @@ public class TicketRepository {
             // hasInvoiceAttachment above as another per-row query enrichSummary runs to fill in a
             // field mapSummary alone cannot answer from sales.ticket.
             s.winProbabilityOverride(), s.designerName(), s.ownerName(), s.buyerName(), stale,
-            hasRecordedCommission(s.id()), s.reopenedAt(), s.reopenCount(), s.quotationOnly(),
+            facts.commissionRecorded(), s.reopenedAt(), s.reopenCount(), s.quotationOnly(),
             due == null ? null : due.date(), due == null ? null : due.basis(),
             due == null ? null : due.creditDays(),
-            // Slice 2 (S2-B4): one more per-row query, the same shape as hasRecordedCommission —
-            // see findLiveDirectQuotation's Javadoc for why it is not batched.
-            findLiveDirectQuotation(s.id()).orElse(null));
+            facts.liveDirectQuotation());
     }
 
     /**
@@ -1263,16 +1264,43 @@ public class TicketRepository {
      * .hasActiveCommissionForTicket} always agree. If you change one predicate you MUST change the
      * other, and that test is what catches it if you forget.
      */
-    private boolean hasRecordedCommission(long ticketId) {
-        Boolean value = jdbc.queryForObject("""
-            SELECT EXISTS(
+    private static final String HAS_RECORDED_COMMISSION = """
+            EXISTS(
                 SELECT 1 FROM sales.commission_record
                  WHERE source_ticket_id = :ticketId
                    AND kind = 'SALE'
                    AND status NOT IN ('VOID', 'REJECTED')
             )
-            """, Map.of("ticketId", ticketId), Boolean.class);
-        return Boolean.TRUE.equals(value);
+        """;
+
+    private record CommissionAndLiveQuotation(boolean commissionRecorded,
+                                              LiveDirectQuotationDto liveDirectQuotation) {}
+
+    /**
+     * {@link #HAS_RECORDED_COMMISSION} and {@link #findLiveDirectQuotation}'s row in ONE statement.
+     * They are unrelated facts; they share a round trip only because {@link #enrichSummary} runs on
+     * the single-deal path of {@code TicketService#actions}, which
+     * {@code TicketActionsQueryCountIntegrationTest} caps below {@code DealStage.ORDER.size()}
+     * statements — a separate live-quotation query was the fifteenth. The LATERAL subquery is
+     * {@link #LIVE_DIRECT_QUOTATION_SELECT}, the very text {@link #findLiveDirectQuotation} runs, so
+     * the list/detail field and the N6 refusal cannot disagree about which row is live.
+     */
+    private CommissionAndLiveQuotation recordedCommissionAndLiveDirectQuotation(long ticketId) {
+        return jdbc.queryForObject("SELECT " + HAS_RECORDED_COMMISSION + """
+                   AS commission_recorded,
+                   q.quotation_id, q.number, q.doc_status, q.recipient_type
+              FROM (SELECT 1) AS one
+              LEFT JOIN LATERAL (
+            """ + LIVE_DIRECT_QUOTATION_SELECT + """
+              ) q ON true
+            """, Map.of("ticketId", ticketId),
+            (rs, rowNum) -> {
+                long quotationId = rs.getLong("quotation_id");
+                LiveDirectQuotationDto live = rs.wasNull() ? null
+                    : new LiveDirectQuotationDto(quotationId, rs.getString("number"),
+                        rs.getString("doc_status"), rs.getString("recipient_type"));
+                return new CommissionAndLiveQuotation(rs.getBoolean("commission_recorded"), live);
+            });
     }
 
     /** ฝ่ายบัญชี signs off that the deal is ready to close; CEO verification still required. */
@@ -2083,16 +2111,25 @@ public class TicketRepository {
                              AND doc_status IN ('DRAFT', 'PENDING_APPROVAL', 'APPROVED')
         """;
 
+    /** The newest live direct quotation's row — see {@link #findLiveDirectQuotation}. */
+    private static final String LIVE_DIRECT_QUOTATION_SELECT = """
+            SELECT quotation_id, number, doc_status, recipient_type
+              FROM sales.quotation
+             WHERE ticket_id = :ticketId
+        """ + LIVE_DIRECT_QUOTATION_PREDICATE + """
+             ORDER BY quotation_id DESC
+             LIMIT 1
+        """;
+
     /**
      * Quotation ↔ deal linking slice 2 (S2-B3 / S2-B4) — the NEWEST live direct quotation on the
      * deal (highest {@code quotation_id}), or empty. Newest matters because a deal can legitimately
      * hold two live rows — an APPROVED parent and its DRAFT revision, or an APPROVED source and its
      * reorder clone — and the client acts on the one being worked on.
      *
-     * <p>Called once per row by {@link #enrichSummary} — deliberately the same per-row shape as
-     * {@link #hasRecordedCommission}/{@link #hasInvoiceAttachment}/{@link #isStale}/{@code payableAmount}/
-     * {@code sumPaid}/{@code hasBalanceReceipt}, which that method already runs for every list row
-     * (so a 500-row page already costs ~7 queries a row; this adds one). Not batched into
+     * <p>{@link #enrichSummary} does not call this: it reads the same row through
+     * {@link #recordedCommissionAndLiveDirectQuotation}, sharing the commission flag's statement so
+     * the list/detail field costs no extra query per row. Not batched into
      * {@link #findSummaries}' SELECT: that query is shared with {@link #findSummaryById} through
      * {@code SUMMARY_SELECT} and its {@code GROUP BY}, and a LATERAL join there would change the
      * one query every deal read goes through for one nullable field — the risk is not worth it while
@@ -2101,14 +2138,7 @@ public class TicketRepository {
      * {@code idx_quotation_deal_direct_ticket} (V165: {@code (ticket_id) WHERE origin = 'DEAL_DIRECT'}).
      */
     public Optional<LiveDirectQuotationDto> findLiveDirectQuotation(long ticketId) {
-        List<LiveDirectQuotationDto> rows = jdbc.query("""
-            SELECT quotation_id, number, doc_status, recipient_type
-              FROM sales.quotation
-             WHERE ticket_id = :ticketId
-            """ + LIVE_DIRECT_QUOTATION_PREDICATE + """
-             ORDER BY quotation_id DESC
-             LIMIT 1
-            """, Map.of("ticketId", ticketId),
+        List<LiveDirectQuotationDto> rows = jdbc.query(LIVE_DIRECT_QUOTATION_SELECT, Map.of("ticketId", ticketId),
             (rs, rowNum) -> new LiveDirectQuotationDto(rs.getLong("quotation_id"), rs.getString("number"),
                 rs.getString("doc_status"), rs.getString("recipient_type")));
         return rows.stream().findFirst();
