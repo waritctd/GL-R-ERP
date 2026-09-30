@@ -113,9 +113,10 @@ public final class TicketEventKind {
     public static final String DEAL_QUOTATION_SUPERSEDED = "DEAL_QUOTATION_SUPERSEDED";
 
     // GLA-136 (owner ruling 2026-09-30): a REAL sales.ticket_event.kind value (chk_event_kind
-    // widened for it in V193). Written once, by DealQuotationService#promoteToDeal, when an APPROVED
-    // direct (DEAL_DIRECT) quotation's quotation-only container ticket is promoted into the pipeline
-    // (draft -> quotation_issued, related document = that QUOTATION). Deliberately NOT a reuse of
+    // widened for it in V193). Written once, by DealQuotationService#confirmOrderFromDirectQuotation
+    // (named promoteToDeal until quotation <-> deal linking slice 1 — this kind keeps the old name
+    // because the DB CHECK pins it), when the order is confirmed from an APPROVED direct
+    // (DEAL_DIRECT) quotation (draft -> quotation_issued, related document = that QUOTATION). Deliberately NOT a reuse of
     // ORDER_CONFIRMED_FROM_QUOTATION, which means a customer-accepted PRICING_REQUEST quotation's
     // order confirmation (OrderConfirmationService) — a different business event.
     public static final String DEAL_PROMOTED_FROM_QUOTATION = "DEAL_PROMOTED_FROM_QUOTATION";

@@ -29,6 +29,7 @@ import th.co.glr.hr.customerquotation.CustomerQuotationRepository;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.PromoteToDealResultDto;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.ApproveRequest;
+import th.co.glr.hr.dealquotation.DealQuotationRequests.CancelRequest;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.ItemInput;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.UpsertDealQuotationRequest;
 import th.co.glr.hr.deposit.DepositNoticeDraftRequest;
@@ -51,9 +52,11 @@ import th.co.glr.hr.pricingrequest.PricingRequestRequests.CreatePricingRequestRe
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.CreateTicketRequest;
+import th.co.glr.hr.ticket.DealActivityKind;
+import th.co.glr.hr.ticket.DealActivityRequest;
 import th.co.glr.hr.ticket.DealStage;
+import th.co.glr.hr.ticket.DirectQuotationLocks;
 import th.co.glr.hr.ticket.EditItemsRequest;
-import th.co.glr.hr.ticket.QuotationOnlyTickets;
 import th.co.glr.hr.ticket.QuotationRenderer;
 import th.co.glr.hr.ticket.QuotationStatus;
 import th.co.glr.hr.ticket.TicketDto;
@@ -65,26 +68,38 @@ import th.co.glr.hr.ticket.TicketStatus;
 import th.co.glr.hr.ticket.TicketSummaryDto;
 
 /**
- * GLA-136 (owner ruling, Ploy 2026-09-30) — real-DB, real-service proof for "สร้างดีลจากใบเสนอราคา"
- * ({@link DealQuotationService#promoteToDeal}) and the quotation-only container ticket it promotes
- * (V193 {@code sales.ticket.quotation_only}).
+ * Quotation ↔ deal linking, slice 1 (IA §7, owner decisions D1–D7 approved 2026-09-30) — real-DB,
+ * real-service proof for "ยืนยันคำสั่งซื้อ" on a direct quotation
+ * ({@link DealQuotationService#confirmOrderFromDirectQuotation}, {@code POST
+ * /api/deal-quotations/{id}/confirm-order}; {@code …/promote-to-deal} is kept as an alias for one
+ * release), and for the reversal of GLA-136's "hide the quotation-first deal" rule.
+ *
+ * <p>What changed from GLA-136 (#1083), and is pinned here:
+ * <ul>
+ *   <li>the {@code quotation_only} precondition is DROPPED — an ordinary deal with an APPROVED
+ *       direct quotation confirms too; {@code quotation_only} (V193) is provenance only;</li>
+ *   <li>a quotation-first deal is a real pipeline deal: it is listed, and stage / entry-channel /
+ *       tender writes work on it;</li>
+ *   <li>the items and pricing-request refusals are RE-KEYED from the flag to "this deal has a live
+ *       DEAL_DIRECT quotation" ({@link DirectQuotationLocks}).</li>
+ * </ul>
  *
  * <p>Every service is the production class, hand-wired against real Postgres (no Mockito anywhere):
- * the authz decision, the list-exclusion SQL and the promotion's writes are all exercised through
- * the real repositories. The promotion itself is called through {@link #transactional} — a real
+ * the authz decision, the list SQL and the confirmation's writes are all exercised through the real
+ * repositories. The confirmation itself is called through {@link #transactional} — a real
  * transactional AOP proxy — so the atomicity test below proves the method's own
- * {@code @Transactional} is what rolls a half-done promotion back, not a template the test supplied.
+ * {@code @Transactional} is what rolls a half-done confirmation back, not a template the test supplied.
  *
  * <p>Authz cases are written wrong-way-round per CLAUDE.md: every refusal asserts that NOTHING was
- * written (the ticket is still quotation-only, still {@code draft}, still has no event).
+ * written (still {@code draft}, still at the lead stage, no items, no event).
  */
-class DealQuotationPromoteIntegrationTest extends AbstractPostgresIntegrationTest {
+class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final String V193 = "db/migration/V193__ticket_quotation_only.sql";
 
     private TicketRepository tickets;
     private TicketService ticketService;
     private DealQuotationService quotationService;
-    private DealQuotationService promoter; // quotationService behind a real @Transactional proxy
+    private DealQuotationService confirmer; // quotationService behind a real @Transactional proxy
     private PricingRequestService pricingRequestService;
     private DepositNoticeService depositNoticeService;
     private CustomerRepository customers;
@@ -139,7 +154,7 @@ class DealQuotationPromoteIntegrationTest extends AbstractPostgresIntegrationTes
         quotationService.wirePricingRequestDependencies(pricingRequests, new PricingDecisionRepository(jdbc),
             legacyQuotations);
         quotationService.wireTicketService(ticketService);
-        promoter = transactional(quotationService);
+        confirmer = transactional(quotationService);
 
         depositNoticeService = new DepositNoticeService(new DepositNoticeRepository(jdbc), tickets, notifications,
             new DepositNoticeRenderer(), new RemainingInvoiceRenderer(), customers, legacyQuotations);
@@ -163,21 +178,22 @@ class DealQuotationPromoteIntegrationTest extends AbstractPostgresIntegrationTes
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // Happy path — owner promotes; the deal lands at S10 with the quotation's own lines, and the
+    // Happy path — owner confirms; the deal lands at S10 with the quotation's own lines, and the
     // ticket-keyed money side (deposit-notice draft) unlocks.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
+    /** The quotation-first ("ghost") deal still confirms — the GLA-136 happy path, unchanged. */
     @Test
-    void ownerPromotes_approvedDirectQuotation_landsAtOrderReceived_withQuotationLines_andDepositDraftUnlocks() {
+    void quotationFirstGhost_stillConfirms_landsAtOrderReceived_withQuotationLines_andDepositDraftUnlocks() {
         long ghost = quotationOnlyTicket(salesActor);
         assertThat(summary(ghost).quotationOnly()).isTrue();
         DealQuotationDto approved = approvedDirectQuotation(ghost, salesActor);
 
-        PromoteToDealResultDto result = promoter.promoteToDeal(approved.id(), salesActor);
+        PromoteToDealResultDto result = confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor);
 
         assertThat(result.ticketId()).isEqualTo(ghost); // the SAME ticket — never a second one
         TicketSummaryDto after = summary(ghost);
-        assertThat(after.quotationOnly()).isFalse();
+        assertThat(after.quotationOnly()).as("best-effort provenance flip still happens").isFalse();
         assertThat(after.status()).isEqualTo(TicketStatus.QUOTATION_ISSUED);
         assertThat(after.salesStage()).isEqualTo(DealStage.ORDER_RECEIVED);
         assertThat(after.paymentStatus()).isEqualTo("CUSTOMER_CONFIRMED");
@@ -237,10 +253,10 @@ class DealQuotationPromoteIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(draft.items()).isNotEmpty();
     }
 
-    /** The same deposit-notice draft is REFUSED before promotion — the negative half of "the money
+    /** The same deposit-notice draft is REFUSED before confirmation — the negative half of "the money
      * side unlocks", so the positive assertion above cannot be passing for an unrelated reason. */
     @Test
-    void depositDraft_isRefused_whileTheTicketIsStillQuotationOnly() {
+    void depositDraft_isRefused_untilTheOrderIsConfirmed() {
         long ghost = quotationOnlyTicket(salesActor);
         approvedDirectQuotation(ghost, salesActor);
         assertThatThrownBy(() -> depositNoticeService.createDraft(ghost,
@@ -248,12 +264,36 @@ class DealQuotationPromoteIntegrationTest extends AbstractPostgresIntegrationTes
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
     }
 
+    /**
+     * The precondition GLA-136 had and this slice DROPS: a deal created the ordinary way (deal page,
+     * {@code quotation_only = FALSE}, never a ghost) with an APPROVED direct quotation confirms the
+     * order exactly like a quotation-first one — S10, CUSTOMER_CONFIRMED, the quotation's lines, one
+     * event. Under GLA-136 this was a 409 "อยู่ใน pipeline อยู่แล้ว".
+     */
+    @Test
+    void ordinaryDeal_withApprovedDirectQuotation_confirmsOrder_landsAtOrderReceived() {
+        long deal = pipelineTicket(salesActor);
+        assertThat(summary(deal).quotationOnly()).isFalse();
+        DealQuotationDto approved = approvedDirectQuotation(deal, salesActor);
+
+        PromoteToDealResultDto result = confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor);
+
+        assertThat(result.ticketId()).isEqualTo(deal);
+        TicketSummaryDto after = summary(deal);
+        assertThat(after.quotationOnly()).as("provenance flag untouched on an ordinary deal").isFalse();
+        assertThat(after.status()).isEqualTo(TicketStatus.QUOTATION_ISSUED);
+        assertThat(after.salesStage()).isEqualTo(DealStage.ORDER_RECEIVED);
+        assertThat(after.paymentStatus()).isEqualTo("CUSTOMER_CONFIRMED");
+        assertThat(itemCount(deal)).as("the quotation's two goods lines").isEqualTo(2);
+        assertThat(eventCount(deal, TicketEventKind.DEAL_PROMOTED_FROM_QUOTATION)).isEqualTo(1);
+    }
+
     @Test
     void salesManagerPromotesARepsQuotation_confirmCustomerOwnerGateDoesNotBlockIt() {
         long ghost = quotationOnlyTicket(salesActor);
         DealQuotationDto approved = approvedDirectQuotation(ghost, salesActor);
 
-        promoter.promoteToDeal(approved.id(), salesManagerActor);
+        confirmer.confirmOrderFromDirectQuotation(approved.id(), salesManagerActor);
 
         TicketSummaryDto after = summary(ghost);
         assertThat(after.quotationOnly()).isFalse();
@@ -267,7 +307,7 @@ class DealQuotationPromoteIntegrationTest extends AbstractPostgresIntegrationTes
         long ghost = quotationOnlyTicket(salesActor);
         DealQuotationDto approved = approvedDirectQuotation(ghost, salesActor);
 
-        promoter.promoteToDeal(approved.id(), grantedQcActor);
+        confirmer.confirmOrderFromDirectQuotation(approved.id(), grantedQcActor);
 
         assertThat(summary(ghost).status()).isEqualTo(TicketStatus.QUOTATION_ISSUED);
     }
@@ -276,11 +316,11 @@ class DealQuotationPromoteIntegrationTest extends AbstractPostgresIntegrationTes
     void replay_isIdempotent_returnsTheDeal_andWritesNothingMore() {
         long ghost = quotationOnlyTicket(salesActor);
         DealQuotationDto approved = approvedDirectQuotation(ghost, salesActor);
-        promoter.promoteToDeal(approved.id(), salesActor);
+        confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor);
         int eventsBefore = eventCount(ghost);
         int itemsBefore = itemCount(ghost);
 
-        PromoteToDealResultDto replay = promoter.promoteToDeal(approved.id(), salesActor);
+        PromoteToDealResultDto replay = confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor);
 
         assertThat(replay.ticketId()).isEqualTo(ghost);
         assertThat(replay.ticket().status()).isEqualTo(TicketStatus.QUOTATION_ISSUED);
@@ -301,7 +341,7 @@ class DealQuotationPromoteIntegrationTest extends AbstractPostgresIntegrationTes
         // A payment status past CUSTOMER_CONFIRMED makes applyCustomerConfirmation refuse (409).
         jdbc.update("UPDATE sales.ticket SET payment_status = 'DEPOSIT_PAID' WHERE ticket_id = :id", Map.of("id", ghost));
 
-        assertThatThrownBy(() -> promoter.promoteToDeal(approved.id(), salesActor))
+        assertThatThrownBy(() -> confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
 
         assertNothingPromoted(ghost);
@@ -315,7 +355,7 @@ class DealQuotationPromoteIntegrationTest extends AbstractPostgresIntegrationTes
     void nonOwningSales_isRefused_403_andNothingIsWritten() {
         long ghost = quotationOnlyTicket(salesActor);
         DealQuotationDto approved = approvedDirectQuotation(ghost, salesActor);
-        assertForbidden(() -> promoter.promoteToDeal(approved.id(), otherSalesActor));
+        assertForbidden(() -> confirmer.confirmOrderFromDirectQuotation(approved.id(), otherSalesActor));
         assertNothingPromoted(ghost);
     }
 
@@ -323,7 +363,7 @@ class DealQuotationPromoteIntegrationTest extends AbstractPostgresIntegrationTes
     void importRole_isRefused_403_andNothingIsWritten() {
         long ghost = quotationOnlyTicket(salesActor);
         DealQuotationDto approved = approvedDirectQuotation(ghost, salesActor);
-        assertForbidden(() -> promoter.promoteToDeal(approved.id(), importActor));
+        assertForbidden(() -> confirmer.confirmOrderFromDirectQuotation(approved.id(), importActor));
         assertNothingPromoted(ghost);
     }
 
@@ -332,7 +372,7 @@ class DealQuotationPromoteIntegrationTest extends AbstractPostgresIntegrationTes
     void ceoRole_isRefused_403_andNothingIsWritten() {
         long ghost = quotationOnlyTicket(salesActor);
         DealQuotationDto approved = approvedDirectQuotation(ghost, salesActor);
-        assertForbidden(() -> promoter.promoteToDeal(approved.id(), ceoActor));
+        assertForbidden(() -> confirmer.confirmOrderFromDirectQuotation(approved.id(), ceoActor));
         assertNothingPromoted(ghost);
     }
 
@@ -340,7 +380,7 @@ class DealQuotationPromoteIntegrationTest extends AbstractPostgresIntegrationTes
     void accountRole_isRefused_403_andNothingIsWritten() {
         long ghost = quotationOnlyTicket(salesActor);
         DealQuotationDto approved = approvedDirectQuotation(ghost, salesActor);
-        assertForbidden(() -> promoter.promoteToDeal(approved.id(), accountActor));
+        assertForbidden(() -> confirmer.confirmOrderFromDirectQuotation(approved.id(), accountActor));
         assertNothingPromoted(ghost);
     }
 
@@ -349,7 +389,7 @@ class DealQuotationPromoteIntegrationTest extends AbstractPostgresIntegrationTes
     void nonOwningSales_onADraftQuotation_getsTheSame403_notA409() {
         long ghost = quotationOnlyTicket(salesActor);
         DealQuotationDto draft = quotationService.create(ghost, directDraft(), salesActor);
-        assertForbidden(() -> promoter.promoteToDeal(draft.id(), otherSalesActor));
+        assertForbidden(() -> confirmer.confirmOrderFromDirectQuotation(draft.id(), otherSalesActor));
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -360,7 +400,7 @@ class DealQuotationPromoteIntegrationTest extends AbstractPostgresIntegrationTes
     void draftDirectQuotation_isRefused_409() {
         long ghost = quotationOnlyTicket(salesActor);
         DealQuotationDto draft = quotationService.create(ghost, directDraft(), salesActor);
-        assertConflict(() -> promoter.promoteToDeal(draft.id(), salesActor), "อนุมัติแล้ว");
+        assertConflict(() -> confirmer.confirmOrderFromDirectQuotation(draft.id(), salesActor), "อนุมัติแล้ว");
         assertNothingPromoted(ghost);
     }
 
@@ -370,7 +410,7 @@ class DealQuotationPromoteIntegrationTest extends AbstractPostgresIntegrationTes
         DealQuotationDto pending = quotationService.submit(
             quotationService.create(ghost, directDraft(), salesActor).id(), salesActor);
         assertThat(pending.docStatus()).isEqualTo(QuotationStatus.PENDING_APPROVAL);
-        assertConflict(() -> promoter.promoteToDeal(pending.id(), salesActor), "อนุมัติแล้ว");
+        assertConflict(() -> confirmer.confirmOrderFromDirectQuotation(pending.id(), salesActor), "อนุมัติแล้ว");
         assertNothingPromoted(ghost);
     }
 
@@ -386,31 +426,23 @@ class DealQuotationPromoteIntegrationTest extends AbstractPostgresIntegrationTes
             UPDATE sales.quotation SET origin = 'PRICING_REQUEST', pricing_request_id = :pr
              WHERE quotation_id = :id
             """, Map.of("pr", pricingRequestId, "id", approved.id()));
-        assertConflict(() -> promoter.promoteToDeal(approved.id(), salesActor), "ไม่ผ่านคำขอราคา");
+        assertConflict(() -> confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor), "ไม่ผ่านคำขอราคา");
         assertNothingPromoted(ghost);
     }
 
-    /** A ticket that was always a pipeline deal (created without the flag, e.g. from the deal page)
-     * and was never promoted: 409, never a silent "success". */
-    @Test
-    void ordinaryPipelineDeal_isRefused_409_notTreatedAsAReplay() {
-        long pipeline = pipelineTicket(salesActor);
-        DealQuotationDto approved = approvedDirectQuotation(pipeline, salesActor);
-        assertConflict(() -> promoter.promoteToDeal(approved.id(), salesActor), "อยู่ใน pipeline อยู่แล้ว");
-        assertThat(summary(pipeline).status()).isEqualTo(TicketStatus.DRAFT);
-        assertThat(eventCount(pipeline, TicketEventKind.DEAL_PROMOTED_FROM_QUOTATION)).isZero();
-    }
-
     /** Reached quotation_issued by ANOTHER path (the pricing-request confirmOrder bridge writes the
-     * same status) — not quotation-only, no promotion event: 409, nothing overwritten. */
+     * same status) — no confirmation event, so not a replay: 409 on the ticket-status precondition,
+     * nothing overwritten. */
     @Test
-    void ticketAlreadyInThePipelineByAnotherPath_isRefused_409() {
+    void ticketAlreadyPastDraftByAnotherPath_isRefused_409() {
         long pipeline = pipelineTicket(salesActor);
         DealQuotationDto approved = approvedDirectQuotation(pipeline, salesActor);
         assertThat(tickets.markQuotationIssuedForOrderConfirmation(pipeline)).isEqualTo(1);
-        assertConflict(() -> promoter.promoteToDeal(approved.id(), salesActor), "อยู่ใน pipeline อยู่แล้ว");
+        assertConflict(() -> confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor),
+            "ยืนยันคำสั่งซื้อไม่ได้");
         assertThat(summary(pipeline).paymentStatus()).isNull();
         assertThat(itemCount(pipeline)).isZero();
+        assertThat(eventCount(pipeline, TicketEventKind.DEAL_PROMOTED_FROM_QUOTATION)).isZero();
     }
 
     @Test
@@ -418,86 +450,135 @@ class DealQuotationPromoteIntegrationTest extends AbstractPostgresIntegrationTes
         long ghost = quotationOnlyTicket(salesActor);
         DealQuotationDto approved = approvedDirectQuotation(ghost, salesActor);
         jdbc.update("UPDATE sales.ticket SET lifecycle = 'ON_HOLD' WHERE ticket_id = :id", Map.of("id", ghost));
-        assertConflict(() -> promoter.promoteToDeal(approved.id(), salesActor), "ACTIVE");
+        assertConflict(() -> confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor), "ACTIVE");
         assertNothingPromoted(ghost);
     }
 
     @Test
     void missingQuotation_is404() {
-        assertThatThrownBy(() -> promoter.promoteToDeal(999_999L, salesActor))
+        assertThatThrownBy(() -> confirmer.confirmOrderFromDirectQuotation(999_999L, salesActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // Pipeline reads exclude a quotation-only ticket; single reads still serve it.
+    // A quotation-first deal is a real pipeline deal (IA §7) — listed, and movable by hand.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
+    /** Inverted from GLA-136's "excludes … until promoted": the quotation-first deal is listed (and
+     * counted) from the moment it exists, for the owning rep and for the manager. */
     @Test
-    void repsOwnList_excludesTheQuotationOnlyTicket_untilItIsPromoted() {
+    void repsOwnList_includesTheQuotationFirstDeal() {
         long ghost = quotationOnlyTicket(salesActor);
         long pipeline = pipelineTicket(salesActor);
-        DealQuotationDto approved = approvedDirectQuotation(ghost, salesActor);
-
-        assertThat(listIds(salesActor)).containsExactly(pipeline);
-        assertThat(listIds(salesManagerActor)).doesNotContain(ghost).contains(pipeline);
-        assertThat(ticketService.listPage(null, salesActor, new th.co.glr.hr.common.PageRequest(0, 50)).total())
-            .as("the COUNT agrees with the rows").isEqualTo(1);
-        // get() still serves it — the quotation editor reads this summary.
-        assertThat(ticketService.get(ghost, salesActor).summary().quotationOnly()).isTrue();
-
-        promoter.promoteToDeal(approved.id(), salesActor);
+        approvedDirectQuotation(ghost, salesActor);
 
         assertThat(listIds(salesActor)).containsExactlyInAnyOrder(ghost, pipeline);
+        assertThat(listIds(salesManagerActor)).contains(ghost, pipeline);
         assertThat(ticketService.listPage(null, salesActor, new th.co.glr.hr.common.PageRequest(0, 50)).total())
-            .isEqualTo(2);
+            .as("the COUNT agrees with the rows").isEqualTo(2);
+        // Wrong-way-round: listing it does not widen who sees it — another rep still does not.
+        assertThat(listIds(otherSalesActor)).doesNotContain(ghost, pipeline);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Manual pipeline writes refuse a quotation-only ticket (409); quotation CRUD does not.
-    // ─────────────────────────────────────────────────────────────────────────────────────
-
     @Test
-    void updateStage_onQuotationOnlyTicket_is409_andTheStageDoesNotMove() {
+    void updateStage_onQuotationFirstDeal_nowSucceeds() {
         long ghost = quotationOnlyTicket(salesActor);
-        assertConflict(() -> ticketService.updateStage(ghost, DealStage.SPEC_APPROVED, "ทดสอบ", salesActor),
-            QuotationOnlyTickets.REFUSAL_MESSAGE);
+        ticketService.addActivity(ghost, new DealActivityRequest(LocalDate.now(), DealActivityKind.CALL, null),
+            salesActor);
+
+        TicketDto moved = ticketService.updateStage(ghost, DealStage.PRESENTATION, null, salesActor);
+
+        assertThat(moved.summary().salesStage()).isEqualTo(DealStage.PRESENTATION);
+        assertThat(summary(ghost).salesStage()).isEqualTo(DealStage.PRESENTATION);
+    }
+
+    /** Wrong-way-round: removing the quotation-only refusal did not open the deal to a non-owner. */
+    @Test
+    void updateStage_onQuotationFirstDeal_byNonOwner_isStill403() {
+        long ghost = quotationOnlyTicket(salesActor);
+        assertForbidden(() -> ticketService.updateStage(ghost, DealStage.SPEC_APPROVED, "ทดสอบ", otherSalesActor));
         assertThat(summary(ghost).salesStage()).isEqualTo(DealStage.LEAD_APPROACH);
     }
 
-    /** Wrong-way-round ordering: a caller with no write access still gets 403, never the 409 that
-     * would confirm what kind of ticket this is. */
     @Test
-    void updateStage_onQuotationOnlyTicket_byNonOwner_isStill403() {
+    void setEntryChannel_andTender_onQuotationFirstDeal_nowSucceed() {
         long ghost = quotationOnlyTicket(salesActor);
-        assertForbidden(() -> ticketService.updateStage(ghost, DealStage.SPEC_APPROVED, "ทดสอบ", otherSalesActor));
+        TicketDto channel = ticketService.setEntryChannel(ghost, "OWNER_DIRECT", null, salesActor);
+        assertThat(channel.summary().entryChannel()).isEqualTo("OWNER_DIRECT");
+        TicketDto tender = ticketService.setTenderRequirement(ghost, "REQUIRED", salesActor);
+        assertThat(tender.summary().tenderRequirement()).isEqualTo("REQUIRED");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Items / pricing-request refusals are keyed on "a LIVE DEAL_DIRECT quotation exists" —
+    // not on the quotation_only flag. Written on ORDINARY deals so the flag cannot be the cause.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void editItems_isRefused_whileALiveDirectQuotationExists_andAllowedOnceCancelled() {
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto draft = quotationService.create(deal, directDraft(), salesActor);
+
+        assertConflict(() -> ticketService.editItems(deal,
+            new EditItemsRequest(List.of(ticketItem()), null), salesActor), DirectQuotationLocks.REFUSAL_MESSAGE);
+        assertThat(itemCount(deal)).isZero();
+
+        // Once the only direct quotation is CANCELLED the deal's own lines are editable again.
+        quotationService.cancel(draft.id(), new CancelRequest(null), salesActor);
+        ticketService.editItems(deal, new EditItemsRequest(List.of(ticketItem()), null), salesActor);
+        assertThat(itemCount(deal)).isEqualTo(1);
+    }
+
+    /** PENDING_APPROVAL and APPROVED are live as well (the latter is the one the order would be
+     * confirmed from). */
+    @Test
+    void editItems_isRefused_whileAPendingOrApprovedDirectQuotationExists() {
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto pending = quotationService.submit(
+            quotationService.create(deal, directDraft(), salesActor).id(), salesActor);
+        assertConflict(() -> ticketService.editItems(deal,
+            new EditItemsRequest(List.of(ticketItem()), null), salesActor), DirectQuotationLocks.REFUSAL_MESSAGE);
+
+        quotationService.approve(pending.id(), new ApproveRequest(null), salesManagerActor);
+        assertConflict(() -> ticketService.editItems(deal,
+            new EditItemsRequest(List.of(ticketItem()), null), salesActor), DirectQuotationLocks.REFUSAL_MESSAGE);
+        assertThat(itemCount(deal)).isZero();
+    }
+
+    /** A quotation-first deal with NO live direct quotation is not locked — the flag is not the key. */
+    @Test
+    void editItems_onQuotationFirstDeal_withoutALiveDirectQuotation_isAllowed() {
+        long ghost = quotationOnlyTicket(salesActor);
+        ticketService.editItems(ghost, new EditItemsRequest(List.of(ticketItem()), null), salesActor);
+        assertThat(itemCount(ghost)).isEqualTo(1);
+    }
+
+    /** Wrong-way-round ordering: a non-owner gets the 403, never the 409 that would reveal a quotation. */
+    @Test
+    void editItems_byNonOwner_isStill403_evenWithALiveDirectQuotation() {
+        long deal = pipelineTicket(salesActor);
+        quotationService.create(deal, directDraft(), salesActor);
+        assertForbidden(() -> ticketService.editItems(deal,
+            new EditItemsRequest(List.of(ticketItem()), null), otherSalesActor));
     }
 
     @Test
-    void editItems_onQuotationOnlyTicket_is409() {
-        long ghost = quotationOnlyTicket(salesActor);
-        assertConflict(() -> ticketService.editItems(ghost,
-            new EditItemsRequest(List.of(ticketItem()), null), salesActor), QuotationOnlyTickets.REFUSAL_MESSAGE);
-        assertThat(itemCount(ghost)).isZero();
-    }
-
-    @Test
-    void setEntryChannel_andTender_onQuotationOnlyTicket_are409() {
-        long ghost = quotationOnlyTicket(salesActor);
-        assertConflict(() -> ticketService.setEntryChannel(ghost, "OWNER_DIRECT", null, salesActor),
-            QuotationOnlyTickets.REFUSAL_MESSAGE);
-        assertConflict(() -> ticketService.setTenderRequirement(ghost, "REQUIRED", salesActor),
-            QuotationOnlyTickets.REFUSAL_MESSAGE);
-    }
-
-    @Test
-    void createPricingRequest_onQuotationOnlyTicket_is409_andNoPricingRequestExists() {
-        long ghost = quotationOnlyTicket(salesActor);
-        assertConflict(() -> pricingRequestService.createDraft(ghost,
+    void createPricingRequest_isRefused_whileALiveDirectQuotationExists() {
+        long deal = pipelineTicket(salesActor);
+        quotationService.create(deal, directDraft(), salesActor);
+        assertConflict(() -> pricingRequestService.createDraft(deal,
             new CreatePricingRequestRequest("DESIGNER", null, "ผู้ออกแบบ", null, null, "THB", null,
                 java.util.UUID.randomUUID().toString(), List.of()), salesActor),
-            QuotationOnlyTickets.REFUSAL_MESSAGE);
+            DirectQuotationLocks.REFUSAL_MESSAGE);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sales.pricing_request WHERE ticket_id = :id",
-            Map.of("id", ghost), Integer.class)).isZero();
+            Map.of("id", deal), Integer.class)).isZero();
+    }
+
+    /** The refusal message says what to do, not only what is wrong (Thai, 409). */
+    @Test
+    void refusalMessage_tellsTheRepWhatToDo() {
+        assertThat(DirectQuotationLocks.REFUSAL_MESSAGE)
+            .contains("ใบเสนอราคาตรงที่ยังใช้งานอยู่").contains("แก้ไขรายการที่ใบเสนอราคา").contains("ยกเลิกใบเสนอราคา");
     }
 
     /** The pipeline gates must not reach an ordinary deal: the same moves still work there. */
