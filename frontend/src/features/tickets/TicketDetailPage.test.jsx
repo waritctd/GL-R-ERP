@@ -699,6 +699,16 @@ describe('TicketDetailPage', () => {
     await waitFor(() => expect(api.tickets.comment).toHaveBeenCalledWith(701, { message: 'จดไว้จากแท็บกิจกรรม' }));
   });
 
+  // GLA-156: the "รอ<ฝ่าย>" waiting bar looked expandable, did nothing and named no next step. It is
+  // gone from the page itself — workState.test.js pins the resolver, this pins where it rendered.
+  it('renders no "รอ…" waiting line in the sticky action bar', async () => {
+    api.tickets.get.mockResolvedValueOnce({ ticket: buildTicket() });
+    renderTicketDetailPage(salesOwnerUser);
+    await screen.findByTestId('deal-stage-panel');
+    const bar = screen.queryByTestId('ticket-action-bar');
+    expect(bar?.textContent ?? '').not.toMatch(/รอ(ฝ่าย|CEO)/);
+  });
+
   // The stage panel's "เอกสารของขั้นนี้" row used to carry this as a full-size bordered secondary
   // button, heavier than the stage headline above it. It is a link to a document, not an action.
   it('offers the quotation PDF as a compact inline link, not a full-size bordered button', async () => {
@@ -3568,6 +3578,9 @@ describe('TicketDetailPage', () => {
       renderTicketDetailPage(salesOwnerUser);
 
       const button = await screen.findByRole('button', { name: 'ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ' });
+      // Compact inline link like the quotation PDF, not a full-size bordered button.
+      expect(button.className).not.toContain('border-border-input');
+      expect(button.className).toContain('text-primary');
       fireEvent.click(button);
 
       // The button only ever opens the dialog — it never downloads directly.

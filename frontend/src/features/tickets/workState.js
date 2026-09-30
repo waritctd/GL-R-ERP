@@ -23,15 +23,10 @@
 //     TicketService.java:702 only advances to PROCUREMENT once import issues
 //     the IR). Same false "รอฝ่ายบัญชี" negative.
 //
-// The fix: ask the matching resolver FIRST, unconditionally. Only when the
-// resolver comes back empty (nothing pending for this viewer) does the
-// module fall back to reading the CURRENT stage's `gate` (stageMeta.js,
-// SALES_STAGES) to say whose turn it looks like instead — the same field
-// DealStagePanel/UpdateStageModal use to decide who may manually set a
-// stage. ceo and sales_manager never get that fallback banner at all (see
-// resolveWorkState's own doc comment) — only sales/import/account have a
-// worklist resolver, and only those three's "nothing pending" case should
-// ever read as a real waiting state for anyone with actual work to look for.
+// The fix: ask the matching resolver FIRST, unconditionally. There is deliberately NO "whose turn
+// is it" fallback any more: when the resolver has nothing pending the module returns no action and
+// the header says nothing (GLA-156 — the "รอ<ฝ่าย>" bar looked expandable, did nothing and named
+// no next step, and on auto stages it named the wrong department).
 //
 // Presentation only, same convention as salesViewScope.js / accountActions.js
 // / importActions.js: this NEVER claims an action the server would reject,
@@ -39,8 +34,7 @@
 // canLost / canHold / canDormant / canResume in DealStagePanel.jsx (backed by
 // the real `GET /{id}/actions`) remain the sole authority on what is
 // actually clickable; this module only decides which ONE action (if any)
-// leads the sticky bar, and what the header banner says when there isn't
-// one for this viewer.
+// leads the sticky bar.
 
 import { nextSalesAction } from './salesActions.js';
 import { nextImportAction } from './importActions.js';

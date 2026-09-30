@@ -347,21 +347,19 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
             ) : null}
 
             {canTender ? (
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-3 border-t border-border pt-3">
-                {canTender ? (
-                  <label className="flex min-w-0 items-center gap-2 text-xs font-bold text-text-muted">
-                    ประมูล
-                    <select
-                      value={summary.tenderRequirement ?? 'UNKNOWN'}
-                      disabled={actionLoading}
-                      onChange={(event) => onSetTenderRequirement({ value: event.target.value })}
-                    >
-                      {['UNKNOWN', 'REQUIRED', 'NOT_REQUIRED'].map((value) => (
-                        <option key={value} value={value}>{tenderRequirementLabel(value).label}</option>
-                      ))}
-                    </select>
-                  </label>
-                ) : null}
+              <div className="flex flex-wrap items-center border-t border-border pt-3">
+                <label className="flex min-w-0 items-center gap-2 text-xs font-bold text-text-muted">
+                  ประมูล
+                  <select
+                    value={summary.tenderRequirement ?? 'UNKNOWN'}
+                    disabled={actionLoading}
+                    onChange={(event) => onSetTenderRequirement({ value: event.target.value })}
+                  >
+                    {['UNKNOWN', 'REQUIRED', 'NOT_REQUIRED'].map((value) => (
+                      <option key={value} value={value}>{tenderRequirementLabel(value).label}</option>
+                    ))}
+                  </select>
+                </label>
               </div>
             ) : null}
 

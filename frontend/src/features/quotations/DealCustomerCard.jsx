@@ -508,7 +508,7 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
 
       <div className="mt-3">
         <span className="mb-1 block text-xs">ช่องทางรับงาน</span>
-        <div id="deal-entry-channel" role="group" aria-label="ช่องทางรับงาน" tabIndex={-1} className="flex flex-wrap gap-2">
+        <div id="deal-entry-channel" role="group" aria-label="ช่องทางรับงาน" aria-describedby={errors?.entryChannel ? 'deal-entry-channel-error' : undefined} tabIndex={-1} className="flex flex-wrap gap-2">
           {ENTRY_CHANNEL_CODES.map((code) => (
             <button
               key={code}
@@ -521,7 +521,7 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
             </button>
           ))}
         </div>
-        {errors?.entryChannel ? <p role="alert" className="mt-1 text-xs text-danger">{errors.entryChannel}</p> : null}
+        {errors?.entryChannel ? <p id="deal-entry-channel-error" role="alert" className="mt-1 text-xs text-danger">{errors.entryChannel}</p> : null}
       </div>
 
     </Panel>

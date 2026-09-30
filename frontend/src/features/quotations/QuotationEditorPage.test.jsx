@@ -781,8 +781,11 @@ describe('QuotationEditorPage inline deal creation', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).title)
       .toContain('ต้องเลือกช่องทางรับงานก่อนบันทึกร่าง'));
     expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(true);
+    // The editor hands the picker its inline hint, not just the disabled button's tooltip.
+    expect(screen.getByText('ต้องเลือกช่องทางรับงานก่อนบันทึกร่าง', { selector: 'p' })).not.toBeNull();
     pickEntryChannel();
     await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
+    expect(screen.queryByText('ต้องเลือกช่องทางรับงานก่อนบันทึกร่าง', { selector: 'p' })).toBeNull();
     expect(screen.queryByText('กรุณาระบุผู้สั่งซื้อ')).toBeNull();
   }, 10000);
 

@@ -641,7 +641,7 @@ const UNREACHABLE_FROM_UI = new Set([
   'POST /api/pricing-requests/{}/costings',
   // POST /api/tickets/{}/entry-channel left this list at #740 (DealStagePanel's ช่องทางรับงาน
   // control) and is back on 2026-09-30: that control was removed on request — the channel follows
-  // the deal's stage, so DealStagePanel now shows it read-only. Frontend-only; the endpoint,
+  // the deal's stage, so DealStagePanel no longer shows or edits it. Frontend-only; the endpoint,
   // TicketService.setEntryChannel and the SET_ENTRY_CHANNEL action are untouched, so this is "UI
   // unreachable", not "dead". Deals stuck on UNSPECIFIED can no longer be corrected from the portal.
   'POST /api/tickets/{}/entry-channel',
