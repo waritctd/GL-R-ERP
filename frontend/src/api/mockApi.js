@@ -14696,8 +14696,14 @@ export const api = {
       // `origin IN ('DEAL_DIRECT','PRICING_REQUEST')` (this list backs the เอกสาร register's
       // "does the deal have a quotation" answer). #search/#counts stay DEAL_DIRECT-only, so
       // isDealDirectOrigin still governs those — this mock had kept the OLD scope here.
+      // A PRICING_REQUEST row carries the CEO's price/discount, so — mirroring
+      // DealQuotationService#listForTicket's per-row canViewPricingRequestOriginRow — it is dropped
+      // (not field-stripped) unless the viewer is the owning sales rep, sales_manager or ceo; the
+      // can_create_quotation grant does NOT bypass it (unlike a DEAL_DIRECT row).
+      const canSeePricingRequestRows = ['sales', 'sales_manager', 'ceo'].includes(user.role)
+        && (user.role !== 'sales' || ticket.createdById === user.id);
       const items = mockDealQuotations
-        .filter((q) => q.ticketId === ticket.id)
+        .filter((q) => q.ticketId === ticket.id && (isDealDirectOrigin(q) || canSeePricingRequestRows))
         .sort((a, b) => b.id - a.id)
         .map(buildDealQuotationDto);
       return delay({ items });

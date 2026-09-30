@@ -354,7 +354,7 @@ export function DealDocumentRegister({
 
       {canViewDepositAndInvoice ? (
         <RegisterSection testId="register-deposit" title="ใบแจ้งยอดมัดจำ"
-          count={depositNoticesQuery.data?.length ? depositGroups.length : 0} unit="เอกสาร">
+          count={depositGroups.length} unit="เอกสาร">
           {depositNoticesQuery.isLoading ? (
             <Skeleton height={40} />
           ) : depositGroups[0]?.versions.length ? (

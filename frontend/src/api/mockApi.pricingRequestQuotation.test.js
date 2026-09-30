@@ -382,6 +382,56 @@ describe('mockApi.dealQuotations.listForTicket/list/counts — origin scoping (m
     expect(items.map((q) => q.id)).toEqual([quotation.id]);
   });
 
+  // Round 10 (Opus review): the mock must not be MORE permissive than
+  // DealQuotationService#listForTicket, which drops a PRICING_REQUEST-origin row (CEO's price and
+  // discount) unless canViewPricingRequestOriginRow: the owning sales rep, sales_manager, ceo.
+  // Mirrors DealQuotationOutcomeIntegrationTest.listForTicket_hidesPricingRequestOriginRow_from*.
+  // Mock authz is not authoritative evidence — the real-DB tests are.
+  describe('listForTicket visibility of a PRICING_REQUEST-origin row (wrong-way-round)', () => {
+    async function ticketWithPrRow() {
+      const { ticketId, prId } = await approvedNetPricingRequest(); // logged in as the owning sales rep
+      const { quotation } = await api.dealQuotations.createFromPricingRequest(prId);
+      return { ticketId, id: quotation.id };
+    }
+    const idsFor = async (email, ticketId) => {
+      await api.auth.login({ email, password: 'demo1234' });
+      return (await api.dealQuotations.listForTicket(ticketId)).items.map((q) => q.id);
+    };
+
+    it('the owning sales rep, sales_manager and ceo see it', async () => {
+      const { ticketId, id } = await ticketWithPrRow();
+      expect(await idsFor('sales@glr.co.th', ticketId)).toContain(id);
+      expect(await idsFor('sales.manager@glr.co.th', ticketId)).toContain(id);
+      expect(await idsFor('ceo@glr.co.th', ticketId)).toContain(id);
+    });
+
+    it('import, account and a can_create_quotation grant holder do NOT see it', async () => {
+      const { ticketId, id } = await ticketWithPrRow();
+      expect(await idsFor('import@glr.co.th', ticketId)).not.toContain(id);
+      await api.auth.login({ role: 'account' });
+      expect((await api.dealQuotations.listForTicket(ticketId)).items.map((q) => q.id)).not.toContain(id);
+      // employee@glr.co.th carries canCreateQuotation: the grant must NOT bypass the PR-origin gate.
+      expect(await idsFor('employee@glr.co.th', ticketId)).not.toContain(id);
+    });
+
+    it('a non-owning sales rep is refused the list outright (entry gate), as on the service', async () => {
+      const { ticketId } = await ticketWithPrRow();
+      await api.auth.login({ email: 'sales2@glr.co.th', password: 'demo1234' });
+      await expect(api.dealQuotations.listForTicket(ticketId)).rejects.toMatchObject({ status: 403 });
+    });
+
+    it('a DEAL_DIRECT row stays visible to the same roles the gate always admitted (unaffected)', async () => {
+      await api.auth.login({ email: 'sales@glr.co.th', password: 'demo1234' });
+      const { quotation } = await api.dealQuotations.create(18, { items: [{
+        model: 'Trilogy', color: 'Ash', texture: 'Matt', sizeText: '60x60', thicknessMm: 10, sqmPerPiece: 0.36,
+        quantityMode: 'AREA', areaSqm: 20, wastageMode: 'NONE', wastageValue: 0, piecesPerBox: 3, unitPrice: 850, discountPct: 0,
+        leadTimeMinDays: 30, leadTimeMaxDays: 45,
+      }] });
+      expect(await idsFor('sales@glr.co.th', 18)).toContain(quotation.id);
+      expect(await idsFor('import@glr.co.th', 18)).toContain(quotation.id);
+    });
+  });
+
   it('list()/counts() never include a PRICING_REQUEST-origin row', async () => {
     const { prId } = await approvedNetPricingRequest();
     const { quotation } = await api.dealQuotations.createFromPricingRequest(prId);
