@@ -7,7 +7,6 @@ import { RECIPIENT_OPTIONS } from './pricingRequestMeta.js';
 import { QuotationItemRow, newItemClientId } from '../quotations/QuotationItemRow.jsx';
 import { QuotationContactPicker } from '../quotations/QuotationContactPicker.jsx';
 import { piecesPerSqmFromSqmPerPiece, validateQuotationItem } from '../quotations/quotationMeta.js';
-import { entryChannelLabel } from '../../utils/format.js';
 
 // ลักษณะจำนวน / วันที่ต้องการส่งมอบ / สถานที่ส่งมอบ / ข้อกำหนดพิเศษ were removed from this form
 // (owner request, 2026-08-11): Sales does not have that information at คำขอราคา time, so the
@@ -420,27 +419,31 @@ export function PricingRequestCreateModal({
     seedsFromExisting ? (initialSummary?.note ?? '') : (deal?.note ?? '')
   ));
   // GLA-125 (owner ruling 2026-09-18): header terms mirroring the direct-deal quotation's own
-  // (V165/V179/V180) — NOT yet carried onto the quotation itself (Phase 3). All optional. Create
-  // mode always starts blank (there is no "deal default" for any of these the way recipientLabel
-  // has one) — only edit/revision seed from the persisted request.
-  const [paymentTermMode, setPaymentTermMode] = useState(() => initialSummary?.paymentTermMode ?? '');
-  const [creditDays, setCreditDays] = useState(() => (
-    initialSummary?.creditDays != null ? String(initialSummary.creditDays) : ''
-  ));
-  const [validityDays, setValidityDays] = useState(() => (
-    initialSummary?.validityDays != null ? String(initialSummary.validityDays) : ''
-  ));
-  const [printedByDisplayId, setPrintedByDisplayId] = useState(() => (
-    initialSummary?.printedByDisplayId != null ? String(initialSummary.printedByDisplayId) : ''
-  ));
-  const [salesRepDisplayId, setSalesRepDisplayId] = useState(() => (
-    initialSummary?.salesRepDisplayId != null ? String(initialSummary.salesRepDisplayId) : ''
-  ));
-  const [deptCode, setDeptCode] = useState(() => initialSummary?.deptCode ?? '');
+  // (V165/V179/V180) — NOT yet carried onto the quotation itself (Phase 3). All optional.
+  //
+  // The "เงื่อนไขสำหรับใบเสนอราคา" input box that used to edit these was REMOVED (owner request,
+  // 2026-09-30): Sales does not decide payment terms / validity / display-name / dept-unit at
+  // คำขอราคา time, so the box only ever collected noise before the CEO costing phase — exactly the
+  // same reasoning that retired the four quantity/delivery inputs on 2026-08-11 (see
+  // DEFAULT_QUANTITY_TYPE's own comment above). The BACKEND CONTRACT IS UNCHANGED — every field
+  // below is still sent by buildPayload — so these are now read-only, preserved values rather than
+  // user inputs:
+  //   - create mode has no persisted request, so each stays blank and sends null (nothing was
+  //     ever entered);
+  //   - edit/revision mode PRESERVES whatever the persisted request already holds, so removing the
+  //     box never nulls a term a draft was saved with. This is why they remain seeded from
+  //     initialSummary rather than dropped from the payload.
+  // Kept as plain constants (not useState) precisely because nothing sets them anymore.
+  const paymentTermMode = initialSummary?.paymentTermMode ?? '';
+  const creditDays = initialSummary?.creditDays != null ? String(initialSummary.creditDays) : '';
+  const validityDays = initialSummary?.validityDays != null ? String(initialSummary.validityDays) : '';
+  const printedByDisplayId = initialSummary?.printedByDisplayId != null ? String(initialSummary.printedByDisplayId) : '';
+  const salesRepDisplayId = initialSummary?.salesRepDisplayId != null ? String(initialSummary.salesRepDisplayId) : '';
+  const deptCode = initialSummary?.deptCode ?? '';
   // unitCode doubles as the ผู้ออกแบบ picker's target, exactly as on the direct-deal form (V173) —
   // a designer pick is a frontend convenience that writes this SAME free-text field, never a
   // separate column; the designer's own name never reaches it, only the code does.
-  const [unitCode, setUnitCode] = useState(() => initialSummary?.unitCode ?? '');
+  const unitCode = initialSummary?.unitCode ?? '';
   const [omitContactHonorific, setOmitContactHonorific] = useState(() => initialSummary?.omitContactHonorific ?? false);
   const [revisionReason, setRevisionReason] = useState('');
   const [clientRequestId] = useState(() => generateClientRequestId());
@@ -507,21 +510,6 @@ export function PricingRequestCreateModal({
       .catch((err) => { if (!cancelled) setAttachmentsError(err.message || 'โหลดไฟล์แนบไม่สำเร็จ'); });
     return () => { cancelled = true; };
   }, [attachablePricingRequestId]);
-
-  // GLA-125: แสดงชื่อผู้พิมพ์เป็น/แสดงชื่อพนักงานขายเป็น reuse the SAME eligible-employee list
-  // the direct-deal quotation editor already fetches (DealQuotationRepository
-  // #findEligibleQuotationDisplayNameOptions — sales division employees plus any
-  // can_create_quotation grant holder). No PCR-specific endpoint needed.
-  const [displayNameOptions, setDisplayNameOptions] = useState([]);
-  const [displayNameOptionsLoading, setDisplayNameOptionsLoading] = useState(true);
-  useEffect(() => {
-    let cancelled = false;
-    api.dealQuotations.displayNameOptions()
-      .then((res) => { if (!cancelled) setDisplayNameOptions(res?.items ?? []); })
-      .catch(() => { /* non-critical: selects just render with no options */ })
-      .finally(() => { if (!cancelled) setDisplayNameOptionsLoading(false); });
-    return () => { cancelled = true; };
-  }, []);
 
   async function handleUploadAttachment(e) {
     const file = e.target.files?.[0];
@@ -890,87 +878,11 @@ export function PricingRequestCreateModal({
           <textarea className="min-h-16" value={note} onChange={(e) => setNote(e.target.value)} placeholder="ข้อมูลเพิ่มเติมสำหรับฝ่ายนำเข้า (ถ้ามี)" />
         </label>
 
-        {/* GLA-125 (owner ruling 2026-09-18): header terms mirroring the direct-deal quotation's
-            own (V165/V179/V180) — none of these are required (a PricingRequest has no price yet,
-            so unlike quotation's deposit/remainder trio there is nothing here that MUST be
-            decided before saving). NOT yet carried onto the customer quotation itself — that is
-            Phase 3, see V185's migration header. "ไม่เติม 'คุณ'" now lives on the ผู้สั่งซื้อ
-            picker above (its own built-in control, wired via omitContactHonorific/
-            onChangeOmitContactHonorific), not duplicated here. */}
-        <div className="rounded-md border border-border bg-surface-subtle p-3">
-          <span className="mb-2 block text-sm font-bold text-text-secondary">เงื่อนไขสำหรับใบเสนอราคา (ไม่บังคับ)</span>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div>
-              <span className="mb-1.5 block text-sm font-bold text-text-secondary">เงื่อนไขการชำระเงิน</span>
-              <div className="flex flex-wrap items-center gap-2">
-                <label className="flex items-center gap-1.5 text-sm">
-                  <input
-                    type="radio"
-                    name="pcrPaymentTermMode"
-                    checked={paymentTermMode === 'CREDIT'}
-                    onChange={() => setPaymentTermMode('CREDIT')}
-                  />
-                  เครดิต
-                </label>
-                <input
-                  type="number"
-                  min="1"
-                  className="w-20"
-                  disabled={paymentTermMode !== 'CREDIT'}
-                  value={creditDays}
-                  onChange={(e) => setCreditDays(e.target.value)}
-                  placeholder="วัน"
-                  aria-label="ระยะเวลาเครดิต (วัน)"
-                />
-                <span className="text-text-muted">วัน</span>
-                <label className="flex items-center gap-1.5 text-sm">
-                  <input
-                    type="radio"
-                    name="pcrPaymentTermMode"
-                    checked={paymentTermMode === 'ON_DELIVERY'}
-                    onChange={() => setPaymentTermMode('ON_DELIVERY')}
-                  />
-                  ชำระเมื่อส่งมอบ
-                </label>
-              </div>
-            </div>
-            <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
-              ยืนราคา (วัน)
-              <input type="number" min="0" value={validityDays} onChange={(e) => setValidityDays(e.target.value)} placeholder="ไม่บังคับ" />
-            </label>
-            <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
-              แสดงชื่อผู้พิมพ์เป็น
-              <select value={printedByDisplayId} onChange={(e) => setPrintedByDisplayId(e.target.value)} disabled={displayNameOptionsLoading}>
-                <option value="">(ใช้ชื่อผู้สร้างคำขอราคา)</option>
-                {displayNameOptions.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-              </select>
-            </label>
-            <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
-              แสดงชื่อพนักงานขายเป็น
-              <select value={salesRepDisplayId} onChange={(e) => setSalesRepDisplayId(e.target.value)} disabled={displayNameOptionsLoading}>
-                <option value="">(ใช้ชื่อผู้สร้างคำขอราคา)</option>
-                {displayNameOptions.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-              </select>
-            </label>
-            <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
-              ฝ่าย
-              <input value={deptCode} onChange={(e) => setDeptCode(e.target.value)} placeholder="ไม่บังคับ" />
-            </label>
-            <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
-              หน่วยงาน / รหัสผู้ออกแบบ
-              <input value={unitCode} onChange={(e) => setUnitCode(e.target.value)} placeholder="ไม่บังคับ" />
-            </label>
-          </div>
-          {/* GLA-125: ช่องทางรับงาน is sales.ticket.entry_channel (V51/V144), set once at
-              deal-creation time and immutable from here — this form only ever DISPLAYS it,
-              read-only, never a new column on sales.pricing_request. Only available in create
-              mode, where `deal` (the ticket summary) is actually passed in; edit/revision mode
-              has no reliable `deal` prop to read this from. */}
-          {deal?.entryChannel ? (
-            <p className="mt-3 text-xs text-text-muted">ช่องทางรับงาน: {entryChannelLabel(deal.entryChannel).label}</p>
-          ) : null}
-        </div>
-
+        {/* The "เงื่อนไขสำหรับใบเสนอราคา" box (payment term / validity / display-name / dept-unit,
+            plus the read-only ช่องทางรับงาน line) was removed on 2026-09-30 per owner request —
+            Sales does not set quotation terms at คำขอราคา time. The underlying fields are still
+            carried on the wire (see the header-terms constants above), so an existing draft's saved
+            terms survive an edit; there is simply no longer any input for them here. */}
         <div>
           <div className="mb-2 flex items-center justify-between">
             <span className="text-sm font-bold text-text-secondary">รายการสินค้า *</span>

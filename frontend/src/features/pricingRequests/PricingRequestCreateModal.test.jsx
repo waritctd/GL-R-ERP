@@ -7,11 +7,11 @@ import { api } from '../../api/index.js';
 globalThis.React = React;
 
 // The component fetches Pricing Request attachments (V69) whenever a persisted id is available
-// (createdId after save, or initialSummary.id in edit mode), QuotationItemRow's own รุ่น
-// typeahead searches the catalog on typing, and (GLA-125) the header-terms section fetches the
-// same eligible-display-name list the direct-deal quotation editor uses — none of these are
-// under test in most cases here, so all three are stubbed to resolve emptily rather than hitting
-// the network and polluting assertions.
+// (createdId after save, or initialSummary.id in edit mode), and QuotationItemRow's own รุ่น
+// typeahead searches the catalog on typing — neither is under test in most cases here, so both are
+// stubbed to resolve emptily rather than hitting the network and polluting assertions.
+// (The header-terms "เงื่อนไขสำหรับใบเสนอราคา" box that used to fetch dealQuotations.displayNameOptions
+// was removed on 2026-09-30, so that stub is gone with it.)
 vi.mock('../../api/index.js', () => ({
   api: {
     catalog: { prices: vi.fn().mockResolvedValue({ items: [] }) },
@@ -19,9 +19,6 @@ vi.mock('../../api/index.js', () => ({
       listAttachments: vi.fn().mockResolvedValue({ items: [] }),
       uploadAttachment: vi.fn().mockResolvedValue({ attachment: null }),
       deleteAttachment: vi.fn().mockResolvedValue({ ok: true }),
-    },
-    dealQuotations: {
-      displayNameOptions: vi.fn().mockResolvedValue({ items: [] }),
     },
     // GLA-125 follow-up: ผู้สั่งซื้อ (QuotationContactPicker) fetches this whenever a customerId
     // is present -- most tests here never set one (deal defaults to null), so it stays unmocked
@@ -305,47 +302,41 @@ describe('PricingRequestCreateModal', () => {
     expect(item.originCountryOther).toBe('เวียดนาม');
   });
 
-  // ── GLA-125 item 4 (header terms) ───────────────────────────────────────────────────────
-  it('sends the header-terms section (payment term, validity, dept/unit code, omit-honorific) in the create payload', async () => {
+  // ── Owner request 2026-09-30: the "เงื่อนไขสำหรับใบเสนอราคา" box was removed from the form ──
+  // Sales does not set quotation terms at คำขอราคา time. The fields stay on the wire (buildPayload
+  // still carries them) so an existing draft's saved terms survive an edit, but there is no input
+  // for them here anymore — create mode therefore sends them all as null.
+  it('no longer renders the "เงื่อนไขสำหรับใบเสนอราคา" box, and create mode sends its fields as null', async () => {
     const { createFn } = renderModal();
+    // The whole box and every input inside it is gone.
+    expect(screen.queryByText('เงื่อนไขสำหรับใบเสนอราคา (ไม่บังคับ)')).toBeNull();
+    expect(screen.queryByLabelText('เครดิต')).toBeNull();
+    expect(screen.queryByLabelText('ระยะเวลาเครดิต (วัน)')).toBeNull();
+    expect(screen.queryByLabelText('ยืนราคา (วัน)')).toBeNull();
+    expect(screen.queryByLabelText('แสดงชื่อผู้พิมพ์เป็น')).toBeNull();
+    expect(screen.queryByLabelText('แสดงชื่อพนักงานขายเป็น')).toBeNull();
+    expect(screen.queryByLabelText('ฝ่าย')).toBeNull();
+    expect(screen.queryByLabelText('หน่วยงาน / รหัสผู้ออกแบบ')).toBeNull();
+
     fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
     fillRequiredFields();
-
-    fireEvent.click(screen.getByLabelText('เครดิต'));
-    fireEvent.change(screen.getByLabelText('ระยะเวลาเครดิต (วัน)'), { target: { value: '30' } });
-    fireEvent.change(screen.getByLabelText('ยืนราคา (วัน)'), { target: { value: '15' } });
-    fireEvent.change(screen.getByLabelText('ฝ่าย'), { target: { value: 'ขาย' } });
-    fireEvent.change(screen.getByLabelText('หน่วยงาน / รหัสผู้ออกแบบ'), { target: { value: 'D01' } });
-    // GLA-125 follow-up: this checkbox now lives on the reused QuotationContactPicker (its own
-    // typographic-quote copy, "ไม่เติม “คุณ”..."), not a standalone PCR-only control.
+    // GLA-125 follow-up: this checkbox lives on the reused QuotationContactPicker (its own
+    // typographic-quote copy, "ไม่เติม “คุณ”..."), independent of the removed box — still works.
     fireEvent.click(screen.getByLabelText(/ไม่เติม/));
 
     fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
 
     await waitFor(() => expect(createFn).toHaveBeenCalledTimes(1));
     expect(createFn.mock.calls[0][0]).toMatchObject({
-      paymentTermMode: 'CREDIT',
-      creditDays: 30,
-      validityDays: 15,
-      deptCode: 'ขาย',
-      unitCode: 'D01',
+      paymentTermMode: null,
+      creditDays: null,
+      validityDays: null,
+      printedByDisplayId: null,
+      salesRepDisplayId: null,
+      deptCode: null,
+      unitCode: null,
       omitContactHonorific: true,
     });
-  });
-
-  it('never sends creditDays when paymentTermMode is ON_DELIVERY, even if a stale value is still in the field', async () => {
-    const { createFn } = renderModal();
-    fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
-    fillRequiredFields();
-
-    fireEvent.click(screen.getByLabelText('เครดิต'));
-    fireEvent.change(screen.getByLabelText('ระยะเวลาเครดิต (วัน)'), { target: { value: '30' } });
-    fireEvent.click(screen.getByLabelText('ชำระเมื่อส่งมอบ'));
-
-    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
-
-    await waitFor(() => expect(createFn).toHaveBeenCalledTimes(1));
-    expect(createFn.mock.calls[0][0]).toMatchObject({ paymentTermMode: 'ON_DELIVERY', creditDays: null });
   });
 
   // ── GLA-125 follow-up: ผู้สั่งซื้อ (QuotationContactPicker reuse) ──────────────────────────
@@ -454,6 +445,50 @@ describe('PricingRequestCreateModal edit mode (Fix 2)', () => {
       items: [expect.objectContaining({ productDescription: 'กระเบื้องพื้น SCG A1' })],
     })));
     expect(onCreated).toHaveBeenCalledTimes(1);
+  });
+
+  // Owner request 2026-09-30: the "เงื่อนไขสำหรับใบเสนอราคา" box is gone, but the header terms it
+  // used to edit are still persisted on the wire — editing a draft that already carries them must
+  // NOT null them just because there is no input anymore.
+  it('preserves the persisted header terms (payment/validity/display-name/dept-unit) on save even with the box removed', async () => {
+    const updateFn = vi.fn().mockResolvedValue({});
+    render(
+      <PricingRequestCreateModal
+        mode="edit"
+        initialValue={editInitialValue({
+          summary: {
+            id: 77,
+            recipientType: 'OWNER',
+            recipientLabel: 'เจ้าของโครงการ ข.',
+            paymentTermMode: 'CREDIT',
+            creditDays: 30,
+            validityDays: 15,
+            printedByDisplayId: 8,
+            salesRepDisplayId: 9,
+            deptCode: 'ขาย',
+            unitCode: 'D01',
+          },
+        })}
+        onClose={vi.fn()}
+        onCreated={vi.fn()}
+        updateFn={updateFn}
+      />,
+    );
+
+    // Confirm there is genuinely no box to re-enter these in.
+    expect(screen.queryByText('เงื่อนไขสำหรับใบเสนอราคา (ไม่บังคับ)')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
+
+    await waitFor(() => expect(updateFn).toHaveBeenCalledWith(77, expect.objectContaining({
+      paymentTermMode: 'CREDIT',
+      creditDays: 30,
+      validityDays: 15,
+      printedByDisplayId: 8,
+      salesRepDisplayId: 9,
+      deptCode: 'ขาย',
+      unitCode: 'D01',
+    })));
   });
 
   it('seeds ผู้สั่งซื้อ from the persisted request\'s recipientContactId/customerId (GLA-125 follow-up), and preserves it on save', async () => {
