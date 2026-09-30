@@ -620,13 +620,13 @@ export function DealFulfilmentPanel({
           )}
           <div className="flex flex-wrap gap-2">
             {can.reserveStock ? (
-              <Button type="button" variant="secondary" disabled={reserveStockMutation.isPending}
+              <Button type="button" variant="secondary" className="whitespace-nowrap" disabled={reserveStockMutation.isPending}
                 onClick={openStockModal} data-testid="deal-fulfilment-reserve-stock">
                 จองสินค้าจากสต็อก
               </Button>
             ) : null}
             {can.setItemWeight ? (
-              <Button type="button" variant="secondary" disabled={setItemWeightMutation.isPending}
+              <Button type="button" variant="secondary" className="whitespace-nowrap" disabled={setItemWeightMutation.isPending}
                 onClick={openWeightModal} data-testid="deal-fulfilment-set-item-weight">
                 ตั้งน้ำหนักคอมมิชชั่นต่อรายการ
               </Button>
@@ -646,7 +646,7 @@ export function DealFulfilmentPanel({
                 <StepRoleTag owners={['sales', 'ceo']} viewerRole={role} />
               </div>
               {canFullWriteStoredIr ? (
-                <Button type="button" size="sm" variant="primary" disabled={createDraftsMutation.isPending}
+                <Button type="button" size="sm" variant="primary" className="whitespace-nowrap" disabled={createDraftsMutation.isPending}
                   onClick={() => createDraftsMutation.mutate(undefined)} data-testid="deal-fulfilment-create-ir-drafts">
                   {/* Nit: once the deal already has rows, "สร้างใบขอซื้อ" ("create a purchase
                       request") read as though it would create a fresh set for every factory again

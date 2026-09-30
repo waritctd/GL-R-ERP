@@ -4,9 +4,13 @@ import { cn } from '../../utils/cn.js';
 import { formatThaiDate } from '../../utils/format.js';
 import { IMPORT_STEPS, importStepIndex, importStepMeta, nextImportStep, stepsAhead } from './importSteps.js';
 
+// Chip metrics — 26px tall / 12px type, the same box StatusBadge (the .status-badge rule) draws, so
+// a chip, the filled step chip and a StatusBadge sitting in one row share a height and baseline.
+// Keep in lockstep with ImportStatusStrip's CHIP.
+const CHIP_BOX = 'inline-flex min-h-[26px] items-center gap-1 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs';
 // Outlined ETA chip — the neutral counterpart to the filled step chip (filled = state, outlined =
 // a date/count), shared in spirit with ImportStatusStrip's chips.
-const ETA_CHIP = 'inline-flex max-w-full items-center gap-1 whitespace-nowrap rounded-full border border-border-subtle bg-surface px-2.5 py-0.5 text-2xs font-bold tabular-nums text-text-secondary';
+const ETA_CHIP = `${CHIP_BOX} max-w-full border-border-subtle bg-surface font-bold tabular-nums text-text-secondary`;
 
 // One factory's import journey as a 6-step progress bar (S12-S17). Read-only for sales/CEO/
 // sales_manager; `editable` (import/CEO — ImportRequestService.ADVANCE_STEP_ROLES) adds the
@@ -63,8 +67,9 @@ export function FactoryProgressBar({
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
             <span
               className={cn(
-                'inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-0.5 text-2xs font-bold',
-                done ? 'bg-success-bg text-success-dark' : 'bg-info-bg text-info',
+                CHIP_BOX,
+                'font-bold',
+                done ? 'border-transparent bg-success-bg text-success-dark' : 'border-transparent bg-info-bg text-info',
               )}
             >
               {current ? `${current.s} · ${current.label}` : (row.importStep ?? '—')}
@@ -100,7 +105,7 @@ export function FactoryProgressBar({
               <>
                 {ahead.length > 1 ? (
                   <select
-                    className="min-h-8 w-auto min-w-0 max-w-full rounded-md border border-border-input bg-surface px-2 text-xs mobile:min-h-11 mobile:w-full"
+                    className="h-8 w-auto min-w-0 max-w-full rounded-md border-[1.5px] border-border-input bg-surface px-2 text-sm mobile:h-11 mobile:w-full"
                     value={target}
                     onChange={(e) => setTarget(e.target.value)}
                     aria-label={`เลื่อนขั้นตอนโรงงาน ${row.factoryName} ไปที่`}
@@ -134,7 +139,7 @@ export function FactoryProgressBar({
           a muted rule. The dot row is a fixed height so the larger current dot never nudges the
           labels out of line with their neighbours. */}
       <div className="overflow-x-auto pb-2">
-        <ol className="m-0 flex min-w-[560px] list-none items-start p-0">
+        <ol className="m-0 flex min-w-[600px] list-none items-start p-0">
           {IMPORT_STEPS.map((step, i) => {
             const isDone = currentIdx >= 0 && i < currentIdx;
             const isCurrent = i === currentIdx;
@@ -158,7 +163,7 @@ export function FactoryProgressBar({
                 </div>
                 <span
                   className={cn(
-                    'mt-2 px-1 text-2xs leading-tight',
+                    'mt-2 px-1 text-xs leading-tight',
                     isCurrent ? (done ? 'font-extrabold text-success-dark' : 'font-extrabold text-info') : isDone ? 'font-bold text-success-dark' : 'text-text-muted',
                   )}
                 >

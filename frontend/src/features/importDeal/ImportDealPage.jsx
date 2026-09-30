@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
-import { Button } from '../../components/common/Button.jsx';
+import { Button, buttonVariants } from '../../components/common/Button.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, Panel } from '../../components/common/Layout.jsx';
@@ -12,6 +12,7 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import {
   dealLifecycleLabel, dealStageLabel, formatThaiDate, fulfilmentStatusLabel,
 } from '../../utils/format.js';
+import { cn } from '../../utils/cn.js';
 import { ImportStatusStrip } from '../importProgress/ImportStatusStrip.jsx';
 import { importStepIndex } from '../importProgress/importSteps.js';
 import { DealAttachmentsPanel } from '../tickets/DealAttachmentsPanel.jsx';
@@ -164,8 +165,9 @@ export function ImportDealPage({ user, showToast }) {
               : status === 404 ? 'ตรวจสอบลิงก์อีกครั้ง หรือกลับไปเลือกจากรายการงานนำเข้า'
                 : (dealQuery.error?.message || 'ลองใหม่อีกครั้ง')}
           />
-          <div className="mt-2 flex justify-center gap-2">
-            <Link to="/fulfilment" className="text-sm font-bold text-primary underline">กลับไปงานนำเข้า</Link>
+          <div className="mt-2 flex flex-wrap justify-center gap-2">
+            {/* A real button-shaped link (not a bare underlined anchor) so it clears the 44px touch floor. */}
+            <Link to="/fulfilment" className={cn(buttonVariants({ variant: 'secondary', size: 'sm' }), 'no-underline')}>กลับไปงานนำเข้า</Link>
             {status !== 403 && status !== 404 ? (
               <Button type="button" size="sm" variant="secondary" onClick={() => dealQuery.refetch()}>ลองใหม่</Button>
             ) : null}

@@ -157,7 +157,7 @@ export function ImportRequestFactoryCard({
   // as before — nothing here is conditionally unmounted.
   const documentDetails = (
     <details className="rounded-md border border-border-subtle open:bg-surface-muted" data-testid={`ir-details-${row.id}`}>
-      <summary className="cursor-pointer select-none rounded-md px-3 py-2 text-xs font-bold text-text-secondary hover:bg-surface-muted hover:text-text">
+      <summary className="cursor-pointer select-none rounded-md px-3 py-2 mobile:py-3.5 text-xs font-bold text-text-secondary hover:bg-surface-muted hover:text-text">
         รายละเอียดใบขอซื้อ (เอกสาร/PDF)
       </summary>
       <div className="flex flex-col gap-3 border-t border-border-subtle p-3">
@@ -231,7 +231,7 @@ export function ImportRequestFactoryCard({
                   onChange={(e) => setLeadTimeDraft((d) => ({ ...d, max: e.target.value }))}
                   data-testid={`ir-lead-max-${row.id}`} />
               </label>
-              <Button type="button" size="sm" variant="secondary" disabled={setLeadTimeMutation.isPending}
+              <Button type="button" size="sm" variant="secondary" className="min-h-10" disabled={setLeadTimeMutation.isPending}
                 onClick={saveLeadTime} data-testid={`ir-lead-save-${row.id}`}>
                 บันทึกระยะเวลา
               </Button>
@@ -257,7 +257,7 @@ export function ImportRequestFactoryCard({
               {row.approvedByName ? `อนุมัติโดย ${row.approvedByName}${row.approvedDate ? ` (${formatThaiDate(row.approvedDate)})` : ''}` : 'ยังไม่อนุมัติ'}
               {row.vesselEtaNote ? ` · กำหนดเรือเข้าโดยประมาณ: ${row.vesselEtaNote}` : ''}
             </span>
-            <Button type="button" size="sm" variant="text" onClick={() => setFooterOpen(true)} data-testid={`ir-footer-open-${row.id}`}>
+            <Button type="button" size="sm" variant="text" className="mobile:min-h-11 mobile:min-w-11" onClick={() => setFooterOpen(true)} data-testid={`ir-footer-open-${row.id}`}>
               แก้ไข
             </Button>
           </div>

@@ -4,7 +4,9 @@ import { cn } from '../../utils/cn.js';
 // Quiet, outlined counter chip — neutral by default so the strip informs without competing with
 // the per-factory tracker beside/below it. `whitespace-nowrap` is deliberate: a chip that wraps
 // onto two lines reads as two chips.
-const CHIP = 'inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-border-subtle bg-surface px-2.5 py-0.5 text-2xs font-bold tabular-nums text-text-secondary';
+// 26px tall / 12px type — the same box StatusBadge draws, so the status badge and these chips read
+// as one row. Keep in lockstep with FactoryProgressBar's CHIP_BOX.
+const CHIP = 'inline-flex min-h-[26px] items-center gap-1.5 whitespace-nowrap rounded-full border border-border-subtle bg-surface px-2.5 py-0.5 text-xs font-bold tabular-nums text-text-secondary';
 const CHIP_ARRIVED = 'border-success-border text-success';
 
 /**
