@@ -103,17 +103,6 @@ public class TicketRepository {
     private static final List<String> ACCOUNT_PENDING_PAYMENT_STATUSES =
         List.of("DEPOSIT_NOTICE_ISSUED", "AWAITING_FINAL_PAYMENT");
 
-    /**
-     * GLA-136 (owner ruling 2026-09-30, V193): the deal LIST and its COUNT are the pipeline, and a
-     * quotation-only container ticket ({@code sales.ticket.quotation_only}) is not part of it — it
-     * exists only because {@code sales.quotation.ticket_id} is NOT NULL. One shared fragment so
-     * {@link #findSummaries} and {@link #countSummaries} can never disagree about which rows the
-     * page holds versus how many pages there are. Deliberately NOT applied to {@link #findById}:
-     * reading a single ticket by id (the quotation editor's ticket summary, the deal page banner)
-     * must still work.
-     */
-    private static final String PIPELINE_ONLY = " AND t.quotation_only = FALSE ";
-
     public TicketRepository(NamedParameterJdbcTemplate jdbc) {
         this.jdbc = jdbc;
     }
@@ -140,7 +129,7 @@ public class TicketRepository {
              WHERE (:status::varchar IS NULL OR t.status = :status)
                AND (:salesStage::varchar IS NULL OR t.sales_stage = :salesStage)
                AND (:createdBy::bigint IS NULL OR t.created_by = :createdBy)
-            """).append(PIPELINE_ONLY);
+            """);
         MapSqlParameterSource params = new MapSqlParameterSource()
             .addValue("status", status)
             .addValue("salesStage", salesStage)
@@ -178,7 +167,7 @@ public class TicketRepository {
              WHERE (:status::varchar IS NULL OR t.status = :status)
                AND (:salesStage::varchar IS NULL OR t.sales_stage = :salesStage)
                AND (:createdBy::bigint IS NULL OR t.created_by = :createdBy)
-            """).append(PIPELINE_ONLY);
+            """);
         MapSqlParameterSource params = new MapSqlParameterSource()
             .addValue("status", status)
             .addValue("salesStage", salesStage)
@@ -1894,13 +1883,28 @@ public class TicketRepository {
     }
 
     /**
-     * GLA-136 — the one write that turns a quotation-only container ticket (V193) into a pipeline
-     * deal: {@code quotation_only TRUE -> FALSE}, as a compare-and-set so a lost race (a concurrent
-     * promotion already flipped it) yields 0 rows rather than a silent double write. Called ONLY by
-     * {@code DealQuotationService#promoteToDeal}, under {@link #lockTicketForUpdate}, immediately
-     * before the same {@link #markQuotationIssuedForOrderConfirmation} bridge write
-     * {@code OrderConfirmationService#confirmOrder} performs. Never sets the flag back to TRUE:
-     * nothing in the product un-promotes a deal.
+     * Quotation ↔ deal linking slice 1 — does this deal have a LIVE direct quotation: a
+     * {@code DEAL_DIRECT} row in {@code DRAFT}, {@code PENDING_APPROVAL} or {@code APPROVED}? The one
+     * predicate behind {@link DirectQuotationLocks#requireNoLiveDirectQuotation}. CANCELLED,
+     * SUPERSEDED and REJECTED rows are not live; PRICING_REQUEST and legacy rows never count.
+     */
+    public boolean hasLiveDirectQuotation(long ticketId) {
+        Boolean value = jdbc.queryForObject("""
+            SELECT EXISTS(SELECT 1 FROM sales.quotation
+                           WHERE ticket_id = :ticketId
+                             AND origin = 'DEAL_DIRECT'
+                             AND doc_status IN ('DRAFT', 'PENDING_APPROVAL', 'APPROVED'))
+            """, Map.of("ticketId", ticketId), Boolean.class);
+        return Boolean.TRUE.equals(value);
+    }
+
+    /**
+     * GLA-136 — clears the V193 {@code quotation_only} provenance flag, as a compare-and-set
+     * ({@code TRUE -> FALSE}). Since quotation ↔ deal linking slice 1 the flag is provenance only
+     * (nothing reads it), and this is called BEST-EFFORT by
+     * {@code DealQuotationService#confirmOrderFromDirectQuotation}, under {@link #lockTicketForUpdate}:
+     * 1 on a quotation-first deal, 0 on an ordinary one — the caller ignores the rowcount. Never sets
+     * the flag back to TRUE.
      *
      * @return the rowcount (0 or 1).
      */
@@ -1913,12 +1917,11 @@ public class TicketRepository {
     }
 
     /**
-     * GLA-136 — has this ticket already been promoted into the pipeline from a direct quotation
-     * ({@link TicketEventKind#DEAL_PROMOTED_FROM_QUOTATION}, written exactly once per promotion by
-     * {@code DealQuotationService#promoteToDeal})? The discriminator for that method's idempotent
-     * replay: a ticket with {@code quotation_only = FALSE} AND this event was promoted by that path
-     * (a replay returns it unchanged), while a ticket with {@code quotation_only = FALSE} and NO such
-     * event was always a pipeline deal (a promotion attempt is a 409, not a silent success).
+     * GLA-136 — has this deal's order already been confirmed from a direct quotation
+     * ({@link TicketEventKind#DEAL_PROMOTED_FROM_QUOTATION}, written exactly once per confirmation by
+     * {@code DealQuotationService#confirmOrderFromDirectQuotation})? The discriminator for that
+     * method's idempotent replay: if the event exists, a replay returns the current state and
+     * writes nothing.
      */
     public boolean hasPromotionFromQuotationEvent(long ticketId) {
         Boolean value = jdbc.queryForObject("""

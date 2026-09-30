@@ -209,6 +209,7 @@
     "POST /api/deal-quotations/calculate-line",
     "POST /api/deal-quotations/{id}/approve",
     "POST /api/deal-quotations/{id}/cancel",
+    "POST /api/deal-quotations/{id}/confirm-order",
     "POST /api/deal-quotations/{id}/items/{pricingDecisionItemId}/restore",
     "POST /api/deal-quotations/{id}/outcome",
     "POST /api/deal-quotations/{id}/promote-to-deal",

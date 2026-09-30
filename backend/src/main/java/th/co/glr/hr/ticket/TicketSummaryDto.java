@@ -105,13 +105,12 @@ public record TicketSummaryDto(
      */
     int reopenCount,
     /**
-     * GLA-136 (owner ruling 2026-09-30, V193 {@code sales.ticket.quotation_only}): {@code true}
-     * when this ticket exists only as the container of a direct (DEAL_DIRECT) quotation written at
-     * {@code /quotations/new} — it is NOT a pipeline deal. The deal list/count and the dashboard
-     * leave such a ticket out, and manual pipeline writes refuse it; {@code GET /api/tickets/{id}}
-     * still serves it (the quotation editor reads this summary). Flips to {@code false} when the rep
-     * promotes an APPROVED direct quotation into the pipeline
-     * ({@code DealQuotationService#promoteToDeal}).
+     * V193 {@code sales.ticket.quotation_only} — PROVENANCE ONLY since quotation ↔ deal linking
+     * slice 1 (IA §7, 2026-09-30): {@code true} when the deal was created from {@code
+     * /quotations/new} (quotation first). GLA-136 used it to hide the deal from the pipeline; that
+     * was reversed — the deal is listed, counted and movable like any other, and nothing in the
+     * backend reads this flag any more. Cleared best-effort when the order is confirmed from a direct
+     * quotation ({@code DealQuotationService#confirmOrderFromDirectQuotation}).
      */
     boolean quotationOnly
 ) {

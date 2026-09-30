@@ -4,7 +4,8 @@ import { describe, expect, it } from 'vitest';
 import { DEAL_STAGE_CATALOG } from '../../data/dealStageCatalog.js';
 import { hasDealStageLabel } from '../../utils/format.js';
 import {
-  EMPTY_STAGE_CATALOG, findStage, nextStageIn, phaseIdOf, stageIndexIn, stagesInPhase,
+  EMPTY_STAGE_CATALOG, findStage, nextOnRoute, nextStageIn, phaseIdOf, routeForChannel, routePath,
+  routePosition, routePositionForChannel, stageIndexIn, stagesInPhase,
 } from './stageCatalog.js';
 import { assertStageLabelsComplete, AUTO_STAGE_HINT, GATE_LABEL } from './stageMeta.js';
 import { MOCK_FACT_GATED_STAGES } from '../../api/mockApi.js';
@@ -53,6 +54,7 @@ import { MOCK_FACT_GATED_STAGES } from '../../api/mockApi.js';
 
 const JAVA_RELATIVE_PATH = 'backend/src/main/java/th/co/glr/hr/ticket/DealStage.java';
 const TICKET_SERVICE_RELATIVE_PATH = 'backend/src/main/java/th/co/glr/hr/ticket/TicketService.java';
+const DEAL_ROUTE_RELATIVE_PATH = 'backend/src/main/java/th/co/glr/hr/ticket/DealRoute.java';
 
 /**
  * Walk up from the working directory to the repo root and read the Java. Deliberately THROWS when
@@ -77,6 +79,7 @@ function readBackendJava(relativePath) {
 
 const javaSource = readBackendJava(JAVA_RELATIVE_PATH);
 const ticketServiceSource = readBackendJava(TICKET_SERVICE_RELATIVE_PATH);
+const dealRouteSource = readBackendJava(DEAL_ROUTE_RELATIVE_PATH);
 
 /** Pull `NAME = List.of(A, B, C);` / `NAME = Set.of(A, B);` out of the Java, as bare identifiers. */
 function javaConstantList(declaration) {
@@ -314,5 +317,296 @@ describe('catalog lookups', () => {
     expect(stageIndexIn(EMPTY_STAGE_CATALOG, 'LEAD_APPROACH')).toBe(-1);
     expect(stagesInPhase(EMPTY_STAGE_CATALOG, 1)).toEqual([]);
     expect(findStage(undefined, 'LEAD_APPROACH')).toBeNull();
+  });
+});
+
+/**
+ * Route-aware lookups (deal-route-staging). The backend serves `onRoute` per stage on
+ * GET /api/tickets/{id}/actions (StageDecisionDto); these helpers only READ it.
+ *
+ * ⚠️ The decisions below are built here and passed in DIRECTLY. mockApi.js does not emit `onRoute`,
+ * so a mock-driven test would see every stage on-route and pass vacuously — the "mock omits a field
+ * the feature keys on" failure mode CLAUDE.md documents.
+ */
+describe('route-aware lookups', () => {
+  const catalog = DEAL_STAGE_CATALOG;
+  const OWNER_OFF = ['QUOTE_DESIGN_SIDE'];
+  const BUYER_OFF = ['QUOTE_DESIGN_SIDE', 'QUOTE_OWNER', 'OWNER_SIGNOFF', 'AWAITING_BUYER'];
+  const decisionsFor = (off) => catalog.stages.map((stage) => ({
+    stage: stage.code,
+    no: stage.no,
+    allowed: !off.includes(stage.code),
+    requiresReason: false,
+    blockedReason: off.includes(stage.code) ? `ขั้นที่ ${stage.no} ไม่อยู่ในเส้นทางของดีลนี้` : null,
+    onRoute: !off.includes(stage.code),
+  }));
+
+  describe('routePath', () => {
+    it('returns all fifteen stages when there are no decisions at all (empty, undefined, null)', () => {
+      expect(catalog.stages).toHaveLength(15);
+      expect(routePath(catalog, [])).toHaveLength(15);
+      expect(routePath(catalog, undefined)).toHaveLength(15);
+      expect(routePath(catalog, null)).toHaveLength(15);
+    });
+
+    it('returns all fifteen when every decision says onRoute:true (designer-led)', () => {
+      expect(routePath(catalog, decisionsFor([])).map((s) => s.code))
+        .toEqual(catalog.stages.map((s) => s.code));
+    });
+
+    it('excludes onRoute:false stages and keeps catalog order (buyer-direct)', () => {
+      const path = routePath(catalog, decisionsFor(BUYER_OFF));
+      expect(path).toHaveLength(11);
+      expect(path.map((s) => s.code)).toEqual(
+        catalog.stages.map((s) => s.code).filter((code) => !BUYER_OFF.includes(code)),
+      );
+    });
+
+    it('treats a stage with NO decision, or a decision with no onRoute field, as on-route', () => {
+      // Degrades to today's behaviour: only an explicit `false` removes a stage.
+      const partial = [
+        { stage: 'QUOTE_DESIGN_SIDE', no: 4, allowed: true, blockedReason: null }, // onRoute absent
+        { stage: 'QUOTE_OWNER', no: 5, allowed: false, blockedReason: 'x', onRoute: false },
+      ];
+      const codes = routePath(catalog, partial).map((s) => s.code);
+      expect(codes).toContain('QUOTE_DESIGN_SIDE');
+      expect(codes).not.toContain('QUOTE_OWNER');
+      expect(codes).toHaveLength(14);
+    });
+  });
+
+  describe('routePosition', () => {
+    it('buyer-direct at QUOTE_BUYER (S8) is the 4th of 11 — not 8 of 15', () => {
+      expect(routePosition(catalog, 'QUOTE_BUYER', decisionsFor(BUYER_OFF)))
+        .toEqual({ position: 4, total: 11 });
+    });
+
+    it('designer-led at QUOTE_BUYER stays 8 of 15 (majority-route regression guard)', () => {
+      expect(routePosition(catalog, 'QUOTE_BUYER', decisionsFor([])))
+        .toEqual({ position: 8, total: 15 });
+    });
+
+    it('with no decisions at all it is the plain catalog position', () => {
+      expect(routePosition(catalog, 'QUOTE_BUYER', [])).toEqual({ position: 8, total: 15 });
+      expect(routePosition(catalog, 'QUOTE_BUYER', undefined)).toEqual({ position: 8, total: 15 });
+    });
+
+    it('owner-direct: 14 stages, and S5 is the 4th on the route', () => {
+      expect(routePosition(catalog, 'QUOTE_OWNER', decisionsFor(OWNER_OFF)))
+        .toEqual({ position: 4, total: 14 });
+    });
+
+    it('a deal SITTING on an off-route stage (channel corrected after it got there) gets a sane position and does not throw', () => {
+      // Sat on S4, then the channel was corrected to owner-direct: S4 is now off-route.
+      const result = routePosition(catalog, 'QUOTE_DESIGN_SIDE', decisionsFor(OWNER_OFF));
+      expect(result.total).toBe(14);
+      // Counts the on-route stages it has passed (S1-S3); never 0, never past the total.
+      expect(result.position).toBeGreaterThanOrEqual(1);
+      expect(result.position).toBeLessThanOrEqual(result.total);
+      expect(result.position).toBe(3);
+    });
+
+    it('never throws for an unknown stage code or the pre-load empty catalog', () => {
+      expect(() => routePosition(catalog, 'NOT_A_STAGE', decisionsFor([]))).not.toThrow();
+      expect(() => routePosition(EMPTY_STAGE_CATALOG, 'LEAD_APPROACH', [])).not.toThrow();
+      expect(routePosition(EMPTY_STAGE_CATALOG, 'LEAD_APPROACH', []).total).toBe(0);
+    });
+  });
+
+  describe('nextOnRoute', () => {
+    it('owner-direct at SPEC_APPROVED (S3) offers QUOTE_OWNER (S5), not QUOTE_DESIGN_SIDE (S4)', () => {
+      expect(nextOnRoute(catalog, 'SPEC_APPROVED', decisionsFor(OWNER_OFF))?.code).toBe('QUOTE_OWNER');
+    });
+
+    it('buyer-direct at SPEC_APPROVED (S3) offers QUOTE_BUYER (S8)', () => {
+      expect(nextOnRoute(catalog, 'SPEC_APPROVED', decisionsFor(BUYER_OFF))?.code).toBe('QUOTE_BUYER');
+    });
+
+    it('designer-led / no decisions agree with nextStageIn everywhere', () => {
+      for (const stage of catalog.stages) {
+        expect(nextOnRoute(catalog, stage.code, decisionsFor([]))?.code ?? null)
+          .toBe(nextStageIn(catalog, stage.code)?.code ?? null);
+        expect(nextOnRoute(catalog, stage.code, [])?.code ?? null)
+          .toBe(nextStageIn(catalog, stage.code)?.code ?? null);
+      }
+    });
+
+    it('a deal sitting on an off-route stage is offered the next ON-route stage after it', () => {
+      expect(nextOnRoute(catalog, 'QUOTE_DESIGN_SIDE', decisionsFor(OWNER_OFF))?.code).toBe('QUOTE_OWNER');
+    });
+
+    it('is null at the last stage and for an unknown code', () => {
+      expect(nextOnRoute(catalog, 'CLOSED_PAID', decisionsFor([]))).toBeNull();
+      expect(nextOnRoute(catalog, 'NOT_A_STAGE', decisionsFor([]))).toBeNull();
+    });
+
+    it('never returns an off-route stage', () => {
+      for (const stage of catalog.stages) {
+        const next = nextOnRoute(catalog, stage.code, decisionsFor(BUYER_OFF));
+        if (next) expect(BUYER_OFF).not.toContain(next.code);
+      }
+    });
+  });
+});
+
+// ── The served route: GET /api/meta/deal-stages -> `routes` ────────────────────────────────────
+// The backend serves each entry channel's route (DealStageMetaController -> DealRoute.path) so a
+// deal LIST row, which has `deal.entryChannel` but no per-deal decision payload, can print its
+// position on its own route. Serving it is only safer than mirroring it if the fixture that stands
+// in for the endpoint cannot drift from DealRoute.java — so the guard below reads DealRoute's
+// off-route tables out of the Java source and compares.
+
+/** Stage identifiers named inside a Java fragment, in order: `DealStage.X` -> X. */
+function dealStageNames(fragment) {
+  return [...fragment.matchAll(/DealStage\.([A-Z_]+)/g)].map((match) => match[1]);
+}
+
+/** DealRoute.OFF_ROUTE: channel -> list of off-route stage codes, parsed from the Java. */
+function javaOffRouteTable() {
+  const match = dealRouteSource.match(/OFF_ROUTE\s*=\s*Map\.of\(([\s\S]*?)\)\);/);
+  if (!match) throw new Error('could not find OFF_ROUTE in DealRoute.java');
+  // The lazy match stops at the `));` that closes `Map.of(`, which consumes the LAST `Set.of(`'s own
+  // closing paren — restore it, or the final channel's entry silently fails to parse.
+  const body = `${match[1].replace(/\/\/[^\n]*/g, '')})`;
+  const table = {};
+  for (const entry of body.matchAll(/EntryChannel\.([A-Z_]+)\s*,\s*Set\.of\(([^)]*)\)/g)) {
+    table[entry[1]] = dealStageNames(entry[2]);
+  }
+  return table;
+}
+
+/** DealRoute.ROUTE_VARIABLE: the only stages a route may ever exclude. */
+function javaRouteVariable() {
+  const match = dealRouteSource.match(/ROUTE_VARIABLE\s*=\s*Set\.of\(([\s\S]*?)\);/);
+  if (!match) throw new Error('could not find ROUTE_VARIABLE in DealRoute.java');
+  return dealStageNames(match[1].replace(/\/\/[^\n]*/g, ''));
+}
+
+const javaOffRoute = javaOffRouteTable();
+const javaRouteVariableStages = javaRouteVariable();
+
+describe('DealRoute.java is the route, and the served-routes fixture must not disagree with it', () => {
+  const routes = DEAL_STAGE_CATALOG.routes;
+
+  it('parsed DealRoute.java at all — a vacuous parse must fail, not pass', () => {
+    expect(Object.keys(javaOffRoute).sort()).toEqual(['BUYER_DIRECT', 'DESIGNER_LED', 'OWNER_DIRECT']);
+    expect(javaOffRoute.DESIGNER_LED).toEqual([]);
+    expect(javaOffRoute.OWNER_DIRECT.length).toBeGreaterThanOrEqual(1);
+    expect(javaOffRoute.BUYER_DIRECT.length).toBeGreaterThanOrEqual(4);
+    expect(javaRouteVariableStages.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it('the fixture serves a route for every channel DealRoute names, plus UNSPECIFIED', () => {
+    expect(routes, 'DEAL_STAGE_CATALOG.routes').toBeTruthy();
+    expect(Object.keys(routes).sort()).toEqual(
+      [...Object.keys(javaOffRoute), 'UNSPECIFIED'].sort(),
+    );
+  });
+
+  it('each served route is DealStage.ORDER minus that channel\'s off-route stages, in order', () => {
+    for (const [channel, off] of Object.entries(javaOffRoute)) {
+      expect(routes?.[channel], `route of ${channel}`).toEqual(
+        javaOrder.filter((code) => !off.includes(code)),
+      );
+    }
+  });
+
+  it('UNSPECIFIED serves all fifteen — DealRoute gives it no off-route stage', () => {
+    expect(routes?.UNSPECIFIED).toEqual(javaOrder);
+    expect(routes?.UNSPECIFIED).toHaveLength(15);
+  });
+
+  it('a route only ever varies the party stages: every route keeps the whole tail from NEGOTIATION', () => {
+    const tail = javaOrder.slice(javaOrder.indexOf('NEGOTIATION'));
+    expect(tail).toContain('CLOSED_PAID');
+    for (const [channel, off] of Object.entries(javaOffRoute)) {
+      for (const stage of off) {
+        expect(javaRouteVariableStages, `${stage} off-route for ${channel}`).toContain(stage);
+      }
+      expect(routes?.[channel], `route of ${channel}`).toEqual(expect.arrayContaining(tail));
+    }
+  });
+});
+
+describe('routeForChannel / routePositionForChannel — lookups over the SERVED routes', () => {
+  const catalog = DEAL_STAGE_CATALOG;
+  const withoutRoutes = { ...catalog, routes: undefined };
+
+  describe('routeForChannel', () => {
+    it('buyer-direct is 11 stages, owner-direct 14, designer-led 15 — in catalog order', () => {
+      expect(routeForChannel(catalog, 'BUYER_DIRECT')).toHaveLength(11);
+      expect(routeForChannel(catalog, 'OWNER_DIRECT')).toHaveLength(14);
+      expect(routeForChannel(catalog, 'DESIGNER_LED')).toHaveLength(15);
+      expect(routeForChannel(catalog, 'BUYER_DIRECT').map((s) => s.code)).toEqual(
+        catalog.routes.BUYER_DIRECT,
+      );
+    });
+
+    it('UNSPECIFIED, an unknown channel, null and undefined are all fifteen', () => {
+      for (const channel of ['UNSPECIFIED', 'SOMETHING_NEW', null, undefined]) {
+        expect(routeForChannel(catalog, channel), String(channel)).toHaveLength(15);
+      }
+    });
+
+    it('absent `routes` (older backend, pre-load) is all stages, and never throws', () => {
+      expect(routeForChannel(withoutRoutes, 'BUYER_DIRECT')).toHaveLength(15);
+      expect(routeForChannel(EMPTY_STAGE_CATALOG, 'BUYER_DIRECT')).toEqual([]);
+      expect(() => routeForChannel(undefined, 'BUYER_DIRECT')).not.toThrow();
+    });
+  });
+
+  describe('routePositionForChannel', () => {
+    it('buyer-direct at QUOTE_BUYER is the 4th of 11 — not 8 of 15', () => {
+      expect(routePositionForChannel(catalog, 'QUOTE_BUYER', 'BUYER_DIRECT'))
+        .toEqual({ position: 4, total: 11 });
+    });
+
+    it('designer-led at QUOTE_BUYER stays 8 of 15 (majority-route regression guard)', () => {
+      expect(routePositionForChannel(catalog, 'QUOTE_BUYER', 'DESIGNER_LED'))
+        .toEqual({ position: 8, total: 15 });
+    });
+
+    it('UNSPECIFIED, absent and unknown channels are the plain catalog position', () => {
+      for (const channel of ['UNSPECIFIED', null, undefined, 'SOMETHING_NEW']) {
+        expect(routePositionForChannel(catalog, 'QUOTE_BUYER', channel), String(channel))
+          .toEqual({ position: 8, total: 15 });
+      }
+    });
+
+    it('absent catalog.routes is all fifteen even for a buyer-direct deal', () => {
+      expect(routePositionForChannel(withoutRoutes, 'QUOTE_BUYER', 'BUYER_DIRECT'))
+        .toEqual({ position: 8, total: 15 });
+    });
+
+    it('owner-direct at QUOTE_OWNER (S5) is the 4th of 14', () => {
+      expect(routePositionForChannel(catalog, 'QUOTE_OWNER', 'OWNER_DIRECT'))
+        .toEqual({ position: 4, total: 14 });
+    });
+
+    it('agrees with routePosition over the equivalent decisions, stage by stage', () => {
+      const decisions = catalog.stages.map((stage) => ({
+        stage: stage.code, onRoute: catalog.routes.BUYER_DIRECT.includes(stage.code),
+      }));
+      for (const stage of catalog.stages) {
+        expect(routePositionForChannel(catalog, stage.code, 'BUYER_DIRECT'), stage.code)
+          .toEqual(routePosition(catalog, stage.code, decisions));
+      }
+    });
+
+    it('a deal SITTING on an off-route stage gets a sane position and does not throw', () => {
+      // On QUOTE_DESIGN_SIDE, then the channel became buyer-direct: S4 is off-route.
+      const result = routePositionForChannel(catalog, 'QUOTE_DESIGN_SIDE', 'BUYER_DIRECT');
+      expect(result.total).toBe(11);
+      expect(result.position).toBe(3); // the on-route stages it has passed: S1-S3
+    });
+
+    it('an unknown stage is position 0 of that route; the empty catalog does not throw', () => {
+      expect(routePositionForChannel(catalog, 'NOT_A_STAGE', 'BUYER_DIRECT'))
+        .toEqual({ position: 0, total: 11 });
+      expect(() => routePositionForChannel(EMPTY_STAGE_CATALOG, 'LEAD_APPROACH', 'BUYER_DIRECT'))
+        .not.toThrow();
+      expect(routePositionForChannel(EMPTY_STAGE_CATALOG, 'LEAD_APPROACH', 'BUYER_DIRECT').total)
+        .toBe(0);
+    });
   });
 });
