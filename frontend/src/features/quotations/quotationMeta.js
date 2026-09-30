@@ -227,6 +227,104 @@ export function isDealQuotationReadOnlyViewer(user) {
   return user?.role === 'import' || user?.role === 'account';
 }
 
+// ── Slice 2 — ผู้รับใบเสนอราคา (SLICE-2-FLOW-A.md §A/§C, S2-B1) ───────────────────────────────────
+// The three recipients, in S-order, each paired with TicketService#stageForQuotationRecipient's own
+// quote stage (DESIGNER -> S4, OWNER -> S5, BUYER -> S8). Slice 2 only READS that pairing — to
+// preselect the recipient from a deal already sitting at a quote stage (flow B); owner ruling
+// 2026-09-30 took the recipient -> stage MOVE (spec S2-B2) out of this slice, since the deal-stage
+// rule is owned by another session. UNSPECIFIED is never offered (IA §8). Labels are Thai-only —
+// pricingRequestMeta's RECIPIENT_OPTIONS carries "ผู้ออกแบบ (Designer)", a mixed-script label
+// DESIGN.md §18 bans on a new control.
+export const QUOTATION_RECIPIENT_OPTIONS = Object.freeze([
+  Object.freeze({ code: 'DESIGNER', label: 'ผู้ออกแบบ', stage: 'QUOTE_DESIGN_SIDE' }),
+  Object.freeze({ code: 'OWNER', label: 'เจ้าของโครงการ', stage: 'QUOTE_OWNER' }),
+  Object.freeze({ code: 'BUYER', label: 'ผู้ซื้อ / ผู้รับเหมา', stage: 'QUOTE_BUYER' }),
+]);
+
+export function quotationRecipientOption(code) {
+  return QUOTATION_RECIPIENT_OPTIONS.find((o) => o.code === code) ?? null;
+}
+
+/** Mirrors TicketService#stageForQuotationRecipient. null for UNSPECIFIED/unknown. */
+export function stageForQuotationRecipient(code) {
+  return quotationRecipientOption(code)?.stage ?? null;
+}
+
+/** The inverse, for flow B's preselect: a deal already AT a quote stage names its recipient.
+ * '' for every other stage — the rep is then asked, never guessed for. */
+export function recipientForDealStage(stage) {
+  return QUOTATION_RECIPIENT_OPTIONS.find((o) => o.stage === stage)?.code ?? '';
+}
+
+/** Owner ruling 2026-09-30 #2 — on a NEW deal the entry channel pre-fills ผู้รับใบเสนอราคา (editable;
+ * the editor re-fills only while the rep has not picked one). This pairs a channel with the party it
+ * names; it says nothing about the ROUTE, which is only ever read from the served catalog below.
+ * '' for UNSPECIFIED / unknown — the rep is then asked, never guessed for. */
+const RECIPIENT_FOR_ENTRY_CHANNEL = Object.freeze({
+  DESIGNER_LED: 'DESIGNER',
+  OWNER_DIRECT: 'OWNER',
+  BUYER_DIRECT: 'BUYER',
+});
+
+export function recipientForEntryChannel(entryChannel) {
+  return RECIPIENT_FOR_ENTRY_CHANNEL[entryChannel] ?? '';
+}
+
+/** Owner ruling 2026-09-30 #1 — "off-route recipient → allow + inline note". `route` is the deal's
+ * route as served (`routeForChannel(catalog, channel)` from features/tickets/stageCatalog.js — this
+ * module deliberately does not import it: mockApi imports this file, and stageCatalog imports the
+ * api). True only when a recipient is chosen, the route is known (non-empty — an unloaded catalog
+ * reads as "no opinion", never as "everything off-route"), and the recipient's quote stage is not on
+ * it. A hint for the UI only: nothing is blocked on it, and the server moves no stage from it. */
+export function isRecipientOffRoute(route, recipientCode) {
+  const stage = stageForQuotationRecipient(recipientCode);
+  if (!stage || !Array.isArray(route) || route.length === 0) return false;
+  return !route.some((row) => row?.code === stage);
+}
+
+// ── One pricing route per deal (owner ruling 2026-09-30, both directions) ──────────────────────────
+// Slice 1 refuses a คำขอราคา while a live direct quotation exists (DirectQuotationLocks). The reverse:
+// while the deal has a LIVE pricing request, no direct quotation may be started — the deal page hides
+// ใบเสนอราคาตรง, the /quotations/new picker shows an inline notice and disables บันทึกร่าง, and the
+// server 409s DealQuotationService#create with the sentence below. "Live" = any status except the two
+// dead ends, so a private DRAFT and a finished QUOTATION_ACCEPTED both count. This is the ONE
+// definition; every surface above (and mockApi's create) reads it from here.
+const DEAD_PRICING_REQUEST_STATUSES = Object.freeze(new Set(['CANCELLED', 'SUPERSEDED']));
+
+export const LIVE_PRICING_REQUEST_BLOCK_MESSAGE =
+  'ดีลนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน';
+
+/** True when `pricingRequests` holds a live request ON `ticketId` (ids compared as numbers). */
+export function hasLivePricingRequest(pricingRequests, ticketId) {
+  if (!Array.isArray(pricingRequests) || ticketId == null) return false;
+  return pricingRequests.some((pr) => pr != null
+    && Number(pr.ticketId) === Number(ticketId)
+    && !DEAD_PRICING_REQUEST_STATUSES.has(pr.status));
+}
+
+/** The live DEAL_DIRECT statuses — DealQuotationService's N6 predicate (slice 1's
+ * DirectQuotationLocks) and TicketSummaryDto.liveDirectQuotation both key on exactly these. */
+export const LIVE_DIRECT_QUOTATION_STATUSES = Object.freeze(new Set(['DRAFT', 'PENDING_APPROVAL', 'APPROVED']));
+
+export function isLiveDirectQuotation(live) {
+  return Boolean(live) && LIVE_DIRECT_QUOTATION_STATUSES.has(live.docStatus);
+}
+
+/** N6's reason, word for word the server's 409 (S2-B3) — the editor disables บันทึกร่าง with it
+ * BEFORE the rep ever reaches that refusal (DESIGN.md §14: a disabled action says why). */
+export function liveDirectQuotationBlockMessage(live) {
+  return `ดีลนี้มีใบเสนอราคาตรงที่ใช้งานอยู่ (${live?.number ?? '-'}) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่`;
+}
+
+/** The confirm-order dialog copy for an APPROVED direct quotation (GLA-136's promote endpoint),
+ * shared by the quotation editor and the deal page's sticky CTA so the two never drift. `stage`
+ * is the part both render in <strong>. */
+export const CONFIRM_ORDER_FROM_QUOTATION_COPY = Object.freeze({
+  lead: (number) => `ระบบจะนำดีลของใบเสนอราคา ${number ?? ''} เข้าสู่ขั้นตอนการขาย ที่ขั้น`,
+  stage: 'ได้รับคำสั่งซื้อ',
+  tail: 'พร้อมรายการสินค้าตามใบเสนอราคานี้ — จากนั้นออกใบแจ้งรับมัดจำ สั่งสินค้า และส่งมอบได้ตามปกติ การดำเนินการนี้ย้อนกลับไม่ได้',
+});
+
 // ── Terms card options (editor) ────────────────────────────────────────────────────────────────
 
 // Item 4 ("ไม่รับมัดจำ", owner ruling 2026-09-16): 0% is no longer enterable as an ordinary
@@ -1528,11 +1626,24 @@ export const QUOTATION_CHECK = Object.freeze({
   // submit. Two check names so the two severities can never share one blocking/non-blocking flag.
   CREDIT_DAYS: 'creditDays',
   CREDIT_DAYS_INVALID: 'creditDaysInvalid',
+  // Slice 2 (SLICE-2-FLOW-A.md, owner-approved IA D1–D7) — all three blocking, and each mirrors a
+  // refusal the server makes on create: no ticket to hang the quotation on at all (DEAL), S2-B1's
+  // 400 on a DEAL_DIRECT create with no recipient (RECIPIENT), and S2-B3's N6 409 (LIVE_DIRECT).
+  DEAL: 'deal',
+  RECIPIENT: 'recipient',
+  LIVE_DIRECT_QUOTATION: 'liveDirectQuotation',
+  // One pricing route per deal (owner ruling 2026-09-30): the reverse of slice 1's lock — the
+  // picked deal has a live pricing request, which DealQuotationService#create refuses (409).
+  LIVE_PRICING_REQUEST: 'livePricingRequest',
 });
 
 /** THE blocking set — the one place that decides which checklist entries disable บันทึกร่าง and
  * ส่งขออนุมัติ. Every other check is a warning. Change it only on an owner ruling. */
 export const QUOTATION_BLOCKING_CHECKS = Object.freeze(new Set([
+  QUOTATION_CHECK.DEAL,
+  QUOTATION_CHECK.RECIPIENT,
+  QUOTATION_CHECK.LIVE_DIRECT_QUOTATION,
+  QUOTATION_CHECK.LIVE_PRICING_REQUEST,
   QUOTATION_CHECK.CUSTOMER,
   QUOTATION_CHECK.PROJECT,
   QUOTATION_CHECK.ENTRY_CHANNEL,
@@ -1546,6 +1657,9 @@ export const QUOTATION_BLOCKING_CHECKS = Object.freeze(new Set([
  * shared CustomerDetailsFields' (the same ids on every entry path — only one path renders at a
  * time). */
 export const QUOTATION_FIELD_IDS = Object.freeze({
+  deal: 'deal-picker',
+  // The FIRST radio of ผู้รับใบเสนอราคา — a radiogroup <div> is not focusable itself.
+  recipient: 'quotation-recipient-DESIGNER',
   customer: 'deal-customer',
   project: 'deal-project',
   entryChannel: 'deal-entry-channel',
@@ -1655,16 +1769,39 @@ export function buildQuotationChecklist({
   // QUOTATION_CHECK.CREDIT_DAYS/CREDIT_DAYS_INVALID above for the two severities.
   remainderMode = '',
   creditDays = '',
+  // Slice 2 — flow A. `needsDeal`: the "เลือกดีลที่มีอยู่" branch with nothing picked yet.
+  // `recipientRequired`: a NEW DEAL_DIRECT quotation (the server 400s one without a recipient);
+  // never set for an existing row or a PRICING_REQUEST one. `liveDirectQuotation`: the picked
+  // deal's TicketSummaryDto.liveDirectQuotation on a NEW quotation (N6). All default to "never
+  // triggers", so every existing caller/test keeps its old checklist exactly.
+  needsDeal = false,
+  recipientRequired = false,
+  recipientType = '',
+  liveDirectQuotation = null,
+  // One pricing route per deal: the picked deal has a live pricing request (hasLivePricingRequest).
+  livePricingRequest = false,
 } = {}) {
   const entries = [];
   const push = (check, message, targetId = null) => {
     entries.push({ check, message, targetId, blocking: QUOTATION_BLOCKING_CHECKS.has(check) });
   };
 
+  if (needsDeal) push(QUOTATION_CHECK.DEAL, 'ต้องเลือกดีลก่อนบันทึกร่าง', QUOTATION_FIELD_IDS.deal);
+  if (isLiveDirectQuotation(liveDirectQuotation)) {
+    push(QUOTATION_CHECK.LIVE_DIRECT_QUOTATION, liveDirectQuotationBlockMessage(liveDirectQuotation));
+  }
+  if (livePricingRequest) push(QUOTATION_CHECK.LIVE_PRICING_REQUEST, LIVE_PRICING_REQUEST_BLOCK_MESSAGE);
+  if (recipientRequired && !quotationRecipientOption(recipientType)) {
+    push(QUOTATION_CHECK.RECIPIENT, 'ต้องเลือกผู้รับใบเสนอราคา', QUOTATION_FIELD_IDS.recipient);
+  }
+
   if (isInlineCreate) {
-    if (!customer) push(QUOTATION_CHECK.CUSTOMER, 'ต้องเลือกลูกค้าก่อนบันทึกร่าง', QUOTATION_FIELD_IDS.customer);
-    if (!hasProject) push(QUOTATION_CHECK.PROJECT, 'ต้องเลือกโครงการก่อนบันทึกร่าง', QUOTATION_FIELD_IDS.project);
-    if (!hasEntryChannel) push(QUOTATION_CHECK.ENTRY_CHANNEL, 'ต้องเลือกช่องทางรับงานก่อนบันทึกร่าง', QUOTATION_FIELD_IDS.entryChannel);
+    // The customer/project/channel trio is the สร้างดีลใหม่ branch's own (channel required since
+    // #1085); with no deal picked yet on the เลือกดีลที่มีอยู่ branch, DEAL above is the one thing
+    // missing.
+    if (!needsDeal && !customer) push(QUOTATION_CHECK.CUSTOMER, 'ต้องเลือกลูกค้าก่อนบันทึกร่าง', QUOTATION_FIELD_IDS.customer);
+    if (!needsDeal && !hasProject) push(QUOTATION_CHECK.PROJECT, 'ต้องเลือกโครงการก่อนบันทึกร่าง', QUOTATION_FIELD_IDS.project);
+    if (!needsDeal && !hasEntryChannel) push(QUOTATION_CHECK.ENTRY_CHANNEL, 'ต้องเลือกช่องทางรับงานก่อนบันทึกร่าง', QUOTATION_FIELD_IDS.entryChannel);
   } else if (projectName !== undefined && blankValue(projectName)) {
     push(QUOTATION_CHECK.DEAL_PROJECT, 'ดีลนี้ยังไม่มีโครงการ (แก้ได้ที่หน้ารายละเอียดดีล)');
   }

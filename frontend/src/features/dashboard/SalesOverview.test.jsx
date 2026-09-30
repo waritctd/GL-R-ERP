@@ -284,3 +284,52 @@ describe('SalesOverview', () => {
     expect(followUps.queryByText('บริษัท เอช จำกัด')).toBeNull();
   });
 });
+
+// Slice 2 — flow A (SLICE-2-FLOW-A.md §E, DESIGN.md §15): the three live-direct-quotation buckets
+// reach the worklist, and their badge tone says whose move it is — SUBMIT / CONFIRM are the rep's
+// own (warning), AWAIT is waiting on ผจก.ขาย/CEO (neutral), never the same tone as a task.
+describe('SalesOverview — live direct quotation worklist tones (slice 2)', () => {
+  const liveDeals = [
+    { id: 701, code: 'DL-2026-0701', customerName: 'บริษัท ร่าง จำกัด', title: 'ร่าง', lifecycle: 'ACTIVE', amountPayable: 0, stale: false, nextFollowUpAt: null, stageUpdatedAt: '2026-07-01T00:00:00.000Z',
+      liveDirectQuotation: { id: 71, number: 'QT-2026-0071-1', docStatus: 'DRAFT', recipientType: 'DESIGNER' } },
+    { id: 702, code: 'DL-2026-0702', customerName: 'บริษัท รอ จำกัด', title: 'รอ', lifecycle: 'ACTIVE', amountPayable: 0, stale: false, nextFollowUpAt: null, stageUpdatedAt: '2026-07-01T00:00:00.000Z',
+      liveDirectQuotation: { id: 72, number: 'QT-2026-0072-1', docStatus: 'PENDING_APPROVAL', recipientType: 'OWNER' } },
+    { id: 703, code: 'DL-2026-0703', customerName: 'บริษัท อนุมัติ จำกัด', title: 'อนุมัติ', lifecycle: 'ACTIVE', amountPayable: 0, stale: false, nextFollowUpAt: null, stageUpdatedAt: '2026-07-01T00:00:00.000Z',
+      liveDirectQuotation: { id: 73, number: 'QT-2026-0073-1', docStatus: 'APPROVED', recipientType: 'BUYER' } },
+  ];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.tickets.list.mockResolvedValue({ tickets: liveDeals });
+    api.pricingRequests.queue.mockResolvedValue({ items: [] });
+    api.commissions.monthlySummary.mockResolvedValue({ summary: defaultCommissionSummary });
+  });
+
+  function badgeFor(customerName) {
+    const row = within(worklistSection()).getByText(customerName).closest('button');
+    return row.querySelector('.status-badge');
+  }
+
+  it('lists all three, CONFIRM first (rank 1), then SUBMIT (2), then AWAIT (5)', async () => {
+    renderOverview();
+    const worklist = within(worklistSection());
+    await worklist.findByText('บริษัท ร่าง จำกัด');
+    const rows = worklist.getAllByRole('button').map((btn) => btn.textContent);
+    expect(rows[0]).toContain('บริษัท อนุมัติ จำกัด');
+    expect(rows[1]).toContain('บริษัท ร่าง จำกัด');
+    expect(rows[2]).toContain('บริษัท รอ จำกัด');
+    // None of them is told to open a คำขอราคา.
+    expect(worklist.queryByText('สร้างคำขอราคา')).toBeNull();
+  });
+
+  it('SUBMIT and CONFIRM read as warning (mine to act); AWAIT reads neutral (waiting)', async () => {
+    renderOverview();
+    await within(worklistSection()).findByText('บริษัท ร่าง จำกัด');
+    expect(badgeFor('บริษัท ร่าง จำกัด').textContent).toBe('ส่งขออนุมัติใบเสนอราคา');
+    expect(badgeFor('บริษัท ร่าง จำกัด').className).toContain('status-warning');
+    expect(badgeFor('บริษัท อนุมัติ จำกัด').textContent).toBe('ยืนยันคำสั่งซื้อ');
+    expect(badgeFor('บริษัท อนุมัติ จำกัด').className).toContain('status-warning');
+    expect(badgeFor('บริษัท รอ จำกัด').textContent).toBe('รออนุมัติใบเสนอราคา');
+    expect(badgeFor('บริษัท รอ จำกัด').className).toContain('status-neutral');
+  });
+});

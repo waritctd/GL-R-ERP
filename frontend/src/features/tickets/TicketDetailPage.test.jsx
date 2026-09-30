@@ -100,6 +100,11 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       // eligible-display-name list the direct-deal quotation editor uses.
       dealQuotations: {
         displayNameOptions: vi.fn().mockResolvedValue({ items: [] }),
+        // Slice 2: DealDirectQuotationPanel's list, and the APPROVED direct quotation's
+        // ยืนยันคำสั่งซื้อ from the sticky CTA. listForTicket is only given a resolved value inside
+        // the slice-2 describe block, so every older test renders that panel exactly as before.
+        listForTicket: vi.fn(),
+        promoteToDeal: vi.fn(),
       },
       // Deposit (Phase 3 Slice S3 — handoff 105): DealDepositPanel reads/writes
       // this namespace directly, same pattern as pricingRequests above.
@@ -588,30 +593,21 @@ describe('TicketDetailPage', () => {
     });
   });
 
-  // GLA-136 (owner ruling 2026-09-30): a quotation-only container ticket (V193) is not a pipeline
-  // deal. The list never shows it, but a direct link still reaches it — the page must say so and
-  // offer no pipeline control (the server 409s every manual pipeline write on it regardless).
-  describe('quotation-only deal (GLA-136)', () => {
-    it('shows the "not in the pipeline" banner and hides the stage panel and the primary CTA', async () => {
-      api.tickets.get.mockResolvedValueOnce({
-        ticket: buildTicket({ summary: { status: 'draft', salesStage: 'LEAD_APPROACH', createdById: 1, quotationOnly: true } }),
-      });
-      renderTicketDetailPage(salesOwnerUser);
-
-      const banner = await screen.findByTestId('ticket-quotation-only-banner');
-      expect(within(banner).getByText('ดีลนี้เป็นดีลใบเสนอราคาเท่านั้น — ยังไม่เข้า pipeline')).not.toBeNull();
-      expect(screen.queryByTestId('deal-stage-panel')).toBeNull();
-      expect(screen.queryByTestId('ticket-primary-action')).toBeNull();
-    });
-
-    it('an ordinary pipeline deal keeps its stage panel and shows no banner (wrong-way-round)', async () => {
-      api.tickets.get.mockResolvedValueOnce({
-        ticket: buildTicket({ summary: { status: 'draft', salesStage: 'LEAD_APPROACH', createdById: 1, quotationOnly: false } }),
+  // GLA-136 used to render a quotation-only container ticket (V193) as "not in the pipeline": a
+  // banner, no stage panel, no primary CTA. Slice 1 (backend 2ed3468e) made the flag provenance only
+  // and IA §7 ("Nothing hidden") makes a quotation-first deal an ordinary deal — so the page must now
+  // render it EXACTLY like any other. Both shapes are asserted to render the same controls.
+  describe('quotation-first deal (GLA-136 hiding reverted, IA §7)', () => {
+    it.each([[true], [false]])('quotationOnly=%s: stage panel and primary CTA present, no "not in the pipeline" banner', async (quotationOnly) => {
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({ summary: { status: 'draft', salesStage: 'LEAD_APPROACH', lifecycle: 'ACTIVE', createdById: 1, quotationOnly } }),
       });
       renderTicketDetailPage(salesOwnerUser);
 
       expect(await screen.findByTestId('deal-stage-panel')).not.toBeNull();
+      await waitFor(() => expect(screen.getByTestId('ticket-primary-action')).not.toBeNull());
       expect(screen.queryByTestId('ticket-quotation-only-banner')).toBeNull();
+      expect(screen.queryByText(/ยังไม่เข้า pipeline/)).toBeNull();
     });
   });
 
@@ -3633,6 +3629,157 @@ describe('TicketDetailPage', () => {
       expect(screen.queryByRole('button', { name: INVOICE_BUTTON })).toBeNull();
     });
   });
+
+  // Slice 2 — flow B + the direct-quotation CTAs (SLICE-2-FLOW-A.md §D/§E). The ใบเสนอราคา panel
+  // offers the two routes as sibling buttons — never a dialog (DESIGN.md §16) — and the sticky CTA
+  // follows a live direct quotation (TicketSummaryDto.liveDirectQuotation, S2-B4).
+  describe('slice 2 — ใบเสนอราคา route choice and the live direct quotation CTA', () => {
+    const DRAFT_LIVE = { id: 77, number: 'QT-2026-0077-1', docStatus: 'DRAFT', recipientType: 'DESIGNER' };
+
+    function activeDeal(summary = {}) {
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({ summary: { lifecycle: 'ACTIVE', salesStage: 'PRESENTATION', status: 'draft', createdById: 1, ...summary } }),
+      });
+      api.tickets.actions.mockResolvedValue({
+        currentState: { lifecycle: 'ACTIVE', salesStage: summary.salesStage ?? 'PRESENTATION', paymentStatus: null, fulfillmentStatus: null, status: 'draft' },
+        availableActions: [],
+      });
+    }
+
+    beforeEach(() => {
+      api.dealQuotations.listForTicket.mockResolvedValue({ items: [] });
+    });
+
+    function quotationPanel() {
+      return screen.getByRole('heading', { name: 'ใบเสนอราคา', level: 2 }).closest('section');
+    }
+
+    it('the owning rep sees both routes as sibling buttons in the panel header, plus one helper line — no dialog', async () => {
+      activeDeal();
+      renderTicketDetailPage(salesOwnerUser);
+      await openTab(/เอกสาร/);
+      await waitFor(() => expect(quotationPanel()).not.toBeNull());
+      const panel = within(quotationPanel());
+      expect(panel.getByRole('button', { name: 'สร้างคำขอราคา' })).not.toBeNull();
+      const direct = panel.getByRole('link', { name: 'ใบเสนอราคาตรง' });
+      expect(direct.getAttribute('href')).toBe('/quotations/new?ticket=701');
+      expect(panel.getByText('ผ่านคำขอราคา = import → โรงงาน → CEO กำหนดราคา · ใบเสนอราคาตรง = กรอกราคาเอง แล้วส่ง ผจก./CEO อนุมัติ')).not.toBeNull();
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+
+    it('ใบเสนอราคาตรง is hidden while the deal already has a live direct quotation (N6 by construction)', async () => {
+      activeDeal({ liveDirectQuotation: DRAFT_LIVE });
+      renderTicketDetailPage(salesOwnerUser);
+      await openTab(/เอกสาร/);
+      await waitFor(() => expect(quotationPanel()).not.toBeNull());
+      expect(within(quotationPanel()).queryByRole('link', { name: 'ใบเสนอราคาตรง' })).toBeNull();
+      // The helper line compares the two routes — with only one offered it would describe a
+      // button that is not there.
+      expect(within(quotationPanel()).queryByText(/ใบเสนอราคาตรง = กรอกราคาเอง/)).toBeNull();
+    });
+
+    // Owner ruling 2026-09-30 — ONE PRICING ROUTE PER DEAL, both directions. Slice 1 blocks a
+    // คำขอราคา while a live direct quotation exists; this is the reverse: while the deal has a LIVE
+    // pricing request (any status but CANCELLED / SUPERSEDED — DRAFT and QUOTATION_ACCEPTED count),
+    // no direct quotation may be started, so ใบเสนอราคาตรง is not offered. สร้างคำขอราคา is unchanged.
+    function prOnDeal(status) {
+      return {
+        id: 501, requestCode: 'PCR-2026-0501', ticketId: 701, ticketCreatedById: 1,
+        status, recipientType: 'BUYER', recipientLabel: null, orderConfirmedAt: null,
+      };
+    }
+
+    it.each([['DRAFT'], ['SUBMITTED'], ['APPROVED_FOR_QUOTATION'], ['QUOTATION_ACCEPTED']])(
+      'ใบเสนอราคาตรง is hidden while the deal has a live pricing request (%s); the helper line goes with it',
+      async (status) => {
+        activeDeal();
+        api.pricingRequests.listForTicket.mockResolvedValue({ items: [prOnDeal(status)] });
+        renderTicketDetailPage(salesOwnerUser);
+        await openTab(/เอกสาร/);
+        await waitFor(() => expect(quotationPanel()).not.toBeNull());
+        await waitFor(() => expect(api.pricingRequests.listForTicket).toHaveBeenCalled());
+        await new Promise((resolve) => { setTimeout(resolve, 0); });
+        expect(within(quotationPanel()).queryByRole('link', { name: 'ใบเสนอราคาตรง' })).toBeNull();
+        expect(within(quotationPanel()).queryByText(/ใบเสนอราคาตรง = กรอกราคาเอง/)).toBeNull();
+      },
+    );
+
+    it.each([['CANCELLED'], ['SUPERSEDED']])(
+      'wrong-way-round: a %s pricing request does NOT hide ใบเสนอราคาตรง',
+      async (status) => {
+        activeDeal();
+        api.pricingRequests.listForTicket.mockResolvedValue({ items: [prOnDeal(status)] });
+        renderTicketDetailPage(salesOwnerUser);
+        await openTab(/เอกสาร/);
+        await waitFor(() => expect(quotationPanel()).not.toBeNull());
+        expect(await within(quotationPanel()).findByRole('link', { name: 'ใบเสนอราคาตรง' })).not.toBeNull();
+      },
+    );
+
+    it('a role that may not create a quotation on this deal gets neither button', async () => {
+      activeDeal();
+      renderTicketDetailPage(accountUser);
+      await openTab(/เอกสาร/);
+      await waitFor(() => expect(quotationPanel()).not.toBeNull());
+      expect(within(quotationPanel()).queryByRole('link', { name: 'ใบเสนอราคาตรง' })).toBeNull();
+      expect(within(quotationPanel()).queryByRole('button', { name: 'สร้างคำขอราคา' })).toBeNull();
+    });
+
+    it('DRAFT: the sticky primary is "ส่งขออนุมัติใบเสนอราคา" and it opens the quotation', async () => {
+      activeDeal({ liveDirectQuotation: DRAFT_LIVE });
+      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+      await waitFor(() => expect(screen.getByTestId('ticket-primary-action').getAttribute('data-action')).toBe('submit_direct_quotation'));
+      const cta = screen.getByTestId('ticket-primary-action');
+      expect(cta.textContent).toContain('ส่งขออนุมัติใบเสนอราคา');
+      // Never "สร้างคำขอราคา" as the CTA while a quotation is being priced by hand.
+      expect(cta.textContent).not.toContain('สร้างคำขอราคา');
+      fireEvent.click(cta);
+      await waitFor(() => expect(screen.getByTestId('location-probe').textContent).toBe('/quotations/77'));
+    });
+
+    it('PENDING_APPROVAL, as the rep: no button — the header banner says who it waits on', async () => {
+      activeDeal({ liveDirectQuotation: { ...DRAFT_LIVE, docStatus: 'PENDING_APPROVAL' } });
+      renderTicketDetailPage(salesOwnerUser);
+      expect((await screen.findAllByText('รอ ผจก.ขาย/CEO อนุมัติใบเสนอราคา QT-2026-0077-1')).length).toBeGreaterThan(0);
+      expect(screen.queryByTestId('ticket-primary-action')).toBeNull();
+    });
+
+    it('PENDING_APPROVAL, as the CEO: their own "อนุมัติใบเสนอราคา" action to the quotation', async () => {
+      activeDeal({ liveDirectQuotation: { ...DRAFT_LIVE, docStatus: 'PENDING_APPROVAL' } });
+      renderTicketDetailPageAtRoute(['/tickets/701'], ceoUser);
+      await waitFor(() => expect(screen.getByTestId('ticket-primary-action').getAttribute('data-action')).toBe('approve_direct_quotation'));
+      fireEvent.click(screen.getByTestId('ticket-primary-action'));
+      await waitFor(() => expect(screen.getByTestId('location-probe').textContent).toBe('/quotations/77'));
+    });
+
+    it('APPROVED: "ยืนยันคำสั่งซื้อ" confirms first (same copy as the editor), then calls the direct-quotation confirm endpoint', async () => {
+      activeDeal({ liveDirectQuotation: { ...DRAFT_LIVE, docStatus: 'APPROVED' } });
+      api.dealQuotations.promoteToDeal.mockResolvedValue({ result: { ticketId: 701 } });
+      const showToast = vi.fn();
+      renderTicketDetailPage(salesOwnerUser, showToast);
+      await waitFor(() => expect(screen.getByTestId('ticket-primary-action').getAttribute('data-action')).toBe('confirm_order_direct'));
+      fireEvent.click(screen.getByTestId('ticket-primary-action'));
+      expect(api.dealQuotations.promoteToDeal).not.toHaveBeenCalled();
+      const dialog = within(screen.getByRole('dialog'));
+      expect(dialog.getByText(/ได้รับคำสั่งซื้อ/)).not.toBeNull();
+      expect(dialog.getByText(/QT-2026-0077-1/)).not.toBeNull();
+      fireEvent.click(dialog.getByRole('button', { name: 'ยืนยันคำสั่งซื้อ' }));
+      await waitFor(() => expect(api.dealQuotations.promoteToDeal).toHaveBeenCalledWith(77));
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', 'ยืนยันคำสั่งซื้อแล้ว'));
+    });
+
+    it('a refused confirm surfaces the server\'s own Thai message', async () => {
+      activeDeal({ liveDirectQuotation: { ...DRAFT_LIVE, docStatus: 'APPROVED' } });
+      api.dealQuotations.promoteToDeal.mockRejectedValue(Object.assign(new Error('ดีลไม่ได้อยู่ในสถานะ ACTIVE'), { status: 409 }));
+      const showToast = vi.fn();
+      renderTicketDetailPage(salesOwnerUser, showToast);
+      await waitFor(() => expect(screen.getByTestId('ticket-primary-action').getAttribute('data-action')).toBe('confirm_order_direct'));
+      fireEvent.click(screen.getByTestId('ticket-primary-action'));
+      fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'ยืนยันคำสั่งซื้อ' }));
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'ดีลไม่ได้อยู่ในสถานะ ACTIVE'));
+    });
+  });
+
   // A deal follows a ROUTE fixed by its entry channel. The overflow menu's "เลื่อนไป" target was
   // computed with the route-BLIND nextStageIn, so on an owner-direct deal at S3 it named S4
   // (เสนอราคาผู้ออกแบบ) — a stage the backend refuses with a 409 (DealRoute). It now steps over
