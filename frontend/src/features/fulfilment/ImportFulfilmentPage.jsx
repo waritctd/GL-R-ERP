@@ -395,7 +395,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
     <PageStack>
       <PageHeader
         title="งานนำเข้า"
-        subtitle="ติดตามและเลื่อนสถานะนำเข้ารายโรงงาน — ติดต่อโรงงาน → สั่งซื้อ → รับสินค้า → ขนส่ง → ศุลกากร → ถึงโกดัง"
+        subtitle="ติดตามและเลื่อนสถานะนำเข้ารายโรงงาน — ส่ง IR ให้จัดซื้อ → สั่งซื้อผู้ผลิต → ขนส่งรับของ → กำลังเดินทาง → ถึงไทย รอออกของ → ถึงโกดัง"
         actions={(
           <Button
             type="button"

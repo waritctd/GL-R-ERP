@@ -8,6 +8,7 @@ import { Panel } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatThaiDate, fulfilmentStatusLabel } from '../../utils/format.js';
+import { importStepIndex } from '../importProgress/importSteps.js';
 import { nextFulfilmentActionCode } from './importActions.js';
 import { ImportRequestFactoryCard } from './ImportRequestFactoryCard.jsx';
 import { procurementPath } from './stageMeta.js';
@@ -242,6 +243,19 @@ export function DealFulfilmentPanel({
   // Treating an ERROR as "has stored IRs" (rather than as "does not") is the safe direction here:
   // it keeps the legacy block hidden and shows the real error instead of guessing.
   const hasStoredIrs = storedIrRows.length > 0 || storedIrQuery.isError;
+  // Yang's rollup chip (origin/feat/per-factory-import-tracking's FactoryImportProgressPanel,
+  // "ถึงไทย X/N โรงงาน") ported onto THIS deal's stored rows — reuses storedIrQuery above rather
+  // than adding a second query. N = live (non-SUPERSEDED) rows that have actually been ISSUED
+  // (carry an importStep at all); X = how many of those reached Thailand, i.e. AWAITING_CUSTOMS
+  // (S16) or later. A DRAFT row has no importStep yet, so it does not count toward N.
+  const issuedIrRows = liveStoredIrRows.filter((r) => r.importStep != null);
+  const arrivedIrCount = issuedIrRows
+    .filter((r) => importStepIndex(r.importStep) >= importStepIndex('AWAITING_CUSTOMS')).length;
+  const irRollupChip = issuedIrRows.length > 0 ? (
+    <span className="rounded-full bg-info-bg px-2.5 py-0.5 text-2xs font-bold text-info" data-testid="deal-fulfilment-ir-rollup-chip">
+      ถึงไทย {arrivedIrCount}/{issuedIrRows.length} โรงงาน
+    </span>
+  ) : null;
 
   const [newFactoryNames, setNewFactoryNames] = useState(null); // string[] | null
   // PR-B REVIEW ROUND 1, S7: the 409's message is parsed for factory names because the backend
@@ -544,7 +558,10 @@ export function DealFulfilmentPanel({
               <strong className="text-sm">นำเข้าสินค้า</strong>
               <StepRoleTag owners={['import', 'ceo']} viewerRole={role} />
             </div>
-            {fs ? <StatusBadge tone={fsLabel.tone}>{fsLabel.label}</StatusBadge> : null}
+            <div className="flex items-center gap-2">
+              {irRollupChip}
+              {fs ? <StatusBadge tone={fsLabel.tone}>{fsLabel.label}</StatusBadge> : null}
+            </div>
           </div>
 
           {/* V184 (PR-B): once the deal is tracked per-factory, the old deal-level substep chips
@@ -552,10 +569,11 @@ export function DealFulfilmentPanel({
               IR_ISSUED for the whole tracking period (only the rollup moves it again, to
               GOODS_RECEIVED), and the legacy mutations 409 the moment any factory here is ISSUED
               (see markIrSent/markShipping/markGoodsReceived's own hasLiveImportRequests guard).
-              The "ใบขอซื้อรายโรงงาน" section below is the per-factory replacement. */}
+              The “ใบขอซื้อรายโรงงาน” section below is the per-factory replacement — the rollup
+              chip above already says how far along it is, so this note stays a short pointer. */}
           {hasStoredIrs ? (
             <p className="text-xs text-text-muted" data-testid="deal-fulfilment-ir-tracked-note">
-              ดีลนี้ติดตามการนำเข้าแบบรายโรงงาน — ดูและเลื่อนสถานะที่ส่วน “ใบขอซื้อรายโรงงาน” ด้านล่าง
+              ติดตามการนำเข้าแบบรายโรงงานที่ส่วน “ใบขอซื้อรายโรงงาน” ด้านล่าง
             </p>
           ) : (
             <>
