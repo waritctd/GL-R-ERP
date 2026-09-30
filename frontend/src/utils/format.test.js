@@ -3,6 +3,7 @@ import {
   addDaysIso,
   attendanceSourceLabel,
   bangkokMonthStartIso,
+  dealStageLabel,
   depositNoticeStatusLabel,
   factoryQuoteStatusLabel,
   formatAddress,
@@ -355,5 +356,61 @@ describe('bangkokMonthStartIso monthsBack', () => {
 
   it('rolls back across two year boundaries', () => {
     expect(bangkokMonthStartIso(new Date('2026-01-15T10:00:00Z'), 14)).toBe('2024-11-01');
+  });
+});
+
+// S3 (SPEC_APPROVED) is "the party who specifies has agreed the spec" — only the WORDING varies by
+// the deal's entry channel. Nine existing call sites pass ONE argument, so the 1-arg call must not
+// change; every other stage must be indistinguishable with or without a channel.
+describe('dealStageLabel(code, entryChannel?) — route-aware S3 wording', () => {
+  const DESIGNER = 'ผู้ออกแบบอนุมัติสเปค';
+
+  it('owner-direct reads เจ้าของตกลงตามสเปคแล้ว', () => {
+    expect(dealStageLabel('SPEC_APPROVED', 'OWNER_DIRECT').label).toBe('เจ้าของตกลงตามสเปคแล้ว');
+  });
+
+  it('buyer-direct reads ผู้ซื้อ/ผู้รับเหมาตกลงตามสเปคแล้ว', () => {
+    expect(dealStageLabel('SPEC_APPROVED', 'BUYER_DIRECT').label).toBe('ผู้ซื้อ/ผู้รับเหมาตกลงตามสเปคแล้ว');
+  });
+
+  it.each(['DESIGNER_LED', 'UNSPECIFIED', undefined, null, 'SOMETHING_NEW', ''])(
+    'keeps the designer wording for channel %s',
+    (channel) => {
+      expect(dealStageLabel('SPEC_APPROVED', channel).label).toBe(DESIGNER);
+    },
+  );
+
+  it('keeps the designer wording for the 1-argument call (back-compat for the existing call sites)', () => {
+    expect(dealStageLabel('SPEC_APPROVED').label).toBe(DESIGNER);
+  });
+
+  it('keeps the same tone whatever the wording', () => {
+    const tone = dealStageLabel('SPEC_APPROVED').tone;
+    expect(dealStageLabel('SPEC_APPROVED', 'OWNER_DIRECT').tone).toBe(tone);
+    expect(dealStageLabel('SPEC_APPROVED', 'BUYER_DIRECT').tone).toBe(tone);
+  });
+
+  // Wrong-way-round: the channel may re-word S3 and NOTHING else.
+  const OTHER_STAGES = [
+    'LEAD_APPROACH', 'PRESENTATION', 'QUOTE_DESIGN_SIDE', 'QUOTE_OWNER', 'OWNER_SIGNOFF',
+    'AWAITING_BUYER', 'QUOTE_BUYER', 'NEGOTIATION', 'ORDER_RECEIVED', 'DEPOSIT_RECEIVED',
+    'PROCUREMENT', 'DELIVERY_SCHEDULING', 'DELIVERED', 'CLOSED_PAID',
+  ];
+
+  it('covers the other fourteen stage codes (guards this list against a new stage being added)', () => {
+    expect(OTHER_STAGES).toHaveLength(14);
+    for (const code of OTHER_STAGES) expect(dealStageLabel(code).label).not.toBe(code);
+  });
+
+  it.each(OTHER_STAGES)('%s is identical with and without any channel', (code) => {
+    const bare = dealStageLabel(code);
+    for (const channel of ['DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT', 'UNSPECIFIED', null]) {
+      expect(dealStageLabel(code, channel)).toEqual(bare);
+    }
+  });
+
+  it('an unknown stage code still renders its own code, with or without a channel', () => {
+    expect(dealStageLabel('NOT_A_STAGE').label).toBe('NOT_A_STAGE');
+    expect(dealStageLabel('NOT_A_STAGE', 'OWNER_DIRECT').label).toBe('NOT_A_STAGE');
   });
 });

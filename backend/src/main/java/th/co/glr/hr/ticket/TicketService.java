@@ -1909,6 +1909,19 @@ public class TicketService {
         // the misleading pair "write a note" -> "…now the fact is missing", and would have let a
         // reader mistake the note rule for the thing doing the work.
         requireStageFactsHold(s, targetStage);
+        // Rung 6 of the precedence ladder (design §12.1): the deal's ENTRY-CHANNEL route. Last on
+        // purpose — a deal missing its deposit must report the FACT gate, not blame the route.
+        //
+        // ⚠️ Tests the TARGET only, NEVER s.salesStage(). A deal may legitimately be SITTING on an
+        // off-route stage (it got there before someone corrected the channel); gating the current
+        // stage would strand it with no legal move. Reads the channel off the already-loaded
+        // summary: no repository call may be added to any gate (see stageDecisions' Javadoc — it
+        // would turn one query into fifteen). UNSPECIFIED / DESIGNER_LED / unknown / null have an
+        // EMPTY off-route set, so this is a no-op for them (DealRoute's class Javadoc).
+        if (!DealRoute.isOnRoute(s.entryChannel(), targetStage)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                DealRoute.refusalMessage(s.entryChannel(), targetStage));
+        }
     }
 
     /**
@@ -1979,7 +1992,7 @@ public class TicketService {
             decisions.add(new StageDecisionDto(target, DealStage.displayNoOf(target),
                 blockedReason == null,
                 DealStage.requiresJustification(s.salesStage(), target),
-                blockedReason));
+                blockedReason, DealRoute.isOnRoute(s.entryChannel(), target)));
         }
         return decisions;
     }
@@ -2266,6 +2279,15 @@ public class TicketService {
             return;
         }
         if (DealStage.indexOf(targetStage) <= DealStage.indexOf(s.salesStage())) {
+            return;
+        }
+        // An off-route target is a silent no-op, exactly like a non-forward one above — never a
+        // throw, which would fail an unrelated caller (e.g. quotation creation). Reachable ONLY for
+        // party-axis stages: DealRoute.ROUTE_VARIABLE (S4–S8) is the only set an off-route table
+        // may contain, so an OPERATIONAL advance (ORDER_RECEIVED, DEPOSIT_RECEIVED, PROCUREMENT,
+        // DELIVERY_SCHEDULING, DELIVERED, CLOSED_PAID) can never vanish here with its fact already
+        // written. DealRouteTest pins that invariant; do not weaken it without revisiting this.
+        if (!DealRoute.isOnRoute(s.entryChannel(), targetStage)) {
             return;
         }
         tickets.updateSalesStage(s.id(), targetStage);
