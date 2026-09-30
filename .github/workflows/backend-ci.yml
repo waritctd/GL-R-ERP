@@ -7,12 +7,41 @@ name: Backend CI
 #
 # The filter therefore now lives INSIDE the job: the workflow runs on every PR, the
 # `build-and-test` check always reports, and the expensive steps are gated on whether the
-# diff actually touched the backend. A frontend-only PR reports green in seconds; a backend
-# PR still runs the full `./mvnw -B clean verify` and still goes red when it fails.
+# diff actually touched the backend. A frontend-only PR reports green in seconds.
+#
+# ── SELECTIVE TESTS ON PULL REQUESTS (2026-10-01) ─────────────────────────────────────────
+# A backend PR no longer always runs the full `./mvnw -B clean verify` (~8.5 min of tests).
+# `.github/scripts/select-tests.mjs` reads the PR diff and picks one of three modes:
+#   full     — anything that can affect every test changed (pom.xml, wrapper, resources incl.
+#              migrations, test support/common, main config/common, top-level classes, this
+#              workflow, the picker itself, or ANY backend path the picker does not
+#              recognise), OR the PR carries the `full-ci` label, OR the PR targets `main`
+#              (merging to main deploys — owner ruling 2026-10-01), OR the base commit could
+#              not be resolved, OR the picker printed anything but a known mode. Runs
+#              `clean verify` exactly as before, coverage ratchet included.
+#   selected — only `th/co/glr/hr/<pkg>/**` changed: runs surefire for those packages, plus
+#              every package that references them (ONE level of reverse dependencies), plus
+#              config, support and FlywayMigrationTest. The JaCoCo ratchet is skipped in this
+#              mode (owner ruling 2026-10-01) because a partial run cannot meet a whole-suite
+#              coverage floor; `-Dsurefire.failIfNoSpecifiedTests=false` because a selected
+#              package may legitimately have no tests.
+#   none     — nothing backend-relevant changed (e.g. only backend/README.md).
+#
+# THE SAFETY NET: pushes to `develop` and `main` are never selective. Every merge re-runs the
+# whole suite with the ratchet on, so a mis-selection on a PR is caught at the latest on the
+# merge to develop — not silently. The picker itself is unit-tested (select-tests.test.mjs)
+# and fails SAFE: any crash prints `mode=full`. Add the `full-ci` label to a PR to force the
+# full run when in doubt (e.g. a wide refactor whose blast radius the one-level rule may
+# under-estimate).
+#
+# `types:` lists the default three PLUS `labeled`, so adding `full-ci` to an open PR starts a
+# new run immediately; the concurrency group below cancels the in-flight selective run for the
+# same PR, which is the intended effect.
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
 
 # Least privilege, stated rather than inherited. The repo default is already read-only, but a
 # default is a setting someone can change from a web UI; this pins it in the file. Nothing in
@@ -73,19 +102,84 @@ jobs:
 
           # Two-dot: on a pull_request, HEAD is the PR merge commit, so `BASE HEAD` is exactly
           # the PR's net effect on the base branch. On a push it is the pushed range.
-          CHANGED="$(git diff --name-only "$BASE" HEAD)"
+          # --no-renames so a move OUT of a sensitive directory (config/, common/, resources/)
+          # lists the source path as a delete, not a rename that hides it; quotePath=false so
+          # a non-ASCII path is printed as-is rather than octal-escaped.
+          CHANGED="$(git -c core.quotePath=false diff --no-renames --name-only "$BASE" HEAD)"
           echo "Changed files:"
           echo "$CHANGED"
 
-          if echo "$CHANGED" | grep -qE '^(backend/|\.github/workflows/backend-ci\.yml$)'; then
+          # The picker itself (.github/scripts/**) is in scope: a change to the selection
+          # logic must run the backend suite so its own regressions cannot hide.
+          if echo "$CHANGED" | grep -qE '^(backend/|\.github/workflows/backend-ci\.yml$|\.github/scripts/)'; then
             echo "backend=true" >> "$GITHUB_OUTPUT"
           else
             echo "backend=false" >> "$GITHUB_OUTPUT"
           fi
+          # Handed to the selection step below; empty means "unresolvable → full".
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
 
       - name: No backend changes — nothing to build
         if: steps.changes.outputs.backend != 'true'
         run: echo "No backend/** changes in this diff; skipping the Maven build."
+
+      # Node only runs the ~200-line picker; no npm install, so no cache.
+      - name: Set up Node.js 22 (for the test picker)
+        if: steps.changes.outputs.backend == 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+
+      # F4: the picker's own unit tests run every time the picker is about to decide anything.
+      # They are cheap (<1s) and cannot be skipped by a green mode because they run BEFORE it.
+      - name: Test the test picker
+        if: steps.changes.outputs.backend == 'true'
+        working-directory: ${{ github.workspace }}
+        run: node --test '.github/scripts/**/*.test.mjs'
+
+      # See the header comment for the three modes. Runs from the repo root because the
+      # picker resolves paths relative to it. Three layers of fail-safe: the picker prints
+      # `mode=full` on any exception it can catch; this shell prints `mode=full` if the picker
+      # cannot even start (syntax error, missing file); and whatever it printed, a mode that
+      # is not one of full|selected|none is rewritten to full (F3).
+      - name: Select backend tests
+        id: select
+        if: steps.changes.outputs.backend == 'true'
+        working-directory: ${{ github.workspace }}
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE: ${{ steps.changes.outputs.base }}
+          BASE_REF: ${{ github.base_ref }}
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: |
+          set -euo pipefail
+          SELECTION="$RUNNER_TEMP/backend-selection.txt"
+          if [ -z "$BASE" ]; then
+            printf 'mode=full\nreason=base commit unresolvable — running the full backend suite\npackages=\ntest_pattern=\n' > "$SELECTION"
+          elif ! node .github/scripts/select-tests.mjs --side backend --base "$BASE" --base-ref "$BASE_REF" \
+                 --event "$EVENT_NAME" --labels "$PR_LABELS" > "$SELECTION"; then
+            printf 'mode=full\nreason=select-tests.mjs could not run — falling back to the full backend suite\npackages=\ntest_pattern=\n' > "$SELECTION"
+          fi
+          MODE="$(sed -n 's/^mode=//p' "$SELECTION")"
+          case "$MODE" in
+            full|selected|none) ;;
+            *)
+              echo "::warning title=Unknown backend test mode::picker printed mode='$MODE' — running the full suite."
+              printf 'mode=full\nreason=picker printed an unknown mode (%s) — running the full backend suite\npackages=\ntest_pattern=\n' "$MODE" > "$SELECTION"
+              MODE=full
+              ;;
+          esac
+          echo "── backend test selection ──"
+          cat "$SELECTION"
+          cat "$SELECTION" >> "$GITHUB_OUTPUT"
+          REASON="$(sed -n 's/^reason=//p' "$SELECTION")"
+          echo "::notice title=Backend tests: $MODE::$REASON"
+
+      - name: Backend files changed, but none affect tests
+        if: steps.changes.outputs.backend == 'true' && steps.select.outputs.mode == 'none'
+        env:
+          REASON: ${{ steps.select.outputs.reason }}
+        run: echo "::notice::$REASON — skipping the Maven build."
 
       # Owner ruling 2026-08-14: Docker is ENABLED for this job, and its absence is a stated
       # failure rather than something the suite quietly degrades around.
@@ -104,7 +198,7 @@ jobs:
       # actually decides, and which additionally honours DOCKER_HOST, ~/.testcontainers.properties
       # and its own strategy chain. The two can disagree, and that disagreement fails green.
       - name: Require an integration database (Docker, or TEST_DB_URL)
-        if: steps.changes.outputs.backend == 'true'
+        if: steps.changes.outputs.backend == 'true' && steps.select.outputs.mode != 'none'
         run: |
           set -euo pipefail
 
@@ -129,7 +223,7 @@ jobs:
           docker version --format 'server {{.Server.Version}}' || true
 
       - name: Set up Temurin JDK 21
-        if: steps.changes.outputs.backend == 'true'
+        if: steps.changes.outputs.backend == 'true' && steps.select.outputs.mode != 'none'
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: temurin
@@ -160,7 +254,7 @@ jobs:
       # REQUIRE_CHROMIUM=1 turns the tests' availability guard from "skip" into "fail": a missing
       # or unlaunchable browser here must go RED, never green by absence (ChromiumTestGate).
       - name: Install LibreOffice + Thai fonts, resolve Chromium (for PDF renderer tests)
-        if: steps.changes.outputs.backend == 'true'
+        if: steps.changes.outputs.backend == 'true' && steps.select.outputs.mode != 'none'
         # The runner image ships a Google Chrome apt source this job does not need. When that
         # repo serves a Packages.gz whose hash disagrees with its own Release file, `apt-get
         # update` exits 100 and takes this step -- and the whole job -- down before a single
@@ -196,6 +290,23 @@ jobs:
       # Testcontainers spins its own throwaway Postgres via the runner's Docker daemon, so the
       # integration + security + Flyway tests run without a manually provisioned DB service. The
       # TEST_DB_URL override path still exists in PostgresTestSupport as a one-line revert if needed.
-      - name: Build and test
-        if: steps.changes.outputs.backend == 'true'
+      # Gated on "not selected and not none" rather than "== full" so that an empty or
+      # unexpected mode — should the validation above ever be bypassed — still runs everything.
+      - name: Build and test (full suite)
+        if: steps.changes.outputs.backend == 'true' && steps.select.outputs.mode != 'selected' && steps.select.outputs.mode != 'none'
         run: ./mvnw -B clean verify
+
+      # `-Dtest=` REPLACES surefire's default includes, which is why the picker emits the four
+      # default name patterns per package rather than a bare package glob. Still `verify`, not
+      # `test`, so the integration-test phase and every other plugin bound after `test` behave
+      # exactly as on the full run — only the JaCoCo check is skipped (see header).
+      - name: Build and test (selected packages)
+        if: steps.changes.outputs.backend == 'true' && steps.select.outputs.mode == 'selected'
+        env:
+          TEST_PATTERN: ${{ steps.select.outputs.test_pattern }}
+          PACKAGES: ${{ steps.select.outputs.packages }}
+        run: |
+          set -euo pipefail
+          echo "Selected packages: $PACKAGES"
+          echo "-Dtest=$TEST_PATTERN"
+          ./mvnw -B clean verify -Dtest="$TEST_PATTERN" -Djacoco.skip=true -Dsurefire.failIfNoSpecifiedTests=false
