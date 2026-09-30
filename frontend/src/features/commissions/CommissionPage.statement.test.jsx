@@ -198,6 +198,36 @@ describe('rep statement — "ค่าคอมของฉัน" builds the to
     expect(text(note)).toMatch(/ยังไม่(ได้)?อนุมัติ/);
   });
 
+  // weightUpliftBase goes NEGATIVE when a weighted (x2) sale is clawed back in the month. The row is
+  // then a deduction: minus operator, its own label, the figure as a positive magnitude after the
+  // minus sign (never "฿-50,000.00" after a "+").
+  it('a NEGATIVE weightUpliftBase is shown as a deduction: minus sign, clawback label, positive magnitude', async () => {
+    api.commissions.monthlySummary.mockResolvedValue({
+      summary: summary({
+        rawCommissionableBase: 3050000,
+        weightUpliftBase: -50000,
+        commissionableBase: 3000000,
+      }),
+    });
+    await openAugust();
+    const uplift = await screen.findByTestId('statement-uplift');
+    expect(text(uplift)).toContain('−');
+    expect(text(uplift)).not.toContain('+');
+    expect(text(uplift)).toContain('ส่วนลดจากการหักคืนรายการสต็อก (2x/3x)');
+    expect(text(uplift)).toContain('฿50,000.00');
+    expect(text(uplift)).not.toContain('฿-50,000.00');
+    expect(text(uplift)).not.toContain('ส่วนเพิ่มจากสินค้าสต็อก');
+  });
+
+  it('a positive weightUpliftBase keeps the "+" and the original label', async () => {
+    api.commissions.monthlySummary.mockResolvedValue({ summary: summary() });
+    await openAugust();
+    const uplift = await screen.findByTestId('statement-uplift');
+    expect(text(uplift)).toContain('+');
+    expect(text(uplift)).toContain('ส่วนเพิ่มจากสินค้าสต็อก (2x/3x)');
+    expect(text(uplift)).not.toContain('ส่วนลดจากการหักคืน');
+  });
+
   it('hides the limbs that are zero (uplift, incentive, stock bonus, manual) but always keeps base, tier and total', async () => {
     api.commissions.monthlySummary.mockResolvedValue({
       summary: summary({
