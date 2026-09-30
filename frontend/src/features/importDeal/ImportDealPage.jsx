@@ -292,6 +292,7 @@ export function ImportDealPage({ user, showToast }) {
                 canAdvance={canAdvance}
                 canEmailWrite={canEmailWrite}
                 showToast={showToast}
+                showInlineDownload
               />
             ))}
           </div>

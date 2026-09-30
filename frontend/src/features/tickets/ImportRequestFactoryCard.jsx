@@ -37,6 +37,7 @@ function downloadBlob(blob, filename) {
  */
 export function ImportRequestFactoryCard({
   row, ticketId, canFullWrite, canFooterWrite, canAdvance, canEmailWrite, showToast,
+  showInlineDownload = false,
 }) {
   const queryClient = useQueryClient();
   const [leadTimeDraft, setLeadTimeDraft] = useState({ min: row.leadTimeMinDays ?? '', max: row.leadTimeMaxDays ?? '' });
@@ -329,6 +330,20 @@ export function ImportRequestFactoryCard({
               ✉ อีเมลสั่งซื้อ
             </Button>
           ) : null}
+        </div>
+      ) : null}
+
+      {/* Per-factory ใบขอซื้อ download, surfaced on the import page (showInlineDownload) so import
+          can grab each factory's F-SM-001 without opening the details expander. Same download as
+          the details block (internal copy — import's working reference); both copies stay there. */}
+      {showInlineDownload && isIssued ? (
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-2 border-t border-border-subtle pt-3 text-xs">
+          <strong className="text-text-secondary">ใบขอซื้อ (F-SM-001):</strong>
+          <Button type="button" size="sm" variant="secondary" className="ml-auto whitespace-nowrap mobile:ml-0"
+            disabled={downloadMutation.isPending}
+            onClick={() => downloadMutation.mutate(undefined)} data-testid={`ir-download-inline-${row.id}`}>
+            ดาวน์โหลด PDF
+          </Button>
         </div>
       ) : null}
 

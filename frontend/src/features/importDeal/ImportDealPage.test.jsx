@@ -238,6 +238,15 @@ describe('ImportDealPage', () => {
     expect(screen.getByTestId('ir-email-open-11')).not.toBeNull();
   });
 
+  it('surfaces a per-factory ใบขอซื้อ PDF download on each issued card, and it downloads', async () => {
+    api.storedImportRequests.download.mockResolvedValue(new Blob(['pdf'], { type: 'application/pdf' }));
+    renderPage({ role: 'import' });
+    const btn = await screen.findByTestId('ir-download-inline-11');
+    expect(btn).not.toBeNull();
+    fireEvent.click(btn);
+    await waitFor(() => expect(api.storedImportRequests.download).toHaveBeenCalledWith(11, undefined));
+  });
+
   it('shows a friendly "not in your import scope" message on a 403, with no deal content', async () => {
     api.importDeals.get.mockRejectedValue(Object.assign(new Error('ไม่มีสิทธิ์เข้าถึงรายการนี้'), { status: 403 }));
     renderPage();
