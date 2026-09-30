@@ -9,8 +9,12 @@ import { dealLifecycleLabel, dealLostReasonLabel, dealStageLabel, formatThaiDate
 import { ACTIVITY_KINDS, STAGE_ADVANCE_GATE_MESSAGE } from './dealTrackingMeta.js';
 import { DealStageStepper, PhaseSummary, PhaseTracker } from './DealStageStepper.jsx';
 import { MarkLostModal } from './MarkLostModal.jsx';
-import { EMPTY_STAGE_CATALOG, findStage, nextStageIn } from './stageCatalog.js';
-import { AUTO_STAGE_HINT, GATE_LABEL, STAGE_HEADLINE } from './stageMeta.js';
+import {
+  EMPTY_STAGE_CATALOG, findStage, nextOnRoute, routePath, routePosition,
+} from './stageCatalog.js';
+import {
+  AUTO_STAGE_HINT, GATE_LABEL, routeName, STAGE_HEADLINE,
+} from './stageMeta.js';
 import { UpdateStageModal } from './UpdateStageModal.jsx';
 
 function daysSince(iso) {
@@ -77,6 +81,7 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   docActions, primaryAction, actionLoading,
   advanceReady = true,
   onUpdateStage, onMarkLost, onReopen, onHold, onDormant, onResume, onSetTenderRequirement,
+  onSetEntryChannel,
 }, ref) {
   const [editOpen, setEditOpen] = useState(false);
   const [lostOpen, setLostOpen] = useState(false);
@@ -95,8 +100,14 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   const lost = summary.lifecycle === 'CLOSED_LOST';
   const lifecycle = summary.lifecycle ?? (lost ? 'CLOSED_LOST' : 'ACTIVE');
   const meta = findStage(catalog, summary.salesStage);
-  const label = dealStageLabel(summary.salesStage);
-  const next = lost ? null : nextStageIn(catalog, summary.salesStage);
+  // Route-aware (deal-route-staging): the channel re-words S3, and the next step steps over stages
+  // this deal's route does not visit. Both are read off the server's answer — `entryChannel` on the
+  // summary, `onRoute` on each stage decision — never derived here. Absent => today's behaviour.
+  const label = dealStageLabel(summary.salesStage, summary.entryChannel);
+  const next = lost ? null : nextOnRoute(catalog, summary.salesStage, stageDecisions);
+  const route = routeName(summary.entryChannel);
+  const position = routePosition(catalog, summary.salesStage, stageDecisions);
+  const routeStageCount = routePath(catalog, stageDecisions).length;
   const days = daysSince(summary.stageUpdatedAt);
   // Every gate below is now read off the server's answer, never recomputed. `hasAction` is the
   // backend's availableActions list (TicketService.actions) and `stageDecisions` is its per-stage
@@ -105,13 +116,16 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   const canEditStage = hasAction('UPDATE_STAGE')
     && stageDecisions.some((decision) => decision.allowed) && !lost;
   const canLost = hasAction('MARK_LOST') && !lost && summary.salesStage !== 'CLOSED_PAID';
-  const canAdvance = Boolean(next) && !next.auto && hasAction('ADVANCE_STAGE', next.code);
+  // `next` is on-route by construction; the explicit onRoute check is the belt to that braces — an
+  // off-route stage must never be one click away, whatever else the server listed.
+  const nextDecision = next ? stageDecisions.find((decision) => decision.stage === next.code) : null;
+  const canAdvance = Boolean(next) && !next.auto && nextDecision?.onRoute !== false
+    && hasAction('ADVANCE_STAGE', next.code);
   // The next stage is reachable EXCEPT the readiness gate (a follow-up date + a logged activity
   // since the last stage change) is unmet — the ONE block the acting sales rep clears themselves.
   // Detected off the server's own reason (STAGE_ADVANCE_GATE_MESSAGE verbatim) so it can never
   // disagree with the backend; distinct from an auto stage or a block owned by another role, which
   // the rep cannot act on. When true, the guided-advance flow replaces the dead "อัปเดตโดย…" hint.
-  const nextDecision = next ? stageDecisions.find((decision) => decision.stage === next.code) : null;
   const readinessBlocked = Boolean(next) && !next.auto && !canAdvance
     && Boolean(nextDecision) && !nextDecision.allowed
     && nextDecision.blockedReason === STAGE_ADVANCE_GATE_MESSAGE;
@@ -142,6 +156,11 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   const canDormant = hasAction('MARK_DORMANT');
   const canResume = hasAction('RESUME');
   const canTender = hasAction('SET_TENDER_REQUIREMENT') && summary.salesStage === 'AWAITING_BUYER';
+  // "แก้ช่องทางดีล" is the remedy for a route refusal, not standing chrome: GLA-156 deliberately took
+  // the ช่องทางรับงาน row off this panel and that stays. The server's own advertisement is handed
+  // down to the two places a refusal is READ (the stepper's off-route rows, UpdateStageModal's
+  // blocked list), which render nothing without it. Its `requiredFields` decides the reason field.
+  const entryChannelAction = availableActions.find((item) => item.action === 'SET_ENTRY_CHANNEL');
   const isDone = !lost && summary.salesStage === 'CLOSED_PAID';
 
   useImperativeHandle(ref, () => ({
@@ -209,7 +228,7 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
           style={{ fontSize: 12 }}
           onClick={() => setShowSteps((v) => !v)}
         >
-          {showSteps ? 'ซ่อนขั้นตอนทั้งหมด' : `ดูขั้นตอนทั้งหมด (${catalog.stages.length} ขั้น)`}
+          {showSteps ? 'ซ่อนขั้นตอนทั้งหมด' : `ดูขั้นตอนทั้งหมด (${routeStageCount} ขั้น)`}
         </Button>
       )}
     >
@@ -285,8 +304,15 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
                     {`ผู้รับผิดชอบ: ${GATE_LABEL[meta.gate]}`}
                   </div>
                 ) : null}
+                {/* One text line naming the route and the honest position on it. Nothing at all when
+                    the deal has no route (UNSPECIFIED / unknown / absent channel). */}
+                {route ? (
+                  <div data-testid="deal-route-line" className="mt-0.5 text-xs font-bold text-text-muted">
+                    เส้นทาง · {route} · ขั้นที่ {position.position} จาก {position.total}
+                  </div>
+                ) : null}
                 <div className="mt-1">
-                  <PhaseSummary catalog={catalog} salesStage={summary.salesStage} lost={lost} />
+                  <PhaseSummary catalog={catalog} salesStage={summary.salesStage} lost={lost} stageDecisions={stageDecisions} />
                 </div>
                 {days != null ? (
                   <div className="mt-1 text-xs text-text-muted">อยู่ในขั้นนี้ {days === 0 ? 'วันนี้' : `${days} วัน`}</div>
@@ -300,7 +326,7 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
             {next && !isDone ? (
               <div data-testid="deal-stage-next" className="text-sm leading-snug text-text">
                 <span className="font-bold text-text-muted">ถัดไป: </span>
-                <span className="font-extrabold">{next.no}. {dealStageLabel(next.code).label}</span>
+                <span className="font-extrabold">{next.no}. {dealStageLabel(next.code, summary.entryChannel).label}</span>
                 {nextHint ? <span className="text-text-secondary"> — {nextHint}</span> : null}
               </div>
             ) : null}
@@ -340,7 +366,7 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
                     onClick={() => setGuidedOpen(true)}
                     data-testid="guided-advance-open"
                   >
-                    เลื่อนไป: {next.no}. {dealStageLabel(next.code).label}
+                    เลื่อนไป: {next.no}. {dealStageLabel(next.code, summary.entryChannel).label}
                   </Button>
                 ) : null}
               </div>
@@ -378,7 +404,16 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
         {showSteps ? (
           <div className="flex flex-col gap-4 border-t border-border pt-4">
             <PhaseTracker catalog={catalog} salesStage={summary.salesStage} lost={lost} />
-            <DealStageStepper catalog={catalog} salesStage={summary.salesStage} lost={lost} />
+            <DealStageStepper
+              catalog={catalog}
+              salesStage={summary.salesStage}
+              lost={lost}
+              stageDecisions={stageDecisions}
+              entryChannel={summary.entryChannel}
+              entryChannelAction={entryChannelAction}
+              onSetEntryChannel={onSetEntryChannel}
+              actionLoading={actionLoading}
+            />
           </div>
         ) : null}
       </div>
@@ -390,6 +425,8 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
           submitting={actionLoading}
           onClose={() => setEditOpen(false)}
           onSubmit={submitStage}
+          entryChannelAction={entryChannelAction}
+          onSetEntryChannel={onSetEntryChannel}
         />
       ) : null}
       {lostOpen ? (
@@ -419,7 +456,7 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
       ) : null}
       {guidedOpen && next ? (
         <Modal
-          title={`เลื่อนไปขั้น ${next.no}. ${dealStageLabel(next.code).label}`}
+          title={`เลื่อนไปขั้น ${next.no}. ${dealStageLabel(next.code, summary.entryChannel).label}`}
           subtitle="ก่อนเลื่อนขั้น ระบุวันติดตามครั้งถัดไป และบันทึกกิจกรรมล่าสุดอย่างน้อย 1 รายการ"
           onClose={() => setGuidedOpen(false)}
           testId="guided-advance-modal"

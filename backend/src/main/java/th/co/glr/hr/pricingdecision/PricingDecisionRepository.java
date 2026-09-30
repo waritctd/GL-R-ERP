@@ -95,7 +95,10 @@ public class PricingDecisionRepository {
     }
 
     public record WriteItem(
-        long pricingRequestItemId, long pricingCostingItemId, String requestedUnitBasis,
+        // Slice 1 scaffolding (V194): boxed so a STOCK line - which has no factory quote and hence no
+        // costing row - can be written with a NULL link (the DB trigger allows that only for a stock
+        // line). Every existing caller passes a primitive long and autoboxes.
+        long pricingRequestItemId, Long pricingCostingItemId, String requestedUnitBasis,
         BigDecimal requestedQuantity, BigDecimal normalizedQuantityPieces,
         BigDecimal frozenLandedCostPerPieceThb, BigDecimal frozenLandedCostPerRequestedUnitThb,
         String currency, BigDecimal proposedMarginPct, BigDecimal proposedSellingPrice,
@@ -492,10 +495,13 @@ public class PricingDecisionRepository {
                    pdi.minimum_selling_price_per_requested_unit, pdi.decision_note,
                    pdi.created_at, pdi.updated_at, pdi.manual_selling_price_per_requested_unit,
                    pri.sqm_per_piece, pdi.list_unit_price, pdi.discount_pct, pdi.special_price_sqm,
-                   pdi.direct_net_price, pdi.net_unit_price
+                   pdi.direct_net_price, pdi.net_unit_price,
+                   pri.stock_source, pri.expected_arrival_date
               FROM sales.pricing_decision_item pdi
               JOIN sales.pricing_request_item pri ON pri.pricing_request_item_id = pdi.pricing_request_item_id
-              JOIN sales.pricing_costing_item pci ON pci.pricing_costing_item_id = pdi.pricing_costing_item_id
+              -- LEFT JOIN (V194): a STOCK line has no costing row (pricing_costing_item_id IS NULL), and
+              -- an inner join would silently drop it from the decision. factory_name reads NULL there.
+              LEFT JOIN sales.pricing_costing_item pci ON pci.pricing_costing_item_id = pdi.pricing_costing_item_id
              WHERE pdi.pricing_decision_id = :decisionId
              ORDER BY pdi.pricing_decision_item_id
             """, Map.of("decisionId", decisionId), (rs, rowNum) -> mapItem(rs));
@@ -621,7 +627,9 @@ public class PricingDecisionRepository {
             rs.getBigDecimal("discount_pct"),
             rs.getBigDecimal("special_price_sqm"),
             rs.getBigDecimal("direct_net_price"),
-            rs.getBigDecimal("net_unit_price")
+            rs.getBigDecimal("net_unit_price"),
+            rs.getString("stock_source"),
+            rs.getObject("expected_arrival_date", java.time.LocalDate.class)
         );
     }
 

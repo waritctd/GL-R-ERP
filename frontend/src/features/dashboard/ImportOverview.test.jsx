@@ -1,6 +1,6 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ImportOverview } from './ImportOverview.jsx';
@@ -151,5 +151,49 @@ describe('ImportOverview', () => {
 
     fireEvent.click(screen.getByText('ล้างตัวกรอง'));
     expect(await within(worklistPanel()).findAllByText(/^บริษัท /)).toHaveLength(5);
+  });
+});
+
+// Import cannot open the whole-deal page (/tickets/:id — the GET 403s it); every deal link on its
+// dashboard must land on its OWN per-deal page instead.
+describe('ImportOverview deal links', () => {
+  function LocationProbe() {
+    return <output data-testid="location">{useLocation().pathname}</output>;
+  }
+  function renderWithProbe() {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/']}>
+          <ImportOverview user={user} employee={employee} />
+          <LocationProbe />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.tickets.list.mockResolvedValue({ tickets: TICKETS });
+    api.pricingRequests.queue.mockResolvedValue({ items: PRICING_REQUESTS });
+  });
+
+  it('sends a legacy-action CTA to /import/deals/:id', async () => {
+    renderWithProbe();
+    await screen.findAllByText(/^บริษัท /);
+    const panel = screen.getByText('สิ่งที่ต้องทำ').closest('section');
+    const row = within(panel).getByText('บริษัท A').closest('div').parentElement.parentElement;
+    fireEvent.click(within(row).getByRole('button'));
+    expect(screen.getByTestId('location').textContent).toBe('/import/deals/1');
+  });
+
+  it('sends an in-transit tile to /import/deals/:id', async () => {
+    renderWithProbe();
+    await screen.findAllByText(/^บริษัท /);
+    const transit = screen.getByText('กำลังขนส่ง').closest('section');
+    fireEvent.click(within(transit).getByText('บริษัท C').closest('button'));
+    expect(screen.getByTestId('location').textContent).toBe('/import/deals/3');
   });
 });

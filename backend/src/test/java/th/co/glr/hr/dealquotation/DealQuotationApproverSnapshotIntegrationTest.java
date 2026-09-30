@@ -379,8 +379,12 @@ class DealQuotationApproverSnapshotIntegrationTest extends AbstractPostgresInteg
         signatureService.upload(managerId, png(signatureA()), managerActor);
         DealQuotationDto legacy = createSubmittedApproved();
         DealQuotationDto pending = quotationService.submit(
-            quotationService.create(ticketId, upsertRequest(), salesActor).id(), salesActor);
-        DealQuotationDto draft = quotationService.create(ticketId, upsertRequest(), salesActor);
+            // Slice 2's N6: a second/third live direct quotation on one deal is a legacy shape —
+            // see LegacyDirectQuotationFixtures.
+            LegacyDirectQuotationFixtures.createAlongsideLive(jdbc, quotationService, ticketId, upsertRequest(),
+                salesActor).id(), salesActor);
+        DealQuotationDto draft = LegacyDirectQuotationFixtures.createAlongsideLive(jdbc, quotationService, ticketId,
+            upsertRequest(), salesActor);
         jdbc.update("DELETE FROM sales.quotation_approver_snapshot WHERE quotation_id = :id",
             Map.of("id", legacy.id()));
 
@@ -581,7 +585,7 @@ class DealQuotationApproverSnapshotIntegrationTest extends AbstractPostgresInteg
             WastageCalculator.QUANTITY_MODE_PIECES, null, 10, WastageCalculator.WASTAGE_MODE_NONE, null, 1,
             new BigDecimal("100.00"), BigDecimal.ZERO, "ไทย-สต็อก", 30, 45, null);
         return new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
-            "หมายเหตุทดสอบ", List.of(item));
+            "หมายเหตุทดสอบ", List.of(item)).withRecipientType("OWNER");
     }
 
     /** Same fixture as {@link #upsertRequest} plus a ผู้พิมพ์ display-name override (V179) —
@@ -594,7 +598,7 @@ class DealQuotationApproverSnapshotIntegrationTest extends AbstractPostgresInteg
             new BigDecimal("100.00"), BigDecimal.ZERO, "ไทย-สต็อก", 30, 45, null);
         return new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
             null, null, "หมายเหตุทดสอบ", null, null, null, printedByDisplayId, null, null, null, null,
-            List.of(item));
+            List.of(item)).withRecipientType("OWNER");
     }
 
     private long createEmployee(EmployeeRepository employees, String nameTh, String email,

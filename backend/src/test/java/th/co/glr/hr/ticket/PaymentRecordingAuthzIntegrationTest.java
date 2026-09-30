@@ -165,6 +165,7 @@ class PaymentRecordingAuthzIntegrationTest extends AbstractPostgresIntegrationTe
     @Test
     void account_recordsADepositReceipt_andTheRowIsActuallyWritten() {
         long ticketId = createPricedDeal();
+        putInAccountScope(ticketId);
 
         ticketService.recordPayment(ticketId,
             new RecordPaymentRequest("DEPOSIT", new BigDecimal("300.00"), null, "บันทึกมัดจำ", null, "RC-DEP-1", false),
@@ -176,12 +177,27 @@ class PaymentRecordingAuthzIntegrationTest extends AbstractPostgresIntegrationTe
     @Test
     void account_recordsABalanceReceipt_andTheRowIsActuallyWritten() {
         long ticketId = createPricedDeal();
+        putInAccountScope(ticketId);
 
         ticketService.recordPayment(ticketId,
             new RecordPaymentRequest("BALANCE", new BigDecimal("300.00"), null, "บันทึกยอดคงเหลือ", null, "RC-BAL-1", false),
             accountUser);
 
         assertThat(paymentReceiptCount(ticketId)).isEqualTo(1);
+    }
+
+    // H1 lockdown: account may record a payment only on a deal inside its list scope. A fresh deal is at the
+    // lead stage with no payment status, so it is OUTSIDE it -- refused, and no receipt row is written.
+    @Test
+    void account_isRefusedRecordingPayments_onADealOutsideItsListScope_andNothingIsWritten() {
+        long ticketId = createPricedDeal();
+
+        assertThatThrownBy(() -> ticketService.recordPayment(ticketId,
+            new RecordPaymentRequest("DEPOSIT", new BigDecimal("300.00"), null, "x", null, "RC-X", false), accountUser))
+            .isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+
+        assertThat(paymentReceiptCount(ticketId)).isZero();
     }
 
     // ── available actions: the advertiser must never drift from the gate ────────────────
@@ -196,9 +212,18 @@ class PaymentRecordingAuthzIntegrationTest extends AbstractPostgresIntegrationTe
 
     // ── helpers ───────────────────────────────────────────────────────────────────────
 
+    // H1 lockdown: account no longer reaches TicketService.actions (the /tickets path); its action list
+    // comes from financeActions -- the SAME gate logic, built without the ticket view-access check.
     private List<String> actionCodes(long ticketId, UserPrincipal actor) {
-        return ticketService.actions(ticketId, actor).availableActions().stream()
-            .map(TicketResponses.TicketActionDto::action).toList();
+        var response = "account".equals(actor.role())
+            ? ticketService.financeActions(ticketId, actor)
+            : ticketService.actions(ticketId, actor);
+        return response.availableActions().stream().map(TicketResponses.TicketActionDto::action).toList();
+    }
+
+    private void putInAccountScope(long ticketId) {
+        jdbc.update("UPDATE sales.ticket SET sales_stage = 'ORDER_RECEIVED' WHERE ticket_id = :id",
+            Map.of("id", ticketId));
     }
 
     /** A deal priced at ฿1,000 (approved_price × qty), so {@code payableAmount} is nonzero and

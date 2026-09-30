@@ -317,7 +317,7 @@ export function ImportOverview({ user, employee }) {
                 <button
                   key={ticket.id}
                   type="button"
-                  onClick={() => navigate(`/tickets/${ticket.id}`)}
+                  onClick={() => navigate(`/import/deals/${ticket.id}`)}
                   className="flex items-center justify-between gap-3 border-t border-border-subtle px-4 py-3 text-left first:border-t-0 hover:bg-surface-hover"
                 >
                   <span className="min-w-0">

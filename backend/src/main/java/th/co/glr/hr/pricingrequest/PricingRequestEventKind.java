@@ -13,6 +13,11 @@ public final class PricingRequestEventKind {
     // one. It is a routing decision, not metadata: it decides which factory gets asked for a
     // price, so it belongs in the audit trail beside the pickup and the factory-email events.
     public static final String PRICING_REQUEST_ITEM_FACTORY_SET = "PRICING_REQUEST_ITEM_FACTORY_SET";
+    // Stock lines (V194): import (or the CEO) confirmed / changed the ETA of an IN_TRANSIT line, and
+    // import switched an IN_TRANSIT line to สั่งนำเข้า (R13). Both change what the CEO will see, so
+    // both belong in the audit trail. No DB CHECK constrains event_kind (V141 note).
+    public static final String PRICING_REQUEST_ITEM_ETA_SET = "PRICING_REQUEST_ITEM_ETA_SET";
+    public static final String PRICING_REQUEST_ITEM_CONVERTED_TO_IMPORT = "PRICING_REQUEST_ITEM_CONVERTED_TO_IMPORT";
     public static final String MORE_INFO_REQUESTED        = "MORE_INFO_REQUESTED";
     public static final String MORE_INFO_RESPONDED        = "MORE_INFO_RESPONDED";
     public static final String PRICING_REQUEST_CANCELLED  = "PRICING_REQUEST_CANCELLED";
@@ -74,6 +79,7 @@ public final class PricingRequestEventKind {
     public static final Set<String> VALUES = Set.of(
         PRICING_REQUEST_CREATED, PRICING_REQUEST_UPDATED, PRICING_REQUEST_SUBMITTED,
         PRICING_REQUEST_PICKED_UP, PRICING_REQUEST_ITEM_FACTORY_SET,
+        PRICING_REQUEST_ITEM_ETA_SET, PRICING_REQUEST_ITEM_CONVERTED_TO_IMPORT,
         MORE_INFO_REQUESTED, MORE_INFO_RESPONDED,
         PRICING_REQUEST_CANCELLED, PRICING_REQUEST_REVISED, FACTORY_EMAIL_READY, FACTORY_EMAIL_SENT,
         FACTORY_RESPONSE_RECEIVED, FACTORY_NEGOTIATION_STARTED,

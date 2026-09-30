@@ -100,8 +100,38 @@ public final class PricingDecisionDtos {
         // Server-derived net price per requested unit for whichever price_mode is active --
         // freezes into approvedSellingPricePerRequestedUnit AND
         // minimumSellingPricePerRequestedUnit on approve() of a new-form decision. CEO-only.
-        BigDecimal netUnitPrice
-    ) {}
+        BigDecimal netUnitPrice,
+        // ── Slice 1 of the stock-line feature (V194), read from the bound pricing_request_item ──
+        // null = สั่งนำเข้า; IN_THAILAND / IN_TRANSIT = a stock line (no costing link, no cost).
+        String stockSource,
+        // วันที่คาดว่าจะถึง - IN_TRANSIT lines only. Read-only here; import sets it on the request.
+        LocalDate expectedArrivalDate
+    ) {
+        /** The pre-stock-line shape - every construction site before slice 1. Defaults both new
+         * fields to null. */
+        public PricingDecisionItemDto(
+            long id, long pricingDecisionId, long pricingRequestItemId, long pricingCostingItemId,
+            String brand, String model, String productDescription, String factoryName,
+            String requestedUnitBasis, BigDecimal requestedQuantity, BigDecimal normalizedQuantityPieces,
+            BigDecimal frozenLandedCostPerPieceThb, BigDecimal frozenLandedCostPerRequestedUnitThb,
+            String currency, BigDecimal proposedMarginPct, BigDecimal approvedMarginPct,
+            BigDecimal proposedSellingPricePerRequestedUnit, BigDecimal approvedSellingPricePerRequestedUnit,
+            BigDecimal minimumSellingPricePerRequestedUnit, String decisionNote, Instant createdAt,
+            Instant updatedAt, BigDecimal manualSellingPricePerRequestedUnit,
+            BigDecimal effectiveSellingPricePerRequestedUnit, BigDecimal sqmPerPiece,
+            BigDecimal listUnitPrice, BigDecimal discountPct, BigDecimal specialPriceSqm,
+            BigDecimal directNetPrice, BigDecimal netUnitPrice
+        ) {
+            this(id, pricingDecisionId, pricingRequestItemId, pricingCostingItemId, brand, model,
+                productDescription, factoryName, requestedUnitBasis, requestedQuantity,
+                normalizedQuantityPieces, frozenLandedCostPerPieceThb,
+                frozenLandedCostPerRequestedUnitThb, currency, proposedMarginPct, approvedMarginPct,
+                proposedSellingPricePerRequestedUnit, approvedSellingPricePerRequestedUnit,
+                minimumSellingPricePerRequestedUnit, decisionNote, createdAt, updatedAt,
+                manualSellingPricePerRequestedUnit, effectiveSellingPricePerRequestedUnit, sqmPerPiece,
+                listUnitPrice, discountPct, specialPriceSqm, directNetPrice, netUnitPrice, null, null);
+        }
+    }
 
     /**
      * Design correction 2 ("never leak cost to Sales"): the ONLY shape a {@code sales}/

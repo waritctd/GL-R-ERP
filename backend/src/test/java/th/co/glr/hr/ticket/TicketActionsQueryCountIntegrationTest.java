@@ -142,8 +142,9 @@ class TicketActionsQueryCountIntegrationTest extends AbstractPostgresIntegration
         for (String stage : DealStage.ORDER) {
             long ticketId = readyToAdvanceFrom(stage);
             actors.forEach((label, actor) -> {
+                if (accountOutsideScope(actor, stage)) return;
                 counter.reset();
-                ticketService.actions(ticketId, actor);
+                actionsFor(ticketId, actor);
 
                 // The harness must have observed SOMETHING, or "no query ran twice" is vacuously
                 // true and this test is worthless. See theCounterItselfDetectsARepeatedQuery for
@@ -183,8 +184,9 @@ class TicketActionsQueryCountIntegrationTest extends AbstractPostgresIntegration
         for (String stage : DealStage.ORDER) {
             long ticketId = readyToAdvanceFrom(stage);
             actors.forEach((label, actor) -> {
+                if (accountOutsideScope(actor, stage)) return;
                 counter.reset();
-                ticketService.actions(ticketId, actor);
+                actionsFor(ticketId, actor);
                 countsByActorAndStage
                     .computeIfAbsent(label, k -> new LinkedHashMap<>())
                     .put(stage, counter.total());
@@ -192,7 +194,7 @@ class TicketActionsQueryCountIntegrationTest extends AbstractPostgresIntegration
         }
 
         countsByActorAndStage.forEach((label, byStage) -> {
-            int atFirstStage = byStage.get(DealStage.ORDER.get(0));
+            int atFirstStage = byStage.values().iterator().next();
             assertThat(byStage.values())
                 .as("statement count as %s must not depend on the deal's stage, but was %s",
                     label, byStage)
@@ -203,6 +205,23 @@ class TicketActionsQueryCountIntegrationTest extends AbstractPostgresIntegration
                     label, atFirstStage, DealStage.ORDER.size(), byStage)
                 .isLessThan(DealStage.ORDER.size());
         });
+    }
+
+    // H1 lockdown: account no longer reaches TicketService.actions (the /tickets path); it reads its action
+    // list through financeActions -- the SAME buildActions, plus one scope query -- and only on deals inside
+    // its list scope (S10+ here: these deals carry no payment status). So the harness routes account through
+    // financeActions and skips the stages below S10, where the finance path (correctly) refuses it.
+    private static boolean accountOutsideScope(UserPrincipal actor, String stage) {
+        return "account".equals(actor.role())
+            && DealStage.indexOf(stage) < DealStage.indexOf(DealStage.ORDER_RECEIVED);
+    }
+
+    private void actionsFor(long ticketId, UserPrincipal actor) {
+        if ("account".equals(actor.role())) {
+            ticketService.financeActions(ticketId, actor);
+        } else {
+            ticketService.actions(ticketId, actor);
+        }
     }
 
     /**

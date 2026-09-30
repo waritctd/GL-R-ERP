@@ -125,6 +125,11 @@ public class FactoryQuoteService {
         Map<String, List<PricingRequestItemDto>> byFactory = groupByFactory(items);
         if (byFactory.isEmpty()) {
             List<String> missing = unresolvedLineDescriptions(items);
+            if (missing.isEmpty()) {
+                // Only stock lines (V194): there is nothing to send to any factory.
+                throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
+                    "คำขอราคานี้ไม่มีรายการสั่งนำเข้า จึงไม่มีรายการที่ต้องส่งให้โรงงาน");
+            }
             throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                 "ยังไม่ได้ระบุโรงงานสำหรับ " + String.join(", ", missing)
                     + " — กรุณาระบุโรงงานในรายการสินค้าก่อนสร้างร่างอีเมล");
@@ -548,8 +553,11 @@ public class FactoryQuoteService {
         // guards this check (unlike PricingDecisionService.startReview) — the worst case of two
         // quotes being marked ready in the same instant is a missed auto-advance, not an illegal
         // state, and the plan does not call for locking here.
+        // Stock lines (V194): the predicate is now "every import line resolvable AND every
+        // in-transit line has an ETA" (LandedCostCalculator#isReadyForCeoReview); for an
+        // import-only request it is exactly isFullyResolvable, as before.
         if (PricingRequestStatus.AWAITING_FACTORY_RESPONSE.equals(summary.status())
-                && landedCosts.isFullyResolvable(summary)) {
+                && landedCosts.isReadyForCeoReview(summary)) {
             int transitioned = pricingRequests.transition(summary.id(), PricingRequestStatus.AWAITING_FACTORY_RESPONSE,
                 PricingRequestStatus.READY_FOR_CEO_REVIEW, null, null);
             if (transitioned == 1) {
@@ -598,6 +606,10 @@ public class FactoryQuoteService {
             .toList();
         Map<String, List<PricingRequestItemDto>> byFactory = new LinkedHashMap<>();
         for (PricingRequestItemDto item : ordered) {
+            // Stock lines (V194) are never sent to a factory, even when they resolve to one.
+            if (item.stockSource() != null) {
+                continue;
+            }
             String factoryName = item.resolvedFactory();
             if (factoryName == null) {
                 continue;
@@ -634,7 +646,7 @@ public class FactoryQuoteService {
         List<String> missing = new ArrayList<>();
         for (int i = 0; i < ordered.size(); i++) {
             PricingRequestItemDto item = ordered.get(i);
-            if (item.resolvedFactory() == null) {
+            if (item.stockSource() == null && item.resolvedFactory() == null) {
                 missing.add("รายการที่ " + (i + 1) + " (" + item.displayName() + ")");
             }
         }

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as meta from './quotationMeta.js';
+import { DEAL_STAGE_CATALOG } from '../../data/dealStageCatalog.js';
+import { routeForChannel } from '../tickets/stageCatalog.js';
 import {
   canApproveDealQuotation,
   canCancelDealQuotation,
@@ -1455,8 +1457,16 @@ describe('buildQuotationChecklist', () => {
     // pick one of the three real ช่องทางรับงาน before บันทึกร่าง creates the deal. This is the ONE
     // entry here the backend does NOT refuse (TicketService.create accepts UNSPECIFIED, the V144
     // default): it is a deliberate frontend-only product rule, ruled on, not a mirror.
+    //
+    // Slice 2 (SLICE-2-FLOW-A.md, IA D1–D7 owner-approved 2026-09-30): 'deal', 'recipient' and
+    // 'liveDirectQuotation' join — each mirrors a create refusal the server makes (no ticket to
+    // hang the quotation on; S2-B1's 400 on a direct create without a recipient; S2-B3's N6 409).
+    //
+    // Owner ruling 2026-09-30 (one pricing route per deal): 'livePricingRequest' joins — it mirrors
+    // DealQuotationService#create's 409 on a deal holding a live pricing request.
     expect([...meta.QUOTATION_BLOCKING_CHECKS].sort()).toEqual(
-      ['creditDaysInvalid', 'customer', 'entryChannel', 'items', 'locationLabels', 'priceModeLanguage', 'project'],
+      ['creditDaysInvalid', 'customer', 'deal', 'entryChannel', 'items', 'liveDirectQuotation', 'livePricingRequest',
+        'locationLabels', 'priceModeLanguage', 'project', 'recipient'],
     );
     // Wrong-way-round: none of the header fields a customer might simply not have is blocking,
     // and the blank-creditDays reminder is a warning, not a blocker (fix 6).
@@ -1470,6 +1480,93 @@ describe('buildQuotationChecklist', () => {
 
   it('is empty for a complete quotation', () => {
     expect(meta.buildQuotationChecklist(complete)).toEqual([]);
+  });
+
+  // Slice 2 (SLICE-2-FLOW-A.md §A) — the three new create-time gates, each blocking and each naming
+  // its reason; the defaults leave every pre-slice-2 caller's checklist exactly as it was.
+  it('slice 2: no deal picked yet blocks with "ต้องเลือกดีล…" and skips the new-deal customer/project checks', () => {
+    const entries = meta.buildQuotationChecklist({ ...complete, isInlineCreate: true, customer: null, needsDeal: true });
+    expect(entries.map((e) => [e.check, e.blocking])).toEqual([['deal', true]]);
+    expect(entries[0].message).toBe('ต้องเลือกดีลก่อนบันทึกร่าง');
+    expect(entries[0].targetId).toBe('deal-picker');
+  });
+
+  it('slice 2: a NEW direct quotation without a recipient blocks; any of the three recipients clears it', () => {
+    const missing = meta.buildQuotationChecklist({ ...complete, recipientRequired: true, recipientType: '' });
+    expect(missing).toEqual([expect.objectContaining({ check: 'recipient', blocking: true, message: 'ต้องเลือกผู้รับใบเสนอราคา' })]);
+    for (const code of ['DESIGNER', 'OWNER', 'BUYER']) {
+      expect(meta.buildQuotationChecklist({ ...complete, recipientRequired: true, recipientType: code })).toEqual([]);
+    }
+    // UNSPECIFIED is never a choice.
+    expect(meta.buildQuotationChecklist({ ...complete, recipientRequired: true, recipientType: 'UNSPECIFIED' })
+      .map((e) => e.check)).toEqual(['recipient']);
+    // Not required (an existing row): never listed.
+    expect(meta.buildQuotationChecklist({ ...complete, recipientType: '' })).toEqual([]);
+  });
+
+  it('slice 2: N6 — a live direct quotation on the deal blocks with the server\'s own sentence; a dead one does not', () => {
+    const live = { id: 77, number: 'QT-2026-0077-1', docStatus: 'PENDING_APPROVAL' };
+    expect(meta.buildQuotationChecklist({ ...complete, liveDirectQuotation: live })).toEqual([expect.objectContaining({
+      check: 'liveDirectQuotation',
+      blocking: true,
+      message: 'ดีลนี้มีใบเสนอราคาตรงที่ใช้งานอยู่ (QT-2026-0077-1) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่',
+    })]);
+    expect(meta.buildQuotationChecklist({ ...complete, liveDirectQuotation: { ...live, docStatus: 'CANCELLED' } })).toEqual([]);
+  });
+
+  it('slice 2: the recipient table maps to S4/S5/S8 and back, and never offers UNSPECIFIED', () => {
+    expect(meta.QUOTATION_RECIPIENT_OPTIONS.map((o) => [o.code, o.stage])).toEqual([
+      ['DESIGNER', 'QUOTE_DESIGN_SIDE'], ['OWNER', 'QUOTE_OWNER'], ['BUYER', 'QUOTE_BUYER'],
+    ]);
+    expect(meta.stageForQuotationRecipient('UNSPECIFIED')).toBeNull();
+    expect(meta.recipientForDealStage('QUOTE_OWNER')).toBe('OWNER');
+    expect(meta.recipientForDealStage('NEGOTIATION')).toBe('');
+  });
+
+  // Owner ruling 2026-09-30 — one pricing route per deal: the ONE definition of "live pricing request".
+  it('hasLivePricingRequest: any status but CANCELLED/SUPERSEDED on THIS deal counts', () => {
+    const pr = (status, ticketId = 18) => ({ id: 1, ticketId, status });
+    ['DRAFT', 'SUBMITTED', 'IMPORT_REVIEWING', 'APPROVED_FOR_QUOTATION', 'QUOTATION_ISSUED', 'QUOTATION_ACCEPTED']
+      .forEach((status) => expect(meta.hasLivePricingRequest([pr(status)], 18)).toBe(true));
+    expect(meta.hasLivePricingRequest([pr('CANCELLED'), pr('SUPERSEDED')], 18)).toBe(false);
+    // Another deal's request never counts; ids compare as numbers (a useParams string is fine).
+    expect(meta.hasLivePricingRequest([pr('DRAFT', 19)], 18)).toBe(false);
+    expect(meta.hasLivePricingRequest([pr('DRAFT')], '18')).toBe(true);
+    expect(meta.hasLivePricingRequest(null, 18)).toBe(false);
+    expect(meta.LIVE_PRICING_REQUEST_BLOCK_MESSAGE)
+      .toBe('ดีลนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน');
+  });
+
+  it('the checklist blocks a NEW quotation on a deal with a live pricing request, with that sentence', () => {
+    expect(meta.buildQuotationChecklist({ ...complete, livePricingRequest: true })).toEqual([expect.objectContaining({
+      check: 'livePricingRequest',
+      blocking: true,
+      message: 'ดีลนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน',
+    })]);
+    expect(meta.buildQuotationChecklist({ ...complete, livePricingRequest: false })).toEqual([]);
+  });
+
+  // Owner ruling 2026-09-30 #2: the channel pre-fills the recipient on a new deal.
+  it('owner ruling #2: each real entry channel names its recipient; UNSPECIFIED/unknown name none', () => {
+    expect(meta.recipientForEntryChannel('DESIGNER_LED')).toBe('DESIGNER');
+    expect(meta.recipientForEntryChannel('OWNER_DIRECT')).toBe('OWNER');
+    expect(meta.recipientForEntryChannel('BUYER_DIRECT')).toBe('BUYER');
+    expect(meta.recipientForEntryChannel('UNSPECIFIED')).toBe('');
+    expect(meta.recipientForEntryChannel(null)).toBe('');
+  });
+
+  // Owner ruling 2026-09-30 #1: the route is READ from the served catalog (routeForChannel), never a
+  // local table — so this is exercised against the guarded fixture mockApi serves.
+  it('owner ruling #1: a recipient is off-route exactly when its quote stage is not on the channel\'s served route', () => {
+    const offRoute = (channel, recipient) => meta.isRecipientOffRoute(routeForChannel(DEAL_STAGE_CATALOG, channel), recipient);
+    expect(['DESIGNER', 'OWNER', 'BUYER'].map((r) => offRoute('DESIGNER_LED', r))).toEqual([false, false, false]);
+    expect(['DESIGNER', 'OWNER', 'BUYER'].map((r) => offRoute('OWNER_DIRECT', r))).toEqual([true, false, false]);
+    expect(['DESIGNER', 'OWNER', 'BUYER'].map((r) => offRoute('BUYER_DIRECT', r))).toEqual([true, true, false]);
+    expect(['DESIGNER', 'OWNER', 'BUYER'].map((r) => offRoute('UNSPECIFIED', r))).toEqual([false, false, false]);
+    // No recipient chosen, or the catalog not loaded yet (empty route): never a note.
+    expect(offRoute('BUYER_DIRECT', '')).toBe(false);
+    expect(meta.isRecipientOffRoute([], 'DESIGNER')).toBe(false);
+    expect(meta.isRecipientOffRoute(undefined, 'DESIGNER')).toBe(false);
   });
 
   // Owner ruling (2026-09-16): "make ผู้ออกแบบ optional including ฝ่าย". Both were already optional on

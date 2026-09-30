@@ -30,6 +30,7 @@ async function approvedNetPricingRequest() {
     firstName: 'สมชาย', lastName: 'ทดสอบ', phone: '081-000-0000', email: 'contact-pcrq@example.com',
   });
   const { ticket: created } = await api.tickets.create({
+    entryChannel: 'DESIGNER_LED',
     title: 'ดีล PCR Quotation Mock',
     priority: 'NORMAL',
     customerName: customer.name,
@@ -123,6 +124,7 @@ async function twoItemApprovedNetPricingRequest() {
     firstName: 'สมหญิง', lastName: 'ทดสอบ', phone: '081-000-0001', email: 'contact-pcrq2@example.com',
   });
   const { ticket: created } = await api.tickets.create({
+    entryChannel: 'DESIGNER_LED',
     title: 'ดีล PCR Quotation Mock 2',
     priority: 'NORMAL',
     customerName: customer.name,
@@ -405,11 +407,15 @@ describe('mockApi.dealQuotations.listForTicket/list/counts — origin scoping (m
       expect(await idsFor('ceo@glr.co.th', ticketId)).toContain(id);
     });
 
-    it('import, account and a can_create_quotation grant holder do NOT see it', async () => {
+    // 2026-09-30 owner ruling (reverses M3 FOR ACCOUNT ONLY): account may read a PR-origin row, but only on a
+    // deal inside its list scope (live, S10+). This deal is still below S10, so account is refused the list
+    // outright (403), exactly as DealQuotationService.listForTicket does; import and a grant holder still get
+    // the row filtered out. The in-scope allow-case is pinned by the real-DB DealQuotationOutcomeIntegrationTest.
+    it('import and a can_create_quotation grant holder do NOT see it; account is refused below S10', async () => {
       const { ticketId, id } = await ticketWithPrRow();
       expect(await idsFor('import@glr.co.th', ticketId)).not.toContain(id);
       await api.auth.login({ role: 'account' });
-      expect((await api.dealQuotations.listForTicket(ticketId)).items.map((q) => q.id)).not.toContain(id);
+      await expect(api.dealQuotations.listForTicket(ticketId)).rejects.toMatchObject({ status: 403 });
       // employee@glr.co.th carries canCreateQuotation: the grant must NOT bypass the PR-origin gate.
       expect(await idsFor('employee@glr.co.th', ticketId)).not.toContain(id);
     });
@@ -421,12 +427,12 @@ describe('mockApi.dealQuotations.listForTicket/list/counts — origin scoping (m
     });
 
     it('a DEAL_DIRECT row stays visible to the same roles the gate always admitted (unaffected)', async () => {
+      // Slice 2 (N6, S2-B3): ticket 18's seed already holds a LIVE direct quotation (id 1, DRAFT),
+      // so a second create there is refused by design — this case only needs A DEAL_DIRECT row on
+      // the deal, and the seeded one is exactly that.
       await api.auth.login({ email: 'sales@glr.co.th', password: 'demo1234' });
-      const { quotation } = await api.dealQuotations.create(18, { items: [{
-        model: 'Trilogy', color: 'Ash', texture: 'Matt', sizeText: '60x60', thicknessMm: 10, sqmPerPiece: 0.36,
-        quantityMode: 'AREA', areaSqm: 20, wastageMode: 'NONE', wastageValue: 0, piecesPerBox: 3, unitPrice: 850, discountPct: 0,
-        leadTimeMinDays: 30, leadTimeMaxDays: 45,
-      }] });
+      const { quotation } = await api.dealQuotations.get(1);
+      expect(quotation.origin).toBe('DEAL_DIRECT');
       expect(await idsFor('sales@glr.co.th', 18)).toContain(quotation.id);
       expect(await idsFor('import@glr.co.th', 18)).toContain(quotation.id);
     });

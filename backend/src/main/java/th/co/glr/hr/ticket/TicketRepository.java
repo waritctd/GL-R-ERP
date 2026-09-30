@@ -102,17 +102,15 @@ public class TicketRepository {
     // overdue on an outstanding balance. Mirrors TicketEventKind's payment-status values.
     private static final List<String> ACCOUNT_PENDING_PAYMENT_STATUSES =
         List.of("DEPOSIT_NOTICE_ISSUED", "AWAITING_FINAL_PAYMENT");
-
-    /**
-     * GLA-136 (owner ruling 2026-09-30, V193): the deal LIST and its COUNT are the pipeline, and a
-     * quotation-only container ticket ({@code sales.ticket.quotation_only}) is not part of it — it
-     * exists only because {@code sales.quotation.ticket_id} is NOT NULL. One shared fragment so
-     * {@link #findSummaries} and {@link #countSummaries} can never disagree about which rows the
-     * page holds versus how many pages there are. Deliberately NOT applied to {@link #findById}:
-     * reading a single ticket by id (the quotation editor's ticket summary, the deal page banner)
-     * must still work.
-     */
-    private static final String PIPELINE_ONLY = " AND t.quotation_only = FALSE ";
+    // account (H1): every live order from ORDER_RECEIVED (S10) through CLOSED_PAID (S20), stage
+    // alone. The payment-status disjunct above missed a deal sitting at DEPOSIT_PAID through
+    // PROCUREMENT (S12-S17), a deposit-bypass deal (null / CUSTOMER_CONFIRMED), FULLY_PAID-but-not-
+    // close-confirmed, and CLOSED_PAID history -- all of which the account worklist must show. The
+    // old disjuncts stay as a UNION so nothing account saw before disappears. CLOSED_PAID is
+    // deliberately IN (history); a `closed` STATUS (CEO close-confirm) is NOT excluded either --
+    // only lost / cancelled deals are, matching the import scope's terminal guard minus 'closed'.
+    private static final List<String> ACCOUNT_ORDER_STAGE_SCOPE =
+        DealStage.ORDER.subList(DealStage.indexOf(DealStage.ORDER_RECEIVED), DealStage.ORDER.size());
 
     public TicketRepository(NamedParameterJdbcTemplate jdbc) {
         this.jdbc = jdbc;
@@ -140,7 +138,7 @@ public class TicketRepository {
              WHERE (:status::varchar IS NULL OR t.status = :status)
                AND (:salesStage::varchar IS NULL OR t.sales_stage = :salesStage)
                AND (:createdBy::bigint IS NULL OR t.created_by = :createdBy)
-            """).append(PIPELINE_ONLY);
+            """);
         MapSqlParameterSource params = new MapSqlParameterSource()
             .addValue("status", status)
             .addValue("salesStage", salesStage)
@@ -178,7 +176,7 @@ public class TicketRepository {
              WHERE (:status::varchar IS NULL OR t.status = :status)
                AND (:salesStage::varchar IS NULL OR t.sales_stage = :salesStage)
                AND (:createdBy::bigint IS NULL OR t.created_by = :createdBy)
-            """).append(PIPELINE_ONLY);
+            """);
         MapSqlParameterSource params = new MapSqlParameterSource()
             .addValue("status", status)
             .addValue("salesStage", salesStage)
@@ -186,6 +184,27 @@ public class TicketRepository {
         appendRoleScope(sql, params, actorRole);
         Integer total = jdbc.queryForObject(sql.toString(), params, Integer.class);
         return total == null ? 0 : total;
+    }
+
+    /**
+     * Is this deal inside the import role's list scope — i.e. would {@code GET /api/tickets} return
+     * it to an {@code import} caller? Runs the list's OWN predicate ({@link #appendRoleScope} with
+     * {@code "import"}) against a single id rather than restating it, so the by-id read and the
+     * worklist can never disagree about what import may see. A missing deal is simply "not in
+     * scope" (false).
+     *
+     * <p>The former {@code quotation_only = FALSE} filter was dropped when the deal-route-staging
+     * rework removed it from the list paths too (the flag is now cleared on promote to a real deal,
+     * so a quotation-only container never reaches import's stage/PCR scope anyway). This stays in
+     * lock-step with {@code findSummaries}/{@code countSummaries}: predicate = id + appendRoleScope.
+     */
+    public boolean isInImportScope(long ticketId) {
+        StringBuilder sql = new StringBuilder(
+            "SELECT COUNT(*) FROM sales.ticket t WHERE t.ticket_id = :ticketId");
+        MapSqlParameterSource params = new MapSqlParameterSource().addValue("ticketId", ticketId);
+        appendRoleScope(sql, params, "import");
+        Integer n = jdbc.queryForObject(sql.toString(), params, Integer.class);
+        return n != null && n > 0;
     }
 
     /** Additive WHERE fragment for import/account list-scoping — see the class-level comment. */
@@ -206,13 +225,39 @@ public class TicketRepository {
             params.addValue("prTerminalStatuses", PRICING_REQUEST_TERMINAL_STATUSES);
             params.addValue("importStages", IMPORT_STAGE_SCOPE);
         } else if ("account".equals(actorRole)) {
-            sql.append(" AND (t.payment_status IN (:accountPendingStatuses) OR (t.due_date IS NOT NULL AND t.due_date < CURRENT_DATE AND ((")
+            sql.append("""
+                   AND (
+                     (t.lifecycle NOT IN ('CLOSED_LOST', 'CANCELLED')
+                      AND t.status <> 'cancelled'
+                      AND t.sales_stage IN (:accountOrderStages))
+                     OR t.payment_status IN (:accountPendingStatuses)
+                     OR (""")
+               .append(paymentDueDateScalarSql("t.ticket_id"))
+               .append(" < ").append(BANGKOK_TODAY_SQL)
+               .append(" AND t.payment_status IS DISTINCT FROM 'DEPOSIT_NOTICE_ISSUED' AND ((")
                .append(payableAmountSelect("t.ticket_id"))
                .append(") - (")
                .append(paidAmountSelect("t.ticket_id"))
                .append(")) > 0)) ");
+            params.addValue("accountOrderStages", ACCOUNT_ORDER_STAGE_SCOPE);
             params.addValue("accountPendingStatuses", ACCOUNT_PENDING_PAYMENT_STATUSES);
         }
+    }
+
+    /**
+     * Is this deal inside the account role's list scope? The single-deal twin of the list
+     * predicate: it runs the SAME {@link #appendRoleScope} fragment (and, like the list since the
+     * deal-route-staging rework, no quotation_only filter -- see {@link #isInImportScope}), so the
+     * finance deal read can never disagree with the list about what account may see.
+     */
+    public boolean isInAccountScope(long ticketId) {
+        // Trailing space is load-bearing: the account fragment appended below is a text block that starts
+        // flush with "AND (", so without it the SQL reads ":idAND" (it used to borrow PIPELINE_ONLY's space).
+        StringBuilder sql = new StringBuilder("SELECT COUNT(*) FROM sales.ticket t WHERE t.ticket_id = :id ");
+        MapSqlParameterSource params = new MapSqlParameterSource().addValue("id", ticketId);
+        appendRoleScope(sql, params, "account");
+        Integer n = jdbc.queryForObject(sql.toString(), params, Integer.class);
+        return n != null && n > 0;
     }
 
     /**
@@ -735,7 +780,7 @@ public class TicketRepository {
 
     // --- private helpers ---
 
-    private Optional<TicketSummaryDto> findSummaryById(long id) {
+    public Optional<TicketSummaryDto> findSummaryById(long id) {
         try {
             TicketSummaryDto summary = jdbc.queryForObject(
                 SUMMARY_SELECT + """
@@ -1158,10 +1203,19 @@ public class TicketRepository {
         }
         boolean balanceReceipt = hasBalanceReceipt(s.id());
         String stage = derivePaymentStage(s, payable, paid, outstanding, balanceReceipt);
-        boolean overdue = s.dueDate() != null && s.dueDate().isBefore(LocalDate.now()) && outstanding.signum() > 0;
+        // OVERDUE comes from the payable quotation's terms + the delivery date (owner ruling 2026-09-30),
+        // never from the stored billing due_date. An unpaid deposit is never overdue.
+        PaymentDue due = paymentDue(s.id()).orElse(null);
+        boolean overdue = due != null && due.date() != null
+            && LocalDate.now(BANGKOK).isAfter(due.date())
+            && outstanding.signum() > 0
+            && !"DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus());
         // Staleness only means anything for a deal actively being worked — a DRAFT that hasn't
         // started or a CLOSED_LOST/CANCELLED/COMPLETED deal is never flagged (Slice B1, handoff 103).
         boolean stale = DealLifecycle.ACTIVE.equals(s.lifecycle()) && isStale(s.id());
+        // Slice 2 (S2-B4): liveDirectQuotation rides in the SAME statement as commissionRecorded
+        // rather than adding a query of its own — see recordedCommissionAndLiveDirectQuotation.
+        CommissionAndLiveQuotation facts = recordedCommissionAndLiveDirectQuotation(s.id());
         return new TicketSummaryDto(
             s.id(), s.code(), s.type(), s.title(), s.status(), s.priority(),
             s.createdById(), s.createdByName(), s.assignedToId(), s.assignedToName(),
@@ -1179,7 +1233,10 @@ public class TicketRepository {
             // hasInvoiceAttachment above as another per-row query enrichSummary runs to fill in a
             // field mapSummary alone cannot answer from sales.ticket.
             s.winProbabilityOverride(), s.designerName(), s.ownerName(), s.buyerName(), stale,
-            hasRecordedCommission(s.id()), s.reopenedAt(), s.reopenCount(), s.quotationOnly());
+            facts.commissionRecorded(), s.reopenedAt(), s.reopenCount(), s.quotationOnly(),
+            due == null ? null : due.date(), due == null ? null : due.basis(),
+            due == null ? null : due.creditDays(),
+            facts.liveDirectQuotation());
     }
 
     /**
@@ -1207,16 +1264,43 @@ public class TicketRepository {
      * .hasActiveCommissionForTicket} always agree. If you change one predicate you MUST change the
      * other, and that test is what catches it if you forget.
      */
-    private boolean hasRecordedCommission(long ticketId) {
-        Boolean value = jdbc.queryForObject("""
-            SELECT EXISTS(
+    private static final String HAS_RECORDED_COMMISSION = """
+            EXISTS(
                 SELECT 1 FROM sales.commission_record
                  WHERE source_ticket_id = :ticketId
                    AND kind = 'SALE'
                    AND status NOT IN ('VOID', 'REJECTED')
             )
-            """, Map.of("ticketId", ticketId), Boolean.class);
-        return Boolean.TRUE.equals(value);
+        """;
+
+    private record CommissionAndLiveQuotation(boolean commissionRecorded,
+                                              LiveDirectQuotationDto liveDirectQuotation) {}
+
+    /**
+     * {@link #HAS_RECORDED_COMMISSION} and {@link #findLiveDirectQuotation}'s row in ONE statement.
+     * They are unrelated facts; they share a round trip only because {@link #enrichSummary} runs on
+     * the single-deal path of {@code TicketService#actions}, which
+     * {@code TicketActionsQueryCountIntegrationTest} caps below {@code DealStage.ORDER.size()}
+     * statements — a separate live-quotation query was the fifteenth. The LATERAL subquery is
+     * {@link #LIVE_DIRECT_QUOTATION_SELECT}, the very text {@link #findLiveDirectQuotation} runs, so
+     * the list/detail field and the N6 refusal cannot disagree about which row is live.
+     */
+    private CommissionAndLiveQuotation recordedCommissionAndLiveDirectQuotation(long ticketId) {
+        return jdbc.queryForObject("SELECT " + HAS_RECORDED_COMMISSION + """
+                   AS commission_recorded,
+                   q.quotation_id, q.number, q.doc_status, q.recipient_type
+              FROM (SELECT 1) AS one
+              LEFT JOIN LATERAL (
+            """ + LIVE_DIRECT_QUOTATION_SELECT + """
+              ) q ON true
+            """, Map.of("ticketId", ticketId),
+            (rs, rowNum) -> {
+                long quotationId = rs.getLong("quotation_id");
+                LiveDirectQuotationDto live = rs.wasNull() ? null
+                    : new LiveDirectQuotationDto(quotationId, rs.getString("number"),
+                        rs.getString("doc_status"), rs.getString("recipient_type"));
+                return new CommissionAndLiveQuotation(rs.getBoolean("commission_recorded"), live);
+            });
     }
 
     /** ฝ่ายบัญชี signs off that the deal is ready to close; CEO verification still required. */
@@ -1529,6 +1613,17 @@ public class TicketRepository {
         return Boolean.TRUE.equals(value);
     }
 
+    /**
+     * The PRE-VAT quotation total — exactly what {@link #payableAmount} returned before payable became
+     * VAT-inclusive (owner ruling 2026-09-30). COMMISSION reads this and only this: commission is
+     * computed on the ex-VAT figure and must not move when payable does.
+     */
+    public BigDecimal payableAmountExVat(long ticketId) {
+        BigDecimal value = jdbc.queryForObject(payableAmountExVatSelect(":ticketId"),
+            Map.of("ticketId", ticketId), BigDecimal.class);
+        return value == null ? BigDecimal.ZERO : value;
+    }
+
     public BigDecimal payableAmount(long ticketId) {
         BigDecimal value = jdbc.queryForObject(payableAmountSelect(":ticketId"),
             Map.of("ticketId", ticketId), BigDecimal.class);
@@ -1543,9 +1638,41 @@ public class TicketRepository {
      * contexts can never drift apart; this is the exact SQL {@link #payableAmount} always ran.
      */
     private static String payableAmountSelect(String ticketIdRef) {
+        return payableAmountSelect(ticketIdRef, true);
+    }
+
+    /** Same SELECT, PRE-VAT — what {@code payableAmountSelect} returned before payable became VAT-inclusive. */
+    private static String payableAmountExVatSelect(String ticketIdRef) {
+        return payableAmountSelect(ticketIdRef, false);
+    }
+
+    /**
+     * The VAT rate every quotation document applies (Thai documents; an EN document has none). Read from
+     * {@link th.co.glr.hr.dealquotation.WastageCalculator} -- the same constant the quotation's own
+     * grand total uses -- never a second "0.07" here.
+     */
+    private static final String THAI_VAT_RATE =
+        th.co.glr.hr.dealquotation.WastageCalculator.vatRateFor(
+            th.co.glr.hr.dealquotation.WastageCalculator.DOCUMENT_LANGUAGE_TH).toPlainString();
+
+    /**
+     * Every branch is made VAT-inclusive the same way the quotation DTOs compute their grand total:
+     * {@code total_amount} is the persisted SUBTOTAL for every origin (DEAL_DIRECT, the PCR customer quotation
+     * and legacy ticket quotations alike), VAT = round2(subtotal x rate), rate 0 for an EN document
+     * ({@code document_language}; NULL = TH, V169). A deposit notice's {@code total_payable} is already VAT
+     * inclusive; the ticket-item fallback is a pre-VAT sum and takes the Thai rate.
+     */
+    private static String payableAmountSelect(String ticketIdRef, boolean inclVat) {
+        String quotationAmount = inclVat
+            ? "q.total_amount + ROUND(q.total_amount * CASE WHEN q.document_language = 'EN' THEN 0 ELSE " + THAI_VAT_RATE + " END, 2)"
+            : "q.total_amount";
+        String itemsSum = "COALESCE(SUM(COALESCE(ti.approved_price, 0) * ti.qty), 0)";
+        String itemsAmount = inclVat
+            ? "(SELECT " + itemsSum + " + ROUND(" + itemsSum + " * " + THAI_VAT_RATE + ", 2)"
+            : "(SELECT " + itemsSum;
         return """
             SELECT COALESCE(
-                (SELECT q.total_amount
+                (SELECT QUOTATION_AMOUNT
                    FROM sales.quotation q
                   WHERE q.ticket_id = %1$s AND q.doc_status = 'ACCEPTED'
                   ORDER BY CASE q.recipient_type
@@ -1557,7 +1684,7 @@ public class TicketRepository {
                            q.issued_at DESC,
                            q.quotation_id DESC
                   LIMIT 1),
-                (SELECT q.total_amount
+                (SELECT QUOTATION_AMOUNT
                    FROM sales.quotation q
                   WHERE q.ticket_id = %1$s AND q.doc_status IN ('ISSUED','SENT')
                   ORDER BY CASE q.recipient_type
@@ -1573,12 +1700,93 @@ public class TicketRepository {
                   WHERE d.ticket_id = %1$s AND d.status = 'ISSUED'
                   ORDER BY d.version DESC, d.deposit_notice_id DESC
                   LIMIT 1),
-                (SELECT COALESCE(SUM(COALESCE(ti.approved_price, 0) * ti.qty), 0)
+                ITEMS_AMOUNT
                    FROM sales.ticket_item ti
                   WHERE ti.ticket_id = %1$s),
                 0
             )
+            """.formatted(ticketIdRef)
+            .replace("QUOTATION_AMOUNT", quotationAmount)
+            .replace("ITEMS_AMOUNT", itemsAmount);
+    }
+
+    /** Every payment-due calculation uses the Bangkok calendar, explicitly -- never the server default zone. */
+    private static final java.time.ZoneId BANGKOK = java.time.ZoneId.of("Asia/Bangkok");
+
+    /** Bangkok "today" in SQL, matching {@link #BANGKOK} in Java. */
+    private static final String BANGKOK_TODAY_SQL = "(now() AT TIME ZONE 'Asia/Bangkok')::date";
+
+    /**
+     * One row (or none) describing WHEN the balance is due, from the payable quotation's own terms
+     * (owner ruling 2026-09-30). The quotation is the same one {@link #payableAmountSelect} picks (accepted
+     * first, else issued/sent; same recipient ordering); a deposit-notice / ticket-item payable has no terms,
+     * so no row. Terms:
+     * <ul>
+     *   <li>{@code remainder_mode = CREDIT} with {@code credit_days} N: due = delivery date + N
+     *       ({@code CREDIT_FROM_DELIVERY});</li>
+     *   <li>any other non-null {@code remainder_mode} (the remainder is due before/on delivery), or a
+     *       zero-deposit {@code full_payment_term} (BEFORE_DELIVERY / ON_DELIVERY / ON_OR_BEFORE_DELIVERY):
+     *       due = the delivery date ({@code ON_DELIVERY});</li>
+     *   <li>anything else (legacy / free-text terms): no row -- never overdue.</li>
+     * </ul>
+     * The delivery date is the Bangkok calendar date of the LATEST delivery record, and only once the deal is
+     * {@code FULLY_DELIVERED}; until then there is no due date. Columns: days, basis, credit_days, delivered_on.
+     */
+    private static String paymentTermsRowSql(String ticketIdRef) {
+        return """
+            SELECT tq.days, tq.basis, tq.credit_days, dv.delivered_on
+              FROM (SELECT CASE
+                               WHEN q.remainder_mode = 'CREDIT' AND q.credit_days IS NOT NULL THEN q.credit_days::int
+                               WHEN q.full_payment_term IN ('BEFORE_DELIVERY', 'ON_DELIVERY', 'ON_OR_BEFORE_DELIVERY') THEN 0
+                               WHEN q.remainder_mode IS NOT NULL AND q.remainder_mode <> 'CREDIT' THEN 0
+                           END AS days,
+                           CASE
+                               WHEN q.remainder_mode = 'CREDIT' AND q.credit_days IS NOT NULL THEN 'CREDIT_FROM_DELIVERY'
+                               WHEN q.full_payment_term IN ('BEFORE_DELIVERY', 'ON_DELIVERY', 'ON_OR_BEFORE_DELIVERY') THEN 'ON_DELIVERY'
+                               WHEN q.remainder_mode IS NOT NULL AND q.remainder_mode <> 'CREDIT' THEN 'ON_DELIVERY'
+                           END AS basis,
+                           CASE WHEN q.remainder_mode = 'CREDIT' AND q.credit_days IS NOT NULL THEN q.credit_days::int END AS credit_days
+                      FROM sales.quotation q
+                     WHERE q.ticket_id = %1$s AND q.doc_status IN ('ACCEPTED', 'ISSUED', 'SENT')
+                     ORDER BY CASE WHEN q.doc_status = 'ACCEPTED' THEN 0 ELSE 1 END,
+                              CASE q.recipient_type
+                                  WHEN 'BUYER' THEN 0
+                                  WHEN 'OWNER' THEN 1
+                                  ELSE 2
+                              END,
+                              CASE WHEN q.doc_status = 'ACCEPTED' THEN q.accepted_at END DESC NULLS LAST,
+                              q.issued_at DESC,
+                              q.quotation_id DESC
+                     LIMIT 1) tq
+             CROSS JOIN (SELECT (MAX(dr.delivered_at) AT TIME ZONE 'Asia/Bangkok')::date AS delivered_on
+                           FROM sales.delivery_record dr
+                          WHERE dr.ticket_id = %1$s
+                            AND (SELECT t2.fulfillment_status FROM sales.ticket t2 WHERE t2.ticket_id = %1$s)
+                                = 'FULLY_DELIVERED') dv
             """.formatted(ticketIdRef);
+    }
+
+    /** The derived due DATE as a scalar subquery (NULL when there is none) -- the list-scope predicate's twin. */
+    private static String paymentDueDateScalarSql(String ticketIdRef) {
+        return "(SELECT x.delivered_on + x.days FROM (" + paymentTermsRowSql(ticketIdRef) + ") x)";
+    }
+
+    /** When the balance is due and on what basis; see {@link #paymentTermsRowSql}. */
+    public record PaymentDue(LocalDate date /* null until delivered */, String basis, Integer creditDays) {}
+
+    public Optional<PaymentDue> paymentDue(long ticketId) {
+        List<PaymentDue> rows = jdbc.query(paymentTermsRowSql(":ticketId"), Map.of("ticketId", ticketId),
+            (rs, n) -> {
+                String basis = rs.getString("basis");
+                if (basis == null) return null; // legacy / free-text terms: nothing structured
+                int days = rs.getInt("days");
+                java.sql.Date delivered = rs.getDate("delivered_on");
+                int credit = rs.getInt("credit_days");
+                Integer creditDays = rs.wasNull() ? null : credit;
+                // Structured terms but not (fully) delivered yet: the basis is known, the date is not.
+                return new PaymentDue(delivered == null ? null : delivered.toLocalDate().plusDays(days), basis, creditDays);
+            });
+        return rows.stream().filter(java.util.Objects::nonNull).findFirst();
     }
 
     /** Full "amount paid" SELECT statement — see {@link #payableAmountSelect} for the correlation contract. */
@@ -1878,13 +2086,91 @@ public class TicketRepository {
     }
 
     /**
-     * GLA-136 — the one write that turns a quotation-only container ticket (V193) into a pipeline
-     * deal: {@code quotation_only TRUE -> FALSE}, as a compare-and-set so a lost race (a concurrent
-     * promotion already flipped it) yields 0 rows rather than a silent double write. Called ONLY by
-     * {@code DealQuotationService#promoteToDeal}, under {@link #lockTicketForUpdate}, immediately
-     * before the same {@link #markQuotationIssuedForOrderConfirmation} bridge write
-     * {@code OrderConfirmationService#confirmOrder} performs. Never sets the flag back to TRUE:
-     * nothing in the product un-promotes a deal.
+     * Quotation ↔ deal linking slice 1 — does this deal have a LIVE direct quotation: a
+     * {@code DEAL_DIRECT} row in {@code DRAFT}, {@code PENDING_APPROVAL} or {@code APPROVED}? The one
+     * predicate behind {@link DirectQuotationLocks#requireNoLiveDirectQuotation}. CANCELLED,
+     * SUPERSEDED and REJECTED rows are not live; PRICING_REQUEST and legacy rows never count.
+     */
+    public boolean hasLiveDirectQuotation(long ticketId) {
+        Boolean value = jdbc.queryForObject("""
+            SELECT EXISTS(SELECT 1 FROM sales.quotation
+                           WHERE ticket_id = :ticketId
+            """ + LIVE_DIRECT_QUOTATION_PREDICATE + ")",
+            Map.of("ticketId", ticketId), Boolean.class);
+        return Boolean.TRUE.equals(value);
+    }
+
+    /**
+     * The ONE definition of a "live" direct quotation, shared as SQL text by
+     * {@link #hasLiveDirectQuotation} (slice 1's lock) and {@link #findLiveDirectQuotation} (slice 2's
+     * N6 refusal and {@link TicketSummaryDto#liveDirectQuotation}) so the two can never disagree about
+     * which rows count. Appended after a {@code WHERE ticket_id = :ticketId} clause.
+     */
+    private static final String LIVE_DIRECT_QUOTATION_PREDICATE = """
+                             AND origin = 'DEAL_DIRECT'
+                             AND doc_status IN ('DRAFT', 'PENDING_APPROVAL', 'APPROVED')
+        """;
+
+    /** The newest live direct quotation's row — see {@link #findLiveDirectQuotation}. */
+    private static final String LIVE_DIRECT_QUOTATION_SELECT = """
+            SELECT quotation_id, number, doc_status, recipient_type
+              FROM sales.quotation
+             WHERE ticket_id = :ticketId
+        """ + LIVE_DIRECT_QUOTATION_PREDICATE + """
+             ORDER BY quotation_id DESC
+             LIMIT 1
+        """;
+
+    /**
+     * Quotation ↔ deal linking slice 2 (S2-B3 / S2-B4) — the NEWEST live direct quotation on the
+     * deal (highest {@code quotation_id}), or empty. Newest matters because a deal can legitimately
+     * hold two live rows — an APPROVED parent and its DRAFT revision, or an APPROVED source and its
+     * reorder clone — and the client acts on the one being worked on.
+     *
+     * <p>{@link #enrichSummary} does not call this: it reads the same row through
+     * {@link #recordedCommissionAndLiveDirectQuotation}, sharing the commission flag's statement so
+     * the list/detail field costs no extra query per row. Not batched into
+     * {@link #findSummaries}' SELECT: that query is shared with {@link #findSummaryById} through
+     * {@code SUMMARY_SELECT} and its {@code GROUP BY}, and a LATERAL join there would change the
+     * one query every deal read goes through for one nullable field — the risk is not worth it while
+     * every sibling field is per-row anyway; batching {@code enrichSummary} as a whole is the fix
+     * if list latency ever matters. Each call is an index lookup on
+     * {@code idx_quotation_deal_direct_ticket} (V165: {@code (ticket_id) WHERE origin = 'DEAL_DIRECT'}).
+     */
+    public Optional<LiveDirectQuotationDto> findLiveDirectQuotation(long ticketId) {
+        List<LiveDirectQuotationDto> rows = jdbc.query(LIVE_DIRECT_QUOTATION_SELECT, Map.of("ticketId", ticketId),
+            (rs, rowNum) -> new LiveDirectQuotationDto(rs.getLong("quotation_id"), rs.getString("number"),
+                rs.getString("doc_status"), rs.getString("recipient_type")));
+        return rows.stream().findFirst();
+    }
+
+    /**
+     * Quotation ↔ deal linking slice 2 — one pricing route per deal (owner ruling 2026-09-30): does
+     * this deal have a LIVE pricing request, i.e. any {@code sales.pricing_request} whose status is
+     * neither {@code CANCELLED} nor {@code SUPERSEDED}? A private {@code DRAFT} and a finished
+     * {@code QUOTATION_ACCEPTED} both count. The one predicate behind
+     * {@link DirectQuotationLocks#requireNoLivePricingRequest}.
+     *
+     * <p>Deliberately NOT {@link #PRICING_REQUEST_TERMINAL_STATUSES} (import's list scope), which also
+     * treats {@code QUOTATION_ACCEPTED} as finished: for that worklist an accepted request is done,
+     * but for "which pricing route is this deal on" it is very much the route in use.
+     */
+    public boolean hasLivePricingRequest(long ticketId) {
+        Boolean value = jdbc.queryForObject("""
+            SELECT EXISTS(SELECT 1 FROM sales.pricing_request
+                           WHERE ticket_id = :ticketId
+                             AND status NOT IN ('CANCELLED', 'SUPERSEDED'))
+            """, Map.of("ticketId", ticketId), Boolean.class);
+        return Boolean.TRUE.equals(value);
+    }
+
+    /**
+     * GLA-136 — clears the V193 {@code quotation_only} provenance flag, as a compare-and-set
+     * ({@code TRUE -> FALSE}). Since quotation ↔ deal linking slice 1 the flag is provenance only
+     * (nothing reads it), and this is called BEST-EFFORT by
+     * {@code DealQuotationService#confirmOrderFromDirectQuotation}, under {@link #lockTicketForUpdate}:
+     * 1 on a quotation-first deal, 0 on an ordinary one — the caller ignores the rowcount. Never sets
+     * the flag back to TRUE.
      *
      * @return the rowcount (0 or 1).
      */
@@ -1897,12 +2183,11 @@ public class TicketRepository {
     }
 
     /**
-     * GLA-136 — has this ticket already been promoted into the pipeline from a direct quotation
-     * ({@link TicketEventKind#DEAL_PROMOTED_FROM_QUOTATION}, written exactly once per promotion by
-     * {@code DealQuotationService#promoteToDeal})? The discriminator for that method's idempotent
-     * replay: a ticket with {@code quotation_only = FALSE} AND this event was promoted by that path
-     * (a replay returns it unchanged), while a ticket with {@code quotation_only = FALSE} and NO such
-     * event was always a pipeline deal (a promotion attempt is a 409, not a silent success).
+     * GLA-136 — has this deal's order already been confirmed from a direct quotation
+     * ({@link TicketEventKind#DEAL_PROMOTED_FROM_QUOTATION}, written exactly once per confirmation by
+     * {@code DealQuotationService#confirmOrderFromDirectQuotation})? The discriminator for that
+     * method's idempotent replay: if the event exists, a replay returns the current state and
+     * writes nothing.
      */
     public boolean hasPromotionFromQuotationEvent(long ticketId) {
         Boolean value = jdbc.queryForObject("""

@@ -249,3 +249,48 @@ describe('nextSalesAction — CREATE_PCR gate on legacy/no-PR deals (UAT regress
     expect(nextSalesAction(deal, [])).toMatchObject({ key: 'create_pcr' });
   });
 });
+
+// Slice 2 — flow A (SLICE-2-FLOW-A.md §E): the AWAIT_DIRECT_APPROVAL bucket is a WAITING state for
+// the rep (the header's bannerText, never a button), while for sales_manager/ceo — who approve a
+// direct quotation (canApproveDealQuotation) — the same live PENDING_APPROVAL quotation resolves to
+// their OWN action "อนุมัติใบเสนอราคา" -> /quotations/:id. SUBMIT / CONFIRM stay sales actions.
+describe('resolveWorkState — live direct quotation (slice 2)', () => {
+  const pending = { id: 77, number: 'QT-2026-0077-1', docStatus: 'PENDING_APPROVAL', recipientType: 'OWNER' };
+
+  // Shapes follow GLA-156 (develop): `{ action }` only, no waitingRoleLabel; slice 2 adds an
+  // optional `bannerText` for the rep's waiting state and nothing else.
+  it('sales + PENDING_APPROVAL -> no action, a banner naming who it waits on and the number', () => {
+    const result = resolveWorkState({ role: 'sales' }, baseDeal({ liveDirectQuotation: pending }), []);
+    expect(result).toEqual({ action: null, bannerText: 'รอ ผจก.ขาย/CEO อนุมัติใบเสนอราคา QT-2026-0077-1' });
+    expect(result).not.toHaveProperty('waitingRoleLabel');
+  });
+
+  it.each([['sales_manager'], ['ceo']])('%s + PENDING_APPROVAL -> their own action "อนุมัติใบเสนอราคา" to the quotation', (role) => {
+    const result = resolveWorkState({ role }, baseDeal({ liveDirectQuotation: pending }), []);
+    expect(result.action).toMatchObject({ key: 'approve_direct_quotation', label: 'อนุมัติใบเสนอราคา', to: '/quotations/77' });
+    expect(result).not.toHaveProperty('bannerText');
+  });
+
+  it.each([['sales_manager'], ['ceo']])('%s gets nothing new for a DRAFT/APPROVED direct quotation (not theirs to act on)', (role) => {
+    for (const docStatus of ['DRAFT', 'APPROVED']) {
+      const result = resolveWorkState({ role }, baseDeal({ liveDirectQuotation: { ...pending, docStatus } }), []);
+      expect(result).toEqual({ action: null });
+    }
+  });
+
+  it('sales + DRAFT -> the SUBMIT action with its /quotations/:id route (the sticky bar navigates there)', () => {
+    const result = resolveWorkState({ role: 'sales' }, baseDeal({ liveDirectQuotation: { ...pending, docStatus: 'DRAFT' } }), []);
+    expect(result.action).toMatchObject({ key: 'submit_direct_quotation', to: '/quotations/77' });
+    expect(result).not.toHaveProperty('bannerText');
+  });
+
+  it('sales + APPROVED -> the CONFIRM_ORDER_DIRECT action', () => {
+    const result = resolveWorkState({ role: 'sales' }, baseDeal({ liveDirectQuotation: { ...pending, docStatus: 'APPROVED' } }), []);
+    expect(result.action).toMatchObject({ key: 'confirm_order_direct', label: 'ยืนยันคำสั่งซื้อ', quotationId: 77 });
+  });
+
+  it('an ON_HOLD deal still returns nothing — the lifecycle banner owns that state', () => {
+    const result = resolveWorkState({ role: 'ceo' }, baseDeal({ lifecycle: 'ON_HOLD', liveDirectQuotation: pending }), []);
+    expect(result).toEqual({ action: null });
+  });
+});

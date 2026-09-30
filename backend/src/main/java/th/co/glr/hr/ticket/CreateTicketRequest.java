@@ -15,7 +15,11 @@ public record CreateTicketRequest(
     @NotNull Long projectId,
     Long contactId,
     String note,
-    String entryChannel,
+    // Required for every new deal (owner ruling 2026-09-30): the channel decides the deal's route
+    // (DealRoute). Enforced HERE, at the API boundary, via TicketController's @Valid -- NOT in
+    // TicketService.create, which still tolerates null so the ~84 existing call sites keep working.
+    // UNSPECIFIED is non-blank, so it passes this annotation; TicketService.create refuses it.
+    @NotBlank String entryChannel,
     // Optional since V50: a deal may start at the lead stage with no product items
     // yet (lightweight DRAFT); items arrive later via editItems before submit.
     List<@Valid TicketItemRequest> items,
@@ -30,13 +34,11 @@ public record CreateTicketRequest(
      */
     LocalDate nextFollowUpAt,
     /**
-     * GLA-136 (owner ruling 2026-09-30): optional; {@code true} marks the new ticket as a
-     * quotation-only container ({@code sales.ticket.quotation_only}, V193) — the quotation editor's
-     * inline "new customer + project" create at {@code /quotations/new} is the ONLY caller that
-     * sends it. Such a ticket is not a pipeline deal: it is left out of the deal list/count and the
-     * dashboard, and manual pipeline writes refuse it, until the rep promotes an APPROVED direct
-     * quotation on it ({@code POST /api/deal-quotations/{id}/promote-to-deal}). Null/absent/false
-     * means an ordinary pipeline deal — exactly the behaviour every existing caller already gets.
+     * GLA-136: optional; {@code true} records that the deal was created quotation-first
+     * ({@code sales.ticket.quotation_only}, V193) — the quotation editor's inline "new customer +
+     * project" create at {@code /quotations/new} is the ONLY caller that sends it. Provenance only
+     * since quotation ↔ deal linking slice 1 (IA §7, 2026-09-30): the deal is an ordinary pipeline
+     * deal either way (listed, counted, movable).
      */
     Boolean quotationOnly
 ) {
