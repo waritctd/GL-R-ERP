@@ -312,10 +312,21 @@ public class TicketService {
         if (request.projectId() == null) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องเลือกโครงการก่อนสร้างดีล");
         }
+        // A NEW deal must state a real channel (owner ruling 2026-09-30) -- it decides the deal's
+        // route (DealRoute). The split is deliberate: "absent/blank" is refused at the API boundary
+        // by @NotBlank on CreateTicketRequest.entryChannel, and THIS check guards the VALUE. Null is
+        // still tolerated here on purpose: ~84 call sites across 72 test files build a request with
+        // no channel, and making the service strict would mean editing all of them for a data-quality
+        // rule (TicketServiceTest#create_stillToleratesNullEntryChannelAtServiceLevel pins this).
+        // UNSPECIFIED passes EntryChannel.isValid (valid as STORED, e.g. legacy rows) but is not a
+        // channel a caller may CHOOSE for a new deal.
         if (request.entryChannel() != null && !request.entryChannel().isBlank()
-                && !EntryChannel.isValid(request.entryChannel())) {
+                && (!EntryChannel.isValid(request.entryChannel())
+                    || EntryChannel.UNSPECIFIED.equals(request.entryChannel()))) {
             throw new ApiException(HttpStatus.BAD_REQUEST,
-                "ไม่รองรับช่องทางรับงาน '" + request.entryChannel() + "'");
+                EntryChannel.UNSPECIFIED.equals(request.entryChannel())
+                    ? "ต้องระบุช่องทางดีลที่แท้จริง (ออกแบบนำ / เจ้าของโครงการ / ผู้ซื้อตรง) ก่อนสร้างดีล"
+                    : "ไม่รองรับช่องทางรับงาน '" + request.entryChannel() + "'");
         }
         // Guard priority the same way as entryChannel: an unvalidated value hits the
         // chk_ticket_priority CHECK column in the repository and fails closed (500).

@@ -15,7 +15,11 @@ public record CreateTicketRequest(
     @NotNull Long projectId,
     Long contactId,
     String note,
-    String entryChannel,
+    // Required for every new deal (owner ruling 2026-09-30): the channel decides the deal's route
+    // (DealRoute). Enforced HERE, at the API boundary, via TicketController's @Valid -- NOT in
+    // TicketService.create, which still tolerates null so the ~84 existing call sites keep working.
+    // UNSPECIFIED is non-blank, so it passes this annotation; TicketService.create refuses it.
+    @NotBlank String entryChannel,
     // Optional since V50: a deal may start at the lead stage with no product items
     // yet (lightweight DRAFT); items arrive later via editItems before submit.
     List<@Valid TicketItemRequest> items,

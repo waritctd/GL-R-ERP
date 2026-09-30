@@ -1652,6 +1652,74 @@ class TicketServiceTest {
         verify(ticketRepo).create(request, "PR-2026-0001", 1L, "sales");
     }
 
+    // ── create: a NEW deal must state a real ช่องทางดีล (owner ruling 2026-09-30) ───────────
+    // The channel decides the deal's route (DealRoute), so UNSPECIFIED -- valid as STORED, see
+    // EntryChannel -- is refused as a create INPUT. The "absent/blank" half of the rule is enforced
+    // at the API boundary by @NotBlank on CreateTicketRequest.entryChannel
+    // (CreateTicketRequestValidationTest); THIS class pins the value guard in the service plus the
+    // deliberate fact that the service itself still tolerates null.
+
+    @Test
+    void create_rejectsUnspecifiedEntryChannel() {
+        var request = new CreateTicketRequest("Test deal", "NORMAL", "ลูกค้า", null, 77L, null, null,
+            EntryChannel.UNSPECIFIED, List.of());
+
+        assertThatThrownBy(() -> service.create(request, salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                assertThat(e.getMessage()).contains("ช่องทาง");
+            });
+        verify(ticketRepo, never()).create(any(), anyString(), anyLong(), anyString());
+    }
+
+    @Test
+    void create_acceptsDesignerLedEntryChannel() {
+        assertCreateAcceptsEntryChannel(EntryChannel.DESIGNER_LED);
+    }
+
+    @Test
+    void create_acceptsOwnerDirectEntryChannel() {
+        assertCreateAcceptsEntryChannel(EntryChannel.OWNER_DIRECT);
+    }
+
+    @Test
+    void create_acceptsBuyerDirectEntryChannel() {
+        assertCreateAcceptsEntryChannel(EntryChannel.BUYER_DIRECT);
+    }
+
+    /**
+     * DELIBERATE, do not "tighten": the service still tolerates a null channel. Requiring it here
+     * would mean editing the 72 test files / 84 call sites that build a CreateTicketRequest with
+     * none, for a data-quality rule. The rule is enforced at the API boundary instead -- @NotBlank on
+     * CreateTicketRequest.entryChannel, reached through TicketController's @Valid @RequestBody -- so
+     * an HTTP create with no channel 400s before this method is ever called. If this test goes red,
+     * someone moved the enforcement into the service; move it back.
+     */
+    @Test
+    void create_stillToleratesNullEntryChannelAtServiceLevel() {
+        var request = createRequest(77L, List.of());
+        assertThat(request.entryChannel()).isNull();
+        when(ticketRepo.nextTicketCode()).thenReturn("PR-2026-0001");
+        when(ticketRepo.create(request, "PR-2026-0001", 1L, "sales")).thenReturn(10L);
+        stubTicket(10L, 1L, TicketStatus.DRAFT);
+
+        service.create(request, salesActor); // must not throw
+
+        verify(ticketRepo).create(request, "PR-2026-0001", 1L, "sales");
+    }
+
+    private void assertCreateAcceptsEntryChannel(String channel) {
+        var request = new CreateTicketRequest("Test deal", "NORMAL", "ลูกค้า", null, 77L, null, null,
+            channel, List.of());
+        when(ticketRepo.nextTicketCode()).thenReturn("PR-2026-0001");
+        when(ticketRepo.create(request, "PR-2026-0001", 1L, "sales")).thenReturn(10L);
+        stubTicket(10L, 1L, TicketStatus.DRAFT);
+
+        service.create(request, salesActor); // must not throw
+
+        verify(ticketRepo).create(request, "PR-2026-0001", 1L, "sales");
+    }
+
     // ── create: V183 stock-sourced deal-line pricing ────────────────────────
     // tickets.create(...) calls TicketRepository#insertItems directly off the raw
     // TicketItemRequest list -- no DTO merge step exists on this path, so the
