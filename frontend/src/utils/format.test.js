@@ -4,11 +4,16 @@ import {
   attendanceSourceLabel,
   bangkokMonthStartIso,
   dealStageLabel,
+  DEAL_OFFERED_TO_LABEL,
   depositNoticeStatusLabel,
+  entryChannelLabel,
   factoryQuoteStatusLabel,
   formatAddress,
+  quotationRecipientLabel,
   formatMoney,
+  OFFERED_TO_LABEL,
   formatShortDate,
+  QUOTATION_OFFERED_TO_LABEL,
   formatThaiMonthYearFromMonthInputValue,
   greetingName,
   overtimeStatusLabel,
@@ -412,5 +417,27 @@ describe('dealStageLabel(code, entryChannel?) — route-aware S3 wording', () =>
   it('an unknown stage code still renders its own code, with or without a channel', () => {
     expect(dealStageLabel('NOT_A_STAGE').label).toBe('NOT_A_STAGE');
     expect(dealStageLabel('NOT_A_STAGE', 'OWNER_DIRECT').label).toBe('NOT_A_STAGE');
+  });
+});
+
+describe('offered-to field labels (R8, owner ruling 2026-09-30)', () => {
+  it('shares one label between the deal channel and the quotation recipient', () => {
+    expect(OFFERED_TO_LABEL).toBe('เสนอแก่');
+  });
+
+  it('qualifies each one where both appear on the same surface', () => {
+    expect(DEAL_OFFERED_TO_LABEL).toBe('ดีลนี้เสนอแก่');
+    expect(QUOTATION_OFFERED_TO_LABEL).toBe('ใบเสนอราคานี้เสนอแก่');
+    // Both qualified forms must contain the shared label, or the two fields stop reading as the
+    // same question asked of two different documents.
+    expect(DEAL_OFFERED_TO_LABEL).toContain(OFFERED_TO_LABEL);
+    expect(QUOTATION_OFFERED_TO_LABEL).toContain(OFFERED_TO_LABEL);
+  });
+
+  it('leaves the channel OPTION labels alone — they deliberately differ from the recipient\'s', () => {
+    // Owner ruling: the how-the-deal-arrived nuance beats symmetry. Do not "fix" this divergence.
+    expect(entryChannelLabel('DESIGNER_LED').label).toBe('ผู้ออกแบบนำดีล');
+    expect(entryChannelLabel('OWNER_DIRECT').label).toBe('เจ้าของติดต่อโดยตรง');
+    expect(quotationRecipientLabel('DESIGNER').label).not.toBe(entryChannelLabel('DESIGNER_LED').label);
   });
 });

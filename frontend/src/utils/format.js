@@ -647,6 +647,26 @@ export function fulfilmentStatusLabel(value) {
 
 // Step 7: Factory Purchase Order and Import Execution — mirrors
 
+/**
+ * The FIELD labels for "who is this offered to" — owner ruling 2026-09-30 (R8).
+ *
+ * The deal's entry channel and the quotation's recipient are two different fields that answer the
+ * same question, so they share one label: เสนอแก่. Where both appear on the same surface (the
+ * new-deal card at /quotations/new) each is qualified; where only one appears, the plain form is
+ * used. Kept here, in one place, so the quotation side imports them rather than re-typing the Thai.
+ *
+ * ⚠️ This renames the FIELD only. The remedy button ("แก้ช่องทางดีล") and the server's own refusal
+ * ("… — แก้ช่องทางดีลก่อน", DealRoute.refusalMessage) deliberately keep the old wording — they name
+ * the ACTION, not the field, and the owner chose that inconsistency over editing merged server copy.
+ *
+ * ⚠️ The channel's OPTION labels below are NOT renamed and deliberately differ from
+ * {@link quotationRecipientLabel}'s. Owner ruling: the how-the-deal-arrived nuance ("ผู้ออกแบบนำดีล",
+ * "เจ้าของติดต่อโดยตรง") is worth more than symmetry between the two fields. Do not "fix" that.
+ */
+export const OFFERED_TO_LABEL = 'เสนอแก่';
+export const DEAL_OFFERED_TO_LABEL = 'ดีลนี้เสนอแก่';
+export const QUOTATION_OFFERED_TO_LABEL = 'ใบเสนอราคานี้เสนอแก่';
+
 export function entryChannelLabel(value) {
   const map = {
     DESIGNER_LED: 'ผู้ออกแบบนำดีล',

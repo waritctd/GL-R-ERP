@@ -113,10 +113,10 @@ export function EntryChannelFix({
           className="mt-1 flex min-w-0 flex-col gap-2.5 rounded-lg bg-surface-subtle px-3 py-3"
         >
           <p data-testid="entry-channel-fix-current" className="m-0 text-xs text-text-secondary">
-            ช่องทางรับงานตอนนี้: <strong className="font-extrabold text-text">{entryChannelLabel(current).label}</strong>
+            เสนอแก่ตอนนี้: <strong className="font-extrabold text-text">{entryChannelLabel(current).label}</strong>
           </p>
 
-          <div role="radiogroup" aria-label="ช่องทางรับงานที่ถูกต้อง" className="flex min-w-0 flex-col">
+          <div role="radiogroup" aria-label="เสนอแก่ที่ถูกต้อง" className="flex min-w-0 flex-col">
             {SETTABLE_ENTRY_CHANNELS.map((value) => {
               const isCurrent = value === current;
               return (
