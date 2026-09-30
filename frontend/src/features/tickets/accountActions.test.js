@@ -107,7 +107,7 @@ describe('nextAccountAction', () => {
     expect(nextAccountAction(t)).toBeNull();
   });
 
-  it('CLOSED_PAID -> บันทึกใบกำกับ + ออกค่าคอม, deep-links to the create-from-deal flow', () => {
+  it('CLOSED_PAID -> บันทึกใบกำกับ, deep-links to the finance deal page (invoice is recorded there)', () => {
     const t = ticket({
       id: 42,
       status: 'quotation_issued',
@@ -119,8 +119,8 @@ describe('nextAccountAction', () => {
     });
     const action = nextAccountAction(t);
     expect(action.key).toBe('recordInvoiceCommission');
-    expect(action.label).toBe('บันทึกใบกำกับ + ออกค่าคอม');
-    expect(action.to).toBe('/commissions?ticketId=42');
+    expect(action.label).toBe('บันทึกใบกำกับ');
+    expect(action.to).toBe('/finance/deals/42');
   });
 
   // Issue #736 pair, wrong-way-round: commissionRecorded:true is the interesting half — the
@@ -141,7 +141,7 @@ describe('nextAccountAction', () => {
     expect(nextAccountAction(t)).toBeNull();
   });
 
-  it('CLOSED_PAID with commissionRecorded:false still yields บันทึกใบกำกับ + ออกค่าคอม', () => {
+  it('CLOSED_PAID with commissionRecorded:false still yields บันทึกใบกำกับ', () => {
     const t = ticket({
       id: 42,
       status: 'quotation_issued',
@@ -154,6 +154,8 @@ describe('nextAccountAction', () => {
     });
     const action = nextAccountAction(t);
     expect(action.key).toBe('recordInvoiceCommission');
+    expect(action.label).toBe('บันทึกใบกำกับ');
+    expect(action.to).toBe('/finance/deals/42');
   });
 
   it('a legacy (pre-dual-track) fully-paid document_issued deal is also close-ready', () => {

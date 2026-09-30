@@ -639,4 +639,45 @@ class CommissionCalculatorTest {
         // all -- qtyFromStock = 0 means it never earns credit above 1x either way.
         assertThat(weightWithThreeXStored.get()).isEqualByComparingTo(weightWithTwoXStored.get());
     }
+
+    /**
+     * Golden pin of the money math the pending-approval / item-weight feature must only CALL, never
+     * change. Expected values were produced by running the calculator as it stood before that
+     * feature and hard-coded; any change to itemDerivedWeight, monthlyTierBase or
+     * progressiveCommission(TierConfig.defaults()) turns this red.
+     */
+    @Test
+    void goldenFixedInputs_outputsUnchanged() {
+        List<CommissionCalculator.ItemStockWeightInput> items = List.of(
+            // stock-covered x2 line priced by approvedPrice
+            new CommissionCalculator.ItemStockWeightInput(
+                new BigDecimal("10"), new BigDecimal("4"), new BigDecimal("1000.00"), null, 2),
+            // non-stock line priced by the proposedPrice fallback
+            new CommissionCalculator.ItemStockWeightInput(
+                new BigDecimal("5"), BigDecimal.ZERO, null, new BigDecimal("500.00"), 1),
+            // fully stock-covered x3 line (approvedPrice wins over proposedPrice)
+            new CommissionCalculator.ItemStockWeightInput(
+                new BigDecimal("2"), new BigDecimal("2"), new BigDecimal("3000.00"), new BigDecimal("2500.00"), 3));
+
+        // (14000 + 2500 + 18000) / 18500 = 1.864865 (6dp, HALF_UP)
+        assertThat(calculator.itemDerivedWeight(items, new BigDecimal("123456.78")))
+            .contains(new BigDecimal("1.864865"));
+
+        String[][] golden = {
+            // weightedActualReceived, monthlyTierBase, progressiveCommission(TierConfig.defaults())
+            {"99999.99", "93457.9345794393", "233.64"},
+            {"250000.00", "233644.8598130841", "584.11"},
+            {"1000000.00", "934579.4392523364", "5595.79"},
+            {"3210987.65", "3000923.0373831776", "48780.00"},
+            {"8000000.00", "7476635.5140186916", "194240.65"},
+        };
+        for (String[] row : golden) {
+            BigDecimal base = calculator.monthlyTierBase(new BigDecimal(row[0]));
+            assertThat(base).as("monthlyTierBase(%s)", row[0]).isEqualTo(new BigDecimal(row[1]));
+            assertThat(calculator.progressiveCommission(base, TierConfig.defaults()))
+                .as("progressiveCommission(base of %s)", row[0]).isEqualTo(new BigDecimal(row[2]));
+        }
+        assertThat(calculator.progressiveCommission(calculator.monthlyTierBase(BigDecimal.ZERO), TierConfig.defaults()))
+            .isEqualByComparingTo("0.00");
+    }
 }

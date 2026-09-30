@@ -33,6 +33,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         revokeCloseConfirmation: vi.fn(),
         updateStage: vi.fn(),
       },
+      commissions: { createFromDeal: vi.fn() },
     },
   };
 });
@@ -348,26 +349,154 @@ describe('FinanceDealPage', () => {
       expect(screen.queryByRole('button', { name: 'บันทึกรับชำระ' })).toBeNull();
     });
 
-    it('CLOSED_PAID without a recorded commission offers the link to the commission flow', async () => {
+    it('the old "link to /commissions" CTA is gone: a CLOSED_PAID deal without RECORD_INVOICE offers no commission link or button', async () => {
       const deal = makeFinanceDeal({ salesStage: 'CLOSED_PAID', milestoneTrack: makeTrack(5) });
       api.finance.getDeal.mockResolvedValue({ deal });
       renderPage();
-      const link = await screen.findByRole('link', { name: 'บันทึกใบกำกับ + ออกค่าคอม' });
-      expect(link.getAttribute('href')).toBe('/commissions?ticketId=501');
+      await screen.findByRole('heading', { level: 1, name: /PR-2026-0501/ });
+      expect(screen.queryByRole('link', { name: /บันทึกใบกำกับ/ })).toBeNull();
+      expect(screen.queryByRole('button', { name: /บันทึกใบกำกับ/ })).toBeNull();
+    });
+  });
+
+  describe('RECORD_INVOICE (invoice recording in-page, ex-VAT default)', () => {
+    const recordInvoice = () => action('RECORD_INVOICE', 'บันทึกใบกำกับ');
+    const closedDeal = (extra = {}) => {
+      const deal = makeFinanceDeal({
+        salesStage: 'CLOSED_PAID',
+        milestoneTrack: makeTrack(5),
+        availableActions: [recordInvoice()],
+        commissionInvoice: null,
+        ...extra,
+      });
+      deal.money.amountPayable = 107000;
+      deal.money.amountPayableExVat = 100000;
+      deal.money.commissionRecorded = false;
+      return deal;
+    };
+    const pdf = () => new File(['%PDF-fake'], 'tax-invoice-0501.pdf', { type: 'application/pdf' });
+
+    it('the primary button reads exactly บันทึกใบกำกับ and ออกค่าคอม appears nowhere on the page', async () => {
+      api.finance.getDeal.mockResolvedValue({ deal: closedDeal() });
+      const { container } = renderPage();
+      expect(await screen.findByRole('button', { name: 'บันทึกใบกำกับ' })).not.toBeNull();
+      expect(container.textContent).not.toContain('ออกค่าคอม');
+      expect(screen.queryByText(/ออกค่าคอม/)).toBeNull();
     });
 
-    it('no commission link once the commission is recorded, or before CLOSED_PAID', async () => {
-      const closed = makeFinanceDeal({ salesStage: 'CLOSED_PAID', milestoneTrack: makeTrack(5) });
-      closed.money.commissionRecorded = true;
-      api.finance.getDeal.mockResolvedValue({ deal: closed });
-      const first = renderPage();
-      await screen.findByRole('heading', { level: 1, name: /PR-2026-0501/ });
-      expect(screen.queryByRole('link', { name: 'บันทึกใบกำกับ + ออกค่าคอม' })).toBeNull();
-      first.unmount();
-      api.finance.getDeal.mockResolvedValue({ deal: makeFinanceDeal() });
+    it('clicking it opens an in-page form (no navigation to /commissions) whose ยอดรวม defaults to the EX-VAT figure', async () => {
+      api.finance.getDeal.mockResolvedValue({ deal: closedDeal() });
+      renderPage();
+      fireEvent.click(await screen.findByRole('button', { name: 'บันทึกใบกำกับ' }));
+      const gross = await screen.findByLabelText(/^ยอดรวม/);
+      expect(gross.value).toBe('100000');
+      expect(gross.value).not.toBe('107000');
+      expect(screen.queryByText('WORKLIST-PAGE')).toBeNull();
+      expect(screen.getByLabelText(/เลขที่ใบกำกับ/)).not.toBeNull();
+      expect(screen.getByLabelText(/วันที่ใบกำกับ/)).not.toBeNull();
+      expect(screen.getByLabelText(/ไฟล์ใบกำกับภาษี/)).not.toBeNull();
+    });
+
+    it('submitting calls api.commissions.createFromDeal once with exactly the contract keys, then refetches the deal', async () => {
+      api.finance.getDeal.mockResolvedValue({ deal: closedDeal() });
+      api.commissions.createFromDeal.mockResolvedValue({ commission: { id: 900 } });
+      renderPage();
+      fireEvent.click(await screen.findByRole('button', { name: 'บันทึกใบกำกับ' }));
+      fireEvent.change(await screen.findByLabelText(/เลขที่ใบกำกับ/), { target: { value: 'INV-0501' } });
+      fireEvent.change(screen.getByLabelText(/วันที่ใบกำกับ/), { target: { value: '2026-09-20' } });
+      const file = pdf();
+      fireEvent.change(screen.getByLabelText(/ไฟล์ใบกำกับภาษี/), { target: { files: [file] } });
+      fireEvent.change(screen.getByLabelText(/ค่าธรรมเนียมธนาคาร/), { target: { value: '50' } });
+      fireEvent.change(screen.getByLabelText(/ภาษีพัก/), { target: { value: '7000' } });
+      fireEvent.change(screen.getByLabelText(/ค่าขนส่ง/), { target: { value: '300' } });
+      fireEvent.change(screen.getByLabelText(/ค่าตัด/), { target: { value: '200' } });
+      fireEvent.change(screen.getByLabelText(/รับเงินขาด/), { target: { value: '10' } });
+      fireEvent.change(screen.getByLabelText(/หัก ณ ที่จ่าย/), { target: { value: '3000' } });
+      fireEvent.change(screen.getByLabelText(/รับเงินเกิน/), { target: { value: '5' } });
+      const callsBefore = api.finance.getDeal.mock.calls.length;
+      // submit the form directly: jsdom does not treat a synthetic file change as satisfying `required`
+      // (same reason CommissionPage.test.jsx dispatches submit on the form).
+      fireEvent.submit(screen.getByLabelText(/เลขที่ใบกำกับ/).closest('form'));
+
+      await waitFor(() => expect(api.commissions.createFromDeal).toHaveBeenCalledTimes(1));
+      const payload = api.commissions.createFromDeal.mock.calls[0][0];
+      expect(Object.keys(payload).sort()).toEqual([
+        'bankFees', 'cutFee', 'grossAmount', 'invoiceAttachment', 'invoiceDate', 'invoiceNumber', 'overpayment',
+        'shortfall', 'suspenseVat', 'ticketId', 'transportFee', 'withholdingTax',
+      ]);
+      expect(payload.ticketId).toBe(501);
+      expect(payload.invoiceNumber).toBe('INV-0501');
+      expect(payload.invoiceDate).toBe('2026-09-20');
+      expect(Number(payload.grossAmount)).toBe(100000);
+      expect(Number(payload.bankFees)).toBe(50);
+      expect(Number(payload.suspenseVat)).toBe(7000);
+      expect(Number(payload.transportFee)).toBe(300);
+      expect(Number(payload.cutFee)).toBe(200);
+      expect(Number(payload.shortfall)).toBe(10);
+      expect(Number(payload.withholdingTax)).toBe(3000);
+      expect(Number(payload.overpayment)).toBe(5);
+      expect(payload.invoiceAttachment).toBeInstanceOf(File);
+      expect(payload.invoiceAttachment.name).toBe('tax-invoice-0501.pdf');
+      await waitFor(() => expect(api.finance.getDeal.mock.calls.length).toBeGreaterThan(callsBefore));
+    });
+
+    const invoice = (over = {}) => ({
+      invoiceNumber: 'INV-0501', invoiceDate: '2026-09-20', grossAmount: 100000,
+      bankFees: 50, suspenseVat: 7000, transportFee: 300, cutFee: 200, shortfall: 10, withholdingTax: 3000, overpayment: 5,
+      fileName: 'tax-invoice-0501.pdf', downloadPath: '/downloads/attachment-77',
+      approvalStatus: 'SUBMITTED', rejectionReason: null, recordedAt: '2026-09-20T03:00:00Z', ...over,
+    });
+
+    it('milestone 5 shows the recorded invoice: number, date, gross, each deduction and a download for the file', async () => {
+      const deal = closedDeal({ availableActions: [], commissionInvoice: invoice() });
+      deal.money.commissionRecorded = true;
+      api.finance.getDeal.mockResolvedValue({ deal });
+      fetchDocumentBlob.mockResolvedValue(new Blob(['x'], { type: 'application/pdf' }));
+      renderPage();
+      const closed = within(await screen.findByRole('region', { name: /ชำระครบ ปิดงาน/ }));
+      expect(closed.getByText(/INV-0501/)).not.toBeNull();
+      expect(closed.getByText(/20 ก\.ย\. 2569|20\/09\/2569|2026-09-20/)).not.toBeNull();
+      expect(closed.getByText(/100,000\.00/)).not.toBeNull();
+      for (const v of ['50.00', '7,000.00', '300.00', '200.00', '10.00', '3,000.00', '5.00']) {
+        expect(closed.getAllByText(new RegExp(v.replace('.', '\\.'))).length).toBeGreaterThan(0);
+      }
+      expect(closed.getByText('รอผู้จัดการฝ่ายขายอนุมัติ')).not.toBeNull();
+      fireEvent.click(closed.getByRole('button', { name: /ดาวน์โหลด/ }));
+      await waitFor(() => expect(fetchDocumentBlob).toHaveBeenCalledWith('/downloads/attachment-77'));
+      expect(screen.queryByRole('button', { name: 'บันทึกใบกำกับ' })).toBeNull();
+    });
+
+    it.each([
+      ['MANAGER_APPROVED', null, 'รอ CEO อนุมัติ'],
+      ['APPROVED', null, 'อนุมัติแล้ว'],
+      ['REJECTED', 'เลขที่ใบกำกับไม่ตรงกับไฟล์แนบ', 'ถูกตีกลับ'],
+    ])('approval status %s shows the status line %#; a rejection also shows its reason', async (approvalStatus, rejectionReason, text) => {
+      const deal = closedDeal({ availableActions: [], commissionInvoice: invoice({ approvalStatus, rejectionReason }) });
+      deal.money.commissionRecorded = true;
+      api.finance.getDeal.mockResolvedValue({ deal });
+      renderPage();
+      const closed = within(await screen.findByRole('region', { name: /ชำระครบ ปิดงาน/ }));
+      expect(closed.getByText(new RegExp(text))).not.toBeNull();
+      if (rejectionReason) expect(closed.getByText(new RegExp(rejectionReason))).not.toBeNull();
+    });
+
+    it('never renders a commission amount, even if a payload wrongly carries one', async () => {
+      const deal = closedDeal({
+        availableActions: [],
+        commissionInvoice: invoice({ commissionableBase: 123456.78, actualReceived: 123456.78, commissionAmount: 123456.78 }),
+      });
+      deal.money.commissionRecorded = true;
+      api.finance.getDeal.mockResolvedValue({ deal });
+      const { container } = renderPage();
+      await screen.findByRole('region', { name: /ชำระครบ ปิดงาน/ });
+      expect(container.textContent).not.toMatch(/123,?456/);
+    });
+
+    it('a ceo-style deal (no RECORD_INVOICE action) shows no บันทึกใบกำกับ button', async () => {
+      api.finance.getDeal.mockResolvedValue({ deal: closedDeal({ availableActions: [] }) });
       renderPage();
       await screen.findByRole('heading', { level: 1, name: /PR-2026-0501/ });
-      expect(screen.queryByRole('link', { name: 'บันทึกใบกำกับ + ออกค่าคอม' })).toBeNull();
+      expect(screen.queryByRole('button', { name: /บันทึกใบกำกับ/ })).toBeNull();
     });
   });
 

@@ -101,6 +101,14 @@ describe('AccountFinancePage (index-first worklist)', () => {
     expect(screen.queryByText('บริษัท ไอเดิล จำกัด')).toBeNull();
   });
 
+  it('the CLOSED_PAID row action reads บันทึกใบกำกับ and the old ออกค่าคอม wording renders nowhere', async () => {
+    const { container } = renderPage();
+    await screen.findByText('บริษัท เอฟ จำกัด');
+    expect(screen.getAllByText('บันทึกใบกำกับ').length).toBeGreaterThan(0);
+    expect(container.textContent).not.toContain('ออกค่าคอม');
+    expect(screen.queryByText('บันทึกใบกำกับ + ออกค่าคอม')).toBeNull();
+  });
+
   it('sorts urgent (overdue) first, then by due date, then outstanding descending', async () => {
     api.tickets.list.mockImplementation((params = {}) => (params.salesStage === 'CLOSED_PAID'
       ? Promise.resolve({ tickets: [] })
