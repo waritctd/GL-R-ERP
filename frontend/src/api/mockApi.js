@@ -6437,6 +6437,11 @@ function buildDealQuotationDto(row) {
     ticketId: row.ticketId,
     origin,
     pricingRequestId: origin === 'PRICING_REQUEST' ? (row.pricingRequestId ?? null) : null,
+    // Round 8 — mirrors DealQuotationDto#recipientType/recipientLabel (sales.quotation.recipient_type
+    // /recipient_label, read-only): the source pricing request's for a PRICING_REQUEST-origin row,
+    // 'UNSPECIFIED' for a DEAL_DIRECT row (DealQuotationRepository.InsertDraftParams).
+    recipientType: row.recipientType ?? 'UNSPECIFIED',
+    recipientLabel: row.recipientLabel ?? null,
     // Coordinator follow-up (2026-09-20) — mirrors DealQuotationRepository#baseSelect's own
     // pricing_request join, for the editor's "สร้างจากคำขอราคา {code}" link.
     pricingRequestCode: pricingRequestRow?.requestCode ?? null,
@@ -14687,10 +14692,18 @@ export const api = {
       const ticket = db.tickets.find((t) => t.id === Number(ticketId));
       if (!ticket) fail('ไม่พบดีลนี้', 404);
       requireDealQuotationViewAccess(ticket, user);
-      // MINOR fix (Opus review, 2026-09-20) — mirrors DealQuotationRepository#findByTicket's own
-      // deliberate DEAL_DIRECT-only scope; see isDealDirectOrigin's own comment.
+      // GLA-123 S3 MAJOR 4 fix — DealQuotationRepository#findByTicket is now
+      // `origin IN ('DEAL_DIRECT','PRICING_REQUEST')` (this list backs the เอกสาร register's
+      // "does the deal have a quotation" answer). #search/#counts stay DEAL_DIRECT-only, so
+      // isDealDirectOrigin still governs those — this mock had kept the OLD scope here.
+      // A PRICING_REQUEST row carries the CEO's price/discount, so — mirroring
+      // DealQuotationService#listForTicket's per-row canViewPricingRequestOriginRow — it is dropped
+      // (not field-stripped) unless the viewer is the owning sales rep, sales_manager or ceo; the
+      // can_create_quotation grant does NOT bypass it (unlike a DEAL_DIRECT row).
+      const canSeePricingRequestRows = ['sales', 'sales_manager', 'ceo'].includes(user.role)
+        && (user.role !== 'sales' || ticket.createdById === user.id);
       const items = mockDealQuotations
-        .filter((q) => q.ticketId === ticket.id && isDealDirectOrigin(q))
+        .filter((q) => q.ticketId === ticket.id && (isDealDirectOrigin(q) || canSeePricingRequestRows))
         .sort((a, b) => b.id - a.id)
         .map(buildDealQuotationDto);
       return delay({ items });
@@ -14899,6 +14912,8 @@ export const api = {
         origin: 'PRICING_REQUEST',
         pricingRequestId: pr.id,
         pricingDecisionId: decision.id,
+        recipientType: pr.recipientType,
+        recipientLabel: pr.recipientLabel ?? null,
         docStatus: 'DRAFT',
         revisionNo: 1,
         parentQuotationId: null,

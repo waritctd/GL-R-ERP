@@ -2220,6 +2220,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             canViewPricingRequests={canViewPricingRequests}
             canViewDocumentsTab={canViewDocumentsTab}
             pricingRequests={pricingRequests}
+            pricingRequestsLoading={canViewPricingRequests && pricingRequestsQuery.isLoading}
             legacyQuotations={sortedQuotations}
             attachments={attachments}
             attachLoading={attachLoading}
