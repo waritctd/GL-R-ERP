@@ -255,13 +255,13 @@ class DealDocumentRegisterAuthzIntegrationTest extends AbstractPostgresIntegrati
         assertThat(asOwner.quotations()).extracting(QuotationDto::number).containsExactly("QT-2026-DOCREG-0001");
         assertThat(asOwner.quotation()).isNotNull();
 
-        TicketDto asAssignee = ticketService.get(ticketId, importAssigneeActor);
-        assertThat(asAssignee.quotations()).isEmpty();
-        assertThat(asAssignee.quotation()).isNull();
-
-        TicketDto asNonParticipant = ticketService.get(ticketId, importNonParticipantActor);
-        assertThat(asNonParticipant.quotations()).isEmpty();
-        assertThat(asNonParticipant.quotation()).isNull();
+        // import no longer reaches GET /tickets/{id} AT ALL (it has its own per-deal endpoint,
+        // GET /api/import/deals/{id}, which never carries a quotation) — so the strongest form of
+        // "cannot see the embedded quotations" is a refusal, for the assignee and the
+        // non-participant alike. The projection itself is still exercised on the one remaining
+        // ticket-DTO path import can hit (comment), in TicketServiceTest.
+        assertForbidden(() -> ticketService.get(ticketId, importAssigneeActor));
+        assertForbidden(() -> ticketService.get(ticketId, importNonParticipantActor));
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -310,7 +310,6 @@ class DealDocumentRegisterAuthzIntegrationTest extends AbstractPostgresIntegrati
 
     @Test
     void importAssignee_reachesAttachmentsAsAParticipant() throws Exception {
-        assertThatCode(() -> ticketService.get(ticketId, importAssigneeActor)).doesNotThrowAnyException();
         assertAttachmentsOk(importAssigneeActor);
     }
 
@@ -322,7 +321,7 @@ class DealDocumentRegisterAuthzIntegrationTest extends AbstractPostgresIntegrati
         // re-trusting the other test, since Opus review found the un-seeded version of this exact
         // assertion could not fail (mutating projectForRole's stripping away left it green).
         assertThat(ticketService.get(ticketId, salesOwnerActor).quotations()).isNotEmpty();
-        assertThat(ticketService.get(ticketId, importAssigneeActor).quotations()).isEmpty();
+        assertForbidden(() -> ticketService.get(ticketId, importAssigneeActor));
 
         // The new PricingRequest/CustomerQuotation chain: the backend actually GRANTS import this
         // read (CustomerQuotationService.VIEW_ROLES includes it, pinned by the sibling matrix's
@@ -348,23 +347,24 @@ class DealDocumentRegisterAuthzIntegrationTest extends AbstractPostgresIntegrati
 
     // ─────────────────────────────────────────────────────────────────────────────────────
     // REQUIRED CASE (coordinator addendum): a viewer admitted to none of the three row families
-    // sees NOTHING — not merely "the tab renders". A non-participant import rep is the real-world
-    // instance of this: every VIEWER_ROLE the backend recognises (sales/import/ceo/account/
-    // sales_manager) already has a positive grant somewhere in at least one of
-    // canViewTicketDocuments/PRICING_AND_QUOTATION_ROLES EXCEPT this one specific combination —
-    // import that has not yet picked the deal up loses all three: the legacy quotations field
+    // sees NOTHING. Import that has not picked the deal up loses the legacy quotations field
     // (role-only strip), the new-chain quotations (hidden by frontend choice, not a 403 — see
-    // above), and both deposit-notice-shaped reads AND attachments (both genuinely 403, since it
-    // is neither a participant nor in either role list).
+    // above) and both deposit-notice-shaped reads (genuinely 403).
+    //
+    // 2026-09-30 owner ruling: the fourth read, the deal's ATTACHMENTS, is no longer refused to
+    // import as such — import may download all four attachment types for a deal inside its own
+    // import scope (TicketRepository#isInImportScope). This deal carries a live (SUBMITTED)
+    // pricing request, so it IS in scope; attachments are therefore granted here and stay 403 only
+    // OUTSIDE the scope (pinned in ImportCommentAndDocumentAuthzIntegrationTest). The deposit
+    // families below are unchanged: still 403.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
-    void nonParticipantImport_seesZeroRowsAcrossAllThreeFamilies() throws Exception {
-        assertThatCode(() -> ticketService.get(ticketId, importNonParticipantActor)).doesNotThrowAnyException();
-        assertThat(ticketService.get(ticketId, importNonParticipantActor).quotations()).isEmpty();
+    void nonParticipantImport_seesNoQuotationOrDepositFamily_butMayReadAttachmentsInScope() throws Exception {
+        assertForbidden(() -> ticketService.get(ticketId, importNonParticipantActor));
         assertForbidden(() -> depositNoticeService.listByTicket(ticketId, importNonParticipantActor));
         assertForbidden(() -> depositNoticeService.getRemainingInvoiceOptions(ticketId, importNonParticipantActor));
-        assertAttachmentsForbidden(importNonParticipantActor);
+        assertAttachmentsOk(importNonParticipantActor);
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────

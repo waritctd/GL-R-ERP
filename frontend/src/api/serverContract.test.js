@@ -233,6 +233,7 @@ const SERVER_ONLY = {
   'GET /api/deal-quotations/{}/items/{}/picture': 'GLA-75 quotation item pictures (V170), built BACKEND-FIRST: the per-item picture endpoints landed before the quotation editor UI that calls them (a separate frontend branch). Gated like editing / viewing the quotation and covered by DealQuotationPictureIntegrationTest. LIVE, not dead — delete this entry when hrApi.js calls it.',
   'POST /api/deal-quotations/{}/confirm-order': 'Quotation ↔ deal linking slice 1 (IA §7, 2026-09-30), built BACKEND-FIRST: the real name of GLA-136\'s promote-to-deal, which DealQuotationController maps to the SAME handler as a one-release alias. hrApi.js still calls …/promote-to-deal (identical behaviour) until the slice-1 frontend switches it over. Covered by DealQuotationConfirmOrderIntegrationTest and DealQuotationControllerTest. LIVE, not dead — delete this entry when hrApi.js calls it.',
 
+
   // ── Formerly dormant, now GONE: ProcurementController ─────────────────────
   // Eight entries stood here — all of ProcurementController's mappings. PR #683 (ebaf6888,
   // 2026-08-11) had deleted the จัดซื้อ & นำเข้า page and every client layer while keeping the

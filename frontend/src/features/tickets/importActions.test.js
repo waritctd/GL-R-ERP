@@ -50,7 +50,7 @@ describe('nextImportAction', () => {
     // PR-B REVIEW ROUND 2, X1: issueImportRequest now routes to the deal page — the rewritten
     // /fulfilment (per-factory tracker) can't act on it and doesn't even list a
     // null-fulfillmentStatus deal. See importActions.js's `to` table doc comment.
-    expect(action).toEqual({ code: 'issueImportRequest', label: 'ออกคำขอนำเข้า', to: '/tickets/5' });
+    expect(action).toEqual({ code: 'issueImportRequest', label: 'ออกคำขอนำเข้า', to: '/import/deals/5' });
   });
 
   // PR-B REVIEW ROUND 2, X1: only markIrSent still routes to /fulfilment (its legacy section
@@ -59,12 +59,12 @@ describe('nextImportAction', () => {
   // all — those three now route to the deal page, where DealFulfilmentPanel still performs
   // them. This test used to assert all four landed on /fulfilment, back when that page
   // performed each as a single deal-level click.
-  it('routes markIrSent to /fulfilment and the other three legacy codes to the deal page', () => {
+  it('routes markIrSent to /fulfilment and the other three legacy codes to import\'s own deal page (never /tickets/:id, which import can no longer open)', () => {
     const cases = [
-      [null, 'issueImportRequest', 'ออกคำขอนำเข้า', '/tickets/7'],
+      [null, 'issueImportRequest', 'ออกคำขอนำเข้า', '/import/deals/7'],
       ['IR_ISSUED', 'markIrSent', 'อัปเดตสถานะนำเข้า', '/fulfilment'],
-      ['IR_SENT', 'markShipping', 'บันทึกออกเดินทาง', '/tickets/7'],
-      ['SHIPPING', 'markGoodsReceived', 'ยืนยันรับเข้าคลัง', '/tickets/7'],
+      ['IR_SENT', 'markShipping', 'บันทึกออกเดินทาง', '/import/deals/7'],
+      ['SHIPPING', 'markGoodsReceived', 'ยืนยันรับเข้าคลัง', '/import/deals/7'],
     ];
     cases.forEach(([fulfillmentStatus, code, label, to]) => {
       const ticket = { id: 7, status: 'quotation_issued', fulfillmentStatus };

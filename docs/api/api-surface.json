@@ -70,6 +70,7 @@
     "GET /api/holidays",
     "GET /api/import-requests/{id}",
     "GET /api/import-requests/{id}/file",
+    "GET /api/import/deals/{id}",
     "GET /api/leave",
     "GET /api/leave/attachments/{attachmentId}",
     "GET /api/leave/balances",

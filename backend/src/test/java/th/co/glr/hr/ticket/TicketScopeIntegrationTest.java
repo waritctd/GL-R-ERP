@@ -273,12 +273,23 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
 
     // ── import: quotation is not part of its read surface ───────────────────
 
+    /**
+     * import no longer reaches GET /tickets/{id} (it has its own per-deal endpoint,
+     * GET /api/import/deals/{id}, which never carries a quotation — see
+     * ImportDealAuthzIntegrationTest). The quotation stays projected out of the one ticket-DTO
+     * path import can still hit, {@code comment}, which re-fetches and re-projects the ticket.
+     */
     @Test
-    void importGet_quotationIsProjectedOutOfTheResponse() {
+    void importGet_isRefused_andImportCommentStillProjectsTheQuotationOut() {
         long ticketId = createTicket(DealStage.QUOTE_BUYER);
         tickets.createQuotation(ticketId, "QT-SCOPE-0003", salesRepId, new BigDecimal("10000.00"));
 
-        TicketDto seenByImport = ticketService.get(ticketId, importUser);
+        assertThatThrownBy(() -> ticketService.get(ticketId, importUser))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(403));
+
+        // Import's comment path is row-scoped (2026-09-30): a live pricing request puts the deal in scope.
+        insertPricingRequest(ticketId, "SUBMITTED");
+        TicketDto seenByImport = ticketService.comment(ticketId, new CommentRequest("hi"), importUser);
         assertThat(seenByImport.quotation()).isNull();
         assertThat(seenByImport.quotations()).isEmpty();
 

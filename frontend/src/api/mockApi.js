@@ -3328,12 +3328,17 @@ function requireNoLiveDirectQuotation(ticket) {
 const ATTACHMENT_VIEWER_ROLES = ['ceo', 'account', 'sales_manager'];
 const ATTACHMENT_WRITER_ROLES = ['sales_manager', 'ceo'];
 
+// Amended (feat/import-own-page): `import` now READS an IN-SCOPE deal's documents — all four
+// AttachTypes — via the SAME predicate as its worklist (TicketAccessPolicy.canViewDocuments'
+// importInScope leg). Read-only: it does NOT extend to the write gate, so an import user who did
+// not pick the deal up still cannot upload or delete.
 function requireAttachmentTicketAccess(ticketId, { write = false } = {}) {
   const user = requireSession();
   const ticket = findTicketRaw(Number(ticketId));
   const isParticipant = ticket.createdById === user.id
     || (ticket.assignedToId != null && ticket.assignedToId === user.id);
-  const allowed = isParticipant || (write
+  const importReadsInScope = !write && user.role === 'import' && importListScopeIncludes(ticket);
+  const allowed = isParticipant || importReadsInScope || (write
     ? ATTACHMENT_WRITER_ROLES.includes(user.role)
     : ATTACHMENT_VIEWER_ROLES.includes(user.role));
   if (!allowed) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
@@ -7254,7 +7259,12 @@ export const api = {
 
     async get(id) {
       const user = requireSession();
-      if (!['sales', 'import', 'ceo', 'account', 'sales_manager'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      // Mirrors TicketService.get: the whole-deal read is REFUSED to import (it carries the
+      // customer price and the quotation chain) — import is served GET /api/import/deals/{id}
+      // (importDeals.get below) instead. Checked before the row lookup so a missing id and a real
+      // one answer alike (no existence oracle). Authz here is an approximation, never the evidence.
+      if (user.role === 'import') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!['sales', 'ceo', 'account', 'sales_manager'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const ticket = structuredClone(db.tickets.find((t) => t.id === Number(id)));
       if (!ticket) fail('ไม่พบดีลนี้', 404);
       if (user.role === 'sales' && ticket.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
@@ -7776,6 +7786,14 @@ export const api = {
       // Mirrors TicketService.comment: same read gate as get() — commenting
       // returns the full ticket, so it must not be a side door around the read
       // scoping (nor, per Phase B, around the import quotation projection).
+      // Mirrors TicketService.comment (Leak B, owner ruling 2026-09-30): import's comment path is
+      // row-scoped to its import scope — the SAME predicate as its worklist and importDeals.get —
+      // and a missing deal answers 403 like an out-of-scope one (no existence oracle).
+      const commenter = requireSession();
+      if (commenter.role === 'import') {
+        const scoped = db.tickets.find((t) => t.id === Number(id));
+        if (!(scoped && importListScopeIncludes(scoped))) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      }
       const { user, ticket } = requireTicketViewer(id);
       pushEvent(ticket, user, 'COMMENTED', null, null, payload.message);
       return delay({ ticket: projectTicketDetailForRole(buildTicketDetail(ticket), user.role) });
@@ -11080,6 +11098,64 @@ export const api = {
       hasRole('import', 'ceo');
       void ticketId; void brand; void ref; void requiredBy;
       fail('สร้างไฟล์ใบขอซื้อไม่รองรับในโหมดทดสอบ (mock) — ต้องใช้เซิร์ฟเวอร์จริง', 501);
+    },
+  },
+
+  // Mirrors ImportDealService / ImportDealDtos — GET /api/import/deals/{id}, the import-only
+  // per-deal view. The DTO is built FIELD BY FIELD from the mock ticket (never a spread of the
+  // ticket item), so a price/cost/margin/weighting field the mock item happens to hold can never
+  // leak through — the same "fresh projection, nothing to forget to strip" construction the Java
+  // side uses. Authz here is an APPROXIMATION of the service (NOT authoritative — real coverage is
+  // ImportDealAuthzIntegrationTest): role import/ceo checked FIRST; import is then row-scoped to
+  // the SAME set the import worklist (tickets.list) returns, via importListScopeIncludes, and a
+  // deal outside it or missing both answer 403 (no existence oracle); ceo is unscoped, so a
+  // missing deal is an ordinary 404.
+  importDeals: {
+    async get(ticketId) {
+      const user = hasRole('import', 'ceo');
+      const raw = db.tickets.find((t) => t.id === Number(ticketId));
+      if (user.role === 'import' && !(raw && importListScopeIncludes(raw))) {
+        fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      }
+      if (!raw) fail('ไม่พบดีลนี้', 404);
+      // Same display-only fallback tickets.get() applies: ticket_item stays empty until order
+      // confirmation, so a pricing-phase deal shows the live quotation's lines instead.
+      let lines = raw.items ?? [];
+      if (lines.length === 0) lines = mockPricingChainFallbackItems(raw.id);
+      const project = raw.projectId ? mockProjects.find((p) => p.id === raw.projectId) : null;
+      return delay({
+        deal: {
+          id: raw.id,
+          code: raw.code,
+          title: raw.title,
+          status: raw.status,
+          lifecycle: raw.lifecycle ?? 'ACTIVE',
+          salesStage: raw.salesStage,
+          customerName: raw.customerName ?? null,
+          projectName: project?.name ?? raw.projectName ?? null,
+          createdByName: raw.createdByName ?? null,
+          fulfillmentStatus: raw.fulfillmentStatus ?? null,
+          items: lines.map((i) => ({
+            id: i.id,
+            brand: i.brand ?? null,
+            model: i.model ?? null,
+            color: i.color ?? null,
+            texture: i.texture ?? null,
+            size: i.size ?? null,
+            code: i.catalogProductCode ?? null,
+            qty: i.qty ?? null,
+            qtySqm: i.qtySqm ?? null,
+            unit: i.unitBasis ?? null,
+            qtyDelivered: i.qtyDelivered ?? null,
+          })),
+          // ImportRequestService#list for import/ceo is unrestricted.
+          importRequests: mockImportRequestsForTicket(raw.id),
+          // ONLY the human comment thread — the raw event feed quotes prices in its notes.
+          comments: (raw.events ?? [])
+            .filter((e) => e.kind === 'COMMENTED')
+            .map((e) => ({ id: e.id, actorName: e.actorName, message: e.message, createdAt: e.createdAt })),
+        },
+      });
     },
   },
 

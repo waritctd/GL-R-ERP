@@ -530,6 +530,13 @@ export const api = {
       return res.blob();
     },
   },
+  // Mirrors ImportDealController — the import-only per-deal view. Role (import/ceo) and import's
+  // worklist row-scope are enforced in ImportDealService; this method carries no gate of its own.
+  // Resolves `{ deal }`; `deal.importRequests` is the same shape storedImportRequests.listForTicket
+  // returns, and `deal.items` never carries a price.
+  importDeals: {
+    get: (ticketId) => apiRequest(API_ROUTES.importDeals.get(ticketId)),
+  },
   // Mirrors ImportRequestController's PLURAL routes — the STORED ใบขอซื้อ aggregate (V184, PR-A
   // #1008 / PR-B UI, GLA-100/105). One row per (deal, factory), draft -> issue -> revise, with
   // per-factory progress (S12-S17), lead time / expected arrival, and an order-email draft.

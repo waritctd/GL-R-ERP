@@ -52,9 +52,9 @@ public final class TicketAccessPolicy {
      * it. The equivalent control was removed from TicketDetailPage for exactly this reason; do not
      * re-open it from the API side either.
      *
-     * <p>Excludes {@code import} too, which is refused document READS as a non-participant in the
-     * first place (see {@link #canViewDocuments}) — import touches a deal's documents once it has
-     * actually picked the deal up, i.e. once it is the assignee, exactly as before issue #389.
+     * <p>Excludes {@code import} too: import may now READ an in-scope deal's documents (see {@link
+     * #canViewDocuments}), but it still WRITES them only once it has actually picked the deal up,
+     * i.e. once it is the assignee, exactly as before issue #389.
      */
     public static final Set<String> DOCUMENT_WRITER_ROLES = Set.of("sales_manager", "ceo");
 
@@ -86,8 +86,17 @@ public final class TicketAccessPolicy {
      *       refuse them. Nothing can reach that branch today (deals are created by {@code sales}
      *       and picked up by {@code import}, both viewers), but it IS wider, so it is stated here
      *       rather than left to be discovered. It preserves the pre-#389 participant grant.</li>
-     *   <li><b>{@code import} is refused unless it is a participant.</b> This is the one place
-     *       document reads are deliberately NARROWER than deal reads. Import may read the deal
+     *   <li><b>{@code import} is admitted only for a deal inside its import scope (or as a
+     *       participant).</b> Owner ruling 2026-09-30 — it supersedes the blanket refusal issue #389's
+     *       review pinned here. {@code importInScope} is {@code TicketRepository#isInImportScope}, the
+     *       SAME predicate as import's worklist, and is computed by the caller (this class is pure,
+     *       no DB); the 2-arg overload passes {@code false}. The reasoning below records why the
+     *       blanket read was withheld; what changed is that import's other cost exposures are now
+     *       closed too ({@code TicketService#projectForRole} strips item costs and price-bearing
+     *       events, its comment path is row-scoped, and {@code GET /tickets/{id}} is refused), and
+     *       the owner decided the countersigned quotation / invoice files are part of what an
+     *       importer working an in-scope deal downloads. Historical rationale: this was the one place
+     *       document reads were deliberately NARROWER than deal reads. Import may read the deal
      *       shell, but the codebase withholds the customer-facing documents from it in five
      *       separate places: {@code TicketService#projectForRole} nulls quotations out of the
      *       DTO, {@code TicketService#loadQuotationContext} 403s a quotation file download
@@ -106,6 +115,12 @@ public final class TicketAccessPolicy {
      * </ol>
      */
     public static boolean canViewDocuments(TicketSummaryDto summary, UserPrincipal actor) {
+        return canViewDocuments(summary, actor, false);
+    }
+
+    /** @param importInScope whether the deal is inside import's list scope; consulted for {@code import} only. */
+
+    public static boolean canViewDocuments(TicketSummaryDto summary, UserPrincipal actor, boolean importInScope) {
         if (actor == null) {
             return false;
         }
@@ -117,8 +132,11 @@ public final class TicketAccessPolicy {
         }
         // A sales rep reaches only their OWN deals; on someone else's they are not a participant,
         // so being in VIEWER_ROLES is not enough (same rule as requireViewAccess). import is
-        // refused for the customer-price-exposure reason in this method's javadoc.
-        return !"sales".equals(actor.role()) && !"import".equals(actor.role());
+        // row-scoped: admitted only for a deal inside its import scope (see this method's javadoc).
+        if ("import".equals(actor.role())) {
+            return importInScope;
+        }
+        return !"sales".equals(actor.role());
     }
 
     /** May {@code actor} attach a document to, or remove one from, this deal? */

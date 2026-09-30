@@ -136,7 +136,18 @@ public class TicketService {
     public List<TicketSummaryDto> list(String status, UserPrincipal actor) {
         requireRole(actor, VIEWER_ROLES);
         Long createdByFilter = "sales".equals(actor.role()) ? actor.id() : null;
-        return tickets.findSummaries(status, null, createdByFilter, actor.role(), null);
+        return forRole(tickets.findSummaries(status, null, createdByFilter, actor.role(), null), actor.role());
+    }
+
+    /**
+     * Owner ruling 2026-09-30: import receives no customer money totals on any summary it is
+     * handed. Applied after the query, so ordering, paging and counts are untouched.
+     */
+    private static List<TicketSummaryDto> forRole(List<TicketSummaryDto> rows, String role) {
+        if (!IMPORT_ROLES.contains(role)) {
+            return rows;
+        }
+        return rows.stream().map(TicketSummaryDto::withoutMoney).toList();
     }
 
     public Page<TicketSummaryDto> listPage(String status, UserPrincipal actor, PageRequest page) {
@@ -153,7 +164,8 @@ public class TicketService {
         // Phase B (role-scoped views): import/account only see the slice of the deal
         // pipeline relevant to their own worklist — see TicketRepository.appendRoleScope.
         // ceo/sales_manager/sales are unaffected (the repository ignores any other role).
-        List<TicketSummaryDto> rows = tickets.findSummaries(status, salesStage, createdByFilter, actor.role(), page);
+        List<TicketSummaryDto> rows =
+            forRole(tickets.findSummaries(status, salesStage, createdByFilter, actor.role(), page), actor.role());
         // Skip the COUNT round-trip when the whole result set fits on page 0.
         int total = (page.page() == 0 && rows.size() < page.size())
             ? rows.size()
@@ -162,6 +174,15 @@ public class TicketService {
     }
 
     public TicketDto get(long id, UserPrincipal actor) {
+        // import has its OWN per-deal page endpoint (GET /api/import/deals/{id},
+        // ImportDealService) that projects the deal down to factories/items/delivery status/comments
+        // and never carries a price — mirroring the account finance view ruling. The whole-deal
+        // read (every item's cost fields, the full event feed) is therefore refused to it. This
+        // guard is on this ONE read only: requireViewAccess (shared by actions, listDeliveries,
+        // comment, ...) is deliberately untouched, and so are import's /import-requests routes.
+        if (IMPORT_ROLES.contains(actor.role())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
         TicketDto ticket = requireViewAccess(id, actor);
         // B5 fix: display-only fallback, scoped to THIS single read endpoint on purpose. Every
         // other reader of ticket.items() (actions()'s canReserveStock/canRecordDelivery/
@@ -227,7 +248,34 @@ public class TicketService {
         if (!IMPORT_ROLES.contains(role)) {
             return ticket;
         }
-        return new TicketDto(ticket.summary(), ticket.items(), ticket.events(), null, List.of());
+        // Owner ruling 2026-09-30: import must never be handed pricing. Beyond the quotation chain
+        // this also strips (a) every item's cost/price columns and (b) every event that is not a
+        // human comment — PRICE_* / override events quote prices in their note and item snapshot,
+        // exactly what ImportDealService already withholds from the import view — and (c) the
+        // summary's customer money totals (withoutMoney).
+        List<TicketItemDto> items = ticket.items().stream().map(TicketService::withoutCosts).toList();
+        List<TicketEventDto> events = ticket.events().stream()
+            .filter(e -> TicketEventKind.COMMENTED.equals(e.kind()))
+            .toList();
+        return new TicketDto(ticket.summary().withoutMoney(), items, events, null, List.of());
+    }
+
+    /**
+     * A copy of {@code i} with every price/cost-bearing column blanked. {@code weightMultiplier} is
+     * a primitive {@code int} (the commission weighting), so it cannot be null — it is reset to the
+     * neutral column default 1 rather than left carrying the manager-set value.
+     */
+    private static TicketItemDto withoutCosts(TicketItemDto i) {
+        return new TicketItemDto(i.id(), i.ticketId(), i.brand(), i.model(), i.color(), i.texture(), i.size(),
+            i.factory(), i.qty(), i.qtySqm(),
+            null /* rawPrice */, null /* rawCurrency */, i.rawUnit(),
+            null /* proposedPrice */, null /* approvedPrice */, null /* currency */,
+            i.sortOrder(),
+            null /* calcedCost */, null /* calcedPrice */, i.calcConfigVersion(), i.unitBasis(),
+            null /* manualPrice */, null /* manualOverrideReason */,
+            i.qtyDelivered(), i.qtyFromStock(), i.stockNote(), i.catalogPriceId(), i.catalogProductCode(),
+            i.source(), null /* catalogPrice */, null /* catalogCurrency */, i.catalogPriceUnit(),
+            i.sqmPerPiece(), 1 /* weightMultiplier */, i.sourcedFromStock(), null /* stockSalePrice */);
     }
 
     @Transactional
@@ -2687,6 +2735,14 @@ public class TicketService {
         // so it must not be a side door around the read scoping (nor, per Phase B,
         // around the import quotation projection — the ticket is re-fetched below to
         // pick up the new event, so it must be re-projected too).
+        // Leak B (owner ruling 2026-09-30): import's comment path is row-scoped to its import scope
+        // — the same predicate as its worklist and GET /api/import/deals/{id}. Checked BEFORE
+        // requireViewAccess so a missing deal and an out-of-scope deal are both a plain 403 (no
+        // existence oracle). The scope is applied here, NOT in requireViewAccess, so import's other
+        // shared-gate reads (actions, listDeliveries) keep their pre-existing behaviour.
+        if (IMPORT_ROLES.contains(actor.role()) && !tickets.isInImportScope(ticketId)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
         requireViewAccess(ticketId, actor);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.COMMENTED, null, null, request.message());

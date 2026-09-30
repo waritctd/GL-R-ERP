@@ -90,6 +90,28 @@ class TicketAccessPolicyTest {
         assertThat(TicketAccessPolicy.canManageDocuments(summary(), stranger("import"))).isFalse();
     }
 
+    /**
+     * 2026-09-30 owner ruling: import's document read is row-scoped, not role-blocked. The policy
+     * itself is pure (no DB), so "in import scope" is passed in — the repository predicate that
+     * computes it is proven against real Postgres in ImportCommentAndDocumentAuthzIntegrationTest.
+     * In scope → import may read; the WRITE side is unchanged and still refused.
+     */
+    @Test
+    void importMayReadDocumentsOnlyWhenTheDealIsInItsImportScope() {
+        assertThat(TicketAccessPolicy.canViewDocuments(summary(), stranger("import"), true)).isTrue();
+        assertThat(TicketAccessPolicy.canViewDocuments(summary(), stranger("import"), false)).isFalse();
+        assertThat(TicketAccessPolicy.canManageDocuments(summary(), stranger("import"))).isFalse();
+    }
+
+    /** The scope flag is import-only: it must never widen any other role's document read. */
+    @Test
+    void theImportScopeFlagNeverWidensAnyOtherRole() {
+        for (String role : new String[]{"sales", "hr", "employee", "warehouse", "qc"}) {
+            assertThat(TicketAccessPolicy.canViewDocuments(summary(), stranger(role), true))
+                .as("canViewDocuments(importInScope=true) for role %s", role).isFalse();
+        }
+    }
+
     @Test
     void importRegainsAccessOnlyOnADealItActuallyPickedUp() {
         // The assignee IS the import user who picked the deal up — a participant, not a role grant.

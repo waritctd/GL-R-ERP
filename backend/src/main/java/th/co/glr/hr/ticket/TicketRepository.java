@@ -177,6 +177,27 @@ public class TicketRepository {
         return total == null ? 0 : total;
     }
 
+    /**
+     * Is this deal inside the import role's list scope — i.e. would {@code GET /api/tickets} return
+     * it to an {@code import} caller? Runs the list's OWN predicate ({@link #appendRoleScope} with
+     * {@code "import"}) against a single id rather than restating it, so the by-id read and the
+     * worklist can never disagree about what import may see. A missing deal is simply "not in
+     * scope" (false).
+     *
+     * <p>The former {@code quotation_only = FALSE} filter was dropped when the deal-route-staging
+     * rework removed it from the list paths too (the flag is now cleared on promote to a real deal,
+     * so a quotation-only container never reaches import's stage/PCR scope anyway). This stays in
+     * lock-step with {@code findSummaries}/{@code countSummaries}: predicate = id + appendRoleScope.
+     */
+    public boolean isInImportScope(long ticketId) {
+        StringBuilder sql = new StringBuilder(
+            "SELECT COUNT(*) FROM sales.ticket t WHERE t.ticket_id = :ticketId");
+        MapSqlParameterSource params = new MapSqlParameterSource().addValue("ticketId", ticketId);
+        appendRoleScope(sql, params, "import");
+        Integer n = jdbc.queryForObject(sql.toString(), params, Integer.class);
+        return n != null && n > 0;
+    }
+
     /** Additive WHERE fragment for import/account list-scoping — see the class-level comment. */
     private void appendRoleScope(StringBuilder sql, MapSqlParameterSource params, String actorRole) {
         if ("import".equals(actorRole)) {

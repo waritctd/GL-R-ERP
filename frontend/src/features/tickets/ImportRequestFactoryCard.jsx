@@ -10,7 +10,7 @@ import { formatThaiDate } from '../../utils/format.js';
 import { FactoryProgressBar } from '../importProgress/FactoryProgressBar.jsx';
 
 const STATUS_LABEL = { DRAFT: 'ร่าง', ISSUED: 'ออกเลขแล้ว', SUPERSEDED: 'ถูกแทนที่แล้ว' };
-const STATUS_TONE = { DRAFT: 'blue', ISSUED: 'green', SUPERSEDED: 'neutral' };
+const STATUS_TONE = { DRAFT: 'info', ISSUED: 'success', SUPERSEDED: 'neutral' };
 
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
@@ -37,6 +37,7 @@ function downloadBlob(blob, filename) {
  */
 export function ImportRequestFactoryCard({
   row, ticketId, canFullWrite, canFooterWrite, canAdvance, canEmailWrite, showToast,
+  showInlineDownload = false,
 }) {
   const queryClient = useQueryClient();
   const [leadTimeDraft, setLeadTimeDraft] = useState({ min: row.leadTimeMinDays ?? '', max: row.leadTimeMaxDays ?? '' });
@@ -58,6 +59,10 @@ export function ImportRequestFactoryCard({
 
   function invalidate() {
     queryClient.invalidateQueries({ queryKey: queryKeys.storedImportRequests(ticketId) });
+    // This card is rendered by BOTH the deal tab and import's own per-deal page (ImportDealPage,
+    // which reads GET /api/import/deals/{id} — a different query key). A mutation from either must
+    // refresh the other, or a stale step shows there until a hard reload.
+    queryClient.invalidateQueries({ queryKey: queryKeys.importDeal(ticketId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(ticketId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketActions(ticketId) });
     queryClient.invalidateQueries({ queryKey: ['tickets', 'list'] });
@@ -145,15 +150,18 @@ export function ImportRequestFactoryCard({
   const isDraft = row.status === 'DRAFT';
   const isIssued = row.status === 'ISSUED';
 
-  return (
-    <div className="flex flex-col gap-2.5 rounded-md border border-border bg-surface p-3" data-testid={`ir-factory-card-${row.id}`}>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <strong className="min-w-0 truncate text-sm">{row.factoryName}</strong>
-          <span className="text-2xs text-text-muted">v{row.version}</span>
-          <StatusBadge tone={STATUS_TONE[row.status]}>{STATUS_LABEL[row.status] ?? row.status}</StatusBadge>
-          {row.docNumber ? <code className="text-2xs text-text-muted">{row.docNumber}</code> : null}
-        </div>
+  // Yang-style compact card (feat/import-panel-yang-visual, frontend-only visual port): the
+  // document-heavy / secondary controls below are grouped into a collapsed-by-default <details>
+  // so the default view reads as factory name → progress bar → email action, matching Yang's
+  // FactoryImportProgressPanel. Native <details> keeps its children in the DOM while collapsed
+  // (just visually hidden), so every data-testid here stays queryable by existing tests exactly
+  // as before — nothing here is conditionally unmounted.
+  const documentDetails = (
+    <details className="rounded-md border border-border-subtle open:bg-surface-muted" data-testid={`ir-details-${row.id}`}>
+      <summary className="cursor-pointer select-none rounded-md px-3 py-2 mobile:py-3.5 text-xs font-bold text-text-secondary hover:bg-surface-muted hover:text-text">
+        รายละเอียดใบขอซื้อ (เอกสาร/PDF)
+      </summary>
+      <div className="flex flex-col gap-3 border-t border-border-subtle p-3">
         <div className="flex flex-wrap gap-1.5">
           {isDraft && canFullWrite ? (
             <Button type="button" size="sm" variant="primary" disabled={issueMutation.isPending}
@@ -182,25 +190,52 @@ export function ImportRequestFactoryCard({
             PDF (ให้โรงงาน)
           </Button>
         </div>
-      </div>
 
-      {/* เนื้อหา (draft body): lead time + required-by, editable by the owning rep/CEO only while
-          DRAFT. Post-issue the min/max here is READ-ONLY — the edit control below (import/CEO)
-          is the one that still writes.
-          PR-B REVIEW ROUND 1, S1: a viewer who cannot write (sales_manager always; sales/CEO once
-          ISSUED; import while still DRAFT) gets PLAIN TEXT here, not a disabled input — a disabled
-          input is a look-alike control that implies "there is a field here you almost can edit",
-          which is misleading for a role with no path to ever edit it. */}
-      {(() => {
-        const canWriteLeadTimeNow = isDraft ? canFullWrite : canAdvance;
-        if (!canWriteLeadTimeNow) {
+        {/* เนื้อหา (draft body): lead time + required-by, editable by the owning rep/CEO only while
+            DRAFT. Post-issue the min/max here is READ-ONLY — the edit control below (import/CEO)
+            is the one that still writes.
+            PR-B REVIEW ROUND 1, S1: a viewer who cannot write (sales_manager always; sales/CEO once
+            ISSUED; import while still DRAFT) gets PLAIN TEXT here, not a disabled input — a disabled
+            input is a look-alike control that implies "there is a field here you almost can edit",
+            which is misleading for a role with no path to ever edit it. */}
+        {(() => {
+          const canWriteLeadTimeNow = isDraft ? canFullWrite : canAdvance;
+          if (!canWriteLeadTimeNow) {
+            return (
+              <div className="flex flex-wrap items-center gap-3 text-xs" data-testid={`ir-lead-readonly-${row.id}`}>
+                <span className="text-text-secondary">
+                  {row.leadTimeMinDays != null && row.leadTimeMaxDays != null
+                    ? `ระยะเวลานำเข้า ${row.leadTimeMinDays}–${row.leadTimeMaxDays} วัน`
+                    : 'ยังไม่ระบุระยะเวลานำเข้า'}
+                </span>
+                {row.expectedArrivalFrom && row.expectedArrivalTo ? (
+                  <span className="text-text-muted">
+                    คาดว่าถึง {formatThaiDate(row.expectedArrivalFrom)} – {formatThaiDate(row.expectedArrivalTo)}
+                  </span>
+                ) : null}
+              </div>
+            );
+          }
           return (
-            <div className="flex flex-wrap items-center gap-3 text-xs" data-testid={`ir-lead-readonly-${row.id}`}>
-              <span className="text-text-secondary">
-                {row.leadTimeMinDays != null && row.leadTimeMaxDays != null
-                  ? `ระยะเวลานำเข้า ${row.leadTimeMinDays}–${row.leadTimeMaxDays} วัน`
-                  : 'ยังไม่ระบุระยะเวลานำเข้า'}
-              </span>
+            <div className="flex flex-wrap items-end gap-3 text-xs">
+              <label className="flex flex-col gap-1 font-bold text-text-secondary">
+                ระยะเวลานำเข้า (วัน) ต่ำสุด
+                <input type="number" min="1" max="365" className="w-24"
+                  value={leadTimeDraft.min}
+                  onChange={(e) => setLeadTimeDraft((d) => ({ ...d, min: e.target.value }))}
+                  data-testid={`ir-lead-min-${row.id}`} />
+              </label>
+              <label className="flex flex-col gap-1 font-bold text-text-secondary">
+                สูงสุด
+                <input type="number" min="1" max="365" className="w-24"
+                  value={leadTimeDraft.max}
+                  onChange={(e) => setLeadTimeDraft((d) => ({ ...d, max: e.target.value }))}
+                  data-testid={`ir-lead-max-${row.id}`} />
+              </label>
+              <Button type="button" size="sm" variant="secondary" className="min-h-10" disabled={setLeadTimeMutation.isPending}
+                onClick={saveLeadTime} data-testid={`ir-lead-save-${row.id}`}>
+                บันทึกระยะเวลา
+              </Button>
               {row.expectedArrivalFrom && row.expectedArrivalTo ? (
                 <span className="text-text-muted">
                   คาดว่าถึง {formatThaiDate(row.expectedArrivalFrom)} – {formatThaiDate(row.expectedArrivalTo)}
@@ -208,35 +243,109 @@ export function ImportRequestFactoryCard({
               ) : null}
             </div>
           );
-        }
-        return (
-          <div className="flex flex-wrap items-end gap-3 text-xs">
-            <label className="flex flex-col gap-1 font-bold text-text-secondary">
-              ระยะเวลานำเข้า (วัน) ต่ำสุด
-              <input type="number" min="1" max="365" className="w-24"
-                value={leadTimeDraft.min}
-                onChange={(e) => setLeadTimeDraft((d) => ({ ...d, min: e.target.value }))}
-                data-testid={`ir-lead-min-${row.id}`} />
-            </label>
-            <label className="flex flex-col gap-1 font-bold text-text-secondary">
-              สูงสุด
-              <input type="number" min="1" max="365" className="w-24"
-                value={leadTimeDraft.max}
-                onChange={(e) => setLeadTimeDraft((d) => ({ ...d, max: e.target.value }))}
-                data-testid={`ir-lead-max-${row.id}`} />
-            </label>
-            <Button type="button" size="sm" variant="secondary" disabled={setLeadTimeMutation.isPending}
-              onClick={saveLeadTime} data-testid={`ir-lead-save-${row.id}`}>
-              บันทึกระยะเวลา
+        })()}
+
+        {/* Nit: the CEO-only footer (checked/approved/vessel ETA) is editable from DRAFT onward —
+            not gated on isIssued — and its current status stays visible READ-ONLY to every other
+            viewer who can reach this card, at any status, rather than only once ISSUED and only the
+            vessel ETA line. */}
+        {canFooterWrite ? (
+          <div className="flex flex-wrap items-center gap-2 rounded-md border border-border-subtle bg-surface-subtle p-2 text-xs">
+            <strong>ท้ายฟอร์ม (CEO):</strong>
+            <span className="text-text-muted">
+              {row.checkedByName ? `ตรวจสอบโดย ${row.checkedByName}${row.checkedDate ? ` (${formatThaiDate(row.checkedDate)})` : ''}` : 'ยังไม่ตรวจสอบ'}
+              {' · '}
+              {row.approvedByName ? `อนุมัติโดย ${row.approvedByName}${row.approvedDate ? ` (${formatThaiDate(row.approvedDate)})` : ''}` : 'ยังไม่อนุมัติ'}
+              {row.vesselEtaNote ? ` · กำหนดเรือเข้าโดยประมาณ: ${row.vesselEtaNote}` : ''}
+            </span>
+            <Button type="button" size="sm" variant="text" className="mobile:min-h-11 mobile:min-w-11" onClick={() => setFooterOpen(true)} data-testid={`ir-footer-open-${row.id}`}>
+              แก้ไข
             </Button>
-            {row.expectedArrivalFrom && row.expectedArrivalTo ? (
-              <span className="text-text-muted">
-                คาดว่าถึง {formatThaiDate(row.expectedArrivalFrom)} – {formatThaiDate(row.expectedArrivalTo)}
-              </span>
-            ) : null}
           </div>
-        );
-      })()}
+        ) : (row.checkedByName || row.approvedByName || row.vesselEtaNote) ? (
+          <p className="text-2xs text-text-muted" data-testid={`ir-footer-readonly-${row.id}`}>
+            {row.checkedByName ? `ตรวจสอบโดย ${row.checkedByName}${row.checkedDate ? ` (${formatThaiDate(row.checkedDate)})` : ''}` : null}
+            {row.checkedByName && row.approvedByName ? ' · ' : ''}
+            {row.approvedByName ? `อนุมัติโดย ${row.approvedByName}${row.approvedDate ? ` (${formatThaiDate(row.approvedDate)})` : ''}` : null}
+            {(row.checkedByName || row.approvedByName) && row.vesselEtaNote ? ' · ' : ''}
+            {row.vesselEtaNote ? `กำหนดเรือเข้าโดยประมาณ: ${row.vesselEtaNote}` : null}
+          </p>
+        ) : null}
+      </div>
+    </details>
+  );
+
+  // v# · status · doc number — the quiet identity line of this stored row. For an ISSUED row it is
+  // handed to the progress bar (which owns the header line: name → step → ETA → last update); for a
+  // DRAFT row there is no bar, so it renders after the name in the card's own header below.
+  const docMeta = (
+    <>
+      <span className="text-2xs text-text-muted">v{row.version}</span>
+      <StatusBadge tone={STATUS_TONE[row.status]}>{STATUS_LABEL[row.status] ?? row.status}</StatusBadge>
+      {row.docNumber ? <code className="text-2xs text-text-muted">{row.docNumber}</code> : null}
+    </>
+  );
+
+  // The card is the ONE per-factory unit on both surfaces (the deal tab and import's own page), so
+  // its frame, header and rhythm are defined here only: 16px padding (12px on a phone), 12px between
+  // blocks, hairline rules between the supporting blocks so the tracker (header + bar) leads.
+  return (
+    <div className="flex min-w-0 flex-col gap-3 rounded-md border border-border-strong bg-surface p-4 mobile:p-3" data-testid={`ir-factory-card-${row.id}`}>
+      {isIssued ? (
+        <FactoryProgressBar
+          bare
+          titleExtra={docMeta}
+          row={{
+            id: row.id, factoryName: row.factoryName, importStep: row.importStep, importStepAt: row.importStepAt,
+            expectedArrivalFrom: row.expectedArrivalFrom, expectedArrivalTo: row.expectedArrivalTo,
+            leadTimeMinDays: row.leadTimeMinDays, leadTimeMaxDays: row.leadTimeMaxDays,
+          }}
+          editable={canAdvance}
+          advancing={advanceMutation.isPending}
+          onAdvance={(_r, targetStep) => advanceMutation.mutate(targetStep)}
+        />
+      ) : (
+        <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
+          <strong className="min-w-0 text-md font-extrabold text-text [overflow-wrap:anywhere]">{row.factoryName}</strong>
+          {docMeta}
+        </div>
+      )}
+
+      {/* Primary visible content for an ISSUED row (Yang-style compact card): the progress bar
+          with its → next-step advance, plus the order-email action on its own row right below it.
+          Every document-heavy control (PDF downloads, ออกเลข/ลบร่าง/ออกฉบับแก้ไข, the lead-time
+          editor, the CEO footer) lives in the collapsed-by-default details block further down. */}
+      {isIssued ? (
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-2 border-t border-border-subtle pt-3 text-xs">
+          <strong className="text-text-secondary">อีเมลสั่งซื้อ:</strong>
+          {row.emailSentAt ? (
+            <StatusBadge tone="success">ส่งแล้ว {formatThaiDate(row.emailSentAt)}{row.emailSentByName ? ` · ${row.emailSentByName}` : ''}</StatusBadge>
+          ) : (
+            <StatusBadge tone="info">ยังไม่ได้ส่ง</StatusBadge>
+          )}
+          {canEmailWrite ? (
+            <Button type="button" size="sm" variant="secondary" className="ml-auto whitespace-nowrap mobile:ml-0"
+              onClick={() => { setEmailDraft({ emailTo: row.emailTo ?? '', emailSubject: row.emailSubject ?? '', emailBody: row.emailBody ?? '' }); setEmailOpen(true); }}
+              data-testid={`ir-email-open-${row.id}`}>
+              ✉ อีเมลสั่งซื้อ
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+
+      {/* Per-factory ใบขอซื้อ download, surfaced on the import page (showInlineDownload) so import
+          can grab each factory's F-SM-001 without opening the details expander. Same download as
+          the details block (internal copy — import's working reference); both copies stay there. */}
+      {showInlineDownload && isIssued ? (
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-2 border-t border-border-subtle pt-3 text-xs">
+          <strong className="text-text-secondary">ใบขอซื้อ (F-SM-001):</strong>
+          <Button type="button" size="sm" variant="secondary" className="ml-auto whitespace-nowrap mobile:ml-0"
+            disabled={downloadMutation.isPending}
+            onClick={() => downloadMutation.mutate(undefined)} data-testid={`ir-download-inline-${row.id}`}>
+            ดาวน์โหลด PDF
+          </Button>
+        </div>
+      ) : null}
 
       {isDraft && canFullWrite ? (
         <label className="flex flex-col gap-1 text-xs font-bold text-text-secondary">
@@ -248,10 +357,10 @@ export function ImportRequestFactoryCard({
             data-testid={`ir-required-by-${row.id}`} />
         </label>
       ) : row.requiredByNote ? (
-        <p className="text-2xs text-text-muted">กำหนดวันที่ต้องการของ: {row.requiredByNote}</p>
+        <p className="m-0 text-2xs text-text-muted">กำหนดวันที่ต้องการของ: {row.requiredByNote}</p>
       ) : null}
 
-      <div className="flex flex-col gap-1 text-2xs text-text-muted">
+      <div className="flex flex-col gap-1 border-t border-border-subtle pt-3 text-2xs text-text-muted">
         {row.items.map((it) => (
           <div key={it.id} className="flex flex-wrap items-baseline gap-x-2">
             <strong className="text-text">{it.code}</strong>
@@ -262,59 +371,7 @@ export function ImportRequestFactoryCard({
         ))}
       </div>
 
-      {isIssued ? (
-        <FactoryProgressBar
-          row={{ id: row.id, factoryName: row.factoryName, importStep: row.importStep, importStepAt: row.importStepAt }}
-          editable={canAdvance}
-          advancing={advanceMutation.isPending}
-          onAdvance={(_r, targetStep) => advanceMutation.mutate(targetStep)}
-        />
-      ) : null}
-
-      {isIssued ? (
-        <div className="flex flex-wrap items-center gap-2 rounded-md border border-border-subtle bg-surface-subtle p-2 text-xs">
-          <strong>อีเมลสั่งซื้อ:</strong>
-          {row.emailSentAt ? (
-            <StatusBadge tone="green">ส่งแล้ว {formatThaiDate(row.emailSentAt)}{row.emailSentByName ? ` · ${row.emailSentByName}` : ''}</StatusBadge>
-          ) : (
-            <StatusBadge tone="blue">ยังไม่ได้ส่ง</StatusBadge>
-          )}
-          {canEmailWrite ? (
-            <Button type="button" size="sm" variant="text"
-              onClick={() => { setEmailDraft({ emailTo: row.emailTo ?? '', emailSubject: row.emailSubject ?? '', emailBody: row.emailBody ?? '' }); setEmailOpen(true); }}
-              data-testid={`ir-email-open-${row.id}`}>
-              ดู/แก้ไขอีเมล
-            </Button>
-          ) : null}
-        </div>
-      ) : null}
-
-      {/* Nit: the CEO-only footer (checked/approved/vessel ETA) is editable from DRAFT onward —
-          not gated on isIssued — and its current status stays visible READ-ONLY to every other
-          viewer who can reach this card, at any status, rather than only once ISSUED and only the
-          vessel ETA line. */}
-      {canFooterWrite ? (
-        <div className="flex flex-wrap items-center gap-2 rounded-md border border-border-subtle bg-surface-subtle p-2 text-xs">
-          <strong>ท้ายฟอร์ม (CEO):</strong>
-          <span className="text-text-muted">
-            {row.checkedByName ? `ตรวจสอบโดย ${row.checkedByName}${row.checkedDate ? ` (${formatThaiDate(row.checkedDate)})` : ''}` : 'ยังไม่ตรวจสอบ'}
-            {' · '}
-            {row.approvedByName ? `อนุมัติโดย ${row.approvedByName}${row.approvedDate ? ` (${formatThaiDate(row.approvedDate)})` : ''}` : 'ยังไม่อนุมัติ'}
-            {row.vesselEtaNote ? ` · กำหนดเรือเข้าโดยประมาณ: ${row.vesselEtaNote}` : ''}
-          </span>
-          <Button type="button" size="sm" variant="text" onClick={() => setFooterOpen(true)} data-testid={`ir-footer-open-${row.id}`}>
-            แก้ไข
-          </Button>
-        </div>
-      ) : (row.checkedByName || row.approvedByName || row.vesselEtaNote) ? (
-        <p className="text-2xs text-text-muted" data-testid={`ir-footer-readonly-${row.id}`}>
-          {row.checkedByName ? `ตรวจสอบโดย ${row.checkedByName}${row.checkedDate ? ` (${formatThaiDate(row.checkedDate)})` : ''}` : null}
-          {row.checkedByName && row.approvedByName ? ' · ' : ''}
-          {row.approvedByName ? `อนุมัติโดย ${row.approvedByName}${row.approvedDate ? ` (${formatThaiDate(row.approvedDate)})` : ''}` : null}
-          {(row.checkedByName || row.approvedByName) && row.vesselEtaNote ? ' · ' : ''}
-          {row.vesselEtaNote ? `กำหนดเรือเข้าโดยประมาณ: ${row.vesselEtaNote}` : null}
-        </p>
-      ) : null}
+      {documentDetails}
 
       {emailOpen ? (
         <Modal

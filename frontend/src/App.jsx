@@ -61,6 +61,7 @@ const CeoSettingsPage = lazy(() => import('./features/ceoSettings/CeoSettingsPag
 const PriceImportPage = lazy(() => import('./features/catalog/PriceImportPage.jsx').then(toDefault('PriceImportPage')));
 const CatalogSearchPage = lazy(() => import('./features/catalog/CatalogSearchPage.jsx').then(toDefault('CatalogSearchPage')));
 const PricingRequestQueuePage = lazy(() => import('./features/pricingRequests/PricingRequestQueuePage.jsx').then(toDefault('PricingRequestQueuePage')));
+const ImportDealPage = lazy(() => import('./features/importDeal/ImportDealPage.jsx').then(toDefault('ImportDealPage')));
 const ImportFulfilmentPage = lazy(() => import('./features/fulfilment/ImportFulfilmentPage.jsx').then(toDefault('ImportFulfilmentPage')));
 const PricingRequestDetailPage = lazy(() => import('./features/pricingRequests/PricingRequestDetailPage.jsx').then(toDefault('PricingRequestDetailPage')));
 // Quotation v2 — direct deal quotation (QUOTATION-V2-PLAN.md, owner ruling 2026-09-09). Sibling
@@ -538,6 +539,13 @@ export function App() {
                 <Route
                   path="/fulfilment"
                   element={<ImportFulfilmentPage user={user} showToast={showToast} />}
+                />
+                {/* Import's OWN per-deal page (GET /api/import/deals/{id}). Import is refused the
+                    whole-deal /tickets/:id, so this is where its deal links land. Guarded by
+                    canViewImportDeal (import/ceo) in PATH_GUARDS. */}
+                <Route
+                  path="/import/deals/:ticketId"
+                  element={<ImportDealPage user={user} showToast={showToast} />}
                 />
                 <Route
                   path="/commissions"

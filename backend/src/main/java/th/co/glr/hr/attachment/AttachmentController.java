@@ -138,7 +138,12 @@ public class AttachmentController {
      * {@link TicketAccessPolicy} rather than by a role list local to this controller.
      */
     private void requireTicketReadAccess(long ticketId, UserPrincipal actor) {
-        if (!TicketAccessPolicy.canViewDocuments(requireTicketSummary(ticketId), actor)) {
+        TicketSummaryDto summary = requireTicketSummary(ticketId);
+        // import is row-scoped (owner ruling 2026-09-30): the scope predicate is a DB query, so it
+        // is only run for the one role that needs it, and never for a participant (short-circuited
+        // inside the policy anyway).
+        boolean importInScope = "import".equals(actor.role()) && tickets.isInImportScope(ticketId);
+        if (!TicketAccessPolicy.canViewDocuments(summary, actor, importInScope)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }
