@@ -38,6 +38,7 @@ describe('mockApi.tickets.setDepositPolicy — Rule 4 (FR-A-05)', () => {
     });
     const { project } = await api.customers.createProject(customer.id, { name: 'โครงการทดสอบนโยบาย' });
     const { ticket: created } = await api.tickets.create({
+      entryChannel: 'DESIGNER_LED',
       title: 'ดีลทดสอบนโยบายมัดจำ',
       priority: 'NORMAL',
       customerName: customer.name,

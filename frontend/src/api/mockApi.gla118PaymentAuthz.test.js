@@ -70,6 +70,7 @@ describe('mockApi.tickets.setDepositPolicy — GLA-118 role gate (rule B)', () =
     });
     const { project } = await api.customers.createProject(customer.id, { name: 'โครงการทดสอบสิทธิ' });
     const { ticket: created } = await api.tickets.create({
+      entryChannel: 'DESIGNER_LED',
       title: 'ดีลทดสอบสิทธินโยบายมัดจำ',
       priority: 'NORMAL',
       customerName: customer.name,

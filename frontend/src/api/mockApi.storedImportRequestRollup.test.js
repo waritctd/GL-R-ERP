@@ -46,6 +46,7 @@ async function driveTwoFactoryTicketToOrderReceived() {
   });
   const { project } = await api.customers.createProject(customer.id, { name: `โครงการนำเข้าทดสอบ ${n}` });
   const { ticket: created } = await api.tickets.create({
+    entryChannel: 'DESIGNER_LED',
     title: `ดีลนำเข้าทดสอบ ${n}`,
     priority: 'NORMAL',
     customerName: customer.name,

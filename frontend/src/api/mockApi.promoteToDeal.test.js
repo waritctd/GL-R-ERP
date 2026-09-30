@@ -28,6 +28,7 @@ async function asRole(role) {
 async function quotationOnlyTicket() {
   await asRole('sales');
   const { ticket } = await api.tickets.create({
+    entryChannel: 'DESIGNER_LED',
     title: 'ดีลใบเสนอราคา', customerName: 'ลูกค้า', projectId: 1, contactId: null,
     priority: 'NORMAL', items: [], nextFollowUpAt: '2026-10-07', quotationOnly: true,
   });
@@ -62,6 +63,7 @@ describe('mock quotation-first ticket (GLA-136 flag, slice-1 semantics)', () => 
 
   it('a create WITHOUT the flag is an ordinary pipeline deal, listed as before', async () => {
     const { ticket } = await api.tickets.create({
+      entryChannel: 'DESIGNER_LED',
       title: 'ดีลปกติ', customerName: 'ลูกค้า', projectId: 1, items: [], nextFollowUpAt: '2026-10-07',
     });
     expect(ticket.summary.quotationOnly).toBe(false);
@@ -81,6 +83,7 @@ describe('mock quotation-first ticket (GLA-136 flag, slice-1 semantics)', () => 
 
   it('editItems and a pricing-request create 409 while a LIVE direct quotation exists — keyed on the quotation, not the flag', async () => {
     const { ticket: plain } = await api.tickets.create({
+      entryChannel: 'DESIGNER_LED',
       title: 'ดีลปกติ', customerName: 'ลูกค้า', projectId: 1, items: [], nextFollowUpAt: '2026-10-07',
     });
     const dealId = plain.summary.id;
@@ -147,6 +150,7 @@ describe('mock dealQuotations.promoteToDeal (GLA-136)', () => {
   // (CONFIRM_ORDER_DIRECT). This used to pin a 409 here.
   it('confirms the order on an ordinary pipeline deal too (quotation_only precondition dropped by slice 1)', async () => {
     const { ticket } = await api.tickets.create({
+      entryChannel: 'DESIGNER_LED',
       title: 'ดีลปกติ', customerName: 'ลูกค้า', projectId: 1, items: [], nextFollowUpAt: '2026-10-07',
     });
     const approved = await approvedQuotation(ticket.summary.id);

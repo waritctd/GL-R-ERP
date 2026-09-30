@@ -33,7 +33,7 @@ async function createDealWithCommentAsSales() {
   }
   const { ticket } = await api.tickets.create({
     title: 'ดีลนำเข้าทดสอบ', customerName: customer.name, customerId: customer.id,
-    projectId: projects[0].id, entryChannel: 'UNSPECIFIED', priority: 'NORMAL',
+    projectId: projects[0].id, entryChannel: 'DESIGNER_LED', priority: 'NORMAL',
     items: [{ brand: 'Panaria', model: 'Ivory Lappato', qty: 10, currency: 'THB', rawPrice: 500, factory: 'Panaria SpA' }],
   });
   const id = ticket.summary.id;

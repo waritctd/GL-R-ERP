@@ -30,6 +30,7 @@ async function freshTicket() {
     firstName: 'สมศรี', lastName: 'ทดสอบ', phone: '081-000-0003', email: 'contact-s3outcome@example.com',
   });
   const { ticket: created } = await api.tickets.create({
+    entryChannel: 'DESIGNER_LED',
     title: 'ดีล S3 Outcome Mock',
     priority: 'NORMAL',
     customerName: customer.name,
@@ -247,6 +248,7 @@ describe('mockApi dealQuotations.recordOutcome (GLA-123 slice S3)', () => {
       firstName: 'สมชาย', lastName: 'ทดสอบ', phone: '081-000-0004', email: 'contact-s3direct@example.com',
     });
     const { ticket } = await api.tickets.create({
+      entryChannel: 'DESIGNER_LED',
       title: 'ดีล S3 Direct Mock', priority: 'NORMAL', customerName: customer.name, customerId: customer.id,
       projectId: project.id, contactId: contact.id,
       items: [{ brand: 'SCG', model: 'Direct Tile', qty: 10, currency: 'THB' }],

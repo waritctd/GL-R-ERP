@@ -26,6 +26,7 @@ async function asRole(role) {
 async function freshDeal() {
   await asRole('sales');
   const { ticket } = await api.tickets.create({
+    entryChannel: 'DESIGNER_LED',
     title: 'ดีลทดสอบ slice 2', customerName: 'ลูกค้า slice 2', projectId: 1, contactId: null,
     priority: 'NORMAL', items: [], nextFollowUpAt: '2026-10-07',
   });
@@ -113,6 +114,7 @@ async function pricingRequestOriginDraft() {
   });
   const { project } = await api.customers.createProject(customer.id, { name: 'โครงการ slice 2 PR' });
   const { ticket: created } = await api.tickets.create({
+    entryChannel: 'DESIGNER_LED',
     title: 'ดีล slice 2 PR', priority: 'NORMAL', customerName: customer.name, customerId: customer.id,
     projectId: project.id, contactId: null,
     items: [{ brand: 'SCG', model: 'Tile slice 2', qty: 10, currency: 'THB' }],
@@ -298,6 +300,7 @@ describe('mock dealQuotations.create — one pricing route per deal (a live pric
     });
     const { project } = await api.customers.createProject(customer.id, { name: 'โครงการ one-route' });
     const { ticket: created } = await api.tickets.create({
+      entryChannel: 'DESIGNER_LED',
       title: 'ดีล one-route', priority: 'NORMAL', customerName: customer.name, customerId: customer.id,
       projectId: project.id, contactId: null,
       items: [{ brand: 'SCG', model: 'Tile one-route', qty: 10, currency: 'THB' }],

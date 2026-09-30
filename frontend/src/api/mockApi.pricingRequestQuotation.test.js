@@ -30,6 +30,7 @@ async function approvedNetPricingRequest() {
     firstName: 'สมชาย', lastName: 'ทดสอบ', phone: '081-000-0000', email: 'contact-pcrq@example.com',
   });
   const { ticket: created } = await api.tickets.create({
+    entryChannel: 'DESIGNER_LED',
     title: 'ดีล PCR Quotation Mock',
     priority: 'NORMAL',
     customerName: customer.name,
@@ -123,6 +124,7 @@ async function twoItemApprovedNetPricingRequest() {
     firstName: 'สมหญิง', lastName: 'ทดสอบ', phone: '081-000-0001', email: 'contact-pcrq2@example.com',
   });
   const { ticket: created } = await api.tickets.create({
+    entryChannel: 'DESIGNER_LED',
     title: 'ดีล PCR Quotation Mock 2',
     priority: 'NORMAL',
     customerName: customer.name,

@@ -7855,6 +7855,21 @@ export const api = {
       const user = requireDealEntry();
       // Mirrors TicketService.create (V50): every new deal belongs to a โครงการ.
       if (payload.projectId == null) fail('ต้องเลือกโครงการก่อนสร้างดีล', 400);
+      // Mirrors CreateTicketRequest's @NotBlank entryChannel (TicketController @Valid -> 400) plus
+      // TicketService.create's value guard: a NEW deal must state a real channel (owner ruling
+      // 2026-09-30), because the channel decides its route (DealRoute). UNSPECIFIED is refused as an
+      // INPUT though it stays valid as STORED. The real service additionally tolerates a null channel
+      // when called internally (Java fixtures); no HTTP caller can reach that path, so the mock has
+      // no reason to.
+      if (typeof payload.entryChannel !== 'string' || payload.entryChannel.trim() === '') {
+        fail('ต้องระบุช่องทางดีลก่อนสร้างดีล', 400);
+      }
+      if (payload.entryChannel === 'UNSPECIFIED') {
+        fail('ต้องระบุช่องทางดีลที่แท้จริง (ออกแบบนำ / เจ้าของโครงการ / ผู้ซื้อตรง) ก่อนสร้างดีล', 400);
+      }
+      if (!['DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT'].includes(payload.entryChannel)) {
+        fail(`ไม่รองรับช่องทางรับงาน '${payload.entryChannel}'`, 400);
+      }
       // Mirrors TicketService.create's V183 item-validation loop: a stock-sourced line must
       // carry a real, positive selling price, checked before any write.
       for (const item of payload.items || []) {
