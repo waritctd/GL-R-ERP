@@ -132,7 +132,11 @@ public final class PricingRequestStatus {
         // AWAITING_FACTORY_RESPONSE) and so is MORE_INFO_REQUIRED — the ขอข้อมูลเพิ่มเติม
         // round-trip was removed from the product entirely, since in practice Import and Sales
         // just message each other directly.
-        Map.entry(IMPORT_REVIEWING,    Set.of(AWAITING_FACTORY_RESPONSE, CANCELLED, SUPERSEDED)),
+        // Stock lines (V194, IA 1.2): IMPORT_REVIEWING -> READY_FOR_CEO_REVIEW is the edge for a
+        // request with NO import line (only IN_TRANSIT / IN_THAILAND lines): there is no factory
+        // quote to move it through AWAITING_FACTORY_RESPONSE, so saving the last ETA advances it
+        // directly. Taken only by PricingRequestService's readiness predicate.
+        Map.entry(IMPORT_REVIEWING,    Set.of(AWAITING_FACTORY_RESPONSE, READY_FOR_CEO_REVIEW, CANCELLED, SUPERSEDED)),
         // V141 ("CEO owns costing"): FactoryQuoteService.markReadyForCosting auto-advances a
         // request straight to READY_FOR_CEO_REVIEW the moment every item's factory quote is
         // ready (LandedCostCalculator.isFullyResolvable) — there is no more Import-driven costing

@@ -742,7 +742,7 @@ public class DealQuotationRepository {
              pieces_before_wastage, pieces_after_wastage, boxes, discount_pct, origin_country,
              lead_time_min_days, lead_time_max_days, item_notes,
              line_type, special_price_sqm, adjustment_pct, adjustment_deadline, sqm_per_box,
-             round_to_full_box, pricing_request_item_id, pricing_decision_item_id)
+             round_to_full_box, pricing_request_item_id, pricing_decision_item_id, stock_source)
         VALUES
             (:quotationId, :seq, :brand, :model, :color, :texture, :size, :rawUnit, :qty, :unitPrice, :amount,
              :salesDiscount, :finalUnitPrice, :lineSubtotal, :vat, :lineTotal, :description,
@@ -751,7 +751,13 @@ public class DealQuotationRepository {
              :piecesBeforeWastage, :piecesAfterWastage, :boxes, :discountPct, :originCountry,
              :leadTimeMinDays, :leadTimeMaxDays, :itemNotes,
              :lineType, :specialPriceSqm, :adjustmentPct, :adjustmentDeadline, :sqmPerBox,
-             :roundToFullBox, :pricingRequestItemId, :pricingDecisionItemId)
+             :roundToFullBox, :pricingRequestItemId, :pricingDecisionItemId,
+             -- Stock lines (V194, R1): a PRICING_REQUEST-origin line carries the SOURCE of the
+             -- pricing-request item it was created from (NULL = สั่งนำเข้า, and NULL for every
+             -- DEAL_DIRECT row, whose :pricingRequestItemId is null). Read in-statement so every
+             -- insert path (create, restore-a-removed-line) stamps it without widening NewItem.
+             (SELECT pri.stock_source FROM sales.pricing_request_item pri
+               WHERE pri.pricing_request_item_id = :pricingRequestItemId))
         """;
 
     /** One row about to be inserted at an explicit {@code seq} — {@link #insertItemsAtSeq}, the
