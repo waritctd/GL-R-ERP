@@ -103,3 +103,73 @@ describe('mock importDeals.get -- import-only projection of one deal', () => {
     await expect(api.importDeals.get(99999999)).rejects.toMatchObject({ status: 404 });
   });
 });
+
+// The backend now refuses import the whole-deal read (TicketService.get) and points it at
+// GET /api/import/deals/{id}. The mock must be no MORE permissive than that, or a mock-driven run
+// (and the frontend's own guard) never exercises the refusal. Authz here is an approximation only.
+describe('mock tickets.get -- import is refused the whole-deal read', () => {
+  it('403s import on tickets.get even for a deal inside its import scope', async () => {
+    await api.auth.login({ role: 'ceo' });
+    // Any seeded deal is fine: the refusal is role-based and must come BEFORE the row lookup.
+    const { tickets } = await api.tickets.list({});
+    expect(tickets.length).toBeGreaterThan(0);
+    await api.auth.login({ role: 'import' });
+    await expect(api.tickets.get(tickets[0].id)).rejects.toMatchObject({ status: 403 });
+    // No existence oracle: a missing id 403s too, not 404.
+    await expect(api.tickets.get(99999999)).rejects.toMatchObject({ status: 403 });
+  });
+
+  it('still serves the whole deal to the CEO and sales (unchanged)', async () => {
+    await api.auth.login({ role: 'ceo' });
+    const { tickets } = await api.tickets.list({});
+    await expect(api.tickets.get(tickets[0].id)).resolves.toHaveProperty('ticket');
+    await expect(api.tickets.get(99999999)).rejects.toMatchObject({ status: 404 });
+  });
+});
+
+// TicketAccessPolicy.canViewDocuments: import READS an in-scope deal's documents (all four
+// AttachTypes) and is refused an out-of-scope one; it never writes. The import deal page lists
+// attachments through this call.
+describe('mock attachments -- import reads in-scope deal documents only', () => {
+  it('lets import list attachments on a deal in its import scope, and refuses one outside it', async () => {
+    const outOfScopeId = await createDealWithCommentAsSales(); // pre-PROCUREMENT: outside import scope
+    const login = await api.auth.login({ role: 'import' });
+    const importUserId = (login.user ?? login).id;
+    await expect(api.attachments.list(outOfScopeId)).rejects.toMatchObject({ status: 403 });
+
+    // A deal import is NOT a participant of: the read must come from the import-scope rule, not
+    // from having picked the deal up (which the participant check already grants).
+    const { tickets } = await api.tickets.list({});
+    const nonParticipant = tickets.find((t) => t.assignedToId !== importUserId && t.createdById !== importUserId);
+    expect(nonParticipant, 'seed must expose an in-scope deal import did not pick up').toBeDefined();
+    await expect(api.attachments.list(nonParticipant.id)).resolves.toHaveProperty('attachments');
+  });
+
+  // Reading is the ONLY thing the import-scope rule grants: a deal import did not pick up stays
+  // read-only (TicketAccessPolicy.canManageDocuments is participant OR sales_manager/ceo).
+  it('does not let import upload to an in-scope deal it did not pick up', async () => {
+    const login = await api.auth.login({ role: 'import' });
+    const importUserId = (login.user ?? login).id;
+    const { tickets } = await api.tickets.list({});
+    const nonParticipant = tickets.find((t) => t.assignedToId !== importUserId && t.createdById !== importUserId);
+    expect(nonParticipant, 'seed must expose an in-scope deal import did not pick up').toBeDefined();
+    await expect(api.attachments.upload(nonParticipant.id, new File(['x'], 'x.pdf'), 'OTHER'))
+      .rejects.toMatchObject({ status: 403 });
+  });
+});
+
+// TicketService.comment (Leak B): import's comment path is row-scoped to its import scope.
+describe('mock tickets.comment -- import is row-scoped', () => {
+  it('refuses import a comment on a deal outside its import scope, and on a missing deal', async () => {
+    const outOfScopeId = await createDealWithCommentAsSales();
+    await api.auth.login({ role: 'import' });
+    await expect(api.tickets.comment(outOfScopeId, { message: 'x' })).rejects.toMatchObject({ status: 403 });
+    await expect(api.tickets.comment(99999999, { message: 'x' })).rejects.toMatchObject({ status: 403 });
+  });
+
+  it('lets import comment on an in-scope deal', async () => {
+    await api.auth.login({ role: 'import' });
+    const { tickets } = await api.tickets.list({});
+    await expect(api.tickets.comment(tickets[0].id, { message: 'รับทราบ' })).resolves.toHaveProperty('ticket');
+  });
+});

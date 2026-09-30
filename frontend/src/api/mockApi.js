@@ -3318,12 +3318,17 @@ function requirePipelineDeal(ticket) {
 const ATTACHMENT_VIEWER_ROLES = ['ceo', 'account', 'sales_manager'];
 const ATTACHMENT_WRITER_ROLES = ['sales_manager', 'ceo'];
 
+// Amended (feat/import-own-page): `import` now READS an IN-SCOPE deal's documents — all four
+// AttachTypes — via the SAME predicate as its worklist (TicketAccessPolicy.canViewDocuments'
+// importInScope leg). Read-only: it does NOT extend to the write gate, so an import user who did
+// not pick the deal up still cannot upload or delete.
 function requireAttachmentTicketAccess(ticketId, { write = false } = {}) {
   const user = requireSession();
   const ticket = findTicketRaw(Number(ticketId));
   const isParticipant = ticket.createdById === user.id
     || (ticket.assignedToId != null && ticket.assignedToId === user.id);
-  const allowed = isParticipant || (write
+  const importReadsInScope = !write && user.role === 'import' && importListScopeIncludes(ticket);
+  const allowed = isParticipant || importReadsInScope || (write
     ? ATTACHMENT_WRITER_ROLES.includes(user.role)
     : ATTACHMENT_VIEWER_ROLES.includes(user.role));
   if (!allowed) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
@@ -7175,7 +7180,12 @@ export const api = {
 
     async get(id) {
       const user = requireSession();
-      if (!['sales', 'import', 'ceo', 'account', 'sales_manager'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      // Mirrors TicketService.get: the whole-deal read is REFUSED to import (it carries the
+      // customer price and the quotation chain) — import is served GET /api/import/deals/{id}
+      // (importDeals.get below) instead. Checked before the row lookup so a missing id and a real
+      // one answer alike (no existence oracle). Authz here is an approximation, never the evidence.
+      if (user.role === 'import') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!['sales', 'ceo', 'account', 'sales_manager'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const ticket = structuredClone(db.tickets.find((t) => t.id === Number(id)));
       if (!ticket) fail('ไม่พบดีลนี้', 404);
       if (user.role === 'sales' && ticket.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
@@ -7696,6 +7706,14 @@ export const api = {
       // Mirrors TicketService.comment: same read gate as get() — commenting
       // returns the full ticket, so it must not be a side door around the read
       // scoping (nor, per Phase B, around the import quotation projection).
+      // Mirrors TicketService.comment (Leak B, owner ruling 2026-09-30): import's comment path is
+      // row-scoped to its import scope — the SAME predicate as its worklist and importDeals.get —
+      // and a missing deal answers 403 like an out-of-scope one (no existence oracle).
+      const commenter = requireSession();
+      if (commenter.role === 'import') {
+        const scoped = db.tickets.find((t) => t.id === Number(id));
+        if (!(scoped && importListScopeIncludes(scoped))) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      }
       const { user, ticket } = requireTicketViewer(id);
       pushEvent(ticket, user, 'COMMENTED', null, null, payload.message);
       return delay({ ticket: projectTicketDetailForRole(buildTicketDetail(ticket), user.role) });

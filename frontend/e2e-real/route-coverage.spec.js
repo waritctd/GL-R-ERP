@@ -63,6 +63,7 @@ const ROUTES = [
   '/quotations/new',
   '/quotations/1',
   '/fulfilment', // งานนำเข้า — Import's fulfilment workspace (import/ceo; every other role refuses)
+  '/import/deals/1', // Import's own per-deal page (GET /api/import/deals/{id}; import/ceo, import row-scoped)
   '/commissions',
   '/finance',
   '/price-import',

@@ -86,7 +86,8 @@ export function nextFulfilmentActionCode(ticket) {
  * survivor: its own legacy section still lists a deal that reached IR_ISSUED WITHOUT going
  * through the stored aggregate (no per-factory rows), with a link out rather than an in-place
  * action — see that section's own comment in ImportFulfilmentPage.jsx for why. The other three
- * codes now route to `/tickets/:id`, where DealFulfilmentPanel still performs them.
+ * codes now route to `/import/deals/:id` (import's own per-deal page — import can no longer open
+ * `/tickets/:id`, where DealFulfilmentPanel performs them).
  *
  * Exported so the workspace's OWN candidate/legacy classification (ImportFulfilmentPage.jsx)
  * can be reasoned about against the same code this module routes CTAs with, even though the
@@ -116,9 +117,12 @@ export const FULFILMENT_WORKSPACE_CODES = ['markIrSent'];
  *   pickupPricingRequest                        -> '/pricing-requests'  (คิวขอราคา — the pickup button)
  *   markIrSent                                  -> '/fulfilment'        (งานนำเข้า — its legacy section)
  *   issueImportRequest/markShipping/
- *     markGoodsReceived                         -> '/tickets/:id'       (deal page — DealFulfilmentPanel
- *                                                                         performs these three; PR-B
- *                                                                         REVIEW ROUND 2, X1)
+ *     markGoodsReceived                         -> '/import/deals/:id'  (import's own per-deal page, which
+ *                                                                         PERFORMS the three legacy
+ *                                                                         deal-level buttons for a deal with
+ *                                                                         no per-factory rows —
+ *                                                                         DealFulfilmentPanel, where they
+ *                                                                         also live, is closed to import)
  *
  * `recordDelivery` is deliberately ABSENT from that table, even though
  * nextFulfilmentActionCode (above) still returns it for a delivery-ready
@@ -143,7 +147,9 @@ export function nextImportAction(ticket, pricingRequests = []) {
   // Import's. FULFILMENT_WORKSPACE_CODES already excludes it from the /fulfilment workspace for the
   // same owner ruling — this is the second, worklist-CTA half of that same exclusion.
   if (!code || code === 'recordDelivery') return null;
-  const to = FULFILMENT_WORKSPACE_CODES.includes(code) ? '/fulfilment' : `/tickets/${ticket.id}`;
+  // Import cannot open the whole-deal page (/tickets/:id — GET /api/tickets/{id} 403s it), so the
+  // non-workspace codes land on import's OWN per-deal page instead.
+  const to = FULFILMENT_WORKSPACE_CODES.includes(code) ? '/fulfilment' : `/import/deals/${ticket.id}`;
   // PR-B REVIEW ROUND 1, S8: 'markIrSent' (fulfillmentStatus IR_ISSUED) is the code every
   // IR-TRACKED deal sits at for its whole per-factory tracking period (V184/PR-B) — this label used
   // to say "ส่งคำขอนำเข้าแล้ว" ("mark IR sent"), a single legacy ACTION that /fulfilment no longer

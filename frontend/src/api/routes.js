@@ -629,6 +629,15 @@ export const ROLE_PERMISSIONS = {
   // canCreateTickets/canPickupTickets/canProposePrices/canApproveReject/
   // canGenerateQuotation/canConfirmPayments. Mirrors TicketService.VIEWER_ROLES.
   canViewTickets: ['sales', 'import', 'ceo', 'account', 'sales_manager'],
+  // Which roles may OPEN the whole-deal page (`/tickets/:id`, GET /api/tickets/{id}). `import` is
+  // deliberately absent: the backend refuses it the whole-deal read (it carries the customer price
+  // and the quotation chain) and serves it GET /api/import/deals/{id} instead — rendered by
+  // ImportDealPage at `/import/deals/:id`. canViewTickets above is left as it was because it still
+  // mirrors TicketService.VIEWER_ROLES for the list and the other import-readable sub-paths.
+  canViewWholeDeal: ['sales', 'ceo', 'account', 'sales_manager'],
+  // Import's OWN per-deal page (ImportDealController: import + ceo). Presentation only — the
+  // endpoint enforces the real gate and the row scope.
+  canViewImportDeal: ['import', 'ceo'],
   // Role-scoped views (docs/role-scoped-views.md): the deal PIPELINE BROWSER
   // (list `/tickets`, the รายการดีล nav item, the SalesTabs deal-list tab) is
   // narrower than ticket-detail read (canViewTickets above,

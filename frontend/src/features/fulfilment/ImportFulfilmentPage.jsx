@@ -176,6 +176,8 @@ export function ImportFulfilmentPage({ user, showToast }) {
 
   const invalidateAfterAdvance = useCallback((ticketId) => {
     queryClient.invalidateQueries({ queryKey: queryKeys.storedImportRequests(ticketId) });
+    // Import's per-deal page (ImportDealPage) shows these same rows from its own query key.
+    queryClient.invalidateQueries({ queryKey: queryKeys.importDeal(ticketId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(ticketId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketActions(ticketId) });
     queryClient.invalidateQueries({ queryKey: ['tickets', 'list'] });
@@ -462,7 +464,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
           <ul className="m-0 list-disc pl-5 text-xs text-danger-dark">
             {erroredDeals.map((d) => (
               <li key={d.ticketId}>
-                <Link to={`/tickets/${d.ticketId}`} className="underline">
+                <Link to={`/import/deals/${d.ticketId}`} className="underline">
                   {d.customerName || d.title || d.ticketCode}
                 </Link>
                 {' — '}{d.message}
@@ -506,7 +508,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
                     {deal.overdue ? <StatusBadge tone="danger">เกินกำหนด</StatusBadge> : null}
                   </div>
                   <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-2xs text-text-muted">
-                    <Link to={`/tickets/${deal.ticketId}`} className="text-info underline">
+                    <Link to={`/import/deals/${deal.ticketId}`} className="text-info underline">
                       <code>{deal.ticketCode}</code>
                     </Link>
                     {deal.projectName ? <span className="truncate">{deal.projectName}</span> : null}
@@ -589,7 +591,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
                   >
                     <span className="flex flex-wrap items-center gap-x-2 text-xs">
                       <strong className="text-text">{deal.customerName || deal.title || deal.ticketCode}</strong>
-                      <Link to={`/tickets/${deal.ticketId}`} className="text-info underline">
+                      <Link to={`/import/deals/${deal.ticketId}`} className="text-info underline">
                         <code>{deal.ticketCode}</code>
                       </Link>
                     </span>
@@ -624,7 +626,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
                         <span className="text-2xs text-text-muted">{fulfilmentStatusLabel(deal.fulfillmentStatus).label}</span>
                       ) : null}
                     </span>
-                    <Link to={`/tickets/${deal.ticketId}`} className="text-info underline">
+                    <Link to={`/import/deals/${deal.ticketId}`} className="text-info underline">
                       ไปที่หน้าดีล <code>{deal.ticketCode}</code>
                     </Link>
                   </div>

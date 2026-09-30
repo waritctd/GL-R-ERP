@@ -593,13 +593,6 @@ const UNREACHABLE_FROM_UI = new Set([
   // (ImportRequestController#getStored) for completeness/future callers, same reasoning as the
   // other single-row GETs already in this list (deposit-notices, factory-quotes, ...).
   'GET /api/import-requests/{}',
-  // GET /api/import/deals/{} (ImportDealController) is WIRED in hrApi (importDeals.get) and mockApi
-  // but no screen calls it YET: the per-deal import page that consumes it is the next slice on
-  // feat/import-own-page (backend -> API layer -> UI, in that order). TEMPORARY by construction --
-  // the stale-entry test below fails the moment a component calls api.importDeals.get, which is
-  // the prompt to delete this line. Not a "dead endpoint": import is already refused the
-  // whole-deal GET /api/tickets/{} in favour of it.
-  'GET /api/import/deals/{}',
   // 'GET /api/leave/policy-document' left this list on 2026-08-14: LeavePolicyDocumentPage.jsx
   // calls policyDocumentAvailable (the HEAD probe the GET mapping answers) and
   // downloadPolicyDocument, so a screen reaches it again for the first time since the reader bar

@@ -58,6 +58,10 @@ export function ImportRequestFactoryCard({
 
   function invalidate() {
     queryClient.invalidateQueries({ queryKey: queryKeys.storedImportRequests(ticketId) });
+    // This card is rendered by BOTH the deal tab and import's own per-deal page (ImportDealPage,
+    // which reads GET /api/import/deals/{id} — a different query key). A mutation from either must
+    // refresh the other, or a stale step shows there until a hard reload.
+    queryClient.invalidateQueries({ queryKey: queryKeys.importDeal(ticketId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(ticketId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketActions(ticketId) });
     queryClient.invalidateQueries({ queryKey: ['tickets', 'list'] });

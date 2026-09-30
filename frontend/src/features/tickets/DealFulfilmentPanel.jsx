@@ -280,6 +280,7 @@ export function DealFulfilmentPanel({
       setNewFactoryNames(null);
       setMissingFactoryRetryKey(null);
       queryClient.invalidateQueries({ queryKey: queryKeys.storedImportRequests(ticketId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.importDeal(ticketId) });
       invalidateAfterFulfilmentChange();
     },
     onError: (err, variables) => {
@@ -388,6 +389,8 @@ export function DealFulfilmentPanel({
   const deliveryRecords = deliveriesQuery.data ?? [];
 
   function invalidateAfterFulfilmentChange() {
+    // Import's own per-deal page reads fulfillmentStatus/items/rows from GET /api/import/deals/{id}.
+    queryClient.invalidateQueries({ queryKey: queryKeys.importDeal(ticketId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(ticketId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketActions(ticketId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketDeliveries(ticketId) });
