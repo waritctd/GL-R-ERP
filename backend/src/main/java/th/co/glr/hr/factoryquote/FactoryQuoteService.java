@@ -1,6 +1,8 @@
 package th.co.glr.hr.factoryquote;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -22,10 +24,10 @@ import th.co.glr.hr.factory.FactoryConfigRepository;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteAttachmentDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteItemDto;
+import th.co.glr.hr.factoryquote.FactoryQuoteRequests.MarkFactoryContactedRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.MarkNotAvailableRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteItemRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteRequest;
-import th.co.glr.hr.factoryquote.FactoryQuoteRequests.SendFactoryQuoteRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.StartNegotiationRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.UpdateFactoryQuoteDraftRequest;
 import th.co.glr.hr.notification.NotificationRepository;
@@ -44,6 +46,11 @@ import th.co.glr.hr.ticket.TicketSummaryDto;
 public class FactoryQuoteService {
     private static final Set<String> RAW_QUOTE_ROLES = Set.of("import", "ceo");
     private static final Set<String> IMPORT_ROLES = Set.of("import");
+    // CR-1 (GLA-167) B-R1: the CEO may also run the contact step -- generate/edit the email draft and
+    // mark the factory contacted. Everything else on a quote (receive, attachments, ...) stays import-only.
+    private static final Set<String> CONTACT_ROLES = Set.of("import", "ceo");
+    private static final ZoneId BANGKOK = ZoneId.of("Asia/Bangkok");
+    private static final int CONTACTED_NOTE_MAX = 1000;
     private static final Set<String> DRAFT_STATUSES = Set.of(
         PricingRequestStatus.IMPORT_REVIEWING,
         PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
@@ -114,7 +121,7 @@ public class FactoryQuoteService {
      */
     @Transactional
     public List<FactoryQuoteDto> generateDrafts(long pricingRequestId, UserPrincipal actor) {
-        requireRole(actor, IMPORT_ROLES);
+        requireRole(actor, CONTACT_ROLES);
         PricingRequestSummaryDto summary = requirePricingRequest(pricingRequestId);
         if (!DRAFT_STATUSES.contains(summary.status())) {
             throw new ApiException(HttpStatus.CONFLICT,
@@ -150,7 +157,8 @@ public class FactoryQuoteService {
                 .filter(java.util.Objects::nonNull)
                 .findFirst()
                 .orElse(null);
-            long quoteId = quotes.createDraft(pricingRequestId, factoryId, factoryName, emailTo, subject, body, actor.id());
+            long quoteId = quotes.createDraft(pricingRequestId, factoryId, factoryName, emailTo, subject, body,
+                actor.id(), seededCurrency(entry.getValue()));
             quotes.insertDraftItems(quoteId, entry.getValue().stream().map(PricingRequestItemDto::id).toList());
             addEvent(summary, actor, PricingRequestEventKind.FACTORY_EMAIL_READY, summary.status(), summary.status(),
                 "Factory email draft ready for " + factoryName);
@@ -211,7 +219,7 @@ public class FactoryQuoteService {
 
     @Transactional
     public FactoryQuoteDto updateDraft(long quoteId, UpdateFactoryQuoteDraftRequest request, UserPrincipal actor) {
-        requireRole(actor, IMPORT_ROLES);
+        requireRole(actor, CONTACT_ROLES);
         FactoryQuoteDto quote = requireQuote(quoteId);
         PricingRequestSummaryDto summary = requirePricingRequest(quote.pricingRequestId());
         requireMutablePricingRequest(summary, DRAFT_STATUSES);
@@ -223,44 +231,46 @@ public class FactoryQuoteService {
     }
 
     /**
-     * Manual-only RFQ send (owner decision — the automatic dispatch/outbox path is deleted). This
-     * records that a HUMAN has already sent the RFQ email from their own mail client: DRAFT →
-     * REQUESTED, persisting emailTo/subject/body/{@code email_sent_at}/{@code sent_by}, advancing
-     * the pricing request's status, and raising the same audit event and CEO notification the old
-     * dispatch-finalize step used to — all synchronously, in one transaction. Nothing here calls a
-     * mail provider, and there is no dispatch row: {@code sales.factory_quote_email_dispatch} is
-     * left in place (V163) but no longer written to.
+     * CR-1 (GLA-167): "ติดต่อโรงงานแล้ว" -- replaces the old manual {@code send}. A HUMAN (import or
+     * the CEO) has already contacted the factory outside the system; this records the date, an
+     * optional note and who did it, moves the quote DRAFT -> REQUESTED (which is what unlocks price
+     * entry, see {@link #receive}) and advances the pricing request IMPORT_REVIEWING ->
+     * AWAITING_FACTORY_RESPONSE, all in one transaction. Nothing is sent from here.
      *
-     * <p>The recipient is OPTIONAL — a blank {@code emailTo} no longer 400s, because a human may
-     * mark an RFQ sent even when no factory contact email is on file.
-     *
-     * <p><b>Idempotent by current STATE, not a client-generated key.</b> Calling this again once
-     * the quote is already {@code REQUESTED} is a no-op that returns the quote unchanged. The old
-     * {@code clientRequestId} idempotency key existed only to protect the enqueue call from being
-     * replayed before the out-of-band worker had run; there is no worker to race any more.
+     * <p><b>No undo, no edit (owner ruling R7):</b> only a current DRAFT quote can be marked, and the
+     * UPDATE is guarded on {@code status = 'DRAFT'}, so a second call is a 409 and can never rewrite
+     * the recorded date, note or actor. {@code contactedOn} is required and may not be later than
+     * today in Asia/Bangkok (a clock-date, not an instant, so the zone decides "today").
      */
     @Transactional
-    public FactoryQuoteDto send(long quoteId, SendFactoryQuoteRequest request, UserPrincipal actor) {
-        requireRole(actor, IMPORT_ROLES);
+    public FactoryQuoteDto markContacted(long quoteId, MarkFactoryContactedRequest request, UserPrincipal actor) {
+        requireRole(actor, CONTACT_ROLES);
         FactoryQuoteDto quote = requireQuote(quoteId);
+        LocalDate contactedOn = request == null ? null : request.contactedOn();
+        if (contactedOn == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาระบุวันที่ติดต่อโรงงาน");
+        }
+        if (contactedOn.isAfter(LocalDate.now(BANGKOK))) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "วันที่ติดต่อโรงงานต้องไม่เป็นวันในอนาคต");
+        }
+        String note = request.note() == null || request.note().isBlank() ? null : request.note().trim();
+        if (note != null && note.length() > CONTACTED_NOTE_MAX) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "หมายเหตุการติดต่อโรงงานต้องไม่เกิน " + CONTACTED_NOTE_MAX + " ตัวอักษร");
+        }
+        if (!quote.current() || !FactoryQuoteStatus.DRAFT.equals(quote.status())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ใบเสนอราคาโรงงาน " + quote.quoteCode() + " ติดต่อโรงงานแล้วหรือไม่อยู่ในสถานะร่าง ไม่สามารถบันทึกซ้ำได้");
+        }
         PricingRequestSummaryDto summary = requirePricingRequest(quote.pricingRequestId());
         requireMutablePricingRequest(summary, DRAFT_STATUSES);
         requireActiveDeal(summary.ticketId());
-        if (FactoryQuoteStatus.REQUESTED.equals(quote.status())) {
-            return quote;
-        }
-        String emailTo = firstText(request.emailTo(), quote.emailTo());
-        String subject = firstText(request.emailSubject(), quote.emailSubject());
-        String body = firstText(request.emailBody(), quote.emailBody());
-        int rows = quotes.markRequested(quoteId, emailTo, subject, body, actor.id());
-        if (rows == 0) {
+        if (quotes.markContacted(quoteId, contactedOn, note, actor.id()) == 0) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ใบเสนอราคาโรงงาน " + quote.id() + " ไม่สามารถส่งได้จากสถานะปัจจุบัน");
+                "ใบเสนอราคาโรงงาน " + quote.id() + " ถูกบันทึกว่าติดต่อแล้วโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่");
         }
-
-        // V140 merged COSTING_IN_PROGRESS into AWAITING_FACTORY_RESPONSE, so the only status
-        // still needing promotion here is IMPORT_REVIEWING — mirrors the deleted dispatch
-        // finalize step's own transition.
+        // V140 merged COSTING_IN_PROGRESS into AWAITING_FACTORY_RESPONSE, so IMPORT_REVIEWING is the
+        // only status still needing promotion here.
         if (PricingRequestStatus.IMPORT_REVIEWING.equals(summary.status())) {
             int transitioned = pricingRequests.transition(summary.id(), summary.status(),
                 PricingRequestStatus.AWAITING_FACTORY_RESPONSE, null, null);
@@ -269,11 +279,24 @@ public class FactoryQuoteService {
             }
         }
         PricingRequestSummaryDto currentSummary = requirePricingRequest(summary.id());
-        addEvent(currentSummary, actor, PricingRequestEventKind.FACTORY_EMAIL_SENT, summary.status(),
-            currentSummary.status(), "Factory request sent to " + quote.factoryName());
-        notifyCeo(currentSummary, PricingRequestEventKind.FACTORY_EMAIL_SENT,
-            "คำขอราคา " + currentSummary.requestCode() + " ส่งคำขอโรงงาน " + quote.factoryName());
+        addEvent(currentSummary, actor, PricingRequestEventKind.FACTORY_CONTACTED, summary.status(),
+            currentSummary.status(), "Factory contacted: " + quote.factoryName() + " on " + contactedOn);
+        notifyCeo(currentSummary, PricingRequestEventKind.FACTORY_CONTACTED,
+            "คำขอราคา " + currentSummary.requestCode() + " ติดต่อโรงงาน " + quote.factoryName() + "แล้ว");
         return requireQuote(quoteId);
+    }
+
+    /**
+     * CR-1 (B2): a draft's default currency is the one Sales fixed on its lines. Seeded only when the
+     * lines name exactly ONE currency between them; if none is set (legacy) or they disagree the
+     * caller keeps the old THB default, since there is no single right answer to seed.
+     */
+    private static String seededCurrency(List<PricingRequestItemDto> lines) {
+        Set<String> currencies = lines.stream()
+            .map(PricingRequestItemDto::requestedCurrency)
+            .filter(java.util.Objects::nonNull)
+            .collect(java.util.stream.Collectors.toSet());
+        return currencies.size() == 1 ? currencies.iterator().next() : null;
     }
 
     @Transactional
@@ -402,6 +425,10 @@ public class FactoryQuoteService {
         }
         if (!current.current()) {
             throw new ApiException(HttpStatus.CONFLICT, "รับคำตอบได้เฉพาะ revision ล่าสุดของใบเสนอราคาโรงงานเท่านั้น");
+        }
+        // CR-1 (B-R2): price entry is locked until the factory has been marked contacted.
+        if (FactoryQuoteStatus.DRAFT.equals(current.status())) {
+            throw new ApiException(HttpStatus.CONFLICT, "ต้องกด ติดต่อโรงงานแล้ว ก่อนกรอกราคา");
         }
         PricingRequestSummaryDto summary = requirePricingRequest(current.pricingRequestId());
         requireMutablePricingRequest(summary, RESPONSE_STATUSES);
@@ -682,6 +709,17 @@ public class FactoryQuoteService {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "รายการตอบกลับนี้เป็นของโรงงานอื่น");
             }
             String unitBasis = UnitBasis.canonicalize(responseItem.unitBasis(), "Factory quote unit");
+            // CR-1 (R1): currency and price unit are fixed by Sales on the line and locked for import.
+            // NULL on the line = legacy request, anything accepted. Checked here, before any write.
+            if (requestItem.requestedCurrency() != null
+                && !requestItem.requestedCurrency().equalsIgnoreCase(responseItem.currency() == null ? "" : responseItem.currency().trim())) {
+                throw new ApiException(HttpStatus.CONFLICT, "สกุลเงินต้องเป็น " + requestItem.requestedCurrency()
+                    + " ตามที่ฝ่ายขายระบุ (รายการ " + requestItem.displayName() + ")");
+            }
+            if (requestItem.requestedPriceUnitBasis() != null && !requestItem.requestedPriceUnitBasis().equals(unitBasis)) {
+                throw new ApiException(HttpStatus.CONFLICT, "หน่วยราคาต้องเป็น " + requestItem.requestedPriceUnitBasis()
+                    + " ตามที่ฝ่ายขายระบุ (รายการ " + requestItem.displayName() + ")");
+            }
             // quotedUnit is the DISPLAY unit (ตร.ม., PCS, ...) — LandedCostCalculator never reads
             // it for arithmetic (only unitBasis feeds pricePerPiece/quantityToPieces; quotedUnit
             // rides through as PricingCostingWriteItem.rawUnit, display-only). Routing it through

@@ -97,6 +97,44 @@ public class ImportRequestQueryRepository {
     ) {}
 
     /**
+     * CR-1 (GLA-167), part D: the lead time APPROVED on each deal line, read from the same
+     * order-confirmed ({@code QUOTATION_ACCEPTED}) pricing request {@link #factoryResolutionCandidates}
+     * uses, found via {@code source_ticket_item_id} (latest item row wins). Keyed by ticket_item id;
+     * a line whose pricing-request item carries no lead time maps to {@code null}/absent so the caller
+     * can tell "no lead time" from "0". An approved lead-time change has already been written onto
+     * these rows ({@code LeadTimeChangeService#approve}), so this always reflects the current approval.
+     */
+    public Map<Long, LineLeadTime> acceptedLeadTimesByTicketItem(long ticketId) {
+        Map<Long, LineLeadTime> byItem = new java.util.HashMap<>();
+        jdbc.query("""
+            SELECT ti.item_id, pri.lead_time_min_days, pri.lead_time_max_days
+              FROM sales.ticket_item ti
+              JOIN LATERAL (
+                  SELECT pri2.lead_time_min_days, pri2.lead_time_max_days
+                    FROM sales.pricing_request_item pri2
+                    JOIN sales.pricing_request pr2
+                      ON pr2.pricing_request_id = pri2.pricing_request_id
+                   WHERE pri2.source_ticket_item_id = ti.item_id
+                     AND pr2.ticket_id = ti.ticket_id
+                     AND pr2.status = 'QUOTATION_ACCEPTED'
+                   ORDER BY pri2.pricing_request_item_id DESC
+                   LIMIT 1
+              ) pri ON true
+             WHERE ti.ticket_id = :id
+            """, Map.of("id", ticketId), rs -> {
+                Number min = (Number) rs.getObject("lead_time_min_days");
+                Number max = (Number) rs.getObject("lead_time_max_days");
+                if (min != null && max != null) {
+                    byItem.put(rs.getLong("item_id"), new LineLeadTime(min.intValue(), max.intValue()));
+                }
+            });
+        return byItem;
+    }
+
+    /** One line's approved lead-time range, in days. */
+    public record LineLeadTime(int minDays, int maxDays) {}
+
+    /**
      * Per-line factory resolution inputs for the STORED (factory-grained) ใบขอซื้อ path — replaces
      * {@link #brandLinesForTicket} for {@code createDrafts}/the rollup, which are per-FACTORY as of
      * V184. {@link #brandLinesForTicket} itself is UNCHANGED and still serves the singular PREVIEW

@@ -26,6 +26,7 @@ import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.factory.FactoryConfigRepository;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteRepository;
+import th.co.glr.hr.factoryquote.FactoryQuoteRequests.MarkFactoryContactedRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteItemRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteService;
@@ -272,6 +273,8 @@ public abstract class AbstractStockLineIntegrationTest extends AbstractPostgresI
                 new BigDecimal("100.00"), "THB", null, new BigDecimal("1.00"), null, null,
                 "45 days", null, null));
         }
+        factoryQuoteService.markContacted(draft.id(), new MarkFactoryContactedRequest(
+            java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
         FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(),
             new ReceiveFactoryQuoteRequest("REF-" + draft.factoryName(), "THB", "30 days", "45 days",
                 "revision", "note", items, UUID.randomUUID().toString()),

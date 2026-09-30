@@ -3,6 +3,7 @@ package th.co.glr.hr.factoryquote;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.time.LocalDate;
 import java.time.Year;
 import java.util.List;
 import java.util.Map;
@@ -40,8 +41,9 @@ public class FactoryQuoteRepository {
         return "FQ-" + Year.now() + "-" + String.format("%04d", seq == null ? 0 : seq);
     }
 
+    /** {@code defaultCurrency} is seeded from the lines' Sales-requested currency (CR-1); null = THB as before. */
     public long createDraft(long pricingRequestId, Long factoryId, String factoryName, String emailTo,
-                            String subject, String body, long actorId) {
+                            String subject, String body, long actorId, String defaultCurrency) {
         Long id = jdbc.queryForObject("""
             INSERT INTO sales.factory_quote
                 (quote_code, pricing_request_id, factory_id, factory_name_snapshot,
@@ -59,7 +61,7 @@ public class FactoryQuoteRepository {
                 .addValue("emailTo", emailTo)
                 .addValue("subject", subject)
                 .addValue("body", body)
-                .addValue("currency", "THB")
+                .addValue("currency", defaultCurrency == null ? "THB" : defaultCurrency)
                 .addValue("createdBy", actorId),
             Long.class);
         long quoteId = id == null ? 0L : id;
@@ -108,7 +110,7 @@ public class FactoryQuoteRepository {
      * than raise anything, silently corrupting the quote's item list.
      *
      * <p>Only ever safe to call while the quote is still {@code DRAFT} — once a quote has been
-     * sent or answered its item set must never be mutated (see {@link #markRequested} and the
+     * sent or answered its item set must never be mutated (see {@link #markContacted} and the
      * guard {@code PricingRequestService#setItemFactory}'s Javadoc protects on the other side of
      * this same invariant); enforcing that is the caller's job, same division of labour as every
      * other status guard in this class.
@@ -161,25 +163,33 @@ public class FactoryQuoteRepository {
         return rows == 1;
     }
 
-    public int markRequested(long quoteId, String emailTo, String subject, String body, long actorId) {
+    /**
+     * CR-1 (GLA-167): "ติดต่อโรงงานแล้ว" -- DRAFT -> REQUESTED with the contacted fields. Guarded on
+     * {@code status = 'DRAFT'} so a double click / race is a 0-row no-op (caller throws 409) and the
+     * first contacted date can never be overwritten (no undo, no edit -- owner ruling R7).
+     * {@code email_sent_at}/{@code sent_by} are kept in step with the new columns because older
+     * readers (and the V196 backfill's own reading of "sent") still key on them.
+     */
+    public int markContacted(long quoteId, LocalDate contactedOn, String note, long actorId) {
         return jdbc.update("""
             UPDATE sales.factory_quote
                SET status = 'REQUESTED',
-                   email_to = COALESCE(NULLIF(BTRIM(:emailTo), ''), email_to),
-                   email_subject = COALESCE(:subject, email_subject),
-                   email_body = COALESCE(:body, email_body),
+                   contacted_on = :contactedOn,
+                   contacted_note = :note,
+                   contacted_by = :actorId,
+                   contacted_at = now(),
                    email_sent_at = now(),
                    requested_at = now(),
                    sent_by = :actorId,
                    updated_at = now()
              WHERE factory_quote_id = :quoteId
                AND status = 'DRAFT'
+               AND is_current
             """,
             new MapSqlParameterSource()
                 .addValue("quoteId", quoteId)
-                .addValue("emailTo", emailTo)
-                .addValue("subject", subject)
-                .addValue("body", body)
+                .addValue("contactedOn", contactedOn)
+                .addValue("note", note)
                 .addValue("actorId", actorId));
     }
 
@@ -324,7 +334,7 @@ public class FactoryQuoteRepository {
      * 'SUPERSEDED' AND status <> 'CANCELLED'} guard ({@code
      * PricingRequestRepository#supersedeForCustomerRevision}, this method's sibling on the
      * PricingRequest aggregate) to match every OTHER status-guarded method already in this file
-     * ({@link #updateDraft}, {@link #markRequested}, {@link #updateFirstResponse}, {@link
+     * ({@link #updateDraft}, {@link #markContacted}, {@link #updateFirstResponse}, {@link
      * #startNegotiation}, {@link #markReady}, {@link #markNotAvailable}, {@link
      * #cancelOpenForPricingRequest}), which all use a positive {@code status IN (...)}/{@code
      * status = '...'}. An allowlist also fails safe: a 9th {@code FactoryQuoteStatus} added later
@@ -801,7 +811,8 @@ public class FactoryQuoteRepository {
                    supplier_quote_ref, default_currency, payment_terms, lead_time_text, note,
                    negotiation_note, requested_at, received_at, root_factory_quote_id,
                    parent_factory_quote_id, revision_no, revision_reason, is_current,
-                   created_at, updated_at
+                   created_at, updated_at,
+                   contacted_on, contacted_note, contacted_by, contacted_at
               FROM sales.factory_quote fq
             """;
     }
@@ -836,7 +847,11 @@ public class FactoryQuoteRepository {
             rs.getTimestamp("created_at").toInstant(),
             rs.getTimestamp("updated_at").toInstant(),
             items,
-            attachments
+            attachments,
+            rs.getObject("contacted_on", LocalDate.class),
+            rs.getString("contacted_note"),
+            nullableLong(rs, "contacted_by"),
+            instant(rs, "contacted_at")
         );
     }
 

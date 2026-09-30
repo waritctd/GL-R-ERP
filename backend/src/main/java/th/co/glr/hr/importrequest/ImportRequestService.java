@@ -244,12 +244,18 @@ public class ImportRequestService {
             .map(ImportRequestDto::factoryId)
             .collect(Collectors.toSet());
 
+        // CR-1 (D): each factory's IR takes the lead time approved on the pricing request's lines.
+        Map<Long, ImportRequestQueryRepository.LineLeadTime> approvedLeadTimes =
+            repository.acceptedLeadTimesByTicketItem(ticketId);
         int created = 0;
         for (FactoryGroup group : groups) {
             if (alreadyCovered.contains(group.factoryId())) {
                 continue;
             }
-            LeadTimeDefaults.Range leadTime = LeadTimeDefaults.forCountry(group.countryCode());
+            LeadTimeDefaults.Range leadTime = leadTimeFromLines(approvedLeadTimes, group.items());
+            if (leadTime == null) {
+                leadTime = LeadTimeDefaults.forCountry(group.countryCode());
+            }
             long id = stored.insertDraft(ticketId, group.factoryId(), group.factoryName(),
                 group.brandLabel(), stored.highestVersion(ticketId, group.factoryId()) + 1,
                 snapshot, leadTime == null ? null : leadTime.minDays(),
@@ -839,9 +845,21 @@ public class ImportRequestService {
         // forward too — leaving this out fell all the way back to `insertDraft`'s
         // snap.requiredByNote() default (the DEAL's CURRENT value), silently dropping anything the
         // rep had typed directly onto THIS form (e.g. "Before Songkran") the moment it was revised.
+        // CR-1 (R6/D): sales regenerates the IR after an approved lead-time change, so a revision
+        // re-derives the lead time from the lines' CURRENT approved values. Only when NO line carries
+        // one does it fall back to carrying the predecessor's values forward, as before. A stale
+        // auto-derived vessel-ETA note is re-derived at issue() (looksAutoDerivedVesselEta).
+        LeadTimeDefaults.Range revisedLeadTime = leadTimeFromLines(
+            repository.acceptedLeadTimesByTicketItem(issued.ticketId()),
+            issued.items().stream()
+                .map(it -> new ImportRequestItemInput(it.ticketItemId(), it.code(), it.size(),
+                    it.qty(), it.unit(), it.note(), it.color(), it.texture(), it.brand(), it.model()))
+                .toList());
+        Integer revisedMin = revisedLeadTime == null ? issued.leadTimeMinDays() : revisedLeadTime.minDays();
+        Integer revisedMax = revisedLeadTime == null ? issued.leadTimeMaxDays() : revisedLeadTime.maxDays();
         long revisionId = stored.insertDraft(issued.ticketId(), issued.factoryId(), issued.factoryName(),
             issued.brand(), stored.highestVersion(issued.ticketId(), issued.factoryId()) + 1,
-            snapshot, issued.leadTimeMinDays(), issued.leadTimeMaxDays(), issued.vesselEtaNote(),
+            snapshot, revisedMin, revisedMax, issued.vesselEtaNote(),
             issued.requiredByNote(), actor.id(), actor.name());
         stored.replaceItems(revisionId, issued.items().stream()
             .map(it -> new ImportRequestItemInput(it.ticketItemId(), it.code(), it.size(),
@@ -1191,6 +1209,26 @@ public class ImportRequestService {
                 countryCodeById.get(factoryId), brandLabel.isBlank() ? null : brandLabel, items));
         }
         return groups;
+    }
+
+    /**
+     * CR-1 (D): the LONGEST lead time among {@code items}' lines -- {@code min = max of the mins},
+     * {@code max = max of the maxes}, each taken independently -- or {@code null} when no line carries
+     * one (the caller then falls back to the country default / the predecessor's value).
+     */
+    private static LeadTimeDefaults.Range leadTimeFromLines(
+            Map<Long, ImportRequestQueryRepository.LineLeadTime> approved, List<ImportRequestItemInput> items) {
+        Integer min = null;
+        Integer max = null;
+        for (ImportRequestItemInput item : items) {
+            ImportRequestQueryRepository.LineLeadTime lt = item.ticketItemId() == null ? null : approved.get(item.ticketItemId());
+            if (lt == null) {
+                continue;
+            }
+            min = min == null ? lt.minDays() : Math.max(min, lt.minDays());
+            max = max == null ? lt.maxDays() : Math.max(max, lt.maxDays());
+        }
+        return min == null ? null : new LeadTimeDefaults.Range(min, max);
     }
 
     private Optional<FactoryConfigDto> freshFactoryLookup(long factoryId) {
