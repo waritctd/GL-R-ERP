@@ -30,8 +30,13 @@ function summary(overrides = {}) {
   };
 }
 
+// The VIEWER's role, not an ARIA role — DealStateHeader takes `role` as a prop and production
+// passes it as an expression (TicketDetailPage.jsx:1471). A string literal here trips
+// jsx-a11y/aria-role, which reads any literal `role=` as the DOM attribute.
+const VIEWER_ROLE = 'sales';
+
 function renderHeader(summaryOverrides, props = {}) {
-  return render(<DealStateHeader summary={summary(summaryOverrides)} role="sales" {...props} />);
+  return render(<DealStateHeader summary={summary(summaryOverrides)} role={VIEWER_ROLE} {...props} />);
 }
 
 // The expanded header renders the stage as the value of the "ขั้นตอนดีล" chip.
