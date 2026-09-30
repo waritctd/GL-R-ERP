@@ -55,7 +55,8 @@ describe('mockApi.tickets.setDepositPolicy — GLA-118 role gate (rule B)', () =
 
     // get() is itself owner-scoped for a `sales` actor (a non-owning rep can't even READ someone
     // else's deal) — switch back to a role that can view it before the final assertion.
-    await loginRole('account');
+    // H1 lockdown: account no longer reads /tickets/{id} -- read it back as the ceo.
+    await loginRole('ceo');
     const { ticket: after } = await api.tickets.get(NOTICE_ISSUED_TICKET_ID);
     expect(after.summary.depositPolicy).toBe(before.summary.depositPolicy);
     expect(after.summary.depositPolicyReason).toBe(before.summary.depositPolicyReason);
@@ -106,21 +107,23 @@ describe('mockApi.tickets.confirmDepositPaid — GLA-118 account only', () => {
     await expect(api.tickets.confirmDepositPaid(NOTICE_ISSUED_TICKET_ID))
       .rejects.toMatchObject({ status: 403 });
 
+    await loginRole('ceo'); // H1 lockdown: read it back as the ceo (account reads the finance view instead)
     const { ticket: after } = await api.tickets.get(NOTICE_ISSUED_TICKET_ID);
     expect(after.summary.paymentStatus).toBe('DEPOSIT_NOTICE_ISSUED');
   });
 
   it('lets account confirm the deposit and advance the payment track', async () => {
     await loginRole('account');
-    const { ticket } = await api.tickets.confirmDepositPaid(NOTICE_ISSUED_TICKET_ID);
-    expect(ticket.summary.paymentStatus).toBe('DEPOSIT_PAID');
+    // H1 lockdown: the call now goes to the finance route and answers with the finance view ({ deal }).
+    const { deal } = await api.tickets.confirmDepositPaid(NOTICE_ISSUED_TICKET_ID);
+    expect(deal.money.paymentStatus).toBe('DEPOSIT_PAID');
   });
 });
 
 describe('mockApi.tickets.recordPayment — GLA-118 owner ruling 2026-09-20, part A', () => {
   it.each(['DEPOSIT', 'BALANCE'])('refuses ceo, the owning sales rep, and import for a %s receipt, and records nothing', async (kind) => {
     await loginRole('account');
-    const { items: before } = await api.tickets.listPayments(NOTICE_ISSUED_TICKET_ID_2);
+    const before = (await api.finance.getDeal(NOTICE_ISSUED_TICKET_ID_2)).deal.money.payments;
 
     await loginRole('ceo');
     await expect(api.tickets.recordPayment(NOTICE_ISSUED_TICKET_ID_2,
@@ -135,18 +138,18 @@ describe('mockApi.tickets.recordPayment — GLA-118 owner ruling 2026-09-20, par
       { kind, amount: 100, note: 'ลองบันทึก' })).rejects.toMatchObject({ status: 403 });
 
     await loginRole('account');
-    const { items: after } = await api.tickets.listPayments(NOTICE_ISSUED_TICKET_ID_2);
+    const after = (await api.finance.getDeal(NOTICE_ISSUED_TICKET_ID_2)).deal.money.payments;
     expect(after.length).toBe(before.length);
   });
 
   it('lets account record a DEPOSIT receipt, and the row is actually written', async () => {
     await loginRole('account');
-    const { items: before } = await api.tickets.listPayments(NOTICE_ISSUED_TICKET_ID_2);
+    const before = (await api.finance.getDeal(NOTICE_ISSUED_TICKET_ID_2)).deal.money.payments;
 
     await api.tickets.recordPayment(NOTICE_ISSUED_TICKET_ID_2,
       { kind: 'DEPOSIT', amount: 5000, note: 'บันทึกมัดจำบางส่วน' });
 
-    const { items: after } = await api.tickets.listPayments(NOTICE_ISSUED_TICKET_ID_2);
+    const after = (await api.finance.getDeal(NOTICE_ISSUED_TICKET_ID_2)).deal.money.payments;
     expect(after.length).toBe(before.length + 1);
     expect(after.at(-1)).toMatchObject({ kind: 'DEPOSIT', amount: 5000 });
   });

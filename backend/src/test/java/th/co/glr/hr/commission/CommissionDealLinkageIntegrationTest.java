@@ -248,7 +248,7 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
     @Test
     void submit_withGrossAmountWithinThreshold_succeedsWithNoMismatchFlag() {
         long ticketId = driveDealToClosedPaid(new BigDecimal("10"));
-        BigDecimal payable = tickets.payableAmount(ticketId);
+        BigDecimal payable = tickets.payableAmountExVat(ticketId);
         assertThat(payable.signum()).isPositive();
         // 2% above payable — within the 5% cross-check threshold.
         BigDecimal grossAmount = payable.multiply(new BigDecimal("1.02")).setScale(2, java.math.RoundingMode.HALF_UP);
@@ -272,7 +272,7 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
     @Test
     void submit_withGrossAmountBeyondThreshold_succeedsButFlagsMismatch() {
         long ticketId = driveDealToClosedPaid(new BigDecimal("10"));
-        BigDecimal payable = tickets.payableAmount(ticketId);
+        BigDecimal payable = tickets.payableAmountExVat(ticketId);
         assertThat(payable.signum()).isPositive();
         // 25% above payable — well beyond the 5% threshold.
         BigDecimal grossAmount = payable.multiply(new BigDecimal("1.25")).setScale(2, java.math.RoundingMode.HALF_UP);

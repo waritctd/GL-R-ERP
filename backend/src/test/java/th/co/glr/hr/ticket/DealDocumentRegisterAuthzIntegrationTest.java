@@ -227,7 +227,11 @@ class DealDocumentRegisterAuthzIntegrationTest extends AbstractPostgresIntegrati
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
-    void account_canListDepositNoticesAndAttachmentsForTheTicket() throws Exception {
+    void account_canListDepositNoticesAndAttachmentsForTheTicket_onlyOnceTheDealIsInItsListScope() throws Exception {
+        // H1 lockdown: row-scoped. A fresh deal is at the lead stage -- outside account's list scope.
+        assertForbidden(() -> depositNoticeService.listByTicket(ticketId, accountActor));
+        jdbc.update("UPDATE sales.ticket SET sales_stage = 'PROCUREMENT' WHERE ticket_id = :id",
+            new org.springframework.jdbc.core.namedparam.MapSqlParameterSource("id", ticketId));
         assertThatCode(() -> depositNoticeService.listByTicket(ticketId, accountActor)).doesNotThrowAnyException();
         assertAttachmentsOk(accountActor);
     }

@@ -541,24 +541,133 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(forTicket).as("import must not see the PRICING_REQUEST-origin row at all").isEmpty();
     }
 
+    // 2026-09-30 owner ruling (REVERSES M3 FOR ACCOUNT ONLY): account may read a PRICING_REQUEST-origin
+    // quotation and download its PDF -- but only on a deal inside the account list scope
+    // (TicketRepository.isInAccountScope, i.e. live and at S10+). Every other role's gate is unchanged.
     @Test
-    void listForTicket_hidesPricingRequestOriginRow_fromAccount() {
+    void listForTicket_pricingRequestOriginRow_isRefusedToAccount_onADealBelowS10() {
         issuedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
+        setSalesStage(ticketId, "NEGOTIATION");
 
-        List<DealQuotationDto> forTicket = quotationService.listForTicket(ticketId, accountActor("hide"));
-
-        assertThat(forTicket).as("account must not see the PRICING_REQUEST-origin row at all").isEmpty();
+        assertThatThrownBy(() -> quotationService.listForTicket(ticketId, accountActor("below-s10")))
+            .isInstanceOf(ApiException.class).hasFieldOrPropertyWithValue("status", HttpStatus.FORBIDDEN);
     }
 
     @Test
-    void listForTicket_hidesPricingRequestOriginRow_fromACanCreateQuotationGrantHolder() {
+    void account_readsAndDownloadsAPricingRequestOriginQuotation_onAnInScopeDeal() {
+        DealQuotationDto issued = issuedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
+        setSalesStage(ticketId, "PROCUREMENT");
+        UserPrincipal account = accountActor("in-scope");
+
+        assertThat(quotationService.listForTicket(ticketId, account)).extracting(DealQuotationDto::id)
+            .contains(issued.id());
+        assertThat(quotationService.get(issued.id(), account).id()).isEqualTo(issued.id());
+        assertThat(quotationService.renderPdf(issued.id(), account)).isNotEmpty();
+    }
+
+    @Test
+    void account_cannotDownloadAPricingRequestOriginQuotation_onADealBelowS10() {
+        DealQuotationDto issued = issuedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
+        setSalesStage(ticketId, "NEGOTIATION");
+        UserPrincipal account = accountActor("pdf-below-s10");
+
+        assertThatThrownBy(() -> quotationService.renderPdf(issued.id(), account))
+            .isInstanceOf(ApiException.class).hasFieldOrPropertyWithValue("status", HttpStatus.FORBIDDEN);
+        assertThatThrownBy(() -> quotationService.get(issued.id(), account))
+            .isInstanceOf(ApiException.class).hasFieldOrPropertyWithValue("status", HttpStatus.FORBIDDEN);
+    }
+
+    // Ruling 3 as approved: account sees number, total and each line's NET unit price -- never the CEO list
+    // price or discount. Stripped at the service layer on EVERY JSON read account can reach (get, listForTicket).
+    private static final java.util.Set<String> PRICE_INTERNAL_KEYS = java.util.Set.of(
+        "unitPrice", "discountPct", "specialPriceSqm", "adjustmentPct", "adjustmentAmount", "catalogPriceId",
+        "specialPriceLine", "calculationLine", "priceMode", "ceoPriceMode", "priceModeChangedFromCeo",
+        "priceChangedFromCeo", "itemsRemovedFromCeoCount", "removedCeoItems",
+        "ceoListUnitPrice", "ceoDiscountPct", "ceoSpecialPriceSqm", "ceoDirectNetPrice", "ceoNetUnitPrice");
+
+    private com.fasterxml.jackson.databind.JsonNode json(Object dto) throws Exception {
+        return new com.fasterxml.jackson.databind.ObjectMapper()
+            .registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule()).valueToTree(dto);
+    }
+
+    /** A price-internal key may exist only as an emptied value (null / false / 0 / empty list). */
+    private void assertNoPriceInternals(com.fasterxml.jackson.databind.JsonNode node, String path) {
+        if (node.isObject()) {
+            node.fields().forEachRemaining(e -> {
+                var v = e.getValue();
+                if (PRICE_INTERNAL_KEYS.contains(e.getKey())) {
+                    boolean empty = v.isNull() || (v.isBoolean() && !v.asBoolean()) || (v.isNumber() && v.asInt() == 0)
+                        || (v.isArray() && v.isEmpty());
+                    assertThat(empty).as(path + "." + e.getKey() + " must be stripped but was " + v).isTrue();
+                }
+                assertNoPriceInternals(v, path + "." + e.getKey());
+            });
+        } else if (node.isArray()) {
+            node.forEach(n -> assertNoPriceInternals(n, path + "[]"));
+        }
+    }
+
+    @Test
+    void account_readingAPricingRequestQuotation_getsNetPricesButNoListPriceOrDiscount() throws Exception {
+        DealQuotationDto issued = issuedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
+        setSalesStage(ticketId, "PROCUREMENT");
+        UserPrincipal account = accountActor("net-only");
+
+        var viaGet = json(quotationService.get(issued.id(), account));
+        var viaList = json(quotationService.listForTicket(ticketId, account));
+
+        assertNoPriceInternals(viaGet, "get");
+        assertNoPriceInternals(viaList, "list");
+        // positive: number, totals and each line's net unit price / line amount ARE there
+        assertThat(viaGet.get("number").asText()).isNotBlank();
+        assertThat(viaGet.get("grandTotal").isNull()).isFalse();
+        assertThat(viaGet.get("items")).isNotEmpty();
+        viaGet.get("items").forEach(i -> {
+            assertThat(i.get("netUnitPrice").isNull()).isFalse();
+            assertThat(i.get("lineAmount").isNull()).isFalse();
+        });
+        assertThat(viaList.get(0).get("items").get(0).get("netUnitPrice").isNull()).isFalse();
+    }
+
+    @Test
+    void ceoAndTheSalesOwner_stillReceiveTheListPriceAndDiscountFields() throws Exception {
+        DealQuotationDto issued = issuedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
+        setSalesStage(ticketId, "PROCUREMENT");
+
+        for (UserPrincipal reader : List.of(ceoActor, salesActor)) {
+            var item = json(quotationService.get(issued.id(), reader)).get("items").get(0);
+            assertThat(item.get("unitPrice").isNull()).as(reader.role() + " keeps unitPrice").isFalse();
+            assertThat(item.get("ceoListUnitPrice").isNull()).as(reader.role() + " keeps ceoListUnitPrice").isFalse();
+        }
+    }
+
+    @Test
+    void importStillRefused_evenOnAnInScopeDeal_andSoIsANonOwningSalesRep() {
+        DealQuotationDto issued = issuedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
+        setSalesStage(ticketId, "PROCUREMENT");
+
+        assertThatThrownBy(() -> quotationService.renderPdf(issued.id(), importActor))
+            .isInstanceOf(ApiException.class).hasFieldOrPropertyWithValue("status", HttpStatus.FORBIDDEN);
+        assertThatThrownBy(() -> quotationService.get(issued.id(), importActor))
+            .isInstanceOf(ApiException.class).hasFieldOrPropertyWithValue("status", HttpStatus.FORBIDDEN);
+    }
+
+    private void setSalesStage(long ticketId, String stage) {
+        jdbc.update("UPDATE sales.ticket SET sales_stage = :s WHERE ticket_id = :id",
+            new org.springframework.jdbc.core.namedparam.MapSqlParameterSource("s", stage).addValue("id", ticketId));
+    }
+
+    // 2026-09-30: this granted actor has the ACCOUNT role, so the account scope rule (H1) now decides it:
+    // below S10 the can_create_quotation grant must NOT open the deal (403) -- the grant never bypassed
+    // the PRICING_REQUEST gate, and it does not bypass the account scope either.
+    @Test
+    void listForTicket_pricingRequestOriginRow_isRefusedToAGrantedAccountActor_onADealBelowS10() {
         issuedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
+        setSalesStage(ticketId, "NEGOTIATION");
 
-        List<DealQuotationDto> forTicket = quotationService.listForTicket(ticketId, grantedAccountActor("hide"));
-
-        assertThat(forTicket)
-            .as("the can_create_quotation grant does NOT bypass PRICING_REQUEST_VIEW_ROLES — unlike a DEAL_DIRECT row")
-            .isEmpty();
+        assertThatThrownBy(() -> quotationService.listForTicket(ticketId, grantedAccountActor("hide")))
+            .as("the can_create_quotation grant does not bypass the account scope")
+            .isInstanceOf(ApiException.class).hasFieldOrPropertyWithValue("status", HttpStatus.FORBIDDEN);
     }
 
     @Test

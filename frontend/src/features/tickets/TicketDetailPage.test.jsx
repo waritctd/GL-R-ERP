@@ -312,7 +312,9 @@ describe('TicketDetailPage', () => {
     api.tickets.listPayments.mockResolvedValue({ items: [] });
     api.tickets.listDeliveries.mockResolvedValue({ items: [] });
     api.tickets.comment.mockResolvedValue({ ticket: buildTicket() });
-    api.tickets.recordPayment.mockResolvedValue({ ticket: buildTicket() });
+    // H1: recordPayment/confirmFinalPayment/confirmCloseReady are re-pointed at the finance routes and
+    // return the finance view `{ deal }`, NOT `{ ticket }` (see hrApi.js `tickets.recordPayment`).
+    api.tickets.recordPayment.mockResolvedValue({ deal: { id: 701 } });
     api.tickets.setBilling.mockResolvedValue({ ticket: buildTicket() });
     api.tickets.reserveStock.mockResolvedValue({ ticket: buildTicket() });
     api.tickets.recordDelivery.mockResolvedValue({ ticket: buildTicket() });
@@ -982,17 +984,9 @@ describe('TicketDetailPage', () => {
       },
       availableActions: [{ action: 'FINAL_PAYMENT', kind: 'payment', label: 'ยืนยันชำระครบ' }],
     });
-    api.tickets.confirmFinalPayment.mockResolvedValue({
-      ticket: buildTicket({
-        summary: {
-          status: 'quotation_issued',
-          paymentStage: 'FULLY_PAID',
-          amountPayable: 132500,
-          amountPaid: 132500,
-          amountOutstanding: 0,
-        },
-      }),
-    });
+    // Finance route response shape: `{ deal }`. The page must refetch the ticket, not crash on
+    // `applyTicketUpdate(undefined)` (react-query rejects undefined query data).
+    api.tickets.confirmFinalPayment.mockResolvedValue({ deal: { id: 701 } });
 
     renderTicketDetailPage(accountUser);
 
@@ -1015,6 +1009,10 @@ describe('TicketDetailPage', () => {
     await waitFor(() => expect(api.tickets.confirmFinalPayment).toHaveBeenCalledWith(701));
     // Dialog closes after a successful confirm.
     await waitFor(() => expect(screen.queryByText('ยืนยันการรับชำระครบถ้วน')).toBeNull());
+    // A `{ deal }` response carries no ticket: the page re-reads the ticket instead of writing
+    // `undefined` into the detail cache (which would blank the page).
+    await waitFor(() => expect(api.tickets.get.mock.calls.length).toBeGreaterThanOrEqual(2));
+    expect(screen.getAllByText(/PR-2026-0701/).length).toBeGreaterThan(0);
   });
 
   it('renders delivery progress and hides record delivery without the action', async () => {
@@ -1077,6 +1075,8 @@ describe('TicketDetailPage', () => {
     queryClient.setQueryData(['tickets', 'list', ''], []);
     queryClient.setQueryData(queryKeys.dashboardSummary(), {});
     queryClient.setQueryData(queryKeys.notifications(), []);
+    // The finance deal view (account/ceo) is money state too: the ceo can open it, so it must go stale.
+    queryClient.setQueryData(queryKeys.financeDeal(701), { deal: {} });
 
     await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
     // The comment box now lives in DealHistoryPanel, in the "ประวัติ" tab.
@@ -1092,6 +1092,7 @@ describe('TicketDetailPage', () => {
       expect(queryClient.getQueryState(['tickets', 'list', ''])?.isInvalidated).toBe(true);
       expect(queryClient.getQueryState(queryKeys.dashboardSummary())?.isInvalidated).toBe(true);
       expect(queryClient.getQueryState(queryKeys.notifications())?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryState(queryKeys.financeDeal(701))?.isInvalidated).toBe(true);
     });
   });
 

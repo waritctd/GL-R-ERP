@@ -189,7 +189,7 @@ test.describe('@uat-sales pipeline journeys — Cases A-D', () => {
 
     await test.step('S19 -> S20 (-> CLOSED_PAID): auto, confirmFinalPayment', async () => {
       const updated = await confirmFinalPayment(sessions, deal.id);
-      expect(updated.summary.salesStage).toBe('CLOSED_PAID');
+      expect(updated.salesStage).toBe('CLOSED_PAID'); // finance view: { deal }, not { ticket }
     });
 
     await test.step('prove the ROUTE, not just the destination', async () => {
@@ -492,7 +492,7 @@ test.describe('@uat-sales pipeline journeys — Cases A-D', () => {
 
     await test.step('S19 -> S20 (-> CLOSED_PAID): auto, confirmFinalPayment', async () => {
       const updated = await confirmFinalPayment(sessions, deal.id);
-      expect(updated.summary.salesStage).toBe('CLOSED_PAID');
+      expect(updated.salesStage).toBe('CLOSED_PAID'); // finance view: { deal }, not { ticket }
     });
 
     await test.step('prove the ROUTE — PROCUREMENT is the one stage this route must never touch', async () => {

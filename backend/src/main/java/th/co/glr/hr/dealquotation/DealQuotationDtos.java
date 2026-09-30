@@ -317,6 +317,11 @@ public final class DealQuotationDtos {
                 removedCeoItems, orderedByName, recipientType, recipientLabel, null, null, false);
         }
 
+        /** Ruling 3 (2026-09-30): the account view -- number, totals and each line's NET price stay; list price, discount and CEO pricing metadata are emptied. */
+        public DealQuotationDto withoutPriceInternals() {
+            return new DealQuotationDto(id, number, ticketId, docStatus, revisionNo, parentQuotationId, createdById, createdByName, createdByNameEn, salesRepId, salesRepName, salesRepNameEn, salesRepPhone, submittedAt, approvedById, approvedByName, approvedByNameEn, approvedAt, approvalNote, quotationDate, customerName, customerAddress, customerTaxId, customerPhone, contactId, contactName, contactPhone, contactEmail, projectName, deptCode, unitCode, offerDate, depositPercent, remainderMode, creditDays, validityDays, validityDate, validityMode, validityUntil, customerNotes, null, documentLanguage, subtotalAmount, vatAmount, grandTotal, currency, approverHasSignature, printedByDisplayId, printedByDisplayName, printedByDisplayNameEn, salesRepDisplayId, salesRepDisplayName, salesRepDisplayNameEn, salesRepDisplayPhone, omitContactHonorific, fullPaymentTerm, derivedFromQuotationId, derivedFromQuotationNumber, derivedFromQuotationStatus, items == null ? null : items.stream().map(DealQuotationItemDto::withoutPriceInternals).toList(), createdAt, updatedAt, origin, pricingRequestId, false, null, pricingRequestCode, 0, List.of(), orderedByName, recipientType, recipientLabel, ticketCode, dealStage, readOnly);
+        }
+
         /** This DTO carrying {@link #removedCeoItems} — same device as {@code
          * DealQuotationItemDto#withCeoComparison} (appended field written after the shorter
          * legacy constructors most call sites still build from). Parameter named distinctly from
@@ -726,6 +731,11 @@ public final class DealQuotationDtos {
          * unlinked TILE row always reads null here). */
         BigDecimal ceoNetUnitPrice
     ) {
+        /** Ruling 3 (2026-09-30): the account view -- net unit price and line amount stay; every list-price / discount / CEO pricing field is emptied. */
+        public DealQuotationItemDto withoutPriceInternals() {
+            return new DealQuotationItemDto(id, seq, locationLabel, null, productCode, brand, model, color, texture, sizeText, thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput, wastageMode, wastageValue, piecesPerBox, null, null, originCountry, leadTimeMinDays, leadTimeMaxDays, itemNotes, piecesPerSqm, piecesBeforeWastage, piecesAfterWastage, piecesFinal, boxes, netUnitPrice, lineAmount, descriptionLine, sizeLine, null, lineType, quantity, unit, null, null, adjustmentDeadline, null, null, hasPicture, picturePlacement, pictureUrl, sqmPerBox, roundToFullBox, false, null, null, null, null, null);
+        }
+
         /** The pre-GLA-123 canonical shape (no CEO-original/changed-flag fields) — kept so every
          * existing construction site (tests, mostly) compiles unchanged. Defaults every new field
          * to false/null, correct for every DEAL_DIRECT fixture (nothing before this feature was

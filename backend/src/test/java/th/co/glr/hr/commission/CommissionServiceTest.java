@@ -166,7 +166,7 @@ class CommissionServiceTest {
     void submitWithLinkedClosedPaidTicket_withinThreshold_succeedsAndRecordsNoMismatch() {
         SubmitCommissionRequest request = submitRequestLinkedTo(42L, new BigDecimal("1000.00"));
         when(tickets.findSalesStage(42L)).thenReturn(Optional.of(DealStage.CLOSED_PAID));
-        when(tickets.payableAmount(42L)).thenReturn(new BigDecimal("1030.00")); // 2.9% off — within 5%
+        when(tickets.payableAmountExVat(42L)).thenReturn(new BigDecimal("1030.00")); // 2.9% off — within 5%
         InvoiceCalculation calculation = new InvoiceCalculation(new BigDecimal("1000.00"), new BigDecimal("1000.00"));
         when(calculator.calculateInvoice(any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(calculation);
         when(commissions.createInvoice(any(SubmitCommissionRequest.class))).thenReturn(500L);
@@ -192,7 +192,7 @@ class CommissionServiceTest {
     void submitWithLinkedClosedPaidTicket_beyondThreshold_stillSucceedsButFlagsMismatch() {
         SubmitCommissionRequest request = submitRequestLinkedTo(42L, new BigDecimal("1000.00"));
         when(tickets.findSalesStage(42L)).thenReturn(Optional.of(DealStage.CLOSED_PAID));
-        when(tickets.payableAmount(42L)).thenReturn(new BigDecimal("1200.00")); // 16.7% off — beyond 5%
+        when(tickets.payableAmountExVat(42L)).thenReturn(new BigDecimal("1200.00")); // 16.7% off — beyond 5%
         InvoiceCalculation calculation = new InvoiceCalculation(new BigDecimal("1000.00"), new BigDecimal("1000.00"));
         when(calculator.calculateInvoice(any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(calculation);
         when(commissions.createInvoice(any(SubmitCommissionRequest.class))).thenReturn(500L);
@@ -237,7 +237,7 @@ class CommissionServiceTest {
         assertThat(result.dealPayableAmountSnapshot()).isNull();
         assertThat(result.dealAmountMismatch()).isFalse();
         verify(tickets, never()).findSalesStage(anyLong());
-        verify(tickets, never()).payableAmount(anyLong());
+        verify(tickets, never()).payableAmountExVat(anyLong());
     }
 
     // ── Slice A2 createFromDeal decision-level tests (unit) — role gate, salesRepId resolution,
@@ -304,7 +304,7 @@ class CommissionServiceTest {
         when(tickets.findById(ticketId)).thenReturn(Optional.of(ticketWithOwner(ticketId, ownerId)));
         when(commissions.hasActiveCommissionForTicket(ticketId)).thenReturn(false);
         when(tickets.findSalesStage(ticketId)).thenReturn(Optional.of(DealStage.CLOSED_PAID));
-        when(tickets.payableAmount(ticketId)).thenReturn(new BigDecimal("1000.00"));
+        when(tickets.payableAmountExVat(ticketId)).thenReturn(new BigDecimal("1000.00"));
         InvoiceCalculation calculation = new InvoiceCalculation(new BigDecimal("1000.00"), new BigDecimal("1000.00"));
         when(calculator.calculateInvoice(any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(calculation);
         when(commissions.createInvoice(any(SubmitCommissionRequest.class))).thenReturn(500L);
@@ -335,7 +335,7 @@ class CommissionServiceTest {
         when(tickets.findById(ticketId)).thenReturn(Optional.of(ticketWithOwner(ticketId, 30L)));
         when(commissions.hasActiveCommissionForTicket(ticketId)).thenReturn(false);
         when(tickets.findSalesStage(ticketId)).thenReturn(Optional.of(DealStage.CLOSED_PAID));
-        when(tickets.payableAmount(ticketId)).thenReturn(new BigDecimal("2500.00"));
+        when(tickets.payableAmountExVat(ticketId)).thenReturn(new BigDecimal("2500.00"));
         InvoiceCalculation calculation = new InvoiceCalculation(new BigDecimal("2500.00"), new BigDecimal("2500.00"));
         when(calculator.calculateInvoice(eq(new BigDecimal("2500.00")), any(), any(), any(), any(), any(), any(), any()))
             .thenReturn(calculation);
@@ -363,7 +363,7 @@ class CommissionServiceTest {
         when(commissions.hasActiveCommissionForTicket(ticketId)).thenReturn(false);
         when(tickets.findSalesStage(ticketId)).thenReturn(Optional.of(DealStage.CLOSED_PAID));
         // Deliberately different from the payable amount, to prove the override wins.
-        when(tickets.payableAmount(ticketId)).thenReturn(new BigDecimal("2500.00"));
+        when(tickets.payableAmountExVat(ticketId)).thenReturn(new BigDecimal("2500.00"));
         InvoiceCalculation calculation = new InvoiceCalculation(new BigDecimal("9999.00"), new BigDecimal("9999.00"));
         when(calculator.calculateInvoice(eq(new BigDecimal("9999.00")), any(), any(), any(), any(), any(), any(), any()))
             .thenReturn(calculation);
@@ -423,7 +423,7 @@ class CommissionServiceTest {
         when(tickets.findById(ticketId)).thenReturn(Optional.of(ticketWithOwner(ticketId, 30L)));
         when(commissions.hasActiveCommissionForTicket(ticketId)).thenReturn(false);
         when(tickets.findSalesStage(ticketId)).thenReturn(Optional.of(DealStage.CLOSED_PAID));
-        when(tickets.payableAmount(ticketId)).thenReturn(new BigDecimal("1000.00"));
+        when(tickets.payableAmountExVat(ticketId)).thenReturn(new BigDecimal("1000.00"));
         InvoiceCalculation calculation = new InvoiceCalculation(new BigDecimal("1000.00"), new BigDecimal("1000.00"));
         when(calculator.calculateInvoice(any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(calculation);
         when(commissions.createInvoice(any(SubmitCommissionRequest.class))).thenReturn(500L);

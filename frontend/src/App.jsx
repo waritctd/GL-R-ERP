@@ -45,11 +45,12 @@ const LeaveSurfacePage = lazy(() => import('./features/leave/LeaveSurfacePage.js
 // own doc comment.
 const LeaveRequestPage = lazy(() => import('./features/leave/LeaveRequestPage.jsx').then(toDefault('LeaveRequestPage')));
 const TicketListPage = lazy(() => import('./features/tickets/TicketListPage.jsx').then(toDefault('TicketListPage')));
-const TicketDetailPage = lazy(() => import('./features/tickets/TicketDetailPage.jsx').then(toDefault('TicketDetailPage')));
+import { AccountFinanceRedirect, TicketDetailRoute } from './features/tickets/TicketDetailRoute.jsx';
 const CommissionPage = lazy(() => import('./features/commissions/CommissionPage.jsx').then(toDefault('CommissionPage')));
 // Role-scoped views: Account's money Overview (landing) + งานการเงิน worklist.
 const AccountOverview = lazy(() => import('./features/dashboard/AccountOverview.jsx').then(toDefault('AccountOverview')));
 const AccountFinancePage = lazy(() => import('./features/finance/AccountFinancePage.jsx').then(toDefault('AccountFinancePage')));
+const FinanceDealPage = lazy(() => import('./features/finance/FinanceDealPage.jsx').then(toDefault('FinanceDealPage')));
 const PayrollPage = lazy(() => import('./features/payroll/PayrollPage.jsx').then(toDefault('PayrollPage')));
 const DeductionShortfallsPage = lazy(() => import('./features/payroll/DeductionShortfallsPage.jsx').then(toDefault('DeductionShortfallsPage')));
 const DeductionConsentsPage = lazy(() => import('./features/payroll/DeductionConsentsPage.jsx').then(toDefault('DeductionConsentsPage')));
@@ -93,22 +94,6 @@ const SafeFormSubmitterProbe = lazy(() => import('./dev/SafeFormSubmitterProbe.j
 function userFromAuthResponse(response) {
   if (!response?.user) return null;
   return { ...response.user, admin: Boolean(response.admin), canCreateQuotation: Boolean(response.canCreateQuotation) };
-}
-
-function TicketDetailRoute({ user, showToast }) {
-  const { id } = useParams();
-  const navigate = useNavigate();
-  return (
-    <TicketDetailPage
-      user={user}
-      ticketId={id}
-      // navigate(-1) (not a fixed '/tickets') so the list's status filter and
-      // search text — now carried in the URL query string, see
-      // TicketListPage.jsx — survive the round trip instead of resetting.
-      onBack={() => navigate(-1)}
-      showToast={showToast}
-    />
-  );
 }
 
 function DepositNoticeRoute({ user, showToast }) {
@@ -506,7 +491,7 @@ export function App() {
                 />
                 <Route
                   path="/tickets/:ticketId/deposit"
-                  element={<DepositNoticeRoute user={user} showToast={showToast} />}
+                  element={<AccountFinanceRedirect user={user}><DepositNoticeRoute user={user} showToast={showToast} /></AccountFinanceRedirect>}
                 />
                 <Route
                   path="/pricing-requests"
@@ -555,6 +540,12 @@ export function App() {
                 <Route
                   path="/finance"
                   element={<AccountFinancePage user={user} showToast={showToast} />}
+                />
+                {/* One deal's money view (H1): the finance-only read model + money actions. Guarded
+                    like /finance by the `/finance` prefix rule in PATH_GUARDS. */}
+                <Route
+                  path="/finance/deals/:id"
+                  element={<FinanceDealPage user={user} showToast={showToast} />}
                 />
                 <Route
                   path="/price-import"

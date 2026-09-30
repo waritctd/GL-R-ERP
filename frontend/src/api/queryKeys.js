@@ -121,6 +121,9 @@ export const queryKeys = {
   unitBasisCatalog: () => ['meta', 'unit-bases'],
   // PR-B REVIEW ROUND 1, S6 — see ticketDetail's own comment just above.
   ticketActions: (id) => ['tickets', 'actions', id == null ? id : Number(id)],
+  // Finance-only read model of one deal (GET /api/finance/deals/{id}), account + ceo. Number()-coerced
+  // for the same route-param-is-a-string reason as ticketDetail above.
+  financeDeal: (id) => ['finance', 'deal', id == null ? id : Number(id)],
   ticketPayments: (id) => ['tickets', 'payments', id],
   ticketDeliveries: (id) => ['tickets', 'deliveries', id],
   // Which brands a deal needs a ใบขอซื้อ for — one F-SM-001 per brand.

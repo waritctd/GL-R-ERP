@@ -88,6 +88,9 @@ function closeReady(ticket) {
  * `!ticket.commissionRecorded` naturally treats `undefined` the same as `false` ("not recorded"),
  * which is the safe default: it never hides a step that might still be needed.
  *
+ * `to` is the finance deal page (`/finance/deals/:id`) for every viewer role. The commission step
+ * always goes to `/commissions?ticketId=`.
+ *
  * @param {string} [viewerRole] GLA-118 (owner ruling 2026-09-20, part A): steps 2 and 3 both
  *   record a payment (ยืนยันรับมัดจำ = confirmDepositPaid, รับชำระส่วนที่เหลือ = confirmFinalPayment),
  *   which is account ONLY now — the CEO fallback is gone. The CEO can still reach this page
@@ -103,18 +106,22 @@ export function nextAccountAction(ticket, viewerRole) {
   if (!ticket) return null;
   const outstanding = ticket.amountOutstanding != null && Number(ticket.amountOutstanding) > 0;
   const canRecordPayments = viewerRole === undefined || viewerRole === 'account';
+  // H1 lockdown: account is refused on the /tickets deal routes and works a deal on the finance page.
+  // The CEO reaches /finance too (owner ruling), so every viewer of this worklist helper lands on the
+  // finance deal page. (dealHref, used by the ticket list, still sends the ceo to /tickets/:id.)
+  const dealPath = `/finance/deals/${ticket.id}`;
 
   if (ticket.overdue && outstanding) {
-    return { key: 'chaseOverdue', label: 'ติดตามชำระ', to: `/tickets/${ticket.id}`, urgent: true };
+    return { key: 'chaseOverdue', label: 'ติดตามชำระ', to: dealPath, urgent: true };
   }
   if (canRecordPayments && ticket.status === 'quotation_issued' && ticket.paymentStatus === 'DEPOSIT_NOTICE_ISSUED') {
-    return { key: 'confirmDeposit', label: 'ยืนยันรับมัดจำ', to: `/tickets/${ticket.id}`, urgent: false };
+    return { key: 'confirmDeposit', label: 'ยืนยันรับมัดจำ', to: dealPath, urgent: false };
   }
   if (canRecordPayments && ticket.status === 'quotation_issued' && finalPaymentDue(ticket)) {
-    return { key: 'confirmFinalPayment', label: 'รับชำระส่วนที่เหลือ', to: `/tickets/${ticket.id}`, urgent: false };
+    return { key: 'confirmFinalPayment', label: 'รับชำระส่วนที่เหลือ', to: dealPath, urgent: false };
   }
   if (closeReady(ticket)) {
-    return { key: 'confirmCloseReady', label: 'ยืนยันพร้อมปิดงาน', to: `/tickets/${ticket.id}`, urgent: false };
+    return { key: 'confirmCloseReady', label: 'ยืนยันพร้อมปิดงาน', to: dealPath, urgent: false };
   }
   if (ticket.salesStage === 'CLOSED_PAID' && !ticket.commissionRecorded) {
     return {

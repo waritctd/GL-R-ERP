@@ -3102,6 +3102,10 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     void importAndAccount_readIndividualDeals_butGlobalListScopedToOwn() {
         DealQuotationDto created = quotationService.create(ticketId,
             upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        // H1 lockdown: account now reads a deal's quotations only inside its list scope (live, S10+).
+        setSalesStage(ticketId, "PROCUREMENT");
+        // ...and only once the quotation went to the customer (2026-09-30 ruling): APPROVED here.
+        setDocStatus(created.id(), "APPROVED");
         for (UserPrincipal reader : List.of(importActor, accountActor)) {
             assertThat(quotationService.get(created.id(), reader).id()).isEqualTo(created.id());
             assertThat(quotationService.listForTicket(ticketId, reader))
@@ -3115,6 +3119,179 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
                 upsertRequest(List.of(sampleItem("1.00", 1))), reader));
             assertForbidden(() -> quotationService.approve(created.id(), new ApproveRequest(null), reader));
         }
+    }
+
+    /** H1 lockdown: the SAME reads are refused to account on a deal outside its list scope (below S10),
+     * on every read path (get / list-for-ticket / PDF); import is unaffected. */
+    @Test
+    void account_isRefusedADealQuotationBelowS10_onEveryReadPath_importIsNot() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        setSalesStage(ticketId, "NEGOTIATION");
+
+        assertForbidden(() -> quotationService.get(created.id(), accountActor));
+        assertForbidden(() -> quotationService.listForTicket(ticketId, accountActor));
+        assertForbidden(() -> quotationService.renderPdf(created.id(), accountActor));
+        assertThat(quotationService.get(created.id(), importActor).id()).isEqualTo(created.id());
+    }
+
+    private static final java.util.Set<String> PRICE_INTERNAL_KEYS = java.util.Set.of(
+        "unitPrice", "discountPct", "specialPriceSqm", "adjustmentPct", "adjustmentAmount", "catalogPriceId",
+        "specialPriceLine", "calculationLine", "priceMode", "ceoPriceMode", "priceModeChangedFromCeo",
+        "priceChangedFromCeo", "itemsRemovedFromCeoCount", "removedCeoItems",
+        "ceoListUnitPrice", "ceoDiscountPct", "ceoSpecialPriceSqm", "ceoDirectNetPrice", "ceoNetUnitPrice");
+
+    private com.fasterxml.jackson.databind.JsonNode jsonOf(Object dto) {
+        return new com.fasterxml.jackson.databind.ObjectMapper()
+            .registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule()).valueToTree(dto);
+    }
+
+    private void assertPriceInternalsEmptied(com.fasterxml.jackson.databind.JsonNode node, String path) {
+        if (node.isObject()) {
+            node.fields().forEachRemaining(e -> {
+                var v = e.getValue();
+                if (PRICE_INTERNAL_KEYS.contains(e.getKey())) {
+                    boolean empty = v.isNull() || (v.isBoolean() && !v.asBoolean()) || (v.isNumber() && v.asInt() == 0)
+                        || (v.isArray() && v.isEmpty());
+                    assertThat(empty).as(path + "." + e.getKey() + " must be emptied but was " + v).isTrue();
+                }
+                assertPriceInternalsEmptied(v, path + "." + e.getKey());
+            });
+        } else if (node.isArray()) {
+            node.forEach(n -> assertPriceInternalsEmptied(n, path + "[]"));
+        }
+    }
+
+    private void assertNetFieldsKept(com.fasterxml.jackson.databind.JsonNode quotation) {
+        assertThat(quotation.get("number").asText()).isNotBlank();
+        assertThat(quotation.get("grandTotal").isNull()).isFalse();
+        assertThat(quotation.get("items")).isNotEmpty();
+        quotation.get("items").forEach(i -> {
+            assertThat(i.get("netUnitPrice").isNull()).isFalse();
+            assertThat(i.get("lineAmount").isNull()).isFalse();
+        });
+    }
+
+    /** Ruling 3 covers EVERY origin: a DEAL_DIRECT quotation read by an in-scope account is redacted too. */
+    @Test
+    void account_readingADealDirectQuotation_getsNetPricesButNoListPriceOrDiscount() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        setSalesStage(ticketId, "PROCUREMENT");
+        setDocStatus(created.id(), "APPROVED"); // account sees only quotations that went to the customer
+
+        var viaGet = jsonOf(quotationService.get(created.id(), accountActor));
+        var viaList = jsonOf(quotationService.listForTicket(ticketId, accountActor));
+
+        assertPriceInternalsEmptied(viaGet, "get");
+        assertPriceInternalsEmptied(viaList, "list");
+        assertNetFieldsKept(viaGet);
+        assertNetFieldsKept(viaList.get(0));
+        // regression: the owning rep still gets the list price
+        assertThat(jsonOf(quotationService.get(created.id(), salesActor)).get("items").get(0).get("unitPrice").isNull())
+            .isFalse();
+    }
+
+    /**
+     * 2026-09-30 owner ruling: for account, a deal quotation is visible only once it has gone to the customer --
+     * APPROVED (DEAL_DIRECT's post-approval status), ISSUED (PRICING_REQUEST's), SENT, ACCEPTED. Everything else
+     * (DRAFT, PENDING_APPROVAL, REJECTED, CANCELLED, ...) is 403 on get / PDF / XLS / picture and absent from
+     * listForTicket and search. Other roles are unchanged.
+     */
+    @Test
+    void account_seesADealQuotationOnlyOnceItWentToTheCustomer() {
+        setSalesStage(ticketId, "PROCUREMENT");
+        DealQuotationDto draft = quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        DealQuotationDto submitted = quotationService.submit(
+            quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor).id(), salesActor);
+        DealQuotationDto rejected = quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        DealQuotationDto cancelled = quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        setDocStatus(rejected.id(), "REJECTED");
+        setDocStatus(cancelled.id(), "CANCELLED");
+        DealQuotationDto approved = quotationService.approve(
+            quotationService.submit(quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))),
+                salesActor).id(), salesActor).id(), new ApproveRequest(null), salesManagerActor);
+        DealQuotationDto accepted = quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        setDocStatus(accepted.id(), "ACCEPTED");
+        assertThat(approved.docStatus()).isEqualTo("APPROVED");
+        assertThat(submitted.docStatus()).isEqualTo("PENDING_APPROVAL");
+        // account sees only quotations on deals IT created in search(); flip ownership AFTER the rep's writes
+        jdbc.update("UPDATE sales.ticket SET created_by = :a WHERE ticket_id = :t",
+            new org.springframework.jdbc.core.namedparam.MapSqlParameterSource("a", accountUserId).addValue("t", ticketId));
+
+        for (DealQuotationDto hidden : List.of(draft, submitted, rejected, cancelled)) {
+            long itemId = hidden.items().get(0).id();
+            assertForbidden(() -> quotationService.get(hidden.id(), accountActor));
+            assertForbidden(() -> quotationService.renderPdf(hidden.id(), accountActor));
+            assertForbidden(() -> quotationService.renderXlsx(hidden.id(), accountActor));
+            assertForbidden(() -> quotationService.getItemPicture(hidden.id(), itemId, accountActor));
+        }
+        for (DealQuotationDto shown : List.of(approved, accepted)) {
+            assertThat(quotationService.get(shown.id(), accountActor).id()).isEqualTo(shown.id());
+            assertThat(quotationService.renderPdf(shown.id(), accountActor)).isNotEmpty();
+            assertThat(quotationService.renderXlsx(shown.id(), accountActor)).isNotEmpty();
+        }
+
+        List<Long> listed = quotationService.listForTicket(ticketId, accountActor).stream().map(DealQuotationDto::id).toList();
+        assertThat(listed).contains(approved.id(), accepted.id())
+            .doesNotContain(draft.id(), submitted.id(), rejected.id(), cancelled.id());
+        List<Long> searched = quotationService.search(null, false, accountActor).stream().map(DealQuotationDto::id).toList();
+        assertThat(searched).contains(approved.id(), accepted.id())
+            .doesNotContain(draft.id(), submitted.id(), rejected.id(), cancelled.id());
+
+        // regression: sales_manager and ceo (the rep no longer owns the flipped fixture) still see every status, drafts included
+        for (UserPrincipal reader : List.of(salesManagerActor, ceoActor)) {
+            assertThat(quotationService.get(draft.id(), reader).id()).isEqualTo(draft.id());
+            assertThat(quotationService.listForTicket(ticketId, reader).stream().map(DealQuotationDto::id).toList())
+                .contains(draft.id(), rejected.id(), cancelled.id());
+        }
+    }
+
+    private void setDocStatus(long quotationId, String status) {
+        jdbc.update("UPDATE sales.quotation SET doc_status = :s WHERE quotation_id = :q",
+            new org.springframework.jdbc.core.namedparam.MapSqlParameterSource("s", status).addValue("q", quotationId));
+    }
+
+    /** search() (the global list) is one more JSON read: account sees only deals it created, redacted. */
+    @Test
+    void search_forAccount_redactsTheRowsItReturns() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        setDocStatus(created.id(), "APPROVED"); // account sees only quotations that went to the customer
+        jdbc.update("UPDATE sales.ticket SET created_by = :a WHERE ticket_id = :t",
+            new org.springframework.jdbc.core.namedparam.MapSqlParameterSource("a", accountUserId).addValue("t", ticketId));
+
+        var rows = quotationService.search(null, false, accountActor);
+
+        assertThat(rows).extracting(DealQuotationDto::id).contains(created.id());
+        assertPriceInternalsEmptied(jsonOf(rows), "search");
+        assertNetFieldsKept(jsonOf(rows.stream().filter(r -> r.id() == created.id()).findFirst().orElseThrow()));
+    }
+
+    /** A2 fix: the finance view's item unit must come out of a quotation built through the REAL
+     * DEAL_DIRECT insert path, which writes {@code raw_unit} only (never unit_basis /
+     * requested_unit_basis) -- a hand-built fixture that fills those columns hid this. */
+    @Test
+    void financeItems_fromTheRealDealDirectInsertPath_carryTheHumanRawUnit() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+
+        String rawUnit = jdbc.queryForObject(
+            "SELECT raw_unit FROM sales.quotation_item WHERE quotation_id = :id ORDER BY seq LIMIT 1",
+            new org.springframework.jdbc.core.namedparam.MapSqlParameterSource("id", created.id()), String.class);
+        assertThat(rawUnit).as("the DEAL_DIRECT path stores the human unit in raw_unit").isNotBlank();
+
+        var items = new th.co.glr.hr.finance.FinanceDealRepository(jdbc).findQuotationItems(created.id());
+
+        assertThat(items).hasSize(1);
+        assertThat(items.get(0).unit()).isEqualTo(rawUnit);
+        assertThat(items.get(0).qty()).isNotNull();
+        assertThat(items.get(0).unitPrice()).isNotNull();
+    }
+
+    private void setSalesStage(long ticketId, String stage) {
+        jdbc.update("UPDATE sales.ticket SET sales_stage = :s WHERE ticket_id = :id",
+            new org.springframework.jdbc.core.namedparam.MapSqlParameterSource("s", stage).addValue("id", ticketId));
     }
 
     @Test

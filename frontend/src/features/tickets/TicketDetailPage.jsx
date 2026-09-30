@@ -594,11 +594,20 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // staleness fix — list/dashboard/notifications went stale after every
   // action before this slice and nothing refreshed them.
   function applyTicketUpdate(updatedTicket) {
-    queryClient.setQueryData(queryKeys.ticketDetail(ticketId), updatedTicket);
+    if (updatedTicket) {
+      queryClient.setQueryData(queryKeys.ticketDetail(ticketId), updatedTicket);
+    } else {
+      // The re-pointed money calls (recordPayment / confirmFinalPayment / confirmCloseReady) answer
+      // with the finance view `{ deal }`, which carries no ticket — writing `undefined` into the
+      // cache would blank the page, so re-read the ticket instead.
+      queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(ticketId) });
+    }
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketActions(ticketId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketPayments(ticketId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketDeliveries(ticketId) });
     queryClient.invalidateQueries({ queryKey: ['tickets', 'list'] });
+    // The ceo can open the same deal on /finance/deals/:id; its cached finance view is money state too.
+    queryClient.invalidateQueries({ queryKey: ['finance'] });
     queryClient.invalidateQueries({ queryKey: queryKeys.dashboardSummary() });
     queryClient.invalidateQueries({ queryKey: queryKeys.notifications() });
   }

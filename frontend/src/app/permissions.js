@@ -99,8 +99,9 @@ const PATH_GUARDS = [
   // Account's money-lifecycle worklist (งานการเงิน) — mirrors ROLE_PERMISSIONS
   // .canConfirmPayments exactly (account/ceo), same audience as the ticket
   // confirmDepositPaid/confirmFinalPayment/confirmCloseReady actions this
-  // page's rows drive.
-  { test: (p) => p === '/finance', can: (u) => hasPermission(u.role, 'canConfirmPayments') },
+  // page's rows drive. The prefix arm covers /finance/deals/:id (the per-deal finance page): the
+  // exact match alone would leave it unclaimed, and canAccessPath fails OPEN for an unclaimed path.
+  { test: (p) => p === '/finance' || p.startsWith('/finance/'), can: (u) => hasPermission(u.role, 'canConfirmPayments') },
   // Split (issue #390): mirrors PayrollController exactly -- every GET plus the non-persisting
   // POST /preview and /preview/export/{kind} are hasAnyRole('HR','CEO'); every write stays
   // hr-only and is gated inside PayrollPage.jsx (canManagePayroll), not at the route level.

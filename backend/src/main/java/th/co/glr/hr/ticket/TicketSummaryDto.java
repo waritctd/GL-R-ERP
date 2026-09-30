@@ -112,8 +112,53 @@ public record TicketSummaryDto(
      * backend reads this flag any more. Cleared best-effort when the order is confirmed from a direct
      * quotation ({@code DealQuotationService#confirmOrderFromDirectQuotation}).
      */
-    boolean quotationOnly
+    boolean quotationOnly,
+    /**
+     * The date the balance is DUE, derived from the payable quotation's own terms (owner ruling
+     * 2026-09-30) — NOT the stored billing {@link #dueDate} column, which stays as the CEO's
+     * billing-tab value. {@code null} when there is no structured term (legacy / PCR / no quotation)
+     * OR the deal has not been fully delivered yet (then {@link #paymentDueBasis} still says which
+     * term applies, so a UI can say "waiting for delivery"). Basis: credit N days counted from the date
+     * the deal became FULLY delivered, or that delivery date itself for "ชำระเมื่อ/ก่อนส่งมอบ". Bangkok
+     * calendar date. {@link #overdue} is computed from this, never from {@link #dueDate}; an unpaid
+     * deposit is never overdue.
+     */
+    LocalDate paymentDueDate,
+    /** {@code CREDIT_FROM_DELIVERY} or {@code ON_DELIVERY}; {@code null} exactly when the quotation has no structured term. */
+    String paymentDueBasis,
+    /** The N of {@code CREDIT_FROM_DELIVERY}; {@code null} for any other basis. */
+    Integer paymentDueCreditDays
 ) {
+    /** The shape before the derived payment-due fields existed: they default to "no structured term". */
+    public TicketSummaryDto(
+        long id, String code, String type, String title, String status, String priority,
+        long createdById, String createdByName, Long assignedToId, String assignedToName,
+        String customerName, Long customerId, Long projectId, String projectName,
+        Long contactId, String contactName, String note,
+        Instant createdAt, Instant updatedAt, Instant closedAt, int itemCount, boolean hasEdits,
+        String paymentStatus, String fulfillmentStatus,
+        String salesStage, String lostReason, Instant lostAt, Instant stageUpdatedAt,
+        String lifecycle, String tenderRequirement, String depositPolicy, String depositPolicyReason,
+        String entryChannel, LocalDate billingDate, LocalDate dueDate, Integer creditTermDays,
+        LocalDate lastFollowUpAt, LocalDate nextFollowUpAt, String paymentStage,
+        BigDecimal amountPayable, BigDecimal amountPaid, BigDecimal amountOutstanding, boolean overdue,
+        Instant closeConfirmedAt, String closeConfirmedByName, boolean invoiceOnFile,
+        String cancelReason, Instant cancelledAt,
+        Integer winProbabilityOverride, String designerName, String ownerName, String buyerName,
+        boolean stale, boolean commissionRecorded, Instant reopenedAt, int reopenCount,
+        boolean quotationOnly
+    ) {
+        this(id, code, type, title, status, priority, createdById, createdByName, assignedToId,
+            assignedToName, customerName, customerId, projectId, projectName, contactId, contactName,
+            note, createdAt, updatedAt, closedAt, itemCount, hasEdits, paymentStatus, fulfillmentStatus,
+            salesStage, lostReason, lostAt, stageUpdatedAt, lifecycle, tenderRequirement, depositPolicy,
+            depositPolicyReason, entryChannel, billingDate, dueDate, creditTermDays, lastFollowUpAt,
+            nextFollowUpAt, paymentStage, amountPayable, amountPaid, amountOutstanding, overdue,
+            closeConfirmedAt, closeConfirmedByName, invoiceOnFile, cancelReason, cancelledAt,
+            winProbabilityOverride, designerName, ownerName, buyerName, stale, commissionRecorded,
+            reopenedAt, reopenCount, quotationOnly, null, null, null);
+    }
+
     /**
      * The pre-GLA-136 full-arity shape, kept so every existing {@code new TicketSummaryDto(...)}
      * call site (mostly test fixtures) keeps compiling unchanged — they all describe ordinary
@@ -208,7 +253,8 @@ public record TicketSummaryDto(
             creditTermDays, lastFollowUpAt, nextFollowUpAt, paymentStage, amountPayable, amountPaid,
             amountOutstanding, overdue, closeConfirmedAt, closeConfirmedByName, invoiceOnFile,
             cancelReason, cancelledAt, winProbabilityOverride, designerName, ownerName, buyerName, stale,
-            commissionRecorded, reopenedAt, reopenCount, quotationOnly);
+            commissionRecorded, reopenedAt, reopenCount, quotationOnly, paymentDueDate, paymentDueBasis,
+            paymentDueCreditDays);
     }
 
     /**

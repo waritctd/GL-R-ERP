@@ -321,6 +321,10 @@ export const API_ROUTES = {
     freightRates: '/api/pricing-formula-config/freight-rates',
     freightRate: (freightRateId) => `/api/pricing-formula-config/freight-rates/${freightRateId}`,
   },
+  finance: {
+    deal: (id) => `/api/finance/deals/${id}`,
+    action: (id, action) => `/api/finance/deals/${id}/${action}`,
+  },
   attachments: {
     list: (ticketId) => `/api/tickets/${ticketId}/attachments`,
     upload: (ticketId) => `/api/tickets/${ticketId}/attachments`,
