@@ -1,6 +1,6 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PricingRequestDetailPage } from './PricingRequestDetailPage.jsx';
@@ -3280,6 +3280,54 @@ describe('PricingRequestDetailPage blank-factory lines', () => {
     await waitFor(() => expect(api.pricingRequests.setItemFactory).toHaveBeenCalledWith(
       501, 2, { factoryId: 602 },
     ));
+  });
+
+  // QA BUG-20: pressing บันทึกโรงงาน with nothing picked used to be a silent no-op (the button was
+  // disabled — no click, no hint why). Now it stays clickable and says what to do, and still does
+  // NOT fire a NaN factoryId at the endpoint.
+  it('warns instead of calling the endpoint when บันทึกโรงงาน is pressed with no factory selected', async () => {
+    const request = buildRequestWithBlankFactoryLine();
+    renderDetailPage({ user: importUser, request });
+    await waitForLoaded(request);
+
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกโรงงาน' }));
+
+    expect(screen.getByText('เลือกโรงงานจากรายการก่อนกดบันทึก')).toBeTruthy();
+    expect(api.pricingRequests.setItemFactory).not.toHaveBeenCalled();
+  });
+
+  // QA BUG-20: the double-submit lock. Both clicks land inside ONE act(), so React cannot re-render
+  // between them — `saving` (isPending) is still false and the button still enabled for the second
+  // click, exactly the fast-double-click window. Only ImportFactoryPicker's inFlight ref can stop the
+  // repeat; separate fireEvent.click calls would each flush a render and pass without the ref.
+  it('fires setItemFactory once when บันทึกโรงงาน is clicked twice before the first save settles', async () => {
+    api.pricingRequests.setItemFactory.mockReturnValue(new Promise(() => {}));
+    const request = buildRequestWithBlankFactoryLine();
+    renderDetailPage({ user: importUser, request });
+    await waitForLoaded(request);
+
+    fireEvent.focus(screen.getByLabelText('ระบุโรงงาน'));
+    fireEvent.click(await screen.findByRole('option', { name: 'Cotto Industry' }));
+    const save = screen.getByRole('button', { name: 'บันทึกโรงงาน' });
+    act(() => {
+      save.click();
+      save.click();
+    });
+
+    await waitFor(() => expect(api.pricingRequests.setItemFactory).toHaveBeenCalledTimes(1));
+    expect(await screen.findByRole('button', { name: 'กำลังบันทึก…' })).toBeTruthy();
+    expect(api.pricingRequests.setItemFactory).toHaveBeenCalledTimes(1);
+  });
+
+  // QA BUG-20: a line that already has a factory is a silent dead-end no more — it explains that
+  // changing means a new revision (the backend refuses an in-place re-route), instead of leaving
+  // Import to guess why the picker vanished.
+  it('tells Import how to change a factory once one is set, without offering a re-route', async () => {
+    const request = buildRequestWithBlankFactoryLine();
+    renderDetailPage({ user: importUser, request });
+    await waitForLoaded(request);
+
+    expect(screen.getByText(/ระบบล็อกไว้กันใบขอราคาที่จัดกลุ่มตามโรงงานเพี้ยน/)).toBeTruthy();
   });
 
   it('offers no input on a line that already names a factory — the backend refuses a re-route', async () => {
