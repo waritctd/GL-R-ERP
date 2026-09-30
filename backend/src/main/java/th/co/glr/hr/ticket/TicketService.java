@@ -733,7 +733,9 @@ public class TicketService {
             s.closeConfirmedAt(), s.closeConfirmedByName(), s.invoiceOnFile(),
             s.cancelReason(), s.cancelledAt(),
             s.winProbabilityOverride(), s.designerName(), s.ownerName(), s.buyerName(), s.stale(),
-            s.commissionRecorded(), s.reopenedAt(), s.reopenCount(), s.quotationOnly());
+            s.commissionRecorded(), s.reopenedAt(), s.reopenCount(), s.quotationOnly(),
+            s.paymentDueDate(), s.paymentDueBasis(), s.paymentDueCreditDays(),
+            s.liveDirectQuotation());
     }
 
     /**

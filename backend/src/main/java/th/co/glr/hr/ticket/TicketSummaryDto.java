@@ -127,7 +127,15 @@ public record TicketSummaryDto(
     /** {@code CREDIT_FROM_DELIVERY} or {@code ON_DELIVERY}; {@code null} exactly when the quotation has no structured term. */
     String paymentDueBasis,
     /** The N of {@code CREDIT_FROM_DELIVERY}; {@code null} for any other basis. */
-    Integer paymentDueCreditDays
+    Integer paymentDueCreditDays,
+    /**
+     * Quotation ↔ deal linking slice 2 (S2-B4): the NEWEST live {@code DEAL_DIRECT} quotation on
+     * this deal ({@code {id, number, docStatus, recipientType}}), or {@code null} when there is none.
+     * Filled by {@code TicketRepository#enrichSummary} for list rows AND the single-deal read — the
+     * deal page's CTA cascade and the {@code /quotations/new} deal picker key on it. See
+     * {@link LiveDirectQuotationDto} for the one "live" definition.
+     */
+    LiveDirectQuotationDto liveDirectQuotation
 ) {
     /** The shape before the derived payment-due fields existed: they default to "no structured term". */
     public TicketSummaryDto(
@@ -156,7 +164,44 @@ public record TicketSummaryDto(
             nextFollowUpAt, paymentStage, amountPayable, amountPaid, amountOutstanding, overdue,
             closeConfirmedAt, closeConfirmedByName, invoiceOnFile, cancelReason, cancelledAt,
             winProbabilityOverride, designerName, ownerName, buyerName, stale, commissionRecorded,
-            reopenedAt, reopenCount, quotationOnly, null, null, null);
+            reopenedAt, reopenCount, quotationOnly, null, null, null, null);
+    }
+
+    /**
+     * The pre-slice-2 canonical shape — the payment-due fields but no {@link #liveDirectQuotation}
+     * (rebase onto #1095, 2026-10-01: both appended to this record) — kept so every call site that
+     * builds the full pre-slice-2 shape compiles unchanged. {@code liveDirectQuotation} defaults to
+     * {@code null}; only {@code TicketRepository#enrichSummary} computes the real value.
+     */
+    public TicketSummaryDto(
+        long id, String code, String type, String title, String status, String priority,
+        long createdById, String createdByName, Long assignedToId, String assignedToName,
+        String customerName, Long customerId, Long projectId, String projectName,
+        Long contactId, String contactName, String note,
+        Instant createdAt, Instant updatedAt, Instant closedAt, int itemCount, boolean hasEdits,
+        String paymentStatus, String fulfillmentStatus,
+        String salesStage, String lostReason, Instant lostAt, Instant stageUpdatedAt,
+        String lifecycle, String tenderRequirement, String depositPolicy, String depositPolicyReason,
+        String entryChannel, LocalDate billingDate, LocalDate dueDate, Integer creditTermDays,
+        LocalDate lastFollowUpAt, LocalDate nextFollowUpAt, String paymentStage,
+        BigDecimal amountPayable, BigDecimal amountPaid, BigDecimal amountOutstanding, boolean overdue,
+        Instant closeConfirmedAt, String closeConfirmedByName, boolean invoiceOnFile,
+        String cancelReason, Instant cancelledAt,
+        Integer winProbabilityOverride, String designerName, String ownerName, String buyerName,
+        boolean stale, boolean commissionRecorded, Instant reopenedAt, int reopenCount,
+        boolean quotationOnly, LocalDate paymentDueDate, String paymentDueBasis,
+        Integer paymentDueCreditDays
+    ) {
+        this(id, code, type, title, status, priority, createdById, createdByName, assignedToId,
+            assignedToName, customerName, customerId, projectId, projectName, contactId, contactName,
+            note, createdAt, updatedAt, closedAt, itemCount, hasEdits, paymentStatus, fulfillmentStatus,
+            salesStage, lostReason, lostAt, stageUpdatedAt, lifecycle, tenderRequirement, depositPolicy,
+            depositPolicyReason, entryChannel, billingDate, dueDate, creditTermDays, lastFollowUpAt,
+            nextFollowUpAt, paymentStage, amountPayable, amountPaid, amountOutstanding, overdue,
+            closeConfirmedAt, closeConfirmedByName, invoiceOnFile, cancelReason, cancelledAt,
+            winProbabilityOverride, designerName, ownerName, buyerName, stale, commissionRecorded,
+            reopenedAt, reopenCount, quotationOnly, paymentDueDate, paymentDueBasis,
+            paymentDueCreditDays, null);
     }
 
     /**
@@ -254,7 +299,7 @@ public record TicketSummaryDto(
             amountOutstanding, overdue, closeConfirmedAt, closeConfirmedByName, invoiceOnFile,
             cancelReason, cancelledAt, winProbabilityOverride, designerName, ownerName, buyerName, stale,
             commissionRecorded, reopenedAt, reopenCount, quotationOnly, paymentDueDate, paymentDueBasis,
-            paymentDueCreditDays);
+            paymentDueCreditDays, liveDirectQuotation);
     }
 
     /**

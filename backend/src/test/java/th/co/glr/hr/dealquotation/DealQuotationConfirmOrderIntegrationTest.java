@@ -680,7 +680,7 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
             null, null, null, WastageCalculator.LINE_TYPE_ADJUSTMENT, "ส่วนลดพิเศษ", null, null, null, null,
             null, null, new BigDecimal("100.00"), null, null, null);
         return new UpsertDealQuotationRequest(null, null, null, null, 50, "CASH_ON_DELIVERY",
-            0, 30, null, "NET", "TH", "THB", List.of(tile, plain, adjustment));
+            0, 30, null, "NET", "TH", "THB", List.of(tile, plain, adjustment)).withRecipientType("OWNER");
     }
 
     private TicketItemRequest ticketItem() {

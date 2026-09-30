@@ -563,7 +563,7 @@ class DealQuotationPictureIntegrationTest extends AbstractPostgresIntegrationTes
     }
 
     private UpsertDealQuotationRequest upsert(List<ItemInput> items) {
-        return new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30, null, items);
+        return new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30, null, items).withRecipientType("OWNER");
     }
 
     /** 60x60 -> 0.36 ตร.ม./แผ่น (explicit -- ตร.ม./แผ่น is never derived from sizeText any more;

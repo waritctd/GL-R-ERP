@@ -56,6 +56,7 @@ import th.co.glr.hr.pricingrequest.PricingRequestRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestStatus;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.PromoteToDealResultDto;
 import th.co.glr.hr.ticket.DealLifecycle;
+import th.co.glr.hr.ticket.QuotationRecipient;
 import th.co.glr.hr.ticket.QuotationStatus;
 import th.co.glr.hr.ticket.RelatedDocumentType;
 import th.co.glr.hr.ticket.TicketEventKind;
@@ -267,7 +268,22 @@ public class DealQuotationService {
     public DealQuotationDto create(long ticketId, UpsertDealQuotationRequest request, UserPrincipal actor) {
         TicketSummaryDto ticket = requireTicketSummary(ticketId);
         requireEditAccess(actor, ticket);
+        // Quotation ↔ deal linking slice 2 — precedence (mirrored by mockApi.dealQuotations.create):
+        // authz 403 (above) → recipient 400 → one-pricing-route 409 → N6 409, all BEFORE anything is
+        // resolved or written (so a malformed body on a blocked deal reads as the 400, and a blocked
+        // deal refuses before its items are even validated).
+        String recipientType = requireRecipientForCreate(request.recipientType());
         quotations.lockTicket(ticketId);
+        // One pricing route per deal (owner ruling 2026-09-30): the reverse of slice 1's
+        // DirectQuotationLocks#requireNoLiveDirectQuotation. Scoped to THIS method only — a revision
+        // or reorder of an existing direct quotation (#createRevision/#createReorder) is not a new
+        // route choice, and #createFromPricingRequest IS the pricing route.
+        th.co.glr.hr.ticket.DirectQuotationLocks.requireNoLivePricingRequest(tickets, ticketId);
+        // N6 (S2-B3): one live direct quotation per deal — a second create would mint a second base
+        // number. The 409 names the live one (liveQuotationId/number/docStatus, top-level in the JSON
+        // body) so the client can offer "แก้ไขฉบับนั้น" / "สร้างฉบับแก้ไข". Under #lockTicket, so two
+        // concurrent creates cannot both pass it.
+        th.co.glr.hr.ticket.DirectQuotationLocks.requireNoLiveDirectQuotationForCreate(tickets, ticketId);
         ContactSnapshot contact = resolveContact(request.contactId(), null, ticket);
         String priceMode = resolvePriceMode(request.priceMode());
         String documentLanguage = resolveDocumentLanguage(request.documentLanguage());
@@ -322,10 +338,32 @@ public class DealQuotationService {
             // A brand-new document is neither a revision (parentQuotationId) nor a reorder clone
             // (derivedFromQuotationId) — both null.
             subtotal, null, 1, null, items,
+            // Slice 2 (S2-B1): the rep's ผู้รับ and its Thai label, where this call used to take
+            // the short constructor's hard-coded 'UNSPECIFIED'/null. Still DEAL_DIRECT, no source
+            // pricing request/decision.
+            DealQuotationRepository.ORIGIN_DEAL_DIRECT, recipientType, QuotationRecipient.thaiLabel(recipientType),
+            null, null,
             // Owner-directed reversal of F2 (2026-09-26) — manual, optional buyer name; blank
             // clears it to null, same discipline as every other free-text header field here.
             blankToNull(request.orderedByName())));
+        // Deal-stage rule hook — owned by the entry-channel/stage-route work (.design/deal-route-staging §5 Flow 10): recipient → stage, forward-only via TicketService.autoAdvanceStage. Intentionally empty here.
         return requireQuotation(id);
+    }
+
+    /** Slice 2 (S2-B1): a direct create must name its ผู้รับ — DESIGNER / OWNER / BUYER only. Returns
+     * the validated code. Both sentences are mirrored verbatim by {@code mockApi.dealQuotations}. */
+    private static String requireRecipientForCreate(String recipientType) {
+        if (recipientType == null || recipientType.isBlank()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุผู้รับใบเสนอราคา");
+        }
+        return requireAddressableRecipient(recipientType);
+    }
+
+    private static String requireAddressableRecipient(String recipientType) {
+        if (!QuotationRecipient.isAddressable(recipientType)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับผู้รับใบเสนอราคา '" + recipientType + "'");
+        }
+        return recipientType;
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -867,6 +905,22 @@ public class DealQuotationService {
         // (already loaded, right above) and branches on its origin — every other write path
         // already goes through it; this was the one straggler.
         requireEditAccessForQuotation(actor, existing);
+        // Slice 2 (S2-B1) — ผู้รับ on update. Omitted/null keeps the stored value (a pre-slice-2
+        // client, or the editor on a PRICING_REQUEST row, which never sends it). A VALUE is refused
+        // before anything is computed or persisted, in mockApi.dealQuotations.update's order: not a
+        // DRAFT → 409; a PRICING_REQUEST row (its recipient belongs to its คำขอราคา) → 409, whatever
+        // the value, even the stored one; not DESIGNER/OWNER/BUYER → 400.
+        String requestedRecipient = request.recipientType();
+        if (requestedRecipient != null) {
+            if (!QuotationStatus.DRAFT.equals(existing.docStatus())) {
+                throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงแก้ไขไม่ได้");
+            }
+            if ("PRICING_REQUEST".equals(existing.origin())) {
+                throw new ApiException(HttpStatus.CONFLICT,
+                    "ผู้รับของใบเสนอราคาจากคำขอราคามาจากคำขอราคา — แก้ที่คำขอราคาต้นทาง");
+            }
+            requireAddressableRecipient(requestedRecipient);
+        }
         ContactSnapshot contact = resolveContact(request.contactId(), existing.contactId(), ticket);
         // ⚠️ v3, review fix F1: a MISSING priceMode on UPDATE keeps the STORED one. #resolvePriceMode's
         // blank→NET default is correct on CREATE (a brand-new document with no mode chosen IS a NET
@@ -960,6 +1014,21 @@ public class DealQuotationService {
             blankToNull(request.orderedByName()));
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงแก้ไขไม่ได้");
+        }
+        // Slice 2 (S2-B1): persist a sent ผู้รับ. Validated above; the header CAS just proved the row
+        // is still a DRAFT inside this transaction, and updateRecipient's own WHERE re-states
+        // DRAFT + DEAL_DIRECT, so 0 rows here can only mean the row moved under us.
+        if (requestedRecipient != null) {
+            boolean recipientChanged = !requestedRecipient.equals(existing.recipientType());
+            String label = QuotationRecipient.thaiLabel(requestedRecipient);
+            if (recipientChanged || !java.util.Objects.equals(label, existing.recipientLabel())) {
+                if (quotations.updateRecipient(id, requestedRecipient, label) == 0) {
+                    throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงแก้ไขไม่ได้");
+                }
+            }
+            if (recipientChanged) {
+                // Deal-stage rule hook — owned by the entry-channel/stage-route work (.design/deal-route-staging §5 Flow 10): recipient → stage, forward-only via TicketService.autoAdvanceStage. Intentionally empty here.
+            }
         }
         // Item ids are STABLE across a draft save (fix for the picture-dropping race this
         // replaced — a full delete+insert used to mint new ids on every save, so any client that
@@ -2292,6 +2361,15 @@ public class DealQuotationService {
             source.omitContactHonorific(), source.fullPaymentTerm(),
             source.subtotalAmount(), parentQuotationId,
             nextRevisionNo, derivedFromQuotationId, items,
+            // Slice 2 (S2-B1): the copy inherits the source's ผู้รับ VERBATIM, like every other
+            // header field here — before slice 2 every direct row was 'UNSPECIFIED', so the short
+            // constructor's hard-coded literal was the same thing; now a DESIGNER quotation's
+            // revision must stay DESIGNER (TicketSummaryDto.liveDirectQuotation serves the
+            // revision's). Every source reaching here is DEAL_DIRECT (createRevision/createReorder
+            // refuse PRICING_REQUEST via #requireStatusMachineEnabled, and #submit excludes that
+            // origin from the resubmit-as-revision path) — the origin is stated, not copied.
+            DealQuotationRepository.ORIGIN_DEAL_DIRECT, source.recipientType(), source.recipientLabel(),
+            null, null,
             // Owner-directed reversal of F2 (2026-09-26) — the copy inherits the source's manual
             // buyer name VERBATIM, same "copy every header field" rule as everything else here.
             source.orderedByName()));
