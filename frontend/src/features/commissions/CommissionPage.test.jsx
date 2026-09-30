@@ -482,7 +482,23 @@ describe('CommissionPage — account create-from-deal tax invoice upload', () =>
     renderAccountPage();
     fireEvent.change(screen.getByLabelText(/เลขที่ Ticket ID/), { target: { value: '42' } });
     fireEvent.click(screen.getByRole('button', { name: /โหลดข้อมูลดีล/ }));
-    expect(await screen.findByText(/ยังไม่ถึงขั้นตอนปิดงาน/)).not.toBeNull();
+    const msg = (await screen.findByText(/ยังไม่ถึงขั้นตอนปิดงาน/)).textContent;
+    // dealStageLabel() returns { label, tone }, never a string: interpolating the call itself
+    // renders "[object Object]" where the Thai stage name belongs. Pin the rendered text.
+    expect(msg).toContain('นัดส่งสินค้า / นัดรับเงินส่วนที่เหลือ');
+    expect(msg).not.toContain('[object Object]');
+  });
+
+  it('a stage with no Thai copy falls back to the raw code, still not "[object Object]"', async () => {
+    // dealStageLabel()'s fallback limb returns an object too, so a fix that only handles known
+    // stages would leak "[object Object]" here.
+    api.finance.getDeal.mockResolvedValue({ deal: financeDeal({ salesStage: 'FUTURE_STAGE' }) });
+    renderAccountPage();
+    fireEvent.change(screen.getByLabelText(/เลขที่ Ticket ID/), { target: { value: '42' } });
+    fireEvent.click(screen.getByRole('button', { name: /โหลดข้อมูลดีล/ }));
+    const msg = (await screen.findByText(/ยังไม่ถึงขั้นตอนปิดงาน/)).textContent;
+    expect(msg).toContain('FUTURE_STAGE');
+    expect(msg).not.toContain('[object Object]');
   });
 
   it('a successful create-from-deal invalidates the finance deal cache too, so the commission CTA is not stale', async () => {
