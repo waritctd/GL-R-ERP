@@ -108,10 +108,10 @@ async function buildClosedPaidDeal(sessions) {
   const ticketId = (await ticket.json()).ticket.summary.id;
 
   const created = await apiWrite(sessions.sales, 'post', `/api/tickets/${ticketId}/deal-quotations`, {
-    contactId: null, deptCode: 'P003', unitCode: 'D002', offerDate: '2026-09-10', depositPercent: 50,
+    contactId: null, recipientType: 'OWNER', deptCode: 'P003', unitCode: 'D002', offerDate: '2026-09-10', depositPercent: 50,
     remainderMode: 'ON_DELIVERY', validityDays: 30, customerNotes: null, items: [ITEM],
   });
-  expect(created.status(), 'POST deal-quotations').toBe(201);
+  expect(created.status(), `POST deal-quotations: ${await created.text()}`).toBe(201);
   const quotationId = (await created.json()).quotation.id;
   let r = await apiWrite(sessions.sales, 'post', `/api/deal-quotations/${quotationId}/submit`, {});
   expect(r.status(), 'submit').toBe(200);
