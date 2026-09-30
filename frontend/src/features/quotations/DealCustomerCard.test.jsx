@@ -1,6 +1,7 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DealCustomerCard } from './DealCustomerCard.jsx';
 import data from '../../data/thai-locations.json';
@@ -23,6 +24,9 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         createContact: vi.fn(),
         update: vi.fn(),
       },
+      // Slice 2: the "เลือกดีลที่มีอยู่" branch mounts DealPicker, which reads the deal list.
+      tickets: { list: vi.fn() },
+      dealQuotations: { createRevision: vi.fn() },
     },
   };
 });
@@ -454,6 +458,109 @@ describe('DealCustomerCard — ที่อยู่ on the selected customer', 
     fireEvent.blur(address);
     await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'ไม่มีสิทธิ์เข้าถึงรายการนี้'));
     await waitFor(() => expect(screen.getByLabelText(/^ที่อยู่/).value).toBe(repeat.address));
+  });
+});
+
+// ── Slice 2 — flow A (SLICE-2-FLOW-A.md §A) ────────────────────────────────────────────────────
+// The card becomes step 1 "ดีล": a segmented choice (เลือกดีลที่มีอยู่ | สร้างดีลใหม่) over the
+// DealPicker / today's customer+project card, then ผู้รับใบเสนอราคา* (three pill radios, required,
+// in S-order). The spec's live "ดีลจะอยู่ที่ขั้น …" helper line was dropped by owner ruling
+// 2026-09-30 (the recipient no longer moves the deal's stage in slice 2).
+describe('DealCustomerCard — ดีล step (slice 2)', () => {
+  const salesUser = { id: 6, name: 'คุณสมหมาย ขายดี', role: 'sales' };
+
+  function ModeHarness({ initialMode = 'pick', initialValue, errors, onModeChange }) {
+    const [mode, setMode] = React.useState(initialMode);
+    const [value, setValue] = React.useState(initialValue
+      ?? { customer: null, project: null, entryChannel: 'UNSPECIFIED', recipientType: '' });
+    return (
+      <DealCustomerCard
+        user={salesUser}
+        mode={mode}
+        onModeChange={(next) => { onModeChange?.(next); setMode(next); }}
+        selectedDeal={null}
+        value={value}
+        onChange={(patch) => setValue((prev) => ({ ...prev, ...patch }))}
+        errors={errors}
+        showToast={vi.fn()}
+      />
+    );
+  }
+
+  function renderCard(props) {
+    return render(wrap(<MemoryRouter initialEntries={['/quotations/new']}><ModeHarness {...props} /></MemoryRouter>));
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.tickets.list.mockResolvedValue({ tickets: [] });
+    api.customers.projects.mockResolvedValue({ projects: [] });
+  });
+
+  it('is titled "ดีล" and opens on เลือกดีลที่มีอยู่: the deal search, no customer/project fields, no ช่องทางรับงาน', async () => {
+    renderCard();
+    expect(screen.getByRole('heading', { name: 'ดีล' })).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'เลือกดีลที่มีอยู่' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: 'สร้างดีลใหม่' }).getAttribute('aria-pressed')).toBe('false');
+    expect(await screen.findByRole('combobox', { name: /ดีล/ })).not.toBeNull();
+    expect(screen.queryByLabelText(/^ลูกค้า/)).toBeNull();
+    expect(screen.queryByText('ช่องทางรับงาน')).toBeNull();
+  });
+
+  it('สร้างดีลใหม่ swaps in today\'s customer + project card and ช่องทางรับงาน (reports the choice upward)', async () => {
+    const onModeChange = vi.fn();
+    renderCard({ onModeChange });
+    fireEvent.click(screen.getByRole('button', { name: 'สร้างดีลใหม่' }));
+    expect(onModeChange).toHaveBeenCalledWith('create');
+    expect(screen.getByRole('button', { name: 'สร้างดีลใหม่' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByLabelText(/^ลูกค้า/)).not.toBeNull();
+    expect(screen.getByText('ช่องทางรับงาน')).not.toBeNull();
+    expect(screen.queryByRole('combobox', { name: /^ดีล/ })).toBeNull();
+  });
+
+  it.each([['pick'], ['create']])('ผู้รับใบเสนอราคา is offered on the %s branch: three radios in S-order, none chosen', (initialMode) => {
+    renderCard({ initialMode });
+    const group = screen.getByRole('radiogroup', { name: 'ผู้รับใบเสนอราคา' });
+    const radios = within(group).getAllByRole('radio');
+    expect(radios.map((r) => r.textContent)).toEqual(['ผู้ออกแบบ', 'เจ้าของโครงการ', 'ผู้ซื้อ / ผู้รับเหมา']);
+    expect(radios.map((r) => r.getAttribute('aria-checked'))).toEqual(['false', 'false', 'false']);
+    expect(group.getAttribute('aria-required')).toBe('true');
+  });
+
+  it('choosing one checks it (and only it); the field promises no stage move', () => {
+    renderCard();
+    fireEvent.click(screen.getByRole('radio', { name: 'เจ้าของโครงการ' }));
+    expect(screen.getByRole('radio', { name: 'เจ้าของโครงการ' }).getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(screen.getByRole('radio', { name: 'ผู้ซื้อ / ผู้รับเหมา' }));
+    expect(screen.getAllByRole('radio').map((r) => r.getAttribute('aria-checked'))).toEqual(['false', 'false', 'true']);
+    // Owner ruling 2026-09-30 (slice-2 scope reduction): no "ดีลจะอยู่ที่ขั้น …" line — the recipient
+    // no longer moves the deal's stage, so the field must not say it will. And no S-codes (§18).
+    expect(screen.queryByText(/ดีลจะอยู่ที่ขั้น|ดีลอยู่ที่ขั้น/)).toBeNull();
+    expect(document.body.textContent).not.toMatch(/\bS\d+\b|QUOTE_/);
+  });
+
+  it('on a new deal the recipient pills sit BELOW the required ช่องทางรับงาน row (#1085 + slice 2)', () => {
+    renderCard({ initialMode: 'create' });
+    const channel = screen.getByRole('group', { name: 'ช่องทางรับงาน' });
+    const recipient = screen.getByRole('radiogroup', { name: 'ผู้รับใบเสนอราคา' });
+    expect(channel.compareDocumentPosition(recipient) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // #1085: UNSPECIFIED is not a pickable channel.
+    expect(within(channel).getAllByRole('button')).toHaveLength(3);
+  });
+
+  it('arrow keys move the choice inside the group (radiogroup keyboard pattern)', () => {
+    renderCard({ initialValue: { customer: null, project: null, entryChannel: 'UNSPECIFIED', recipientType: 'DESIGNER' } });
+    const designer = screen.getByRole('radio', { name: 'ผู้ออกแบบ' });
+    expect(designer.getAttribute('tabindex')).toBe('0');
+    expect(screen.getByRole('radio', { name: 'เจ้าของโครงการ' }).getAttribute('tabindex')).toBe('-1');
+    fireEvent.keyDown(designer, { key: 'ArrowRight' });
+    expect(screen.getByRole('radio', { name: 'เจ้าของโครงการ' }).getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('the required error renders in the field\'s own error slot and marks the group invalid', () => {
+    renderCard({ errors: { recipient: 'กรุณาเลือกผู้รับใบเสนอราคา' } });
+    expect(screen.getByRole('alert').textContent).toBe('กรุณาเลือกผู้รับใบเสนอราคา');
+    expect(screen.getByRole('radiogroup', { name: 'ผู้รับใบเสนอราคา' }).getAttribute('aria-invalid')).toBe('true');
   });
 });
 

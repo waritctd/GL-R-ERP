@@ -2,14 +2,18 @@
  * conformance-pass: radius normalized to the §8 scale (card/panel surfaces → --radius-md;
  * rounded-lg/xl/[6px] were off the sm/md/lg/pill scale — "20px is reserved, not a default").
  * No logic, data, permission, or layout-metric changes. See DESIGN.md §8 (shape) / §20 (anti-patterns).
+ * conformance-pass (slice 2 flow A, SLICE-2-FLOW-A.md §D/§E): ใบเสนอราคา panel route choice as two
+ * sibling header buttons (no dialog, §16) + one muted helper line; three direct-quotation CTA states
+ * through the existing sticky slot + ConfirmDialog; GLA-136 quotation-only banner removed (IA §7).
+ * Tokens only, no new colour/font/radius. pre-emit critique: P4 H4 E4 S4 R4 V5.
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Breadcrumbs } from '../../components/common/Breadcrumbs.jsx';
-import { Button } from '../../components/common/Button.jsx';
+import { Button, buttonVariants } from '../../components/common/Button.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { fieldErrorId } from '../../components/common/FormField.jsx';
@@ -28,7 +32,7 @@ import {
 } from '../../utils/format.js';
 import { downloadBlob } from '../../utils/download.js';
 import { convertToThb, formatThb } from './catalogPriceDisplay.js';
-import { activePricingRequestsSummary } from '../pricingRequests/pricingRequestMeta.js';
+import { activePricingRequestsSummary, canCreatePricingRequest } from '../pricingRequests/pricingRequestMeta.js';
 import { PricingRequestPanel } from '../pricingRequests/PricingRequestPanel.jsx';
 import { CancelDealModal } from './CancelDealModal.jsx';
 import { hasActivitySince, isReadyToAdvance, lastStageChangeAt, STAGE_ADVANCE_GATE_HINT } from './dealTrackingMeta.js';
@@ -46,7 +50,9 @@ import { DealQuotationPanel } from './DealQuotationPanel.jsx';
 // above (the PCR-chain's own panel, untouched) -- renders `origin = 'DEAL_DIRECT'` rows, which
 // never overlap that panel's rows.
 import { DealDirectQuotationPanel } from '../quotations/DealDirectQuotationPanel.jsx';
-import { canViewDealQuotation } from '../quotations/quotationMeta.js';
+import {
+  canCreateDealQuotation, canViewDealQuotation, CONFIRM_ORDER_FROM_QUOTATION_COPY, isLiveDirectQuotation,
+} from '../quotations/quotationMeta.js';
 import { DealStagePanel } from './DealStagePanel.jsx';
 import { DealStateHeader } from './DealStateHeader.jsx';
 import { DealTrackingPanel } from './DealTrackingPanel.jsx';
@@ -91,6 +97,9 @@ import { resolveWorkState } from './workState.js';
 // forwardRef instead (see pricingRequestPanelRef/dealQuotationPanelRef
 // below and their own FIX 1/FIX 2 doc comments), so they are deliberately
 // absent from this map.
+// Slice 2 §D — the ONE helper line under the ใบเสนอราคา panel's two route buttons (spec copy).
+const QUOTATION_ROUTE_NOTE = 'ผ่านคำขอราคา = import → โรงงาน → CEO กำหนดราคา · ใบเสนอราคาตรง = กรอกราคาเอง แล้วส่ง ผจก./CEO อนุมัติ';
+
 const IN_PAGE_JUMP_TARGET = {
   // salesActions.js SALES_ACTION keys
   follow_up: 'deal-tracking-panel',
@@ -631,6 +640,26 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     } catch { /* onError above already toasted */ }
   }
 
+  // Slice 2 §E — "ยืนยันคำสั่งซื้อ" for an APPROVED direct quotation, from the sticky CTA. The same
+  // endpoint (and the same confirm copy) as the quotation editor's own action: hrApi's
+  // dealQuotations.promoteToDeal in this tree (slice 1 renames it confirmOrder). Not routed through
+  // actionMutation: that one expects a `{ ticket }` response, this endpoint answers `{ result }`.
+  // Every refusal surfaces the server's own Thai message and re-reads the deal (it changed under us).
+  const confirmOrderDirectMutation = useMutation({
+    mutationFn: (quotationId) => api.dealQuotations.promoteToDeal(quotationId),
+    onSuccess: () => {
+      setConfirm(null);
+      showToast('success', 'ยืนยันคำสั่งซื้อแล้ว');
+      queryClient.invalidateQueries({ queryKey: ['tickets'] });
+      queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
+    },
+    onError: (error) => {
+      setConfirm(null);
+      showToast('error', error.message || 'ยืนยันคำสั่งซื้อไม่สำเร็จ');
+      queryClient.invalidateQueries({ queryKey: ['tickets'] });
+    },
+  });
+
   // R5: Attachments upload/delete — invalidate the attachments query instead
   // of manually reloading + setting local array state.
   const uploadAttachmentMutation = useMutation({
@@ -809,13 +838,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // showing "0 รายการ" — see TicketService#get (backend) for the exact pick rule. Those rows
   // are NOT ticket_item, so they render read-only: no edit affordance, no add-item control.
   const fromPricingChain = ticket.fromPricingChain ?? false;
-  // GLA-136 (owner ruling 2026-09-30): a quotation-only container ticket (V193) exists only to
-  // hold a direct quotation written at /quotations — it is NOT a pipeline deal. It never appears
-  // in the deal list, but a direct link still reaches it, so this page says so and offers no
-  // pipeline control: no stage panel, no primary CTA, no overflow (the server 409s every manual
-  // pipeline write on it anyway — TicketService / QuotationOnlyTickets). The way in is
-  // "สร้างดีลจากใบเสนอราคา" on the APPROVED quotation.
-  const quotationOnly = summary.quotationOnly === true;
+  // GLA-136's `quotationOnly` switch (no stage panel / CTA / overflow on a quotation-first deal) is
+  // gone: slice 1 (2ed3468e) made that flag provenance only and the IA (§7, "Nothing hidden") makes
+  // such a deal an ordinary one, so nothing on this page reads it any more.
   const st = summary.status;
   const isOwner = user.id === summary.createdById;
   // Issue #389: reading a deal's documents is now the same question as reading the deal (so
@@ -1154,6 +1179,26 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         </Button>
       );
       stickyPrimaryLabel = workStateAction.label;
+    } else if (actionKey === 'confirm_order_direct') {
+      // Slice 2 §E — an APPROVED direct quotation: the customer's order is confirmed right here,
+      // behind the same confirm the quotation editor uses (consequential and irreversible —
+      // DESIGN.md principle 10). SUBMIT and the approvers' action need no branch of their own: both
+      // carry a `to` (/quotations/:id), which the first branch above already navigates.
+      stickyPrimaryAction = (
+        <Button
+          type="button"
+          variant="primary"
+          data-testid="ticket-primary-action"
+          data-action={actionKey}
+          disabled={confirmOrderDirectMutation.isPending}
+          onClick={() => setConfirm({
+            kind: 'confirmOrderDirect', quotationId: workStateAction.quotationId, number: workStateAction.quotationNumber,
+          })}
+        >
+          {workStateAction.label}
+        </Button>
+      );
+      stickyPrimaryLabel = workStateAction.label;
     } else if (jumpId) {
       // Every IN_PAGE_JUMP_TARGET id now lives inside a tab — JUMP_TARGET_TAB
       // names which one, so runOnTab can switch there before scrolling.
@@ -1186,11 +1231,41 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   //
   // `primaryAction` (not stickyPrimaryLabel) is the discriminator: it is set
   // only by that four-branch cascade, and it always wins over the resolver.
+  //
+  // Slice 2: workState can hand back its own finished line (`workState.bannerText` — the rep's
+  // direct quotation waiting on ผจก.ขาย/CEO), which reads before the blocker line.
   const bannerText = primaryAction
     ? nextAction
     : stickyPrimaryLabel
       ? null
-      : blocker;
+      : workState.bannerText
+        ? workState.bannerText
+        : blocker;
+
+  // Slice 2 §D — flow B's two routes for the ใบเสนอราคา panel header, each on its own existing gate:
+  // canCreatePricingRequest (PricingRequestPanel's own; owning sales rep, ACTIVE deal) and
+  // canCreateDealQuotation (the quotation editor's own). The direct route disappears while a live
+  // direct quotation exists — a second one would be refused anyway (N6), and the panel's row for
+  // the live one is the way in. null when this viewer has neither, so the helper line goes too.
+  const showCreatePricingRequest = canCreatePricingRequest(user, summary);
+  const showDirectQuotation = canCreateDealQuotation(user, summary)
+    && (summary.lifecycle ?? 'ACTIVE') === 'ACTIVE'
+    && !isLiveDirectQuotation(summary.liveDirectQuotation);
+  const quotationRouteActions = showCreatePricingRequest || showDirectQuotation ? (
+    <div className="flex flex-wrap gap-2">
+      {showCreatePricingRequest ? (
+        <Button type="button" variant="primary" onClick={() => runOnTab('items', () => pricingRequestPanelRef.current?.openCreate())}>
+          <Icon name="plus" size={14} />
+          สร้างคำขอราคา
+        </Button>
+      ) : null}
+      {showDirectQuotation ? (
+        <Link to={`/quotations/new?ticket=${ticketId}`} className={cn(buttonVariants({ variant: 'secondary' }), 'no-underline')}>
+          ใบเสนอราคาตรง
+        </Link>
+      ) : null}
+    </div>
+  ) : null;
 
   // Overflow-menu / danger-zone availability — mirrors DealStagePanel's own
   // canEditStage/canLost/canHold/canDormant gates byte-for-byte (same
@@ -1444,7 +1519,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // DealFulfilmentPanel (Phase 3 Slice S4).
 
   return (
-    <div className={`grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px] ${!quotationOnly && (bannerText || stickyPrimaryAction || overflowItems.length > 0) ? 'mobile:pb-28' : ''}`}>
+    <div className={`grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px] ${bannerText || stickyPrimaryAction || overflowItems.length > 0 ? 'mobile:pb-28' : ''}`}>
       {/* F-14 (ticket-detail IA rebuild Phase 1): the breadcrumb is the single
           up-nav — a full-width "กลับ" bar underneath it just repeated the same
           affordance as page chrome. Verified safe to drop: every e2e "กลับ"
@@ -1469,9 +1544,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             summary={summary}
             pricingRequests={pricingRequests}
             role={role}
-            primaryAction={quotationOnly ? null : stickyPrimaryAction}
-            bannerText={quotationOnly ? null : bannerText}
-            overflowItems={quotationOnly ? [] : overflowItems}
+            primaryAction={stickyPrimaryAction}
+            bannerText={bannerText}
+            overflowItems={overflowItems}
             onRefresh={refreshTicket}
             condensed={ticketChromeCondensed}
           />
@@ -1502,21 +1577,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           Generation buttons reuse the exact handlers/permissions of the action
           row; once a document exists (quotation / ใบแจ้งยอดมัดจำ) it stays
           reachable from here through the later stages too. */}
-      {quotationOnly ? (
-        <div
-          className="flex items-start gap-2 rounded-md border border-info-border bg-info-bg px-3 py-2.5 text-sm text-info-dark"
-          data-testid="ticket-quotation-only-banner"
-          role="status"
-        >
-          <Icon name="info" size={16} className="mt-0.5 shrink-0" />
-          <div className="flex min-w-0 flex-col gap-0.5">
-            <strong>ดีลนี้เป็นดีลใบเสนอราคาเท่านั้น — ยังไม่เข้า pipeline</strong>
-            <span className="text-xs">
-              เมื่อลูกค้าสั่งซื้อ ให้กด &ldquo;สร้างดีลจากใบเสนอราคา&rdquo; ที่ใบเสนอราคาที่อนุมัติแล้ว
-            </span>
-          </div>
-        </div>
-      ) : (
+      {/* GLA-136's "ดีลนี้เป็นดีลใบเสนอราคาเท่านั้น — ยังไม่เข้า pipeline" banner, and the branch that
+          swapped this stage panel out for it, are gone (slice 1 backend 2ed3468e + IA §7 "Nothing
+          hidden"): a quotation-first deal is an ordinary deal and renders exactly like one. */}
       <div className="min-w-0">
       <DealStagePanel
         ref={dealStagePanelRef}
@@ -1565,7 +1628,6 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         ) : null}
       />
       </div>
-      )}
 
       {/* Ticket-detail IA rebuild Phase 2 built the seven role-projected tabs
           from docs/ui-repair/02-information-architecture/TICKET_INFORMATION_ARCHITECTURE.md
@@ -2244,7 +2306,21 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             // `Number(ticketIdParam)` (its `effectiveTicketId`), so a string here would key this
             // panel's list query differently from anything invalidating/refetching by the numeric
             // id and leave it never refreshing off that path.
-            <DealDirectQuotationPanel ticketId={Number(ticketId)} deal={summary} user={user} showToast={showToast} />
+            <DealDirectQuotationPanel
+              ticketId={Number(ticketId)}
+              deal={summary}
+              user={user}
+              showToast={showToast}
+              // Slice 2 §D — flow B's route choice, as two SIBLING buttons in this panel's header
+              // (DESIGN.md §16: no dialog for a choice that fits inline). สร้างคำขอราคา is the
+              // existing action (it opens PricingRequestPanel's create, same as the sticky
+              // CREATE_PCR does); ใบเสนอราคาตรง opens /quotations/new?ticket= with the recipient
+              // preselected from the stage. The direct route is hidden while this deal already has a
+              // live direct quotation — its row below carries the link to that one instead (N6).
+              actions={quotationRouteActions}
+              // The note compares the two routes, so it only shows when both are on offer.
+              note={showCreatePricingRequest && showDirectQuotation ? QUOTATION_ROUTE_NOTE : null}
+            />
           ) : null}
           {sections.dealQuotation && canViewPricingRequests ? (
             <div id="deal-quotation-panel" tabIndex={-1} className="scroll-mt-[300px] mobile:scroll-mt-[420px] outline-none">
@@ -2717,6 +2793,25 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         confirmLabel="ยืนยันชำระครบ"
         busy={actionLoading}
         onConfirm={confirmFinalPaymentAction}
+        onCancel={() => setConfirm(null)}
+      />
+
+      {/* Slice 2 §E — the sticky "ยืนยันคำสั่งซื้อ" of an APPROVED direct quotation. The copy is the
+          quotation editor's own (quotationMeta's CONFIRM_ORDER_FROM_QUOTATION_COPY), so the two
+          doors to the same irreversible act say the same thing. */}
+      <ConfirmDialog
+        open={confirm?.kind === 'confirmOrderDirect'}
+        title="ยืนยันคำสั่งซื้อ"
+        message={(
+          <p className="confirm-dialog-message m-0 leading-normal text-text-secondary">
+            {CONFIRM_ORDER_FROM_QUOTATION_COPY.lead(confirm?.number)} <strong>{CONFIRM_ORDER_FROM_QUOTATION_COPY.stage}</strong>
+            {' '}{CONFIRM_ORDER_FROM_QUOTATION_COPY.tail}
+          </p>
+        )}
+        confirmLabel="ยืนยันคำสั่งซื้อ"
+        cancelLabel="ปิด"
+        busy={confirmOrderDirectMutation.isPending}
+        onConfirm={() => confirmOrderDirectMutation.mutate(confirm.quotationId)}
         onCancel={() => setConfirm(null)}
       />
     </div>

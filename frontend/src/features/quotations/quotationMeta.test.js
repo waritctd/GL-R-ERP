@@ -1455,8 +1455,13 @@ describe('buildQuotationChecklist', () => {
     // pick one of the three real ช่องทางรับงาน before บันทึกร่าง creates the deal. This is the ONE
     // entry here the backend does NOT refuse (TicketService.create accepts UNSPECIFIED, the V144
     // default): it is a deliberate frontend-only product rule, ruled on, not a mirror.
+    //
+    // Slice 2 (SLICE-2-FLOW-A.md, IA D1–D7 owner-approved 2026-09-30): 'deal', 'recipient' and
+    // 'liveDirectQuotation' join — each mirrors a create refusal the server makes (no ticket to
+    // hang the quotation on; S2-B1's 400 on a direct create without a recipient; S2-B3's N6 409).
     expect([...meta.QUOTATION_BLOCKING_CHECKS].sort()).toEqual(
-      ['creditDaysInvalid', 'customer', 'entryChannel', 'items', 'locationLabels', 'priceModeLanguage', 'project'],
+      ['creditDaysInvalid', 'customer', 'deal', 'entryChannel', 'items', 'liveDirectQuotation', 'locationLabels',
+        'priceModeLanguage', 'project', 'recipient'],
     );
     // Wrong-way-round: none of the header fields a customer might simply not have is blocking,
     // and the blank-creditDays reminder is a warning, not a blocker (fix 6).
@@ -1470,6 +1475,47 @@ describe('buildQuotationChecklist', () => {
 
   it('is empty for a complete quotation', () => {
     expect(meta.buildQuotationChecklist(complete)).toEqual([]);
+  });
+
+  // Slice 2 (SLICE-2-FLOW-A.md §A) — the three new create-time gates, each blocking and each naming
+  // its reason; the defaults leave every pre-slice-2 caller's checklist exactly as it was.
+  it('slice 2: no deal picked yet blocks with "ต้องเลือกดีล…" and skips the new-deal customer/project checks', () => {
+    const entries = meta.buildQuotationChecklist({ ...complete, isInlineCreate: true, customer: null, needsDeal: true });
+    expect(entries.map((e) => [e.check, e.blocking])).toEqual([['deal', true]]);
+    expect(entries[0].message).toBe('ต้องเลือกดีลก่อนบันทึกร่าง');
+    expect(entries[0].targetId).toBe('deal-picker');
+  });
+
+  it('slice 2: a NEW direct quotation without a recipient blocks; any of the three recipients clears it', () => {
+    const missing = meta.buildQuotationChecklist({ ...complete, recipientRequired: true, recipientType: '' });
+    expect(missing).toEqual([expect.objectContaining({ check: 'recipient', blocking: true, message: 'ต้องเลือกผู้รับใบเสนอราคา' })]);
+    for (const code of ['DESIGNER', 'OWNER', 'BUYER']) {
+      expect(meta.buildQuotationChecklist({ ...complete, recipientRequired: true, recipientType: code })).toEqual([]);
+    }
+    // UNSPECIFIED is never a choice.
+    expect(meta.buildQuotationChecklist({ ...complete, recipientRequired: true, recipientType: 'UNSPECIFIED' })
+      .map((e) => e.check)).toEqual(['recipient']);
+    // Not required (an existing row): never listed.
+    expect(meta.buildQuotationChecklist({ ...complete, recipientType: '' })).toEqual([]);
+  });
+
+  it('slice 2: N6 — a live direct quotation on the deal blocks with the server\'s own sentence; a dead one does not', () => {
+    const live = { id: 77, number: 'QT-2026-0077-1', docStatus: 'PENDING_APPROVAL' };
+    expect(meta.buildQuotationChecklist({ ...complete, liveDirectQuotation: live })).toEqual([expect.objectContaining({
+      check: 'liveDirectQuotation',
+      blocking: true,
+      message: 'ดีลนี้มีใบเสนอราคาตรงที่ใช้งานอยู่ (QT-2026-0077-1) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่',
+    })]);
+    expect(meta.buildQuotationChecklist({ ...complete, liveDirectQuotation: { ...live, docStatus: 'CANCELLED' } })).toEqual([]);
+  });
+
+  it('slice 2: the recipient table maps to S4/S5/S8 and back, and never offers UNSPECIFIED', () => {
+    expect(meta.QUOTATION_RECIPIENT_OPTIONS.map((o) => [o.code, o.stage])).toEqual([
+      ['DESIGNER', 'QUOTE_DESIGN_SIDE'], ['OWNER', 'QUOTE_OWNER'], ['BUYER', 'QUOTE_BUYER'],
+    ]);
+    expect(meta.stageForQuotationRecipient('UNSPECIFIED')).toBeNull();
+    expect(meta.recipientForDealStage('QUOTE_OWNER')).toBe('OWNER');
+    expect(meta.recipientForDealStage('NEGOTIATION')).toBe('');
   });
 
   // Owner ruling (2026-09-16): "make ผู้ออกแบบ optional including ฝ่าย". Both were already optional on

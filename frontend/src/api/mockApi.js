@@ -54,6 +54,9 @@ import {
   // V178: the SAME hasSpecialPricing quotationMeta.js exports for the editor's own toggle — not a
   // second copy, so the mock's create/update gate cannot drift from what the toggle itself hides.
   hasSpecialPricing,
+  // Slice 2 (S2-B1/S2-B3): the recipient table (code -> Thai label) and the live DEAL_DIRECT status
+  // set, shared with the editor so the mock validates and labels recipients exactly as the pills do.
+  isLiveDirectQuotation, quotationRecipientOption,
 } from '../features/quotations/quotationMeta.js';
 // fix/commission-figures-from-backend: mock mode no longer imports the commission tier math —
 // see the fenced MOCK COMMISSION FIXTURES block near the `commissions` namespace below for why,
@@ -2310,9 +2313,13 @@ function delay(value) {
   });
 }
 
-function fail(message, status = 400) {
+// `details` mirrors client.js's ApiError#details — the whole JSON error body the real client
+// attaches (`{ message, status, ...extra }`). Only set when a refusal carries structured fields
+// (slice 2's N6 409 is the first), so every existing plain refusal keeps its old shape.
+function fail(message, status = 400, extra = null) {
   const error = new Error(message);
   error.status = status;
+  if (extra) error.details = { message, status, ...extra };
   throw error;
 }
 
@@ -3281,13 +3288,16 @@ function findTicketRaw(id) {
   return ticket;
 }
 
-// GLA-136 (owner ruling 2026-09-30) -- mirrors th.co.glr.hr.ticket.QuotationOnlyTickets: a
-// quotation-only container ticket (V193 sales.ticket.quotation_only, written only by the quotation
-// editor's inline create) is not a pipeline deal, so manual pipeline writes refuse it with 409.
-const QUOTATION_ONLY_REFUSAL =
-  'ดีลนี้เป็นดีลใบเสนอราคาเท่านั้น — ยังไม่เข้า pipeline กรุณาสร้างดีลจากใบเสนอราคาที่อนุมัติแล้วก่อน';
-function requirePipelineDeal(ticket) {
-  if (ticket?.quotationOnly === true) fail(QUOTATION_ONLY_REFUSAL, 409);
+// Mirrors th.co.glr.hr.ticket.DirectQuotationLocks (slice 1, 2ed3468e — replaced GLA-136's
+// QuotationOnlyTickets): the ONE refusal shared by the two deal writes that must not happen while the
+// deal has a LIVE direct quotation (DEAL_DIRECT in DRAFT / PENDING_APPROVAL / APPROVED) — editing
+// the deal's own lines, and opening a pricing request. Keyed on the live quotation, not on the
+// quotation_only flag (provenance only since slice 1; nothing reads it). Callers run their own authz
+// first, so a caller with no access gets the 403, never this 409.
+const DIRECT_QUOTATION_LOCK_REFUSAL =
+  'ดีลนี้มีใบเสนอราคาตรงที่ยังใช้งานอยู่ — แก้ไขรายการที่ใบเสนอราคา หรือยกเลิกใบเสนอราคาก่อน';
+function requireNoLiveDirectQuotation(ticket) {
+  if (ticket && mockLiveDirectQuotation(ticket.id)) fail(DIRECT_QUOTATION_LOCK_REFUSAL, 409);
 }
 
 // Mirrors AttachmentController + TicketAccessPolicy (ticket/TicketAccessPolicy.java). Issue #389
@@ -3920,10 +3930,8 @@ function mockStageDecisions(ticket, user) {
     let blockedReason = null;
     if (!mockCanWriteStage(user, ticket, code)) {
       blockedReason = 'ไม่มีสิทธิ์เข้าถึงรายการนี้';
-    } else if (ticket.quotationOnly === true) {
-      // GLA-136: TicketService#requireStageMoveAllowed refuses a quotation-only container right
-      // after the write-access check (409), so no stage is ever offered on one.
-      blockedReason = QUOTATION_ONLY_REFUSAL;
+      // Slice 1 (2ed3468e) removed GLA-136's quotation-only stage refusal: a quotation-first deal
+      // is an ordinary deal now (IA §7), so its stages are offered like any other.
     } else if (ticket.lifecycle === 'CLOSED_LOST') {
       blockedReason = 'ดีลถูกทำเครื่องหมายเสียงานแล้ว — เปิดดีลใหม่ก่อนแก้ไขสถานะ';
     } else if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') {
@@ -3957,6 +3965,38 @@ function autoAdvanceStage(ticket, targetStage, user) {
   ticket.salesStage = targetStage;
   ticket.stageUpdatedAt = new Date().toISOString();
   pushEvent(ticket, user, 'STAGE_CHANGED', fromStage, targetStage, 'อัตโนมัติจากขั้นตอนของดีล');
+}
+
+// Slice 2 NOTE (owner ruling 2026-09-30): the spec's S2-B2 — a direct quotation's recipient moving
+// the deal's stage — is OUT of slice 2; the deal-stage rule is owned by another session. So the
+// mock's dealQuotations.create/update persist recipientType and nothing more: no stage move, no
+// STAGE_CHANGED event (mockApi.quotationDealLink.test.js pins that it does NOT move).
+
+// Mirrors TicketRepository#enrichSummary's liveDirectQuotation (slice 2 contract,
+// SLICE-2-FLOW-A.md Part 1, S2-B4): the NEWEST (highest id) DEAL_DIRECT row on the ticket in a
+// live status (DRAFT / PENDING_APPROVAL / APPROVED), as `{ id, number, docStatus, recipientType }`,
+// or null. Served on list rows AND get(), like hasRecordedCommission.
+/**
+ * TEST-ONLY seam — not part of `api`, never called by the app. Since slice 2's N6 (S2-B3) a deal
+ * holds at most one live DEAL_DIRECT quotation, and the older mock suites (written before N6) create
+ * direct quotations on demo ticket 18 over and over across tests that share this module's state.
+ * This retires (CANCELLED) whatever is live on the ticket so each such test starts from a deal a
+ * create may legally land on — the same state a rep reaches by cancelling the draft. contract.test.js
+ * compares `api` only, so this export cannot widen the mocked API surface.
+ */
+export function retireLiveDirectQuotationsForTests(ticketId) {
+  for (const q of mockDealQuotations) {
+    if (q.ticketId === Number(ticketId) && isDealDirectOrigin(q) && isLiveDirectQuotation(q)) q.docStatus = 'CANCELLED';
+  }
+}
+
+function mockLiveDirectQuotation(ticketId) {
+  const live = mockDealQuotations
+    .filter((q) => q.ticketId === ticketId && isDealDirectOrigin(q) && isLiveDirectQuotation(q))
+    .sort((a, b) => b.id - a.id)[0];
+  return live
+    ? { id: live.id, number: live.number, docStatus: live.docStatus, recipientType: live.recipientType ?? 'UNSPECIFIED' }
+    : null;
 }
 
 // Mirrors FulfilmentStatus.IMPORT_SEQUENCE (backend/src/main/java/th/co/glr/hr/ticket/
@@ -4063,6 +4103,8 @@ function buildTicketDetail(ticket) {
       commissionRecorded: hasRecordedCommission(ticket),
       // GLA-136 -- TicketSummaryDto.quotationOnly (V193).
       quotationOnly: ticket.quotationOnly === true,
+      // Mirrors TicketSummaryDto#liveDirectQuotation (slice 2 contract, SLICE-2-FLOW-A.md Part 1, S2-B4).
+      liveDirectQuotation: mockLiveDirectQuotation(ticket.id),
       ...paymentFields,
     },
     items: ticket.items, events: ticket.events,
@@ -6431,15 +6473,25 @@ function buildDealQuotationDto(row) {
   const ceoPriceMode = decision?.priceMode ?? null;
   const pricingRequestRow = origin === 'PRICING_REQUEST' && row.pricingRequestId != null
     ? mockPricingRequests.find((p) => p.id === row.pricingRequestId) : null;
+  // Mirrors DealQuotationDto#ticketCode/#dealStage/#readOnly (slice 1, 2ed3468e): the deal's code
+  // and CURRENT stage are joined live from sales.ticket on every read (list + detail), so the editor's
+  // header strip always shows where the deal is now. readOnly is true exactly for a
+  // LEGACY (origin IS NULL) row — this engine's mock holds none, so it is always false here.
+  const dealTicket = db.tickets.find((t) => t.id === row.ticketId);
   return {
     id: row.id,
     number: row.number,
     ticketId: row.ticketId,
+    ticketCode: dealTicket?.code ?? null,
+    dealStage: dealTicket?.salesStage ?? null,
+    readOnly: false,
     origin,
     pricingRequestId: origin === 'PRICING_REQUEST' ? (row.pricingRequestId ?? null) : null,
     // Round 8 — mirrors DealQuotationDto#recipientType/recipientLabel (sales.quotation.recipient_type
-    // /recipient_label, read-only): the source pricing request's for a PRICING_REQUEST-origin row,
-    // 'UNSPECIFIED' for a DEAL_DIRECT row (DealQuotationRepository.InsertDraftParams).
+    // /recipient_label): the source pricing request's for a PRICING_REQUEST-origin row,
+    // 'UNSPECIFIED' for a DEAL_DIRECT row created before slice 2 (DealQuotationRepository.InsertDraftParams).
+    // Slice 2 (S2-B1) WRITES both columns on a DEAL_DIRECT create/update — the chosen code and its
+    // Thai role label (see dealQuotations.create/update) — so they are read back here unchanged.
     recipientType: row.recipientType ?? 'UNSPECIFIED',
     recipientLabel: row.recipientLabel ?? null,
     // Coordinator follow-up (2026-09-20) — mirrors DealQuotationRepository#baseSelect's own
@@ -7066,9 +7118,9 @@ export const api = {
       // requireTicketViewer) to match the existing inline-array pattern; must move
       // in lockstep with requireTicketViewer/get() and TicketService.VIEWER_ROLES.
       if (!['sales', 'import', 'ceo', 'account', 'sales_manager'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      // GLA-136: mirrors TicketRepository#PIPELINE_ONLY -- the deal list is the pipeline, and a
-      // quotation-only container ticket is not part of it (get() below still serves it).
-      let list = structuredClone(db.tickets).filter((t) => t.quotationOnly !== true);
+      // Slice 1 (2ed3468e) removed TicketRepository#PIPELINE_ONLY: a quotation-first deal is listed
+      // like any other deal (IA §7 — "Nothing hidden").
+      let list = structuredClone(db.tickets);
       if (user.role === 'sales') list = list.filter((t) => t.createdById === user.id);
       // Phase B (role-scoped views): import/account only see the slice of the deal
       // pipeline relevant to their own worklist — see importListScopeIncludes /
@@ -7131,6 +7183,9 @@ export const api = {
         // (issue #736).
         commissionRecorded: hasRecordedCommission(t),
         quotationOnly: t.quotationOnly === true,
+        // Mirrors TicketSummaryDto#liveDirectQuotation on the LIST projection (slice 2 contract,
+        // SLICE-2-FLOW-A.md Part 1, S2-B4) — the CTA cascade and the DealPicker read list rows.
+        liveDirectQuotation: mockLiveDirectQuotation(t.id),
         ...derivePaymentFields(t),
       }));
       return delay({ tickets });
@@ -7497,8 +7552,9 @@ export const api = {
       // items here before submit().
       const salesCanEdit = user.role === 'sales' && isOwner
         && ['draft', 'submitted', 'in_review', 'price_proposed'].includes(st);
-      // GLA-136: after the authz check, mirroring TicketService.editItems' own order.
-      if (salesCanEdit) requirePipelineDeal(ticket);
+      // Mirrors TicketService.editItems' DirectQuotationLocks check (slice 1), after the authz check:
+      // while a live direct quotation holds the deal's lines, they are edited on the quotation.
+      if (salesCanEdit) requireNoLiveDirectQuotation(ticket);
       // KNOWN MOCK-MORE-PERMISSIVE GAP (pre-existing, not touched by V183): the real
       // TicketService.editItems only ever checks `SALES_ROLES.contains(actor.role()) && isOwner`
       // — there is no import branch at all — so role 'import' gets a real 403 here, regardless of
@@ -7995,7 +8051,7 @@ export const api = {
       const ticket = findTicketRaw(Number(id));
       if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       requireActive(ticket);
-      requirePipelineDeal(ticket); // GLA-136
+      // Slice 1 (2ed3468e) removed the quotation-only tender refusal (IA §7).
       if (!['REQUIRED', 'NOT_REQUIRED', 'UNKNOWN'].includes(payload.value)) fail(`ไม่รองรับเงื่อนไขการประมูล '${payload.value}'`, 400);
       ticket.tenderRequirement = payload.value;
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
@@ -8008,7 +8064,7 @@ export const api = {
       const ticket = findTicketRaw(Number(id));
       if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       requireActive(ticket);
-      requirePipelineDeal(ticket); // GLA-136
+      // Slice 1 (2ed3468e) removed the quotation-only entry-channel refusal (IA §7).
       if (!['DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT'].includes(payload.value)) fail(`ไม่รองรับช่องทางรับงาน '${payload.value}'`, 400);
       if (mockEntryChannelIsStated(ticket) && ticket.entryChannel !== payload.value && !(payload.note || '').trim()) {
         fail('การเปลี่ยน entry channel ต้องระบุเหตุผล', 400);
@@ -12605,9 +12661,10 @@ export const api = {
         if (existing.ticketId !== Number(ticketId)) fail('clientRequestId นี้ถูกใช้ไปแล้วกับดีลอื่น', 409);
         return delay({ pricingRequest: buildPricingRequestDetail(existing) });
       }
-      // GLA-136: mirrors PricingRequestService.createDraft -- after the owner check and the replay
-      // short-circuit, before any field validation.
-      requirePipelineDeal(ticket);
+      // Mirrors PricingRequestService.createDraft's DirectQuotationLocks check (slice 1) -- after the
+      // owner check and the replay short-circuit, before any field validation: a deal priced by hand
+      // on a live direct quotation never also gets a คำขอราคา (IA §7).
+      requireNoLiveDirectQuotation(ticket);
       if (!PRICING_REQUEST_RECIPIENT_VALUES.includes(payload.recipientType)) {
         fail(`ไม่รองรับประเภทผู้รับ '${payload.recipientType}'`, 400);
       }
@@ -14770,6 +14827,25 @@ export const api = {
       const ticket = db.tickets.find((t) => t.id === Number(ticketId));
       if (!ticket) fail('ไม่พบดีลนี้', 404);
       requireDealQuotationWriteAccess(ticket, user);
+      // Mirrors DealQuotationService#create's recipient rule (slice 2 contract, SLICE-2-FLOW-A.md
+      // Part 1, S2-B1): required on a DEAL_DIRECT create (every row this method writes is one), and
+      // only DESIGNER/OWNER/BUYER — UNSPECIFIED is never accepted from a client. Validated BEFORE
+      // the N6 state check below: a malformed request is a 400 whatever the deal holds.
+      const recipientType = payload.recipientType ?? null;
+      if (recipientType == null || String(recipientType).trim() === '') fail('ต้องระบุผู้รับใบเสนอราคา', 400);
+      if (!quotationRecipientOption(recipientType)) fail(`ไม่รองรับผู้รับใบเสนอราคา '${recipientType}'`, 400);
+      // Mirrors DealQuotationService#create's N6 guard (slice 2 contract, SLICE-2-FLOW-A.md Part 1,
+      // S2-B3; slice 1's DirectQuotationLocks predicate): a deal already holding a LIVE DEAL_DIRECT
+      // quotation gets a 409 whose body names it, so the client can offer "แก้ไขฉบับนั้น" /
+      // "สร้างฉบับแก้ไข" instead of minting a second base number.
+      const live = mockLiveDirectQuotation(ticket.id);
+      if (live) {
+        fail(
+          `ดีลนี้มีใบเสนอราคาตรงที่ใช้งานอยู่ (${live.number}) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่`,
+          409,
+          { liveQuotationId: live.id, number: live.number, docStatus: live.docStatus },
+        );
+      }
       const contactSnapshot = resolveDealQuotationContact(ticket, payload);
       const now = new Date().toISOString();
       const header = resolveDealQuotationV3Header(payload);
@@ -14835,10 +14911,15 @@ export const api = {
         // name; blank/omitted stores null (the dotted placeholder), mirrors
         // DealQuotationService#create's blankToNull(request.orderedByName()).
         orderedByName: blankToNullMock(payload.orderedByName),
+        // Slice 2 (S2-B1) — validated above; recipient_label carries the Thai role label for a
+        // direct row (a PRICING_REQUEST row's carries its คำขอราคา's own label — Round 8).
+        recipientType,
+        recipientLabel: quotationRecipientOption(recipientType).label,
         items,
         createdAt: now, updatedAt: now,
       };
       mockDealQuotations.push(row);
+      // No stage move (owner ruling 2026-09-30 — S2-B2 is out of slice 2; see autoAdvanceStage's note).
       return delay({ quotation: buildDealQuotationDto(row) });
     },
 
@@ -14978,6 +15059,17 @@ export const api = {
       const ticket = db.tickets.find((t) => t.id === row.ticketId);
       requireDealQuotationWriteAccess(ticket, user, row.origin);
       requireDealQuotationEditable(row);
+      // Mirrors DealQuotationService#update's recipient rule (slice 2 contract, SLICE-2-FLOW-A.md
+      // Part 1, S2-B1): omitted/null = keep the stored value; a value is DRAFT-only (the editable
+      // check just above already 409s anything else) and REFUSED outright on a PRICING_REQUEST row,
+      // whose recipient belongs to its คำขอราคา. Checked before anything is computed or persisted.
+      const nextRecipientType = payload.recipientType ?? null;
+      if (nextRecipientType != null) {
+        if ((row.origin || 'DEAL_DIRECT') === 'PRICING_REQUEST') {
+          fail('ผู้รับของใบเสนอราคาจากคำขอราคามาจากคำขอราคา — แก้ที่คำขอราคาต้นทาง', 409);
+        }
+        if (!quotationRecipientOption(nextRecipientType)) fail(`ไม่รองรับผู้รับใบเสนอราคา '${nextRecipientType}'`, 400);
+      }
       // GLA-123 slice S1 (owner ruling 2026-09-19) — a PRICING_REQUEST-origin quotation's items
       // come ENTIRELY from createFromPricingRequest; adding an extra row (of any line type) is
       // refused for this origin in S1 — mirrors DealQuotationService#update's identical guard.
@@ -15084,6 +15176,12 @@ export const api = {
         itemsRemovedFromCeoCount: Math.max(0, (row.itemsRemovedFromCeoCount ?? 0) + droppedLinkedCount),
         updatedAt: new Date().toISOString(),
       });
+      // Slice 2 (S2-B1): a DEAL_DIRECT draft's recipient, when sent. It moves nothing on the deal
+      // (owner ruling 2026-09-30 — the recipient -> stage rule, S2-B2, is out of slice 2).
+      if (nextRecipientType != null) {
+        row.recipientType = nextRecipientType;
+        row.recipientLabel = quotationRecipientOption(nextRecipientType).label;
+      }
       return delay({ quotation: buildDealQuotationDto(row) });
     },
 
@@ -15485,13 +15583,15 @@ export const api = {
       return delay({ quotation: buildDealQuotationDto(clone) });
     },
 
-    // GLA-136 (owner ruling 2026-09-30) -- "สร้างดีลจากใบเสนอราคา".
-    // Mirrors DealQuotationService#promoteToDeal: same precondition ORDER (404 -> authz 403 ->
-    // origin 409 -> idempotent replay / not-quotation-only 409 -> APPROVED 409 -> ACTIVE 409 ->
-    // draft 409) and the same effects (quotationOnly false, draft -> quotation_issued, ticket items
-    // from the quotation's goods lines, CUSTOMER_CONFIRMED + ORDER_RECEIVED). Authorization here is
-    // NOT authoritative (CLAUDE.md) -- DealQuotationPromoteIntegrationTest against real Postgres is
-    // the evidence for who may promote.
+    // "ยืนยันคำสั่งซื้อ" from an APPROVED direct quotation (GLA-136's promote endpoint, re-gated by
+    // slice 1 — 2ed3468e). Mirrors DealQuotationService#confirmOrderFromDirectQuotation: precondition
+    // ORDER 404 -> authz 403 -> origin 409 -> idempotent replay (a DEAL_PROMOTED_FROM_QUOTATION event
+    // already on the deal) -> APPROVED 409 -> ACTIVE 409 -> draft 409, and the same effects (draft ->
+    // quotation_issued, the quotation_only flag cleared best-effort — provenance only, an ordinary deal
+    // is already false — ticket items replaced by the quotation's goods lines, CUSTOMER_CONFIRMED +
+    // ORDER_RECEIVED). Slice 1 DROPPED the quotation_only precondition: an ordinary deal confirms too.
+    // hrApi still names it promoteToDeal in this tree (slice 1's frontend renames it). Authorization
+    // here is NOT authoritative (CLAUDE.md) — DealQuotationConfirmOrderIntegrationTest is.
     async promoteToDeal(id) {
       const user = requireSession();
       const row = mockDealQuotations.find((q) => q.id === Number(id));
@@ -15500,23 +15600,20 @@ export const api = {
       // DealQuotationService#requireEditAccess (the DEAL_DIRECT audience), BEFORE any 409.
       requireDealQuotationWriteAccess(ticket, user, 'DEAL_DIRECT');
       if ((row.origin || 'DEAL_DIRECT') !== 'DEAL_DIRECT') {
-        fail('สร้างดีลจากใบเสนอราคาได้เฉพาะใบเสนอราคาตรง (ไม่ผ่านคำขอราคา) เท่านั้น', 409);
+        fail('ยืนยันคำสั่งซื้อจากหน้านี้ได้เฉพาะใบเสนอราคาตรง (ไม่ผ่านคำขอราคา) เท่านั้น', 409);
       }
       const result = () => delay({
         result: { ticketId: ticket.id, ticket: buildTicketDetail(ticket).summary, quotation: buildDealQuotationDto(row) },
       });
-      if (ticket.quotationOnly !== true) {
-        if (ticket.events.some((e) => e.kind === 'DEAL_PROMOTED_FROM_QUOTATION')) return result();
-        fail('ดีลนี้อยู่ใน pipeline อยู่แล้ว — ไม่ต้องสร้างดีลจากใบเสนอราคา', 409);
-      }
+      if (ticket.events.some((e) => e.kind === 'DEAL_PROMOTED_FROM_QUOTATION')) return result();
       if (row.docStatus !== 'APPROVED') {
-        fail(`สร้างดีลได้เฉพาะใบเสนอราคาที่อนุมัติแล้วเท่านั้น (ปัจจุบัน: ${row.docStatus})`, 409);
+        fail(`ยืนยันคำสั่งซื้อได้เฉพาะใบเสนอราคาที่อนุมัติแล้วเท่านั้น (ปัจจุบัน: ${row.docStatus})`, 409);
       }
       if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') {
-        fail(`ดีลไม่ได้อยู่ในสถานะ ACTIVE (${ticket.lifecycle}) จึงสร้างดีลจากใบเสนอราคาไม่ได้`, 409);
+        fail(`ดีลไม่ได้อยู่ในสถานะ ACTIVE (${ticket.lifecycle}) จึงยืนยันคำสั่งซื้อไม่ได้`, 409);
       }
       if (ticket.status !== 'draft') {
-        fail(`สร้างดีลจากใบเสนอราคาไม่ได้ — สถานะดีลเดิม (${ticket.status}) ขัดแย้งกับขั้นตอนนี้`, 409);
+        fail(`ยืนยันคำสั่งซื้อไม่ได้ — สถานะดีล (${ticket.status}) ผ่านขั้นออกใบเสนอราคาไปแล้ว`, 409);
       }
       // The backend runs this guard LAST and rolls the whole transaction back when it fails; the
       // mock has no transaction, so it checks it up front to leave the same (untouched) state.
@@ -15528,7 +15625,7 @@ export const api = {
       ticket.status = 'quotation_issued';
       ticket.updatedAt = now;
       pushEvent(ticket, user, 'DEAL_PROMOTED_FROM_QUOTATION', 'draft', 'quotation_issued',
-        `สร้างดีลจากใบเสนอราคา ${row.number}`);
+        `ยืนยันคำสั่งซื้อจากใบเสนอราคา ${row.number}`);
       // DealQuotationService#ticketItemsFromQuotation: goods lines only (no ADJUSTMENT, no
       // non-positive quantity), no pricing field copied, qty_sqm from the same piece count.
       ticket.items = (row.items ?? [])

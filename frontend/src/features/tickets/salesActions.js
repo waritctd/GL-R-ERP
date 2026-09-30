@@ -11,6 +11,10 @@
 // (`pricingRequests`, as returned by api.pricingRequests.queue) — so this
 // never triggers a per-ticket detail fetch.
 //
+// Slice 2 put three direct-quotation buckets IN FRONT of all of these (see
+// "bucket 0" inside nextSalesAction): a live DEAL_DIRECT quotation owns the
+// deal's CTA outright.
+//
 // The 7 CTA buckets below are a priority cascade, evaluated in pipeline
 // order (earliest-unblocked-step wins): a deal with no live pricing request
 // normally needs "สร้างคำขอราคา" first, even if it also happens to be overdue
@@ -48,6 +52,10 @@ import { bangkokTodayIso } from '../../utils/format.js';
 import { nextFulfilmentActionCode } from './importActions.js';
 
 export const SALES_ACTION = {
+  // Slice 2 — flow A (SLICE-2-FLOW-A.md §E): the three buckets a LIVE direct quotation drives.
+  SUBMIT_DIRECT_QUOTATION: 'submit_direct_quotation',
+  AWAIT_DIRECT_APPROVAL: 'await_direct_approval',
+  CONFIRM_ORDER_DIRECT: 'confirm_order_direct',
   CREATE_PCR: 'create_pcr',
   ISSUE_QUOTATION: 'issue_quotation',
   CONFIRM_ORDER: 'confirm_order',
@@ -58,6 +66,11 @@ export const SALES_ACTION = {
 };
 
 const ACTION_LABEL = {
+  [SALES_ACTION.SUBMIT_DIRECT_QUOTATION]: 'ส่งขออนุมัติใบเสนอราคา',
+  [SALES_ACTION.AWAIT_DIRECT_APPROVAL]: 'รออนุมัติใบเสนอราคา',
+  // The same words as CONFIRM_ORDER below on purpose (IA §8): to the rep it is the same real-world
+  // act — the customer ordered — whichever route priced the deal.
+  [SALES_ACTION.CONFIRM_ORDER_DIRECT]: 'ยืนยันคำสั่งซื้อ',
   [SALES_ACTION.CREATE_PCR]: 'สร้างคำขอราคา',
   [SALES_ACTION.ISSUE_QUOTATION]: 'ออกใบเสนอราคา',
   [SALES_ACTION.CONFIRM_ORDER]: 'ยืนยันคำสั่งซื้อ',
@@ -87,12 +100,20 @@ const ACTION_LABEL = {
 // takes one click once the rep knows the answer — no less urgent than the
 // other "just do it" buckets, and well ahead of CREATE_PCR (which requires
 // building something new) or a bare nudge.
+//
+// Slice 2: each direct-quotation bucket shares the rank of its pricing-request twin — confirming an
+// order is confirming an order (1), sending a quotation onward is ISSUE_QUOTATION's weight (2) — and
+// AWAIT_DIRECT_APPROVAL, which is waiting on ผจก.ขาย/CEO rather than on the rep, takes the waiting
+// rank (5): visible in the worklist, never ahead of something the rep can actually do.
 const ACTION_RANK = {
   [SALES_ACTION.CONFIRM_ORDER]: 1,
+  [SALES_ACTION.CONFIRM_ORDER_DIRECT]: 1,
   [SALES_ACTION.ISSUE_QUOTATION]: 2,
+  [SALES_ACTION.SUBMIT_DIRECT_QUOTATION]: 2,
   [SALES_ACTION.RECORD_QUOTATION_OUTCOME]: 3,
   [SALES_ACTION.CREATE_PCR]: 4,
   [SALES_ACTION.RECORD_DELIVERY]: 5,
+  [SALES_ACTION.AWAIT_DIRECT_APPROVAL]: 5,
   [SALES_ACTION.FOLLOW_UP]: 6,
   [SALES_ACTION.LOG_ACTIVITY]: 7,
 };
@@ -152,6 +173,21 @@ const QUOTED_STATUSES = new Set(['quotation_issued', 'document_issued']);
  */
 export function nextSalesAction(deal, pricingRequests = []) {
   if (!deal || deal.lifecycle !== 'ACTIVE') return null;
+
+  // 0. Slice 2 — flow A (SLICE-2-FLOW-A.md §E, IA §4): a LIVE direct quotation. Checked BEFORE
+  //    bucket 1 on purpose: a deal whose price is being written by hand on a DEAL_DIRECT quotation
+  //    must never be told "สร้างคำขอราคา" — that would open the mixed-origin case the server refuses
+  //    (IA §7, pricing-request refusal kept while a live direct quotation exists). Keyed only on
+  //    TicketSummaryDto.liveDirectQuotation (S2-B4 — the newest live DEAL_DIRECT row, server-picked),
+  //    so this stays a list-row-only computation like the rest of this module; a non-live status is
+  //    ignored even if one ever arrives.
+  const directAction = liveDirectQuotationAction(deal.liveDirectQuotation);
+  // confirmOrderFromDirectQuotation (slice 1) 409s unless the deal is still 'draft'; a deal already
+  // past it (a legacy deal whose order is already under way) is never offered that confirm — it
+  // falls through to the ordinary cascade below instead. A list row always carries `status`.
+  const confirmRefused = directAction?.key === SALES_ACTION.CONFIRM_ORDER_DIRECT
+    && (deal.status ?? 'draft') !== 'draft';
+  if (directAction && !confirmRefused) return directAction;
 
   const ownPrs = pricingRequests.filter((pr) => pr.ticketId === deal.id);
 
@@ -292,6 +328,23 @@ export function nextSalesAction(deal, pricingRequests = []) {
   }
 
   return null;
+}
+
+const DIRECT_QUOTATION_BUCKET = {
+  DRAFT: SALES_ACTION.SUBMIT_DIRECT_QUOTATION,
+  PENDING_APPROVAL: SALES_ACTION.AWAIT_DIRECT_APPROVAL,
+  APPROVED: SALES_ACTION.CONFIRM_ORDER_DIRECT,
+};
+
+/** The bucket a live direct quotation puts its deal in, or null. Every action names the quotation
+ * (`quotationId`/`quotationNumber`) so the caller can route to it or name it in a banner; SUBMIT
+ * also carries `to`, because its real control (ส่งขออนุมัติ) lives on the quotation editor. */
+function liveDirectQuotationAction(live) {
+  const key = live ? DIRECT_QUOTATION_BUCKET[live.docStatus] : null;
+  if (!key) return null;
+  const action = { key, label: ACTION_LABEL[key], quotationId: live.id, quotationNumber: live.number };
+  if (key === SALES_ACTION.SUBMIT_DIRECT_QUOTATION) action.to = `/quotations/${live.id}`;
+  return action;
 }
 
 /**

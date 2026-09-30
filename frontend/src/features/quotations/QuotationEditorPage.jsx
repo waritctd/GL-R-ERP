@@ -1,3 +1,4 @@
+/* Hallmark · genre: modern-minimal · macrostructure: Workbench · design-system: design.md · designed-as-app · pre-emit critique: P4 H4 E4 S4 R4 V4 */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -14,11 +15,12 @@ import { RouteFallback } from '../../components/common/RouteFallback.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { cn } from '../../utils/cn.js';
 import { downloadBlob } from '../../utils/download.js';
-import { addDaysIso, bangkokTodayIso } from '../../utils/format.js';
+import { addDaysIso, bangkokTodayIso, dealStageLabel } from '../../utils/format.js';
 import {
   canApproveDealQuotation, canApproveDealQuotationNow, canCancelDealQuotation, canCreateDealQuotation,
   canCreateDealQuotationStandalone, canDecideDealQuotation, canEditDealQuotation,
   canPromoteDealQuotationToDeal, canReviseDealQuotation, canSubmitDealQuotation, DEPOSIT_PERCENT_PRESETS,
+  CONFIRM_ORDER_FROM_QUOTATION_COPY, quotationRecipientOption, recipientForDealStage,
   availablePriceModes, PRICE_MODE_OPTIONS, adjustmentDescriptionPreview, buildQuotationChecklist, currencyForLanguage, DOCUMENT_LANGUAGE_OPTIONS,
   isEffectiveZeroDeposit,
   estimateAdjustmentAmount, formatQuotationMoney, hasSpecialPricing, isEnglishPerSqm, LINE_TYPE_ADJUSTMENT, LINE_TYPE_PLAIN, LINE_TYPE_TILE,
@@ -30,7 +32,7 @@ import {
   VALIDITY_MODE_OPTIONS, FULL_PAYMENT_TERM_OPTIONS,
 } from './quotationMeta.js';
 import { CustomerDetailsFields } from './CustomerDetailsFields.jsx';
-import { DealCustomerCard } from './DealCustomerCard.jsx';
+import { DealCustomerCard, QuotationRecipientField } from './DealCustomerCard.jsx';
 import { QuotationDealFields } from './QuotationDealFields.jsx';
 import { focusQuotationField, QuotationChecklist } from './QuotationChecklist.jsx';
 import { QuotationDocumentView } from './QuotationDocumentView.jsx';
@@ -180,7 +182,7 @@ function defaultDocSettings() {
  */
 export function QuotationEditorPage({ user, showToast }) {
   const { id } = useParams();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const ticketIdParam = searchParams.get('ticket');
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -220,8 +222,15 @@ export function QuotationEditorPage({ user, showToast }) {
   // (address/tax id/phone autofill, below) and the editable โครงการ field both still need, and
   // only the ticket has it. Deliberately NOT fetched for a read-only/non-DRAFT quotation: the
   // document view prints the snapshot the DTO already carries and nothing here is editable.
+  //
+  // Slice 2 fix: the key carries its own 'summary' suffix. TicketDetailPage caches the WHOLE
+  // TicketDto under the bare queryKeys.ticketDetail(id) and renders from whatever is cached there,
+  // so this page caching a bare summary under that same key crashed the deal page ("Cannot read
+  // properties of undefined (reading 'status')") the moment a rep followed เปิดดีล from here —
+  // reproduced in the browser. Same device promotionTicketQuery below already uses; a prefix
+  // invalidation of ticketDetail(id) (or ['tickets']) still reaches it.
   const ticketQuery = useQuery({
-    queryKey: queryKeys.ticketDetail(effectiveTicketId),
+    queryKey: [...queryKeys.ticketDetail(effectiveTicketId), 'summary'],
     queryFn: () => api.tickets.get(effectiveTicketId).then((r) => r.ticket?.summary),
     enabled: !!effectiveTicketId && (!id || quotation?.docStatus === 'DRAFT'),
   });
@@ -284,12 +293,51 @@ export function QuotationEditorPage({ user, showToast }) {
   // customer and project right here instead of being sent to /tickets first. Stable per-render
   // (not stateful): it only ever describes the URL the page was loaded with.
   const isInlineCreate = !id && !ticketIdParam;
+
+  // Slice 2 — flow A (SLICE-2-FLOW-A.md §A): step 1 is "ดีล". `dealModeChoice` is the rep's pick
+  // between เลือกดีลที่มีอยู่ and สร้างดีลใหม่; a `?ticket=` in the URL IS the picked-deal branch
+  // (DealPicker only ever sets that param), so the URL wins over the stored choice. `needsDeal` is
+  // the one new-page state with no deal to hang the quotation on yet.
+  const [dealModeChoice, setDealModeChoice] = useState('pick');
+  const dealMode = ticketIdParam ? 'pick' : dealModeChoice;
+  const needsDeal = isInlineCreate && dealMode === 'pick';
+  function changeDealMode(next) {
+    setDealModeChoice(next);
+    if (next === 'create' && ticketIdParam) {
+      setSearchParams((prev) => {
+        const params = new URLSearchParams(prev);
+        params.delete('ticket');
+        return params;
+      }, { replace: true });
+    }
+  }
+
+  // ผู้รับใบเสนอราคา (S2-B1). '' = not chosen. Seeded from the stored row on an existing quotation,
+  // and — on the ?ticket= path — preselected from the deal's own stage (flow B) until the rep
+  // touches it themselves (see the effect below).
+  const [recipientType, setRecipientType] = useState('');
+  const recipientTouchedRef = useRef(false);
+  // Once-per-ticket seed guards for the ?ticket= path (โครงการ and ผู้รับ — see their effects below).
+  // Declared here, ABOVE the main seeding effect, because that effect clears them when the rep picks
+  // a different deal through DealPicker.
+  const projectNameSeededForTicket = useRef(null);
+  const recipientSeededForTicket = useRef(null);
+  function changeRecipient(code) {
+    recipientTouchedRef.current = true;
+    setRecipientType(code);
+    setDirty(true);
+  }
   const [dealForm, setDealForm] = useState(emptyDealForm);
   // Owner-directed reversal of F2 (2026-09-26): DealCustomerCard no longer reports a `contact` or
   // `omitContactHonorific` key at all (both removed along with QuotationContactPicker), so this
   // is now a plain patch-upward with nothing to split out.
   function updateDealForm(patch) {
-    setDealForm((prev) => ({ ...prev, ...patch }));
+    // The ดีล card reports ผู้รับ through the same patch-upward channel; it is quotation state, not
+    // deal-form state, so it is split out to its own setter.
+    const { recipientType: nextRecipient, ...dealPatch } = patch;
+    if (nextRecipient !== undefined) changeRecipient(nextRecipient);
+    if (Object.keys(dealPatch).length === 0) return;
+    setDealForm((prev) => ({ ...prev, ...dealPatch }));
     setDirty(true);
   }
   // Set once the inline flow's own `tickets.create` succeeds. Kept across a subsequent
@@ -318,6 +366,8 @@ export function QuotationEditorPage({ user, showToast }) {
   // The last save's refusal, kept on screen (a toast vanishes). A 400 like "ยอดรวมหลังหักส่วนลด
   // พิเศษติดลบ" is exactly the kind of error that must not be swallowed or scroll away.
   const [saveError, setSaveError] = useState(null);
+  // Slice 2 — N6 (S2-B3): the live direct quotation a refused create named, if any.
+  const [saveErrorLiveQuotationId, setSaveErrorLiveQuotationId] = useState(null);
   // ตำแหน่งติดตั้ง groups (owner feedback F1), ordered. `items` stays the single flat, ordered
   // list it always was -- see locationGroupsFromItems' comment for the contiguity invariant every
   // mutation below maintains, which is what lets buildUpsertPayload save with no re-sorting.
@@ -436,9 +486,25 @@ export function QuotationEditorPage({ user, showToast }) {
         // blank, same "no value stored" convention as every other field here.
         orderedByName: quotation.orderedByName ?? '',
       });
+      // Slice 2 (S2-B1): the stored recipient. UNSPECIFIED (every pre-slice-2 direct row) reads as
+      // "not chosen yet" — the choice is never invented for the rep.
+      setRecipientType(quotationRecipientOption(quotation.recipientType) ? quotation.recipientType : '');
+      recipientTouchedRef.current = false;
       setDirty(false);
       setInitializedFor(key);
     } else if (effectiveTicketId) {
+      // Slice 2: picking a deal (DealPicker) or switching to another one only swaps the URL's
+      // ?ticket= — the rep's half-built items and terms stay put rather than being wiped, and only
+      // the deal-derived bits (โครงการ, and ผู้รับ unless the rep chose it) re-seed from the newly
+      // picked deal via the two effects below. A first visit has nothing to keep, so the full reset
+      // below is unchanged for it (and for anything arriving from an existing quotation).
+      if (initializedFor === null || initializedFor.startsWith('t-')) {
+        setTerms((t) => ({ ...t, projectName: '' }));
+        projectNameSeededForTicket.current = null;
+        recipientSeededForTicket.current = null;
+        setInitializedFor(key);
+        return;
+      }
       setItems([]);
       setAdjustments([]);
       setDocSettings(defaultDocSettings());
@@ -467,13 +533,25 @@ export function QuotationEditorPage({ user, showToast }) {
   // who starts typing during the query window could have this effect fire afterward and clobber
   // it. Guard by checking the CURRENT field value inside the updater, not just the ref: only seed
   // when the rep hasn't already put something there.
-  const projectNameSeededForTicket = useRef(null);
+  // (projectNameSeededForTicket itself is declared up with the other refs, above the main seeding
+  // effect — that effect resets it when the rep picks a different deal, slice 2.)
   useEffect(() => {
     if (id || !ticket?.id || projectNameSeededForTicket.current === ticket.id) return;
     projectNameSeededForTicket.current = ticket.id;
     if (ticket.projectName) {
       setTerms((t) => (t.projectName ? t : { ...t, projectName: ticket.projectName }));
     }
+  }, [id, ticket]);
+
+  // Slice 2 — flow B's preselect (SLICE-2-FLOW-A.md §A, IA §4): a deal already sitting at a quote
+  // stage (S4 / S5 / S8) names its own recipient; any other stage leaves the choice empty so the rep
+  // is asked, never guessed for. Same once-per-ticket shape as the โครงการ seed above, and never
+  // over a choice the rep has already made themselves.
+  useEffect(() => {
+    if (id || !ticket?.id || recipientSeededForTicket.current === ticket.id) return;
+    recipientSeededForTicket.current = ticket.id;
+    if (recipientTouchedRef.current) return;
+    setRecipientType(recipientForDealStage(ticket.salesStage));
   }, [id, ticket]);
 
   function updateItem(clientId, patch) {
@@ -922,9 +1000,17 @@ export function QuotationEditorPage({ user, showToast }) {
     // CREDIT_DAYS_INVALID's own comment in quotationMeta.js for the two severities.
     remainderMode: terms.remainderMode,
     creditDays: terms.creditDays,
+    // Slice 2 (SLICE-2-FLOW-A.md): a new quotation needs a deal, and a new DIRECT quotation needs a
+    // recipient (S2-B1's 400) on a deal with no live direct quotation (S2-B3's N6 409) — each one
+    // blocks บันทึกร่าง with its reason, before the server has to refuse it.
+    needsDeal,
+    recipientRequired: !quotation,
+    recipientType,
+    liveDirectQuotation: !quotation && !isInlineCreate ? (ticket?.liveDirectQuotation ?? null) : null,
   }), [isInlineCreate, checklistCustomer, dealForm.project, dealForm.entryChannel, checklistProjectName, items, itemErrorsByRow,
     adjustments, adjustmentErrorsByRow, duplicateGroupIndex, docSettings, terms.noDeposit,
-    terms.depositPercentCustom, terms.depositPercent, terms.fullPaymentTerm, terms.remainderMode, terms.creditDays]);
+    terms.depositPercentCustom, terms.depositPercent, terms.fullPaymentTerm, terms.remainderMode, terms.creditDays,
+    needsDeal, quotation, recipientType, ticket]);
   const validationErrors = useMemo(() => checklist.filter((e) => e.blocking).map((e) => e.message), [checklist]);
   const checklistWarnings = useMemo(() => checklist.filter((e) => !e.blocking), [checklist]);
   const hasValidationErrors = validationErrors.length > 0;
@@ -1025,7 +1111,13 @@ export function QuotationEditorPage({ user, showToast }) {
       })),
       ...adjustments.map(adjustmentInputFromRow),
     ],
-  }), [terms, docSettings, items, adjustments, labelByGroupId]);
+    // Slice 2 (S2-B1) — ผู้รับใบเสนอราคา, persisted on the quotation (it does NOT move the deal's
+    // stage — owner ruling 2026-09-30, the stage rule is owned elsewhere).
+    // OMITTED, never null, when there is nothing to say: a PRICING_REQUEST row's recipient belongs
+    // to its คำขอราคา (the server 409s the field on that origin), and a legacy direct draft the rep
+    // has not given a recipient yet keeps whatever is stored (omitted = unchanged).
+    ...(quotation?.origin !== 'PRICING_REQUEST' && recipientType ? { recipientType } : {}),
+  }), [terms, docSettings, items, adjustments, labelByGroupId, quotation?.origin, recipientType]);
 
   /** The ONE place that builds a save request — autosave, manual บันทึกร่าง, AND submit's own
    * pre-save all call this instead of pairing buildUpsertPayload() with editSeqRef.current
@@ -1152,13 +1244,19 @@ export function QuotationEditorPage({ user, showToast }) {
       // lost, same as before this change -- out of scope here (see the handoff for this branch).
       setDirty(false);
       setSaveError(null);
+      setSaveErrorLiveQuotationId(null);
       rememberDefaults();
       queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
+      // Slice 2: the create just gave the deal a live direct quotation (S2-B4) — every cached deal
+      // list/summary (the CTA cascade and the DealPicker read it) is stale now.
+      queryClient.invalidateQueries({ queryKey: ['tickets'] });
       showToast('success', 'บันทึกร่างแล้ว');
       navigate(`/quotations/${res.quotation.id}`, { replace: true });
     },
     onError: (error) => {
       setSaveError(error.message || 'บันทึกไม่สำเร็จ');
+      // N6 (S2-B3): the 409 body names the live quotation — offer the way to it.
+      setSaveErrorLiveQuotationId(error.details?.liveQuotationId ?? null);
       showToast('error', error.message || 'บันทึกไม่สำเร็จ');
     },
   });
@@ -1184,14 +1282,19 @@ export function QuotationEditorPage({ user, showToast }) {
       const { payload, sentSeq, sentClientIds } = buildSaveRequest();
       try {
         const res = await api.dealQuotations.update(id, payload);
-        return { res, sentSeq, sentClientIds };
+        return { res, sentSeq, sentClientIds, sentRecipientType: payload.recipientType ?? null };
       } catch (error) {
         lastFailedAutoPayloadRef.current = JSON.stringify(payload);
         throw error;
       }
     },
-    onSuccess: ({ res, sentSeq, sentClientIds }, variables) => {
+    onSuccess: ({ res, sentSeq, sentClientIds, sentRecipientType }, variables) => {
       setSaveError(null);
+      // Slice 2: a CHANGED recipient changes the deal summary's liveDirectQuotation.recipientType
+      // (S2-B4) — refetch the cached deal reads so they agree with the quotation.
+      if (sentRecipientType && sentRecipientType !== quotation?.recipientType) {
+        queryClient.invalidateQueries({ queryKey: ['tickets'] });
+      }
       rememberDefaults();
       queryClient.setQueryData(queryKeys.dealQuotationDetail(id), res.quotation);
       queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
@@ -1409,12 +1512,16 @@ export function QuotationEditorPage({ user, showToast }) {
       const quotationRes = await api.dealQuotations.create(ticketId, buildUpsertPayload());
       setDirty(false);
       setSaveError(null);
+      setSaveErrorLiveQuotationId(null);
       rememberDefaults();
       queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
+      // Slice 2: a new deal now exists, holding a live direct quotation (S2-B4).
+      queryClient.invalidateQueries({ queryKey: ['tickets'] });
       showToast('success', 'บันทึกร่างแล้ว');
       navigate(`/quotations/${quotationRes.quotation.id}`, { replace: true });
     } catch (error) {
       setSaveError(error.message || 'บันทึกไม่สำเร็จ');
+      setSaveErrorLiveQuotationId(error.details?.liveQuotationId ?? null);
       showToast('error', error.message || 'บันทึกไม่สำเร็จ');
     } finally {
       setCreatingDeal(false);
@@ -1745,13 +1852,30 @@ export function QuotationEditorPage({ user, showToast }) {
     && docSettings.priceMode !== quotation.ceoPriceMode;
   const saving = createMutation.isPending || updateMutation.isPending || creatingDeal;
 
+  // Slice 2 §B — the deal behind this quotation, for the header strip. Slice 1's DealQuotationDto
+  // carries `ticketCode`/`dealStage` itself; THIS tree's DTO does not yet, so until it does the strip
+  // reads the deal summary this page already fetches — the ?ticket= / editable-DRAFT `ticket`, or
+  // the promoter's own summary on an APPROVED direct quotation. No extra request is made for it: a
+  // quotation this page has no summary for (e.g. a non-DRAFT viewed by an approver) shows no strip
+  // until the DTO carries the fields. Hidden while inline-creating: there is no deal yet.
+  const stripDeal = quotation?.ticketCode
+    ? {
+      id: quotation.ticketId, code: quotation.ticketCode,
+      customerName: quotation.customerName, salesStage: quotation.dealStage ?? null,
+    }
+    : (ticket ?? promotionTicketQuery.data ?? null);
+  const stripDealId = stripDeal?.id ?? effectiveTicketId;
+  const canOpenStripDeal = stripDealId != null && canAccessPath(`/tickets/${stripDealId}`, user);
+  const stripStage = stripDeal?.salesStage ? dealStageLabel(stripDeal.salesStage) : null;
+
   return (
     <PageStack>
       <PageHeader
         title={quotation ? `ใบเสนอราคา ${quotation.number}` : 'สร้างใบเสนอราคา'}
         subtitle={customerName
           ? `${customerName}${projectName ? ` · ${projectName}` : ''}`
-          : 'เริ่มจากเลือกลูกค้าและโครงการด้านล่าง'}
+          // Slice 2: step 1 is "ดีล" now — pick an existing deal or create one.
+          : 'เริ่มจากเลือกดีลด้านล่าง หรือสร้างดีลใหม่'}
         context={(
           <>
             {status ? <StatusBadge tone={status.tone}>{status.label}</StatusBadge> : null}
@@ -1887,6 +2011,34 @@ export function QuotationEditorPage({ user, showToast }) {
         )}
       />
 
+      {/* Slice 2 §B — "ดีล <code> · <customer> · <stage> · เปิดดีล". One flat row ON the page (never a
+          card inside a card), directly under the header, so the stage a recipient just moved the
+          deal to is visible where the rep is working. เปิดดีล is the ONE deal link on this page
+          (IA §8: "เปิดดีล — everywhere, one verb"), hidden for a role that cannot open the deal. */}
+      {!isInlineCreate && stripDeal ? (
+        <div
+          data-testid="quotation-deal-strip"
+          className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1.5 text-sm"
+        >
+          <span className="font-bold text-text-muted">ดีล</span>
+          <code className="font-mono text-sm text-text">{stripDeal.code ?? `#${stripDealId}`}</code>
+          <span aria-hidden="true" className="text-text-muted">·</span>
+          <span className="min-w-0 max-w-full truncate font-bold text-text" title={stripDeal.customerName ?? undefined}>
+            {stripDeal.customerName ?? '-'}
+          </span>
+          {stripStage ? <StatusBadge tone={stripStage.tone}>{stripStage.label}</StatusBadge> : null}
+          {canOpenStripDeal ? (
+            <Link
+              to={`/tickets/${stripDealId}`}
+              className="inline-flex min-h-[38px] items-center gap-1 rounded-md font-bold text-primary no-underline hover:text-primary-hover mobile:min-h-[44px]"
+            >
+              เปิดดีล
+              <Icon name="chevronRight" size={14} />
+            </Link>
+          ) : null}
+        </div>
+      ) : null}
+
       {wasRejected ? (
         <div className="rounded-md border border-danger-border bg-danger/10 p-4 text-sm text-danger">
           <strong className="block">ไม่อนุมัติ — ส่งกลับเป็นร่าง</strong>
@@ -1952,21 +2104,35 @@ export function QuotationEditorPage({ user, showToast }) {
               showValidationSummary documents; shown at once on an existing draft. */}
           {dirty || quotation ? <QuotationChecklist entries={checklist} /> : null}
 
+          {/* Slice 2 §A — step 1 "ดีล", on every NEW quotation: pick an existing deal (which turns
+              this page into the ?ticket= path) or create one inline, then ผู้รับใบเสนอราคา*. An
+              existing quotation already has its deal; its recipient lives in ข้อมูลลูกค้าและผู้ขาย
+              below (§C). */}
+          {!id ? (
+            <DealCustomerCard
+              user={user}
+              mode={dealMode}
+              onModeChange={changeDealMode}
+              selectedDeal={ticketIdParam ? ticket : null}
+              value={{ ...dealForm, recipientType }}
+              onChange={updateDealForm}
+              errors={{
+                deal: showValidationSummary && needsDeal ? 'กรุณาเลือกดีล' : undefined,
+                recipient: showValidationSummary && !recipientType ? 'กรุณาเลือกผู้รับใบเสนอราคา' : undefined,
+                customer: showValidationSummary && !dealForm.customer ? 'กรุณาเลือกลูกค้า' : undefined,
+                project: showValidationSummary && dealForm.customer && !dealForm.project ? 'กรุณาเลือกโครงการ' : undefined,
+                // #1085 — a real ช่องทางรับงาน is required before a NEW deal is created.
+                entryChannel: showValidationSummary && (!dealForm.entryChannel || dealForm.entryChannel === 'UNSPECIFIED') ? 'ต้องเลือกช่องทางรับงานก่อนบันทึกร่าง' : undefined,
+              }}
+              showToast={showToast}
+            />
+          ) : null}
+
           {isInlineCreate ? (
             // Owner ask 2026-09-10: no ticket exists yet -- ลูกค้า/โครงการ/ผู้ติดต่อ/ช่องทาง are
-            // picked (or created) right here instead of the read-only summary below, which has
-            // nothing to summarize until the first บันทึกร่าง mints the ticket.
+            // picked (or created) in the ดีล card above instead of the read-only summary below,
+            // which has nothing to summarize until the first บันทึกร่าง mints the ticket.
             <>
-              <DealCustomerCard
-                value={dealForm}
-                onChange={updateDealForm}
-                errors={{
-                  customer: showValidationSummary && !dealForm.customer ? 'กรุณาเลือกลูกค้า' : undefined,
-                  project: showValidationSummary && dealForm.customer && !dealForm.project ? 'กรุณาเลือกโครงการ' : undefined,
-                  entryChannel: showValidationSummary && (!dealForm.entryChannel || dealForm.entryChannel === 'UNSPECIFIED') ? 'ต้องเลือกช่องทางรับงานก่อนบันทึกร่าง' : undefined,
-                }}
-                showToast={showToast}
-              />
               <Panel title="ข้อมูลลูกค้าและผู้ขาย">
                 {/* Owner-directed reversal of F2/V167 (2026-09-26) — ผู้สั่งซื้อ is now this ONE
                     optional free-text field (the required contact-picker dropdown this card used
@@ -2032,14 +2198,38 @@ export function QuotationEditorPage({ user, showToast }) {
                     {displayNameOptions.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
                   </select>
                 </FormField>
-                {/* Hidden when the viewer cannot open the deal page — under the release lock
-                    (owner, 2026-09-11) a sales rep reaches /quotations but not /tickets, and a
-                    link straight to the access-denied page is worse than no link. */}
-                {effectiveTicketId && canAccessPath(`/tickets/${effectiveTicketId}`, user) ? (
-                  <div>
-                    <span className="block text-2xs font-bold uppercase text-text-muted">ดีล</span>
-                    <Link to={`/tickets/${effectiveTicketId}`} className="text-sm text-info underline">ดูรายละเอียดดีลนี้</Link>
-                  </div>
+                {/* The "ดีล / ดูรายละเอียดดีลนี้" link that sat here moved to the header strip as
+                    "เปิดดีล" (slice 2 §B) — one deal link per page, same canAccessPath gate. */}
+                {/* Slice 2 §C — ผู้รับใบเสนอราคา on an EXISTING draft (a new quotation asks for it in
+                    the ดีล card above). DEAL_DIRECT: the same pill radios, saved through update
+                    (DRAFT-only — this panel only renders on an editable draft). PRICING_REQUEST: read-only — that
+                    recipient belongs to its คำขอราคา, and the update never sends one. */}
+                {id && quotation ? (
+                  isPricingRequestOrigin ? (
+                    <div className="col-span-full" data-testid="quotation-recipient-readonly">
+                      <span className="block text-sm font-bold text-text-secondary">ผู้รับใบเสนอราคา</span>
+                      <span className="flex flex-wrap items-baseline gap-x-2">
+                        <strong className="text-text">
+                          {quotationRecipientOption(quotation.recipientType)?.label ?? 'ไม่ระบุ'}
+                        </strong>
+                        {/* The คำขอราคา's own free-text recipient (recipient_label, Round 8 #1084),
+                            when it says more than the role. */}
+                        {quotation.recipientLabel
+                          && quotation.recipientLabel !== quotationRecipientOption(quotation.recipientType)?.label ? (
+                            <span className="text-sm text-text-secondary">{quotation.recipientLabel}</span>
+                          ) : null}
+                        <span className="text-xs text-text-muted">จากคำขอราคา</span>
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="col-span-full">
+                      <QuotationRecipientField
+                        value={recipientType}
+                        onChange={changeRecipient}
+                        idPrefix="quotation-recipient-edit"
+                      />
+                    </div>
+                  )
                 ) : null}
                 {/* Owner, 2026-09-11: the customer's ที่อยู่ / เลขที่ผู้เสียภาษี / โทร., prefilled
                     from the customer record and editable here too — the SAME component the
@@ -2641,6 +2831,13 @@ export function QuotationEditorPage({ user, showToast }) {
             {saveError ? (
               <p role="alert" className="m-0 mt-3 rounded-md border border-danger-border bg-danger/10 p-3 text-xs text-danger">
                 บันทึกไม่สำเร็จ: {saveError}
+                {/* N6 (S2-B3): the server named the live quotation — go there, don't retype it. */}
+                {saveErrorLiveQuotationId != null ? (
+                  <>
+                    {' '}
+                    <Link to={`/quotations/${saveErrorLiveQuotationId}`} className="font-bold underline">เปิดใบเสนอราคา</Link>
+                  </>
+                ) : null}
               </p>
             ) : null}
           </Panel>
@@ -2859,10 +3056,11 @@ export function QuotationEditorPage({ user, showToast }) {
             </>
           )}
         >
+          {/* Slice 2: the copy lives in quotationMeta.js so the deal page's ยืนยันคำสั่งซื้อ CTA says
+              exactly the same thing (TicketDetailPage renders the same three parts). */}
           <p className="m-0">
-            ระบบจะนำดีลของใบเสนอราคา {quotation?.number} เข้าสู่ขั้นตอนการขาย ที่ขั้น <strong>ได้รับคำสั่งซื้อ</strong>
-            {' '}พร้อมรายการสินค้าตามใบเสนอราคานี้ — จากนั้นออกใบแจ้งรับมัดจำ สั่งสินค้า และส่งมอบได้ตามปกติ
-            การดำเนินการนี้ย้อนกลับไม่ได้
+            {CONFIRM_ORDER_FROM_QUOTATION_COPY.lead(quotation?.number)} <strong>{CONFIRM_ORDER_FROM_QUOTATION_COPY.stage}</strong>
+            {' '}{CONFIRM_ORDER_FROM_QUOTATION_COPY.tail}
           </p>
         </Modal>
       ) : null}

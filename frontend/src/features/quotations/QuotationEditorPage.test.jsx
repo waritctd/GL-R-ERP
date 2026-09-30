@@ -105,7 +105,7 @@ describe('QuotationEditorPage item calc wiring', () => {
     api.tickets.get.mockResolvedValue({
       ticket: {
         summary: {
-          id: 18, createdById: 6, createdByName: 'คุณสมหมาย ขายดี',
+          id: 18, createdById: 6, createdByName: 'คุณสมหมาย ขายดี', salesStage: 'QUOTE_DESIGN_SIDE',
           customerName: 'บริษัท แฟชั่นไอส์แลนด์ จำกัด', projectName: null,
           // ผู้สั่งซื้อ is REQUIRED since owner feedback F2 (2026-09-10) and prefills from the
           // deal's own contact, so a ticket fixture without these two fields would leave
@@ -234,7 +234,7 @@ describe('QuotationEditorPage item calc wiring', () => {
     api.tickets.get.mockResolvedValue({
       ticket: {
         summary: {
-          id: 18, createdById: 6, createdByName: 'คุณสมหมาย ขายดี',
+          id: 18, createdById: 6, createdByName: 'คุณสมหมาย ขายดี', salesStage: 'QUOTE_DESIGN_SIDE',
           customerName: 'บริษัท แฟชั่นไอส์แลนด์ จำกัด', projectName: 'โครงการ A',
           customerId: 5, contactId: 6, contactName: 'ณัฐพงศ์ ศรีวิไล',
         },
@@ -280,7 +280,7 @@ describe('QuotationEditorPage new-quotation authorization (#M2)', () => {
     api.tickets.get.mockResolvedValue({
       ticket: {
         summary: {
-          id: 18, createdById: 6, createdByName: 'คุณสมหมาย ขายดี',
+          id: 18, createdById: 6, createdByName: 'คุณสมหมาย ขายดี', salesStage: 'QUOTE_DESIGN_SIDE',
           customerName: 'บริษัท แฟชั่นไอส์แลนด์ จำกัด', projectName: null,
           // ผู้สั่งซื้อ is REQUIRED since owner feedback F2 (2026-09-10) and prefills from the
           // deal's own contact, so a ticket fixture without these two fields would leave
@@ -368,7 +368,7 @@ describe('QuotationEditorPage client-side validation (#M4, item completeness own
     api.tickets.get.mockResolvedValue({
       ticket: {
         summary: {
-          id: 18, createdById: 6, createdByName: 'คุณสมหมาย ขายดี',
+          id: 18, createdById: 6, createdByName: 'คุณสมหมาย ขายดี', salesStage: 'QUOTE_DESIGN_SIDE',
           customerName: 'บริษัท แฟชั่นไอส์แลนด์ จำกัด', projectName: null,
           // ผู้สั่งซื้อ is REQUIRED since owner feedback F2 (2026-09-10) and prefills from the
           // deal's own contact, so a ticket fixture without these two fields would leave
@@ -713,6 +713,10 @@ describe('QuotationEditorPage inline deal creation', () => {
         </MemoryRouter>
       </QueryClientProvider>,
     );
+    // Slice 2 (SLICE-2-FLOW-A.md §A): /quotations/new now opens on "เลือกดีลที่มีอยู่" — this whole
+    // block is about the OTHER branch, so every case starts by choosing สร้างดีลใหม่, the same click
+    // a rep makes. (QuotationEditorPage.recipient.test.jsx covers the pick branch.)
+    fireEvent.click(screen.getByRole('button', { name: 'สร้างดีลใหม่' }));
     return { ...result, showToast, queryClient };
   }
 
@@ -725,6 +729,9 @@ describe('QuotationEditorPage inline deal creation', () => {
   async function selectCustomerAndProject({ channel = true } = {}) {
     api.customers.search.mockResolvedValue({ customers: [testCustomer] });
     api.customers.projects.mockResolvedValue({ projects: [testProject] });
+    // Slice 2 (S2-B1): a direct quotation needs its ผู้รับใบเสนอราคา before it can be saved.
+    // Incidental to every case here, so it is chosen alongside the customer and project.
+    fireEvent.click(screen.getByRole('radio', { name: 'ผู้ออกแบบ' }));
 
     fireEvent.change(await screen.findByLabelText(/^ลูกค้า/), { target: { value: 'ก้าวหน้า' } });
     // role="option" since V4 (2026-09-10) — the typeahead popup is a listbox.
@@ -876,8 +883,10 @@ describe('QuotationEditorPage inline deal creation', () => {
   });
 
   // "?ticket= present" is the OLD behaviour, unchanged (inline-deal-spec.md: "as today") -- the
-  // card renders the deal read-only instead of DealCustomerCard, now with a link back to it.
-  it('with ?ticket= present, the deal renders read-only with a link to /tickets/{id} -- DealCustomerCard does not render', async () => {
+  // deal renders read-only instead of the customer/project fields, with a link back to it. Slice 2
+  // moved that link into the header strip as "เปิดดีล" (IA §8: one deal verb, everywhere); the old
+  // in-panel "ดูรายละเอียดดีลนี้" is gone, so there is exactly one.
+  it('with ?ticket= present, the deal renders read-only with a link to /tickets/{id} -- no customer/project fields', async () => {
     api.customers.contacts.mockResolvedValue({
       contacts: [
         { id: 6, customerId: 5, firstName: 'ณัฐพงศ์', lastName: 'ศรีวิไล', phone: '086-222-3333', email: 'nattapong@fashionisland.co.th' },
@@ -887,7 +896,7 @@ describe('QuotationEditorPage inline deal creation', () => {
     api.tickets.get.mockResolvedValue({
       ticket: {
         summary: {
-          id: 18, createdById: 6, createdByName: 'คุณสมหมาย ขายดี',
+          id: 18, createdById: 6, createdByName: 'คุณสมหมาย ขายดี', salesStage: 'QUOTE_DESIGN_SIDE',
           customerName: 'บริษัท แฟชั่นไอส์แลนด์ จำกัด', projectName: null,
           // ผู้สั่งซื้อ is REQUIRED since owner feedback F2 (2026-09-10) and prefills from the
           // deal's own contact, so a ticket fixture without these two fields would leave
@@ -908,9 +917,10 @@ describe('QuotationEditorPage inline deal creation', () => {
     );
 
     await screen.findByRole('button', { name: /เพิ่มรายการ/ });
-    expect(screen.queryByLabelText(/^ลูกค้า/)).toBeNull(); // DealCustomerCard's own field, not this mode's
-    const link = screen.getByRole('link', { name: 'ดูรายละเอียดดีลนี้' });
+    expect(screen.queryByLabelText(/^ลูกค้า/)).toBeNull(); // the สร้างดีลใหม่ branch's own field, not this mode's
+    const link = screen.getByRole('link', { name: /เปิดดีล/ });
     expect(link.getAttribute('href')).toBe('/tickets/18');
+    expect(screen.queryByRole('link', { name: 'ดูรายละเอียดดีลนี้' })).toBeNull();
   });
 });
 
@@ -928,7 +938,7 @@ function ticketFixture(overrides = {}) {
   return {
     ticket: {
       summary: {
-        id: 18, createdById: 6, createdByName: 'คุณสมหมาย ขายดี',
+        id: 18, createdById: 6, createdByName: 'คุณสมหมาย ขายดี', salesStage: 'QUOTE_DESIGN_SIDE',
         customerName: 'บริษัท แฟชั่นไอส์แลนด์ จำกัด', projectName: null,
         customerId: 5, contactId: 6, contactName: 'ณัฐพงศ์ ศรีวิไล',
         ...overrides,
@@ -1192,6 +1202,8 @@ describe('QuotationEditorPage ผู้สั่งซื้อ (owner-directed 
 
   it('an inline-create quotation (no ticket yet) also renders ผู้สั่งซื้อ as an optional text input, not on DealCustomerCard', async () => {
     renderEditor('/quotations/new');
+    // Slice 2: the inline (new-deal) branch is behind the ดีล step's "สร้างดีลใหม่" now.
+    fireEvent.click(await screen.findByRole('button', { name: 'สร้างดีลใหม่' }));
 
     // DealCustomerCard itself no longer renders a ผู้สั่งซื้อ control at all -- the field lives
     // on the editor, right next to the card, same as the ticket/existing-draft path.

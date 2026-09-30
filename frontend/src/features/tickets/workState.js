@@ -36,9 +36,12 @@
 // actually clickable; this module only decides which ONE action (if any)
 // leads the sticky bar.
 
-import { nextSalesAction } from './salesActions.js';
+import { nextSalesAction, SALES_ACTION } from './salesActions.js';
 import { nextImportAction } from './importActions.js';
 import { nextAccountAction } from './accountActions.js';
+
+/** The approver-side twin of salesActions' AWAIT_DIRECT_APPROVAL bucket (slice 2). */
+export const DIRECT_APPROVAL_ACTION_KEY = 'approve_direct_quotation';
 
 /**
  * The single next action for `user` on `deal`, or the "whose turn is it"
@@ -54,15 +57,49 @@ import { nextAccountAction } from './accountActions.js';
  * not ACTIVE. There is deliberately no "waiting on <department>" fallback: the
  * "รอฝ่ายขาย" banner looked expandable, did nothing and named no next step
  * (GLA-156), so it was removed rather than fixed.
+ *
+ * Slice 2 adds exactly two things, both keyed on a live direct quotation
+ * (TicketSummaryDto.liveDirectQuotation) and both naming a concrete next step:
+ * - sales_manager / ceo on a PENDING_APPROVAL one get their own action
+ *   "อนุมัติใบเสนอราคา" -> /quotations/:id;
+ * - the rep on that same state gets no button but `bannerText` — "รอ ผจก.ขาย/CEO
+ *   อนุมัติใบเสนอราคา {number}" — a waiting line that names the document and who
+ *   decides it (unlike the retired department-only banner above). Absent otherwise.
  */
 export function resolveWorkState(user, deal, pricingRequests = []) {
   const role = user?.role;
   if (!deal || deal.lifecycle !== 'ACTIVE') return { action: null };
 
+  // Slice 2 (SLICE-2-FLOW-A.md §E): a live direct quotation waiting for approval is the approvers'
+  // move. sales_manager/ceo — exactly canApproveDealQuotation's audience — get their own action to
+  // the quotation, where the real (server-gated) อนุมัติ button is. They get NOTHING new for a
+  // DRAFT/APPROVED one: submitting and confirming the order are the rep's.
+  if ((role === 'sales_manager' || role === 'ceo') && deal.liveDirectQuotation?.docStatus === 'PENDING_APPROVAL') {
+    const live = deal.liveDirectQuotation;
+    return {
+      action: {
+        key: DIRECT_APPROVAL_ACTION_KEY,
+        label: 'อนุมัติใบเสนอราคา',
+        to: `/quotations/${live.id}`,
+        quotationId: live.id,
+        quotationNumber: live.number,
+      },
+    };
+  }
+
   const action = role === 'sales' ? nextSalesAction(deal, pricingRequests)
     : role === 'import' ? nextImportAction(deal, pricingRequests)
       : role === 'account' ? nextAccountAction(deal)
         : null;
+
+  // The rep's AWAIT_DIRECT_APPROVAL bucket is a WAITING state, not a button: it becomes the
+  // header's one work-state line, naming who it waits on and which document.
+  if (action?.key === SALES_ACTION.AWAIT_DIRECT_APPROVAL) {
+    return {
+      action: null,
+      bannerText: `รอ ผจก.ขาย/CEO อนุมัติใบเสนอราคา ${action.quotationNumber ?? ''}`.trim(),
+    };
+  }
 
   if (action) return { action };
 

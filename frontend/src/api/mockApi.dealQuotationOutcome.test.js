@@ -251,7 +251,9 @@ describe('mockApi dealQuotations.recordOutcome (GLA-123 slice S3)', () => {
       projectId: project.id, contactId: contact.id,
       items: [{ brand: 'SCG', model: 'Direct Tile', qty: 10, currency: 'THB' }],
     });
+    // recipientType: required on a DEAL_DIRECT create since slice 2 (S2-B1) — incidental here.
     const { quotation: draft } = await api.dealQuotations.create(ticket.summary.id, {
+      recipientType: 'DESIGNER',
       items: [{
         lineType: 'TILE', brand: 'SCG', model: 'Direct Tile', color: 'ขาว', texture: 'ด้าน', sizeText: '60x60',
         thicknessMm: 10, sqmPerPiece: 0.36, quantityMode: 'PIECES', piecesInput: 10, wastageMode: 'NONE',
