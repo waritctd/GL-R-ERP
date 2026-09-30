@@ -531,11 +531,31 @@ export function hasDealStageLabel(stage) {
   return Object.prototype.hasOwnProperty.call(DEAL_STAGE_LABELS, stage);
 }
 
-export function dealStageLabel(stage) {
+// S3 is not a designer stage: it means "the party who specifies has agreed the spec". Only the
+// WORDING follows the deal's entry channel. Designer-led, UNSPECIFIED, unknown and absent channels
+// all keep the DEAL_STAGE_LABELS wording above. Wording only — which stages a route visits is the
+// backend's (DealRoute), served as `onRoute` on the stage decisions.
+const SPEC_APPROVED_LABEL_BY_CHANNEL = {
+  OWNER_DIRECT: 'เจ้าของตกลงตามสเปคแล้ว',
+  BUYER_DIRECT: 'ผู้ซื้อ/ผู้รับเหมาตกลงตามสเปคแล้ว',
+};
+
+/**
+ * @param {string} stage
+ * @param {string} [entryChannel] the deal's `entryChannel`. Optional on purpose: the many call
+ *   sites that have no deal in hand (lists, history) keep the one-argument form and the default
+ *   wording.
+ */
+export function dealStageLabel(stage, entryChannel) {
   // The fallback renders the raw code rather than throwing: a shipped build must still draw the
   // deal. It is deliberately ugly, and the guard above is what makes sure nobody has to rely on
   // seeing it — assertStageLabelsComplete has already thrown in dev/test by this point.
-  return DEAL_STAGE_LABELS[stage] ?? { label: stage || '-', tone: 'neutral' };
+  const base = DEAL_STAGE_LABELS[stage] ?? { label: stage || '-', tone: 'neutral' };
+  if (stage === 'SPEC_APPROVED'
+    && Object.prototype.hasOwnProperty.call(SPEC_APPROVED_LABEL_BY_CHANNEL, entryChannel)) {
+    return { ...base, label: SPEC_APPROVED_LABEL_BY_CHANNEL[entryChannel] };
+  }
+  return base;
 }
 
 // Project lost reason -> StatusBadge tone (V50). Canonical source.
