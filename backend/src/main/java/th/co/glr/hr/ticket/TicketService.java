@@ -41,14 +41,16 @@ public class TicketService {
     private static final Set<String> IMPORT_ROLES = Set.of("import");
     private static final Set<String> CEO_ROLES    = Set.of("ceo");
     private static final Set<String> FULFILMENT_ROLES = Set.of("import", "ceo");
-    // Coarse pre-filter for the stock-coverage declaration only (owner ruling 2026-08-13,
-    // "Sales declares, Import can correct" — see reserveStock). DERIVED from the two sets
-    // canDeclareStockCoverage actually tests, never hand-written, so it cannot silently drift
-    // from them if either is ever changed. It is only the first of two gates: passing this set
-    // says "your role could declare on SOME deal", not "on THIS one" — a sales rep still has to
-    // own the deal. See requireViewAccess for the same two-stage role-then-row shape.
+    // Coarse pre-filter for the stock-coverage declaration only. Owner decision 2026-09-28 removed
+    // import from this gate — "Sales declares, CEO may correct/override" (S18 is Sales's; the earlier
+    // 2026-08-13 "Import can correct" reading is superseded, the same direction V184 took delivery).
+    // DERIVED from the two sets canDeclareStockCoverage actually tests ({@link #CEO_ROLES} +
+    // {@link #SALES_ROLES}), never hand-written, so it cannot silently drift from them if either is
+    // ever changed. It is only the first of two gates: passing this set says "your role could declare
+    // on SOME deal", not "on THIS one" — a sales rep still has to own the deal. See requireViewAccess
+    // for the same two-stage role-then-row shape.
     private static final Set<String> STOCK_DECLARATION_ROLES =
-        Stream.concat(FULFILMENT_ROLES.stream(), SALES_ROLES.stream())
+        Stream.concat(CEO_ROLES.stream(), SALES_ROLES.stream())
             .collect(Collectors.toUnmodifiableSet());
     // V148 (per-item stock-commission weighting): a DIFFERENT gate from STOCK_DECLARATION_ROLES
     // above, deliberately. qty_from_stock is the rep's own DECLARATION (owner ruling "Sales
@@ -134,7 +136,18 @@ public class TicketService {
     public List<TicketSummaryDto> list(String status, UserPrincipal actor) {
         requireRole(actor, VIEWER_ROLES);
         Long createdByFilter = "sales".equals(actor.role()) ? actor.id() : null;
-        return tickets.findSummaries(status, null, createdByFilter, actor.role(), null);
+        return forRole(tickets.findSummaries(status, null, createdByFilter, actor.role(), null), actor.role());
+    }
+
+    /**
+     * Owner ruling 2026-09-30: import receives no customer money totals on any summary it is
+     * handed. Applied after the query, so ordering, paging and counts are untouched.
+     */
+    private static List<TicketSummaryDto> forRole(List<TicketSummaryDto> rows, String role) {
+        if (!IMPORT_ROLES.contains(role)) {
+            return rows;
+        }
+        return rows.stream().map(TicketSummaryDto::withoutMoney).toList();
     }
 
     public Page<TicketSummaryDto> listPage(String status, UserPrincipal actor, PageRequest page) {
@@ -151,7 +164,8 @@ public class TicketService {
         // Phase B (role-scoped views): import/account only see the slice of the deal
         // pipeline relevant to their own worklist — see TicketRepository.appendRoleScope.
         // ceo/sales_manager/sales are unaffected (the repository ignores any other role).
-        List<TicketSummaryDto> rows = tickets.findSummaries(status, salesStage, createdByFilter, actor.role(), page);
+        List<TicketSummaryDto> rows =
+            forRole(tickets.findSummaries(status, salesStage, createdByFilter, actor.role(), page), actor.role());
         // Skip the COUNT round-trip when the whole result set fits on page 0.
         int total = (page.page() == 0 && rows.size() < page.size())
             ? rows.size()
@@ -160,7 +174,32 @@ public class TicketService {
     }
 
     public TicketDto get(long id, UserPrincipal actor) {
-        return requireViewAccess(id, actor);
+        // import has its OWN per-deal page endpoint (GET /api/import/deals/{id},
+        // ImportDealService) that projects the deal down to factories/items/delivery status/comments
+        // and never carries a price — mirroring the account finance view ruling. The whole-deal
+        // read (every item's cost fields, the full event feed) is therefore refused to it. This
+        // guard is on this ONE read only: requireViewAccess (shared by actions, listDeliveries,
+        // comment, ...) is deliberately untouched, and so are import's /import-requests routes.
+        if (IMPORT_ROLES.contains(actor.role())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
+        TicketDto ticket = requireViewAccess(id, actor);
+        // B5 fix: display-only fallback, scoped to THIS single read endpoint on purpose. Every
+        // other reader of ticket.items() (actions()'s canReserveStock/canRecordDelivery/
+        // hasRemainingDelivery, editItems' merge-by-position, commission/delivery calculations,
+        // ...) must keep seeing the real (possibly empty) sales.ticket_item rows -- those all
+        // read qtyDelivered/qtyFromStock and stage/action gates that a borrowed quotation line
+        // knows nothing about, so folding this into requireViewAccess or TicketRepository#findById
+        // would leak fallback items into action-availability and edit-merge logic that assumes
+        // ticket-native rows. See TicketDto#fromPricingChain's own Javadoc.
+        if (ticket.items().isEmpty()) {
+            List<TicketItemDto> fallback = tickets.findPricingChainFallbackItems(id);
+            if (!fallback.isEmpty()) {
+                return new TicketDto(ticket.summary(), fallback, ticket.events(),
+                    ticket.quotation(), ticket.quotations(), true);
+            }
+        }
+        return ticket;
     }
 
     public List<PaymentReceiptDto> listPayments(long ticketId, UserPrincipal actor) {
@@ -181,11 +220,33 @@ public class TicketService {
      */
     private TicketDto requireViewAccess(long ticketId, UserPrincipal actor) {
         requireRole(actor, VIEWER_ROLES);
+        // H1 lockdown (owner decision, 2026-09-30): account no longer reads a deal through the ticket
+        // routes AT ALL -- not even one inside its list scope. It reads the finance deal view
+        // (FinanceDealService, GET /api/finance/deals/{id}), which carries no cost/pricing/tracking
+        // internals. Refused here, in the service, so that every caller of requireViewAccess (get,
+        // actions, listPayments, listDeliveries, comment, the quotation file) inherits it and the
+        // /tickets controller needs no check of its own.
+        if ("account".equals(actor.role())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
         TicketDto ticket = requireTicket(ticketId);
         if ("sales".equals(actor.role()) && ticket.summary().createdById() != actor.id()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         return projectForRole(ticket, actor.role());
+    }
+
+    /**
+     * The account role's ROW scope for the finance paths: {@code account} may act on / read a deal
+     * only when it is inside its list scope ({@link TicketRepository#isInAccountScope} -- the SAME
+     * predicate that filters {@code GET /api/tickets} for account). Any other role passes through
+     * untouched. Enforced here, in the shared business methods, so that a caller reaching them by
+     * any path (the finance controller today) cannot skip it.
+     */
+    private void requireAccountScope(long ticketId, UserPrincipal actor) {
+        if ("account".equals(actor.role()) && !tickets.isInAccountScope(ticketId)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
     }
 
     /**
@@ -209,7 +270,34 @@ public class TicketService {
         if (!IMPORT_ROLES.contains(role)) {
             return ticket;
         }
-        return new TicketDto(ticket.summary(), ticket.items(), ticket.events(), null, List.of());
+        // Owner ruling 2026-09-30: import must never be handed pricing. Beyond the quotation chain
+        // this also strips (a) every item's cost/price columns and (b) every event that is not a
+        // human comment — PRICE_* / override events quote prices in their note and item snapshot,
+        // exactly what ImportDealService already withholds from the import view — and (c) the
+        // summary's customer money totals (withoutMoney).
+        List<TicketItemDto> items = ticket.items().stream().map(TicketService::withoutCosts).toList();
+        List<TicketEventDto> events = ticket.events().stream()
+            .filter(e -> TicketEventKind.COMMENTED.equals(e.kind()))
+            .toList();
+        return new TicketDto(ticket.summary().withoutMoney(), items, events, null, List.of());
+    }
+
+    /**
+     * A copy of {@code i} with every price/cost-bearing column blanked. {@code weightMultiplier} is
+     * a primitive {@code int} (the commission weighting), so it cannot be null — it is reset to the
+     * neutral column default 1 rather than left carrying the manager-set value.
+     */
+    private static TicketItemDto withoutCosts(TicketItemDto i) {
+        return new TicketItemDto(i.id(), i.ticketId(), i.brand(), i.model(), i.color(), i.texture(), i.size(),
+            i.factory(), i.qty(), i.qtySqm(),
+            null /* rawPrice */, null /* rawCurrency */, i.rawUnit(),
+            null /* proposedPrice */, null /* approvedPrice */, null /* currency */,
+            i.sortOrder(),
+            null /* calcedCost */, null /* calcedPrice */, i.calcConfigVersion(), i.unitBasis(),
+            null /* manualPrice */, null /* manualOverrideReason */,
+            i.qtyDelivered(), i.qtyFromStock(), i.stockNote(), i.catalogPriceId(), i.catalogProductCode(),
+            i.source(), null /* catalogPrice */, null /* catalogCurrency */, i.catalogPriceUnit(),
+            i.sqmPerPiece(), 1 /* weightMultiplier */, i.sourcedFromStock(), null /* stockSalePrice */);
     }
 
     @Transactional
@@ -224,10 +312,21 @@ public class TicketService {
         if (request.projectId() == null) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องเลือกโครงการก่อนสร้างดีล");
         }
+        // A NEW deal must state a real channel (owner ruling 2026-09-30) -- it decides the deal's
+        // route (DealRoute). The split is deliberate: "absent/blank" is refused at the API boundary
+        // by @NotBlank on CreateTicketRequest.entryChannel, and THIS check guards the VALUE. Null is
+        // still tolerated here on purpose: ~84 call sites across 72 test files build a request with
+        // no channel, and making the service strict would mean editing all of them for a data-quality
+        // rule (TicketServiceTest#create_stillToleratesNullEntryChannelAtServiceLevel pins this).
+        // UNSPECIFIED passes EntryChannel.isValid (valid as STORED, e.g. legacy rows) but is not a
+        // channel a caller may CHOOSE for a new deal.
         if (request.entryChannel() != null && !request.entryChannel().isBlank()
-                && !EntryChannel.isValid(request.entryChannel())) {
+                && (!EntryChannel.isValid(request.entryChannel())
+                    || EntryChannel.UNSPECIFIED.equals(request.entryChannel()))) {
             throw new ApiException(HttpStatus.BAD_REQUEST,
-                "ไม่รองรับช่องทางรับงาน '" + request.entryChannel() + "'");
+                EntryChannel.UNSPECIFIED.equals(request.entryChannel())
+                    ? "ต้องระบุช่องทางดีลที่แท้จริง (ออกแบบนำ / เจ้าของโครงการ / ผู้ซื้อตรง) ก่อนสร้างดีล"
+                    : "ไม่รองรับช่องทางรับงาน '" + request.entryChannel() + "'");
         }
         // Guard priority the same way as entryChannel: an unvalidated value hits the
         // chk_ticket_priority CHECK column in the repository and fails closed (500).
@@ -570,7 +669,16 @@ public class TicketService {
     private record QuotationRenderContext(TicketDto ticket, QuotationDto quotation, CustomerDto customer) {}
 
     private QuotationRenderContext loadQuotationContext(long ticketId, long quotationId, UserPrincipal actor) {
-        TicketDto ticket = requireViewAccess(ticketId, actor);
+        // H1 lockdown: requireViewAccess refuses account outright, but the finance view links the deal's
+        // accepted quotation here, so account gets a SCOPED path -- the deal must be inside its list scope.
+        TicketDto ticket;
+        if ("account".equals(actor.role())) {
+            requireRole(actor, VIEWER_ROLES);
+            ticket = requireTicket(ticketId);
+            requireAccountScope(ticketId, actor);
+        } else {
+            ticket = requireViewAccess(ticketId, actor);
+        }
         // Phase B: explicit denial rather than relying on projectForRole's stripped
         // quotations list to fall through to a "quotation not found" 404 — import
         // downloading a quotation file is a permission question, not a lookup miss.
@@ -625,7 +733,9 @@ public class TicketService {
             s.closeConfirmedAt(), s.closeConfirmedByName(), s.invoiceOnFile(),
             s.cancelReason(), s.cancelledAt(),
             s.winProbabilityOverride(), s.designerName(), s.ownerName(), s.buyerName(), s.stale(),
-            s.commissionRecorded(), s.reopenedAt(), s.reopenCount());
+            s.commissionRecorded(), s.reopenedAt(), s.reopenCount(), s.quotationOnly(),
+            s.paymentDueDate(), s.paymentDueBasis(), s.paymentDueCreditDays(),
+            s.liveDirectQuotation());
     }
 
     /**
@@ -665,6 +775,7 @@ public class TicketService {
     @Transactional
     public TicketDto confirmCloseReady(long ticketId, UserPrincipal actor) {
         requireRole(actor, CLOSE_CONFIRM_ROLES);
+        requireAccountScope(ticketId, actor);
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireActive(s);
         if (s.closeConfirmedAt() != null) {
@@ -678,10 +789,25 @@ public class TicketService {
         return requireTicket(ticketId);
     }
 
-    /** Withdraw the confirmation before the CEO acts (account or CEO). */
+    /**
+     * Withdraw the confirmation before the CEO acts. The {@code /api/tickets} entrypoint: ceo only since
+     * the H1 lockdown -- account revokes through {@link #financeRevokeCloseConfirmation} instead.
+     */
     @Transactional
     public TicketDto revokeCloseConfirmation(long ticketId, String note, UserPrincipal actor) {
+        requireRole(actor, CEO_ROLES);
+        return revokeCloseConfirmationInternal(ticketId, note, actor);
+    }
+
+    /** The finance entrypoint (account or ceo; account row-scoped) -- same business logic. */
+    @Transactional
+    public TicketDto financeRevokeCloseConfirmation(long ticketId, String note, UserPrincipal actor) {
         requireRole(actor, ACCOUNT_ROLES);
+        requireAccountScope(ticketId, actor);
+        return revokeCloseConfirmationInternal(ticketId, note, actor);
+    }
+
+    private TicketDto revokeCloseConfirmationInternal(long ticketId, String note, UserPrincipal actor) {
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireActive(s);
         if (s.closeConfirmedAt() == null) {
@@ -727,6 +853,40 @@ public class TicketService {
         TicketSummaryDto s = loadAndVerifyStatus(ticketId, TicketStatus.QUOTATION_ISSUED);
         requireActive(s);
         requireOwner(s, actor);
+        return applyCustomerConfirmation(ticketId, s, actor);
+    }
+
+    /**
+     * GLA-136 — the SAME customer-confirmation effects as {@link #confirmCustomer} (payment track
+     * {@code null -> CUSTOMER_CONFIRMED}, stage auto-advance to {@code ORDER_RECEIVED}), for the
+     * ONE caller that has already made its own authorization decision:
+     * {@code DealQuotationService#confirmOrderFromDirectQuotation}.
+     *
+     * <p><strong>Why a second entry point instead of calling {@link #confirmCustomer}:</strong>
+     * that method's gate is sales-role AND deal-owner only. Promotion's audience is wider by owner
+     * ruling — the owning rep, any {@code sales_manager}, or a {@code can_create_quotation} grantee
+     * (the same audience that may write the direct quotation, {@code
+     * DealQuotationService#requireEditAccess}) — and a sales_manager promoting a rep's approved
+     * quotation would otherwise hit {@link #confirmCustomer}'s owner 403 halfway through the
+     * promotion transaction. {@link #confirmCustomer}'s own public gate is left exactly as it was;
+     * this method simply skips the role/owner half, keeping the status ({@code quotation_issued})
+     * and lifecycle ({@code ACTIVE}) preconditions.
+     *
+     * <p><strong>Performs NO authorization of its own.</strong> It is not routed by any controller
+     * and must never be: every caller is responsible for having authorized {@code actor} against
+     * this ticket first. Today that is exactly one call site, inside the same transaction as the
+     * gate it relies on.
+     */
+    @Transactional
+    public TicketDto confirmCustomerForPromotedQuotation(long ticketId, UserPrincipal actor) {
+        TicketSummaryDto s = loadAndVerifyStatus(ticketId, TicketStatus.QUOTATION_ISSUED);
+        requireActive(s);
+        return applyCustomerConfirmation(ticketId, s, actor);
+    }
+
+    /** The shared body of {@link #confirmCustomer} and {@link #confirmCustomerForPromotedQuotation}
+     * — moved here verbatim (GLA-136) so the two cannot drift; behaviour is unchanged. */
+    private TicketDto applyCustomerConfirmation(long ticketId, TicketSummaryDto s, UserPrincipal actor) {
         // Never downgrade the payment track: once past CUSTOMER_CONFIRMED, re-confirming
         // would reset paymentStatus and deadlock the later transitions.
         if (s.paymentStatus() != null && !"CUSTOMER_CONFIRMED".equals(s.paymentStatus())) {
@@ -789,6 +949,7 @@ public class TicketService {
         // GLA-118: account only — see DEPOSIT_CONFIRM_ROLES's own Javadoc for why this is not
         // ACCOUNT_ROLES (which would still let the CEO through).
         requireRole(actor, DEPOSIT_CONFIRM_ROLES);
+        requireAccountScope(ticketId, actor);
         TicketDto ticket = requireTicket(ticketId);
         TicketSummaryDto s = ticket.summary();
         requireActive(s);
@@ -1339,7 +1500,10 @@ public class TicketService {
      * {@code sales.commission_record.effective_weight_multiplier}'s migration comment, V148) --
      * editing this value after a commission already exists for this ticket never moves that
      * commission's money, by the same "freeze, never recompute live" discipline {@code
-     * pricing_decision} (V72) already established for landed cost.
+     * pricing_decision} (V72) already established for landed cost. The ONE sanctioned exception
+     * is {@code CommissionService#adjustItemWeights}: the sales_manager may re-weight a SUBMITTED
+     * commission's lines (owner ruling 2026-10-01) and the frozen blend is recomputed with the
+     * same calculator call; once MANAGER_APPROVED it is frozen again.
      *
      * <p>Two gates in the same order {@link #reserveStock} uses: the coarse {@link
      * #ITEM_WEIGHT_ROLES} role check runs BEFORE the ticket is loaded, so a role that can never
@@ -1491,6 +1655,7 @@ public class TicketService {
         // GLA-118 (owner ruling 2026-09-20, part A): account only — see PAYMENT_RECORD_ROLES's own
         // Javadoc. This used to be ACCOUNT_ROLES, which let the CEO through.
         requireRole(actor, PAYMENT_RECORD_ROLES);
+        requireAccountScope(ticketId, actor);
         TicketDto ticket = requireTicket(ticketId);
         TicketSummaryDto s = ticket.summary();
         requireActive(s);
@@ -1523,12 +1688,18 @@ public class TicketService {
         // GLA-118 (owner ruling 2026-09-20, part A): account only — see PAYMENT_RECORD_ROLES's own
         // Javadoc. This used to be ACCOUNT_ROLES, which let the CEO through.
         requireRole(actor, PAYMENT_RECORD_ROLES);
+        requireAccountScope(ticketId, actor);
         return recordPaymentInternal(ticketId, request, actor);
     }
 
+    /** The {@code /api/tickets} entrypoint: ceo only since the H1 lockdown (billing is out of scope for the finance page). */
     @Transactional
     public TicketDto setBilling(long ticketId, BillingRequest request, UserPrincipal actor) {
-        requireRole(actor, ACCOUNT_ROLES);
+        requireRole(actor, CEO_ROLES);
+        return setBillingInternal(ticketId, request, actor);
+    }
+
+    private TicketDto setBillingInternal(long ticketId, BillingRequest request, UserPrincipal actor) {
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireActive(s);
         tickets.updateBilling(ticketId, request.billingDate(), request.dueDate(), request.creditTermDays(),
@@ -1779,8 +1950,37 @@ public class TicketService {
     // copy used to be a hand-maintained literal in the frontend's stageMeta.js, which is the drift
     // this refactor exists to end.
 
+    /**
+     * The {@code /api/tickets} entrypoint. H1 lockdown: refuses {@code account} outright -- account moves a
+     * money stage through {@link #financeUpdateStage}, on deals inside its list scope only.
+     */
     @Transactional
     public TicketDto updateStage(long ticketId, String targetStage, String note, UserPrincipal actor) {
+        if ("account".equals(actor.role())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
+        return updateStageInternal(ticketId, targetStage, note, actor);
+    }
+
+    /**
+     * The finance entrypoint: account or ceo, a MONEY stage only ({@link DealStage#ACCOUNT_TARGET_STAGES}:
+     * DEPOSIT_RECEIVED / CLOSED_PAID), account row-scoped. The stage rules themselves -- write gate, fact
+     * gates, note rule, tracking readiness -- are the untouched {@link #updateStageInternal}.
+     */
+    @Transactional
+    public TicketDto financeUpdateStage(long ticketId, String targetStage, String note, UserPrincipal actor) {
+        requireRole(actor, ACCOUNT_ROLES);
+        if (!DealStage.isValid(targetStage)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับสถานะขั้นตอนการขาย '" + targetStage + "'");
+        }
+        if (!DealStage.ACCOUNT_TARGET_STAGES.contains(targetStage)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
+        requireAccountScope(ticketId, actor);
+        return updateStageInternal(ticketId, targetStage, note, actor);
+    }
+
+    private TicketDto updateStageInternal(long ticketId, String targetStage, String note, UserPrincipal actor) {
         if (!DealStage.isValid(targetStage)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับสถานะขั้นตอนการขาย '" + targetStage + "'");
         }
@@ -1857,6 +2057,19 @@ public class TicketService {
         // the misleading pair "write a note" -> "…now the fact is missing", and would have let a
         // reader mistake the note rule for the thing doing the work.
         requireStageFactsHold(s, targetStage);
+        // Rung 6 of the precedence ladder (design §12.1): the deal's ENTRY-CHANNEL route. Last on
+        // purpose — a deal missing its deposit must report the FACT gate, not blame the route.
+        //
+        // ⚠️ Tests the TARGET only, NEVER s.salesStage(). A deal may legitimately be SITTING on an
+        // off-route stage (it got there before someone corrected the channel); gating the current
+        // stage would strand it with no legal move. Reads the channel off the already-loaded
+        // summary: no repository call may be added to any gate (see stageDecisions' Javadoc — it
+        // would turn one query into fifteen). UNSPECIFIED / DESIGNER_LED / unknown / null have an
+        // EMPTY off-route set, so this is a no-op for them (DealRoute's class Javadoc).
+        if (!DealRoute.isOnRoute(s.entryChannel(), targetStage)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                DealRoute.refusalMessage(s.entryChannel(), targetStage));
+        }
     }
 
     /**
@@ -1927,7 +2140,7 @@ public class TicketService {
             decisions.add(new StageDecisionDto(target, DealStage.displayNoOf(target),
                 blockedReason == null,
                 DealStage.requiresJustification(s.salesStage(), target),
-                blockedReason));
+                blockedReason, DealRoute.isOnRoute(s.entryChannel(), target)));
         }
         return decisions;
     }
@@ -2216,6 +2429,15 @@ public class TicketService {
         if (DealStage.indexOf(targetStage) <= DealStage.indexOf(s.salesStage())) {
             return;
         }
+        // An off-route target is a silent no-op, exactly like a non-forward one above — never a
+        // throw, which would fail an unrelated caller (e.g. quotation creation). Reachable ONLY for
+        // party-axis stages: DealRoute.ROUTE_VARIABLE (S4–S8) is the only set an off-route table
+        // may contain, so an OPERATIONAL advance (ORDER_RECEIVED, DEPOSIT_RECEIVED, PROCUREMENT,
+        // DELIVERY_SCHEDULING, DELIVERED, CLOSED_PAID) can never vanish here with its fact already
+        // written. DealRouteTest pins that invariant; do not weaken it without revisiting this.
+        if (!DealRoute.isOnRoute(s.entryChannel(), targetStage)) {
+            return;
+        }
         tickets.updateSalesStage(s.id(), targetStage);
         tickets.addEvent(s.id(), actor.id(), actor.name(),
             TicketEventKind.STAGE_CHANGED, s.salesStage(), targetStage, "อัตโนมัติจากขั้นตอนของดีล");
@@ -2485,6 +2707,10 @@ public class TicketService {
         if (!salesCanEdit) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์แก้ไขรายการสินค้าในสถานะนี้");
         }
+        // Quotation <-> deal linking slice 1: while a LIVE direct quotation exists the deal's lines
+        // live on it (ticket_item is written from it when the order is confirmed), so they are not
+        // typed in here — see DirectQuotationLocks. AFTER the 403 above on purpose.
+        DirectQuotationLocks.requireNoLiveDirectQuotation(tickets, ticketId);
         // Sales editing items (brand/model/qty/etc.) must NOT be able to clobber import's
         // proposed price or CEO's approved/manual price — only proposePrice (import) is
         // allowed to replace pricing wholesale. Merge request items onto the ticket's
@@ -2609,10 +2835,32 @@ public class TicketService {
         // so it must not be a side door around the read scoping (nor, per Phase B,
         // around the import quotation projection — the ticket is re-fetched below to
         // pick up the new event, so it must be re-projected too).
+        // Leak B (owner ruling 2026-09-30): import's comment path is row-scoped to its import scope
+        // — the same predicate as its worklist and GET /api/import/deals/{id}. Checked BEFORE
+        // requireViewAccess so a missing deal and an out-of-scope deal are both a plain 403 (no
+        // existence oracle). The scope is applied here, NOT in requireViewAccess, so import's other
+        // shared-gate reads (actions, listDeliveries) keep their pre-existing behaviour.
+        if (IMPORT_ROLES.contains(actor.role()) && !tickets.isInImportScope(ticketId)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
         requireViewAccess(ticketId, actor);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.COMMENTED, null, null, request.message());
         return projectForRole(requireTicket(ticketId), actor.role());
+    }
+
+    /**
+     * The finance entrypoint for a deal comment: account or ceo, account row-scoped. Writes the same
+     * COMMENTED event as {@link #comment}; the caller (FinanceDealService) returns the finance view,
+     * never the full ticket.
+     */
+    @Transactional
+    public void financeComment(long ticketId, CommentRequest request, UserPrincipal actor) {
+        requireRole(actor, ACCOUNT_ROLES);
+        requireAccountScope(ticketId, actor);
+        requireTicket(ticketId);
+        tickets.addEvent(ticketId, actor.id(), actor.name(),
+            TicketEventKind.COMMENTED, null, null, request.message());
     }
 
     /**
@@ -2654,7 +2902,33 @@ public class TicketService {
     // FactoryQuoteService.send, which is gated by its own IMPORT_ROLES check — see that class.
 
     public TicketActionsResponse actions(long ticketId, UserPrincipal actor) {
-        TicketDto ticket = requireViewAccess(ticketId, actor);
+        return buildActions(requireViewAccess(ticketId, actor), actor);
+    }
+
+    /**
+     * The finance entrypoint for the action list: account or ceo (account row-scoped). Runs the SAME
+     * {@link #buildActions} as {@link #actions} -- one readiness rule, no second copy -- without the
+     * ticket view-access check that refuses account. FinanceDealService narrows the result to money actions.
+     */
+    public TicketActionsResponse financeActions(long ticketId, UserPrincipal actor) {
+        requireRole(actor, ACCOUNT_ROLES);
+        TicketDto ticket = requireTicket(ticketId);
+        requireAccountScope(ticketId, actor);
+        return buildActions(ticket, actor);
+    }
+
+    /**
+     * {@link #financeActions} minus the account row-scope re-check, for a caller that has ALREADY authorised and
+     * scoped the request (FinanceDealService). Needed because an authorised account action may legitimately move
+     * the deal out of account's list scope; re-checking scope when rebuilding the response would 403 AFTER the
+     * write committed. Role is still enforced.
+     */
+    public TicketActionsResponse financeActionsAlreadyScoped(long ticketId, UserPrincipal actor) {
+        requireRole(actor, ACCOUNT_ROLES);
+        return buildActions(requireTicket(ticketId), actor);
+    }
+
+    private TicketActionsResponse buildActions(TicketDto ticket, UserPrincipal actor) {
         TicketSummaryDto s = ticket.summary();
         List<TicketActionDto> actions = new ArrayList<>();
         List<StageDecisionDto> decisions = stageDecisions(s, actor);
@@ -2878,41 +3152,25 @@ public class TicketService {
      * cannot drift into offering an action that immediately 403s (the same discipline {@link
      * #canIssueImportRequest} documents for 409s).
      *
+     * <p><strong>S18 is Sales's, not Import's — owner decision 2026-09-28.</strong> The access
+     * {@code import} used to have here is removed: scheduling delivery / declaring stock coverage
+     * (S18 จัดตารางส่งมอบ) is now the owning sales rep — or the CEO as oversight/override — and no one
+     * else. This is the S18 counterpart to V184's transfer of delivery-recording (S19,
+     * {@link #canWriteDelivery}) to Sales: Import keeps the import axis (per-factory PROCUREMENT /
+     * {@code ImportRequestService}), Sales owns the delivery axis end to end. Before this the gate
+     * ran through {@code FULFILMENT_ROLES} ({@code import}+{@code ceo}) via a shared helper; that
+     * helper is gone with its only caller.
+     *
      * <p>Ownership is expressed exactly as {@link #requireDealOwnership}, {@link
      * #canManageQuotation} and {@link #canConfirmCustomer} express it: a {@code sales} role that
      * created this deal. {@code sales_manager} is deliberately NOT included even though {@link
      * #requireDealOwnership} grants it — the ruling is "Sales declares", and the declaration feeds
      * the owning rep's own STOCK_BONUS input, so letting oversight write another rep's commission
-     * input is a wider grant than was asked for. {@code ceo} keeps access through {@link
-     * #FULFILMENT_ROLES}, not through ownership.
+     * input is a wider grant than was asked for. {@code ceo} keeps access through {@link #CEO_ROLES}
+     * as an oversight/override, not through ownership — the same shape as {@link #canWriteDelivery}.
      */
     private boolean canDeclareStockCoverage(TicketSummaryDto s, UserPrincipal actor) {
-        return isFulfilmentOrOwningRep(s, actor);
-    }
-
-    /**
-     * "Import and the CEO, or the {@code sales} rep who owns this deal."
-     *
-     * <p>ONE definition, because two separate owner rulings landed on exactly this set and two copies
-     * of an authorization expression is how they drift: {@link #canDeclareStockCoverage} (stock
-     * declaration) and {@link #canWriteDelivery} (stages 13–14, ส่งมอบสินค้า). Both call this; neither
-     * restates it.
-     *
-     * <p><strong>{@code sales_manager} is deliberately absent</strong>, and for a stated rule rather
-     * than an analogy: {@code ROLE_PERMISSIONS} in {@code frontend/src/api/routes.js} records that
-     * sales_manager "is read+comment oversight ONLY (a project-manager-style follow-up role for the
-     * sales team) — it must never be added to" the write permissions. Recording a delivery is a
-     * write. Note the asymmetry this creates on purpose: {@code requireStageWriteAccess} DOES let
-     * sales_manager set {@code DELIVERY_SCHEDULING}/{@code DELIVERED} by hand, because that is the
-     * manual stage-correction fallback, not the operational act. Oversight may correct the pipeline;
-     * it may not record that goods went out.
-     *
-     * <p>Ownership is expressed exactly as {@link #requireDealOwnership}, {@link #canManageQuotation}
-     * and {@link #canConfirmCustomer} express it: a {@code sales} role that created this deal. CEO
-     * keeps access through {@link #FULFILMENT_ROLES}, not through ownership.
-     */
-    private boolean isFulfilmentOrOwningRep(TicketSummaryDto s, UserPrincipal actor) {
-        return FULFILMENT_ROLES.contains(actor.role())
+        return CEO_ROLES.contains(actor.role())
             || (SALES_ROLES.contains(actor.role()) && s.createdById() == actor.id());
     }
 
@@ -2929,9 +3187,20 @@ public class TicketService {
      * everything else in that commit is superseded by the {@code sales.import_request}-based rebuild
      * (V184) this branch implements instead of {@code sales.factory_import_progress}.
      *
-     * <p>Deliberately NOT {@link #isFulfilmentOrOwningRep}, which still admits import — that helper
-     * stays as-is for {@link #canDeclareStockCoverage}, its other caller: stock-coverage declaration
-     * is unaffected by this transfer.
+     * <p>Identical in shape to {@link #canDeclareStockCoverage} (S18): both are "CEO, or the owning
+     * sales rep", import excluded. They were once a single shared helper admitting import; the
+     * 2026-09-28 S18 decision removed import from stock coverage too, so the two now agree — but they
+     * stay SEPARATE methods on purpose (V184 split them precisely so S19 and S18 can diverge again
+     * without one silently dragging the other). Do NOT re-merge them into one predicate.
+     *
+     * <p><strong>{@code sales_manager} is deliberately absent</strong>, and for a stated rule rather
+     * than an analogy: {@code ROLE_PERMISSIONS} in {@code frontend/src/api/routes.js} records that
+     * sales_manager "is read+comment oversight ONLY (a project-manager-style follow-up role for the
+     * sales team) — it must never be added to" the write permissions. Recording a delivery is a
+     * write. Note the asymmetry this creates on purpose: {@code requireStageWriteAccess} DOES let
+     * sales_manager set {@code DELIVERY_SCHEDULING}/{@code DELIVERED} by hand, because that is the
+     * manual stage-correction fallback, not the operational act. Oversight may correct the pipeline;
+     * it may not record that goods went out.
      *
      * <p>The single source of truth for BOTH {@code recordPartialDelivery}/{@code completeDelivery}'s
      * gate AND whether {@link #actions} advertises RECORD_PARTIAL_DELIVERY/COMPLETE_DELIVERY, so the

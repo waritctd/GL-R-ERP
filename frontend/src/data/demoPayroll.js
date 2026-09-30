@@ -100,13 +100,16 @@ export function buildDemoCommissions() {
   // null/false defaults for an unlinked commission). Commission #4 already pointed at ticket
   // 14 and is left untouched.
   return [
-    // SUBMITTED — auto SALE, pending manager review. Unlinked (D1): ticket 1 never reaches
-    // CLOSED_PAID, and both CLOSED_PAID tickets are already spoken for by #3/#4 below.
+    // SUBMITTED — auto SALE, pending manager review. Linked to ticket 9: a CLOSED_PAID deal owned by
+    // this rep (so the createFromDeal gate is satisfied) that #3 no longer claims since it was unlinked
+    // (D1). Linked so the รออนุมัติ view has real item lines to render (pendingApproval builds `items`
+    // from the linked ticket, like CommissionRepository#findPendingItems). The snapshot is the deal's
+    // payable (96,000) and the 125,000 invoice diverges from it by >5%, so the mismatch flag is true.
     row({
-      id: 1, sourceTicketId: null, salesRepId: 6, salesRepName: 'คุณสมหมาย ขายดี',
+      id: 1, sourceTicketId: 9, salesRepId: 6, salesRepName: 'คุณสมหมาย ขายดี',
       kind: 'SALE', status: 'SUBMITTED', payrollMonth: '2026-08-01',
       actualReceived: 125000, commissionableBase: 116822.43,
-      dealPayableAmountSnapshot: null, dealAmountMismatch: false,
+      dealPayableAmountSnapshot: 96000, dealAmountMismatch: true,
       invoiceDetails: invoice({ id: 1, invoiceNumber: 'INV-2026-08001', invoiceDate: '2026-08-01', grossAmount: 125000 }),
     }),
     // MANAGER_APPROVED — waiting on CEO. Unlinked (D1): ticket 3 never reaches CLOSED_PAID.

@@ -77,8 +77,60 @@ public interface Mailer {
      */
     void sendWithAttachments(String to, String subject, String body, List<Attachment> attachments);
 
+    /**
+     * Sends one fully-specified message: an HTML body with a required plain-text alternative, an
+     * optional CC list, inline images, and file attachments, all in one email. The single-purpose
+     * methods above cannot express two of these at once - none carries a {@code cc}, and none
+     * combines HTML with attachments - which the auto-generated leave-submission email needs (it
+     * mails the ใบลา PDF to the shared HR inbox while CC'ing the requester and their manager). Kept as
+     * one method taking {@link OutgoingEmail} rather than a seven-argument signature so a caller
+     * cannot transpose {@code htmlBody}/{@code textBody} or {@code to}/{@code cc} positionally.
+     *
+     * <p>CC containment note: {@link OverrideRedirectingMailer} redirects {@code to} AND drops
+     * {@code cc} when {@code app.mail.override-to} is set, so a UAT run never mails a real manager via
+     * CC - the same by-construction guarantee issue #782 established for {@code to}.
+     *
+     * <p>A default that throws rather than an abstract method: all four shipping transports
+     * ({@link LogMailer}/{@link ResendMailer}/{@link SmtpMailer}) and the {@link
+     * OverrideRedirectingMailer} decorator override it, so production always has a real
+     * implementation. The default exists only so a test double that never drives the rich path (most
+     * of them) does not have to stub a method it never calls - and it FAILS LOUDLY, never silently
+     * dropping the CC/attachments, if such a double is ever routed a rich send by accident.
+     *
+     * @throws MailSendException if the underlying transport fails.
+     * @throws UnsupportedOperationException if a transport does not implement the rich send path.
+     */
+    default void send(OutgoingEmail email) {
+        throw new UnsupportedOperationException(
+            getClass().getSimpleName() + " does not implement send(OutgoingEmail)");
+    }
+
     /** One file attached to an outbound email, already resolved to bytes. */
     record Attachment(String filename, byte[] bytes, String mimeType) {}
+
+    /**
+     * A fully-specified outbound email for {@link #send(OutgoingEmail)}: HTML + plain-text body, an
+     * optional CC list, inline images (e.g. the brand logo), and file attachments. {@code cc},
+     * {@code inlineImages} and {@code attachments} are defensively copied and never null after
+     * construction (a null becomes an empty list), so implementations can iterate them directly. Blank
+     * CC entries are dropped so a caller need not pre-filter an absent manager address.
+     */
+    record OutgoingEmail(
+        String to,
+        List<String> cc,
+        String subject,
+        String htmlBody,
+        String textBody,
+        List<InlineImage> inlineImages,
+        List<Attachment> attachments
+    ) {
+        public OutgoingEmail {
+            cc = cc == null ? List.of()
+                : cc.stream().filter(a -> a != null && !a.isBlank()).map(String::trim).toList();
+            inlineImages = inlineImages == null ? List.of() : List.copyOf(inlineImages);
+            attachments = attachments == null ? List.of() : List.copyOf(attachments);
+        }
+    }
 
     /** One image embedded in an HTML email and referenced from the HTML via {@code cid:<contentId>}
      * (no leading {@code cid:} in {@code contentId} itself - that prefix is an HTML/CSS URL-scheme

@@ -154,6 +154,19 @@ export function canReviseDealQuotation(user, quotation) {
   return canEditDealQuotation(user, quotation) && quotation?.docStatus === 'APPROVED';
 }
 
+/** GLA-136 (owner ruling 2026-09-30) — "สร้างดีลจากใบเสนอราคา": only an APPROVED direct
+ * (DEAL_DIRECT) quotation may be promoted into the pipeline, by the same audience that may write
+ * it (canEditDealQuotation mirrors DealQuotationService#requireEditAccess, which is exactly
+ * promoteToDeal's own gate). A PRICING_REQUEST-origin quotation never qualifies — it has its own
+ * confirm-order step. Whether the deal is ALREADY promoted is the caller's second question
+ * (ticket.quotationOnly); the server answers a replay idempotently either way. Display-only —
+ * the server re-checks all of it. */
+export function canPromoteDealQuotationToDeal(user, quotation) {
+  return canEditDealQuotation(user, quotation)
+    && quotation?.docStatus === 'APPROVED'
+    && (quotation?.origin ?? 'DEAL_DIRECT') === 'DEAL_DIRECT';
+}
+
 /** Mirrors DealQuotationService.approve/reject's gate: sales_manager or ceo, role-only (the
  * plan states "No self-exclusion (matches repo convention; flagged)") -- the caller combines
  * this with canDecideDealQuotation below, or its own PENDING_APPROVAL check, before rendering a
@@ -214,6 +227,104 @@ export function isDealQuotationReadOnlyViewer(user) {
   return user?.role === 'import' || user?.role === 'account';
 }
 
+// ── Slice 2 — ผู้รับใบเสนอราคา (SLICE-2-FLOW-A.md §A/§C, S2-B1) ───────────────────────────────────
+// The three recipients, in S-order, each paired with TicketService#stageForQuotationRecipient's own
+// quote stage (DESIGNER -> S4, OWNER -> S5, BUYER -> S8). Slice 2 only READS that pairing — to
+// preselect the recipient from a deal already sitting at a quote stage (flow B); owner ruling
+// 2026-09-30 took the recipient -> stage MOVE (spec S2-B2) out of this slice, since the deal-stage
+// rule is owned by another session. UNSPECIFIED is never offered (IA §8). Labels are Thai-only —
+// pricingRequestMeta's RECIPIENT_OPTIONS carries "ผู้ออกแบบ (Designer)", a mixed-script label
+// DESIGN.md §18 bans on a new control.
+export const QUOTATION_RECIPIENT_OPTIONS = Object.freeze([
+  Object.freeze({ code: 'DESIGNER', label: 'ผู้ออกแบบ', stage: 'QUOTE_DESIGN_SIDE' }),
+  Object.freeze({ code: 'OWNER', label: 'เจ้าของโครงการ', stage: 'QUOTE_OWNER' }),
+  Object.freeze({ code: 'BUYER', label: 'ผู้ซื้อ / ผู้รับเหมา', stage: 'QUOTE_BUYER' }),
+]);
+
+export function quotationRecipientOption(code) {
+  return QUOTATION_RECIPIENT_OPTIONS.find((o) => o.code === code) ?? null;
+}
+
+/** Mirrors TicketService#stageForQuotationRecipient. null for UNSPECIFIED/unknown. */
+export function stageForQuotationRecipient(code) {
+  return quotationRecipientOption(code)?.stage ?? null;
+}
+
+/** The inverse, for flow B's preselect: a deal already AT a quote stage names its recipient.
+ * '' for every other stage — the rep is then asked, never guessed for. */
+export function recipientForDealStage(stage) {
+  return QUOTATION_RECIPIENT_OPTIONS.find((o) => o.stage === stage)?.code ?? '';
+}
+
+/** Owner ruling 2026-09-30 #2 — on a NEW deal the entry channel pre-fills ผู้รับใบเสนอราคา (editable;
+ * the editor re-fills only while the rep has not picked one). This pairs a channel with the party it
+ * names; it says nothing about the ROUTE, which is only ever read from the served catalog below.
+ * '' for UNSPECIFIED / unknown — the rep is then asked, never guessed for. */
+const RECIPIENT_FOR_ENTRY_CHANNEL = Object.freeze({
+  DESIGNER_LED: 'DESIGNER',
+  OWNER_DIRECT: 'OWNER',
+  BUYER_DIRECT: 'BUYER',
+});
+
+export function recipientForEntryChannel(entryChannel) {
+  return RECIPIENT_FOR_ENTRY_CHANNEL[entryChannel] ?? '';
+}
+
+/** Owner ruling 2026-09-30 #1 — "off-route recipient → allow + inline note". `route` is the deal's
+ * route as served (`routeForChannel(catalog, channel)` from features/tickets/stageCatalog.js — this
+ * module deliberately does not import it: mockApi imports this file, and stageCatalog imports the
+ * api). True only when a recipient is chosen, the route is known (non-empty — an unloaded catalog
+ * reads as "no opinion", never as "everything off-route"), and the recipient's quote stage is not on
+ * it. A hint for the UI only: nothing is blocked on it, and the server moves no stage from it. */
+export function isRecipientOffRoute(route, recipientCode) {
+  const stage = stageForQuotationRecipient(recipientCode);
+  if (!stage || !Array.isArray(route) || route.length === 0) return false;
+  return !route.some((row) => row?.code === stage);
+}
+
+// ── One pricing route per deal (owner ruling 2026-09-30, both directions) ──────────────────────────
+// Slice 1 refuses a คำขอราคา while a live direct quotation exists (DirectQuotationLocks). The reverse:
+// while the deal has a LIVE pricing request, no direct quotation may be started — the deal page hides
+// ใบเสนอราคาตรง, the /quotations/new picker shows an inline notice and disables บันทึกร่าง, and the
+// server 409s DealQuotationService#create with the sentence below. "Live" = any status except the two
+// dead ends, so a private DRAFT and a finished QUOTATION_ACCEPTED both count. This is the ONE
+// definition; every surface above (and mockApi's create) reads it from here.
+const DEAD_PRICING_REQUEST_STATUSES = Object.freeze(new Set(['CANCELLED', 'SUPERSEDED']));
+
+export const LIVE_PRICING_REQUEST_BLOCK_MESSAGE =
+  'ดีลนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน';
+
+/** True when `pricingRequests` holds a live request ON `ticketId` (ids compared as numbers). */
+export function hasLivePricingRequest(pricingRequests, ticketId) {
+  if (!Array.isArray(pricingRequests) || ticketId == null) return false;
+  return pricingRequests.some((pr) => pr != null
+    && Number(pr.ticketId) === Number(ticketId)
+    && !DEAD_PRICING_REQUEST_STATUSES.has(pr.status));
+}
+
+/** The live DEAL_DIRECT statuses — DealQuotationService's N6 predicate (slice 1's
+ * DirectQuotationLocks) and TicketSummaryDto.liveDirectQuotation both key on exactly these. */
+export const LIVE_DIRECT_QUOTATION_STATUSES = Object.freeze(new Set(['DRAFT', 'PENDING_APPROVAL', 'APPROVED']));
+
+export function isLiveDirectQuotation(live) {
+  return Boolean(live) && LIVE_DIRECT_QUOTATION_STATUSES.has(live.docStatus);
+}
+
+/** N6's reason, word for word the server's 409 (S2-B3) — the editor disables บันทึกร่าง with it
+ * BEFORE the rep ever reaches that refusal (DESIGN.md §14: a disabled action says why). */
+export function liveDirectQuotationBlockMessage(live) {
+  return `ดีลนี้มีใบเสนอราคาตรงที่ใช้งานอยู่ (${live?.number ?? '-'}) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่`;
+}
+
+/** The confirm-order dialog copy for an APPROVED direct quotation (GLA-136's promote endpoint),
+ * shared by the quotation editor and the deal page's sticky CTA so the two never drift. `stage`
+ * is the part both render in <strong>. */
+export const CONFIRM_ORDER_FROM_QUOTATION_COPY = Object.freeze({
+  lead: (number) => `ระบบจะนำดีลของใบเสนอราคา ${number ?? ''} เข้าสู่ขั้นตอนการขาย ที่ขั้น`,
+  stage: 'ได้รับคำสั่งซื้อ',
+  tail: 'พร้อมรายการสินค้าตามใบเสนอราคานี้ — จากนั้นออกใบแจ้งรับมัดจำ สั่งสินค้า และส่งมอบได้ตามปกติ การดำเนินการนี้ย้อนกลับไม่ได้',
+});
+
 // ── Terms card options (editor) ────────────────────────────────────────────────────────────────
 
 // Item 4 ("ไม่รับมัดจำ", owner ruling 2026-09-16): 0% is no longer enterable as an ordinary
@@ -267,7 +378,15 @@ export const QUANTITY_MODE_OPTIONS = [
   { code: 'PIECES', label: 'แผ่น' },
 ];
 
-export const WASTAGE_PERCENT_PRESETS = [0, 5, 10];
+// เผื่อ (wastage) mode switch — mirrors QUANTITY_MODE_OPTIONS' own segmented-control shape exactly
+// (QuotationItemRow renders both with the same styling). PERCENT/PIECES are WastageCalculator's
+// own mode codes; this is a label mapping only, not a source of truth for validation.
+export const WASTAGE_MODE_OPTIONS = [
+  { code: 'PERCENT', label: '%' },
+  { code: 'PIECES', label: 'แผ่น' },
+];
+
+export const WASTAGE_PERCENT_PRESETS = [0, 5, 10, 15, 20];
 
 // ประเทศต้นทาง select + its default lead-time range (min/max days), editable per line. Mirrors
 // the plan's "อิตาลี/สเปน/จีน/ไทย-สต็อก/อื่นๆ" list exactly, in that order.
@@ -347,6 +466,70 @@ export function defaultDealQuotationStatusTab(user) {
 
 export function dealQuotationStatusTab(key) {
   return DEAL_QUOTATION_STATUS_TABS.find((tab) => tab.key === key) ?? null;
+}
+
+// ── Global list scope (owner ruling 2026-09-24) ─────────────────────────────────────────────
+// Mirrors DealQuotationService.listOwnerScope / LIST_SEE_ALL_ROLES: on the GLOBAL LIST only,
+// sales_manager/ceo see every deal's quotations; everyone else (sales, import, account, and any
+// canCreateQuotation grant-holder) sees only quotations on deals they created. This is a
+// PRESENTATION HINT ONLY -- it drives whether the rep filter dropdown is shown; the server (and
+// mockApi.js's scopedDealQuotationsFor) has already scoped the rows before they ever reach the
+// client, so getting this predicate wrong could at most show/hide a filter control, never leak a
+// row. Do not treat this as an authz check.
+
+/** Whether this user's global `/quotations` list already contains every deal (so a "filter by
+ * rep" control makes sense), per the 2026-09-24 ruling. */
+export function dealQuotationListSeesAll(user) {
+  return user?.role === 'sales_manager' || user?.role === 'ceo';
+}
+
+/** Distinct `{ id, name }` options for the rep filter dropdown, derived from the ROWS actually on
+ * the list (not a department/role listing) -- so a non-sales grant-holder who owns a visible
+ * quotation is offered as an option too, and no option is ever offered for someone who owns
+ * nothing on the current list. Skips rows with no `salesRepId`, dedupes by id, and sorts by name
+ * with Thai collation. */
+export function dealQuotationRepOptions(rows) {
+  const byId = new Map();
+  (rows ?? []).forEach((row) => {
+    if (row?.salesRepId == null) return;
+    const id = String(row.salesRepId);
+    if (!byId.has(id)) byId.set(id, { id, name: row.salesRepName ?? id });
+  });
+  return Array.from(byId.values()).sort((a, b) => a.name.localeCompare(b.name, 'th'));
+}
+
+/** The ยอดรวม (grand total) filter boundary (owner ask 2026-09-24): a row is "ต่ำกว่าหนึ่งล้าน"
+ * when grandTotal < this, and "มากกว่าหนึ่งล้านบาท" when >= this. `>=` (not `>`) owns the exact
+ * 1,000,000 boundary so no row is ever unclassifiable between the two buckets. */
+export const DEAL_QUOTATION_AMOUNT_THRESHOLD = 1000000;
+
+/** The two ยอดรวม filter options offered to see-all roles (sales_manager/ceo), in display order.
+ * `''` ("ทั้งหมด") is added by the caller as the leading option. */
+export const DEAL_QUOTATION_AMOUNT_OPTIONS = [
+  { value: 'lt1m', label: 'ต่ำกว่าหนึ่งล้าน' },
+  { value: 'gte1m', label: 'มากกว่าหนึ่งล้านบาท' },
+];
+
+/** Client-side, presentation-only narrowing of an already-server-scoped row list -- NOT a
+ * security boundary (see the section comment above). `repId` filters on `row.salesRepId`
+ * (string-compared, so `''`/`null`/`undefined` all mean "no filter"); `text` matches
+ * case-insensitively against `${customerName} ${projectName}`; `amount` is `'lt1m'` (grandTotal
+ * below {@link DEAL_QUOTATION_AMOUNT_THRESHOLD}) or `'gte1m'` (at/above it), anything else meaning
+ * "no filter". All three compose with AND, each is a no-op when empty/absent, and the function is
+ * null-safe throughout. */
+export function filterDealQuotationRows(rows, { repId = '', text = '', amount = '' } = {}) {
+  let list = rows ?? [];
+  if (repId) list = list.filter((row) => String(row?.salesRepId ?? '') === String(repId));
+  const needle = (text ?? '').trim().toLowerCase();
+  if (needle) {
+    list = list.filter((row) => `${row?.customerName ?? ''} ${row?.projectName ?? ''}`.toLowerCase().includes(needle));
+  }
+  if (amount === 'lt1m') {
+    list = list.filter((row) => Number(row?.grandTotal ?? 0) < DEAL_QUOTATION_AMOUNT_THRESHOLD);
+  } else if (amount === 'gte1m') {
+    list = list.filter((row) => Number(row?.grandTotal ?? 0) >= DEAL_QUOTATION_AMOUNT_THRESHOLD);
+  }
+  return list;
 }
 
 // ── ตำแหน่งติดตั้ง location groups (owner feedback F1, 2026-09-10) ────────────────────────────
@@ -928,31 +1111,36 @@ export function validateQuotationItem(item, priceMode = 'NET', documentLanguage 
     if (!(Number(item?.piecesInput) >= 1)) errors.piecesInput = 'กรุณาระบุจำนวนแผ่น';
   } else if (!(Number(item?.areaSqm) > 0)) {
     errors.areaSqm = 'กรุณาระบุพื้นที่ (ตร.ม.)';
+  } else if (item?.piecesBeforeWastage === 0) {
+    // Wording-scan fix 4 (2026-09-17): mirrors DealQuotationService's new AREA-mode "computes to
+    // zero pieces" refusal. `piecesBeforeWastage` arrives from the debounced calculate-line
+    // preview merge (QuotationEditorPage), so this is null (unknown, not yet computed) until a
+    // preview has actually run -- never mistaken for a genuine zero from an unrelated row.
+    errors.areaSqm = 'พื้นที่น้อยเกินไป คำนวณได้ 0 แผ่น';
+  }
+  // Wording-scan fix 5 (2026-09-17): mirrors DealQuotationService's new PIECES-wastage
+  // whole-number refusal -- PERCENT wastage is untouched, a percentage genuinely can be
+  // fractional (2.5%).
+  if (item?.wastageMode === 'PIECES' && item?.wastageValue !== '' && item?.wastageValue != null
+    && Number.isFinite(Number(item.wastageValue)) && !Number.isInteger(Number(item.wastageValue))) {
+    errors.wastageValue = 'จำนวนแผ่นที่เผื่อต้องเป็นจำนวนเต็ม';
+  }
+  // Wording-scan fix 3 (2026-09-17): mirrors DealQuotationService#requireValidLeadTime -- once a
+  // lead time is ENTERED (both fields present), min must be >= 1 day and max must be >= min.
+  // Refused on SAVE (blocking, see QUOTATION_CHECK.ITEMS below), unlike the missing-lead-time
+  // check right after it, which is submit-only. A lone value (the other field still blank) is an
+  // incompleteness question for the `requireLeadTime` branch below, not this one.
+  if (item?.leadTimeMinDays != null && item?.leadTimeMaxDays != null) {
+    const leadMin = Number(item.leadTimeMinDays);
+    const leadMax = Number(item.leadTimeMaxDays);
+    if (!(leadMin >= 1) || !(leadMax >= leadMin)) {
+      errors.leadTimeMinDays = 'ระยะเวลานำเข้าต้องไม่น้อยกว่า 1 วัน และค่าสูงสุดต้องไม่น้อยกว่าค่าต่ำสุด';
+    }
   }
   // Owner feedback #7 (2026-09-14): mirrors DealQuotationService#requireEveryTileItemHasALeadTime
   // — SUBMIT only (see this function's own Javadoc for why the default leaves it off).
   if (requireLeadTime && (item?.leadTimeMinDays == null || item?.leadTimeMaxDays == null)) {
     errors.leadTimeMinDays = 'กรุณาระบุระยะเวลานำเข้า (วัน)';
-  }
-  // Second review pass, finding N6 (2026-09-19): min <= max used to be checked UNCONDITIONALLY
-  // ("a genuine data error on either form" -- true in isolation, but it reached direct-deal too,
-  // where nobody asked for it: an EXISTING draft with min > max could no longer be saved at all,
-  // and QuotationEditorPage's own submit banner (missingLeadTimeSeqs, keyed on any truthy
-  // errors.leadTimeMinDays) reported it with the WRONG sentence -- "กรุณาระบุระยะเวลานำเข้า" (please
-  // fill this in), the MISSING message, for a row that was not missing anything.
-  //
-  // Gated to requireOriginCountry -- the PCR-only flag (same signal N4 gates the
-  // ระบุประเทศต้นทาง box on) -- so direct-deal's two validateQuotationItem call sites
-  // (itemErrorsByRow's draft-save default, and submitItemErrorsByRow's requireLeadTime-only call;
-  // neither ever passes requireOriginCountry) can never produce this error, and both the stale-draft
-  // and wrong-banner symptoms disappear there. The PCR form (which always passes
-  // requireOriginCountry: true, see PricingRequestCreateModal#validateItemFields) keeps the check,
-  // and already renders fieldErrors.leadTimeMinDays verbatim per-row instead of flattening it into
-  // a boolean banner -- so it already carries its OWN correct, distinct message here
-  // ('ระยะเวลานำเข้าต่ำสุดต้องไม่มากกว่าสูงสุด') with nothing further to change there.
-  else if (requireOriginCountry && item?.leadTimeMinDays != null && item?.leadTimeMaxDays != null
-      && Number(item.leadTimeMinDays) > Number(item.leadTimeMaxDays)) {
-    errors.leadTimeMinDays = 'ระยะเวลานำเข้าต่ำสุดต้องไม่มากกว่าสูงสุด';
   }
   // GLA-125 (owner ruling 2026-09-18): ประเทศต้นทาง is required on the PCR form only
   // (requireOriginCountry) — direct-deal keeps it optional (default false, unchanged).
@@ -973,7 +1161,7 @@ export function validateQuotationItem(item, priceMode = 'NET', documentLanguage 
 const QUOTATION_ITEM_FIELD_ORDER = [
   'description', 'model', 'color', 'texture', 'sizeText', 'thicknessMm', 'sqmPerPiece', 'piecesPerBox',
   'sqmPerBox', 'unitPrice', 'specialPriceSqm', 'directNetPrice', 'quantity', 'unit', 'areaSqm', 'piecesInput',
-  'adjustmentPct', 'adjustmentAmount', 'leadTimeMinDays',
+  'wastageValue', 'adjustmentPct', 'adjustmentAmount', 'leadTimeMinDays',
 ];
 const QUOTATION_ITEM_FIELD_LABELS = {
   model: 'รุ่น', color: 'สี', texture: 'ผิว', sizeText: 'ขนาด', thicknessMm: 'ความหนา',
@@ -985,6 +1173,8 @@ const QUOTATION_ITEM_FIELD_LABELS = {
   adjustmentPct: 'เปอร์เซ็นต์ส่วนลด', adjustmentAmount: 'จำนวนเงินส่วนลด',
   // #7 (2026-09-14): submit-only, see validateQuotationItem's `requireLeadTime`.
   leadTimeMinDays: 'ระยะเวลานำเข้า (วัน)',
+  // Wording-scan fix 5 (2026-09-17): the fractional-PIECES-wastage refusal.
+  wastageValue: 'เผื่อ (จำนวนแผ่น)',
 };
 
 /** "รายการที่ {index+1}: ขาด {field1}, {field2}" or null once `errors` (validateQuotationItem's
@@ -1365,6 +1555,16 @@ export function validatePlainItem(item) {
   else if (!withinDecimals(item.quantity, 2)) errors.quantity = 'จำนวนทศนิยมได้ไม่เกิน 2 ตำแหน่ง';
   if (!item?.unit?.trim()) errors.unit = 'กรุณาเลือกหน่วย';
   if (!(Number(item?.unitPrice) > 0)) errors.unitPrice = 'กรุณาระบุราคา/หน่วย';
+  // Wording-scan fix 3 (2026-09-17): the SAME lead-time value rule as a TILE row (D1, 2026-09-16:
+  // a PLAIN row's lead time is optional but, once entered, must still be a real range) — mirrors
+  // DealQuotationService#requireValidLeadTime, called unconditionally for both line types there.
+  if (item?.leadTimeMinDays != null && item?.leadTimeMaxDays != null) {
+    const leadMin = Number(item.leadTimeMinDays);
+    const leadMax = Number(item.leadTimeMaxDays);
+    if (!(leadMin >= 1) || !(leadMax >= leadMin)) {
+      errors.leadTimeMinDays = 'ระยะเวลานำเข้าต้องไม่น้อยกว่า 1 วัน และค่าสูงสุดต้องไม่น้อยกว่าค่าต่ำสุด';
+    }
+  }
   return errors;
 }
 
@@ -1385,13 +1585,14 @@ export function validateAdjustment(adjustment) {
 
 // ── "ข้อมูลที่ยังไม่ครบ" checklist (owner, 2026-09-11) ──────────────────────────────────────────
 // "validate with the quotation which field have not been filled yet". The fields are the ones her
-// reference documents print in their HEADER — customer name, ที่อยู่, เลขที่ผู้เสียภาษี, โทร., the
-// ผู้สั่งซื้อ and its โทร./อีเมล, โครงการ — plus each item's own completeness.
+// reference documents print in their HEADER — customer name, ที่อยู่, เลขที่ผู้เสียภาษี, โทร.,
+// โครงการ — plus each item's own completeness. ผู้สั่งซื้อ used to be here too (its own
+// contact/โทร./อีเมล checks) until the owner-directed reversal of F2/V167 (2026-09-26) made it a
+// single optional free-text field with nothing left to validate.
 //
 // ⚠️ Two tiers, and the split is deliberately NOT invented here. A check BLOCKS บันทึกร่าง /
 // ส่งขออนุมัติ only when the backend ALREADY refuses the same state:
 //   customer / project   → TicketService.create ("ต้องเลือกโครงการก่อนสร้างดีล"), inline path only
-//   contact              → DealQuotationService#resolveContact / #submit ("กรุณาระบุผู้สั่งซื้อ")
 //   items                → #buildItem / #requireStoredItemComplete, and "at least one row"
 //   locationLabels       → the editor's own MED-4 rule (an unsaveable-without-loss state, pre-existing)
 //   priceModeLanguage    → #requirePriceModeAvailableInLanguage (SPECIAL_SQM on EN → 400)
@@ -1406,9 +1607,12 @@ export const QUOTATION_CHECK = Object.freeze({
   CUSTOMER: 'customer',
   PROJECT: 'project',
   DEAL_PROJECT: 'dealProject',
-  CONTACT: 'contact',
-  CONTACT_PHONE: 'contactPhone',
-  CONTACT_EMAIL: 'contactEmail',
+  // Inline-create only. A FRONTEND rule: TicketService.create accepts UNSPECIFIED (the V144 stored
+  // default), but a rep must now state how the deal arrived before it is created, and
+  // UNSPECIFIED is no longer a button, so "nothing picked" is what this blocks on.
+  ENTRY_CHANNEL: 'entryChannel',
+  // CONTACT / CONTACT_PHONE / CONTACT_EMAIL removed — owner-directed reversal of F2/V167
+  // (2026-09-26): ผู้สั่งซื้อ is no longer a required contact, so there is nothing left to check.
   CUSTOMER_ADDRESS: 'customerAddress',
   CUSTOMER_TAX_ID: 'customerTaxId',
   CUSTOMER_PHONE: 'customerPhone',
@@ -1416,25 +1620,49 @@ export const QUOTATION_CHECK = Object.freeze({
   PRICE_MODE_LANGUAGE: 'priceModeLanguage',
   ITEMS: 'items',
   FULL_PAYMENT_TERM: 'fullPaymentTerm',
+  // Wording-scan fix 6 (2026-09-17): CREDIT_DAYS is the blank-on-draft reminder (non-blocking,
+  // mirrors FULL_PAYMENT_TERM's own role above); CREDIT_DAYS_INVALID is an EXPLICIT invalid value
+  // (0 or negative) — blocking, since the backend already refuses that on every save, not just
+  // submit. Two check names so the two severities can never share one blocking/non-blocking flag.
+  CREDIT_DAYS: 'creditDays',
+  CREDIT_DAYS_INVALID: 'creditDaysInvalid',
+  // Slice 2 (SLICE-2-FLOW-A.md, owner-approved IA D1–D7) — all three blocking, and each mirrors a
+  // refusal the server makes on create: no ticket to hang the quotation on at all (DEAL), S2-B1's
+  // 400 on a DEAL_DIRECT create with no recipient (RECIPIENT), and S2-B3's N6 409 (LIVE_DIRECT).
+  DEAL: 'deal',
+  RECIPIENT: 'recipient',
+  LIVE_DIRECT_QUOTATION: 'liveDirectQuotation',
+  // One pricing route per deal (owner ruling 2026-09-30): the reverse of slice 1's lock — the
+  // picked deal has a live pricing request, which DealQuotationService#create refuses (409).
+  LIVE_PRICING_REQUEST: 'livePricingRequest',
 });
 
 /** THE blocking set — the one place that decides which checklist entries disable บันทึกร่าง and
  * ส่งขออนุมัติ. Every other check is a warning. Change it only on an owner ruling. */
 export const QUOTATION_BLOCKING_CHECKS = Object.freeze(new Set([
+  QUOTATION_CHECK.DEAL,
+  QUOTATION_CHECK.RECIPIENT,
+  QUOTATION_CHECK.LIVE_DIRECT_QUOTATION,
+  QUOTATION_CHECK.LIVE_PRICING_REQUEST,
   QUOTATION_CHECK.CUSTOMER,
   QUOTATION_CHECK.PROJECT,
-  QUOTATION_CHECK.CONTACT,
+  QUOTATION_CHECK.ENTRY_CHANNEL,
   QUOTATION_CHECK.LOCATION_LABELS,
   QUOTATION_CHECK.PRICE_MODE_LANGUAGE,
   QUOTATION_CHECK.ITEMS,
+  QUOTATION_CHECK.CREDIT_DAYS_INVALID,
 ]));
 
 /** DOM id of each editor field the checklist can focus. The three customer-detail ids are the
  * shared CustomerDetailsFields' (the same ids on every entry path — only one path renders at a
  * time). */
 export const QUOTATION_FIELD_IDS = Object.freeze({
+  deal: 'deal-picker',
+  // The FIRST radio of ผู้รับใบเสนอราคา — a radiogroup <div> is not focusable itself.
+  recipient: 'quotation-recipient-DESIGNER',
   customer: 'deal-customer',
   project: 'deal-project',
+  entryChannel: 'deal-entry-channel',
   customerName: 'deal-customer-name',
   customerAddress: 'deal-customer-address',
   customerTaxId: 'deal-customer-tax-id',
@@ -1451,8 +1679,14 @@ const ITEM_FIELD_ID_PREFIX = {
     directNetPrice: 'direct-net', areaSqm: 'qty', piecesInput: 'qty',
     // Matches QuotationItemRow's `lead-${index}` input id.
     leadTimeMinDays: 'lead',
+    // Wording-scan fix 5 (2026-09-17): matches QuotationItemRow's `waste-${index}` input id.
+    wastageValue: 'waste',
   },
-  PLAIN: { description: 'plain-desc', quantity: 'plain-qty', unit: 'plain-unit', unitPrice: 'plain-price' },
+  PLAIN: {
+    description: 'plain-desc', quantity: 'plain-qty', unit: 'plain-unit', unitPrice: 'plain-price',
+    // Wording-scan fix 3 (2026-09-17): matches QuotationPlainItemRow's `plain-lead-${index}` id.
+    leadTimeMinDays: 'plain-lead',
+  },
   ADJUSTMENT: { adjustmentPct: 'adj-pct', adjustmentAmount: 'adj-amount' },
 };
 
@@ -1489,22 +1723,21 @@ export function isEffectiveZeroDeposit({ noDeposit = false, depositPercentCustom
  * The checklist, as `{ check, message, targetId, blocking }` entries, in the order the editor
  * reads top to bottom. Pure: every input is editor state the caller already holds.
  *
- * `customer` / `contact` carry the details the document prints. A field whose value is
- * `undefined` is UNKNOWN (still loading, or a stand-in seeded from a name only) and produces no
- * warning — only a known-empty one (null / '') does, so the list never flashes "missing" at a
- * value that simply has not arrived yet.
+ * `customer` carries the details the document prints. A field whose value is `undefined` is
+ * UNKNOWN (still loading) and produces no warning — only a known-empty one (null / '') does, so
+ * the list never flashes "missing" at a value that simply has not arrived yet.
  *
- * The blocking messages are the exact strings the editor showed before this checklist existed
- * (and, for ผู้สั่งซื้อ, the backend's own 400 wording), so a rep sees one sentence for one problem.
+ * The blocking messages are the exact strings the editor showed before this checklist existed, so
+ * a rep sees one sentence for one problem.
  */
 export function buildQuotationChecklist({
   isInlineCreate = false,
   customer = null,
   hasProject = false,
+  // Inline-create only; defaults to "satisfied" so every existing caller keeps behaving as before.
+  hasEntryChannel = true,
   // undefined = not loaded yet (the deal is still in flight) → no warning; null/'' = no project.
   projectName = undefined,
-  contact = null,
-  contactFieldId = 'quotation-contact',
   items = [],
   itemErrorsByRow = [],
   adjustments = [],
@@ -1532,19 +1765,50 @@ export function buildQuotationChecklist({
   depositPercentCustom = false,
   depositPercent = '',
   fullPaymentTerm = '',
+  // Wording-scan fix 6 (2026-09-17): mirrors DealQuotationService's credit-days rule — see
+  // QUOTATION_CHECK.CREDIT_DAYS/CREDIT_DAYS_INVALID above for the two severities.
+  remainderMode = '',
+  creditDays = '',
+  // Slice 2 — flow A. `needsDeal`: the "เลือกดีลที่มีอยู่" branch with nothing picked yet.
+  // `recipientRequired`: a NEW DEAL_DIRECT quotation (the server 400s one without a recipient);
+  // never set for an existing row or a PRICING_REQUEST one. `liveDirectQuotation`: the picked
+  // deal's TicketSummaryDto.liveDirectQuotation on a NEW quotation (N6). All default to "never
+  // triggers", so every existing caller/test keeps its old checklist exactly.
+  needsDeal = false,
+  recipientRequired = false,
+  recipientType = '',
+  liveDirectQuotation = null,
+  // One pricing route per deal: the picked deal has a live pricing request (hasLivePricingRequest).
+  livePricingRequest = false,
 } = {}) {
   const entries = [];
   const push = (check, message, targetId = null) => {
     entries.push({ check, message, targetId, blocking: QUOTATION_BLOCKING_CHECKS.has(check) });
   };
 
+  if (needsDeal) push(QUOTATION_CHECK.DEAL, 'ต้องเลือกดีลก่อนบันทึกร่าง', QUOTATION_FIELD_IDS.deal);
+  if (isLiveDirectQuotation(liveDirectQuotation)) {
+    push(QUOTATION_CHECK.LIVE_DIRECT_QUOTATION, liveDirectQuotationBlockMessage(liveDirectQuotation));
+  }
+  if (livePricingRequest) push(QUOTATION_CHECK.LIVE_PRICING_REQUEST, LIVE_PRICING_REQUEST_BLOCK_MESSAGE);
+  if (recipientRequired && !quotationRecipientOption(recipientType)) {
+    push(QUOTATION_CHECK.RECIPIENT, 'ต้องเลือกผู้รับใบเสนอราคา', QUOTATION_FIELD_IDS.recipient);
+  }
+
   if (isInlineCreate) {
-    if (!customer) push(QUOTATION_CHECK.CUSTOMER, 'ต้องเลือกลูกค้าก่อนบันทึกร่าง', QUOTATION_FIELD_IDS.customer);
-    if (!hasProject) push(QUOTATION_CHECK.PROJECT, 'ต้องเลือกโครงการก่อนบันทึกร่าง', QUOTATION_FIELD_IDS.project);
+    // The customer/project/channel trio is the สร้างดีลใหม่ branch's own (channel required since
+    // #1085); with no deal picked yet on the เลือกดีลที่มีอยู่ branch, DEAL above is the one thing
+    // missing.
+    if (!needsDeal && !customer) push(QUOTATION_CHECK.CUSTOMER, 'ต้องเลือกลูกค้าก่อนบันทึกร่าง', QUOTATION_FIELD_IDS.customer);
+    if (!needsDeal && !hasProject) push(QUOTATION_CHECK.PROJECT, 'ต้องเลือกโครงการก่อนบันทึกร่าง', QUOTATION_FIELD_IDS.project);
+    if (!needsDeal && !hasEntryChannel) push(QUOTATION_CHECK.ENTRY_CHANNEL, 'ต้องเลือกช่องทางรับงานก่อนบันทึกร่าง', QUOTATION_FIELD_IDS.entryChannel);
   } else if (projectName !== undefined && blankValue(projectName)) {
     push(QUOTATION_CHECK.DEAL_PROJECT, 'ดีลนี้ยังไม่มีโครงการ (แก้ได้ที่หน้ารายละเอียดดีล)');
   }
-  if (!contact?.id) push(QUOTATION_CHECK.CONTACT, 'กรุณาระบุผู้สั่งซื้อ', contactFieldId);
+  // ผู้สั่งซื้อ is no longer checked here at all — owner-directed reversal of F2/V167 (2026-09-26)
+  // dropped QUOTATION_CHECK.CONTACT/CONTACT_PHONE/CONTACT_EMAIL along with the required
+  // contact-picker they gated: ผู้สั่งซื้อ is now a single optional free-text field
+  // (`terms.orderedByName`) that can never be "missing" in a way worth flagging.
   // ผู้ออกแบบ (unitCode) and ฝ่าย (deptCode) are deliberately NOT checked — owner ruling 2026-09-16,
   // "make ผู้ออกแบบ optional including ฝ่าย". The backend never required either; this list used to
   // warn "ยังไม่ได้เลือกผู้ออกแบบ", which read as a required field.
@@ -1560,15 +1824,6 @@ export function buildQuotationChecklist({
       push(QUOTATION_CHECK.CUSTOMER_PHONE, 'ยังไม่ได้กรอกเบอร์โทรลูกค้า', QUOTATION_FIELD_IDS.customerPhone);
     }
   }
-  if (contact?.id) {
-    if (contact.phone !== undefined && blankValue(contact.phone)) {
-      push(QUOTATION_CHECK.CONTACT_PHONE, 'ผู้สั่งซื้อยังไม่มีเบอร์โทร', contactFieldId);
-    }
-    if (contact.email !== undefined && blankValue(contact.email)) {
-      push(QUOTATION_CHECK.CONTACT_EMAIL, 'ผู้สั่งซื้อยังไม่มีอีเมล', contactFieldId);
-    }
-  }
-
   if (duplicateGroupIndex != null) {
     push(QUOTATION_CHECK.LOCATION_LABELS,
       'ชื่อตำแหน่งติดตั้งซ้ำกัน กรุณาตั้งชื่อให้ต่างกัน (ตำแหน่งที่ชื่อซ้ำจะถูกรวมเป็นตำแหน่งเดียวในเอกสาร)',
@@ -1579,6 +1834,16 @@ export function buildQuotationChecklist({
   }
   if (isEffectiveZeroDeposit({ noDeposit, depositPercentCustom, depositPercent }) && blankValue(fullPaymentTerm)) {
     push(QUOTATION_CHECK.FULL_PAYMENT_TERM, 'มัดจำ 0% กรุณาเลือกเงื่อนไขการชำระเงิน', 'fullPaymentTerm');
+  }
+  // Wording-scan fix 6 (2026-09-17): mirrors DealQuotationService's credit-days rule. Skipped
+  // entirely at effective-zero-deposit, where remainderMode is forced null server-side regardless
+  // of what is still displayed (buildUpsertPayload's own `terms.noDeposit ? null : ...` ternary).
+  if (!isEffectiveZeroDeposit({ noDeposit, depositPercentCustom, depositPercent }) && remainderMode === 'CREDIT') {
+    if (!blankValue(creditDays) && Number(creditDays) <= 0) {
+      push(QUOTATION_CHECK.CREDIT_DAYS_INVALID, 'กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน', 'creditDays');
+    } else if (blankValue(creditDays)) {
+      push(QUOTATION_CHECK.CREDIT_DAYS, 'กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน', 'creditDays');
+    }
   }
 
   if (items.length === 0) {

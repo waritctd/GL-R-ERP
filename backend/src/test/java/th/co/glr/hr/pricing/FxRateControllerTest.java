@@ -3,18 +3,21 @@ package th.co.glr.hr.pricing;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.time.LocalDate;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.common.ApiExceptionHandler;
 
 /**
@@ -45,9 +48,14 @@ class FxRateControllerTest {
     private static final List<String> READ_DENIED =
         List.of("employee", "warehouse", "qc", "hr", "sales_manager", "account");
 
+    /** Everyone but CEO — the write gate that /fetch-now shares with upsert. */
+    private static final List<String> WRITE_DENIED =
+        List.of("import", "sales", "sales_manager", "account", "hr", "employee", "warehouse", "qc");
+
     private final FxRateRepository fxRates = mock(FxRateRepository.class);
+    private final BotFxFetchService botFx = mock(BotFxFetchService.class);
     private final MockMvc mvc = MockMvcBuilders
-        .standaloneSetup(new FxRateController(fxRates, new SessionContext()))
+        .standaloneSetup(new FxRateController(fxRates, new SessionContext(), botFx))
         .setControllerAdvice(new ApiExceptionHandler())
         .build();
 
@@ -97,6 +105,44 @@ class FxRateControllerTest {
                     {"rateToThb": 38.5, "effectiveDate": "2026-08-01"}
                     """))
             .andExpect(status().isForbidden());
+    }
+
+    /** The manual FX fetch is a WRITE (it upserts rates), so it stays on the CEO write gate. */
+    @Test
+    void ceoCanTriggerManualFxFetch() throws Exception {
+        when(botFx.fetchNow())
+            .thenReturn(new BotFxFetchService.FxFetchResult(2, 5, "2026-09-24", List.of("USD", "EUR")));
+        mvc.perform(post("/api/fx-rates/fetch-now").session(session("ceo")))
+            .andExpect(status().is2xxSuccessful());
+    }
+
+    /**
+     * B1 (review fix, 2026-09-28): {@code BotFxFetchService.fetchNow()} now throws a 429 {@link
+     * ApiException} when the CEO console's manual-fetch cooldown is still active. This proves the
+     * controller layer propagates that status verbatim rather than translating it into something
+     * else — {@code ApiExceptionHandler} is wired into this class's {@code mvc} exactly as
+     * production wires it, so a mismatch here would be a real regression, not a test artifact.
+     */
+    @Test
+    void manualFxFetchPropagatesA429FromTheServiceAsIs() throws Exception {
+        when(botFx.fetchNow()).thenThrow(new ApiException(HttpStatus.TOO_MANY_REQUESTS,
+            "รอสักครู่ก่อนเรียกดึงอัตราแลกเปลี่ยนจากธนาคารแห่งประเทศไทยอีกครั้ง (ประมาณ 300 วินาที)"));
+        mvc.perform(post("/api/fx-rates/fetch-now").session(session("ceo")))
+            .andExpect(status().isTooManyRequests());
+    }
+
+    /** Wrong-way-round: everyone but CEO must be refused — the case that catches a widened gate. */
+    @Test
+    void manualFxFetchIsForbiddenForEveryoneButCeo() throws Exception {
+        for (String role : WRITE_DENIED) {
+            mvc.perform(post("/api/fx-rates/fetch-now").session(session(role)))
+                .andExpect(status().isForbidden());
+        }
+    }
+
+    @Test
+    void manualFxFetchIsUnauthorizedWithoutASession() throws Exception {
+        mvc.perform(post("/api/fx-rates/fetch-now")).andExpect(status().isUnauthorized());
     }
 
     private MockHttpSession session(String role) {

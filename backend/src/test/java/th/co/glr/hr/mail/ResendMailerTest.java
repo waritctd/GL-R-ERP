@@ -163,6 +163,54 @@ class ResendMailerTest {
         assertThat(Base64.getDecoder().decode(attachments.get(0).getContent())).isEqualTo(logoBytes);
     }
 
+    @Test
+    void richSendSetsCcAndMergesInlineImagesWithFileAttachments() {
+        AtomicReference<CreateEmailOptions> captured = new AtomicReference<>();
+        ResendMailer mailer = mailerWith(options -> {
+            captured.set(options);
+            CreateEmailResponse response = new CreateEmailResponse();
+            response.setId("email-id-rich");
+            return response;
+        });
+        byte[] logoBytes = {1, 2, 3};
+        byte[] pdfBytes = "%PDF".getBytes();
+
+        mailer.send(new Mailer.OutgoingEmail(
+            "hr-inbox@example.com",
+            List.of("employee@example.com", "manager@example.com"),
+            "leave submitted",
+            "<p>letter</p>", "letter",
+            List.of(new Mailer.InlineImage("glr-logo", "glr-logo.png", logoBytes, "image/png")),
+            List.of(new Mailer.Attachment("ใบลา.pdf", pdfBytes, "application/pdf"))));
+
+        assertThat(captured.get().getTo()).containsExactly("hr-inbox@example.com");
+        assertThat(captured.get().getCc()).containsExactly("employee@example.com", "manager@example.com");
+        assertThat(captured.get().getHtml()).isEqualTo("<p>letter</p>");
+        List<com.resend.services.emails.model.Attachment> attachments = captured.get().getAttachments();
+        assertThat(attachments).hasSize(2);
+        // Inline image first (carries a contentId), then the file attachment (none).
+        assertThat(attachments.get(0).getContentId()).isEqualTo("glr-logo");
+        assertThat(attachments.get(1).getContentId()).isNull();
+        assertThat(attachments.get(1).getFileName()).isEqualTo("ใบลา.pdf");
+        assertThat(Base64.getDecoder().decode(attachments.get(1).getContent())).isEqualTo(pdfBytes);
+    }
+
+    @Test
+    void richSendOmitsCcWhenEmpty() {
+        AtomicReference<CreateEmailOptions> captured = new AtomicReference<>();
+        ResendMailer mailer = mailerWith(options -> {
+            captured.set(options);
+            CreateEmailResponse response = new CreateEmailResponse();
+            response.setId("email-id-rich-nocc");
+            return response;
+        });
+
+        mailer.send(new Mailer.OutgoingEmail("hr-inbox@example.com", List.of(), "s",
+            "<p>x</p>", "x", List.of(), List.of()));
+
+        assertThat(captured.get().getCc()).isNullOrEmpty();
+    }
+
     // MUTATION-CHECK (verified live, not just by reasoning): temporarily removed the
     // `if (!replyTo.isBlank())` guard in applyReplyTo() so it always called request.replyTo(replyTo)
     // -- exactly this one test went red (getReplyTo() became a 1-element list containing "" rather

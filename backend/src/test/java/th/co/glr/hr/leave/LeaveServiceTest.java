@@ -17,6 +17,7 @@ import java.time.DayOfWeek;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
+import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.util.Collection;
@@ -137,8 +138,8 @@ class LeaveServiceTest {
         // is awaiting approval; the manager (99L, the requestDto() fixture's hardcoded manager, !=
         // actor 10L) is told a request is pending THEIR review -- LEAVE_PENDING_APPROVAL, not
         // LEAVE_AUTO_APPROVED (nothing auto-approves any more).
-        verify(notificationService).notify(eq(10L), eq("LEAVE_SUBMITTED"), any(String.class), any(String.class), eq("/leave"), eq(true));
-        verify(notificationService).notify(eq(99L), eq("LEAVE_PENDING_APPROVAL"), any(String.class), any(String.class), eq("/leave"), eq(true));
+        verify(notificationService).notify(eq(10L), eq("LEAVE_SUBMITTED"), any(String.class), any(String.class), eq("/leave"), eq(false));
+        verify(notificationService).notify(eq(99L), eq("LEAVE_PENDING_APPROVAL"), any(String.class), any(String.class), eq("/leave"), eq(false));
     }
 
     @Test
@@ -170,7 +171,7 @@ class LeaveServiceTest {
         assertThat(paidDays.getValue()).isEqualByComparingTo("1.00");
         assertThat(unpaidDays.getValue()).isEqualByComparingTo("1.00");
         assertThat(remainingAfter.getValue()).isEqualByComparingTo("0.00");
-        verify(notificationService).notify(eq(10L), eq("LEAVE_SUBMITTED"), any(String.class), any(String.class), eq("/leave"), eq(true));
+        verify(notificationService).notify(eq(10L), eq("LEAVE_SUBMITTED"), any(String.class), any(String.class), eq("/leave"), eq(false));
     }
 
     @Test
@@ -1113,9 +1114,9 @@ class LeaveServiceTest {
 
         leaveService.submit(request, user("employee", 10010L));
 
-        verify(notificationService).notify(eq(10010L), eq("LEAVE_SUBMITTED"), any(String.class), any(String.class), eq("/leave"), eq(true));
-        verify(notificationService).notify(eq(10200L), eq("LEAVE_PENDING_APPROVAL"), any(String.class), any(String.class), eq("/leave"), eq(true));
-        verify(notificationService).notify(eq(10201L), eq("LEAVE_PENDING_APPROVAL"), any(String.class), any(String.class), eq("/leave"), eq(true));
+        verify(notificationService).notify(eq(10010L), eq("LEAVE_SUBMITTED"), any(String.class), any(String.class), eq("/leave"), eq(false));
+        verify(notificationService).notify(eq(10200L), eq("LEAVE_PENDING_APPROVAL"), any(String.class), any(String.class), eq("/leave"), eq(false));
+        verify(notificationService).notify(eq(10201L), eq("LEAVE_PENDING_APPROVAL"), any(String.class), any(String.class), eq("/leave"), eq(false));
     }
 
     /**
@@ -1144,7 +1145,7 @@ class LeaveServiceTest {
         leaveService.submit(request, user("employee", 10010L));
 
         ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
-        verify(notificationService).notify(eq(10010L), eq("LEAVE_SUBMITTED"), any(String.class), body.capture(), eq("/leave"), eq(true));
+        verify(notificationService).notify(eq(10010L), eq("LEAVE_SUBMITTED"), any(String.class), body.capture(), eq("/leave"), eq(false));
         assertThat(body.getValue()).contains("รอฝ่ายบุคคลอนุมัติ").doesNotContain("รอผู้จัดการอนุมัติ");
     }
 
@@ -1167,7 +1168,7 @@ class LeaveServiceTest {
         leaveService.submit(request, user("employee", 10010L));
 
         ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
-        verify(notificationService).notify(eq(10010L), eq("LEAVE_SUBMITTED"), any(String.class), body.capture(), eq("/leave"), eq(true));
+        verify(notificationService).notify(eq(10010L), eq("LEAVE_SUBMITTED"), any(String.class), body.capture(), eq("/leave"), eq(false));
         assertThat(body.getValue()).contains("รอผู้จัดการอนุมัติ").doesNotContain("รอฝ่ายบุคคลอนุมัติ");
     }
 
@@ -1198,7 +1199,7 @@ class LeaveServiceTest {
         leaveService.submit(request, user("employee", 10010L));
 
         ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
-        verify(notificationService).notify(eq(99L), eq("LEAVE_PENDING_APPROVAL"), any(String.class), body.capture(), eq("/leave"), eq(true));
+        verify(notificationService).notify(eq(99L), eq("LEAVE_PENDING_APPROVAL"), any(String.class), body.capture(), eq("/leave"), eq(false));
         assertThat(body.getValue())
             .contains("คำขอนี้ผิดระเบียบ 2 ข้อ")
             .contains("ยื่นล่วงหน้าไม่ทันกำหนด แจ้งเตือนที่หนึ่ง")
@@ -1232,7 +1233,7 @@ class LeaveServiceTest {
         leaveService.submit(request, user("employee", 10L));
 
         ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
-        verify(notificationService).notify(eq(99L), eq("LEAVE_PENDING_APPROVAL"), any(String.class), body.capture(), eq("/leave"), eq(true));
+        verify(notificationService).notify(eq(99L), eq("LEAVE_PENDING_APPROVAL"), any(String.class), body.capture(), eq("/leave"), eq(false));
         String period = th.co.glr.hr.common.ThaiText.dateRange(request.startDate(), request.endDate());
         assertThat(body.getValue()).isEqualTo(
             "Test Employee ขอVacation " + period + " (2 วัน)"
@@ -1272,7 +1273,7 @@ class LeaveServiceTest {
         // 10099L, so the actor is the request's only manager-of-record.
         leaveService.submit(request, user("hr", 10099L));
 
-        verify(notificationService).notify(eq(10010L), eq("LEAVE_SUBMITTED"), any(String.class), any(String.class), eq("/leave"), eq(true));
+        verify(notificationService).notify(eq(10010L), eq("LEAVE_SUBMITTED"), any(String.class), any(String.class), eq("/leave"), eq(false));
         verify(notificationService, org.mockito.Mockito.never())
             .notify(eq(10099L), eq("LEAVE_PENDING_APPROVAL"), any(String.class), any(String.class), any(String.class), org.mockito.ArgumentMatchers.anyBoolean());
         // findHrEmployeeIds is the OTHER branch (no manager of record) -- must not even be consulted
@@ -2968,6 +2969,47 @@ class LeaveServiceTest {
     // making every test carry every real seeded value. The real seeded values (VACATION notice=3,
     // min-service=12; PERSONAL notice=1, min-service=4, max-consecutive=3; etc.) are covered by
     // LeaveTypeRuleIntegrationTest against the real V116-migrated schema.
+    @Test
+    void buildLeaveFormMapsDecisionApproverAndConvertsTimestampToBangkok() {
+        when(leaveRepository.findContactDefaults(anyLong())).thenReturn(Optional.empty());
+        when(leaveRepository.findNickname(anyLong())).thenReturn(Optional.empty());
+        when(leaveRepository.findLeaveTypes()).thenReturn(List.of());
+
+        // 02:15Z == 09:15 Asia/Bangkok; the reports-to manager becomes the ผู้อนุมัติ signature.
+        LeaveFormData approved = leaveService.buildLeaveForm(
+            reviewedDto("APPROVED", "จินตนา หาญมนตรี", OffsetDateTime.parse("2026-09-21T02:15:00Z")));
+        assertThat(approved.decision()).isEqualTo("APPROVED");
+        assertThat(approved.approverName()).isEqualTo("จินตนา หาญมนตรี");
+        assertThat(approved.approvedAt()).isEqualTo(LocalDateTime.of(2026, 9, 21, 9, 15));
+
+        // A pending SUBMITTED form leaves the approval boxes blank.
+        LeaveFormData pending = leaveService.buildLeaveForm(reviewedDto("SUBMITTED", "จินตนา หาญมนตรี", null));
+        assertThat(pending.decision()).isNull();
+        assertThat(pending.approvedAt()).isNull();
+
+        // AUTO_REJECTED is a system outcome with no human reviewer -> must NOT tick a box.
+        assertThat(leaveService.buildLeaveForm(reviewedDto("AUTO_REJECTED", null, null)).decision()).isNull();
+    }
+
+    private LeaveRequestDto reviewedDto(String status, String managerName, OffsetDateTime reviewedAt) {
+        OffsetDateTime ts = OffsetDateTime.parse("2026-09-20T09:00:00+07:00");
+        return new LeaveRequestDto(
+            77L, 10L, "EMP001", "พลอย วริศ",
+            "SICK", "ลาป่วย", "Sick leave",
+            LocalDate.parse("2026-09-22"), LocalDate.parse("2026-09-22"), null, null,
+            new BigDecimal("1.00"), new BigDecimal("1.00"), new BigDecimal("0.00"),
+            2026, "เจ็บขา", null, null, status,
+            new BigDecimal("6.00"), new BigDecimal("5.00"), null,
+            10L, "พลอย วริศ", ts,
+            reviewedAt == null ? null : 99L, managerName, reviewedAt, null, null,
+            99L, managerName,
+            ts, ts,
+            "12", "พระโขนง", "คลองเตย", "กรุงเทพ", "0917949655",
+            null, false, null, Map.of(), false,
+            null, null,
+            List.of(), BigDecimal.ZERO);
+    }
+
     private LeaveTypeDto vacationType() {
         // proratedFirstYear=false here (deliberate, same "no restriction on fields not under test"
         // convention as every other field in this fixture): pro-ration is covered by its own

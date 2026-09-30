@@ -341,11 +341,28 @@ class DealQuotationEnglishFormTest {
         assertThat(names)
             .contains("(Jintana Hanmontree)")
             .contains("(Jennet Longsakul)")
-            .contains("(Rarm Itarat)")
-            // ผู้สั่งซื้อ is the CUSTOMER's contact — there is no English name stored for a contact
-            // anywhere, so the snapshot prints as typed.
-            .contains("(Ms. Aisha Rahman)");
+            .contains("(Rarm Itarat)");
         assertThat(names).doesNotContain("จินตนา").doesNotContain("เจนเนตร").doesNotContain("ราม");
+    }
+
+    /** Owner-directed reversal of F2 (2026-09-26): the ผู้สั่งซื้อ slot no longer auto-fills from
+     * the contact snapshot at all -- it prints ONLY a rep's manually-typed
+     * {@code DealQuotationDto#orderedByName}, exactly as typed (English document, no separate
+     * English name concept for a manual free-text field). */
+    @Test
+    void signatureBlock_printsTheManualOrderedByNameWhenSet() throws Exception {
+        DealQuotationDto quotation = englishQuotation(q -> q.withOrderedByName("Ms. Aisha Rahman"));
+        String names = str(render(quotation), NAMES_ROW, 0);
+        assertThat(names).contains("(Ms. Aisha Rahman)");
+    }
+
+    /** F2-reversal regression guard: the CONTACT snapshot ("Ms. Aisha Rahman") is present but no
+     * manual orderedByName was typed -- the slot must stay the dotted placeholder, never fall
+     * back to the contact name any more. */
+    @Test
+    void signatureBlock_orderedBySlot_staysDottedWhenNoManualNameEvenWithContactPresent() throws Exception {
+        String names = str(renderEnglish(), NAMES_ROW, 0);
+        assertThat(names).doesNotContain("(Ms. Aisha Rahman)").contains("(..........................)");
     }
 
     /**
@@ -353,6 +370,13 @@ class DealQuotationEnglishFormTest {
      * incomplete: an employee with no English name prints their THAI name on the English form,
      * rather than an empty slot. Asserted wrong-way-round — the failure this guards against is a
      * BLANK signature line on a customer-facing document, not a Thai one.
+     *
+     * <p>Owner-directed reversal of F2 (2026-09-26): the ผู้สั่งซื้อ slot's OWN placeholder is no
+     * longer a signal about the employee-name fallback this test covers — it always prints the
+     * placeholder now (no orderedByName was set on this fixture), so the old "doesNotContain the
+     * placeholder" assertion (which meant "the ผู้สั่งซื้อ slot fell back to the customer name")
+     * no longer holds and would be testing the wrong thing; dropped rather than reworded to avoid
+     * conflating the two independent behaviours.
      */
     @Test
     void signatureBlock_fallsBackToTheThaiNameWhenTheEmployeeHasNoEnglishOne() throws Exception {
@@ -360,8 +384,6 @@ class DealQuotationEnglishFormTest {
         Sheet sheet = render(quotation);
         String names = str(sheet, NAMES_ROW, 0);
         assertThat(names).contains("(จินตนา หาญมนตรี)").contains("(เจนเนตร หลงสกุล)").contains("(ราม อิฐรัตน์)");
-        // The placeholder is what a blank slot looks like — it must NOT appear for these three.
-        assertThat(names).doesNotContain("(..........................)");
     }
 
     /** The signature dates are CE on the English form, and the empty ผู้สั่งซื้อ slot reads

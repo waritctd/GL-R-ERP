@@ -1549,6 +1549,31 @@ public class QuotationRenderer {
     // width, regardless of the slot's actual pixel width, since all four slots are equal.
     private static final double SIGNATURE_APPROVER_SLOT_CENTER_FRACTION =
         (SIG_APPROVER_INDEX + 0.5) / SIG_LABELS.length;
+    // Measured (not guessed), 2026-09-27, via soffice --convert-to pdf + PDFBox on this exact
+    // template/font: AWT's OWN estimate of a SPACE glyph's width is a slightly different fraction
+    // of what LibreOffice actually renders it at than AWT's estimate of an UNDERSCORE glyph's
+    // width is. Isolated by rendering a real quotation and measuring, on the SAME row, (a) the
+    // pixel gap a run of N leading spaces produces before a name block and (b) the pixel length
+    // of the 17-underscore signature line itself: space's real/AWT-estimated ratio came out
+    // ≈0.6634 (four independent slots, all within 0.001 of each other) against underscore's
+    // ≈0.6528 (73.98pt measured / (17 × 6.667px) AWT-estimated) — a small but real and highly
+    // repeatable ~1.6% gap. {@link #appendAtTarget}'s targets ({@code runStart[]}/{@code
+    // runEnd[]}) are computed in units calibrated to the UNDERSCORE scale (they derive from
+    // {@link #padLabelSlotPx}'s own underscore-filled content), so leaving spaceWidthPx at its
+    // raw AWT estimate makes the SPACE-padded names/dates rows drift from that reference by this
+    // same ~1.6% per space character used — worse for a slot further from the row's start, since
+    // more spaces have accumulated by then. This is exactly the "progressively worse toward the
+    // right" shape the owner reported (confirmed by measurement: the un-scaled estimate consistently OVERSHOOTS
+    // rightward, more so the more spaces a slot needed). Scaling spaceWidthPx UP by (space ratio
+    // / underscore ratio) — space renders relatively WIDER than underscore does relative to
+    // AWT's own estimate, so fewer spaces are needed to cover the same real distance than a
+    // naive AWT count implies — makes each space travel the SAME effective real distance, per
+    // AWT pixel, that an underscore does, eliminating the growing gap rather than merely
+    // shrinking it. Like every other constant in this class derived this way, it is a property
+    // of THIS font/LibreOffice build, not a law of nature — recalibrate with the same PDFBox
+    // technique if the licensed fonts or LibreOffice version change and the on-page drift
+    // reappears.
+    private static final double SIGNATURE_SPACE_TO_UNDERSCORE_SCALE = 0.6634 / 0.6528;
     // AWT's unscaled Graphics2D#getFontRenderContext() measures glyph advances at ~72 DPI (1 unit =
     // 1/72in), while POI's Sheet#getColumnWidthInPixels — the other pixel figure this class works
     // in — assumes 96 DPI screen pixels (its own javadoc says so). Scale every AWT measurement up so
@@ -1640,7 +1665,9 @@ public class QuotationRenderer {
         double totalWidthPx = totalColumnWidthPixelsLibreOffice(sh, 0, 8);
         double slotWidthPx = totalWidthPx * SIGNATURE_ROW_FILL_FRACTION / labels.length;
         double underscoreWidthPx = charRunWidthPx(fontMetrics, '_');
-        double spaceWidthPx = charRunWidthPx(fontMetrics, ' ');
+        // See #SIGNATURE_SPACE_TO_UNDERSCORE_SCALE's own Javadoc for why the raw AWT estimate is
+        // corrected here rather than used as-is.
+        double spaceWidthPx = charRunWidthPx(fontMetrics, ' ') * SIGNATURE_SPACE_TO_UNDERSCORE_SCALE;
 
         String[] names = {
             sig != null ? sig.printedBy() : null,
@@ -1668,38 +1695,88 @@ public class QuotationRenderer {
         StringBuilder namesLine = new StringBuilder();
         StringBuilder datesLine = new StringBuilder();
         // Owner feedback F6-amended-again (2026-09-10 late): the signature picture is centred on
-        // the approver slot's UNDERSCORE RUN — the blank stretch of rule AFTER the label words —
-        // not on the whole slot, which drew it over "ผู้จัดการฝ่ายขาย" itself. The run is derived
-        // from the very string being built here, measured with the SAME AWT metrics that laid it
-        // out, so it tracks the real glyph widths of whatever font the template carries rather
-        // than any hardcoded millimetre figure.
-        double runStartPx = 0;
-        double runEndPx = 0;
-        double cursorPx = 0;
+        // the slot's UNDERSCORE RUN — the blank stretch of rule AFTER the label words — not on the
+        // whole slot, which drew it over the label text itself. The run is derived from the very
+        // string being built here, measured with the SAME AWT metrics that laid it out, so it
+        // tracks the real glyph widths of whatever font the template carries rather than any
+        // hardcoded millimetre figure.
+        //
+        // Task 4 (2026-09-26): originally captured ONLY for {@link #SIG_APPROVER_INDEX} (slot 2),
+        // since only the approver's signature ever drew a picture. ผู้พิมพ์ (slot 0) and
+        // พนักงานขาย (slot 1) now can too — see {@code sig.printedBySignaturePng()}/
+        // {@code sig.salesRepSignaturePng()} — so every slot's run is captured the same way; the
+        // approver-index geometry itself (which is what actually got the owner's F6 sign-off) is
+        // untouched.
+        //
+        // Owner feedback round 2 (2026-09-27, real reference .xls supplied): the equal-length-
+        // underscore change above (round 1) was WRONG — the owner's actual template signature
+        // block has each label's underscore run fill to ITS OWN slot's right edge (so line
+        // LENGTHS vary with label length, short label -> longer line), with groups sitting
+        // CONTIGUOUS — no artificial gap between one label and the next. Round 1's shared fixed-
+        // count underscore run couldn't fill a short label's leftover slot width, so it had to
+        // add LEADING padding to keep the unit centred, and that leading padding is exactly the
+        // "gap between groups" the owner is now pointing at. Reverted: {@link #padLabelSlotPx}
+        // is back — label text first, then underscores filling the REST of the slot's own
+        // {@code slotWidthPx}, cumulative (no artificial leading pad), reproducing the
+        // reference's tight, ragged-length-but-grid-ended lines.
+        //
+        // What's KEPT from round 1: names/dates still centre on {@code runStart[i]}/{@code
+        // runEnd[i]} — the ACTUAL underscore run this loop just measured, not an independently
+        // re-derived nominal slot — via #appendAtTarget, so they no longer drift progressively
+        // left the way they did before round 1 (owner feedback round 1, problem 1 + 3: S1's
+        // filler (underscores) and S2/S3's filler (spaces) do not drift from AWT's estimate by
+        // the same amount when LibreOffice actually lays the row out, so independently-nominal-
+        // targeted rows quietly diverged slot by slot). Centring the name/date on the row's own
+        // measured run, using an ABSOLUTE per-slot target rather than a value chained off the
+        // previous slot's own rounding, is what stops that divergence — see #appendAtTarget's
+        // own Javadoc — and is independent of how the underscore run itself is sized, so it
+        // composes cleanly with the reverted per-slot fill.
+        double[] runStart = new double[labels.length];
+        double[] runEnd = new double[labels.length];
+        double labelCursorPx = 0;
         for (int i = 0; i < labels.length; i++) {
             String labelSlot = padLabelSlotPx(fontMetrics, labels[i], slotWidthPx, underscoreWidthPx);
             labelsLine.append(labelSlot);
             double labelSlotPx = textWidthPx(fontMetrics, labelSlot);
-            if (i == SIG_APPROVER_INDEX) {
-                runStartPx = cursorPx + textWidthPx(fontMetrics, labels[i]);
-                runEndPx = cursorPx + labelSlotPx;
-            }
-            cursorPx += labelSlotPx;
+            runStart[i] = labelCursorPx + textWidthPx(fontMetrics, labels[i]);
+            runEnd[i] = labelCursorPx + labelSlotPx;
+            labelCursorPx += labelSlotPx;
+        }
+
+        double nameCursorPx = 0;
+        double dateCursorPx = 0;
+        for (int i = 0; i < labels.length; i++) {
+            double runCentrePx = (runStart[i] + runEnd[i]) / 2.0;
 
             String name = names[i];
             String nameText = name != null && !name.isBlank() ? "(" + name.trim() + ")" : BLANK_NAME_PLACEHOLDER;
-            namesLine.append(centerInSlotPx(fontMetrics, nameText, slotWidthPx, spaceWidthPx));
+            double namePx = textWidthPx(fontMetrics, nameText);
+            nameCursorPx = appendAtTarget(fontMetrics, namesLine, nameCursorPx, nameText,
+                runCentrePx - namePx / 2.0, spaceWidthPx);
 
-            datesLine.append(centerInSlotPx(fontMetrics, signatureDateText(dates[i], english),
-                slotWidthPx, spaceWidthPx));
+            String dateText = signatureDateText(dates[i], english);
+            double datePx = textWidthPx(fontMetrics, dateText);
+            dateCursorPx = appendAtTarget(fontMetrics, datesLine, dateCursorPx, dateText,
+                runCentrePx - datePx / 2.0, spaceWidthPx);
         }
         writeFixedWidthRow(sh, labelsRow, labelsLine.toString());
         writeFixedWidthRow(sh, nameRow, namesLine.toString());
         writeFixedWidthRow(sh, dateRow, datesLine.toString());
 
+        // Slot 0 (ผู้พิมพ์) and slot 1 (พนักงานขาย) draw the rep-selected person's signature
+        // image, same as the approver always has — independent per slot, so one missing a
+        // signature never affects the other. Slot 2 (ผู้จัดการฝ่ายขาย) is unchanged.
+        if (sig != null && sig.printedBySignaturePng() != null) {
+            anchorSlotSignature(sh, labelsRow, sig.printedBySignaturePng(), sig.printedBySignatureMime(),
+                runStart[0], runEnd[0]);
+        }
+        if (sig != null && sig.salesRepSignaturePng() != null) {
+            anchorSlotSignature(sh, labelsRow, sig.salesRepSignaturePng(), sig.salesRepSignatureMime(),
+                runStart[1], runEnd[1]);
+        }
         if (sig != null && sig.approverSignaturePng() != null) {
-            anchorApproverSignature(sh, labelsRow, sig.approverSignaturePng(), sig.approverSignatureMime(),
-                runStartPx, runEndPx);
+            anchorSlotSignature(sh, labelsRow, sig.approverSignaturePng(), sig.approverSignatureMime(),
+                runStart[SIG_APPROVER_INDEX], runEnd[SIG_APPROVER_INDEX]);
         }
     }
 
@@ -1727,7 +1804,7 @@ public class QuotationRenderer {
      * AWT {@code Font} + {@code FontRenderContext} pair for the pixel-measurement helpers below.
      * Returns {@link SignatureFontMetrics#UNAVAILABLE} if AWT can't construct one at all (never
      * lets a font-metrics failure break the render — matching this class's convention elsewhere,
-     * see {@link #anchorApproverSignature}); every caller of an unavailable metrics object falls
+     * see {@link #anchorSlotSignature}); every caller of an unavailable metrics object falls
      * back to {@link #textUnits} character-counting via {@link #FALLBACK_AVG_CHAR_WIDTH_PX}.
      *
      * <p><strong>Root cause of the signature row not filling {@link #SIGNATURE_ROW_FILL_FRACTION}
@@ -1824,7 +1901,11 @@ public class QuotationRenderer {
     }
 
     /** S1's left/underscore padding: appends {@code label} + enough '_' (at {@code underscorePx}
-     * each) to land as close as possible to {@code slotWidthPx} without exceeding it. */
+     * each) to land as close as possible to {@code slotWidthPx} without exceeding it — so the
+     * line fills the REST of the slot after the label, ending at (approximately) the slot's own
+     * right edge. Label text first, no leading padding: labels flow straight from one into the
+     * next with no artificial gap, reproducing the owner's reference template (line LENGTH
+     * varies with the label's own length; line ENDS land on the same per-slot grid). */
     private String padLabelSlotPx(SignatureFontMetrics metrics, String label, double slotWidthPx,
             double underscorePx) {
         double labelPx = textWidthPx(metrics, label);
@@ -1833,19 +1914,32 @@ public class QuotationRenderer {
         return label + "_".repeat(Math.max(0, underscoreCount));
     }
 
-    /** S2/S3's centring: space-pads {@code text} on both sides (at {@code spacePx} each) to land as
-     * close as possible to {@code slotWidthPx} — the proportional-font equivalent of Excel's own
-     * CENTER alignment, computed by hand because all four slots live in ONE cell (a real per-cell
-     * alignment would centre the whole concatenated string, not each slot within it). Approximate in
-     * a proportional font — acceptable per layout-spec §5 — but measuring each row's OWN padding
-     * character at the SAME font keeps the four slots landing at consistent physical x positions
-     * across all three rows (see the class comment above {@link #SIG_LABELS}). */
-    private String centerInSlotPx(SignatureFontMetrics metrics, String text, double slotWidthPx, double spacePx) {
-        double textPx = textWidthPx(metrics, text);
-        double padPx = Math.max(0, slotWidthPx - textPx);
-        int leftCount = spacePx > 0 ? (int) Math.round(padPx / 2 / spacePx) : 0;
-        int rightCount = spacePx > 0 ? (int) Math.round((padPx - leftCount * spacePx) / spacePx) : 0;
-        return " ".repeat(Math.max(0, leftCount)) + text + " ".repeat(Math.max(0, rightCount));
+    /**
+     * Appends {@code text} to {@code line}, left-padded with just enough {@code spacePx}-wide
+     * spaces to land its start at the ABSOLUTE {@code targetStartPx} — this row's own AWT-pixel
+     * coordinate space, measured from the merged cell's left edge — given the row's current
+     * cursor {@code cursorPx}. Returns the new cursor (the appended text's own end), threaded
+     * into the next call.
+     *
+     * <p>Used to centre S2/S3 (names/dates) on {@code runStart[i]}/{@code runEnd[i]} — the
+     * underscore run {@link #padLabelSlotPx} actually measured for slot i, not an independently
+     * re-derived nominal slot. The load-bearing property is that {@code targetStartPx} is an
+     * ABSOLUTE number computed fresh for slot i — never "wherever the previous slot's own
+     * rounding happened to leave the cursor". Two calls that both target the same absolute
+     * number land at the same place even if an earlier slot's own padding rounded off by half a
+     * space; the error never carries forward into the next slot's target the way it did when
+     * S2/S3 used to re-derive "centre within MY OWN nominal {@code slotWidthPx}" independently
+     * per block (owner feedback 2026-09-27: names drifting progressively left of their slot
+     * centre from slot 1 onward — see the class comment above {@link #SIG_LABELS} and the call
+     * site in {@link #writeSignatureBlock}). A negative gap (this row is already past the
+     * target — e.g. an unusually long name) clamps to zero spaces rather than backing up,
+     * matching every other best-effort width estimate in this class. */
+    private double appendAtTarget(SignatureFontMetrics metrics, StringBuilder line, double cursorPx,
+            String text, double targetStartPx, double spacePx) {
+        int leftSpaces = spacePx > 0 ? (int) Math.round(Math.max(0, targetStartPx - cursorPx) / spacePx) : 0;
+        line.append(" ".repeat(Math.max(0, leftSpaces)));
+        line.append(text);
+        return cursorPx + leftSpaces * spacePx + textWidthPx(metrics, text);
     }
 
     /** Writes one already-fully-padded S1/S2/S3 string into its merged A:I cell — LEFT aligned (the
@@ -1890,12 +1984,18 @@ public class QuotationRenderer {
     }
 
     /**
-     * Anchors the approver's signature image in the ผู้จัดการฝ่ายขาย slot using HSSF drawing,
-     * reusing the template's EXISTING drawing patriarch (it already carries the letterhead/cert
-     * images — creating a fresh one is the known POI corruption risk this deliberately avoids).
-     * Any failure here is swallowed and logged: a broken image anchor must never break the whole
-     * render, so the dotted-placeholder/name text {@link #writeSignatureBlock} already wrote
-     * stands on its own.
+     * Anchors a signatory's signature image in ITS OWN slot using HSSF drawing, reusing the
+     * template's EXISTING drawing patriarch (it already carries the letterhead/cert images —
+     * creating a fresh one is the known POI corruption risk this deliberately avoids). Any failure
+     * here is swallowed and logged: a broken image anchor must never break the whole render, so
+     * the dotted-placeholder/name text {@link #writeSignatureBlock} already wrote stands on its
+     * own.
+     *
+     * <p>Task 4 (slot signatures, 2026-09-26): renamed from {@code anchorApproverSignature} — the
+     * method was never approver-specific internally (it just places whatever image it is given
+     * over whatever run it is handed), only ever CALLED for the approver's slot. It is now called
+     * for ผู้พิมพ์ (slot 0) and พนักงานขาย (slot 1) too; the geometry below (all of it, including
+     * {@link #placeSignaturePicture}) is untouched — only the caller side changed.
      *
      * <p>Owner feedback F6 (2026-09-10, seen on the demo), amended twice the same evening: the
      * picture used to span rows {@code labelsRow-2..labelsRow} with {@code dy2 = 0} — its BOTTOM
@@ -1931,11 +2031,11 @@ public class QuotationRenderer {
      * undecodable image never gets a shape created for it at all — falling back to the text-only
      * name exactly as this method's own contract promises, with a warning that finally says why.
      */
-    private void anchorApproverSignature(Sheet sh, int labelsRow, byte[] png, String mime,
-                                         double runStartPx, double runEndPx) {
+    private void anchorSlotSignature(Sheet sh, int labelsRow, byte[] png, String mime,
+                                     double runStartPx, double runEndPx) {
         java.awt.Dimension natural = decodableImageSize(png);
         if (natural == null) {
-            log.warn("Approver signature image ({} bytes, mime={}) is not a decodable image "
+            log.warn("Signature image ({} bytes, mime={}) is not a decodable image "
                 + "(ImageIO has no reader for these bytes) — skipping the picture and keeping the "
                 + "text-only name", png.length, mime);
             return;
@@ -1950,8 +2050,12 @@ public class QuotationRenderer {
                 ? Workbook.PICTURE_TYPE_JPEG : Workbook.PICTURE_TYPE_PNG;
             int pictureIdx = wb.addPicture(png, pictureType);
 
-            // Provisional box (replaced wholesale by #placeSignaturePicture): the approver slot's
-            // centre column, the labels row and the one above it.
+            // Provisional box (replaced wholesale by #placeSignaturePicture, which recomputes every
+            // anchor corner from runStartPx/runEndPx — this slot's OWN run, passed in above): always
+            // seeded on the approver slot's centre column regardless of which slot is actually being
+            // anchored, since #placeSignaturePicture only ever falls back to it in the DEGENERATE
+            // (zero-width run) case and otherwise overwrites this box entirely. The labels row and
+            // the one above it are just a starting row range for the initial (throwaway) anchor.
             double totalWidthPx = totalColumnWidthPixels(sh, 0, 8);
             int[] center = absolutePixelToColumn(sh, totalWidthPx * SIGNATURE_APPROVER_SLOT_CENTER_FRACTION, 0, 8);
             ClientAnchor anchor = patriarch.createAnchor(center[1], 0, center[1], 0,
@@ -1959,7 +2063,7 @@ public class QuotationRenderer {
             Picture picture = patriarch.createPicture(anchor, pictureIdx);
             placeSignaturePicture(sh, picture, labelsRow, runStartPx, runEndPx);
         } catch (RuntimeException e) {
-            log.warn("Approver signature image anchor failed; falling back to text-only name: {}", e.getMessage(), e);
+            log.warn("Signature image anchor failed; falling back to text-only name: {}", e.getMessage(), e);
         }
     }
 
@@ -1967,7 +2071,7 @@ public class QuotationRenderer {
      * Whether ImageIO can decode {@code imageBytes} at all — the same check
      * {@code org.apache.poi.ss.util.ImageUtils#getImageDimension} makes internally, run here
      * BEFORE any workbook shape exists so a decode failure can be handled by never creating one
-     * (see {@link #anchorApproverSignature}'s Javadoc for why that matters — POI silently keeps a
+     * (see {@link #anchorSlotSignature}'s Javadoc for why that matters — POI silently keeps a
      * degenerate shape LibreOffice then silently drops). Returns the decoded natural size, or
      * {@code null} on anything ImageIO rejects — a missing reader (unsupported/corrupt format,
      * {@code ImageIO.read} returns {@code null}) or a reader that throws partway through (e.g. a
@@ -2009,7 +2113,7 @@ public class QuotationRenderer {
     // signature sits ON the line without cutting through it. Measured before the change: ink
     // bottom 264.16 mm against a rule at 262.54 mm — 1.62 mm THROUGH it. Keep this positive; a
     // negative value would put the ink back across the rule.
-    private static final double SIGNATURE_LIFT_ABOVE_RULE_MM = 0.4;
+    private static final double SIGNATURE_LIFT_ABOVE_RULE_MM = 1.5;
     // Never walk the anchor more than this many rows away from the labels row — a corrupt row
     // height must not send the walk off the sheet.
     private static final int SIGNATURE_MAX_ROW_WALK = 8;
@@ -2383,7 +2487,7 @@ public class QuotationRenderer {
     /**
      * Anchors the picture inside column B (col1 == col2 == B, so it can never reach the จำนวน
      * column), from {@code topRow}'s top edge plus a pad, for exactly the planned height. Reuses the
-     * template's existing drawing patriarch, like {@link #anchorApproverSignature}; a failure is
+     * template's existing drawing patriarch, like {@link #anchorSlotSignature}; a failure is
      * logged and the item prints without its picture — its rows are already reserved, so nothing
      * below moves.
      */

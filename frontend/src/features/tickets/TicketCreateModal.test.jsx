@@ -130,7 +130,7 @@ async function selectCustomerAndProject() {
 
 /** The channel is required and has no default, so most create-path tests must state one. */
 function chooseEntryChannel(name = /ผู้ออกแบบนำ/) {
-  goToSection('ผู้ติดต่อ & ช่องทางดีล');
+  goToSection('ผู้ติดต่อ & เสนอแก่');
   fireEvent.click(screen.getByRole('radio', { name }));
   goToSection('กลับ');
 }
@@ -203,7 +203,7 @@ describe('TicketCreateModal validation', () => {
 
     await selectCustomerAndProject();
     // entryChannel now sits earlier than items in on-screen order (ลูกค้า → โครงการ → ผู้ติดต่อ &
-    // ช่องทางดีล → รายการสินค้า), so it must be chosen or the failed-submit jump lands on the
+    // เสนอแก่ → รายการสินค้า), so it must be chosen or the failed-submit jump lands on the
     // channel picker instead of this item's ขนาด field — this test would otherwise time out
     // waiting on a placeholder that never mounts.
     chooseEntryChannel();
@@ -351,7 +351,7 @@ describe('TicketCreateModal validation', () => {
 
     await selectCustomerAndProject();
 
-    goToSection('ผู้ติดต่อ & ช่องทางดีล');
+    goToSection('ผู้ติดต่อ & เสนอแก่');
     fireEvent.click(screen.getByRole('radio', { name: /เจ้าของตรง/ }));
     goToSection('กลับ');
 
@@ -389,13 +389,13 @@ describe('TicketCreateModal validation', () => {
     await selectCustomerAndProject();
     submitForm();
 
-    await waitFor(() => expect(screen.getByText('กรุณาเลือกช่องทางดีล (ระบุว่าดีลนี้เข้ามาทางไหน)')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('กรุณาเลือกว่าดีลนี้เสนอแก่ใคร')).toBeTruthy());
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
   it('starts with NO entry channel selected', async () => {
     renderModal({ onSubmit: vi.fn() });
-    goToSection('ผู้ติดต่อ & ช่องทางดีล');
+    goToSection('ผู้ติดต่อ & เสนอแก่');
     const radios = screen.getAllByRole('radio');
     expect(radios).toHaveLength(3);
     // Wrong-way-round: assert none is checked, not that a particular one is.
@@ -412,15 +412,15 @@ describe('TicketCreateModal validation', () => {
     // No explicit goToSection here, deliberately: entryChannel is the only invalid field once
     // customer+project are set and there are no items, so the failed submit's own
     // jumpToField('entryChannel') (viewForFieldKey → 'contact') has already navigated here. Adding
-    // a goToSection('ผู้ติดต่อ & ช่องทางดีล') at this point would look harmless but throws — the
+    // a goToSection('ผู้ติดต่อ & เสนอแก่') at this point would look harmless but throws — the
     // hub row it clicks is no longer rendered once the jump has fired.
-    const group = await screen.findByRole('radiogroup', { name: 'ช่องทางดีล' });
+    const group = await screen.findByRole('radiogroup', { name: 'เสนอแก่' });
     await waitFor(() => expect(group.getAttribute('aria-invalid')).toBe('true'));
     expect(group.getAttribute('aria-describedby')).toBe('entry-channel-error');
 
     fireEvent.click(screen.getByRole('radio', { name: /ผู้ซื้อตรง/ }));
     expect(group.getAttribute('aria-invalid')).toBeNull();
-    expect(screen.queryByText('กรุณาเลือกช่องทางดีล (ระบุว่าดีลนี้เข้ามาทางไหน)')).toBeNull();
+    expect(screen.queryByText('กรุณาเลือกว่าดีลนี้เสนอแก่ใคร')).toBeNull();
   });
 
   it('sends exactly the channel the rep picked, not a default', async () => {
@@ -447,7 +447,7 @@ describe('TicketCreateModal validation', () => {
     const restoreButton = await screen.findByRole('button', { name: 'เปิดต่อ' });
     fireEvent.click(restoreButton);
 
-    goToSection('ผู้ติดต่อ & ช่องทางดีล');
+    goToSection('ผู้ติดต่อ & เสนอแก่');
     expect(screen.getByRole('radio', { name: /เจ้าของตรง/ }).getAttribute('aria-checked')).toBe('true');
   });
 });

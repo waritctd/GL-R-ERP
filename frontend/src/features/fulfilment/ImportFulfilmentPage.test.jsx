@@ -5,6 +5,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ImportFulfilmentPage } from './ImportFulfilmentPage.jsx';
 import { api } from '../../api/index.js';
+import { queryKeys } from '../../api/queryKeys.js';
 
 globalThis.React = React;
 
@@ -148,6 +149,28 @@ describe('ImportFulfilmentPage (per-factory, stored aggregate)', () => {
 
     await waitFor(() => expect(api.storedImportRequests.advanceStep)
       .toHaveBeenCalledWith(1, { targetStep: 'PICKED_UP' }));
+  });
+
+  // Import has its own per-deal page (GET /api/import/deals/{id}); the whole-deal GET
+  // /api/tickets/{id} 403s import, so a link into /tickets/:id from this worklist is a dead end.
+  it('links every deal to import\'s own page (/import/deals/:id), never the whole-deal page', async () => {
+    renderPage();
+    await screen.findByTestId('fulfilment-deal');
+    const hrefs = screen.getAllByRole('link').map((a) => a.getAttribute('href'));
+    expect(hrefs).toContain('/import/deals/1');
+    expect(hrefs.filter((h) => h.startsWith('/tickets'))).toEqual([]);
+  });
+
+  // SYNC: the same per-factory rows are shown on the import deal page, so an advance made here
+  // must refresh that page's cached copy too — otherwise a stale step shows until a hard reload.
+  it('refreshes the import deal page cache after advancing a factory (sync)', async () => {
+    const { queryClient } = renderPage();
+    const spy = vi.spyOn(queryClient, 'invalidateQueries');
+    const card = await screen.findByTestId('fulfilment-deal');
+    fireEvent.click(within(card).getByTestId('advance-1'));
+
+    await waitFor(() => expect(spy).toHaveBeenCalledWith({ queryKey: queryKeys.importDeal(1) }));
+    expect(spy).toHaveBeenCalledWith({ queryKey: queryKeys.storedImportRequests(1) });
   });
 
   it('keeps an all-received deal in the done group, out of the active list', async () => {

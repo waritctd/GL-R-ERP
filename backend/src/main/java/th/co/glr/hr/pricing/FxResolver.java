@@ -31,8 +31,10 @@ import th.co.glr.hr.common.ApiException;
  * system) is direct evidence the gate fired exactly as that reasoning predicts.
  *
  * <p>A separate, weaker argument for the same conclusion is deliberately NOT what this rests on,
- * and is named here only to correct it: {@code BotFxFetchService#fetchDailyRates} (the only writer
- * of a BOT-sourced row, via {@link FxRateRepository#upsertFromBot}) returns early whenever
+ * and is named here only to correct it: {@code BotFxFetchService#fetchDailyRates} (the scheduled
+ * writer of a BOT-sourced row, via {@link FxRateRepository#upsertFromBot} — {@code POST
+ * /api/fx-rates/fetch-now}, added 2026-09-24, is the other, manual writer of the same BOT-sourced
+ * shape) returns early whenever
  * {@code BOT_FX_API_TOKEN} is unset, and {@code render.yaml} marks that key {@code sync: false}
  * with its own checked-in comment recording both BOT fetchers as no-op'ing in this environment.
  * That comment is exactly the shape of claim CLAUDE.md warns against reasoning from: {@code sync:

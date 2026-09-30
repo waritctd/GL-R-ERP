@@ -536,8 +536,17 @@ class PricingRequestItemDirectDealFieldsIntegrationTest extends AbstractPostgres
         assertThat(beforeFactory.factory()).isNull();
         assertThat(beforeFactory.variantId()).isEqualTo(4242L);
 
+        // B6 (GLA-135): setItemFactory now takes a factoryId resolved against a real
+        // price_catalog.factories master row, not a free-typed name — insert one directly (this
+        // test's own ticket/catalog fixture above uses "V185 Test Factory", a different name, so a
+        // fresh master row keeps this test's own Thai-text round-trip intent).
+        Long factoryId = jdbc.queryForObject("""
+            INSERT INTO price_catalog.factories (name, country, default_currency)
+            VALUES ('โรงงาน กขค', 'TH', 'THB')
+            RETURNING factory_id
+            """, Map.of(), Long.class);
         pricingRequestService.setItemFactory(id, beforeFactory.id(),
-            new SetItemFactoryRequest("โรงงาน กขค"), importActor);
+            new SetItemFactoryRequest(factoryId), importActor);
 
         PricingRequestItemDto afterFactory = onlyItemById(id);
         assertThat(afterFactory.factory()).isEqualTo("โรงงาน กขค");

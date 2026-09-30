@@ -33,6 +33,7 @@ function row(overrides = {}) {
     number: 'QD69-0001',
     customerName: 'บริษัท แฟชั่นไอส์แลนด์ จำกัด',
     projectName: null,
+    salesRepId: 6,
     salesRepName: 'คุณสมหมาย ขายดี',
     grandTotal: 123456.78,
     docStatus: 'DRAFT',
@@ -179,6 +180,35 @@ describe('QuotationListPage', () => {
     expect(screen.getByText('คุณสมหมาย ขายดี')).not.toBeNull();
     // ร่าง is no longer a tab, so the row's own StatusBadge is the only place it appears.
     expect(screen.getByText('ร่าง')).not.toBeNull();
+  });
+
+  // Owner ruling 2026-09-24: only sales_manager/ceo (whose global list already contains every
+  // deal) get a rep filter — everyone else's rows are already scoped to their own deals
+  // server-side, so a per-rep filter over one rep's own rows is pointless chrome.
+  it('sales_manager sees the rep dropdown and selecting a rep narrows the rows', async () => {
+    api.dealQuotations.list.mockResolvedValue({
+      items: [
+        row({ id: 1, number: 'QD69-0001', salesRepId: 6, salesRepName: 'คุณสมหมาย ขายดี' }),
+        row({ id: 2, number: 'QD69-0002', salesRepId: 9, salesRepName: 'ผึ้ง' }),
+      ],
+    });
+    renderListPage(salesManagerUser);
+    await screen.findByText('QD69-0001');
+    expect(screen.getByText('QD69-0002')).not.toBeNull();
+
+    const select = screen.getByRole('combobox', { name: 'กรองตามพนักงานขาย' });
+    fireEvent.change(select, { target: { value: '6' } });
+
+    expect(screen.getByText('QD69-0001')).not.toBeNull();
+    expect(screen.queryByText('QD69-0002')).toBeNull();
+  });
+
+  it('a plain sales user does not see the rep dropdown, but does see the customer/project search box', async () => {
+    renderListPage(salesUser);
+    await screen.findByText('QD69-0001');
+
+    expect(screen.queryByRole('combobox', { name: 'กรองตามพนักงานขาย' })).toBeNull();
+    expect(screen.getByPlaceholderText('ค้นหาลูกค้า / โครงการ')).not.toBeNull();
   });
 });
 

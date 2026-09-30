@@ -1,3 +1,4 @@
+/* Hallmark · genre: modern-minimal · macrostructure: Workbench · design-system: design.md · designed-as-app · pre-emit critique: P4 H4 E5 S4 R5 V5 */
 import { useMemo, useState } from 'react';
 import { Button } from '../../components/common/Button.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
@@ -45,6 +46,10 @@ export const EVENT_KIND_LABEL = {
   // same-ticket sweep DealQuotationService#approve fires once per sibling it actually
   // supersedes. Missing here would leave the raw kind string on screen (Opus review finding).
   DEAL_QUOTATION_SUPERSEDED: 'ใบเสนอราคาถูกแทนที่',
+  // GLA-136 (V193) -- DealQuotationService#promoteToDeal: the customer ordered on an APPROVED
+  // direct quotation. Relabelled by slice 2 (IA §4/§8): under the linked design the deal already
+  // exists, so what this event records is the ORDER, in the same words as the CTA that fires it.
+  DEAL_PROMOTED_FROM_QUOTATION: 'ยืนยันคำสั่งซื้อจากใบเสนอราคา',
   CLOSED:             'ปิดเรื่อง',
   CANCELLED:          'ยกเลิก',
   EDITED:             'แก้ไขรายการสินค้า',

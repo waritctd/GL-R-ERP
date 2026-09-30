@@ -168,15 +168,18 @@ class StageDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void accountAndImport_areEachConfinedToTheirOwnStages() {
         long ticketId = readyToAdvanceFrom(DealStage.PRESENTATION);
+        // H1 lockdown: account only reaches a deal inside its list scope, so its half of this test runs on
+        // its own deal at ORDER_RECEIVED (S10). Import keeps the original PRESENTATION deal.
+        long accountTicketId = readyToAdvanceFrom(DealStage.ORDER_RECEIVED);
 
         // account: DEPOSIT_RECEIVED and CLOSED_PAID are both fact-gated and the facts do not hold,
         // so what account is OFFERED here is nothing — but the reason must be the fact, not a 403,
         // and every sales stage must still be a 403.
-        List<StageDecisionDto> accountDecisions = decisionsFor(ticketId, accountActor);
+        List<StageDecisionDto> accountDecisions = decisionsFor(accountTicketId, accountActor);
         assertThat(allowedStages(accountDecisions)).isEmpty();
         assertThat(reasonFor(accountDecisions, DealStage.SPEC_APPROVED)).isEqualTo("ไม่มีสิทธิ์เข้าถึงรายการนี้");
         assertThat(reasonFor(accountDecisions, DealStage.DEPOSIT_RECEIVED)).contains("ยังไม่ได้รับชำระมัดจำ");
-        assertThatThrownBy(() -> ticketService.updateStage(ticketId, DealStage.SPEC_APPROVED, "x", accountActor))
+        assertThatThrownBy(() -> ticketService.financeUpdateStage(accountTicketId, DealStage.SPEC_APPROVED, "x", accountActor))
             .isInstanceOfSatisfying(ApiException.class,
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
 
@@ -189,7 +192,9 @@ class StageDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
 
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.PRESENTATION);
+        assertThat(stageOf(accountTicketId)).isEqualTo(DealStage.ORDER_RECEIVED);
         assertThat(stageChangedEvents(ticketId)).isZero();
+        assertThat(stageChangedEvents(accountTicketId)).isZero();
     }
 
     /**
@@ -228,6 +233,8 @@ class StageDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void theFourFactGatedStages_areBlockedWithTheFactAsTheReason_forTheRoleThatMayWriteThem() {
         long ticketId = readyToAdvanceFrom(DealStage.NEGOTIATION);
+        // H1 lockdown: the two money stages are exercised by account on ITS OWN in-scope deal (S10).
+        long accountTicketId = readyToAdvanceFrom(DealStage.ORDER_RECEIVED);
 
         Map<String, UserPrincipal> byPrincipal = Map.of(
             DealStage.ORDER_RECEIVED, ownerRep,
@@ -241,23 +248,26 @@ class StageDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
             DealStage.CLOSED_PAID, "ต้องรับชำระเงินครบและส่งมอบสินค้าครบก่อน");
 
         byPrincipal.forEach((stage, actor) -> {
-            List<StageDecisionDto> decisions = decisionsFor(ticketId, actor);
+            long dealId = "account".equals(actor.role()) ? accountTicketId : ticketId;
+            List<StageDecisionDto> decisions = decisionsFor(dealId, actor);
             assertThat(allowedFor(decisions, stage)).as("%s must not be allowed", stage).isFalse();
             assertThat(reasonFor(decisions, stage)).as("reason for %s", stage)
                 .contains(expectedFragment.get(stage));
             // The advertised verb list agrees with the decision — no dead ADVANCE_STAGE.
-            assertThat(advanceTargets(ticketId, actor)).as("%s must not be advertised", stage)
+            assertThat(advanceTargets(dealId, actor)).as("%s must not be advertised", stage)
                 .doesNotContain(stage);
             // And the write really is refused, with the same message the decision carried.
-            assertThatThrownBy(() -> ticketService.updateStage(ticketId, stage, "มีเหตุผลครบ", actor))
+            assertThatThrownBy(() -> updateStageAs(dealId, stage, "มีเหตุผลครบ", actor))
                 .isInstanceOfSatisfying(ApiException.class, e -> {
                     assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
-                    assertThat(e.getMessage()).isEqualTo(reasonFor(decisionsFor(ticketId, actor), stage));
+                    assertThat(e.getMessage()).isEqualTo(reasonFor(decisionsFor(dealId, actor), stage));
                 });
         });
 
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.NEGOTIATION);
+        assertThat(stageOf(accountTicketId)).isEqualTo(DealStage.ORDER_RECEIVED);
         assertThat(stageChangedEvents(ticketId)).isZero();
+        assertThat(stageChangedEvents(accountTicketId)).isZero();
     }
 
     /**
@@ -432,12 +442,24 @@ class StageDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
+    // H1 lockdown: account reads its stage decisions through financeActions (same gates, no /tickets view
+    // check) and writes a money stage through financeUpdateStage; every other role is unchanged.
     private List<StageDecisionDto> decisionsFor(long ticketId, UserPrincipal actor) {
-        return ticketService.actions(ticketId, actor).stageDecisions();
+        return actionsFor(ticketId, actor).stageDecisions();
     }
 
     private TicketActionsResponse actionsFor(long ticketId, UserPrincipal actor) {
-        return ticketService.actions(ticketId, actor);
+        return "account".equals(actor.role())
+            ? ticketService.financeActions(ticketId, actor)
+            : ticketService.actions(ticketId, actor);
+    }
+
+    private void updateStageAs(long ticketId, String stage, String note, UserPrincipal actor) {
+        if ("account".equals(actor.role())) {
+            ticketService.financeUpdateStage(ticketId, stage, note, actor);
+        } else {
+            ticketService.updateStage(ticketId, stage, note, actor);
+        }
     }
 
     private Set<String> actionNames(long ticketId, UserPrincipal actor) {

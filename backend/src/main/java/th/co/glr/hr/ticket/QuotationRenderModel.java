@@ -213,6 +213,15 @@ public record QuotationRenderModel(
      * ผู้สั่งซื้อ's date is always the placeholder (the customer signs on paper). The five-argument
      * constructor is the pre-feedback shape — no ordered-by name, no dates — kept for the legacy
      * wrappers and the many existing callers.
+     *
+     * <p>Task 4 (slot signatures, 2026-09-26): {@code printedBySignaturePng/Mime} (ผู้พิมพ์, slot 0)
+     * and {@code salesRepSignaturePng/Mime} (พนักงานขาย, slot 1) let those two slots draw a
+     * signature IMAGE the same way {@code approverSignaturePng} always has for ผู้จัดการฝ่ายขาย
+     * (slot 2) — resolved LIVE at render by {@code DealQuotationService#toRenderModel}, never
+     * frozen into a snapshot the way the approver's is. Either pair is nullable independently: a
+     * slot whose person has no signature on file simply keeps printing the text-only name, exactly
+     * as every slot always has. The nine-argument constructor is the pre-task-4 shape — kept for
+     * the many existing callers, which all still compile unchanged with these four new fields null.
      */
     public record Signatories(
         String printedBy,
@@ -223,8 +232,21 @@ public record QuotationRenderModel(
         String approverSignatureMime,
         LocalDate printedOn,
         LocalDate checkedOn,
-        LocalDate approvedOn
+        LocalDate approvedOn,
+        byte[] printedBySignaturePng,
+        String printedBySignatureMime,
+        byte[] salesRepSignaturePng,
+        String salesRepSignatureMime
     ) {
+        /** Pre-task-4 shape (9 args, no slot-0/1 signature images) — kept for the many existing
+         * callers; slots 0 and 1 print text-only, exactly as before this feature. */
+        public Signatories(String printedBy, String checkedBy, String approvedBy, String orderedBy,
+                           byte[] approverSignaturePng, String approverSignatureMime,
+                           LocalDate printedOn, LocalDate checkedOn, LocalDate approvedOn) {
+            this(printedBy, checkedBy, approvedBy, orderedBy, approverSignaturePng, approverSignatureMime,
+                printedOn, checkedOn, approvedOn, null, null, null, null);
+        }
+
         public Signatories(String printedBy, String checkedBy, String approvedBy,
                            byte[] approverSignaturePng, String approverSignatureMime) {
             this(printedBy, checkedBy, approvedBy, null, approverSignaturePng, approverSignatureMime,

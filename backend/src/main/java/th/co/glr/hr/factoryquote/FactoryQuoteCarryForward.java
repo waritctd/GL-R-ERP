@@ -79,8 +79,16 @@ public class FactoryQuoteCarryForward {
         if (!quotes.findByPricingRequest(child.id()).isEmpty()) {
             return false;
         }
+        List<PricingRequestItemDto> childItems = pricingRequests.findItems(child.id());
+        // Stock lines (V194): a request carrying any stock line takes the ordinary submit routing
+        // (all-in-Thailand straight to the CEO, otherwise Import confirms the ETAs). Copying a
+        // parent's factory quotes onto a request whose lines changed SOURCE is exactly the kind of
+        // fuzzy carry this class refuses to make.
+        if (childItems.stream().anyMatch(item -> item.stockSource() != null)) {
+            return false;
+        }
         Map<Long, Long> itemIdMapping = equivalentItemMapping(
-            pricingRequests.findItems(parentId), pricingRequests.findItems(child.id()));
+            pricingRequests.findItems(parentId), childItems);
         if (itemIdMapping == null) {
             return false;
         }
@@ -99,6 +107,15 @@ public class FactoryQuoteCarryForward {
             return false;
         }
         return true;
+    }
+
+    /**
+     * Stock lines (V194): {@link LandedCostCalculator#isReadyForCeoReview} - the ONE readiness
+     * predicate - exposed to {@code PricingRequestService}, which cannot take a new constructor
+     * dependency (every hand-wired test builds it positionally).
+     */
+    public boolean isReadyForCeoReview(PricingRequestSummaryDto summary) {
+        return landedCosts.isReadyForCeoReview(summary);
     }
 
     /**

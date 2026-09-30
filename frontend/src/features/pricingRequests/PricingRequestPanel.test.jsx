@@ -19,6 +19,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         update: vi.fn(),
         submit: vi.fn(),
         cancel: vi.fn(),
+        pickup: vi.fn(),
         // PricingRequestCreateModal (V69, review remediation COMMIT 4) fetches attachments
         // whenever it has a persisted id — including edit mode, which this file's "seed the
         // modal from request detail" test exercises.
@@ -76,6 +77,26 @@ function summary(overrides = {}) {
 describe('PricingRequestPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  // #1 (owner ask 2026-09-24): a SUBMITTED request waiting for import had no รับเรื่อง affordance
+  // on the deal itself — only in the คิวขอราคา queue. Same gate/endpoint the queue uses.
+  it('lets an import user รับเรื่อง a SUBMITTED request straight from the deal', async () => {
+    api.pricingRequests.listForTicket.mockResolvedValue({ items: [summary({ status: 'SUBMITTED' })] });
+    api.pricingRequests.pickup.mockResolvedValue({
+      pricingRequest: { summary: summary({ status: 'PICKED_UP' }), items: [], events: [] },
+    });
+    renderPanel({ user: importUser });
+
+    fireEvent.click(await screen.findByTestId('pcr-pickup-1'));
+    await waitFor(() => expect(api.pricingRequests.pickup).toHaveBeenCalledWith(1));
+  });
+
+  it('shows no รับเรื่อง button to the sales owner (pickup is import-only)', async () => {
+    api.pricingRequests.listForTicket.mockResolvedValue({ items: [summary({ status: 'SUBMITTED' })] });
+    renderPanel({ user: salesOwner });
+    await screen.findByText('PCR-2026-0001');
+    expect(screen.queryByTestId('pcr-pickup-1')).toBeNull();
   });
 
   // Ticket-detail IA rebuild Phase 1 clutter follow-up (FIX 1): this panel no

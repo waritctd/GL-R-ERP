@@ -187,6 +187,22 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     // Acceptance
     // ─────────────────────────────────────────────────────────────────────────────────────
 
+    /** Round 8: the DTO serves a DEAL_DIRECT row's persisted recipient_type through listForTicket's
+     * real query. Slice 2 (quotation ↔ deal linking) made the recipient REQUIRED on a direct create —
+     * it used to be stored as 'UNSPECIFIED' — so this now pins the value the request sent. OWNER is
+     * deliberately not the column's old default, so a query that dropped the column would fail here. */
+    @Test
+    void listForTicket_servesTheStoredRecipientForADealDirectRow() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+
+        DealQuotationDto listed = quotationService.listForTicket(ticketId, salesActor).stream()
+            .filter(q -> q.id() == created.id()).findFirst().orElseThrow();
+
+        assertThat(listed.origin()).isEqualTo("DEAL_DIRECT");
+        assertThat(listed.recipientType()).isEqualTo("OWNER");
+    }
+
     @Test
     void acceptanceScenario_createUpdateSubmitApprove() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -616,6 +632,12 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
      */
     @Test
     void createReorder_approvalSweep_neverTouchesAPricingChainCustomerQuotationRow() {
+        // Slice 2 (one pricing route per deal): a direct quotation can no longer be CREATED on a deal
+        // with a live pricing request, so the direct draft is created and submitted FIRST and the
+        // pricing-chain rows arrive behind it (the legacy coexistence this test is about). The sweep
+        // under test runs at approve(), which still happens after both exist.
+        DealQuotationDto pendingDirect = quotationService.submit(quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor).id(), salesActor);
         jdbc.update("""
             INSERT INTO sales.pricing_request (request_code, ticket_id, recipient_type, requested_by)
             VALUES (:code, :ticketId, 'BUYER', :requestedBy)
@@ -638,7 +660,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
         // Approve an ordinary DEAL_DIRECT quotation on the SAME ticket -- must not touch the
         // PCR-chain row above.
-        createSubmittedApproved(ticketId, salesActor, salesManagerActor);
+        quotationService.approve(pendingDirect.id(), new ApproveRequest(null), salesManagerActor);
 
         String pcrStatusAfter = jdbc.queryForObject(
             "SELECT doc_status FROM sales.quotation WHERE quotation_id = :id",
@@ -937,7 +959,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         DealQuotationDto first = quotationService.create(ticketId,
             upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
         DealQuotationDto pending1 = quotationService.submit(first.id(), salesActor);
-        DealQuotationDto second = quotationService.create(ticketId,
+        DealQuotationDto second = createAlongsideLive(ticketId,
             upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
         DealQuotationDto pending2 = quotationService.submit(second.id(), salesActor);
         assertThat(pending1.docStatus()).isEqualTo(QuotationStatus.PENDING_APPROVAL);
@@ -1985,9 +2007,235 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .hasMessageContaining("กรุณาระบุระยะเวลานำเข้า");
     }
 
+    // ── Wording-scan fix 3 (2026-09-17): an ENTERED lead-time range must be min>=1, max>=min ────
+
+    /** {@code ประมาณ 0-3 วัน} saved on 2 approved quotations, and {@code 90-75}/negatives would too
+     * -- refused on save now, TILE row, the exact message the frontend validator mirrors. */
+    @Test
+    void create_refusesATileLeadTimeMinBelowOne() {
+        assertThatThrownBy(() -> quotationService.create(ticketId,
+            upsertRequest(List.of(itemMutated(m -> m.withLeadTime(0, 3)))), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("รายการที่ 1")
+            .hasMessageContaining("ระยะเวลานำเข้าต้องไม่น้อยกว่า 1 วัน และค่าสูงสุดต้องไม่น้อยกว่าค่าต่ำสุด");
+    }
+
+    /** Same rule, the "max < min" half -- "90-75" is a range running backwards. */
+    @Test
+    void create_refusesATileLeadTimeMaxBelowMin() {
+        assertThatThrownBy(() -> quotationService.create(ticketId,
+            upsertRequest(List.of(itemMutated(m -> m.withLeadTime(90, 75)))), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("ระยะเวลานำเข้าต้องไม่น้อยกว่า 1 วัน และค่าสูงสุดต้องไม่น้อยกว่าค่าต่ำสุด");
+    }
+
+    /** A negative min is refused the same way as zero. */
+    @Test
+    void create_refusesANegativeTileLeadTimeMin() {
+        assertThatThrownBy(() -> quotationService.create(ticketId,
+            upsertRequest(List.of(itemMutated(m -> m.withLeadTime(-5, 10)))), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("ระยะเวลานำเข้าต้องไม่น้อยกว่า 1 วัน และค่าสูงสุดต้องไม่น้อยกว่าค่าต่ำสุด");
+    }
+
+    /** The SAME rule applies to a PLAIN (สินค้า/บริการอื่น) row's optional lead time, not only TILE. */
+    @Test
+    void create_refusesAnInvalidLeadTimeOnAPlainRowToo() {
+        assertThatThrownBy(() -> quotationService.create(ticketId,
+            upsertRequest(List.of(plainItemWithLeadTime("สุขภัณฑ์", "1", "ชุด", "5000.00", 0, 3))),
+            salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("ระยะเวลานำเข้าต้องไม่น้อยกว่า 1 วัน และค่าสูงสุดต้องไม่น้อยกว่าค่าต่ำสุด");
+    }
+
+    /** Wrong-way-round: a valid range (including the min==max exact-day case) is untouched -- this
+     * rule refuses only genuinely invalid values, never a well-formed one. */
+    @Test
+    void create_acceptsAValidLeadTimeRange_minEqualsMaxIncluded() {
+        DealQuotationDto range = quotationService.create(ticketId,
+            upsertRequest(List.of(itemMutated(m -> m.withLeadTime(75, 90)))), salesActor);
+        assertThat(range.items().get(0).leadTimeMinDays()).isEqualTo(75);
+        DealQuotationDto exact = createAlongsideLive(ticketId,
+            upsertRequest(List.of(itemMutated(m -> m.withLeadTime(1, 1)))), salesActor);
+        assertThat(exact.items().get(0).leadTimeMinDays()).isEqualTo(1);
+        assertThat(exact.items().get(0).leadTimeMaxDays()).isEqualTo(1);
+    }
+
+    /** A lone value (the OTHER field still blank) is an INCOMPLETENESS question, not an invalid
+     * one -- this rule must not fire until BOTH fields are entered (the "is it required at all"
+     * rules are unchanged and untested here; see the #7 section above). */
+    @Test
+    void create_doesNotValidateAPartiallyEnteredLeadTime() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(itemMutated(m -> m.withLeadTime(0, null)))), salesActor);
+        assertThat(created.items().get(0).leadTimeMinDays()).isEqualTo(0);
+        assertThat(created.items().get(0).leadTimeMaxDays()).isNull();
+    }
+
+    // ── Wording-scan fix 4 (2026-09-17): an AREA-mode row that computes to ZERO pieces ──────────
+
+    /** {@code (พื้นที่ 0.01 ตร.ม.ๆละ 2.78 แผ่น รวม 0 แผ่น ...)} saved today -- a document line
+     * selling nothing. sqmPerPiece 0.36 (sampleItem's fixed value) -> ~2.78 pcs/sqm; 0.01 sqm
+     * rounds to 0 pieces before wastage (round2(0.01 x 2.78) = round(0.0278) = 0). */
+    @Test
+    void create_refusesAnAreaThatComputesToZeroPieces() {
+        assertThatThrownBy(() -> quotationService.create(ticketId,
+            upsertRequest(List.of(itemMutated(m -> m.withAreaMode(new BigDecimal("0.01"))))), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("รายการที่ 1")
+            .hasMessageContaining("พื้นที่น้อยเกินไป คำนวณได้ 0 แผ่น");
+    }
+
+    /** The same check on the LENIENT calculate-line preview -- consistent with how every other
+     * item error already behaves there (#requirePriceValidForType's own precedent). */
+    @Test
+    void calculateLine_refusesAnAreaThatComputesToZeroPieces() {
+        assertThatThrownBy(() -> quotationService.calculateLine(
+            itemMutated(m -> m.withAreaMode(new BigDecimal("0.01"))), "TH", salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("พื้นที่น้อยเกินไป คำนวณได้ 0 แผ่น");
+    }
+
+    /** Wrong-way-round: an area that rounds to exactly 1 piece (not 0) is accepted -- this rule
+     * refuses only a genuine zero, never a small-but-real quantity. */
+    @Test
+    void create_acceptsAnAreaThatComputesToExactlyOnePiece() {
+        // 0.36 sqm/piece (sampleItem) -> 2.78 pcs/sqm; 0.36 sqm x 2.78 = 1.0008 -> rounds to 1.
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(itemMutated(m -> m.withAreaMode(new BigDecimal("0.36"))))), salesActor);
+        assertThat(created.items().get(0).piecesBeforeWastage()).isEqualTo(1);
+    }
+
+    // ── Wording-scan fix 5 (2026-09-17): PIECES wastage must be a whole number ────────────────
+
+    /** {@code + เผื่อ 0.5 แผ่น} saved today. Refused now, whole-number PIECES wastage only. */
+    @Test
+    void create_refusesAFractionalPiecesWastageValue() {
+        assertThatThrownBy(() -> quotationService.create(ticketId,
+            upsertRequest(List.of(itemMutated(m ->
+                m.withWastage(WastageCalculator.WASTAGE_MODE_PIECES, new BigDecimal("0.5"))))),
+            salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("รายการที่ 1")
+            .hasMessageContaining("จำนวนแผ่นที่เผื่อต้องเป็นจำนวนเต็ม");
+    }
+
+    /** Wrong-way-round: a whole-number PIECES wastage (including one written "2.00") is untouched. */
+    @Test
+    void create_acceptsAWholeNumberPiecesWastageValue_evenWithATrailingZeroScale() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(itemMutated(m ->
+                m.withWastage(WastageCalculator.WASTAGE_MODE_PIECES, new BigDecimal("2.00"))))),
+            salesActor);
+        assertThat(created.items().get(0).piecesAfterWastage())
+            .isEqualTo(created.items().get(0).piecesBeforeWastage() + 2);
+    }
+
+    /** PERCENT wastage keeps accepting decimals -- this rule is PIECES-mode only. */
+    @Test
+    void create_stillAcceptsAFractionalPercentWastageValue() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(itemMutated(m ->
+                m.withWastage(WastageCalculator.WASTAGE_MODE_PERCENT, new BigDecimal("2.5"))))),
+            salesActor);
+        assertThat(created.items().get(0)).isNotNull();
+    }
+
+    // ── Wording-scan fix 6 (2026-09-17): CREDIT remainder needs at least 1 credit day ──────────
+
+    /** {@code ส่วนที่เหลือเครดิต 0 วัน} can print today. An explicit 0 (or negative) is refused on
+     * SAVE (create/update), matching the "invalid value" half of the rule; a BLANK value still
+     * saves (see {@link #submit_refusesACreditRemainderWithNoCreditDays} for the submit-time half,
+     * mirroring how {@code fullPaymentTerm} is gated for a zero-deposit document). */
+    @Test
+    void create_refusesZeroCreditDaysWhenRemainderModeIsCredit() {
+        assertThatThrownBy(() -> quotationService.create(ticketId,
+            new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 0, 30,
+                "หมายเหตุทดสอบ", List.of(sampleItem("100.00", 10))).withRecipientType("OWNER"),
+            salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน");
+    }
+
+    /** A negative creditDays is refused the same way (bean {@code @Min(0)} already blocks anything
+     * below -1... this proves the SERVICE rule, not the bean bound, is what actually names zero). */
+    @Test
+    void update_refusesZeroCreditDaysWhenRemainderModeIsCredit() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+
+        assertThatThrownBy(() -> quotationService.update(created.id(),
+            new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 0, 30,
+                "หมายเหตุทดสอบ", List.of(sampleItem("100.00", 10))).withRecipientType("OWNER"),
+            salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน");
+    }
+
+    /** The blank-on-draft half: create/update still accept a CREDIT remainder with NO creditDays
+     * typed yet (a draft may be incomplete) -- only {@link #submit} refuses to advance it, the
+     * EXACT "create/update permissive, submit strict" split {@code fullPaymentTerm} already uses. */
+    @Test
+    void create_stillAcceptsACreditRemainderWithBlankCreditDays() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", null, 30,
+                "หมายเหตุทดสอบ", List.of(sampleItem("100.00", 10))).withRecipientType("OWNER"),
+            salesActor);
+        assertThat(created.remainderMode()).isEqualTo("CREDIT");
+        assertThat(created.creditDays()).isNull();
+    }
+
+    /** The submit-time half: a CREDIT-remainder draft with creditDays still blank may not advance
+     * past DRAFT. */
+    @Test
+    void submit_refusesACreditRemainderWithNoCreditDays() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", null, 30,
+                "หมายเหตุทดสอบ", List.of(sampleItem("100.00", 10))).withRecipientType("OWNER"),
+            salesActor);
+
+        assertThatThrownBy(() -> quotationService.submit(created.id(), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน");
+    }
+
+    /** Wrong-way-round: a positive creditDays, or a non-CREDIT remainder mode with creditDays left
+     * however it likes, is completely untouched by this rule. */
+    @Test
+    void create_acceptsAPositiveCreditDays_andANonCreditRemainderModeRegardlessOfCreditDays() {
+        DealQuotationDto credit = quotationService.create(ticketId,
+            new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 1, 30,
+                "หมายเหตุทดสอบ", List.of(sampleItem("100.00", 10))).withRecipientType("OWNER"),
+            salesActor);
+        assertThat(credit.creditDays()).isEqualTo(1);
+
+        DealQuotationDto delivery = createAlongsideLive(ticketId,
+            new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "ON_DELIVERY", 0, 30,
+                "หมายเหตุทดสอบ", List.of(sampleItem("100.00", 10))).withRecipientType("OWNER"),
+            salesActor);
+        assertThat(delivery.remainderMode()).isEqualTo("ON_DELIVERY");
+    }
+
     /** Builder-shaped helper over the complete {@link #sampleItem} fixture, for one-field-at-a-time
      * incompleteness tests -- avoids a 21-argument constructor call per test case. */
     private ItemInput itemMissing(java.util.function.UnaryOperator<ItemInputBuilder> mutate) {
+        return mutate.apply(new ItemInputBuilder(sampleItem("100.00", 10))).build();
+    }
+
+    /** Same builder, different name for a mutation that is not about INCOMPLETENESS (a value the
+     * validation rejects while every required field is still present) -- shares the exact same
+     * fixture and mechanism as {@link #itemMissing}. */
+    private ItemInput itemMutated(java.util.function.UnaryOperator<ItemInputBuilder> mutate) {
         return mutate.apply(new ItemInputBuilder(sampleItem("100.00", 10))).build();
     }
 
@@ -2025,6 +2273,14 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         ItemInputBuilder withPiecesInput(Integer v) { piecesInput = v; return this; }
         // #7 (2026-09-14): submit's new lead-time requirement.
         ItemInputBuilder withNoLeadTime() { leadTimeMinDays = null; leadTimeMaxDays = null; return this; }
+        // Wording-scan fix 3 (2026-09-17): an explicit (possibly invalid) lead-time range.
+        ItemInputBuilder withLeadTime(Integer min, Integer max) { leadTimeMinDays = min; leadTimeMaxDays = max; return this; }
+        // Wording-scan fix 4 (2026-09-17): AREA quantity mode with a caller-chosen area.
+        ItemInputBuilder withAreaMode(BigDecimal area) {
+            quantityMode = WastageCalculator.QUANTITY_MODE_AREA; areaSqm = area; piecesInput = null; return this;
+        }
+        // Wording-scan fix 5 (2026-09-17): a caller-chosen wastage mode/value.
+        ItemInputBuilder withWastage(String mode, BigDecimal value) { wastageMode = mode; wastageValue = value; return this; }
 
         ItemInput build() {
             return new ItemInput(locationLabel, catalogPriceId, productCode, brand, model, color, texture,
@@ -2071,10 +2327,11 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
      * regardless of how many ids it was asked for. Two quotations here only make the fixture
      * legible (which row is "first" is otherwise arbitrary) -- the SAME bug drops the first line
      * item of a SINGLE quotation too, e.g. {@code findByTicket} on a ticket with exactly one
-     * quotation renders that quotation missing its own first item. {@code search} here (import
-     * reads every deal, unscoped) routes through {@code DealQuotationService#search ->
-     * DealQuotationRepository#hydrate -> #findItemsForQuotations}, the same path {@code
-     * findByTicket} and the approver queue use. {@link #findById} (single-quotation {@code GET})
+     * quotation renders that quotation missing its own first item. {@code search} here (ceo reads
+     * every deal, unscoped -- see {@code LIST_SEE_ALL_ROLES}, owner ruling 2026-09-24) routes
+     * through {@code DealQuotationService#search -> DealQuotationRepository#hydrate ->
+     * #findItemsForQuotations}, the same path {@code findByTicket} and the approver queue use.
+     * {@link #findById} (single-quotation {@code GET})
      * uses the unbatched {@code #findItems} instead and is unaffected -- this test is what proves
      * the batched path specifically. */
     @Test
@@ -2087,7 +2344,10 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         // assertions below are checking the row the bug actually drops, not by luck.
         assertThat(first.id()).isLessThan(second.id());
 
-        List<DealQuotationDto> results = quotationService.search(null, false, importActor);
+        // ceoActor, NOT importActor (owner ruling 2026-09-24): the global list is now scoped to
+        // sales_manager/ceo for "see everything" -- import is scoped to its own deals (created
+        // none here), which would make this fixture's own assertions vacuous.
+        List<DealQuotationDto> results = quotationService.search(null, false, ceoActor);
 
         // Ties the fixture to the bug's actual trigger (the SMALLEST quotation_id in the whole
         // result set, not just relative to `second`) -- guards against this test going silently
@@ -2314,16 +2574,20 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         return out;
     }
 
+    /** ⚠️ Owner-directed reversal of V167/F2 (2026-09-26): create used to refuse a deal with no
+     * resolvable contact ("กรุณาระบุผู้สั่งซื้อ") -- the frontend's required contact-picker dropdown
+     * that rule existed for is gone (ผู้สั่งซื้อ is now a single optional free-text signature-name
+     * field, unrelated to this contact snapshot), so this now proves the OPPOSITE: create succeeds
+     * with a blank contact snapshot. See #resolveContact's own Javadoc for the relaxed rule. */
     @Test
-    void create_withoutAnyResolvableContact_isBadRequest() {
+    void create_withNoResolvableContact_succeedsWithABlankContactSnapshot() {
         ProjectDto project = projects.create(customer.id(), "โครงการไม่มีผู้ติดต่อ");
         long noContactTicket = createTicket("ดีลไม่มีผู้สั่งซื้อ", project.id(), null, salesActor);
-        assertThatThrownBy(() -> quotationService.create(noContactTicket,
-                upsertRequest(List.of(sampleItem("100.00", 10))), salesActor))
-            .isInstanceOf(ApiException.class)
-            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
-            .hasMessage("กรุณาระบุผู้สั่งซื้อ");
-        assertThat(quotationRepository.findByTicket(noContactTicket)).as("nothing was inserted").isEmpty();
+        DealQuotationDto created = quotationService.create(noContactTicket,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        assertThat(created.contactId()).isNull();
+        assertThat(created.contactName()).isNull();
+        assertThat(quotationRepository.findByTicket(noContactTicket)).as("the draft was inserted").isNotEmpty();
     }
 
     /** An explicit {@code contactId} overrides the deal's default — and a contact of ANOTHER
@@ -2339,13 +2603,13 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
         CustomerDto otherCustomer = customers.create("บริษัท อื่น จำกัด", "0100000000098", "1 ถนนอื่น", "สนญ.", null);
         ContactDto foreign = contacts.create(otherCustomer.id(), "คนนอก", "ลูกค้าอื่น", null, null, null);
-        assertThatThrownBy(() -> quotationService.create(ticketId,
+        assertThatThrownBy(() -> createAlongsideLive(ticketId,
                 upsertRequest(foreign.id(), List.of(sampleItem("100.00", 10))), salesActor))
             .isInstanceOf(ApiException.class)
             .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
             .hasMessage("กรุณาระบุผู้สั่งซื้อ");
         // A contact id that does not exist at all: same answer, nothing leaks.
-        assertThatThrownBy(() -> quotationService.create(ticketId,
+        assertThatThrownBy(() -> createAlongsideLive(ticketId,
                 upsertRequest(999_999_999L, List.of(sampleItem("100.00", 10))), salesActor))
             .isInstanceOf(ApiException.class)
             .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST);
@@ -2408,18 +2672,20 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(cleared.projectName()).isNull();
     }
 
-    /** submit is the last gate: a row that predates V167 (no snapshot) cannot go to an approver.
-     * Reproduced by blanking the snapshot straight in the DB. */
+    /** ⚠️ Owner-directed reversal of V167/F2 (2026-09-26): submit used to be the last gate refusing
+     * a row with no contact snapshot (predating V167, or -- since this reversal -- any row created
+     * with none at all now that create/update allow it). That refusal ("กรุณาระบุผู้สั่งซื้อ") is
+     * gone; this now proves submit SUCCEEDS on a row with a blanked contact snapshot, reproduced by
+     * blanking it straight in the DB exactly as before. */
     @Test
-    void submit_refusesARowWithNoContactSnapshot() {
+    void submit_succeedsOnARowWithNoContactSnapshot() {
         DealQuotationDto created = quotationService.create(ticketId,
             upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
         jdbc.update("UPDATE sales.quotation SET contact_id = NULL, contact_name = NULL WHERE quotation_id = :id",
             java.util.Map.of("id", created.id()));
-        assertThatThrownBy(() -> quotationService.submit(created.id(), salesActor))
-            .isInstanceOf(ApiException.class)
-            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
-            .hasMessage("กรุณาระบุผู้สั่งซื้อ");
+        DealQuotationDto submitted = quotationService.submit(created.id(), salesActor);
+        assertThat(submitted.contactId()).isNull();
+        assertThat(submitted.docStatus()).isEqualTo(QuotationStatus.PENDING_APPROVAL);
     }
 
     @Test
@@ -2467,25 +2733,42 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         return "วันที่ " + d.getDayOfMonth() + "/" + d.getMonthValue() + "/" + (d.getYear() + 543);
     }
 
+    /** Owner-directed reversal of F2 (2026-09-26): a DRAFT with a contact snapshot but no manual
+     * orderedByName must print the DOTTED placeholder in slot 4, never the contact's name any
+     * more -- this is the F2-reversal regression guard, end-to-end through the real service and
+     * repository (not just the adapter unit tests). */
     @Test
-    void render_draft_printsContactNameInSlot4_andOnlyThePrintedOnDate() throws Exception {
+    void render_draft_neverAutoFillsContactNameInSlot4_evenThoughOneIsRecorded() throws Exception {
         DealQuotationDto created = quotationService.create(ticketId,
             upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        assertThat(created.contactName()).as("a contact IS recorded on this deal").isEqualTo("สมหญิง ใจดี");
         String[] rows = signatureRows(quotationService.renderXlsx(created.id(), salesActor));
         String names = rows[1];
         String dates = rows[2];
-        assertThat(names).contains("(สมหญิง ใจดี)");
-        // Slot 4 is the LAST slot: the contact's name comes after the sales rep's.
-        assertThat(names.indexOf("(สมหญิง ใจดี)")).isGreaterThan(names.indexOf("(" + created.salesRepName() + ")"));
-        // Draft: no approver name yet -> one dotted name placeholder (slot 3).
-        assertThat(names).containsOnlyOnce("(..........................)");
+        assertThat(names).doesNotContain("(สมหญิง ใจดี)");
+        // Draft: no approver name yet AND no manual ผู้สั่งซื้อ name -- two dotted placeholders.
+        assertThat(names.split("\\(\\.{26}\\)", -1)).hasSize(3);
         // Dates: ผู้พิมพ์ = created date; the other three slots stay dotted.
         assertThat(dates).contains(thaiShort(created.createdAt()));
         assertThat(dates.split("วันที่........./........./.........", -1)).as("three dotted date slots").hasSize(4);
     }
 
+    /** The manual override this reversal adds: a rep-typed {@code orderedByName} on the request
+     * reaches the printed signature slot exactly as typed, end-to-end (create -> render), even
+     * though the deal ALSO carries a contact snapshot the slot must NOT fall back to. */
     @Test
-    void render_approved_printsAllThreeDates_andOrderedByStaysDotted() throws Exception {
+    void render_draft_printsTheManualOrderedByNameWhenSet_notTheContactName() throws Exception {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequestWithOrderedByName("คุณวิชัย มั่นคง", List.of(sampleItem("100.00", 10))), salesActor);
+        assertThat(created.orderedByName()).isEqualTo("คุณวิชัย มั่นคง");
+        assertThat(created.contactName()).as("still a contact IS recorded on this deal").isEqualTo("สมหญิง ใจดี");
+        String[] rows = signatureRows(quotationService.renderXlsx(created.id(), salesActor));
+        String names = rows[1];
+        assertThat(names).contains("(คุณวิชัย มั่นคง)").doesNotContain("(สมหญิง ใจดี)");
+    }
+
+    @Test
+    void render_approved_printsAllThreeDates_andOrderedByStaysDottedWithNoManualName() throws Exception {
         DealQuotationDto approved = createSubmittedApproved(ticketId, salesActor, salesManagerActor);
         String[] rows = signatureRows(quotationService.renderXlsx(approved.id(), salesActor));
         String dates = rows[2];
@@ -2495,7 +2778,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         // ผู้สั่งซื้อ never gets a date -- the customer signs and dates on paper.
         assertThat(dates.split("วันที่........./........./.........", -1)).as("exactly one dotted date slot").hasSize(2);
         assertThat(dates.lastIndexOf("วันที่........./........./.........")).isGreaterThan(dates.lastIndexOf(thaiShort(approved.approvedAt())));
-        assertThat(rows[1]).contains("(สมหญิง ใจดี)").contains("(" + approved.approvedByName() + ")");
+        // F2-reversal regression guard: NO manual name was set on this fixture, so the ผู้สั่งซื้อ
+        // slot stays the dotted placeholder even though a contact ("สมหญิง ใจดี") is recorded.
+        assertThat(rows[1]).contains("(" + approved.approvedByName() + ")").doesNotContain("(สมหญิง ใจดี)");
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -2559,8 +2844,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         String[] rows = signatureRows(xls);
         assertThat(rows[1]).contains("(" + approved.approvedByName() + ")");
 
-        // A draft on the same deal (no approver yet) must NOT carry the image.
-        DealQuotationDto draft = quotationService.create(ticketId,
+        // A draft on the same deal (no approver yet) must NOT carry the image. Stacked beside the
+        // live approved row on purpose, so it bypasses N6 via the test-only fixture.
+        DealQuotationDto draft = createAlongsideLive(ticketId,
             upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
         assertThat(signaturePicture(quotationService.renderXlsx(draft.id(), salesActor))).isNull();
 
@@ -2595,9 +2881,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         quotationService.reject(rejected.id(), new RejectRequest("แก้ราคา"), salesManagerActor);
         DealQuotationDto approved = createSubmittedApproved(ticketId, salesActor, salesManagerActor);
         DealQuotationDto revision = quotationService.createRevision(approved.id(), salesActor);
-        DealQuotationDto plainDraft = quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        DealQuotationDto plainDraft = createAlongsideLive(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
         DealQuotationDto pending = quotationService.submit(
-            quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor).id(), salesActor);
+            createAlongsideLive(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor).id(), salesActor);
 
         DealQuotationDto othersRejected = quotationService.create(otherTicketId, upsertRequest(List.of(sampleItem("100.00", 10))), otherSalesActor);
         quotationService.submit(othersRejected.id(), otherSalesActor);
@@ -2629,10 +2915,10 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         quotationService.submit(rejected.id(), salesActor);
         quotationService.reject(rejected.id(), new RejectRequest("แก้ราคา"), salesManagerActor);
         createSubmittedApproved(ticketId, salesActor, salesManagerActor);
-        quotationService.submit(quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor).id(), salesActor);
-        quotationService.cancel(quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor).id(),
+        quotationService.submit(createAlongsideLive(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor).id(), salesActor);
+        quotationService.cancel(createAlongsideLive(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor).id(),
             new CancelRequest(null), salesActor);
-        quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor); // plain draft
+        createAlongsideLive(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor); // plain draft
         // Rep B's rows must not leak into rep A's counts.
         DealQuotationDto othersPending = quotationService.submit(
             quotationService.create(otherTicketId, upsertRequest(List.of(sampleItem("100.00", 10))), otherSalesActor).id(), otherSalesActor);
@@ -2695,10 +2981,15 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
     // ─────────────────────────────────────────────────────────────────────────────────────
     // H5 — read-side authz: get/listForTicket/search/renderPdf, wrong-way-round.
-    // Mutation-checked (see the class Javadoc's "H5 mutation check" note at the bottom of this
-    // file / the PR body) by deleting the owner scope in DealQuotationService#requireViewAccess
-    // AND the ownerFilter branch in #search, confirming these tests (and only these) go red, then
+    // Mutation-checked by deleting the owner scope in DealQuotationService#requireViewAccess AND
+    // the ownerFilter branch in #search, confirming these tests (and only these) go red, then
     // reverting.
+    //
+    // Owner ruling 2026-09-24 (LIST_SEE_ALL_ROLES) — mutation-checked separately, by editing
+    // #listOwnerScope to `return null;` (always "see all"): confirms ONLY the global-list scope
+    // tests below (search_seesOnlyOwnDeals, listSeeAll_*, importAndAccount_..._butGlobalListScoped
+    // ToOwn, grantHolder_search...) go red, then reverting by hand (never `git checkout`) and
+    // re-running with `clean`. See the PR body for the recorded run.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
@@ -2727,6 +3018,69 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(results).extracting(DealQuotationDto::id).doesNotContain(others.id());
     }
 
+    /** Owner ruling 2026-09-24 — positive case: sales_manager and ceo see BOTH reps' quotations
+     * on the global list, unlike sales above. */
+    @Test
+    void listSeeAllRoles_salesManagerAndCeo_seeBothRepsQuotationsOnTheGlobalList() {
+        DealQuotationDto own = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        DealQuotationDto others = quotationService.create(otherTicketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), otherSalesActor);
+
+        for (UserPrincipal seesAll : List.of(salesManagerActor, ceoActor)) {
+            List<DealQuotationDto> results = quotationService.search(null, false, seesAll);
+            assertThat(results).extracting(DealQuotationDto::id).contains(own.id(), others.id());
+        }
+    }
+
+    /** Owner ruling 2026-09-24, wrong-way-round: import created NOTHING (salesActor owns
+     * ticketId), so the global list is empty for import even though salesActor's quotation
+     * exists. Distinct from {@link #importAndAccount_readIndividualDeals_butGlobalListScopedToOwn}
+     * above, which proves the SAME row is still readable individually. */
+    @Test
+    void listSeeAllRoles_import_doesNotSeeAnotherRepsQuotationOnTheGlobalList() {
+        quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+
+        assertThat(quotationService.search(null, false, importActor)).isEmpty();
+    }
+
+    /** Same guard as above, for {@code account}. */
+    @Test
+    void listSeeAllRoles_account_doesNotSeeAnotherRepsQuotationOnTheGlobalList() {
+        quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+
+        assertThat(quotationService.search(null, false, accountActor)).isEmpty();
+    }
+
+    /** Owner ruling 2026-09-24 — the KEY new guard: a {@code canCreateQuotation} grant-holder
+     * (qc, ภิญญดา's own capability, V166) may still READ any deal's quotation individually via
+     * {@link DealQuotationService#get} (the grant still widens detail access, unchanged) — but on
+     * the GLOBAL LIST, the grant no longer widens scope: it sees only quotations on deals IT
+     * created, not {@code salesActor}'s. */
+    @Test
+    void grantHolder_search_seesOnlyOwnDeals_butCanStillGetAnotherRepsQuotationIndividually() {
+        grantQuotationCapability(qcUserId);
+        long projectId = projects.findByCustomer(customer.id()).get(0).id();
+        long grantHolderTicketId = createTicket("ดีล QC คิว", projectId, contact.id(), qcActor);
+        DealQuotationDto ownQuotation = quotationService.create(grantHolderTicketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), qcActor);
+        DealQuotationDto salesActorsQuotation = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("200.00", 5))), salesActor);
+
+        List<DealQuotationDto> results = quotationService.search(null, false, qcActor);
+        assertThat(results).extracting(DealQuotationDto::id).contains(ownQuotation.id());
+        assertThat(results).extracting(DealQuotationDto::id).doesNotContain(salesActorsQuotation.id());
+
+        // Detail access via requireViewAccess is UNCHANGED -- the grant still lets qcActor read
+        // salesActor's quotation individually, even though it is now absent from qcActor's list.
+        assertThat(quotationService.get(salesActorsQuotation.id(), qcActor).id())
+            .isEqualTo(salesActorsQuotation.id());
+
+        // counts().all() must always equal the size of the list that tab would show (F5) -- same
+        // scope decision, so this must equal 1 (ownQuotation only), never 2.
+        assertThat(quotationService.counts(qcActor).all()).isEqualTo(results.size());
+    }
+
     @Test
     void sales_cannotRenderPdfForAnotherRepsQuotation() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -2748,21 +3102,207 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertForbidden(() -> quotationService.search(null, false, qcActor));
     }
 
+    /** Owner ruling 2026-09-24: import/account may still read an INDIVIDUAL deal's quotation(s)
+     * via {@link DealQuotationService#get}/{@link DealQuotationService#listForTicket} — that is
+     * unchanged, per-deal viewing on the deal page. But the GLOBAL LIST ({@link
+     * DealQuotationService#search}) is now scoped to deals THEY created, and neither import nor
+     * account created this deal, so it is empty for them there. */
     @Test
-    void importAndAccount_canReadAnyDeal_readOnly() {
+    void importAndAccount_readIndividualDeals_butGlobalListScopedToOwn() {
         DealQuotationDto created = quotationService.create(ticketId,
             upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        // H1 lockdown: account now reads a deal's quotations only inside its list scope (live, S10+).
+        setSalesStage(ticketId, "PROCUREMENT");
+        // ...and only once the quotation went to the customer (2026-09-30 ruling): APPROVED here.
+        setDocStatus(created.id(), "APPROVED");
         for (UserPrincipal reader : List.of(importActor, accountActor)) {
             assertThat(quotationService.get(created.id(), reader).id()).isEqualTo(created.id());
             assertThat(quotationService.listForTicket(ticketId, reader))
                 .extracting(DealQuotationDto::id).contains(created.id());
+            // NEW guard (2026-09-24): the global list no longer includes a deal this reader did
+            // not create, even though get()/listForTicket() above still can.
             assertThat(quotationService.search(null, false, reader))
-                .extracting(DealQuotationDto::id).contains(created.id());
+                .extracting(DealQuotationDto::id).doesNotContain(created.id());
             // Still read-only: neither role may create/edit/approve.
             assertForbidden(() -> quotationService.update(created.id(),
                 upsertRequest(List.of(sampleItem("1.00", 1))), reader));
             assertForbidden(() -> quotationService.approve(created.id(), new ApproveRequest(null), reader));
         }
+    }
+
+    /** H1 lockdown: the SAME reads are refused to account on a deal outside its list scope (below S10),
+     * on every read path (get / list-for-ticket / PDF); import is unaffected. */
+    @Test
+    void account_isRefusedADealQuotationBelowS10_onEveryReadPath_importIsNot() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        setSalesStage(ticketId, "NEGOTIATION");
+
+        assertForbidden(() -> quotationService.get(created.id(), accountActor));
+        assertForbidden(() -> quotationService.listForTicket(ticketId, accountActor));
+        assertForbidden(() -> quotationService.renderPdf(created.id(), accountActor));
+        assertThat(quotationService.get(created.id(), importActor).id()).isEqualTo(created.id());
+    }
+
+    private static final java.util.Set<String> PRICE_INTERNAL_KEYS = java.util.Set.of(
+        "unitPrice", "discountPct", "specialPriceSqm", "adjustmentPct", "adjustmentAmount", "catalogPriceId",
+        "specialPriceLine", "calculationLine", "priceMode", "ceoPriceMode", "priceModeChangedFromCeo",
+        "priceChangedFromCeo", "itemsRemovedFromCeoCount", "removedCeoItems",
+        "ceoListUnitPrice", "ceoDiscountPct", "ceoSpecialPriceSqm", "ceoDirectNetPrice", "ceoNetUnitPrice");
+
+    private com.fasterxml.jackson.databind.JsonNode jsonOf(Object dto) {
+        return new com.fasterxml.jackson.databind.ObjectMapper()
+            .registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule()).valueToTree(dto);
+    }
+
+    private void assertPriceInternalsEmptied(com.fasterxml.jackson.databind.JsonNode node, String path) {
+        if (node.isObject()) {
+            node.fields().forEachRemaining(e -> {
+                var v = e.getValue();
+                if (PRICE_INTERNAL_KEYS.contains(e.getKey())) {
+                    boolean empty = v.isNull() || (v.isBoolean() && !v.asBoolean()) || (v.isNumber() && v.asInt() == 0)
+                        || (v.isArray() && v.isEmpty());
+                    assertThat(empty).as(path + "." + e.getKey() + " must be emptied but was " + v).isTrue();
+                }
+                assertPriceInternalsEmptied(v, path + "." + e.getKey());
+            });
+        } else if (node.isArray()) {
+            node.forEach(n -> assertPriceInternalsEmptied(n, path + "[]"));
+        }
+    }
+
+    private void assertNetFieldsKept(com.fasterxml.jackson.databind.JsonNode quotation) {
+        assertThat(quotation.get("number").asText()).isNotBlank();
+        assertThat(quotation.get("grandTotal").isNull()).isFalse();
+        assertThat(quotation.get("items")).isNotEmpty();
+        quotation.get("items").forEach(i -> {
+            assertThat(i.get("netUnitPrice").isNull()).isFalse();
+            assertThat(i.get("lineAmount").isNull()).isFalse();
+        });
+    }
+
+    /** Ruling 3 covers EVERY origin: a DEAL_DIRECT quotation read by an in-scope account is redacted too. */
+    @Test
+    void account_readingADealDirectQuotation_getsNetPricesButNoListPriceOrDiscount() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        setSalesStage(ticketId, "PROCUREMENT");
+        setDocStatus(created.id(), "APPROVED"); // account sees only quotations that went to the customer
+
+        var viaGet = jsonOf(quotationService.get(created.id(), accountActor));
+        var viaList = jsonOf(quotationService.listForTicket(ticketId, accountActor));
+
+        assertPriceInternalsEmptied(viaGet, "get");
+        assertPriceInternalsEmptied(viaList, "list");
+        assertNetFieldsKept(viaGet);
+        assertNetFieldsKept(viaList.get(0));
+        // regression: the owning rep still gets the list price
+        assertThat(jsonOf(quotationService.get(created.id(), salesActor)).get("items").get(0).get("unitPrice").isNull())
+            .isFalse();
+    }
+
+    /**
+     * 2026-09-30 owner ruling: for account, a deal quotation is visible only once it has gone to the customer --
+     * APPROVED (DEAL_DIRECT's post-approval status), ISSUED (PRICING_REQUEST's), SENT, ACCEPTED. Everything else
+     * (DRAFT, PENDING_APPROVAL, REJECTED, CANCELLED, ...) is 403 on get / PDF / XLS / picture and absent from
+     * listForTicket and search. Other roles are unchanged.
+     */
+    @Test
+    void account_seesADealQuotationOnlyOnceItWentToTheCustomer() {
+        setSalesStage(ticketId, "PROCUREMENT");
+        // Every create after the first stacks another live direct quotation on this one deal on
+        // purpose (one per status under test), so those go through the N6-bypassing test fixture.
+        DealQuotationDto draft = quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        DealQuotationDto submitted = quotationService.submit(
+            createAlongsideLive(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor).id(), salesActor);
+        DealQuotationDto rejected = createAlongsideLive(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        DealQuotationDto cancelled = createAlongsideLive(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        setDocStatus(rejected.id(), "REJECTED");
+        setDocStatus(cancelled.id(), "CANCELLED");
+        DealQuotationDto approved = quotationService.approve(
+            quotationService.submit(createAlongsideLive(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))),
+                salesActor).id(), salesActor).id(), new ApproveRequest(null), salesManagerActor);
+        DealQuotationDto accepted = createAlongsideLive(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        setDocStatus(accepted.id(), "ACCEPTED");
+        assertThat(approved.docStatus()).isEqualTo("APPROVED");
+        assertThat(submitted.docStatus()).isEqualTo("PENDING_APPROVAL");
+        // account sees only quotations on deals IT created in search(); flip ownership AFTER the rep's writes
+        jdbc.update("UPDATE sales.ticket SET created_by = :a WHERE ticket_id = :t",
+            new org.springframework.jdbc.core.namedparam.MapSqlParameterSource("a", accountUserId).addValue("t", ticketId));
+
+        for (DealQuotationDto hidden : List.of(draft, submitted, rejected, cancelled)) {
+            long itemId = hidden.items().get(0).id();
+            assertForbidden(() -> quotationService.get(hidden.id(), accountActor));
+            assertForbidden(() -> quotationService.renderPdf(hidden.id(), accountActor));
+            assertForbidden(() -> quotationService.renderXlsx(hidden.id(), accountActor));
+            assertForbidden(() -> quotationService.getItemPicture(hidden.id(), itemId, accountActor));
+        }
+        for (DealQuotationDto shown : List.of(approved, accepted)) {
+            assertThat(quotationService.get(shown.id(), accountActor).id()).isEqualTo(shown.id());
+            assertThat(quotationService.renderPdf(shown.id(), accountActor)).isNotEmpty();
+            assertThat(quotationService.renderXlsx(shown.id(), accountActor)).isNotEmpty();
+        }
+
+        List<Long> listed = quotationService.listForTicket(ticketId, accountActor).stream().map(DealQuotationDto::id).toList();
+        assertThat(listed).contains(approved.id(), accepted.id())
+            .doesNotContain(draft.id(), submitted.id(), rejected.id(), cancelled.id());
+        List<Long> searched = quotationService.search(null, false, accountActor).stream().map(DealQuotationDto::id).toList();
+        assertThat(searched).contains(approved.id(), accepted.id())
+            .doesNotContain(draft.id(), submitted.id(), rejected.id(), cancelled.id());
+
+        // regression: sales_manager and ceo (the rep no longer owns the flipped fixture) still see every status, drafts included
+        for (UserPrincipal reader : List.of(salesManagerActor, ceoActor)) {
+            assertThat(quotationService.get(draft.id(), reader).id()).isEqualTo(draft.id());
+            assertThat(quotationService.listForTicket(ticketId, reader).stream().map(DealQuotationDto::id).toList())
+                .contains(draft.id(), rejected.id(), cancelled.id());
+        }
+    }
+
+    private void setDocStatus(long quotationId, String status) {
+        jdbc.update("UPDATE sales.quotation SET doc_status = :s WHERE quotation_id = :q",
+            new org.springframework.jdbc.core.namedparam.MapSqlParameterSource("s", status).addValue("q", quotationId));
+    }
+
+    /** search() (the global list) is one more JSON read: account sees only deals it created, redacted. */
+    @Test
+    void search_forAccount_redactsTheRowsItReturns() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        setDocStatus(created.id(), "APPROVED"); // account sees only quotations that went to the customer
+        jdbc.update("UPDATE sales.ticket SET created_by = :a WHERE ticket_id = :t",
+            new org.springframework.jdbc.core.namedparam.MapSqlParameterSource("a", accountUserId).addValue("t", ticketId));
+
+        var rows = quotationService.search(null, false, accountActor);
+
+        assertThat(rows).extracting(DealQuotationDto::id).contains(created.id());
+        assertPriceInternalsEmptied(jsonOf(rows), "search");
+        assertNetFieldsKept(jsonOf(rows.stream().filter(r -> r.id() == created.id()).findFirst().orElseThrow()));
+    }
+
+    /** A2 fix: the finance view's item unit must come out of a quotation built through the REAL
+     * DEAL_DIRECT insert path, which writes {@code raw_unit} only (never unit_basis /
+     * requested_unit_basis) -- a hand-built fixture that fills those columns hid this. */
+    @Test
+    void financeItems_fromTheRealDealDirectInsertPath_carryTheHumanRawUnit() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+
+        String rawUnit = jdbc.queryForObject(
+            "SELECT raw_unit FROM sales.quotation_item WHERE quotation_id = :id ORDER BY seq LIMIT 1",
+            new org.springframework.jdbc.core.namedparam.MapSqlParameterSource("id", created.id()), String.class);
+        assertThat(rawUnit).as("the DEAL_DIRECT path stores the human unit in raw_unit").isNotBlank();
+
+        var items = new th.co.glr.hr.finance.FinanceDealRepository(jdbc).findQuotationItems(created.id());
+
+        assertThat(items).hasSize(1);
+        assertThat(items.get(0).unit()).isEqualTo(rawUnit);
+        assertThat(items.get(0).qty()).isNotNull();
+        assertThat(items.get(0).unitPrice()).isNotNull();
+    }
+
+    private void setSalesStage(long ticketId, String stage) {
+        jdbc.update("UPDATE sales.ticket SET sales_stage = :s WHERE ticket_id = :id",
+            new org.springframework.jdbc.core.namedparam.MapSqlParameterSource("s", stage).addValue("id", ticketId));
     }
 
     @Test
@@ -2801,7 +3341,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(approvedByManager.docStatus()).isEqualTo(QuotationStatus.APPROVED);
 
         DealQuotationDto submitted2 = quotationService.submit(
-            quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor).id(),
+            createAlongsideLive(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor).id(),
             salesActor);
         DealQuotationDto approvedByCeo = quotationService.approve(submitted2.id(), new ApproveRequest(null), ceoActor);
         assertThat(approvedByCeo.docStatus()).isEqualTo(QuotationStatus.APPROVED);
@@ -3098,7 +3638,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         return new UpsertDealQuotationRequest(base.contactId(), base.deptCode(), base.unitCode(),
             base.offerDate(), base.depositPercent(), base.remainderMode(), base.creditDays(),
             base.validityDays(), validityMode, validityUntil, base.customerNotes(), base.priceMode(),
-            base.documentLanguage(), base.currency(), base.items());
+            base.documentLanguage(), base.currency(), base.items()).withRecipientType("OWNER");
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -3116,7 +3656,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             base.validityDays(), base.validityMode(), base.validityUntil(), base.customerNotes(),
             base.priceMode(), base.documentLanguage(), base.currency(), base.printedByDisplayId(),
             base.salesRepDisplayId(), base.projectName(), base.omitContactHonorific(), fullPaymentTerm,
-            base.items());
+            base.items()).withRecipientType("OWNER");
     }
 
     /** Item 2 wither. */
@@ -3125,7 +3665,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             base.offerDate(), base.depositPercent(), base.remainderMode(), base.creditDays(),
             base.validityDays(), base.validityMode(), base.validityUntil(), base.customerNotes(),
             base.priceMode(), base.documentLanguage(), base.currency(), base.printedByDisplayId(),
-            base.salesRepDisplayId(), base.projectName(), omit, base.fullPaymentTerm(), base.items());
+            base.salesRepDisplayId(), base.projectName(), omit, base.fullPaymentTerm(), base.items()).withRecipientType("OWNER");
     }
 
     @Test
@@ -3414,8 +3954,15 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         return salesActor;
     }
 
+    /** Slice 2's N6 allows one live direct quotation per deal; the tests below that put several on one
+     * deal (legacy/revision shapes) create through {@link LegacyDirectQuotationFixtures}. */
+    private DealQuotationDto createAlongsideLive(long ticketIdParam, UpsertDealQuotationRequest request,
+                                                 UserPrincipal actor) {
+        return LegacyDirectQuotationFixtures.createAlongsideLive(jdbc, quotationService, ticketIdParam, request, actor);
+    }
+
     private DealQuotationDto createSubmittedApproved(long ticketIdParam, UserPrincipal creator, UserPrincipal approver) {
-        DealQuotationDto created = quotationService.create(ticketIdParam,
+        DealQuotationDto created = createAlongsideLive(ticketIdParam,
             upsertRequest(List.of(sampleItem("100.00", 10))), creator);
         DealQuotationDto submitted = quotationService.submit(created.id(), creator);
         return quotationService.approve(submitted.id(), new ApproveRequest(null), approver);
@@ -3434,7 +3981,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     /** {@code contactId} null = "default to the deal's contact" (the normal wire shape). */
     private UpsertDealQuotationRequest upsertRequest(Long contactId, List<ItemInput> items) {
         return new UpsertDealQuotationRequest(contactId, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
-            "หมายเหตุทดสอบ", items);
+            "หมายเหตุทดสอบ", items).withRecipientType("OWNER");
     }
 
     private ItemInput sampleItem(String unitPrice, int pieces) {
@@ -3675,6 +4222,26 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(model.remarkLines().get(2)).isEqualTo(
             "3.กรณีโรงงานผู้ผลิตมีสินค้าพร้อมจัดส่ง ระยะเวลานำเข้า รายการที่ 1 ประมาณ 75-90 วัน "
                 + "หลังจากได้รับมัดจำ 30% เรียบร้อยแล้ว");
+    }
+
+    /** Wording-scan fix 2 (2026-09-17): at 100% deposit the non-tile remark 3's own
+     * "หลังจากได้รับมัดจำ N% เรียบร้อยแล้ว" clause is replaced with "หลังจากได้รับชำระเงินเรียบร้อยแล้ว"
+     * -- naming a "deposit" percentage at 100% is naming money that was never separate from the
+     * full price. Exercised through the REAL create() -> render path, not a hand-built DTO. */
+    @Test
+    void plainRow_hundredPercentDeposit_nonTileRemark_statesFullPaymentReceived_notADeposit() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 100, "CREDIT", 45, 30,
+                "หมายเหตุทดสอบ", List.of(plainItemWithLeadTime("สุขภัณฑ์", "1", "ชุด", "5000.00", 75, 90))).withRecipientType("OWNER"),
+            salesActor);
+
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(created, null, null);
+        assertThat(model.remarkLines().get(1)).isEqualTo("2.บริษัทขอรับเงินค่าสินค้า 100% เมื่อสั่งซื้อสินค้า");
+        assertThat(model.remarkLines().get(2)).isEqualTo(
+            "3.กรณีโรงงานผู้ผลิตมีสินค้าพร้อมจัดส่ง ระยะเวลานำเข้า รายการที่ 1 ประมาณ 75-90 วัน "
+                + "หลังจากได้รับชำระเงินเรียบร้อยแล้ว");
+        // Wrong-way-round: no "มัดจำ 100%"/credit-days wording anywhere in the remark block.
+        assertThat(model.remarkLines()).noneMatch(l -> l.contains("มัดจำ 100%") || l.contains("เครดิต 45"));
     }
 
     /** D1 twin: a PLAIN row saved with NO lead time (today's ordinary case) still saves exactly as
@@ -4057,7 +4624,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         // The obvious client edit: same items, a changed note, NO priceMode field on the wire.
         DealQuotationDto saved = quotationService.update(created.id(),
             new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
-                "แก้หมายเหตุ", List.of(specialSqmItem("2000.00", 10, "1350"))),
+                "แก้หมายเหตุ", List.of(specialSqmItem("2000.00", 10, "1350"))).withRecipientType("OWNER"),
             salesActor);
 
         assertThat(saved.priceMode()).isEqualTo(WastageCalculator.PRICE_MODE_SPECIAL_SQM);
@@ -4088,7 +4655,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
         DealQuotationDto saved = quotationService.update(created.id(),
             new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
-                "แก้หมายเหตุ", List.of(directNetItem("2000.00", 10, "777.50"))),
+                "แก้หมายเหตุ", List.of(directNetItem("2000.00", 10, "777.50"))).withRecipientType("OWNER"),
             salesActor);
 
         assertThat(saved.priceMode()).isEqualTo(WastageCalculator.PRICE_MODE_DIRECT_NET);
@@ -4486,7 +5053,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(revisionOfFalse.items().get(0).piecesFinal()).isEqualTo(32);
         assertThat(revisionOfFalse.items().get(0).boxes()).isEqualTo(3);
 
-        DealQuotationDto createdTrue = quotationService.create(ticketId,
+        DealQuotationDto createdTrue = createAlongsideLive(ticketId,
             upsertRequest(List.of(loosePiecesItem(32, WastageCalculator.WASTAGE_MODE_NONE, null, 10,
                 "50.00", true))),
             salesActor);
@@ -4600,14 +5167,22 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private UpsertDealQuotationRequest upsertRequestWithMode(String priceMode, List<ItemInput> items) {
         return new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
-            "หมายเหตุทดสอบ", priceMode, items);
+            "หมายเหตุทดสอบ", priceMode, items).withRecipientType("OWNER");
     }
 
     /** The full canonical constructor, for the one field (projectName) none of this class's other
      * helpers thread through. Every other field left at its "use the default" value. */
     private UpsertDealQuotationRequest upsertRequestWithProjectName(String projectName, List<ItemInput> items) {
         return new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
-            null, null, "หมายเหตุทดสอบ", null, null, null, null, null, projectName, items);
+            null, null, "หมายเหตุทดสอบ", null, null, null, null, null, projectName, items).withRecipientType("OWNER");
+    }
+
+    /** Owner-directed reversal of F2 (2026-09-26) — the full canonical constructor, for the one
+     * field (orderedByName) none of this class's other helpers thread through. Every other field
+     * left at its "use the default" value. */
+    private UpsertDealQuotationRequest upsertRequestWithOrderedByName(String orderedByName, List<ItemInput> items) {
+        return new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
+            null, null, "หมายเหตุทดสอบ", null, null, null, null, null, null, null, null, orderedByName, items).withRecipientType("OWNER");
     }
 
     /** {@link #sampleItem} (60x60 -> 0.36 ตร.ม./แผ่น, piecesPerBox 1) plus a ราคาพิเศษ. */

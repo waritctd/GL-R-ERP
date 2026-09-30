@@ -155,17 +155,53 @@ class QuotationRendererNoPictureGoldenTest {
         // any of the five fixtures, is that one "col 8 w=" line). paginated is excluded from this
         // list: its case is skipped by the Assumptions.assumeTrue column-unit guard above on this
         // machine already, independently of this fix.
+        // Re-pinned 2026-09-27 (signature-block equal-length-lines + drift fix, owner feedback):
+        // #writeSignatureBlock now gives every slot's underscore line the SAME character count
+        // (was: pad each label to fill whatever pixel width its OWN slot had left, so the
+        // shortest label got the longest line) and centres the label+line unit, the name and the
+        // date within their slot instead of independently re-deriving each block's own nominal
+        // target — see the class comment above QuotationRenderer#SIG_LABELS and
+        // #appendAtTarget's own Javadoc for why the old per-row-independent centring drifted
+        // left slot by slot. The regenerated .txt dumps for the four signature-bearing fixtures
+        // differ from their prior version ONLY in the labels/names/dates row text (now carrying
+        // leading/interstitial spaces from the per-slot centring) and the signature picture's
+        // horizontal anchor (it still tracks runStart[SIG_APPROVER_INDEX]/runEnd[...], which
+        // moved because the line it anchors to moved) -- confirmed by `git diff` on the golden
+        // .txt files. legacy-shape has no signature block, so its hash is unchanged.
+        // Re-pinned AGAIN 2026-09-27 (same task, second pass): #SIGNATURE_SPACE_TO_UNDERSCORE_SCALE
+        // added after the first re-pin above -- a small empirically-measured correction for the
+        // SPACE glyph's own AWT-vs-LibreOffice rendering gap (see that constant's own Javadoc),
+        // which further reduces the residual name/date left-drift the first pass didn't fully
+        // remove. Confirmed by diffing the regenerated .txt goldens against their first-pass
+        // version: every changed line is the names/dates row text (one leading space more or
+        // fewer per slot) or the signature picture's horizontal anchor (still tracking the same
+        // runStart/runEnd, which shifted by the same small amount); legacy-shape (no signature
+        // block) is byte-identical to the very first pre-feature baseline.
+        // Re-pinned a THIRD time 2026-09-27 (same task, round 2 -- owner supplied the real
+        // production template as a reference and the equal-length-underscore change above was
+        // WRONG): #writeSignatureBlock's shared fixed-count underscore run is REVERTED back to
+        // #padLabelSlotPx's original per-slot leftover-fill (label first, underscores filling the
+        // REST of that slot's own width, cumulative, no leading pad) -- this is what reproduces
+        // the reference's contiguous, ragged-length-but-grid-ended lines. The centred-name/date
+        // anti-drift fix from the first two re-pins (targeting runStart[i]/runEnd[i] via
+        // #appendAtTarget, with the SIGNATURE_SPACE_TO_UNDERSCORE_SCALE correction) is KEPT
+        // unchanged -- it composes cleanly with either underscore-run scheme. Confirmed by
+        // diffing the regenerated .txt goldens: the labels row reverts to exactly its
+        // pre-signature-fix shape (ragged underscore counts, no leading/interstitial spaces); the
+        // names/dates rows and the picture anchor shift by a few pixels/characters (the
+        // runStart/runEnd values they target moved because the underscore run's own sizing rule
+        // changed) but stay centred. legacy-shape (no signature block) is unchanged.
         java.util.Map<String, String> preFeatureSha256 = java.util.Map.of(
-            "single-page", "a144c7d73b3ef35a672b50803eb2d66a83576a6a333bd7c52963ffa0fcd96761",
-            "one-page-scaled", "0b5d2600234181677dd118ba713badc989872fa267c46304bf94cb6d9dd678a1",
-            "paginated", "e85b9df1fdd2d9dccb5bd6a300bb6afb22f62e7ab862c1ea124a4ea9ca3d5317",
+            "single-page", "a98c381f1d6a66a357a1f5ce79e720848efc2eaa3f858f6bf311b83d80cbcd70",
+            "one-page-scaled", "72e222df3ec7ecd1e4c1223f8598ad3c030ff53627e864a0618595eedf9204f9",
+            "paginated", "d018b85ca70c36442c792cf66dc6f01e63257447a15d14ad04e96c47bfddd1cb",
             // Re-pinned on develop 80f2484e: #930 deliberately changed the English form's output.
             // Re-pinned again 2026-09-13 (owner ruling 2): QuotationRenderer#applyEnglishTotals now
             // strips every border from the emptied subtotal/VAT rows and hides them, so Grand Total
             // sits directly under the table box. The regenerated english.txt differs from its prior
             // version ONLY in those two rows (hidden, b=NONE) plus the style indices the new
             // borderless styles shift; the four Thai fixtures are byte-identical.
-            "english", "0bfe7ba2d9a493026b979e991768b392773d88511d8293a8a16f7e8667f06dff",
+            "english", "8220bcbcda9086265b048ddda833b7d696edc8ed80b38f349369c91fbcd1c43f",
             "legacy-shape", "a92e576f622abb6fd0c2a49051e5513ae162adadbfb4b21636f56b7484de28fe");
         byte[] xls = renderer.toXls(model(fixture));
         String expectedUnit = Files.readString(Path.of("src/test/resources/quotation-golden", fixture + ".txt"),

@@ -24,8 +24,12 @@ import {
   ticketStatusLabel,
 } from '../../utils/format.js';
 import { StageProgressBar } from './DealStageStepper.jsx';
+import { dealHref } from '../finance/dealHref.js';
 import { dealInScope } from './salesViewScope.js';
-import { EMPTY_STAGE_CATALOG, findStage, stageIndexIn, useStageCatalog } from './stageCatalog.js';
+import {
+  EMPTY_STAGE_CATALOG, findStage, routePositionForChannel, stageIndexIn, useStageCatalog,
+} from './stageCatalog.js';
+import { routeName } from './stageMeta.js';
 import { TicketCreateModal } from './TicketCreateModal.jsx';
 
 // Same selector Modal.jsx traps on — kept identical so the two overlay
@@ -325,7 +329,6 @@ const PAUSED_OR_TERMINAL_LIFECYCLES = new Set(['CANCELLED', 'COMPLETED', 'ON_HOL
 function progressReadout(deal, catalog) {
   if (deal.lifecycle === 'CLOSED_LOST') return 'ไม่คืบหน้า (เสียงาน)';
   const idx = stageIndexIn(catalog, deal.salesStage);
-  const total = catalog.stages.length;
   // FIX F: the lifecycle prefix must be decided BEFORE the "no resolvable
   // stage" early return, not after it. A CANCELLED/COMPLETED/ON_HOLD/DORMANT
   // deal with a null/unrecognized `salesStage` (idx < 0) has no fraction to
@@ -338,7 +341,13 @@ function progressReadout(deal, catalog) {
   if (idx < 0) {
     return lifecyclePrefixed ? dealLifecycleLabel(deal.lifecycle).label : 'ยังไม่ระบุขั้นตอน';
   }
-  const fraction = `ขั้นตอน ${idx + 1}/${total}`;
+  // Position and total are on THIS deal's route, so a buyer-direct deal at S8 reads 4/11 — the same
+  // as its own deal page — not the catalog-wide 8/15. The route comes from the served
+  // `catalog.routes` keyed by the row's `entryChannel`; a row has no per-deal decisions payload
+  // and fetching one per row would be an N+1. No served route (UNSPECIFIED, unknown, absent) is
+  // all fifteen, i.e. what this always read.
+  const { position, total } = routePositionForChannel(catalog, deal.salesStage, deal.entryChannel);
+  const fraction = `ขั้นตอน ${position}/${total}`;
   return lifecyclePrefixed ? `${dealLifecycleLabel(deal.lifecycle).label} · ${fraction}` : fraction;
 }
 
@@ -354,7 +363,7 @@ function ProgressCell({ deal, catalog }) {
   const lost = deal.lifecycle === 'CLOSED_LOST';
   return (
     <span className="flex min-w-0 flex-col gap-1">
-      <StageProgressBar catalog={catalog} salesStage={deal.salesStage} lost={lost} />
+      <StageProgressBar catalog={catalog} salesStage={deal.salesStage} lost={lost} entryChannel={deal.entryChannel} />
       <span className="text-2xs font-bold tabular-nums text-text-muted">
         {progressReadout(deal, catalog)}
       </span>
@@ -370,7 +379,9 @@ function DealStageCell({ deal, catalog }) {
     const lost = dealLostReasonLabel(deal.lostReason);
     return <StatusBadge tone="danger">เสียงาน · {lost.label}</StatusBadge>;
   }
-  const stage = dealStageLabel(deal.salesStage);
+  const stage = dealStageLabel(deal.salesStage, deal.entryChannel);
+  // null (render nothing) for UNSPECIFIED / unknown / absent: a route is never invented.
+  const route = routeName(deal.entryChannel);
   const meta = findStage(catalog, deal.salesStage);
   const operational = ticketStatusLabel(deal.status);
   // FIX F6 (review-remediation): used to badge only ON_HOLD/DORMANT, so a
@@ -400,6 +411,7 @@ function DealStageCell({ deal, catalog }) {
         </StatusBadge>
         {showLifecycleBadge ? <StatusBadge tone={lifecycle.tone}>{lifecycle.label}</StatusBadge> : null}
       </span>
+      {route ? <span data-testid="deal-route-marker" className="pl-0.5 text-2xs text-text-muted">{route}</span> : null}
       {showOperational ? (
         <span className="pl-0.5 text-2xs text-text-muted">{operational.label}</span>
       ) : null}
@@ -438,7 +450,8 @@ function DealOpenButton({ deal, onOpen }) {
 }
 
 function DealCard({ deal, catalog, reason = null, showTracking = false, onOpen }) {
-  const stage = dealStageLabel(deal.salesStage);
+  const stage = dealStageLabel(deal.salesStage, deal.entryChannel);
+  const route = routeName(deal.entryChannel);
   const stageMetaInfo = findStage(catalog, deal.salesStage);
   const freshnessText = overdueBadgeLabel(deal.stageUpdatedAt)?.label || formatThaiDate(deal.stageUpdatedAt ?? deal.updatedAt);
   return (
@@ -458,9 +471,15 @@ function DealCard({ deal, catalog, reason = null, showTracking = false, onOpen }
       <div className="ticket-card-work">
         <span>ขั้นตอน / เหตุผลงาน</span>
         <strong>{stageMetaInfo ? `${stageMetaInfo.no}. ` : ''}{stage.label}</strong>
+        {route ? <span data-testid="deal-route-marker">{route}</span> : null}
         {reason ? <small>{reason}</small> : null}
       </div>
-      <StageProgressBar catalog={catalog} salesStage={deal.salesStage} lost={deal.lifecycle === 'CLOSED_LOST'} />
+      <StageProgressBar
+        catalog={catalog}
+        salesStage={deal.salesStage}
+        lost={deal.lifecycle === 'CLOSED_LOST'}
+        entryChannel={deal.entryChannel}
+      />
       {showTracking ? <TrackingBadges deal={deal} /> : null}
 
       <span className="ticket-card-owner">
@@ -528,7 +547,7 @@ function buildDealColumns({ role, isManagerView, catalog }) {
       render: (deal) => (
         <span className="flex min-w-0 flex-col gap-0.5">
           <Link
-            to={`/tickets/${deal.id}`}
+            to={dealHref(role, deal.id)}
             className="block truncate font-bold text-link underline decoration-1 underline-offset-2 hover:decoration-2"
           >
             {deal.customerName || deal.title}
@@ -635,8 +654,8 @@ export function TicketListPage({ user, showToast }) {
   const loading = ticketsQuery.isLoading;
   const refreshing = ticketsQuery.isFetching && !ticketsQuery.isLoading;
   const openDeal = useCallback((deal) => {
-    navigate(`/tickets/${deal.id}`);
-  }, [navigate]);
+    navigate(dealHref(user.role, deal.id));
+  }, [navigate, user.role]);
 
   useEffect(() => {
     if (ticketsQuery.error) showToast('error', ticketsQuery.error.message || 'โหลดข้อมูลไม่สำเร็จ');

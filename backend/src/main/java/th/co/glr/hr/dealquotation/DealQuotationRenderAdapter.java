@@ -64,6 +64,26 @@ public final class DealQuotationRenderAdapter {
                                                       String approverSignatureMime,
                                                       List<String> bankBlockLines,
                                                       java.util.Map<Long, DealQuotationRepository.PictureImage> itemPictures) {
+        return toRenderModel(quotation, approverSignaturePng, approverSignatureMime, bankBlockLines, itemPictures,
+            null, null, null, null);
+    }
+
+    /**
+     * Task 4 (slot signatures, 2026-09-26): the full overload, additionally threading the
+     * ผู้พิมพ์ (slot 0) and พนักงานขาย (slot 1) signature image bytes — resolved LIVE by the
+     * caller ({@code DealQuotationService#toRenderModel}) the same way {@code approverSignaturePng}
+     * always has been, just never frozen into an approval snapshot the way the approver's is.
+     * Either pair may be null independently (that person has no signature on file, or the caller
+     * chose not to resolve one) — the corresponding slot then prints text-only, exactly as every
+     * slot always has. Kept as a SEPARATE overload (rather than adding params to the one above) so
+     * every existing caller of the five-argument overload keeps compiling unchanged.
+     */
+    public static QuotationRenderModel toRenderModel(DealQuotationDto quotation, byte[] approverSignaturePng,
+                                                      String approverSignatureMime,
+                                                      List<String> bankBlockLines,
+                                                      java.util.Map<Long, DealQuotationRepository.PictureImage> itemPictures,
+                                                      byte[] printedBySignaturePng, String printedBySignatureMime,
+                                                      byte[] salesRepSignaturePng, String salesRepSignatureMime) {
         // B4 (header วันที่) = the date the SALES REP CREATED the quotation, for every status —
         // owner feedback F8, 2026-09-10: "for วันที่ at the top of the page it should be the date
         // it was created by the sale". It used to print the APPROVED date once approved (and
@@ -200,7 +220,9 @@ public final class DealQuotationRenderAdapter {
             displayName(quotation.approvedByName(), quotation.approvedByNameEn(), english),
             orderedByName(quotation),
             approverSignaturePng, approverSignatureMime,
-            bangkokDate(quotation.createdAt()), bangkokDate(quotation.submittedAt()), bangkokDate(quotation.approvedAt()));
+            bangkokDate(quotation.createdAt()), bangkokDate(quotation.submittedAt()), bangkokDate(quotation.approvedAt()),
+            printedBySignaturePng, printedBySignatureMime,
+            salesRepSignaturePng, salesRepSignatureMime);
 
         // V182 (owner request, 2026-09-16): a document with NO tile line at all (sanitaryware sold
         // on ชุด/PLAIN lines) prints a different, shorter หมายเหตุ block — the tile-oriented remarks
@@ -476,6 +498,15 @@ public final class DealQuotationRenderAdapter {
      */
     private static String depositLine(int depositPct, String fullPaymentTerm, String remainderMode,
                                        Integer creditDays, String remainderText) {
+        // Wording-scan fix 2 (2026-09-17): a 100% deposit is full payment, not "a deposit, with a
+        // remainder" -- remainderMode/creditDays describe money that, at 100%, does not exist, and
+        // printing them anyway ("...ส่วนที่เหลือขอรับก่อนส่งมอบสินค้าหรือเมื่อส่งมอบสินค้า" on top of
+        // a 100% figure) is what 6 real quotations printed before this fix. This is a DIFFERENT
+        // sentence from Item 4's fullPaymentTerm-selected text below (which only ever applies at
+        // 0%): 100% is charged UP FRONT, 0% (Item 4) is charged with none up front at all.
+        if (depositPct == 100) {
+            return "2.บริษัทขอรับเงินค่าสินค้า 100% เมื่อสั่งซื้อสินค้า";
+        }
         if (depositPct != 0) {
             return "2.บริษัทฯ ขอรับมัดจำ " + depositPct + "% เมื่อสั่งซื้อสินค้า ส่วนที่เหลือ" + remainderText;
         }
@@ -547,8 +578,17 @@ public final class DealQuotationRenderAdapter {
             return NON_TILE_LINE3_FALLBACK;
         }
         String groups = String.join("  ", leadTimeGroups(items, false));
-        String depositClause = depositPct == 0 ? ""
-            : " หลังจากได้รับมัดจำ " + depositPct + "% เรียบร้อยแล้ว";
+        // Wording-scan fix 2 (2026-09-17): at 100% deposit there is no "deposit" left to name a
+        // percentage of -- the whole price was already collected -- so this states that plainly
+        // ("after full payment is received") instead of the misleading "...มัดจำ 100%...".
+        String depositClause;
+        if (depositPct == 0) {
+            depositClause = "";
+        } else if (depositPct == 100) {
+            depositClause = " หลังจากได้รับชำระเงินเรียบร้อยแล้ว";
+        } else {
+            depositClause = " หลังจากได้รับมัดจำ " + depositPct + "% เรียบร้อยแล้ว";
+        }
         return "3.กรณีโรงงานผู้ผลิตมีสินค้าพร้อมจัดส่ง ระยะเวลานำเข้า " + groups + depositClause;
     }
 
@@ -747,7 +787,12 @@ public final class DealQuotationRenderAdapter {
         String days = min.equals(max) ? String.valueOf(min) : min + "-" + max;
         if (english) {
             String range = first.equals(last) ? "item " + first : "items " + first + "-" + last;
-            groups.add(range + " approximately " + days + " days");
+            // Wording-scan fix 7 (2026-09-17): a single-value exact lead time (min == max) is
+            // pluralized by that value -- "approximately 1 day", not "approximately 1 days". A
+            // RANGE ("75-90") is always plural regardless of its endpoints, so only the single-value
+            // branch routes through the shared helper.
+            String dayWord = min.equals(max) ? DealQuotationLines.plural(min, "day", "days") : "days";
+            groups.add(range + " approximately " + days + " " + dayWord);
         } else {
             String range = first.equals(last) ? String.valueOf(first) : first + "-" + last;
             groups.add("รายการที่ " + range + " ประมาณ " + days + " วัน");
@@ -789,6 +834,11 @@ public final class DealQuotationRenderAdapter {
      * ternaries" reason {@link #englishLeadTimeLine} gives for its own Thai twin. */
     private static String englishDepositLine(int depositPct, String fullPaymentTerm, String remainderMode,
                                               Integer creditDays, String remainderText) {
+        // Wording-scan fix 2 (2026-09-17) — English twin of the Thai branch above; see its own
+        // comment for why 100% and Item 4's 0% fullPaymentTerm sentences are different cases.
+        if (depositPct == 100) {
+            return "2.Full payment (100%) is required upon order confirmation.";
+        }
         if (depositPct != 0) {
             return "2.A deposit of " + depositPct + "% is required upon order confirmation, " + remainderText + ".";
         }
@@ -797,9 +847,13 @@ public final class DealQuotationRenderAdapter {
         if (termText != null) {
             return "2." + termText;
         }
-        return "CREDIT".equals(remainderMode)
-            ? "2.Full payment is due on " + (creditDays != null ? creditDays : 0) + " days credit."
-            : "2.Full payment is due before or upon delivery.";
+        if ("CREDIT".equals(remainderMode)) {
+            // Wording-scan fix 7 (2026-09-17): singular "day credit" at exactly 1 day.
+            int days = creditDays != null ? creditDays : 0;
+            return "2.Full payment is due on " + days + " " + DealQuotationLines.plural(days, "day", "days")
+                + " credit.";
+        }
+        return "2.Full payment is due before or upon delivery.";
     }
 
     /** The English twin of {@link #fullPaymentTermThaiText} — same three codes, same
@@ -820,10 +874,17 @@ public final class DealQuotationRenderAdapter {
     private static List<String> englishRemarkLines(DealQuotationDto quotation, List<String> bankBlockLines) {
         LocalDate offerDate = quotation.offerDate() != null ? quotation.offerDate() : LocalDate.now(BANGKOK);
         int depositPct = quotation.depositPercent() != null ? quotation.depositPercent() : 30;
-        String remainderText = "CREDIT".equals(quotation.remainderMode())
-            ? "the balance on " + (quotation.creditDays() != null ? quotation.creditDays() : 0) + " days credit"
-            : "the balance before or upon delivery";
+        // Wording-scan fix 7 (2026-09-17): singular "day credit" at exactly 1 day.
+        String remainderText;
+        if ("CREDIT".equals(quotation.remainderMode())) {
+            int creditDays = quotation.creditDays() != null ? quotation.creditDays() : 0;
+            remainderText = "the balance on " + creditDays + " " + DealQuotationLines.plural(creditDays, "day", "days")
+                + " credit";
+        } else {
+            remainderText = "the balance before or upon delivery";
+        }
         int validityDays = quotation.validityDays() != null ? quotation.validityDays() : 30;
+        String validityDayWord = DealQuotationLines.plural(validityDays, "day", "days");
         // V178, English twin of the Thai line7 branch above — same guard, same byte-identical
         // DAYS-mode output.
         boolean validityIsDate = WastageCalculator.VALIDITY_MODE_DATE.equals(quotation.validityMode())
@@ -864,7 +925,7 @@ public final class DealQuotationRenderAdapter {
             lines.add(validityIsDate
                 ? "4.Special price for orders with deposit paid by " + validityUntilEn
                     + "; sizes may vary slightly within ISO and TIS tolerances."
-                : "4.Price validity : " + validityDays + " days from the date of this quotation; "
+                : "4.Price validity : " + validityDays + " " + validityDayWord + " from the date of this quotation; "
                     + "sizes may vary slightly within ISO and TIS tolerances.");
             lines.add("5.Colours may vary slightly between production lots. "
                 + "Goods sold are not returnable or exchangeable.");
@@ -874,7 +935,7 @@ public final class DealQuotationRenderAdapter {
             lines.add(BANK_BLOCK_PLACEHOLDER_LINE);
             lines.add(validityIsDate
                 ? "5.Special price for orders with deposit paid by " + validityUntilEn + "."
-                : "5.Price validity : " + validityDays + " days from the date of this quotation.");
+                : "5.Price validity : " + validityDays + " " + validityDayWord + " from the date of this quotation.");
             lines.add("6.Actual tile sizes may vary slightly from the sizes stated above, within ISO "
                 + "and TIS tolerances.");
             lines.add("7.Colours and patterns may vary slightly from the samples, as goods come from "
@@ -926,18 +987,29 @@ public final class DealQuotationRenderAdapter {
             return EN_NON_TILE_LINE3_FALLBACK;
         }
         String groups = String.join("  ", leadTimeGroups(items, true));
-        return depositPct == 0
-            ? "3.If the factory has the goods ready to ship, the import lead time is " + groups + "."
-            : "3.If the factory has the goods ready to ship, the import lead time is " + groups
-                + ", after the " + depositPct + "% deposit is received.";
+        String prefix = "3.If the factory has the goods ready to ship, the import lead time is " + groups;
+        // Wording-scan fix 2 (2026-09-17) — English twin of the Thai branch above.
+        if (depositPct == 0) {
+            return prefix + ".";
+        }
+        if (depositPct == 100) {
+            return prefix + ", after full payment is received.";
+        }
+        return prefix + ", after the " + depositPct + "% deposit is received.";
     }
 
     /** The English twin of {@link #nonTileRemarkLines}. */
     private static List<String> englishNonTileRemarkLines(DealQuotationDto quotation, List<String> bankBlockLines) {
         int depositPct = quotation.depositPercent() != null ? quotation.depositPercent() : 30;
-        String remainderText = "CREDIT".equals(quotation.remainderMode())
-            ? "the balance on " + (quotation.creditDays() != null ? quotation.creditDays() : 0) + " days credit"
-            : "the balance before or upon delivery";
+        // Wording-scan fix 7 (2026-09-17): singular "day credit" at exactly 1 day.
+        String remainderText;
+        if ("CREDIT".equals(quotation.remainderMode())) {
+            int creditDays = quotation.creditDays() != null ? quotation.creditDays() : 0;
+            remainderText = "the balance on " + creditDays + " " + DealQuotationLines.plural(creditDays, "day", "days")
+                + " credit";
+        } else {
+            remainderText = "the balance before or upon delivery";
+        }
         boolean hasBankBlock = bankBlockLines != null && bankBlockLines.size() == 3
             && bankBlockLines.stream().noneMatch(DealQuotationRenderAdapter::blank);
 
@@ -1022,20 +1094,26 @@ public final class DealQuotationRenderAdapter {
         return thai;
     }
 
-    // ── Fix (2026-09-15, production complaint): ผู้สั่งซื้อ signature-name fallback ────────────
+    // ── Owner-directed reversal of F2 (2026-09-26) ────────────────────────────────────────────
+    // F2 (2026-09-10, "use that name to auto fill in the name for signature") auto-filled the
+    // ผู้สั่งซื้อ signature slot from the deal's contact snapshot, and a 2026-09-15 production fix
+    // widened that to fall back to the CUSTOMER name when a deal recorded no separate contact.
+    // The owner has now REVERSED both of those: this slot must NEVER auto-fill from
+    // contactName/customerName any more. It always prints the dotted
+    // {@code QuotationRenderer#BLANK_NAME_PLACEHOLDER} by default — the customer signs on paper —
+    // unless a sales rep has typed a manual name into {@code DealQuotationDto#orderedByName}
+    // ({@code sales.quotation.ordered_by_name}, V192), in which case THAT exact text prints here
+    // instead. Deliberately does NOT touch #printContactPart/the "เรียน ..." greeting line above,
+    // which still reads contactName/customerName exactly as before — this reversal is scoped to
+    // the SIGNATURE slot only.
 
-    /** The ผู้สั่งซื้อ (F2) signature-slot name: the deal's contact snapshot when there is one,
-     * else the CUSTOMER name -- production printed the dotted {@code
-     * QuotationRenderer#BLANK_NAME_PLACEHOLDER} on the signature line whenever a deal recorded no
-     * separate contact, even though the customer being quoted to is right there on the same
-     * document. {@code QuotationRenderer} only ever falls back to the placeholder when THIS
-     * returns null, i.e. when both fields are blank. Shared by both TH/EN documents -- {@code
-     * Signatories} is built once above for either language. */
+    /** The ผู้สั่งซื้อ signature-slot name: the rep's manually-typed {@link
+     * DealQuotationDto#orderedByName}, or null (the dotted placeholder) when they left it blank.
+     * {@code QuotationRenderer} only ever falls back to the placeholder when THIS returns null.
+     * Shared by both TH/EN documents -- {@code Signatories} is built once above for either
+     * language. */
     static String orderedByName(DealQuotationDto quotation) {
-        if (!blank(quotation.contactName())) {
-            return quotation.contactName().trim();
-        }
-        return blank(quotation.customerName()) ? null : quotation.customerName().trim();
+        return blank(quotation.orderedByName()) ? null : quotation.orderedByName().trim();
     }
 
     // ── V179 (owner feedback #4, 2026-09-14): ผู้พิมพ์/พนักงานขาย print-name override ──────────

@@ -15,13 +15,6 @@ import { fieldErrorId } from '../../components/common/FormField.jsx';
 import { depositNoticeStatusLabel, formatThaiDate } from '../../utils/format.js';
 import { downloadBlob } from '../../utils/download.js';
 
-const DEPOSIT_OPTIONS = [
-  { value: 0.3,  label: '30%' },
-  { value: 0.5,  label: '50%' },
-  { value: 0.7,  label: '70%' },
-  { value: 1.0,  label: '100%' },
-];
-
 function money(v) {
   if (v == null) return '—';
   return Number(v).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -281,14 +274,15 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
       } catch {
         acceptedPricingRequestId = null;
       }
+      // depositPercent is deliberately NOT sent on either branch below (owner ruling,
+      // 2026-09-29): the backend always ignores a caller-supplied value now and re-sources it
+      // from the ticket's own quotation (see DepositNoticeService.createDraft), falling back to
+      // 0.50 only when there is no quotation to read it from at all.
       if (acceptedPricingRequestId != null) {
-        return api.pricingRequests.createDepositNoticeFromQuotation(acceptedPricingRequestId, {
-          depositPercent: 0.5,
-        });
+        return api.pricingRequests.createDepositNoticeFromQuotation(acceptedPricingRequestId, {});
       }
       return api.depositNotices.createDraft(ticketId, {
         notes: defaultNotes,
-        depositPercent: 0.5,
       });
     },
     onSuccess: () => invalidateDepositNotices(),
@@ -828,24 +822,20 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
               aria-describedby={fieldErrors.total ? fieldErrorId('doc-summary-panel') : undefined}
               className="px-4.5 py-3.5"
             >
-              {!isIssued && (
-                <label className="mb-3 block text-xs">
-                  % มัดจำ
-                  <div className="mt-1 flex gap-1.5">
-                    {DEPOSIT_OPTIONS.map((opt) => (
-                      <button key={opt.value} type="button"
-                        onClick={() => setField('depositPercent', opt.value)}
-                        className={`cursor-pointer rounded-[6px] border px-3 py-1 text-sm ${
-                          form.depositPercent == opt.value
-                            ? 'border-info-dot bg-info-dot text-surface'
-                            : 'border-border-muted bg-surface-subtle text-text-secondary'
-                        }`}>
-                        {opt.label}
-                      </button>
-                    ))}
-                  </div>
-                </label>
-              )}
+              {/*
+                Owner ruling (2026-09-29): the deposit % is LOCKED to the source quotation's own
+                deposit_percent (sales.quotation) and is never editable at the deposit-notice
+                stage — createDraft/update on the backend both ignore any client-supplied value
+                and always re-source it from the quotation. The 30/50/70/100% preset buttons this
+                used to be are gone; this is now a plain read-only label, shown regardless of
+                isIssued since there is no draft-only editable state left to distinguish.
+              */}
+              <div className="mb-3 text-xs">
+                <span className="block text-icon-muted">% มัดจำ</span>
+                <span className="mt-1 inline-block rounded-[6px] border border-border-muted bg-surface-subtle px-3 py-1 text-sm text-text-secondary">
+                  {Math.round(Number(form.depositPercent) * 100)}%
+                </span>
+              </div>
               {[
                 { label: 'รวมเป็นเงิน', value: subtotal },
                 { label: `ขอรับเงินมัดจำ (${Math.round(Number(form.depositPercent) * 100)}%)`, value: deposit },

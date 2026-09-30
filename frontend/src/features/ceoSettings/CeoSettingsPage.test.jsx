@@ -12,6 +12,7 @@ vi.mock('../../api/index.js', () => ({
     fxRates: {
       list: vi.fn(),
       upsert: vi.fn(),
+      fetchNow: vi.fn(),
     },
     priceCalcConfigs: {
       list: vi.fn(),
@@ -79,6 +80,14 @@ function sampleFormulaConfigWithBlankCell() {
       // China [7,12) x [100, null) is DELIBERATELY missing -- the blank cell under test.
     ],
   };
+}
+
+// Mirrors HolidaysTab.test.jsx's identical helper -- both features' BOT fetchers throw the same
+// { message, status } shape (apiRequest's real error object) for a non-2xx response.
+function apiError(message, status) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
 }
 
 function renderCeoSettingsPage(showToast = vi.fn()) {
@@ -223,6 +232,85 @@ describe('CeoSettingsPage', () => {
 
       await screen.findByText('USD');
       expect(screen.queryByTestId('fx-rate-stale-USD')).toBeNull();
+    });
+  });
+
+  // Review fix (2026-09-28): S2 -- fetchNow had zero test coverage. Modelled on
+  // HolidaysTab.test.jsx's identical BOT-fetch coverage (success/zero-row/cooldown).
+  describe('BOT FX fetch-now button (review fix)', () => {
+    it('calls api.fxRates.fetchNow exactly once when clicked', async () => {
+      api.fxRates.fetchNow.mockResolvedValue({ result: { updated: 2, total: 5, asOf: '2026-09-28', updatedCurrencies: ['USD', 'EUR'] } });
+      renderCeoSettingsPage();
+
+      await screen.findByText('USD');
+      fireEvent.click(screen.getByTestId('fx-fetch-now'));
+
+      await waitFor(() => expect(api.fxRates.fetchNow).toHaveBeenCalledTimes(1));
+    });
+
+    it('shows a pending label and disables the button while the fetch is in flight', async () => {
+      let resolveFetch;
+      api.fxRates.fetchNow.mockReturnValue(new Promise((resolve) => { resolveFetch = resolve; }));
+      renderCeoSettingsPage();
+
+      await screen.findByText('USD');
+      fireEvent.click(screen.getByTestId('fx-fetch-now'));
+
+      // isPending only flips a render AFTER the mutate() call has started (react-query's own
+      // async dispatch, not synchronous with fireEvent.click) -- waitFor rather than asserting
+      // immediately, mirroring this repo's own documented gotcha (see SpecialMoneyPanel.test.jsx).
+      await waitFor(() => expect(screen.getByTestId('fx-fetch-now')).toHaveProperty('disabled', true));
+      expect(screen.getByTestId('fx-fetch-now').textContent).toContain('กำลังดึงเรต');
+
+      resolveFetch({ result: { updated: 1, total: 5, asOf: '2026-09-28', updatedCurrencies: ['USD'] } });
+      await waitFor(() => expect(screen.getByTestId('fx-fetch-now')).toHaveProperty('disabled', false));
+    });
+
+    it('reports a genuine update as a success toast naming updated/total', async () => {
+      api.fxRates.fetchNow.mockResolvedValue({ result: { updated: 3, total: 5, asOf: '2026-09-28', updatedCurrencies: ['USD', 'EUR', 'JPY'] } });
+      const showToast = vi.fn();
+      renderCeoSettingsPage(showToast);
+
+      await screen.findByText('USD');
+      fireEvent.click(screen.getByTestId('fx-fetch-now'));
+
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', expect.stringContaining('3/5')));
+      await waitFor(() => expect(api.fxRates.list).toHaveBeenCalledTimes(2)); // invalidated + refetched
+    });
+
+    // The exact production failure mode this review fix names: HTTP 200, updated: 0 (BOT hasn't
+    // published DAILY_AVG_EXG_RATE yet, or the token is bad) -- must never render as success.
+    // Mutation-check for S1: reverting the `r.updated === 0` branch back to an unconditional
+    // success toast turns THIS test red (and no other test in this file) -- see the PR body.
+    it('reports a zero-currency fetch honestly -- no success toast, an info toast instead', async () => {
+      api.fxRates.fetchNow.mockResolvedValue({ result: { updated: 0, total: 5, asOf: '2026-09-28', updatedCurrencies: [] } });
+      const showToast = vi.fn();
+      renderCeoSettingsPage(showToast);
+
+      await screen.findByText('USD');
+      fireEvent.click(screen.getByTestId('fx-fetch-now'));
+
+      await waitFor(() => expect(api.fxRates.fetchNow).toHaveBeenCalledTimes(1));
+      expect(showToast).not.toHaveBeenCalledWith('success', expect.anything());
+      expect(showToast).toHaveBeenCalledWith('info', expect.stringContaining('ยังไม่มีอัตราใหม่'));
+    });
+
+    // 429: BotFxFetchService.MANUAL_FETCH_COOLDOWN -- a timed, non-error state, not a failure.
+    it('renders a 429 as a cooldown message, not an error toast, and disables the fetch button', async () => {
+      api.fxRates.fetchNow.mockRejectedValue(apiError(
+        'รอสักครู่ก่อนเรียกดึงอัตราแลกเปลี่ยนจากธนาคารแห่งประเทศไทยอีกครั้ง (ประมาณ 5 วินาที)',
+        429,
+      ));
+      const showToast = vi.fn();
+      renderCeoSettingsPage(showToast);
+
+      await screen.findByText('USD');
+      fireEvent.click(screen.getByTestId('fx-fetch-now'));
+
+      await waitFor(() => expect(api.fxRates.fetchNow).toHaveBeenCalledTimes(1));
+      expect(showToast).not.toHaveBeenCalledWith('error', expect.anything());
+      expect(await screen.findByText(/เหลืออีกประมาณ 5 วินาที/)).not.toBeNull();
+      expect(screen.getByTestId('fx-fetch-now')).toHaveProperty('disabled', true);
     });
   });
 

@@ -1222,15 +1222,22 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         List<FactoryQuoteDto> beforeDrafts = factoryQuoteService.generateDrafts(pricingRequestId, importActor);
         assertThat(beforeDrafts).extracting(FactoryQuoteDto::factoryName).containsExactly("Factory A");
 
+        long factoryBId = factoryIdByName("Factory B");
         pricingRequestService.setItemFactory(pricingRequestId, blankItemId,
-            new PricingRequestRequests.SetItemFactoryRequest("  Factory B  "), importActor);
+            new PricingRequestRequests.SetItemFactoryRequest(factoryBId), importActor);
 
-        // The persisted row, trimmed — not merely the DTO the call returned.
+        // The persisted row — the canonical master name, resolved server-side from factoryBId, not
+        // anything the caller typed (B6: the caller sends only an id now).
         assertThat(jdbc.queryForObject(
             "SELECT factory FROM sales.pricing_request_item WHERE pricing_request_item_id = :id",
             Map.of("id", blankItemId), String.class)).isEqualTo("Factory B");
-        // resolved_factory_name is the CATALOG snapshot and must stay untouched: a hand-typed name
-        // is not a catalog resolution.
+        // B6 (GLA-135): resolved_factory_id is now written — the column the downstream factory-email
+        // + CEO costing lookups actually key on. This is the root fix.
+        assertThat(jdbc.queryForObject(
+            "SELECT resolved_factory_id FROM sales.pricing_request_item WHERE pricing_request_item_id = :id",
+            Map.of("id", blankItemId), Long.class)).isEqualTo(factoryBId);
+        // resolved_factory_name is the CATALOG snapshot and must stay untouched: a master-resolved
+        // manual pick is still not a catalog PRODUCT resolution.
         assertThat(jdbc.queryForObject(
             "SELECT resolved_factory_name FROM sales.pricing_request_item WHERE pricing_request_item_id = :id",
             Map.of("id", blankItemId), String.class)).isNull();
@@ -1250,17 +1257,18 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         long pricingRequestId = pricingRequestWithOneBlankFactoryLine();
         long blankItemId = blankFactoryItemId(pricingRequestId);
 
+        long factoryBId = factoryIdByName("Factory B");
         // Wrong-way-round: the two roles that can otherwise READ this request in full — its own
         // sales rep, and the CEO — must not be able to write this field. Import owns the routing
         // decision because Import is who emails the factory.
         assertThatThrownBy(() -> pricingRequestService.setItemFactory(pricingRequestId, blankItemId,
-            new PricingRequestRequests.SetItemFactoryRequest("Factory B"), salesActor))
+            new PricingRequestRequests.SetItemFactoryRequest(factoryBId), salesActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
         assertThatThrownBy(() -> pricingRequestService.setItemFactory(pricingRequestId, blankItemId,
-            new PricingRequestRequests.SetItemFactoryRequest("Factory B"), ceoActor))
+            new PricingRequestRequests.SetItemFactoryRequest(factoryBId), ceoActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
         assertThatThrownBy(() -> pricingRequestService.setItemFactory(pricingRequestId, blankItemId,
-            new PricingRequestRequests.SetItemFactoryRequest("Factory B"), salesManagerActor))
+            new PricingRequestRequests.SetItemFactoryRequest(factoryBId), salesManagerActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
 
         assertThat(jdbc.queryForObject(
@@ -1279,12 +1287,37 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         // A fill, never a re-route: sales.factory_quote rows are grouped by factory NAME, so
         // moving a line after its quote exists would strand that quote's item list.
         assertThatThrownBy(() -> pricingRequestService.setItemFactory(pricingRequestId, catalogBackedItemId,
-            new PricingRequestRequests.SetItemFactoryRequest("Factory B"), importActor))
+            new PricingRequestRequests.SetItemFactoryRequest(factoryIdByName("Factory B")), importActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
 
         assertThat(jdbc.queryForObject(
             "SELECT resolved_factory_name FROM sales.pricing_request_item WHERE pricing_request_item_id = :id",
             Map.of("id", catalogBackedItemId), String.class)).isEqualTo("Factory A");
+    }
+
+    /**
+     * B6 (GLA-135): the picker only ever offers real {@code price_catalog.factories} rows, but the
+     * service must not trust an arbitrary id blindly — a factoryId that resolves to nothing is a
+     * 404, and the line must be left completely untouched (both {@code factory} and
+     * {@code resolved_factory_id} still null), not partially written.
+     */
+    @Test
+    void setItemFactory_refuses404ForAFactoryIdThatDoesNotExist() {
+        long pricingRequestId = pricingRequestWithOneBlankFactoryLine();
+        long blankItemId = blankFactoryItemId(pricingRequestId);
+        long noSuchFactoryId = jdbc.queryForObject(
+            "SELECT COALESCE(MAX(factory_id), 0) + 1 FROM price_catalog.factories", Map.of(), Long.class);
+
+        assertThatThrownBy(() -> pricingRequestService.setItemFactory(pricingRequestId, blankItemId,
+            new PricingRequestRequests.SetItemFactoryRequest(noSuchFactoryId), importActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
+
+        assertThat(jdbc.queryForObject(
+            "SELECT factory FROM sales.pricing_request_item WHERE pricing_request_item_id = :id",
+            Map.of("id", blankItemId), String.class)).isNull();
+        assertThat(jdbc.queryForObject(
+            "SELECT resolved_factory_id FROM sales.pricing_request_item WHERE pricing_request_item_id = :id",
+            Map.of("id", blankItemId), Long.class)).isNull();
     }
 
     @Test
@@ -1297,7 +1330,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         // SUBMITTED, not yet picked up — outside FACTORY_ROUTING_STATUSES, so no Import user may
         // start editing a request nobody has taken responsibility for.
         assertThatThrownBy(() -> pricingRequestService.setItemFactory(pricingRequestId, blankItemId,
-            new PricingRequestRequests.SetItemFactoryRequest("Factory B"), importActor))
+            new PricingRequestRequests.SetItemFactoryRequest(factoryIdByName("Factory B")), importActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
 
         assertThat(jdbc.queryForObject(
@@ -1311,14 +1344,15 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         long victimRequestId = pricingRequestWithOneBlankFactoryLine();
         long victimItemId = blankFactoryItemId(victimRequestId);
 
+        long factoryBId = factoryIdByName("Factory B");
         assertThatThrownBy(() -> pricingRequestService.setItemFactory(targetRequestId, victimItemId,
-            new PricingRequestRequests.SetItemFactoryRequest("Factory B"), importActor))
+            new PricingRequestRequests.SetItemFactoryRequest(factoryBId), importActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
 
         // And the same scoping again at the REPOSITORY level, bypassing the service's own check —
         // this is the half a mocked repository could never prove: that pricing_request_id really
         // reaches the WHERE clause and no row is written.
-        assertThat(pricingRequests.fillItemFactory(targetRequestId, victimItemId, "Factory B")).isZero();
+        assertThat(pricingRequests.fillItemFactory(targetRequestId, victimItemId, factoryBId, "Factory B")).isZero();
         assertThat(jdbc.queryForObject(
             "SELECT factory FROM sales.pricing_request_item WHERE pricing_request_item_id = :id",
             Map.of("id", victimItemId), String.class)).isNull();
@@ -1346,7 +1380,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             new SendFactoryQuoteRequest("factory-a@example.com", null, null), importActor);
 
         assertThatThrownBy(() -> pricingRequestService.setItemFactory(pricingRequestId, blankItemId,
-            new PricingRequestRequests.SetItemFactoryRequest("Factory A"), importActor))
+            new PricingRequestRequests.SetItemFactoryRequest(factoryIdByName("Factory A")), importActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
         assertThat(jdbc.queryForObject(
             "SELECT factory FROM sales.pricing_request_item WHERE pricing_request_item_id = :id",
@@ -1355,7 +1389,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         // The guard is per-factory, not a blanket refusal the moment ANY quote on the request has
         // been sent: a factory with no current quote at all must still be fillable.
         pricingRequestService.setItemFactory(pricingRequestId, blankItemId,
-            new PricingRequestRequests.SetItemFactoryRequest("Factory C"), importActor);
+            new PricingRequestRequests.SetItemFactoryRequest(factoryIdByName("Factory C")), importActor);
         assertThat(jdbc.queryForObject(
             "SELECT factory FROM sales.pricing_request_item WHERE pricing_request_item_id = :id",
             Map.of("id", blankItemId), String.class)).isEqualTo("Factory C");
@@ -1448,7 +1482,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         long firstItemId = firstDraft.items().get(0).pricingRequestItemId();
 
         pricingRequestService.setItemFactory(pricingRequestId, blankItemId,
-            new PricingRequestRequests.SetItemFactoryRequest("Factory A"), importActor);
+            new PricingRequestRequests.SetItemFactoryRequest(factoryIdByName("Factory A")), importActor);
 
         List<FactoryQuoteDto> secondRun = factoryQuoteService.generateDrafts(pricingRequestId, importActor);
         assertThat(secondRun).extracting(FactoryQuoteDto::factoryName).containsExactly("Factory A");
@@ -1506,7 +1540,8 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             new SendFactoryQuoteRequest("factory-a@example.com", null, null), importActor);
 
         // Bypasses the service-level setItemFactory guard on purpose (see this test's Javadoc).
-        assertThat(pricingRequests.fillItemFactory(pricingRequestId, blankItemId, "Factory A")).isEqualTo(1);
+        assertThat(pricingRequests.fillItemFactory(pricingRequestId, blankItemId, factoryIdByName("Factory A"), "Factory A"))
+            .isEqualTo(1);
 
         FactoryQuoteDto afterRerun = quoteFor(
             factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Factory A");
@@ -1644,6 +1679,15 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
              WHERE pricing_request_id = :id
                AND COALESCE(NULLIF(BTRIM(resolved_factory_name), ''), NULLIF(BTRIM(factory), '')) IS NULL
             """, Map.of("id", pricingRequestId), Long.class);
+    }
+
+    /** B6 (GLA-135): {@code SetItemFactoryRequest} now carries a factoryId, resolved against the
+     * real {@code price_catalog.factories} master row — "Factory A"/"B"/"C" are seeded by
+     * {@code insertCatalogProduct} in {@code wireServicesAndCreateDeal} above. */
+    private long factoryIdByName(String name) {
+        return jdbc.queryForObject(
+            "SELECT factory_id FROM price_catalog.factories WHERE name = :name",
+            Map.of("name", name), Long.class);
     }
 
     /**

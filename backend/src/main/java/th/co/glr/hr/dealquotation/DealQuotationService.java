@@ -11,6 +11,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -53,10 +54,15 @@ import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestSummaryDto;
 import th.co.glr.hr.pricingrequest.PricingRequestEventKind;
 import th.co.glr.hr.pricingrequest.PricingRequestRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestStatus;
+import th.co.glr.hr.dealquotation.DealQuotationDtos.PromoteToDealResultDto;
+import th.co.glr.hr.ticket.DealLifecycle;
+import th.co.glr.hr.ticket.QuotationRecipient;
 import th.co.glr.hr.ticket.QuotationStatus;
 import th.co.glr.hr.ticket.RelatedDocumentType;
 import th.co.glr.hr.ticket.TicketEventKind;
+import th.co.glr.hr.ticket.TicketItemRequest;
 import th.co.glr.hr.ticket.TicketRepository;
+import th.co.glr.hr.ticket.TicketStatus;
 import th.co.glr.hr.ticket.TicketSummaryDto;
 
 /**
@@ -120,7 +126,34 @@ public class DealQuotationService {
     // keeps its OWN, unrelated visibility into the pricing request itself, its items, factory
     // quotes and the import request document — none of that is this class's concern and none of
     // it is touched by this set.
+    //
+    // 2026-09-30 owner ruling (H1 finance lockdown) -- REVERSES M3 FOR `account` ONLY: account MAY read a
+    // PRICING_REQUEST-origin quotation (number, total, net line prices) and download its PDF, but ONLY on a deal
+    // inside the account list scope (TicketRepository#isInAccountScope). That is handled by the account
+    // branch in #requireViewAccess / #canViewPricingRequestOriginRow / #listForTicket, NOT by adding account to
+    // this set -- so every other role (sales non-owner, import, a grant holder) is exactly as before, and
+    // account below S10 is refused. The finance view (FinanceDealDto) still carries no list price/discount.
+    /**
+     * 2026-09-30 owner ruling: for {@code account}, a deal quotation is visible only once it has gone to the
+     * customer: APPROVED (a DEAL_DIRECT quotation's post-CEO/manager-approval status), ISSUED (a PRICING_REQUEST
+     * quotation's -- see {@link DealQuotationRepository#approve}), SENT and ACCEPTED. DRAFT, PENDING_APPROVAL,
+     * REJECTED, CANCELLED, EXPIRED, SUPERSEDED, ... are all refused on get / PDF / XLS / picture and dropped from
+     * listForTicket and search. Mirrors the PCR side's ISSUED / SENT / ACCEPTED rule. No other role is affected.
+     */
+    private static final Set<String> ACCOUNT_VISIBLE_STATUSES = Set.of("APPROVED", "ISSUED", "SENT", "ACCEPTED");
+
     private static final Set<String> PRICING_REQUEST_VIEW_ROLES = Set.of("sales", "sales_manager", "ceo");
+
+    /** Owner ruling 2026-09-24: on the GLOBAL LIST ({@link #search}/{@link #counts}) ONLY,
+     * sales_manager and ceo see every deal's quotations; everyone else (sales, import, account,
+     * and any {@code canCreateQuotation} grant-holder) sees only quotations on deals they created.
+     * This narrows import/account/grant-holders, who previously saw the whole list here. Scope
+     * boundary: this affects ONLY {@link #listOwnerScope} (and therefore search/counts) — {@link
+     * #requireViewAccess}, {@link #get}, {@link #listForTicket} and {@link #renderPdf} are
+     * unchanged, so import/account/grant-holders still read individual quotations from the deal
+     * page. A grant no longer widens the LIST scope; it still widens create/edit/detail access via
+     * {@link #requireViewAccess}. */
+    private static final Set<String> LIST_SEE_ALL_ROLES = Set.of("sales_manager", "ceo");
 
     private final DealQuotationRepository quotations;
     private final TicketRepository tickets;
@@ -235,7 +268,22 @@ public class DealQuotationService {
     public DealQuotationDto create(long ticketId, UpsertDealQuotationRequest request, UserPrincipal actor) {
         TicketSummaryDto ticket = requireTicketSummary(ticketId);
         requireEditAccess(actor, ticket);
+        // Quotation ↔ deal linking slice 2 — precedence (mirrored by mockApi.dealQuotations.create):
+        // authz 403 (above) → recipient 400 → one-pricing-route 409 → N6 409, all BEFORE anything is
+        // resolved or written (so a malformed body on a blocked deal reads as the 400, and a blocked
+        // deal refuses before its items are even validated).
+        String recipientType = requireRecipientForCreate(request.recipientType());
         quotations.lockTicket(ticketId);
+        // One pricing route per deal (owner ruling 2026-09-30): the reverse of slice 1's
+        // DirectQuotationLocks#requireNoLiveDirectQuotation. Scoped to THIS method only — a revision
+        // or reorder of an existing direct quotation (#createRevision/#createReorder) is not a new
+        // route choice, and #createFromPricingRequest IS the pricing route.
+        th.co.glr.hr.ticket.DirectQuotationLocks.requireNoLivePricingRequest(tickets, ticketId);
+        // N6 (S2-B3): one live direct quotation per deal — a second create would mint a second base
+        // number. The 409 names the live one (liveQuotationId/number/docStatus, top-level in the JSON
+        // body) so the client can offer "แก้ไขฉบับนั้น" / "สร้างฉบับแก้ไข". Under #lockTicket, so two
+        // concurrent creates cannot both pass it.
+        th.co.glr.hr.ticket.DirectQuotationLocks.requireNoLiveDirectQuotationForCreate(tickets, ticketId);
         ContactSnapshot contact = resolveContact(request.contactId(), null, ticket);
         String priceMode = resolvePriceMode(request.priceMode());
         String documentLanguage = resolveDocumentLanguage(request.documentLanguage());
@@ -262,6 +310,7 @@ public class DealQuotationService {
         boolean noDeposit = isZeroDeposit(request.depositPercent());
         String remainderMode = noDeposit ? null : blankToNull(request.remainderMode());
         Integer creditDays = noDeposit ? null : request.creditDays();
+        requireValidCreditDays(remainderMode, creditDays);
         String fullPaymentTerm = resolveFullPaymentTerm(request.depositPercent(), request.fullPaymentTerm());
         // Owner feedback 2026-09-11 ("มีรันเลข -1 -2 ต่อท้ายตี้วแต่แรก" / "ใบแรกเป็น QT-2026-0014-1"):
         // the FIRST issued document now carries the revision suffix too, so a fresh sequence value
@@ -288,8 +337,33 @@ public class DealQuotationService {
             resolveOmitContactHonorific(request.omitContactHonorific()), fullPaymentTerm,
             // A brand-new document is neither a revision (parentQuotationId) nor a reorder clone
             // (derivedFromQuotationId) — both null.
-            subtotal, null, 1, null, items));
+            subtotal, null, 1, null, items,
+            // Slice 2 (S2-B1): the rep's ผู้รับ and its Thai label, where this call used to take
+            // the short constructor's hard-coded 'UNSPECIFIED'/null. Still DEAL_DIRECT, no source
+            // pricing request/decision.
+            DealQuotationRepository.ORIGIN_DEAL_DIRECT, recipientType, QuotationRecipient.thaiLabel(recipientType),
+            null, null,
+            // Owner-directed reversal of F2 (2026-09-26) — manual, optional buyer name; blank
+            // clears it to null, same discipline as every other free-text header field here.
+            blankToNull(request.orderedByName())));
+        // Deal-stage rule hook — owned by the entry-channel/stage-route work (.design/deal-route-staging §5 Flow 10): recipient → stage, forward-only via TicketService.autoAdvanceStage. Intentionally empty here.
         return requireQuotation(id);
+    }
+
+    /** Slice 2 (S2-B1): a direct create must name its ผู้รับ — DESIGNER / OWNER / BUYER only. Returns
+     * the validated code. Both sentences are mirrored verbatim by {@code mockApi.dealQuotations}. */
+    private static String requireRecipientForCreate(String recipientType) {
+        if (recipientType == null || recipientType.isBlank()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุผู้รับใบเสนอราคา");
+        }
+        return requireAddressableRecipient(recipientType);
+    }
+
+    private static String requireAddressableRecipient(String recipientType) {
+        if (!QuotationRecipient.isAddressable(recipientType)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับผู้รับใบเสนอราคา '" + recipientType + "'");
+        }
+        return recipientType;
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -353,6 +427,13 @@ public class DealQuotationService {
         // document also leaves the PR at QUOTATION_ISSUED); that is enforced once, unconditionally,
         // by #hasLivePricingRequestQuotation just below the idempotent-DRAFT check, which is the
         // ONE place "no second live quotation" is actually decided for BOTH branches.
+        //
+        // GLA-123 slice S3 BLOCKER-B fix note: this same QUOTATION_ISSUED check ALSO now correctly
+        // covers the REVISION_REQUESTED recovery path with no further change here — recordOutcome
+        // deliberately never moves the PR's own status off QUOTATION_ISSUED for that outcome (same
+        // as REJECTED), so the variable name below ("AfterExpiry") undersells what it now gates;
+        // the actual invariant is just "PR status == QUOTATION_ISSUED", which is what BOTH the
+        // expiry and the revision-requested recovery paths leave it at.
         boolean prReadyForFirstQuotation = PricingRequestStatus.APPROVED_FOR_QUOTATION.equals(summary.status());
         boolean prReadyForReplacementAfterExpiry = PricingRequestStatus.QUOTATION_ISSUED.equals(summary.status());
         if (!prReadyForFirstQuotation && !prReadyForReplacementAfterExpiry) {
@@ -480,7 +561,11 @@ public class DealQuotationService {
             summary.omitContactHonorific(), null,
             subtotal, null, revisionNo, null, items,
             "PRICING_REQUEST", summary.recipientType(), summary.recipientLabel(),
-            summary.id(), decision.id()));
+            summary.id(), decision.id(),
+            // Owner-directed reversal of F2 (2026-09-26) — nothing to inherit on a brand-new
+            // PRICING_REQUEST-origin create; the rep sets a manual name later via #update, same
+            // as any DEAL_DIRECT document.
+            null));
 
         pricingRequests.addEvent(summary.id(), summary.ticketId(), actor.id(), actor.name(),
             PricingRequestEventKind.CUSTOMER_QUOTATION_CREATED, summary.status(), summary.status(),
@@ -495,20 +580,32 @@ public class DealQuotationService {
      * quotation's number/status/link without going through {@code createFromPricingRequest}
      * (which would either mint one or just silently replay the idempotent existing draft — wrong
      * for a page that must not have create side effects on render). Returns empty when this PR
-     * has no PRICING_REQUEST-origin quotation yet — in S1 that can only ever be a DRAFT (every
-     * other status-machine transition is refused for this origin, see
-     * {@link #requireStatusMachineEnabled}), so {@code findOpenDraftForPricingRequest}'s
-     * DRAFT-only scope already covers every reachable case. Uses the same {@link
-     * #requireViewAccess} gate as {@code GET /deal-quotations/{id}} (M3) — narrower than
-     * DEAL_DIRECT's, no account, no quotation-grant bypass. */
+     * has no PRICING_REQUEST-origin quotation yet.
+     *
+     * <p><b>GLA-123 slice S3 BLOCKER 1 fix (Opus review against real Postgres, 2026-09-23):</b>
+     * this used to call {@link DealQuotationRepository#findOpenDraftForPricingRequest}, whose
+     * DRAFT-only scope was correct back when S1 shipped (every other status-machine transition
+     * WAS refused for this origin at the time) but went stale the moment S2 made
+     * PENDING_APPROVAL/ISSUED reachable — and S3 adds ACCEPTED/REJECTED/REVISION_REQUESTED/
+     * EXPIRED on top. With the old call, this method returned {@code Optional.empty()} for EVERY
+     * quotation past DRAFT, so the frontend's {@code dealQuotationForPr} was null the instant a
+     * quotation was submitted — {@code canRecordCustomerQuotationOutcome} (which reads THIS
+     * value) could never see a live quotation, so the whole S3 outcome panel was unreachable, and
+     * S2's own EXPIRED-escape-hatch UI block (also keyed on this same value) was equally dead.
+     * Switched to {@link DealQuotationRepository#findLatestForPricingRequest}, which is already
+     * used by {@link #createFromPricingRequest}'s own expiry-escape-hatch numbering for the
+     * identical "current quotation regardless of status" need — reusing it here instead of a
+     * third status-scoped query. Uses the same {@link #requireViewAccess} gate as
+     * {@code GET /deal-quotations/{id}} (M3) — narrower than DEAL_DIRECT's, no account, no
+     * quotation-grant bypass. */
     public Optional<DealQuotationDto> findForPricingRequest(long pricingRequestId, UserPrincipal actor) {
-        Optional<Long> id = quotations.findOpenDraftForPricingRequest(pricingRequestId);
+        Optional<Long> id = quotations.findLatestForPricingRequest(pricingRequestId);
         if (id.isEmpty()) {
             return Optional.empty();
         }
         DealQuotationDto quotation = requireQuotation(id.get());
         requireViewAccess(actor, quotation);
-        return Optional.of(quotation);
+        return Optional.of(forViewer(quotation, actor));
     }
 
     /** One decision item's CEO-approved price, expressed as the {@link ItemInput} fields
@@ -620,47 +717,143 @@ public class DealQuotationService {
     public DealQuotationDto get(long id, UserPrincipal actor) {
         DealQuotationDto quotation = requireQuotation(id);
         requireViewAccess(actor, quotation);
-        return quotation;
+        return forViewer(quotation, actor);
+    }
+
+    /**
+     * Ruling 3 (2026-09-30): {@code account} sees a quotation's number, totals and each line's NET unit price,
+     * never the list price, discount or CEO pricing fields -- on every origin, at the service layer, on every
+     * JSON read it can reach. Every other role receives the DTO unchanged.
+     */
+    private static DealQuotationDto forViewer(DealQuotationDto quotation, UserPrincipal actor) {
+        return "account".equals(actor.role()) ? quotation.withoutPriceInternals() : quotation;
     }
 
     public List<DealQuotationDto> listForTicket(long ticketId, UserPrincipal actor) {
         TicketSummaryDto ticket = requireTicketSummary(ticketId);
-        if (!hasQuotationGrant(actor)) {
+        // H1 lockdown: account is row-scoped -- before the grant bypass, like #requireViewAccess.
+        if ("account".equals(actor.role())) {
+            requireAccountScope(ticketId);
+        } else if (!hasQuotationGrant(actor)) {
             requireRole(actor, VIEW_ROLES);
             if ("sales".equals(actor.role()) && ticket.createdById() != actor.id()) {
                 throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงดีลนี้");
             }
         }
-        return quotations.findByTicket(ticketId);
+        // GLA-123 slice S3 BLOCKER-A fix (Opus review against real Postgres, 2026-09-23): the
+        // entry gate above is DEAL_DIRECT's own broad rule (VIEW_ROLES + a full hasQuotationGrant
+        // bypass) — correct for a DEAL_DIRECT row, where price is the rep's own typed number, but
+        // WAY too broad for a PRICING_REQUEST row, where unitPrice/discountPct/netUnitPrice ARE
+        // the CEO's approved price/discount. #findByTicket was widened (MAJOR 4, this same S3
+        // round) to include PRICING_REQUEST rows in its RESULT SET without this method's own
+        // per-row visibility check being widened to match — reproduced live: import could read
+        // discountPct=10.00 off a PRICING_REQUEST row via this endpoint. Filtered here (not
+        // field-stripped) — every OTHER list/count surface on this class (search/counts) already
+        // behaves as "rows you may see", not "rows with some fields blanked out", so an
+        // unauthorized PRICING_REQUEST row is dropped from the list entirely, exactly as if
+        // #findByTicket had never returned it, rather than appearing with nulled-out price fields.
+        List<DealQuotationDto> rows = quotations.findByTicket(ticketId);
+        List<DealQuotationDto> visible = new ArrayList<>(rows.size());
+        for (DealQuotationDto row : rows) {
+            if ("account".equals(actor.role()) && !ACCOUNT_VISIBLE_STATUSES.contains(row.docStatus())) {
+                continue;
+            }
+            if (!"PRICING_REQUEST".equals(row.origin()) || canViewPricingRequestOriginRow(actor, row)) {
+                visible.add(forViewer(row, actor));
+            }
+        }
+        return visible;
     }
 
-    /** The approver queue (sales_manager/ceo/import/account see everything; sales sees only their
-     * own deals' quotations; a {@code canCreateQuotation}-granted employee sees everything, same
-     * as sales_manager — the grant is "any deal", not "own deal only"). */
+    /** The approver queue (owner ruling 2026-09-24: sales_manager/ceo see everything; sales,
+     * import, account, and any {@code canCreateQuotation}-granted employee see only quotations on
+     * deals THEY created — the grant lets them reach this endpoint but no longer widens the LIST
+     * scope, only detail/create/edit access elsewhere). */
     public List<DealQuotationDto> search(List<String> statuses, boolean needsRework, UserPrincipal actor) {
-        return quotations.search(statuses, listOwnerScope(actor), needsRework);
+        return search(statuses, needsRework, null, actor);
+    }
+
+    /**
+     * {@code GET /api/deal-quotations} — every origin since quotation ↔ deal linking slice 1 (owner
+     * decision D4, 2026-09-30; it was DEAL_DIRECT only): DEAL_DIRECT and PRICING_REQUEST rows as
+     * editable rows, legacy v1 rows ({@code origin IS NULL}) tagged {@code LEGACY} and
+     * {@code readOnly}. Every row carries its deal's {@code ticketCode}/{@code dealStage}.
+     *
+     * <p>{@code origin} (optional) narrows to exactly one of {@code DEAL_DIRECT},
+     * {@code PRICING_REQUEST}, {@code LEGACY}; blank reads as absent; anything else is 400. The
+     * scope is {@link #listOwnerScope}, unchanged, applied to every origin; on top of it the
+     * price-bearing origins keep their narrower read rule (see {@link #canViewPricedOriginsOnList}).
+     */
+    public List<DealQuotationDto> search(List<String> statuses, boolean needsRework, String origin,
+                                         UserPrincipal actor) {
+        Long owner = listOwnerScope(actor);
+        // H1 (2026-09-30): account sees only customer-facing statuses, with price internals stripped.
+        return quotations.search(statuses, owner, needsRework, parseListOrigin(origin),
+                canViewPricedOriginsOnList(actor)).stream()
+            .filter(row -> !"account".equals(actor.role()) || ACCOUNT_VISIBLE_STATUSES.contains(row.docStatus()))
+            .map(row -> forViewer(row, actor)).toList();
     }
 
     /** Per-status counts for the list page's tab labels (owner feedback F5, 2026-09-10) — the
      * SAME scope decision as {@link #search}, so a tab's count is always the size of the list
      * that tab would show. */
     public DealQuotationCountsDto counts(UserPrincipal actor) {
-        return quotations.counts(listOwnerScope(actor));
+        return counts(null, actor);
+    }
+
+    /** {@link #counts(UserPrincipal)} under the same optional {@code origin} filter {@link #search}
+     * takes — widened and validated identically, so tabs and list agree under a filter too. */
+    public DealQuotationCountsDto counts(String origin, UserPrincipal actor) {
+        Long owner = listOwnerScope(actor);
+        return quotations.counts(owner, parseListOrigin(origin), canViewPricedOriginsOnList(actor));
+    }
+
+    private static final Set<String> LIST_ORIGIN_FILTERS = Set.of(DealQuotationRepository.ORIGIN_DEAL_DIRECT,
+        DealQuotationRepository.ORIGIN_PRICING_REQUEST, DealQuotationRepository.ORIGIN_LEGACY);
+
+    /** null/blank → no filter; exact (case-sensitive) member of {@link #LIST_ORIGIN_FILTERS}; else 400. */
+    private static String parseListOrigin(String origin) {
+        if (origin == null || origin.isBlank()) {
+            return null;
+        }
+        String value = origin.trim();
+        if (!LIST_ORIGIN_FILTERS.contains(value)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "ไม่รองรับประเภทใบเสนอราคา '" + origin + "' (ใช้ได้: DEAL_DIRECT, PRICING_REQUEST, LEGACY)");
+        }
+        return value;
     }
 
     /**
-     * The ONE list-scope decision {@link #search} and {@link #counts} share: a
-     * {@code canCreateQuotation}-granted employee sees everything (the grant is "any deal");
-     * otherwise the caller must hold a {@link #VIEW_ROLES} role, and {@code sales} is scoped to
-     * deals they created (returns their own id as the owner filter); every other view role is
-     * unrestricted (null).
+     * Slice 1 — may this caller see PRICING_REQUEST and LEGACY rows on the widened LIST? Both carry
+     * a pricing-chain price (the CEO's approved price/discount on a PRICING_REQUEST row; the v1
+     * chain's approved price on a LEGACY one), so the list applies the SAME role rule
+     * {@link #canViewPricingRequestOriginRow} applies to a single PRICING_REQUEST row:
+     * {@link #PRICING_REQUEST_VIEW_ROLES} only, no {@link #hasQuotationGrant} bypass. The
+     * "sales sees only their own deal" half of that rule is already {@link #listOwnerScope}'s own
+     * (sales is always owner-scoped on the list), so a role check is all that is left to add here.
+     * Without it, widening the list would print to import/account/grant-holders a price the
+     * detail endpoint refuses them (403).
+     */
+    private boolean canViewPricedOriginsOnList(UserPrincipal actor) {
+        return PRICING_REQUEST_VIEW_ROLES.contains(actor.role());
+    }
+
+    /**
+     * The ONE list-scope decision {@link #search} and {@link #counts} share (owner ruling
+     * 2026-09-24, see {@link #LIST_SEE_ALL_ROLES}): the caller must hold a {@link #VIEW_ROLES}
+     * role OR a {@code canCreateQuotation} grant to pass the entry gate; having passed it, only
+     * {@code sales_manager}/{@code ceo} see every deal (returns {@code null}, unrestricted) —
+     * everyone else, including a grant-holder, is scoped to deals they created (returns their own
+     * id as the owner filter). This deliberately narrowed import/account/grant-holders, who
+     * previously saw the whole list here.
      */
     private Long listOwnerScope(UserPrincipal actor) {
         boolean grant = hasQuotationGrant(actor);
         if (!grant) {
             requireRole(actor, VIEW_ROLES);
         }
-        return (!grant && "sales".equals(actor.role())) ? actor.id() : null;
+        return LIST_SEE_ALL_ROLES.contains(actor.role()) ? null : actor.id();
     }
 
     /** Rule: server recomputes every number, always — this is the stateless preview the item
@@ -712,6 +905,22 @@ public class DealQuotationService {
         // (already loaded, right above) and branches on its origin — every other write path
         // already goes through it; this was the one straggler.
         requireEditAccessForQuotation(actor, existing);
+        // Slice 2 (S2-B1) — ผู้รับ on update. Omitted/null keeps the stored value (a pre-slice-2
+        // client, or the editor on a PRICING_REQUEST row, which never sends it). A VALUE is refused
+        // before anything is computed or persisted, in mockApi.dealQuotations.update's order: not a
+        // DRAFT → 409; a PRICING_REQUEST row (its recipient belongs to its คำขอราคา) → 409, whatever
+        // the value, even the stored one; not DESIGNER/OWNER/BUYER → 400.
+        String requestedRecipient = request.recipientType();
+        if (requestedRecipient != null) {
+            if (!QuotationStatus.DRAFT.equals(existing.docStatus())) {
+                throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงแก้ไขไม่ได้");
+            }
+            if ("PRICING_REQUEST".equals(existing.origin())) {
+                throw new ApiException(HttpStatus.CONFLICT,
+                    "ผู้รับของใบเสนอราคาจากคำขอราคามาจากคำขอราคา — แก้ที่คำขอราคาต้นทาง");
+            }
+            requireAddressableRecipient(requestedRecipient);
+        }
         ContactSnapshot contact = resolveContact(request.contactId(), existing.contactId(), ticket);
         // ⚠️ v3, review fix F1: a MISSING priceMode on UPDATE keeps the STORED one. #resolvePriceMode's
         // blank→NET default is correct on CREATE (a brand-new document with no mode chosen IS a NET
@@ -772,6 +981,7 @@ public class DealQuotationService {
         boolean noDeposit = isZeroDeposit(request.depositPercent());
         String remainderMode = noDeposit ? null : blankToNull(request.remainderMode());
         Integer creditDays = noDeposit ? null : request.creditDays();
+        requireValidCreditDays(remainderMode, creditDays);
         String fullPaymentTerm = resolveFullPaymentTerm(request.depositPercent(), request.fullPaymentTerm());
         // Item 2 ("ไม่เติม “คุณ”", V180) — the editor always sends its CURRENT value (the checkbox
         // is always rendered, never omitted), so, same as printedByDisplayId/projectName, there is
@@ -797,9 +1007,28 @@ public class DealQuotationService {
             // case — blankToNull(null) clears it, exactly like every other free-text header field
             // on this same call (customerNotes, deptCode, unitCode).
             blankToNull(request.projectName()),
-            omitContactHonorific, fullPaymentTerm);
+            omitContactHonorific, fullPaymentTerm,
+            // Owner-directed reversal of F2 (2026-09-26) — manual, optional buyer name; the
+            // editor always sends its current value, so blank genuinely clears it back to the
+            // dotted placeholder, same discipline as projectName/customerNotes above.
+            blankToNull(request.orderedByName()));
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงแก้ไขไม่ได้");
+        }
+        // Slice 2 (S2-B1): persist a sent ผู้รับ. Validated above; the header CAS just proved the row
+        // is still a DRAFT inside this transaction, and updateRecipient's own WHERE re-states
+        // DRAFT + DEAL_DIRECT, so 0 rows here can only mean the row moved under us.
+        if (requestedRecipient != null) {
+            boolean recipientChanged = !requestedRecipient.equals(existing.recipientType());
+            String label = QuotationRecipient.thaiLabel(requestedRecipient);
+            if (recipientChanged || !java.util.Objects.equals(label, existing.recipientLabel())) {
+                if (quotations.updateRecipient(id, requestedRecipient, label) == 0) {
+                    throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงแก้ไขไม่ได้");
+                }
+            }
+            if (recipientChanged) {
+                // Deal-stage rule hook — owned by the entry-channel/stage-route work (.design/deal-route-staging §5 Flow 10): recipient → stage, forward-only via TicketService.autoAdvanceStage. Intentionally empty here.
+            }
         }
         // Item ids are STABLE across a draft save (fix for the picture-dropping race this
         // replaced — a full delete+insert used to mint new ids on every save, so any client that
@@ -1040,17 +1269,17 @@ public class DealQuotationService {
         DealQuotationDto quotation = requireQuotation(id);
         requireEditAccessForQuotation(actor, quotation);
         // GLA-123 slice S2: submit is now LIVE for BOTH origins — every validation below (item
-        // completeness, ผู้สั่งซื้อ, payment term, validity date) is origin-agnostic and applies
-        // unchanged; only approve/reject/issue diverge (see #approve/#reject's own origin branch).
+        // completeness, payment term, validity date) is origin-agnostic and applies unchanged;
+        // only approve/reject/issue diverge (see #approve/#reject's own origin branch).
         if (quotation.items().isEmpty()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ใบเสนอราคาต้องมีอย่างน้อยหนึ่งรายการก่อนส่งขออนุมัติ");
         }
-        // ผู้สั่งซื้อ is mandatory (owner feedback F2): create/update already refuse a draft with no
-        // resolvable contact, so this only ever catches a row that predates V167 on a ticket that
-        // had no contact -- it stays a draft until the rep saves it with one.
-        if (quotation.contactId() == null || isBlank(quotation.contactName())) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาระบุผู้สั่งซื้อ");
-        }
+        // ⚠️ Owner-directed reversal of V167/F2 (2026-09-26): ผู้สั่งซื้อ used to be mandatory here
+        // ("กรุณาระบุผู้สั่งซื้อ" refused a submit with no resolvable contact) — the frontend's
+        // required contact-picker dropdown is gone, replaced by a single optional free-text
+        // signature-name field (`orderedByName`, unrelated to `contactId`/`contactName`), so a
+        // quotation with no contact at all must now submit successfully. See #resolveContact's own
+        // comment for the matching create/update-side relaxation.
         // Item 4 ("ไม่รับมัดจำ", V181, owner ruling 2026-09-16): a zero-deposit document must name
         // ONE of the three payment terms before an approver ever sees it — create/update allow a
         // DRAFT to be saved with no term chosen yet (isZeroDeposit(...) ? blankToNull(...) : null),
@@ -1062,6 +1291,19 @@ public class DealQuotationService {
         // is null, so this condition can only ever fire on a genuinely zero-deposit document.
         if (isZeroDeposit(quotation.depositPercent()) && isBlank(quotation.fullPaymentTerm())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาเลือกเงื่อนไขการชำระเงินเต็มจำนวน");
+        }
+        // Wording-scan fix 6 (2026-09-17) — the submit-time half of the credit-days rule, the exact
+        // "create/update permissive, submit strict" split the fullPaymentTerm gate just above uses:
+        // create/update already refuse an explicit invalid VALUE (0 or negative — #requireValidCreditDays),
+        // but still let a CREDIT-remainder draft save with creditDays left BLANK; submit is what
+        // actually requires it be filled in before an approver ever sees the document. Deliberately
+        // NOT re-checked for a value that is not exactly null (an explicit invalid one could only
+        // reach a stored row from before this fix existed, and re-validating every stored value here
+        // would be the same defensive re-check #requireStoredItemComplete already does for items,
+        // which this quotation-level field does not need — a value already accepted by create/update
+        // going forward is never invalid).
+        if ("CREDIT".equals(quotation.remainderMode()) && quotation.creditDays() == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน");
         }
         // V178: a DATE-mode validity deadline that has already passed must not go to an approver —
         // create/update already refuse one before the quotation's OWN date, but time keeps moving
@@ -1526,6 +1768,361 @@ public class DealQuotationService {
         }
     }
 
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // GLA-123 slice S3 — Step 5 for a PRICING_REQUEST-origin quotation (R9): records what the
+    // customer said about an ISSUED document. Deliberately narrower than #requireEditAccessForQuotation
+    // (which also lets sales_manager act on ANY deal for edit/submit/cancel): this mirrors {@code
+    // CustomerQuotationService#recordOutcome}'s own gate EXACTLY — {@code SALES_ROLES = Set.of("sales")}
+    // there, i.e. sales_manager is NOT included, and only the ticket's OWNING rep may record an
+    // outcome, full stop. Read from that class directly (not assumed): its #requireEditAccess calls
+    // #requireRole(actor, SALES_ROLES) then #requireOwner, with no sales_manager/CEO carve-out
+    // anywhere in that path. The new engine's own EDIT_ROLES/APPROVE_ROLES sets are NOT reused here
+    // on purpose — recording a customer's outcome is a different action from editing or approving
+    // the document, and the legacy behaviour (the ONLY precedent that exists for this action) is
+    // sales-owner-only. R8 (one finalized quotation per deal, across BOTH คำขอราคา origins) is
+    // enforced via TicketRepository#hasAcceptedQuotation, called under TicketRepository
+    // #lockTicketForUpdate — the SAME ticket-row lock CustomerQuotationService#recordOutcome now
+    // also takes (see that method's own mirrored comment), so a legacy accept and a new-origin
+    // accept on the same ticket's sibling pricing requests fully serialise against each other
+    // regardless of which service instance issues the lock.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    /** The only outcomes a client may record here — mirrors {@code
+     * CustomerQuotationService#RECORDABLE_OUTCOMES} exactly (EXPIRED is sweep-only). */
+    private static final Set<String> RECORDABLE_OUTCOMES =
+        Set.of(QuotationStatus.ACCEPTED, QuotationStatus.REJECTED, QuotationStatus.REVISION_REQUESTED);
+
+    /**
+     * R9 — records what the customer said about an ISSUED PRICING_REQUEST-origin quotation, and
+     * on ACCEPTED, transitions the pricing request {@code QUOTATION_ISSUED -> QUOTATION_ACCEPTED}
+     * exactly like {@code CustomerQuotationService#recordOutcome} does for the legacy chain —
+     * same event kind, same CEO notification, same "REJECTED/REVISION_REQUESTED do NOT change the
+     * pricing request's own status" rule. R8 (one finalized quotation per deal, across BOTH
+     * คำขอราคา origins) is the one thing genuinely NEW here: an ACCEPTED outcome is refused with
+     * 409 when {@code sales.quotation} already carries an ACCEPTED row for this TICKET under any
+     * origin (legacy {@code origin IS NULL} included) — see {@link
+     * TicketRepository#hasAcceptedQuotation}'s own Javadoc for why one origin-agnostic query over
+     * the shared table is the whole guard.
+     *
+     * <p>A {@code DEAL_DIRECT} row is refused outright (409) — R10: the direct quotation stays
+     * completely separate from the pipeline and has no customer-outcome concept at all.
+     */
+    @Transactional
+    public DealQuotationDto recordOutcome(long quotationId, DealQuotationRequests.RecordOutcomeRequest request,
+                                          UserPrincipal actor) {
+        if (QuotationStatus.EXPIRED.equals(request.outcome())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "EXPIRED ไม่สามารถบันทึกผ่าน API นี้ได้ — ระบบตั้งเป็นอัตโนมัติเท่านั้น");
+        }
+        if (request.outcome() == null || !RECORDABLE_OUTCOMES.contains(request.outcome())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "outcome ไม่ถูกต้อง");
+        }
+        DealQuotationDto quotation = requireQuotation(quotationId);
+        if (!"PRICING_REQUEST".equals(quotation.origin())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ใบเสนอราคาฉบับนี้ไม่ได้อยู่ในสายงานคำขอราคา จึงบันทึกผลลูกค้าด้วย endpoint นี้ไม่ได้");
+        }
+        if (pricingRequests == null) {
+            // Same defensive shape as #createFromPricingRequest/#approveAndIssuePricingRequestOrigin's
+            // own guard — only reachable if a deployment wires this bean without the GLA-123
+            // setter-injected dependencies.
+            throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "ฟีเจอร์นี้ยังไม่พร้อมใช้งาน");
+        }
+        requireOutcomeAccess(actor, quotation);
+
+        // GLA-123 slice S3 MAJOR 3 fix (Opus review against real Postgres, 2026-09-23): this used
+        // to lock the ticket row FIRST, then the pricing-request advisory lock — the OPPOSITE
+        // order #approveAndIssuePricingRequestOrigin (and CustomerQuotationService#issue) take,
+        // and the opposite order this SAME method's own CustomerQuotationService#recordOutcome
+        // sibling now takes after its own MAJOR 3 fix. Reproduced as a real Postgres deadlock. The
+        // pricing-request advisory lock (borrowed via the existing setter-injected
+        // customerQuotations dependency, same as #approveAndIssuePricingRequestOrigin) is taken
+        // FIRST, THEN the ticket-row lock — matching every other path. R8 is unaffected: the
+        // hasAcceptedQuotation check below still runs with BOTH locks held, which is all it needs.
+        customerQuotations.lockPricingRequest(quotation.pricingRequestId());
+        tickets.lockTicketForUpdate(quotation.ticketId());
+
+        String outcomeClientRequestId = validateUuid(request.clientRequestId());
+        if (outcomeClientRequestId != null) {
+            Optional<Long> replay = quotations.findIdByOutcomeClientRequestId(actor.id(), outcomeClientRequestId);
+            if (replay.isPresent()) {
+                // MINOR-2 fix (Opus review, 2026-09-23) — mirrors CustomerQuotationService#issue's
+                // own identical guard: a replay resolving to a DIFFERENT quotation than the one
+                // this call actually named is a genuine conflict, not a silent "success" — without
+                // this, the caller would get back some OTHER quotation's DTO with no outcome
+                // recorded on the one they meant to act on, and no error to notice it by.
+                if (replay.get() != quotationId) {
+                    throw new ApiException(HttpStatus.CONFLICT,
+                        "clientRequestId ถูกใช้ไปแล้วกับใบเสนอราคาอื่น");
+                }
+                return requireQuotation(replay.get());
+            }
+        }
+        DealQuotationDto fresh = requireQuotation(quotationId);
+        if (!QuotationStatus.ISSUED.equals(fresh.docStatus())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "บันทึกผลได้เฉพาะใบเสนอราคาที่ออกแล้วเท่านั้น (ปัจจุบัน: " + fresh.docStatus() + ")");
+        }
+        if (QuotationStatus.ACCEPTED.equals(request.outcome()) && tickets.hasAcceptedQuotation(fresh.ticketId())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ดีลนี้มีใบเสนอราคาที่ลูกค้ายอมรับแล้วฉบับหนึ่ง — ยอมรับซ้ำอีกฉบับไม่ได้ (R8)");
+        }
+
+        // MINOR-3 fix (Opus review, 2026-09-23) — see CustomerQuotationService#recordOutcome's
+        // identical fix for the full reasoning: V75's own unique index is table-wide, both
+        // origins' replay lookups are now origin-scoped, so a cross-engine clientRequestId reuse
+        // deterministically hits this constraint instead of replay-matching. Caught and turned
+        // into the same clean 409 the wrong-quotation replay guard above already uses.
+        int rows;
+        try {
+            rows = quotations.recordOutcome(quotationId, request.outcome(), blankToNull(request.customerNote()),
+                actor.id(), outcomeClientRequestId);
+        } catch (org.springframework.dao.DataIntegrityViolationException e) {
+            throw new ApiException(HttpStatus.CONFLICT, "clientRequestId ถูกใช้ไปแล้วกับใบเสนอราคาอื่น");
+        }
+        if (rows == 0) {
+            throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาถูกเปลี่ยนแปลงโดยผู้ใช้อื่น");
+        }
+
+        PricingRequestSummaryDto summary = pricingRequests.findSummary(fresh.pricingRequestId())
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบคำขอราคานี้"));
+        String eventKind = outcomeEventKind(request.outcome());
+        pricingRequests.addEvent(summary.id(), summary.ticketId(), actor.id(), actor.name(),
+            eventKind, summary.status(), summary.status(),
+            "บันทึกผลใบเสนอราคาลูกค้า " + fresh.number() + ": " + request.outcome()
+                + (request.customerNote() != null && !request.customerNote().isBlank()
+                    ? " — " + request.customerNote().trim() : ""), null);
+        notifications.notifyByRoleForPricingRequest("ceo", summary.id(), eventKind,
+            "ใบเสนอราคาลูกค้า " + fresh.number() + " " + outcomeLabel(request.outcome()));
+
+        if (QuotationStatus.ACCEPTED.equals(request.outcome())
+                && PricingRequestStatus.QUOTATION_ISSUED.equals(summary.status())) {
+            int transitioned = pricingRequests.transition(summary.id(), PricingRequestStatus.QUOTATION_ISSUED,
+                PricingRequestStatus.QUOTATION_ACCEPTED, null, null);
+            if (transitioned == 0) {
+                throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาถูกเปลี่ยนแปลงโดยผู้ใช้อื่น");
+            }
+        }
+        return requireQuotation(quotationId);
+    }
+
+    /** Mirrors {@code CustomerQuotationService#requireEditAccess} for the outcome action
+     * SPECIFICALLY — see this section's own header comment for why {@link #EDIT_ROLES}/{@link
+     * #requireEditAccessForQuotation} (which also admits sales_manager on any deal) is NOT reused
+     * here. */
+    private void requireOutcomeAccess(UserPrincipal actor, DealQuotationDto quotation) {
+        if (!"sales".equals(actor.role())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
+        TicketSummaryDto ticket = requireTicketSummary(quotation.ticketId());
+        if (ticket.createdById() != actor.id()) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
+    }
+
+    private String outcomeEventKind(String outcome) {
+        return switch (outcome) {
+            case QuotationStatus.ACCEPTED -> PricingRequestEventKind.CUSTOMER_QUOTATION_ACCEPTED;
+            case QuotationStatus.REJECTED -> PricingRequestEventKind.CUSTOMER_QUOTATION_REJECTED;
+            case QuotationStatus.REVISION_REQUESTED -> PricingRequestEventKind.CUSTOMER_QUOTATION_REVISION_REQUESTED;
+            default -> throw new IllegalStateException("Unreachable — validated by RECORDABLE_OUTCOMES");
+        };
+    }
+
+    private String outcomeLabel(String outcome) {
+        return switch (outcome) {
+            case QuotationStatus.ACCEPTED -> "ลูกค้ายอมรับแล้ว";
+            case QuotationStatus.REJECTED -> "ถูกลูกค้าปฏิเสธ";
+            case QuotationStatus.REVISION_REQUESTED -> "ลูกค้าขอแก้ไข";
+            default -> "มีการอัปเดตผล";
+        };
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // "ยืนยันคำสั่งซื้อ" on a direct quotation — GLA-136 (owner ruling, Ploy 2026-09-30), reshaped by
+    // quotation ↔ deal linking slice 1 (IA §7, same day): an APPROVED direct quotation's deal moves
+    // to S10 ORDER_RECEIVED with the quotation's lines.
+    //
+    // Direct (DEAL_DIRECT) and pipeline (PRICING_REQUEST) quotations keep separate PRICING routes, and
+    // R10 stands: there is still no recordOutcome for DEAL_DIRECT (see #recordOutcome), and this is
+    // the rep's own decision that the customer ordered (owner decision D3 — no signature capture).
+    // Slice 1 dropped GLA-136's "the ticket must be quotation-only" precondition: a quotation-first
+    // deal is a real deal now (V193 quotation_only is provenance only), and an ordinary deal with a
+    // direct quotation confirms the same way. It lives here rather than in a new service because
+    // every authz decision for this engine already lives on this class (#requireEditAccess is the
+    // audience, reused verbatim, not re-derived) and #ticketService is already wired here for
+    // #approveAndIssuePricingRequestOrigin.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    /** ticket_item column widths (V6/V8/V9/V25): brand 255, model/color/texture/size 80, raw_unit 30.
+     * quotation_item's own were widened to 255 by V162, so a long catalogue text is clipped here
+     * rather than failing the confirmation on a length error; the quotation keeps the full text. */
+    private static final int TICKET_ITEM_BRAND_MAX = 255;
+    private static final int TICKET_ITEM_TEXT_MAX = 80;
+    private static final int TICKET_ITEM_RAW_UNIT_MAX = 30;
+
+    /**
+     * {@code POST /api/deal-quotations/{id}/confirm-order} (and its one-release alias
+     * {@code …/promote-to-deal}) — confirms the customer's order from an APPROVED direct quotation,
+     * moving the deal it hangs off to S10 ORDER_RECEIVED in ONE transaction, mirroring
+     * {@code OrderConfirmationService#confirmOrder}'s own bridge sequence (never a second
+     * implementation of it):
+     *
+     * <ol>
+     *   <li>lock the ticket row ({@link TicketRepository#lockTicketForUpdate}) and re-read it — every
+     *       ticket precondition below is checked against the LOCKED read;</li>
+     *   <li>{@code status draft -> quotation_issued} — the SAME bridge write
+     *       ({@link TicketRepository#markQuotationIssuedForOrderConfirmation}) confirmOrder uses, the
+     *       only thing every downstream ticket-keyed gate (deposit notice, IR, close) keys on;</li>
+     *   <li>best-effort {@code quotation_only TRUE -> FALSE} ({@link TicketRepository#markPromotedToPipeline})
+     *       — provenance only; its rowcount is ignored (an ordinary deal is already FALSE);</li>
+     *   <li>{@code sales.ticket_item} replaced by the quotation's own goods lines (see
+     *       {@link #ticketItemsFromQuotation}) — the delivery machinery's quantity source; the
+     *       quotation is the agreed order, so it replaces any preliminary lines the deal carried;</li>
+     *   <li>{@code TicketService#confirmCustomerForPromotedQuotation} — the unmodified
+     *       confirmCustomer body: {@code payment_status = CUSTOMER_CONFIRMED}, stage auto-advanced to
+     *       {@code ORDER_RECEIVED}.</li>
+     * </ol>
+     *
+     * <p><strong>Order of checks</strong>: quotation exists on this engine (404 — a LEGACY
+     * {@code origin IS NULL} id is a 404 here too, via {@link #requireQuotation}) → authz
+     * {@link #requireEditAccess} against the deal (403: the owning {@code sales} rep, any
+     * {@code sales_manager}, or a {@code can_create_quotation} grantee; checked BEFORE any 409, so a
+     * caller with no access learns nothing about the quotation's state) → {@code origin = DEAL_DIRECT}
+     * (409) → [lock] → idempotent replay: a {@link TicketEventKind#DEAL_PROMOTED_FROM_QUOTATION}
+     * event already exists on the deal → return the current state, write nothing → {@code doc_status
+     * = APPROVED} (409) → deal lifecycle {@code ACTIVE} (409) → deal status {@code draft} (409).
+     *
+     * <p>The event kind keeps its GLA-136 name ({@code DEAL_PROMOTED_FROM_QUOTATION}) — it is pinned
+     * by the {@code chk_event_kind} DB CHECK.
+     */
+    @Transactional
+    public PromoteToDealResultDto confirmOrderFromDirectQuotation(long quotationId, UserPrincipal actor) {
+        if (ticketService == null) {
+            // Same defensive shape as #approveAndIssuePricingRequestOrigin's own guard — only
+            // reachable if a deployment wires this bean without #wireTicketService.
+            throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "ฟีเจอร์นี้ยังไม่พร้อมใช้งาน");
+        }
+        DealQuotationDto quotation = requireQuotation(quotationId);
+        long ticketId = quotation.ticketId();
+        // Authz first — see this method's Javadoc.
+        requireEditAccess(actor, requireTicketSummary(ticketId));
+        if (!DealQuotationRepository.ORIGIN_DEAL_DIRECT.equals(quotation.origin())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ยืนยันคำสั่งซื้อจากหน้านี้ได้เฉพาะใบเสนอราคาตรง (ไม่ผ่านคำขอราคา) เท่านั้น");
+        }
+
+        // Serialize every confirmation (and every other writer that takes this lock) on this deal.
+        tickets.lockTicketForUpdate(ticketId);
+        TicketSummaryDto locked = requireTicketSummary(ticketId);
+
+        if (tickets.hasPromotionFromQuotationEvent(ticketId)) {
+            return promotionResult(ticketId, quotationId); // idempotent replay — no writes
+        }
+        DealQuotationDto fresh = requireQuotation(quotationId);
+        if (!QuotationStatus.APPROVED.equals(fresh.docStatus())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ยืนยันคำสั่งซื้อได้เฉพาะใบเสนอราคาที่อนุมัติแล้วเท่านั้น (ปัจจุบัน: " + fresh.docStatus() + ")");
+        }
+        if (!DealLifecycle.ACTIVE.equals(locked.lifecycle())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ดีลไม่ได้อยู่ในสถานะ ACTIVE (" + locked.lifecycle() + ") จึงยืนยันคำสั่งซื้อไม่ได้");
+        }
+        if (!TicketStatus.DRAFT.equals(locked.status())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ยืนยันคำสั่งซื้อไม่ได้ — สถานะดีล (" + locked.status() + ") ผ่านขั้นออกใบเสนอราคาไปแล้ว");
+        }
+
+        // The status compare-and-set runs under the row lock, so a 0 here is unreachable through the
+        // API; it is checked, not assumed, and rolls the whole confirmation back.
+        if (tickets.markQuotationIssuedForOrderConfirmation(ticketId) != 1) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "สถานะดีลถูกเปลี่ยนโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
+        }
+        // Provenance only (V193): flips a quotation-first deal's flag; a no-op (0 rows) on an
+        // ordinary deal. Nothing reads the flag any more, so its rowcount is deliberately ignored.
+        tickets.markPromotedToPipeline(ticketId);
+        tickets.addEventWithDocument(ticketId, actor.id(), actor.name(),
+            TicketEventKind.DEAL_PROMOTED_FROM_QUOTATION, TicketStatus.DRAFT, TicketStatus.QUOTATION_ISSUED,
+            "ยืนยันคำสั่งซื้อจากใบเสนอราคา " + fresh.number(), RelatedDocumentType.QUOTATION, quotationId);
+        // The quotation is the agreed order, so it REPLACES whatever preliminary lines the deal
+        // carried. Safe at this point: the deal is still pre-order (status was draft, so no delivery
+        // or stock reservation exists — both key on quotation_issued or later), and the only other
+        // reference to a ticket_item, pricing_request_item.source_ticket_item_id, is ON DELETE SET NULL.
+        tickets.replaceItems(ticketId, ticketItemsFromQuotation(fresh));
+        ticketService.confirmCustomerForPromotedQuotation(ticketId, actor);
+        return promotionResult(ticketId, quotationId);
+    }
+
+    private PromoteToDealResultDto promotionResult(long ticketId, long quotationId) {
+        return new PromoteToDealResultDto(ticketId, requireTicketSummary(ticketId), requireQuotation(quotationId));
+    }
+
+    /**
+     * The quotation's lines as {@code sales.ticket_item} rows — the same field set {@link
+     * TicketRepository#findPricingChainFallbackItems} maps and {@code
+     * OrderConfirmationService#reconcileTicketItems} writes: brand/model/color/texture/size, qty,
+     * qty_sqm, unit_basis, raw_unit. NO pricing field is copied (proposed/approved/raw price stay
+     * null) — those columns carry the legacy ticket-native approval history, and a direct
+     * quotation's typed price was never "approved" on this ticket in that sense; money documents
+     * read the quotation itself ({@code DepositNoticeRepository#findDealQuotationItemsForDeposit}).
+     *
+     * <p>Only goods lines: an {@code ADJUSTMENT} row (a negative discount/surcharge line, quantity −1)
+     * is money, not something to deliver, and a non-positive quantity would violate
+     * {@code chk_ticket_item_qty_delivered} anyway. A TILE line's quantity is its final piece count
+     * ({@code quantity}), and its area is derived from that SAME count via the shared {@link
+     * WastageCalculator#sqmQuantityFromPieces} — exactly as reconcileTicketItems derives it — so qty
+     * and qty_sqm can never disagree. {@code unit_basis} is PIECE for every row: ticket_item's CHECK
+     * allows only PIECE/SQM, and qty here is always a count (pieces, or the PLAIN row's own unit,
+     * kept verbatim in raw_unit).
+     */
+    private List<TicketItemRequest> ticketItemsFromQuotation(DealQuotationDto quotation) {
+        List<TicketItemRequest> rows = new ArrayList<>();
+        for (DealQuotationItemDto item : quotation.items()) {
+            if (WastageCalculator.LINE_TYPE_ADJUSTMENT.equals(item.lineType())) {
+                continue;
+            }
+            BigDecimal qty = item.quantity();
+            if (qty == null || qty.signum() <= 0) {
+                continue;
+            }
+            boolean tile = !WastageCalculator.LINE_TYPE_PLAIN.equals(item.lineType());
+            BigDecimal qtySqm = tile && item.sqmPerPiece() != null && item.sqmPerPiece().signum() > 0
+                ? WastageCalculator.sqmQuantityFromPieces(qty.intValue(), item.sqmPerPiece())
+                : null;
+            rows.add(new TicketItemRequest(
+                clip(firstNonBlank(item.brand(), item.model(), item.descriptionLine(), "รายการจากใบเสนอราคา"),
+                    TICKET_ITEM_BRAND_MAX),
+                clip(item.model(), TICKET_ITEM_TEXT_MAX),
+                clip(item.color(), TICKET_ITEM_TEXT_MAX),
+                clip(item.texture(), TICKET_ITEM_TEXT_MAX),
+                clip(item.sizeText(), TICKET_ITEM_TEXT_MAX),
+                null, // factory — a direct quotation line carries none
+                qty, qtySqm, "PIECE",
+                null, null, // rawPrice/rawCurrency — not a costing input, see Javadoc
+                clip(item.unit(), TICKET_ITEM_RAW_UNIT_MAX),
+                null, // proposedPrice — see Javadoc
+                "THB"));
+        }
+        return rows;
+    }
+
+    private static String firstNonBlank(String... values) {
+        for (String v : values) {
+            if (v != null && !v.isBlank()) {
+                return v.trim();
+            }
+        }
+        return null;
+    }
+
+    private static String clip(String value, int max) {
+        if (value == null) {
+            return null;
+        }
+        return value.length() <= max ? value : value.substring(0, max);
+    }
+
     /**
      * Automatic expiry sweep for a PRICING_REQUEST-origin quotation (D5) — the counterpart
      * {@code CustomerQuotationService#expireOverdueQuotations} already implements for the legacy
@@ -1763,7 +2360,19 @@ public class DealQuotationService {
             // zero-deposit term the rep already picked on the source document.
             source.omitContactHonorific(), source.fullPaymentTerm(),
             source.subtotalAmount(), parentQuotationId,
-            nextRevisionNo, derivedFromQuotationId, items));
+            nextRevisionNo, derivedFromQuotationId, items,
+            // Slice 2 (S2-B1): the copy inherits the source's ผู้รับ VERBATIM, like every other
+            // header field here — before slice 2 every direct row was 'UNSPECIFIED', so the short
+            // constructor's hard-coded literal was the same thing; now a DESIGNER quotation's
+            // revision must stay DESIGNER (TicketSummaryDto.liveDirectQuotation serves the
+            // revision's). Every source reaching here is DEAL_DIRECT (createRevision/createReorder
+            // refuse PRICING_REQUEST via #requireStatusMachineEnabled, and #submit excludes that
+            // origin from the resubmit-as-revision path) — the origin is stated, not copied.
+            DealQuotationRepository.ORIGIN_DEAL_DIRECT, source.recipientType(), source.recipientLabel(),
+            null, null,
+            // Owner-directed reversal of F2 (2026-09-26) — the copy inherits the source's manual
+            // buyer name VERBATIM, same "copy every header field" rule as everything else here.
+            source.orderedByName()));
         // GLA-75: "the copy carries the source's items verbatim" includes their pictures — the new
         // row's items point at the source's (immutable, shared) picture rows, matched by seq.
         // Shared by revisions and reorder clones alike.
@@ -1926,7 +2535,19 @@ public class DealQuotationService {
      * <p>GLA-123 slice S2 REWORK (owner reversed the dual-approval design, 2026-09-20): this read
      * is now shared verbatim by BOTH origins — whoever approves a PRICING_REQUEST-origin
      * quotation freezes into the SAME single snapshot row DEAL_DIRECT's own {@code #approve}
-     * writes, so there is no origin branching left here at all. */
+     * writes, so there is no origin branching left here at all.
+     *
+     * <p>Task 4 (slot signatures, 2026-09-26): ผู้พิมพ์ (slot 0) and พนักงานขาย (slot 1) each also
+     * get a signature image, resolved LIVE — {@code signatures.find(id)} straight off
+     * {@code hr.employee_signature} — every time this renders, NEVER frozen into a snapshot the
+     * way the approver's is (there is no approval event that would even define when to freeze
+     * these two). The id resolved is whichever the rep actually selected: the display override
+     * when set ({@code printedByDisplayId}/{@code salesRepDisplayId} — the same V179 ids the name
+     * override already reads), else the real deal-ownership id ({@code createdById}/
+     * {@code salesRepId}). A missing signature for that id, or the id happening to equal the
+     * approver's, is handled the same uneventful way: {@code signatures.find} returns empty and
+     * the slot just prints its text-only name, exactly as it always has — no special-casing
+     * needed, each slot's resolution is fully independent of the other two. */
     private th.co.glr.hr.ticket.QuotationRenderModel toRenderModel(DealQuotationDto quotation) {
         byte[] signaturePng = null;
         String signatureMime = null;
@@ -1946,8 +2567,31 @@ public class DealQuotationService {
         Map<Long, PictureImage> itemPictures = quotation.items().stream().anyMatch(DealQuotationItemDto::hasPicture)
             ? quotations.findPictureImagesForQuotation(quotation.id())
             : Map.of();
+
+        long printedById = quotation.printedByDisplayId() != null
+            ? quotation.printedByDisplayId() : quotation.createdById();
+        byte[] printedBySignaturePng = null;
+        String printedBySignatureMime = null;
+        var printedBySignature = signatures.find(printedById);
+        if (printedBySignature.isPresent()) {
+            printedBySignaturePng = printedBySignature.get().image();
+            printedBySignatureMime = printedBySignature.get().mimeType();
+        }
+
+        long salesRepId = quotation.salesRepDisplayId() != null
+            ? quotation.salesRepDisplayId() : quotation.salesRepId();
+        byte[] salesRepSignaturePng = null;
+        String salesRepSignatureMime = null;
+        var salesRepSignature = signatures.find(salesRepId);
+        if (salesRepSignature.isPresent()) {
+            salesRepSignaturePng = salesRepSignature.get().image();
+            salesRepSignatureMime = salesRepSignature.get().mimeType();
+        }
+
         return DealQuotationRenderAdapter.toRenderModel(quotation, signaturePng, signatureMime,
-            bankBlockLines, itemPictures);
+            bankBlockLines, itemPictures,
+            printedBySignaturePng, printedBySignatureMime,
+            salesRepSignaturePng, salesRepSignatureMime);
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -2049,19 +2693,27 @@ public class DealQuotationService {
      * Resolves the ผู้สั่งซื้อ for a create/update and returns the FROZEN snapshot to store —
      * precedence: the request's own {@code contactId}, else the contact the draft already carries
      * ({@code existingContactId}, update only), else the deal's contact
-     * ({@code sales.ticket.contact_id}). None → 400 "กรุณาระบุผู้สั่งซื้อ" (the owner's rule: a
-     * quotation cannot be saved without one). The contact must exist and belong to the deal's
-     * customer — a contact id from another customer is a client bug or a probe, refused as 400 with
-     * the same wording so nothing about other customers' contacts leaks. The name/phone/email are
-     * read NOW and written onto the quotation; a later edit of the contact row never changes the
-     * document (see V167's header for why that matters for an approved, emailed PDF).
+     * ({@code sales.ticket.contact_id}).
+     *
+     * ⚠️ Owner-directed reversal of V167/F2 (2026-09-26): a resolvable contact is NO LONGER
+     * required. This used to throw 400 "กรุณาระบุผู้สั่งซื้อ" when nothing in the precedence chain
+     * resolved (the owner's original rule: a quotation could not be saved without one) — the
+     * frontend's required contact-picker dropdown that rule existed for is gone (ผู้สั่งซื้อ is now
+     * a single optional free-text signature-name field, `orderedByName`, tracked entirely
+     * separately from this contact snapshot), so a create/update/submit with no contact anywhere in
+     * the chain now returns a blank snapshot instead of refusing. A contact id that IS given (or
+     * inherited) is still validated exactly as before: it must exist and belong to the deal's
+     * customer — a contact id from another customer is a client bug or a probe, still refused as
+     * 400 with the same wording so nothing about other customers' contacts leaks. The name/phone/
+     * email are read NOW and written onto the quotation; a later edit of the contact row never
+     * changes the document (see V167's header for why that matters for an approved, emailed PDF).
      */
     private ContactSnapshot resolveContact(Long requestedContactId, Long existingContactId, TicketSummaryDto ticket) {
         Long contactId = requestedContactId != null ? requestedContactId
             : existingContactId != null ? existingContactId
             : ticket.contactId();
         if (contactId == null) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาระบุผู้สั่งซื้อ");
+            return new ContactSnapshot(null, null, null, null);
         }
         ContactDto contact = contacts.findById(contactId)
             .filter(c -> ticket.customerId() != null && c.customerId() == ticket.customerId())
@@ -2228,6 +2880,23 @@ public class DealQuotationService {
         return isZeroDeposit(depositPercent) ? blankToNull(fullPaymentTerm) : null;
     }
 
+    /**
+     * Wording-scan fix 6 (2026-09-17) — the save-time half of the credit-days rule; the submit-time
+     * half (a BLANK value, once {@code remainderMode} is CREDIT, may not advance past DRAFT) lives
+     * inline in {@link #submit}, matching {@link #resolveFullPaymentTerm}'s own "create/update
+     * permissive, submit strict" split for the zero-deposit payment term — the precedent this fix
+     * was asked to follow. The two halves differ in ONE way {@code fullPaymentTerm} has no
+     * equivalent for: an explicit non-blank but INVALID value (0 or negative) is refused HERE,
+     * immediately, on every save — there is no "let a wrong number sit in a draft" case to permit,
+     * unlike a merely blank one, which still may (create/update never call this for a blank value —
+     * see the {@code creditDays <= 0} guard below, which a null short-circuits past).
+     */
+    private void requireValidCreditDays(String remainderMode, Integer creditDays) {
+        if ("CREDIT".equals(remainderMode) && creditDays != null && creditDays <= 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน");
+        }
+    }
+
     /** V178: {@code null}/blank reads as DAYS — today's behaviour, and what every pre-V178 row
      * (and the whole legacy customer-quotation path) stores. */
     private String resolveValidityMode(String validityMode) {
@@ -2343,6 +3012,14 @@ public class DealQuotationService {
         // ALWAYS, including the lenient preview path — see #requirePriceValidForType's Javadoc for
         // why this is not gated on rowNumber the way the completeness check is.
         requirePriceValidForType(input, lineType, priceMode, documentLanguage, rowNumber);
+        // Wording-scan fix 3 (2026-09-17): an invalid lead-time VALUE (min < 1, or max < min) is
+        // refused unconditionally, the same "always, including the lenient preview" reasoning as
+        // requirePriceValidForType above — these are wrong values, not an incomplete row, so there
+        // is no honest number to preview either. Applies to TILE and PLAIN rows alike (an
+        // ADJUSTMENT row has no lead-time concept at all — see WastageCalculator.LINE_TYPE_ADJUSTMENT).
+        if (!WastageCalculator.LINE_TYPE_ADJUSTMENT.equals(lineType)) {
+            requireValidLeadTime(input.leadTimeMinDays(), input.leadTimeMaxDays(), rowNumber);
+        }
         // v3b: the stored per-item vat/line_total columns follow the DOCUMENT's language, so an EN
         // row stores 0.00 VAT rather than a 7% figure nothing on that document ever charges. These
         // two columns are internal (neither is on DealQuotationItemDto, and the renderer never
@@ -2401,6 +3078,18 @@ public class DealQuotationService {
                     + "ราคาต่อ ตร.ม. (เอกสารภาษาอังกฤษ) ที่ระบุ ตร.ม./กล่อง ต้องปัดขึ้นเต็มกล่องเสมอ ไม่รองรับการขายแผ่นไม่เต็มกล่อง");
             }
         }
+        // Wording-scan fix 5 (2026-09-17): PIECES wastage must be a whole number of แผ่น — a
+        // fractional value (e.g. 0.5) saved today, but WastageCalculator#applyWastage's PIECES
+        // branch silently ROUNDS it (HALF_UP) for the arithmetic while the STORED/PRINTED
+        // wastageValue stays the untouched fraction, so the printed "+ เผื่อ 0.5 แผ่น" disagrees
+        // with the piece count the document actually adds. Refused here, before the value ever
+        // reaches WastageCalculator, so it can never be stored at all. PERCENT wastage is
+        // untouched — a percentage genuinely can be fractional (2.5%).
+        if (WastageCalculator.WASTAGE_MODE_PIECES.equals(input.wastageMode()) && input.wastageValue() != null
+            && input.wastageValue().stripTrailingZeros().scale() > 0) {
+            String where = rowNumber == null ? "" : "รายการที่ " + rowNumber + ": ";
+            throw new ApiException(HttpStatus.BAD_REQUEST, where + "จำนวนแผ่นที่เผื่อต้องเป็นจำนวนเต็ม");
+        }
         WastageCalculator.Result result;
         try {
             result = WastageCalculator.calculate(new WastageCalculator.Input(
@@ -2418,6 +3107,15 @@ public class DealQuotationService {
             // that does not fit exactly -- an absurd piecesInput/areaSqm/wastageValue combination
             // otherwise reached the generic 500 handler instead of this 400.
             throw new ApiException(HttpStatus.BAD_REQUEST, "ข้อมูลรายการไม่ถูกต้อง: " + e.getMessage());
+        }
+        // Wording-scan fix 4 (2026-09-17): an AREA-mode row whose typed area rounds to ZERO pieces
+        // before wastage saves today ("(พื้นที่ 0.01 ตร.ม.ๆละ 2.78 แผ่น รวม 0 แผ่น ...)") — a document
+        // line selling nothing. Checked on every path that reaches this point, the preview
+        // (rowNumber == null) included, consistently with how #requirePriceValidForType already
+        // behaves on the preview.
+        if (WastageCalculator.QUANTITY_MODE_AREA.equals(input.quantityMode()) && result.piecesBeforeWastage() == 0) {
+            String where = rowNumber == null ? "" : "รายการที่ " + rowNumber + ": ";
+            throw new ApiException(HttpStatus.BAD_REQUEST, where + "พื้นที่น้อยเกินไป คำนวณได้ 0 แผ่น");
         }
 
         // v3: the PIECE arithmetic above is mode-independent — only the money changes. WastageCalculator
@@ -2840,6 +3538,34 @@ public class DealQuotationService {
         }
     }
 
+    /**
+     * Wording-scan fix 3 (2026-09-17) — a lead-time range is only validated once it is actually
+     * ENTERED (both {@code min}/{@code max} present): a lone value, or neither, is an incompleteness
+     * question for {@link #requireItemComplete}/{@link #requireEveryTileItemHasALeadTime} to answer
+     * (submit-only, unchanged by this fix), not an invalid-value one. Once both are present:
+     * {@code min} must be at least 1 day (a lead time of 0 or negative days is not a real range) and
+     * {@code max} must be at least {@code min} (so "90-75" cannot be saved as a range that runs
+     * backwards). Refused on save — these are wrong VALUES, not a gap to fill in later — with the
+     * exact message the frontend validator mirrors, so a rep sees the same sentence whichever side
+     * catches it.
+     *
+     * <p>A stored row that predates this fix (0, or min &gt; max) is untouched by this check — it
+     * only ever runs on a freshly-submitted {@code ItemInput}, never re-validates an
+     * already-persisted {@link DealQuotationItemDto} — so an old row with such values still RENDERS
+     * exactly as it always did (see {@code DealQuotationRenderAdapter#flushLeadTimeGroup}, which
+     * prints whatever it is given rather than validating it).
+     */
+    private void requireValidLeadTime(Integer leadTimeMinDays, Integer leadTimeMaxDays, Integer rowNumber) {
+        if (leadTimeMinDays == null || leadTimeMaxDays == null) {
+            return;
+        }
+        if (leadTimeMinDays < 1 || leadTimeMaxDays < leadTimeMinDays) {
+            String where = rowNumber == null ? "" : "รายการที่ " + rowNumber + ": ";
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                where + "ระยะเวลานำเข้าต้องไม่น้อยกว่า 1 วัน และค่าสูงสุดต้องไม่น้อยกว่าค่าต่ำสุด");
+        }
+    }
+
     /** Item completeness rule — see {@link #buildItem(ItemInput, Integer)}'s own Javadoc. Collects
      * EVERY missing/invalid field before throwing (not just the first) so one 400 tells the rep
      * everything wrong with the row, not a one-at-a-time guessing game. */
@@ -3085,13 +3811,19 @@ public class DealQuotationService {
         // NARROWER CustomerQuotationService-shaped gate (no account, no quotation-grant bypass),
         // checked FIRST and returning early so the broader DEAL_DIRECT rules below never apply to
         // it. Covers get/render/download/pictures — every read here funnels through this method.
+        // H1 lockdown (2026-09-30): account is ROW-scoped on BOTH origins -- refused on a deal outside its list
+        // scope, and (owner ruling) allowed on a PRICING_REQUEST-origin row inside it. Checked before the
+        // quotation-grant bypass so a can_create_quotation grant cannot widen an account caller past its scope.
+        if ("account".equals(actor.role())) {
+            requireAccountScope(quotation.ticketId());
+            if (!ACCOUNT_VISIBLE_STATUSES.contains(quotation.docStatus())) {
+                throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+            }
+            return;
+        }
         if ("PRICING_REQUEST".equals(quotation.origin())) {
-            requireRole(actor, PRICING_REQUEST_VIEW_ROLES);
-            if ("sales".equals(actor.role())) {
-                TicketSummaryDto ticket = requireTicketSummary(quotation.ticketId());
-                if (ticket.createdById() != actor.id()) {
-                    throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
-                }
+            if (!canViewPricingRequestOriginRow(actor, quotation)) {
+                throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
             }
             return;
         }
@@ -3105,6 +3837,38 @@ public class DealQuotationService {
                 throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
             }
         }
+    }
+
+    /**
+     * GLA-123 slice S3 BLOCKER-A fix (Opus review against real Postgres, 2026-09-23): the boolean
+     * form of {@link #requireViewAccess}'s PRICING_REQUEST branch, factored out so {@link
+     * #listForTicket} can FILTER a mixed-origin list with the exact same rule this method already
+     * enforces for a single row — rather than duplicating the role/owner check a second time (the
+     * duplication is exactly how {@code listForTicket} ended up leaking CEO price/discount to
+     * import/account/grant-holders in the first place: it had its OWN, broader gate at the
+     * method's entry — {@link #VIEW_ROLES} plus a full {@link #hasQuotationGrant} bypass — and
+     * nothing origin-aware downstream of it).
+     *
+     * <p>On this origin, {@link DealQuotationItemDto#unitPrice}/{@code discountPct}/{@code
+     * netUnitPrice} ARE the CEO's approved price and discount (not a rep's own typed price, as on
+     * a DEAL_DIRECT row) — two prior owner rulings (S1 review MAJOR-3, then the "block import"
+     * ruling) restrict reading them to {@link #PRICING_REQUEST_VIEW_ROLES} (sales-owner,
+     * sales_manager, ceo) with NO {@link #hasQuotationGrant} bypass, unlike every other role/read
+     * gate on this class.
+     */
+    private boolean canViewPricingRequestOriginRow(UserPrincipal actor, DealQuotationDto quotation) {
+        // 2026-09-30 reversal of M3 for account only -- see PRICING_REQUEST_VIEW_ROLES's comment.
+        if ("account".equals(actor.role())) {
+            return tickets.isInAccountScope(quotation.ticketId());
+        }
+        if (!PRICING_REQUEST_VIEW_ROLES.contains(actor.role())) {
+            return false;
+        }
+        if ("sales".equals(actor.role())) {
+            TicketSummaryDto ticket = requireTicketSummary(quotation.ticketId());
+            return ticket.createdById() == actor.id();
+        }
+        return true;
     }
 
     /** Live DB read of the per-employee grant — see {@link EmployeeAuthRepository#canCreateQuotation}
@@ -3122,6 +3886,13 @@ public class DealQuotationService {
      */
     private void requireApproveAccess(UserPrincipal actor) {
         requireRole(actor, APPROVE_ROLES);
+    }
+
+    /** The account role's row scope ({@code TicketRepository#isInAccountScope}) -- 403 outside it. */
+    private void requireAccountScope(long ticketId) {
+        if (!tickets.isInAccountScope(ticketId)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
     }
 
     private TicketSummaryDto requireTicketSummary(long ticketId) {
@@ -3145,6 +3916,20 @@ public class DealQuotationService {
 
     private String blankToNull(String s) {
         return (s == null || s.isBlank()) ? null : s.trim();
+    }
+
+    /** GLA-123 slice S3 — mirrors {@code CustomerQuotationService#validateUuid} exactly, needed
+     * here for the first time by {@link #recordOutcome}'s own {@code clientRequestId} replay
+     * guard (no other method on this class validates one today). */
+    private String validateUuid(String clientRequestId) {
+        if (clientRequestId == null || clientRequestId.isBlank()) {
+            return null;
+        }
+        try {
+            return UUID.fromString(clientRequestId.trim()).toString();
+        } catch (IllegalArgumentException e) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "clientRequestId ต้องเป็น UUID ที่ถูกต้อง");
+        }
     }
 
     private BigDecimal money2(BigDecimal value) {

@@ -180,8 +180,42 @@ public final class PricingRequestRequests {
         // PricingRequestService#requireItemFieldsComplete exactly then. Appended at the END (not
         // beside originCountry above) so every existing positional constructor call — the compat
         // ctor below, and every hand-wired test call site — keeps compiling unchanged.
-        @Size(max = 500) String originCountryOther
+        @Size(max = 500) String originCountryOther,
+
+        // Slice 1 of the stock-line feature (V194, IA .design/stock-item-pricing): the line's
+        // SOURCE. null = สั่งนำเข้า (import, the default), "IN_THAILAND" = สต็อกในไทย, "IN_TRANSIT" =
+        // สต็อกกำลังเดินทาง. Appended at the END so every existing positional call keeps compiling
+        // via the compat constructors below. TEST-FIRST SCAFFOLDING: the field is carried and
+        // persisted, nothing validates or acts on it yet.
+        String stockSource
     ) {
+        /** The pre-stock-line shape - the canonical 36-field constructor that existed before
+         * stockSource was appended. Defaults it to null (สั่งนำเข้า). */
+        public PricingRequestItemRequest(Long sourceTicketItemId, Long productId, Long variantId,
+                                         String brand, String model, String productDescription,
+                                         String color, String texture, String size, String factory,
+                                         BigDecimal requestedQty, BigDecimal requestedQtySqm,
+                                         String requestedUnit, String requestedUnitBasis,
+                                         String quantityType, LocalDate targetDeliveryDate,
+                                         String deliveryLocation, String specialRequirement,
+                                         String productCode, BigDecimal thicknessMm,
+                                         BigDecimal sqmPerPiece, String quantityMode,
+                                         BigDecimal areaSqm, Integer piecesInput,
+                                         String wastageMode, BigDecimal wastageValue,
+                                         Integer piecesPerBox, BigDecimal sqmPerBox,
+                                         Boolean roundToFullBox, String originCountry,
+                                         Integer leadTimeMinDays, Integer leadTimeMaxDays,
+                                         Integer piecesBeforeWastage, Integer piecesAfterWastage,
+                                         Integer boxes, String originCountryOther) {
+            this(sourceTicketItemId, productId, variantId, brand, model, productDescription, color,
+                texture, size, factory, requestedQty, requestedQtySqm, requestedUnit,
+                requestedUnitBasis, quantityType, targetDeliveryDate, deliveryLocation,
+                specialRequirement, productCode, thicknessMm, sqmPerPiece, quantityMode, areaSqm,
+                piecesInput, wastageMode, wastageValue, piecesPerBox, sqmPerBox, roundToFullBox,
+                originCountry, leadTimeMinDays, leadTimeMaxDays, piecesBeforeWastage,
+                piecesAfterWastage, boxes, originCountryOther, null);
+        }
+
         /** The pre-V185 shape — kept so every existing construction site (tests, mostly) compiles
          * unchanged. Defaults every new field to null; {@code resolveItems} then requires the
          * caller to have supplied the tile fields directly, same as any other item. */
@@ -244,12 +278,22 @@ public final class PricingRequestRequests {
      * {@code PricingRequestService#setItemFactory} for the full set of guards and why this is a
      * gap-FILL rather than a re-route.
      *
-     * <p>The 255 cap matches {@code sales.pricing_request_item.factory VARCHAR(255)} (V59): the
-     * column would otherwise reject the write as a raw constraint violation (500) instead of the
-     * 400 a too-long name deserves.
+     * <p><b>B6 (GLA-135) — factoryId, not a free-text name.</b> Until this fix the field was a
+     * free-typed {@code String factory}, so a name that did not exactly match a
+     * {@code price_catalog.factories} row saved with {@code resolved_factory_id} left NULL — the
+     * direct cause of the reported "brand-new factory → factory config error": downstream
+     * {@code FactoryConfigRepository.findByName} (factory-email + CEO landed-cost lookups) had
+     * nothing to match. The picker now sends the id of a real master row instead; the service
+     * resolves it and stores BOTH {@code resolved_factory_id} and the canonical
+     * {@code factory} name (see {@code PricingRequestService#setItemFactory} /
+     * {@code PricingRequestRepository#fillItemFactory}). factoryId-only, not
+     * factoryId-or-name: grepping every caller (backend integration tests, the frontend
+     * {@code hrApi}/{@code mockApi} pair, e2e) found none outside this one flow, and sales/import
+     * must pick from existing factories only — a brand-new one is added in-flow via
+     * {@code POST /api/price-import/factories} (import/ceo-only), never typed here.
      */
     public record SetItemFactoryRequest(
-        @NotBlank @Size(max = 255) String factory
+        @NotNull Long factoryId
     ) {}
 
     /** Import-only toggle on a Pricing Request attachment (V69, review remediation COMMIT 4). */

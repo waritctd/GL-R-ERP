@@ -235,11 +235,16 @@ public final class DealQuotationRequests {
 
     /**
      * {@code contactId} (owner feedback F2, 2026-09-10 — ผู้สั่งซื้อ) is OPTIONAL on the wire and
-     * defaults to the deal's own contact ({@code sales.ticket.contact_id}); what is REQUIRED is
-     * that one resolves — create/update/submit answer 400 "กรุณาระบุผู้สั่งซื้อ" otherwise. The
-     * chosen contact must belong to the deal's customer; its name/phone/email are snapshotted onto
-     * the quotation (V167). Enforced in {@code DealQuotationService}, not by bean validation, because
-     * the default is a DB lookup.
+     * defaults to the deal's own contact ({@code sales.ticket.contact_id}).
+     *
+     * ⚠️ Owner-directed reversal of V167/F2 (2026-09-26): resolving to a contact is no longer
+     * REQUIRED either — the frontend's required contact-picker dropdown this field used to back is
+     * gone (replaced by an unrelated, always-optional free-text signature name, {@code
+     * orderedByName}), so create/update/submit no longer refuse a quotation with no contact
+     * anywhere in the resolution chain. A contact id that IS given (or inherited) must still belong
+     * to the deal's customer, refused as 400 otherwise; its name/phone/email are snapshotted onto
+     * the quotation same as before (V167). Enforced in {@code DealQuotationService#resolveContact},
+     * not by bean validation, because the default is a DB lookup.
      */
     public record UpsertDealQuotationRequest(
         Long contactId,
@@ -357,8 +362,76 @@ public final class DealQuotationRequests {
         @Pattern(regexp = "BEFORE_DELIVERY|ON_DELIVERY|ON_OR_BEFORE_DELIVERY",
             message = "ต้องเป็น BEFORE_DELIVERY, ON_DELIVERY หรือ ON_OR_BEFORE_DELIVERY")
         String fullPaymentTerm,
+        /**
+         * Owner-directed reversal of F2 (2026-09-10, hardened 2026-09-15, reversed 2026-09-26):
+         * the ผู้สั่งซื้อ signature slot no longer auto-fills from the contact/customer name at
+         * all — this is the ONLY thing it ever prints there. Optional/nullable on the wire, and
+         * genuinely editable the same "editor always sends its current value" way as
+         * {@link #projectName} — a null/blank on a PUT is a real request to clear it back to the
+         * dotted placeholder, not "leave alone". {@code null} on CREATE means the same thing: a
+         * brand-new document starts with no manual name, i.e. the dotted line.
+         */
+        @Size(max = 255) String orderedByName,
+        /**
+         * Quotation ↔ deal linking slice 2 (S2-B1) — ผู้รับใบเสนอราคา, persisted to the existing
+         * {@code sales.quotation.recipient_type} (V52). {@code DESIGNER | OWNER | BUYER} only —
+         * {@code UNSPECIFIED} is the legacy bucket and is never accepted from a client.
+         *
+         * <p>On CREATE (every create is a {@code DEAL_DIRECT} row) it is REQUIRED: missing/blank →
+         * 400. On UPDATE, omitted/null keeps the stored value; a value is accepted only on a
+         * {@code DRAFT} {@code DEAL_DIRECT} quotation (409 on any other status, 409 on a
+         * {@code PRICING_REQUEST} row — whose recipient belongs to its คำขอราคา). Validated in
+         * {@code DealQuotationService}, not by a bean annotation, so the refusal carries the
+         * service's own Thai sentence rather than {@code ApiExceptionHandler#fieldMessage}'s
+         * "field + default message" shape.
+         */
+        String recipientType,
         @NotEmpty List<@Valid ItemInput> items
     ) {
+        /** The pre-slice-2 canonical shape (no {@link #recipientType}) — kept so every existing
+         * construction site (tests, mostly) compiles unchanged. Defaults recipientType to null,
+         * which on UPDATE means "keep the stored recipient" and on CREATE is refused (400) — a
+         * fixture that creates must say who the quotation is for, via {@link #withRecipientType}. */
+        public UpsertDealQuotationRequest(Long contactId, String deptCode, String unitCode,
+                                          LocalDate offerDate, Integer depositPercent,
+                                          String remainderMode, Integer creditDays,
+                                          Integer validityDays, String validityMode, LocalDate validityUntil,
+                                          String customerNotes, String priceMode, String documentLanguage,
+                                          String currency, Long printedByDisplayId, Long salesRepDisplayId,
+                                          String projectName, Boolean omitContactHonorific,
+                                          String fullPaymentTerm, String orderedByName, List<ItemInput> items) {
+            this(contactId, deptCode, unitCode, offerDate, depositPercent, remainderMode,
+                creditDays, validityDays, validityMode, validityUntil, customerNotes, priceMode,
+                documentLanguage, currency, printedByDisplayId, salesRepDisplayId, projectName,
+                omitContactHonorific, fullPaymentTerm, orderedByName, null, items);
+        }
+
+        /** Copy with only {@link #recipientType} replaced — every other field unchanged. */
+        public UpsertDealQuotationRequest withRecipientType(String newRecipientType) {
+            return new UpsertDealQuotationRequest(contactId, deptCode, unitCode, offerDate, depositPercent,
+                remainderMode, creditDays, validityDays, validityMode, validityUntil, customerNotes, priceMode,
+                documentLanguage, currency, printedByDisplayId, salesRepDisplayId, projectName,
+                omitContactHonorific, fullPaymentTerm, orderedByName, newRecipientType, items);
+        }
+
+        /** The pre-orderedByName shape (today's canonical, minus {@link #orderedByName}) — kept
+         * so every existing construction site (tests, mostly) compiles unchanged. Defaults to
+         * null, which reads as "no manual name" — the dotted placeholder — correct for every one
+         * of those fixtures (nothing before this feature ever set it). */
+        public UpsertDealQuotationRequest(Long contactId, String deptCode, String unitCode,
+                                          LocalDate offerDate, Integer depositPercent,
+                                          String remainderMode, Integer creditDays,
+                                          Integer validityDays, String validityMode, LocalDate validityUntil,
+                                          String customerNotes, String priceMode, String documentLanguage,
+                                          String currency, Long printedByDisplayId, Long salesRepDisplayId,
+                                          String projectName, Boolean omitContactHonorific,
+                                          String fullPaymentTerm, List<ItemInput> items) {
+            this(contactId, deptCode, unitCode, offerDate, depositPercent, remainderMode,
+                creditDays, validityDays, validityMode, validityUntil, customerNotes, priceMode,
+                documentLanguage, currency, printedByDisplayId, salesRepDisplayId, projectName,
+                omitContactHonorific, fullPaymentTerm, null, items);
+        }
+
         /** The pre-V180/V181 shape (no {@link #omitContactHonorific}/{@link #fullPaymentTerm}) —
          * kept so every existing construction site (tests, mostly) compiles unchanged. Defaults
          * omitContactHonorific to null (read as {@code false} — UNticked, today's only behaviour)
@@ -460,4 +533,16 @@ public final class DealQuotationRequests {
     public record RejectRequest(@NotBlank @Size(max = 2000) String reason) {}
 
     public record CancelRequest(@Size(max = 2000) String reason) {}
+
+    /** GLA-123 slice S3 (R9 — customer outcome) — mirrors {@code
+     * CustomerQuotationRequests.RecordQuotationOutcomeRequest} field-for-field; kept as this
+     * package's own record rather than reused across packages, matching this file's existing
+     * convention of one self-contained request-record family per quotation engine. {@code
+     * outcome} is one of {@code ACCEPTED}/{@code REJECTED}/{@code REVISION_REQUESTED} — validated
+     * against {@code DealQuotationService}'s own {@code RECORDABLE_OUTCOMES}, not here. */
+    public record RecordOutcomeRequest(
+        String outcome,
+        @Size(max = 4000) String customerNote,
+        String clientRequestId
+    ) {}
 }

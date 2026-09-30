@@ -100,7 +100,7 @@ export function QuotationPlainItemRow({
         />
       </FormField>
 
-      <div className="grid grid-cols-4 gap-3 mobile:grid-cols-2">
+      <div className="grid grid-cols-4 gap-3 mobile:grid-cols-1">
         <FormField label="จำนวน" htmlFor={`plain-qty-${index}`} required error={errors.quantity}>
           <input
             id={`plain-qty-${index}`} type="number" step="0.01" min="0" disabled={readOnly}
@@ -137,7 +137,10 @@ export function QuotationPlainItemRow({
             (DealQuotationService#requireEveryTileItemHasALeadTime only gates TILE rows), so a row
             left blank here saves exactly as it always did. Mirrors that control's shape (same
             labels, same sr-only max-field pattern) so the two read as one feature. */}
-        <FormField label="ระยะเวลานำเข้า (วัน)" htmlFor={`plain-lead-${index}`} hint="ไม่บังคับ">
+        <FormField
+          label="ระยะเวลานำเข้า (วัน)" htmlFor={`plain-lead-${index}`} hint="ไม่บังคับ"
+          error={errors.leadTimeMinDays}
+        >
           <div className="flex items-center gap-1.5">
             <input
               id={`plain-lead-${index}`} type="number" disabled={readOnly} className="w-16"

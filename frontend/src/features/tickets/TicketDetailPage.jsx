@@ -1,10 +1,22 @@
+/* Hallmark · genre: modern-minimal · macrostructure: Workbench · design-system: design.md · designed-as-app
+ * conformance-pass: radius normalized to the §8 scale (card/panel surfaces → --radius-md;
+ * rounded-lg/xl/[6px] were off the sm/md/lg/pill scale — "20px is reserved, not a default").
+ * No logic, data, permission, or layout-metric changes. See DESIGN.md §8 (shape) / §20 (anti-patterns).
+ * conformance-pass (slice 2 flow A, SLICE-2-FLOW-A.md §D/§E): ใบเสนอราคา panel route choice as two
+ * sibling header buttons (no dialog, §16) + one muted helper line; three direct-quotation CTA states
+ * through the existing sticky slot + ConfirmDialog; GLA-136 quotation-only banner removed (IA §7).
+ * Tokens only, no new colour/font/radius. pre-emit critique: P4 H4 E4 S4 R4 V5.
+ * conformance-pass (one pricing route per deal, owner ruling 2026-09-30): ใบเสนอราคาตรง is hidden
+ * while the deal holds a live คำขอราคา (and while those load); the route-comparison helper line
+ * already goes with it. No new control, colour or layout. pre-emit critique: P4 H4 E4 S4 R4 V5.
+ */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Breadcrumbs } from '../../components/common/Breadcrumbs.jsx';
-import { Button } from '../../components/common/Button.jsx';
+import { Button, buttonVariants } from '../../components/common/Button.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { fieldErrorId } from '../../components/common/FormField.jsx';
@@ -23,7 +35,7 @@ import {
 } from '../../utils/format.js';
 import { downloadBlob } from '../../utils/download.js';
 import { convertToThb, formatThb } from './catalogPriceDisplay.js';
-import { activePricingRequestsSummary } from '../pricingRequests/pricingRequestMeta.js';
+import { activePricingRequestsSummary, canCreatePricingRequest } from '../pricingRequests/pricingRequestMeta.js';
 import { PricingRequestPanel } from '../pricingRequests/PricingRequestPanel.jsx';
 import { CancelDealModal } from './CancelDealModal.jsx';
 import { hasActivitySince, isReadyToAdvance, lastStageChangeAt, STAGE_ADVANCE_GATE_HINT } from './dealTrackingMeta.js';
@@ -41,12 +53,14 @@ import { DealQuotationPanel } from './DealQuotationPanel.jsx';
 // above (the PCR-chain's own panel, untouched) -- renders `origin = 'DEAL_DIRECT'` rows, which
 // never overlap that panel's rows.
 import { DealDirectQuotationPanel } from '../quotations/DealDirectQuotationPanel.jsx';
-import { canViewDealQuotation } from '../quotations/quotationMeta.js';
+import {
+  canCreateDealQuotation, canViewDealQuotation, CONFIRM_ORDER_FROM_QUOTATION_COPY, hasLivePricingRequest, isLiveDirectQuotation,
+} from '../quotations/quotationMeta.js';
 import { DealStagePanel } from './DealStagePanel.jsx';
 import { DealStateHeader } from './DealStateHeader.jsx';
 import { DealTrackingPanel } from './DealTrackingPanel.jsx';
 import { visibleSections } from './salesViewScope.js';
-import { nextStageIn, useStageCatalog } from './stageCatalog.js';
+import { nextOnRoute, useStageCatalog } from './stageCatalog.js';
 import {
   resolveTicketDetailTab, TICKET_DETAIL_TABS, visibleTicketDetailTabIds,
 } from './ticketDetailTabs.js';
@@ -86,6 +100,9 @@ import { resolveWorkState } from './workState.js';
 // forwardRef instead (see pricingRequestPanelRef/dealQuotationPanelRef
 // below and their own FIX 1/FIX 2 doc comments), so they are deliberately
 // absent from this map.
+// Slice 2 §D — the ONE helper line under the ใบเสนอราคา panel's two route buttons (spec copy).
+const QUOTATION_ROUTE_NOTE = 'ผ่านคำขอราคา = import → โรงงาน → CEO กำหนดราคา · ใบเสนอราคาตรง = กรอกราคาเอง แล้วส่ง ผจก./CEO อนุมัติ';
+
 const IN_PAGE_JUMP_TARGET = {
   // salesActions.js SALES_ACTION keys
   follow_up: 'deal-tracking-panel',
@@ -577,11 +594,20 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // staleness fix — list/dashboard/notifications went stale after every
   // action before this slice and nothing refreshed them.
   function applyTicketUpdate(updatedTicket) {
-    queryClient.setQueryData(queryKeys.ticketDetail(ticketId), updatedTicket);
+    if (updatedTicket) {
+      queryClient.setQueryData(queryKeys.ticketDetail(ticketId), updatedTicket);
+    } else {
+      // The re-pointed money calls (recordPayment / confirmFinalPayment / confirmCloseReady) answer
+      // with the finance view `{ deal }`, which carries no ticket — writing `undefined` into the
+      // cache would blank the page, so re-read the ticket instead.
+      queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(ticketId) });
+    }
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketActions(ticketId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketPayments(ticketId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketDeliveries(ticketId) });
     queryClient.invalidateQueries({ queryKey: ['tickets', 'list'] });
+    // The ceo can open the same deal on /finance/deals/:id; its cached finance view is money state too.
+    queryClient.invalidateQueries({ queryKey: ['finance'] });
     queryClient.invalidateQueries({ queryKey: queryKeys.dashboardSummary() });
     queryClient.invalidateQueries({ queryKey: queryKeys.notifications() });
   }
@@ -625,6 +651,26 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       await actionMutation.mutateAsync({ fn, successMsg });
     } catch { /* onError above already toasted */ }
   }
+
+  // Slice 2 §E — "ยืนยันคำสั่งซื้อ" for an APPROVED direct quotation, from the sticky CTA. The same
+  // endpoint (and the same confirm copy) as the quotation editor's own action: hrApi's
+  // dealQuotations.promoteToDeal in this tree (slice 1 renames it confirmOrder). Not routed through
+  // actionMutation: that one expects a `{ ticket }` response, this endpoint answers `{ result }`.
+  // Every refusal surfaces the server's own Thai message and re-reads the deal (it changed under us).
+  const confirmOrderDirectMutation = useMutation({
+    mutationFn: (quotationId) => api.dealQuotations.promoteToDeal(quotationId),
+    onSuccess: () => {
+      setConfirm(null);
+      showToast('success', 'ยืนยันคำสั่งซื้อแล้ว');
+      queryClient.invalidateQueries({ queryKey: ['tickets'] });
+      queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
+    },
+    onError: (error) => {
+      setConfirm(null);
+      showToast('error', error.message || 'ยืนยันคำสั่งซื้อไม่สำเร็จ');
+      queryClient.invalidateQueries({ queryKey: ['tickets'] });
+    },
+  });
 
   // R5: Attachments upload/delete — invalidate the attachments query instead
   // of manually reloading + setting local array state.
@@ -799,6 +845,14 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   }
 
   const { summary, items, events, quotations } = ticket;
+  // B5 fix: when sales.ticket_item is still empty (pre-order-confirmation), the items grid
+  // below falls back to the deal's live pricing-request/quotation line items instead of
+  // showing "0 รายการ" — see TicketService#get (backend) for the exact pick rule. Those rows
+  // are NOT ticket_item, so they render read-only: no edit affordance, no add-item control.
+  const fromPricingChain = ticket.fromPricingChain ?? false;
+  // GLA-136's `quotationOnly` switch (no stage panel / CTA / overflow on a quotation-first deal) is
+  // gone: slice 1 (2ed3468e) made that flag provenance only and the IA (§7, "Nothing hidden") makes
+  // such a deal an ordinary one, so nothing on this page reads it any more.
   const st = summary.status;
   const isOwner = user.id === summary.createdById;
   // Issue #389: reading a deal's documents is now the same question as reading the deal (so
@@ -902,7 +956,11 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     verifyClose:        hasAction('VERIFY_CLOSE'),
     cancel:           hasAction('CANCEL') && !TERMINAL.includes(st)   && isOwner,
     comment:          !TERMINAL.includes(st),
-    editItems: hasAction('EDIT_ITEMS') && EDITABLE_STATUSES.includes(st) && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner,
+    // B5 fix: a fallback (fromPricingChain) grid shows borrowed quotation lines, not real
+    // ticket_item rows — there is nothing here for editItems to save, so the affordance (and,
+    // since it is the only entry point into edit mode, the add-item control inside it) is
+    // hidden rather than left to fail server-side.
+    editItems: hasAction('EDIT_ITEMS') && EDITABLE_STATUSES.includes(st) && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner && !fromPricingChain,
     // Dual-track (ข้อ 13)
     confirmCustomer:    hasAction('CONFIRM_CUSTOMER') && st === 'quotation_issued' && (ps == null || ps === 'CUSTOMER_CONFIRMED') && isSales,
     confirmFinalPayment:hasAction('FINAL_PAYMENT') && st === 'quotation_issued' && isMoneyRecorder,
@@ -1027,9 +1085,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // ready for account) that this page has no dedicated `can.*` button for —
   // rendered as a "jump to the real control" convenience (in-page scroll,
   // or a real route when the control lives elsewhere), never a duplicate of
-  // the mutation itself. See workState.js's own doc comment for why it can
-  // also say "not your turn" (`waitingRoleLabel`), which nextSalesAction/
-  // nextImportAction/nextAccountAction alone cannot express.
+  // the mutation itself.
   //
   // CREATE_PCR/ISSUE_QUOTATION/CONFIRM_ORDER are the exceptions to "jump,
   // don't duplicate" (FIX 1 + FIX 2, Phase-1 clutter follow-up rounds 1/2):
@@ -1039,7 +1095,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // directly via a forwardRef (pricingRequestPanelRef / dealQuotationPanelRef),
   // and that panel no longer renders a trigger of its own — the sticky bar
   // is the only copy of each label on the page.
-  const workState = resolveWorkState(user, summary, pricingRequests, stageCatalog);
+  const workState = resolveWorkState(user, summary, pricingRequests);
   const workStateAction = workState.action;
   let stickyPrimaryLabel = nextAction;
   let stickyPrimaryAction = primaryAction;
@@ -1122,6 +1178,39 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         </Button>
       );
       stickyPrimaryLabel = workStateAction.label;
+    } else if (actionKey === 'record_quotation_outcome') {
+      // salesActions.js's RECORD_QUOTATION_OUTCOME bucket (a QUOTATION_ISSUED PR whose customer
+      // decision hasn't been recorded yet). Unlike issue_quotation/confirm_order this never fires a
+      // mutation directly — the accept/reject/revision decision is the rep's own judgment call, not
+      // something a single click can default — so openRecordOutcome only scrolls DealQuotationPanel's
+      // existing outcome controls into view (same "DealQuotationPanel lives inside the เอกสาร tab"
+      // pattern as the two branches above).
+      stickyPrimaryAction = (
+        <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => runOnTab('documents', () => dealQuotationPanelRef.current?.openRecordOutcome())}>
+          {workStateAction.label}
+        </Button>
+      );
+      stickyPrimaryLabel = workStateAction.label;
+    } else if (actionKey === 'confirm_order_direct') {
+      // Slice 2 §E — an APPROVED direct quotation: the customer's order is confirmed right here,
+      // behind the same confirm the quotation editor uses (consequential and irreversible —
+      // DESIGN.md principle 10). SUBMIT and the approvers' action need no branch of their own: both
+      // carry a `to` (/quotations/:id), which the first branch above already navigates.
+      stickyPrimaryAction = (
+        <Button
+          type="button"
+          variant="primary"
+          data-testid="ticket-primary-action"
+          data-action={actionKey}
+          disabled={confirmOrderDirectMutation.isPending}
+          onClick={() => setConfirm({
+            kind: 'confirmOrderDirect', quotationId: workStateAction.quotationId, number: workStateAction.quotationNumber,
+          })}
+        >
+          {workStateAction.label}
+        </Button>
+      );
+      stickyPrimaryLabel = workStateAction.label;
     } else if (jumpId) {
       // Every IN_PAGE_JUMP_TARGET id now lives inside a tab — JUMP_TARGET_TAB
       // names which one, so runOnTab can switch there before scrolling.
@@ -1154,13 +1243,48 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   //
   // `primaryAction` (not stickyPrimaryLabel) is the discriminator: it is set
   // only by that four-branch cascade, and it always wins over the resolver.
+  //
+  // Slice 2: workState can hand back its own finished line (`workState.bannerText` — the rep's
+  // direct quotation waiting on ผจก.ขาย/CEO), which reads before the blocker line.
   const bannerText = primaryAction
     ? nextAction
     : stickyPrimaryLabel
       ? null
-      : workState.waitingRoleLabel
-        ? `รอ${workState.waitingRoleLabel}${blocker ? ` — ${blocker}` : ''}`
+      : workState.bannerText
+        ? workState.bannerText
         : blocker;
+
+  // Slice 2 §D — flow B's two routes for the ใบเสนอราคา panel header, each on its own existing gate:
+  // canCreatePricingRequest (PricingRequestPanel's own; owning sales rep, ACTIVE deal) and
+  // canCreateDealQuotation (the quotation editor's own). The direct route disappears while a live
+  // direct quotation exists — a second one would be refused anyway (N6), and the panel's row for
+  // the live one is the way in. null when this viewer has neither, so the helper line goes too.
+  // Owner ruling 2026-09-30 — one pricing route per deal, both directions: it is ALSO hidden while
+  // the deal has a live pricing request (quotationMeta.hasLivePricingRequest — any status but
+  // CANCELLED/SUPERSEDED; DealQuotationService#create 409s it), and while those requests are still
+  // loading, so it never flashes up only to vanish. สร้างคำขอราคา is unchanged.
+  const showCreatePricingRequest = canCreatePricingRequest(user, summary);
+  const pricingRequestsPending = canViewPricingRequests && pricingRequestsQuery.isLoading;
+  const showDirectQuotation = canCreateDealQuotation(user, summary)
+    && (summary.lifecycle ?? 'ACTIVE') === 'ACTIVE'
+    && !isLiveDirectQuotation(summary.liveDirectQuotation)
+    && !pricingRequestsPending
+    && !hasLivePricingRequest(pricingRequests, ticketId);
+  const quotationRouteActions = showCreatePricingRequest || showDirectQuotation ? (
+    <div className="flex flex-wrap gap-2">
+      {showCreatePricingRequest ? (
+        <Button type="button" variant="primary" onClick={() => runOnTab('items', () => pricingRequestPanelRef.current?.openCreate())}>
+          <Icon name="plus" size={14} />
+          สร้างคำขอราคา
+        </Button>
+      ) : null}
+      {showDirectQuotation ? (
+        <Link to={`/quotations/new?ticket=${ticketId}`} className={cn(buttonVariants({ variant: 'secondary' }), 'no-underline')}>
+          ใบเสนอราคาตรง
+        </Link>
+      ) : null}
+    </div>
+  ) : null;
 
   // Overflow-menu / danger-zone availability — mirrors DealStagePanel's own
   // canEditStage/canLost/canHold/canDormant gates byte-for-byte (same
@@ -1200,7 +1324,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // through the single-arg version. Checked directly against
   // `availableActions` here so this stays byte-identical to DealStagePanel's
   // gate, not just same-named.
-  const next = isActiveLifecycle && !lost ? nextStageIn(stageCatalog, summary.salesStage) : null;
+  const next = isActiveLifecycle && !lost ? nextOnRoute(stageCatalog, summary.salesStage, stageDecisions) : null;
   const hasAdvanceStageAction = Boolean(next) && availableActions.some(
     (item) => item.action === 'ADVANCE_STAGE' && item.targetStage === next.code,
   );
@@ -1274,7 +1398,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     // same fix, so the item doesn't invite a click it's about to reject.
     canAdvance && {
       key: 'advanceStage',
-      label: `เลื่อนไป: ${next ? dealStageLabel(next.code).label : ''}`,
+      label: `เลื่อนไป: ${next ? dealStageLabel(next.code, summary.entryChannel).label : ''}`,
       icon: 'chevronRight',
       disabled: !readyToAdvance || actionLoading,
       disabledReason: !readyToAdvance ? STAGE_ADVANCE_GATE_HINT : undefined,
@@ -1434,7 +1558,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         data-testid="ticket-detail-sticky-chrome"
         className="sticky top-[calc(var(--deal-scroll-pad-y)*-1)] z-10 bg-surface pt-[var(--deal-scroll-pad-y)] mobile:static mobile:bg-transparent mobile:pt-0"
       >
-        <div className="overflow-hidden rounded-lg border border-border bg-surface mobile:overflow-visible mobile:border-0 mobile:bg-transparent">
+        <div className="overflow-hidden rounded-md border border-border bg-surface mobile:overflow-visible mobile:border-0 mobile:bg-transparent">
           <DealStateHeader
             summary={summary}
             pricingRequests={pricingRequests}
@@ -1472,6 +1596,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           Generation buttons reuse the exact handlers/permissions of the action
           row; once a document exists (quotation / ใบแจ้งยอดมัดจำ) it stays
           reachable from here through the later stages too. */}
+      {/* GLA-136's "ดีลนี้เป็นดีลใบเสนอราคาเท่านั้น — ยังไม่เข้า pipeline" banner, and the branch that
+          swapped this stage panel out for it, are gone (slice 1 backend 2ed3468e + IA §7 "Nothing
+          hidden"): a quotation-first deal is an ordinary deal and renders exactly like one. */}
       <div className="min-w-0">
       <DealStagePanel
         ref={dealStagePanelRef}
@@ -1491,11 +1618,6 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         onDormant={(payload) => doAction(() => api.tickets.dormant(ticketId, payload), 'พัก dormant แล้ว')}
         onResume={(payload) => doAction(() => api.tickets.resume(ticketId, payload), 'ดำเนินการต่อแล้ว')}
         onSetTenderRequirement={(payload) => doAction(() => api.tickets.setTenderRequirement(ticketId, payload), 'บันทึกสถานะประมูลแล้ว')}
-        // Issue #740: api.tickets.setEntryChannel had NO caller anywhere in frontend/src, while
-        // TicketService.addPolicyActions advertised SET_ENTRY_CHANNEL to every deal owner — so a
-        // deal stuck at ยังไม่ระบุช่องทาง (the V144 stored default) could not be corrected from this
-        // portal at all. Neither contract guard could see it: both start from hrApi.js and never
-        // trace a call from a component.
         onSetEntryChannel={(payload) => doAction(() => api.tickets.setEntryChannel(ticketId, payload), 'บันทึกช่องทางรับงานแล้ว')}
         docActions={(can.downloadRemainingInvoice || (sections.quotation && latestQuotation)) ? (
           <>
@@ -1507,7 +1629,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                 Import Request button moved to DealFulfilmentPanel (Phase 3
                 Slice S4). */}
             {sections.quotation && latestQuotation && (
-              <Button type="button" variant="secondary"
+              <Button type="button" variant="text" size="sm" className="min-h-0 gap-1.5 text-sm font-bold"
                 disabled={downloadingQuotationKey === `${latestQuotation.id}-pdf`}
                 onClick={() => handleDownloadQuotation(latestQuotation.id, latestQuotation.number, 'pdf')}>
                 <Icon name="fileText" size={14} />
@@ -1517,7 +1639,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               </Button>
             )}
             {can.downloadRemainingInvoice && (
-              <Button type="button" variant="secondary" onClick={() => setRemainingInvoiceDialogOpen(true)}>
+              <Button type="button" variant="text" size="sm" className="min-h-0 gap-1.5 text-sm font-bold" onClick={() => setRemainingInvoiceDialogOpen(true)}>
+                <Icon name="fileText" size={14} />
                 ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ
               </Button>
             )}
@@ -1551,7 +1674,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               the now-deleted TicketContextPanel.jsx sticky rail — same fields,
               same labels, same assignedImport role-scoped readout. */}
           <div className="grid gap-4 sm:grid-cols-2">
-            <section className="rounded-lg border border-border bg-surface p-4">
+            <section className="rounded-md border border-border bg-surface p-4">
               <ContextSection title="วันสำคัญ" helper="Key dates" icon="calendar">
                 <dl className="m-0">
                   <FieldRow label="ติดตามครั้งถัดไป" value={formatThaiDate(summary.nextFollowUpAt)} />
@@ -1562,7 +1685,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                 </dl>
               </ContextSection>
             </section>
-            <section className="rounded-lg border border-border bg-surface p-4">
+            <section className="rounded-md border border-border bg-surface p-4">
               <ContextSection title="ผู้เกี่ยวข้อง" helper="ทีมที่เกี่ยวข้อง" icon="users">
                 <dl className="m-0">
                   <FieldRow label="เจ้าของดีล" value={summary.createdByName} />
@@ -1786,7 +1909,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                           </label>
                           <div className="m-0">
                             <span className="mb-1 block text-xs">พื้นที่รวม (ตร.ม.)</span>
-                            <div className={cn('rounded-[6px] border border-border-subtle bg-surface-muted px-2.5 py-[7px] text-sm', item.qtySqm ? 'text-icon-muted' : 'text-text-muted')}>
+                            <div className={cn('rounded-md border border-border-subtle bg-surface-muted px-2.5 py-[7px] text-sm', item.qtySqm ? 'text-icon-muted' : 'text-text-muted')}>
                               {item.qtySqm ? `${Number(item.qtySqm).toFixed(3)} ตร.ม.` : '—'}
                             </div>
                           </div>
@@ -1823,7 +1946,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                           </label>
                           <div className="m-0">
                             <span className="mb-1 block text-xs">จำนวน (แผ่น)</span>
-                            <div className={cn('rounded-[6px] border border-border-subtle bg-surface-muted px-2.5 py-[7px] text-sm', item.qty ? 'text-icon-muted' : 'text-text-muted')}>
+                            <div className={cn('rounded-md border border-border-subtle bg-surface-muted px-2.5 py-[7px] text-sm', item.qty ? 'text-icon-muted' : 'text-text-muted')}>
                               {item.qty ? `${item.qty} แผ่น` : '—'}
                             </div>
                           </div>
@@ -2012,6 +2135,14 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               </div>
             ) : (
               <>
+                {fromPricingChain ? (
+                  <div className="p-[14px_18px_0]">
+                    <div className="flex items-start gap-2 rounded-md border border-info-border bg-info-bg px-3 py-2.5 text-xs text-info-dark" data-testid="items-pricing-chain-banner">
+                      <Icon name="info" size={15} className="mt-0.5 shrink-0" />
+                      <span>รายการจากใบเสนอราคา — จะยืนยันเป็นรายการจริงเมื่อยืนยันคำสั่งซื้อ (แก้ไขได้ที่คำขอราคา/ใบเสนอราคา)</span>
+                    </div>
+                  </div>
+                ) : null}
                 <div className="ticket-items-table table-head" style={{ gridTemplateColumns: itemsGridCols }}>
                   <span>ยี่ห้อ / รุ่น</span>
                   <span>สี / เนื้อผิว</span>
@@ -2116,7 +2247,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                 table. */}
             {st === 'draft' && isOwner && items.length === 0 && (
               <div className="p-[0_18px_16px]">
-                <span className="rounded-lg border border-border bg-surface-subtle px-3 py-2 text-xs text-text-muted">
+                <span className="rounded-md border border-border bg-surface-subtle px-3 py-2 text-xs text-text-muted">
                   ดีลนี้ยังไม่มีรายการสินค้า — กด “แก้ไขรายการสินค้า” เพื่อเพิ่มก่อนส่งขอราคา
                 </span>
               </div>
@@ -2162,6 +2293,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             canViewPricingRequests={canViewPricingRequests}
             canViewDocumentsTab={canViewDocumentsTab}
             pricingRequests={pricingRequests}
+            pricingRequestsLoading={canViewPricingRequests && pricingRequestsQuery.isLoading}
             legacyQuotations={sortedQuotations}
             attachments={attachments}
             attachLoading={attachLoading}
@@ -2194,7 +2326,21 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             // `Number(ticketIdParam)` (its `effectiveTicketId`), so a string here would key this
             // panel's list query differently from anything invalidating/refetching by the numeric
             // id and leave it never refreshing off that path.
-            <DealDirectQuotationPanel ticketId={Number(ticketId)} deal={summary} user={user} showToast={showToast} />
+            <DealDirectQuotationPanel
+              ticketId={Number(ticketId)}
+              deal={summary}
+              user={user}
+              showToast={showToast}
+              // Slice 2 §D — flow B's route choice, as two SIBLING buttons in this panel's header
+              // (DESIGN.md §16: no dialog for a choice that fits inline). สร้างคำขอราคา is the
+              // existing action (it opens PricingRequestPanel's create, same as the sticky
+              // CREATE_PCR does); ใบเสนอราคาตรง opens /quotations/new?ticket= with the recipient
+              // preselected from the stage. The direct route is hidden while this deal already has a
+              // live direct quotation — its row below carries the link to that one instead (N6).
+              actions={quotationRouteActions}
+              // The note compares the two routes, so it only shows when both are on offer.
+              note={showCreatePricingRequest && showDirectQuotation ? QUOTATION_ROUTE_NOTE : null}
+            />
           ) : null}
           {sections.dealQuotation && canViewPricingRequests ? (
             <div id="deal-quotation-panel" tabIndex={-1} className="scroll-mt-[300px] mobile:scroll-mt-[420px] outline-none">
@@ -2379,7 +2525,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           modals), only demoted from sitting inline among the day-to-day
           pipeline controls. */}
       {(canLostDeal || can.cancel) ? (
-        <section className="rounded-xl border border-danger-border bg-danger-bg p-4 sm:p-5" aria-labelledby="deal-danger-zone-heading">
+        <section className="rounded-md border border-danger-border bg-danger-bg p-4 sm:p-5" aria-labelledby="deal-danger-zone-heading">
           <h2 id="deal-danger-zone-heading" className="m-0 text-sm font-extrabold text-danger-dark">จัดการดีล</h2>
           <p className="mt-1 text-xs text-danger-dark">การดำเนินการเหล่านี้ส่งผลต่อทั้งดีล และบางรายการย้อนกลับไม่ได้ — ใช้เมื่อจำเป็นเท่านั้น</p>
           <div className="mt-3 flex flex-wrap gap-2">
@@ -2667,6 +2813,25 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         confirmLabel="ยืนยันชำระครบ"
         busy={actionLoading}
         onConfirm={confirmFinalPaymentAction}
+        onCancel={() => setConfirm(null)}
+      />
+
+      {/* Slice 2 §E — the sticky "ยืนยันคำสั่งซื้อ" of an APPROVED direct quotation. The copy is the
+          quotation editor's own (quotationMeta's CONFIRM_ORDER_FROM_QUOTATION_COPY), so the two
+          doors to the same irreversible act say the same thing. */}
+      <ConfirmDialog
+        open={confirm?.kind === 'confirmOrderDirect'}
+        title="ยืนยันคำสั่งซื้อ"
+        message={(
+          <p className="confirm-dialog-message m-0 leading-normal text-text-secondary">
+            {CONFIRM_ORDER_FROM_QUOTATION_COPY.lead(confirm?.number)} <strong>{CONFIRM_ORDER_FROM_QUOTATION_COPY.stage}</strong>
+            {' '}{CONFIRM_ORDER_FROM_QUOTATION_COPY.tail}
+          </p>
+        )}
+        confirmLabel="ยืนยันคำสั่งซื้อ"
+        cancelLabel="ปิด"
+        busy={confirmOrderDirectMutation.isPending}
+        onConfirm={() => confirmOrderDirectMutation.mutate(confirm.quotationId)}
         onCancel={() => setConfirm(null)}
       />
     </div>

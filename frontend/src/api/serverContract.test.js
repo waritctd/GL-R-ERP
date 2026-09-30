@@ -231,6 +231,8 @@ const SERVER_ONLY = {
   'PATCH /api/deal-quotations/{}/items/{}/picture': 'GLA-75 quotation item pictures (V170), built BACKEND-FIRST: the per-item picture endpoints landed before the quotation editor UI that calls them (a separate frontend branch). Gated like editing / viewing the quotation and covered by DealQuotationPictureIntegrationTest. LIVE, not dead — delete this entry when hrApi.js calls it.',
   'DELETE /api/deal-quotations/{}/items/{}/picture': 'GLA-75 quotation item pictures (V170), built BACKEND-FIRST: the per-item picture endpoints landed before the quotation editor UI that calls them (a separate frontend branch). Gated like editing / viewing the quotation and covered by DealQuotationPictureIntegrationTest. LIVE, not dead — delete this entry when hrApi.js calls it.',
   'GET /api/deal-quotations/{}/items/{}/picture': 'GLA-75 quotation item pictures (V170), built BACKEND-FIRST: the per-item picture endpoints landed before the quotation editor UI that calls them (a separate frontend branch). Gated like editing / viewing the quotation and covered by DealQuotationPictureIntegrationTest. LIVE, not dead — delete this entry when hrApi.js calls it.',
+  'POST /api/deal-quotations/{}/confirm-order': 'Quotation ↔ deal linking slice 1 (IA §7, 2026-09-30), built BACKEND-FIRST: the real name of GLA-136\'s promote-to-deal, which DealQuotationController maps to the SAME handler as a one-release alias. hrApi.js still calls …/promote-to-deal (identical behaviour) until the slice-1 frontend switches it over. Covered by DealQuotationConfirmOrderIntegrationTest and DealQuotationControllerTest. LIVE, not dead — delete this entry when hrApi.js calls it.',
+
 
   // ── Formerly dormant, now GONE: ProcurementController ─────────────────────
   // Eight entries stood here — all of ProcurementController's mappings. PR #683 (ebaf6888,
@@ -624,9 +626,11 @@ const UNREACHABLE_FROM_UI = new Set([
   'POST /api/pricing-costings/{}/recalculate',
   'POST /api/pricing-costings/{}/submit',
   'POST /api/pricing-requests/{}/costings',
-  // 'POST /api/tickets/{}/entry-channel' was here until issue #740 wired DealStagePanel's
-  // ช่องทางรับงาน control. The `UNREACHABLE_FROM_UI entry is real and still unreachable` test is
-  // what demanded this deletion — it is not an optional tidy-up.
+  // POST /api/tickets/{}/entry-channel left this list at #740 (DealStagePanel's ช่องทางรับงาน
+  // control), came back on 2026-09-30 when GLA-156 removed that control, and LEFT AGAIN the same day:
+  // the route gate refuses an off-route stage with "… — แก้ช่องทางดีลก่อน", so a remedy has to exist.
+  // EntryChannelFix (the stepper's off-route rows + UpdateStageModal's blocked list) calls it via
+  // TicketDetailPage's onSetEntryChannel. Pinned by the explicit test in the reachability block below.
   // 'POST /api/tickets/{}/factory-emails/send' left this list on 2026-09-06: the endpoint itself
   // is DELETED (manual-RFQ redesign — factory email is a human-copies-and-sends flow now, see
   // FactoryQuoteService.send), not merely wired up, so it is gone from SERVER_KEYS entirely and
@@ -646,6 +650,15 @@ describe('controller surface / hrApi.js contract — UI reachability', () => {
     // allowlist below would silently become the whole surface.
     expect(UI_CALLED_METHODS.size).toBeGreaterThan(150);
     expect(UI_REACHABLE_KEYS.size).toBeGreaterThan(150);
+  });
+
+  it('POST /api/tickets/{}/entry-channel is UI-reachable: the "แก้ช่องทางดีล" control calls it', () => {
+    // The route gate refuses an off-route stage with "… — แก้ช่องทางดีลก่อน". GLA-156 had removed the
+    // only control that could do that, leaving the refusal with no remedy. EntryChannelFix (mounted
+    // from the stepper's off-route rows and UpdateStageModal's blocked list) restores it, and this
+    // pins that a screen really invokes it — so the endpoint must NOT sit in UNREACHABLE_FROM_UI.
+    expect(UI_REACHABLE_KEYS.has('POST /api/tickets/{}/entry-channel')).toBe(true);
+    expect(UNREACHABLE_FROM_UI.has('POST /api/tickets/{}/entry-channel')).toBe(false);
   });
 
   it('every endpoint a screen cannot reach is a known one', () => {
