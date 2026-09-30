@@ -467,6 +467,15 @@ public class CommissionService {
         if (!MANAGER_ROLES.contains(actor.role())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
+        // Serialise concurrent adjusters of the SAME record BEFORE reading anything the decision
+        // depends on. Under READ COMMITTED, two managers re-weighting different lines interleave:
+        // each re-reads the deal's items before the other commits, and the last writer freezes an
+        // effective_weight_multiplier (what payroll reads via COALESCE) that ignores the other's
+        // line. With the row lock held until commit, the second adjuster's reads (status, items)
+        // all happen after the first has committed. Taken before requireRecord so the record we
+        // validate and diff for the audit row is the post-lock one. A missing id locks nothing and
+        // falls through to requireRecord's 404.
+        commissions.lockRecordForUpdate(id);
         CommissionRecord existing = requireRecord(id);
         if (!CommissionKind.SALE.equals(existing.kind()) || existing.sourceTicketId() == null) {
             throw new ApiException(HttpStatus.CONFLICT, "ปรับน้ำหนักได้เฉพาะรายการค่าคอมจากดีลขาย");

@@ -846,6 +846,18 @@ public class CommissionRepository {
      * number for the same deal).
      */
     /**
+     * Takes a row lock on the commission record ({@code SELECT ... FOR UPDATE}), held until the
+     * surrounding transaction ends -- so it only serialises anything when called inside a real
+     * transaction ({@link CommissionService#adjustItemWeights} is {@code @Transactional}). Returns
+     * whether the row exists.
+     */
+    public boolean lockRecordForUpdate(long commissionId) {
+        return !jdbc.queryForList(
+            "SELECT commission_id FROM sales.commission_record WHERE commission_id = :id FOR UPDATE",
+            Map.of("id", commissionId), Long.class).isEmpty();
+    }
+
+    /**
      * Freezes a recomputed blended weight onto a record, but ONLY while it is still SUBMITTED. The sole
      * sanctioned post-creation write to {@code effective_weight_multiplier} (owner ruling 2026-10-01): the
      * sales manager's {@link CommissionService#adjustItemWeights}. Returns rows updated; 0 means the record
