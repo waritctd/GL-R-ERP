@@ -196,6 +196,11 @@ jobs:
       # Testcontainers spins its own throwaway Postgres via the runner's Docker daemon, so the
       # integration + security + Flyway tests run without a manually provisioned DB service. The
       # TEST_DB_URL override path still exists in PostgresTestSupport as a one-line revert if needed.
+      #
+      # -Dtest.fork.count=4: one test JVM per runner vCPU (ubuntu-latest has 4). Set HERE rather
+      # than as the pom default (2) so local runs on a shared laptop don't start four JVMs and
+      # four Postgres containers. Each fork is fully isolated (own container, own golden/wrk
+      # clone) — see the pom's test.fork.count comment.
       - name: Build and test
         if: steps.changes.outputs.backend == 'true'
-        run: ./mvnw -B clean verify
+        run: ./mvnw -B clean verify -Dtest.fork.count=4
