@@ -546,9 +546,9 @@ export function ImportFulfilmentPage({ user, showToast }) {
                         />
                         <span className="flex items-center gap-1.5 text-2xs">
                           {row.emailSentAt ? (
-                            <StatusBadge tone="green">ส่งอีเมลแล้ว</StatusBadge>
+                            <StatusBadge tone="success">ส่งอีเมลแล้ว</StatusBadge>
                           ) : (
-                            <StatusBadge tone="blue">ยังไม่ส่งอีเมล</StatusBadge>
+                            <StatusBadge tone="info">ยังไม่ส่งอีเมล</StatusBadge>
                           )}
                           <Button type="button" variant="text" disabled={downloadPdf.isPending}
                             onClick={() => downloadPdf.mutate({ rowId: row.id, copy: undefined, row })}

@@ -12,6 +12,7 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import {
   dealLifecycleLabel, dealStageLabel, formatThaiDate, fulfilmentStatusLabel,
 } from '../../utils/format.js';
+import { ImportStatusStrip } from '../importProgress/ImportStatusStrip.jsx';
 import { importStepIndex } from '../importProgress/importSteps.js';
 import { DealAttachmentsPanel } from '../tickets/DealAttachmentsPanel.jsx';
 import { ImportRequestFactoryCard } from '../tickets/ImportRequestFactoryCard.jsx';
@@ -39,10 +40,6 @@ const LEGACY_ACTIONS = {
     toast: 'รับสินค้าแล้ว',
   },
 };
-
-// Quiet, outlined status chip for the at-a-glance strip — neutral by default so the strip informs
-// without competing with the per-factory tracker below it.
-const CHIP = 'inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-border-subtle bg-surface px-2.5 py-0.5 text-2xs font-bold tabular-nums text-text-secondary';
 
 function formatQty(value) {
   if (value == null || value === '') return '-';
@@ -213,7 +210,6 @@ export function ImportDealPage({ user, showToast }) {
       return sum + (ordered > 0 ? Math.min(100, (delivered / ordered) * 100) : 0);
     }, 0) / items.length)
     : null;
-  const allArrived = issuedRows.length > 0 && arrivedCount === issuedRows.length;
 
   return (
     <PageStack className="gap-5">
@@ -235,30 +231,23 @@ export function ImportDealPage({ user, showToast }) {
         )}
       />
 
-      {/* At-a-glance: three quiet chips, wrapping cleanly on a phone. The status badge is the shared
-          StatusBadge; the two counters are neutral outlined chips so the strip informs rather than
-          competes with the tracker below. */}
-      <div className="-mt-1 flex flex-wrap items-center gap-x-2 gap-y-1.5" data-testid="import-deal-status-strip">
-        <StatusBadge tone={fulfilment.tone}>{fulfilment.label}</StatusBadge>
-        {issuedRows.length > 0 ? (
-          <span
-            className={`${CHIP} ${allArrived ? 'border-success-border text-success' : ''}`}
-            data-testid="import-deal-ir-rollup-chip"
-          >
-            ถึงไทย {arrivedCount}/{issuedRows.length} โรงงาน
-          </span>
-        ) : null}
-        {deliveryPct != null ? (
-          <span className={CHIP} data-testid="import-deal-delivery-chip">ส่งมอบ {deliveryPct}%</span>
-        ) : null}
-      </div>
+      {/* At-a-glance: the SAME strip the deal tab's Step-1 header shows (fulfilment status → ถึงไทย
+          X/N โรงงาน → ส่งมอบ N%) — shared so the two surfaces read as one system. */}
+      <ImportStatusStrip
+        className="-mt-1"
+        testIdPrefix="import-deal"
+        fulfilment={fulfilment}
+        arrivedCount={arrivedCount}
+        issuedCount={issuedRows.length}
+        deliveryPct={deliveryPct}
+      />
 
-      {/* The focal section: per-factory tracking. Slightly stronger rule than the supporting panels
-          below (which are p-4 and border-default) so the eye lands here first. */}
+      {/* The focal section: per-factory tracking. Same padding as the supporting panels below, but a
+          stronger rule and the full-size title (theirs are quieted), so the eye lands here first. */}
       <Panel
         title="ใบขอซื้อรายโรงงาน"
         data-testid="import-deal-tracking"
-        className="border-border-strong"
+        className="border-border-strong p-4 mobile:p-3"
       >
         {liveRows.length === 0 ? (
           <div className="grid gap-4">
@@ -307,123 +296,130 @@ export function ImportDealPage({ user, showToast }) {
         )}
       </Panel>
 
-      {/* Delivery is Sales's (owner ruling 2026-08-17): status only, no write control of any kind. */}
-      <Panel
-        title="สถานะการส่งมอบ"
-        data-testid="import-deal-delivery"
-        className="p-4"
-        actions={<StatusBadge tone={fulfilment.tone}>{fulfilment.label}</StatusBadge>}
-      >
-        {items.length === 0 ? (
-          <p className="m-0 text-sm text-text-muted">ยังไม่มีรายการสินค้า</p>
-        ) : (
-          <ul className="m-0 grid list-none gap-2 p-0">
-            {items.map((item) => {
-              const ordered = Number(item.qty) || 0;
-              const delivered = Number(item.qtyDelivered) || 0;
-              const pct = ordered > 0 ? Math.min(100, Math.round((delivered / ordered) * 100)) : 0;
-              return (
+      {/* Supporting sections (delivery → items → comments → attachments): one wrapper so every
+          panel title — including DealAttachmentsPanel's, which this page does not own — steps down
+          to the same quiet size (and every panel to the same 16px/12px padding) and the tracker above is the only thing with a full-size heading. */}
+      <div className="grid min-w-0 gap-5 [&>section]:p-4 mobile:[&>section]:p-3 [&_h2]:text-md [&_h2]:text-text-secondary" data-testid="import-deal-supporting">
+        {/* Delivery is Sales's (owner ruling 2026-08-17): status only, no write control of any kind.
+            The status badge stays in the header — the delivery panel is read on its own, and its own
+            test pins the label here. */}
+        <Panel
+          title="สถานะการส่งมอบ"
+          data-testid="import-deal-delivery"
+          className="p-4 mobile:p-3"
+          actions={<StatusBadge tone={fulfilment.tone}>{fulfilment.label}</StatusBadge>}
+        >
+          {items.length === 0 ? (
+            <p className="m-0 text-sm text-text-muted">ยังไม่มีรายการสินค้า</p>
+          ) : (
+            <ul className="m-0 grid list-none gap-2 p-0">
+              {items.map((item) => {
+                const ordered = Number(item.qty) || 0;
+                const delivered = Number(item.qtyDelivered) || 0;
+                const pct = ordered > 0 ? Math.min(100, Math.round((delivered / ordered) * 100)) : 0;
+                return (
+                  <li
+                    key={item.id}
+                    className="grid gap-1.5 rounded-md border border-border-subtle p-3"
+                    data-testid={`import-deal-delivery-item-${item.id}`}
+                  >
+                    <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
+                      <strong className="min-w-0 text-sm">{itemTitle(item)}</strong>
+                      <span className="text-xs font-bold tabular-nums text-text-secondary">
+                        ส่งแล้ว {formatQty(item.qtyDelivered ?? 0)} / {formatQty(item.qty)} {item.unit ?? ''}
+                      </span>
+                    </div>
+                    <div className="h-1.5 overflow-hidden rounded-full bg-surface-subtle" aria-hidden="true">
+                      <div className="h-full rounded-full bg-success" style={{ width: `${pct}%` }} />
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </Panel>
+
+        <Panel title="รายการสินค้า" data-testid="import-deal-items" className="p-4 mobile:p-3">
+          {items.length === 0 ? (
+            <p className="m-0 text-sm text-text-muted">ยังไม่มีรายการสินค้า</p>
+          ) : (
+            <ul className="m-0 grid list-none gap-2 p-0">
+              {items.map((item) => (
                 <li
                   key={item.id}
-                  className="grid gap-1 rounded-md border border-border-subtle p-2.5"
-                  data-testid={`import-deal-delivery-item-${item.id}`}
+                  className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 border-t border-border-subtle pt-2 first:border-t-0 first:pt-0"
                 >
-                  <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
-                    <strong className="min-w-0 text-sm">{itemTitle(item)}</strong>
-                    <span className="text-xs font-bold tabular-nums text-text-secondary">
-                      ส่งแล้ว {formatQty(item.qtyDelivered ?? 0)} / {formatQty(item.qty)} {item.unit ?? ''}
+                  <span className="min-w-0">
+                    <strong className="block text-sm">{itemTitle(item)}</strong>
+                    <span className="block text-xs text-text-muted">
+                      {itemSpec(item) || '-'}
+                      {item.code ? <> · <code>{item.code}</code></> : null}
                     </span>
-                  </div>
-                  <div className="h-1.5 overflow-hidden rounded-full bg-surface-subtle" aria-hidden="true">
-                    <div className="h-full rounded-full bg-success" style={{ width: `${pct}%` }} />
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </Panel>
-
-      <Panel title="รายการสินค้า" data-testid="import-deal-items" className="p-4">
-        {items.length === 0 ? (
-          <p className="m-0 text-sm text-text-muted">ยังไม่มีรายการสินค้า</p>
-        ) : (
-          <ul className="m-0 grid list-none gap-2 p-0">
-            {items.map((item) => (
-              <li
-                key={item.id}
-                className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 border-t border-border-subtle pt-2 first:border-t-0 first:pt-0"
-              >
-                <span className="min-w-0">
-                  <strong className="block text-sm">{itemTitle(item)}</strong>
-                  <span className="block text-xs text-text-muted">
-                    {itemSpec(item) || '-'}
-                    {item.code ? <> · <code>{item.code}</code></> : null}
                   </span>
-                </span>
-                <span className="text-sm font-bold tabular-nums">
-                  {formatQty(item.qty)} {item.unit ?? ''}
-                  {item.qtySqm != null ? (
-                    <span className="ml-1 text-xs font-normal text-text-muted">({formatQty(item.qtySqm)} ตร.ม.)</span>
-                  ) : null}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </Panel>
+                  <span className="text-sm font-bold tabular-nums">
+                    {formatQty(item.qty)} {item.unit ?? ''}
+                    {item.qtySqm != null ? (
+                      <span className="ml-1 text-xs font-normal text-text-muted">({formatQty(item.qtySqm)} ตร.ม.)</span>
+                    ) : null}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Panel>
 
-      <Panel title="ความคิดเห็น" data-testid="import-deal-comments" className="p-4">
-        {comments.length === 0 ? (
-          <p className="m-0 mb-3 text-sm text-text-muted">ยังไม่มีความคิดเห็น</p>
-        ) : (
-          <ul className="m-0 mb-3 grid list-none gap-2 p-0">
-            {comments.map((c) => (
-              <li key={c.id} className="rounded-md bg-surface-subtle p-2.5">
-                <div className="flex flex-wrap items-baseline gap-x-2 text-2xs text-text-muted">
-                  <strong className="text-xs text-text">{c.actorName}</strong>
-                  <span>{formatThaiDate(c.createdAt)}</span>
-                </div>
-                <p className="m-0 mt-1 whitespace-pre-wrap text-sm [overflow-wrap:anywhere]">{c.message}</p>
-              </li>
-            ))}
-          </ul>
-        )}
-        <label className="grid gap-1.5 text-xs font-bold text-text-secondary">
-          เพิ่มความคิดเห็น
-          <textarea
-            className="form-input min-h-20 text-sm font-normal"
-            value={commentText}
-            onChange={(e) => setCommentText(e.target.value)}
-            data-testid="import-deal-comment-input"
-          />
-        </label>
-        <div className="mt-2 flex justify-end">
-          <Button
-            type="button"
-            variant="primary"
-            disabled={commentMutation.isPending || !commentText.trim()}
-            onClick={submitComment}
-            data-testid="import-deal-comment-submit"
-          >
-            ส่งความคิดเห็น
-          </Button>
-        </div>
-      </Panel>
+        <Panel title="ความคิดเห็น" data-testid="import-deal-comments" className="p-4 mobile:p-3">
+          {comments.length === 0 ? (
+            <p className="m-0 mb-3 text-sm text-text-muted">ยังไม่มีความคิดเห็น</p>
+          ) : (
+            <ul className="m-0 mb-3 grid list-none gap-2 p-0">
+              {comments.map((c) => (
+                <li key={c.id} className="rounded-md bg-surface-subtle p-3">
+                  <div className="flex flex-wrap items-baseline gap-x-2 text-2xs text-text-muted">
+                    <strong className="text-xs text-text">{c.actorName}</strong>
+                    <span>{formatThaiDate(c.createdAt)}</span>
+                  </div>
+                  <p className="m-0 mt-1 whitespace-pre-wrap text-sm [overflow-wrap:anywhere]">{c.message}</p>
+                </li>
+              ))}
+            </ul>
+          )}
+          <label className="grid gap-1.5 text-xs font-bold text-text-secondary">
+            เพิ่มความคิดเห็น
+            <textarea
+              className="form-input min-h-20 text-sm font-normal"
+              value={commentText}
+              onChange={(e) => setCommentText(e.target.value)}
+              data-testid="import-deal-comment-input"
+            />
+          </label>
+          <div className="mt-2 flex justify-end">
+            <Button
+              type="button"
+              variant="primary"
+              disabled={commentMutation.isPending || !commentText.trim()}
+              onClick={submitComment}
+              data-testid="import-deal-comment-submit"
+            >
+              ส่งความคิดเห็น
+            </Button>
+          </div>
+        </Panel>
 
-      {/* Read-only: import lists and downloads; upload/delete stay with the deal's participants. */}
-      <DealAttachmentsPanel
-        attachments={attachments}
-        attachLoading={attachmentsQuery.isLoading}
-        canManageDocuments={false}
-        uploadingFile={false}
-        onUploadAttachment={NOOP}
-        onDeleteAttachment={NOOP}
-        canUpload={false}
-        notTerminal={false}
-        user={user}
-        emptyDescription="ยังไม่มีไฟล์แนบสำหรับดีลนี้"
-      />
+        {/* Read-only: import lists and downloads; upload/delete stay with the deal's participants. */}
+        <DealAttachmentsPanel
+          attachments={attachments}
+          attachLoading={attachmentsQuery.isLoading}
+          canManageDocuments={false}
+          uploadingFile={false}
+          onUploadAttachment={NOOP}
+          onDeleteAttachment={NOOP}
+          canUpload={false}
+          notTerminal={false}
+          user={user}
+          emptyDescription="ยังไม่มีไฟล์แนบสำหรับดีลนี้"
+        />
+      </div>
     </PageStack>
   );
 }

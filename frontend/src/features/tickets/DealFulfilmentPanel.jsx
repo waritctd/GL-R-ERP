@@ -6,8 +6,9 @@ import { Button } from '../../components/common/Button.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
-import { StatusBadge } from '../../components/common/StatusBadge.jsx';
+import { cn } from '../../utils/cn.js';
 import { formatThaiDate, fulfilmentStatusLabel } from '../../utils/format.js';
+import { ImportStatusStrip } from '../importProgress/ImportStatusStrip.jsx';
 import { importStepIndex } from '../importProgress/importSteps.js';
 import { nextFulfilmentActionCode } from './importActions.js';
 import { ImportRequestFactoryCard } from './ImportRequestFactoryCard.jsx';
@@ -86,6 +87,12 @@ function NewFactoryCountryModal({ factoryNames, countries, countriesError, onClo
     </Modal>
   );
 }
+
+// One frame + one title style for every block on the tab (①, the per-factory tracker, the legacy
+// preview, ②): 16px padding (12px on a phone), 12px between rows, radius-md. The tracker block adds
+// `border-border-strong` on top of this so it is the one that leads.
+const STEP_BOX = 'flex flex-col gap-3 rounded-md border border-border bg-surface p-4 mobile:p-3';
+const STEP_TITLE = 'text-md font-extrabold text-text';
 
 const STEP_ROLE_TH = { import: 'ฝ่ายนำเข้า', ceo: 'CEO', sales: 'ฝ่ายขาย', account: 'ฝ่ายบัญชี' };
 
@@ -251,11 +258,8 @@ export function DealFulfilmentPanel({
   const issuedIrRows = liveStoredIrRows.filter((r) => r.importStep != null);
   const arrivedIrCount = issuedIrRows
     .filter((r) => importStepIndex(r.importStep) >= importStepIndex('AWAITING_CUSTOMS')).length;
-  const irRollupChip = issuedIrRows.length > 0 ? (
-    <span className="rounded-full bg-info-bg px-2.5 py-0.5 text-2xs font-bold text-info" data-testid="deal-fulfilment-ir-rollup-chip">
-      ถึงไทย {arrivedIrCount}/{issuedIrRows.length} โรงงาน
-    </span>
-  ) : null;
+  // The rollup chip now lives in the shared ImportStatusStrip (same strip import's own per-deal page
+  // renders) — the counters above are unchanged, only their presentation moved.
 
   const [newFactoryNames, setNewFactoryNames] = useState(null); // string[] | null
   // PR-B REVIEW ROUND 1, S7: the 409's message is parsed for factory names because the backend
@@ -552,19 +556,24 @@ export function DealFulfilmentPanel({
 
   return (
     <Panel flush title="การส่งมอบ / นำเข้า" data-testid="deal-fulfilment-panel">
-      <div className="flex flex-col gap-3 p-4">
+      <div className="flex flex-col gap-4 p-4 mobile:p-3">
         {/* Step 1: นำเข้าสินค้า (Import Request → รับสินค้า, or from-stock) */}
-        <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
+        <div className={STEP_BOX}>
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
               <StepNumber no={1} />
-              <strong className="text-sm">นำเข้าสินค้า</strong>
+              <strong className={STEP_TITLE}>นำเข้าสินค้า</strong>
               <StepRoleTag owners={['import', 'ceo']} viewerRole={role} />
             </div>
-            <div className="flex items-center gap-2">
-              {irRollupChip}
-              {fs ? <StatusBadge tone={fsLabel.tone}>{fsLabel.label}</StatusBadge> : null}
-            </div>
+            {/* The same at-a-glance strip import's own per-deal page shows (fulfilment status →
+                ถึงไทย X/N โรงงาน → ส่งมอบ N%), so the two surfaces read as one system. */}
+            <ImportStatusStrip
+              testIdPrefix="deal-fulfilment"
+              fulfilment={fs ? fsLabel : null}
+              arrivedCount={arrivedIrCount}
+              issuedCount={issuedIrRows.length}
+              deliveryPct={totalOrdered > 0 ? deliveryProgress : null}
+            />
           </div>
 
           {/* V184 (PR-B): once the deal is tracked per-factory, the old deal-level substep chips
@@ -629,11 +638,11 @@ export function DealFulfilmentPanel({
             sales_manager unrestricted, and to sales only for a deal they own — mirrors
             ImportRequestService#requireRead exactly (canReadStoredIr above). */}
         {canReadStoredIr ? (
-          <div className="flex flex-col gap-2.5 rounded-md border border-border bg-surface p-3"
+          <div className={cn(STEP_BOX, 'border-border-strong')}
             data-testid="deal-fulfilment-stored-ir">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <strong className="text-sm">ใบขอซื้อรายโรงงาน (F-SM-001)</strong>
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <strong className={STEP_TITLE}>ใบขอซื้อรายโรงงาน (F-SM-001)</strong>
                 <StepRoleTag owners={['sales', 'ceo']} viewerRole={role} />
               </div>
               {canFullWriteStoredIr ? (
@@ -678,7 +687,7 @@ export function DealFulfilmentPanel({
             ) : liveStoredIrRows.length === 0 ? (
               <p className="text-xs text-text-muted">ยังไม่มีใบขอซื้อสำหรับดีลนี้</p>
             ) : (
-              <div className="flex flex-col gap-2.5">
+              <div className="flex flex-col gap-3">
                 {liveStoredIrRows.map((row) => (
                   <ImportRequestFactoryCard
                     key={row.id}
@@ -701,11 +710,11 @@ export function DealFulfilmentPanel({
             rendering this for sales would offer a control that 403s. Hidden once the deal has any
             STORED row — the section above supersedes it (own download buttons per factory). */}
         {isFulfilment && !hasStoredIrs ? (
-          <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3"
+          <div className={STEP_BOX}
             data-testid="deal-fulfilment-import-request">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <strong className="text-sm">ใบขอซื้อ (F-SM-001)</strong>
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <strong className={STEP_TITLE}>ใบขอซื้อ (F-SM-001)</strong>
                 <StepRoleTag owners={['import', 'ceo']} viewerRole={role} />
               </div>
               <label className="flex items-center gap-2 text-xs font-bold text-text-secondary">
@@ -741,7 +750,7 @@ export function DealFulfilmentPanel({
               <div className="flex flex-col gap-1.5">
                 {irBrands.map((brand) => (
                   <div key={brand}
-                    className="flex items-center justify-between gap-2 rounded border border-border-subtle px-2.5 py-1.5 text-xs">
+                    className="flex items-center justify-between gap-2 rounded-md border border-border-subtle px-3 py-2 text-xs">
                     <span className="flex min-w-0 items-baseline gap-2">
                       <strong className="min-w-0 truncate">{brand}</strong>
                       {irPages[brand] > 1 ? (
@@ -764,10 +773,10 @@ export function DealFulfilmentPanel({
         ) : null}
 
         {/* Step 2: ส่งมอบสินค้า */}
-        <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3">
-          <div className="flex items-center gap-2">
+        <div className={STEP_BOX}>
+          <div className="flex flex-wrap items-center gap-2">
             <StepNumber no={2} />
-            <strong className="text-sm">ส่งมอบสินค้า</strong>
+            <strong className={STEP_TITLE}>ส่งมอบสินค้า</strong>
             {/* Sales is listed FIRST because stages 13-14 are its ruling (2026-08-17). REVIEW ROUND
                 1, S2 (2026-09-18): import DROPPED from this list -- TicketService#canWriteDelivery
                 (the single source of truth this tag mirrors) is CEO, or the deal's own owning sales
@@ -810,7 +819,7 @@ export function DealFulfilmentPanel({
               const delivered = Number(item.qtyDelivered || 0);
               const remaining = Math.max(0, ordered - delivered);
               return (
-                <div key={item.id} className="flex items-center justify-between gap-2 rounded border border-border-subtle px-2.5 py-1.5 text-xs">
+                <div key={item.id} className="flex items-center justify-between gap-2 rounded-md border border-border-subtle px-3 py-2 text-xs">
                   <div className="min-w-0">
                     <strong className="block truncate">{item.brand} {item.model || ''}</strong>
                     <span className="text-2xs text-text-muted">
