@@ -2,6 +2,7 @@ package th.co.glr.hr.ticket;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -15,8 +16,10 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
@@ -44,9 +47,14 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  * <ul>
  *   <li>{@code routeA_…} — designer -&gt; owner -&gt; contractor, the full 15-stage spine (S1
  *       through S20), including the S4 -&gt; S3 routine backward step.
- *   <li>{@code routeB_…} — the owner buys directly: {@link DealStage#SPEC_APPROVED}, {@link
- *       DealStage#QUOTE_DESIGN_SIDE}, {@link DealStage#AWAITING_BUYER} and {@link
- *       DealStage#QUOTE_BUYER} never happen.
+ *   <li>{@code routeB_…} — the owner buys directly (the {@link EntryChannel#OWNER_DIRECT} route,
+ *       see {@link DealRoute}): {@link DealStage#SPEC_APPROVED} (S3) IS kept — it means "the party
+ *       who specifies has agreed the spec", only its wording differs per party — and {@link
+ *       DealStage#QUOTE_DESIGN_SIDE} (S4, no designer to quote) is the only stage the route
+ *       excludes; a manual move into it is refused. This walk takes the O-b continuation (the owner
+ *       buys themselves), so {@link DealStage#AWAITING_BUYER} and {@link DealStage#QUOTE_BUYER}
+ *       are on-route but not visited. (Before the route gate this test asserted S3 never happens;
+ *       that pinned business rule was reversed by owner ruling 2026-09-30.)
  *   <li>{@code routeC_…} — a contractor arrives with a BOQ and a spec already in hand: the deal
  *       OPENS at {@link DealStage#QUOTE_BUYER} (S8), skipping S1-S7, and is also the
  *       BUYER_DIRECT entry channel.
@@ -185,16 +193,30 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
 
     // ═══ Route B — the owner buys directly ════════════════════════════════════
 
-    /** S3, S4, S7 and S8 never happen: the owner IS the buyer. */
+    /**
+     * Owner-direct: S3 (re-worded "the owner agreed the spec") IS visited; S4 is the only stage
+     * the route excludes and a manual move into it is refused. S7/S8 are on-route but this walk
+     * takes the O-b branch (the owner buys themselves) straight from S6 to S9.
+     */
     @Test
-    void routeB_ownerBuysDirect_skipsSpecDesignAwaitingAndBuyerQuote() {
+    void routeB_ownerBuysDirect_keepsSpecApproval_andExcludesOnlyTheDesignerQuote() {
         long ticketId = createOneItemDeal("ดีล B: เจ้าของซื้อตรง", "100.00", "800.00"); // payable 80,000
         setStatus(ticketId, TicketStatus.QUOTATION_ISSUED);
+        ticketService.setEntryChannel(ticketId, EntryChannel.OWNER_DIRECT, null, ownerRep);
+        assertThat(entryChannelOf(ticketId)).isEqualTo(EntryChannel.OWNER_DIRECT);
 
         advanceTo(ticketId, DealStage.PRESENTATION, null);
-        advanceTo(ticketId, DealStage.QUOTE_OWNER, null);   // skips SPEC_APPROVED + QUOTE_DESIGN_SIDE
+        // The route's defining refusal, through the real gate: no designer to quote.
+        logAnActivityAndFollowUp(ticketId);
+        assertThatThrownBy(() -> ticketService.updateStage(ticketId, DealStage.QUOTE_DESIGN_SIDE, null, ownerRep))
+            .isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        assertThat(stageOf(ticketId)).isEqualTo(DealStage.PRESENTATION);
+
+        advanceTo(ticketId, DealStage.SPEC_APPROVED, null); // S3 — kept, only re-worded
+        advanceTo(ticketId, DealStage.QUOTE_OWNER, null);
         advanceTo(ticketId, DealStage.OWNER_SIGNOFF, null);
-        advanceTo(ticketId, DealStage.NEGOTIATION, null);   // skips AWAITING_BUYER + QUOTE_BUYER
+        advanceTo(ticketId, DealStage.NEGOTIATION, null);   // O-b: skips S7 + S8 (on-route, not visited)
 
         ticketService.confirmCustomer(ticketId, ownerRep);
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.ORDER_RECEIVED);
@@ -214,8 +236,10 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(paymentStatusOf(ticketId)).isEqualTo(PaymentTrack.FULLY_PAID);
         assertThat(fulfilmentOf(ticketId)).isEqualTo(FulfilmentStatus.FULLY_DELIVERED);
 
-        // The defining property: the four skipped stages never appear as a STAGE_CHANGED target.
-        assertStageNeverVisited(ticketId, DealStage.SPEC_APPROVED, DealStage.QUOTE_DESIGN_SIDE,
+        // S3 happened exactly once — the reversal of the old "S3 never happens" assertion.
+        assertThat(stageChangedToCount(ticketId, DealStage.SPEC_APPROVED)).isEqualTo(1);
+        // The route's only exclusion never happened, and neither did the two O-b skips.
+        assertStageNeverVisited(ticketId, DealStage.QUOTE_DESIGN_SIDE,
             DealStage.AWAITING_BUYER, DealStage.QUOTE_BUYER);
     }
 

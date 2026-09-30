@@ -131,6 +131,41 @@ public class SmtpMailer implements Mailer {
     }
 
     @Override
+    public void send(OutgoingEmail email) {
+        try {
+            var message = sender.createMimeMessage();
+            // multipart=true -> MIXED_RELATED, so one message can carry the multipart/alternative
+            // (text+html), related inline images, and mixed file attachments together.
+            var helper = new MimeMessageHelper(message, true, "UTF-8");
+            helper.setFrom(fromAddress);
+            if (!replyTo.isBlank()) {
+                helper.setReplyTo(replyTo);
+            }
+            helper.setTo(email.to());
+            if (!email.cc().isEmpty()) {
+                helper.setCc(email.cc().toArray(String[]::new));
+            }
+            helper.setSubject(email.subject());
+            helper.setText(email.textBody(), email.htmlBody());
+            // addInline MUST come after setText() (see sendHtml's note on MIME part ordering).
+            for (InlineImage image : email.inlineImages()) {
+                helper.addInline(image.contentId(), new ByteArrayResource(image.bytes()),
+                    image.mimeType() != null ? image.mimeType() : "application/octet-stream");
+            }
+            for (Attachment attachment : email.attachments()) {
+                helper.addAttachment(attachment.filename(), new ByteArrayResource(attachment.bytes()));
+            }
+            sender.send(message);
+            log.info("Rich email sent via SMTP: from={} to={} cc={} inline={} attachments={}",
+                fromAddress, email.to(), email.cc().size(), email.inlineImages().size(),
+                email.attachments().size());
+        } catch (Exception exception) {
+            throw new MailSendException("SMTP rich send failed to " + email.to() + ": "
+                + exception.getMessage(), exception);
+        }
+    }
+
+    @Override
     public void sendWithAttachment(String to, String subject, String body, String filename, byte[] bytes) {
         sendWithAttachments(to, subject, body, List.of(new Attachment(filename, bytes, null)));
     }

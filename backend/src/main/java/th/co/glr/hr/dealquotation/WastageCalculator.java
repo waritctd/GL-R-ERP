@@ -368,7 +368,16 @@ public final class WastageCalculator {
     private static final BigDecimal MAX_WASTAGE_PERCENT = HUNDRED;
     private static final BigDecimal MAX_WASTAGE_PIECES = BigDecimal.valueOf(1_000_000);
 
-    private static int applyWastage(int piecesBefore, String wastageMode, BigDecimal wastageValue) {
+    /**
+     * Package-private, not {@code private} (wording-scan fix 1, 2026-09-17): {@link
+     * DealQuotationLines#calculationLine} needs the post-wastage, PRE-box-rounding piece count to
+     * decide whether box rounding actually changed anything — it is the one fact this method's own
+     * caller ({@link #calculate}) already derives but does not hand back on {@link Result} (only
+     * the FINAL, post-rounding count is). Re-deriving it here (the single source of truth) rather
+     * than duplicating the wastage arithmetic in the rendering layer is what keeps a future change
+     * to this formula from silently drifting the printed line out of step with the stored numbers.
+     */
+    static int applyWastage(int piecesBefore, String wastageMode, BigDecimal wastageValue) {
         if (wastageMode == null || WASTAGE_MODE_NONE.equals(wastageMode)) {
             return piecesBefore;
         }

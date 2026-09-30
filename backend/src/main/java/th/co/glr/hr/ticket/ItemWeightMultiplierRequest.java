@@ -18,7 +18,8 @@ import java.util.List;
  * th.co.glr.hr.commission.CommissionCalculator#itemDerivedWeight} for the blending formula that
  * consumes this value. Setting this multiplier does not, by itself, change any money: it only
  * takes effect the next time a commission record is CREATED against this ticket (frozen once,
- * never recomputed -- see {@code sales.commission_record.effective_weight_multiplier}'s migration
+ * never recomputed, except by the sales_manager's CommissionService#adjustItemWeights while the
+ * record is SUBMITTED -- owner ruling 2026-10-01, which reuses this same request shape -- see {@code sales.commission_record.effective_weight_multiplier}'s migration
  * comment, V148).
  *
  * <p>Authorization: {@code sales_manager}/{@code ceo} only -- see {@link

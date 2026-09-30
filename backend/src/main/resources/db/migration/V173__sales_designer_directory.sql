@@ -9,10 +9,20 @@
 --   -- the designer's NAME is confidential and must NEVER reach a printed document; it exists
 --   only so a sales rep can FIND the right code by name in the picker.
 -- Storage/maintenance, also the owner's own words: "อ่านอย่างเดียว อัปเดตจาก Excel" -- this table
--- is READ-ONLY from the application's point of view. There are NO write endpoints anywhere in this
--- change (see DesignerController); the only way this table's contents ever change is a FUTURE
--- migration re-importing a refreshed Excel export. That is a deliberate scope limit, not an
--- oversight -- do not add a create/update/delete endpoint for this table without a fresh owner ask.
+-- was originally READ-ONLY from the application's point of view. There were NO write endpoints
+-- anywhere in this change (see DesignerController); the only way this table's contents changed was
+-- a FUTURE migration re-importing a refreshed Excel export. That was a deliberate scope limit, not
+-- an oversight -- the note here used to say do not add a create/update/delete endpoint for this
+-- table without a fresh owner ask.
+--
+-- ⚠️ REVERSAL (owner ask relayed 2026-09-26, task "designer-add-from-ui"): that fresh ask has now
+-- happened. DesignerController gained a POST /api/designers (DesignerRepository#create) so a sales
+-- rep can add a new designer inline from the quotation editor's DesignerPicker, mirroring
+-- DealCustomerCard's "+ เพิ่มลูกค้าใหม่" flow, gated by the same DealEntryAccess check
+-- CustomerController#create uses (sales / sales_manager / a live canCreateQuotation grant). This
+-- migration's own DDL is UNCHANGED by that reversal (no ALTER here) -- a row created through the
+-- new endpoint is tagged source_sheet = 'UI' so it stays distinguishable from an Excel-imported
+-- row. There is still no UPDATE/DELETE endpoint; that remains out of scope until a further ask.
 --
 -- ── What this does NOT do ────────────────────────────────────────────────────────────────────
 -- This does NOT touch sales.quotation.unit_code itself, its type, or anything already reading or

@@ -24,6 +24,8 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         createFromDeal: vi.fn(),
         monthlySummary: vi.fn(),
         simulate: vi.fn(),
+        pendingApproval: vi.fn(),
+        adjustItemWeights: vi.fn(),
         // Default empty, same reasoning as tickets.list below: every sales_manager/ceo render
         // (canCreateManual) fires this effect on mount regardless of what a given test is
         // actually checking, so an unconfigured vi.fn() (resolving to undefined) would throw on
@@ -33,6 +35,9 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       tickets: {
         list: vi.fn().mockResolvedValue({ tickets: [] }),
         get: vi.fn(),
+      },
+      finance: {
+        getDeal: vi.fn(),
       },
     },
   };
@@ -411,13 +416,14 @@ describe('CommissionPage — monthly tier summary comes from the server, not cli
 
 const accountUser = { id: 20, employeeId: 20, name: 'บัญชี ทดสอบ', role: 'account' };
 
-function closedPaidTicket(overrides = {}) {
+// The FinanceDealDto shape (backend finance/FinanceDealDto.java): the amount lives under `money`.
+function financeDeal(overrides = {}) {
   return {
     id: 42,
     code: 'TCK-0042',
     customerName: 'บริษัท ทดสอบ จำกัด',
     salesStage: 'CLOSED_PAID',
-    amountPayable: 3210000,
+    money: { amountPayable: 3210000 },
     ...overrides,
   };
 }
@@ -440,7 +446,9 @@ describe('CommissionPage — account create-from-deal tax invoice upload', () =>
   beforeEach(() => {
     vi.clearAllMocks();
     showToast = vi.fn();
-    api.tickets.get.mockResolvedValue({ ticket: { summary: closedPaidTicket() } });
+    // H1 lockdown: account reads a deal through the finance view only (api.tickets.get 403s for it).
+    api.finance.getDeal.mockResolvedValue({ deal: financeDeal() });
+    api.tickets.get.mockRejectedValue(new Error('account must not call api.tickets.get'));
     api.commissions.createFromDeal.mockResolvedValue({ commission: { id: 900, invoiceDetails: invoiceDetails() } });
   });
 
@@ -448,23 +456,56 @@ describe('CommissionPage — account create-from-deal tax invoice upload', () =>
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
-    return render(
+    const utils = render(
       <MemoryRouter>
         <QueryClientProvider client={queryClient}>
           <CommissionPage user={accountUser} showToast={showToast} />
         </QueryClientProvider>
       </MemoryRouter>,
     );
+    return { ...utils, queryClient };
   }
+
+  it('the Linked Deal lookup goes through api.finance.getDeal for account, never api.tickets.get', async () => {
+    renderAccountPage();
+    await loadEligibleDeal('42');
+    expect(api.finance.getDeal).toHaveBeenCalledWith(42);
+    expect(api.tickets.get).not.toHaveBeenCalled();
+    // fields are mapped from the finance view: code, customer, and the amount from `money`
+    expect(screen.getByText('TCK-0042')).not.toBeNull();
+    expect(screen.getByText(/฿3,210,000.00/)).not.toBeNull();
+    expect((screen.getByLabelText(/ยอดรวม/)).value).toBe('3210000');
+  });
+
+  it('a finance-view deal that has not reached CLOSED_PAID is refused with the stage in the message', async () => {
+    api.finance.getDeal.mockResolvedValue({ deal: financeDeal({ salesStage: 'DELIVERY_SCHEDULING' }) });
+    renderAccountPage();
+    fireEvent.change(screen.getByLabelText(/เลขที่ Ticket ID/), { target: { value: '42' } });
+    fireEvent.click(screen.getByRole('button', { name: /โหลดข้อมูลดีล/ }));
+    expect(await screen.findByText(/ยังไม่ถึงขั้นตอนปิดงาน/)).not.toBeNull();
+  });
+
+  it('a successful create-from-deal invalidates the finance deal cache too, so the commission CTA is not stale', async () => {
+    const { queryClient } = renderAccountPage();
+    const spy = vi.spyOn(queryClient, 'invalidateQueries');
+    await loadEligibleDeal();
+    fireEvent.change(screen.getByLabelText(/เลขที่ใบกำกับ/), { target: { value: 'INV-0042' } });
+    const original = new File(['x'], 'tax-invoice-0042.jpg', { type: 'image/jpeg' });
+    fireEvent.change(document.getElementById('commission-invoice-file'), { target: { files: [original] } });
+    fireEvent.change(screen.getByLabelText(/ยอดรวม/), { target: { value: '3210000' } });
+    fireEvent.submit(screen.getByRole('button', { name: 'บันทึกและสร้างคำขอค่าคอม' }).closest('form'));
+    await waitFor(() => expect(api.commissions.createFromDeal).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(spy).toHaveBeenCalledWith({ queryKey: ['finance'] }));
+  });
 
   it('re-wraps the compressed invoice image so createFromDeal receives the original filename, not "blob"', async () => {
     renderAccountPage();
     await loadEligibleDeal();
 
-    fireEvent.change(screen.getByLabelText('Invoice Number *'), { target: { value: 'INV-0042' } });
+    fireEvent.change(screen.getByLabelText(/เลขที่ใบกำกับ/), { target: { value: 'INV-0042' } });
     const original = new File(['fake-jpeg-bytes'], 'tax-invoice-0042.jpg', { type: 'image/jpeg' });
     fireEvent.change(document.getElementById('commission-invoice-file'), { target: { files: [original] } });
-    fireEvent.change(screen.getByLabelText(/Gross Amount/), { target: { value: '3210000' } });
+    fireEvent.change(screen.getByLabelText(/ยอดรวม/), { target: { value: '3210000' } });
 
     // fireEvent.click on the submit button runs jsdom's native constraint validation first,
     // which (unlike a real browser) does not reliably see the file input as satisfied after a
@@ -488,10 +529,10 @@ describe('CommissionPage — account create-from-deal tax invoice upload', () =>
     renderAccountPage();
     await loadEligibleDeal();
 
-    fireEvent.change(screen.getByLabelText('Invoice Number *'), { target: { value: 'INV-0042' } });
+    fireEvent.change(screen.getByLabelText(/เลขที่ใบกำกับ/), { target: { value: 'INV-0042' } });
     const pdf = new File(['fake-pdf-bytes'], 'tax-invoice-0042.pdf', { type: 'application/pdf' });
     fireEvent.change(document.getElementById('commission-invoice-file'), { target: { files: [pdf] } });
-    fireEvent.change(screen.getByLabelText(/Gross Amount/), { target: { value: '3210000' } });
+    fireEvent.change(screen.getByLabelText(/ยอดรวม/), { target: { value: '3210000' } });
 
     // fireEvent.click on the submit button runs jsdom's native constraint validation first,
     // which (unlike a real browser) does not reliably see the file input as satisfied after a
@@ -636,5 +677,141 @@ describe('CommissionPage — manual-commission rep picker (issue #737)', () => {
     // numeric Employee-ID field for anyone the picker excludes -- dropping either would either
     // overclaim completeness or silently strand a caller with no way to reach someone.
     expect(screen.getByText('หรือเลือกจากพนักงานขาย (นอกฝ่ายขายให้กรอกรหัสพนักงานด้านบน)')).not.toBeNull();
+  });
+});
+
+// sales_manager รออนุมัติ view (?view=pending): every SUBMITTED sale record across ALL payroll months,
+// with per-item stock/weight lines, served by GET /api/commissions/pending-approval and adjusted by
+// POST /api/commissions/{id}/item-weights (sales_manager ONLY; ceo reads). MOCK-DRIVEN: these prove the
+// page's plumbing, NOT the authorization boundary (the Java integration tests own that) and NOT the
+// estimatedCommission / effectiveWeight maths, which come back from the server and are never recomputed here.
+describe('CommissionPage — รออนุมัติ pending-approval view', () => {
+  function renderAt(user, url) {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    return render(
+      <MemoryRouter initialEntries={[url]}>
+        <QueryClientProvider client={queryClient}>
+          <CommissionPage user={user} showToast={vi.fn()} />
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  const pendingRecord = () => saleRecord({
+    id: 701,
+    status: 'SUBMITTED',
+    payrollMonth: '2026-07-01', // deliberately NOT the current month: the view must not depend on the month filter
+    approvedById: null, approvedAt: null,
+    managerApprovedBy: null, managerApprovedByName: null, managerApprovedAt: null,
+    ceoApprovedBy: null, ceoApprovedByName: null, ceoApprovedAt: null,
+    invoiceDetails: invoiceDetails({ id: 701, invoiceNumber: 'INV-PEND-0701' }),
+  });
+  const pendingDto = (over = {}) => ({
+    commission: pendingRecord(),
+    ticketCode: 'TCK-0077',
+    customerName: 'บริษัท รออนุมัติ จำกัด',
+    items: [
+      { itemId: 11, description: 'PADANA 60x60 ผิวเงา', qty: 120, qtyFromStock: 30, weightMultiplier: 1 },
+      { itemId: 12, description: 'PADANA 30x60 ผิวด้าน', qty: 40, qtyFromStock: 0, weightMultiplier: 1 },
+    ],
+    effectiveWeight: 1.6,
+    weightedCommissionableBase: 4800000,
+    estimatedCommission: 95000.5,
+    ...over,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // list() returns OTHER-status records: they must never leak into the pending view.
+    api.commissions.list.mockResolvedValue({
+      commissions: [
+        saleRecord({ id: 801, status: 'APPROVED', invoiceDetails: invoiceDetails({ id: 801, invoiceNumber: 'INV-OTHER-APPROVED' }) }),
+        saleRecord({ id: 802, status: 'MANAGER_APPROVED', invoiceDetails: invoiceDetails({ id: 802, invoiceNumber: 'INV-OTHER-MGRAPPR' }) }),
+      ],
+    });
+    api.commissions.reps.mockResolvedValue({ reps: [] });
+    api.commissions.monthlySummary.mockResolvedValue({ summary: null });
+    api.commissions.pendingApproval.mockResolvedValue({ commissions: [pendingDto()] });
+  });
+
+  const pendingTab = () => screen.queryByRole('tab', { name: /รออนุมัติ/ }) ?? screen.queryByRole('button', { name: /^รออนุมัติ/ });
+
+  it('?view=pending shows the รออนุมัติ view from api.commissions.pendingApproval (no month argument) and only its items', async () => {
+    renderAt(salesManagerUser, '/commissions?view=pending');
+    expect(await screen.findByText('INV-PEND-0701')).not.toBeNull();
+    expect(api.commissions.pendingApproval).toHaveBeenCalledWith();
+    expect(screen.getByText(/TCK-0077/)).not.toBeNull();
+    expect(screen.getByText(/บริษัท รออนุมัติ จำกัด/)).not.toBeNull();
+    // other-status rows from list() do not appear in the pending view
+    expect(screen.queryByText('INV-OTHER-APPROVED')).toBeNull();
+    expect(screen.queryByText('INV-OTHER-MGRAPPR')).toBeNull();
+  });
+
+  it('each pending card shows product, qty, qty from stock, a ×1/×2/×3 weight select, total weight (2dp) and the estimated commission', async () => {
+    renderAt(salesManagerUser, '/commissions?view=pending');
+    await screen.findByText('INV-PEND-0701');
+    expect(screen.getByText('PADANA 60x60 ผิวเงา')).not.toBeNull();
+    expect(screen.getByText('PADANA 30x60 ผิวด้าน')).not.toBeNull();
+    expect(screen.getAllByText(/จากสต็อก/).length).toBeGreaterThan(0);
+    expect(screen.getByText('120')).not.toBeNull();
+    expect(screen.getByText('30')).not.toBeNull();
+    const selects = screen.getAllByRole('combobox');
+    expect(selects).toHaveLength(2);
+    expect(Array.from(selects[0].options).map((o) => o.textContent.trim())).toEqual(['×1', '×2', '×3']);
+    expect(selects[0].value).toBe('1');
+    expect(screen.getByText(/น้ำหนักรวม/)).not.toBeNull();
+    expect(screen.getByText('1.60')).not.toBeNull();
+    expect(screen.getByText(/ค่าคอมที่คำนวณได้/)).not.toBeNull();
+    expect(screen.getByText(/฿95,000\.50/)).not.toBeNull();
+  });
+
+  it('sales_manager changing an item weight calls adjustItemWeights(recordId, {lines}) and shows the SERVER-recomputed effectiveWeight', async () => {
+    api.commissions.adjustItemWeights.mockResolvedValue({
+      pending: pendingDto({
+        items: [
+          { itemId: 11, description: 'PADANA 60x60 ผิวเงา', qty: 120, qtyFromStock: 30, weightMultiplier: 3 },
+          { itemId: 12, description: 'PADANA 30x60 ผิวด้าน', qty: 40, qtyFromStock: 0, weightMultiplier: 1 },
+        ],
+        effectiveWeight: 2.2,
+        estimatedCommission: 130000,
+      }),
+    });
+    renderAt(salesManagerUser, '/commissions?view=pending');
+    await screen.findByText('INV-PEND-0701');
+    fireEvent.change(screen.getAllByRole('combobox')[0], { target: { value: '3' } });
+    await waitFor(() => expect(api.commissions.adjustItemWeights).toHaveBeenCalledTimes(1));
+    expect(api.commissions.adjustItemWeights).toHaveBeenCalledWith(701, { lines: [{ itemId: 11, weightMultiplier: 3 }] });
+    expect(await screen.findByText('2.20')).not.toBeNull();
+    expect(screen.queryByText('1.60')).toBeNull();
+    expect(screen.getAllByRole('combobox')[0].value).toBe('3');
+  });
+
+  it('ceo sees the pending card but the weight selects are read-only (adjust is sales_manager only) and never call the API', async () => {
+    renderAt(ceoUser, '/commissions?view=pending');
+    await screen.findByText('INV-PEND-0701');
+    expect(api.commissions.pendingApproval).toHaveBeenCalled();
+    const selects = screen.queryAllByRole('combobox');
+    selects.forEach((select) => expect(select.disabled).toBe(true));
+    expect(screen.getByText('1.60')).not.toBeNull();
+    if (selects.length) fireEvent.change(selects[0], { target: { value: '2' } });
+    expect(api.commissions.adjustItemWeights).not.toHaveBeenCalled();
+  });
+
+  it('sales_manager has a รออนุมัติ tab on the default view that switches to the pending view', async () => {
+    renderAt(salesManagerUser, '/commissions');
+    await waitFor(() => expect(api.commissions.list).toHaveBeenCalled());
+    const tab = pendingTab();
+    expect(tab).not.toBeNull();
+    fireEvent.click(tab);
+    expect(await screen.findByText('INV-PEND-0701')).not.toBeNull();
+    expect(api.commissions.pendingApproval).toHaveBeenCalled();
+    expect(screen.queryByText('INV-OTHER-APPROVED')).toBeNull();
+  });
+
+  it('a sales rep has no รออนุมัติ tab and ?view=pending never calls the pending endpoint for them', async () => {
+    renderAt(salesUser, '/commissions?view=pending');
+    await waitFor(() => expect(api.commissions.list).toHaveBeenCalled());
+    expect(pendingTab()).toBeNull();
+    expect(api.commissions.pendingApproval).not.toHaveBeenCalled();
   });
 });

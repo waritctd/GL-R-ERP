@@ -30,12 +30,12 @@ describe('nextAccountAction', () => {
     expect(nextAccountAction(null)).toBeNull();
   });
 
-  it('deposit-notice-issued -> ยืนยันรับมัดจำ, deep-links to the ticket', () => {
+  it('deposit-notice-issued -> ยืนยันรับมัดจำ, deep-links to the finance deal page', () => {
     const t = ticket({ paymentStatus: 'DEPOSIT_NOTICE_ISSUED' });
     const action = nextAccountAction(t);
     expect(action.key).toBe('confirmDeposit');
     expect(action.label).toBe('ยืนยันรับมัดจำ');
-    expect(action.to).toBe('/tickets/1');
+    expect(action.to).toBe('/finance/deals/1');
     expect(action.urgent).toBe(false);
   });
 
@@ -44,7 +44,7 @@ describe('nextAccountAction', () => {
     const action = nextAccountAction(t);
     expect(action.key).toBe('confirmFinalPayment');
     expect(action.label).toBe('รับชำระส่วนที่เหลือ');
-    expect(action.to).toBe('/tickets/1');
+    expect(action.to).toBe('/finance/deals/1');
   });
 
   it('deposit-paid also counts as final payment due (mirrors TicketService#canConfirmFinalPaymentNow)', () => {
@@ -83,7 +83,7 @@ describe('nextAccountAction', () => {
     const action = nextAccountAction(t);
     expect(action.key).toBe('confirmCloseReady');
     expect(action.label).toBe('ยืนยันพร้อมปิดงาน');
-    expect(action.to).toBe('/tickets/1');
+    expect(action.to).toBe('/finance/deals/1');
   });
 
   it('fully paid + fully delivered but the invoice is not on file is NOT close-ready (mirrors requireClosePrerequisites)', () => {
@@ -107,7 +107,7 @@ describe('nextAccountAction', () => {
     expect(nextAccountAction(t)).toBeNull();
   });
 
-  it('CLOSED_PAID -> บันทึกใบกำกับ + ออกค่าคอม, deep-links to the create-from-deal flow', () => {
+  it('CLOSED_PAID -> บันทึกใบกำกับ, deep-links to the finance deal page (invoice is recorded there)', () => {
     const t = ticket({
       id: 42,
       status: 'quotation_issued',
@@ -119,8 +119,8 @@ describe('nextAccountAction', () => {
     });
     const action = nextAccountAction(t);
     expect(action.key).toBe('recordInvoiceCommission');
-    expect(action.label).toBe('บันทึกใบกำกับ + ออกค่าคอม');
-    expect(action.to).toBe('/commissions?ticketId=42');
+    expect(action.label).toBe('บันทึกใบกำกับ');
+    expect(action.to).toBe('/finance/deals/42');
   });
 
   // Issue #736 pair, wrong-way-round: commissionRecorded:true is the interesting half — the
@@ -141,7 +141,7 @@ describe('nextAccountAction', () => {
     expect(nextAccountAction(t)).toBeNull();
   });
 
-  it('CLOSED_PAID with commissionRecorded:false still yields บันทึกใบกำกับ + ออกค่าคอม', () => {
+  it('CLOSED_PAID with commissionRecorded:false still yields บันทึกใบกำกับ', () => {
     const t = ticket({
       id: 42,
       status: 'quotation_issued',
@@ -154,6 +154,8 @@ describe('nextAccountAction', () => {
     });
     const action = nextAccountAction(t);
     expect(action.key).toBe('recordInvoiceCommission');
+    expect(action.label).toBe('บันทึกใบกำกับ');
+    expect(action.to).toBe('/finance/deals/42');
   });
 
   it('a legacy (pre-dual-track) fully-paid document_issued deal is also close-ready', () => {
@@ -184,6 +186,13 @@ describe('nextAccountAction', () => {
       // exactly as before, so that caller needs no change.
       const t = ticket({ paymentStatus: 'DEPOSIT_NOTICE_ISSUED' });
       expect(nextAccountAction(t).key).toBe('confirmDeposit');
+    });
+
+    it('every viewer (account, ceo, omitted) is sent to the finance deal page; the commission step keeps /commissions', () => {
+      const t = ticket({ id: 7, paymentStatus: 'AWAITING_FINAL_PAYMENT', overdue: true, amountOutstanding: 5000 });
+      expect(nextAccountAction(t, 'ceo').to).toBe('/finance/deals/7');
+      expect(nextAccountAction(t, 'account').to).toBe('/finance/deals/7');
+      expect(nextAccountAction(t).to).toBe('/finance/deals/7');
     });
 
     it('overdue chase (a link to the ticket, not a payment submission) is unaffected by role', () => {

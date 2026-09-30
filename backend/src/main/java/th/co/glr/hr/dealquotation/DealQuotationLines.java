@@ -512,22 +512,46 @@ public final class DealQuotationLines {
             return thaiLoosePiecesLine(quantityPart, wastagePart, hasWastage, piecesFinal, piecesPerBox);
         }
 
+        // Wording-scan fix 1 (2026-09-17): the box-rounding phrase and its "= N แผ่น" echo used to
+        // print even when box rounding was a pure no-op -- the count going in (piecesAfterWastage,
+        // re-derived here via WastageCalculator#applyWastage, the single source of truth for that
+        // number) was ALREADY a whole number of boxes, so "และปัดขึ้นเต็มกล่อง = 20 แผ่น" on a row
+        // that never rounded anything was actively misleading (21 real production items print this
+        // shape). Only when box rounding genuinely moved the count does the old wording/echo stay;
+        // otherwise the line ends with the box count instead -- new, genuine information the old
+        // line never stated at all.
+        //
+        // "Changed" is asked directly of the box arithmetic itself -- piecesAfterWastage % ppb != 0
+        // -- rather than by comparing against piecesFinal: ceilToMultiple is a no-op EXACTLY when
+        // its input is already a multiple, so this is the more direct question, and (unlike a
+        // piecesFinal comparison) it stays correct even if a caller's piecesFinal ever disagreed
+        // with what ceilToMultiple(piecesAfterWastage, ppb) would produce -- it can never derive a
+        // box count that does not evenly divide piecesFinal in the branch below.
+        int piecesAfterWastage = WastageCalculator.applyWastage(piecesBeforeWastage, wastageMode, wastageValue);
+        boolean boxRoundingChangedCount = hasBox && piecesAfterWastage % piecesPerBox != 0;
+
         // Owner decision (2026-09-16): was "และปัดลงกล่อง" ("rounded DOWN") -- the arithmetic
         // rounds UP (ceilToMultiple), so that wording was wrong about its own direction. Corrected
         // to "และปัดขึ้นเต็มกล่อง" ("rounded up to a full box"). English's "rounded up to full
         // boxes" was already right and is untouched.
-        String roundingPart = hasBox ? " และปัดขึ้นเต็มกล่อง" : "";
+        String roundingPart = boxRoundingChangedCount ? " และปัดขึ้นเต็มกล่อง" : "";
 
         // F1 fix (2026-09-16 review): the trailing "= N แผ่น" clause only states something new
         // when box rounding or wastage may have moved piecesFinal away from the count
         // quantityPart already states. Without a แผ่น/กล่อง and without wastage, piecesFinal
         // always equals piecesBeforeWastage -- printing "= N แผ่น" then is a pure echo, e.g. the
-        // production bug "(จำนวน 32 แผ่น = 32 แผ่น)". hasBox alone still justifies the clause even
-        // when the rounding happened to not change the number, because roundingPart itself already
-        // says an operation occurred.
+        // production bug "(จำนวน 32 แผ่น = 32 แผ่น)". Wording-scan fix 1 narrows this further:
+        // box rounding only "still justifies the clause" when it actually CHANGED the count --
+        // when it did not, the box COUNT below is the new information instead, not another echo of
+        // the same piece count quantityPart already gave.
         StringBuilder sb = new StringBuilder("(").append(quantityPart).append(wastagePart).append(roundingPart);
-        if (hasBox || hasWastage) {
+        if (boxRoundingChangedCount || hasWastage) {
             sb.append(" = ").append(format(piecesFinal)).append(" แผ่น");
+        }
+        // A box of ONE piece makes "= N กล่อง" the same number as the piece count in another
+        // unit -- another echo, not information (2 real items carry แผ่น/กล่อง = 1).
+        if (hasBox && piecesPerBox > 1 && !boxRoundingChangedCount) {
+            sb.append(" = ").append(format(piecesFinal / piecesPerBox)).append(" กล่อง");
         }
         sb.append(")");
         String line = sb.toString();
@@ -591,9 +615,9 @@ public final class DealQuotationLines {
                                                  BigDecimal wastageValue, int piecesFinal, Integer piecesPerBox,
                                                  Integer boxes, boolean roundToFullBox) {
         String quantityPart = WastageCalculator.QUANTITY_MODE_PIECES.equals(quantityMode)
-            ? "Quantity " + format(piecesBeforeWastage) + " pcs"
-            : "Area " + format(areaSqm) + " sqm @ " + format(piecesPerSqm) + " pcs/sqm = "
-                + format(piecesBeforeWastage) + " pcs";
+            ? "Quantity " + format(piecesBeforeWastage) + " " + pluralPcs(piecesBeforeWastage)
+            : "Area " + format(areaSqm) + " sqm @ " + format(piecesPerSqm) + " " + pluralPcs(piecesPerSqm)
+                + "/sqm = " + format(piecesBeforeWastage) + " " + pluralPcs(piecesBeforeWastage);
         // Review fix F2 (2026-09-16): mode-gated, mirroring the Thai branch above -- see its own
         // comment. Without this, englishLoosePiecesLine's intermediate "= N pcs" clause could print
         // the same duplicate its own Javadoc says it exists to avoid.
@@ -603,7 +627,7 @@ public final class DealQuotationLines {
         if (hasWastage && WastageCalculator.WASTAGE_MODE_PERCENT.equals(wastageMode)) {
             wastagePart = " + " + format(wastageValue) + "% allowance";
         } else if (hasWastage && WastageCalculator.WASTAGE_MODE_PIECES.equals(wastageMode)) {
-            wastagePart = " + " + format(wastageValue) + " pcs allowance";
+            wastagePart = " + " + format(wastageValue) + " " + pluralPcs(wastageValue) + " allowance";
         }
         boolean hasBox = piecesPerBox != null && piecesPerBox > 0;
 
@@ -615,25 +639,48 @@ public final class DealQuotationLines {
             return englishLoosePiecesLine(quantityPart, wastagePart, hasWastage, piecesFinal, piecesPerBox);
         }
 
-        String roundingPart = hasBox ? ", rounded up to full boxes" : "";
+        // Wording-scan fix 1 (2026-09-17): the Thai mirror of this method's own comment applies
+        // here verbatim -- see #calculationLine's matching block for the full reasoning, including
+        // why "changed" is asked of piecesAfterWastage % ppb directly rather than by comparing
+        // against piecesFinal. piecesAfterWastage is re-derived (never duplicated) via
+        // WastageCalculator#applyWastage, the single source of truth for that number.
+        int piecesAfterWastage = WastageCalculator.applyWastage(piecesBeforeWastage, wastageMode, wastageValue);
+        boolean boxRoundingChangedCount = hasBox && piecesAfterWastage % piecesPerBox != 0;
+        String roundingPart = boxRoundingChangedCount ? ", rounded up to full boxes" : "";
         if (boxes != null) {
-            return "(" + quantityPart + wastagePart + roundingPart + " = " + format(piecesFinal) + " pcs = "
-                + format(boxes) + (boxes == 1 ? " box)" : " boxes)");
+            // The per-sqm box-AREA variant: the box count is this branch's own defining fact (the
+            // printed sqm quantity is derived FROM it), so it is always stated, whether or not box
+            // rounding itself changed anything -- only the rounding phrase and the "= N pcs" echo
+            // (dropped when it says nothing the quantity part or the wastage did not already say)
+            // follow fix 1's rule.
+            StringBuilder sb = new StringBuilder("(").append(quantityPart).append(wastagePart).append(roundingPart);
+            if (boxRoundingChangedCount || hasWastage) {
+                sb.append(" = ").append(format(piecesFinal)).append(" ").append(pluralPcs(piecesFinal));
+            }
+            sb.append(" = ").append(format(boxes)).append(" ").append(pluralBoxes(boxes)).append(")");
+            return sb.toString();
         }
         // F1 fix (2026-09-16 review): mirrors the Thai branch above -- omit a trailing "= N pcs"
         // that only echoes a count quantityPart already states (no pcs/box, no wastage), e.g. the
         // production-class duplicates "(Quantity 3,360 pcs = 3,360 pcs)" and, in AREA mode,
         // "(Area 1,000 sqm @ 2.78 pcs/sqm = 2,780 pcs = 2,780 pcs)" -- AREA mode's own "= 2,780
         // pcs" clause (baked into quantityPart, converting sqm to pieces) is genuine information
-        // and stays untouched; only this SECOND, redundant echo is dropped.
+        // and stays untouched; only this SECOND, redundant echo is dropped. Wording-scan fix 1
+        // narrows this further: when box rounding did not change anything, the box COUNT below is
+        // the new information instead of yet another echo of the same piece count.
         StringBuilder sb = new StringBuilder("(").append(quantityPart).append(wastagePart).append(roundingPart);
-        if (hasBox || hasWastage) {
-            sb.append(" = ").append(format(piecesFinal)).append(" pcs");
+        if (boxRoundingChangedCount || hasWastage) {
+            sb.append(" = ").append(format(piecesFinal)).append(" ").append(pluralPcs(piecesFinal));
+        }
+        // Same one-piece-box rule as the Thai line above.
+        if (hasBox && piecesPerBox > 1 && !boxRoundingChangedCount) {
+            int boxCount = piecesFinal / piecesPerBox;
+            sb.append(" = ").append(format(boxCount)).append(" ").append(pluralBoxes(boxCount));
         }
         sb.append(")");
         String line = sb.toString();
         if (hasBox) {
-            line += " (" + format(piecesPerBox) + " pcs/box)";
+            line += " (" + format(piecesPerBox) + " " + pluralPcs(piecesPerBox) + "/box)";
         }
         return line;
     }
@@ -642,7 +689,9 @@ public final class DealQuotationLines {
      * intermediate clause only when it says something new" rule (F1, 2026-09-16 review: zero full
      * boxes AND no wastage now prints no intermediate clause at all, e.g. {@code "(Quantity 7 pcs)
      * (10 pcs/box)"}, not the old duplicate {@code "(Quantity 7 pcs = 7 pcs) (10 pcs/box)"}),
-     * singular "box"/"pc" at 1. */
+     * singular "box"/"pc" at 1 — routed through the shared {@link #pluralPcs}/{@link #pluralBoxes}
+     * helpers (wording-scan fix 7, 2026-09-17) rather than this method's own ad-hoc ternaries, so
+     * every English count on the document agrees on the same singular/plural rule. */
     private static String englishLoosePiecesLine(String quantityPart, String wastagePart, boolean hasWastage,
                                                  int piecesFinal, int piecesPerBox) {
         int boxes = piecesFinal / piecesPerBox;
@@ -650,32 +699,79 @@ public final class DealQuotationLines {
         StringBuilder sb = new StringBuilder("(").append(quantityPart).append(wastagePart);
         if (boxes > 0) {
             if (hasWastage) {
-                sb.append(" = ").append(format(piecesFinal)).append(" pcs");
+                sb.append(" = ").append(format(piecesFinal)).append(" ").append(pluralPcs(piecesFinal));
             }
             if (loose > 0) {
-                sb.append(" = ").append(format(boxes)).append(boxes == 1 ? " box + " : " boxes + ")
-                    .append(format(loose)).append(loose == 1 ? " pc" : " pcs");
+                sb.append(" = ").append(format(boxes)).append(" ").append(pluralBoxes(boxes)).append(" + ")
+                    .append(format(loose)).append(" ").append(pluralPcs(loose));
             } else {
-                sb.append(" = ").append(format(boxes)).append(boxes == 1 ? " box" : " boxes");
+                sb.append(" = ").append(format(boxes)).append(" ").append(pluralBoxes(boxes));
             }
         } else if (hasWastage) {
-            sb.append(" = ").append(format(loose)).append(loose == 1 ? " pc" : " pcs");
+            sb.append(" = ").append(format(loose)).append(" ").append(pluralPcs(loose));
         }
-        sb.append(") (").append(format(piecesPerBox)).append(" pcs/box)");
+        // Wording-scan fix 7 (2026-09-17): this box tail used to hardcode "pcs" regardless of
+        // count -- a piecesPerBox of 1 printed the bug's own "(1 pcs/box)" shape.
+        sb.append(") (").append(format(piecesPerBox)).append(" ").append(pluralPcs(piecesPerBox)).append("/box)");
         return sb.toString();
     }
 
     /**
      * The English per-sqm box sub-line, exactly her QN6900933's shape: {@code (1 box = 28 pcs =
      * 0.6 sqm)}, {@code (1 box = 66 pcs = 0.495 sqm)} — the box area as the supplier states it,
-     * trailing zeros dropped (up to the column's 6 decimals).
+     * trailing zeros dropped (up to the column's 6 decimals). The LEADING "1 box" is always
+     * singular and literal — it is not a count, it names ONE box's own contents — but the piece
+     * count inside it is a genuine count and is pluralized accordingly (wording-scan fix 7).
      */
     public static String boxLine(Integer piecesPerBox, BigDecimal sqmPerBox) {
         if (piecesPerBox == null || piecesPerBox <= 0 || sqmPerBox == null || sqmPerBox.signum() <= 0) {
             return null;
         }
         DecimalFormat area = new DecimalFormat("#,##0.######", DecimalFormatSymbols.getInstance(Locale.US));
-        return "(1 box = " + format(piecesPerBox) + " pcs = " + area.format(sqmPerBox) + " sqm)";
+        return "(1 box = " + format(piecesPerBox) + " " + pluralPcs(piecesPerBox) + " = " + area.format(sqmPerBox)
+            + " sqm)";
+    }
+
+    /**
+     * Wording-scan fix 7 (2026-09-17) — the ONE shared English singular/plural helper for a
+     * printed count, used everywhere a count appears on the English document (calculation lines,
+     * the box line, the per-sqm line, the wastage allowance, credit days, lead time, validity
+     * days) instead of an ad-hoc ternary at each call site. A real English document printed every
+     * one of "1 pcs", "1 days", "(1 pcs/box)", "@ 1 pcs/sqm", "+ 1 pcs allowance", "on 1 days
+     * credit" and "approximately 1 days" before this fix — one shared rule closes all of them at
+     * once, and closes the same way for whichever is added next.
+     *
+     * @return {@code singular} when {@code count} is exactly one, {@code pluralWord} otherwise
+     *     (zero, negative, or greater than one) — English count agreement, not a sign check.
+     */
+    static String plural(int count, String singular, String pluralWord) {
+        return count == 1 ? singular : pluralWord;
+    }
+
+    /** {@link #plural(int, String, String)} for a {@link BigDecimal} count (the wastage-allowance
+     * piece count, which is user-typed and so arrives as a decimal even though fix 5 requires it be
+     * a whole number in PIECES mode) — compared with {@link BigDecimal#compareTo} so "1.00" reads
+     * as singular exactly like {@code 1}. */
+    static String plural(BigDecimal count, String singular, String pluralWord) {
+        return count != null && count.compareTo(BigDecimal.ONE) == 0 ? singular : pluralWord;
+    }
+
+    /** {@code "pc"}/{@code "pcs"} via {@link #plural(int, String, String)} — the single most common
+     * shape this document prints, given its own tiny helper so call sites read as one word rather
+     * than a three-argument call. */
+    private static String pluralPcs(int count) {
+        return plural(count, "pc", "pcs");
+    }
+
+    /** {@link #pluralPcs(int)} for a {@link BigDecimal}-typed count (the wastage allowance and the
+     * per-sqm rate, e.g. "@ 1 pc/sqm"). */
+    private static String pluralPcs(BigDecimal count) {
+        return plural(count, "pc", "pcs");
+    }
+
+    /** {@code "box"}/{@code "boxes"} via {@link #plural(int, String, String)}. */
+    private static String pluralBoxes(int count) {
+        return plural(count, "box", "boxes");
     }
 
     /** What a TILE row prints in the quantity/unit cells and under its description, decided in ONE

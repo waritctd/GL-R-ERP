@@ -248,7 +248,7 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
     @Test
     void submit_withGrossAmountWithinThreshold_succeedsWithNoMismatchFlag() {
         long ticketId = driveDealToClosedPaid(new BigDecimal("10"));
-        BigDecimal payable = tickets.payableAmount(ticketId);
+        BigDecimal payable = tickets.payableAmountExVat(ticketId);
         assertThat(payable.signum()).isPositive();
         // 2% above payable — within the 5% cross-check threshold.
         BigDecimal grossAmount = payable.multiply(new BigDecimal("1.02")).setScale(2, java.math.RoundingMode.HALF_UP);
@@ -272,7 +272,7 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
     @Test
     void submit_withGrossAmountBeyondThreshold_succeedsButFlagsMismatch() {
         long ticketId = driveDealToClosedPaid(new BigDecimal("10"));
-        BigDecimal payable = tickets.payableAmount(ticketId);
+        BigDecimal payable = tickets.payableAmountExVat(ticketId);
         assertThat(payable.signum()).isPositive();
         // 25% above payable — well beyond the 5% threshold.
         BigDecimal grossAmount = payable.multiply(new BigDecimal("1.25")).setScale(2, java.math.RoundingMode.HALF_UP);
@@ -389,10 +389,12 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
         assertThat(issuedNotice.status()).isEqualTo("ISSUED");
         ticketService.confirmDepositPaid(ticketId, accountActor);
 
+        // S18 owner decision 2026-09-28: import no longer declares stock coverage. This is setup for
+        // a commission test, so the CEO (allowed on any deal) stands in for the declarer.
         ticketService.reserveStock(ticketId,
             new StockReservationRequest(List.of(
                 new StockReservationRequest.Line(ticketItemId, quantity, "จองครบจากสต็อก"))),
-            importActor);
+            ceoActor);
         // V184: completeDelivery's gate (canWriteDelivery) transferred from {import,ceo,owning-rep}
         // to {ceo, owning-rep} only -- import no longer completes delivery. salesActor (the deal
         // owner) is used here instead of importActor; this fixture is not testing delivery authz.

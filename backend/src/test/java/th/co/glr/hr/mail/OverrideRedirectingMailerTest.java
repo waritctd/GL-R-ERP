@@ -135,6 +135,32 @@ class OverrideRedirectingMailerTest {
         verify(delegate).sendHtml(eq(OVERRIDE_TO), eq("subject"), anyString(), anyString(), eq(List.of()));
     }
 
+    // The rich send path (leave-submission email): the CC list must be DROPPED, not redirected, so a
+    // UAT run never mails a real manager via CC. Asserted wrong-way-round: the delegate's OutgoingEmail
+    // carries an EMPTY cc and the override as its to, and neither the real requester nor the real
+    // manager appears as an actual recipient - they appear only in the disclosure note.
+    @Test
+    void richSendDropsCcAndRedirectsToTheOverrideInbox() {
+        String manager = "manager@example.com";
+        Mailer.Attachment pdf = new Mailer.Attachment("ใบลา.pdf", "%PDF".getBytes(), "application/pdf");
+        Mailer.OutgoingEmail email = new Mailer.OutgoingEmail(
+            "hr-inbox@example.com", List.of(REAL_RECIPIENT, manager), "leave",
+            "<html><body><p>letter</p></body></html>", "letter", List.of(), List.of(pdf));
+
+        mailer.send(email);
+
+        verify(delegate).send(argThat(sent ->
+            OVERRIDE_TO.equals(sent.to())
+            && sent.cc().isEmpty()                                  // CC dropped entirely
+            && sent.attachments().equals(List.of(pdf))             // attachments preserved
+            && sent.htmlBody().contains("<p>letter</p>")
+            && sent.htmlBody().contains("Redirected for testing")
+            && sent.htmlBody().contains(REAL_RECIPIENT)             // real recipients disclosed in note
+            && sent.htmlBody().contains(manager)
+            && sent.textBody().contains(REAL_RECIPIENT)
+            && sent.textBody().contains(manager)));
+    }
+
     @Test
     void blankOriginalToStillRedirectsAndNotesNoAddressWasOnFile() {
         mailer.send(null, "subject", "body");

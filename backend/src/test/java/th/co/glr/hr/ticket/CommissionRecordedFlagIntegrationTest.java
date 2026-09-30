@@ -26,7 +26,7 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  * design). So {@code accountActions.js#nextAccountAction} could only guess: EVERY {@code
  * CLOSED_PAID} deal permanently showed "บันทึกใบกำกับ + ออกค่าคอม" as ฝ่ายบัญชี's next action, and
  * the accountant's worklist over-counted its backlog and never emptied. {@link
- * TicketRepository#hasRecordedCommission} closes that gap, but it is a DELIBERATE second copy of
+ * TicketRepository#HAS_RECORDED_COMMISSION} closes that gap, but it is a DELIBERATE second copy of
  * {@code CommissionRepository#hasActiveCommissionForTicket}'s SQL — {@code TicketRepository} is
  * hand-wired as {@code new TicketRepository(jdbc)} in ~40 places, so injecting {@code
  * CommissionRepository} there to reuse the real method would break all of them for one boolean.
@@ -185,7 +185,7 @@ class CommissionRecordedFlagIntegrationTest extends AbstractPostgresIntegrationT
         for (long ticketId : List.of(noCommission, submitted, managerApproved, approved, rejected,
                 voided, clawbackOnly, adjustmentOnly, elsewhereTarget, elsewhereDecoy)) {
             assertThat(commissionRecordedOf(ticketId))
-                .as("TicketRepository#hasRecordedCommission must never disagree with "
+                .as("TicketRepository#HAS_RECORDED_COMMISSION must never disagree with "
                     + "CommissionRepository#hasActiveCommissionForTicket for ticket %d", ticketId)
                 .isEqualTo(commissions.hasActiveCommissionForTicket(ticketId));
         }

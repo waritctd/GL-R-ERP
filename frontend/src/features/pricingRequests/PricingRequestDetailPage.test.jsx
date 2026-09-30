@@ -1,6 +1,6 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PricingRequestDetailPage } from './PricingRequestDetailPage.jsx';
@@ -31,6 +31,7 @@ vi.mock('../../api/index.js', () => ({
       attachmentUrl: (id) => `#attachment-${id}`,
       factoryQuoteAttachmentUrl: (id) => `#quote-attachment-${id}`,
       setItemFactory: vi.fn(),
+      pickup: vi.fn(),
       generateFactoryEmailDrafts: vi.fn(),
       updateFactoryQuote: vi.fn(),
       sendFactoryQuote: vi.fn(),
@@ -76,6 +77,13 @@ vi.mock('../../api/index.js', () => ({
     catalog: {
       prices: vi.fn(),
     },
+    // B6 (GLA-135): the import factory picker's master list + country roster + in-flow
+    // add-factory form (ImportFactoryPicker, reusing catalog PriceImportPage's FactoryFormModal).
+    priceImport: {
+      factories: vi.fn(),
+      countries: vi.fn(),
+      createFactory: vi.fn(),
+    },
     meta: {
       unitBases: vi.fn(),
     },
@@ -89,6 +97,9 @@ vi.mock('../../api/index.js', () => ({
       // this fix, rather than a leaked override from an earlier test or a thrown TypeError.
       findForPricingRequest: vi.fn(),
       createFromPricingRequest: vi.fn(),
+      // GLA-123 slice S3 — the new engine's own outcome-recording endpoint, mirrors
+      // pricingRequests.recordCustomerQuotationOutcome above.
+      recordOutcome: vi.fn(),
     },
   },
 }));
@@ -294,6 +305,16 @@ function setApiDefaults() {
   });
   api.pricingRequests.createDepositNoticeFromQuotation.mockResolvedValue({ depositNotice: { id: 9901, status: 'DRAFT' } });
   api.catalog.prices.mockResolvedValue({ items: [] });
+  // B6 (GLA-135): a small real-looking factory roster — enough for the picker + duplicate-name
+  // tests below without pulling in the full catalog fixture this file doesn't otherwise need.
+  api.priceImport.factories.mockResolvedValue([
+    { factoryId: 601, name: 'SCG Ceramics', country: 'TH', countryOther: null, defaultCurrency: 'THB', email: null, unit: 'piece' },
+    { factoryId: 602, name: 'Cotto Industry', country: 'TH', countryOther: null, defaultCurrency: 'THB', email: null, unit: 'piece' },
+  ]);
+  api.priceImport.countries.mockResolvedValue([
+    { countryCode: 'TH', nameEn: 'Thailand', nameTh: 'ไทย' },
+    { countryCode: 'IT', nameEn: 'Italy', nameTh: 'อิตาลี' },
+  ]);
   // Mirrors UnitBasisMetaController's GET /api/meta/unit-bases — the backend catalog the
   // factory-quote response unit select is built from at runtime (item 3 of this task's brief).
   api.meta.unitBases.mockResolvedValue({
@@ -785,6 +806,172 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     // step, not a decorative afterthought beside the button that actually changes state.
     expect(within(dialog).getByRole('button', { name: /คัดลอกข้อความ/ })).not.toBeNull();
     expect(within(dialog).getByRole('button', { name: 'ส่งแล้ว' })).not.toBeNull();
+  });
+
+  // Owner UX ask 2026-09-24: the price grid must not invite a quoted price before the request
+  // email has actually been sent to this factory (a DRAFT quote = not sent yet). Nudge, not hide:
+  // the grid stays visible with a locked/dimmed price input + a "send the email first" banner.
+  it('locks the price grid with a nudge while the factory email is still a DRAFT', async () => {
+    renderDetailPage({ user: importUser, factoryQuotes: [buildFactoryQuote()] }); // default status DRAFT
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    expect(screen.getByTestId('pcr-await-email-91')).not.toBeNull();     // the nudge banner
+    // The price field (shared aria-label prefix) is the DISABLED stand-in, not an editable input.
+    expect(screen.getByLabelText(/^ราคาที่เสนอ/).disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: 'ยืนยันราคาเสนอ' })).toBeNull(); // and no confirm
+  });
+
+  it('unlocks the price grid once the factory email is sent (REQUESTED)', async () => {
+    renderDetailPage({ user: importUser, factoryQuotes: [buildFactoryQuote({ status: 'REQUESTED' })] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    expect(screen.queryByTestId('pcr-await-email-91')).toBeNull();       // banner gone
+    expect(screen.getByLabelText(/^ราคาที่เสนอ/).disabled).toBe(false);  // editable input back
+    expect(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' })).not.toBeNull();
+  });
+
+  // Opus review of #1062 (2026-09-28): the lock above read only the QUOTE's own status, never the
+  // PRICING REQUEST's. FactoryQuoteService.send only succeeds while the request itself sits in
+  // DRAFT_STATUSES = {IMPORT_REVIEWING, AWAITING_FACTORY_RESPONSE} (FactoryQuoteService.java:47-49,
+  // guarded at :242). receive()'s window is wider (RESPONSE_STATUSES, :50-53, adds
+  // READY_FOR_CEO_REVIEW) and explicitly still accepts a DRAFT quote (:402, :408). This is a
+  // defensive guard, not a claim of a specific reproduction — PricingRequestService#setItemFactory
+  // is a gap-FILL only (a line that already has a factory 409s), so no confirmed live path was found
+  // that lands a DRAFT quote outside send()'s window today. But whatever combination does, the UI
+  // must never lock the grid behind a "send first" banner whose only action would 409 while
+  // receive() would accept the very same confirm — so outside send()'s window the grid must behave
+  // as it did before #1062: enabled, no banner, AND (since receive() explicitly still accepts a
+  // DRAFT quote there) the ยืนยันราคาเสนอ confirm button restored too — see the follow-up fix to
+  // canConfirm's own disjunction, which this test also covers.
+  it('does not lock the price grid for a surviving DRAFT quote once the request is past send()\'s window (READY_FOR_CEO_REVIEW)', async () => {
+    renderDetailPage({
+      user: importUser,
+      request: buildRequest({ summary: { status: 'READY_FOR_CEO_REVIEW' } }),
+      factoryQuotes: [buildFactoryQuote()], // still DRAFT
+    });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    expect(screen.queryByTestId('pcr-await-email-91')).toBeNull();       // no banner
+    expect(screen.getByLabelText(/^ราคาที่เสนอ/).disabled).toBe(false);  // input enabled, not locked
+    expect(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' })).not.toBeNull(); // confirm restored too
+  });
+
+  // #2 (owner ask 2026-09-24): before any ร่างอีเมล is generated the price section used to be a
+  // bare "ยังไม่มีราคาโรงงาน" — now it previews what needs pricing, grouped by the routed factory,
+  // read-only (no editable price input yet).
+  it('previews what needs pricing (grouped by factory) before any ร่างอีเมล is generated', async () => {
+    renderDetailPage({ user: importUser }); // no factoryQuotes → nothing generated yet
+    await waitForLoaded();
+
+    const preview = await screen.findByTestId('pcr-price-preview');
+    expect(screen.getAllByTestId('pcr-price-preview-group').length).toBeGreaterThan(0);
+    expect(within(preview).getByText('SCG Ceramics')).not.toBeNull();   // the routed factory group
+    expect(screen.queryByLabelText(/^ราคาที่เสนอ/)).toBeNull();          // no editable price yet
+  });
+
+  // Opus review of #1062 (2026-09-28): the preview used to be gated on `factoryGroups.length ===
+  // 0`, so it vanished entirely the instant ANY factory quote existed anywhere on the request. An
+  // item whose factory was blank until Import gap-filled it (canSetItemFactory, still within
+  // FACTORY_ROUTING_STATUSES — never a re-route of an already-set line, per setItemFactory's own
+  // Javadoc) AFTER drafts were already generated for other items has no factory-quote row of its
+  // own, so it appeared in neither the (suppressed) preview nor the quote grid — invisible. The
+  // preview must now cover exactly the items no CURRENT factory quote already lists, independent of
+  // whether other items already have one — and its banner copy must not claim "no draft generated
+  // at all" in this mixed case, and the panel's item count must include these previewed items too.
+  it('previews an item with no factory-quote row yet even once other items already have one', async () => {
+    const base = buildRequest().items[0];
+    const items = [
+      { ...base, id: 1, resolvedFactoryName: 'SCG Ceramics' }, // A — quoted below
+      { ...base, id: 2, resolvedFactoryName: 'SCG Ceramics', model: 'A2' }, // B — quoted below
+      { ...base, id: 3, resolvedFactoryName: 'Cotto', model: 'C1' }, // C — gap-filled, not quoted yet
+    ];
+    const quote = buildFactoryQuote({
+      items: [
+        { ...buildFactoryQuote().items[0], id: 911, pricingRequestItemId: 1 },
+        { ...buildFactoryQuote().items[0], id: 912, pricingRequestItemId: 2 },
+      ],
+    });
+    const request = buildRequest({ items });
+    renderDetailPage({ user: importUser, request, factoryQuotes: [quote] });
+    await waitForLoaded(request);
+
+    const preview = await screen.findByTestId('pcr-price-preview');
+    expect(within(preview).getByText('Cotto')).not.toBeNull();          // C's factory shows
+    expect(within(preview).queryByText('SCG Ceramics')).toBeNull();     // A/B's factory does not
+    // Mixed case (A/B already quoted, C only just previewed): the banner must not claim no draft
+    // was ever generated — that would be false for A/B's already-drafted factory.
+    expect(within(preview).getByText(/รายการที่ยังไม่ได้ขอราคาจากโรงงาน/)).not.toBeNull();
+    expect(within(preview).queryByText(/ยังไม่ได้สร้างร่างอีเมลขอราคา/)).toBeNull();
+
+    // A and B still render as their own quote-grid rows (locked, since request stays
+    // IMPORT_REVIEWING and the quote stays DRAFT) rather than being hidden by C's preview.
+    expect(screen.getAllByLabelText(/^ราคาที่เสนอ/).length).toBe(2);
+
+    // Panel title counts all three items (2 quoted + 1 previewed), not just the quoted ones.
+    expect(screen.getByText('รายการสินค้า (3 รายการ)')).not.toBeNull();
+  });
+
+  // #1 (owner ask 2026-09-24): a SUBMITTED request opened here (e.g. from a link) had no รับเรื่อง
+  // affordance on the page itself — only in the คิวขอราคา queue.
+  it('lets an import user รับเรื่อง a SUBMITTED request from the request-page header', async () => {
+    api.pricingRequests.pickup.mockResolvedValue({ pricingRequest: buildRequest({ summary: { status: 'IMPORT_REVIEWING' } }) });
+    renderDetailPage({ user: importUser, request: buildRequest({ summary: { status: 'SUBMITTED' } }) });
+    await waitForLoaded();
+
+    fireEvent.click(screen.getByTestId('pcr-detail-pickup'));
+    await waitFor(() => expect(api.pricingRequests.pickup).toHaveBeenCalledWith(501));
+  });
+
+  it('shows no รับเรื่อง on the request page once it is already picked up (IMPORT_REVIEWING)', async () => {
+    renderDetailPage({ user: importUser, request: buildRequest() }); // default IMPORT_REVIEWING
+    await waitForLoaded();
+    expect(screen.queryByTestId('pcr-detail-pickup')).toBeNull();
+  });
+
+  // owner ask 2026-09-24: after ส่งแล้ว, Import can still reopen the RFQ email — read-only (view +
+  // copy), labelled ดูอีเมล; the ส่งแล้ว transition is gone.
+  it('reopens a SENT factory RFQ email read-only (ดูอีเมล, copy kept, no ส่งแล้ว)', async () => {
+    renderDetailPage({ user: importUser, factoryQuotes: [buildFactoryQuote({ status: 'REQUESTED' })] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    const openBtn = screen.getByTestId('pcr-open-email-draft-91');
+    expect(openBtn.textContent).toContain('ดูอีเมล');
+    fireEvent.click(openBtn);
+
+    const dialog = await screen.findByTestId('factory-email-draft-modal');
+    expect(within(dialog).getByTestId('pcr-copy-factory-email')).not.toBeNull();          // copy kept
+    expect(within(dialog).queryByTestId('pcr-mark-factory-email-sent')).toBeNull();       // no ส่งแล้ว
+  });
+
+  // Opus review of #1062 (2026-09-28), second pass: FactoryEmailDraftModal's own two flags
+  // (canEditFields / canOfferSendActions) used to read only the QUOTE's status — the identical gap
+  // the price grid had before the first review pass, reachable through the exact same state (request
+  // outside send()'s window, quote still DRAFT). The group header already shows "ดูอีเมล" there
+  // (view-only, per the grid's emailSent fix), but the modal itself still offered "ส่งแล้ว" (→
+  // FactoryQuoteService.send → 409) and "บันทึกร่างอีเมล" (→ updateDraft, guarded by the identical
+  // DRAFT_STATUSES → 409). Both now also require `inSendWindow`.
+  it('reopens the RFQ email modal read-only for a DRAFT quote once the request is past send()\'s window (READY_FOR_CEO_REVIEW)', async () => {
+    renderDetailPage({
+      user: importUser,
+      request: buildRequest({ summary: { status: 'READY_FOR_CEO_REVIEW' } }),
+      factoryQuotes: [buildFactoryQuote()], // still DRAFT
+    });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    const openBtn = screen.getByTestId('pcr-open-email-draft-91');
+    expect(openBtn.textContent).toContain('ดูอีเมล'); // header already reads view-only here
+    fireEvent.click(openBtn);
+
+    const dialog = await screen.findByTestId('factory-email-draft-modal');
+    expect(within(dialog).queryByRole('button', { name: 'ส่งแล้ว' })).toBeNull();          // no send
+    expect(within(dialog).queryByRole('button', { name: 'บันทึกร่างอีเมล' })).toBeNull();  // no save
+    expect(within(dialog).getByTestId('pcr-copy-factory-email')).not.toBeNull();           // copy kept
+    expect(within(dialog).getByLabelText('อีเมลโรงงาน (ถ้ามี)').disabled).toBe(true);       // fields locked
   });
 
   it('records a factory response revision entry via receiveFactoryQuote with a fresh clientRequestId', async () => {
@@ -2197,6 +2384,7 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
             clearSpecialPriceSqm: false,
             directNetPrice: null,
             clearDirectNetPrice: false,
+            clearSellingPriceOverride: false,
           }],
         },
       ));
@@ -2230,6 +2418,7 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
             clearSpecialPriceSqm: false,
             directNetPrice: null,
             clearDirectNetPrice: false,
+            clearSellingPriceOverride: false,
           }],
         },
       ));
@@ -2751,6 +2940,176 @@ describe('PricingRequestDetailPage Step 4: Customer Quotation', () => {
   });
 });
 
+// GLA-123 slice S3 BLOCKER 1 fix (Opus review against real Postgres, 2026-09-23):
+// DealQuotationService#findForPricingRequest used to call the DRAFT-only
+// findOpenDraftForPricingRequest, so dealQuotationForPr was null for every status past DRAFT and
+// this whole panel (outcome-recording, the EXPIRED escape hatch) was unreachable in production —
+// even though these mock-driven tests already exercised the UI logic correctly, since they mock
+// the API response directly and never went through the real (buggy) backend query. These tests
+// pin the SAME UI behaviour per status the legacy "Step 5" describe block above pins for the old
+// engine, now for the new one.
+//
+// CORRECTION (Opus MAJOR-A re-review, 2026-09-23): the sentence this replaced claimed these tests
+// also catch a regression in the BACKEND query — false. They stub api.dealQuotations
+// .findForPricingRequest's RESOLVED VALUE directly (see newEngineQuotation()/mockResolvedValue
+// below), so reverting DealQuotationService#findForPricingRequest to the old DRAFT-only reader
+// leaves every one of these 4 tests green — proven: 73/73 still passed under that mutation. The
+// real backend-query regression coverage is
+// DealQuotationOutcomeIntegrationTest#findForPricingRequest_returnsTheQuotationPastDraft (real
+// Postgres, added for MAJOR-A) — THAT is what a future regression on the repository method is
+// caught by, not this file.
+describe('PricingRequestDetailPage GLA-123 slice S3: new-engine (dealQuotationForPr) outcome + expiry', () => {
+  function newEngineQuotation(overrides = {}) {
+    return { id: 9101, number: 'QT-2026-0101-1', docStatus: 'ISSUED', ...overrides };
+  }
+
+  it('ISSUED: offers the outcome-recording controls to the owning sales rep, and records ACCEPTED via dealQuotations.recordOutcome', async () => {
+    const issued = newEngineQuotation({ docStatus: 'ISSUED' });
+    api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: issued });
+    renderDetailPage({ user: salesOwner });
+    await waitForLoaded();
+    await screen.findByText(issued.number);
+
+    const acceptButton = await screen.findByRole('button', { name: 'ลูกค้ายอมรับ' });
+    fireEvent.click(acceptButton);
+
+    await waitFor(() => expect(api.dealQuotations.recordOutcome).toHaveBeenCalledWith(
+      issued.id,
+      expect.objectContaining({ outcome: 'ACCEPTED', clientRequestId: expect.any(String) }),
+    ));
+  });
+
+  it('ISSUED: never shows the outcome-recording controls to CEO or Import — read-only', async () => {
+    const issued = newEngineQuotation({ docStatus: 'ISSUED' });
+    api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: issued });
+    renderDetailPage({ user: ceoUser });
+    await waitForLoaded();
+    await screen.findByText(issued.number);
+
+    expect(screen.queryByRole('button', { name: 'ลูกค้ายอมรับ' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ลูกค้าปฏิเสธ' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ลูกค้าขอแก้ไข' })).toBeNull();
+  });
+
+  it('ACCEPTED: hides the outcome-recording controls and shows the read-only outcome summary', async () => {
+    const accepted = newEngineQuotation({ docStatus: 'ACCEPTED' });
+    api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: accepted });
+    renderDetailPage({ user: salesOwner });
+    await waitForLoaded();
+    await screen.findByText(accepted.number);
+
+    expect(screen.queryByRole('button', { name: 'ลูกค้ายอมรับ' })).toBeNull();
+    expect(screen.getByText(/ผลใบเสนอราคา/)).not.toBeNull();
+  });
+
+  it('EXPIRED: the outcome panel is gone and the expiry escape hatch renders instead', async () => {
+    const expired = newEngineQuotation({ docStatus: 'EXPIRED' });
+    const request = buildRequest({ summary: { status: 'QUOTATION_ISSUED' } });
+    api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: expired });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+    await screen.findByText(expired.number);
+
+    expect(screen.queryByRole('button', { name: 'ลูกค้ายอมรับ' })).toBeNull();
+    expect(screen.getByText('ใบเสนอราคาหมดอายุแล้ว — เขียนใบใหม่ได้')).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'เขียนใบเสนอราคาใหม่จากคำขอราคา' })).not.toBeNull();
+  });
+
+  // S3 round-3 review fix (NEW-1, MAJOR, 2026-09-23): BLOCKER-B's service-layer fix let a
+  // REVISION_REQUESTED quotation be recreated (DealQuotationService#createFromPricingRequest /
+  // #hasLivePricingRequestQuotation both treat it like EXPIRED), but the frontend's own recreate
+  // gate only ever checked docStatus === 'EXPIRED' — so the owning rep hit a dead end: a
+  // read-only "ผลใบเสนอราคา" line with no way to write the replacement the backend already
+  // supports. Pins that the recreate button is now reachable for REVISION_REQUESTED too.
+  it('REVISION_REQUESTED: the outcome panel is gone and the recreate escape hatch renders instead', async () => {
+    const revisionRequested = newEngineQuotation({ docStatus: 'REVISION_REQUESTED' });
+    const request = buildRequest({ summary: { status: 'QUOTATION_ISSUED' } });
+    api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: revisionRequested });
+    api.dealQuotations.createFromPricingRequest.mockResolvedValue({
+      quotation: { id: 9103, number: 'QT-2026-0101-2', docStatus: 'DRAFT' },
+    });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+    await screen.findByText(revisionRequested.number);
+
+    expect(screen.queryByRole('button', { name: 'ลูกค้ายอมรับ' })).toBeNull();
+    expect(screen.getByText('ลูกค้าขอแก้ไขใบเสนอราคา — เขียนใบใหม่ได้')).not.toBeNull();
+    const button = screen.getByRole('button', { name: 'เขียนใบเสนอราคาใหม่จากคำขอราคา' });
+    fireEvent.click(button);
+
+    await waitFor(() => expect(api.dealQuotations.createFromPricingRequest)
+      .toHaveBeenCalledWith(request.summary.id));
+  });
+
+  // Same S3 round-3 review fix (NEW-1) — REJECTED is the other status the backend already
+  // supports a recreate from (same #hasLivePricingRequestQuotation non-live set) but the old
+  // frontend gate never offered.
+  it('REJECTED: the outcome panel is gone and the recreate escape hatch renders instead', async () => {
+    const rejected = newEngineQuotation({ docStatus: 'REJECTED' });
+    const request = buildRequest({ summary: { status: 'QUOTATION_ISSUED' } });
+    api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: rejected });
+    api.dealQuotations.createFromPricingRequest.mockResolvedValue({
+      quotation: { id: 9104, number: 'QT-2026-0101-2', docStatus: 'DRAFT' },
+    });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+    await screen.findByText(rejected.number);
+
+    expect(screen.queryByRole('button', { name: 'ลูกค้ายอมรับ' })).toBeNull();
+    expect(screen.getByText('ลูกค้าปฏิเสธใบเสนอราคา — เขียนใบใหม่ได้')).not.toBeNull();
+    const button = screen.getByRole('button', { name: 'เขียนใบเสนอราคาใหม่จากคำขอราคา' });
+    fireEvent.click(button);
+
+    await waitFor(() => expect(api.dealQuotations.createFromPricingRequest)
+      .toHaveBeenCalledWith(request.summary.id));
+  });
+
+  // S3 round-5 review fix (NEW-A, MAJOR, 2026-09-23): invalidate() (this file's source, around
+  // line 815) invalidated seven query keys after recordDealQuotationOutcome's onSuccess but
+  // OMITTED queryKeys.dealQuotationForPricingRequest — the key backing dealQuotationForPrQuery,
+  // which both the outcome panel above AND the recreate gate just below it read. Because
+  // ['pricingRequests','detail',id] does not prefix-match
+  // ['pricingRequests','dealQuotationForPricingRequest',id], a rep recording an outcome got the
+  // success toast but the screen kept showing the stale ISSUED DTO — and with it, the OLD
+  // outcome-recording buttons instead of the new recreate affordance — until a manual reload or
+  // the query's 30s staleTime lapsed (api/queryClient.js). This test proves the refetch actually
+  // happens and the UI actually re-renders, WITHOUT a remount: it stubs
+  // findForPricingRequest to first resolve ISSUED, then REVISION_REQUESTED on any later call, and
+  // watches (a) the call count rise after the outcome is recorded, and (b) the recreate button
+  // become reachable while the old outcome buttons disappear — proving invalidate() actually
+  // reached this key and not just the six others already covered above.
+  it('invalidates dealQuotationForPr after recording an outcome, so the recreate button appears without a reload', async () => {
+    const issued = newEngineQuotation({ docStatus: 'ISSUED' });
+    const revisionRequested = newEngineQuotation({ docStatus: 'REVISION_REQUESTED' });
+    const request = buildRequest({ summary: { status: 'QUOTATION_ISSUED' } });
+    api.dealQuotations.findForPricingRequest
+      .mockResolvedValueOnce({ quotation: issued })
+      .mockResolvedValue({ quotation: revisionRequested });
+    api.dealQuotations.recordOutcome.mockResolvedValue({ quotation: revisionRequested });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+    await screen.findByText(issued.number);
+
+    const callsBeforeOutcome = api.dealQuotations.findForPricingRequest.mock.calls.length;
+    const reviseButton = screen.getByRole('button', { name: 'ลูกค้าขอแก้ไข' });
+    fireEvent.click(reviseButton);
+
+    await waitFor(() => expect(api.dealQuotations.recordOutcome).toHaveBeenCalledWith(
+      issued.id,
+      expect.objectContaining({ outcome: 'REVISION_REQUESTED', clientRequestId: expect.any(String) }),
+    ));
+
+    // The regression this pins: without invalidating dealQuotationForPricingRequest, this second
+    // call never fires and the assertions below would time out against the stale ISSUED DTO.
+    await waitFor(() => expect(api.dealQuotations.findForPricingRequest.mock.calls.length)
+      .toBeGreaterThan(callsBeforeOutcome));
+
+    expect(await screen.findByRole('button', { name: 'เขียนใบเสนอราคาใหม่จากคำขอราคา' })).not.toBeNull();
+    expect(screen.queryByRole('button', { name: 'ลูกค้ายอมรับ' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ลูกค้าขอแก้ไข' })).toBeNull();
+  });
+});
+
 describe('PricingRequestDetailPage Step 5: Customer Decision and Commercial Revisions', () => {
   it('offers the outcome-recording controls to the owning sales rep only while ISSUED, and records ACCEPTED on click', async () => {
     const issued = buildCustomerQuotation({ docStatus: 'ISSUED' });
@@ -2906,17 +3265,69 @@ describe('PricingRequestDetailPage blank-factory lines', () => {
     expect(screen.getByText('รายการที่ 2')).toBeTruthy();
   });
 
-  it('lets Import name the factory on the blank line and sends it to the per-item endpoint', async () => {
+  // B6 (GLA-135): the field is now a picker over the real factory master list (SearchableCombobox),
+  // not a free-text <input> — selecting an option sends the master row's factoryId, never a typed
+  // name. Opening the combobox (focus) reveals every option because the query starts empty.
+  it('lets Import PICK the factory on the blank line from the master list and sends its id to the per-item endpoint', async () => {
     const request = buildRequestWithBlankFactoryLine();
     renderDetailPage({ user: importUser, request });
     await waitForLoaded(request);
 
-    fireEvent.change(screen.getByLabelText('ระบุโรงงาน'), { target: { value: ' Cotto Industry ' } });
+    fireEvent.focus(screen.getByLabelText('ระบุโรงงาน'));
+    fireEvent.click(await screen.findByRole('option', { name: 'Cotto Industry' }));
     fireEvent.click(screen.getByRole('button', { name: 'บันทึกโรงงาน' }));
 
     await waitFor(() => expect(api.pricingRequests.setItemFactory).toHaveBeenCalledWith(
-      501, 2, { factory: 'Cotto Industry' },
+      501, 2, { factoryId: 602 },
     ));
+  });
+
+  // QA BUG-20: pressing บันทึกโรงงาน with nothing picked used to be a silent no-op (the button was
+  // disabled — no click, no hint why). Now it stays clickable and says what to do, and still does
+  // NOT fire a NaN factoryId at the endpoint.
+  it('warns instead of calling the endpoint when บันทึกโรงงาน is pressed with no factory selected', async () => {
+    const request = buildRequestWithBlankFactoryLine();
+    renderDetailPage({ user: importUser, request });
+    await waitForLoaded(request);
+
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกโรงงาน' }));
+
+    expect(screen.getByText('เลือกโรงงานจากรายการก่อนกดบันทึก')).toBeTruthy();
+    expect(api.pricingRequests.setItemFactory).not.toHaveBeenCalled();
+  });
+
+  // QA BUG-20: the double-submit lock. Both clicks land inside ONE act(), so React cannot re-render
+  // between them — `saving` (isPending) is still false and the button still enabled for the second
+  // click, exactly the fast-double-click window. Only ImportFactoryPicker's inFlight ref can stop the
+  // repeat; separate fireEvent.click calls would each flush a render and pass without the ref.
+  it('fires setItemFactory once when บันทึกโรงงาน is clicked twice before the first save settles', async () => {
+    api.pricingRequests.setItemFactory.mockReturnValue(new Promise(() => {}));
+    const request = buildRequestWithBlankFactoryLine();
+    renderDetailPage({ user: importUser, request });
+    await waitForLoaded(request);
+
+    fireEvent.focus(screen.getByLabelText('ระบุโรงงาน'));
+    fireEvent.click(await screen.findByRole('option', { name: 'Cotto Industry' }));
+    const save = screen.getByRole('button', { name: 'บันทึกโรงงาน' });
+    act(() => {
+      save.click();
+      save.click();
+    });
+
+    await waitFor(() => expect(api.pricingRequests.setItemFactory).toHaveBeenCalledTimes(1));
+    expect(await screen.findByRole('button', { name: 'กำลังบันทึก…' })).toBeTruthy();
+    expect(api.pricingRequests.setItemFactory).toHaveBeenCalledTimes(1);
+  });
+
+  // QA BUG-20: a line that already has a factory is a silent dead-end no more — it explains that
+  // changing means a new revision (the backend refuses an in-place re-route), instead of leaving
+  // Import to guess why the picker vanished.
+  it('tells Import how to change a factory once one is set, without offering a re-route', async () => {
+    const request = buildRequestWithBlankFactoryLine();
+    renderDetailPage({ user: importUser, request });
+    await waitForLoaded(request);
+
+    expect(screen.getByText(/ระบบล็อกไว้กันใบขอราคาที่จัดกลุ่มตามโรงงานเพี้ยน/)).toBeTruthy();
   });
 
   it('offers no input on a line that already names a factory — the backend refuses a re-route', async () => {
@@ -2924,18 +3335,63 @@ describe('PricingRequestDetailPage blank-factory lines', () => {
     renderDetailPage({ user: importUser, request });
     await waitForLoaded(request);
 
-    // Two lines, one blank: exactly one input, and it belongs to the blank one.
+    // Two lines, one blank: exactly one picker, and it belongs to the blank one.
     expect(screen.getAllByLabelText('ระบุโรงงาน')).toHaveLength(1);
     expect(screen.getByLabelText('ระบุโรงงาน').id).toBe('pcr-item-factory-2');
   });
 
-  it('shows Sales the same blocking lines but no input — Import owns the field', async () => {
+  it('shows Sales the same blocking lines but no picker and no add-factory affordance — Import owns the field', async () => {
     const request = buildRequestWithBlankFactoryLine();
     renderDetailPage({ user: salesOwner, request });
     await waitForLoaded(request);
 
     expect(screen.getByText(/ฝ่ายนำเข้าเป็นผู้ระบุโรงงานให้ในขั้นตอนนี้/)).toBeTruthy();
     expect(screen.queryByLabelText('ระบุโรงงาน')).toBeNull();
+    // B6: the inline "add a brand-new factory" affordance is part of the same import-only
+    // control — Sales must not see it either, not merely the picker's input.
+    expect(screen.queryByRole('button', { name: /เพิ่มโรงงานใหม่/ })).toBeNull();
+  });
+
+  // B6 (GLA-135): Import may add a factory that genuinely doesn't exist yet, in-flow, rather than
+  // being stuck typing a name the backend can never resolve. Reuses PriceImportPage's own
+  // FactoryFormModal (name/country/currency/unit/email) — this proves the picker's own wiring:
+  // create -> refetch the master list -> auto-select the new row for this line.
+  it('lets Import add a brand-new factory in-flow and auto-selects it for the blank line', async () => {
+    const request = buildRequestWithBlankFactoryLine();
+    renderDetailPage({ user: importUser, request });
+    await waitForLoaded(request);
+
+    api.priceImport.createFactory.mockResolvedValue({
+      factoryId: 603, name: 'New Factory Co', country: 'TH', countryOther: null,
+      defaultCurrency: 'THB', email: null, unit: 'piece',
+    });
+    // The picker's initial fetch already ran (and resolved with setApiDefaults' 601/602 pair)
+    // before this point — this ONE queued value is for the invalidate-triggered REFETCH that
+    // follows onFactoryAdded, so the picker's options genuinely come from a fresh server read,
+    // not a client-side splice of the create response into stale cache data.
+    api.priceImport.factories.mockResolvedValueOnce([
+      { factoryId: 601, name: 'SCG Ceramics', country: 'TH', countryOther: null, defaultCurrency: 'THB', email: null, unit: 'piece' },
+      { factoryId: 602, name: 'Cotto Industry', country: 'TH', countryOther: null, defaultCurrency: 'THB', email: null, unit: 'piece' },
+      { factoryId: 603, name: 'New Factory Co', country: 'TH', countryOther: null, defaultCurrency: 'THB', email: null, unit: 'piece' },
+    ]);
+
+    fireEvent.click(screen.getByRole('button', { name: /เพิ่มโรงงานใหม่/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'เพิ่มโรงงานใหม่' });
+    fireEvent.change(within(dialog).getByLabelText(/ชื่อโรงงาน/), { target: { value: 'New Factory Co' } });
+    fireEvent.change(within(dialog).getByLabelText(/ประเทศ/), { target: { value: 'TH' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
+
+    await waitFor(() => expect(api.priceImport.createFactory).toHaveBeenCalledWith(
+      'New Factory Co', 'TH', null, 'EUR', '', 'piece',
+    ));
+    // The dialog closes and the line's picker now shows the newly-created, auto-selected factory.
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'เพิ่มโรงงานใหม่' })).toBeNull());
+    expect(await screen.findByDisplayValue('New Factory Co')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกโรงงาน' }));
+    await waitFor(() => expect(api.pricingRequests.setItemFactory).toHaveBeenCalledWith(
+      501, 2, { factoryId: 603 },
+    ));
   });
 
   it('offers nothing once the request has left Import\'s hands', async () => {
@@ -2952,5 +3408,22 @@ describe('PricingRequestDetailPage blank-factory lines', () => {
 
     expect(screen.queryByText(/ยังไม่ได้ระบุโรงงาน/)).toBeNull();
     expect(screen.queryByLabelText('ระบุโรงงาน')).toBeNull();
+  });
+});
+
+describe('PricingRequestDetailPage deal link', () => {
+  // Import cannot open /tickets/:id any more (the whole-deal GET 403s it) — its deal link must
+  // land on its OWN per-deal page instead. Sales/CEO keep the whole-deal page.
+  it('links import to /import/deals/:id, not the whole-deal page', async () => {
+    renderDetailPage({ user: importUser });
+    await waitForLoaded();
+    const link = screen.getByRole('link', { name: 'PR-2026-0701' });
+    expect(link.getAttribute('href')).toBe('/import/deals/701');
+  });
+
+  it('keeps the whole-deal link for sales', async () => {
+    renderDetailPage({ user: salesOwner });
+    await waitForLoaded();
+    expect(screen.getByRole('link', { name: 'PR-2026-0701' }).getAttribute('href')).toBe('/tickets/701');
   });
 });

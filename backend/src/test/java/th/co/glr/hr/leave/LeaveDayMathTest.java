@@ -113,6 +113,64 @@ class LeaveDayMathTest {
     }
 
     // ─────────────────────────────────────────────────────────────────────
+    // 2026-09-25 fix: the multi-day branch used to floor paidDays to a whole number of days
+    // (setScale(0, DOWN)) before ranking working days against it, silently discarding a fractional
+    // paid remainder. It now consumes paidDays as a running fractional balance against each 1.00-value
+    // counted day, so a boundary day where the balance runs out mid-day splits into a paid portion and
+    // an unpaid portion instead of the whole day landing as unpaid.
+    // ─────────────────────────────────────────────────────────────────────
+
+    @Test
+    void unpaidWorkingDaysByMonthWithFractionalPaidSplitsTheBoundaryDayAcrossThreeWorkingDays() {
+        // The "บ๊ก" case: Mon 2026-07-13 .. Wed 2026-07-15 (3 consecutive weekdays), totalDays=3.00,
+        // paidDays=1.50. Under the OLD floor(1.50)=1 behaviour this would have marked 2.00 unpaid
+        // (ranks 2 and 3 wholly unpaid). The fix instead consumes the balance day by day: day 1 takes
+        // 1.00 of the 1.50 (0.50 remains, 0 unpaid); day 2 takes the remaining 0.50 (0.50 unpaid); day
+        // 3 has nothing left to consume (1.00 unpaid) -- total unpaid = 1.50, all in July.
+        Map<LocalDate, BigDecimal> byMonth = LeaveDayMath.unpaidWorkingDaysByMonth(
+            LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-15"), new BigDecimal("1.50"), new BigDecimal("3.00"));
+
+        assertThat(byMonth).containsExactly(Map.entry(LocalDate.parse("2026-07-01"), new BigDecimal("1.50")));
+    }
+
+    @Test
+    void unpaidWorkingDaysByMonthWithFractionalPaidOverTwoDaysYieldsAHalfDayUnpaid() {
+        // The "สนั่น" case: Mon 2026-07-13 .. Tue 2026-07-14 (2 working days), totalDays=2.00,
+        // paidDays=1.50 -> the bug this fix targets: OLD floor(1.50)=1 gave unpaid=1.00 (the whole
+        // second day), the CORRECT answer is 0.50 (only the fraction of the second day beyond the
+        // 1.50 paid balance).
+        Map<LocalDate, BigDecimal> byMonth = LeaveDayMath.unpaidWorkingDaysByMonth(
+            LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-14"), new BigDecimal("1.50"), new BigDecimal("2.00"));
+
+        assertThat(byMonth).containsExactly(Map.entry(LocalDate.parse("2026-07-01"), new BigDecimal("0.50")));
+    }
+
+    @Test
+    void unpaidWorkingDaysByMonthWithExactWholePaidDaysStillProducesAWholeUnpaidDay() {
+        // Sanity check that the fractional-balance rewrite did not change the pre-existing exact-whole-
+        // number behaviour: paid=1.00 over 2 working days -> day 1 fully paid, day 2 fully unpaid.
+        Map<LocalDate, BigDecimal> byMonth = LeaveDayMath.unpaidWorkingDaysByMonth(
+            LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-14"), new BigDecimal("1.00"), new BigDecimal("2.00"));
+
+        assertThat(byMonth).containsExactly(Map.entry(LocalDate.parse("2026-07-01"), new BigDecimal("1.00")));
+    }
+
+    @Test
+    void unpaidWorkingDaysByMonthWithFractionalPaidRunningOutMidSpanSplitsAcrossACalendarMonthBoundary() {
+        // Thu 2026-07-30 .. Mon 2026-08-03: working days are 7/30, 7/31, 8/3 (Sat 8/1 + Sun 8/2
+        // excluded) = 3 working days total. paidDays=1.50: day 1 (7/30) consumes 1.00 of it (0.50
+        // remains, 0 unpaid); day 2 (7/31) consumes the remaining 0.50 -> 0.50 unpaid, landing in
+        // July; day 3 (8/3) has nothing left -> 1.00 unpaid, landing in August. Proves the fractional
+        // remainder lands in the correct month, not just the correct total.
+        Map<LocalDate, BigDecimal> byMonth = LeaveDayMath.unpaidWorkingDaysByMonth(
+            LocalDate.parse("2026-07-30"), LocalDate.parse("2026-08-03"), new BigDecimal("1.50"), new BigDecimal("3.00"));
+
+        assertThat(byMonth).containsExactly(
+            Map.entry(LocalDate.parse("2026-07-01"), new BigDecimal("0.50")),
+            Map.entry(LocalDate.parse("2026-08-01"), new BigDecimal("1.00")));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
     // V118 cross-year quota fix (2026-08-02): totalDaysByYear / clipToYear /
     // unpaidWorkingDaysByMonthAcrossYears -- the day-counting logic EXTENDED (not duplicated) to
     // attribute a request's days per calendar year instead of only per calendar month.

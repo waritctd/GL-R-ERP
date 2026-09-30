@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../../api/index.js';
+import { Button } from '../../components/common/Button.jsx';
+import { Icon } from '../../components/common/Icon.jsx';
+import { Modal } from '../../components/common/Modal.jsx';
 
 /**
  * ผู้ออกแบบ (designer) picker for the quotation editor's combined designer/D.Co. field. Picking a
@@ -21,6 +24,14 @@ import { api } from '../../api/index.js';
  * approach. This is deliberately the ONE extra combobox variant CLAUDE.md's "do not build a third
  * variant" note allows: it reuses BOTH existing patterns' mechanics rather than inventing new ones.
  *
+ * ⚠️ REVERSAL (owner ask relayed 2026-09-26, task "designer-add-from-ui"): the directory used to be
+ * read-only from this picker's point of view. A sticky "+ เพิ่มผู้ออกแบบใหม่" first row now opens a
+ * small modal (code + name) that calls `api.designers.create`, mirroring DealCustomerCard's
+ * "+ เพิ่มลูกค้าใหม่" flow exactly -- same sticky-row placement, same seed-from-typed-query
+ * behaviour, same select-on-success. `code` is entered by hand (the table's PK, e.g. "A001") -- see
+ * DesignerController#create's own doc for the auto-generated-code follow-up this deliberately does
+ * not attempt.
+ *
  * The designer is OPTIONAL (owner ruling 2026-09-14 -- the backend blankToNull's unit_code and
  * never required it) and CLEARABLE: typing the box down to blank and leaving it (blur) clears a
  * previously-picked code back to '', but only when the rep actually edited the text -- a plain
@@ -29,7 +40,7 @@ import { api } from '../../api/index.js';
  * picker shows that raw code as-is rather than going blank, and reopening seeds the search box with
  * it so the rep can search onward from it.
  */
-export function DesignerPicker({ value, onSelectCode, disabled = false, idPrefix = 'designer-picker', label = 'ค้นหาผู้ออกแบบ' }) {
+export function DesignerPicker({ value, onSelectCode, disabled = false, idPrefix = 'designer-picker', label = 'ค้นหาผู้ออกแบบ', showToast }) {
   const [search, setSearch] = useState('');
   const [results, setResults] = useState([]);
   const [open, setOpen] = useState(false);
@@ -41,6 +52,11 @@ export function DesignerPicker({ value, onSelectCode, disabled = false, idPrefix
   // selected — the signal that distinguishes "cleared on purpose" (blur below) from a plain
   // focus-then-blur or an Enter/click pick that also leaves `search` blank.
   const editedRef = useRef(false);
+
+  // ── "+ เพิ่มผู้ออกแบบใหม่" (reversal, see this file's class doc) ─────────────────────────────
+  const [showNewDesigner, setShowNewDesigner] = useState(false);
+  const [newDesigner, setNewDesigner] = useState({ code: '', name: '' });
+  const [savingDesigner, setSavingDesigner] = useState(false);
 
   const hint = useDesignerHint(value);
 
@@ -84,6 +100,39 @@ export function DesignerPicker({ value, onSelectCode, disabled = false, idPrefix
     setResults([]);
     editedRef.current = false;
     closeDropdown();
+  }
+
+  // Keep the text the rep already typed into the search box when opening the create form, so
+  // adding a new designer does not require retyping it — mirrors DealCustomerCard's own
+  // เพิ่มลูกค้าใหม่ seed exactly. Seeds NAME only: `code` is a separate hand-entered field (the
+  // table's PK), not something a free-text search query should guess at.
+  function openNewDesignerFromDropdown() {
+    setNewDesigner({ code: '', name: search.trim() });
+    setShowNewDesigner(true);
+    closeDropdown();
+  }
+
+  function closeNewDesigner() {
+    if (savingDesigner) return;
+    setShowNewDesigner(false);
+    setNewDesigner({ code: '', name: '' });
+  }
+
+  async function handleCreateDesigner() {
+    const code = newDesigner.code.trim();
+    const name = newDesigner.name.trim();
+    if (!code || !name) return;
+    setSavingDesigner(true);
+    try {
+      const res = await api.designers.create({ code, name });
+      selectDesigner(res.designer);
+      setShowNewDesigner(false);
+      setNewDesigner({ code: '', name: '' });
+    } catch (error) {
+      showToast?.('error', error.message || 'เพิ่มผู้ออกแบบใหม่ไม่สำเร็จ');
+    } finally {
+      setSavingDesigner(false);
+    }
   }
 
   // Blur commits a deliberate clear: the rep edited the box (not just opened and left it, and not
@@ -153,6 +202,16 @@ export function DesignerPicker({ value, onSelectCode, disabled = false, idPrefix
           aria-label="ผลการค้นหาผู้ออกแบบ"
           className="absolute z-10 mt-1 max-h-64 w-full list-none overflow-auto rounded-md border border-border bg-surface pl-0 shadow-[var(--shadow-lg-heavy)]"
         >
+          <li className="sticky top-0 z-10 border-b border-border-subtle bg-surface-muted">
+            <button
+              type="button"
+              className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-xs font-bold text-link"
+              onMouseDown={(e) => { e.preventDefault(); openNewDesignerFromDropdown(); }}
+            >
+              <Icon name="plus" size={13} />
+              เพิ่มผู้ออกแบบใหม่
+            </button>
+          </li>
           {loading ? <li role="presentation" className="px-3 py-2 text-xs text-text-muted">กำลังค้นหา…</li> : null}
           {!loading && results.length === 0 ? (
             <li role="presentation" className="px-3 py-2 text-xs text-text-muted">ไม่พบผู้ออกแบบ</li>
@@ -174,6 +233,44 @@ export function DesignerPicker({ value, onSelectCode, disabled = false, idPrefix
             </li>
           ))}
         </ul>
+      ) : null}
+      {showNewDesigner ? (
+        <Modal title="เพิ่มผู้ออกแบบใหม่" onClose={closeNewDesigner}>
+          <div className="grid grid-cols-2 gap-2 mobile:grid-cols-1">
+            <label className="m-0">
+              <span className="text-2xs">รหัสผู้ออกแบบ *</span>
+              <input
+                value={newDesigner.code}
+                disabled={savingDesigner}
+                placeholder="เช่น A001"
+                onChange={(e) => setNewDesigner((p) => ({ ...p, code: e.target.value }))}
+              />
+            </label>
+            <label className="m-0">
+              <span className="text-2xs">ชื่อผู้ออกแบบ *</span>
+              <input
+                value={newDesigner.name}
+                disabled={savingDesigner}
+                placeholder="ชื่อบริษัท / ผู้ออกแบบ"
+                onChange={(e) => setNewDesigner((p) => ({ ...p, name: e.target.value }))}
+              />
+            </label>
+          </div>
+          <div className="mt-4 flex flex-wrap justify-end gap-2">
+            <Button
+              variant="primary"
+              size="sm"
+              loading={savingDesigner}
+              disabled={!newDesigner.code.trim() || !newDesigner.name.trim() || savingDesigner}
+              onClick={handleCreateDesigner}
+            >
+              บันทึกผู้ออกแบบใหม่
+            </Button>
+            <Button variant="secondary" size="sm" disabled={savingDesigner} onClick={closeNewDesigner}>
+              ยกเลิก
+            </Button>
+          </div>
+        </Modal>
       ) : null}
     </div>
   );

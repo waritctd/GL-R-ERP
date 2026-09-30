@@ -68,20 +68,15 @@ public class TicketController {
         return ticketService.actions(id, user);
     }
 
+    // H1 lockdown (2026-09-30): the four routes that only `account` could call -- POST /{id}/payments,
+    // /{id}/deposit-paid, /{id}/final-payment and /{id}/close/confirm -- were REMOVED from this controller
+    // (their allowed role sets became empty once account was refused here). They live on the finance
+    // controller now: POST /api/finance/deals/{id}/{payments,deposit-paid,final-payment,close/confirm}.
+    // (`ceo` was never allowed on them.) GET /{id}/payments below refuses account (requireViewAccess).
     @GetMapping("/{id}/payments")
     Map<String, List<PaymentReceiptDto>> payments(@PathVariable long id, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return Map.of("items", ticketService.listPayments(id, user));
-    }
-
-    @PostMapping("/{id}/payments")
-    TicketDetailResponse recordPayment(
-        @PathVariable long id,
-        @Valid @RequestBody RecordPaymentRequest request,
-        HttpSession session
-    ) {
-        UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.recordPayment(id, request, user));
     }
 
     @PostMapping("/{id}/billing")
@@ -175,14 +170,6 @@ public class TicketController {
             .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"quotation-" + quotationId + ".xls\"")
             .contentType(MediaType.parseMediaType("application/vnd.ms-excel"))
             .body(bytes);
-    }
-
-    // Three-party close (V56): ฝ่ายบัญชี confirms, then the CEO verifies. The old
-    // single-step POST /{id}/close (sales owner, one signature) is gone.
-    @PostMapping("/{id}/close/confirm")
-    TicketDetailResponse confirmCloseReady(@PathVariable long id, HttpSession session) {
-        UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.confirmCloseReady(id, user));
     }
 
     @PostMapping("/{id}/close/revoke")
@@ -371,12 +358,6 @@ public class TicketController {
         return new TicketDetailResponse(ticketService.confirmCustomer(id, user));
     }
 
-    @PostMapping("/{id}/deposit-paid")
-    TicketDetailResponse confirmDepositPaid(@PathVariable long id, HttpSession session) {
-        UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.confirmDepositPaid(id, user));
-    }
-
     @PostMapping("/{id}/import-request")
     TicketDetailResponse issueImportRequest(@PathVariable long id, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
@@ -399,11 +380,5 @@ public class TicketController {
     TicketDetailResponse markGoodsReceived(@PathVariable long id, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return new TicketDetailResponse(ticketService.markGoodsReceived(id, user));
-    }
-
-    @PostMapping("/{id}/final-payment")
-    TicketDetailResponse confirmFinalPayment(@PathVariable long id, HttpSession session) {
-        UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.confirmFinalPayment(id, user));
     }
 }

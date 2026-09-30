@@ -270,6 +270,26 @@ export function DeductionConsentsPage({ user, showToast }) {
         </div>
       </Panel>
 
+      {/* Above DataTable's own search input (which renders inside `data-table-toolbar`), rather
+          than via DataTable's `toolbarExtra` — that prop renders INLINE alongside the search
+          field in the same flex-wrap row, so on a narrow viewport it wraps BELOW the search box
+          only because it comes second in DOM order, not clearly above it. Same fix as
+          QuotationListPage's พนักงานขาย/ยอดรวม filters (2026-09-24), applied here because this
+          page has no header-embedded alternative to conflict with at any width. */}
+      <label className="mb-3 flex flex-col gap-1">
+        <span className="text-2xs font-extrabold uppercase tracking-wide text-text-muted">ประเภทการหัก</span>
+        <select
+          value={kind}
+          onChange={(event) => setKind(event.target.value)}
+          className="min-h-9 mobile:min-h-[44px] w-full max-w-xs rounded-md border-[1.5px] border-border-input bg-surface px-2 py-1 text-sm font-normal text-text"
+        >
+          <option value="">ทั้งหมด</option>
+          {CONSENT_APPLICABLE_DEDUCTION_KINDS.map((value) => (
+            <option key={value} value={value}>{payrollDeductionKindLabel(value)}</option>
+          ))}
+        </select>
+      </label>
+
       <DataTable
         columns={columns}
         rows={rows}
@@ -315,21 +335,6 @@ export function DeductionConsentsPage({ user, showToast }) {
         // wrong key fails silently into a default rather than erroring.
         initialSort={{ key: 'employee', dir: 'asc' }}
         caption="ทะเบียนหนังสือยินยอมหักเงิน"
-        toolbarExtra={(
-          <label className="flex items-center gap-2 text-xs font-bold text-text-secondary">
-            ประเภทการหัก
-            <select
-              value={kind}
-              onChange={(event) => setKind(event.target.value)}
-              className="min-h-9 rounded-md border-[1.5px] border-border-input bg-surface px-2 py-1 text-sm font-normal text-text"
-            >
-              <option value="">ทั้งหมด</option>
-              {CONSENT_APPLICABLE_DEDUCTION_KINDS.map((value) => (
-                <option key={value} value={value}>{payrollDeductionKindLabel(value)}</option>
-              ))}
-            </select>
-          </label>
-        )}
         // Empty is the DEFAULT state of this register everywhere today, not a failure and not an
         // anomaly — nobody has ever been able to record a row. The copy says that plainly, and
         // repeats the non-consequence so an empty table is not read as "nothing is authorised".

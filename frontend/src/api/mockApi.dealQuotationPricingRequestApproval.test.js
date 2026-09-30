@@ -32,6 +32,7 @@ async function draftPricingRequestQuotation() {
     firstName: 'สมศักดิ์', lastName: 'ทดสอบ', phone: '081-000-0002', email: 'contact-s2approval@example.com',
   });
   const { ticket: created } = await api.tickets.create({
+    entryChannel: 'DESIGNER_LED',
     title: 'ดีล S2 Approval Mock',
     priority: 'NORMAL',
     customerName: customer.name,

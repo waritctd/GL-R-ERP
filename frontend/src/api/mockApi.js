@@ -54,6 +54,9 @@ import {
   // V178: the SAME hasSpecialPricing quotationMeta.js exports for the editor's own toggle — not a
   // second copy, so the mock's create/update gate cannot drift from what the toggle itself hides.
   hasSpecialPricing,
+  // Slice 2 (S2-B1/S2-B3): the recipient table (code -> Thai label) and the live DEAL_DIRECT status
+  // set, shared with the editor so the mock validates and labels recipients exactly as the pills do.
+  isLiveDirectQuotation, quotationRecipientOption, hasLivePricingRequest, LIVE_PRICING_REQUEST_BLOCK_MESSAGE,
 } from '../features/quotations/quotationMeta.js';
 // fix/commission-figures-from-backend: mock mode no longer imports the commission tier math —
 // see the fenced MOCK COMMISSION FIXTURES block near the `commissions` namespace below for why,
@@ -1370,6 +1373,85 @@ function mockPickTicketQuotationForDepositNotice(ticketId) {
   return latestAccepted ?? latestIssued ?? null;
 }
 
+// B5 fix ("รายการสินค้า shows 0 รายการ while a deal is still in the pricing/quotation phase"):
+// mirrors TicketRepository#findPricingChainFallbackItems (real backend) -- when a deal's
+// ticket_item is still empty (pre-order-confirmation), tickets.get()'s items grid falls back to
+// the deal's live PRICING_REQUEST/DEAL_DIRECT quotation line items, read-only. Checks BOTH mock
+// arrays explicitly -- see mockHasAcceptedQuotationForTicket's own comment just above on why the
+// mock keeps these origins in separate arrays (mockCustomerQuotations / mockDealQuotations)
+// where the real backend has one shared sales.quotation table.
+const MOCK_ITEM_FALLBACK_STATUS_RANK = { ACCEPTED: 0, ISSUED: 1, APPROVED: 2 };
+
+function mockPickLiveQuotationForItemFallback(ticketId) {
+  const candidates = [];
+  for (const q of mockCustomerQuotations) {
+    if (q.ticketId !== ticketId) continue;
+    const rank = MOCK_ITEM_FALLBACK_STATUS_RANK[q.docStatus];
+    if (rank == null) continue;
+    candidates.push({ origin: 'PRICING_REQUEST', rank, id: q.id, quotation: q });
+  }
+  for (const q of mockDealQuotations) {
+    if (q.ticketId !== ticketId) continue;
+    const rank = MOCK_ITEM_FALLBACK_STATUS_RANK[q.docStatus];
+    if (rank == null) continue;
+    candidates.push({ origin: q.origin || 'DEAL_DIRECT', rank, id: q.id, quotation: q });
+  }
+  if (candidates.length === 0) return null;
+  // ACCEPTED beats ISSUED beats APPROVED (rank ascending); most recent id wins a tie -- same
+  // priority findDealQuotationItemsForDeposit's CASE doc_status / ORDER BY quotation_id DESC
+  // encodes server-side.
+  candidates.sort((a, b) => (a.rank - b.rank) || (b.id - a.id));
+  return candidates[0];
+}
+
+// TicketItemDto's full read shape (see TicketRepository#findPricingChainFallbackItems on the
+// backend) with every pricing-approval-history field at its "not a real ticket_item row"
+// default -- these lines are borrowed from a quotation, not something CEO/import approved on
+// THIS ticket.
+function mockPricingChainFallbackItemShape({ id, brand, model, color, texture, size, qty, sortOrder }) {
+  return {
+    id, brand: brand ?? null, model: model ?? null, color: color ?? null, texture: texture ?? null,
+    size: size ?? null, factory: null,
+    qty: qty ?? null, qtySqm: null, rawPrice: null, rawCurrency: null, rawUnit: null,
+    proposedPrice: null, approvedPrice: null, currency: null, sortOrder,
+    calcedCost: null, calcedPrice: null, calcConfigVersion: null, unitBasis: null,
+    manualPrice: null, manualOverrideReason: null,
+    qtyDelivered: null, qtyFromStock: null, stockNote: null,
+    catalogPriceId: null, catalogProductCode: null,
+    source: 'custom', catalogPrice: null, catalogCurrency: null, catalogPriceUnit: null,
+    sqmPerPiece: null, weightMultiplier: 1, sourcedFromStock: false, stockSalePrice: null,
+  };
+}
+
+function mockPricingChainFallbackItems(ticketId) {
+  const picked = mockPickLiveQuotationForItemFallback(ticketId);
+  if (!picked) return [];
+  if (picked.origin === 'PRICING_REQUEST') {
+    // mockCustomerQuotations items carry no brand/model/color/texture/size of their own (only
+    // description/requestedQuantity/requestedUnitBasis) -- resolve via the linked
+    // pricingRequestItemId, mirroring buildDealQuotationDto's removedCeoItems lookup above.
+    const pr = mockPricingRequests.find((p) => p.id === picked.quotation.pricingRequestId);
+    const priById = new Map((pr?.items ?? []).map((i) => [i.id, i]));
+    return (picked.quotation.items ?? []).map((it, idx) => {
+      const pri = priById.get(it.pricingRequestItemId) ?? {};
+      return mockPricingChainFallbackItemShape({
+        id: it.id, brand: pri.brand, model: pri.model, color: pri.color,
+        texture: pri.texture, size: pri.size,
+        qty: it.requestedQuantity, sortOrder: it.seq ?? idx + 1,
+      });
+    });
+  }
+  // mockDealQuotations shape (either origin, v2 unified editor): brand/model/color/texture/
+  // sizeText/quantity/unit are spread straight from the line's own input by
+  // computeDealQuotationLine/computeDealQuotationV3Line -- mirrors
+  // DealQuotationRepository's own legacy-column writes (brand/model/color/texture/size/qty).
+  return (picked.quotation.items ?? []).map((it, idx) => mockPricingChainFallbackItemShape({
+    id: it.id, brand: it.brand, model: it.model, color: it.color,
+    texture: it.texture, size: it.sizeText ?? it.size,
+    qty: it.quantity, sortOrder: it.seq ?? idx + 1,
+  }));
+}
+
 // Branch fix: mirrors DepositNoticeService.createDraft's header autofill — customerTaxId/
 // customerAddress/projectName were never populated for a deal created through the pricing-
 // request chain. A caller-supplied non-blank value always wins; ticket.customerId == null
@@ -1596,6 +1678,18 @@ function mockCustomerQuotationEditAccess(id, user) {
   const ticket = db.tickets.find((t) => t.id === pr.ticketId);
   if (ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
   return quotation;
+}
+
+// GLA-123 slice S3 (R8 — one finalized quotation per deal, across BOTH คำขอราคา origins).
+// Mirrors TicketRepository#hasAcceptedQuotation: the real backend has ONE shared sales.quotation
+// table for both origins, so that method is a single origin-agnostic EXISTS query. This mock
+// keeps the two origins in SEPARATE arrays (mockCustomerQuotations / mockDealQuotations), so the
+// mock's own guard has to check both explicitly — a real divergence from the backend's storage
+// shape, called out here rather than left implicit, per CLAUDE.md's "argument handling is not
+// guaranteed by the contract test" note (this is exactly that kind of shape difference).
+function mockHasAcceptedQuotationForTicket(ticketId) {
+  return mockCustomerQuotations.some((q) => q.ticketId === ticketId && q.docStatus === 'ACCEPTED')
+    || mockDealQuotations.some((q) => q.ticketId === ticketId && q.docStatus === 'ACCEPTED');
 }
 
 // CEO discount-approval workflow, Phase 2 (owner ruling 2026-08-16) — mirrors
@@ -2234,9 +2328,13 @@ function delay(value) {
   });
 }
 
-function fail(message, status = 400) {
+// `details` mirrors client.js's ApiError#details — the whole JSON error body the real client
+// attaches (`{ message, status, ...extra }`). Only set when a refusal carries structured fields
+// (slice 2's N6 409 is the first), so every existing plain refusal keeps its old shape.
+function fail(message, status = 400, extra = null) {
   const error = new Error(message);
   error.status = status;
+  if (extra) error.details = { message, status, ...extra };
   throw error;
 }
 
@@ -3336,10 +3434,17 @@ function mockPayrollLine(employee) {
 // Mirrors TicketService.requireViewAccess: viewer role required, sales reps
 // only see their own tickets. Used by every read/render path. sales_manager is
 // read+comment-only oversight — never add it to a write-action role list.
-function requireTicketViewer(id) {
+function requireTicketViewer(id, { accountScoped = false } = {}) {
   const user = hasRole('sales', 'import', 'ceo', 'account', 'sales_manager');
   const ticket = findTicketRaw(Number(id));
   if (user.role === 'sales' && ticket.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  // H1 lockdown: account no longer reads a deal through the ticket routes (get / actions / payments /
+  // deliveries / comments) at all. The row-scoped document reads (deposit notices, remaining invoices) opt in
+  // with accountScoped, where account is admitted only inside its list scope.
+  if (user.role === 'account') {
+    if (!accountScoped) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+    requireMockAccountScope(user, ticket);
+  }
   return { user, ticket };
 }
 
@@ -3350,7 +3455,7 @@ function requireTicketViewer(id) {
 // this separate from requireTicketViewer so listDeliveries/actions (which import
 // DOES need) never accidentally inherit the deposit-notice denial.
 function requireDepositNoticeViewer(ticketId) {
-  const result = requireTicketViewer(ticketId);
+  const result = requireTicketViewer(ticketId, { accountScoped: true });
   if (result.user.role === 'import') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
   return result;
 }
@@ -3384,18 +3489,49 @@ function importListScopeIncludes(ticket) {
   return hasActivePricingRequest || dealStageIndex(ticket.salesStage) >= IMPORT_STAGE_SCOPE_START;
 }
 
-// account: a deposit or final-payment confirmation is awaited, or the deal is
-// overdue on an outstanding balance — same fields derivePaymentFields already
-// computes for every list row (paymentStatus / overdue), so this just filters on them.
+// account (H1) -- mirrors TicketRepository#appendRoleScope's account branch: every LIVE order from
+// ORDER_RECEIVED (S10) through CLOSED_PAID (history stays listed), UNIONED with the older rule
+// (a deposit or final-payment confirmation is awaited, or the deal is overdue on an outstanding
+// balance) so nothing account saw before disappears. Only lost / cancelled deals are excluded from
+// the stage disjunct -- a `closed` STATUS (CEO close-confirm) is not. The old scope keyed on
+// paymentStatus alone and hid a PROCUREMENT deal at DEPOSIT_PAID (S12-S17).
+const ACCOUNT_ORDER_STAGE_SCOPE_START = dealStageIndex('ORDER_RECEIVED');
 function accountListScopeIncludes(ticket) {
+  const live = !['CLOSED_LOST', 'CANCELLED'].includes(ticket.lifecycle) && ticket.status !== 'cancelled';
+  if (live && dealStageIndex(ticket.salesStage) >= ACCOUNT_ORDER_STAGE_SCOPE_START) return true;
   if (ACCOUNT_PENDING_PAYMENT_STATUSES.includes(ticket.paymentStatus)) return true;
   return Boolean(derivePaymentFields(ticket).overdue);
 }
+
+// Mirrors th.co.glr.hr.ticket.MoneyMilestone -- the five money milestones and the stage each covers.
+const FINANCE_MONEY_TRACK = [
+  { key: 'ORDER_RECEIVED', index: 1, label: 'ได้รับคำสั่งซื้อ' },
+  { key: 'DEPOSIT_RECEIVED', index: 2, label: 'ได้รับมัดจำ' },
+  { key: 'PROCUREMENT', index: 3, label: 'รอสินค้า / นำเข้า' },
+  { key: 'DELIVERY', index: 4, label: 'ส่งมอบ — รอชำระส่วนที่เหลือ' },
+  { key: 'CLOSED_PAID', index: 5, label: 'ชำระครบ ปิดงาน' },
+];
+const FINANCE_STAGE_TO_MILESTONE = {
+  ORDER_RECEIVED: 'ORDER_RECEIVED', DEPOSIT_RECEIVED: 'DEPOSIT_RECEIVED', PROCUREMENT: 'PROCUREMENT',
+  DELIVERY_SCHEDULING: 'DELIVERY', DELIVERED: 'DELIVERY', CLOSED_PAID: 'CLOSED_PAID',
+};
 
 function findTicketRaw(id) {
   const ticket = db.tickets.find((t) => t.id === id);
   if (!ticket) fail('ไม่พบดีลนี้', 404);
   return ticket;
+}
+
+// Mirrors th.co.glr.hr.ticket.DirectQuotationLocks (slice 1, 2ed3468e — replaced GLA-136's
+// QuotationOnlyTickets): the ONE refusal shared by the two deal writes that must not happen while the
+// deal has a LIVE direct quotation (DEAL_DIRECT in DRAFT / PENDING_APPROVAL / APPROVED) — editing
+// the deal's own lines, and opening a pricing request. Keyed on the live quotation, not on the
+// quotation_only flag (provenance only since slice 1; nothing reads it). Callers run their own authz
+// first, so a caller with no access gets the 403, never this 409.
+const DIRECT_QUOTATION_LOCK_REFUSAL =
+  'ดีลนี้มีใบเสนอราคาตรงที่ยังใช้งานอยู่ — แก้ไขรายการที่ใบเสนอราคา หรือยกเลิกใบเสนอราคาก่อน';
+function requireNoLiveDirectQuotation(ticket) {
+  if (ticket && mockLiveDirectQuotation(ticket.id)) fail(DIRECT_QUOTATION_LOCK_REFUSAL, 409);
 }
 
 // Mirrors AttachmentController + TicketAccessPolicy (ticket/TicketAccessPolicy.java). Issue #389
@@ -3426,15 +3562,22 @@ function findTicketRaw(id) {
 const ATTACHMENT_VIEWER_ROLES = ['ceo', 'account', 'sales_manager'];
 const ATTACHMENT_WRITER_ROLES = ['sales_manager', 'ceo'];
 
+// Amended (feat/import-own-page): `import` now READS an IN-SCOPE deal's documents — all four
+// AttachTypes — via the SAME predicate as its worklist (TicketAccessPolicy.canViewDocuments'
+// importInScope leg). Read-only: it does NOT extend to the write gate, so an import user who did
+// not pick the deal up still cannot upload or delete.
 function requireAttachmentTicketAccess(ticketId, { write = false } = {}) {
   const user = requireSession();
   const ticket = findTicketRaw(Number(ticketId));
   const isParticipant = ticket.createdById === user.id
     || (ticket.assignedToId != null && ticket.assignedToId === user.id);
-  const allowed = isParticipant || (write
+  const importReadsInScope = !write && user.role === 'import' && importListScopeIncludes(ticket);
+  const allowed = isParticipant || importReadsInScope || (write
     ? ATTACHMENT_WRITER_ROLES.includes(user.role)
     : ATTACHMENT_VIEWER_ROLES.includes(user.role));
   if (!allowed) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  // H1 lockdown: account reads a deal's documents only inside its list scope (all four attach types).
+  requireMockAccountScope(user, ticket);
   return { user, ticket };
 }
 
@@ -3510,6 +3653,8 @@ function derivePaymentFields(ticket) {
   return {
     billingDate: ticket.billingDate ?? null,
     dueDate: ticket.dueDate ?? null,
+    // Mock approximation: no quotation-terms/delivery derivation, so the demo billing due date stands in.
+    paymentDueDate: ticket.dueDate ?? null, paymentDueBasis: null, paymentDueCreditDays: null,
     creditTermDays: ticket.creditTermDays ?? null,
     lastFollowUpAt: ticket.lastFollowUpAt ?? null,
     nextFollowUpAt: ticket.nextFollowUpAt ?? null,
@@ -3973,6 +4118,36 @@ function mockThaiMoney(amount) {
 //     rendering of it is covered by UpdateStageModal.test.jsx driving a hand-built payload.
 //
 // Mirrors TicketService.stageDecisions / requireStageMoveAllowed (backend ticket/).
+
+// Mirrors DealRoute (backend ticket/DealRoute.java) — the PARTY route per entry channel.
+// ⚠️ Mirror only: route ENFORCEMENT is proved against the real Java service by
+// DealRouteGateIntegrationTest, never here (CLAUDE.md: a mock can validate plumbing, never an
+// algorithm it mirrors). This exists so the feature is VISIBLE in mock mode and so a mock-driven
+// test cannot pass vacuously by seeing every stage as on-route.
+// UNSPECIFIED / unknown / absent have an EMPTY set on purpose: legacy and quotation-first deals
+// must never be gated (design §13.1c) — there is no in-portal remedy for them.
+const MOCK_OFF_ROUTE_STAGES = {
+  DESIGNER_LED: [],
+  OWNER_DIRECT: ['QUOTE_DESIGN_SIDE'],
+  BUYER_DIRECT: ['QUOTE_DESIGN_SIDE', 'QUOTE_OWNER', 'OWNER_SIGNOFF', 'AWAITING_BUYER'],
+};
+
+const MOCK_ENTRY_CHANNEL_PHRASE = {
+  DESIGNER_LED: 'ผู้ออกแบบนำดีล',
+  OWNER_DIRECT: 'เจ้าของติดต่อโดยตรง',
+  BUYER_DIRECT: 'ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง',
+};
+
+function mockIsOnRoute(entryChannel, stage) {
+  return !(MOCK_OFF_ROUTE_STAGES[entryChannel] ?? []).includes(stage);
+}
+
+/** Mirrors DealRoute.refusalMessage — names the channel, the stage BY DISPLAY NUMBER, and the remedy. */
+function mockRouteRefusal(entryChannel, stage) {
+  const no = DEAL_STAGE_CATALOG.stages.find((s) => s.code === stage)?.no ?? '';
+  return `ดีลนี้เป็น${MOCK_ENTRY_CHANNEL_PHRASE[entryChannel] ?? 'ดีลที่ระบุช่องทางไว้'}`
+    + ` — ขั้นที่ ${no} ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน`;
+}
 /**
  * The stages a manual move is closed to in mock mode — a literal mirror of the four
  * `DealStage.X.equals(targetStage)` guards in TicketService.requireStageFactsHold, NOT a
@@ -4046,6 +4221,8 @@ function mockStageDecisions(ticket, user) {
     let blockedReason = null;
     if (!mockCanWriteStage(user, ticket, code)) {
       blockedReason = 'ไม่มีสิทธิ์เข้าถึงรายการนี้';
+      // Slice 1 (2ed3468e) removed GLA-136's quotation-only stage refusal: a quotation-first deal
+      // is an ordinary deal now (IA §7), so its stages are offered like any other.
     } else if (ticket.lifecycle === 'CLOSED_LOST') {
       blockedReason = 'ดีลถูกทำเครื่องหมายเสียงานแล้ว — เปิดดีลใหม่ก่อนแก้ไขสถานะ';
     } else if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') {
@@ -4056,6 +4233,12 @@ function mockStageDecisions(ticket, user) {
       // The stub, not a copy of requireStageFactsHold — see the block comment above.
       blockedReason = `เลื่อนไปขั้นตอน ${code} ไม่ได้: ขั้นตอนนี้อัปเดตอัตโนมัติจากขั้นตอนของดีล`
         + ' (โหมดจำลองไม่รองรับการตั้งค่าด้วยมือ)';
+    } else if (!mockIsOnRoute(ticket.entryChannel, code)) {
+      // Rung 6 — the deal's entry-channel route. AFTER the fact gate on purpose: a deal missing
+      // its deposit must report the FACT gate, not blame the route. Tests the TARGET only, never
+      // ticket.salesStage — a deal may legitimately be SITTING on an off-route stage after its
+      // channel was corrected, and gating the current stage would strand it.
+      blockedReason = mockRouteRefusal(ticket.entryChannel, code);
     } else if (dealStageIndex(code) > dealStageIndex(ticket.salesStage)) {
       const sinceIso = dealLastStageChangeAt(ticket.events, ticket.createdAt);
       const hasRecentActivity = dealHasActivitySince(dealActivitiesForTicket(ticket.id), sinceIso);
@@ -4064,7 +4247,8 @@ function mockStageDecisions(ticket, user) {
       }
     }
     // requiresReason is deliberately always false here — see the block comment above.
-    return { stage: code, no, allowed: blockedReason === null, requiresReason: false, blockedReason };
+    return { stage: code, no, allowed: blockedReason === null, requiresReason: false, blockedReason,
+      onRoute: mockIsOnRoute(ticket.entryChannel, code) };
   });
 }
 
@@ -4079,6 +4263,62 @@ function autoAdvanceStage(ticket, targetStage, user) {
   ticket.salesStage = targetStage;
   ticket.stageUpdatedAt = new Date().toISOString();
   pushEvent(ticket, user, 'STAGE_CHANGED', fromStage, targetStage, 'อัตโนมัติจากขั้นตอนของดีล');
+}
+
+// Slice 2 NOTE (owner ruling 2026-09-30): the spec's S2-B2 — a direct quotation's recipient moving
+// the deal's stage — is OUT of slice 2; the deal-stage rule is owned by another session. So the
+// mock's dealQuotations.create/update persist recipientType and nothing more: no stage move, no
+// STAGE_CHANGED event (mockApi.quotationDealLink.test.js pins that it does NOT move).
+
+// Mirrors TicketRepository#enrichSummary's liveDirectQuotation (slice 2 contract,
+// SLICE-2-FLOW-A.md Part 1, S2-B4): the NEWEST (highest id) DEAL_DIRECT row on the ticket in a
+// live status (DRAFT / PENDING_APPROVAL / APPROVED), as `{ id, number, docStatus, recipientType }`,
+// or null. Served on list rows AND get(), like hasRecordedCommission.
+/**
+ * TEST-ONLY seam — not part of `api`, never called by the app. Since slice 2's N6 (S2-B3) a deal
+ * holds at most one live DEAL_DIRECT quotation, and the older mock suites (written before N6) create
+ * direct quotations on demo ticket 18 over and over across tests that share this module's state.
+ * This retires (CANCELLED) whatever is live on the ticket so each such test starts from a deal a
+ * create may legally land on — the same state a rep reaches by cancelling the draft. contract.test.js
+ * compares `api` only, so this export cannot widen the mocked API surface.
+ */
+export function retireLiveDirectQuotationsForTests(ticketId) {
+  for (const q of mockDealQuotations) {
+    if (q.ticketId === Number(ticketId) && isDealDirectOrigin(q) && isLiveDirectQuotation(q)) q.docStatus = 'CANCELLED';
+  }
+}
+
+/**
+ * TEST-ONLY seam — not part of `api`, never called by the app. The sibling of
+ * retireLiveDirectQuotationsForTests for the reverse lock (one pricing route per deal, owner ruling
+ * 2026-09-30): the older suites create direct quotations on demo ticket 18, whose seed also carries
+ * live pricing requests. This CANCELs every live one on the ticket — the state a rep reaches by
+ * cancelling the คำขอราคา — so a create there may legally land.
+ */
+export function retireLivePricingRequestsForTests(ticketId) {
+  for (const pr of mockPricingRequests) {
+    if (pr.ticketId === Number(ticketId) && hasLivePricingRequest([pr], ticketId)) pr.status = 'CANCELLED';
+  }
+}
+
+/**
+ * TEST-ONLY seam — not part of `api`, never called by the app. Puts one pricing request straight
+ * into `status`, for the states a test cannot cheaply drive through the real chain (SUPERSEDED,
+ * QUOTATION_ACCEPTED). contract.test.js compares `api` only, so this cannot widen the mocked API.
+ */
+export function setPricingRequestStatusForTests(prId, status) {
+  const pr = mockPricingRequests.find((row) => row.id === Number(prId));
+  if (!pr) throw new Error(`no pricing request ${prId}`);
+  pr.status = status;
+}
+
+function mockLiveDirectQuotation(ticketId) {
+  const live = mockDealQuotations
+    .filter((q) => q.ticketId === ticketId && isDealDirectOrigin(q) && isLiveDirectQuotation(q))
+    .sort((a, b) => b.id - a.id)[0];
+  return live
+    ? { id: live.id, number: live.number, docStatus: live.docStatus, recipientType: live.recipientType ?? 'UNSPECIFIED' }
+    : null;
 }
 
 // Mirrors FulfilmentStatus.IMPORT_SEQUENCE (backend/src/main/java/th/co/glr/hr/ticket/
@@ -4183,6 +4423,10 @@ function buildTicketDetail(ticket) {
       // Existence-only flag (issue #736) — see hasRecordedCommission's own comment. Never an
       // amount; amounts stay behind commissions.list()'s own role gate.
       commissionRecorded: hasRecordedCommission(ticket),
+      // GLA-136 -- TicketSummaryDto.quotationOnly (V193).
+      quotationOnly: ticket.quotationOnly === true,
+      // Mirrors TicketSummaryDto#liveDirectQuotation (slice 2 contract, SLICE-2-FLOW-A.md Part 1, S2-B4).
+      liveDirectQuotation: mockLiveDirectQuotation(ticket.id),
       ...paymentFields,
     },
     items: ticket.items, events: ticket.events,
@@ -4282,6 +4526,29 @@ const MANUAL_COMMISSION_KINDS = ['ADJUSTMENT', 'MANAGER', 'STOCK_BONUS', 'INCENT
 
 function isManualCommissionKind(kind) {
   return MANUAL_COMMISSION_KINDS.includes(kind);
+}
+
+// CommissionService#PendingCommissionDto shape. Item rows mirror the real query (description =
+// brand/model/color/texture/size; qtyFromStock; weightMultiplier). The three figures are NOT recomputed here -- see
+// commissions.pendingApproval.
+function buildMockPendingCommission(record) {
+  const ticket = db.tickets.find((t) => t.id === record.sourceTicketId);
+  const commission = buildCommissionRecord(record);
+  return structuredClone({
+    commission,
+    ticketCode: ticket?.code ?? null,
+    customerName: ticket?.customerName ?? null,
+    items: (ticket?.items ?? []).map((it) => ({
+      itemId: it.id,
+      description: [it.brand, it.model, it.color, it.texture, it.size].filter(Boolean).join(' '),
+      qty: it.qty ?? 0,
+      qtyFromStock: it.qtyFromStock ?? 0,
+      weightMultiplier: it.weightMultiplier ?? 1,
+    })),
+    effectiveWeight: record.effectiveWeight ?? commission.weightMultiplier ?? 1,
+    weightedCommissionableBase: record.commissionableBase ?? null,
+    estimatedCommission: record.estimatedCommission ?? null,
+  });
 }
 
 function buildCommissionRecord(record) {
@@ -5688,7 +5955,22 @@ function hasDealQuotationMockGrant(user) {
 // permissive than production" shape CLAUDE.md names (#199); it does not make the mock authz
 // evidence — see the file header — it only stops the mock from actively lying in the dangerous
 // direction while devs/QA drive it.
-function requireDealQuotationViewAccess(ticket, user, origin = 'DEAL_DIRECT') {
+// 2026-09-30 owner ruling, mirrors DealQuotationService.ACCOUNT_VISIBLE_STATUSES: account sees a deal quotation only
+// once it went to the customer -- APPROVED (DEAL_DIRECT post-approval), ISSUED (PRICING_REQUEST's), SENT, ACCEPTED.
+const ACCOUNT_VISIBLE_DEAL_QUOTATION_STATUSES = ['APPROVED', 'ISSUED', 'SENT', 'ACCEPTED'];
+
+function requireDealQuotationViewAccess(ticket, user, origin = 'DEAL_DIRECT', docStatus = null) {
+  // H1 lockdown + 2026-09-30 owner ruling (reverses M3 for account ONLY): account is row-scoped on BOTH origins
+  // -- refused outside its list scope, and allowed on a PRICING_REQUEST-origin row inside it. Checked before the
+  // grant bypass, like DealQuotationService#requireViewAccess.
+  if (user.role === 'account') {
+    requireMockAccountScope(user, ticket);
+    // docStatus is null only for the list-entry gate (no row yet); every row read passes its own status.
+    if (docStatus != null && !ACCOUNT_VISIBLE_DEAL_QUOTATION_STATUSES.includes(docStatus)) {
+      fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+    }
+    return;
+  }
   if (origin === 'PRICING_REQUEST') {
     if (!['sales', 'sales_manager', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
     if (user.role === 'sales' && ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
@@ -5723,8 +6005,14 @@ function requireDealQuotationWriteAccess(ticket, user, origin = 'DEAL_DIRECT') {
 // The rows GET /api/deal-quotations would return for this caller BEFORE any status filter --
 // factored out so list() and counts() (owner feedback F5, 2026-09-10) read the exact same set.
 // Two independent copies of this scope is precisely how a tab count ends up promising rows the
-// list then refuses to show. Mirrors DealQuotationService.list: sales is scoped to its own deals;
-// a canCreateQuotation grant sees everything, same as sales_manager (#H4).
+// list then refuses to show. Mirrors DealQuotationService.listOwnerScope (owner ruling
+// 2026-09-24): on this GLOBAL LIST only, sales_manager/ceo see everything; everyone else (sales,
+// import, account, and any canCreateQuotation grant-holder) is scoped to deals THEY created — the
+// grant still passes the access gate below, but no longer widens the list scope (it still widens
+// per-deal/detail access via requireViewAccess, which this mock's get()/listForTicket() are
+// unaffected by; see DealQuotationService.LIST_SEE_ALL_ROLES for the authoritative rule). This
+// mock's authz is NOT authoritative -- DealQuotationIntegrationTest against real Postgres is the
+// evidence for the actual scope.
 // MINOR fix (Opus review, 2026-09-20) — mirrors DealQuotationRepository#findByTicket/#search/
 // #counts's own deliberate `origin = 'DEAL_DIRECT'` scoping (see
 // directDealSearch_doesNotIncludePricingRequestOriginRows on the backend IT): the DEAL_DIRECT-only
@@ -5734,14 +6022,16 @@ function isDealDirectOrigin(q) {
   return (q.origin || 'DEAL_DIRECT') === 'DEAL_DIRECT';
 }
 
+const DEAL_QUOTATION_LIST_SEE_ALL_ROLES = ['sales_manager', 'ceo'];
+
 function scopedDealQuotationsFor(user) {
   const grant = hasDealQuotationMockGrant(user);
   if (!grant && !DEAL_QUOTATION_VIEWER_ROLES.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
   const base = mockDealQuotations.filter(isDealDirectOrigin);
-  if (!grant && user.role === 'sales') {
-    return base.filter((q) => db.tickets.find((t) => t.id === q.ticketId)?.createdById === user.id);
+  if (DEAL_QUOTATION_LIST_SEE_ALL_ROLES.includes(user.role)) {
+    return base;
   }
-  return base;
+  return base.filter((q) => db.tickets.find((t) => t.id === q.ticketId)?.createdById === user.id);
 }
 
 // V179 (owner feedback #4, 2026-09-14) -- ผู้พิมพ์/พนักงานขาย print-name override. Mirrors
@@ -5783,16 +6073,21 @@ function mockDealQuotationDisplayEmployee(id) {
 }
 
 // ผู้สั่งซื้อ resolution + the frozen snapshot V167 stores (owner feedback F2, 2026-09-10).
-// Mirrors DealQuotationService: `contactId` is OPTIONAL on the wire and defaults to the deal's own
-// `sales.ticket.contact_id`; what is REQUIRED is that one RESOLVES, and the chosen contact must
-// belong to the deal's customer. 400 "กรุณาระบุผู้สั่งซื้อ" otherwise — the same Thai string the
-// frontend's own pre-save check uses.
+// Mirrors DealQuotationService#resolveContact: `contactId` is OPTIONAL on the wire and defaults to
+// the deal's own `sales.ticket.contact_id`.
+//
+// ⚠️ Owner-directed reversal of V167/F2 (2026-09-26): resolving to a contact is no longer REQUIRED
+// either — this used to fail 400 "กรุณาระบุผู้สั่งซื้อ" when nothing resolved; it now mirrors the
+// relaxed Java method exactly and returns a blank snapshot instead. A contact id that IS given (or
+// inherited) still must belong to the deal's customer, still refused as 400 otherwise.
 //
 // ⚠️ AUTHZ CAVEAT (CLAUDE.md "Mock API contract"): the customer-ownership check below approximates
 // the Java service's and is NOT authoritative. Verify it against DealQuotationService, never here.
 function resolveDealQuotationContact(ticket, payload, current = null) {
   const requested = payload?.contactId ?? current?.contactId ?? ticket?.contactId ?? null;
-  if (requested == null) fail('กรุณาระบุผู้สั่งซื้อ', 400);
+  if (requested == null) {
+    return { contactId: null, contactName: null, contactPhone: null, contactEmail: null };
+  }
   const contact = mockContacts.find((c) => c.id === Number(requested));
   if (!contact) fail('กรุณาระบุผู้สั่งซื้อ', 400);
   if (ticket?.customerId != null && contact.customerId !== ticket.customerId) {
@@ -5830,7 +6125,7 @@ function requireDealQuotationRowViewable(id) {
   const row = mockDealQuotations.find((q) => q.id === Number(id));
   if (!row) fail('ไม่พบใบเสนอราคานี้', 404);
   const ticket = db.tickets.find((t) => t.id === row.ticketId);
-  requireDealQuotationViewAccess(ticket, user, row.origin);
+  requireDealQuotationViewAccess(ticket, user, row.origin, row.docStatus);
   return row;
 }
 
@@ -6176,10 +6471,14 @@ function computeDealQuotationLine(input = {}, documentLanguage = 'TH') {
   const sizeLine = input.sizeText
     ? `${en ? 'Size' : 'ขนาด'} ${input.sizeText}${input.thicknessMm != null ? `x${input.thicknessMm}` : ''} cm. ${en ? '(approx.)' : '(ขนาดโดยประมาณ)'}`
     : '';
+  // Wording-scan fix 7 (2026-09-17) — mirrors DealQuotationLines#plural: the ONE shared English
+  // singular/plural picker, so this mock's counts agree with the real document rather than each
+  // hardcoding "pcs"/re-deriving its own ternary.
+  const pl = (count, singular, pluralWord) => (Number(count) === 1 ? singular : pluralWord);
   const wastageText = wastageMode === 'NONE'
     ? ''
     : en
-      ? (wastageMode === 'PERCENT' ? ` + ${wastageValue}% allowance` : ` + ${wastageValue} pcs allowance`)
+      ? (wastageMode === 'PERCENT' ? ` + ${wastageValue}% allowance` : ` + ${wastageValue} ${pl(wastageValue, 'pc', 'pcs')} allowance`)
       : (wastageMode === 'PERCENT' ? ` + เผื่อ ${wastageValue}%` : ` + เผื่อ ${wastageValue} แผ่น`);
   const hasWastage = wastageMode !== 'NONE' && wastageValue !== 0;
   const hasBox = piecesPerBox > 0;
@@ -6191,22 +6490,22 @@ function computeDealQuotationLine(input = {}, documentLanguage = 'TH') {
     // AND there is a full-box count to split it from); loose=0 drops the "+ N" tail; boxes=0 drops
     // the box wording entirely.
     const base = quantityMode === 'PIECES'
-      ? (en ? `Quantity ${piecesBeforeWastage} pcs${wastageText}` : `จำนวน ${piecesBeforeWastage} แผ่น${wastageText}`)
+      ? (en ? `Quantity ${piecesBeforeWastage} ${pl(piecesBeforeWastage, 'pc', 'pcs')}${wastageText}` : `จำนวน ${piecesBeforeWastage} แผ่น${wastageText}`)
       : (en
-        ? `Area ${areaSqm} sqm @ ${piecesPerSqm ?? '-'} pcs/sqm = ${piecesBeforeWastage} pcs${wastageText}`
+        ? `Area ${areaSqm} sqm @ ${piecesPerSqm ?? '-'} ${pl(piecesPerSqm, 'pc', 'pcs')}/sqm = ${piecesBeforeWastage} ${pl(piecesBeforeWastage, 'pc', 'pcs')}${wastageText}`
         : `พื้นที่ ${areaSqm} ตร.ม.ๆละ ${piecesPerSqm ?? '-'} แผ่น รวม ${piecesBeforeWastage} แผ่น${wastageText}`);
     let tail = '';
     if (hasWastage && boxes > 0) {
-      tail += en ? ` = ${piecesFinal} pcs` : ` = ${piecesFinal} แผ่น`;
+      tail += en ? ` = ${piecesFinal} ${pl(piecesFinal, 'pc', 'pcs')}` : ` = ${piecesFinal} แผ่น`;
     }
     if (boxes > 0 && loosePieces > 0) {
       tail += en
-        ? ` = ${boxes} ${boxes === 1 ? 'box' : 'boxes'} + ${loosePieces} ${loosePieces === 1 ? 'pc' : 'pcs'}`
+        ? ` = ${boxes} ${pl(boxes, 'box', 'boxes')} + ${loosePieces} ${pl(loosePieces, 'pc', 'pcs')}`
         : ` = ${boxes} กล่อง + ${loosePieces} แผ่น`;
     } else if (boxes > 0) {
-      tail += en ? ` = ${boxes} ${boxes === 1 ? 'box' : 'boxes'}` : ` = ${boxes} กล่อง`;
+      tail += en ? ` = ${boxes} ${pl(boxes, 'box', 'boxes')}` : ` = ${boxes} กล่อง`;
     } else {
-      tail += en ? ` = ${loosePieces} ${loosePieces === 1 ? 'pc' : 'pcs'}` : ` = ${loosePieces} แผ่น`;
+      tail += en ? ` = ${loosePieces} ${pl(loosePieces, 'pc', 'pcs')}` : ` = ${loosePieces} แผ่น`;
     }
     qtyText = `(${base}${tail})`;
   } else {
@@ -6215,30 +6514,35 @@ function computeDealQuotationLine(input = {}, documentLanguage = 'TH') {
     // to a full box"), mirroring DealQuotationLines' own correction. English already said "rounded
     // up to full boxes" and is unchanged.
     //
-    // F1 fix (2026-09-16 review): this branch used to print BOTH the rounding wording AND the
-    // trailing "= N" clause unconditionally, even with NO piecesPerBox at all -- e.g.
-    // "(จำนวน 32 แผ่น และปัดขึ้นเต็มกล่อง = 32 แผ่น)" with no box data whatsoever, a nonsensical
-    // rounding claim AND a pure echo of the count already stated. Mirrors
-    // DealQuotationLines#calculationLine's own default-branch fix: the rounding phrase prints only
-    // when there IS a box (hasBox), and the trailing "= N" clause prints only when box rounding or
-    // wastage may actually have moved piecesFinal away from piecesBeforeWastage (hasBox ||
-    // hasWastage) -- see DealQuotationLinesTest's "F1" section for the exact production-bug shapes
-    // this closes on the backend side.
-    const roundingPart = hasBox
+    // Wording-scan fix 1 (2026-09-17) — mirrors DealQuotationLines#calculationLine's own fix: the
+    // rounding phrase and its "= N" echo print ONLY when box rounding actually changed the count
+    // (piecesAfterWastage was not already a whole multiple of piecesPerBox) — 21 real production
+    // items printed the misleading "rounded up" wording on a row that never rounded anything.
+    // When it did NOT change, the box COUNT prints instead (new information the old line never
+    // gave), computed the same way DealQuotationLines does (piecesFinal / piecesPerBox — exact
+    // whenever this branch is reached, since piecesFinal is only ever piecesAfterWastage itself, or
+    // Math.ceil()'d to the next box multiple).
+    const boxRoundingChangedCount = hasBox && (piecesAfterWastage % piecesPerBox !== 0);
+    const roundingPart = boxRoundingChangedCount
       ? (en ? ', rounded up to full boxes' : ' และปัดขึ้นเต็มกล่อง')
       : '';
-    const echoTail = hasBox || hasWastage
-      ? (en ? ` = ${piecesFinal} pcs` : ` = ${piecesFinal} แผ่น`)
+    const echoTail = boxRoundingChangedCount || hasWastage
+      ? (en ? ` = ${piecesFinal} ${pl(piecesFinal, 'pc', 'pcs')}` : ` = ${piecesFinal} แผ่น`)
+      : '';
+    const boxCount = hasBox ? Math.floor(piecesFinal / piecesPerBox) : 0;
+    // Mirrors DealQuotationLines: a one-piece box's count only repeats the piece count.
+    const boxCountTail = hasBox && piecesPerBox > 1 && !boxRoundingChangedCount
+      ? (en ? ` = ${boxCount} ${pl(boxCount, 'box', 'boxes')}` : ` = ${boxCount} กล่อง`)
       : '';
     qtyText = en
       ? (quantityMode === 'PIECES'
-        ? `(Quantity ${piecesBeforeWastage} pcs${wastageText}${roundingPart}${echoTail})`
-        : `(Area ${areaSqm} sqm @ ${piecesPerSqm ?? '-'} pcs/sqm = ${piecesBeforeWastage} pcs${wastageText}${roundingPart}${echoTail})`)
+        ? `(Quantity ${piecesBeforeWastage} ${pl(piecesBeforeWastage, 'pc', 'pcs')}${wastageText}${roundingPart}${echoTail}${boxCountTail})`
+        : `(Area ${areaSqm} sqm @ ${piecesPerSqm ?? '-'} ${pl(piecesPerSqm, 'pc', 'pcs')}/sqm = ${piecesBeforeWastage} ${pl(piecesBeforeWastage, 'pc', 'pcs')}${wastageText}${roundingPart}${echoTail}${boxCountTail})`)
       : (quantityMode === 'PIECES'
-        ? `(จำนวน ${piecesBeforeWastage} แผ่น${wastageText}${roundingPart}${echoTail})`
-        : `(พื้นที่ ${areaSqm} ตร.ม.ๆละ ${piecesPerSqm ?? '-'} แผ่น รวม ${piecesBeforeWastage} แผ่น${wastageText}${roundingPart}${echoTail})`);
+        ? `(จำนวน ${piecesBeforeWastage} แผ่น${wastageText}${roundingPart}${echoTail}${boxCountTail})`
+        : `(พื้นที่ ${areaSqm} ตร.ม.ๆละ ${piecesPerSqm ?? '-'} แผ่น รวม ${piecesBeforeWastage} แผ่น${wastageText}${roundingPart}${echoTail}${boxCountTail})`);
   }
-  const boxText = piecesPerBox > 0 ? (en ? ` (${piecesPerBox} pcs/box)` : ` (บรรจุ ${piecesPerBox} แผ่น/กล่อง)`) : '';
+  const boxText = piecesPerBox > 0 ? (en ? ` (${piecesPerBox} ${pl(piecesPerBox, 'pc', 'pcs')}/box)` : ` (บรรจุ ${piecesPerBox} แผ่น/กล่อง)`) : '';
   const calculationLine = `${qtyText}${boxText}`;
 
   return {
@@ -6437,6 +6741,13 @@ function resolveDealQuotationDepositTerms(payload) {
   const noDeposit = depositPercent === 0;
   const remainderMode = noDeposit ? null : (payload.remainderMode ?? null);
   const creditDays = noDeposit ? null : (payload.creditDays ?? null);
+  // Wording-scan fix 6 (2026-09-17) — mirrors DealQuotationService#requireValidCreditDays: an
+  // EXPLICIT non-blank but invalid creditDays (0 or negative) is refused immediately on every
+  // save when remainderMode is CREDIT. A blank value still saves (a draft may be incomplete) --
+  // only submit() below requires it be filled in, the same split fullPaymentTerm already uses.
+  if (remainderMode === 'CREDIT' && creditDays != null && Number(creditDays) <= 0) {
+    fail('กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน', 400);
+  }
   let fullPaymentTerm = null;
   if (noDeposit) {
     fullPaymentTerm = payload.fullPaymentTerm ? String(payload.fullPaymentTerm).trim() : null;
@@ -6512,6 +6823,29 @@ function dealQuotationTotals(items, documentLanguage = 'TH') {
   return { subtotalAmount, vatAmount, grandTotal };
 }
 
+// Mirrors DealQuotationService#forViewer / DealQuotationDtos#withoutPriceInternals (ruling 3, 2026-09-30):
+// `account` sees a quotation's number, totals and each line's NET unit price / line amount -- never the list
+// price, discount or CEO pricing metadata, on every origin. Same convention as Java: keys kept, values emptied
+// (null / false / 0 / []). Every other role gets the DTO unchanged.
+function forDealQuotationViewer(dto, user) {
+  if (user?.role !== 'account') return dto;
+  return {
+    ...dto,
+    priceMode: null,
+    ceoPriceMode: null,
+    priceModeChangedFromCeo: false,
+    itemsRemovedFromCeoCount: 0,
+    removedCeoItems: [],
+    items: (dto.items ?? []).map((item) => ({
+      ...item,
+      catalogPriceId: null, unitPrice: null, discountPct: null, specialPriceSqm: null, adjustmentPct: null,
+      adjustmentAmount: null, specialPriceLine: null, calculationLine: null, priceChangedFromCeo: false,
+      ceoListUnitPrice: null, ceoDiscountPct: null, ceoSpecialPriceSqm: null, ceoDirectNetPrice: null,
+      ceoNetUnitPrice: null,
+    })),
+  };
+}
+
 function buildDealQuotationDto(row) {
   // GLA-123 slice S1 — origin & the CEO-comparison flags, recomputed fresh on every read (never
   // stored), mirroring DealQuotationRepository#mapQuotation/#mapItemColumns. A DEAL_DIRECT row
@@ -6522,12 +6856,27 @@ function buildDealQuotationDto(row) {
   const ceoPriceMode = decision?.priceMode ?? null;
   const pricingRequestRow = origin === 'PRICING_REQUEST' && row.pricingRequestId != null
     ? mockPricingRequests.find((p) => p.id === row.pricingRequestId) : null;
+  // Mirrors DealQuotationDto#ticketCode/#dealStage/#readOnly (slice 1, 2ed3468e): the deal's code
+  // and CURRENT stage are joined live from sales.ticket on every read (list + detail), so the editor's
+  // header strip always shows where the deal is now. readOnly is true exactly for a
+  // LEGACY (origin IS NULL) row — this engine's mock holds none, so it is always false here.
+  const dealTicket = db.tickets.find((t) => t.id === row.ticketId);
   return {
     id: row.id,
     number: row.number,
     ticketId: row.ticketId,
+    ticketCode: dealTicket?.code ?? null,
+    dealStage: dealTicket?.salesStage ?? null,
+    readOnly: false,
     origin,
     pricingRequestId: origin === 'PRICING_REQUEST' ? (row.pricingRequestId ?? null) : null,
+    // Round 8 — mirrors DealQuotationDto#recipientType/recipientLabel (sales.quotation.recipient_type
+    // /recipient_label): the source pricing request's for a PRICING_REQUEST-origin row,
+    // 'UNSPECIFIED' for a DEAL_DIRECT row created before slice 2 (DealQuotationRepository.InsertDraftParams).
+    // Slice 2 (S2-B1) WRITES both columns on a DEAL_DIRECT create/update — the chosen code and its
+    // Thai role label (see dealQuotations.create/update) — so they are read back here unchanged.
+    recipientType: row.recipientType ?? 'UNSPECIFIED',
+    recipientLabel: row.recipientLabel ?? null,
     // Coordinator follow-up (2026-09-20) — mirrors DealQuotationRepository#baseSelect's own
     // pricing_request join, for the editor's "สร้างจากคำขอราคา {code}" link.
     pricingRequestCode: pricingRequestRow?.requestCode ?? null,
@@ -6604,6 +6953,11 @@ function buildDealQuotationDto(row) {
     contactName: row.contactName,
     contactPhone: row.contactPhone ?? null,
     contactEmail: row.contactEmail ?? null,
+    // Owner-directed reversal of F2 (2026-09-26): the ผู้สั่งซื้อ SIGNATURE slot no longer reads
+    // contactName at all -- it prints ONLY this manual, optional rep-typed field (V192's
+    // ordered_by_name column), null when nobody has typed one (the dotted placeholder). Mirrors
+    // DealQuotationDto#orderedByName / DealQuotationRenderAdapter#orderedByName exactly.
+    orderedByName: row.orderedByName ?? null,
     // Item 2 (V180, "ไม่เติม “คุณ”", owner ruling 2026-09-16): NOT NULL DEFAULT FALSE on the real
     // column — a stored/never-set value normalises to false here, same device as priceMode/
     // documentLanguage above. Mirrors DealQuotationDto#omitContactHonorific.
@@ -6849,6 +7203,454 @@ function leavePreviewWarnings(leaveType, totalDays) {
     // here, unpaid_by_rule_days is simply that code's own full-request figure.
     unpaidByRuleDays: totalDays,
   };
+}
+
+// H1 lockdown -- the account role's ROW scope on the finance paths. Mirrors TicketRepository#isInAccountScope
+// (the SAME predicate as the list scope, accountListScopeIncludes above), plus the quotation-only container
+// exclusion the list applies. Enforced inside the shared money functions, like TicketService.requireAccountScope.
+function requireMockAccountScope(user, ticket) {
+  if (user.role === 'account' && (ticket.quotationOnly === true || !accountListScopeIncludes(ticket))) {
+    fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  }
+}
+
+// The shared money-action bodies (payment / close / billing / stage). Each is the ONE implementation behind both
+// its /api/tickets entrypoint and its finance entrypoint (api.finance.*), like the Java TicketService methods.
+async function mockRecordPayment(id, payload) {
+  // GLA-118 (owner ruling 2026-09-20, part A): account only now — the CEO fallback is gone.
+  // Mirrors TicketService's new PAYMENT_RECORD_ROLES, for every receipt kind (deposit,
+  // balance, ...) alike. This used to be hasRole('account', 'ceo').
+  const user = hasRole('account');
+  const ticket = findTicketRaw(Number(id));
+  requireMockAccountScope(user, ticket);
+  requireActive(ticket);
+  recordPaymentForTicket(ticket, user, payload ?? {});
+  return delay({ ticket: buildTicketDetail(ticket) });
+}
+
+async function mockSetBilling(id, payload, viaFinance = false) {
+  // /api/tickets entrypoint: ceo only since the H1 lockdown; the finance entrypoint keeps account + ceo.
+  const user = viaFinance ? hasRole('account', 'ceo') : hasRole('ceo');
+  const ticket = findTicketRaw(Number(id));
+  requireMockAccountScope(user, ticket);
+  requireActive(ticket);
+  ticket.billingDate = payload.billingDate ?? null;
+  ticket.dueDate = payload.dueDate ?? null;
+  ticket.creditTermDays = payload.creditTermDays ?? null;
+  ticket.lastFollowUpAt = payload.lastFollowUpAt ?? null;
+  ticket.nextFollowUpAt = payload.nextFollowUpAt ?? null;
+  ticket.updatedAt = new Date().toISOString().slice(0, 10);
+  pushEvent(ticket, user, 'BILLING_UPDATED', ticket.status, ticket.status,
+    `billing_date=${ticket.billingDate}, due_date=${ticket.dueDate}`);
+  return delay({ ticket: buildTicketDetail(ticket) });
+}
+
+async function mockConfirmCloseReady(id) {
+  const user = requireSession();
+  hasRole('account'); // NOT ceo — the CEO signs the second half
+  const ticket = findTicketRaw(Number(id));
+  requireMockAccountScope(user, ticket);
+  requireActive(ticket);
+  if (ticket.closeConfirmedAt) fail('ยืนยันปิดงานไปแล้ว — รอ CEO ตรวจสอบ', 409);
+  requireClosePrerequisites(ticket);
+  ticket.closeConfirmedAt = new Date().toISOString();
+  ticket.closeConfirmedByName = user.name;
+  ticket.updatedAt = new Date().toISOString().slice(0, 10);
+  pushEvent(ticket, user, 'CLOSE_CONFIRMED', ticket.status, ticket.status,
+    'ฝ่ายบัญชียืนยันพร้อมปิดงาน — รอ CEO ตรวจสอบ');
+  return delay({ ticket: buildTicketDetail(ticket) });
+}
+
+async function mockRevokeCloseConfirmation(id, payload = {}, viaFinance = false) {
+  const user = requireSession();
+  if (viaFinance) hasRole('account', 'ceo'); else hasRole('ceo');
+  const ticket = findTicketRaw(Number(id));
+  requireMockAccountScope(user, ticket);
+  requireActive(ticket);
+  if (!ticket.closeConfirmedAt) fail('ดีลนี้ยังไม่ได้ยืนยันปิดงาน', 409);
+  ticket.closeConfirmedAt = null;
+  ticket.closeConfirmedByName = null;
+  pushEvent(ticket, user, 'CLOSE_CONFIRM_REVOKED', ticket.status, ticket.status,
+    (payload.note || '').trim() || null);
+  return delay({ ticket: buildTicketDetail(ticket) });
+}
+
+async function mockConfirmDepositPaid(id) {
+  // GLA-118 (owner ruling 2026-09-17): account only now — the CEO fallback is gone. Mirrors
+  // TicketService's DEPOSIT_CONFIRM_ROLES. RECORD_PAYMENT/FINAL_PAYMENT are account-only too
+  // (PAYMENT_RECORD_ROLES, owner ruling 2026-09-20); ACCOUNT_ROLES (['account','ceo']) now only
+  // covers SET_BILLING and similar non-payment actions.
+  const user = hasRole('account');
+  const ticket = findTicketRaw(Number(id));
+  requireMockAccountScope(user, ticket);
+  requireActive(ticket);
+  if (ticket.paymentStatus !== 'DEPOSIT_NOTICE_ISSUED') fail('ต้องออกใบแจ้งรับมัดจำก่อนจึงจะยืนยันรับชำระมัดจำได้', 409);
+  const notice = latestIssuedDepositNotice(ticket.id);
+  const amount = notice?.depositAmount ?? moneyValue(payableAmount(ticket) * 0.5);
+  if (amount <= 0) fail('ไม่พบยอดมัดจำสำหรับบันทึกรับชำระ', 409);
+  recordPaymentForTicket(ticket, user, {
+    kind: 'DEPOSIT',
+    amount,
+    note: 'ยืนยันรับมัดจำ',
+    depositNoticeId: notice?.id ?? null,
+  });
+  return delay({ ticket: buildTicketDetail(ticket) });
+}
+
+async function mockConfirmFinalPayment(id) {
+  // GLA-118 (owner ruling 2026-09-20, part A): account only now — the CEO fallback is gone.
+  // Mirrors TicketService's new PAYMENT_RECORD_ROLES (confirmFinalPayment is a payment-
+  // recording entry point too, whether or not it ends up calling recordPaymentInternal). This
+  // used to be hasRole('account', 'ceo') (TicketService.ACCOUNT_ROLES).
+  const user = hasRole('account');
+  const ticket = findTicketRaw(Number(id));
+  requireMockAccountScope(user, ticket);
+  requireActive(ticket);
+  const allowed = ['AWAITING_FINAL_PAYMENT', 'DEPOSIT_PAID'].includes(ticket.paymentStatus)
+    || (depositBypassesNotice(ticket) && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED'));
+  if (!allowed) fail('ต้องรับชำระมัดจำแล้วหรือรอชำระเงินงวดสุดท้าย (หรือดีลนี้ได้รับการยกเว้นมัดจำ) ก่อนจึงจะยืนยันรับชำระเงินครบถ้วนได้', 409);
+  const outstanding = moneyValue(payableAmount(ticket) - sumPaid(ticket.id));
+  if (outstanding <= 0) {
+    if (ticket.paymentStatus !== 'FULLY_PAID') {
+      ticket.paymentStatus = 'FULLY_PAID';
+      ticket.updatedAt = new Date().toISOString().slice(0, 10);
+      pushEvent(ticket, user, 'FULLY_PAID', ticket.status, ticket.status, null);
+      maybeAdvanceClosedPaid(ticket, user);
+    }
+  } else {
+    recordPaymentForTicket(ticket, user, {
+      kind: 'BALANCE',
+      amount: outstanding,
+      note: 'ยืนยันชำระส่วนที่เหลือ',
+    });
+  }
+  return delay({ ticket: buildTicketDetail(ticket) });
+}
+
+async function mockUpdateStage(id, payload, viaFinance = false) {
+  const user = requireSession();
+  // /api/tickets entrypoint refuses account outright (H1 lockdown); account reaches a MONEY stage only via
+  // the finance entrypoint (TicketService.financeUpdateStage).
+  if (user.role === 'account' && !viaFinance) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  if (viaFinance) {
+    if (!['account', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+    if (dealStageIndex(payload.stage) >= 0 && !['DEPOSIT_RECEIVED', 'CLOSED_PAID'].includes(payload.stage)) {
+      fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+    }
+  }
+  const ticket = findTicketRaw(Number(id));
+  requireMockAccountScope(user, ticket);
+  requireActive(ticket);
+  if (dealStageIndex(payload.stage) < 0) fail(`ไม่รองรับสถานะขั้นตอนการขาย '${payload.stage}'`, 400);
+  // Enforced from the SAME decision list actions() serves, never re-derived — so an option the
+  // mock offered is an option the mock accepts, and there is one place to read. The status is
+  // approximated (403 for the permission message, 409 otherwise) because the mock's decisions
+  // carry a reason, not a status code; the real service's codes are pinned by
+  // StageDecisionIntegrationTest.
+  const decision = mockStageDecisions(ticket, user).find((d) => d.stage === payload.stage);
+  if (!decision.allowed) {
+    fail(decision.blockedReason, decision.blockedReason === 'ไม่มีสิทธิ์เข้าถึงรายการนี้' ? 403 : 409);
+  }
+  // NO note requirement here. DealStage.requiresJustification is a backend decision and the
+  // mock does not mirror it — see the "what this mock will and will not decide" block above.
+  const fromStage = ticket.salesStage;
+  ticket.salesStage = payload.stage;
+  ticket.stageUpdatedAt = new Date().toISOString();
+  pushEvent(ticket, user, 'STAGE_CHANGED', fromStage, payload.stage, (payload.note || '').trim() || null);
+  return delay({ ticket: buildTicketDetail(ticket) });
+}
+
+// The action list for a deal as seen by `user` -- shared by api.tickets.actions and the finance deal view
+// (api.finance.getDeal's availableActions), like TicketService.buildActions.
+function buildTicketActions(user, ticket) {
+  const active = (ticket.lifecycle ?? 'ACTIVE') === 'ACTIVE';
+  // Computed once and used for both halves of the response: the ADVANCE_STAGE/UPDATE_STAGE
+  // verbs below are derived from it, and it ships to the client as stageDecisions.
+  const stageDecisions = mockStageDecisions(ticket, user);
+  const availableActions = [];
+  const add = (action, kind, label, extra = {}) => availableActions.push({ action, kind, label, ...extra });
+  const owner = user.role === 'sales' && ticket.createdById === user.id;
+  const dealOwner = owner || user.role === 'sales_manager' || user.role === 'ceo';
+  const canIssueIr = ticket.status === 'quotation_issued'
+    && ticket.fulfillmentStatus == null
+    && (['DEPOSIT_NOTICE_ISSUED', 'DEPOSIT_PAID'].includes(ticket.paymentStatus)
+      || (depositBypassesNotice(ticket) && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED')));
+
+  if (active) {
+    // Ticket-level SUBMIT/PICKUP/PROPOSE_PRICE/CALCULATE_PRICES/OVERRIDE_ITEM_PRICE/
+    // APPROVE/REJECT/GENERATE_QUOTATION/MARK_QUOTATION_SENT/ACCEPTED/REJECTED are retired
+    // (Phase 2 Slice S1/S2 "engine collapse" — mirrors TicketController/TicketService's own
+    // pruning of these verbs from actions(), see docs/agent-handoffs/104): never advertised,
+    // so the UI never shows a button that would now 404 on click. Pricing/quotation runs
+    // through the PricingRequest chain instead (api.pricingRequests.*).
+    if (owner && ticket.status === 'quotation_issued' && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED')) add('CONFIRM_CUSTOMER', 'payment', 'ลูกค้ายืนยัน');
+    if (owner && ticket.status === 'quotation_issued' && ticket.paymentStatus === 'CUSTOMER_CONFIRMED' && !depositBypassesNotice(ticket)) add('ISSUE_DEPOSIT_NOTICE', 'doc', 'ออกใบแจ้งมัดจำ');
+    // GLA-118: account only -- the CEO fallback is gone for DEPOSIT_PAID (owner ruling
+    // 2026-09-17, DEPOSIT_CONFIRM_ROLES) AND, as of 2026-09-20 part A, for RECORD_PAYMENT/
+    // FINAL_PAYMENT too (PAYMENT_RECORD_ROLES) -- recording ANY payment is account-only now.
+    // SET_BILLING below is the one payment-adjacent action that DID keep the CEO fallback
+    // (['account','ceo'], unchanged) -- it sets billing/due dates, it never records money.
+    if (user.role === 'account' && ticket.paymentStatus === 'DEPOSIT_NOTICE_ISSUED') add('DEPOSIT_PAID', 'payment', 'รับมัดจำ');
+    const paymentFields = derivePaymentFields(ticket);
+    if (user.role === 'account' && paymentFields.amountPayable > 0 && paymentFields.paymentStage !== 'FULLY_PAID') {
+      add('RECORD_PAYMENT', 'payment', 'บันทึกรับชำระเงิน', { requiredFields: ['kind', 'amount'] });
+    }
+    if (['account', 'ceo'].includes(user.role)) add('SET_BILLING', 'payment', 'ตั้งค่าการวางบิล', { requiredFields: ['dueDate'] });
+    if (['import', 'ceo'].includes(user.role) && canIssueIr) add('ISSUE_IMPORT_REQUEST', 'fulfillment', 'ออกคำขอนำเข้า');
+    // V184 (PR-B): once the deal is tracked per-factory (>= 1 ISSUED sales.import_request
+    // row), these three deal-level buttons all 409 — mirrors TicketService#addOperationalActions'
+    // own `irTracked` guard. canIssueIr already excludes a tracked deal on its own (the first
+    // factory issue sets fulfillmentStatus, so it is no longer null), matching the real
+    // canIssueImportRequest, which is why ISSUE_IMPORT_REQUEST above needs no separate check.
+    const irTracked = mockHasLiveImportRequests(ticket.id);
+    if (['import', 'ceo'].includes(user.role) && !irTracked && ticket.fulfillmentStatus === 'IR_ISSUED') add('IR_SENT', 'fulfillment', 'ส่งคำขอนำเข้าแล้ว');
+    if (['import', 'ceo'].includes(user.role) && !irTracked && ticket.fulfillmentStatus === 'IR_SENT') add('SHIPPING', 'fulfillment', 'สินค้าเดินทาง');
+    if (['import', 'ceo'].includes(user.role) && !irTracked && ticket.fulfillmentStatus === 'SHIPPING') add('GOODS_RECEIVED', 'fulfillment', 'รับสินค้า');
+    // S18 owner decision 2026-09-28: CEO or the deal's owning sales rep -- NOT import (dropped
+    // from `['import', 'ceo']`), mirroring TicketService#canReserveStock -> canDeclareStockCoverage
+    // and the reserveStock mutation gate above. `owner` is the same limb the delivery
+    // advertisement uses just below; advertising it to import would offer a button that 403s.
+    if ((user.role === 'ceo' || owner) && (ticket.items ?? []).length > 0 && hasRemainingDelivery(ticket)
+        && ticket.fulfillmentStatus !== 'FULLY_DELIVERED') {
+      add('RESERVE_STOCK', 'fulfillment', 'จองสินค้าจากสต็อก', { requiredFields: ['lines'] });
+    }
+    // V148 (per-item stock-commission weighting): sales_manager/ceo only -- mirrors
+    // TicketService#canSetItemWeightMultiplier exactly (ITEM_WEIGHT_ROLES, no ownership/stage
+    // nuance beyond the ticket being ACTIVE, which the enclosing `if (active)` already is).
+    if (['sales_manager', 'ceo'].includes(user.role)) {
+      add('SET_ITEM_WEIGHT_MULTIPLIER', 'fulfillment', 'ตั้งน้ำหนักคอมมิชชั่นต่อรายการ', { requiredFields: ['lines'] });
+    }
+    // Mirrors TicketService#canRecordDelivery -> canWriteDelivery exactly (REVIEW ROUND 1, S2,
+    // 2026-09-18): CEO, or the deal's own owning sales rep -- the advertisement and the
+    // mutation gate must come off the same predicate or the UI offers a button that instantly
+    // 403s. `owner` (above) is exactly the Java's second limb -- deliberately NOT `dealOwner`,
+    // which also admits sales_manager/ceo: Java's SALES_ROLES is Set.of("sales") and
+    // sales_manager is read+comment oversight only, so widening here would make the mock MORE
+    // permissive than production, the one direction CLAUDE.md calls dangerous.
+    //
+    // import was DROPPED from this condition (previously `['import', 'ceo'].includes(user.role)
+    // || owner`) -- it used to be additive to Sales (#818), but the 2026-08-17 ruling was a
+    // TRANSFER, not an addition: ส่งมอบสินค้า write access moved FROM import TO Sales, and
+    // requireOwningRepOrCeo (backing recordDelivery/completeDelivery's own mutation gate just
+    // above in this file) already reflects that. Leaving `import` here left the mock MORE
+    // permissive than the real TicketService#canWriteDelivery -- a real divergence this review
+    // caught, not a hypothetical one.
+    if ((user.role === 'ceo' || owner) && hasRemainingDelivery(ticket) && deliveryAvailable(ticket)) {
+      add('RECORD_PARTIAL_DELIVERY', 'fulfillment', 'บันทึกการส่งสินค้า', { requiredFields: ['source', 'lines'] });
+      add('COMPLETE_DELIVERY', 'fulfillment', 'ส่งมอบครบ');
+    }
+    const finalPaymentAllowed = ['AWAITING_FINAL_PAYMENT', 'DEPOSIT_PAID'].includes(ticket.paymentStatus)
+      || (depositBypassesNotice(ticket) && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED'));
+    // GLA-118 (owner ruling 2026-09-20, part A): account only -- see the PAYMENT_RECORD_ROLES
+    // comment above RECORD_PAYMENT. This used to be ['account', 'ceo'].
+    if (user.role === 'account' && finalPaymentAllowed) add('FINAL_PAYMENT', 'payment', 'รับเงินครบ');
+    // Three-party close: account confirms, CEO verifies. Sales is not involved.
+    let closeReady = true;
+    try { requireClosePrerequisites(ticket); } catch { closeReady = false; }
+    if (user.role === 'account' && !ticket.closeConfirmedAt && closeReady) {
+      add('CONFIRM_CLOSE', 'operational', 'ยืนยันพร้อมปิดงาน');
+    }
+    if (['account', 'ceo'].includes(user.role) && ticket.closeConfirmedAt) {
+      add('REVOKE_CLOSE_CONFIRM', 'operational', 'ยกเลิกการยืนยันปิดงาน');
+    }
+    if (user.role === 'ceo' && ticket.closeConfirmedAt && closeReady) {
+      add('VERIFY_CLOSE', 'operational', 'ตรวจสอบและปิดงาน');
+    }
+    if (ticket.createdById === user.id && !['closed', 'cancelled'].includes(ticket.status)) add('CANCEL', 'operational', 'ยกเลิก');
+    if (owner && ['draft', 'submitted', 'in_review', 'price_proposed'].includes(ticket.status)) add('EDIT_ITEMS', 'operational', 'แก้ไขรายการ');
+    // Mirrors TicketService.addStageActions: derived from the decisions, so the mock can
+    // never advertise a stage it would then refuse. The hardcoded 14-stage array that used to
+    // live here was the third copy of DealStage.ORDER and had gone stale on QUOTE_OWNER.
+    for (const decision of stageDecisions.filter((d) => d.allowed)) {
+      add('ADVANCE_STAGE', 'stage', 'เลื่อนสถานะ', { targetStage: decision.stage });
+    }
+    if (availableActions.some((a) => a.kind === 'stage')) add('UPDATE_STAGE', 'stage', 'แก้ไขสถานะ', { requiredFields: ['stage'] });
+    if (dealOwner) {
+      add('MARK_LOST', 'lifecycle', 'เสียงาน', { requiredFields: ['reason'] });
+      add('PLACE_ON_HOLD', 'lifecycle', 'พักดีลไว้');
+      add('MARK_DORMANT', 'lifecycle', 'พัก dormant');
+      add('SET_TENDER_REQUIREMENT', 'policy', 'ตั้งค่าสถานะประมูล', { requiredFields: ['value'] });
+      // requiredFields carries the note rule, exactly as TicketService.addPolicyActions does:
+      // a channel that was actually STATED needs a reason to change, an unstated one (the V144
+      // UNSPECIFIED default, or the never-backfilled pre-V144 DESIGNER_LED) does not. Same
+      // predicate as setEntryChannel below — see TicketService.entryChannelIsStated.
+      add('SET_ENTRY_CHANNEL', 'policy', 'ตั้งค่า entry channel', {
+        requiredFields: mockEntryChannelIsStated(ticket) ? ['value', 'note'] : ['value'],
+      });
+    }
+    // GLA-118: the OWNING sales rep, or sales_manager as a backup (owner ruling 2026-09-20,
+    // part B) -- not account, not ceo, not any other sales rep. Mirrors
+    // TicketService.canSetDepositPolicy exactly: deliberately `owner || user.role ===
+    // 'sales_manager'` here, NOT `dealOwner` (which also admits ceo, see MARK_LOST/
+    // SET_TENDER_REQUIREMENT/SET_ENTRY_CHANNEL above) -- the ruling text is explicit that
+    // deposit policy is narrower than the usual "deal ownership" grant.
+    //
+    // Review fix: also gated on paymentStatus, matching Rule 4 -- once a deposit notice has
+    // actually been issued (or paid, or further), setDepositPolicy 409s instead of writing
+    // (see the Rule 4 check just above in this file's setDepositPolicy), so advertising the
+    // action past that point would offer a button that dies on click.
+    const depositWaivableNow = ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED';
+    if ((owner || user.role === 'sales_manager') && depositWaivableNow) {
+      add('WAIVE_DEPOSIT', 'policy', 'นโยบายมัดจำ', { requiredFields: ['policy', 'reason'] });
+    }
+  } else if (['ON_HOLD', 'DORMANT'].includes(ticket.lifecycle) && dealOwner) {
+    add('RESUME', 'lifecycle', 'ดำเนินการต่อ');
+    if (ticket.lifecycle === 'ON_HOLD') add('MARK_DORMANT', 'lifecycle', 'พัก dormant');
+  } else if (ticket.lifecycle === 'CLOSED_LOST' && dealOwner) {
+    add('REOPEN', 'lifecycle', 'เปิดดีลใหม่');
+  }
+  return {
+    currentState: {
+      lifecycle: ticket.lifecycle ?? 'ACTIVE',
+      salesStage: ticket.salesStage,
+      paymentStatus: ticket.paymentStatus ?? null,
+      fulfillmentStatus: ticket.fulfillmentStatus ?? null,
+      status: ticket.status,
+    },
+    availableActions,
+    stageDecisions,
+  };
+}
+
+// The money actions THIS caller can take on the deal right now -- the ticket action list (buildTicketActions,
+// the mock's one readiness rule) narrowed to money actions, and to ADVANCE_STAGE / UPDATE_STAGE only for the two
+// money stages. Mirrors FinanceDealService#availableActions.
+function mockFinanceAvailableActions(user, ticket) {
+  const all = buildTicketActions(user, ticket).availableActions;
+  const MONEY = ['DEPOSIT_PAID', 'RECORD_PAYMENT', 'FINAL_PAYMENT', 'CONFIRM_CLOSE', 'REVOKE_CLOSE_CONFIRM'];
+  const moneyStage = (a) => a.action === 'ADVANCE_STAGE' && ['DEPOSIT_RECEIVED', 'CLOSED_PAID'].includes(a.targetStage);
+  const anyMoneyStage = all.some(moneyStage);
+  return all
+    .filter((a) => MONEY.includes(a.action) || moneyStage(a) || (a.action === 'UPDATE_STAGE' && anyMoneyStage))
+    .map((a) => ({ action: a.action, label: a.label, targetStage: a.targetStage ?? null, requiredFields: a.requiredFields ?? [] }))
+    // RECORD_INVOICE is not a ticket action: FinanceDealService appends it when actor is account AND the deal is
+    // CLOSED_PAID AND no live SALE commission exists (the write itself is the existing POST /api/commissions/from-deal).
+    .concat(user.role === 'account' && ticket.salesStage === 'CLOSED_PAID' && !hasRecordedCommission(ticket)
+      ? [{ action: 'RECORD_INVOICE', label: 'บันทึกใบกำกับ', targetStage: null, requiredFields: [] }]
+      : []);
+}
+
+// FinanceDealDto.CommissionInvoice: the LATEST non-VOID SALE commission's invoice as finance may see it -- the
+// exact 15-key allowlist, and never a commission amount / base / weight / rep / approver.
+function mockFinanceCommissionInvoice(ticket) {
+  const record = db.commissions
+    .filter((c) => c.sourceTicketId === ticket.id && c.kind === 'SALE' && c.status !== 'VOID')
+    .sort((a, b) => b.id - a.id)[0];
+  if (!record?.invoiceDetails) return null;
+  const inv = record.invoiceDetails;
+  const attachments = mockAttachments.filter((a) => a.ticketId === ticket.id && a.attachType === 'INVOICE');
+  const file = attachments.find((a) => a.fileName === inv.invoiceAttachmentFileName) ?? attachments[attachments.length - 1] ?? null;
+  return {
+    invoiceNumber: inv.invoiceNumber, invoiceDate: inv.invoiceDate,
+    grossAmount: inv.grossAmount, bankFees: inv.bankFees, suspenseVat: inv.suspenseVat, transportFee: inv.transportFee,
+    cutFee: inv.cutFee, shortfall: inv.shortfall, withholdingTax: inv.withholdingTax, overpayment: inv.overpayment,
+    fileName: inv.invoiceAttachmentFileName ?? file?.fileName ?? null,
+    downloadPath: file ? `/api/attachments/${file.id}/file` : null,
+    approvalStatus: record.status,
+    rejectionReason: record.status === 'REJECTED' ? (record.rejectionReason ?? null) : null,
+    recordedAt: inv.createdAt ?? record.createdAt ?? null,
+  };
+}
+
+// FinanceDealService#requireFinanceAccess: role (403), existence (404), then account's row scope (403).
+function requireMockFinanceAccess(id) {
+  const user = requireSession();
+  if (!['account', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  const raw = db.tickets.find((t) => t.id === Number(id));
+  if (!raw) fail('ไม่พบดีลนี้', 404);
+  requireMockAccountScope(user, raw);
+  return { user, raw };
+}
+
+// The finance view of one deal -- an explicit allowlist (no pricing requests, costs, tracking, events).
+function buildFinanceDeal(raw, user) {
+  const ticket = structuredClone(raw);
+  const s = buildTicketDetail(ticket).summary;
+  const currentKey = FINANCE_STAGE_TO_MILESTONE[s.salesStage] ?? null;
+  const track = FINANCE_MONEY_TRACK.map((m) => ({
+    ...m,
+    skipped: m.index === 2 && depositBypassesNotice(ticket),
+    current: m.key === currentKey,
+  }));
+  const quotations = buildTicketDetail(ticket).quotations ?? [];
+  const quotation = quotations.find((q) => q.docStatus === 'ACCEPTED')
+    ?? quotations.find((q) => ['ISSUED', 'SENT'].includes(q.docStatus)) ?? null;
+  const files = mockAttachments.filter((a) => a.ticketId === ticket.id);
+  const fileDoc = (a) => ({
+    id: a.id, fileName: a.fileName, attachType: a.attachType, uploadedAt: a.uploadedAt ?? null,
+    fileSize: a.fileSize ?? null, downloadPath: `/api/attachments/${a.id}/file`,
+  });
+  const payableInclVat = s.amountPayable == null ? null : moneyValue(Number(s.amountPayable) * 1.07);
+  const deal = {
+    id: s.id, code: s.code, title: s.title, salesStage: s.salesStage, lifecycle: s.lifecycle, status: s.status,
+    moneyMilestone: track.find((m) => m.current) ?? null,
+    milestoneTrack: track,
+    customerName: s.customerName, customerId: s.customerId, projectName: s.projectName, contactName: s.contactName,
+    items: (ticket.items ?? []).map((it) => ({
+      description: [it.brand, it.model, it.color, it.texture, it.size].filter(Boolean).join(' ') || null,
+      qty: it.qty ?? null, unit: it.unitBasis ?? null,
+      unitPrice: it.approvedPrice ?? null,
+      lineTotal: it.approvedPrice == null ? null : moneyValue(Number(it.approvedPrice) * Number(it.qty ?? 0)),
+      vatBasis: 'EXCLUDING_VAT',
+    })),
+    money: {
+      // Mirrors FinanceDealDto's VAT-basis javadoc (FinanceDealService): `amountPayable` is the VAT-INCLUSIVE
+      // grand total with amountVatBasis 'INCLUDING_VAT', and `amountPayableExVat` is
+      // TicketRepository#payableAmountExVat. The mock's own summary figure is the pre-VAT sum, so it becomes
+      // amountPayableExVat and the inclusive payable is that x 1.07 (2dp) -- a shape stand-in only; the real VAT
+      // math stays on the server. Outstanding = max(payable - paid, 0).
+      amountPayable: payableInclVat,
+      amountPayableExVat: s.amountPayable,
+      amountPaid: s.amountPaid,
+      amountOutstanding: payableInclVat == null ? null : moneyValue(Math.max(payableInclVat - Number(s.amountPaid ?? 0), 0)),
+      amountVatBasis: 'INCLUDING_VAT',
+      depositPolicy: s.depositPolicy, paymentStatus: s.paymentStatus, paymentStage: s.paymentStage,
+      fulfillmentStatus: s.fulfillmentStatus,
+      // The real server derives these from the quotation's terms + the delivery date. The mock has no
+      // delivery-based terms, so it only echoes its demo billing date as the due date (no basis).
+      paymentDueDate: s.paymentDueDate ?? null, paymentDueBasis: s.paymentDueBasis ?? null,
+      paymentDueCreditDays: s.paymentDueCreditDays ?? null, overdue: s.overdue,
+      closeConfirmedAt: s.closeConfirmedAt, invoiceOnFile: s.invoiceOnFile,
+      commissionRecorded: hasRecordedCommission(ticket),
+      payments: receiptsForTicket(ticket.id).map((r) => ({
+        id: r.receiptId, kind: r.kind, amount: r.amount, currency: r.currency ?? 'THB', receivedAt: r.receivedAt,
+        receiptRef: r.receiptRef ?? null, note: r.note ?? null, depositNoticeId: r.depositNoticeId ?? null,
+        recordedByName: r.recordedByName ?? null,
+      })),
+    },
+    documents: {
+      acceptedQuotation: quotation && {
+        id: quotation.id, number: quotation.number, status: quotation.docStatus,
+        totalAmount: quotation.totalAmount, vatBasis: 'EXCLUDING_VAT', currency: quotation.currency ?? 'THB',
+        issuedAt: quotation.issuedAt ?? null, acceptedAt: quotation.acceptedAt ?? null,
+        downloadPath: `/api/tickets/${ticket.id}/quotations/${quotation.id}/file`,
+      },
+      depositNotices: mockDepositNotices
+        .filter((d) => d.ticketId === ticket.id && d.status !== 'DRAFT')
+        .map((d) => ({
+          id: d.id, docNumber: d.docNumber ?? null, version: d.version ?? 1, status: d.status,
+          issueDate: d.issueDate ?? null, depositAmount: d.depositAmount ?? null, totalPayable: d.totalPayable ?? null, totalPayableVatBasis: 'INCLUDING_VAT',
+          downloadPath: `/api/deposit-notices/${d.id}/file`,
+        })),
+      remainingInvoices: mockRemainingInvoices
+        .filter((r) => r.ticketId === ticket.id && r.status !== 'DRAFT')
+        .map((r) => ({
+          id: r.id, docNumber: r.docNumber ?? null, version: r.version ?? 1, status: r.status,
+          docDate: r.docDate ?? null, grandTotal: r.grandTotal ?? null, grandTotalVatBasis: 'INCLUDING_VAT',
+          downloadPath: `/api/remaining-invoices/${r.id}/file`,
+        })),
+      taxInvoices: files.filter((a) => a.attachType === 'INVOICE').map(fileDoc),
+      billingNotes: [],
+      purchaseOrders: files.filter((a) => a.attachType === 'PO').map(fileDoc),
+      contracts: files.filter((a) => ['SIGNED_QUOTATION', 'OTHER'].includes(a.attachType)).map(fileDoc),
+    },
+  comments: ticket.events
+      .filter((e) => e.kind === 'COMMENTED')
+      .map((e) => ({ id: e.id, authorName: e.actorName, createdAt: e.createdAt, message: e.message })),
+  availableActions: mockFinanceAvailableActions(user, ticket),
+  commissionInvoice: mockFinanceCommissionInvoice(ticket),
+};
+  return deal;
 }
 
 export const api = {
@@ -7147,6 +7949,8 @@ export const api = {
       // requireTicketViewer) to match the existing inline-array pattern; must move
       // in lockstep with requireTicketViewer/get() and TicketService.VIEWER_ROLES.
       if (!['sales', 'import', 'ceo', 'account', 'sales_manager'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      // Slice 1 (2ed3468e) removed TicketRepository#PIPELINE_ONLY: a quotation-first deal is listed
+      // like any other deal (IA §7 — "Nothing hidden").
       let list = structuredClone(db.tickets);
       if (user.role === 'sales') list = list.filter((t) => t.createdById === user.id);
       // Phase B (role-scoped views): import/account only see the slice of the deal
@@ -7209,6 +8013,10 @@ export const api = {
         // too because accountActions.js's worklist is built from list rows, not detail fetches
         // (issue #736).
         commissionRecorded: hasRecordedCommission(t),
+        quotationOnly: t.quotationOnly === true,
+        // Mirrors TicketSummaryDto#liveDirectQuotation on the LIST projection (slice 2 contract,
+        // SLICE-2-FLOW-A.md Part 1, S2-B4) — the CTA cascade and the DealPicker read list rows.
+        liveDirectQuotation: mockLiveDirectQuotation(t.id),
         ...derivePaymentFields(t),
       }));
       return delay({ tickets });
@@ -7216,11 +8024,29 @@ export const api = {
 
     async get(id) {
       const user = requireSession();
-      if (!['sales', 'import', 'ceo', 'account', 'sales_manager'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      // Mirrors TicketService.get / requireViewAccess: the whole-deal read is REFUSED to import (it
+      // carries the customer price and the quotation chain; import is served importDeals.get) and to
+      // account (H1 lockdown; account reads deals through api.finance.getDeal only). Checked before the
+      // row lookup so a missing id and a real one answer alike (no existence oracle). Authz here is an
+      // approximation, never the evidence.
+      if (user.role === 'import' || user.role === 'account') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!['sales', 'ceo', 'sales_manager'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const ticket = structuredClone(db.tickets.find((t) => t.id === Number(id)));
       if (!ticket) fail('ไม่พบดีลนี้', 404);
       if (user.role === 'sales' && ticket.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      return delay({ ticket: projectTicketDetailForRole(buildTicketDetail(ticket), user.role) });
+      const detail = projectTicketDetailForRole(buildTicketDetail(ticket), user.role);
+      // B5 fix: read-path-only fallback (mirrors TicketService#get on the backend) -- every
+      // OTHER mock mutation that returns buildTicketDetail(ticket) directly (recordPayment,
+      // reserveStock, editItems, ...) must keep seeing the real (possibly empty) items array,
+      // so this stays local to get() rather than moving into buildTicketDetail itself. See
+      // mockPricingChainFallbackItems's own comment.
+      if (detail.items.length === 0) {
+        const fallbackItems = mockPricingChainFallbackItems(Number(id));
+        if (fallbackItems.length > 0) {
+          return delay({ ticket: { ...detail, items: fallbackItems, fromPricingChain: true } });
+        }
+      }
+      return delay({ ticket: detail });
     },
 
     async listPayments(id) {
@@ -7237,19 +8063,16 @@ export const api = {
     },
 
     async recordPayment(id, payload) {
-      // GLA-118 (owner ruling 2026-09-20, part A): account only now — the CEO fallback is gone.
-      // Mirrors TicketService's new PAYMENT_RECORD_ROLES, for every receipt kind (deposit,
-      // balance, ...) alike. This used to be hasRole('account', 'ceo').
-      const user = hasRole('account');
-      const ticket = findTicketRaw(Number(id));
-      requireActive(ticket);
-      recordPaymentForTicket(ticket, user, payload ?? {});
-      return delay({ ticket: buildTicketDetail(ticket) });
+      return api.finance.recordPayment(id, payload);
     },
 
     async reserveStock(id, payload) {
-      const user = hasRole('import', 'ceo');
       const ticket = findTicketRaw(Number(id));
+      // S18 owner decision 2026-09-28: stock coverage is the owning sales rep's (or CEO's), not
+      // import's -- mirrors TicketService#canDeclareStockCoverage. import was DROPPED here; leaving
+      // `hasRole('import', 'ceo')` left the mock MORE permissive than production, the one direction
+      // CLAUDE.md calls dangerous. Same predicate as recordDelivery's requireOwningRepOrCeo.
+      const user = requireOwningRepOrCeo(ticket);
       requireActive(ticket);
       reserveStockForTicket(ticket, user, payload ?? {});
       return delay({ ticket: buildTicketDetail(ticket) });
@@ -7300,165 +8123,13 @@ export const api = {
     },
 
     async setBilling(id, payload) {
-      const user = hasRole('account', 'ceo');
-      const ticket = findTicketRaw(Number(id));
-      requireActive(ticket);
-      ticket.billingDate = payload.billingDate ?? null;
-      ticket.dueDate = payload.dueDate ?? null;
-      ticket.creditTermDays = payload.creditTermDays ?? null;
-      ticket.lastFollowUpAt = payload.lastFollowUpAt ?? null;
-      ticket.nextFollowUpAt = payload.nextFollowUpAt ?? null;
-      ticket.updatedAt = new Date().toISOString().slice(0, 10);
-      pushEvent(ticket, user, 'BILLING_UPDATED', ticket.status, ticket.status,
-        `billing_date=${ticket.billingDate}, due_date=${ticket.dueDate}`);
-      return delay({ ticket: buildTicketDetail(ticket) });
+      // /api/tickets entrypoint: ceo only since the H1 lockdown (account uses api.finance.setBilling).
+      return mockSetBilling(id, payload);
     },
 
     async actions(id) {
       const { user, ticket } = requireTicketViewer(id);
-      const active = (ticket.lifecycle ?? 'ACTIVE') === 'ACTIVE';
-      // Computed once and used for both halves of the response: the ADVANCE_STAGE/UPDATE_STAGE
-      // verbs below are derived from it, and it ships to the client as stageDecisions.
-      const stageDecisions = mockStageDecisions(ticket, user);
-      const availableActions = [];
-      const add = (action, kind, label, extra = {}) => availableActions.push({ action, kind, label, ...extra });
-      const owner = user.role === 'sales' && ticket.createdById === user.id;
-      const dealOwner = owner || user.role === 'sales_manager' || user.role === 'ceo';
-      const canIssueIr = ticket.status === 'quotation_issued'
-        && ticket.fulfillmentStatus == null
-        && (['DEPOSIT_NOTICE_ISSUED', 'DEPOSIT_PAID'].includes(ticket.paymentStatus)
-          || (depositBypassesNotice(ticket) && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED')));
-
-      if (active) {
-        // Ticket-level SUBMIT/PICKUP/PROPOSE_PRICE/CALCULATE_PRICES/OVERRIDE_ITEM_PRICE/
-        // APPROVE/REJECT/GENERATE_QUOTATION/MARK_QUOTATION_SENT/ACCEPTED/REJECTED are retired
-        // (Phase 2 Slice S1/S2 "engine collapse" — mirrors TicketController/TicketService's own
-        // pruning of these verbs from actions(), see docs/agent-handoffs/104): never advertised,
-        // so the UI never shows a button that would now 404 on click. Pricing/quotation runs
-        // through the PricingRequest chain instead (api.pricingRequests.*).
-        if (owner && ticket.status === 'quotation_issued' && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED')) add('CONFIRM_CUSTOMER', 'payment', 'ลูกค้ายืนยัน');
-        if (owner && ticket.status === 'quotation_issued' && ticket.paymentStatus === 'CUSTOMER_CONFIRMED' && !depositBypassesNotice(ticket)) add('ISSUE_DEPOSIT_NOTICE', 'doc', 'ออกใบแจ้งมัดจำ');
-        // GLA-118: account only -- the CEO fallback is gone for DEPOSIT_PAID (owner ruling
-        // 2026-09-17, DEPOSIT_CONFIRM_ROLES) AND, as of 2026-09-20 part A, for RECORD_PAYMENT/
-        // FINAL_PAYMENT too (PAYMENT_RECORD_ROLES) -- recording ANY payment is account-only now.
-        // SET_BILLING below is the one payment-adjacent action that DID keep the CEO fallback
-        // (['account','ceo'], unchanged) -- it sets billing/due dates, it never records money.
-        if (user.role === 'account' && ticket.paymentStatus === 'DEPOSIT_NOTICE_ISSUED') add('DEPOSIT_PAID', 'payment', 'รับมัดจำ');
-        const paymentFields = derivePaymentFields(ticket);
-        if (user.role === 'account' && paymentFields.amountPayable > 0 && paymentFields.paymentStage !== 'FULLY_PAID') {
-          add('RECORD_PAYMENT', 'payment', 'บันทึกรับชำระเงิน', { requiredFields: ['kind', 'amount'] });
-        }
-        if (['account', 'ceo'].includes(user.role)) add('SET_BILLING', 'payment', 'ตั้งค่าการวางบิล', { requiredFields: ['dueDate'] });
-        if (['import', 'ceo'].includes(user.role) && canIssueIr) add('ISSUE_IMPORT_REQUEST', 'fulfillment', 'ออกคำขอนำเข้า');
-        // V184 (PR-B): once the deal is tracked per-factory (>= 1 ISSUED sales.import_request
-        // row), these three deal-level buttons all 409 — mirrors TicketService#addOperationalActions'
-        // own `irTracked` guard. canIssueIr already excludes a tracked deal on its own (the first
-        // factory issue sets fulfillmentStatus, so it is no longer null), matching the real
-        // canIssueImportRequest, which is why ISSUE_IMPORT_REQUEST above needs no separate check.
-        const irTracked = mockHasLiveImportRequests(ticket.id);
-        if (['import', 'ceo'].includes(user.role) && !irTracked && ticket.fulfillmentStatus === 'IR_ISSUED') add('IR_SENT', 'fulfillment', 'ส่งคำขอนำเข้าแล้ว');
-        if (['import', 'ceo'].includes(user.role) && !irTracked && ticket.fulfillmentStatus === 'IR_SENT') add('SHIPPING', 'fulfillment', 'สินค้าเดินทาง');
-        if (['import', 'ceo'].includes(user.role) && !irTracked && ticket.fulfillmentStatus === 'SHIPPING') add('GOODS_RECEIVED', 'fulfillment', 'รับสินค้า');
-        if (['import', 'ceo'].includes(user.role) && (ticket.items ?? []).length > 0 && hasRemainingDelivery(ticket)
-            && ticket.fulfillmentStatus !== 'FULLY_DELIVERED') {
-          add('RESERVE_STOCK', 'fulfillment', 'จองสินค้าจากสต็อก', { requiredFields: ['lines'] });
-        }
-        // V148 (per-item stock-commission weighting): sales_manager/ceo only -- mirrors
-        // TicketService#canSetItemWeightMultiplier exactly (ITEM_WEIGHT_ROLES, no ownership/stage
-        // nuance beyond the ticket being ACTIVE, which the enclosing `if (active)` already is).
-        if (['sales_manager', 'ceo'].includes(user.role)) {
-          add('SET_ITEM_WEIGHT_MULTIPLIER', 'fulfillment', 'ตั้งน้ำหนักคอมมิชชั่นต่อรายการ', { requiredFields: ['lines'] });
-        }
-        // Mirrors TicketService#canRecordDelivery -> canWriteDelivery exactly (REVIEW ROUND 1, S2,
-        // 2026-09-18): CEO, or the deal's own owning sales rep -- the advertisement and the
-        // mutation gate must come off the same predicate or the UI offers a button that instantly
-        // 403s. `owner` (above) is exactly the Java's second limb -- deliberately NOT `dealOwner`,
-        // which also admits sales_manager/ceo: Java's SALES_ROLES is Set.of("sales") and
-        // sales_manager is read+comment oversight only, so widening here would make the mock MORE
-        // permissive than production, the one direction CLAUDE.md calls dangerous.
-        //
-        // import was DROPPED from this condition (previously `['import', 'ceo'].includes(user.role)
-        // || owner`) -- it used to be additive to Sales (#818), but the 2026-08-17 ruling was a
-        // TRANSFER, not an addition: ส่งมอบสินค้า write access moved FROM import TO Sales, and
-        // requireOwningRepOrCeo (backing recordDelivery/completeDelivery's own mutation gate just
-        // above in this file) already reflects that. Leaving `import` here left the mock MORE
-        // permissive than the real TicketService#canWriteDelivery -- a real divergence this review
-        // caught, not a hypothetical one.
-        if ((user.role === 'ceo' || owner) && hasRemainingDelivery(ticket) && deliveryAvailable(ticket)) {
-          add('RECORD_PARTIAL_DELIVERY', 'fulfillment', 'บันทึกการส่งสินค้า', { requiredFields: ['source', 'lines'] });
-          add('COMPLETE_DELIVERY', 'fulfillment', 'ส่งมอบครบ');
-        }
-        const finalPaymentAllowed = ['AWAITING_FINAL_PAYMENT', 'DEPOSIT_PAID'].includes(ticket.paymentStatus)
-          || (depositBypassesNotice(ticket) && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED'));
-        // GLA-118 (owner ruling 2026-09-20, part A): account only -- see the PAYMENT_RECORD_ROLES
-        // comment above RECORD_PAYMENT. This used to be ['account', 'ceo'].
-        if (user.role === 'account' && finalPaymentAllowed) add('FINAL_PAYMENT', 'payment', 'รับเงินครบ');
-        // Three-party close: account confirms, CEO verifies. Sales is not involved.
-        let closeReady = true;
-        try { requireClosePrerequisites(ticket); } catch { closeReady = false; }
-        if (user.role === 'account' && !ticket.closeConfirmedAt && closeReady) {
-          add('CONFIRM_CLOSE', 'operational', 'ยืนยันพร้อมปิดงาน');
-        }
-        if (['account', 'ceo'].includes(user.role) && ticket.closeConfirmedAt) {
-          add('REVOKE_CLOSE_CONFIRM', 'operational', 'ยกเลิกการยืนยันปิดงาน');
-        }
-        if (user.role === 'ceo' && ticket.closeConfirmedAt && closeReady) {
-          add('VERIFY_CLOSE', 'operational', 'ตรวจสอบและปิดงาน');
-        }
-        if (ticket.createdById === user.id && !['closed', 'cancelled'].includes(ticket.status)) add('CANCEL', 'operational', 'ยกเลิก');
-        if (owner && ['draft', 'submitted', 'in_review', 'price_proposed'].includes(ticket.status)) add('EDIT_ITEMS', 'operational', 'แก้ไขรายการ');
-        // Mirrors TicketService.addStageActions: derived from the decisions, so the mock can
-        // never advertise a stage it would then refuse. The hardcoded 14-stage array that used to
-        // live here was the third copy of DealStage.ORDER and had gone stale on QUOTE_OWNER.
-        for (const decision of stageDecisions.filter((d) => d.allowed)) {
-          add('ADVANCE_STAGE', 'stage', 'เลื่อนสถานะ', { targetStage: decision.stage });
-        }
-        if (availableActions.some((a) => a.kind === 'stage')) add('UPDATE_STAGE', 'stage', 'แก้ไขสถานะ', { requiredFields: ['stage'] });
-        if (dealOwner) {
-          add('MARK_LOST', 'lifecycle', 'เสียงาน', { requiredFields: ['reason'] });
-          add('PLACE_ON_HOLD', 'lifecycle', 'พักดีลไว้');
-          add('MARK_DORMANT', 'lifecycle', 'พัก dormant');
-          add('SET_TENDER_REQUIREMENT', 'policy', 'ตั้งค่าสถานะประมูล', { requiredFields: ['value'] });
-          // requiredFields carries the note rule, exactly as TicketService.addPolicyActions does:
-          // a channel that was actually STATED needs a reason to change, an unstated one (the V144
-          // UNSPECIFIED default, or the never-backfilled pre-V144 DESIGNER_LED) does not. Same
-          // predicate as setEntryChannel below — see TicketService.entryChannelIsStated.
-          add('SET_ENTRY_CHANNEL', 'policy', 'ตั้งค่า entry channel', {
-            requiredFields: mockEntryChannelIsStated(ticket) ? ['value', 'note'] : ['value'],
-          });
-        }
-        // GLA-118: the OWNING sales rep, or sales_manager as a backup (owner ruling 2026-09-20,
-        // part B) -- not account, not ceo, not any other sales rep. Mirrors
-        // TicketService.canSetDepositPolicy exactly: deliberately `owner || user.role ===
-        // 'sales_manager'` here, NOT `dealOwner` (which also admits ceo, see MARK_LOST/
-        // SET_TENDER_REQUIREMENT/SET_ENTRY_CHANNEL above) -- the ruling text is explicit that
-        // deposit policy is narrower than the usual "deal ownership" grant.
-        //
-        // Review fix: also gated on paymentStatus, matching Rule 4 -- once a deposit notice has
-        // actually been issued (or paid, or further), setDepositPolicy 409s instead of writing
-        // (see the Rule 4 check just above in this file's setDepositPolicy), so advertising the
-        // action past that point would offer a button that dies on click.
-        const depositWaivableNow = ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED';
-        if ((owner || user.role === 'sales_manager') && depositWaivableNow) {
-          add('WAIVE_DEPOSIT', 'policy', 'นโยบายมัดจำ', { requiredFields: ['policy', 'reason'] });
-        }
-      } else if (['ON_HOLD', 'DORMANT'].includes(ticket.lifecycle) && dealOwner) {
-        add('RESUME', 'lifecycle', 'ดำเนินการต่อ');
-        if (ticket.lifecycle === 'ON_HOLD') add('MARK_DORMANT', 'lifecycle', 'พัก dormant');
-      } else if (ticket.lifecycle === 'CLOSED_LOST' && dealOwner) {
-        add('REOPEN', 'lifecycle', 'เปิดดีลใหม่');
-      }
-      return delay({
-        currentState: {
-          lifecycle: ticket.lifecycle ?? 'ACTIVE',
-          salesStage: ticket.salesStage,
-          paymentStatus: ticket.paymentStatus ?? null,
-          fulfillmentStatus: ticket.fulfillmentStatus ?? null,
-          status: ticket.status,
-        },
-        availableActions,
-        stageDecisions,
-      });
+      return delay(buildTicketActions(user, ticket));
     },
 
     async create(payload) {
@@ -7468,6 +8139,21 @@ export const api = {
       const user = requireDealEntry();
       // Mirrors TicketService.create (V50): every new deal belongs to a โครงการ.
       if (payload.projectId == null) fail('ต้องเลือกโครงการก่อนสร้างดีล', 400);
+      // Mirrors CreateTicketRequest's @NotBlank entryChannel (TicketController @Valid -> 400) plus
+      // TicketService.create's value guard: a NEW deal must state a real channel (owner ruling
+      // 2026-09-30), because the channel decides its route (DealRoute). UNSPECIFIED is refused as an
+      // INPUT though it stays valid as STORED. The real service additionally tolerates a null channel
+      // when called internally (Java fixtures); no HTTP caller can reach that path, so the mock has
+      // no reason to.
+      if (typeof payload.entryChannel !== 'string' || payload.entryChannel.trim() === '') {
+        fail('ต้องระบุช่องทางดีลก่อนสร้างดีล', 400);
+      }
+      if (payload.entryChannel === 'UNSPECIFIED') {
+        fail('ต้องระบุช่องทางดีลที่แท้จริง (ออกแบบนำ / เจ้าของโครงการ / ผู้ซื้อตรง) ก่อนสร้างดีล', 400);
+      }
+      if (!['DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT'].includes(payload.entryChannel)) {
+        fail(`ไม่รองรับช่องทางรับงาน '${payload.entryChannel}'`, 400);
+      }
       // Mirrors TicketService.create's V183 item-validation loop: a stock-sourced line must
       // carry a real, positive selling price, checked before any write.
       for (const item of payload.items || []) {
@@ -7509,6 +8195,9 @@ export const api = {
         // argument the real API honours — the "mock drops an argument" shape CLAUDE.md names —
         // and both TicketCreateModal and the inline deal step on /quotations/new send it.
         nextFollowUpAt: payload.nextFollowUpAt ?? null,
+        // GLA-136: mirrors TicketRepository.create's `quotation_only` write -- only the quotation
+        // editor's inline create sends `quotationOnly: true`; absent/false is a pipeline deal.
+        quotationOnly: payload.quotationOnly === true,
         createdAt: now.slice(0, 10), updatedAt: now.slice(0, 10), closedAt: null,
         items: (payload.items || []).map((item, i) => ({
           id: nextId * 100 + i, ticketId: nextId,
@@ -7552,6 +8241,9 @@ export const api = {
       // items here before submit().
       const salesCanEdit = user.role === 'sales' && isOwner
         && ['draft', 'submitted', 'in_review', 'price_proposed'].includes(st);
+      // Mirrors TicketService.editItems' DirectQuotationLocks check (slice 1), after the authz check:
+      // while a live direct quotation holds the deal's lines, they are edited on the quotation.
+      if (salesCanEdit) requireNoLiveDirectQuotation(ticket);
       // KNOWN MOCK-MORE-PERMISSIVE GAP (pre-existing, not touched by V183): the real
       // TicketService.editItems only ever checks `SALES_ROLES.contains(actor.role()) && isOwner`
       // — there is no import branch at all — so role 'import' gets a real 403 here, regardless of
@@ -7639,31 +8331,12 @@ export const api = {
     // Three-party close (V55). Mirrors TicketService.confirmCloseReady /
     // revokeCloseConfirmation / verifyClose. Sales is not part of the sequence.
     async confirmCloseReady(id) {
-      const user = requireSession();
-      hasRole('account'); // NOT ceo — the CEO signs the second half
-      const ticket = findTicketRaw(Number(id));
-      requireActive(ticket);
-      if (ticket.closeConfirmedAt) fail('ยืนยันปิดงานไปแล้ว — รอ CEO ตรวจสอบ', 409);
-      requireClosePrerequisites(ticket);
-      ticket.closeConfirmedAt = new Date().toISOString();
-      ticket.closeConfirmedByName = user.name;
-      ticket.updatedAt = new Date().toISOString().slice(0, 10);
-      pushEvent(ticket, user, 'CLOSE_CONFIRMED', ticket.status, ticket.status,
-        'ฝ่ายบัญชียืนยันพร้อมปิดงาน — รอ CEO ตรวจสอบ');
-      return delay({ ticket: buildTicketDetail(ticket) });
+      return api.finance.confirmCloseReady(id);
     },
 
     async revokeCloseConfirmation(id, payload = {}) {
-      const user = requireSession();
-      hasRole('account', 'ceo');
-      const ticket = findTicketRaw(Number(id));
-      requireActive(ticket);
-      if (!ticket.closeConfirmedAt) fail('ดีลนี้ยังไม่ได้ยืนยันปิดงาน', 409);
-      ticket.closeConfirmedAt = null;
-      ticket.closeConfirmedByName = null;
-      pushEvent(ticket, user, 'CLOSE_CONFIRM_REVOKED', ticket.status, ticket.status,
-        (payload.note || '').trim() || null);
-      return delay({ ticket: buildTicketDetail(ticket) });
+      // /api/tickets entrypoint: ceo only since the H1 lockdown (account uses api.finance.revokeCloseConfirmation).
+      return mockRevokeCloseConfirmation(id, payload);
     },
 
     async verifyClose(id) {
@@ -7712,6 +8385,14 @@ export const api = {
       // Mirrors TicketService.comment: same read gate as get() — commenting
       // returns the full ticket, so it must not be a side door around the read
       // scoping (nor, per Phase B, around the import quotation projection).
+      // Mirrors TicketService.comment (Leak B, owner ruling 2026-09-30): import's comment path is
+      // row-scoped to its import scope — the SAME predicate as its worklist and importDeals.get —
+      // and a missing deal answers 403 like an out-of-scope one (no existence oracle).
+      const commenter = requireSession();
+      if (commenter.role === 'import') {
+        const scoped = db.tickets.find((t) => t.id === Number(id));
+        if (!(scoped && importListScopeIncludes(scoped))) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      }
       const { user, ticket } = requireTicketViewer(id);
       pushEvent(ticket, user, 'COMMENTED', null, null, payload.message);
       return delay({ ticket: projectTicketDetailForRole(buildTicketDetail(ticket), user.role) });
@@ -7825,24 +8506,7 @@ export const api = {
     //  that advances the payment track to DEPOSIT_NOTICE_ISSUED.)
 
     async confirmDepositPaid(id) {
-      // GLA-118 (owner ruling 2026-09-17): account only now — the CEO fallback is gone. Mirrors
-      // TicketService's DEPOSIT_CONFIRM_ROLES. RECORD_PAYMENT/FINAL_PAYMENT are account-only too
-      // (PAYMENT_RECORD_ROLES, owner ruling 2026-09-20); ACCOUNT_ROLES (['account','ceo']) now only
-      // covers SET_BILLING and similar non-payment actions.
-      const user = hasRole('account');
-      const ticket = findTicketRaw(Number(id));
-      requireActive(ticket);
-      if (ticket.paymentStatus !== 'DEPOSIT_NOTICE_ISSUED') fail('ต้องออกใบแจ้งรับมัดจำก่อนจึงจะยืนยันรับชำระมัดจำได้', 409);
-      const notice = latestIssuedDepositNotice(ticket.id);
-      const amount = notice?.depositAmount ?? moneyValue(payableAmount(ticket) * 0.5);
-      if (amount <= 0) fail('ไม่พบยอดมัดจำสำหรับบันทึกรับชำระ', 409);
-      recordPaymentForTicket(ticket, user, {
-        kind: 'DEPOSIT',
-        amount,
-        note: 'ยืนยันรับมัดจำ',
-        depositNoticeId: notice?.id ?? null,
-      });
-      return delay({ ticket: buildTicketDetail(ticket) });
+      return api.finance.confirmDepositPaid(id);
     },
 
     async issueImportRequest(id) {
@@ -7922,32 +8586,7 @@ export const api = {
     },
 
     async confirmFinalPayment(id) {
-      // GLA-118 (owner ruling 2026-09-20, part A): account only now — the CEO fallback is gone.
-      // Mirrors TicketService's new PAYMENT_RECORD_ROLES (confirmFinalPayment is a payment-
-      // recording entry point too, whether or not it ends up calling recordPaymentInternal). This
-      // used to be hasRole('account', 'ceo') (TicketService.ACCOUNT_ROLES).
-      const user = hasRole('account');
-      const ticket = findTicketRaw(Number(id));
-      requireActive(ticket);
-      const allowed = ['AWAITING_FINAL_PAYMENT', 'DEPOSIT_PAID'].includes(ticket.paymentStatus)
-        || (depositBypassesNotice(ticket) && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED'));
-      if (!allowed) fail('ต้องรับชำระมัดจำแล้วหรือรอชำระเงินงวดสุดท้าย (หรือดีลนี้ได้รับการยกเว้นมัดจำ) ก่อนจึงจะยืนยันรับชำระเงินครบถ้วนได้', 409);
-      const outstanding = moneyValue(payableAmount(ticket) - sumPaid(ticket.id));
-      if (outstanding <= 0) {
-        if (ticket.paymentStatus !== 'FULLY_PAID') {
-          ticket.paymentStatus = 'FULLY_PAID';
-          ticket.updatedAt = new Date().toISOString().slice(0, 10);
-          pushEvent(ticket, user, 'FULLY_PAID', ticket.status, ticket.status, null);
-          maybeAdvanceClosedPaid(ticket, user);
-        }
-      } else {
-        recordPaymentForTicket(ticket, user, {
-          kind: 'BALANCE',
-          amount: outstanding,
-          note: 'ยืนยันชำระส่วนที่เหลือ',
-        });
-      }
-      return delay({ ticket: buildTicketDetail(ticket) });
+      return api.finance.confirmFinalPayment(id);
     },
 
     // ── Deal pipeline (V50): mirrors TicketService.updateStage/markLost/reopenDeal.
@@ -7955,26 +8594,8 @@ export const api = {
     // the Java service and is NOT authoritative (CLAUDE.md).
 
     async updateStage(id, payload) {
-      const user = requireSession();
-      const ticket = findTicketRaw(Number(id));
-      requireActive(ticket);
-      if (dealStageIndex(payload.stage) < 0) fail(`ไม่รองรับสถานะขั้นตอนการขาย '${payload.stage}'`, 400);
-      // Enforced from the SAME decision list actions() serves, never re-derived — so an option the
-      // mock offered is an option the mock accepts, and there is one place to read. The status is
-      // approximated (403 for the permission message, 409 otherwise) because the mock's decisions
-      // carry a reason, not a status code; the real service's codes are pinned by
-      // StageDecisionIntegrationTest.
-      const decision = mockStageDecisions(ticket, user).find((d) => d.stage === payload.stage);
-      if (!decision.allowed) {
-        fail(decision.blockedReason, decision.blockedReason === 'ไม่มีสิทธิ์เข้าถึงรายการนี้' ? 403 : 409);
-      }
-      // NO note requirement here. DealStage.requiresJustification is a backend decision and the
-      // mock does not mirror it — see the "what this mock will and will not decide" block above.
-      const fromStage = ticket.salesStage;
-      ticket.salesStage = payload.stage;
-      ticket.stageUpdatedAt = new Date().toISOString();
-      pushEvent(ticket, user, 'STAGE_CHANGED', fromStage, payload.stage, (payload.note || '').trim() || null);
-      return delay({ ticket: buildTicketDetail(ticket) });
+      // /api/tickets entrypoint: refuses account (H1 lockdown); account uses api.finance.updateStage.
+      return mockUpdateStage(id, payload);
     },
 
     async markLost(id, payload) {
@@ -8048,6 +8669,7 @@ export const api = {
       const ticket = findTicketRaw(Number(id));
       if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       requireActive(ticket);
+      // Slice 1 (2ed3468e) removed the quotation-only tender refusal (IA §7).
       if (!['REQUIRED', 'NOT_REQUIRED', 'UNKNOWN'].includes(payload.value)) fail(`ไม่รองรับเงื่อนไขการประมูล '${payload.value}'`, 400);
       ticket.tenderRequirement = payload.value;
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
@@ -8060,6 +8682,7 @@ export const api = {
       const ticket = findTicketRaw(Number(id));
       if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       requireActive(ticket);
+      // Slice 1 (2ed3468e) removed the quotation-only entry-channel refusal (IA §7).
       if (!['DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT'].includes(payload.value)) fail(`ไม่รองรับช่องทางรับงาน '${payload.value}'`, 400);
       if (mockEntryChannelIsStated(ticket) && ticket.entryChannel !== payload.value && !(payload.note || '').trim()) {
         fail('การเปลี่ยน entry channel ต้องระบุเหตุผล', 400);
@@ -9447,7 +10070,8 @@ export const api = {
     },
   },
 
-  // Mirrors CommissionController + CommissionService (commission/).
+  // Mirrors CommissionController + CommissionService (commission/), including GET /pending-approval and
+  // POST /{id}/item-weights (CommissionService#listPendingApproval / #adjustItemWeights).
   commissions: {
     // Mirrors CommissionController#list PreAuthorize exactly: SALES, SALES_MANAGER, CEO only.
     // Neither ACCOUNT nor HR may call this — account only ever gets createFromDeal, hr reads via
@@ -9460,6 +10084,46 @@ export const api = {
       if (user.role === 'sales') list = list.filter((item) => item.salesRepId === user.id);
       if (params.payrollMonth) list = list.filter((item) => commissionMonth(item.payrollMonth) === params.payrollMonth.slice(0, 7));
       return delay({ commissions: list.map(buildCommissionRecord) });
+    },
+
+    // Mirrors CommissionController#pendingApproval / CommissionService#listPendingApproval: every SALE record
+    // with status SUBMITTED, ANY payroll month, ORDER BY commission_id ASC. sales_manager + ceo only (403 else).
+    // effectiveWeight / weightedCommissionableBase / estimatedCommission are SERVER computations (calculator +
+    // the rep's month totals) and the mock deliberately does not reimplement them (CLAUDE.md: a mock that
+    // mirrors a computation is no evidence). It echoes what the record already carries and null where absent.
+    async pendingApproval() {
+      const user = requireSession();
+      if (!['sales_manager', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const pending = db.commissions
+        .filter((item) => item.kind === 'SALE' && item.status === 'SUBMITTED')
+        .sort((a, b) => a.id - b.id)
+        .map(buildMockPendingCommission);
+      return delay({ commissions: pending });
+    },
+
+    // Mirrors CommissionService#adjustItemWeights. sales_manager ONLY (ceo is refused), before any read; the record
+    // must exist (404), be a ticket-linked SALE and still SUBMITTED (409), lines non-empty and each item must belong
+    // to the record's deal (400). Writes the per-item weight multipliers (same store as the ticket's own
+    // setItemWeightMultipliers). The real service then re-derives the record's effective weight with
+    // CommissionCalculator#itemDerivedWeight; the mock does NOT recompute it (not supported in mock mode) --
+    // effectiveWeight / estimatedCommission stay whatever the record already had.
+    async adjustItemWeights(id, payload = {}) {
+      const user = requireSession();
+      if (user.role !== 'sales_manager') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const record = db.commissions.find((item) => item.id === Number(id));
+      if (!record) fail('ไม่พบรายการค่าคอมนี้', 404);
+      if (record.kind !== 'SALE' || record.sourceTicketId == null) fail('รายการนี้ไม่ได้เชื่อมกับดีล', 409);
+      if (record.status !== 'SUBMITTED') fail('ปรับน้ำหนักได้เฉพาะรายการที่รอผู้จัดการฝ่ายขายอนุมัติ', 409);
+      const lines = payload.lines ?? [];
+      if (!lines.length) fail('ต้องระบุรายการสินค้า', 400);
+      const ticket = db.tickets.find((t) => t.id === record.sourceTicketId);
+      if (!ticket) fail('ไม่พบดีลนี้', 404);
+      for (const line of lines) {
+        if (!(ticket.items ?? []).some((it) => it.id === Number(line.itemId))) fail('รายการสินค้าไม่อยู่ในดีลนี้', 400);
+        if (![1, 2, 3].includes(Number(line.weightMultiplier))) fail('น้ำหนักคอมมิชชั่นต้องเป็น 1, 2 หรือ 3', 400);
+      }
+      updateItemWeightMultipliersForTicket(ticket, user, payload);
+      return delay({ pending: buildMockPendingCommission(record) });
     },
 
     // Slice A2 (AUTHZ CHANGE): sales removed from SUBMIT_ROLES — account replaces it as the
@@ -11017,6 +11681,64 @@ export const api = {
     },
   },
 
+  // Mirrors ImportDealService / ImportDealDtos — GET /api/import/deals/{id}, the import-only
+  // per-deal view. The DTO is built FIELD BY FIELD from the mock ticket (never a spread of the
+  // ticket item), so a price/cost/margin/weighting field the mock item happens to hold can never
+  // leak through — the same "fresh projection, nothing to forget to strip" construction the Java
+  // side uses. Authz here is an APPROXIMATION of the service (NOT authoritative — real coverage is
+  // ImportDealAuthzIntegrationTest): role import/ceo checked FIRST; import is then row-scoped to
+  // the SAME set the import worklist (tickets.list) returns, via importListScopeIncludes, and a
+  // deal outside it or missing both answer 403 (no existence oracle); ceo is unscoped, so a
+  // missing deal is an ordinary 404.
+  importDeals: {
+    async get(ticketId) {
+      const user = hasRole('import', 'ceo');
+      const raw = db.tickets.find((t) => t.id === Number(ticketId));
+      if (user.role === 'import' && !(raw && importListScopeIncludes(raw))) {
+        fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      }
+      if (!raw) fail('ไม่พบดีลนี้', 404);
+      // Same display-only fallback tickets.get() applies: ticket_item stays empty until order
+      // confirmation, so a pricing-phase deal shows the live quotation's lines instead.
+      let lines = raw.items ?? [];
+      if (lines.length === 0) lines = mockPricingChainFallbackItems(raw.id);
+      const project = raw.projectId ? mockProjects.find((p) => p.id === raw.projectId) : null;
+      return delay({
+        deal: {
+          id: raw.id,
+          code: raw.code,
+          title: raw.title,
+          status: raw.status,
+          lifecycle: raw.lifecycle ?? 'ACTIVE',
+          salesStage: raw.salesStage,
+          customerName: raw.customerName ?? null,
+          projectName: project?.name ?? raw.projectName ?? null,
+          createdByName: raw.createdByName ?? null,
+          fulfillmentStatus: raw.fulfillmentStatus ?? null,
+          items: lines.map((i) => ({
+            id: i.id,
+            brand: i.brand ?? null,
+            model: i.model ?? null,
+            color: i.color ?? null,
+            texture: i.texture ?? null,
+            size: i.size ?? null,
+            code: i.catalogProductCode ?? null,
+            qty: i.qty ?? null,
+            qtySqm: i.qtySqm ?? null,
+            unit: i.unitBasis ?? null,
+            qtyDelivered: i.qtyDelivered ?? null,
+          })),
+          // ImportRequestService#list for import/ceo is unrestricted.
+          importRequests: mockImportRequestsForTicket(raw.id),
+          // ONLY the human comment thread — the raw event feed quotes prices in its notes.
+          comments: (raw.events ?? [])
+            .filter((e) => e.kind === 'COMMENTED')
+            .map((e) => ({ id: e.id, actorName: e.actorName, message: e.message, createdAt: e.createdAt })),
+        },
+      });
+    },
+  },
+
   // Mirrors ImportRequestController's PLURAL routes — the STORED ใบขอซื้อ aggregate (V184, PR-A
   // #1008 / PR-B, GLA-100/105). Role gates mirror ImportRequestService (see the helpers just above
   // requireDealEntry). PDF rendering is a "not supported in mock mode" stub, same as the legacy
@@ -11503,12 +12225,18 @@ export const api = {
     },
   },
 
-  // Mirrors DesignerController (designer/) — READ-ONLY. Owner ruling "อ่านอย่างเดียว อัปเดตจาก
-  // Excel" is enforced by construction: there is no create/update/delete method in this namespace
-  // and there must never be one. Open to any authenticated user, same as catalog above — a sales
-  // rep filling in a quotation needs to search this, and #205's own reasoning applies (see
-  // DesignerController's Javadoc): the confidentiality requirement is about the PRINTED DOCUMENT,
-  // not about which role may search the directory.
+  // Mirrors DesignerController (designer/). search/getByCode stay open to any authenticated user,
+  // same as catalog above — a sales rep filling in a quotation needs to search this, and #205's own
+  // reasoning applies (see DesignerController's Javadoc): the confidentiality requirement is about
+  // the PRINTED DOCUMENT, not about which role may search the directory.
+  //
+  // ⚠️ REVERSAL (owner ask relayed 2026-09-26, task "designer-add-from-ui"): this namespace used to
+  // say READ-ONLY was enforced by construction (no create/update/delete method, and there must
+  // never be one). create() below is the fresh write path the owner asked for — gated by
+  // requireDealEntry(), mirroring DealEntryAccess.requireCanEnterDeal exactly like
+  // customers.create's own gate. There is still no update()/delete() here — only create was asked
+  // for. ⚠️ AUTHZ CAVEAT (same as customers.create above): this gate approximates the Java one and
+  // is NOT authoritative — verify against DealEntryAccess, never here.
   designers: {
     // Ordering mirrors DesignerRepository.search: `ORDER BY code LIMIT 30`. Active-only, exactly
     // like the Java WHERE clause — a designer marked ยกเลิก must not be offered for a NEW pick.
@@ -11531,6 +12259,21 @@ export const api = {
       const found = mockDesigners.find((d) => d.code === String(code ?? '').trim());
       if (!found) fail('ไม่พบผู้ออกแบบรหัสนี้', 404);
       return delay({ ...found });
+    },
+    // NEW (reversal, see this namespace's own comment above). Mirrors DesignerController#create:
+    // gated by requireDealEntry() (same as customers.create), a duplicate code is a 409 mirroring
+    // the real controller's DuplicateKeyException→CONFLICT mapping, and a brand-new row is always
+    // active: true — there is no way to create one pre-cancelled, matching DesignerRepository#create.
+    async create(payload = {}) {
+      requireDealEntry();
+      const code = String(payload.code ?? '').trim();
+      const name = String(payload.name ?? '').trim();
+      if (!code) fail('code ไม่ถูกต้อง', 400);
+      if (!name) fail('name ไม่ถูกต้อง', 400);
+      if (mockDesigners.some((d) => d.code === code)) fail('รหัสผู้ออกแบบนี้มีอยู่แล้ว', 409);
+      const designer = { code, name, active: true };
+      mockDesigners.push(designer);
+      return delay({ designer: { ...designer } });
     },
   },
 
@@ -11601,6 +12344,31 @@ export const api = {
       };
       mockFxRates.push(newRate);
       return delay({ fxRate: structuredClone(newRate) });
+    },
+    // Mirrors FxRateController.fetchNow -> BotFxFetchService.fetchNow (CEO-only). The real path
+    // calls the Bank of Thailand API; the mock cannot, so this SIMULATES a successful fetch:
+    // it refreshes each tracked currency's row to today with source=BOT (clearing the staleness
+    // warning) without inventing new rates, and returns the same {result} shape. Not a rate
+    // computation — just plumbing so the button, toast and refetch are exercisable in mock mode.
+    async fetchNow() {
+      hasRole('ceo');
+      // Hardcodes BotFxFetchService.TRACKED_CURRENCIES's five currencies rather than importing it
+      // (this file has no access to backend source) -- contract.test.js's arity check cannot see
+      // this drift if the real list ever changes, so keep this in sync by hand.
+      const tracked = ['USD', 'EUR', 'JPY', 'CNY', 'GBP'];
+      const asOf = new Date().toISOString().slice(0, 10);
+      const now = new Date().toISOString();
+      const updated = [];
+      for (const currency of tracked) {
+        const row = mockFxRates.find((r) => r.currency === currency);
+        if (!row) continue;
+        row.effectiveDate = asOf;
+        row.updatedAt = now;
+        row.fetchedAt = now;
+        row.source = 'BOT';
+        updated.push(currency);
+      }
+      return delay({ result: { updated: updated.length, total: tracked.length, asOf, updatedCurrencies: updated } });
     },
   },
 
@@ -11743,6 +12511,64 @@ export const api = {
       };
       mockPricingFormulaConfigVersions.push(newConfig);
       return delay({ formulaConfig: sortedFormulaConfig(newConfig) });
+    },
+  },
+
+  // Mirrors FinanceDealController + FinanceDealService (finance/): GET /api/finance/deals/{id} (incl. money.amountPayableExVat,
+  // commissionInvoice and the RECORD_INVOICE action) and the money
+  // actions under it (H1 lockdown), for `account` and `ceo` ONLY. account is row-scoped to the same scope as the
+  // deal list (accountListScopeIncludes, never a quotation-only container); ceo reads any deal. Each action is the
+  // SAME shared body as its /api/tickets twin (mockRecordPayment, mockSetBilling, ...), which keeps TODAY's role gate
+  // (deposit-paid / final-payment / payments / close-confirm: account only; billing / close-revoke / stage:
+  // account + ceo). The mock APPROXIMATES the documents block (items at approved price, billing notes not
+  // modelled); authz here is never authoritative -- FinanceDealIntegrationTest / FinanceDealLockdownIntegrationTest
+  // are the evidence.
+  finance: {
+    async getDeal(id) {
+      const { user, raw } = requireMockFinanceAccess(id);
+      return delay({ deal: buildFinanceDeal(raw, user) });
+    },
+
+    async addComment(id, payload) {
+      const { user, raw } = requireMockFinanceAccess(id);
+      pushEvent(raw, user, 'COMMENTED', null, null, payload.message);
+      return delay({ deal: buildFinanceDeal(raw, user) });
+    },
+
+    async confirmDepositPaid(id) {
+      const { user, raw } = requireMockFinanceAccess(id);
+      await mockConfirmDepositPaid(id);
+      return delay({ deal: buildFinanceDeal(raw, user) });
+    },
+
+    async confirmFinalPayment(id) {
+      const { user, raw } = requireMockFinanceAccess(id);
+      await mockConfirmFinalPayment(id);
+      return delay({ deal: buildFinanceDeal(raw, user) });
+    },
+
+    async recordPayment(id, payload) {
+      const { user, raw } = requireMockFinanceAccess(id);
+      await mockRecordPayment(id, payload);
+      return delay({ deal: buildFinanceDeal(raw, user) });
+    },
+
+    async confirmCloseReady(id) {
+      const { user, raw } = requireMockFinanceAccess(id);
+      await mockConfirmCloseReady(id);
+      return delay({ deal: buildFinanceDeal(raw, user) });
+    },
+
+    async revokeCloseConfirmation(id, payload = {}) {
+      const { user, raw } = requireMockFinanceAccess(id);
+      await mockRevokeCloseConfirmation(id, payload, true);
+      return delay({ deal: buildFinanceDeal(raw, user) });
+    },
+
+    async updateStage(id, payload) {
+      const { user, raw } = requireMockFinanceAccess(id);
+      await mockUpdateStage(id, payload, true);
+      return delay({ deal: buildFinanceDeal(raw, user) });
     },
   },
 
@@ -12900,6 +13726,10 @@ export const api = {
         if (existing.ticketId !== Number(ticketId)) fail('clientRequestId นี้ถูกใช้ไปแล้วกับดีลอื่น', 409);
         return delay({ pricingRequest: buildPricingRequestDetail(existing) });
       }
+      // Mirrors PricingRequestService.createDraft's DirectQuotationLocks check (slice 1) -- after the
+      // owner check and the replay short-circuit, before any field validation: a deal priced by hand
+      // on a live direct quotation never also gets a คำขอราคา (IA §7).
+      requireNoLiveDirectQuotation(ticket);
       if (!PRICING_REQUEST_RECIPIENT_VALUES.includes(payload.recipientType)) {
         fail(`ไม่รองรับประเภทผู้รับ '${payload.recipientType}'`, 400);
       }
@@ -13171,6 +14001,11 @@ export const api = {
     // NOTE (CLAUDE.md, "Authorization is NOT authoritative"): the role/status gates below
     // approximate the Java service and are not evidence about it. The real gate is pinned by
     // PricingFactoryQuoteCostingIntegrationTest#setItemFactory_* against a real Postgres.
+    //
+    // B6 (GLA-135): `payload` is now `{ factoryId }`, resolved against `mockPriceImportFactories` —
+    // mirrors PricingRequestRepository#findFactoryNameById/#fillItemFactory writing BOTH
+    // resolved_factory_id and the canonical name, instead of trusting a free-typed one. A
+    // factoryId with no matching row is a 404, same as the real service.
     async setItemFactory(id, itemId, payload) {
       const user = hasRole('import');
       const pr = findPricingRequestRaw(id);
@@ -13178,15 +14013,17 @@ export const api = {
         fail(`ระบุโรงงานได้เฉพาะคำขอราคาที่อยู่ระหว่างการดำเนินการของฝ่ายนำเข้าเท่านั้น (สถานะปัจจุบัน: '${pr.status}')`, 409);
       }
       requirePricingRequestDealActive(db.tickets.find((t) => t.id === pr.ticketId));
-      const factory = payload?.factory?.trim();
-      if (!factory) fail('ชื่อโรงงานต้องไม่เว้นว่าง', 400);
+      const factoryId = Number(payload?.factoryId);
+      const factoryMaster = mockPriceImportFactories.find((f) => f.factoryId === factoryId);
+      if (!factoryId || !factoryMaster) fail('ไม่พบโรงงานนี้ในระบบ', 404);
       const item = pr.items.find((candidate) => candidate.id === itemId);
       if (!item) fail('ไม่พบรายการสินค้านี้ในคำขอราคานี้', 404);
       const existing = pricingRequestItemFactory(item);
       if (existing) {
         fail(`รายการนี้ระบุโรงงานไว้แล้ว (${existing}) — หากต้องการเปลี่ยนโรงงาน ต้องสร้างคำขอราคารอบใหม่`, 409);
       }
-      item.factory = factory;
+      item.factory = factoryMaster.name;
+      item.resolvedFactoryId = factoryMaster.factoryId;
       pr.updatedAt = new Date().toISOString();
       pushPricingRequestEvent(pr, user, 'PRICING_REQUEST_ITEM_FACTORY_SET', pr.status, pr.status);
       return delay({ pricingRequest: buildPricingRequestDetail(pr) });
@@ -14472,13 +15309,31 @@ export const api = {
       if (!['ACCEPTED', 'REJECTED', 'REVISION_REQUESTED'].includes(payload.outcome)) {
         fail('outcome ไม่ถูกต้อง', 400);
       }
+      // S3 round-3 review fix (NEW-3, 2026-09-23): mirrors CustomerQuotationService#recordOutcome's
+      // MINOR-2 fix EXACTLY (that method's own comment, :587) — a replay resolving to a DIFFERENT
+      // quotation than the one THIS call names is a genuine conflict, not a silent "success".
+      // Before this fix the mock returned the OTHER quotation's DTO with no outcome recorded on
+      // the one the caller meant to act on, and no error to notice it by — the header comment
+      // above claimed field-for-field parity "INCLUDING R8" while this 409 was missing.
       if (payload.clientRequestId) {
         const replay = mockCustomerQuotations.find(
           (q) => q.issuedById === user.id && q.outcomeClientRequestId === payload.clientRequestId);
-        if (replay) return delay({ quotation: replay });
+        if (replay) {
+          if (replay.id !== quotation.id) {
+            fail('clientRequestId ถูกใช้ไปแล้วกับใบเสนอราคาอื่น', 409);
+          }
+          return delay({ quotation: replay });
+        }
       }
       if (quotation.docStatus !== 'ISSUED') {
         fail(`บันทึกผลได้เฉพาะใบเสนอราคาที่ออกแล้วเท่านั้น (ปัจจุบัน: ${quotation.docStatus})`, 409);
+      }
+      const pr = findPricingRequestRaw(quotation.pricingRequestId);
+      // GLA-123 slice S3 (R8) — refused when ANY quotation on this TICKET is already ACCEPTED,
+      // the new PRICING_REQUEST-origin engine included. Mirrors dealQuotations.recordOutcome's
+      // identical check below.
+      if (payload.outcome === 'ACCEPTED' && mockHasAcceptedQuotationForTicket(pr.ticketId)) {
+        fail('ดีลนี้มีใบเสนอราคาที่ลูกค้ายอมรับแล้วฉบับหนึ่ง — ยอมรับซ้ำอีกฉบับไม่ได้ (R8)', 409);
       }
       const now = new Date().toISOString();
       quotation.docStatus = payload.outcome;
@@ -14488,7 +15343,6 @@ export const api = {
       if (payload.outcome === 'ACCEPTED') quotation.acceptedAt = now;
       if (payload.outcome === 'REJECTED') quotation.rejectedAt = now;
 
-      const pr = findPricingRequestRaw(quotation.pricingRequestId);
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
       const eventKind = payload.outcome === 'ACCEPTED' ? 'CUSTOMER_QUOTATION_ACCEPTED'
         : payload.outcome === 'REJECTED' ? 'CUSTOMER_QUOTATION_REJECTED' : 'CUSTOMER_QUOTATION_REVISION_REQUESTED';
@@ -14960,12 +15814,24 @@ export const api = {
       const ticket = db.tickets.find((t) => t.id === Number(ticketId));
       if (!ticket) fail('ไม่พบดีลนี้', 404);
       requireDealQuotationViewAccess(ticket, user);
-      // MINOR fix (Opus review, 2026-09-20) — mirrors DealQuotationRepository#findByTicket's own
-      // deliberate DEAL_DIRECT-only scope; see isDealDirectOrigin's own comment.
+      // GLA-123 S3 MAJOR 4 fix — DealQuotationRepository#findByTicket is now
+      // `origin IN ('DEAL_DIRECT','PRICING_REQUEST')` (this list backs the เอกสาร register's
+      // "does the deal have a quotation" answer). #search/#counts stay DEAL_DIRECT-only, so
+      // isDealDirectOrigin still governs those — this mock had kept the OLD scope here.
+      // A PRICING_REQUEST row carries the CEO's price/discount, so — mirroring
+      // DealQuotationService#listForTicket's per-row canViewPricingRequestOriginRow — it is dropped
+      // (not field-stripped) unless the viewer is the owning sales rep, sales_manager or ceo; the
+      // can_create_quotation grant does NOT bypass it (unlike a DEAL_DIRECT row).
+      // 2026-09-30 owner ruling (reverses M3 for account ONLY): account also sees them, but only inside its list
+      // scope -- requireDealQuotationViewAccess above already refused account outside it.
+      const canSeePricingRequestRows = user.role === 'account'
+        || (['sales', 'sales_manager', 'ceo'].includes(user.role)
+          && (user.role !== 'sales' || ticket.createdById === user.id));
       const items = mockDealQuotations
-        .filter((q) => q.ticketId === ticket.id && isDealDirectOrigin(q))
+        .filter((q) => q.ticketId === ticket.id && (isDealDirectOrigin(q) || canSeePricingRequestRows)
+          && (user.role !== 'account' || ACCOUNT_VISIBLE_DEAL_QUOTATION_STATUSES.includes(q.docStatus)))
         .sort((a, b) => b.id - a.id)
-        .map(buildDealQuotationDto);
+        .map((q) => forDealQuotationViewer(buildDealQuotationDto(q), user));
       return delay({ items });
     },
 
@@ -14980,8 +15846,11 @@ export const api = {
         (!params.status || q.docStatus === params.status)
         && (!params.needsRework || isDealQuotationNeedingRework(q))
       ));
-      const sorted = [...filtered].sort((a, b) => b.id - a.id);
-      return delay({ items: sorted.map(buildDealQuotationDto) });
+      const viewer = requireSession();
+      const sorted = [...filtered]
+        .filter((q) => viewer.role !== 'account' || ACCOUNT_VISIBLE_DEAL_QUOTATION_STATUSES.includes(q.docStatus))
+        .sort((a, b) => b.id - a.id);
+      return delay({ items: sorted.map((q) => forDealQuotationViewer(buildDealQuotationDto(q), viewer)) });
     },
 
     // Per-status counts for the tab labels (owner feedback F5, 2026-09-10). Computed from the
@@ -15022,7 +15891,7 @@ export const api = {
 
     async get(id) {
       const row = requireDealQuotationRowViewable(id);
-      return delay({ quotation: buildDealQuotationDto(row) });
+      return delay({ quotation: forDealQuotationViewer(buildDealQuotationDto(row), requireSession()) });
     },
 
     async create(ticketId, payload = {}) {
@@ -15030,6 +15899,31 @@ export const api = {
       const ticket = db.tickets.find((t) => t.id === Number(ticketId));
       if (!ticket) fail('ไม่พบดีลนี้', 404);
       requireDealQuotationWriteAccess(ticket, user);
+      // Mirrors DealQuotationService#create's recipient rule (slice 2 contract, SLICE-2-FLOW-A.md
+      // Part 1, S2-B1): required on a DEAL_DIRECT create (every row this method writes is one), and
+      // only DESIGNER/OWNER/BUYER — UNSPECIFIED is never accepted from a client. Validated BEFORE
+      // the N6 state check below: a malformed request is a 400 whatever the deal holds.
+      const recipientType = payload.recipientType ?? null;
+      if (recipientType == null || String(recipientType).trim() === '') fail('ต้องระบุผู้รับใบเสนอราคา', 400);
+      if (!quotationRecipientOption(recipientType)) fail(`ไม่รองรับผู้รับใบเสนอราคา '${recipientType}'`, 400);
+      // Mirrors DealQuotationService#create (slice 2 contract — one pricing route per deal, owner
+      // ruling 2026-09-30): the reverse of slice 1's DirectQuotationLocks. While the deal has a LIVE
+      // pricing request (any status but CANCELLED / SUPERSEDED — quotationMeta.hasLivePricingRequest,
+      // the one definition), a direct quotation may not be started. After the recipient 400 (a
+      // malformed request is a 400 whatever the deal holds), before N6.
+      if (hasLivePricingRequest(mockPricingRequests, ticket.id)) fail(LIVE_PRICING_REQUEST_BLOCK_MESSAGE, 409);
+      // Mirrors DealQuotationService#create's N6 guard (slice 2 contract, SLICE-2-FLOW-A.md Part 1,
+      // S2-B3; slice 1's DirectQuotationLocks predicate): a deal already holding a LIVE DEAL_DIRECT
+      // quotation gets a 409 whose body names it, so the client can offer "แก้ไขฉบับนั้น" /
+      // "สร้างฉบับแก้ไข" instead of minting a second base number.
+      const live = mockLiveDirectQuotation(ticket.id);
+      if (live) {
+        fail(
+          `ดีลนี้มีใบเสนอราคาตรงที่ใช้งานอยู่ (${live.number}) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่`,
+          409,
+          { liveQuotationId: live.id, number: live.number, docStatus: live.docStatus },
+        );
+      }
       const contactSnapshot = resolveDealQuotationContact(ticket, payload);
       const now = new Date().toISOString();
       const header = resolveDealQuotationV3Header(payload);
@@ -15091,10 +15985,19 @@ export const api = {
         // Item 2 (V180, "ไม่เติม “คุณ”", owner ruling 2026-09-16) — UNticked is the only behaviour
         // on CREATE, same device as DealQuotationService#create.
         omitContactHonorific: payload.omitContactHonorific === true,
+        // Owner-directed reversal of F2 (2026-09-26) — manual, optional ผู้สั่งซื้อ signature
+        // name; blank/omitted stores null (the dotted placeholder), mirrors
+        // DealQuotationService#create's blankToNull(request.orderedByName()).
+        orderedByName: blankToNullMock(payload.orderedByName),
+        // Slice 2 (S2-B1) — validated above; recipient_label carries the Thai role label for a
+        // direct row (a PRICING_REQUEST row's carries its คำขอราคา's own label — Round 8).
+        recipientType,
+        recipientLabel: quotationRecipientOption(recipientType).label,
         items,
         createdAt: now, updatedAt: now,
       };
       mockDealQuotations.push(row);
+      // No stage move (owner ruling 2026-09-30 — S2-B2 is out of slice 2; see autoAdvanceStage's note).
       return delay({ quotation: buildDealQuotationDto(row) });
     },
 
@@ -15168,6 +16071,8 @@ export const api = {
         origin: 'PRICING_REQUEST',
         pricingRequestId: pr.id,
         pricingDecisionId: decision.id,
+        recipientType: pr.recipientType,
+        recipientLabel: pr.recipientLabel ?? null,
         docStatus: 'DRAFT',
         revisionNo: 1,
         parentQuotationId: null,
@@ -15219,8 +16124,8 @@ export const api = {
         (q) => q.pricingRequestId === pr.id && q.origin === 'PRICING_REQUEST' && q.docStatus === 'DRAFT');
       if (!row) return delay({ quotation: null });
       const ticket = db.tickets.find((t) => t.id === row.ticketId);
-      requireDealQuotationViewAccess(ticket, user, row.origin);
-      return delay({ quotation: buildDealQuotationDto(row) });
+      requireDealQuotationViewAccess(ticket, user, row.origin, row.docStatus);
+      return delay({ quotation: forDealQuotationViewer(buildDealQuotationDto(row), user) });
     },
 
     // Full replace of `items` (plan: "PUT ... body = UpsertDealQuotationRequest (FULL replace of
@@ -15232,6 +16137,17 @@ export const api = {
       const ticket = db.tickets.find((t) => t.id === row.ticketId);
       requireDealQuotationWriteAccess(ticket, user, row.origin);
       requireDealQuotationEditable(row);
+      // Mirrors DealQuotationService#update's recipient rule (slice 2 contract, SLICE-2-FLOW-A.md
+      // Part 1, S2-B1): omitted/null = keep the stored value; a value is DRAFT-only (the editable
+      // check just above already 409s anything else) and REFUSED outright on a PRICING_REQUEST row,
+      // whose recipient belongs to its คำขอราคา. Checked before anything is computed or persisted.
+      const nextRecipientType = payload.recipientType ?? null;
+      if (nextRecipientType != null) {
+        if ((row.origin || 'DEAL_DIRECT') === 'PRICING_REQUEST') {
+          fail('ผู้รับของใบเสนอราคาจากคำขอราคามาจากคำขอราคา — แก้ที่คำขอราคาต้นทาง', 409);
+        }
+        if (!quotationRecipientOption(nextRecipientType)) fail(`ไม่รองรับผู้รับใบเสนอราคา '${nextRecipientType}'`, 400);
+      }
       // GLA-123 slice S1 (owner ruling 2026-09-19) — a PRICING_REQUEST-origin quotation's items
       // come ENTIRELY from createFromPricingRequest; adding an extra row (of any line type) is
       // refused for this origin in S1 — mirrors DealQuotationService#update's identical guard.
@@ -15327,12 +16243,23 @@ export const api = {
         // above, which is out of scope here -- so "" and whitespace-only both clear the field
         // exactly as they do against the real backend.
         projectName: blankToNullMock(payload.projectName),
+        // Owner-directed reversal of F2 (2026-09-26) — same #M7 DIRECT-assignment discipline as
+        // projectName just above: the editor always sends its current value, so blankToNullMock
+        // genuinely clears it back to the dotted placeholder, mirroring
+        // DealQuotationService#update's blankToNull(request.orderedByName()).
+        orderedByName: blankToNullMock(payload.orderedByName),
         items,
         // M4(c) fix (Opus review, 2026-09-20) — mirrors
         // DealQuotationRepository#incrementItemsRemovedFromCeo's GREATEST(0, ...) floor.
         itemsRemovedFromCeoCount: Math.max(0, (row.itemsRemovedFromCeoCount ?? 0) + droppedLinkedCount),
         updatedAt: new Date().toISOString(),
       });
+      // Slice 2 (S2-B1): a DEAL_DIRECT draft's recipient, when sent. It moves nothing on the deal
+      // (owner ruling 2026-09-30 — the recipient -> stage rule, S2-B2, is out of slice 2).
+      if (nextRecipientType != null) {
+        row.recipientType = nextRecipientType;
+        row.recipientLabel = quotationRecipientOption(nextRecipientType).label;
+      }
       return delay({ quotation: buildDealQuotationDto(row) });
     },
 
@@ -15430,14 +16357,21 @@ export const api = {
       if (!canTransitionDealQuotation(row.docStatus, 'PENDING_APPROVAL')) {
         fail(`ส่งขออนุมัติไม่ได้ในสถานะ '${row.docStatus}'`, 409);
       }
-      // F2: submit REQUIRES a ผู้สั่งซื้อ too, not just create/update -- a pre-V167 row can carry
-      // none, and that document cannot go for approval with an empty signature slot.
-      if (row.contactId == null) fail('กรุณาระบุผู้สั่งซื้อ', 400);
+      // ⚠️ Owner-directed reversal of V167/F2 (2026-09-26): submit used to REQUIRE a ผู้สั่งซื้อ too
+      // ("กรุณาระบุผู้สั่งซื้อ" -- a pre-V167 row could carry none, and that document could not go
+      // for approval with an empty signature slot). That refusal is gone, mirroring
+      // DealQuotationService#submit: a row with no contact at all now submits successfully.
       // Item 4 (V181, "ไม่รับมัดจำ", owner ruling 2026-09-16): a zero-deposit document must name a
       // payment term before an approver ever sees it -- create/update allow a DRAFT with none
       // chosen yet. Mirrors DealQuotationService#submit exactly.
       if (row.depositPercent === 0 && !row.fullPaymentTerm) {
         fail('กรุณาเลือกเงื่อนไขการชำระเงินเต็มจำนวน', 400);
+      }
+      // Wording-scan fix 6 (2026-09-17) — the submit-time half of the credit-days rule, right
+      // after the fullPaymentTerm check above, the exact "create/update permissive, submit strict"
+      // split. Mirrors DealQuotationService#submit's new gate.
+      if (row.remainderMode === 'CREDIT' && row.creditDays == null) {
+        fail('กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน', 400);
       }
       // V178: time moves on after a DATE-mode draft is saved -- create/update already refuse a
       // date before the quotation's OWN date, so this is the re-check against TODAY, the last
@@ -15584,6 +16518,102 @@ export const api = {
       return delay({ quotation: buildDealQuotationDto(row) });
     },
 
+    // GLA-123 slice S3 (R9 — customer outcome). Mirrors recordCustomerQuotationOutcome's own
+    // shape field-for-field, INCLUDING R8 below — the two are kept in sync by hand in this mock
+    // (mockHasAcceptedQuotationForTicket checks BOTH origin arrays), unlike the real backend
+    // where one shared sales.quotation table makes it automatic. AUTHZ NOTE (mirrors the real
+    // DealQuotationService#recordOutcome's own comment): deliberately NARROWER than this origin's
+    // own EDIT_ROLES (sales_manager may edit/submit/cancel ANY deal) — outcome-recording mirrors
+    // the LEGACY gate instead (sales, ticket owner ONLY, no sales_manager carve-out), since that
+    // is the only precedent this action has. Authorization is NOT authoritative here (CLAUDE.md);
+    // verify against the real Java service.
+    async recordOutcome(id, payload = {}) {
+      // MINOR fix (Opus review, 2026-09-23): reordered to match
+      // DealQuotationService#recordOutcome's ACTUAL precedence — outcome-value checks
+      // (EXPIRED/RECORDABLE_OUTCOMES) run BEFORE the quotation is even looked up there, and the
+      // origin check runs BEFORE the role/owner authz check (requireOutcomeAccess). Session
+      // existence is checked FIRST regardless (requireSession, mirroring Spring Security's
+      // default-deny filter chain, which rejects an unauthenticated request before ANY controller
+      // code runs — that part of the ordering was never backend-accurate to skip). This used to
+      // check role+existence+origin+owner, THEN outcome value — a different error for the SAME
+      // malformed request than the real backend gives (e.g. a bad outcome value on a missing id
+      // 400'd here but 404's on the real service). Authorization is NOT authoritative here
+      // regardless of ordering (CLAUDE.md) — this fix is about matching observable error
+      // PRECEDENCE for manual/demo testing, not a claim of verified authz.
+      const user = requireSession();
+      if (payload.outcome === 'EXPIRED') {
+        fail('EXPIRED ไม่สามารถบันทึกผ่าน API นี้ได้ — ระบบตั้งเป็นอัตโนมัติเท่านั้น', 400);
+      }
+      if (!['ACCEPTED', 'REJECTED', 'REVISION_REQUESTED'].includes(payload.outcome)) {
+        fail('outcome ไม่ถูกต้อง', 400);
+      }
+      const row = mockDealQuotations.find((q) => q.id === Number(id));
+      if (!row) fail('ไม่พบใบเสนอราคานี้', 404);
+      if ((row.origin || 'DEAL_DIRECT') !== 'PRICING_REQUEST') {
+        fail('ใบเสนอราคาฉบับนี้ไม่ได้อยู่ในสายงานคำขอราคา จึงบันทึกผลลูกค้าด้วย endpoint นี้ไม่ได้', 409);
+      }
+      if (user.role !== 'sales') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const ticket = db.tickets.find((t) => t.id === row.ticketId);
+      if (ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (payload.clientRequestId) {
+        // MAJOR 6 fix (Opus review, 2026-09-23): this used to compare q.createdById ===
+        // user.employeeId — always-true, not just wrong-field, because the seeded sales persona's
+        // own employeeId is null and every row here defaults createdById to
+        // `user.employeeId ?? null`, so `null === null` matched EVERY row regardless of actor or
+        // ticket. row.salesRepId is `ticket.createdById` (kept in the LOGIN-ACCOUNT id space, same
+        // space as `user.id` — see #create's own comment on why), matching the SAME space the
+        // legacy sibling's `q.issuedById === user.id` replay check already uses correctly. This
+        // also happens to be the exact identity #requireOutcomeAccess-equivalent gating above
+        // already required (only the ticket's owning rep reaches this far), so scoping the replay
+        // to it is not just field-correct but semantically the right actor to scope by.
+        // S3 round-3 review fix (NEW-3, 2026-09-23): mirrors DealQuotationService#recordOutcome's
+        // own MINOR-2 fix (:1642) — a replay resolving to a DIFFERENT quotation than the one this
+        // call names is a genuine conflict, not a silent "success". Before this fix the mock
+        // returned the OTHER quotation's DTO with no outcome recorded on the one the caller meant
+        // to act on, and no error to notice it by — the header comment above claiming
+        // field-for-field parity "INCLUDING R8" was not true of this guard.
+        const replay = mockDealQuotations.find(
+          (q) => q.origin === 'PRICING_REQUEST' && q.salesRepId === user.id
+            && q.outcomeClientRequestId === payload.clientRequestId);
+        if (replay) {
+          if (replay.id !== row.id) {
+            fail('clientRequestId ถูกใช้ไปแล้วกับใบเสนอราคาอื่น', 409);
+          }
+          return delay({ quotation: buildDealQuotationDto(replay) });
+        }
+      }
+      if (row.docStatus !== 'ISSUED') {
+        fail(`บันทึกผลได้เฉพาะใบเสนอราคาที่ออกแล้วเท่านั้น (ปัจจุบัน: ${row.docStatus})`, 409);
+      }
+      if (payload.outcome === 'ACCEPTED' && mockHasAcceptedQuotationForTicket(row.ticketId)) {
+        fail('ดีลนี้มีใบเสนอราคาที่ลูกค้ายอมรับแล้วฉบับหนึ่ง — ยอมรับซ้ำอีกฉบับไม่ได้ (R8)', 409);
+      }
+      const now = new Date().toISOString();
+      row.docStatus = payload.outcome;
+      row.outcomeNote = payload.customerNote ?? null;
+      row.outcomeRecordedAt = now;
+      row.outcomeClientRequestId = payload.clientRequestId ?? null;
+      if (payload.outcome === 'ACCEPTED') row.acceptedAt = now;
+      if (payload.outcome === 'REJECTED') row.rejectedAt = now;
+      row.updatedAt = now;
+
+      const pr = findPricingRequestRaw(row.pricingRequestId);
+      const eventKind = payload.outcome === 'ACCEPTED' ? 'CUSTOMER_QUOTATION_ACCEPTED'
+        : payload.outcome === 'REJECTED' ? 'CUSTOMER_QUOTATION_REJECTED' : 'CUSTOMER_QUOTATION_REVISION_REQUESTED';
+      const label = payload.outcome === 'ACCEPTED' ? 'ลูกค้ายอมรับแล้ว'
+        : payload.outcome === 'REJECTED' ? 'ถูกลูกค้าปฏิเสธ' : 'ลูกค้าขอแก้ไข';
+      pushPricingRequestEvent(pr, user, eventKind, null, null,
+        `บันทึกผลใบเสนอราคาลูกค้า ${row.number}: ${payload.outcome}${payload.customerNote ? ` — ${payload.customerNote}` : ''}`);
+      const ceoUsers = db.users.filter((u) => u.role === 'ceo');
+      ceoUsers.forEach((ceo) => addNotification(ceo.id, pr.ticketId, ticket?.code, eventKind,
+        `ใบเสนอราคาลูกค้า ${row.number} ${label}`));
+
+      if (payload.outcome === 'ACCEPTED' && pr.status === 'QUOTATION_ISSUED') {
+        pr.status = 'QUOTATION_ACCEPTED';
+      }
+      return delay({ quotation: buildDealQuotationDto(row) });
+    },
+
     // "APPROVED -> (revise) -> new DRAFT child (revision_no+1, number `{base}-{n}`, everything
     // copied)". The parent is untouched here -- it only becomes SUPERSEDED once THIS child is
     // itself approved (see approve() above).
@@ -15629,6 +16659,78 @@ export const api = {
       const clone = mintDealQuotationReorder(source, user);
       mockDealQuotations.push(clone);
       return delay({ quotation: buildDealQuotationDto(clone) });
+    },
+
+    // "ยืนยันคำสั่งซื้อ" from an APPROVED direct quotation (GLA-136's promote endpoint, re-gated by
+    // slice 1 — 2ed3468e). Mirrors DealQuotationService#confirmOrderFromDirectQuotation: precondition
+    // ORDER 404 -> authz 403 -> origin 409 -> idempotent replay (a DEAL_PROMOTED_FROM_QUOTATION event
+    // already on the deal) -> APPROVED 409 -> ACTIVE 409 -> draft 409, and the same effects (draft ->
+    // quotation_issued, the quotation_only flag cleared best-effort — provenance only, an ordinary deal
+    // is already false — ticket items replaced by the quotation's goods lines, CUSTOMER_CONFIRMED +
+    // ORDER_RECEIVED). Slice 1 DROPPED the quotation_only precondition: an ordinary deal confirms too.
+    // hrApi still names it promoteToDeal in this tree (slice 1's frontend renames it). Authorization
+    // here is NOT authoritative (CLAUDE.md) — DealQuotationConfirmOrderIntegrationTest is.
+    async promoteToDeal(id) {
+      const user = requireSession();
+      const row = mockDealQuotations.find((q) => q.id === Number(id));
+      if (!row) fail('ไม่พบใบเสนอราคานี้', 404);
+      const ticket = findTicketRaw(row.ticketId);
+      // DealQuotationService#requireEditAccess (the DEAL_DIRECT audience), BEFORE any 409.
+      requireDealQuotationWriteAccess(ticket, user, 'DEAL_DIRECT');
+      if ((row.origin || 'DEAL_DIRECT') !== 'DEAL_DIRECT') {
+        fail('ยืนยันคำสั่งซื้อจากหน้านี้ได้เฉพาะใบเสนอราคาตรง (ไม่ผ่านคำขอราคา) เท่านั้น', 409);
+      }
+      const result = () => delay({
+        result: { ticketId: ticket.id, ticket: buildTicketDetail(ticket).summary, quotation: buildDealQuotationDto(row) },
+      });
+      if (ticket.events.some((e) => e.kind === 'DEAL_PROMOTED_FROM_QUOTATION')) return result();
+      if (row.docStatus !== 'APPROVED') {
+        fail(`ยืนยันคำสั่งซื้อได้เฉพาะใบเสนอราคาที่อนุมัติแล้วเท่านั้น (ปัจจุบัน: ${row.docStatus})`, 409);
+      }
+      if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') {
+        fail(`ดีลไม่ได้อยู่ในสถานะ ACTIVE (${ticket.lifecycle}) จึงยืนยันคำสั่งซื้อไม่ได้`, 409);
+      }
+      if (ticket.status !== 'draft') {
+        fail(`ยืนยันคำสั่งซื้อไม่ได้ — สถานะดีล (${ticket.status}) ผ่านขั้นออกใบเสนอราคาไปแล้ว`, 409);
+      }
+      // The backend runs this guard LAST and rolls the whole transaction back when it fails; the
+      // mock has no transaction, so it checks it up front to leave the same (untouched) state.
+      if (ticket.paymentStatus != null && ticket.paymentStatus !== 'CUSTOMER_CONFIRMED') {
+        fail('ขั้นตอนการรับชำระเงินผ่านสถานะ CUSTOMER_CONFIRMED ไปแล้ว', 409);
+      }
+      const now = new Date().toISOString();
+      ticket.quotationOnly = false;
+      ticket.status = 'quotation_issued';
+      ticket.updatedAt = now;
+      pushEvent(ticket, user, 'DEAL_PROMOTED_FROM_QUOTATION', 'draft', 'quotation_issued',
+        `ยืนยันคำสั่งซื้อจากใบเสนอราคา ${row.number}`);
+      // DealQuotationService#ticketItemsFromQuotation: goods lines only (no ADJUSTMENT, no
+      // non-positive quantity), no pricing field copied, qty_sqm from the same piece count.
+      ticket.items = (row.items ?? [])
+        .filter((it) => (it.lineType ?? 'TILE') !== 'ADJUSTMENT' && Number(it.quantity) > 0)
+        .map((it, i) => {
+          const tile = (it.lineType ?? 'TILE') !== 'PLAIN';
+          const sqmPerPiece = Number(it.sqmPerPiece);
+          return {
+            id: ticket.id * 100 + i, ticketId: ticket.id,
+            brand: [it.brand, it.model, it.descriptionLine, it.description].find((v) => v && String(v).trim())
+              ?? 'รายการจากใบเสนอราคา',
+            model: it.model ?? null, color: it.color ?? null, texture: it.texture ?? null,
+            size: it.sizeText ?? it.size ?? null, factory: null,
+            qty: Number(it.quantity),
+            qtySqm: tile && sqmPerPiece > 0 ? Math.round(Number(it.quantity) * sqmPerPiece * 100) / 100 : null,
+            unitBasis: 'PIECE', rawUnit: it.unit ?? null,
+            proposedPrice: null, approvedPrice: null, currency: 'THB', sortOrder: i,
+            catalogPriceId: null, catalogProductCode: null, sourcedFromStock: false, stockSalePrice: null,
+          };
+        });
+      // TicketService#confirmCustomerForPromotedQuotation -- the confirmCustomer body.
+      if (ticket.paymentStatus == null) {
+        ticket.paymentStatus = 'CUSTOMER_CONFIRMED';
+        pushEvent(ticket, user, 'CUSTOMER_CONFIRMED', ticket.status, ticket.status, null);
+      }
+      autoAdvanceStage(ticket, 'ORDER_RECEIVED', user);
+      return result();
     },
 
     async cancel(id, payload = {}) {

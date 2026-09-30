@@ -142,6 +142,44 @@ public class ResendMailer implements Mailer {
         sendWithRetry(request.build(), to);
     }
 
+    @Override
+    public void send(OutgoingEmail email) {
+        CreateEmailOptions.Builder request = CreateEmailOptions.builder()
+            .from(fromAddress)
+            .to(email.to())
+            .subject(email.subject())
+            .html(email.htmlBody())
+            .text(email.textBody());
+        if (!email.cc().isEmpty()) {
+            request.cc(email.cc());
+        }
+        // Inline images and file attachments are the same Resend concept - an Attachment; an inline
+        // one simply carries a contentId the HTML references via cid:<contentId> (see sendHtml). Merge
+        // both into one list so a leave-submission email can carry the brand logo inline AND the ใบลา
+        // PDF as a real attachment in the same message.
+        List<com.resend.services.emails.model.Attachment> resendAttachments = new java.util.ArrayList<>();
+        for (InlineImage image : email.inlineImages()) {
+            resendAttachments.add(com.resend.services.emails.model.Attachment.builder()
+                .fileName(image.filename())
+                .content(Base64.getEncoder().encodeToString(image.bytes()))
+                .contentType(image.mimeType() != null ? image.mimeType() : "application/octet-stream")
+                .contentId(image.contentId())
+                .build());
+        }
+        for (Attachment attachment : email.attachments()) {
+            resendAttachments.add(com.resend.services.emails.model.Attachment.builder()
+                .fileName(attachment.filename())
+                .content(Base64.getEncoder().encodeToString(attachment.bytes()))
+                .contentType(attachment.mimeType() != null ? attachment.mimeType() : "application/pdf")
+                .build());
+        }
+        if (!resendAttachments.isEmpty()) {
+            request.attachments(resendAttachments);
+        }
+        applyReplyTo(request);
+        sendWithRetry(request.build(), email.to());
+    }
+
     /** Sets Reply-To on the request being built, or leaves it unset when {@code app.mail.reply-to}
      * is blank (the default - no address is invented). Resend, like any RFC 5322 client, treats a
      * missing Reply-To as "replies go to From", so omitting the header is a safe, valid default. */

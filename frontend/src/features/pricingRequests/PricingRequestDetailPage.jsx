@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { hasPermission } from '../../app/permissions.js';
@@ -40,6 +40,7 @@ import {
   canRecordCustomerQuotationOutcome,
   canSeePricingDecisionSalesView,
   canSeeRawPricingDecision,
+  canPickupPricingRequest,
   canStartCeoReview,
   canViewCustomerQuotation,
   isCustomerQuotationEditable,
@@ -53,6 +54,10 @@ import { useUnitBasisCatalog } from './unitBasisCatalog.js';
 import { buttonVariants } from '../../components/common/Button.jsx';
 import { cn } from '../../utils/cn.js';
 import { piecesPerSqmFromSqmPerPiece, PRICE_MODE_OPTIONS } from '../quotations/quotationMeta.js';
+import { SearchableCombobox } from '../../components/common/SearchableCombobox.jsx';
+// B6 (GLA-135): reuses the catalog page's own add-factory dialog rather than a second, drifting
+// copy of the same five fields + validation — see ImportFactoryPicker's own comment below.
+import { FactoryFormModal } from '../catalog/PriceImportPage.jsx';
 
 // V152 (V109 engine wiring), owner ruling 2026-08-16: the CEO's per-item duty product_type
 // override (LandedCostCalculator defaults every item to TILE — see PricingFormulaEngine's own
@@ -362,6 +367,100 @@ function groupFactoryQuotesByFactory(factoryQuotes) {
 const FACTORY_ITEM_GRID = 'md:grid-cols-[minmax(150px,1.6fr)_minmax(120px,1.1fr)_100px_170px_150px] md:min-w-[720px]';
 
 /**
+ * Import's factory-routing control for ONE blank line (rendered only when `canSetItemFactory &&
+ * !factoryName` — see the item-card call site). B6 (GLA-135, owner ruling): a typed factory name
+ * that did not exactly match a `price_catalog.factories` master row used to save with
+ * `resolved_factory_id` NULL, dead-ending the downstream factory-email + CEO landed-cost lookups
+ * that key on it — the reported "brand-new factory → factory config error". Sales/import now pick
+ * from EXISTING factories only, via {@link SearchableCombobox} over the real master list
+ * (`factories`, from `GET /api/price-import/factories`) rather than a free-text `<input>`.
+ *
+ * Import (the only role that reaches this control) may still add a genuinely new factory
+ * IN-FLOW — the owner ruling is that import/CEO are the ones who may add one, not that this page
+ * can never need one it doesn't already have — via the "เพิ่มโรงงานใหม่" affordance, which reuses
+ * {@link FactoryFormModal} (the catalog PriceImportPage's own add/edit form: name, country,
+ * countryOther, currency, unit, email) rather than a second, drifting copy of the same fields and
+ * validation. `Modal` is `position: fixed` + focus-trapped (see Modal.jsx), so this dialog is
+ * fully reachable regardless of the item card's own layout — never a clipped absolute dropdown.
+ */
+function ImportFactoryPicker({
+  itemId, factories, countries, loading, loadFailed, value, onChangeValue, onSave, saving, onFactoryAdded,
+}) {
+  const [addOpen, setAddOpen] = useState(false);
+  const [emptyWarned, setEmptyWarned] = useState(false);
+  // QA BUG-20: hard lock against a double-submit. `saving` is the mutation's isPending, which only
+  // flips on the NEXT render — a fast second click (or Enter) can fire between the first mutate()
+  // and that re-render, and setItemFactory answers the second call with a confusing 409 ("ระบุ
+  // โรงงานไว้แล้ว") even though the save succeeded. This ref closes that window synchronously; it is
+  // released once `saving` returns to false (the mutation settled, success or error).
+  const inFlight = useRef(false);
+  useEffect(() => { if (!saving) inFlight.current = false; }, [saving]);
+  const options = useMemo(
+    () => factories.map((f) => ({ code: String(f.factoryId), nameTh: f.name })),
+    [factories],
+  );
+
+  function handleSubmit(event) {
+    if (saving || inFlight.current) return; // already submitting — swallow the repeat click/Enter
+    if (!value) { setEmptyWarned(true); return; } // QA BUG-20: an empty save now says why
+    setEmptyWarned(false);
+    inFlight.current = true;
+    onSave(event);
+  }
+
+  return (
+    <>
+      <SafeForm className="mt-2 flex flex-wrap items-end gap-2" onSubmit={handleSubmit}>
+        <div className="w-[min(320px,100%)]">
+          <FormField label="ระบุโรงงาน" htmlFor={`pcr-item-factory-${itemId}`}>
+            <SearchableCombobox
+              id={`pcr-item-factory-${itemId}`}
+              label="โรงงาน"
+              value={value}
+              options={options}
+              loading={loading}
+              disabled={saving}
+              placeholder={loading ? 'กำลังโหลดรายชื่อโรงงาน…' : 'พิมพ์ค้นหาโรงงาน…'}
+              onChange={(code) => { setEmptyWarned(false); onChangeValue(code); }}
+            />
+          </FormField>
+          {/* Distinguishes "the fetch failed" from "the roster really is empty" — SearchableCombobox's
+              own empty state (ไม่พบข้อมูล) reads as the latter, which would be a misleading dead end
+              for the one control that unblocks the whole request. */}
+          {loadFailed ? (
+            <p className="m-0 mt-1 text-xs font-bold text-danger">โหลดรายชื่อโรงงานไม่สำเร็จ — ลองรีเฟรชหน้านี้</p>
+          ) : null}
+          {emptyWarned ? (
+            <p className="m-0 mt-1 text-xs font-bold text-warning-dark">เลือกโรงงานจากรายการก่อนกดบันทึก</p>
+          ) : null}
+        </div>
+        {/* QA BUG-20: NOT disabled on an empty value — a disabled button is exactly the "no
+            feedback" the report flagged (nothing happens, no reason given). It stays clickable so
+            handleSubmit can say เลือกโรงงานก่อน; `saving` still blocks the in-flight repeat. */}
+        <Button type="submit" variant="secondary" disabled={saving}>
+          {saving ? 'กำลังบันทึก…' : 'บันทึกโรงงาน'}
+        </Button>
+        <Button type="button" variant="text" onClick={() => setAddOpen(true)} disabled={saving}>
+          <Icon name="plus" size={13} />
+          เพิ่มโรงงานใหม่
+        </Button>
+      </SafeForm>
+      {addOpen ? (
+        <FactoryFormModal
+          factory={null}
+          countries={countries}
+          onClose={() => setAddOpen(false)}
+          onSaved={(saved) => {
+            onFactoryAdded(saved);
+            setAddOpen(false);
+          }}
+        />
+      ) : null}
+    </>
+  );
+}
+
+/**
  * The factory-quote email composer, relocated into a modal behind each factory group's header
  * "ร่างอีเมล" button (owner-supplied mockup, 2026-08-16 — the header collapses this to one action;
  * the always-visible primary surface is the item-price grid, not email mechanics).
@@ -385,9 +484,16 @@ const FACTORY_ITEM_GRID = 'md:grid-cols-[minmax(150px,1.6fr)_minmax(120px,1.1fr)
  * about two `useDialogFocus` traps active together, and it matches how a user's attention actually
  * moves: finish the draft, then confirm the send.
  */
-function FactoryEmailDraftModal({ quote, draft, onChangeDraft, onClose, onSave, savePending, onCopy, onRequestSend }) {
-  const canOfferSendActions = quote.status === 'DRAFT';
-  const canEditFields = quote.status === 'DRAFT';
+function FactoryEmailDraftModal({ quote, draft, onChangeDraft, onClose, onSave, savePending, onCopy, onRequestSend, inSendWindow }) {
+  // Opus review of #1062 (2026-09-28): these two used to read only the QUOTE's own status — the
+  // exact gap the price grid had before that review's fix. In the state that fix now explicitly
+  // supports (request outside FactoryQuoteService.send's DRAFT_STATUSES window, quote still DRAFT),
+  // the group header already shows "ดูอีเมล" (view-only) for this same reason, yet this modal would
+  // still offer "บันทึกร่างอีเมล" (→ updateDraft, guarded by the identical DRAFT_STATUSES → 409) and
+  // "ส่งแล้ว" (→ send → 409). Both must also require `inSendWindow` (passed in from the page, which
+  // hoists the same value the grid uses — see PricingRequestDetailPage's own comment on it).
+  const canOfferSendActions = quote.status === 'DRAFT' && inSendWindow;
+  const canEditFields = quote.status === 'DRAFT' && inSendWindow;
 
   return (
     <Modal
@@ -403,12 +509,13 @@ function FactoryEmailDraftModal({ quote, draft, onChangeDraft, onClose, onSave, 
               บันทึกร่างอีเมล
             </Button>
           ) : null}
-          {canOfferSendActions ? (
-            <Button type="button" variant="primary" data-testid="pcr-copy-factory-email" onClick={() => onCopy(draft)}>
-              <Icon name="clipboard" size={14} />
-              คัดลอกข้อความ
-            </Button>
-          ) : null}
+          {/* Copy stays available after sending too — viewing + re-copying the sent RFQ is the
+              whole point of reopening it read-only (owner ask 2026-09-24). Only the "ส่งแล้ว"
+              transition is DRAFT-only. */}
+          <Button type="button" variant="primary" data-testid="pcr-copy-factory-email" onClick={() => onCopy(draft)}>
+            <Icon name="clipboard" size={14} />
+            คัดลอกข้อความ
+          </Button>
           {canOfferSendActions ? (
             <Button type="button" variant="success" data-testid="pcr-mark-factory-email-sent" onClick={onRequestSend}>
               ส่งแล้ว
@@ -728,6 +835,24 @@ export function PricingRequestDetailPage({ user, showToast }) {
     enabled: Number.isFinite(pricingRequestId) && canSeeRaw(user),
   });
 
+  // B6 (GLA-135): the factory master list + country roster feeding ImportFactoryPicker below.
+  // Gated on the ROLE alone (isImport(user), no summary/status dependency) rather than the fuller
+  // canSetItemFactory (computed further down, after `summary` resolves) — an import user should
+  // not wait on the detail fetch before this starts, and the picker itself is never rendered for
+  // anyone else regardless. `countries()` is read-widened to import already (PriceImportService).
+  const factoriesQuery = useQuery({
+    queryKey: queryKeys.priceImportFactories(),
+    queryFn: () => api.priceImport.factories(),
+    enabled: isImport(user),
+    staleTime: 60 * 1000,
+  });
+  const countriesQuery = useQuery({
+    queryKey: queryKeys.priceImportCountries(),
+    queryFn: () => api.priceImport.countries(),
+    enabled: isImport(user),
+    staleTime: 5 * 60 * 1000,
+  });
+
   // The สกุลเงิน select on the ราคาโรงงาน per-factory control row (owner-supplied mockup,
   // 2026-08-16): options come from the real FX rate table Import/CEO already read elsewhere
   // (CeoSettingsPage's own fxRates query, same queryKeys.fxRates()/api.fxRates.list()), not a
@@ -820,6 +945,15 @@ export function PricingRequestDetailPage({ user, showToast }) {
     queryClient.invalidateQueries({ queryKey: queryKeys.pricingDecisions(pricingRequestId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.pricingDecisionSalesView(pricingRequestId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.customerQuotations(pricingRequestId) });
+    // GLA-123 S3 review round 5 fix (NEW-A): the NEW engine's counterpart of the invalidation
+    // above. dealQuotationForPrQuery backs both the outcome-recording panel AND the recreate gate
+    // (['EXPIRED','REVISION_REQUESTED','REJECTED'].includes(dealQuotationForPr?.docStatus)) further
+    // down this file. ['pricingRequests','detail',id] does NOT prefix-match
+    // ['pricingRequests','dealQuotationForPricingRequest',id] — these are siblings, not a parent/
+    // child pair — so without this line the outcome mutation's success toast fires but the DTO
+    // backing the recreate button stays stale until a manual reload or the 30s staleTime lapses
+    // (api/queryClient.js). Nothing else in the app invalidates this key.
+    queryClient.invalidateQueries({ queryKey: queryKeys.dealQuotationForPricingRequest(pricingRequestId) });
     // discountApprovals is keyed by quotation id, not pricingRequestId — invalidate the whole
     // family with the shared 'discountApprovals' prefix rather than needing the current
     // quotation's id here too (this function is called from mutations that may have just
@@ -854,10 +988,16 @@ export function PricingRequestDetailPage({ user, showToast }) {
     });
   }
 
+  // B6 (GLA-135): payload is now { factoryId } — a real price_catalog.factories row's id, picked
+  // from ImportFactoryPicker's SearchableCombobox — not a free-typed name.
   const setItemFactory = useActionMutation(
-    ({ itemId, factory }) => api.pricingRequests.setItemFactory(pricingRequestId, itemId, { factory }),
+    ({ itemId, factoryId }) => api.pricingRequests.setItemFactory(pricingRequestId, itemId, { factoryId }),
     'บันทึกโรงงานแล้ว',
   );
+  // รับเรื่อง (pickup) from the request page itself — a SUBMITTED request landed here (e.g. from a
+  // notification link) with no way to claim it except going back to the คิวขอราคา queue. Same
+  // endpoint + canPickupPricingRequest gate as the queue and the deal panel; server is the authority.
+  const pickupRequest = useActionMutation(() => api.pricingRequests.pickup(pricingRequestId), 'รับเรื่องแล้ว');
   const generateDrafts = useActionMutation(() => api.pricingRequests.generateFactoryEmailDrafts(pricingRequestId), 'สร้างร่างอีเมลแล้ว');
   const updateQuote = useActionMutation(({ quote, draft }) => api.pricingRequests.updateFactoryQuote(quote.id, draft), 'บันทึกร่างอีเมลแล้ว');
   // Manual-RFQ redesign: records that Import already sent this email themselves — see
@@ -1054,6 +1194,12 @@ export function PricingRequestDetailPage({ user, showToast }) {
         clearSpecialPriceSqm: Boolean(clears.clearSpecialPriceSqm),
         directNetPrice: clears.clearDirectNetPrice ? null : cleanNumber(draft.directNetPrice),
         clearDirectNetPrice: Boolean(clears.clearDirectNetPrice),
+        // QA fix (2026-09-28): the backend's UpdatePricingDecisionItemRequest declares
+        // clearSellingPriceOverride as a primitive boolean. Omitting it here fails Jackson
+        // deserialization and the whole request 400s with a bare "คำขอไม่ถูกต้อง" -- every
+        // price-mode save on this page was broken. sellingPriceOverride itself stays untouched
+        // (this mutation never sets/clears it), so false ("no change") is always correct.
+        clearSellingPriceOverride: false,
       }],
     }),
     'บันทึกราคาแล้ว',
@@ -1204,6 +1350,26 @@ export function PricingRequestDetailPage({ user, showToast }) {
     },
     onError: (error) => showToast?.('error', error.message || 'ดำเนินการไม่สำเร็จ'),
   });
+  // GLA-123 slice S3 (R9) — the SAME outcome action as recordQuotationOutcome above, on the
+  // NEW-engine (PRICING_REQUEST-origin) quotation instead of the legacy one. Shares
+  // outcomeNote/outcomeClientRequestId state with recordQuotationOutcome: M2 already guarantees a
+  // pricing request can never carry a live quotation on BOTH engines at once, so only one of the
+  // two outcome UI blocks below is ever rendered for a given request, and the two mutations never
+  // race over the same state.
+  const recordDealQuotationOutcome = useMutation({
+    mutationFn: ({ quotation, outcome }) => api.dealQuotations.recordOutcome(quotation.id, {
+      outcome,
+      customerNote: outcomeNote || null,
+      clientRequestId: outcomeClientRequestId,
+    }),
+    onSuccess: () => {
+      setOutcomeClientRequestId(generateClientRequestId());
+      setOutcomeNote('');
+      showToast?.('success', 'บันทึกผลใบเสนอราคาแล้ว');
+      invalidate();
+    },
+    onError: (error) => showToast?.('error', error.message || 'ดำเนินการไม่สำเร็จ'),
+  });
   // Step 6: Deposit, Payment, and Order Confirmation.
   const confirmOrder = useMutation({
     mutationFn: () => api.pricingRequests.confirmOrder(pricingRequestId, {
@@ -1266,8 +1432,10 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const request = detailQuery.data;
   const summary = request?.summary;
   const status = pricingRequestStatusLabel(summary?.status);
-  // itemId -> the factory name Import is typing for that line. Same shape as `responseDrafts`
-  // above: a key exists only once a change handler has written to it.
+  // itemId -> the factoryId Import has picked (as a string, matching SearchableCombobox's own
+  // `code` convention) for that line. B6 (GLA-135): this used to hold the free-typed factory
+  // NAME; it holds an id now, resolved server-side to the canonical master name on save. Same
+  // shape as `responseDrafts` above: a key exists only once a change handler has written to it.
   const [factoryDrafts, setFactoryDrafts] = useState({});
   // pricingRequestItemId -> the sales-side item it came from. Feeds both defaultResponseItems'
   // autofill and the read-only "what Sales asked for" echo on each response row. Declared here
@@ -1290,11 +1458,58 @@ export function PricingRequestDetailPage({ user, showToast }) {
   // decision — PricingRequestService#setItemFactory is — just whether to offer an input that would
   // otherwise be refused.
   const canSetItemFactory = isImport(user) && FACTORY_ROUTING_STATUSES.includes(summary?.status);
+  // Whether FactoryQuoteService.send (and updateDraft, guarded by the same DRAFT_STATUSES) would
+  // still accept an action against this request — i.e. whether the request itself, not any one
+  // quote, sits inside FACTORY_ROUTING_STATUSES (mirrors FactoryQuoteService.DRAFT_STATUSES, see
+  // that constant's own comment). Hoisted here (rather than recomputed per factory group below)
+  // because FactoryEmailDraftModal needs it too — its send/save gating is a per-QUOTE status read
+  // that has the identical gap the price grid had before the #1062 review fix.
+  const inSendWindow = FACTORY_ROUTING_STATUSES.includes(summary?.status);
   const factoryQuotes = useMemo(() => factoryQuery.data ?? [], [factoryQuery.data]);
   const factoryGroups = useMemo(() => groupFactoryQuotesByFactory(factoryQuotes), [factoryQuotes]);
+  // Before any ร่างอีเมล has been generated there are no factory quotes, so the price section used
+  // to render a bare "ยังไม่มีราคาโรงงาน" — Import had no idea what they were about to price (owner
+  // UX ask 2026-09-24). This groups the request's OWN items by the factory each is routed to, so the
+  // section shows "what needs a price, per factory" up front; it is read-only preview only — the
+  // real price inputs still appear (and unlock per the email-sent nudge) once drafts are generated.
+  //
+  // Opus review of #1062 (2026-09-28): this used to be gated on `factoryGroups.length === 0`, so it
+  // was all-or-nothing — the moment ANY factory quote existed, the whole preview disappeared. But
+  // `canSetItemFactory` only ever GAP-FILLS a factory name on a line Sales left blank — never
+  // re-routes one that already has a factory (PricingRequestService#setItemFactory's own Javadoc:
+  // "deliberately a gap-FILL, never a re-route" — a line that already has a factory is refused with
+  // a 409) — while the request is still in FACTORY_ROUTING_STATUSES. If that happens AFTER drafts
+  // were already generated for other lines, the newly-filled item has no factory-quote row of its
+  // own (it never went through สร้างร่างอีเมล), so it showed up in neither `factoryGroups` nor the
+  // (suppressed) preview — invisible, with no price surface at all. Fixed by covering exactly the
+  // items no CURRENT factory quote already lists (below), independent of whether other items in the
+  // same request already have quotes.
+  const coveredItemIds = useMemo(() => {
+    const ids = new Set();
+    factoryGroups.forEach((group) => {
+      (group.current.items ?? []).forEach((item) => ids.add(item.pricingRequestItemId));
+    });
+    return ids;
+  }, [factoryGroups]);
+  const pricePreviewGroups = useMemo(() => {
+    const map = new Map();
+    (request?.items ?? [])
+      .filter((item) => !coveredItemIds.has(item.id))
+      .forEach((item) => {
+        const name = itemFactoryName(item) || 'ยังไม่ได้ระบุโรงงาน';
+        if (!map.has(name)) map.set(name, { key: name, factoryName: name, items: [] });
+        map.get(name).items.push(item);
+      });
+    return [...map.values()];
+  }, [request, coveredItemIds]);
+  // Opus review of #1062 (2026-09-28): this used to count only `factoryGroups` (quoted items), so
+  // the panel title undercounted in the mixed case now covered by `pricePreviewGroups` — a request
+  // with 2 quoted items + 1 gap-filled-but-not-yet-quoted item showed "(2 รายการ)" above 3 rows.
+  // Count both: quoted items plus previewed-but-not-yet-quoted items.
   const factoryItemCount = useMemo(
-    () => factoryGroups.reduce((sum, group) => sum + (group.current.items?.length ?? 0), 0),
-    [factoryGroups],
+    () => factoryGroups.reduce((sum, group) => sum + (group.current.items?.length ?? 0), 0)
+      + pricePreviewGroups.reduce((sum, group) => sum + group.items.length, 0),
+    [factoryGroups, pricePreviewGroups],
   );
   // Currency codes Import may pick from the per-factory สกุลเงิน select — real trade currencies
   // this business already reads elsewhere (fxRatesQuery above), not an invented list. THB always
@@ -1484,16 +1699,24 @@ export function PricingRequestDetailPage({ user, showToast }) {
         title={summary.requestCode}
         subtitle={`${summary.customerName ?? '-'}${summary.projectName ? ` · ${summary.projectName}` : ''}`}
         actions={(
-          <Button type="button" variant="secondary" onClick={() => navigate(-1)}>
-            <Icon name="chevronLeft" size={14} />
-            กลับ
-          </Button>
+          <>
+            {canPickupPricingRequest(user, summary) ? (
+              <Button type="button" variant="primary" disabled={pickupRequest.isPending}
+                onClick={() => pickupRequest.mutate()} data-testid="pcr-detail-pickup">
+                รับเรื่อง
+              </Button>
+            ) : null}
+            <Button type="button" variant="secondary" onClick={() => navigate(-1)}>
+              <Icon name="chevronLeft" size={14} />
+              กลับ
+            </Button>
+          </>
         )}
       />
 
       <Panel flush title="ภาพรวม" actions={<StatusBadge tone={status.tone}>{status.label}</StatusBadge>}>
         <div className="grid gap-3 p-4 md:grid-cols-2">
-          <div className="text-sm"><strong>ดีล</strong> <Link to={`/tickets/${summary.ticketId}`} className="text-info underline">{summary.ticketCode}</Link></div>
+          <div className="text-sm"><strong>ดีล</strong> <Link to={user?.role === 'import' ? `/import/deals/${summary.ticketId}` : `/tickets/${summary.ticketId}`} className="text-info underline">{summary.ticketCode}</Link></div>
           <div className="text-sm"><strong>ผู้รับ</strong> {pricingRequestRecipientLabel(summary.recipientType)}{summary.recipientLabel ? ` · ${summary.recipientLabel}` : ''}</div>
           <div className="text-sm"><strong>ต้องการภายใน</strong> {formatThaiDate(summary.requiredDate)}</div>
           <div className="text-sm"><strong>ฝ่ายนำเข้า</strong> ผู้รับเรื่องและประสานราคาโรงงาน</div>
@@ -1534,7 +1757,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
               {`ยังไม่ได้ระบุโรงงาน ${missingFactoryItems.length} รายการ — ระบบจะสร้างร่างอีเมลให้เฉพาะรายการที่ระบุโรงงานแล้ว ส่วนรายการต่อไปนี้ต้องระบุโรงงานก่อนจึงจะขอราคาได้: `}
               {missingFactoryItems.map((entry) => `รายการที่ ${entry.position} (${itemDisplayName(entry.item)})`).join(', ')}
               {canSetItemFactory
-                ? ' — กรอกชื่อโรงงานในรายการด้านล่างแล้วกดบันทึก'
+                ? ' — เลือกโรงงานในรายการด้านล่างแล้วกดบันทึก'
                 : ' — ฝ่ายนำเข้าเป็นผู้ระบุโรงงานให้ในขั้นตอนนี้'}
             </p>
           ) : null}
@@ -1629,36 +1852,41 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 {/* Import's escape hatch. Only offered on a line that has NO factory: the backend
                     refuses to re-route one that does (a factory quote may already be grouped under
                     that name), so offering an editable value here would promise something the
-                    service would 409. */}
+                    service would 409.
+                    B6 (GLA-135): a picker over the real factory master list, not a free-text
+                    input — see ImportFactoryPicker's own comment for why. */}
+                {/* QA BUG-20: a line that already has a factory offers no picker (re-routing is
+                    refused by the backend — a factory quote may already be grouped under that name).
+                    Rather than a silent dead-end, say WHY and what to do instead of guessing. */}
+                {canSetItemFactory && factoryName ? (
+                  <p className="mt-2 text-xs text-text-muted">
+                    ต้องการเปลี่ยนโรงงาน? ต้องสร้างคำขอราคารอบใหม่ — ระบบล็อกไว้กันใบขอราคาที่จัดกลุ่มตามโรงงานเพี้ยน
+                  </p>
+                ) : null}
                 {canSetItemFactory && !factoryName ? (
-                  <SafeForm
-                    className="mt-2 flex flex-wrap items-end gap-2"
-                    onSubmit={() => setItemFactory.mutate(
-                      { itemId: item.id, factory: (factoryDrafts[item.id] ?? '').trim() },
+                  <ImportFactoryPicker
+                    itemId={item.id}
+                    factories={factoriesQuery.data ?? []}
+                    countries={countriesQuery.data ?? []}
+                    loading={factoriesQuery.isLoading}
+                    loadFailed={factoriesQuery.isError}
+                    value={factoryDrafts[item.id] ?? ''}
+                    onChangeValue={(code) => setFactoryDrafts((current) => ({ ...current, [item.id]: code }))}
+                    saving={setItemFactory.isPending}
+                    onSave={() => setItemFactory.mutate(
+                      { itemId: item.id, factoryId: Number(factoryDrafts[item.id]) },
                       { onSuccess: () => setFactoryDrafts((current) => {
                         const next = { ...current };
                         delete next[item.id];
                         return next;
                       }) },
                     )}
-                  >
-                    <FormField label="ระบุโรงงาน" htmlFor={`pcr-item-factory-${item.id}`}>
-                      <input
-                        id={`pcr-item-factory-${item.id}`}
-                        value={factoryDrafts[item.id] ?? ''}
-                        maxLength={255}
-                        placeholder="ชื่อโรงงานที่จะขอราคา"
-                        onChange={(event) => setFactoryDrafts((current) => ({ ...current, [item.id]: event.target.value }))}
-                      />
-                    </FormField>
-                    <Button
-                      type="submit"
-                      variant="secondary"
-                      disabled={setItemFactory.isPending || !(factoryDrafts[item.id] ?? '').trim()}
-                    >
-                      บันทึกโรงงาน
-                    </Button>
-                  </SafeForm>
+                    onFactoryAdded={(saved) => {
+                      queryClient.invalidateQueries({ queryKey: queryKeys.priceImportFactories() });
+                      setFactoryDrafts((current) => ({ ...current, [item.id]: String(saved.factoryId) }));
+                      showToast?.('success', `เพิ่มโรงงาน "${saved.name}" แล้ว`);
+                    }}
+                  />
                 ) : null}
               </div>
             );
@@ -1739,9 +1967,57 @@ export function PricingRequestDetailPage({ user, showToast }) {
             </Button>
           ) : null}
         >
-          {factoryGroups.length === 0 ? (
-            <p className="p-4 text-sm text-text-muted">ยังไม่มีราคาโรงงาน</p>
-          ) : (
+          {/* Opus review of #1062 (2026-09-28): these two blocks used to be an if/else on
+              `factoryGroups.length === 0`, so the preview vanished the instant ANY factory quote
+              existed anywhere on the request — hiding an item whose factory was blank until Import
+              gap-filled it (canSetItemFactory, during FACTORY_ROUTING_STATUSES — never a re-route of
+              an already-set line, see setItemFactory's own Javadoc) AFTER drafts were already
+              generated for other items; that item has no quote row of its own. They now render
+              independently: the editable grid for whatever already has a quote, PLUS a preview for
+              whatever still doesn't — which can both be true at once. */}
+          {pricePreviewGroups.length > 0 ? (
+            <div className="flex flex-col gap-3 p-4" data-testid="pcr-price-preview">
+              {/* Opus review of #1062 (2026-09-28): "ยังไม่ได้สร้างร่างอีเมลขอราคา" (no draft has been
+                  generated AT ALL) is false in the mixed case this block now also covers — it can
+                  render ABOVE factory groups that already have a sent/answered quote, once another
+                  item's factory was only just gap-filled. Text now depends on which case this is. */}
+              <p className="rounded-md border border-warning-border bg-warning-bg-soft p-3 text-xs text-warning-dark">
+                {factoryGroups.length === 0 ? (
+                  <>
+                    ยังไม่ได้สร้างร่างอีเมลขอราคา — ด้านล่างคือรายการที่ต้องขอราคา จัดกลุ่มตามโรงงาน
+                    {isImport(user) ? ' · กด “สร้างร่างอีเมล” ด้านบนเพื่อเริ่ม แล้วจึงกรอกราคาได้หลังกดส่งอีเมล' : ''}
+                  </>
+                ) : (
+                  <>
+                    รายการที่ยังไม่ได้ขอราคาจากโรงงาน — ด้านล่างคือรายการที่ต้องขอราคาเพิ่ม จัดกลุ่มตามโรงงาน
+                    {isImport(user) ? ' · กด “สร้างร่างอีเมล” ด้านบนเพื่อรวมรายการเหล่านี้เข้าไปในร่างอีเมล' : ''}
+                  </>
+                )}
+              </p>
+              {pricePreviewGroups.map((group) => (
+                <div key={group.key} className="rounded-md border border-border bg-surface" data-testid="pcr-price-preview-group">
+                  <div className="flex flex-wrap items-center gap-2 border-b border-border-subtle bg-surface-subtle px-3 py-2">
+                    <strong className="text-sm text-text">{group.factoryName}</strong>
+                    <span className="text-xs text-text-muted">({group.items.length} รายการ)</span>
+                    <span className="ml-auto text-2xs text-text-muted">กรอกราคาได้หลังส่งอีเมล</span>
+                  </div>
+                  <div className="flex flex-col gap-1 p-3 text-xs text-text-secondary">
+                    {group.items.map((item) => {
+                      const variant = [item.size, item.color, item.texture].filter(Boolean).join(' · ');
+                      return (
+                        <div key={item.id} className="flex flex-wrap items-baseline gap-x-2">
+                          <strong className="text-text">{itemDisplayName(item)}</strong>
+                          {variant ? <span>{variant}</span> : null}
+                          <span className="text-text-muted">· {item.requestedQty ?? '—'} {item.requestedUnit ?? ''}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {factoryGroups.length > 0 ? (
             <div className="flex flex-col">
               {/* Column headers (DESIGN.md §13's .table-head idiom: surface-muted band, overline
                   caption) — shared FACTORY_ITEM_GRID keeps every item row below aligned to these
@@ -1779,15 +2055,64 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 const dirty = Boolean(responseDrafts[current.id]);
                 const editable = isImport(user) && current.current
                   && ['DRAFT', 'REQUESTED', 'RESPONSE_RECEIVED', 'NEGOTIATING', 'READY_FOR_COSTING'].includes(current.status);
+                // Owner UX ask (2026-09-24): the price grid must not invite a quoted price before
+                // Import has actually SENT the request email to this factory — a DRAFT quote means
+                // "not sent yet" (the ร่างอีเมล → "ส่งแล้ว" action is what leaves DRAFT, → REQUESTED).
+                // So while DRAFT the ราคาที่เสนอ inputs stay locked (dimmed + a nudge to send first)
+                // and ยืนยันราคาเสนอ is withheld, without hard-hiding the grid — it stays the visible
+                // primary surface (owner ruling 2026-08-16), just not fillable out of order.
+                //
+                // Opus review of #1062 (2026-09-28): the lock above looked only at the QUOTE's own
+                // status, never the PRICING REQUEST's — but the "ส่งแล้ว" action it points at is
+                // FactoryQuoteService.send, which only succeeds while the pricing request itself is
+                // in DRAFT_STATUSES ({IMPORT_REVIEWING, AWAITING_FACTORY_RESPONSE} —
+                // FactoryQuoteService.java:47-49, guarded at :242). FactoryQuoteService.receive's
+                // window (RESPONSE_STATUSES, :50-53) is wider — it adds READY_FOR_CEO_REVIEW and
+                // explicitly still accepts a DRAFT quote (:402, :408). This clamp is a DEFENSIVE
+                // guard mirroring those two backend windows, not a claim of a specific sequence that
+                // reaches (request outside send()'s window) ∧ (quote still DRAFT) today —
+                // PricingRequestService#setItemFactory is a gap-FILL only (a line that already has a
+                // factory 409s), and markReadyForCosting's auto-advance requires every item's
+                // CURRENT quote to already be READY_FOR_COSTING, so no confirmed live path was found.
+                // But whatever combination does get a request there, the UI must never lock the grid
+                // behind a "send first" banner whose only action would 409 while receive() would
+                // accept the very same confirm. So the lock/banner apply only inside send()'s window;
+                // FACTORY_ROUTING_STATUSES above is that exact set (its own comment already notes it
+                // mirrors FactoryQuoteService.DRAFT_STATUSES), so it is reused rather than duplicated.
+                // `inSendWindow` itself is hoisted to component scope (above `canSetItemFactory`) —
+                // FactoryEmailDraftModal needs the identical value.
+                const emailSent = !inSendWindow || current.status !== 'DRAFT';
                 // READY_FOR_COSTING only offers ยืนยันราคาเสนอ again while dirty — see
                 // confirmFactoryQuote's doc comment for why an undirtied re-click must not be
                 // offered at all (it would either no-op-fail against markReady's own guard, or,
                 // if this branch called receive() unconditionally, spuriously bump the revision).
-                const canConfirm = isImport(user) && current.current
-                  && (['DRAFT', 'REQUESTED', 'RESPONSE_RECEIVED', 'NEGOTIATING'].includes(current.status)
-                    || (current.status === 'READY_FOR_COSTING' && dirty));
+                // Withheld until the email is sent (emailSent): confirming a price before the
+                // request has gone out is exactly the out-of-order flow this nudge closes. DRAFT is
+                // the only !emailSent status the old list carried, so dropping it + AND emailSent is
+                // the whole change.
+                //
+                // Opus review of #1062 (2026-09-28): that DRAFT/emailSent history only ever
+                // ungated the price INPUT for a request past send()'s window (below) — it did not
+                // restore this disjunction, which still names only
+                // REQUESTED/RESPONSE_RECEIVED/NEGOTIATING/READY_FOR_COSTING&&dirty. So a request
+                // outside send()'s window with a still-DRAFT quote showed an ENABLED input with NO
+                // confirm button — a typed price was enterable but unsubmittable, silently lost.
+                // FactoryQuoteService.receive's window (RESPONSE_STATUSES, which includes
+                // READY_FOR_CEO_REVIEW) explicitly still accepts a DRAFT quote, so the button must
+                // offer exactly that confirm: add `current.status === 'DRAFT' && !inSendWindow`.
+                const canConfirm = isImport(user) && current.current && emailSent
+                  && (['REQUESTED', 'RESPONSE_RECEIVED', 'NEGOTIATING'].includes(current.status)
+                    || (current.status === 'READY_FOR_COSTING' && dirty)
+                    || (current.status === 'DRAFT' && !inSendWindow));
                 const canNegotiate = isImport(user) && current.status === 'RESPONSE_RECEIVED' && current.current;
-                const canOpenEmailDraft = isImport(user) && current.status === 'DRAFT';
+                // Import can OPEN the RFQ email at any status (owner ask 2026-09-24): to draft+send
+                // it while DRAFT, or just to VIEW what was actually sent afterwards. The modal is
+                // read-only once the quote leaves DRAFT OR the request leaves send()'s window
+                // (FactoryEmailDraftModal's canEditFields / canOfferSendActions — Opus review of
+                // #1062, 2026-09-28: DRAFT alone wasn't enough, matching the grid's own emailSent
+                // fix above), so opening it post-send, or outside that window, can only view + copy,
+                // never re-edit or re-send.
+                const canOpenEmailDraft = isImport(user);
                 // หน่วยราคา is a per-FACTORY control now, not per-line (owner-supplied mockup) — every
                 // line in `draft.items` shares one unitBasis, so the first line speaks for the whole
                 // group. defaultResponseItems seeds every line from the same source when untouched,
@@ -1847,10 +2172,21 @@ export function PricingRequestDetailPage({ user, showToast }) {
                       {canOpenEmailDraft ? (
                         <Button type="button" variant="secondary" onClick={() => setEmailModalQuoteId(current.id)} data-testid={`pcr-open-email-draft-${current.id}`}>
                           <Icon name="mail" size={14} />
-                          ร่างอีเมล
+                          {emailSent ? 'ดูอีเมล' : 'ร่างอีเมล'}
                         </Button>
                       ) : null}
                     </div>
+
+                    {/* Nudge (owner UX ask 2026-09-24): while this factory's request email is still
+                        a DRAFT (not sent), the price grid below is locked. Point Import at the
+                        ร่างอีเมล → "ส่งแล้ว" action in the header rather than letting them type a
+                        price out of order. Shown only to the role that can act (import, editable). */}
+                    {editable && !emailSent ? (
+                      <div className="flex flex-wrap items-center gap-2 border-b border-warning-border bg-warning-bg-soft px-5 py-2.5 text-xs text-warning-dark mobile:px-4" data-testid={`pcr-await-email-${current.id}`}>
+                        <Icon name="mail" size={14} />
+                        ส่งอีเมลขอราคาให้โรงงานนี้ก่อน จึงจะกรอกราคาที่เสนอได้ — กด “ร่างอีเมล” ด้านบน แล้วกด “ส่งแล้ว”
+                      </div>
+                    ) : null}
 
                     {/* Per-factory control row — สกุลเงิน + หน่วยราคา, shared by every item below
                         instead of a per-line picker (owner-supplied mockup). Static text once the
@@ -1940,7 +2276,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                           </div>
                           <div className="min-w-0">
                             <span className="mb-1 block text-2xs font-bold uppercase text-text-muted md:hidden">ราคาที่เสนอ (แก้ไข)</span>
-                            {editable ? (
+                            {editable && emailSent ? (
                               <div className="flex flex-wrap items-center gap-1.5">
                                 <input
                                   id={`pcr-quote-price-${current.id}-${line.pricingRequestItemId}`}
@@ -1969,6 +2305,19 @@ export function PricingRequestDetailPage({ user, showToast }) {
                                   />
                                 ) : null}
                               </div>
+                            ) : editable ? (
+                              // Import, but the request email is still a DRAFT — a dimmed, disabled
+                              // stand-in so the column reads "you'll fill this after sending", not a
+                              // usable field. The group-level banner above says why.
+                              <input
+                                className="w-full opacity-50 md:w-32"
+                                type="text"
+                                disabled
+                                value=""
+                                placeholder="ส่งอีเมลก่อน"
+                                aria-label={`ราคาที่เสนอ ${itemRef} — ส่งอีเมลขอราคาก่อน`}
+                                data-testid={`pcr-quote-price-locked-${current.id}-${line.pricingRequestItemId}`}
+                              />
                             ) : (
                               <span className="text-sm text-text-secondary">{formatCurrency(line.rawUnitPrice, line.currency)}</span>
                             )}
@@ -2071,7 +2420,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 );
               })}
             </div>
-          )}
+          ) : null}
         </Panel>
       ) : null}
 
@@ -2950,21 +3299,77 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 </Link>
               </div>
             ) : null}
-            {/* MAJOR-3 fix (owner ruling via coordinator, 2026-09-20 — "the expiry escape hatch"):
-                once the linked NEW-engine quotation has EXPIRED (D5), sales may write a FRESH one
-                from the SAME approved decision — DealQuotationService#createFromPricingRequest now
-                tolerates this specific case server-side (see that method's own comment). Gated on
-                canManageCustomerQuotation (sales + ticket owner, no PR-status check) rather than
-                canCreateCustomerQuotation, which requires pr.status === 'APPROVED_FOR_QUOTATION' —
-                a PR whose quotation has expired sits at QUOTATION_ISSUED instead (the backend
-                deliberately does not roll PR status back), so that stricter gate would incorrectly
-                hide this button in exactly the state it needs to appear. Reuses the SAME
-                createDealQuotationFromRequest mutation the first-ever create button below already
-                uses (same navigate-on-success behaviour), since the server-side call is identical
-                either way — only the PR's current state differs. */}
-            {dealQuotationForPr?.docStatus === 'EXPIRED' && canManageCustomerQuotation(user, summary) ? (
+
+            {/* GLA-123 slice S3 (R9) — the SAME outcome-recording action the legacy block below
+                offers (canRecordCustomerQuotationOutcome is origin-agnostic: sales + ticket owner,
+                docStatus === 'ISSUED'), now also reachable for the NEW engine's own quotation. R8
+                (only one finalized quotation per deal, across both คำขอราคา origins) is enforced
+                server-side by DealQuotationService#recordOutcome, not here. */}
+            {canRecordCustomerQuotationOutcome(user, summary, dealQuotationForPr) ? (
+              <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3">
+                <strong className="text-sm">บันทึกผลจากลูกค้า</strong>
+                <textarea
+                  className="rounded border border-border p-2 text-sm"
+                  placeholder="หมายเหตุจากลูกค้า (ถ้ามี)"
+                  value={outcomeNote}
+                  onChange={(e) => setOutcomeNote(e.target.value)}
+                />
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" variant="primary" disabled={recordDealQuotationOutcome.isPending}
+                    onClick={() => recordDealQuotationOutcome.mutate({ quotation: dealQuotationForPr, outcome: 'ACCEPTED' })}>
+                    ลูกค้ายอมรับ
+                  </Button>
+                  <Button type="button" variant="danger" disabled={recordDealQuotationOutcome.isPending}
+                    onClick={() => recordDealQuotationOutcome.mutate({ quotation: dealQuotationForPr, outcome: 'REJECTED' })}>
+                    ลูกค้าปฏิเสธ
+                  </Button>
+                  <Button type="button" variant="secondary" disabled={recordDealQuotationOutcome.isPending}
+                    onClick={() => recordDealQuotationOutcome.mutate({ quotation: dealQuotationForPr, outcome: 'REVISION_REQUESTED' })}>
+                    ลูกค้าขอแก้ไข
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+
+            {/* Read-only outcome summary — mirrors the legacy block's identical read-only
+                summary below (visible to everyone with view access, once the customer's response
+                has been recorded or the document moved past ISSUED for any other reason). */}
+            {dealQuotationForPr
+              && ['ACCEPTED', 'REJECTED', 'REVISION_REQUESTED', 'EXPIRED'].includes(dealQuotationForPr.docStatus) ? (
+              <p className="text-sm text-text-muted">
+                ผลใบเสนอราคา: <strong>{quotationStatusLabel(dealQuotationForPr.docStatus).label}</strong>
+              </p>
+            ) : null}
+            {/* MAJOR-3 fix (owner ruling via coordinator, 2026-09-20 — "the expiry escape hatch"),
+                widened by the S3 round-3 review (NEW-1, MAJOR, 2026-09-23): once the linked
+                NEW-engine quotation has EXPIRED (D5), was REJECTED, or the customer asked for a
+                REVISION, sales may write a FRESH one from the SAME approved decision —
+                DealQuotationService#createFromPricingRequest tolerates all three cases
+                server-side (its own PR-status check treats them identically: none of the three
+                move the PR off QUOTATION_ISSUED — see that method's own comment), and
+                DealQuotationRepository#hasLivePricingRequestQuotation excludes all three from
+                its own "live" set for the same reason. This gate used to only cover EXPIRED,
+                which left REVISION_REQUESTED and REJECTED — both reachable via this same PR's
+                own outcome-recording buttons just above — as UI dead ends: the backend accepted
+                a recreate, but nothing on screen offered it. Gated on canManageCustomerQuotation
+                (sales + ticket owner, no PR-status check) rather than canCreateCustomerQuotation,
+                which requires pr.status === 'APPROVED_FOR_QUOTATION' — a PR in any of these three
+                states sits at QUOTATION_ISSUED instead (the backend deliberately does not roll PR
+                status back), so that stricter gate would incorrectly hide this button in exactly
+                the states it needs to appear. Reuses the SAME createDealQuotationFromRequest
+                mutation the first-ever create button below already uses (same
+                navigate-on-success behaviour), since the server-side call is identical in every
+                case — only the PR's current state differs. */}
+            {['EXPIRED', 'REVISION_REQUESTED', 'REJECTED'].includes(dealQuotationForPr?.docStatus)
+              && canManageCustomerQuotation(user, summary) ? (
               <div className="flex flex-col items-start gap-2">
-                <p className="m-0 text-sm text-warning">ใบเสนอราคาหมดอายุแล้ว — เขียนใบใหม่ได้</p>
+                <p className="m-0 text-sm text-warning">
+                  {dealQuotationForPr.docStatus === 'EXPIRED'
+                    ? 'ใบเสนอราคาหมดอายุแล้ว — เขียนใบใหม่ได้'
+                    : dealQuotationForPr.docStatus === 'REVISION_REQUESTED'
+                      ? 'ลูกค้าขอแก้ไขใบเสนอราคา — เขียนใบใหม่ได้'
+                      : 'ลูกค้าปฏิเสธใบเสนอราคา — เขียนใบใหม่ได้'}
+                </p>
                 <Button
                   type="button"
                   variant="primary"
@@ -3373,6 +3778,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
           })}
           savePending={updateQuote.isPending}
           onCopy={copyFactoryEmail}
+          inSendWindow={inSendWindow}
           onRequestSend={() => {
             const quote = emailModalQuote;
             const draft = emailDrafts[quote.id] ?? { emailTo: quote.emailTo ?? '', emailSubject: quote.emailSubject ?? '', emailBody: quote.emailBody ?? '', note: quote.note ?? '' };

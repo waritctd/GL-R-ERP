@@ -179,7 +179,10 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
         Sheet sheet = renderSheet(approved.id());
         assertThat(str(sheet, 0, 7).strip()).isEqualTo("QUOTATION");
         assertThat(str(sheet, 3, 1)).matches("[A-Z][a-z]+ \\d{1,2}, 20\\d\\d");   // English month, CE year
-        assertThat(str(sheet, 3, 1)).doesNotContain("25");                        // no BE year leaked
+        // no BE year leaked (e.g. "September 8, 2569"). Assert against the actual BE year of the
+        // rendered (today's) date, not the bare substring "25" -- "25" collided with day-of-month
+        // (e.g. the 25th of a month, or the year 2025), failing this test on those dates for no reason.
+        assertThat(str(sheet, 3, 1)).doesNotContain(String.valueOf(java.time.Year.now().getValue() + 543));
         assertThat(str(sheet, 6, 8)).isEqualTo("Amount (USD)");
         assertThat(str(sheet, 6, 1)).isEqualTo("Description & Conditions");
         assertThat(str(sheet, 33, 4)).isEqualTo("Grand Total (USD)");             // TOTAL_ROW 40-7
@@ -188,7 +191,12 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(str(sheet, 37, 0))
             .contains("Printed by").contains("Quoted by").contains("Approved by").contains("Ordered by");
         assertThat(str(sheet, 38, 0))
-            .contains("(Jennet Longsakul)").contains("(Rarm Itarat)").contains("(Aisha Rahman)");
+            .contains("(Jennet Longsakul)").contains("(Rarm Itarat)");
+        // Owner-directed reversal of F2 (2026-09-26), F2-reversal regression guard: a contact
+        // ("Aisha Rahman") IS recorded on this deal, but no manual orderedByName was ever set on
+        // this request -- the ผู้สั่งซื้อ/"Ordered by" slot must stay the dotted placeholder,
+        // never fall back to the contact name any more.
+        assertThat(str(sheet, 38, 0)).doesNotContain("(Aisha Rahman)").contains("(..........................)");
         // No VAT row survived onto the sheet.
         assertThat(allText(sheet)).noneMatch(t -> t.contains("ภาษีมูลค่าเพิ่ม"));
     }
@@ -223,7 +231,7 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
     void requestWithoutALanguage_defaultsToThaiAndBaht() {
         DealQuotationDto created = quotationService.create(ticketId,
             new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
-                null, List.of(tileItem("100.00", 10))),
+                null, List.of(tileItem("100.00", 10))).withRecipientType("OWNER"),
             salesActor);
         assertThat(created.documentLanguage()).isEqualTo("TH");
         assertThat(created.currency()).isEqualTo("THB");
@@ -374,8 +382,11 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(item.boxes()).isEqualTo(120);
         assertThat(item.sqmPerBox()).isNull();
         assertThat(item.specialPriceLine()).isNull(); // no box sub-line without a box area
+        // Wording-scan fix 1 (2026-09-17): 3,360 / 28 = 120 exactly -- box rounding was a no-op,
+        // so the box count (new information on this branch, which has no "= N boxes" tail of its
+        // own before this fix) prints instead of the misleading rounding phrase + pure echo.
         assertThat(item.calculationLine())
-            .isEqualTo("(Quantity 3,360 pcs, rounded up to full boxes = 3,360 pcs) (28 pcs/box)");
+            .isEqualTo("(Quantity 3,360 pcs = 120 boxes) (28 pcs/box)");
 
         // Stored: qty stays the PIECE count, sqm_per_box stays NULL.
         assertThat(jdbc.getJdbcOperations().queryForObject(
@@ -402,8 +413,9 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(quotationService.submit(created.id(), salesActor).docStatus())
             .isEqualTo(QuotationStatus.PENDING_APPROVAL);
 
-        // update: the same combination onto an existing (NET) document.
-        DealQuotationDto net = quotationService.create(ticketId,
+        // update: the same combination onto an existing (NET) document. (Slice 2's N6: the deal
+        // already holds the live quotation above — see LegacyDirectQuotationFixtures.)
+        DealQuotationDto net = LegacyDirectQuotationFixtures.createAlongsideLive(jdbc, quotationService, ticketId,
             englishRequest(List.of(tileItem("100.00", 10))), salesActor);
         DealQuotationDto updated = quotationService.update(net.id(),
             englishRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM, List.of(row)), salesActor);
@@ -598,7 +610,10 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
     void calculateLine_inEnglish_returnsTheEnglishLinesAndThePerSqmQuantity() {
         DealQuotationItemDto preview = quotationService.calculateLine(perSqmItem(3360, 28, "0.6", "64"), "EN", salesActor);
         assertThat(preview.descriptionLine()).isEqualTo("Tile Model Model A Color White Finish Matte");
-        assertThat(preview.calculationLine()).isEqualTo("(Quantity 3,360 pcs, rounded up to full boxes = 3,360 pcs = 120 boxes)");
+        // Wording-scan fix 1 (2026-09-17): 3,360 / 28 = 120 exactly -- box rounding was a no-op,
+        // so the rounding phrase and its "= 3,360 pcs" echo drop; see DealQuotationLinesTest's
+        // matching tilePrint_englishPerSqm_piecesMode_QN6900933Row1_andSingularBox.
+        assertThat(preview.calculationLine()).isEqualTo("(Quantity 3,360 pcs = 120 boxes)");
         assertThat(preview.specialPriceLine()).isEqualTo("(1 box = 28 pcs = 0.6 sqm)");
         assertThat(preview.quantity()).isEqualByComparingTo("72.00");
         assertThat(preview.unit()).isEqualTo("SQM");
@@ -607,7 +622,10 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
 
         // An English NET preview: English lines, PCS, pieces.
         DealQuotationItemDto net = quotationService.calculateLine(tileItem("100.00", 10), "EN", salesActor);
-        assertThat(net.calculationLine()).isEqualTo("(Quantity 10 pcs, rounded up to full boxes = 10 pcs) (1 pcs/box)");
+        // Wording-scan fix 1 (2026-09-17): tileItem's piecesPerBox=1 makes box rounding a no-op, and
+        // a one-piece box's count would only repeat the piece count, so neither the rounding
+        // phrase nor "= 10 boxes" prints. Wording-scan fix 7: singular "1 pc/box".
+        assertThat(net.calculationLine()).isEqualTo("(Quantity 10 pcs) (1 pc/box)");
         assertThat(net.unit()).isEqualTo("PCS");
 
         assertThatThrownBy(() -> quotationService.calculateLine(tileItem("100.00", 10), "FR", salesActor))
@@ -682,7 +700,10 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
         // this now prints in centimetres ("60 cm x 60 cm") rather than the old ambiguous verbatim
         // "60x60" -- see DealQuotationLinesTest's "F2" section for the production bug this closes.
         assertThat(tile.sizeLine()).isEqualTo("Size 60 cm x 60 cm x 10 mm (approx.)");
-        assertThat(tile.calculationLine()).isEqualTo("(Quantity 10 pcs, rounded up to full boxes = 10 pcs) (1 pcs/box)");
+        // Wording-scan fix 1 (2026-09-17): piecesPerBox=1 makes box rounding a no-op, and a
+        // one-piece box's count would only repeat the piece count -- so neither the rounding
+        // phrase nor "= 10 boxes" prints. Wording-scan fix 7: singular "1 pc/box".
+        assertThat(tile.calculationLine()).isEqualTo("(Quantity 10 pcs) (1 pc/box)");
         assertThat(tile.unit()).isEqualTo("PCS");
         var adjustment = created.items().get(1);
         assertThat(adjustment.descriptionLine()).isEqualTo("Special discount 3% for orders placed by July 31, 2026");
@@ -729,7 +750,11 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(thai.items().get(0).descriptionLine()).isEqualTo("กระเบื้อง รุ่น Model A สี White ผิว Matte");
         // F2 fix (2026-09-16 review): same "60x60", no unit, no catalogue link -- centimetres now.
         assertThat(thai.items().get(0).sizeLine()).isEqualTo("ขนาด 60 cm x 60 cm x 10 mm (ขนาดโดยประมาณ)");
-        assertThat(thai.items().get(0).calculationLine()).isEqualTo("(จำนวน 10 แผ่น และปัดขึ้นเต็มกล่อง = 10 แผ่น) (บรรจุ 1 แผ่น/กล่อง)");
+        // Wording-scan fix 1 (2026-09-17): piecesPerBox=1 -- tileItem's own fixed value -- makes
+        // EVERY piece count trivially "already a whole number of boxes", so this row's box
+        // rounding was always a no-op; the misleading "และปัดขึ้นเต็มกล่อง = 10 แผ่น" echo drops, and
+        // "= 10 กล่อง" does not print either -- a one-piece box's count only repeats the pieces.
+        assertThat(thai.items().get(0).calculationLine()).isEqualTo("(จำนวน 10 แผ่น) (บรรจุ 1 แผ่น/กล่อง)");
         assertThat(thai.items().get(0).unit()).isEqualTo("แผ่น");
         assertThat(thai.items().get(1).descriptionLine()).isEqualTo("ส่วนลดพิเศษ 3% สำหรับการสั่งซื้อภายใน 31/07/2569");
 
@@ -823,7 +848,15 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
 
         String names = str(renderSheet(approved.id()), 38, 0);
         assertThat(names).contains("(สมชาย ไม่มีชื่ออังกฤษ)");
-        assertThat(names).doesNotContain("(..........................)");
+        // Owner-directed reversal of F2 (2026-09-26): the placeholder's PRESENCE is no longer a
+        // signal about this fallback -- the ผู้สั่งซื้อ/"Ordered by" slot always prints it now
+        // (no manual orderedByName was set on this fixture), independent of the approver-name
+        // fallback this test is actually about. Assert the fallback name landed in the APPROVER
+        // slot specifically, rather than a blanket "no placeholder anywhere" that would no longer
+        // hold.
+        assertThat(names.indexOf("(สมชาย ไม่มีชื่ออังกฤษ)"))
+            .as("the fallback name replaces the approver's own dotted slot, not the ผู้สั่งซื้อ one")
+            .isLessThan(names.indexOf("(..........................)"));
     }
 
     /**
@@ -909,7 +942,7 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
     private UpsertDealQuotationRequest request(String language, String currency, String priceMode,
                                                List<ItemInput> items) {
         return new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
-            null, priceMode, language, currency, items);
+            null, priceMode, language, currency, items).withRecipientType("OWNER");
     }
 
     /** 60x60 -> 0.36 ตร.ม./แผ่น (explicit -- ตร.ม./แผ่น is never derived from sizeText any more;

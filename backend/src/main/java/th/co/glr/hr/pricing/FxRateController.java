@@ -8,6 +8,7 @@ import java.util.Set;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -58,10 +59,12 @@ public class FxRateController {
 
     private final FxRateRepository fxRates;
     private final SessionContext sessions;
+    private final BotFxFetchService botFx;
 
-    public FxRateController(FxRateRepository fxRates, SessionContext sessions) {
+    public FxRateController(FxRateRepository fxRates, SessionContext sessions, BotFxFetchService botFx) {
         this.fxRates  = fxRates;
         this.sessions = sessions;
+        this.botFx    = botFx;
     }
 
     /** Read is gated to {@link #READ_ROLES} — see that field for the ruling and its scope. */
@@ -86,6 +89,19 @@ public class FxRateController {
             request.effectiveDate(),
             user.id());
         return Map.of("fxRate", result);
+    }
+
+    /**
+     * Trigger the BOT FX fetch on demand instead of waiting for the 18:00 schedule. CEO-only, the
+     * same gate as {@link #upsert} — this WRITES rates (via {@code BotFxFetchService.fetchNow}).
+     * Returns what changed so the console can report "อัปเดต N/5 สกุล"; a missing token surfaces as
+     * the service's own 503, not a silent no-op.
+     */
+    @PostMapping("/fetch-now")
+    Map<String, BotFxFetchService.FxFetchResult> fetchNow(HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        requireCeoRole(user);
+        return Map.of("result", botFx.fetchNow());
     }
 
     private void requireCeoRole(UserPrincipal user) {

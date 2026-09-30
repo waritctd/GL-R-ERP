@@ -526,12 +526,12 @@ export function buildDemoSalesSeed() {
   //                                                       nextAccountAction)
   //   24  FULLY_PAID + FULLY_DELIVERED + invoice on file-> รอปิดงาน
   //   25  CLOSED_PAID, close already confirmed,
-  //       no SALE commission yet                        -> ออกค่าคอม
+  //       no SALE commission yet                        -> บันทึกใบกำกับ
   //
   // ⚠️ 24 and 25 are deliberately OUTSIDE the account role's own list scope.
   // accountListScopeIncludes() (mockApi.js) returns only deals with a pending
   // payment status or an overdue balance, and both of these have
-  // amountOutstanding = 0 — so "รอปิดงาน"/"ออกค่าคอม" still read 0 for the
+  // amountOutstanding = 0 — so "รอปิดงาน"/"บันทึกใบกำกับ" still read 0 for the
   // `account` persona. That scope is a reviewed authz decision, already
   // documented as a known gap in AccountOverview.jsx's own doc comment, and
   // widening it is explicitly out of scope for a seed change (CLAUDE.md).
@@ -809,7 +809,7 @@ export function buildDemoSalesSeed() {
       ],
     }),
 
-    // 25 — ออกค่าคอม. Same shape as 24 but ฝ่ายบัญชี has already confirmed the
+    // 25 — บันทึกใบกำกับ. Same shape as 24 but ฝ่ายบัญชี has already confirmed the
     // close, which is what takes it PAST the close-ready branch (closeReady()
     // requires closeConfirmedAt == null) and into the commission step. No SALE
     // commission row exists for this ticket in demoPayroll.js, so

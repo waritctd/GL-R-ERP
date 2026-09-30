@@ -97,10 +97,34 @@ describe('nextSalesAction — RECORD_DELIVERY (stages 13-14, owner ruling 2026-0
   });
 });
 
-// Baseline pass over the rest of the cascade — establishes that inserting bucket 4 did not disturb
-// buckets 1-3/5-6, each exercised through a deal/PR shape that clears every earlier bucket without
-// matching it.
-describe('nextSalesAction — full cascade baseline (buckets 1-3, 5-6)', () => {
+describe('nextSalesAction — RECORD_QUOTATION_OUTCOME (bucket 4, deal-page CTA discoverability fix)', () => {
+  it('returns RECORD_QUOTATION_OUTCOME for a live PR at QUOTATION_ISSUED (previously fell through to follow-up/activity)', () => {
+    const prs = [{ id: 1, ticketId: 1, status: 'QUOTATION_ISSUED' }];
+    expect(nextSalesAction(baseDeal(), prs)).toEqual({
+      key: SALES_ACTION.RECORD_QUOTATION_OUTCOME,
+      label: 'บันทึกผลใบเสนอราคา',
+    });
+  });
+
+  it('CONFIRM_ORDER still wins when one PR is QUOTATION_ACCEPTED even alongside a stale sibling PR still at QUOTATION_ISSUED', () => {
+    const prs = [
+      { id: 1, ticketId: 1, status: 'QUOTATION_ISSUED' },
+      { id: 2, ticketId: 1, status: 'QUOTATION_ACCEPTED', orderConfirmedAt: null },
+    ];
+    expect(nextSalesAction(baseDeal(), prs)).toMatchObject({ key: SALES_ACTION.CONFIRM_ORDER });
+  });
+
+  it('RECORD_QUOTATION_OUTCOME outranks RECORD_DELIVERY when both could apply (bucket 4 fires before bucket 5 is ever checked)', () => {
+    const deal = baseDeal({ status: 'quotation_issued', fulfillmentStatus: 'GOODS_RECEIVED' });
+    const prs = [{ id: 1, ticketId: 1, status: 'QUOTATION_ISSUED' }];
+    expect(nextSalesAction(deal, prs)).toMatchObject({ key: SALES_ACTION.RECORD_QUOTATION_OUTCOME });
+  });
+});
+
+// Baseline pass over the rest of the cascade — establishes that inserting buckets 4/5 did not
+// disturb buckets 1-3/6-7, each exercised through a deal/PR shape that clears every earlier bucket
+// without matching it.
+describe('nextSalesAction — full cascade baseline (buckets 1-3, 6-7)', () => {
   it('CREATE_PCR — no live pricing request, no price evidence', () => {
     expect(nextSalesAction(baseDeal(), [])).toMatchObject({ key: SALES_ACTION.CREATE_PCR });
   });
@@ -136,7 +160,7 @@ describe('nextSalesAction — full cascade baseline (buckets 1-3, 5-6)', () => {
   });
 });
 
-describe('sortWorklist — RECORD_DELIVERY rank (4) relative to CONFIRM_ORDER (1) and FOLLOW_UP (5)', () => {
+describe('sortWorklist — RECORD_DELIVERY rank relative to CONFIRM_ORDER and FOLLOW_UP', () => {
   it('places a delivery row after a confirm-order row but before a non-overdue follow-up row', () => {
     const items = [
       { deal: { id: 3, stageUpdatedAt: '2026-07-01T00:00:00.000Z' }, action: { key: SALES_ACTION.FOLLOW_UP, label: 'x', followUp: 'today' } },
@@ -144,6 +168,16 @@ describe('sortWorklist — RECORD_DELIVERY rank (4) relative to CONFIRM_ORDER (1
       { deal: { id: 2, stageUpdatedAt: '2026-07-01T00:00:00.000Z' }, action: { key: SALES_ACTION.CONFIRM_ORDER, label: 'x' } },
     ];
     expect(sortWorklist(items).map((item) => item.deal.id)).toEqual([2, 1, 3]);
+  });
+
+  it('places RECORD_QUOTATION_OUTCOME between ISSUE_QUOTATION and CREATE_PCR, ahead of RECORD_DELIVERY', () => {
+    const items = [
+      { deal: { id: 1, stageUpdatedAt: '2026-07-01T00:00:00.000Z' }, action: { key: SALES_ACTION.RECORD_DELIVERY, label: 'x' } },
+      { deal: { id: 2, stageUpdatedAt: '2026-07-01T00:00:00.000Z' }, action: { key: SALES_ACTION.CREATE_PCR, label: 'x' } },
+      { deal: { id: 3, stageUpdatedAt: '2026-07-01T00:00:00.000Z' }, action: { key: SALES_ACTION.RECORD_QUOTATION_OUTCOME, label: 'x' } },
+      { deal: { id: 4, stageUpdatedAt: '2026-07-01T00:00:00.000Z' }, action: { key: SALES_ACTION.ISSUE_QUOTATION, label: 'x' } },
+    ];
+    expect(sortWorklist(items).map((item) => item.deal.id)).toEqual([4, 3, 2, 1]);
   });
 
   it('an OVERDUE follow-up still leads ahead of a delivery row, despite RECORD_DELIVERY outranking FOLLOW_UP under equal urgency', () => {
@@ -170,5 +204,107 @@ describe('sortWorklist — RECORD_DELIVERY rank (4) relative to CONFIRM_ORDER (1
     const original = [...items];
     sortWorklist(items);
     expect(items).toEqual(original);
+  });
+});
+
+// Slice 2 — flow A (SLICE-2-FLOW-A.md §E, IA §4): a deal whose direct quotation (DEAL_DIRECT) is
+// live is being priced BY HAND. Its CTA follows that quotation — ส่งขออนุมัติ / รออนุมัติ / ยืนยัน
+// คำสั่งซื้อ — and must NEVER be "สร้างคำขอราคา": the three buckets sit BEFORE CREATE_PCR. Keyed on
+// `deal.liveDirectQuotation` (TicketSummaryDto S2-B4 — the newest live DEAL_DIRECT row, or null).
+describe('nextSalesAction — live direct quotation buckets (slice 2, flow A)', () => {
+  function liveDirect(docStatus, overrides = {}) {
+    return { id: 77, number: 'QT-2026-0077-1', docStatus, recipientType: 'DESIGNER', ...overrides };
+  }
+
+  it('DRAFT -> SUBMIT_DIRECT_QUOTATION "ส่งขออนุมัติใบเสนอราคา", pointing at the quotation', () => {
+    const deal = baseDeal({ liveDirectQuotation: liveDirect('DRAFT') });
+    expect(nextSalesAction(deal, [])).toEqual({
+      key: SALES_ACTION.SUBMIT_DIRECT_QUOTATION,
+      label: 'ส่งขออนุมัติใบเสนอราคา',
+      quotationId: 77,
+      quotationNumber: 'QT-2026-0077-1',
+      to: '/quotations/77',
+    });
+  });
+
+  it('PENDING_APPROVAL -> AWAIT_DIRECT_APPROVAL "รออนุมัติใบเสนอราคา" (a waiting state, carries the number for the banner)', () => {
+    const deal = baseDeal({ liveDirectQuotation: liveDirect('PENDING_APPROVAL') });
+    expect(nextSalesAction(deal, [])).toMatchObject({
+      key: SALES_ACTION.AWAIT_DIRECT_APPROVAL,
+      label: 'รออนุมัติใบเสนอราคา',
+      quotationId: 77,
+      quotationNumber: 'QT-2026-0077-1',
+    });
+  });
+
+  it('APPROVED -> CONFIRM_ORDER_DIRECT "ยืนยันคำสั่งซื้อ"', () => {
+    const deal = baseDeal({ liveDirectQuotation: liveDirect('APPROVED') });
+    expect(nextSalesAction(deal, [])).toMatchObject({
+      key: SALES_ACTION.CONFIRM_ORDER_DIRECT,
+      label: 'ยืนยันคำสั่งซื้อ',
+      quotationId: 77,
+    });
+  });
+
+  it('wins over CREATE_PCR — a zero-pricing-request deal with a live direct quotation is never told to open a คำขอราคา', () => {
+    // Exactly bucket 1's shape (no PR at all, no price evidence) — this is the ordering test.
+    const keys = ['DRAFT', 'PENDING_APPROVAL', 'APPROVED']
+      .map((docStatus) => nextSalesAction(baseDeal({ liveDirectQuotation: liveDirect(docStatus) }), [])?.key);
+    expect(keys).toEqual([
+      SALES_ACTION.SUBMIT_DIRECT_QUOTATION, SALES_ACTION.AWAIT_DIRECT_APPROVAL, SALES_ACTION.CONFIRM_ORDER_DIRECT,
+    ]);
+    expect(keys).not.toContain(SALES_ACTION.CREATE_PCR);
+  });
+
+  // Found in the browser: confirmOrderFromDirectQuotation 409s unless the deal's status is still
+  // 'draft' (slice 1, 2ed3468e). A legacy deal already past it (e.g. demo deal 1: status 'approved',
+  // payment under way) must NOT be offered a ยืนยันคำสั่งซื้อ the server refuses — it falls through
+  // to the ordinary cascade instead. A list row always carries `status`; absent reads as 'draft'.
+  it('APPROVED on a deal already PAST draft is not offered CONFIRM_ORDER_DIRECT (the server would 409)', () => {
+    for (const status of ['approved', 'quotation_issued', 'document_issued']) {
+      const action = nextSalesAction(baseDeal({ status, liveDirectQuotation: liveDirect('APPROVED') }), []);
+      expect(action?.key).not.toBe(SALES_ACTION.CONFIRM_ORDER_DIRECT);
+    }
+    expect(nextSalesAction(baseDeal({ status: 'draft', liveDirectQuotation: liveDirect('APPROVED') }), []))
+      .toMatchObject({ key: SALES_ACTION.CONFIRM_ORDER_DIRECT });
+  });
+
+  it('null / absent liveDirectQuotation leaves the cascade exactly as before (CREATE_PCR)', () => {
+    expect(nextSalesAction(baseDeal({ liveDirectQuotation: null }), [])).toMatchObject({ key: SALES_ACTION.CREATE_PCR });
+    expect(nextSalesAction(baseDeal(), [])).toMatchObject({ key: SALES_ACTION.CREATE_PCR });
+  });
+
+  it('a non-live status (CANCELLED / SUPERSEDED / REJECTED) is ignored — the server never sends one, but the client must not act on it either', () => {
+    for (const docStatus of ['CANCELLED', 'SUPERSEDED', 'REJECTED']) {
+      expect(nextSalesAction(baseDeal({ liveDirectQuotation: liveDirect(docStatus) }), []))
+        .toMatchObject({ key: SALES_ACTION.CREATE_PCR });
+    }
+  });
+
+  it('a non-ACTIVE deal gets nothing, live quotation or not (same lifecycle guard as every bucket)', () => {
+    expect(nextSalesAction(baseDeal({ lifecycle: 'ON_HOLD', liveDirectQuotation: liveDirect('DRAFT') }), [])).toBeNull();
+  });
+
+  it('ranks: CONFIRM_ORDER_DIRECT with CONFIRM_ORDER (1), SUBMIT_DIRECT_QUOTATION with ISSUE_QUOTATION (2), AWAIT_DIRECT_APPROVAL with the waiting rank (5)', () => {
+    const at = '2026-07-01T00:00:00.000Z';
+    const row = (id, key) => ({ deal: { id, stageUpdatedAt: at }, action: { key } });
+    const sorted = sortWorklist([
+      row(1, SALES_ACTION.AWAIT_DIRECT_APPROVAL),
+      row(2, SALES_ACTION.FOLLOW_UP),
+      row(3, SALES_ACTION.CREATE_PCR),
+      row(4, SALES_ACTION.SUBMIT_DIRECT_QUOTATION),
+      row(5, SALES_ACTION.CONFIRM_ORDER_DIRECT),
+    ]).map((item) => item.deal.id);
+    // CONFIRM_ORDER_DIRECT(1) < SUBMIT(2) < CREATE_PCR(4) < AWAIT(5) < FOLLOW_UP(6)
+    expect(sorted).toEqual([5, 4, 3, 1, 2]);
+  });
+
+  it('shares a rank with its sibling: inside rank 2 the longest-waiting deal leads, whichever bucket it is', () => {
+    const sorted = sortWorklist([
+      { deal: { id: 1, stageUpdatedAt: '2026-07-05T00:00:00.000Z' }, action: { key: SALES_ACTION.SUBMIT_DIRECT_QUOTATION } },
+      { deal: { id: 2, stageUpdatedAt: '2026-07-01T00:00:00.000Z' }, action: { key: SALES_ACTION.ISSUE_QUOTATION } },
+      { deal: { id: 3, stageUpdatedAt: '2026-06-01T00:00:00.000Z' }, action: { key: SALES_ACTION.SUBMIT_DIRECT_QUOTATION } },
+    ]).map((item) => item.deal.id);
+    expect(sorted).toEqual([3, 2, 1]);
   });
 });

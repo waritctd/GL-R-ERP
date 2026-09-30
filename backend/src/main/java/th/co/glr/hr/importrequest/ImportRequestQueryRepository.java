@@ -232,7 +232,7 @@ public class ImportRequestQueryRepository {
 
     /**
      * Does {@code employeeId} own this deal? Expressed as {@code createdById}, the same way
-     * {@code TicketService.requireDealOwnership} and {@code isFulfilmentOrOwningRep} express it.
+     * {@code TicketService.requireDealOwnership} and {@code canDeclareStockCoverage} express it.
      *
      * <p>Used only by {@code setRequiredByNote} — the one write here that belongs to SALES rather than
      * import, so it cannot lean on {@code IR_ROLES}.

@@ -110,6 +110,32 @@ class DealQuotationControllerTest {
             .andExpect(status().isUnauthorized());
     }
 
+    /** Slice 1 (IA §7): {@code …/confirm-order} is the real route and {@code …/promote-to-deal} is kept
+     * as an alias for one release — BOTH must dispatch to the same service method. Against the
+     * pre-slice controller the confirm-order POST is a 404 (no such mapping). */
+    @Test
+    void confirmOrder_andThePromoteToDealAlias_bothReachConfirmOrderFromDirectQuotation() throws Exception {
+        DealQuotationDtos.PromoteToDealResultDto result =
+            new DealQuotationDtos.PromoteToDealResultDto(9L, null, quotation(42L, "QT-2026-0042-1"));
+        when(service.confirmOrderFromDirectQuotation(eq(42L), any(UserPrincipal.class))).thenReturn(result);
+
+        mvc.perform(post("/api/deal-quotations/42/confirm-order").session(session()))
+            .andExpect(status().isOk());
+        mvc.perform(post("/api/deal-quotations/42/promote-to-deal").session(session()))
+            .andExpect(status().isOk());
+
+        verify(service, org.mockito.Mockito.times(2)).confirmOrderFromDirectQuotation(eq(42L), any(UserPrincipal.class));
+    }
+
+    /** {@code GET /deal-quotations?origin=…} reaches the service verbatim (validation lives there). */
+    @Test
+    void searchForwardsTheOriginQueryParam() throws Exception {
+        when(service.search(any(), eq(false), eq("LEGACY"), any(UserPrincipal.class))).thenReturn(List.of());
+        mvc.perform(get("/api/deal-quotations?origin=LEGACY").session(session()))
+            .andExpect(status().isOk());
+        verify(service).search(any(), eq(false), eq("LEGACY"), any(UserPrincipal.class));
+    }
+
     private MockHttpSession session() {
         MockHttpSession session = new MockHttpSession();
         session.setAttribute(SessionContext.SESSION_USER_KEY,

@@ -97,6 +97,12 @@ app:
   # hr.leave_type.advance_notice_days, a per-type column LeaveService now reads directly.
   # APP_LEAVE_ADVANCE_NOTICE_DAYS is no longer read — remove it from any deployment environment that
   # still sets it.
+  leave:
+    # Auto-generated leave-submission email (2026-09 HR request): the shared HR inbox the ใบลา
+    # F-HR-020 PDF is mailed TO when an employee submits leave (the requester and their manager are
+    # CC'd). See th.co.glr.hr.leave.LeaveSubmissionMailer. Overridable per deployment; the code
+    # default matches this so an unset var still routes to the right box.
+    submission-inbox: ${APP_LEAVE_SUBMISSION_INBOX:jobs.glr.co.th@gmail.com}
   overtime:
     # Advance notice was removed on CEO instruction; same-day and retroactive requests are allowed
     # when the reason explains why. APP_OVERTIME_ADVANCE_NOTICE_DAYS is no longer read — remove it

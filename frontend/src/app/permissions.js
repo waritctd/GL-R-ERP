@@ -34,9 +34,9 @@ export function allowedRoute(route, user) {
   if (route === 'requests' && !hasPermission(user.role, 'canReviewProfileRequests')) return fallback;
   // Role-scoped views: 'tickets' is the pipeline BROWSER (canViewDealPipeline
   // — sales/sales_manager/ceo only), 'ticket-detail' stays the broader
-  // ticket-DETAIL read (canViewTickets — keeps import/account).
+  // whole-deal DETAIL read (canViewWholeDeal — keeps account; import has its own page).
   if (route === 'tickets' && !hasPermission(user.role, 'canViewDealPipeline')) return fallback;
-  if (route === 'ticket-detail' && !hasPermission(user.role, 'canViewTickets')) return fallback;
+  if (route === 'ticket-detail' && !hasPermission(user.role, 'canViewWholeDeal')) return fallback;
   if (route === 'finance' && !hasPermission(user.role, 'canConfirmPayments')) return fallback;
   if (route === 'commissions' && !hasPermission(user.role, 'canViewCommissions')) return fallback;
   // Split (issue #390): the route itself only needs read access (canViewPayroll, hr+ceo) --
@@ -67,9 +67,8 @@ const PATH_GUARDS = [
   { test: (p) => p === '/hr', can: (u) => hasPermission(u.role, 'canViewEmployees') },
   // Role-scoped views: the bare `/tickets` list is the deal-PIPELINE BROWSER
   // (canViewDealPipeline — sales/sales_manager/ceo only); `/tickets/:id`
-  // detail stays on the broader canViewTickets (keeps import/account, whose
-  // Overview/worklist rows deep-link straight to a single deal). See
-  // docs/role-scoped-views.md.
+  // detail is canViewWholeDeal (keeps account; import now has its own /import/deals/:id page).
+  // See docs/role-scoped-views.md.
   { test: (p) => p === '/employees' || p.startsWith('/employees/'), can: (u) => hasPermission(u.role, 'canViewEmployees') },
   { test: (p) => p === '/requests', can: (u) => hasPermission(u.role, 'canReviewProfileRequests') },
   // `/my-requests` is now an alias that redirects to `/profile`, so it has to
@@ -78,10 +77,16 @@ const PATH_GUARDS = [
   { test: (p) => p === '/my-requests' || p === '/profile', can: (u) => !!u.employeeId },
   // Split (role-scoped views program): the deal-pipeline LIST is the
   // pipeline browser (canViewDealPipeline — sales/sales_manager/ceo only); a
-  // single ticket's DETAIL page stays canViewTickets (import/account keep
-  // detail-read access even though they no longer browse the full list).
+  // single ticket's DETAIL page is canViewWholeDeal (account keeps it; import is
+  // sent to its own /import/deals/:id page instead).
   { test: (p) => p === '/tickets', can: (u) => hasPermission(u.role, 'canViewDealPipeline') },
-  { test: (p) => p.startsWith('/tickets/'), can: (u) => hasPermission(u.role, 'canViewTickets') },
+  // Whole-deal page (and its sub-paths, e.g. /tickets/:id/deposit). Import is REFUSED here — the
+  // backend 403s it the whole-deal read and deposit notices — and gets its own per-deal page below.
+  { test: (p) => p.startsWith('/tickets/'), can: (u) => hasPermission(u.role, 'canViewWholeDeal') },
+  // Import's own per-deal page (GET /api/import/deals/{id}: import + ceo). MANDATORY entry:
+  // canAccessPath fails OPEN for a path no guard claims, so without this line every authenticated
+  // role would reach /import/deals/:id.
+  { test: (p) => p === '/import/deals' || p.startsWith('/import/deals/'), can: (u) => hasPermission(u.role, 'canViewImportDeal') },
   { test: (p) => p === '/catalog', can: (u) => hasPermission(u.role, 'canViewCatalog') },
   // Quotation v2 — direct deal quotation (QUOTATION-V2-PLAN.md). Exact + prefix (the editor's
   // /quotations/new and /quotations/:id both need to fall under this). Mirrors the plan's
@@ -94,7 +99,9 @@ const PATH_GUARDS = [
   // Account's money-lifecycle worklist (งานการเงิน) — mirrors ROLE_PERMISSIONS
   // .canConfirmPayments exactly (account/ceo), same audience as the ticket
   // confirmDepositPaid/confirmFinalPayment/confirmCloseReady actions this
-  // page's rows drive. Deliberately NOT OR'd with isBillingNoteReleaseUser
+  // page's rows drive. The prefix arm covers /finance/deals/:id (the per-deal finance page): the
+  // exact match alone would leave it unclaimed, and canAccessPath fails OPEN for an unclaimed path.
+  // Deliberately NOT OR'd with isBillingNoteReleaseUser
   // (GLA-129) yet — AccountFinancePage.jsx has no internal tab scoping today,
   // so opening this guard for a can_issue_billing_note grant holder before
   // that scoping exists would hand a plain `employee` grant holder the WHOLE
@@ -103,7 +110,7 @@ const PATH_GUARDS = [
   // step-4 UI branch adds this OR at the SAME time it adds the page's own
   // tab-level gate, so the two land atomically and there is no window where
   // the page is reachable but unscoped.
-  { test: (p) => p === '/finance', can: (u) => hasPermission(u.role, 'canConfirmPayments') },
+  { test: (p) => p === '/finance' || p.startsWith('/finance/'), can: (u) => hasPermission(u.role, 'canConfirmPayments') },
   // Split (issue #390): mirrors PayrollController exactly -- every GET plus the non-persisting
   // POST /preview and /preview/export/{kind} are hasAnyRole('HR','CEO'); every write stays
   // hr-only and is gated inside PayrollPage.jsx (canManagePayroll), not at the route level.
@@ -266,6 +273,19 @@ function isQuotationPath(path) {
 // change that adds AccountFinancePage.jsx's own tab gate, so the three always land together.
 export function isBillingNoteReleaseUser(user) {
   return Boolean(user?.canIssueBillingNote);
+}
+
+/**
+ * Where an `import` user landing on a whole-deal URL (`/tickets/:id`) should go instead: their own
+ * per-deal page. Backend notification deep-links and old bookmarks still point at `/tickets/:id`,
+ * and a dead-end refusal there helps nobody. Only the bare detail path redirects — `/tickets`
+ * (the pipeline browser) and `/tickets/:id/deposit` have no import equivalent and stay refused.
+ * Returns null when no redirect applies. Routing convenience only; the backend is the authority.
+ */
+export function importDealRedirectFor(path, user) {
+  if (user?.role !== 'import') return null;
+  const match = /^\/tickets\/(\d+)\/?$/.exec(path.split(/[?#]/)[0]);
+  return match ? `/import/deals/${match[1]}` : null;
 }
 
 export function canAccessPath(path, user) {

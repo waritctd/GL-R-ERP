@@ -35,6 +35,7 @@ async function startNewFormDecision(sqmPerPiece = 0.36) {
   });
   const { project } = await api.customers.createProject(customer.id, { name: 'โครงการ CEO Price Mode Mock' });
   const { ticket: created } = await api.tickets.create({
+    entryChannel: 'DESIGNER_LED',
     title: 'ดีล CEO Price Mode Mock',
     priority: 'NORMAL',
     customerName: customer.name,

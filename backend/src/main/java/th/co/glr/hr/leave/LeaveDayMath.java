@@ -55,12 +55,14 @@ import th.co.glr.hr.attendance.schedule.WorkScheduleResolver;
  * timed request (still the only shape {@code chk_leave_time_single_day} allowed before V166) is
  * handled directly by the single-date branch below: the whole {@code totalDays - paidDays} remainder
  * lands in that one day's month, with no rank/weekday logic needed since there is only one day it
- * could ever land in. The multi-day branch below this point is UNCHANGED (still whole-day-only,
- * {@code BigDecimal("1.00")} per unpaid weekday) and stays the only path for a WHOLE-day multi-day
- * request. It does NOT gain fraction-awareness for a multi-day TIMED request (V166, 2026-09-10,
+ * could ever land in. The multi-day branch below this point (fixed 2026-09-25, see that method's own
+ * javadoc) now consumes a fractional {@code paidDays} balance day-by-day instead of flooring it to a
+ * whole number of paid days up front -- a boundary day where the paid balance runs out mid-day can
+ * therefore split into a paid portion and an unpaid portion, rather than the whole day being counted
+ * as unpaid. It does NOT gain fraction-awareness for a multi-day TIMED request (V166, 2026-09-10,
  * relaxed {@code chk_leave_time_single_day}) -- that is a separate, additive set of methods further
- * down this class (see the "Partial-day span" section header), so this pre-existing method's
- * behaviour for every request shape it already handled is byte-identical to before V166.
+ * down this class (see the "Partial-day span" section header), whose {@code
+ * unpaidByMonthFromFractions} already used running-balance consumption and is unaffected by this fix.
  *
  * <p><b>§5.4 MATERNITY calendar-day counting (V119, 2026-08-02):</b> every method below has a
  * {@link LeaveDayCountBasis}-aware overload alongside its original no-basis signature, which is
@@ -147,9 +149,16 @@ final class LeaveDayMath {
      * day's month -- there is only one day, so no weekday-rank logic is needed, and the result may be
      * fractional (sub-day leave).
      *
-     * <p>Multi-day range (always whole-day -- sub-day leave can never span more than one date): the
-     * original weekday-rank logic, each unpaid working day contributing exactly {@code 1.00}, correctly
-     * splitting across a calendar-month boundary.
+     * <p>Multi-day range (always whole-day -- sub-day leave can never span more than one date): each
+     * counted working day is worth {@code 1.00}, and {@code paidDays} is consumed against those days as
+     * a RUNNING FRACTIONAL BALANCE (2026-09-25 fix), not floored to a whole number of days up front --
+     * so a boundary day where the balance runs out mid-day is split between that day's month bucket
+     * (the unpaid remainder) and the paid portion consumed, rather than the whole day landing as
+     * unpaid. This mirrors {@link #unpaidByMonthFromFractions}'s balance-consumption approach, just
+     * over a flat {@code 1.00}-per-day ledger instead of a fractional per-day ledger. (Before this fix,
+     * {@code paidDays} was floored via {@code setScale(0, DOWN)} before ranking days against it, which
+     * silently discarded a fractional paid remainder -- e.g. 1.50 paid days over a 2-working-day leave
+     * used to yield 1.00 unpaid instead of the correct 0.50.)
      */
     static Map<LocalDate, BigDecimal> unpaidWorkingDaysByMonth(
             LocalDate startDate, LocalDate endDate, BigDecimal paidDays, BigDecimal totalDays) {
@@ -193,15 +202,16 @@ final class LeaveDayMath {
             return byMonth;
         }
 
-        int paidWholeDays = paid.setScale(0, RoundingMode.DOWN).intValue();
-        int rank = 0;
+        BigDecimal remainingPaid = paid;
         LocalDate cursor = startDate;
         while (!cursor.isAfter(endDate)) {
             if (basis.counts(cursor, isWorkingDay)) {
-                rank++;
-                if (rank > paidWholeDays) {
+                BigDecimal paidForDay = remainingPaid.min(ONE_DAY);
+                remainingPaid = remainingPaid.subtract(paidForDay);
+                BigDecimal unpaidForDay = ONE_DAY.subtract(paidForDay).setScale(2, RoundingMode.HALF_UP);
+                if (unpaidForDay.signum() > 0) {
                     LocalDate month = cursor.withDayOfMonth(1);
-                    byMonth.merge(month, ONE_DAY, BigDecimal::add);
+                    byMonth.merge(month, unpaidForDay, BigDecimal::add);
                 }
             }
             cursor = cursor.plusDays(1);
@@ -257,7 +267,12 @@ final class LeaveDayMath {
      * range (covers both whole-day and sub-day single-day leave): the whole {@code totalDays} is
      * attributed to that one date's year. Multi-day range (always whole-day): one {@code 1.00} per
      * working day, bucketed by {@code cursor.getYear()} -- mirrors {@link #unpaidWorkingDaysByMonth}'s
-     * multi-day branch exactly, just keyed by year instead of by first-of-month date. The returned
+     * multi-day branch's DAY-RANKING/bucketing walk (same cursor, same {@code basis.counts} test), NOT
+     * its paid-consumption: this method has no {@code paidDays} parameter and emits a flat {@code 1.00}
+     * per counted day regardless of how much of the request is paid, so the 2026-09-25 fix that made
+     * {@code unpaidWorkingDaysByMonth} consume a fractional paid balance (rather than flooring it) has
+     * no analogue here -- there is no paid/unpaid split to get right in a total-days-by-year count. The
+     * returned
      * map's key order is guaranteed ascending (years are only ever appended in the order the cursor
      * walks through them), so a caller may safely read the first entry as the request's earliest
      * (start) year.

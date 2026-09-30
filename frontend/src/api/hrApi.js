@@ -398,7 +398,10 @@ export const api = {
     create: (payload) => apiRequest(API_ROUTES.tickets.create, { method: 'POST', body: payload }),
     get: (id) => apiRequest(API_ROUTES.tickets.detail(id)),
     listPayments: (id) => apiRequest(API_ROUTES.tickets.payments(id)),
-    recordPayment: (id, payload) => apiRequest(API_ROUTES.tickets.payments(id), { method: 'POST', body: payload }),
+    // H1 lockdown: the four account-only money calls below were REMOVED from /api/tickets (their routes are
+    // gone) and now go to the finance routes; the method names stay so existing callers keep working.
+    // Response shape changes from { ticket } to { deal } (the finance view).
+    recordPayment: (id, payload) => apiRequest(API_ROUTES.finance.action(id, 'payments'), { method: 'POST', body: payload }),
     setBilling: (id, payload) => apiRequest(API_ROUTES.tickets.billing(id), { method: 'POST', body: payload }),
     listDeliveries: (id) => apiRequest(API_ROUTES.tickets.deliveries(id)),
     reserveStock: (id, payload) => apiRequest(API_ROUTES.tickets.reserveStock(id), { method: 'POST', body: payload }),
@@ -417,8 +420,7 @@ export const api = {
     // downloadQuotationXlsx/Pdf — so the 3 legacy pre-redesign quotations remain visible.
     // Three-party close (V55): ฝ่ายบัญชี confirms, then the CEO verifies. There is no
     // single-step close any more — sales is not part of the sequence.
-    confirmCloseReady: (id) =>
-      apiRequest(API_ROUTES.tickets.action(id, 'close/confirm'), { method: 'POST' }),
+    confirmCloseReady: (id) => apiRequest(API_ROUTES.finance.action(id, 'close/confirm'), { method: 'POST' }),
     revokeCloseConfirmation: (id, body) =>
       apiRequest(API_ROUTES.tickets.action(id, 'close/revoke'), { method: 'POST', body }),
     verifyClose: (id) =>
@@ -440,12 +442,12 @@ export const api = {
     // backend route — RemainingInvoiceDialog now downloads through storedRemainingInvoices.file
     // instead, an ISSUED/SUPERSEDED document's own frozen snapshot.
     confirmCustomer: (id) => apiRequest(API_ROUTES.tickets.action(id, 'confirm-customer'), { method: 'POST' }),
-    confirmDepositPaid: (id) => apiRequest(API_ROUTES.tickets.action(id, 'deposit-paid'), { method: 'POST' }),
+    confirmDepositPaid: (id) => apiRequest(API_ROUTES.finance.action(id, 'deposit-paid'), { method: 'POST' }),
     issueImportRequest: (id) => apiRequest(API_ROUTES.tickets.action(id, 'import-request'), { method: 'POST' }),
     markIrSent: (id) => apiRequest(API_ROUTES.tickets.action(id, 'ir-sent'), { method: 'POST' }),
     markShipping: (id) => apiRequest(API_ROUTES.tickets.action(id, 'shipping'), { method: 'POST' }),
     markGoodsReceived: (id) => apiRequest(API_ROUTES.tickets.action(id, 'goods-received'), { method: 'POST' }),
-    confirmFinalPayment: (id) => apiRequest(API_ROUTES.tickets.action(id, 'final-payment'), { method: 'POST' }),
+    confirmFinalPayment: (id) => apiRequest(API_ROUTES.finance.action(id, 'final-payment'), { method: 'POST' }),
     // Deal pipeline (V50): manual stage change / lost / reopen on the deal itself.
     updateStage: (id, payload) => apiRequest(API_ROUTES.tickets.action(id, 'stage'), { method: 'POST', body: payload }),
     markLost: (id, payload) => apiRequest(API_ROUTES.tickets.action(id, 'lost'), { method: 'POST', body: payload }),
@@ -558,6 +560,13 @@ export const api = {
       return res.blob();
     },
   },
+  // Mirrors ImportDealController — the import-only per-deal view. Role (import/ceo) and import's
+  // worklist row-scope are enforced in ImportDealService; this method carries no gate of its own.
+  // Resolves `{ deal }`; `deal.importRequests` is the same shape storedImportRequests.listForTicket
+  // returns, and `deal.items` never carries a price.
+  importDeals: {
+    get: (ticketId) => apiRequest(API_ROUTES.importDeals.get(ticketId)),
+  },
   // Mirrors ImportRequestController's PLURAL routes — the STORED ใบขอซื้อ aggregate (V184, PR-A
   // #1008 / PR-B UI, GLA-100/105). One row per (deal, factory), draft -> issue -> revise, with
   // per-factory progress (S12-S17), lead time / expected arrival, and an order-email draft.
@@ -616,6 +625,10 @@ export const api = {
   designers: {
     search: (q) => apiRequest(API_ROUTES.designers.search(q ?? '')),
     getByCode: (code) => apiRequest(API_ROUTES.designers.byCode(code)),
+    // Reversal of the original read-only ruling (owner ask relayed 2026-09-26, task
+    // "designer-add-from-ui") — mirrors customers.create's shape exactly (a single payload arg,
+    // POST). Gated server-side by DealEntryAccess.requireCanEnterDeal, same as customers.create.
+    create: (payload) => apiRequest(API_ROUTES.designers.create, { method: 'POST', body: payload }),
   },
   // Mirrors DealStageMetaController (ticket/). The deal pipeline's shape — stages with their
   // display number, S-sheet code, phase, write gate and auto-advance flag, plus the phase list and
@@ -659,6 +672,7 @@ export const api = {
   fxRates: {
     list: () => apiRequest(API_ROUTES.fxRates.list),
     upsert: (currency, payload) => apiRequest(API_ROUTES.fxRates.upsert(currency), { method: 'PUT', body: payload }),
+    fetchNow: () => apiRequest(API_ROUTES.fxRates.fetchNow, { method: 'POST' }),
   },
   priceCalcConfigs: {
     list: () => apiRequest(API_ROUTES.priceCalcConfigs.list),
@@ -677,6 +691,21 @@ export const api = {
   catalogThicknessDefaults: {
     list: () => apiRequest(API_ROUTES.catalog.thicknessDefaults),
     save: (payload) => apiRequest(API_ROUTES.catalog.thicknessDefaults, { method: 'PUT', body: payload }),
+  },
+  // Finance-only deal read (account + ceo) -- mirrors FinanceDealController.
+  // Also the money actions (H1 lockdown): each delegates server-side to the existing ticket business method and
+  // returns { deal }. account: row-scoped to its list scope; deposit-paid / final-payment / payments /
+  // close-confirm are account-only, billing / close-revoke / stage / comments are account + ceo.
+  finance: {
+    getDeal: (id) => apiRequest(API_ROUTES.finance.deal(id)),
+    addComment: (id, payload) => apiRequest(API_ROUTES.finance.action(id, 'comments'), { method: 'POST', body: payload }),
+    confirmDepositPaid: (id) => apiRequest(API_ROUTES.finance.action(id, 'deposit-paid'), { method: 'POST' }),
+    confirmFinalPayment: (id) => apiRequest(API_ROUTES.finance.action(id, 'final-payment'), { method: 'POST' }),
+    recordPayment: (id, payload) => apiRequest(API_ROUTES.finance.action(id, 'payments'), { method: 'POST', body: payload }),
+    confirmCloseReady: (id) => apiRequest(API_ROUTES.finance.action(id, 'close/confirm'), { method: 'POST' }),
+    revokeCloseConfirmation: (id, body) =>
+      apiRequest(API_ROUTES.finance.action(id, 'close/revoke'), { method: 'POST', body }),
+    updateStage: (id, payload) => apiRequest(API_ROUTES.finance.action(id, 'stage'), { method: 'POST', body: payload }),
   },
   attachments: {
     list: (ticketId) => apiRequest(API_ROUTES.attachments.list(ticketId)),
@@ -708,6 +737,10 @@ export const api = {
   },
   commissions: {
     list: (params) => apiRequest(withQuery(API_ROUTES.commissions.list, params)),
+    // sales_manager/ceo รออนุมัติ view: -> { commissions: [PendingCommissionDto] }.
+    pendingApproval: () => apiRequest(API_ROUTES.commissions.pendingApproval),
+    // sales_manager only: { lines: [{ itemId, weightMultiplier }] } -> { pending: PendingCommissionDto }.
+    adjustItemWeights: (id, payload) => apiRequest(API_ROUTES.commissions.itemWeights(id), { method: 'POST', body: payload }),
     create: async (payload) => {
       if (!Object.prototype.hasOwnProperty.call(payload, 'invoiceAttachment')) {
         return apiRequest(API_ROUTES.commissions.create, { method: 'POST', body: payload });
@@ -755,9 +788,17 @@ export const api = {
       formData.append('withholdingTax', String(payload.withholdingTax ?? 0));
       formData.append('overpayment', String(payload.overpayment ?? 0));
       if (payload.invoiceAttachment) formData.append('invoiceAttachment', payload.invoiceAttachment);
+      // Hand-rolled multipart fetch() must attach X-XSRF-TOKEN itself — apiRequest() does it for
+      // JSON calls, but this bypasses it for the file upload. Omitting it makes CsrfCookieFilter
+      // reject POST /api/commissions/from-deal with 403 "Invalid CSRF token". Same block as
+      // priceImport.upload below (see the leave-submit regression note at the top of this file).
+      const csrfToken = document.cookie.split('; ')
+        .find((c) => c.startsWith('XSRF-TOKEN='))
+        ?.split('=')[1];
       const res = await fetch(API_ROUTES.commissions.createFromDeal, {
         method: 'POST',
         credentials: 'include',
+        headers: csrfToken ? { 'X-XSRF-TOKEN': csrfToken } : {},
         body: formData,
       });
       if (!res.ok) {
@@ -1089,9 +1130,13 @@ export const api = {
     queue: (params) => apiRequest(API_ROUTES.pricingRequests.queue(params)),
     get: (id) => apiRequest(API_ROUTES.pricingRequests.detail(id)),
     update: (id, payload) => apiRequest(API_ROUTES.pricingRequests.detail(id), { method: 'PUT', body: payload }),
-    // Import-only, and only while the request is in Import's hands. `payload` is { factory }.
-    // Fills a blank factory; it never re-routes a line that already has one (the service 409s) —
-    // see PricingRequestService#setItemFactory.
+    // Import-only, and only while the request is in Import's hands. `payload` is { factoryId } —
+    // B6 (GLA-135): a real price_catalog.factories row's id, picked from the SearchableCombobox
+    // in PricingRequestDetailPage, not a free-typed name (a typed name that didn't exactly match a
+    // master row used to leave resolved_factory_id NULL and dead-end the factory-email/CEO-costing
+    // lookups that key on it). Fills a blank factory; it never re-routes a line that already has
+    // one (the service 409s), and 404s when factoryId does not resolve — see
+    // PricingRequestService#setItemFactory.
     setItemFactory: (id, itemId, payload) =>
       apiRequest(API_ROUTES.pricingRequests.itemFactory(id, itemId), { method: 'PUT', body: payload }),
     generateFactoryEmailDrafts: (id) => apiRequest(API_ROUTES.pricingRequests.factoryEmailDrafts(id), { method: 'POST' }),
@@ -1245,10 +1290,22 @@ export const api = {
     submit: (id, payload = {}) => apiRequest(API_ROUTES.dealQuotations.submit(id), { method: 'POST', body: payload }),
     approve: (id, payload = {}) => apiRequest(API_ROUTES.dealQuotations.approve(id), { method: 'POST', body: payload }),
     reject: (id, payload) => apiRequest(API_ROUTES.dealQuotations.reject(id), { method: 'POST', body: payload }),
+    // GLA-123 slice S3 (R9) — records what the customer said about an ISSUED
+    // PRICING_REQUEST-origin quotation. `outcome` is one of ACCEPTED/REJECTED/REVISION_REQUESTED
+    // (mirrors CustomerQuotationController's identical legacy endpoint at
+    // pricingRequests.recordCustomerQuotationOutcome). ACCEPTED transitions the pricing request
+    // to QUOTATION_ACCEPTED; R8 (only one finalized quotation per deal, across both คำขอราคา
+    // origins) is enforced server-side, not here.
+    recordOutcome: (id, payload) => apiRequest(API_ROUTES.dealQuotations.outcome(id), { method: 'POST', body: payload }),
     createRevision: (id, payload = {}) => apiRequest(API_ROUTES.dealQuotations.revisions(id), { method: 'POST', body: payload }),
     // GLA-74 part 1 ("สร้างจากใบเดิม" / สั่งเหมือนเดิม) -- clone an APPROVED quotation into a new,
     // independent DRAFT. The source stays APPROVED; see DealQuotationService#createReorder.
     createReorder: (id, payload = {}) => apiRequest(API_ROUTES.dealQuotations.reorders(id), { method: 'POST', body: payload }),
+    // GLA-136 (owner ruling 2026-09-30) -- "สร้างดีลจากใบเสนอราคา". No request body. Responds
+    // `{ result: { ticketId, ticket: TicketSummaryDto, quotation: DealQuotationDto } }`
+    // (DealQuotationDtos.PromoteToDealResultDto). Idempotent server-side: a replay on an
+    // already-promoted deal returns the same shape. See DealQuotationService#promoteToDeal.
+    promoteToDeal: (id) => apiRequest(API_ROUTES.dealQuotations.promoteToDeal(id), { method: 'POST' }),
     cancel: (id, payload = {}) => apiRequest(API_ROUTES.dealQuotations.cancel(id), { method: 'POST', body: payload }),
     // M4(d) fix (Opus review, 2026-09-20) — no request body: everything is rebuilt server-side
     // from the same approved decision item.

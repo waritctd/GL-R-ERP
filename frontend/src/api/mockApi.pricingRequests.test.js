@@ -341,6 +341,7 @@ async function driveToApprovedForQuotation() {
   });
   const { project } = await api.customers.createProject(customer.id, { name: `โครงการเลขที่ใบเสนอราคาทดสอบ ${n}` });
   const { ticket: created } = await api.tickets.create({
+    entryChannel: 'DESIGNER_LED',
     title: `ดีลเลขที่ใบเสนอราคาทดสอบ ${n}`,
     priority: 'NORMAL',
     customerName: customer.name,

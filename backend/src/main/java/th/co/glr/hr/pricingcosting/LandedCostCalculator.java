@@ -657,6 +657,10 @@ public class LandedCostCalculator {
         Set<String> problems = new LinkedHashSet<>();
         Map<String, Optional<FactoryQuoteDto>> quotesByFactory = new HashMap<>();
         for (PricingRequestItemDto item : pricingRequests.findItems(summary.id())) {
+            // Stock lines (V194): never sent to a factory, never costed - nothing to resolve.
+            if (item.stockSource() != null) {
+                continue;
+            }
             String factoryName = firstText(item.resolvedFactoryName(), item.factory());
             if (factoryName == null) {
                 problems.add(itemLabel(item) + " ในคำขอราคายังไม่ได้ระบุโรงงาน");
@@ -715,6 +719,21 @@ public class LandedCostCalculator {
         } catch (ApiException e) {
             return false;
         }
+    }
+
+    /**
+     * Stock lines (V194, IA 1.2): THE readiness predicate for a request to reach the CEO -- every
+     * IMPORT line is resolvable ({@link #isFullyResolvable}, which skips stock lines) AND every
+     * {@code IN_TRANSIT} line has an ETA. Re-checked after markReadyForCosting and after each ETA
+     * save, so whichever of the two finishes last advances the request.
+     */
+    public boolean isReadyForCeoReview(PricingRequestSummaryDto summary) {
+        for (PricingRequestItemDto item : pricingRequests.findItems(summary.id())) {
+            if ("IN_TRANSIT".equals(item.stockSource()) && item.expectedArrivalDate() == null) {
+                return false;
+            }
+        }
+        return isFullyResolvable(summary);
     }
 
     /**

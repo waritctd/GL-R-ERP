@@ -14,14 +14,15 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       designers: {
         search: vi.fn(),
         getByCode: vi.fn(),
+        create: vi.fn(),
       },
     },
   };
 });
 
-function Harness({ initial = '' }) {
+function Harness({ initial = '', showToast }) {
   const [code, setCode] = React.useState(initial);
-  return <DesignerPicker value={code} onSelectCode={setCode} idPrefix="dp" />;
+  return <DesignerPicker value={code} onSelectCode={setCode} idPrefix="dp" showToast={showToast} />;
 }
 
 // Owner ask (2026-09-14): the picker displays designer NAME + CODE in one field, while the
@@ -158,5 +159,72 @@ describe('DesignerPicker', () => {
 
     fireEvent.keyDown(input, { key: 'Escape' });
     expect(screen.queryByRole('option', { name: /ABACUS DESIGN/ })).toBeNull();
+  });
+
+  // "+ เพิ่มผู้ออกแบบใหม่" (reversal, owner ask relayed 2026-09-26, task "designer-add-from-ui")
+  describe('add-new-designer flow', () => {
+    it('shows a sticky "+ เพิ่มผู้ออกแบบใหม่" row seeded from the typed query, opens a modal, and saving calls onSelectCode with the CREATED code', async () => {
+      api.designers.search.mockResolvedValue({ items: [] });
+      api.designers.create.mockResolvedValue({ designer: { code: 'A200', name: 'NEW DESIGN STUDIO', active: true } });
+      render(<Harness />);
+
+      const input = screen.getByLabelText('ค้นหาผู้ออกแบบ');
+      fireEvent.change(input, { target: { value: 'NEW DESIGN STUDIO' } });
+      await waitFor(() => expect(api.designers.search).toHaveBeenCalled());
+
+      fireEvent.mouseDown(screen.getByRole('button', { name: /เพิ่มผู้ออกแบบใหม่/ }));
+
+      const nameField = await screen.findByLabelText(/ชื่อผู้ออกแบบ/);
+      // Seeded from the typed search query, same behaviour as DealCustomerCard's เพิ่มลูกค้าใหม่.
+      expect(nameField.value).toBe('NEW DESIGN STUDIO');
+
+      const codeField = screen.getByLabelText(/รหัสผู้ออกแบบ/);
+      fireEvent.change(codeField, { target: { value: 'A200' } });
+
+      fireEvent.click(screen.getByRole('button', { name: 'บันทึกผู้ออกแบบใหม่' }));
+
+      await waitFor(() => expect(api.designers.create).toHaveBeenCalledWith({ code: 'A200', name: 'NEW DESIGN STUDIO' }));
+      // The modal closes and the picker's own field carries the CODE the create call returned,
+      // not the name -- the same confidentiality-shaped guarantee the existing pick tests assert.
+      await waitFor(() => expect(screen.queryByRole('button', { name: 'บันทึกผู้ออกแบบใหม่' })).toBeNull());
+      await waitFor(() => expect(input.value).toBe('A200'));
+    });
+
+    it('a duplicate code surfaces the server error via showToast and leaves the modal open', async () => {
+      api.designers.search.mockResolvedValue({ items: [] });
+      const showToast = vi.fn();
+      const error = new Error('รหัสผู้ออกแบบนี้มีอยู่แล้ว');
+      api.designers.create.mockRejectedValue(error);
+      render(<Harness showToast={showToast} />);
+
+      fireEvent.focus(screen.getByLabelText('ค้นหาผู้ออกแบบ'));
+      await waitFor(() => expect(api.designers.search).toHaveBeenCalled());
+      fireEvent.mouseDown(screen.getByRole('button', { name: /เพิ่มผู้ออกแบบใหม่/ }));
+
+      fireEvent.change(screen.getByLabelText(/รหัสผู้ออกแบบ/), { target: { value: 'A001' } });
+      fireEvent.change(screen.getByLabelText(/ชื่อผู้ออกแบบ/), { target: { value: 'ABACUS DESIGN CO.,LTD' } });
+      fireEvent.click(screen.getByRole('button', { name: 'บันทึกผู้ออกแบบใหม่' }));
+
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'รหัสผู้ออกแบบนี้มีอยู่แล้ว'));
+      // The modal stays open on failure -- nothing was selected, so the field is still blank.
+      expect(screen.getByRole('button', { name: 'บันทึกผู้ออกแบบใหม่' })).not.toBeNull();
+    });
+
+    it('the save button is disabled until BOTH code and name are non-blank', async () => {
+      api.designers.search.mockResolvedValue({ items: [] });
+      render(<Harness />);
+      fireEvent.focus(screen.getByLabelText('ค้นหาผู้ออกแบบ'));
+      await waitFor(() => expect(api.designers.search).toHaveBeenCalled());
+      fireEvent.mouseDown(screen.getByRole('button', { name: /เพิ่มผู้ออกแบบใหม่/ }));
+
+      const saveButton = screen.getByRole('button', { name: 'บันทึกผู้ออกแบบใหม่' });
+      expect(saveButton.disabled).toBe(true);
+
+      fireEvent.change(screen.getByLabelText(/รหัสผู้ออกแบบ/), { target: { value: 'A200' } });
+      expect(saveButton.disabled).toBe(true);
+
+      fireEvent.change(screen.getByLabelText(/ชื่อผู้ออกแบบ/), { target: { value: 'NEW DESIGN STUDIO' } });
+      expect(saveButton.disabled).toBe(false);
+    });
   });
 });

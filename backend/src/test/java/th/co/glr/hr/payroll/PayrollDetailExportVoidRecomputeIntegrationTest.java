@@ -9,6 +9,7 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import org.apache.poi.ss.usermodel.Cell;
+import org.apache.poi.ss.usermodel.FormulaEvaluator;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
@@ -95,24 +96,37 @@ class PayrollDetailExportVoidRecomputeIntegrationTest extends AbstractPostgresIn
             PayrollExportKind.PAYROLL_DETAIL, periodId, LocalDate.of(2026, 3, 26), hr());
 
         try (XSSFWorkbook workbook = new XSSFWorkbook(new ByteArrayInputStream(file.content()))) {
+            // 3-tab workbook: สรุปเงินเดือน is sheet 0 -- see PayrollDetailExporter's class javadoc.
             Sheet sheet = workbook.getSheetAt(0);
-            Row header = sheet.getRow(0);
+            Row header = sheet.getRow(3); // header on row 4 (title/subtitle rows above it)
             int codeCol = -1;
-            int netPayCol = -1;
+            int grossCol = -1;
             int specialPay1Col = -1;
             for (Cell cell : header) {
-                if ("รหัสพนักงาน".equals(cell.getStringCellValue())) codeCol = cell.getColumnIndex();
-                if ("คงเหลือจ่ายจริง (A-B-C+D)".equals(cell.getStringCellValue())) netPayCol = cell.getColumnIndex();
-                if ("พิเศษ 1 (ค่าครองชีพ)".equals(cell.getStringCellValue())) specialPay1Col = cell.getColumnIndex();
+                if ("รหัส".equals(cell.getStringCellValue())) codeCol = cell.getColumnIndex();
+                if ("รวมรายได้\nที่ต้องเสียภาษี".equals(cell.getStringCellValue())) grossCol = cell.getColumnIndex();
+                if ("พิเศษ 1\nค่าครองชีพ".equals(cell.getStringCellValue())) specialPay1Col = cell.getColumnIndex();
             }
-            Row dataRow = sheet.getRow(1);
+            Row dataRow = sheet.getRow(4); // first (only) employee, row 5
             assertThat(dataRow.getCell(codeCol).getStringCellValue()).isEqualTo("VOID-001");
-            assertThat(BigDecimal.valueOf(dataRow.getCell(netPayCol).getNumericCellValue()))
-                .as("must equal the ORIGINAL correct net pay, NOT the corrupted 0 sitting in the VOID row")
-                .isEqualByComparingTo(correctNetPay);
-            assertThat(dataRow.getCell(netPayCol).getNumericCellValue())
+
+            FormulaEvaluator evaluator = workbook.getCreationHelper().createFormulaEvaluator();
+            // รวมรายได้ที่ต้องเสียภาษี (R) is a live SUM formula over the reconstructed line's own
+            // input cells -- unlike the old sheet's netPay()-verbatim column, this format recomputes
+            // from cells, so what we can assert directly against PayrollLineDto is the TAXABLE GROSS,
+            // not the final net (see PayrollDetailExporter's class javadoc on why net pay here is a
+            // simplified re-derivation, not PayrollLineDto#netPay() verbatim).
+            double gross = evaluator.evaluate(dataRow.getCell(grossCol)).getNumberValue();
+            assertThat(BigDecimal.valueOf(gross))
+                .as("must equal the ORIGINAL correct recomputed gross taxable income, NOT the "
+                    + "corrupted 0 sitting in the VOID row's gross_taxable_income column")
+                .isEqualByComparingTo(correct.grossTaxableIncome());
+            assertThat(gross)
                 .as("the corrupted stored value was literally 0 -- the recompute must not equal it")
                 .isNotEqualTo(0.0);
+            assertThat(correctNetPay)
+                .as("sanity: the correct processed run actually paid something, not zero")
+                .isNotEqualByComparingTo(BigDecimal.ZERO);
             assertThat(dataRow.getCell(specialPay1Col).getNumericCellValue())
                 .as("HR's typed special-pay input must survive the reconstruct-and-recompute")
                 .isEqualTo(1000.00);
