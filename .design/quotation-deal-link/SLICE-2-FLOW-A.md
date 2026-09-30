@@ -13,17 +13,17 @@ inverted, every touched file stamped `designed-as-app`).
 | # | Change | Contract |
 |---|---|---|
 | S2-B1 | `UpsertDealQuotationRequest.recipientType` (DESIGNER / OWNER / BUYER; **required on create for `DEAL_DIRECT`**, 400 otherwise; editable while DRAFT via update; refused on a PRICING_REQUEST-origin row — its recipient comes from the คำขอราคา). Persisted to the existing `sales.quotation.recipient_type` (today hard-coded `"UNSPECIFIED"` at `DealQuotationRepository:576`). `recipientLabel` derived (Thai). | request field |
-| S2-B2 | **Recipient → stage on create and on recipient change**, DEAL_DIRECT only: `TicketService.advanceStageForDirectQuotationRecipient(ticketId, recipientType, actor)` — public wrapper over the existing private `stageForQuotationRecipient` + `autoAdvanceStage` (forward-only, ACTIVE only, event `STAGE_CHANGED` note "อัตโนมัติจากใบเสนอราคา"). Called from `DealQuotationService.create` and from `update` when `recipientType` changed. **Never on a PRICING_REQUEST row** (that route advances at issue, unchanged). | behaviour |
+| ~~S2-B2~~ | **MOVED OUT OF THIS SLICE (owner ruling 2026-09-30, later same day).** The deal-stage rule — including what a direct quotation's creation does to `sales_stage` — is owned by the separate "entry channel drives the stage route" work (session "Deal stage auto-jump on contact selection"). This slice only persists `recipientType` (S2-B1) so that rule can key on it; it does **not** call `autoAdvanceStage`. `DealQuotationService.create` carries a one-line pointer comment at the hook point. The original proposal (DESIGNER→S4, OWNER→S5, BUYER→S8, forward-only) was handed over as input, not as a decision; IA decision D1 is therefore now that work's to honour or amend with the owner. | — |
 | S2-B3 | **N6** — `DealQuotationService.create` on a ticket that already has a *live* DEAL_DIRECT quotation (DRAFT / PENDING_APPROVAL / APPROVED) → 409 whose body names the live quotation (`liveQuotationId`, `number`, `docStatus`) so the client can offer "แก้ไขฉบับนั้น" / "สร้างฉบับแก้ไข (-n)". Message: "ดีลนี้มีใบเสนอราคาตรงที่ใช้งานอยู่ ({number}) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่". Reuses slice 1's `DirectQuotationLocks` predicate. | behaviour (409 + structured body) |
 | S2-B4 | `TicketSummaryDto.liveDirectQuotation` — `{ id, number, docStatus, recipientType }` or null — filled in `TicketRepository.enrichSummary` for list rows **and** `findById` (one query per row, same shape as `hasRecordedCommission`; or a LEFT JOIN LATERAL if the list query is already joining — implementer's call, must cite). Picks the newest live DEAL_DIRECT row. This is what the CTA cascade keys on. | DTO field |
 | S2-B5 | `confirm-order` (slice 1) unchanged. Backfilled quotation-first ghosts: NO data migration invents a stage (IA §7) — the rep sets ผู้รับ on the quotation and S2-B2 moves it. | — |
 | — | No migration (all columns exist). Digests regenerated if any operation/field changes. | |
 
 **Coverage list (write first, run red, then implement):**
-- `DealQuotationRecipientStageIntegrationTest` (new): create DEAL_DIRECT with DESIGNER → deal at `QUOTE_DESIGN_SIDE`; OWNER → `QUOTE_OWNER`; BUYER → `QUOTE_BUYER`; create on a deal already at `NEGOTIATION` → stage **unchanged** (forward-only); update DRAFT recipient DESIGNER→OWNER moves S4→S5; BUYER→DESIGNER leaves S8; recipient change on PENDING_APPROVAL → 409; `recipientType` missing on a direct create → 400; `recipientType` sent on a PRICING_REQUEST-origin update → 409; **wrong-way-round**: an ON_HOLD deal is not advanced; a non-owner `sales` cannot create at all (403, pre-existing); `STAGE_CHANGED` event written with the auto note.
+- `DealQuotationRecipientIntegrationTest` (new): `recipientType` persisted on a DEAL_DIRECT create (each of DESIGNER / OWNER / BUYER) with its Thai `recipientLabel`; missing on a direct create → 400; changed on a DRAFT via update → persisted; changed on PENDING_APPROVAL → 409; sent on a PRICING_REQUEST-origin update → 409; non-owner `sales` → 403 (pre-existing). **Pins the handover:** creating/updating a direct quotation does **not** change `sales_stage` and writes no `STAGE_CHANGED` event (so the stage rule has exactly one owner).
 - N6: second `create` on a ticket with a live direct quotation → 409 with `liveQuotationId` = the live one; allowed again after that quotation is CANCELLED; allowed when the only prior quotation is SUPERSEDED.
 - `TicketListLiveDirectQuotationIntegrationTest` (new): list row carries `liveDirectQuotation` for a deal with a DRAFT direct quotation; null for none; the **newest** live one when two exist (revision chain); cancelled ones ignored; `findById` carries the same.
-- Mutation checks: (a) remove the `autoAdvanceStage` call → the three stage tests red; (b) drop the N6 check → its 409 test red; (c) return null from the enrichment → the list test red.
+- Mutation checks: (a) drop the `recipientType` required-check → its 400 test red; (b) drop the N6 check → its 409 test red; (c) return null from the enrichment → the list test red.
 
 ---
 
@@ -69,9 +69,9 @@ tint when selected, `--radius-md`, 38/44 px):
 - **สร้างดีลใหม่** → today's card (customer typeahead · project typeahead · ช่องทางรับงาน), unchanged.
 - **ผู้รับใบเสนอราคา*** (both branches, below the deal choice, above ช่องทางรับงาน): three pill
   radios — `ผู้ออกแบบ` · `เจ้าของโครงการ` · `ผู้ซื้อ / ผู้รับเหมา` — required; validation error in the
-  same `FormField` error slot. Helper line under it (13 px, `--color-text-muted`):
-  "ดีลจะอยู่ที่ขั้น {stage label}" updating live with the choice (e.g. *ดีลจะอยู่ที่ขั้น เสนอราคา
-  ผู้ออกแบบ*). On the `?ticket=` path the radio is **preselected from the deal's stage** when it is
+  same `FormField` error slot. ~~Helper line "ดีลจะอยู่ที่ขั้น {stage}"~~ — **removed**: the stage
+  rule is owned by the entry-channel/stage-route work (see S2-B2), so this screen must not promise a
+  stage move; that work may add a preview here later. On the `?ticket=` path the radio is **preselected from the deal's stage** when it is
   S4/S5/S8 and left empty otherwise. Order of options = S-order (S4, S5, S8).
 - Copy is Thai-first; no S-codes in the UI (the stage label is the text; DESIGN.md §18).
 
