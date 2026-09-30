@@ -309,7 +309,11 @@ export function ImportRequestFactoryCard({
 
       {isIssued ? (
         <FactoryProgressBar
-          row={{ id: row.id, factoryName: row.factoryName, importStep: row.importStep, importStepAt: row.importStepAt }}
+          row={{
+            id: row.id, factoryName: row.factoryName, importStep: row.importStep, importStepAt: row.importStepAt,
+            expectedArrivalFrom: row.expectedArrivalFrom, expectedArrivalTo: row.expectedArrivalTo,
+            leadTimeMinDays: row.leadTimeMinDays, leadTimeMaxDays: row.leadTimeMaxDays,
+          }}
           editable={canAdvance}
           advancing={advanceMutation.isPending}
           onAdvance={(_r, targetStep) => advanceMutation.mutate(targetStep)}

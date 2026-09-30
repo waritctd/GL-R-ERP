@@ -45,6 +45,19 @@ export function FactoryProgressBar({ row, editable = false, advancing = false, o
         {row.importStepAt ? (
           <span className="text-2xs text-text-muted">· อัปเดต {formatThaiDate(row.importStepAt)}</span>
         ) : null}
+        {/* ETA — expected arrival window, derived from the factory's lead time (issueDate +
+            leadTimeMin/Max). Read-only, shown to sales/CEO/import alike. Falls back to the raw
+            lead-time span before the row is issued (no issue date yet, so no derived dates). */}
+        {row.expectedArrivalFrom && row.expectedArrivalTo ? (
+          <span className="inline-flex items-center gap-1 rounded-full bg-surface-subtle px-2 py-0.5 text-2xs font-bold text-text-secondary" data-testid={`factory-eta-${row.id}`}>
+            ETA {formatThaiDate(row.expectedArrivalFrom)}
+            {row.expectedArrivalTo !== row.expectedArrivalFrom ? ` – ${formatThaiDate(row.expectedArrivalTo)}` : ''}
+          </span>
+        ) : (row.leadTimeMinDays != null && row.leadTimeMaxDays != null) ? (
+          <span className="text-2xs text-text-muted" data-testid={`factory-eta-${row.id}`}>
+            · ETA ~{row.leadTimeMinDays}–{row.leadTimeMaxDays} วันหลังออกเลข
+          </span>
+        ) : null}
         {onOpenEmail || (editable && ahead.length > 0) ? (
           <span className="ml-auto flex flex-wrap items-center gap-2">
             {onOpenEmail ? (
