@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Button } from '../../components/common/Button.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { dealStageLabel } from '../../utils/format.js';
+import { EntryChannelFix } from './EntryChannelFix.jsx';
 
 /**
  * Manual stage-change modal. **It renders a decision; it does not make one.**
@@ -23,7 +24,10 @@ import { dealStageLabel } from '../../utils/format.js';
  * silently vanishes leaves the rep guessing, while "ยังไปไม่ได้ — ยังไม่ได้รับชำระมัดจำ" tells them
  * what to do next. The select still offers only what will actually be accepted.
  */
-export function UpdateStageModal({ deal, stageDecisions = [], onClose, onSubmit, submitting }) {
+export function UpdateStageModal({
+  deal, stageDecisions = [], onClose, onSubmit, submitting,
+  entryChannelAction, onSetEntryChannel,
+}) {
   const options = stageDecisions.filter((decision) => decision.allowed);
   const blocked = stageDecisions.filter(
     (decision) => !decision.allowed && decision.stage !== deal?.salesStage,
@@ -135,6 +139,19 @@ export function UpdateStageModal({ deal, stageDecisions = [], onClose, onSubmit,
                       <span className="block text-2xs leading-snug text-text-muted [overflow-wrap:anywhere]">
                         {decision.blockedReason}
                       </span>
+                      {/* "…— แก้ช่องทางดีลก่อน" is the server's remedy; this is the control that does it,
+                          INLINE because this component is already a dialog. Only rows the server
+                          itself marked off-route: a row blocked for permission or a payment fact
+                          would be offered a remedy that cannot clear it. */}
+                      {decision.onRoute === false ? (
+                        <EntryChannelFix
+                          entryChannel={deal?.entryChannel}
+                          action={entryChannelAction}
+                          onSubmit={onSetEntryChannel}
+                          disabled={submitting}
+                          context={dealStageLabel(decision.stage, deal?.entryChannel).label}
+                        />
+                      ) : null}
                     </span>
                   </li>
                 ))}
