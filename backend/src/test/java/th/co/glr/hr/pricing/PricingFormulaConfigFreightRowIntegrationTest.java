@@ -38,7 +38,7 @@ import tools.jackson.databind.json.JsonMapper;
  *
  * <p>Mockito cannot stand in here for two separate reasons. First, a mocked repository would let a
  * 403 assertion "pass" while the SQL happily wrote the row anyway -- so every denial case below also
- * asserts the STORED state is unchanged (version still 1, target row still present), which is the
+ * asserts the STORED state is unchanged (version still 2 -- V109 seed v1, V198 margin-30% republish v2, target row still present), which is the
  * assertion that actually proves the guard runs before the write. Second, the add/delete paths
  * derive the whole new version from {@code findCurrent()}, so the V109 seed itself -- 39 freight
  * rows, six deliberately-blank cells, half-open contiguous bands -- is the fixture under test.
@@ -111,7 +111,7 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
 
             // The 403 is worthless if the row landed anyway: no new version, no new row, and
             // Turkey must not exist anywhere in the table (not merely in the current version).
-            assertThat(currentConfig().version()).as("version after %s attempted a write", role).isEqualTo(1);
+            assertThat(currentConfig().version()).as("version after %s attempted a write", role).isEqualTo(2);
             assertThat(totalFreightRowCount()).as("row count after %s attempted a write", role).isEqualTo(seededRowCount);
             assertThat(countryRowCountAcrossAllVersions("TR")).as("Turkey rows after %s", role).isZero();
         }
@@ -127,7 +127,7 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
                     .session(sessionFor(role)))
                 .andExpect(status().isForbidden());
 
-            assertThat(currentConfig().version()).as("version after %s attempted a delete", role).isEqualTo(1);
+            assertThat(currentConfig().version()).as("version after %s attempted a delete", role).isEqualTo(2);
             assertThat(totalFreightRowCount()).as("row count after %s attempted a delete", role).isEqualTo(seededRowCount);
             assertThat(currentConfig().freightRates())
                 .as("target row after %s attempted a delete", role)
@@ -146,7 +146,7 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
         mvc.perform(delete("/api/pricing-formula-config/freight-rates/{id}", targetId))
             .andExpect(status().isUnauthorized());
 
-        assertThat(currentConfig().version()).isEqualTo(1);
+        assertThat(currentConfig().version()).isEqualTo(2);
         assertThat(countryRowCountAcrossAllVersions("TR")).isZero();
     }
 
@@ -176,7 +176,7 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
             .andExpect(status().isOk());
 
         PricingFormulaConfigDto after = currentConfig();
-        assertThat(after.version()).isEqualTo(2);
+        assertThat(after.version()).isEqualTo(3);
         assertThat(after.freightRates()).hasSize(40);
         assertThat(matchingBands(after, "IT", thickness, qty)).isEqualTo(1);
         assertThat(after.freightRates().stream()
@@ -185,8 +185,8 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
             .filter(rate -> rate.thicknessMinMm().compareTo(new BigDecimal("12")) == 0)
             .findFirst().orElseThrow().amountThb()).isEqualByComparingTo("110000");
 
-        // V109's versioning model is untouched: the previous generation keeps all 39 of its rows.
-        assertThat(freightRowCountForVersion(1)).isEqualTo(39);
+        // V109's versioning model is untouched: the previous generation (v2, the V198 republish) keeps all 39 of its rows.
+        assertThat(freightRowCountForVersion(2)).isEqualTo(39);
     }
 
     /** A brand-new origin country is now a config edit, not a migration -- the other half of #436. */
@@ -199,7 +199,7 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
             .andExpect(status().isOk());
 
         PricingFormulaConfigDto after = currentConfig();
-        assertThat(after.version()).isEqualTo(2);
+        assertThat(after.version()).isEqualTo(3);
         assertThat(matchingBands(after, "TR", new BigDecimal("5.5"), new BigDecimal("250.25"))).isEqualTo(1);
     }
 
@@ -212,7 +212,7 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
             .andExpect(status().isOk());
 
         PricingFormulaConfigDto after = currentConfig();
-        assertThat(after.version()).isEqualTo(2);
+        assertThat(after.version()).isEqualTo(3);
         assertThat(after.freightRates()).hasSize(38);
         assertThat(after.freightRates())
             .noneMatch(rate -> "IT".equals(rate.originCountryCode())
@@ -221,7 +221,7 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
         // Trimming the top of a ladder is allowed, and the row below it still covers its own range
         // exactly once -- the delete narrowed coverage without disturbing what remains.
         assertThat(matchingBands(after, "IT", new BigDecimal("14"), new BigDecimal("300"))).isEqualTo(1);
-        assertThat(freightRowCountForVersion(1)).isEqualTo(39);
+        assertThat(freightRowCountForVersion(2)).isEqualTo(39);
     }
 
     // ============================================================================================
@@ -237,8 +237,9 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
                 .content(newRowBody("IT", 12, 17, 700, 900, 95000)))
             .andExpect(status().isBadRequest());
 
-        assertThat(currentConfig().version()).isEqualTo(1);
-        assertThat(totalFreightRowCount()).isEqualTo(39);
+        assertThat(currentConfig().version()).isEqualTo(2);
+        // Across ALL versions: 39 (V109 seed v1) + 39 (V198 margin-30% republish v2); nothing added.
+        assertThat(totalFreightRowCount()).isEqualTo(78);
     }
 
     /** An overlapping THICKNESS band is caught on insert too, not just an overlapping qty band. */
@@ -250,7 +251,7 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
                 .content(newRowBody("IT", 5, 10, 1, 101, 85000)))
             .andExpect(status().isBadRequest());
 
-        assertThat(currentConfig().version()).isEqualTo(1);
+        assertThat(currentConfig().version()).isEqualTo(2);
     }
 
     @Test
@@ -261,7 +262,7 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
                 .content(newRowBody("TR", 12, 12, 1, 101, 70000)))
             .andExpect(status().isBadRequest());
 
-        assertThat(currentConfig().version()).isEqualTo(1);
+        assertThat(currentConfig().version()).isEqualTo(2);
     }
 
     /**
@@ -281,7 +282,7 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
                 .session(sessionFor("ceo")))
             .andExpect(status().isBadRequest());
 
-        assertThat(currentConfig().version()).isEqualTo(1);
+        assertThat(currentConfig().version()).isEqualTo(2);
         assertThat(currentConfig().freightRates()).anyMatch(rate -> rate.freightRateId() == middle.freightRateId());
         // Still exactly one band for a 300 sqm / 14 mm Italian order -- the hole was never opened.
         assertThat(matchingBands(currentConfig(), "IT", new BigDecimal("14"), new BigDecimal("300"))).isEqualTo(1);
@@ -311,15 +312,15 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
     void deletingARowIdFromASupersededVersionIsNotFound() throws Exception {
         long staleId = topQuantityBandOf("IT", "12", "17").freightRateId();
         deleteAsCeoExpectingOk(staleId);
-        assertThat(currentConfig().version()).isEqualTo(2);
+        assertThat(currentConfig().version()).isEqualTo(3);
 
         mvc.perform(delete("/api/pricing-formula-config/freight-rates/{id}", staleId)
                 .session(sessionFor("ceo")))
             .andExpect(status().isNotFound());
 
         // The superseded version still has all 39 of its rows, including the one just "deleted".
-        assertThat(freightRowCountForVersion(1)).isEqualTo(39);
-        assertThat(currentConfig().version()).isEqualTo(2);
+        assertThat(freightRowCountForVersion(2)).isEqualTo(39);
+        assertThat(currentConfig().version()).isEqualTo(3);
     }
 
     @Test
@@ -327,7 +328,7 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
         mvc.perform(delete("/api/pricing-formula-config/freight-rates/{id}", 9_999_999L)
                 .session(sessionFor("ceo")))
             .andExpect(status().isNotFound());
-        assertThat(currentConfig().version()).isEqualTo(1);
+        assertThat(currentConfig().version()).isEqualTo(2);
     }
 
     /**
@@ -346,7 +347,7 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
         deleteAsCeoExpectingOk(quantityBandOf("CN", "17", "21", "101").freightRateId());
 
         PricingFormulaConfigDto after = currentConfig();
-        assertThat(after.version()).isEqualTo(3);
+        assertThat(after.version()).isEqualTo(4);
 
         for (BigDecimal qty : List.of(new BigDecimal("1"), new BigDecimal("100.5"), new BigDecimal("450.75"))) {
             for (PricingFreightRateDto rate : after.freightRates()) {

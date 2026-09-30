@@ -30,17 +30,19 @@ class PricingFormulaConfigRepositoryIntegrationTest extends AbstractPostgresInte
     }
 
     @Test
-    void findCurrent_returnsTheV109SeededConfigWithAllChildren() {
+    void findCurrent_returnsTheV109SeedCarriedForwardByV198WithAllChildren() {
         PricingFormulaConfigDto config = formulaConfigs.findCurrent().orElseThrow();
 
-        assertThat(config.version()).isEqualTo(1);
+        // V109 seeded version 1 (margin 20%); V198 (owner ruling 2026-10-01) published version 2
+        // as the current row with the default margin raised to 30%, copying every other value.
+        assertThat(config.version()).isEqualTo(2);
         assertThat(config.isCurrent()).isTrue();
         assertThat(config.insuranceValueFactor()).isEqualByComparingTo("1.150000");
         assertThat(config.insuranceRate()).isEqualByComparingTo("0.004500");
         assertThat(config.insuranceBuffer()).isEqualByComparingTo("1.070000");
         assertThat(config.costBuffer()).isEqualByComparingTo("1.070000");
         assertThat(config.sellingBuffer()).isEqualByComparingTo("1.070000");
-        assertThat(config.defaultMarginPct()).isEqualByComparingTo("0.200000");
+        assertThat(config.defaultMarginPct()).isEqualByComparingTo("0.300000");
         assertThat(config.sellingPriceRoundUpTo()).isEqualByComparingTo("10.0000");
 
         // Italy + Spain: 4 thickness bands x (4,4,3,2) qty bands = 13 rows each. China: same
@@ -155,7 +157,8 @@ class PricingFormulaConfigRepositoryIntegrationTest extends AbstractPostgresInte
 
         PricingFormulaConfigDto updated = formulaConfigs.createNewVersion(request, null);
 
-        assertThat(updated.version()).isEqualTo(2);
+        // V109 seed = v1, V198 margin-30% republish = v2, so this new version is v3.
+        assertThat(updated.version()).isEqualTo(original.version() + 1);
         assertThat(updated.isCurrent()).isTrue();
         assertThat(updated.formulaConfigId()).isNotEqualTo(originalId);
         assertThat(updated.insuranceValueFactor()).isEqualByComparingTo("1.20");
@@ -193,9 +196,8 @@ class PricingFormulaConfigRepositoryIntegrationTest extends AbstractPostgresInte
         PricingFormulaConfigDto v2 = formulaConfigs.createNewVersion(request, null);
         PricingFormulaConfigDto v3 = formulaConfigs.createNewVersion(request, null);
 
-        assertThat(v2.version()).isEqualTo(2);
-        assertThat(v3.version()).isEqualTo(3);
-        assertThat(formulaConfigs.findCurrent().orElseThrow().version()).isEqualTo(3);
+        assertThat(v3.version()).isEqualTo(v2.version() + 1);
+        assertThat(formulaConfigs.findCurrent().orElseThrow().version()).isEqualTo(v3.version());
     }
 
     private boolean hasFreightRow(PricingFormulaConfigDto config, String country, String thicknessMin, String thicknessMax, String qtyMin) {

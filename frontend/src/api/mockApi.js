@@ -718,7 +718,7 @@ function buildSeedFormulaConfig() {
     insuranceBuffer: 1.07,
     costBuffer: 1.07,
     sellingBuffer: 1.07,
-    defaultMarginPct: 0.2,
+    defaultMarginPct: 0.3, // V198 (owner ruling 2026-10-01): default margin 20% -> 30%
     sellingPriceRoundUpTo: 10,
     isCurrent: true,
     effectiveFrom: '2026-01-01',
