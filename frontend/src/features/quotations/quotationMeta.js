@@ -1509,6 +1509,10 @@ export const QUOTATION_CHECK = Object.freeze({
   CUSTOMER: 'customer',
   PROJECT: 'project',
   DEAL_PROJECT: 'dealProject',
+  // Inline-create only. A FRONTEND rule: TicketService.create accepts UNSPECIFIED (the V144 stored
+  // default), but a rep must now state how the deal arrived before it is created, and
+  // UNSPECIFIED is no longer a button, so "nothing picked" is what this blocks on.
+  ENTRY_CHANNEL: 'entryChannel',
   // CONTACT / CONTACT_PHONE / CONTACT_EMAIL removed — owner-directed reversal of F2/V167
   // (2026-09-26): ผู้สั่งซื้อ is no longer a required contact, so there is nothing left to check.
   CUSTOMER_ADDRESS: 'customerAddress',
@@ -1531,6 +1535,7 @@ export const QUOTATION_CHECK = Object.freeze({
 export const QUOTATION_BLOCKING_CHECKS = Object.freeze(new Set([
   QUOTATION_CHECK.CUSTOMER,
   QUOTATION_CHECK.PROJECT,
+  QUOTATION_CHECK.ENTRY_CHANNEL,
   QUOTATION_CHECK.LOCATION_LABELS,
   QUOTATION_CHECK.PRICE_MODE_LANGUAGE,
   QUOTATION_CHECK.ITEMS,
@@ -1543,6 +1548,7 @@ export const QUOTATION_BLOCKING_CHECKS = Object.freeze(new Set([
 export const QUOTATION_FIELD_IDS = Object.freeze({
   customer: 'deal-customer',
   project: 'deal-project',
+  entryChannel: 'deal-entry-channel',
   customerName: 'deal-customer-name',
   customerAddress: 'deal-customer-address',
   customerTaxId: 'deal-customer-tax-id',
@@ -1614,6 +1620,8 @@ export function buildQuotationChecklist({
   isInlineCreate = false,
   customer = null,
   hasProject = false,
+  // Inline-create only; defaults to "satisfied" so every existing caller keeps behaving as before.
+  hasEntryChannel = true,
   // undefined = not loaded yet (the deal is still in flight) → no warning; null/'' = no project.
   projectName = undefined,
   items = [],
@@ -1656,6 +1664,7 @@ export function buildQuotationChecklist({
   if (isInlineCreate) {
     if (!customer) push(QUOTATION_CHECK.CUSTOMER, 'ต้องเลือกลูกค้าก่อนบันทึกร่าง', QUOTATION_FIELD_IDS.customer);
     if (!hasProject) push(QUOTATION_CHECK.PROJECT, 'ต้องเลือกโครงการก่อนบันทึกร่าง', QUOTATION_FIELD_IDS.project);
+    if (!hasEntryChannel) push(QUOTATION_CHECK.ENTRY_CHANNEL, 'ต้องเลือกช่องทางรับงานก่อนบันทึกร่าง', QUOTATION_FIELD_IDS.entryChannel);
   } else if (projectName !== undefined && blankValue(projectName)) {
     push(QUOTATION_CHECK.DEAL_PROJECT, 'ดีลนี้ยังไม่มีโครงการ (แก้ได้ที่หน้ารายละเอียดดีล)');
   }

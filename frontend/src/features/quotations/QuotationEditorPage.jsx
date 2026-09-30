@@ -901,6 +901,7 @@ export function QuotationEditorPage({ user, showToast }) {
     isInlineCreate,
     customer: checklistCustomer,
     hasProject: Boolean(dealForm.project),
+    hasEntryChannel: Boolean(dealForm.entryChannel) && dealForm.entryChannel !== 'UNSPECIFIED',
     projectName: checklistProjectName,
     items,
     itemErrorsByRow,
@@ -921,7 +922,7 @@ export function QuotationEditorPage({ user, showToast }) {
     // CREDIT_DAYS_INVALID's own comment in quotationMeta.js for the two severities.
     remainderMode: terms.remainderMode,
     creditDays: terms.creditDays,
-  }), [isInlineCreate, checklistCustomer, dealForm.project, checklistProjectName, items, itemErrorsByRow,
+  }), [isInlineCreate, checklistCustomer, dealForm.project, dealForm.entryChannel, checklistProjectName, items, itemErrorsByRow,
     adjustments, adjustmentErrorsByRow, duplicateGroupIndex, docSettings, terms.noDeposit,
     terms.depositPercentCustom, terms.depositPercent, terms.fullPaymentTerm, terms.remainderMode, terms.creditDays]);
   const validationErrors = useMemo(() => checklist.filter((e) => e.blocking).map((e) => e.message), [checklist]);
@@ -1962,6 +1963,7 @@ export function QuotationEditorPage({ user, showToast }) {
                 errors={{
                   customer: showValidationSummary && !dealForm.customer ? 'กรุณาเลือกลูกค้า' : undefined,
                   project: showValidationSummary && dealForm.customer && !dealForm.project ? 'กรุณาเลือกโครงการ' : undefined,
+                  entryChannel: showValidationSummary && (!dealForm.entryChannel || dealForm.entryChannel === 'UNSPECIFIED') ? 'ต้องเลือกช่องทางรับงานก่อนบันทึกร่าง' : undefined,
                 }}
                 showToast={showToast}
               />

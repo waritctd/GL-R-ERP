@@ -716,7 +716,13 @@ describe('QuotationEditorPage inline deal creation', () => {
     return { ...result, showToast, queryClient };
   }
 
-  async function selectCustomerAndProject() {
+  // ช่องทางรับงาน is required to save (UNSPECIFIED is never a choice), so the helper picks one unless
+  // a test is specifically about the gate.
+  function pickEntryChannel() {
+    fireEvent.click(screen.getByRole('button', { name: /ผู้ออกแบบนำดีล/ }));
+  }
+
+  async function selectCustomerAndProject({ channel = true } = {}) {
     api.customers.search.mockResolvedValue({ customers: [testCustomer] });
     api.customers.projects.mockResolvedValue({ projects: [testProject] });
 
@@ -731,6 +737,7 @@ describe('QuotationEditorPage inline deal creation', () => {
     // open it and pick the option, same "role=option" listbox shape as ลูกค้า above.
     fireEvent.focus(await screen.findByLabelText(/^โครงการ/));
     fireEvent.mouseDown(await screen.findByRole('option', { name: new RegExp(testProject.name) }));
+    if (channel) pickEntryChannel();
   }
 
   // #M4 (owner ruling 2026-09-10): "ALL info about the tile has to be completed" -- reuses the
@@ -757,7 +764,7 @@ describe('QuotationEditorPage inline deal creation', () => {
     expect(screen.queryByText('ต้องเลือกลูกค้าก่อนบันทึกร่าง')).toBeNull();
     expect(screen.queryByText('ต้องเลือกโครงการก่อนบันทึกร่าง')).toBeNull();
 
-    await selectCustomerAndProject();
+    await selectCustomerAndProject({ channel: false });
     expect(screen.queryByText('ต้องเลือกลูกค้าก่อนบันทึกร่าง')).toBeNull();
     expect(screen.queryByText('ต้องเลือกโครงการก่อนบันทึกร่าง')).toBeNull();
     // Customer+project are satisfied now, but there is still no item -- บันทึกร่าง stays gated
@@ -769,6 +776,12 @@ describe('QuotationEditorPage inline deal creation', () => {
     // on top of ลูกค้า/โครงการ and item completeness -- filling the item alone now unblocks
     // บันทึกร่าง, with no separate ผู้สั่งซื้อ requirement left to satisfy.
     await fillOneValidItem();
+    // ช่องทางรับงาน is the last gate: everything else is complete but no channel is picked, and
+    // ยังไม่ระบุช่องทาง is not offered as a choice, so saving stays blocked until one of the three is.
+    await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).title)
+      .toContain('ต้องเลือกช่องทางรับงานก่อนบันทึกร่าง'));
+    expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(true);
+    pickEntryChannel();
     await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
     expect(screen.queryByText('กรุณาระบุผู้สั่งซื้อ')).toBeNull();
   }, 10000);
@@ -796,7 +809,7 @@ describe('QuotationEditorPage inline deal creation', () => {
       // Owner-directed reversal of F2 (2026-09-26): the inline-create card no longer collects a
       // ผู้สั่งซื้อ contact at all -- always null now.
       contactId: null,
-      entryChannel: 'UNSPECIFIED',
+      entryChannel: 'DESIGNER_LED',
       priority: 'NORMAL',
       items: [],
       nextFollowUpAt: expectedFollowUp,
