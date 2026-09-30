@@ -106,22 +106,26 @@ public class DealQuotationController {
 
     /** {@code needsRework=true} (owner feedback F5, 2026-09-10) narrows to the "แก้" bucket —
      * DRAFT rows sent back with a reason or revisions in progress — server-side, composed with
-     * {@code status} (AND); see {@code DealQuotationRepository#search}. */
+     * {@code status} (AND); see {@code DealQuotationRepository#search}. Every origin since slice 1
+     * (legacy rows tagged {@code LEGACY}, {@code readOnly}); optional {@code origin} ∈
+     * {@code DEAL_DIRECT | PRICING_REQUEST | LEGACY} narrows to one (anything else 400). */
     @GetMapping("/deal-quotations")
     Map<String, List<DealQuotationDto>> search(@RequestParam(required = false) List<String> status,
                                                @RequestParam(required = false, defaultValue = "false") boolean needsRework,
+                                               @RequestParam(required = false) String origin,
                                                HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return Map.of("items", quotations.search(status, needsRework, user));
+        return Map.of("items", quotations.search(status, needsRework, origin, user));
     }
 
     /** Per-status counts for the caller's own list scope — {@code {all, pendingApproval,
      * needsRework, cancelled, approved}} — so the list page's tabs carry counts without a second
-     * full fetch (owner feedback F5). Same scope rules as {@link #search}. */
+     * full fetch (owner feedback F5). Same scope rules, and the same optional {@code origin}
+     * filter, as {@link #search}. */
     @GetMapping("/deal-quotations/counts")
-    DealQuotationCountsDto counts(HttpSession session) {
+    DealQuotationCountsDto counts(@RequestParam(required = false) String origin, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return quotations.counts(user);
+        return quotations.counts(origin, user);
     }
 
     /** V179 (owner feedback #4, 2026-09-14) — the option list for the ผู้พิมพ์/พนักงานขาย
@@ -205,15 +209,20 @@ public class DealQuotationController {
         return Map.of("quotation", quotations.recordOutcome(id, request, user));
     }
 
-    /** GLA-136 (owner ruling 2026-09-30) — "สร้างดีลจากใบเสนอราคา": promotes an APPROVED direct
-     * quotation's quotation-only container ticket into the deal pipeline at ORDER_RECEIVED. No
-     * request body. Idempotent. See {@code DealQuotationService#promoteToDeal}. Deliberately not
-     * {@code /outcome} or a confirm-order route: R10 stands — a direct quotation still has no
-     * customer-outcome concept; promotion is the rep's own decision that the customer ordered. */
-    @PostMapping("/deal-quotations/{id}/promote-to-deal")
-    Map<String, PromoteToDealResultDto> promoteToDeal(@PathVariable long id, HttpSession session) {
+    /** "ยืนยันคำสั่งซื้อ" on a direct quotation (GLA-136, renamed by quotation ↔ deal linking slice 1,
+     * IA §7, 2026-09-30): moves the APPROVED direct quotation's deal to ORDER_RECEIVED with the
+     * quotation's lines. No request body. Idempotent. See
+     * {@code DealQuotationService#confirmOrderFromDirectQuotation}. Not {@code /outcome}: R10 stands —
+     * a direct quotation still has no customer-outcome concept; this is the rep's own decision that
+     * the customer ordered.
+     *
+     * <p>{@code …/promote-to-deal} is the GLA-136 name, kept as an ALIAS of this same handler for ONE
+     * release so a frontend bundle still calling it keeps working; remove it once the frontend calls
+     * {@code …/confirm-order}. */
+    @PostMapping({"/deal-quotations/{id}/confirm-order", "/deal-quotations/{id}/promote-to-deal"})
+    Map<String, PromoteToDealResultDto> confirmOrder(@PathVariable long id, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return Map.of("result", quotations.promoteToDeal(id, user));
+        return Map.of("result", quotations.confirmOrderFromDirectQuotation(id, user));
     }
 
     @PostMapping("/deal-quotations/{id}/cancel")

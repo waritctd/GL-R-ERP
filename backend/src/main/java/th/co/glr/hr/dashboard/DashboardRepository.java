@@ -532,25 +532,17 @@ public class DashboardRepository {
         return whereEmployeeScope(employeeAlias, scope, params);
     }
 
-    /**
-     * GLA-136 (owner ruling 2026-09-30, V193): every dashboard ticket figure is a PIPELINE figure,
-     * and a quotation-only container ticket ({@code sales.ticket.quotation_only}) is not a pipeline
-     * deal — so it is excluded here, the one WHERE root both {@link #tickets} and
-     * {@link #countPendingTickets} share. Mirrors {@code TicketRepository#PIPELINE_ONLY}.
-     */
-    private static final String PIPELINE_TICKETS_ONLY = " AND t.quotation_only = FALSE";
-
     private String whereTicketScope(DashboardQueryScope scope, MapSqlParameterSource params) {
         if (scope.isAll()) {
-            return " WHERE 1 = 1" + PIPELINE_TICKETS_ONLY;
+            return " WHERE 1 = 1";
         }
         if (scope.isDivision()) {
             params.addValue("divisionId", scope.divisionId());
-            return " WHERE e.division_id = :divisionId" + PIPELINE_TICKETS_ONLY;
+            return " WHERE e.division_id = :divisionId";
         }
         if (scope.isSelf()) {
             params.addValue("employeeId", scope.employeeId());
-            return " WHERE t.created_by = :employeeId" + PIPELINE_TICKETS_ONLY;
+            return " WHERE t.created_by = :employeeId";
         }
         return " WHERE 1 = 0";
     }
