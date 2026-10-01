@@ -56,6 +56,9 @@ export const SALES_ACTION = {
   SUBMIT_DIRECT_QUOTATION: 'submit_direct_quotation',
   AWAIT_DIRECT_APPROVAL: 'await_direct_approval',
   CONFIRM_ORDER_DIRECT: 'confirm_order_direct',
+  // PR A: แก้ใบเสนอราคา — revise (or open the open revision of) an approved/issued quotation. Only
+  // ever produced when the caller hands nextSalesAction a `reviseTarget`.
+  REVISE_QUOTATION: 'revise_quotation',
   CREATE_PCR: 'create_pcr',
   ISSUE_QUOTATION: 'issue_quotation',
   CONFIRM_ORDER: 'confirm_order',
@@ -72,6 +75,7 @@ const ACTION_LABEL = {
   // act — the customer ordered — whichever route priced the deal.
   [SALES_ACTION.CONFIRM_ORDER_DIRECT]: 'ยืนยันคำสั่งซื้อ',
   [SALES_ACTION.CREATE_PCR]: 'สร้างคำขอราคา',
+  [SALES_ACTION.REVISE_QUOTATION]: 'แก้ใบเสนอราคา',
   [SALES_ACTION.ISSUE_QUOTATION]: 'ออกใบเสนอราคา',
   [SALES_ACTION.CONFIRM_ORDER]: 'ยืนยันคำสั่งซื้อ',
   // "Record the quotation outcome" — deliberately not "ติดตามผล"/"ติดตามลูกค้า" (that's
@@ -112,6 +116,7 @@ const ACTION_RANK = {
   [SALES_ACTION.SUBMIT_DIRECT_QUOTATION]: 2,
   [SALES_ACTION.RECORD_QUOTATION_OUTCOME]: 3,
   [SALES_ACTION.CREATE_PCR]: 4,
+  [SALES_ACTION.REVISE_QUOTATION]: 4,
   [SALES_ACTION.RECORD_DELIVERY]: 5,
   [SALES_ACTION.AWAIT_DIRECT_APPROVAL]: 5,
   [SALES_ACTION.FOLLOW_UP]: 6,
@@ -175,7 +180,7 @@ const QUOTED_STATUSES = new Set(['quotation_issued', 'document_issued']);
  * server-side, see api.pricingRequests.queue) — filtered here to the ones
  * belonging to this ticket.
  */
-export function nextSalesAction(deal, pricingRequests = []) {
+export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = null } = {}) {
   if (!deal || deal.lifecycle !== 'ACTIVE') return null;
 
   // 0. Slice 2 — flow A (SLICE-2-FLOW-A.md §E, IA §4): a LIVE direct quotation. Checked BEFORE
@@ -192,6 +197,9 @@ export function nextSalesAction(deal, pricingRequests = []) {
   const confirmRefused = directAction?.key === SALES_ACTION.CONFIRM_ORDER_DIRECT
     && (deal.status ?? 'draft') !== 'draft';
   if (directAction && !confirmRefused) return directAction;
+  // PR A: an APPROVED direct quotation the confirm bucket refuses (deal already past 'draft') is
+  // revised rather than left to fall through to CREATE_PCR.
+  if (confirmRefused && reviseTarget) return reviseAction(reviseTarget);
 
   const ownPrs = pricingRequests.filter((pr) => pr.ticketId === deal.id);
 
@@ -336,6 +344,24 @@ export function nextSalesAction(deal, pricingRequests = []) {
   }
 
   return null;
+}
+
+export const REVISE_STAGES = new Set(['QUOTE_OWNER', 'QUOTE_BUYER']);
+
+/** `target` = { quotationId, number, openDraftId? }. With an open revision draft the action points
+ * at it (`to`) instead of minting a second one. */
+export function reviseAction(target) {
+  const action = {
+    key: SALES_ACTION.REVISE_QUOTATION,
+    label: ACTION_LABEL[SALES_ACTION.REVISE_QUOTATION],
+    quotationId: target.quotationId,
+    quotationNumber: target.number,
+  };
+  if (target.openDraftId != null) {
+    action.label = 'ไปที่ฉบับแก้ไข';
+    action.to = `/quotations/${target.openDraftId}`;
+  }
+  return action;
 }
 
 const DIRECT_QUOTATION_BUCKET = {

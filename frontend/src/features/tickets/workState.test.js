@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEAL_STAGE_CATALOG } from '../../data/dealStageCatalog.js';
-import { resolveWorkState } from './workState.js';
+import { resolveWorkState, secondaryWorkActions } from './workState.js';
 
 // There is no waiting-on-department fallback any more (GLA-156) — see workState.js.
 // `catalog` is the same canned payload mockApi serves, pinned against DealStage.java
@@ -292,5 +292,55 @@ describe('resolveWorkState — live direct quotation (slice 2)', () => {
   it('an ON_HOLD deal still returns nothing — the lifecycle banner owns that state', () => {
     const result = resolveWorkState({ role: 'ceo' }, baseDeal({ lifecycle: 'ON_HOLD', liveDirectQuotation: pending }), []);
     expect(result).toEqual({ action: null });
+  });
+});
+
+// PR A — แก้ใบเสนอราคา is an ADDITIONAL (secondary) action at the owner/buyer quote stages: the
+// primary stays บันทึกผลใบเสนอราคา (client accepts the original / asks for changes), because the
+// client may be happy with the original quotation. The caller resolves `reviseTarget`
+// (canReviseDealQuotation); resolveWorkState/secondaryWorkActions are sales-only.
+describe('resolveWorkState / secondaryWorkActions — reviseTarget (PR A)', () => {
+  const target = { quotationId: 90, number: 'QT-2026-0090-1' };
+  const deal = (overrides = {}) => baseDeal({ salesStage: 'QUOTE_OWNER', ...overrides });
+  const issuedPr = [{ id: 5, ticketId: 1, status: 'QUOTATION_ISSUED', orderConfirmedAt: null }];
+
+  it.each(['QUOTE_OWNER', 'QUOTE_BUYER'])('%s: primary stays record_quotation_outcome AND revise is offered as a secondary action', (salesStage) => {
+    const d = deal({ salesStage });
+    expect(resolveWorkState({ role: 'sales' }, d, issuedPr, { reviseTarget: target }).action).toMatchObject({ key: 'record_quotation_outcome' });
+    expect(secondaryWorkActions({ role: 'sales' }, d, issuedPr, { reviseTarget: target })).toEqual([
+      { key: 'revise_quotation', label: 'แก้ใบเสนอราคา', quotationId: 90, quotationNumber: 'QT-2026-0090-1' },
+    ]);
+  });
+
+  it('an open revision draft -> the secondary reads "ไปที่ฉบับแก้ไข" and points at the draft', () => {
+    const result = secondaryWorkActions({ role: 'sales' }, deal(), issuedPr, { reviseTarget: { ...target, openDraftId: 91 } });
+    expect(result).toEqual([
+      { key: 'revise_quotation', label: 'ไปที่ฉบับแก้ไข', quotationId: 90, quotationNumber: 'QT-2026-0090-1', to: '/quotations/91' },
+    ]);
+  });
+
+  it('negative: no reviseTarget -> nothing', () => {
+    expect(secondaryWorkActions({ role: 'sales' }, deal(), issuedPr)).toEqual([]);
+    expect(secondaryWorkActions({ role: 'sales' }, deal(), issuedPr, { reviseTarget: null })).toEqual([]);
+  });
+
+  it('negative: the designer stage and other stages get no secondary revise', () => {
+    for (const salesStage of ['QUOTE_DESIGN_SIDE', 'PRESENTATION', 'NEGOTIATION']) {
+      expect(secondaryWorkActions({ role: 'sales' }, deal({ salesStage }), issuedPr, { reviseTarget: target })).toEqual([]);
+    }
+  });
+
+  it.each(['ceo', 'sales_manager', 'account', 'import', undefined])('negative: role %s never gets it, even if handed a target', (role) => {
+    expect(secondaryWorkActions({ role }, deal(), issuedPr, { reviseTarget: target })).toEqual([]);
+  });
+
+  it('negative: a non-ACTIVE deal gets nothing', () => {
+    expect(secondaryWorkActions({ role: 'sales' }, deal({ lifecycle: 'ON_HOLD' }), issuedPr, { reviseTarget: target })).toEqual([]);
+  });
+
+  it('no duplicate: when revise is already the PRIMARY (approved direct past draft) there is no secondary copy', () => {
+    const d = deal({ status: 'quotation_issued', liveDirectQuotation: { id: 90, number: 'QT-2026-0090-1', docStatus: 'APPROVED' } });
+    expect(resolveWorkState({ role: 'sales' }, d, [], { reviseTarget: target }).action).toMatchObject({ key: 'revise_quotation' });
+    expect(secondaryWorkActions({ role: 'sales' }, d, [], { reviseTarget: target })).toEqual([]);
   });
 });

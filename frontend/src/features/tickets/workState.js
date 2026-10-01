@@ -36,7 +36,7 @@
 // actually clickable; this module only decides which ONE action (if any)
 // leads the sticky bar.
 
-import { nextSalesAction, SALES_ACTION } from './salesActions.js';
+import { nextSalesAction, reviseAction, REVISE_STAGES, SALES_ACTION } from './salesActions.js';
 import { nextImportAction } from './importActions.js';
 import { nextAccountAction } from './accountActions.js';
 
@@ -66,7 +66,7 @@ export const DIRECT_APPROVAL_ACTION_KEY = 'approve_direct_quotation';
  *   อนุมัติใบเสนอราคา {number}" — a waiting line that names the document and who
  *   decides it (unlike the retired department-only banner above). Absent otherwise.
  */
-export function resolveWorkState(user, deal, pricingRequests = []) {
+export function resolveWorkState(user, deal, pricingRequests = [], { reviseTarget = null } = {}) {
   const role = user?.role;
   if (!deal || deal.lifecycle !== 'ACTIVE') return { action: null };
 
@@ -87,7 +87,7 @@ export function resolveWorkState(user, deal, pricingRequests = []) {
     };
   }
 
-  const action = role === 'sales' ? nextSalesAction(deal, pricingRequests)
+  const action = role === 'sales' ? nextSalesAction(deal, pricingRequests, { reviseTarget })
     : role === 'import' ? nextImportAction(deal, pricingRequests)
       : role === 'account' ? nextAccountAction(deal)
         : null;
@@ -104,4 +104,18 @@ export function resolveWorkState(user, deal, pricingRequests = []) {
   if (action) return { action };
 
   return { action: null };
+}
+
+/**
+ * PR A — ADDITIONAL (secondary) actions beside the sticky primary. At the owner / buyer quote stages
+ * the client may want a revision or be happy with the original, so แก้ใบเสนอราคา is offered
+ * alongside — never instead of — the primary บันทึกผลใบเสนอราคา. Sales only; `reviseTarget` is
+ * resolved by the caller through quotationMeta.canReviseDealQuotation (owner + status live there).
+ * Skipped when revise is already the primary (approved direct quotation past draft).
+ */
+export function secondaryWorkActions(user, deal, pricingRequests = [], { reviseTarget = null } = {}) {
+  if (user?.role !== 'sales' || !deal || deal.lifecycle !== 'ACTIVE') return [];
+  if (!reviseTarget || !REVISE_STAGES.has(deal.salesStage)) return [];
+  if (resolveWorkState(user, deal, pricingRequests, { reviseTarget }).action?.key === SALES_ACTION.REVISE_QUOTATION) return [];
+  return [reviseAction(reviseTarget)];
 }
