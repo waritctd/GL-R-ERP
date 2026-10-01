@@ -1007,23 +1007,27 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
   // The ตร.ม./หน่วย input this task's brief listed as already shipped, but which was not present
   // on origin/main — FactoryQuoteService requires sqmPerUnit for any PER_SQM line
   // (validateAndNormalizeResponseItems:727) and there was no way for Import to supply it.
-  it('shows the ตร.ม./หน่วย input only for a PER_SQM line, and includes it in the saved payload', async () => {
-    const quote = buildFactoryQuote({
-      status: 'REQUESTED',
-      items: [{
-        id: 911,
-        pricingRequestItemId: 1,
-        supplierProductCode: '',
-        supplierProductDescription: '',
-        quotedQuantity: 20,
-        quotedUnit: 'ตร.ม.',
-        unitBasis: 'PER_SQM',
-        rawUnitPrice: null,
-        currency: 'THB',
-        sqmPerUnit: null,
-      }],
-    });
-    renderDetailPage({ user: importUser, factoryQuotes: [quote] });
+  const perSqmItem = (overrides = {}) => ({
+    id: 911,
+    pricingRequestItemId: 1,
+    supplierProductCode: '',
+    supplierProductDescription: '',
+    quotedQuantity: 20,
+    quotedUnit: 'ตร.ม.',
+    unitBasis: 'PER_SQM',
+    rawUnitPrice: null,
+    currency: 'THB',
+    sqmPerUnit: null,
+    ...overrides,
+  });
+  const requestWithSqmPerPiece = (sqmPerPiece) => {
+    const base = buildRequest();
+    return buildRequest({ items: [{ ...base.items[0], sqmPerPiece }] });
+  };
+
+  it('asks for ตร.ม./หน่วย on a PER_SQM line only when the request item has no sqmPerPiece, and sends what was typed', async () => {
+    const quote = buildFactoryQuote({ status: 'REQUESTED', items: [perSqmItem()] });
+    renderDetailPage({ user: importUser, request: requestWithSqmPerPiece(null), factoryQuotes: [quote] });
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
 
@@ -1035,6 +1039,74 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalledWith(
       quote.id,
       expect.objectContaining({ items: [expect.objectContaining({ sqmPerUnit: 0.36 })] }),
+    ));
+  });
+
+  it('auto-fills ตร.ม./หน่วย from the request item sqmPerPiece, hides the box, and sends it', async () => {
+    const quote = buildFactoryQuote({ status: 'REQUESTED', items: [perSqmItem()] });
+    renderDetailPage({ user: importUser, request: requestWithSqmPerPiece(0.36), factoryQuotes: [quote] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    expect(screen.queryByLabelText(/^ตร\.ม\.\/หน่วย/)).toBeNull();
+    fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ/), { target: { value: '120' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
+
+    await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalledWith(
+      quote.id,
+      expect.objectContaining({ items: [expect.objectContaining({ sqmPerUnit: 0.36 })] }),
+    ));
+  });
+
+  it('never overwrites a ตร.ม./หน่วย already saved on the quote with the request item value', async () => {
+    const quote = buildFactoryQuote({ status: 'REQUESTED', items: [perSqmItem({ sqmPerUnit: 0.5 })] });
+    renderDetailPage({ user: importUser, request: requestWithSqmPerPiece(0.36), factoryQuotes: [quote] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ/), { target: { value: '120' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
+
+    await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalledWith(
+      quote.id,
+      expect.objectContaining({ items: [expect.objectContaining({ sqmPerUnit: 0.5 })] }),
+    ));
+  });
+
+  it('labels the price box ราคา/<unit> — แผ่น for a per-piece line, ตร.ม. for a per-sqm line', async () => {
+    const piece = buildFactoryQuote({ status: 'REQUESTED' }); // default item: PER_PIECE
+    const { unmount } = renderDetailPage({ user: importUser, factoryQuotes: [piece] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+    expect(screen.getByLabelText(/^ราคาที่เสนอ/).getAttribute('placeholder')).toBe('ราคา/แผ่น');
+    unmount();
+
+    const sqm = buildFactoryQuote({ status: 'REQUESTED', items: [perSqmItem()] });
+    renderDetailPage({ user: importUser, factoryQuotes: [sqm] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+    expect(screen.getByLabelText(/^ราคาที่เสนอ/).getAttribute('placeholder')).toBe('ราคา/ตร.ม.');
+  });
+
+  it('uses plain text boxes (no number spinner) for price and ตร.ม./หน่วย, keeping only digits and one decimal point', async () => {
+    const quote = buildFactoryQuote({ status: 'REQUESTED', items: [perSqmItem()] });
+    renderDetailPage({ user: importUser, request: requestWithSqmPerPiece(null), factoryQuotes: [quote] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    const price = screen.getByLabelText(/^ราคาที่เสนอ/);
+    const sqm = screen.getByLabelText(/^ตร\.ม\.\/หน่วย/);
+    expect(price.getAttribute('type')).toBe('text');
+    expect(sqm.getAttribute('type')).toBe('text');
+
+    fireEvent.change(price, { target: { value: '1,200.5x' } });
+    fireEvent.change(sqm, { target: { value: '0.36' } });
+    expect(price.value).toBe('1200.5');
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
+
+    await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalledWith(
+      quote.id,
+      expect.objectContaining({ items: [expect.objectContaining({ rawUnitPrice: 1200.5, sqmPerUnit: 0.36 })] }),
     ));
   });
 
@@ -3405,6 +3477,12 @@ function crRequest(over = {}) {
   };
 }
 
+// An item with no sqmPerPiece, so the ตร.ม./หน่วย box is asked of import (it is auto-filled otherwise).
+function crRequestWithoutSqm() {
+  const req = crRequest();
+  return { ...req, items: req.items.map((item) => ({ ...item, sqmPerPiece: null })) };
+}
+
 function ltChange(over = {}) {
   return {
     id: 7001,
@@ -3495,7 +3573,7 @@ describe('CR-1 factory card — status, terms, and the locked price grid (F1)', 
 
   it('the price payload carries the sales terms (EUR / PER_SQM) — import cannot change them', async () => {
     const quote = contactedQuote();
-    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [quote] });
+    renderDetailPage({ user: importUser, request: crRequestWithoutSqm(), factoryQuotes: [quote] });
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
 
@@ -4110,7 +4188,7 @@ describe('CR-1 R1 payload precedence — the line\'s requested terms win over wh
       defaultCurrency: 'THB',
       items: [{ ...base.items[0], unitBasis: 'PER_PIECE', quotedUnit: 'PER_PIECE', currency: null }],
     });
-    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [quote] });
+    renderDetailPage({ user: importUser, request: crRequestWithoutSqm(), factoryQuotes: [quote] });
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
 
