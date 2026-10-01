@@ -11991,8 +11991,9 @@ export const api = {
       // testing issue an IR the real backend refuses.
       const depositReadyOrLater = ['DEPOSIT_NOTICE_ISSUED', 'DEPOSIT_PAID', 'AWAITING_FINAL_PAYMENT', 'FULLY_PAID'].includes(ticket.paymentStatus)
         || (depositBypassesNotice(ticket) && ticket.paymentStatus === 'CUSTOMER_CONFIRMED');
-      if (ticket.status !== 'quotation_issued' || !depositReadyOrLater) {
-        fail('ออกใบขอนำเข้า (IR) ได้เฉพาะเมื่อออกใบเสนอราคาแล้วและรับชำระมัดจำแล้ว (หรือได้รับการยกเว้นมัดจำ) เท่านั้น', 409);
+      // Gated on the deposit ALONE (mirrors TicketService#requireImportRequestIssuable, 2026-10-01).
+      if (!depositReadyOrLater) {
+        fail('ออกใบขอนำเข้า (IR) ได้เฉพาะเมื่อรับชำระมัดจำแล้ว (หรือได้รับการยกเว้นมัดจำ) เท่านั้น', 409);
       }
       const override = request?.docNumber?.trim() || null;
       if (override && mockImportRequests.some((r) => r.docNumber === override)) {
