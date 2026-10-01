@@ -1528,6 +1528,42 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     expect(screen.queryByTestId('pcr-ceo-recalculate-cost')).toBeNull();
   });
 
+  // CEO cost transparency (owner decision): the cost line now shows WHERE the cost comes from —
+  // the factory's own quoted price (as import recorded it) → the landed cost — and the CEO toggles
+  // whether that landed figure reads per ตร.ม. or per แผ่น. newForm path only (V187 current flow).
+  describe('CEO cost transparency — raw factory price + ตร.ม./แผ่น toggle', () => {
+    function renderCeoCostBreakdown() {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      const costingItem = buildCostingItemWithOverride(); // id 5001, rawUnitPrice 45 THB, fxRate 1
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({
+          items: [buildDecisionItem({
+            pricingCostingItemId: 5001, sqmPerPiece: 0.5, frozenLandedCostPerRequestedUnitThb: 60,
+          })],
+        })],
+      });
+      return renderDetailPage({ user: ceoUser, request, costings: [buildCosting({ id: 601, items: [costingItem] })] });
+    }
+
+    it('shows the factory raw price and the landed cost per ตร.ม. by default, then per แผ่น on toggle', async () => {
+      renderCeoCostBreakdown();
+      await screen.findByText('PCD-2026-0001');
+
+      const line = screen.getByTestId('pcr-ceo-cost-breakdown-8001');
+      // The factory's own quoted price is now visible on the card (answers "ทุนคือราคาจากอะไร").
+      expect(line.textContent).toContain('ราคาโรงงาน');
+      expect(line.textContent).toContain('฿45.00');
+      // Default unit is ตร.ม.: frozen 60 ÷ sqmPerPiece 0.5 = 120 (same plain division the list price uses).
+      expect(line.textContent).toContain('฿120.00');
+      expect(line.textContent).toContain('ตร.ม.');
+
+      fireEvent.click(screen.getByTestId('ceo-cost-unit-piece'));
+      const perPiece = screen.getByTestId('pcr-ceo-cost-breakdown-8001');
+      expect(perPiece.textContent).toContain('฿60.00');
+      expect(perPiece.textContent).toContain('แผ่น');
+    });
+  });
+
   // V141 ("CEO owns costing", PR #702, commit 2) — per-line cost override.
   describe('CEO per-line cost override', () => {
     function renderWithCostingItem(costingItemOverrides = {}, { user = ceoUser } = {}) {

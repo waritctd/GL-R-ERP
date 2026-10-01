@@ -996,6 +996,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
     setCeoPriceDrafts((prev) => ({ ...prev, [itemId]: { ...prev[itemId], ...patch } }));
   }
   const [approveClientRequestId, setApproveClientRequestId] = useState(() => generateClientRequestId());
+  // CEO clarity (owner decision): the CEO toggles whether each decision line reads its landed cost
+  // per ตร.ม. or per แผ่น. Presentation only — the stored figure is per-requested-unit; the per-ตร.ม.
+  // view is the same plain division the list price already uses (frozen ÷ sqmPerPiece, see
+  // formulaPricePerSqm), never a re-derivation of the costing math.
+  const [ceoCostUnit, setCeoCostUnit] = useState('sqm');
   // Step 4: Customer Quotation Generation and Issuance.
   const [createQuotationClientRequestId, setCreateQuotationClientRequestId] = useState(() => generateClientRequestId());
   const [issueQuotationClientRequestId, setIssueQuotationClientRequestId] = useState(() => generateClientRequestId());
@@ -2511,6 +2516,29 @@ export function PricingRequestDetailPage({ user, showToast }) {
                     </div>
                   ) : null}
                   <div className="mt-3 flex flex-col gap-3">
+                    {/* CEO toggles ตร.ม. ⇄ แผ่น for how the landed cost reads on each line below
+                        (owner decision). Presentation only — see ceoCostUnit's own comment. */}
+                    <div className="flex items-center gap-2 text-xs text-text-muted" data-testid="ceo-cost-unit-toggle">
+                      <span>แสดงต้นทุนต่อ:</span>
+                      <div className="inline-flex overflow-hidden rounded-md border border-border">
+                        <button
+                          type="button"
+                          className={`px-2.5 py-1 ${ceoCostUnit === 'sqm' ? 'bg-info font-bold text-surface' : 'bg-surface text-text-secondary'}`}
+                          onClick={() => setCeoCostUnit('sqm')}
+                          data-testid="ceo-cost-unit-sqm"
+                        >
+                          ตร.ม.
+                        </button>
+                        <button
+                          type="button"
+                          className={`px-2.5 py-1 ${ceoCostUnit === 'piece' ? 'bg-info font-bold text-surface' : 'bg-surface text-text-secondary'}`}
+                          onClick={() => setCeoCostUnit('piece')}
+                          data-testid="ceo-cost-unit-piece"
+                        >
+                          แผ่น
+                        </button>
+                      </div>
+                    </div>
                     {decision.items.map((item) => {
                       // V141: the bound costing line this decision item was frozen from — may
                       // legitimately be undefined (costings never fetched, or not yet loaded), in
@@ -2581,6 +2609,21 @@ export function PricingRequestDetailPage({ user, showToast }) {
                         const formulaPricePerSqm = item.proposedSellingPricePerRequestedUnit != null && item.sqmPerPiece > 0
                           ? round2(Number(item.proposedSellingPricePerRequestedUnit) / Number(item.sqmPerPiece))
                           : null;
+                        // CEO cost transparency (owner decision): show WHERE the cost comes from —
+                        // the factory's own quoted price (in its own currency, as import recorded it)
+                        // and that same price in THB (× the FX the costing used), then the landed
+                        // cost that rolls freight/duty/insurance/etc on top, in the toggled unit.
+                        // All plain reads/one-step conversions — the same frozen÷sqmPerPiece division
+                        // formulaPricePerSqm above already uses — never a re-run of the costing math.
+                        const landedCostPerSqm = item.frozenLandedCostPerRequestedUnitThb != null && item.sqmPerPiece > 0
+                          ? round2(Number(item.frozenLandedCostPerRequestedUnitThb) / Number(item.sqmPerPiece))
+                          : null;
+                        const rawFactoryThbPerUnit = costingItem?.rawUnitPrice != null && costingItem?.fxRate != null
+                          ? round2(Number(costingItem.rawUnitPrice) * Number(costingItem.fxRate))
+                          : null;
+                        const showCostPerSqm = ceoCostUnit === 'sqm' && landedCostPerSqm != null;
+                        const landedCostShown = showCostPerSqm ? landedCostPerSqm : item.frozenLandedCostPerRequestedUnitThb;
+                        const landedCostUnitLabel = showCostPerSqm ? 'บาท/ตร.ม.' : 'บาท/แผ่น';
                         // NIT: per-ITEM pending state, not the mutation's shared isPending --
                         // otherwise saving item A shows every OTHER item's button spinning too.
                         const savingThisItem = saveCeoItemPrice.isPending
@@ -2628,12 +2671,26 @@ export function PricingRequestDetailPage({ user, showToast }) {
                                 ราคาตั้ง (สูตร) actually is, or to reach the overrides, without
                                 expanding anything. Both now render in the card's main body. */}
                             <div className="mt-2 flex flex-wrap items-baseline gap-x-6 gap-y-1">
-                              <span className="text-xs text-text-muted">
+                              <span className="text-xs text-text-muted" data-testid={`pcr-ceo-cost-breakdown-${item.id}`}>
                                 ต้นทุนโรงงาน (ฐาน):{' '}
                                 {costingItem?.uncostableReason ? (
                                   <span className="font-bold text-warning">คำนวณอัตโนมัติไม่ได้</span>
                                 ) : (
-                                  <code>{formatCurrency(item.frozenLandedCostPerRequestedUnitThb, 'THB')}</code>
+                                  <>
+                                    {/* ราคาที่โรงงานเสนอ ตามที่ import บันทึก (สกุล/หน่วยของโรงงาน) → บาท (× FX) */}
+                                    {costingItem?.rawUnitPrice != null ? (
+                                      <>
+                                        ราคาโรงงาน <code>{formatCurrency(costingItem.rawUnitPrice, costingItem.rawCurrency)}</code>
+                                        {rawFactoryThbPerUnit != null ? (
+                                          <> (≈ <code>{formatCurrency(rawFactoryThbPerUnit, 'THB')}</code>)</>
+                                        ) : null}
+                                        {' → '}
+                                      </>
+                                    ) : null}
+                                    รวมค่าขนส่ง/อากร/อื่นๆ ={' '}
+                                    <code className="font-bold text-info">{formatCurrency(landedCostShown, 'THB')}</code>
+                                    {' '}{landedCostUnitLabel}
+                                  </>
                                 )}
                               </span>
                               <span className="text-xs text-text-muted">
