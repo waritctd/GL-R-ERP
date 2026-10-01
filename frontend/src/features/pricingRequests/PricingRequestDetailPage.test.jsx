@@ -2526,56 +2526,61 @@ describe('PricingRequestDetailPage mobile layout', () => {
 // sees the full breakdown. UI scoping only, no backend authz change (buildRequest's base fixture
 // already carries color/thicknessMm/sqmPerPiece/quantityMode/piecesInput/piecesPerBox — see that
 // fixture's own V185 comment).
-describe('PricingRequestDetailPage item card — catalogue price in baht', () => {
+describe('PricingRequestDetailPage item card — import price in baht', () => {
   const fxRates = [{ currency: 'EUR', rateToThb: 40 }, { currency: 'THB', rateToThb: 1 }];
-  const requestWith = (over) => {
+  // 5 แผ่น of a 1.44 ตร.ม. slab = 7.2 ตร.ม.
+  const request = () => {
     const base = buildRequest();
     return buildRequest({
-      items: [{
-        ...base.items[0],
-        catalogBasePrice: 115,
-        catalogCurrency: 'EUR',
-        catalogPriceUnit: 'per_sqm',
-        sqmPerPiece: 1.44,
-        requestedQtySqm: 7.2,
-        piecesAfterWastage: 5,
-        ...over,
-      }],
+      items: [{ ...base.items[0], sqmPerPiece: 1.44, requestedQtySqm: 7.2, piecesAfterWastage: 5, catalogBasePrice: 999, catalogCurrency: 'USD' }],
     });
   };
-  const renderWithFx = async (user, request) => {
+  const quoteWith = (itemOver = {}) => buildFactoryQuote({
+    status: 'RESPONSE_RECEIVED',
+    items: [{
+      id: 911, pricingRequestItemId: 1, supplierProductCode: '', supplierProductDescription: '',
+      quotedQuantity: 5, quotedUnit: 'ตร.ม.', unitBasis: 'PER_SQM', rawUnitPrice: 115, currency: 'EUR', sqmPerUnit: null,
+      ...itemOver,
+    }],
+  });
+  const renderWithFx = async (user, factoryQuotes) => {
     api.fxRates = { list: vi.fn().mockResolvedValue({ fxRates }) };
-    renderDetailPage({ user, request });
-    await waitForLoaded(request);
+    const req = request();
+    renderDetailPage({ user, request: req, factoryQuotes });
+    await waitForLoaded(req);
   };
   afterEach(() => { delete api.fxRates; });
 
-  it('labels the price as the import factory price with its unit, without "preliminary"', async () => {
-    await renderWithFx(importUser, requestWith({}));
-    const label = screen.getByTestId('pcr-catalog-price-1').textContent;
-    expect(label).toContain('ราคาโรงงาน (แคตตาล็อกฝ่ายนำเข้า)');
-    expect(label).toContain('115 EUR/ตร.ม.');
+  it('shows ราคาจากฝ่ายนำเข้า with its unit — Import\'s quote, never the catalogue price or "preliminary"', async () => {
+    await renderWithFx(importUser, [quoteWith()]);
+    const label = (await screen.findByTestId('pcr-import-price-1')).textContent;
+    expect(label).toContain('ราคาจากฝ่ายนำเข้า: 115 EUR/ตร.ม.');
+    expect(document.body.textContent).not.toContain('999');
     expect(document.body.textContent).not.toContain('preliminary');
   });
 
   it.each([['import', importUser], ['ceo', ceoUser]])('shows %s the baht per ตร.ม., per แผ่น and in total for the requested quantity', async (_name, user) => {
-    await renderWithFx(user, requestWith({}));
-    const thb = await screen.findByTestId('pcr-catalog-thb-1');
+    await renderWithFx(user, [quoteWith()]);
+    const thb = await screen.findByTestId('pcr-import-thb-1');
     expect(thb.textContent).toContain('4,600');
-    expect(thb.textContent).toContain('/ตร.ม.');
     expect(thb.textContent).toContain('6,624');
-    expect(thb.textContent).toContain('/แผ่น');
     expect(thb.textContent).toContain('33,120');
     expect(thb.textContent).toContain('5 แผ่น = 7.2 ตร.ม.');
   });
 
+  it('says ยังไม่มี and shows no baht until Import has typed a price', async () => {
+    await renderWithFx(importUser, [quoteWith({ rawUnitPrice: null })]);
+    expect((await screen.findByTestId('pcr-import-price-1')).textContent).toContain('ยังไม่มี');
+    expect(screen.queryByTestId('pcr-import-thb-1')).toBeNull();
+  });
+
   it('shows no baht for a per-box price, and none to Sales (no FX access)', async () => {
-    await renderWithFx(importUser, requestWith({ catalogPriceUnit: 'per_box' }));
-    expect(screen.getByTestId('pcr-catalog-price-1').textContent).toContain('115 EUR/กล่อง');
-    expect(screen.queryByTestId('pcr-catalog-thb-1')).toBeNull();
+    await renderWithFx(importUser, [quoteWith({ unitBasis: 'PER_BOX' })]);
+    expect((await screen.findByTestId('pcr-import-price-1')).textContent).toContain('115 EUR/กล่อง');
+    expect(screen.queryByTestId('pcr-import-thb-1')).toBeNull();
     cleanup();
-    await renderWithFx(salesOwner, requestWith({}));
-    expect(screen.queryByTestId('pcr-catalog-thb-1')).toBeNull();
+    await renderWithFx(salesOwner, [quoteWith()]);
+    expect(screen.queryByTestId('pcr-import-thb-1')).toBeNull();
   });
 });
 
@@ -3569,7 +3574,7 @@ describe('CR-1 factory card — status, terms, and the locked price grid (F1)', 
     expect(screen.queryByRole('button', { name: 'ส่งแล้ว' })).toBeNull();
   });
 
-  it('shows the locked terms strip "EUR · ต่อ ตร.ม. · ตามคำขอของฝ่ายขาย" and REMOVES the currency/unit selects for lines that carry terms (R1)', async () => {
+  it('shows the locked terms strip "EUR · ต่อ ตร.ม. · ตามคำขอของฝ่ายขาย" and REMOVES the currency select (the unit may now switch ตร.ม./แผ่น per line) for lines that carry terms (R1)', async () => {
     renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote()] });
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
@@ -3580,7 +3585,8 @@ describe('CR-1 factory card — status, terms, and the locked price grid (F1)', 
     expect(strip.textContent).toContain('ตามคำขอของฝ่ายขาย');
     // regex, not the bare string: the label carries an InfoTip, so an exact-string query can never match
     expect(screen.queryByRole('combobox', { name: /^สกุลเงิน/ })).toBeNull();
-    expect(screen.queryByRole('combobox', { name: /^หน่วยราคา/ })).toBeNull();
+    // the group-level unit select stays gone; the per-line ตร.ม./แผ่น switch is its own control
+    expect(screen.queryByRole('combobox', { name: /^หน่วยราคา$/ })).toBeNull();
   });
 
   it('a legacy line with no requested terms keeps today\'s currency/unit selects and shows no lock strip', async () => {
@@ -3644,8 +3650,57 @@ describe('CR-1 factory card — status, terms, and the locked price grid (F1)', 
     ));
   });
 
+  // Owner ruling 2026-10-01: factories sell on different terms, so import may quote a per-ตร.ม.
+  // line per แผ่น and vice versa — only that pair; the currency stays Sales'.
+  it('lets import switch a per-ตร.ม. line to per-แผ่น: placeholder follows, and unitBasis/quotedUnit are saved', async () => {
+    const quote = contactedQuote();
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [quote] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    const price = screen.getByLabelText(/^ราคาที่เสนอ/);
+    expect(price.getAttribute('placeholder')).toBe('ราคา/ตร.ม.');
+    fireEvent.change(screen.getByLabelText(/^หน่วยราคา รายการ/), { target: { value: 'PER_PIECE' } });
+    expect(screen.getByLabelText(/^ราคาที่เสนอ/).getAttribute('placeholder')).toBe('ราคา/แผ่น');
+    expect(screen.queryByLabelText(/^ตร.ม.\/หน่วย/)).toBeNull();
+
+    fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ/), { target: { value: '40' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
+
+    await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalledWith(
+      quote.id,
+      expect.objectContaining({
+        items: [expect.objectContaining({ currency: 'EUR', unitBasis: 'PER_PIECE', quotedUnit: 'แผ่น', rawUnitPrice: 40 })],
+      }),
+    ));
+  });
+
+  it('offers no unit switch when Sales asked for per-box (or per-metre) — only the ตร.ม./แผ่น pair switches', async () => {
+    const base = crQuote();
+    const quote = contactedQuote({ items: [{ ...base.items[0], unitBasis: 'PER_BOX', quotedUnit: 'กล่อง' }] });
+    renderDetailPage({ user: importUser, request: buildRequest({ items: [crItem({ requestedPriceUnitBasis: 'PER_BOX' })] }), factoryQuotes: [quote] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    expect(screen.queryByLabelText(/^หน่วยราคา รายการ/)).toBeNull();
+  });
+
+  it('auto-calculates the price in the other unit as import types: 100 EUR/ตร.ม. x 0.36 = 36 EUR/แผ่น, and back', async () => {
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote()] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    expect(screen.queryByTestId('pcr-quote-equiv-91-1')).toBeNull(); // nothing typed yet
+    fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ/), { target: { value: '100' } });
+    expect(screen.getByTestId('pcr-quote-equiv-91-1').textContent).toContain('36 EUR/แผ่น');
+
+    fireEvent.change(screen.getByLabelText(/^หน่วยราคา รายการ/), { target: { value: 'PER_PIECE' } });
+    fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ/), { target: { value: '36' } });
+    expect(screen.getByTestId('pcr-quote-equiv-91-1').textContent).toContain('100 EUR/ตร.ม.');
+  });
+
   // Owner ruling 2026-10-01: factory workspace is import-only (#1103); the backend still authorises ceo on drafts and /contacted (CR-1) but no CEO screen uses it.
-  it('CEO does NOT see the factory card, its locked terms, price inputs, confirm or lead-time change — and never loads the factory quotes', async () => {
+  it('CEO does NOT see the factory card, its locked terms, price inputs, confirm or lead-time change (it loads the quotes only to show Import\'s price on the item card)', async () => {
     renderDetailPage({ user: ceoUser, request: crRequest(), factoryQuotes: [contactedQuote()] });
     await waitForLoaded();
 
@@ -3654,7 +3709,6 @@ describe('CR-1 factory card — status, terms, and the locked price grid (F1)', 
     expect(screen.queryByLabelText(/^ราคาที่เสนอ/)).toBeNull();
     expect(screen.queryByRole('button', { name: 'ยืนยันราคาเสนอ' })).toBeNull();
     expect(screen.queryByTestId('pcr-lt-open-91')).toBeNull();
-    expect(api.pricingRequests.listFactoryQuotes).not.toHaveBeenCalled();
   });
 });
 
@@ -4630,9 +4684,9 @@ describe('CEO pricing inside รายการสินค้าและรา
       expect(within(getPanel()).getByText(/ทุกรายการต้องมีต้นทุนก่อนอนุมัติ/).textContent).toContain('วิธีคำนวณราคานี้');
     });
 
-    it('nit: the CEO no longer fetches the factory quotes (nothing renders them for that role); Import still does', async () => {
+    it('the CEO fetches the factory quotes (server allows ceo) to show Import\'s price on the item card; so does Import', async () => {
       await renderCeo();
-      expect(api.pricingRequests.listFactoryQuotes).not.toHaveBeenCalled();
+      expect(api.pricingRequests.listFactoryQuotes).toHaveBeenCalled();
 
       vi.clearAllMocks();
       setApiDefaults();

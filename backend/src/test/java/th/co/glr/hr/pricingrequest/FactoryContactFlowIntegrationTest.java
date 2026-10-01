@@ -398,21 +398,47 @@ class FactoryContactFlowIntegrationTest extends Cr1FixtureSupport {
             .isEqualTo(FactoryQuoteStatus.RESPONSE_RECEIVED);
     }
 
-    /** B4 */
+    /** B4 — owner ruling 2026-10-01: factories sell on different terms, so import may quote a
+     *  per-ตร.ม. line per แผ่น and vice versa. Only that pair is switchable; currency stays locked. */
     @Test
-    void receiveWithAPriceUnitOtherThanTheRequestedOneIs409_andStoresNothing() {
-        long prId = requestInImportReview(line("Tile A", "Factory A", 10, null, null, "EUR", UnitBasis.PER_SQM));
+    void importMayQuoteAPerSqmLineByThePieceAndAPerPieceLineBySqm() {
+        long prId = requestInImportReview(
+            line("Tile A", "Factory A", 10, null, null, "EUR", UnitBasis.PER_SQM),
+            line("Tile B", "Factory A", 10, null, null, "EUR", UnitBasis.PER_PIECE));
+        FactoryQuoteDto quote = requestedQuote(prId, "Factory A");
+        // receiveAll applies ONE basis to every item; item 0 was requested per sqm, item 1 per piece.
+        // Quote per PIECE: item 0 is the switched one (sqm -> piece), item 1 matches.
+        assertThat(factoryQuoteService.receive(quote.id(), receiveAll(quote, "EUR", "PER_PIECE"), importActor).items())
+            .extracting(i -> i.unitBasis()).containsOnly("PER_PIECE");
+    }
+
+    @Test
+    void importMayQuoteAPerPieceLineBySqm() {
+        long prId = requestInImportReview(line("Tile A", "Factory A", 10, null, null, "EUR", UnitBasis.PER_PIECE));
         FactoryQuoteDto quote = requestedQuote(prId, "Factory A");
 
-        assertThatThrownBy(() -> factoryQuoteService.receive(quote.id(), receiveAll(quote, "EUR", "PER_PIECE"), importActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-        FactoryQuoteDto after = factoryQuoteService.get(quote.id(), importActor);
-        assertThat(after.status()).isEqualTo(FactoryQuoteStatus.REQUESTED);
-        assertThat(after.items()).allSatisfy(i -> assertThat(i.rawUnitPrice()).isNull());
+        FactoryQuoteDto received = factoryQuoteService.receive(quote.id(), receiveAll(quote, "EUR", "PER_SQM"), importActor);
 
-        // control: the matching basis is accepted
-        assertThat(factoryQuoteService.receive(quote.id(), receiveAll(quote, "EUR", "PER_SQM"), importActor).status())
-            .isEqualTo(FactoryQuoteStatus.RESPONSE_RECEIVED);
+        assertThat(received.items().get(0).unitBasis()).isEqualTo("PER_SQM");
+        assertThat(received.items().get(0).sqmPerUnit()).isEqualByComparingTo("0.36");
+    }
+
+    @Test
+    void aPriceUnitOutsideSqmAndPieceStaysLocked_andStoresNothing() {
+        long sqmLine = requestInImportReview(line("Tile A", "Factory A", 10, null, null, "EUR", UnitBasis.PER_SQM));
+        FactoryQuoteDto sqmQuote = requestedQuote(sqmLine, "Factory A");
+        // a per-sqm line cannot be switched to per-box ...
+        assertThatThrownBy(() -> factoryQuoteService.receive(sqmQuote.id(), receiveAll(sqmQuote, "EUR", "PER_BOX"), importActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+
+        // ... and a per-box line cannot be switched to per-sqm (the pair is sqm <-> piece only).
+        long boxLine = requestInImportReview(line("Tile B", "Factory B", 10, null, null, "EUR", UnitBasis.PER_BOX));
+        FactoryQuoteDto boxQuote = requestedQuote(boxLine, "Factory B");
+        assertThatThrownBy(() -> factoryQuoteService.receive(boxQuote.id(), receiveAll(boxQuote, "EUR", "PER_SQM"), importActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        assertThat(factoryQuoteService.get(boxQuote.id(), importActor).status()).isEqualTo(FactoryQuoteStatus.REQUESTED);
+        assertThat(factoryQuoteService.get(boxQuote.id(), importActor).items())
+            .allSatisfy(i -> assertThat(i.rawUnitPrice()).isNull());
     }
 
     /** B5 — backward compatible. Goes through the real contact step, so it is red until A exists. */
