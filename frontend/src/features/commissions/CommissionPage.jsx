@@ -1569,9 +1569,10 @@ function ManagerReviewEditPanel({ record, draft, onChange, preview, saving, onSa
   );
 }
 
-// Six columns now (ค่าคอมทีม added). A Tailwind utility beats the legacy 5-column
-// `.commission-payroll-table` rule in styles.css (layer order), so the override lives here.
-const PAYROLL_TABLE_COLUMNS = 'grid-cols-[minmax(0,1.8fr)_repeat(5,minmax(0,1fr))]';
+// The legacy `.commission-payroll-table` rule in styles.css is 5 columns; a Tailwind utility beats it
+// (layer order), so the 6-column variant (ค่าคอมทีม shown) lives here.
+const PAYROLL_COLUMNS_BASE = 'grid-cols-[minmax(0,1.8fr)_repeat(4,minmax(0,1fr))]';
+const PAYROLL_COLUMNS_WITH_TEAM = 'grid-cols-[minmax(0,1.8fr)_repeat(5,minmax(0,1fr))]';
 
 function PayrollSummary({ summary, loading }) {
   if (loading) {
@@ -1580,6 +1581,13 @@ function PayrollSummary({ summary, loading }) {
   if (!summary) {
     return <EmptyState icon="badge" title="ยังไม่มีข้อมูลค่าคอม" description="เลือกรอบเดือนอื่นเพื่อตรวจสอบ" />;
   }
+  // The backend sends companyCommissionableBase = null when no override applies in the month, but
+  // ALWAYS sends totalTeamOverrideAmount (0.00) -- so only a non-null company base or a non-zero
+  // total means the override exists this month. Otherwise (every pre-October month) the ค่าคอมทีม
+  // column and footer would be all zeros and are left out.
+  const showTeam = summary.companyCommissionableBase != null
+    || (summary.totalTeamOverrideAmount != null && Number(summary.totalTeamOverrideAmount) !== 0);
+  const PAYROLL_TABLE_COLUMNS = showTeam ? PAYROLL_COLUMNS_WITH_TEAM : PAYROLL_COLUMNS_BASE;
   return (
     <>
       <CompactStatRow
@@ -1602,7 +1610,7 @@ function PayrollSummary({ summary, loading }) {
           {/* The team override (ค่าคอมทีม) is already folded into the "ค่าคอม" total column — only
               the override recipients carry a non-zero amount, so the column is mostly empty by
               design rather than broken. */}
-          <span>ค่าคอมทีม</span>
+          {showTeam ? <span>ค่าคอมทีม</span> : null}
           <span>ค่าคอม</span>
         </div>
         {(summary.salesReps ?? []).length === 0 ? (
@@ -1613,11 +1621,11 @@ function PayrollSummary({ summary, loading }) {
             <code>{formatMoney(rep.commissionableBase)}</code>
             <code>{formatMoney(rep.incentiveAmount)}</code>
             <code>{formatMoney(rep.stockBonusAmount)}</code>
-            <code>{formatMoney(rep.teamOverrideAmount)}</code>
+            {showTeam ? <code>{formatMoney(rep.teamOverrideAmount)}</code> : null}
             <code>{formatMoney(rep.commissionAmount)}</code>
           </div>
         ))}
-        {summary.totalTeamOverrideAmount != null || summary.companyCommissionableBase != null ? (
+        {showTeam ? (
           <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 border-t border-border-subtle bg-surface-muted px-5 py-3 text-md mobile:px-4">
             {summary.companyCommissionableBase != null ? (
               <span className="text-text-secondary">

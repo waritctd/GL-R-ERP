@@ -115,7 +115,11 @@ export function CommissionStatement({ summary, heading = 'ค่าคอมข�
           <Row testId="statement-raw" label="ยอดรับเงิน (ไม่รวม VAT)" amount={summary.rawCommissionableBase} />
         ) : null}
         {nonZero(summary.weightUpliftBase) ? (
-          <Row testId="statement-uplift" op="+" label="ส่วนเพิ่มจากสินค้าสต็อก (2x/3x)" amount={summary.weightUpliftBase} />
+          // Negative when a weighted sale was clawed back in the month: a deduction, shown as a minus
+          // operator and a positive magnitude so the ledger still adds up by eye.
+          Number(summary.weightUpliftBase) < 0
+            ? <Row testId="statement-uplift" op="−" label="ส่วนลดจากการหักคืนรายการสต็อก (2x/3x)" amount={Math.abs(Number(summary.weightUpliftBase))} />
+            : <Row testId="statement-uplift" op="+" label="ส่วนเพิ่มจากสินค้าสต็อก (2x/3x)" amount={summary.weightUpliftBase} />
         ) : null}
         <Row testId="statement-base" op="=" label="ฐานคิดค่าคอม" amount={summary.commissionableBase} strong />
 

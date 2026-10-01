@@ -32,7 +32,8 @@ describe('mock commission DTOs carry the new team-override / weighting fields ho
     const { summary } = await api.commissions.payrollReady({ payrollMonth: '2026-08' });
 
     expect(summary).toHaveProperty('totalTeamOverrideAmount', 0);
-    expect(summary).toHaveProperty('companyCommissionableBase');
+    // Mirrors the backend: null when no override applies in the month (a mock rep is never a recipient).
+    expect(summary.companyCommissionableBase).toBeNull();
     summary.salesReps.forEach((rep) => expect(rep).toHaveProperty('teamOverrideAmount', 0));
   });
 });
