@@ -149,8 +149,17 @@ export function canCancelDealQuotation(user, quotation) {
   return canEditDealQuotation(user, quotation) && canTransitionDealQuotation(quotation?.docStatus, 'CANCELLED');
 }
 
-/** "APPROVED -> (revise) -> new DRAFT child": only an APPROVED quotation may be revised. */
+/** "APPROVED -> (revise) -> new DRAFT child": a DEAL_DIRECT quotation may be revised only when
+ * APPROVED. A PRICING_REQUEST-origin quotation may be revised when ISSUED or REVISION_REQUESTED, and
+ * ONLY by its owning sales rep (mirrors DealQuotationService#createRevision, which reuses the
+ * recordOutcome gate there) -- sales_manager / granted employees may NOT, unlike for DEAL_DIRECT.
+ * Display-only; the server re-checks. */
 export function canReviseDealQuotation(user, quotation) {
+  if (quotation?.origin === 'PRICING_REQUEST') {
+    return user?.role === 'sales'
+      && quotation.salesRepId != null && Number(quotation.salesRepId) === Number(user.id)
+      && (quotation.docStatus === 'ISSUED' || quotation.docStatus === 'REVISION_REQUESTED');
+  }
   return canEditDealQuotation(user, quotation) && quotation?.docStatus === 'APPROVED';
 }
 

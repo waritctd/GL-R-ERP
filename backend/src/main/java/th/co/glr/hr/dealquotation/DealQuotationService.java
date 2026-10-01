@@ -915,7 +915,9 @@ public class DealQuotationService {
             if (!QuotationStatus.DRAFT.equals(existing.docStatus())) {
                 throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงแก้ไขไม่ได้");
             }
-            if ("PRICING_REQUEST".equals(existing.origin())) {
+            // PR B: only a REVISION (parentQuotationId set) of a PRICING_REQUEST row may be re-addressed
+            // (to the owner / buyer); a first-issue row keeps its request's recipient.
+            if ("PRICING_REQUEST".equals(existing.origin()) && existing.parentQuotationId() == null) {
                 throw new ApiException(HttpStatus.CONFLICT,
                     "ผู้รับของใบเสนอราคาจากคำขอราคามาจากคำขอราคา — แก้ที่คำขอราคาต้นทาง");
             }
@@ -1723,7 +1725,19 @@ public class DealQuotationService {
         // Rule 7 (shared with CustomerQuotationService#issue): reuse the SAME stage transition,
         // not a second path. Forward-only and ACTIVE-deal-only — see
         // TicketService#advanceStageForCustomerQuotationIssue/#autoAdvanceStage's own guards.
-        ticketService.advanceStageForCustomerQuotationIssue(summary.ticketId(), summary.recipientType(), actor);
+        // PR B: use the QUOTATION's own recipient, not the pricing request's — a revision may be
+        // re-addressed to the owner/buyer, and the stage must follow the party it now addresses. For a
+        // first-issue quotation the two are identical (it copies the request's recipient at create).
+        ticketService.advanceStageForCustomerQuotationIssue(summary.ticketId(), issued.recipientType(), actor);
+        // PR B: issuing a REVISION replaces its parent chain. Each hop is its own compare-and-set
+        // (supersede() only flips an ISSUED/REVISION_REQUESTED row), so already-terminal ancestors
+        // (earlier revisions, already SUPERSEDED) are a safe no-op.
+        Long ancestorId = issued.parentQuotationId();
+        while (ancestorId != null) {
+            DealQuotationDto ancestor = requireQuotation(ancestorId);
+            quotations.supersede(ancestorId);
+            ancestorId = ancestor.parentQuotationId();
+        }
         tickets.addEventWithDocument(issued.ticketId(), actor.id(), actor.name(), TicketEventKind.QUOTATION_ISSUED,
             null, null, "อนุมัติและออกใบเสนอราคา " + issued.number(), RelatedDocumentType.QUOTATION, issued.id());
         pricingRequests.addEvent(summary.id(), summary.ticketId(), actor.id(), actor.name(),
@@ -2197,12 +2211,17 @@ public class DealQuotationService {
     @Transactional
     public DealQuotationDto createRevision(long id, UserPrincipal actor) {
         DealQuotationDto source = requireQuotation(id);
-        requireEditAccessForQuotation(actor, source);
-        // GLA-123 slice S1, defence in depth — unreachable today (APPROVED is itself unreachable
-        // for this origin, requireApprovedForClone below would already refuse it), but explicit
-        // rather than relying on that alone — see #requireStatusMachineEnabled's own Javadoc.
-        requireStatusMachineEnabled(source);
-        requireApprovedForClone(source, "สร้างฉบับแก้ไขได้จากใบเสนอราคาที่ได้รับอนุมัติแล้วเท่านั้น");
+        // PR B: a PRICING_REQUEST-origin quotation (ISSUED / REVISION_REQUESTED) may now be revised,
+        // by its OWNING sales rep only — the same gate as #recordOutcome (#requireOutcomeAccess),
+        // narrower than #requireEditAccessForQuotation (which also admits sales_manager on any
+        // deal): the manager's job is to APPROVE the revision, not to author it. DEAL_DIRECT is
+        // unchanged: edit access + APPROVED.
+        if (isPricingRequestOrigin(source)) {
+            requireOutcomeAccess(actor, source);
+        } else {
+            requireEditAccessForQuotation(actor, source);
+        }
+        requireRevisableStatus(source);
         requireNoOpenRevision(source); // locks the ticket
         // Opus review (2026-09-19): RE-CHECK the status AFTER the lock, not just before it. The
         // check above and the lock this line takes are two separate moments -- a concurrent
@@ -2213,8 +2232,7 @@ public class DealQuotationService {
         // actually closes the window; without it, a caller could mint a revision of a row that is
         // no longer the deal's live APPROVED document. Same message as the check above -- this is
         // the same rule, just re-asserted at the moment that actually matters.
-        source = requireApprovedForClone(requireQuotation(id),
-            "สร้างฉบับแก้ไขได้จากใบเสนอราคาที่ได้รับอนุมัติแล้วเท่านั้น");
+        source = requireRevisableStatus(requireQuotation(id));
         long newId = insertRevisionCopyOf(source, actor);
         DealQuotationDto revision = requireQuotation(newId);
         tickets.addEvent(source.ticketId(), actor.id(), actor.name(), TicketEventKind.REVISION_REQUESTED, null, null,
@@ -2326,8 +2344,23 @@ public class DealQuotationService {
         int nextRevisionNo = quotations.nextRevisionNo(source.ticketId(), baseNumber);
         String newNumber = DealQuotationRepository.revisionNumber(baseNumber, nextRevisionNo);
         BigDecimal sourceVatRate = WastageCalculator.vatRateFor(source.documentLanguage());
-        List<NewItem> items = source.items().stream()
-            .map(item -> toNewItemFromDto(item, sourceVatRate, source.documentLanguage())).toList();
+        // PR B: a PRICING_REQUEST-origin revision keeps the source's pricing-request/decision ITEM links
+        // (matched by item id) — dropping them would silently switch off the CEO-price comparison
+        // (priceChangedFromCeo) on the copy. DEAL_DIRECT rows have no links.
+        boolean prSource = isPricingRequestOrigin(source);
+        Map<Long, DealQuotationRepository.ItemLink> sourceLinks = new java.util.HashMap<>();
+        if (prSource) {
+            for (DealQuotationRepository.ItemLink link : quotations.findItemLinks(source.id())) {
+                sourceLinks.put(link.itemId(), link);
+            }
+        }
+        List<NewItem> items = source.items().stream().map(item -> {
+            NewItem copy = toNewItemFromDto(item, sourceVatRate, source.documentLanguage());
+            DealQuotationRepository.ItemLink link = sourceLinks.get(item.id());
+            return link == null ? copy
+                : withDecisionLink(copy, link.pricingRequestItemId(), link.pricingDecisionItemId());
+        }).toList();
+        Long sourceDecisionId = prSource ? quotations.findPricingDecisionId(source.id()).orElse(null) : null;
         long newId = quotations.insertDraft(new InsertDraftParams(
             source.ticketId(), newNumber, actor.id(), source.salesRepId(),
             source.customerName(), source.customerAddress(), source.customerTaxId(), source.customerPhone(),
@@ -2368,8 +2401,9 @@ public class DealQuotationService {
             // revision's). Every source reaching here is DEAL_DIRECT (createRevision/createReorder
             // refuse PRICING_REQUEST via #requireStatusMachineEnabled, and #submit excludes that
             // origin from the resubmit-as-revision path) — the origin is stated, not copied.
-            DealQuotationRepository.ORIGIN_DEAL_DIRECT, source.recipientType(), source.recipientLabel(),
-            null, null,
+            prSource ? "PRICING_REQUEST" : DealQuotationRepository.ORIGIN_DEAL_DIRECT,
+            source.recipientType(), source.recipientLabel(),
+            prSource ? source.pricingRequestId() : null, sourceDecisionId,
             // Owner-directed reversal of F2 (2026-09-26) — the copy inherits the source's manual
             // buyer name VERBATIM, same "copy every header field" rule as everything else here.
             source.orderedByName()));
@@ -2377,6 +2411,12 @@ public class DealQuotationService {
         // row's items point at the source's (immutable, shared) picture rows, matched by seq.
         // Shared by revisions and reorder clones alike.
         quotations.copyPictureLinks(source.id(), newId);
+        // A CEO-linked line the rep already removed on the source stays "removed from the CEO's
+        // decision" on the copy; resetting the counter to 0 would let a revision dodge the
+        // CEO-required-when-changed gate (#requireCeoApprovalIfChanged).
+        if (prSource && source.itemsRemovedFromCeoCount() > 0) {
+            quotations.incrementItemsRemovedFromCeo(newId, source.itemsRemovedFromCeoCount());
+        }
         return newId;
     }
 
@@ -2393,6 +2433,27 @@ public class DealQuotationService {
                 actionMessage + " (ปัจจุบัน: " + quotation.docStatus() + ")");
         }
         return quotation;
+    }
+
+    private static boolean isPricingRequestOrigin(DealQuotationDto quotation) {
+        return "PRICING_REQUEST".equals(quotation.origin());
+    }
+
+    /** What {@link #createRevision} may revise: a DEAL_DIRECT row only when APPROVED; a PRICING_REQUEST
+     * row only when ISSUED or REVISION_REQUESTED. ACCEPTED is the deal's finalized quotation (R8) and
+     * REJECTED/EXPIRED have their own recovery ({@link #createFromPricingRequest}), so none of those
+     * may be revised. */
+    private DealQuotationDto requireRevisableStatus(DealQuotationDto quotation) {
+        if (isPricingRequestOrigin(quotation)) {
+            if (!QuotationStatus.ISSUED.equals(quotation.docStatus())
+                    && !QuotationStatus.REVISION_REQUESTED.equals(quotation.docStatus())) {
+                throw new ApiException(HttpStatus.CONFLICT,
+                    "สร้างฉบับแก้ไขได้จากใบเสนอราคาที่ออกแล้วหรือลูกค้าขอแก้ไขเท่านั้น (ปัจจุบัน: "
+                        + quotation.docStatus() + ")");
+            }
+            return quotation;
+        }
+        return requireApprovedForClone(quotation, "สร้างฉบับแก้ไขได้จากใบเสนอราคาที่ได้รับอนุมัติแล้วเท่านั้น");
     }
 
     /**

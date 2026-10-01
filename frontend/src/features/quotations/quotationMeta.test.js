@@ -227,6 +227,40 @@ describe('canSubmitDealQuotation / canCancelDealQuotation / canReviseDealQuotati
   });
 });
 
+// PR B (revise a PRICING_REQUEST-origin quotation). Mirrors DealQuotationService#createRevision's
+// PRICING_REQUEST branch: ISSUED / REVISION_REQUESTED only, and ONLY the owning sales rep -- the
+// wider canEditDealQuotation audience (sales_manager, canCreateQuotation grant) must NOT see the
+// button for this origin. Display-only; the authoritative proof is the real-DB
+// DealQuotationPricingRequestRevisionIntegrationTest.
+describe('canReviseDealQuotation -- PRICING_REQUEST origin', () => {
+  const prQ = (overrides = {}) => quotation({ origin: 'PRICING_REQUEST', docStatus: 'ISSUED', ...overrides });
+
+  it('the owning rep may revise ISSUED and REVISION_REQUESTED', () => {
+    expect(canReviseDealQuotation(salesOwner, prQ({ docStatus: 'ISSUED' }))).toBe(true);
+    expect(canReviseDealQuotation(salesOwner, prQ({ docStatus: 'REVISION_REQUESTED' }))).toBe(true);
+  });
+
+  it('never in any other status (ACCEPTED/REJECTED/EXPIRED/SUPERSEDED/DRAFT/PENDING_APPROVAL/CANCELLED)', () => {
+    for (const docStatus of ['ACCEPTED', 'REJECTED', 'EXPIRED', 'SUPERSEDED', 'DRAFT', 'PENDING_APPROVAL', 'CANCELLED']) {
+      expect(canReviseDealQuotation(salesOwner, prQ({ docStatus }))).toBe(false);
+    }
+  });
+
+  it('wrong-way-round: sales_manager, granted qc, non-owner sales and ceo are all refused', () => {
+    expect(canReviseDealQuotation(salesManager, prQ())).toBe(false);
+    expect(canReviseDealQuotation(qcWithGrant, prQ())).toBe(false);
+    expect(canReviseDealQuotation(otherSales, prQ())).toBe(false);
+    expect(canReviseDealQuotation(ceo, prQ())).toBe(false);
+  });
+
+  it('a DEAL_DIRECT quotation is unchanged: APPROVED only, ISSUED/REVISION_REQUESTED stay false', () => {
+    expect(canReviseDealQuotation(salesOwner, quotation({ docStatus: 'APPROVED' }))).toBe(true);
+    expect(canReviseDealQuotation(salesManager, quotation({ docStatus: 'APPROVED' }))).toBe(true);
+    expect(canReviseDealQuotation(salesOwner, quotation({ docStatus: 'ISSUED' }))).toBe(false);
+    expect(canReviseDealQuotation(salesOwner, quotation({ docStatus: 'REVISION_REQUESTED' }))).toBe(false);
+  });
+});
+
 // GLA-136 (owner ruling 2026-09-30) — display gate for "สร้างดีลจากใบเสนอราคา". Mirrors
 // DealQuotationService#promoteToDeal's own gate (requireEditAccess + DEAL_DIRECT + APPROVED);
 // the authoritative, real-DB proof is DealQuotationPromoteIntegrationTest.
