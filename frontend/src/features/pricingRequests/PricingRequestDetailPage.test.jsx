@@ -4516,6 +4516,55 @@ describe('CEO pricing inside รายการสินค้าและรา
       expect(within(getPanel()).getByTestId('pcr-ceo-formula-list-8001').textContent).toContain('72');
     });
 
+    describe('อัตรากำไร per item recalculates the selling price (owner 2026-10-01)', () => {
+      const withBuffer = (sellingBuffer) => {
+        api.pricingFormulaConfig = { get: vi.fn().mockResolvedValue({ formulaConfig: { defaultMarginPct: 0.2, sellingBuffer } }) };
+      };
+      afterEach(() => { delete api.pricingFormulaConfig; });
+
+      it('NET: typing a margin shows the new ราคาตั้ง/แผ่น live (cost 60 x 1.5 x 1.07 = 96.30) and saves ONLY the margin', async () => {
+        withBuffer(1.07);
+        await renderCeo({ items: [newFormItem({ listUnitPrice: 72, netUnitPrice: 72, proposedMarginPct: 0.2 })] });
+        const panel = within(getPanel());
+        expect(panel.getByTestId('pcr-ceo-margin-8001').value).toBe('0.2');
+
+        fireEvent.change(panel.getByTestId('pcr-ceo-margin-8001'), { target: { value: '0.5' } });
+        expect(panel.getByTestId('pcr-ceo-list-price-8001').value).toBe('96.3');
+        expect(panel.getByText(/^สูตร:/).textContent).toContain('96.30');
+
+        fireEvent.click(panel.getByTestId('pcr-ceo-save-price-8001'));
+        await waitFor(() => expect(lastSavedItem()).toEqual(expect.objectContaining({ marginPct: 0.5 })));
+        // the server recomputes the price from the margin: no typed override rides along
+        expect(lastSavedItem().sellingPriceOverride).toBeUndefined();
+      });
+
+      it('SPECIAL_SQM: the margin also moves the pre-filled ราคาพิเศษ (90/แผ่` -> 90 x 2.78 x 1.07 = 267.71)', async () => {
+        withBuffer(1);
+        await renderCeo({ priceMode: 'SPECIAL_SQM', items: [newFormItem({ proposedMarginPct: 0.2 })] });
+        fireEvent.change(within(getPanel()).getByTestId('pcr-ceo-margin-8001'), { target: { value: '0.5' } });
+        expect(within(getPanel()).getByTestId('pcr-ceo-special-sqm-8001').value).toBe('267.71');
+      });
+
+      it('a typed ราคาตั้ง beats the margin preview, and a garbage margin cannot be saved', async () => {
+        withBuffer(1);
+        await renderCeo({ items: [newFormItem({ listUnitPrice: 72, netUnitPrice: 72, proposedMarginPct: 0.2 })] });
+        const panel = within(getPanel());
+        fireEvent.change(panel.getByTestId('pcr-ceo-margin-8001'), { target: { value: '0.5' } });
+        fireEvent.change(panel.getByTestId('pcr-ceo-list-price-8001'), { target: { value: '100' } });
+        expect(panel.getByTestId('pcr-ceo-list-price-8001').value).toBe('100');
+        fireEvent.change(panel.getByTestId('pcr-ceo-margin-8001'), { target: { value: '-1' } });
+        expect(panel.getByTestId('pcr-ceo-margin-8001').value).toBe('1'); // only digits and a decimal point survive
+        fireEvent.change(panel.getByTestId('pcr-ceo-margin-8001'), { target: { value: '' } });
+        expect(panel.getByTestId('pcr-ceo-save-price-8001').disabled).toBe(false); // list price still changed
+      });
+
+      it('offers no margin input on a stock line (no cost, no margin) or without a cost', async () => {
+        withBuffer(1);
+        await renderCeo({ items: [newFormItem({ stockSource: 'IN_THAILAND', frozenLandedCostPerRequestedUnitThb: null, listUnitPrice: 150, netUnitPrice: 150 })] });
+        expect(within(getPanel()).queryByTestId('pcr-ceo-margin-8001')).toBeNull();
+      });
+    });
+
     it('shows ต้นทุน per แผ่น and per ตร.ม. up front (60 / 0.36 = 166.67), without opening the ต้นทุน section; none for a stock line', async () => {
       await renderCeo({ priceMode: 'NET', items: [newFormItem({ listUnitPrice: 72, netUnitPrice: 72 })] });
       const cost = within(getPanel()).getByTestId('pcr-ceo-cost-both-8001').textContent;

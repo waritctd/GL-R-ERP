@@ -1366,6 +1366,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
           // deserialization and the whole request 400s with a bare "คำขอไม่ถูกต้อง" -- so it is
           // always present; listPart overrides it to true only for an explicit clear.
           clearSellingPriceOverride: false,
+          // Margin: the server recomputes the formula price (and list/net) from it.
+          ...(cleanNumber(draft.marginPct) != null ? { marginPct: cleanNumber(draft.marginPct) } : {}),
           ...listPart,
         }],
       });
@@ -2024,20 +2026,37 @@ export function PricingRequestDetailPage({ user, showToast }) {
     // ── Phase 2 (owner rulings 2026-09-18/19, V187) ─────────────────────────
     if (newForm) {
       const isStockLine = item.stockSource != null;
-      // Owner 2026-10-01: the CEO should not have to work ราคาพิเศษ out by hand. Until one is saved
-      // (or typed), the formula price pre-fills it — as an ordinary draft, so it previews, enables
-      // บันทึกราคา and is what gets saved, and any typed value overrides it.
+      const rawDraft = ceoPriceDrafts[item.id] ?? {};
+      // Owner 2026-10-01: typing อัตรากำไร recalculates the selling price. Mirrors
+      // PricingDecisionService#computeSellingPrice (cost x (1 + margin) x sellingBuffer, / FX for a
+      // non-THB decision) as a PREVIEW only — saving sends just the margin and the server derives
+      // (and returns) the stored price. null without a cost, a valid margin or the buffer.
+      const marginInput = rawDraft.marginPct;
+      const marginNumber = marginInput === undefined || marginInput === '' ? null : Number(marginInput);
+      const marginInvalid = marginNumber != null && !(marginNumber >= 0);
+      const sellingBuffer = Number(formulaConfigQuery.data?.sellingBuffer);
+      const fxUsed = decision.currency === 'THB' ? 1 : Number(decision.fxRateUsed);
+      const formulaFromMargin = !isStockLine && marginNumber != null && !marginInvalid
+        && item.frozenLandedCostPerRequestedUnitThb != null && sellingBuffer > 0 && fxUsed > 0
+        ? round2((Number(item.frozenLandedCostPerRequestedUnitThb) * (1 + marginNumber) * sellingBuffer) / fxUsed)
+        : null;
+      const formulaPerPiece = formulaFromMargin ?? item.proposedSellingPricePerRequestedUnit;
+      // The CEO should not have to work ราคาพิเศษ out by hand. Until one is saved (or typed), the
+      // formula price pre-fills it — as an ordinary draft, so it previews, enables บันทึกราคา and is
+      // what gets saved, and any typed value overrides it.
       const autoSpecial = decision.priceMode === 'SPECIAL_SQM' && !isStockLine && editable
         && item.specialPriceSqm == null && decision.currency === 'THB'
-        ? specialPriceSqmFromFormula(item.proposedSellingPricePerRequestedUnit, item.sqmPerPiece)
+        ? specialPriceSqmFromFormula(formulaPerPiece, item.sqmPerPiece)
         : null;
-      const draft = { ...(autoSpecial != null ? { specialPriceSqm: autoSpecial } : {}), ...(ceoPriceDrafts[item.id] ?? {}) };
+      const draft = { ...(autoSpecial != null ? { specialPriceSqm: autoSpecial } : {}), ...rawDraft };
       // 2026-10-01 (owner Ploy): under NET the CEO types ราคาตั้ง again. The effective list price
       // mirrors PricingDecisionService (override ?? listUnitPrice); the input starts from it and
-      // the in-progress draft wins for the preview.
+      // the in-progress draft wins for the preview. A pending margin moves it to the recalculated
+      // formula price (an overridden line keeps its override).
       const currentList = hasPriceOverride ? item.manualSellingPricePerRequestedUnit : item.listUnitPrice;
+      const baseList = formulaFromMargin != null && !hasPriceOverride ? formulaFromMargin : currentList;
       const listDraft = draft.listUnitPrice;
-      const listInputValue = listDraft ?? currentList ?? '';
+      const listInputValue = listDraft ?? baseList ?? '';
       const listDraftNumber = cleanNumber(listDraft);
       // Java rejects a non-positive ราคาตั้ง (stock: "> 0"; override: non-negative, and 0 would
       // price the line at zero), so the UI refuses it up front instead of round-tripping a 400.
@@ -2047,7 +2066,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
       // falls back to listUnitPrice); on any other line a blank simply leaves the price as saved.
       const previewList = listDraftNumber != null && !listInvalid ? listDraftNumber
         : (listDraft === '' && hasPriceOverride && !isStockLine) ? item.listUnitPrice
-          : currentList;
+          : baseList;
       const previewNet = previewCeoNetUnitPrice(decision.priceMode, {
         listUnitPrice: previewList,
         discountPct: draft.discountPct ?? item.discountPct,
@@ -2070,8 +2089,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
       const lineTotal = displayNet != null ? round2(Number(item.requestedQuantity) * displayNet) : null;
       // Owner ruling A (2026-09-19): the formula price is shown both per แผ่น and per ตร.ม. — a
       // plain division, not the SPECIAL_SQM VAT-stripping algorithm, so safe to compute here.
-      const formulaPricePerSqm = item.proposedSellingPricePerRequestedUnit != null && item.sqmPerPiece > 0
-        ? round2(Number(item.proposedSellingPricePerRequestedUnit) / Number(item.sqmPerPiece))
+      const formulaPricePerSqm = formulaPerPiece != null && item.sqmPerPiece > 0
+        ? round2(Number(formulaPerPiece) / Number(item.sqmPerPiece))
         : null;
       const savingThisItem = saveCeoItemPrice.isPending
         && saveCeoItemPrice.variables?.item?.id === item.id;
@@ -2117,7 +2136,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
       const missingModeInputForList = listChanged && isStockLine && (
         (decision.priceMode === 'DIRECT_NET' && modeInputBlank(draft.directNetPrice ?? item.directNetPrice))
         || (decision.priceMode === 'SPECIAL_SQM' && modeInputBlank(draft.specialPriceSqm ?? item.specialPriceSqm)));
-      const saveDisabled = listInvalid || missingModeInputForList || !(otherDraftDirty || listChanged);
+      const saveDisabled = listInvalid || marginInvalid || missingModeInputForList || !(otherDraftDirty || listChanged);
       const costForcedOpen = showCost && Boolean(costingItem?.uncostableReason || costingItem?.overrideStale);
       const listPriceField = (
         <div className="flex flex-col gap-1">
@@ -2144,9 +2163,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 : 'กรอกราคาพิเศษ บาท/ตร.ม. ด้วยก่อนบันทึก'}
             </span>
           ) : null}
-          {item.proposedSellingPricePerRequestedUnit != null ? (
+          {formulaPerPiece != null ? (
             <span className="text-2xs text-text-muted">
-              สูตร: {formatCurrency(item.proposedSellingPricePerRequestedUnit, decision.currency)} / แผ่น
+              สูตร: {formatCurrency(formulaPerPiece, decision.currency)} / แผ่น
               {formulaPricePerSqm != null ? ` · ${formatCurrency(formulaPricePerSqm, decision.currency)} / ตร.ม.` : ''}
             </span>
           ) : null}
@@ -2208,6 +2227,25 @@ export function PricingRequestDetailPage({ user, showToast }) {
             ) : null}
           </div>
           {showCost && item.frozenLandedCostPerRequestedUnitThb != null ? (
+            <FormField
+              label="อัตรากำไร"
+              htmlFor={`pcr-ceo-margin-${item.id}`}
+              hint="ราคาตั้ง = ต้นทุน × (1 + อัตรากำไร) × ตัวคูณราคาขาย — กรอกแล้วราคาคำนวณใหม่ทันที"
+              error={marginInvalid ? 'อัตรากำไรต้องไม่ติดลบ' : undefined}
+            >
+              <input
+                id={`pcr-ceo-margin-${item.id}`}
+                type="text"
+                inputMode="decimal"
+                className="w-28"
+                disabled={!editable}
+                value={rawDraft.marginPct ?? item.proposedMarginPct ?? ''}
+                onChange={(e) => updateCeoPriceDraft(item.id, { marginPct: sanitizeDecimal(e.target.value) })}
+                data-testid={`pcr-ceo-margin-${item.id}`}
+              />
+            </FormField>
+          ) : null}
+          {showCost && item.frozenLandedCostPerRequestedUnitThb != null ? (
             <span className="text-xs text-text-muted" data-testid={`pcr-ceo-cost-both-${item.id}`}>
               ต้นทุน (จากราคาฝ่ายนำเข้า รวมค่าขนส่งและภาษีนำเข้า): <code className="font-bold text-text">{formatCurrency(item.frozenLandedCostPerRequestedUnitThb, 'THB')}</code> / แผ่น
               {item.sqmPerPiece > 0
@@ -2259,9 +2297,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
               {decision.priceMode === 'SPECIAL_SQM' ? (
                 <>
                   {isStockLine ? listPriceField : null}
-                  {!isStockLine && item.proposedSellingPricePerRequestedUnit != null ? (
+                  {!isStockLine && formulaPerPiece != null ? (
                     <span className="text-xs text-text-muted" data-testid={`pcr-ceo-formula-list-${item.id}`}>
-                      ราคาตั้ง/แผ่น (สูตร): <code className="font-bold text-text">{formatCurrency(item.proposedSellingPricePerRequestedUnit, decision.currency)}</code>
+                      ราคาตั้ง/แผ่น (สูตร): <code className="font-bold text-text">{formatCurrency(formulaPerPiece, decision.currency)}</code>
                       {formulaPricePerSqm != null ? ` · ${formatCurrency(formulaPricePerSqm, decision.currency)} / ตร.ม.` : ''}
                     </span>
                   ) : null}
