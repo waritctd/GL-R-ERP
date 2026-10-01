@@ -198,9 +198,12 @@ export function ImportDealPage({ user, showToast }) {
   const canAdvance = role === 'import' || isCeo;
   const canEmailWrite = isCeo || role === 'import';
 
-  // Legacy = no LIVE per-factory rows AND the deal-level chain has a step import performs here.
+  // Legacy = no ISSUED per-factory row AND the deal-level chain has a step import performs here.
+  // Keyed on ISSUED rows, not live rows, because that is what the backend refuses on
+  // (TicketRepository#hasLiveImportRequests): a DRAFT row is not tracking anything, and a deal
+  // whose IR went out the legacy way can still hold an unissued draft that only sales/CEO can issue.
   const nextAction = nextImportAction(deal);
-  const legacyCode = canAdvance && liveRows.length === 0 && nextAction && LEGACY_ACTIONS[nextAction.code]
+  const legacyCode = canAdvance && issuedRows.length === 0 && nextAction && LEGACY_ACTIONS[nextAction.code]
     ? nextAction.code
     : null;
 
@@ -264,29 +267,6 @@ export function ImportDealPage({ user, showToast }) {
             <p className="m-0 text-sm text-text-muted" data-testid="import-deal-no-ir">
               ดีลนี้ยังไม่มีใบขอซื้อรายโรงงาน — ฝ่ายขายเป็นผู้สร้างและออกเลขใบขอซื้อ แล้วฝ่ายนำเข้าจึงเลื่อนสถานะรายโรงงานได้ที่นี่
             </p>
-            {legacyCode ? (
-              <div
-                className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 rounded-md border border-dashed border-border-muted bg-surface-muted p-4"
-                data-testid="import-deal-legacy-action"
-              >
-                <div className="min-w-0 flex-1 basis-56">
-                  <h3 className="m-0 text-sm font-bold text-text">ดำเนินการนำเข้า (ดีลรูปแบบเดิม)</h3>
-                  <p className="m-0 mt-1 text-xs text-text-muted">
-                    ดีลนี้ยังไม่ใช้ใบขอซื้อรายโรงงาน — เลื่อนสถานะทั้งดีลทีละขั้นด้วยปุ่มนี้
-                  </p>
-                </div>
-                <Button
-                  type="button"
-                  variant="primary"
-                  className="whitespace-nowrap"
-                  loading={legacyMutation.isPending}
-                  onClick={() => legacyMutation.mutate(legacyCode)}
-                  data-testid="import-deal-legacy-action-btn"
-                >
-                  {IMPORT_ACTION_LABELS[legacyCode]}
-                </Button>
-              </div>
-            ) : null}
           </div>
         ) : (
           <div className="flex flex-col gap-3">
@@ -305,6 +285,31 @@ export function ImportDealPage({ user, showToast }) {
             ))}
           </div>
         )}
+        <div className="mt-3 grid gap-4 empty:hidden">
+          {legacyCode ? (
+            <div
+              className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 rounded-md border border-dashed border-border-muted bg-surface-muted p-4"
+              data-testid="import-deal-legacy-action"
+            >
+              <div className="min-w-0 flex-1 basis-56">
+                <h3 className="m-0 text-sm font-bold text-text">ดำเนินการนำเข้า (ดีลรูปแบบเดิม)</h3>
+                <p className="m-0 mt-1 text-xs text-text-muted">
+                  ดีลนี้ยังไม่ใช้ใบขอซื้อรายโรงงาน — เลื่อนสถานะทั้งดีลทีละขั้นด้วยปุ่มนี้
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="primary"
+                className="whitespace-nowrap"
+                loading={legacyMutation.isPending}
+                onClick={() => legacyMutation.mutate(legacyCode)}
+                data-testid="import-deal-legacy-action-btn"
+              >
+                {IMPORT_ACTION_LABELS[legacyCode]}
+              </Button>
+            </div>
+          ) : null}
+        </div>
       </Panel>
 
       {/* Supporting sections (delivery → items → comments → attachments): one wrapper so every
