@@ -299,6 +299,52 @@ class FactoryContactFlowIntegrationTest extends Cr1FixtureSupport {
             null, null, null, null, null, null, null));
     }
 
+    /** R1: a draft item starts from the terms Sales locked on the line (EUR, PER_SQM), not the quantity basis. */
+    @Test
+    void generateDraftsSeedsTheDraftItemWithTheRequestedCurrencyAndPriceUnit() {
+        long prId = requestInImportReview(line("Tile A", "Factory A", 10, null, null, "EUR", UnitBasis.PER_SQM));
+
+        FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(prId, importActor), "Factory A");
+
+        assertThat(draft.items()).singleElement().satisfies(i -> {
+            assertThat(i.currency()).isEqualTo("EUR");
+            assertThat(i.unitBasis()).isEqualTo(UnitBasis.PER_SQM);
+        });
+    }
+
+    /** A legacy line (no requested terms) seeds exactly as before: its quantity basis, no currency. */
+    @Test
+    void generateDraftsSeedsALegacyLineExactlyAsBefore() {
+        long prId = requestInImportReview(line("Tile A", "Factory A", 10, null, null, null, null));
+
+        FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(prId, importActor), "Factory A");
+
+        assertThat(draft.items()).singleElement().satisfies(i -> {
+            assertThat(i.currency()).isNull();
+            assertThat(i.unitBasis()).isEqualTo(UnitBasis.PER_PIECE);
+            assertThat(i.quotedQuantity()).isEqualByComparingTo("10");
+        });
+    }
+
+    /** Lines appended to an existing DRAFT are seeded the same way. */
+    @Test
+    void linesAddedToAnExistingDraftAreSeededWithTheirRequestedTerms() {
+        long prId = requestInImportReview(
+            line("Tile A", "Factory A", 10, null, null, "EUR", UnitBasis.PER_SQM),
+            line("Tile A2", "Factory A", 5, null, null, "USD", UnitBasis.PER_BOX),
+            line("Tile A3", "Factory A", 5, null, null, null, null));
+        List<PricingRequestDtos.PricingRequestItemDto> items = pricingRequestService.get(prId, importActor).items();
+        long quoteId = factoryQuoteRepository.createDraft(prId, null, "Factory A", null, "s", "b", importUserId, null);
+        factoryQuoteRepository.insertDraftItems(quoteId, List.of(items.get(0).id()));
+
+        factoryQuoteRepository.addItemsToDraft(quoteId, List.of(items.get(1).id(), items.get(2).id()));
+
+        List<th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteItemDto> seeded =
+            factoryQuoteRepository.find(quoteId).orElseThrow().items();
+        assertThat(seeded).extracting(i -> i.currency() + "/" + i.unitBasis())
+            .containsExactly("EUR/PER_SQM", "USD/PER_BOX", "null/PER_PIECE");
+    }
+
     // ═════════════════════════════════════════════════════════════════════════════════════════
     // B — currency + price unit locked from the sales request
     // ═════════════════════════════════════════════════════════════════════════════════════════

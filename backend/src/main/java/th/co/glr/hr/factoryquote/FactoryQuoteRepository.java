@@ -81,7 +81,11 @@ public class FactoryQuoteRepository {
                 .addValue("pricingRequestItemId", pricingRequestItemIds.get(i))
                 .addValue("sortOrder", i);
         }
-        // unit_basis is copied verbatim from the request item's own canonical
+        // CR-1 (R1): when Sales locked a price unit / currency on the line, the draft item starts from
+        // THOSE (unit_basis = requested_price_unit_basis, currency = requested_currency); a legacy line
+        // (both NULL) seeds exactly as before. quoted_quantity/quoted_unit stay the request quantity and
+        // the PER_SQM/PER_BOX/PER_LINEAR_M dimension fields stay NULL for import to fill, as today.
+        // unit_basis is otherwise copied verbatim from the request item's own canonical
         // requested_unit_basis (V68) rather than re-derived from the free-text requested_unit —
         // a text guess has no way to express PER_BOX / PER_LINEAR_M and used to silently seed
         // both as PER_PIECE. No COALESCE needed: V68 makes requested_unit_basis NOT NULL and
@@ -89,9 +93,10 @@ public class FactoryQuoteRepository {
         // direct copy always satisfies both sides.
         jdbc.batchUpdate("""
             INSERT INTO sales.factory_quote_item
-                (factory_quote_id, pricing_request_item_id, quoted_quantity, quoted_unit, unit_basis, sort_order)
+                (factory_quote_id, pricing_request_item_id, quoted_quantity, quoted_unit, unit_basis, currency, sort_order)
             SELECT :quoteId, pri.pricing_request_item_id, pri.requested_qty, pri.requested_unit,
-                   pri.requested_unit_basis,
+                   COALESCE(pri.requested_price_unit_basis, pri.requested_unit_basis),
+                   pri.requested_currency,
                    :sortOrder
               FROM sales.pricing_request_item pri
              WHERE pri.pricing_request_item_id = :pricingRequestItemId
@@ -134,9 +139,10 @@ public class FactoryQuoteRepository {
         // for why no COALESCE is needed.
         jdbc.batchUpdate("""
             INSERT INTO sales.factory_quote_item
-                (factory_quote_id, pricing_request_item_id, quoted_quantity, quoted_unit, unit_basis, sort_order)
+                (factory_quote_id, pricing_request_item_id, quoted_quantity, quoted_unit, unit_basis, currency, sort_order)
             SELECT :quoteId, pri.pricing_request_item_id, pri.requested_qty, pri.requested_unit,
-                   pri.requested_unit_basis,
+                   COALESCE(pri.requested_price_unit_basis, pri.requested_unit_basis),
+                   pri.requested_currency,
                    :sortOrder
               FROM sales.pricing_request_item pri
              WHERE pri.pricing_request_item_id = :pricingRequestItemId
