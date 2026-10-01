@@ -6465,9 +6465,11 @@ function mockApproveDealQuotationPricingRequestOrigin(row, payload, user) {
     pr.status = 'QUOTATION_ISSUED';
   }
   if (pr && ticket) {
-    if (pr.recipientType === 'DESIGNER') autoAdvanceStage(ticket, 'QUOTE_DESIGN_SIDE', user);
-    if (pr.recipientType === 'OWNER') autoAdvanceStage(ticket, 'QUOTE_OWNER', user);
-    if (pr.recipientType === 'BUYER') autoAdvanceStage(ticket, 'QUOTE_BUYER', user);
+    // PR B: the QUOTATION's recipient (a revision may be re-addressed), not the request's.
+    const recipient = row.recipientType ?? pr.recipientType;
+    if (recipient === 'DESIGNER') autoAdvanceStage(ticket, 'QUOTE_DESIGN_SIDE', user);
+    if (recipient === 'OWNER') autoAdvanceStage(ticket, 'QUOTE_OWNER', user);
+    if (recipient === 'BUYER') autoAdvanceStage(ticket, 'QUOTE_BUYER', user);
     pushEvent(ticket, user, 'QUOTATION_ISSUED', null, null, `อนุมัติและออกใบเสนอราคา ${row.number}`);
     pushPricingRequestEvent(pr, user, 'CUSTOMER_QUOTATION_ISSUED', null, null, `ออกใบเสนอราคา ${row.number}`);
     // Parity with the real service's unconditional CEO-visibility notification on issue (redundant
@@ -6475,6 +6477,18 @@ function mockApproveDealQuotationPricingRequestOrigin(row, payload, user) {
     // #approveAndIssuePricingRequestOrigin's own comment for why).
     db.users.filter((u) => u.role === 'ceo' && u.active).forEach((ceoUser) => addNotification(
       ceoUser.id, row.ticketId, ticket.code, 'DEAL_QUOTATION_APPROVED', `ใบเสนอราคา ${row.number} ถูกออกแล้ว`));
+  }
+  // PR B: issuing a REVISION supersedes its parent chain (mirrors the ancestor walk in
+  // DealQuotationService#approveAndIssuePricingRequestOrigin; ISSUED/REVISION_REQUESTED only).
+  let ancestorId = row.parentQuotationId;
+  while (ancestorId != null) {
+    const ancestor = mockDealQuotations.find((q) => q.id === ancestorId);
+    if (!ancestor) break;
+    if (ancestor.docStatus === 'ISSUED' || ancestor.docStatus === 'REVISION_REQUESTED') {
+      ancestor.docStatus = 'SUPERSEDED';
+      ancestor.updatedAt = now;
+    }
+    ancestorId = ancestor.parentQuotationId;
   }
   return delay({ quotation: buildDealQuotationDto(row) });
 }
@@ -16433,7 +16447,8 @@ export const api = {
       // whose recipient belongs to its คำขอราคา. Checked before anything is computed or persisted.
       const nextRecipientType = payload.recipientType ?? null;
       if (nextRecipientType != null) {
-        if ((row.origin || 'DEAL_DIRECT') === 'PRICING_REQUEST') {
+        // PR B: only a REVISION (parentQuotationId set) of a PRICING_REQUEST row may be re-addressed.
+        if ((row.origin || 'DEAL_DIRECT') === 'PRICING_REQUEST' && row.parentQuotationId == null) {
           fail('ผู้รับของใบเสนอราคาจากคำขอราคามาจากคำขอราคา — แก้ที่คำขอราคาต้นทาง', 409);
         }
         if (!quotationRecipientOption(nextRecipientType)) fail(`ไม่รองรับผู้รับใบเสนอราคา '${nextRecipientType}'`, 400);
@@ -16913,9 +16928,18 @@ export const api = {
       const parent = mockDealQuotations.find((q) => q.id === Number(id));
       if (!parent) fail('ไม่พบใบเสนอราคานี้', 404);
       const ticket = db.tickets.find((t) => t.id === parent.ticketId);
-      requireDealQuotationWriteAccess(ticket, user, parent.origin);
-      if (parent.docStatus !== 'APPROVED') {
-        fail('สร้างฉบับแก้ไขได้เฉพาะใบเสนอราคาที่อนุมัติแล้วเท่านั้น', 409);
+      if ((parent.origin || 'DEAL_DIRECT') === 'PRICING_REQUEST') {
+        // PR B: PRICING_REQUEST origin -- owning sales rep ONLY (DealQuotationService#createRevision
+        // reuses #requireOutcomeAccess), ISSUED / REVISION_REQUESTED only.
+        if (user.role !== 'sales' || ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+        if (parent.docStatus !== 'ISSUED' && parent.docStatus !== 'REVISION_REQUESTED') {
+          fail('สร้างฉบับแก้ไขได้จากใบเสนอราคาที่ออกแล้วหรือลูกค้าขอแก้ไขเท่านั้น', 409);
+        }
+      } else {
+        requireDealQuotationWriteAccess(ticket, user, parent.origin);
+        if (parent.docStatus !== 'APPROVED') {
+          fail('สร้างฉบับแก้ไขได้เฉพาะใบเสนอราคาที่อนุมัติแล้วเท่านั้น', 409);
+        }
       }
       // M3: mirrors DealQuotationRepository#hasOpenRevision's own guard -- a double-tap must not
       // silently mint two children sharing the same {base}-{n} number.

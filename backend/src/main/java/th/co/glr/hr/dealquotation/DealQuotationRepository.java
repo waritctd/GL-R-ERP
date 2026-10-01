@@ -97,7 +97,7 @@ public class DealQuotationRepository {
             SELECT EXISTS (
                 SELECT 1 FROM sales.quotation
                  WHERE parent_quotation_id = :parentId
-                   AND origin = 'DEAL_DIRECT'
+                   AND origin IN ('DEAL_DIRECT', 'PRICING_REQUEST')
                    AND doc_status IN ('DRAFT', 'PENDING_APPROVAL')
             )
             """, Map.of("parentId", parentQuotationId), Boolean.class);
@@ -876,7 +876,9 @@ public class DealQuotationRepository {
                    updated_at = now()
              WHERE quotation_id = :id
                AND doc_status = 'DRAFT'
-               AND origin = 'DEAL_DIRECT'
+               -- PR B: a PRICING_REQUEST row may be re-addressed ONLY when it is a REVISION
+               -- (parent_quotation_id set); a first-issue PR quotation keeps its request's recipient.
+               AND (origin = 'DEAL_DIRECT' OR (origin = 'PRICING_REQUEST' AND parent_quotation_id IS NOT NULL))
             """, new MapSqlParameterSource()
                 .addValue("id", quotationId)
                 .addValue("recipientType", recipientType)
@@ -1247,7 +1249,11 @@ public class DealQuotationRepository {
     public int supersede(long quotationId) {
         return jdbc.update("""
             UPDATE sales.quotation SET doc_status = 'SUPERSEDED', updated_at = now()
-             WHERE quotation_id = :id AND origin = 'DEAL_DIRECT' AND doc_status IN ('APPROVED', 'DRAFT')
+             WHERE quotation_id = :id
+               AND ((origin = 'DEAL_DIRECT' AND doc_status IN ('APPROVED', 'DRAFT'))
+                 -- PR B: a PRICING_REQUEST-origin parent is replaced by its issued revision from
+                 -- ISSUED, or from REVISION_REQUESTED (the customer asked for the change).
+                 OR (origin = 'PRICING_REQUEST' AND doc_status IN ('ISSUED', 'REVISION_REQUESTED')))
             """, Map.of("id", quotationId));
     }
 
