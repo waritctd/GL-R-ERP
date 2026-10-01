@@ -321,6 +321,79 @@ public class CommissionRepository {
         return value == null ? BigDecimal.ZERO : value;
     }
 
+    /**
+     * Manager TEAM OVERRIDE (V199): the generation active for {@code payrollMonth} -- the latest
+     * {@code effective_from} &le; the month, the same generation-selection rule as {@link
+     * #findIncentiveTiers} / {@link #findStockBonusConfig}. A generation that exists but is
+     * {@code enabled = FALSE} IS returned (with its {@code enabled} flag) -- the caller decides
+     * what disabled means; empty only when no generation has started yet. Recipients are joined to
+     * {@code hr.employee} for a display name (same first/last-name expression the record queries
+     * use, falling back to the employee code for a nameless row), ordered by employee_id so the
+     * list is deterministic.
+     */
+    public Optional<TeamOverrideConfig> findTeamOverrideConfig(LocalDate payrollMonth) {
+        record Header(long id, boolean enabled, BigDecimal threshold, BigDecimal rate) {}
+        List<Header> headers = jdbc.query("""
+            SELECT team_override_config_id, enabled, threshold_base, rate_percent
+              FROM sales.commission_team_override_config
+             WHERE effective_from = (
+                 SELECT MAX(effective_from)
+                   FROM sales.commission_team_override_config
+                  WHERE effective_from <= :payrollMonth
+             )
+            """,
+            Map.of("payrollMonth", payrollMonth),
+            (rs, rowNum) -> new Header(
+                rs.getLong("team_override_config_id"),
+                rs.getBoolean("enabled"),
+                rs.getBigDecimal("threshold_base"),
+                rs.getBigDecimal("rate_percent")));
+        if (headers.isEmpty()) {
+            return Optional.empty();
+        }
+        Header header = headers.get(0);
+        List<TeamOverrideRecipient> recipients = jdbc.query("""
+            SELECT r.employee_id,
+                   COALESCE(NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), ''), e.employee_code) AS display_name
+              FROM sales.commission_team_override_recipient r
+              JOIN hr.employee e ON e.employee_id = r.employee_id
+             WHERE r.team_override_config_id = :configId
+             ORDER BY r.employee_id
+            """,
+            Map.of("configId", header.id()),
+            (rs, rowNum) -> new TeamOverrideRecipient(rs.getLong("employee_id"), rs.getString("display_name")));
+        return Optional.of(new TeamOverrideConfig(header.enabled(), header.threshold(), header.rate(), recipients));
+    }
+
+    /**
+     * Manager TEAM OVERRIDE (V199): the COMPANY-WIDE, UNWEIGHTED sum of {@code actual_received}
+     * for the month -- SALE and CLAWBACK records only (manual kinds carry {@code actual_received =
+     * 0} but are excluded by kind anyway, so a future non-zero manual row could never leak in).
+     * Unweighted on purpose: the workbook's base is real cash, the x2/x3 uplift is not included.
+     *
+     * <p>{@code approvedOnly = true} is the PAYROLL path ({@code status = 'APPROVED'}, the same
+     * filter {@link #findApprovedRecordsByMonth} and {@link #sumActiveStockActualReceived} use --
+     * unapproved money must never reach a payroll figure; a payroll-path sum on the preview filter
+     * once paid a bonus on an unapproved receipt). {@code false} is the live-ESTIMATE path
+     * ({@code monthlySummary}), the broader {@code NOT IN ('VOID','REJECTED')} preview filter
+     * {@link #sumActiveWeightedActualReceived} uses.
+     */
+    public BigDecimal sumCompanyActualReceived(LocalDate payrollMonth, boolean approvedOnly) {
+        BigDecimal value = jdbc.queryForObject("""
+            SELECT COALESCE(SUM(actual_received), 0)
+              FROM sales.commission_record
+             WHERE payroll_month = :payrollMonth
+               AND kind IN ('SALE', 'CLAWBACK')
+               AND (CASE WHEN :approvedOnly THEN status = 'APPROVED'
+                         ELSE status NOT IN ('VOID', 'REJECTED') END)
+            """,
+            new MapSqlParameterSource()
+                .addValue("payrollMonth", payrollMonth)
+                .addValue("approvedOnly", approvedOnly),
+            BigDecimal.class);
+        return value == null ? BigDecimal.ZERO : value;
+    }
+
     public boolean hasActiveClawbackFor(long commissionId) {
         Boolean value = jdbc.queryForObject("""
             SELECT EXISTS(
@@ -772,6 +845,18 @@ public class CommissionRepository {
      * time (the invoice_number UNIQUE constraint alone would not catch a genuine second invoice
      * number for the same deal).
      */
+    /**
+     * Takes a row lock on the commission record ({@code SELECT ... FOR UPDATE}), held until the
+     * surrounding transaction ends -- so it only serialises anything when called inside a real
+     * transaction ({@link CommissionService#adjustItemWeights} is {@code @Transactional}). Returns
+     * whether the row exists.
+     */
+    public boolean lockRecordForUpdate(long commissionId) {
+        return !jdbc.queryForList(
+            "SELECT commission_id FROM sales.commission_record WHERE commission_id = :id FOR UPDATE",
+            Map.of("id", commissionId), Long.class).isEmpty();
+    }
+
     /**
      * Freezes a recomputed blended weight onto a record, but ONLY while it is still SUBMITTED. The sole
      * sanctioned post-creation write to {@code effective_weight_multiplier} (owner ruling 2026-10-01): the

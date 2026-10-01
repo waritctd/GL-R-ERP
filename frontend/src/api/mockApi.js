@@ -10158,7 +10158,9 @@ export const api = {
   },
 
   // Mirrors CommissionController + CommissionService (commission/), including GET /pending-approval and
-  // POST /{id}/item-weights (CommissionService#listPendingApproval / #adjustItemWeights).
+  // POST /{id}/item-weights (CommissionService#listPendingApproval / #adjustItemWeights), and the
+  // monthly-summary / payroll-ready DTOs including their team-override fields
+  // (CommissionMonthlySummaryDto / PayrollCommissionSummaryDto) -- shape only, never the maths.
   commissions: {
     // Mirrors CommissionController#list PreAuthorize exactly: SALES, SALES_MANAGER, CEO only.
     // Neither ACCOUNT nor HR may call this — account only ever gets createFromDeal, hr reads via
@@ -10799,6 +10801,9 @@ export const api = {
           manualAdjustmentAmount: round2(manualAmount),
           incentiveAmount,
           stockBonusAmount,
+          // The mock has no override-recipient list (that lives in sales config on the real
+          // backend), so no mock rep is ever a team-override recipient: honest 0, never invented.
+          teamOverrideAmount: 0,
         };
       });
       // A rep whose ONLY approved commission this month is a manual entry (e.g. a MANAGER
@@ -10814,6 +10819,7 @@ export const api = {
           manualAdjustmentAmount: round2(entry.amount),
           incentiveAmount: 0,
           stockBonusAmount: 0,
+          teamOverrideAmount: 0,
         });
       });
       salesReps.sort((a, b) => String(a.salesRepName || '').localeCompare(String(b.salesRepName || ''), 'th'));
@@ -10825,6 +10831,10 @@ export const api = {
           totalCommissionAmount: salesReps.reduce((sum, item) => sum + item.commissionAmount, 0),
           totalIncentiveAmount: salesReps.reduce((sum, item) => sum + item.incentiveAmount, 0),
           totalStockBonusAmount: salesReps.reduce((sum, item) => sum + item.stockBonusAmount, 0),
+          totalTeamOverrideAmount: salesReps.reduce((sum, item) => sum + item.teamOverrideAmount, 0),
+          // Mirrors the backend: null when no override applies in the month. The mock has no
+          // override-recipient list, so it never applies here.
+          companyCommissionableBase: null,
           salesReps,
         },
       });
@@ -10841,6 +10851,11 @@ export const api = {
      * figure: a plain sum of this rep/month's approved manual-kind demo records, no policy
      * involved. totalCommission is computed from these (not itself canned), so it tracks
      * manualTotal correctly even though two of its three inputs are frozen.
+     *
+     * Redesign additions (mirrors CommissionMonthlySummaryDto's new fields): rawCommissionableBase,
+     * weightUpliftBase, stockBonusAmount, teamOverrideAmount, companyCommissionableBase,
+     * teamOverrideThresholdBase, teamOverrideRatePercent. The mock fabricates none of them -- see
+     * the inline comments; totalCommission would include stockBonus + teamOverride, both 0 here.
      */
     async monthlySummary(params = {}) {
       const user = requireSession();
@@ -10858,9 +10873,21 @@ export const api = {
         summary: {
           payrollMonth: `${month}-01`,
           salesRepId,
+          // No stock uplift and no stock bonus are fabricated (the mock has no weighting or
+          // stock-bonus config), so the raw pre-weighting base IS the canned base.
+          rawCommissionableBase: commissionableBase,
+          weightUpliftBase: 0,
           commissionableBase,
           tierCommission,
           incentiveAmount,
+          stockBonusAmount: 0,
+          // Team override is for a configured recipient list the mock does not have: a mock rep is
+          // never a recipient, so the company figures are null (the UI then hides the row) and the
+          // amount is 0 -- never an invented override.
+          teamOverrideAmount: 0,
+          companyCommissionableBase: null,
+          teamOverrideThresholdBase: null,
+          teamOverrideRatePercent: null,
           manualTotal,
           totalCommission: round2(tierCommission + incentiveAmount + manualTotal),
           belowFloor: false,

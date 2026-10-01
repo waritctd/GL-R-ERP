@@ -13,9 +13,8 @@ import java.util.List;
  * from the same {@link CommissionCalculator}/{@link CommissionRepository} the real payroll run
  * uses — never re-derived client-side.
  *
- * <p>KNOWN GAP, deliberate: STOCK_BONUS is not included. The page this replaces never showed it,
- * it ships config-gated OFF ({@link StockBonusConfig#disabled()}), and adding a new rendered
- * figure is out of scope for a "who computes the number" change.
+ * <p>STOCK_BONUS and the manager TEAM OVERRIDE (V199) are included; the former "KNOWN GAP" for
+ * STOCK_BONUS is closed. The last seven components are the "how was my commission built" detail.
  *
  * @param commissionableBase the 2dp display value of the full-precision monthly tier base
  *                            ({@link CommissionCalculator#monthlyTierBase})
@@ -24,7 +23,20 @@ import java.util.List;
  *                            records (ADJUSTMENT/MANAGER/STOCK_BONUS/INCENTIVE) — never fed into
  *                            {@code commissionableBase}, only added on top of the total, mirroring
  *                            {@link CommissionService#computeRepPayrollCommissions} exactly
- * @param totalCommission    {@code tierCommission + incentiveAmount + manualTotal}
+ * @param totalCommission    {@code tierCommission + incentiveAmount + manualTotal + stockBonusAmount +
+ *                            teamOverrideAmount}
+ * @param rawCommissionableBase UNWEIGHTED sum of actual_received / 1.07 for this rep (same preview
+ *                            filter as {@code commissionableBase}), 2dp
+ * @param weightUpliftBase    {@code commissionableBase - rawCommissionableBase}: the extra the x2/x3
+ *                            weighting added to the tier base, 2dp
+ * @param stockBonusAmount    auto STOCK_BONUS exactly as payroll computes it (config-gated; a positive
+ *                            approved manual STOCK_BONUS replaces it)
+ * @param teamOverrideAmount  manager team override; ZERO unless this rep is a recipient
+ * @param companyCommissionableBase company-wide unweighted ex-VAT base the override is computed from;
+ *                            NULL unless this rep is a recipient (company-wide data -- never shown to
+ *                            a non-recipient)
+ * @param teamOverrideThresholdBase the generation's threshold; NULL unless recipient
+ * @param teamOverrideRatePercent the generation's rate in percent; NULL unless recipient
  * @param belowFloor         true when a positive base still produced zero tier commission — the
  *                            only way that happens is {@link CommissionCalculator}'s private
  *                            monthly floor, so this is derived rather than re-declared
@@ -38,5 +50,13 @@ public record CommissionMonthlySummaryDto(
     BigDecimal manualTotal,
     BigDecimal totalCommission,
     boolean belowFloor,
-    List<CommissionTierRowDto> tiers
+    List<CommissionTierRowDto> tiers,
+    // Team override + full-detail additions (V199).
+    BigDecimal rawCommissionableBase,
+    BigDecimal weightUpliftBase,
+    BigDecimal stockBonusAmount,
+    BigDecimal teamOverrideAmount,
+    BigDecimal companyCommissionableBase,
+    BigDecimal teamOverrideThresholdBase,
+    BigDecimal teamOverrideRatePercent
 ) {}

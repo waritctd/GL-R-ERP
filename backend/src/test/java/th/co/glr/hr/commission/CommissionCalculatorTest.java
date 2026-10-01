@@ -680,4 +680,96 @@ class CommissionCalculatorTest {
         assertThat(calculator.progressiveCommission(calculator.monthlyTierBase(BigDecimal.ZERO), TierConfig.defaults()))
             .isEqualByComparingTo("0.00");
     }
+
+    // ── Manager TEAM OVERRIDE (V199): (companyBase - threshold) x rate% ──────────────────────
+    // Source: accountant's nine monthly workbooks, sheet อัตราค่าคอม K2 "ยอดรับเงิน(ไม่รวม Vat) - 3
+    // ล้าน *0.075%". The figures below are the workbook's own ex-VAT company totals and the
+    // amounts the accountant typed, reproduced to the satang.
+
+    private static final TeamOverrideConfig WORKBOOK_TEAM_OVERRIDE = new TeamOverrideConfig(
+        true, new BigDecimal("3000000.00"), new BigDecimal("0.0750"),
+        List.of(new TeamOverrideRecipient(142L, "recipient-a"), new TeamOverrideRecipient(47L, "recipient-b")));
+
+    @Test
+    void teamOverride_reproducesAllSevenWorkbookMonthsToTheSatang() {
+        String[][] workbook = {
+            // month, company ex-VAT receipts (workbook), override the accountant paid
+            {"Feb", "4682135.09", "1261.60"},
+            {"Mar", "6311454.21", "2483.59"},
+            {"Apr", "5708277.47", "2031.21"},
+            {"May", "7984067.69", "3738.05"},
+            {"Jun", "11032569.26", "6024.43"},
+            {"Jul", "5482682.42", "1862.01"},
+            {"Aug", "6615086.80", "2711.32"},
+        };
+        for (String[] row : workbook) {
+            assertThat(calculator.teamOverride(new BigDecimal(row[1]), WORKBOOK_TEAM_OVERRIDE))
+                .as("teamOverride(%s = %s)", row[0], row[1])
+                .isEqualByComparingTo(new BigDecimal(row[2]));
+        }
+    }
+
+    @Test
+    void teamOverride_resultIsScaleTwo() {
+        assertThat(calculator.teamOverride(new BigDecimal("4000000.00"), WORKBOOK_TEAM_OVERRIDE).scale()).isEqualTo(2);
+        assertThat(calculator.teamOverride(new BigDecimal("4000000.00"), WORKBOOK_TEAM_OVERRIDE))
+            .isEqualByComparingTo("750.00");
+    }
+
+    @Test
+    void teamOverride_baseExactlyAtThreshold_isZero() {
+        assertThat(calculator.teamOverride(new BigDecimal("3000000.00"), WORKBOOK_TEAM_OVERRIDE))
+            .isEqualByComparingTo("0.00");
+    }
+
+    @Test
+    void teamOverride_oneSatangAboveThreshold_roundsHalfUpNotDown() {
+        // 0.01 x 0.075% = 0.0000075 -> 0.00 at 2dp: a tiny excess correctly rounds to nothing...
+        assertThat(calculator.teamOverride(new BigDecimal("3000000.01"), WORKBOOK_TEAM_OVERRIDE))
+            .isEqualByComparingTo("0.00");
+        // ...while 100.00 over pays exactly 0.075 -> HALF_UP to 0.08 (banker's/DOWN would give 0.07).
+        assertThat(calculator.teamOverride(new BigDecimal("3000100.00"), WORKBOOK_TEAM_OVERRIDE))
+            .isEqualByComparingTo("0.08");
+    }
+
+    @Test
+    void teamOverride_belowThresholdOrNonPositiveBase_isZero() {
+        assertThat(calculator.teamOverride(new BigDecimal("2999999.99"), WORKBOOK_TEAM_OVERRIDE)).isEqualByComparingTo("0.00");
+        assertThat(calculator.teamOverride(BigDecimal.ZERO, WORKBOOK_TEAM_OVERRIDE)).isEqualByComparingTo("0.00");
+        assertThat(calculator.teamOverride(new BigDecimal("-500000.00"), WORKBOOK_TEAM_OVERRIDE)).isEqualByComparingTo("0.00");
+    }
+
+    @Test
+    void teamOverride_nullBase_isZero() {
+        assertThat(calculator.teamOverride(null, WORKBOOK_TEAM_OVERRIDE)).isEqualByComparingTo("0.00");
+    }
+
+    @Test
+    void teamOverride_nullOrDisabledConfig_isZeroEvenForAHugeBase() {
+        BigDecimal huge = new BigDecimal("11032569.26");
+        assertThat(calculator.teamOverride(huge, null)).isEqualByComparingTo("0.00");
+        assertThat(calculator.teamOverride(huge, TeamOverrideConfig.disabled())).isEqualByComparingTo("0.00");
+        TeamOverrideConfig switchedOff = new TeamOverrideConfig(
+            false, new BigDecimal("3000000.00"), new BigDecimal("0.0750"), WORKBOOK_TEAM_OVERRIDE.recipients());
+        assertThat(calculator.teamOverride(huge, switchedOff)).isEqualByComparingTo("0.00");
+    }
+
+    @Test
+    void teamOverride_followsTheConfigNotHardcodedConstants() {
+        // A later generation with threshold 4,000,000 and rate 0.10%: (6,000,000 - 4,000,000) x 0.10% = 2,000.00.
+        TeamOverrideConfig revised = new TeamOverrideConfig(
+            true, new BigDecimal("4000000.00"), new BigDecimal("0.1000"), List.of());
+        assertThat(calculator.teamOverride(new BigDecimal("6000000.00"), revised)).isEqualByComparingTo("2000.00");
+    }
+
+    @Test
+    void teamOverride_doesNotPreRoundItsInputTo2dp_roundsOnlyTheFinalFigure() {
+        // monthlyTierBase carries 10dp and the override must round only ONCE, at the end.
+        // excess 1,000,006.666666666 x 0.075% = 750.0049999995 -> 750.00. Had the base been
+        // pre-rounded to 2dp (4,000,006.67) the excess would be 1,000,006.67 -> 750.005025 -> 750.01.
+        assertThat(calculator.teamOverride(new BigDecimal("4000006.666666666"), WORKBOOK_TEAM_OVERRIDE))
+            .isEqualByComparingTo("750.00");
+        assertThat(calculator.teamOverride(new BigDecimal("4000006.67"), WORKBOOK_TEAM_OVERRIDE))
+            .isEqualByComparingTo("750.01");
+    }
 }

@@ -467,6 +467,15 @@ public class CommissionService {
         if (!MANAGER_ROLES.contains(actor.role())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
+        // Serialise concurrent adjusters of the SAME record BEFORE reading anything the decision
+        // depends on. Under READ COMMITTED, two managers re-weighting different lines interleave:
+        // each re-reads the deal's items before the other commits, and the last writer freezes an
+        // effective_weight_multiplier (what payroll reads via COALESCE) that ignores the other's
+        // line. With the row lock held until commit, the second adjuster's reads (status, items)
+        // all happen after the first has committed. Taken before requireRecord so the record we
+        // validate and diff for the audit row is the post-lock one. A missing id locks nothing and
+        // falls through to requireRecord's 404.
+        commissions.lockRecordForUpdate(id);
         CommissionRecord existing = requireRecord(id);
         if (!CommissionKind.SALE.equals(existing.kind()) || existing.sourceTicketId() == null) {
             throw new ApiException(HttpStatus.CONFLICT, "ปรับน้ำหนักได้เฉพาะรายการค่าคอมจากดีลขาย");
@@ -915,9 +924,21 @@ public class CommissionService {
      * way {@link CommissionCalculator#progressiveCommission} returns zero is the floor (tier 1
      * starts at {@code 0} with a positive rate), so this check is exact.
      *
-     * <p>KNOWN GAP, deliberate (see {@link CommissionMonthlySummaryDto}): STOCK_BONUS is not
-     * included — the page this replaces never showed it, it ships config-gated OFF, and adding a
-     * new rendered figure is out of scope for a "who computes the number" change.
+     * <p>STOCK_BONUS and the manager TEAM OVERRIDE are now included (the former KNOWN GAP is
+     * closed), each computed exactly as {@link #computeRepPayrollCommissions} computes it: the
+     * stock bonus is config-gated (zero when disabled) and suppressed by a strictly positive
+     * approved manual STOCK_BONUS; the team override is paid only to a configured recipient of an
+     * ENABLED generation and suppressed by a strictly positive approved manual MANAGER entry. Two
+     * deliberate differences from payroll, both because this is the live ESTIMATE: the override's
+     * company base uses the broader preview filter ({@code NOT IN ('VOID','REJECTED')}) like the
+     * rest of this method, and so a SUBMITTED receipt moves the estimate before it moves payroll.
+     *
+     * <p>AUTHZ: {@code companyCommissionableBase}, {@code teamOverrideThresholdBase} and {@code
+     * teamOverrideRatePercent} are company-wide data. They are populated ONLY when the viewed rep
+     * is a recipient (whoever the viewer is -- {@link #resolveSalesRep} already stops a {@code
+     * sales} actor reading anyone but themself) and are NULL for everyone else, so a non-recipient
+     * rep can never learn the company total through this endpoint. A disabled generation is
+     * treated as "not a recipient".
      */
     public CommissionMonthlySummaryDto monthlySummary(Long salesRepId, LocalDate payrollMonth, UserPrincipal actor) {
         if (!LIST_VIEWER_ROLES.contains(actor.role())) {
@@ -934,6 +955,8 @@ public class CommissionService {
         BigDecimal zero = BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
         BigDecimal manualTotal = zero;
         BigDecimal manualIncentiveTotal = zero;
+        BigDecimal manualStockBonusTotal = zero;
+        BigDecimal manualManagerTotal = zero;
         for (CommissionRecord record : commissions.findRecords(repId, month)) {
             if (!MANUAL_KINDS.contains(record.kind()) || !CommissionStatus.APPROVED.equals(record.status())) {
                 continue;
@@ -943,21 +966,73 @@ public class CommissionService {
             if (CommissionKind.INCENTIVE.equals(record.kind())) {
                 manualIncentiveTotal = manualIncentiveTotal.add(amount);
             }
+            if (CommissionKind.STOCK_BONUS.equals(record.kind())) {
+                manualStockBonusTotal = manualStockBonusTotal.add(amount);
+            }
+            if (CommissionKind.MANAGER.equals(record.kind())) {
+                manualManagerTotal = manualManagerTotal.add(amount);
+            }
         }
 
         BigDecimal incentiveAmount = manualIncentiveTotal.signum() > 0
             ? zero
             : calculator.monthlyIncentive(base, commissions.findIncentiveTiers(month));
 
+        // Same rule + same gating as computeRepPayrollCommissions (incl. its performance
+        // short-circuit: no stock-share aggregate when config is off or a manual entry replaces it).
+        StockBonusConfig stockBonusConfig = commissions.findStockBonusConfig(month).orElse(StockBonusConfig.disabled());
+        BigDecimal stockBonusAmount = (manualStockBonusTotal.signum() > 0 || !stockBonusConfig.enabled())
+            ? zero
+            : calculator.stockSaleBonus(commissions.sumActiveStockActualReceived(repId, month), stockBonusConfig);
+
+        // Team override: only a recipient of an ENABLED generation, and only then is the
+        // company-wide base read at all (the authz rule in this method's Javadoc).
+        TeamOverrideConfig teamOverrideConfig = activeTeamOverrideConfig(month);
+        boolean recipient = teamOverrideConfig.recipients().stream().anyMatch(r -> r.employeeId() == repId);
+        BigDecimal teamOverrideAmount = zero;
+        BigDecimal companyBase = null;
+        BigDecimal overrideThreshold = null;
+        BigDecimal overrideRate = null;
+        if (recipient) {
+            BigDecimal companyBaseFull = calculator.monthlyTierBase(
+                commissions.sumCompanyActualReceived(month, false).max(BigDecimal.ZERO));
+            companyBase = companyBaseFull.setScale(2, RoundingMode.HALF_UP);
+            overrideThreshold = teamOverrideConfig.thresholdBase();
+            overrideRate = teamOverrideConfig.ratePercent();
+            teamOverrideAmount = manualManagerTotal.signum() > 0
+                ? zero
+                : calculator.teamOverride(companyBaseFull, teamOverrideConfig);
+        }
+
+        // Display figures: raw (unweighted) base and the x2/x3 uplift, both 2dp so that
+        // raw + uplift == commissionableBase exactly as displayed.
+        BigDecimal displayBase = base.setScale(2, RoundingMode.HALF_UP);
+        BigDecimal rawBase = calculator.monthlyTierBase(
+            commissions.sumActiveActualReceived(repId, month).max(BigDecimal.ZERO)).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal weightUplift = displayBase.subtract(rawBase);
+
         boolean belowFloor = base.signum() > 0 && tierCommission.signum() == 0;
 
         return new CommissionMonthlySummaryDto(
             month, repId,
-            base.setScale(2, RoundingMode.HALF_UP),
+            displayBase,
             tierCommission, incentiveAmount, manualTotal,
-            tierCommission.add(incentiveAmount).add(manualTotal),
+            tierCommission.add(incentiveAmount).add(manualTotal).add(stockBonusAmount).add(teamOverrideAmount),
             belowFloor,
-            tierRows(base, tiers));
+            tierRows(base, tiers),
+            rawBase, weightUplift, stockBonusAmount, teamOverrideAmount,
+            companyBase, overrideThreshold, overrideRate);
+    }
+
+    /**
+     * The team-override generation for {@code month}, or {@link TeamOverrideConfig#disabled()} when
+     * there is none OR the generation is switched off -- a disabled generation is treated as "no
+     * recipients" everywhere (payroll pays nothing, the summary exposes nothing).
+     */
+    private TeamOverrideConfig activeTeamOverrideConfig(LocalDate month) {
+        return commissions.findTeamOverrideConfig(month)
+            .filter(TeamOverrideConfig::enabled)
+            .orElse(TeamOverrideConfig.disabled());
     }
 
     /**
@@ -998,24 +1073,28 @@ public class CommissionService {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         LocalDate month = payrollMonth == null ? currentPayrollMonth() : payrollMonth(payrollMonth);
-        List<RepPayrollCommission> reps = computeRepPayrollCommissions(month);
+        PayrollRun run = computePayrollRun(month);
+        List<RepPayrollCommission> reps = run.reps();
         List<SalesRepCommissionSummaryDto> repSummaries = new ArrayList<>();
         BigDecimal totalBase = BigDecimal.ZERO;
         BigDecimal totalCommission = BigDecimal.ZERO;
         BigDecimal totalIncentive = BigDecimal.ZERO;
         BigDecimal totalStockBonus = BigDecimal.ZERO;
+        BigDecimal totalTeamOverride = BigDecimal.ZERO;
         for (RepPayrollCommission rep : reps) {
             repSummaries.add(new SalesRepCommissionSummaryDto(
                 rep.salesRepId(), rep.salesRepName(), rep.tierCommissionableBase(), rep.totalCommission(),
-                rep.manualAdjustmentAmount(), rep.incentiveAmount(), rep.stockBonusAmount()));
+                rep.manualAdjustmentAmount(), rep.incentiveAmount(), rep.stockBonusAmount(), rep.teamOverrideAmount()));
             totalBase = totalBase.add(rep.tierCommissionableBase());
             totalCommission = totalCommission.add(rep.totalCommission());
             totalIncentive = totalIncentive.add(rep.incentiveAmount());
             totalStockBonus = totalStockBonus.add(rep.stockBonusAmount());
+            totalTeamOverride = totalTeamOverride.add(rep.teamOverrideAmount());
         }
         repSummaries.sort(Comparator.comparing(SalesRepCommissionSummaryDto::salesRepName, Comparator.nullsLast(String::compareTo)));
         return new PayrollCommissionSummaryDto(
-            month, "PAYROLL_READY", totalBase, totalCommission, totalIncentive, totalStockBonus, repSummaries);
+            month, "PAYROLL_READY", totalBase, totalCommission, totalIncentive, totalStockBonus,
+            totalTeamOverride, run.companyCommissionableBase(), repSummaries);
     }
 
     /**
@@ -1033,6 +1112,13 @@ public class CommissionService {
      *                     match, it does not re-normalize.
      */
     private List<RepPayrollCommission> computeRepPayrollCommissions(LocalDate payrollMonth) {
+        return computePayrollRun(payrollMonth).reps();
+    }
+
+    /** The per-rep rows plus the company-wide base the team override was computed from. */
+    private record PayrollRun(List<RepPayrollCommission> reps, BigDecimal companyCommissionableBase) {}
+
+    private PayrollRun computePayrollRun(LocalDate payrollMonth) {
         List<CommissionRecord> records = commissions.findApprovedRecordsByMonth(payrollMonth);
         Map<Long, RepAccumulator> grouped = new LinkedHashMap<>();
         // Manual entries (ADJUSTMENT/MANAGER/STOCK_BONUS/INCENTIVE, feat/commission-manual-adjustments)
@@ -1059,6 +1145,11 @@ public class CommissionService {
         // suppress (grouped.getOrDefault(...).signum() > 0 is false for zero).
         Map<Long, BigDecimal> manualIncentiveTotals = new LinkedHashMap<>();
         Map<Long, BigDecimal> manualStockBonusTotals = new LinkedHashMap<>();
+        // Manager TEAM OVERRIDE (V199): same replacement rule -- a recipient whose summed approved
+        // manual MANAGER entries are STRICTLY POSITIVE (the accountant still hand-types the figure)
+        // has the auto limb suppressed; zero (a note) does not suppress. A negative MANAGER cannot
+        // exist (createManualCommission 400s it), so "correction layered on top" is unreachable.
+        Map<Long, BigDecimal> manualManagerTotals = new LinkedHashMap<>();
         for (CommissionRecord record : records) {
             if (MANUAL_KINDS.contains(record.kind())) {
                 BigDecimal amount = record.manualAmount() == null ? BigDecimal.ZERO : record.manualAmount();
@@ -1069,6 +1160,9 @@ public class CommissionService {
                 }
                 if (CommissionKind.STOCK_BONUS.equals(record.kind())) {
                     manualStockBonusTotals.merge(record.salesRepId(), amount, BigDecimal::add);
+                }
+                if (CommissionKind.MANAGER.equals(record.kind())) {
+                    manualManagerTotals.merge(record.salesRepId(), amount, BigDecimal::add);
                 }
                 continue;
             }
@@ -1092,6 +1186,24 @@ public class CommissionService {
         List<IncentiveTierConfig> incentiveLadder = commissions.findIncentiveTiers(payrollMonth);
         StockBonusConfig stockBonusConfig = commissions.findStockBonusConfig(payrollMonth).orElse(StockBonusConfig.disabled());
         BigDecimal zero = BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
+        // Team override: config + company base loaded ONCE for the month. The base is the
+        // UNWEIGHTED, APPROVED-only company-wide ex-VAT sum at full precision (payroll must never
+        // count an unapproved receipt). Skipped entirely when no enabled generation applies.
+        TeamOverrideConfig teamOverrideConfig = activeTeamOverrideConfig(payrollMonth);
+        // NULL (not 0.00) when no override applies -- disabled, no generation yet, or no recipients:
+        // "company receipts 0.00" would be a lie for a month that simply has no override rule.
+        boolean overrideApplies = !teamOverrideConfig.recipients().isEmpty();
+        BigDecimal companyBase = overrideApplies
+            ? calculator.monthlyTierBase(commissions.sumCompanyActualReceived(payrollMonth, true).max(BigDecimal.ZERO))
+            : null;
+        Map<Long, BigDecimal> teamOverrideByEmployee = new LinkedHashMap<>();
+        Map<Long, String> teamOverrideNames = new LinkedHashMap<>();
+        for (TeamOverrideRecipient recipient : teamOverrideConfig.recipients()) {
+            boolean replaced = manualManagerTotals.getOrDefault(recipient.employeeId(), BigDecimal.ZERO).signum() > 0;
+            teamOverrideByEmployee.put(recipient.employeeId(),
+                replaced ? zero : calculator.teamOverride(companyBase, teamOverrideConfig));
+            teamOverrideNames.put(recipient.employeeId(), recipient.name());
+        }
         List<RepPayrollCommission> results = new ArrayList<>();
         Set<Long> repIds = new HashSet<>();
         for (RepAccumulator rep : grouped.values()) {
@@ -1118,9 +1230,12 @@ public class CommissionService {
             BigDecimal stockBonusAmount = (stockBonusReplaced || !stockBonusConfig.enabled())
                 ? zero
                 : calculator.stockSaleBonus(commissions.sumActiveStockActualReceived(rep.salesRepId, payrollMonth), stockBonusConfig);
-            BigDecimal finalCommission = tierCommission.add(incentiveAmount).add(stockBonusAmount).add(manualAmount);
+            BigDecimal teamOverrideAmount = teamOverrideByEmployee.getOrDefault(rep.salesRepId, zero);
+            BigDecimal finalCommission = tierCommission.add(incentiveAmount).add(stockBonusAmount)
+                .add(teamOverrideAmount).add(manualAmount);
             results.add(new RepPayrollCommission(
-                rep.salesRepId, rep.salesRepName, displayBase, manualAmount, incentiveAmount, stockBonusAmount, finalCommission));
+                rep.salesRepId, rep.salesRepName, displayBase, manualAmount, incentiveAmount, stockBonusAmount,
+                teamOverrideAmount, finalCommission));
             repIds.add(rep.salesRepId);
         }
         // A rep whose ONLY approved commission this month is a manual entry (e.g. a MANAGER
@@ -1135,11 +1250,24 @@ public class CommissionService {
                 continue;
             }
             BigDecimal manualAmount = entry.getValue();
+            BigDecimal teamOverrideAmount = teamOverrideByEmployee.getOrDefault(entry.getKey(), zero);
             results.add(new RepPayrollCommission(
                 entry.getKey(), manualOnlyRepNames.get(entry.getKey()),
-                zero, manualAmount, zero, zero, manualAmount));
+                zero, manualAmount, zero, zero, teamOverrideAmount, manualAmount.add(teamOverrideAmount)));
+            repIds.add(entry.getKey());
         }
-        return results;
+        // A recipient with NO approved record of any kind this month still earns the override: give
+        // them a row -- but only when the amount is positive (a zero override with nothing else to
+        // pay creates no row, so a below-threshold month leaves no empty recipient lines).
+        for (Map.Entry<Long, BigDecimal> entry : teamOverrideByEmployee.entrySet()) {
+            if (repIds.contains(entry.getKey()) || entry.getValue().signum() <= 0) {
+                continue;
+            }
+            results.add(new RepPayrollCommission(
+                entry.getKey(), teamOverrideNames.get(entry.getKey()),
+                zero, zero, zero, zero, entry.getValue(), entry.getValue()));
+        }
+        return new PayrollRun(results, companyBase == null ? null : companyBase.setScale(2, RoundingMode.HALF_UP));
     }
 
     /**
@@ -1163,8 +1291,8 @@ public class CommissionService {
      * Per-rep breakdown shared between {@link #payrollReadySummary} and {@link
      * #payrollCommissionTotalsByEmployee} -- {@code totalCommission} is the number payroll must
      * pay: {@code tierCommissionableBase} run through the tier table, plus {@code
-     * incentiveAmount}, {@code stockBonusAmount} (issue #405), plus {@code
-     * manualAdjustmentAmount}.
+     * incentiveAmount}, {@code stockBonusAmount} (issue #405), {@code teamOverrideAmount} (V199),
+     * plus {@code manualAdjustmentAmount}.
      */
     public record RepPayrollCommission(
         long salesRepId,
@@ -1173,6 +1301,7 @@ public class CommissionService {
         BigDecimal manualAdjustmentAmount,
         BigDecimal incentiveAmount,
         BigDecimal stockBonusAmount,
+        BigDecimal teamOverrideAmount,
         BigDecimal totalCommission) {}
 
     private CommissionRecord requireRecord(long id) {
