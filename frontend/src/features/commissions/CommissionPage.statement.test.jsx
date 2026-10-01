@@ -755,4 +755,62 @@ describe('hr payroll summary — ค่าคอมทีม', () => {
     expect(screen.getAllByText('฿1,234.56').length).toBeGreaterThan(0); // the recipient's cell
     expect(text(screen.getByTestId('payroll-team-override-total'))).toContain('฿1,234.56');
   });
+
+  // The backend sends companyCommissionableBase = null when no override applies in the month, but
+  // ALWAYS sends totalTeamOverrideAmount (0.00) -- so a month before the override existed must not
+  // grow an all-zero ค่าคอมทีม column or a "รวมค่าคอมทีม 0.00" footer.
+  it('no override in the month (companyCommissionableBase null, total 0): no ค่าคอมทีม column and no footer', async () => {
+    api.commissions.payrollReady.mockResolvedValue({
+      summary: {
+        payrollMonth: '2026-08-01',
+        status: 'PAYROLL_READY',
+        totalCommissionableBase: 3000000,
+        totalCommissionAmount: 70000,
+        totalIncentiveAmount: 15000,
+        totalStockBonusAmount: 0,
+        totalTeamOverrideAmount: 0,
+        companyCommissionableBase: null,
+        salesReps: [{
+          salesRepId: 10,
+          salesRepName: 'เจนเนตร',
+          commissionableBase: 3000000,
+          commissionAmount: 70000,
+          manualAdjustmentAmount: 0,
+          incentiveAmount: 15000,
+          stockBonusAmount: 0,
+          teamOverrideAmount: 0,
+        }],
+      },
+    });
+    renderPage(hrUser);
+
+    expect(await screen.findByText('เจนเนตร')).not.toBeNull();
+    expect(screen.getByText('อินเซนทีฟ')).not.toBeNull(); // the rest of the table is there
+    expect(screen.queryByText('ค่าคอมทีม')).toBeNull();
+    expect(screen.queryByTestId('payroll-team-override-total')).toBeNull();
+    expect(screen.queryByText(/รวมค่าคอมทีม/)).toBeNull();
+  });
+
+  it('a non-zero team total with no company base still shows the column and the footer', async () => {
+    api.commissions.payrollReady.mockResolvedValue({
+      summary: {
+        payrollMonth: '2026-08-01',
+        status: 'PAYROLL_READY',
+        totalCommissionableBase: 3000000,
+        totalCommissionAmount: 70000,
+        totalIncentiveAmount: 0,
+        totalStockBonusAmount: 0,
+        totalTeamOverrideAmount: 500,
+        companyCommissionableBase: null,
+        salesReps: [{
+          salesRepId: 10, salesRepName: 'เจนเนตร', commissionableBase: 3000000, commissionAmount: 70000,
+          manualAdjustmentAmount: 0, incentiveAmount: 0, stockBonusAmount: 0, teamOverrideAmount: 500,
+        }],
+      },
+    });
+    renderPage(hrUser);
+
+    expect((await screen.findAllByText('ค่าคอมทีม')).length).toBeGreaterThan(0);
+    expect(text(screen.getByTestId('payroll-team-override-total'))).toContain('฿500.00');
+  });
 });

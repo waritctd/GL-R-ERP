@@ -10510,20 +10510,18 @@ export const api = {
         });
       });
       salesReps.sort((a, b) => String(a.salesRepName || '').localeCompare(String(b.salesRepName || ''), 'th'));
-      const totalCommissionableBase = salesReps.reduce((sum, item) => sum + item.commissionableBase, 0);
       return delay({
         summary: {
           payrollMonth: `${month}-01`,
           status: 'PAYROLL_READY',
-          totalCommissionableBase,
+          totalCommissionableBase: salesReps.reduce((sum, item) => sum + item.commissionableBase, 0),
           totalCommissionAmount: salesReps.reduce((sum, item) => sum + item.commissionAmount, 0),
           totalIncentiveAmount: salesReps.reduce((sum, item) => sum + item.incentiveAmount, 0),
           totalStockBonusAmount: salesReps.reduce((sum, item) => sum + item.stockBonusAmount, 0),
           totalTeamOverrideAmount: salesReps.reduce((sum, item) => sum + item.teamOverrideAmount, 0),
-          // The real figure is the whole company's ex-VAT receipts for the month. The mock's only
-          // honest stand-in is the sum of the (already canned) per-rep bases it lists -- a fixture
-          // figure like those, not a computation.
-          companyCommissionableBase: totalCommissionableBase,
+          // Mirrors the backend: null when no override applies in the month. The mock has no
+          // override-recipient list, so it never applies here.
+          companyCommissionableBase: null,
           salesReps,
         },
       });
