@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { hasPermission } from '../../app/permissions.js';
+import { catalogPriceInThb } from './catalogPriceThb.js';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Icon } from '../../components/common/Icon.jsx';
@@ -66,7 +67,7 @@ import {
 import { useUnitBasisCatalog } from './unitBasisCatalog.js';
 import { buttonVariants } from '../../components/common/Button.jsx';
 import { cn } from '../../utils/cn.js';
-import { piecesPerSqmFromSqmPerPiece, PRICE_MODE_OPTIONS } from '../quotations/quotationMeta.js';
+import { PRICE_MODE_OPTIONS } from '../quotations/quotationMeta.js';
 import { SearchableCombobox } from '../../components/common/SearchableCombobox.jsx';
 // B6 (GLA-135): reuses the catalog page's own add-factory dialog rather than a second, drifting
 // copy of the same five fields + validation — see ImportFactoryPicker's own comment below.
@@ -116,14 +117,6 @@ const FACTORY_ROUTING_STATUSES = ['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE
 // anything a legacy (pre-V185) item never carried. ─────────────────────────────────────────────
 function formatOrDash(value, suffix = '') {
   return value == null || value === '' ? '—' : `${value}${suffix}`;
-}
-
-/** แผ่น/ตร.ม. — the RECIPROCAL of the stored sqm_per_piece, same convention the direct-deal
- * quotation editor displays (QuotationItemRow's own piecesPerSqmDisplay). */
-function formatPiecesPerSqm(item) {
-  if (item?.sqmPerPiece == null) return '—';
-  const reciprocal = piecesPerSqmFromSqmPerPiece(item.sqmPerPiece);
-  return reciprocal == null ? '—' : String(reciprocal);
 }
 
 function formatLeadTime(item) {
@@ -254,6 +247,13 @@ function cleanNumber(value) {
 function generateClientRequestId() {
   return crypto.randomUUID?.()
     ?? '00000000-0000-4000-8000-' + String(Date.now()).slice(-12).padStart(12, '0');
+}
+
+const CATALOG_UNIT_SUFFIX = { per_sqm: '/ตร.ม.', per_piece: '/แผ่น', per_box: '/กล่อง', per_linear_m: '/เมตร' };
+
+/** Quantities shown with up to 2 decimals, no trailing zeros (7.2, 5, 7.25). */
+function formatQty(value) {
+  return Number(Number(value).toFixed(2)).toLocaleString('en-US');
 }
 
 function formatCurrency(value, currency = 'THB') {
@@ -872,7 +872,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const fxRatesQuery = useQuery({
     queryKey: queryKeys.fxRates(),
     queryFn: () => api.fxRates.list().then((r) => r.fxRates ?? []),
-    enabled: Number.isFinite(pricingRequestId) && isImport(user),
+    // The CEO needs the same list for the baht conversion of a line's catalogue price (GET
+    // /api/fx-rates is ceo/import only on the server).
+    enabled: Number.isFinite(pricingRequestId) && canSeeRaw(user),
     staleTime: 5 * 60 * 1000,
   });
 
@@ -2793,6 +2795,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
             // after wastage + full-box rounding, boxes, sqm equivalent). Sales/CEO/everyone else
             // keeps the full breakdown. UI scoping only — no backend authz change.
             const showWastageDetail = !isImport(user);
+            const catalogThb = catalogPriceInThb(item, fxRatesQuery.data);
             return (
               <div
                 key={item.id}
@@ -2812,7 +2815,16 @@ export function PricingRequestDetailPage({ user, showToast }) {
                     {`โรงงานที่กำหนด (Import): ${factoryName ?? 'ยังไม่ได้ระบุ'}`}
                   </span>
                   <span>รหัสสินค้า: {productCode ?? '-'}</span>
-                  <span>Base: {item.catalogBasePrice != null ? `${formatCurrency(item.catalogBasePrice, item.catalogCurrency ?? 'THB')} (preliminary)` : '-'}</span>
+                  <span data-testid={`pcr-catalog-price-${item.id}`}>
+                    ราคาโรงงาน (แคตตาล็อกฝ่ายนำเข้า): {item.catalogBasePrice != null
+                      ? `${formatCurrency(item.catalogBasePrice, item.catalogCurrency ?? 'THB')}${CATALOG_UNIT_SUFFIX[item.catalogPriceUnit] ?? ''}`
+                      : '-'}
+                  </span>
+                  {catalogThb ? (
+                    <span className="font-bold text-text" data-testid={`pcr-catalog-thb-${item.id}`}>
+                      {`≈ ${formatMoney(catalogThb.perSqm)}/ตร.ม. · ${formatMoney(catalogThb.perPiece)}/แผ่น · รวม ${formatMoney(catalogThb.total)} (${formatQty(catalogThb.pieces)} แผ่น = ${formatQty(catalogThb.sqm)} ตร.ม.)`}
+                    </span>
+                  ) : null}
                 </div>
                 {/* V185: the sales-entered tile fields, read-only for every viewer — legacy
                     (pre-V185) items show "—" for whichever of these they never carried. */}
@@ -2821,8 +2833,6 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   <span>ผิว: {formatOrDash(item.texture)}</span>
                   <span>ขนาด: {formatOrDash(item.size)}</span>
                   <span>ความหนา: {formatOrDash(item.thicknessMm, ' มม.')}</span>
-                  <span>แผ่น/ตร.ม.: {formatPiecesPerSqm(item)}</span>
-                  <span>แผ่น/กล่อง: {formatOrDash(item.piecesPerBox)}</span>
                   <span>ขายแผ่นไม่เต็มกล่อง: {item.piecesPerBox != null ? (item.roundToFullBox === false ? 'ใช่' : 'ไม่ใช่') : '—'}</span>
                   <span>
                     ประเทศต้นทาง: {formatOrDash(item.originCountry)}

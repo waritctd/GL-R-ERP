@@ -86,6 +86,27 @@ class PricingRequestRepositoryIntegrationTest extends AbstractPostgresIntegratio
     }
 
     @Test
+    void findItems_exposesTheLinkedCatalogueRowsPriceUnit_andNullWhenNotLinked() {
+        long catalogPriceId = insertCatalogProduct(
+            "Padana", "IT", "018090291", new BigDecimal("115"), "EUR", "per_sqm", "ACTIVE");
+        CreatePricingRequestRequest create = new CreatePricingRequestRequest(
+            PricingRequestRecipient.DESIGNER, null, "Designer Co.", null, null, "THB", null, clientRequestId("77"),
+            List.of(item("Padana", "linked"), item("Free", "text")));
+        long id = requests.create(ticketId, requests.nextRequestCode(), create, salesActorId);
+        jdbc.update("""
+            UPDATE sales.pricing_request_item SET catalog_price_id = :priceId, catalog_base_price = 115, catalog_currency = 'EUR'
+             WHERE pricing_request_id = :id AND model = 'linked'
+            """, Map.of("priceId", catalogPriceId, "id", id));
+
+        List<PricingRequestItemDto> items = requests.findItems(id);
+
+        // The unit is what makes catalogBasePrice usable: 115 EUR per m2 and 115 EUR per piece are
+        // not the same money. A free-text line has no catalogue row, hence no unit.
+        assertThat(items).extracting(PricingRequestItemDto::model).containsExactly("linked", "text");
+        assertThat(items).extracting(PricingRequestItemDto::catalogPriceUnit).containsExactly("per_sqm", null);
+    }
+
+    @Test
     void create_withBlankTargetCurrency_storesNull() {
         CreatePricingRequestRequest create = new CreatePricingRequestRequest(
             PricingRequestRecipient.OWNER, null, null, null, null, "   ", null, clientRequestId("2"),

@@ -194,8 +194,45 @@ public final class PricingRequestDtos {
         LocalDate expectedArrivalDate,
         // CR-1 (GLA-167): the currency / price unit Sales fixed on the line (null = legacy line).
         String requestedCurrency,
-        String requestedPriceUnitBasis
+        String requestedPriceUnitBasis,
+        // The price_catalog unit (per_sqm / per_piece / per_box / per_linear_m / unknown) of the
+        // catalogue row catalogPriceId points at, read live through that link. Without it
+        // catalogBasePrice is a number with no unit, so a total for the requested quantity cannot
+        // be computed. null = no catalogue link (free-text line).
+        String catalogPriceUnit
     ) {
+        /** The pre-catalogPriceUnit canonical 54-field shape. Defaults the unit to null. */
+        public PricingRequestItemDto(
+            long id, long pricingRequestId, Long sourceTicketItemId, Long productId, Long variantId,
+            String brand, String model, String productDescription, String color, String texture,
+            String size, String factory, BigDecimal requestedQty, BigDecimal requestedQtySqm,
+            String requestedUnit, String requestedUnitBasis, String quantityType,
+            LocalDate targetDeliveryDate, String deliveryLocation, String specialRequirement,
+            int sortOrder, Long priceListVersionId, Long catalogPriceId, BigDecimal catalogBasePrice,
+            String catalogCurrency, LocalDate catalogEffectiveDate, Long resolvedFactoryId,
+            String resolvedFactoryName, String catalogProductCode, String catalogBrand,
+            String catalogCollection, String catalogModel, String productTypeOverride,
+            String productCode, BigDecimal thicknessMm, BigDecimal sqmPerPiece, String quantityMode,
+            BigDecimal areaSqm, Integer piecesInput, String wastageMode, BigDecimal wastageValue,
+            Integer piecesPerBox, BigDecimal sqmPerBox, Integer piecesBeforeWastage,
+            Integer piecesAfterWastage, Integer boxes, boolean roundToFullBox, String originCountry,
+            Integer leadTimeMinDays, Integer leadTimeMaxDays, String originCountryOther,
+            String stockSource, LocalDate expectedArrivalDate, String requestedCurrency,
+            String requestedPriceUnitBasis
+        ) {
+            this(id, pricingRequestId, sourceTicketItemId, productId, variantId, brand, model,
+                productDescription, color, texture, size, factory, requestedQty, requestedQtySqm,
+                requestedUnit, requestedUnitBasis, quantityType, targetDeliveryDate,
+                deliveryLocation, specialRequirement, sortOrder, priceListVersionId, catalogPriceId,
+                catalogBasePrice, catalogCurrency, catalogEffectiveDate, resolvedFactoryId,
+                resolvedFactoryName, catalogProductCode, catalogBrand, catalogCollection,
+                catalogModel, productTypeOverride, productCode, thicknessMm, sqmPerPiece,
+                quantityMode, areaSqm, piecesInput, wastageMode, wastageValue, piecesPerBox,
+                sqmPerBox, piecesBeforeWastage, piecesAfterWastage, boxes, roundToFullBox,
+                originCountry, leadTimeMinDays, leadTimeMaxDays, originCountryOther, stockSource,
+                expectedArrivalDate, requestedCurrency, requestedPriceUnitBasis, null);
+        }
+
         /** The pre-CR-1 canonical 52-field shape. Defaults the two CR-1 fields to null. */
         public PricingRequestItemDto(
             long id, long pricingRequestId, Long sourceTicketItemId, Long productId, Long variantId,

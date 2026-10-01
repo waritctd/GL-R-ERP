@@ -2526,6 +2526,59 @@ describe('PricingRequestDetailPage mobile layout', () => {
 // sees the full breakdown. UI scoping only, no backend authz change (buildRequest's base fixture
 // already carries color/thicknessMm/sqmPerPiece/quantityMode/piecesInput/piecesPerBox — see that
 // fixture's own V185 comment).
+describe('PricingRequestDetailPage item card — catalogue price in baht', () => {
+  const fxRates = [{ currency: 'EUR', rateToThb: 40 }, { currency: 'THB', rateToThb: 1 }];
+  const requestWith = (over) => {
+    const base = buildRequest();
+    return buildRequest({
+      items: [{
+        ...base.items[0],
+        catalogBasePrice: 115,
+        catalogCurrency: 'EUR',
+        catalogPriceUnit: 'per_sqm',
+        sqmPerPiece: 1.44,
+        requestedQtySqm: 7.2,
+        piecesAfterWastage: 5,
+        ...over,
+      }],
+    });
+  };
+  const renderWithFx = async (user, request) => {
+    api.fxRates = { list: vi.fn().mockResolvedValue({ fxRates }) };
+    renderDetailPage({ user, request });
+    await waitForLoaded(request);
+  };
+  afterEach(() => { delete api.fxRates; });
+
+  it('labels the price as the import factory price with its unit, without "preliminary"', async () => {
+    await renderWithFx(importUser, requestWith({}));
+    const label = screen.getByTestId('pcr-catalog-price-1').textContent;
+    expect(label).toContain('ราคาโรงงาน (แคตตาล็อกฝ่ายนำเข้า)');
+    expect(label).toContain('115 EUR/ตร.ม.');
+    expect(document.body.textContent).not.toContain('preliminary');
+  });
+
+  it.each([['import', importUser], ['ceo', ceoUser]])('shows %s the baht per ตร.ม., per แผ่น and in total for the requested quantity', async (_name, user) => {
+    await renderWithFx(user, requestWith({}));
+    const thb = await screen.findByTestId('pcr-catalog-thb-1');
+    expect(thb.textContent).toContain('4,600');
+    expect(thb.textContent).toContain('/ตร.ม.');
+    expect(thb.textContent).toContain('6,624');
+    expect(thb.textContent).toContain('/แผ่น');
+    expect(thb.textContent).toContain('33,120');
+    expect(thb.textContent).toContain('5 แผ่น = 7.2 ตร.ม.');
+  });
+
+  it('shows no baht for a per-box price, and none to Sales (no FX access)', async () => {
+    await renderWithFx(importUser, requestWith({ catalogPriceUnit: 'per_box' }));
+    expect(screen.getByTestId('pcr-catalog-price-1').textContent).toContain('115 EUR/กล่อง');
+    expect(screen.queryByTestId('pcr-catalog-thb-1')).toBeNull();
+    cleanup();
+    await renderWithFx(salesOwner, requestWith({}));
+    expect(screen.queryByTestId('pcr-catalog-thb-1')).toBeNull();
+  });
+});
+
 describe('PricingRequestDetailPage item card — V185 sales-entered fields', () => {
   it('shows the sales-entered tile fields read-only to every viewer', async () => {
     renderDetailPage({ user: salesOwner });
@@ -2535,7 +2588,9 @@ describe('PricingRequestDetailPage item card — V185 sales-entered fields', () 
     expect(screen.getByText('ผิว: ด้าน')).not.toBeNull();
     expect(screen.getByText('ขนาด: 60x60')).not.toBeNull();
     expect(screen.getByText('ความหนา: 10 มม.')).not.toBeNull();
-    expect(screen.getByText('แผ่น/กล่อง: 4')).not.toBeNull();
+    // แผ่น/ตร.ม. and แผ่น/กล่อง are not on the Sales form, so they are not repeated here.
+    expect(screen.queryByText(/^แผ่น\/ตร\.ม\.:/)).toBeNull();
+    expect(screen.queryByText(/^แผ่น\/กล่อง:/)).toBeNull();
   });
 
   it('shows เผื่อ (wastage) and the pre-wastage quantity to Sales', async () => {
@@ -2593,7 +2648,6 @@ describe('PricingRequestDetailPage item card — V185 sales-entered fields', () 
     expect(screen.getByText('สี: —')).not.toBeNull();
     expect(screen.getByText('ผิว: —')).not.toBeNull();
     expect(screen.getByText('ความหนา: —')).not.toBeNull();
-    expect(screen.getByText('แผ่น/กล่อง: —')).not.toBeNull();
     // The legacy row's OWN requestedQty/requestedUnit (client-typed under the old form) still
     // renders in the final-order-quantity line — this never depended on the new columns.
     expect(screen.getByText('จำนวนสั่งซื้อ: 20 แผ่น')).not.toBeNull();
@@ -4670,11 +4724,11 @@ describe('CEO pricing inside รายการสินค้าและรา
       expect(panel.getByTestId('pcr-ceo-save-price-8001').disabled).toBe(true);
     });
 
-    it('nit: the CEO does not fetch fxRates (import-only)', async () => {
+    it('the CEO fetches fxRates, for the baht conversion of the catalogue price (GET /api/fx-rates is ceo/import)', async () => {
       api.fxRates = { list: vi.fn().mockResolvedValue({ fxRates: [] }) };
       try {
         await renderCeo();
-        expect(api.fxRates.list).not.toHaveBeenCalled();
+        expect(api.fxRates.list).toHaveBeenCalled();
       } finally {
         delete api.fxRates;
       }

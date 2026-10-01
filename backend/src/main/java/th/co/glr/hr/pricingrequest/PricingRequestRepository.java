@@ -634,7 +634,9 @@ public class PricingRequestRepository {
                    pieces_after_wastage, boxes, round_to_full_box, origin_country,
                    lead_time_min_days, lead_time_max_days, origin_country_other,
                    stock_source, expected_arrival_date,
-                   requested_currency, requested_price_unit_basis
+                   requested_currency, requested_price_unit_basis,
+                   (SELECT pp.price_unit FROM price_catalog.product_prices pp
+                     WHERE pp.price_id = sales.pricing_request_item.catalog_price_id) AS catalog_price_unit
               FROM sales.pricing_request_item
              WHERE pricing_request_id = :id
              ORDER BY sort_order, pricing_request_item_id
@@ -1385,7 +1387,8 @@ public class PricingRequestRepository {
             rs.getString("stock_source"),
             rs.getObject("expected_arrival_date", LocalDate.class),
             rs.getString("requested_currency"),
-            rs.getString("requested_price_unit_basis")
+            rs.getString("requested_price_unit_basis"),
+            rs.getString("catalog_price_unit")
         );
     }
 

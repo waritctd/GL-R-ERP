@@ -2191,6 +2191,7 @@ function snapshotPricingRequestCatalogSelections(pr) {
     item.priceListVersionId = activeVersion.versionId;
     item.catalogPriceId = product.priceId;
     item.catalogBasePrice = product.price;
+    item.catalogPriceUnit = product.priceUnit ?? null;
     item.catalogCurrency = product.currency;
     item.catalogEffectiveDate = activeVersion.createdAt ?? null;
     item.resolvedFactoryId = product.factoryId;
