@@ -123,6 +123,26 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
     });
   });
 
+  // QA BUG-21 (S12/S15): a DRAFT ใบขอซื้อ has no progress bar — advancing a step needs it ISSUED
+  // first (import/ceo), but issuing is sales/ceo's job. Without a word, import saw a bare DRAFT card
+  // with no advance control and no reason, reading as "per-factory นำเข้าเลื่อนไม่ได้/พัง".
+  describe('DRAFT ใบขอซื้อ says whose move it is (BUG-21)', () => {
+    it('import sees why a DRAFT cannot be advanced yet, and gets no progress bar / advance control', async () => {
+      renderPanel(IMPORT, [draftRow()]);
+      const hint = await screen.findByTestId('ir-draft-hint-10');
+      expect(hint.textContent).toContain('รอฝ่ายขาย/CEO');
+      expect(screen.queryByTestId('factory-progress-10')).toBeNull();
+      expect(screen.queryByTestId('advance-10')).toBeNull();
+    });
+
+    it('the owning rep sees a nudge to ออกเลข so import can start tracking', async () => {
+      renderPanel(OWNER, [draftRow()]);
+      const hint = await screen.findByTestId('ir-draft-hint-10');
+      expect(hint.textContent).toContain('ติดตามการนำเข้า');
+      expect(screen.getByTestId('ir-issue-10')).not.toBeNull();
+    });
+  });
+
   describe('country-required create flow', () => {
     it('a missing-country 409 opens the picker, and submitting retries with newFactoryCountries', async () => {
       api.storedImportRequests.createDrafts

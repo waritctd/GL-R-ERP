@@ -269,6 +269,17 @@ export function ImportRequestFactoryCard({
           advancing={advanceMutation.isPending}
           onAdvance={(_r, targetStep) => advanceMutation.mutate(targetStep)}
         />
+      ) : isDraft ? (
+        // QA BUG-21 (S12/S15): a DRAFT has no progress bar — step advance (ADVANCE_STEP_ROLES =
+        // import/ceo) requires the ใบขอซื้อ to be ISSUED first (advanceStep 409s otherwise). Without
+        // a word here, import saw a bare DRAFT card with no advance control and no reason why, which
+        // reads as "per-factory นำเข้าเลื่อนไม่ได้/พัง". Say whose move it is instead. Ownership split
+        // (create+issue = sales/ceo; advance = import/ceo) is unchanged — owner decision, UX only.
+        <p className="text-xs text-text-muted" data-testid={`ir-draft-hint-${row.id}`}>
+          {canFullWrite
+            ? 'ยังเป็นร่าง — กด "ออกเลข" เพื่อให้ฝ่ายนำเข้าเริ่มติดตามการนำเข้า (S12–S17)'
+            : 'ใบขอซื้อยังเป็นร่าง — รอฝ่ายขาย/CEO กดออกเลขก่อน จึงจะเริ่มเลื่อนขั้นนำเข้าได้'}
+        </p>
       ) : null}
 
       {isIssued ? (
