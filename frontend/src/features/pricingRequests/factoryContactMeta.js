@@ -17,11 +17,18 @@ export function formatShortThaiDay(isoDate) {
   return month ? `${Number(match[3])} ${month}` : '';
 }
 
-/** 75, 90 -> '75–90' · 60, 60 -> '60' · nothing -> '-'. */
+export const LEAD_TIME_UNKNOWN = 'ยังไม่ระบุ';
+
+/** 75, 90 -> '75–90' · 60, 60 -> '60' · nothing -> 'ยังไม่ระบุ' (never a bare dash). */
 export function leadTimeRangeText(min, max) {
-  if (min == null && max == null) return '-';
+  if (min == null && max == null) return LEAD_TIME_UNKNOWN;
   if (min != null && max != null && Number(min) === Number(max)) return String(min);
   return `${min ?? '?'}–${max ?? '?'}`;
+}
+
+/** '75–90 วัน', or 'ยังไม่ระบุ' with no unit when the lead time is unknown. */
+export function leadTimeWithUnit(min, max) {
+  return min == null && max == null ? LEAD_TIME_UNKNOWN : `${leadTimeRangeText(min, max)} วัน`;
 }
 
 /** A DRAFT quote has not been marked ติดต่อโรงงานแล้ว yet; every other status is past that step. */

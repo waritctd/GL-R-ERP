@@ -3,7 +3,7 @@ import { Button } from '../../components/common/Button.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { SafeForm } from '../../components/common/SafeForm.jsx';
-import { isValidLeadTimeRange, leadTimeRangeText } from './factoryContactMeta.js';
+import { isValidLeadTimeRange, leadTimeWithUnit } from './factoryContactMeta.js';
 
 /**
  * CR-1 (GLA-167) R2 / R10 (option C) — import asks to change ระยะเวลานำเข้า for ONE factory.
@@ -118,7 +118,7 @@ export function LeadTimeChangeDialog({ factoryName, lines, existing = null, pend
                     aria-label={`เลือกรายการ #${item.id}`} onChange={() => toggleRow(item.id)} />
                   <span className="min-w-0">
                     <span className="block truncate font-bold">{name}</span>
-                    <span className="block text-xs text-text-muted">ปัจจุบัน {leadTimeRangeText(current.min, current.max)} วัน</span>
+                    <span className="block text-xs text-text-muted">ปัจจุบัน {leadTimeWithUnit(current.min, current.max)}</span>
                   </span>
                 </label>
                 <div className="flex items-center gap-1.5 pl-6 sm:pl-0">

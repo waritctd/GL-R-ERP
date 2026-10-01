@@ -3968,3 +3968,103 @@ describe('CR-1 factory card — the factory\'s IR row, read-only for import (R9)
     expect(screen.queryByTestId('pcr-ir-91')).toBeNull();
   });
 });
+
+// ── Browser-verification follow-ups (coordinator, 2026-10-01) ─────────────────────────────────
+describe('CR-1 pre-draft preview card — contact / mail without the bulk สร้างเมลให้ทุกโรงงาน first (R3: สร้างเมล is optional)', () => {
+  function renderPreview(user = importUser) {
+    let generated = false;
+    api.pricingRequests.generateFactoryEmailDrafts.mockImplementation(async () => {
+      generated = true;
+      return { items: [crQuote()] };
+    });
+    const utils = renderDetailPage({ user, request: crRequest() });
+    api.pricingRequests.listFactoryQuotes.mockImplementation(async () => ({ items: generated ? [crQuote()] : [] }));
+    return utils;
+  }
+
+  it('shows สร้างเมล and ติดต่อโรงงานแล้ว on the preview group of a named factory', async () => {
+    renderPreview();
+    await waitForLoaded();
+    const group = await screen.findByTestId('pcr-price-preview-group');
+    expect(within(group).getByRole('button', { name: 'สร้างเมล' })).not.toBeNull();
+    expect(within(group).getByRole('button', { name: 'ติดต่อโรงงานแล้ว' })).not.toBeNull();
+  });
+
+  it('ติดต่อโรงงานแล้ว on the preview: generates the draft first, then marks THAT factory\'s new quote contacted', async () => {
+    renderPreview();
+    await waitForLoaded();
+    const group = await screen.findByTestId('pcr-price-preview-group');
+    fireEvent.click(within(group).getByRole('button', { name: 'ติดต่อโรงงานแล้ว' }));
+    const dialog = await screen.findByRole('dialog', { name: 'ติดต่อโรงงานแล้ว' });
+    fireEvent.change(within(dialog).getByLabelText(/หมายเหตุ/), { target: { value: 'โทรแล้ว' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'ยืนยัน' }));
+
+    await waitFor(() => expect(api.pricingRequests.markFactoryQuoteContacted).toHaveBeenCalledWith(
+      91, { contactedOn: bangkokDay(), note: 'โทรแล้ว' },
+    ));
+    expect(api.pricingRequests.generateFactoryEmailDrafts).toHaveBeenCalledTimes(1);
+    expect(api.pricingRequests.generateFactoryEmailDrafts.mock.invocationCallOrder[0])
+      .toBeLessThan(api.pricingRequests.markFactoryQuoteContacted.mock.invocationCallOrder[0]);
+  });
+
+  it('สร้างเมล on the preview: generates the draft, then opens that factory\'s mail modal', async () => {
+    renderPreview();
+    await waitForLoaded();
+    const group = await screen.findByTestId('pcr-price-preview-group');
+    fireEvent.click(within(group).getByRole('button', { name: 'สร้างเมล' }));
+    expect(await screen.findByRole('dialog', { name: 'สร้างเมล' })).not.toBeNull();
+    expect(api.pricingRequests.generateFactoryEmailDrafts).toHaveBeenCalledTimes(1);
+    expect(api.pricingRequests.markFactoryQuoteContacted).not.toHaveBeenCalled();
+  });
+
+  it('the CEO gets both preview buttons too; a line with no factory gets none', async () => {
+    renderPreview(ceoUser);
+    await waitForLoaded();
+    const group = await screen.findByTestId('pcr-price-preview-group');
+    expect(within(group).getByRole('button', { name: 'ติดต่อโรงงานแล้ว' })).not.toBeNull();
+  });
+
+  it('no preview buttons outside the contact window (the server would 409)', async () => {
+    renderDetailPage({ user: importUser, request: crRequest({ summary: { status: 'READY_FOR_CEO_REVIEW' } }) });
+    await waitForLoaded();
+    const group = await screen.findByTestId('pcr-price-preview-group');
+    expect(within(group).queryByRole('button', { name: 'ติดต่อโรงงานแล้ว' })).toBeNull();
+  });
+});
+
+describe('CR-1 unknown lead time reads ยังไม่ระบุ, never "-" / "- วัน"', () => {
+  const unknownOld = (over = {}) => ltChange({
+    lines: [{ pricingRequestItemId: 1, oldMinDays: null, oldMaxDays: null, newMinDays: 120, newMaxDays: 150 }], ...over,
+  });
+  const noLeadRequest = () => crRequest({ items: [crItem({ leadTimeMinDays: null, leadTimeMaxDays: null })] });
+
+  it('banner, pending line and dialog all say ยังไม่ระบุ', async () => {
+    renderDetailPage({ user: salesOwner, request: noLeadRequest(), leadTimeChanges: [unknownOld()] });
+    await waitForLoaded();
+    expect((await screen.findByTestId('pcr-lt-banner')).textContent).toContain('ยังไม่ระบุ → 120–150 วัน');
+  });
+
+  it('import: the line cell, pending cell and dialog', async () => {
+    const { unmount } = renderDetailPage({ user: importUser, request: noLeadRequest(), factoryQuotes: [contactedQuote()], leadTimeChanges: [unknownOld()] });
+    await waitForLoaded();
+    expect((await screen.findByTestId('pcr-lt-value-91-1')).textContent).toContain('ยังไม่ระบุ → 120–150 วัน');
+    unmount();
+    renderDetailPage({ user: importUser, request: noLeadRequest(), factoryQuotes: [contactedQuote()] });
+    await waitForLoaded();
+    expect((await screen.findByTestId('pcr-lt-value-91-1')).textContent).toBe('ระยะเวลานำเข้ายังไม่ระบุ');
+    fireEvent.click(screen.getByTestId('pcr-lt-open-91'));
+    const dialog = await screen.findByRole('dialog', { name: 'ขอเปลี่ยนระยะเวลานำเข้า' });
+    expect(dialog.textContent).toContain('ปัจจุบัน ยังไม่ระบุ');
+    expect(dialog.textContent).not.toMatch(/ปัจจุบัน -/);
+  });
+});
+
+describe('CR-1 factory section layout — nothing forces a horizontal scroll', () => {
+  it('the item grid has no fixed minimum width (a min-w-[…] on it is what scrolled the whole section at 1100px)', async () => {
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote()] });
+    await waitForLoaded();
+    const card = await screen.findByTestId('pcr-factory-card-91');
+    expect(card.querySelector('[class*="min-w-["]')).toBeNull();
+    expect(card.parentElement.querySelector('[class*="md:min-w-["]')).toBeNull();
+  });
+});

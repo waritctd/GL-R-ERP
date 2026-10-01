@@ -60,6 +60,7 @@ import {
   isFactoryContacted,
   isImportLine,
   leadTimeRangeText,
+  leadTimeWithUnit,
   lockedTermsList,
   splitLeadTimeChanges,
 } from './factoryContactMeta.js';
@@ -383,7 +384,10 @@ function groupFactoryQuotesByFactory(factoryQuotes) {
 // scrolls this table horizontally inside itself rather than crushing the columns unreadable or
 // silently losing data off the edge (see Layout.jsx's own Panel comment on why that clip is
 // scroll, not hidden).
-const FACTORY_ITEM_GRID = 'md:grid-cols-[minmax(150px,1.5fr)_minmax(110px,1fr)_90px_170px_minmax(130px,1fr)_130px] md:min-w-[860px]';
+// No fixed min-width: the section is a flush Panel (overflow-x-auto), so any min-w here scrolled the WHOLE
+// card — header and chip included — at ~1100px. Five flexible tracks (variant sits under the product
+// name) always fit; below md each line stacks as label/value instead.
+const FACTORY_ITEM_GRID = 'md:grid-cols-[minmax(0,1.6fr)_5.5rem_minmax(0,11rem)_minmax(0,1fr)_5.5rem]';
 
 /**
  * Import's factory-routing control for ONE blank line (rendered only when `canSetItemFactory &&
@@ -814,6 +818,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
   // PENDING request instead of raising a new one.
   const [contactQuoteId, setContactQuoteId] = useState(null);
   const [leadTimeDialog, setLeadTimeDialog] = useState(null);
+  // R3 ("สร้างเมล is optional"): the pre-draft preview card of a factory can be contacted / mailed
+  // directly — the draft is generated on demand. `previewContactFactory` is the factory NAME whose
+  // contact dialog is open; `previewBusyFactory` the one currently generating/marking.
+  const [previewContactFactory, setPreviewContactFactory] = useState(null);
+  const [previewBusyFactory, setPreviewBusyFactory] = useState(null);
 
   const detailQuery = useQuery({
     queryKey: queryKeys.pricingRequestDetail(pricingRequestId),
@@ -1071,6 +1080,41 @@ export function PricingRequestDetailPage({ user, showToast }) {
     'บันทึกการไม่อนุมัติแล้ว',
     { onError: decideErrorHandler },
   );
+  // Generates the drafts (idempotent: factories that already have one are skipped server-side) and
+  // returns THIS factory's current quote from the answer.
+  async function generateDraftFor(factoryName) {
+    const result = await api.pricingRequests.generateFactoryEmailDrafts(pricingRequestId);
+    invalidate();
+    const quote = (result?.items ?? []).find((q) => q.factoryName === factoryName && q.current !== false);
+    if (!quote) throw new Error(`สร้างเมลของโรงงาน ${factoryName} ไม่สำเร็จ`);
+    return quote;
+  }
+  async function openMailForPreview(factoryName) {
+    setPreviewBusyFactory(factoryName);
+    try {
+      const quote = await generateDraftFor(factoryName);
+      setEmailModalQuoteId(quote.id);
+    } catch (error) {
+      showToast?.('error', error.message || 'ดำเนินการไม่สำเร็จ');
+    } finally {
+      setPreviewBusyFactory(null);
+    }
+  }
+  async function contactFromPreview(factoryName, body) {
+    setPreviewBusyFactory(factoryName);
+    try {
+      const quote = await generateDraftFor(factoryName);
+      await api.pricingRequests.markFactoryQuoteContacted(quote.id, body);
+      showToast?.('success', 'บันทึกว่าติดต่อโรงงานแล้ว');
+      invalidate();
+      setPreviewContactFactory(null);
+    } catch (error) {
+      showToast?.('error', error.message || 'ดำเนินการไม่สำเร็จ');
+      invalidate();
+    } finally {
+      setPreviewBusyFactory(null);
+    }
+  }
   const negotiateQuote = useActionMutation((quote) => api.pricingRequests.startFactoryNegotiation(quote.id, { note: quote.negotiationNote || 'Negotiation in progress' }), 'เริ่มเจรจาแล้ว');
   /**
    * ยืนยันราคาเสนอ — ONE primary action per factory group (owner-supplied mockup, 2026-08-16, task
@@ -2118,7 +2162,22 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   <div className="flex flex-wrap items-center gap-2 border-b border-border-subtle bg-surface-subtle px-3 py-2">
                     <strong className="text-sm text-text">{group.factoryName}</strong>
                     <span className="text-xs text-text-muted">({group.items.length} รายการ)</span>
-                    <span className="ml-auto text-2xs text-text-muted">กรอกราคาได้หลังติดต่อโรงงานแล้ว</span>
+                    {canContactFactory && inSendWindow && group.factoryName !== 'ยังไม่ได้ระบุโรงงาน' ? (
+                      <div className="ml-auto flex flex-wrap items-center gap-2">
+                        <Button type="button" size="sm" variant="secondary" disabled={previewBusyFactory === group.factoryName}
+                          onClick={() => openMailForPreview(group.factoryName)}>
+                          <Icon name="mail" size={13} />
+                          สร้างเมล
+                        </Button>
+                        <Button type="button" size="sm" variant="primary" disabled={previewBusyFactory === group.factoryName}
+                          onClick={() => setPreviewContactFactory(group.factoryName)}>
+                          <Icon name="check" size={13} />
+                          ติดต่อโรงงานแล้ว
+                        </Button>
+                      </div>
+                    ) : (
+                      <span className="ml-auto text-2xs text-text-muted">กรอกราคาได้หลังติดต่อโรงงานแล้ว</span>
+                    )}
                   </div>
                   <div className="flex flex-col gap-1 p-3 text-xs text-text-secondary">
                     {group.items.map((item) => {
@@ -2147,8 +2206,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
               <div className={cn('hidden items-center gap-3 border-b border-border-subtle bg-surface-subtle px-5 py-2.5 text-xs font-bold uppercase tracking-wide text-text-muted md:grid', FACTORY_ITEM_GRID)}>
                 {/* Owner ruling (2026-09-19): โรงงาน on PCR screens, not ยี่ห้อ -- PCR page only,
                     TicketDetailPage's own identical header is untouched. */}
-                <span>โรงงาน / รุ่น</span>
-                <span>สี / เนื้อผิว</span>
+                <span>รุ่น / สี / เนื้อผิว</span>
                 <span>จำนวน</span>
                 <span>ราคาที่เสนอ (แก้ไข)</span>
                 <span>ระยะเวลานำเข้า</span>
@@ -2408,11 +2466,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
                           className={cn('grid items-center gap-3 border-b border-border-subtle px-5 py-3 last:border-b-0 mobile:flex mobile:flex-col mobile:items-stretch mobile:gap-1 mobile:px-4', FACTORY_ITEM_GRID)}
                         >
                           <div className="min-w-0">
-                            <div className="truncate text-sm font-bold text-text">{productName}</div>
-                          </div>
-                          <div className="min-w-0 text-sm text-text-secondary">
-                            <span className="mb-0.5 block text-2xs font-bold uppercase text-text-muted md:hidden">สี / เนื้อผิว</span>
-                            {variantLabel || '-'}
+                            <div className="break-words text-sm font-bold text-text md:truncate">{productName}</div>
+                            <div className="break-words text-xs text-text-secondary">{variantLabel || '-'}</div>
                           </div>
                           <div className="text-sm text-text-secondary">
                             <span className="mr-1 text-2xs font-bold uppercase text-text-muted md:hidden">จำนวน</span>
@@ -2424,7 +2479,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                               <div className="flex flex-wrap items-center gap-1.5">
                                 <input
                                   id={`pcr-quote-price-${current.id}-${line.pricingRequestItemId}`}
-                                  className="w-full md:w-32"
+                                  className="w-full md:w-28"
                                   type="number"
                                   min="0"
                                   step="0.0001"
@@ -2437,7 +2492,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                                 {line.unitBasis === 'PER_SQM' ? (
                                   <input
                                     id={`pcr-quote-sqm-${current.id}-${line.pricingRequestItemId}`}
-                                    className="w-24"
+                                    className="w-full md:w-24"
                                     type="number"
                                     min="0.000001"
                                     step="0.000001"
@@ -2478,9 +2533,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
                                 </span>
                                 <span className="block text-2xs font-bold text-warning-dark">รอฝ่ายขายอนุมัติ</span>
                               </>
-                            ) : requested && (requested.leadTimeMinDays != null || requested.leadTimeMaxDays != null) ? (
-                              <span className="tabular-nums">{`${leadTimeRangeText(requested.leadTimeMinDays, requested.leadTimeMaxDays)} วัน`}</span>
-                            ) : '–'}
+                            ) : (
+                              <span className="tabular-nums">{leadTimeWithUnit(requested?.leadTimeMinDays, requested?.leadTimeMaxDays)}</span>
+                            )}
                           </div>
                           <div>
                             <span className="mb-1 block text-2xs font-bold uppercase text-text-muted md:hidden">ราคาที่อนุมัติ</span>
@@ -3995,6 +4050,15 @@ export function PricingRequestDetailPage({ user, showToast }) {
           // DRAFT_STATUSES window as markContacted — outside any of those the modal is view + copy.
           canEdit={canContactFactory && emailModalQuote.status === 'DRAFT' && emailModalQuote.current && inSendWindow}
           attachments={pricingRequestAttachments.filter((attachment) => attachment.includeInFactoryEmail)}
+        />
+      ) : null}
+
+      {previewContactFactory ? (
+        <FactoryContactDialog
+          factoryName={previewContactFactory}
+          pending={previewBusyFactory === previewContactFactory}
+          onCancel={() => setPreviewContactFactory(null)}
+          onConfirm={(body) => contactFromPreview(previewContactFactory, body)}
         />
       ) : null}
 

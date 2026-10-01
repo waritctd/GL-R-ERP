@@ -348,7 +348,8 @@ export function DealDocumentRegister({
   const importRequestItem = (r) => ({
     id: r.id,
     testId: `document-version-ir-${r.id}`,
-    title: r.docNumber ?? 'ฉบับร่าง',
+    // a draft has no number yet: a dash here, the ฉบับร่าง chip says the rest (once)
+    title: r.docNumber ?? '—',
     status: r.status === 'ISSUED' ? { label: 'ออกเลขแล้ว', tone: 'success' } : { label: 'ฉบับร่าง', tone: 'neutral' },
     date: r.issuedAt ?? r.createdAt,
     // One IR per factory: the factory is what tells two rows apart, so it leads the meta line.

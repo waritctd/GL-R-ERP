@@ -121,3 +121,4 @@ Section title: **ราคาจากโรงงาน**, with one card per fa
   - on the direct route, the APPROVED quotation, with items resolved through `catalog_price_id`. Hand-typed direct lines fall back to the country default.
 
   CR-1 does **not** build a way to issue a new quotation after acceptance. That is filed as a separate issue. Until it exists, a lead-time change approved after acceptance does not reach the IR.
+- **B-R6:** /fulfilment lists an IR only once sales has **issued** it. A DRAFT IR does not appear there, so this is unchanged.

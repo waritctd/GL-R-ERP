@@ -967,6 +967,9 @@ describe('DealDocumentRegister — ใบขอซื้อ (รายโรง�
     expect(issued.textContent).toContain('Cotto Industry');
     const draft = within(section).getByTestId('document-version-ir-12');
     expect(draft.textContent).toContain('ฉบับร่าง');
+    // the draft has no number: the number slot is a dash and ฉบับร่าง appears ONCE (the status chip)
+    expect(draft.textContent.match(/ฉบับร่าง/g)).toHaveLength(1);
+    expect(draft.textContent).toContain('—');
     expect(draft.textContent).toContain('Panaria');
   });
 
