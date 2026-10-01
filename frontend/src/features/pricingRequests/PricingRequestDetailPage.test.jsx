@@ -1413,7 +1413,7 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     fireEvent.click(screen.getByRole('button', { name: 'วิธีคำนวณราคานี้' }));
   }
 
-  // "ต้นทุนโรงงาน (ฐาน): <code>฿60.00</code>" splits its label and value across an element
+  // "ต้นทุนรวมนำเข้า (รวมค่าขนส่งและภาษี): <code>฿60.00</code>" splits its label and value across an element
   // boundary (the <code> wraps the figure, matching every other computed-money display in this
   // panel) — the default getByText text matcher does not read across that boundary (it is a
   // known testing-library limitation, not a markup defect: the "ราคาขาย" line right next to it
@@ -1463,7 +1463,7 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     await waitForLoaded(request);
     await screen.findByText('PCD-2026-0001');
 
-    expect(screen.getByText(byCombinedText(/ต้นทุนโรงงาน.*฿60\.00/))).not.toBeNull();
+    expect(screen.getByText(byCombinedText(/ต้นทุนรวมนำเข้า.*฿60\.00/))).not.toBeNull();
     expect(screen.getByText(/ราคาขาย.*฿72\.00/)).not.toBeNull();
     // The old per-item margin/minimum/ceiling grid is gone entirely.
     expect(screen.queryByPlaceholderText('อัตรากำไร เช่น 0.20 = 20%')).toBeNull();
@@ -1548,7 +1548,7 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       // The per-requested-unit basis (a different number, 60) still renders in the main
       // (collapsed) view under its Phase-1-simplification label — a substring match against the
       // combined "label: value" text of that line.
-      expect(screen.getByText(byCombinedText(/ต้นทุนโรงงาน.*฿60\.00/))).not.toBeNull();
+      expect(screen.getByText(byCombinedText(/ต้นทุนรวมนำเข้า.*฿60\.00/))).not.toBeNull();
     });
 
     it('refuses to SAVE an override with a blank reason, client-side, without calling the API', async () => {
@@ -4523,6 +4523,8 @@ describe('CEO pricing inside รายการสินค้าและรา
       expect(cost).toContain('/ แผ่น');
       expect(cost).toContain('166.67');
       expect(cost).toContain('/ ตร.ม.');
+      // The figure is the landed cost: factory price + freight + insurance + duty + clearance.
+      expect(cost).toContain('รวมค่าขนส่งและภาษีนำเข้า');
       cleanup();
       await renderCeo({ priceMode: 'NET', items: [newFormItem({ stockSource: 'IN_THAILAND', frozenLandedCostPerRequestedUnitThb: null, listUnitPrice: 150, netUnitPrice: 150 })] });
       expect(within(getPanel()).queryByTestId('pcr-ceo-cost-both-8001')).toBeNull();
