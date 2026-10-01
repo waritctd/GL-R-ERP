@@ -15,6 +15,10 @@ package th.co.glr.hr.auth;
  * <p>{@code canCreateQuotation} is the same shape for the per-employee "can create quotations"
  * capability (owner ruling, Ploy 2026-09-09): a hint only, re-checked live by
  * {@code th.co.glr.hr.dealquotation.DealQuotationService} on every request.
+ *
+ * <p>{@code canIssueBillingNote} is the same shape again for the per-employee "can issue billing
+ * notes" capability (GLA-99/GLA-129, Ploy 2026-09-19): a hint only, re-checked live by
+ * {@code th.co.glr.hr.billing.BillingNoteService.hasWriteGrant}.
  */
-public record AuthResponse(UserPrincipal user, boolean admin, boolean canCreateQuotation) {
+public record AuthResponse(UserPrincipal user, boolean admin, boolean canCreateQuotation, boolean canIssueBillingNote) {
 }
