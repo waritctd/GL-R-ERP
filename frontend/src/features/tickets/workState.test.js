@@ -294,3 +294,25 @@ describe('resolveWorkState — live direct quotation (slice 2)', () => {
     expect(result).toEqual({ action: null });
   });
 });
+
+// PR A — resolveWorkState forwards the caller-resolved revise target to nextSalesAction, for the
+// sales role only (every other role ignores it: their cascade is their own function).
+describe('resolveWorkState — reviseTarget (PR A)', () => {
+  const target = { quotationId: 90, number: 'QT-2026-0090-1' };
+  const deal = () => baseDeal({ salesStage: 'QUOTE_OWNER' });
+  const issuedPr = [{ id: 5, ticketId: 1, status: 'QUOTATION_ISSUED', orderConfirmedAt: null }];
+
+  it('sales viewer gets REVISE_QUOTATION at the owner stage', () => {
+    const result = resolveWorkState({ role: 'sales' }, deal(), issuedPr, { reviseTarget: target });
+    expect(result.action).toMatchObject({ key: 'revise_quotation', label: 'แก้ใบเสนอราคา', quotationId: 90 });
+  });
+
+  it.each(['ceo', 'sales_manager', 'account', 'import'])('%s never gets REVISE_QUOTATION, even if handed a target', (role) => {
+    const result = resolveWorkState({ role }, deal(), issuedPr, { reviseTarget: target });
+    expect(result.action?.key).not.toBe('revise_quotation');
+  });
+
+  it('without a target the sales viewer is unchanged (RECORD_QUOTATION_OUTCOME)', () => {
+    expect(resolveWorkState({ role: 'sales' }, deal(), issuedPr).action).toMatchObject({ key: 'record_quotation_outcome' });
+  });
+});

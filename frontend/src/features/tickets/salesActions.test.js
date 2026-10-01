@@ -320,3 +320,83 @@ describe('nextSalesAction — live direct quotation buckets (slice 2, flow A)', 
     expect(sorted).toEqual([3, 2, 1]);
   });
 });
+
+// PR A — แก้ใบเสนอราคา (REVISE_QUOTATION). nextSalesAction is list-row-only and cannot see
+// quotation rows or who owns them, so the CALLER resolves the revisable quotation (via
+// canReviseDealQuotation, which PR B widens) and hands it in as `{ reviseTarget }`:
+//   { quotationId, number, openDraftId? }   — openDraftId = an open revision child already exists.
+// Two places the cascade consumes it: (1) a live DEAL_DIRECT quotation already APPROVED on a deal
+// past 'draft' (the confirm-order bucket refuses it) and (2) the owner/buyer quote stages
+// (QUOTE_OWNER / QUOTE_BUYER) with an issued PR-origin quotation, which used to dead-end on
+// RECORD_QUOTATION_OUTCOME. Everything else in the cascade is unchanged.
+describe('nextSalesAction — REVISE_QUOTATION (PR A)', () => {
+  const REVISE = 'revise_quotation'; // literal on purpose: SALES_ACTION.REVISE_QUOTATION is undefined until implemented
+  const target = { quotationId: 90, number: 'QT-2026-0090-1' };
+  const issuedPr = (overrides = {}) => ({ id: 5, ticketId: 1, status: 'QUOTATION_ISSUED', orderConfirmedAt: null, ...overrides });
+  const approvedDirect = { id: 90, number: 'QT-2026-0090-1', docStatus: 'APPROVED', recipientType: 'DESIGNER' };
+
+  it('exposes the new action key', () => {
+    expect(SALES_ACTION.REVISE_QUOTATION).toBe('revise_quotation');
+  });
+
+  it('APPROVED direct quotation on a deal past draft -> REVISE_QUOTATION instead of the old CREATE_PCR fall-through', () => {
+    const deal = baseDeal({ status: 'quotation_issued', liveDirectQuotation: approvedDirect });
+    expect(nextSalesAction(deal, [], { reviseTarget: target })).toEqual({
+      key: REVISE, label: 'แก้ใบเสนอราคา', quotationId: 90, quotationNumber: 'QT-2026-0090-1',
+    });
+  });
+
+  it('cascade order unchanged: an APPROVED direct quotation on a still-draft deal keeps CONFIRM_ORDER_DIRECT', () => {
+    const deal = baseDeal({ status: 'draft', liveDirectQuotation: approvedDirect });
+    expect(nextSalesAction(deal, [], { reviseTarget: target })).toMatchObject({ key: SALES_ACTION.CONFIRM_ORDER_DIRECT });
+  });
+
+  it.each(['QUOTE_OWNER', 'QUOTE_BUYER'])(
+    'an issued PR-origin quotation at %s -> REVISE_QUOTATION, not the RECORD_QUOTATION_OUTCOME dead end',
+    (salesStage) => {
+      const deal = baseDeal({ salesStage });
+      expect(nextSalesAction(deal, [issuedPr()], { reviseTarget: target })).toMatchObject({
+        key: REVISE, label: 'แก้ใบเสนอราคา', quotationId: 90,
+      });
+    },
+  );
+
+  it('wrong-way-round: the same issued quotation at the DESIGNER stage still gets RECORD_QUOTATION_OUTCOME', () => {
+    const deal = baseDeal({ salesStage: 'QUOTE_DESIGN_SIDE' });
+    expect(nextSalesAction(deal, [issuedPr()], { reviseTarget: target })).toMatchObject({ key: SALES_ACTION.RECORD_QUOTATION_OUTCOME });
+  });
+
+  it('wrong-way-round: NO reviseTarget (non-owner / other role / predicate refused) -> cascade exactly as before', () => {
+    const deal = baseDeal({ salesStage: 'QUOTE_OWNER' });
+    expect(nextSalesAction(deal, [issuedPr()])).toMatchObject({ key: SALES_ACTION.RECORD_QUOTATION_OUTCOME });
+    expect(nextSalesAction(deal, [issuedPr()], { reviseTarget: null })).toMatchObject({ key: SALES_ACTION.RECORD_QUOTATION_OUTCOME });
+    const past = baseDeal({ status: 'quotation_issued', liveDirectQuotation: approvedDirect });
+    expect(nextSalesAction(past, [], {})?.key).not.toBe(REVISE);
+  });
+
+  it('an earlier unblocked step still wins: CONFIRM_ORDER (accepted PR) outranks a revise at the owner stage', () => {
+    const deal = baseDeal({ salesStage: 'QUOTE_OWNER' });
+    const prs = [issuedPr(), { id: 6, ticketId: 1, status: 'QUOTATION_ACCEPTED', orderConfirmedAt: null }];
+    expect(nextSalesAction(deal, prs, { reviseTarget: target })).toMatchObject({ key: SALES_ACTION.CONFIRM_ORDER });
+  });
+
+  it('open revision draft exists -> same bucket, label "ไปที่ฉบับแก้ไข", pointing at the draft (never mints a second one)', () => {
+    const deal = baseDeal({ salesStage: 'QUOTE_OWNER' });
+    expect(nextSalesAction(deal, [issuedPr()], { reviseTarget: { ...target, openDraftId: 91 } })).toMatchObject({
+      key: REVISE, label: 'ไปที่ฉบับแก้ไข', quotationId: 90, to: '/quotations/91',
+    });
+  });
+
+  it('a non-ACTIVE deal gets nothing even with a reviseTarget', () => {
+    expect(nextSalesAction(baseDeal({ lifecycle: 'ON_HOLD', salesStage: 'QUOTE_OWNER' }), [issuedPr()], { reviseTarget: target })).toBeNull();
+  });
+
+  it('sortWorklist gives REVISE_QUOTATION a defined rank (no NaN ordering): ahead of FOLLOW_UP, behind CONFIRM_ORDER', () => {
+    const at = '2026-07-01T00:00:00.000Z';
+    const row = (id, key) => ({ deal: { id, stageUpdatedAt: at }, action: { key } });
+    const sorted = sortWorklist([
+      row(1, SALES_ACTION.FOLLOW_UP), row(2, REVISE), row(3, SALES_ACTION.CONFIRM_ORDER),
+    ]).map((item) => item.deal.id);
+    expect(sorted).toEqual([3, 2, 1]);
+  });
+});

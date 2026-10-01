@@ -66,7 +66,7 @@ export const DIRECT_APPROVAL_ACTION_KEY = 'approve_direct_quotation';
  *   อนุมัติใบเสนอราคา {number}" — a waiting line that names the document and who
  *   decides it (unlike the retired department-only banner above). Absent otherwise.
  */
-export function resolveWorkState(user, deal, pricingRequests = []) {
+export function resolveWorkState(user, deal, pricingRequests = [], { reviseTarget = null } = {}) {
   const role = user?.role;
   if (!deal || deal.lifecycle !== 'ACTIVE') return { action: null };
 
@@ -87,7 +87,7 @@ export function resolveWorkState(user, deal, pricingRequests = []) {
     };
   }
 
-  const action = role === 'sales' ? nextSalesAction(deal, pricingRequests)
+  const action = role === 'sales' ? nextSalesAction(deal, pricingRequests, { reviseTarget })
     : role === 'import' ? nextImportAction(deal, pricingRequests)
       : role === 'account' ? nextAccountAction(deal)
         : null;
