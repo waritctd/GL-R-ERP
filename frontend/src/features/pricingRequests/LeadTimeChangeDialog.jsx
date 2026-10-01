@@ -115,7 +115,7 @@ export function LeadTimeChangeDialog({ factoryName, lines, existing = null, pend
                 className="grid grid-cols-[minmax(0,1fr)] items-center gap-x-3 gap-y-1.5 rounded-md border border-border-subtle p-3 sm:grid-cols-[minmax(0,1fr)_auto]">
                 <label className="flex min-w-0 items-start gap-2 text-sm text-text">
                   <input type="checkbox" className="mt-1 shrink-0" checked={row.ticked}
-                    aria-label={`เลือกรายการ #${item.id}`} onChange={() => toggleRow(item.id)} />
+                    aria-label={`เลือกรายการ ${name}`} onChange={() => toggleRow(item.id)} />
                   <span className="min-w-0">
                     <span className="block truncate font-bold">{name}</span>
                     <span className="block text-xs text-text-muted">ปัจจุบัน {leadTimeWithUnit(current.min, current.max)}</span>
@@ -124,12 +124,12 @@ export function LeadTimeChangeDialog({ factoryName, lines, existing = null, pend
                 <div className="flex items-center gap-1.5 pl-6 sm:pl-0">
                   <input className="w-20" type="number" min="1" max="3650" inputMode="numeric"
                     disabled={!row.ticked} value={row.min}
-                    aria-label={`ต่ำสุด รายการ #${item.id}`}
+                    aria-label={`ต่ำสุด ${name}`}
                     onChange={(event) => patchRow(item.id, { min: event.target.value })} />
                   <span className="text-xs text-text-muted" aria-hidden="true">–</span>
                   <input className="w-20" type="number" min="1" max="3650" inputMode="numeric"
                     disabled={!row.ticked} value={row.max}
-                    aria-label={`สูงสุด รายการ #${item.id}`}
+                    aria-label={`สูงสุด ${name}`}
                     onChange={(event) => patchRow(item.id, { max: event.target.value })} />
                   <span className="text-xs text-text-muted">วัน</span>
                 </div>

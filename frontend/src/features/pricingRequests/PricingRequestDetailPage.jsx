@@ -2124,8 +2124,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
           flush
           title={`รายการสินค้า (${factoryItemCount} รายการ)`}
           // CR-1: only while some line still has no factory mail. Per-factory สร้างเมล lives on each card.
-          actions={canContactFactory && pricePreviewGroups.length > 0 ? (
-            <Button type="button" variant="primary" disabled={generateDrafts.isPending} onClick={() => generateDrafts.mutate()} data-testid="pcr-generate-drafts">
+          actions={canContactFactory && inSendWindow && pricePreviewGroups.length > 0 ? (
+            <Button type="button" variant="secondary" disabled={generateDrafts.isPending} onClick={() => generateDrafts.mutate()} data-testid="pcr-generate-drafts">
               สร้างเมลให้ทุกโรงงาน
             </Button>
           ) : null}
@@ -2148,7 +2148,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 {factoryGroups.length === 0 ? (
                   <>
                     ยังไม่ได้สร้างเมลขอราคา — ด้านล่างคือรายการที่ต้องขอราคา จัดกลุ่มตามโรงงาน
-                    {canContactFactory ? ' · กด “สร้างเมลให้ทุกโรงงาน” ด้านบนเพื่อเริ่ม แล้วจึงกรอกราคาได้หลังกด “ติดต่อโรงงานแล้ว”' : ''}
+                    {canContactFactory ? ' · กด “ติดต่อโรงงานแล้ว” ของแต่ละโรงงานเมื่อติดต่อแล้ว จึงกรอกราคาได้ (สร้างเมลหรือไม่ก็ได้)' : ''}
                   </>
                 ) : (
                   <>
@@ -2220,7 +2220,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 // per-group emailDraft needed in this closure any more.
                 const draft = responseDrafts[current.id] ?? {
                   supplierQuoteRef: current.supplierQuoteRef ?? '',
-                  defaultCurrency: current.defaultCurrency ?? 'THB',
+                  // R1: when every line is locked to ONE currency, that is the draft's currency too.
+                  defaultCurrency: (() => {
+                    const locked = [...new Set((current.items ?? []).map((i) => requestItemById.get(i.pricingRequestItemId)?.requestedCurrency).filter(Boolean))];
+                    return locked.length === 1 ? locked[0] : (current.defaultCurrency ?? 'THB');
+                  })(),
                   paymentTerms: current.paymentTerms ?? '',
                   leadTimeText: current.leadTimeText ?? '',
                   revisionReason: '',

@@ -3698,10 +3698,10 @@ describe('CR-1 lead-time change — import raises it (R2, R10 option C)', () => 
     expect(within(dialog).getByLabelText('ต่ำสุด (วัน)')).not.toBeNull();
     expect(within(dialog).getByLabelText('สูงสุด (วัน)')).not.toBeNull();
     expect(within(dialog).getByLabelText('เหตุผล')).not.toBeNull();
-    expect(within(dialog).getByLabelText('เลือกรายการ #1').checked).toBe(true);
-    expect(within(dialog).getByLabelText('เลือกรายการ #2').checked).toBe(true);
+    expect(within(dialog).getByLabelText('เลือกรายการ SCG A1').checked).toBe(true);
+    expect(within(dialog).getByLabelText('เลือกรายการ SCG A2').checked).toBe(true);
     // the stock line is never offered (backend refuses it)
-    expect(within(dialog).queryByLabelText('เลือกรายการ #3')).toBeNull();
+    expect(within(dialog).queryByLabelText('เลือกรายการ SCG S1')).toBeNull();
     // submit stays disabled until a reason and a valid range exist
     expect(within(dialog).getByRole('button', { name: 'ส่งคำขอ' }).disabled).toBe(true);
   });
@@ -3740,8 +3740,8 @@ describe('CR-1 lead-time change — import raises it (R2, R10 option C)', () => 
     fireEvent.change(within(dialog).getByLabelText('สูงสุด (วัน)'), { target: { value: '150' } });
     fireEvent.change(within(dialog).getByLabelText('เหตุผล'), { target: { value: 'เหตุผล' } });
     // line 2: own value
-    fireEvent.change(within(dialog).getByLabelText('ต่ำสุด รายการ #2'), { target: { value: '100' } });
-    fireEvent.change(within(dialog).getByLabelText('สูงสุด รายการ #2'), { target: { value: '110' } });
+    fireEvent.change(within(dialog).getByLabelText('ต่ำสุด SCG A2'), { target: { value: '100' } });
+    fireEvent.change(within(dialog).getByLabelText('สูงสุด SCG A2'), { target: { value: '110' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'ส่งคำขอ' }));
     await waitFor(() => expect(api.leadTimeChanges.create).toHaveBeenCalledWith(91, expect.objectContaining({
       lines: [
@@ -3761,7 +3761,7 @@ describe('CR-1 lead-time change — import raises it (R2, R10 option C)', () => 
     fireEvent.change(within(dialog).getByLabelText('ต่ำสุด (วัน)'), { target: { value: '120' } });
     fireEvent.change(within(dialog).getByLabelText('สูงสุด (วัน)'), { target: { value: '150' } });
     fireEvent.change(within(dialog).getByLabelText('เหตุผล'), { target: { value: 'เหตุผล' } });
-    fireEvent.click(within(dialog).getByLabelText('เลือกรายการ #2'));
+    fireEvent.click(within(dialog).getByLabelText('เลือกรายการ SCG A2'));
     fireEvent.click(within(dialog).getByRole('button', { name: 'ส่งคำขอ' }));
     await waitFor(() => expect(api.leadTimeChanges.create).toHaveBeenCalledWith(91, expect.objectContaining({
       lines: [{ pricingRequestItemId: 1, newMinDays: 120, newMaxDays: 150 }],
@@ -3811,8 +3811,8 @@ describe('CR-1 lead-time change — import raises it (R2, R10 option C)', () => 
     fireEvent.click(within(strip).getByRole('button', { name: 'แก้ไข' }));
     const dialog = await screen.findByRole('dialog', { name: 'ขอเปลี่ยนระยะเวลานำเข้า' });
     expect(within(dialog).getByLabelText('เหตุผล').value).toBe('โรงงานเลื่อนกำหนดผลิต');
-    expect(within(dialog).getByLabelText('ต่ำสุด รายการ #1').value).toBe('120');
-    fireEvent.change(within(dialog).getByLabelText('สูงสุด รายการ #1'), { target: { value: '160' } });
+    expect(within(dialog).getByLabelText('ต่ำสุด SCG A1').value).toBe('120');
+    fireEvent.change(within(dialog).getByLabelText('สูงสุด SCG A1'), { target: { value: '160' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึกการแก้ไข' }));
     await waitFor(() => expect(api.leadTimeChanges.update).toHaveBeenCalledWith(7001, {
       reason: 'โรงงานเลื่อนกำหนดผลิต',
@@ -4066,5 +4066,61 @@ describe('CR-1 factory section layout — nothing forces a horizontal scroll', (
     const card = await screen.findByTestId('pcr-factory-card-91');
     expect(card.querySelector('[class*="min-w-["]')).toBeNull();
     expect(card.parentElement.querySelector('[class*="md:min-w-["]')).toBeNull();
+  });
+});
+
+// ── Opus review follow-ups ────────────────────────────────────────────────────────────────────
+describe('CR-1 R1 payload precedence — the line\'s requested terms win over what the draft carries', () => {
+  it('sends EUR / PER_SQM even when the draft items were seeded PER_PIECE / no currency (pre-fix backend seeding)', async () => {
+    const base = crQuote();
+    const quote = contactedQuote({
+      defaultCurrency: 'THB',
+      items: [{ ...base.items[0], unitBasis: 'PER_PIECE', quotedUnit: 'PER_PIECE', currency: null }],
+    });
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [quote] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ/), { target: { value: '12.5' } });
+    fireEvent.change(screen.getByLabelText(/^ตร.ม.\/หน่วย/), { target: { value: '0.36' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
+
+    await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalled());
+    const payload = api.pricingRequests.receiveFactoryQuote.mock.calls[0][1];
+    expect(payload.items[0]).toMatchObject({ currency: 'EUR', unitBasis: 'PER_SQM' });
+    expect(payload.defaultCurrency).toBe('EUR');
+  });
+});
+
+describe('CR-1 review copy / gating / a11y / provenance', () => {
+  it('pre-draft banner points at each factory\'s ติดต่อโรงงานแล้ว and says the mail is optional', async () => {
+    renderDetailPage({ user: importUser, request: crRequest() });
+    await waitForLoaded();
+    const preview = await screen.findByTestId('pcr-price-preview');
+    expect(preview.textContent).toContain('กด “ติดต่อโรงงานแล้ว” ของแต่ละโรงงานเมื่อติดต่อแล้ว จึงกรอกราคาได้ (สร้างเมลหรือไม่ก็ได้)');
+  });
+
+  it('สร้างเมลให้ทุกโรงงาน is offered only inside the contact window', async () => {
+    renderDetailPage({ user: importUser, request: crRequest() });
+    await waitForLoaded();
+    expect(await screen.findByTestId('pcr-generate-drafts')).not.toBeNull();
+  });
+
+  it('…and is hidden once the request is past it (generate would 409)', async () => {
+    renderDetailPage({ user: importUser, request: crRequest({ summary: { status: 'READY_FOR_CEO_REVIEW' } }) });
+    await waitForLoaded();
+    await screen.findByTestId('pcr-price-preview');
+    expect(screen.queryByTestId('pcr-generate-drafts')).toBeNull();
+  });
+
+  it('names the contactor from the legacy FACTORY_EMAIL_SENT event on a backfilled quote', async () => {
+    const request = {
+      ...crRequest(),
+      events: [{ id: 2, actorId: 3, actorName: 'ฝ้าย', eventKind: 'FACTORY_EMAIL_SENT', message: null, createdAt: '2026-09-20T03:00:00Z' }],
+    };
+    renderDetailPage({ user: importUser, request, factoryQuotes: [contactedQuote()] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+    expect(screen.getByTestId('pcr-factory-status-91').textContent).toContain('โดย ฝ้าย');
   });
 });

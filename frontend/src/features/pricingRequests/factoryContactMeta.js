@@ -38,14 +38,18 @@ export function isFactoryContacted(quote) {
 
 /**
  * Who marked the factory contacted. FactoryQuoteDto carries only `contactedBy` (an id), so the name
- * is read off the request's own FACTORY_CONTACTED event for that factory by the same actor.
+ * is read off the request's own FACTORY_CONTACTED event (or the legacy FACTORY_EMAIL_SENT one) by the same actor.
  * Null when it cannot be resolved (the chip then simply omits "· โดย ...").
  */
 export function contactedByName(quote, events = []) {
   if (!quote || quote.contactedBy == null) return null;
-  const hit = [...events].reverse().find((event) => event?.eventKind === 'FACTORY_CONTACTED'
-    && event.actorId === quote.contactedBy
-    && (!quote.factoryName || String(event.message ?? '').includes(quote.factoryName)));
+  const byActor = [...events].reverse().filter((event) => event?.actorId === quote.contactedBy);
+  const names = (event) => (!quote.factoryName || String(event.message ?? '').includes(quote.factoryName));
+  // Newest evidence first: the CR-1 event for this factory, then — for a quote backfilled from the old
+  // "ส่งแล้ว" step (R4) — the legacy FACTORY_EMAIL_SENT event, by the same actor.
+  const hit = byActor.find((e) => e.eventKind === 'FACTORY_CONTACTED' && names(e))
+    ?? byActor.find((e) => e.eventKind === 'FACTORY_EMAIL_SENT' && names(e))
+    ?? byActor.find((e) => e.eventKind === 'FACTORY_EMAIL_SENT');
   return hit?.actorName ?? null;
 }
 

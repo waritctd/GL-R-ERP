@@ -1307,6 +1307,13 @@ function mockLeadTimeLines(quote, pr, inputs) {
   });
 }
 
+// A cancelled / superseded request takes no lead-time decision (LeadTimeChangeService, approve + reject).
+function mockRequireLiveRequest(pr) {
+  if (['CANCELLED', 'SUPERSEDED'].includes(pr.status)) {
+    fail('คำขอราคานี้ถูกยกเลิกหรือถูกแทนที่แล้ว ไม่สามารถอนุมัติหรือไม่อนุมัติได้', 409);
+  }
+}
+
 // B-R3: the owning rep (role sales AND ticket creator) or a sales manager -- NOT the CEO, import,
 // account or another rep.
 function mockRequireLeadTimeDecider(pr) {
@@ -13169,6 +13176,7 @@ export const api = {
       const change = mockFindLeadTimeChange(id);
       const pr = findPricingRequestRaw(change.pricingRequestId);
       const user = mockRequireLeadTimeDecider(pr);
+      mockRequireLiveRequest(pr);
       const version = mockRequireExpectedVersion(request.expectedVersion);
       mockRequireLeadTimePending(change);
       if (change.version !== version) fail('คำขอถูกแก้ไขแล้ว กรุณาตรวจสอบอีกครั้ง', 409);
@@ -13186,6 +13194,7 @@ export const api = {
       const change = mockFindLeadTimeChange(id);
       const pr = findPricingRequestRaw(change.pricingRequestId);
       const user = mockRequireLeadTimeDecider(pr);
+      mockRequireLiveRequest(pr);
       const reason = typeof request.reason === 'string' && request.reason.trim() ? request.reason.trim() : null;
       if (!reason) fail('กรุณาระบุเหตุผลที่ไม่อนุมัติ', 400);
       if (reason.length > 1000) fail('เหตุผลต้องไม่เกิน 1000 ตัวอักษร', 400);
@@ -13612,6 +13621,8 @@ export const api = {
       const user = hasRole('import', 'ceo');
       const pr = findPricingRequestRaw(id);
       // Mirrors FactoryQuoteService.DRAFT_STATUSES (V140 dropped COSTING_IN_PROGRESS from it).
+      // Draft items are seeded with the line's requested price unit / currency when it carries them
+      // (CR-1 R1), else today's seeding (quantity unit, no currency) — see the items map below.
       if (!['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE'].includes(pr.status)) {
         fail('คำขอราคาต้องอยู่ระหว่างการตรวจสอบของฝ่ายนำเข้าก่อนจึงจะสร้างร่างอีเมลราคาโรงงานได้', 409);
       }

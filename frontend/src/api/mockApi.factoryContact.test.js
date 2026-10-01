@@ -325,4 +325,13 @@ describe('mockApi.leadTimeChanges (R2 / R10, option C)', () => {
     await api.auth.login({ role: 'account' });
     await expect(api.leadTimeChanges.listForPricingRequest(prId)).rejects.toMatchObject({ status: 403 });
   });
+
+  it('approve / reject are refused (409) once the pricing request is CANCELLED, like LeadTimeChangeService', async () => {
+    const { prId, quote } = await contactedQuote();
+    const { leadTimeChange } = await api.leadTimeChanges.create(quote.id, body(quote));
+    await api.auth.login({ role: 'sales' });
+    await api.pricingRequests.cancel(prId, { reason: 'ยกเลิก' });
+    await expect(api.leadTimeChanges.approve(leadTimeChange.id, { expectedVersion: 1 })).rejects.toMatchObject({ status: 409 });
+    await expect(api.leadTimeChanges.reject(leadTimeChange.id, { reason: 'x', expectedVersion: 1 })).rejects.toMatchObject({ status: 409 });
+  });
 });
