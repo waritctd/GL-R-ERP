@@ -30,10 +30,10 @@ class PricingFormulaConfigRepositoryIntegrationTest extends AbstractPostgresInte
     }
 
     @Test
-    void findCurrent_returnsTheV109SeedCarriedForwardByV198WithAllChildren() {
+    void findCurrent_returnsTheV109SeedCarriedForwardByV197WithAllChildren() {
         PricingFormulaConfigDto config = formulaConfigs.findCurrent().orElseThrow();
 
-        // V109 seeded version 1 (margin 20%); V198 (owner ruling 2026-10-01) published version 2
+        // V109 seeded version 1 (margin 20%); V197 (owner ruling 2026-10-01) published version 2
         // as the current row with the default margin raised to 30%, copying every other value.
         assertThat(config.version()).isEqualTo(2);
         assertThat(config.isCurrent()).isTrue();
@@ -157,7 +157,7 @@ class PricingFormulaConfigRepositoryIntegrationTest extends AbstractPostgresInte
 
         PricingFormulaConfigDto updated = formulaConfigs.createNewVersion(request, null);
 
-        // V109 seed = v1, V198 margin-30% republish = v2, so this new version is v3.
+        // V109 seed = v1, V197 margin-30% republish = v2, so this new version is v3.
         assertThat(updated.version()).isEqualTo(original.version() + 1);
         assertThat(updated.isCurrent()).isTrue();
         assertThat(updated.formulaConfigId()).isNotEqualTo(originalId);

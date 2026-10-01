@@ -18,8 +18,8 @@
 -- together with a full copy of the freight / duty / clearance child rows (children are never
 -- versioned independently -- see V109).
 --
--- Deploy note: this is V198. It must ship in the same image as, or after, V195-V197; never deploy
--- an image containing V198 while a lower pending migration is neither in it nor already applied.
+-- Deploy note: this is V197. It must ship in the same image as, or after, V195-V197; never deploy
+-- an image containing V197 while a lower pending migration is neither in it nor already applied.
 
 ALTER TABLE sales.pricing_formula_config
     ALTER COLUMN default_margin_pct SET DEFAULT 0.300000;

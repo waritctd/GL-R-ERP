@@ -38,7 +38,7 @@ import tools.jackson.databind.json.JsonMapper;
  *
  * <p>Mockito cannot stand in here for two separate reasons. First, a mocked repository would let a
  * 403 assertion "pass" while the SQL happily wrote the row anyway -- so every denial case below also
- * asserts the STORED state is unchanged (version still 2 -- V109 seed v1, V198 margin-30% republish v2, target row still present), which is the
+ * asserts the STORED state is unchanged (version still 2 -- V109 seed v1, V197 margin-30% republish v2, target row still present), which is the
  * assertion that actually proves the guard runs before the write. Second, the add/delete paths
  * derive the whole new version from {@code findCurrent()}, so the V109 seed itself -- 39 freight
  * rows, six deliberately-blank cells, half-open contiguous bands -- is the fixture under test.
@@ -185,7 +185,7 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
             .filter(rate -> rate.thicknessMinMm().compareTo(new BigDecimal("12")) == 0)
             .findFirst().orElseThrow().amountThb()).isEqualByComparingTo("110000");
 
-        // V109's versioning model is untouched: the previous generation (v2, the V198 republish) keeps all 39 of its rows.
+        // V109's versioning model is untouched: the previous generation (v2, the V197 republish) keeps all 39 of its rows.
         assertThat(freightRowCountForVersion(2)).isEqualTo(39);
     }
 
@@ -238,7 +238,7 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
             .andExpect(status().isBadRequest());
 
         assertThat(currentConfig().version()).isEqualTo(2);
-        // Across ALL versions: 39 (V109 seed v1) + 39 (V198 margin-30% republish v2); nothing added.
+        // Across ALL versions: 39 (V109 seed v1) + 39 (V197 margin-30% republish v2); nothing added.
         assertThat(totalFreightRowCount()).isEqualTo(78);
     }
 
