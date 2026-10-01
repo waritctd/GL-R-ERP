@@ -1,6 +1,6 @@
 -- CR-1 (GLA-167): factory-contact flow + lead-time change requests.
 --
--- Forward-only. Authored as V196 and renumbered to V195 on owner ruling 2026-10-01 (stock-lines V195 paused).
+-- Forward-only. Authored as V196; renumbered to V198 on owner ruling 2026-10-02 so it sits above V197 (already on develop).
 -- Prod note: a lower version merged AFTER a higher one is silently skipped (validate-on-migrate is
 -- false there and out-of-order is unset), so do not deploy an image containing this file unless
 -- every lower pending migration is in the same image or already applied.
@@ -86,5 +86,5 @@ ALTER TABLE sales.import_request
     ADD COLUMN derived_lead_time_min_days SMALLINT,
     ADD COLUMN derived_lead_time_max_days SMALLINT;
 
-COMMENT ON COLUMN sales.import_request.derived_lead_time_min_days IS 'Min lead time (days) derived from the deal''s current quotation items when this IR was built. NULL = country default or pre-V195. Lets revise tell a changed quotation from a manual lead-time edit.';
+COMMENT ON COLUMN sales.import_request.derived_lead_time_min_days IS 'Min lead time (days) derived from the deal''s current quotation items when this IR was built. NULL = country default or pre-V198. Lets revise tell a changed quotation from a manual lead-time edit.';
 COMMENT ON COLUMN sales.import_request.derived_lead_time_max_days IS 'Max lead time (days) derived from the deal''s current quotation items when this IR was built. See derived_lead_time_min_days.';

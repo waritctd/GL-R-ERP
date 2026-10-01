@@ -16,7 +16,7 @@ import th.co.glr.hr.pricingrequest.LeadTimeChangeDtos.LeadTimeChangeDto;
 import th.co.glr.hr.pricingrequest.LeadTimeChangeDtos.LeadTimeChangeLineDto;
 
 /**
- * CR-1 (GLA-167): persistence for lead-time change requests (V195). Persistence only -- who may do
+ * CR-1 (GLA-167): persistence for lead-time change requests (V198). Persistence only -- who may do
  * what, and every validation, lives in {@link LeadTimeChangeService}. State changes are
  * compare-and-set on {@code status = 'PENDING'} and return a row count, so a lost race is a 409 in
  * the service rather than a silent overwrite.

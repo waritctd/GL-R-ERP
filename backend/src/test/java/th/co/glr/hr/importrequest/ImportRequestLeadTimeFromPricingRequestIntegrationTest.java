@@ -340,7 +340,7 @@ class ImportRequestLeadTimeFromPricingRequestIntegrationTest extends AbstractPos
         assertThat(v2.leadTimeMaxDays()).isEqualTo(120);
     }
 
-    // ── revise with no stored derived value (country-default IRs, pre-V195 rows) ─────────────
+    // ── revise with no stored derived value (country-default IRs, pre-V198 rows) ─────────────
 
     /**
      * (a) An IR first built from the COUNTRY DEFAULT (the quotation had no lead time) must pick up a
@@ -370,7 +370,7 @@ class ImportRequestLeadTimeFromPricingRequestIntegrationTest extends AbstractPos
     void revise_withNoStoredDerivedValue_keepsALeadTimeThatDiffersFromTheCountryDefault() {
         long[] d = issuedPrRouteIr("D6b", 40, 60);
         service.setLeadTime(d[0], new SetLeadTimeRequest(55, 66), importUser);
-        clearDerived(d[0]); // pre-V195 shape
+        clearDerived(d[0]); // pre-V198 shape
         jdbc.update("UPDATE sales.quotation_item SET lead_time_min_days = 100, lead_time_max_days = 120 WHERE quotation_id = :q",
             Map.of("q", d[2]));
 
@@ -380,7 +380,7 @@ class ImportRequestLeadTimeFromPricingRequestIntegrationTest extends AbstractPos
         assertThat(v2.leadTimeMaxDays()).isEqualTo(66);
     }
 
-    /** (c) A pre-V195-shaped row whose lead time still EQUALS the country default takes the fresh quotation value. */
+    /** (c) A pre-V198-shaped row whose lead time still EQUALS the country default takes the fresh quotation value. */
     @Test
     void revise_withNoStoredDerivedValue_andALeadTimeEqualToTheCountryDefault_takesTheFreshQuotationValue() {
         long[] d = issuedPrRouteIr("D6c", null, null); // CN default 30-45, never edited

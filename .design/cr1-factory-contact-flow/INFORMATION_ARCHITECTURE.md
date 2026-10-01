@@ -102,7 +102,7 @@ Section title: **ราคาจากโรงงาน**, with one card per fa
 
 ## Open questions
 
-- None. Rulings closed 2026-10-01. Branch off `develop` (ruled 2026-10-01 after seeing develop is 105 commits ahead of main on these files); migration is **V195** (authored as V196; renumbered on owner ruling 2026-10-01 when stock-lines V195 was paused).
+- None. Rulings closed 2026-10-01. Branch off `develop` (ruled 2026-10-01 after seeing develop is 105 commits ahead of main on these files); migration is **V198** (authored as V196; renumbered on owner ruling 2026-10-02 so it sits above V197, already on develop).
 
 ## Backend rulings (Ploy, 2026-10-01)
 
@@ -122,3 +122,4 @@ Section title: **ราคาจากโรงงาน**, with one card per fa
 
   CR-1 does **not** build a way to issue a new quotation after acceptance. That is filed as a separate issue. Until it exists, a lead-time change approved after acceptance does not reach the IR.
 - **B-R6:** /fulfilment lists an IR only once sales has **issued** it. A DRAFT IR does not appear there, so this is unchanged.
+- **B-R7 (2026-10-02, supersedes the UI half of R5 / B-R1):** the factory section of the pricing-request page is **import-only in the UI**, keeping #1103's gate. The CEO does not see the factory cards, สร้างเมล, ติดต่อโรงงานแล้ว or the lead-time badge. The backend still authorises the CEO for drafts and `/contacted`; the UI never calls them for the CEO.
