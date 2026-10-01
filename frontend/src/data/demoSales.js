@@ -569,7 +569,7 @@ export function buildDemoSalesSeed() {
    * ฝ่ายบัญชี banks the money and confirms the close.
    */
   function makeMoneyDeal({
-    id, title, customerName, owner = SALES1, priority = 'NORMAL',
+    id, title, customerName, customerId = null, owner = SALES1, priority = 'NORMAL',
     paymentStatus, fulfillmentStatus = null, salesStage,
     depositPolicy = 'REQUIRED', depositPolicyReason = null,
     entryChannel = 'BUYER_DIRECT',
@@ -611,7 +611,7 @@ export function buildDemoSalesSeed() {
       title, status: 'quotation_issued', priority,
       createdById: owner.id, createdByName: owner.name,
       assignedToId: IMPORT1.id, assignedToName: IMPORT1.name,
-      customerName, note: null,
+      customerName, customerId, note: null,
       createdAt, updatedAt, closedAt: null,
       salesStage, lostReason: null, lostAt: null,
       stageUpdatedAt: timeline[timeline.length - 1][1],
@@ -671,6 +671,10 @@ export function buildDemoSalesSeed() {
     makeMoneyDeal({
       id: 19, title: 'สยามพารากอน ดีเวลลอปเมนท์',
       customerName: 'บริษัท สยามพารากอน ดีเวลลอปเมนท์ จำกัด',
+      // customerId 6 (mockApi.js's own mockCustomers) — the ONE ISSUED-deposit-notice money-cycle
+      // deal linked to a real customer row, so mockApi.billingNotes.candidates() has at least one
+      // reachable REMAINING_INVOICE/DEPOSIT_NOTICE candidate in mock mode (GLA-129 review round 1).
+      customerId: 6,
       priority: 'HIGH',
       paymentStatus: 'DEPOSIT_NOTICE_ISSUED', fulfillmentStatus: null,
       salesStage: 'ORDER_RECEIVED',
