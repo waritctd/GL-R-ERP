@@ -292,8 +292,10 @@ class CommissionTeamOverrideIntegrationTest extends AbstractPostgresIntegrationT
     @Test
     void noConfigGenerationForTheMonth_noOverrideForAnyone() {
         wireService();
-        // The V197 seed generation starts 2026-10-01 and this DB has no employees 142/47; the
-        // generation below starts 2027-03-01. Neither applies to Feb 2027 / Sep 2026.
+        // Sep 2026 is before every generation, so no generation applies at all. Feb 2027 IS covered
+        // by the V197 seed generation (effective 2026-10-01), but that generation has ZERO
+        // recipients in this DB (employees 142/47 do not exist here), so it pays nobody. The
+        // generation inserted below starts 2027-03-01 and applies to neither month.
         insertConfig(MARCH_2027, true, "3000000.00", "0.0750", recipient1, recipient2);
         seedApproved(repA, TWO_M_EX_VAT, FEB_2027);
         seedApproved(repB, TWO_M_EX_VAT, FEB_2027);
@@ -303,6 +305,10 @@ class CommissionTeamOverrideIntegrationTest extends AbstractPostgresIntegrationT
         for (LocalDate month : new LocalDate[] {FEB_2027, SEPTEMBER_2026}) {
             PayrollCommissionSummaryDto summary = commissionService.payrollReadySummary(month, hrActor);
             assertThat(summary.totalTeamOverrideAmount()).as("total override %s", month).isEqualByComparingTo(ZERO2);
+            // No recipients => no override was computed, so there is no company base to show: NULL
+            // (the UI hides it), NOT a misleading "company receipts 0.00".
+            assertThat(summary.companyCommissionableBase())
+                .as("companyCommissionableBase %s: no recipients -> null, not 0.00", month).isNull();
             assertThat(repRow(summary, recipient1)).as("no row for recipient 1 in %s", month).isEmpty();
             assertThat(repRow(summary, recipient2)).as("no row for recipient 2 in %s", month).isEmpty();
             assertThat(commissionService.payrollCommissionTotalsByEmployee(month))
@@ -320,6 +326,8 @@ class CommissionTeamOverrideIntegrationTest extends AbstractPostgresIntegrationT
         PayrollCommissionSummaryDto summary = commissionService.payrollReadySummary(MARCH_2027, hrActor);
 
         assertThat(summary.totalTeamOverrideAmount()).isEqualByComparingTo(ZERO2);
+        assertThat(summary.companyCommissionableBase())
+            .as("a disabled generation exposes no company base: null, not 0.00").isNull();
         assertThat(repRow(summary, recipient1)).isEmpty();
     }
 
@@ -549,6 +557,25 @@ class CommissionTeamOverrideIntegrationTest extends AbstractPostgresIntegrationT
         assertThat(dto.manualTotal()).isEqualByComparingTo("5000.00");
         // She is still a recipient, so she still sees the rule and base that would have applied.
         assertThat(dto.companyCommissionableBase()).isNotNull();
+    }
+
+    @Test
+    void monthlySummary_aZeroManualManagerEntryDoesNotSuppressTheAutoOverride() {
+        wireService();
+        insertConfig(MARCH_2027, true, "3000000.00", "0.0750", recipient1);
+        seedApproved(repA, TWO_M_EX_VAT, MARCH_2027);
+        seedApproved(repB, TWO_M_EX_VAT, MARCH_2027);
+        commissionService.createManualCommission(
+            recipient1, CommissionKind.MANAGER, BigDecimal.ZERO, "note only", MARCH_2027, ceoActor);
+
+        CommissionMonthlySummaryDto dto = commissionService.monthlySummary(recipient1, MARCH_2027, principal(recipient1, "sales"));
+
+        // Same rule as the payroll path: only a STRICTLY POSITIVE manual MANAGER replaces the auto limb.
+        assertThat(dto.teamOverrideAmount()).isEqualByComparingTo("750.00");
+        assertThat(dto.manualTotal()).isEqualByComparingTo(ZERO2);
+        assertThat(dto.totalCommission()).isEqualByComparingTo(
+            dto.tierCommission().add(dto.incentiveAmount()).add(dto.manualTotal())
+                .add(dto.stockBonusAmount()).add(dto.teamOverrideAmount()));
     }
 
     @Test

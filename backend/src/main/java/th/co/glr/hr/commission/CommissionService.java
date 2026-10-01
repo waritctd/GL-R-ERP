@@ -1190,9 +1190,12 @@ public class CommissionService {
         // UNWEIGHTED, APPROVED-only company-wide ex-VAT sum at full precision (payroll must never
         // count an unapproved receipt). Skipped entirely when no enabled generation applies.
         TeamOverrideConfig teamOverrideConfig = activeTeamOverrideConfig(payrollMonth);
-        BigDecimal companyBase = teamOverrideConfig.recipients().isEmpty()
-            ? zero
-            : calculator.monthlyTierBase(commissions.sumCompanyActualReceived(payrollMonth, true).max(BigDecimal.ZERO));
+        // NULL (not 0.00) when no override applies -- disabled, no generation yet, or no recipients:
+        // "company receipts 0.00" would be a lie for a month that simply has no override rule.
+        boolean overrideApplies = !teamOverrideConfig.recipients().isEmpty();
+        BigDecimal companyBase = overrideApplies
+            ? calculator.monthlyTierBase(commissions.sumCompanyActualReceived(payrollMonth, true).max(BigDecimal.ZERO))
+            : null;
         Map<Long, BigDecimal> teamOverrideByEmployee = new LinkedHashMap<>();
         Map<Long, String> teamOverrideNames = new LinkedHashMap<>();
         for (TeamOverrideRecipient recipient : teamOverrideConfig.recipients()) {
@@ -1264,7 +1267,7 @@ public class CommissionService {
                 entry.getKey(), teamOverrideNames.get(entry.getKey()),
                 zero, zero, zero, zero, entry.getValue(), entry.getValue()));
         }
-        return new PayrollRun(results, companyBase.setScale(2, RoundingMode.HALF_UP));
+        return new PayrollRun(results, companyBase == null ? null : companyBase.setScale(2, RoundingMode.HALF_UP));
     }
 
     /**
