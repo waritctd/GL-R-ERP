@@ -36,7 +36,7 @@
 // actually clickable; this module only decides which ONE action (if any)
 // leads the sticky bar.
 
-import { nextSalesAction, SALES_ACTION } from './salesActions.js';
+import { nextSalesAction, reviseAction, REVISE_STAGES, SALES_ACTION } from './salesActions.js';
 import { nextImportAction } from './importActions.js';
 import { nextAccountAction } from './accountActions.js';
 
@@ -104,4 +104,18 @@ export function resolveWorkState(user, deal, pricingRequests = [], { reviseTarge
   if (action) return { action };
 
   return { action: null };
+}
+
+/**
+ * PR A — ADDITIONAL (secondary) actions beside the sticky primary. At the owner / buyer quote stages
+ * the client may want a revision or be happy with the original, so แก้ใบเสนอราคา is offered
+ * alongside — never instead of — the primary บันทึกผลใบเสนอราคา. Sales only; `reviseTarget` is
+ * resolved by the caller through quotationMeta.canReviseDealQuotation (owner + status live there).
+ * Skipped when revise is already the primary (approved direct quotation past draft).
+ */
+export function secondaryWorkActions(user, deal, pricingRequests = [], { reviseTarget = null } = {}) {
+  if (user?.role !== 'sales' || !deal || deal.lifecycle !== 'ACTIVE') return [];
+  if (!reviseTarget || !REVISE_STAGES.has(deal.salesStage)) return [];
+  if (resolveWorkState(user, deal, pricingRequests, { reviseTarget }).action?.key === SALES_ACTION.REVISE_QUOTATION) return [];
+  return [reviseAction(reviseTarget)];
 }

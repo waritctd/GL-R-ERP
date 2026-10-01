@@ -3806,7 +3806,7 @@ describe('TicketDetailPage', () => {
   // spy stands in for B's rule so A does not duplicate it) and hands it to the cascade. Clicking it
   // mints a revision (api.dealQuotations.createRevision) and opens it; an open revision draft is
   // opened instead ("ไปที่ฉบับแก้ไข"), never a second one.
-  describe('PR A — แก้ใบเสนอราคา sticky CTA', () => {
+  describe('PR A — แก้ใบเสนอราคา (sticky primary past draft; overflow secondary at owner/buyer stages)', () => {
     const REVISABLE = ['APPROVED', 'ISSUED', 'REVISION_REQUESTED'];
     const standInForPrB = (user, quotation) => (
       quotationMeta.canEditDealQuotation(user, quotation) && REVISABLE.includes(quotation?.docStatus)
@@ -3877,14 +3877,28 @@ describe('TicketDetailPage', () => {
       await waitFor(() => expect(screen.getByTestId('location-probe').textContent).toBe('/quotations/88'));
     });
 
+    // At the owner / buyer quote stages the client may want a revision OR be happy with the original,
+    // so revise is an ADDITIONAL action in the header "⋯" overflow menu (the page's existing
+    // secondary slot) and บันทึกผลใบเสนอราคา stays the sticky primary.
+    async function reviseMenuItem() {
+      const trigger = await screen.findByRole('button', { name: 'การดำเนินการเพิ่มเติม' }).catch(() => null);
+      if (!trigger) return null;
+      fireEvent.click(trigger);
+      return screen.queryByTestId('deal-quotation-revise');
+    }
+
     it.each(['QUOTE_OWNER', 'QUOTE_BUYER'])(
-      'PR-origin: an ISSUED quotation at %s -> CTA "แก้ใบเสนอราคา" (not the RECORD_QUOTATION_OUTCOME dead end); click revises it',
+      'PR-origin: an ISSUED quotation at %s keeps บันทึกผลใบเสนอราคา as primary AND offers แก้ใบเสนอราคา in the overflow menu; click revises it',
       async (salesStage) => {
         prOriginDeal({ salesStage });
         renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
-        await waitFor(() => expect(primaryAction()).toBe('revise_quotation'));
-        expect(primary().textContent).toContain('แก้ใบเสนอราคา');
-        fireEvent.click(primary());
+        await waitFor(() => expect(primaryAction()).toBe('record_quotation_outcome'));
+        await settle();
+        const item = await reviseMenuItem();
+        expect(item).not.toBeNull();
+        expect(item.textContent).toContain('แก้ใบเสนอราคา');
+        expect(primaryAction()).toBe('record_quotation_outcome');
+        fireEvent.click(item);
         await waitFor(() => expect(api.dealQuotations.createRevision).toHaveBeenCalledWith(80));
         await waitFor(() => expect(screen.getByTestId('location-probe').textContent).toBe('/quotations/88'));
       },
@@ -3894,25 +3908,27 @@ describe('TicketDetailPage', () => {
       for (const docStatus of ['REVISION_REQUESTED', 'APPROVED']) {
         prOriginDeal({ rows: [quotationRow({ docStatus })] });
         const { unmount } = renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
-        await waitFor(() => expect(primaryAction()).toBe('revise_quotation'));
+        await settle();
+        expect(await reviseMenuItem()).not.toBeNull();
         unmount();
       }
     });
 
-    it('wrong-way-round: at the DESIGNER stage the same issued quotation keeps บันทึกผลใบเสนอราคา', async () => {
+    it('wrong-way-round: at the DESIGNER stage there is no revise item and the primary is unchanged', async () => {
       prOriginDeal({ salesStage: 'QUOTE_DESIGN_SIDE' });
       renderTicketDetailPage(salesOwnerUser);
       await settle();
       await waitFor(() => expect(primaryAction()).toBe('record_quotation_outcome'));
+      expect(await reviseMenuItem()).toBeNull();
     });
 
-    it('consumes the predicate: when canReviseDealQuotation refuses the quotation there is no revise CTA', async () => {
+    it('consumes the predicate: when canReviseDealQuotation refuses the quotation there is no revise item', async () => {
       quotationMeta.canReviseDealQuotation.mockImplementation(() => false);
       prOriginDeal();
       renderTicketDetailPage(salesOwnerUser);
       await settle();
       await waitFor(() => expect(primaryAction()).toBe('record_quotation_outcome'));
-      expect(screen.queryByText('แก้ใบเสนอราคา')).toBeNull();
+      expect(await reviseMenuItem()).toBeNull();
       expect(quotationMeta.canReviseDealQuotation).toHaveBeenCalled();
     });
 
@@ -3922,15 +3938,14 @@ describe('TicketDetailPage', () => {
       prOriginDeal();
       renderTicketDetailPage(salesOwnerUser);
       await settle();
-      expect(primaryAction()).not.toBe('revise_quotation');
+      expect(await reviseMenuItem()).toBeNull();
     });
 
-    it('negative: a sales rep who does NOT own the quotation never sees แก้ใบเสนอราคา and createRevision is never reachable', async () => {
+    it('negative: a sales rep who does NOT own the quotation never sees แก้ใบเสนอราคา', async () => {
       prOriginDeal({ rows: [quotationRow({ salesRepId: 99 })] });
       renderTicketDetailPage(salesOwnerUser);
       await settle();
-      expect(primaryAction()).not.toBe('revise_quotation');
-      expect(screen.queryByText('แก้ใบเสนอราคา')).toBeNull();
+      expect(await reviseMenuItem()).toBeNull();
       expect(api.dealQuotations.createRevision).not.toHaveBeenCalled();
     });
 
@@ -3938,26 +3953,27 @@ describe('TicketDetailPage', () => {
       ['the CEO', ceoUser],
       ['sales_manager', salesManagerUser],
       ['account', accountUser],
-    ])('negative: %s never gets the revise CTA, even on a deal whose quotation is revisable', async (_label, user) => {
+    ])('negative: %s never gets the revise action, even on a deal whose quotation is revisable', async (_label, user) => {
       prOriginDeal();
       renderTicketDetailPage(user);
       await settle();
       expect(primaryAction()).not.toBe('revise_quotation');
-      expect(screen.queryByText('แก้ใบเสนอราคา')).toBeNull();
+      expect(await reviseMenuItem()).toBeNull();
     });
 
-    it('negative: no approved/issued quotation (only a DRAFT live one) -> no revise CTA, the submit CTA stays', async () => {
+    it('negative: no approved/issued quotation (only a DRAFT live one) -> no revise action, the submit CTA stays', async () => {
       api.tickets.get.mockResolvedValue({
-        ticket: buildTicket({ summary: { lifecycle: 'ACTIVE', salesStage: 'PRESENTATION', status: 'draft', createdById: 1, liveDirectQuotation: { id: 77, number: 'QT-2026-0077-1', docStatus: 'DRAFT', recipientType: 'DESIGNER' } } }),
+        ticket: buildTicket({ summary: { lifecycle: 'ACTIVE', salesStage: 'QUOTE_OWNER', status: 'draft', createdById: 1, liveDirectQuotation: { id: 77, number: 'QT-2026-0077-1', docStatus: 'DRAFT', recipientType: 'DESIGNER' } } }),
       });
       api.tickets.actions.mockResolvedValue({
-        currentState: { lifecycle: 'ACTIVE', salesStage: 'PRESENTATION', paymentStatus: null, fulfillmentStatus: null, status: 'draft' },
+        currentState: { lifecycle: 'ACTIVE', salesStage: 'QUOTE_OWNER', paymentStatus: null, fulfillmentStatus: null, status: 'draft' },
         availableActions: [],
       });
       api.dealQuotations.listForTicket.mockResolvedValue({ items: [quotationRow({ id: 77, origin: 'DEAL_DIRECT', docStatus: 'DRAFT' })] });
       renderTicketDetailPage(salesOwnerUser);
       await waitFor(() => expect(primaryAction()).toBe('submit_direct_quotation'));
-      expect(screen.queryByText('แก้ใบเสนอราคา')).toBeNull();
+      await settle();
+      expect(await reviseMenuItem()).toBeNull();
     });
 
     it('cascade order unchanged: a still-draft deal with an APPROVED direct quotation keeps ยืนยันคำสั่งซื้อ as its primary', async () => {
@@ -3974,20 +3990,22 @@ describe('TicketDetailPage', () => {
       await waitFor(() => expect(primaryAction()).toBe('confirm_order_direct'));
     });
 
-    it('an open revision draft exists -> label "ไปที่ฉบับแก้ไข", opens that draft, and createRevision is NOT called', async () => {
+    it('an open revision draft exists -> menu item reads "ไปที่ฉบับแก้ไข", opens that draft, and createRevision is NOT called', async () => {
       prOriginDeal({
         rows: [quotationRow(), quotationRow({ id: 81, number: 'QT-2026-0080-2', docStatus: 'DRAFT', revisionNo: 2, parentQuotationId: 80 })],
       });
       renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
-      await waitFor(() => expect(primaryAction()).toBe('revise_quotation'));
-      expect(primary().textContent).toContain('ไปที่ฉบับแก้ไข');
-      expect(primary().textContent).not.toContain('แก้ใบเสนอราคา');
-      fireEvent.click(primary());
+      await settle();
+      const item = await reviseMenuItem();
+      expect(item).not.toBeNull();
+      expect(item.textContent).toContain('ไปที่ฉบับแก้ไข');
+      expect(item.textContent).not.toContain('แก้ใบเสนอราคา');
+      fireEvent.click(item);
       await waitFor(() => expect(screen.getByTestId('location-probe').textContent).toBe('/quotations/81'));
       expect(api.dealQuotations.createRevision).not.toHaveBeenCalled();
     });
 
-    it('repeatable: once the revision is APPROVED the CTA is offered again, against the NEW head', async () => {
+    it('repeatable: once the revision is APPROVED the action is offered again, against the NEW head', async () => {
       prOriginDeal({
         rows: [
           quotationRow({ docStatus: 'SUPERSEDED' }),
@@ -3996,8 +4014,8 @@ describe('TicketDetailPage', () => {
       });
       api.dealQuotations.createRevision.mockResolvedValue({ quotation: quotationRow({ id: 95, docStatus: 'DRAFT', parentQuotationId: 88 }) });
       renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
-      await waitFor(() => expect(primaryAction()).toBe('revise_quotation'));
-      fireEvent.click(primary());
+      await settle();
+      fireEvent.click(await reviseMenuItem());
       await waitFor(() => expect(api.dealQuotations.createRevision).toHaveBeenCalledWith(88));
       await waitFor(() => expect(screen.getByTestId('location-probe').textContent).toBe('/quotations/95'));
     });
@@ -4007,8 +4025,8 @@ describe('TicketDetailPage', () => {
       prOriginDeal();
       const showToast = vi.fn();
       renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser, showToast);
-      await waitFor(() => expect(primaryAction()).toBe('revise_quotation'));
-      fireEvent.click(primary());
+      await settle();
+      fireEvent.click(await reviseMenuItem());
       await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'มีฉบับแก้ไขของใบเสนอราคานี้อยู่แล้ว'));
       expect(screen.getByTestId('location-probe').textContent).toBe('/tickets/701');
     });

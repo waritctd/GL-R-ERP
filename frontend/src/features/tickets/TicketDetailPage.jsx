@@ -80,7 +80,7 @@ import {
   searchCatalog,
   stockSalePriceError,
 } from './ticketItemFields.jsx';
-import { resolveWorkState } from './workState.js';
+import { resolveWorkState, secondaryWorkActions } from './workState.js';
 
 // Ticket-detail IA rebuild Phase 1 (see
 // docs/ui-repair/02-information-architecture/TICKET_INFORMATION_ARCHITECTURE.md
@@ -1128,6 +1128,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     ? { quotationId: reviseCandidate.id, number: reviseCandidate.number, openDraftId: openRevisionDraft?.id }
     : null;
   const workState = resolveWorkState(user, summary, pricingRequests, { reviseTarget });
+  // PR A: at the owner/buyer quote stages revise is an ADDITIONAL action (header "⋯" menu), never a
+  // replacement for the primary บันทึกผลใบเสนอราคา — the client may simply accept the original.
+  const reviseSecondary = secondaryWorkActions(user, summary, pricingRequests, { reviseTarget })[0] ?? null;
   const workStateAction = workState.action;
   let stickyPrimaryLabel = nextAction;
   let stickyPrimaryAction = primaryAction;
@@ -1425,6 +1428,14 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     },
     canHoldDeal && { key: 'hold', label: 'พักดีลไว้', disabled: actionLoading, onSelect: handleOpenHold },
     canDormantDeal && { key: 'dormant', label: 'พัก dormant', disabled: actionLoading, onSelect: handleOpenDormant },
+    reviseSecondary && {
+      key: 'reviseQuotation',
+      label: reviseSecondary.label,
+      icon: 'pencil',
+      disabled: reviseQuotationMutation.isPending,
+      onSelect: () => (reviseSecondary.to ? navigate(reviseSecondary.to) : reviseQuotationMutation.mutate(reviseSecondary.quotationId)),
+      testId: 'deal-quotation-revise',
+    },
     can.revise && { key: 'revise', label: 'ขอแก้ไข', icon: 'pencil', onSelect: handleOpenRevise },
   ].filter(Boolean);
 

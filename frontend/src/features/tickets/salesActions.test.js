@@ -352,12 +352,10 @@ describe('nextSalesAction — REVISE_QUOTATION (PR A)', () => {
   });
 
   it.each(['QUOTE_OWNER', 'QUOTE_BUYER'])(
-    'an issued PR-origin quotation at %s -> REVISE_QUOTATION, not the RECORD_QUOTATION_OUTCOME dead end',
+    'an issued PR-origin quotation at %s keeps RECORD_QUOTATION_OUTCOME as the primary even with a reviseTarget (revise is a SECONDARY action — see workState secondaryWorkActions)',
     (salesStage) => {
       const deal = baseDeal({ salesStage });
-      expect(nextSalesAction(deal, [issuedPr()], { reviseTarget: target })).toMatchObject({
-        key: REVISE, label: 'แก้ใบเสนอราคา', quotationId: 90,
-      });
+      expect(nextSalesAction(deal, [issuedPr()], { reviseTarget: target })).toMatchObject({ key: SALES_ACTION.RECORD_QUOTATION_OUTCOME });
     },
   );
 
@@ -374,15 +372,15 @@ describe('nextSalesAction — REVISE_QUOTATION (PR A)', () => {
     expect(nextSalesAction(past, [], {})?.key).not.toBe(REVISE);
   });
 
-  it('an earlier unblocked step still wins: CONFIRM_ORDER (accepted PR) outranks a revise at the owner stage', () => {
+  it('an accepted PR (CONFIRM_ORDER) still wins at the owner stage', () => {
     const deal = baseDeal({ salesStage: 'QUOTE_OWNER' });
     const prs = [issuedPr(), { id: 6, ticketId: 1, status: 'QUOTATION_ACCEPTED', orderConfirmedAt: null }];
     expect(nextSalesAction(deal, prs, { reviseTarget: target })).toMatchObject({ key: SALES_ACTION.CONFIRM_ORDER });
   });
 
-  it('open revision draft exists -> same bucket, label "ไปที่ฉบับแก้ไข", pointing at the draft (never mints a second one)', () => {
-    const deal = baseDeal({ salesStage: 'QUOTE_OWNER' });
-    expect(nextSalesAction(deal, [issuedPr()], { reviseTarget: { ...target, openDraftId: 91 } })).toMatchObject({
+  it('APPROVED-direct-past-draft with an open revision draft -> label "ไปที่ฉบับแก้ไข", pointing at the draft (never mints a second one)', () => {
+    const deal = baseDeal({ status: 'quotation_issued', liveDirectQuotation: approvedDirect });
+    expect(nextSalesAction(deal, [], { reviseTarget: { ...target, openDraftId: 91 } })).toMatchObject({
       key: REVISE, label: 'ไปที่ฉบับแก้ไข', quotationId: 90, to: '/quotations/91',
     });
   });

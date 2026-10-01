@@ -266,11 +266,6 @@ export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = nul
     return { key: SALES_ACTION.CONFIRM_ORDER, label: ACTION_LABEL[SALES_ACTION.CONFIRM_ORDER] };
   }
 
-  // 3b. PR A: owner/buyer quote stages with an already-issued quotation — the rep's move is to
-  //    revise it for the new recipient, not to record an outcome that never applies there. The
-  //    caller resolves `reviseTarget` (ownership + status via canReviseDealQuotation).
-  if (reviseTarget && REVISE_STAGES.has(deal.salesStage)) return reviseAction(reviseTarget);
-
   // 4. The quotation went out to the customer but nobody has recorded what the customer said yet —
   //    canRecordCustomerQuotationOutcome's own gate (pricingRequestMeta.js) requires the customer
   //    quotation's docStatus to be ISSUED, but that document-level detail isn't available here (this
@@ -351,11 +346,11 @@ export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = nul
   return null;
 }
 
-const REVISE_STAGES = new Set(['QUOTE_OWNER', 'QUOTE_BUYER']);
+export const REVISE_STAGES = new Set(['QUOTE_OWNER', 'QUOTE_BUYER']);
 
 /** `target` = { quotationId, number, openDraftId? }. With an open revision draft the action points
  * at it (`to`) instead of minting a second one. */
-function reviseAction(target) {
+export function reviseAction(target) {
   const action = {
     key: SALES_ACTION.REVISE_QUOTATION,
     label: ACTION_LABEL[SALES_ACTION.REVISE_QUOTATION],
