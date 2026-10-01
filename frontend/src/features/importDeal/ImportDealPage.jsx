@@ -22,12 +22,20 @@ import { IMPORT_ACTION_LABELS, nextImportAction } from '../tickets/importActions
 const NOOP = () => {};
 
 /**
- * The three LEGACY deal-level transitions import performs on this page. `nextImportAction` routes
- * them here (importActions.js) because DealFulfilmentPanel — where they used to live — is closed to
- * import. `markIrSent` deliberately is NOT here (it routes to /fulfilment) and neither is
- * `recordDelivery` (delivery is Sales's; this page stays read-only for it).
+ * The LEGACY deal-level transitions import performs on this page (issue IR, mark IR sent, shipping,
+ * goods received). `nextImportAction` routes most of them here (importActions.js) because
+ * DealFulfilmentPanel — where they used to live — is closed to import. `markIrSent` is here too:
+ * /fulfilment's legacy section only links back to this page, so without it a legacy deal at
+ * IR_ISSUED could not advance anywhere. `recordDelivery` is NOT (delivery is Sales's; this page
+ * stays read-only for it).
  */
 const LEGACY_ACTIONS = {
+  // A deal whose IR went out the legacy one-shot way (no per-factory rows) has nowhere else to
+  // advance from IR_ISSUED: /fulfilment's legacy section only links back to this page.
+  markIrSent: {
+    call: (ticketId) => api.tickets.markIrSent(ticketId),
+    toast: 'ส่งคำขอนำเข้าแล้ว',
+  },
   issueImportRequest: {
     call: (ticketId) => api.tickets.issueImportRequest(ticketId),
     toast: 'ออกคำขอนำเข้าแล้ว',
