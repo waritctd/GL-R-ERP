@@ -174,7 +174,7 @@ public class FactoryQuoteRepository {
      * {@code status = 'DRAFT'} so a double click / race is a 0-row no-op (caller throws 409) and the
      * first contacted date can never be overwritten (no undo, no edit -- owner ruling R7).
      * {@code email_sent_at}/{@code sent_by} are kept in step with the new columns because older
-     * readers (and the V196 backfill's own reading of "sent") still key on them.
+     * readers (and the V195 backfill's own reading of "sent") still key on them.
      */
     public int markContacted(long quoteId, LocalDate contactedOn, String note, long actorId) {
         return jdbc.update("""

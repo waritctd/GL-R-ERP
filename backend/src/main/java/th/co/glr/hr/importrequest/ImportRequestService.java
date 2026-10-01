@@ -869,7 +869,7 @@ public class ImportRequestService {
         } else if (storedDerived != null) {
             quotationChanged = storedDerived[0] != freshDerived.minDays() || storedDerived[1] != freshDerived.maxDays();
         } else {
-            // Nothing records what this IR was built from (pre-V196 rows, and IRs first built from the
+            // Nothing records what this IR was built from (pre-V195 rows, and IRs first built from the
             // country default). Its live lead time only counts as a HAND edit if it differs from that
             // country default; an unedited default must not shadow a quotation value forever.
             LeadTimeDefaults.Range countryDefault = LeadTimeDefaults.forCountry(

@@ -102,7 +102,7 @@ Section title: **ราคาจากโรงงาน**, with one card per fa
 
 ## Open questions
 
-- None. Rulings closed 2026-10-01. Branch off `develop` (ruled 2026-10-01 after seeing develop is 105 commits ahead of main on these files); migrations start at **V196** (V195 is claimed by stock-lines slice 2).
+- None. Rulings closed 2026-10-01. Branch off `develop` (ruled 2026-10-01 after seeing develop is 105 commits ahead of main on these files); migration is **V195** (authored as V196; renumbered on owner ruling 2026-10-01 when stock-lines V195 was paused).
 
 ## Backend rulings (Ploy, 2026-10-01)
 
