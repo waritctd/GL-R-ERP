@@ -2209,7 +2209,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
           </div>
           {showCost && item.frozenLandedCostPerRequestedUnitThb != null ? (
             <span className="text-xs text-text-muted" data-testid={`pcr-ceo-cost-both-${item.id}`}>
-              ต้นทุน (ตามค่าที่ CEO ตั้ง): <code className="font-bold text-text">{formatCurrency(item.frozenLandedCostPerRequestedUnitThb, 'THB')}</code> / แผ่น
+              ต้นทุน (จากราคาฝ่ายนำเข้า): <code className="font-bold text-text">{formatCurrency(item.frozenLandedCostPerRequestedUnitThb, 'THB')}</code> / แผ่น
               {item.sqmPerPiece > 0
                 ? <> · <code className="font-bold text-text">{formatCurrency(round2(Number(item.frozenLandedCostPerRequestedUnitThb) / Number(item.sqmPerPiece)), 'THB')}</code> / ตร.ม.</>
                 : null}
