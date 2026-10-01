@@ -8,6 +8,21 @@ import { nextFulfilmentActionCode, nextImportAction } from './importActions.js';
 // importActions.js header). It named ProcurementFulfilmentPage until ebaf6888
 // deleted that page.
 describe('nextFulfilmentActionCode', () => {
+  it('offers issueImportRequest on a draft ticket once the deposit is in (no quotation_issued needed)', () => {
+    for (const paymentStatus of ['DEPOSIT_NOTICE_ISSUED', 'DEPOSIT_PAID']) {
+      expect(nextFulfilmentActionCode({ status: 'draft', fulfillmentStatus: null, paymentStatus })).toBe('issueImportRequest');
+    }
+    expect(nextFulfilmentActionCode({
+      status: 'draft', fulfillmentStatus: null, paymentStatus: 'CUSTOMER_CONFIRMED', depositPolicy: 'CREDIT_CUSTOMER',
+    })).toBe('issueImportRequest');
+  });
+  it('does NOT offer issueImportRequest on a draft ticket without a deposit (deposit floor stays)', () => {
+    expect(nextFulfilmentActionCode({ status: 'draft', fulfillmentStatus: null, paymentStatus: null })).toBeNull();
+    expect(nextFulfilmentActionCode({ status: 'draft', fulfillmentStatus: null, paymentStatus: 'CUSTOMER_CONFIRMED', depositPolicy: 'REQUIRED' })).toBeNull();
+  });
+  it('does not re-offer issueImportRequest once a fulfilment status exists, even on a draft ticket', () => {
+    expect(nextFulfilmentActionCode({ status: 'draft', fulfillmentStatus: 'IR_ISSUED', paymentStatus: 'DEPOSIT_PAID' })).toBeNull();
+  });
   it('walks the linear fulfilment chain in order', () => {
     expect(nextFulfilmentActionCode({ status: 'quotation_issued', fulfillmentStatus: null })).toBe('issueImportRequest');
     expect(nextFulfilmentActionCode({ status: 'quotation_issued', fulfillmentStatus: 'IR_ISSUED' })).toBe('markIrSent');

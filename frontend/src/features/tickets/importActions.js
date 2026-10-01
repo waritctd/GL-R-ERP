@@ -50,6 +50,16 @@ export const IMPORT_ACTION_LABELS = {
 // PARTIALLY_DELIVERED mid-delivery).
 const DELIVERY_READY_FULFILMENT_STATUSES = ['GOODS_RECEIVED', 'FROM_STOCK', 'PARTIALLY_DELIVERED'];
 
+const DEPOSIT_POLICY_BYPASSES_NOTICE = new Set(['NOT_REQUIRED', 'WAIVED', 'CREDIT_CUSTOMER']);
+
+/** Mirrors TicketService#requireImportRequestIssuable's deposit condition: a deposit notice
+ * issued or the deposit paid, or a deposit-exempt policy whose customer has confirmed. */
+function importDepositReady(ticket) {
+  return ticket?.paymentStatus === 'DEPOSIT_NOTICE_ISSUED'
+    || ticket?.paymentStatus === 'DEPOSIT_PAID'
+    || (DEPOSIT_POLICY_BYPASSES_NOTICE.has(ticket?.depositPolicy) && ticket?.paymentStatus === 'CUSTOMER_CONFIRMED');
+}
+
 /**
  * The fulfilment-chain-only decision — mirrors DealFulfilmentPanel's
  * `issueImportRequest` / `markIrSent` / `markShipping` / `markGoodsReceived`
@@ -64,7 +74,10 @@ const DELIVERY_READY_FULFILMENT_STATUSES = ['GOODS_RECEIVED', 'FROM_STOCK', 'PAR
 export function nextFulfilmentActionCode(ticket) {
   const st = ticket?.status;
   const fs = ticket?.fulfillmentStatus ?? null;
-  if (st === 'quotation_issued' && fs == null) return 'issueImportRequest';
+  // Issuing the IR is gated on the DEPOSIT, not on the ticket reaching quotation_issued (owner
+  // ruling 2026-10-01; mirrors TicketService#requireImportRequestIssuable). quotation_issued keeps
+  // its prior behaviour; any other status needs the deposit condition itself.
+  if (fs == null && (st === 'quotation_issued' || importDepositReady(ticket))) return 'issueImportRequest';
   if (st === 'quotation_issued' && fs === 'IR_ISSUED') return 'markIrSent';
   if (st === 'quotation_issued' && fs === 'IR_SENT') return 'markShipping';
   if (st === 'quotation_issued' && fs === 'SHIPPING') return 'markGoodsReceived';

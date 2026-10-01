@@ -1019,9 +1019,12 @@ public class TicketService {
             || depositPolicyBypassesNotice
             || (allowAdvancedPayment
                 && ("AWAITING_FINAL_PAYMENT".equals(s.paymentStatus()) || "FULLY_PAID".equals(s.paymentStatus())));
-        if (!TicketStatus.QUOTATION_ISSUED.equals(s.status()) || !depositReady) {
+        // Gated on the deposit ALONE (owner ruling 2026-10-01): the ticket's legacy status is no
+        // longer required to be quotation_issued — the redesigned pricing chain does not always
+        // advance it, and a deal whose deposit is in hand must be able to import.
+        if (!depositReady) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ออกใบขอนำเข้า (IR) ได้เฉพาะเมื่อออกใบเสนอราคาแล้วและรับชำระมัดจำแล้ว (หรือได้รับการยกเว้นมัดจำ) เท่านั้น");
+                "ออกใบขอนำเข้า (IR) ได้เฉพาะเมื่อรับชำระมัดจำแล้ว (หรือได้รับการยกเว้นมัดจำ) เท่านั้น");
         }
     }
 
