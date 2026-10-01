@@ -340,8 +340,67 @@ class ImportRequestLeadTimeFromPricingRequestIntegrationTest extends AbstractPos
         assertThat(v2.leadTimeMaxDays()).isEqualTo(120);
     }
 
+    // ── revise with no stored derived value (country-default IRs, pre-V196 rows) ─────────────
+
+    /**
+     * (a) An IR first built from the COUNTRY DEFAULT (the quotation had no lead time) must pick up a
+     * quotation lead time that appears later, and keep it on the following revise. The "new quotation"
+     * is SQL-seeded rather than approved through DealQuotationService: that service needs a dozen
+     * collaborators (signatures, approver snapshots, numbering) to approve one, while revise reads
+     * nothing but the sales.quotation / quotation_item rows, which is exactly what is seeded.
+     */
+    @Test
+    void revise_anIrBuiltFromTheCountryDefault_picksUpALaterQuotationLeadTime_andKeepsItOnTheNextRevise() {
+        long[] d = issuedPrRouteIr("D6", null, null); // CN default 30-45
+        jdbc.update("UPDATE sales.quotation_item SET lead_time_min_days = 100, lead_time_max_days = 120 WHERE quotation_id = :q",
+            Map.of("q", d[2]));
+
+        ImportRequestDto v2 = service.revise(d[0], owner);
+        assertThat(v2.leadTimeMinDays()).isEqualTo(100);
+        assertThat(v2.leadTimeMaxDays()).isEqualTo(120);
+
+        service.issue(v2.id(), null, owner);
+        ImportRequestDto v3 = service.revise(v2.id(), owner);
+        assertThat(v3.leadTimeMinDays()).isEqualTo(100);
+        assertThat(v3.leadTimeMaxDays()).isEqualTo(120);
+    }
+
+    /** (b) A row with NO stored derived value and a HAND-edited lead time (differs from the default) keeps it. */
+    @Test
+    void revise_withNoStoredDerivedValue_keepsALeadTimeThatDiffersFromTheCountryDefault() {
+        long[] d = issuedPrRouteIr("D6b", 40, 60);
+        service.setLeadTime(d[0], new SetLeadTimeRequest(55, 66), importUser);
+        clearDerived(d[0]); // pre-V196 shape
+        jdbc.update("UPDATE sales.quotation_item SET lead_time_min_days = 100, lead_time_max_days = 120 WHERE quotation_id = :q",
+            Map.of("q", d[2]));
+
+        ImportRequestDto v2 = service.revise(d[0], owner);
+
+        assertThat(v2.leadTimeMinDays()).isEqualTo(55);
+        assertThat(v2.leadTimeMaxDays()).isEqualTo(66);
+    }
+
+    /** (c) A pre-V196-shaped row whose lead time still EQUALS the country default takes the fresh quotation value. */
+    @Test
+    void revise_withNoStoredDerivedValue_andALeadTimeEqualToTheCountryDefault_takesTheFreshQuotationValue() {
+        long[] d = issuedPrRouteIr("D6c", null, null); // CN default 30-45, never edited
+        clearDerived(d[0]);
+        jdbc.update("UPDATE sales.quotation_item SET lead_time_min_days = 100, lead_time_max_days = 120 WHERE quotation_id = :q",
+            Map.of("q", d[2]));
+
+        ImportRequestDto v2 = service.revise(d[0], owner);
+
+        assertThat(v2.leadTimeMinDays()).isEqualTo(100);
+        assertThat(v2.leadTimeMaxDays()).isEqualTo(120);
+    }
+
+    private void clearDerived(long irId) {
+        jdbc.update("UPDATE sales.import_request SET derived_lead_time_min_days = NULL, derived_lead_time_max_days = NULL WHERE import_request_id = :id",
+            Map.of("id", irId));
+    }
+
     /** Builds a one-factory PR-route deal whose quotation carries {@code min-max}, creates and ISSUES its IR. Returns {irId, prId, quotationId}. */
-    private long[] issuedPrRouteIr(String tag, int min, int max) {
+    private long[] issuedPrRouteIr(String tag, Integer min, Integer max) {
         insertFactory(tag + " Factory", "CN");
         long ticket = insertTicket("CR1-" + tag);
         long t1 = insertTicketItem(ticket, tag + " Factory", "Line 1", 0, null);
@@ -350,7 +409,9 @@ class ImportRequestLeadTimeFromPricingRequestIntegrationTest extends AbstractPos
         long q = insertQuotation(ticket, "PRICING_REQUEST", "ACCEPTED", pr);
         insertQuotationItem(q, p1, null, min, max);
         ImportRequestDto v1 = service.createDrafts(ticket, null, owner).get(0);
-        assertThat(v1.leadTimeMinDays()).isEqualTo(min);
+        if (min != null) {
+            assertThat(v1.leadTimeMinDays()).isEqualTo(min);
+        }
         service.issue(v1.id(), null, owner);
         return new long[] {v1.id(), pr, q};
     }

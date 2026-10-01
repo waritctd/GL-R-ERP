@@ -46,7 +46,7 @@ public class LeadTimeChangeService {
     private static final Set<String> DEAD_REQUEST_STATUSES = Set.of(
         PricingRequestStatus.CANCELLED, PricingRequestStatus.SUPERSEDED);
     private static final Set<String> DEAD_QUOTE_STATUSES = Set.of(
-        FactoryQuoteStatus.CANCELLED, FactoryQuoteStatus.SUPERSEDED);
+        FactoryQuoteStatus.CANCELLED, FactoryQuoteStatus.SUPERSEDED, FactoryQuoteStatus.NOT_AVAILABLE);
     private static final int REASON_MAX = 1000;
     // pricing_request_item.lead_time_*_days is SMALLINT; 10 years is well past any real lead time.
     private static final int MAX_DAYS = 3650;

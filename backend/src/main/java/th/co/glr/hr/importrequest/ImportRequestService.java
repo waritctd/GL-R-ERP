@@ -863,8 +863,22 @@ public class ImportRequestService {
                     it.qty(), it.unit(), it.note(), it.color(), it.texture(), it.brand(), it.model()))
                 .toList());
         int[] storedDerived = stored.findDerivedLeadTime(issued.id()).orElse(null);
-        boolean quotationChanged = freshDerived != null && storedDerived != null
-            && (storedDerived[0] != freshDerived.minDays() || storedDerived[1] != freshDerived.maxDays());
+        boolean quotationChanged;
+        if (freshDerived == null) {
+            quotationChanged = false;
+        } else if (storedDerived != null) {
+            quotationChanged = storedDerived[0] != freshDerived.minDays() || storedDerived[1] != freshDerived.maxDays();
+        } else {
+            // Nothing records what this IR was built from (pre-V196 rows, and IRs first built from the
+            // country default). Its live lead time only counts as a HAND edit if it differs from that
+            // country default; an unedited default must not shadow a quotation value forever.
+            LeadTimeDefaults.Range countryDefault = LeadTimeDefaults.forCountry(
+                freshFactoryLookup(issued.factoryId()).map(FactoryConfigDto::country).orElse(null));
+            boolean handEdited = issued.leadTimeMinDays() != null && issued.leadTimeMaxDays() != null
+                && (countryDefault == null || issued.leadTimeMinDays() != countryDefault.minDays()
+                    || issued.leadTimeMaxDays() != countryDefault.maxDays());
+            quotationChanged = !handEdited;
+        }
         Integer revisedMin = quotationChanged ? freshDerived.minDays() : issued.leadTimeMinDays();
         Integer revisedMax = quotationChanged ? freshDerived.maxDays() : issued.leadTimeMaxDays();
         long revisionId = stored.insertDraft(issued.ticketId(), issued.factoryId(), issued.factoryName(),

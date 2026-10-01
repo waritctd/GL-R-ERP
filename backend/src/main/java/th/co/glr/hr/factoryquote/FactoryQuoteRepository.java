@@ -230,12 +230,12 @@ public class FactoryQuoteRepository {
      */
     public int cancelOpenForPricingRequest(long pricingRequestId, String reason, long actorId) {
         int cancelled = cancelOpenQuoteRows(pricingRequestId, reason, actorId);
-        if (cancelled > 0) {
-            // CR-1: pending lead-time changes on the dead request's quotes are withdrawn with them.
-            jdbc.update(th.co.glr.hr.pricingrequest.LeadTimeChangeRepository.AUTO_WITHDRAW_SQL
-                .formatted("c.pricing_request_id = :pricingRequestId"), Map.of("pricingRequestId", pricingRequestId,
-                    "autoReason", th.co.glr.hr.pricingrequest.LeadTimeChangeRepository.AUTO_WITHDRAW_REASON));
-        }
+        // CR-1: pending lead-time changes on the dead request are withdrawn with it. Unconditional: a
+        // change can be PENDING even when this call cancelled no quote row (e.g. the quotes were
+        // already NOT_AVAILABLE).
+        jdbc.update(th.co.glr.hr.pricingrequest.LeadTimeChangeRepository.AUTO_WITHDRAW_SQL
+            .formatted("c.pricing_request_id = :pricingRequestId"), Map.of("pricingRequestId", pricingRequestId,
+                "autoReason", th.co.glr.hr.pricingrequest.LeadTimeChangeRepository.AUTO_WITHDRAW_REASON));
         return cancelled;
     }
 
@@ -462,6 +462,17 @@ public class FactoryQuoteRepository {
     }
 
     public int markNotAvailable(long quoteId, String reason, long actorId) {
+        int rows = markNotAvailableRows(quoteId, reason, actorId);
+        if (rows > 0) {
+            // CR-1: the quote is retired (still "current", but dead), so a change raised on it dies too.
+            jdbc.update(th.co.glr.hr.pricingrequest.LeadTimeChangeRepository.AUTO_WITHDRAW_SQL
+                .formatted("c.factory_quote_id = :quoteId"), Map.of("quoteId", quoteId,
+                    "autoReason", th.co.glr.hr.pricingrequest.LeadTimeChangeRepository.AUTO_WITHDRAW_REASON));
+        }
+        return rows;
+    }
+
+    private int markNotAvailableRows(long quoteId, String reason, long actorId) {
         return jdbc.update("""
             UPDATE sales.factory_quote
                SET status = 'NOT_AVAILABLE',

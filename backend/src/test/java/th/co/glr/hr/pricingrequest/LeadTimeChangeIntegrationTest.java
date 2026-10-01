@@ -404,6 +404,66 @@ class LeadTimeChangeIntegrationTest extends Cr1FixtureSupport {
         assertLeadTime(a2, 150, 180);
     }
 
+    // ── round 3 ──────────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Cancelling the request withdraws its pending change even when NO quote row is cancelled by that
+     * call (here the only quotes are already NOT_AVAILABLE, so the cancel cascade touches none).
+     */
+    @Test
+    void cancellingTheRequestAutoWithdrawsThePendingChange_evenWhenNoQuoteRowWasCancelled() {
+        LeadTimeChangeDto change = leadTimeChangeService.create(quoteA.id(), body("r1", line(a1, 100, 120)), importActor);
+        jdbc.update("UPDATE sales.factory_quote SET status = 'NOT_AVAILABLE' WHERE pricing_request_id = :id",
+            java.util.Map.of("id", prId));
+
+        pricingRequestService.cancel(prId, new PricingRequestRequests.CancelPricingRequestRequest("ลูกค้ายกเลิก"), salesActor);
+
+        assertAutoWithdrawn(change.id());
+        assertLeadTime(a1, 30, 45);
+    }
+
+    /** Superseding the request (customer-change revision) withdraws its pending change. */
+    @Test
+    void supersedingTheRequestAutoWithdrawsThePendingChange() {
+        LeadTimeChangeDto change = leadTimeChangeService.create(quoteA.id(), body("r1", line(a1, 100, 120)), importActor);
+        long replacement = pricingRequestService.createDraft(ticketId, request(line("A-1", "Factory A", 10, 30, 45, null, null)),
+            salesActor).summary().id();
+
+        assertThat(pricingRequests.supersedeForCustomerRevision(prId, PricingRequestStatus.IMPORT_REVIEWING, replacement))
+            .isEqualTo(1);
+
+        assertAutoWithdrawn(change.id());
+    }
+
+    /** A NOT_AVAILABLE quote stays "current" but takes no new lead-time change. */
+    @Test
+    void createIsRefusedOnANotAvailableQuote() {
+        jdbc.update("UPDATE sales.factory_quote SET status = 'NOT_AVAILABLE' WHERE factory_quote_id = :id",
+            java.util.Map.of("id", quoteA.id()));
+
+        assertConflict(() -> leadTimeChangeService.create(quoteA.id(), body("r1", line(a1, 100, 120)), importActor));
+        assertThat(leadTimeChangeService.listForPricingRequest(prId, importActor)).isEmpty();
+    }
+
+    /** Marking the factory not available retires the quote, so its pending change is withdrawn. */
+    @Test
+    void markingTheQuoteNotAvailableAutoWithdrawsItsPendingChange() {
+        LeadTimeChangeDto change = leadTimeChangeService.create(quoteA.id(), body("r1", line(a1, 100, 120)), importActor);
+
+        factoryQuoteService.markNotAvailable(quoteA.id(),
+            new th.co.glr.hr.factoryquote.FactoryQuoteRequests.MarkNotAvailableRequest("โรงงานปิดสายการผลิต"), importActor);
+
+        assertAutoWithdrawn(change.id());
+    }
+
+    private void assertAutoWithdrawn(long changeId) {
+        LeadTimeChangeDto after = leadTimeChangeService.listForPricingRequest(prId, importActor).stream()
+            .filter(c -> c.id() == changeId).findFirst().orElseThrow();
+        assertThat(after.status()).isEqualTo(LeadTimeChangeStatus.WITHDRAWN);
+        assertThat(after.decisionReason()).isEqualTo("ใบราคาถูกแก้ไข — คำขอเดิมถูกยกเลิกอัตโนมัติ");
+        assertThat(eventCount(prId, PricingRequestEventKind.LEAD_TIME_CHANGE_WITHDRAWN)).isEqualTo(1L);
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────────────────────
 
     private long itemId(String model) {
