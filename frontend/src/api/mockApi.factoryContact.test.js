@@ -189,11 +189,13 @@ describe('mockApi.pricingRequests.receiveFactoryQuote — price entry locked unt
       .rejects.toMatchObject({ status: 409, message: expect.stringContaining('สกุลเงิน') });
   });
 
-  it('409s a different price unit than the line requested', async () => {
+  it('accepts ตร.ม. <-> แผ่น for a per-ตร.ม. line (factories sell on different terms), but 409s any other unit', async () => {
     const { quote } = await pcrWithDraftQuote();
     await api.pricingRequests.markFactoryQuoteContacted(quote.id, { contactedOn: todayBangkok() });
-    await expect(api.pricingRequests.receiveFactoryQuote(quote.id, receivePayload(quote, { unitBasis: 'PER_PIECE', quotedUnit: 'PER_PIECE' })))
+    await expect(api.pricingRequests.receiveFactoryQuote(quote.id, receivePayload(quote, { unitBasis: 'PER_BOX', quotedUnit: 'PER_BOX' })))
       .rejects.toMatchObject({ status: 409, message: expect.stringContaining('หน่วยราคา') });
+    await expect(api.pricingRequests.receiveFactoryQuote(quote.id, receivePayload(quote, { unitBasis: 'PER_PIECE', quotedUnit: 'PER_PIECE' })))
+      .resolves.toBeTruthy();
   });
 
   it('accepts any currency/unit for a legacy line that carries no requested terms', async () => {
