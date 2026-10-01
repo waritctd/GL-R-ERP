@@ -1936,10 +1936,10 @@ describe('TicketDetailPage', () => {
 
     it('renders exactly one "ยืนยันคำสั่งซื้อ" control (the sticky primary), and clicking it confirms the order directly', async () => {
       api.tickets.get.mockResolvedValue({
-        ticket: buildTicket({ summary: { lifecycle: 'ACTIVE', salesStage: 'QUOTE_BUYER', createdById: 1 } }),
+        ticket: buildTicket({ summary: { lifecycle: 'ACTIVE', salesStage: 'QUOTE_BUYER', createdById: 1, status: 'draft' } }),
       });
       api.tickets.actions.mockResolvedValue({
-        currentState: { lifecycle: 'ACTIVE', salesStage: 'QUOTE_BUYER', paymentStatus: null, fulfillmentStatus: null, status: 'price_proposed' },
+        currentState: { lifecycle: 'ACTIVE', salesStage: 'QUOTE_BUYER', paymentStatus: null, fulfillmentStatus: null, status: 'draft' },
         availableActions: [],
       });
       api.pricingRequests.listForTicket.mockResolvedValue({

@@ -1880,6 +1880,7 @@ function buildPricingRequestSummary(pr) {
     projectName: ticket?.projectId ? (mockProjects.find((p) => p.id === ticket.projectId)?.name ?? null) : null,
     customerName: ticket?.customerName ?? null,
     ticketCreatedById: ticket?.createdById ?? null,
+    ticketStatus: ticket?.status ?? null,
     recipientType: pr.recipientType,
     recipientContactId: pr.recipientContactId ?? null,
     recipientLabel: pr.recipientLabel ?? null,

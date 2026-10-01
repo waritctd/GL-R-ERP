@@ -17,7 +17,7 @@ import {
 } from '../../utils/format.js';
 import { downloadBlob } from '../../utils/download.js';
 import {
-  canConfirmOrder, canCreateCustomerQuotation,
+  canConfirmOrder, confirmOrderBlockedReason, canCreateCustomerQuotation,
   canManageCustomerQuotation, canRecordCustomerQuotationOutcome, canViewCustomerQuotation,
   isCustomerQuotationEditable, pricingRequestRecipientLabel,
 } from '../pricingRequests/pricingRequestMeta.js';
@@ -280,7 +280,8 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticke
       if (pr && canConfirmOrder(user, pr)) {
         confirmOrder.mutate();
       } else {
-        showToast?.('error', 'ยังยืนยันคำสั่งซื้อไม่ได้ — ตรวจสอบสถานะคำขอราคาในส่วน "ราคาและใบเสนอราคา" ด้านล่าง');
+        showToast?.('error', confirmOrderBlockedReason(pr)
+          ?? 'ยังยืนยันคำสั่งซื้อไม่ได้ — ตรวจสอบสถานะคำขอราคาในส่วน "ราคาและใบเสนอราคา" ด้านล่าง');
       }
     },
     // salesActions.js's RECORD_QUOTATION_OUTCOME bucket fires off `pr.status === 'QUOTATION_ISSUED'`
@@ -460,13 +461,13 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticke
               </p>
             ) : (
               <p className="text-sm text-text-muted">
-                {pr.orderConfirmedAt
+                {confirmOrderBlockedReason(pr) ?? (pr.orderConfirmedAt
                   // Deposit-notice creation moved to DealDepositPanel's own
                   // "ใบแจ้งยอดมัดจำ" step (Phase 3 Slice S4 de-duplication —
                   // see docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md)
                   // — pointed at here rather than duplicated.
                   ? `ยืนยันคำสั่งซื้อแล้วเมื่อ ${formatThaiDate(pr.orderConfirmedAt)} — ออกใบแจ้งยอดเงินรับมัดจำได้ที่ส่วน "มัดจำ" ด้านล่าง`
-                  : 'ยืนยันคำสั่งซื้อได้เฉพาะเจ้าของดีล (sales)'}
+                  : 'ยืนยันคำสั่งซื้อได้เฉพาะเจ้าของดีล (sales)')}
               </p>
             )}
           </div>

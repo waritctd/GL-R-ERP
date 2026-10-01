@@ -7,6 +7,7 @@ import {
   canActOnPricingDecision,
   canCancelPricingRequest,
   canConfirmOrder,
+  confirmOrderBlockedReason,
   canCreateCommercialOnlyRevision,
   canCreateCustomerQuotation,
   canCreateDepositNoticeFromQuotation,
@@ -392,6 +393,31 @@ describe('canConfirmOrder', () => {
     expect(canConfirmOrder(salesOwner, pr({ status: 'QUOTATION_ACCEPTED', orderConfirmedAt: '2026-07-21T00:00:00Z' })))
       .toBe(false);
   });
+  it('rejects when the deal ticket sits in a status the bridge cannot advance (ticket-status gate)', () => {
+    for (const ticketStatus of ['approved', 'price_proposed', 'in_review', 'submitted', 'document_issued', 'closed', 'cancelled']) {
+      expect(canConfirmOrder(salesOwner, pr({ status: 'QUOTATION_ACCEPTED', ticketStatus }))).toBe(false);
+    }
+  });
+  it('allows the two ticket statuses the bridge handles, and an absent ticketStatus (server still guards)', () => {
+    for (const ticketStatus of ['draft', 'quotation_issued', null, undefined]) {
+      expect(canConfirmOrder(salesOwner, pr({ status: 'QUOTATION_ACCEPTED', ticketStatus }))).toBe(true);
+    }
+  });
+});
+
+describe('confirmOrderBlockedReason', () => {
+  it('names the ticket status when it is the blocker', () => {
+    expect(confirmOrderBlockedReason(pr({ status: 'QUOTATION_ACCEPTED', ticketStatus: 'approved' })))
+      .toContain('approved');
+  });
+  it('is null when the ticket status is bridgeable or unknown, or the PR is not accepted yet', () => {
+    expect(confirmOrderBlockedReason(pr({ status: 'QUOTATION_ACCEPTED', ticketStatus: 'draft' }))).toBeNull();
+    expect(confirmOrderBlockedReason(pr({ status: 'QUOTATION_ACCEPTED' }))).toBeNull();
+    expect(confirmOrderBlockedReason(pr({ status: 'DRAFT', ticketStatus: 'approved' }))).toBeNull();
+  });
+});
+
+describe('canConfirmOrder (roles)', () => {
   it('rejects a non-owning sales rep, ceo, and import', () => {
     const accepted = pr({ status: 'QUOTATION_ACCEPTED' });
     expect(canConfirmOrder(otherSales, accepted)).toBe(false);
