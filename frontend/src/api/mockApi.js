@@ -733,7 +733,7 @@ function buildSeedFormulaConfig() {
     insuranceBuffer: 1.07,
     costBuffer: 1.07,
     sellingBuffer: 1.07,
-    defaultMarginPct: 0.2,
+    defaultMarginPct: 0.3, // V197 (owner ruling 2026-10-01): default margin 20% -> 30%
     sellingPriceRoundUpTo: 10,
     isCurrent: true,
     effectiveFrom: '2026-01-01',
@@ -14777,6 +14777,16 @@ export const api = {
         const item = decision.items.find((i) => i.id === Number(itemPayload.pricingDecisionItemId));
         if (!item) fail(`รายการที่ ${itemPayload.pricingDecisionItemId} ไม่ได้เป็นของมติราคานี้`, 400);
         const touchesPriceOverride = itemPayload.sellingPriceOverride != null || itemPayload.clearSellingPriceOverride;
+        // 2026-10-01: listUnitPrice is accepted ONLY for stock lines (stockSource set) and 400s on
+        // an import line — mirrors PricingDecisionService#applyItemUpdates (touchesListPrice
+        // branch), which is why the page routes a CEO-typed ราคาตั้ง to sellingPriceOverride on
+        // import lines. NB: mock decision items do not carry stockSource today, so this mock
+        // treats every line as an import line; the stock path is exercised by the page's unit tests.
+        const touchesListPrice = itemPayload.listUnitPrice != null;
+        if (touchesListPrice) {
+          if (item.stockSource == null) fail('กรอกราคาตั้งได้เฉพาะรายการสินค้าจากสต็อก — รายการนำเข้าให้ปรับราคาตั้งเอง', 400);
+          if (Number(itemPayload.listUnitPrice) <= 0) fail('ราคาตั้งต้องมากกว่า 0', 400);
+        }
         if (itemPayload.sellingPriceOverride != null && itemPayload.clearSellingPriceOverride) {
           fail('ระบุราคาที่ปรับพร้อมกับล้างค่าที่ปรับในคำขอเดียวกันไม่ได้', 400);
         }
@@ -14786,9 +14796,10 @@ export const api = {
         if (itemPayload.sellingPriceOverride != null && Number(itemPayload.sellingPriceOverride) < 0) {
           fail('ราคาที่ปรับต้องไม่ติดลบ', 400);
         }
-        // Review finding #6: set + clear mutually exclusive, per field. listUnitPrice/
-        // clearListUnitPrice are GONE (owner correction 2026-09-19) — see updatePricingDecision's
-        // mockRefreshListAndNet-driven handling of marginPct below for why.
+        // Review finding #6: set + clear mutually exclusive, per field. clearListUnitPrice is still
+        // GONE, and listUnitPrice is a client input for STOCK lines only (2026-10-01; see the touchesListPrice guard above — an import line
+        // 400s it and prices through sellingPriceOverride instead). For import lines the list
+        // price stays server-derived (marginPct path below).
         [['discountPct', 'clearDiscountPct', 'ส่วนลด %'],
           ['specialPriceSqm', 'clearSpecialPriceSqm', 'ราคาพิเศษ บาท/ตร.ม.'],
           ['directNetPrice', 'clearDirectNetPrice', 'ราคาสุทธิต่อแผ่น']].forEach(([valueKey, clearKey, labelTh]) => {
@@ -14811,20 +14822,22 @@ export const api = {
         // Owner correction (2026-09-19): marginPct (the LEGACY margin-formula path, still a valid
         // request field) recomputes proposedSellingPricePerRequestedUnit exactly like
         // overridePricingDecisionItemCost/recalculatePricingDecisionCost do -- so listUnitPrice
-        // (never a client input any more, mirrors PricingDecisionService#applyItemUpdates) must be
-        // derived from THAT fresh figure here too, not the payload (which no longer carries one).
+        // (a client input for stock lines only; import lines never take one, mirrors
+        // PricingDecisionService#applyItemUpdates) must be derived from THAT fresh figure here
+        // too on the margin path, not the payload.
         const marginTouched = itemPayload.marginPct != null;
         const listUnitPriceNext = marginTouched
           ? (item.frozenLandedCostPerRequestedUnitThb == null
               ? null
               : round2(item.frozenLandedCostPerRequestedUnitThb * (1 + Number(itemPayload.marginPct))))
-          : item.listUnitPrice;
+          : touchesListPrice ? round2(Number(itemPayload.listUnitPrice))
+            : item.listUnitPrice;
         const touchesPriceModeFields = itemPayload.discountPct != null || itemPayload.clearDiscountPct
           || itemPayload.specialPriceSqm != null || itemPayload.clearSpecialPriceSqm
           || itemPayload.directNetPrice != null || itemPayload.clearDirectNetPrice;
         let netUnitPriceNext;
         let netUnitPriceTouched = false;
-        if (decision.priceMode != null && (touchesPriceModeFields || touchesPriceOverride || marginTouched)) {
+        if (decision.priceMode != null && (touchesPriceModeFields || touchesPriceOverride || marginTouched || touchesListPrice)) {
           if (touchesPriceModeFields && decision.priceMode == null) {
             fail('กรุณาเลือกวิธีกรอกราคา (priceMode) ก่อนกรอกราคาของรายการ', 400);
           }
