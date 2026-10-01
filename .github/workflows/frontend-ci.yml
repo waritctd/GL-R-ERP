@@ -15,11 +15,41 @@ name: Frontend CI
 #
 # Neither job here is a required check yet — that is a branch-protection setting, left to the
 # owner. This workflow is merely structurally ready for the promotion.
+#
+# ── SELECTIVE TESTS ON PULL REQUESTS (2026-10-01) ─────────────────────────────────────────
+# Lint and build always run when the frontend is touched. The Vitest step, though, no longer
+# always runs all ~2,700 tests on a PR. `.github/scripts/select-tests.mjs` picks a mode:
+#   full     — package.json / package-lock.json / vite or vitest config / src/test/** (setup
+#              and fixtures) / .env* / this workflow / the picker itself changed, OR any file
+#              under docs/api/ changed (status-catalog / api-surface are read through helpers), OR any file
+#              under frontend/ that is not .js/.jsx/.ts/.tsx/.json changed (CSS, HTML, assets:
+#              a dozen tests read those through fs, which the import graph cannot see), OR the
+#              PR carries the `full-ci` label, OR the PR targets `main` (merging to main
+#              deploys — owner ruling 2026-10-01), OR the base commit is unresolvable, OR the
+#              picker printed anything but a known mode → `npm test`.
+#   changed  — code-only diff → `vitest run --changed <base>` (tests whose import graph reaches
+#              a changed file) PLUS a second invocation for the tests that read source via fs,
+#              and src/api/serverContract.test.js whenever frontend code or a *Controller.java
+#              changed (it scans every screen via apiSurface.js), and every fs-reading test that PARSES a changed backend Java file
+#              (stageCatalog.test.js reads DealStage.java, and so on). Two invocations because
+#              a positional file filter RESTRICTS `--changed` rather than adding to it
+#              (verified against vitest 4.1, 2026-10-01).
+#   none     — nothing frontend-relevant changed.
+#
+# THE SAFETY NET: pushes to `develop` and `main` always run `npm test` in full, so a PR whose
+# selection missed a test is caught on the merge to develop. The picker is unit-tested
+# (select-tests.test.mjs) and fails SAFE to `mode=full` on any error. Add the `full-ci` label
+# to force the full run on a PR.
+#
+# `types:` lists the default three PLUS `labeled`, so adding `full-ci` to an open PR starts a
+# new run immediately; the concurrency group below cancels the in-flight selective run for the
+# same PR, which is the intended effect.
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
 
 # Least privilege, stated rather than inherited. The repo default is already read-only, but a
 # default is a setting someone can change from a web UI; this pins it in the file. Nothing in
@@ -122,7 +152,10 @@ jobs:
 
           # Two-dot: on a pull_request HEAD is the merge commit, so `BASE HEAD` is exactly the
           # PR's net effect on the base branch. On a push it is the pushed range.
-          CHANGED="$(git diff --name-only "$BASE" HEAD)"
+          # --no-renames so a move OUT of a sensitive directory (config/, common/, resources/)
+          # lists the source path as a delete, not a rename that hides it; quotePath=false so
+          # a non-ASCII path is printed as-is rather than octal-escaped.
+          CHANGED="$(git -c core.quotePath=false diff --no-renames --name-only "$BASE" HEAD)"
           echo "Changed files:"
           echo "$CHANGED"
 
@@ -139,11 +172,18 @@ jobs:
           # triaged into SERVER_ONLY rather than silently landing unreachable.
           # The Controller.java clause is kept as belt-and-braces: it costs one CI run and
           # catches the case where someone edits a controller without regenerating the digest.
-          if echo "$CHANGED" | grep -qE '^(frontend/|docs/api/|backend/src/main/java/.*Controller\.java$|\.github/workflows/frontend-ci\.yml$)'; then
+          # .github/scripts/ is the test picker: a change to it must run this suite too.
+          # backend/src/main/java/ as a whole (not only controllers) because a handful of
+          # frontend tests parse backend Java files through fs — stageCatalog.test.js reads
+          # DealStage.java — and a backend-only PR would otherwise never run them. The picker
+          # narrows this to the tests that actually mention the changed file.
+          if echo "$CHANGED" | grep -qE '^(frontend/|docs/api/|backend/src/main/java/|\.github/workflows/frontend-ci\.yml$|\.github/scripts/)'; then
             echo "frontend=true" >> "$GITHUB_OUTPUT"
           else
             echo "frontend=false" >> "$GITHUB_OUTPUT"
           fi
+          # Handed to the selection step below; empty means "unresolvable → full".
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
 
       - name: No frontend changes — nothing to lint or build
         if: steps.changes.outputs.frontend != 'true'
@@ -165,9 +205,80 @@ jobs:
         if: steps.changes.outputs.frontend == 'true'
         run: npm run lint
 
-      - name: Test (Vitest)
+      # F4: the picker's own unit tests run every time the picker is about to decide anything.
+      # They are cheap (<1s) and cannot be skipped by a green mode because they run BEFORE it.
+      - name: Test the test picker
         if: steps.changes.outputs.frontend == 'true'
+        working-directory: ${{ github.workspace }}
+        run: node --test '.github/scripts/**/*.test.mjs'
+
+      # See the header comment for the three modes. Runs from the repo root because the
+      # picker resolves paths relative to it; the paths it emits are relative to frontend/.
+      # Three layers of fail-safe, as in backend-ci: picker exception → full; picker cannot
+      # start → full; unknown mode → full (F3).
+      - name: Select frontend tests
+        id: select
+        if: steps.changes.outputs.frontend == 'true'
+        working-directory: ${{ github.workspace }}
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE: ${{ steps.changes.outputs.base }}
+          BASE_REF: ${{ github.base_ref }}
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: |
+          set -euo pipefail
+          SELECTION="$RUNNER_TEMP/frontend-selection.txt"
+          if [ -z "$BASE" ]; then
+            printf 'mode=full\nreason=base commit unresolvable — running the full frontend suite\nextra_test_files=\n' > "$SELECTION"
+          elif ! node .github/scripts/select-tests.mjs --side frontend --base "$BASE" --base-ref "$BASE_REF" \
+                 --event "$EVENT_NAME" --labels "$PR_LABELS" > "$SELECTION"; then
+            printf 'mode=full\nreason=select-tests.mjs could not run — falling back to the full frontend suite\nextra_test_files=\n' > "$SELECTION"
+          fi
+          MODE="$(sed -n 's/^mode=//p' "$SELECTION")"
+          case "$MODE" in
+            full|changed|none) ;;
+            *)
+              echo "::warning title=Unknown frontend test mode::picker printed mode='$MODE' — running the full suite."
+              printf 'mode=full\nreason=picker printed an unknown mode (%s) — running the full frontend suite\nextra_test_files=\n' "$MODE" > "$SELECTION"
+              MODE=full
+              ;;
+          esac
+          echo "── frontend test selection ──"
+          cat "$SELECTION"
+          cat "$SELECTION" >> "$GITHUB_OUTPUT"
+          REASON="$(sed -n 's/^reason=//p' "$SELECTION")"
+          echo "::notice title=Frontend tests: $MODE::$REASON"
+
+      # Gated on "not changed and not none" rather than "== full" so that an empty or
+      # unexpected mode — should the validation above ever be bypassed — still runs everything.
+      - name: Test (Vitest, full suite)
+        if: steps.changes.outputs.frontend == 'true' && steps.select.outputs.mode != 'changed' && steps.select.outputs.mode != 'none'
         run: npm test
+
+      # Two invocations, deliberately: `vitest run --changed BASE file...` treats the files as
+      # a filter ON the changed set (it found nothing when tried), so the fs-reading tests and
+      # the server-contract guard get their own run. An empty `--changed` set exits 0 with
+      # "No test files found", which is the correct verdict for, say, a docs/api-only PR.
+      - name: Test (Vitest, changed + fs-reading tests)
+        if: steps.changes.outputs.frontend == 'true' && steps.select.outputs.mode == 'changed'
+        env:
+          BASE: ${{ steps.changes.outputs.base }}
+          EXTRA_TEST_FILES: ${{ steps.select.outputs.extra_test_files }}
+        run: |
+          set -euo pipefail
+          echo "── vitest --changed $BASE ──"
+          npx vitest run --changed "$BASE"
+          if [ -n "$EXTRA_TEST_FILES" ]; then
+            read -r -a EXTRAS <<< "$EXTRA_TEST_FILES"
+            echo "── vitest (${#EXTRAS[@]} fs-reading / contract test files) ──"
+            npx vitest run "${EXTRAS[@]}"
+          fi
+
+      - name: Frontend-adjacent files changed, but none affect tests
+        if: steps.changes.outputs.frontend == 'true' && steps.select.outputs.mode == 'none'
+        env:
+          REASON: ${{ steps.select.outputs.reason }}
+        run: echo "::notice::$REASON — skipping Vitest."
 
       - name: Build
         if: steps.changes.outputs.frontend == 'true'
