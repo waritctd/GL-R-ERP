@@ -25,6 +25,9 @@ import th.co.glr.hr.commission.CommissionResponses.CommissionMonthlySummaryRespo
 import th.co.glr.hr.commission.CommissionResponses.CommissionRepOptionsResponse;
 import th.co.glr.hr.commission.CommissionResponses.CommissionSimulationResponse;
 import th.co.glr.hr.commission.CommissionResponses.PayrollSummaryResponse;
+import th.co.glr.hr.commission.CommissionResponses.PendingCommissionResponse;
+import th.co.glr.hr.commission.CommissionResponses.PendingCommissionsResponse;
+import th.co.glr.hr.ticket.ItemWeightMultiplierRequest;
 import th.co.glr.hr.common.ApiException;
 
 @RestController
@@ -151,6 +154,26 @@ public class CommissionController {
     ) {
         UserPrincipal user = sessions.requireUser(session);
         return new CommissionDetailResponse(commissionService.updateDeductions(id, request, user));
+    }
+
+    /** The sales manager's "รออนุมัติ" list: every SUBMITTED SALE commission, any payroll month. */
+    @GetMapping("/pending-approval")
+    @PreAuthorize("hasAnyRole('SALES_MANAGER','CEO')")
+    public PendingCommissionsResponse pendingApproval(HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new PendingCommissionsResponse(commissionService.listPendingApproval(user));
+    }
+
+    /** sales_manager re-weights a SUBMITTED commission's deal lines; see CommissionService#adjustItemWeights. */
+    @PostMapping("/{id}/item-weights")
+    @PreAuthorize("hasRole('SALES_MANAGER')")
+    public PendingCommissionResponse adjustItemWeights(
+        @PathVariable long id,
+        @Valid @RequestBody ItemWeightMultiplierRequest request,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new PendingCommissionResponse(commissionService.adjustItemWeights(id, request, user));
     }
 
     @PostMapping("/{id}/approve")

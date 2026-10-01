@@ -283,7 +283,9 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
 
         // ── Step 6.3: Account confirms the deposit paid ─────────────────────────────────
         BigDecimal payableBeforePayment = tickets.payableAmount(ticketId);
-        assertThat(payableBeforePayment).isEqualByComparingTo(acceptedQuotation.subtotalAmount());
+        // Payable is the VAT-INCLUSIVE grand total (owner ruling 2026-09-30), no longer the pre-VAT subtotal.
+        assertThat(payableBeforePayment).isEqualByComparingTo(acceptedQuotation.grandTotal());
+        assertThat(tickets.payableAmountExVat(ticketId)).isEqualByComparingTo(acceptedQuotation.subtotalAmount());
 
         TicketDto afterDeposit = ticketService.confirmDepositPaid(ticketId, accountActor);
         assertThat(afterDeposit.summary().paymentStatus()).isEqualTo("DEPOSIT_PAID");

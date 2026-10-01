@@ -3410,3 +3410,20 @@ describe('PricingRequestDetailPage blank-factory lines', () => {
     expect(screen.queryByLabelText('ระบุโรงงาน')).toBeNull();
   });
 });
+
+describe('PricingRequestDetailPage deal link', () => {
+  // Import cannot open /tickets/:id any more (the whole-deal GET 403s it) — its deal link must
+  // land on its OWN per-deal page instead. Sales/CEO keep the whole-deal page.
+  it('links import to /import/deals/:id, not the whole-deal page', async () => {
+    renderDetailPage({ user: importUser });
+    await waitForLoaded();
+    const link = screen.getByRole('link', { name: 'PR-2026-0701' });
+    expect(link.getAttribute('href')).toBe('/import/deals/701');
+  });
+
+  it('keeps the whole-deal link for sales', async () => {
+    renderDetailPage({ user: salesOwner });
+    await waitForLoaded();
+    expect(screen.getByRole('link', { name: 'PR-2026-0701' }).getAttribute('href')).toBe('/tickets/701');
+  });
+});

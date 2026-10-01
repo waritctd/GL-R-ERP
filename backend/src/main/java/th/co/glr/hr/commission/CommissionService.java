@@ -44,6 +44,7 @@ public class CommissionService {
     private static final Set<String> SUBMIT_ROLES = Set.of("account", "sales_manager", "ceo");
     private static final Set<String> CREATE_FROM_DEAL_ROLES = Set.of("account");
     private static final Set<String> MANAGER_ROLES = Set.of("sales_manager");
+    private static final Set<String> PENDING_VIEW_ROLES = Set.of("sales_manager", "ceo");
     private static final Set<String> CEO_ROLES = Set.of("ceo");
     private static final Set<String> PAYROLL_ROLES = Set.of("hr");
     // Who may read the commission list (GET /api/commissions). Matches the frontend's
@@ -140,7 +141,8 @@ public class CommissionService {
         );
         DealLinkage linkage = resolveDealLinkage(safeRequest);
         // V148 (per-item stock-commission weighting): computed and FROZEN here, once, from this
-        // ticket's items as they stand right now -- never recomputed after this. See
+        // ticket's items as they stand right now. Never recomputed after this EXCEPT by the sales
+        // manager's #adjustItemWeights while SUBMITTED (owner ruling 2026-10-01). See
         // #computeItemDerivedWeight's own Javadoc.
         Optional<BigDecimal> itemDerivedWeight =
             computeItemDerivedWeight(safeRequest.sourceTicketId(), calculation.actualReceived());
@@ -264,7 +266,7 @@ public class CommissionService {
         if (commissions.hasActiveCommissionForTicket(ticketId)) {
             throw new ApiException(HttpStatus.CONFLICT, "มีรายการค่าคอมมิชชั่นสำหรับดีลนี้อยู่แล้ว");
         }
-        BigDecimal effectiveGrossAmount = grossAmount != null ? grossAmount : tickets.payableAmount(ticketId);
+        BigDecimal effectiveGrossAmount = grossAmount != null ? grossAmount : tickets.payableAmountExVat(ticketId);
 
         SubmitCommissionRequest request = new SubmitCommissionRequest(
             ticketId,
@@ -295,7 +297,8 @@ public class CommissionService {
         DealLinkage linkage = resolveDealLinkage(request);
         // V148 (per-item stock-commission weighting): computed and FROZEN here, once, from this
         // SAME ticket already loaded above -- no second fetch needed, unlike submit()'s wrapper
-        // (which has no ticket in hand yet at this point). Never recomputed after this. Keyed on
+        // (which has no ticket in hand yet at this point). Never recomputed after this, except by the
+        // sales manager's #adjustItemWeights while SUBMITTED (owner ruling 2026-10-01). Keyed on
         // calculation.actualReceived() (post-deduction cash), not the raw grossAmount -- the same
         // figure #sumActiveWeightedActualReceived weights and submit()'s own call below uses.
         Optional<BigDecimal> itemDerivedWeight =
@@ -383,7 +386,7 @@ public class CommissionService {
             throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                 "ดีลนี้ยังไม่ถึงขั้นตอนรับชำระเงินครบถ้วน (CLOSED_PAID) จึงยังยื่นค่าคอมมิชชั่นไม่ได้");
         }
-        BigDecimal payable = tickets.payableAmount(ticketId);
+        BigDecimal payable = tickets.payableAmountExVat(ticketId);
         boolean mismatch = isMismatch(request.grossAmount(), payable);
         return new DealLinkage(payable, mismatch);
     }
@@ -398,11 +401,14 @@ public class CommissionService {
      * but resolving it here avoids a pointless {@code findById} call on the hot path every
      * manual/unlinked submission already takes today.
      *
-     * <p>Never called again for an existing record -- see {@code
+     * <p>Not called again for an existing record -- see {@code
      * sales.commission_record.effective_weight_multiplier}'s migration comment (V148) for why this
-     * must stay a one-time freeze, not a live recomputation: editing the ticket's items (a
-     * different {@code weight_multiplier}, a corrected {@code qty_from_stock}) after this point
-     * must never move an already-created commission record's money.
+     * is a freeze, not a live recomputation: editing the ticket's items (a different {@code
+     * weight_multiplier}, a corrected {@code qty_from_stock}) after this point must never move an
+     * already-created commission record's money. The ONE sanctioned exception is the sales
+     * manager's {@link #adjustItemWeights} while the record is still SUBMITTED (owner ruling
+     * 2026-10-01), which recomputes with the same {@code itemDerivedWeight} call; after
+     * MANAGER_APPROVED the weight is frozen again.
      */
     private Optional<BigDecimal> computeItemDerivedWeight(Long sourceTicketId, BigDecimal actualReceived) {
         if (sourceTicketId == null) {
@@ -433,6 +439,101 @@ public class CommissionService {
     }
 
     private record DealLinkage(BigDecimal payableSnapshot, boolean mismatch) {}
+
+    /**
+     * The sales manager's "รออนุมัติ" list: every SUBMITTED SALE record, any payroll month, oldest first.
+     * sales_manager and ceo only (checked here; the controller's {@code @PreAuthorize} is a second layer).
+     */
+    public List<PendingCommissionDto> listPendingApproval(UserPrincipal actor) {
+        if (!PENDING_VIEW_ROLES.contains(actor.role())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
+        return commissions.findSubmittedSaleRecords().stream().map(this::toPending).toList();
+    }
+
+    /**
+     * The sales manager re-weights a SUBMITTED commission's deal lines. This is the ONE sanctioned
+     * exception to "effective_weight_multiplier is frozen at creation" (owner ruling 2026-10-01): the
+     * blended weight is recomputed with the SAME {@link CommissionCalculator#itemDerivedWeight} call
+     * {@link #createFromDeal} uses, and only while the record is still SUBMITTED -- once it is
+     * MANAGER_APPROVED the weight is frozen again.
+     *
+     * <p>Every refusal is checked BEFORE any write (role, exists, kind/ticket, SUBMITTED, month open,
+     * lines, line ownership), so a refused call leaves nothing behind even without a transaction.
+     */
+    @Transactional
+    public PendingCommissionDto adjustItemWeights(
+            long id, th.co.glr.hr.ticket.ItemWeightMultiplierRequest request, UserPrincipal actor) {
+        if (!MANAGER_ROLES.contains(actor.role())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
+        CommissionRecord existing = requireRecord(id);
+        if (!CommissionKind.SALE.equals(existing.kind()) || existing.sourceTicketId() == null) {
+            throw new ApiException(HttpStatus.CONFLICT, "ปรับน้ำหนักได้เฉพาะรายการค่าคอมจากดีลขาย");
+        }
+        if (!CommissionStatus.SUBMITTED.equals(existing.status())) {
+            throw new ApiException(HttpStatus.CONFLICT, "ปรับน้ำหนักได้เฉพาะรายการที่รอผู้จัดการฝ่ายขายอนุมัติ");
+        }
+        requireCommissionPayrollMonthOpen(existing.payrollMonth());
+        List<th.co.glr.hr.ticket.ItemWeightMultiplierRequest.Line> lines =
+            request == null ? null : request.lines();
+        if (lines == null || lines.isEmpty()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุรายการสินค้า");
+        }
+        long ticketId = existing.sourceTicketId();
+        Set<Long> ownItemIds = new HashSet<>();
+        for (TicketItemDto item : tickets.findById(ticketId).map(TicketDto::items).orElse(List.of())) {
+            ownItemIds.add(item.id());
+        }
+        for (th.co.glr.hr.ticket.ItemWeightMultiplierRequest.Line line : lines) {
+            if (line == null || line.itemId() == null || line.weightMultiplier() == null
+                    || line.weightMultiplier() < 1 || line.weightMultiplier() > 3
+                    || !ownItemIds.contains(line.itemId())) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "รายการสินค้าไม่อยู่ในดีลนี้");
+            }
+        }
+
+        tickets.updateItemWeightMultipliers(ticketId, lines);
+        List<TicketItemDto> items = tickets.findById(ticketId).map(TicketDto::items).orElse(List.of());
+        Optional<BigDecimal> recomputed =
+            calculator.itemDerivedWeight(toItemStockWeightInputs(items), existing.actualReceived());
+        if (commissions.updateEffectiveWeightMultiplierIfSubmitted(id, recomputed.orElse(null)) == 0) {
+            throw new ApiException(HttpStatus.CONFLICT, "ปรับน้ำหนักได้เฉพาะรายการที่รอผู้จัดการฝ่ายขายอนุมัติ");
+        }
+        CommissionRecord after = requireRecord(id);
+        auditService.record(actor, "ADJUST_COMMISSION_ITEM_WEIGHTS", "commission_record", id, existing, after);
+        String ticketStatus = tickets.findSummaryById(ticketId).map(th.co.glr.hr.ticket.TicketSummaryDto::status).orElse(null);
+        tickets.addEvent(ticketId, actor.id(), actor.name(), th.co.glr.hr.ticket.TicketEventKind.EDITED,
+            ticketStatus, ticketStatus, "ผู้จัดการฝ่ายขายปรับน้ำหนักค่าคอมต่อรายการ " + lines.size() + " รายการ");
+        return toPending(after);
+    }
+
+    /**
+     * Builds one pending card. {@code estimatedCommission} is this record's marginal contribution to its
+     * rep's payroll month, composed only from existing calculator calls (same pattern as {@link #simulate}).
+     */
+    private PendingCommissionDto toPending(CommissionRecord record) {
+        Long ticketId = record.sourceTicketId();
+        var summary = ticketId == null ? Optional.<th.co.glr.hr.ticket.TicketSummaryDto>empty()
+            : tickets.findSummaryById(ticketId);
+        List<PendingCommissionItemDto> items = ticketId == null ? List.of() : commissions.findPendingItems(ticketId);
+        BigDecimal effectiveWeight = record.effectiveWeight();
+        BigDecimal received = record.actualReceived() == null ? BigDecimal.ZERO : record.actualReceived();
+        BigDecimal thisWeighted = received.multiply(effectiveWeight);
+        BigDecimal total = commissions.sumActiveWeightedActualReceived(record.salesRepId(), record.payrollMonth());
+        BigDecimal without = total.subtract(thisWeighted).max(BigDecimal.ZERO);
+        List<TierConfig> tiers = tiers();
+        BigDecimal estimated = calculator.progressiveCommission(calculator.monthlyTierBase(total), tiers)
+            .subtract(calculator.progressiveCommission(calculator.monthlyTierBase(without), tiers));
+        return new PendingCommissionDto(
+            record,
+            summary.map(th.co.glr.hr.ticket.TicketSummaryDto::code).orElse(null),
+            summary.map(th.co.glr.hr.ticket.TicketSummaryDto::customerName).orElse(null),
+            items,
+            effectiveWeight,
+            calculator.monthlyTierBase(thisWeighted).setScale(2, RoundingMode.HALF_UP),
+            estimated);
+    }
 
     @Transactional
     public CommissionRecord updateDeductions(long id, UpdateCommissionDeductionsRequest request, UserPrincipal actor) {
@@ -1196,7 +1297,7 @@ public class CommissionService {
                 "COMMISSION_PENDING_MANAGER",
                 "มีคำขอค่าคอมรออนุมัติ",
                 record.salesRepName() + " ส่งคำขอค่าคอม" + description,
-                "/commissions",
+                "/commissions?view=pending",
                 true
             );
         }

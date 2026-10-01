@@ -1,3 +1,4 @@
+/* Hallmark · genre: modern-minimal · macrostructure: Workbench · design-system: design.md · designed-as-app · pre-emit critique: P4 H4 E4 S4 R4 V5 */
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
@@ -31,8 +32,13 @@ import { dealQuotationStatusLabel } from './quotationMeta.js';
  * pipeline deal is priced through its คำขอราคา chain instead. The "สร้างใบเสนอราคา" link that used
  * to sit in this panel's header is gone; the list below is unchanged. TicketDetailPage still
  * passes `deal`/`user`; they are no longer read here.
+ *
+ * Slice 2 §D (SLICE-2-FLOW-A.md, owner-approved IA D2) restores a create affordance here — as the
+ * two-route choice (ผ่านคำขอราคา / ใบเสนอราคาตรง), built and gated by TicketDetailPage and handed in
+ * as `actions` (the Panel header's right side) plus one `note` line under the title. This panel
+ * only places them; it decides nothing about who may see them.
  */
-export function DealDirectQuotationPanel({ ticketId, showToast }) {
+export function DealDirectQuotationPanel({ ticketId, showToast, actions = null, note = null }) {
   const [downloadingKey, setDownloadingKey] = useState(null);
 
   const listQuery = useQuery({
@@ -58,17 +64,19 @@ export function DealDirectQuotationPanel({ ticketId, showToast }) {
   }
 
   return (
-    <Panel title="ใบเสนอราคา">
+    <Panel title="ใบเสนอราคา" actions={actions}>
+      {note ? <p className="m-0 mb-4 text-sm text-text-muted">{note}</p> : null}
       {listQuery.isLoading ? (
         <p className="text-xs text-text-muted">กำลังโหลด...</p>
       ) : rows.length === 0 ? (
         <EmptyState
           icon="fileText"
           title="ยังไม่มีใบเสนอราคา"
-          description="สร้างได้จากหน้า ใบเสนอราคา"
+          // Slice 2 §D: when this viewer has the route buttons, the way in is right above.
+          description={actions ? 'เริ่มจากปุ่มด้านบน — ผ่านคำขอราคา หรือใบเสนอราคาตรง' : 'สร้างได้จากหน้า ใบเสนอราคา'}
         />
       ) : (
-        <ul className="grid gap-2.5">
+        <ul className="m-0 grid list-none gap-2.5 p-0">
           {rows.map((q) => {
             const status = dealQuotationStatusLabel(q.docStatus);
             return (

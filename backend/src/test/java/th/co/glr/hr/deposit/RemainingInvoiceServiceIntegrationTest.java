@@ -557,12 +557,28 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
     }
 
     @Test
-    void read_ceoAndAccountAndSalesManager_canReadAndDownload_viewerRoleUnaffectedByTheWriteGate() {
+    void read_ceoAndAccountInScopeAndSalesManager_canReadAndDownload_viewerRoleUnaffectedByTheWriteGate() {
         DealFixture fixture = buildAcceptedDeal(salesActor, "AuthzRead3");
         RemainingInvoiceDocumentDto issued = remainingInvoiceService.issue(
             remainingInvoiceService.createDraft(fixture.ticketId(), null, salesActor).id(), salesActor);
 
+        // H1 lockdown: account is ROW-SCOPED to its list scope (live, S10+). Below S10 every read is refused;
+        // ceo and sales_manager are unaffected by the scope.
+        // (Below S10 AND no pending payment status: a deposit-notice-issued deal is in scope by the payment rule.)
+        setStage(fixture.ticketId(), "NEGOTIATION");
+        jdbc.update("UPDATE sales.ticket SET payment_status = NULL WHERE ticket_id = :id",
+            new org.springframework.jdbc.core.namedparam.MapSqlParameterSource("id", fixture.ticketId()));
+        assertThatThrownBy(() -> remainingInvoiceService.get(issued.id(), accountActor))
+            .isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        assertThatThrownBy(() -> remainingInvoiceService.file(issued.id(), accountActor))
+            .isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        assertThatThrownBy(() -> remainingInvoiceService.list(fixture.ticketId(), accountActor))
+            .isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
         assertThat(remainingInvoiceService.get(issued.id(), ceoActor).id()).isEqualTo(issued.id());
+        setStage(fixture.ticketId(), "PROCUREMENT");
         assertThat(remainingInvoiceService.get(issued.id(), accountActor).id()).isEqualTo(issued.id());
         // R1 fix (GLA-99 step 2 review-round-1): this test's own name has always promised
         // sales_manager too, but nothing here ever constructed or asserted that actor — the
@@ -903,6 +919,11 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
     private TicketItemRequest ticketItem(String brand, String model, String factory) {
         return new TicketItemRequest(brand, model, "White", "Matte", "60x60", factory,
             new BigDecimal("1"), null, "PIECE", null, null, null, null, "THB");
+    }
+
+    private void setStage(long ticketId, String stage) {
+        jdbc.update("UPDATE sales.ticket SET sales_stage = :s WHERE ticket_id = :id",
+            new org.springframework.jdbc.core.namedparam.MapSqlParameterSource("s", stage).addValue("id", ticketId));
     }
 
     private long createEmployee(EmployeeRepository employees, String nameTh, String email,

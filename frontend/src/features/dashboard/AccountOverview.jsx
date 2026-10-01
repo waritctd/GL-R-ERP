@@ -1,3 +1,5 @@
+/* Hallmark · genre: modern-minimal · macrostructure: Bento Grid · tone: utilitarian · theme: project system (Sarabun + indigo, owner-locked) · redesign */
+/* Hallmark · pre-emit critique: P4 H4 E4 S4 R4 V4 (spans follow the fixed bucket importance order, never the data; every tile shows a real count and amount) */
 import { useEffect, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
@@ -10,12 +12,13 @@ import { Panel, PageStack } from '../../components/common/Layout.jsx';
 import { SkeletonCard, SkeletonText } from '../../components/common/Skeleton.jsx';
 import { STAT_ICON_TILE_CLASSES, STAT_TONE_CLASSES } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { useIsMobile } from '../../hooks/useIsMobile.js';
 import { cn } from '../../utils/cn.js';
 import { formatMoney, formatThaiDate, greetingName, ticketStatusLabel } from '../../utils/format.js';
 import { accountMoneyBucket, nextAccountAction } from '../tickets/accountActions.js';
 
-// Money-pulse bucket meta — order matches the plan's five-across layout:
+// Money-pulse bucket meta (Bento Grid). `span` encodes IMPORTANCE, not data: overdue is the 2x2 lead
+// tile, the deposit step is double-wide, the commission step is the slim closing strip.
+// Order matches the plan's original layout:
 // overdue leads (most urgent), then the two payment-confirmation steps, then
 // close-ready, then the folded commission step. `amountField` picks which
 // ticket money field the bucket sums: outstanding balance for the three
@@ -23,11 +26,11 @@ import { accountMoneyBucket, nextAccountAction } from '../tickets/accountActions
 // already secured, just needs admin follow-through" buckets where
 // amountOutstanding is 0 by definition.
 const MONEY_BUCKETS = [
-  { key: 'overdue', label: 'เกินกำหนด', icon: 'triangleAlert', tone: 'rose', amountField: 'amountOutstanding' },
-  { key: 'depositPending', label: 'รอรับมัดจำ', icon: 'clock', tone: 'amber', amountField: 'amountOutstanding' },
+  { key: 'overdue', label: 'เกินกำหนด', icon: 'triangleAlert', tone: 'rose', amountField: 'amountOutstanding', span: 'col-span-2 row-span-2 nav-drawer:row-span-1' },
+  { key: 'depositPending', label: 'รอรับมัดจำ', icon: 'clock', tone: 'amber', amountField: 'amountOutstanding', span: 'col-span-2 nav-drawer:col-span-1' },
   { key: 'finalPaymentPending', label: 'รอชำระส่วนที่เหลือ', icon: 'badgeDollar', tone: 'teal', amountField: 'amountOutstanding', live: true },
-  { key: 'closeReady', label: 'รอปิดงาน', icon: 'check', tone: 'indigo', amountField: 'amountPayable' },
-  { key: 'commissionPending', label: 'ออกค่าคอม', icon: 'fileText', tone: 'blue', amountField: 'amountPayable' },
+  { key: 'closeReady', label: 'รอปิดงาน', icon: 'check', tone: 'indigo', amountField: 'amountPayable', span: 'nav-drawer:col-span-2' },
+  { key: 'commissionPending', label: 'บันทึกใบกำกับ', icon: 'fileText', tone: 'blue', amountField: 'amountPayable', span: 'col-span-4 nav-drawer:col-span-2' },
 ];
 
 const CTA_VARIANT = {
@@ -71,7 +74,7 @@ function startOfMonth() {
  * amountOutstanding = 0 by definition, so neither condition is ever true).
  * That scope was a deliberate, reviewed authz decision (handoff 100), not a
  * bug this branch introduces, and per CLAUDE.md this task must never loosen
- * it. Consequence: "รอปิดงาน"/"ออกค่าคอม" below will read 0 under the
+ * it. Consequence: "รอปิดงาน"/"บันทึกใบกำกับ" below will read 0 under the
  * current backend scope even when such deals exist — the salesStage=
  * CLOSED_PAID query is kept anyway (mirrors CommissionPage's own
  * "eligibleTickets" picker) so this becomes correct for free if that scope
@@ -80,7 +83,6 @@ function startOfMonth() {
  */
 export function AccountOverview({ user, employee, showToast }) {
   const navigate = useNavigate();
-  const isMobile = useIsMobile();
 
   const scopedQuery = useQuery({
     queryKey: queryKeys.ticketList(''),
@@ -163,7 +165,7 @@ export function AccountOverview({ user, employee, showToast }) {
 
       {loading ? (
         <div aria-busy="true" aria-label="กำลังโหลดข้อมูลการเงิน">
-          <div className="grid grid-cols-5 gap-3 nav-drawer:grid-cols-3 mobile:grid-cols-2">
+          <div className="grid grid-cols-4 gap-3 nav-drawer:grid-cols-2">
             {MONEY_BUCKETS.map((b) => <SkeletonCard key={b.key} lines={1} />)}
           </div>
           <Panel className="mt-[14px]">
@@ -172,61 +174,49 @@ export function AccountOverview({ user, employee, showToast }) {
         </div>
       ) : (
         <>
-          {/* Money pulse — desktop: 5-across cards; mobile: horizontal-scroll chips. */}
-          {isMobile ? (
-            <div className="flex gap-2.5 overflow-x-auto pb-1 -mx-1 px-1">
-              {MONEY_BUCKETS.map((b) => {
-                const bucket = buckets[b.key];
-                return (
-                  <div
-                    key={b.key}
-                    className={`flex shrink-0 flex-col gap-1 rounded-lg border border-border bg-surface px-3.5 py-2.5 min-w-[132px] ${b.tone === 'rose' && bucket.count > 0 ? 'border-danger-border' : ''}`}
-                  >
-                    <span className="flex items-center gap-1.5 text-2xs font-bold text-text-muted">
-                      <Icon name={b.icon} size={13} />
-                      {b.label}
-                      {/* DESIGN.md "Rationed Teal Rule": teal marks what is live — here,
-                          the one bucket in active money-motion right now. */}
-                      {b.live ? <span className="h-1.5 w-1.5 rounded-full bg-accent" aria-hidden="true" /> : null}
-                    </span>
-                    <strong className="text-lg font-extrabold tabular-nums text-text">{formatMoney(bucket.amount)}</strong>
-                    <span className="text-2xs text-text-muted">{bucket.count} ดีล</span>
+          {/* Money pulse — Bento Grid. 4 columns on desktop, 2 at <=1040px; overdue leads. */}
+          <div className="grid grid-cols-4 gap-3 nav-drawer:grid-cols-2 mobile:gap-2.5">
+            {MONEY_BUCKETS.map((b) => {
+              const bucket = buckets[b.key];
+              const lead = b.key === 'overdue';
+              const alarming = lead && bucket.count > 0;
+              const slim = b.key === 'commissionPending';
+              return (
+                <div
+                  key={b.key}
+                  className={cn(
+                    'grid min-w-0 content-between gap-3 rounded-md border bg-surface p-4 mobile:p-3',
+                    alarming ? 'border-danger-border bg-danger-bg' : 'border-border',
+                    slim && 'grid-cols-[auto_minmax(0,1fr)_auto] items-center content-center',
+                    b.span,
+                  )}
+                >
+                  <div className={cn(STAT_ICON_TILE_CLASSES, '!mb-0', STAT_TONE_CLASSES[b.tone])}>
+                    <Icon name={b.icon} size={lead ? 24 : 21} />
                   </div>
-                );
-              })}
-            </div>
-          ) : (
-            <div className="grid grid-cols-5 gap-3 nav-drawer:grid-cols-3">
-              {MONEY_BUCKETS.map((b) => {
-                const bucket = buckets[b.key];
-                return (
-                  <div
-                    key={b.key}
-                    className={cn(
-                      'bg-surface border border-border rounded-md p-4 mobile:p-3',
-                      b.tone === 'rose' && bucket.count > 0 && '!border-danger-border',
+                  <div className="grid min-w-0 gap-1">
+                    <div className={cn(
+                      'font-extrabold leading-[1.1] tabular-nums [overflow-wrap:anywhere]',
+                      lead ? 'text-[length:var(--text-4xl)] mobile:text-[length:var(--text-2xl)]' : 'text-[length:var(--text-2xl)] mobile:text-[length:var(--text-lg)]',
+                      alarming ? 'text-danger-dark' : 'text-text',
                     )}
-                  >
-                    <div className={cn(STAT_ICON_TILE_CLASSES, 'mb-3.5 mobile:mb-2', STAT_TONE_CLASSES[b.tone])}>
-                      <Icon name={b.icon} size={21} />
-                    </div>
-                    <div className="text-[length:var(--text-3xl)] font-extrabold leading-[1.1] text-text mobile:text-[length:var(--text-xl)] tabular-nums">
+                    >
                       {formatMoney(bucket.amount)}
                     </div>
-                    <div className="mt-[5px] flex items-center gap-1.5 font-bold mobile:mt-[3px] mobile:text-[length:var(--text-xs)]">
+                    <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 font-bold text-text">
                       {b.label}
                       {/* DESIGN.md "Rationed Teal Rule": teal marks what is live — here,
                           the one bucket in active money-motion right now. */}
                       {b.live ? <span className="h-1.5 w-1.5 rounded-full bg-accent" aria-hidden="true" /> : null}
                     </div>
-                    <div className="block text-[length:var(--text-xs)] font-medium text-text-muted mobile:mt-px mobile:truncate">
-                      {bucket.count} ดีล
-                    </div>
                   </div>
-                );
-              })}
-            </div>
-          )}
+                  <div className={cn('text-[length:var(--text-sm)] font-bold tabular-nums', alarming ? 'text-danger-dark' : 'text-text-muted', slim && 'text-right')}>
+                    {bucket.count} ดีล
+                  </div>
+                </div>
+              );
+            })}
+          </div>
 
           <div className="grid gap-[18px] items-start grid-cols-[1.6fr_1fr] nav-drawer:grid-cols-1">
             {/* "สิ่งที่ต้องทำ" money worklist — overdue-first. */}

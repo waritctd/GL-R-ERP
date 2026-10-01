@@ -538,8 +538,10 @@ public class DealQuotationRepository {
         List<NewItem> items,
         // ── GLA-123 slice S1 (2026-09-19) ───────────────────────────────────────────────────────
         // origin: 'DEAL_DIRECT' (every call site before this feature) or 'PRICING_REQUEST'
-        // (DealQuotationService#createFromPricingRequest). recipientType/recipientLabel: always
-        // 'UNSPECIFIED'/null for DEAL_DIRECT (unchanged); for PRICING_REQUEST, the SOURCE pricing
+        // (DealQuotationService#createFromPricingRequest). recipientType/recipientLabel: for a NEW
+        // DEAL_DIRECT document (DealQuotationService#create, slice 2 S2-B1) the rep's DESIGNER/OWNER/
+        // BUYER and its Thai label; 'UNSPECIFIED'/null via the short constructor below (revisions
+        // and reorders — see #insertCopyOf's callers); for PRICING_REQUEST, the SOURCE pricing
         // request's own recipientType/recipientLabel (ผู้ออกแบบ/เจ้าของ/ผู้ซื้อ), carried over so
         // a later slice's issue() can reuse TicketService#advanceStageForCustomerQuotationIssue's
         // existing recipient->stage mapping unchanged. pricingRequestId/pricingDecisionId: the
@@ -552,9 +554,10 @@ public class DealQuotationRepository {
         // sets it later via #update, same as any other DEAL_DIRECT document).
         String orderedByName) {
 
-        /** The pre-GLA-123 shape — every DEAL_DIRECT call site. Defaults origin to
-         * {@code DEAL_DIRECT}, recipientType to {@code UNSPECIFIED} (this class's own historic
-         * hardcoded literal), and everything else to null. */
+        /** The pre-GLA-123 shape. Defaults origin to {@code DEAL_DIRECT}, recipientType to
+         * {@code UNSPECIFIED} (this class's own historic hardcoded literal), and everything else to
+         * null. Since slice 2, {@code DealQuotationService#create} no longer uses it (it passes the
+         * rep's recipient through the canonical constructor). */
         public InsertDraftParams(
             long ticketId, String number, long createdById, long salesRepId,
             String customerName, String customerAddress, String customerTaxId, String customerPhone,
@@ -742,7 +745,7 @@ public class DealQuotationRepository {
              pieces_before_wastage, pieces_after_wastage, boxes, discount_pct, origin_country,
              lead_time_min_days, lead_time_max_days, item_notes,
              line_type, special_price_sqm, adjustment_pct, adjustment_deadline, sqm_per_box,
-             round_to_full_box, pricing_request_item_id, pricing_decision_item_id)
+             round_to_full_box, pricing_request_item_id, pricing_decision_item_id, stock_source)
         VALUES
             (:quotationId, :seq, :brand, :model, :color, :texture, :size, :rawUnit, :qty, :unitPrice, :amount,
              :salesDiscount, :finalUnitPrice, :lineSubtotal, :vat, :lineTotal, :description,
@@ -751,7 +754,13 @@ public class DealQuotationRepository {
              :piecesBeforeWastage, :piecesAfterWastage, :boxes, :discountPct, :originCountry,
              :leadTimeMinDays, :leadTimeMaxDays, :itemNotes,
              :lineType, :specialPriceSqm, :adjustmentPct, :adjustmentDeadline, :sqmPerBox,
-             :roundToFullBox, :pricingRequestItemId, :pricingDecisionItemId)
+             :roundToFullBox, :pricingRequestItemId, :pricingDecisionItemId,
+             -- Stock lines (V194, R1): a PRICING_REQUEST-origin line carries the SOURCE of the
+             -- pricing-request item it was created from (NULL = สั่งนำเข้า, and NULL for every
+             -- DEAL_DIRECT row, whose :pricingRequestItemId is null). Read in-statement so every
+             -- insert path (create, restore-a-removed-line) stamps it without widening NewItem.
+             (SELECT pri.stock_source FROM sales.pricing_request_item pri
+               WHERE pri.pricing_request_item_id = :pricingRequestItemId))
         """;
 
     /** One row about to be inserted at an explicit {@code seq} — {@link #insertItemsAtSeq}, the
@@ -852,6 +861,26 @@ public class DealQuotationRepository {
             params, (rs, rowNum) -> rs.getLong("picture_id"));
         jdbc.update("DELETE FROM sales.quotation_item WHERE " + scope, params);
         return pictureIds;
+    }
+
+    /** Quotation ↔ deal linking slice 2 (S2-B1) — sets a direct quotation's ผู้รับ. DRAFT-only AND
+     * DEAL_DIRECT-only via the WHERE clause (the enforcement, as for {@link #updateHeader}): a
+     * PRICING_REQUEST row's recipient belongs to its คำขอราคา and is never rewritten here.
+     *
+     * @return the rowcount (0 or 1). */
+    public int updateRecipient(long quotationId, String recipientType, String recipientLabel) {
+        return jdbc.update("""
+            UPDATE sales.quotation
+               SET recipient_type = :recipientType,
+                   recipient_label = :recipientLabel,
+                   updated_at = now()
+             WHERE quotation_id = :id
+               AND doc_status = 'DRAFT'
+               AND origin = 'DEAL_DIRECT'
+            """, new MapSqlParameterSource()
+                .addValue("id", quotationId)
+                .addValue("recipientType", recipientType)
+                .addValue("recipientLabel", recipientLabel));
     }
 
     /** DRAFT-only via the WHERE clause — the enforcement, not a service-layer check the caller

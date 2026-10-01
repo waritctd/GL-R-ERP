@@ -187,8 +187,42 @@ public final class PricingRequestDtos {
         // the END, not next to originCountry above, purely so every existing positional
         // constructor call (this class's own two compat ctors below, plus every hand-wired test
         // call site) keeps compiling unchanged.
-        String originCountryOther
+        String originCountryOther,
+        // Slice 1 of the stock-line feature (V194): null = สั่งนำเข้า, IN_THAILAND, IN_TRANSIT.
+        String stockSource,
+        // วันที่คาดว่าจะถึง - only ever non-null for an IN_TRANSIT line (DB CHECK). Set by import/CEO.
+        LocalDate expectedArrivalDate
     ) {
+        /** The pre-stock-line shape - the canonical 50-field constructor that existed before
+         * stockSource/expectedArrivalDate were appended. Defaults both to null. */
+        public PricingRequestItemDto(
+            long id, long pricingRequestId, Long sourceTicketItemId, Long productId, Long variantId,
+            String brand, String model, String productDescription, String color, String texture,
+            String size, String factory, BigDecimal requestedQty, BigDecimal requestedQtySqm,
+            String requestedUnit, String requestedUnitBasis, String quantityType,
+            LocalDate targetDeliveryDate, String deliveryLocation, String specialRequirement,
+            int sortOrder, Long priceListVersionId, Long catalogPriceId, BigDecimal catalogBasePrice,
+            String catalogCurrency, LocalDate catalogEffectiveDate, Long resolvedFactoryId,
+            String resolvedFactoryName, String catalogProductCode, String catalogBrand,
+            String catalogCollection, String catalogModel, String productTypeOverride,
+            String productCode, BigDecimal thicknessMm, BigDecimal sqmPerPiece, String quantityMode,
+            BigDecimal areaSqm, Integer piecesInput, String wastageMode, BigDecimal wastageValue,
+            Integer piecesPerBox, BigDecimal sqmPerBox, Integer piecesBeforeWastage,
+            Integer piecesAfterWastage, Integer boxes, boolean roundToFullBox, String originCountry,
+            Integer leadTimeMinDays, Integer leadTimeMaxDays, String originCountryOther
+        ) {
+            this(id, pricingRequestId, sourceTicketItemId, productId, variantId, brand, model,
+                productDescription, color, texture, size, factory, requestedQty, requestedQtySqm,
+                requestedUnit, requestedUnitBasis, quantityType, targetDeliveryDate,
+                deliveryLocation, specialRequirement, sortOrder, priceListVersionId, catalogPriceId,
+                catalogBasePrice, catalogCurrency, catalogEffectiveDate, resolvedFactoryId,
+                resolvedFactoryName, catalogProductCode, catalogBrand, catalogCollection,
+                catalogModel, productTypeOverride, productCode, thicknessMm, sqmPerPiece,
+                quantityMode, areaSqm, piecesInput, wastageMode, wastageValue, piecesPerBox,
+                sqmPerBox, piecesBeforeWastage, piecesAfterWastage, boxes, roundToFullBox,
+                originCountry, leadTimeMinDays, leadTimeMaxDays, originCountryOther, null, null);
+        }
+
         /** The pre-V185 shape — kept so every existing construction site (tests, mostly) compiles
          * unchanged. Defaults every new field to null/false, exactly what a legacy row reads as. */
         public PricingRequestItemDto(

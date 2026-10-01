@@ -1716,7 +1716,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
 
       <Panel flush title="ภาพรวม" actions={<StatusBadge tone={status.tone}>{status.label}</StatusBadge>}>
         <div className="grid gap-3 p-4 md:grid-cols-2">
-          <div className="text-sm"><strong>ดีล</strong> <Link to={`/tickets/${summary.ticketId}`} className="text-info underline">{summary.ticketCode}</Link></div>
+          <div className="text-sm"><strong>ดีล</strong> <Link to={user?.role === 'import' ? `/import/deals/${summary.ticketId}` : `/tickets/${summary.ticketId}`} className="text-info underline">{summary.ticketCode}</Link></div>
           <div className="text-sm"><strong>ผู้รับ</strong> {pricingRequestRecipientLabel(summary.recipientType)}{summary.recipientLabel ? ` · ${summary.recipientLabel}` : ''}</div>
           <div className="text-sm"><strong>ต้องการภายใน</strong> {formatThaiDate(summary.requiredDate)}</div>
           <div className="text-sm"><strong>ฝ่ายนำเข้า</strong> ผู้รับเรื่องและประสานราคาโรงงาน</div>

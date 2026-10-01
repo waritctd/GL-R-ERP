@@ -8,9 +8,15 @@ import { api } from '../../api/index.js';
 
 globalThis.React = React;
 
-// GLA-136 (owner ruling 2026-09-30) — "สร้างดีลจากใบเสนอราคา" on an APPROVED direct quotation.
-// The gate here is DISPLAY-only (quotationMeta.canPromoteDealQuotationToDeal); who may actually
-// promote is enforced and proven server-side in DealQuotationPromoteIntegrationTest, never here.
+// GLA-136 → slice 1/2 (IA §7/§8, decision D3): "ยืนยันคำสั่งซื้อ" on an APPROVED direct quotation
+// (was "สร้างดีลจากใบเสนอราคา"). The gate here is DISPLAY-only (quotationMeta.
+// canPromoteDealQuotationToDeal); who may actually confirm is enforced and proven server-side in
+// DealQuotationPromoteIntegrationTest / DealQuotationConfirmOrderIntegrationTest, never here.
+//
+// Whether the order is still confirmable is the deal's `status === 'draft'` — the backend's own
+// precondition (DealQuotationService#confirmOrderFromDirectQuotation 409s otherwise; confirming
+// flips it to 'quotation_issued'). `quotationOnly` is provenance only since #1086 and must NOT
+// decide it: every deal created on the deal page (flow B) carries quotationOnly=false.
 vi.mock('../../api/index.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
@@ -54,7 +60,7 @@ function quotation(overrides = {}) {
 }
 
 function ticketSummary(overrides = {}) {
-  return { ticket: { summary: { id: 18, createdById: 6, quotationOnly: true, ...overrides } } };
+  return { ticket: { summary: { id: 18, createdById: 6, quotationOnly: true, status: 'draft', ...overrides } } };
 }
 
 function DealRoute() {
@@ -77,15 +83,15 @@ function renderEditor(user = salesUser, showToast = vi.fn()) {
   return { showToast, queryClient };
 }
 
-const PROMOTE = 'สร้างดีลจากใบเสนอราคา';
+const PROMOTE = 'ยืนยันคำสั่งซื้อ';
 
-describe('QuotationEditorPage — สร้างดีลจากใบเสนอราคา (GLA-136)', () => {
+describe('QuotationEditorPage — ยืนยันคำสั่งซื้อ on a direct quotation (GLA-136, IA §7/§8)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.tickets.get.mockResolvedValue(ticketSummary());
   });
 
-  it('is offered to the owning rep on an APPROVED direct quotation whose deal is still quotation-only', async () => {
+  it('(c) is offered to the owning rep on an APPROVED direct quotation whose quotation-first deal is still draft', async () => {
     api.dealQuotations.get.mockResolvedValue({ quotation: quotation() });
     renderEditor();
     expect(await screen.findByRole('button', { name: PROMOTE })).not.toBeNull();
@@ -126,16 +132,32 @@ describe('QuotationEditorPage — สร้างดีลจากใบเส�
     expect(await screen.findByRole('button', { name: PROMOTE })).not.toBeNull();
   });
 
-  it('shows "ไปที่ดีล" instead once the deal is already promoted', async () => {
+  it('(a) an ORDINARY deal (quotationOnly=false, created on the deal page) still at draft: the confirm is offered, not ไปที่ดีล', async () => {
     api.dealQuotations.get.mockResolvedValue({ quotation: quotation() });
-    api.tickets.get.mockResolvedValue(ticketSummary({ quotationOnly: false }));
+    api.tickets.get.mockResolvedValue(ticketSummary({ quotationOnly: false, status: 'draft' }));
+    renderEditor();
+    expect(await screen.findByRole('button', { name: PROMOTE })).not.toBeNull();
+    expect(screen.queryByRole('link', { name: /ไปที่ดีล/ })).toBeNull();
+  });
+
+  it.each([[true], [false]])('(b) once the order is confirmed (status quotation_issued, quotationOnly=%s): "ไปที่ดีล", no confirm', async (quotationOnly) => {
+    api.dealQuotations.get.mockResolvedValue({ quotation: quotation() });
+    api.tickets.get.mockResolvedValue(ticketSummary({ quotationOnly, status: 'quotation_issued' }));
     renderEditor();
     const link = await screen.findByRole('link', { name: /ไปที่ดีล/ });
     expect(link.getAttribute('href')).toBe('/tickets/18');
     expect(screen.queryByRole('button', { name: PROMOTE })).toBeNull();
   });
 
-  it('confirms first, then promotes, toasts and navigates to the deal', async () => {
+  it('while the deal\'s status is unknown (a 403 on the deal read) the confirm stays offered — the server answers idempotently', async () => {
+    api.dealQuotations.get.mockResolvedValue({ quotation: quotation() });
+    api.tickets.get.mockRejectedValue(Object.assign(new Error('ไม่มีสิทธิ์เข้าถึงรายการนี้'), { status: 403 }));
+    renderEditor();
+    expect(await screen.findByRole('button', { name: PROMOTE })).not.toBeNull();
+    expect(screen.queryByRole('link', { name: /ไปที่ดีล/ })).toBeNull();
+  });
+
+  it('(d) confirms first (dialog titled ยืนยันคำสั่งซื้อ), then confirms the order, toasts "ยืนยันคำสั่งซื้อแล้ว" and navigates to the deal', async () => {
     api.dealQuotations.get.mockResolvedValue({ quotation: quotation() });
     api.dealQuotations.promoteToDeal.mockResolvedValue({
       result: { ticketId: 18, ticket: { id: 18, quotationOnly: false }, quotation: quotation() },
@@ -144,14 +166,17 @@ describe('QuotationEditorPage — สร้างดีลจากใบเส�
 
     fireEvent.click(await screen.findByRole('button', { name: PROMOTE }));
     expect(api.dealQuotations.promoteToDeal).not.toHaveBeenCalled();
-    const dialog = within(screen.getByRole('dialog'));
+    const dialogEl = screen.getByRole('dialog');
+    const dialog = within(dialogEl);
+    expect(dialog.getByRole('heading', { name: 'ยืนยันคำสั่งซื้อ' })).not.toBeNull();
+    expect(dialogEl.textContent).not.toMatch(/สร้างดีล/);
     expect(dialog.getByText(/ได้รับคำสั่งซื้อ/)).not.toBeNull();
     expect(dialog.getByText(/ย้อนกลับไม่ได้/)).not.toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันสร้างดีล' }));
+    fireEvent.click(dialog.getByRole('button', { name: PROMOTE }));
     await waitFor(() => expect(api.dealQuotations.promoteToDeal).toHaveBeenCalledWith('5'));
     expect(await screen.findByText('deal page 18')).not.toBeNull();
-    expect(showToast).toHaveBeenCalledWith('success', 'สร้างดีลจากใบเสนอราคาแล้ว');
+    expect(showToast).toHaveBeenCalledWith('success', 'ยืนยันคำสั่งซื้อแล้ว');
   });
 
   it.each([
@@ -163,9 +188,20 @@ describe('QuotationEditorPage — สร้างดีลจากใบเส�
     const { showToast } = renderEditor();
 
     fireEvent.click(await screen.findByRole('button', { name: PROMOTE }));
-    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันสร้างดีล' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: PROMOTE }));
 
     await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', message));
     expect(screen.queryByText(/deal page/)).toBeNull();
+  });
+
+  it('an error with no message falls back to "ยืนยันคำสั่งซื้อไม่สำเร็จ"', async () => {
+    api.dealQuotations.get.mockResolvedValue({ quotation: quotation() });
+    api.dealQuotations.promoteToDeal.mockRejectedValue(Object.assign(new Error(''), { status: 500 }));
+    const { showToast } = renderEditor();
+
+    fireEvent.click(await screen.findByRole('button', { name: PROMOTE }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: PROMOTE }));
+
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'ยืนยันคำสั่งซื้อไม่สำเร็จ'));
   });
 });
