@@ -86,7 +86,11 @@ describe('DealStateHeader — stage chip is route-aware', () => {
 
 describe('DealStateHeader — every non-S3 stage is identical regardless of channel', () => {
   const channels = ['DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT', 'UNSPECIFIED', undefined];
-  const stages = DEAL_STAGE_CATALOG.stages.map((s) => s.code).filter((c) => c !== 'SPEC_APPROVED');
+  // The two stages whose WORDING follows the entry channel (format.js STAGE_LABEL_BY_CHANNEL):
+// S3, and S1 since the owner ruling of 2026-10-01. Every OTHER stage must stay identical
+// across channels — that is what this loop guards.
+const CHANNEL_WORDED = ['SPEC_APPROVED', 'LEAD_APPROACH'];
+const stages = DEAL_STAGE_CATALOG.stages.map((s) => s.code).filter((c) => !CHANNEL_WORDED.includes(c));
 
   it('has stages to loop over (guard against a vacuous loop)', () => {
     expect(stages.length).toBeGreaterThan(10);
