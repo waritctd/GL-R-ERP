@@ -2209,7 +2209,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
           </div>
           {showCost && item.frozenLandedCostPerRequestedUnitThb != null ? (
             <span className="text-xs text-text-muted" data-testid={`pcr-ceo-cost-both-${item.id}`}>
-              ต้นทุน (จากราคาฝ่ายนำเข้า): <code className="font-bold text-text">{formatCurrency(item.frozenLandedCostPerRequestedUnitThb, 'THB')}</code> / แผ่น
+              ต้นทุน (จากราคาฝ่ายนำเข้า รวมค่าขนส่งและภาษีนำเข้า): <code className="font-bold text-text">{formatCurrency(item.frozenLandedCostPerRequestedUnitThb, 'THB')}</code> / แผ่น
               {item.sqmPerPiece > 0
                 ? <> · <code className="font-bold text-text">{formatCurrency(round2(Number(item.frozenLandedCostPerRequestedUnitThb) / Number(item.sqmPerPiece)), 'THB')}</code> / ตร.ม.</>
                 : null}
@@ -2333,7 +2333,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
             >
               <div className="flex flex-col gap-2 text-xs">
                 <span className="text-text-muted">
-                  ต้นทุนโรงงาน (ฐาน):{' '}
+                  ต้นทุนรวมนำเข้า (รวมค่าขนส่งและภาษี):{' '}
                   {costingItem?.uncostableReason ? (
                     <span className="font-bold text-warning">คำนวณอัตโนมัติไม่ได้</span>
                   ) : (
@@ -2413,7 +2413,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
         {/* The two numbers, read-only, asking for nothing. */}
         <div className="mt-2 grid gap-x-6 gap-y-1 sm:grid-cols-2">
           <span className="text-xs text-text-muted">
-            ต้นทุนโรงงาน (ฐาน):{' '}
+            ต้นทุนรวมนำเข้า (รวมค่าขนส่งและภาษี):{' '}
             {costingItem?.uncostableReason ? (
               <span className="font-bold text-warning">คำนวณอัตโนมัติไม่ได้</span>
             ) : (
