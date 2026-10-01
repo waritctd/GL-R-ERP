@@ -937,7 +937,7 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
             WastageCalculator.WASTAGE_MODE_NONE, null, 4, new BigDecimal("100.00"), BigDecimal.ZERO, "ไทย-สต็อก",
             3, 7, null, "TILE", null, null, null, null, null, null, null, null, null, null, false);
         return new DealQuotationRequests.UpsertDealQuotationRequest(null, null, null, null, 50, "CASH_ON_DELIVERY",
-            0, 30, null, "NET", "TH", "THB", List.of(item));
+            0, 30, null, "NET", "TH", "THB", List.of(item)).withRecipientType("OWNER");
     }
 
     private ReceiveFactoryQuoteRequest response(String ref, String currency, String price, long pricingRequestItemId) {

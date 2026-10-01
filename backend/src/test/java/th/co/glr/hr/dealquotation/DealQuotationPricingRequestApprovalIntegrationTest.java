@@ -493,7 +493,7 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
             WastageCalculator.QUANTITY_MODE_PIECES, null, 10, WastageCalculator.WASTAGE_MODE_NONE, null, 1,
             new BigDecimal("100.00"), BigDecimal.ZERO, "ไทย-สต็อก", 30, 45, null);
         DealQuotationRequests.UpsertDealQuotationRequest request = new DealQuotationRequests.UpsertDealQuotationRequest(
-            null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30, "หมายเหตุทดสอบ", List.of(item));
+            null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30, "หมายเหตุทดสอบ", List.of(item)).withRecipientType("OWNER");
         DealQuotationDto directDraft = quotationService.create(ticketId, request, salesActor);
         DealQuotationDto submittedDirect = quotationService.submit(directDraft.id(), salesActor);
         DealQuotationDto approvedDirect = quotationService.approve(

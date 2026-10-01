@@ -37,7 +37,7 @@ export function DealAttachmentsPanel({
       // the ONLY supported path is CommissionService.createFromDeal
       // (POST /api/commissions/from-deal, CREATE_FROM_DEAL_ROLES =
       // account-only), reached from this page's own sticky CTA
-      // "บันทึกใบกำกับ + ออกค่าคอม" -> /commissions?ticketId=NN
+      // "บันทึกใบกำกับ" -> /finance/deals/NN
       // (accountActions.js). That one upload dual-writes the file as an
       // AttachType.INVOICE ticket attachment, so it satisfies the close
       // gate's invoiceOnFile check AND creates the deal owner's

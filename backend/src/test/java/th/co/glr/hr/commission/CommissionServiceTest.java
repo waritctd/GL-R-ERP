@@ -94,7 +94,7 @@ class CommissionServiceTest {
         verify(commissions).attachInvoiceFile(500L, 700L);
         verify(auditService).record(account, "SUBMIT_COMMISSION", "commission_record", 900L, null, created);
         verify(notificationService).notify(eq(30L), eq("COMMISSION_SUBMITTED"), anyString(), anyString(), eq("/commissions"), eq(true));
-        verify(notificationService).notify(eq(88L), eq("COMMISSION_PENDING_MANAGER"), anyString(), anyString(), eq("/commissions"), eq(true));
+        verify(notificationService).notify(eq(88L), eq("COMMISSION_PENDING_MANAGER"), anyString(), anyString(), eq("/commissions?view=pending"), eq(true));
     }
 
     @Test

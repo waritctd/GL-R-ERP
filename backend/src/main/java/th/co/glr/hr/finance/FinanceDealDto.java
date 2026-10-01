@@ -31,7 +31,9 @@ public record FinanceDealDto(
     /** The deal's COMMENT events only, every author, oldest first. No other event kind, no snapshot. */
     List<Comment> comments,
     /** The money actions THIS caller can take on this deal right now (same gates as the ticket actions). */
-    List<Action> availableActions
+    List<Action> availableActions,
+    /** The deal's non-VOID SALE commission INVOICE record (no commission amounts); null when none. */
+    CommissionInvoice commissionInvoice
 ) {
     /**
      * VAT basis of every amount, stated once so a UI never has to guess (they differ on purpose --
@@ -65,7 +67,7 @@ public record FinanceDealDto(
                           String receiptRef, String note, Long depositNoticeId, String recordedByName) {}
 
     public record Money(
-        BigDecimal amountPayable, BigDecimal amountPaid, BigDecimal amountOutstanding,
+        BigDecimal amountPayable, BigDecimal amountPayableExVat, BigDecimal amountPaid, BigDecimal amountOutstanding,
         String depositPolicy, String paymentStatus, String paymentStage, String fulfillmentStatus,
         // When the balance is due, from the payable quotation's terms + the delivery date (NOT the stored billing
         // column): null until the deal is delivered, or when the quotation has no structured term.
@@ -73,6 +75,18 @@ public record FinanceDealDto(
         LocalDate paymentDueDate, String paymentDueBasis, Integer paymentDueCreditDays,
         boolean overdue, Instant closeConfirmedAt,
         boolean invoiceOnFile, boolean commissionRecorded, String amountVatBasis, List<Payment> payments) {}
+
+    /**
+     * The invoice the account recorded for the deal's commission, as finance may see it: the invoice
+     * fields and the approval status only -- never a commission amount, weight, tier or payroll month.
+     * {@code downloadPath} is {@code /api/attachments/{ticketAttachmentId}/file}.
+     */
+    public record CommissionInvoice(
+        String invoiceNumber, LocalDate invoiceDate,
+        BigDecimal grossAmount, BigDecimal bankFees, BigDecimal suspenseVat, BigDecimal transportFee,
+        BigDecimal cutFee, BigDecimal shortfall, BigDecimal withholdingTax, BigDecimal overpayment,
+        String fileName, String downloadPath,
+        String approvalStatus, String rejectionReason, Instant recordedAt) {}
 
     /** {@code downloadPath} points at the EXISTING download endpoint, which enforces its own authz. */
     public record QuotationDoc(long id, String number, String status, BigDecimal totalAmount, String vatBasis,

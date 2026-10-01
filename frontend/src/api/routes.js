@@ -244,6 +244,22 @@ export const API_ROUTES = {
     revise: (id) => `/api/remaining-invoices/${id}/revise`,
     file: (id) => `/api/remaining-invoices/${id}/file`,
   },
+  // Mirrors BillingNoteController — the STORED ใบวางบิล aggregate (V189, GLA-99 step 3 / GLA-129
+  // step 4). Customer-scoped (many deals bill together), DRAFT -> ISSUED -> {SUPERSEDED (revised) |
+  // CANCELLED | SETTLED}, minted on the same shared AR_GLR sequence remaining invoices use.
+  // Authorisation is entirely BillingNoteService's own grant (can_issue_billing_note OR ceo, plus a
+  // wider read set) — these methods carry no gate of their own.
+  billingNotes: {
+    candidates: (customerId) => `/api/customers/${customerId}/billing-note-candidates`,
+    forCustomer: (customerId) => `/api/customers/${customerId}/billing-notes`,
+    get: (id) => `/api/billing-notes/${id}`,
+    issue: (id) => `/api/billing-notes/${id}/issue`,
+    revise: (id) => `/api/billing-notes/${id}/revise`,
+    cancel: (id) => `/api/billing-notes/${id}/cancel`,
+    markReceived: (id) => `/api/billing-notes/${id}/mark-received`,
+    markSettled: (id) => `/api/billing-notes/${id}/mark-settled`,
+    file: (id) => `/api/billing-notes/${id}/file`,
+  },
   catalog: {
     search: (q) => `/api/catalog${q ? `?q=${encodeURIComponent(q)}` : ''}`,
     prices: (q, factoryId, limit) => {
@@ -346,6 +362,10 @@ export const API_ROUTES = {
     // Slice A2: the accountant's auto-create trigger at deal close. Mirrors
     // CommissionController's POST /api/commissions/from-deal (ACCOUNT-only).
     createFromDeal: '/api/commissions/from-deal',
+    // sales_manager/ceo รออนุมัติ view: every SUBMITTED sale record (any payroll month), and the
+    // sales_manager-only per-item weight adjustment. Mirrors CommissionController#pendingApproval / #itemWeights.
+    pendingApproval: '/api/commissions/pending-approval',
+    itemWeights: (id) => `/api/commissions/${id}/item-weights`,
     deductions: (id) => `/api/commissions/${id}/deductions`,
     approve: (id) => `/api/commissions/${id}/approve`,
     reject: (id) => `/api/commissions/${id}/reject`,

@@ -395,15 +395,17 @@ describe('dealStageLabel(code, entryChannel?) — route-aware S3 wording', () =>
     expect(dealStageLabel('SPEC_APPROVED', 'BUYER_DIRECT').tone).toBe(tone);
   });
 
-  // Wrong-way-round: the channel may re-word S3 and NOTHING else.
+  // Wrong-way-round: the channel may re-word S3 and S1 (STAGE_LABEL_BY_CHANNEL) and NOTHING else.
+  // LEAD_APPROACH left this list on 2026-10-01 when the owner ruled S1 should name the party the
+  // deal entered through instead of hedging "เข้าถึงเจ้าของ/ผู้ออกแบบโครงการ".
   const OTHER_STAGES = [
-    'LEAD_APPROACH', 'PRESENTATION', 'QUOTE_DESIGN_SIDE', 'QUOTE_OWNER', 'OWNER_SIGNOFF',
+    'PRESENTATION', 'QUOTE_DESIGN_SIDE', 'QUOTE_OWNER', 'OWNER_SIGNOFF',
     'AWAITING_BUYER', 'QUOTE_BUYER', 'NEGOTIATION', 'ORDER_RECEIVED', 'DEPOSIT_RECEIVED',
     'PROCUREMENT', 'DELIVERY_SCHEDULING', 'DELIVERED', 'CLOSED_PAID',
   ];
 
-  it('covers the other fourteen stage codes (guards this list against a new stage being added)', () => {
-    expect(OTHER_STAGES).toHaveLength(14);
+  it('covers the other thirteen stage codes (guards this list against a new stage being added)', () => {
+    expect(OTHER_STAGES).toHaveLength(13);
     for (const code of OTHER_STAGES) expect(dealStageLabel(code).label).not.toBe(code);
   });
 
@@ -439,5 +441,38 @@ describe('offered-to field labels (R8, owner ruling 2026-09-30)', () => {
     expect(entryChannelLabel('DESIGNER_LED').label).toBe('ผู้ออกแบบนำดีล');
     expect(entryChannelLabel('OWNER_DIRECT').label).toBe('เจ้าของติดต่อโดยตรง');
     expect(quotationRecipientLabel('DESIGNER').label).not.toBe(entryChannelLabel('DESIGNER_LED').label);
+  });
+});
+
+describe('S1 LEAD_APPROACH wording follows the entry channel', () => {
+  // The default label hedges with a slash — เข้าถึงเจ้าของ/ผู้ออกแบบโครงการ — because one string had
+  // to serve every route. Owner ruling 2026-10-01: name the party the deal actually entered
+  // through. S1 ONLY; S7's "รอผลประมูล / รอผู้ซื้อ" and S18's slash join two real situations, not
+  // two routes, so they are deliberately untouched.
+  it('names the single party for each real channel', () => {
+    expect(dealStageLabel('LEAD_APPROACH', 'DESIGNER_LED').label).toBe('เข้าถึงผู้ออกแบบโครงการ');
+    expect(dealStageLabel('LEAD_APPROACH', 'OWNER_DIRECT').label).toBe('เข้าถึงเจ้าของโครงการ');
+    expect(dealStageLabel('LEAD_APPROACH', 'BUYER_DIRECT').label).toBe('เข้าถึงผู้ซื้อ/ผู้รับเหมา');
+  });
+
+  it('keeps the hedged wording when no channel was entered', () => {
+    // Nothing to name, so nothing is asserted — same rule as UNSPECIFIED everywhere else.
+    ['UNSPECIFIED', undefined, null, '', 'NOT_A_CHANNEL'].forEach((channel) => {
+      expect(dealStageLabel('LEAD_APPROACH', channel).label).toBe('เข้าถึงเจ้าของ/ผู้ออกแบบโครงการ');
+    });
+    expect(dealStageLabel('LEAD_APPROACH').label).toBe('เข้าถึงเจ้าของ/ผู้ออกแบบโครงการ');
+  });
+
+  it('leaves the tone alone — only the wording varies', () => {
+    expect(dealStageLabel('LEAD_APPROACH', 'OWNER_DIRECT').tone)
+      .toBe(dealStageLabel('LEAD_APPROACH').tone);
+  });
+
+  it('does NOT split S7 or S18 — their slashes are not route hedges', () => {
+    ['DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT'].forEach((channel) => {
+      expect(dealStageLabel('AWAITING_BUYER', channel).label).toBe(dealStageLabel('AWAITING_BUYER').label);
+      expect(dealStageLabel('DELIVERY_SCHEDULING', channel).label)
+        .toBe(dealStageLabel('DELIVERY_SCHEDULING').label);
+    });
   });
 });

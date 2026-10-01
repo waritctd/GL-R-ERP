@@ -1,5 +1,5 @@
-/* Hallmark · genre: modern-minimal · macrostructure: Index-First · tone: utilitarian · theme: project system (Sarabun + indigo accent, preserved) · enrichment: none · nav: AppShell (existing) · footer: none */
-/* Hallmark · pre-emit critique: P4 H4 E4 S4 R3 V3 (scores /5 after fixes; R and V are by code reading only — not browser-verified) */
+/* Hallmark · genre: modern-minimal · macrostructure: Stat-Led · tone: utilitarian · theme: project system (Sarabun + indigo, owner-locked) · redesign */
+/* Hallmark · pre-emit critique: P4 H4 E4 S4 R4 V4 (lead figure is the real outstanding total of the loaded rows and always paired with words; worklist keeps the subgrid columns) */
 import { useEffect, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
@@ -24,7 +24,7 @@ const ACTION_FILTERS = [
   { key: 'confirmDeposit', label: 'ยืนยันรับมัดจำ' },
   { key: 'confirmFinalPayment', label: 'รับชำระส่วนที่เหลือ' },
   { key: 'confirmCloseReady', label: 'ยืนยันพร้อมปิดงาน' },
-  { key: 'recordInvoiceCommission', label: 'บันทึกใบกำกับ + ออกค่าคอม' },
+  { key: 'recordInvoiceCommission', label: 'บันทึกใบกำกับ' },
 ];
 
 const money = (value) => (value == null ? '—' : formatMoney(value));
@@ -54,7 +54,7 @@ function DealRow({ row, catalog }) {
     ? `${milestone.index} · ${milestone.label}${stageCode ? ` · ${stageCode}` : ''}`
     : `${dealStageLabel(ticket.salesStage).label}${stageCode ? ` · ${stageCode}` : ''}`;
   return (
-    <li className="col-span-full grid grid-cols-subgrid border-b border-border last:border-b-0">
+    <li className={cn('col-span-full grid grid-cols-subgrid border-b border-border last:border-b-0', action?.urgent && 'shadow-[inset_3px_0_0_var(--color-danger)]')}>
       <Link
         to={`/finance/deals/${ticket.id}`}
         className="col-span-full grid grid-cols-subgrid items-center gap-y-1.5 px-5 py-3 text-text no-underline hover:bg-surface-hover active:bg-surface-muted pointer-coarse:min-h-[44px] @max-[60rem]:px-4 @max-[60rem]:py-3.5"
@@ -150,10 +150,16 @@ export function AccountFinancePage({ user, showToast }) {
   const actionable = useMemo(() => allRows.filter((r) => r.action != null), [allRows]);
 
   // The summary always describes the actionable set, whichever view is showing.
-  const summary = useMemo(() => {
+  const stats = useMemo(() => {
     const total = actionable.reduce((sum, r) => sum + Number(r.ticket.amountOutstanding ?? 0), 0);
-    return `ต้องดำเนินการ ${actionable.length} ดีล · คงค้างรวม ${actionable.length === 0 ? '—' : formatMoney(total)}`;
+    const overdueCount = actionable.filter((r) => r.ticket.overdue).length;
+    const dueTimes = actionable
+      .map((r) => (r.ticket.paymentDueDate ? new Date(r.ticket.paymentDueDate).getTime() : null))
+      .filter((t) => t != null && !Number.isNaN(t));
+    const nextDue = dueTimes.length ? new Date(Math.min(...dueTimes)).toISOString() : null;
+    return { total, overdueCount, nextDue };
   }, [actionable]);
+  const summary = `ต้องดำเนินการ ${actionable.length} ดีล · คงค้างรวม ${actionable.length === 0 ? '—' : formatMoney(stats.total)}`;
 
   const rows = useMemo(() => {
     const base = view === 'all' ? allRows : actionable;
@@ -186,7 +192,34 @@ export function AccountFinancePage({ user, showToast }) {
 
   return (
     <PageStack>
-      <PageHeader title="งานการเงิน" subtitle={loading ? undefined : summary} />
+      <PageHeader title="งานการเงิน" />
+
+      {loading ? null : (
+        <section aria-label="สรุปงานการเงิน" className="grid min-w-0 grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] items-end gap-x-8 gap-y-4 border-b border-border pb-5 nav-drawer:grid-cols-[minmax(0,1fr)]">
+          {/* The screen-reader sentence; the visible block below shows the same figures as a lead stat. */}
+          <p className="sr-only">{summary}</p>
+          <div className="grid min-w-0 gap-1">
+            <p className="m-0 text-sm font-bold text-text-secondary">ยอดคงค้างของดีลที่ต้องดำเนินการ</p>
+            <p className="m-0 text-4xl font-extrabold leading-tight tabular-nums text-text [overflow-wrap:anywhere] mobile:text-3xl">
+              {actionable.length === 0 ? '—' : formatMoney(stats.total)}
+            </p>
+          </div>
+          <dl className="m-0 grid grid-cols-3 gap-x-4 gap-y-2 mobile:grid-cols-1">
+            <div className="grid min-w-0 gap-0.5">
+              <dt className="text-sm text-text-muted">ดีลที่รอดำเนินการ</dt>
+              <dd className="m-0 text-lg font-extrabold tabular-nums text-text">{`${actionable.length} ดีล`}</dd>
+            </div>
+            <div className="grid min-w-0 gap-0.5">
+              <dt className="text-sm text-text-muted">ในนั้นเกินกำหนด</dt>
+              <dd className={cn('m-0 text-lg font-extrabold tabular-nums', stats.overdueCount > 0 ? 'text-danger' : 'text-text')}>{`${stats.overdueCount} ดีล`}</dd>
+            </div>
+            <div className="grid min-w-0 gap-0.5">
+              <dt className="text-sm text-text-muted">ครบกำหนดใกล้สุด</dt>
+              <dd className="m-0 text-lg font-extrabold tabular-nums text-text">{stats.nextDue ? formatThaiDate(stats.nextDue) : '—'}</dd>
+            </div>
+          </dl>
+        </section>
+      )}
 
       <Tabs
         items={[

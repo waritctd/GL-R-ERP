@@ -187,10 +187,12 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     // Acceptance
     // ─────────────────────────────────────────────────────────────────────────────────────
 
-    /** Round 8: a DEAL_DIRECT row stores recipient_type = 'UNSPECIFIED'; the DTO must serve it
-     * (read-only exposure of an already-persisted column) through listForTicket's real query. */
+    /** Round 8: the DTO serves a DEAL_DIRECT row's persisted recipient_type through listForTicket's
+     * real query. Slice 2 (quotation ↔ deal linking) made the recipient REQUIRED on a direct create —
+     * it used to be stored as 'UNSPECIFIED' — so this now pins the value the request sent. OWNER is
+     * deliberately not the column's old default, so a query that dropped the column would fail here. */
     @Test
-    void listForTicket_servesUnspecifiedRecipientForADealDirectRow() {
+    void listForTicket_servesTheStoredRecipientForADealDirectRow() {
         DealQuotationDto created = quotationService.create(ticketId,
             upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
 
@@ -198,7 +200,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .filter(q -> q.id() == created.id()).findFirst().orElseThrow();
 
         assertThat(listed.origin()).isEqualTo("DEAL_DIRECT");
-        assertThat(listed.recipientType()).isEqualTo("UNSPECIFIED");
+        assertThat(listed.recipientType()).isEqualTo("OWNER");
     }
 
     @Test
@@ -630,6 +632,12 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
      */
     @Test
     void createReorder_approvalSweep_neverTouchesAPricingChainCustomerQuotationRow() {
+        // Slice 2 (one pricing route per deal): a direct quotation can no longer be CREATED on a deal
+        // with a live pricing request, so the direct draft is created and submitted FIRST and the
+        // pricing-chain rows arrive behind it (the legacy coexistence this test is about). The sweep
+        // under test runs at approve(), which still happens after both exist.
+        DealQuotationDto pendingDirect = quotationService.submit(quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor).id(), salesActor);
         jdbc.update("""
             INSERT INTO sales.pricing_request (request_code, ticket_id, recipient_type, requested_by)
             VALUES (:code, :ticketId, 'BUYER', :requestedBy)
@@ -652,7 +660,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
         // Approve an ordinary DEAL_DIRECT quotation on the SAME ticket -- must not touch the
         // PCR-chain row above.
-        createSubmittedApproved(ticketId, salesActor, salesManagerActor);
+        quotationService.approve(pendingDirect.id(), new ApproveRequest(null), salesManagerActor);
 
         String pcrStatusAfter = jdbc.queryForObject(
             "SELECT doc_status FROM sales.quotation WHERE quotation_id = :id",
@@ -951,7 +959,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         DealQuotationDto first = quotationService.create(ticketId,
             upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
         DealQuotationDto pending1 = quotationService.submit(first.id(), salesActor);
-        DealQuotationDto second = quotationService.create(ticketId,
+        DealQuotationDto second = createAlongsideLive(ticketId,
             upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
         DealQuotationDto pending2 = quotationService.submit(second.id(), salesActor);
         assertThat(pending1.docStatus()).isEqualTo(QuotationStatus.PENDING_APPROVAL);
@@ -2051,7 +2059,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         DealQuotationDto range = quotationService.create(ticketId,
             upsertRequest(List.of(itemMutated(m -> m.withLeadTime(75, 90)))), salesActor);
         assertThat(range.items().get(0).leadTimeMinDays()).isEqualTo(75);
-        DealQuotationDto exact = quotationService.create(ticketId,
+        DealQuotationDto exact = createAlongsideLive(ticketId,
             upsertRequest(List.of(itemMutated(m -> m.withLeadTime(1, 1)))), salesActor);
         assertThat(exact.items().get(0).leadTimeMinDays()).isEqualTo(1);
         assertThat(exact.items().get(0).leadTimeMaxDays()).isEqualTo(1);
@@ -2150,7 +2158,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     void create_refusesZeroCreditDaysWhenRemainderModeIsCredit() {
         assertThatThrownBy(() -> quotationService.create(ticketId,
             new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 0, 30,
-                "หมายเหตุทดสอบ", List.of(sampleItem("100.00", 10))),
+                "หมายเหตุทดสอบ", List.of(sampleItem("100.00", 10))).withRecipientType("OWNER"),
             salesActor))
             .isInstanceOf(ApiException.class)
             .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
@@ -2166,7 +2174,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
         assertThatThrownBy(() -> quotationService.update(created.id(),
             new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 0, 30,
-                "หมายเหตุทดสอบ", List.of(sampleItem("100.00", 10))),
+                "หมายเหตุทดสอบ", List.of(sampleItem("100.00", 10))).withRecipientType("OWNER"),
             salesActor))
             .isInstanceOf(ApiException.class)
             .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
@@ -2180,7 +2188,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     void create_stillAcceptsACreditRemainderWithBlankCreditDays() {
         DealQuotationDto created = quotationService.create(ticketId,
             new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", null, 30,
-                "หมายเหตุทดสอบ", List.of(sampleItem("100.00", 10))),
+                "หมายเหตุทดสอบ", List.of(sampleItem("100.00", 10))).withRecipientType("OWNER"),
             salesActor);
         assertThat(created.remainderMode()).isEqualTo("CREDIT");
         assertThat(created.creditDays()).isNull();
@@ -2192,7 +2200,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     void submit_refusesACreditRemainderWithNoCreditDays() {
         DealQuotationDto created = quotationService.create(ticketId,
             new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", null, 30,
-                "หมายเหตุทดสอบ", List.of(sampleItem("100.00", 10))),
+                "หมายเหตุทดสอบ", List.of(sampleItem("100.00", 10))).withRecipientType("OWNER"),
             salesActor);
 
         assertThatThrownBy(() -> quotationService.submit(created.id(), salesActor))
@@ -2207,13 +2215,13 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     void create_acceptsAPositiveCreditDays_andANonCreditRemainderModeRegardlessOfCreditDays() {
         DealQuotationDto credit = quotationService.create(ticketId,
             new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 1, 30,
-                "หมายเหตุทดสอบ", List.of(sampleItem("100.00", 10))),
+                "หมายเหตุทดสอบ", List.of(sampleItem("100.00", 10))).withRecipientType("OWNER"),
             salesActor);
         assertThat(credit.creditDays()).isEqualTo(1);
 
-        DealQuotationDto delivery = quotationService.create(ticketId,
+        DealQuotationDto delivery = createAlongsideLive(ticketId,
             new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "ON_DELIVERY", 0, 30,
-                "หมายเหตุทดสอบ", List.of(sampleItem("100.00", 10))),
+                "หมายเหตุทดสอบ", List.of(sampleItem("100.00", 10))).withRecipientType("OWNER"),
             salesActor);
         assertThat(delivery.remainderMode()).isEqualTo("ON_DELIVERY");
     }
@@ -2595,13 +2603,13 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
         CustomerDto otherCustomer = customers.create("บริษัท อื่น จำกัด", "0100000000098", "1 ถนนอื่น", "สนญ.", null);
         ContactDto foreign = contacts.create(otherCustomer.id(), "คนนอก", "ลูกค้าอื่น", null, null, null);
-        assertThatThrownBy(() -> quotationService.create(ticketId,
+        assertThatThrownBy(() -> createAlongsideLive(ticketId,
                 upsertRequest(foreign.id(), List.of(sampleItem("100.00", 10))), salesActor))
             .isInstanceOf(ApiException.class)
             .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
             .hasMessage("กรุณาระบุผู้สั่งซื้อ");
         // A contact id that does not exist at all: same answer, nothing leaks.
-        assertThatThrownBy(() -> quotationService.create(ticketId,
+        assertThatThrownBy(() -> createAlongsideLive(ticketId,
                 upsertRequest(999_999_999L, List.of(sampleItem("100.00", 10))), salesActor))
             .isInstanceOf(ApiException.class)
             .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST);
@@ -2836,8 +2844,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         String[] rows = signatureRows(xls);
         assertThat(rows[1]).contains("(" + approved.approvedByName() + ")");
 
-        // A draft on the same deal (no approver yet) must NOT carry the image.
-        DealQuotationDto draft = quotationService.create(ticketId,
+        // A draft on the same deal (no approver yet) must NOT carry the image. Stacked beside the
+        // live approved row on purpose, so it bypasses N6 via the test-only fixture.
+        DealQuotationDto draft = createAlongsideLive(ticketId,
             upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
         assertThat(signaturePicture(quotationService.renderXlsx(draft.id(), salesActor))).isNull();
 
@@ -2872,9 +2881,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         quotationService.reject(rejected.id(), new RejectRequest("แก้ราคา"), salesManagerActor);
         DealQuotationDto approved = createSubmittedApproved(ticketId, salesActor, salesManagerActor);
         DealQuotationDto revision = quotationService.createRevision(approved.id(), salesActor);
-        DealQuotationDto plainDraft = quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        DealQuotationDto plainDraft = createAlongsideLive(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
         DealQuotationDto pending = quotationService.submit(
-            quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor).id(), salesActor);
+            createAlongsideLive(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor).id(), salesActor);
 
         DealQuotationDto othersRejected = quotationService.create(otherTicketId, upsertRequest(List.of(sampleItem("100.00", 10))), otherSalesActor);
         quotationService.submit(othersRejected.id(), otherSalesActor);
@@ -2906,10 +2915,10 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         quotationService.submit(rejected.id(), salesActor);
         quotationService.reject(rejected.id(), new RejectRequest("แก้ราคา"), salesManagerActor);
         createSubmittedApproved(ticketId, salesActor, salesManagerActor);
-        quotationService.submit(quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor).id(), salesActor);
-        quotationService.cancel(quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor).id(),
+        quotationService.submit(createAlongsideLive(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor).id(), salesActor);
+        quotationService.cancel(createAlongsideLive(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor).id(),
             new CancelRequest(null), salesActor);
-        quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor); // plain draft
+        createAlongsideLive(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor); // plain draft
         // Rep B's rows must not leak into rep A's counts.
         DealQuotationDto othersPending = quotationService.submit(
             quotationService.create(otherTicketId, upsertRequest(List.of(sampleItem("100.00", 10))), otherSalesActor).id(), otherSalesActor);
@@ -3201,17 +3210,19 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void account_seesADealQuotationOnlyOnceItWentToTheCustomer() {
         setSalesStage(ticketId, "PROCUREMENT");
+        // Every create after the first stacks another live direct quotation on this one deal on
+        // purpose (one per status under test), so those go through the N6-bypassing test fixture.
         DealQuotationDto draft = quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
         DealQuotationDto submitted = quotationService.submit(
-            quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor).id(), salesActor);
-        DealQuotationDto rejected = quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
-        DealQuotationDto cancelled = quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+            createAlongsideLive(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor).id(), salesActor);
+        DealQuotationDto rejected = createAlongsideLive(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        DealQuotationDto cancelled = createAlongsideLive(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
         setDocStatus(rejected.id(), "REJECTED");
         setDocStatus(cancelled.id(), "CANCELLED");
         DealQuotationDto approved = quotationService.approve(
-            quotationService.submit(quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))),
+            quotationService.submit(createAlongsideLive(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))),
                 salesActor).id(), salesActor).id(), new ApproveRequest(null), salesManagerActor);
-        DealQuotationDto accepted = quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        DealQuotationDto accepted = createAlongsideLive(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
         setDocStatus(accepted.id(), "ACCEPTED");
         assertThat(approved.docStatus()).isEqualTo("APPROVED");
         assertThat(submitted.docStatus()).isEqualTo("PENDING_APPROVAL");
@@ -3330,7 +3341,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(approvedByManager.docStatus()).isEqualTo(QuotationStatus.APPROVED);
 
         DealQuotationDto submitted2 = quotationService.submit(
-            quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor).id(),
+            createAlongsideLive(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor).id(),
             salesActor);
         DealQuotationDto approvedByCeo = quotationService.approve(submitted2.id(), new ApproveRequest(null), ceoActor);
         assertThat(approvedByCeo.docStatus()).isEqualTo(QuotationStatus.APPROVED);
@@ -3627,7 +3638,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         return new UpsertDealQuotationRequest(base.contactId(), base.deptCode(), base.unitCode(),
             base.offerDate(), base.depositPercent(), base.remainderMode(), base.creditDays(),
             base.validityDays(), validityMode, validityUntil, base.customerNotes(), base.priceMode(),
-            base.documentLanguage(), base.currency(), base.items());
+            base.documentLanguage(), base.currency(), base.items()).withRecipientType("OWNER");
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -3645,7 +3656,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             base.validityDays(), base.validityMode(), base.validityUntil(), base.customerNotes(),
             base.priceMode(), base.documentLanguage(), base.currency(), base.printedByDisplayId(),
             base.salesRepDisplayId(), base.projectName(), base.omitContactHonorific(), fullPaymentTerm,
-            base.items());
+            base.items()).withRecipientType("OWNER");
     }
 
     /** Item 2 wither. */
@@ -3654,7 +3665,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             base.offerDate(), base.depositPercent(), base.remainderMode(), base.creditDays(),
             base.validityDays(), base.validityMode(), base.validityUntil(), base.customerNotes(),
             base.priceMode(), base.documentLanguage(), base.currency(), base.printedByDisplayId(),
-            base.salesRepDisplayId(), base.projectName(), omit, base.fullPaymentTerm(), base.items());
+            base.salesRepDisplayId(), base.projectName(), omit, base.fullPaymentTerm(), base.items()).withRecipientType("OWNER");
     }
 
     @Test
@@ -3943,8 +3954,15 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         return salesActor;
     }
 
+    /** Slice 2's N6 allows one live direct quotation per deal; the tests below that put several on one
+     * deal (legacy/revision shapes) create through {@link LegacyDirectQuotationFixtures}. */
+    private DealQuotationDto createAlongsideLive(long ticketIdParam, UpsertDealQuotationRequest request,
+                                                 UserPrincipal actor) {
+        return LegacyDirectQuotationFixtures.createAlongsideLive(jdbc, quotationService, ticketIdParam, request, actor);
+    }
+
     private DealQuotationDto createSubmittedApproved(long ticketIdParam, UserPrincipal creator, UserPrincipal approver) {
-        DealQuotationDto created = quotationService.create(ticketIdParam,
+        DealQuotationDto created = createAlongsideLive(ticketIdParam,
             upsertRequest(List.of(sampleItem("100.00", 10))), creator);
         DealQuotationDto submitted = quotationService.submit(created.id(), creator);
         return quotationService.approve(submitted.id(), new ApproveRequest(null), approver);
@@ -3963,7 +3981,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     /** {@code contactId} null = "default to the deal's contact" (the normal wire shape). */
     private UpsertDealQuotationRequest upsertRequest(Long contactId, List<ItemInput> items) {
         return new UpsertDealQuotationRequest(contactId, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
-            "หมายเหตุทดสอบ", items);
+            "หมายเหตุทดสอบ", items).withRecipientType("OWNER");
     }
 
     private ItemInput sampleItem(String unitPrice, int pieces) {
@@ -4214,7 +4232,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     void plainRow_hundredPercentDeposit_nonTileRemark_statesFullPaymentReceived_notADeposit() {
         DealQuotationDto created = quotationService.create(ticketId,
             new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 100, "CREDIT", 45, 30,
-                "หมายเหตุทดสอบ", List.of(plainItemWithLeadTime("สุขภัณฑ์", "1", "ชุด", "5000.00", 75, 90))),
+                "หมายเหตุทดสอบ", List.of(plainItemWithLeadTime("สุขภัณฑ์", "1", "ชุด", "5000.00", 75, 90))).withRecipientType("OWNER"),
             salesActor);
 
         QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(created, null, null);
@@ -4606,7 +4624,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         // The obvious client edit: same items, a changed note, NO priceMode field on the wire.
         DealQuotationDto saved = quotationService.update(created.id(),
             new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
-                "แก้หมายเหตุ", List.of(specialSqmItem("2000.00", 10, "1350"))),
+                "แก้หมายเหตุ", List.of(specialSqmItem("2000.00", 10, "1350"))).withRecipientType("OWNER"),
             salesActor);
 
         assertThat(saved.priceMode()).isEqualTo(WastageCalculator.PRICE_MODE_SPECIAL_SQM);
@@ -4637,7 +4655,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
         DealQuotationDto saved = quotationService.update(created.id(),
             new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
-                "แก้หมายเหตุ", List.of(directNetItem("2000.00", 10, "777.50"))),
+                "แก้หมายเหตุ", List.of(directNetItem("2000.00", 10, "777.50"))).withRecipientType("OWNER"),
             salesActor);
 
         assertThat(saved.priceMode()).isEqualTo(WastageCalculator.PRICE_MODE_DIRECT_NET);
@@ -5035,7 +5053,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(revisionOfFalse.items().get(0).piecesFinal()).isEqualTo(32);
         assertThat(revisionOfFalse.items().get(0).boxes()).isEqualTo(3);
 
-        DealQuotationDto createdTrue = quotationService.create(ticketId,
+        DealQuotationDto createdTrue = createAlongsideLive(ticketId,
             upsertRequest(List.of(loosePiecesItem(32, WastageCalculator.WASTAGE_MODE_NONE, null, 10,
                 "50.00", true))),
             salesActor);
@@ -5149,14 +5167,14 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private UpsertDealQuotationRequest upsertRequestWithMode(String priceMode, List<ItemInput> items) {
         return new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
-            "หมายเหตุทดสอบ", priceMode, items);
+            "หมายเหตุทดสอบ", priceMode, items).withRecipientType("OWNER");
     }
 
     /** The full canonical constructor, for the one field (projectName) none of this class's other
      * helpers thread through. Every other field left at its "use the default" value. */
     private UpsertDealQuotationRequest upsertRequestWithProjectName(String projectName, List<ItemInput> items) {
         return new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
-            null, null, "หมายเหตุทดสอบ", null, null, null, null, null, projectName, items);
+            null, null, "หมายเหตุทดสอบ", null, null, null, null, null, projectName, items).withRecipientType("OWNER");
     }
 
     /** Owner-directed reversal of F2 (2026-09-26) — the full canonical constructor, for the one
@@ -5164,7 +5182,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
      * left at its "use the default" value. */
     private UpsertDealQuotationRequest upsertRequestWithOrderedByName(String orderedByName, List<ItemInput> items) {
         return new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
-            null, null, "หมายเหตุทดสอบ", null, null, null, null, null, null, null, null, orderedByName, items);
+            null, null, "หมายเหตุทดสอบ", null, null, null, null, null, null, null, null, orderedByName, items).withRecipientType("OWNER");
     }
 
     /** {@link #sampleItem} (60x60 -> 0.36 ตร.ม./แผ่น, piecesPerBox 1) plus a ราคาพิเศษ. */

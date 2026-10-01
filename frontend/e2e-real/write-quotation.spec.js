@@ -46,9 +46,14 @@ const ITEM = {
   leadTimeMaxDays: 90,
 };
 
+// Quotation ↔ deal linking slice 2: a direct create must name its ผู้รับใบเสนอราคา (S2-B1, 400
+// otherwise), and a deal may hold only ONE live direct quotation (N6, 409 otherwise) — so every test
+// below that CREATES a quotation does so on a deal of its own (`newDeal`), and the body always says
+// who the quotation is for. On an update the same OWNER is a no-op (it is what was stored).
 function draftBody(contactId, overrides = {}) {
   return {
     contactId,
+    recipientType: 'OWNER',
     deptCode: 'P003',
     unitCode: 'D002',
     offerDate: '2026-09-10',
@@ -65,6 +70,7 @@ test.describe('direct-deal ใบเสนอราคา — the real service',
   let sessions;
   let ticketId;
   let contactId;
+  let newDeal;
 
   // Deliberately NOT using helpers/sales.js. Those helpers are for the `uat-*` specs, which this
   // config EXCLUDES from a local/CI run (`testIgnore: ['**/uat-*.spec.js']`), and `runId()` there
@@ -90,18 +96,21 @@ test.describe('direct-deal ใบเสนอราคา — the real service',
     expect(project.status(), 'POST /api/customers/{id}/projects').toBe(200);
     const projectId = (await project.json()).project.id;
 
-    const ticket = await apiWrite(sessions.sales, 'post', '/api/tickets', {
-      title: `${tag} quotation journey`,
-      priority: 'NORMAL',
-      customerId,
-      customerName: `บริษัท อีทูอี ${tag} จำกัด`,
-      projectId,
-      entryChannel: 'OWNER_DIRECT',
-      items: [],
-      nextFollowUpAt: '2026-12-31',
-    });
-    expect(ticket.status(), 'POST /api/tickets').toBe(200);
-    ticketId = (await ticket.json()).ticket.summary.id;
+    newDeal = async () => {
+      const ticket = await apiWrite(sessions.sales, 'post', '/api/tickets', {
+        title: `${tag} quotation journey`,
+        priority: 'NORMAL',
+        customerId,
+        customerName: `บริษัท อีทูอี ${tag} จำกัด`,
+        projectId,
+        entryChannel: 'OWNER_DIRECT',
+        items: [],
+        nextFollowUpAt: '2026-12-31',
+      });
+      expect(ticket.status(), 'POST /api/tickets').toBe(200);
+      return (await ticket.json()).ticket.summary.id;
+    };
+    ticketId = await newDeal();
 
     // Owner-directed reversal of V167/F2 (2026-09-26): ผู้สั่งซื้อ is no longer mandatory — a
     // contact is still created here because "sales creates a draft, and the ผู้สั่งซื้อ snapshot
@@ -117,7 +126,7 @@ test.describe('direct-deal ใบเสนอราคา — the real service',
   test.afterAll(async () => { await disposeSessions(sessions); });
 
   test('sales creates a draft, and the ผู้สั่งซื้อ snapshot is frozen onto it', async () => {
-    const response = await apiWrite(sessions.sales, 'post', `/api/tickets/${ticketId}/deal-quotations`, draftBody(contactId));
+    const response = await apiWrite(sessions.sales, 'post', `/api/tickets/${await newDeal()}/deal-quotations`, draftBody(contactId));
     // 201, not 200 — creating a quotation is the ONE endpoint in this journey that answers Created.
     // Everything else here (contacts, projects, tickets, submit, approve) answers 200. Pinned
     // because a status change is a contract change a caller can be broken by.
@@ -144,7 +153,7 @@ test.describe('direct-deal ใบเสนอราคา — the real service',
   // DealQuotationIntegrationTest#create_withNoResolvableContact_succeedsWithABlankContactSnapshot.
   test('a quotation can be created with no ผู้สั่งซื้อ at all, and freezes a blank contact snapshot', async () => {
     const response = await apiWrite(
-      sessions.sales, 'post', `/api/tickets/${ticketId}/deal-quotations`,
+      sessions.sales, 'post', `/api/tickets/${await newDeal()}/deal-quotations`,
       { ...draftBody(contactId), contactId: null },
     );
     expect(response.status(), 'create with no contact now succeeds').toBe(201);
@@ -161,7 +170,7 @@ test.describe('direct-deal ใบเสนอราคา — the real service',
   });
 
   test('submit → approve, with every refusal asserted on the way', async () => {
-    const created = await apiWrite(sessions.sales, 'post', `/api/tickets/${ticketId}/deal-quotations`, draftBody(contactId));
+    const created = await apiWrite(sessions.sales, 'post', `/api/tickets/${await newDeal()}/deal-quotations`, draftBody(contactId));
     expect(created.status(), 'POST create answers 201 Created').toBe(201);
     const id = (await created.json()).quotation.id;
 
@@ -242,6 +251,7 @@ test.describe('quotation v3 / v3b + customer details — the real service', () =
   let contactId;
   let thaiId;
   let englishId;
+  let newDeal;
   const tag = `q3v3-${Date.now().toString(36)}`;
   // Filled in the address test, asserted on the NEXT quotation (repeat-customer autofill).
   const ADDRESS = `99/1 ถนนพระราม 9 แขวงห้วยขวาง เขตห้วยขวาง กทม. 10310 ${tag}`;
@@ -264,11 +274,17 @@ test.describe('quotation v3 / v3b + customer details — the real service', () =
     customerId = (await customer.json()).customer.id;
     const project = await apiWrite(sessions.sales, 'post', `/api/customers/${customerId}/projects`, { name: `V3 Project ${tag}` });
     const projectId = (await project.json()).project.id;
-    const ticket = await apiWrite(sessions.sales, 'post', '/api/tickets', {
-      title: `${tag} v3`, priority: 'NORMAL', customerId, customerName: `บริษัท เปล่า ${tag} จำกัด`, projectId,
-      entryChannel: 'OWNER_DIRECT', items: [], nextFollowUpAt: '2026-12-31',
-    });
-    ticketId = (await ticket.json()).ticket.summary.id;
+    // One deal per created quotation (slice 2's N6) — all for the SAME customer, which is what the
+    // repeat-customer test at the end is about.
+    newDeal = async () => {
+      const ticket = await apiWrite(sessions.sales, 'post', '/api/tickets', {
+        title: `${tag} v3`, priority: 'NORMAL', customerId, customerName: `บริษัท เปล่า ${tag} จำกัด`, projectId,
+        entryChannel: 'OWNER_DIRECT', items: [], nextFollowUpAt: '2026-12-31',
+      });
+      expect(ticket.status(), 'POST /api/tickets').toBe(200);
+      return (await ticket.json()).ticket.summary.id;
+    };
+    ticketId = await newDeal();
     // A ผู้สั่งซื้อ with NO phone and NO email.
     const contact = await apiWrite(sessions.sales, 'post', `/api/customers/${customerId}/contacts`, { firstName: 'สมศรี', lastName: tag });
     contactId = (await contact.json()).contact.id;
@@ -321,7 +337,10 @@ test.describe('quotation v3 / v3b + customer details — the real service', () =
   });
 
   test('refusals: every one the editor avoids offering is a real 400 from the service', async () => {
-    const create = (overrides) => apiWrite(sessions.sales, 'post', `/api/tickets/${ticketId}/deal-quotations`, draftBody(contactId, overrides));
+    // A deal with NO live direct quotation: on ticketId (which holds thaiId) N6's 409 would answer
+    // before any item is validated. Every refusal below writes nothing, so one fresh deal serves all.
+    const refusalDeal = await newDeal();
+    const create = (overrides) => apiWrite(sessions.sales, 'post', `/api/tickets/${refusalDeal}/deal-quotations`, draftBody(contactId, overrides));
     const refusals = [
       // Option B (owner decision 2026-09-16) superseded 2026-09-13's "never without box data": a
       // bare English per-sqm row (no box area at all) is now ACCEPTED, its sqm quantity derived
@@ -356,7 +375,7 @@ test.describe('quotation v3 / v3b + customer details — the real service', () =
   });
 
   test('English: USD, no VAT; an update that OMITS priceMode/documentLanguage keeps the stored ones', async () => {
-    const created = await apiWrite(sessions.sales, 'post', `/api/tickets/${ticketId}/deal-quotations`, draftBody(contactId, {
+    const created = await apiWrite(sessions.sales, 'post', `/api/tickets/${await newDeal()}/deal-quotations`, draftBody(contactId, {
       priceMode: 'DIRECT_NET', documentLanguage: 'EN', currency: 'USD',
       items: [tile({ unitPrice: 15, directNetPrice: 12.5, discountPct: null }), { ...plain, unit: 'JOB', quantity: 1, unitPrice: 800 }],
     }));
@@ -441,7 +460,7 @@ test.describe('quotation v3 / v3b + customer details — the real service', () =
   });
 
   test('a repeat customer: the NEXT quotation starts with the details already filled', async () => {
-    const response = await apiWrite(sessions.sales, 'post', `/api/tickets/${ticketId}/deal-quotations`, draftBody(contactId));
+    const response = await apiWrite(sessions.sales, 'post', `/api/tickets/${await newDeal()}/deal-quotations`, draftBody(contactId));
     expect(response.status()).toBe(201);
     const { quotation } = await response.json();
     expect(quotation).toMatchObject({ customerAddress: ADDRESS, customerPhone: PHONE, customerTaxId: TAX_ID });

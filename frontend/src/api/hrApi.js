@@ -517,6 +517,34 @@ export const api = {
       return res.blob();
     },
   },
+  // Mirrors BillingNoteController — the STORED ใบวางบิล aggregate (V189, GLA-99 step 3 / GLA-129
+  // step 4). Customer-scoped, DRAFT -> ISSUED -> {SUPERSEDED | CANCELLED | SETTLED}. `createDraft`'s
+  // `payload` is a BillingNoteDraftRequest-shaped body (type required on create; lines, when
+  // supplied, whole-value replace). Authorisation is enforced entirely in BillingNoteService —
+  // these methods carry no gate of their own.
+  billingNotes: {
+    candidates: (customerId) => apiRequest(API_ROUTES.billingNotes.candidates(customerId)),
+    listForCustomer: (customerId) => apiRequest(API_ROUTES.billingNotes.forCustomer(customerId)),
+    createDraft: (customerId, payload) =>
+      apiRequest(API_ROUTES.billingNotes.forCustomer(customerId), { method: 'POST', body: payload }),
+    get: (id) => apiRequest(API_ROUTES.billingNotes.get(id)),
+    update: (id, payload) => apiRequest(API_ROUTES.billingNotes.get(id), { method: 'PUT', body: payload }),
+    issue: (id) => apiRequest(API_ROUTES.billingNotes.issue(id), { method: 'POST' }),
+    revise: (id) => apiRequest(API_ROUTES.billingNotes.revise(id), { method: 'POST' }),
+    cancel: (id, reason) => apiRequest(API_ROUTES.billingNotes.cancel(id), { method: 'POST', body: { reason } }),
+    markReceived: (id, payload) => apiRequest(API_ROUTES.billingNotes.markReceived(id), { method: 'POST', body: payload }),
+    markSettled: (id) => apiRequest(API_ROUTES.billingNotes.markSettled(id), { method: 'POST' }),
+    remove: (id) => apiRequest(API_ROUTES.billingNotes.get(id), { method: 'DELETE' }),
+    // Binary, so it goes through fetch directly — same shape as storedRemainingInvoices.download above.
+    download: async (id) => {
+      const res = await fetch(API_ROUTES.billingNotes.file(id), { credentials: 'include' });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'ดาวน์โหลดใบวางบิลไม่สำเร็จ');
+      }
+      return res.blob();
+    },
+  },
   // Mirrors ImportRequestController's SINGULAR (preview) routes. Import/CEO only, enforced in
   // ImportRequestService — these methods carry no gate of their own and must not be read as one.
   importRequests: {
@@ -722,6 +750,10 @@ export const api = {
   },
   commissions: {
     list: (params) => apiRequest(withQuery(API_ROUTES.commissions.list, params)),
+    // sales_manager/ceo รออนุมัติ view: -> { commissions: [PendingCommissionDto] }.
+    pendingApproval: () => apiRequest(API_ROUTES.commissions.pendingApproval),
+    // sales_manager only: { lines: [{ itemId, weightMultiplier }] } -> { pending: PendingCommissionDto }.
+    adjustItemWeights: (id, payload) => apiRequest(API_ROUTES.commissions.itemWeights(id), { method: 'POST', body: payload }),
     create: async (payload) => {
       if (!Object.prototype.hasOwnProperty.call(payload, 'invoiceAttachment')) {
         return apiRequest(API_ROUTES.commissions.create, { method: 'POST', body: payload });
