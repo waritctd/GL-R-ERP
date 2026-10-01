@@ -439,14 +439,10 @@ export async function generateFactoryEmailDrafts(sessions, pricingRequestId) {
  * (FactoryQuoteService.receive, factoryquote/FactoryQuoteService.java:464-586 — the
  * DRAFT/REQUESTED branch at :499-538 that a freshly-drafted quote always takes).
  *
- * This flow calls receive() directly rather than POST /api/factory-quotes/{id}/send, which
- * remains unneeded here: receive() accepts a quote straight from DRAFT (line 499). The mail-safety
- * reason this bullet used to give — that send() would call Resend and UAT's integration ignores
- * APP_MAIL_OVERRIDE_TO (issue #782) — no longer applies: the manual-RFQ redesign (2026-09-06) made
- * send() a synchronous, human-performed-send RECORD only; it never calls a mail provider any more
- * (FactoryQuoteService.send's own javadoc), and the factory-emails/send endpoint it also warned
- * about is deleted outright. send() is safe to call in any environment now — it is just not the
- * call this particular flow needs.
+ * CR-1 (GLA-167, B-R2): receive() now 409s on a still-DRAFT quote ("ต้องกด ติดต่อโรงงานแล้ว ก่อนกรอกราคา"),
+ * so this helper first records the factory as contacted (POST /api/factory-quotes/{id}/contacted,
+ * today in Asia/Bangkok) — the real-stack equivalent of Import pressing ติดต่อโรงงานแล้ว. The old
+ * POST .../send endpoint is gone. A quote that is already past DRAFT is left alone.
  *
  * currency is pinned THB (see this file's header). sqmPerUnit is supplied even though the
  * chosen unitBasis is PER_PIECE — see this file's header on why that field is unconditional.
@@ -469,6 +465,10 @@ export async function receiveFactoryQuote(
   { rawUnitPrice = 150, quotedQuantity = 10 } = {}
 ) {
   const tag = runId();
+  const contactedOn = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Bangkok' }).format(new Date());
+  const contacted = await apiWrite(sessions.import, 'post', `/api/factory-quotes/${factoryQuoteId}/contacted`, { contactedOn });
+  // 409 = already contacted by an earlier step of the same flow: fine, price entry is unlocked.
+  expect([200, 409], `POST /api/factory-quotes/${factoryQuoteId}/contacted`).toContain(contacted.status());
   const response = await apiWrite(sessions.import, 'post', `/api/factory-quotes/${factoryQuoteId}/receive`, {
     supplierQuoteRef: `${tag}-quote`,
     defaultCurrency: 'THB',

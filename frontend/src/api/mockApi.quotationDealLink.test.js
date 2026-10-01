@@ -134,6 +134,12 @@ async function pricingRequestOriginDraft() {
   await asRole('import');
   await api.pricingRequests.pickup(prId);
   const { items: quotes } = await api.pricingRequests.generateFactoryEmailDrafts(prId);
+  // CR-1 (B-R2): price entry is locked until the factory is marked ติดต่อโรงงานแล้ว.
+  for (const q of quotes) {
+    await api.pricingRequests.markFactoryQuoteContacted(q.id, {
+      contactedOn: new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Bangkok' }).format(new Date()),
+    });
+  }
   await api.pricingRequests.receiveFactoryQuote(quotes[0].id, {
     clientRequestId: crypto.randomUUID(), supplierQuoteRef: 'REF-S2', defaultCurrency: 'THB', paymentTerms: '30 days',
     leadTimeText: '45 days',

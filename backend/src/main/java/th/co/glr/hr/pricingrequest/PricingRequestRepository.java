@@ -202,7 +202,10 @@ public class PricingRequestRepository {
                 .addValue("originCountryOther", item.originCountryOther())
                 // Slice 1 stock-line scaffolding (V194): persisted exactly as sent; no validation
                 // or routing here (persistence only, per this class's header Javadoc).
-                .addValue("stockSource", item.stockSource());
+                .addValue("stockSource", item.stockSource())
+                // CR-1 (GLA-167): terms Sales fixes on the line; already normalized by the service.
+                .addValue("requestedCurrency", item.requestedCurrency())
+                .addValue("requestedPriceUnitBasis", item.requestedPriceUnitBasis());
         }
         jdbc.batchUpdate("""
             INSERT INTO sales.pricing_request_item
@@ -213,7 +216,8 @@ public class PricingRequestRepository {
                  product_code, thickness_mm, sqm_per_piece, quantity_mode, area_sqm, pieces_input,
                  wastage_mode, wastage_value, pieces_per_box, sqm_per_box, pieces_before_wastage,
                  pieces_after_wastage, boxes, round_to_full_box, origin_country,
-                 lead_time_min_days, lead_time_max_days, origin_country_other, stock_source)
+                 lead_time_min_days, lead_time_max_days, origin_country_other, stock_source,
+                 requested_currency, requested_price_unit_basis)
             VALUES
                 (:pricingRequestId, :sourceTicketItemId, :productId, :variantId,
                  :brand, :model, :productDescription, :color, :texture, :size, :factory,
@@ -222,7 +226,8 @@ public class PricingRequestRepository {
                  :productCode, :thicknessMm, :sqmPerPiece, :quantityMode, :areaSqm, :piecesInput,
                  :wastageMode, :wastageValue, :piecesPerBox, :sqmPerBox, :piecesBeforeWastage,
                  :piecesAfterWastage, :boxes, :roundToFullBox, :originCountry,
-                 :leadTimeMinDays, :leadTimeMaxDays, :originCountryOther, :stockSource)
+                 :leadTimeMinDays, :leadTimeMaxDays, :originCountryOther, :stockSource,
+                 :requestedCurrency, :requestedPriceUnitBasis)
             """, batch);
     }
 
@@ -514,7 +519,7 @@ public class PricingRequestRepository {
                 "Illegal pricing request status transition: " + expected + " -> "
                     + PricingRequestStatus.SUPERSEDED);
         }
-        return jdbc.update("""
+        int rows = jdbc.update("""
             UPDATE sales.pricing_request
                SET status = 'SUPERSEDED',
                    superseded_at = now(),
@@ -526,6 +531,13 @@ public class PricingRequestRepository {
                 .addValue("id", id)
                 .addValue("expected", expected)
                 .addValue("supersededBy", supersededByPricingRequestId));
+        if (rows > 0) {
+            // CR-1: a pending lead-time change dies with the superseded request.
+            jdbc.update(LeadTimeChangeRepository.AUTO_WITHDRAW_SQL.formatted("c.pricing_request_id = :id"),
+                new MapSqlParameterSource().addValue("id", id)
+                    .addValue("autoReason", LeadTimeChangeRepository.AUTO_WITHDRAW_REASON));
+        }
+        return rows;
     }
 
     public void addEvent(long pricingRequestId, long ticketId, Long actorId, String actorName,
@@ -621,7 +633,8 @@ public class PricingRequestRepository {
                    wastage_mode, wastage_value, pieces_per_box, sqm_per_box, pieces_before_wastage,
                    pieces_after_wastage, boxes, round_to_full_box, origin_country,
                    lead_time_min_days, lead_time_max_days, origin_country_other,
-                   stock_source, expected_arrival_date
+                   stock_source, expected_arrival_date,
+                   requested_currency, requested_price_unit_basis
               FROM sales.pricing_request_item
              WHERE pricing_request_id = :id
              ORDER BY sort_order, pricing_request_item_id
@@ -1370,7 +1383,9 @@ public class PricingRequestRepository {
             nullableInt(rs, "lead_time_max_days"),
             rs.getString("origin_country_other"),
             rs.getString("stock_source"),
-            rs.getObject("expected_arrival_date", LocalDate.class)
+            rs.getObject("expected_arrival_date", LocalDate.class),
+            rs.getString("requested_currency"),
+            rs.getString("requested_price_unit_basis")
         );
     }
 

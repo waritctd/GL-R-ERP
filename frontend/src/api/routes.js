@@ -285,10 +285,19 @@ export const API_ROUTES = {
     // 2026-09-26, task "designer-add-from-ui"). See DesignerController's own Javadoc.
     create: '/api/designers',
   },
+  // CR-1 (GLA-167): lead-time change requests. Mirrors LeadTimeChangeController.
+  leadTimeChanges: {
+    forFactoryQuote: (factoryQuoteId) => `/api/factory-quotes/${factoryQuoteId}/lead-time-changes`,
+    detail: (id) => `/api/lead-time-changes/${id}`,
+    withdraw: (id) => `/api/lead-time-changes/${id}/withdraw`,
+    approve: (id) => `/api/lead-time-changes/${id}/approve`,
+    reject: (id) => `/api/lead-time-changes/${id}/reject`,
+    forPricingRequest: (pricingRequestId) => `/api/pricing-requests/${pricingRequestId}/lead-time-changes`,
+  },
   factoryConfigs: {
     list: '/api/factory-configs',
     // sendEmail (POST /api/tickets/{id}/factory-emails/send) is retired: factory RFQ email is
-    // manual-only now — see priceImport.factories/factory below and pricingRequests.factoryQuoteSend.
+    // manual-only now — see priceImport.factories/factory below and pricingRequests.factoryQuoteContacted.
   },
   locations: {
     provinces: '/api/locations/provinces',
@@ -496,7 +505,8 @@ export const API_ROUTES = {
     factoryEmailDrafts: (id) => `/api/pricing-requests/${id}/factory-email-drafts`,
     factoryQuotes: (id) => `/api/pricing-requests/${id}/factory-quotes`,
     factoryQuote: (id) => `/api/factory-quotes/${id}`,
-    factoryQuoteSend: (id) => `/api/factory-quotes/${id}/send`,
+    // CR-1 (GLA-167): "ติดต่อโรงงานแล้ว" — replaces the retired POST .../send.
+    factoryQuoteContacted: (id) => `/api/factory-quotes/${id}/contacted`,
     factoryQuoteReceive: (id) => `/api/factory-quotes/${id}/receive`,
     factoryQuoteStartNegotiation: (id) => `/api/factory-quotes/${id}/start-negotiation`,
     factoryQuoteReady: (id) => `/api/factory-quotes/${id}/mark-ready-for-costing`,

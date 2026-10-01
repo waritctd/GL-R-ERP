@@ -1461,7 +1461,31 @@ public class PricingRequestService {
             item.piecesInput(), item.wastageMode(), item.wastageValue(), item.piecesPerBox(),
             item.sqmPerBox(), roundToFullBox, item.originCountry(), item.leadTimeMinDays(),
             item.leadTimeMaxDays(), result.piecesBeforeWastage(), result.piecesAfterWastage(),
-            result.boxes(), originCountryOther, stockSource);
+            result.boxes(), originCountryOther, stockSource,
+            requestedCurrency(rowNumber, item.requestedCurrency()),
+            requestedPriceUnitBasis(item.requestedPriceUnitBasis()));
+    }
+
+    /**
+     * CR-1 (GLA-167): the currency Sales asks the factory to quote in. Blank = legacy/unspecified
+     * (null). No shared currency list exists to check against (FX tracks five but any ISO-4217 code
+     * can be quoted), so this only enforces the shape: three letters, stored upper-case.
+     */
+    private static String requestedCurrency(int rowNumber, String raw) {
+        if (!hasText(raw)) {
+            return null;
+        }
+        String code = raw.trim().toUpperCase();
+        if (!code.matches("[A-Z]{3}")) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "รายการที่ " + (rowNumber + 1) + ": สกุลเงินไม่ถูกต้อง '" + raw + "'");
+        }
+        return code;
+    }
+
+    /** CR-1: the price unit Sales asks for, normalized to the shared unit-basis vocabulary. */
+    private static String requestedPriceUnitBasis(String raw) {
+        return hasText(raw) ? UnitBasis.canonicalize(raw, "หน่วยราคา") : null;
     }
 
     private static PricingRequestItemRequest withStockSource(PricingRequestItemRequest i, String stockSource) {
@@ -1473,7 +1497,8 @@ public class PricingRequestService {
             i.thicknessMm(), i.sqmPerPiece(), i.quantityMode(), i.areaSqm(), i.piecesInput(),
             i.wastageMode(), i.wastageValue(), i.piecesPerBox(), i.sqmPerBox(), i.roundToFullBox(),
             i.originCountry(), i.leadTimeMinDays(), i.leadTimeMaxDays(), i.piecesBeforeWastage(),
-            i.piecesAfterWastage(), i.boxes(), i.originCountryOther(), stockSource);
+            i.piecesAfterWastage(), i.boxes(), i.originCountryOther(), stockSource,
+            i.requestedCurrency(), i.requestedPriceUnitBasis());
     }
 
     // ── V185: reconstruct the top-level request record with a RESOLVED items list, so

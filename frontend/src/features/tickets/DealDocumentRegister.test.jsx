@@ -52,6 +52,11 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       attachments: {
         fileUrl: (id) => `#mock-file-${id}`,
       },
+      // CR-1 (R9): the stored ใบขอซื้อ aggregate — one row per factory, listed in a 5th section.
+      storedImportRequests: {
+        listForTicket: vi.fn().mockResolvedValue({ importRequests: [] }),
+        download: vi.fn(),
+      },
     },
   };
 });
@@ -89,11 +94,14 @@ describe('DealDocumentRegister', () => {
     api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [] });
     api.dealQuotations.listForTicket.mockResolvedValue({ items: [] });
     api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [] });
+    api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: [] });
   });
 
-  it('renders one honest empty state — not three silently-omitted sections — for a viewer admitted to none of the three row families', async () => {
+  it('renders one honest empty state — not silently-omitted sections — for a viewer admitted to none of the row families', async () => {
     renderRegister({
-      user: { id: 99, role: 'import' },
+      // CR-1: import is admitted to the ใบขอซื้อ family now (it may read the stored IRs), so the
+      // "admitted to nothing" viewer is a non-participant account here instead.
+      user: { id: 99, role: 'account' },
       sections: IMPORT_SECTIONS,
       canViewPricingRequests: true, // role-list includes import; sections still zero it out
       canViewDocumentsTab: false, // non-participant, not in canViewTicketDocuments
@@ -105,6 +113,8 @@ describe('DealDocumentRegister', () => {
     expect(screen.queryByTestId('register-deposit')).toBeNull();
     expect(screen.queryByTestId('register-remaining-invoice')).toBeNull();
     expect(screen.queryByTestId('register-attachments')).toBeNull();
+    expect(screen.queryByTestId('register-import-requests')).toBeNull();
+    expect(api.storedImportRequests.listForTicket).not.toHaveBeenCalled();
     // Never fire a query that would 403 — a swallowed 403 rendering an empty
     // register reads as "no documents exist", which is worse than the
     // honest "not available in this view" above.
@@ -917,5 +927,88 @@ describe('DealDocumentRegister', () => {
       expect(section.getByText('รอขั้นตอน')).not.toBeNull();
       expect(section.queryByRole('button', { name: 'Excel' })).toBeNull();
     }
+  });
+});
+
+// CR-1 (GLA-167) R6 / R9: the deal เอกสาร tab gets a 5th section, ใบขอซื้อ (รายโรงงาน) — one row
+// per IR (one IR per factory): number or ฉบับร่าง, factory, status, PDF. Read gate mirrors
+// ImportRequestService#requireRead: import / CEO / sales_manager, or the owning sales rep.
+describe('DealDocumentRegister — ใบขอซื้อ (รายโรงงาน) section (CR-1)', () => {
+  const OWNER = { user: { id: 1, role: 'sales' }, sections: SALES_SECTIONS, canViewPricingRequests: true, canViewDocumentsTab: true, summary: { status: 'order_received', createdById: 1 } };
+  const ir = (over = {}) => ({
+    id: 11, ticketId: 701, factoryId: 1, factoryName: 'Cotto Industry', version: 1, status: 'ISSUED', docNumber: 'IR26001', issuedAt: '2026-09-10T03:00:00Z', ...over,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [] });
+    api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [] });
+    api.dealQuotations.listForTicket.mockResolvedValue({ items: [] });
+    api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [] });
+    api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: [] });
+    api.storedImportRequests.download.mockResolvedValue(new Blob(['pdf'], { type: 'application/pdf' }));
+    globalThis.URL.createObjectURL = vi.fn(() => 'blob:ir');
+    globalThis.URL.revokeObjectURL = vi.fn();
+  });
+
+  it('lists one row per factory IR: number (or ฉบับร่าง), factory, status', async () => {
+    api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: [
+      ir(),
+      ir({ id: 12, factoryId: 2, factoryName: 'Panaria', status: 'DRAFT', docNumber: null }),
+    ] });
+    renderRegister(OWNER);
+
+    const section = await screen.findByTestId('register-import-requests');
+    expect(within(section).getByText('ใบขอซื้อ (รายโรงงาน)')).not.toBeNull();
+    const rows = await within(section).findAllByTestId(/^document-version-ir-/);
+    expect(rows).toHaveLength(2);
+    const issued = within(section).getByTestId('document-version-ir-11');
+    expect(issued.textContent).toContain('IR26001');
+    expect(issued.textContent).toContain('Cotto Industry');
+    const draft = within(section).getByTestId('document-version-ir-12');
+    expect(draft.textContent).toContain('ฉบับร่าง');
+    // the draft has no number: the number slot is a dash and ฉบับร่าง appears ONCE (the status chip)
+    expect(draft.textContent.match(/ฉบับร่าง/g)).toHaveLength(1);
+    expect(draft.textContent).toContain('—');
+    expect(draft.textContent).toContain('Panaria');
+  });
+
+  it('does not list SUPERSEDED rows (an old revision is not a current IR)', async () => {
+    api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: [ir(), ir({ id: 13, version: 0, status: 'SUPERSEDED', docNumber: 'IR25999' })] });
+    renderRegister(OWNER);
+    const section = await screen.findByTestId('register-import-requests');
+    await within(section).findByTestId('document-version-ir-11');
+    expect(within(section).queryByTestId('document-version-ir-13')).toBeNull();
+  });
+
+  it('each row downloads its PDF', async () => {
+    api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: [ir()] });
+    renderRegister(OWNER);
+    const row = await screen.findByTestId('document-version-ir-11');
+    fireEvent.click(within(row).getByRole('button', { name: 'PDF' }));
+    await waitFor(() => expect(api.storedImportRequests.download).toHaveBeenCalledWith(11, undefined));
+  });
+
+  it('shows an honest empty line when the deal has no IR yet', async () => {
+    renderRegister(OWNER);
+    const section = await screen.findByTestId('register-import-requests');
+    expect(await within(section).findByText('ยังไม่มีใบขอซื้อสำหรับดีลนี้')).not.toBeNull();
+  });
+
+  it('import (read-only), CEO and sales_manager see the section; a non-owning sales rep and account do not, and never fetch', async () => {
+    api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: [ir()] });
+    for (const user of [{ id: 5, role: 'import' }, { id: 6, role: 'ceo' }, { id: 7, role: 'sales_manager' }]) {
+      const { unmount } = renderRegister({ ...OWNER, user, sections: IMPORT_SECTIONS, canViewDocumentsTab: false, summary: { status: 'order_received', createdById: 1 } });
+      expect(await screen.findByTestId('register-import-requests')).not.toBeNull();
+      unmount();
+    }
+    vi.clearAllMocks();
+    for (const user of [{ id: 99, role: 'sales' }, { id: 8, role: 'account' }]) {
+      const { unmount } = renderRegister({ ...OWNER, user, sections: IMPORT_SECTIONS, canViewDocumentsTab: false });
+      await screen.findByTestId('deal-document-register');
+      expect(screen.queryByTestId('register-import-requests')).toBeNull();
+      unmount();
+    }
+    expect(api.storedImportRequests.listForTicket).not.toHaveBeenCalled();
   });
 });

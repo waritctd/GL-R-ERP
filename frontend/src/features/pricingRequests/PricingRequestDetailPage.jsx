@@ -49,6 +49,20 @@ import {
   unitBasisLabel,
 } from './pricingRequestMeta.js';
 import { PricingRequestCreateModal } from './PricingRequestCreateModal.jsx';
+import { FactoryContactDialog } from './FactoryContactDialog.jsx';
+import { LeadTimeChangeBanner } from './LeadTimeChangeBanner.jsx';
+import { LeadTimeChangeDialog } from './LeadTimeChangeDialog.jsx';
+import {
+  contactedByName,
+  formatShortThaiDay,
+  hasLockedTerms,
+  isFactoryContacted,
+  isImportLine,
+  leadTimeRangeText,
+  leadTimeWithUnit,
+  lockedTermsList,
+  splitLeadTimeChanges,
+} from './factoryContactMeta.js';
 import { useUnitBasisCatalog } from './unitBasisCatalog.js';
 import { buttonVariants } from '../../components/common/Button.jsx';
 import { cn } from '../../utils/cn.js';
@@ -192,8 +206,14 @@ function defaultResponseItems(quote, requestItemById = new Map()) {
     // would have written a display string into a basis field. Leaving the `'PER_PIECE'` default
     // off is deliberate — a silently wrong basis is what PR #789 fixed on the seeding side, and
     // an absent one should fail loudly at the backend rather than quietly price per piece.
-    const unitBasis = item.unitBasis;
-    const quotedUnit = item.quotedUnit ?? requestItem.requestedUnit ?? unitBasisLabel(unitBasis);
+    // CR-1 (R1): currency and price unit are fixed by Sales on the line and locked for import — the
+    // line's own requested terms win over whatever the draft carries, so what is sent back always
+    // matches (FactoryQuoteService#receive 409s anything else). A legacy line has neither and keeps
+    // the seeding below.
+    const unitBasis = requestItem.requestedPriceUnitBasis ?? item.unitBasis;
+    const quotedUnit = requestItem.requestedPriceUnitBasis
+      ? unitBasisLabel(unitBasis)
+      : item.quotedUnit ?? requestItem.requestedUnit ?? unitBasisLabel(unitBasis);
     return {
     pricingRequestItemId: item.pricingRequestItemId,
     supplierProductCode: item.supplierProductCode ?? '',
@@ -202,7 +222,7 @@ function defaultResponseItems(quote, requestItemById = new Map()) {
     quotedUnit,
     unitBasis,
     rawUnitPrice: item.rawUnitPrice ?? '',
-    currency: item.currency ?? quote.defaultCurrency ?? requestItem.catalogCurrency ?? 'THB',
+    currency: requestItem.requestedCurrency ?? item.currency ?? quote.defaultCurrency ?? requestItem.catalogCurrency ?? 'THB',
     minimumOrderQuantity: item.minimumOrderQuantity ?? '',
     sqmPerUnit: item.sqmPerUnit ?? '',
     piecesPerBox: item.piecesPerBox ?? '',
@@ -353,7 +373,10 @@ function groupFactoryQuotesByFactory(factoryQuotes) {
 // scrolls this table horizontally inside itself rather than crushing the columns unreadable or
 // silently losing data off the edge (see Layout.jsx's own Panel comment on why that clip is
 // scroll, not hidden).
-const FACTORY_ITEM_GRID = 'md:grid-cols-[minmax(150px,1.6fr)_minmax(120px,1.1fr)_100px_170px_150px] md:min-w-[720px]';
+// No fixed min-width: the section is a flush Panel (overflow-x-auto), so any min-w here scrolled the WHOLE
+// card — header and chip included — at ~1100px. Five flexible tracks (variant sits under the product
+// name) always fit; below md each line stacks as label/value instead.
+const FACTORY_ITEM_GRID = 'md:grid-cols-[minmax(0,1.6fr)_5.5rem_minmax(0,11rem)_minmax(0,1fr)_5.5rem]';
 
 /**
  * Import's factory-routing control for ONE blank line (rendered only when `canSetItemFactory &&
@@ -450,107 +473,84 @@ function ImportFactoryPicker({
 }
 
 /**
- * The factory-quote email composer, relocated into a modal behind each factory group's header
- * "ร่างอีเมล" button (owner-supplied mockup, 2026-08-16 — the header collapses this to one action;
- * the always-visible primary surface is the item-price grid, not email mechanics).
+ * The factory-quote mail composer, in a modal behind each factory card's "สร้างเมล" button.
  *
- * Manual-RFQ redesign (owner decision): the backend never sends this email — it only records that
- * a human already sent it from their own mail client. So this modal's job is to make that three-step
- * manual hand-off obvious rather than read as a normal in-app "send": (1) คัดลอกข้อความ copies the
- * draft to the clipboard — the actual first, load-bearing step, styled `primary` here for exactly
- * that reason, not `secondary` as if it were an afterthought next to a real send button; (2) the
- * human pastes it into their own mail client and sends it — outside this app entirely, which is why
- * there is no "sending…" state to show; (3) ส่งแล้ว — styled `success`, matching this app's existing
- * "confirm a real-world action already happened" vocabulary (see e.g. ProfileRequestsPage's approve
- * button) rather than `primary`, since it is a confirmation of something done elsewhere, not this
- * dialog's own action — records that in `sales.factory_quote` (DRAFT -> REQUESTED) and opens the
- * shared `<ConfirmDialog>` to say so in plain language before committing (see that dialog's own copy
- * below). Real labels, not placeholder-only, for the same reason the inline version used them: a
- * screen reader needs a stable accessible name, not one that depends on the field being empty.
+ * CR-1 (GLA-167, rulings R3/R8): the backend never sends this mail — a human copies it into their
+ * own mail client. So the modal has exactly TWO actions beyond closing: บันทึกร่าง (save the draft)
+ * and คัดลอกเมล (copy it). There is no "ส่งแล้ว" here any more: that step is a separate, FINAL
+ * "ติดต่อโรงงานแล้ว" button on the card (FactoryContactDialog), which also records the date. Closing
+ * this modal changes no status. ถึง is pre-filled from the factory master's email (R8).
  *
- * `onRequestSend` closes this modal before opening the shared `<ConfirmDialog>` (rather than
- * stacking two modals) — sequencing one focus-trapped dialog at a time is simpler than reasoning
- * about two `useDialogFocus` traps active together, and it matches how a user's attention actually
- * moves: finish the draft, then confirm the send.
+ * `canEdit` is decided by the page (contact role AND the quote still DRAFT AND the request inside
+ * FactoryQuoteService.DRAFT_STATUSES — updateDraft 409s outside it); otherwise the modal is a
+ * read-only view that can still copy. `attachments` are the request attachments ticked to travel
+ * with the mail (read-only here — the tick lives in the request's own attachment list).
  */
-function FactoryEmailDraftModal({ quote, draft, onChangeDraft, onClose, onSave, savePending, onCopy, onRequestSend, inSendWindow }) {
-  // Opus review of #1062 (2026-09-28): these two used to read only the QUOTE's own status — the
-  // exact gap the price grid had before that review's fix. In the state that fix now explicitly
-  // supports (request outside FactoryQuoteService.send's DRAFT_STATUSES window, quote still DRAFT),
-  // the group header already shows "ดูอีเมล" (view-only) for this same reason, yet this modal would
-  // still offer "บันทึกร่างอีเมล" (→ updateDraft, guarded by the identical DRAFT_STATUSES → 409) and
-  // "ส่งแล้ว" (→ send → 409). Both must also require `inSendWindow` (passed in from the page, which
-  // hoists the same value the grid uses — see PricingRequestDetailPage's own comment on it).
-  const canOfferSendActions = quote.status === 'DRAFT' && inSendWindow;
-  const canEditFields = quote.status === 'DRAFT' && inSendWindow;
-
+function FactoryEmailDraftModal({ quote, draft, onChangeDraft, onClose, onSave, savePending, onCopy, canEdit, attachments = [] }) {
   return (
     <Modal
-      title="ร่างอีเมลถึงโรงงาน"
+      title="สร้างเมล"
       subtitle={quote.factoryName}
       onClose={onClose}
       testId="factory-email-draft-modal"
       footer={
         <>
           <Button type="button" variant="secondary" onClick={onClose}>ปิด</Button>
-          {canEditFields ? (
+          {canEdit ? (
             <Button type="button" variant="secondary" disabled={savePending} onClick={onSave}>
-              บันทึกร่างอีเมล
+              บันทึกร่าง
             </Button>
           ) : null}
-          {/* Copy stays available after sending too — viewing + re-copying the sent RFQ is the
-              whole point of reopening it read-only (owner ask 2026-09-24). Only the "ส่งแล้ว"
-              transition is DRAFT-only. */}
           <Button type="button" variant="primary" data-testid="pcr-copy-factory-email" onClick={() => onCopy(draft)}>
             <Icon name="clipboard" size={14} />
-            คัดลอกข้อความ
+            คัดลอกเมล
           </Button>
-          {canOfferSendActions ? (
-            <Button type="button" variant="success" data-testid="pcr-mark-factory-email-sent" onClick={onRequestSend}>
-              ส่งแล้ว
-            </Button>
-          ) : null}
         </>
       }
     >
       <div className="grid gap-3">
-        {canEditFields ? (
-          <ol className="m-0 grid list-decimal gap-1 rounded-md border border-border-subtle bg-surface-subtle p-3 pl-8 text-xs text-text-secondary">
-            <li>คัดลอกข้อความอีเมลด้านล่าง</li>
-            <li>วางและส่งอีเมลนี้จากโปรแกรมอีเมลของคุณเอง — ระบบนี้ไม่ได้ส่งอีเมลให้</li>
-            <li>กลับมาที่นี่แล้วกด &ldquo;ส่งแล้ว&rdquo; เพื่อบันทึกว่าส่งคำขอราคาไปแล้ว</li>
-          </ol>
-        ) : (
-          <p className="m-0 rounded-md border border-border-subtle bg-surface-subtle p-3 text-xs text-text-muted">
-            บันทึกว่าส่งคำขอราคาไปแล้ว — แก้ไขอีเมลฉบับนี้ไม่ได้ ดูรายละเอียดที่ส่งจริงด้านล่าง
-          </p>
-        )}
-        <FormField label="อีเมลโรงงาน (ถ้ามี)" htmlFor="pcr-email-to" hint={canEditFields ? 'ไม่บังคับ — บันทึกว่าส่งแล้วได้แม้ยังไม่มีอีเมลติดต่อโรงงานนี้ในระบบ' : undefined}>
+        <p className="m-0 rounded-md border border-border-subtle bg-surface-subtle p-3 text-xs text-text-secondary">
+          {canEdit
+            ? 'ระบบไม่ได้ส่งเมลให้ — คัดลอกไปส่งจากโปรแกรมเมลของคุณ แล้วกลับมากด “ติดต่อโรงงานแล้ว”'
+            : 'แก้ไขเมลฉบับนี้ไม่ได้แล้ว — ยังคัดลอกไปใช้ซ้ำได้'}
+        </p>
+        <FormField label="ถึง" htmlFor="pcr-email-to" hint={canEdit ? 'ดึงจากอีเมลโรงงานในข้อมูลหลัก — ไม่บังคับ' : undefined}>
           <input
             id="pcr-email-to"
             type="email"
-            disabled={!canEditFields}
+            disabled={!canEdit}
             value={draft.emailTo}
             onChange={(e) => onChangeDraft({ ...draft, emailTo: e.target.value })}
           />
         </FormField>
-        <FormField label="หัวข้ออีเมล" htmlFor="pcr-email-subject">
+        <FormField label="หัวข้อ" htmlFor="pcr-email-subject">
           <input
             id="pcr-email-subject"
-            disabled={!canEditFields}
+            disabled={!canEdit}
             value={draft.emailSubject}
             onChange={(e) => onChangeDraft({ ...draft, emailSubject: e.target.value })}
           />
         </FormField>
-        <FormField label="เนื้อหาอีเมล" htmlFor="pcr-email-body">
+        <FormField label="เนื้อหา" htmlFor="pcr-email-body">
           <textarea
             id="pcr-email-body"
             className="min-h-40"
-            disabled={!canEditFields}
+            disabled={!canEdit}
             value={draft.emailBody}
             onChange={(e) => onChangeDraft({ ...draft, emailBody: e.target.value })}
           />
         </FormField>
+        {attachments.length > 0 ? (
+          <div className="grid gap-1 text-xs text-text-secondary" data-testid="pcr-email-attachments">
+            <span className="font-bold text-text-muted">ไฟล์ที่แนบไปกับเมล</span>
+            {attachments.map((attachment) => (
+              <span key={attachment.id} className="flex items-center gap-1.5">
+                <Icon name="paperclip" size={12} />
+                {attachment.fileName}
+              </span>
+            ))}
+          </div>
+        ) : null}
       </div>
     </Modal>
   );
@@ -802,6 +802,16 @@ export function PricingRequestDetailPage({ user, showToast }) {
   // itself) — looked up fresh against `factoryQuotes` on every render, so the modal always shows
   // post-invalidate server data instead of a stale snapshot from the moment it was opened.
   const [emailModalQuoteId, setEmailModalQuoteId] = useState(null);
+  // CR-1 (GLA-167): which factory card's ติดต่อโรงงานแล้ว dialog is open (by quote id), and the
+  // lead-time change panel being filled in — { quoteId, change } with `change` set when editing a
+  // PENDING request instead of raising a new one.
+  const [contactQuoteId, setContactQuoteId] = useState(null);
+  const [leadTimeDialog, setLeadTimeDialog] = useState(null);
+  // R3 ("สร้างเมล is optional"): the pre-draft preview card of a factory can be contacted / mailed
+  // directly — the draft is generated on demand. `previewContactFactory` is the factory NAME whose
+  // contact dialog is open; `previewBusyFactory` the one currently generating/marking.
+  const [previewContactFactory, setPreviewContactFactory] = useState(null);
+  const [previewBusyFactory, setPreviewBusyFactory] = useState(null);
 
   const detailQuery = useQuery({
     queryKey: queryKeys.pricingRequestDetail(pricingRequestId),
@@ -924,6 +934,25 @@ export function PricingRequestDetailPage({ user, showToast }) {
     enabled: Number.isFinite(pricingRequestId),
   });
 
+  // CR-1 (GLA-167) R2/R10: lead-time change requests of this pricing request. LeadTimeChangeService
+  // lets import, the CEO, the owning rep and sales_manager read them (anyone else would 403), so the
+  // query is gated on those roles — never fired for account & co. Non-blocking by design: nothing in
+  // the pricing chain reads these rows, so a failed fetch only hides the lead-time UI.
+  const leadTimeChangesQuery = useQuery({
+    queryKey: queryKeys.pricingRequestLeadTimeChanges(pricingRequestId),
+    queryFn: () => api.leadTimeChanges.listForPricingRequest(pricingRequestId).then((r) => r.items ?? []),
+    enabled: Number.isFinite(pricingRequestId)
+      && ['import', 'ceo', 'sales', 'sales_manager'].includes(user?.role),
+  });
+  // CR-1 (R9): the deal's stored ใบขอซื้อ rows, read-only on the factory card for import/CEO. One IR
+  // per factory; the same query key DealFulfilmentPanel / the register use, so a create there shows here.
+  const storedIrTicketId = detailQuery.data?.summary?.ticketId;
+  const storedIrQuery = useQuery({
+    queryKey: queryKeys.storedImportRequests(storedIrTicketId),
+    queryFn: () => api.storedImportRequests.listForTicket(storedIrTicketId).then((r) => r.importRequests ?? []),
+    enabled: storedIrTicketId != null && canSeeRaw(user),
+  });
+
   // The unit-basis vocabulary for the ราคาโรงงาน response unit select below — fetched from the
   // backend at runtime (owner's choice, not a hardcoded list) and cached for the app's lifetime.
   const { unitBases: unitBasisCatalog } = useUnitBasisCatalog();
@@ -933,6 +962,16 @@ export function PricingRequestDetailPage({ user, showToast }) {
     queryClient.invalidateQueries({ queryKey: queryKeys.pricingRequestFactoryQuotes(pricingRequestId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.pricingRequestCostings(pricingRequestId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.pricingRequestAttachments(pricingRequestId) });
+    // CR-1 (F): a contact / lead-time decision on this page is visible on the deal page and the
+    // /fulfilment worklist too, so those caches are refreshed with it — never left to the 30s staleTime.
+    queryClient.invalidateQueries({ queryKey: queryKeys.pricingRequestLeadTimeChanges(pricingRequestId) });
+    const dealId = detailQuery.data?.summary?.ticketId;
+    if (dealId != null) {
+      queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(dealId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.storedImportRequests(dealId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.importDeal(dealId) });
+    }
+    queryClient.invalidateQueries({ queryKey: ['tickets', 'list'] });
     queryClient.invalidateQueries({ queryKey: queryKeys.pricingDecisions(pricingRequestId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.pricingDecisionSalesView(pricingRequestId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.customerQuotations(pricingRequestId) });
@@ -989,16 +1028,84 @@ export function PricingRequestDetailPage({ user, showToast }) {
   // notification link) with no way to claim it except going back to the คิวขอราคา queue. Same
   // endpoint + canPickupPricingRequest gate as the queue and the deal panel; server is the authority.
   const pickupRequest = useActionMutation(() => api.pricingRequests.pickup(pricingRequestId), 'รับเรื่องแล้ว');
-  const generateDrafts = useActionMutation(() => api.pricingRequests.generateFactoryEmailDrafts(pricingRequestId), 'สร้างร่างอีเมลแล้ว');
-  const updateQuote = useActionMutation(({ quote, draft }) => api.pricingRequests.updateFactoryQuote(quote.id, draft), 'บันทึกร่างอีเมลแล้ว');
-  // Manual-RFQ redesign: records that Import already sent this email themselves — see
-  // FactoryEmailDraftModal's doc comment. No clientRequestId any more (there is no dispatch to
-  // replay against); send() is idempotent by the quote's own status instead.
-  const sendQuote = useActionMutation(({ quote, draft }) => api.pricingRequests.sendFactoryQuote(quote.id, {
-    emailTo: draft?.emailTo ?? quote.emailTo,
-    emailSubject: draft?.emailSubject ?? quote.emailSubject,
-    emailBody: draft?.emailBody ?? quote.emailBody,
-  }), 'บันทึกว่าส่งคำขอราคาแล้ว');
+  const generateDrafts = useActionMutation(() => api.pricingRequests.generateFactoryEmailDrafts(pricingRequestId), 'สร้างเมลแล้ว');
+  const updateQuote = useActionMutation(({ quote, draft }) => api.pricingRequests.updateFactoryQuote(quote.id, draft), 'บันทึกร่างแล้ว');
+  // CR-1 (GLA-167) R3/R5/R7: records that import (or the CEO) already contacted this factory —
+  // FINAL, no undo. Replaces the old "ส่งแล้ว" send record. Closes its dialog only on success so a
+  // 409 ("already contacted") leaves the user looking at what they tried.
+  const markContacted = useActionMutation(
+    ({ quote, body }) => api.pricingRequests.markFactoryQuoteContacted(quote.id, body),
+    'บันทึกว่าติดต่อโรงงานแล้ว',
+    { onSuccess: () => setContactQuoteId(null) },
+  );
+  // CR-1 R2/R10: lead-time change requests. Create/update/withdraw are import's; approve/reject the
+  // owning rep's / a sales manager's. A 409 on a decision means import edited the request after the
+  // banner loaded — say so and let the refetch (invalidate) show the current version.
+  const closeLeadTimeDialog = { onSuccess: () => setLeadTimeDialog(null) };
+  const createLeadTimeChange = useActionMutation(
+    ({ quote, body }) => api.leadTimeChanges.create(quote.id, body),
+    'ส่งคำขอเปลี่ยนระยะเวลานำเข้าแล้ว',
+    closeLeadTimeDialog,
+  );
+  const updateLeadTimeChange = useActionMutation(
+    ({ change, body }) => api.leadTimeChanges.update(change.id, body),
+    'บันทึกการแก้ไขคำขอแล้ว',
+    closeLeadTimeDialog,
+  );
+  const withdrawLeadTimeChange = useActionMutation(
+    (change) => api.leadTimeChanges.withdraw(change.id),
+    'ถอนคำขอแล้ว',
+  );
+  const decideErrorHandler = (error) => {
+    showToast?.('error', error?.status === 409 ? 'คำขอถูกแก้ไขแล้ว กรุณาตรวจสอบอีกครั้ง' : (error?.message || 'ดำเนินการไม่สำเร็จ'));
+    // The request moved under us — refetch so the banner shows the version that is current now.
+    invalidate();
+  };
+  const approveLeadTimeChange = useActionMutation(
+    (change) => api.leadTimeChanges.approve(change.id, { expectedVersion: change.version }),
+    'อนุมัติการเปลี่ยนระยะเวลานำเข้าแล้ว',
+    { onError: decideErrorHandler },
+  );
+  const rejectLeadTimeChange = useActionMutation(
+    ({ change, reason }) => api.leadTimeChanges.reject(change.id, { reason, expectedVersion: change.version }),
+    'บันทึกการไม่อนุมัติแล้ว',
+    { onError: decideErrorHandler },
+  );
+  // Generates the drafts (idempotent: factories that already have one are skipped server-side) and
+  // returns THIS factory's current quote from the answer.
+  async function generateDraftFor(factoryName) {
+    const result = await api.pricingRequests.generateFactoryEmailDrafts(pricingRequestId);
+    invalidate();
+    const quote = (result?.items ?? []).find((q) => q.factoryName === factoryName && q.current !== false);
+    if (!quote) throw new Error(`สร้างเมลของโรงงาน ${factoryName} ไม่สำเร็จ`);
+    return quote;
+  }
+  async function openMailForPreview(factoryName) {
+    setPreviewBusyFactory(factoryName);
+    try {
+      const quote = await generateDraftFor(factoryName);
+      setEmailModalQuoteId(quote.id);
+    } catch (error) {
+      showToast?.('error', error.message || 'ดำเนินการไม่สำเร็จ');
+    } finally {
+      setPreviewBusyFactory(null);
+    }
+  }
+  async function contactFromPreview(factoryName, body) {
+    setPreviewBusyFactory(factoryName);
+    try {
+      const quote = await generateDraftFor(factoryName);
+      await api.pricingRequests.markFactoryQuoteContacted(quote.id, body);
+      showToast?.('success', 'บันทึกว่าติดต่อโรงงานแล้ว');
+      invalidate();
+      setPreviewContactFactory(null);
+    } catch (error) {
+      showToast?.('error', error.message || 'ดำเนินการไม่สำเร็จ');
+      invalidate();
+    } finally {
+      setPreviewBusyFactory(null);
+    }
+  }
   const negotiateQuote = useActionMutation((quote) => api.pricingRequests.startFactoryNegotiation(quote.id, { note: quote.negotiationNote || 'Negotiation in progress' }), 'เริ่มเจรจาแล้ว');
   /**
    * ยืนยันราคาเสนอ — ONE primary action per factory group (owner-supplied mockup, 2026-08-16, task
@@ -1431,6 +1538,21 @@ export function PricingRequestDetailPage({ user, showToast }) {
     }
   }
 
+  // CR-1 (R9): import reads the factory's IR PDF straight off the card (read-only — creating or
+  // revising it is sales's, from the deal page).
+  const [downloadingIrId, setDownloadingIrId] = useState(null);
+  async function downloadIr(row) {
+    setDownloadingIrId(row.id);
+    try {
+      const blob = await api.storedImportRequests.download(row.id, undefined);
+      downloadBlob(blob, `IR-${row.docNumber ?? `draft-${row.id}`}-${row.factoryName}`, 'pdf');
+    } catch (err) {
+      showToast?.('error', err.message || 'ดาวน์โหลดไม่สำเร็จ');
+    } finally {
+      setDownloadingIrId(null);
+    }
+  }
+
   async function handleDownloadCustomerQuotation(quotation, format) {
     setDownloadingQuotationFormat(format);
     try {
@@ -1538,6 +1660,24 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const emailModalQuote = emailModalQuoteId != null
     ? factoryQuotes.find((q) => q.id === emailModalQuoteId) ?? null
     : null;
+  // CR-1 (GLA-167): who may run the contact step (สร้างเมล + ติดต่อโรงงานแล้ว) — import AND the CEO
+  // (R5, B-R1; FactoryQuoteService.CONTACT_ROLES). Price entry, lead-time requests and confirm stay
+  // import-only. UI-level gate only — the service is the authority.
+  const canContactFactory = user?.role === 'import' || user?.role === 'ceo';
+  const contactQuote = contactQuoteId != null ? factoryQuotes.find((q) => q.id === contactQuoteId) ?? null : null;
+  const leadTimeChanges = useMemo(() => leadTimeChangesQuery.data ?? [], [leadTimeChangesQuery.data]);
+  const leadTimeSplit = useMemo(() => splitLeadTimeChanges(leadTimeChanges), [leadTimeChanges]);
+  // B-R3: only the owning rep (sales + ticket creator, matched the way this page matches ownership
+  // everywhere: ticketCreatedById === employeeId) or a sales manager decides — never the CEO.
+  const canDecideLeadTime = (isSales(user) && summary?.ticketCreatedById === user?.employeeId)
+    || user?.role === 'sales_manager';
+  // The factory a pending request is about, for a viewer who cannot read factory quotes (sales):
+  // read it off the request's own lines (every line of one change belongs to one factory).
+  const lineNameById = useMemo(
+    () => new Map((request?.items ?? []).map((item) => [item.id, itemDisplayName(item)])),
+    [request],
+  );
+  const leadTimeDialogQuote = leadTimeDialog ? factoryQuotes.find((q) => q.id === leadTimeDialog.quoteId) ?? null : null;
   const costings = useMemo(() => costingQuery.data ?? [], [costingQuery.data]);
   const pricingDecisions = useMemo(() => decisionsQuery.data ?? [], [decisionsQuery.data]);
   // The currently-relevant decision: the open DRAFT if one exists (the CEO's active review),
@@ -2516,6 +2656,28 @@ export function PricingRequestDetailPage({ user, showToast }) {
         )}
       />
 
+      {/* CR-1 (R2/R10, B-R3): a pending lead-time change waits for the OWNING rep or a sales manager —
+          one banner per request, deciding the whole request at once. The CEO and import never see
+          decide controls (the CEO sees only the read-only badge on the factory card). */}
+      {canDecideLeadTime && leadTimeSplit.pending.length > 0 ? (
+        <div className="grid gap-3" data-testid="pcr-lt-banners">
+          {leadTimeSplit.pending.map((change) => {
+            const firstItem = (request?.items ?? []).find((item) => item.id === change.lines[0]?.pricingRequestItemId);
+            return (
+              <LeadTimeChangeBanner
+                key={change.id}
+                change={change}
+                factoryName={itemFactoryName(firstItem) ?? '-'}
+                lineNames={lineNameById}
+                pending={approveLeadTimeChange.isPending || rejectLeadTimeChange.isPending}
+                onApprove={(target) => approveLeadTimeChange.mutate(target)}
+                onReject={(target, reason) => rejectLeadTimeChange.mutate({ change: target, reason })}
+              />
+            );
+          })}
+        </div>
+      ) : null}
+
       <Panel flush title="ภาพรวม" actions={<StatusBadge tone={status.tone}>{status.label}</StatusBadge>}>
         <div className="grid gap-3 p-4 md:grid-cols-2">
           <div className="text-sm"><strong>ดีล</strong> <Link to={user?.role === 'import' ? `/import/deals/${summary.ticketId}` : `/tickets/${summary.ticketId}`} className="text-info underline">{summary.ticketCode}</Link></div>
@@ -2584,7 +2746,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
               which lines still block a QUOTE (not a draft) until they get a factory. */}
           {missingFactoryItems.length ? (
             <p className="rounded-md border border-warning-border bg-warning-bg p-3 text-xs text-warning-dark">
-              {`ยังไม่ได้ระบุโรงงาน ${missingFactoryItems.length} รายการ — ระบบจะสร้างร่างอีเมลให้เฉพาะรายการที่ระบุโรงงานแล้ว ส่วนรายการต่อไปนี้ต้องระบุโรงงานก่อนจึงจะขอราคาได้: `}
+              {`ยังไม่ได้ระบุโรงงาน ${missingFactoryItems.length} รายการ — ระบบจะสร้างเมลให้เฉพาะรายการที่ระบุโรงงานแล้ว ส่วนรายการต่อไปนี้ต้องระบุโรงงานก่อนจึงจะขอราคาได้: `}
               {missingFactoryItems.map((entry) => `รายการที่ ${entry.position} (${itemDisplayName(entry.item)})`).join(', ')}
               {canSetItemFactory
                 ? ' — เลือกโรงงานในรายการด้านล่างแล้วกดบันทึก'
@@ -2827,9 +2989,10 @@ export function PricingRequestDetailPage({ user, showToast }) {
         <Panel
           flush
           title={`รายการสินค้า (${factoryItemCount} รายการ)`}
-          actions={isImport(user) ? (
-            <Button type="button" variant="primary" disabled={generateDrafts.isPending} onClick={() => generateDrafts.mutate()} data-testid="pcr-generate-drafts">
-              สร้างร่างอีเมล
+          // CR-1: only while some line still has no factory mail. Per-factory สร้างเมล lives on each card.
+          actions={canContactFactory && inSendWindow && pricePreviewGroups.length > 0 ? (
+            <Button type="button" variant="secondary" disabled={generateDrafts.isPending} onClick={() => generateDrafts.mutate()} data-testid="pcr-generate-drafts">
+              สร้างเมลให้ทุกโรงงาน
             </Button>
           ) : null}
         >
@@ -2850,13 +3013,13 @@ export function PricingRequestDetailPage({ user, showToast }) {
               <p className="rounded-md border border-warning-border bg-warning-bg-soft p-3 text-xs text-warning-dark">
                 {factoryGroups.length === 0 ? (
                   <>
-                    ยังไม่ได้สร้างร่างอีเมลขอราคา — ด้านล่างคือรายการที่ต้องขอราคา จัดกลุ่มตามโรงงาน
-                    {isImport(user) ? ' · กด “สร้างร่างอีเมล” ด้านบนเพื่อเริ่ม แล้วจึงกรอกราคาได้หลังกดส่งอีเมล' : ''}
+                    ยังไม่ได้สร้างเมลขอราคา — ด้านล่างคือรายการที่ต้องขอราคา จัดกลุ่มตามโรงงาน
+                    {canContactFactory ? ' · กด “ติดต่อโรงงานแล้ว” ของแต่ละโรงงานเมื่อติดต่อแล้ว จึงกรอกราคาได้ (สร้างเมลหรือไม่ก็ได้)' : ''}
                   </>
                 ) : (
                   <>
                     รายการที่ยังไม่ได้ขอราคาจากโรงงาน — ด้านล่างคือรายการที่ต้องขอราคาเพิ่ม จัดกลุ่มตามโรงงาน
-                    {isImport(user) ? ' · กด “สร้างร่างอีเมล” ด้านบนเพื่อรวมรายการเหล่านี้เข้าไปในร่างอีเมล' : ''}
+                    {canContactFactory ? ' · กด “สร้างเมลให้ทุกโรงงาน” ด้านบนเพื่อรวมรายการเหล่านี้เข้าไปในเมล' : ''}
                   </>
                 )}
               </p>
@@ -2865,7 +3028,22 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   <div className="flex flex-wrap items-center gap-2 border-b border-border-subtle bg-surface-subtle px-3 py-2">
                     <strong className="text-sm text-text">{group.factoryName}</strong>
                     <span className="text-xs text-text-muted">({group.items.length} รายการ)</span>
-                    <span className="ml-auto text-2xs text-text-muted">กรอกราคาได้หลังส่งอีเมล</span>
+                    {canContactFactory && inSendWindow && group.factoryName !== 'ยังไม่ได้ระบุโรงงาน' ? (
+                      <div className="ml-auto flex flex-wrap items-center gap-2">
+                        <Button type="button" size="sm" variant="secondary" disabled={previewBusyFactory === group.factoryName}
+                          onClick={() => openMailForPreview(group.factoryName)}>
+                          <Icon name="mail" size={13} />
+                          สร้างเมล
+                        </Button>
+                        <Button type="button" size="sm" variant="primary" disabled={previewBusyFactory === group.factoryName}
+                          onClick={() => setPreviewContactFactory(group.factoryName)}>
+                          <Icon name="check" size={13} />
+                          ติดต่อโรงงานแล้ว
+                        </Button>
+                      </div>
+                    ) : (
+                      <span className="ml-auto text-2xs text-text-muted">กรอกราคาได้หลังติดต่อโรงงานแล้ว</span>
+                    )}
                   </div>
                   <div className="flex flex-col gap-1 p-3 text-xs text-text-secondary">
                     {group.items.map((item) => {
@@ -2894,10 +3072,10 @@ export function PricingRequestDetailPage({ user, showToast }) {
               <div className={cn('hidden items-center gap-3 border-b border-border-subtle bg-surface-subtle px-5 py-2.5 text-xs font-bold uppercase tracking-wide text-text-muted md:grid', FACTORY_ITEM_GRID)}>
                 {/* Owner ruling (2026-09-19): โรงงาน on PCR screens, not ยี่ห้อ -- PCR page only,
                     TicketDetailPage's own identical header is untouched. */}
-                <span>โรงงาน / รุ่น</span>
-                <span>สี / เนื้อผิว</span>
+                <span>รุ่น / สี / เนื้อผิว</span>
                 <span>จำนวน</span>
                 <span>ราคาที่เสนอ (แก้ไข)</span>
+                <span>ระยะเวลานำเข้า</span>
                 <span>ราคาที่อนุมัติ</span>
               </div>
               {factoryGroups.map((group) => {
@@ -2908,7 +3086,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 // per-group emailDraft needed in this closure any more.
                 const draft = responseDrafts[current.id] ?? {
                   supplierQuoteRef: current.supplierQuoteRef ?? '',
-                  defaultCurrency: current.defaultCurrency ?? 'THB',
+                  // R1: when every line is locked to ONE currency, that is the draft's currency too.
+                  defaultCurrency: (() => {
+                    const locked = [...new Set((current.items ?? []).map((i) => requestItemById.get(i.pricingRequestItemId)?.requestedCurrency).filter(Boolean))];
+                    return locked.length === 1 ? locked[0] : (current.defaultCurrency ?? 'THB');
+                  })(),
                   paymentTerms: current.paymentTerms ?? '',
                   leadTimeText: current.leadTimeText ?? '',
                   revisionReason: '',
@@ -2921,74 +3103,72 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 const dirty = Boolean(responseDrafts[current.id]);
                 const editable = isImport(user) && current.current
                   && ['DRAFT', 'REQUESTED', 'RESPONSE_RECEIVED', 'NEGOTIATING', 'READY_FOR_COSTING'].includes(current.status);
-                // Owner UX ask (2026-09-24): the price grid must not invite a quoted price before
-                // Import has actually SENT the request email to this factory — a DRAFT quote means
-                // "not sent yet" (the ร่างอีเมล → "ส่งแล้ว" action is what leaves DRAFT, → REQUESTED).
-                // So while DRAFT the ราคาที่เสนอ inputs stay locked (dimmed + a nudge to send first)
-                // and ยืนยันราคาเสนอ is withheld, without hard-hiding the grid — it stays the visible
-                // primary surface (owner ruling 2026-08-16), just not fillable out of order.
-                //
-                // Opus review of #1062 (2026-09-28): the lock above looked only at the QUOTE's own
-                // status, never the PRICING REQUEST's — but the "ส่งแล้ว" action it points at is
-                // FactoryQuoteService.send, which only succeeds while the pricing request itself is
-                // in DRAFT_STATUSES ({IMPORT_REVIEWING, AWAITING_FACTORY_RESPONSE} —
-                // FactoryQuoteService.java:47-49, guarded at :242). FactoryQuoteService.receive's
-                // window (RESPONSE_STATUSES, :50-53) is wider — it adds READY_FOR_CEO_REVIEW and
-                // explicitly still accepts a DRAFT quote (:402, :408). This clamp is a DEFENSIVE
-                // guard mirroring those two backend windows, not a claim of a specific sequence that
-                // reaches (request outside send()'s window) ∧ (quote still DRAFT) today —
-                // PricingRequestService#setItemFactory is a gap-FILL only (a line that already has a
-                // factory 409s), and markReadyForCosting's auto-advance requires every item's
-                // CURRENT quote to already be READY_FOR_COSTING, so no confirmed live path was found.
-                // But whatever combination does get a request there, the UI must never lock the grid
-                // behind a "send first" banner whose only action would 409 while receive() would
-                // accept the very same confirm. So the lock/banner apply only inside send()'s window;
-                // FACTORY_ROUTING_STATUSES above is that exact set (its own comment already notes it
-                // mirrors FactoryQuoteService.DRAFT_STATUSES), so it is reused rather than duplicated.
-                // `inSendWindow` itself is hoisted to component scope (above `canSetItemFactory`) —
-                // FactoryEmailDraftModal needs the identical value.
-                const emailSent = !inSendWindow || current.status !== 'DRAFT';
+                // CR-1 (GLA-167) R3 / B-R2: the price grid is locked until the factory has been marked
+                // ติดต่อโรงงานแล้ว — a DRAFT quote means "not contacted yet", and FactoryQuoteService#receive
+                // now 409s EVERY DRAFT quote (no exception outside the contact window any more; that
+                // exception, from #1062, is reversed). Locked inputs stay visible, dimmed, with the
+                // reason beside them — the grid is still the primary surface (owner ruling 2026-08-16).
+                const contacted = isFactoryContacted(current);
                 // READY_FOR_COSTING only offers ยืนยันราคาเสนอ again while dirty — see
                 // confirmFactoryQuote's doc comment for why an undirtied re-click must not be
                 // offered at all (it would either no-op-fail against markReady's own guard, or,
                 // if this branch called receive() unconditionally, spuriously bump the revision).
-                // Withheld until the email is sent (emailSent): confirming a price before the
-                // request has gone out is exactly the out-of-order flow this nudge closes. DRAFT is
-                // the only !emailSent status the old list carried, so dropping it + AND emailSent is
-                // the whole change.
-                //
-                // Opus review of #1062 (2026-09-28): that DRAFT/emailSent history only ever
-                // ungated the price INPUT for a request past send()'s window (below) — it did not
-                // restore this disjunction, which still names only
-                // REQUESTED/RESPONSE_RECEIVED/NEGOTIATING/READY_FOR_COSTING&&dirty. So a request
-                // outside send()'s window with a still-DRAFT quote showed an ENABLED input with NO
-                // confirm button — a typed price was enterable but unsubmittable, silently lost.
-                // FactoryQuoteService.receive's window (RESPONSE_STATUSES, which includes
-                // READY_FOR_CEO_REVIEW) explicitly still accepts a DRAFT quote, so the button must
-                // offer exactly that confirm: add `current.status === 'DRAFT' && !inSendWindow`.
-                const canConfirm = isImport(user) && current.current && emailSent
+                const canConfirm = isImport(user) && current.current && contacted
                   && (['REQUESTED', 'RESPONSE_RECEIVED', 'NEGOTIATING'].includes(current.status)
-                    || (current.status === 'READY_FOR_COSTING' && dirty)
-                    || (current.status === 'DRAFT' && !inSendWindow));
+                    || (current.status === 'READY_FOR_COSTING' && dirty));
                 const canNegotiate = isImport(user) && current.status === 'RESPONSE_RECEIVED' && current.current;
-                // Import can OPEN the RFQ email at any status (owner ask 2026-09-24): to draft+send
-                // it while DRAFT, or just to VIEW what was actually sent afterwards. The modal is
-                // read-only once the quote leaves DRAFT OR the request leaves send()'s window
-                // (FactoryEmailDraftModal's canEditFields / canOfferSendActions — Opus review of
-                // #1062, 2026-09-28: DRAFT alone wasn't enough, matching the grid's own emailSent
-                // fix above), so opening it post-send, or outside that window, can only view + copy,
-                // never re-edit or re-send.
-                const canOpenEmailDraft = isImport(user);
-                // หน่วยราคา is a per-FACTORY control now, not per-line (owner-supplied mockup) — every
-                // line in `draft.items` shares one unitBasis, so the first line speaks for the whole
-                // group. defaultResponseItems seeds every line from the same source when untouched,
-                // so this only reads as "mixed" if something mutated lines independently, which
-                // nothing below does any more (updateUnitBasis always writes every line at once).
-                const groupUnitBasis = draft.items[0]?.unitBasis ?? '';
-                const needsSqmPerUnit = groupUnitBasis === 'PER_SQM';
-                const groupCurrency = draft.defaultCurrency || draft.items[0]?.currency || 'THB';
+                // สร้างเมล is offered to import AND the CEO at every status (R5): to build + copy the
+                // mail while DRAFT, or just to re-read what was drafted afterwards. The modal is
+                // read-only once the quote leaves DRAFT or the request leaves the contact window.
+                const canOpenEmailDraft = canContactFactory;
+                // ติดต่อโรงงานแล้ว: only for a current DRAFT quote inside the window markContacted
+                // accepts (FactoryQuoteService.DRAFT_STATUSES) — and never again after (R7, no undo).
+                const canMarkContacted = canContactFactory && current.current && current.status === 'DRAFT' && inSendWindow;
+                // Per-line locked terms (R1): a line carrying requestedCurrency + requestedPriceUnitBasis
+                // shows them read-only; only a LEGACY line (neither) keeps today's currency/unit selects.
+                const groupRequestItems = draft.items.map((line) => requestItemById.get(line.pricingRequestItemId));
+                const lockedTerms = lockedTermsList(
+                  groupRequestItems.filter(Boolean),
+                  (basis) => unitBasisCatalog.find((option) => option.code === basis)?.label ?? unitBasisLabel(basis),
+                );
+                const hasLegacyLines = groupRequestItems.some((item) => !hasLockedTerms(item));
+                // The legacy selects speak for the legacy lines only: the first one that carries no terms.
+                const legacyLine = draft.items.find((line) => !hasLockedTerms(requestItemById.get(line.pricingRequestItemId)));
+                const groupUnitBasis = legacyLine?.unitBasis ?? draft.items[0]?.unitBasis ?? '';
+                const groupCurrency = (legacyLine ? draft.defaultCurrency : null) || draft.items[0]?.currency || 'THB';
                 const groupUnitLabel = unitBasisCatalog.find((option) => option.code === groupUnitBasis)?.label
                   ?? unitBasisLabel(groupUnitBasis);
+                const quoteIds = group.quotes.map((q) => q.id);
+                const pendingChange = leadTimeSplit.pending.find((change) => quoteIds.includes(change.factoryQuoteId)) ?? null;
+                const decidedChanges = leadTimeSplit.decided.filter((change) => quoteIds.includes(change.factoryQuoteId));
+                const pendingLineById = new Map((pendingChange?.lines ?? []).map((line) => [line.pricingRequestItemId, line]));
+                const irRow = (storedIrQuery.data ?? [])
+                  .filter((row) => row.status !== 'SUPERSEDED')
+                  .find((row) => (current.factoryId != null && row.factoryId != null
+                    ? row.factoryId === current.factoryId
+                    : row.factoryName === current.factoryName)) ?? null;
+                // Lines import may put in a lead-time change: import (non-stock) lines of THIS quote.
+                const leadTimeLines = draft.items
+                  .map((line) => requestItemById.get(line.pricingRequestItemId))
+                  .filter((item) => item && isImportLine(item))
+                  .map((item) => ({ item, name: itemDisplayName(item), current: { min: item.leadTimeMinDays, max: item.leadTimeMaxDays } }));
+                const canRequestLeadTime = isImport(user) && current.current && !pendingChange && leadTimeLines.length > 0
+                  && !['CANCELLED', 'SUPERSEDED', 'NOT_AVAILABLE'].includes(current.status);
+                const contactedName = contactedByName(current, request?.events);
+                // The chip answers "what do I do next with this factory" (IA F1): ยังไม่ติดต่อ -> ติดต่อแล้ว
+                // <date> -> ยืนยันราคาแล้ว. Statuses outside that path (not available / cancelled / superseded)
+                // keep their own label.
+                const chip = !contacted
+                  ? { tone: 'warning', label: 'ยังไม่ติดต่อ' }
+                  : current.status === 'READY_FOR_COSTING'
+                    ? { tone: 'success', label: 'ยืนยันราคาแล้ว' }
+                    : ['NOT_AVAILABLE', 'CANCELLED', 'SUPERSEDED'].includes(current.status)
+                      ? { tone: quoteStatus.tone, label: quoteStatus.label }
+                      : {
+                        tone: 'info',
+                        label: ['ติดต่อแล้ว', formatShortThaiDay(current.contactedOn)].filter(Boolean).join(' ')
+                          + (contactedName ? ` · โดย ${contactedName}` : ''),
+                      };
 
                 function updateDraft(patch) {
                   setResponseDrafts({ ...responseDrafts, [current.id]: { ...draft, ...patch } });
@@ -2998,16 +3178,19 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   items[index] = { ...items[index], ...patch };
                   updateDraft({ items });
                 }
+                // The legacy selects only ever touch lines that carry no locked terms.
                 function updateCurrency(nextCurrency) {
                   updateDraft({
                     defaultCurrency: nextCurrency,
-                    items: draft.items.map((item) => ({ ...item, currency: nextCurrency })),
+                    items: draft.items.map((item) => (hasLockedTerms(requestItemById.get(item.pricingRequestItemId))
+                      ? item : { ...item, currency: nextCurrency })),
                   });
                 }
                 function updateUnitBasis(nextBasis) {
                   const nextLabel = unitBasisCatalog.find((option) => option.code === nextBasis)?.label;
                   updateDraft({
-                    items: draft.items.map((item) => ({ ...item, unitBasis: nextBasis, quotedUnit: nextLabel ?? item.quotedUnit })),
+                    items: draft.items.map((item) => (hasLockedTerms(requestItemById.get(item.pricingRequestItemId))
+                      ? item : { ...item, unitBasis: nextBasis, quotedUnit: nextLabel ?? item.quotedUnit })),
                   });
                 }
                 function discardEdits() {
@@ -3019,46 +3202,69 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 }
 
                 return (
-                  <div key={group.key} className="border-t border-border-subtle first:border-t-0">
-                    {/* Factory header: name, its item count, its contact email (current.emailTo —
-                        the address Import is actually corresponding with; see this file's
-                        groupFactoryQuotesByFactory comment for why there is no separate master-data
-                        field to read instead), and one ร่างอีเมล action collapsing the old inline
-                        To/Subject/Body composer into FactoryEmailDraftModal. Never its own bordered
-                        card (DESIGN.md: "never nest a card inside a card") — a tonal
-                        surface-subtle band inside the flush Panel, same idiom as a table header. */}
+                  <div key={group.key} className="border-t border-border-subtle first:border-t-0" data-testid={`pcr-factory-card-${current.id}`}>
+                    {/* Factory header: name, line count, the contact-state chip, and the two actions.
+                        Never its own bordered card (DESIGN.md: "never nest a card inside a card") — a
+                        tonal surface-subtle band inside the flush Panel, same idiom as a table header. */}
                     <div className="flex flex-wrap items-center justify-between gap-3 bg-surface-subtle px-5 py-3 mobile:px-4">
                       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5">
                         <strong className="text-text">{group.factoryName}</strong>
                         <span className="text-xs text-text-muted">({current.items?.length ?? 0} รายการ)</span>
-                        {current.emailTo ? <span className="truncate text-xs text-text-muted">{current.emailTo}</span> : null}
-                        <StatusBadge tone={quoteStatus.tone}>{quoteStatus.label}</StatusBadge>
+                        <span data-testid={`pcr-factory-status-${current.id}`}>
+                          <StatusBadge tone={chip.tone}>{chip.label}</StatusBadge>
+                        </span>
+                        {contacted && !['READY_FOR_COSTING', 'NOT_AVAILABLE', 'CANCELLED', 'SUPERSEDED'].includes(current.status)
+                          && current.status !== 'REQUESTED' ? (
+                            <StatusBadge tone={quoteStatus.tone}>{quoteStatus.label}</StatusBadge>
+                          ) : null}
                         {current.revisionNo > 1 ? <StatusBadge tone="neutral">ครั้งที่ {current.revisionNo}</StatusBadge> : null}
                       </div>
-                      {canOpenEmailDraft ? (
-                        <Button type="button" variant="secondary" onClick={() => setEmailModalQuoteId(current.id)} data-testid={`pcr-open-email-draft-${current.id}`}>
-                          <Icon name="mail" size={14} />
-                          {emailSent ? 'ดูอีเมล' : 'ร่างอีเมล'}
-                        </Button>
+                      {canOpenEmailDraft || canMarkContacted ? (
+                        <div className="flex flex-wrap items-center gap-2">
+                          {canOpenEmailDraft ? (
+                            <Button type="button" variant="secondary" onClick={() => setEmailModalQuoteId(current.id)} data-testid={`pcr-open-email-draft-${current.id}`}>
+                              <Icon name="mail" size={14} />
+                              สร้างเมล
+                            </Button>
+                          ) : null}
+                          {canMarkContacted ? (
+                            <Button type="button" variant="primary" onClick={() => setContactQuoteId(current.id)} data-testid={`pcr-open-contact-${current.id}`}>
+                              <Icon name="check" size={14} />
+                              ติดต่อโรงงานแล้ว
+                            </Button>
+                          ) : null}
+                        </div>
                       ) : null}
                     </div>
 
-                    {/* Nudge (owner UX ask 2026-09-24): while this factory's request email is still
-                        a DRAFT (not sent), the price grid below is locked. Point Import at the
-                        ร่างอีเมล → "ส่งแล้ว" action in the header rather than letting them type a
-                        price out of order. Shown only to the role that can act (import, editable). */}
-                    {editable && !emailSent ? (
-                      <div className="flex flex-wrap items-center gap-2 border-b border-warning-border bg-warning-bg-soft px-5 py-2.5 text-xs text-warning-dark mobile:px-4" data-testid={`pcr-await-email-${current.id}`}>
-                        <Icon name="mail" size={14} />
-                        ส่งอีเมลขอราคาให้โรงงานนี้ก่อน จึงจะกรอกราคาที่เสนอได้ — กด “ร่างอีเมล” ด้านบน แล้วกด “ส่งแล้ว”
+                    {/* The contacted note, kept visible for everyone who can see the card (R7: it is final). */}
+                    {contacted && current.contactedNote ? (
+                      <p className="m-0 border-b border-border-subtle px-5 py-2.5 text-xs text-text-secondary mobile:px-4" data-testid={`pcr-contact-note-${current.id}`}>
+                        <span className="font-bold text-text-muted">หมายเหตุการติดต่อ: </span>{current.contactedNote}
+                      </p>
+                    ) : null}
+
+                    {/* Hint (CR-1 R3): while the factory is not yet contacted the price inputs below are
+                        locked. Point import at the button instead of letting a price be typed out of order. */}
+                    {editable && !contacted ? (
+                      <div className="flex flex-wrap items-center gap-2 border-b border-warning-border bg-warning-bg-soft px-5 py-2.5 text-xs text-warning-dark mobile:px-4" data-testid={`pcr-await-contact-${current.id}`}>
+                        <Icon name="lock" size={14} />
+                        กด ติดต่อโรงงานแล้ว ก่อนกรอกราคา
                       </div>
                     ) : null}
 
-                    {/* Per-factory control row — สกุลเงิน + หน่วยราคา, shared by every item below
-                        instead of a per-line picker (owner-supplied mockup). Static text once the
-                        response can no longer be edited here (not `editable`), so a read-only
-                        viewer (CEO) sees the values without an inert-looking select. */}
-                    {editable ? (
+                    {/* Terms strip (R1): currency + price unit are Sales's, locked for import. A lock icon
+                        and plain words, so nobody hunts for a select that is deliberately not there. */}
+                    {lockedTerms.length > 0 ? (
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border-subtle px-5 py-2.5 text-xs text-text-secondary mobile:px-4" data-testid={`pcr-factory-terms-${current.id}`}>
+                        <Icon name="lock" size={13} className="shrink-0 text-text-muted" />
+                        <strong className="text-text">{lockedTerms.join(' / ')}</strong>
+                        <span className="text-text-muted">· ตามคำขอของฝ่ายขาย</span>
+                      </div>
+                    ) : null}
+
+                    {/* Legacy lines (no requested terms) keep today's currency/unit controls. */}
+                    {hasLegacyLines ? (editable ? (
                       <div className="flex flex-wrap items-end gap-4 border-b border-border-subtle px-5 py-3 mobile:px-4">
                         <FormField
                           label={<>สกุลเงิน<InfoTip label="สกุลเงิน" text="สกุลเงินที่โรงงานนี้เสนอราคามา อ้างอิงจากราคาตั้งต้นในแคตตาล็อกโดยอัตโนมัติ — เปลี่ยนได้หากโรงงานเสนอราคาเป็นสกุลเงินอื่น" /></>}
@@ -3093,7 +3299,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                         <span>สกุลเงิน: {groupCurrency}</span>
                         <span>{`หน่วยราคา: / ${groupUnitLabel}`}</span>
                       </div>
-                    )}
+                    )) : null}
 
                     {/* Item rows: ยี่ห้อ/รุ่น · สี/เนื้อผิว · จำนวน · ราคาที่เสนอ (แก้ไข) · ราคาที่อนุมัติ. */}
                     {draft.items.map((line, index) => {
@@ -3130,11 +3336,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
                           className={cn('grid items-center gap-3 border-b border-border-subtle px-5 py-3 last:border-b-0 mobile:flex mobile:flex-col mobile:items-stretch mobile:gap-1 mobile:px-4', FACTORY_ITEM_GRID)}
                         >
                           <div className="min-w-0">
-                            <div className="truncate text-sm font-bold text-text">{productName}</div>
-                          </div>
-                          <div className="min-w-0 text-sm text-text-secondary">
-                            <span className="mb-0.5 block text-2xs font-bold uppercase text-text-muted md:hidden">สี / เนื้อผิว</span>
-                            {variantLabel || '-'}
+                            <div className="break-words text-sm font-bold text-text md:truncate">{productName}</div>
+                            <div className="break-words text-xs text-text-secondary">{variantLabel || '-'}</div>
                           </div>
                           <div className="text-sm text-text-secondary">
                             <span className="mr-1 text-2xs font-bold uppercase text-text-muted md:hidden">จำนวน</span>
@@ -3142,11 +3345,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
                           </div>
                           <div className="min-w-0">
                             <span className="mb-1 block text-2xs font-bold uppercase text-text-muted md:hidden">ราคาที่เสนอ (แก้ไข)</span>
-                            {editable && emailSent ? (
+                            {editable && contacted ? (
                               <div className="flex flex-wrap items-center gap-1.5">
                                 <input
                                   id={`pcr-quote-price-${current.id}-${line.pricingRequestItemId}`}
-                                  className="w-full md:w-32"
+                                  className="w-full md:w-28"
                                   type="number"
                                   min="0"
                                   step="0.0001"
@@ -3156,10 +3359,10 @@ export function PricingRequestDetailPage({ user, showToast }) {
                                   value={line.rawUnitPrice ?? ''}
                                   onChange={(e) => updateLine(index, { rawUnitPrice: e.target.value })}
                                 />
-                                {needsSqmPerUnit ? (
+                                {line.unitBasis === 'PER_SQM' ? (
                                   <input
                                     id={`pcr-quote-sqm-${current.id}-${line.pricingRequestItemId}`}
-                                    className="w-24"
+                                    className="w-full md:w-24"
                                     type="number"
                                     min="0.000001"
                                     step="0.000001"
@@ -3172,20 +3375,36 @@ export function PricingRequestDetailPage({ user, showToast }) {
                                 ) : null}
                               </div>
                             ) : editable ? (
-                              // Import, but the request email is still a DRAFT — a dimmed, disabled
-                              // stand-in so the column reads "you'll fill this after sending", not a
-                              // usable field. The group-level banner above says why.
+                              // Import, but the factory is not yet marked ติดต่อโรงงานแล้ว — a dimmed,
+                              // disabled stand-in so the column reads "you'll fill this after
+                              // contacting", not a usable field. The hint above the grid says why.
                               <input
                                 className="w-full opacity-50 md:w-32"
                                 type="text"
                                 disabled
                                 value=""
-                                placeholder="ส่งอีเมลก่อน"
-                                aria-label={`ราคาที่เสนอ ${itemRef} — ส่งอีเมลขอราคาก่อน`}
+                                placeholder="ติดต่อโรงงานก่อน"
+                                aria-label={`ราคาที่เสนอ ${itemRef} — ต้องติดต่อโรงงานก่อน`}
                                 data-testid={`pcr-quote-price-locked-${current.id}-${line.pricingRequestItemId}`}
                               />
                             ) : (
                               <span className="text-sm text-text-secondary">{formatCurrency(line.rawUnitPrice, line.currency)}</span>
+                            )}
+                          </div>
+                          {/* ระยะเวลานำเข้า: the line's current range; with a PENDING change it reads
+                              "old → new" in amber until the owning rep / a sales manager decides (R2/R10).
+                              The old value stands until then — nothing downstream waits on it. */}
+                          <div className="min-w-0 text-sm text-text-secondary" data-testid={`pcr-lt-value-${current.id}-${line.pricingRequestItemId}`}>
+                            <span className="mb-1 block text-2xs font-bold uppercase text-text-muted md:hidden">ระยะเวลานำเข้า</span>
+                            {pendingLineById.get(line.pricingRequestItemId) ? (
+                              <>
+                                <span className="tabular-nums">
+                                  {`${leadTimeRangeText(pendingLineById.get(line.pricingRequestItemId).oldMinDays, pendingLineById.get(line.pricingRequestItemId).oldMaxDays)} → ${leadTimeRangeText(pendingLineById.get(line.pricingRequestItemId).newMinDays, pendingLineById.get(line.pricingRequestItemId).newMaxDays)} วัน`}
+                                </span>
+                                <span className="block text-2xs font-bold text-warning-dark">รอฝ่ายขายอนุมัติ</span>
+                              </>
+                            ) : (
+                              <span className="tabular-nums">{leadTimeWithUnit(requested?.leadTimeMinDays, requested?.leadTimeMaxDays)}</span>
                             )}
                           </div>
                           <div>
@@ -3197,6 +3416,68 @@ export function PricingRequestDetailPage({ user, showToast }) {
                         </div>
                       );
                     })}
+
+                    {/* Lead-time change (R2/R10, option C), the approved/rejected history, and this factory's
+                        IR (R9, read-only). One compact block so the card keeps one reading order:
+                        terms -> grid -> what is pending / decided -> the IR. */}
+                    {pendingChange || canRequestLeadTime || decidedChanges.length > 0 || irRow ? (
+                      <div className="grid gap-2.5 border-b border-border-subtle px-5 py-3 text-xs mobile:px-4">
+                        {pendingChange ? (
+                          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-md border border-warning-border bg-warning-bg-soft px-3 py-2" data-testid={`pcr-lt-pending-${current.id}`}>
+                            <StatusBadge tone="warning">รอฝ่ายขายอนุมัติ</StatusBadge>
+                            <span className="min-w-0 text-text-secondary">ขอเปลี่ยนระยะเวลานำเข้า — {pendingChange.reason}</span>
+                            {isImport(user) ? (
+                              <span className="ml-auto flex flex-wrap items-center gap-2">
+                                <Button type="button" size="sm" variant="secondary" disabled={withdrawLeadTimeChange.isPending}
+                                  onClick={() => setLeadTimeDialog({ quoteId: current.id, change: pendingChange })}>
+                                  แก้ไข
+                                </Button>
+                                <Button type="button" size="sm" variant="secondary" disabled={withdrawLeadTimeChange.isPending}
+                                  onClick={() => withdrawLeadTimeChange.mutate(pendingChange)}>
+                                  ถอนคำขอ
+                                </Button>
+                              </span>
+                            ) : null}
+                          </div>
+                        ) : null}
+                        {canRequestLeadTime ? (
+                          <div>
+                            <Button type="button" size="sm" variant="secondary" data-testid={`pcr-lt-open-${current.id}`}
+                              onClick={() => setLeadTimeDialog({ quoteId: current.id, change: null })}>
+                              <Icon name="pencil" size={13} />
+                              ขอเปลี่ยนระยะเวลานำเข้า
+                            </Button>
+                          </div>
+                        ) : null}
+                        {decidedChanges.length > 0 ? (
+                          <div className="grid gap-1 text-text-muted" data-testid={`pcr-lt-history-${current.id}`}>
+                            <span className="font-bold">ประวัติการเปลี่ยนระยะเวลานำเข้า</span>
+                            {decidedChanges.map((change) => (
+                              <p key={change.id} className="m-0">
+                                <span className={change.status === 'APPROVED' ? 'font-bold text-success-dark' : 'font-bold text-danger-dark'}>
+                                  {change.status === 'APPROVED' ? 'อนุมัติแล้ว' : 'ไม่อนุมัติ'}
+                                </span>
+                                {change.decidedAt ? ` ${formatShortThaiDay(String(change.decidedAt).slice(0, 10))}` : ''}
+                                {' · '}
+                                {change.lines.map((line) => `${lineNameById.get(line.pricingRequestItemId) ?? `รายการ #${line.pricingRequestItemId}`} ${leadTimeRangeText(line.oldMinDays, line.oldMaxDays)} → ${leadTimeRangeText(line.newMinDays, line.newMaxDays)}`).join(', ')}
+                                {change.status === 'REJECTED' && change.decisionReason ? ` · เหตุผล: ${change.decisionReason}` : ''}
+                              </p>
+                            ))}
+                          </div>
+                        ) : null}
+                        {irRow ? (
+                          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-text-secondary" data-testid={`pcr-ir-${current.id}`}>
+                            <Icon name="fileText" size={13} className="shrink-0 text-text-muted" />
+                            <span className="font-bold text-text">{irRow.docNumber ?? 'ใบขอซื้อ'}</span>
+                            <StatusBadge tone={irRow.status === 'ISSUED' ? 'success' : 'neutral'}>{irRow.status === 'ISSUED' ? 'ออกเลขแล้ว' : 'ฉบับร่าง'}</StatusBadge>
+                            <Button type="button" size="sm" variant="secondary" disabled={downloadingIrId === irRow.id}
+                              onClick={() => downloadIr(irRow)}>
+                              {downloadingIrId === irRow.id ? 'กำลังดาวน์โหลด…' : 'ดาวน์โหลด PDF'}
+                            </Button>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
 
                     {/* Attachments — unchanged functionality, relocated under the item rows now that
                         the email composer they used to trail is a modal. */}
@@ -3770,12 +4051,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
           : confirmAction?.type === 'issueQuotation' ? 'ออกใบเสนอราคาลูกค้า'
           : confirmAction?.type === 'approveDiscount' ? 'อนุมัติส่วนลด'
           : confirmAction?.type === 'rejectDiscount' ? 'ปฏิเสธส่วนลด'
-          : confirmAction?.type === 'switchPriceMode' ? 'เปลี่ยนวิธีกรอกราคา'
-          // Manual-RFQ redesign: this dialog used to confirm the app SENDING the factory email
-          // (it never did — see FactoryQuoteService.send's own javadoc, "Was BROKEN"). The title,
-          // message and confirmLabel below now say plainly that this RECORDS a send the user
-          // already did themselves, in their own mail client.
-          : 'บันทึกว่าส่งอีเมลถึงโรงงานแล้ว'}
+          : 'เปลี่ยนวิธีกรอกราคา'}
         message={confirmAction?.type === 'approveDecision'
           ? 'เมื่ออนุมัติแล้ว ราคาขายจะถูกส่งให้ฝ่ายขายและไม่สามารถแก้ไขราคานี้ได้อีก (ราคานี้เป็นราคาก่อน VAT — ยังไม่รวมภาษีมูลค่าเพิ่ม 7%)'
           : confirmAction?.type === 'returnDecision'
@@ -3786,27 +4062,23 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 ? `อนุมัติส่วนลดรายการที่ ${confirmAction?.approval?.quotationItemId} ที่ราคา ${formatCurrency(confirmAction?.approval?.requestedFinalUnitPrice, currentCustomerQuotation?.currency)} — เมื่ออนุมัติแล้ว ใบเสนอราคานี้จะออกได้ตราบใดที่ไม่มีการแก้ไขราคาอีก`
                 : confirmAction?.type === 'rejectDiscount'
                   ? 'ระบุเหตุผลที่ปฏิเสธส่วนลดนี้ — ฝ่ายขายจะเห็นเหตุผลนี้และต้องแก้ไขราคาหรือถอนส่วนลดก่อนออกใบเสนอราคาได้'
-                  : confirmAction?.type === 'switchPriceMode'
-                    ? 'ค่าที่กรอกไว้ของวิธีเดิมจะไม่ถูกใช้ — ราคาสุทธิของทุกรายการจะคำนวณใหม่ตามวิธีที่เลือก และรายการที่ยังไม่มีข้อมูลของวิธีใหม่จะว่างจนกว่าจะกรอก'
-                    : `ยืนยันว่าคุณส่งอีเมลคำขอราคานี้ให้ ${confirmAction?.quote?.factoryName ?? 'โรงงาน'} เรียบร้อยแล้วด้วยตัวเอง — ระบบไม่ได้ส่งอีเมลนี้ให้ เมื่อยืนยันแล้วสถานะคำขอราคาโรงงานนี้จะเปลี่ยนเป็น "ส่งคำขอแล้ว"`}
+                  : 'ค่าที่กรอกไว้ของวิธีเดิมจะไม่ถูกใช้ — ราคาสุทธิของทุกรายการจะคำนวณใหม่ตามวิธีที่เลือก และรายการที่ยังไม่มีข้อมูลของวิธีใหม่จะว่างจนกว่าจะกรอก'}
         confirmLabel={confirmAction?.type === 'approveDecision' ? 'อนุมัติ'
           : confirmAction?.type === 'returnDecision' ? 'ตีกลับ'
           : confirmAction?.type === 'issueQuotation' ? 'ออกใบเสนอราคา'
           : confirmAction?.type === 'approveDiscount' ? 'อนุมัติส่วนลด'
           : confirmAction?.type === 'rejectDiscount' ? 'ปฏิเสธส่วนลด'
-          : confirmAction?.type === 'switchPriceMode' ? 'เปลี่ยนวิธีกรอกราคา'
-          : 'บันทึกว่าส่งแล้ว'}
+          : 'เปลี่ยนวิธีกรอกราคา'}
         tone={confirmAction?.type === 'returnDecision' || confirmAction?.type === 'rejectDiscount' ? 'danger' : 'default'}
         requireReason={confirmAction?.type === 'returnDecision' || confirmAction?.type === 'rejectDiscount'}
         reasonLabel={confirmAction?.type === 'rejectDiscount' ? 'เหตุผลที่ปฏิเสธส่วนลด' : 'เหตุผลที่ตีกลับ'}
-        busy={sendQuote.isPending || approveDecision.isPending || returnDecisionToImport.isPending
+        busy={approveDecision.isPending || returnDecisionToImport.isPending
           || issueQuotation.isPending || approveDiscount.isPending || rejectDiscount.isPending
           || setCeoPriceMode.isPending}
         onCancel={() => setConfirmAction(null)}
         onConfirm={(reason) => {
           const action = confirmAction;
           setConfirmAction(null);
-          if (action?.type === 'sendQuote') sendQuote.mutate({ quote: action.quote, draft: action.emailDraft });
           if (action?.type === 'approveDecision') approveDecision.mutate(action.decision);
           if (action?.type === 'returnDecision') returnDecisionToImport.mutate({ decision: action.decision, reason });
           if (action?.type === 'issueQuotation') issueQuotation.mutate(action.quotation);
@@ -3833,15 +4105,44 @@ export function PricingRequestDetailPage({ user, showToast }) {
           })}
           savePending={updateQuote.isPending}
           onCopy={copyFactoryEmail}
-          inSendWindow={inSendWindow}
-          onRequestSend={() => {
-            const quote = emailModalQuote;
-            const draft = emailDrafts[quote.id] ?? { emailTo: quote.emailTo ?? '', emailSubject: quote.emailSubject ?? '', emailBody: quote.emailBody ?? '', note: quote.note ?? '' };
-            // Close this modal before opening the shared ConfirmDialog rather than stacking two
-            // focus-trapped modals — see FactoryEmailDraftModal's own doc comment.
-            setEmailModalQuoteId(null);
-            setConfirmAction({ type: 'sendQuote', quote, emailDraft: draft });
-          }}
+          // updateDraft is the contact roles' (import + CEO), DRAFT-only, and guarded by the same
+          // DRAFT_STATUSES window as markContacted — outside any of those the modal is view + copy.
+          canEdit={canContactFactory && emailModalQuote.status === 'DRAFT' && emailModalQuote.current && inSendWindow}
+          attachments={pricingRequestAttachments.filter((attachment) => attachment.includeInFactoryEmail)}
+        />
+      ) : null}
+
+      {previewContactFactory ? (
+        <FactoryContactDialog
+          factoryName={previewContactFactory}
+          pending={previewBusyFactory === previewContactFactory}
+          onCancel={() => setPreviewContactFactory(null)}
+          onConfirm={(body) => contactFromPreview(previewContactFactory, body)}
+        />
+      ) : null}
+
+      {contactQuote ? (
+        <FactoryContactDialog
+          factoryName={contactQuote.factoryName}
+          pending={markContacted.isPending}
+          onCancel={() => setContactQuoteId(null)}
+          onConfirm={(body) => markContacted.mutate({ quote: contactQuote, body })}
+        />
+      ) : null}
+
+      {leadTimeDialog && leadTimeDialogQuote ? (
+        <LeadTimeChangeDialog
+          factoryName={leadTimeDialogQuote.factoryName}
+          lines={(leadTimeDialogQuote.items ?? [])
+            .map((line) => requestItemById.get(line.pricingRequestItemId))
+            .filter((item) => item && isImportLine(item))
+            .map((item) => ({ item, name: itemDisplayName(item), current: { min: item.leadTimeMinDays, max: item.leadTimeMaxDays } }))}
+          existing={leadTimeDialog.change}
+          pending={createLeadTimeChange.isPending || updateLeadTimeChange.isPending}
+          onCancel={() => setLeadTimeDialog(null)}
+          onSubmit={(body) => (leadTimeDialog.change
+            ? updateLeadTimeChange.mutate({ change: leadTimeDialog.change, body })
+            : createLeadTimeChange.mutate({ quote: leadTimeDialogQuote, body }))}
         />
       ) : null}
 

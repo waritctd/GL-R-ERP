@@ -34,7 +34,7 @@ vi.mock('../../api/index.js', () => ({
       pickup: vi.fn(),
       generateFactoryEmailDrafts: vi.fn(),
       updateFactoryQuote: vi.fn(),
-      sendFactoryQuote: vi.fn(),
+      markFactoryQuoteContacted: vi.fn(),
       receiveFactoryQuote: vi.fn(),
       startFactoryNegotiation: vi.fn(),
       markFactoryQuoteReady: vi.fn(),
@@ -73,6 +73,20 @@ vi.mock('../../api/index.js', () => ({
       // Step 6: Deposit, Payment, and Order Confirmation.
       confirmOrder: vi.fn(),
       createDepositNoticeFromQuotation: vi.fn(),
+    },
+    // CR-1 (GLA-167): lead-time change requests (R2 / R10).
+    leadTimeChanges: {
+      listForPricingRequest: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      withdraw: vi.fn(),
+      approve: vi.fn(),
+      reject: vi.fn(),
+    },
+    // CR-1 (R9): the factory card lists the deal's stored IR for that factory, read-only.
+    storedImportRequests: {
+      listForTicket: vi.fn(),
+      download: vi.fn(),
     },
     catalog: {
       prices: vi.fn(),
@@ -263,7 +277,15 @@ function setApiDefaults() {
   api.pricingRequests.setItemFactory.mockResolvedValue({});
   api.pricingRequests.generateFactoryEmailDrafts.mockResolvedValue({});
   api.pricingRequests.updateFactoryQuote.mockResolvedValue({});
-  api.pricingRequests.sendFactoryQuote.mockResolvedValue({});
+  api.pricingRequests.markFactoryQuoteContacted.mockResolvedValue({});
+  api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: [] });
+  api.storedImportRequests.download.mockResolvedValue(new Blob(['pdf'], { type: 'application/pdf' }));
+  api.leadTimeChanges.listForPricingRequest.mockResolvedValue({ items: [] });
+  api.leadTimeChanges.create.mockResolvedValue({});
+  api.leadTimeChanges.update.mockResolvedValue({});
+  api.leadTimeChanges.withdraw.mockResolvedValue({});
+  api.leadTimeChanges.approve.mockResolvedValue({});
+  api.leadTimeChanges.reject.mockResolvedValue({});
   api.pricingRequests.receiveFactoryQuote.mockResolvedValue({});
   api.pricingRequests.startFactoryNegotiation.mockResolvedValue({});
   api.pricingRequests.markFactoryQuoteReady.mockResolvedValue({});
@@ -505,6 +527,10 @@ function renderDetailPage({
   // (listFactoryQuotes/listCostings/listAttachments) so a test that doesn't care about this
   // feature never has to know it exists — only tests exercising it pass discountApprovals.
   discountApprovals = [],
+  // CR-1: lead-time change requests (LeadTimeChangeDto[]).
+  leadTimeChanges = [],
+  // CR-1 (R9): the deal's stored ใบขอซื้อ rows (ImportRequestDto[]).
+  importRequests = [],
   showToast = vi.fn(),
   routeId = request?.summary?.id ?? 501,
 } = {}) {
@@ -519,6 +545,8 @@ function renderDetailPage({
   api.pricingRequests.listCostings.mockResolvedValue({ items: costings });
   api.pricingRequests.listAttachments.mockResolvedValue({ items: attachments });
   api.pricingRequests.listDiscountApprovalsForQuotation.mockResolvedValue({ items: discountApprovals });
+  api.leadTimeChanges.listForPricingRequest.mockResolvedValue({ items: leadTimeChanges });
+  api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests });
 
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -684,26 +712,26 @@ describe('PricingRequestDetailPage role-scoped raw quote/costing visibility (UI-
 });
 
 describe('PricingRequestDetailPage Import factory-quote workflow', () => {
-  it('lets Import edit the factory email draft before sending, and saves it via updateFactoryQuote', async () => {
+  it('lets Import edit the mail draft via สร้างเมล and saves it with บันทึกร่าง (updateFactoryQuote)', async () => {
     const quote = buildFactoryQuote();
     renderDetailPage({ user: importUser, factoryQuotes: [quote] });
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
 
-    // The To/Subject/Body composer moved into a modal behind the factory group's own "ร่างอีเมล"
-    // button (factory-price-import-ui redesign) — open it before looking for the fields.
-    fireEvent.click(screen.getByRole('button', { name: 'ร่างอีเมล' }));
-    const dialog = await screen.findByRole('dialog', { name: 'ร่างอีเมลถึงโรงงาน' });
+    // CR-1: the composer lives in a modal behind each factory card's สร้างเมล button (the old
+    // ร่างอีเมล / ดูอีเมล labels are gone — see IA naming table).
+    fireEvent.click(screen.getByRole('button', { name: 'สร้างเมล' }));
+    const dialog = await screen.findByRole('dialog', { name: 'สร้างเมล' });
 
-    const toInput = within(dialog).getByLabelText(/อีเมลโรงงาน/);
-    const subjectInput = within(dialog).getByLabelText('หัวข้ออีเมล');
-    const bodyInput = within(dialog).getByLabelText('เนื้อหาอีเมล');
+    const toInput = within(dialog).getByLabelText('ถึง');
+    const subjectInput = within(dialog).getByLabelText('หัวข้อ');
+    const bodyInput = within(dialog).getByLabelText('เนื้อหา');
 
     fireEvent.change(toInput, { target: { value: 'purchasing@scg-factory.example' } });
     fireEvent.change(subjectInput, { target: { value: 'ขอราคาใหม่ SCG A1' } });
     fireEvent.change(bodyInput, { target: { value: 'เรียน โรงงาน กรุณาเสนอราคาใหม่' } });
 
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่างอีเมล' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึกร่าง' }));
 
     await waitFor(() => expect(api.pricingRequests.updateFactoryQuote).toHaveBeenCalledWith(
       quote.id,
@@ -715,137 +743,34 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     ));
   });
 
-  // Manual-RFQ redesign (2026-09-06) retired the dispatch-outbox model this test used to pin
-  // (a clientRequestId cached across retries of the same enqueue attempt). send() is now a
-  // synchronous, one-shot record with no dispatch to replay against, so there is no idempotency
-  // key left to stabilize — this test now covers what replaces it: the payload carries no
-  // clientRequestId at all, and repeated open/cancel/reopen still ends in exactly one call.
-  it('sends the factory quote with no clientRequestId — open/cancel/reopen still ends in exactly one send', async () => {
-    const quote = buildFactoryQuote();
-    renderDetailPage({ user: importUser, factoryQuotes: [quote] });
-    await waitForLoaded();
-    await screen.findByText('SCG Ceramics');
-
-    // The To/Subject/Body composer + ส่งแล้ว live behind the factory group's ร่างอีเมล modal.
-    // Requesting send closes THAT modal before opening the shared ConfirmDialog (one focus-trapped
-    // dialog at a time — see FactoryEmailDraftModal's own doc comment), so each attempt below
-    // reopens ร่างอีเมล first. "ยกเลิก" alone would also match this quote's own (unrelated)
-    // discard-edits button in the item-price grid, so the ConfirmDialog's is scoped with `within`.
-    fireEvent.click(screen.getByRole('button', { name: 'ร่างอีเมล' }));
-    await screen.findByRole('dialog', { name: 'ร่างอีเมลถึงโรงงาน' });
-    fireEvent.click(screen.getByRole('button', { name: 'ส่งแล้ว' }));
-    const firstConfirmDialog = await screen.findByRole('dialog', { name: 'บันทึกว่าส่งอีเมลถึงโรงงานแล้ว' });
-
-    // Cancel without confirming, reopen ร่างอีเมล, request send again.
-    fireEvent.click(within(firstConfirmDialog).getByRole('button', { name: 'ยกเลิก' }));
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'บันทึกว่าส่งอีเมลถึงโรงงานแล้ว' })).toBeNull());
-    fireEvent.click(screen.getByRole('button', { name: 'ร่างอีเมล' }));
-    await screen.findByRole('dialog', { name: 'ร่างอีเมลถึงโรงงาน' });
-    fireEvent.click(screen.getByRole('button', { name: 'ส่งแล้ว' }));
-    const secondConfirmDialog = await screen.findByRole('dialog', { name: 'บันทึกว่าส่งอีเมลถึงโรงงานแล้ว' });
-
-    fireEvent.click(within(secondConfirmDialog).getByRole('button', { name: 'บันทึกว่าส่งแล้ว' }));
-
-    await waitFor(() => expect(api.pricingRequests.sendFactoryQuote).toHaveBeenCalledTimes(1));
-    const [id, payload] = api.pricingRequests.sendFactoryQuote.mock.calls[0];
-    expect(id).toBe(quote.id);
-    // clientRequestId is GONE (manual-RFQ redesign): there is no dispatch left to replay against,
-    // so send() is idempotent by the quote's own status instead — see hrApi.js's own doc comment
-    // on sendFactoryQuote.
-    expect(payload).not.toHaveProperty('clientRequestId');
-    expect(payload).toEqual({
-      emailTo: quote.emailTo,
-      emailSubject: quote.emailSubject,
-      emailBody: quote.emailBody,
-    });
-  });
-
-  // The recipient is optional now (owner decision): a human may mark an RFQ sent even when no
-  // factory contact email is on file. This used to be untested either way; it is now pinned so a
-  // future regression that disables ส่งแล้ว on a blank address, or blocks the confirm, is caught.
-  it('lets Import mark a factory quote sent with a blank recipient email', async () => {
-    const quote = buildFactoryQuote({ emailTo: null });
-    renderDetailPage({ user: importUser, factoryQuotes: [quote] });
-    await waitForLoaded();
-    await screen.findByText('SCG Ceramics');
-
-    fireEvent.click(screen.getByRole('button', { name: 'ร่างอีเมล' }));
-    const draftDialog = await screen.findByRole('dialog', { name: 'ร่างอีเมลถึงโรงงาน' });
-    const emailInput = within(draftDialog).getByLabelText(/อีเมลโรงงาน/);
-    expect(emailInput.value).toBe('');
-    const markSentButton = within(draftDialog).getByRole('button', { name: 'ส่งแล้ว' });
-    expect(markSentButton.disabled).toBe(false);
-    fireEvent.click(markSentButton);
-
-    const confirmDialog = await screen.findByRole('dialog', { name: 'บันทึกว่าส่งอีเมลถึงโรงงานแล้ว' });
-    fireEvent.click(within(confirmDialog).getByRole('button', { name: 'บันทึกว่าส่งแล้ว' }));
-
-    // The blank field round-trips as '' (the controlled input's own empty value), not blocked and
-    // not coerced back to the quote's original (already-null) emailTo on the way out.
-    await waitFor(() => expect(api.pricingRequests.sendFactoryQuote).toHaveBeenCalledWith(
-      quote.id,
-      expect.objectContaining({ emailTo: '' }),
-    ));
-  });
-
-  // The three-step manual hand-off (copy -> send from your own mail client -> come back and
-  // confirm) must be spelled out on screen, not left implicit now that the app itself sends
-  // nothing — see FactoryEmailDraftModal's own doc comment.
-  it('spells out the copy → send yourself → confirm steps while the draft is still editable', async () => {
-    renderDetailPage({ user: importUser, factoryQuotes: [buildFactoryQuote()] });
-    await waitForLoaded();
-    await screen.findByText('SCG Ceramics');
-
-    fireEvent.click(screen.getByRole('button', { name: 'ร่างอีเมล' }));
-    const dialog = await screen.findByRole('dialog', { name: 'ร่างอีเมลถึงโรงงาน' });
-
-    expect(within(dialog).getByText('คัดลอกข้อความอีเมลด้านล่าง')).not.toBeNull();
-    expect(within(dialog).getByText(/วางและส่งอีเมลนี้จากโปรแกรมอีเมลของคุณเอง/)).not.toBeNull();
-    expect(within(dialog).getByText(/ระบบนี้ไม่ได้ส่งอีเมลให้/)).not.toBeNull();
-    // Both actions are offered while the draft is still a DRAFT — copy is the actionable first
-    // step, not a decorative afterthought beside the button that actually changes state.
-    expect(within(dialog).getByRole('button', { name: /คัดลอกข้อความ/ })).not.toBeNull();
-    expect(within(dialog).getByRole('button', { name: 'ส่งแล้ว' })).not.toBeNull();
-  });
-
-  // Owner UX ask 2026-09-24: the price grid must not invite a quoted price before the request
-  // email has actually been sent to this factory (a DRAFT quote = not sent yet). Nudge, not hide:
-  // the grid stays visible with a locked/dimmed price input + a "send the email first" banner.
-  it('locks the price grid with a nudge while the factory email is still a DRAFT', async () => {
+  // Owner UX ask 2026-09-24 (kept) + CR-1 R3/B-R2: the price grid must not invite a quoted price
+  // before the factory has been marked ติดต่อโรงงานแล้ว (a DRAFT quote = not contacted yet).
+  it('locks the price grid with a hint while the factory is not yet contacted (DRAFT)', async () => {
     renderDetailPage({ user: importUser, factoryQuotes: [buildFactoryQuote()] }); // default status DRAFT
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
 
-    expect(screen.getByTestId('pcr-await-email-91')).not.toBeNull();     // the nudge banner
-    // The price field (shared aria-label prefix) is the DISABLED stand-in, not an editable input.
+    expect(screen.getByTestId('pcr-await-contact-91').textContent).toContain('กด ติดต่อโรงงานแล้ว ก่อนกรอกราคา');
     expect(screen.getByLabelText(/^ราคาที่เสนอ/).disabled).toBe(true);
-    expect(screen.queryByRole('button', { name: 'ยืนยันราคาเสนอ' })).toBeNull(); // and no confirm
+    expect(screen.queryByRole('button', { name: 'ยืนยันราคาเสนอ' })).toBeNull();
   });
 
-  it('unlocks the price grid once the factory email is sent (REQUESTED)', async () => {
+  it('unlocks the price grid once the factory is contacted (REQUESTED)', async () => {
     renderDetailPage({ user: importUser, factoryQuotes: [buildFactoryQuote({ status: 'REQUESTED' })] });
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
 
-    expect(screen.queryByTestId('pcr-await-email-91')).toBeNull();       // banner gone
-    expect(screen.getByLabelText(/^ราคาที่เสนอ/).disabled).toBe(false);  // editable input back
+    expect(screen.queryByTestId('pcr-await-contact-91')).toBeNull();
+    expect(screen.getByLabelText(/^ราคาที่เสนอ/).disabled).toBe(false);
     expect(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' })).not.toBeNull();
   });
 
-  // Opus review of #1062 (2026-09-28): the lock above read only the QUOTE's own status, never the
-  // PRICING REQUEST's. FactoryQuoteService.send only succeeds while the request itself sits in
-  // DRAFT_STATUSES = {IMPORT_REVIEWING, AWAITING_FACTORY_RESPONSE} (FactoryQuoteService.java:47-49,
-  // guarded at :242). receive()'s window is wider (RESPONSE_STATUSES, :50-53, adds
-  // READY_FOR_CEO_REVIEW) and explicitly still accepts a DRAFT quote (:402, :408). This is a
-  // defensive guard, not a claim of a specific reproduction — PricingRequestService#setItemFactory
-  // is a gap-FILL only (a line that already has a factory 409s), so no confirmed live path was found
-  // that lands a DRAFT quote outside send()'s window today. But whatever combination does, the UI
-  // must never lock the grid behind a "send first" banner whose only action would 409 while
-  // receive() would accept the very same confirm — so outside send()'s window the grid must behave
-  // as it did before #1062: enabled, no banner, AND (since receive() explicitly still accepts a
-  // DRAFT quote there) the ยืนยันราคาเสนอ confirm button restored too — see the follow-up fix to
-  // canConfirm's own disjunction, which this test also covers.
-  it('does not lock the price grid for a surviving DRAFT quote once the request is past send()\'s window (READY_FOR_CEO_REVIEW)', async () => {
+  // Opus review of #1062 (2026-09-28) used to pin that a DRAFT quote outside send()'s window
+  // UNLOCKED the grid because receive() accepted a DRAFT quote there. CR-1 B-R2 reverses that:
+  // FactoryQuoteService#receive now 409s on EVERY DRAFT quote ("ต้องกด ติดต่อโรงงานแล้ว ก่อนกรอกราคา"),
+  // so the grid stays locked past the window too, and — since markContacted is itself guarded by
+  // DRAFT_STATUSES — the ติดต่อโรงงานแล้ว button is withheld there rather than offered to 409.
+  it('keeps a DRAFT quote locked once the request is past the contact window (READY_FOR_CEO_REVIEW), with no contact button', async () => {
     renderDetailPage({
       user: importUser,
       request: buildRequest({ summary: { status: 'READY_FOR_CEO_REVIEW' } }),
@@ -854,15 +779,15 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
 
-    expect(screen.queryByTestId('pcr-await-email-91')).toBeNull();       // no banner
-    expect(screen.getByLabelText(/^ราคาที่เสนอ/).disabled).toBe(false);  // input enabled, not locked
-    expect(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' })).not.toBeNull(); // confirm restored too
+    expect(screen.getByLabelText(/^ราคาที่เสนอ/).disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: 'ยืนยันราคาเสนอ' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ติดต่อโรงงานแล้ว' })).toBeNull();
   });
 
-  // #2 (owner ask 2026-09-24): before any ร่างอีเมล is generated the price section used to be a
+  // #2 (owner ask 2026-09-24): before any mail is generated the price section used to be a
   // bare "ยังไม่มีราคาโรงงาน" — now it previews what needs pricing, grouped by the routed factory,
   // read-only (no editable price input yet).
-  it('previews what needs pricing (grouped by factory) before any ร่างอีเมล is generated', async () => {
+  it('previews what needs pricing (grouped by factory) before any mail is generated', async () => {
     renderDetailPage({ user: importUser }); // no factoryQuotes → nothing generated yet
     await waitForLoaded();
 
@@ -904,7 +829,7 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     // Mixed case (A/B already quoted, C only just previewed): the banner must not claim no draft
     // was ever generated — that would be false for A/B's already-drafted factory.
     expect(within(preview).getByText(/รายการที่ยังไม่ได้ขอราคาจากโรงงาน/)).not.toBeNull();
-    expect(within(preview).queryByText(/ยังไม่ได้สร้างร่างอีเมลขอราคา/)).toBeNull();
+    expect(within(preview).queryByText(/ยังไม่ได้สร้างเมลขอราคา/)).toBeNull();
 
     // A and B still render as their own quote-grid rows (locked, since request stays
     // IMPORT_REVIEWING and the quote stays DRAFT) rather than being hidden by C's preview.
@@ -931,30 +856,26 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     expect(screen.queryByTestId('pcr-detail-pickup')).toBeNull();
   });
 
-  // owner ask 2026-09-24: after ส่งแล้ว, Import can still reopen the RFQ email — read-only (view +
-  // copy), labelled ดูอีเมล; the ส่งแล้ว transition is gone.
-  it('reopens a SENT factory RFQ email read-only (ดูอีเมล, copy kept, no ส่งแล้ว)', async () => {
+  // owner ask 2026-09-24 (kept): once contacted, Import can still reopen the mail — read-only
+  // (view + copy). CR-1 naming: the button stays สร้างเมล, there is no separate ดูอีเมล label.
+  it('reopens the mail of a CONTACTED factory read-only (copy kept, no บันทึกร่าง)', async () => {
     renderDetailPage({ user: importUser, factoryQuotes: [buildFactoryQuote({ status: 'REQUESTED' })] });
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
 
     const openBtn = screen.getByTestId('pcr-open-email-draft-91');
-    expect(openBtn.textContent).toContain('ดูอีเมล');
+    expect(openBtn.textContent).toContain('สร้างเมล');
     fireEvent.click(openBtn);
 
     const dialog = await screen.findByTestId('factory-email-draft-modal');
-    expect(within(dialog).getByTestId('pcr-copy-factory-email')).not.toBeNull();          // copy kept
-    expect(within(dialog).queryByTestId('pcr-mark-factory-email-sent')).toBeNull();       // no ส่งแล้ว
+    expect(within(dialog).getByRole('button', { name: /คัดลอกเมล/ })).not.toBeNull();
+    expect(within(dialog).queryByRole('button', { name: 'บันทึกร่าง' })).toBeNull();
+    expect(within(dialog).getByLabelText('ถึง').disabled).toBe(true);
   });
 
-  // Opus review of #1062 (2026-09-28), second pass: FactoryEmailDraftModal's own two flags
-  // (canEditFields / canOfferSendActions) used to read only the QUOTE's status — the identical gap
-  // the price grid had before the first review pass, reachable through the exact same state (request
-  // outside send()'s window, quote still DRAFT). The group header already shows "ดูอีเมล" there
-  // (view-only, per the grid's emailSent fix), but the modal itself still offered "ส่งแล้ว" (→
-  // FactoryQuoteService.send → 409) and "บันทึกร่างอีเมล" (→ updateDraft, guarded by the identical
-  // DRAFT_STATUSES → 409). Both now also require `inSendWindow`.
-  it('reopens the RFQ email modal read-only for a DRAFT quote once the request is past send()\'s window (READY_FOR_CEO_REVIEW)', async () => {
+  // Opus review of #1062 second pass (kept in spirit): outside the contact window the modal is
+  // read-only too — updateDraft is guarded by the identical DRAFT_STATUSES (409).
+  it('reopens the mail modal read-only for a DRAFT quote once the request is past the contact window', async () => {
     renderDetailPage({
       user: importUser,
       request: buildRequest({ summary: { status: 'READY_FOR_CEO_REVIEW' } }),
@@ -963,15 +884,11 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
 
-    const openBtn = screen.getByTestId('pcr-open-email-draft-91');
-    expect(openBtn.textContent).toContain('ดูอีเมล'); // header already reads view-only here
-    fireEvent.click(openBtn);
-
+    fireEvent.click(screen.getByTestId('pcr-open-email-draft-91'));
     const dialog = await screen.findByTestId('factory-email-draft-modal');
-    expect(within(dialog).queryByRole('button', { name: 'ส่งแล้ว' })).toBeNull();          // no send
-    expect(within(dialog).queryByRole('button', { name: 'บันทึกร่างอีเมล' })).toBeNull();  // no save
-    expect(within(dialog).getByTestId('pcr-copy-factory-email')).not.toBeNull();           // copy kept
-    expect(within(dialog).getByLabelText('อีเมลโรงงาน (ถ้ามี)').disabled).toBe(true);       // fields locked
+    expect(within(dialog).queryByRole('button', { name: 'บันทึกร่าง' })).toBeNull();
+    expect(within(dialog).getByRole('button', { name: /คัดลอกเมล/ })).not.toBeNull();
+    expect(within(dialog).getByLabelText('ถึง').disabled).toBe(true);
   });
 
   it('records a factory response revision entry via receiveFactoryQuote with a fresh clientRequestId', async () => {
@@ -1242,31 +1159,7 @@ describe('PricingRequestDetailPage Import costing workflow', () => {
 // `isImport`). These cases pin the copy of the FOUR that remain, so that edit and any future one
 // is falsifiable. Mutation-checked on 2026-08-14: swapping any single branch of any of the three
 // chains turns exactly the matching case below red.
-describe('PricingRequestDetailPage shared ConfirmDialog copy (the four surviving actions)', () => {
-  // Manual-RFQ redesign (2026-09-06): this case's copy changed from confirming that the APP would
-  // send the email (it never did — FactoryQuoteService.send's own javadoc: "Was BROKEN") to
-  // plainly saying the click only RECORDS a send the user already made themselves. Still the same
-  // chain-default branch, still pinned the same way as the other three.
-  it('sendQuote — the chain default: บันทึกว่าส่งอีเมลถึงโรงงานแล้ว / ยืนยันว่าคุณส่ง… / บันทึกว่าส่งแล้ว', async () => {
-    renderDetailPage({ user: importUser, factoryQuotes: [buildFactoryQuote()] });
-    await waitForLoaded();
-    await screen.findByText('SCG Ceramics');
-
-    // ส่งแล้ว lives inside the factory group's ร่างอีเมล modal now (factory-price-import-ui redesign).
-    fireEvent.click(screen.getByRole('button', { name: 'ร่างอีเมล' }));
-    await screen.findByRole('dialog', { name: 'ร่างอีเมลถึงโรงงาน' });
-    fireEvent.click(screen.getByRole('button', { name: 'ส่งแล้ว' }));
-
-    const dialog = await screen.findByRole('dialog', { name: 'บันทึกว่าส่งอีเมลถึงโรงงานแล้ว' });
-    // Names the factory and says plainly that the SYSTEM did not send the email — the user is
-    // recording a send they already made themselves, in their own mail client.
-    expect(within(dialog).getByText(/ยืนยันว่าคุณส่งอีเมลคำขอราคานี้ให้ SCG Ceramics เรียบร้อยแล้วด้วยตัวเอง/)).not.toBeNull();
-    expect(within(dialog).getByText(/ระบบไม่ได้ส่งอีเมลนี้ให้/)).not.toBeNull();
-    expect(within(dialog).getByRole('button', { name: 'บันทึกว่าส่งแล้ว' })).not.toBeNull();
-    // No reason textarea: requireReason is returnDecision-only.
-    expect(within(dialog).queryByLabelText('เหตุผลที่ตีกลับ')).toBeNull();
-  });
-
+describe('PricingRequestDetailPage shared ConfirmDialog copy (the three surviving actions)', () => {
   it('approveDecision — อนุมัติราคาขาย / เมื่ออนุมัติแล้ว… / อนุมัติ', async () => {
     const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
     api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [buildDecision()] });
@@ -1334,7 +1227,12 @@ describe('PricingRequestDetailPage shared ConfirmDialog copy (the four surviving
 
 describe('PricingRequestDetailPage customer-change revision editing', () => {
   it('lets the owning sales rep open the revision modal (seeded from the current request) and create a revision via createCustomerChangeRevision', async () => {
-    const request = buildRequest({ summary: { status: 'READY_FOR_CEO_REVIEW' } });
+    // CR-1: the line carries the currency/unit sales fixed (a legacy line without them must be
+    // completed before a revision can be saved — covered in PricingRequestCreateModal.test.jsx).
+    const request = buildRequest({
+      summary: { status: 'READY_FOR_CEO_REVIEW' },
+      items: [{ ...buildRequest().items[0], requestedCurrency: 'THB', requestedPriceUnitBasis: 'PER_PIECE' }],
+    });
     renderDetailPage({ user: salesOwner, request });
     await waitForLoaded(request);
 
@@ -3453,6 +3351,810 @@ describe('PricingRequestDetailPage deal link', () => {
     renderDetailPage({ user: salesOwner });
     await waitForLoaded();
     expect(screen.getByRole('link', { name: 'PR-2026-0701' }).getAttribute('href')).toBe('/tickets/701');
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+// CR-1 (GLA-167) — factory contact flow, locked terms, lead-time change (rulings R1–R10).
+// UI-LEVEL ONLY, per this file's header: every role assertion proves conditional rendering, not
+// server enforcement (FactoryQuoteService / LeadTimeChangeService integration tests do that).
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+const bangkokDay = (offsetDays = 0) => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Bangkok' })
+  .format(new Date(Date.now() + offsetDays * 24 * 3600 * 1000));
+
+const salesOtherRep = { id: 9, employeeId: 9, name: 'พนักงานขายคนอื่น', role: 'sales' };
+
+function crItem(over = {}) {
+  return {
+    ...buildRequest().items[0],
+    requestedCurrency: 'EUR',
+    requestedPriceUnitBasis: 'PER_SQM',
+    leadTimeMinDays: 75,
+    leadTimeMaxDays: 90,
+    ...over,
+  };
+}
+
+function crQuote(over = {}) {
+  const base = buildFactoryQuote();
+  return buildFactoryQuote({
+    defaultCurrency: 'EUR',
+    items: [{ ...base.items[0], currency: 'EUR', unitBasis: 'PER_SQM', quotedUnit: 'ตร.ม.' }],
+    ...over,
+  });
+}
+
+function contactedQuote(over = {}) {
+  return crQuote({
+    status: 'REQUESTED',
+    contactedOn: '2026-10-01',
+    contactedNote: 'โทรคุณ Marco',
+    contactedBy: 3,
+    contactedAt: '2026-10-01T03:00:00Z',
+    ...over,
+  });
+}
+
+function crRequest(over = {}) {
+  return {
+    ...buildRequest({ items: [crItem()], ...over }),
+    events: [{
+      id: 1, actorId: 3, actorName: 'ฝ่ายนำเข้า', eventKind: 'FACTORY_CONTACTED',
+      message: 'Factory contacted: SCG Ceramics on 2026-10-01', createdAt: '2026-10-01T03:00:00Z',
+    }],
+  };
+}
+
+function ltChange(over = {}) {
+  return {
+    id: 7001,
+    factoryQuoteId: 91,
+    pricingRequestId: 501,
+    status: 'PENDING',
+    reason: 'โรงงานเลื่อนกำหนดผลิต',
+    requestedBy: 3,
+    requestedAt: '2026-10-01T03:00:00Z',
+    decidedBy: null,
+    decidedAt: null,
+    decisionReason: null,
+    version: 3,
+    lines: [{ pricingRequestItemId: 1, oldMinDays: 75, oldMaxDays: 90, newMinDays: 120, newMaxDays: 150 }],
+    ...over,
+  };
+}
+
+describe('CR-1 factory card — status, terms, and the locked price grid (F1)', () => {
+  it('a not-yet-contacted factory shows the chip ยังไม่ติดต่อ with สร้างเมล + a primary ติดต่อโรงงานแล้ว, and none of the retired labels', async () => {
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [crQuote()] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    expect(screen.getByTestId('pcr-factory-status-91').textContent).toContain('ยังไม่ติดต่อ');
+    expect(screen.getByRole('button', { name: 'สร้างเมล' })).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'ติดต่อโรงงานแล้ว' })).not.toBeNull();
+    expect(screen.queryByRole('button', { name: 'ร่างอีเมล' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ดูอีเมล' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ส่งแล้ว' })).toBeNull();
+  });
+
+  it('shows the locked terms strip "EUR · ต่อ ตร.ม. · ตามคำขอของฝ่ายขาย" and REMOVES the currency/unit selects for lines that carry terms (R1)', async () => {
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote()] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    const strip = screen.getByTestId('pcr-factory-terms-91');
+    expect(strip.textContent).toContain('EUR');
+    expect(strip.textContent).toContain('ต่อ ตร.ม.');
+    expect(strip.textContent).toContain('ตามคำขอของฝ่ายขาย');
+    // regex, not the bare string: the label carries an InfoTip, so an exact-string query can never match
+    expect(screen.queryByRole('combobox', { name: /^สกุลเงิน/ })).toBeNull();
+    expect(screen.queryByRole('combobox', { name: /^หน่วยราคา/ })).toBeNull();
+  });
+
+  it('a legacy line with no requested terms keeps today\'s currency/unit selects and shows no lock strip', async () => {
+    renderDetailPage({ user: importUser, request: buildRequest(), factoryQuotes: [buildFactoryQuote({ status: 'REQUESTED' })] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    expect(screen.getByRole('combobox', { name: /^สกุลเงิน/ })).not.toBeNull();
+    expect(screen.getByRole('combobox', { name: /^หน่วยราคา/ })).not.toBeNull();
+    expect(screen.queryByTestId('pcr-factory-terms-91')).toBeNull();
+  });
+
+  it('a not-yet-contacted factory disables every price input and says why', async () => {
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [crQuote()] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    expect(screen.getByLabelText(/^ราคาที่เสนอ/).disabled).toBe(true);
+    expect(screen.getByTestId('pcr-await-contact-91').textContent).toContain('กด ติดต่อโรงงานแล้ว ก่อนกรอกราคา');
+    expect(screen.queryByRole('button', { name: 'ยืนยันราคาเสนอ' })).toBeNull();
+  });
+
+  it('a contacted factory shows ติดต่อแล้ว <date> · <name>, the note, unlocked prices — and NO ติดต่อโรงงานแล้ว button (no undo, R7)', async () => {
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote()] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    const chip = screen.getByTestId('pcr-factory-status-91').textContent;
+    expect(chip).toContain('ติดต่อแล้ว');
+    expect(chip).toContain('1 ต.ค.');
+    expect(chip).toContain('ฝ่ายนำเข้า');
+    expect(screen.getByText(/โทรคุณ Marco/)).not.toBeNull();
+    expect(screen.getByLabelText(/^ราคาที่เสนอ/).disabled).toBe(false);
+    expect(screen.queryByRole('button', { name: 'ติดต่อโรงงานแล้ว' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /ยกเลิกการติดต่อ|แก้ไขการติดต่อ/ })).toBeNull();
+  });
+
+  it('a READY_FOR_COSTING factory reads ยืนยันราคาแล้ว', async () => {
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote({ status: 'READY_FOR_COSTING' })] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+    expect(screen.getByTestId('pcr-factory-status-91').textContent).toContain('ยืนยันราคาแล้ว');
+  });
+
+  it('the price payload carries the sales terms (EUR / PER_SQM) — import cannot change them', async () => {
+    const quote = contactedQuote();
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [quote] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ/), { target: { value: '12.5' } });
+    fireEvent.change(screen.getByLabelText(/^ตร.ม.\/หน่วย/), { target: { value: '0.36' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
+
+    await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalledWith(
+      quote.id,
+      expect.objectContaining({
+        defaultCurrency: 'EUR',
+        items: [expect.objectContaining({ currency: 'EUR', unitBasis: 'PER_SQM', rawUnitPrice: 12.5 })],
+      }),
+    ));
+  });
+
+  // Owner ruling 2026-10-01: factory workspace is import-only (#1103); the backend still authorises ceo on drafts and /contacted (CR-1) but no CEO screen uses it.
+  it('CEO does NOT see the factory card, its locked terms, price inputs, confirm or lead-time change — and never loads the factory quotes', async () => {
+    renderDetailPage({ user: ceoUser, request: crRequest(), factoryQuotes: [contactedQuote()] });
+    await waitForLoaded();
+
+    expect(screen.queryByText('SCG Ceramics')).toBeNull();
+    expect(screen.queryByTestId('pcr-factory-terms-91')).toBeNull();
+    expect(screen.queryByLabelText(/^ราคาที่เสนอ/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ยืนยันราคาเสนอ' })).toBeNull();
+    expect(screen.queryByTestId('pcr-lt-open-91')).toBeNull();
+    expect(api.pricingRequests.listFactoryQuotes).not.toHaveBeenCalled();
+  });
+});
+
+describe('CR-1 ติดต่อโรงงานแล้ว dialog (R3, R5, R7)', () => {
+  it('opens a small dialog with the date defaulting to today (Bangkok), capped at today, and an optional note', async () => {
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [crQuote()] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    fireEvent.click(screen.getByRole('button', { name: 'ติดต่อโรงงานแล้ว' }));
+    const dialog = await screen.findByRole('dialog', { name: 'ติดต่อโรงงานแล้ว' });
+    const date = within(dialog).getByLabelText('วันที่ติดต่อ');
+    expect(date.value).toBe(bangkokDay());
+    expect(date.max).toBe(bangkokDay());
+    expect(within(dialog).getByLabelText(/หมายเหตุ/)).not.toBeNull();
+  });
+
+  it('ยืนยัน calls markFactoryQuoteContacted(id, {contactedOn, note}) and refreshes the factory quotes + request (F)', async () => {
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [crQuote()] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+    const detailCalls = api.pricingRequests.get.mock.calls.length;
+    const quoteCalls = api.pricingRequests.listFactoryQuotes.mock.calls.length;
+
+    fireEvent.click(screen.getByRole('button', { name: 'ติดต่อโรงงานแล้ว' }));
+    const dialog = await screen.findByRole('dialog', { name: 'ติดต่อโรงงานแล้ว' });
+    fireEvent.change(within(dialog).getByLabelText(/หมายเหตุ/), { target: { value: 'โทรคุณ Marco' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'ยืนยัน' }));
+
+    await waitFor(() => expect(api.pricingRequests.markFactoryQuoteContacted).toHaveBeenCalledWith(
+      91, { contactedOn: bangkokDay(), note: 'โทรคุณ Marco' },
+    ));
+    await waitFor(() => expect(api.pricingRequests.listFactoryQuotes.mock.calls.length).toBeGreaterThan(quoteCalls));
+    expect(api.pricingRequests.get.mock.calls.length).toBeGreaterThan(detailCalls);
+  });
+
+  it('omits the note entirely when it is left blank', async () => {
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [crQuote()] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    fireEvent.click(screen.getByRole('button', { name: 'ติดต่อโรงงานแล้ว' }));
+    const dialog = await screen.findByRole('dialog', { name: 'ติดต่อโรงงานแล้ว' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'ยืนยัน' }));
+
+    await waitFor(() => expect(api.pricingRequests.markFactoryQuoteContacted).toHaveBeenCalledWith(
+      91, { contactedOn: bangkokDay() },
+    ));
+  });
+
+  it('refuses a future date: ยืนยัน is disabled and nothing is sent', async () => {
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [crQuote()] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    fireEvent.click(screen.getByRole('button', { name: 'ติดต่อโรงงานแล้ว' }));
+    const dialog = await screen.findByRole('dialog', { name: 'ติดต่อโรงงานแล้ว' });
+    fireEvent.change(within(dialog).getByLabelText('วันที่ติดต่อ'), { target: { value: bangkokDay(1) } });
+    const confirm = within(dialog).getByRole('button', { name: 'ยืนยัน' });
+    expect(confirm.disabled).toBe(true);
+    fireEvent.click(confirm);
+    expect(api.pricingRequests.markFactoryQuoteContacted).not.toHaveBeenCalled();
+  });
+
+  it('cancelling the dialog changes nothing', async () => {
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [crQuote()] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    fireEvent.click(screen.getByRole('button', { name: 'ติดต่อโรงงานแล้ว' }));
+    const dialog = await screen.findByRole('dialog', { name: 'ติดต่อโรงงานแล้ว' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'ยกเลิก' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'ติดต่อโรงงานแล้ว' })).toBeNull());
+    expect(api.pricingRequests.markFactoryQuoteContacted).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a 409 (already contacted) as an error toast', async () => {
+    api.pricingRequests.markFactoryQuoteContacted.mockRejectedValue(new Error('ติดต่อโรงงานแล้วหรือไม่อยู่ในสถานะร่าง'));
+    const { showToast } = renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [crQuote()] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    fireEvent.click(screen.getByRole('button', { name: 'ติดต่อโรงงานแล้ว' }));
+    const dialog = await screen.findByRole('dialog', { name: 'ติดต่อโรงงานแล้ว' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'ยืนยัน' }));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'ติดต่อโรงงานแล้วหรือไม่อยู่ในสถานะร่าง'));
+  });
+
+  // Owner ruling 2026-10-01: factory workspace is import-only (#1103); the backend still authorises ceo on drafts and /contacted (CR-1) but no CEO screen uses it.
+  it('the CEO gets neither สร้างเมล nor ติดต่อโรงงานแล้ว, and nothing is called', async () => {
+    renderDetailPage({ user: ceoUser, request: crRequest(), factoryQuotes: [crQuote()] });
+    await waitForLoaded();
+
+    expect(screen.queryByText('SCG Ceramics')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'สร้างเมล' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ติดต่อโรงงานแล้ว' })).toBeNull();
+    expect(api.pricingRequests.markFactoryQuoteContacted).not.toHaveBeenCalled();
+    expect(api.pricingRequests.generateFactoryEmailDrafts).not.toHaveBeenCalled();
+  });
+});
+
+describe('CR-1 สร้างเมล modal (R3, R8)', () => {
+  it('has ถึง pre-filled from the factory email, หัวข้อ, เนื้อหา — and ONLY บันทึกร่าง / คัดลอกเมล (+ ปิด); no ส่งแล้ว, no hand-off steps', async () => {
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [crQuote()] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    fireEvent.click(screen.getByRole('button', { name: 'สร้างเมล' }));
+    const dialog = await screen.findByRole('dialog', { name: 'สร้างเมล' });
+    expect(within(dialog).getByLabelText('ถึง').value).toBe('sales@scg-factory.example');
+    expect(within(dialog).getByLabelText('หัวข้อ').value).toBe('ขอราคา SCG A1');
+    expect(within(dialog).getByLabelText('เนื้อหา').value).toBe('เรียน โรงงาน...');
+    const buttons = within(dialog).getAllByRole('button').map((b) => b.textContent.trim());
+    expect(buttons.filter((t) => t && t !== 'ปิด' && !/ปิด|close/i.test(t))).toEqual(['บันทึกร่าง', 'คัดลอกเมล']);
+    expect(within(dialog).queryByText('คัดลอกข้อความอีเมลด้านล่าง')).toBeNull();
+  });
+
+  it('คัดลอกเมล copies the mail and changes NO status (no contact call, no save)', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(globalThis.navigator, 'clipboard', { value: { writeText }, configurable: true });
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [crQuote()] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    fireEvent.click(screen.getByRole('button', { name: 'สร้างเมล' }));
+    const dialog = await screen.findByRole('dialog', { name: 'สร้างเมล' });
+    fireEvent.click(within(dialog).getByRole('button', { name: /คัดลอกเมล/ }));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    expect(writeText.mock.calls[0][0]).toContain('Subject: ขอราคา SCG A1');
+    expect(api.pricingRequests.markFactoryQuoteContacted).not.toHaveBeenCalled();
+    expect(api.pricingRequests.updateFactoryQuote).not.toHaveBeenCalled();
+  });
+
+  it('closing the modal changes no status', async () => {
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [crQuote()] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    fireEvent.click(screen.getByRole('button', { name: 'สร้างเมล' }));
+    const dialog = await screen.findByRole('dialog', { name: 'สร้างเมล' });
+    // header X and the footer ปิด share the accessible name; either closes
+    fireEvent.click(within(dialog).getAllByRole('button', { name: 'ปิด' }).at(-1));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'สร้างเมล' })).toBeNull());
+    expect(api.pricingRequests.markFactoryQuoteContacted).not.toHaveBeenCalled();
+    expect(api.pricingRequests.updateFactoryQuote).not.toHaveBeenCalled();
+    expect(screen.getByTestId('pcr-factory-status-91').textContent).toContain('ยังไม่ติดต่อ');
+  });
+
+  it('lists the request attachments that are ticked to go with the mail', async () => {
+    renderDetailPage({
+      user: importUser,
+      request: crRequest(),
+      factoryQuotes: [crQuote()],
+      attachments: [
+        { id: 31, fileName: 'spec-sheet.pdf', includeInFactoryEmail: true },
+        { id: 32, fileName: 'internal-note.pdf', includeInFactoryEmail: false },
+      ],
+    });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    fireEvent.click(screen.getByRole('button', { name: 'สร้างเมล' }));
+    const dialog = await screen.findByRole('dialog', { name: 'สร้างเมล' });
+    expect(within(dialog).getByText('spec-sheet.pdf')).not.toBeNull();
+    expect(within(dialog).queryByText('internal-note.pdf')).toBeNull();
+  });
+});
+
+describe('CR-1 lead-time change — import raises it (R2, R10 option C)', () => {
+  function twoLineRequest() {
+    return crRequest({ items: [crItem(), crItem({ id: 2, model: 'A2' }), crItem({ id: 3, model: 'S1', stockSource: 'IN_THAILAND' })] });
+  }
+  function twoLineQuote(over = {}) {
+    const it0 = crQuote().items[0];
+    return contactedQuote({
+      items: [
+        it0,
+        { ...it0, id: 912, pricingRequestItemId: 2 },
+        { ...it0, id: 913, pricingRequestItemId: 3 },
+      ],
+      ...over,
+    });
+  }
+
+  it('shows each line\'s ระยะเวลานำเข้า and offers ขอเปลี่ยนระยะเวลานำเข้า to import only', async () => {
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote()] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+    expect(screen.getByTestId('pcr-lt-value-91-1').textContent).toContain('75–90 วัน');
+    expect(screen.getByTestId('pcr-lt-open-91')).not.toBeNull();
+  });
+
+  it('opens a panel with new min/max, a required reason, and every non-stock line pre-ticked', async () => {
+    renderDetailPage({ user: importUser, request: twoLineRequest(), factoryQuotes: [twoLineQuote()] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    fireEvent.click(screen.getByTestId('pcr-lt-open-91'));
+    const dialog = await screen.findByRole('dialog', { name: 'ขอเปลี่ยนระยะเวลานำเข้า' });
+    expect(within(dialog).getByLabelText('ต่ำสุด (วัน)')).not.toBeNull();
+    expect(within(dialog).getByLabelText('สูงสุด (วัน)')).not.toBeNull();
+    expect(within(dialog).getByLabelText('เหตุผล')).not.toBeNull();
+    expect(within(dialog).getByLabelText('เลือกรายการ SCG A1').checked).toBe(true);
+    expect(within(dialog).getByLabelText('เลือกรายการ SCG A2').checked).toBe(true);
+    // the stock line is never offered (backend refuses it)
+    expect(within(dialog).queryByLabelText('เลือกรายการ SCG S1')).toBeNull();
+    // submit stays disabled until a reason and a valid range exist
+    expect(within(dialog).getByRole('button', { name: 'ส่งคำขอ' }).disabled).toBe(true);
+  });
+
+  it('submits every ticked line with the new value, the reason, and refreshes the lead-time changes', async () => {
+    renderDetailPage({ user: importUser, request: twoLineRequest(), factoryQuotes: [twoLineQuote()] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+    const before = api.leadTimeChanges.listForPricingRequest.mock.calls.length;
+
+    fireEvent.click(screen.getByTestId('pcr-lt-open-91'));
+    const dialog = await screen.findByRole('dialog', { name: 'ขอเปลี่ยนระยะเวลานำเข้า' });
+    fireEvent.change(within(dialog).getByLabelText('ต่ำสุด (วัน)'), { target: { value: '120' } });
+    fireEvent.change(within(dialog).getByLabelText('สูงสุด (วัน)'), { target: { value: '150' } });
+    fireEvent.change(within(dialog).getByLabelText('เหตุผล'), { target: { value: 'โรงงานเลื่อนผลิต' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'ส่งคำขอ' }));
+
+    await waitFor(() => expect(api.leadTimeChanges.create).toHaveBeenCalledWith(91, {
+      reason: 'โรงงานเลื่อนผลิต',
+      lines: [
+        { pricingRequestItemId: 1, newMinDays: 120, newMaxDays: 150 },
+        { pricingRequestItemId: 2, newMinDays: 120, newMaxDays: 150 },
+      ],
+    }));
+    await waitFor(() => expect(api.leadTimeChanges.listForPricingRequest.mock.calls.length).toBeGreaterThan(before));
+  });
+
+  it('an unticked line is left out; a per-line override keeps its own value', async () => {
+    renderDetailPage({ user: importUser, request: twoLineRequest(), factoryQuotes: [twoLineQuote()] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    fireEvent.click(screen.getByTestId('pcr-lt-open-91'));
+    const dialog = await screen.findByRole('dialog', { name: 'ขอเปลี่ยนระยะเวลานำเข้า' });
+    fireEvent.change(within(dialog).getByLabelText('ต่ำสุด (วัน)'), { target: { value: '120' } });
+    fireEvent.change(within(dialog).getByLabelText('สูงสุด (วัน)'), { target: { value: '150' } });
+    fireEvent.change(within(dialog).getByLabelText('เหตุผล'), { target: { value: 'เหตุผล' } });
+    // line 2: own value
+    fireEvent.change(within(dialog).getByLabelText('ต่ำสุด SCG A2'), { target: { value: '100' } });
+    fireEvent.change(within(dialog).getByLabelText('สูงสุด SCG A2'), { target: { value: '110' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'ส่งคำขอ' }));
+    await waitFor(() => expect(api.leadTimeChanges.create).toHaveBeenCalledWith(91, expect.objectContaining({
+      lines: [
+        { pricingRequestItemId: 1, newMinDays: 120, newMaxDays: 150 },
+        { pricingRequestItemId: 2, newMinDays: 100, newMaxDays: 110 },
+      ],
+    })));
+  });
+
+  it('unticking a line removes it from the request', async () => {
+    renderDetailPage({ user: importUser, request: twoLineRequest(), factoryQuotes: [twoLineQuote()] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    fireEvent.click(screen.getByTestId('pcr-lt-open-91'));
+    const dialog = await screen.findByRole('dialog', { name: 'ขอเปลี่ยนระยะเวลานำเข้า' });
+    fireEvent.change(within(dialog).getByLabelText('ต่ำสุด (วัน)'), { target: { value: '120' } });
+    fireEvent.change(within(dialog).getByLabelText('สูงสุด (วัน)'), { target: { value: '150' } });
+    fireEvent.change(within(dialog).getByLabelText('เหตุผล'), { target: { value: 'เหตุผล' } });
+    fireEvent.click(within(dialog).getByLabelText('เลือกรายการ SCG A2'));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'ส่งคำขอ' }));
+    await waitFor(() => expect(api.leadTimeChanges.create).toHaveBeenCalledWith(91, expect.objectContaining({
+      lines: [{ pricingRequestItemId: 1, newMinDays: 120, newMaxDays: 150 }],
+    })));
+  });
+
+  it('refuses min > max and an empty reason client-side (nothing sent)', async () => {
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote()] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    fireEvent.click(screen.getByTestId('pcr-lt-open-91'));
+    const dialog = await screen.findByRole('dialog', { name: 'ขอเปลี่ยนระยะเวลานำเข้า' });
+    fireEvent.change(within(dialog).getByLabelText('ต่ำสุด (วัน)'), { target: { value: '150' } });
+    fireEvent.change(within(dialog).getByLabelText('สูงสุด (วัน)'), { target: { value: '120' } });
+    fireEvent.change(within(dialog).getByLabelText('เหตุผล'), { target: { value: 'เหตุผล' } });
+    expect(within(dialog).getByRole('button', { name: 'ส่งคำขอ' }).disabled).toBe(true);
+    expect(api.leadTimeChanges.create).not.toHaveBeenCalled();
+  });
+
+  it('with a PENDING change: lines read "old → new · รอฝ่ายขายอนุมัติ", import can แก้ไข / ถอนคำขอ, and cannot raise a second one', async () => {
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote()], leadTimeChanges: [ltChange()] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    const cell = await screen.findByTestId('pcr-lt-value-91-1');
+    expect(cell.textContent).toContain('75–90 → 120–150 วัน');
+    expect(cell.textContent).toContain('รอฝ่ายขายอนุมัติ');
+    const strip = screen.getByTestId('pcr-lt-pending-91');
+    expect(within(strip).getByRole('button', { name: 'แก้ไข' })).not.toBeNull();
+    expect(within(strip).getByRole('button', { name: 'ถอนคำขอ' })).not.toBeNull();
+    expect(screen.queryByTestId('pcr-lt-open-91')).toBeNull();
+  });
+
+  it('ถอนคำขอ withdraws the pending request', async () => {
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote()], leadTimeChanges: [ltChange()] });
+    await waitForLoaded();
+    const strip = await screen.findByTestId('pcr-lt-pending-91');
+    fireEvent.click(within(strip).getByRole('button', { name: 'ถอนคำขอ' }));
+    await waitFor(() => expect(api.leadTimeChanges.withdraw).toHaveBeenCalledWith(7001));
+  });
+
+  it('แก้ไข opens the panel prefilled and saves with update(id, body)', async () => {
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote()], leadTimeChanges: [ltChange()] });
+    await waitForLoaded();
+    const strip = await screen.findByTestId('pcr-lt-pending-91');
+    fireEvent.click(within(strip).getByRole('button', { name: 'แก้ไข' }));
+    const dialog = await screen.findByRole('dialog', { name: 'ขอเปลี่ยนระยะเวลานำเข้า' });
+    expect(within(dialog).getByLabelText('เหตุผล').value).toBe('โรงงานเลื่อนกำหนดผลิต');
+    expect(within(dialog).getByLabelText('ต่ำสุด SCG A1').value).toBe('120');
+    fireEvent.change(within(dialog).getByLabelText('สูงสุด SCG A1'), { target: { value: '160' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึกการแก้ไข' }));
+    await waitFor(() => expect(api.leadTimeChanges.update).toHaveBeenCalledWith(7001, {
+      reason: 'โรงงานเลื่อนกำหนดผลิต',
+      lines: [{ pricingRequestItemId: 1, newMinDays: 120, newMaxDays: 160 }],
+    }));
+  });
+
+  it('shows approved / rejected history compactly on the card, with the rejection reason', async () => {
+    const history = [
+      ltChange({ id: 6001, status: 'APPROVED', decidedBy: 1, decidedAt: '2026-09-20T03:00:00Z' }),
+      ltChange({ id: 6002, status: 'REJECTED', decisionReason: 'ลูกค้ารอไม่ได้', decidedBy: 1, decidedAt: '2026-09-25T03:00:00Z',
+        lines: [{ pricingRequestItemId: 1, oldMinDays: 120, oldMaxDays: 150, newMinDays: 200, newMaxDays: 210 }] }),
+    ];
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote()], leadTimeChanges: history });
+    await waitForLoaded();
+    const box = await screen.findByTestId('pcr-lt-history-91');
+    expect(box.textContent).toContain('อนุมัติแล้ว');
+    expect(box.textContent).toContain('75–90 → 120–150');
+    expect(box.textContent).toContain('ไม่อนุมัติ');
+    expect(box.textContent).toContain('ลูกค้ารอไม่ได้');
+    // history is not a pending request: no actions, the raise button is available again
+    expect(screen.queryByTestId('pcr-lt-pending-91')).toBeNull();
+    expect(screen.getByTestId('pcr-lt-open-91')).not.toBeNull();
+  });
+
+  // Owner ruling 2026-10-01: factory workspace is import-only (#1103); the backend still authorises ceo on drafts and /contacted (CR-1) but no CEO screen uses it.
+  it('the CEO does NOT see the pending lead-time request (no badge, no decide controls)', async () => {
+    renderDetailPage({ user: ceoUser, request: crRequest(), factoryQuotes: [contactedQuote()], leadTimeChanges: [ltChange()] });
+    await waitForLoaded();
+
+    expect(screen.queryByTestId('pcr-lt-pending-91')).toBeNull();
+    expect(screen.queryByText(/รอฝ่ายขายอนุมัติ/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'อนุมัติ' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ไม่อนุมัติ' })).toBeNull();
+  });
+});
+
+describe('CR-1 lead-time change — owning rep / sales manager decide it as a whole (R2, R10, B-R3)', () => {
+  it('the owning rep sees ONE banner listing the request (factory, reason, old → new) with อนุมัติ / ไม่อนุมัติ', async () => {
+    renderDetailPage({ user: salesOwner, request: crRequest(), leadTimeChanges: [ltChange()] });
+    await waitForLoaded();
+    const banner = await screen.findByTestId('pcr-lt-banner');
+    expect(banner.textContent).toContain('SCG Ceramics');
+    expect(banner.textContent).toContain('โรงงานเลื่อนกำหนดผลิต');
+    expect(banner.textContent).toContain('75–90 → 120–150');
+    expect(within(banner).getByRole('button', { name: 'อนุมัติ' })).not.toBeNull();
+    expect(within(banner).getByRole('button', { name: 'ไม่อนุมัติ' })).not.toBeNull();
+  });
+
+  it('อนุมัติ sends the version the approver loaded (expectedVersion) and refreshes', async () => {
+    renderDetailPage({ user: salesOwner, request: crRequest(), leadTimeChanges: [ltChange({ version: 3 })] });
+    await waitForLoaded();
+    const banner = await screen.findByTestId('pcr-lt-banner');
+    const detailCalls = api.pricingRequests.get.mock.calls.length;
+    fireEvent.click(within(banner).getByRole('button', { name: 'อนุมัติ' }));
+    await waitFor(() => expect(api.leadTimeChanges.approve).toHaveBeenCalledWith(7001, { expectedVersion: 3 }));
+    // approval rewrites the pricing-request lines, so the request itself must be re-read too
+    await waitFor(() => expect(api.pricingRequests.get.mock.calls.length).toBeGreaterThan(detailCalls));
+  });
+
+  it('ไม่อนุมัติ needs a reason before it can be confirmed, then sends reason + expectedVersion', async () => {
+    renderDetailPage({ user: salesManager, request: crRequest(), leadTimeChanges: [ltChange({ version: 3 })] });
+    await waitForLoaded();
+    const banner = await screen.findByTestId('pcr-lt-banner');
+    fireEvent.click(within(banner).getByRole('button', { name: 'ไม่อนุมัติ' }));
+    const confirm = within(banner).getByRole('button', { name: 'ยืนยันไม่อนุมัติ' });
+    expect(confirm.disabled).toBe(true);
+    fireEvent.change(within(banner).getByLabelText('เหตุผลที่ไม่อนุมัติ'), { target: { value: 'ลูกค้ารอไม่ได้' } });
+    expect(confirm.disabled).toBe(false);
+    fireEvent.click(confirm);
+    await waitFor(() => expect(api.leadTimeChanges.reject).toHaveBeenCalledWith(7001, { reason: 'ลูกค้ารอไม่ได้', expectedVersion: 3 }));
+  });
+
+  it('on a 409 (import edited it in between) shows "คำขอถูกแก้ไขแล้ว กรุณาตรวจสอบอีกครั้ง" and refetches', async () => {
+    const err = Object.assign(new Error('Conflict'), { status: 409 });
+    api.leadTimeChanges.approve.mockRejectedValue(err);
+    const { showToast } = renderDetailPage({ user: salesOwner, request: crRequest(), leadTimeChanges: [ltChange()] });
+    await waitForLoaded();
+    const banner = await screen.findByTestId('pcr-lt-banner');
+    const before = api.leadTimeChanges.listForPricingRequest.mock.calls.length;
+    fireEvent.click(within(banner).getByRole('button', { name: 'อนุมัติ' }));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'คำขอถูกแก้ไขแล้ว กรุณาตรวจสอบอีกครั้ง'));
+    await waitFor(() => expect(api.leadTimeChanges.listForPricingRequest.mock.calls.length).toBeGreaterThan(before));
+  });
+
+  it('shows nothing to a sales rep who does not own the deal, nor to the CEO or import (no decide controls)', async () => {
+    for (const user of [salesOtherRep, ceoUser, importUser]) {
+      const { unmount } = renderDetailPage({ user, request: crRequest(), factoryQuotes: [contactedQuote()], leadTimeChanges: [ltChange()] });
+      await waitForLoaded();
+      await screen.findByText('PCR-2026-0001');
+      expect(screen.queryByTestId('pcr-lt-banner')).toBeNull();
+      expect(screen.queryByRole('button', { name: 'อนุมัติ' })).toBeNull();
+      unmount();
+    }
+  });
+
+  it('does not show a banner when nothing is pending (history only)', async () => {
+    renderDetailPage({ user: salesOwner, request: crRequest(), leadTimeChanges: [ltChange({ status: 'APPROVED' })] });
+    await waitForLoaded();
+    await screen.findByText('PCR-2026-0001');
+    expect(screen.queryByTestId('pcr-lt-banner')).toBeNull();
+  });
+});
+
+describe('CR-1 factory card — the factory\'s IR row, read-only for import (R9)', () => {
+  const ir = (over = {}) => ({ id: 11, ticketId: 701, factoryId: null, factoryName: 'SCG Ceramics', version: 1, status: 'ISSUED', docNumber: 'IR26001', ...over });
+
+  beforeEach(() => {
+    globalThis.URL.createObjectURL = vi.fn(() => 'blob:ir');
+    globalThis.URL.revokeObjectURL = vi.fn();
+  });
+
+  it('shows "<number> · <status> · PDF" under the matching factory card, and downloads it', async () => {
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote()], importRequests: [ir()] });
+    await waitForLoaded();
+    const row = await screen.findByTestId('pcr-ir-91');
+    expect(row.textContent).toContain('IR26001');
+    fireEvent.click(within(row).getByRole('button', { name: /PDF/ }));
+    await waitFor(() => expect(api.storedImportRequests.download).toHaveBeenCalledWith(11, undefined));
+    expect(api.storedImportRequests.listForTicket).toHaveBeenCalledWith(701);
+  });
+
+  it('a DRAFT IR reads ฉบับร่าง; import gets no create / issue / revise control on this page', async () => {
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote()], importRequests: [ir({ status: 'DRAFT', docNumber: null })] });
+    await waitForLoaded();
+    const row = await screen.findByTestId('pcr-ir-91');
+    expect(row.textContent).toContain('ฉบับร่าง');
+    expect(screen.queryByRole('button', { name: /สร้างใบ IR|ออกเลข|ออกฉบับแก้ไข/ })).toBeNull();
+  });
+
+  it('matches the factory by id when both carry one, and ignores SUPERSEDED rows and other factories', async () => {
+    const quote = contactedQuote({ factoryId: 601 });
+    renderDetailPage({
+      user: importUser,
+      request: crRequest(),
+      factoryQuotes: [quote],
+      importRequests: [
+        ir({ id: 12, factoryId: 999, factoryName: 'Someone Else' }),
+        ir({ id: 13, factoryId: 601, status: 'SUPERSEDED', docNumber: 'IR25999' }),
+        ir({ id: 14, factoryId: 601, docNumber: 'IR26014' }),
+      ],
+    });
+    await waitForLoaded();
+    const row = await screen.findByTestId('pcr-ir-91');
+    expect(row.textContent).toContain('IR26014');
+    expect(row.textContent).not.toContain('IR25999');
+    expect(row.textContent).not.toContain('Someone Else');
+  });
+
+  it('shows no IR row when the factory has none yet', async () => {
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote()] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+    expect(screen.queryByTestId('pcr-ir-91')).toBeNull();
+  });
+});
+
+// ── Browser-verification follow-ups (coordinator, 2026-10-01) ─────────────────────────────────
+describe('CR-1 pre-draft preview card — contact / mail without the bulk สร้างเมลให้ทุกโรงงาน first (R3: สร้างเมล is optional)', () => {
+  function renderPreview(user = importUser) {
+    let generated = false;
+    api.pricingRequests.generateFactoryEmailDrafts.mockImplementation(async () => {
+      generated = true;
+      return { items: [crQuote()] };
+    });
+    const utils = renderDetailPage({ user, request: crRequest() });
+    api.pricingRequests.listFactoryQuotes.mockImplementation(async () => ({ items: generated ? [crQuote()] : [] }));
+    return utils;
+  }
+
+  it('shows สร้างเมล and ติดต่อโรงงานแล้ว on the preview group of a named factory', async () => {
+    renderPreview();
+    await waitForLoaded();
+    const group = await screen.findByTestId('pcr-price-preview-group');
+    expect(within(group).getByRole('button', { name: 'สร้างเมล' })).not.toBeNull();
+    expect(within(group).getByRole('button', { name: 'ติดต่อโรงงานแล้ว' })).not.toBeNull();
+  });
+
+  it('ติดต่อโรงงานแล้ว on the preview: generates the draft first, then marks THAT factory\'s new quote contacted', async () => {
+    renderPreview();
+    await waitForLoaded();
+    const group = await screen.findByTestId('pcr-price-preview-group');
+    fireEvent.click(within(group).getByRole('button', { name: 'ติดต่อโรงงานแล้ว' }));
+    const dialog = await screen.findByRole('dialog', { name: 'ติดต่อโรงงานแล้ว' });
+    fireEvent.change(within(dialog).getByLabelText(/หมายเหตุ/), { target: { value: 'โทรแล้ว' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'ยืนยัน' }));
+
+    await waitFor(() => expect(api.pricingRequests.markFactoryQuoteContacted).toHaveBeenCalledWith(
+      91, { contactedOn: bangkokDay(), note: 'โทรแล้ว' },
+    ));
+    expect(api.pricingRequests.generateFactoryEmailDrafts).toHaveBeenCalledTimes(1);
+    expect(api.pricingRequests.generateFactoryEmailDrafts.mock.invocationCallOrder[0])
+      .toBeLessThan(api.pricingRequests.markFactoryQuoteContacted.mock.invocationCallOrder[0]);
+  });
+
+  it('สร้างเมล on the preview: generates the draft, then opens that factory\'s mail modal', async () => {
+    renderPreview();
+    await waitForLoaded();
+    const group = await screen.findByTestId('pcr-price-preview-group');
+    fireEvent.click(within(group).getByRole('button', { name: 'สร้างเมล' }));
+    expect(await screen.findByRole('dialog', { name: 'สร้างเมล' })).not.toBeNull();
+    expect(api.pricingRequests.generateFactoryEmailDrafts).toHaveBeenCalledTimes(1);
+    expect(api.pricingRequests.markFactoryQuoteContacted).not.toHaveBeenCalled();
+  });
+
+  // Owner ruling 2026-10-01: factory workspace is import-only (#1103); the backend still authorises ceo on drafts and /contacted (CR-1) but no CEO screen uses it.
+  it('the CEO gets no pre-draft preview card and no contact / mail buttons', async () => {
+    renderPreview(ceoUser);
+    await waitForLoaded();
+
+    expect(screen.queryByTestId('pcr-price-preview-group')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ติดต่อโรงงานแล้ว' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'สร้างเมล' })).toBeNull();
+    expect(api.pricingRequests.generateFactoryEmailDrafts).not.toHaveBeenCalled();
+  });
+
+  it('no preview buttons outside the contact window (the server would 409)', async () => {
+    renderDetailPage({ user: importUser, request: crRequest({ summary: { status: 'READY_FOR_CEO_REVIEW' } }) });
+    await waitForLoaded();
+    const group = await screen.findByTestId('pcr-price-preview-group');
+    expect(within(group).queryByRole('button', { name: 'ติดต่อโรงงานแล้ว' })).toBeNull();
+  });
+});
+
+describe('CR-1 unknown lead time reads ยังไม่ระบุ, never "-" / "- วัน"', () => {
+  const unknownOld = (over = {}) => ltChange({
+    lines: [{ pricingRequestItemId: 1, oldMinDays: null, oldMaxDays: null, newMinDays: 120, newMaxDays: 150 }], ...over,
+  });
+  const noLeadRequest = () => crRequest({ items: [crItem({ leadTimeMinDays: null, leadTimeMaxDays: null })] });
+
+  it('banner, pending line and dialog all say ยังไม่ระบุ', async () => {
+    renderDetailPage({ user: salesOwner, request: noLeadRequest(), leadTimeChanges: [unknownOld()] });
+    await waitForLoaded();
+    expect((await screen.findByTestId('pcr-lt-banner')).textContent).toContain('ยังไม่ระบุ → 120–150 วัน');
+  });
+
+  it('import: the line cell, pending cell and dialog', async () => {
+    const { unmount } = renderDetailPage({ user: importUser, request: noLeadRequest(), factoryQuotes: [contactedQuote()], leadTimeChanges: [unknownOld()] });
+    await waitForLoaded();
+    expect((await screen.findByTestId('pcr-lt-value-91-1')).textContent).toContain('ยังไม่ระบุ → 120–150 วัน');
+    unmount();
+    renderDetailPage({ user: importUser, request: noLeadRequest(), factoryQuotes: [contactedQuote()] });
+    await waitForLoaded();
+    expect((await screen.findByTestId('pcr-lt-value-91-1')).textContent).toBe('ระยะเวลานำเข้ายังไม่ระบุ');
+    fireEvent.click(screen.getByTestId('pcr-lt-open-91'));
+    const dialog = await screen.findByRole('dialog', { name: 'ขอเปลี่ยนระยะเวลานำเข้า' });
+    expect(dialog.textContent).toContain('ปัจจุบัน ยังไม่ระบุ');
+    expect(dialog.textContent).not.toMatch(/ปัจจุบัน -/);
+  });
+});
+
+describe('CR-1 factory section layout — nothing forces a horizontal scroll', () => {
+  it('the item grid has no fixed minimum width (a min-w-[…] on it is what scrolled the whole section at 1100px)', async () => {
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote()] });
+    await waitForLoaded();
+    const card = await screen.findByTestId('pcr-factory-card-91');
+    expect(card.querySelector('[class*="min-w-["]')).toBeNull();
+    expect(card.parentElement.querySelector('[class*="md:min-w-["]')).toBeNull();
+  });
+});
+
+// ── Opus review follow-ups ────────────────────────────────────────────────────────────────────
+describe('CR-1 R1 payload precedence — the line\'s requested terms win over what the draft carries', () => {
+  it('sends EUR / PER_SQM even when the draft items were seeded PER_PIECE / no currency (pre-fix backend seeding)', async () => {
+    const base = crQuote();
+    const quote = contactedQuote({
+      defaultCurrency: 'THB',
+      items: [{ ...base.items[0], unitBasis: 'PER_PIECE', quotedUnit: 'PER_PIECE', currency: null }],
+    });
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [quote] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ/), { target: { value: '12.5' } });
+    fireEvent.change(screen.getByLabelText(/^ตร.ม.\/หน่วย/), { target: { value: '0.36' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
+
+    await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalled());
+    const payload = api.pricingRequests.receiveFactoryQuote.mock.calls[0][1];
+    expect(payload.items[0]).toMatchObject({ currency: 'EUR', unitBasis: 'PER_SQM' });
+    expect(payload.defaultCurrency).toBe('EUR');
+  });
+});
+
+describe('CR-1 review copy / gating / a11y / provenance', () => {
+  it('pre-draft banner points at each factory\'s ติดต่อโรงงานแล้ว and says the mail is optional', async () => {
+    renderDetailPage({ user: importUser, request: crRequest() });
+    await waitForLoaded();
+    const preview = await screen.findByTestId('pcr-price-preview');
+    expect(preview.textContent).toContain('กด “ติดต่อโรงงานแล้ว” ของแต่ละโรงงานเมื่อติดต่อแล้ว จึงกรอกราคาได้ (สร้างเมลหรือไม่ก็ได้)');
+  });
+
+  it('สร้างเมลให้ทุกโรงงาน is offered only inside the contact window', async () => {
+    renderDetailPage({ user: importUser, request: crRequest() });
+    await waitForLoaded();
+    expect(await screen.findByTestId('pcr-generate-drafts')).not.toBeNull();
+  });
+
+  it('…and is hidden once the request is past it (generate would 409)', async () => {
+    renderDetailPage({ user: importUser, request: crRequest({ summary: { status: 'READY_FOR_CEO_REVIEW' } }) });
+    await waitForLoaded();
+    await screen.findByTestId('pcr-price-preview');
+    expect(screen.queryByTestId('pcr-generate-drafts')).toBeNull();
+  });
+
+  it('names the contactor from the legacy FACTORY_EMAIL_SENT event on a backfilled quote', async () => {
+    const request = {
+      ...crRequest(),
+      events: [{ id: 2, actorId: 3, actorName: 'ฝ้าย', eventKind: 'FACTORY_EMAIL_SENT', message: null, createdAt: '2026-09-20T03:00:00Z' }],
+    };
+    renderDetailPage({ user: importUser, request, factoryQuotes: [contactedQuote()] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+    expect(screen.getByTestId('pcr-factory-status-91').textContent).toContain('โดย ฝ้าย');
   });
 });
 

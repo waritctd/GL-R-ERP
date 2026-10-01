@@ -6,6 +6,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 
 public final class FactoryQuoteRequests {
@@ -19,17 +20,13 @@ public final class FactoryQuoteRequests {
     ) {}
 
     /**
-     * Manual-only RFQ send (owner decision): the system only records that a human already sent
-     * this email from their own mail client — there is no automatic dispatch to make idempotent
-     * with a client-generated key any more, so {@code clientRequestId} (used by the deleted
-     * dispatch-outbox path) is gone. {@link FactoryQuoteService#send} is naturally idempotent
-     * instead: calling it again once the quote is already {@code REQUESTED} is a no-op that
-     * returns the existing quote.
+     * CR-1 (GLA-167): "ติดต่อโรงงานแล้ว" — records that import (or the CEO) has contacted the
+     * factory. {@code contactedOn} is required and may not be in the future (Asia/Bangkok today);
+     * {@code note} is optional (max 1000 chars, checked in the service). Replaces the old send request.
      */
-    public record SendFactoryQuoteRequest(
-        String emailTo,
-        String emailSubject,
-        String emailBody
+    public record MarkFactoryContactedRequest(
+        @NotNull LocalDate contactedOn,
+        String note
     ) {}
 
     public record ReceiveFactoryQuoteRequest(

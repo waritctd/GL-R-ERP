@@ -187,8 +187,40 @@ public final class PricingRequestRequests {
         // สต็อกกำลังเดินทาง. Appended at the END so every existing positional call keeps compiling
         // via the compat constructors below. TEST-FIRST SCAFFOLDING: the field is carried and
         // persisted, nothing validates or acts on it yet.
-        String stockSource
+        String stockSource,
+        // CR-1 (GLA-167): currency + price unit Sales fixes on the line; import may not override them
+        // (FactoryQuoteService#receive enforces it). Normalized in PricingRequestService#resolveItem.
+        // Nullable: legacy lines carry neither.
+        String requestedCurrency,
+        String requestedPriceUnitBasis
     ) {
+        /** The pre-CR-1 canonical 37-field shape. Defaults the two CR-1 fields to null. */
+        public PricingRequestItemRequest(Long sourceTicketItemId, Long productId, Long variantId,
+                                         String brand, String model, String productDescription,
+                                         String color, String texture, String size, String factory,
+                                         BigDecimal requestedQty, BigDecimal requestedQtySqm,
+                                         String requestedUnit, String requestedUnitBasis,
+                                         String quantityType, LocalDate targetDeliveryDate,
+                                         String deliveryLocation, String specialRequirement,
+                                         String productCode, BigDecimal thicknessMm,
+                                         BigDecimal sqmPerPiece, String quantityMode,
+                                         BigDecimal areaSqm, Integer piecesInput,
+                                         String wastageMode, BigDecimal wastageValue,
+                                         Integer piecesPerBox, BigDecimal sqmPerBox,
+                                         Boolean roundToFullBox, String originCountry,
+                                         Integer leadTimeMinDays, Integer leadTimeMaxDays,
+                                         Integer piecesBeforeWastage, Integer piecesAfterWastage,
+                                         Integer boxes, String originCountryOther,
+                                         String stockSource) {
+            this(sourceTicketItemId, productId, variantId, brand, model, productDescription, color,
+                texture, size, factory, requestedQty, requestedQtySqm, requestedUnit,
+                requestedUnitBasis, quantityType, targetDeliveryDate, deliveryLocation,
+                specialRequirement, productCode, thicknessMm, sqmPerPiece, quantityMode, areaSqm,
+                piecesInput, wastageMode, wastageValue, piecesPerBox, sqmPerBox, roundToFullBox,
+                originCountry, leadTimeMinDays, leadTimeMaxDays, piecesBeforeWastage,
+                piecesAfterWastage, boxes, originCountryOther, stockSource, null, null);
+        }
+
         /** The pre-stock-line shape - the canonical 36-field constructor that existed before
          * stockSource was appended. Defaults it to null (สั่งนำเข้า). */
         public PricingRequestItemRequest(Long sourceTicketItemId, Long productId, Long variantId,

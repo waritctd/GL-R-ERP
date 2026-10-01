@@ -33,6 +33,7 @@ import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.factory.FactoryConfigRepository;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteRepository;
+import th.co.glr.hr.factoryquote.FactoryQuoteRequests.MarkFactoryContactedRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteItemRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteService;
@@ -308,6 +309,8 @@ class SupersedeChainRecipientScopeIntegrationTest extends AbstractPostgresIntegr
     private void driveSubmittedRequestToApprovedForQuotation(long pricingRequestId, BigDecimal quantity) {
         pricingRequestService.pickup(pricingRequestId, importActor);
         FactoryQuoteDto draft = factoryQuoteService.generateDrafts(pricingRequestId, importActor).get(0);
+        factoryQuoteService.markContacted(draft.id(), new MarkFactoryContactedRequest(
+            java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
         FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(),
             factoryResponse(draft.items().get(0).pricingRequestItemId(), quantity), importActor);
         factoryQuoteService.markReadyForCosting(responded.id(), importActor);

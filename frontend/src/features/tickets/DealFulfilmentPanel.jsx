@@ -7,6 +7,7 @@ import { FormField } from '../../components/common/FormField.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { cn } from '../../utils/cn.js';
+import { downloadBlob } from '../../utils/download.js';
 import { formatThaiDate, fulfilmentStatusLabel } from '../../utils/format.js';
 import { ImportStatusStrip } from '../importProgress/ImportStatusStrip.jsx';
 import { importStepIndex } from '../importProgress/importSteps.js';
@@ -41,7 +42,7 @@ function NewFactoryCountryModal({ factoryNames, countries, countriesError, onClo
               countryOther: entries[name].countryCode === 'ZZ' ? entries[name].countryOther.trim() : null,
             })))}
             data-testid="new-factory-country-submit">
-            สร้างใบขอซื้อ
+            สร้างใบ IR
           </Button>
         </>
       )}
@@ -277,10 +278,31 @@ export function DealFulfilmentPanel({
     queryFn: () => api.priceImport.countries(),
     enabled: newFactoryNames != null,
   });
+  // CR-1 (R6 / R9): sales presses สร้างใบ IR, one IR per factory is created, and each PDF downloads
+  // straight away so sales can hand it over (import downloads the same IR from /fulfilment). A failed
+  // download never undoes the create — the IRs exist, the toast says so, the cards below still carry
+  // their own PDF buttons.
+  async function downloadCreatedIrs(rows) {
+    if (rows.length === 0) return;
+    const outcomes = await Promise.allSettled(rows.map(async (row) => {
+      const blob = await api.storedImportRequests.download(row.id, undefined);
+      downloadBlob(blob, `IR-${row.docNumber ?? `draft-${row.id}`}-${row.factoryName}`, 'pdf');
+    }));
+    if (outcomes.some((o) => o.status === 'rejected')) {
+      showToast?.('error', 'สร้างใบ IR แล้ว แต่ดาวน์โหลด PDF ไม่สำเร็จ — ดาวน์โหลดได้จากรายการด้านล่าง');
+    }
+  }
   const createDraftsMutation = useMutation({
-    mutationFn: (payload) => api.storedImportRequests.createDrafts(ticketId, payload),
-    onSuccess: () => {
-      showToast?.('success', 'สร้างใบขอซื้อแล้ว');
+    // CR-1 (R6): remember which rows already existed, so only the NEWLY created IRs download — the
+    // endpoint answers with every row of the deal, new and old alike.
+    mutationFn: async (payload) => {
+      const knownIds = new Set(storedIrRows.map((r) => r.id));
+      const result = await api.storedImportRequests.createDrafts(ticketId, payload);
+      return { result, knownIds };
+    },
+    onSuccess: ({ result, knownIds }) => {
+      showToast?.('success', 'สร้างใบ IR แล้ว');
+      downloadCreatedIrs((result?.importRequests ?? []).filter((r) => !knownIds.has(r.id) && r.status !== 'SUPERSEDED'));
       setNewFactoryNames(null);
       setMissingFactoryRetryKey(null);
       queryClient.invalidateQueries({ queryKey: queryKeys.storedImportRequests(ticketId) });
@@ -297,7 +319,7 @@ export function DealFulfilmentPanel({
         if (wasARetry && key === missingFactoryRetryKey) {
           setNewFactoryNames(null);
           setMissingFactoryRetryKey(null);
-          onError(new Error('ยังระบุโรงงานไม่ครบ — กรุณากดสร้างใบขอซื้ออีกครั้งแล้วลองใหม่'));
+          onError(new Error('ยังระบุโรงงานไม่ครบ — กรุณากดสร้างใบ IR อีกครั้งแล้วลองใหม่'));
           return;
         }
         setMissingFactoryRetryKey(key);
@@ -648,12 +670,12 @@ export function DealFulfilmentPanel({
               {canFullWriteStoredIr ? (
                 <Button type="button" size="sm" variant="primary" className="whitespace-nowrap" disabled={createDraftsMutation.isPending}
                   onClick={() => createDraftsMutation.mutate(undefined)} data-testid="deal-fulfilment-create-ir-drafts">
-                  {/* Nit: once the deal already has rows, "สร้างใบขอซื้อ" ("create a purchase
-                      request") read as though it would create a fresh set for every factory again
+                  {/* Nit: once the deal already has rows, "สร้างใบ IR" read as though it would
+                      create a fresh set for every factory again
                       — createDrafts actually SKIPS factories already covered (see its own
                       CONFLICT-on-nothing-new behaviour), so the label now says what it really
                       does the second time. */}
-                  {liveStoredIrRows.length > 0 ? 'สร้างใบขอซื้อโรงงานที่ยังไม่มี' : 'สร้างใบขอซื้อ'}
+                  {liveStoredIrRows.length > 0 ? 'สร้างใบ IR โรงงานที่ยังไม่มี' : 'สร้างใบ IR'}
                 </Button>
               ) : null}
             </div>

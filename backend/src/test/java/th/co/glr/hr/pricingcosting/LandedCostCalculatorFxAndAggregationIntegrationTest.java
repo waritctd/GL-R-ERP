@@ -32,6 +32,7 @@ import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.factory.FactoryConfigRepository;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteRepository;
+import th.co.glr.hr.factoryquote.FactoryQuoteRequests.MarkFactoryContactedRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteItemRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteService;
@@ -286,6 +287,8 @@ class LandedCostCalculatorFxAndAggregationIntegrationTest extends AbstractPostgr
                 UnitBasis.PER_PIECE, UnitBasis.PER_PIECE, new BigDecimal("100.00"), currency, null,
                 new BigDecimal("1"), null, null, "45 days", null, null)),
             UUID.randomUUID().toString());
+        factoryQuoteService.markContacted(draft.id(), new MarkFactoryContactedRequest(
+            java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
         FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(), response, importActor);
         factoryQuoteService.markReadyForCosting(responded.id(), importActor);
         return pricingRequestId;
@@ -360,6 +363,8 @@ class LandedCostCalculatorFxAndAggregationIntegrationTest extends AbstractPostgr
                 UnitBasis.PER_PIECE, UnitBasis.PER_PIECE, new BigDecimal("100.00"), "THB", null,
                 null, null, null, "45 days", null, null)),
             UUID.randomUUID().toString());
+        factoryQuoteService.markContacted(draftA.id(), new MarkFactoryContactedRequest(
+            java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
         FactoryQuoteDto respondedA = factoryQuoteService.receive(draftA.id(), responseA, importActor);
         factoryQuoteService.markReadyForCosting(respondedA.id(), importActor);
 
@@ -373,6 +378,8 @@ class LandedCostCalculatorFxAndAggregationIntegrationTest extends AbstractPostgr
                 UnitBasis.PER_PIECE, UnitBasis.PER_PIECE, new BigDecimal("100.00"), "THB", null,
                 new BigDecimal("1"), null, null, "45 days", null, null)),
             UUID.randomUUID().toString());
+        factoryQuoteService.markContacted(draftB.id(), new MarkFactoryContactedRequest(
+            java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
         FactoryQuoteDto respondedB = factoryQuoteService.receive(draftB.id(), responseB, importActor);
         factoryQuoteService.markReadyForCosting(respondedB.id(), importActor);
 
