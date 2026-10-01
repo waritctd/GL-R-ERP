@@ -2553,16 +2553,25 @@ const mockImportRequests = []; // ImportRequestDto-shaped rows, each carrying it
 // mock session could not exercise import's S12–S17 step advance at all (the reported "ออกคำขอนำเข้า
 // แล้วแต่เลื่อนไม่ได้" — that was the legacy DEAL-level flow, which has no per-factory steps).
 //
-// Attached to demo deal 19 (สยามพารากอน, ORDER_RECEIVED, item from Cotto Industry #11, not from
-// stock) by RUNTIME lookup of its real item ids — the demo item ids are sequence-based, so never
-// hardcode them. The deal's fulfillment_status stays null on purpose: in the per-factory (no-PO)
-// flow it only moves to GOODS_RECEIVED on the all-factories-received rollup, so null + an ISSUED row
-// at an early step is exactly "import in progress", no deal edit needed. Import can advance this row
-// S12→S17 immediately; Sales/CEO can test create+issue on another ORDER_RECEIVED deal (e.g. 20).
+// Attached to demo deal 19 (สยามพารากอน, item from Cotto Industry #11, not from stock) by RUNTIME
+// lookup of its real item ids — the demo item ids are sequence-based, so never hardcode them. The
+// deal is nudged into a coherent "import in progress" state, which is also exactly what makes it
+// REACH import in the first place — two separate gates, both load-bearing:
+//   - salesStage = PROCUREMENT: dealInScope('import') only admits a deal from PROCUREMENT onward
+//     (salesViewScope.js), so at the demo's own ORDER_RECEIVED import's ticket list never even
+//     contains it.
+//   - fulfillmentStatus = IR_ISSUED: ImportFulfilmentPage's candidateIds filter drops any deal with
+//     a null status, and a per-factory-tracked deal carries IR_ISSUED from its first factory's
+//     issue (see that page's header).
+// paymentStatus is deliberately LEFT ALONE — deal 19's DEPOSIT_NOTICE_ISSUED is load-bearing for
+// the deposit/billing-candidate suites, and the import workspace does not read it anyway.
+// Import can advance this row S12→S17 immediately.
 (function seedPerFactoryImportRequestForDev() {
   const ticket = (db.tickets ?? []).find((t) => t.id === 19);
   const factory = mockPriceImportFactories.find((f) => f.name === 'Cotto Industry');
   if (!ticket || !ticket.items?.length || !factory) return;
+  ticket.salesStage = 'PROCUREMENT';
+  ticket.fulfillmentStatus = 'IR_ISSUED';
   const id = mockImportRequestSeq++;
   mockImportRequests.push({
     id, ticketId: ticket.id, ticketCode: ticket.code,
