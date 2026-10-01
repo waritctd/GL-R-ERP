@@ -15,7 +15,7 @@ public record PayrollCommissionSummaryDto(
     // an existing DTO, not a contract removal.
     BigDecimal totalIncentiveAmount,
     BigDecimal totalStockBonusAmount,
-    // Manager team override (V197): sum of each rep's teamOverrideAmount, and the company-wide
+    // Manager team override (V196): sum of each rep's teamOverrideAmount, and the company-wide
     // UNWEIGHTED ex-VAT base (2dp) the override was computed from -- NULL when no override applies
     // (disabled, no generation yet, or no recipients), so the UI hides it rather than showing 0.00.
     BigDecimal totalTeamOverrideAmount,

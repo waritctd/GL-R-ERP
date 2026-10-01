@@ -1145,7 +1145,7 @@ public class CommissionService {
         // suppress (grouped.getOrDefault(...).signum() > 0 is false for zero).
         Map<Long, BigDecimal> manualIncentiveTotals = new LinkedHashMap<>();
         Map<Long, BigDecimal> manualStockBonusTotals = new LinkedHashMap<>();
-        // Manager TEAM OVERRIDE (V197): same replacement rule -- a recipient whose summed approved
+        // Manager TEAM OVERRIDE (V196): same replacement rule -- a recipient whose summed approved
         // manual MANAGER entries are STRICTLY POSITIVE (the accountant still hand-types the figure)
         // has the auto limb suppressed; zero (a note) does not suppress. A negative MANAGER cannot
         // exist (createManualCommission 400s it), so "correction layered on top" is unreachable.
@@ -1291,7 +1291,7 @@ public class CommissionService {
      * Per-rep breakdown shared between {@link #payrollReadySummary} and {@link
      * #payrollCommissionTotalsByEmployee} -- {@code totalCommission} is the number payroll must
      * pay: {@code tierCommissionableBase} run through the tier table, plus {@code
-     * incentiveAmount}, {@code stockBonusAmount} (issue #405), {@code teamOverrideAmount} (V197),
+     * incentiveAmount}, {@code stockBonusAmount} (issue #405), {@code teamOverrideAmount} (V196),
      * plus {@code manualAdjustmentAmount}.
      */
     public record RepPayrollCommission(

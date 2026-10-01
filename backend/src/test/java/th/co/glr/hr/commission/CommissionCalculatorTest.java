@@ -681,7 +681,7 @@ class CommissionCalculatorTest {
             .isEqualByComparingTo("0.00");
     }
 
-    // ── Manager TEAM OVERRIDE (V197): (companyBase - threshold) x rate% ──────────────────────
+    // ── Manager TEAM OVERRIDE (V196): (companyBase - threshold) x rate% ──────────────────────
     // Source: accountant's nine monthly workbooks, sheet อัตราค่าคอม K2 "ยอดรับเงิน(ไม่รวม Vat) - 3
     // ล้าน *0.075%". The figures below are the workbook's own ex-VAT company totals and the
     // amounts the accountant typed, reproduced to the satang.
