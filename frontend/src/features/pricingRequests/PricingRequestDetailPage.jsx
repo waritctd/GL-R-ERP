@@ -2270,10 +2270,28 @@ export function PricingRequestDetailPage({ user, showToast }) {
             <CollapsibleSection
               key={`cost-${costForcedOpen}`}
               title="ต้นทุน"
-              defaultOpen={costForcedOpen}
+              /* Owner decision 2026-10-01: open by default. The CEO was seeing only the calculated
+                 price with the cost basis hidden one click away, so could not tell what the price
+                 was computed from. costForcedOpen stays the remount key (a problem still forces it
+                 open across a re-render); the base state is now simply open. */
+              defaultOpen
               id={`pcr-ceo-derivation-${item.id}`}
             >
               <div className="flex flex-col gap-2 text-xs">
+                {/* The factory's own quoted price EXACTLY as import recorded it — the number the
+                    landed cost (and therefore the CEO's price) is built from. Shown so the CEO can
+                    see WHAT the cost was computed from, and spot an import entry that disagrees with
+                    the catalogue preliminary. Read straight off costingItem (in scope above) + one
+                    × fxRate, never a re-run of the costing math. */}
+                {costingItem?.rawUnitPrice != null ? (
+                  <span className="text-text-muted" data-testid={`pcr-ceo-raw-factory-price-${item.id}`}>
+                    ราคาโรงงานที่ฝ่ายนำเข้ากรอก:{' '}
+                    <code>{formatCurrency(costingItem.rawUnitPrice, costingItem.rawCurrency)}</code>
+                    {costingItem.fxRate != null && Number(costingItem.fxRate) > 0 ? (
+                      <> (≈ <code>{formatCurrency(round2(Number(costingItem.rawUnitPrice) * Number(costingItem.fxRate)), 'THB')}</code>{' '}ที่ FX {costingItem.fxRate})</>
+                    ) : null}
+                  </span>
+                ) : null}
                 <span className="text-text-muted">
                   ต้นทุนโรงงาน (ฐาน):{' '}
                   {costingItem?.uncostableReason ? (
