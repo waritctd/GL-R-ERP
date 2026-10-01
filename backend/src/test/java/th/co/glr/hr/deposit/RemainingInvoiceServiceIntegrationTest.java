@@ -39,7 +39,7 @@ import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteRepository;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteItemRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteRequest;
-import th.co.glr.hr.factoryquote.FactoryQuoteRequests.SendFactoryQuoteRequest;
+import th.co.glr.hr.factoryquote.FactoryQuoteRequests.MarkFactoryContactedRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteService;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
@@ -888,7 +888,8 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         FactoryQuoteDto draft = drafts.get(0);
         long pricingRequestItemId = draft.items().get(0).pricingRequestItemId();
         String email = FACTORY.toLowerCase().replace(" ", "-") + "@example.com";
-        factoryQuoteService.send(draft.id(), new SendFactoryQuoteRequest(email, null, null), importActor);
+        factoryQuoteService.markContacted(draft.id(),
+            new MarkFactoryContactedRequest(java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
         ReceiveFactoryQuoteRequest response = new ReceiveFactoryQuoteRequest(
             "REF-" + UUID.randomUUID(), "THB", "30 days", "45 days", "revision", "note",
             List.of(new ReceiveFactoryQuoteItemRequest(

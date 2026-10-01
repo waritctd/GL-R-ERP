@@ -641,10 +641,23 @@ export const api = {
     // which stays the source for that file's other, unrelated call sites.
     unitBases: () => apiRequest(API_ROUTES.meta.unitBases),
   },
+  // CR-1 (GLA-167): lead-time change requests (rulings R2 / R10). Import raises ONE per factory quote
+  // (`{ reason, lines: [{ pricingRequestItemId, newMinDays, newMaxDays }] }`); the owning rep or a
+  // sales manager approves/rejects it as a whole, quoting the `version` they loaded
+  // (`{ expectedVersion }` / `{ reason, expectedVersion }`; 409 = import edited it meanwhile).
+  // Role gates live in LeadTimeChangeService — not here.
+  leadTimeChanges: {
+    create: (factoryQuoteId, payload) => apiRequest(API_ROUTES.leadTimeChanges.forFactoryQuote(factoryQuoteId), { method: 'POST', body: payload }),
+    update: (id, payload) => apiRequest(API_ROUTES.leadTimeChanges.detail(id), { method: 'PUT', body: payload }),
+    withdraw: (id) => apiRequest(API_ROUTES.leadTimeChanges.withdraw(id), { method: 'POST' }),
+    approve: (id, payload) => apiRequest(API_ROUTES.leadTimeChanges.approve(id), { method: 'POST', body: payload }),
+    reject: (id, payload) => apiRequest(API_ROUTES.leadTimeChanges.reject(id), { method: 'POST', body: payload }),
+    listForPricingRequest: (pricingRequestId) => apiRequest(API_ROUTES.leadTimeChanges.forPricingRequest(pricingRequestId)),
+  },
   factoryConfigs: {
     list: () => apiRequest(API_ROUTES.factoryConfigs.list),
     // sendEmail is retired — POST /api/tickets/{id}/factory-emails/send no longer exists (factory
-    // RFQ email is manual-only). See priceImport.updateFactory / pricingRequests.sendFactoryQuote.
+    // RFQ email is manual-only). See priceImport.updateFactory / pricingRequests.markFactoryQuoteContacted.
   },
   locations: {
     provinces: () => apiRequest(API_ROUTES.locations.provinces),
@@ -1143,14 +1156,11 @@ export const api = {
     listFactoryQuotes: (id) => apiRequest(API_ROUTES.pricingRequests.factoryQuotes(id)),
     getFactoryQuote: (id) => apiRequest(API_ROUTES.pricingRequests.factoryQuote(id)),
     updateFactoryQuote: (id, payload) => apiRequest(API_ROUTES.pricingRequests.factoryQuote(id), { method: 'PUT', body: payload }),
-    // Manual-only RFQ send (owner decision): records that a human already sent this email from
-    // their own mail client — DRAFT -> REQUESTED, synchronously, no dispatch/outbox in between.
-    // `payload` is `{ emailTo, emailSubject, emailBody }`; emailTo is now OPTIONAL (a human may
-    // mark an RFQ sent even with no factory contact email on file), and `clientRequestId` is GONE
-    // — there is no out-of-band worker left to replay against, so FactoryQuoteService.send is
-    // idempotent by the quote's own current status instead (calling it again once REQUESTED is a
-    // no-op). See FactoryQuoteRequests.SendFactoryQuoteRequest's javadoc.
-    sendFactoryQuote: (id, payload) => apiRequest(API_ROUTES.pricingRequests.factoryQuoteSend(id), { method: 'POST', body: payload }),
+    // CR-1 (GLA-167): "ติดต่อโรงงานแล้ว" — records that import (or the CEO) already contacted the
+    // factory outside the system. `payload` is `{ contactedOn: 'YYYY-MM-DD', note? }` (date required,
+    // not in the future, Asia/Bangkok). DRAFT -> REQUESTED, which is what unlocks price entry; final
+    // (a second call is a 409, there is no undo). Replaces the retired POST .../send.
+    markFactoryQuoteContacted: (id, payload) => apiRequest(API_ROUTES.pricingRequests.factoryQuoteContacted(id), { method: 'POST', body: payload }),
     receiveFactoryQuote: (id, payload) => apiRequest(API_ROUTES.pricingRequests.factoryQuoteReceive(id), { method: 'POST', body: payload }),
     startFactoryNegotiation: (id, payload) => apiRequest(API_ROUTES.pricingRequests.factoryQuoteStartNegotiation(id), { method: 'POST', body: payload }),
     markFactoryQuoteReady: (id) => apiRequest(API_ROUTES.pricingRequests.factoryQuoteReady(id), { method: 'POST' }),

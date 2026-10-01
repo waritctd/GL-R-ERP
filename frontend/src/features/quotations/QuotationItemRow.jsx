@@ -194,6 +194,11 @@ export function QuotationItemRow({
   // thumbnail under the row's notes without re-plumbing this component: `(item, index) => node`.
   // Unused today, which renders nothing.
   renderMedia = null,
+  // CR-1 (GLA-167, F4): PricingRequestCreateModal's per-line สกุลเงิน + หน่วยราคา controls — the
+  // currency and price unit sales fixes on the line (import cannot change them). A render prop for
+  // the same reason as renderMedia above: the row stays a shared component, the PCR form slots its
+  // own fields in `(item, index) => node` without this file knowing what they are.
+  renderTerms = null,
   // V185 (PricingRequestCreateModal, Phase 1 of the sales-flow redesign): the PCR item form
   // reuses this SAME row for every field except price/discount — CEO pricing is a later phase,
   // not this one. Hides ราคา/หน่วย, ส่วนลด %, ราคาพิเศษ, ราคาสุทธิ (whichever the price mode would
@@ -1131,6 +1136,7 @@ export function QuotationItemRow({
       </FormField>
 
       {renderMedia ? renderMedia(item, index) : null}
+      {renderTerms ? renderTerms(item, index) : null}
 
       {/* Live calculation line -- from calculate-line, debounced by the parent. Hidden entirely
           under hidePricing: the PCR form has no calculate-line preview at all (that endpoint

@@ -322,8 +322,8 @@ public class TicketController {
 
     // POST /{id}/factory-emails/send is retired: factory RFQ email is manual-only now (owner
     // decision) — a human copies the draft FactoryQuoteService generates and sends it from their
-    // own mail client, then marks it sent via POST /api/factory-quotes/{factoryQuoteId}/send
-    // (FactoryQuoteController.send / FactoryQuoteService.send — see that method's javadoc).
+    // own mail client, then marks it sent via POST /api/factory-quotes/{factoryQuoteId}/contacted (CR-1; was /send)
+    // (FactoryQuoteController.markContacted / FactoryQuoteService.markContacted).
     // TicketService.assertFactoryEmailAllowed, this route's only gate, was deleted alongside it.
 
     // calculate-prices and items/{itemId}/price-override are retired too — same Slice S1

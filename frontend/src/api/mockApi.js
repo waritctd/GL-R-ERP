@@ -1147,6 +1147,9 @@ let mockPricingRequestEventSeq = 1;
 const mockFactoryQuotes = [];
 const mockPricingCostings = [];
 const mockFactoryQuoteResponseReceipts = [];
+// CR-1 (GLA-167): lead-time change requests (LeadTimeChangeDto rows), see the leadTimeChanges namespace.
+const mockLeadTimeChanges = [];
+let mockLeadTimeChangeSeq = 1;
 let mockFactoryQuoteSeq = 1;
 let mockFactoryQuoteItemSeq = 1;
 let mockFactoryQuoteAttachmentSeq = 1;
@@ -1253,8 +1256,8 @@ function findPricingRequestRaw(id) {
 
 // scheduleMockFactoryQuoteDispatch (the mock stand-in for FactoryQuoteEmailDispatchWorker) is
 // retired along with the real worker it mirrored: factory RFQ email is manual-only now, and
-// sendFactoryQuote below performs its DRAFT -> REQUESTED transition synchronously, in one call,
-// matching FactoryQuoteService.send()'s own javadoc.
+// markFactoryQuoteContacted below performs its DRAFT -> REQUESTED transition synchronously, in one
+// call (CR-1 / GLA-167: it replaced the old sendFactoryQuote, matching FactoryQuoteService#markContacted).
 
 // Step 3, design correction 3 ("freeze factory mutations from CEO_REVIEWING"): mirrors
 // FactoryQuoteService's RESPONSE_STATUSES/MUTABLE_STATUSES/DRAFT_STATUSES all deliberately
@@ -1264,6 +1267,77 @@ function mockRequireNotCeoReviewing(pr) {
   if (pr.status === 'CEO_REVIEWING') {
     fail('คำขอราคานี้อยู่ระหว่างการพิจารณาของ CEO — ไม่สามารถแก้ไขราคาโรงงานได้ในขณะนี้', 409);
   }
+}
+
+// ── CR-1 (GLA-167) lead-time change helpers — mirror LeadTimeChangeService's private validators ──
+function mockFindLeadTimeChange(id) {
+  const change = mockLeadTimeChanges.find((c) => c.id === Number(id));
+  if (!change) fail('ไม่พบคำขอเปลี่ยนระยะเวลานำเข้านี้', 404);
+  return change;
+}
+
+function mockRequireLeadTimePending(change) {
+  if (change.status !== 'PENDING') fail('คำขอเปลี่ยนระยะเวลานำเข้านี้ไม่ได้อยู่ในสถานะรออนุมัติ', 409);
+}
+
+function mockRequireExpectedVersion(expectedVersion) {
+  if (expectedVersion == null) fail('กรุณาระบุ expectedVersion', 400);
+  return Number(expectedVersion);
+}
+
+function mockLeadTimeReason(raw) {
+  const reason = typeof raw === 'string' ? raw.trim() : '';
+  if (!reason) fail('กรุณาระบุเหตุผลที่ขอเปลี่ยนระยะเวลานำเข้า', 400);
+  if (reason.length > 1000) fail('เหตุผลต้องไม่เกิน 1000 ตัวอักษร', 400);
+  return reason;
+}
+
+// Every ticked line must be an IMPORT (non-stock) line of THIS factory quote, listed once, with
+// 1 <= min <= max <= 3650. The old range is snapshotted here, from the item as it is right now.
+function mockLeadTimeLines(quote, pr, inputs) {
+  if (!Array.isArray(inputs) || inputs.length === 0) fail('กรุณาเลือกอย่างน้อยหนึ่งรายการ', 400);
+  const onQuote = new Set((quote?.items ?? []).map((i) => i.pricingRequestItemId));
+  const seen = new Set();
+  return inputs.map((input) => {
+    const itemId = Number(input?.pricingRequestItemId);
+    if (!input || input.pricingRequestItemId == null) fail('รายการไม่ถูกต้อง', 400);
+    const item = pr.items.find((i) => i.id === itemId);
+    if (!onQuote.has(itemId) || !item || item.stockSource) {
+      fail(`รายการที่ ${itemId} ไม่ได้อยู่ในใบเสนอราคาโรงงาน ${quote?.factoryName}`, 400);
+    }
+    if (seen.has(itemId)) fail(`รายการที่ ${itemId} ซ้ำกัน`, 400);
+    seen.add(itemId);
+    const min = input.newMinDays;
+    const max = input.newMaxDays;
+    if (!Number.isInteger(min) || !Number.isInteger(max) || min < 1 || min > max || max > 3650) {
+      fail(`ระยะเวลานำเข้าของรายการที่ ${itemId} ต้องอยู่ระหว่าง 1 ถึง 3650 วัน และค่าต่ำสุดต้องไม่มากกว่าค่าสูงสุด`, 400);
+    }
+    return {
+      pricingRequestItemId: itemId,
+      oldMinDays: item.leadTimeMinDays ?? null,
+      oldMaxDays: item.leadTimeMaxDays ?? null,
+      newMinDays: min,
+      newMaxDays: max,
+    };
+  });
+}
+
+// A cancelled / superseded request takes no lead-time decision (LeadTimeChangeService, approve + reject).
+function mockRequireLiveRequest(pr) {
+  if (['CANCELLED', 'SUPERSEDED'].includes(pr.status)) {
+    fail('คำขอราคานี้ถูกยกเลิกหรือถูกแทนที่แล้ว ไม่สามารถอนุมัติหรือไม่อนุมัติได้', 409);
+  }
+}
+
+// B-R3: the owning rep (role sales AND ticket creator) or a sales manager -- NOT the CEO, import,
+// account or another rep.
+function mockRequireLeadTimeDecider(pr) {
+  const user = requireSession();
+  const owns = user.role === 'sales' && buildPricingRequestSummary(pr).ticketCreatedById === user.id;
+  if (!owns && user.role !== 'sales_manager') {
+    fail('เฉพาะพนักงานขายเจ้าของดีลหรือผู้จัดการฝ่ายขายเท่านั้นที่อนุมัติหรือไม่อนุมัติได้', 403);
+  }
+  return user;
 }
 
 function pushPricingRequestEvent(pr, actor, eventKind, fromStatus, toStatus, message = null, metadata = null) {
@@ -2046,7 +2120,20 @@ function resolvePricingRequestItem(item, rowNumber = 0) {
   if (line.piecesFinal < 1) {
     fail(`รายการที่ ${rowNumber + 1}: จำนวนที่คำนวณได้เป็น 0 ชิ้น กรุณาระบุจำนวนหรือขนาดให้มากขึ้น`, 400);
   }
+  // CR-1 (GLA-167): mirrors PricingRequestService#requestedCurrency / #requestedPriceUnitBasis —
+  // the currency + price unit Sales fixes on the line. Blank = legacy/unspecified (null); a
+  // currency must be three letters (stored upper-case); the unit is normalized to UnitBasis.
+  const rawCurrency = typeof item.requestedCurrency === 'string' ? item.requestedCurrency.trim() : '';
+  if (rawCurrency && !/^[A-Za-z]{3}$/.test(rawCurrency)) {
+    fail(`รายการที่ ${rowNumber + 1}: สกุลเงินไม่ถูกต้อง '${item.requestedCurrency}'`, 400);
+  }
+  const rawPriceUnit = typeof item.requestedPriceUnitBasis === 'string' ? item.requestedPriceUnitBasis.trim().toUpperCase() : '';
+  if (rawPriceUnit && !['PER_SQM', 'PER_PIECE', 'PER_BOX', 'PER_LINEAR_M'].includes(rawPriceUnit)) {
+    fail(`ไม่รองรับค่า หน่วยราคา '${item.requestedPriceUnitBasis}'`, 422);
+  }
   return {
+    requestedCurrency: rawCurrency ? rawCurrency.toUpperCase() : null,
+    requestedPriceUnitBasis: rawPriceUnit || null,
     // Mirrors DealQuotationLines.TILE_UNIT_TH / PricingRequestService.PIECE_UNIT_LABEL.
     requestedUnit: 'แผ่น',
     requestedUnitBasis: 'PER_PIECE',
@@ -12309,7 +12396,7 @@ export const api = {
       return delay({ factories: mockFactoryConfigs });
     },
     // sendEmail is retired — POST /api/tickets/{id}/factory-emails/send no longer exists (factory
-    // RFQ email is manual-only). See priceImport.updateFactory / pricingRequests.sendFactoryQuote.
+    // RFQ email is manual-only). See priceImport.updateFactory / pricingRequests.markFactoryQuoteContacted.
   },
 
   // Mirrors FxRateController + BotFxFetchService (pricing/).
@@ -13633,6 +13720,119 @@ export const api = {
     },
   },
 
+  // CR-1 (GLA-167): lead-time change requests (rulings R2 / R10, option C).
+  // Mirrors LeadTimeChangeController + LeadTimeChangeService (pricingrequest/): import raises ONE
+  // request per factory quote (every ticked line carries its own new min/max); the OWNING sales
+  // rep or a sales manager approves/rejects it as a whole (B-R3: NOT the CEO); approving writes the
+  // new range onto the listed pricing-request lines, until then the old value stands. Optimistic
+  // concurrency: import edits bump `version`; approve/reject must quote the version they loaded.
+  // Authz here is approximate and NOT authoritative — see this file's header.
+  leadTimeChanges: {
+    async create(factoryQuoteId, request = {}) {
+      const user = hasRole('import');
+      const quote = mockFactoryQuotes.find((q) => q.id === Number(factoryQuoteId));
+      if (!quote) fail('ไม่พบใบเสนอราคาโรงงานนี้', 404);
+      if (!quote.current || ['CANCELLED', 'SUPERSEDED'].includes(quote.status)) {
+        fail('ขอเปลี่ยนระยะเวลานำเข้าได้เฉพาะใบเสนอราคาโรงงานฉบับล่าสุดที่ยังใช้งานอยู่เท่านั้น', 409);
+      }
+      const pr = findPricingRequestRaw(quote.pricingRequestId);
+      if (['CANCELLED', 'SUPERSEDED'].includes(pr.status)) {
+        fail('คำขอราคานี้ถูกยกเลิกหรือถูกแทนที่แล้ว ไม่สามารถขอเปลี่ยนระยะเวลานำเข้าได้', 409);
+      }
+      const reason = mockLeadTimeReason(request.reason);
+      const lines = mockLeadTimeLines(quote, pr, request.lines);
+      if (mockLeadTimeChanges.some((c) => c.factoryQuoteId === quote.id && c.status === 'PENDING')) {
+        fail(`โรงงาน ${quote.factoryName} มีคำขอเปลี่ยนระยะเวลานำเข้าที่รออนุมัติอยู่แล้ว`, 409);
+      }
+      const change = {
+        id: mockLeadTimeChangeSeq++,
+        factoryQuoteId: quote.id,
+        pricingRequestId: pr.id,
+        status: 'PENDING',
+        reason,
+        requestedBy: user.id,
+        requestedAt: new Date().toISOString(),
+        decidedBy: null,
+        decidedAt: null,
+        decisionReason: null,
+        lines,
+        version: 1,
+      };
+      mockLeadTimeChanges.push(change);
+      pushPricingRequestEvent(pr, user, 'LEAD_TIME_CHANGE_REQUESTED', pr.status, pr.status,
+        `Lead-time change requested for ${quote.factoryName} (${lines.length} line(s)): ${reason}`);
+      return delay({ leadTimeChange: change });
+    },
+
+    async update(id, request = {}) {
+      const user = hasRole('import');
+      const change = mockFindLeadTimeChange(id);
+      mockRequireLeadTimePending(change);
+      const quote = mockFactoryQuotes.find((q) => q.id === change.factoryQuoteId);
+      const pr = findPricingRequestRaw(change.pricingRequestId);
+      const reason = mockLeadTimeReason(request.reason);
+      const lines = mockLeadTimeLines(quote, pr, request.lines);
+      Object.assign(change, { reason, lines, version: change.version + 1 });
+      pushPricingRequestEvent(pr, user, 'LEAD_TIME_CHANGE_REQUESTED', pr.status, pr.status,
+        `Lead-time change edited for ${quote?.factoryName} (${lines.length} line(s)): ${reason}`);
+      return delay({ leadTimeChange: change });
+    },
+
+    async withdraw(id) {
+      const user = hasRole('import');
+      const change = mockFindLeadTimeChange(id);
+      mockRequireLeadTimePending(change);
+      change.status = 'WITHDRAWN';
+      pushPricingRequestEvent(findPricingRequestRaw(change.pricingRequestId), user,
+        'LEAD_TIME_CHANGE_WITHDRAWN', null, null, 'Lead-time change withdrawn');
+      return delay({ leadTimeChange: change });
+    },
+
+    async approve(id, request = {}) {
+      const change = mockFindLeadTimeChange(id);
+      const pr = findPricingRequestRaw(change.pricingRequestId);
+      const user = mockRequireLeadTimeDecider(pr);
+      mockRequireLiveRequest(pr);
+      const version = mockRequireExpectedVersion(request.expectedVersion);
+      mockRequireLeadTimePending(change);
+      if (change.version !== version) fail('คำขอถูกแก้ไขแล้ว กรุณาตรวจสอบอีกครั้ง', 409);
+      Object.assign(change, { status: 'APPROVED', decidedBy: user.id, decidedAt: new Date().toISOString() });
+      for (const line of change.lines) {
+        const item = pr.items.find((i) => i.id === line.pricingRequestItemId);
+        if (item) Object.assign(item, { leadTimeMinDays: line.newMinDays, leadTimeMaxDays: line.newMaxDays });
+      }
+      pushPricingRequestEvent(pr, user, 'LEAD_TIME_CHANGE_APPROVED', pr.status, pr.status,
+        `Lead-time change approved (${change.lines.length} line(s))`);
+      return delay({ leadTimeChange: change });
+    },
+
+    async reject(id, request = {}) {
+      const change = mockFindLeadTimeChange(id);
+      const pr = findPricingRequestRaw(change.pricingRequestId);
+      const user = mockRequireLeadTimeDecider(pr);
+      mockRequireLiveRequest(pr);
+      const reason = typeof request.reason === 'string' && request.reason.trim() ? request.reason.trim() : null;
+      if (!reason) fail('กรุณาระบุเหตุผลที่ไม่อนุมัติ', 400);
+      if (reason.length > 1000) fail('เหตุผลต้องไม่เกิน 1000 ตัวอักษร', 400);
+      const version = mockRequireExpectedVersion(request.expectedVersion);
+      mockRequireLeadTimePending(change);
+      if (change.version !== version) fail('คำขอถูกแก้ไขแล้ว กรุณาตรวจสอบอีกครั้ง', 409);
+      Object.assign(change, { status: 'REJECTED', decidedBy: user.id, decidedAt: new Date().toISOString(), decisionReason: reason });
+      pushPricingRequestEvent(pr, user, 'LEAD_TIME_CHANGE_REJECTED', pr.status, pr.status,
+        `Lead-time change rejected: ${reason}`);
+      return delay({ leadTimeChange: change });
+    },
+
+    // Readable by import, ceo, the owning rep and sales_manager (LeadTimeChangeService#listForPricingRequest).
+    async listForPricingRequest(pricingRequestId) {
+      const user = requireSession();
+      const pr = findPricingRequestRaw(pricingRequestId);
+      const owns = user.role === 'sales' && buildPricingRequestSummary(pr).ticketCreatedById === user.id;
+      if (!['import', 'ceo', 'sales_manager'].includes(user.role) && !owns) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      return delay({ items: mockLeadTimeChanges.filter((c) => c.pricingRequestId === pr.id) });
+    },
+  },
+
   // Mirrors PricingRequestController + PricingRequestService (pricingrequest/).
   pricingRequests: {
     async listForTicket(ticketId) {
@@ -14033,9 +14233,12 @@ export const api = {
     // for every factory that DOES resolve instead of refusing the whole batch when some lines
     // don't (owner decision) — only an entirely-unresolved request (byFactory empty) still 422s.
     async generateFactoryEmailDrafts(id) {
-      const user = hasRole('import');
+      // CR-1 (B-R1): the CEO may also generate the drafts (FactoryQuoteService.CONTACT_ROLES).
+      const user = hasRole('import', 'ceo');
       const pr = findPricingRequestRaw(id);
       // Mirrors FactoryQuoteService.DRAFT_STATUSES (V140 dropped COSTING_IN_PROGRESS from it).
+      // Draft items are seeded with the line's requested price unit / currency when it carries them
+      // (CR-1 R1), else today's seeding (quantity unit, no currency) — see the items map below.
       if (!['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE'].includes(pr.status)) {
         fail('คำขอราคาต้องอยู่ระหว่างการตรวจสอบของฝ่ายนำเข้าก่อนจึงจะสร้างร่างอีเมลราคาโรงงานได้', 409);
       }
@@ -14090,6 +14293,17 @@ export const api = {
           factoryName,
           status: 'DRAFT',
           emailTo: factoryConfig?.email ?? null,
+          // CR-1 (B2): the draft's currency is the one Sales fixed on the lines, seeded only when the
+          // lines name exactly ONE currency (mirrors FactoryQuoteService#seededCurrency).
+          defaultCurrency: (() => {
+            const codes = [...new Set(items.map((i) => i.requestedCurrency).filter(Boolean))];
+            return codes.length === 1 ? codes[0] : 'THB';
+          })(),
+          // CR-1: the "ติดต่อโรงงานแล้ว" step — all null until the factory is marked contacted.
+          contactedOn: null,
+          contactedNote: null,
+          contactedBy: null,
+          contactedAt: null,
           emailSubject: `Pricing request ${pr.requestCode}`,
           // Mirrors FactoryQuoteService.emailBody's item-block loop (appendItemBlock, 2026-09):
           // one numbered block per item — brand/model, catalog code, colour/surface/size,
@@ -14126,7 +14340,6 @@ export const api = {
           emailSentAt: null,
           sentBy: null,
           supplierQuoteRef: null,
-          defaultCurrency: 'THB',
           paymentTerms: null,
           leadTimeText: null,
           note: null,
@@ -14159,10 +14372,12 @@ export const api = {
             // are always written together as the same code by the response form's
             // own onChange (see the unitBasis <select> below), so both are seeded
             // from requestedUnitBasis here too.
-            quotedUnit: item.requestedUnitBasis,
-            unitBasis: item.requestedUnitBasis,
+            // CR-1: the price unit / currency Sales fixed on the line win over the quantity unit;
+            // a legacy line (no requested terms) keeps the old seeding.
+            quotedUnit: item.requestedPriceUnitBasis ?? item.requestedUnitBasis,
+            unitBasis: item.requestedPriceUnitBasis ?? item.requestedUnitBasis,
             rawUnitPrice: null,
-            currency: null,
+            currency: item.requestedCurrency ?? null,
             sortOrder: i,
           })),
         });
@@ -14185,7 +14400,8 @@ export const api = {
     },
 
     async updateFactoryQuote(id, payload) {
-      hasRole('import');
+      // CR-1 (B-R1): import or the CEO (FactoryQuoteService#updateDraft -> CONTACT_ROLES).
+      hasRole('import', 'ceo');
       const quote = mockFactoryQuotes.find((q) => q.id === Number(id));
       if (!quote) fail('ไม่พบใบเสนอราคาโรงงานนี้', 404);
       if (quote.status !== 'DRAFT') fail('แก้ไขได้เฉพาะอีเมลราคาโรงงานที่ยังเป็นฉบับร่างเท่านั้น', 409);
@@ -14200,40 +14416,50 @@ export const api = {
     },
 
     /**
-     * Manual-only RFQ send (owner decision — the automatic dispatch/outbox path is deleted).
-     * Mirrors FactoryQuoteService.send(): records that a human already sent this email from their
-     * own mail client — DRAFT -> REQUESTED, synchronously, with no out-of-band worker in between.
-     * `clientRequestId` is GONE from the payload (there is no dispatch to replay against any
-     * more); calling this again once the quote is already REQUESTED is a no-op, matching the real
-     * service's own idempotent-by-status behaviour. `emailTo` is OPTIONAL — a human may mark an
-     * RFQ sent even with no factory contact email on file.
+     * CR-1 (GLA-167): "ติดต่อโรงงานแล้ว" — replaces the retired sendFactoryQuote. Mirrors
+     * FactoryQuoteService#markContacted: a HUMAN (import or the CEO) already contacted the factory
+     * outside the system; this records the date, an optional note and who did it, moves the quote
+     * DRAFT -> REQUESTED (which unlocks price entry, see receiveFactoryQuote) and promotes the
+     * request IMPORT_REVIEWING -> AWAITING_FACTORY_RESPONSE. FINAL (owner ruling R7): only a
+     * current DRAFT quote can be marked, so a second call is a 409 and never rewrites the record.
+     * Authz here is approximate — not authoritative (see this file's header).
      */
-    async sendFactoryQuote(id, payload = {}) {
-      const user = hasRole('import');
+    async markFactoryQuoteContacted(id, payload = {}) {
+      const user = hasRole('import', 'ceo');
       const quote = mockFactoryQuotes.find((q) => q.id === Number(id));
       if (!quote) fail('ไม่พบใบเสนอราคาโรงงานนี้', 404);
-      if (quote.status === 'REQUESTED') return delay({ factoryQuote: quote });
-      if (quote.status !== 'DRAFT') fail('ส่งได้เฉพาะอีเมลราคาโรงงานที่ยังเป็นฉบับร่างเท่านั้น', 409);
-      // Mirrors FactoryQuoteService.firstText: the payload wins only when it supplies a non-blank
-      // value, so submitting a blank recipient does not blank out an emailTo already on the draft.
-      const firstNonBlank = (first, fallback) => {
-        const trimmed = typeof first === 'string' ? first.trim() : first;
-        return trimmed ? trimmed : fallback;
-      };
-      quote.emailTo = firstNonBlank(payload.emailTo, quote.emailTo) ?? null;
-      quote.emailSubject = firstNonBlank(payload.emailSubject, quote.emailSubject) ?? null;
-      quote.emailBody = firstNonBlank(payload.emailBody, quote.emailBody) ?? null;
-      quote.status = 'REQUESTED';
-      quote.emailSentAt = new Date().toISOString();
-      quote.requestedAt = quote.emailSentAt;
-      quote.sentBy = user.id;
-      quote.updatedAt = quote.emailSentAt;
+      const contactedOn = payload?.contactedOn;
+      if (!contactedOn) fail('กรุณาระบุวันที่ติดต่อโรงงาน', 400);
+      const todayBangkok = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Bangkok' }).format(new Date());
+      if (contactedOn > todayBangkok) fail('วันที่ติดต่อโรงงานต้องไม่เป็นวันในอนาคต', 400);
+      const note = typeof payload.note === 'string' && payload.note.trim() ? payload.note.trim() : null;
+      if (note && note.length > 1000) fail('หมายเหตุการติดต่อโรงงานต้องไม่เกิน 1000 ตัวอักษร', 400);
+      if (!quote.current || quote.status !== 'DRAFT') {
+        fail(`ใบเสนอราคาโรงงาน ${quote.quoteCode} ติดต่อโรงงานแล้วหรือไม่อยู่ในสถานะร่าง ไม่สามารถบันทึกซ้ำได้`, 409);
+      }
       const pr = findPricingRequestRaw(quote.pricingRequestId);
+      if (!['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE'].includes(pr.status)) {
+        fail('คำขอราคาต้องอยู่ระหว่างการตรวจสอบของฝ่ายนำเข้าก่อนจึงจะบันทึกการติดต่อโรงงานได้', 409);
+      }
+      const now = new Date().toISOString();
+      Object.assign(quote, {
+        status: 'REQUESTED',
+        contactedOn,
+        contactedNote: note,
+        contactedBy: user.id,
+        contactedAt: now,
+        // The legacy sent-stamp fields stay in step so anything still reading them keeps working.
+        emailSentAt: now,
+        requestedAt: now,
+        sentBy: user.id,
+        updatedAt: now,
+      });
       const fromStatus = pr.status;
       // V140 merged COSTING_IN_PROGRESS into AWAITING_FACTORY_RESPONSE, so IMPORT_REVIEWING is
-      // the only status still needing promotion here — mirrors FactoryQuoteService.send().
+      // the only status still needing promotion — mirrors FactoryQuoteService#markContacted.
       if (pr.status === 'IMPORT_REVIEWING') pr.status = 'AWAITING_FACTORY_RESPONSE';
-      pushPricingRequestEvent(pr, user, 'FACTORY_EMAIL_SENT', fromStatus, pr.status);
+      pushPricingRequestEvent(pr, user, 'FACTORY_CONTACTED', fromStatus, pr.status,
+        `Factory contacted: ${quote.factoryName} on ${contactedOn}`);
       return delay({ factoryQuote: quote });
     },
 
@@ -14261,8 +14487,25 @@ export const api = {
         return delay({ factoryQuote: receiptQuote });
       }
       if (!quote.current) fail('รับคำตอบได้เฉพาะ revision ล่าสุดของใบเสนอราคาโรงงานเท่านั้น', 409);
+      // CR-1 (B-R2): price entry is locked until the factory has been marked contacted.
+      if (quote.status === 'DRAFT') fail('ต้องกด ติดต่อโรงงานแล้ว ก่อนกรอกราคา', 409);
       const pr = findPricingRequestRaw(quote.pricingRequestId);
       mockRequireNotCeoReviewing(pr);
+      // CR-1 (R1): currency and price unit are fixed by Sales on the line and locked for import.
+      // A line with no requested terms (legacy) accepts anything — mirrors
+      // FactoryQuoteService#validateAndNormalizeResponseItems.
+      for (const responseItem of payload.items ?? []) {
+        const requestItem = pr.items.find((i) => i.id === responseItem.pricingRequestItemId);
+        if (!requestItem) continue;
+        if (requestItem.requestedCurrency
+          && requestItem.requestedCurrency.toUpperCase() !== String(responseItem.currency ?? '').trim().toUpperCase()) {
+          fail(`สกุลเงินต้องเป็น ${requestItem.requestedCurrency} ตามที่ฝ่ายขายระบุ (รายการ ${pricingRequestItemDisplayName(requestItem)})`, 409);
+        }
+        if (requestItem.requestedPriceUnitBasis
+          && requestItem.requestedPriceUnitBasis !== String(responseItem.unitBasis ?? '').trim().toUpperCase()) {
+          fail(`หน่วยราคาต้องเป็น ${requestItem.requestedPriceUnitBasis} ตามที่ฝ่ายขายระบุ (รายการ ${pricingRequestItemDisplayName(requestItem)})`, 409);
+        }
+      }
       const applyResponse = (target) => {
         target.status = 'RESPONSE_RECEIVED';
         target.supplierQuoteRef = payload.supplierQuoteRef ?? null;

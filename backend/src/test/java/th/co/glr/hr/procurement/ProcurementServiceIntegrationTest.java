@@ -48,7 +48,7 @@ import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteRepository;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteItemRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteRequest;
-import th.co.glr.hr.factoryquote.FactoryQuoteRequests.SendFactoryQuoteRequest;
+import th.co.glr.hr.factoryquote.FactoryQuoteRequests.MarkFactoryContactedRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteService;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
@@ -627,8 +627,8 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
         for (FactoryQuoteDto draft : drafts) {
             long pricingRequestItemId = draft.items().get(0).pricingRequestItemId();
             String email = draft.factoryName().toLowerCase().replace(" ", "-") + "@example.com";
-            factoryQuoteService.send(draft.id(),
-                new SendFactoryQuoteRequest(email, null, null), importActor);
+            factoryQuoteService.markContacted(draft.id(),
+            new MarkFactoryContactedRequest(java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
             drainDispatches();
             BigDecimal price = FACTORY_A.equals(draft.factoryName()) ? new BigDecimal("100.00") : new BigDecimal("200.00");
             ReceiveFactoryQuoteRequest response = new ReceiveFactoryQuoteRequest("REF-" + draft.factoryName(), "THB", "30 days", "45 days",
@@ -700,8 +700,8 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
         List<FactoryQuoteDto> drafts = factoryQuoteService.generateDrafts(pricingRequestId, importActor);
         FactoryQuoteDto draft = drafts.get(0);
         long pricingRequestItemId = draft.items().get(0).pricingRequestItemId();
-        factoryQuoteService.send(draft.id(),
-            new SendFactoryQuoteRequest(factory.toLowerCase().replace(" ", "-") + "@example.com", null, null), importActor);
+        factoryQuoteService.markContacted(draft.id(),
+            new MarkFactoryContactedRequest(java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
         drainDispatches();
         ReceiveFactoryQuoteRequest response = new ReceiveFactoryQuoteRequest("REF-FOREIGN", "THB", "30 days", "45 days",
             "revision", "note", List.of(new ReceiveFactoryQuoteItemRequest(
@@ -750,8 +750,8 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
         List<FactoryQuoteDto> drafts = factoryQuoteService.generateDrafts(pricingRequestId, importActor);
         FactoryQuoteDto draft = drafts.get(0);
         long pricingRequestItemId = draft.items().get(0).pricingRequestItemId();
-        factoryQuoteService.send(draft.id(),
-            new SendFactoryQuoteRequest(factory.toLowerCase().replace(" ", "-") + "@example.com", null, null), importActor);
+        factoryQuoteService.markContacted(draft.id(),
+            new MarkFactoryContactedRequest(java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
         drainDispatches();
         ReceiveFactoryQuoteRequest response = new ReceiveFactoryQuoteRequest("REF-2ND", "THB", "30 days", "45 days",
             "revision", "note", List.of(new ReceiveFactoryQuoteItemRequest(

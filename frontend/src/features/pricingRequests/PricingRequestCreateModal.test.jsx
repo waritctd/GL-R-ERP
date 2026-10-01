@@ -80,6 +80,11 @@ function fillRequiredFields() {
   if (!screen.getByLabelText(/^ประเทศต้นทาง/).value) {
     fireEvent.change(screen.getByLabelText(/^ประเทศต้นทาง/), { target: { value: 'ไทย-สต็อก' } });
   }
+  // CR-1 (R1 / F4): สกุลเงิน + หน่วยราคา are required per line too (blank for a hand-typed row).
+  const currency = screen.getByLabelText(/^สกุลเงิน \(ราคาโรงงาน\)/);
+  if (!currency.value) fireEvent.change(currency, { target: { value: 'EUR' } });
+  const unit = screen.getByLabelText(/^หน่วยราคา/);
+  if (!unit.value) fireEvent.change(unit, { target: { value: 'PER_SQM' } });
 }
 
 describe('PricingRequestCreateModal', () => {
@@ -412,6 +417,8 @@ describe('PricingRequestCreateModal edit mode (Fix 2)', () => {
         wastageMode: 'NONE', piecesPerBox: 4, roundToFullBox: true,
         // GLA-125: required on this form.
         originCountry: 'ไทย-สต็อก', leadTimeMinDays: 3, leadTimeMaxDays: 7,
+        // CR-1: currency + price unit are required on every line now.
+        requestedCurrency: 'THB', requestedPriceUnitBasis: 'PER_PIECE',
         quantityType: 'CONFIRMED', targetDeliveryDate: null, deliveryLocation: null, specialRequirement: null,
       }],
       ...overrides,
@@ -674,6 +681,8 @@ describe('PricingRequestCreateModal revision mode (COMMIT 5, P1 finding 3)', () 
         wastageMode: 'NONE', piecesPerBox: 4, roundToFullBox: true,
         // GLA-125: required on this form.
         originCountry: 'ไทย-สต็อก', leadTimeMinDays: 3, leadTimeMaxDays: 7,
+        // CR-1: currency + price unit are required on every line now.
+        requestedCurrency: 'THB', requestedPriceUnitBasis: 'PER_PIECE',
         quantityType: 'CONFIRMED', targetDeliveryDate: null, deliveryLocation: null, specialRequirement: null,
       }],
       ...overrides,
@@ -894,6 +903,8 @@ describe('PricingRequestCreateModal preserves the removed per-item fields throug
             deliveryLocation: 'ที่ส่งมอบเดิม', specialRequirement: 'ส่งด่วน',
             // GLA-125: required on this form.
             originCountry: 'ไทย-สต็อก', leadTimeMinDays: 3, leadTimeMaxDays: 7,
+        // CR-1: currency + price unit are required on every line now.
+        requestedCurrency: 'THB', requestedPriceUnitBasis: 'PER_PIECE',
           }],
         }}
         onClose={vi.fn()}
@@ -931,5 +942,141 @@ describe('PricingRequestCreateModal preserves the removed per-item fields throug
       deliveryLocation: null,
       specialRequirement: null,
     });
+  });
+});
+
+// CR-1 (GLA-167), rulings R1 + F4: sales fixes the currency and price unit on every line; import
+// cannot change them later. Auto-filled from the catalogue pick; blank + required for a hand-typed
+// line (the factory master's defaults are import/CEO-only, so sales has no source for them).
+describe('PricingRequestCreateModal — สกุลเงิน + หน่วยราคา per line (R1, F4)', () => {
+  const RECIPIENT = 'เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ';
+  const currencySelect = () => screen.getByLabelText(/^สกุลเงิน \(ราคาโรงงาน\)/);
+  const unitSelect = () => screen.getByLabelText(/^หน่วยราคา/);
+
+  it('shows both selects on each line, blank for a hand-typed line', () => {
+    renderModal({ ticketItems: [] });
+    expect(currencySelect().value).toBe('');
+    expect(unitSelect().value).toBe('');
+  });
+
+  it('blocks submission with per-row errors while either is blank, and sends nothing', async () => {
+    const { createFn } = renderModal();
+    fireEvent.change(screen.getByPlaceholderText(RECIPIENT), { target: { value: 'ผู้ออกแบบ ก.' } });
+    fillRequiredFields();
+    fireEvent.change(currencySelect(), { target: { value: '' } });
+    fireEvent.change(unitSelect(), { target: { value: '' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
+
+    expect(await screen.findByText('กรุณาระบุสกุลเงิน')).not.toBeNull();
+    expect(screen.getByText('กรุณาระบุหน่วยราคา')).not.toBeNull();
+    expect(createFn).not.toHaveBeenCalled();
+  });
+
+  it('a catalogue pick auto-fills the currency and unit from the catalogue row, and sales may still change them', async () => {
+    api.catalog.prices.mockImplementation(async (q) => (
+      (q ?? '').includes('B2')
+        ? { items: [{
+          priceId: 901, productCode: 'PC-901', factoryName: 'Panaria', collection: 'B2', sizeRaw: '60x60',
+          color: 'ขาว', surface: 'ด้าน', price: 12, currency: 'EUR', priceUnit: 'per_sqm',
+        }] }
+        : { items: [] }
+    ));
+    const { createFn } = renderModal({ ticketItems: [] });
+    fireEvent.change(screen.getByPlaceholderText(RECIPIENT), { target: { value: 'ผู้ออกแบบ ก.' } });
+    fireEvent.change(screen.getByLabelText(/รุ่น \/ ค้นหาแคตตาล็อก/), { target: { value: 'B2' } });
+    fireEvent.mouseDown(await waitFor(() => screen.getByRole('option', { name: /B2/ }), { timeout: 1000 }));
+
+    expect(currencySelect().value).toBe('EUR');
+    expect(unitSelect().value).toBe('PER_SQM');
+
+    fireEvent.change(currencySelect(), { target: { value: 'USD' } });
+    fillRequiredFields();
+    fireEvent.change(screen.getByLabelText(/^จำนวน/), { target: { value: '10' } });
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+
+    await waitFor(() => expect(createFn).toHaveBeenCalled());
+    expect(createFn.mock.calls[0][0].items[0]).toMatchObject({
+      requestedCurrency: 'USD', requestedPriceUnitBasis: 'PER_SQM',
+    });
+  });
+
+  it('a catalogue row with an unknown price unit leaves the unit blank (required) instead of guessing', async () => {
+    api.catalog.prices.mockImplementation(async (q) => (
+      (q ?? '').includes('B3')
+        ? { items: [{
+          priceId: 902, productCode: 'PC-902', factoryName: 'Panaria', collection: 'B3', sizeRaw: '60x60',
+          color: 'ขาว', surface: 'ด้าน', price: 12, currency: 'EUR', priceUnit: 'unknown',
+        }] }
+        : { items: [] }
+    ));
+    renderModal({ ticketItems: [] });
+    fireEvent.change(screen.getByLabelText(/รุ่น \/ ค้นหาแคตตาล็อก/), { target: { value: 'B3' } });
+    fireEvent.mouseDown(await waitFor(() => screen.getByRole('option', { name: /B3/ }), { timeout: 1000 }));
+    expect(currencySelect().value).toBe('EUR');
+    expect(unitSelect().value).toBe('');
+  });
+
+  it('a hand-typed line sends the currency/unit sales chose', async () => {
+    const { createFn } = renderModal();
+    fireEvent.change(screen.getByPlaceholderText(RECIPIENT), { target: { value: 'ผู้ออกแบบ ก.' } });
+    fillRequiredFields();
+    fireEvent.change(currencySelect(), { target: { value: 'USD' } });
+    fireEvent.change(unitSelect(), { target: { value: 'PER_BOX' } });
+    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
+    await waitFor(() => expect(createFn).toHaveBeenCalledTimes(1));
+    expect(createFn.mock.calls[0][0].items[0]).toMatchObject({ requestedCurrency: 'USD', requestedPriceUnitBasis: 'PER_BOX' });
+  });
+
+  it('edit mode seeds them from the persisted item and sends them back on save', async () => {
+    const updateFn = vi.fn().mockResolvedValue({});
+    render(
+      <PricingRequestCreateModal
+        mode="edit"
+        initialValue={{
+          summary: { id: 77, recipientType: 'OWNER', recipientLabel: 'เจ้าของโครงการ ข.' },
+          items: [{
+            id: 5, brand: 'SCG', model: 'A1', color: 'ขาว', texture: 'ด้าน', size: '60x60',
+            thicknessMm: 10, sqmPerPiece: 0.36, quantityMode: 'PIECES', piecesInput: 20,
+            wastageMode: 'NONE', piecesPerBox: 4, roundToFullBox: true,
+            originCountry: 'ไทย-สต็อก', leadTimeMinDays: 3, leadTimeMaxDays: 7,
+            requestedCurrency: 'EUR', requestedPriceUnitBasis: 'PER_SQM',
+          }],
+        }}
+        onClose={vi.fn()}
+        onCreated={vi.fn()}
+        updateFn={updateFn}
+      />,
+    );
+    expect(currencySelect().value).toBe('EUR');
+    expect(unitSelect().value).toBe('PER_SQM');
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
+    await waitFor(() => expect(updateFn).toHaveBeenCalled());
+    expect(updateFn.mock.calls[0][1].items[0]).toMatchObject({ requestedCurrency: 'EUR', requestedPriceUnitBasis: 'PER_SQM' });
+  });
+
+  it('a legacy persisted line with no terms must be completed before it can be saved again', async () => {
+    const updateFn = vi.fn().mockResolvedValue({});
+    render(
+      <PricingRequestCreateModal
+        mode="edit"
+        initialValue={{
+          summary: { id: 77, recipientType: 'OWNER', recipientLabel: 'เจ้าของโครงการ ข.' },
+          items: [{
+            id: 5, brand: 'SCG', model: 'A1', color: 'ขาว', texture: 'ด้าน', size: '60x60',
+            thicknessMm: 10, sqmPerPiece: 0.36, quantityMode: 'PIECES', piecesInput: 20,
+            wastageMode: 'NONE', piecesPerBox: 4, roundToFullBox: true,
+            originCountry: 'ไทย-สต็อก', leadTimeMinDays: 3, leadTimeMaxDays: 7,
+          }],
+        }}
+        onClose={vi.fn()}
+        onCreated={vi.fn()}
+        updateFn={updateFn}
+      />,
+    );
+    expect(currencySelect().value).toBe('');
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
+    expect(await screen.findByText('กรุณาระบุสกุลเงิน')).not.toBeNull();
+    expect(updateFn).not.toHaveBeenCalled();
   });
 });

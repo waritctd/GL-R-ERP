@@ -180,6 +180,8 @@ export const queryKeys = {
   pricingRequestFactoryQuotes: (id) => ['pricingRequests', 'factoryQuotes', id],
   pricingRequestCostings: (id) => ['pricingRequests', 'costings', id],
   pricingRequestAttachments: (id) => ['pricingRequests', 'attachments', id],
+  // CR-1 (GLA-167): lead-time change requests of one pricing request.
+  pricingRequestLeadTimeChanges: (id) => ['pricingRequests', 'leadTimeChanges', id],
   pricingCostingDetail: (id) => ['pricingCostings', 'detail', id],
   // Step 3: CEO Selling Price Decision.
   pricingDecisions: (id) => ['pricingRequests', 'pricingDecisions', id],

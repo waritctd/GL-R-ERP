@@ -41,6 +41,7 @@ import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.factory.FactoryConfigRepository;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteRepository;
+import th.co.glr.hr.factoryquote.FactoryQuoteRequests.MarkFactoryContactedRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteItemRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteService;
@@ -1187,6 +1188,8 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         pricingRequestService.submit(pricingRequestId, salesActor);
         pricingRequestService.pickup(pricingRequestId, importActor);
         FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Factory C4");
+        factoryQuoteService.markContacted(draft.id(), new MarkFactoryContactedRequest(
+            java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
         FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(),
             response("REF-RENDER4", "THB", "100.00", draft.items().get(0).pricingRequestItemId()), importActor);
         factoryQuoteService.markReadyForCosting(responded.id(), importActor);
@@ -1207,6 +1210,8 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         pricingRequestService.pickup(pricingRequestId, importActor);
         List<FactoryQuoteDto> drafts = factoryQuoteService.generateDrafts(pricingRequestId, importActor);
         for (FactoryQuoteDto draft : drafts) {
+            factoryQuoteService.markContacted(draft.id(), new MarkFactoryContactedRequest(
+                java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
             FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(),
                 response("REF-" + draft.factoryName(), "THB", "100.00", draft.items().get(0).pricingRequestItemId()),
                 importActor);
@@ -1243,6 +1248,8 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
                 new BigDecimal(rawPrice), "THB", null, sqmPerUnit, piecesPerBox, null,
                 "45 days", null, null)),
             UUID.randomUUID().toString());
+        factoryQuoteService.markContacted(draft.id(), new MarkFactoryContactedRequest(
+            java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
         FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(), response, importActor);
         factoryQuoteService.markReadyForCosting(responded.id(), importActor);
         // V141 ("CEO owns costing"): markReadyForCosting auto-advances the request straight to
@@ -1293,6 +1300,8 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         pricingRequestService.pickup(pricingRequestId, importActor);
         List<FactoryQuoteDto> drafts = factoryQuoteService.generateDrafts(pricingRequestId, importActor);
         for (FactoryQuoteDto draft : drafts) {
+            factoryQuoteService.markContacted(draft.id(), new MarkFactoryContactedRequest(
+                java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
             FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(),
                 response("REF-" + draft.factoryName(), "THB", "100.00", draft.items().get(0).pricingRequestItemId()),
                 importActor);

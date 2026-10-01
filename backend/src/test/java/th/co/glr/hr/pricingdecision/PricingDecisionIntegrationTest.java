@@ -46,7 +46,7 @@ import th.co.glr.hr.factoryquote.FactoryQuoteRepository;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.MarkNotAvailableRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteItemRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteRequest;
-import th.co.glr.hr.factoryquote.FactoryQuoteRequests.SendFactoryQuoteRequest;
+import th.co.glr.hr.factoryquote.FactoryQuoteRequests.MarkFactoryContactedRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.StartNegotiationRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteService;
 import th.co.glr.hr.notification.NotificationRepository;
@@ -533,13 +533,16 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         FactoryQuoteDto quoteBefore = factoryQuoteRepository.findCurrentByFactory(pricingRequestId, "Factory A3").orElseThrow();
         long quoteId = quoteBefore.id();
 
-        // ceo cannot mutate the factory quote — requireRole runs before any state lookup, so this
-        // is provably a role check, not a side effect of the quote's current status (already
-        // READY_FOR_COSTING, with the request auto-advanced to READY_FOR_CEO_REVIEW, by the time
+        // CR-1 (B-R1): the CEO MAY now mark a factory contacted, so that call is no longer a role
+        // refusal -- but this quote is already READY_FOR_COSTING (not a DRAFT), so it is refused on
+        // STATE (409) and, below, the row is still untouched. The remaining CEO attempts
+        // (receive, markReadyForCosting) are still pure role checks: requireRole runs before any
+        // state lookup, so they are provably not a side effect of the quote's current status
+        // (READY_FOR_COSTING, request auto-advanced to READY_FOR_CEO_REVIEW, by the time
         // twoItemSubmittedCosting() returns).
-        assertThatThrownBy(() -> factoryQuoteService.send(quoteId,
-                new SendFactoryQuoteRequest("ceo-attempt@example.com", null, null), ceoActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        assertThatThrownBy(() -> factoryQuoteService.markContacted(quoteId,
+            new MarkFactoryContactedRequest(java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), ceoActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
         assertThatThrownBy(() -> factoryQuoteService.receive(quoteId,
                 new ReceiveFactoryQuoteRequest("REF-CEO-ATTEMPT", "THB", "30 days", "45 days", "revision", "note",
                     List.of(new ReceiveFactoryQuoteItemRequest(
@@ -1296,6 +1299,8 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         pricingRequestService.pickup(pricingRequestId, importActor);
         List<FactoryQuoteDto> drafts = factoryQuoteService.generateDrafts(pricingRequestId, importActor);
         for (FactoryQuoteDto draft : drafts) {
+            factoryQuoteService.markContacted(draft.id(), new MarkFactoryContactedRequest(
+                java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
             FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(),
                 response("REF-" + draft.factoryName(), "THB", "100.00", draft.items().get(0).pricingRequestItemId()),
                 importActor);
@@ -1335,6 +1340,8 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
                 new BigDecimal(rawPrice), "THB", null, sqmPerUnit, piecesPerBox, linearMPerUnit,
                 "45 days", null, null)),
             UUID.randomUUID().toString());
+        factoryQuoteService.markContacted(draft.id(), new MarkFactoryContactedRequest(
+            java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
         FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(), response, importActor);
         factoryQuoteService.markReadyForCosting(responded.id(), importActor);
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())

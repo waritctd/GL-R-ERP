@@ -2,6 +2,7 @@ package th.co.glr.hr.factoryquote;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 
 public final class FactoryQuoteDtos {
@@ -35,8 +36,30 @@ public final class FactoryQuoteDtos {
         Instant createdAt,
         Instant updatedAt,
         List<FactoryQuoteItemDto> items,
-        List<FactoryQuoteAttachmentDto> attachments
-    ) {}
+        List<FactoryQuoteAttachmentDto> attachments,
+        // CR-1 (GLA-167): the "ติดต่อโรงงานแล้ว" step. All null until the factory is marked contacted.
+        LocalDate contactedOn,
+        String contactedNote,
+        Long contactedBy,
+        Instant contactedAt
+    ) {
+        /** The pre-CR-1 shape (28 components). Defaults the four contacted fields to null. */
+        public FactoryQuoteDto(
+            long id, String quoteCode, long pricingRequestId, Long factoryId, String factoryName,
+            String status, String emailTo, String emailSubject, String emailBody, Instant emailSentAt,
+            Long sentBy, String supplierQuoteRef, String defaultCurrency, String paymentTerms,
+            String leadTimeText, String note, String negotiationNote, Instant requestedAt,
+            Instant receivedAt, Long rootFactoryQuoteId, Long parentFactoryQuoteId, int revisionNo,
+            String revisionReason, boolean current, Instant createdAt, Instant updatedAt,
+            List<FactoryQuoteItemDto> items, List<FactoryQuoteAttachmentDto> attachments
+        ) {
+            this(id, quoteCode, pricingRequestId, factoryId, factoryName, status, emailTo,
+                emailSubject, emailBody, emailSentAt, sentBy, supplierQuoteRef, defaultCurrency,
+                paymentTerms, leadTimeText, note, negotiationNote, requestedAt, receivedAt,
+                rootFactoryQuoteId, parentFactoryQuoteId, revisionNo, revisionReason, current,
+                createdAt, updatedAt, items, attachments, null, null, null, null);
+        }
+    }
 
     public record FactoryQuoteItemDto(
         long id,
