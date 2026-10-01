@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { hasPermission } from '../../app/permissions.js';
+import { quotedPriceInThb } from './quotedPriceThb.js';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Icon } from '../../components/common/Icon.jsx';
@@ -66,7 +67,7 @@ import {
 import { useUnitBasisCatalog } from './unitBasisCatalog.js';
 import { buttonVariants } from '../../components/common/Button.jsx';
 import { cn } from '../../utils/cn.js';
-import { piecesPerSqmFromSqmPerPiece, PRICE_MODE_OPTIONS } from '../quotations/quotationMeta.js';
+import { PRICE_MODE_OPTIONS } from '../quotations/quotationMeta.js';
 import { SearchableCombobox } from '../../components/common/SearchableCombobox.jsx';
 // B6 (GLA-135): reuses the catalog page's own add-factory dialog rather than a second, drifting
 // copy of the same five fields + validation — see ImportFactoryPicker's own comment below.
@@ -116,14 +117,6 @@ const FACTORY_ROUTING_STATUSES = ['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE
 // anything a legacy (pre-V185) item never carried. ─────────────────────────────────────────────
 function formatOrDash(value, suffix = '') {
   return value == null || value === '' ? '—' : `${value}${suffix}`;
-}
-
-/** แผ่น/ตร.ม. — the RECIPROCAL of the stored sqm_per_piece, same convention the direct-deal
- * quotation editor displays (QuotationItemRow's own piecesPerSqmDisplay). */
-function formatPiecesPerSqm(item) {
-  if (item?.sqmPerPiece == null) return '—';
-  const reciprocal = piecesPerSqmFromSqmPerPiece(item.sqmPerPiece);
-  return reciprocal == null ? '—' : String(reciprocal);
 }
 
 function formatLeadTime(item) {
@@ -254,6 +247,39 @@ function cleanNumber(value) {
 function generateClientRequestId() {
   return crypto.randomUUID?.()
     ?? '00000000-0000-4000-8000-' + String(Date.now()).slice(-12).padStart(12, '0');
+}
+
+const QUOTE_UNIT_SUFFIX = { PER_SQM: '/ตร.ม.', PER_PIECE: '/แผ่น', PER_BOX: '/กล่อง', PER_LINEAR_M: '/เมตร' };
+
+/** Quantities shown with up to 2 decimals, no trailing zeros (7.2, 5, 7.25). */
+function formatQty(value) {
+  return Number(Number(value).toFixed(2)).toLocaleString('en-US');
+}
+
+/**
+ * The typed price expressed in the OTHER unit (per ตร.ม. <-> per แผ่น), so import sees both without
+ * doing the arithmetic. null until a price and the ตร.ม./แผ่น are known, and for any other unit.
+ */
+function equivalentUnitPrice(line, requestItem) {
+  const price = Number(line.rawUnitPrice);
+  const sqmPerPiece = Number(line.sqmPerUnit) > 0 ? Number(line.sqmPerUnit) : Number(requestItem?.sqmPerPiece);
+  if (!(price > 0) || !(sqmPerPiece > 0)) return null;
+  if (line.unitBasis === 'PER_SQM') return { value: Number((price * sqmPerPiece).toFixed(4)), unitLabel: 'แผ่น' };
+  if (line.unitBasis === 'PER_PIECE') return { value: Number((price / sqmPerPiece).toFixed(4)), unitLabel: 'ตร.ม.' };
+  return null;
+}
+
+/**
+ * ราคาพิเศษ บาท/ตร.ม. (รวม VAT) that reproduces the formula price per แผ่น — the INVERSE of
+ * WastageCalculator#netPerPieceFromSpecialSqm (net = round2((special / 1.07) / round2(1 / sqmPerPiece))),
+ * using the same 2dp ตร.ม.->แผ่น reciprocal, so saving it gives back the formula price. 7% = the Thai
+ * document's VAT. null when either input is missing.
+ */
+function specialPriceSqmFromFormula(pricePerPiece, sqmPerPiece) {
+  const price = Number(pricePerPiece);
+  const sqm = Number(sqmPerPiece);
+  if (!(price > 0) || !(sqm > 0)) return null;
+  return round2(price * round2(1 / sqm) * 1.07);
 }
 
 function formatCurrency(value, currency = 'THB') {
@@ -834,10 +860,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const factoryQuery = useQuery({
     queryKey: queryKeys.pricingRequestFactoryQuotes(pricingRequestId),
     queryFn: () => api.pricingRequests.listFactoryQuotes(pricingRequestId).then((r) => r.items ?? []),
-    // Import only (2026-10-01): the factory-quote workspace no longer renders for the CEO, and
-    // nothing else on the page reads this data for that role (the CEO's costing view uses
-    // `costings`, below).
-    enabled: Number.isFinite(pricingRequestId) && isImport(user),
+    // Import and CEO (server: ceo/import). The factory-quote WORKSPACE still renders for Import only
+    // (2026-10-01); the CEO reads this just for Import's quoted price on each item card.
+    enabled: Number.isFinite(pricingRequestId) && canSeeRaw(user),
   });
 
   const costingQuery = useQuery({
@@ -872,7 +897,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const fxRatesQuery = useQuery({
     queryKey: queryKeys.fxRates(),
     queryFn: () => api.fxRates.list().then((r) => r.fxRates ?? []),
-    enabled: Number.isFinite(pricingRequestId) && isImport(user),
+    // The CEO needs the same list for the baht conversion of a line's catalogue price (GET
+    // /api/fx-rates is ceo/import only on the server).
+    enabled: Number.isFinite(pricingRequestId) && canSeeRaw(user),
     staleTime: 5 * 60 * 1000,
   });
 
@@ -1613,6 +1640,16 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const inSendWindow = FACTORY_ROUTING_STATUSES.includes(summary?.status);
   const factoryQuotes = useMemo(() => factoryQuery.data ?? [], [factoryQuery.data]);
   const factoryGroups = useMemo(() => groupFactoryQuotesByFactory(factoryQuotes), [factoryQuotes]);
+  // pricingRequestItemId -> that item's line on the CURRENT factory quote, once Import has priced it.
+  const importQuoteItemByRequestItem = useMemo(() => {
+    const byItem = new Map();
+    factoryGroups.forEach((group) => {
+      (group.current?.items ?? []).forEach((line) => {
+        if (line.rawUnitPrice != null) byItem.set(line.pricingRequestItemId, line);
+      });
+    });
+    return byItem;
+  }, [factoryGroups]);
   // Before any ร่างอีเมล has been generated there are no factory quotes, so the price section used
   // to render a bare "ยังไม่มีราคาโรงงาน" — Import had no idea what they were about to price (owner
   // UX ask 2026-09-24). This groups the request's OWN items by the factory each is routed to, so the
@@ -1986,8 +2023,15 @@ export function PricingRequestDetailPage({ user, showToast }) {
     const effectiveMargin = item.approvedMarginPct ?? item.proposedMarginPct;
     // ── Phase 2 (owner rulings 2026-09-18/19, V187) ─────────────────────────
     if (newForm) {
-      const draft = ceoPriceDrafts[item.id] ?? {};
       const isStockLine = item.stockSource != null;
+      // Owner 2026-10-01: the CEO should not have to work ราคาพิเศษ out by hand. Until one is saved
+      // (or typed), the formula price pre-fills it — as an ordinary draft, so it previews, enables
+      // บันทึกราคา and is what gets saved, and any typed value overrides it.
+      const autoSpecial = decision.priceMode === 'SPECIAL_SQM' && !isStockLine && editable
+        && item.specialPriceSqm == null && decision.currency === 'THB'
+        ? specialPriceSqmFromFormula(item.proposedSellingPricePerRequestedUnit, item.sqmPerPiece)
+        : null;
+      const draft = { ...(autoSpecial != null ? { specialPriceSqm: autoSpecial } : {}), ...(ceoPriceDrafts[item.id] ?? {}) };
       // 2026-10-01 (owner Ploy): under NET the CEO types ราคาตั้ง again. The effective list price
       // mirrors PricingDecisionService (override ?? listUnitPrice); the input starts from it and
       // the in-progress draft wins for the preview.
@@ -2163,6 +2207,14 @@ export function PricingRequestDetailPage({ user, showToast }) {
               <StatusBadge tone="warning">ต้องระบุต้นทุนเอง</StatusBadge>
             ) : null}
           </div>
+          {showCost && item.frozenLandedCostPerRequestedUnitThb != null ? (
+            <span className="text-xs text-text-muted" data-testid={`pcr-ceo-cost-both-${item.id}`}>
+              ต้นทุน (ตามค่าที่ CEO ตั้ง): <code className="font-bold text-text">{formatCurrency(item.frozenLandedCostPerRequestedUnitThb, 'THB')}</code> / แผ่น
+              {item.sqmPerPiece > 0
+                ? <> · <code className="font-bold text-text">{formatCurrency(round2(Number(item.frozenLandedCostPerRequestedUnitThb) / Number(item.sqmPerPiece)), 'THB')}</code> / ตร.ม.</>
+                : null}
+            </span>
+          ) : null}
           {decision.priceMode == null ? (
             <p className="m-0 text-xs text-text-muted">เลือกวิธีกรอกราคากระเบื้องด้านบนก่อน</p>
           ) : (
@@ -2207,6 +2259,12 @@ export function PricingRequestDetailPage({ user, showToast }) {
               {decision.priceMode === 'SPECIAL_SQM' ? (
                 <>
                   {isStockLine ? listPriceField : null}
+                  {!isStockLine && item.proposedSellingPricePerRequestedUnit != null ? (
+                    <span className="text-xs text-text-muted" data-testid={`pcr-ceo-formula-list-${item.id}`}>
+                      ราคาตั้ง/แผ่น (สูตร): <code className="font-bold text-text">{formatCurrency(item.proposedSellingPricePerRequestedUnit, decision.currency)}</code>
+                      {formulaPricePerSqm != null ? ` · ${formatCurrency(formulaPricePerSqm, decision.currency)} / ตร.ม.` : ''}
+                    </span>
+                  ) : null}
                   <FormField
                     label="ราคาพิเศษ บาท/ตร.ม. (รวม VAT)"
                     htmlFor={`pcr-ceo-special-sqm-${item.id}`}
@@ -2793,6 +2851,10 @@ export function PricingRequestDetailPage({ user, showToast }) {
             // after wastage + full-box rounding, boxes, sqm equivalent). Sales/CEO/everyone else
             // keeps the full breakdown. UI scoping only — no backend authz change.
             const showWastageDetail = !isImport(user);
+            // Import's own quoted price (the CURRENT factory quote's line for this item) — not the
+            // catalogue list price. Absent until Import has typed a price.
+            const importQuoteItem = importQuoteItemByRequestItem.get(item.id);
+            const importPriceThb = quotedPriceInThb(importQuoteItem, item, fxRatesQuery.data);
             return (
               <div
                 key={item.id}
@@ -2812,7 +2874,16 @@ export function PricingRequestDetailPage({ user, showToast }) {
                     {`โรงงานที่กำหนด (Import): ${factoryName ?? 'ยังไม่ได้ระบุ'}`}
                   </span>
                   <span>รหัสสินค้า: {productCode ?? '-'}</span>
-                  <span>Base: {item.catalogBasePrice != null ? `${formatCurrency(item.catalogBasePrice, item.catalogCurrency ?? 'THB')} (preliminary)` : '-'}</span>
+                  <span data-testid={`pcr-import-price-${item.id}`}>
+                    ราคาจากฝ่ายนำเข้า: {importQuoteItem?.rawUnitPrice != null
+                      ? `${formatCurrency(importQuoteItem.rawUnitPrice, importQuoteItem.currency ?? 'THB')}${QUOTE_UNIT_SUFFIX[importQuoteItem.unitBasis] ?? ''}`
+                      : 'ยังไม่มี'}
+                  </span>
+                  {importPriceThb ? (
+                    <span className="font-bold text-text" data-testid={`pcr-import-thb-${item.id}`}>
+                      {`≈ ${formatMoney(importPriceThb.perSqm)}/ตร.ม. · ${formatMoney(importPriceThb.perPiece)}/แผ่น · รวม ${formatMoney(importPriceThb.total)} (${formatQty(importPriceThb.pieces)} แผ่น = ${formatQty(importPriceThb.sqm)} ตร.ม.)`}
+                    </span>
+                  ) : null}
                 </div>
                 {/* V185: the sales-entered tile fields, read-only for every viewer — legacy
                     (pre-V185) items show "—" for whichever of these they never carried. */}
@@ -2821,8 +2892,6 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   <span>ผิว: {formatOrDash(item.texture)}</span>
                   <span>ขนาด: {formatOrDash(item.size)}</span>
                   <span>ความหนา: {formatOrDash(item.thicknessMm, ' มม.')}</span>
-                  <span>แผ่น/ตร.ม.: {formatPiecesPerSqm(item)}</span>
-                  <span>แผ่น/กล่อง: {formatOrDash(item.piecesPerBox)}</span>
                   <span>ขายแผ่นไม่เต็มกล่อง: {item.piecesPerBox != null ? (item.roundToFullBox === false ? 'ใช่' : 'ไม่ใช่') : '—'}</span>
                   <span>
                     ประเทศต้นทาง: {formatOrDash(item.originCountry)}
@@ -3337,6 +3406,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
                       // confirmed, so it visibly still differs from ราคาที่เสนอ the instant Import
                       // types a new number, rather than instantly (and wrongly) claiming the unsaved
                       // edit was already approved.
+                      const switchableUnit = ['PER_SQM', 'PER_PIECE'].includes(requested?.requestedPriceUnitBasis);
+                      const equivalentPrice = equivalentUnitPrice(line, requested);
                       const serverItem = current.items?.find((i) => i.pricingRequestItemId === line.pricingRequestItemId);
                       const approvedPrice = current.status === 'READY_FOR_COSTING' ? serverItem?.rawUnitPrice ?? null : null;
                       return (
@@ -3356,6 +3427,23 @@ export function PricingRequestDetailPage({ user, showToast }) {
                             <span className="mb-1 block text-2xs font-bold uppercase text-text-muted md:hidden">ราคาที่เสนอ (แก้ไข)</span>
                             {editable && contacted ? (
                               <div className="flex flex-wrap items-center gap-1.5">
+                                {/* Factories sell on different terms: a line Sales asked per ตร.ม. or per แผ่น can be
+                                    quoted either way (any other requested unit stays locked). */}
+                                {switchableUnit ? (
+                                  <select
+                                    className="w-full md:w-24"
+                                    aria-label={`หน่วยราคา ${itemRef}`}
+                                    value={line.unitBasis}
+                                    onChange={(e) => updateLine(index, {
+                                      unitBasis: e.target.value,
+                                      quotedUnit: unitBasisCatalog.find((option) => option.code === e.target.value)?.label ?? line.quotedUnit,
+                                    })}
+                                  >
+                                    {['PER_SQM', 'PER_PIECE'].map((code) => (
+                                      <option key={code} value={code}>{`/ ${unitBasisCatalog.find((option) => option.code === code)?.label ?? unitBasisLabel(code)}`}</option>
+                                    ))}
+                                  </select>
+                                ) : null}
                                 <input
                                   id={`pcr-quote-price-${current.id}-${line.pricingRequestItemId}`}
                                   className="w-full md:w-28"
@@ -3377,6 +3465,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
                                     value={line.sqmPerUnit ?? ''}
                                     onChange={(e) => updateLine(index, { sqmPerUnit: sanitizeDecimal(e.target.value) })}
                                   />
+                                ) : null}
+                                {equivalentPrice ? (
+                                  <span className="w-full text-xs text-text-muted" data-testid={`pcr-quote-equiv-${current.id}-${line.pricingRequestItemId}`}>
+                                    {`= ${equivalentPrice.value} ${line.currency}/${equivalentPrice.unitLabel}`}
+                                  </span>
                                 ) : null}
                               </div>
                             ) : editable ? (

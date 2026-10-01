@@ -14528,8 +14528,13 @@ export const api = {
           && requestItem.requestedCurrency.toUpperCase() !== String(responseItem.currency ?? '').trim().toUpperCase()) {
           fail(`สกุลเงินต้องเป็น ${requestItem.requestedCurrency} ตามที่ฝ่ายขายระบุ (รายการ ${pricingRequestItemDisplayName(requestItem)})`, 409);
         }
+        // Mirrors FactoryQuoteService#isSqmPieceSwitch: only ตร.ม. <-> แผ่น may differ from the request.
+        const quotedBasis = String(responseItem.unitBasis ?? '').trim().toUpperCase();
+        const sqmPieceSwitch = ['PER_SQM', 'PER_PIECE'].includes(requestItem.requestedPriceUnitBasis)
+          && ['PER_SQM', 'PER_PIECE'].includes(quotedBasis);
         if (requestItem.requestedPriceUnitBasis
-          && requestItem.requestedPriceUnitBasis !== String(responseItem.unitBasis ?? '').trim().toUpperCase()) {
+          && requestItem.requestedPriceUnitBasis !== quotedBasis
+          && !sqmPieceSwitch) {
           fail(`หน่วยราคาต้องเป็น ${requestItem.requestedPriceUnitBasis} ตามที่ฝ่ายขายระบุ (รายการ ${pricingRequestItemDisplayName(requestItem)})`, 409);
         }
       }

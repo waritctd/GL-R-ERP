@@ -217,6 +217,11 @@ public class FactoryQuoteService {
         return requireQuote(quoteId);
     }
 
+    private static boolean isSqmPieceSwitch(String requested, String quoted) {
+        return (UnitBasis.PER_SQM.equals(requested) && UnitBasis.PER_PIECE.equals(quoted))
+            || (UnitBasis.PER_PIECE.equals(requested) && UnitBasis.PER_SQM.equals(quoted));
+    }
+
     @Transactional
     public FactoryQuoteDto updateDraft(long quoteId, UpdateFactoryQuoteDraftRequest request, UserPrincipal actor) {
         requireRole(actor, CONTACT_ROLES);
@@ -716,7 +721,13 @@ public class FactoryQuoteService {
                 throw new ApiException(HttpStatus.CONFLICT, "สกุลเงินต้องเป็น " + requestItem.requestedCurrency()
                     + " ตามที่ฝ่ายขายระบุ (รายการ " + requestItem.displayName() + ")");
             }
-            if (requestItem.requestedPriceUnitBasis() != null && !requestItem.requestedPriceUnitBasis().equals(unitBasis)) {
+            // Owner ruling 2026-10-01: factories sell on different terms, so import may quote a
+            // per-ตร.ม. line per แผ่น (and the reverse). Only that pair switches; any other basis
+            // stays locked to what Sales asked for. Costing normalises the requested quantity onto
+            // the quoted basis (V68), so a switched line still prices correctly.
+            if (requestItem.requestedPriceUnitBasis() != null
+                && !requestItem.requestedPriceUnitBasis().equals(unitBasis)
+                && !isSqmPieceSwitch(requestItem.requestedPriceUnitBasis(), unitBasis)) {
                 throw new ApiException(HttpStatus.CONFLICT, "หน่วยราคาต้องเป็น " + requestItem.requestedPriceUnitBasis()
                     + " ตามที่ฝ่ายขายระบุ (รายการ " + requestItem.displayName() + ")");
             }
