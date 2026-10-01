@@ -644,6 +644,10 @@ const UNREACHABLE_FROM_UI = new Set([
   'PUT /api/payroll/tax-allowances',
   'PUT /api/payroll/ytd-seed',
   'PUT /api/price-import/profile/{}',
+  // GLA-152 (owner ruling 2026-10-01): the CEO product-type select was removed from the pricing
+  // cards; the endpoint stays server-side (TILE default, duty rate) and hrApi keeps the method for
+  // a future admin surface. Backend untouched — "UI unreachable", not "dead".
+  'PUT /api/pricing-decisions/{}/items/{}/product-type-override',
 ]);
 
 describe('controller surface / hrApi.js contract — UI reachability', () => {
