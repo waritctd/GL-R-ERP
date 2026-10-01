@@ -170,6 +170,23 @@ export function DealDocumentRegister({
   });
   const remainingGroups = useMemo(() => groupRemainingInvoices(remainingInvoicesQuery.data ?? []), [remainingInvoicesQuery.data]);
 
+  // CR-1 (R6/R9): the stored ใบขอซื้อ rows — one IR per factory — in a 5th section. Same read gate as
+  // ImportRequestService#requireRead (and DealFulfilmentPanel's canReadStoredIr): import / CEO /
+  // sales_manager, or the OWNING sales rep. Same query key as that panel, so one fetch feeds both.
+  const canViewImportRequests = ['import', 'ceo', 'sales_manager'].includes(user?.role)
+    || (user?.role === 'sales' && summary?.createdById != null && summary.createdById === user?.id);
+  const importRequestsQuery = useQuery({
+    queryKey: queryKeys.storedImportRequests(ticketId),
+    queryFn: () => api.storedImportRequests.listForTicket(ticketId).then((r) => r.importRequests ?? []),
+    enabled: Boolean(ticketId) && canViewImportRequests,
+  });
+  const importRequestRows = useMemo(
+    () => [...(importRequestsQuery.data ?? [])]
+      .filter((r) => r.status !== 'SUPERSEDED')
+      .sort((a, b) => (a.factoryName ?? '').localeCompare(b.factoryName ?? '', 'th') || (a.version ?? 0) - (b.version ?? 0)),
+    [importRequestsQuery.data],
+  );
+
   const chainGroups = useMemo(() => groupChainQuotations(customerQuotationRows), [customerQuotationRows]);
   // Legacy rows that also exist in the chain (same id) render once, as the chain row. Until the
   // chain queries have settled ONCE we cannot tell which those are, so hold the legacy rows back
@@ -235,11 +252,17 @@ export function DealDocumentRegister({
     downloadBlob(blob, v.docNumber || `draft-${v.id}`, 'xlsx');
   }
 
+  async function downloadImportRequest(row) {
+    const key = `ir-${row.id}-pdf`;
+    const blob = await handleDownload(key, () => api.storedImportRequests.download(row.id, undefined));
+    downloadBlob(blob, `IR-${row.docNumber ?? `draft-${row.id}`}-${row.factoryName}`, 'pdf');
+  }
+
   function openRemainingInvoiceDialog() {
     setRemainingInvoiceDialogOpen(true);
   }
 
-  const hasAnyVisibleSection = canViewQuotations || canViewDepositAndInvoice || canViewDocumentsTab;
+  const hasAnyVisibleSection = canViewQuotations || canViewDepositAndInvoice || canViewDocumentsTab || canViewImportRequests;
 
   if (!hasAnyVisibleSection) {
     return (
@@ -322,6 +345,18 @@ export function DealDocumentRegister({
     ],
   });
 
+  const importRequestItem = (r) => ({
+    id: r.id,
+    testId: `document-version-ir-${r.id}`,
+    title: r.docNumber ?? 'ฉบับร่าง',
+    status: r.status === 'ISSUED' ? { label: 'ออกเลขแล้ว', tone: 'success' } : { label: 'ฉบับร่าง', tone: 'neutral' },
+    date: r.issuedAt ?? r.createdAt,
+    // One IR per factory: the factory is what tells two rows apart, so it leads the meta line.
+    meta: r.factoryName,
+    // Every stored row has a renderable PDF (a draft included — sales downloads it on create).
+    actions: [{ label: 'PDF', busy: busyKey === `ir-${r.id}-pdf`, onClick: () => downloadImportRequest(r) }],
+  });
+
   const renderGroups = (groups, toItem) => groups.map((g) => (
     <DocumentGroup key={g.key} items={g.versions.map(toItem)} />
   ));
@@ -385,6 +420,22 @@ export function DealDocumentRegister({
             <Skeleton height={40} />
           ) : (
             <p className="text-xs text-text-muted">ยังไม่มีใบแจ้งหนี้ส่วนที่เหลือสำหรับดีลนี้</p>
+          )}
+        </RegisterSection>
+      ) : null}
+
+      {canViewImportRequests ? (
+        <RegisterSection testId="register-import-requests" title="ใบขอซื้อ (รายโรงงาน)" count={importRequestRows.length} unit="เอกสาร">
+          {importRequestsQuery.isLoading ? (
+            <Skeleton height={40} />
+          ) : importRequestsQuery.isError ? (
+            <p className="text-xs font-bold text-danger">โหลดใบขอซื้อไม่สำเร็จ — ลองรีเฟรชหน้านี้</p>
+          ) : importRequestRows.length === 0 ? (
+            <p className="text-xs text-text-muted">ยังไม่มีใบขอซื้อสำหรับดีลนี้</p>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {importRequestRows.map((r) => <DocumentGroup key={`ir-${r.id}`} items={[importRequestItem(r)]} />)}
+            </div>
           )}
         </RegisterSection>
       ) : null}

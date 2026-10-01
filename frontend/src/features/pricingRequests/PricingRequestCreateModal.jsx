@@ -3,10 +3,33 @@ import { api } from '../../api/index.js';
 import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
-import { RECIPIENT_OPTIONS } from './pricingRequestMeta.js';
+import { RECIPIENT_OPTIONS, UNIT_BASIS_OPTIONS } from './pricingRequestMeta.js';
+import { FormField } from '../../components/common/FormField.jsx';
 import { QuotationItemRow, newItemClientId } from '../quotations/QuotationItemRow.jsx';
 import { QuotationContactPicker } from '../quotations/QuotationContactPicker.jsx';
 import { piecesPerSqmFromSqmPerPiece, validateQuotationItem } from '../quotations/quotationMeta.js';
+
+// CR-1 (GLA-167, R1 / F4): the currency and price unit Sales fixes on each line; import cannot
+// change them afterwards. The currency list is the trade currencies this business quotes in (the
+// same ones the FX table tracks); the unit list is UnitBasis's four codes.
+const REQUEST_CURRENCY_OPTIONS = ['THB', 'EUR', 'USD', 'CNY'];
+
+// price_catalog.price_unit -> UnitBasis. 'unknown' (or anything else) is NOT guessed: the unit stays
+// blank and required, so a wrong basis can never be pre-filled silently.
+const CATALOG_PRICE_UNIT_TO_BASIS = {
+  per_sqm: 'PER_SQM',
+  per_piece: 'PER_PIECE',
+  per_box: 'PER_BOX',
+  per_linear_m: 'PER_LINEAR_M',
+};
+
+/** The fields a catalogue pick auto-fills (sales may still change them before submit). */
+function termsFromCatalog(cat) {
+  return {
+    requestedCurrency: typeof cat?.currency === 'string' ? cat.currency.trim().toUpperCase() : '',
+    requestedPriceUnitBasis: CATALOG_PRICE_UNIT_TO_BASIS[cat?.priceUnit] ?? '',
+  };
+}
 
 // ลักษณะจำนวน / วันที่ต้องการส่งมอบ / สถานที่ส่งมอบ / ข้อกำหนดพิเศษ were removed from this form
 // (owner request, 2026-08-11): Sales does not have that information at คำขอราคา time, so the
@@ -80,6 +103,10 @@ function emptyItemFromTicketItem(ticketItem) {
     catalogSqmPerPiece: null,
     catalogPriceUnit: ticketItem?.catalogPriceUnit ?? null,
     catalogSizeText: null,
+    // CR-1: auto-filled only from a CATALOGUE line (the ticket item already resolved one); a
+    // hand-typed line starts blank and required.
+    requestedCurrency: ticketItem?.catalogPriceId ? termsFromCatalog({ currency: ticketItem.catalogCurrency, priceUnit: ticketItem.catalogPriceUnit }).requestedCurrency : '',
+    requestedPriceUnitBasis: ticketItem?.catalogPriceId ? termsFromCatalog({ currency: ticketItem.catalogCurrency, priceUnit: ticketItem.catalogPriceUnit }).requestedPriceUnitBasis : '',
     sqmPerBox: null,
     quantityMode,
     areaSqm: quantityMode === 'AREA' ? (ticketItem?.qtySqm ?? '') : '',
@@ -212,6 +239,9 @@ function itemFromExisting(item) {
     catalogSqmPerPiece: null,
     catalogPriceUnit: null,
     catalogSizeText: null,
+    // CR-1: what Sales fixed on the persisted line; blank for a legacy line (must be completed).
+    requestedCurrency: item?.requestedCurrency ?? '',
+    requestedPriceUnitBasis: item?.requestedPriceUnitBasis ?? '',
     sqmPerBox: item?.sqmPerBox ?? null,
     quantityMode: quantitySeed.quantityMode,
     areaSqm: quantitySeed.areaSqm,
@@ -309,6 +339,9 @@ function pricingRequestItemInputFromRow(item) {
     originCountryOther: item.originCountryOther?.trim() || null,
     leadTimeMinDays: item.leadTimeMinDays ?? null,
     leadTimeMaxDays: item.leadTimeMaxDays ?? null,
+    // CR-1: the locked terms import will see on the factory card.
+    requestedCurrency: item.requestedCurrency || null,
+    requestedPriceUnitBasis: item.requestedPriceUnitBasis || null,
     quantityType: item.quantityType ?? DEFAULT_QUANTITY_TYPE,
     targetDeliveryDate: item.targetDeliveryDate || null,
     deliveryLocation: item.deliveryLocation?.trim() || null,
@@ -612,6 +645,9 @@ export function PricingRequestCreateModal({
           fieldErrors.areaSqm = 'จำนวนที่คำนวณได้จะเป็น 0 ชิ้น กรุณาระบุพื้นที่ให้มากขึ้น';
         }
       }
+      // CR-1 (R1): currency + price unit are required on every line sales submits.
+      if (!item?.requestedCurrency) fieldErrors.requestedCurrency = 'กรุณาระบุสกุลเงิน';
+      if (!item?.requestedPriceUnitBasis) fieldErrors.requestedPriceUnitBasis = 'กรุณาระบุหน่วยราคา';
       if (Object.keys(fieldErrors).length) next[index] = fieldErrors;
     });
     setItemFieldErrors(next);
@@ -905,6 +941,32 @@ export function PricingRequestCreateModal({
                 onChange={(patch) => updateItem(index, patch)}
                 onRemove={items.length > 1 ? () => removeItem(index) : undefined}
                 onDuplicate={() => duplicateItem(index)}
+                // CR-1: a catalogue pick auto-fills the currency + unit; sales may still change them.
+                onCatalogPicked={(cat) => updateItem(index, termsFromCatalog(cat))}
+                renderTerms={(row, rowIndex) => {
+                  const rowErrors = itemFieldErrors[rowIndex] ?? {};
+                  const currencies = REQUEST_CURRENCY_OPTIONS.includes(row.requestedCurrency) || !row.requestedCurrency
+                    ? REQUEST_CURRENCY_OPTIONS : [row.requestedCurrency, ...REQUEST_CURRENCY_OPTIONS];
+                  return (
+                    <div className="grid grid-cols-[repeat(2,minmax(0,1fr))] gap-3 sm:max-w-md">
+                      <FormField label="สกุลเงิน (ราคาโรงงาน)" htmlFor={`req-currency-${rowIndex}`} error={rowErrors.requestedCurrency}
+                        hint="ฝ่ายนำเข้าเปลี่ยนไม่ได้">
+                        <select id={`req-currency-${rowIndex}`} value={row.requestedCurrency ?? ''}
+                          onChange={(e) => updateItem(rowIndex, { requestedCurrency: e.target.value })}>
+                          <option value="">-- เลือก --</option>
+                          {currencies.map((code) => <option key={code} value={code}>{code}</option>)}
+                        </select>
+                      </FormField>
+                      <FormField label="หน่วยราคา" htmlFor={`req-unit-${rowIndex}`} error={rowErrors.requestedPriceUnitBasis}>
+                        <select id={`req-unit-${rowIndex}`} value={row.requestedPriceUnitBasis ?? ''}
+                          onChange={(e) => updateItem(rowIndex, { requestedPriceUnitBasis: e.target.value })}>
+                          <option value="">-- เลือก --</option>
+                          {UNIT_BASIS_OPTIONS.map((option) => <option key={option.code} value={option.code}>{`ต่อ ${option.label}`}</option>)}
+                        </select>
+                      </FormField>
+                    </div>
+                  );
+                }}
               />
             ))}
           </ul>

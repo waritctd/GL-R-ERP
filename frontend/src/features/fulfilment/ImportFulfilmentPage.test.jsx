@@ -595,3 +595,26 @@ describe('ImportFulfilmentPage (per-factory, stored aggregate)', () => {
     });
   });
 });
+
+// CR-1 (R9): import receives each factory's IR with no hand-off and downloads it from /fulfilment.
+// Characterization of what already exists — pinned here so the CR-1 flow cannot silently lose it.
+describe('ImportFulfilmentPage — import downloads each factory IR PDF (CR-1, R9)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    globalThis.URL.createObjectURL = vi.fn(() => 'blob:ir');
+    globalThis.URL.revokeObjectURL = vi.fn();
+    api.storedImportRequests.download.mockResolvedValue(new Blob(['pdf'], { type: 'application/pdf' }));
+    api.tickets.list.mockResolvedValue({ tickets: [ticket()] });
+    mockRowsByTicket({ 1: [row({ id: 1 }), row({ id: 2, factoryId: 2, factoryName: 'Panaria', docNumber: 'IR26002' })] });
+  });
+
+  it('offers a PDF download per factory row, internal and factory copy', async () => {
+    renderPage();
+    await screen.findByTestId('ir-download-internal-1');
+    fireEvent.click(screen.getByTestId('ir-download-internal-1'));
+    await waitFor(() => expect(api.storedImportRequests.download).toHaveBeenCalledWith(1, undefined));
+    fireEvent.click(screen.getByTestId('ir-download-factory-2'));
+    await waitFor(() => expect(api.storedImportRequests.download).toHaveBeenCalledWith(2, 'factory'));
+  });
+});
+
