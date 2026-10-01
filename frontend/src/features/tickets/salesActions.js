@@ -160,6 +160,10 @@ const LIVE_PR_STATUSES = new Set(['DRAFT', 'CANCELLED', 'SUPERSEDED']);
 // (nothing writes it any more). 'closed' is deliberately absent: verifyClose
 // sets lifecycle=COMPLETED alongside it, and V51 backfilled every historical
 // row, so nextSalesAction's own `lifecycle !== 'ACTIVE'` guard returns first.
+// The ticket statuses OrderConfirmationService.confirmOrder can proceed from (mirror of
+// pricingRequestMeta's BRIDGEABLE_TICKET_STATUSES).
+const BRIDGEABLE_TICKET_STATUSES = new Set(['draft', 'quotation_issued']);
+
 const QUOTED_STATUSES = new Set(['quotation_issued', 'document_issued']);
 
 /**
@@ -246,7 +250,11 @@ export function nextSalesAction(deal, pricingRequests = []) {
 
   // 3. The customer accepted the quotation but the order isn't confirmed yet —
   //    canConfirmOrder's own gate: pr.status === 'QUOTATION_ACCEPTED' && !orderConfirmedAt.
-  if (ownPrs.some((pr) => pr.status === 'QUOTATION_ACCEPTED' && !pr.orderConfirmedAt)) {
+  //    Also gated on the deal's own ticket status being one the order-confirm bridge can advance
+  //    (pricingRequestMeta's confirmOrderBlockedReason / OrderConfirmationService
+  //    .isBridgeableTicketStatus) — otherwise the CTA is a button that can only 409.
+  if (ownPrs.some((pr) => pr.status === 'QUOTATION_ACCEPTED' && !pr.orderConfirmedAt)
+      && (deal.status == null || BRIDGEABLE_TICKET_STATUSES.has(deal.status))) {
     return { key: SALES_ACTION.CONFIRM_ORDER, label: ACTION_LABEL[SALES_ACTION.CONFIRM_ORDER] };
   }
 

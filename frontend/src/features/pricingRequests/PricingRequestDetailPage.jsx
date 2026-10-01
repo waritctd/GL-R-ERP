@@ -32,6 +32,7 @@ import { toUserErrorDescription, toUserErrorMessage } from '../../utils/userMess
 import {
   canActOnPricingDecision,
   canConfirmOrder,
+  confirmOrderBlockedReason,
   canCreateCommercialOnlyRevision,
   canCreateCustomerQuotation,
   canCreateDepositNoticeFromQuotation,
@@ -4130,6 +4131,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   สร้างใบแจ้งยอดเงินรับมัดจำ
                 </Button>
               </div>
+            ) : null}
+            {confirmOrderBlockedReason(summary) ? (
+              <p className="text-sm text-danger" role="alert">{confirmOrderBlockedReason(summary)}</p>
             ) : null}
             {!canConfirmOrder(user, summary) && !canCreateDepositNoticeFromQuotation(user, summary) ? (
               <p className="text-sm text-text-muted">

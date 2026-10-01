@@ -139,6 +139,18 @@ describe('nextSalesAction — full cascade baseline (buckets 1-3, 6-7)', () => {
     expect(nextSalesAction(baseDeal(), prs)).toMatchObject({ key: SALES_ACTION.CONFIRM_ORDER });
   });
 
+  it('CONFIRM_ORDER — NOT offered when the deal ticket is in a status the bridge cannot advance (ticket-status gate)', () => {
+    const prs = [{ id: 1, ticketId: 1, status: 'QUOTATION_ACCEPTED', orderConfirmedAt: null }];
+    for (const status of ['approved', 'price_proposed', 'in_review', 'submitted', 'document_issued']) {
+      expect(nextSalesAction(baseDeal({ status }), prs)?.key).not.toBe(SALES_ACTION.CONFIRM_ORDER);
+    }
+  });
+
+  it('CONFIRM_ORDER — still offered for a quotation_issued ticket (a later accepted revision)', () => {
+    const prs = [{ id: 1, ticketId: 1, status: 'QUOTATION_ACCEPTED', orderConfirmedAt: null }];
+    expect(nextSalesAction(baseDeal({ status: 'quotation_issued' }), prs)).toMatchObject({ key: SALES_ACTION.CONFIRM_ORDER });
+  });
+
   it('FOLLOW_UP — order confirmed, not delivery-ready, follow-up overdue', () => {
     const deal = baseDeal({ status: 'quotation_issued', nextFollowUpAt: '2020-01-01' });
     expect(nextSalesAction(deal, [orderConfirmedPr()])).toMatchObject({ key: SALES_ACTION.FOLLOW_UP, followUp: 'overdue' });

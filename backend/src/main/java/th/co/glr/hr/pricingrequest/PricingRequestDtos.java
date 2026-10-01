@@ -70,7 +70,11 @@ public final class PricingRequestDtos {
         // was already available from the ticket-list query the panel already runs). Appended at
         // the very end, after omitContactHonorific, so every existing positional constructor call
         // keeps compiling unchanged.
-        Long customerId
+        Long customerId,
+        // The deal ticket's own legacy status (sales.ticket.status). The frontend gates
+        // "ยืนยันคำสั่งซื้อ" on it (OrderConfirmationService.isBridgeableTicketStatus) so a deal the
+        // bridge cannot handle never offers a button that can only 409.
+        String ticketStatus
     ) {
         /** The pre-GLA-125 shape — kept so every existing construction site (tests, mostly)
          * compiles unchanged. Defaults every new field to null/false, exactly what a pre-GLA-125
@@ -89,7 +93,7 @@ public final class PricingRequestDtos {
                 requestedByName, assignedImportId, assignedImportName, requiredDate,
                 customerTargetPrice, targetCurrency, note, itemCount, revisionNo,
                 parentPricingRequestId, submittedAt, pickedUpAt, cancelledAt, createdAt, updatedAt,
-                orderConfirmedAt, null, null, null, null, null, null, null, false, null);
+                orderConfirmedAt, null, null, null, null, null, null, null, false, null, null);
         }
 
         /** The pre-customerId (but post-GLA-125-header-terms) shape — the 36-field constructor
@@ -111,7 +115,29 @@ public final class PricingRequestDtos {
                 customerTargetPrice, targetCurrency, note, itemCount, revisionNo,
                 parentPricingRequestId, submittedAt, pickedUpAt, cancelledAt, createdAt, updatedAt,
                 orderConfirmedAt, paymentTermMode, creditDays, validityDays, printedByDisplayId,
-                salesRepDisplayId, deptCode, unitCode, omitContactHonorific, null);
+                salesRepDisplayId, deptCode, unitCode, omitContactHonorific, null, null);
+        }
+
+        /** The pre-ticketStatus (37-field) shape. Defaults ticketStatus to null. */
+        public PricingRequestSummaryDto(
+            long id, String requestCode, long ticketId, String ticketCode, String projectName,
+            String customerName, long ticketCreatedById, String recipientType, Long recipientContactId,
+            String recipientLabel, String status, long requestedById, String requestedByName,
+            Long assignedImportId, String assignedImportName, LocalDate requiredDate,
+            BigDecimal customerTargetPrice, String targetCurrency, String note, int itemCount,
+            int revisionNo, Long parentPricingRequestId, Instant submittedAt, Instant pickedUpAt,
+            Instant cancelledAt, Instant createdAt, Instant updatedAt, Instant orderConfirmedAt,
+            String paymentTermMode, Integer creditDays, Integer validityDays, Long printedByDisplayId,
+            Long salesRepDisplayId, String deptCode, String unitCode, boolean omitContactHonorific,
+            Long customerId
+        ) {
+            this(id, requestCode, ticketId, ticketCode, projectName, customerName, ticketCreatedById,
+                recipientType, recipientContactId, recipientLabel, status, requestedById,
+                requestedByName, assignedImportId, assignedImportName, requiredDate,
+                customerTargetPrice, targetCurrency, note, itemCount, revisionNo,
+                parentPricingRequestId, submittedAt, pickedUpAt, cancelledAt, createdAt, updatedAt,
+                orderConfirmedAt, paymentTermMode, creditDays, validityDays, printedByDisplayId,
+                salesRepDisplayId, deptCode, unitCode, omitContactHonorific, customerId, null);
         }
     }
 

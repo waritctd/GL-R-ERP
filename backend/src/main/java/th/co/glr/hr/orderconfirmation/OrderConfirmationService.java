@@ -150,6 +150,18 @@ public class OrderConfirmationService {
                 "ยืนยันคำสั่งซื้อได้เฉพาะคำขอราคาที่ลูกค้ายอมรับใบเสนอราคาแล้วเท่านั้น (ปัจจุบัน: " + locked.status() + ")");
         }
 
+        // Gate BEFORE the first write: the bridge below can only handle a ticket sitting at
+        // 'draft' (it advances it) or already at 'quotation_issued' (a later accepted revision).
+        // Any other status used to be discovered only AFTER markOrderConfirmed had committed,
+        // stranding the deal half-confirmed. Refuse up front, naming the status.
+        String ticketStatus = requireTicketSummary(locked.ticketId()).status();
+        if (!isBridgeableTicketStatus(ticketStatus)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ไม่สามารถยืนยันคำสั่งซื้อได้ — สถานะดีล (ticket) เป็น '" + ticketStatus
+                    + "' ซึ่งไม่ตรงกับขั้นตอนนี้ (ต้องเป็น '" + TicketStatus.DRAFT + "' หรือ '"
+                    + TicketStatus.QUOTATION_ISSUED + "')");
+        }
+
         int confirmedRows = pricingRequests.markOrderConfirmed(pricingRequestId, actor.id(), clientRequestId);
         if (confirmedRows == 0) {
             // Lost a race against another confirmOrder call that committed between the state
@@ -214,6 +226,12 @@ public class OrderConfirmationService {
             "คำขอราคา " + locked.requestCode() + " ยืนยันคำสั่งซื้อแล้ว");
 
         return new OrderConfirmationResultDto(ticketDto, requirePricingRequest(pricingRequestId));
+    }
+
+    /** The ticket statuses {@link #confirmOrder}'s bridge can proceed from. Public so the DTO
+     * exposed to the frontend (ticketStatus) and the UI gate share one definition. */
+    public static boolean isBridgeableTicketStatus(String ticketStatus) {
+        return TicketStatus.DRAFT.equals(ticketStatus) || TicketStatus.QUOTATION_ISSUED.equals(ticketStatus);
     }
 
     private OrderConfirmationResultDto currentResult(long pricingRequestId, long ticketId, UserPrincipal actor) {

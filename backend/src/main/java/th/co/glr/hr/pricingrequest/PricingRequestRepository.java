@@ -43,7 +43,7 @@ import th.co.glr.hr.pricingrequest.PricingRequestRequests.UpdatePricingRequestRe
 public class PricingRequestRepository {
     private static final String SUMMARY_SELECT = """
         SELECT pr.*, t.code AS ticket_code, t.title AS ticket_title, t.created_by AS ticket_created_by,
-               p.name AS project_name, t.customer_name, t.customer_id,
+               p.name AS project_name, t.customer_name, t.customer_id, t.status AS ticket_status,
                er.first_name_th AS requested_by_first_name_th, er.last_name_th AS requested_by_last_name_th,
                ei.first_name_th AS assigned_import_first_name_th, ei.last_name_th AS assigned_import_last_name_th,
                (SELECT COUNT(*) FROM sales.pricing_request_item i
@@ -1314,7 +1314,8 @@ public class PricingRequestRepository {
             rs.getString("dept_code"),
             rs.getString("unit_code"),
             rs.getBoolean("omit_contact_honorific"),
-            nullableLong(rs, "customer_id")
+            nullableLong(rs, "customer_id"),
+            rs.getString("ticket_status")
         );
     }
 
