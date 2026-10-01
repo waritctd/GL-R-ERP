@@ -688,7 +688,7 @@ class CommissionCalculatorTest {
 
     private static final TeamOverrideConfig WORKBOOK_TEAM_OVERRIDE = new TeamOverrideConfig(
         true, new BigDecimal("3000000.00"), new BigDecimal("0.0750"),
-        List.of(new TeamOverrideRecipient(142L, "มณฑ์ชญา"), new TeamOverrideRecipient(47L, "จินตนา")));
+        List.of(new TeamOverrideRecipient(142L, "recipient-a"), new TeamOverrideRecipient(47L, "recipient-b")));
 
     @Test
     void teamOverride_reproducesAllSevenWorkbookMonthsToTheSatang() {

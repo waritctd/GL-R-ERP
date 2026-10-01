@@ -57,7 +57,7 @@ CREATE TABLE sales.commission_team_override_recipient (
 INSERT INTO sales.commission_team_override_config (effective_from, enabled, threshold_base, rate_percent)
 VALUES ('2026-10-01', TRUE, 3000000.00, 0.0750);
 
--- Today's two recipients: employee 142 (มณฑ์ชญา / อิ๊ด) and 47 (จินตนา / ผึ้ง). Seeded with
+-- Today's two recipients: employee 142 and 47. Seeded with
 -- INSERT ... SELECT so a database without those people (demo / test) still migrates cleanly
 -- instead of failing the foreign key.
 INSERT INTO sales.commission_team_override_recipient (team_override_config_id, employee_id)
