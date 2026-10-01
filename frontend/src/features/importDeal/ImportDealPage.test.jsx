@@ -363,6 +363,20 @@ describe('ImportDealPage', () => {
       expect(legacyButtons()).toHaveLength(0);
     });
 
+    it('IR_ISSUED with only a DRAFT per-factory row: the draft card shows AND the legacy ส่งคำขอนำเข้าแล้ว button works (a draft is not tracking — the backend only refuses once a row is ISSUED)', async () => {
+      api.tickets.markIrSent.mockResolvedValue({});
+      api.importDeals.get.mockResolvedValue({
+        deal: dealFixture({
+          fulfillmentStatus: 'IR_ISSUED',
+          importRequests: [irRow({ id: 14, status: 'DRAFT', importStep: null })],
+        }),
+      });
+      renderPage();
+      await screen.findByTestId('ir-factory-card-14');
+      fireEvent.click(await screen.findByRole('button', { name: 'ส่งคำขอนำเข้าแล้ว' }));
+      await waitFor(() => expect(api.tickets.markIrSent).toHaveBeenCalledWith('1'));
+    });
+
     it('a deal whose only rows are SUPERSEDED is still legacy (no LIVE rows)', async () => {
       api.importDeals.get.mockResolvedValue({
         deal: dealFixture({
