@@ -269,6 +269,19 @@ function equivalentUnitPrice(line, requestItem) {
   return null;
 }
 
+/**
+ * ราคาพิเศษ บาท/ตร.ม. (รวม VAT) that reproduces the formula price per แผ่น — the INVERSE of
+ * WastageCalculator#netPerPieceFromSpecialSqm (net = round2((special / 1.07) / round2(1 / sqmPerPiece))),
+ * using the same 2dp ตร.ม.->แผ่น reciprocal, so saving it gives back the formula price. 7% = the Thai
+ * document's VAT. null when either input is missing.
+ */
+function specialPriceSqmFromFormula(pricePerPiece, sqmPerPiece) {
+  const price = Number(pricePerPiece);
+  const sqm = Number(sqmPerPiece);
+  if (!(price > 0) || !(sqm > 0)) return null;
+  return round2(price * round2(1 / sqm) * 1.07);
+}
+
 function formatCurrency(value, currency = 'THB') {
   if (value == null || value === '') return '-';
   return currency === 'THB' ? formatMoney(value) : `${Number(value).toLocaleString('en-US')} ${currency}`;
@@ -2010,8 +2023,15 @@ export function PricingRequestDetailPage({ user, showToast }) {
     const effectiveMargin = item.approvedMarginPct ?? item.proposedMarginPct;
     // ── Phase 2 (owner rulings 2026-09-18/19, V187) ─────────────────────────
     if (newForm) {
-      const draft = ceoPriceDrafts[item.id] ?? {};
       const isStockLine = item.stockSource != null;
+      // Owner 2026-10-01: the CEO should not have to work ราคาพิเศษ out by hand. Until one is saved
+      // (or typed), the formula price pre-fills it — as an ordinary draft, so it previews, enables
+      // บันทึกราคา and is what gets saved, and any typed value overrides it.
+      const autoSpecial = decision.priceMode === 'SPECIAL_SQM' && !isStockLine && editable
+        && item.specialPriceSqm == null && decision.currency === 'THB'
+        ? specialPriceSqmFromFormula(item.proposedSellingPricePerRequestedUnit, item.sqmPerPiece)
+        : null;
+      const draft = { ...(autoSpecial != null ? { specialPriceSqm: autoSpecial } : {}), ...(ceoPriceDrafts[item.id] ?? {}) };
       // 2026-10-01 (owner Ploy): under NET the CEO types ราคาตั้ง again. The effective list price
       // mirrors PricingDecisionService (override ?? listUnitPrice); the input starts from it and
       // the in-progress draft wins for the preview.
@@ -2187,6 +2207,14 @@ export function PricingRequestDetailPage({ user, showToast }) {
               <StatusBadge tone="warning">ต้องระบุต้นทุนเอง</StatusBadge>
             ) : null}
           </div>
+          {showCost && item.frozenLandedCostPerRequestedUnitThb != null ? (
+            <span className="text-xs text-text-muted" data-testid={`pcr-ceo-cost-both-${item.id}`}>
+              ต้นทุน (ตามค่าที่ CEO ตั้ง): <code className="font-bold text-text">{formatCurrency(item.frozenLandedCostPerRequestedUnitThb, 'THB')}</code> / แผ่น
+              {item.sqmPerPiece > 0
+                ? <> · <code className="font-bold text-text">{formatCurrency(round2(Number(item.frozenLandedCostPerRequestedUnitThb) / Number(item.sqmPerPiece)), 'THB')}</code> / ตร.ม.</>
+                : null}
+            </span>
+          ) : null}
           {decision.priceMode == null ? (
             <p className="m-0 text-xs text-text-muted">เลือกวิธีกรอกราคากระเบื้องด้านบนก่อน</p>
           ) : (
@@ -2231,6 +2259,12 @@ export function PricingRequestDetailPage({ user, showToast }) {
               {decision.priceMode === 'SPECIAL_SQM' ? (
                 <>
                   {isStockLine ? listPriceField : null}
+                  {!isStockLine && item.proposedSellingPricePerRequestedUnit != null ? (
+                    <span className="text-xs text-text-muted" data-testid={`pcr-ceo-formula-list-${item.id}`}>
+                      ราคาตั้ง/แผ่น (สูตร): <code className="font-bold text-text">{formatCurrency(item.proposedSellingPricePerRequestedUnit, decision.currency)}</code>
+                      {formulaPricePerSqm != null ? ` · ${formatCurrency(formulaPricePerSqm, decision.currency)} / ตร.ม.` : ''}
+                    </span>
+                  ) : null}
                   <FormField
                     label="ราคาพิเศษ บาท/ตร.ม. (รวม VAT)"
                     htmlFor={`pcr-ceo-special-sqm-${item.id}`}

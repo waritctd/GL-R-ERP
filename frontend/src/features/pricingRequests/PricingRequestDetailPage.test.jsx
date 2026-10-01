@@ -4483,6 +4483,52 @@ describe('CEO pricing inside รายการสินค้าและรา
     expect(panel.queryByTestId('pcr-ceo-discount-8001')).toBeNull();
   });
 
+  // Owner 2026-10-01: the CEO should not have to work these out. The formula price (CEO config:
+  // cost x (1 + margin) x buffer) pre-fills ราคาพิเศษ, and ต้นทุน reads per แผ่น AND per ตร.ม.
+  describe('auto-calculated prices and ต้นทุน in both units', () => {
+    it('pre-fills ราคาพิเศษ บาท/ตร.ม. (รวม VAT) from the formula price: 72/แผ่น at 0.36 ตร.ม. -> 72 x 2.78 x 1.07 = 214.17, and saves it', async () => {
+      await renderCeo({ priceMode: 'SPECIAL_SQM', items: [newFormItem()] }); // formula 72, sqmPerPiece 0.36
+      const panel = within(getPanel());
+      expect(panel.getByTestId('pcr-ceo-special-sqm-8001').value).toBe('214.17');
+      expect(panel.getByTestId('pcr-ceo-save-price-8001').disabled).toBe(false);
+
+      fireEvent.click(panel.getByTestId('pcr-ceo-save-price-8001'));
+      await waitFor(() => expect(lastSavedItem()).toEqual(expect.objectContaining({ specialPriceSqm: 214.17 })));
+    });
+
+    it('lets the CEO type over the pre-fill, and never replaces a saved ราคาพิเศษ', async () => {
+      await renderCeo({ priceMode: 'SPECIAL_SQM', items: [newFormItem()] });
+      fireEvent.change(within(getPanel()).getByTestId('pcr-ceo-special-sqm-8001'), { target: { value: '1350' } });
+      expect(within(getPanel()).getByTestId('pcr-ceo-special-sqm-8001').value).toBe('1350');
+      cleanup();
+      await renderCeo({ priceMode: 'SPECIAL_SQM', items: [newFormItem({ specialPriceSqm: 1350, netUnitPrice: 453.84 })] });
+      expect(within(getPanel()).getByTestId('pcr-ceo-special-sqm-8001').value).toBe('1350');
+    });
+
+    it('pre-fills nothing without a formula price or without ตร.ม./แผ่น', async () => {
+      await renderCeo({ priceMode: 'SPECIAL_SQM', items: [newFormItem({ proposedSellingPricePerRequestedUnit: null })] });
+      expect(within(getPanel()).getByTestId('pcr-ceo-special-sqm-8001').value).toBe('');
+      expect(within(getPanel()).getByTestId('pcr-ceo-save-price-8001').disabled).toBe(true);
+    });
+
+    it('shows the formula ราคาตั้ง/แผ่น under ราคาพิเศษ too (not only under NET)', async () => {
+      await renderCeo({ priceMode: 'SPECIAL_SQM', items: [newFormItem()] });
+      expect(within(getPanel()).getByTestId('pcr-ceo-formula-list-8001').textContent).toContain('72');
+    });
+
+    it('shows ต้นทุน per แผ่น and per ตร.ม. up front (60 / 0.36 = 166.67), without opening the ต้นทุน section; none for a stock line', async () => {
+      await renderCeo({ priceMode: 'NET', items: [newFormItem({ listUnitPrice: 72, netUnitPrice: 72 })] });
+      const cost = within(getPanel()).getByTestId('pcr-ceo-cost-both-8001').textContent;
+      expect(cost).toContain('60');
+      expect(cost).toContain('/ แผ่น');
+      expect(cost).toContain('166.67');
+      expect(cost).toContain('/ ตร.ม.');
+      cleanup();
+      await renderCeo({ priceMode: 'NET', items: [newFormItem({ stockSource: 'IN_THAILAND', frozenLandedCostPerRequestedUnitThb: null, listUnitPrice: 150, netUnitPrice: 150 })] });
+      expect(within(getPanel()).queryByTestId('pcr-ceo-cost-both-8001')).toBeNull();
+    });
+  });
+
   it('DIRECT_NET mode: only the ราคาสุทธิต่อแผ่น input, inside the panel; no ราคาตั้ง/ส่วนลด', async () => {
     await renderCeo({ priceMode: 'DIRECT_NET', items: [newFormItem({ directNetPrice: 100, netUnitPrice: 100 })] });
     const panel = within(getPanel());
