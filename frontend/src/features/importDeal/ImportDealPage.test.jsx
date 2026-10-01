@@ -386,13 +386,17 @@ describe('ImportDealPage', () => {
       },
     );
 
-    it('shows NO action at IR_ISSUED — markIrSent belongs to /fulfilment, not this page', async () => {
-      api.importDeals.get.mockResolvedValue({ deal: legacyDeal({ fulfillmentStatus: 'IR_ISSUED' }) });
-      renderPage();
-      await screen.findByTestId('import-deal-no-ir');
-      expect(screen.queryByTestId('import-deal-legacy-action')).toBeNull();
-      expect(legacyButtons()).toHaveLength(0);
-    });
+    it.each(['quotation_issued', 'approved'])(
+      'IR_ISSUED (status %s, no per-factory rows): shows ส่งคำขอนำเข้าแล้ว; clicking it calls tickets.markIrSent',
+      async (status) => {
+        api.tickets.markIrSent.mockResolvedValue({});
+        api.importDeals.get.mockResolvedValue({ deal: legacyDeal({ status, fulfillmentStatus: 'IR_ISSUED' }) });
+        const { showToast } = renderPage();
+        fireEvent.click(await screen.findByRole('button', { name: 'ส่งคำขอนำเข้าแล้ว' }));
+        await waitFor(() => expect(api.tickets.markIrSent).toHaveBeenCalledWith('1'));
+        await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', expect.any(String)));
+      },
+    );
 
     it('shows NO action before the quotation is issued (deal not in the fulfilment chain yet)', async () => {
       api.importDeals.get.mockResolvedValue({ deal: legacyDeal({ status: 'pricing', fulfillmentStatus: null }) });

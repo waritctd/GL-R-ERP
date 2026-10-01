@@ -78,9 +78,13 @@ export function nextFulfilmentActionCode(ticket) {
   // ruling 2026-10-01; mirrors TicketService#requireImportRequestIssuable). quotation_issued keeps
   // its prior behaviour; any other status needs the deposit condition itself.
   if (fs == null && (st === 'quotation_issued' || importDepositReady(ticket))) return 'issueImportRequest';
-  if (st === 'quotation_issued' && fs === 'IR_ISSUED') return 'markIrSent';
-  if (st === 'quotation_issued' && fs === 'IR_SENT') return 'markShipping';
-  if (st === 'quotation_issued' && fs === 'SHIPPING') return 'markGoodsReceived';
+  // The three in-flight steps key on fulfillmentStatus ALONE, as the backend does (TicketService
+  // markIrSent/markShipping/markGoodsReceived and their availableActions never read ticket.status).
+  // Once the IR is out the deal must stay advanceable: the redesigned pricing chain does not always
+  // reach quotation_issued, and requiring it hid every button on such a deal.
+  if (fs === 'IR_ISSUED') return 'markIrSent';
+  if (fs === 'IR_SENT') return 'markShipping';
+  if (fs === 'SHIPPING') return 'markGoodsReceived';
   if (DELIVERY_READY_FULFILMENT_STATUSES.includes(fs)) return 'recordDelivery';
   return null;
 }

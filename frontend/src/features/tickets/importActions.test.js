@@ -21,7 +21,19 @@ describe('nextFulfilmentActionCode', () => {
     expect(nextFulfilmentActionCode({ status: 'draft', fulfillmentStatus: null, paymentStatus: 'CUSTOMER_CONFIRMED', depositPolicy: 'REQUIRED' })).toBeNull();
   });
   it('does not re-offer issueImportRequest once a fulfilment status exists, even on a draft ticket', () => {
-    expect(nextFulfilmentActionCode({ status: 'draft', fulfillmentStatus: 'IR_ISSUED', paymentStatus: 'DEPOSIT_PAID' })).toBeNull();
+    expect(nextFulfilmentActionCode({ status: 'draft', fulfillmentStatus: 'IR_ISSUED', paymentStatus: 'DEPOSIT_PAID' })).not.toBe('issueImportRequest');
+  });
+  // The backend's markIrSent/markShipping/markGoodsReceived gate on fulfillmentStatus alone (never
+  // on ticket.status), and the redesigned pricing chain does not always reach quotation_issued — a
+  // deal whose IR is already out must still be advanceable (the buttons used to vanish).
+  it.each([
+    ['IR_ISSUED', 'markIrSent'],
+    ['IR_SENT', 'markShipping'],
+    ['SHIPPING', 'markGoodsReceived'],
+  ])('offers the %s step (%s) whatever the ticket status — the IR is already out', (fulfillmentStatus, code) => {
+    for (const status of ['draft', 'approved', 'quotation_issued', 'document_issued']) {
+      expect(nextFulfilmentActionCode({ status, fulfillmentStatus })).toBe(code);
+    }
   });
   it('walks the linear fulfilment chain in order', () => {
     expect(nextFulfilmentActionCode({ status: 'quotation_issued', fulfillmentStatus: null })).toBe('issueImportRequest');
