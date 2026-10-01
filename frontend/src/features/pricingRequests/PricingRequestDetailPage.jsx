@@ -224,7 +224,9 @@ function defaultResponseItems(quote, requestItemById = new Map()) {
     rawUnitPrice: item.rawUnitPrice ?? '',
     currency: requestItem.requestedCurrency ?? item.currency ?? quote.defaultCurrency ?? requestItem.catalogCurrency ?? 'THB',
     minimumOrderQuantity: item.minimumOrderQuantity ?? '',
-    sqmPerUnit: item.sqmPerUnit ?? '',
+    // Falls back to the request item's own ตร.ม./แผ่น (required on every item since V185) so import
+    // is not asked for a figure the system already holds; a value saved on the quote still wins.
+    sqmPerUnit: item.sqmPerUnit ?? requestItem.sqmPerPiece ?? '',
     piecesPerBox: item.piecesPerBox ?? '',
     leadTimeText: item.leadTimeText ?? '',
     availabilityNote: item.availabilityNote ?? '',
@@ -236,6 +238,13 @@ function defaultResponseItems(quote, requestItemById = new Map()) {
 // Mandatory reason the backend demands whenever an item's sellingPriceOverride is set or cleared
 // (PricingDecisionService#applyItemUpdates) — the CEO-typed ราคาตั้ง has no separate note field.
 const CEO_LIST_PRICE_NOTE = 'CEO กรอกราคาตั้งเอง';
+
+// Price boxes are plain text inputs (no number spinner / scroll-to-change). Keep digits and a
+// single decimal point only, so Number() on submit can never see junk; commas are dropped.
+function sanitizeDecimal(raw) {
+  const [whole, ...rest] = String(raw).replace(/[^\d.]/g, '').split('.');
+  return rest.length ? `${whole}.${rest.join('')}` : whole;
+}
 
 function cleanNumber(value) {
   if (value === '' || value == null) return null;
@@ -3350,27 +3359,23 @@ export function PricingRequestDetailPage({ user, showToast }) {
                                 <input
                                   id={`pcr-quote-price-${current.id}-${line.pricingRequestItemId}`}
                                   className="w-full md:w-28"
-                                  type="number"
-                                  min="0"
-                                  step="0.0001"
+                                  type="text"
                                   inputMode="decimal"
                                   placeholder={`ราคา/${unitBasisCatalog.find((option) => option.code === line.unitBasis)?.label ?? line.quotedUnit ?? ''}`}
                                   aria-label={`ราคาที่เสนอ ${itemRef}`}
                                   value={line.rawUnitPrice ?? ''}
-                                  onChange={(e) => updateLine(index, { rawUnitPrice: e.target.value })}
+                                  onChange={(e) => updateLine(index, { rawUnitPrice: sanitizeDecimal(e.target.value) })}
                                 />
-                                {line.unitBasis === 'PER_SQM' ? (
+                                {line.unitBasis === 'PER_SQM' && !(Number(requested?.sqmPerPiece) > 0) ? (
                                   <input
                                     id={`pcr-quote-sqm-${current.id}-${line.pricingRequestItemId}`}
                                     className="w-full md:w-24"
-                                    type="number"
-                                    min="0.000001"
-                                    step="0.000001"
+                                    type="text"
                                     inputMode="decimal"
                                     placeholder="ตร.ม./หน่วย"
                                     aria-label={`ตร.ม./หน่วย ${itemRef}`}
                                     value={line.sqmPerUnit ?? ''}
-                                    onChange={(e) => updateLine(index, { sqmPerUnit: e.target.value })}
+                                    onChange={(e) => updateLine(index, { sqmPerUnit: sanitizeDecimal(e.target.value) })}
                                   />
                                 ) : null}
                               </div>
