@@ -531,13 +531,36 @@ export function hasDealStageLabel(stage) {
   return Object.prototype.hasOwnProperty.call(DEAL_STAGE_LABELS, stage);
 }
 
-// S3 is not a designer stage: it means "the party who specifies has agreed the spec". Only the
-// WORDING follows the deal's entry channel. Designer-led, UNSPECIFIED, unknown and absent channels
-// all keep the DEAL_STAGE_LABELS wording above. Wording only — which stages a route visits is the
-// backend's (DealRoute), served as `onRoute` on the stage decisions.
-const SPEC_APPROVED_LABEL_BY_CHANNEL = {
-  OWNER_DIRECT: 'เจ้าของตกลงตามสเปคแล้ว',
-  BUYER_DIRECT: 'ผู้ซื้อ/ผู้รับเหมาตกลงตามสเปคแล้ว',
+/**
+ * Stages whose WORDING follows the deal's entry channel — `stage -> channel -> label`.
+ *
+ * Two stages qualify, and both for the same reason: their default label in `DEAL_STAGE_LABELS`
+ * hedges with a slash because one string had to serve every route. Now that the channel is known,
+ * the hedge can be resolved to the party the deal actually involves.
+ *   S1 LEAD_APPROACH — "เข้าถึงเจ้าของ/ผู้ออกแบบโครงการ" (owner ruling 2026-10-01)
+ *   S3 SPEC_APPROVED — not a designer stage; it means "the party who specifies has agreed the spec"
+ *
+ * A channel not listed here — DESIGNER_LED, UNSPECIFIED, unknown, absent — keeps the
+ * DEAL_STAGE_LABELS wording. For UNSPECIFIED that is the point: no channel was entered, so there is
+ * no party to name and the hedged label is the honest one.
+ *
+ * ⚠️ NOT every slash is a route hedge, and the others are deliberately left alone:
+ * S7 "รอผลประมูล / รอผู้ซื้อ" joins two different SITUATIONS, and S18
+ * "นัดส่งสินค้า / นัดรับเงินส่วนที่เหลือ" joins two ACTIVITIES. Neither varies by channel, so neither
+ * belongs here. A test pins that they stay identical across channels.
+ *
+ * Wording only. WHICH stages a route visits is the backend's (`DealRoute`), served as `onRoute`.
+ */
+const STAGE_LABEL_BY_CHANNEL = {
+  LEAD_APPROACH: {
+    DESIGNER_LED: 'เข้าถึงผู้ออกแบบโครงการ',
+    OWNER_DIRECT: 'เข้าถึงเจ้าของโครงการ',
+    BUYER_DIRECT: 'เข้าถึงผู้ซื้อ/ผู้รับเหมา',
+  },
+  SPEC_APPROVED: {
+    OWNER_DIRECT: 'เจ้าของตกลงตามสเปคแล้ว',
+    BUYER_DIRECT: 'ผู้ซื้อ/ผู้รับเหมาตกลงตามสเปคแล้ว',
+  },
 };
 
 /**
@@ -551,9 +574,10 @@ export function dealStageLabel(stage, entryChannel) {
   // deal. It is deliberately ugly, and the guard above is what makes sure nobody has to rely on
   // seeing it — assertStageLabelsComplete has already thrown in dev/test by this point.
   const base = DEAL_STAGE_LABELS[stage] ?? { label: stage || '-', tone: 'neutral' };
-  if (stage === 'SPEC_APPROVED'
-    && Object.prototype.hasOwnProperty.call(SPEC_APPROVED_LABEL_BY_CHANNEL, entryChannel)) {
-    return { ...base, label: SPEC_APPROVED_LABEL_BY_CHANNEL[entryChannel] };
+  const byChannel = STAGE_LABEL_BY_CHANNEL[stage];
+  if (byChannel && Object.prototype.hasOwnProperty.call(byChannel, entryChannel)) {
+    // Only the label varies; tone stays the base's, so a stage's colour never depends on the route.
+    return { ...base, label: byChannel[entryChannel] };
   }
   return base;
 }

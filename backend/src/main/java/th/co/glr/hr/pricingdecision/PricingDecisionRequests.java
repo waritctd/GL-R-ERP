@@ -101,14 +101,20 @@ public final class PricingDecisionRequests {
      * IMPOSSIBLE to actually clear a value the CEO had typed and then blanked back out (a blanked
      * NET discount, sent as {@code discountPct: null}, silently kept the OLD discount instead of
      * resetting toward 0). Set and clear are mutually exclusive per field, validated in
-     * {@link PricingDecisionService#applyItemUpdates}. */
+     * {@link PricingDecisionService#applyItemUpdates}.
+     *
+     * <p><b>Wire tolerance:</b> the four {@code clear*} flags are {@code Boolean}, not
+     * {@code boolean}, and an absent flag means {@code false}. Jackson 3 (Spring Boot 4) rejects a
+     * body that leaves a primitive creator property absent, so clients that omit the flags — the
+     * CEO's "ปรับราคาเอง" save sends only the override fields — got a bare 400. The compact
+     * constructor normalises null to false, so accessors never return null. */
     public record UpdatePricingDecisionItemRequest(
         long pricingDecisionItemId, BigDecimal marginPct,
         BigDecimal minimumSellingPrice, String decisionNote,
-        BigDecimal sellingPriceOverride, boolean clearSellingPriceOverride,
-        BigDecimal discountPct, boolean clearDiscountPct,
-        BigDecimal specialPriceSqm, boolean clearSpecialPriceSqm,
-        BigDecimal directNetPrice, boolean clearDirectNetPrice,
+        BigDecimal sellingPriceOverride, Boolean clearSellingPriceOverride,
+        BigDecimal discountPct, Boolean clearDiscountPct,
+        BigDecimal specialPriceSqm, Boolean clearSpecialPriceSqm,
+        BigDecimal directNetPrice, Boolean clearDirectNetPrice,
         // Slice 1 of the stock-line feature (V194): the CEO's ราคาตั้ง for a STOCK line (IN_THAILAND /
         // IN_TRANSIT). Stock lines have no cost and therefore no formula price, so the CEO types it;
         // it becomes the item's list_unit_price and the decision's single price mode then applies
@@ -120,6 +126,15 @@ public final class PricingDecisionRequests {
         // costed lines - see the owner correction of 2026-09-19 above).
         // TEST-FIRST SCAFFOLDING: the field exists so the tests compile; nothing reads it yet.
         BigDecimal listUnitPrice) {
+        /** Absent (null) {@code clear*} flags normalise to {@code false}, so every accessor is
+         * non-null and the service's {@code ||}/{@code &&} call sites unbox safely. */
+        public UpdatePricingDecisionItemRequest {
+            clearSellingPriceOverride = Boolean.TRUE.equals(clearSellingPriceOverride);
+            clearDiscountPct = Boolean.TRUE.equals(clearDiscountPct);
+            clearSpecialPriceSqm = Boolean.TRUE.equals(clearSpecialPriceSqm);
+            clearDirectNetPrice = Boolean.TRUE.equals(clearDirectNetPrice);
+        }
+
         /** The pre-stock-line shape - the 12-field constructor that existed before listUnitPrice
          * was appended. Defaults it to null (leave untouched). */
         public UpdatePricingDecisionItemRequest(
