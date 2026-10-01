@@ -193,7 +193,7 @@ public class CommissionCalculator {
     }
 
     /**
-     * Manager TEAM OVERRIDE (V196): {@code (companyBase - thresholdBase) x ratePercent / 100},
+     * Manager TEAM OVERRIDE (V199): {@code (companyBase - thresholdBase) x ratePercent / 100},
      * HALF_UP to 2dp, where {@code companyBase} is the company-wide, UNWEIGHTED ex-VAT receipts
      * ({@link #monthlyTierBase} of {@link CommissionRepository#sumCompanyActualReceived}) at full
      * precision -- rounded once, at the final figure, like every other limb here. Mirrors the

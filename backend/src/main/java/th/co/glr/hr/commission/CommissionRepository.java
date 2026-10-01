@@ -322,7 +322,7 @@ public class CommissionRepository {
     }
 
     /**
-     * Manager TEAM OVERRIDE (V196): the generation active for {@code payrollMonth} -- the latest
+     * Manager TEAM OVERRIDE (V199): the generation active for {@code payrollMonth} -- the latest
      * {@code effective_from} &le; the month, the same generation-selection rule as {@link
      * #findIncentiveTiers} / {@link #findStockBonusConfig}. A generation that exists but is
      * {@code enabled = FALSE} IS returned (with its {@code enabled} flag) -- the caller decides
@@ -366,7 +366,7 @@ public class CommissionRepository {
     }
 
     /**
-     * Manager TEAM OVERRIDE (V196): the COMPANY-WIDE, UNWEIGHTED sum of {@code actual_received}
+     * Manager TEAM OVERRIDE (V199): the COMPANY-WIDE, UNWEIGHTED sum of {@code actual_received}
      * for the month -- SALE and CLAWBACK records only (manual kinds carry {@code actual_received =
      * 0} but are excluded by kind anyway, so a future non-zero manual row could never leak in).
      * Unweighted on purpose: the workbook's base is real cash, the x2/x3 uplift is not included.

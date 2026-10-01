@@ -13,7 +13,7 @@ import java.util.List;
  * from the same {@link CommissionCalculator}/{@link CommissionRepository} the real payroll run
  * uses — never re-derived client-side.
  *
- * <p>STOCK_BONUS and the manager TEAM OVERRIDE (V196) are included; the former "KNOWN GAP" for
+ * <p>STOCK_BONUS and the manager TEAM OVERRIDE (V199) are included; the former "KNOWN GAP" for
  * STOCK_BONUS is closed. The last seven components are the "how was my commission built" detail.
  *
  * @param commissionableBase the 2dp display value of the full-precision monthly tier base
@@ -51,7 +51,7 @@ public record CommissionMonthlySummaryDto(
     BigDecimal totalCommission,
     boolean belowFloor,
     List<CommissionTierRowDto> tiers,
-    // Team override + full-detail additions (V196).
+    // Team override + full-detail additions (V199).
     BigDecimal rawCommissionableBase,
     BigDecimal weightUpliftBase,
     BigDecimal stockBonusAmount,

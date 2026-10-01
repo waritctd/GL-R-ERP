@@ -28,7 +28,7 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketRepository;
 
 /**
- * Manager TEAM OVERRIDE (V196) -- real-DB coverage, through the REAL {@link CommissionService} and
+ * Manager TEAM OVERRIDE (V199) -- real-DB coverage, through the REAL {@link CommissionService} and
  * {@link CommissionRepository} (never Mockito): the override's base is a company-wide {@code SUM}
  * whose status filter, kind filter and weighting are all SQL, and a mocked repository would happily
  * "pass" while the SQL summed the wrong rows. The override pays real money to two named people and
@@ -36,7 +36,7 @@ import th.co.glr.hr.ticket.TicketRepository;
  * figure (an unapproved receipt, a weight, a manual kind) and who must NOT see the company base (a
  * non-recipient rep).
  *
- * <p>Independent of the V196 seed: every case inserts its OWN config generation at a month
+ * <p>Independent of the V199 seed: every case inserts its OWN config generation at a month
  * {@code >= 2027-01-01} with its OWN freshly-created employees, so it never depends on employees
  * 142/47 existing.
  *
@@ -56,7 +56,7 @@ class CommissionTeamOverrideIntegrationTest extends AbstractPostgresIntegrationT
     private static final LocalDate MARCH_2027 = LocalDate.of(2027, 3, 1);
     private static final LocalDate APRIL_2027 = LocalDate.of(2027, 4, 1);
     private static final LocalDate MAY_2027 = LocalDate.of(2027, 5, 1);
-    // Before V196's own 2026-10-01 generation: no generation applies at all.
+    // Before V199's own 2026-10-01 generation: no generation applies at all.
     private static final LocalDate SEPTEMBER_2026 = LocalDate.of(2026, 9, 1);
     private static final LocalDate INVOICE_DATE = LocalDate.of(2027, 2, 10);
 
@@ -293,7 +293,7 @@ class CommissionTeamOverrideIntegrationTest extends AbstractPostgresIntegrationT
     void noConfigGenerationForTheMonth_noOverrideForAnyone() {
         wireService();
         // Sep 2026 is before every generation, so no generation applies at all. Feb 2027 IS covered
-        // by the V196 seed generation (effective 2026-10-01), but that generation has ZERO
+        // by the V199 seed generation (effective 2026-10-01), but that generation has ZERO
         // recipients in this DB (employees 142/47 do not exist here), so it pays nobody. The
         // generation inserted below starts 2027-03-01 and applies to neither month.
         insertConfig(MARCH_2027, true, "3000000.00", "0.0750", recipient1, recipient2);
