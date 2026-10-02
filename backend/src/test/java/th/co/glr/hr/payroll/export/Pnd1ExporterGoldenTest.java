@@ -65,6 +65,7 @@ class Pnd1ExporterGoldenTest {
         byte[] bytes = exporter.export(rows, employer, LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 26));
         String[] lines = new String(bytes, Cp874.CHARSET).split("\r\n", -1);
 
+        assertThat(lines).as("one line per employee plus the trailing empty element").hasSizeGreaterThanOrEqualTo(2);
         String[] a = lines[0].split("\\|", -1);
         assertThat(a).hasSize(21);
         assertThat(a[1]).isEqualTo("00001");            // sequence

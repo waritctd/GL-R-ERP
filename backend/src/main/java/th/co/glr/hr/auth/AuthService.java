@@ -15,7 +15,7 @@ import th.co.glr.hr.common.ApiException;
 @Service
 public class AuthService {
     private static final Logger log = LoggerFactory.getLogger(AuthService.class);
-    private static final String INVALID_CREDENTIALS = "อีเมลหรือรหัสผ่านไม่ถูกต้อง";
+    private static final String INVALID_LOGIN_MESSAGE = "อีเมลหรือรหัสผ่านไม่ถูกต้อง";
 
     private final EmployeeAuthRepository employees;
     private final PasswordEncoder passwordEncoder;
@@ -37,7 +37,7 @@ public class AuthService {
             throw new ApiException(HttpStatus.FORBIDDEN, "Role login is disabled");
         }
         if (!hasText(safeRequest.email()) || !hasText(safeRequest.password())) {
-            throw new ApiException(HttpStatus.UNAUTHORIZED, INVALID_CREDENTIALS);
+            throw new ApiException(HttpStatus.UNAUTHORIZED, INVALID_LOGIN_MESSAGE);
         }
         // No .trim() here any more: LoginRequest's constructor already trimmed and lowercased, and
         // it cannot be bypassed — a record's canonical constructor runs however the instance is
@@ -46,9 +46,9 @@ public class AuthService {
         // trim that mattered looked like it lived here when it did not. Removing it is also what
         // gives LoginEmailNormalizationIntegrationTest's whitespace case something to prove.
         EmployeeLoginRecord employee = employees.findByEmail(safeRequest.email())
-            .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, INVALID_CREDENTIALS));
+            .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, INVALID_LOGIN_MESSAGE));
         if (!employee.active() || !passwordMatches(safeRequest.password(), employee)) {
-            throw new ApiException(HttpStatus.UNAUTHORIZED, INVALID_CREDENTIALS);
+            throw new ApiException(HttpStatus.UNAUTHORIZED, INVALID_LOGIN_MESSAGE);
         }
 
         UserPrincipal principal = toPrincipal(employee);

@@ -72,7 +72,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv or sys.argv[1:])
     zone = ZoneInfo(args.timezone)
     cutoff = datetime.now(zone) - timedelta(days=args.days)
@@ -104,7 +104,7 @@ def main(argv: list[str] | None = None) -> int:
           f"skipped {len(punches) - len(kept)} older than the window.")
     if not kept:
         print("Nothing to export.")
-        return 0
+        return
 
     files: list[str] = []
     for start in range(0, len(kept), args.chunk):
@@ -125,7 +125,6 @@ def main(argv: list[str] | None = None) -> int:
     print("\nNext: import each file (HR login required), e.g.:")
     for path in files:
         print(f'  py -3-32 import_dat.py "{path}" --api-base-url {args.api_base_url}')
-    return 0
 
 
 if __name__ == "__main__":

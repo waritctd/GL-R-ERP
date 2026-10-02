@@ -2444,7 +2444,7 @@ public class QuotationRenderer {
         double heightMm;
         double leftMm;
         int textBudget = REMARK_LINE_CHAR_BUDGET;
-        if (picture.beside()) {
+        if (picture.isBeside()) {
             double maxHeightMm = (BESIDE_ROWS * rowHeightPt - 2 * PICTURE_PAD_PT) / POINTS_PER_INCH * MM_PER_INCH;
             double maxWidthMm = columnMm * BESIDE_MAX_WIDTH_FRACTION;
             heightMm = maxHeightMm;
@@ -2467,7 +2467,7 @@ public class QuotationRenderer {
             }
             leftMm = PICTURE_INSET_MM;
         }
-        return new PicturePlan(picture, picture.beside(), leftMm / columnMm, widthMm / columnMm,
+        return new PicturePlan(picture, picture.isBeside(), leftMm / columnMm, widthMm / columnMm,
             heightMm / MM_PER_INCH * POINTS_PER_INCH, textBudget);
     }
 

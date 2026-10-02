@@ -109,7 +109,7 @@ describe('AttendanceCorrectionPanel — CEO review affordance', () => {
     renderPanel(ceoUser);
     await expandSection();
 
-    await screen.findByText('ยังไม่มีคำขอแก้ไขเวลา');
+    expect(await screen.findByText('ยังไม่มีคำขอแก้ไขเวลา')).not.toBeNull();
   });
 
   it('shows approve/reject for a SUBMITTED request and approves on confirm', async () => {

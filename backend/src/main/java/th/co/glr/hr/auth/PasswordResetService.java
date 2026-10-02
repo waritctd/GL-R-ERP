@@ -56,7 +56,7 @@ public class PasswordResetService {
 
     private static final String GENERIC_SENT_MESSAGE =
         "หากอีเมลนี้มีอยู่ในระบบ เราได้ส่งลิงก์สำหรับตั้งรหัสผ่านใหม่ไปให้แล้ว กรุณาตรวจสอบกล่องอีเมลของคุณ";
-    private static final String INVALID_OR_EXPIRED_TOKEN =
+    private static final String INVALID_OR_EXPIRED_LINK_MESSAGE =
         "ลิงก์สำหรับตั้งรหัสผ่านใหม่ไม่ถูกต้องหรือหมดอายุแล้ว กรุณาขอลิงก์ใหม่อีกครั้ง";
     private static final String RESET_SUCCESS_MESSAGE = "ตั้งรหัสผ่านใหม่เรียบร้อยแล้ว กรุณาเข้าสู่ระบบด้วยรหัสผ่านใหม่ของคุณ";
 
@@ -158,13 +158,13 @@ public class PasswordResetService {
     public MessageResponse resetPassword(ResetPasswordRequest request) {
         String tokenHash = PasswordResetTokenCodec.hash(request.token());
         PasswordResetTokenRepository.OpenToken openToken = tokens.findValidByTokenHash(tokenHash)
-            .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, INVALID_OR_EXPIRED_TOKEN));
+            .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, INVALID_OR_EXPIRED_LINK_MESSAGE));
 
         // Re-look-up rather than trust the token row alone: an employee deactivated after the
         // token was issued must not be able to set a new password with it.
         EmployeeLoginRecord employee = employees.findByEmployeeId(openToken.employeeId())
             .filter(EmployeeLoginRecord::active)
-            .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, INVALID_OR_EXPIRED_TOKEN));
+            .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, INVALID_OR_EXPIRED_LINK_MESSAGE));
 
         // Same rule AuthService#changePassword applies, shared rather than duplicated - see that
         // method's sibling call. The "must not equal the CURRENT password" rule does not carry
@@ -179,7 +179,7 @@ public class PasswordResetService {
         // concurrent caller gets the SAME rejection a normal invalid/expired token gets, and never
         // reaches passwordEncoder.encode/updatePassword below.
         if (!tokens.markUsedIfUnused(openToken.id())) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, INVALID_OR_EXPIRED_TOKEN);
+            throw new ApiException(HttpStatus.BAD_REQUEST, INVALID_OR_EXPIRED_LINK_MESSAGE);
         }
 
         employees.updatePassword(employee.employeeId(), passwordEncoder.encode(request.newPassword()));
