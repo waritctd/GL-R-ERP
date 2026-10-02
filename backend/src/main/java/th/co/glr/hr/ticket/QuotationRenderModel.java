@@ -194,7 +194,7 @@ public record QuotationRenderModel(
         public static final String BESIDE = "BESIDE";
 
         /** Anything that is not BESIDE is BELOW — the owner's default placement. */
-        public boolean beside() {
+        public boolean isBeside() {
             return BESIDE.equalsIgnoreCase(placement);
         }
     }
