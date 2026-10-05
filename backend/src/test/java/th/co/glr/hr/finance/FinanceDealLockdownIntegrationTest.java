@@ -2,6 +2,7 @@ package th.co.glr.hr.finance;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 
@@ -118,7 +119,7 @@ class FinanceDealLockdownIntegrationTest extends FinanceDealTestBase {
     }
 
     @Test
-    void ceoIsRefusedTheAccountOnlyFinanceActions_asTodayButMayCommentRevokeAndStage() throws Exception {
+    void ceoIsRefusedTheAccountOnlyFinanceActions_asTodayButMayCommentAndRevoke() throws Exception {
         long id = createS15Deal("DEPOSIT_NOTICE_ISSUED");
 
         for (String name : List.of("deposit-paid", "final-payment", "payments", "close/confirm")) {
@@ -223,8 +224,20 @@ class FinanceDealLockdownIntegrationTest extends FinanceDealTestBase {
         assertThat(closeConfirmed(id)).isFalse();
     }
 
+    /**
+     * M4 (owner rules of 2026-10-05): from ขั้น 10 the stage is system-only for EVERY role, ฝ่ายบัญชี through the
+     * finance stage route included — so that route no longer moves a money stage by hand. This was
+     * {@code stage_accountMovesAMoneyStage_andCannotMoveANonMoneyStage}: its second half asserted a 200 and
+     * the deal on {@code DEPOSIT_RECEIVED}. The first half (a non-money stage is a 403, nothing moves) is
+     * unchanged and green.
+     *
+     * <p>Whether the route is deleted or kept and refusing is the developer's choice, so only "status >= 400,
+     * the deal did not move, no STAGE_CHANGED event" is pinned — never which status. The fixture is one today's
+     * code ACCEPTS (payment DEPOSIT_PAID, stage stamped ORDER_RECEIVED, a follow-up date and an activity
+     * present), so the second half is red today because the move succeeded.
+     */
     @Test
-    void stage_accountMovesAMoneyStage_andCannotMoveANonMoneyStage() throws Exception {
+    void stage_accountIsRefusedEveryHandMove_evenOntoAMoneyStage() throws Exception {
         long id = createS15Deal("DEPOSIT_PAID");
         jdbc.update("UPDATE sales.ticket SET sales_stage = 'ORDER_RECEIVED', next_follow_up_at = CURRENT_DATE + 3 WHERE ticket_id = :id",
             new MapSqlParameterSource("id", id));
@@ -236,11 +249,16 @@ class FinanceDealLockdownIntegrationTest extends FinanceDealTestBase {
             "{\"stage\":\"NEGOTIATION\",\"note\":\"x\"}")), 403);
         assertThat(salesStageOf(id)).isEqualTo(DealStage.ORDER_RECEIVED);
 
-        JsonNode deal = okDeal(financeMvc.perform(routeNamed("stage").request(id, accountUser)));
+        // M4: a money stage is refused too.
+        int stageChangedBefore = stageChangedCount(id);
+        int status = financeMvc.perform(routeNamed("stage").request(id, accountUser)).andReturn().getResponse().getStatus();
 
-        assertThat(salesStageOf(id)).isEqualTo(DealStage.DEPOSIT_RECEIVED);
-        assertThat(deal.get("salesStage").asText()).isEqualTo(DealStage.DEPOSIT_RECEIVED);
-        assertFinanceShape(deal, id);
+        assertAll(
+            () -> assertThat(status).as("POST /api/finance/deals/{id}/stage onto DEPOSIT_RECEIVED, as account")
+                .isGreaterThanOrEqualTo(400),
+            () -> assertThat(salesStageOf(id)).as("the deal must not have moved").isEqualTo(DealStage.ORDER_RECEIVED),
+            () -> assertThat(stageChangedCount(id)).as("no STAGE_CHANGED event may be written")
+                .isEqualTo(stageChangedBefore));
     }
 
     @Test
@@ -381,6 +399,11 @@ class FinanceDealLockdownIntegrationTest extends FinanceDealTestBase {
 
     private int commentCount(long ticketId) {
         return jdbc.queryForObject("SELECT COUNT(*) FROM sales.ticket_event WHERE ticket_id = :id AND kind = 'COMMENTED'",
+            new MapSqlParameterSource("id", ticketId), Integer.class);
+    }
+
+    private int stageChangedCount(long ticketId) {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM sales.ticket_event WHERE ticket_id = :id AND kind = 'STAGE_CHANGED'",
             new MapSqlParameterSource("id", ticketId), Integer.class);
     }
 

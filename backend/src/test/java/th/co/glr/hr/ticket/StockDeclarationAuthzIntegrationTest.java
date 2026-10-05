@@ -271,6 +271,11 @@ class StockDeclarationAuthzIntegrationTest extends AbstractPostgresIntegrationTe
      * floor (see {@code TicketService.stockCoverageStageReached} and
      * {@code StageFactGateIntegrationTest}); the ROUTING above the floor is deliberately unchanged,
      * which is what this test still pins.
+     *
+     * <p>Routing to {@code DELIVERY_SCHEDULING} needs the deposit to be ready (C4 of the owner rules of
+     * 2026-10-05: a stock declaration holds the stage until ฝ่ายบัญชี has confirmed the deposit; pinned in
+     * {@code StockDeclarationDepositHoldIntegrationTest}), so both deals are made deposit-ready here to keep
+     * this test about the routing being the same whoever declares.
      */
     @Test
     void fullCoverage_routesIdenticallyWhicheverRoleDeclares() {
@@ -278,6 +283,8 @@ class StockDeclarationAuthzIntegrationTest extends AbstractPostgresIntegrationTe
         long ceoDeclared = createTicketWithOneItem();
         assertThat(salesStage(ownerDeclared)).isEqualTo(DealStage.ORDER_RECEIVED);
         assertThat(salesStage(ceoDeclared)).isEqualTo(DealStage.ORDER_RECEIVED);
+        tickets.updatePaymentStatusUnchecked(ownerDeclared, PaymentTrack.DEPOSIT_PAID);
+        tickets.updatePaymentStatusUnchecked(ceoDeclared, PaymentTrack.DEPOSIT_PAID);
 
         ticketService.reserveStock(ownerDeclared, declare(onlyItemId(ownerDeclared), "100.00"), owner);
         ticketService.reserveStock(ceoDeclared, declare(onlyItemId(ceoDeclared), "100.00"), ceoUser);

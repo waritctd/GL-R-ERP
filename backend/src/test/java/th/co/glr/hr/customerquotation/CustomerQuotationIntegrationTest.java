@@ -2,6 +2,7 @@ package th.co.glr.hr.customerquotation;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
@@ -69,6 +70,9 @@ import th.co.glr.hr.pricingrequest.QuantityType;
 import th.co.glr.hr.pricingrequest.UnitBasis;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.CreateTicketRequest;
+import th.co.glr.hr.ticket.DealRoute;
+import th.co.glr.hr.ticket.DealStage;
+import th.co.glr.hr.ticket.EntryChannel;
 import th.co.glr.hr.ticket.QuotationRenderer;
 import th.co.glr.hr.ticket.QuotationStatus;
 import th.co.glr.hr.ticket.TicketDto;
@@ -199,6 +203,9 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void acceptanceScenario_draftDiscountPreviewIssue() {
         long pricingRequestId = approvedPricingRequest();
+        // Owner rule of 2026-10-05 (M2): the deal moves when the quotation DOCUMENT is created — not when
+        // the price request is created or approved. So up to here no quotation stage has been reached.
+        assertThat(salesStageOfDeal()).isNotIn("QUOTE_DESIGN_SIDE", "QUOTE_OWNER", "QUOTE_BUYER");
 
         // Sales creates Quotation Draft 1.
         CustomerQuotationDto draft = quotationService.create(pricingRequestId,
@@ -214,12 +221,14 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             assertThat(item.finalUnitPrice()).isEqualByComparingTo(item.approvedUnitPrice());
         }
 
-        // Draft creation must NOT move the deal stage or the pricing request status (rule 6).
-        assertThat(jdbc.queryForObject(
-            "SELECT sales_stage FROM sales.ticket WHERE ticket_id = :id", Map.of("id", ticketId), String.class))
-            .isNotIn("QUOTE_DESIGN_SIDE", "QUOTE_BUYER");
+        // Draft creation still does NOT move the pricing request status (that is the issue's job)...
         assertThat(pricingRequestService.get(pricingRequestId, salesActor).summary().status())
             .isEqualTo(PricingRequestStatus.APPROVED_FOR_QUOTATION);
+        // ...but it DOES move the deal (owner rule of 2026-10-05, M2: the stage follows the creation of the
+        // quotation document, not only its issue). This quotation is addressed to the DESIGNER, so ขั้น 4.
+        // This used to assert that creating the draft must NOT move the stage (rule 6).
+        assertThat(salesStageOfDeal()).as("deal stage once the quotation document is created")
+            .isEqualTo("QUOTE_DESIGN_SIDE");
 
         // Sales applies a permitted discount to item 1.
         CustomerQuotationItemDto item1 = draft.items().get(0);
@@ -258,9 +267,8 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(issued.docStatus()).isEqualTo(QuotationStatus.ISSUED);
         assertThat(pricingRequestService.get(pricingRequestId, salesActor).summary().status())
             .isEqualTo(PricingRequestStatus.QUOTATION_ISSUED);
-        assertThat(jdbc.queryForObject(
-            "SELECT sales_stage FROM sales.ticket WHERE ticket_id = :id", Map.of("id", ticketId), String.class))
-            .isIn("QUOTE_DESIGN_SIDE", "QUOTE_BUYER");
+        // Issuing the quotation leaves the deal where creating it already put it (forward-only, no move back).
+        assertThat(salesStageOfDeal()).isEqualTo("QUOTE_DESIGN_SIDE");
 
         // Exactly one issue event and one notification.
         assertThat(jdbc.queryForObject("""
@@ -281,6 +289,49 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(jdbc.queryForObject("""
             SELECT COUNT(*) FROM sales.ticket_event WHERE ticket_id = :id AND kind = 'QUOTATION_ISSUED'
             """, Map.of("id", ticketId), Long.class)).isEqualTo(1L);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // M3 — a quotation for a party that is not on the deal's route corrects the route
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Owner rules of 2026-10-05 (M3), for the PRICING-REQUEST quotation path ({@code
+     * CustomerQuotationService#create}): a quotation for a party that is NOT on the deal's route corrects
+     * the route, so that afterwards that party's stage is on the route and the deal is on it. This is the
+     * twin of {@code DealQuotationRecipientIntegrationTest#create_forAPartyOffTheDealsRoute_correctsTheRoute_andTheDealIsOnThatStage},
+     * which pins it for a direct quotation: each creation path has its own hook, so each needs its own
+     * case. Which channel the deal ends up with is deliberately not pinned — only {@code
+     * DealRoute.isOnRoute(newChannel, stage)} and the stage.
+     *
+     * <p>The fixture: the deal is OWNER_DIRECT (its route has no ขั้น 4 — "no designer to quote") BEFORE the
+     * quotation exists, and the pricing request is addressed to the DESIGNER (every helper in this class
+     * builds one). The channel is set the way a real deal gets it — its owner states it through {@code
+     * TicketService#setEntryChannel}, which asks for no reason while the channel is still UNSPECIFIED — and
+     * not stamped with SQL. Red today: creating the quotation moves nothing, and the move at issue is
+     * skipped silently when the stage is off the route.
+     */
+    @Test
+    void create_forADesignerOnAnOwnerDirectDeal_correctsTheRoute_andTheDealIsOnQuoteDesignSide() {
+        ticketService.setEntryChannel(ticketId, EntryChannel.OWNER_DIRECT, null, salesActor);
+        String channelBefore = entryChannelOfDeal();
+        assertThat(DealRoute.isOnRoute(channelBefore, DealStage.QUOTE_DESIGN_SIDE))
+            .as("fixture: %s is OFF the %s route", DealStage.QUOTE_DESIGN_SIDE, channelBefore).isFalse();
+        long pricingRequestId = approvedPricingRequest();
+        assertThat(salesStageOfDeal()).as("fixture: no quotation document exists yet")
+            .isNotEqualTo(DealStage.QUOTE_DESIGN_SIDE);
+
+        quotationService.create(pricingRequestId,
+            new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
+
+        String channelAfter = entryChannelOfDeal();
+        assertAll(
+            () -> assertThat(DealRoute.isOnRoute(channelAfter, DealStage.QUOTE_DESIGN_SIDE))
+                .as("%s must be on the route of the deal's channel after the quotation (channel now %s)",
+                    DealStage.QUOTE_DESIGN_SIDE, channelAfter).isTrue(),
+            () -> assertThat(salesStageOfDeal())
+                .as("the deal's stage once a DESIGNER quotation document is created")
+                .isEqualTo(DealStage.QUOTE_DESIGN_SIDE));
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -661,6 +712,16 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     private void setStage(String stage) {
         jdbc.update("UPDATE sales.ticket SET sales_stage = :s WHERE ticket_id = :t",
             Map.of("s", stage, "t", ticketId));
+    }
+
+    private String salesStageOfDeal() {
+        return jdbc.queryForObject(
+            "SELECT sales_stage FROM sales.ticket WHERE ticket_id = :id", Map.of("id", ticketId), String.class);
+    }
+
+    private String entryChannelOfDeal() {
+        return jdbc.queryForObject(
+            "SELECT entry_channel FROM sales.ticket WHERE ticket_id = :id", Map.of("id", ticketId), String.class);
     }
 
     @Test

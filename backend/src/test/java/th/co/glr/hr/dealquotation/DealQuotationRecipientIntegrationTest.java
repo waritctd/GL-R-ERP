@@ -1,13 +1,18 @@
 package th.co.glr.hr.dealquotation;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertAll;
 
 import java.util.Arrays;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.http.HttpStatus;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto;
+import th.co.glr.hr.ticket.DealRoute;
 import th.co.glr.hr.ticket.DealStage;
 import th.co.glr.hr.ticket.QuotationStatus;
 import th.co.glr.hr.ticket.TicketEventKind;
@@ -23,9 +28,16 @@ import th.co.glr.hr.ticket.TicketSummaryDto;
  * {@code recipient_label}; on update omitted/null keeps the stored value, a value on a non-DRAFT row
  * is 409, a value on a PRICING_REQUEST-origin row is 409, an invalid value is 400.
  *
- * <p><b>The handover pin:</b> neither create nor update moves {@code sales_stage} or writes a
- * {@code STAGE_CHANGED} event — the recipient → stage rule is owned by the entry-channel/stage-route
- * work ({@code .design/deal-route-staging} §5 Flow 10), so this slice must not also own it.
+ * <p><b>The recipient → stage rule (owner rules of 2026-10-05, M2 and M3).</b> This used to be "the
+ * handover pin": neither create nor update moved {@code sales_stage}, because the rule was owned by
+ * the entry-channel/stage-route work ({@code .design/deal-route-staging} §5 Flow 10) and the hook in
+ * {@code DealQuotationService#create} was deliberately empty. It is now confirmed: creating a direct
+ * quotation moves the deal to the stage of its recipient (DESIGNER → ขั้น 4, OWNER → ขั้น 5, BUYER →
+ * ขั้น 8), forward only, with one {@code STAGE_CHANGED} event; and a quotation for a party that is not
+ * on the deal's route CORRECTS the route, so that afterwards that stage is on the route and the deal
+ * is on it (which channel it becomes is deliberately not pinned). Re-addressing an existing draft
+ * ({@code update}) is not stated by the owner's rules and keeps moving nothing — asserted relative to
+ * the state after the create.
  *
  * <p>Written wrong-way-round: every refusal asserts nothing was written.
  */
@@ -82,20 +94,82 @@ class DealQuotationRecipientIntegrationTest extends AbstractDealQuotationSlice2I
         assertThat(quotationCount(ticket)).isZero();
     }
 
-    /** The handover pin: a BUYER quotation on a LEAD_APPROACH deal would be S8 under the rule this
-     * slice does NOT own — the stage must not move, and no STAGE_CHANGED may be written. */
-    @Test
-    void create_doesNotMoveTheStage_andWritesNoStageChangedEvent() {
-        long ticket = deal(salesActor, "BUYER_DIRECT");
-        TicketSummaryDto before = summary(ticket);
-        assertThat(before.salesStage()).isEqualTo(DealStage.LEAD_APPROACH);
+    /**
+     * M2 — what the handover pin became. Creating a direct quotation for a recipient moves the deal
+     * to that recipient's stage: DESIGNER → ขั้น 4, OWNER → ขั้น 5, BUYER → ขั้น 8, each on a deal
+     * whose route contains it (so the route is not what is under test) and which starts at
+     * LEAD_APPROACH, with one {@code STAGE_CHANGED} event written and the entry channel left alone.
+     * The old test asserted the opposite for the BUYER case ("the hook is deliberately empty").
+     */
+    @ParameterizedTest(name = "[{index}] a {1} quotation on a {0} deal puts it on {2}")
+    @CsvSource({
+        "DESIGNER_LED, DESIGNER, QUOTE_DESIGN_SIDE",
+        "OWNER_DIRECT, OWNER, QUOTE_OWNER",
+        "BUYER_DIRECT, BUYER, QUOTE_BUYER"})
+    void create_movesTheDealToTheStageOfItsRecipient_andWritesOneStageChangedEvent(
+            String channel, String recipient, String expectedStage) {
+        long ticket = deal(salesActor, channel);
+        assertThat(summary(ticket).salesStage()).isEqualTo(DealStage.LEAD_APPROACH);
+        assertThat(DealRoute.isOnRoute(channel, expectedStage))
+            .as("fixture: %s is on the %s route", expectedStage, channel).isTrue();
+        assertThat(eventCount(ticket, TicketEventKind.STAGE_CHANGED)).isZero();
 
-        quotationService.create(ticket, draft("BUYER"), salesActor);
+        quotationService.create(ticket, draft(recipient), salesActor);
 
         TicketSummaryDto after = summary(ticket);
-        assertThat(after.salesStage()).isEqualTo(DealStage.LEAD_APPROACH);
-        assertThat(after.stageUpdatedAt()).isEqualTo(before.stageUpdatedAt());
+        assertAll(
+            () -> assertThat(after.salesStage())
+                .as("the deal's stage once a %s quotation document is created", recipient)
+                .isEqualTo(expectedStage),
+            () -> assertThat(eventCount(ticket, TicketEventKind.STAGE_CHANGED))
+                .as("STAGE_CHANGED events once the quotation is created").isEqualTo(1),
+            () -> assertThat(after.entryChannel())
+                .as("an on-route quotation corrects nothing").isEqualTo(channel));
+    }
+
+    /**
+     * M2, "forward only": a deal already PAST the recipient's stage does not move back when a quotation
+     * for that recipient is created, and no {@code STAGE_CHANGED} is written. (Holds before the rule
+     * exists too — it is the guard the new move must respect, so it is a green mirror, not a red test.)
+     */
+    @ParameterizedTest(name = "[{index}] a {0} quotation on a deal already at NEGOTIATION")
+    @ValueSource(strings = {"DESIGNER", "OWNER", "BUYER"})
+    void create_forADealAlreadyPastTheRecipientsStage_doesNotMoveItBack(String recipient) {
+        long ticket = deal(salesActor, "DESIGNER_LED");
+        tickets.updateSalesStage(ticket, DealStage.NEGOTIATION);
+
+        quotationService.create(ticket, draft(recipient), salesActor);
+
+        assertThat(summary(ticket).salesStage()).isEqualTo(DealStage.NEGOTIATION);
         assertThat(eventCount(ticket, TicketEventKind.STAGE_CHANGED)).isZero();
+    }
+
+    /**
+     * M3 — a quotation for a party that is NOT on the deal's route corrects the route: afterwards the
+     * recipient's stage is on the deal's route and the deal is on it. Which channel the deal ends up
+     * with is deliberately not pinned, only {@code DealRoute.isOnRoute(newChannel, stage)}. The fixture
+     * premise (the stage really is off the route to begin with) is asserted first.
+     */
+    @ParameterizedTest(name = "[{index}] a {1} quotation on a {0} deal")
+    @CsvSource({
+        "OWNER_DIRECT, DESIGNER, QUOTE_DESIGN_SIDE",
+        "BUYER_DIRECT, DESIGNER, QUOTE_DESIGN_SIDE",
+        "BUYER_DIRECT, OWNER, QUOTE_OWNER"})
+    void create_forAPartyOffTheDealsRoute_correctsTheRoute_andTheDealIsOnThatStage(
+            String channel, String recipient, String stage) {
+        long ticket = deal(salesActor, channel);
+        assertThat(DealRoute.isOnRoute(channel, stage))
+            .as("fixture: %s is OFF the %s route", stage, channel).isFalse();
+
+        quotationService.create(ticket, draft(recipient), salesActor);
+
+        TicketSummaryDto after = summary(ticket);
+        assertAll(
+            () -> assertThat(DealRoute.isOnRoute(after.entryChannel(), stage))
+                .as("%s must be on the route of the deal's channel after the quotation (channel now %s)",
+                    stage, after.entryChannel()).isTrue(),
+            () -> assertThat(after.salesStage())
+                .as("the deal's stage once a %s quotation document is created", recipient).isEqualTo(stage));
     }
 
     /** A revision or reorder copies every header field verbatim — the recipient included. Before
@@ -120,11 +194,18 @@ class DealQuotationRecipientIntegrationTest extends AbstractDealQuotationSlice2I
 
     // ── update ───────────────────────────────────────────────────────────────────────────────────
 
+    /**
+     * Re-addressing an existing draft is not part of the owner's rule (the move happens when the
+     * quotation DOCUMENT is created), so {@code update} still moves nothing: the stage and the
+     * {@code STAGE_CHANGED} count are read AFTER the create — which now moves the deal to ขั้น 4 and
+     * writes one event — and must be identical after the update.
+     */
     @Test
     void update_onADraft_changesTheRecipient_andStillMovesNoStage() {
         long ticket = deal(salesActor, "DESIGNER_LED");
         DealQuotationDto created = quotationService.create(ticket, draft("DESIGNER"), salesActor);
         TicketSummaryDto before = summary(ticket);
+        int stageEventsBefore = eventCount(ticket, TicketEventKind.STAGE_CHANGED);
 
         DealQuotationDto updated = quotationService.update(created.id(), draft("BUYER"), salesActor);
 
@@ -134,7 +215,7 @@ class DealQuotationRecipientIntegrationTest extends AbstractDealQuotationSlice2I
         TicketSummaryDto after = summary(ticket);
         assertThat(after.salesStage()).isEqualTo(before.salesStage());
         assertThat(after.stageUpdatedAt()).isEqualTo(before.stageUpdatedAt());
-        assertThat(eventCount(ticket, TicketEventKind.STAGE_CHANGED)).isZero();
+        assertThat(eventCount(ticket, TicketEventKind.STAGE_CHANGED)).isEqualTo(stageEventsBefore);
     }
 
     @Test

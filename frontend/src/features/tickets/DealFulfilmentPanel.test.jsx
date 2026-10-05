@@ -488,3 +488,125 @@ describe('DealFulfilmentPanel — สร้างใบ IR downloads every creat
     });
   });
 });
+
+// D2 (owner rules 2026-10-05, C5): nothing is DELIVERED until the deposit is CONFIRMED.
+// On a DEPOSIT deal (the accepted quotation asks more than 0%) whose deposit is not confirmed, the server stops offering
+// RECORD_PARTIAL_DELIVERY / COMPLETE_DELIVERY (TicketService#canRecordDelivery) — and today the panel
+// then shows NO button and NO reason, so a rep with the goods on the shelf cannot tell why. The minimum
+// pinned here is a blocked state that names the DEPOSIT. It must be about the deposit and nothing
+// else: a deal that is simply not delivery-ready yet (no source) shows no such notice.
+//
+// The test id `deal-fulfilment-delivery-blocked` is the contract these tests PROPOSE — the dev may
+// rename it together with the tests.
+describe('DealFulfilmentPanel — delivery waits for the deposit (D2)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const DELIVERY_ACTIONS = [
+    { action: 'RECORD_PARTIAL_DELIVERY', kind: 'fulfillment', label: 'บันทึกการส่งสินค้า' },
+    { action: 'COMPLETE_DELIVERY', kind: 'fulfillment', label: 'ส่งมอบครบ' },
+  ];
+  // Goods on the shelf: every unit declared from stock, nothing delivered yet.
+  const STOCK_LINE = { id: 501, brand: 'SCG', model: 'Tile', qty: 10, qtyDelivered: 0, qtyFromStock: 10 };
+
+  // A deal owned by OWNER, FROM_STOCK, with a deposit awaited (today's summary field: depositPolicy 'REQUIRED') unless overridden.
+  function dealSummary(over = {}) {
+    return {
+      createdById: OWNER.id, status: 'quotation_issued', fulfillmentStatus: 'FROM_STOCK',
+      paymentStatus: 'DEPOSIT_NOTICE_ISSUED', depositPolicy: 'REQUIRED', salesStage: 'DELIVERY_SCHEDULING',
+      ...over,
+    };
+  }
+
+  // Same shape as renderPanel above, which pins summary/items/availableActions to an empty deal —
+  // these tests need all three to describe a deal at a particular payment state. The viewer defaults
+  // to the owning rep; the CEO — a delivery writer too — is passed explicitly.
+  function renderDeliveryPanel({
+    summary: dealSummaryProp, items = [STOCK_LINE], availableActions = [], user = OWNER,
+  }) {
+    api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: [] });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <DealFulfilmentPanel user={user} ticketId={1} summary={dealSummaryProp} items={items}
+          availableActions={availableActions} showToast={vi.fn()} />
+      </QueryClientProvider>,
+    );
+  }
+
+  // RED today: the server's answer carries no delivery action, and the panel says nothing about why.
+  // Rows are (paymentStatus, salesStage). The first two sit at DELIVERY_SCHEDULING — what a declaration's
+  // early jump produces today; the third is the same held deal as it sits once D3 stops that jump, at
+  // ORDER_RECEIVED. The notice is about the DEPOSIT, so it must not be keyed on the stage.
+  it.each([
+    ['DEPOSIT_NOTICE_ISSUED', 'DELIVERY_SCHEDULING'],
+    ['CUSTOMER_CONFIRMED', 'DELIVERY_SCHEDULING'],
+    ['DEPOSIT_NOTICE_ISSUED', 'ORDER_RECEIVED'],
+  ])(
+    'shows a blocked notice about the deposit, and no delivery button, on a deposit deal at %s (stage %s)',
+    async (paymentStatus, salesStage) => {
+      renderDeliveryPanel({ summary: dealSummary({ paymentStatus, salesStage }) });
+      await screen.findByTestId('deal-fulfilment-panel');
+
+      // The buttons stay absent — the server does not offer the actions (this half already holds).
+      expect(screen.queryByTestId('deal-fulfilment-record-delivery')).toBeNull();
+      expect(screen.queryByTestId('deal-fulfilment-complete')).toBeNull();
+      // ...and the panel says WHY, naming the deposit (this is the half that is missing).
+      const blocked = await screen.findByTestId('deal-fulfilment-delivery-blocked');
+      expect(blocked.textContent).toContain('มัดจำ');
+    },
+  );
+
+  // RED today, for the same reason as the owner's two: the CEO is a delivery writer too
+  // (TicketService#canWriteDelivery — the CEO, or the owning rep), and is NOT the owner of this deal,
+  // so the CEO is just as stuck with no button and no reason. Other viewers who cannot deliver
+  // (sales_manager, ...) are deliberately NOT pinned here: whether they see the notice is the dev's call.
+  it('shows the same blocked notice, and no delivery button, to the CEO on a deposit deal at DEPOSIT_NOTICE_ISSUED', async () => {
+    renderDeliveryPanel({ user: CEO, summary: dealSummary({ paymentStatus: 'DEPOSIT_NOTICE_ISSUED' }) });
+    await screen.findByTestId('deal-fulfilment-panel');
+
+    expect(screen.queryByTestId('deal-fulfilment-record-delivery')).toBeNull();
+    expect(screen.queryByTestId('deal-fulfilment-complete')).toBeNull();
+    const blocked = await screen.findByTestId('deal-fulfilment-delivery-blocked');
+    expect(blocked.textContent).toContain('มัดจำ');
+  });
+
+  // GREEN guards — the notice must not appear where the deposit is not what is in the way.
+  it('deposit received (DEPOSIT_PAID) with both actions advertised: both buttons, no blocked notice', async () => {
+    renderDeliveryPanel({
+      summary: dealSummary({ paymentStatus: 'DEPOSIT_PAID' }), availableActions: DELIVERY_ACTIONS,
+    });
+
+    expect(await screen.findByTestId('deal-fulfilment-record-delivery')).not.toBeNull();
+    expect(screen.getByTestId('deal-fulfilment-complete')).not.toBeNull();
+    expect(screen.queryByTestId('deal-fulfilment-delivery-blocked')).toBeNull();
+  });
+
+  // A 0% quotation deal: no deposit step at all, so the confirmed order alone opens delivery (C1/C5) and the
+  // server offers both actions. The panel follows the server's offered actions; the summary still carries the
+  // field it has today for a deal with no deposit to wait for (depositPolicy 'WAIVED') — no new summary field
+  // is invented for the quotation's percentage.
+  it('a 0% quotation deal (no deposit step, CUSTOMER_CONFIRMED) with the actions advertised: buttons, no blocked notice', async () => {
+    renderDeliveryPanel({
+      summary: dealSummary({ depositPolicy: 'WAIVED', paymentStatus: 'CUSTOMER_CONFIRMED' }),
+      availableActions: DELIVERY_ACTIONS,
+    });
+
+    expect(await screen.findByTestId('deal-fulfilment-record-delivery')).not.toBeNull();
+    expect(screen.getByTestId('deal-fulfilment-complete')).not.toBeNull();
+    expect(screen.queryByTestId('deal-fulfilment-delivery-blocked')).toBeNull();
+  });
+
+  it('a deal that is simply not delivery-ready yet (IR_ISSUED, deposit received, no delivery actions): no blocked notice', async () => {
+    // The import is still on its way, so there is nothing to deliver and no delivery action — but the
+    // deposit is in, so it is not what is in the way and the panel must not claim it is.
+    renderDeliveryPanel({
+      summary: dealSummary({ fulfillmentStatus: 'IR_ISSUED', paymentStatus: 'DEPOSIT_PAID', salesStage: 'PROCUREMENT' }),
+      items: [{ ...STOCK_LINE, qtyFromStock: 0 }],
+    });
+    await screen.findByTestId('deal-fulfilment-panel');
+
+    expect(screen.queryByTestId('deal-fulfilment-record-delivery')).toBeNull();
+    expect(screen.queryByTestId('deal-fulfilment-complete')).toBeNull();
+    expect(screen.queryByTestId('deal-fulfilment-delivery-blocked')).toBeNull();
+  });
+});

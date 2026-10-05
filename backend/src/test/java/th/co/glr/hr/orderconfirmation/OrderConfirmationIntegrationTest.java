@@ -1,6 +1,7 @@
 package th.co.glr.hr.orderconfirmation;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -79,7 +80,6 @@ import th.co.glr.hr.pricingrequest.UnitBasis;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.CreateTicketRequest;
 import th.co.glr.hr.ticket.DealStage;
-import th.co.glr.hr.ticket.DepositPolicy;
 import th.co.glr.hr.ticket.FulfilmentStatus;
 import th.co.glr.hr.ticket.QuotationRenderer;
 import th.co.glr.hr.ticket.QuotationStatus;
@@ -572,31 +572,40 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // The CEO-credit-terms bypass path — reaches order-confirmed without a deposit notice.
+    // A 0% deal (owner rules of 2026-10-05, C1) — reaches order-confirmed without a deposit notice.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     /**
-     * Traces {@code TicketService.issueImportRequest}'s {@code depositPolicyBypassesNotice} logic
-     * for a real credit-terms deal: bypasses the deposit notice entirely and, because {@code
-     * issueImportRequest} advances straight to {@code DealStage.PROCUREMENT} (the whole import
-     * journey lives inside that one stage — see {@code DealStage}'s own Javadoc), the deal SKIPS
-     * {@code DealStage.DEPOSIT_RECEIVED} rather than landing on it. paymentStatus stays
-     * CUSTOMER_CONFIRMED throughout (no payment was ever recorded), and no deposit_notice row is
-     * ever created for this ticket — this is the actual bypass shape the DealStage/paymentStatus/
-     * DepositPolicy machinery already models, reported here as found rather than assumed.
+     * A deal whose ACCEPTED quotation asks 0% has no deposit step at all (C1: the accepted quotation decides —
+     * there is no waiver and no deal-level switch). Its import request issues right after the order is
+     * confirmed (C3) and, because {@code issueImportRequest} advances straight to {@code
+     * DealStage.PROCUREMENT} (the whole import journey lives inside that one stage — see {@code DealStage}'s own
+     * Javadoc), the deal SKIPS {@code DealStage.DEPOSIT_RECEIVED} rather than landing on it. paymentStatus stays
+     * CUSTOMER_CONFIRMED throughout (no payment was ever recorded), and no deposit_notice row is ever created
+     * for this ticket.
+     *
+     * <p>This was {@code ceoCreditTermsBypass_reachesOrderConfirmed_withoutADepositNotice}, which reached the
+     * same journey through {@code waiveDeposit(CREDIT_CUSTOMER)} and asserted the policy had been written. The
+     * journey is what this test is about; the way the deal became a no-deposit deal is now the fixture rule: 0%
+     * stamped on the real accepted quotation row BEFORE {@code confirmOrder}, never a waiver.
      */
     @Test
-    void ceoCreditTermsBypass_reachesOrderConfirmed_withoutADepositNotice() {
+    void zeroPercentDeal_reachesProcurement_withoutADepositNotice() {
         long pricingRequestId = driveToQuotationAccepted();
+        // C1: no deposit step — a 0% accepted quotation, stamped before the order is confirmed.
+        int stamped = jdbc.update(
+            "UPDATE sales.quotation SET deposit_percent = :p WHERE ticket_id = :t AND doc_status = 'ACCEPTED'",
+            Map.of("p", (short) 0, "t", ticketId));
+        assertThat(stamped).as("the deal's accepted quotation row").isEqualTo(1);
         orderConfirmation.confirmOrder(pricingRequestId, new OrderConfirmationRequests.ConfirmOrderRequest(null), salesActor);
+        assertThat(tickets.findById(ticketId).orElseThrow().summary().paymentStatus()).isEqualTo("CUSTOMER_CONFIRMED");
 
-        // GLA-118: deposit policy is set by the OWNING sales rep (or a sales_manager) now, not account -- salesActor
-        // owns ticketId (created via ticketService.create(..., salesActor) in setUp).
-        TicketDto waived = ticketService.waiveDeposit(ticketId, DepositPolicy.CREDIT_CUSTOMER,
-            "ลูกค้าเครดิตชั้นดี อนุมัติเทอมเครดิตแทนมัดจำ", salesActor);
-        assertThat(waived.summary().depositPolicy()).isEqualTo(DepositPolicy.CREDIT_CUSTOMER);
+        // assertThatCode so that a refusal reads as a FAILURE with this description, not as an ERROR.
+        assertThatCode(() -> ticketService.issueImportRequest(ticketId, importActor))
+            .as("a 0% deal may issue its import request right after the order is confirmed")
+            .doesNotThrowAnyException();
 
-        TicketDto afterIr = ticketService.issueImportRequest(ticketId, importActor);
+        TicketDto afterIr = tickets.findById(ticketId).orElseThrow();
         assertThat(afterIr.summary().fulfillmentStatus()).isEqualTo(FulfilmentStatus.IR_ISSUED);
         assertThat(afterIr.summary().salesStage()).isEqualTo(DealStage.PROCUREMENT);
         // paymentStatus is untouched — no payment was ever recorded on this deal.

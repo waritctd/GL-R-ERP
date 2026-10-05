@@ -16,7 +16,6 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
@@ -64,9 +63,9 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  *   <li>{@code routeE_…} — partial stock, split per line item on a two-item deal: one line
  *       declared from stock, the other genuinely imported through the real IR -&gt; warehouse
  *       journey, delivered from two different sources in two different calls.
- *   <li>{@code routeG_…} — credit after delivery: on {@code CREDIT_CUSTOMER} terms no deposit is
- *       ever required, so {@link DealStage#DEPOSIT_RECEIVED} is skipped outright; the goods go
- *       out first and the whole invoice is settled afterward, on credit.
+ *   <li>{@code routeG_…} — payment after delivery: the deal's accepted quotation asks 0%, so there is
+ *       no deposit step at all and {@link DealStage#DEPOSIT_RECEIVED} is skipped outright; the goods go
+ *       out first and the whole invoice is settled afterward.
  * </ul>
  *
  * <p><b>Case F (paid in full before delivery) is OUT OF SCOPE by owner ruling and is
@@ -88,8 +87,13 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  * GOODS_RECEIVED} event or full stock coverage, so shortcutting that journey would make the later
  * delivery call fail for a reason that has nothing to do with the route under test),
  * {@code completeDelivery} / {@code recordPartialDelivery}, {@code confirmFinalPayment}, and
- * {@code reserveStock} for the from-stock jump. The remaining ungated stages are reached with
- * plain {@code TicketService.updateStage}, exactly as a rep would click through them.
+ * {@code reserveStock} for the from-stock jump. The hand-settable stages (ขั้น 2, 3, 6, 7 and 9, the
+ * only ones a hand move may land on since the owner rules of 2026-10-05) are reached with plain
+ * {@code TicketService.updateStage}, exactly as a rep would click through them. ขั้น 4, 5 and 8 are NOT
+ * reached by hand any more: a quotation created for that party takes the deal there, and that move is
+ * pinned in the quotation classes ({@code DealQuotationRecipientIntegrationTest},
+ * {@code CustomerQuotationIntegrationTest}, {@code DealQuotationPricingRequestApprovalIntegrationTest}).
+ * Here the deal is only POSITIONED on those three stages ({@link #positionedAt}).
  *
  * <p>Every route test asserts {@code salesStage} after EACH hop (not just the terminal one), the
  * terminal triple (CLOSED_PAID / FULLY_PAID / FULLY_DELIVERED — no route here is an exception),
@@ -154,12 +158,12 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.LEAD_APPROACH);
 
         advanceTo(ticketId, DealStage.PRESENTATION, null);
-        advanceTo(ticketId, DealStage.QUOTE_DESIGN_SIDE, null);
+        positionedAt(ticketId, DealStage.QUOTE_DESIGN_SIDE);     // S4: the designer quotation's move
         advanceTo(ticketId, DealStage.SPEC_APPROVED, null);      // S4 -> S3, routine backward
-        advanceTo(ticketId, DealStage.QUOTE_OWNER, null);
+        positionedAt(ticketId, DealStage.QUOTE_OWNER);           // S5: the owner quotation's move
         advanceTo(ticketId, DealStage.OWNER_SIGNOFF, null);
         advanceTo(ticketId, DealStage.AWAITING_BUYER, null);
-        advanceTo(ticketId, DealStage.QUOTE_BUYER, null);
+        positionedAt(ticketId, DealStage.QUOTE_BUYER);           // S8: the buyer quotation's move
         advanceTo(ticketId, DealStage.NEGOTIATION, null);
 
         ticketService.confirmCustomer(ticketId, ownerRep);
@@ -206,15 +210,16 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(entryChannelOf(ticketId)).isEqualTo(EntryChannel.OWNER_DIRECT);
 
         advanceTo(ticketId, DealStage.PRESENTATION, null);
-        // The route's defining refusal, through the real gate: no designer to quote.
+        // The route's defining refusal, through the real gate: no designer to quote. ขั้น 4 is a
+        // quotation's job for everyone now (owner rule 2026-10-05, M2), so only "refused" is asserted —
+        // not the route's own 409, which is no longer the only thing that could refuse it.
         logAnActivityAndFollowUp(ticketId);
         assertThatThrownBy(() -> ticketService.updateStage(ticketId, DealStage.QUOTE_DESIGN_SIDE, null, ownerRep))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+            .isInstanceOf(ApiException.class);
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.PRESENTATION);
 
         advanceTo(ticketId, DealStage.SPEC_APPROVED, null); // S3 — kept, only re-worded
-        advanceTo(ticketId, DealStage.QUOTE_OWNER, null);
+        positionedAt(ticketId, DealStage.QUOTE_OWNER);      // S5: the owner quotation's move
         advanceTo(ticketId, DealStage.OWNER_SIGNOFF, null);
         advanceTo(ticketId, DealStage.NEGOTIATION, null);   // O-b: skips S7 + S8 (on-route, not visited)
 
@@ -247,8 +252,9 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
 
     /**
      * The deal OPENS at {@link DealStage#QUOTE_BUYER} (S8), skipping S1-S7 entirely — the first
-     * stage move ever made on this deal lands on S8. Also the BUYER_DIRECT entry channel: route C
-     * IS that channel.
+     * stage the deal is ever on beyond its start is S8, put there by the quotation created for the
+     * buyer (positioned by the repository here; that move is pinned in the quotation classes). Also
+     * the BUYER_DIRECT entry channel: route C IS that channel.
      */
     @Test
     void routeC_contractorWithBoq_opensAtQuoteBuyer() {
@@ -260,13 +266,11 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
             "ผู้รับเหมานำ BOQ และสเปกมาเองตั้งแต่ต้น", ownerRep);
         assertThat(entryChannelOf(ticketId)).isEqualTo(EntryChannel.BUYER_DIRECT);
 
-        // LEAD_APPROACH -> QUOTE_BUYER crosses only route-dependent stages (none of S2-S7 is
-        // MANDATORY per DealStage.MANDATORY), so DealStage.requiresJustification says this needs
-        // no note. Asserted, not assumed: called with note=null and required to succeed.
-        logAnActivityAndFollowUp(ticketId);
-        assertThatCode(() -> ticketService.updateStage(ticketId, DealStage.QUOTE_BUYER, null, ownerRep))
-            .doesNotThrowAnyException();
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.QUOTE_BUYER);
+        // LEAD_APPROACH -> QUOTE_BUYER (S8) is what the buyer quotation does; it is no longer a hand
+        // move (M2), so the deal is positioned there. (This used to assert, with note=null, that the
+        // jump over S2-S7 needs no note; the hand move onto S8 is now refused, see
+        // DealStageQuoteOwnerAndRouteIntegrationTest#caseC_….)
+        positionedAt(ticketId, DealStage.QUOTE_BUYER);
 
         advanceTo(ticketId, DealStage.NEGOTIATION, null);
 
@@ -289,7 +293,7 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(fulfilmentOf(ticketId)).isEqualTo(FulfilmentStatus.FULLY_DELIVERED);
 
         // The defining property: S1-S7 never appear as a STAGE_CHANGED target anywhere in this
-        // deal's history — its very first recorded stage move landed on QUOTE_BUYER.
+        // deal's history — it went from its start to S8 without visiting any of them.
         assertStageNeverVisited(ticketId, DealStage.LEAD_APPROACH, DealStage.PRESENTATION,
             DealStage.SPEC_APPROVED, DealStage.QUOTE_DESIGN_SIDE, DealStage.QUOTE_OWNER,
             DealStage.OWNER_SIGNOFF, DealStage.AWAITING_BUYER);
@@ -309,7 +313,7 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
         long itemId = onlyItemId(ticketId);
 
         advanceTo(ticketId, DealStage.PRESENTATION, null);
-        advanceTo(ticketId, DealStage.QUOTE_OWNER, null);
+        positionedAt(ticketId, DealStage.QUOTE_OWNER);      // S5: the owner quotation's move
         advanceTo(ticketId, DealStage.OWNER_SIGNOFF, null);
         advanceTo(ticketId, DealStage.NEGOTIATION, null);
 
@@ -363,7 +367,7 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
         long item2 = items.get(1).id();
 
         advanceTo(ticketId, DealStage.PRESENTATION, null);
-        advanceTo(ticketId, DealStage.QUOTE_OWNER, null);
+        positionedAt(ticketId, DealStage.QUOTE_OWNER);      // S5: the owner quotation's move
         advanceTo(ticketId, DealStage.OWNER_SIGNOFF, null);
         advanceTo(ticketId, DealStage.NEGOTIATION, null);
 
@@ -417,40 +421,41 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(qtyFromStockOf(item1)).isNotEqualByComparingTo(qtyFromStockOf(item2));
     }
 
-    // ═══ Route G — credit after delivery ═══════════════════════════════════════
+    // ═══ Route G — a 0% deal: no deposit step, paid after delivery ═════════════
 
     /**
-     * On {@code CREDIT_CUSTOMER} terms {@link PaymentTrack}'s bypass path has no {@code
-     * DEPOSIT_NOTICE_ISSUED}/{@code DEPOSIT_PAID} state at all, so {@link
-     * DealStage#DEPOSIT_RECEIVED} is skipped outright — not merely "not required", genuinely
-     * unreachable on this policy. The goods go out first; the whole invoice is settled afterward.
+     * On a 0% deal (the accepted quotation's {@code deposit_percent} is 0 — owner rules 2026-10-05, C1)
+     * there is no deposit step at all: {@link PaymentTrack}'s bypass path has no {@code
+     * DEPOSIT_NOTICE_ISSUED}/{@code DEPOSIT_PAID} state, so {@link DealStage#DEPOSIT_RECEIVED} is
+     * skipped outright — not merely "not required", genuinely unreachable — and the import request
+     * issues right after the order is confirmed (C3). The goods go out first; the whole invoice is
+     * settled afterward. The quotation row is written BEFORE {@code confirmCustomer}; no waiver, no
+     * deal-level switch.
      */
     @Test
-    void routeG_creditAfterDelivery_skipsDepositAndPaysAfterDelivery() {
+    void routeG_zeroPercentDeal_skipsDepositAndPaysAfterDelivery() {
         long ticketId = createOneItemDeal("ดีล G: เครดิตหลังส่งของ", "100.00", "300.00"); // payable 30,000
         setStatus(ticketId, TicketStatus.QUOTATION_ISSUED);
 
         advanceTo(ticketId, DealStage.PRESENTATION, null);
-        advanceTo(ticketId, DealStage.QUOTE_OWNER, null);
+        positionedAt(ticketId, DealStage.QUOTE_OWNER);      // S5: the owner quotation's move
         advanceTo(ticketId, DealStage.OWNER_SIGNOFF, null);
         advanceTo(ticketId, DealStage.NEGOTIATION, null);
 
-        // Credit terms, decided before the order is confirmed: payment_status is still null here,
-        // so waiveDeposit's own "no deposit invoice issued yet" guard holds.
-        // GLA-118: deposit policy is set by the OWNING sales rep (or a sales_manager) now, not account -- driven
-        // as ownerRep (createTicketWithItems's ownerRepId owns this deal).
-        ticketService.waiveDeposit(ticketId, DepositPolicy.CREDIT_CUSTOMER,
-            "ลูกค้าเครดิต 30 วัน ตามสัญญาก่อสร้าง", ownerRep);
-        assertThat(depositPolicyOf(ticketId)).isEqualTo(DepositPolicy.CREDIT_CUSTOMER);
+        // C1: no deposit step — the accepted quotation asks 0%, written BEFORE the order is confirmed.
+        insertQuotation(ticketId, 0);
 
         ticketService.confirmCustomer(ticketId, ownerRep);
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.ORDER_RECEIVED);
         assertThat(paymentStatusOf(ticketId)).isEqualTo(PaymentTrack.CUSTOMER_CONFIRMED);
 
-        // No deposit notice, no confirmDepositPaid: PaymentTrack.BYPASS_ALLOWED has no entry for
-        // DEPOSIT_NOTICE_ISSUED/DEPOSIT_PAID at all. issueImportRequest's bypass clause
-        // (bypassesDepositNotice && CUSTOMER_CONFIRMED) is what actually lets this proceed.
-        walkImportJourneyToDeliveryScheduling(ticketId);
+        // No deposit notice, no confirmDepositPaid: a 0% deal has no deposit step, so the import request
+        // issues right after the order is confirmed (C3). assertThatCode so that a refusal reads as a
+        // FAILURE with this description, not as an ERROR from inside the helper.
+        assertThatCode(() -> walkImportJourneyToDeliveryScheduling(ticketId))
+            .as("a 0% deal may issue its import request right after the order is confirmed"
+                + " and walk the import journey to DELIVERY_SCHEDULING")
+            .doesNotThrowAnyException();
 
         ticketService.completeDelivery(ticketId,
             new CompleteDeliveryRequest("ส่งของก่อนตามเครดิต", "ลูกค้า"), ownerRep);
@@ -472,16 +477,28 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
     // ── helpers ──────────────────────────────────────────────────────────────
 
     /**
-     * A plain forward (or, for the one routine pair, backward) hop through the ungated front
-     * half of the pipeline: seeds the tracking gate's own preconditions (a next follow-up date and
-     * one activity logged since the last stage change — {@code updateStage}'s forward-readiness
-     * gate demands both) and then calls the real {@link TicketService#updateStage}, asserting the
-     * landing stage so every route test reads as a clean list of hops.
+     * A plain forward (or, for the one routine pair, backward) hop onto a HAND-SETTABLE stage of the
+     * front half of the pipeline (ขั้น 2, 3, 6, 7, 9): seeds the tracking gate's own preconditions (a
+     * next follow-up date and one activity logged since the last stage change — {@code updateStage}'s
+     * forward-readiness gate demands both) and then calls the real {@link TicketService#updateStage},
+     * asserting the landing stage so every route test reads as a clean list of hops.
      */
     private void advanceTo(long ticketId, String stage, String note) {
         logAnActivityAndFollowUp(ticketId);
         ticketService.updateStage(ticketId, stage, note, ownerRep);
         assertThat(stageOf(ticketId)).as("expected to land on %s", stage).isEqualTo(stage);
+    }
+
+    /**
+     * ขั้น 4, 5 and 8 are reached when a quotation is created for that party (owner rules of 2026-10-05,
+     * M2) and are never set by hand, so a route walk only POSITIONS the deal there with the repository.
+     * The quotation-driven move itself is pinned in the quotation classes —
+     * {@code DealQuotationRecipientIntegrationTest}, {@code CustomerQuotationIntegrationTest} and
+     * {@code DealQuotationPricingRequestApprovalIntegrationTest} — not here.
+     */
+    private void positionedAt(long ticketId, String stage) {
+        tickets.updateSalesStage(ticketId, stage);
+        assertThat(stageOf(ticketId)).as("expected to be positioned on %s", stage).isEqualTo(stage);
     }
 
     /**
@@ -595,9 +612,18 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
             Map.of("id", ticketId), String.class);
     }
 
-    private String depositPolicyOf(long ticketId) {
-        return jdbc.queryForObject("SELECT deposit_policy FROM sales.ticket WHERE ticket_id = :id",
-            Map.of("id", ticketId), String.class);
+    /**
+     * C1: the deal's accepted quotation — an approved direct-deal row asking {@code depositPercent} (whole
+     * percent; 0 = no deposit step at all) — written BEFORE the customer's order is confirmed.
+     */
+    private void insertQuotation(long ticketId, int depositPercent) {
+        jdbc.update("""
+            INSERT INTO sales.quotation (ticket_id, number, issued_by, doc_status, quotation_version,
+                                         origin, deposit_percent)
+            VALUES (:ticketId, :number, :by, 'APPROVED', 1, 'DEAL_DIRECT', :depositPercent)
+            """, new MapSqlParameterSource().addValue("ticketId", ticketId)
+                .addValue("number", "QTD-WALK-" + ticketId).addValue("by", ownerRepId)
+                .addValue("depositPercent", (short) depositPercent));
     }
 
     private String entryChannelOf(long ticketId) {

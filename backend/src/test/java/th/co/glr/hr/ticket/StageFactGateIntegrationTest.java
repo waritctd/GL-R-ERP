@@ -3,6 +3,8 @@ package th.co.glr.hr.ticket;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -14,8 +16,13 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Stream;
+import org.assertj.core.api.ThrowableAssert;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import th.co.glr.hr.auth.UserPrincipal;
@@ -46,6 +53,19 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  *       is no inventory system) yet full coverage reroutes the deal past the whole import journey.
  * </ul>
  *
+ * <p><b>Owner rules of 2026-10-05 (stage movement, M1-M4) supersede the "grants" below.</b> A hand
+ * move exists only inside ขั้น 1-9 and only onto ขั้น 1, 2, 3, 6, 7 and 9; ขั้น 4, 5 and 8 are reached
+ * when a quotation is created for that party; from ขั้น 10 the stage is system-only for EVERY role
+ * (the owning rep, ผจก.ขาย, the CEO, ฝ่ายนำเข้า through {@code updateStage}, ฝ่ายบัญชี through
+ * {@code financeUpdateStage}) whether or not the fact behind the stage holds — and a deal that
+ * already SITS at ขั้น 10 or later cannot be hand-moved at all, not even back. So "the stage becomes
+ * settable once its fact is recorded" is now "still refused although its fact is recorded", and the
+ * refusal tests of Part A, which hold under both readings, are left as they were. A NEW refusal is
+ * asserted as: {@code ApiException} thrown, {@code sales_stage} unchanged, no {@code STAGE_CHANGED}
+ * event written — never its status or message ({@link #assertHandMoveRefused}). Every fixture below
+ * is one in which the OLD code accepted the move (right role, tracking fields current, a note
+ * supplied, the fact recorded), so a refusal can only be the new rule's.
+ *
  * <p><b>Written wrong-way-round.</b> The tests that matter are the refusals, and each re-reads
  * {@code sales.ticket} (stage, payment/fulfilment track, {@code qty_from_stock}) and the
  * {@code sales.ticket_event} log straight out of Postgres afterwards to prove nothing moved — an
@@ -74,6 +94,7 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private long ownerRepId;
     private UserPrincipal ownerRep;
+    private UserPrincipal salesManager;
     private UserPrincipal ceo;
     private UserPrincipal accountActor;
     private UserPrincipal importActor;
@@ -97,6 +118,7 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
             jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
         ownerRepId = createEmployee(employees, "เจ้าของดีล ทดสอบ", "stagegate-owner@glr.co.th");
         ownerRep = principal(ownerRepId, "sales");
+        salesManager = principal(createEmployee(employees, "ผู้จัดการขาย", "stagegate-mgr@glr.co.th"), "sales_manager");
         ceo = principal(createEmployee(employees, "ซีอีโอ", "stagegate-ceo@glr.co.th"), "ceo");
         accountActor = principal(createEmployee(employees, "ฝ่ายบัญชี", "stagegate-account@glr.co.th"), "account");
         importActor = principal(createEmployee(employees, "ฝ่ายนำเข้า", "stagegate-import@glr.co.th"), "import");
@@ -261,22 +283,27 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     /**
-     * …and the manual gate now matches {@link TicketService} {@code maybeAdvanceClosedPaid} exactly:
-     * with delivery completed as well, the move is accepted.
+     * …and still refused when BOTH facts are in (M4): paid in full AND fully delivered is exactly the
+     * bar {@link TicketService} {@code maybeAdvanceClosedPaid} clears, and it is the SYSTEM that
+     * moves the deal to CLOSED_PAID when it does — {@link
+     * #autoAdvanceStillReachesAllFourGatedStagesWhenTheFactBecomesTrue} walks that. This used to
+     * assert the opposite: that ฝ่ายบัญชี could claim the stage by hand once the facts matched.
      *
      * <p>Walked from {@code DELIVERED} rather than {@code DELIVERY_SCHEDULING} on purpose — that is
-     * the adjacent move, so no MANDATORY stage is stepped over and no note is required. The facts
-     * are then the only thing that can be permitting this, which is what the test is for.
+     * the adjacent move, so no MANDATORY stage is stepped over and no note is required: the old code
+     * accepted this exact call, so a refusal here can only be the "system-only from ขั้น 10" rule.
      */
     @Test
-    void closedPaid_isAcceptedOnceBothPaymentAndDeliveryAreComplete() {
+    void closedPaid_isRefusedByHand_evenOnceBothPaymentAndDeliveryAreComplete() {
         long ticketId = readyToAdvanceFrom(DealStage.DELIVERED);
         tickets.updatePaymentStatusUnchecked(ticketId, PaymentTrack.FULLY_PAID);
         tickets.updateFulfillmentStatus(ticketId, FulfilmentStatus.FULLY_DELIVERED);
+        assertThat(paymentStatusOf(ticketId)).isEqualTo(PaymentTrack.FULLY_PAID);
+        assertThat(fulfilmentOf(ticketId)).isEqualTo(FulfilmentStatus.FULLY_DELIVERED);
 
-        ticketService.financeUpdateStage(ticketId, DealStage.CLOSED_PAID, null, accountActor);
-
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.CLOSED_PAID);
+        assertHandMoveRefused(ticketId, DealStage.DELIVERED,
+            "ฝ่ายบัญชี must not claim CLOSED_PAID by hand although the deal is paid and delivered",
+            () -> ticketService.financeUpdateStage(ticketId, DealStage.CLOSED_PAID, null, accountActor));
     }
 
     /** Keyed on the target, so a backward correction into a gated stage is gated identically. */
@@ -293,135 +320,164 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(stageChangedEvents(ticketId)).isZero();
     }
 
-    // ═══ Part A — the grants: necessary, but not the evidence ════════════════
+    // ═══ Part A — the former grants, flipped by the owner rules of 2026-10-05 ═
 
-    /** Each gated stage becomes settable the moment its own fact is on the row, and not before. */
-    @Test
-    void eachGatedStageBecomesSettableOnceItsFactIsRecorded() {
-        long order = readyToAdvanceFrom(DealStage.NEGOTIATION);
-        tickets.updatePaymentStatusUnchecked(order, PaymentTrack.CUSTOMER_CONFIRMED);
-        ticketService.updateStage(order, DealStage.ORDER_RECEIVED, null, ownerRep);
-        assertThat(stageOf(order)).isEqualTo(DealStage.ORDER_RECEIVED);
+    /**
+     * M4, the headline flip. This used to be "each gated stage becomes settable the moment its own
+     * fact is on the row"; the owner's rule is that from ขั้น 10 the stage is system-only, so the hand
+     * move into ORDER_RECEIVED, DEPOSIT_RECEIVED, DELIVERED and CLOSED_PAID is refused for every role
+     * that could write it — the owning rep, ฝ่ายบัญชี through the finance entrypoint, and the CEO —
+     * with the fact behind the stage RECORDED, a note supplied and the tracking fields current. Each
+     * case is a deal on which the old code accepted exactly this call (the old test asserted it), so
+     * the refusal is the new rule's and nothing else's.
+     *
+     * <p>Parameterised so that each (stage, role) pair is its own result: a single loop would stop at
+     * the first pair and say nothing about the other seven.
+     */
+    @ParameterizedTest(name = "[{index}] {0} by {1}, with its fact recorded")
+    @MethodSource("theFormerlyGatedStagesAndEveryRoleThatCouldWriteThem")
+    void eachFormerlyGatedStageIsStillRefusedByHand_evenOnceItsFactIsRecorded(String stage, String role) {
+        long ticketId = dealWithTheFactRecorded(stage);
+        String parkedAt = DealStage.ORDER.get(DealStage.indexOf(stage) - 1);
 
-        long deposit = readyToAdvanceFrom(DealStage.ORDER_RECEIVED);
-        tickets.updatePaymentStatusUnchecked(deposit, PaymentTrack.DEPOSIT_PAID);
-        ticketService.financeUpdateStage(deposit, DealStage.DEPOSIT_RECEIVED, null, accountActor);
-        assertThat(stageOf(deposit)).isEqualTo(DealStage.DEPOSIT_RECEIVED);
+        assertHandMoveRefused(ticketId, parkedAt,
+            role + " must not move a deal onto " + stage + " by hand, even though its fact is recorded",
+            () -> handMove(ticketId, stage, role));
+    }
 
-        long delivered = readyToAdvanceFrom(DealStage.DELIVERY_SCHEDULING);
-        tickets.updateFulfillmentStatus(delivered, FulfilmentStatus.FULLY_DELIVERED);
-        ticketService.updateStage(delivered, DealStage.DELIVERED, null, ownerRep);
-        assertThat(stageOf(delivered)).isEqualTo(DealStage.DELIVERED);
-
-        // CLOSED_PAID is the one stage with TWO facts behind it — payment AND delivery, exactly as
-        // maybeAdvanceClosedPaid requires. See closedPaid_fullyPaidButNotFullyDelivered_… for the
-        // half-satisfied case.
-        long closed = readyToAdvanceFrom(DealStage.DELIVERED);
-        tickets.updatePaymentStatusUnchecked(closed, PaymentTrack.FULLY_PAID);
-        tickets.updateFulfillmentStatus(closed, FulfilmentStatus.FULLY_DELIVERED);
-        ticketService.financeUpdateStage(closed, DealStage.CLOSED_PAID, null, accountActor);
-        assertThat(stageOf(closed)).isEqualTo(DealStage.CLOSED_PAID);
+    static Stream<Arguments> theFormerlyGatedStagesAndEveryRoleThatCouldWriteThem() {
+        return Stream.of(
+            Arguments.of(DealStage.ORDER_RECEIVED, "sales"),
+            Arguments.of(DealStage.ORDER_RECEIVED, "ceo"),
+            Arguments.of(DealStage.DEPOSIT_RECEIVED, "account"),
+            Arguments.of(DealStage.DEPOSIT_RECEIVED, "ceo"),
+            Arguments.of(DealStage.DELIVERED, "sales"),
+            Arguments.of(DealStage.DELIVERED, "ceo"),
+            Arguments.of(DealStage.CLOSED_PAID, "account"),
+            Arguments.of(DealStage.CLOSED_PAID, "ceo"));
     }
 
     /**
-     * The eleven ungated stages keep their manual fallback with no facts recorded at all —
-     * {@code NEGOTIATION}, {@code PROCUREMENT} and {@code DELIVERY_SCHEDULING} above all, the
-     * operational stages where a wrong value misreports nothing financial. A gate that quietly
-     * swallowed these would be worse than the hole it closes.
+     * Of the stages the old gate left alone, only NEGOTIATION (ขั้น 9) keeps its manual fallback — it
+     * is inside ขั้น 1-9 and one of the six hand-settable ones. PROCUREMENT (ขั้น 12) and
+     * DELIVERY_SCHEDULING (ขั้น 13) are past ขั้น 10, so they are system-only: ฝ่ายนำเข้า cannot claim
+     * PROCUREMENT and the owning rep cannot claim DELIVERY_SCHEDULING, with no facts recorded and
+     * with the facts recorded alike. This was {@code theUngatedStagesKeepTheirManualFallback…}.
+     *
+     * <p>The green half runs first, so a failure below it cannot be mistaken for a broken NEGOTIATION.
+     * The two refusals sit in {@code assertAll} so that BOTH are reported rather than the first only.
+     * Their fixtures are the old ones (a note supplied, tracking current): the old code accepted both.
      */
     @Test
-    void theUngatedStagesKeepTheirManualFallbackWithNoFactsRecorded() {
+    void negotiationKeepsItsManualFallback_whileProcurementAndDeliverySchedulingAreSystemOnly() {
         long negotiation = readyToAdvanceFrom(DealStage.QUOTE_BUYER);
         ticketService.updateStage(negotiation, DealStage.NEGOTIATION, null, ownerRep);
         assertThat(stageOf(negotiation)).isEqualTo(DealStage.NEGOTIATION);
+        assertThat(paymentStatusOf(negotiation)).isNull();
 
         long procurement = readyToAdvanceFrom(DealStage.QUOTE_BUYER);
-        ticketService.updateStage(procurement, DealStage.PROCUREMENT, "นำเข้าเริ่มแล้ว", importActor);
-        assertThat(stageOf(procurement)).isEqualTo(DealStage.PROCUREMENT);
-
         long scheduling = readyToAdvanceFrom(DealStage.QUOTE_BUYER);
-        ticketService.updateStage(scheduling, DealStage.DELIVERY_SCHEDULING, "ของพร้อมส่ง", ownerRep);
-        assertThat(stageOf(scheduling)).isEqualTo(DealStage.DELIVERY_SCHEDULING);
-
-        assertThat(paymentStatusOf(negotiation)).isNull();
-        assertThat(fulfilmentOf(procurement)).isNull();
+        assertAll(
+            () -> assertHandMoveRefused(procurement, DealStage.QUOTE_BUYER,
+                "ฝ่ายนำเข้า must not claim PROCUREMENT by hand",
+                () -> ticketService.updateStage(procurement, DealStage.PROCUREMENT, "นำเข้าเริ่มแล้ว", importActor)),
+            () -> assertHandMoveRefused(scheduling, DealStage.QUOTE_BUYER,
+                "the owning rep must not claim DELIVERY_SCHEDULING by hand",
+                () -> ticketService.updateStage(scheduling, DealStage.DELIVERY_SCHEDULING, "ของพร้อมส่ง", ownerRep)));
     }
 
-    // ═══ The owner's routes must all still be walkable ═══════════════════════
+    // ═══ The owner's routes: by hand only inside ขั้น 1-9, the rest is the system's ═══
     //
     // Cases A-D are the four in DealStage's own Javadoc; G (delivered, then paid) is the ordering
     // covered by the automatic walk below. E (per-line partial stock coverage) is separate work
     // and is exercised only as far as the mixed declaration below reaches; F is out of scope by
-    // owner ruling. None of these routes touches a gated stage without its fact, which is the
-    // whole point of gating on the fact rather than on the previous stage.
+    // owner ruling.
+    //
+    // This class wires NO quotation service (and must not be made to just for this): ขั้น 4, 5 and 8
+    // are reached when a quotation is CREATED for that party, and that move is pinned where the
+    // quotation services are wired — DealQuotationRecipientIntegrationTest (a direct quotation, each
+    // recipient, plus the route correction), CustomerQuotationIntegrationTest and
+    // DealQuotationPricingRequestApprovalIntegrationTest (a pricing-request quotation). Here the deal
+    // is only POSITIONED on those three stages, with the repository, and the hand move onto them is
+    // asserted refused.
 
     /** Case C — a contractor arrives with a BOQ and a spec, so the deal opens straight at S8. */
     @Test
-    void caseC_aDealThatOpensStraightAtQuoteBuyer_isUnaffected() {
+    void caseC_aHandMoveStraightOntoQuoteBuyer_isRefused_theBuyerQuotationIsWhatMovesTheDeal() {
         long ticketId = readyToAdvanceFrom(DealStage.LEAD_APPROACH);
 
-        ticketService.updateStage(ticketId, DealStage.QUOTE_BUYER, null, ownerRep);
-
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.QUOTE_BUYER);
+        assertHandMoveRefused(ticketId, DealStage.LEAD_APPROACH,
+            "the owning rep must not move a deal onto QUOTE_BUYER (ขั้น 8) by hand",
+            () -> ticketService.updateStage(ticketId, DealStage.QUOTE_BUYER, null, ownerRep));
     }
 
     /** Case B — the owner buys directly, so S3, S4, S7 and S8 never happen. */
     @Test
-    void caseB_theOwnerBuysDirect_isUnaffected() {
-        long ticketId = readyToAdvanceFrom(DealStage.PRESENTATION);
-
-        ticketService.updateStage(ticketId, DealStage.QUOTE_OWNER, null, ownerRep);
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.QUOTE_OWNER);
-
-        logAnActivityAndFollowUp(ticketId);
+    void caseB_theOwnerBuysDirect_signoffAndNegotiationAreByHand_butTheOwnerQuotationIsNot() {
+        // The hand-settable remainder of the route, from a deal POSITIONED on QUOTE_OWNER (ขั้น 5):
+        // S5 -> S6 -> S9 are accepted today and stay accepted (M1).
+        long ticketId = readyToAdvanceFrom(DealStage.QUOTE_OWNER);
         ticketService.updateStage(ticketId, DealStage.OWNER_SIGNOFF, null, ownerRep);
         logAnActivityAndFollowUp(ticketId);
         ticketService.updateStage(ticketId, DealStage.NEGOTIATION, null, ownerRep);
-
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.NEGOTIATION);
+
+        // ...but ขั้น 5 itself is reached by the owner quotation, never by hand (M2).
+        long fromPresentation = readyToAdvanceFrom(DealStage.PRESENTATION);
+        assertHandMoveRefused(fromPresentation, DealStage.PRESENTATION,
+            "the owning rep must not move a deal onto QUOTE_OWNER (ขั้น 5) by hand",
+            () -> ticketService.updateStage(fromPresentation, DealStage.QUOTE_OWNER, null, ownerRep));
     }
 
     /**
-     * Case A — the full route, walked by hand with each fact recorded as it happens. The front
-     * half needs nothing; the back half needs exactly the fact its stage claims, in the order the
-     * business produces them.
+     * Case A — the full route. The hand walk covers ขั้น 1-9 with only the hand-settable stages
+     * (S2, S3, S6, S7, S9); ขั้น 4, 5 and 8 are positioned with the repository, standing in for the
+     * quotation that really takes the deal there. Then, with the customer's order verified, the hand
+     * move to ORDER_RECEIVED is refused: the tail of the route belongs to the system, and {@link
+     * #autoAdvanceStillReachesAllFourGatedStagesWhenTheFactBecomesTrue} is the test that walks it.
      */
     @Test
-    void caseA_theFullRoute_walksEveryStageWithItsFactsInPlace() {
+    void caseA_theFullRoute_handWalksTheHandSettableStages_thenTheOrderCannotBeClaimedByHand() {
         long ticketId = readyToAdvanceFrom(DealStage.LEAD_APPROACH);
 
-        for (String stage : List.of(DealStage.PRESENTATION, DealStage.QUOTE_DESIGN_SIDE,
-                DealStage.SPEC_APPROVED, DealStage.QUOTE_OWNER, DealStage.OWNER_SIGNOFF,
-                DealStage.AWAITING_BUYER, DealStage.QUOTE_BUYER, DealStage.NEGOTIATION)) {
-            logAnActivityAndFollowUp(ticketId);
-            // QUOTE_DESIGN_SIDE -> SPEC_APPROVED is the one routine backward pair; the rest are
-            // forward. Neither needs a note, and none of them is fact-gated.
-            ticketService.updateStage(ticketId, stage, null, ownerRep);
-            assertThat(stageOf(ticketId)).isEqualTo(stage);
-        }
+        handStep(ticketId, DealStage.PRESENTATION);
+        positionedAt(ticketId, DealStage.QUOTE_DESIGN_SIDE);   // S4: a quotation's job
+        handStep(ticketId, DealStage.SPEC_APPROVED);           // S4 -> S3, the routine backward pair
+        positionedAt(ticketId, DealStage.QUOTE_OWNER);         // S5: a quotation's job
+        handStep(ticketId, DealStage.OWNER_SIGNOFF);
+        handStep(ticketId, DealStage.AWAITING_BUYER);
+        positionedAt(ticketId, DealStage.QUOTE_BUYER);         // S8: a quotation's job
+        handStep(ticketId, DealStage.NEGOTIATION);
 
+        // The facts for ขั้น 10 are in, and the tracking fields are current — the old code accepted this.
         tickets.updatePaymentStatusUnchecked(ticketId, PaymentTrack.CUSTOMER_CONFIRMED);
         logAnActivityAndFollowUp(ticketId);
-        ticketService.updateStage(ticketId, DealStage.ORDER_RECEIVED, null, ownerRep);
+        assertHandMoveRefused(ticketId, DealStage.NEGOTIATION,
+            "the owning rep must not claim ORDER_RECEIVED by hand although the customer's order is verified",
+            () -> ticketService.updateStage(ticketId, DealStage.ORDER_RECEIVED, null, ownerRep));
+    }
 
-        tickets.updatePaymentStatusUnchecked(ticketId, PaymentTrack.DEPOSIT_PAID);
-        logAnActivityAndFollowUp(ticketId);
-        ticketService.financeUpdateStage(ticketId, DealStage.DEPOSIT_RECEIVED, null, accountActor);
+    /**
+     * M4, the one shape nothing else here pins: a deal that already SITS at ขั้น 10 or later cannot be
+     * moved by hand at all — not even BACK into ขั้น 1-9, with a reason, by the owning rep, ผจก.ขาย or
+     * the CEO. NEGOTIATION is a stage all three may write, a note is supplied (a backward move needs
+     * one), the stage is on the route and the fact gates do not touch it, so the old code accepted
+     * every one of these 18 moves: the refusal is the new rule's and nothing else's.
+     */
+    @ParameterizedTest(name = "[{index}] sitting at {0}, moved back to NEGOTIATION by {1}")
+    @MethodSource("everyStageFromOrderReceivedOnAndEveryRoleThatMayWriteSalesStages")
+    void aDealSittingAtOrderReceivedOrLater_cannotBeMovedBackByHandIntoTheFrontHalf(String sittingAt, String role) {
+        long ticketId = readyToAdvanceFrom(sittingAt);
 
-        logAnActivityAndFollowUp(ticketId);
-        ticketService.updateStage(ticketId, DealStage.PROCUREMENT, null, importActor);
-        logAnActivityAndFollowUp(ticketId);
-        ticketService.updateStage(ticketId, DealStage.DELIVERY_SCHEDULING, null, ownerRep);
+        assertHandMoveRefused(ticketId, sittingAt,
+            role + " must not hand-move a deal sitting at " + sittingAt + " back to NEGOTIATION",
+            () -> handMove(ticketId, DealStage.NEGOTIATION, role, "ลูกค้าขอทบทวนข้อเสนอใหม่"));
+    }
 
-        tickets.updateFulfillmentStatus(ticketId, FulfilmentStatus.FULLY_DELIVERED);
-        logAnActivityAndFollowUp(ticketId);
-        ticketService.updateStage(ticketId, DealStage.DELIVERED, null, ownerRep);
-
-        tickets.updatePaymentStatusUnchecked(ticketId, PaymentTrack.FULLY_PAID);
-        logAnActivityAndFollowUp(ticketId);
-        ticketService.financeUpdateStage(ticketId, DealStage.CLOSED_PAID, null, accountActor);
-
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.CLOSED_PAID);
+    static Stream<Arguments> everyStageFromOrderReceivedOnAndEveryRoleThatMayWriteSalesStages() {
+        return DealStage.ORDER.subList(DealStage.indexOf(DealStage.ORDER_RECEIVED), DealStage.ORDER.size())
+            .stream()
+            .flatMap(stage -> Stream.of("sales", "sales_manager", "ceo").map(role -> Arguments.of(stage, role)));
     }
 
     // ═══ The automatic path must be completely unaffected ════════════════════
@@ -437,11 +493,16 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
      *
      * <pre>
      * confirmCustomer     -> CUSTOMER_CONFIRMED  -> ORDER_RECEIVED      (S10)
-     * recordPayment       -> DEPOSIT_PAID        -> DEPOSIT_RECEIVED    (S11)
+     * confirmDepositPaid  -> DEPOSIT_PAID        -> DEPOSIT_RECEIVED    (S11)
      * reserveStock (full) -> FROM_STOCK          -> DELIVERY_SCHEDULING (S18, skipping PROCUREMENT)
      * completeDelivery    -> FULLY_DELIVERED     -> DELIVERED           (S19)
      * confirmFinalPayment -> FULLY_PAID          -> CLOSED_PAID         (S20)
      * </pre>
+     *
+     * <p>The deposit is confirmed the one way there is (C2): ฝ่ายบัญชี's {@code confirmDepositPaid}, once the
+     * notice has been issued — its effect is stamped here, as {@code SalesRouteWalkIntegrationTest} does. A
+     * receipt recorded through {@code recordPayment} is not a deposit confirmation. The deal is a deposit
+     * deal explicitly (C1): its accepted quotation asks 50%, written before the order is confirmed.
      *
      * <p>It doubles as the owner's all-from-stock route (Case D — no import journey, PROCUREMENT
      * never visited) and as Case G's ordering (delivered first, then paid).
@@ -450,7 +511,8 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
     void autoAdvanceStillReachesAllFourGatedStagesWhenTheFactBecomesTrue() {
         long ticketId = createDealWithOneItem();
         long itemId = onlyItemId(ticketId);
-        setApprovedPrice(itemId, "1000.00");          // payable = 100 x 1,000 = 100,000
+        setApprovedPrice(itemId, "1000.00");          // payable = 100 x 1,000 + 7% VAT = 107,000
+        insertDepositQuotation(ticketId, 50);
         setStatus(ticketId, TicketStatus.QUOTATION_ISSUED);
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.LEAD_APPROACH);
 
@@ -458,8 +520,8 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(paymentStatusOf(ticketId)).isEqualTo(PaymentTrack.CUSTOMER_CONFIRMED);
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.ORDER_RECEIVED);
 
-        ticketService.recordPayment(ticketId, new RecordPaymentRequest(
-            "DEPOSIT", new BigDecimal("50000.00"), null, "รับมัดจำ", null, null, false), accountActor);
+        tickets.updatePaymentStatusUnchecked(ticketId, PaymentTrack.DEPOSIT_NOTICE_ISSUED);
+        ticketService.confirmDepositPaid(ticketId, accountActor);
         assertThat(paymentStatusOf(ticketId)).isEqualTo(PaymentTrack.DEPOSIT_PAID);
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.DEPOSIT_RECEIVED);
 
@@ -522,6 +584,11 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
      * …and above the floor nothing changed: the same declaration is accepted and still routes the
      * deal exactly as before (owner ruling — the floor adds a precondition, it does not change what
      * happens above it).
+     *
+     * <p>Routing to {@code DELIVERY_SCHEDULING} needs the deposit to be ready (C4 of the owner rules of
+     * 2026-10-05: a stock declaration holds the stage until ฝ่ายบัญชี has confirmed the deposit; pinned in
+     * {@code StockDeclarationDepositHoldIntegrationTest}). So each deal is made deposit-ready here, to
+     * keep this test about the floor and nothing else.
      */
     @Test
     void aStockDeclarationAtOrAboveTheFloor_isAcceptedAndStillRoutesTheDeal() {
@@ -529,6 +596,7 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
             long ticketId = createDealWithOneItem();
             long itemId = onlyItemId(ticketId);
             tickets.updateSalesStage(ticketId, stage);
+            tickets.updatePaymentStatusUnchecked(ticketId, PaymentTrack.DEPOSIT_PAID);
 
             ticketService.reserveStock(ticketId, declare(itemId, "100.00"), ownerRep);
 
@@ -588,6 +656,82 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
             new DealActivityRequest(LocalDate.now(), DealActivityKind.CALL, null), ownerRep);
     }
 
+    /**
+     * How a NEW refusal of a hand move is asserted (owner rules of 2026-10-05): {@code ApiException}
+     * is thrown, {@code sales_stage} is unchanged and no {@code STAGE_CHANGED} event was written —
+     * and nothing about the status or the message, because 403 and 409 are both acceptable. The
+     * callers' fixtures are ones the OLD code accepted, which is what makes this red before the rule
+     * exists and keeps it from passing for an unrelated reason.
+     */
+    private void assertHandMoveRefused(long ticketId, String stillAt, String why,
+                                       ThrowableAssert.ThrowingCallable move) {
+        assertThat(stageOf(ticketId)).as("fixture: the deal sits at %s", stillAt).isEqualTo(stillAt);
+        int eventsBefore = stageChangedEvents(ticketId);
+
+        // catchThrowable + a described assertThat, not assertThatThrownBy(...).as(why): the latter fails with a
+        // bare "Expecting code to raise a throwable" BEFORE the description is applied, and says nothing
+        // about which case was accepted.
+        Throwable thrown = catchThrowable(move);
+        assertThat(thrown).as("%s -- the move must be REFUSED with an ApiException", why)
+            .isInstanceOf(ApiException.class);
+
+        assertThat(stageOf(ticketId)).as("%s — and the stage must not have moved", why).isEqualTo(stillAt);
+        assertThat(stageChangedEvents(ticketId)).as("%s — and no STAGE_CHANGED may be written", why)
+            .isEqualTo(eventsBefore);
+    }
+
+    /** The hand move a given role would make: account only through the finance entrypoint (H1 lockdown). */
+    private void handMove(long ticketId, String stage, String role) {
+        handMove(ticketId, stage, role, "ย้ายขั้นตอนเพราะข้อเท็จจริงของดีลครบแล้ว");
+    }
+
+    private void handMove(long ticketId, String stage, String role, String note) {
+        switch (role) {
+            case "sales" -> ticketService.updateStage(ticketId, stage, note, ownerRep);
+            case "sales_manager" -> ticketService.updateStage(ticketId, stage, note, salesManager);
+            case "ceo" -> ticketService.updateStage(ticketId, stage, note, ceo);
+            case "import" -> ticketService.updateStage(ticketId, stage, note, importActor);
+            case "account" -> ticketService.financeUpdateStage(ticketId, stage, note, accountActor);
+            default -> throw new IllegalArgumentException("no such actor in this class: " + role);
+        }
+    }
+
+    /**
+     * A deal on which the OLD gate accepted the hand move into {@code stage}: parked on the stage
+     * just below it, tracking fields current, and the fact behind {@code stage} recorded on the row.
+     * CLOSED_PAID is the one stage with TWO facts behind it — payment AND delivery.
+     */
+    private long dealWithTheFactRecorded(String stage) {
+        long ticketId = readyToAdvanceFrom(DealStage.ORDER.get(DealStage.indexOf(stage) - 1));
+        switch (stage) {
+            case DealStage.ORDER_RECEIVED ->
+                tickets.updatePaymentStatusUnchecked(ticketId, PaymentTrack.CUSTOMER_CONFIRMED);
+            case DealStage.DEPOSIT_RECEIVED ->
+                tickets.updatePaymentStatusUnchecked(ticketId, PaymentTrack.DEPOSIT_PAID);
+            case DealStage.DELIVERED ->
+                tickets.updateFulfillmentStatus(ticketId, FulfilmentStatus.FULLY_DELIVERED);
+            case DealStage.CLOSED_PAID -> {
+                tickets.updatePaymentStatusUnchecked(ticketId, PaymentTrack.FULLY_PAID);
+                tickets.updateFulfillmentStatus(ticketId, FulfilmentStatus.FULLY_DELIVERED);
+            }
+            default -> throw new IllegalArgumentException(stage + " is not one of the four fact-gated stages");
+        }
+        return ticketId;
+    }
+
+    /** One hand-settable hop of the owning rep: tracking made current, no note, landing asserted. */
+    private void handStep(long ticketId, String stage) {
+        logAnActivityAndFollowUp(ticketId);
+        ticketService.updateStage(ticketId, stage, null, ownerRep);
+        assertThat(stageOf(ticketId)).as("expected to land on %s by hand", stage).isEqualTo(stage);
+    }
+
+    /** ขั้น 4, 5 and 8 are a quotation's job, not a hand move's: here the deal is only POSITIONED there. */
+    private void positionedAt(long ticketId, String stage) {
+        tickets.updateSalesStage(ticketId, stage);
+        assertThat(stageOf(ticketId)).isEqualTo(stage);
+    }
+
     private long createDealWithOneItem() {
         CreateTicketRequest request = new CreateTicketRequest(
             "ดีลทดสอบขั้นตอน", "NORMAL", "ลูกค้าทดสอบ", null, null, null, null, null,
@@ -620,6 +764,21 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
     private void setApprovedPrice(long itemId, String price) {
         jdbc.update("UPDATE sales.ticket_item SET approved_price = :price WHERE item_id = :id",
             new MapSqlParameterSource().addValue("price", new BigDecimal(price)).addValue("id", itemId));
+    }
+
+    /**
+     * C1: the deal's accepted quotation — an approved direct-deal row asking {@code depositPercent} (whole
+     * percent) — written BEFORE the customer's order is confirmed, so the deal is a deposit deal (50) or a
+     * 0% deal explicitly rather than by the deal-level switch's default.
+     */
+    private void insertDepositQuotation(long ticketId, int depositPercent) {
+        jdbc.update("""
+            INSERT INTO sales.quotation (ticket_id, number, issued_by, doc_status, quotation_version,
+                                         origin, deposit_percent)
+            VALUES (:ticketId, :number, :by, 'APPROVED', 1, 'DEAL_DIRECT', :depositPercent)
+            """, new MapSqlParameterSource().addValue("ticketId", ticketId)
+                .addValue("number", "QTD-STG-" + ticketId).addValue("by", ownerRepId)
+                .addValue("depositPercent", (short) depositPercent));
     }
 
     private void setStatus(long ticketId, String status) {

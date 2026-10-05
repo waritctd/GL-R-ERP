@@ -32,6 +32,10 @@ function uuid() {
  * salesStage ORDER_RECEIVED. This is the floor createDrafts requires (dealStageIndex >=
  * ORDER_RECEIVED) — there is no shortcut around the real pricing/quotation chain, so this
  * mirrors driveTicketToAcceptedQuotation but generalises the single-item body to N items/quotes.
+ *
+ * Returns `{ ticketId, prId }` — the pricing request id too, which the D1 tests below need to
+ * raise the deal's deposit notice (createDepositNoticeFromQuotation keys on it). The session is
+ * left logged in as `sales`, the deal's owning rep.
  */
 async function driveTwoFactoryTicketToOrderReceived() {
   const n = seq + 1;
@@ -141,7 +145,7 @@ async function driveTwoFactoryTicketToOrderReceived() {
   expect(detail.summary.status).toBe('quotation_issued');
   expect(detail.summary.paymentStatus).toBe('CUSTOMER_CONFIRMED');
 
-  return { ticketId };
+  return { ticketId, prId };
 }
 
 describe('mockApi storedImportRequests — S3: rollup requires EVERY required factory issued+received', () => {
@@ -216,6 +220,312 @@ describe('mockApi storedImportRequests — S4: bypass issue gate requires EXACTL
     const { importRequest: issued } = await api.storedImportRequests.issue(draft.id, {});
     expect(issued.status).toBe('ISSUED');
   });
+});
+
+// D1 (owner rules 2026-10-05, C3): on a DEPOSIT deal (the accepted quotation asks more than 0%) the import
+// request may be ISSUED only once ฝ่ายบัญชี has confirmed the deposit — issuing a deposit NOTICE is not enough. It holds
+// on the per-factory route (storedImportRequests.issue) and the legacy one-click route
+// (tickets.issueImportRequest), the advertised ISSUE_IMPORT_REQUEST action follows the same
+// predicate, and preparing the draft stays allowed. Mirrors TicketService#requireImportRequestIssuable.
+//
+// Like everything in this file, it proves the MOCK mirrors that rule — never that production does
+// (CLAUDE.md: the mock's behaviour is not authoritative); the real-DB evidence is the backend's
+// ImportRequestPaymentGateIntegrationTest / PaymentTrackIntegrationTest. The deal here is built by
+// the mock's real chain (order confirmed, deposit notice issued through api.depositNotices.issue),
+// so the DEPOSIT_NOTICE_ISSUED it reaches is the state a real notice produces, not a stamped field.
+describe('mockApi import request — D1: the deposit must be RECEIVED, a notice is not enough', () => {
+  // The deal's summary as `role` sees it. The ticket's owner is the seeded sales user (login({role})
+  // always resolves the same user for a role); import is refused the whole-deal GET, so read as sales.
+  async function dealAs(role, ticketId) {
+    await api.auth.login({ role });
+    const { ticket } = await api.tickets.get(ticketId);
+    return ticket.summary;
+  }
+
+  async function driveToDepositNoticeIssued() {
+    const { ticketId, prId } = await driveTwoFactoryTicketToOrderReceived(); // leaves the session as sales
+    const { depositNotice: doc } = await api.pricingRequests.createDepositNoticeFromQuotation(prId, {});
+    await api.depositNotices.issue(doc.id);
+    expect((await dealAs('sales', ticketId)).paymentStatus).toBe('DEPOSIT_NOTICE_ISSUED');
+    return ticketId;
+  }
+
+  async function accountConfirmsTheDeposit(ticketId) {
+    await api.auth.login({ role: 'account' });
+    await api.finance.confirmDepositPaid(ticketId);
+  }
+
+  it('per-factory route: draft allowed, issue() refused (409, deposit message, nothing written) at notice-only, allowed once account confirms the deposit', async () => {
+    const ticketId = await driveToDepositNoticeIssued();
+    const before = await dealAs('sales', ticketId);
+
+    // Preparing the form is still allowed — the rule gates ISSUING, not drafting.
+    const { importRequests: drafts } = await api.storedImportRequests.createDrafts(ticketId, {});
+    expect(drafts.length).toBeGreaterThan(0);
+    const draft = drafts[0];
+    expect(draft.status).toBe('DRAFT');
+
+    // 409 AND the deposit message: a bare 409 could equally be "already issued" or "no items".
+    await expect(api.storedImportRequests.issue(draft.id, {}))
+      .rejects.toMatchObject({ status: 409, message: expect.stringContaining('มัดจำ') });
+
+    // Nothing was written: still an unnumbered DRAFT, and the deal is exactly as it was.
+    const { importRequest: untouched } = await api.storedImportRequests.get(draft.id);
+    expect(untouched.status).toBe('DRAFT');
+    expect(untouched.docNumber).toBeNull();
+    const refused = await dealAs('sales', ticketId);
+    expect(refused.fulfillmentStatus).toBeNull();
+    expect(refused.salesStage).toBe(before.salesStage);
+    expect(refused.paymentStatus).toBe('DEPOSIT_NOTICE_ISSUED');
+
+    // ฝ่ายบัญชี confirms the deposit received — then the same draft issues.
+    await accountConfirmsTheDeposit(ticketId);
+    await api.auth.login({ role: 'sales' });
+    const { importRequest: issued } = await api.storedImportRequests.issue(draft.id, {});
+    expect(issued.status).toBe('ISSUED');
+  }, 30000);
+
+  it('legacy route: tickets.issueImportRequest is refused (409, deposit message, nothing written) at notice-only, allowed once account confirms the deposit', async () => {
+    const ticketId = await driveToDepositNoticeIssued();
+    const before = await dealAs('sales', ticketId);
+
+    await api.auth.login({ role: 'import' });
+    await expect(api.tickets.issueImportRequest(ticketId))
+      .rejects.toMatchObject({ status: 409, message: expect.stringContaining('มัดจำ') });
+    const refused = await dealAs('sales', ticketId);
+    expect(refused.fulfillmentStatus).toBeNull();
+    expect(refused.salesStage).toBe(before.salesStage);
+
+    await accountConfirmsTheDeposit(ticketId);
+    await api.auth.login({ role: 'import' });
+    await api.tickets.issueImportRequest(ticketId);
+    expect((await dealAs('sales', ticketId)).fulfillmentStatus).toBe('IR_ISSUED');
+  }, 30000);
+
+  it('advertised action: ISSUE_IMPORT_REQUEST is not listed at notice-only, and is listed once account confirms the deposit', async () => {
+    const ticketId = await driveToDepositNoticeIssued();
+
+    await api.auth.login({ role: 'ceo' });
+    const atNotice = await api.tickets.actions(ticketId);
+    expect(atNotice.availableActions.map((a) => a.action)).not.toContain('ISSUE_IMPORT_REQUEST');
+
+    await accountConfirmsTheDeposit(ticketId);
+    await api.auth.login({ role: 'ceo' });
+    const afterDeposit = await api.tickets.actions(ticketId);
+    // Without this the "not listed" half above would pass for an actions() that listed nothing at all.
+    expect(afterDeposit.availableActions.map((a) => a.action)).toContain('ISSUE_IMPORT_REQUEST');
+  }, 30000);
+});
+
+// Helpers shared by the D2 and D3 describes below. The D1 describe above has its own
+// accountConfirmsTheDeposit, which leaves the session logged in as account; the one here is named
+// differently because it hands the session back to the owning rep.
+
+// The owning rep declares EVERY line from stock (allowed at any payment state — the
+// declaration stays open). The session must be the owning rep, which is what the drive leaves it as.
+async function declareEveryLineFromStock(ticketId) {
+  const { ticket } = await api.tickets.get(ticketId);
+  await api.tickets.reserveStock(ticketId, {
+    lines: ticket.items.map((item) => ({ itemId: item.id, qtyFromStock: item.qty })),
+  });
+  return (await api.tickets.get(ticketId)).ticket;
+}
+
+async function issueTheDepositNotice(ticketId, prId) {
+  await api.auth.login({ role: 'sales' });
+  const { depositNotice: doc } = await api.pricingRequests.createDepositNoticeFromQuotation(prId, {});
+  await api.depositNotices.issue(doc.id);
+  expect((await api.tickets.get(ticketId)).ticket.summary.paymentStatus).toBe('DEPOSIT_NOTICE_ISSUED');
+}
+
+async function accountConfirmsTheDepositAndTheRepResumes(ticketId) {
+  await api.auth.login({ role: 'account' });
+  await api.finance.confirmDepositPaid(ticketId);
+  await api.auth.login({ role: 'sales' });
+}
+
+// A deal whose ACCEPTED quotation asks 0% — no deposit step at all (owner rules 2026-10-05, C1) — with its
+// order confirmed through the mock's real confirm-order call (dealQuotations.promoteToDeal: an APPROVED direct
+// quotation -> CUSTOMER_CONFIRMED + ORDER_RECEIVED), built the way mockApi.promoteToDeal.test.js builds its
+// deals. Not the deal-level switch (tickets.setDepositPolicy). The mock IGNORES the quotation's percentage
+// today, so what a test on this deal pins is the over-holding guard for the day it does not. The session is
+// left as the owning rep, who declares and delivers.
+const ZERO_PERCENT_TILE = {
+  brand: 'SCG', model: 'Trilogy', color: 'Ash', texture: 'Matt', sizeText: '60x60', thicknessMm: 10,
+  sqmPerPiece: 0.36, quantityMode: 'PIECES', piecesInput: 10, wastageMode: 'NONE', wastageValue: 0,
+  piecesPerBox: null, unitPrice: 850, discountPct: 0, leadTimeMinDays: 30, leadTimeMaxDays: 45,
+};
+
+async function confirmedZeroPercentDeal() {
+  await api.auth.login({ role: 'sales' });
+  const { ticket } = await api.tickets.create({
+    entryChannel: 'DESIGNER_LED', title: 'ดีลไม่รับมัดจำ', priority: 'NORMAL', customerName: 'ลูกค้า',
+    projectId: 1, items: [], nextFollowUpAt: '2026-10-07',
+  });
+  const ticketId = ticket.summary.id;
+  const { quotation: draft } = await api.dealQuotations.create(ticketId, {
+    recipientType: 'DESIGNER', depositPercent: 0, fullPaymentTerm: 'ON_DELIVERY', items: [ZERO_PERCENT_TILE],
+  });
+  expect(draft.depositPercent).toBe(0);
+  await api.dealQuotations.submit(draft.id);
+  await api.auth.login({ role: 'sales_manager' });
+  await api.dealQuotations.approve(draft.id);
+  await api.auth.login({ role: 'sales' });
+  await api.dealQuotations.promoteToDeal(draft.id); // the real confirmation of the order
+  const { ticket: confirmed } = await api.tickets.get(ticketId);
+  expect(confirmed.summary.paymentStatus).toBe('CUSTOMER_CONFIRMED');
+  expect(confirmed.summary.salesStage).toBe('ORDER_RECEIVED');
+  return ticketId;
+}
+
+// D2 (owner rules 2026-10-05, C5): on a DEPOSIT deal (the accepted quotation asks more than 0%) NOTHING IS
+// DELIVERED until ฝ่ายบัญชี has confirmed the deposit — not on the customer's confirmation, not on a deposit
+// NOTICE either. Partial or complete, from stock or from the warehouse. Declaring stock stays allowed, the
+// balance is never required, and the advertised RECORD_PARTIAL_DELIVERY / COMPLETE_DELIVERY follow the same
+// rule. A 0% quotation has no deposit step at all: delivery is allowed once the order is confirmed. Mirrors
+// TicketService#recordPartialDelivery/completeDelivery and canRecordDelivery.
+//
+// Like everything in this file, it proves the MOCK mirrors that rule — never that production does
+// (CLAUDE.md: the mock's behaviour is not authoritative); the real-DB evidence is the backend's
+// DeliveryDepositGateIntegrationTest / PaymentTrackIntegrationTest. The deal is built by the mock's
+// real chain, and the deposit notice is issued through api.depositNotices.issue, so the states
+// reached are the ones a real order and a real notice produce, not stamped fields. Only the STOCK
+// route is driven here; the warehouse route needs the whole import journey first and is pinned on
+// the backend.
+describe('mockApi delivery — D2: nothing is delivered until the deposit is RECEIVED', () => {
+  const DELIVERY_ACTIONS = ['RECORD_PARTIAL_DELIVERY', 'COMPLETE_DELIVERY'];
+
+  async function offeredActions(ticketId) {
+    return (await api.tickets.actions(ticketId)).availableActions.map((a) => a.action);
+  }
+
+  it('stock route, deposit deal: the declaration is allowed, delivery is refused (409, deposit message, nothing delivered) on the confirmation and on the notice, and lands once account confirms the deposit', async () => {
+    const { ticketId, prId } = await driveTwoFactoryTicketToOrderReceived(); // session = sales, the owner
+    const declared = await declareEveryLineFromStock(ticketId);
+    expect(declared.summary.fulfillmentStatus).toBe('FROM_STOCK');
+    const first = declared.items[0];
+
+    // 409 AND the deposit message: a bare 409 could equally be "over-delivery" or "receive the goods
+    // first". And nothing is delivered: every line still 0, fulfilment and stage unchanged.
+    async function expectBothWritersRefusedAndNothingDelivered() {
+      await expect(api.tickets.recordDelivery(ticketId, { source: 'STOCK', lines: [{ itemId: first.id, qty: 4 }] }))
+        .rejects.toMatchObject({ status: 409, message: expect.stringContaining('มัดจำ') });
+      await expect(api.tickets.completeDelivery(ticketId, {}))
+        .rejects.toMatchObject({ status: 409, message: expect.stringContaining('มัดจำ') });
+      const { ticket } = await api.tickets.get(ticketId);
+      expect(ticket.items.map((item) => Number(item.qtyDelivered ?? 0))).toEqual(ticket.items.map(() => 0));
+      expect(ticket.summary.fulfillmentStatus).toBe(declared.summary.fulfillmentStatus);
+      expect(ticket.summary.salesStage).toBe(declared.summary.salesStage);
+    }
+
+    // On the customer's confirmation alone...
+    await expectBothWritersRefusedAndNothingDelivered();
+    // ...and still not once the deposit NOTICE is issued: a notice is a document, not money.
+    await issueTheDepositNotice(ticketId, prId);
+    await expectBothWritersRefusedAndNothingDelivered();
+
+    // ฝ่ายบัญชี confirms the deposit received — then the rep's completeDelivery lands, with only the
+    // deposit paid (the balance is never required).
+    await accountConfirmsTheDepositAndTheRepResumes(ticketId);
+    await api.tickets.completeDelivery(ticketId, {});
+    const { ticket: delivered } = await api.tickets.get(ticketId);
+    expect(delivered.summary.fulfillmentStatus).toBe('FULLY_DELIVERED');
+    expect(delivered.summary.paymentStatus).toBe('DEPOSIT_PAID');
+  }, 40000);
+
+  it('advertised actions: RECORD_PARTIAL_DELIVERY / COMPLETE_DELIVERY are not listed to the owning rep before the deposit is received, and are once account confirms it', async () => {
+    const { ticketId, prId } = await driveTwoFactoryTicketToOrderReceived();
+    await declareEveryLineFromStock(ticketId); // a source exists, so delivery is otherwise possible
+
+    const onConfirmation = await offeredActions(ticketId);
+    DELIVERY_ACTIONS.forEach((action) => expect(onConfirmation).not.toContain(action));
+    await issueTheDepositNotice(ticketId, prId);
+    const onNotice = await offeredActions(ticketId);
+    DELIVERY_ACTIONS.forEach((action) => expect(onNotice).not.toContain(action));
+
+    await accountConfirmsTheDepositAndTheRepResumes(ticketId);
+    // Without this the "not listed" halves above would pass for an actions() that listed nothing at all.
+    const afterDeposit = await offeredActions(ticketId);
+    DELIVERY_ACTIONS.forEach((action) => expect(afterDeposit).toContain(action));
+  }, 40000);
+
+  // GREEN today: guard against over-correcting. A 0% quotation has no deposit step, so the confirmed order
+  // alone opens delivery — with nothing paid.
+  it('a 0% quotation deal: the rep declares stock, the actions are offered, and completeDelivery succeeds with nothing paid', async () => {
+    const ticketId = await confirmedZeroPercentDeal();
+    await declareEveryLineFromStock(ticketId);
+
+    const offered = await offeredActions(ticketId);
+    DELIVERY_ACTIONS.forEach((action) => expect(offered).toContain(action));
+    await api.tickets.completeDelivery(ticketId, {});
+
+    const { ticket } = await api.tickets.get(ticketId);
+    expect(ticket.summary.fulfillmentStatus).toBe('FULLY_DELIVERED');
+    expect(ticket.summary.paymentStatus).toBe('CUSTOMER_CONFIRMED'); // nothing was paid
+  }, 40000);
+});
+
+// D3 (owner rules 2026-10-05, C4): declaring FULL stock must not move a DEPOSIT deal past ขั้น 10
+// (ORDER_RECEIVED) before the deposit is CONFIRMED. Declaring stays allowed at any payment state, and
+// everything a declaration writes today it still writes — each line's qtyFromStock, the STOCK_RESERVED
+// event, fulfillmentStatus FROM_STOCK. ONLY the stage move waits: it happens at the moment ฝ่ายบัญชี
+// confirms the deposit (DEPOSIT_PAID). A 0% quotation has no deposit step, so it moves at once.
+// Mirrors TicketService#reserveStock.
+//
+// Like everything in this file, it proves the MOCK mirrors that rule — never that production does
+// (CLAUDE.md: the mock's behaviour is not authoritative); the real-DB evidence is the backend's
+// StockDeclarationDepositHoldIntegrationTest / PaymentTrackIntegrationTest. Every deal here is already at
+// ORDER_RECEIVED, built by the mock's real chain; the stage FLOOR on a declaration (refused below
+// ORDER_RECEIVED) is a different rule and is not exercised here.
+describe('mockApi stock declaration — D3: the stage waits for the deposit', () => {
+  it('deposit deal / CUSTOMER_CONFIRMED: the declaration is saved but the stage holds at ORDER_RECEIVED — through the deposit notice — and moves to DELIVERY_SCHEDULING when account confirms the deposit', async () => {
+    const { ticketId, prId } = await driveTwoFactoryTicketToOrderReceived(); // session = sales, the owner
+    const declared = await declareEveryLineFromStock(ticketId);
+
+    // Everything the declaration writes today, it still writes (all of this holds today)...
+    expect(declared.summary.fulfillmentStatus).toBe('FROM_STOCK');
+    expect(declared.summary.paymentStatus).toBe('CUSTOMER_CONFIRMED');
+    expect(declared.items.length).toBeGreaterThan(0);
+    declared.items.forEach((item) => expect(Number(item.qtyFromStock)).toBe(Number(item.qty)));
+    // ...except the stage move, which waits for the deposit.
+    expect(declared.summary.salesStage).toBe('ORDER_RECEIVED');
+
+    // A deposit NOTICE is a document, not money — the stage is still held.
+    await issueTheDepositNotice(ticketId, prId);
+    expect((await api.tickets.get(ticketId)).ticket.summary.salesStage).toBe('ORDER_RECEIVED');
+
+    // ฝ่ายบัญชี confirms the deposit received — the held deal goes on to DELIVERY_SCHEDULING.
+    await accountConfirmsTheDepositAndTheRepResumes(ticketId);
+    const { ticket: released } = await api.tickets.get(ticketId);
+    expect(released.summary.salesStage).toBe('DELIVERY_SCHEDULING');
+    expect(released.summary.fulfillmentStatus).toBe('FROM_STOCK');
+  }, 40000);
+
+  // GREEN today, and the half that ties the hold to its release: asserts ONLY the end state, never the
+  // hold in the middle. It passes today because the stage jumped early; after a fix that held the stage
+  // but FORGOT the release it goes red.
+  it('the release half on its own: declare, issue the notice, account confirms the deposit — the deal ends at DELIVERY_SCHEDULING and FROM_STOCK', async () => {
+    const { ticketId, prId } = await driveTwoFactoryTicketToOrderReceived();
+    await declareEveryLineFromStock(ticketId);
+    await issueTheDepositNotice(ticketId, prId);
+    await accountConfirmsTheDepositAndTheRepResumes(ticketId);
+
+    const { ticket } = await api.tickets.get(ticketId);
+    expect(ticket.summary.paymentStatus).toBe('DEPOSIT_PAID');
+    expect(ticket.summary.fulfillmentStatus).toBe('FROM_STOCK');
+    expect(ticket.summary.salesStage).toBe('DELIVERY_SCHEDULING');
+  }, 40000);
+
+  // GREEN today: guard against over-holding. A 0% quotation has no deposit step, so the confirmed order
+  // alone is enough and the declaration moves the deal on at once — with nothing paid.
+  it('a 0% quotation deal: the declaration moves it to DELIVERY_SCHEDULING at once', async () => {
+    const ticketId = await confirmedZeroPercentDeal();
+    const declared = await declareEveryLineFromStock(ticketId);
+
+    expect(declared.summary.fulfillmentStatus).toBe('FROM_STOCK');
+    expect(declared.summary.paymentStatus).toBe('CUSTOMER_CONFIRMED'); // nothing was paid
+    expect(declared.summary.salesStage).toBe('DELIVERY_SCHEDULING');
+  }, 40000);
 });
 
 // PR-B REVIEW ROUND 2, X5: applyImportRequestRollupMock's own firewall guards, mirroring

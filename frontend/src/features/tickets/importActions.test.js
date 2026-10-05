@@ -1,3 +1,4 @@
+// NOTE: these rows are keyed on today's summary field `depositPolicy`; under C1 (owner rules of 2026-10-05) that field goes, so they are revised when the summary's new shape is decided.
 import { describe, expect, it } from 'vitest';
 import { nextFulfilmentActionCode, nextImportAction } from './importActions.js';
 
@@ -8,17 +9,59 @@ import { nextFulfilmentActionCode, nextImportAction } from './importActions.js';
 // importActions.js header). It named ProcurementFulfilmentPage until ebaf6888
 // deleted that page.
 describe('nextFulfilmentActionCode', () => {
+  // "The deposit is in" means RECEIVED (DEPOSIT_PAID) — C2 + C3 of the owner rules of 2026-10-05: only
+  // ฝ่ายบัญชี's ยืนยันรับมัดจำ confirms a deposit, and the import request waits for it. This test used to
+  // loop over ['DEPOSIT_NOTICE_ISSUED', 'DEPOSIT_PAID']; the notice half moved to its own test below.
   it('offers issueImportRequest on a draft ticket once the deposit is in (no quotation_issued needed)', () => {
-    for (const paymentStatus of ['DEPOSIT_NOTICE_ISSUED', 'DEPOSIT_PAID']) {
-      expect(nextFulfilmentActionCode({ status: 'draft', fulfillmentStatus: null, paymentStatus })).toBe('issueImportRequest');
-    }
+    expect(nextFulfilmentActionCode({ status: 'draft', fulfillmentStatus: null, paymentStatus: 'DEPOSIT_PAID' })).toBe('issueImportRequest');
     expect(nextFulfilmentActionCode({
       status: 'draft', fulfillmentStatus: null, paymentStatus: 'CUSTOMER_CONFIRMED', depositPolicy: 'CREDIT_CUSTOMER',
     })).toBe('issueImportRequest');
   });
+  // C3: a deposit NOTICE is a document, not money in hand (C2). importDepositReady mirrors
+  // TicketService#requireImportRequestIssuable, which no longer accepts DEPOSIT_NOTICE_ISSUED, so the
+  // CTA must not be offered — it would 409 on click. (The ticket here is not quotation_issued: that
+  // status short-circuits to issueImportRequest whatever the deposit says, a separate matter.)
+  it('does NOT offer issueImportRequest on a draft ticket while only the deposit notice is issued', () => {
+    expect(nextFulfilmentActionCode({
+      status: 'draft', fulfillmentStatus: null, paymentStatus: 'DEPOSIT_NOTICE_ISSUED', depositPolicy: 'REQUIRED',
+    })).toBeNull();
+    // Same with no depositPolicy on the object at all: the notice alone never qualifies.
+    expect(nextFulfilmentActionCode({
+      status: 'draft', fulfillmentStatus: null, paymentStatus: 'DEPOSIT_NOTICE_ISSUED',
+    })).toBeNull();
+  });
   it('does NOT offer issueImportRequest on a draft ticket without a deposit (deposit floor stays)', () => {
     expect(nextFulfilmentActionCode({ status: 'draft', fulfillmentStatus: null, paymentStatus: null })).toBeNull();
     expect(nextFulfilmentActionCode({ status: 'draft', fulfillmentStatus: null, paymentStatus: 'CUSTOMER_CONFIRMED', depositPolicy: 'REQUIRED' })).toBeNull();
+  });
+  // Guard against over-correcting C3: a deal with no deposit step (keyed today on a deposit-exempt
+  // depositPolicy; under C1 it is a 0% quotation) owes nothing, so the customer's
+  // confirmation alone opens the gate (and null is still not "exempt"). Demanding DEPOSIT_PAID here
+  // would strand every exempt deal.
+  it.each(['NOT_REQUIRED', 'WAIVED', 'CREDIT_CUSTOMER'])(
+    'a deposit-exempt (%s) draft ticket needs only the customer confirmation: offered at CUSTOMER_CONFIRMED, not before',
+    (depositPolicy) => {
+      expect(nextFulfilmentActionCode({
+        status: 'draft', fulfillmentStatus: null, paymentStatus: 'CUSTOMER_CONFIRMED', depositPolicy,
+      })).toBe('issueImportRequest');
+      expect(nextFulfilmentActionCode({
+        status: 'draft', fulfillmentStatus: null, paymentStatus: null, depositPolicy,
+      })).toBeNull();
+    },
+  );
+  // FLAGGED GROUP (keep or drop as one unit) — NOT part of the C3 finding. A deal already paid PAST
+  // the deposit before any import request exists is refused on the backend's legacy route today with
+  // the "deposit not received" message, while the stored per-factory route already issues it. These
+  // pin the target for the CTA: money past the deposit has been received, so the action is offered.
+  // (The two rows for a WAIVED deal went with the waiver — C1: there is none — as their backend
+  // twins did; they asked for new behaviour on a switch value that no longer exists.)
+  it.each([
+    ['REQUIRED', 'FULLY_PAID'],
+  ])('paid ahead: offers issueImportRequest on a draft ticket already paid past the deposit (%s, %s)', (depositPolicy, paymentStatus) => {
+    expect(nextFulfilmentActionCode({
+      status: 'draft', fulfillmentStatus: null, paymentStatus, depositPolicy,
+    })).toBe('issueImportRequest');
   });
   it('does not re-offer issueImportRequest once a fulfilment status exists, even on a draft ticket', () => {
     expect(nextFulfilmentActionCode({ status: 'draft', fulfillmentStatus: 'IR_ISSUED', paymentStatus: 'DEPOSIT_PAID' })).not.toBe('issueImportRequest');

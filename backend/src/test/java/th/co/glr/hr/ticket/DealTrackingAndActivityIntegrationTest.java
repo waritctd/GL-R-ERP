@@ -152,8 +152,11 @@ class DealTrackingAndActivityIntegrationTest extends AbstractPostgresIntegration
         ticketService.updateStage(ticketId, DealStage.PRESENTATION, null, salesRep);
         logActivity(ticketId, DealActivityKind.CALL);
         ticketService.updateStage(ticketId, DealStage.SPEC_APPROVED, null, salesRep);
-        logActivity(ticketId, DealActivityKind.CALL);
-        ticketService.updateStage(ticketId, DealStage.QUOTE_DESIGN_SIDE, null, salesRep);
+        // ขั้น 4 is reached when a quotation is created for the designer, never by hand (owner rule of
+        // 2026-10-05, M2), so the deal is only POSITIONED there. No activity is logged after the last
+        // STAGE_CHANGED event (the move onto SPEC_APPROVED above), which is exactly the state the old
+        // hand move onto QUOTE_DESIGN_SIDE left behind and the one that would block a FORWARD move.
+        tickets.updateSalesStage(ticketId, DealStage.QUOTE_DESIGN_SIDE);
 
         // QUOTE_DESIGN_SIDE -> SPEC_APPROVED is the routine backward move (DealStage
         // .isRoutineBackwardMove) — no note required, and no tracking-field gate at all, even

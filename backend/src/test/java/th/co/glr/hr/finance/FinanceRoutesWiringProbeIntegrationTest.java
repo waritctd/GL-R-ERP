@@ -1,6 +1,7 @@
 package th.co.glr.hr.finance;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 
@@ -54,6 +55,10 @@ import th.co.glr.hr.ticket.TicketService;
  * EXACTLY the path and JSON body hrApi.js / its callers send (TicketDetailPage.handleRecordPayment /
  * handleSetBilling, UpdateStageModal, the `{}` revoke body), with the XSRF cookie + X-XSRF-TOKEN header pair the
  * real client (client.js csrfHeaders) sends.
+ *
+ * <p>The stage post keeps its client-shaped body, but since the owner rules of 2026-10-05 (M4: from ขั้น 10 the
+ * stage is system-only for every role) it is expected to be REFUSED for ฝ่ายบัญชี and for the CEO alike — only
+ * "status >= 400, the row did not move, no STAGE_CHANGED" is asserted.
  */
 @EnabledIf(
     value = "th.co.glr.hr.support.PostgresTestSupport#isAvailable",
@@ -175,12 +180,23 @@ class FinanceRoutesWiringProbeIntegrationTest {
         assertThat(d.get("money").get("closeConfirmedAt").isNull()).isTrue();
 
         long c = stageReadyDeal();
-        // UpdateStageModal: onSubmit({ stage, note: note.trim() || undefined }) -> JSON.stringify drops `note`
-        d = okDeal(postAs("/api/finance/deals/" + c + "/stage", "{\"stage\":\"DEPOSIT_RECEIVED\"}", account), c, "stage");
-        assertThat(d.get("salesStage").asText()).isEqualTo("DEPOSIT_RECEIVED");
-        // and a non-money stage is refused through the full stack
+        int stageChangedBefore = stageChangedCount(c);
+        // a non-money stage is refused through the full stack (the role gate, 403 — unchanged)
         assertThat(postAs("/api/finance/deals/" + c + "/stage", "{\"stage\":\"NEGOTIATION\"}", account).getStatus())
             .isEqualTo(403);
+        // UpdateStageModal: onSubmit({ stage, note: note.trim() || undefined }) -> JSON.stringify drops `note`.
+        // Owner rules of 2026-10-05 (M4): from ขั้น 10 the stage is system-only for every role, so this money-stage
+        // hand move is now expected to be REFUSED even for ฝ่ายบัญชี — it used to be okDeal(...) and
+        // salesStage == DEPOSIT_RECEIVED. Only "status >= 400, the row did not move, no STAGE_CHANGED" is pinned:
+        // whether the route is deleted or kept and refusing is the developer's choice. The deal is one today's
+        // code accepts (payment DEPOSIT_PAID, ORDER_RECEIVED, follow-up date and an activity), so this is red today.
+        int stageStatus = postAs("/api/finance/deals/" + c + "/stage", "{\"stage\":\"DEPOSIT_RECEIVED\"}", account)
+            .getStatus();
+        assertAll(
+            () -> assertThat(stageStatus).as("account's stage post onto DEPOSIT_RECEIVED").isGreaterThanOrEqualTo(400),
+            () -> assertThat(salesStageOf(c)).as("the row must not have moved").isEqualTo("ORDER_RECEIVED"),
+            () -> assertThat(stageChangedCount(c)).as("no STAGE_CHANGED event may be written")
+                .isEqualTo(stageChangedBefore));
         System.out.println("PROBE account ok: " + log);
     }
 
@@ -201,7 +217,17 @@ class FinanceRoutesWiringProbeIntegrationTest {
         okDeal(postAs("/api/finance/deals/" + b + "/close/revoke", "{}", ceo), b, "ceo revoke");
 
         long c = stageReadyDeal();
-        okDeal(postAs("/api/finance/deals/" + c + "/stage", "{\"stage\":\"DEPOSIT_RECEIVED\"}", ceo), c, "ceo stage");
+        int stageChangedBefore = stageChangedCount(c);
+        // Owner rules of 2026-10-05 (M4): the stage is system-only from ขั้น 10 for EVERY role, the CEO included, so
+        // the CEO's hand move through this route is now expected to be refused too (it used to be okDeal(...)).
+        // Only "status >= 400, the row did not move, no STAGE_CHANGED" is pinned; red today because it is accepted.
+        int stageStatus = postAs("/api/finance/deals/" + c + "/stage", "{\"stage\":\"DEPOSIT_RECEIVED\"}", ceo)
+            .getStatus();
+        assertAll(
+            () -> assertThat(stageStatus).as("ceo's stage post onto DEPOSIT_RECEIVED").isGreaterThanOrEqualTo(400),
+            () -> assertThat(salesStageOf(c)).as("the row must not have moved").isEqualTo("ORDER_RECEIVED"),
+            () -> assertThat(stageChangedCount(c)).as("no STAGE_CHANGED event may be written")
+                .isEqualTo(stageChangedBefore));
     }
 
     @Test
@@ -289,6 +315,16 @@ class FinanceRoutesWiringProbeIntegrationTest {
             + "WHERE ticket_id = :id", new MapSqlParameterSource("id", id));
         ticketService.addActivity(id, new DealActivityRequest(LocalDate.now(), DealActivityKind.CALL, null), sales);
         return id;
+    }
+
+    private String salesStageOf(long ticketId) {
+        return jdbc.queryForObject("SELECT sales_stage FROM sales.ticket WHERE ticket_id = :id",
+            new MapSqlParameterSource("id", ticketId), String.class);
+    }
+
+    private int stageChangedCount(long ticketId) {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM sales.ticket_event WHERE ticket_id = :id AND kind = 'STAGE_CHANGED'",
+            new MapSqlParameterSource("id", ticketId), Integer.class);
     }
 
     private long employee(String emailLocal) {

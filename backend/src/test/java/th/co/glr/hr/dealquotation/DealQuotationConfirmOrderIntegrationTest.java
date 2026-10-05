@@ -341,10 +341,11 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
         // A payment status past CUSTOMER_CONFIRMED makes applyCustomerConfirmation refuse (409).
         jdbc.update("UPDATE sales.ticket SET payment_status = 'DEPOSIT_PAID' WHERE ticket_id = :id", Map.of("id", ghost));
 
+        String stageBefore = summary(ghost).salesStage(); // M2: the quotation just created moved the deal
         assertThatThrownBy(() -> confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
 
-        assertNothingPromoted(ghost);
+        assertNothingPromoted(ghost, stageBefore);
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -355,16 +356,18 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
     void nonOwningSales_isRefused_403_andNothingIsWritten() {
         long ghost = quotationOnlyTicket(salesActor);
         DealQuotationDto approved = approvedDirectQuotation(ghost, salesActor);
+        String stageBefore = summary(ghost).salesStage(); // M2: the quotation just created moved the deal
         assertForbidden(() -> confirmer.confirmOrderFromDirectQuotation(approved.id(), otherSalesActor));
-        assertNothingPromoted(ghost);
+        assertNothingPromoted(ghost, stageBefore);
     }
 
     @Test
     void importRole_isRefused_403_andNothingIsWritten() {
         long ghost = quotationOnlyTicket(salesActor);
         DealQuotationDto approved = approvedDirectQuotation(ghost, salesActor);
+        String stageBefore = summary(ghost).salesStage(); // M2: the quotation just created moved the deal
         assertForbidden(() -> confirmer.confirmOrderFromDirectQuotation(approved.id(), importActor));
-        assertNothingPromoted(ghost);
+        assertNothingPromoted(ghost, stageBefore);
     }
 
     /** ceo APPROVES direct quotations but does not write them — promotion is the writer's action. */
@@ -372,16 +375,18 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
     void ceoRole_isRefused_403_andNothingIsWritten() {
         long ghost = quotationOnlyTicket(salesActor);
         DealQuotationDto approved = approvedDirectQuotation(ghost, salesActor);
+        String stageBefore = summary(ghost).salesStage(); // M2: the quotation just created moved the deal
         assertForbidden(() -> confirmer.confirmOrderFromDirectQuotation(approved.id(), ceoActor));
-        assertNothingPromoted(ghost);
+        assertNothingPromoted(ghost, stageBefore);
     }
 
     @Test
     void accountRole_isRefused_403_andNothingIsWritten() {
         long ghost = quotationOnlyTicket(salesActor);
         DealQuotationDto approved = approvedDirectQuotation(ghost, salesActor);
+        String stageBefore = summary(ghost).salesStage(); // M2: the quotation just created moved the deal
         assertForbidden(() -> confirmer.confirmOrderFromDirectQuotation(approved.id(), accountActor));
-        assertNothingPromoted(ghost);
+        assertNothingPromoted(ghost, stageBefore);
     }
 
     /** 403 wins over 409: a caller with no access must not learn the quotation's state either. */
@@ -400,8 +405,9 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
     void draftDirectQuotation_isRefused_409() {
         long ghost = quotationOnlyTicket(salesActor);
         DealQuotationDto draft = quotationService.create(ghost, directDraft(), salesActor);
+        String stageBefore = summary(ghost).salesStage(); // M2: the quotation just created moved the deal
         assertConflict(() -> confirmer.confirmOrderFromDirectQuotation(draft.id(), salesActor), "อนุมัติแล้ว");
-        assertNothingPromoted(ghost);
+        assertNothingPromoted(ghost, stageBefore);
     }
 
     @Test
@@ -410,8 +416,9 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
         DealQuotationDto pending = quotationService.submit(
             quotationService.create(ghost, directDraft(), salesActor).id(), salesActor);
         assertThat(pending.docStatus()).isEqualTo(QuotationStatus.PENDING_APPROVAL);
+        String stageBefore = summary(ghost).salesStage(); // M2: the quotation just created moved the deal
         assertConflict(() -> confirmer.confirmOrderFromDirectQuotation(pending.id(), salesActor), "อนุมัติแล้ว");
-        assertNothingPromoted(ghost);
+        assertNothingPromoted(ghost, stageBefore);
     }
 
     /** R10 / separation: a PRICING_REQUEST-origin quotation is never promoted by this route — it has
@@ -426,8 +433,9 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
             UPDATE sales.quotation SET origin = 'PRICING_REQUEST', pricing_request_id = :pr
              WHERE quotation_id = :id
             """, Map.of("pr", pricingRequestId, "id", approved.id()));
+        String stageBefore = summary(ghost).salesStage(); // M2: the quotation just created moved the deal
         assertConflict(() -> confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor), "ไม่ผ่านคำขอราคา");
-        assertNothingPromoted(ghost);
+        assertNothingPromoted(ghost, stageBefore);
     }
 
     /** Reached quotation_issued by ANOTHER path (the pricing-request confirmOrder bridge writes the
@@ -450,8 +458,9 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
         long ghost = quotationOnlyTicket(salesActor);
         DealQuotationDto approved = approvedDirectQuotation(ghost, salesActor);
         jdbc.update("UPDATE sales.ticket SET lifecycle = 'ON_HOLD' WHERE ticket_id = :id", Map.of("id", ghost));
+        String stageBefore = summary(ghost).salesStage(); // M2: the quotation just created moved the deal
         assertConflict(() -> confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor), "ACTIVE");
-        assertNothingPromoted(ghost);
+        assertNothingPromoted(ghost, stageBefore);
     }
 
     @Test
@@ -612,6 +621,16 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
         tickets.markQuotationIssuedForOrderConfirmation(advancedStatus);
         long noQuotation = pipelineTicket(salesActor);           // no quotation at all
 
+        // Creating a direct quotation now moves the deal to its recipient's stage (owner rule of
+        // 2026-10-05, M2). These rows model PRE-V193 data, whose stage was still LEAD_APPROACH, so they are
+        // re-pinned there — otherwise each would be excluded by the backfill's stage clause, which the
+        // quotation just changed, and no longer by the clause (pricing request / legacy origin / status)
+        // this test exists to prove. advancedStage keeps the stage it was explicitly given above.
+        for (long row : new long[] {ghost, withPricingRequest, mixedOrigin, advancedStatus}) {
+            jdbc.update("UPDATE sales.ticket SET sales_stage = 'LEAD_APPROACH' WHERE ticket_id = :id",
+                Map.of("id", row));
+        }
+
         runV193();
         runV193(); // re-runnable
 
@@ -688,11 +707,17 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
             new BigDecimal("1"), null, "PIECE", null, null, null, null, "THB");
     }
 
-    private void assertNothingPromoted(long ticketId) {
+    /**
+     * The refused promotion wrote nothing. {@code stageBefore} is the stage read just before the attempt:
+     * it used to be the literal LEAD_APPROACH, but creating the direct quotation these tests start from
+     * now moves the deal to its recipient's stage (owner rule of 2026-10-05, M2), so "unmoved" has to be
+     * measured against where the deal stood when the promotion was attempted, not against where it began.
+     */
+    private void assertNothingPromoted(long ticketId, String stageBefore) {
         TicketSummaryDto s = summary(ticketId);
         assertThat(s.quotationOnly()).as("still quotation-only").isTrue();
         assertThat(s.status()).isEqualTo(TicketStatus.DRAFT);
-        assertThat(s.salesStage()).isEqualTo(DealStage.LEAD_APPROACH);
+        assertThat(s.salesStage()).as("stage unchanged by the refused promotion").isEqualTo(stageBefore);
         assertThat(itemCount(ticketId)).isZero();
         assertThat(eventCount(ticketId, TicketEventKind.DEAL_PROMOTED_FROM_QUOTATION)).isZero();
     }

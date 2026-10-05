@@ -47,12 +47,12 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  *
  * <p>This is the required evidence under {@code CLAUDE.md}'s "permission changes must ship
  * evidence": {@link TicketServiceTest}'s Mockito-based companion cases
- * ({@code waiveDeposit_ownerOrSalesManagerOnlyAndIssueImportRequestCanBypassNotice},
+ * ({@code waiveDeposit_ownerOrSalesManagerOnly_andAWaiverOpensNoImportRequest},
  * {@code waiveDeposit_grantsSalesManagerAsBackupOwner},
  * {@code waiveDeposit_sameIdAsOriginalOwnerButRoleNoLongerSales_decidesByRoleNotId},
  * {@code confirmDepositPaid_rejectsCeoRole}, {@code
  * actions_neverOffersWaiveDepositOnceDepositNoticeExists_butStillOffersDepositPaidToAccount},
- * {@code actions_offersWaiveDepositToOwnerAndSalesManager_whenPaymentTrackNotStarted}) pin which
+ * {@code actions_neverOffersWaiveDepositToAnyone_evenWhenThePaymentTrackHasNotStarted}) pin which
  * branch is chosen; only a real {@link TicketRepository} against real Postgres proves the decision
  * survives into the {@code UPDATE} — a mocked repository happily "passes" while the SQL does
  * something else.

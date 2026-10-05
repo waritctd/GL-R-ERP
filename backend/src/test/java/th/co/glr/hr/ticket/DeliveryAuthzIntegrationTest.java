@@ -300,6 +300,13 @@ class DeliveryAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
      *
      * <p>Seeded to ORDER_RECEIVED through the real {@code updateSalesStage}: {@code reserveStock} has
      * a stage floor there, and {@code StageFactGateIntegrationTest} owns that floor's coverage.
+     *
+     * <p>Delivery needs the deposit RECEIVED — confirmed by ฝ่ายบัญชี (owner rules of 2026-10-05: C5, and C2,
+     * only ยืนยันรับมัดจำ confirms a deposit), so the deal is marked {@code DEPOSIT_PAID} after the
+     * declaration. This class is about WHO may deliver, so its deal must
+     * be deliverable: otherwise the grants would fail for a reason unrelated to authorisation, and the
+     * 403 tests would stop proving that role is the only thing in the way. The deposit half is {@link
+     * DeliveryDepositGateIntegrationTest}.
      */
     private long deliverableDeal() {
         CreateTicketRequest request = new CreateTicketRequest(
@@ -313,6 +320,7 @@ class DeliveryAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
             new StockReservationRequest(List.of(
                 new StockReservationRequest.Line(itemId, new BigDecimal("10.00"), "ทดสอบ"))),
             owner);
+        tickets.updatePaymentStatusUnchecked(ticketId, PaymentTrack.DEPOSIT_PAID);
         return ticketId;
     }
 

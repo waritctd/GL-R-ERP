@@ -2,16 +2,19 @@ package th.co.glr.hr.dealquotation;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assertions.assertAll;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.function.Executable;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.http.HttpStatus;
@@ -178,7 +181,6 @@ class DealQuotationSearchOriginsIntegrationTest extends AbstractPostgresIntegrat
         assertThat(legacy.customerName()).isEqualTo("ลูกค้าเดิม A");
         assertThat(legacy.ticketId()).isEqualTo(dealA);
         assertThat(legacy.ticketCode()).isEqualTo(code(dealA)).isNotBlank();
-        assertThat(legacy.dealStage()).isEqualTo(DealStage.LEAD_APPROACH);
         assertThat(legacy.subtotalAmount()).isEqualByComparingTo("1000.00");
         assertThat(legacy.items()).as("legacy lines are never mapped through this engine").isEmpty();
         assertThat(legacy.pricingRequestId()).isNull();
@@ -191,9 +193,23 @@ class DealQuotationSearchOriginsIntegrationTest extends AbstractPostgresIntegrat
             DealQuotationDto row = byId(rows, id);
             assertThat(row.readOnly()).as("row %d readOnly", id).isFalse();
             assertThat(row.ticketCode()).as("row %d ticketCode", id).isEqualTo(code(row.ticketId()));
-            assertThat(row.dealStage()).as("row %d dealStage", id).isEqualTo(DealStage.LEAD_APPROACH);
         }
         assertThat(byId(rows, prA2).origin()).isEqualTo("PRICING_REQUEST");
+
+        // Every row carries its deal's LIVE stage. This asserted LEAD_APPROACH for all of them, because a
+        // quotation did not move its deal. By the owner rule of 2026-10-05 (M2) it does: the fixture put an
+        // OWNER-recipient direct quotation on each of the three deals through the real service (setup calls
+        // create / createAlongsideLive for directA, directB and the two re-tagged PRICING_REQUEST rows), so
+        // every deal is on ขั้น 5 — the legacy row's deal (deal A) included. The legacy row itself was
+        // inserted by SQL and moved nothing; it only reads the stage its deal is on.
+        List<Executable> stageOfEveryRow = new ArrayList<>();
+        stageOfEveryRow.add(() -> assertThat(legacy.dealStage()).as("legacy row (deal A) dealStage")
+            .isEqualTo(DealStage.QUOTE_OWNER));
+        for (long id : List.of(directA, prA2, directB, prB)) {
+            stageOfEveryRow.add(() -> assertThat(byId(rows, id).dealStage()).as("row %d dealStage", id)
+                .isEqualTo(DealStage.QUOTE_OWNER));
+        }
+        assertAll("every row carries its deal's live stage", stageOfEveryRow);
     }
 
     @ParameterizedTest
@@ -298,8 +314,8 @@ class DealQuotationSearchOriginsIntegrationTest extends AbstractPostgresIntegrat
     @Test
     void findById_carriesTicketCodeAndDealStage() {
         DealQuotationDto detail = quotationService.get(directA, salesA);
+        String stageOnTheFirstRead = detail.dealStage();
         assertThat(detail.ticketCode()).isEqualTo(code(dealA)).isNotBlank();
-        assertThat(detail.dealStage()).isEqualTo(DealStage.LEAD_APPROACH);
         assertThat(detail.readOnly()).isFalse();
 
         // Read live from the deal, never frozen on the quotation.
@@ -307,6 +323,13 @@ class DealQuotationSearchOriginsIntegrationTest extends AbstractPostgresIntegrat
         assertThat(quotationService.get(directA, salesA).dealStage()).isEqualTo(DealStage.PRESENTATION);
         assertThat(quotationService.listForTicket(dealA, salesA))
             .allSatisfy(q -> assertThat(q.ticketCode()).isEqualTo(code(dealA)));
+
+        // And what that live read said BEFORE the stage was forced above: this asserted LEAD_APPROACH, because
+        // a quotation did not move its deal. Setup created directA's OWNER-recipient quotation through the real
+        // service, so by the owner rule of 2026-10-05 (M2) deal A is on ขั้น 5 by then. Last, so the live-read
+        // half above is checked whatever the stage was.
+        assertThat(stageOnTheFirstRead).as("dealStage on the first read of the detail")
+            .isEqualTo(DealStage.QUOTE_OWNER);
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────

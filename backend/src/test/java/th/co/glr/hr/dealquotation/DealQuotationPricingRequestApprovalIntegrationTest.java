@@ -2,6 +2,7 @@ package th.co.glr.hr.dealquotation;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assertions.assertAll;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.ByteArrayInputStream;
@@ -70,7 +71,9 @@ import th.co.glr.hr.pricingrequest.PricingRequestStatus;
 import th.co.glr.hr.pricingrequest.QuantityType;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.CreateTicketRequest;
+import th.co.glr.hr.ticket.DealRoute;
 import th.co.glr.hr.ticket.DealStage;
+import th.co.glr.hr.ticket.EntryChannel;
 import th.co.glr.hr.ticket.QuotationRenderer;
 import th.co.glr.hr.ticket.QuotationStatus;
 import th.co.glr.hr.ticket.TicketDto;
@@ -406,15 +409,32 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
     // Issue hooks: PR status, stage advance, ticket event, validity date
     // ─────────────────────────────────────────────────────────────────────────────────────
 
+    /**
+     * Owner rule of 2026-10-05 (M2): the deal moves to the quotation stage when the quotation DOCUMENT is
+     * created ({@code createFromPricingRequest}) — not when the price request is created or approved, and
+     * not only when the quotation is issued. This used to be "…andAdvancesStage" at issue: the stage was
+     * asserted NOT to be QUOTE_DESIGN_SIDE after creating, submitting and updating the draft, and to be
+     * on it only after approval. Issuing still transitions the pricing request and still leaves the deal
+     * on ขั้น 4 (forward-only: nothing moves it back).
+     */
     @Test
-    void issue_transitionsPricingRequestToQuotationIssued_andAdvancesStage() {
+    void creation_advancesTheStage_andIssueTransitionsPricingRequestToQuotationIssued() {
         PricingDecisionDto decision = approvedDecision();
+        // Not at creation of the price request, nor at its approval: the quotation document has not been created yet.
+        assertThat(tickets.findById(ticketId).orElseThrow().summary().salesStage())
+            .isNotEqualTo(DealStage.QUOTE_DESIGN_SIDE);
+
         DealQuotationDto draft = quotationService.createFromPricingRequest(decision.pricingRequestId(), salesActor);
+
+        assertThat(tickets.findById(ticketId).orElseThrow().summary().salesStage())
+            .as("deal stage once the quotation document is created for the designer")
+            .isEqualTo(DealStage.QUOTE_DESIGN_SIDE);
+
         DealQuotationDto withValidity = quotationService.update(draft.id(), upsertWithValidityDays(draft, 30), salesActor);
         DealQuotationDto submitted = quotationService.submit(withValidity.id(), salesActor);
-
-        TicketDto beforeIssue = tickets.findById(ticketId).orElseThrow();
-        assertThat(beforeIssue.summary().salesStage()).isNotEqualTo(DealStage.QUOTE_DESIGN_SIDE);
+        assertThat(tickets.findById(ticketId).orElseThrow().summary().salesStage())
+            .as("updating and submitting the draft moves nothing further")
+            .isEqualTo(DealStage.QUOTE_DESIGN_SIDE);
 
         quotationService.approve(submitted.id(), new ApproveRequest(null), salesManagerActor);
 
@@ -423,6 +443,43 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
 
         TicketDto afterIssueTicket = tickets.findById(ticketId).orElseThrow();
         assertThat(afterIssueTicket.summary().salesStage()).isEqualTo(DealStage.QUOTE_DESIGN_SIDE);
+    }
+
+    /**
+     * Owner rules of 2026-10-05 (M3), for the second pricing-request creation path
+     * ({@code DealQuotationService#createFromPricingRequest}): a quotation for a party that is NOT on the
+     * deal's route corrects the route, so that afterwards that party's stage is on the route and the deal is
+     * on it. The twin of {@code DealQuotationRecipientIntegrationTest#create_forAPartyOffTheDealsRoute_correctsTheRoute_andTheDealIsOnThatStage}
+     * (a direct quotation) and of {@code CustomerQuotationIntegrationTest}'s case for the other
+     * pricing-request path: each creation path has its own hook. Which channel the deal ends up with is
+     * deliberately not pinned — only {@code DealRoute.isOnRoute(newChannel, stage)} and the stage.
+     *
+     * <p>The fixture: the deal is OWNER_DIRECT (no ขั้น 4 on its route) BEFORE the quotation exists, and the
+     * price request is addressed to the DESIGNER (this class's {@code twoItemPricingRequest}). The channel is
+     * set the way a real deal gets it — its owner states it through {@code TicketService#setEntryChannel},
+     * which asks for no reason while the channel is still UNSPECIFIED — and not stamped with SQL. Red today:
+     * creating the quotation moves nothing.
+     */
+    @Test
+    void createFromPricingRequest_forADesignerOnAnOwnerDirectDeal_correctsTheRoute_andTheDealIsOnQuoteDesignSide() {
+        ticketService.setEntryChannel(ticketId, EntryChannel.OWNER_DIRECT, null, salesActor);
+        String channelBefore = entryChannelOfDeal();
+        assertThat(DealRoute.isOnRoute(channelBefore, DealStage.QUOTE_DESIGN_SIDE))
+            .as("fixture: %s is OFF the %s route", DealStage.QUOTE_DESIGN_SIDE, channelBefore).isFalse();
+        PricingDecisionDto decision = approvedDecision();
+        assertThat(tickets.findById(ticketId).orElseThrow().summary().salesStage())
+            .as("fixture: no quotation document exists yet").isNotEqualTo(DealStage.QUOTE_DESIGN_SIDE);
+
+        quotationService.createFromPricingRequest(decision.pricingRequestId(), salesActor);
+
+        String channelAfter = entryChannelOfDeal();
+        assertAll(
+            () -> assertThat(DealRoute.isOnRoute(channelAfter, DealStage.QUOTE_DESIGN_SIDE))
+                .as("%s must be on the route of the deal's channel after the quotation (channel now %s)",
+                    DealStage.QUOTE_DESIGN_SIDE, channelAfter).isTrue(),
+            () -> assertThat(tickets.findById(ticketId).orElseThrow().summary().salesStage())
+                .as("the deal's stage once a DESIGNER quotation document is created")
+                .isEqualTo(DealStage.QUOTE_DESIGN_SIDE));
     }
 
     @Test
@@ -673,6 +730,10 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
             item.leadTimeMinDays(), item.leadTimeMaxDays(), item.itemNotes(),
             "TILE", null, null, null, null, directNetPrice, null, null, null,
             item.id(), item.sqmPerBox(), true);
+    }
+
+    private String entryChannelOfDeal() {
+        return tickets.findById(ticketId).orElseThrow().summary().entryChannel();
     }
 
     private DealQuotationDto submittedQuotation() {

@@ -164,10 +164,13 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     /**
-     * The deposit-bypass path. {@code issueImportRequest} accepts DEPOSIT_NOTICE_ISSUED and a
-     * bypass policy's CUSTOMER_CONFIRMED, and a deal in either is still standing at ORDER_RECEIVED
-     * — the stage only advances to DEPOSIT_RECEIVED once money lands. A floor of DEPOSIT_RECEIVED
-     * would leave this case broken, so the floor is ORDER_RECEIVED and this pins it.
+     * The ORDER_RECEIVED floor, which this pins. The stage only advances to DEPOSIT_RECEIVED once
+     * money lands, so two kinds of deal still stand at ORDER_RECEIVED and import must see both: the
+     * 0% deal (a quotation with no deposit step, at CUSTOMER_CONFIRMED, whose import request issues
+     * right after the order is confirmed — C3 of the owner rules of 2026-10-05), and a deal still
+     * WAITING for its deposit (C2/C3: only ฝ่ายบัญชี's ยืนยันรับมัดจำ confirms it, a notice is not
+     * enough to issue), whose import request the rep may already be preparing. A floor of
+     * DEPOSIT_RECEIVED would hide both, so the floor is ORDER_RECEIVED.
      */
     @Test
     void importListPage_orderReceivedDealWithNoLivePricingRequest_isReturned() {
@@ -299,11 +302,28 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(idsIn(listPage(accountUser))).contains(ticketId);
     }
 
+    /**
+     * A 0% deal (C1 of the owner rules of 2026-10-05: no deposit step, because its accepted quotation asks
+     * 0%) at ORDER_RECEIVED with the customer's confirmation: no deposit notice will ever exist for it, so
+     * only its STAGE — the S10 floor — lists it for account. This was {@code
+     * accountListPage_bypassPolicyOrderReceivedCustomerConfirmed_isReturned}, whose "no deposit" deal was built
+     * by writing the deal-level switch; now the 0% quotation row is written BEFORE the order is confirmed
+     * through the real service, and the switch is never written. The assertion is unchanged, and green today
+     * and after.
+     */
     @Test
-    void accountListPage_bypassPolicyOrderReceivedCustomerConfirmed_isReturned() {
+    void accountListPage_zeroPercentDealOrderReceivedCustomerConfirmed_isReturned() {
         long ticketId = createTicket(DealStage.ORDER_RECEIVED);
-        tickets.updateDepositPolicy(ticketId, DepositPolicy.CREDIT_CUSTOMER, "credit customer", salesRepId);
-        tickets.updatePaymentStatusUnchecked(ticketId, "CUSTOMER_CONFIRMED");
+        // The origin-tagged form on a bare ticket (the S1 fixture rule): an APPROVED direct-deal row asking 0%.
+        jdbc.update("""
+            INSERT INTO sales.quotation (ticket_id, number, issued_by, doc_status, quotation_version,
+                                         origin, deposit_percent)
+            VALUES (:ticketId, :number, :by, 'APPROVED', 1, 'DEAL_DIRECT', 0)
+            """, new MapSqlParameterSource().addValue("ticketId", ticketId)
+                .addValue("number", "QTD-SCOPE-ZERO-" + ticketId).addValue("by", salesRepId));
+        tickets.markQuotationIssuedForOrderConfirmation(ticketId); // draft -> quotation_issued
+        ticketService.confirmCustomer(ticketId, salesRep);
+        assertThat(tickets.findById(ticketId).orElseThrow().summary().paymentStatus()).isEqualTo("CUSTOMER_CONFIRMED");
 
         assertThat(idsIn(listPage(accountUser))).contains(ticketId);
     }

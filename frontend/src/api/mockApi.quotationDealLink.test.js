@@ -5,7 +5,8 @@ import { api, setPricingRequestStatusForTests } from './mockApi.js';
 // backend contract so VITE_USE_MOCKS=true drives the same flow the Java service will serve —
 //   S2-B1  recipientType on create/update (required on a DEAL_DIRECT create; DRAFT-only; refused on
 //          a PRICING_REQUEST-origin row), persisted as recipientType + a Thai recipientLabel
-//   S2-B2  OUT of slice 2 (owner ruling 2026-09-30): pinned that the recipient does NOT move the stage
+//   S2-B2  (owner rules of 2026-10-05, M2) the recipient puts the deal on its stage when the quotation is
+//          created — this used to be "OUT of slice 2 (owner ruling 2026-09-30)", pinned as "does NOT move"
 //   S2-B3  N6: a second create while a live DEAL_DIRECT quotation exists -> 409 naming the live one
 //   S2-B4  TicketSummaryDto.liveDirectQuotation on list rows AND get()
 // This is evidence about the mock's own plumbing ONLY. It is not evidence about the Java service
@@ -180,28 +181,41 @@ describe('mock dealQuotations — a PRICING_REQUEST-origin row takes its recipie
   });
 });
 
-// Owner ruling 2026-09-30 (slice-2 scope reduction): the spec's S2-B2 — the recipient moving the
-// deal's stage — is OUT of slice 2; the deal-stage rule is owned by another session. Pinned here the
-// right way round so the removal cannot quietly come back: a direct quotation moves NOTHING on its
-// deal, on create or on a recipient change, and writes no STAGE_CHANGED event.
-describe('mock dealQuotations — the recipient does NOT move the deal stage (S2-B2 out of slice 2)', () => {
+// Owner rules of 2026-10-05 (stage movement, M2). This block used to pin the opposite — owner ruling
+// 2026-09-30 had taken the spec's S2-B2 OUT of slice 2, so "a direct quotation moves NOTHING on its deal,
+// on create or on a recipient change, and writes no STAGE_CHANGED event". The rule is now confirmed: creating
+// a direct quotation puts the deal on its recipient's stage (DESIGNER → ขั้น 4, OWNER → ขั้น 5, BUYER →
+// ขั้น 8), with one STAGE_CHANGED event. The deals here are DESIGNER_LED, whose route holds all three, so the
+// route is not what is under test. Plumbing evidence only: the Java service's own is
+// DealQuotationRecipientIntegrationTest (which also pins forward-only and the route correction).
+describe('mock dealQuotations — the recipient puts the deal on its stage when the quotation is created (S2-B2, M2)', () => {
   beforeEach(async () => { await asRole('sales'); });
 
-  it('create with OWNER on a LEAD_APPROACH deal leaves the deal at LEAD_APPROACH, with no STAGE_CHANGED', async () => {
+  it.each([
+    ['DESIGNER', 'QUOTE_DESIGN_SIDE'],
+    ['OWNER', 'QUOTE_OWNER'],
+    ['BUYER', 'QUOTE_BUYER'],
+  ])('create with %s on a LEAD_APPROACH deal puts the deal on %s, with one STAGE_CHANGED', async (recipient, stage) => {
     const ticketId = await freshDeal();
-    expect((await summaryOf(ticketId)).salesStage).toBe('LEAD_APPROACH');
-    await createDirect(ticketId, 'OWNER');
+    // The premise holds before the create (and is what makes the move below the quotation's doing).
     expect((await summaryOf(ticketId)).salesStage).toBe('LEAD_APPROACH');
     expect((await eventsOf(ticketId)).filter((e) => e.kind === 'STAGE_CHANGED')).toHaveLength(0);
+    await createDirect(ticketId, recipient);
+    expect.soft((await summaryOf(ticketId)).salesStage, `the deal's stage once a ${recipient} quotation exists`).toBe(stage);
+    expect.soft((await eventsOf(ticketId)).filter((e) => e.kind === 'STAGE_CHANGED'), 'STAGE_CHANGED events').toHaveLength(1);
   });
 
-  it('a DRAFT recipient change (DESIGNER -> BUYER) is saved but moves nothing either', async () => {
+  // The rules do not say that RE-ADDRESSING an existing draft moves the deal again, so this stays "moves
+  // nothing" — measured against the state AFTER the create, which now moves it.
+  it('a DRAFT recipient change (DESIGNER -> BUYER) is saved but moves nothing further', async () => {
     const ticketId = await freshDeal();
     const created = await createDirect(ticketId, 'DESIGNER');
+    const stageAfterCreate = (await summaryOf(ticketId)).salesStage;
+    const eventsAfterCreate = (await eventsOf(ticketId)).filter((e) => e.kind === 'STAGE_CHANGED').length;
     const { quotation } = await api.dealQuotations.update(created.id, { recipientType: 'BUYER', items: [TILE] });
     expect(quotation.recipientType).toBe('BUYER');
-    expect((await summaryOf(ticketId)).salesStage).toBe('LEAD_APPROACH');
-    expect((await eventsOf(ticketId)).filter((e) => e.kind === 'STAGE_CHANGED')).toHaveLength(0);
+    expect((await summaryOf(ticketId)).salesStage).toBe(stageAfterCreate);
+    expect((await eventsOf(ticketId)).filter((e) => e.kind === 'STAGE_CHANGED')).toHaveLength(eventsAfterCreate);
   });
 });
 

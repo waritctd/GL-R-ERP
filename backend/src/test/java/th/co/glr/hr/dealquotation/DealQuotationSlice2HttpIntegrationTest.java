@@ -1,6 +1,7 @@
 package th.co.glr.hr.dealquotation;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -67,6 +68,14 @@ class DealQuotationSlice2HttpIntegrationTest extends AbstractDealQuotationSlice2
 
     // ── create ───────────────────────────────────────────────────────────────────────────────────
 
+    /**
+     * Owner rule of 2026-10-05 (M2): creating a direct quotation for a recipient puts the deal on that
+     * recipient's stage (DESIGNER → ขั้น 4). The body the editor reads carries the deal's CURRENT stage,
+     * so the {@code dealStage} it shows right after the create is QUOTE_DESIGN_SIDE — it used to be
+     * LEAD_APPROACH, the stage the deal was on before the quotation existed — and the deal itself, read
+     * back over {@code GET /api/tickets/{id}}, is on the same stage. The stage assertions come last so the
+     * rest of what the editor reads is checked whatever the stage does.
+     */
     @Test
     void create_withARecipient_is201_andTheBodyCarriesWhatTheEditorReads() throws Exception {
         long ticketId = createDealOverHttp("DESIGNER_LED");
@@ -81,9 +90,14 @@ class DealQuotationSlice2HttpIntegrationTest extends AbstractDealQuotationSlice2
         assertThat(q.get("docStatus").asText()).isEqualTo("DRAFT");
         assertThat(q.get("ticketId").asLong()).isEqualTo(ticketId);
         assertThat(q.get("ticketCode").asText()).startsWith("PR-");
-        assertThat(q.get("dealStage").asText()).isEqualTo("LEAD_APPROACH");
         assertThat(q.get("id").isIntegralNumber()).isTrue();
         assertThat(q.get("number").asText()).startsWith("QT-");
+        JsonNode dealAfter = read(send(get("/api/tickets/" + ticketId), null)).get("ticket").get("summary");
+        assertAll(
+            () -> assertThat(q.get("dealStage").asText())
+                .as("dealStage in the create response, once the quotation document exists").isEqualTo("QUOTE_DESIGN_SIDE"),
+            () -> assertThat(dealAfter.get("salesStage").asText())
+                .as("the deal's own stage, read back over GET /api/tickets/{id}").isEqualTo("QUOTE_DESIGN_SIDE"));
     }
 
     @Test

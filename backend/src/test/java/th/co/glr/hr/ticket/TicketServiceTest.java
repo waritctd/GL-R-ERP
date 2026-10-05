@@ -2,14 +2,18 @@ package th.co.glr.hr.ticket;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -20,9 +24,13 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.apache.poi.ss.usermodel.WorkbookFactory;
 import org.assertj.core.api.ThrowableAssert;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
@@ -1095,12 +1103,27 @@ class TicketServiceTest {
     }
 
     @Test
-    void issueImportRequest_fromDepositNoticeIssued_startsFulfillment() {
+    void issueImportRequest_fromDepositNoticeIssued_isRefused_andWritesNothing() {
+        // C3 (owner rules of 2026-10-05): a deposit NOTICE is a document, not money in hand (C2: only
+        // ฝ่ายบัญชี's ยืนยันรับมัดจำ confirms a deposit) — on a deposit deal (stubDeal's default policy stands in
+        // for a quotation that asks one) the import request waits for ฝ่ายบัญชี to confirm the deposit
+        // RECEIVED (DEPOSIT_PAID, next test). This used to be an ALLOWED case
+        // (…_fromDepositNoticeIssued_startsFulfillment). The message check tells this refusal from
+        // the "already issued" 409 further down; only the deposit word is pinned.
         stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_NOTICE_ISSUED", null);
 
-        service.issueImportRequest(10L, importActor);
+        // catchThrowable + a described assertThat, not assertThatThrownBy(..).as(..): the latter fails with a
+        // bare "Expecting code to raise a throwable" BEFORE the description is applied, so a red run could not
+        // say which call was accepted.
+        Throwable refused = catchThrowable(() -> service.issueImportRequest(10L, importActor));
+        assertThat(refused)
+            .as("issueImportRequest on a deal whose deposit is only noticed must be REFUSED for the deposit -- the call was accepted")
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(e.getMessage()).contains("มัดจำ");
+            });
 
-        verify(ticketRepo).updateFulfillmentStatus(10L, "IR_ISSUED");
+        verify(ticketRepo, never()).updateFulfillmentStatus(anyLong(), anyString());
     }
 
     @Test
@@ -1122,7 +1145,7 @@ class TicketServiceTest {
     }
 
     @Test
-    void issueImportRequest_rejectsWhenNoDepositNoticeYet() {
+    void issueImportRequest_rejectsWhenNothingIsReceivedYet() {
         stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED", null);
         assertConflict(() -> service.issueImportRequest(10L, importActor));
     }
@@ -1184,6 +1207,68 @@ class TicketServiceTest {
         verify(ticketRepo, never()).updateSalesStage(10L, DealStage.PROCUREMENT);
         verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
             eq(TicketEventKind.STOCK_RESERVED), anyString(), anyString(), anyString());
+    }
+
+    // ── finding D3 (owner rules of 2026-10-05, C4): a full declaration holds the stage until ฝ่ายบัญชี has
+    //    confirmed the deposit (C2). Only the stage move waits — the declaration is still saved, still writes the
+    //    STOCK_RESERVED event and still sets FROM_STOCK — and the move happens when the deposit lands.
+    //    The real-DB proof (every payment state, both declarers, all four ways a held deal is released)
+    //    is StockDeclarationDepositHoldIntegrationTest; these two pin the same two behaviours at unit
+    //    level. The test above stubs DEPOSIT_PAID, i.e. a deposit that IS received, and stays valid.
+
+    @Test
+    void reserveStock_fullCoverage_beforeTheDepositIsReceived_holdsTheStage() {
+        TicketItemDto item = deliveryItem(1L, "100.00", "0.00", "0.00");
+        // A deposit NOTICE is a document, not money: on a REQUIRED deal (stubDeal's default policy) the
+        // deposit is not received at DEPOSIT_NOTICE_ISSUED.
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item),
+            "DEPOSIT_NOTICE_ISSUED", null, DealStage.ORDER_RECEIVED, null);
+
+        service.reserveStock(10L, new StockReservationRequest(List.of(
+            new StockReservationRequest.Line(1L, new BigDecimal("100.00"), "พร้อมจากสต็อก"))), salesActor);
+
+        // Everything the declaration writes today, it still writes...
+        verify(ticketRepo).reserveStock(eq(10L), argThat(lines ->
+            lines.size() == 1 && lines.get(0).qtyFromStock().compareTo(new BigDecimal("100.00")) == 0));
+        verify(ticketRepo).updateFulfillmentStatus(10L, FulfilmentStatus.FROM_STOCK);
+        verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
+            eq(TicketEventKind.STOCK_RESERVED), anyString(), anyString(), anyString());
+        // ...except the stage move, which waits for the deposit.
+        verify(ticketRepo, never()).updateSalesStage(anyLong(), any());
+    }
+
+    @Test
+    void confirmDepositPaid_onAHeldFromStockDeal_movesItToDeliveryScheduling() {
+        // A HELD deal: every unit declared from stock, FROM_STOCK, and still at ORDER_RECEIVED because the
+        // deposit was not ready when it was declared (the state the test above leaves behind).
+        TicketItemDto line = deliveryItem(1L, "100.00", "0.00", "100.00");
+        TicketDto beforeTheDeposit = stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(line),
+            "DEPOSIT_NOTICE_ISSUED", FulfilmentStatus.FROM_STOCK, DealStage.ORDER_RECEIVED, null);
+        TicketDto afterTheDeposit = stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(line),
+            "DEPOSIT_PAID", FulfilmentStatus.FROM_STOCK, DealStage.ORDER_RECEIVED, null);
+        // The repository answers like the database does for the one column that matters: the deal reads as
+        // DEPOSIT_NOTICE_ISSUED until the payment status has been advanced, and as DEPOSIT_PAID after. So this
+        // does not depend on how many times the service re-reads the deal, or on whether the release looks
+        // at a fresh read or at the status it has just written.
+        AtomicBoolean depositWritten = new AtomicBoolean(false);
+        when(ticketRepo.findById(10L)).thenAnswer(invocation ->
+            Optional.of(depositWritten.get() ? afterTheDeposit : beforeTheDeposit));
+        when(ticketRepo.advancePaymentStatus(
+            10L, DepositPolicy.REQUIRED, "DEPOSIT_NOTICE_ISSUED", PaymentTrack.DEPOSIT_PAID))
+            .thenAnswer(invocation -> {
+                depositWritten.set(true);
+                return 1;
+            });
+        when(ticketRepo.payableAmount(10L)).thenReturn(new BigDecimal("1000.00"));
+        when(ticketRepo.sumPaid(10L)).thenReturn(BigDecimal.ZERO, new BigDecimal("500.00"));
+
+        service.confirmDepositPaid(10L, accountActor);
+
+        verify(ticketRepo).advancePaymentStatus(
+            10L, DepositPolicy.REQUIRED, "DEPOSIT_NOTICE_ISSUED", PaymentTrack.DEPOSIT_PAID);
+        // The deposit is in, so the held route applies: straight on to DELIVERY_SCHEDULING. Whether
+        // DEPOSIT_RECEIVED is also written on the way is deliberately not pinned.
+        verify(ticketRepo).updateSalesStage(10L, DealStage.DELIVERY_SCHEDULING);
     }
 
     @Test
@@ -1446,6 +1531,54 @@ class TicketServiceTest {
         verify(ticketRepo).insertDeliveryRecord(eq(10L), eq("WAREHOUSE"), eq(1L), anyString(), any(),
             argThat(lines -> lines.size() == 1 && lines.get(0).qty().compareTo(new BigDecimal("60.00")) == 0));
         verify(ticketRepo).updateFulfillmentStatus(10L, FulfilmentStatus.FULLY_DELIVERED);
+    }
+
+    // C5 (owner rules of 2026-10-05): on a deposit deal (stubDeal's default policy stands in for a quotation
+    // that asks one) nothing is delivered until ฝ่ายบัญชี has confirmed the deposit RECEIVED (C2) — a deposit
+    // NOTICE is a document, not money — and goods never wait for the BALANCE. Every delivery stub above is
+    // FULLY_PAID, so none of them needed revising. The message check tells this refusal from the other
+    // delivery 409s (over-delivery, "receive the goods first", ...); only the deposit word is pinned. The
+    // real-DB evidence is DeliveryDepositGateIntegrationTest; these two pin which branch the service takes.
+    @Test
+    void recordPartialDelivery_beforeTheDepositIsReceived_isRefused_andWritesNothing() {
+        TicketItemDto item = deliveryItem(1L, "100.00", "0.00", "0.00");
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item),
+            "DEPOSIT_NOTICE_ISSUED", FulfilmentStatus.GOODS_RECEIVED, DealStage.DELIVERY_SCHEDULING, null);
+
+        // salesActor is id 1 and owns this deal, so it clears requireDeliveryAccess and reaches the gate.
+        // catchThrowable + a described assertThat so that a red run names the call that was accepted.
+        Throwable refused = catchThrowable(() -> service.recordPartialDelivery(10L, new RecordDeliveryRequest(
+            "WAREHOUSE", null, List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("40.00"))), null),
+            salesActor));
+        assertThat(refused)
+            .as("recordPartialDelivery before the deposit is received must be REFUSED for the deposit -- the call was accepted")
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(e.getMessage()).contains("มัดจำ");
+            });
+
+        verify(ticketRepo, never()).insertDeliveryRecord(anyLong(), anyString(), anyLong(), any(), any(), any());
+        verify(ticketRepo, never()).updateFulfillmentStatus(anyLong(), anyString());
+    }
+
+    @Test
+    void completeDelivery_beforeTheDepositIsReceived_isRefused_andWritesNothing() {
+        TicketItemDto item = deliveryItem(1L, "100.00", "0.00", "100.00");
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item),
+            "DEPOSIT_NOTICE_ISSUED", FulfilmentStatus.FROM_STOCK, DealStage.DELIVERY_SCHEDULING, null);
+
+        // catchThrowable + a described assertThat so that a red run names the call that was accepted.
+        Throwable refused = catchThrowable(() -> service.completeDelivery(10L,
+            new CompleteDeliveryRequest("ส่งครบจากสต็อก", null), salesActor));
+        assertThat(refused)
+            .as("completeDelivery before the deposit is received must be REFUSED for the deposit -- the call was accepted")
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(e.getMessage()).contains("มัดจำ");
+            });
+
+        verify(ticketRepo, never()).insertDeliveryRecord(anyLong(), anyString(), anyLong(), any(), any(), any());
+        verify(ticketRepo, never()).updateFulfillmentStatus(anyLong(), anyString());
     }
 
     @Test
@@ -1786,9 +1919,17 @@ class TicketServiceTest {
         verify(ticketRepo).updateSalesStage(10L, DealStage.OWNER_SIGNOFF);
     }
 
+    /**
+     * The role gate: another rep's deal, the money/import stages from a sales rep, a sales stage from
+     * account or import — each a 403, unchanged. What changed with the owner rules of 2026-10-05 (M4) is
+     * the pair of GRANTS this test used to end with: ฝ่ายบัญชี moving a deal onto DEPOSIT_RECEIVED through
+     * the finance entrypoint and ฝ่ายนำเข้า onto PROCUREMENT. From ขั้น 10 the stage is system-only, so both
+     * are refused now (the stub still carries DEPOSIT_PAID, so the old code accepted both and a refusal is
+     * the new rule's; their status and message are not pinned).
+     */
     @Test
     void updateStage_rejectsNonOwnerSalesAndWrongRolesPerTarget() {
-        // DEPOSIT_PAID on the payment track so the two grants at the bottom exercise the ROLE
+        // DEPOSIT_PAID on the payment track so the two former grants at the bottom exercise the ROLE
         // routing this test is about, and not the fact gate (updateStage_intoAGatedStage_*).
         // The refusals above it are unaffected either way: requireStageWriteAccess runs first.
         stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), PaymentTrack.DEPOSIT_PAID, null,
@@ -1803,10 +1944,14 @@ class TicketServiceTest {
         // H1 lockdown: account reaches updateStage only via the finance entrypoint (money stages only).
         assertForbidden(() -> service.financeUpdateStage(10L, DealStage.SPEC_APPROVED, null, accountActor));
         assertForbidden(() -> service.updateStage(10L, DealStage.SPEC_APPROVED, null, importActor));
-        service.financeUpdateStage(10L, DealStage.DEPOSIT_RECEIVED, "บัญชีแก้ย้อนหลังจากเอกสารรับเงิน", accountActor);
-        service.updateStage(10L, DealStage.PROCUREMENT, "นำเข้าเริ่มออก IR แล้ว", importActor);
-        verify(ticketRepo).updateSalesStage(10L, DealStage.DEPOSIT_RECEIVED);
-        verify(ticketRepo).updateSalesStage(10L, DealStage.PROCUREMENT);
+
+        assertAll(
+            () -> assertRefused("ฝ่ายบัญชี must not move a deal onto DEPOSIT_RECEIVED by hand",
+                () -> service.financeUpdateStage(
+                    10L, DealStage.DEPOSIT_RECEIVED, "บัญชีแก้ย้อนหลังจากเอกสารรับเงิน", accountActor)),
+            () -> assertRefused("ฝ่ายนำเข้า must not move a deal onto PROCUREMENT by hand",
+                () -> service.updateStage(10L, DealStage.PROCUREMENT, "นำเข้าเริ่มออก IR แล้ว", importActor)));
+        verify(ticketRepo, never()).updateSalesStage(anyLong(), anyString());
     }
 
     @Test
@@ -1817,8 +1962,11 @@ class TicketServiceTest {
         assertBadRequest(() -> service.updateStage(10L, DealStage.PRESENTATION, "  ", salesActor));
         service.updateStage(10L, DealStage.PRESENTATION, "ลูกค้าเปลี่ยนผู้ออกแบบ เริ่มสเปคใหม่", salesActor);
         verify(ticketRepo).updateSalesStage(10L, DealStage.PRESENTATION);
+        // A lost deal is refused 409 whatever stage is asked for. The target is SPEC_APPROVED (a stage a
+        // hand move may still land on): it used to be ORDER_RECEIVED, which is system-only now (M4), and
+        // this line is about the lost state, not about which stage the rep asked for.
         stubDeal(11L, 1L, TicketStatus.DRAFT, List.of(), null, null, DealStage.NEGOTIATION, DealLostReason.PRICE);
-        assertConflict(() -> service.updateStage(11L, DealStage.ORDER_RECEIVED, null, salesActor));
+        assertConflict(() -> service.updateStage(11L, DealStage.SPEC_APPROVED, "แก้ไขสเปค", salesActor));
     }
 
     @Test
@@ -1860,18 +2008,29 @@ class TicketServiceTest {
         verify(ticketRepo).updateSalesStage(10L, DealStage.OWNER_SIGNOFF);
     }
 
-    /** …and the relaxation stops at the mandatory stages: stepping over NEGOTIATION still needs a reason. */
+    /**
+     * …and the stage the relaxation stopped at is now refused outright (M4): QUOTE_BUYER -&gt;
+     * ORDER_RECEIVED steps over NEGOTIATION (a MANDATORY stage), which used to cost a note and was then
+     * accepted; ORDER_RECEIVED is system-only now, so it is refused WITH or WITHOUT a note although the
+     * customer's order is verified. The forward-skip note rule can no longer be triggered by a hand
+     * move (the only mandatory stage inside ขั้น 1-9 is NEGOTIATION itself), so it survives only as the
+     * reported {@code requiresReason}. The no-note call was refused before (400) and is refused now, so
+     * it comes first and its status is no longer pinned; the call with a note is the one the old code
+     * accepted.
+     */
     @Test
-    void updateStage_forwardSkipCrossingAMandatoryStage_stillRequiresNote() {
-        // CUSTOMER_CONFIRMED is what makes ORDER_RECEIVED's own fact hold, so the refusal below is
-        // the NOTE rule and the grant after it is not blocked by the fact gate.
+    void updateStage_ontoOrderReceived_isRefusedWithAndWithoutANote() {
+        // CUSTOMER_CONFIRMED is what makes ORDER_RECEIVED's own fact hold, so only the new rule can be
+        // refusing the second call.
         stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), PaymentTrack.CUSTOMER_CONFIRMED, null,
             DealStage.QUOTE_BUYER, null);
 
-        assertBadRequest(() -> service.updateStage(10L, DealStage.ORDER_RECEIVED, null, salesActor));
-        service.updateStage(10L, DealStage.ORDER_RECEIVED, "ลูกค้าสั่งซื้อทันทีโดยไม่ต่อรอง", salesActor);
+        assertRefused("no note: the owning rep must not move a deal onto ORDER_RECEIVED by hand",
+            () -> service.updateStage(10L, DealStage.ORDER_RECEIVED, null, salesActor));
+        assertRefused("with a note: the owning rep must not move a deal onto ORDER_RECEIVED by hand either",
+            () -> service.updateStage(10L, DealStage.ORDER_RECEIVED, "ลูกค้าสั่งซื้อทันทีโดยไม่ต่อรอง", salesActor));
 
-        verify(ticketRepo).updateSalesStage(10L, DealStage.ORDER_RECEIVED);
+        verify(ticketRepo, never()).updateSalesStage(anyLong(), anyString());
     }
 
     // ── deal pipeline: a manual stage move must not outrun the facts ──────
@@ -1880,6 +2039,13 @@ class TicketServiceTest {
     // one: these pin which branch of requireStageFactsHold is taken per (stage, fact) pair. They
     // are NOT the evidence — a mocked TicketRepository cannot prove the refusal keeps the UPDATE
     // from running against a real row. That is StageFactGateIntegrationTest's job.
+    //
+    // Owner rules of 2026-10-05 (stage movement, M1-M4): a hand move exists only onto ขั้น 1, 2, 3, 6, 7
+    // and 9; ขั้น 4, 5 and 8 are reached when a quotation is created; from ขั้น 10 the stage is
+    // system-only for every role. So the "is allowed once its fact holds" and "ungated stages still
+    // move" tests below were FLIPPED to refusals (their stubs are the old ones, which the old code
+    // accepted), and the refusal tests that hold under both readings were left as they were. A NEW
+    // refusal is asserted as an ApiException with nothing written — never its status or message.
 
     /**
      * The headline hole this closes, at unit level: one call from S1 to S20 used to cost a note
@@ -1918,59 +2084,74 @@ class TicketServiceTest {
         verify(ticketRepo, never()).updateSalesStage(anyLong(), anyString());
     }
 
-    /** …and each one is settable the moment its own fact holds. */
+    /**
+     * …and still refused once each one's own fact holds (M4). This was "each one is settable the moment
+     * its own fact holds"; from ขั้น 10 the stage is the system's, so the CEO — who passes every role
+     * gate — is refused all four with the fact RECORDED on the stub. Each stub is one the old code
+     * accepted (the old test asserted it), so a refusal is the new rule's; status and message are not
+     * pinned. {@code assertAll} so that every one of the four is reported, not the first only.
+     */
     @Test
-    void updateStage_intoAGatedStage_isAllowedOnceItsFactHolds() {
+    void updateStage_intoAFormerlyGatedStage_isStillRefusedOnceItsFactHolds() {
         stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), PaymentTrack.CUSTOMER_CONFIRMED, null,
             DealStage.NEGOTIATION, null);
-        service.updateStage(10L, DealStage.ORDER_RECEIVED, null, ceoActor);
-
         stubDeal(11L, 1L, TicketStatus.DRAFT, List.of(), PaymentTrack.DEPOSIT_PAID, null,
             DealStage.ORDER_RECEIVED, null);
-        service.updateStage(11L, DealStage.DEPOSIT_RECEIVED, null, ceoActor);
-
         stubDeal(12L, 1L, TicketStatus.DRAFT, List.of(), PaymentTrack.AWAITING_FINAL_PAYMENT,
             FulfilmentStatus.FULLY_DELIVERED, DealStage.DELIVERY_SCHEDULING, null);
-        service.updateStage(12L, DealStage.DELIVERED, null, ceoActor);
-
         stubDeal(13L, 1L, TicketStatus.DRAFT, List.of(), PaymentTrack.FULLY_PAID,
             FulfilmentStatus.FULLY_DELIVERED, DealStage.DELIVERED, null);
-        service.updateStage(13L, DealStage.CLOSED_PAID, null, ceoActor);
 
-        verify(ticketRepo).updateSalesStage(10L, DealStage.ORDER_RECEIVED);
-        verify(ticketRepo).updateSalesStage(11L, DealStage.DEPOSIT_RECEIVED);
-        verify(ticketRepo).updateSalesStage(12L, DealStage.DELIVERED);
-        verify(ticketRepo).updateSalesStage(13L, DealStage.CLOSED_PAID);
+        assertAll(
+            () -> assertRefused("the CEO must not claim ORDER_RECEIVED by hand although the customer's order is verified",
+                () -> service.updateStage(10L, DealStage.ORDER_RECEIVED, null, ceoActor)),
+            () -> assertRefused("the CEO must not claim DEPOSIT_RECEIVED by hand although the deposit is received",
+                () -> service.updateStage(11L, DealStage.DEPOSIT_RECEIVED, null, ceoActor)),
+            () -> assertRefused("the CEO must not claim DELIVERED by hand although the goods are fully delivered",
+                () -> service.updateStage(12L, DealStage.DELIVERED, null, ceoActor)),
+            () -> assertRefused("the CEO must not claim CLOSED_PAID by hand although it is paid and delivered",
+                () -> service.updateStage(13L, DealStage.CLOSED_PAID, null, ceoActor)));
+
+        verify(ticketRepo, never()).updateSalesStage(anyLong(), anyString());
     }
 
     /**
-     * The other eleven stages are untouched — NEGOTIATION, PROCUREMENT and DELIVERY_SCHEDULING in
-     * particular keep their manual fallback with no facts recorded at all. A gate that quietly
-     * swallowed these would break the operational routes it was supposed to leave alone.
+     * Of the stages the old gate left alone, only NEGOTIATION keeps its manual fallback — it is inside
+     * ขั้น 1-9 and one of the six hand-settable stages. PROCUREMENT (ขั้น 12) and DELIVERY_SCHEDULING
+     * (ขั้น 13) are past ขั้น 10, so they are system-only (M4): ฝ่ายนำเข้า cannot claim PROCUREMENT and the
+     * owning rep cannot claim DELIVERY_SCHEDULING, with no facts recorded. This was
+     * {@code updateStage_theUngatedStages_stillMoveWithNoFactsRecorded}. The green NEGOTIATION half runs
+     * first; the two stubs for the refusals are the old ones, which the old code accepted.
      */
     @Test
-    void updateStage_theUngatedStages_stillMoveWithNoFactsRecorded() {
+    void updateStage_negotiationStillMoves_butProcurementAndDeliverySchedulingAreSystemOnly() {
         stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), null, null, DealStage.QUOTE_BUYER, null);
         service.updateStage(10L, DealStage.NEGOTIATION, null, salesActor);
+        verify(ticketRepo).updateSalesStage(10L, DealStage.NEGOTIATION);
 
         stubDeal(11L, 1L, TicketStatus.DRAFT, List.of(), null, null, DealStage.QUOTE_BUYER, null);
-        service.updateStage(11L, DealStage.PROCUREMENT, "นำเข้าเริ่มแล้ว", importActor);
-
         stubDeal(12L, 1L, TicketStatus.DRAFT, List.of(), null, null, DealStage.QUOTE_BUYER, null);
-        service.updateStage(12L, DealStage.DELIVERY_SCHEDULING, "ของพร้อมส่ง", salesActor);
+        assertAll(
+            () -> assertRefused("ฝ่ายนำเข้า must not claim PROCUREMENT by hand",
+                () -> service.updateStage(11L, DealStage.PROCUREMENT, "นำเข้าเริ่มแล้ว", importActor)),
+            () -> assertRefused("the owning rep must not claim DELIVERY_SCHEDULING by hand",
+                () -> service.updateStage(12L, DealStage.DELIVERY_SCHEDULING, "ของพร้อมส่ง", salesActor)));
 
-        verify(ticketRepo).updateSalesStage(10L, DealStage.NEGOTIATION);
-        verify(ticketRepo).updateSalesStage(11L, DealStage.PROCUREMENT);
-        verify(ticketRepo).updateSalesStage(12L, DealStage.DELIVERY_SCHEDULING);
+        verify(ticketRepo, never()).updateSalesStage(eq(11L), anyString());
+        verify(ticketRepo, never()).updateSalesStage(eq(12L), anyString());
     }
 
     /**
-     * CLOSED_PAID needs BOTH halves — the same bar {@code maybeAdvanceClosedPaid} clears. Paid in
-     * full with the goods still undelivered is the case a FULLY_PAID-only gate let through, i.e. a
-     * manual path claiming a stage the automatic path would have refused.
+     * CLOSED_PAID is refused by hand whatever the facts (M4). The two refusals first — paid in full with
+     * the goods still undelivered was the case a FULLY_PAID-only gate let through, a manual path claiming
+     * a stage the automatic path would refuse — still hold and keep their 409. What changed is the last
+     * half: with BOTH halves in place (paid AND delivered, the bar {@code maybeAdvanceClosedPaid} clears)
+     * ฝ่ายบัญชี used to be accepted, from DELIVERED, the adjacent move; the system moves the deal to
+     * CLOSED_PAID when that bar is cleared, and a hand move is refused. This was
+     * {@code updateStage_closedPaid_needsDeliveryAsWellAsPayment}.
      */
     @Test
-    void updateStage_closedPaid_needsDeliveryAsWellAsPayment() {
+    void updateStage_closedPaid_isRefusedByHand_evenWithBothPaymentAndDelivery() {
         stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), PaymentTrack.FULLY_PAID,
             FulfilmentStatus.GOODS_RECEIVED, DealStage.DELIVERY_SCHEDULING, null);
         assertConflict(() -> service.financeUpdateStage(10L, DealStage.CLOSED_PAID, "รับเงินครบ", accountActor));
@@ -1981,12 +2162,13 @@ class TicketServiceTest {
 
         verify(ticketRepo, never()).updateSalesStage(anyLong(), anyString());
 
-        // Both halves in place -> accepted. From DELIVERED, the adjacent move: nothing MANDATORY is
-        // stepped over, so no note is needed and the facts are the only thing permitting it.
+        // Both halves in place: from DELIVERED, the adjacent move (no MANDATORY stage stepped over, no
+        // note needed) — which the old code accepted. Refused now.
         stubDeal(12L, 1L, TicketStatus.DRAFT, List.of(), PaymentTrack.FULLY_PAID,
             FulfilmentStatus.FULLY_DELIVERED, DealStage.DELIVERED, null);
-        service.financeUpdateStage(12L, DealStage.CLOSED_PAID, null, accountActor);
-        verify(ticketRepo).updateSalesStage(12L, DealStage.CLOSED_PAID);
+        assertRefused("ฝ่ายบัญชี must not claim CLOSED_PAID by hand although the deal is paid and delivered",
+            () -> service.financeUpdateStage(12L, DealStage.CLOSED_PAID, null, accountActor));
+        verify(ticketRepo, never()).updateSalesStage(anyLong(), anyString());
     }
 
     /** The fact gate is keyed on the TARGET, so a backward correction into it is gated too. */
@@ -2051,19 +2233,90 @@ class TicketServiceTest {
         assertConflict(() -> service.markLost(11L, DealLostReason.LEAD_TIME, null, salesActor));
     }
 
+    // ── lost / cancel once ฝ่ายบัญชี has confirmed a payment (owner rules of 2026-10-05) ───────────
+    //
+    // Once payment_status is DEPOSIT_PAID, AWAITING_FINAL_PAYMENT or FULLY_PAID the owning rep and
+    // ผจก.ขาย can no longer cancel the deal or mark it lost by themselves; that needs the CEO's
+    // approval — a flow that does not exist yet, so neither the approval nor what the CEO may do
+    // directly is pinned here. The rule may be built as a refusal or as the same call queueing a request
+    // for the CEO to approve, and both satisfy it, so these tests do NOT demand an exception: the call is
+    // tolerated (an ApiException is swallowed) and what is pinned is what both designs share — the deal
+    // has not ended: no markDealLost / cancelDeal / lifecycle write, no MARKED_LOST or CANCELLED event,
+    // no cascade cancelling the open pricing requests. These pin the decision with a mocked repository;
+    // the real-DB half, on the state a real order produces, is PaymentTrackIntegrationTest. Each stub is a
+    // deal the old code let the rep lose or cancel, so a failure here is "the deal ended" — the new
+    // rule's to prevent.
+
+    @ParameterizedTest(name = "[{index}] payment_status {0}")
+    @ValueSource(strings = {PaymentTrack.DEPOSIT_PAID, PaymentTrack.AWAITING_FINAL_PAYMENT, PaymentTrack.FULLY_PAID})
+    void markLost_afterAPaymentIsConfirmed_doesNotEndTheDealForTheOwningRepAndSalesManager(
+            String paymentStatus) {
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), paymentStatus, null,
+            DealStage.DEPOSIT_RECEIVED, null);
+
+        // Refused, or held for the CEO's approval — either design is fine; the verifications below pin that
+        // the deal did not end.
+        tolerateRefusal(() -> service.markLost(10L, DealLostReason.PRICE, "ลูกค้าเปลี่ยนใจ", salesActor));
+        tolerateRefusal(() -> service.markLost(10L, DealLostReason.PRICE, "ลูกค้าเปลี่ยนใจ", salesManagerActor));
+
+        verify(ticketRepo, never()).markDealLost(anyLong(), anyString());
+        verify(ticketRepo, never()).addEvent(anyLong(), anyLong(), anyString(),
+            eq(TicketEventKind.MARKED_LOST), any(), any(), any());
+        verify(pricingRequestService, never()).cancelOpenForTicket(anyLong(), anyString(), any());
+    }
+
+    @ParameterizedTest(name = "[{index}] payment_status {0}")
+    @ValueSource(strings = {PaymentTrack.DEPOSIT_PAID, PaymentTrack.AWAITING_FINAL_PAYMENT, PaymentTrack.FULLY_PAID})
+    void cancel_afterAPaymentIsConfirmed_doesNotEndTheDealForTheOwningRep(String paymentStatus) {
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), paymentStatus, null,
+            DealStage.DEPOSIT_RECEIVED, null);
+
+        // Refused, or held for the CEO's approval — either design is fine; the verifications below pin that
+        // the deal did not end.
+        tolerateRefusal(() -> service.cancel(10L, DealCancelReason.OWNER_CANCELLED, "ลูกค้ายกเลิกโครงการ", salesActor));
+
+        verify(ticketRepo, never()).cancelDeal(anyLong(), anyString());
+        verify(ticketRepo, never()).addEvent(anyLong(), anyLong(), anyString(),
+            eq(TicketEventKind.CANCELLED), any(), any(), any());
+        verify(ticketRepo, never()).updateLifecycle(anyLong(), eq(DealLifecycle.CANCELLED));
+        verify(pricingRequestService, never()).cancelOpenForTicket(anyLong(), anyString(), any());
+    }
+
+    /**
+     * The green mirror at unit level: until a payment is CONFIRMED (no payment track yet, the order
+     * confirmed, the deposit notice issued — a notice is a document, not money) the same people can still
+     * mark the deal lost and the owning rep can still cancel it, so the refusals above are about the
+     * confirmed payment and not about "any payment_status at all".
+     */
+    @ParameterizedTest(name = "[{index}] payment_status {0}")
+    @NullSource
+    @ValueSource(strings = {PaymentTrack.CUSTOMER_CONFIRMED, PaymentTrack.DEPOSIT_NOTICE_ISSUED})
+    void lostAndCancel_beforeAnyPaymentIsConfirmed_stillWorkForTheOwningRepAndSalesManager(String paymentStatus) {
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), paymentStatus, null,
+            DealStage.ORDER_RECEIVED, null);
+
+        service.markLost(10L, DealLostReason.PRICE, "ลูกค้าเปลี่ยนใจ", salesActor);
+        service.markLost(10L, DealLostReason.PRICE, "ลูกค้าเปลี่ยนใจ", salesManagerActor);
+        service.cancel(10L, DealCancelReason.OWNER_CANCELLED, "ลูกค้ายกเลิกโครงการ", salesActor);
+
+        verify(ticketRepo, times(2)).markDealLost(10L, DealLostReason.PRICE);
+        verify(ticketRepo).cancelDeal(10L, DealCancelReason.OWNER_CANCELLED);
+    }
+
     @Test
     void reopenedDealIsFullyOperableAndKeepsItsLostReason() {
         // V58 stopped nulling lost_reason on reopen, so a live reopened deal now
         // carries one. Every guard that used `lostReason != null` to mean "is
         // currently lost" had to move to the lifecycle — otherwise reopening a deal
         // silently bricked it: no stage changes, no auto-advance, un-losable again.
-        // CUSTOMER_CONFIRMED: ORDER_RECEIVED is fact-gated, and this test is about the LIFECYCLE
-        // (a reopened deal must still be operable), not about the gate.
-        stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), PaymentTrack.CUSTOMER_CONFIRMED, null,
+        // This test is about the LIFECYCLE (a reopened deal must still be operable), so the stage move
+        // is one a hand move may still make: a backward move to SPEC_APPROVED, with its reason. (It used
+        // to be a hand move onto ORDER_RECEIVED, which is system-only now — owner rules of 2026-10-05.)
+        stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), null, null,
             DealStage.NEGOTIATION, DealLostReason.PRICE, DealLifecycle.ACTIVE, DepositPolicy.REQUIRED);
 
-        service.updateStage(10L, DealStage.ORDER_RECEIVED, null, salesActor);
-        verify(ticketRepo).updateSalesStage(10L, DealStage.ORDER_RECEIVED);
+        service.updateStage(10L, DealStage.SPEC_APPROVED, "ลูกค้ากลับมาขอปรับสเปค", salesActor);
+        verify(ticketRepo).updateSalesStage(10L, DealStage.SPEC_APPROVED);
 
         service.markLost(10L, DealLostReason.LEAD_TIME, null, salesActor);
         verify(ticketRepo).markDealLost(10L, DealLostReason.LEAD_TIME);
@@ -2073,7 +2326,9 @@ class TicketServiceTest {
     void stageWritesStillRefusedWhileActuallyLost() {
         stubDeal(11L, 1L, TicketStatus.DRAFT, List.of(), null, null,
             DealStage.NEGOTIATION, DealLostReason.PRICE, DealLifecycle.CLOSED_LOST, DepositPolicy.REQUIRED);
-        assertConflict(() -> service.updateStage(11L, DealStage.ORDER_RECEIVED, null, salesActor));
+        // SPEC_APPROVED, a stage a hand move may still land on (this used to ask for ORDER_RECEIVED, which is
+        // system-only now): the subject is the lost state, so the 409 must not depend on the target.
+        assertConflict(() -> service.updateStage(11L, DealStage.SPEC_APPROVED, "แก้ไขสเปค", salesActor));
         assertConflict(() -> service.markLost(11L, DealLostReason.PRICE, null, salesActor));
     }
 
@@ -2126,8 +2381,22 @@ class TicketServiceTest {
             eq(TicketEventKind.COMMENTED), isNull(), isNull(), eq("ยังรอลูกค้ากลับมา"));
     }
 
+    /**
+     * Two halves, and only the first is still about the switch's own gate.
+     *
+     * <p><b>Who may waive</b> (kept as it was): the OWNING rep and ผจก.ขาย, nobody else — obsolete once the
+     * deposit switch is removed, together with {@code waiveDeposit_grantsSalesManagerAsBackupOwner} and
+     * {@code waiveDeposit_sameIdAsOriginalOwnerButRoleNoLongerSales_decidesByRoleNotId} below.
+     *
+     * <p><b>What a waiver opens</b> (flipped; owner rules of 2026-10-05, C1): nothing. The accepted quotation
+     * decides whether a deal has a deposit and there is no waiver, so a waiver attempt on a deposit deal is
+     * tolerated — refused, or ignored — and with only the customer's confirmation in, the import request is
+     * still refused, for the deposit. This used to assert the opposite: that a WAIVED / CREDIT_CUSTOMER deal at
+     * CUSTOMER_CONFIRMED could issue it ("…CanBypassNotice"). If {@code waiveDeposit} is deleted with the
+     * switch, delete this half with it.
+     */
     @Test
-    void waiveDeposit_ownerOrSalesManagerOnlyAndIssueImportRequestCanBypassNotice() {
+    void waiveDeposit_ownerOrSalesManagerOnly_andAWaiverOpensNoImportRequest() {
         // GLA-118: deposit policy is set by the OWNING sales rep, or sales_manager as a backup
         // (owner ruling 2026-09-20, part B). salesActor (id 1L) owns ticket 10L (stubDeal's
         // createdById), so it grants here where the old ACCOUNT_ROLES gate (account/ceo) used to.
@@ -2149,23 +2418,39 @@ class TicketServiceTest {
         assertForbidden(() -> service.waiveDeposit(10L, DepositPolicy.WAIVED, "sales อื่นขอเอง", otherSales));
         assertBadRequest(() -> service.waiveDeposit(10L, DepositPolicy.WAIVED, " ", salesActor));
 
-        // Rule 5 (payment-track state machine): null no longer qualifies as "deposit bypassed" on
-        // its own — a bypass-policy deal must have actually reached CUSTOMER_CONFIRMED first (via
-        // confirmCustomer). This used to succeed straight from null; it is now refused, and the
-        // CUSTOMER_CONFIRMED case below is what still proves "issueImportRequest can bypass
-        // notice" for a WAIVED/NOT_REQUIRED/CREDIT_CUSTOMER deal.
+        // Rule 5 (payment-track state machine): null never qualifies — a deal must have actually reached
+        // CUSTOMER_CONFIRMED (via confirmCustomer) before an import request can issue, whatever its policy
+        // stub says. Both nulls are refused (11L and 12L) and still are.
         stubDeal(11L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
             DealStage.ORDER_RECEIVED, null, DealLifecycle.ACTIVE, DepositPolicy.WAIVED);
         assertConflict(() -> service.issueImportRequest(11L, importActor));
 
-        stubDeal(13L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), "CUSTOMER_CONFIRMED", null,
-            DealStage.ORDER_RECEIVED, null, DealLifecycle.ACTIVE, DepositPolicy.WAIVED);
-        service.issueImportRequest(13L, importActor);
-        verify(ticketRepo).updateFulfillmentStatus(13L, "IR_ISSUED");
-
         stubDeal(12L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
             DealStage.ORDER_RECEIVED, null, DealLifecycle.ACTIVE, DepositPolicy.REQUIRED);
         assertConflict(() -> service.issueImportRequest(12L, importActor));
+
+        // C1 — the flipped half. Deal 13 is a DEPOSIT deal with only the customer's confirmation in. The rep's
+        // waiver attempt is tolerated (refused, or ignored). The repository here is a mock, so the policy write a
+        // waiver makes would never be visible to the next read: this answer re-serves deal 13 as the real
+        // repository would hold it after that write — WAIVED, at CUSTOMER_CONFIRMED — which is exactly the state
+        // the old half of this test issued the import request from.
+        stubDeal(13L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), "CUSTOMER_CONFIRMED", null,
+            DealStage.ORDER_RECEIVED, null, DealLifecycle.ACTIVE, DepositPolicy.REQUIRED);
+        doAnswer(invocation -> {
+            stubDeal(13L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), "CUSTOMER_CONFIRMED", null,
+                DealStage.ORDER_RECEIVED, null, DealLifecycle.ACTIVE, DepositPolicy.WAIVED);
+            return null;
+        }).when(ticketRepo).updateDepositPolicy(eq(13L), anyString(), anyString(), anyLong());
+        tolerateRefusal(() -> service.waiveDeposit(13L, DepositPolicy.WAIVED, "ลูกค้าเครดิตดี", salesActor));
+
+        Throwable refused = catchThrowable(() -> service.issueImportRequest(13L, importActor));
+        assertThat(refused)
+            .as("after a waiver attempt on a deposit deal the import request is still refused, for the deposit")
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(e.getMessage()).contains("มัดจำ");
+            });
+        verify(ticketRepo, never()).updateFulfillmentStatus(eq(13L), anyString());
     }
 
     @Test
@@ -2353,20 +2638,31 @@ class TicketServiceTest {
     }
 
     /**
-     * The positive case {@link #actions_neverOffersWaiveDepositOnceDepositNoticeExists_butStillOffersDepositPaidToAccount}
-     * deliberately does not cover: a deal whose payment track has not started yet (paymentStatus
-     * null) still owes WAIVE_DEPOSIT to the owner and, per Rule B, to sales_manager as a backup —
-     * account/ceo/a non-owning rep still see nothing.
+     * Owner rules of 2026-10-05 (C1 + M5): there is no waiver, so WAIVE_DEPOSIT is advertised to NOBODY —
+     * not the owning rep, not ผจก.ขาย, not the CEO, not ฝ่ายบัญชี — and the screen only offers what will
+     * work. This is the same stub the test used to be built on: a deal whose payment track has not started
+     * (paymentStatus null), the one state where the old code still offered the button to the owner and, as
+     * a backup, to ผจก.ขาย ({@code actions_offersWaiveDepositToOwnerAndSalesManager_whenPaymentTrackNotStarted}).
+     * {@code assertAll} with a description per role, so that both roles that are still offered it today are
+     * reported, not the first only; CEO and ฝ่ายบัญชี were never offered it and stay green.
+     *
+     * <p>The sibling above keeps its own WAIVE_DEPOSIT exclusion for a deal whose notice exists. The "who may
+     * waive" tests of {@code waiveDeposit} itself go with the switch and are left alone here.
      */
     @Test
-    void actions_offersWaiveDepositToOwnerAndSalesManager_whenPaymentTrackNotStarted() {
+    void actions_neverOffersWaiveDepositToAnyone_evenWhenThePaymentTrackHasNotStarted() {
         stubDeal(51L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
             DealStage.ORDER_RECEIVED, null);
 
-        assertThat(actionCodes(51L, salesActor)).contains("WAIVE_DEPOSIT");
-        assertThat(actionCodes(51L, salesManagerActor)).contains("WAIVE_DEPOSIT");
-        assertThat(actionCodes(51L, ceoActor)).doesNotContain("WAIVE_DEPOSIT");
-        assertThat(actionCodes(51L, accountActor)).doesNotContain("WAIVE_DEPOSIT");
+        assertAll(
+            () -> assertThat(actionCodes(51L, salesActor)).as("the owning rep is offered nothing to waive")
+                .doesNotContain("WAIVE_DEPOSIT"),
+            () -> assertThat(actionCodes(51L, salesManagerActor)).as("ผจก.ขาย is offered nothing to waive")
+                .doesNotContain("WAIVE_DEPOSIT"),
+            () -> assertThat(actionCodes(51L, ceoActor)).as("the CEO is offered nothing to waive")
+                .doesNotContain("WAIVE_DEPOSIT"),
+            () -> assertThat(actionCodes(51L, accountActor)).as("ฝ่ายบัญชี is offered nothing to waive")
+                .doesNotContain("WAIVE_DEPOSIT"));
     }
 
     /**
@@ -3204,6 +3500,32 @@ class TicketServiceTest {
             s.winProbabilityOverride(), s.designerName(), s.ownerName(), s.buyerName(), s.stale(),
             s.commissionRecorded(), s.reopenedAt(), s.reopenCount());
         return new TicketDto(summary, items, source.events(), source.quotation(), source.quotations());
+    }
+
+    /**
+     * A NEW refusal (owner rules of 2026-10-05): an {@code ApiException}, and nothing about its status or
+     * message. {@code catchThrowable} + a described {@code assertThat} rather than
+     * {@code assertThatThrownBy(..).as(..)}, whose bare "Expecting code to raise a throwable" fails before
+     * the description is applied and so says nothing about which call was accepted.
+     */
+    private static void assertRefused(String why, ThrowableAssert.ThrowingCallable action) {
+        assertThat(catchThrowable(action)).as("%s -- the call must be REFUSED with an ApiException", why)
+            .isInstanceOf(ApiException.class);
+    }
+
+    /**
+     * A call whose refusal is as good as its success (owner rules of 2026-10-05). C1: there is no waiver any
+     * more, so a rep's waiver attempt may be refused or ignored. And a rep's or ผจก.ขาย's cancel / mark-lost once
+     * a payment is confirmed needs the CEO's approval, which may be built as a refusal or as the same call
+     * queueing a request — so the deal not having ended is what is asserted, never an exception. Only an
+     * {@code ApiException} is tolerated — any other failure, a NullPointerException say, still fails the test.
+     */
+    private static void tolerateRefusal(Runnable call) {
+        try {
+            call.run();
+        } catch (ApiException refusalIsFine) {
+            // tolerated
+        }
     }
 
     private static void assertForbidden(ThrowableAssert.ThrowingCallable action) {

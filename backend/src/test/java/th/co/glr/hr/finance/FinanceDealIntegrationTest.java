@@ -19,7 +19,6 @@ import th.co.glr.hr.deposit.DepositNoticeItemRequest;
 import th.co.glr.hr.ticket.AttachType;
 import th.co.glr.hr.ticket.DealLifecycle;
 import th.co.glr.hr.ticket.DealStage;
-import th.co.glr.hr.ticket.DepositPolicy;
 
 /**
  * GET /api/finance/deals/{id} against the real service and real Postgres (H1, owner decision A2).
@@ -124,16 +123,61 @@ class FinanceDealIntegrationTest extends FinanceDealTestBase {
         assertThat(dto.documents().acceptedQuotation().number()).isEqualTo("QT-FIN-0001");
     }
 
+    /**
+     * C1 (owner rules of 2026-10-05): a deal whose ACCEPTED quotation asks 0% has no deposit step, so the
+     * deposit milestone (ขั้น 11, index 2 on the track) is shown as skipped and the deal stands on milestone 1.
+     * This was {@code bypassPolicyDeal_flagsTheDepositMilestoneAsSkipped}, whose "no deposit" deal was built by
+     * writing the deal-level switch ({@code CREDIT_CUSTOMER}) — a fixture for a rule the owner replaced: the
+     * switch decides nothing any more. The fixture is now {@link #confirmedOrderAsking}: the 0% quotation row
+     * is written BEFORE the order is confirmed through the real service, and the switch is never written.
+     * Red today — the read model derives "skipped" from the switch ({@code MoneyMilestone.isSkipped(step,
+     * depositPolicy)}), which this deal never had written. The two assertions that hold today come first.
+     */
     @Test
-    void bypassPolicyDeal_flagsTheDepositMilestoneAsSkipped() {
-        long ticketId = createTicket(DealStage.ORDER_RECEIVED);
-        tickets.updateDepositPolicy(ticketId, DepositPolicy.CREDIT_CUSTOMER, "credit", salesRepId);
+    void zeroPercentDeal_flagsTheDepositMilestoneAsSkipped() {
+        long ticketId = confirmedOrderAsking(0);
 
         FinanceDealDto dto = service.get(ticketId, accountUser);
 
         assertThat(dto.moneyMilestone().index()).isEqualTo(1);
-        assertThat(dto.milestoneTrack().get(1).skipped()).isTrue();
         assertThat(dto.milestoneTrack().get(0).skipped()).isFalse();
+        assertThat(dto.milestoneTrack().get(1).skipped()).as("the deposit milestone of a 0% deal").isTrue();
+    }
+
+    /**
+     * The green mirror of the test above — nothing else pinned it on this read model: a deposit deal (its
+     * accepted quotation asks 50%) does NOT show the deposit milestone as skipped. Green today and after.
+     */
+    @Test
+    void depositDeal_doesNotFlagTheDepositMilestoneAsSkipped() {
+        long ticketId = confirmedOrderAsking(50);
+
+        FinanceDealDto dto = service.get(ticketId, accountUser);
+
+        assertThat(dto.moneyMilestone().index()).isEqualTo(1);
+        assertThat(dto.milestoneTrack().get(1).skipped()).as("the deposit milestone of a 50% deal").isFalse();
+    }
+
+    /**
+     * C1: a deal at ORDER_RECEIVED whose accepted quotation asks {@code depositPercent} (whole percent), whose
+     * order the owning rep has REALLY confirmed through {@code TicketService#confirmCustomer}. The quotation
+     * row — the origin-tagged form on a bare ticket ({@code origin = 'DEAL_DIRECT'}, {@code doc_status =
+     * 'APPROVED'}), carrying its {@code deposit_percent} — is written BEFORE that confirmation (the S1 fixture
+     * rule, so the fixture is right whether the read model reads the quotation when it is asked or derives
+     * something when the order is confirmed), and the deal-level deposit switch is never written.
+     */
+    private long confirmedOrderAsking(int depositPercent) {
+        long ticketId = createTicket(DealStage.ORDER_RECEIVED);
+        jdbc.update("""
+            INSERT INTO sales.quotation (ticket_id, number, issued_by, doc_status, quotation_version,
+                                         origin, deposit_percent)
+            VALUES (:ticketId, :number, :by, 'APPROVED', 1, 'DEAL_DIRECT', :depositPercent)
+            """, new MapSqlParameterSource().addValue("ticketId", ticketId)
+                .addValue("number", "QTD-FIN-" + ticketId).addValue("by", salesRepId)
+                .addValue("depositPercent", (short) depositPercent));
+        tickets.markQuotationIssuedForOrderConfirmation(ticketId); // draft -> quotation_issued
+        ticketService.confirmCustomer(ticketId, salesRep);
+        return ticketId;
     }
 
     @Test
