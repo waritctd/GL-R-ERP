@@ -12,6 +12,19 @@ import { FactoryProgressBar } from '../importProgress/FactoryProgressBar.jsx';
 const STATUS_LABEL = { DRAFT: 'ร่าง', ISSUED: 'ออกเลขแล้ว', SUPERSEDED: 'ถูกแทนที่แล้ว' };
 const STATUS_TONE = { DRAFT: 'info', ISSUED: 'success', SUPERSEDED: 'neutral' };
 
+// Both sentences hold whatever else is true of the deal, so neither needs the deal's state: a row
+// gets its import step at issue, and the server refuses the deal-level chain from the first ISSUED
+// row on (TicketRepository#hasLiveImportRequests).
+const FIRST_DRAFT_HINT = 'ยังเป็นร่าง — ยังไม่มีขั้นนำเข้าให้เลื่อน เมื่อฝ่ายขายเจ้าของดีลหรือ CEO ออกเลขแล้ว จะติดตามการนำเข้ารายโรงงาน (S12–S17) แทนการเลื่อนสถานะทั้งดีล';
+// revise() leaves the ISSUED predecessor live until this draft is issued; issue() then supersedes
+// it, carries its step forward and resets the order e-mail to unsent (ImportRequestRepository#issue).
+const REVISION_DRAFT_HINT = 'ร่างฉบับแก้ไข — ฉบับที่ออกเลขแล้วยังติดตามและเลื่อนขั้นได้ตามปกติ เมื่อออกเลขฉบับนี้จะได้เลขใบขอซื้อใหม่แทนฉบับเดิม ขั้นนำเข้าปัจจุบันยกมาต่อ และต้องส่งอีเมลสั่งซื้อใหม่';
+
+const footerDraftOf = (row) => ({
+  vesselEtaNote: row.vesselEtaNote ?? '', checkedByName: row.checkedByName ?? '', checkedDate: row.checkedDate ?? '',
+  approvedByName: row.approvedByName ?? '', approvedDate: row.approvedDate ?? '',
+});
+
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -49,10 +62,7 @@ export function ImportRequestFactoryCard({
   // COALESCE(:field, existing) kept the OLD value with a 200 OK and no error anywhere.
   const [emailDraft, setEmailDraft] = useState({ emailTo: row.emailTo ?? '', emailSubject: row.emailSubject ?? '', emailBody: row.emailBody ?? '' });
   const [footerOpen, setFooterOpen] = useState(false);
-  const [footerDraft, setFooterDraft] = useState({
-    vesselEtaNote: row.vesselEtaNote ?? '', checkedByName: row.checkedByName ?? '', checkedDate: row.checkedDate ?? '',
-    approvedByName: row.approvedByName ?? '', approvedDate: row.approvedDate ?? '',
-  });
+  const [footerDraft, setFooterDraft] = useState(() => footerDraftOf(row));
   // Nit: window.confirm() replaced with the app's own ConfirmDialog pattern (see that
   // component's own Javadoc-style header — "Replaces window.confirm/window.prompt call sites").
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
@@ -81,7 +91,9 @@ export function ImportRequestFactoryCard({
   const issueMutation = useMutation({
     mutationFn: () => api.storedImportRequests.issue(row.id, {}),
     onSuccess: () => { showToast?.('success', `ออกเลขใบขอซื้อโรงงาน ${row.factoryName} แล้ว`); invalidate(); },
-    onError,
+    // A refused issue usually means this card is stale (issued or deleted in another session), so
+    // refetch instead of leaving the same doomed button on screen.
+    onError: (err) => { onError(err); invalidate(); },
   });
   const reviseMutation = useMutation({
     mutationFn: () => api.storedImportRequests.revise(row.id),
@@ -135,9 +147,9 @@ export function ImportRequestFactoryCard({
     }
     // Nit: a blank save must surface a VALIDATION message, not silently succeed with a "saved"
     // toast — ISSUED rows go through setLeadTime, whose Java shape (SetLeadTimeRequest) requires
-    // BOTH fields non-null (@NotNull @Min(1)); a DRAFT row's own update() tolerates null (clears
-    // it), so this guard only blocks the case that would otherwise 400.
-    if (min == null && max == null && row.status !== 'DRAFT') {
+    // BOTH fields non-null (@NotNull @Min(1)), and a DRAFT row's update() reads null/null as "no
+    // change" (ImportRequestService#update's wantsLeadTimeChange), so neither can clear a lead time.
+    if (min == null && max == null) {
       showToast?.('error', 'กรุณาระบุระยะเวลานำเข้า (วัน) ทั้งค่าต่ำสุดและสูงสุด');
       return;
     }
@@ -149,6 +161,9 @@ export function ImportRequestFactoryCard({
 
   const isDraft = row.status === 'DRAFT';
   const isIssued = row.status === 'ISSUED';
+  // revise() only runs on an ISSUED row and leaves it ISSUED, so a draft above v1 always sits beside
+  // a predecessor that is still being advanced (ImportRequestService#revise).
+  const isRevisionDraft = isDraft && row.version > 1;
 
   // Yang-style compact card (feat/import-panel-yang-visual, frontend-only visual port): the
   // document-heavy / secondary controls below are grouped into a collapsed-by-default <details>
@@ -163,12 +178,6 @@ export function ImportRequestFactoryCard({
       </summary>
       <div className="flex flex-col gap-3 border-t border-border-subtle p-3">
         <div className="flex flex-wrap gap-1.5">
-          {isDraft && canFullWrite ? (
-            <Button type="button" size="sm" variant="primary" disabled={issueMutation.isPending}
-              onClick={() => issueMutation.mutate()} data-testid={`ir-issue-${row.id}`}>
-              ออกเลข
-            </Button>
-          ) : null}
           {isDraft && canFullWrite ? (
             <Button type="button" size="sm" variant="danger" disabled={deleteMutation.isPending}
               onClick={() => setDeleteConfirmOpen(true)} data-testid={`ir-delete-${row.id}`}>
@@ -258,7 +267,7 @@ export function ImportRequestFactoryCard({
               {row.approvedByName ? `อนุมัติโดย ${row.approvedByName}${row.approvedDate ? ` (${formatThaiDate(row.approvedDate)})` : ''}` : 'ยังไม่อนุมัติ'}
               {row.vesselEtaNote ? ` · กำหนดเรือเข้าโดยประมาณ: ${row.vesselEtaNote}` : ''}
             </span>
-            <Button type="button" size="sm" variant="text" className="mobile:min-h-11 mobile:min-w-11" onClick={() => setFooterOpen(true)} data-testid={`ir-footer-open-${row.id}`}>
+            <Button type="button" size="sm" variant="text" className="mobile:min-h-11 mobile:min-w-11" onClick={() => { setFooterDraft(footerDraftOf(row)); setFooterOpen(true); }} data-testid={`ir-footer-open-${row.id}`}>
               แก้ไข
             </Button>
           </div>
@@ -311,10 +320,29 @@ export function ImportRequestFactoryCard({
         </div>
       )}
 
+      {/* QA BUG-21: a DRAFT has no import step, so the tracker's slot says why instead of sitting
+          empty. The wording is the same for every viewer and names no one to wait for: issuing can
+          still be gated on the deposit, and the deal may be advancing on the deal-level chain.
+          ออกเลข sits here rather than in the collapsed details because it is the one action that
+          moves a draft forward. */}
+      {isDraft ? (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-border-subtle pt-3">
+          <p className="m-0 min-w-0 flex-1 basis-64 text-xs text-text-muted" data-testid={`ir-draft-hint-${row.id}`}>
+            {isRevisionDraft ? REVISION_DRAFT_HINT : FIRST_DRAFT_HINT}
+          </p>
+          {canFullWrite ? (
+            <Button type="button" size="sm" variant="primary" className="whitespace-nowrap" disabled={issueMutation.isPending}
+              onClick={() => issueMutation.mutate()} data-testid={`ir-issue-${row.id}`}>
+              ออกเลข
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+
       {/* Primary visible content for an ISSUED row (Yang-style compact card): the progress bar
           with its → next-step advance, plus the order-email action on its own row right below it.
-          Every document-heavy control (PDF downloads, ออกเลข/ลบร่าง/ออกฉบับแก้ไข, the lead-time
-          editor, the CEO footer) lives in the collapsed-by-default details block further down. */}
+          Every document-heavy control (PDF downloads, ลบร่าง/ออกฉบับแก้ไข, the lead-time editor,
+          the CEO footer) lives in the collapsed-by-default details block further down. */}
       {isIssued ? (
         <div className="flex flex-wrap items-center gap-x-2 gap-y-2 border-t border-border-subtle pt-3 text-xs">
           <strong className="text-text-secondary">อีเมลสั่งซื้อ:</strong>
