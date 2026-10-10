@@ -2,7 +2,7 @@ import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TicketDetailPage } from './TicketDetailPage.jsx';
 import { ITEM_FIELD_META, missingQtyMessage } from './ticketItemFields.jsx';
 import { api } from '../../api/index.js';
@@ -3855,12 +3855,12 @@ describe('TicketDetailPage', () => {
       await new Promise((resolve) => { setTimeout(resolve, 50); });
     }
 
-    beforeEach(async () => {
-      // clearAllMocks keeps implementations, so undo the swap the "consumes the predicate" test makes.
-      const actual = await vi.importActual('../quotations/quotationMeta.js');
-      quotationMeta.canReviseDealQuotation.mockImplementation(actual.canReviseDealQuotation);
+    beforeEach(() => {
       api.dealQuotations.createRevision.mockResolvedValue({ quotation: quotationRow({ id: 88, docStatus: 'DRAFT', parentQuotationId: 80 }) });
     });
+    // mockReset puts back the implementation the vi.mock factory gave the spy (the real predicate),
+    // so the swap in "consumes the predicate" ends with that test.
+    afterEach(() => { quotationMeta.canReviseDealQuotation.mockReset(); });
 
     it('DEAL_DIRECT: an APPROVED quotation on an order-confirmed deal -> CTA "แก้ใบเสนอราคา"; click mints a revision and opens it', async () => {
       directApprovedDeal();
@@ -3938,7 +3938,9 @@ describe('TicketDetailPage', () => {
       ['sales_manager', salesManagerUser],
       ['account', accountUser],
     ])('negative: %s never gets the revise action, even on a deal whose quotation is revisable', async (_label, user) => {
-      prOriginDeal();
+      // The predicate admits a sales_manager for a DEAL_DIRECT APPROVED quotation, so this is the
+      // fixture on which that row reaches the page's own sales-only gate (secondaryWorkActions).
+      prOriginDeal({ rows: [quotationRow({ origin: 'DEAL_DIRECT', docStatus: 'APPROVED' })] });
       renderTicketDetailPage(user);
       await settle();
       expect(primaryAction()).not.toBe('revise_quotation');
