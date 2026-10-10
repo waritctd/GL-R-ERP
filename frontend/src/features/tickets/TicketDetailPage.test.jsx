@@ -2,7 +2,7 @@ import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TicketDetailPage } from './TicketDetailPage.jsx';
 import { ITEM_FIELD_META, missingQtyMessage } from './ticketItemFields.jsx';
 import { api } from '../../api/index.js';
@@ -12,9 +12,8 @@ import * as quotationMeta from '../quotations/quotationMeta.js';
 
 globalThis.React = React;
 
-// PR A consumes quotationMeta.canReviseDealQuotation as-is (PR B widens it for PR-origin
-// statuses). It is wrapped in a spy so the "แก้ใบเสนอราคา" tests can stand in for B's widened rule
-// without duplicating it here; the default implementation is the real one.
+// quotationMeta.canReviseDealQuotation is wrapped in a spy so the "แก้ใบเสนอราคา" tests can check the
+// page consults it and can make it refuse; the default implementation is the real one.
 vi.mock('../quotations/quotationMeta.js', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, canReviseDealQuotation: vi.fn(actual.canReviseDealQuotation) };
@@ -3802,15 +3801,10 @@ describe('TicketDetailPage', () => {
 
   // PR A — the sticky primary CTA "แก้ใบเสนอราคา" (SALES_ACTION.REVISE_QUOTATION). The page resolves
   // the revisable quotation from api.dealQuotations.listForTicket through
-  // quotationMeta.canReviseDealQuotation (PR B widens that predicate for PR-origin statuses; here a
-  // spy stands in for B's rule so A does not duplicate it) and hands it to the cascade. Clicking it
+  // quotationMeta.canReviseDealQuotation (the real predicate) and hands it to the cascade. Clicking it
   // mints a revision (api.dealQuotations.createRevision) and opens it; an open revision draft is
   // opened instead ("ไปที่ฉบับแก้ไข"), never a second one.
   describe('PR A — แก้ใบเสนอราคา (sticky primary past draft; overflow secondary at owner/buyer stages)', () => {
-    const REVISABLE = ['APPROVED', 'ISSUED', 'REVISION_REQUESTED'];
-    const standInForPrB = (user, quotation) => (
-      quotationMeta.canEditDealQuotation(user, quotation) && REVISABLE.includes(quotation?.docStatus)
-    );
     const salesManagerUser = { id: 11, employeeId: 11, name: 'ผจก.ขาย', role: 'sales_manager' };
 
     const quotationRow = (overrides = {}) => ({
@@ -3862,9 +3856,11 @@ describe('TicketDetailPage', () => {
     }
 
     beforeEach(() => {
-      quotationMeta.canReviseDealQuotation.mockImplementation(standInForPrB);
       api.dealQuotations.createRevision.mockResolvedValue({ quotation: quotationRow({ id: 88, docStatus: 'DRAFT', parentQuotationId: 80 }) });
     });
+    // mockReset puts back the implementation the vi.mock factory gave the spy (the real predicate),
+    // so the swap in "consumes the predicate" ends with that test.
+    afterEach(() => { quotationMeta.canReviseDealQuotation.mockReset(); });
 
     it('DEAL_DIRECT: an APPROVED quotation on an order-confirmed deal -> CTA "แก้ใบเสนอราคา"; click mints a revision and opens it', async () => {
       directApprovedDeal();
@@ -3904,14 +3900,11 @@ describe('TicketDetailPage', () => {
       },
     );
 
-    it('PR-origin: REVISION_REQUESTED and APPROVED quotations at the owner stage are revisable too', async () => {
-      for (const docStatus of ['REVISION_REQUESTED', 'APPROVED']) {
-        prOriginDeal({ rows: [quotationRow({ docStatus })] });
-        const { unmount } = renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
-        await settle();
-        expect(await reviseMenuItem()).not.toBeNull();
-        unmount();
-      }
+    it('PR-origin: a REVISION_REQUESTED quotation at the owner stage is revisable too', async () => {
+      prOriginDeal({ rows: [quotationRow({ docStatus: 'REVISION_REQUESTED' })] });
+      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+      await settle();
+      expect(await reviseMenuItem()).not.toBeNull();
     });
 
     it('wrong-way-round: at the DESIGNER stage there is no revise item and the primary is unchanged', async () => {
@@ -3932,15 +3925,6 @@ describe('TicketDetailPage', () => {
       expect(quotationMeta.canReviseDealQuotation).toHaveBeenCalled();
     });
 
-    it('with the real, un-widened predicate (before PR B) an ISSUED PR-origin quotation is not offered — no behaviour invented here', async () => {
-      const actual = await vi.importActual('../quotations/quotationMeta.js');
-      quotationMeta.canReviseDealQuotation.mockImplementation(actual.canReviseDealQuotation);
-      prOriginDeal();
-      renderTicketDetailPage(salesOwnerUser);
-      await settle();
-      expect(await reviseMenuItem()).toBeNull();
-    });
-
     it('negative: a sales rep who does NOT own the quotation never sees แก้ใบเสนอราคา', async () => {
       prOriginDeal({ rows: [quotationRow({ salesRepId: 99 })] });
       renderTicketDetailPage(salesOwnerUser);
@@ -3954,7 +3938,9 @@ describe('TicketDetailPage', () => {
       ['sales_manager', salesManagerUser],
       ['account', accountUser],
     ])('negative: %s never gets the revise action, even on a deal whose quotation is revisable', async (_label, user) => {
-      prOriginDeal();
+      // The predicate admits a sales_manager for a DEAL_DIRECT APPROVED quotation, so this is the
+      // fixture on which that row reaches the page's own sales-only gate (secondaryWorkActions).
+      prOriginDeal({ rows: [quotationRow({ origin: 'DEAL_DIRECT', docStatus: 'APPROVED' })] });
       renderTicketDetailPage(user);
       await settle();
       expect(primaryAction()).not.toBe('revise_quotation');
@@ -4005,11 +3991,13 @@ describe('TicketDetailPage', () => {
       expect(api.dealQuotations.createRevision).not.toHaveBeenCalled();
     });
 
-    it('repeatable: once the revision is APPROVED the action is offered again, against the NEW head', async () => {
+    // Approving a PR-origin revision issues it in the same step (DealQuotationService
+    // #approveAndIssuePricingRequestOrigin), so the new head is ISSUED, never APPROVED.
+    it('repeatable: once the revision is approved and issued the action is offered again, against the NEW head', async () => {
       prOriginDeal({
         rows: [
           quotationRow({ docStatus: 'SUPERSEDED' }),
-          quotationRow({ id: 88, number: 'QT-2026-0080-2', docStatus: 'APPROVED', revisionNo: 2, parentQuotationId: 80 }),
+          quotationRow({ id: 88, number: 'QT-2026-0080-2', docStatus: 'ISSUED', revisionNo: 2, parentQuotationId: 80 }),
         ],
       });
       api.dealQuotations.createRevision.mockResolvedValue({ quotation: quotationRow({ id: 95, docStatus: 'DRAFT', parentQuotationId: 88 }) });

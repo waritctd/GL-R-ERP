@@ -240,8 +240,8 @@ describe('canReviseDealQuotation -- PRICING_REQUEST origin', () => {
     expect(canReviseDealQuotation(salesOwner, prQ({ docStatus: 'REVISION_REQUESTED' }))).toBe(true);
   });
 
-  it('never in any other status (ACCEPTED/REJECTED/EXPIRED/SUPERSEDED/DRAFT/PENDING_APPROVAL/CANCELLED)', () => {
-    for (const docStatus of ['ACCEPTED', 'REJECTED', 'EXPIRED', 'SUPERSEDED', 'DRAFT', 'PENDING_APPROVAL', 'CANCELLED']) {
+  it('never in any other status (APPROVED/ACCEPTED/REJECTED/EXPIRED/SUPERSEDED/DRAFT/PENDING_APPROVAL/CANCELLED)', () => {
+    for (const docStatus of ['APPROVED', 'ACCEPTED', 'REJECTED', 'EXPIRED', 'SUPERSEDED', 'DRAFT', 'PENDING_APPROVAL', 'CANCELLED']) {
       expect(canReviseDealQuotation(salesOwner, prQ({ docStatus }))).toBe(false);
     }
   });
