@@ -2186,6 +2186,21 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       expect(basis.textContent).toBe('ราคาที่ใช้คำนวณต้นทุน: ฿45.00/แผ่น');
     });
 
+    // CostOverrideModal reads the costing item on its first line, so opening it without one threw
+    // and the route error boundary replaced the page.
+    it('ปรับต้นทุนเอง is disabled while the line\'s costing has not loaded', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({ items: [newFormItem({ pricingCostingItemId: 1 })] })],
+      });
+      renderDetailPage({ user: ceoUser, request, costings: [] });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      fireEvent.click(screen.getByRole('button', { name: /^ต้นทุน/ }));
+      expect(screen.getByTestId('pcr-ceo-cost-override-8001').disabled).toBe(true);
+    });
+
     // Reproduced against a genuine new-form decision, per the coordinator's screenshots of the
     // mock demo (2026-09-19): a seeded decision item forced to PER_PIECE with sqmPerPiece 0.72 and
     // listUnitPrice = proposed (83), NET mode with 10% typed but NOT yet saved.

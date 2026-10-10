@@ -2362,6 +2362,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                       type="button"
                       variant="secondary"
                       size="sm"
+                      disabled={!costingItem}
                       onClick={() => setCostOverrideItem({ decision, item, costingItem })}
                       data-testid={`pcr-ceo-cost-override-${item.id}`}
                     >
