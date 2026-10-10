@@ -97,6 +97,48 @@ public class ImportRequestQueryRepository {
     ) {}
 
     /**
+     * CR-1 (GLA-167), owner rulings B-R4/B-R5: the lead times on the deal's CURRENT QUOTATION items --
+     * never the pricing-request lines. "Current" is route-specific:
+     * <ul>
+     *   <li>PRICING_REQUEST route: the ACCEPTED quotation ({@code DealQuotationRepository
+     *       #findAcceptedItemQuantitiesByPricingRequest}'s own definition). An item reaches its factory
+     *       through {@code pricing_request_item_id} -> that line's {@code source_ticket_item_id}, which
+     *       is exactly the ticket item the factory-resolution cascade groups on, so the two can never
+     *       disagree about which factory a line belongs to.
+     *   <li>direct route: the APPROVED DEAL_DIRECT quotation. An item reaches its factory through
+     *       {@code catalog_price_id} -> {@code product_prices.factory_id}; a hand-typed line has no
+     *       link, is not returned, and so never counts.
+     * </ul>
+     * The legacy engine ({@code origin IS NULL}) carries no per-item lead time and is ignored. Only
+     * items with BOTH min and max set are returned. Exactly one of {@code ticketItemId}/{@code
+     * factoryId} is non-null per row, matching the route that produced it.
+     */
+    public List<QuotationLeadTimeRow> currentQuotationLeadTimes(long ticketId) {
+        return jdbc.query("""
+            SELECT pri.source_ticket_item_id AS ticket_item_id, NULL::bigint AS factory_id,
+                   qi.lead_time_min_days, qi.lead_time_max_days
+              FROM sales.quotation q
+              JOIN sales.quotation_item qi ON qi.quotation_id = q.quotation_id
+              JOIN sales.pricing_request_item pri ON pri.pricing_request_item_id = qi.pricing_request_item_id
+             WHERE q.ticket_id = :id AND q.origin = 'PRICING_REQUEST' AND q.doc_status = 'ACCEPTED'
+               AND pri.source_ticket_item_id IS NOT NULL
+               AND qi.lead_time_min_days IS NOT NULL AND qi.lead_time_max_days IS NOT NULL
+            UNION ALL
+            SELECT NULL::bigint, pp.factory_id, qi.lead_time_min_days, qi.lead_time_max_days
+              FROM sales.quotation q
+              JOIN sales.quotation_item qi ON qi.quotation_id = q.quotation_id
+              JOIN price_catalog.product_prices pp ON pp.price_id = qi.catalog_price_id
+             WHERE q.ticket_id = :id AND q.origin = 'DEAL_DIRECT' AND q.doc_status = 'APPROVED'
+               AND qi.lead_time_min_days IS NOT NULL AND qi.lead_time_max_days IS NOT NULL
+            """, Map.of("id", ticketId), (rs, n) -> new QuotationLeadTimeRow(
+                (Long) rs.getObject("ticket_item_id"), (Long) rs.getObject("factory_id"),
+                rs.getInt("lead_time_min_days"), rs.getInt("lead_time_max_days")));
+    }
+
+    /** One quotation item's lead time, attributed to a ticket item (PR route) or a factory (direct route). */
+    public record QuotationLeadTimeRow(Long ticketItemId, Long factoryId, int minDays, int maxDays) {}
+
+    /**
      * Per-line factory resolution inputs for the STORED (factory-grained) ใบขอซื้อ path — replaces
      * {@link #brandLinesForTicket} for {@code createDrafts}/the rollup, which are per-FACTORY as of
      * V184. {@link #brandLinesForTicket} itself is UNCHANGED and still serves the singular PREVIEW

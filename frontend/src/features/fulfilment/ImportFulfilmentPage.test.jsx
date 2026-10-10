@@ -5,6 +5,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ImportFulfilmentPage } from './ImportFulfilmentPage.jsx';
 import { api } from '../../api/index.js';
+import { queryKeys } from '../../api/queryKeys.js';
 
 globalThis.React = React;
 
@@ -148,6 +149,28 @@ describe('ImportFulfilmentPage (per-factory, stored aggregate)', () => {
 
     await waitFor(() => expect(api.storedImportRequests.advanceStep)
       .toHaveBeenCalledWith(1, { targetStep: 'PICKED_UP' }));
+  });
+
+  // Import has its own per-deal page (GET /api/import/deals/{id}); the whole-deal GET
+  // /api/tickets/{id} 403s import, so a link into /tickets/:id from this worklist is a dead end.
+  it('links every deal to import\'s own page (/import/deals/:id), never the whole-deal page', async () => {
+    renderPage();
+    await screen.findByTestId('fulfilment-deal');
+    const hrefs = screen.getAllByRole('link').map((a) => a.getAttribute('href'));
+    expect(hrefs).toContain('/import/deals/1');
+    expect(hrefs.filter((h) => h.startsWith('/tickets'))).toEqual([]);
+  });
+
+  // SYNC: the same per-factory rows are shown on the import deal page, so an advance made here
+  // must refresh that page's cached copy too — otherwise a stale step shows until a hard reload.
+  it('refreshes the import deal page cache after advancing a factory (sync)', async () => {
+    const { queryClient } = renderPage();
+    const spy = vi.spyOn(queryClient, 'invalidateQueries');
+    const card = await screen.findByTestId('fulfilment-deal');
+    fireEvent.click(within(card).getByTestId('advance-1'));
+
+    await waitFor(() => expect(spy).toHaveBeenCalledWith({ queryKey: queryKeys.importDeal(1) }));
+    expect(spy).toHaveBeenCalledWith({ queryKey: queryKeys.storedImportRequests(1) });
   });
 
   it('keeps an all-received deal in the done group, out of the active list', async () => {
@@ -572,3 +595,26 @@ describe('ImportFulfilmentPage (per-factory, stored aggregate)', () => {
     });
   });
 });
+
+// CR-1 (R9): import receives each factory's IR with no hand-off and downloads it from /fulfilment.
+// Characterization of what already exists — pinned here so the CR-1 flow cannot silently lose it.
+describe('ImportFulfilmentPage — import downloads each factory IR PDF (CR-1, R9)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    globalThis.URL.createObjectURL = vi.fn(() => 'blob:ir');
+    globalThis.URL.revokeObjectURL = vi.fn();
+    api.storedImportRequests.download.mockResolvedValue(new Blob(['pdf'], { type: 'application/pdf' }));
+    api.tickets.list.mockResolvedValue({ tickets: [ticket()] });
+    mockRowsByTicket({ 1: [row({ id: 1 }), row({ id: 2, factoryId: 2, factoryName: 'Panaria', docNumber: 'IR26002' })] });
+  });
+
+  it('offers a PDF download per factory row, internal and factory copy', async () => {
+    renderPage();
+    await screen.findByTestId('ir-download-internal-1');
+    fireEvent.click(screen.getByTestId('ir-download-internal-1'));
+    await waitFor(() => expect(api.storedImportRequests.download).toHaveBeenCalledWith(1, undefined));
+    fireEvent.click(screen.getByTestId('ir-download-factory-2'));
+    await waitFor(() => expect(api.storedImportRequests.download).toHaveBeenCalledWith(2, 'factory'));
+  });
+});
+

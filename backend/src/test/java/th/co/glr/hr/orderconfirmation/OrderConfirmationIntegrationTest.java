@@ -51,7 +51,7 @@ import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteRepository;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteItemRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteRequest;
-import th.co.glr.hr.factoryquote.FactoryQuoteRequests.SendFactoryQuoteRequest;
+import th.co.glr.hr.factoryquote.FactoryQuoteRequests.MarkFactoryContactedRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteService;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
@@ -283,7 +283,9 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
 
         // ── Step 6.3: Account confirms the deposit paid ─────────────────────────────────
         BigDecimal payableBeforePayment = tickets.payableAmount(ticketId);
-        assertThat(payableBeforePayment).isEqualByComparingTo(acceptedQuotation.subtotalAmount());
+        // Payable is the VAT-INCLUSIVE grand total (owner ruling 2026-09-30), no longer the pre-VAT subtotal.
+        assertThat(payableBeforePayment).isEqualByComparingTo(acceptedQuotation.grandTotal());
+        assertThat(tickets.payableAmountExVat(ticketId)).isEqualByComparingTo(acceptedQuotation.subtotalAmount());
 
         TicketDto afterDeposit = ticketService.confirmDepositPaid(ticketId, accountActor);
         assertThat(afterDeposit.summary().paymentStatus()).isEqualTo("DEPOSIT_PAID");
@@ -509,6 +511,64 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(jdbc.queryForObject(
             "SELECT status FROM sales.ticket WHERE ticket_id = :id", Map.of("id", ticketId), String.class))
             .isEqualTo(TicketStatus.DRAFT);
+    }
+
+    /**
+     * The ticket-status gate: the bridge only knows how to move a {@code draft} ticket to {@code
+     * quotation_issued} (or proceed on one already there). A ticket carrying any other status
+     * (here a pre-redesign {@code approved} deal) must be refused BEFORE the first write — not
+     * after {@code markOrderConfirmed} has already committed, which (without a proxy, as in this
+     * hand-wired suite; and in prod only if the transaction proxy were ever bypassed) strands the
+     * deal half-confirmed with the retry then 409ing on "already confirmed".
+     */
+    @Test
+    void confirmOrder_ticketInAnUnbridgeableStatus_isRefusedBeforeAnyWrite() {
+        long pricingRequestId = driveToQuotationAccepted();
+        jdbc.update("UPDATE sales.ticket SET status = 'approved' WHERE ticket_id = :id", Map.of("id", ticketId));
+        List<Map<String, Object>> itemsBefore = ticketItemSnapshot();
+
+        assertThatThrownBy(() -> orderConfirmation.confirmOrder(pricingRequestId,
+            new OrderConfirmationRequests.ConfirmOrderRequest(null), salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(e.getMessage()).contains("approved");
+            });
+
+        assertThat(jdbc.queryForObject(
+            "SELECT order_confirmed_at IS NOT NULL FROM sales.pricing_request WHERE pricing_request_id = :id",
+            Map.of("id", pricingRequestId), Boolean.class))
+            .as("the refusal must happen before markOrderConfirmed's compare-and-set").isFalse();
+        assertThat(jdbc.queryForObject(
+            "SELECT status FROM sales.ticket WHERE ticket_id = :id", Map.of("id", ticketId), String.class))
+            .isEqualTo("approved");
+        assertThat(ticketItemSnapshot()).as("no ticket_item reconciliation ran").isEqualTo(itemsBefore);
+        assertThat(countTicketEventsOfKind("CUSTOMER_CONFIRMED")).isZero();
+    }
+
+    /** The summary the frontend gates the button on carries the ticket's own status. */
+    @Test
+    void pricingRequestSummary_exposesTicketStatus() {
+        long pricingRequestId = driveToQuotationAccepted();
+        assertThat(pricingRequests.findSummary(pricingRequestId).orElseThrow().ticketStatus())
+            .isEqualTo(TicketStatus.DRAFT);
+        jdbc.update("UPDATE sales.ticket SET status = 'approved' WHERE ticket_id = :id", Map.of("id", ticketId));
+        assertThat(pricingRequests.findSummary(pricingRequestId).orElseThrow().ticketStatus())
+            .isEqualTo("approved");
+    }
+
+    /** Both statuses the bridge CAN handle still confirm: draft (first confirm, the normal path
+     * exercised by every other test here) and quotation_issued (a later accepted revision). */
+    @Test
+    void confirmOrder_ticketAlreadyQuotationIssued_stillConfirms() {
+        long pricingRequestId = driveToQuotationAccepted();
+        jdbc.update("UPDATE sales.ticket SET status = 'quotation_issued' WHERE ticket_id = :id", Map.of("id", ticketId));
+
+        orderConfirmation.confirmOrder(pricingRequestId,
+            new OrderConfirmationRequests.ConfirmOrderRequest(null), salesActor);
+
+        assertThat(jdbc.queryForObject(
+            "SELECT order_confirmed_at IS NOT NULL FROM sales.pricing_request WHERE pricing_request_id = :id",
+            Map.of("id", pricingRequestId), Boolean.class)).isTrue();
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -775,8 +835,8 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
         List<FactoryQuoteDto> drafts = factoryQuoteService.generateDrafts(pricingRequestId, importActor);
         FactoryQuoteDto draft = drafts.get(0);
         long pricingRequestItemId = draft.items().get(0).pricingRequestItemId();
-        factoryQuoteService.send(draft.id(),
-            new SendFactoryQuoteRequest("factory-oc@example.com", null, null), importActor);
+        factoryQuoteService.markContacted(draft.id(),
+            new MarkFactoryContactedRequest(java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
         drainDispatches();
 
         ReceiveFactoryQuoteRequest response = new ReceiveFactoryQuoteRequest("REF-OC", "THB", "30 days", "45 days",

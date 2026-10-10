@@ -40,6 +40,7 @@ import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ReturnPricingDecisio
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.StartPricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.UpdatePricingDecisionItemRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.UpdatePricingDecisionRequest;
+import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestItemDto;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestSummaryDto;
 import th.co.glr.hr.pricingrequest.PricingRequestEventKind;
 import th.co.glr.hr.pricingrequest.PricingRequestRepository;
@@ -144,9 +145,23 @@ public class PricingDecisionService {
         // FactoryQuoteService.markReadyForCosting only advances the pricing request to
         // READY_FOR_CEO_REVIEW once every item resolves, but THIS check, not that one, is the
         // authoritative gate for whether a costing can actually be computed.
-        LandedCostCalculator.CalculationResult calc = landedCost.calculate(summary);
-        long costingId = costings.createComputed(pricingRequestId, request.ceoNote(), actor.id(), calc.total());
-        costings.replaceItemsPreservingOverrides(costingId, calc.items());
+        //
+        // Stock lines (V194, R3): they are never costed. A request with NO import line (only stock
+        // lines) skips the calculation entirely - there is nothing to cost, and pricing_decision
+        // still needs a costing row to hang off (pricing_costing_id stays NOT NULL), so it gets an
+        // EMPTY one (total 0). A mixed request costs its import lines exactly as before
+        // (LandedCostCalculator#resolveSources skips the stock lines).
+        List<PricingRequestItemDto> requestItems = pricingRequests.findItems(pricingRequestId);
+        List<PricingRequestItemDto> stockItems = requestItems.stream()
+            .filter(item -> item.stockSource() != null).toList();
+        long costingId;
+        if (stockItems.size() == requestItems.size()) {
+            costingId = costings.createComputed(pricingRequestId, request.ceoNote(), actor.id(), BigDecimal.ZERO);
+        } else {
+            LandedCostCalculator.CalculationResult calc = landedCost.calculate(summary);
+            costingId = costings.createComputed(pricingRequestId, request.ceoNote(), actor.id(), calc.total());
+            costings.replaceItemsPreservingOverrides(costingId, calc.items());
+        }
         PricingCostingDto submittedCosting = requireCosting(costingId);
 
         String currency = firstText(request.currency(), firstText(summary.targetCurrency(), "THB")).toUpperCase();
@@ -198,6 +213,14 @@ public class PricingDecisionService {
             writeItems.add(new WriteItem(item.pricingRequestItemId(), item.id(), item.requestedUnitBasis(),
                 item.requestedQuantity(), item.normalizedQuantityPieces(), frozenPerPiece, frozenPerRequestedUnit,
                 currency, defaultMarginPct, proposedSellingPrice, listUnitPrice));
+        }
+        for (PricingRequestItemDto stockItem : stockItems) {
+            // A stock line has no factory quote (so no costing link), no cost, no margin and no
+            // proposed/list price: the CEO types its ราคาตั้ง (update() -> listUnitPrice). The
+            // decision item is still written so the CEO sees the line and approve() can price it.
+            writeItems.add(new WriteItem(stockItem.id(), null, stockItem.requestedUnitBasis(),
+                stockItem.requestedQty(), stockItem.requestedQty(), null, null,
+                currency, null, null, null));
         }
         decisions.insertItems(decisionId, writeItems);
 
@@ -388,6 +411,9 @@ public class PricingDecisionService {
             .filter(i -> i.id() == itemId)
             .findFirst()
             .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "รายการที่ " + itemId + " ไม่ได้เป็นของมติราคานี้"));
+        if (item.stockSource() != null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "รายการจากสต็อกไม่มีต้นทุน จึงปรับต้นทุนไม่ได้");
+        }
         PricingCostingDto costing = requireCosting(decision.pricingCostingId());
         PricingCostingItemDto costingItem = costing.items().stream()
             .filter(i -> i.id() == item.pricingCostingItemId())
@@ -463,7 +489,10 @@ public class PricingDecisionService {
         // re-confirming the SAME override value (which re-stamps its provenance, clearing
         // staleness) are the two ways past this.
         PricingCostingDto costing = requireCosting(decision.pricingCostingId());
+        // Stock lines (V194) have no costing link (read back as 0) - several of them would collide
+        // on that key and Collectors.toMap would throw, so only costed lines are keyed.
         Map<Long, Long> decisionItemIdByCostingItemId = decision.items().stream()
+            .filter(item -> item.stockSource() == null)
             .collect(java.util.stream.Collectors.toMap(PricingDecisionItemDto::pricingCostingItemId, PricingDecisionItemDto::id));
         List<Long> staleItemIds = costing.items().stream()
             .filter(PricingCostingItemDto::overrideStale)
@@ -496,7 +525,8 @@ public class PricingDecisionService {
         boolean overrideCanClearUncostedGate = decision.priceMode() == null
             || WastageCalculator.PRICE_MODE_NET.equals(decision.priceMode());
         List<Long> uncosted = decision.items().stream()
-            .filter(item -> item.frozenLandedCostPerRequestedUnitThb() == null
+            .filter(item -> item.stockSource() == null
+                && item.frozenLandedCostPerRequestedUnitThb() == null
                 && !(overrideCanClearUncostedGate && item.manualSellingPricePerRequestedUnit() != null))
             .map(PricingDecisionItemDto::id)
             .toList();
@@ -505,6 +535,27 @@ public class PricingDecisionService {
                 "ทุกรายการต้องมีต้นทุนก่อนอนุมัติ — คำนวณค่าขนส่งอัตโนมัติไม่ได้เพราะ Price Catalog "
                     + "ไม่มีความหนาหรือประเทศต้นทาง กรุณาระบุต้นทุนเอง หรือปรับราคาเอง — รายการที่ยังไม่มีต้นทุน: "
                     + uncosted);
+        }
+
+        // Stock lines (V194, R6): exempt from the cost gate above (they have no cost), but each must
+        // carry a ราคาตั้ง > 0 - the CEO's own number is all the price a stock line has. And since
+        // that price only means something through the request's single price mode, a decision that
+        // contains a stock line must have a mode picked: the LEGACY margin engine (priceMode null)
+        // is not supported for stock lines (owner-default decision, slice 1 - see the PR body).
+        List<PricingDecisionItemDto> stockLines = decision.items().stream()
+            .filter(item -> item.stockSource() != null).toList();
+        if (!stockLines.isEmpty() && decision.priceMode() == null) {
+            throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
+                "รายการจากสต็อกต้องเลือกวิธีกรอกราคา (NET, SPECIAL_SQM หรือ DIRECT_NET) ก่อนอนุมัติ");
+        }
+        List<Long> stockWithoutListPrice = stockLines.stream()
+            .filter(item -> item.listUnitPrice() == null || item.listUnitPrice().signum() <= 0)
+            .map(PricingDecisionItemDto::id)
+            .toList();
+        if (!stockWithoutListPrice.isEmpty()) {
+            throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
+                "รายการจากสต็อกต้องมีราคาตั้ง (มากกว่า 0) ก่อนอนุมัติ — รายการที่ยังไม่มีราคาตั้ง: "
+                    + stockWithoutListPrice);
         }
 
         // Phase 2 (owner rulings 2026-09-18/19): a new-form decision (non-null priceMode) is
@@ -628,6 +679,13 @@ public class PricingDecisionService {
         decisions.lockPricingRequest(preview.pricingRequestId());
         PricingDecisionDto decision = requireOpenDecisionForMutation(decisionId);
         PricingRequestSummaryDto summary = requirePricingRequest(decision.pricingRequestId());
+        // Stock lines (V194, R4): a request made only of สต็อกในไทย lines never went through Import
+        // (no quote, no ETA), so there is nothing to send back to it.
+        List<PricingRequestItemDto> returnItems = pricingRequests.findItems(summary.id());
+        if (!returnItems.isEmpty() && returnItems.stream().allMatch(i -> "IN_THAILAND".equals(i.stockSource()))) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "คำขอราคานี้เป็นสต็อกในไทยทั้งหมด ไม่ผ่านฝ่ายนำเข้า จึงตีกลับให้ฝ่ายนำเข้าไม่ได้");
+        }
 
         int returnedRows = decisions.returnToImport(decisionId, request.returnReason());
         if (returnedRows == 0) {
@@ -710,7 +768,9 @@ public class PricingDecisionService {
             boolean touchesPriceModeValue = req.discountPct() != null || req.clearDiscountPct()
                 || req.specialPriceSqm() != null || req.clearSpecialPriceSqm()
                 || req.directNetPrice() != null || req.clearDirectNetPrice();
-            boolean touchesAnything = touchesPriceOverride || touchesPriceModeValue
+            // Stock lines (V194): the CEO's ราคาตั้ง for a stock line (set-only).
+            boolean touchesListPrice = req.listUnitPrice() != null;
+            boolean touchesAnything = touchesPriceOverride || touchesPriceModeValue || touchesListPrice
                 || req.marginPct() != null || req.minimumSellingPrice() != null || req.decisionNote() != null;
             // Review finding #3: an item entry that touches NOTHING (the CEO clicked "save" on a
             // row they never edited) is a true no-op — skip it entirely rather than writing an
@@ -734,6 +794,22 @@ public class PricingDecisionService {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "ราคาที่ปรับต้องไม่ติดลบ");
             }
 
+            BigDecimal stockListPrice = null;
+            if (touchesListPrice) {
+                if (item.stockSource() == null) {
+                    // A costed line's list price stays server-maintained (owner correction 2026-09-19).
+                    throw new ApiException(HttpStatus.BAD_REQUEST,
+                        "กรอกราคาตั้งได้เฉพาะรายการจากสต็อกเท่านั้น (รายการสั่งนำเข้าคำนวณจากต้นทุน)");
+                }
+                if (req.listUnitPrice().signum() <= 0) {
+                    throw new ApiException(HttpStatus.BAD_REQUEST, "ราคาตั้งต้องมากกว่า 0");
+                }
+                stockListPrice = roundAndBoundPrice(req.listUnitPrice(), MAX_PRICE_14_2, "ราคาตั้ง");
+            }
+            if (item.stockSource() != null && req.marginPct() != null) {
+                // No cost, so no margin: applying one would also wipe the CEO's typed ราคาตั้ง.
+                throw new ApiException(HttpStatus.BAD_REQUEST, "รายการจากสต็อกไม่มีต้นทุน จึงกำหนด margin ไม่ได้");
+            }
             BigDecimal marginPct = req.marginPct();
             BigDecimal sellingPrice = null;
             boolean marginTouched = marginPct != null;
@@ -761,8 +837,9 @@ public class PricingDecisionService {
             // list_unit_price stale. When marginPct was not part of this call, listUnitPriceInput
             // stays null/not-cleared, so the tri-state below leaves the column untouched.
             ListAndNet marginListAndNet = marginTouched ? deriveListAndNet(decision, item, sellingPrice) : null;
-            BigDecimal listUnitPriceInput = marginTouched ? marginListAndNet.listUnitPrice() : null;
+            BigDecimal listUnitPriceInput = marginTouched ? marginListAndNet.listUnitPrice() : stockListPrice;
             boolean clearListUnitPrice = marginTouched && marginListAndNet.listUnitPrice() == null;
+            boolean listUnitPriceTouched = marginTouched || touchesListPrice;
 
             // ── Phase 2 (owner rulings 2026-09-18/19): the CEO price-mode inputs ─────────────
             // Review finding #6: set + clear mutually exclusive, per field, same shape as the
@@ -791,9 +868,10 @@ public class PricingDecisionService {
             // applies on top of it. A touch to the override, a price-mode value, OR marginPct
             // (which just moved list_unit_price itself, see above) means the net must be
             // re-derived from this item's fully-resolved inputs.
-            if (effectivePriceMode != null && (touchesPriceModeValue || touchesPriceOverride || marginTouched)) {
+            if (effectivePriceMode != null
+                    && (touchesPriceModeValue || touchesPriceOverride || marginTouched || touchesListPrice)) {
                 BigDecimal resolvedListUnitPrice = resolveTriState(
-                    marginTouched, clearListUnitPrice, listUnitPriceInput, item.listUnitPrice());
+                    listUnitPriceTouched, clearListUnitPrice, listUnitPriceInput, item.listUnitPrice());
                 BigDecimal resolvedDiscountPct = resolveTriState(
                     req.discountPct() != null, req.clearDiscountPct(), discountPctInput, item.discountPct());
                 BigDecimal resolvedSpecialPriceSqm = resolveTriState(
@@ -1219,7 +1297,9 @@ public class PricingDecisionService {
                 item.approvedSellingPricePerRequestedUnit(), item.minimumSellingPricePerRequestedUnit(),
                 item.decisionNote(), item.createdAt(), item.updatedAt(), item.manualSellingPricePerRequestedUnit(),
                 item.effectiveSellingPricePerRequestedUnit(), item.sqmPerPiece(),
-                null, null, null, null, null))
+                null, null, null, null, null,
+                // Not price-shaped, so import may see them (slice 1 scaffolding, V194).
+                item.stockSource(), item.expectedArrivalDate()))
             .toList();
         return new PricingDecisionDto(
             decision.id(), decision.decisionCode(), decision.pricingRequestId(), decision.pricingCostingId(),

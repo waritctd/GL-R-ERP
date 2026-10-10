@@ -41,6 +41,7 @@ import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.factory.FactoryConfigRepository;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteRepository;
+import th.co.glr.hr.factoryquote.FactoryQuoteRequests.MarkFactoryContactedRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteItemRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteService;
@@ -629,6 +630,39 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
     }
 
+    /**
+     * 2026-09-30 owner ruling (#6): account may download the FILE of an ISSUED customer quotation on a deal inside
+     * its list scope -- and nothing else in this service (get / list / create stay 403, asserted above).
+     */
+    @Test
+    void accountRole_canDownloadOnlyTheFileOfAnIssuedQuotation_onAnInScopeDeal() {
+        long pricingRequestId = approvedPricingRequest();
+        CustomerQuotationDto draft = quotationService.create(pricingRequestId,
+            new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
+        setStage("PROCUREMENT");
+
+        // a DRAFT is never the document the customer received
+        assertThatThrownBy(() -> quotationService.renderPdf(draft.id(), accountActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+
+        quotationService.issue(draft.id(), new IssueCustomerQuotationRequest(UUID.randomUUID().toString()), salesActor);
+        setStage("PROCUREMENT"); // issuing advances the stage back to the quotation stages
+
+        assertThat(quotationService.renderPdf(draft.id(), accountActor)).isNotEmpty();
+        assertThat(quotationService.renderXlsx(draft.id(), accountActor)).isNotEmpty();
+        assertThatThrownBy(() -> quotationService.get(draft.id(), accountActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+
+        setStage("NEGOTIATION"); // below S10 -> out of scope
+        assertThatThrownBy(() -> quotationService.renderPdf(draft.id(), accountActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+    }
+
+    private void setStage(String stage) {
+        jdbc.update("UPDATE sales.ticket SET sales_stage = :s WHERE ticket_id = :t",
+            Map.of("s", stage, "t", ticketId));
+    }
+
     @Test
     void ceoAndImport_canReadButNeverEditOrIssue() {
         long pricingRequestId = approvedPricingRequest();
@@ -1154,6 +1188,8 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         pricingRequestService.submit(pricingRequestId, salesActor);
         pricingRequestService.pickup(pricingRequestId, importActor);
         FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Factory C4");
+        factoryQuoteService.markContacted(draft.id(), new MarkFactoryContactedRequest(
+            java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
         FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(),
             response("REF-RENDER4", "THB", "100.00", draft.items().get(0).pricingRequestItemId()), importActor);
         factoryQuoteService.markReadyForCosting(responded.id(), importActor);
@@ -1174,6 +1210,8 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         pricingRequestService.pickup(pricingRequestId, importActor);
         List<FactoryQuoteDto> drafts = factoryQuoteService.generateDrafts(pricingRequestId, importActor);
         for (FactoryQuoteDto draft : drafts) {
+            factoryQuoteService.markContacted(draft.id(), new MarkFactoryContactedRequest(
+                java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
             FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(),
                 response("REF-" + draft.factoryName(), "THB", "100.00", draft.items().get(0).pricingRequestItemId()),
                 importActor);
@@ -1210,6 +1248,8 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
                 new BigDecimal(rawPrice), "THB", null, sqmPerUnit, piecesPerBox, null,
                 "45 days", null, null)),
             UUID.randomUUID().toString());
+        factoryQuoteService.markContacted(draft.id(), new MarkFactoryContactedRequest(
+            java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
         FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(), response, importActor);
         factoryQuoteService.markReadyForCosting(responded.id(), importActor);
         // V141 ("CEO owns costing"): markReadyForCosting auto-advances the request straight to
@@ -1260,6 +1300,8 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         pricingRequestService.pickup(pricingRequestId, importActor);
         List<FactoryQuoteDto> drafts = factoryQuoteService.generateDrafts(pricingRequestId, importActor);
         for (FactoryQuoteDto draft : drafts) {
+            factoryQuoteService.markContacted(draft.id(), new MarkFactoryContactedRequest(
+                java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
             FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(),
                 response("REF-" + draft.factoryName(), "THB", "100.00", draft.items().get(0).pricingRequestItemId()),
                 importActor);

@@ -220,6 +220,12 @@ export const API_ROUTES = {
     file: (id, copy) => `/api/import-requests/${id}/file${copy ? `?copy=${encodeURIComponent(copy)}` : ''}`,
     requiredByNote: (ticketId) => `/api/tickets/${ticketId}/required-by-note`,
   },
+  // The per-deal IMPORT view (ImportDealController) — the import-only projection of ONE deal
+  // (factories, per-factory ใบขอซื้อ rows, items WITHOUT prices, read-only delivery status, the
+  // COMMENTED thread). import is refused the whole-deal GET /api/tickets/{id}; this replaces it.
+  importDeals: {
+    get: (ticketId) => `/api/import/deals/${ticketId}`,
+  },
   // Mirrors RemainingInvoiceController — the STORED ใบแจ้งหนี้ส่วนที่เหลือ aggregate (V188,
   // GLA-99 step 2). One row per (deal, issued document), DRAFT -> ISSUED -> SUPERSEDED, minted on
   // the shared sales.document_sequence (doc_type AR_GLR, format GLR<yy><5-digit seq>-<version>).
@@ -237,6 +243,22 @@ export const API_ROUTES = {
     issue: (id) => `/api/remaining-invoices/${id}/issue`,
     revise: (id) => `/api/remaining-invoices/${id}/revise`,
     file: (id) => `/api/remaining-invoices/${id}/file`,
+  },
+  // Mirrors BillingNoteController — the STORED ใบวางบิล aggregate (V189, GLA-99 step 3 / GLA-129
+  // step 4). Customer-scoped (many deals bill together), DRAFT -> ISSUED -> {SUPERSEDED (revised) |
+  // CANCELLED | SETTLED}, minted on the same shared AR_GLR sequence remaining invoices use.
+  // Authorisation is entirely BillingNoteService's own grant (can_issue_billing_note OR ceo, plus a
+  // wider read set) — these methods carry no gate of their own.
+  billingNotes: {
+    candidates: (customerId) => `/api/customers/${customerId}/billing-note-candidates`,
+    forCustomer: (customerId) => `/api/customers/${customerId}/billing-notes`,
+    get: (id) => `/api/billing-notes/${id}`,
+    issue: (id) => `/api/billing-notes/${id}/issue`,
+    revise: (id) => `/api/billing-notes/${id}/revise`,
+    cancel: (id) => `/api/billing-notes/${id}/cancel`,
+    markReceived: (id) => `/api/billing-notes/${id}/mark-received`,
+    markSettled: (id) => `/api/billing-notes/${id}/mark-settled`,
+    file: (id) => `/api/billing-notes/${id}/file`,
   },
   catalog: {
     search: (q) => `/api/catalog${q ? `?q=${encodeURIComponent(q)}` : ''}`,
@@ -263,10 +285,19 @@ export const API_ROUTES = {
     // 2026-09-26, task "designer-add-from-ui"). See DesignerController's own Javadoc.
     create: '/api/designers',
   },
+  // CR-1 (GLA-167): lead-time change requests. Mirrors LeadTimeChangeController.
+  leadTimeChanges: {
+    forFactoryQuote: (factoryQuoteId) => `/api/factory-quotes/${factoryQuoteId}/lead-time-changes`,
+    detail: (id) => `/api/lead-time-changes/${id}`,
+    withdraw: (id) => `/api/lead-time-changes/${id}/withdraw`,
+    approve: (id) => `/api/lead-time-changes/${id}/approve`,
+    reject: (id) => `/api/lead-time-changes/${id}/reject`,
+    forPricingRequest: (pricingRequestId) => `/api/pricing-requests/${pricingRequestId}/lead-time-changes`,
+  },
   factoryConfigs: {
     list: '/api/factory-configs',
     // sendEmail (POST /api/tickets/{id}/factory-emails/send) is retired: factory RFQ email is
-    // manual-only now — see priceImport.factories/factory below and pricingRequests.factoryQuoteSend.
+    // manual-only now — see priceImport.factories/factory below and pricingRequests.factoryQuoteContacted.
   },
   locations: {
     provinces: '/api/locations/provinces',
@@ -315,6 +346,10 @@ export const API_ROUTES = {
     freightRates: '/api/pricing-formula-config/freight-rates',
     freightRate: (freightRateId) => `/api/pricing-formula-config/freight-rates/${freightRateId}`,
   },
+  finance: {
+    deal: (id) => `/api/finance/deals/${id}`,
+    action: (id, action) => `/api/finance/deals/${id}/${action}`,
+  },
   attachments: {
     list: (ticketId) => `/api/tickets/${ticketId}/attachments`,
     upload: (ticketId) => `/api/tickets/${ticketId}/attachments`,
@@ -327,6 +362,10 @@ export const API_ROUTES = {
     // Slice A2: the accountant's auto-create trigger at deal close. Mirrors
     // CommissionController's POST /api/commissions/from-deal (ACCOUNT-only).
     createFromDeal: '/api/commissions/from-deal',
+    // sales_manager/ceo รออนุมัติ view: every SUBMITTED sale record (any payroll month), and the
+    // sales_manager-only per-item weight adjustment. Mirrors CommissionController#pendingApproval / #itemWeights.
+    pendingApproval: '/api/commissions/pending-approval',
+    itemWeights: (id) => `/api/commissions/${id}/item-weights`,
     deductions: (id) => `/api/commissions/${id}/deductions`,
     approve: (id) => `/api/commissions/${id}/approve`,
     reject: (id) => `/api/commissions/${id}/reject`,
@@ -466,7 +505,8 @@ export const API_ROUTES = {
     factoryEmailDrafts: (id) => `/api/pricing-requests/${id}/factory-email-drafts`,
     factoryQuotes: (id) => `/api/pricing-requests/${id}/factory-quotes`,
     factoryQuote: (id) => `/api/factory-quotes/${id}`,
-    factoryQuoteSend: (id) => `/api/factory-quotes/${id}/send`,
+    // CR-1 (GLA-167): "ติดต่อโรงงานแล้ว" — replaces the retired POST .../send.
+    factoryQuoteContacted: (id) => `/api/factory-quotes/${id}/contacted`,
     factoryQuoteReceive: (id) => `/api/factory-quotes/${id}/receive`,
     factoryQuoteStartNegotiation: (id) => `/api/factory-quotes/${id}/start-negotiation`,
     factoryQuoteReady: (id) => `/api/factory-quotes/${id}/mark-ready-for-costing`,
@@ -580,6 +620,10 @@ export const API_ROUTES = {
     // independent DRAFT. Mirrors DealQuotationController#createReorder. Plural, sibling to
     // `revisions` above, for the same reason: one source may be cloned any number of times.
     reorders: (id) => `/api/deal-quotations/${id}/reorders`,
+    // GLA-136 (owner ruling 2026-09-30) -- "สร้างดีลจากใบเสนอราคา": promote an APPROVED direct
+    // quotation's quotation-only container ticket into the pipeline at ORDER_RECEIVED. Mirrors
+    // DealQuotationController#promoteToDeal.
+    promoteToDeal: (id) => `/api/deal-quotations/${id}/promote-to-deal`,
     cancel: (id) => `/api/deal-quotations/${id}/cancel`,
     file: (id, format) => `/api/deal-quotations/${id}/file?format=${format}`,
     // M4(d) fix (Opus review, 2026-09-20) — "คืนรายการ": re-adds a CEO-linked line a prior save
@@ -619,6 +663,15 @@ export const ROLE_PERMISSIONS = {
   // canCreateTickets/canPickupTickets/canProposePrices/canApproveReject/
   // canGenerateQuotation/canConfirmPayments. Mirrors TicketService.VIEWER_ROLES.
   canViewTickets: ['sales', 'import', 'ceo', 'account', 'sales_manager'],
+  // Which roles may OPEN the whole-deal page (`/tickets/:id`, GET /api/tickets/{id}). `import` is
+  // deliberately absent: the backend refuses it the whole-deal read (it carries the customer price
+  // and the quotation chain) and serves it GET /api/import/deals/{id} instead — rendered by
+  // ImportDealPage at `/import/deals/:id`. canViewTickets above is left as it was because it still
+  // mirrors TicketService.VIEWER_ROLES for the list and the other import-readable sub-paths.
+  canViewWholeDeal: ['sales', 'ceo', 'account', 'sales_manager'],
+  // Import's OWN per-deal page (ImportDealController: import + ceo). Presentation only — the
+  // endpoint enforces the real gate and the row scope.
+  canViewImportDeal: ['import', 'ceo'],
   // Role-scoped views (docs/role-scoped-views.md): the deal PIPELINE BROWSER
   // (list `/tickets`, the รายการดีล nav item, the SalesTabs deal-list tab) is
   // narrower than ticket-detail read (canViewTickets above,

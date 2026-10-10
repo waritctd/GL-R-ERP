@@ -50,6 +50,16 @@ export const IMPORT_ACTION_LABELS = {
 // PARTIALLY_DELIVERED mid-delivery).
 const DELIVERY_READY_FULFILMENT_STATUSES = ['GOODS_RECEIVED', 'FROM_STOCK', 'PARTIALLY_DELIVERED'];
 
+const DEPOSIT_POLICY_BYPASSES_NOTICE = new Set(['NOT_REQUIRED', 'WAIVED', 'CREDIT_CUSTOMER']);
+
+/** Mirrors TicketService#requireImportRequestIssuable's deposit condition: a deposit notice
+ * issued or the deposit paid, or a deposit-exempt policy whose customer has confirmed. */
+function importDepositReady(ticket) {
+  return ticket?.paymentStatus === 'DEPOSIT_NOTICE_ISSUED'
+    || ticket?.paymentStatus === 'DEPOSIT_PAID'
+    || (DEPOSIT_POLICY_BYPASSES_NOTICE.has(ticket?.depositPolicy) && ticket?.paymentStatus === 'CUSTOMER_CONFIRMED');
+}
+
 /**
  * The fulfilment-chain-only decision — mirrors DealFulfilmentPanel's
  * `issueImportRequest` / `markIrSent` / `markShipping` / `markGoodsReceived`
@@ -64,10 +74,17 @@ const DELIVERY_READY_FULFILMENT_STATUSES = ['GOODS_RECEIVED', 'FROM_STOCK', 'PAR
 export function nextFulfilmentActionCode(ticket) {
   const st = ticket?.status;
   const fs = ticket?.fulfillmentStatus ?? null;
-  if (st === 'quotation_issued' && fs == null) return 'issueImportRequest';
-  if (st === 'quotation_issued' && fs === 'IR_ISSUED') return 'markIrSent';
-  if (st === 'quotation_issued' && fs === 'IR_SENT') return 'markShipping';
-  if (st === 'quotation_issued' && fs === 'SHIPPING') return 'markGoodsReceived';
+  // Issuing the IR is gated on the DEPOSIT, not on the ticket reaching quotation_issued (owner
+  // ruling 2026-10-01; mirrors TicketService#requireImportRequestIssuable). quotation_issued keeps
+  // its prior behaviour; any other status needs the deposit condition itself.
+  if (fs == null && (st === 'quotation_issued' || importDepositReady(ticket))) return 'issueImportRequest';
+  // The three in-flight steps key on fulfillmentStatus ALONE, as the backend does (TicketService
+  // markIrSent/markShipping/markGoodsReceived and their availableActions never read ticket.status).
+  // Once the IR is out the deal must stay advanceable: the redesigned pricing chain does not always
+  // reach quotation_issued, and requiring it hid every button on such a deal.
+  if (fs === 'IR_ISSUED') return 'markIrSent';
+  if (fs === 'IR_SENT') return 'markShipping';
+  if (fs === 'SHIPPING') return 'markGoodsReceived';
   if (DELIVERY_READY_FULFILMENT_STATUSES.includes(fs)) return 'recordDelivery';
   return null;
 }
@@ -86,7 +103,8 @@ export function nextFulfilmentActionCode(ticket) {
  * survivor: its own legacy section still lists a deal that reached IR_ISSUED WITHOUT going
  * through the stored aggregate (no per-factory rows), with a link out rather than an in-place
  * action — see that section's own comment in ImportFulfilmentPage.jsx for why. The other three
- * codes now route to `/tickets/:id`, where DealFulfilmentPanel still performs them.
+ * codes now route to `/import/deals/:id` (import's own per-deal page — import can no longer open
+ * `/tickets/:id`, where DealFulfilmentPanel performs them).
  *
  * Exported so the workspace's OWN candidate/legacy classification (ImportFulfilmentPage.jsx)
  * can be reasoned about against the same code this module routes CTAs with, even though the
@@ -116,9 +134,12 @@ export const FULFILMENT_WORKSPACE_CODES = ['markIrSent'];
  *   pickupPricingRequest                        -> '/pricing-requests'  (คิวขอราคา — the pickup button)
  *   markIrSent                                  -> '/fulfilment'        (งานนำเข้า — its legacy section)
  *   issueImportRequest/markShipping/
- *     markGoodsReceived                         -> '/tickets/:id'       (deal page — DealFulfilmentPanel
- *                                                                         performs these three; PR-B
- *                                                                         REVIEW ROUND 2, X1)
+ *     markGoodsReceived                         -> '/import/deals/:id'  (import's own per-deal page, which
+ *                                                                         PERFORMS the three legacy
+ *                                                                         deal-level buttons for a deal with
+ *                                                                         no per-factory rows —
+ *                                                                         DealFulfilmentPanel, where they
+ *                                                                         also live, is closed to import)
  *
  * `recordDelivery` is deliberately ABSENT from that table, even though
  * nextFulfilmentActionCode (above) still returns it for a delivery-ready
@@ -143,7 +164,9 @@ export function nextImportAction(ticket, pricingRequests = []) {
   // Import's. FULFILMENT_WORKSPACE_CODES already excludes it from the /fulfilment workspace for the
   // same owner ruling — this is the second, worklist-CTA half of that same exclusion.
   if (!code || code === 'recordDelivery') return null;
-  const to = FULFILMENT_WORKSPACE_CODES.includes(code) ? '/fulfilment' : `/tickets/${ticket.id}`;
+  // Import cannot open the whole-deal page (/tickets/:id — GET /api/tickets/{id} 403s it), so the
+  // non-workspace codes land on import's OWN per-deal page instead.
+  const to = FULFILMENT_WORKSPACE_CODES.includes(code) ? '/fulfilment' : `/import/deals/${ticket.id}`;
   // PR-B REVIEW ROUND 1, S8: 'markIrSent' (fulfillmentStatus IR_ISSUED) is the code every
   // IR-TRACKED deal sits at for its whole per-factory tracking period (V184/PR-B) — this label used
   // to say "ส่งคำขอนำเข้าแล้ว" ("mark IR sent"), a single legacy ACTION that /fulfilment no longer

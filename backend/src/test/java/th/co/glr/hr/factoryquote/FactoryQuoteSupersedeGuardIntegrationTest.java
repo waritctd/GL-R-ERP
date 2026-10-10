@@ -116,7 +116,7 @@ class FactoryQuoteSupersedeGuardIntegrationTest extends AbstractPostgresIntegrat
     @Test
     void supersede_refusesNotAvailableQuote_rowUnchanged() {
         long quoteId = createDraftQuote("Factory NotAvailable");
-        int requestedRows = factoryQuotes.markRequested(quoteId, "vendor@example.com", "Subject", "Body", salesRepId);
+        int requestedRows = factoryQuotes.markContacted(quoteId, java.time.LocalDate.now(), null, salesRepId);
         assertThat(requestedRows).isEqualTo(1);
         int notAvailableRows = factoryQuotes.markNotAvailable(quoteId, "โรงงานไม่รับออเดอร์", salesRepId);
         assertThat(notAvailableRows).isEqualTo(1);
@@ -131,7 +131,7 @@ class FactoryQuoteSupersedeGuardIntegrationTest extends AbstractPostgresIntegrat
     @Test
     void supersede_isIdempotentRefusalOnAlreadySupersededQuote() {
         long quoteId = createDraftQuote("Factory AlreadySuperseded");
-        factoryQuotes.markRequested(quoteId, "vendor@example.com", "Subject", "Body", salesRepId);
+        factoryQuotes.markContacted(quoteId, java.time.LocalDate.now(), null, salesRepId);
         factoryQuotes.updateFirstResponse(quoteId, "REF-1", "THB", "30 days", "45 days", null, null);
         assertThat(statusOf(quoteId)).isEqualTo(FactoryQuoteStatus.RESPONSE_RECEIVED);
         int firstSupersede = factoryQuotes.supersede(quoteId); // fixture setup, not under test
@@ -148,7 +148,7 @@ class FactoryQuoteSupersedeGuardIntegrationTest extends AbstractPostgresIntegrat
     @Test
     void supersede_allowsLiveResponseReceivedQuote_positiveControl() {
         long quoteId = createDraftQuote("Factory Live");
-        factoryQuotes.markRequested(quoteId, "vendor@example.com", "Subject", "Body", salesRepId);
+        factoryQuotes.markContacted(quoteId, java.time.LocalDate.now(), null, salesRepId);
         factoryQuotes.updateFirstResponse(quoteId, "REF-1", "THB", "30 days", "45 days", null, null);
         assertThat(statusOf(quoteId)).isEqualTo(FactoryQuoteStatus.RESPONSE_RECEIVED);
 
@@ -165,7 +165,7 @@ class FactoryQuoteSupersedeGuardIntegrationTest extends AbstractPostgresIntegrat
 
     private long createDraftQuote(String factoryName) {
         return factoryQuotes.createDraft(pricingRequestId, null, factoryName,
-            "vendor@example.com", "Subject", "Body", salesRepId);
+            "vendor@example.com", "Subject", "Body", salesRepId, null);
     }
 
     private String statusOf(long quoteId) {

@@ -3,11 +3,17 @@ import {
   addDaysIso,
   attendanceSourceLabel,
   bangkokMonthStartIso,
+  dealStageLabel,
+  DEAL_OFFERED_TO_LABEL,
   depositNoticeStatusLabel,
+  entryChannelLabel,
   factoryQuoteStatusLabel,
   formatAddress,
+  quotationRecipientLabel,
   formatMoney,
+  OFFERED_TO_LABEL,
   formatShortDate,
+  QUOTATION_OFFERED_TO_LABEL,
   formatThaiMonthYearFromMonthInputValue,
   greetingName,
   overtimeStatusLabel,
@@ -355,5 +361,118 @@ describe('bangkokMonthStartIso monthsBack', () => {
 
   it('rolls back across two year boundaries', () => {
     expect(bangkokMonthStartIso(new Date('2026-01-15T10:00:00Z'), 14)).toBe('2024-11-01');
+  });
+});
+
+// S3 (SPEC_APPROVED) is "the party who specifies has agreed the spec" — only the WORDING varies by
+// the deal's entry channel. Nine existing call sites pass ONE argument, so the 1-arg call must not
+// change; every other stage must be indistinguishable with or without a channel.
+describe('dealStageLabel(code, entryChannel?) — route-aware S3 wording', () => {
+  const DESIGNER = 'ผู้ออกแบบอนุมัติสเปค';
+
+  it('owner-direct reads เจ้าของตกลงตามสเปคแล้ว', () => {
+    expect(dealStageLabel('SPEC_APPROVED', 'OWNER_DIRECT').label).toBe('เจ้าของตกลงตามสเปคแล้ว');
+  });
+
+  it('buyer-direct reads ผู้ซื้อ/ผู้รับเหมาตกลงตามสเปคแล้ว', () => {
+    expect(dealStageLabel('SPEC_APPROVED', 'BUYER_DIRECT').label).toBe('ผู้ซื้อ/ผู้รับเหมาตกลงตามสเปคแล้ว');
+  });
+
+  it.each(['DESIGNER_LED', 'UNSPECIFIED', undefined, null, 'SOMETHING_NEW', ''])(
+    'keeps the designer wording for channel %s',
+    (channel) => {
+      expect(dealStageLabel('SPEC_APPROVED', channel).label).toBe(DESIGNER);
+    },
+  );
+
+  it('keeps the designer wording for the 1-argument call (back-compat for the existing call sites)', () => {
+    expect(dealStageLabel('SPEC_APPROVED').label).toBe(DESIGNER);
+  });
+
+  it('keeps the same tone whatever the wording', () => {
+    const tone = dealStageLabel('SPEC_APPROVED').tone;
+    expect(dealStageLabel('SPEC_APPROVED', 'OWNER_DIRECT').tone).toBe(tone);
+    expect(dealStageLabel('SPEC_APPROVED', 'BUYER_DIRECT').tone).toBe(tone);
+  });
+
+  // Wrong-way-round: the channel may re-word S3 and S1 (STAGE_LABEL_BY_CHANNEL) and NOTHING else.
+  // LEAD_APPROACH left this list on 2026-10-01 when the owner ruled S1 should name the party the
+  // deal entered through instead of hedging "เข้าถึงเจ้าของ/ผู้ออกแบบโครงการ".
+  const OTHER_STAGES = [
+    'PRESENTATION', 'QUOTE_DESIGN_SIDE', 'QUOTE_OWNER', 'OWNER_SIGNOFF',
+    'AWAITING_BUYER', 'QUOTE_BUYER', 'NEGOTIATION', 'ORDER_RECEIVED', 'DEPOSIT_RECEIVED',
+    'PROCUREMENT', 'DELIVERY_SCHEDULING', 'DELIVERED', 'CLOSED_PAID',
+  ];
+
+  it('covers the other thirteen stage codes (guards this list against a new stage being added)', () => {
+    expect(OTHER_STAGES).toHaveLength(13);
+    for (const code of OTHER_STAGES) expect(dealStageLabel(code).label).not.toBe(code);
+  });
+
+  it.each(OTHER_STAGES)('%s is identical with and without any channel', (code) => {
+    const bare = dealStageLabel(code);
+    for (const channel of ['DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT', 'UNSPECIFIED', null]) {
+      expect(dealStageLabel(code, channel)).toEqual(bare);
+    }
+  });
+
+  it('an unknown stage code still renders its own code, with or without a channel', () => {
+    expect(dealStageLabel('NOT_A_STAGE').label).toBe('NOT_A_STAGE');
+    expect(dealStageLabel('NOT_A_STAGE', 'OWNER_DIRECT').label).toBe('NOT_A_STAGE');
+  });
+});
+
+describe('offered-to field labels (R8, owner ruling 2026-09-30)', () => {
+  it('shares one label between the deal channel and the quotation recipient', () => {
+    expect(OFFERED_TO_LABEL).toBe('เสนอแก่');
+  });
+
+  it('qualifies each one where both appear on the same surface', () => {
+    expect(DEAL_OFFERED_TO_LABEL).toBe('ดีลนี้เสนอแก่');
+    expect(QUOTATION_OFFERED_TO_LABEL).toBe('ใบเสนอราคานี้เสนอแก่');
+    // Both qualified forms must contain the shared label, or the two fields stop reading as the
+    // same question asked of two different documents.
+    expect(DEAL_OFFERED_TO_LABEL).toContain(OFFERED_TO_LABEL);
+    expect(QUOTATION_OFFERED_TO_LABEL).toContain(OFFERED_TO_LABEL);
+  });
+
+  it('leaves the channel OPTION labels alone — they deliberately differ from the recipient\'s', () => {
+    // Owner ruling: the how-the-deal-arrived nuance beats symmetry. Do not "fix" this divergence.
+    expect(entryChannelLabel('DESIGNER_LED').label).toBe('ผู้ออกแบบนำดีล');
+    expect(entryChannelLabel('OWNER_DIRECT').label).toBe('เจ้าของติดต่อโดยตรง');
+    expect(quotationRecipientLabel('DESIGNER').label).not.toBe(entryChannelLabel('DESIGNER_LED').label);
+  });
+});
+
+describe('S1 LEAD_APPROACH wording follows the entry channel', () => {
+  // The default label hedges with a slash — เข้าถึงเจ้าของ/ผู้ออกแบบโครงการ — because one string had
+  // to serve every route. Owner ruling 2026-10-01: name the party the deal actually entered
+  // through. S1 ONLY; S7's "รอผลประมูล / รอผู้ซื้อ" and S18's slash join two real situations, not
+  // two routes, so they are deliberately untouched.
+  it('names the single party for each real channel', () => {
+    expect(dealStageLabel('LEAD_APPROACH', 'DESIGNER_LED').label).toBe('เข้าถึงผู้ออกแบบโครงการ');
+    expect(dealStageLabel('LEAD_APPROACH', 'OWNER_DIRECT').label).toBe('เข้าถึงเจ้าของโครงการ');
+    expect(dealStageLabel('LEAD_APPROACH', 'BUYER_DIRECT').label).toBe('เข้าถึงผู้ซื้อ/ผู้รับเหมา');
+  });
+
+  it('keeps the hedged wording when no channel was entered', () => {
+    // Nothing to name, so nothing is asserted — same rule as UNSPECIFIED everywhere else.
+    ['UNSPECIFIED', undefined, null, '', 'NOT_A_CHANNEL'].forEach((channel) => {
+      expect(dealStageLabel('LEAD_APPROACH', channel).label).toBe('เข้าถึงเจ้าของ/ผู้ออกแบบโครงการ');
+    });
+    expect(dealStageLabel('LEAD_APPROACH').label).toBe('เข้าถึงเจ้าของ/ผู้ออกแบบโครงการ');
+  });
+
+  it('leaves the tone alone — only the wording varies', () => {
+    expect(dealStageLabel('LEAD_APPROACH', 'OWNER_DIRECT').tone)
+      .toBe(dealStageLabel('LEAD_APPROACH').tone);
+  });
+
+  it('does NOT split S7 or S18 — their slashes are not route hedges', () => {
+    ['DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT'].forEach((channel) => {
+      expect(dealStageLabel('AWAITING_BUYER', channel).label).toBe(dealStageLabel('AWAITING_BUYER').label);
+      expect(dealStageLabel('DELIVERY_SCHEDULING', channel).label)
+        .toBe(dealStageLabel('DELIVERY_SCHEDULING').label);
+    });
   });
 });

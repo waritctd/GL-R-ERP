@@ -79,7 +79,9 @@ export const ALLOWED_TRANSITIONS = {
   SUBMITTED: ['IMPORT_REVIEWING', 'READY_FOR_CEO_REVIEW', 'CANCELLED', 'SUPERSEDED'],
   // V140: Import's states. COSTING_IN_PROGRESS merged into AWAITING_FACTORY_RESPONSE
   // (เจรจาราคากับโรงงาน) and MORE_INFO_REQUIRED left the product.
-  IMPORT_REVIEWING: ['AWAITING_FACTORY_RESPONSE', 'CANCELLED', 'SUPERSEDED'],
+  // Stock lines (V194): IMPORT_REVIEWING -> READY_FOR_CEO_REVIEW mirrors the backend edge added by
+  // #1094 for a request with nothing left for Import to quote (see PricingRequestStatus.ALLOWED).
+  IMPORT_REVIEWING: ['AWAITING_FACTORY_RESPONSE', 'READY_FOR_CEO_REVIEW', 'CANCELLED', 'SUPERSEDED'],
   // V141: FactoryQuoteService.markReadyForCosting auto-advances straight to READY_FOR_CEO_REVIEW
   // once every item's quote is resolvable — there is no Import-driven costing step in between.
   AWAITING_FACTORY_RESPONSE: ['READY_FOR_CEO_REVIEW', 'CANCELLED', 'SUPERSEDED'],
@@ -283,7 +285,23 @@ export function canCreateCommercialOnlyRevision(user, pr, quotation) {
  * ONLY from QUOTATION_ACCEPTED (Step 5's terminal status), and only until the bridge has already
  * run once (orderConfirmedAt is set on the FIRST successful call and never cleared). */
 export function canConfirmOrder(user, pr) {
-  return canManageCustomerQuotation(user, pr) && pr?.status === 'QUOTATION_ACCEPTED' && !pr?.orderConfirmedAt;
+  return canManageCustomerQuotation(user, pr) && pr?.status === 'QUOTATION_ACCEPTED' && !pr?.orderConfirmedAt
+    && !confirmOrderBlockedReason(pr);
+}
+
+/** Mirrors OrderConfirmationService.isBridgeableTicketStatus: the bridge can only advance a
+ * ticket sitting at 'draft' (or already at 'quotation_issued'). Any other ticket status makes
+ * confirmOrder 409, so the UI refuses first. An absent ticketStatus (older payload / mock) is not
+ * blocked here — the server's own preflight still guards it. */
+const BRIDGEABLE_TICKET_STATUSES = ['draft', 'quotation_issued'];
+
+/** Why "ยืนยันคำสั่งซื้อ" cannot work on an accepted request, or null when nothing blocks it. */
+export function confirmOrderBlockedReason(pr) {
+  if (pr?.status !== 'QUOTATION_ACCEPTED' || pr?.orderConfirmedAt) return null;
+  const ticketStatus = pr?.ticketStatus;
+  if (ticketStatus == null || BRIDGEABLE_TICKET_STATUSES.includes(ticketStatus)) return null;
+  return `ยืนยันคำสั่งซื้อไม่ได้ — สถานะดีล (ticket) เป็น '${ticketStatus}' ซึ่งไม่ตรงกับขั้นตอนนี้ `
+    + `(ต้องเป็น 'draft' หรือ 'quotation_issued') กรุณาแจ้งทีมพัฒนา/ฝ่าย IT เพื่อตรวจสอบสถานะดีลนี้`;
 }
 
 /** Mirrors OrderConfirmationService.createDepositNoticeFromQuotation's gate: sales (ticket owner)

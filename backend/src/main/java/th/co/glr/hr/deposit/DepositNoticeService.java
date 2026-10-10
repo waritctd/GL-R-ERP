@@ -1114,6 +1114,12 @@ public class DepositNoticeService {
         if (IMPORT_ROLES.contains(actor.role())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
+        // H1 lockdown: account is ROW-scoped -- it reads a deal's deposit notices / remaining invoices only
+        // when the deal is inside its list scope (the same predicate that filters GET /api/tickets).
+        // Every deposit-notice and remaining-invoice read funnels through this method.
+        if ("account".equals(actor.role()) && !tickets.isInAccountScope(ticketId)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
         return t;
     }
 

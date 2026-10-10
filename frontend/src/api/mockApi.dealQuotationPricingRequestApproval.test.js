@@ -32,6 +32,7 @@ async function draftPricingRequestQuotation() {
     firstName: 'สมศักดิ์', lastName: 'ทดสอบ', phone: '081-000-0002', email: 'contact-s2approval@example.com',
   });
   const { ticket: created } = await api.tickets.create({
+    entryChannel: 'DESIGNER_LED',
     title: 'ดีล S2 Approval Mock',
     priority: 'NORMAL',
     customerName: customer.name,
@@ -75,6 +76,12 @@ async function draftPricingRequestQuotation() {
   await api.auth.login({ role: 'import' });
   await api.pricingRequests.pickup(prId);
   const { items: quotes } = await api.pricingRequests.generateFactoryEmailDrafts(prId);
+  // CR-1 (B-R2): price entry is locked until the factory is marked ติดต่อโรงงานแล้ว.
+  for (const q of quotes) {
+    await api.pricingRequests.markFactoryQuoteContacted(q.id, {
+      contactedOn: new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Bangkok' }).format(new Date()),
+    });
+  }
   const quote = quotes[0];
   const prItemId = quote.items[0].pricingRequestItemId;
   await api.pricingRequests.receiveFactoryQuote(quote.id, {

@@ -7,11 +7,11 @@ import { api } from '../../api/index.js';
 globalThis.React = React;
 
 // The component fetches Pricing Request attachments (V69) whenever a persisted id is available
-// (createdId after save, or initialSummary.id in edit mode), QuotationItemRow's own รุ่น
-// typeahead searches the catalog on typing, and (GLA-125) the header-terms section fetches the
-// same eligible-display-name list the direct-deal quotation editor uses — none of these are
-// under test in most cases here, so all three are stubbed to resolve emptily rather than hitting
-// the network and polluting assertions.
+// (createdId after save, or initialSummary.id in edit mode), and QuotationItemRow's own รุ่น
+// typeahead searches the catalog on typing — neither is under test in most cases here, so both are
+// stubbed to resolve emptily rather than hitting the network and polluting assertions.
+// (The header-terms "เงื่อนไขสำหรับใบเสนอราคา" box that used to fetch dealQuotations.displayNameOptions
+// was removed on 2026-09-30, so that stub is gone with it.)
 vi.mock('../../api/index.js', () => ({
   api: {
     catalog: { prices: vi.fn().mockResolvedValue({ items: [] }) },
@@ -19,9 +19,6 @@ vi.mock('../../api/index.js', () => ({
       listAttachments: vi.fn().mockResolvedValue({ items: [] }),
       uploadAttachment: vi.fn().mockResolvedValue({ attachment: null }),
       deleteAttachment: vi.fn().mockResolvedValue({ ok: true }),
-    },
-    dealQuotations: {
-      displayNameOptions: vi.fn().mockResolvedValue({ items: [] }),
     },
     // GLA-125 follow-up: ผู้สั่งซื้อ (QuotationContactPicker) fetches this whenever a customerId
     // is present -- most tests here never set one (deal defaults to null), so it stays unmocked
@@ -83,6 +80,11 @@ function fillRequiredFields() {
   if (!screen.getByLabelText(/^ประเทศต้นทาง/).value) {
     fireEvent.change(screen.getByLabelText(/^ประเทศต้นทาง/), { target: { value: 'ไทย-สต็อก' } });
   }
+  // CR-1 (R1 / F4): สกุลเงิน + หน่วยราคา are required per line too (blank for a hand-typed row).
+  const currency = screen.getByLabelText(/^สกุลเงิน \(ราคาโรงงาน\)/);
+  if (!currency.value) fireEvent.change(currency, { target: { value: 'EUR' } });
+  const unit = screen.getByLabelText(/^หน่วยราคา/);
+  if (!unit.value) fireEvent.change(unit, { target: { value: 'PER_SQM' } });
 }
 
 describe('PricingRequestCreateModal', () => {
@@ -305,47 +307,41 @@ describe('PricingRequestCreateModal', () => {
     expect(item.originCountryOther).toBe('เวียดนาม');
   });
 
-  // ── GLA-125 item 4 (header terms) ───────────────────────────────────────────────────────
-  it('sends the header-terms section (payment term, validity, dept/unit code, omit-honorific) in the create payload', async () => {
+  // ── Owner request 2026-09-30: the "เงื่อนไขสำหรับใบเสนอราคา" box was removed from the form ──
+  // Sales does not set quotation terms at คำขอราคา time. The fields stay on the wire (buildPayload
+  // still carries them) so an existing draft's saved terms survive an edit, but there is no input
+  // for them here anymore — create mode therefore sends them all as null.
+  it('no longer renders the "เงื่อนไขสำหรับใบเสนอราคา" box, and create mode sends its fields as null', async () => {
     const { createFn } = renderModal();
+    // The whole box and every input inside it is gone.
+    expect(screen.queryByText('เงื่อนไขสำหรับใบเสนอราคา (ไม่บังคับ)')).toBeNull();
+    expect(screen.queryByLabelText('เครดิต')).toBeNull();
+    expect(screen.queryByLabelText('ระยะเวลาเครดิต (วัน)')).toBeNull();
+    expect(screen.queryByLabelText('ยืนราคา (วัน)')).toBeNull();
+    expect(screen.queryByLabelText('แสดงชื่อผู้พิมพ์เป็น')).toBeNull();
+    expect(screen.queryByLabelText('แสดงชื่อพนักงานขายเป็น')).toBeNull();
+    expect(screen.queryByLabelText('ฝ่าย')).toBeNull();
+    expect(screen.queryByLabelText('หน่วยงาน / รหัสผู้ออกแบบ')).toBeNull();
+
     fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
     fillRequiredFields();
-
-    fireEvent.click(screen.getByLabelText('เครดิต'));
-    fireEvent.change(screen.getByLabelText('ระยะเวลาเครดิต (วัน)'), { target: { value: '30' } });
-    fireEvent.change(screen.getByLabelText('ยืนราคา (วัน)'), { target: { value: '15' } });
-    fireEvent.change(screen.getByLabelText('ฝ่าย'), { target: { value: 'ขาย' } });
-    fireEvent.change(screen.getByLabelText('หน่วยงาน / รหัสผู้ออกแบบ'), { target: { value: 'D01' } });
-    // GLA-125 follow-up: this checkbox now lives on the reused QuotationContactPicker (its own
-    // typographic-quote copy, "ไม่เติม “คุณ”..."), not a standalone PCR-only control.
+    // GLA-125 follow-up: this checkbox lives on the reused QuotationContactPicker (its own
+    // typographic-quote copy, "ไม่เติม “คุณ”..."), independent of the removed box — still works.
     fireEvent.click(screen.getByLabelText(/ไม่เติม/));
 
     fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
 
     await waitFor(() => expect(createFn).toHaveBeenCalledTimes(1));
     expect(createFn.mock.calls[0][0]).toMatchObject({
-      paymentTermMode: 'CREDIT',
-      creditDays: 30,
-      validityDays: 15,
-      deptCode: 'ขาย',
-      unitCode: 'D01',
+      paymentTermMode: null,
+      creditDays: null,
+      validityDays: null,
+      printedByDisplayId: null,
+      salesRepDisplayId: null,
+      deptCode: null,
+      unitCode: null,
       omitContactHonorific: true,
     });
-  });
-
-  it('never sends creditDays when paymentTermMode is ON_DELIVERY, even if a stale value is still in the field', async () => {
-    const { createFn } = renderModal();
-    fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
-    fillRequiredFields();
-
-    fireEvent.click(screen.getByLabelText('เครดิต'));
-    fireEvent.change(screen.getByLabelText('ระยะเวลาเครดิต (วัน)'), { target: { value: '30' } });
-    fireEvent.click(screen.getByLabelText('ชำระเมื่อส่งมอบ'));
-
-    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
-
-    await waitFor(() => expect(createFn).toHaveBeenCalledTimes(1));
-    expect(createFn.mock.calls[0][0]).toMatchObject({ paymentTermMode: 'ON_DELIVERY', creditDays: null });
   });
 
   // ── GLA-125 follow-up: ผู้สั่งซื้อ (QuotationContactPicker reuse) ──────────────────────────
@@ -421,6 +417,8 @@ describe('PricingRequestCreateModal edit mode (Fix 2)', () => {
         wastageMode: 'NONE', piecesPerBox: 4, roundToFullBox: true,
         // GLA-125: required on this form.
         originCountry: 'ไทย-สต็อก', leadTimeMinDays: 3, leadTimeMaxDays: 7,
+        // CR-1: currency + price unit are required on every line now.
+        requestedCurrency: 'THB', requestedPriceUnitBasis: 'PER_PIECE',
         quantityType: 'CONFIRMED', targetDeliveryDate: null, deliveryLocation: null, specialRequirement: null,
       }],
       ...overrides,
@@ -454,6 +452,50 @@ describe('PricingRequestCreateModal edit mode (Fix 2)', () => {
       items: [expect.objectContaining({ productDescription: 'กระเบื้องพื้น SCG A1' })],
     })));
     expect(onCreated).toHaveBeenCalledTimes(1);
+  });
+
+  // Owner request 2026-09-30: the "เงื่อนไขสำหรับใบเสนอราคา" box is gone, but the header terms it
+  // used to edit are still persisted on the wire — editing a draft that already carries them must
+  // NOT null them just because there is no input anymore.
+  it('preserves the persisted header terms (payment/validity/display-name/dept-unit) on save even with the box removed', async () => {
+    const updateFn = vi.fn().mockResolvedValue({});
+    render(
+      <PricingRequestCreateModal
+        mode="edit"
+        initialValue={editInitialValue({
+          summary: {
+            id: 77,
+            recipientType: 'OWNER',
+            recipientLabel: 'เจ้าของโครงการ ข.',
+            paymentTermMode: 'CREDIT',
+            creditDays: 30,
+            validityDays: 15,
+            printedByDisplayId: 8,
+            salesRepDisplayId: 9,
+            deptCode: 'ขาย',
+            unitCode: 'D01',
+          },
+        })}
+        onClose={vi.fn()}
+        onCreated={vi.fn()}
+        updateFn={updateFn}
+      />,
+    );
+
+    // Confirm there is genuinely no box to re-enter these in.
+    expect(screen.queryByText('เงื่อนไขสำหรับใบเสนอราคา (ไม่บังคับ)')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
+
+    await waitFor(() => expect(updateFn).toHaveBeenCalledWith(77, expect.objectContaining({
+      paymentTermMode: 'CREDIT',
+      creditDays: 30,
+      validityDays: 15,
+      printedByDisplayId: 8,
+      salesRepDisplayId: 9,
+      deptCode: 'ขาย',
+      unitCode: 'D01',
+    })));
   });
 
   it('seeds ผู้สั่งซื้อ from the persisted request\'s recipientContactId/customerId (GLA-125 follow-up), and preserves it on save', async () => {
@@ -639,6 +681,8 @@ describe('PricingRequestCreateModal revision mode (COMMIT 5, P1 finding 3)', () 
         wastageMode: 'NONE', piecesPerBox: 4, roundToFullBox: true,
         // GLA-125: required on this form.
         originCountry: 'ไทย-สต็อก', leadTimeMinDays: 3, leadTimeMaxDays: 7,
+        // CR-1: currency + price unit are required on every line now.
+        requestedCurrency: 'THB', requestedPriceUnitBasis: 'PER_PIECE',
         quantityType: 'CONFIRMED', targetDeliveryDate: null, deliveryLocation: null, specialRequirement: null,
       }],
       ...overrides,
@@ -859,6 +903,8 @@ describe('PricingRequestCreateModal preserves the removed per-item fields throug
             deliveryLocation: 'ที่ส่งมอบเดิม', specialRequirement: 'ส่งด่วน',
             // GLA-125: required on this form.
             originCountry: 'ไทย-สต็อก', leadTimeMinDays: 3, leadTimeMaxDays: 7,
+        // CR-1: currency + price unit are required on every line now.
+        requestedCurrency: 'THB', requestedPriceUnitBasis: 'PER_PIECE',
           }],
         }}
         onClose={vi.fn()}
@@ -896,5 +942,141 @@ describe('PricingRequestCreateModal preserves the removed per-item fields throug
       deliveryLocation: null,
       specialRequirement: null,
     });
+  });
+});
+
+// CR-1 (GLA-167), rulings R1 + F4: sales fixes the currency and price unit on every line; import
+// cannot change them later. Auto-filled from the catalogue pick; blank + required for a hand-typed
+// line (the factory master's defaults are import/CEO-only, so sales has no source for them).
+describe('PricingRequestCreateModal — สกุลเงิน + หน่วยราคา per line (R1, F4)', () => {
+  const RECIPIENT = 'เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ';
+  const currencySelect = () => screen.getByLabelText(/^สกุลเงิน \(ราคาโรงงาน\)/);
+  const unitSelect = () => screen.getByLabelText(/^หน่วยราคา/);
+
+  it('shows both selects on each line, blank for a hand-typed line', () => {
+    renderModal({ ticketItems: [] });
+    expect(currencySelect().value).toBe('');
+    expect(unitSelect().value).toBe('');
+  });
+
+  it('blocks submission with per-row errors while either is blank, and sends nothing', async () => {
+    const { createFn } = renderModal();
+    fireEvent.change(screen.getByPlaceholderText(RECIPIENT), { target: { value: 'ผู้ออกแบบ ก.' } });
+    fillRequiredFields();
+    fireEvent.change(currencySelect(), { target: { value: '' } });
+    fireEvent.change(unitSelect(), { target: { value: '' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
+
+    expect(await screen.findByText('กรุณาระบุสกุลเงิน')).not.toBeNull();
+    expect(screen.getByText('กรุณาระบุหน่วยราคา')).not.toBeNull();
+    expect(createFn).not.toHaveBeenCalled();
+  });
+
+  it('a catalogue pick auto-fills the currency and unit from the catalogue row, and sales may still change them', async () => {
+    api.catalog.prices.mockImplementation(async (q) => (
+      (q ?? '').includes('B2')
+        ? { items: [{
+          priceId: 901, productCode: 'PC-901', factoryName: 'Panaria', collection: 'B2', sizeRaw: '60x60',
+          color: 'ขาว', surface: 'ด้าน', price: 12, currency: 'EUR', priceUnit: 'per_sqm',
+        }] }
+        : { items: [] }
+    ));
+    const { createFn } = renderModal({ ticketItems: [] });
+    fireEvent.change(screen.getByPlaceholderText(RECIPIENT), { target: { value: 'ผู้ออกแบบ ก.' } });
+    fireEvent.change(screen.getByLabelText(/รุ่น \/ ค้นหาแคตตาล็อก/), { target: { value: 'B2' } });
+    fireEvent.mouseDown(await waitFor(() => screen.getByRole('option', { name: /B2/ }), { timeout: 1000 }));
+
+    expect(currencySelect().value).toBe('EUR');
+    expect(unitSelect().value).toBe('PER_SQM');
+
+    fireEvent.change(currencySelect(), { target: { value: 'USD' } });
+    fillRequiredFields();
+    fireEvent.change(screen.getByLabelText(/^จำนวน/), { target: { value: '10' } });
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+
+    await waitFor(() => expect(createFn).toHaveBeenCalled());
+    expect(createFn.mock.calls[0][0].items[0]).toMatchObject({
+      requestedCurrency: 'USD', requestedPriceUnitBasis: 'PER_SQM',
+    });
+  });
+
+  it('a catalogue row with an unknown price unit leaves the unit blank (required) instead of guessing', async () => {
+    api.catalog.prices.mockImplementation(async (q) => (
+      (q ?? '').includes('B3')
+        ? { items: [{
+          priceId: 902, productCode: 'PC-902', factoryName: 'Panaria', collection: 'B3', sizeRaw: '60x60',
+          color: 'ขาว', surface: 'ด้าน', price: 12, currency: 'EUR', priceUnit: 'unknown',
+        }] }
+        : { items: [] }
+    ));
+    renderModal({ ticketItems: [] });
+    fireEvent.change(screen.getByLabelText(/รุ่น \/ ค้นหาแคตตาล็อก/), { target: { value: 'B3' } });
+    fireEvent.mouseDown(await waitFor(() => screen.getByRole('option', { name: /B3/ }), { timeout: 1000 }));
+    expect(currencySelect().value).toBe('EUR');
+    expect(unitSelect().value).toBe('');
+  });
+
+  it('a hand-typed line sends the currency/unit sales chose', async () => {
+    const { createFn } = renderModal();
+    fireEvent.change(screen.getByPlaceholderText(RECIPIENT), { target: { value: 'ผู้ออกแบบ ก.' } });
+    fillRequiredFields();
+    fireEvent.change(currencySelect(), { target: { value: 'USD' } });
+    fireEvent.change(unitSelect(), { target: { value: 'PER_BOX' } });
+    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
+    await waitFor(() => expect(createFn).toHaveBeenCalledTimes(1));
+    expect(createFn.mock.calls[0][0].items[0]).toMatchObject({ requestedCurrency: 'USD', requestedPriceUnitBasis: 'PER_BOX' });
+  });
+
+  it('edit mode seeds them from the persisted item and sends them back on save', async () => {
+    const updateFn = vi.fn().mockResolvedValue({});
+    render(
+      <PricingRequestCreateModal
+        mode="edit"
+        initialValue={{
+          summary: { id: 77, recipientType: 'OWNER', recipientLabel: 'เจ้าของโครงการ ข.' },
+          items: [{
+            id: 5, brand: 'SCG', model: 'A1', color: 'ขาว', texture: 'ด้าน', size: '60x60',
+            thicknessMm: 10, sqmPerPiece: 0.36, quantityMode: 'PIECES', piecesInput: 20,
+            wastageMode: 'NONE', piecesPerBox: 4, roundToFullBox: true,
+            originCountry: 'ไทย-สต็อก', leadTimeMinDays: 3, leadTimeMaxDays: 7,
+            requestedCurrency: 'EUR', requestedPriceUnitBasis: 'PER_SQM',
+          }],
+        }}
+        onClose={vi.fn()}
+        onCreated={vi.fn()}
+        updateFn={updateFn}
+      />,
+    );
+    expect(currencySelect().value).toBe('EUR');
+    expect(unitSelect().value).toBe('PER_SQM');
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
+    await waitFor(() => expect(updateFn).toHaveBeenCalled());
+    expect(updateFn.mock.calls[0][1].items[0]).toMatchObject({ requestedCurrency: 'EUR', requestedPriceUnitBasis: 'PER_SQM' });
+  });
+
+  it('a legacy persisted line with no terms must be completed before it can be saved again', async () => {
+    const updateFn = vi.fn().mockResolvedValue({});
+    render(
+      <PricingRequestCreateModal
+        mode="edit"
+        initialValue={{
+          summary: { id: 77, recipientType: 'OWNER', recipientLabel: 'เจ้าของโครงการ ข.' },
+          items: [{
+            id: 5, brand: 'SCG', model: 'A1', color: 'ขาว', texture: 'ด้าน', size: '60x60',
+            thicknessMm: 10, sqmPerPiece: 0.36, quantityMode: 'PIECES', piecesInput: 20,
+            wastageMode: 'NONE', piecesPerBox: 4, roundToFullBox: true,
+            originCountry: 'ไทย-สต็อก', leadTimeMinDays: 3, leadTimeMaxDays: 7,
+          }],
+        }}
+        onClose={vi.fn()}
+        onCreated={vi.fn()}
+        updateFn={updateFn}
+      />,
+    );
+    expect(currencySelect().value).toBe('');
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
+    expect(await screen.findByText('กรุณาระบุสกุลเงิน')).not.toBeNull();
+    expect(updateFn).not.toHaveBeenCalled();
   });
 });

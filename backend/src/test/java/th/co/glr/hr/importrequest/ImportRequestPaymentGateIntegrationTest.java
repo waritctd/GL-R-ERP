@@ -43,6 +43,7 @@ import th.co.glr.hr.ticket.TicketService;
 class ImportRequestPaymentGateIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private ImportRequestService service;
+    private TicketService ticketService;
 
     private long ownerId;
     private UserPrincipal owner;
@@ -62,7 +63,7 @@ class ImportRequestPaymentGateIntegrationTest extends AbstractPostgresIntegratio
             new PricingRequestRepository(jdbc), tickets, notifications, objectMapper,
             new ContactRepository(jdbc), fileStorage, factoryQuoteCarryForward());
         EmployeeAuthRepository auth = new EmployeeAuthRepository(jdbc);
-        TicketService ticketService = new TicketService(tickets, notifications, objectMapper, customers,
+        ticketService = new TicketService(tickets, notifications, objectMapper, customers,
             new QuotationRenderer(), pricingRequestService, auth);
 
         service = new ImportRequestService(queries, new ImportRequestRenderer(), stored, factories,
@@ -144,10 +145,63 @@ class ImportRequestPaymentGateIntegrationTest extends AbstractPostgresIntegratio
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
     }
 
+    /**
+     * The gate is "deposit received", NOT "quotation issued": a deal whose ticket never left
+     * {@code draft} (the redesigned pricing chain does not always advance it) can still issue once
+     * the deposit condition holds.
+     */
+    @Test
+    void issue_isAllowed_onADraftTicket_whenTheDepositIsPaid() {
+        insertFactory("Pay Gate Draft Factory");
+        long ticketId = insertTicket("GATE-DRAFT-PAID", "DEPOSIT_PAID");
+        setTicketStatus(ticketId, "draft");
+        insertItem(ticketId, "Pay Gate Draft Factory", "Line", "60x60", "10", "pcs", 0);
+        long id = service.createDrafts(ticketId, null, owner).get(0).id();
+
+        assertThat(service.issue(id, null, owner).status()).isEqualTo(ImportRequestStatus.ISSUED);
+    }
+
+    /** Same rule on the legacy deal-level action behind POST /api/tickets/{id}/import-request. */
+    @Test
+    void legacyIssueImportRequest_isAllowed_onADraftTicket_whenTheDepositIsPaid() {
+        long ticketId = insertTicket("GATE-DRAFT-LEGACY", "DEPOSIT_PAID");
+        setTicketStatus(ticketId, "draft");
+
+        ticketService.issueImportRequest(ticketId, principal(insertEmployee("PAYGATE-IMP"), "import"));
+
+        assertThat(jdbc.queryForObject(
+            "SELECT fulfillment_status FROM sales.ticket WHERE ticket_id = :id", Map.of("id", ticketId), String.class))
+            .isEqualTo("IR_ISSUED");
+    }
+
+    /** Dropping the status requirement must not drop the deposit floor — wrong-way-round cases. */
+    @Test
+    void issue_isStillRefused_onADraftTicket_withNoDeposit_orOnlyCustomerConfirmed() {
+        insertFactory("Pay Gate Draft Refused Factory");
+        for (String paymentStatus : new String[] {null, "CUSTOMER_CONFIRMED"}) {
+            long ticketId = insertTicket("GATE-DR-" + (paymentStatus == null ? "NULL" : "CC"), paymentStatus);
+            setTicketStatus(ticketId, "draft");
+            insertItem(ticketId, "Pay Gate Draft Refused Factory", "Line", "60x60", "10", "pcs", 0);
+            long id = service.createDrafts(ticketId, null, owner).get(0).id();
+
+            assertThatThrownBy(() -> service.issue(id, null, owner))
+                .isInstanceOfSatisfying(ApiException.class,
+                    e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+            assertThatThrownBy(() -> ticketService.issueImportRequest(ticketId,
+                principal(insertEmployee("PAYGATE-IMP-" + (paymentStatus == null ? "N" : "C")), "import")))
+                .isInstanceOfSatisfying(ApiException.class,
+                    e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        }
+    }
+
     // ── fixtures ──────────────────────────────────────────────────────────────────────────────
 
     private static ImportRequestDto byFactory(List<ImportRequestDto> rows, long factoryId) {
         return rows.stream().filter(r -> r.factoryId() == factoryId).findFirst().orElseThrow();
+    }
+
+    private void setTicketStatus(long ticketId, String status) {
+        jdbc.update("UPDATE sales.ticket SET status = :s WHERE ticket_id = :id", Map.of("s", status, "id", ticketId));
     }
 
     private void setPaymentStatus(long ticketId, String paymentStatus) {

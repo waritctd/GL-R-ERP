@@ -13,6 +13,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -228,15 +229,18 @@ class DepositNoticeIssueRenderOutsideTransactionIntegrationTest extends Abstract
      * build is far more expensive to diagnose than a fast red.
      */
     private String statusFromAnIndependentSession(long docId) {
-        ExecutorService executor = Executors.newSingleThreadExecutor();
-        try {
-            return executor.submit(() -> jdbc.queryForObject(
+        // try-with-resources: ExecutorService is AutoCloseable on Java 21 (close() awaits termination),
+        // so the future is cancelled first on any failure to keep close() from waiting on a running task.
+        try (ExecutorService executor = Executors.newSingleThreadExecutor()) {
+            Future<String> read = executor.submit(() -> jdbc.queryForObject(
                 "SELECT status FROM sales.deposit_notice WHERE deposit_notice_id = :id",
-                Map.of("id", docId), String.class)).get(10, TimeUnit.SECONDS);
-        } catch (Exception exception) {
-            throw new IllegalStateException("independent-session read failed", exception);
-        } finally {
-            executor.shutdownNow();
+                Map.of("id", docId), String.class));
+            try {
+                return read.get(10, TimeUnit.SECONDS);
+            } catch (Exception exception) {
+                read.cancel(true);
+                throw new IllegalStateException("independent-session read failed", exception);
+            }
         }
     }
 

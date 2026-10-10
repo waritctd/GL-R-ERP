@@ -277,6 +277,14 @@ class DealQuotationPictureIntegrationTest extends AbstractPostgresIntegrationTes
         assertStatus(HttpStatus.FORBIDDEN, () -> quotationService.getItemPicture(q.id(), itemId, qcActor));
         // The view roles may read it.
         assertThat(quotationService.getItemPicture(q.id(), itemId, salesManagerActor).image()).isEqualTo(png(40, 20));
+        // H1 lockdown: account is ROW-scoped -- refused while the deal is below S10, allowed inside its scope.
+        assertStatus(HttpStatus.FORBIDDEN, () -> quotationService.getItemPicture(q.id(), itemId, accountActor));
+        jdbc.update("UPDATE sales.ticket SET sales_stage = 'PROCUREMENT' WHERE ticket_id = :id",
+            new org.springframework.jdbc.core.namedparam.MapSqlParameterSource("id", ticketId));
+        // ...and (2026-09-30 ruling) only once the quotation went to the customer: a DRAFT is still refused.
+        assertStatus(HttpStatus.FORBIDDEN, () -> quotationService.getItemPicture(q.id(), itemId, accountActor));
+        jdbc.update("UPDATE sales.quotation SET doc_status = 'APPROVED' WHERE quotation_id = :q",
+            new org.springframework.jdbc.core.namedparam.MapSqlParameterSource("q", q.id()));
         assertThat(quotationService.getItemPicture(q.id(), itemId, accountActor).mimeType()).isEqualTo("image/png");
     }
 
@@ -555,7 +563,7 @@ class DealQuotationPictureIntegrationTest extends AbstractPostgresIntegrationTes
     }
 
     private UpsertDealQuotationRequest upsert(List<ItemInput> items) {
-        return new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30, null, items);
+        return new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30, null, items).withRecipientType("OWNER");
     }
 
     /** 60x60 -> 0.36 ตร.ม./แผ่น (explicit -- ตร.ม./แผ่น is never derived from sizeText any more;

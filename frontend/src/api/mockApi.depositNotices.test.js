@@ -33,6 +33,7 @@ async function driveTicketToAcceptedQuotation() {
   });
   const { project } = await api.customers.createProject(customer.id, { name: `โครงการมัดจำทดสอบ ${n}` });
   const { ticket: created } = await api.tickets.create({
+    entryChannel: 'DESIGNER_LED',
     title: `ดีลมัดจำทดสอบ ${n}`,
     priority: 'NORMAL',
     customerName: customer.name,
@@ -82,10 +83,14 @@ async function driveTicketToAcceptedQuotation() {
   await api.auth.login({ role: 'import' });
   await api.pricingRequests.pickup(prId);
   const { items: quotes } = await api.pricingRequests.generateFactoryEmailDrafts(prId);
+  // CR-1 (B-R2): price entry is locked until the factory is marked ติดต่อโรงงานแล้ว.
+  for (const q of quotes) {
+    await api.pricingRequests.markFactoryQuoteContacted(q.id, {
+      contactedOn: new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Bangkok' }).format(new Date()),
+    });
+  }
   const quote = quotes[0];
   const prItemId = quote.items[0].pricingRequestItemId;
-  // receiveFactoryQuote accepts a still-DRAFT quote (see its own status check) — the
-  // send/dispatch step is a UX-polling simulation, not a gate this drive needs.
   await api.pricingRequests.receiveFactoryQuote(quote.id, {
     clientRequestId: uuid(),
     supplierQuoteRef: 'REF-MOCK',

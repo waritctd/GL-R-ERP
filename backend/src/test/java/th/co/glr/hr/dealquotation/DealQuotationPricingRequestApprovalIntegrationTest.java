@@ -41,6 +41,7 @@ import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.factory.FactoryConfigRepository;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteRepository;
+import th.co.glr.hr.factoryquote.FactoryQuoteRequests.MarkFactoryContactedRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteItemRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteService;
@@ -492,7 +493,7 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
             WastageCalculator.QUANTITY_MODE_PIECES, null, 10, WastageCalculator.WASTAGE_MODE_NONE, null, 1,
             new BigDecimal("100.00"), BigDecimal.ZERO, "ไทย-สต็อก", 30, 45, null);
         DealQuotationRequests.UpsertDealQuotationRequest request = new DealQuotationRequests.UpsertDealQuotationRequest(
-            null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30, "หมายเหตุทดสอบ", List.of(item));
+            null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30, "หมายเหตุทดสอบ", List.of(item)).withRecipientType("OWNER");
         DealQuotationDto directDraft = quotationService.create(ticketId, request, salesActor);
         DealQuotationDto submittedDirect = quotationService.submit(directDraft.id(), salesActor);
         DealQuotationDto approvedDirect = quotationService.approve(
@@ -710,6 +711,8 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
         pricingRequestService.pickup(pricingRequestId, importActor);
         List<FactoryQuoteDto> drafts = factoryQuoteService.generateDrafts(pricingRequestId, importActor);
         for (FactoryQuoteDto draft : drafts) {
+            factoryQuoteService.markContacted(draft.id(), new MarkFactoryContactedRequest(
+                java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
             FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(),
                 response("REF-" + draft.factoryName(), "THB", "100.00", draft.items().get(0).pricingRequestItemId()),
                 importActor);

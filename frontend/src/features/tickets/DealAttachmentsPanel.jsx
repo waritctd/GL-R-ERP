@@ -25,6 +25,9 @@ export function DealAttachmentsPanel({
   canUpload,
   notTerminal,
   user,
+  // Copy for the empty state. The default names the upload control, which a read-only viewer
+  // (import, on its own per-deal page) does not have — that caller passes its own.
+  emptyDescription = 'แนบ PO หรือใบเซ็นได้ด้วยปุ่มด้านบน',
 }) {
   return (
     <Panel
@@ -34,7 +37,7 @@ export function DealAttachmentsPanel({
       // the ONLY supported path is CommissionService.createFromDeal
       // (POST /api/commissions/from-deal, CREATE_FROM_DEAL_ROLES =
       // account-only), reached from this page's own sticky CTA
-      // "บันทึกใบกำกับ + ออกค่าคอม" -> /commissions?ticketId=NN
+      // "บันทึกใบกำกับ" -> /finance/deals/NN
       // (accountActions.js). That one upload dual-writes the file as an
       // AttachType.INVOICE ticket attachment, so it satisfies the close
       // gate's invoiceOnFile check AND creates the deal owner's
@@ -102,7 +105,7 @@ export function DealAttachmentsPanel({
         </div>
       ) : attachments.length === 0 ? (
         <div style={{ padding: '4px 18px 14px' }}>
-          <EmptyState icon="paperclip" title="ยังไม่มีไฟล์แนบ" description="แนบ PO หรือใบเซ็นได้ด้วยปุ่มด้านบน" />
+          <EmptyState icon="paperclip" title="ยังไม่มีไฟล์แนบ" description={emptyDescription} />
         </div>
       ) : (
         <div style={{ padding: '8px 18px', display: 'flex', flexDirection: 'column', gap: 6 }}>

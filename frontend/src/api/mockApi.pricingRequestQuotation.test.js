@@ -30,6 +30,7 @@ async function approvedNetPricingRequest() {
     firstName: 'สมชาย', lastName: 'ทดสอบ', phone: '081-000-0000', email: 'contact-pcrq@example.com',
   });
   const { ticket: created } = await api.tickets.create({
+    entryChannel: 'DESIGNER_LED',
     title: 'ดีล PCR Quotation Mock',
     priority: 'NORMAL',
     customerName: customer.name,
@@ -73,6 +74,12 @@ async function approvedNetPricingRequest() {
   await api.auth.login({ role: 'import' });
   await api.pricingRequests.pickup(prId);
   const { items: quotes } = await api.pricingRequests.generateFactoryEmailDrafts(prId);
+  // CR-1 (B-R2): price entry is locked until the factory is marked ติดต่อโรงงานแล้ว.
+  for (const q of quotes) {
+    await api.pricingRequests.markFactoryQuoteContacted(q.id, {
+      contactedOn: new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Bangkok' }).format(new Date()),
+    });
+  }
   const quote = quotes[0];
   const prItemId = quote.items[0].pricingRequestItemId;
   await api.pricingRequests.receiveFactoryQuote(quote.id, {
@@ -123,6 +130,7 @@ async function twoItemApprovedNetPricingRequest() {
     firstName: 'สมหญิง', lastName: 'ทดสอบ', phone: '081-000-0001', email: 'contact-pcrq2@example.com',
   });
   const { ticket: created } = await api.tickets.create({
+    entryChannel: 'DESIGNER_LED',
     title: 'ดีล PCR Quotation Mock 2',
     priority: 'NORMAL',
     customerName: customer.name,
@@ -159,6 +167,12 @@ async function twoItemApprovedNetPricingRequest() {
   await api.auth.login({ role: 'import' });
   await api.pricingRequests.pickup(prId);
   const { items: quotes } = await api.pricingRequests.generateFactoryEmailDrafts(prId);
+  // CR-1 (B-R2): price entry is locked until the factory is marked ติดต่อโรงงานแล้ว.
+  for (const q of quotes) {
+    await api.pricingRequests.markFactoryQuoteContacted(q.id, {
+      contactedOn: new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Bangkok' }).format(new Date()),
+    });
+  }
   for (const quote of quotes) {
     await api.pricingRequests.receiveFactoryQuote(quote.id, {
       clientRequestId: nextClientRequestId(),
@@ -201,6 +215,17 @@ describe('mockApi.dealQuotations.createFromPricingRequest', () => {
     expect(item.ceoNetUnitPrice).toBeCloseTo(decision.items[0].netUnitPrice, 2);
     expect(item.netUnitPrice).toBeCloseTo(decision.items[0].netUnitPrice, 2);
     expect(item.priceChangedFromCeo).toBe(false);
+  });
+
+  // Round 8: DealQuotationDto now serves recipientType/recipientLabel (already persisted; copied
+  // from the source pricing request for PRICING_REQUEST-origin rows). Mock parity.
+  it('serves the source pricing request recipient on the created row and on listForTicket', async () => {
+    const { ticketId, prId } = await approvedNetPricingRequest();
+    const { quotation } = await api.dealQuotations.createFromPricingRequest(prId);
+    expect(quotation.recipientType).toBe('DESIGNER');
+    expect(quotation.recipientLabel).toBe('ผู้ออกแบบทดสอบ PCRQ');
+    const { items } = await api.dealQuotations.listForTicket(ticketId);
+    expect(items.find((q) => q.id === quotation.id).recipientType).toBe('DESIGNER');
   });
 
   // MINOR (Opus review, 2026-09-20) — mock parity: a second call for the same PR (a double-click;
@@ -358,13 +383,71 @@ describe('mockApi.dealQuotations.update/restoreRemovedItem — M4(c)/(d) drop fl
 // #counts, which are deliberately DEAL_DIRECT-only (see directDealSearch_doesNotIncludePricingRequestOriginRows
 // on the backend IT). A PRICING_REQUEST-origin quotation has its own separate display surface
 // (PricingRequestDetailPage's panel, M1) and must never leak into this one.
-describe('mockApi.dealQuotations.listForTicket/list/counts — exclude PRICING_REQUEST origin (mock parity)', () => {
-  it('listForTicket never returns a PRICING_REQUEST-origin row for the same ticket', async () => {
+describe('mockApi.dealQuotations.listForTicket/list/counts — origin scoping (mock parity)', () => {
+  // CHANGED (Round 8): listForTicket now INCLUDES the PRICING_REQUEST-origin row, mirroring
+  // DealQuotationRepository#findByTicket's `origin IN ('DEAL_DIRECT','PRICING_REQUEST')` (GLA-123
+  // S3 MAJOR 4 fix; the backend IT is directDealSearch_includesPricingRequestOriginRows). list()/
+  // counts() below stay DEAL_DIRECT-only, as #search/#counts do.
+  it('listForTicket returns the PRICING_REQUEST-origin row for the same ticket', async () => {
     const { ticketId, prId } = await approvedNetPricingRequest();
-    await api.dealQuotations.createFromPricingRequest(prId);
+    const { quotation } = await api.dealQuotations.createFromPricingRequest(prId);
 
     const { items } = await api.dealQuotations.listForTicket(ticketId);
-    expect(items).toHaveLength(0);
+    expect(items.map((q) => q.id)).toEqual([quotation.id]);
+  });
+
+  // Round 10 (Opus review): the mock must not be MORE permissive than
+  // DealQuotationService#listForTicket, which drops a PRICING_REQUEST-origin row (CEO's price and
+  // discount) unless canViewPricingRequestOriginRow: the owning sales rep, sales_manager, ceo.
+  // Mirrors DealQuotationOutcomeIntegrationTest.listForTicket_hidesPricingRequestOriginRow_from*.
+  // Mock authz is not authoritative evidence — the real-DB tests are.
+  describe('listForTicket visibility of a PRICING_REQUEST-origin row (wrong-way-round)', () => {
+    async function ticketWithPrRow() {
+      const { ticketId, prId } = await approvedNetPricingRequest(); // logged in as the owning sales rep
+      const { quotation } = await api.dealQuotations.createFromPricingRequest(prId);
+      return { ticketId, id: quotation.id };
+    }
+    const idsFor = async (email, ticketId) => {
+      await api.auth.login({ email, password: 'demo1234' });
+      return (await api.dealQuotations.listForTicket(ticketId)).items.map((q) => q.id);
+    };
+
+    it('the owning sales rep, sales_manager and ceo see it', async () => {
+      const { ticketId, id } = await ticketWithPrRow();
+      expect(await idsFor('sales@glr.co.th', ticketId)).toContain(id);
+      expect(await idsFor('sales.manager@glr.co.th', ticketId)).toContain(id);
+      expect(await idsFor('ceo@glr.co.th', ticketId)).toContain(id);
+    });
+
+    // 2026-09-30 owner ruling (reverses M3 FOR ACCOUNT ONLY): account may read a PR-origin row, but only on a
+    // deal inside its list scope (live, S10+). This deal is still below S10, so account is refused the list
+    // outright (403), exactly as DealQuotationService.listForTicket does; import and a grant holder still get
+    // the row filtered out. The in-scope allow-case is pinned by the real-DB DealQuotationOutcomeIntegrationTest.
+    it('import and a can_create_quotation grant holder do NOT see it; account is refused below S10', async () => {
+      const { ticketId, id } = await ticketWithPrRow();
+      expect(await idsFor('import@glr.co.th', ticketId)).not.toContain(id);
+      await api.auth.login({ role: 'account' });
+      await expect(api.dealQuotations.listForTicket(ticketId)).rejects.toMatchObject({ status: 403 });
+      // employee@glr.co.th carries canCreateQuotation: the grant must NOT bypass the PR-origin gate.
+      expect(await idsFor('employee@glr.co.th', ticketId)).not.toContain(id);
+    });
+
+    it('a non-owning sales rep is refused the list outright (entry gate), as on the service', async () => {
+      const { ticketId } = await ticketWithPrRow();
+      await api.auth.login({ email: 'sales2@glr.co.th', password: 'demo1234' });
+      await expect(api.dealQuotations.listForTicket(ticketId)).rejects.toMatchObject({ status: 403 });
+    });
+
+    it('a DEAL_DIRECT row stays visible to the same roles the gate always admitted (unaffected)', async () => {
+      // Slice 2 (N6, S2-B3): ticket 18's seed already holds a LIVE direct quotation (id 1, DRAFT),
+      // so a second create there is refused by design — this case only needs A DEAL_DIRECT row on
+      // the deal, and the seeded one is exactly that.
+      await api.auth.login({ email: 'sales@glr.co.th', password: 'demo1234' });
+      const { quotation } = await api.dealQuotations.get(1);
+      expect(quotation.origin).toBe('DEAL_DIRECT');
+      expect(await idsFor('sales@glr.co.th', 18)).toContain(quotation.id);
+      expect(await idsFor('import@glr.co.th', 18)).toContain(quotation.id);
+    });
   });
 
   it('list()/counts() never include a PRICING_REQUEST-origin row', async () => {

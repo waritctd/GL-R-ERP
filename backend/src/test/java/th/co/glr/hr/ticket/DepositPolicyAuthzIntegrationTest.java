@@ -296,14 +296,22 @@ class DepositPolicyAuthzIntegrationTest extends AbstractPostgresIntegrationTest 
         assertThat(actionCodes(ticketId, owner)).contains("WAIVE_DEPOSIT");
         assertThat(actionCodes(ticketId, salesManagerUser)).contains("WAIVE_DEPOSIT");
         assertThat(actionCodes(ticketId, ceoUser)).doesNotContain("WAIVE_DEPOSIT");
-        assertThat(actionCodes(ticketId, accountUser)).doesNotContain("WAIVE_DEPOSIT");
+        // H1 lockdown: a deal with no payment track started is at the lead stage -- OUTSIDE account's
+        // list scope -- so account is refused the finance action list outright (not merely shown no
+        // WAIVE_DEPOSIT). This used to read the list through the /tickets actions endpoint.
+        assertThatThrownBy(() -> ticketService.financeActions(ticketId, accountUser))
+            .isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────────────
 
+    // H1 lockdown: account reads its action list from financeActions (same gate logic, no /tickets view check).
     private List<String> actionCodes(long ticketId, UserPrincipal actor) {
-        return ticketService.actions(ticketId, actor).availableActions().stream()
-            .map(TicketResponses.TicketActionDto::action).toList();
+        var response = "account".equals(actor.role())
+            ? ticketService.financeActions(ticketId, actor)
+            : ticketService.actions(ticketId, actor);
+        return response.availableActions().stream().map(TicketResponses.TicketActionDto::action).toList();
     }
 
     /** A deal priced at ฿1,000 (approved_price × qty), so {@code payableAmount} is nonzero and

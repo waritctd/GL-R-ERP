@@ -45,7 +45,7 @@ import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteRepository;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteItemRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteRequest;
-import th.co.glr.hr.factoryquote.FactoryQuoteRequests.SendFactoryQuoteRequest;
+import th.co.glr.hr.factoryquote.FactoryQuoteRequests.MarkFactoryContactedRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteService;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
@@ -258,16 +258,14 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
         long itemAId = draftA.items().get(0).pricingRequestItemId();
         long itemBId = draftB.items().get(0).pricingRequestItemId();
 
-        factoryQuoteService.send(draftA.id(),
-            new SendFactoryQuoteRequest("factory-a-chain@example.com", null, null),
-            importActor);
-        factoryQuoteService.send(draftB.id(),
-            new SendFactoryQuoteRequest("factory-b-chain@example.com", null, null),
-            importActor);
+        factoryQuoteService.markContacted(draftA.id(),
+            new MarkFactoryContactedRequest(java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
+        factoryQuoteService.markContacted(draftB.id(),
+            new MarkFactoryContactedRequest(java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
         drainDispatches(); // no-op now — send() above already completed synchronously
         assertThat(jdbc.queryForObject("""
             SELECT COUNT(*) FROM sales.pricing_request_event
-             WHERE pricing_request_id = :id AND event_kind = 'FACTORY_EMAIL_SENT'
+             WHERE pricing_request_id = :id AND event_kind = 'FACTORY_CONTACTED'
             """, Map.of("id", pricingRequestId), Long.class)).isEqualTo(2L);
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
             .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
@@ -447,7 +445,7 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
 
         // ── Exactly one of each key milestone event across the chain ────────────────────────
         assertEventCount(pricingRequestId, PricingRequestEventKind.PRICING_REQUEST_CREATED, 1);
-        assertEventCount(pricingRequestId, PricingRequestEventKind.FACTORY_EMAIL_SENT, 2); // one per factory
+        assertEventCount(pricingRequestId, PricingRequestEventKind.FACTORY_CONTACTED, 2); // one per factory
         assertEventCount(pricingRequestId, PricingRequestEventKind.PRICING_DECISION_APPROVED, 1);
         assertEventCount(pricingRequestId, PricingRequestEventKind.CUSTOMER_QUOTATION_ISSUED, 1);
         assertThat(jdbc.queryForObject("""
@@ -574,12 +572,10 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
         long itemAId = draftA.items().get(0).pricingRequestItemId();
         long itemBId = draftB.items().get(0).pricingRequestItemId();
 
-        factoryQuoteService.send(draftA.id(),
-            new SendFactoryQuoteRequest("factory-a-chain@example.com", null, null),
-            importActor);
-        factoryQuoteService.send(draftB.id(),
-            new SendFactoryQuoteRequest("factory-b-chain@example.com", null, null),
-            importActor);
+        factoryQuoteService.markContacted(draftA.id(),
+            new MarkFactoryContactedRequest(java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
+        factoryQuoteService.markContacted(draftB.id(),
+            new MarkFactoryContactedRequest(java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
         drainDispatches();
 
         FactoryQuoteDto responseA = factoryQuoteService.receive(draftA.id(),

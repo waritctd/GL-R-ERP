@@ -159,8 +159,14 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
         tickets.updatePaymentStatusUnchecked(ticketId, PaymentTrack.DEPOSIT_NOTICE_ISSUED);
 
         for (UserPrincipal actor : List.of(accountActor, ceo)) {
-            assertThatThrownBy(() ->
-                ticketService.updateStage(ticketId, DealStage.DEPOSIT_RECEIVED, "รับมัดจำแล้ว", actor))
+            assertThatThrownBy(() -> {
+                // H1 lockdown: account reaches updateStage only through the finance entrypoint.
+                if ("account".equals(actor.role())) {
+                    ticketService.financeUpdateStage(ticketId, DealStage.DEPOSIT_RECEIVED, "รับมัดจำแล้ว", actor);
+                } else {
+                    ticketService.updateStage(ticketId, DealStage.DEPOSIT_RECEIVED, "รับมัดจำแล้ว", actor);
+                }
+            })
                 .describedAs("%s must not be able to claim a deposit that has not arrived", actor.role())
                 .isInstanceOfSatisfying(ApiException.class,
                     e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
@@ -211,7 +217,7 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
         tickets.updateFulfillmentStatus(ticketId, FulfilmentStatus.FULLY_DELIVERED);
 
         assertThatThrownBy(() ->
-            ticketService.updateStage(ticketId, DealStage.CLOSED_PAID, "ปิดงาน", accountActor))
+            ticketService.financeUpdateStage(ticketId, DealStage.CLOSED_PAID, "ปิดงาน", accountActor))
             .isInstanceOfSatisfying(ApiException.class,
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
 
@@ -242,7 +248,7 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
             }
 
             assertThatThrownBy(() ->
-                ticketService.updateStage(ticketId, DealStage.CLOSED_PAID, "รับเงินครบแล้ว", accountActor))
+                ticketService.financeUpdateStage(ticketId, DealStage.CLOSED_PAID, "รับเงินครบแล้ว", accountActor))
                 .describedAs("paid in full with fulfilment=%s must not reach CLOSED_PAID", fulfilment)
                 .isInstanceOfSatisfying(ApiException.class,
                     e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
@@ -268,7 +274,7 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
         tickets.updatePaymentStatusUnchecked(ticketId, PaymentTrack.FULLY_PAID);
         tickets.updateFulfillmentStatus(ticketId, FulfilmentStatus.FULLY_DELIVERED);
 
-        ticketService.updateStage(ticketId, DealStage.CLOSED_PAID, null, accountActor);
+        ticketService.financeUpdateStage(ticketId, DealStage.CLOSED_PAID, null, accountActor);
 
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.CLOSED_PAID);
     }
@@ -299,7 +305,7 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
 
         long deposit = readyToAdvanceFrom(DealStage.ORDER_RECEIVED);
         tickets.updatePaymentStatusUnchecked(deposit, PaymentTrack.DEPOSIT_PAID);
-        ticketService.updateStage(deposit, DealStage.DEPOSIT_RECEIVED, null, accountActor);
+        ticketService.financeUpdateStage(deposit, DealStage.DEPOSIT_RECEIVED, null, accountActor);
         assertThat(stageOf(deposit)).isEqualTo(DealStage.DEPOSIT_RECEIVED);
 
         long delivered = readyToAdvanceFrom(DealStage.DELIVERY_SCHEDULING);
@@ -313,7 +319,7 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
         long closed = readyToAdvanceFrom(DealStage.DELIVERED);
         tickets.updatePaymentStatusUnchecked(closed, PaymentTrack.FULLY_PAID);
         tickets.updateFulfillmentStatus(closed, FulfilmentStatus.FULLY_DELIVERED);
-        ticketService.updateStage(closed, DealStage.CLOSED_PAID, null, accountActor);
+        ticketService.financeUpdateStage(closed, DealStage.CLOSED_PAID, null, accountActor);
         assertThat(stageOf(closed)).isEqualTo(DealStage.CLOSED_PAID);
     }
 
@@ -400,7 +406,7 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
 
         tickets.updatePaymentStatusUnchecked(ticketId, PaymentTrack.DEPOSIT_PAID);
         logAnActivityAndFollowUp(ticketId);
-        ticketService.updateStage(ticketId, DealStage.DEPOSIT_RECEIVED, null, accountActor);
+        ticketService.financeUpdateStage(ticketId, DealStage.DEPOSIT_RECEIVED, null, accountActor);
 
         logAnActivityAndFollowUp(ticketId);
         ticketService.updateStage(ticketId, DealStage.PROCUREMENT, null, importActor);
@@ -413,7 +419,7 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
 
         tickets.updatePaymentStatusUnchecked(ticketId, PaymentTrack.FULLY_PAID);
         logAnActivityAndFollowUp(ticketId);
-        ticketService.updateStage(ticketId, DealStage.CLOSED_PAID, null, accountActor);
+        ticketService.financeUpdateStage(ticketId, DealStage.CLOSED_PAID, null, accountActor);
 
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.CLOSED_PAID);
     }

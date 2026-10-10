@@ -51,7 +51,7 @@ import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteRepository;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteItemRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteRequest;
-import th.co.glr.hr.factoryquote.FactoryQuoteRequests.SendFactoryQuoteRequest;
+import th.co.glr.hr.factoryquote.FactoryQuoteRequests.MarkFactoryContactedRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteService;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
@@ -297,7 +297,7 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
-    void bypassDeal_partiallyPaid_becomesVisibleToAccountRoleListScope() {
+    void bypassDeal_partiallyPaid_isVisibleToAccountRoleListScope_beforeAndAfter() {
         Deal deal = buildDealToQuotationAccepted("authz");
         // GLA-118: owning rep only -- see the note on the bypass-path test above.
         ticketService.waiveDeposit(deal.ticketId(), DepositPolicy.WAIVED, "ทดสอบ authz visibility", salesActor);
@@ -305,9 +305,11 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
             deal.pricingRequestId(), new ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
         assertThat(paymentStatusOf(deal.ticketId())).isEqualTo(PaymentTrack.CUSTOMER_CONFIRMED);
 
-        // BEFORE: CUSTOMER_CONFIRMED is not in ACCOUNT_PENDING_PAYMENT_STATUSES, and there is no
-        // overdue outstanding balance (no due_date set on this deal) — not yet visible to account.
-        assertThat(accountVisibleTicketIds()).doesNotContain(deal.ticketId());
+        // BEFORE (H1, S10 floor): confirmOrder puts the deal at ORDER_RECEIVED (S10), and every live
+        // order from S10 on is in account's list by STAGE alone -- so a bypass deal sitting at
+        // CUSTOMER_CONFIRMED is already visible, even though CUSTOMER_CONFIRMED is not in
+        // ACCOUNT_PENDING_PAYMENT_STATUSES and no due_date is set. This used to assert the opposite.
+        assertThat(accountVisibleTicketIds()).contains(deal.ticketId());
 
         BigDecimal payable = tickets.payableAmount(deal.ticketId());
         assertThat(payable.signum()).as("fixture must have a positive payable amount").isPositive();
@@ -321,11 +323,9 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(paymentStatusOf(deal.ticketId())).isEqualTo(PaymentTrack.AWAITING_FINAL_PAYMENT);
 
         // AFTER: the real repository list query through the real service (TicketService.listPage
-        // -> TicketRepository.findSummaries -> appendRoleScope), never a mock — proves
-        // ACCOUNT_PENDING_PAYMENT_STATUSES's AWAITING_FINAL_PAYMENT entry now actually reaches
-        // this bypass-policy deal, which it could not before this branch (only DEPOSIT_PAID/
-        // DEPOSIT_NOTICE_ISSUED were pending-payment statuses, and a bypass deal never visits
-        // either one).
+        // -> TicketRepository.findSummaries -> appendRoleScope), never a mock — the deal stays
+        // visible once the partial payment lands (now via BOTH the S10 stage disjunct and
+        // ACCOUNT_PENDING_PAYMENT_STATUSES's AWAITING_FINAL_PAYMENT entry).
         assertThat(accountVisibleTicketIds()).contains(deal.ticketId());
     }
 
@@ -682,8 +682,8 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
         FactoryQuoteDto draft = drafts.get(0);
         long pricingRequestItemId = draft.items().get(0).pricingRequestItemId();
         String email = FACTORY.toLowerCase().replace(" ", "-") + "@example.com";
-        factoryQuoteService.send(draft.id(),
-            new SendFactoryQuoteRequest(email, null, null), importActor);
+        factoryQuoteService.markContacted(draft.id(),
+            new MarkFactoryContactedRequest(java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
         drainDispatches();
         ReceiveFactoryQuoteRequest response = new ReceiveFactoryQuoteRequest(
             "REF-" + UUID.randomUUID(), "THB", "30 days", "45 days", "revision", "note",

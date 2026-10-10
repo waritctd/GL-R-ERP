@@ -1,5 +1,5 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
-import { hasPermission, allowedRoute, canAccessPath, isDivisionManager } from './permissions.js';
+import { hasPermission, allowedRoute, canAccessPath, isDivisionManager, importDealRedirectFor } from './permissions.js';
 
 describe('hasPermission', () => {
   it('grants a permission listed for the role', () => {
@@ -236,6 +236,13 @@ describe('canAccessPath', () => {
     expect(canAccessPath('/finance', employee)).toBe(false);
   });
 
+  it('scopes the per-deal finance page /finance/deals/:id exactly like /finance (fails open if unclaimed)', () => {
+    expect(canAccessPath('/finance/deals/501', account)).toBe(true);
+    expect(canAccessPath('/finance/deals/501', ceo)).toBe(true);
+    expect(canAccessPath('/finance/deals/501', sales)).toBe(false);
+    expect(canAccessPath('/finance/deals/501', employee)).toBe(false);
+  });
+
   it('allows self-service paths for any user linked to an employee', () => {
     expect(canAccessPath('/profile', employee)).toBe(true);
     // overtime/leave are allowed for a linked employee even without the view-all permission
@@ -332,10 +339,36 @@ describe('canAccessPath', () => {
 
   // Role-scoped views (Import build): import is blocked from the pipeline
   // BROWSER (/tickets exact) but keeps ticket-detail read (/tickets/:id).
-  it('blocks import from the deal-pipeline browser but allows ticket detail', () => {
+  it('blocks import from the deal-pipeline browser AND from the whole-deal page', () => {
     expect(canAccessPath('/tickets', importer)).toBe(false);
-    expect(canAccessPath('/tickets/12', importer)).toBe(true);
-    expect(canAccessPath('/tickets/12/deposit', importer)).toBe(true);
+    // Import now has its own per-deal page (/import/deals/:id). The whole-deal GET
+    // /api/tickets/{id} 403s import server-side, so the frontend guard refuses it too.
+    expect(canAccessPath('/tickets/12', importer)).toBe(false);
+    // Deposit notices are denied to import outright (DepositNoticeService), so the whole
+    // /tickets/ prefix is closed to it, not just the bare detail path.
+    expect(canAccessPath('/tickets/12/deposit', importer)).toBe(false);
+  });
+
+  // Import's OWN per-deal page (ImportDealController: import + ceo only). Wrong-way-round first:
+  // every other role is refused, because canAccessPath fails OPEN for a path no guard claims —
+  // without an explicit entry every authenticated role would reach /import/deals/:id.
+  it('lets import and ceo — and nobody else — reach /import/deals/:id', () => {
+    expect(canAccessPath('/import/deals/12', importer)).toBe(true);
+    expect(canAccessPath('/import/deals/12', ceo)).toBe(true);
+    for (const user of [
+      sales, account, hr, employee,
+      { role: 'sales_manager', employeeId: 4 },
+      { role: 'warehouse', employeeId: 6 },
+      { role: 'qc', employeeId: 7 },
+    ]) {
+      expect(canAccessPath('/import/deals/12', user), `${user.role} must be refused`).toBe(false);
+    }
+  });
+
+  it('keeps ceo/sales/sales_manager/account on the whole-deal page', () => {
+    for (const user of [ceo, sales, account, { role: 'sales_manager', employeeId: 4 }]) {
+      expect(canAccessPath('/tickets/12', user), `${user.role} keeps /tickets/:id`).toBe(true);
+    }
   });
 
   // /procurement and /factory-purchase-orders(/:id) were removed 2026-08-11
@@ -706,5 +739,26 @@ describe('quotation release through the self-service lockdown', () => {
     expect(isQuotationReleaseUser(user('import'))).toBe(false);
     expect(isQuotationReleaseUser(user('account'))).toBe(false);
     expect(isQuotationReleaseUser(null)).toBe(false);
+  });
+});
+
+// An import user landing on a whole-deal URL (a backend notification deep-link, an old bookmark)
+// is sent to their own page for that deal instead of a dead-end refusal.
+describe('importDealRedirectFor', () => {
+  const importer = { role: 'import', employeeId: 2 };
+
+  it('maps /tickets/:id to /import/deals/:id for import only', () => {
+    expect(importDealRedirectFor('/tickets/12', importer)).toBe('/import/deals/12');
+    expect(importDealRedirectFor('/tickets/12/', importer)).toBe('/import/deals/12');
+  });
+
+  it('does not redirect other roles, other paths, or sub-paths', () => {
+    expect(importDealRedirectFor('/tickets/12', { role: 'ceo', employeeId: 1 })).toBeNull();
+    expect(importDealRedirectFor('/tickets/12', { role: 'sales', employeeId: 9 })).toBeNull();
+    expect(importDealRedirectFor('/tickets', importer)).toBeNull();
+    expect(importDealRedirectFor('/tickets/12/deposit', importer)).toBeNull();
+    expect(importDealRedirectFor('/tickets/abc', importer)).toBeNull();
+    expect(importDealRedirectFor('/fulfilment', importer)).toBeNull();
+    expect(importDealRedirectFor('/tickets/12', null)).toBeNull();
   });
 });

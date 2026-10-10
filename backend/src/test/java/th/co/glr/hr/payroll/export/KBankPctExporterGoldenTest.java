@@ -24,6 +24,7 @@ class KBankPctExporterGoldenTest {
         byte[] golden = readGolden();
         String text = new String(golden, Cp874.CHARSET);
         String[] lines = text.split("\r\n", -1);
+        assertThat(lines).as("golden file: header line plus at least one data line").hasSizeGreaterThanOrEqualTo(2);
         String header = lines[0];
 
         AppProperties.Employer employer = new AppProperties.Employer();

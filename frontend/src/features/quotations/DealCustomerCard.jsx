@@ -1,3 +1,4 @@
+/* Hallmark · genre: modern-minimal · macrostructure: Workbench · design-system: design.md · designed-as-app · pre-emit critique: P4 H4 E4 S4 R4 V4 */
 import { useEffect, useRef, useState } from 'react';
 import { ThaiAddressFields, emptyThaiAddress, completeThaiAddress } from '../locations/ThaiAddressFields.jsx';
 import { api } from '../../api/index.js';
@@ -6,15 +7,121 @@ import { FormField } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
+import { cn } from '../../utils/cn.js';
 import { entryChannelLabel } from '../../utils/format.js';
 import { CustomerDetailsFields } from './CustomerDetailsFields.jsx';
+import { DealPicker } from './DealPicker.jsx';
+import { QUOTATION_RECIPIENT_OPTIONS, isRecipientOffRoute } from './quotationMeta.js';
+import { routeForChannel, useStageCatalog } from '../tickets/stageCatalog.js';
 
-// ช่องทางรับงาน (owner ask 2026-09-10): the same four codes th.co.glr.hr.ticket.EntryChannel
-// stores, in the order the spec lists them. Deliberately includes UNSPECIFIED as a pickable
-// option and defaults to it -- unlike TicketCreateModal.jsx's own ENTRY_CHANNEL_OPTIONS (which
-// never offers it, per that file's own comment), this card is reached earlier in the flow, often
-// before the rep even knows how the lead came in.
-const ENTRY_CHANNEL_CODES = ['UNSPECIFIED', 'DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT'];
+// The app's one pill-choice voice (ช่องทางรับงาน below, and the ดีล / ผู้รับ choices added in
+// slice 2): indigo tint when chosen, --radius-md, 38px desktop / 44px phone. `whitespace-nowrap`
+// keeps a Thai label on one line — the ROW wraps on a narrow screen, never the label.
+const PILL_BASE = 'min-h-[38px] mobile:min-h-[44px] whitespace-nowrap rounded-md border px-3 text-xs font-bold';
+const PILL_ON = 'border-primary bg-primary/10 text-primary';
+const PILL_OFF = 'border-border bg-surface';
+
+// "ดีล" step (slice 2, SLICE-2-FLOW-A.md §A): which way the quotation gets its deal.
+const DEAL_MODES = [
+  { code: 'pick', label: 'เลือกดีลที่มีอยู่' },
+  { code: 'create', label: 'สร้างดีลใหม่' },
+];
+
+/**
+ * ผู้รับใบเสนอราคา* — three pill radios in S-order (ผู้ออกแบบ · เจ้าของโครงการ · ผู้ซื้อ / ผู้รับเหมา),
+ * required on a direct quotation (S2-B1: the server 400s a DEAL_DIRECT create without one; the PDF
+ * prints its เรียน line from it). A real radiogroup: one tab stop (roving tabindex), arrow keys move
+ * the choice, every pill keeps the global :focus-visible ring. Exported for the editor's
+ * existing-DRAFT path (§C), which renders the same field inside ข้อมูลลูกค้าและผู้ขาย.
+ *
+ * Owner ruling 2026-09-30 (slice-2 scope reduction): the deal-stage rule is owned by another
+ * session, so this field no longer moves — or promises to move — the deal's stage. The spec's live
+ * "ดีลจะอยู่ที่ขั้น …" helper line under the pills was removed for that reason.
+ *
+ * Owner ruling 2026-09-30 #1 — off-route recipient: ALLOW + inline note. Every pill stays
+ * selectable on every deal. `entryChannel` is the deal's channel (on the new-deal card: the one being
+ * chosen there); when the chosen recipient's quote stage is not on that channel's route — READ from
+ * the served stage catalog via routeForChannel, never a local table — one quiet info line says so
+ * under the pills. No block, no modal. With no `entryChannel` there is no route to compare against,
+ * so no note.
+ */
+export function QuotationRecipientField({ value, onChange, error, idPrefix = 'quotation-recipient', entryChannel = null }) {
+  const { catalog } = useStageCatalog();
+  const offRoute = Boolean(entryChannel) && isRecipientOffRoute(routeForChannel(catalog, entryChannel), value);
+  const groupId = `${idPrefix}-group`;
+  const checkedIndex = QUOTATION_RECIPIENT_OPTIONS.findIndex((o) => o.code === value);
+  const focusIndex = checkedIndex >= 0 ? checkedIndex : 0;
+  const optionRefs = useRef([]);
+
+  function choose(index) {
+    const option = QUOTATION_RECIPIENT_OPTIONS[index];
+    onChange(option.code);
+    optionRefs.current[index]?.focus();
+  }
+
+  function handleKeyDown(event, index) {
+    const last = QUOTATION_RECIPIENT_OPTIONS.length - 1;
+    const next = {
+      ArrowRight: index === last ? 0 : index + 1,
+      ArrowDown: index === last ? 0 : index + 1,
+      ArrowLeft: index === 0 ? last : index - 1,
+      ArrowUp: index === 0 ? last : index - 1,
+      Home: 0,
+      End: last,
+    }[event.key];
+    if (next === undefined) return;
+    event.preventDefault();
+    choose(next);
+  }
+
+  return (
+    <FormField label="ผู้รับใบเสนอราคา" htmlFor={groupId} required error={error}>
+      <div
+        id={groupId}
+        role="radiogroup"
+        aria-label="ผู้รับใบเสนอราคา"
+        className="flex flex-wrap gap-2"
+      >
+        {QUOTATION_RECIPIENT_OPTIONS.map((option, index) => (
+          <button
+            key={option.code}
+            ref={(node) => { optionRefs.current[index] = node; }}
+            id={`${idPrefix}-${option.code}`}
+            type="button"
+            role="radio"
+            aria-checked={value === option.code}
+            tabIndex={index === focusIndex ? 0 : -1}
+            className={cn(PILL_BASE, value === option.code ? PILL_ON : PILL_OFF)}
+            onClick={() => choose(index)}
+            onKeyDown={(event) => handleKeyDown(event, index)}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+      {/* A persistent polite live region: the note is announced when it appears, and the empty
+          region takes no space when it does not. 13px (text-sm), info tone, icon + words — status
+          is text, never colour alone (DESIGN.md §2.7). */}
+      <div role="status" aria-live="polite">
+        {offRoute ? (
+          <p className="mt-1.5 mb-0 flex items-start gap-1.5 text-sm text-info">
+            <Icon name="info" size={14} className="mt-[3px] shrink-0" />
+            <span>{OFF_ROUTE_RECIPIENT_NOTE}</span>
+          </p>
+        ) : null}
+      </div>
+    </FormField>
+  );
+}
+
+const OFF_ROUTE_RECIPIENT_NOTE = 'ผู้รับนี้ไม่อยู่ในเส้นทางของดีล — ขั้นของดีลจะไม่ขยับ';
+
+// ช่องทางรับงาน (owner ask 2026-09-10): the three real channels th.co.glr.hr.ticket.EntryChannel
+// accepts as INPUT. UNSPECIFIED is deliberately NOT offered — it is the stored default, and the
+// server refuses it as a setEntryChannel input — so it is never a button, matching
+// TicketCreateModal.jsx's own ENTRY_CHANNEL_OPTIONS. The form's initial value stays UNSPECIFIED
+// (nothing pressed) until the rep picks one.
+const ENTRY_CHANNEL_CODES = ['DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT'];
 
 function emptyNewCustomer() {
   return { name: '', taxId: '', phone: '', address: '', ...emptyThaiAddress() };
@@ -35,9 +142,20 @@ function emptyNewCustomer() {
  * comment -- just no longer here). ผู้สั่งซื้อ is now a single optional free-text field
  * (`terms.orderedByName`) the editor itself renders next to this card, not something this card
  * collects at all.
+ *
+ * Slice 2 — flow A (SLICE-2-FLOW-A.md §A): this card is now step 1, "ดีล". With `onModeChange`
+ * set (the editor always sets it) it leads with a two-way choice — เลือกดีลที่มีอยู่ (DealPicker,
+ * which turns the page into the existing ?ticket= path) or สร้างดีลใหม่ (everything below, as
+ * before) — then ผู้รับใบเสนอราคา* for either branch. ช่องทางรับงาน belongs to a NEW deal only.
+ * Without `onModeChange` the card behaves as the plain customer/project card it always was
+ * (`mode` defaults to 'create'), which is what its older tests exercise.
  */
-export function DealCustomerCard({ value, onChange, errors, showToast }) {
+export function DealCustomerCard({
+  value, onChange, errors, showToast,
+  user = null, mode = 'create', onModeChange = null, selectedDeal = null,
+}) {
   const { customer, project, entryChannel } = value;
+  const creating = mode === 'create';
 
   // ── ลูกค้า typeahead ──────────────────────────────────────────────────────────────────────
   const [customerSearch, setCustomerSearch] = useState('');
@@ -255,7 +373,31 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
   }
 
   return (
-    <Panel title="ลูกค้าและโครงการ">
+    <Panel title="ดีล">
+      {onModeChange ? (
+        // A segmented choice, not a modal (DESIGN.md §16): both branches live on this one panel.
+        // aria-pressed toggle buttons in the same pill voice as ช่องทางรับงาน.
+        <div role="group" aria-label="วิธีเลือกดีล" className="mb-4 flex flex-wrap gap-2">
+          {DEAL_MODES.map((option) => (
+            <button
+              key={option.code}
+              type="button"
+              aria-pressed={mode === option.code}
+              className={cn(PILL_BASE, 'text-sm', mode === option.code ? PILL_ON : PILL_OFF)}
+              onClick={() => { if (mode !== option.code) onModeChange(option.code); }}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      {!creating ? (
+        <DealPicker user={user} selected={selectedDeal} error={errors?.deal} showToast={showToast} />
+      ) : null}
+
+      {creating ? (
+      <>
       <div className="grid grid-cols-2 gap-3 mobile:grid-cols-1">
         <div className="relative">
           <FormField label="ลูกค้า" htmlFor="deal-customer" required error={errors?.customer}>
@@ -506,21 +648,44 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
         </Modal>
       ) : null}
 
-      <div className="mt-3">
-        <span className="mb-1 block text-xs">ช่องทางรับงาน</span>
-        <div className="flex flex-wrap gap-2">
-          {ENTRY_CHANNEL_CODES.map((code) => (
-            <button
-              key={code}
-              type="button"
-              aria-pressed={entryChannel === code}
-              className={`min-h-[38px] mobile:min-h-[44px] rounded-md border px-3 text-xs font-bold ${entryChannel === code ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface'}`}
-              onClick={() => onChange({ entryChannel: code })}
-            >
-              {entryChannelLabel(code).label}
-            </button>
-          ))}
+      </>
+      ) : null}
+
+      {/* ช่องทางรับงาน — a NEW deal's own field (#1085: a real channel is required, UNSPECIFIED is no
+          longer offered, and a missing one shows its error here). Only on the สร้างดีลใหม่ branch: a
+          picked deal already has its channel. */}
+      {creating ? (
+        <div className="mt-4">
+          <span className="mb-1 block text-xs">ช่องทางรับงาน</span>
+          <div id="deal-entry-channel" role="group" aria-label="ช่องทางรับงาน" aria-describedby={errors?.entryChannel ? 'deal-entry-channel-error' : undefined} tabIndex={-1} className="flex flex-wrap gap-2">
+            {ENTRY_CHANNEL_CODES.map((code) => (
+              <button
+                key={code}
+                type="button"
+                aria-pressed={entryChannel === code}
+                className={cn(PILL_BASE, entryChannel === code ? PILL_ON : PILL_OFF)}
+                onClick={() => onChange({ entryChannel: code })}
+              >
+                {entryChannelLabel(code).label}
+              </button>
+            ))}
+          </div>
+          {errors?.entryChannel ? <p id="deal-entry-channel-error" role="alert" className="mt-1 text-xs text-danger">{errors.entryChannel}</p> : null}
         </div>
+      ) : null}
+
+      {/* ผู้รับใบเสนอราคา* — both branches, below the deal choice and (on a new deal) below
+          ช่องทางรับงาน. Required on a direct quotation (S2-B1). No stage promise: which stage the deal
+          sits at is owned elsewhere (owner ruling 2026-09-30, slice-2 scope reduction). The route the
+          off-route note compares against is the channel being chosen here on a NEW deal, the picked
+          deal's own channel otherwise (owner ruling #1). */}
+      <div className="mt-4">
+        <QuotationRecipientField
+          value={value.recipientType ?? ''}
+          onChange={(code) => onChange({ recipientType: code })}
+          error={errors?.recipient}
+          entryChannel={creating ? entryChannel : (selectedDeal?.entryChannel ?? null)}
+        />
       </div>
 
     </Panel>

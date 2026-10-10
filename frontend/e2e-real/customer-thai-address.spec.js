@@ -7,6 +7,9 @@ for (const width of [1366, 390]) {
     await page.setViewportSize({ width, height: 900 });
     await loginAs(page, 'sales');
     await spaGoto(page, '/quotations/new');
+    // Slice 2 (#1090): /quotations/new opens on the "ดีล" step with เลือกดีลที่มีอยู่ selected;
+    // the customer search lives in the สร้างดีลใหม่ branch.
+    await page.getByRole('button', { name: 'สร้างดีลใหม่', exact: true }).click();
     const name = `Thai address e2e ${width} ${Date.now()}`;
     await page.getByPlaceholder('พิมพ์ค้นหาชื่อบริษัท / ลูกค้า…').fill(name);
     await page.getByRole('button', { name: 'เพิ่มลูกค้าใหม่', exact: true }).click();
@@ -22,6 +25,7 @@ for (const width of [1366, 390]) {
     await expect(dialog).toHaveCount(0);
     await expect(page.getByLabel('ที่อยู่', { exact: true })).toHaveValue('88/8 ถนนสุขุมวิท 21 แขวงคลองเตยเหนือ เขตวัฒนา กรุงเทพมหานคร 10110');
     await page.reload();
+    await page.getByRole('button', { name: 'สร้างดีลใหม่', exact: true }).click();
     await page.getByPlaceholder('พิมพ์ค้นหาชื่อบริษัท / ลูกค้า…').fill(name);
     await page.getByRole('option', { name, exact: true }).click();
     await expect(page.getByLabel('ที่อยู่', { exact: true })).toHaveValue('88/8 ถนนสุขุมวิท 21 แขวงคลองเตยเหนือ เขตวัฒนา กรุงเทพมหานคร 10110');

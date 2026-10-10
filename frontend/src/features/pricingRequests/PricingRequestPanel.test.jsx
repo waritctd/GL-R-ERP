@@ -284,6 +284,8 @@ describe('PricingRequestPanel', () => {
           piecesPerBox: 4, quantityType: 'ESTIMATE',
           // GLA-125: required on this form.
           originCountry: 'ไทย-สต็อก', leadTimeMinDays: 3, leadTimeMaxDays: 7,
+          // CR-1: the currency + price unit sales fixed on the line (required to save again).
+          requestedCurrency: 'THB', requestedPriceUnitBasis: 'PER_PIECE',
         }],
         events: [],
       },

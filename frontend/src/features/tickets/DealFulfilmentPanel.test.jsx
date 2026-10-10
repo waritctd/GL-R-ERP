@@ -123,26 +123,6 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
     });
   });
 
-  // QA BUG-21 (S12/S15): a DRAFT ใบขอซื้อ has no progress bar — advancing a step needs it ISSUED
-  // first (import/ceo), but issuing is sales/ceo's job. Without a word, import saw a bare DRAFT card
-  // with no advance control and no reason, reading as "per-factory นำเข้าเลื่อนไม่ได้/พัง".
-  describe('DRAFT ใบขอซื้อ says whose move it is (BUG-21)', () => {
-    it('import sees why a DRAFT cannot be advanced yet, and gets no progress bar / advance control', async () => {
-      renderPanel(IMPORT, [draftRow()]);
-      const hint = await screen.findByTestId('ir-draft-hint-10');
-      expect(hint.textContent).toContain('รอฝ่ายขาย/CEO');
-      expect(screen.queryByTestId('factory-progress-10')).toBeNull();
-      expect(screen.queryByTestId('advance-10')).toBeNull();
-    });
-
-    it('the owning rep sees a nudge to ออกเลข so import can start tracking', async () => {
-      renderPanel(OWNER, [draftRow()]);
-      const hint = await screen.findByTestId('ir-draft-hint-10');
-      expect(hint.textContent).toContain('ติดตามการนำเข้า');
-      expect(screen.getByTestId('ir-issue-10')).not.toBeNull();
-    });
-  });
-
   describe('country-required create flow', () => {
     it('a missing-country 409 opens the picker, and submitting retries with newFactoryCountries', async () => {
       api.storedImportRequests.createDrafts
@@ -398,10 +378,10 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
 
   // PR-B REVIEW ROUND 1, nit: the create button relabels once the deal already has rows.
   describe('create-button relabel (nit)', () => {
-    it('reads "สร้างใบขอซื้อ" with no rows yet, and "สร้างใบขอซื้อโรงงานที่ยังไม่มี" once rows exist', async () => {
+    it('reads "สร้างใบ IR" with no rows yet, and "สร้างใบ IR โรงงานที่ยังไม่มี" once rows exist (CR-1 rename)', async () => {
       const { rerender } = renderPanel(OWNER, []);
       const initialButton = await screen.findByTestId('deal-fulfilment-create-ir-drafts');
-      expect(initialButton.textContent).toBe('สร้างใบขอซื้อ');
+      expect(initialButton.textContent).toBe('สร้างใบ IR');
 
       api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: [draftRow()] });
       const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
@@ -410,7 +390,7 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
           <DealFulfilmentPanel user={OWNER} ticketId={2} summary={summary} items={[]} availableActions={[]} showToast={vi.fn()} />
         </QueryClientProvider>,
       );
-      expect(await screen.findByText('สร้างใบขอซื้อโรงงานที่ยังไม่มี')).not.toBeNull();
+      expect(await screen.findByText('สร้างใบ IR โรงงานที่ยังไม่มี')).not.toBeNull();
     });
   });
 
@@ -430,6 +410,81 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       expect(await screen.findByTestId('deal-fulfilment-stored-ir-error')).not.toBeNull();
       expect(screen.queryByText('ยังไม่มีใบขอซื้อสำหรับดีลนี้')).toBeNull();
       expect(screen.queryByTestId('deal-fulfilment-import-request')).toBeNull();
+    });
+  });
+});
+
+// CR-1 (GLA-167) R6 / R9: sales presses สร้างใบ IR once the quotation is approved; one IR per
+// factory is created and each PDF downloads straight away so sales can hand it over; import then
+// downloads the same IR from /fulfilment.
+describe('DealFulfilmentPanel — สร้างใบ IR downloads every created PDF (CR-1)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    globalThis.URL.createObjectURL = vi.fn(() => 'blob:ir');
+    globalThis.URL.revokeObjectURL = vi.fn();
+    api.storedImportRequests.download.mockResolvedValue(new Blob(['pdf'], { type: 'application/pdf' }));
+  });
+
+  it('relabels the button สร้างใบ IR for the owning rep and CEO, and import still does not get it', async () => {
+    renderPanel(OWNER, []);
+    expect((await screen.findByTestId('deal-fulfilment-create-ir-drafts')).textContent).toBe('สร้างใบ IR');
+  });
+
+  it('after a successful create, downloads the PDF of each IR it just created (one per factory)', async () => {
+    const created = [draftRow({ id: 21, factoryName: 'Cotto Industry' }), draftRow({ id: 22, factoryId: 2, factoryName: 'Panaria' })];
+    api.storedImportRequests.createDrafts.mockResolvedValueOnce({ importRequests: created });
+    renderPanel(OWNER, []);
+    fireEvent.click(await screen.findByTestId('deal-fulfilment-create-ir-drafts'));
+
+    await waitFor(() => expect(api.storedImportRequests.download).toHaveBeenCalledTimes(2));
+    expect(api.storedImportRequests.download.mock.calls.map((c) => c[0]).sort()).toEqual([21, 22]);
+  });
+
+  it('downloads only the NEW IRs when some factories already had one', async () => {
+    const existing = draftRow({ id: 10, factoryName: 'Cotto Industry' });
+    const fresh = draftRow({ id: 23, factoryId: 3, factoryName: 'Rex Ceramics' });
+    api.storedImportRequests.createDrafts.mockResolvedValueOnce({ importRequests: [existing, fresh] });
+    renderPanel(OWNER, [existing]);
+    await screen.findByText('Cotto Industry');
+    fireEvent.click(await screen.findByTestId('deal-fulfilment-create-ir-drafts'));
+
+    await waitFor(() => expect(api.storedImportRequests.download).toHaveBeenCalledTimes(1));
+    expect(api.storedImportRequests.download).toHaveBeenCalledWith(23, undefined);
+  });
+
+  it('a failed PDF download does not undo the create: the toast says the IRs exist but the PDF failed', async () => {
+    const showToast = vi.fn();
+    api.storedImportRequests.createDrafts.mockResolvedValueOnce({ importRequests: [draftRow({ id: 21 })] });
+    api.storedImportRequests.download.mockRejectedValueOnce(new Error('ดาวน์โหลดใบขอซื้อไม่สำเร็จ'));
+    api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: [] });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <DealFulfilmentPanel user={OWNER} ticketId={1} summary={summary} items={[]} availableActions={[]} showToast={showToast} />
+      </QueryClientProvider>,
+    );
+    fireEvent.click(await screen.findByTestId('deal-fulfilment-create-ir-drafts'));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', expect.stringContaining('สร้างใบ IR')));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', expect.stringContaining('ดาวน์โหลด')));
+  });
+
+  it('refreshes the stored IRs, the import deal and the fulfilment worklist after creating (F)', async () => {
+    api.storedImportRequests.createDrafts.mockResolvedValueOnce({ importRequests: [draftRow({ id: 21 })] });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: [] });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <DealFulfilmentPanel user={OWNER} ticketId={1} summary={summary} items={[]} availableActions={[]} showToast={vi.fn()} />
+      </QueryClientProvider>,
+    );
+    fireEvent.click(await screen.findByTestId('deal-fulfilment-create-ir-drafts'));
+    await waitFor(() => expect(api.storedImportRequests.createDrafts).toHaveBeenCalled());
+    await waitFor(() => {
+      const keys = invalidate.mock.calls.map((c) => JSON.stringify(c[0]?.queryKey));
+      expect(keys.some((k) => k.includes('importRequests'))).toBe(true);
+      // the cross-deal /fulfilment page reads the ticket list for its candidates
+      expect(keys.some((k) => k.includes('"tickets","list"'))).toBe(true);
     });
   });
 });

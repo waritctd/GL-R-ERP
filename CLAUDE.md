@@ -197,6 +197,33 @@ The frontend is migrating from the single global `frontend/src/styles.css` to a 
   math, permission gates), re-check the diff against the spec/migration yourself before opening the
   PR, rather than relying on review to catch it.
 
+## Test-first — write the test, show its coverage, THEN implement (standing rule, 2026-09-30)
+Owner ruling. Applies to **every session and every agent** (including a delegated Sonnet
+implementer), for any change that alters behaviour: bug fixes, features, refactors, migrations,
+permission gates.
+
+1. **Write the test before the implementation.** No production code for the change is written until
+   its test exists.
+2. **Show what the test covers — in chat, before implementing.** Post a coverage list covering:
+   - the **behaviour / scenarios** each test case pins (happy path, edge cases, error paths, and for
+     authz the wrong-way-round "cannot reach" cases);
+   - the **file(s) and test names** added or changed;
+   - what is **deliberately NOT covered**, and why (e.g. needs a real DB that isn't available, only
+     verifiable against the Java service, visual-only).
+3. **Run the test and watch it fail for the right reason** (assertion failure on the missing
+   behaviour — not a compile error, import typo, or missing fixture). Report that red result.
+   A test that passes before the fix exists proves nothing.
+4. **Then implement** the smallest change that turns it green, and re-run it.
+5. **Carry the coverage list into the PR body** (item 6 below), so the reviewer can check the tests
+   against the claim.
+
+For a bug fix, the first test **reproduces the bug**. The Opus reviewer checks that the tests were
+written first, that they actually fail without the change (mutation-check: revert the fix, confirm
+red), and that the coverage list matches what the tests really assert.
+
+Only changes with no testable behaviour — docs, comments, pure copy/typo — are exempt, and the
+exemption must be **stated** ("no test: docs-only"), never silently skipped.
+
 ## Before you finish an implementation task
 - **Always run the relevant tests/builds** and record the results:
   - Frontend: `cd frontend && npm run lint && npm test && npm run build` (there is no `typecheck` script)
@@ -219,6 +246,8 @@ The frontend is migrating from the single global `frontend/src/styles.css` to a 
   3. **Tests / build results** (pass/fail/not run, and whether integration tests *ran* or were skipped)
   4. **Authz evidence** (real-service test, or "no authz change", or "unverified — mock only")
   5. **Known risks**
+  6. **Test coverage** (the test-first coverage list: what each test pins, the red-before-green
+     result, and what is deliberately not covered)
 
 ## Where the old docs went
 `docs/agent-handoffs/`, `docs/ui-repair/` and `docs/ux-ui-audit/` were retired in 2026-07 — **the

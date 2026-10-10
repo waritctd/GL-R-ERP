@@ -372,8 +372,48 @@ public final class DealQuotationRequests {
          * brand-new document starts with no manual name, i.e. the dotted line.
          */
         @Size(max = 255) String orderedByName,
+        /**
+         * Quotation ↔ deal linking slice 2 (S2-B1) — ผู้รับใบเสนอราคา, persisted to the existing
+         * {@code sales.quotation.recipient_type} (V52). {@code DESIGNER | OWNER | BUYER} only —
+         * {@code UNSPECIFIED} is the legacy bucket and is never accepted from a client.
+         *
+         * <p>On CREATE (every create is a {@code DEAL_DIRECT} row) it is REQUIRED: missing/blank →
+         * 400. On UPDATE, omitted/null keeps the stored value; a value is accepted only on a
+         * {@code DRAFT} {@code DEAL_DIRECT} quotation (409 on any other status, 409 on a
+         * {@code PRICING_REQUEST} row — whose recipient belongs to its คำขอราคา). Validated in
+         * {@code DealQuotationService}, not by a bean annotation, so the refusal carries the
+         * service's own Thai sentence rather than {@code ApiExceptionHandler#fieldMessage}'s
+         * "field + default message" shape.
+         */
+        String recipientType,
         @NotEmpty List<@Valid ItemInput> items
     ) {
+        /** The pre-slice-2 canonical shape (no {@link #recipientType}) — kept so every existing
+         * construction site (tests, mostly) compiles unchanged. Defaults recipientType to null,
+         * which on UPDATE means "keep the stored recipient" and on CREATE is refused (400) — a
+         * fixture that creates must say who the quotation is for, via {@link #withRecipientType}. */
+        public UpsertDealQuotationRequest(Long contactId, String deptCode, String unitCode,
+                                          LocalDate offerDate, Integer depositPercent,
+                                          String remainderMode, Integer creditDays,
+                                          Integer validityDays, String validityMode, LocalDate validityUntil,
+                                          String customerNotes, String priceMode, String documentLanguage,
+                                          String currency, Long printedByDisplayId, Long salesRepDisplayId,
+                                          String projectName, Boolean omitContactHonorific,
+                                          String fullPaymentTerm, String orderedByName, List<ItemInput> items) {
+            this(contactId, deptCode, unitCode, offerDate, depositPercent, remainderMode,
+                creditDays, validityDays, validityMode, validityUntil, customerNotes, priceMode,
+                documentLanguage, currency, printedByDisplayId, salesRepDisplayId, projectName,
+                omitContactHonorific, fullPaymentTerm, orderedByName, null, items);
+        }
+
+        /** Copy with only {@link #recipientType} replaced — every other field unchanged. */
+        public UpsertDealQuotationRequest withRecipientType(String newRecipientType) {
+            return new UpsertDealQuotationRequest(contactId, deptCode, unitCode, offerDate, depositPercent,
+                remainderMode, creditDays, validityDays, validityMode, validityUntil, customerNotes, priceMode,
+                documentLanguage, currency, printedByDisplayId, salesRepDisplayId, projectName,
+                omitContactHonorific, fullPaymentTerm, orderedByName, newRecipientType, items);
+        }
+
         /** The pre-orderedByName shape (today's canonical, minus {@link #orderedByName}) — kept
          * so every existing construction site (tests, mostly) compiles unchanged. Defaults to
          * null, which reads as "no manual name" — the dotted placeholder — correct for every one
