@@ -2112,7 +2112,7 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       expect(screen.getByText('เลือกวิธีกรอกราคากระเบื้องด้านบนก่อน')).not.toBeNull();
     });
 
-    it('keeps the cost override AND duty/product-type override reachable for a new-form item too (Opus review finding #1), inside the per-item ต้นทุน disclosure (2026-10-01: open by default so the CEO sees the cost basis)', async () => {
+    it('keeps the cost override AND duty/product-type override reachable for a new-form item too (Opus review finding #1), inside the per-item ต้นทุน disclosure (2026-10-01: collapsed by default, was always-visible under review minor #8)', async () => {
       const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
       const costingItem = buildCostingItemWithOverride({ id: 1 });
       api.pricingRequests.listPricingDecisions.mockResolvedValue({
@@ -2124,8 +2124,9 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       await waitForLoaded(request);
       await screen.findByText('PCD-2026-0001');
 
-      // 2026-10-01 (owner): the ต้นทุน disclosure is now OPEN by default, so the cost basis and its
-      // override control are visible without expanding.
+      // Collapsed by default when nothing blocks approval (this costing item is costable and not stale).
+      expect(screen.queryByTestId('pcr-ceo-cost-override-8001')).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: /^ต้นทุน/ }));
       expect(screen.getByTestId('pcr-ceo-cost-override-8001')).not.toBeNull();
       // GLA-152: the duty product-type select is gone (owner: "it's only tiles") — see the
       // dedicated test in the 2026-10-01 describe.
@@ -2147,13 +2148,13 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       expect(screen.getByText('ไม่พบอัตราค่าขนส่ง')).not.toBeNull();
     });
 
-    // Owner 2026-10-01: the CEO could not tell what the price was computed FROM — only the landed
-    // figure showed, so an import entry that disagrees with the catalogue preliminary was invisible.
-    // The ต้นทุน disclosure (open by default) now shows the factory's own quoted price as import
-    // recorded it, plus that price in THB.
-    it('shows the factory raw price import entered (orig currency → THB) so the CEO can verify the cost basis', async () => {
+    // The item card's ราคาจากฝ่ายนำเข้า is the CURRENT quote at today's rate. The cost may have been
+    // computed from an older quote or rate, so the derivation names its own inputs.
+    it('names, inside ต้นทุน, the price and exchange rate the cost was computed from, with its unit', async () => {
       const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
-      const costingItem = buildCostingItemWithOverride({ id: 1, rawUnitPrice: 12.5, rawCurrency: 'EUR', fxRate: 39 });
+      const costingItem = buildCostingItemWithOverride({
+        id: 1, rawUnitPrice: 12.5, rawCurrency: 'EUR', unitBasis: 'PER_SQM', fxRate: 39, fxSource: 'BOT', fxEffectiveDate: '2026-10-01',
+      });
       api.pricingRequests.listPricingDecisions.mockResolvedValue({
         items: [buildDecision({ items: [newFormItem({ pricingCostingItemId: costingItem.id })] })],
       });
@@ -2161,10 +2162,28 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       await waitForLoaded(request);
       await screen.findByText('PCD-2026-0001');
 
-      const raw = await screen.findByTestId('pcr-ceo-raw-factory-price-8001');
-      expect(raw.textContent).toContain('ราคาโรงงานที่ฝ่ายนำเข้ากรอก');
-      expect(raw.textContent).toContain('12.5 EUR'); // as import recorded it (factory currency)
-      expect(raw.textContent).toContain('฿487.50'); // 12.5 × FX 39 = 487.50 THB
+      const toggle = screen.getByRole('button', { name: /^ต้นทุน/ });
+      fireEvent.click(toggle);
+      const basis = await screen.findByTestId('pcr-ceo-cost-basis-8001');
+      expect(basis.textContent).toBe('ราคาที่ใช้คำนวณต้นทุน: 12.5 EUR/ตร.ม. · อัตราแลกเปลี่ยน 39 (BOT, 2026-10-01)');
+      // Derivation detail, not a second price on the card's first view.
+      fireEvent.click(toggle);
+      expect(screen.queryByTestId('pcr-ceo-cost-basis-8001')).toBeNull();
+    });
+
+    it('a THB cost basis shows no exchange-rate clause', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      const costingItem = buildCostingItemWithOverride({ id: 1, unitBasis: 'PER_PIECE' });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({ items: [newFormItem({ pricingCostingItemId: costingItem.id })] })],
+      });
+      renderDetailPage({ user: ceoUser, request, costings: [buildCosting({ id: 601, items: [costingItem] })] });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      fireEvent.click(screen.getByRole('button', { name: /^ต้นทุน/ }));
+      const basis = await screen.findByTestId('pcr-ceo-cost-basis-8001');
+      expect(basis.textContent).toBe('ราคาที่ใช้คำนวณต้นทุน: ฿45.00/แผ่น');
     });
 
     // Reproduced against a genuine new-form decision, per the coordinator's screenshots of the
@@ -2255,7 +2274,8 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       expect(screen.getByTestId('pcr-ceo-list-price-8001')).not.toBeNull();
       expect(screen.getByText(/^สูตร:/)).not.toBeNull();
       expect(screen.queryByTestId('pcr-ceo-price-override-8001')).toBeNull();
-      // 2026-10-01 (owner): ต้นทุน disclosure open by default — ปรับต้นทุนเอง visible without expanding.
+      expect(screen.queryByTestId('pcr-ceo-cost-override-8001')).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: /^ต้นทุน/ }));
       expect(screen.getByTestId('pcr-ceo-cost-override-8001')).not.toBeNull();
     });
 
@@ -2274,8 +2294,9 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       await screen.findByText('PCD-2026-0001');
 
       expect(screen.queryByTestId('pcr-ceo-price-override-8001')).toBeNull();
-      // ปรับต้นทุนเอง stays reachable (inside the ต้นทุน disclosure, open by default since 2026-10-01)
-      // -- that IS the correct way to clear the uncosted gate here.
+      // ปรับต้นทุนเอง stays reachable (inside the ต้นทุน disclosure since 2026-10-01) -- that IS the
+      // correct way to clear the uncosted gate here.
+      fireEvent.click(screen.getByRole('button', { name: /^ต้นทุน/ }));
       expect(screen.getByTestId('pcr-ceo-cost-override-8001')).not.toBeNull();
     });
 
@@ -4988,8 +5009,10 @@ describe('CEO pricing inside รายการสินค้าและรา
     await screen.findByText('PCD-2026-0001');
 
     const panel = within(getPanel());
-    // 2026-10-01 (owner): the ต้นทุน disclosure is open by default, so the cost-override control is
-    // reachable without expanding anything.
+    // Collapsed by default (costable, not stale): absent until the disclosure is opened.
+    expect(panel.queryByTestId('pcr-ceo-cost-override-8001')).toBeNull();
+    // /^ต้นทุน/ (anchored): the panel header's recalculate icon button is titled "คำนวณต้นทุนใหม่…".
+    fireEvent.click(panel.getByRole('button', { name: /^ต้นทุน/ }));
     expect(panel.getByTestId('pcr-ceo-cost-override-8001')).not.toBeNull();
   });
 });

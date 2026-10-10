@@ -2329,26 +2329,20 @@ export function PricingRequestDetailPage({ user, showToast }) {
             <CollapsibleSection
               key={`cost-${costForcedOpen}`}
               title="ต้นทุน"
-              /* Owner decision 2026-10-01: open by default. The CEO was seeing only the calculated
-                 price with the cost basis hidden one click away, so could not tell what the price
-                 was computed from. costForcedOpen stays the remount key (a problem still forces it
-                 open across a re-render); the base state is now simply open. */
-              defaultOpen
+              defaultOpen={costForcedOpen}
               id={`pcr-ceo-derivation-${item.id}`}
             >
               <div className="flex flex-col gap-2 text-xs">
-                {/* The factory's own quoted price EXACTLY as import recorded it — the number the
-                    landed cost (and therefore the CEO's price) is built from. Shown so the CEO can
-                    see WHAT the cost was computed from, and spot an import entry that disagrees with
-                    the catalogue preliminary. Read straight off costingItem (in scope above) + one
-                    × fxRate, never a re-run of the costing math. */}
+                {/* What the cost was computed FROM: the costing's own frozen price and rate. The item
+                    card's ราคาจากฝ่ายนำเข้า is the CURRENT quote at today's rate, so the two differ
+                    once Import revises a quote or the rate moves. Same price format as that line. */}
                 {costingItem?.rawUnitPrice != null ? (
-                  <span className="text-text-muted" data-testid={`pcr-ceo-raw-factory-price-${item.id}`}>
-                    ราคาโรงงานที่ฝ่ายนำเข้ากรอก:{' '}
-                    <code>{formatCurrency(costingItem.rawUnitPrice, costingItem.rawCurrency)}</code>
-                    {costingItem.fxRate != null && Number(costingItem.fxRate) > 0 ? (
-                      <> (≈ <code>{formatCurrency(round2(Number(costingItem.rawUnitPrice) * Number(costingItem.fxRate)), 'THB')}</code>{' '}ที่ FX {costingItem.fxRate})</>
-                    ) : null}
+                  <span className="text-text-muted" data-testid={`pcr-ceo-cost-basis-${item.id}`}>
+                    ราคาที่ใช้คำนวณต้นทุน:{' '}
+                    <code>{`${formatCurrency(costingItem.rawUnitPrice, costingItem.rawCurrency)}${QUOTE_UNIT_SUFFIX[costingItem.unitBasis] ?? ''}`}</code>
+                    {costingItem.rawCurrency !== 'THB' && costingItem.fxRate != null
+                      ? ` · อัตราแลกเปลี่ยน ${costingItem.fxRate} (${[costingItem.fxSource, costingItem.fxEffectiveDate].filter(Boolean).join(', ')})`
+                      : null}
                   </span>
                 ) : null}
                 <span className="text-text-muted">
