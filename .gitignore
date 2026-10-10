@@ -129,3 +129,14 @@ agents/attendance/*roster*.csv
 
 # Hallmark design-skill project memory (local run log; not a build artifact).
 .hallmark/
+
+# Internal agent-operating and design-context docs. Owner ruling 2026-10-10: these are
+# working notes for the team and its coding agents, not something to publish in this
+# PUBLIC repo. Kept locally on each machine; removed from tracking with `git rm --cached`
+# (they remain in history before that commit).
+/CLAUDE.md
+/AGENTS.md
+/DESIGN.md
+/PRODUCT.md
+/STACKED-PRS.md
+/UX_BLOCKED_DECISIONS.md
