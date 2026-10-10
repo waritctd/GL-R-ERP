@@ -377,6 +377,34 @@ describe('ImportDealPage', () => {
       await waitFor(() => expect(api.tickets.markIrSent).toHaveBeenCalledWith('1'));
     });
 
+    // This page is the only place import meets a DRAFT card (import cannot open /tickets/:id), and
+    // here the deal-level button below it is live — so the card must not tell import to wait.
+    it('IR_ISSUED with only a DRAFT row: import reads why the draft has no step, is not told to wait, and gets no ออกเลข', async () => {
+      api.importDeals.get.mockResolvedValue({
+        deal: dealFixture({
+          fulfillmentStatus: 'IR_ISSUED',
+          importRequests: [irRow({ id: 14, status: 'DRAFT', importStep: null })],
+        }),
+      });
+      renderPage({ role: 'import' });
+      const hint = await screen.findByTestId('ir-draft-hint-14');
+      expect(hint.textContent).toContain('ยังเป็นร่าง');
+      expect(hint.textContent).not.toContain('รอฝ่ายขาย');
+      expect(screen.queryByTestId('ir-issue-14')).toBeNull();
+      expect(screen.getByRole('button', { name: 'ส่งคำขอนำเข้าแล้ว' })).not.toBeNull();
+    });
+
+    it('CEO gets ออกเลข beside the same hint on this page, outside the collapsed details', async () => {
+      api.importDeals.get.mockResolvedValue({
+        deal: dealFixture({ importRequests: [irRow({ id: 14, status: 'DRAFT', importStep: null })] }),
+      });
+      renderPage({ role: 'ceo' });
+      const hint = await screen.findByTestId('ir-draft-hint-14');
+      const issue = screen.getByTestId('ir-issue-14');
+      expect(issue.closest('details')).toBeNull();
+      expect(hint.parentElement.contains(issue)).toBe(true);
+    });
+
     it('a deal whose only rows are SUPERSEDED is still legacy (no LIVE rows)', async () => {
       api.importDeals.get.mockResolvedValue({
         deal: dealFixture({

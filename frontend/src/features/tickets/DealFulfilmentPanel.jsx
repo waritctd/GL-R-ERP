@@ -523,6 +523,13 @@ export function DealFulfilmentPanel({
     // (TicketService#ITEM_WEIGHT_ROLES) is sales_manager/ceo, never isFulfilment (import/ceo).
     setItemWeight:      hasAction('SET_ITEM_WEIGHT_MULTIPLIER') && (role === 'sales_manager' || role === 'ceo'),
   };
+  // A per-factory DRAFT tracks nothing: the server refuses the deal-level chain only once a row is
+  // ISSUED (TicketRepository#hasLiveImportRequests). So a deal-level step this viewer can still
+  // perform keeps its button when drafts exist — hiding it left no way to advance the deal. Issuing
+  // is left out on purpose: a deal that has not started that chain issues per factory instead.
+  const dealLevelStepPending = can.markIrSent || can.markShipping || can.markGoodsReceived;
+  const showDealLevelChain = !hasStoredIrs
+    || (dealLevelStepPending && issuedIrRows.length === 0 && !storedIrQuery.isError);
 
   function openDeliveryModal() {
     const source = fs === 'FROM_STOCK' ? 'STOCK' : 'WAREHOUSE';
@@ -605,7 +612,7 @@ export function DealFulfilmentPanel({
               (see markIrSent/markShipping/markGoodsReceived's own hasLiveImportRequests guard).
               The “ใบขอซื้อรายโรงงาน” section below is the per-factory replacement — the rollup
               chip above already says how far along it is, so this note stays a short pointer. */}
-          {hasStoredIrs ? (
+          {!showDealLevelChain ? (
             <p className="text-xs text-text-muted" data-testid="deal-fulfilment-ir-tracked-note">
               ติดตามการนำเข้าแบบรายโรงงานที่ส่วน “ใบขอซื้อรายโรงงาน” ด้านล่าง
             </p>

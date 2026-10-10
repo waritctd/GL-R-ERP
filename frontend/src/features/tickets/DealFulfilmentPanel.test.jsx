@@ -75,12 +75,16 @@ function issuedRow(over = {}) {
 
 const summary = { createdById: 42, status: 'quotation_issued', fulfillmentStatus: null };
 
-function renderPanel(user, rows = [draftRow()]) {
-  api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: rows });
+// `rows` may be an Error, to render the panel with a failed ใบขอซื้อ fetch.
+function renderPanel(user, rows = [draftRow()], {
+  summary: dealSummary = summary, availableActions = [], showToast = vi.fn(),
+} = {}) {
+  if (rows instanceof Error) api.storedImportRequests.listForTicket.mockRejectedValue(rows);
+  else api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: rows });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
-      <DealFulfilmentPanel user={user} ticketId={1} summary={summary} items={[]} availableActions={[]} showToast={vi.fn()} />
+      <DealFulfilmentPanel user={user} ticketId={1} summary={dealSummary} items={[]} availableActions={availableActions} showToast={showToast} />
     </QueryClientProvider>,
   );
 }
@@ -120,6 +124,112 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
     it('a non-owning sales rep sees no stored-IR section at all (read scoped to the deal owner)', () => {
       renderPanel(OTHER_REP);
       expect(screen.queryByTestId('deal-fulfilment-stored-ir')).toBeNull();
+    });
+  });
+
+  // QA BUG-21 (S12/S15): a DRAFT ใบขอซื้อ has no step tracker — a row only gets an import step once
+  // it is ISSUED — so a bare DRAFT card read as "per-factory นำเข้าเลื่อนไม่ได้/พัง". The card says
+  // why, in words that hold in every state a draft can be in.
+  describe('DRAFT ใบขอซื้อ explains itself (BUG-21)', () => {
+    it.each([['the owning rep', OWNER], ['CEO', CEO], ['sales_manager', SALES_MANAGER]])(
+      '%s reads why a first-version DRAFT has no import step, and is never told to wait',
+      async (_label, user) => {
+        renderPanel(user, [draftRow()]);
+        const hint = await screen.findByTestId('ir-draft-hint-10');
+        expect(hint.textContent).toContain('ยังเป็นร่าง');
+        expect(hint.textContent).toContain('S12–S17');
+        // Telling the reader to wait for sales is false wherever the deal-level chain is still live
+        // or issuing is gated on the deposit.
+        expect(hint.textContent).not.toContain('รอฝ่ายขาย');
+        expect(screen.queryByTestId('factory-progress-10')).toBeNull();
+        expect(screen.queryByTestId('advance-10')).toBeNull();
+      },
+    );
+
+    it.each([['the owning rep', OWNER], ['CEO', CEO]])(
+      '%s gets ออกเลข beside the hint, not inside the collapsed details',
+      async (_label, user) => {
+        renderPanel(user, [draftRow()]);
+        const hint = await screen.findByTestId('ir-draft-hint-10');
+        const issue = screen.getByTestId('ir-issue-10');
+        expect(issue.closest('details')).toBeNull();
+        expect(hint.parentElement.contains(issue)).toBe(true);
+      },
+    );
+
+    it('sales_manager (read-only) gets the hint but no ออกเลข control', async () => {
+      renderPanel(SALES_MANAGER, [draftRow()]);
+      await screen.findByTestId('ir-draft-hint-10');
+      expect(screen.queryByTestId('ir-issue-10')).toBeNull();
+    });
+
+    it('an ISSUED row carries no draft hint and keeps its tracker', async () => {
+      renderPanel(CEO, [issuedRow()]);
+      expect(await screen.findByTestId('factory-progress-11')).not.toBeNull();
+      expect(screen.queryByTestId('ir-draft-hint-11')).toBeNull();
+    });
+
+    it('a revision draft beside its still-ISSUED v1 is worded as a revision, and v1 stays advanceable', async () => {
+      renderPanel(CEO, [issuedRow(), draftRow({ id: 12, version: 2 })]);
+      const hint = await screen.findByTestId('ir-draft-hint-12');
+      expect(hint.textContent).toContain('ฉบับแก้ไข');
+      // The first-issue sentence is false here: v1 has a step and is being advanced.
+      expect(hint.textContent).not.toContain('ยังไม่มีขั้นนำเข้า');
+      expect(screen.getByTestId('advance-11')).not.toBeNull();
+    });
+
+    it('a refused ออกเลข refetches, so a draft someone else already issued stops offering it', async () => {
+      const showToast = vi.fn();
+      api.storedImportRequests.issue.mockRejectedValue(new Error('ใบขอซื้อฉบับนี้ออกเลขไปแล้ว'));
+      renderPanel(OWNER, [draftRow()], { showToast });
+      const issue = await screen.findByTestId('ir-issue-10');
+      api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: [issuedRow({ id: 10 })] });
+      fireEvent.click(issue);
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'ใบขอซื้อฉบับนี้ออกเลขไปแล้ว'));
+      await waitFor(() => expect(screen.queryByTestId('ir-issue-10')).toBeNull());
+      expect(screen.queryByTestId('ir-draft-hint-10')).toBeNull();
+    });
+  });
+
+  // The deal-level chain (ส่งคำขอนำเข้าแล้ว → ออกเดินทาง → รับสินค้า) is refused by the server only
+  // once a per-factory row is ISSUED (TicketRepository#hasLiveImportRequests), so a draft must not
+  // take a pending step's button away from the viewer who can perform it.
+  describe('deal-level import chain vs per-factory drafts', () => {
+    const legacyInFlight = { ...summary, fulfillmentStatus: 'IR_SENT' };
+    const shipping = [{ action: 'SHIPPING' }];
+
+    it('CEO keeps a pending deal-level step when the deal\'s only per-factory rows are DRAFT', async () => {
+      api.tickets.markShipping.mockResolvedValue({});
+      renderPanel(CEO, [draftRow()], { summary: legacyInFlight, availableActions: shipping });
+      await screen.findByTestId('ir-factory-card-10');
+      fireEvent.click(screen.getByTestId('deal-fulfilment-mark-shipping'));
+      await waitFor(() => expect(api.tickets.markShipping).toHaveBeenCalledWith(1));
+      expect(screen.queryByTestId('deal-fulfilment-ir-tracked-note')).toBeNull();
+    });
+
+    it('the deal-level step is gone once a row is ISSUED — the server would refuse it', async () => {
+      renderPanel(CEO, [issuedRow()], { summary: legacyInFlight, availableActions: shipping });
+      await screen.findByTestId('ir-factory-card-11');
+      expect(screen.queryByTestId('deal-fulfilment-mark-shipping')).toBeNull();
+      expect(screen.getByTestId('deal-fulfilment-ir-tracked-note')).not.toBeNull();
+    });
+
+    it('a deal that never started the deal-level chain is not offered a second, deal-level issue beside its drafts', async () => {
+      renderPanel(CEO, [draftRow()], { availableActions: [{ action: 'ISSUE_IMPORT_REQUEST' }] });
+      await screen.findByTestId('ir-factory-card-10');
+      expect(screen.queryByTestId('deal-fulfilment-issue-ir')).toBeNull();
+    });
+
+    it('with no deal-level step left to perform, drafts still read as the per-factory section (no import chips)', async () => {
+      renderPanel(CEO, [draftRow()], { summary: { ...summary, fulfillmentStatus: 'PARTIALLY_DELIVERED' } });
+      await screen.findByTestId('ir-factory-card-10');
+      expect(screen.getByTestId('deal-fulfilment-ir-tracked-note')).not.toBeNull();
+    });
+
+    it('a failed ใบขอซื้อ fetch hides a pending deal-level step — the rows are unknown, so nothing is offered', async () => {
+      renderPanel(CEO, new Error('เครือข่ายขัดข้อง'), { summary: legacyInFlight, availableActions: shipping });
+      await screen.findByTestId('deal-fulfilment-stored-ir-error');
+      expect(screen.queryByTestId('deal-fulfilment-mark-shipping')).toBeNull();
     });
   });
 
