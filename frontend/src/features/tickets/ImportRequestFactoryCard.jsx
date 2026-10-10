@@ -20,6 +20,11 @@ const FIRST_DRAFT_HINT = 'ยังเป็นร่าง — ยังไม�
 // it, carries its step forward and resets the order e-mail to unsent (ImportRequestRepository#issue).
 const REVISION_DRAFT_HINT = 'ร่างฉบับแก้ไข — ฉบับที่ออกเลขแล้วยังติดตามและเลื่อนขั้นได้ตามปกติ เมื่อออกเลขฉบับนี้จะได้เลขใบขอซื้อใหม่แทนฉบับเดิม ขั้นนำเข้าปัจจุบันยกมาต่อ และต้องส่งอีเมลสั่งซื้อใหม่';
 
+const footerDraftOf = (row) => ({
+  vesselEtaNote: row.vesselEtaNote ?? '', checkedByName: row.checkedByName ?? '', checkedDate: row.checkedDate ?? '',
+  approvedByName: row.approvedByName ?? '', approvedDate: row.approvedDate ?? '',
+});
+
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -57,10 +62,7 @@ export function ImportRequestFactoryCard({
   // COALESCE(:field, existing) kept the OLD value with a 200 OK and no error anywhere.
   const [emailDraft, setEmailDraft] = useState({ emailTo: row.emailTo ?? '', emailSubject: row.emailSubject ?? '', emailBody: row.emailBody ?? '' });
   const [footerOpen, setFooterOpen] = useState(false);
-  const [footerDraft, setFooterDraft] = useState({
-    vesselEtaNote: row.vesselEtaNote ?? '', checkedByName: row.checkedByName ?? '', checkedDate: row.checkedDate ?? '',
-    approvedByName: row.approvedByName ?? '', approvedDate: row.approvedDate ?? '',
-  });
+  const [footerDraft, setFooterDraft] = useState(() => footerDraftOf(row));
   // Nit: window.confirm() replaced with the app's own ConfirmDialog pattern (see that
   // component's own Javadoc-style header — "Replaces window.confirm/window.prompt call sites").
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
@@ -145,9 +147,9 @@ export function ImportRequestFactoryCard({
     }
     // Nit: a blank save must surface a VALIDATION message, not silently succeed with a "saved"
     // toast — ISSUED rows go through setLeadTime, whose Java shape (SetLeadTimeRequest) requires
-    // BOTH fields non-null (@NotNull @Min(1)); a DRAFT row's own update() tolerates null (clears
-    // it), so this guard only blocks the case that would otherwise 400.
-    if (min == null && max == null && row.status !== 'DRAFT') {
+    // BOTH fields non-null (@NotNull @Min(1)), and a DRAFT row's update() reads null/null as "no
+    // change" (ImportRequestService#update's wantsLeadTimeChange), so neither can clear a lead time.
+    if (min == null && max == null) {
       showToast?.('error', 'กรุณาระบุระยะเวลานำเข้า (วัน) ทั้งค่าต่ำสุดและสูงสุด');
       return;
     }
@@ -265,7 +267,7 @@ export function ImportRequestFactoryCard({
               {row.approvedByName ? `อนุมัติโดย ${row.approvedByName}${row.approvedDate ? ` (${formatThaiDate(row.approvedDate)})` : ''}` : 'ยังไม่อนุมัติ'}
               {row.vesselEtaNote ? ` · กำหนดเรือเข้าโดยประมาณ: ${row.vesselEtaNote}` : ''}
             </span>
-            <Button type="button" size="sm" variant="text" className="mobile:min-h-11 mobile:min-w-11" onClick={() => setFooterOpen(true)} data-testid={`ir-footer-open-${row.id}`}>
+            <Button type="button" size="sm" variant="text" className="mobile:min-h-11 mobile:min-w-11" onClick={() => { setFooterDraft(footerDraftOf(row)); setFooterOpen(true); }} data-testid={`ir-footer-open-${row.id}`}>
               แก้ไข
             </Button>
           </div>

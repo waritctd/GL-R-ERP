@@ -358,6 +358,19 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
         .toHaveBeenCalledWith(10, { leadTimeMinDays: 20, leadTimeMaxDays: 30 }));
     });
 
+    // ImportRequestService#update reads a null/null lead time as "no change", so a both-blank save
+    // on a DRAFT clears nothing — toasting "saved" over an unchanged 30–45 was a false success.
+    it('a both-blank lead-time save on a DRAFT is refused with a validation message, not reported as saved', async () => {
+      const showToast = vi.fn();
+      renderPanel(OWNER, [draftRow()], { showToast });
+      await screen.findByTestId('ir-factory-card-10');
+      fireEvent.change(screen.getByTestId('ir-lead-min-10'), { target: { value: '' } });
+      fireEvent.change(screen.getByTestId('ir-lead-max-10'), { target: { value: '' } });
+      fireEvent.click(screen.getByTestId('ir-lead-save-10'));
+      expect(showToast).toHaveBeenCalledWith('error', expect.stringContaining('กรุณาระบุระยะเวลานำเข้า'));
+      expect(api.storedImportRequests.update).not.toHaveBeenCalled();
+    });
+
     // PR-B REVIEW ROUND 1, S1: a viewer with no write path renders PLAIN TEXT, not a look-alike
     // disabled input — import cannot touch lead time until the row is ISSUED.
     it('import cannot edit lead time on a DRAFT row (post-issue only) — renders read-only text, not a disabled input', async () => {
@@ -466,6 +479,26 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
     it('a non-CEO viewer sees the footer status read-only on a DRAFT row', async () => {
       renderPanel(OWNER, [draftRow({ checkedByName: 'ราม', vesselEtaNote: 'ประมาณ 10/10/26' })]);
       expect(await screen.findByTestId('ir-footer-readonly-10')).not.toBeNull();
+    });
+  });
+
+  // The footer form used to be seeded once at mount, so a note the server derived AFTER mount (issue()
+  // writes vesselEtaNote) opened as a blank input, and saving any other field wrote '' over it.
+  describe('CEO footer editor re-seeds from the row each time it opens', () => {
+    it('shows the vessel ETA the server derived at issue, and saves it back unchanged', async () => {
+      const note = 'ประมาณ 01/11/26 – 16/11/26 (30–45 วัน)';
+      api.storedImportRequests.issue.mockResolvedValue({});
+      api.storedImportRequests.update.mockResolvedValue({});
+      renderPanel(CEO, [draftRow()]);
+      const issue = await screen.findByTestId('ir-issue-10');
+      api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: [issuedRow({ id: 10, vesselEtaNote: note })] });
+      fireEvent.click(issue);
+      await screen.findByTestId('factory-progress-10');
+      fireEvent.click(screen.getByTestId('ir-footer-open-10'));
+      expect(screen.getByLabelText('กำหนดเรือเข้าโดยประมาณ').value).toBe(note);
+      fireEvent.click(screen.getByTestId('ir-footer-save-10'));
+      await waitFor(() => expect(api.storedImportRequests.update)
+        .toHaveBeenCalledWith(10, expect.objectContaining({ vesselEtaNote: note })));
     });
   });
 
