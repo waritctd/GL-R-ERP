@@ -2128,6 +2128,10 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       expect(screen.queryByTestId('pcr-ceo-cost-override-8001')).toBeNull();
       fireEvent.click(screen.getByRole('button', { name: /^ต้นทุน/ }));
       expect(screen.getByTestId('pcr-ceo-cost-override-8001')).not.toBeNull();
+      // Reachable means it opens: a button left disabled would also "exist".
+      await waitFor(() => expect(screen.getByTestId('pcr-ceo-cost-override-8001').disabled).toBe(false));
+      fireEvent.click(screen.getByTestId('pcr-ceo-cost-override-8001'));
+      expect(await screen.findByRole('dialog', { name: 'ปรับต้นทุนเอง' })).not.toBeNull();
       // GLA-152: the duty product-type select is gone (owner: "it's only tiles") — see the
       // dedicated test in the 2026-10-01 describe.
       expect(screen.queryByTestId('pcr-ceo-product-type-override-8001')).toBeNull();
@@ -2158,14 +2162,25 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       api.pricingRequests.listPricingDecisions.mockResolvedValue({
         items: [buildDecision({ items: [newFormItem({ pricingCostingItemId: costingItem.id })] })],
       });
-      renderDetailPage({ user: ceoUser, request, costings: [buildCosting({ id: 601, items: [costingItem] })] });
+      // Import has since revised the quote to 13 EUR; the cost was computed at 12.5.
+      const currentQuote = buildFactoryQuote({
+        status: 'RESPONSE_RECEIVED',
+        items: [{ ...buildFactoryQuote().items[0], unitBasis: 'PER_SQM', quotedUnit: 'ตร.ม.', rawUnitPrice: 13, currency: 'EUR' }],
+      });
+      renderDetailPage({
+        user: ceoUser, request, factoryQuotes: [currentQuote], costings: [buildCosting({ id: 601, items: [costingItem] })],
+      });
       await waitForLoaded(request);
       await screen.findByText('PCD-2026-0001');
+      expect((await screen.findByTestId('pcr-import-price-1')).textContent).toContain('13 EUR/ตร.ม.');
 
       const toggle = screen.getByRole('button', { name: /^ต้นทุน/ });
       fireEvent.click(toggle);
       const basis = await screen.findByTestId('pcr-ceo-cost-basis-8001');
       expect(basis.textContent).toBe('ราคาที่ใช้คำนวณต้นทุน: 12.5 EUR/ตร.ม. · อัตราแลกเปลี่ยน 39 (BOT, 2026-10-01)');
+      // Beside the computed cost it explains, not above ต้นทุนรวมนำเข้า, which shows a manual
+      // figure on an overridden line.
+      expect(basis.nextElementSibling.textContent).toContain('ต้นทุนคำนวณ/ชิ้น');
       // Derivation detail, not a second price on the card's first view.
       fireEvent.click(toggle);
       expect(screen.queryByTestId('pcr-ceo-cost-basis-8001')).toBeNull();

@@ -2014,7 +2014,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
     // V141: the bound costing line this decision item was frozen from — may
     // legitimately be undefined (costings never fetched, or not yet loaded), in
     // which case the derivation below renders only the decision item's own
-    // frozen cost, with no cost-override affordance at all.
+    // frozen cost, and the cost override cannot be opened (the new-form card
+    // shows its button disabled; the legacy card shows none).
     const costingItem = decisionCostingItems.get(item.pricingCostingItemId);
     const hasCostOverride = costingItem?.manualLandedCostPerUnitThb != null;
     const hasPriceOverride = item.manualSellingPricePerRequestedUnit != null;
@@ -2336,18 +2337,6 @@ export function PricingRequestDetailPage({ user, showToast }) {
               id={`pcr-ceo-derivation-${item.id}`}
             >
               <div className="flex flex-col gap-2 text-xs">
-                {/* What the cost was computed FROM: the costing's own frozen price and rate. The item
-                    card's ราคาจากฝ่ายนำเข้า is the CURRENT quote at today's rate, so the two differ
-                    once Import revises a quote or the rate moves. Same price format as that line. */}
-                {costingItem?.rawUnitPrice != null ? (
-                  <span className="text-text-muted" data-testid={`pcr-ceo-cost-basis-${item.id}`}>
-                    ราคาที่ใช้คำนวณต้นทุน:{' '}
-                    <code>{formatQuotedPrice(costingItem.rawUnitPrice, costingItem.rawCurrency, costingItem.unitBasis)}</code>
-                    {costingItem.rawCurrency !== 'THB' && costingItem.fxRate != null
-                      ? ` · อัตราแลกเปลี่ยน ${costingItem.fxRate} (${[costingItem.fxSource, costingItem.fxEffectiveDate].filter(Boolean).join(', ')})`
-                      : null}
-                  </span>
-                ) : null}
                 <span className="text-text-muted">
                   ต้นทุนรวมนำเข้า (รวมค่าขนส่งและภาษี):{' '}
                   {costingItem?.uncostableReason ? (
@@ -2372,6 +2361,19 @@ export function PricingRequestDetailPage({ user, showToast }) {
                       {hasCostOverride ? 'แก้ไขต้นทุนที่ปรับ' : 'ปรับต้นทุนเอง'}
                     </Button>
                   </div>
+                ) : null}
+                {/* What ต้นทุนคำนวณ below was computed FROM: the costing's own frozen price and rate.
+                    The item card's ราคาจากฝ่ายนำเข้า is the CURRENT quote at today's rate, so the two
+                    differ once Import revises a quote or the rate moves. Kept beside the computed
+                    cost, not ต้นทุนรวมนำเข้า above, which shows the manual figure on an overridden line. */}
+                {costingItem?.rawUnitPrice != null ? (
+                  <span className="text-text-muted" data-testid={`pcr-ceo-cost-basis-${item.id}`}>
+                    ราคาที่ใช้คำนวณต้นทุน:{' '}
+                    <code>{formatQuotedPrice(costingItem.rawUnitPrice, costingItem.rawCurrency, costingItem.unitBasis)}</code>
+                    {costingItem.rawCurrency !== 'THB' && costingItem.fxRate != null
+                      ? ` · อัตราแลกเปลี่ยน ${costingItem.fxRate} (${[costingItem.fxSource, costingItem.fxEffectiveDate].filter(Boolean).join(', ')})`
+                      : null}
+                  </span>
                 ) : null}
                 {costingItem ? (
                   <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-md border border-border-subtle bg-surface-subtle p-2">
