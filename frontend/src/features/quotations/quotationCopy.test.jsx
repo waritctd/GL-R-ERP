@@ -95,17 +95,28 @@ const SOURCE = deepFreeze({
 
 const source = (overrides = {}) => deepFreeze({ ...SOURCE, ...overrides });
 
+// What a brand-new quotation of this rep's starts with: the editor's own emptyTerms, seeded with
+// the terms the rep last saved. Wherever a new quotation can differ from SOURCE it does, so each
+// key of a copy shows which of the two it came from.
+const NEW_QUOTATION_TERMS = deepFreeze({
+  unitCode: '', offerDate: TODAY, depositPercent: 50, depositPercentCustom: false, noDeposit: false,
+  fullPaymentTerm: '', remainderMode: 'ON_DELIVERY', creditDays: '',
+  validityDays: 60, validityMode: 'DAYS', validityUntil: '',
+  customerNotes: '', printedByDisplayId: '', salesRepDisplayId: '', projectName: '',
+  orderedByName: '', orderedByPhone: '', orderedByEmail: '', hideProjectName: false,
+});
+
 describe('copyFromQuotation — what the new draft starts with', () => {
   it('copies how the document is written: its language and its price mode (the currency follows the language)', () => {
-    expect(copyFromQuotation(SOURCE).docSettings).toEqual({ priceMode: 'MIXED', documentLanguage: 'TH' });
-    expect(copyFromQuotation(source({ priceMode: 'DIRECT_NET', documentLanguage: 'EN', currency: 'USD' })).docSettings)
+    expect(copyFromQuotation(SOURCE, NEW_QUOTATION_TERMS).docSettings).toEqual({ priceMode: 'MIXED', documentLanguage: 'TH' });
+    expect(copyFromQuotation(source({ priceMode: 'DIRECT_NET', documentLanguage: 'EN', currency: 'USD' }), NEW_QUOTATION_TERMS).docSettings)
       .toEqual({ priceMode: 'DIRECT_NET', documentLanguage: 'EN' });
   });
 
   // THE TABLE. One row per thing the editor's เงื่อนไข / header state holds, so a field added to
   // the editor later cannot be copied (or dropped) by accident: this equality names every key.
   it('copies the terms, the display names, the designer and the project tick — and clears ผู้ติดต่อ with its Phone and Email', () => {
-    expect(copyFromQuotation(SOURCE).terms).toEqual({
+    expect(copyFromQuotation(SOURCE, NEW_QUOTATION_TERMS).terms).toEqual({
       // ── copied ──
       unitCode: 'A001',                       // หน่วยงาน / ผู้ออกแบบ — the project's designer, same job
       depositPercent: 45,
@@ -135,14 +146,14 @@ describe('copyFromQuotation — what the new draft starts with', () => {
   // select anything until the rep has chosen who the new customer is. It travels as the name the
   // โครงการ box offers, and the document then prints whichever project the rep confirms there.
   it('carries the project NAME, as the name to offer once a customer is chosen (same job, different bidder)', () => {
-    expect(copyFromQuotation(SOURCE).suggestedProjectName).toBe('คอนโด ริเวอร์ไซด์ ชั้น 5');
-    expect(copyFromQuotation(source({ projectName: null })).suggestedProjectName).toBe('');
+    expect(copyFromQuotation(SOURCE, NEW_QUOTATION_TERMS).suggestedProjectName).toBe('คอนโด ริเวอร์ไซด์ ชั้น 5');
+    expect(copyFromQuotation(source({ projectName: null }), NEW_QUOTATION_TERMS).suggestedProjectName).toBe('');
   });
 
   it('a "ไม่รับมัดจำ" source stays "ไม่รับมัดจำ", with the payment term it chose', () => {
     const { terms } = copyFromQuotation(source({
       depositPercent: 0, remainderMode: null, creditDays: null, fullPaymentTerm: 'ON_DELIVERY',
-    }));
+    }), NEW_QUOTATION_TERMS);
     expect(terms).toMatchObject({ noDeposit: true, depositPercent: 0, fullPaymentTerm: 'ON_DELIVERY' });
   });
 
@@ -151,7 +162,7 @@ describe('copyFromQuotation — what the new draft starts with', () => {
       unitCode: null, depositPercent: 30, remainderMode: 'ON_DELIVERY', creditDays: null, validityMode: 'DAYS',
       validityUntil: null, customerNotes: null, printedByDisplayId: null, salesRepDisplayId: null,
       hideProjectName: false,
-    }));
+    }), NEW_QUOTATION_TERMS);
     expect(terms).toMatchObject({
       unitCode: '', depositPercent: 30, depositPercentCustom: false, creditDays: '', validityMode: 'DAYS',
       validityUntil: '', customerNotes: '', printedByDisplayId: '', salesRepDisplayId: '', hideProjectName: false,
@@ -161,7 +172,7 @@ describe('copyFromQuotation — what the new draft starts with', () => {
 
 describe('copyFromQuotation — the rows', () => {
   it('copies every row, in document order: tiles and สินค้า/บริการอื่น in the list, ส่วนลดพิเศษ after them', () => {
-    const { items, adjustments } = copyFromQuotation(SOURCE);
+    const { items, adjustments } = copyFromQuotation(SOURCE, NEW_QUOTATION_TERMS);
     expect(items.map((row) => [row.lineType, row.model ?? row.description])).toEqual([
       ['TILE', 'Trilogy'], ['TILE', 'Urbanature'], ['PLAIN', 'ค่าขนส่ง'],
     ]);
@@ -170,14 +181,14 @@ describe('copyFromQuotation — the rows', () => {
   });
 
   it('keeps the ตำแหน่งติดตั้ง of every row', () => {
-    const { groups, items } = copyFromQuotation(SOURCE);
+    const { groups, items } = copyFromQuotation(SOURCE, NEW_QUOTATION_TERMS);
     expect(groups.map((group) => group.label)).toEqual(['ชั้น 5 โซน A', 'ชั้น 5 โซน B']);
     const labelOf = new Map(groups.map((group) => [group.groupId, group.label]));
     expect(items.map((row) => labelOf.get(row.groupId))).toEqual(['ชั้น 5 โซน A', 'ชั้น 5 โซน A', 'ชั้น 5 โซน B']);
   });
 
   it('keeps what the rep typed on each row: prices, discounts, quantities, notes — and, on a mixed document, each row\'s own price mode', () => {
-    const [tile, special, freight] = copyFromQuotation(SOURCE).items;
+    const [tile, special, freight] = copyFromQuotation(SOURCE, NEW_QUOTATION_TERMS).items;
     expect(tile).toMatchObject({
       priceMode: 'NET', listPriceSqm: 1800, discountPct: 20, piecesInput: 10, quantityMode: 'PIECES',
       itemNotes: 'ตัดขอบ 4 ด้าน', leadTimeMinDays: 75, leadTimeMaxDays: 90, catalogPriceId: 321, originCountry: 'อิตาลี',
@@ -192,7 +203,7 @@ describe('copyFromQuotation — the rows', () => {
   // itemInputFromRow), which has its own tests; a copy that mapped rows any other way would differ
   // from it here.
   it('saved untouched, each copied row is the source row\'s own save input without its id', () => {
-    const { items, adjustments } = copyFromQuotation(SOURCE);
+    const { items, adjustments } = copyFromQuotation(SOURCE, NEW_QUOTATION_TERMS);
     const saved = (row) => itemInputFromRow(row, rowPriceMode('MIXED', row), 'TH', { mixed: true });
     const fromSource = (dto) => {
       const row = rowFromServerItem(dto, rowPriceMode('MIXED', dto));
@@ -207,12 +218,12 @@ describe('copyFromQuotation — the rows', () => {
   // A copied draft opens showing its totals: without the rows' own amounts the estimate would read
   // 0.00 until the rep touched every row.
   it('brings each row\'s computed amount along, so the draft opens with its totals', () => {
-    const { items } = copyFromQuotation(SOURCE);
+    const { items } = copyFromQuotation(SOURCE, NEW_QUOTATION_TERMS);
     expect(items.map((row) => row.lineAmount)).toEqual([9682, 9076.6, 1000]);
   });
 
   it('gives every row a key of its own', () => {
-    const { items, adjustments } = copyFromQuotation(SOURCE);
+    const { items, adjustments } = copyFromQuotation(SOURCE, NEW_QUOTATION_TERMS);
     const keys = [...items, ...adjustments].map((row) => row.clientId);
     expect(keys).toHaveLength(4);
     expect(keys.every((key) => key != null && key !== '')).toBe(true);
@@ -222,7 +233,7 @@ describe('copyFromQuotation — the rows', () => {
 
 describe('copyFromQuotation — nothing of the source survives (wrong way round)', () => {
   it('no row carries a server id, and none carries the source row\'s picture', () => {
-    const { items, adjustments } = copyFromQuotation(SOURCE);
+    const { items, adjustments } = copyFromQuotation(SOURCE, NEW_QUOTATION_TERMS);
     const rows = [...items, ...adjustments];
     expect(rows).toHaveLength(4); // …so the two checks below are about real rows
     expect(rows.map((row) => row.id ?? null)).toEqual([null, null, null, null]);
@@ -234,7 +245,7 @@ describe('copyFromQuotation — nothing of the source survives (wrong way round)
   // not in a field this test knows about, and not in one added to the DTO later and spread through
   // by accident. (`lineAmount` and friends are numbers that belong to the rows, not to the source.)
   it('the source\'s id, number, status, approval, customer, contact and row ids appear nowhere in the copied state', () => {
-    const state = copyFromQuotation(SOURCE);
+    const state = copyFromQuotation(SOURCE, NEW_QUOTATION_TERMS);
     expect(state.items).toHaveLength(3); // the state is a real copy, not an empty one
     const everything = JSON.stringify(state);
 
@@ -262,17 +273,6 @@ describe('copyFromQuotation — nothing of the source survives (wrong way round)
 describe('copyFromQuotation — a ยืนราคา date that has passed', () => {
   const YESTERDAY = '2026-11-01';
   const TOMORROW = '2026-11-03';
-
-  // What a brand-new quotation of this rep's starts with: the editor's own emptyTerms, seeded with
-  // the terms the rep last saved. Wherever a new quotation can differ from SOURCE it does, so each
-  // key of a copy shows which of the two it came from.
-  const NEW_QUOTATION_TERMS = deepFreeze({
-    unitCode: '', offerDate: TODAY, depositPercent: 50, depositPercentCustom: false, noDeposit: false,
-    fullPaymentTerm: '', remainderMode: 'ON_DELIVERY', creditDays: '',
-    validityDays: 60, validityMode: 'DAYS', validityUntil: '',
-    customerNotes: '', printedByDisplayId: '', salesRepDisplayId: '', projectName: '',
-    orderedByName: '', orderedByPhone: '', orderedByEmail: '', hideProjectName: false,
-  });
 
   const copyOf = (overrides) => copyFromQuotation(source(overrides), NEW_QUOTATION_TERMS);
 

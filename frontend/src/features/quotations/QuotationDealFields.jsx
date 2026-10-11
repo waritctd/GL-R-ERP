@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { FormField } from '../../components/common/FormField.jsx';
 import { DesignerPicker } from './DesignerPicker.jsx';
-import { orderedByEmailError } from './quotationMeta.js';
+import { ORDERED_BY_EMAIL_MAX, ORDERED_BY_PHONE_MAX, orderedByEmailError } from './quotationMeta.js';
 
 /**
  * "ไม่แสดงชื่อโครงการในใบเสนอราคา" (sales feedback #5, 2026-10-06, V192.1).
@@ -19,7 +19,7 @@ import { orderedByEmailError } from './quotationMeta.js';
  * QuotationDealFields below states: so the two cannot drift apart. Same markup as the page's other
  * tick boxes — the whole row is the label, and it grows to the 44px touch floor on a phone.
  */
-export function ProjectNamePrintToggle({ id, checked, onChange, disabled = false }) {
+export function ProjectNamePrintToggle({ id, checked, onChange }) {
   return (
     <label
       htmlFor={id}
@@ -30,7 +30,6 @@ export function ProjectNamePrintToggle({ id, checked, onChange, disabled = false
         type="checkbox"
         className="mt-0.5 h-4 w-4 shrink-0"
         checked={!!checked}
-        disabled={disabled}
         onChange={(e) => onChange(e.target.checked)}
       />
       <span className="text-xs">
@@ -78,7 +77,7 @@ export function OrderedByContactFields({ terms, onChange, idSuffix }) {
           <input
             id={phoneId}
             autoComplete="off"
-            maxLength={50}
+            maxLength={ORDERED_BY_PHONE_MAX}
             aria-describedby={hintId}
             value={terms.orderedByPhone}
             onChange={(e) => onChange({ orderedByPhone: e.target.value })}
@@ -92,7 +91,7 @@ export function OrderedByContactFields({ terms, onChange, idSuffix }) {
             autoCorrect="off"
             spellCheck={false}
             autoComplete="off"
-            maxLength={254}
+            maxLength={ORDERED_BY_EMAIL_MAX}
             aria-describedby={hintId}
             value={terms.orderedByEmail}
             onChange={(e) => onChange({ orderedByEmail: e.target.value })}
@@ -118,15 +117,12 @@ export function OrderedByContactFields({ terms, onChange, idSuffix }) {
  * kept where nobody can see or correct it. The two-column grid stays so the picker keeps the
  * width it had beside ฝ่าย instead of stretching across the whole card.
  */
-export function QuotationDealFields({ terms, onChange, disabled = false, idPrefix = 'quotation', showToast }) {
-  const setTerm = (key, value) => onChange({ [key]: value });
-
+export function QuotationDealFields({ terms, onChange, idPrefix = 'quotation', showToast }) {
   return (
     <div className="col-span-full grid grid-cols-2 gap-3 mobile:grid-cols-1">
       <DesignerPicker
         value={terms.unitCode}
-        disabled={disabled}
-        onSelectCode={(code) => setTerm('unitCode', code)}
+        onSelectCode={(code) => onChange({ unitCode: code })}
         idPrefix={`${idPrefix}-designer-picker`}
         label="หน่วยงาน / ผู้ออกแบบ"
         showToast={showToast}

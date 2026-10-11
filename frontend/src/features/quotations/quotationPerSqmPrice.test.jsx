@@ -347,7 +347,7 @@ describe('QuotationItemRow — the Thai price boxes', () => {
     });
 
     // 1,748.13 × 1.39 แผ่น/ตร.ม. × 1.07 = 2,599.99 — the same display rule the ราคาพิเศษ mode has
-    // used since 2026-09-14 (listPricePerSqmIncVat). Shown, not saved: see itemInputFromRow above.
+    // used since 2026-09-14 (perSqmIncVatFromPerPiece). Shown, not saved: see itemInputFromRow above.
     it('a row saved before this change shows its price per ตร.ม., and says which figure is the stored one', () => {
       renderRow(legacy);
       expect(screen.getByLabelText(/^ราคา\/ตร\.ม\./).value).toBe('2599.99');

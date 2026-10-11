@@ -9,7 +9,7 @@ import {
   ORIGIN_COUNTRY_OPTIONS, QUANTITY_MODE_OPTIONS, UNLABELLED_LOCATION_TEXT, WASTAGE_MODE_OPTIONS,
   WASTAGE_PERCENT_PRESETS,
   defaultLeadTimeForOrigin, formatQuotationMoney, lineTypeOf, originCountryFromCode,
-  piecesPerSqmFromSqmPerPiece, sqmPerPieceFromPiecesPerSqm, isEnglishPerSqm, listPricePerSqmIncVat,
+  piecesPerSqmFromSqmPerPiece, sqmPerPieceFromPiecesPerSqm, isEnglishPerSqm, perSqmIncVatFromPerPiece,
   sqmPerPieceFromSizeCm, sizeTextDiffersFromCatalogFaceSize,
   roundToFullBoxDisabledReason, roundToFullBoxSummary, isTilePriceChangedFromCeoLocally,
   hasTypedPrice, usesDirectNetPriceSqm, usesListPriceSqm, availablePriceModes,
@@ -249,16 +249,16 @@ export function QuotationItemRow({
   //   - a price the row holds per แผ่น (saved before this change, set by a คำขอราคา, or carried
   //     over by a price-mode switch) shows as its per-ตร.ม. equivalent — DISPLAY-ONLY, never
   //     patched onto `item` and never sent, exactly as this figure always was under ราคาพิเศษ
-  //     (listPricePerSqmIncVat). The row goes on sending the per-แผ่น price until the box is retyped.
+  //     (perSqmIncVatFromPerPiece). The row goes on sending the per-แผ่น price until the box is retyped.
   const thaiPricing = documentLanguage !== 'EN';
   const listIsPerSqm = usesListPriceSqm(item, documentLanguage);
   const netIsPerSqm = usesDirectNetPriceSqm(item, documentLanguage);
   const listPriceSqmShown = listIsPerSqm
     ? item.listPriceSqm
-    : (listPricePerSqmIncVat(item.unitPrice, item.sqmPerPiece) ?? '');
+    : (perSqmIncVatFromPerPiece(item.unitPrice, item.sqmPerPiece) ?? '');
   const netPriceSqmShown = netIsPerSqm
     ? item.directNetPriceSqm
-    : (listPricePerSqmIncVat(item.directNetPrice, item.sqmPerPiece) ?? '');
+    : (perSqmIncVatFromPerPiece(item.directNetPrice, item.sqmPerPiece) ?? '');
   const hasArea = Number(item.sqmPerPiece) > 0;
   // The line under ราคาตั้ง: what the price comes to per แผ่น, before VAT — which is the figure the
   // document prints. The SERVER's (calculate-line's unitPrice), never worked out here: the 2dp
@@ -1338,8 +1338,8 @@ export function itemInputFromRow(item, priceMode = 'NET', documentLanguage = 'TH
     };
   }
   if (type === LINE_TYPE_ADJUSTMENT) return adjustmentInputFromRow(item);
-  const directNet = item.directNetPrice === '' || item.directNetPrice == null ? null : Number(item.directNetPrice);
-  const unitPrice = item.unitPrice === '' || item.unitPrice == null ? null : item.unitPrice;
+  const directNet = hasTypedPrice(item.directNetPrice) ? Number(item.directNetPrice) : null;
+  const unitPrice = hasTypedPrice(item.unitPrice) ? item.unitPrice : null;
   // V192.2 — which unit each of the two prices is in. Both null on an English document.
   const listSqm = usesListPriceSqm(item, documentLanguage) ? Number(item.listPriceSqm) : null;
   const netSqm = priceMode === 'DIRECT_NET' && usesDirectNetPriceSqm(item, documentLanguage)
@@ -1358,14 +1358,14 @@ export function itemInputFromRow(item, priceMode = 'NET', documentLanguage = 'TH
     // English per-sqm: the USD/ตร.ม. IS the unit price (the server substitutes it anyway).
     // Otherwise null whenever the list price travels per ตร.ม. — see this function's Javadoc.
     unitPrice: isEnglishPerSqm(priceMode, documentLanguage)
-      ? (item.specialPriceSqm === '' || item.specialPriceSqm == null ? null : Number(item.specialPriceSqm))
+      ? (hasTypedPrice(item.specialPriceSqm) ? Number(item.specialPriceSqm) : null)
       : wireListSqm != null ? null
         : netStandsInForList ? directNet : unitPrice,
     listPriceSqm: isEnglishPerSqm(priceMode, documentLanguage) ? null : wireListSqm,
     // A mode with no percent: SPECIAL_SQM and DIRECT_NET both print พิเศษ/Net, and the server
     // nulls the stored percent in those modes anyway (DealQuotationService#buildTileItem).
     discountPct: priceMode === 'NET' ? (item.discountPct ?? 0) : null,
-    specialPriceSqm: priceMode === 'SPECIAL_SQM' && item.specialPriceSqm !== '' && item.specialPriceSqm != null
+    specialPriceSqm: priceMode === 'SPECIAL_SQM' && hasTypedPrice(item.specialPriceSqm)
       ? Number(item.specialPriceSqm) : null,
     directNetPrice: priceMode === 'DIRECT_NET' && netSqm == null ? directNet : null,
     directNetPriceSqm: netSqm,

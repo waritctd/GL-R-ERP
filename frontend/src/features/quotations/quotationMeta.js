@@ -635,7 +635,7 @@ export function isTilePriceChangedFromCeoLocally(item, priceMode) {
 //     (the CEO marker, documentDiscountLabel, hasSpecialPricing). It is never sent back.
 //   - no:  `unitPrice` is the price, per แผ่น — every row saved before this change, every row a
 //     คำขอราคา created, and a net carried across by a price-mode switch. The box SHOWS it per
-//     ตร.ม. (listPricePerSqmIncVat) but the row keeps sending the per-แผ่น figure, so a price
+//     ตร.ม. (perSqmIncVatFromPerPiece) but the row keeps sending the per-แผ่น figure, so a price
 //     nobody retyped cannot move by a satang.
 // ราคาสุทธิ works the same way with `directNetPriceSqm` / `directNetPrice`.
 
@@ -694,20 +694,25 @@ export function sqmPerPieceFromPiecesPerSqm(piecesPerSqm) {
 }
 
 /**
- * Thai SPECIAL_SQM only: the rep types `unitPrice` as the LIST price PER PIECE, but ราคาพิเศษ is
- * typed per ตร.ม. INCLUDING VAT, and nothing on the row said which box was which (owner feedback
- * 2026-09-14 — a rep typed a per-ตร.ม. figure into the per-piece box). This converts the list price
- * the same way ราคาพิเศษ is already read, so the rep can see the per-ตร.ม. figure to compare against
- * before typing ราคาพิเศษ: `round2(unitPrice × piecesPerSqm × 1.07)`, reusing
+ * A price the row holds PER PIECE (per แผ่น, before VAT), as the per-ตร.ม. INCLUDING-VAT figure a
+ * Thai document's price boxes are in: `round2(perPiecePrice × piecesPerSqm × 1.07)`, reusing
  * `piecesPerSqmFromSqmPerPiece` above for the reciprocal (1/sqmPerPiece rounded 2dp HALF_UP) rather
- * than inventing a second one. VAT is hardcoded at 1.07 rather than reading `vatRateForLanguage`
- * because this helper is only ever called from the Thai SPECIAL_SQM branch (English per-sqm has no
- * VAT and never calls this). DISPLAY-ONLY: never stored on the item, never sent in the payload, and
- * never fed into the printed document — see QuotationItemRow's own price-fields comment. `null`
- * when either input is missing or non-positive, so the caller renders a guidance hint instead.
+ * than inventing a second one.
+ *
+ * It began as a Thai SPECIAL_SQM aid (owner feedback 2026-09-14: a rep typed a per-ตร.ม. figure
+ * into the per-piece ราคาตั้ง box, because nothing on the row said which box was which). Since
+ * V192.2 every Thai price mode shows its boxes per ตร.ม., so QuotationItemRow calls this for
+ * ราคาตั้ง (`unitPrice`) and for ราคาสุทธิ (`directNetPrice`) alike, whenever the row still holds
+ * that price per แผ่น.
+ *
+ * VAT is hardcoded at 1.07 rather than reading `vatRateForLanguage` because the result is only
+ * ever shown on a Thai document (the English form has no VAT and shows its prices as typed).
+ * DISPLAY-ONLY: never stored on the item, never sent in the payload, and never fed into the
+ * printed document — see QuotationItemRow's own price-fields comment. `null` when either input is
+ * missing or non-positive, so the caller shows an empty box.
  */
-export function listPricePerSqmIncVat(unitPrice, sqmPerPiece) {
-  const price = Number(unitPrice);
+export function perSqmIncVatFromPerPiece(perPiecePrice, sqmPerPiece) {
+  const price = Number(perPiecePrice);
   if (!(price > 0)) return null;
   const piecesPerSqm = piecesPerSqmFromSqmPerPiece(sqmPerPiece);
   if (piecesPerSqm == null) return null;
@@ -1312,7 +1317,7 @@ export function availablePriceModes(documentLanguage) {
 
 export const PRICE_MODE_MIXED = 'MIXED';
 
-const ROW_PRICE_MODES = ['NET', 'SPECIAL_SQM', 'DIRECT_NET'];
+export const ROW_PRICE_MODES = ['NET', 'SPECIAL_SQM', 'DIRECT_NET'];
 
 /** The fourth choice in the editor's "วิธีกรอกราคากระเบื้อง" picker. The explanation travels WITH
  * the option (the owner's requirement), so no caller can show the label and drop what it means. */
@@ -1425,20 +1430,19 @@ export function rowsWithPricesCleared(rows) {
  * preview path too, so there is nothing honest to ask for.
  */
 export function rowHasPriceForPreview(row, priceMode = 'NET', documentLanguage = 'TH') {
-  const present = (value) => value !== '' && value != null;
   const type = lineTypeOf(row);
   if (type === LINE_TYPE_ADJUSTMENT) return true;
-  if (type === LINE_TYPE_PLAIN) return present(row?.unitPrice);
+  if (type === LINE_TYPE_PLAIN) return hasTypedPrice(row?.unitPrice);
   const hasArea = Number(row?.sqmPerPiece) > 0;
-  const hasList = usesListPriceSqm(row, documentLanguage) ? hasArea : present(row?.unitPrice);
+  const hasList = usesListPriceSqm(row, documentLanguage) ? hasArea : hasTypedPrice(row?.unitPrice);
   if (priceMode === 'DIRECT_NET') {
-    const hasNet = usesDirectNetPriceSqm(row, documentLanguage) ? hasArea : present(row?.directNetPrice);
+    const hasNet = usesDirectNetPriceSqm(row, documentLanguage) ? hasArea : hasTypedPrice(row?.directNetPrice);
     // The list price is optional here — but a per-ตร.ม. one, when given, travels with the net and
     // needs the same area to mean anything.
     return hasNet && (!usesListPriceSqm(row, documentLanguage) || hasArea);
   }
   if (priceMode === 'SPECIAL_SQM') {
-    return present(row?.specialPriceSqm) && (isEnglishPerSqm(priceMode, documentLanguage) || hasList);
+    return hasTypedPrice(row?.specialPriceSqm) && (isEnglishPerSqm(priceMode, documentLanguage) || hasList);
   }
   return hasList;
 }
@@ -1803,6 +1807,13 @@ export function isEffectiveZeroDeposit({ noDeposit = false, depositPercentCustom
   return depositPercentCustom && depositPercent !== '' && Number(depositPercent) === 0;
 }
 
+// The longest ผู้ติดต่อ Phone and Email the server keeps (DealQuotationService's own
+// ORDERED_BY_PHONE_MAX / ORDERED_BY_EMAIL_MAX, the widths of the two columns; a longer one is a
+// 400). The editor's two boxes stop at these lengths and mockApi.js refuses past them, both from
+// this one pair. Keep it in step with the server's.
+export const ORDERED_BY_PHONE_MAX = 50;
+export const ORDERED_BY_EMAIL_MAX = 254;
+
 // ผู้ติดต่อ's Email (V192.3): one @, no whitespace, a dot in the domain — "somchai@example" is the
 // ".com" nobody typed. The same shape DealQuotationService#ORDERED_BY_EMAIL_SHAPE refuses with a
 // 400. Keep the two in step: quotationOrderedByContact.test.jsx and
@@ -1903,8 +1914,9 @@ export function buildQuotationChecklist({
   }
   // The same sentence the server's 400 says, so a rep sees one sentence for one problem. The field
   // has a different id on each entry path (two forms, one page never renders both).
-  if (orderedByEmailError(orderedByEmail)) {
-    push(QUOTATION_CHECK.ORDERED_BY_EMAIL, `Email ของผู้ติดต่อ: ${orderedByEmailError(orderedByEmail)}`,
+  const emailError = orderedByEmailError(orderedByEmail);
+  if (emailError) {
+    push(QUOTATION_CHECK.ORDERED_BY_EMAIL, `Email ของผู้ติดต่อ: ${emailError}`,
       isInlineCreate ? 'orderedByEmailInline' : 'orderedByEmailCard');
   }
   if (duplicateGroupIndex != null) {

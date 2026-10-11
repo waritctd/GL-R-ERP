@@ -57,6 +57,9 @@ import {
   // V192.3: the SAME email shape check the editor runs before it saves — see
   // resolveDealQuotationOrderedByContact below.
   orderedByEmailError,
+  // V192.5 / V192.3: the SAME row price-mode codes and ผู้ติดต่อ length limits the editor uses — not
+  // a second list of them.
+  ROW_PRICE_MODES, PRICE_MODE_MIXED, ORDERED_BY_PHONE_MAX, ORDERED_BY_EMAIL_MAX,
 } from '../features/quotations/quotationMeta.js';
 // fix/commission-figures-from-backend: mock mode no longer imports the commission tier math —
 // see the fenced MOCK COMMISSION FIXTURES block near the `commissions` namespace below for why,
@@ -5618,9 +5621,14 @@ function resolveDealQuotationContact(ticket, payload, current = null) {
 function resolveDealQuotationOrderedByContact(payload) {
   const orderedByPhone = blankToNullMock(payload?.orderedByPhone);
   const orderedByEmail = blankToNullMock(payload?.orderedByEmail);
-  if (orderedByPhone && orderedByPhone.length > 50) fail('Phone ของผู้ติดต่อยาวเกิน 50 ตัวอักษร', 400);
-  if (orderedByEmail && orderedByEmail.length > 254) fail('Email ของผู้ติดต่อยาวเกิน 254 ตัวอักษร', 400);
-  if (orderedByEmailError(orderedByEmail)) fail(`Email ของผู้ติดต่อ: ${orderedByEmailError(orderedByEmail)}`, 400);
+  if (orderedByPhone && orderedByPhone.length > ORDERED_BY_PHONE_MAX) {
+    fail(`Phone ของผู้ติดต่อยาวเกิน ${ORDERED_BY_PHONE_MAX} ตัวอักษร`, 400);
+  }
+  if (orderedByEmail && orderedByEmail.length > ORDERED_BY_EMAIL_MAX) {
+    fail(`Email ของผู้ติดต่อยาวเกิน ${ORDERED_BY_EMAIL_MAX} ตัวอักษร`, 400);
+  }
+  const emailError = orderedByEmailError(orderedByEmail);
+  if (emailError) fail(`Email ของผู้ติดต่อ: ${emailError}`, 400);
   return { orderedByPhone, orderedByEmail };
 }
 
@@ -6112,16 +6120,15 @@ function dealQuotationLineType(input) {
 // ── Mixed price modes (V192.5; sales feedback #14, owner 2026-10-06) ─────────────────────────────
 // Mirrors WastageCalculator#rowPriceMode / DealQuotationService#rowPriceMode and
 // #requirePriceModeAllowed: a document's priceMode may be 'MIXED', and then every TILE row states
-// its own (one of the three below) and is priced in it; on any other document a row's own mode is
-// not consulted and none is stored. The RULES are mirrored in full, same messages — a mock more
-// permissive than the service is the dangerous direction. As everywhere in this section the MATH
-// is not: each row is handed to the same per-mode stub a single-mode document uses.
-const MOCK_ROW_PRICE_MODES = ['NET', 'SPECIAL_SQM', 'DIRECT_NET'];
+// its own (one of quotationMeta.js's ROW_PRICE_MODES) and is priced in it; on any other document a
+// row's own mode is not consulted and none is stored. The RULES are mirrored in full, same messages
+// — a mock more permissive than the service is the dangerous direction. As everywhere in this
+// section the MATH is not: each row is handed to the same per-mode stub a single-mode document uses.
 
 /** ItemInput#priceMode's @Pattern — bean validation, so it bites on EVERY row that states a mode,
  * whatever the document's own mode and whether or not that mode will be consulted. */
 function requireMockRowPriceModeWellFormed(input) {
-  if (input?.priceMode != null && !MOCK_ROW_PRICE_MODES.includes(input.priceMode)) {
+  if (input?.priceMode != null && !ROW_PRICE_MODES.includes(input.priceMode)) {
     fail('วิธีคิดราคาของรายการต้องเป็น NET, SPECIAL_SQM หรือ DIRECT_NET', 400);
   }
 }
@@ -6131,7 +6138,7 @@ function requireMockRowPriceModeWellFormed(input) {
  * its fields; a PLAIN / ADJUSTMENT row has no price mode and is handed NET, as always. */
 function mockRowPriceMode(input, documentPriceMode, rowNumber) {
   requireMockRowPriceModeWellFormed(input);
-  if (documentPriceMode !== 'MIXED') return documentPriceMode;
+  if (documentPriceMode !== PRICE_MODE_MIXED) return documentPriceMode;
   if (dealQuotationLineType(input) !== 'TILE') return 'NET';
   if (input?.priceMode == null || String(input.priceMode).trim() === '') {
     fail(`รายการที่ ${rowNumber}: กรุณาเลือกวิธีคิดราคาของรายการนี้ (ใบเสนอราคานี้กรอกราคาแบบผสมหลายวิธี)`, 400);
@@ -6317,14 +6324,14 @@ function buildDealQuotationItemRow(input, seq, priceMode = 'NET', existingIds = 
  * default. */
 function resolveDealQuotationV3Header(payload, current = null) {
   const priceMode = payload.priceMode || current?.priceMode || 'NET';
-  if (!['NET', 'SPECIAL_SQM', 'DIRECT_NET', 'MIXED'].includes(priceMode)) {
+  if (![...ROW_PRICE_MODES, PRICE_MODE_MIXED].includes(priceMode)) {
     fail('ต้องเป็น NET, SPECIAL_SQM, DIRECT_NET หรือ MIXED', 400);
   }
   const documentLanguage = String(payload.documentLanguage || current?.documentLanguage || 'TH').toUpperCase();
   if (!['TH', 'EN'].includes(documentLanguage)) fail('ต้องเป็น TH หรือ EN', 400);
   // DealQuotationService#requirePriceModeAllowed (V192.5), on the RESOLVED pair and in its order:
   // never a quotation that came from a คำขอราคา (its mode is the CEO's), and Thai documents only.
-  if (priceMode === 'MIXED') {
+  if (priceMode === PRICE_MODE_MIXED) {
     if (current?.origin === 'PRICING_REQUEST') {
       fail('ใบเสนอราคาที่สร้างจากคำขอราคาใช้วิธีคิดราคาตามที่ CEO อนุมัติ จึงกรอกราคาแบบผสมหลายวิธีไม่ได้', 400);
     }
@@ -6430,7 +6437,7 @@ function buildDealQuotationItems(inputs, priceMode, existingItems = null, docume
   // where it is the row's to decide — a tile row of a MIXED document. Everywhere else the stored
   // value is null, whatever the client sent (computeDealQuotationV3Line echoes its input, so the
   // key is overwritten here rather than trusted).
-  const mixed = priceMode === 'MIXED';
+  const mixed = priceMode === PRICE_MODE_MIXED;
   const items = [...products, ...adjustments].map((item, index) => {
     const rowMode = mockRowPriceMode(item, priceMode, index + 1);
     const row = buildDealQuotationItemRow(item, index + 1, rowMode, existingIds, documentLanguage);

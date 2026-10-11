@@ -6,7 +6,7 @@
 //                              quotation (but its a new one) in case they want the exactly same
 //                              details just change the customer".
 //
-// The second is the first plus ONE table (TERMS_IN_A_COPY) and one row rule (SOURCE_ROW_FIELDS).
+// The second is the first plus two lists (COPIED, VALIDITY) and one row rule (SOURCE_ROW_FIELDS).
 // There is deliberately no second DTO-to-row mapper: a copy that hydrated its rows any other way
 // would drift from what the editor loads, and quotationCopy.test.jsx compares the two.
 import { bangkokTodayIso } from '../../utils/format.js';
@@ -75,51 +75,29 @@ export function editorStateFromQuotation(quotation) {
 }
 
 // ── "คัดลอกเป็นใบใหม่" ────────────────────────────────────────────────────────────────────────────
+//
+// What a copy does with each thing the editor's `terms` holds. Every key is named, in one of the
+// two lists below or in copyFromQuotation's own `terms`, so a term added to the editor later is
+// not copied (or dropped) by accident — it is simply absent from a copy until someone decides, and
+// quotationCopy.test.jsx names every key for the same reason.
+//
+// The job, its terms and how the document is signed are the source's. Who it is for is not.
 
-const asInTheSource = (value) => value;
-const leftForTheRep = () => '';
-// A ยืนราคา deadline that is still ahead is the job's, since a promotion ends on the same day for
-// every bidder. One that has gone by is refused on the copy's first save
-// (DealQuotationService#requireValidityUntilForMode), and by then that save has already created
-// the copy's deal. So the three validity terms then start as on any new quotation, and the rep
-// sets the validity again.
-const unlessItsDateHasPassed = (value, field, { validityDatePassed, newQuotationTerms }) => (
-  validityDatePassed ? newQuotationTerms[field] : value
-);
+/** Copied as in the source. */
+const COPIED = [
+  'unitCode',             // หน่วยงาน / ผู้ออกแบบ — the project's designer, not the bidder's
+  'depositPercent', 'depositPercentCustom', 'noDeposit', 'fullPaymentTerm', 'remainderMode',
+  'creditDays', 'customerNotes', 'printedByDisplayId', 'salesRepDisplayId', 'hideProjectName',
+];
 
-/**
- * THE TABLE: what a copy does with each thing the editor's `terms` holds. Every key is here, so a
- * term added to the editor later is not copied (or dropped) by accident — it is simply absent from
- * a copy until someone decides, and quotationCopy.test.jsx names every key for the same reason.
- *
- * The job, its terms and how the document is signed are the source's. Who it is for is not.
- */
-const TERMS_IN_A_COPY = {
-  unitCode: asInTheSource,            // หน่วยงาน / ผู้ออกแบบ — the project's designer, not the bidder's
-  depositPercent: asInTheSource,
-  depositPercentCustom: asInTheSource,
-  noDeposit: asInTheSource,
-  fullPaymentTerm: asInTheSource,
-  remainderMode: asInTheSource,
-  creditDays: asInTheSource,
-  validityDays: unlessItsDateHasPassed,
-  validityMode: unlessItsDateHasPassed,
-  validityUntil: unlessItsDateHasPassed,
-  customerNotes: asInTheSource,
-  printedByDisplayId: asInTheSource,
-  salesRepDisplayId: asInTheSource,
-  hideProjectName: asInTheSource,
-  // As on any new quotation. The date the quantities were received is today's question again…
-  offerDate: () => bangkokTodayIso(),
-  // …and the project is chosen with the customer: it is a record UNDER a customer, so the source's
-  // name is offered there (suggestedProjectName) rather than written here, where the new-deal form
-  // has no field that would show it.
-  projectName: leftForTheRep,
-  // ผู้ติดต่อ is a person at the SOURCE's customer.
-  orderedByName: leftForTheRep,
-  orderedByPhone: leftForTheRep,
-  orderedByEmail: leftForTheRep,
-};
+// Copied too, unless the ยืนราคา date has passed. A deadline that is still ahead is the job's, since
+// a promotion ends on the same day for every bidder. One that has gone by is refused on the copy's
+// first save (DealQuotationService#requireValidityUntilForMode), and by then that save has already
+// created the copy's deal. So the three validity terms then start as on any new quotation, and the
+// rep sets the validity again.
+const VALIDITY = ['validityDays', 'validityMode', 'validityUntil'];
+
+const pick = (from, keys) => Object.fromEntries(keys.map((key) => [key, from[key]]));
 
 /** What makes a row the SOURCE's row. A copied row has no server id until its own first save, and
  * a picture is stored against the source's row (this editor has no way to attach one), so the
@@ -138,9 +116,10 @@ function copiedRow(row) {
  * customer, no contact. `suggestedProjectName` is the name to offer once the rep has chosen the
  * new customer (same job, different bidder).
  *
- * `newQuotationTerms` is what a brand-new quotation's terms start as (the editor's emptyTerms):
- * where the table starts a term over, that is what it starts as. `validityDatePassed` says the
- * table did so for ยืนราคา, the source's being a fixed date before today, so the editor can say so.
+ * `newQuotationTerms` is what a brand-new quotation's terms start as (the editor's emptyTerms).
+ * It is required: the three VALIDITY terms are read from it once the source's ยืนราคา date has
+ * passed. `validityDatePassed` says that happened, the source's being a fixed date before today,
+ * so the editor can say so.
  *
  * It reads its arguments and changes nothing (the only thing it makes up is a key per row). Whether
  * the source MAY be copied is the caller's question (quotationMeta#canCopyDealQuotation), and so
@@ -160,11 +139,20 @@ export function copyFromQuotation(quotation, newQuotationTerms) {
     items: source.items.map(copiedRow),
     adjustments: source.adjustments.map(copiedRow),
     docSettings: source.docSettings,
-    terms: Object.fromEntries(
-      Object.entries(TERMS_IN_A_COPY).map(([field, inACopy]) => [
-        field, inACopy(source.terms[field], field, { validityDatePassed, newQuotationTerms }),
-      ]),
-    ),
+    terms: {
+      ...pick(source.terms, COPIED),
+      ...pick(validityDatePassed ? newQuotationTerms : source.terms, VALIDITY),
+      // As on any new quotation. The date the quantities were received is today's question again…
+      offerDate: bangkokTodayIso(),
+      // …and the project is chosen with the customer: it is a record UNDER a customer, so the
+      // source's name is offered there (suggestedProjectName) rather than written here, where the
+      // new-deal form has no field that would show it.
+      projectName: '',
+      // ผู้ติดต่อ is a person at the SOURCE's customer.
+      orderedByName: '',
+      orderedByPhone: '',
+      orderedByEmail: '',
+    },
     suggestedProjectName: quotation.projectName ?? '',
     validityDatePassed,
   };

@@ -21,8 +21,8 @@ import {
   LINE_TYPE_ADJUSTMENT,
   LINE_TYPE_PLAIN,
   LINE_TYPE_TILE,
-  listPricePerSqmIncVat,
   parseSizeText,
+  perSqmIncVatFromPerPiece,
   piecesPerSqmFromSqmPerPiece,
   quotationItemMissingSummary,
   remainderModeLabel,
@@ -571,29 +571,29 @@ describe('piecesPerSqmFromSqmPerPiece / sqmPerPieceFromPiecesPerSqm (แผ่�
   });
 });
 
-describe('listPricePerSqmIncVat (Thai SPECIAL_SQM ราคาตั้ง shown per ตร.ม., owner feedback 2026-09-14)', () => {
+describe('perSqmIncVatFromPerPiece (Thai SPECIAL_SQM ราคาตั้ง shown per ตร.ม., owner feedback 2026-09-14)', () => {
   // The four real-document figures the owner gave, each round2(unitPrice x piecesPerSqm x 1.07)
   // where piecesPerSqm is piecesPerSqmFromSqmPerPiece(sqmPerPiece) -- the SAME reciprocal exercised
   // above, never a second one.
   it('reproduces all four owner figures exactly', () => {
-    expect(listPricePerSqmIncVat(1299.0, 0.72)).toBe(1932.0);
-    expect(listPricePerSqmIncVat(881.46, 0.36)).toBe(2621.99);
-    expect(listPricePerSqmIncVat(843.14, 0.36)).toBe(2508.0);
-    expect(listPricePerSqmIncVat(900.63, 0.36)).toBe(2679.01);
+    expect(perSqmIncVatFromPerPiece(1299.0, 0.72)).toBe(1932.0);
+    expect(perSqmIncVatFromPerPiece(881.46, 0.36)).toBe(2621.99);
+    expect(perSqmIncVatFromPerPiece(843.14, 0.36)).toBe(2508.0);
+    expect(perSqmIncVatFromPerPiece(900.63, 0.36)).toBe(2679.01);
   });
 
   it('returns null when unitPrice is missing, zero or negative', () => {
-    expect(listPricePerSqmIncVat(null, 0.36)).toBeNull();
-    expect(listPricePerSqmIncVat('', 0.36)).toBeNull();
-    expect(listPricePerSqmIncVat(0, 0.36)).toBeNull();
-    expect(listPricePerSqmIncVat(-1, 0.36)).toBeNull();
+    expect(perSqmIncVatFromPerPiece(null, 0.36)).toBeNull();
+    expect(perSqmIncVatFromPerPiece('', 0.36)).toBeNull();
+    expect(perSqmIncVatFromPerPiece(0, 0.36)).toBeNull();
+    expect(perSqmIncVatFromPerPiece(-1, 0.36)).toBeNull();
   });
 
   it('returns null when sqmPerPiece is missing, zero or negative', () => {
-    expect(listPricePerSqmIncVat(1299.0, null)).toBeNull();
-    expect(listPricePerSqmIncVat(1299.0, '')).toBeNull();
-    expect(listPricePerSqmIncVat(1299.0, 0)).toBeNull();
-    expect(listPricePerSqmIncVat(1299.0, -0.36)).toBeNull();
+    expect(perSqmIncVatFromPerPiece(1299.0, null)).toBeNull();
+    expect(perSqmIncVatFromPerPiece(1299.0, '')).toBeNull();
+    expect(perSqmIncVatFromPerPiece(1299.0, 0)).toBeNull();
+    expect(perSqmIncVatFromPerPiece(1299.0, -0.36)).toBeNull();
   });
 });
 

@@ -670,7 +670,7 @@ export function QuotationEditorPage({ user, showToast }) {
    * lands — a stale net must never be shown under the new mode (see the calc-error note above). */
   function tileRowMovedToPriceMode(row, priceMode, prefill = true) {
     const carried = prefill && priceMode === 'DIRECT_NET'
-      && (row.directNetPrice === '' || row.directNetPrice == null) && !hasTypedPrice(row.directNetPriceSqm)
+      && !hasTypedPrice(row.directNetPrice) && !hasTypedPrice(row.directNetPriceSqm)
       && row.netUnitPrice != null
       ? { directNetPrice: row.netUnitPrice } : {};
     return { ...row, ...carried, netUnitPrice: null, lineAmount: null, specialPriceLine: null, calcPending: true };
@@ -2128,7 +2128,7 @@ export function QuotationEditorPage({ user, showToast }) {
           {(copySource.items ?? []).some((item) => item.hasPicture) ? (
             <p className="m-0 mt-1">รูปภาพประกอบรายการของใบเดิมไม่ได้คัดลอกมาด้วย</p>
           ) : null}
-          {/* A ยืนราคา date that has gone by is not carried either (quotationCopy#TERMS_IN_A_COPY),
+          {/* A ยืนราคา date that has gone by is not carried either (quotationCopy#VALIDITY),
               so ยืนราคา below is a new quotation's. Said only when that is what happened. */}
           {copyState.validityDatePassed ? (
             <p className="m-0 mt-1">วันที่ยืนราคาของใบเดิมผ่านไปแล้ว จึงไม่ได้คัดลอกมา กรุณากำหนดยืนราคาของใบนี้ใหม่</p>
