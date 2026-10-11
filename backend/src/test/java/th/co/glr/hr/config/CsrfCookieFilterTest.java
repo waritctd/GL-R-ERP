@@ -143,13 +143,15 @@ class CsrfCookieFilterTest {
     // frontend/src/api/hrApi.uploadCsrf.test.js). The browser attaches the cookie by itself, so the
     // request below is exactly what those calls sent. There is no multipart exemption: the fix
     // belongs in the caller, and exempting file uploads here would reopen cross-site uploads.
+    // The sixth, a quotation's เอกสารแนบ, was written after that fix and is here so it stays covered.
     @ParameterizedTest
     @ValueSource(strings = {
         "/api/tickets/11/attachments",
         "/api/commissions",
         "/api/commissions/from-deal",
         "/api/factory-quotes/7/attachments",
-        "/api/pricing-requests/7/attachments"})
+        "/api/pricing-requests/7/attachments",
+        "/api/deal-quotations/7/attachments"})
     void aMultipartUploadWithTheCookieButNoHeaderIsRejected(String uploadRoute) throws Exception {
         MockHttpServletRequest request = multipartUpload(uploadRoute);
         MockHttpServletResponse response = new MockHttpServletResponse();
@@ -167,7 +169,8 @@ class CsrfCookieFilterTest {
         "/api/commissions",
         "/api/commissions/from-deal",
         "/api/factory-quotes/7/attachments",
-        "/api/pricing-requests/7/attachments"})
+        "/api/pricing-requests/7/attachments",
+        "/api/deal-quotations/7/attachments"})
     void aMultipartUploadWithTheMatchingHeaderPasses(String uploadRoute) throws Exception {
         MockHttpServletRequest request = multipartUpload(uploadRoute);
         request.addHeader(HEADER, "upload-token");

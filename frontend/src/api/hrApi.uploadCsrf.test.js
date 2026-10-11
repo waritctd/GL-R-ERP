@@ -32,6 +32,14 @@ const UPLOADS = [
   ['pricingRequests.uploadAttachment (ไฟล์ประกอบคำขอราคา)',
     () => api.pricingRequests.uploadAttachment(7, file()),
     () => API_ROUTES.pricingRequests.attachments(7)],
+  // Written after the five above were fixed, and listed so it can never join them. The route is
+  // spelled out, because a helper in routes.js would only agree with itself.
+  ['dealQuotations.uploadAttachment (เอกสารแนบของใบเสนอราคา)',
+    () => {
+      expect(api.dealQuotations.uploadAttachment).toBeTypeOf('function');
+      return api.dealQuotations.uploadAttachment(7, file());
+    },
+    () => '/api/deal-quotations/7/attachments'],
 ];
 
 describe('multipart uploads carry the CSRF header', () => {

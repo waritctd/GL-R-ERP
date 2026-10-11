@@ -234,6 +234,20 @@ export function isDealQuotationReadOnlyViewer(user) {
   return user?.role === 'import' || user?.role === 'account';
 }
 
+// ── เอกสารแนบ (the files attached to a quotation) ─────────────────────────────────────────────
+// Phase 1 placeholders. These are the three questions the panel will ask. Each answers nothing
+// yet, so that quotationMeta.attachments.test.js can import them and fail on its assertions. That
+// test and DealQuotationAttachmentService's own tests state the rules.
+
+/** Takes (user). May this viewer see a quotation's เอกสารแนบ at all? */
+export function canSeeDealQuotationAttachments() {}
+
+/** Takes (user, quotation). May this viewer attach a file to this quotation now? */
+export function canAttachToDealQuotation() {}
+
+/** Takes (user, quotation, attachment). May this viewer remove this file from this quotation now? */
+export function canRemoveDealQuotationAttachment() {}
+
 // ── Terms card options (editor) ────────────────────────────────────────────────────────────────
 
 // Item 4 ("ไม่รับมัดจำ", owner ruling 2026-09-16): 0% is no longer enterable as an ordinary

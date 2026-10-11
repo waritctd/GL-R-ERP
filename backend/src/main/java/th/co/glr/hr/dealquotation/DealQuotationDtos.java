@@ -837,4 +837,27 @@ public final class DealQuotationDtos {
                 ceoNetUnitPrice, listPriceSqm, directNetPriceSqm, priceMode);
         }
     }
+
+    /**
+     * One เอกสารแนบ of a quotation, as {@code GET /api/deal-quotations/{id}/attachments} lists it.
+     * The bytes are never on this record. Only the file endpoint serves them.
+     *
+     * <p>{@code quotationId} and {@code quotationNumber} name the quotation the file is STORED on.
+     * When a revision lists a file stored on an earlier document of its chain, they name that
+     * earlier document and {@code inherited} is true. Such a file can be read from the revision
+     * and removed only from the document it is on. {@code uploadedById} and {@code uploadedByName}
+     * are null once that employee row is gone.
+     */
+    public record DealQuotationAttachmentDto(
+        long id,
+        long quotationId,
+        String quotationNumber,
+        String fileName,
+        String mimeType,
+        Long fileSize,
+        Long uploadedById,
+        String uploadedByName,
+        Instant uploadedAt,
+        boolean inherited
+    ) {}
 }
