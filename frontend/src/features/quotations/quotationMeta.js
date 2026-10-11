@@ -154,6 +154,17 @@ export function canReviseDealQuotation(user, quotation) {
   return canEditDealQuotation(user, quotation) && quotation?.docStatus === 'APPROVED';
 }
 
+/** "คัดลอกเป็นใบใหม่": whether `user` may open `quotation` as the starting point of a brand-new
+ * quotation on a new deal. The ONE gate for the button and for `/quotations/new?copyFrom=`, so the
+ * two cannot disagree.
+ *
+ * PHASE 1 SCAFFOLD: refuses everyone. quotationCopy.test.jsx holds the table this must satisfy. */
+export function canCopyDealQuotation(user, quotation) {
+  void user;
+  void quotation;
+  return false;
+}
+
 /** Mirrors DealQuotationService.approve/reject's gate: sales_manager or ceo, role-only (the
  * plan states "No self-exclusion (matches repo convention; flagged)") -- the caller combines
  * this with canDecideDealQuotation below, or its own PENDING_APPROVAL check, before rendering a
@@ -1771,6 +1782,16 @@ function blankValue(value) {
 export function isEffectiveZeroDeposit({ noDeposit = false, depositPercentCustom = false, depositPercent = '' } = {}) {
   if (noDeposit) return true;
   return depositPercentCustom && depositPercent !== '' && Number(depositPercent) === 0;
+}
+
+/** What is wrong with ผู้ติดต่อ's Email as typed — the Thai message to show under the field — or
+ * `undefined` when it is blank (the field is optional) or looks like an address. Mirrors the shape
+ * DealQuotationService refuses with a 400, so the rep is told before the save rather than by it.
+ *
+ * PHASE 1 SCAFFOLD: accepts everything. quotationOrderedByContact.test.jsx holds the table. */
+export function orderedByEmailError(value) {
+  void value;
+  return undefined;
 }
 
 /**

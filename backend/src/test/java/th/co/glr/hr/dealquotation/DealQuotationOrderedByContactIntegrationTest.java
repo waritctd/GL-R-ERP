@@ -163,8 +163,10 @@ class DealQuotationOrderedByContactIntegrationTest extends AbstractDealDirectQuo
             ApiException refused = refusal(
                 () -> quotationService.create(ticket, contact(NAME, PHONE, malformed), salesActor),
                 HttpStatus.BAD_REQUEST);
-            assertThat(refused.getMessage()).as("the refusal of '%s' names the field, in Thai", malformed)
-                .contains("อีเมล");
+            // The sentence the editor shows under the field before the save (quotationMeta
+            // #orderedByEmailError) — one sentence for one problem, whoever catches it.
+            assertThat(refused.getMessage()).as("the refusal of '%s'", malformed)
+                .contains("รูปแบบอีเมลไม่ถูกต้อง");
         }
         assertThat(quotationCount(ticket)).isZero();
 

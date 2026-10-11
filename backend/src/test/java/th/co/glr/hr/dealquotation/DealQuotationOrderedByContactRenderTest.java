@@ -24,16 +24,17 @@ import th.co.glr.hr.ticket.QuotationRenderer;
  * V192.3 — ผู้ติดต่อ's Phone and Email are a sales record and are NEVER printed ("doesn't need to be
  * render in the actual pdf"). Pure render-layer coverage — no Spring, no DB.
  *
- * <p><b>The first three tests are REGRESSION GUARDS, and are green before the feature exists</b> —
+ * <p><b>The first four tests are REGRESSION GUARDS, and are green before the feature exists</b> —
  * nothing prints what nothing reads. They are here for the day someone "helpfully" fills the
- * header's empty email line from the one the rep typed: the fixture with NO customer-master contact
- * is exactly the document where that fallback would fire. Each carries a control (the name beside
- * the two fields DOES print, and a customer-master contact's own phone/email DO print), so none of
- * them can pass merely because the fixture printed nothing. To see them fail, make
- * {@code DealQuotationRenderAdapter#orderedByName} return the name with
- * {@code quotation.orderedByPhone()} appended. The real-DB round trip (the value the service stored
- * is the value the service's own renderer ignores) is
- * {@code DealQuotationOrderedByContactIntegrationTest}.
+ * header's empty phone or email line from the one the rep typed: the fixture with NO
+ * customer-master contact is exactly the document where that fallback would fire. Each carries a
+ * control (the name beside the two fields DOES print; the fourth test is the other control — a
+ * customer-master contact's own phone/email DO print), so none of them can pass merely because the
+ * fixture printed nothing. They have been seen to fail: with
+ * {@code DealQuotationRenderAdapter#effectiveCustomerPhone} falling back to
+ * {@code quotation.orderedByPhone()}, the first three go red and the fourth stays green. The
+ * real-DB round trip (the value the service stored is the value the service's own renderer
+ * ignores) is {@code DealQuotationOrderedByContactIntegrationTest}.
  *
  * <p>The last two are not guards: a copy of the quotation that silently went through an older
  * constructor shape would DROP the contact, and they fail until every copy passes it on.
