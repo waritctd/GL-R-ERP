@@ -140,3 +140,9 @@ agents/attendance/*roster*.csv
 /PRODUCT.md
 /STACKED-PRS.md
 /UX_BLOCKED_DECISIONS.md
+
+# graphify knowledge-graph output (/graphify): regenerated on demand from source, not source.
+# Bare name so it matches at every depth (backend/graphify-out, frontend/graphify-out, root).
+graphify-out
+# Obsidian vault exported from the backend graph — same generated artifact, different shape.
+backend-graph-vault/
