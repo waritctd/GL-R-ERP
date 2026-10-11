@@ -71,6 +71,42 @@ public final class WastageCalculator {
     public static final String PRICE_MODE_SPECIAL_SQM = "SPECIAL_SQM";
     /** The rep types the per-piece net price directly; the ราคา column still shows the list price. */
     public static final String PRICE_MODE_DIRECT_NET = "DIRECT_NET";
+    /**
+     * A document with NO single price mode: each TILE row carries its own — one of the three above
+     * — in {@code sales.quotation_item.price_mode} (V204). Sales feedback #14 / owner 2026-10-06:
+     * "อยากให้เลือกการคิดราคาแต่ละข้อไม่เหมือนกันได้ เช่น บางข้อราคาพิเศษต่อตรม บางข้อลด% ตามสเต็ป".
+     *
+     * <p>It is a property of the DOCUMENT, never of a row: a row is always priced, stored and
+     * printed in exactly one of NET / SPECIAL_SQM / DIRECT_NET, by the very code a single-mode
+     * document runs — see {@link #rowPriceMode}. Thai, direct-deal documents only
+     * ({@code DealQuotationService#requirePriceModeAllowed}).
+     */
+    public static final String PRICE_MODE_MIXED = "MIXED";
+
+    /**
+     * The price mode ONE tile row is priced and printed in: the document's own, unless the
+     * document is {@link #PRICE_MODE_MIXED}, in which case it is the row's. THE one statement of
+     * that rule — the write path, the read path, the printed ส่วนลด cell and the "has special
+     * pricing" gate all ask here, so no two of them can decide differently.
+     *
+     * <p>A row's own mode is consulted ONLY on a MIXED document. On a single-mode document it is
+     * ignored even when present (and the write path stores none there), so nothing a client leaves
+     * on a row can reprice a document whose header names one mode. A MIXED document's row with no
+     * mode of its own reads as NET: unreachable through the write path, which refuses such a row,
+     * but a READ must never fail on a row it cannot place.
+     */
+    public static String rowPriceMode(String documentPriceMode, String itemPriceMode) {
+        if (!PRICE_MODE_MIXED.equals(documentPriceMode)) {
+            return documentPriceMode;
+        }
+        return itemPriceMode == null || itemPriceMode.isBlank() ? PRICE_MODE_NET : itemPriceMode.trim();
+    }
+
+    /** One of the three modes a tile ROW can be priced in — i.e. anything but MIXED. */
+    public static boolean isRowPriceMode(String priceMode) {
+        return PRICE_MODE_NET.equals(priceMode) || PRICE_MODE_SPECIAL_SQM.equals(priceMode)
+            || PRICE_MODE_DIRECT_NET.equals(priceMode);
+    }
 
     // ── Quotation v3b (owner, 2026-09-11 overnight) — the ENGLISH document ────────────────────
     /** The Thai document, form F-SM-002 (03). The default, and the ONLY behaviour before V169. */
@@ -334,14 +370,46 @@ public final class WastageCalculator {
      * {@code WastageCalculatorTest#netPerPieceFromSpecialSqm_dividesByThe2dpReciprocal_notTheExactOne}.
      */
     public static BigDecimal netPerPieceFromSpecialSqm(BigDecimal specialPerSqmIncVat, BigDecimal sqmPerPiece) {
-        if (specialPerSqmIncVat == null || specialPerSqmIncVat.signum() <= 0) {
-            throw new IllegalArgumentException("ราคาพิเศษ must be positive, got: " + specialPerSqmIncVat);
+        return perPieceFromSqm(specialPerSqmIncVat, sqmPerPiece, "ราคาพิเศษ", "a SPECIAL_SQM price");
+    }
+
+    /**
+     * A per-แผ่น price, before VAT, from a price quoted in บาท per ตร.ม. INCLUDING VAT — for ANY
+     * of a Thai tile row's price boxes. Sales feedback #1 (2026-10-06, "แก้เป็น ตร.ม. รวม VAT
+     * ทุกแบบ"): ราคาตั้ง in every price mode, and ราคาสุทธิ in DIRECT_NET, are now typed per ตร.ม.
+     * including VAT exactly as ราคาพิเศษ always was, and converted here.
+     *
+     * <p><b>This is {@link #netPerPieceFromSpecialSqm}'s rule, not a second one</b> — both are the
+     * same private computation, deliberately. The rounding order that method's Javadoc spends its
+     * length on (divide by the 2dp pieces-per-ตร.ม., carry the VAT-stripped figure unrounded) was
+     * reconciled to the satang against the owner's documents; a ราคาตั้ง and a ราคาพิเศษ typed as
+     * the same figure must come out as the same per-แผ่น figure, or a row whose list and special
+     * prices are equal would print a discount that does not exist. Pinned by
+     * {@code WastageCalculatorPerSqmPriceTest}.
+     *
+     * <p>The result cannot be converted back: on a 10×10 tile 1,800 per ตร.ม. is 16.82 a piece,
+     * and 16.82 a piece is 1,799.74 per ตร.ม. That is why the typed figure is stored beside the
+     * derived one (V201) rather than recovered from it.
+     *
+     * @throws IllegalArgumentException when the price is missing or not positive, or there is no
+     *     usable area per piece — never a fallback to reading the figure as a per-แผ่น price.
+     */
+    public static BigDecimal perPieceExVatFromSqmIncVat(BigDecimal perSqmIncVat, BigDecimal sqmPerPiece) {
+        return perPieceFromSqm(perSqmIncVat, sqmPerPiece, "ราคาต่อ ตร.ม.", "a per-sqm price");
+    }
+
+    /** The one computation behind both entry points above; {@code priceName}/{@code needFor} only
+     * word the refusal, so each keeps saying what it always said. */
+    private static BigDecimal perPieceFromSqm(BigDecimal perSqmIncVat, BigDecimal sqmPerPiece,
+                                              String priceName, String needFor) {
+        if (perSqmIncVat == null || perSqmIncVat.signum() <= 0) {
+            throw new IllegalArgumentException(priceName + " must be positive, got: " + perSqmIncVat);
         }
         if (sqmPerPiece == null || sqmPerPiece.signum() <= 0) {
-            throw new IllegalArgumentException("sqmPerPiece is required for a SPECIAL_SQM price");
+            throw new IllegalArgumentException("sqmPerPiece is required for " + needFor);
         }
         requireReasonableSqmPerPiece(sqmPerPiece);
-        BigDecimal exVat = specialPerSqmIncVat.divide(BigDecimal.ONE.add(VAT_RATE), 10, RoundingMode.HALF_UP);
+        BigDecimal exVat = perSqmIncVat.divide(BigDecimal.ONE.add(VAT_RATE), 10, RoundingMode.HALF_UP);
         return round2(exVat.divide(piecesPerSqm(sqmPerPiece), 10, RoundingMode.HALF_UP));
     }
 

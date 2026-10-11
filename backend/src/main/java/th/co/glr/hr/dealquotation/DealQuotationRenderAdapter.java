@@ -199,7 +199,11 @@ public final class DealQuotationRenderAdapter {
 
         List<RenderItem> items = quotation.items().stream()
             .sorted((a, b) -> Integer.compare(a.seq(), b.seq()))
-            .map(item -> toRenderItem(item, quotation.priceMode(), english, itemPictures))
+            // V204: each row is printed in the mode IT was priced in — the document's, or on a
+            // MIXED document the row's own. One line; everything #toRenderItem and #discountLabel
+            // decide from "the price mode" follows.
+            .map(item -> toRenderItem(item,
+                WastageCalculator.rowPriceMode(quotation.priceMode(), item.priceMode()), english, itemPictures))
             .toList();
 
         // Owner feedback pass 1 (2026-09-10): slot 4 = the ผู้สั่งซื้อ snapshot (F2); the dates row =
@@ -238,8 +242,19 @@ public final class DealQuotationRenderAdapter {
             : (hasTile ? remarkLines(quotation) : nonTileRemarkLines(quotation));
 
         return new QuotationRenderModel(
-            issueDate, quotation.number(), quotation.deptCode(), quotation.unitCode(), salesLine,
-            attnLine, phoneLine, quotation.projectName(), items,
+            // ฝ่าย is not printed any more (2026-10-06, "remove ฝ่าย field completely"), so the
+            // stored dept_code — still on older quotations — is not passed on: null, not
+            // quotation.deptCode(). The renderer ignores the field either way; withholding it
+            // here as well means a stale value cannot reach a document by any route.
+            issueDate, quotation.number(), null, quotation.unitCode(), salesLine,
+            // Sales feedback #5 (V200, 2026-10-06) — "ไม่แสดงชื่อโครงการในใบเสนอราคา". The ONE place
+            // the flag has any effect, and it does two things. The NAME is withheld here, so it
+            // never reaches the renderer at all; and hideProjectLine (the last argument below)
+            // tells QuotationRenderer to blank the template's own "Project  : " label, which a
+            // null name alone would leave printed — on the Thai and English documents alike.
+            // quotation.projectName() itself is untouched: the editor, the register and the deal
+            // still read it.
+            attnLine, phoneLine, quotation.hideProjectName() ? null : quotation.projectName(), items,
             remarks, signatories, true,
             english ? WastageCalculator.DOCUMENT_LANGUAGE_EN : WastageCalculator.DOCUMENT_LANGUAGE_TH,
             quotation.currency(),
@@ -248,7 +263,9 @@ public final class DealQuotationRenderAdapter {
             // QuotationRenderModel#forceCompactRemarks's own Javadoc for why the non-tile set (3 or
             // 4 lines, well under QuotationRenderer#REMARK_V2_MIN_LINES) needs this rather than
             // relying on the size check the tile set has always passed on its own.
-            true);
+            true,
+            // hideProjectLine — see the projectName argument above.
+            quotation.hideProjectName());
     }
 
     /** {@code true} when {@code item} is a TILE row — {@code lineType} null or {@link
@@ -395,7 +412,7 @@ public final class DealQuotationRenderAdapter {
     /** {@code true} when the SAVED quotation has special pricing. */
     public static boolean hasSpecialPricing(DealQuotationDto quotation) {
         return hasSpecialPricingCore(quotation.priceMode(), quotation.items().stream()
-            .map(i -> new PricingRow(i.lineType(), i.unitPrice(), i.discountPct(), i.netUnitPrice()))
+            .map(i -> new PricingRow(i.lineType(), i.unitPrice(), i.discountPct(), i.netUnitPrice(), i.priceMode()))
             .toList());
     }
 
@@ -405,17 +422,24 @@ public final class DealQuotationRenderAdapter {
     public static boolean hasSpecialPricingForNewItems(String priceMode,
                                                         List<DealQuotationRepository.NewItem> items) {
         return hasSpecialPricingCore(priceMode, items.stream()
-            .map(i -> new PricingRow(i.lineType(), i.unitPrice(), i.discountPct(), i.netUnitPrice()))
+            .map(i -> new PricingRow(i.lineType(), i.unitPrice(), i.discountPct(), i.netUnitPrice(), i.priceMode()))
             .toList());
     }
 
+    /** {@code priceMode} is the ROW's own stored mode (V204) — non-null only on a tile row of a
+     * MIXED document. */
     private record PricingRow(String lineType, BigDecimal unitPrice, BigDecimal discountPct,
-                              BigDecimal netUnitPrice) {}
+                              BigDecimal netUnitPrice, String priceMode) {}
 
-    private static boolean hasSpecialPricingCore(String priceMode, List<PricingRow> rows) {
-        boolean specialSqm = WastageCalculator.PRICE_MODE_SPECIAL_SQM.equals(priceMode);
-        boolean directNet = WastageCalculator.PRICE_MODE_DIRECT_NET.equals(priceMode);
+    private static boolean hasSpecialPricingCore(String documentPriceMode, List<PricingRow> rows) {
         for (PricingRow row : rows) {
+            // V204: rules (a)–(c) are about how a TILE row is priced, so each is asked of the mode
+            // THAT ROW is priced in — the document's, or on a MIXED document the row's own. For a
+            // single-mode document this is the same value on every pass, i.e. exactly the two
+            // booleans this loop used to compute once above it.
+            String priceMode = WastageCalculator.rowPriceMode(documentPriceMode, row.priceMode());
+            boolean specialSqm = WastageCalculator.PRICE_MODE_SPECIAL_SQM.equals(priceMode);
+            boolean directNet = WastageCalculator.PRICE_MODE_DIRECT_NET.equals(priceMode);
             if (WastageCalculator.LINE_TYPE_ADJUSTMENT.equals(row.lineType())) {
                 return true; // (e)
             }

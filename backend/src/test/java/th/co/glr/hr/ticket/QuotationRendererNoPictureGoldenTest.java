@@ -79,6 +79,25 @@ import th.co.glr.hr.ticket.QuotationRenderModel.Signatories;
  * of the five fixtures. None of these fixtures' phoneLine text itself changed (all five keep the
  * pre-existing "โทร. 02-000-0000" — no address in any of them), which is exactly why this is pure
  * style-table churn and not a content regression.
+ *
+ * <p><b>Re-baselined 2026-10-06, BY HAND, for two deliberate changes to the printed form</b> (sales
+ * feedback Admin 6 and Admin 1d; owner rulings the same day):
+ * <ol>
+ *   <li>the Thai document prints its ISO form number — the tag cell (column I of the print area's
+ *       last row) turns from {@code BLANK} into {@code STRING "F-SM-002 (03)"} in the four Thai
+ *       fixtures; {@code english} is untouched (it always printed {@code F-SM-008 (01)});</li>
+ *   <li>the ฝ่าย / Dept. line left BOTH forms — in all five fixtures row 2's H cell (the label)
+ *       turns {@code BLANK} and its I cell (the value, "P003" here) turns into the empty string.</li>
+ * </ol>
+ * By hand, because this file cannot be regenerated where those changes were made: that PC has no
+ * licensed Thai fonts (column unit 110 twips, not these goldens' 102), so — exactly like CI — the
+ * comparison below skips there, and {@code -Dquotation.golden.update=true} would have rewritten
+ * all five files under the wrong geometry. Neither change depends on geometry: a before/after
+ * canonical dump on that machine differed in exactly those lines per fixture and nothing else (no
+ * row height, break, print area, merge or style index moved), and the same lines were edited here.
+ * ⚠️ That makes these five files <b>unverified by an actual run</b> until someone executes this
+ * class on a machine with the fonts — and the byte hashes in the second test are knowingly stale
+ * (see the note above them).
  */
 class QuotationRendererNoPictureGoldenTest {
     private static final String UPDATE_PROPERTY = "quotation.golden.update";
@@ -191,6 +210,15 @@ class QuotationRendererNoPictureGoldenTest {
         // names/dates rows and the picture anchor shift by a few pixels/characters (the
         // runStart/runEnd values they target moved because the underscore run's own sizing rule
         // changed) but stay centred. legacy-shape (no signature block) is unchanged.
+        // ⚠️ STALE SINCE 2026-10-06 — ALL FIVE NEED RE-PINNING ON A MACHINE WITH THE LICENSED FONTS.
+        // The two changes described in this class's Javadoc ("Re-baselined 2026-10-06": the Thai
+        // ISO form number, and the ฝ่าย / Dept. line removed from both forms) deliberately change
+        // every fixture's bytes. They were made on a PC where this test skips at the assumeTrue
+        // below (no licensed Thai fonts), so the new hashes could not be derived there, and
+        // inventing them was not an option. On a fonts machine this test therefore FAILS for all
+        // five fixtures until it is run there and each "but was" value is copied in below — that
+        // failure is the missing re-pin, not a regression. (The .txt dumps above were updated; if
+        // the dump test passes there while this one fails, that is the expected picture.)
         java.util.Map<String, String> preFeatureSha256 = java.util.Map.of(
             "single-page", "a98c381f1d6a66a357a1f5ce79e720848efc2eaa3f858f6bf311b83d80cbcd70",
             "one-page-scaled", "72e222df3ec7ecd1e4c1223f8598ad3c030ff53627e864a0618595eedf9204f9",

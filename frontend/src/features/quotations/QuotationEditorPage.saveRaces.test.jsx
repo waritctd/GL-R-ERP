@@ -153,16 +153,20 @@ describe('lost edit on save (#932 defect 1)', () => {
   // only edits `customerNotes`, a HEADER field #mergeServerItemFields never touches -- it could
   // never have caught this. This one edits an ITEM field instead, and affects DEAL_DIRECT too
   // (there is nothing PRICING_REQUEST-specific about the bug: any row, any origin).
+  //
+  // Since sales feedback #1 (2026-10-06, V201) the item field a Thai rep types a price into is
+  // `listPriceSqm` (ราคา/ตร.ม. รวม VAT), so that is the field this races now — and the server echo
+  // carries BOTH the stale typed figure and the per-แผ่น price derived from it. Neither may land.
   it('MAJOR-2: an item edit typed while a save is in flight is not clobbered by the server echo (M5 merge)', async () => {
     renderEditor('/quotations/5');
-    const priceInput = await screen.findByLabelText(/^ราคา\/หน่วย/);
+    const priceInput = await screen.findByLabelText(/^ราคา\/ตร\.ม\./);
 
     const first = deferred();
     api.dealQuotations.update.mockImplementationOnce(() => first.promise);
 
     fireEvent.change(priceInput, { target: { value: '900' } });
     await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalledTimes(1), { timeout: 4000 });
-    expect(api.dealQuotations.update.mock.calls[0][1].items[0].unitPrice).toBe(900);
+    expect(api.dealQuotations.update.mock.calls[0][1].items[0]).toMatchObject({ listPriceSqm: 900, unitPrice: null });
 
     // A second edit lands while PUT #1 (built from 900) is still on the wire.
     fireEvent.change(priceInput, { target: { value: '1234' } });
@@ -171,7 +175,9 @@ describe('lost edit on save (#932 defect 1)', () => {
     // PUT #1's server echo resolves AFTER the newer edit — it reflects what was SENT (900), not
     // what is now on screen.
     first.resolve({
-      quotation: draft({ items: [{ ...TILE_ITEM, unitPrice: 900, netUnitPrice: 900, lineAmount: 51300 }] }),
+      quotation: draft({
+        items: [{ ...TILE_ITEM, listPriceSqm: 900, unitPrice: 302.56, netUnitPrice: 302.56, lineAmount: 17245.92 }],
+      }),
     });
 
     // The merge must never clobber a field the rep is actively editing, regardless of timing.
@@ -180,7 +186,7 @@ describe('lost edit on save (#932 defect 1)', () => {
     // dirty must have stayed true, so the next debounce tick fires a SECOND PUT carrying 1234 —
     // the bug's OTHER symptom was this PUT silently reverting to send the stale 900 instead.
     await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalledTimes(2), { timeout: 4000 });
-    expect(api.dealQuotations.update.mock.calls[1][1].items[0].unitPrice).toBe(1234);
+    expect(api.dealQuotations.update.mock.calls[1][1].items[0]).toMatchObject({ listPriceSqm: 1234, unitPrice: null });
   });
 
   it('...variant through submit: ส่งขออนุมัติ still saves the newer edit before submitting', async () => {

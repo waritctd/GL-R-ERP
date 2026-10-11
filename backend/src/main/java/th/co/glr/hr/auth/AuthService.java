@@ -56,7 +56,10 @@ public class AuthService {
         if (httpRequest.getRequestedSessionId() != null) {
             httpRequest.changeSessionId();
         }
-        session.setAttribute(SessionContext.SESSION_USER_KEY, principal);
+        // signIn, not a bare setAttribute: it also writes the sign-in record that makes
+        // SessionSecurityFilter re-check this session against the employee row on every request
+        // from now on (owner ruling 2026-10-06 — see SessionAccountResolver).
+        SessionContext.signIn(session, principal);
         recordLogin(principal);
         return new AuthResponse(principal, employees.isAdmin(principal.id()), employees.canCreateQuotation(principal.id()),
             employees.canIssueBillingNote(principal.id()));
@@ -129,7 +132,7 @@ public class AuthService {
         employees.updatePassword(employee.employeeId(), passwordEncoder.encode(request.newPassword()));
 
         UserPrincipal refreshed = toPrincipal(employee.employeeId(), employee, false);
-        session.setAttribute(SessionContext.SESSION_USER_KEY, refreshed);
+        SessionContext.replacePrincipal(session, refreshed);
         // Never the password, old or new, and no before/after payload: the only fact worth keeping
         // is that this employee set their own password at this moment. Until now the sole trace was
         // must_change_password flipping to false, which fires once per person and never again.
@@ -146,19 +149,11 @@ public class AuthService {
         return toPrincipal(employee.employeeId(), employee, employee.mustChangePassword());
     }
 
+    /** {@code id} has only ever been {@code employee.employeeId()} at both call sites; the mapping
+     * itself lives in {@link SessionAccountResolver#principalOf} so that what a login hands out
+     * and what {@link SessionSecurityFilter} refreshes an open session to are one function. */
     private UserPrincipal toPrincipal(long id, EmployeeLoginRecord employee, boolean mustChangePassword) {
-        return new UserPrincipal(
-            id,
-            employee.email(),
-            employee.name(),
-            DivisionAccessPolicy.roleFor(employee),
-            employee.employeeId(),
-            employee.active(),
-            employee.createdAt(),
-            mustChangePassword,
-            employee.divisionId(),
-            DivisionAccessPolicy.isManager(employee)
-        );
+        return SessionAccountResolver.principalOf(employee, mustChangePassword);
     }
 
     private boolean passwordMatches(String rawPassword, EmployeeLoginRecord employee) {

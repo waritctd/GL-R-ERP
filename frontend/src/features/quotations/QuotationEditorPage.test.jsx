@@ -126,14 +126,17 @@ describe('QuotationEditorPage item calc wiring', () => {
     renderEditor('/quotations/new?ticket=18');
 
     fireEvent.click(await screen.findByRole('button', { name: /เพิ่มรายการ/ }));
-    const priceInput = screen.getByLabelText(/^ราคา\/หน่วย/);
+    // A Thai tile price is typed per ตร.ม. (sales feedback #1, 2026-10-06), and a per-ตร.ม. price
+    // is only previewed on a row with an area per piece — so that goes in first.
+    fireEvent.change(screen.getByLabelText(/^แผ่น\/ตร\.ม\./), { target: { value: '1.39' } });
+    const priceInput = screen.getByLabelText(/^ราคา\/ตร\.ม\./);
     fireEvent.change(priceInput, { target: { value: '350' } });
 
     // Not called synchronously -- the whole point of the debounce.
     expect(api.dealQuotations.calculateLine).not.toHaveBeenCalled();
 
     await waitFor(() => expect(api.dealQuotations.calculateLine).toHaveBeenCalledTimes(1), { timeout: 1000 });
-    expect(api.dealQuotations.calculateLine).toHaveBeenCalledWith(expect.objectContaining({ unitPrice: 350 }), 'TH');
+    expect(api.dealQuotations.calculateLine).toHaveBeenCalledWith(expect.objectContaining({ listPriceSqm: 350 }), 'TH');
 
     expect(await screen.findByText('(พื้นที่ 36 ตร.ม. รวม 100 แผ่น)')).not.toBeNull();
     // getAllByText, not getByText: with only one item, its own line amount and the M6
@@ -147,14 +150,15 @@ describe('QuotationEditorPage item calc wiring', () => {
     renderEditor('/quotations/new?ticket=18');
 
     fireEvent.click(await screen.findByRole('button', { name: /เพิ่มรายการ/ }));
-    const priceInput = screen.getByLabelText(/^ราคา\/หน่วย/);
+    fireEvent.change(screen.getByLabelText(/^แผ่น\/ตร\.ม\./), { target: { value: '1.39' } });
+    const priceInput = screen.getByLabelText(/^ราคา\/ตร\.ม\./);
     fireEvent.change(priceInput, { target: { value: '3' } });
     fireEvent.change(priceInput, { target: { value: '35' } });
     fireEvent.change(priceInput, { target: { value: '350' } });
 
     await waitFor(() => expect(api.dealQuotations.calculateLine).toHaveBeenCalledTimes(1), { timeout: 1000 });
     // The LAST value wins -- an intermediate keystroke's debounced call was cancelled, not queued.
-    expect(api.dealQuotations.calculateLine).toHaveBeenCalledWith(expect.objectContaining({ unitPrice: 350 }), 'TH');
+    expect(api.dealQuotations.calculateLine).toHaveBeenCalledWith(expect.objectContaining({ listPriceSqm: 350 }), 'TH');
   });
 
   it('never calls calculate-line before any item row exists', async () => {
@@ -203,28 +207,32 @@ describe('QuotationEditorPage item calc wiring', () => {
 
     renderEditor('/quotations/new?ticket=18');
     fireEvent.click(await screen.findByRole('button', { name: /เพิ่มรายการ/ }));
-    const priceInput = screen.getByLabelText(/^ราคา\/หน่วย/);
+    fireEvent.change(screen.getByLabelText(/^แผ่น\/ตร\.ม\./), { target: { value: '1.39' } });
+    const priceInput = screen.getByLabelText(/^ราคา\/ตร\.ม\./);
 
     fireEvent.change(priceInput, { target: { value: '100' } });
     await waitFor(() => expect(api.dealQuotations.calculateLine).toHaveBeenCalledTimes(1), { timeout: 1000 });
-    expect(api.dealQuotations.calculateLine).toHaveBeenNthCalledWith(1, expect.objectContaining({ unitPrice: 100 }), 'TH');
+    expect(api.dealQuotations.calculateLine).toHaveBeenNthCalledWith(1, expect.objectContaining({ listPriceSqm: 100 }), 'TH');
 
     fireEvent.change(priceInput, { target: { value: '200' } });
     await waitFor(() => expect(api.dealQuotations.calculateLine).toHaveBeenCalledTimes(2), { timeout: 1000 });
-    expect(api.dealQuotations.calculateLine).toHaveBeenNthCalledWith(2, expect.objectContaining({ unitPrice: 200 }), 'TH');
+    expect(api.dealQuotations.calculateLine).toHaveBeenNthCalledWith(2, expect.objectContaining({ listPriceSqm: 200 }), 'TH');
 
     // The NEWER request settles first (a faster response for the latest edit).
-    resolveSecond({ item: { lineAmount: 2000, calculationLine: 'newer' } });
+    resolveSecond({ item: { lineAmount: 2000, calculationLine: 'newer', unitPrice: 134.47 } });
     expect(await screen.findByText('newer')).not.toBeNull();
 
     // The OLDER request settles LAST -- it must be discarded outright, including its own
     // (irrelevant) echoed input fields, not merged over what the newer response already set.
-    resolveFirst({ item: { lineAmount: 1000, calculationLine: 'older', unitPrice: 100 } });
+    resolveFirst({ item: { lineAmount: 1000, calculationLine: 'older', unitPrice: 67.24, listPriceSqm: 100 } });
     await new Promise((resolve) => { setTimeout(resolve, 50); }); // let any wrongly-queued update flush
 
     expect(screen.getByText('newer')).not.toBeNull();
     expect(screen.queryByText('older')).toBeNull();
     expect(priceInput.value).toBe('200');
+    // …and that includes the one input-named field a response may now write (V201): the per-แผ่น
+    // figure under the box is the NEWER request's, not the stale one's.
+    expect(screen.getByTestId('list-per-piece-0').textContent).toBe('= ฿134.47/แผ่น (ก่อน VAT)');
   });
 
   // Opus review fix (2026-09-14): โครงการ became an editable card field in the same change that
@@ -347,7 +355,8 @@ async function fillCompleteQuotationItem() {
   // required to be the exact reciprocal of any other fixture's figure.
   fireEvent.change(screen.getByLabelText(/^แผ่น\/ตร\.ม\./), { target: { value: '1.39' } });
   fireEvent.change(screen.getByLabelText(/^แผ่น\/กล่อง/), { target: { value: '3' } });
-  fireEvent.change(screen.getByLabelText(/^ราคา\/หน่วย/), { target: { value: '850' } });
+  // Per ตร.ม. including VAT on a Thai document (sales feedback #1, 2026-10-06).
+  fireEvent.change(screen.getByLabelText(/^ราคา\/ตร\.ม\./), { target: { value: '850' } });
   fireEvent.change(screen.getByLabelText(/^จำนวน/), { target: { value: '36' } });
 }
 
@@ -422,7 +431,7 @@ describe('QuotationEditorPage client-side validation (#M4, item completeness own
     await screen.findByRole('button', { name: /เพิ่มรายการ/ });
 
     fireEvent.click(screen.getByRole('button', { name: /เพิ่มรายการ/ }));
-    fireEvent.change(screen.getByLabelText(/^ราคา\/หน่วย/), { target: { value: '100' } });
+    fireEvent.change(screen.getByLabelText(/^ราคา\/ตร\.ม\./), { target: { value: '100' } });
     fireEvent.change(screen.getByLabelText('หมายเหตุรายการ'), { target: { value: 'สินค้าตามตัวอย่างที่ลูกค้าส่งมา' } });
 
     expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(true);
@@ -680,7 +689,8 @@ describe('QuotationEditorPage live provisional totals (#M6)', () => {
     expect(screen.queryByText('฿1,070.00')).toBeNull();
 
     api.dealQuotations.calculateLine.mockResolvedValue({ item: { lineAmount: 500, calculationLine: 'x' } });
-    fireEvent.change(screen.getByLabelText(/^ราคา\/หน่วย/), { target: { value: '500' } });
+    fireEvent.change(screen.getByLabelText(/^แผ่น\/ตร\.ม\./), { target: { value: '1.39' } });
+    fireEvent.change(screen.getByLabelText(/^ราคา\/ตร\.ม\./), { target: { value: '500' } });
     await waitFor(() => expect(api.dealQuotations.calculateLine).toHaveBeenCalled(), { timeout: 1000 });
 
     // 500 subtotal -> 35 VAT -> 535 grand, computed client-side from the one item's lineAmount.
@@ -833,8 +843,10 @@ describe('QuotationEditorPage inline deal creation', () => {
 
     // The ticket envelope's id lives at `.summary.id` -- the SAME unwrap this test suite's own
     // #M2 fixtures were fixed to use above, not `.ticket.id`.
+    // The price travels as it was typed — per ตร.ม. including VAT (sales feedback #1, 2026-10-06) —
+    // with no per-แผ่น price beside it: the server derives that one.
     await waitFor(() => expect(api.dealQuotations.create).toHaveBeenCalledWith(42, expect.objectContaining({
-      items: expect.arrayContaining([expect.objectContaining({ unitPrice: 850, model: 'Trilogy' })]),
+      items: expect.arrayContaining([expect.objectContaining({ listPriceSqm: 850, unitPrice: null, model: 'Trilogy' })]),
     })));
 
     expect(await screen.findByText('navigated-to-99')).not.toBeNull();
@@ -856,7 +868,7 @@ describe('QuotationEditorPage inline deal creation', () => {
     // The form is untouched -- the selected customer chip and the item's typed values are still
     // exactly what the rep entered, so they don't have to redo any of it before retrying.
     expect(screen.getAllByText(testCustomer.name).length).toBeGreaterThan(0);
-    expect(screen.getByLabelText(/^ราคา\/หน่วย/).value).toBe('850');
+    expect(screen.getByLabelText(/^ราคา\/ตร\.ม\./).value).toBe('850');
     expect(screen.getByLabelText(/^รุ่น \/ ค้นหาแคตตาล็อก/).value).toBe('Trilogy');
   });
 
@@ -1062,6 +1074,132 @@ describe('QuotationEditorPage ตำแหน่งติดตั้ง groups 
     expect(screen.getAllByText('1 รายการ')).toHaveLength(2);
   });
 
+  // Sales feedback 2026-10-06 (แจ้งปัญหาการใช้งาน เสนอราคา, Sales #3): "เวลาพิมพ์เสร็จจะพิมพ์
+  // รายการต่อไป ต้องคอยเลื่อนกลับขึ้นไปด้านบน" — every "เพิ่ม…" action used to sit ABOVE the rows
+  // it appends to, so a long quotation meant scrolling up to add and back down to type. They now
+  // sit at the END of the list they append to, and adding takes the rep straight to what was added.
+  describe('add actions at the bottom of what they append to (sales feedback #3, 2026-10-06)', () => {
+    // `b` comes after `a` in document order — i.e. renders below it in this single-column list.
+    const follows = (a, b) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    const addTileButtons = () => screen.getAllByRole('button', { name: /เพิ่มรายการในตำแหน่งนี้/ });
+    const addPlainButtons = () => screen.getAllByRole('button', { name: 'เพิ่มสินค้าหรือบริการอื่นในตำแหน่งนี้' });
+
+    let scrollIntoView;
+    let originalScrollIntoView;
+    beforeEach(() => {
+      // jsdom does not implement scrollIntoView at all; a spy on the prototype is what lets these
+      // tests see WHICH element the editor scrolled to (`mock.contexts`).
+      originalScrollIntoView = Element.prototype.scrollIntoView;
+      scrollIntoView = vi.fn();
+      Element.prototype.scrollIntoView = scrollIntoView;
+    });
+    afterEach(() => {
+      Element.prototype.scrollIntoView = originalScrollIntoView;
+    });
+
+    async function twoGroupDraft() {
+      draftWithItems([groupedItem(0, 'ชั้น 1', 'Trilogy'), groupedItem(1, 'ชั้น 2', 'Frame')]);
+      renderEditor('/quotations/5');
+      await waitFor(() => expect(screen.getByLabelText(/^ตำแหน่งติดตั้งที่ 2/).value).toBe('ชั้น 2'));
+    }
+
+    it('puts each position\'s two add buttons below that position\'s own items, inside its box', async () => {
+      await twoGroupDraft();
+      const firstLabel = document.getElementById('group-label-0');
+      const secondLabel = document.getElementById('group-label-1');
+
+      for (const buttons of [addTileButtons(), addPlainButtons()]) {
+        expect(buttons).toHaveLength(2);
+        // Position 1's button: under its item (flat row 0), still above position 2 — the bottom
+        // of ITS box, not the bottom of the whole list.
+        expect(follows(document.getElementById('notes-0'), buttons[0])).toBe(true);
+        expect(follows(buttons[0], secondLabel)).toBe(true);
+        expect(buttons[0].closest('section')).toBe(firstLabel.closest('section'));
+        // Position 2's button: under its own item (flat row 1).
+        expect(follows(document.getElementById('notes-1'), buttons[1])).toBe(true);
+        expect(buttons[1].closest('section')).toBe(secondLabel.closest('section'));
+      }
+    });
+
+    it('an empty position still offers its add buttons, under the "no items" warning', async () => {
+      draftWithItems([groupedItem(0, 'ชั้น 1', 'Trilogy')]);
+      renderEditor('/quotations/5');
+      await waitFor(() => expect(screen.getByLabelText(/^ตำแหน่งติดตั้งที่ 1/).value).toBe('ชั้น 1'));
+      fireEvent.click(screen.getByRole('button', { name: /เพิ่มตำแหน่ง/ }));
+
+      const warning = screen.getByText(/^ยังไม่มีรายการในตำแหน่งนี้/);
+      const emptySection = document.getElementById('group-label-1').closest('section');
+      expect(warning.closest('section')).toBe(emptySection);
+      expect(addTileButtons()[1].closest('section')).toBe(emptySection);
+      expect(follows(warning, addTileButtons()[1])).toBe(true);
+      expect(follows(warning, addPlainButtons()[1])).toBe(true);
+    });
+
+    it('offers "เพิ่มตำแหน่ง" once — after the last position, before ส่วนลดพิเศษ', async () => {
+      await twoGroupDraft();
+      // ONE button: the header copy is gone rather than duplicated, so there is a single place to
+      // look for it and it is always next to where the new position will appear.
+      const addGroupButtons = screen.getAllByRole('button', { name: /เพิ่มตำแหน่ง/ });
+      expect(addGroupButtons).toHaveLength(1);
+      expect(follows(addTileButtons()[1], addGroupButtons[0])).toBe(true);
+      expect(follows(addPlainButtons()[1], addGroupButtons[0])).toBe(true);
+      expect(follows(addGroupButtons[0], screen.getByRole('button', { name: /เพิ่มส่วนลดพิเศษ/ }))).toBe(true);
+      // …and it is NOT inside any one position's box: it adds a sibling of them.
+      expect(addGroupButtons[0].closest('section')).not.toBe(document.getElementById('group-label-1').closest('section'));
+    });
+
+    it('adding a tile row focuses and scrolls to THAT row\'s รุ่น field, wherever it landed', async () => {
+      await twoGroupDraft();
+      // Into position 1 — the new row lands at flat index 1, in the MIDDLE of the list (position
+      // 2's row moves to index 2). Focusing "the last row" would be the wrong row here.
+      fireEvent.click(addTileButtons()[0]);
+
+      await waitFor(() => expect(document.activeElement?.id).toBe('model-1'));
+      expect(document.getElementById('model-1').value).toBe('');
+      expect(document.getElementById('model-2').value).toBe('Frame');
+      expect(scrollIntoView.mock.contexts).toContain(document.getElementById('model-1'));
+    });
+
+    it('adding สินค้า/บริการอื่น focuses and scrolls to the new row\'s รายละเอียด field', async () => {
+      await twoGroupDraft();
+      fireEvent.click(addPlainButtons()[0]);
+
+      await waitFor(() => expect(document.activeElement?.id).toBe('plain-desc-1'));
+      expect(scrollIntoView.mock.contexts).toContain(document.getElementById('plain-desc-1'));
+    });
+
+    it('adding a position focuses and scrolls to its name field', async () => {
+      await twoGroupDraft();
+      fireEvent.click(screen.getByRole('button', { name: /เพิ่มตำแหน่ง/ }));
+
+      await waitFor(() => expect(document.activeElement?.id).toBe('group-label-2'));
+      expect(scrollIntoView.mock.contexts).toContain(document.getElementById('group-label-2'));
+    });
+
+    // The button is now at the BOTTOM, so the unnamed position that blocks it can be a full screen
+    // above. A toast alone ("กรุณาตั้งชื่อตำแหน่งติดตั้งที่ยังว่างก่อน") would leave the rep hunting
+    // for it; take them to the one field that fixes it.
+    it('a refused "เพิ่มตำแหน่ง" takes the rep to the unnamed position instead of adding one', async () => {
+      draftWithItems([groupedItem(0, 'ชั้น 1', 'Trilogy'), groupedItem(1, null, 'Frame')]);
+      renderEditor('/quotations/5');
+      await waitFor(() => expect(screen.getByLabelText(/^ตำแหน่งติดตั้งที่ 1/).value).toBe('ชั้น 1'));
+      expect(screen.getByLabelText(/^ตำแหน่งติดตั้งที่ 2/).value).toBe('');
+
+      fireEvent.click(screen.getByRole('button', { name: /เพิ่มตำแหน่ง/ }));
+
+      await waitFor(() => expect(document.activeElement?.id).toBe('group-label-1'));
+      expect(screen.queryByLabelText(/^ตำแหน่งติดตั้งที่ 3/)).toBeNull();
+      expect(scrollIntoView.mock.contexts).toContain(document.getElementById('group-label-1'));
+    });
+
+    it('opening a draft does not move focus or scroll on its own', async () => {
+      await twoGroupDraft();
+      // Only an explicit add may take the viewport; loading rows must not.
+      expect(scrollIntoView).not.toHaveBeenCalled();
+      expect(document.activeElement).toBe(document.body);
+    });
+  });
+
   it('moves an item into another group and saves it under that group\'s label, in group order', async () => {
     draftWithItems([groupedItem(0, 'ชั้น 1', 'Trilogy'), groupedItem(1, 'ชั้น 2', 'Frame')]);
     api.dealQuotations.update.mockResolvedValue({ quotation: baseQuotation({ contactId: 6 }) });
@@ -1129,6 +1267,11 @@ describe('QuotationEditorPage ตำแหน่งติดตั้ง groups 
 // contact; they now prove the OPPOSITE. ผู้สั่งซื้อ is a single optional free-text input writing
 // `terms.orderedByName`, `contactId` is always sent as `null`, and nothing about ผู้สั่งซื้อ can
 // ever block บันทึกร่าง/ส่งขออนุมัติ any more.
+//
+// Since 2026-10-06 the editor LABELS that field ผู้ติดต่อ (owner: "the field ผู้สั่งซื้อ make it name
+// ผู้ติดต่อ instead but the pdf still render as ผู้สั่งซื้อ") — so these tests find it by that label.
+// Nothing else about it moved: same input, same `orderedByName`, same slot on the document. The
+// rename itself is pinned in the block after this one.
 describe('QuotationEditorPage ผู้สั่งซื้อ (owner-directed reversal of F2/V167, 2026-09-26)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -1141,7 +1284,7 @@ describe('QuotationEditorPage ผู้สั่งซื้อ (owner-directed 
     api.dealQuotations.create.mockResolvedValue({ quotation: { id: 9 } });
     renderEditor('/quotations/new?ticket=18');
 
-    const field = await screen.findByLabelText(/^ผู้สั่งซื้อ/);
+    const field = await screen.findByLabelText(/^ผู้ติดต่อ/);
     expect(field.tagName).toBe('INPUT'); // not the old <select> contact-picker
     expect(field.value).toBe(''); // never auto-fills from the deal's own ticket contact any more
 
@@ -1160,7 +1303,7 @@ describe('QuotationEditorPage ผู้สั่งซื้อ (owner-directed 
     api.dealQuotations.create.mockResolvedValue({ quotation: { id: 9 } });
     renderEditor('/quotations/new?ticket=18');
 
-    const field = await screen.findByLabelText(/^ผู้สั่งซื้อ/);
+    const field = await screen.findByLabelText(/^ผู้ติดต่อ/);
     fireEvent.change(field, { target: { value: 'คุณวิชัย มั่นคง' } });
 
     fireEvent.click(screen.getByRole('button', { name: /เพิ่มรายการในตำแหน่งนี้/ }));
@@ -1199,7 +1342,7 @@ describe('QuotationEditorPage ผู้สั่งซื้อ (owner-directed 
     });
     renderEditor('/quotations/5');
 
-    const field = await screen.findByLabelText(/^ผู้สั่งซื้อ/);
+    const field = await screen.findByLabelText(/^ผู้ติดต่อ/);
     await waitFor(() => expect(field.value).toBe('คุณพิมพ์ใจ บุญมาก'));
   });
 
@@ -1211,8 +1354,299 @@ describe('QuotationEditorPage ผู้สั่งซื้อ (owner-directed 
     // DealCustomerCard itself no longer renders a ผู้สั่งซื้อ control at all -- the field lives
     // on the editor, right next to the card, same as the ticket/existing-draft path.
     await screen.findByLabelText(/^ลูกค้า/);
-    const field = screen.getByLabelText(/^ผู้สั่งซื้อ/);
+    const field = screen.getByLabelText(/^ผู้ติดต่อ/);
     expect(field.tagName).toBe('INPUT');
+  });
+});
+
+// Owner, 2026-10-06: "the field ผู้สั่งซื้อ make it name ผู้ติดต่อ instead but the pdf still render as
+// ผู้สั่งซื้อ". A change of LABEL on the editor's field, and nothing else — sales know this person as
+// the one they are in contact with, while the form's fourth signature slot keeps its own printed
+// heading. So two things are pinned here, and the second is the one that keeps the first honest:
+// the field answers to ผู้ติดต่อ (and no longer to ผู้สั่งซื้อ), and the line under it says which
+// slot of the document the name lands in — otherwise a rep who types a name under "ผู้ติดต่อ" has
+// no way to know it is the name the customer signs over.
+//
+// What the DOCUMENT prints is not this file's to prove: QuotationDocumentView.test.jsx pins the
+// on-screen document's heading, and DealQuotationEnglishFormTest / QuotationHtmlDocumentTest pin
+// the printed form's (Java; no backend line changed for this).
+describe('QuotationEditorPage — the ผู้สั่งซื้อ field is labelled ผู้ติดต่อ (owner, 2026-10-06)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.customers.contacts.mockResolvedValue({ contacts: CONTACT_OPTIONS });
+    api.dealQuotations.calculateLine.mockResolvedValue({ item: {} });
+  });
+
+  /** The text of whatever the control names as its description (FormField's hint line). */
+  const hintOf = (field) => (field.getAttribute('aria-describedby') ?? '')
+    .split(/\s+/).filter(Boolean)
+    .map((id) => document.getElementById(id)?.textContent ?? '')
+    .join(' ');
+
+  it('on a quotation for an existing deal the field answers to ผู้ติดต่อ, and to ผู้สั่งซื้อ no longer', async () => {
+    api.tickets.get.mockResolvedValue(ticketFixture());
+    renderEditor('/quotations/new?ticket=18');
+
+    const field = await screen.findByLabelText(/^ผู้ติดต่อ/);
+    expect(field.id).toBe('orderedByNameCard');
+    expect(screen.queryByLabelText(/^ผู้สั่งซื้อ/)).toBeNull();
+  });
+
+  it('the same on a quotation that creates its deal inline', async () => {
+    renderEditor('/quotations/new');
+    fireEvent.click(await screen.findByRole('button', { name: 'สร้างดีลใหม่' }));
+
+    await screen.findByLabelText(/^ลูกค้า/);
+    expect(screen.getByLabelText(/^ผู้ติดต่อ/).id).toBe('orderedByNameInline');
+    expect(screen.queryByLabelText(/^ผู้สั่งซื้อ/)).toBeNull();
+  });
+
+  // The field's name and the document's heading now differ, so the hint has to carry the link.
+  it('says, under the field, that the name is printed in the document\'s ผู้สั่งซื้อ signature slot', async () => {
+    api.tickets.get.mockResolvedValue(ticketFixture());
+    renderEditor('/quotations/new?ticket=18');
+
+    const hint = hintOf(await screen.findByLabelText(/^ผู้ติดต่อ/));
+    expect(hint).toContain('ช่องลงนาม');
+    expect(hint).toContain('ผู้สั่งซื้อ');
+    // …and still says what leaving it blank does — the part the old hint already had right.
+    expect(hint).toContain('เส้นประ');
+  });
+
+  it('the inline-create field carries the same hint', async () => {
+    renderEditor('/quotations/new');
+    fireEvent.click(await screen.findByRole('button', { name: 'สร้างดีลใหม่' }));
+
+    await screen.findByLabelText(/^ลูกค้า/);
+    const hint = hintOf(screen.getByLabelText(/^ผู้ติดต่อ/));
+    expect(hint).toContain('ผู้สั่งซื้อ');
+    expect(hint).toContain('เส้นประ');
+  });
+
+  // The rename must not have re-pointed the field: what is typed under ผู้ติดต่อ is still the
+  // document's `orderedByName`, and still never a contact id.
+  it('what is typed under ผู้ติดต่อ is still saved as orderedByName', async () => {
+    api.tickets.get.mockResolvedValue(ticketFixture());
+    api.dealQuotations.create.mockResolvedValue({ quotation: { id: 9 } });
+    renderEditor('/quotations/new?ticket=18');
+
+    fireEvent.change(await screen.findByLabelText(/^ผู้ติดต่อ/), { target: { value: 'คุณวิชัย มั่นคง' } });
+    fireEvent.click(screen.getByRole('button', { name: /เพิ่มรายการในตำแหน่งนี้/ }));
+    await fillCompleteQuotationItem();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+
+    await waitFor(() => expect(api.dealQuotations.create).toHaveBeenCalledTimes(1));
+    const sent = api.dealQuotations.create.mock.calls[0][1];
+    expect(sent.orderedByName).toBe('คุณวิชัย มั่นคง');
+    expect(sent.contactId).toBeNull();
+  });
+});
+
+// Sales feedback, Admin 1d (แจ้งปัญหาการใช้งาน เสนอราคา) — the ฝ่าย box on the quotation: "ไม่มีดีกว่า",
+// reps filled it wrongly and some typed their own name into it. Owner, 2026-10-06: "remove ฝ่าย
+// field completely". So the editor has no such field on either entry path, and — the part that is
+// easy to get half right — a value an OLD draft still carries is neither shown nor quietly sent
+// back: the editor says `deptCode: null` on every save, which is what clears it. (The printed
+// form losing its ฝ่าย line is the renderer's: QuotationRendererTest.)
+describe('QuotationEditorPage — ฝ่าย is gone (sales feedback Admin 1d, owner 2026-10-06)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.customers.contacts.mockResolvedValue({ contacts: CONTACT_OPTIONS });
+    api.tickets.get.mockResolvedValue(ticketFixture());
+    api.dealQuotations.calculateLine.mockResolvedValue({ item: {} });
+  });
+
+  it('a quotation for an existing deal has no ฝ่าย field — and still has หน่วยงาน / ผู้ออกแบบ', async () => {
+    renderEditor('/quotations/new?ticket=18');
+
+    await screen.findByLabelText(/^ผู้ติดต่อ/);
+    expect(screen.queryByLabelText('ฝ่าย')).toBeNull();
+    expect(document.getElementById('quotation-dept-code')).toBeNull();
+    // Its neighbour in the same card is NOT part of this: sales still pick the designer here.
+    expect(screen.getByLabelText(/^หน่วยงาน \/ ผู้ออกแบบ/)).not.toBeNull();
+  });
+
+  it('nor does one that creates its deal inline', async () => {
+    renderEditor('/quotations/new');
+    fireEvent.click(await screen.findByRole('button', { name: 'สร้างดีลใหม่' }));
+
+    await screen.findByLabelText(/^ผู้ติดต่อ/);
+    expect(screen.queryByLabelText('ฝ่าย')).toBeNull();
+    expect(document.getElementById('inline-quotation-dept-code')).toBeNull();
+    expect(screen.getByLabelText(/^หน่วยงาน \/ ผู้ออกแบบ/)).not.toBeNull();
+  });
+
+  it('a new quotation is saved with deptCode: null', async () => {
+    api.dealQuotations.create.mockResolvedValue({ quotation: { id: 9 } });
+    renderEditor('/quotations/new?ticket=18');
+
+    fireEvent.click(await screen.findByRole('button', { name: /เพิ่มรายการในตำแหน่งนี้/ }));
+    await fillCompleteQuotationItem();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+
+    await waitFor(() => expect(api.dealQuotations.create).toHaveBeenCalledTimes(1));
+    const sent = api.dealQuotations.create.mock.calls[0][1];
+    // Stated, not omitted: a full save says every field, so the server is never left to decide
+    // what a missing key means.
+    expect(sent).toHaveProperty('deptCode', null);
+  });
+
+  // Wrong-way-round: the draft below was saved while the field existed and still has "P003" in
+  // it. Nothing on the screen may show that value, and the next save must not carry it back —
+  // otherwise a field nobody can see keeps a value nobody can correct.
+  it('a draft that still carries a ฝ่าย from before neither shows it nor sends it back', async () => {
+    api.dealQuotations.get.mockResolvedValue({
+      quotation: baseQuotation({
+        items: [groupedItem(0, 'ชั้น 1', 'Trilogy')], contactId: 6, contactName: 'ณัฐพงศ์ ศรีวิไล',
+        deptCode: 'P003', unitCode: 'D002',
+      }),
+    });
+    api.dealQuotations.update.mockResolvedValue({ quotation: baseQuotation({ contactId: 6 }) });
+    renderEditor('/quotations/5');
+
+    await screen.findByLabelText(/^ผู้ติดต่อ/);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
+    expect(screen.queryByLabelText('ฝ่าย')).toBeNull();
+    expect(screen.queryByDisplayValue('P003')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalledTimes(1));
+    const sent = api.dealQuotations.update.mock.calls[0][1];
+    expect(sent).toHaveProperty('deptCode', null);
+    // …while the designer code beside it, which is NOT being removed, still round-trips.
+    expect(sent.unitCode).toBe('D002');
+  });
+});
+
+// Sales feedback 2026-10-06 (แจ้งปัญหาการใช้งาน เสนอราคา, Sales #5). Sales asked for โครงการ to be
+// optional; the ruling was that it stays REQUIRED on the deal ("กรณียังไม่ทราบชัดเจน เป็นชื่อกลางๆ
+// ได้ เช่น บ้านเอกมัย ซอย 5") and the rep chooses per document whether it PRINTS ("สร้างทางเลือก
+// แสดง หรือไม่แสดง"). One tick box in the same voice as ไม่รับมัดจำ — unticked is the standard
+// document (project printed), ticked leaves the "Project : …" line off the customer's copy while
+// the name itself stays on the deal and in this editor.
+describe('QuotationEditorPage ไม่แสดงชื่อโครงการ (sales feedback #5, 2026-10-06, V200)', () => {
+  const TOGGLE = 'ไม่แสดงชื่อโครงการในใบเสนอราคา';
+  const follows = (a, b) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.customers.contacts.mockResolvedValue({ contacts: CONTACT_OPTIONS });
+    api.tickets.get.mockResolvedValue(ticketFixture({ projectName: 'บ้านเอกมัย ซอย 5' }));
+    api.dealQuotations.calculateLine.mockResolvedValue({ item: {} });
+  });
+
+  function draft(overrides = {}) {
+    api.dealQuotations.get.mockResolvedValue({
+      quotation: baseQuotation({
+        items: [groupedItem(0, 'ชั้น 1', 'Trilogy')], contactId: 6, contactName: 'ณัฐพงศ์ ศรีวิไล',
+        projectName: 'บ้านเอกมัย ซอย 5', ...overrides,
+      }),
+    });
+    api.dealQuotations.update.mockResolvedValue({ quotation: baseQuotation({ contactId: 6 }) });
+  }
+
+  async function saveDraft() {
+    await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalledTimes(1));
+    return api.dealQuotations.update.mock.calls[0][1];
+  }
+
+  async function saveNewQuotationOnDeal() {
+    fireEvent.click(screen.getByRole('button', { name: /เพิ่มรายการในตำแหน่งนี้/ }));
+    await fillCompleteQuotationItem();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+    await waitFor(() => expect(api.dealQuotations.create).toHaveBeenCalledTimes(1));
+    return api.dealQuotations.create.mock.calls[0][1];
+  }
+
+  it('is offered UNTICKED on a new quotation, and an untouched one still says hideProjectName: false', async () => {
+    api.dealQuotations.create.mockResolvedValue({ quotation: { id: 9 } });
+    renderEditor('/quotations/new?ticket=18');
+
+    const box = await screen.findByRole('checkbox', { name: new RegExp(TOGGLE) });
+    expect(box.checked).toBe(false);
+    // Always sent, never omitted — the same "a full save states every field" discipline as
+    // projectName/orderedByName, so the server is never left guessing what a missing key means.
+    expect((await saveNewQuotationOnDeal()).hideProjectName).toBe(false);
+  });
+
+  it('ticking it on a new quotation creates the document with hideProjectName: true', async () => {
+    api.dealQuotations.create.mockResolvedValue({ quotation: { id: 9 } });
+    renderEditor('/quotations/new?ticket=18');
+
+    fireEvent.click(await screen.findByRole('checkbox', { name: new RegExp(TOGGLE) }));
+    expect((await saveNewQuotationOnDeal()).hideProjectName).toBe(true);
+  });
+
+  it('is offered on an inline-created quotation too (no deal exists yet)', async () => {
+    renderEditor('/quotations/new');
+    fireEvent.click(await screen.findByRole('button', { name: 'สร้างดีลใหม่' }));
+    await screen.findByLabelText(/^ลูกค้า/);
+    expect(screen.getByRole('checkbox', { name: new RegExp(TOGGLE) }).checked).toBe(false);
+  });
+
+  // The wrong-way-round case: a document that already hides its project must not start printing
+  // it again just because the rep saved something else.
+  it('a draft that hides its project loads TICKED, and a save that never touches the box keeps it', async () => {
+    draft({ hideProjectName: true });
+    renderEditor('/quotations/5');
+
+    const box = await screen.findByRole('checkbox', { name: new RegExp(TOGGLE) });
+    await waitFor(() => expect(box.checked).toBe(true));
+    fireEvent.change(screen.getByLabelText(/^ผู้ติดต่อ/), { target: { value: 'คุณวิชัย มั่นคง' } });
+
+    expect((await saveDraft()).hideProjectName).toBe(true);
+  });
+
+  it('unticking it on a draft sends an explicit false', async () => {
+    draft({ hideProjectName: true });
+    renderEditor('/quotations/5');
+
+    const box = await screen.findByRole('checkbox', { name: new RegExp(TOGGLE) });
+    await waitFor(() => expect(box.checked).toBe(true));
+    fireEvent.click(box);
+
+    expect((await saveDraft()).hideProjectName).toBe(false);
+  });
+
+  // "Hide" must never mean "delete": the name is still what the deal and the register show.
+  it('ticking it leaves the project name itself untouched', async () => {
+    draft({ hideProjectName: false });
+    renderEditor('/quotations/5');
+
+    const box = await screen.findByRole('checkbox', { name: new RegExp(TOGGLE) });
+    await waitFor(() => expect(screen.getByLabelText(/^โครงการ/).value).toBe('บ้านเอกมัย ซอย 5'));
+    fireEvent.click(box);
+
+    const payload = await saveDraft();
+    expect(payload.hideProjectName).toBe(true);
+    expect(payload.projectName).toBe('บ้านเอกมัย ซอย 5');
+    expect(screen.getByLabelText(/^โครงการ/).value).toBe('บ้านเอกมัย ซอย 5');
+  });
+
+  it('a draft from before this feature (no hideProjectName on the DTO) loads unticked', async () => {
+    draft();
+    renderEditor('/quotations/5');
+
+    const box = await screen.findByRole('checkbox', { name: new RegExp(TOGGLE) });
+    await waitFor(() => expect(screen.getByLabelText(/^โครงการ/).value).toBe('บ้านเอกมัย ซอย 5'));
+    expect(box.checked).toBe(false);
+  });
+
+  it('sits directly under the โครงการ field it qualifies, and says what ticking it does', async () => {
+    draft();
+    renderEditor('/quotations/5');
+
+    const box = await screen.findByRole('checkbox', { name: new RegExp(TOGGLE) });
+    const projectInput = screen.getByLabelText(/^โครงการ/);
+    expect(follows(projectInput, box)).toBe(true);
+    expect(follows(box, document.getElementById('salesRepDisplayIdCard'))).toBe(true);
+    // The consequence is on screen, not left to be discovered on the PDF.
+    expect(screen.getByText(/ชื่อโครงการยังอยู่ในดีล/)).not.toBeNull();
   });
 });
 

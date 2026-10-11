@@ -34,7 +34,7 @@ describe('QuotationItemRow — English per-sqm (owner decision 2026-09-13)', () 
     expect(screen.getByLabelText(/^ราคา \(USD\/ตร\.ม\.\)/)).not.toBeNull();
     expect(screen.getByLabelText(/^ตร\.ม\.\/กล่อง/).value).toBe('0.6');
     expect(screen.queryByLabelText(/^ราคาตั้ง\/แผ่น/)).toBeNull();
-    expect(screen.queryByLabelText(/^ราคาพิเศษ \(บาท/)).toBeNull();
+    expect(screen.queryByLabelText(/^ราคาพิเศษ\/ตร\.ม\./)).toBeNull();
   });
 
   // The null-on-clear convention: the payload builders coerce with `??`, and `'' ?? x` stays ''.
@@ -52,10 +52,11 @@ describe('QuotationItemRow — English per-sqm (owner decision 2026-09-13)', () 
     expect(itemInputFromRow({ ...emptyQuotationItem(), sqmPerBox: 0.495 }, 'SPECIAL_SQM', 'EN').sqmPerBox).toBe(0.495);
   });
 
-  it('a THAI ราคาพิเศษ row is unchanged: list price + ราคาพิเศษ, no ตร.ม./กล่อง field', () => {
+  it('a THAI ราคาพิเศษ row still asks for a list price + ราคาพิเศษ, and no ตร.ม./กล่อง field', () => {
     renderPerSqm({}, { documentLanguage: 'TH' });
-    expect(screen.getByLabelText(/^ราคาตั้ง \(บาท\/แผ่น\)/)).not.toBeNull();
-    expect(screen.getByLabelText(/^ราคาพิเศษ \(บาท\/ตร\.ม\. รวม VAT\)/)).not.toBeNull();
+    // Per ตร.ม. including VAT since sales feedback #1 (2026-10-06); it was บาท/แผ่น before.
+    expect(screen.getByLabelText(/^ราคาตั้ง\/ตร\.ม\. \(รวม VAT\)/)).not.toBeNull();
+    expect(screen.getByLabelText(/^ราคาพิเศษ\/ตร\.ม\. \(รวม VAT\)/)).not.toBeNull();
     expect(screen.queryByLabelText(/^ตร\.ม\.\/กล่อง/)).toBeNull();
   });
 
@@ -129,8 +130,15 @@ describe('QuotationItemRow — English per-sqm (owner decision 2026-09-13)', () 
 });
 
 // Owner feedback 2026-09-14: nothing on the two Thai SPECIAL_SQM price boxes said which one was
-// per piece and which was per ตร.ม., and a rep typed a per-ตร.ม. figure into the per-piece box.
-describe('QuotationItemRow — Thai SPECIAL_SQM ราคาตั้ง suffix + per-ตร.ม. helper (owner feedback 2026-09-14)', () => {
+// per piece and which was per ตร.ม., and a rep typed a per-ตร.ม. figure into the per-piece box. The
+// fix then was a unit INSIDE each field and a "≈ per ตร.ม." line under the per-piece one.
+//
+// Sales feedback #1 (2026-10-06) went further — "แก้เป็น ตร.ม. รวม VAT ทุกแบบ" — so there is no
+// per-piece box left on a Thai row to confuse with: every one is per ตร.ม., in every price mode.
+// This block keeps what 2026-09-14 was really after (each box says its unit; the other unit's
+// figure is on screen) and now pins it the new way round. quotationPerSqmPrice.test.jsx has the
+// rest of the per-ตร.ม. behaviour.
+describe('QuotationItemRow — Thai price boxes carry their unit (2026-09-14, per ตร.ม. everywhere since 2026-10-06)', () => {
   function renderThaiSpecial(itemOverrides = {}) {
     const onChange = vi.fn();
     const item = { ...emptyQuotationItem(), ...itemOverrides };
@@ -141,68 +149,73 @@ describe('QuotationItemRow — Thai SPECIAL_SQM ราคาตั้ง suffix 
     return { item, onChange };
   }
 
-  it('labels ราคาตั้ง (บาท/แผ่น), placed BEFORE ราคาพิเศษ (บาท/ตร.ม. รวม VAT) in DOM order', () => {
+  it('labels ราคาตั้ง/ตร.ม. (รวม VAT), placed BEFORE ราคาพิเศษ/ตร.ม. (รวม VAT) in DOM order', () => {
     renderThaiSpecial();
-    const priceInput = screen.getByLabelText(/^ราคาตั้ง \(บาท\/แผ่น\)/);
-    const specialInput = screen.getByLabelText(/^ราคาพิเศษ \(บาท\/ตร\.ม\. รวม VAT\)/);
+    const priceInput = screen.getByLabelText(/^ราคาตั้ง\/ตร\.ม\. \(รวม VAT\)/);
+    const specialInput = screen.getByLabelText(/^ราคาพิเศษ\/ตร\.ม\. \(รวม VAT\)/);
     expect(priceInput).not.toBeNull();
     expect(specialInput).not.toBeNull();
     expect(priceInput.compareDocumentPosition(specialInput) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it('both price inputs render their trailing unit label', () => {
+  it('both price inputs render the SAME trailing unit — there is no per-แผ่น box left on the row', () => {
     renderThaiSpecial();
-    expect(screen.getByText('บาท/แผ่น')).not.toBeNull();
-    expect(screen.getByText('บาท/ตร.ม.')).not.toBeNull();
-  });
-
-  it('shows a guidance hint under ราคาตั้ง until both unitPrice and sqmPerPiece are present', () => {
-    renderThaiSpecial();
-    expect(screen.getByTestId('list-per-sqm-0').textContent).toBe('กรอกราคาตั้งต่อแผ่น ระบบแปลงเป็นต่อ ตร.ม. ให้');
-  });
-
-  it('1299 ราคาตั้ง at 0.72 ตร.ม./แผ่น shows ≈ 1,932.00 บาท/ตร.ม. รวม VAT underneath', () => {
-    renderThaiSpecial({ unitPrice: 1299, sqmPerPiece: 0.72 });
-    expect(screen.getByTestId('list-per-sqm-0').textContent).toBe('≈ 1,932.00 บาท/ตร.ม. รวม VAT');
-  });
-
-  // Wrong-way-round: the helper line and the new parenthesised label must be ABSENT everywhere
-  // else -- NET, DIRECT_NET, and English per-sqm all keep their unchanged today's rendering.
-  it('NET mode never renders the suffix, the helper line, or the new label', () => {
-    renderRow({ unitPrice: 850 });
-    expect(screen.queryByLabelText(/^ราคาตั้ง \(บาท\/แผ่น\)/)).toBeNull();
-    expect(screen.queryByTestId('list-per-sqm-0')).toBeNull();
+    expect(screen.getAllByText('บาท/ตร.ม.')).toHaveLength(2);
     expect(screen.queryByText('บาท/แผ่น')).toBeNull();
   });
 
-  it('DIRECT_NET mode never renders the suffix, the helper line, or the new label', () => {
+  it('with no price typed, the line under ราคาตั้ง says the per-แผ่น price will be worked out', () => {
+    renderThaiSpecial();
+    expect(screen.getByTestId('list-per-piece-0').textContent).toBe('ระบบคำนวณราคาต่อแผ่นให้');
+  });
+
+  // The same figure the 2026-09-14 helper line showed UNDER the box (1,299 × 1.39 × 1.07): a row
+  // still holding a price per แผ่น now shows it IN the box, and names the per-แผ่น figure beneath.
+  it('1299 a piece at 0.72 ตร.ม./แผ่น shows as 1932 per ตร.ม. in the box, with the per-แผ่น figure underneath', () => {
+    renderThaiSpecial({ unitPrice: 1299, sqmPerPiece: 0.72 });
+    expect(screen.getByLabelText(/^ราคาตั้ง\/ตร\.ม\. \(รวม VAT\)/).value).toBe('1932');
+    expect(screen.getByTestId('list-per-piece-0').textContent).toBe('คิดจากราคา ฿1,299.00/แผ่น (ก่อน VAT)');
+  });
+
+  // These three used to be the wrong-way-round guards for 2026-09-14 ("only ราคาพิเศษ mode gets a
+  // unit"). The first two are now the opposite claim — every Thai mode gets one — and the third
+  // is unchanged in substance: an English row gets none of it.
+  it('NET mode carries the per-ตร.ม. unit and the per-แผ่น line too', () => {
+    renderRow({ unitPrice: 850, sqmPerPiece: 0.36 });
+    expect(screen.getByLabelText(/^ราคา\/ตร\.ม\. \(รวม VAT\)/)).not.toBeNull();
+    expect(screen.getAllByText('บาท/ตร.ม.')).toHaveLength(1);
+    expect(screen.getByTestId('list-per-piece-0')).not.toBeNull();
+    expect(screen.queryByText('บาท/แผ่น')).toBeNull();
+  });
+
+  it('DIRECT_NET mode carries it on both of its boxes', () => {
     const onChange = vi.fn();
     render(
       <QuotationItemRow item={{ ...emptyQuotationItem(), unitPrice: 850 }} index={0} onChange={onChange} onRemove={vi.fn()}
         priceMode="DIRECT_NET" documentLanguage="TH" currency="THB" />,
     );
-    expect(screen.queryByLabelText(/^ราคาตั้ง \(บาท\/แผ่น\)/)).toBeNull();
-    expect(screen.queryByTestId('list-per-sqm-0')).toBeNull();
-    expect(screen.queryByText('บาท/แผ่น')).toBeNull();
-    // DIRECT_NET's own list-price label stays exactly as it was.
-    expect(screen.getByLabelText(/^ราคาตั้ง\/แผ่น/)).not.toBeNull();
+    expect(screen.getByLabelText(/^ราคาสุทธิ\/ตร\.ม\. \(รวม VAT\)/)).not.toBeNull();
+    expect(screen.getByLabelText(/^ราคาตั้ง\/ตร\.ม\. \(รวม VAT\)/)).not.toBeNull();
+    expect(screen.getAllByText('บาท/ตร.ม.')).toHaveLength(2);
+    expect(screen.queryByLabelText(/^ราคาตั้ง\/แผ่น/)).toBeNull();
   });
 
-  it('English per-sqm mode never renders the suffix, the helper line, or the new label', () => {
+  it('English per-sqm mode never renders the Thai label, the per-แผ่น line, or a บาท unit', () => {
     const onChange = vi.fn();
     render(
       <QuotationItemRow item={{ ...emptyQuotationItem(), specialPriceSqm: 64, sqmPerBox: 0.6 }} index={0}
         onChange={onChange} onRemove={vi.fn()} priceMode="SPECIAL_SQM" documentLanguage="EN" currency="USD" />,
     );
-    expect(screen.queryByLabelText(/^ราคาตั้ง \(บาท\/แผ่น\)/)).toBeNull();
-    expect(screen.queryByTestId('list-per-sqm-0')).toBeNull();
+    expect(screen.queryByLabelText(/^ราคาตั้ง\/ตร\.ม\./)).toBeNull();
+    expect(screen.queryByTestId('list-per-piece-0')).toBeNull();
     expect(screen.queryByText('บาท/แผ่น')).toBeNull();
     expect(screen.queryByText('บาท/ตร.ม.')).toBeNull();
   });
 
-  // DISPLAY-ONLY: the payload the server receives is byte-for-byte what it was before this
-  // change -- no new field, same two typed prices.
-  it('the saved payload for a Thai SPECIAL_SQM row carries no new field', () => {
+  // The whole wire shape of a row that still holds a per-แผ่น list price (nobody has retyped it
+  // since before 2026-10-06): exactly what it always was, plus the two per-ตร.ม. fields as null.
+  // toEqual on purpose — an accidental extra field, or a price that moved, fails here.
+  it('the saved payload for a Thai SPECIAL_SQM row still priced per แผ่น is unchanged apart from two null fields', () => {
     const item = {
       ...emptyQuotationItem(),
       model: 'Trilogy', color: 'Ash', texture: 'Matt', sizeText: '60x60', thicknessMm: 10,
@@ -220,6 +233,8 @@ describe('QuotationItemRow — Thai SPECIAL_SQM ราคาตั้ง suffix 
       roundToFullBox: true, unitPrice: 1299,
       discountPct: null, originCountry: null, leadTimeMinDays: null, leadTimeMaxDays: null,
       itemNotes: null, lineType: 'TILE', specialPriceSqm: 1932, directNetPrice: null,
+      // V201 (sales feedback #1): present on every tile payload, null until the box is retyped.
+      listPriceSqm: null, directNetPriceSqm: null,
     });
   });
 });
@@ -1034,13 +1049,16 @@ describe('ขายแผ่นไม่เต็มกล่อง — owner-ap
 describe('QuotationItemRow — hidePricing (V185)', () => {
   it('renders a price input by default (hidePricing not set) — NET mode', () => {
     renderRow({}, vi.fn());
-    expect(screen.getByLabelText(/^ราคา\/หน่วย/)).not.toBeNull();
+    expect(screen.getByLabelText(/^ราคา\/ตร\.ม\./)).not.toBeNull();
   });
 
-  it('hides ราคา/หน่วย และส่วนลด under hidePricing (NET mode)', () => {
+  // Queries the label the box has NOW (ราคา/ตร.ม. since 2026-10-06). Left asking for the old
+  // "ราคา/หน่วย" this would pass whether or not hidePricing hid anything.
+  it('hides ราคา/ตร.ม. และส่วนลด under hidePricing (NET mode)', () => {
     const item = { ...emptyQuotationItem() };
     render(<QuotationItemRow item={item} index={0} onChange={vi.fn()} onRemove={vi.fn()} hidePricing />);
-    expect(screen.queryByLabelText(/^ราคา\/หน่วย/)).toBeNull();
+    expect(screen.queryByLabelText(/^ราคา\/ตร\.ม\./)).toBeNull();
+    expect(screen.queryByTestId('list-per-piece-0')).toBeNull();
     expect(screen.queryByLabelText(/^ส่วนลด/)).toBeNull();
   });
 

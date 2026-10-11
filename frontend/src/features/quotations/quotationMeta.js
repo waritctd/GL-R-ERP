@@ -706,13 +706,54 @@ export function isTilePriceChangedFromCeoLocally(item, priceMode) {
     return !localMoneyEquals(item.specialPriceSqm, item.ceoSpecialPriceSqm);
   }
   if (priceMode === 'DIRECT_NET') {
-    return !localMoneyEquals(item.directNetPrice, item.ceoDirectNetPrice);
+    // V201: a net typed per ตร.ม. has no per-แผ่น figure of the rep's own — the one to hold against
+    // the CEO's is the SERVER's derivation (netUnitPrice, from calculate-line). Until that lands
+    // it is null, which reads as "changed": the rep did just change it.
+    const net = hasTypedPrice(item.directNetPriceSqm) ? item.netUnitPrice : item.directNetPrice;
+    return !localMoneyEquals(net, item.ceoDirectNetPrice);
   }
   if (priceMode === 'NET') {
+    // unitPrice is per แผ่น either way: the rep's own on a row priced per แผ่น, the server's
+    // derivation on one priced per ตร.ม. (see usesListPriceSqm).
     return !localMoneyEquals(item.unitPrice, item.ceoListUnitPrice)
       || !localMoneyEquals(item.discountPct ?? 0, item.ceoDiscountPct ?? 0);
   }
   return true;
+}
+
+// ── ราคา/ตร.ม. รวม VAT (sales feedback #1, 2026-10-06, V201) ────────────────────────────────────
+// "แก้เป็น ตร.ม. รวม VAT ทุกแบบ". On a THAI quotation every tile price box is typed per ตร.ม.
+// INCLUDING VAT — ราคาตั้ง in all three price modes (`listPriceSqm`) and ราคาสุทธิ too
+// (`directNetPriceSqm`) — and the SERVER works out the per-แผ่น figure the document prints
+// (DealQuotationService#withPerPiecePricesFromPerSqm). The English form is untouched: USD, no VAT,
+// per piece.
+//
+// A row therefore carries its list price in ONE of two ways, and which one is decided by a single
+// test — is `listPriceSqm` filled in?
+//   - yes: that is the price. `unitPrice` on the row is then only the server's last per-แผ่น
+//     ANSWER, kept to show under the box and for the readers that compare per-แผ่น figures
+//     (the CEO marker, documentDiscountLabel, hasSpecialPricing). It is never sent back.
+//   - no:  `unitPrice` is the price, per แผ่น — every row saved before this change, every row a
+//     คำขอราคา created, and a net carried across by a price-mode switch. The box SHOWS it per
+//     ตร.ม. (listPricePerSqmIncVat) but the row keeps sending the per-แผ่น figure, so a price
+//     nobody retyped cannot move by a satang.
+// ราคาสุทธิ works the same way with `directNetPriceSqm` / `directNetPrice`.
+
+/** "Has the rep typed something here?" — '' and null/undefined are both "no". 0 is "yes": it is a
+ * typed value the validator then refuses. */
+export function hasTypedPrice(value) {
+  return value !== '' && value != null;
+}
+
+/** Whether this row's ราคาตั้ง is the per-ตร.ม. figure in `listPriceSqm`. Never on an English
+ * document, whatever a row happens to be carrying — see the block comment above. */
+export function usesListPriceSqm(item, documentLanguage = 'TH') {
+  return documentLanguage !== 'EN' && hasTypedPrice(item?.listPriceSqm);
+}
+
+/** The same question for ราคาสุทธิ and `directNetPriceSqm`. */
+export function usesDirectNetPriceSqm(item, documentLanguage = 'TH') {
+  return documentLanguage !== 'EN' && hasTypedPrice(item?.directNetPriceSqm);
 }
 
 // ── แผ่น/ตร.ม. (owner feedback 2026-09-12) ───────────────────────────────────────────────────────
@@ -1094,15 +1135,45 @@ export function validateQuotationItem(item, priceMode = 'NET', documentLanguage 
   // sqmPerPiece/piecesPerBox) and BELOW (quantity, lead time) still does — the PCR form requires
   // the exact same non-price fields the direct-deal form does (owner ruling).
   if (!skipPricing) {
+    // V201 (sales feedback #1): on a Thai document the price a row needs is a per-ตร.ม. one. The
+    // error KEYS stay `unitPrice` (the ราคาตั้ง box, `price-N`) and `directNetPrice` (the ราคาสุทธิ
+    // box, `direct-net-N`) whichever unit the box is in — they name a box, and the checklist
+    // jumps to it by that key. A typed per-ตร.ม. price is judged on its own: the per-แผ่น figure
+    // is the server's answer and may not have arrived, or may have been refused.
+    const thai = documentLanguage !== 'EN';
+    const listSqm = usesListPriceSqm(item, documentLanguage);
+    const netSqm = usesDirectNetPriceSqm(item, documentLanguage);
+    const sqmPriceError = (value, notPositive) => {
+      if (!(Number(value) > 0)) return notPositive;
+      // ItemInput's @Digits(fraction = 2) — a third decimal is a 400 from bean validation.
+      return withinDecimals(value, 2) ? null : 'ทศนิยมได้ไม่เกิน 2 ตำแหน่ง';
+    };
     if (priceMode === 'DIRECT_NET') {
-      if (!(Number(item?.directNetPrice) > 0)) errors.directNetPrice = 'กรุณาระบุราคาสุทธิ/แผ่น';
+      if (netSqm) {
+        const error = sqmPriceError(item.directNetPriceSqm, 'ราคาสุทธิต้องมากกว่าศูนย์');
+        if (error) errors.directNetPrice = error;
+      } else if (!(Number(item?.directNetPrice) > 0)) {
+        errors.directNetPrice = thai ? 'กรุณาระบุราคาสุทธิ (บาท/ตร.ม.)' : 'กรุณาระบุราคาสุทธิ/แผ่น';
+      }
       // Optional here, but a typed one must still be positive — the server refuses a non-positive
-      // unitPrice on every TILE row whatever the mode.
-      if (item?.unitPrice !== '' && item?.unitPrice != null && !(Number(item.unitPrice) > 0)) {
+      // list price on every TILE row whatever the mode.
+      if (listSqm) {
+        const error = sqmPriceError(item.listPriceSqm, 'ราคาตั้งต้องมากกว่าศูนย์');
+        if (error) errors.unitPrice = error;
+      } else if (item?.unitPrice !== '' && item?.unitPrice != null && !(Number(item.unitPrice) > 0)) {
         errors.unitPrice = 'ราคาตั้งต้องมากกว่าศูนย์';
       }
-    } else if (!perSqm && !(Number(item?.unitPrice) > 0)) {
-      errors.unitPrice = priceMode === 'SPECIAL_SQM' ? 'กรุณาระบุราคาตั้ง (บาท/แผ่น)' : 'กรุณาระบุราคา/หน่วย';
+    } else if (!perSqm) {
+      if (listSqm) {
+        const error = sqmPriceError(item.listPriceSqm,
+          priceMode === 'SPECIAL_SQM' ? 'ราคาตั้งต้องมากกว่าศูนย์' : 'ราคาต้องมากกว่าศูนย์');
+        if (error) errors.unitPrice = error;
+      } else if (!(Number(item?.unitPrice) > 0)) {
+        // An English SPECIAL_SQM row is `perSqm` and never reaches here, so the only list price
+        // ราคาพิเศษ mode ever asks for is the Thai, per-ตร.ม. one.
+        errors.unitPrice = priceMode === 'SPECIAL_SQM' ? 'กรุณาระบุราคาตั้ง (บาท/ตร.ม.)'
+          : thai ? 'กรุณาระบุราคา/ตร.ม.' : 'กรุณาระบุราคา/หน่วย';
+      }
     }
     if (priceMode === 'SPECIAL_SQM') {
       if (!(Number(item?.specialPriceSqm) > 0)) {
@@ -1174,11 +1245,14 @@ const QUOTATION_ITEM_FIELD_ORDER = [
 ];
 const QUOTATION_ITEM_FIELD_LABELS = {
   model: 'รุ่น', color: 'สี', texture: 'ผิว', sizeText: 'ขนาด', thicknessMm: 'ความหนา',
-  sqmPerPiece: 'แผ่น/ตร.ม.', piecesPerBox: 'แผ่น/กล่อง', sqmPerBox: 'ตร.ม./กล่อง', unitPrice: 'ราคา/หน่วย',
+  // 'ราคา' / 'ราคาสุทธิ', with no unit: the same key is a per-ตร.ม. box on a Thai tile row (V201),
+  // a per-piece one on an English tile row and a per-หน่วย one on a สินค้า/บริการอื่น row, and this
+  // summary is built from the error keys alone.
+  sqmPerPiece: 'แผ่น/ตร.ม.', piecesPerBox: 'แผ่น/กล่อง', sqmPerBox: 'ตร.ม./กล่อง', unitPrice: 'ราคา',
   areaSqm: 'จำนวน (พื้นที่)', piecesInput: 'จำนวน (แผ่น)',
   // v3
   description: 'รายละเอียด', quantity: 'จำนวน', unit: 'หน่วย',
-  specialPriceSqm: 'ราคาต่อ ตร.ม.', directNetPrice: 'ราคาสุทธิ/แผ่น',
+  specialPriceSqm: 'ราคาต่อ ตร.ม.', directNetPrice: 'ราคาสุทธิ',
   adjustmentPct: 'เปอร์เซ็นต์ส่วนลด', adjustmentAmount: 'จำนวนเงินส่วนลด',
   // #7 (2026-09-14): submit-only, see validateQuotationItem's `requireLeadTime`.
   leadTimeMinDays: 'ระยะเวลานำเข้า (วัน)',
@@ -1236,6 +1310,21 @@ export const PRICE_MODE_OPTIONS = [
   { code: 'NET', label: 'ราคาตั้ง − ส่วนลด %', hint: 'กรอกราคาตั้งต่อแผ่นและส่วนลด % (แบบเดิม)' },
   { code: 'SPECIAL_SQM', label: 'ราคาพิเศษ บาท/ตร.ม.', hint: 'กรอกราคาพิเศษต่อ ตร.ม. รวม VAT แล้ว ระบบคำนวณราคาสุทธิต่อแผ่นให้' },
   { code: 'DIRECT_NET', label: 'ราคาสุทธิต่อแผ่น', hint: 'กรอกราคาสุทธิต่อแผ่นตรง ๆ' },
+];
+
+/**
+ * What the three modes are called on a THAI quotation since sales feedback #1 (2026-10-06, V201):
+ * every tile price there is typed per ตร.ม. including VAT, so each mode says so.
+ *
+ * ⚠️ Deliberately NOT an edit to PRICE_MODE_OPTIONS above. That list is also the CEO's pricing
+ * screen's (PricingRequestDetailPage), where prices ARE typed per แผ่น — and the editor's own
+ * "CEO เลือก: …" marker, which quotes the CEO's choice in the CEO's words. Only the quotation
+ * editor's own picker (availablePriceModes) reads these.
+ */
+const PRICE_MODE_OPTIONS_TH = [
+  { code: 'NET', label: 'ราคาตั้ง − ส่วนลด %', hint: 'กรอกราคาตั้งต่อ ตร.ม. (รวม VAT) และส่วนลด % ระบบคำนวณราคาต่อแผ่นให้' },
+  { code: 'SPECIAL_SQM', label: 'ราคาพิเศษ บาท/ตร.ม.', hint: 'กรอกราคาตั้งและราคาพิเศษต่อ ตร.ม. (รวม VAT) ระบบคำนวณราคาสุทธิต่อแผ่นให้' },
+  { code: 'DIRECT_NET', label: 'ราคาสุทธิ บาท/ตร.ม.', hint: 'กรอกราคาสุทธิต่อ ตร.ม. (รวม VAT) ตรง ๆ ระบบคำนวณราคาสุทธิต่อแผ่นให้' },
 ];
 
 /** Owner decision 2026-09-13: on an ENGLISH document SPECIAL_SQM is a USD price per square metre
@@ -1302,11 +1391,87 @@ export function roundToFullBoxSummary(item) {
 /**
  * The tile price modes a document in `documentLanguage` may use. Every mode is available in both
  * languages since the owner's 2026-09-13 decision; on English, SPECIAL_SQM carries its USD/ตร.ม.
- * label (see PRICE_MODE_OPTION_EN_PER_SQM).
+ * label (see PRICE_MODE_OPTION_EN_PER_SQM) and the other two keep their per-piece wording, while a
+ * Thai document's three all describe a per-ตร.ม. price (PRICE_MODE_OPTIONS_TH, V201).
  */
 export function availablePriceModes(documentLanguage) {
-  return PRICE_MODE_OPTIONS.map((opt) => (documentLanguage === 'EN' && opt.code === 'SPECIAL_SQM'
-    ? PRICE_MODE_OPTION_EN_PER_SQM : opt));
+  if (documentLanguage !== 'EN') return PRICE_MODE_OPTIONS_TH;
+  return PRICE_MODE_OPTIONS.map((opt) => (opt.code === 'SPECIAL_SQM' ? PRICE_MODE_OPTION_EN_PER_SQM : opt));
+}
+
+// ── Mixed price modes (V204) ───────────────────────────────────────────────────────────────────
+// Sales feedback #14 (แจ้งปัญหาการใช้งาน เสนอราคา): "อยากให้เลือกการคิดราคาแต่ละข้อไม่เหมือนกันได้ เช่น
+// บางข้อราคาพิเศษต่อตรม บางข้อลด% ตามสเต็ป". Owner, 2026-10-06: do it, keep the flow clear, and let the
+// rep choose between one mode for the whole document and a mix — "ต้องอธิบายด้วยว่ากรอกวิธีหลายแบบใน
+// ใบเสนอราคาเดียวกัน".
+//
+// The model is the server's: the DOCUMENT's priceMode may be 'MIXED', and then every TILE row
+// carries its own (`item.priceMode`, one of the three above). A row is always priced in exactly
+// one of the three; MIXED is a fact about the document, never a fourth way to price a row — which
+// is why it is NOT in availablePriceModes (that list is also what a row's own picker offers).
+
+export const PRICE_MODE_MIXED = 'MIXED';
+
+const ROW_PRICE_MODES = ['NET', 'SPECIAL_SQM', 'DIRECT_NET'];
+
+/** The fourth choice in the editor's "วิธีกรอกราคากระเบื้อง" picker. The explanation travels WITH
+ * the option (the owner's requirement), so no caller can show the label and drop what it means. */
+export const PRICE_MODE_MIXED_OPTION = {
+  code: PRICE_MODE_MIXED,
+  label: 'ผสมหลายวิธี',
+  hint: 'กรอกราคาได้หลายวิธีในใบเสนอราคาเดียวกัน — แต่ละรายการเลือกวิธีของตัวเองได้ที่ช่อง “วิธีคิดราคา” ของรายการนั้น เช่น บางรายการใช้ราคาพิเศษ บาท/ตร.ม. บางรายการใช้ราคาตั้ง − ส่วนลด %',
+};
+
+export function isMixedPriceMode(priceMode) {
+  return priceMode === PRICE_MODE_MIXED;
+}
+
+/**
+ * The price mode ONE tile row is in: the document's, unless the document is MIXED, in which case
+ * the row's own. Mirrors {@code WastageCalculator#rowPriceMode} exactly — including its two edges:
+ * on a single-mode document a row's own mode is never consulted (so nothing left on a row can move
+ * a document whose header names one mode), and a mixed document's row with no usable mode of its
+ * own reads as NET rather than as nothing.
+ *
+ * EVERYTHING in the editor that used to ask "what mode is the document in" on behalf of a row —
+ * which boxes it shows, what it sends, what its ส่วนลด cell prints, whether it counts as special
+ * pricing — asks this instead.
+ */
+export function rowPriceMode(documentPriceMode, item) {
+  if (documentPriceMode !== PRICE_MODE_MIXED) return documentPriceMode;
+  return ROW_PRICE_MODES.includes(item?.priceMode) ? item.priceMode : 'NET';
+}
+
+/**
+ * Whether the editor offers "ผสมหลายวิธี" at all. Mirrors
+ * {@code DealQuotationService#requirePriceModeAllowed}: Thai documents only (on English, ราคา
+ * USD/ตร.ม. changes a row's unit and quantity, not just its price), and never a quotation that came
+ * from a คำขอราคา (its mode is the CEO's decision). A UI courtesy — the server is what refuses.
+ */
+export function mixedPriceModeAvailable(documentLanguage, origin) {
+  return documentLanguage !== 'EN' && origin !== 'PRICING_REQUEST';
+}
+
+/** Whether a document in `documentLanguage` may be in `priceMode` — the three row modes per
+ * {@link availablePriceModes}, and MIXED on a Thai document. */
+export function isPriceModeAvailable(priceMode, documentLanguage) {
+  if (priceMode === PRICE_MODE_MIXED) return documentLanguage !== 'EN';
+  return availablePriceModes(documentLanguage).some((opt) => opt.code === priceMode);
+}
+
+/**
+ * "ราคาตั้ง − ส่วนลด % 2 รายการ · ราคาพิเศษ บาท/ตร.ม. 1 รายการ" — how many tile rows of a mixed
+ * document use each mode, in the order the modes are offered. The line under the mixed option, so
+ * the rep can see the mix at a glance without scrolling the rows.
+ */
+export function summarizeRowPriceModes(rows, documentLanguage = 'TH') {
+  const tiles = (rows ?? []).filter((row) => lineTypeOf(row) === LINE_TYPE_TILE);
+  if (tiles.length === 0) return 'ยังไม่มีรายการกระเบื้อง';
+  return availablePriceModes(documentLanguage)
+    .map((opt) => ({ opt, count: tiles.filter((row) => rowPriceMode(PRICE_MODE_MIXED, row) === opt.code).length }))
+    .filter(({ count }) => count > 0)
+    .map(({ opt, count }) => `${opt.label} ${count} รายการ`)
+    .join(' · ');
 }
 
 /**
@@ -1315,7 +1480,8 @@ export function availablePriceModes(documentLanguage) {
  * VAT meaning), and the editor has no exchange rate — so every currency amount the rep typed is
  * cleared to `null` (the null-on-clear convention, never '') for them to re-enter, in EVERY price
  * mode, together with the money derived from it:
- *   - TILE: unitPrice (ราคาตั้ง/แผ่น), directNetPrice, specialPriceSqm
+ *   - TILE: unitPrice (ราคาตั้ง/แผ่น), directNetPrice, specialPriceSqm, and the two per-ตร.ม.
+ *     prices a Thai row is typed in (listPriceSqm, directNetPriceSqm — V201)
  *   - PLAIN: unitPrice
  *   - ADJUSTMENT entered as a FLAT amount: adjustmentAmount
  *   - every row's derived netUnitPrice / lineAmount / specialPriceLine (and an adjustment's echoed
@@ -1340,6 +1506,7 @@ export function rowsWithPricesCleared(rows) {
     if (type === LINE_TYPE_PLAIN) return { ...row, ...derived, unitPrice: null };
     return {
       ...row, ...derived, unitPrice: null, directNetPrice: null, specialPriceSqm: null, specialPriceLine: null,
+      listPriceSqm: null, directNetPriceSqm: null,
     };
   });
 }
@@ -1351,17 +1518,29 @@ export function rowsWithPricesCleared(rows) {
  * no ราคาพิเศษ is priced as NET off its list price) — a plausible number for a price nobody typed.
  * A DIRECT_NET row needs only its net (the list price is optional there); a Thai SPECIAL_SQM row
  * needs both its list price and its ราคาพิเศษ; the English per-sqm row needs its USD/ตร.ม.
+ *
+ * V201: a Thai row's list price and net may each be the per-ตร.ม. figure instead — and THAT one
+ * is a price only on a row with an area per piece. The server refuses to turn a per-ตร.ม. price
+ * into a per-แผ่น one without it (DealQuotationService#withPerPiecePricesFromPerSqm), on this
+ * preview path too, so there is nothing honest to ask for.
  */
 export function rowHasPriceForPreview(row, priceMode = 'NET', documentLanguage = 'TH') {
   const present = (value) => value !== '' && value != null;
   const type = lineTypeOf(row);
   if (type === LINE_TYPE_ADJUSTMENT) return true;
   if (type === LINE_TYPE_PLAIN) return present(row?.unitPrice);
-  if (priceMode === 'DIRECT_NET') return present(row?.directNetPrice);
-  if (priceMode === 'SPECIAL_SQM') {
-    return present(row?.specialPriceSqm) && (isEnglishPerSqm(priceMode, documentLanguage) || present(row?.unitPrice));
+  const hasArea = Number(row?.sqmPerPiece) > 0;
+  const hasList = usesListPriceSqm(row, documentLanguage) ? hasArea : present(row?.unitPrice);
+  if (priceMode === 'DIRECT_NET') {
+    const hasNet = usesDirectNetPriceSqm(row, documentLanguage) ? hasArea : present(row?.directNetPrice);
+    // The list price is optional here — but a per-ตร.ม. one, when given, travels with the net and
+    // needs the same area to mean anything.
+    return hasNet && (!usesListPriceSqm(row, documentLanguage) || hasArea);
   }
-  return present(row?.unitPrice);
+  if (priceMode === 'SPECIAL_SQM') {
+    return present(row?.specialPriceSqm) && (isEnglishPerSqm(priceMode, documentLanguage) || hasList);
+  }
+  return hasList;
 }
 
 /**
@@ -1374,8 +1553,11 @@ export function rowHasPriceForPreview(row, priceMode = 'NET', documentLanguage =
  * per piece, which is what a ราคาพิเศษ document was expressing.
  */
 export function priceModeForLanguage(priceMode, documentLanguage) {
-  const allowed = availablePriceModes(documentLanguage).some((opt) => opt.code === priceMode);
-  if (allowed) return { priceMode, moved: false };
+  if (isPriceModeAvailable(priceMode, documentLanguage)) return { priceMode, moved: false };
+  // V204: a MIXED document becoming English has no single mode to fall back on — and its prices
+  // are all being cleared by the switch anyway — so it lands on the default, ราคาตั้ง − ส่วนลด %,
+  // for the whole document. `moved` is true so the caller says so.
+  if (priceMode === PRICE_MODE_MIXED) return { priceMode: 'NET', moved: true };
   return { priceMode: 'DIRECT_NET', moved: true };
 }
 
@@ -1491,10 +1673,12 @@ export function estimateAdjustmentAmount(adjustment, base) {
  * the typed net differs from the list price; everything else is `Net` or `N%`. On an English
  * document the word is "Special" — the English form has no Thai text in the item table.
  */
-export function documentDiscountLabel(item, priceMode, documentLanguage = 'TH') {
+export function documentDiscountLabel(item, documentPriceMode, documentLanguage = 'TH') {
   const type = lineTypeOf(item);
   if (type === LINE_TYPE_ADJUSTMENT) return '';
   const special = documentLanguage === 'EN' ? 'Special' : 'พิเศษ';
+  // V204: the mode THIS row was priced in — the document's, or on a mixed document the row's own.
+  const priceMode = rowPriceMode(documentPriceMode, item);
   if (type === LINE_TYPE_TILE) {
     // English per-sqm prints "Net": the USD/sqm IS the net (her QN6900933) — renderer's discountLabel.
     if (priceMode === 'SPECIAL_SQM') return documentLanguage === 'EN' ? 'Net' : special;
@@ -1523,7 +1707,7 @@ export function documentDiscountLabel(item, priceMode, documentLanguage = 'TH') 
  *   d. the row is PLAIN with discountPct > 0;
  *   e. the row is an ADJUSTMENT (ส่วนลดพิเศษ) row.
  */
-export function hasSpecialPricing(priceMode, rows) {
+export function hasSpecialPricing(documentPriceMode, rows) {
   const isPositive = (value) => value != null && value !== '' && Number(value) > 0;
   for (const row of rows ?? []) {
     const type = lineTypeOf(row);
@@ -1532,7 +1716,10 @@ export function hasSpecialPricing(priceMode, rows) {
       if (isPositive(row?.discountPct)) return true; // (d)
       continue;
     }
-    // TILE (lineTypeOf's own default when lineType is null/blank)
+    // TILE (lineTypeOf's own default when lineType is null/blank). V204: rules (a)–(c) are asked
+    // of the mode THIS row is priced in — DealQuotationRenderAdapter#hasSpecialPricingCore does
+    // the same — which on a single-mode document is the document's mode on every pass, as before.
+    const priceMode = rowPriceMode(documentPriceMode, row);
     if (priceMode === 'SPECIAL_SQM') return true; // (a)
     if (priceMode === 'DIRECT_NET') {
       if (row?.unitPrice != null && row?.netUnitPrice != null
@@ -1818,7 +2005,8 @@ export function buildQuotationChecklist({
   // dropped QUOTATION_CHECK.CONTACT/CONTACT_PHONE/CONTACT_EMAIL along with the required
   // contact-picker they gated: ผู้สั่งซื้อ is now a single optional free-text field
   // (`terms.orderedByName`) that can never be "missing" in a way worth flagging.
-  // ผู้ออกแบบ (unitCode) and ฝ่าย (deptCode) are deliberately NOT checked — owner ruling 2026-09-16,
+  // ผู้ออกแบบ (unitCode) is deliberately NOT checked (ฝ่าย / deptCode was not either, and has had
+  // no field at all since 2026-10-06) — owner ruling 2026-09-16,
   // "make ผู้ออกแบบ optional including ฝ่าย". The backend never required either; this list used to
   // warn "ยังไม่ได้เลือกผู้ออกแบบ", which read as a required field.
 

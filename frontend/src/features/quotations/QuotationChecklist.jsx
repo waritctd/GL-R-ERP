@@ -1,12 +1,23 @@
 import { Icon } from '../../components/common/Icon.jsx';
 
-/** Moves focus to a checklist entry's field. `scrollIntoView` first so the field is on screen
- * before the focus ring lands on it; optional-chained because jsdom does not implement it. */
+/** DESIGN.md §11/§19 — "Reduced motion is not optional." An explicit `behavior: 'smooth'` passed to
+ * `scrollIntoView` is NOT overridden by a CSS `scroll-behavior`, so the preference is read here.
+ * Guarded because jsdom has no `matchMedia` at all. */
+function prefersReducedMotion() {
+  return typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+/** Moves focus to a field by id — a checklist entry's field, and (sales feedback #3, 2026-10-06)
+ * the row or ตำแหน่ง a "เพิ่ม…" action has just added in QuotationEditorPage. `scrollIntoView`
+ * first so the field is on screen before the focus ring lands on it; optional-chained because
+ * jsdom does not implement it. */
 export function focusQuotationField(targetId) {
   if (!targetId || typeof document === 'undefined') return false;
   const element = document.getElementById(targetId);
   if (!element) return false;
-  element.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+  element.scrollIntoView?.({ block: 'center', behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
   element.focus({ preventScroll: true });
   return true;
 }

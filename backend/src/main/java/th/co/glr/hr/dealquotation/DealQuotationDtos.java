@@ -233,7 +233,15 @@ public final class DealQuotationDtos {
          * /api/deal-quotations} now LISTS (owner decision D4: "show, read-only") but that no read-by-id
          * or mutation path on this engine will ever serve (they all 404 it). {@code false} for
          * {@code DEAL_DIRECT} and {@code PRICING_REQUEST}. */
-        boolean readOnly
+        boolean readOnly,
+        /** Sales feedback #5 (2026-10-06, V200) — "ไม่แสดงชื่อโครงการในใบเสนอราคา"
+         * ({@code sales.quotation.hide_project_name}). When {@code true},
+         * {@code DealQuotationRenderAdapter} hands the renderer no project name, so the printed
+         * document carries no "Project : …" line. {@link #projectName} itself is untouched — the
+         * editor, the เอกสาร register and the deal still read it; only the customer's copy loses
+         * it. {@code false} (the column default, and every pre-V200 row) prints the project,
+         * exactly as before. Set per document by the rep; a revision / reorder clone inherits it. */
+        boolean hideProjectName
     ) {
         /** The pre-slice-1 shape (no {@link #ticketCode}/{@link #dealStage}/{@link #readOnly}) —
          * kept so every existing construction site (tests, mostly) compiles unchanged, the same
@@ -272,7 +280,7 @@ public final class DealQuotationDtos {
                 omitContactHonorific, fullPaymentTerm, derivedFromQuotationId, derivedFromQuotationNumber,
                 derivedFromQuotationStatus, items, createdAt, updatedAt, origin, pricingRequestId,
                 priceModeChangedFromCeo, ceoPriceMode, pricingRequestCode, itemsRemovedFromCeoCount,
-                removedCeoItems, orderedByName, null, null, null, null, false);
+                removedCeoItems, orderedByName, null, null, null, null, false, false);
         }
 
         /** #1084's shape (recipient chip, merged into develop the same day as slice 1) — with
@@ -314,12 +322,12 @@ public final class DealQuotationDtos {
                 omitContactHonorific, fullPaymentTerm, derivedFromQuotationId, derivedFromQuotationNumber,
                 derivedFromQuotationStatus, items, createdAt, updatedAt, origin, pricingRequestId,
                 priceModeChangedFromCeo, ceoPriceMode, pricingRequestCode, itemsRemovedFromCeoCount,
-                removedCeoItems, orderedByName, recipientType, recipientLabel, null, null, false);
+                removedCeoItems, orderedByName, recipientType, recipientLabel, null, null, false, false);
         }
 
         /** Ruling 3 (2026-09-30): the account view -- number, totals and each line's NET price stay; list price, discount and CEO pricing metadata are emptied. */
         public DealQuotationDto withoutPriceInternals() {
-            return new DealQuotationDto(id, number, ticketId, docStatus, revisionNo, parentQuotationId, createdById, createdByName, createdByNameEn, salesRepId, salesRepName, salesRepNameEn, salesRepPhone, submittedAt, approvedById, approvedByName, approvedByNameEn, approvedAt, approvalNote, quotationDate, customerName, customerAddress, customerTaxId, customerPhone, contactId, contactName, contactPhone, contactEmail, projectName, deptCode, unitCode, offerDate, depositPercent, remainderMode, creditDays, validityDays, validityDate, validityMode, validityUntil, customerNotes, null, documentLanguage, subtotalAmount, vatAmount, grandTotal, currency, approverHasSignature, printedByDisplayId, printedByDisplayName, printedByDisplayNameEn, salesRepDisplayId, salesRepDisplayName, salesRepDisplayNameEn, salesRepDisplayPhone, omitContactHonorific, fullPaymentTerm, derivedFromQuotationId, derivedFromQuotationNumber, derivedFromQuotationStatus, items == null ? null : items.stream().map(DealQuotationItemDto::withoutPriceInternals).toList(), createdAt, updatedAt, origin, pricingRequestId, false, null, pricingRequestCode, 0, List.of(), orderedByName, recipientType, recipientLabel, ticketCode, dealStage, readOnly);
+            return new DealQuotationDto(id, number, ticketId, docStatus, revisionNo, parentQuotationId, createdById, createdByName, createdByNameEn, salesRepId, salesRepName, salesRepNameEn, salesRepPhone, submittedAt, approvedById, approvedByName, approvedByNameEn, approvedAt, approvalNote, quotationDate, customerName, customerAddress, customerTaxId, customerPhone, contactId, contactName, contactPhone, contactEmail, projectName, deptCode, unitCode, offerDate, depositPercent, remainderMode, creditDays, validityDays, validityDate, validityMode, validityUntil, customerNotes, null, documentLanguage, subtotalAmount, vatAmount, grandTotal, currency, approverHasSignature, printedByDisplayId, printedByDisplayName, printedByDisplayNameEn, salesRepDisplayId, salesRepDisplayName, salesRepDisplayNameEn, salesRepDisplayPhone, omitContactHonorific, fullPaymentTerm, derivedFromQuotationId, derivedFromQuotationNumber, derivedFromQuotationStatus, items == null ? null : items.stream().map(DealQuotationItemDto::withoutPriceInternals).toList(), createdAt, updatedAt, origin, pricingRequestId, false, null, pricingRequestCode, 0, List.of(), orderedByName, recipientType, recipientLabel, ticketCode, dealStage, readOnly, hideProjectName);
         }
 
         /** This DTO carrying {@link #removedCeoItems} — same device as {@code
@@ -341,7 +349,7 @@ public final class DealQuotationDtos {
                 salesRepDisplayPhone, omitContactHonorific, fullPaymentTerm, derivedFromQuotationId,
                 derivedFromQuotationNumber, derivedFromQuotationStatus, items, createdAt, updatedAt, origin,
                 pricingRequestId, priceModeChangedFromCeo, ceoPriceMode, pricingRequestCode,
-                itemsRemovedFromCeoCount, removedItems, orderedByName, recipientType, recipientLabel, ticketCode, dealStage, readOnly);
+                itemsRemovedFromCeoCount, removedItems, orderedByName, recipientType, recipientLabel, ticketCode, dealStage, readOnly, hideProjectName);
         }
 
         /** This DTO carrying {@code value} as its {@link #orderedByName} — same appended-field
@@ -361,7 +369,28 @@ public final class DealQuotationDtos {
                 salesRepDisplayPhone, omitContactHonorific, fullPaymentTerm, derivedFromQuotationId,
                 derivedFromQuotationNumber, derivedFromQuotationStatus, items, createdAt, updatedAt, origin,
                 pricingRequestId, priceModeChangedFromCeo, ceoPriceMode, pricingRequestCode,
-                itemsRemovedFromCeoCount, removedCeoItems, value, recipientType, recipientLabel, ticketCode, dealStage, readOnly);
+                itemsRemovedFromCeoCount, removedCeoItems, value, recipientType, recipientLabel, ticketCode, dealStage, readOnly, hideProjectName);
+        }
+
+        /** This DTO carrying {@code value} as its {@link #hideProjectName} — the same
+         * appended-field device as {@link #withOrderedByName}: {@code DealQuotationRepository}'s
+         * mapper and every test built from an older constructor shape (none of which know this
+         * field) set it here rather than repeating the canonical constructor by hand. */
+        public DealQuotationDto withHideProjectName(boolean value) {
+            return new DealQuotationDto(id, number, ticketId, docStatus, revisionNo, parentQuotationId,
+                createdById, createdByName, createdByNameEn, salesRepId, salesRepName, salesRepNameEn,
+                salesRepPhone, submittedAt, approvedById, approvedByName, approvedByNameEn, approvedAt,
+                approvalNote, quotationDate, customerName, customerAddress, customerTaxId, customerPhone,
+                contactId, contactName, contactPhone, contactEmail, projectName, deptCode, unitCode, offerDate,
+                depositPercent, remainderMode, creditDays, validityDays, validityDate, validityMode,
+                validityUntil, customerNotes, priceMode, documentLanguage, subtotalAmount, vatAmount,
+                grandTotal, currency, approverHasSignature, printedByDisplayId, printedByDisplayName,
+                printedByDisplayNameEn, salesRepDisplayId, salesRepDisplayName, salesRepDisplayNameEn,
+                salesRepDisplayPhone, omitContactHonorific, fullPaymentTerm, derivedFromQuotationId,
+                derivedFromQuotationNumber, derivedFromQuotationStatus, items, createdAt, updatedAt, origin,
+                pricingRequestId, priceModeChangedFromCeo, ceoPriceMode, pricingRequestCode,
+                itemsRemovedFromCeoCount, removedCeoItems, orderedByName, recipientType, recipientLabel,
+                ticketCode, dealStage, readOnly, value);
         }
 
         /** The pre-M4(c) shape (no {@link #itemsRemovedFromCeoCount}) — kept so every existing
@@ -729,11 +758,114 @@ public final class DealQuotationDtos {
          * shows. Non-null exactly when this row is linked to a decision item (i.e. the one signal
          * that replaces the old boolean "priceLocked" flag — a {@code DEAL_DIRECT} row or an
          * unlinked TILE row always reads null here). */
-        BigDecimal ceoNetUnitPrice
+        BigDecimal ceoNetUnitPrice,
+        /** Sales feedback #1 (2026-10-06, V201) — the list price (ราคาตั้ง) exactly as the rep
+         * typed it: บาท per ตร.ม. INCLUDING VAT ({@code sales.quotation_item.list_price_sqm}).
+         * {@link #unitPrice} is the per-แผ่น figure the server derived from it, and is what the
+         * document prints. Null on a row whose list price was stated per แผ่น — every pre-V201 row,
+         * every English-document row, every row created from a pricing request. Served so the
+         * editor can show the rep the figure they typed rather than one recovered from
+         * {@link #unitPrice}, which does not round-trip. */
+        BigDecimal listPriceSqm,
+        /** The same for {@code DIRECT_NET} mode's net price (ราคาสุทธิ): บาท per ตร.ม. INCLUDING
+         * VAT as typed ({@code sales.quotation_item.direct_net_price_sqm}); {@link #netUnitPrice}
+         * is the per-แผ่น figure derived from it. Null in every other mode and on every row whose
+         * net was stated per แผ่น. */
+        BigDecimal directNetPriceSqm,
+        /** This row's OWN price mode — "NET" | "SPECIAL_SQM" | "DIRECT_NET" — as stored in
+         * {@code sales.quotation_item.price_mode} (V204; sales feedback #14, owner 2026-10-06).
+         * Non-null ONLY on a TILE row of a document whose {@code priceMode} is {@code MIXED}; on
+         * every other row it is null and the document's mode applies
+         * ({@code WastageCalculator#rowPriceMode} is the one rule). A price internal: withheld
+         * from the {@code account} view together with the document's own mode. */
+        String priceMode
     ) {
+        /** The pre-V204 canonical shape (no per-row {@link #priceMode}) — kept so every existing
+         * construction site compiles unchanged. Defaults it to null: a row priced in its
+         * document's mode, which is what every one of those sites builds. */
+        public DealQuotationItemDto(
+            long id, int seq, String locationLabel, Long catalogPriceId, String productCode, String brand,
+            String model, String color, String texture, String sizeText, BigDecimal thicknessMm,
+            BigDecimal sqmPerPiece, String quantityMode, BigDecimal areaSqm, Integer piecesInput,
+            String wastageMode, BigDecimal wastageValue, Integer piecesPerBox, BigDecimal unitPrice,
+            BigDecimal discountPct, String originCountry, Integer leadTimeMinDays, Integer leadTimeMaxDays,
+            String itemNotes, BigDecimal piecesPerSqm, int piecesBeforeWastage, int piecesAfterWastage,
+            int piecesFinal, Integer boxes, BigDecimal netUnitPrice, BigDecimal lineAmount,
+            String descriptionLine, String sizeLine, String calculationLine, String lineType,
+            BigDecimal quantity, String unit, BigDecimal specialPriceSqm, BigDecimal adjustmentPct,
+            LocalDate adjustmentDeadline, String specialPriceLine, BigDecimal adjustmentAmount,
+            boolean hasPicture, String picturePlacement, String pictureUrl, BigDecimal sqmPerBox,
+            boolean roundToFullBox, boolean priceChangedFromCeo, BigDecimal ceoListUnitPrice,
+            BigDecimal ceoDiscountPct, BigDecimal ceoSpecialPriceSqm, BigDecimal ceoDirectNetPrice,
+            BigDecimal ceoNetUnitPrice, BigDecimal listPriceSqm, BigDecimal directNetPriceSqm) {
+            this(
+                id, seq, locationLabel, catalogPriceId, productCode, brand, model, color, texture, sizeText,
+                thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput, wastageMode, wastageValue,
+                piecesPerBox, unitPrice, discountPct, originCountry, leadTimeMinDays, leadTimeMaxDays,
+                itemNotes, piecesPerSqm, piecesBeforeWastage, piecesAfterWastage, piecesFinal, boxes,
+                netUnitPrice, lineAmount, descriptionLine, sizeLine, calculationLine, lineType, quantity,
+                unit, specialPriceSqm, adjustmentPct, adjustmentDeadline, specialPriceLine,
+                adjustmentAmount, hasPicture, picturePlacement, pictureUrl, sqmPerBox, roundToFullBox,
+                priceChangedFromCeo, ceoListUnitPrice, ceoDiscountPct, ceoSpecialPriceSqm,
+                ceoDirectNetPrice, ceoNetUnitPrice, listPriceSqm, directNetPriceSqm, null);
+        }
+
+        /** This item carrying {@code value} as its own {@link #priceMode} — the same appended-field
+         * device as {@link #withSqmPerBox}. Every other copy method on this record passes it
+         * through, so the order they are chained in does not matter. */
+        public DealQuotationItemDto withPriceMode(String value) {
+            return new DealQuotationItemDto(id, seq, locationLabel, catalogPriceId, productCode, brand, model,
+                color, texture, sizeText, thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput,
+                wastageMode, wastageValue, piecesPerBox, unitPrice, discountPct, originCountry, leadTimeMinDays,
+                leadTimeMaxDays, itemNotes, piecesPerSqm, piecesBeforeWastage, piecesAfterWastage, piecesFinal,
+                boxes, netUnitPrice, lineAmount, descriptionLine, sizeLine, calculationLine, lineType, quantity,
+                unit, specialPriceSqm, adjustmentPct, adjustmentDeadline, specialPriceLine, adjustmentAmount,
+                hasPicture, picturePlacement, pictureUrl, sqmPerBox, roundToFullBox,
+                priceChangedFromCeo, ceoListUnitPrice, ceoDiscountPct, ceoSpecialPriceSqm, ceoDirectNetPrice,
+                ceoNetUnitPrice, listPriceSqm, directNetPriceSqm, value);
+        }
+
+        /** The pre-V201 canonical shape (no {@link #listPriceSqm}/{@link #directNetPriceSqm}) — kept
+         * so every existing construction site (tests, mostly) compiles unchanged. Defaults both to
+         * null: a row priced per แผ่น, which is what every one of those fixtures is. */
+        public DealQuotationItemDto(
+            long id, int seq, String locationLabel, Long catalogPriceId, String productCode, String brand,
+            String model, String color, String texture, String sizeText, BigDecimal thicknessMm,
+            BigDecimal sqmPerPiece, String quantityMode, BigDecimal areaSqm, Integer piecesInput,
+            String wastageMode, BigDecimal wastageValue, Integer piecesPerBox, BigDecimal unitPrice,
+            BigDecimal discountPct, String originCountry, Integer leadTimeMinDays, Integer leadTimeMaxDays,
+            String itemNotes, BigDecimal piecesPerSqm, int piecesBeforeWastage, int piecesAfterWastage,
+            int piecesFinal, Integer boxes, BigDecimal netUnitPrice, BigDecimal lineAmount,
+            String descriptionLine, String sizeLine, String calculationLine, String lineType,
+            BigDecimal quantity, String unit, BigDecimal specialPriceSqm, BigDecimal adjustmentPct,
+            LocalDate adjustmentDeadline, String specialPriceLine, BigDecimal adjustmentAmount,
+            boolean hasPicture, String picturePlacement, String pictureUrl, BigDecimal sqmPerBox,
+            boolean roundToFullBox, boolean priceChangedFromCeo, BigDecimal ceoListUnitPrice,
+            BigDecimal ceoDiscountPct, BigDecimal ceoSpecialPriceSqm, BigDecimal ceoDirectNetPrice,
+            BigDecimal ceoNetUnitPrice) {
+            this(
+                id, seq, locationLabel, catalogPriceId, productCode, brand, model, color, texture, sizeText,
+                thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput, wastageMode, wastageValue,
+                piecesPerBox, unitPrice, discountPct, originCountry, leadTimeMinDays, leadTimeMaxDays,
+                itemNotes, piecesPerSqm, piecesBeforeWastage, piecesAfterWastage, piecesFinal, boxes,
+                netUnitPrice, lineAmount, descriptionLine, sizeLine, calculationLine, lineType, quantity,
+                unit, specialPriceSqm, adjustmentPct, adjustmentDeadline, specialPriceLine,
+                adjustmentAmount, hasPicture, picturePlacement, pictureUrl, sqmPerBox, roundToFullBox,
+                priceChangedFromCeo, ceoListUnitPrice, ceoDiscountPct, ceoSpecialPriceSqm,
+                ceoDirectNetPrice, ceoNetUnitPrice, null, null);
+        }
+
         /** Ruling 3 (2026-09-30): the account view -- net unit price and line amount stay; every list-price / discount / CEO pricing field is emptied. */
         public DealQuotationItemDto withoutPriceInternals() {
-            return new DealQuotationItemDto(id, seq, locationLabel, null, productCode, brand, model, color, texture, sizeText, thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput, wastageMode, wastageValue, piecesPerBox, null, null, originCountry, leadTimeMinDays, leadTimeMaxDays, itemNotes, piecesPerSqm, piecesBeforeWastage, piecesAfterWastage, piecesFinal, boxes, netUnitPrice, lineAmount, descriptionLine, sizeLine, null, lineType, quantity, unit, null, null, adjustmentDeadline, null, null, hasPicture, picturePlacement, pictureUrl, sqmPerBox, roundToFullBox, false, null, null, null, null, null);
+            return new DealQuotationItemDto(id, seq, locationLabel, null, productCode, brand, model, color, texture, sizeText, thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput, wastageMode, wastageValue, piecesPerBox, null, null, originCountry, leadTimeMinDays, leadTimeMaxDays, itemNotes, piecesPerSqm, piecesBeforeWastage, piecesAfterWastage, piecesFinal, boxes, netUnitPrice, lineAmount, descriptionLine, sizeLine, null, lineType, quantity, unit, null, null, adjustmentDeadline, null, null, hasPicture, picturePlacement, pictureUrl, sqmPerBox, roundToFullBox, false, null, null, null, null, null,
+                // V201: the typed per-ตร.ม. prices are ราคาตั้ง in another unit and the VAT-inclusive figure the
+                // net is derived from — exactly what this view withholds. Neither is served.
+                null, null,
+                // V204: which mode a row was priced in says how its net was arrived at — the same
+                // fact as the document's own priceMode, which DealQuotationDto#withoutPriceInternals
+                // already withholds. On a mixed document it would otherwise tell this view, line by
+                // line, which products went out at a ราคาพิเศษ. Not served either.
+                null);
         }
 
         /** The pre-GLA-123 canonical shape (no CEO-original/changed-flag fields) — kept so every
@@ -822,7 +954,7 @@ public final class DealQuotationDtos {
                 unit, specialPriceSqm, adjustmentPct, adjustmentDeadline, specialPriceLine, adjustmentAmount,
                 hasPicture, picturePlacement, pictureUrl, value, roundToFullBox,
                 priceChangedFromCeo, ceoListUnitPrice, ceoDiscountPct, ceoSpecialPriceSqm, ceoDirectNetPrice,
-                ceoNetUnitPrice);
+                ceoNetUnitPrice, listPriceSqm, directNetPriceSqm, priceMode);
         }
 
         /** This item carrying {@code value} as its {@link #roundToFullBox} — same device as
@@ -837,7 +969,7 @@ public final class DealQuotationDtos {
                 unit, specialPriceSqm, adjustmentPct, adjustmentDeadline, specialPriceLine, adjustmentAmount,
                 hasPicture, picturePlacement, pictureUrl, sqmPerBox, value,
                 priceChangedFromCeo, ceoListUnitPrice, ceoDiscountPct, ceoSpecialPriceSqm, ceoDirectNetPrice,
-                ceoNetUnitPrice);
+                ceoNetUnitPrice, listPriceSqm, directNetPriceSqm, priceMode);
         }
 
         /** This item carrying the GLA-123 CEO-comparison fields — same device as
@@ -852,7 +984,24 @@ public final class DealQuotationDtos {
                 boxes, netUnitPrice, lineAmount, descriptionLine, sizeLine, calculationLine, lineType, quantity,
                 unit, specialPriceSqm, adjustmentPct, adjustmentDeadline, specialPriceLine, adjustmentAmount,
                 hasPicture, picturePlacement, pictureUrl, sqmPerBox, roundToFullBox,
-                changed, listUnitPrice, discountPct2, specialPriceSqm2, directNetPrice, netUnitPrice2);
+                changed, listUnitPrice, discountPct2, specialPriceSqm2, directNetPrice, netUnitPrice2,
+                listPriceSqm, directNetPriceSqm, priceMode);
+        }
+
+        /** This item carrying the per-ตร.ม. prices as the rep typed them (V201) — the same
+         * appended-field device as {@link #withSqmPerBox}, for the repository read path and the
+         * calculate-line preview. Every other copy method on this record passes both through, so
+         * the order they are chained in does not matter. */
+        public DealQuotationItemDto withPerSqmPrices(BigDecimal list, BigDecimal directNet) {
+            return new DealQuotationItemDto(id, seq, locationLabel, catalogPriceId, productCode, brand, model,
+                color, texture, sizeText, thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput,
+                wastageMode, wastageValue, piecesPerBox, unitPrice, discountPct, originCountry, leadTimeMinDays,
+                leadTimeMaxDays, itemNotes, piecesPerSqm, piecesBeforeWastage, piecesAfterWastage, piecesFinal,
+                boxes, netUnitPrice, lineAmount, descriptionLine, sizeLine, calculationLine, lineType, quantity,
+                unit, specialPriceSqm, adjustmentPct, adjustmentDeadline, specialPriceLine, adjustmentAmount,
+                hasPicture, picturePlacement, pictureUrl, sqmPerBox, roundToFullBox,
+                priceChangedFromCeo, ceoListUnitPrice, ceoDiscountPct, ceoSpecialPriceSqm, ceoDirectNetPrice,
+                ceoNetUnitPrice, list, directNet, priceMode);
         }
 
         /** This item with its picture fields set from the stored link (repository read path). */
@@ -868,7 +1017,7 @@ public final class DealQuotationDtos {
                 has ? "/api/deal-quotations/" + quotationId + "/items/" + id + "/picture" : null, sqmPerBox,
                 roundToFullBox,
                 priceChangedFromCeo, ceoListUnitPrice, ceoDiscountPct, ceoSpecialPriceSqm, ceoDirectNetPrice,
-                ceoNetUnitPrice);
+                ceoNetUnitPrice, listPriceSqm, directNetPriceSqm, priceMode);
         }
     }
 }

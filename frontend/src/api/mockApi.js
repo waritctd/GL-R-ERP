@@ -6688,18 +6688,102 @@ function dealQuotationLineType(input) {
   return input?.lineType || 'TILE';
 }
 
-/** DealQuotationService#inferPriceMode — what calculate-line uses, having no quotation. */
+// ── Mixed price modes (V204; sales feedback #14, owner 2026-10-06) ─────────────────────────────
+// Mirrors WastageCalculator#rowPriceMode / DealQuotationService#rowPriceMode and
+// #requirePriceModeAllowed: a document's priceMode may be 'MIXED', and then every TILE row states
+// its own (one of the three below) and is priced in it; on any other document a row's own mode is
+// not consulted and none is stored. The RULES are mirrored in full, same messages — a mock more
+// permissive than the service is the dangerous direction. As everywhere in this section the MATH
+// is not: each row is handed to the same per-mode stub a single-mode document uses.
+const MOCK_ROW_PRICE_MODES = ['NET', 'SPECIAL_SQM', 'DIRECT_NET'];
+
+/** ItemInput#priceMode's @Pattern — bean validation, so it bites on EVERY row that states a mode,
+ * whatever the document's own mode and whether or not that mode will be consulted. */
+function requireMockRowPriceModeWellFormed(input) {
+  if (input?.priceMode != null && !MOCK_ROW_PRICE_MODES.includes(input.priceMode)) {
+    fail('วิธีคิดราคาของรายการต้องเป็น NET, SPECIAL_SQM หรือ DIRECT_NET', 400);
+  }
+}
+
+/** DealQuotationService#rowPriceMode: the mode ONE row of a document being written is priced in.
+ * On a MIXED document a tile row that states none is REFUSED, naming the row — never guessed from
+ * its fields; a PLAIN / ADJUSTMENT row has no price mode and is handed NET, as always. */
+function mockRowPriceMode(input, documentPriceMode, rowNumber) {
+  requireMockRowPriceModeWellFormed(input);
+  if (documentPriceMode !== 'MIXED') return documentPriceMode;
+  if (dealQuotationLineType(input) !== 'TILE') return 'NET';
+  if (input?.priceMode == null || String(input.priceMode).trim() === '') {
+    fail(`รายการที่ ${rowNumber}: กรุณาเลือกวิธีคิดราคาของรายการนี้ (ใบเสนอราคานี้กรอกราคาแบบผสมหลายวิธี)`, 400);
+  }
+  return input.priceMode;
+}
+
+/** DealQuotationService#inferPriceMode — what calculate-line uses, having no quotation. V204: a row
+ * that STATES its mode is previewed in it (on a mixed document the editor always does); only a
+ * row that states none is guessed from its fields, as before. */
 function inferMockPriceMode(input) {
+  requireMockRowPriceModeWellFormed(input);
+  if (input?.priceMode != null) return input.priceMode;
   if (input?.specialPriceSqm != null) return 'SPECIAL_SQM';
-  if (input?.directNetPrice != null) return 'DIRECT_NET';
+  // V201: a net typed per ตร.ม. says "ราคาสุทธิ" exactly as one typed per แผ่น does.
+  if (input?.directNetPrice != null || input?.directNetPriceSqm != null) return 'DIRECT_NET';
   return 'NET';
 }
 
-function computeDealQuotationV3Line(input = {}, priceMode = 'NET', documentLanguage = 'TH') {
-  const lineType = dealQuotationLineType(input);
+// V201 (sales feedback #1, 2026-10-06) — mirrors DealQuotationService#withPerPiecePricesFromPerSqm:
+// a Thai TILE row may state its ราคาตั้ง (`listPriceSqm`, every price mode) and its ราคาสุทธิ
+// (`directNetPriceSqm`, DIRECT_NET only) per ตร.ม. INCLUDING VAT; each REPLACES its per-แผ่น
+// counterpart (one sent beside it is not consulted) and is kept on the row as typed. A row with
+// neither comes back untouched, both fields null — every per-แผ่น request, priced as before.
+//
+// The RULES are mirrored in full, same messages, same order — a mock more permissive than the
+// service is the dangerous direction: refused on an English document, refused when zero or
+// negative, refused on a row with no area per piece (never read as a price per แผ่น instead), and
+// a net per ตร.ม. outside DIRECT_NET prices nothing and is dropped. One deliberate difference, on
+// the STRICT side: the service can take a missing area from the catalogue row
+// (#resolveSqmPerPiece); this stub only reads the row's own.
+//
+// ⚠️ The per-แผ่น FIGURE is the exception to this section's "never its MATH" rule above. It comes
+// from mockNetPerPieceFromSpecialSqm — the labelled, non-authoritative MIRROR of
+// WastageCalculator already in this file (review finding #7). Returning "not computed" instead
+// would leave EVERY Thai tile row without a price in mock mode, since every one of them is typed
+// per ตร.ม. now. So CLAUDE.md's warning applies in full: a green mock-driven test over these
+// figures is evidence about plumbing, never that the conversion is right. That is pinned on the
+// real service — WastageCalculatorPerSqmPriceTest, DealQuotationPerSqmPriceIntegrationTest.
+function withMockPerPiecePricesFromPerSqm(input, priceMode, documentLanguage) {
+  const listPriceSqm = input.listPriceSqm ?? null;
+  const directNetPriceSqm = priceMode === 'DIRECT_NET' ? (input.directNetPriceSqm ?? null) : null;
+  if (listPriceSqm == null && directNetPriceSqm == null) {
+    return { ...input, listPriceSqm: null, directNetPriceSqm: null };
+  }
+  if (documentLanguage === 'EN') fail('ราคาต่อ ตร.ม. รวม VAT ใช้ได้กับใบเสนอราคาภาษาไทยเท่านั้น', 400);
+  if (listPriceSqm != null && !(Number(listPriceSqm) > 0)) fail('ราคาตั้งต่อ ตร.ม. ต้องมากกว่าศูนย์', 400);
+  if (directNetPriceSqm != null && !(Number(directNetPriceSqm) > 0)) fail('ราคาสุทธิต่อ ตร.ม. ต้องมากกว่าศูนย์', 400);
+  if (!(Number(input.sqmPerPiece) > 0)) fail('ขาด แผ่น/ตร.ม. จึงแปลงราคาต่อ ตร.ม. เป็นราคาต่อแผ่นไม่ได้', 400);
+  return {
+    ...input,
+    listPriceSqm: listPriceSqm == null ? null : round2(Number(listPriceSqm)),
+    directNetPriceSqm: directNetPriceSqm == null ? null : round2(Number(directNetPriceSqm)),
+    unitPrice: listPriceSqm == null
+      ? input.unitPrice : mockNetPerPieceFromSpecialSqm(listPriceSqm, input.sqmPerPiece),
+    directNetPrice: directNetPriceSqm == null
+      ? input.directNetPrice : mockNetPerPieceFromSpecialSqm(directNetPriceSqm, input.sqmPerPiece),
+  };
+}
+
+function computeDealQuotationV3Line(rawInput = {}, priceMode = 'NET', documentLanguage = 'TH') {
+  const lineType = dealQuotationLineType(rawInput);
+  // V201: a TILE row's per-ตร.ม. prices are turned into per-แผ่น ones FIRST, exactly where the
+  // service does it (DealQuotationService#buildItem), so everything below keeps reading the
+  // per-แผ่น figures it always has. PLAIN and ADJUSTMENT rows have no per-ตร.ม. price at all.
+  const input = lineType === 'TILE'
+    ? withMockPerPiecePricesFromPerSqm(rawInput, priceMode, documentLanguage) : rawInput;
   const v3Nulls = {
     specialPriceSqm: null, adjustmentPct: null, adjustmentDeadline: null,
     specialPriceLine: null, adjustmentAmount: null,
+    // V201 — null on every row that is not a tile priced per ตร.ม.; the TILE branch below puts
+    // back whatever withMockPerPiecePricesFromPerSqm kept.
+    listPriceSqm: null, directNetPriceSqm: null,
   };
   if (lineType === 'PLAIN') {
     const quantity = Number(input.quantity) || 1;
@@ -6734,6 +6818,7 @@ function computeDealQuotationV3Line(input = {}, priceMode = 'NET', documentLangu
   const tile = computeDealQuotationLine(input, documentLanguage);
   const common = {
     ...tile, ...v3Nulls, lineType: 'TILE', quantity: tile.piecesFinal, unit: documentLanguage === 'EN' ? 'PCS' : 'แผ่น',
+    listPriceSqm: input.listPriceSqm, directNetPriceSqm: input.directNetPriceSqm,
   };
   if (priceMode === 'SPECIAL_SQM' && documentLanguage === 'EN') {
     // English per-sqm — the RULE is mirrored, never the quantity/amount MATH (boxes × ตร.ม./กล่อง,
@@ -6811,9 +6896,21 @@ function buildDealQuotationItemRow(input, seq, priceMode = 'NET', existingIds = 
  * default. */
 function resolveDealQuotationV3Header(payload, current = null) {
   const priceMode = payload.priceMode || current?.priceMode || 'NET';
-  if (!['NET', 'SPECIAL_SQM', 'DIRECT_NET'].includes(priceMode)) fail('ต้องเป็น NET, SPECIAL_SQM หรือ DIRECT_NET', 400);
+  if (!['NET', 'SPECIAL_SQM', 'DIRECT_NET', 'MIXED'].includes(priceMode)) {
+    fail('ต้องเป็น NET, SPECIAL_SQM, DIRECT_NET หรือ MIXED', 400);
+  }
   const documentLanguage = String(payload.documentLanguage || current?.documentLanguage || 'TH').toUpperCase();
   if (!['TH', 'EN'].includes(documentLanguage)) fail('ต้องเป็น TH หรือ EN', 400);
+  // DealQuotationService#requirePriceModeAllowed (V204), on the RESOLVED pair and in its order:
+  // never a quotation that came from a คำขอราคา (its mode is the CEO's), and Thai documents only.
+  if (priceMode === 'MIXED') {
+    if (current?.origin === 'PRICING_REQUEST') {
+      fail('ใบเสนอราคาที่สร้างจากคำขอราคาใช้วิธีคิดราคาตามที่ CEO อนุมัติ จึงกรอกราคาแบบผสมหลายวิธีไม่ได้', 400);
+    }
+    if (documentLanguage !== 'TH') {
+      fail('การกรอกราคาแบบผสมหลายวิธีในใบเดียว ใช้ได้กับใบเสนอราคาภาษาไทยเท่านั้น', 400);
+    }
+  }
   const expectedCurrency = documentLanguage === 'EN' ? 'USD' : 'THB';
   const currency = payload.currency ? String(payload.currency).toUpperCase() : expectedCurrency;
   if (currency !== expectedCurrency) {
@@ -6908,7 +7005,16 @@ function buildDealQuotationItems(inputs, priceMode, existingItems = null, docume
   // can be recognised as "keep this row" rather than minted fresh — see buildDealQuotationItemRow.
   // null on create, where nothing exists yet.
   const existingIds = existingItems ? new Set(existingItems.map((it) => it.id)) : null;
-  const items = [...products, ...adjustments].map((item, index) => buildDealQuotationItemRow(item, index + 1, priceMode, existingIds, documentLanguage));
+  // V204: each row is built in the mode IT is priced in, and that mode is STORED on the row only
+  // where it is the row's to decide — a tile row of a MIXED document. Everywhere else the stored
+  // value is null, whatever the client sent (computeDealQuotationV3Line echoes its input, so the
+  // key is overwritten here rather than trusted).
+  const mixed = priceMode === 'MIXED';
+  const items = [...products, ...adjustments].map((item, index) => {
+    const rowMode = mockRowPriceMode(item, priceMode, index + 1);
+    const row = buildDealQuotationItemRow(item, index + 1, rowMode, existingIds, documentLanguage);
+    return { ...row, priceMode: mixed && dealQuotationLineType(item) === 'TILE' ? rowMode : null };
+  });
   const known = items.every((it) => it.lineAmount != null);
   if (known && round2(items.reduce((sum, it) => sum + Number(it.lineAmount), 0)) < 0) {
     fail('ยอดรวมหลังหักส่วนลดพิเศษติดลบ กรุณาตรวจสอบส่วนลดพิเศษ', 400);
@@ -6944,6 +7050,11 @@ function forDealQuotationViewer(dto, user) {
       adjustmentAmount: null, specialPriceLine: null, calculationLine: null, priceChangedFromCeo: false,
       ceoListUnitPrice: null, ceoDiscountPct: null, ceoSpecialPriceSqm: null, ceoDirectNetPrice: null,
       ceoNetUnitPrice: null,
+      // V201 — ราคาตั้ง in another unit, and the VAT-inclusive figure the net is derived from:
+      // exactly what this view withholds (DealQuotationItemDto#withoutPriceInternals).
+      listPriceSqm: null, directNetPriceSqm: null,
+      // V204 — the row's own price mode: the document's priceMode (nulled above) row by row.
+      priceMode: null,
     })),
   };
 }
@@ -7060,6 +7171,11 @@ function buildDealQuotationDto(row) {
     // ordered_by_name column), null when nobody has typed one (the dotted placeholder). Mirrors
     // DealQuotationDto#orderedByName / DealQuotationRenderAdapter#orderedByName exactly.
     orderedByName: row.orderedByName ?? null,
+    // Sales feedback #5 (V200, 2026-10-06) — "ไม่แสดงชื่อโครงการในใบเสนอราคา". NOT NULL DEFAULT
+    // FALSE on the real column, so a seed/pre-V200 row normalises to false here. Mirrors
+    // DealQuotationDto#hideProjectName. projectName below is returned regardless: the flag only
+    // ever changes what DealQuotationRenderAdapter PRINTS, which this mock does not render at all.
+    hideProjectName: row.hideProjectName ?? false,
     // Item 2 (V180, "ไม่เติม “คุณ”", owner ruling 2026-09-16): NOT NULL DEFAULT FALSE on the real
     // column — a stored/never-set value normalises to false here, same device as priceMode/
     // documentLanguage above. Mirrors DealQuotationDto#omitContactHonorific.
@@ -16293,6 +16409,9 @@ export const api = {
         // name; blank/omitted stores null (the dotted placeholder), mirrors
         // DealQuotationService#create's blankToNull(request.orderedByName()).
         orderedByName: blankToNullMock(payload.orderedByName),
+        // Sales feedback #5 (V200) — a brand-new document prints its project unless the request
+        // says otherwise; mirrors DealQuotationService#create (null/absent = false).
+        hideProjectName: payload.hideProjectName === true,
         // Slice 2 (S2-B1) — validated above; recipient_label carries the Thai role label for a
         // direct row (a PRICING_REQUEST row's carries its คำขอราคา's own label — Round 8).
         recipientType,
@@ -16553,6 +16672,14 @@ export const api = {
         // genuinely clears it back to the dotted placeholder, mirroring
         // DealQuotationService#update's blankToNull(request.orderedByName()).
         orderedByName: blankToNullMock(payload.orderedByName),
+        // Sales feedback #5 (V200) — DELIBERATELY NOT the #M7 "missing clears it" discipline every
+        // field above uses. A missing hideProjectName KEEPS the stored choice, mirroring
+        // DealQuotationService#update: a browser tab still running the bundle from before this
+        // field existed sends none, and reading that as false would start PRINTING a project name
+        // the rep had chosen to hide. Only an explicit true/false changes it.
+        hideProjectName: payload.hideProjectName == null
+          ? (row.hideProjectName ?? false)
+          : payload.hideProjectName === true,
         items,
         // M4(c) fix (Opus review, 2026-09-20) — mirrors
         // DealQuotationRepository#incrementItemsRemovedFromCeo's GREATEST(0, ...) floor.

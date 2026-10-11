@@ -266,6 +266,24 @@
         "VITE_USE_MOCKS": "false",
         "VITE_API_PROXY_TARGET": "http://localhost:8082"
       }
+    },
+    {
+      "name": "frontend-mock-main",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "C:/Users/user/Documents/GitHub/GL-R-ERP/.claude/worktrees/sales-feedback-main/frontend",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5201",
+        "--strictPort"
+      ],
+      "port": 5201,
+      "env": {
+        "VITE_USE_MOCKS": "true"
+      }
     }
   ]
 }

@@ -135,6 +135,17 @@ export function QuotationDocumentView({ quotation }) {
           <div>
             <span className="block text-2xs font-bold uppercase text-text-muted">โครงการ</span>
             <strong>{quotation.projectName ?? '-'}</strong>
+            {/* Sales feedback #5 (2026-10-06, V200) — "ไม่แสดงชื่อโครงการในใบเสนอราคา". The PRINTED
+                document drops its "Project : …" line (DealQuotationRenderAdapter). This screen is
+                the internal view of the same document — the approver still needs to know which
+                project they are approving — so the name stays and the difference is said in
+                words beside it, rather than leaving screen and paper silently unequal. Only when
+                there is a name to hide: with none, nothing prints either way. */}
+            {quotation.hideProjectName && quotation.projectName?.trim() ? (
+              <span className="block text-xs text-text-muted" data-testid="doc-project-hidden">
+                ไม่แสดงในใบเสนอราคา
+              </span>
+            ) : null}
           </div>
           <div>
             <span className="block text-2xs font-bold uppercase text-text-muted">พนักงานขาย</span>
