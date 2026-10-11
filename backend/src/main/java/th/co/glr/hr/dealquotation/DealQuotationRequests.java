@@ -149,8 +149,127 @@ public final class DealQuotationRequests {
          * why it is REFUSED (400) together with an English per-sqm price mode, which has no way to
          * express a loose-piece quantity in square metres.
          */
-        Boolean roundToFullBox
+        Boolean roundToFullBox,
+
+        /**
+         * Sales feedback #1 (2026-10-06, V192.2) — "แก้เป็น ตร.ม. รวม VAT ทุกแบบ". TILE rows on a THAI
+         * document: the list price (ราคาตั้ง) in บาท per ตร.ม., INCLUDING VAT, exactly as sales read
+         * it off their price lists. When present the server DERIVES the per-แผ่น list price from it
+         * ({@code WastageCalculator#perPieceExVatFromSqmIncVat} — the rule ราคาพิเศษ has always
+         * used) and a {@link #unitPrice} sent beside it is not consulted, so the stored row's two
+         * figures can never disagree. Null means the row still states its list price per แผ่น in
+         * {@link #unitPrice}: every request before this field existed, the English form, the
+         * pricing-request path.
+         *
+         * <p>Stored verbatim ({@code sales.quotation_item.list_price_sqm}) and served back on
+         * {@code DealQuotationItemDto#listPriceSqm}, because the conversion cannot be undone — on a
+         * 10×10 tile 1,800 per ตร.ม. is 16.82 a piece, and 16.82 a piece is 1,799.74 per ตร.ม.
+         * {@code @Digits} matches that column's NUMERIC(12,2), the same reasoning as
+         * {@link #specialPriceSqm}. Refused (400) on an English document, where "รวม VAT" means
+         * nothing, and when the row has no area per piece to convert with.
+         */
+        @DecimalMax("9999999") @Digits(integer = 10, fraction = 2) BigDecimal listPriceSqm,
+
+        /**
+         * The same, for the net price in {@code DIRECT_NET} mode (ราคาสุทธิ): บาท per ตร.ม.
+         * INCLUDING VAT, from which the server derives the per-แผ่น net that mode has always
+         * stored. Null means the net is still stated per แผ่น in {@link #directNetPrice}. Read only
+         * in {@code DIRECT_NET} — sent under another mode it prices nothing and is not stored,
+         * exactly as {@link #specialPriceSqm} is only read in its own. Stored in
+         * {@code sales.quotation_item.direct_net_price_sqm}.
+         */
+        @DecimalMax("9999999") @Digits(integer = 10, fraction = 2) BigDecimal directNetPriceSqm,
+
+        /**
+         * This row's OWN price mode — "NET" | "SPECIAL_SQM" | "DIRECT_NET" — on a document whose
+         * {@code priceMode} is {@code MIXED} (V192.5; sales feedback #14, owner 2026-10-06:
+         * "อยากให้เลือกการคิดราคาแต่ละข้อไม่เหมือนกันได้"). Required on every TILE row of such a document,
+         * where it decides exactly what the document's mode decides on a single-mode one: which
+         * of the row's price fields are read, how its net is worked out, what its ส่วนลด cell
+         * prints.
+         *
+         * <p>IGNORED on a document that is not MIXED — the header's mode governs every row there,
+         * and none is stored on the row — and on PLAIN / ADJUSTMENT rows, which have no price mode
+         * at all. Never {@code MIXED} itself: a row is always priced in exactly one way.
+         *
+         * <p>{@code calculate-line}, which has no document to read a mode off, uses this when it
+         * is present and otherwise infers the mode from which price fields the row carries, as it
+         * always has.
+         */
+        @Pattern(regexp = "NET|SPECIAL_SQM|DIRECT_NET",
+            message = "วิธีคิดราคาของรายการต้องเป็น NET, SPECIAL_SQM หรือ DIRECT_NET")
+        String priceMode
     ) {
+        /** The pre-V192.5 canonical shape (no per-row {@link #priceMode}) — kept so every existing
+         * construction site compiles unchanged. Defaults it to null: the row is priced in its
+         * document's mode, which is what every one of those sites means. */
+        public ItemInput(
+            String locationLabel, Long catalogPriceId, String productCode, String brand, String model,
+            String color, String texture, String sizeText, BigDecimal thicknessMm, BigDecimal sqmPerPiece,
+            String quantityMode, BigDecimal areaSqm, Integer piecesInput, String wastageMode,
+            BigDecimal wastageValue, Integer piecesPerBox, BigDecimal unitPrice, BigDecimal discountPct,
+            String originCountry, Integer leadTimeMinDays, Integer leadTimeMaxDays, String itemNotes,
+            String lineType, String description, BigDecimal quantity, String unit,
+            BigDecimal specialPriceSqm, BigDecimal directNetPrice, BigDecimal adjustmentPct,
+            LocalDate adjustmentDeadline, BigDecimal adjustmentAmount, Long id, BigDecimal sqmPerBox,
+            Boolean roundToFullBox, BigDecimal listPriceSqm, BigDecimal directNetPriceSqm) {
+            this(
+                locationLabel, catalogPriceId, productCode, brand, model, color, texture, sizeText,
+                thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput, wastageMode, wastageValue,
+                piecesPerBox, unitPrice, discountPct, originCountry, leadTimeMinDays, leadTimeMaxDays,
+                itemNotes, lineType, description, quantity, unit, specialPriceSqm, directNetPrice,
+                adjustmentPct, adjustmentDeadline, adjustmentAmount, id, sqmPerBox, roundToFullBox,
+                listPriceSqm, directNetPriceSqm, null);
+        }
+
+        /** This row stating {@code newPriceMode} as its own price mode, everything else unchanged
+         * — see {@link #priceMode}. */
+        public ItemInput withPriceMode(String newPriceMode) {
+            return new ItemInput(locationLabel, catalogPriceId, productCode, brand, model, color, texture, sizeText,
+                thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput, wastageMode, wastageValue,
+                piecesPerBox, unitPrice, discountPct, originCountry, leadTimeMinDays, leadTimeMaxDays,
+                itemNotes, lineType, description, quantity, unit, specialPriceSqm, directNetPrice,
+                adjustmentPct, adjustmentDeadline, adjustmentAmount, id, sqmPerBox, roundToFullBox,
+                listPriceSqm, directNetPriceSqm, newPriceMode);
+        }
+
+        /** The pre-V192.2 canonical shape (no {@link #listPriceSqm}/{@link #directNetPriceSqm}) — kept
+         * so every existing construction site compiles unchanged. Defaults both to null: the row
+         * states its prices per แผ่น, which is what every one of those sites means. */
+        public ItemInput(
+            String locationLabel, Long catalogPriceId, String productCode, String brand, String model,
+            String color, String texture, String sizeText, BigDecimal thicknessMm, BigDecimal sqmPerPiece,
+            String quantityMode, BigDecimal areaSqm, Integer piecesInput, String wastageMode,
+            BigDecimal wastageValue, Integer piecesPerBox, BigDecimal unitPrice, BigDecimal discountPct,
+            String originCountry, Integer leadTimeMinDays, Integer leadTimeMaxDays, String itemNotes,
+            String lineType, String description, BigDecimal quantity, String unit,
+            BigDecimal specialPriceSqm, BigDecimal directNetPrice, BigDecimal adjustmentPct,
+            LocalDate adjustmentDeadline, BigDecimal adjustmentAmount, Long id, BigDecimal sqmPerBox,
+            Boolean roundToFullBox) {
+            this(
+                locationLabel, catalogPriceId, productCode, brand, model, color, texture, sizeText,
+                thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput, wastageMode, wastageValue,
+                piecesPerBox, unitPrice, discountPct, originCountry, leadTimeMinDays, leadTimeMaxDays,
+                itemNotes, lineType, description, quantity, unit, specialPriceSqm, directNetPrice,
+                adjustmentPct, adjustmentDeadline, adjustmentAmount, id, sqmPerBox, roundToFullBox, null,
+                null);
+        }
+
+        /**
+         * This row with its two per-แผ่น prices replaced, and everything else — the typed
+         * per-ตร.ม. figures included — unchanged. {@code DealQuotationService} uses it to turn a
+         * row priced per ตร.ม. into the per-แผ่น shape every rule below it already works with, in
+         * ONE place, before any of them runs.
+         */
+        public ItemInput withPerPiecePrices(BigDecimal newUnitPrice, BigDecimal newDirectNetPrice) {
+            return new ItemInput(locationLabel, catalogPriceId, productCode, brand, model, color, texture, sizeText,
+                thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput, wastageMode, wastageValue,
+                piecesPerBox, newUnitPrice, discountPct, originCountry, leadTimeMinDays, leadTimeMaxDays,
+                itemNotes, lineType, description, quantity, unit, specialPriceSqm, newDirectNetPrice,
+                adjustmentPct, adjustmentDeadline, adjustmentAmount, id, sqmPerBox, roundToFullBox,
+                listPriceSqm, directNetPriceSqm, priceMode);
+        }
+
         /** The pre-loose-pieces canonical shape (with {@link #sqmPerBox}, no
          * {@link #roundToFullBox}) — kept so every existing construction site compiles unchanged.
          * Defaults {@code roundToFullBox} to null, which reads as {@code true}. */
@@ -286,9 +405,15 @@ public final class DealQuotationRequests {
          * documents every tile row in a document uses the same mode, so one selector is the least
          * typing. PLAIN rows always carry a direct price and ignore this, which is what still lets
          * a document mix a ราคาพิเศษ tile with a freight line.
+         *
+         * <p>"MIXED" (V192.5, sales feedback #14 / owner 2026-10-06) is the document that says the
+         * opposite: no single mode, each TILE row states its own in {@link ItemInput#priceMode}.
+         * Thai, direct-deal documents only. It did not replace the ruling above — one mode for the
+         * whole document is still the default and still what most documents are; MIXED is the
+         * rep's explicit choice for the document that needs both.
          */
-        @Pattern(regexp = "NET|SPECIAL_SQM|DIRECT_NET",
-            message = "ต้องเป็น NET, SPECIAL_SQM หรือ DIRECT_NET")
+        @Pattern(regexp = "NET|SPECIAL_SQM|DIRECT_NET|MIXED",
+            message = "ต้องเป็น NET, SPECIAL_SQM, DIRECT_NET หรือ MIXED")
         String priceMode,
         /**
          * "TH" (default when null) | "EN" — quotation v3b (V169). TH prints the Thai F-SM-002 with
@@ -372,8 +497,82 @@ public final class DealQuotationRequests {
          * brand-new document starts with no manual name, i.e. the dotted line.
          */
         @Size(max = 255) String orderedByName,
+        /**
+         * Sales feedback #5 (2026-10-06, V192.1) — "ไม่แสดงชื่อโครงการในใบเสนอราคา": when true the
+         * printed document carries no "Project : …" line ({@link #projectName} itself is still
+         * stored and still shown in the editor, the register and on the deal).
+         *
+         * <p><b>null means different things on create and update</b>, the same split
+         * {@link #priceMode} documents and for the same reason. On CREATE it means false — a
+         * brand-new document prints its project. On UPDATE it means KEEP THE STORED CHOICE. That is
+         * deliberately NOT {@link #omitContactHonorific}'s "missing clears it": a browser tab still
+         * running the bundle from before this field existed sends no value at all, and reading that
+         * as false would silently start PRINTING a project name a rep had chosen to hide, on a
+         * customer document, the first time anyone saved from the stale tab. The editor itself
+         * always sends an explicit true/false.
+         */
+        Boolean hideProjectName,
+        /**
+         * V192.3 — how to reach the person named in {@link #orderedByName} (the editor's ผู้ติดต่อ).
+         * A SALES RECORD only: shown on the quotation's details, NEVER printed on the document.
+         * Free text (an extension or several numbers is normal), optional. Travels exactly like
+         * {@link #orderedByName}: the editor always sends its current value, so a null/blank on a
+         * PUT clears it.
+         *
+         * <p>Deliberately carries no bean-validation annotation: the value is trimmed first and a
+         * blank one is not an error, so the 50-character limit is enforced by
+         * {@code DealQuotationService} on the trimmed value.
+         */
+        String orderedByPhone,
+        /** V192.3 — the email beside {@link #orderedByPhone}; same record-only, never-printed,
+         * clears-on-blank contract. Its shape and 254-character limit are likewise enforced by
+         * {@code DealQuotationService} after trimming, not here. */
+        String orderedByEmail,
         @NotEmpty List<@Valid ItemInput> items
     ) {
+        /** The pre-V192.3 canonical shape (no {@link #orderedByPhone}/{@link #orderedByEmail}) —
+         * kept so every existing construction site (tests, mostly) compiles unchanged. Defaults
+         * both to null: no phone, no email, which is what every one of those sites means. */
+        public UpsertDealQuotationRequest(Long contactId, String deptCode, String unitCode,
+                                          LocalDate offerDate, Integer depositPercent,
+                                          String remainderMode, Integer creditDays,
+                                          Integer validityDays, String validityMode, LocalDate validityUntil,
+                                          String customerNotes, String priceMode, String documentLanguage,
+                                          String currency, Long printedByDisplayId, Long salesRepDisplayId,
+                                          String projectName, Boolean omitContactHonorific,
+                                          String fullPaymentTerm, String orderedByName,
+                                          Boolean hideProjectName, List<ItemInput> items) {
+            this(contactId, deptCode, unitCode, offerDate, depositPercent, remainderMode,
+                creditDays, validityDays, validityMode, validityUntil, customerNotes, priceMode,
+                documentLanguage, currency, printedByDisplayId, salesRepDisplayId, projectName,
+                omitContactHonorific, fullPaymentTerm, orderedByName, hideProjectName, null, null, items);
+        }
+
+        /** The pre-V192.1 canonical shape (no {@link #hideProjectName}) — kept so every existing
+         * construction site (tests, mostly) compiles unchanged. Defaults it to null: "say nothing",
+         * i.e. print the project on create and keep the stored choice on update. */
+        public UpsertDealQuotationRequest(Long contactId, String deptCode, String unitCode,
+                                          LocalDate offerDate, Integer depositPercent,
+                                          String remainderMode, Integer creditDays,
+                                          Integer validityDays, String validityMode, LocalDate validityUntil,
+                                          String customerNotes, String priceMode, String documentLanguage,
+                                          String currency, Long printedByDisplayId, Long salesRepDisplayId,
+                                          String projectName, Boolean omitContactHonorific,
+                                          String fullPaymentTerm, String orderedByName, List<ItemInput> items) {
+            this(contactId, deptCode, unitCode, offerDate, depositPercent, remainderMode,
+                creditDays, validityDays, validityMode, validityUntil, customerNotes, priceMode,
+                documentLanguage, currency, printedByDisplayId, salesRepDisplayId, projectName,
+                omitContactHonorific, fullPaymentTerm, orderedByName, null, items);
+        }
+
+        /** Copy with only {@link #hideProjectName} replaced — every other field unchanged. */
+        public UpsertDealQuotationRequest withHideProjectName(Boolean newHideProjectName) {
+            return new UpsertDealQuotationRequest(contactId, deptCode, unitCode, offerDate, depositPercent,
+                remainderMode, creditDays, validityDays, validityMode, validityUntil, customerNotes, priceMode,
+                documentLanguage, currency, printedByDisplayId, salesRepDisplayId, projectName,
+                omitContactHonorific, fullPaymentTerm, orderedByName, newHideProjectName, items);
+        }
+
         /** The pre-orderedByName shape (today's canonical, minus {@link #orderedByName}) — kept
          * so every existing construction site (tests, mostly) compiles unchanged. Defaults to
          * null, which reads as "no manual name" — the dotted placeholder — correct for every one

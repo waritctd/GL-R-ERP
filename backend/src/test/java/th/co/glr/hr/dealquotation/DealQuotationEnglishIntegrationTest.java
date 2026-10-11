@@ -185,6 +185,12 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(str(sheet, 3, 1)).doesNotContain(String.valueOf(java.time.Year.now().getValue() + 543));
         assertThat(str(sheet, 6, 8)).isEqualTo("Amount (USD)");
         assertThat(str(sheet, 6, 1)).isEqualTo("Description & Conditions");
+        // "remove ฝ่าย field completely" (owner, 2026-10-06): this quotation was created WITH a
+        // deptCode ("P003"), and the document still prints neither "Dept." nor the value.
+        assertThat(approved.deptCode()).isEqualTo("P003");
+        assertThat(str(sheet, 2, 7)).as("H3 — no 'Dept.' label").isEmpty();
+        assertThat(str(sheet, 2, 8)).as("I3 — no department").isEmpty();
+        assertThat(str(sheet, 3, 7)).isEqualTo("Ref.");
         assertThat(str(sheet, 33, 4)).isEqualTo("Grand Total (USD)");             // TOTAL_ROW 40-7
         assertThat(str(sheet, 40, 8)).isEqualTo("F-SM-008 (01)");                 // FORM_TAG 47-7
         // English signature labels AND the employees' real English names, from hr.employee.
@@ -202,7 +208,8 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
     }
 
     /** The regression that matters, on the REAL write path: a Thai document on the same deal, with
-     * the same items, is completely unaffected — 7% VAT, Thai labels, blank form tag. */
+     * the same items, is completely unaffected — 7% VAT, Thai labels, and its OWN form number
+     * (F-SM-002 (03); blank until 2026-10-06, printed since — sales feedback Admin #6). */
     @Test
     void thaiQuotationOnTheSameDeal_stillCarriesItsVat() throws Exception {
         DealQuotationDto thai = quotationService.create(ticketId,
@@ -218,11 +225,16 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
 
         Sheet sheet = renderSheet(thai.id());
         assertThat(str(sheet, 0, 7)).contains("ใบเสนอราคา");
+        // "remove ฝ่าย field completely" (owner, 2026-10-06) — stored "P003", printed nowhere.
+        assertThat(thai.deptCode()).isEqualTo("P003");
+        assertThat(str(sheet, 2, 7)).as("H3 — no ฝ่าย label").isEmpty();
+        assertThat(str(sheet, 2, 8)).as("I3 — no department").isEmpty();
+        assertThat(str(sheet, 3, 7)).isEqualTo("เลขที่อ้างอิง");
         assertThat(str(sheet, 6, 8)).contains("เป็นเงิน");
         assertThat(str(sheet, 31, 7)).isEqualTo("รวมเป็นเงิน");                  // SUBTOTAL 38-7
         assertThat(str(sheet, 32, 4)).isEqualTo("ภาษีมูลค่าเพิ่ม");                  // VAT 39-7
         assertThat(str(sheet, 33, 7)).isEqualTo("รวมเป็นเงินทั้งสิ้น");             // TOTAL 40-7
-        assertThat(str(sheet, 40, 8)).isEmpty();                                  // tag stays blank
+        assertThat(str(sheet, 40, 8)).isEqualTo("F-SM-002 (03)");                 // FORM_TAG 47-7
         assertThat(str(sheet, 37, 0)).contains("ผู้พิมพ์").contains("ผู้สั่งซื้อ");
     }
 

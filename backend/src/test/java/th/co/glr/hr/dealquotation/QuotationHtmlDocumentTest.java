@@ -121,6 +121,28 @@ class QuotationHtmlDocumentTest {
         assertThat(html).contains("class=\"p logo\" src=\"data:image/jpeg;base64,");
     }
 
+    /** Sales feedback Admin #6 (2026-10-06): the Thai form's ISO number prints. The HTML engine
+     * lays out the SAME filled workbook, so it must carry the number too — once, and never the
+     * English form's. */
+    @Test
+    void aThaiDocument_carriesItsIsoFormNumber_once() {
+        String html = QuotationHtmlDocument.render(baseModel(null, null, null, null, null));
+        assertThat(countOccurrences(html, "F-SM-002 (03)")).isEqualTo(1);
+        assertThat(html).doesNotContain("F-SM-008");
+    }
+
+    /** "remove ฝ่าย field completely" (owner, 2026-10-06): baseModel carries the department
+     * "P003"; neither it nor a bare ฝ่าย label reaches the HTML. (A plain contains("ฝ่าย") would
+     * be wrong here — the signature label ผู้จัดการฝ่ายขาย legitimately contains the word.) */
+    @Test
+    void theDepartmentLine_isNotInTheHtml() {
+        String html = QuotationHtmlDocument.render(baseModel(null, null, null, null, null));
+        assertThat(html).doesNotContain("P003");
+        assertThat(html).doesNotContainPattern(">\\s*ฝ่าย\\s*<");
+        // The designer / unit code beside it is not part of this and still prints.
+        assertThat(html).contains("D002");
+    }
+
     @Test
     void letterheadRowsRepeatOnEveryPageOfAPaginatedDocument() {
         // 30 three-line items paginate through the XLS path (repeating rows A1:I7, explicit

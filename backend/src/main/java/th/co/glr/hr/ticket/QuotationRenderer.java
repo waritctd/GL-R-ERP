@@ -108,7 +108,8 @@ public class QuotationRenderer {
     private static final String EN_COL_DISCOUNT = "Disc.";
     private static final String EN_COL_NET_PRICE = "Net price";
     private static final String EN_COL_AMOUNT_PREFIX = "Amount";
-    private static final String EN_LABEL_DEPT = "Dept.";
+    // No EN_LABEL_DEPT: the ฝ่าย / "Dept." line left BOTH forms on 2026-10-06 — see the note at
+    // DEPT_VALUE_ROW below.
     private static final String EN_LABEL_REF = "Ref.";
     // ⚠️ ASK-THE-OWNER: QN6900902-6 prints "D.Co." here and QN6900933 prints "D.Name" — the same
     // slot, two labels. "D.Co." is used because it appears on the more recent of the two samples
@@ -122,10 +123,20 @@ public class QuotationRenderer {
     private static final String EN_ORDER_LINE = "Confirmed to order at the prices and conditions above";
     private static final String[] EN_SIG_LABELS = {"Printed by", "Quoted by", "Approved by", "Ordered by"};
     private static final String EN_BLANK_DATE_PLACEHOLDER = "Date ........./........./.........";
-    // ⚠️ ASK-THE-OWNER: the Thai render BLANKS the F-SM-002 tag ("not customer-facing", a decision
-    // that predates this change and is left exactly as it is). Her English samples DO print
-    // "F-SM-008 (01)", and the spec asks for it, so the English render writes it. The two paths
-    // therefore differ on this cell on purpose. Flagged in the PR.
+    // The ISO form number each document prints in the form's own tag cell (#writeFormTag) — the
+    // last cell of the last printed row, i.e. the bottom-right corner of the page.
+    //
+    // ANSWERED 2026-10-06 (was "⚠️ ASK-THE-OWNER" here): the Thai render used to BLANK the F-SM-002
+    // tag ("not customer-facing") while the English one printed F-SM-008 (01). Sales feedback
+    // Admin #6 — "เลขแบบฟอร์มเอกสาร ISO F-SM-002 (03) จำเป็นต้องใส่หรือไม่ // ต้องเพิ่ม" — and the owner the
+    // same day: "just put the ISO F-SM-002 (03) as a footer on the bottom right of the page". Both
+    // documents now print their own number, in the same cell.
+    //
+    // Written from these constants rather than left to whatever the template cell holds: the
+    // footer block is captured, cleared and re-placed on two of the three layout branches, and a
+    // number that survives only because nothing happened to overwrite it is not one this class
+    // can promise. The Thai value is the template's own text (raw I47), character for character.
+    private static final String TH_FORM_TAG = "F-SM-002 (03)";
     private static final String EN_FORM_TAG = "F-SM-008 (01)";
 
     // Template layout per document-generation-fix.md §A2-A3
@@ -157,7 +168,7 @@ public class QuotationRenderer {
     // line, one row below the names) — S1=LABELS_ROW, S2=SALESPERSON_FORMULA_ROW.
     private static final int ORDER_LINE_ROW = 42; // D43 "ตกลงสั่งซื้อสินค้าตามราคาและเงื่อนไขข้างต้น"
     private static final int DATE_ROW = 46;        // A47 "วันที่…." (all four in ONE cell, pre-rebuild)
-    private static final int FORM_TAG_ROW = 47;             // I48 "F-SM-002" → blanked
+    private static final int FORM_TAG_ROW = 47;             // I48 the ISO form number (#writeFormTag)
     private static final BigDecimal VAT_RATE = new BigDecimal("0.07");
 
     // Header value cells (ฝ่าย / เลขที่อ้างอิง / หน่วยงาน) — found by dumping the template with POI;
@@ -166,7 +177,15 @@ public class QuotationRenderer {
     // slots. A prior version of this renderer mis-attributed I3 as an unused "salesperson code"
     // cell and blanked H5 (the หน่วยงาน LABEL) to "" — both fixed here: I3 is the ฝ่าย value, and
     // the หน่วยงาน label at H5 is left alone.
-    private static final int DEPT_VALUE_ROW = 2;   // I3
+    //
+    // 2026-10-06 — the ฝ่าย line is GONE from the printed document. Sales feedback Admin 1d: the
+    // ฝ่าย box was filled wrongly (some reps typed their own name into it) — "ไม่มีดีกว่า"; take it
+    // off the form and the printout. Owner the same day: "remove ฝ่าย field completely". So H3
+    // (the template's own "ฝ่าย" text; "Dept." on the English form) and I3 (its value) print
+    // NOTHING on every document this class renders — Thai, English, v2 and legacy alike, whatever
+    // the model's deptCode holds. DEPT_VALUE_ROW is kept only to name the two cells that are
+    // cleared. เลขที่อ้างอิง and หน่วยงาน (the two lines under it) are untouched.
+    private static final int DEPT_VALUE_ROW = 2;   // I3 — always blank since 2026-10-06
     private static final int NUMBER_VALUE_ROW = 3;  // I4
     private static final int UNIT_VALUE_ROW = 4;    // I5
     private static final int VALUE_COL = 8;         // column I
@@ -386,7 +405,11 @@ public class QuotationRenderer {
             // English month NAME and a COMMON-era year. #englishDate and #thaiDate sit next to each
             // other at the bottom of this class for exactly that reason.
             setStr(sh, 3, 1, english ? englishDate(model.issueDate()) : thaiDate(model.issueDate()));
-            setStr(sh, DEPT_VALUE_ROW, VALUE_COL, nullSafe(model.deptCode()));   // I3 — ฝ่าย / Dept.
+            // I3 was ฝ่าย / Dept. — never printed any more (see DEPT_VALUE_ROW). Written as the
+            // empty string, exactly what a blank deptCode has always produced here, so a document
+            // that never had a department renders byte-for-byte as it did; model.deptCode() is
+            // deliberately NOT read.
+            setStr(sh, DEPT_VALUE_ROW, VALUE_COL, "");                           // I3 — (ฝ่าย / Dept., removed)
             setStr(sh, NUMBER_VALUE_ROW, VALUE_COL, nullSafe(model.number()));   // I4 — เลขที่อ้างอิง / Ref.
             setStr(sh, UNIT_VALUE_ROW, VALUE_COL, nullSafe(model.unitCode()));   // I5 — หน่วยงาน / D.Co.
             // ฝ่าย/ผู้ออกแบบ optional (2026-09-16): both fields became optional on the deal (commit
@@ -417,11 +440,15 @@ public class QuotationRenderer {
             // = true (line ~208, alongside the real quotation.deptCode()/unitCode()), buildLegacyModel
             // passes false (line ~318, alongside its hardcoded null/null) — so it is already exactly
             // "was this model built from a real deal's dept/unit fields, or a legacy shape that never
-            // had them". Legacy documents keep the template's baked-in ฝ่าย/หน่วยงาน labels exactly as
+            // had them". Legacy documents keep the template's baked-in หน่วยงาน label exactly as
             // they always have.
-            if (model.signatureLabelsV2() && (model.deptCode() == null || model.deptCode().isBlank())) {
-                clearCell(sh, DEPT_VALUE_ROW, SALES_LINE_COL); // H3 label
-            }
+            //
+            // 2026-10-06: all of the above still describes H5 (หน่วยงาน). It no longer describes
+            // H3: the ฝ่าย label is cleared UNCONDITIONALLY — filled or blank, v2 or legacy — because
+            // the line itself was removed from the document ("remove ฝ่าย field completely"; see
+            // DEPT_VALUE_ROW). That deliberately includes the legacy document, which only ever
+            // printed the template's bare "ฝ่าย" with nothing after it: same form, same ruling.
+            clearCell(sh, DEPT_VALUE_ROW, SALES_LINE_COL); // H3 — the ฝ่าย label, on every document
             if (model.signatureLabelsV2() && (model.unitCode() == null || model.unitCode().isBlank())) {
                 clearCell(sh, UNIT_VALUE_ROW, SALES_LINE_COL); // H5 label
             }
@@ -448,7 +475,15 @@ public class QuotationRenderer {
             // trailing โทร./Tel text off the printed document with plain setStr. Same built-in fix
             // #setRightAligned/#setCentered already use for their own narrow ranges.
             setStrShrinkToFit(sh, PHONE_ROW, LABEL_VALUE_COL, nullSafe(model.phoneLine())); // B6
-            if (model.projectName() != null && !model.projectName().isBlank()) {
+            if (model.hideProjectLine()) {
+                // Sales feedback #5 (2026-10-06, V192.1) — "ไม่แสดงชื่อโครงการในใบเสนอราคา". The
+                // template's B8 is not empty: it holds the literal label "Project  : ", which the
+                // branch below only ever OVERWRITES. Leaving the cell alone would print that bare
+                // label; a hidden project prints nothing there at all. Never true on the legacy
+                // path, nor for a document whose name is merely blank — see
+                // QuotationRenderModel#hideProjectLine for why those keep today's output.
+                setStr(sh, PROJECT_ROW, LABEL_VALUE_COL, "");
+            } else if (model.projectName() != null && !model.projectName().isBlank()) {
                 if (model.signatureLabelsV2()) {
                     // layout-spec §2: "Project : {name}" centred in B on the first body row (v2
                     // only — legacy keeps its original left-aligned template style, see the class
@@ -1053,7 +1088,8 @@ public class QuotationRenderer {
         setStr(sh, 2, 1, "                            Tel. +662 711 5995    e-mail : info@glr.co.th"
             + "    Line:@glr_tiles");
 
-        setStr(sh, DEPT_VALUE_ROW, SALES_LINE_COL, EN_LABEL_DEPT);       // H3  ฝ่าย        -> Dept.
+        // H3 (ฝ่าย -> "Dept.") is not written: the line was removed from both forms on 2026-10-06,
+        // and #toXls clears the template's own Thai text from that cell for every document.
         setStr(sh, NUMBER_VALUE_ROW, SALES_LINE_COL, EN_LABEL_REF);      // H4  เลขที่อ้างอิง -> Ref.
         setStr(sh, UNIT_VALUE_ROW, SALES_LINE_COL, EN_LABEL_UNIT_CODE);  // H5  หน่วยงาน    -> D.Co.
         setStr(sh, 3, 0, EN_LABEL_DATE);                                  // A4  วันที่       -> Date
@@ -1169,21 +1205,26 @@ public class QuotationRenderer {
     }
 
     /**
-     * The form tag at I48. The Thai path BLANKS it — a pre-existing decision ("F-SM-002 tag, not
-     * customer-facing") this change does not revisit. The English path WRITES "F-SM-008 (01)",
-     * because both of the owner's English samples print it and the spec asks for it by name.
+     * The ISO form number at I48 — the last cell of the last printed row, so the bottom-right
+     * corner of the page (of the LAST page, when the document runs to several: it travels with
+     * the signature block). Each document prints its own: {@link #TH_FORM_TAG} on the Thai form,
+     * {@link #EN_FORM_TAG} on the English one.
      *
-     * <p>⚠️ The two paths therefore differ on this one cell ON PURPOSE, and that is flagged in the
-     * PR: if she wants the Thai tag printed as well, that is a one-line change here — but it would
-     * be a visible change to every Thai document, which is exactly what this branch's regression
-     * test forbids.
+     * <p>Until 2026-10-06 the Thai path BLANKED this cell ("F-SM-002 tag, not customer-facing")
+     * and only the English path wrote. Sales feedback Admin #6 / owner ruling that day: the Thai
+     * number must print too. That is a visible change to EVERY Thai document, made on purpose —
+     * see {@code QuotationFormTagTest}.
+     *
+     * <p>Nothing else moves. Every layout decision already counted this row whether or not it
+     * held text ({@link #onePageScale} sums through {@code FOOTER_END}, and
+     * {@link #insertNoSplitPageBreaks} keeps the footer block whole through it). The one thing
+     * that does respond is LibreOffice's own fit-to-page zoom, which is computed over the print
+     * area TRIMMED to the last row with content (see {@code LibreOfficeMetrics}): with the number
+     * present that last row is no longer trimmed away, so a Thai document that was height-bound
+     * prints a touch smaller — exactly as an English one of the same length always has.
      */
     private void writeFormTag(Sheet sh, int row, boolean englishForm) {
-        if (englishForm) {
-            setStr(sh, row, VALUE_COL, EN_FORM_TAG);
-        } else {
-            getOrKeep(sh, row, VALUE_COL).setBlank();
-        }
+        setStr(sh, row, VALUE_COL, englishForm ? EN_FORM_TAG : TH_FORM_TAG);
     }
 
     // ── header / remarks / signature block ────────────────────────────────────────

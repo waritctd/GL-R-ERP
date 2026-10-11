@@ -3,8 +3,29 @@ server:
   port: ${PORT:${SERVER_PORT:8080}}
   servlet:
     session:
-      # Explicit idle-timeout policy (issue #23); also the max-inactive-interval Spring Session persists.
-      timeout: ${APP_SESSION_TIMEOUT:30m}
+      # NO idle timeout: a session lasts until its owner logs out (owner ruling 2026-10-06, sales
+      # feedback #8 — a rep left a quotation open for an hour, came back to a dead session and
+      # retyped it). This replaces the 30-minute policy of issue #23, for every role.
+      #
+      # The value must stay NEGATIVE. Boot turns zero-or-less into "never" for the servlet
+      # container, which is what holds sessions today; but Spring Session — if it is ever wired
+      # back in — reads a negative interval as "never" and ZERO as "already expired", i.e. a
+      # company-wide logout on every request. -1s is "never" to both.
+      #
+      # What makes this safe is in code, not here: SessionSecurityFilter re-checks every signed-in
+      # session against the employee row on each request, so deactivating someone, or moving them
+      # out of a ฝ่าย, takes effect at once instead of whenever their session used to idle out.
+      #
+      # The way back needs no code and no new image: set APP_SESSION_TIMEOUT=30m on the host.
+      # Pinned by SessionLifetimeIntegrationTest / SessionIdleTimeoutOverrideIntegrationTest.
+      #
+      # ⚠️ "Until they log out" really means "until the backend restarts". Sessions are held in the
+      # servlet container's memory, NOT in hr.spring_session: the pom still carries
+      # spring-session-jdbc (#23), but since the Spring Boot 4.1 upgrade (ec230864, 2026-07-07)
+      # nothing auto-configures it — Boot 4 moved that into spring-boot-session-jdbc, which this
+      # build does not depend on — and production's newest hr.spring_session row was last touched
+      # that same day. So every backend deploy still signs everyone out, exactly as it has since.
+      timeout: ${APP_SESSION_TIMEOUT:-1s}
       cookie:
         name: GLR_HR_SESSION
         http-only: true

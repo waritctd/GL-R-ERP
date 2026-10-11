@@ -149,16 +149,16 @@ describe('QuotationItemRow price fields follow the quotation\'s mode', () => {
     render(<ul><QuotationItemRow item={item} index={0} priceMode={priceMode} onChange={vi.fn()} onRemove={vi.fn()} /></ul>);
   }
 
-  it('NET: ราคา/หน่วย and ส่วนลด %, no ราคาพิเศษ', () => {
+  it('NET: ราคา/ตร.ม. (รวม VAT) and ส่วนลด %, no ราคาพิเศษ', () => {
     renderRow('NET');
-    expect(screen.getByLabelText(/^ราคา\/หน่วย/)).not.toBeNull();
+    expect(screen.getByLabelText(/^ราคา\/ตร\.ม\. \(รวม VAT\)/)).not.toBeNull();
     expect(screen.getByLabelText(/^ส่วนลด %/)).not.toBeNull();
     expect(screen.queryByLabelText(/ราคาพิเศษ/)).toBeNull();
   });
 
   it('SPECIAL_SQM: shows the SERVER\'s derived net per piece, never a client computation', () => {
     renderRow('SPECIAL_SQM', { ...tile, netUnitPrice: 453.84 });
-    expect(screen.getByLabelText(/^ราคาพิเศษ \(บาท\/ตร\.ม\. รวม VAT\)/)).not.toBeNull();
+    expect(screen.getByLabelText(/^ราคาพิเศษ\/ตร\.ม\. \(รวม VAT\)/)).not.toBeNull();
     expect(screen.queryByLabelText(/^ส่วนลด %/)).toBeNull();
     expect(screen.getByTestId('special-net-0').textContent).toBe('= สุทธิ ฿453.84/แผ่น (ก่อน VAT)');
   });
@@ -168,9 +168,11 @@ describe('QuotationItemRow price fields follow the quotation\'s mode', () => {
     expect(screen.getByTestId('special-net-0').textContent).toBe('ระบบคำนวณราคาสุทธิต่อแผ่นให้');
   });
 
-  it('DIRECT_NET: ราคาสุทธิ/แผ่น is required and the list price is optional', () => {
-    renderRow('DIRECT_NET');
-    expect(screen.getByLabelText(/^ราคาสุทธิ\/แผ่น/)).not.toBeNull();
+  it('DIRECT_NET: ราคาสุทธิ/ตร.ม. (รวม VAT) is required and the list price is optional', () => {
+    // A blank ราคาตั้ง — the state the "leave it blank" hint is for (it steps aside once filled:
+    // see quotationPerSqmPrice.test.jsx).
+    renderRow('DIRECT_NET', { ...tile, unitPrice: '' });
+    expect(screen.getByLabelText(/^ราคาสุทธิ\/ตร\.ม\. \(รวม VAT\)/)).not.toBeNull();
     expect(screen.getByText('เว้นว่าง = ใช้ราคาสุทธิ (พิมพ์ส่วนลดเป็น Net)')).not.toBeNull();
   });
 

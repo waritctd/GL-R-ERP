@@ -374,9 +374,11 @@ describe('validateQuotationItem (#M4, owner ruling 2026-09-10)', () => {
     expect(validateQuotationItem(completeItem({ piecesPerBox: 0 }))).toEqual({ piecesPerBox: 'กรุณาระบุแผ่น/กล่อง' });
   });
 
-  it('flags a missing or non-positive ราคา/หน่วย', () => {
-    expect(validateQuotationItem(completeItem({ unitPrice: null }))).toEqual({ unitPrice: 'กรุณาระบุราคา/หน่วย' });
-    expect(validateQuotationItem(completeItem({ unitPrice: 0 }))).toEqual({ unitPrice: 'กรุณาระบุราคา/หน่วย' });
+  // The box this names on a Thai tile row is ราคา/ตร.ม. since sales feedback #1 (2026-10-06); the
+  // error KEY is still `unitPrice` (it names the box, `price-N`). See quotationPerSqmPrice.test.jsx.
+  it('flags a missing or non-positive price', () => {
+    expect(validateQuotationItem(completeItem({ unitPrice: null }))).toEqual({ unitPrice: 'กรุณาระบุราคา/ตร.ม.' });
+    expect(validateQuotationItem(completeItem({ unitPrice: 0 }))).toEqual({ unitPrice: 'กรุณาระบุราคา/ตร.ม.' });
   });
 
   it('AREA mode requires a positive พื้นที่, ignoring piecesInput entirely', () => {
@@ -1266,7 +1268,7 @@ describe('v3 row validation', () => {
     expect(meta.validateQuotationItem({ ...perSqm, piecesPerBox: '' }, 'SPECIAL_SQM', 'EN').piecesPerBox).toBeTruthy();
     expect(meta.validateQuotationItem({ ...perSqm, sqmPerBox: 0.1234567 }, 'SPECIAL_SQM', 'EN').sqmPerBox).toBe('ทศนิยมได้ไม่เกิน 6 ตำแหน่ง');
     // The same row in THAI ราคาพิเศษ still needs its list price, and never asks for ตร.ม./กล่อง.
-    expect(meta.validateQuotationItem({ ...perSqm, sqmPerBox: null }, 'SPECIAL_SQM', 'TH')).toEqual({ unitPrice: 'กรุณาระบุราคาตั้ง (บาท/แผ่น)' });
+    expect(meta.validateQuotationItem({ ...perSqm, sqmPerBox: null }, 'SPECIAL_SQM', 'TH')).toEqual({ unitPrice: 'กรุณาระบุราคาตั้ง (บาท/ตร.ม.)' });
     expect(meta.quotationItemMissingSummary({ sqmPerBox: 'x', specialPriceSqm: 'y' }, 0)).toBe('รายการที่ 1: ขาด ตร.ม./กล่อง, ราคาต่อ ตร.ม.');
   });
 
@@ -1323,8 +1325,8 @@ describe('v3 row validation', () => {
     expect(meta.validateQuotationItem({ ...tile, specialPriceSqm: 1350.125 }, 'SPECIAL_SQM').specialPriceSqm).toBe('ทศนิยมได้ไม่เกิน 2 ตำแหน่ง');
   });
 
-  it('DIRECT_NET needs the net per piece and lets the list price stay blank', () => {
-    expect(meta.validateQuotationItem({ ...tile, unitPrice: '', directNetPrice: '' }, 'DIRECT_NET')).toEqual({ directNetPrice: 'กรุณาระบุราคาสุทธิ/แผ่น' });
+  it('DIRECT_NET needs the net and lets the list price stay blank', () => {
+    expect(meta.validateQuotationItem({ ...tile, unitPrice: '', directNetPrice: '' }, 'DIRECT_NET')).toEqual({ directNetPrice: 'กรุณาระบุราคาสุทธิ (บาท/ตร.ม.)' });
     expect(meta.validateQuotationItem({ ...tile, unitPrice: '', directNetPrice: 500 }, 'DIRECT_NET')).toEqual({});
   });
 
@@ -1500,7 +1502,7 @@ describe('buildQuotationChecklist', () => {
       adjustmentErrorsByRow: [{ adjustmentPct: 'กรุณาระบุเปอร์เซ็นต์ส่วนลด' }],
     });
     expect(entries.map((e) => [e.blocking, e.targetId, e.message])).toEqual([
-      [true, 'thickness-0', 'รายการที่ 1: ขาด ความหนา, แผ่น/ตร.ม., แผ่น/กล่อง, ราคา/หน่วย, จำนวน (พื้นที่)'],
+      [true, 'thickness-0', 'รายการที่ 1: ขาด ความหนา, แผ่น/ตร.ม., แผ่น/กล่อง, ราคา, จำนวน (พื้นที่)'],
       [true, 'plain-unit-1', 'รายการที่ 2: ขาด หน่วย'],
       [true, 'adj-pct-2', 'รายการที่ 3: ขาด เปอร์เซ็นต์ส่วนลด'],
     ]);

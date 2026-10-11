@@ -12,6 +12,7 @@ import {
   piecesPerSqmFromSqmPerPiece, sqmPerPieceFromPiecesPerSqm, isEnglishPerSqm, listPricePerSqmIncVat,
   sqmPerPieceFromSizeCm, sizeTextDiffersFromCatalogFaceSize,
   roundToFullBoxDisabledReason, roundToFullBoxSummary, isTilePriceChangedFromCeoLocally,
+  hasTypedPrice, usesDirectNetPriceSqm, usesListPriceSqm, availablePriceModes,
 } from './quotationMeta.js';
 
 // ProductPriceDto's own price_unit for a linear-metre trim (V153: 561 real catalog rows). Its
@@ -107,6 +108,7 @@ export function sizeTextFromCatalog(cat) {
  * A number input with a trailing, non-interactive unit label rendered inside the field itself
  * (owner feedback 2026-09-14 -- nothing on the Thai SPECIAL_SQM price boxes said which one was
  * per piece and which was per ตร.ม., so a rep typed a per-ตร.ม. figure into the per-piece box).
+ * Since sales feedback #1 (2026-10-06) EVERY Thai tile price box is per ตร.ม. and carries it.
  * There is no shared adornment component in components/common/ yet -- this mirrors the same
  * `relative` + `pointer-events-none absolute` suffix pattern already used ad hoc for the ฿ prefix
  * in TaxAllowanceForm's `MoneyInput` and the search icon in CatalogSearchPage, so it stays local
@@ -114,13 +116,26 @@ export function sizeTextFromCatalog(cat) {
  * `aria-*` attributes FormField clones onto this element when its `id` matches the field's
  * `htmlFor`) straight onto the real `<input>`, so FormField's automatic aria wiring still reaches
  * the actual control.
+ *
+ * `unitInLabel` — for a box whose LABEL already names the unit (every Thai per-ตร.ม. price box:
+ * "ราคา/ตร.ม. (รวม VAT)"). The in-field unit is then a convenience, and the typed number matters
+ * more: below 11rem (176px) of box width the unit steps aside and the input takes its 72px back.
+ * Measured, not guessed — at an 820px window this row's grid columns are 142px, which left 58px
+ * for digits and cut "1041.11" to "1041."; at 176px there is still ~90px beside the unit. It is a
+ * CONTAINER query on the box itself rather than a `tablet:`/`mobile:` breakpoint, because the
+ * same squeeze happens in two unrelated places: the tablet band (4 columns, no sidebar) and the
+ * narrow end of the desktop band (sidebar open). Left OFF for เผื่อ's "กรอกเอง" box, whose label says
+ * neither % nor แผ่น — there the unit in the field is the only place that distinction lives.
  */
-function PriceInputWithSuffix({ id, suffix, className, ...inputProps }) {
+function PriceInputWithSuffix({ id, suffix, className, unitInLabel = false, ...inputProps }) {
   return (
-    <div className="relative">
-      <input id={id} {...inputProps} className={`pr-[4.5rem] ${className ?? ''}`.trim()} />
+    <div className={unitInLabel ? '@container relative' : 'relative'}>
+      <input
+        id={id} {...inputProps}
+        className={`pr-[4.5rem] ${unitInLabel ? '@max-[11rem]:pr-3 ' : ''}${className ?? ''}`.trim()}
+      />
       <span
-        className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 whitespace-nowrap text-2xs font-bold text-text-muted"
+        className={`pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 whitespace-nowrap text-2xs font-bold text-text-muted${unitInLabel ? ' @max-[11rem]:hidden' : ''}`}
         aria-hidden="true"
       >
         {suffix}
@@ -217,13 +232,57 @@ export function QuotationItemRow({
   // (DealQuotationService#update) — the control is hidden rather than left as a dead end.
   // Defaults false, so DEAL_DIRECT's own rendering is unchanged.
   hideDuplicate = false,
+  // Mixed price modes (V192.5; sales feedback #14, owner 2026-10-06). On a document whose price mode
+  // is MIXED the page passes `priceMode` as THIS ROW's mode (quotationMeta#rowPriceMode) — so
+  // everything below goes on reading "the price mode" exactly as it always has — and sets
+  // `mixedPriceModes`, which is the one thing that adds: the row's own "วิธีคิดราคา" picker.
+  // Choosing there calls `onChangePriceMode(code)`; the PAGE re-prices the row (it owns the
+  // carry-over, the dropped preview and the re-preview), so the row does not patch itself.
+  mixedPriceModes = false,
+  onChangePriceMode = null,
 }) {
   const perSqm = isEnglishPerSqm(priceMode, documentLanguage);
-  // Thai SPECIAL_SQM only -- see PriceInputWithSuffix's own comment above for why this exists.
-  // DISPLAY-ONLY: never patched onto `item`, never sent in a payload builder.
-  const listPerSqm = priceMode === 'SPECIAL_SQM' && !perSqm
-    ? listPricePerSqmIncVat(item.unitPrice, item.sqmPerPiece)
-    : null;
+  // Sales feedback #1 (2026-10-06, V192.2): on a Thai document every tile price box is per ตร.ม.
+  // including VAT. See quotationMeta's "ราคา/ตร.ม. รวม VAT" block for the two ways a row carries
+  // a price; this component only decides what each box SHOWS:
+  //   - a price typed per ตร.ม. shows as typed;
+  //   - a price the row holds per แผ่น (saved before this change, set by a คำขอราคา, or carried
+  //     over by a price-mode switch) shows as its per-ตร.ม. equivalent — DISPLAY-ONLY, never
+  //     patched onto `item` and never sent, exactly as this figure always was under ราคาพิเศษ
+  //     (listPricePerSqmIncVat). The row goes on sending the per-แผ่น price until the box is retyped.
+  const thaiPricing = documentLanguage !== 'EN';
+  const listIsPerSqm = usesListPriceSqm(item, documentLanguage);
+  const netIsPerSqm = usesDirectNetPriceSqm(item, documentLanguage);
+  const listPriceSqmShown = listIsPerSqm
+    ? item.listPriceSqm
+    : (listPricePerSqmIncVat(item.unitPrice, item.sqmPerPiece) ?? '');
+  const netPriceSqmShown = netIsPerSqm
+    ? item.directNetPriceSqm
+    : (listPricePerSqmIncVat(item.directNetPrice, item.sqmPerPiece) ?? '');
+  const hasArea = Number(item.sqmPerPiece) > 0;
+  // The line under ราคาตั้ง: what the price comes to per แผ่น, before VAT — which is the figure the
+  // document prints. The SERVER's (calculate-line's unitPrice), never worked out here: the 2dp
+  // pieces-per-ตร.ม. rounding order is exactly what a copy would get subtly wrong.
+  // …and for a price the row holds per แผ่น, the line names THAT figure: the box above is only
+  // its per-ตร.ม. equivalent. With no แผ่น/ตร.ม. on the row there is no equivalent to show, the box
+  // is empty, and the line has to say the price is still there — an empty required box with
+  // nothing under it would read as "no price", for a row that has one and will go on sending it.
+  const perPieceHeldNote = (value) => (hasArea
+    ? `คิดจากราคา ${formatQuotationMoney(value, currency)}/แผ่น (ก่อน VAT)`
+    : `ราคา ${formatQuotationMoney(value, currency)}/แผ่น (ก่อน VAT) · กรอกแผ่น/ตร.ม. เพื่อแสดงเป็นราคาต่อ ตร.ม.`);
+  const listPerPieceNote = listIsPerSqm
+    ? (item.calcPending ? 'กำลังคำนวณราคาต่อแผ่น...'
+      : hasTypedPrice(item.unitPrice) ? `= ${formatQuotationMoney(item.unitPrice, currency)}/แผ่น (ก่อน VAT)`
+        : hasArea ? 'ระบบคำนวณราคาต่อแผ่นให้' : 'กรอกแผ่น/ตร.ม. ก่อน ระบบจึงคำนวณราคาต่อแผ่นได้')
+    : hasTypedPrice(item.unitPrice) ? perPieceHeldNote(item.unitPrice)
+      // ราคาสุทธิ mode's ราคาตั้ง is optional, and its own hint already says what blank means.
+      : priceMode === 'DIRECT_NET' ? null : 'ระบบคำนวณราคาต่อแผ่นให้';
+  const netPerPieceNote = netIsPerSqm
+    ? (item.calcPending ? 'กำลังคำนวณราคาสุทธิ...'
+      : item.netUnitPrice != null ? `= สุทธิ ${formatQuotationMoney(item.netUnitPrice, currency)}/แผ่น (ก่อน VAT)`
+        : hasArea ? 'ระบบคำนวณราคาสุทธิต่อแผ่นให้' : 'กรอกแผ่น/ตร.ม. ก่อน ระบบจึงคำนวณราคาสุทธิต่อแผ่นได้')
+    : hasTypedPrice(item.directNetPrice) ? perPieceHeldNote(item.directNetPrice)
+      : 'ระบบคำนวณราคาสุทธิต่อแผ่นให้';
   // Owner-approved "sell loose pieces" (2026-09-16, V182) -- see quotationMeta.js for both
   // helpers' own Javadoc. `roundLooseDisabledReason` doubles as the disabled flag (non-null =
   // disabled) and its own hint text, so the two can never disagree.
@@ -886,29 +945,94 @@ export function QuotationItemRow({
         ) : null}
       </div>
 
-      <div className="grid grid-cols-4 gap-3 mobile:grid-cols-1">
+      {/* Four columns only when this row has the room for them (`@min-[45rem]`, a container query
+          on the wrapper just below), two otherwise, one on a phone. The four Thai price labels run
+          to 164px ("ราคาพิเศษ/ตร.ม. (รวม VAT) *"), so four columns need ~170px each — and the row is
+          narrower than that in two unrelated places a window-width breakpoint cannot tell apart:
+          the tablet band (721–1040px, no sidebar: 142px columns at 820) and the narrow end of the
+          desktop band with the sidebar open (133px at 1045 — an iPad in landscape). There the
+          price label wrapped beside a "ส่วนลด %" that did not, and its input sat a line below its
+          neighbours. Base is two columns and the query WIDENS it, rather than the reverse, so that
+          `mobile:grid-cols-1` is only ever competing with an un-prefixed utility.
+
+          The query container is this wrapper and NOT the <li>: a container is also a
+          layout-containment and stacking boundary, and the <li> holds the catalogue dropdown,
+          which has to stay free to overlap the row beneath it. Nothing in here pops out. */}
+      <div className="@container">
+      <div className="grid grid-cols-2 gap-3 @min-[45rem]:grid-cols-4 mobile:grid-cols-1">
+        {/* Mixed price modes (V192.5): the row's own "วิธีคิดราคา", first in the price row so it
+            reads as what the boxes after it depend on. A <select>, not three buttons: it repeats
+            on every row, has to fit one cell of this grid at every width, and is the native
+            control on a phone. Same three labels as the document-level picker, on purpose — one
+            vocabulary for the same three things. Never on a single-mode document (a per-row
+            choice would contradict the document's own), nor where the row has no prices. */}
+        {mixedPriceModes && !hidePricing ? (
+          <FormField label="วิธีคิดราคา" htmlFor={`price-mode-${index}`}>
+            <select
+              id={`price-mode-${index}`}
+              value={priceMode}
+              disabled={readOnly}
+              onChange={(e) => onChangePriceMode?.(e.target.value)}
+            >
+              {availablePriceModes(documentLanguage).map((opt) => (
+                <option key={opt.code} value={opt.code}>{opt.label}</option>
+              ))}
+            </select>
+          </FormField>
+        ) : null}
         {/* v3: the two price fields follow the QUOTATION's price mode, chosen once in the
             "รูปแบบเอกสาร" block — never per row, because every tile row of every one of the owner's
-            nine documents shares one mode. Each mode asks for exactly what the rep has in hand:
-              NET          ราคา/หน่วย + ส่วนลด %                                      (unchanged)
-              SPECIAL_SQM  ราคาตั้ง (บาท/แผ่น) + ราคาพิเศษ (บาท/ตร.ม. รวม VAT) → net per piece shown
-                           live. Both boxes now carry a trailing unit ("บาท/แผ่น" / "บาท/ตร.ม.") and
-                           ราคาตั้ง shows a live ≈ per-ตร.ม. conversion underneath (owner feedback
-                           2026-09-14 — a rep typed a per-ตร.ม. figure into the per-piece box because
-                           nothing distinguished the two). DISPLAY-ONLY: see PriceInputWithSuffix and
-                           listPricePerSqmIncVat's own comments; the payload and the two typed prices
-                           are unchanged.
-              DIRECT_NET   ราคาสุทธิ/แผ่น + ราคาตั้ง/แผ่น (optional: blank prints "Net")   (unchanged)
-            The derived net in SPECIAL_SQM is the SERVER's (calculate-line's netUnitPrice), never
-            a JS copy of WastageCalculator#netPerPieceFromSpecialSqm: its rounding order (the 2dp
-            reciprocal first) is exactly what a copy would get subtly wrong.
+            nine documents shares one mode. Each mode asks for exactly what the rep has in hand.
+
+            On a THAI document (sales feedback #1, 2026-10-06 — "แก้เป็น ตร.ม. รวม VAT ทุกแบบ") every
+            one of these is typed per ตร.ม. INCLUDING VAT, carries the unit inside the field, and
+            shows what it comes to per แผ่น underneath:
+              NET          ราคา/ตร.ม. (รวม VAT) + ส่วนลด %
+              SPECIAL_SQM  ราคาตั้ง/ตร.ม. (รวม VAT) + ราคาพิเศษ/ตร.ม. (รวม VAT)
+              DIRECT_NET   ราคาสุทธิ/ตร.ม. (รวม VAT) + ราคาตั้ง/ตร.ม. (รวม VAT)
+                           (ราคาตั้ง optional: blank prints "Net")
+            One short label family on purpose: the longer "ราคาพิเศษ (บาท/ตร.ม. รวม VAT)" measured
+            191px in this grid's 192px column at a 1280px window and wrapped, dropping its input
+            below its neighbour's. The บาท is not lost — it is the unit inside the field.
+            On an ENGLISH document they are what they always were — USD, no VAT:
+              NET          ราคา/หน่วย + ส่วนลด %
+              SPECIAL_SQM  ราคา (USD/ตร.ม.) + ตร.ม./กล่อง
+              DIRECT_NET   ราคาสุทธิ/แผ่น + ราคาตั้ง/แผ่น
+            Every per-แผ่น figure shown under a Thai box is the SERVER's (calculate-line), never a
+            JS copy of WastageCalculator: its rounding order (the 2dp reciprocal first) is exactly
+            what a copy would get subtly wrong.
 
             V185 (PricingRequestCreateModal / hidePricing): the PCR item form is this SAME row,
             minus price/discount — CEO pricing is a later phase. `hidePricing` hides every price
             input below (DIRECT_NET/NET/SPECIAL_SQM/perSqm) without touching a single line of the
             direct-deal quotation's own behaviour — ประเทศต้นทาง/ระยะเวลานำเข้า further down stay
             rendered either way, since both forms treat them the same (optional). */}
-        {hidePricing ? null : priceMode === 'DIRECT_NET' ? (
+        {hidePricing || priceMode !== 'DIRECT_NET' ? null : thaiPricing ? (
+          <FormField
+            label="ราคาสุทธิ/ตร.ม. (รวม VAT)" htmlFor={`direct-net-${index}`} required
+            error={errors.directNetPrice}
+          >
+            {/* Typing here makes the per-ตร.ม. figure THE net: a per-แผ่น net the row was carrying
+                is dropped with it, so the row never holds two nets that could disagree. */}
+            <PriceInputWithSuffix
+              id={`direct-net-${index}`} type="number" step="0.01" disabled={readOnly} suffix="บาท/ตร.ม."
+              unitInLabel
+              aria-describedby={`direct-net-${index}-per-piece`}
+              value={netPriceSqmShown}
+              onChange={(e) => patch({
+                directNetPriceSqm: e.target.value === '' ? '' : Number(e.target.value), directNetPrice: '',
+              })}
+            />
+            {/* Read out with the box (aria-describedby above): the per-แผ่น net is what the
+                document prints, so it is not left for sighted users only. */}
+            <span
+              id={`direct-net-${index}-per-piece`} className="mt-1 block text-2xs font-bold text-info"
+              data-testid={`direct-net-per-piece-${index}`}
+            >
+              {netPerPieceNote}
+            </span>
+          </FormField>
+        ) : (
           <FormField label="ราคาสุทธิ/แผ่น" htmlFor={`direct-net-${index}`} required error={errors.directNetPrice}>
             <input
               id={`direct-net-${index}`} type="number" step="0.01" disabled={readOnly}
@@ -916,49 +1040,56 @@ export function QuotationItemRow({
               onChange={(e) => patch({ directNetPrice: e.target.value === '' ? '' : Number(e.target.value) })}
             />
           </FormField>
-        ) : null}
-        {/* Thai SPECIAL_SQM's two price boxes carry a trailing unit, which leaves no room for the
-            typed number in a half-width mobile column (97px wide at 375px, 72px of it the unit —
-            measured) — so on mobile each spans the whole row. `contents` keeps NET/DIRECT_NET's
-            grid placement exactly as it was. */}
-        {hidePricing || perSqm ? null : (
-          <div className={priceMode === 'SPECIAL_SQM' ? 'mobile:col-span-1' : 'contents'}>
-            <FormField
-              label={
-                priceMode === 'NET' ? 'ราคา/หน่วย'
-                  : priceMode === 'SPECIAL_SQM' ? 'ราคาตั้ง (บาท/แผ่น)'
-                    : 'ราคาตั้ง/แผ่น'
-              }
-              htmlFor={`price-${index}`}
-              required={priceMode !== 'DIRECT_NET'}
-              hint={priceMode === 'DIRECT_NET' ? 'เว้นว่าง = ใช้ราคาสุทธิ (พิมพ์ส่วนลดเป็น Net)' : undefined}
-              error={errors.unitPrice}
-            >
-              {priceMode === 'SPECIAL_SQM' ? (
-                <PriceInputWithSuffix
-                  id={`price-${index}`} type="number" step="0.01" disabled={readOnly} suffix="บาท/แผ่น"
-                  value={item.unitPrice ?? ''}
-                  onChange={(e) => patch({ unitPrice: e.target.value === '' ? '' : Number(e.target.value) })}
-                />
-              ) : (
-                <input
-                  id={`price-${index}`} type="number" step="0.01" disabled={readOnly}
-                  value={item.unitPrice ?? ''}
-                  onChange={(e) => patch({ unitPrice: e.target.value === '' ? '' : Number(e.target.value) })}
-                />
-              )}
-              {priceMode === 'SPECIAL_SQM' ? (
-                <span
-                  className="mt-1 block text-2xs font-bold text-text-muted"
-                  data-testid={`list-per-sqm-${index}`}
-                >
-                  {listPerSqm != null
-                    ? `≈ ${formatQuotationMoney(listPerSqm, 'THB').replace('฿', '')} บาท/ตร.ม. รวม VAT`
-                    : 'กรอกราคาตั้งต่อแผ่น ระบบแปลงเป็นต่อ ตร.ม. ให้'}
-                </span>
-              ) : null}
-            </FormField>
-          </div>
+        )}
+        {hidePricing || perSqm ? null : thaiPricing ? (
+          <FormField
+            label={priceMode === 'NET' ? 'ราคา/ตร.ม. (รวม VAT)' : 'ราคาตั้ง/ตร.ม. (รวม VAT)'}
+            htmlFor={`price-${index}`}
+            required={priceMode !== 'DIRECT_NET'}
+            // Only while the box is blank — the one time "leave it blank" says anything. Once a
+            // list price is in, the line under the box is what it comes to per แผ่น instead.
+            hint={priceMode === 'DIRECT_NET' && listPriceSqmShown === ''
+              ? 'เว้นว่าง = ใช้ราคาสุทธิ (พิมพ์ส่วนลดเป็น Net)' : undefined}
+            error={errors.unitPrice}
+          >
+            {/* A typed figure is written as `listPriceSqm` and nothing else: the per-แผ่น
+                `unitPrice` is the server's to fill in (QuotationEditorPage#scheduleCalc), and the
+                one already there stays until that answer lands — blanking it for those few hundred
+                milliseconds would flick the document's "has special pricing" off and reset ยืนราคา.
+                EMPTYING the box is different: that clears the price altogether, per-แผ่น figure
+                included, or the box would refill itself with that figure's per-ตร.ม. equivalent. */}
+            <PriceInputWithSuffix
+              id={`price-${index}`} type="number" step="0.01" disabled={readOnly} suffix="บาท/ตร.ม."
+              unitInLabel
+              aria-describedby={listPerPieceNote ? `price-${index}-per-piece` : undefined}
+              value={listPriceSqmShown}
+              onChange={(e) => patch(e.target.value === ''
+                ? { listPriceSqm: '', unitPrice: null }
+                : { listPriceSqm: Number(e.target.value) })}
+            />
+            {listPerPieceNote ? (
+              <span
+                id={`price-${index}-per-piece`} className="mt-1 block text-2xs font-bold text-info"
+                data-testid={`list-per-piece-${index}`}
+              >
+                {listPerPieceNote}
+              </span>
+            ) : null}
+          </FormField>
+        ) : (
+          <FormField
+            label={priceMode === 'NET' ? 'ราคา/หน่วย' : 'ราคาตั้ง/แผ่น'}
+            htmlFor={`price-${index}`}
+            required={priceMode !== 'DIRECT_NET'}
+            hint={priceMode === 'DIRECT_NET' ? 'เว้นว่าง = ใช้ราคาสุทธิ (พิมพ์ส่วนลดเป็น Net)' : undefined}
+            error={errors.unitPrice}
+          >
+            <input
+              id={`price-${index}`} type="number" step="0.01" disabled={readOnly}
+              value={item.unitPrice ?? ''}
+              onChange={(e) => patch({ unitPrice: e.target.value === '' ? '' : Number(e.target.value) })}
+            />
+          </FormField>
         )}
         {!hidePricing && priceMode === 'NET' ? (
           <FormField label="ส่วนลด %" htmlFor={`disc-${index}`}>
@@ -970,22 +1101,21 @@ export function QuotationItemRow({
           </FormField>
         ) : null}
         {!hidePricing && priceMode === 'SPECIAL_SQM' && !perSqm ? (
-          <div className="mobile:col-span-1">
-            <FormField label="ราคาพิเศษ (บาท/ตร.ม. รวม VAT)" htmlFor={`special-${index}`} required error={errors.specialPriceSqm}>
-              <PriceInputWithSuffix
-                id={`special-${index}`} type="number" step="0.01" disabled={readOnly} suffix="บาท/ตร.ม."
-                value={item.specialPriceSqm ?? ''}
-                onChange={(e) => patch({ specialPriceSqm: e.target.value === '' ? '' : Number(e.target.value) })}
-              />
-              <span className="mt-1 block text-2xs font-bold text-info" data-testid={`special-net-${index}`}>
-                {item.calcPending
-                  ? 'กำลังคำนวณราคาสุทธิ...'
-                  : item.netUnitPrice != null && Number(item.specialPriceSqm) > 0
-                    ? `= สุทธิ ${formatQuotationMoney(item.netUnitPrice, currency)}/แผ่น (ก่อน VAT)`
-                    : 'ระบบคำนวณราคาสุทธิต่อแผ่นให้'}
-              </span>
-            </FormField>
-          </div>
+          <FormField label="ราคาพิเศษ/ตร.ม. (รวม VAT)" htmlFor={`special-${index}`} required error={errors.specialPriceSqm}>
+            <PriceInputWithSuffix
+              id={`special-${index}`} type="number" step="0.01" disabled={readOnly} suffix="บาท/ตร.ม."
+              unitInLabel
+              value={item.specialPriceSqm ?? ''}
+              onChange={(e) => patch({ specialPriceSqm: e.target.value === '' ? '' : Number(e.target.value) })}
+            />
+            <span className="mt-1 block text-2xs font-bold text-info" data-testid={`special-net-${index}`}>
+              {item.calcPending
+                ? 'กำลังคำนวณราคาสุทธิ...'
+                : item.netUnitPrice != null && Number(item.specialPriceSqm) > 0
+                  ? `= สุทธิ ${formatQuotationMoney(item.netUnitPrice, currency)}/แผ่น (ก่อน VAT)`
+                  : 'ระบบคำนวณราคาสุทธิต่อแผ่นให้'}
+            </span>
+          </FormField>
         ) : null}
         {hidePricing ? null : perSqm ? (
           <>
@@ -1125,6 +1255,7 @@ export function QuotationItemRow({
           </div>
         </FormField>
       </div>
+      </div>
 
       <FormField label="หมายเหตุรายการ" htmlFor={`notes-${index}`}>
         <input id={`notes-${index}`} disabled={readOnly} value={item.itemNotes ?? ''} onChange={(e) => patch({ itemNotes: e.target.value })} />
@@ -1157,10 +1288,27 @@ export function QuotationItemRow({
  *
  * ⚠️ Sending only the current mode's price is load-bearing, not tidiness: `POST calculate-line` has
  * no quotation to read a mode from, so DealQuotationService#inferPriceMode infers it FROM THE ROW —
- * a present specialPriceSqm means SPECIAL_SQM, a present directNetPrice means DIRECT_NET. A stale
- * ราคาพิเศษ left on a row in NET mode would make the live preview price it as ราคาพิเศษ.
+ * a present specialPriceSqm means SPECIAL_SQM, a present directNetPrice (or directNetPriceSqm)
+ * means DIRECT_NET. A stale ราคาพิเศษ left on a row in NET mode would make the live preview price it
+ * as ราคาพิเศษ.
+ *
+ * V192.2 (sales feedback #1, 2026-10-06): on a THAI document each of a tile row's two prices travels
+ * in the unit the row holds it in — see quotationMeta's "ราคา/ตร.ม. รวม VAT" block:
+ *   - typed per ตร.ม. → `listPriceSqm` / `directNetPriceSqm`, with the per-แผ่น counterpart sent
+ *     as null. The row's own `unitPrice` is then only the server's last ANSWER and is never sent
+ *     back (the server would ignore it anyway — a per-ตร.ม. price replaces it);
+ *   - still per แผ่น (a row nobody has retyped since before this change) → `unitPrice` /
+ *     `directNetPrice`, exactly as before, so the price cannot move.
+ * An English document sends neither per-ตร.ม. field, whatever the row is carrying: the server
+ * refuses a VAT-inclusive price there.
+ *
+ * V192.5 (mixed price modes): on a MIXED document the caller passes THIS ROW's mode as `priceMode`
+ * and `{ mixed: true }`, and a tile row then also STATES that mode on the wire (`priceMode`).
+ * The server requires it there, and calculate-line uses it instead of guessing from the fields.
+ * On a single-mode document nothing about a mode is sent — not even when the row object happens
+ * to carry one — so every existing payload is byte-for-byte what it was.
  */
-export function itemInputFromRow(item, priceMode = 'NET', documentLanguage = 'TH') {
+export function itemInputFromRow(item, priceMode = 'NET', documentLanguage = 'TH', { mixed = false } = {}) {
   const type = lineTypeOf(item);
   if (type === LINE_TYPE_PLAIN) {
     return {
@@ -1192,24 +1340,35 @@ export function itemInputFromRow(item, priceMode = 'NET', documentLanguage = 'TH
   if (type === LINE_TYPE_ADJUSTMENT) return adjustmentInputFromRow(item);
   const directNet = item.directNetPrice === '' || item.directNetPrice == null ? null : Number(item.directNetPrice);
   const unitPrice = item.unitPrice === '' || item.unitPrice == null ? null : item.unitPrice;
+  // V192.2 — which unit each of the two prices is in. Both null on an English document.
+  const listSqm = usesListPriceSqm(item, documentLanguage) ? Number(item.listPriceSqm) : null;
+  const netSqm = priceMode === 'DIRECT_NET' && usesDirectNetPriceSqm(item, documentLanguage)
+    ? Number(item.directNetPriceSqm) : null;
+  // DIRECT_NET: a blank ราคาตั้ง is sent as the net itself — one field typed instead of two,
+  // and DealQuotationRenderAdapter#discountLabel then prints "Net" because the two are equal,
+  // which is the honest reading of "the rep only has a net price". In whichever unit the net is
+  // in: a per-ตร.ม. net stands in as a per-ตร.ม. list, so both derive to the same per-แผ่น figure.
+  const netStandsInForList = priceMode === 'DIRECT_NET' && listSqm == null && unitPrice == null;
+  const wireListSqm = listSqm ?? (netStandsInForList ? netSqm : null);
   return {
     // See the PLAIN branch's comment above -- same reason, same contract.
     id: item.id ?? null,
     ...tileInputFromRow(item),
     lineType: LINE_TYPE_TILE,
-    // DIRECT_NET: a blank ราคาตั้ง is sent as the net itself — one field typed instead of two,
-    // and DealQuotationRenderAdapter#discountLabel then prints "Net" because the two are equal,
-    // which is the honest reading of "the rep only has a net price".
     // English per-sqm: the USD/ตร.ม. IS the unit price (the server substitutes it anyway).
+    // Otherwise null whenever the list price travels per ตร.ม. — see this function's Javadoc.
     unitPrice: isEnglishPerSqm(priceMode, documentLanguage)
       ? (item.specialPriceSqm === '' || item.specialPriceSqm == null ? null : Number(item.specialPriceSqm))
-      : priceMode === 'DIRECT_NET' && unitPrice == null ? directNet : unitPrice,
+      : wireListSqm != null ? null
+        : netStandsInForList ? directNet : unitPrice,
+    listPriceSqm: isEnglishPerSqm(priceMode, documentLanguage) ? null : wireListSqm,
     // A mode with no percent: SPECIAL_SQM and DIRECT_NET both print พิเศษ/Net, and the server
     // nulls the stored percent in those modes anyway (DealQuotationService#buildTileItem).
     discountPct: priceMode === 'NET' ? (item.discountPct ?? 0) : null,
     specialPriceSqm: priceMode === 'SPECIAL_SQM' && item.specialPriceSqm !== '' && item.specialPriceSqm != null
       ? Number(item.specialPriceSqm) : null,
-    directNetPrice: priceMode === 'DIRECT_NET' ? directNet : null,
+    directNetPrice: priceMode === 'DIRECT_NET' && netSqm == null ? directNet : null,
+    directNetPriceSqm: netSqm,
     // English per-sqm WITH a box area cannot express a loose-piece quantity in square metres (its
     // quantity is boxes × sqmPerBox, with no remainder term) — DealQuotationService#buildTileItem's
     // hasBoxArea branch refuses roundToFullBox=false outright for that combination. Forced true
@@ -1222,6 +1381,8 @@ export function itemInputFromRow(item, priceMode = 'NET', documentLanguage = 'TH
     roundToFullBox: isEnglishPerSqm(priceMode, documentLanguage) && Number(item.sqmPerBox) > 0
       ? true
       : item.roundToFullBox !== false,
+    // V192.5 — see this function's Javadoc. A key that is absent, not null, on a single-mode document.
+    ...(mixed ? { priceMode } : {}),
   };
 }
 
@@ -1299,6 +1460,9 @@ export function emptyQuotationItem(groupId = null, defaults = null) {
     groupId,
     lineType: LINE_TYPE_TILE,
     specialPriceSqm: '', directNetPrice: '',
+    // V192.2 — the two prices a Thai row is typed in, per ตร.ม. including VAT. Blank until typed;
+    // see quotationMeta's "ราคา/ตร.ม. รวม VAT" block.
+    listPriceSqm: '', directNetPriceSqm: '',
     locationLabel: '', catalogPriceId: null, productCode: '',
     brand: '', model: '', color: '', texture: '', sizeText: '', thicknessMm: null, sqmPerPiece: null,
     sqmPerBox: null,
@@ -1360,6 +1524,10 @@ export function emptyAdjustment(defaultDeadline = '') {
  *   - A PLAIN row's rep-typed text comes back as `descriptionLine`.
  *   - An ADJUSTMENT's kind follows which of adjustmentPct / adjustmentAmount is non-null (the DTO
  *     guarantees exactly one — review fix F2).
+ *   - V192.2: a price typed per ตร.ม. comes back VERBATIM (`listPriceSqm` / `directNetPriceSqm` —
+ *     the server stores what was typed, because the per-แผ่น figure cannot be converted back), and
+ *     is null on a row that was priced per แผ่น. A net that came back per ตร.ม. is NOT also
+ *     recovered per แผ่น from `netUnitPrice`: the row would then hold the same net twice.
  */
 export function rowFromServerItem(item, priceMode = 'NET') {
   const base = { ...item, clientId: item.id ?? newItemClientId(), calcPending: false };
@@ -1381,9 +1549,12 @@ export function rowFromServerItem(item, priceMode = 'NET') {
       description: flat ? (item.descriptionLine ?? '') : '',
     };
   }
+  const directNetPriceSqm = priceMode === 'DIRECT_NET' ? (item.directNetPriceSqm ?? '') : '';
   return {
     ...base, lineType: LINE_TYPE_TILE,
     specialPriceSqm: item.specialPriceSqm ?? '',
-    directNetPrice: priceMode === 'DIRECT_NET' ? (item.netUnitPrice ?? '') : '',
+    listPriceSqm: item.listPriceSqm ?? '',
+    directNetPriceSqm,
+    directNetPrice: priceMode === 'DIRECT_NET' && directNetPriceSqm === '' ? (item.netUnitPrice ?? '') : '',
   };
 }

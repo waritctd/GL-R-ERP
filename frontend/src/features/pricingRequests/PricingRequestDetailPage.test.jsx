@@ -2342,6 +2342,36 @@ describe('PricingRequestDetailPage mobile layout', () => {
 // sees the full breakdown. UI scoping only, no backend authz change (buildRequest's base fixture
 // already carries color/thicknessMm/sqmPerPiece/quantityMode/piecesInput/piecesPerBox — see that
 // fixture's own V185 comment).
+// Sales feedback Admin 1d / owner 2026-10-06: "remove ฝ่าย field completely". The request's
+// read-only header terms used to repeat it ("ฝ่าย: —") beside the designer code and the validity.
+// It is asserted absent on a request that DOES carry one, so the line cannot survive by being
+// conditional on a value; the other header terms are asserted present, so the test cannot pass
+// by the whole block having disappeared.
+describe('PricingRequestDetailPage header terms — ฝ่าย is not shown (owner, 2026-10-06)', () => {
+  it('shows the designer code and the validity, and no ฝ่าย, even when the request stores one', async () => {
+    const request = buildRequest({ summary: { deptCode: 'P003', unitCode: 'D002', validityDays: 30 } });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+
+    expect(screen.getByText('หน่วยงาน / รหัสผู้ออกแบบ: D002')).not.toBeNull();
+    expect(screen.getByText('ยืนราคา: 30 วัน')).not.toBeNull();
+    expect(screen.queryByText(/^ฝ่าย:/)).toBeNull();
+    expect(screen.queryByText(/P003/)).toBeNull();
+  });
+
+  // A request whose ONLY header term is a stored ฝ่าย has nothing left to say there — the block
+  // must not open just to show an empty set of dashes.
+  it('a request whose only stored header term is a ฝ่าย opens no header-terms block at all', async () => {
+    const request = buildRequest({ summary: { deptCode: 'P003' } });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+
+    expect(screen.queryByText(/^ฝ่าย:/)).toBeNull();
+    expect(screen.queryByText(/^หน่วยงาน \/ รหัสผู้ออกแบบ:/)).toBeNull();
+    expect(screen.queryByText(/^ยืนราคา:/)).toBeNull();
+  });
+});
+
 describe('PricingRequestDetailPage item card — V185 sales-entered fields', () => {
   it('shows the sales-entered tile fields read-only to every viewer', async () => {
     renderDetailPage({ user: salesOwner });
