@@ -636,10 +636,10 @@ public class DealQuotationService {
             item.catalogHeightMm(), item.sqmPerBox(), item.roundToFullBox(), prItemId, decItemId,
             // V192.2 — whatever the row already carries (a revision's copy of its parent's typed
             // prices; null on a row freshly built from the CEO's decision).
-            item.listPriceSqm(), item.directNetPriceSqm())
+            item.listPriceSqm(), item.directNetPriceSqm(),
             // V192.5 — always null today (this origin can never be MIXED — #requirePriceModeAllowed),
             // passed through so that stays a rule rather than an accident of this constructor.
-            .withPriceMode(item.priceMode());
+            item.priceMode());
     }
 
     /** M4(a)/(b) fix (Opus review, 2026-09-20): refuses changing a CEO-linked line's TYPE (must
@@ -3275,11 +3275,11 @@ public class DealQuotationService {
             null, null,
             // V192.2 — a copy carries its parent's typed per-ตร.ม. prices VERBATIM, like every other
             // figure on the row: it is a copy, not a recalculation.
-            item.listPriceSqm(), item.directNetPriceSqm())
+            item.listPriceSqm(), item.directNetPriceSqm(),
             // V192.5 — and the mode the row was priced in, on a mixed document (null otherwise): the
             // copy's header says MIXED too (#insertCopyOf copies source.priceMode()), and a mixed
             // document whose rows had lost their modes would be re-read with every row as NET.
-            .withPriceMode(item.priceMode());
+            item.priceMode());
     }
 
     // ProductPriceDto's/price_catalog.product_prices' own price_unit for a linear-metre trim

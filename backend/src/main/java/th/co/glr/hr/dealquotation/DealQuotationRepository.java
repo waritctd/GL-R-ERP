@@ -504,30 +504,6 @@ public class DealQuotationRepository {
                 directNetPriceSqm, value);
         }
 
-        /** The pre-V192.2 canonical shape (no per-ตร.ม. typed prices) — kept so every existing
-         * construction site compiles unchanged. Defaults both to null: a row priced per แผ่น. */
-        public NewItem(
-            String locationLabel, Long catalogPriceId, String productCode, String brand, String model,
-            String color, String texture, String sizeText, BigDecimal thicknessMm, BigDecimal sqmPerPiece,
-            String quantityMode, BigDecimal areaSqm, Integer piecesInput, String wastageMode,
-            BigDecimal wastageValue, Integer piecesPerBox, int piecesBeforeWastage, int piecesAfterWastage,
-            int piecesFinal, Integer boxes, BigDecimal unitPrice, BigDecimal discountPct,
-            BigDecimal netUnitPrice, BigDecimal lineAmount, BigDecimal vat, BigDecimal lineTotal,
-            String originCountry, Integer leadTimeMinDays, Integer leadTimeMaxDays, String itemNotes,
-            String descriptionLine, String lineType, BigDecimal quantity, String unit,
-            BigDecimal specialPriceSqm, BigDecimal adjustmentPct, java.time.LocalDate adjustmentDeadline,
-            BigDecimal catalogWidthMm, BigDecimal catalogHeightMm, BigDecimal sqmPerBox,
-            boolean roundToFullBox, Long pricingRequestItemId, Long pricingDecisionItemId) {
-            this(
-                locationLabel, catalogPriceId, productCode, brand, model, color, texture, sizeText,
-                thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput, wastageMode, wastageValue,
-                piecesPerBox, piecesBeforeWastage, piecesAfterWastage, piecesFinal, boxes, unitPrice,
-                discountPct, netUnitPrice, lineAmount, vat, lineTotal, originCountry, leadTimeMinDays,
-                leadTimeMaxDays, itemNotes, descriptionLine, lineType, quantity, unit, specialPriceSqm,
-                adjustmentPct, adjustmentDeadline, catalogWidthMm, catalogHeightMm, sqmPerBox,
-                roundToFullBox, pricingRequestItemId, pricingDecisionItemId, null, null);
-        }
-
         /** The pre-GLA-123 shape (no pricing-request/decision item link) — kept so every existing
          * construction site (tests, mostly, plus every DEAL_DIRECT call site in this class and
          * DealQuotationService) compiles unchanged. Defaults both to null, correct for every
@@ -552,7 +528,7 @@ public class DealQuotationRepository {
                 discountPct, netUnitPrice, lineAmount, vat, lineTotal, originCountry, leadTimeMinDays,
                 leadTimeMaxDays, itemNotes, descriptionLine, lineType, quantity, unit, specialPriceSqm,
                 adjustmentPct, adjustmentDeadline, catalogWidthMm, catalogHeightMm, sqmPerBox, roundToFullBox,
-                null, null);
+                null, null, null, null);
         }
 
         /** The pre-V176 shape (no sqmPerBox/roundToFullBox) — PLAIN/ADJUSTMENT rows and existing

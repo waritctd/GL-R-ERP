@@ -120,20 +120,6 @@ public record QuotationRenderModel(
      */
     boolean hideProjectLine
 ) {
-    /** The pre-V192.1 fifteen-argument shape — every caller before {@code hideProjectLine} existed.
-     * Defaults it to {@code false}: the project cell is filled, or left as the template has it,
-     * exactly as before this field existed. */
-    public QuotationRenderModel(
-        LocalDate issueDate, String number, String deptCode, String unitCode, String salesLine,
-        String attnLine, String phoneLine, String projectName, List<RenderItem> items,
-        List<String> remarkLines, Signatories signatories, boolean signatureLabelsV2,
-        String documentLanguage, String currency, boolean forceCompactRemarks
-    ) {
-        this(issueDate, number, deptCode, unitCode, salesLine, attnLine, phoneLine, projectName,
-            items, remarkLines, signatories, signatureLabelsV2, documentLanguage, currency,
-            forceCompactRemarks, false);
-    }
-
     /** The pre-V182 fourteen-argument shape — every caller before {@code forceCompactRemarks}
      * existed. Defaults it to {@code false}: the renderer keeps choosing the v2/legacy remark
      * layout purely from {@code remarkLines.size()}, exactly as before this field existed. */
@@ -144,7 +130,7 @@ public record QuotationRenderModel(
         String documentLanguage, String currency
     ) {
         this(issueDate, number, deptCode, unitCode, salesLine, attnLine, phoneLine, projectName,
-            items, remarkLines, signatories, signatureLabelsV2, documentLanguage, currency, false);
+            items, remarkLines, signatories, signatureLabelsV2, documentLanguage, currency, false, false);
     }
 
     /** The pre-v3b shape: a Thai/THB document, which is what every caller predating the English
