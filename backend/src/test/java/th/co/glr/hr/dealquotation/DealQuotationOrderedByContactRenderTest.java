@@ -2,21 +2,15 @@ package th.co.glr.hr.dealquotation;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.io.ByteArrayInputStream;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
-import org.apache.poi.ss.usermodel.Cell;
-import org.apache.poi.ss.usermodel.CellType;
-import org.apache.poi.ss.usermodel.Row;
-import org.apache.poi.ss.usermodel.Sheet;
-import org.apache.poi.ss.usermodel.Workbook;
-import org.apache.poi.ss.usermodel.WorkbookFactory;
 import org.junit.jupiter.api.Test;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.UpsertDealQuotationRequest;
+import th.co.glr.hr.support.WorkbookTexts;
 import th.co.glr.hr.ticket.QuotationRenderModel;
 import th.co.glr.hr.ticket.QuotationRenderer;
 
@@ -93,7 +87,7 @@ class DealQuotationOrderedByContactRenderTest {
      * own phone and email, so "no phone, no email anywhere" is not what the guards are passing on. */
     @Test
     void theCustomerMasterContact_stillPrints_besideASalesContactThatDoesNot() throws Exception {
-        DealQuotationDto quotation = withSalesContact(quotation(null, true), PHONE, EMAIL);
+        DealQuotationDto quotation = withSalesContact(quotation(null, true));
 
         List<String> cells = sheetTexts(quotation);
         assertThat(cells).anyMatch(text -> text.contains(PRINTED_PHONE));
@@ -109,7 +103,7 @@ class DealQuotationOrderedByContactRenderTest {
      * older shape there would lose the rep's phone and email on the way to the screen. */
     @Test
     void everyCopyOfTheQuotation_keepsTheSalesContact() {
-        DealQuotationDto quotation = withSalesContact(quotation(null, true), PHONE, EMAIL);
+        DealQuotationDto quotation = withSalesContact(quotation(null, true));
 
         for (DealQuotationDto copy : List.of(
             quotation.withRemovedCeoItems(List.of()),
@@ -141,7 +135,7 @@ class DealQuotationOrderedByContactRenderTest {
         List<DealQuotationDto> documents = new ArrayList<>();
         for (String language : List.of(WastageCalculator.DOCUMENT_LANGUAGE_TH, WastageCalculator.DOCUMENT_LANGUAGE_EN)) {
             for (boolean customerMasterContact : List.of(true, false)) {
-                documents.add(withSalesContact(quotation(language, customerMasterContact), PHONE, EMAIL));
+                documents.add(withSalesContact(quotation(language, customerMasterContact)));
             }
         }
         return documents;
@@ -168,9 +162,9 @@ class DealQuotationOrderedByContactRenderTest {
             .withOrderedByName(NAME);
     }
 
-    /** {@code quotation} carrying this phone and email, through the record's canonical constructor
-     * — every other field passed straight through. */
-    private static DealQuotationDto withSalesContact(DealQuotationDto q, String phone, String email) {
+    /** {@code quotation} carrying {@link #PHONE} and {@link #EMAIL}, through the record's canonical
+     * constructor — every other field passed straight through. */
+    private static DealQuotationDto withSalesContact(DealQuotationDto q) {
         return new DealQuotationDto(q.id(), q.number(), q.ticketId(), q.docStatus(), q.revisionNo(),
             q.parentQuotationId(), q.createdById(), q.createdByName(), q.createdByNameEn(), q.salesRepId(),
             q.salesRepName(), q.salesRepNameEn(), q.salesRepPhone(), q.submittedAt(), q.approvedById(),
@@ -186,25 +180,12 @@ class DealQuotationOrderedByContactRenderTest {
             q.derivedFromQuotationId(), q.derivedFromQuotationNumber(), q.derivedFromQuotationStatus(),
             q.items(), q.createdAt(), q.updatedAt(), q.origin(), q.pricingRequestId(),
             q.priceModeChangedFromCeo(), q.ceoPriceMode(), q.pricingRequestCode(), q.itemsRemovedFromCeoCount(),
-            q.removedCeoItems(), q.orderedByName(), q.hideProjectName(), phone, email);
+            q.removedCeoItems(), q.orderedByName(), q.hideProjectName(), PHONE, EMAIL);
     }
 
     /** Every text cell of every sheet the XLS engine wrote for this quotation. */
     private static List<String> sheetTexts(DealQuotationDto quotation) throws Exception {
         QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(quotation, null, null);
-        byte[] xls = new QuotationRenderer().toXls(model);
-        List<String> texts = new ArrayList<>();
-        try (Workbook workbook = WorkbookFactory.create(new ByteArrayInputStream(xls))) {
-            for (Sheet sheet : workbook) {
-                for (Row row : sheet) {
-                    for (Cell cell : row) {
-                        if (cell.getCellType() == CellType.STRING && !cell.getStringCellValue().isBlank()) {
-                            texts.add(cell.getStringCellValue());
-                        }
-                    }
-                }
-            }
-        }
-        return texts;
+        return WorkbookTexts.of(new QuotationRenderer().toXls(model));
     }
 }

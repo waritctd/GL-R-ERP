@@ -1678,12 +1678,15 @@ describe('QuotationEditorPage ไม่แสดงชื่อโครงก�
   });
 
   // Regression guard: already true before the inline form was moved.
-  it('sits directly under the โครงการ field of an existing draft', async () => {
+  it('sits directly under the โครงการ field of an existing draft, and says what ticking it does', async () => {
     draft();
     renderEditor('/quotations/5');
     const box = await screen.findByRole('checkbox', { name: new RegExp(TOGGLE) });
 
     expect(nextFormControlAfter(screen.getByLabelText(/^โครงการ/))).toBe(box);
+    expect(follows(box, document.getElementById('salesRepDisplayIdCard'))).toBe(true);
+    // The consequence is on screen, not left to be discovered on the PDF.
+    expect(screen.getByText(/ชื่อโครงการยังอยู่ในดีล/)).not.toBeNull();
   });
 
   // The wrong-way-round case: a document that already hides its project must not start printing
@@ -1732,18 +1735,6 @@ describe('QuotationEditorPage ไม่แสดงชื่อโครงก�
     const box = await screen.findByRole('checkbox', { name: new RegExp(TOGGLE) });
     await waitFor(() => expect(screen.getByLabelText(/^โครงการ/).value).toBe('บ้านเอกมัย ซอย 5'));
     expect(box.checked).toBe(false);
-  });
-
-  it('sits directly under the โครงการ field it qualifies, and says what ticking it does', async () => {
-    draft();
-    renderEditor('/quotations/5');
-
-    const box = await screen.findByRole('checkbox', { name: new RegExp(TOGGLE) });
-    const projectInput = screen.getByLabelText(/^โครงการ/);
-    expect(follows(projectInput, box)).toBe(true);
-    expect(follows(box, document.getElementById('salesRepDisplayIdCard'))).toBe(true);
-    // The consequence is on screen, not left to be discovered on the PDF.
-    expect(screen.getByText(/ชื่อโครงการยังอยู่ในดีล/)).not.toBeNull();
   });
 });
 

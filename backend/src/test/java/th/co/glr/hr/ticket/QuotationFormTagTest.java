@@ -17,6 +17,7 @@ import org.apache.poi.ss.SpreadsheetVersion;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import th.co.glr.hr.support.WorkbookTexts;
 
 /**
  * Sales feedback, Admin #6 (แจ้งปัญหาการใช้งาน เสนอราคา, 2026-10-06): "เลขแบบฟอร์มเอกสาร ISO
@@ -112,13 +113,13 @@ class QuotationFormTagTest {
     void anEnglishQuotation_keepsItsOwnFormNumber_andNeverCarriesTheThaiOne() throws Exception {
         Sheet sheet = render("english");
         assertThat(cellsReading(sheet, ENGLISH_FORM)).hasSize(1);
-        assertThat(allText(sheet)).noneMatch(t -> t.contains("F-SM-002"));
+        assertThat(WorkbookTexts.of(xls("english"))).noneMatch(t -> t.contains("F-SM-002"));
     }
 
     @ParameterizedTest
     @ValueSource(strings = {"single-page", "one-page-scaled", "paginated", "legacy-shape"})
     void aThaiQuotation_neverCarriesTheEnglishFormNumber(String fixture) throws Exception {
-        assertThat(allText(render(fixture))).noneMatch(t -> t.contains("F-SM-008"));
+        assertThat(WorkbookTexts.of(xls(fixture))).noneMatch(t -> t.contains("F-SM-008"));
     }
 
     /** Both forms print their number in the same place — one layout rule, two numbers. */
@@ -134,9 +135,12 @@ class QuotationFormTagTest {
 
     // ── helpers ─────────────────────────────────────────────────────────────────────────────
 
+    private byte[] xls(String fixture) {
+        return renderer.toXls(QuotationRendererNoPictureGoldenTest.model(fixture));
+    }
+
     private Sheet render(String fixture) throws Exception {
-        byte[] xls = renderer.toXls(QuotationRendererNoPictureGoldenTest.model(fixture));
-        Workbook wb = WorkbookFactory.create(new ByteArrayInputStream(xls));
+        Workbook wb = WorkbookFactory.create(new ByteArrayInputStream(xls(fixture)));
         return wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
     }
 
@@ -159,18 +163,6 @@ class QuotationFormTagTest {
             for (Cell cell : row) {
                 if (text.equals(text(cell).strip())) {
                     out.add(cell);
-                }
-            }
-        }
-        return out;
-    }
-
-    private static List<String> allText(Sheet sheet) {
-        List<String> out = new ArrayList<>();
-        for (Row row : sheet) {
-            for (Cell cell : row) {
-                if (!text(cell).isEmpty()) {
-                    out.add(text(cell));
                 }
             }
         }

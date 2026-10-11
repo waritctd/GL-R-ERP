@@ -2,27 +2,17 @@ package th.co.glr.hr.dealquotation;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.io.ByteArrayInputStream;
 import java.time.LocalDate;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import org.apache.poi.ss.usermodel.Cell;
-import org.apache.poi.ss.usermodel.CellType;
-import org.apache.poi.ss.usermodel.Row;
-import org.apache.poi.ss.usermodel.Sheet;
-import org.apache.poi.ss.usermodel.Workbook;
-import org.apache.poi.ss.usermodel.WorkbookFactory;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto;
-import th.co.glr.hr.dealquotation.DealQuotationRequests.ApproveRequest;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.UpsertDealQuotationRequest;
 import th.co.glr.hr.ticket.QuotationRenderModel;
 import th.co.glr.hr.ticket.QuotationRenderer;
-import th.co.glr.hr.ticket.QuotationStatus;
 
 /**
  * V192.3 — ผู้ติดต่อ gains a Phone and an Email ("for sales record only … doesn't need to be render
@@ -338,11 +328,7 @@ class DealQuotationOrderedByContactIntegrationTest extends AbstractDealDirectQuo
     }
 
     private DealQuotationDto approvedWithContact(long ticketId) {
-        DealQuotationDto created = quotationService.create(ticketId, contact(NAME, PHONE, EMAIL), salesActor);
-        quotationService.submit(created.id(), salesActor);
-        DealQuotationDto approved = quotationService.approve(created.id(), new ApproveRequest(null), salesManagerActor);
-        assertThat(approved.docStatus()).isEqualTo(QuotationStatus.APPROVED);
-        return approved;
+        return approved(ticketId, contact(NAME, PHONE, EMAIL), salesActor);
     }
 
     /** Someone of {@code role} who is not the deal's owner and holds no quotation grant (the id
@@ -357,26 +343,5 @@ class DealQuotationOrderedByContactIntegrationTest extends AbstractDealDirectQuo
         return jdbc.queryForMap(
             "SELECT ordered_by_name, ordered_by_phone, ordered_by_email FROM sales.quotation WHERE quotation_id = :id",
             Map.of("id", quotationId));
-    }
-
-    /** Every text cell of the workbook the SERVICE renders for the stored quotation — the same
-     * render model the PDF is printed from. */
-    private List<String> sheetTexts(long quotationId) {
-        byte[] xls = quotationService.renderXlsx(quotationId, salesActor);
-        List<String> texts = new ArrayList<>();
-        try (Workbook workbook = WorkbookFactory.create(new ByteArrayInputStream(xls))) {
-            for (Sheet sheet : workbook) {
-                for (Row row : sheet) {
-                    for (Cell cell : row) {
-                        if (cell.getCellType() == CellType.STRING && !cell.getStringCellValue().isBlank()) {
-                            texts.add(cell.getStringCellValue());
-                        }
-                    }
-                }
-            }
-        } catch (java.io.IOException e) {
-            throw new java.io.UncheckedIOException(e);
-        }
-        return texts;
     }
 }

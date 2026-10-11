@@ -2,19 +2,11 @@ package th.co.glr.hr.dealquotation;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.io.ByteArrayInputStream;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.ZoneId;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import org.apache.poi.ss.usermodel.Cell;
-import org.apache.poi.ss.usermodel.CellType;
-import org.apache.poi.ss.usermodel.Row;
-import org.apache.poi.ss.usermodel.Sheet;
-import org.apache.poi.ss.usermodel.Workbook;
-import org.apache.poi.ss.usermodel.WorkbookFactory;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import th.co.glr.hr.common.ApiException;
@@ -219,7 +211,7 @@ class DealQuotationMixedPriceModeIntegrationTest extends AbstractDealDirectQuota
         long ticket = deal(salesActor);
         UpsertDealQuotationRequest english = new UpsertDealQuotationRequest(null, null, null, null, 50,
             "CASH_ON_DELIVERY", 0, 30, null, MIXED, "EN", "USD",
-            List.of(perPieceRow("100.00", "0").withPriceMode(NET)));
+            List.of(perPiece("100.00", "0").withPriceMode(NET)));
 
         ApiException refused = refusal(() -> quotationService.create(ticket, english, salesActor),
             HttpStatus.BAD_REQUEST);
@@ -306,10 +298,8 @@ class DealQuotationMixedPriceModeIntegrationTest extends AbstractDealDirectQuota
     @Test
     void aRevisionAndAReorder_carryTheMixAndEveryRowsMode() {
         long ticket = deal(salesActor);
-        DealQuotationDto created = quotationService.create(ticket,
+        DealQuotationDto approved = approved(ticket,
             request(MIXED, netRow("20"), specialRow(), directNetRow(), freight()), salesActor);
-        quotationService.submit(created.id(), salesActor);
-        DealQuotationDto approved = quotationService.approve(created.id(), new ApproveRequest(null), salesManagerActor);
 
         for (DealQuotationDto copy : List.of(
                 quotationService.createReorder(approved.id(), salesActor),
@@ -348,7 +338,7 @@ class DealQuotationMixedPriceModeIntegrationTest extends AbstractDealDirectQuota
      * previewing off the ราคาพิเศษ still sitting in its hidden box. */
     @Test
     void thePreview_usesTheModeTheRowStates_overWhatItsFieldsSuggest() {
-        ItemInput staleSpecialButNet = item("60x120", "0.72", 2, null, "20", "790", "1800", null)
+        ItemInput staleSpecialButNet = tile(null, "20", "790", "1800", null)
             .withPriceMode(NET);
 
         DealQuotationItemDto preview = quotationService.calculateLine(staleSpecialButNet, salesActor);
@@ -387,7 +377,7 @@ class DealQuotationMixedPriceModeIntegrationTest extends AbstractDealDirectQuota
                 .noneMatch(line -> line.contains("ราคาพิเศษ"));
         }
         // …and the same through the service's own render of the stored document.
-        List<String> cells = sheetText(created.id());
+        List<String> cells = sheetTexts(created.id()).stream().map(String::strip).toList();
         assertThat(cells).contains("20%", "พิเศษ", "Net");
         assertThat(cells).noneMatch(text -> text.contains("MIXED") || text.contains("SPECIAL_SQM"));
     }
@@ -433,71 +423,30 @@ class DealQuotationMixedPriceModeIntegrationTest extends AbstractDealDirectQuota
 
     // ── fixtures ────────────────────────────────────────────────────────────────────────────
 
-    private static BigDecimal bd(String value) {
-        return value == null ? null : new BigDecimal(value);
-    }
-
     /** ราคาตั้ง 1,800 บาท/ตร.ม. รวม VAT, less {@code discountPct}% — stating NET as its own mode. */
     private static ItemInput netRow(String discountPct) {
-        return item("60x120", "0.72", 2, null, discountPct, null, "1800", null).withPriceMode(NET);
+        return tile(null, discountPct, null, "1800", null).withPriceMode(NET);
     }
 
     /** ราคาพิเศษ 790 บาท/ตร.ม. รวม VAT (ราคาตั้ง 1,800 only prints) — stating SPECIAL_SQM. */
     private static ItemInput specialRow() {
-        return item("60x120", "0.72", 2, null, null, "790", "1800", null).withPriceMode(SPECIAL_SQM);
+        return tile(null, null, "790", "1800", null).withPriceMode(SPECIAL_SQM);
     }
 
     /** ราคาสุทธิ 790 บาท/ตร.ม. รวม VAT against a ราคาตั้ง of 1,800 — stating DIRECT_NET. */
     private static ItemInput directNetRow() {
-        return item("60x120", "0.72", 2, null, null, null, "1800", "790").withPriceMode(DIRECT_NET);
+        return tile(null, null, null, "1800", "790").withPriceMode(DIRECT_NET);
     }
 
     /** ราคาสุทธิ equal to its ราคาตั้ง (1,800 both): a DIRECT_NET row with nothing special about it. */
     private static ItemInput directNetRowAtListPrice() {
-        return item("60x120", "0.72", 2, null, null, null, "1800", "1800").withPriceMode(DIRECT_NET);
+        return tile(null, null, null, "1800", "1800").withPriceMode(DIRECT_NET);
     }
 
-    /** The same tile priced per แผ่น — the shape the English form still sends. */
-    private static ItemInput perPieceRow(String unitPrice, String discountPct) {
-        return item("60x120", "0.72", 2, unitPrice, discountPct, null, null, null);
-    }
-
-    /** A TILE row of 10 แผ่น with no wastage. */
-    private static ItemInput item(String sizeText, String sqmPerPiece, Integer piecesPerBox, String unitPrice,
-                                  String discountPct, String specialPriceSqm, String listPriceSqm,
-                                  String directNetPriceSqm) {
-        return new ItemInput(
-            null, null, null, "Panaria", "Trilogy", "Ivory", "Lappato", sizeText, bd("10.00"),
-            bd(sqmPerPiece), WastageCalculator.QUANTITY_MODE_PIECES, null, 10,
-            WastageCalculator.WASTAGE_MODE_NONE, null, piecesPerBox, bd(unitPrice), bd(discountPct), "อิตาลี",
-            75, 90, null, WastageCalculator.LINE_TYPE_TILE, null, null, null, bd(specialPriceSqm), null, null, null,
-            null, null, null, false, bd(listPriceSqm), bd(directNetPriceSqm));
-    }
-
-    /** A สินค้า/บริการอื่น line: ค่าขนส่ง, 2 × 500.00. */
-    private static ItemInput freight() {
-        return new ItemInput(
-            null, null, null, null, null, null, null, null, null,
-            null, null, null, null,
-            null, null, null, bd("500.00"), BigDecimal.ZERO, null,
-            null, null, null, WastageCalculator.LINE_TYPE_PLAIN, "ค่าขนส่ง", bd("2"), "JOB", null, null,
-            null, null, null, null, null, null, null, null);
-    }
-
-    /** {@code row} as the editor sends a row it has already saved: carrying its server id. */
-    private static ItemInput withId(long id, ItemInput row) {
-        return new ItemInput(row.locationLabel(), row.catalogPriceId(), row.productCode(), row.brand(), row.model(),
-            row.color(), row.texture(), row.sizeText(), row.thicknessMm(), row.sqmPerPiece(), row.quantityMode(),
-            row.areaSqm(), row.piecesInput(), row.wastageMode(), row.wastageValue(), row.piecesPerBox(),
-            row.unitPrice(), row.discountPct(), row.originCountry(), row.leadTimeMinDays(), row.leadTimeMaxDays(),
-            row.itemNotes(), row.lineType(), row.description(), row.quantity(), row.unit(), row.specialPriceSqm(),
-            row.directNetPrice(), row.adjustmentPct(), row.adjustmentDeadline(), row.adjustmentAmount(), id,
-            row.sqmPerBox(), row.roundToFullBox(), row.listPriceSqm(), row.directNetPriceSqm(), row.priceMode());
-    }
-
-    private static UpsertDealQuotationRequest request(String priceMode, ItemInput... items) {
-        return new UpsertDealQuotationRequest(null, null, null, null, 50, "CASH_ON_DELIVERY",
-            0, 30, null, priceMode, "TH", "THB", List.of(items));
+    /** The owner's 60×120 (0.72 ตร.ม./แผ่น, 2 แผ่น/กล่อง), which every tile row in this class is. */
+    private static ItemInput tile(String unitPrice, String discountPct, String specialPriceSqm,
+                                  String listPriceSqm, String directNetPriceSqm) {
+        return item("60x120", "0.72", 2, unitPrice, discountPct, specialPriceSqm, listPriceSqm, directNetPriceSqm);
     }
 
     private static UpsertDealQuotationRequest withValidityDate(UpsertDealQuotationRequest base, LocalDate until) {
@@ -516,23 +465,5 @@ class DealQuotationMixedPriceModeIntegrationTest extends AbstractDealDirectQuota
         return jdbc.queryForList(
             "SELECT price_mode FROM sales.quotation_item WHERE quotation_id = :id ORDER BY seq",
             Map.of("id", quotationId), String.class);
-    }
-
-    /** Every text cell of the workbook the SERVICE renders for the stored quotation. */
-    private List<String> sheetText(long quotationId) throws Exception {
-        byte[] xls = quotationService.renderXlsx(quotationId, salesActor);
-        List<String> out = new ArrayList<>();
-        try (Workbook workbook = WorkbookFactory.create(new ByteArrayInputStream(xls))) {
-            for (Sheet sheet : workbook) {
-                for (Row row : sheet) {
-                    for (Cell cell : row) {
-                        if (cell.getCellType() == CellType.STRING && !cell.getStringCellValue().isBlank()) {
-                            out.add(cell.getStringCellValue().strip());
-                        }
-                    }
-                }
-            }
-        }
-        return out;
     }
 }

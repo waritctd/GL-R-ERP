@@ -2,20 +2,13 @@ package th.co.glr.hr.dealquotation;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.io.ByteArrayInputStream;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.util.ArrayList;
 import java.util.List;
-import org.apache.poi.ss.usermodel.Cell;
-import org.apache.poi.ss.usermodel.CellType;
-import org.apache.poi.ss.usermodel.Row;
-import org.apache.poi.ss.usermodel.Sheet;
-import org.apache.poi.ss.usermodel.Workbook;
-import org.apache.poi.ss.usermodel.WorkbookFactory;
 import org.junit.jupiter.api.Test;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto;
+import th.co.glr.hr.support.WorkbookTexts;
 import th.co.glr.hr.ticket.QuotationRenderModel;
 import th.co.glr.hr.ticket.QuotationRenderer;
 
@@ -195,19 +188,6 @@ class DealQuotationHideProjectNameRenderTest {
     /** Every text cell of every sheet the XLS engine wrote for this quotation. */
     private static List<String> sheetTexts(DealQuotationDto quotation) throws Exception {
         QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(quotation, null, null);
-        byte[] xls = new QuotationRenderer().toXls(model);
-        List<String> texts = new ArrayList<>();
-        try (Workbook workbook = WorkbookFactory.create(new ByteArrayInputStream(xls))) {
-            for (Sheet sheet : workbook) {
-                for (Row row : sheet) {
-                    for (Cell cell : row) {
-                        if (cell.getCellType() == CellType.STRING && !cell.getStringCellValue().isBlank()) {
-                            texts.add(cell.getStringCellValue());
-                        }
-                    }
-                }
-            }
-        }
-        return texts;
+        return WorkbookTexts.of(new QuotationRenderer().toXls(model));
     }
 }

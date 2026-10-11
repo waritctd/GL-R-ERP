@@ -19,7 +19,6 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationItemDto;
-import th.co.glr.hr.dealquotation.DealQuotationRequests.ApproveRequest;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.ItemInput;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.UpsertDealQuotationRequest;
 
@@ -446,10 +445,7 @@ class DealQuotationPerSqmPriceIntegrationTest extends AbstractDealDirectQuotatio
     @Test
     void aRevisionAndAReorder_carryTheTypedPerSqmPrices() {
         long ticket = deal(salesActor);
-        DealQuotationDto created = quotationService.create(ticket,
-            request(DIRECT_NET, perSqm("1800", "790", null)), salesActor);
-        quotationService.submit(created.id(), salesActor);
-        DealQuotationDto approved = quotationService.approve(created.id(), new ApproveRequest(null), salesManagerActor);
+        DealQuotationDto approved = approved(ticket, request(DIRECT_NET, perSqm("1800", "790", null)), salesActor);
 
         for (DealQuotationDto copy : List.of(
                 quotationService.createReorder(approved.id(), salesActor),
@@ -464,34 +460,10 @@ class DealQuotationPerSqmPriceIntegrationTest extends AbstractDealDirectQuotatio
 
     // ── fixtures ─────────────────────────────────────────────────────────────────────────────
 
-    private static BigDecimal bd(String value) {
-        return value == null ? null : new BigDecimal(value);
-    }
-
     /** The owner's 60×120 (0.72 ตร.ม./แผ่น, 2 แผ่น/กล่อง), priced per ตร.ม. including VAT — the
      * shape the editor sends since this change. */
     private static ItemInput perSqm(String listPriceSqm, String directNetPriceSqm, String discountPct) {
         return item("60x120", "0.72", 2, null, discountPct, null, listPriceSqm, directNetPriceSqm);
-    }
-
-    /** The same tile priced per แผ่น — the shape every request had before this change, and the one
-     * the English form, the pricing-request path and the e2e suite still send. */
-    private static ItemInput perPiece(String unitPrice, String discountPct) {
-        return item("60x120", "0.72", 2, unitPrice, discountPct, null, null, null);
-    }
-
-    /** A TILE row of 10 แผ่น with no wastage, so 10 is what every amount is multiplied by. Built
-     * through the CANONICAL constructor on purpose: the older shapes default the two per-ตร.ม.
-     * fields to null, and this class is about what happens when they are not. */
-    private static ItemInput item(String sizeText, String sqmPerPiece, Integer piecesPerBox, String unitPrice,
-                                  String discountPct, String specialPriceSqm, String listPriceSqm,
-                                  String directNetPriceSqm) {
-        return new ItemInput(
-            null, null, null, "Panaria", "Trilogy", "Ivory", "Lappato", sizeText, bd("10.00"),
-            bd(sqmPerPiece), WastageCalculator.QUANTITY_MODE_PIECES, null, 10,
-            WastageCalculator.WASTAGE_MODE_NONE, null, piecesPerBox, bd(unitPrice), bd(discountPct), "อิตาลี",
-            75, 90, null, WastageCalculator.LINE_TYPE_TILE, null, null, null, bd(specialPriceSqm), null, null, null,
-            null, null, null, false, bd(listPriceSqm), bd(directNetPriceSqm));
     }
 
     /** {@code row} with its quantity changed to {@code pieces} แผ่น (the fixtures default to 10). */
@@ -503,16 +475,6 @@ class DealQuotationPerSqmPriceIntegrationTest extends AbstractDealDirectQuotatio
             row.itemNotes(), row.lineType(), row.description(), row.quantity(), row.unit(), row.specialPriceSqm(),
             row.directNetPrice(), row.adjustmentPct(), row.adjustmentDeadline(), row.adjustmentAmount(), row.id(),
             row.sqmPerBox(), row.roundToFullBox(), row.listPriceSqm(), row.directNetPriceSqm());
-    }
-
-    /** A สินค้า/บริการอื่น line: ค่าขนส่ง, 2 × 500.00. */
-    private static ItemInput freight() {
-        return new ItemInput(
-            null, null, null, null, null, null, null, null, null,
-            null, null, null, null,
-            null, null, null, bd("500.00"), BigDecimal.ZERO, null,
-            null, null, null, WastageCalculator.LINE_TYPE_PLAIN, "ค่าขนส่ง", bd("2"), "JOB", null, null,
-            null, null, null, null, null, null, null, null);
     }
 
     /** What a customer works out from the price they were quoted: that price (per ตร.ม., including
@@ -530,23 +492,6 @@ class DealQuotationPerSqmPriceIntegrationTest extends AbstractDealDirectQuotatio
         assertThat(quotation.grandTotal()).as("%s ยอดรวมทั้งสิ้น", priceMode).isEqualByComparingTo(grandTotal);
         assertThat(quotation.grandTotal()).as("%s: what the keyed price says", priceMode)
             .isCloseTo(keyed, within(new BigDecimal("0.50")));
-    }
-
-    /** {@code row} as the editor sends a row it has already saved: carrying its server id, which is
-     * what makes {@code DealQuotationService#update} rewrite it in place. */
-    private static ItemInput withId(long id, ItemInput row) {
-        return new ItemInput(row.locationLabel(), row.catalogPriceId(), row.productCode(), row.brand(), row.model(),
-            row.color(), row.texture(), row.sizeText(), row.thicknessMm(), row.sqmPerPiece(), row.quantityMode(),
-            row.areaSqm(), row.piecesInput(), row.wastageMode(), row.wastageValue(), row.piecesPerBox(),
-            row.unitPrice(), row.discountPct(), row.originCountry(), row.leadTimeMinDays(), row.leadTimeMaxDays(),
-            row.itemNotes(), row.lineType(), row.description(), row.quantity(), row.unit(), row.specialPriceSqm(),
-            row.directNetPrice(), row.adjustmentPct(), row.adjustmentDeadline(), row.adjustmentAmount(), id,
-            row.sqmPerBox(), row.roundToFullBox(), row.listPriceSqm(), row.directNetPriceSqm());
-    }
-
-    private static UpsertDealQuotationRequest request(String priceMode, ItemInput... items) {
-        return new UpsertDealQuotationRequest(null, null, null, null, 50, "CASH_ON_DELIVERY",
-            0, 30, null, priceMode, "TH", "THB", List.of(items));
     }
 
     private DealQuotationItemDto createOne(String priceMode, ItemInput item) {

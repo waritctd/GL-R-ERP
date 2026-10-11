@@ -2,22 +2,12 @@ package th.co.glr.hr.dealquotation;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.io.ByteArrayInputStream;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import org.apache.poi.ss.usermodel.Cell;
-import org.apache.poi.ss.usermodel.CellType;
-import org.apache.poi.ss.usermodel.Row;
-import org.apache.poi.ss.usermodel.Sheet;
-import org.apache.poi.ss.usermodel.Workbook;
-import org.apache.poi.ss.usermodel.WorkbookFactory;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto;
-import th.co.glr.hr.dealquotation.DealQuotationRequests.ApproveRequest;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.UpsertDealQuotationRequest;
-import th.co.glr.hr.ticket.QuotationStatus;
 
 /**
  * Sales feedback #5 (2026-10-06, V192.1) — "ไม่แสดงชื่อโครงการในใบเสนอราคา", through the REAL
@@ -40,8 +30,6 @@ import th.co.glr.hr.ticket.QuotationStatus;
  */
 class DealQuotationHideProjectNameIntegrationTest extends AbstractDealDirectQuotationIntegrationTest {
 
-    private static final String PROJECT = PROJECT_NAME;
-
     // ── create ───────────────────────────────────────────────────────────────────────────────
 
     @Test
@@ -50,18 +38,18 @@ class DealQuotationHideProjectNameIntegrationTest extends AbstractDealDirectQuot
 
         assertThat(created.hideProjectName()).isFalse();
         assertThat(storedFlag(created.id())).isFalse();
-        assertThat(created.projectName()).isEqualTo(PROJECT);
+        assertThat(created.projectName()).isEqualTo(PROJECT_NAME);
     }
 
     @Test
     void create_hidden_isStored_andTheProjectNameItselfIsKept() {
-        DealQuotationDto created = quotationService.create(deal(salesActor), hidden(draft(), true), salesActor);
+        DealQuotationDto created = quotationService.create(deal(salesActor), hidden(draft()), salesActor);
 
         assertThat(created.hideProjectName()).isTrue();
         assertThat(storedFlag(created.id())).isTrue();
         // "Hide" is not "delete": the deal, the register and the editor still name the project.
-        assertThat(created.projectName()).isEqualTo(PROJECT);
-        assertThat(storedProjectName(created.id())).isEqualTo(PROJECT);
+        assertThat(created.projectName()).isEqualTo(PROJECT_NAME);
+        assertThat(storedProjectName(created.id())).isEqualTo(PROJECT_NAME);
     }
 
     // ── update ───────────────────────────────────────────────────────────────────────────────
@@ -77,28 +65,28 @@ class DealQuotationHideProjectNameIntegrationTest extends AbstractDealDirectQuot
     @Test
     void update_thatDoesNotMentionTheFlag_keepsAHiddenProjectHidden() {
         long ticket = deal(salesActor);
-        DealQuotationDto created = quotationService.create(ticket, hidden(draft(), true), salesActor);
+        DealQuotationDto created = quotationService.create(ticket, hidden(draft()), salesActor);
 
         DealQuotationDto updated = quotationService.update(created.id(), edit(null), salesActor);
 
         assertThat(updated.hideProjectName()).isTrue();
         assertThat(storedFlag(created.id())).isTrue();
         // The name is still stored (so this is the FLAG hiding it, not a cleared name)…
-        assertThat(storedProjectName(created.id())).isEqualTo(PROJECT);
+        assertThat(storedProjectName(created.id())).isEqualTo(PROJECT_NAME);
         // …and the document still does not print it.
-        assertThat(sheetTexts(created.id())).noneMatch(text -> text.contains(PROJECT));
+        assertThat(sheetTexts(created.id())).noneMatch(text -> text.contains(PROJECT_NAME));
     }
 
     @Test
     void update_explicitFalse_printsTheProjectAgain() {
         long ticket = deal(salesActor);
-        DealQuotationDto created = quotationService.create(ticket, hidden(draft(), true), salesActor);
+        DealQuotationDto created = quotationService.create(ticket, hidden(draft()), salesActor);
 
         DealQuotationDto updated = quotationService.update(created.id(), edit(false), salesActor);
 
         assertThat(updated.hideProjectName()).isFalse();
         assertThat(storedFlag(created.id())).isFalse();
-        assertThat(sheetTexts(created.id())).anyMatch(text -> text.contains("Project") && text.contains(PROJECT));
+        assertThat(sheetTexts(created.id())).anyMatch(text -> text.contains("Project") && text.contains(PROJECT_NAME));
     }
 
     @Test
@@ -110,8 +98,8 @@ class DealQuotationHideProjectNameIntegrationTest extends AbstractDealDirectQuot
 
         assertThat(updated.hideProjectName()).isTrue();
         assertThat(storedFlag(created.id())).isTrue();
-        assertThat(updated.projectName()).isEqualTo(PROJECT);
-        assertThat(storedProjectName(created.id())).isEqualTo(PROJECT);
+        assertThat(updated.projectName()).isEqualTo(PROJECT_NAME);
+        assertThat(storedProjectName(created.id())).isEqualTo(PROJECT_NAME);
     }
 
     /** An APPROVED document is frozen at what was approved. Trying to hide its project afterwards
@@ -123,7 +111,7 @@ class DealQuotationHideProjectNameIntegrationTest extends AbstractDealDirectQuot
         refusal(() -> quotationService.update(approved.id(), edit(true), salesActor), HttpStatus.CONFLICT);
 
         assertThat(storedFlag(approved.id())).isFalse();
-        assertThat(sheetTexts(approved.id())).anyMatch(text -> text.contains(PROJECT));
+        assertThat(sheetTexts(approved.id())).anyMatch(text -> text.contains(PROJECT_NAME));
     }
 
     // ── the document the service renders from the stored row ─────────────────────────────────
@@ -134,15 +122,15 @@ class DealQuotationHideProjectNameIntegrationTest extends AbstractDealDirectQuot
     void renderedDocument_printsTheProjectLine_whenNotHidden() {
         DealQuotationDto created = quotationService.create(deal(salesActor), draft(), salesActor);
 
-        assertThat(sheetTexts(created.id())).anyMatch(text -> text.contains("Project") && text.contains(PROJECT));
+        assertThat(sheetTexts(created.id())).anyMatch(text -> text.contains("Project") && text.contains(PROJECT_NAME));
     }
 
     @Test
     void renderedDocument_hasNoProjectLine_whenHidden() {
-        DealQuotationDto created = quotationService.create(deal(salesActor), hidden(draft(), true), salesActor);
+        DealQuotationDto created = quotationService.create(deal(salesActor), hidden(draft()), salesActor);
 
         List<String> cells = sheetTexts(created.id());
-        assertThat(cells).noneMatch(text -> text.contains(PROJECT));
+        assertThat(cells).noneMatch(text -> text.contains(PROJECT_NAME));
         assertThat(cells).noneMatch(text -> text.contains("Project"));
     }
 
@@ -152,14 +140,14 @@ class DealQuotationHideProjectNameIntegrationTest extends AbstractDealDirectQuot
     void renderedDocument_followsTheFlag_acrossAnUpdate() {
         long ticket = deal(salesActor);
         DealQuotationDto created = quotationService.create(ticket, draft(), salesActor);
-        assertThat(sheetTexts(created.id())).anyMatch(text -> text.contains(PROJECT));
+        assertThat(sheetTexts(created.id())).anyMatch(text -> text.contains(PROJECT_NAME));
 
         quotationService.update(created.id(), edit(true), salesActor);
-        assertThat(storedProjectName(created.id())).as("still stored — it is the flag that hides it").isEqualTo(PROJECT);
-        assertThat(sheetTexts(created.id())).noneMatch(text -> text.contains(PROJECT));
+        assertThat(storedProjectName(created.id())).as("still stored — it is the flag that hides it").isEqualTo(PROJECT_NAME);
+        assertThat(sheetTexts(created.id())).noneMatch(text -> text.contains(PROJECT_NAME));
 
         quotationService.update(created.id(), edit(false), salesActor);
-        assertThat(sheetTexts(created.id())).anyMatch(text -> text.contains(PROJECT));
+        assertThat(sheetTexts(created.id())).anyMatch(text -> text.contains(PROJECT_NAME));
     }
 
     // ── copies ───────────────────────────────────────────────────────────────────────────────
@@ -168,20 +156,16 @@ class DealQuotationHideProjectNameIntegrationTest extends AbstractDealDirectQuot
      * reorder clone both inherit the choice, exactly as they inherit every other header field. */
     @Test
     void revisionAndReorder_bothInheritAHiddenProject() {
-        long ticket = deal(salesActor);
-        DealQuotationDto created = quotationService.create(ticket, hidden(draft(), true), salesActor);
-        quotationService.submit(created.id(), salesActor);
-        DealQuotationDto approved = quotationService.approve(created.id(), new ApproveRequest(null), salesManagerActor);
-        assertThat(approved.docStatus()).isEqualTo(QuotationStatus.APPROVED);
+        DealQuotationDto approved = approved(deal(salesActor), hidden(draft()), salesActor);
         assertThat(approved.hideProjectName()).as("approval itself never touches the flag").isTrue();
 
         DealQuotationDto reorder = quotationService.createReorder(approved.id(), salesActor);
         assertThat(reorder.hideProjectName()).isTrue();
-        assertThat(sheetTexts(reorder.id())).noneMatch(text -> text.contains(PROJECT));
+        assertThat(sheetTexts(reorder.id())).noneMatch(text -> text.contains(PROJECT_NAME));
 
         DealQuotationDto revision = quotationService.createRevision(approved.id(), salesActor);
         assertThat(revision.hideProjectName()).isTrue();
-        assertThat(sheetTexts(revision.id())).noneMatch(text -> text.contains(PROJECT));
+        assertThat(sheetTexts(revision.id())).noneMatch(text -> text.contains(PROJECT_NAME));
     }
 
     /** …and the reverse: copying a document that prints its project never invents the flag. */
@@ -192,7 +176,7 @@ class DealQuotationHideProjectNameIntegrationTest extends AbstractDealDirectQuot
         DealQuotationDto revision = quotationService.createRevision(approved.id(), salesActor);
 
         assertThat(revision.hideProjectName()).isFalse();
-        assertThat(sheetTexts(revision.id())).anyMatch(text -> text.contains(PROJECT));
+        assertThat(sheetTexts(revision.id())).anyMatch(text -> text.contains(PROJECT_NAME));
     }
 
     // ── the column ───────────────────────────────────────────────────────────────────────────
@@ -213,8 +197,8 @@ class DealQuotationHideProjectNameIntegrationTest extends AbstractDealDirectQuot
 
     // ── helpers ──────────────────────────────────────────────────────────────────────────────
 
-    private static UpsertDealQuotationRequest hidden(UpsertDealQuotationRequest base, Boolean hideProjectName) {
-        return base.withHideProjectName(hideProjectName);
+    private static UpsertDealQuotationRequest hidden(UpsertDealQuotationRequest base) {
+        return base.withHideProjectName(true);
     }
 
     /**
@@ -235,7 +219,7 @@ class DealQuotationHideProjectNameIntegrationTest extends AbstractDealDirectQuot
             base.depositPercent(), base.remainderMode(), base.creditDays(), base.validityDays(),
             base.validityMode(), base.validityUntil(), base.customerNotes(), base.priceMode(),
             base.documentLanguage(), base.currency(), base.printedByDisplayId(), base.salesRepDisplayId(),
-            PROJECT, base.omitContactHonorific(), base.fullPaymentTerm(), base.orderedByName(),
+            PROJECT_NAME, base.omitContactHonorific(), base.fullPaymentTerm(), base.orderedByName(),
             hideProjectName, base.items());
     }
 
@@ -249,26 +233,5 @@ class DealQuotationHideProjectNameIntegrationTest extends AbstractDealDirectQuot
         return jdbc.queryForObject(
             "SELECT project_name FROM sales.quotation WHERE quotation_id = :id",
             Map.of("id", quotationId), String.class);
-    }
-
-    /** Every text cell of the workbook the SERVICE renders for the stored quotation — the same
-     * render model the PDF is printed from. */
-    private List<String> sheetTexts(long quotationId) {
-        byte[] xls = quotationService.renderXlsx(quotationId, salesActor);
-        List<String> texts = new ArrayList<>();
-        try (Workbook workbook = WorkbookFactory.create(new ByteArrayInputStream(xls))) {
-            for (Sheet sheet : workbook) {
-                for (Row row : sheet) {
-                    for (Cell cell : row) {
-                        if (cell.getCellType() == CellType.STRING && !cell.getStringCellValue().isBlank()) {
-                            texts.add(cell.getStringCellValue());
-                        }
-                    }
-                }
-            }
-        } catch (java.io.IOException e) {
-            throw new java.io.UncheckedIOException(e);
-        }
-        return texts;
     }
 }

@@ -36,6 +36,7 @@ import th.co.glr.hr.pricingdecision.PricingDecisionRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
+import th.co.glr.hr.support.WorkbookTexts;
 import th.co.glr.hr.ticket.CreateTicketRequest;
 import th.co.glr.hr.ticket.QuotationRenderer;
 import th.co.glr.hr.ticket.QuotationStatus;
@@ -134,8 +135,70 @@ abstract class AbstractDealDirectQuotationIntegrationTest extends AbstractPostgr
             0, 30, null, "NET", "TH", "THB", List.of(tile, plain));
     }
 
+    // ── a priced tile row, for the classes that are about how a row is priced ───────────────
+    // The owner's own 60×120 (0.72 ตร.ม./แผ่น → 1.39 แผ่น/ตร.ม., 2 แผ่น/กล่อง) unless a test says
+    // otherwise, so the expected figures are hers: 1,800 → 1,210.25 a piece and 790 → 531.16.
+
+    protected static BigDecimal bd(String value) {
+        return value == null ? null : new BigDecimal(value);
+    }
+
+    /** A TILE row of 10 แผ่น with no wastage, so 10 is what every amount is multiplied by. Built
+     * through the constructor shape that takes the two per-ตร.ม. prices (the older shapes default
+     * them to null) and no price mode, so the row states none. */
+    protected static ItemInput item(String sizeText, String sqmPerPiece, Integer piecesPerBox, String unitPrice,
+                                    String discountPct, String specialPriceSqm, String listPriceSqm,
+                                    String directNetPriceSqm) {
+        return new ItemInput(
+            null, null, null, "Panaria", "Trilogy", "Ivory", "Lappato", sizeText, bd("10.00"),
+            bd(sqmPerPiece), WastageCalculator.QUANTITY_MODE_PIECES, null, 10,
+            WastageCalculator.WASTAGE_MODE_NONE, null, piecesPerBox, bd(unitPrice), bd(discountPct), "อิตาลี",
+            75, 90, null, WastageCalculator.LINE_TYPE_TILE, null, null, null, bd(specialPriceSqm), null, null, null,
+            null, null, null, false, bd(listPriceSqm), bd(directNetPriceSqm));
+    }
+
+    /** The 60×120 priced per แผ่น — the shape every request had before V192.2, and the one the
+     * English form, the pricing-request path and the e2e suite still send. */
+    protected static ItemInput perPiece(String unitPrice, String discountPct) {
+        return item("60x120", "0.72", 2, unitPrice, discountPct, null, null, null);
+    }
+
+    /** A สินค้า/บริการอื่น line: ค่าขนส่ง, 2 × 500.00. */
+    protected static ItemInput freight() {
+        return new ItemInput(
+            null, null, null, null, null, null, null, null, null,
+            null, null, null, null,
+            null, null, null, bd("500.00"), BigDecimal.ZERO, null,
+            null, null, null, WastageCalculator.LINE_TYPE_PLAIN, "ค่าขนส่ง", bd("2"), "JOB", null, null,
+            null, null, null, null, null, null, null, null);
+    }
+
+    /** {@code row} as the editor sends a row it has already saved: carrying its server id, which is
+     * what makes {@code DealQuotationService#update} rewrite it in place. */
+    protected static ItemInput withId(long id, ItemInput row) {
+        return new ItemInput(row.locationLabel(), row.catalogPriceId(), row.productCode(), row.brand(), row.model(),
+            row.color(), row.texture(), row.sizeText(), row.thicknessMm(), row.sqmPerPiece(), row.quantityMode(),
+            row.areaSqm(), row.piecesInput(), row.wastageMode(), row.wastageValue(), row.piecesPerBox(),
+            row.unitPrice(), row.discountPct(), row.originCountry(), row.leadTimeMinDays(), row.leadTimeMaxDays(),
+            row.itemNotes(), row.lineType(), row.description(), row.quantity(), row.unit(), row.specialPriceSqm(),
+            row.directNetPrice(), row.adjustmentPct(), row.adjustmentDeadline(), row.adjustmentAmount(), id,
+            row.sqmPerBox(), row.roundToFullBox(), row.listPriceSqm(), row.directNetPriceSqm(), row.priceMode());
+    }
+
+    /** A Thai request in {@code priceMode} holding {@code items}, on the terms {@link #draft} uses. */
+    protected static UpsertDealQuotationRequest request(String priceMode, ItemInput... items) {
+        return new UpsertDealQuotationRequest(null, null, null, null, 50, "CASH_ON_DELIVERY",
+            0, 30, null, priceMode, "TH", "THB", List.of(items));
+    }
+
     protected DealQuotationDto approved(long ticketId, UserPrincipal creator) {
-        DealQuotationDto created = quotationService.create(ticketId, draft(), creator);
+        return approved(ticketId, draft(), creator);
+    }
+
+    /** {@code request} created on the deal by {@code creator}, submitted, and approved by the sales
+     * manager. */
+    protected DealQuotationDto approved(long ticketId, UpsertDealQuotationRequest request, UserPrincipal creator) {
+        DealQuotationDto created = quotationService.create(ticketId, request, creator);
         quotationService.submit(created.id(), creator);
         DealQuotationDto approved = quotationService.approve(created.id(), new ApproveRequest(null), salesManagerActor);
         assertThat(approved.docStatus()).isEqualTo(QuotationStatus.APPROVED);
@@ -145,6 +208,12 @@ abstract class AbstractDealDirectQuotationIntegrationTest extends AbstractPostgr
     protected int quotationCount(long ticketId) {
         return jdbc.queryForObject("SELECT COUNT(*) FROM sales.quotation WHERE ticket_id = :id",
             Map.of("id", ticketId), Integer.class);
+    }
+
+    /** Every text cell of the workbook the SERVICE renders for the stored quotation — the same
+     * render model the PDF is printed from. */
+    protected List<String> sheetTexts(long quotationId) {
+        return WorkbookTexts.of(quotationService.renderXlsx(quotationId, salesActor));
     }
 
     protected static ApiException refusal(org.assertj.core.api.ThrowableAssert.ThrowingCallable call, HttpStatus status) {

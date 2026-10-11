@@ -3,8 +3,6 @@ package th.co.glr.hr.ticket;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.ByteArrayInputStream;
-import java.util.ArrayList;
-import java.util.List;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.CellType;
 import org.apache.poi.ss.usermodel.Row;
@@ -13,6 +11,7 @@ import org.apache.poi.ss.usermodel.Workbook;
 import org.apache.poi.ss.usermodel.WorkbookFactory;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import th.co.glr.hr.support.WorkbookTexts;
 
 /**
  * Sales feedback, Admin 1d (แจ้งปัญหาการใช้งาน เสนอราคา): the ฝ่าย box — "ไม่มีดีกว่า", reps filled it
@@ -40,7 +39,7 @@ class QuotationDeptLineRemovedTest {
     @ParameterizedTest
     @ValueSource(strings = {"single-page", "one-page-scaled", "paginated", "english", "legacy-shape"})
     void noDepartmentLabel_isPrinted_anywhereOnTheDocument(String fixture) throws Exception {
-        assertThat(allText(render(fixture)))
+        assertThat(WorkbookTexts.of(xls(fixture)))
             .as("cells on the %s document", fixture)
             .noneMatch(t -> t.strip().equals("ฝ่าย"))
             .noneMatch(t -> t.strip().equals("Dept."));
@@ -52,7 +51,7 @@ class QuotationDeptLineRemovedTest {
         assertThat(QuotationRendererNoPictureGoldenTest.model(fixture).deptCode())
             .as("the fixture really does carry a department — or this test proves nothing")
             .isEqualTo("P003");
-        assertThat(allText(render(fixture))).noneMatch(t -> t.contains("P003"));
+        assertThat(WorkbookTexts.of(xls(fixture))).noneMatch(t -> t.contains("P003"));
     }
 
     /** The slot itself: H3 and I3 are empty, not merely free of those two words. */
@@ -82,22 +81,13 @@ class QuotationDeptLineRemovedTest {
 
     // ── helpers ─────────────────────────────────────────────────────────────────────────────
 
-    private Sheet render(String fixture) throws Exception {
-        byte[] xls = renderer.toXls(QuotationRendererNoPictureGoldenTest.model(fixture));
-        Workbook wb = WorkbookFactory.create(new ByteArrayInputStream(xls));
-        return wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+    private byte[] xls(String fixture) {
+        return renderer.toXls(QuotationRendererNoPictureGoldenTest.model(fixture));
     }
 
-    private static List<String> allText(Sheet sheet) {
-        List<String> out = new ArrayList<>();
-        for (Row row : sheet) {
-            for (Cell cell : row) {
-                if (cell.getCellType() == CellType.STRING && !cell.getStringCellValue().isEmpty()) {
-                    out.add(cell.getStringCellValue());
-                }
-            }
-        }
-        return out;
+    private Sheet render(String fixture) throws Exception {
+        Workbook wb = WorkbookFactory.create(new ByteArrayInputStream(xls(fixture)));
+        return wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
     }
 
     private static String text(Sheet sheet, int row, int col) {
