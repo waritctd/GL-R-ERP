@@ -959,304 +959,304 @@ export function QuotationItemRow({
           layout-containment and stacking boundary, and the <li> holds the catalogue dropdown,
           which has to stay free to overlap the row beneath it. Nothing in here pops out. */}
       <div className="@container">
-      <div className="grid grid-cols-2 gap-3 @min-[45rem]:grid-cols-4 mobile:grid-cols-1">
-        {/* Mixed price modes (V192.5): the row's own "วิธีคิดราคา", first in the price row so it
-            reads as what the boxes after it depend on. A <select>, not three buttons: it repeats
-            on every row, has to fit one cell of this grid at every width, and is the native
-            control on a phone. Same three labels as the document-level picker, on purpose — one
-            vocabulary for the same three things. Never on a single-mode document (a per-row
-            choice would contradict the document's own), nor where the row has no prices. */}
-        {mixedPriceModes && !hidePricing ? (
-          <FormField label="วิธีคิดราคา" htmlFor={`price-mode-${index}`}>
-            <select
-              id={`price-mode-${index}`}
-              value={priceMode}
-              disabled={readOnly}
-              onChange={(e) => onChangePriceMode?.(e.target.value)}
-            >
-              {availablePriceModes(documentLanguage).map((opt) => (
-                <option key={opt.code} value={opt.code}>{opt.label}</option>
-              ))}
-            </select>
-          </FormField>
-        ) : null}
-        {/* v3: the two price fields follow the price mode this row is in. That is the QUOTATION's,
-            chosen once in the "รูปแบบเอกสาร" block — every tile row of every one of the owner's
-            nine documents shares one mode — unless the document is "ผสมหลายวิธี" (V192.5), where it
-            is the row's own, chosen in "วิธีคิดราคา" just above. Each mode asks for exactly what the
-            rep has in hand.
-
-            On a THAI document (sales feedback #1, 2026-10-06 — "แก้เป็น ตร.ม. รวม VAT ทุกแบบ") every
-            one of these is typed per ตร.ม. INCLUDING VAT, carries the unit inside the field, and
-            shows what it comes to per แผ่น underneath:
-              NET          ราคา/ตร.ม. (รวม VAT) + ส่วนลด %
-              SPECIAL_SQM  ราคาตั้ง/ตร.ม. (รวม VAT) + ราคาพิเศษ/ตร.ม. (รวม VAT)
-              DIRECT_NET   ราคาสุทธิ/ตร.ม. (รวม VAT) + ราคาตั้ง/ตร.ม. (รวม VAT)
-                           (ราคาตั้ง optional: blank prints "Net")
-            One short label family on purpose: the longer "ราคาพิเศษ (บาท/ตร.ม. รวม VAT)" measured
-            191px in this grid's 192px column at a 1280px window and wrapped, dropping its input
-            below its neighbour's. The บาท is not lost — it is the unit inside the field.
-            On an ENGLISH document they are what they always were — USD, no VAT:
-              NET          ราคา/หน่วย + ส่วนลด %
-              SPECIAL_SQM  ราคา (USD/ตร.ม.) + ตร.ม./กล่อง
-              DIRECT_NET   ราคาสุทธิ/แผ่น + ราคาตั้ง/แผ่น
-            Every per-แผ่น figure shown under a Thai box is the SERVER's (calculate-line), never a
-            JS copy of WastageCalculator: its rounding order (the 2dp reciprocal first) is exactly
-            what a copy would get subtly wrong.
-
-            V185 (PricingRequestCreateModal / hidePricing): the PCR item form is this SAME row,
-            minus price/discount — CEO pricing is a later phase. `hidePricing` hides every price
-            input below (DIRECT_NET/NET/SPECIAL_SQM/perSqm) without touching a single line of the
-            direct-deal quotation's own behaviour — ประเทศต้นทาง/ระยะเวลานำเข้า further down stay
-            rendered either way, since both forms treat them the same (optional). */}
-        {hidePricing || priceMode !== 'DIRECT_NET' ? null : thaiPricing ? (
-          <FormField
-            label="ราคาสุทธิ/ตร.ม. (รวม VAT)" htmlFor={`direct-net-${index}`} required
-            error={errors.directNetPrice}
-          >
-            {/* Typing here makes the per-ตร.ม. figure THE net: a per-แผ่น net the row was carrying
-                is dropped with it, so the row never holds two nets that could disagree. */}
-            <PriceInputWithSuffix
-              id={`direct-net-${index}`} type="number" step="0.01" disabled={readOnly} suffix="บาท/ตร.ม."
-              unitInLabel
-              aria-describedby={`direct-net-${index}-per-piece`}
-              value={netPriceSqmShown}
-              onChange={(e) => patch({
-                directNetPriceSqm: e.target.value === '' ? '' : Number(e.target.value), directNetPrice: '',
-              })}
-            />
-            {/* Read out with the box (aria-describedby above): the per-แผ่น net is what the
-                document prints, so it is not left for sighted users only. */}
-            <span
-              id={`direct-net-${index}-per-piece`} className="mt-1 block text-2xs font-bold text-info"
-              data-testid={`direct-net-per-piece-${index}`}
-            >
-              {netPerPieceNote}
-            </span>
-          </FormField>
-        ) : (
-          <FormField label="ราคาสุทธิ/แผ่น" htmlFor={`direct-net-${index}`} required error={errors.directNetPrice}>
-            <input
-              id={`direct-net-${index}`} type="number" step="0.01" disabled={readOnly}
-              value={item.directNetPrice ?? ''}
-              onChange={(e) => patch({ directNetPrice: e.target.value === '' ? '' : Number(e.target.value) })}
-            />
-          </FormField>
-        )}
-        {hidePricing || perSqm ? null : thaiPricing ? (
-          <FormField
-            label={priceMode === 'NET' ? 'ราคา/ตร.ม. (รวม VAT)' : 'ราคาตั้ง/ตร.ม. (รวม VAT)'}
-            htmlFor={`price-${index}`}
-            required={priceMode !== 'DIRECT_NET'}
-            // Only while the box is blank — the one time "leave it blank" says anything. Once a
-            // list price is in, the line under the box is what it comes to per แผ่น instead.
-            hint={priceMode === 'DIRECT_NET' && listPriceSqmShown === ''
-              ? 'เว้นว่าง = ใช้ราคาสุทธิ (พิมพ์ส่วนลดเป็น Net)' : undefined}
-            error={errors.unitPrice}
-          >
-            {/* A typed figure is written as `listPriceSqm` and nothing else: the per-แผ่น
-                `unitPrice` is the server's to fill in (QuotationEditorPage#scheduleCalc), and the
-                one already there stays until that answer lands — blanking it for those few hundred
-                milliseconds would flick the document's "has special pricing" off and reset ยืนราคา.
-                EMPTYING the box is different: that clears the price altogether, per-แผ่น figure
-                included, or the box would refill itself with that figure's per-ตร.ม. equivalent. */}
-            <PriceInputWithSuffix
-              id={`price-${index}`} type="number" step="0.01" disabled={readOnly} suffix="บาท/ตร.ม."
-              unitInLabel
-              aria-describedby={listPerPieceNote ? `price-${index}-per-piece` : undefined}
-              value={listPriceSqmShown}
-              onChange={(e) => patch(e.target.value === ''
-                ? { listPriceSqm: '', unitPrice: null }
-                : { listPriceSqm: Number(e.target.value) })}
-            />
-            {listPerPieceNote ? (
-              <span
-                id={`price-${index}-per-piece`} className="mt-1 block text-2xs font-bold text-info"
-                data-testid={`list-per-piece-${index}`}
+        <div className="grid grid-cols-2 gap-3 @min-[45rem]:grid-cols-4 mobile:grid-cols-1">
+          {/* Mixed price modes (V192.5): the row's own "วิธีคิดราคา", first in the price row so it
+              reads as what the boxes after it depend on. A <select>, not three buttons: it repeats
+              on every row, has to fit one cell of this grid at every width, and is the native
+              control on a phone. Same three labels as the document-level picker, on purpose — one
+              vocabulary for the same three things. Never on a single-mode document (a per-row
+              choice would contradict the document's own), nor where the row has no prices. */}
+          {mixedPriceModes && !hidePricing ? (
+            <FormField label="วิธีคิดราคา" htmlFor={`price-mode-${index}`}>
+              <select
+                id={`price-mode-${index}`}
+                value={priceMode}
+                disabled={readOnly}
+                onChange={(e) => onChangePriceMode?.(e.target.value)}
               >
-                {listPerPieceNote}
+                {availablePriceModes(documentLanguage).map((opt) => (
+                  <option key={opt.code} value={opt.code}>{opt.label}</option>
+                ))}
+              </select>
+            </FormField>
+          ) : null}
+          {/* v3: the two price fields follow the price mode this row is in. That is the QUOTATION's,
+              chosen once in the "รูปแบบเอกสาร" block — every tile row of every one of the owner's
+              nine documents shares one mode — unless the document is "ผสมหลายวิธี" (V192.5), where it
+              is the row's own, chosen in "วิธีคิดราคา" just above. Each mode asks for exactly what the
+              rep has in hand.
+
+              On a THAI document (sales feedback #1, 2026-10-06 — "แก้เป็น ตร.ม. รวม VAT ทุกแบบ") every
+              one of these is typed per ตร.ม. INCLUDING VAT, carries the unit inside the field, and
+              shows what it comes to per แผ่น underneath:
+                NET          ราคา/ตร.ม. (รวม VAT) + ส่วนลด %
+                SPECIAL_SQM  ราคาตั้ง/ตร.ม. (รวม VAT) + ราคาพิเศษ/ตร.ม. (รวม VAT)
+                DIRECT_NET   ราคาสุทธิ/ตร.ม. (รวม VAT) + ราคาตั้ง/ตร.ม. (รวม VAT)
+                             (ราคาตั้ง optional: blank prints "Net")
+              One short label family on purpose: the longer "ราคาพิเศษ (บาท/ตร.ม. รวม VAT)" measured
+              191px in this grid's 192px column at a 1280px window and wrapped, dropping its input
+              below its neighbour's. The บาท is not lost — it is the unit inside the field.
+              On an ENGLISH document they are what they always were — USD, no VAT:
+                NET          ราคา/หน่วย + ส่วนลด %
+                SPECIAL_SQM  ราคา (USD/ตร.ม.) + ตร.ม./กล่อง
+                DIRECT_NET   ราคาสุทธิ/แผ่น + ราคาตั้ง/แผ่น
+              Every per-แผ่น figure shown under a Thai box is the SERVER's (calculate-line), never a
+              JS copy of WastageCalculator: its rounding order (the 2dp reciprocal first) is exactly
+              what a copy would get subtly wrong.
+
+              V185 (PricingRequestCreateModal / hidePricing): the PCR item form is this SAME row,
+              minus price/discount — CEO pricing is a later phase. `hidePricing` hides every price
+              input below (DIRECT_NET/NET/SPECIAL_SQM/perSqm) without touching a single line of the
+              direct-deal quotation's own behaviour — ประเทศต้นทาง/ระยะเวลานำเข้า further down stay
+              rendered either way, since both forms treat them the same (optional). */}
+          {hidePricing || priceMode !== 'DIRECT_NET' ? null : thaiPricing ? (
+            <FormField
+              label="ราคาสุทธิ/ตร.ม. (รวม VAT)" htmlFor={`direct-net-${index}`} required
+              error={errors.directNetPrice}
+            >
+              {/* Typing here makes the per-ตร.ม. figure THE net: a per-แผ่น net the row was carrying
+                  is dropped with it, so the row never holds two nets that could disagree. */}
+              <PriceInputWithSuffix
+                id={`direct-net-${index}`} type="number" step="0.01" disabled={readOnly} suffix="บาท/ตร.ม."
+                unitInLabel
+                aria-describedby={`direct-net-${index}-per-piece`}
+                value={netPriceSqmShown}
+                onChange={(e) => patch({
+                  directNetPriceSqm: e.target.value === '' ? '' : Number(e.target.value), directNetPrice: '',
+                })}
+              />
+              {/* Read out with the box (aria-describedby above): the per-แผ่น net is what the
+                  document prints, so it is not left for sighted users only. */}
+              <span
+                id={`direct-net-${index}-per-piece`} className="mt-1 block text-2xs font-bold text-info"
+                data-testid={`direct-net-per-piece-${index}`}
+              >
+                {netPerPieceNote}
               </span>
-            ) : null}
-          </FormField>
-        ) : (
-          <FormField
-            label={priceMode === 'NET' ? 'ราคา/หน่วย' : 'ราคาตั้ง/แผ่น'}
-            htmlFor={`price-${index}`}
-            required={priceMode !== 'DIRECT_NET'}
-            hint={priceMode === 'DIRECT_NET' ? 'เว้นว่าง = ใช้ราคาสุทธิ (พิมพ์ส่วนลดเป็น Net)' : undefined}
-            error={errors.unitPrice}
-          >
-            <input
-              id={`price-${index}`} type="number" step="0.01" disabled={readOnly}
-              value={item.unitPrice ?? ''}
-              onChange={(e) => patch({ unitPrice: e.target.value === '' ? '' : Number(e.target.value) })}
-            />
-          </FormField>
-        )}
-        {!hidePricing && priceMode === 'NET' ? (
-          <FormField label="ส่วนลด %" htmlFor={`disc-${index}`}>
-            <input
-              id={`disc-${index}`} type="number" step="0.01" disabled={readOnly}
-              value={item.discountPct ?? ''}
-              onChange={(e) => patch({ discountPct: e.target.value === '' ? null : Number(e.target.value) })}
-            />
-          </FormField>
-        ) : null}
-        {!hidePricing && priceMode === 'SPECIAL_SQM' && !perSqm ? (
-          <FormField label="ราคาพิเศษ/ตร.ม. (รวม VAT)" htmlFor={`special-${index}`} required error={errors.specialPriceSqm}>
-            <PriceInputWithSuffix
-              id={`special-${index}`} type="number" step="0.01" disabled={readOnly} suffix="บาท/ตร.ม."
-              unitInLabel
-              value={item.specialPriceSqm ?? ''}
-              onChange={(e) => patch({ specialPriceSqm: e.target.value === '' ? '' : Number(e.target.value) })}
-            />
-            <span className="mt-1 block text-2xs font-bold text-info" data-testid={`special-net-${index}`}>
-              {item.calcPending
-                ? 'กำลังคำนวณราคาสุทธิ...'
-                : item.netUnitPrice != null && Number(item.specialPriceSqm) > 0
-                  ? `= สุทธิ ${formatQuotationMoney(item.netUnitPrice, currency)}/แผ่น (ก่อน VAT)`
-                  : 'ระบบคำนวณราคาสุทธิต่อแผ่นให้'}
-            </span>
-          </FormField>
-        ) : null}
-        {hidePricing ? null : perSqm ? (
-          <>
-            {/* English per-sqm (owner decision 2026-09-13): the USD/ตร.ม. is the printed Unit price
-                AND Net price, no VAT; the printed Qty is boxes × ตร.ม./กล่อง when a box area is
-                given, or pieces × ตร.ม./แผ่น when it is left blank (Option B, 2026-09-16) — both
-                computed by the server (calculate-line), never here. */}
-            <FormField label="ราคา (USD/ตร.ม.)" htmlFor={`special-${index}`} required error={errors.specialPriceSqm}>
+            </FormField>
+          ) : (
+            <FormField label="ราคาสุทธิ/แผ่น" htmlFor={`direct-net-${index}`} required error={errors.directNetPrice}>
               <input
-                id={`special-${index}`} type="number" step="0.01" disabled={readOnly}
+                id={`direct-net-${index}`} type="number" step="0.01" disabled={readOnly}
+                value={item.directNetPrice ?? ''}
+                onChange={(e) => patch({ directNetPrice: e.target.value === '' ? '' : Number(e.target.value) })}
+              />
+            </FormField>
+          )}
+          {hidePricing || perSqm ? null : thaiPricing ? (
+            <FormField
+              label={priceMode === 'NET' ? 'ราคา/ตร.ม. (รวม VAT)' : 'ราคาตั้ง/ตร.ม. (รวม VAT)'}
+              htmlFor={`price-${index}`}
+              required={priceMode !== 'DIRECT_NET'}
+              // Only while the box is blank — the one time "leave it blank" says anything. Once a
+              // list price is in, the line under the box is what it comes to per แผ่น instead.
+              hint={priceMode === 'DIRECT_NET' && listPriceSqmShown === ''
+                ? 'เว้นว่าง = ใช้ราคาสุทธิ (พิมพ์ส่วนลดเป็น Net)' : undefined}
+              error={errors.unitPrice}
+            >
+              {/* A typed figure is written as `listPriceSqm` and nothing else: the per-แผ่น
+                  `unitPrice` is the server's to fill in (QuotationEditorPage#scheduleCalc), and the
+                  one already there stays until that answer lands — blanking it for those few hundred
+                  milliseconds would flick the document's "has special pricing" off and reset ยืนราคา.
+                  EMPTYING the box is different: that clears the price altogether, per-แผ่น figure
+                  included, or the box would refill itself with that figure's per-ตร.ม. equivalent. */}
+              <PriceInputWithSuffix
+                id={`price-${index}`} type="number" step="0.01" disabled={readOnly} suffix="บาท/ตร.ม."
+                unitInLabel
+                aria-describedby={listPerPieceNote ? `price-${index}-per-piece` : undefined}
+                value={listPriceSqmShown}
+                onChange={(e) => patch(e.target.value === ''
+                  ? { listPriceSqm: '', unitPrice: null }
+                  : { listPriceSqm: Number(e.target.value) })}
+              />
+              {listPerPieceNote ? (
+                <span
+                  id={`price-${index}-per-piece`} className="mt-1 block text-2xs font-bold text-info"
+                  data-testid={`list-per-piece-${index}`}
+                >
+                  {listPerPieceNote}
+                </span>
+              ) : null}
+            </FormField>
+          ) : (
+            <FormField
+              label={priceMode === 'NET' ? 'ราคา/หน่วย' : 'ราคาตั้ง/แผ่น'}
+              htmlFor={`price-${index}`}
+              required={priceMode !== 'DIRECT_NET'}
+              hint={priceMode === 'DIRECT_NET' ? 'เว้นว่าง = ใช้ราคาสุทธิ (พิมพ์ส่วนลดเป็น Net)' : undefined}
+              error={errors.unitPrice}
+            >
+              <input
+                id={`price-${index}`} type="number" step="0.01" disabled={readOnly}
+                value={item.unitPrice ?? ''}
+                onChange={(e) => patch({ unitPrice: e.target.value === '' ? '' : Number(e.target.value) })}
+              />
+            </FormField>
+          )}
+          {!hidePricing && priceMode === 'NET' ? (
+            <FormField label="ส่วนลด %" htmlFor={`disc-${index}`}>
+              <input
+                id={`disc-${index}`} type="number" step="0.01" disabled={readOnly}
+                value={item.discountPct ?? ''}
+                onChange={(e) => patch({ discountPct: e.target.value === '' ? null : Number(e.target.value) })}
+              />
+            </FormField>
+          ) : null}
+          {!hidePricing && priceMode === 'SPECIAL_SQM' && !perSqm ? (
+            <FormField label="ราคาพิเศษ/ตร.ม. (รวม VAT)" htmlFor={`special-${index}`} required error={errors.specialPriceSqm}>
+              <PriceInputWithSuffix
+                id={`special-${index}`} type="number" step="0.01" disabled={readOnly} suffix="บาท/ตร.ม."
+                unitInLabel
                 value={item.specialPriceSqm ?? ''}
                 onChange={(e) => patch({ specialPriceSqm: e.target.value === '' ? '' : Number(e.target.value) })}
               />
               <span className="mt-1 block text-2xs font-bold text-info" data-testid={`special-net-${index}`}>
-                {Number(item.sqmPerBox) > 0
-                  ? 'ไม่มี VAT · จำนวนพิมพ์เป็น ตร.ม. ตามกล่อง'
-                  : 'ไม่มี VAT · จำนวนพิมพ์เป็น ตร.ม. จากจำนวนแผ่น'}
+                {item.calcPending
+                  ? 'กำลังคำนวณราคาสุทธิ...'
+                  : item.netUnitPrice != null && Number(item.specialPriceSqm) > 0
+                    ? `= สุทธิ ${formatQuotationMoney(item.netUnitPrice, currency)}/แผ่น (ก่อน VAT)`
+                    : 'ระบบคำนวณราคาสุทธิต่อแผ่นให้'}
               </span>
             </FormField>
-            {/* Option B (owner decision, 2026-09-16): ตร.ม./กล่อง is now OPTIONAL — a blank value
-                derives the printed sqm quantity from จำนวนแผ่น × ตร.ม./แผ่น instead, exactly like the
-                Thai ราคาพิเศษ mode already does. `required` dropped; the hint explains the fallback. */}
+          ) : null}
+          {hidePricing ? null : perSqm ? (
+            <>
+              {/* English per-sqm (owner decision 2026-09-13): the USD/ตร.ม. is the printed Unit price
+                  AND Net price, no VAT; the printed Qty is boxes × ตร.ม./กล่อง when a box area is
+                  given, or pieces × ตร.ม./แผ่น when it is left blank (Option B, 2026-09-16) — both
+                  computed by the server (calculate-line), never here. */}
+              <FormField label="ราคา (USD/ตร.ม.)" htmlFor={`special-${index}`} required error={errors.specialPriceSqm}>
+                <input
+                  id={`special-${index}`} type="number" step="0.01" disabled={readOnly}
+                  value={item.specialPriceSqm ?? ''}
+                  onChange={(e) => patch({ specialPriceSqm: e.target.value === '' ? '' : Number(e.target.value) })}
+                />
+                <span className="mt-1 block text-2xs font-bold text-info" data-testid={`special-net-${index}`}>
+                  {Number(item.sqmPerBox) > 0
+                    ? 'ไม่มี VAT · จำนวนพิมพ์เป็น ตร.ม. ตามกล่อง'
+                    : 'ไม่มี VAT · จำนวนพิมพ์เป็น ตร.ม. จากจำนวนแผ่น'}
+                </span>
+              </FormField>
+              {/* Option B (owner decision, 2026-09-16): ตร.ม./กล่อง is now OPTIONAL — a blank value
+                  derives the printed sqm quantity from จำนวนแผ่น × ตร.ม./แผ่น instead, exactly like the
+                  Thai ราคาพิเศษ mode already does. `required` dropped; the hint explains the fallback. */}
+              <FormField
+                label="ตร.ม./กล่อง" htmlFor={`sqm-box-${index}`} error={errors.sqmPerBox}
+                hint="ตามที่ผู้ผลิตระบุ (จากแคตตาล็อก แก้ได้) · ไม่บังคับ — ถ้าเว้นว่าง จะคำนวณ ตร.ม. จากจำนวนแผ่น × ตร.ม./แผ่น"
+              >
+                {/* null on clear, never '' — the payload builders coerce with `??`, which keeps ''.
+                    Typing a value while "ขายแผ่นไม่เต็มกล่อง" is ticked resets that checkbox — a box
+                    area forces full-box rounding, so the blocked state (a stored roundToFullBox=false
+                    the server would now refuse) is unreachable, the same fix already applied to the
+                    price-mode switch (QuotationEditorPage#applyPriceMode). */}
+                <input
+                  id={`sqm-box-${index}`} type="number" step="0.000001" min="0" disabled={readOnly}
+                  value={item.sqmPerBox ?? ''}
+                  onChange={(e) => {
+                    const value = e.target.value === '' ? null : Number(e.target.value);
+                    patch({
+                      sqmPerBox: value,
+                      ...(value > 0 && item.roundToFullBox === false ? { roundToFullBox: true } : {}),
+                    });
+                  }}
+                />
+              </FormField>
+            </>
+          ) : null}
+          {/* GLA-123 slice S1 (Phase 3, coordinator follow-up 2026-09-20) — the CEO-comparison
+              marker for a PRICING_REQUEST-origin TILE row linked to a decision item. `item.
+              ceoNetUnitPrice` (from the server's LEFT JOIN, see DealQuotationRepository#mapItem
+              Columns) is non-null exactly on such a row — a DEAL_DIRECT row, or an unlinked
+              PRICING_REQUEST row, always reads it null and renders nothing here. Sales MAY edit
+              these fields (owner ruling revised 2026-09-19 — no server-side lock); this is
+              informational, not a disabled state. */}
+          {!hidePricing && item.ceoNetUnitPrice != null ? (
+            <div className="col-span-2 mobile:col-span-1">
+              {/* Coordinator follow-up (2026-09-20): OR the server's own flag with a LOCAL
+                  recomputation over the row's current (possibly unsaved) values, so the marker
+                  flips amber the instant the rep types a differing price/discount instead of only
+                  after autosave lands — see isTilePriceChangedFromCeoLocally's own Javadoc for why
+                  OR (not replace) keeps the server flag authoritative post-save. */}
+              {item.priceChangedFromCeo || isTilePriceChangedFromCeoLocally(item, priceMode) ? (
+                <p className="m-0 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 rounded-md border border-warning-border bg-warning/10 px-3 py-2 text-2xs font-bold text-warning">
+                  <span>เปลี่ยนจากราคา CEO — ต้องให้ CEO อนุมัติ</span>
+                  <span className="font-normal text-text-muted">{ceoOriginalPriceText(ceoPriceMode ?? priceMode, item, currency)}</span>
+                </p>
+              ) : (
+                <p className="m-0 flex items-center gap-1.5 text-2xs font-bold text-text-muted">
+                  {/* NIT fix (Opus review, 2026-09-20): "lock" read as if the price were locked —
+                      it is not (sales may edit it freely, see this block's own ruling comment
+                      above), so a "check" (nothing to flag) reads correctly instead. */}
+                  <Icon name="check" size={12} />
+                  ราคาจาก CEO
+                </p>
+              )}
+            </div>
+          ) : null}
+          <FormField
+            label="ประเทศต้นทาง"
+            htmlFor={`origin-${index}`}
+            required={requireOriginCountry}
+            error={errors.originCountry}
+          >
+            <select id={`origin-${index}`} disabled={readOnly} value={item.originCountry ?? ''} onChange={(e) => onOriginChange(e.target.value)}>
+              <option value="">-</option>
+              {ORIGIN_COUNTRY_OPTIONS.map((opt) => <option key={opt.code} value={opt.code}>{opt.label}</option>)}
+            </select>
+          </FormField>
+          {/* GLA-125: "อื่นๆ" (ORIGIN_COUNTRY_OPTIONS' own sentinel code, carrying no default lead
+              time) reveals a typed name — required on the PCR form (validateQuotationItem's
+              requireOriginCountry). Second review pass, finding N4: this box must render ONLY when
+              requireOriginCountry is on. sales.quotation_item has no origin_country_other column at
+              all (only sales.pricing_request_item does, V185) — direct-deal's own
+              `itemInputFromRow` never reads item.originCountryOther, so showing this box there let
+              a rep type a country name that was silently DROPPED on every save, with no error and
+              no indication anything was lost. Cleared (never merely hidden) the moment a rep
+              switches away from อื่นๆ, via onOriginChange's own defaults, so a stale typed name can
+              never linger under a different country code either way. */}
+          {item.originCountry === 'อื่นๆ' && requireOriginCountry ? (
             <FormField
-              label="ตร.ม./กล่อง" htmlFor={`sqm-box-${index}`} error={errors.sqmPerBox}
-              hint="ตามที่ผู้ผลิตระบุ (จากแคตตาล็อก แก้ได้) · ไม่บังคับ — ถ้าเว้นว่าง จะคำนวณ ตร.ม. จากจำนวนแผ่น × ตร.ม./แผ่น"
+              label="ระบุประเทศต้นทาง"
+              htmlFor={`origin-other-${index}`}
+              required={requireOriginCountry}
+              error={errors.originCountryOther}
             >
-              {/* null on clear, never '' — the payload builders coerce with `??`, which keeps ''.
-                  Typing a value while "ขายแผ่นไม่เต็มกล่อง" is ticked resets that checkbox — a box
-                  area forces full-box rounding, so the blocked state (a stored roundToFullBox=false
-                  the server would now refuse) is unreachable, the same fix already applied to the
-                  price-mode switch (QuotationEditorPage#applyPriceMode). */}
               <input
-                id={`sqm-box-${index}`} type="number" step="0.000001" min="0" disabled={readOnly}
-                value={item.sqmPerBox ?? ''}
-                onChange={(e) => {
-                  const value = e.target.value === '' ? null : Number(e.target.value);
-                  patch({
-                    sqmPerBox: value,
-                    ...(value > 0 && item.roundToFullBox === false ? { roundToFullBox: true } : {}),
-                  });
-                }}
+                id={`origin-other-${index}`}
+                disabled={readOnly}
+                value={item.originCountryOther ?? ''}
+                onChange={(e) => patch({ originCountryOther: e.target.value })}
               />
             </FormField>
-          </>
-        ) : null}
-        {/* GLA-123 slice S1 (Phase 3, coordinator follow-up 2026-09-20) — the CEO-comparison
-            marker for a PRICING_REQUEST-origin TILE row linked to a decision item. `item.
-            ceoNetUnitPrice` (from the server's LEFT JOIN, see DealQuotationRepository#mapItem
-            Columns) is non-null exactly on such a row — a DEAL_DIRECT row, or an unlinked
-            PRICING_REQUEST row, always reads it null and renders nothing here. Sales MAY edit
-            these fields (owner ruling revised 2026-09-19 — no server-side lock); this is
-            informational, not a disabled state. */}
-        {!hidePricing && item.ceoNetUnitPrice != null ? (
-          <div className="col-span-2 mobile:col-span-1">
-            {/* Coordinator follow-up (2026-09-20): OR the server's own flag with a LOCAL
-                recomputation over the row's current (possibly unsaved) values, so the marker
-                flips amber the instant the rep types a differing price/discount instead of only
-                after autosave lands — see isTilePriceChangedFromCeoLocally's own Javadoc for why
-                OR (not replace) keeps the server flag authoritative post-save. */}
-            {item.priceChangedFromCeo || isTilePriceChangedFromCeoLocally(item, priceMode) ? (
-              <p className="m-0 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 rounded-md border border-warning-border bg-warning/10 px-3 py-2 text-2xs font-bold text-warning">
-                <span>เปลี่ยนจากราคา CEO — ต้องให้ CEO อนุมัติ</span>
-                <span className="font-normal text-text-muted">{ceoOriginalPriceText(ceoPriceMode ?? priceMode, item, currency)}</span>
-              </p>
-            ) : (
-              <p className="m-0 flex items-center gap-1.5 text-2xs font-bold text-text-muted">
-                {/* NIT fix (Opus review, 2026-09-20): "lock" read as if the price were locked —
-                    it is not (sales may edit it freely, see this block's own ruling comment
-                    above), so a "check" (nothing to flag) reads correctly instead. */}
-                <Icon name="check" size={12} />
-                ราคาจาก CEO
-              </p>
-            )}
-          </div>
-        ) : null}
-        <FormField
-          label="ประเทศต้นทาง"
-          htmlFor={`origin-${index}`}
-          required={requireOriginCountry}
-          error={errors.originCountry}
-        >
-          <select id={`origin-${index}`} disabled={readOnly} value={item.originCountry ?? ''} onChange={(e) => onOriginChange(e.target.value)}>
-            <option value="">-</option>
-            {ORIGIN_COUNTRY_OPTIONS.map((opt) => <option key={opt.code} value={opt.code}>{opt.label}</option>)}
-          </select>
-        </FormField>
-        {/* GLA-125: "อื่นๆ" (ORIGIN_COUNTRY_OPTIONS' own sentinel code, carrying no default lead
-            time) reveals a typed name — required on the PCR form (validateQuotationItem's
-            requireOriginCountry). Second review pass, finding N4: this box must render ONLY when
-            requireOriginCountry is on. sales.quotation_item has no origin_country_other column at
-            all (only sales.pricing_request_item does, V185) — direct-deal's own
-            `itemInputFromRow` never reads item.originCountryOther, so showing this box there let
-            a rep type a country name that was silently DROPPED on every save, with no error and
-            no indication anything was lost. Cleared (never merely hidden) the moment a rep
-            switches away from อื่นๆ, via onOriginChange's own defaults, so a stale typed name can
-            never linger under a different country code either way. */}
-        {item.originCountry === 'อื่นๆ' && requireOriginCountry ? (
-          <FormField
-            label="ระบุประเทศต้นทาง"
-            htmlFor={`origin-other-${index}`}
-            required={requireOriginCountry}
-            error={errors.originCountryOther}
-          >
-            <input
-              id={`origin-other-${index}`}
-              disabled={readOnly}
-              value={item.originCountryOther ?? ''}
-              onChange={(e) => patch({ originCountryOther: e.target.value })}
-            />
+          ) : null}
+          {/* #7 (2026-09-14): the CHECK is submit-only (QuotationEditorPage's `submitItemErrorsByRow`
+              requires a lead time; `itemErrorsByRow`, which gates saving a draft, does not) — but
+              the HINT is not submit-gated. `errors.leadTimeMinDays` arrives as soon as this row is
+              `touched` (QuotationEditorPage.jsx's touchedRowIds — set on load for an existing
+              draft, or on first edit for a new row), same as every other field's error here. Opus
+              review (2026-09-14): a prior version of this comment claimed the hint only appears
+              after a submit attempt, which is false and contradicted the row's own test. */}
+          <FormField label="ระยะเวลานำเข้า (วัน)" htmlFor={`lead-${index}`} error={errors.leadTimeMinDays}>
+            <div className="flex items-center gap-1.5">
+              <input
+                id={`lead-${index}`} type="number" disabled={readOnly} className="w-16"
+                value={item.leadTimeMinDays ?? ''}
+                onChange={(e) => patch({ leadTimeMinDays: e.target.value === '' ? null : Number(e.target.value) })}
+              />
+              <span className="text-text-muted">–</span>
+              {/* #L1: its own id + label -- FormField only wires the ONE control whose id matches
+                  its own htmlFor (the min input above), so this one had neither, which is invisible
+                  to a screen reader. sr-only rather than a second visible "ระยะเวลานำเข้า (วัน)" --
+                  the range reads as one field visually, min/max just need their own names. */}
+              <label htmlFor={`lead-max-${index}`} className="sr-only">ถึง (วัน)</label>
+              <input
+                id={`lead-max-${index}`} type="number" disabled={readOnly} className="w-16"
+                value={item.leadTimeMaxDays ?? ''}
+                onChange={(e) => patch({ leadTimeMaxDays: e.target.value === '' ? null : Number(e.target.value) })}
+              />
+            </div>
           </FormField>
-        ) : null}
-        {/* #7 (2026-09-14): the CHECK is submit-only (QuotationEditorPage's `submitItemErrorsByRow`
-            requires a lead time; `itemErrorsByRow`, which gates saving a draft, does not) — but
-            the HINT is not submit-gated. `errors.leadTimeMinDays` arrives as soon as this row is
-            `touched` (QuotationEditorPage.jsx's touchedRowIds — set on load for an existing
-            draft, or on first edit for a new row), same as every other field's error here. Opus
-            review (2026-09-14): a prior version of this comment claimed the hint only appears
-            after a submit attempt, which is false and contradicted the row's own test. */}
-        <FormField label="ระยะเวลานำเข้า (วัน)" htmlFor={`lead-${index}`} error={errors.leadTimeMinDays}>
-          <div className="flex items-center gap-1.5">
-            <input
-              id={`lead-${index}`} type="number" disabled={readOnly} className="w-16"
-              value={item.leadTimeMinDays ?? ''}
-              onChange={(e) => patch({ leadTimeMinDays: e.target.value === '' ? null : Number(e.target.value) })}
-            />
-            <span className="text-text-muted">–</span>
-            {/* #L1: its own id + label -- FormField only wires the ONE control whose id matches
-                its own htmlFor (the min input above), so this one had neither, which is invisible
-                to a screen reader. sr-only rather than a second visible "ระยะเวลานำเข้า (วัน)" --
-                the range reads as one field visually, min/max just need their own names. */}
-            <label htmlFor={`lead-max-${index}`} className="sr-only">ถึง (วัน)</label>
-            <input
-              id={`lead-max-${index}`} type="number" disabled={readOnly} className="w-16"
-              value={item.leadTimeMaxDays ?? ''}
-              onChange={(e) => patch({ leadTimeMaxDays: e.target.value === '' ? null : Number(e.target.value) })}
-            />
-          </div>
-        </FormField>
-      </div>
+        </div>
       </div>
 
       <FormField label="หมายเหตุรายการ" htmlFor={`notes-${index}`}>
