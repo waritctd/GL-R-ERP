@@ -78,6 +78,14 @@ export function editorStateFromQuotation(quotation) {
 
 const asInTheSource = (value) => value;
 const leftForTheRep = () => '';
+// A ยืนราคา deadline that is still ahead is the job's, since a promotion ends on the same day for
+// every bidder. One that has gone by is refused on the copy's first save
+// (DealQuotationService#requireValidityUntilForMode), and by then that save has already created
+// the copy's deal. So the three validity terms then start as on any new quotation, and the rep
+// sets the validity again.
+const unlessItsDateHasPassed = (value, field, { validityDatePassed, newQuotationTerms }) => (
+  validityDatePassed ? newQuotationTerms[field] : value
+);
 
 /**
  * THE TABLE: what a copy does with each thing the editor's `terms` holds. Every key is here, so a
@@ -94,9 +102,9 @@ const TERMS_IN_A_COPY = {
   fullPaymentTerm: asInTheSource,
   remainderMode: asInTheSource,
   creditDays: asInTheSource,
-  validityDays: asInTheSource,
-  validityMode: asInTheSource,
-  validityUntil: asInTheSource,       // a promotion's deadline is the same for every bidder
+  validityDays: unlessItsDateHasPassed,
+  validityMode: unlessItsDateHasPassed,
+  validityUntil: unlessItsDateHasPassed,
   customerNotes: asInTheSource,
   printedByDisplayId: asInTheSource,
   salesRepDisplayId: asInTheSource,
@@ -130,23 +138,34 @@ function copiedRow(row) {
  * customer, no contact. `suggestedProjectName` is the name to offer once the rep has chosen the
  * new customer (same job, different bidder).
  *
- * It reads its argument and changes nothing (the only thing it makes up is a key per row). Whether
+ * `newQuotationTerms` is what a brand-new quotation's terms start as (the editor's emptyTerms):
+ * where the table starts a term over, that is what it starts as. `validityDatePassed` says the
+ * table did so for ยืนราคา, the source's being a fixed date before today, so the editor can say so.
+ *
+ * It reads its arguments and changes nothing (the only thing it makes up is a key per row). Whether
  * the source MAY be copied is the caller's question (quotationMeta#canCopyDealQuotation), and so
  * is saying which quotation this came from — the source's number is deliberately not in here.
  *
  * @returns {{ groups: object[], items: object[], adjustments: object[], docSettings: object,
- *   terms: object, suggestedProjectName: string }}
+ *   terms: object, suggestedProjectName: string, validityDatePassed: boolean }}
  */
-export function copyFromQuotation(quotation) {
+export function copyFromQuotation(quotation, newQuotationTerms) {
   const source = editorStateFromQuotation(quotation);
+  const { validityMode, validityUntil } = source.terms;
+  // Before today is where the server draws it too: a quotation made today may be valid until
+  // today. An empty string sorts before every date, so "no date typed" is ruled out first.
+  const validityDatePassed = validityMode === 'DATE' && validityUntil !== '' && validityUntil < bangkokTodayIso();
   return {
     groups: source.groups,
     items: source.items.map(copiedRow),
     adjustments: source.adjustments.map(copiedRow),
     docSettings: source.docSettings,
     terms: Object.fromEntries(
-      Object.entries(TERMS_IN_A_COPY).map(([field, inACopy]) => [field, inACopy(source.terms[field])]),
+      Object.entries(TERMS_IN_A_COPY).map(([field, inACopy]) => [
+        field, inACopy(source.terms[field], field, { validityDatePassed, newQuotationTerms }),
+      ]),
     ),
     suggestedProjectName: quotation.projectName ?? '',
+    validityDatePassed,
   };
 }

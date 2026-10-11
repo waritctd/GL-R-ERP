@@ -318,6 +318,12 @@ export function QuotationEditorPage({ user, showToast }) {
   // (not stateful): it only ever describes the URL the page was loaded with.
   const isInlineCreate = !id && !ticketIdParam;
 
+  // The rep's own remembered defaults / recent picks (quotationPrefs.js). Read ONCE, lazily, so a
+  // browser that throws on `localStorage` (private window, blocked site data) throws inside the
+  // module's own try/catch during the initial state computation and never on a later render.
+  const [storedDefaults] = useState(() => readQuotationDefaults(user?.id));
+  const [recentPicks, setRecentPicks] = useState(() => readRecentCatalogPicks(user?.id));
+
   // ── "คัดลอกเป็นใบใหม่" — /quotations/new?copyFrom=<quotation id> ──────────────────────────────
   // The same job quoted to another bidder: this is the ordinary new-quotation form, opened already
   // filled in from a saved quotation. Nothing is written here; the first บันทึกร่าง is the ordinary
@@ -339,8 +345,9 @@ export function QuotationEditorPage({ user, showToast }) {
   // copied (canCopyDealQuotation: the SAME question the button on the source's page asks, because
   // a hidden button does not stop a typed, bookmarked or shared link).
   const copyState = useMemo(
-    () => (copySource && canCopyDealQuotation(user, copySource) ? copyFromQuotation(copySource) : null),
-    [copySource, user],
+    () => (copySource && canCopyDealQuotation(user, copySource)
+      ? copyFromQuotation(copySource, emptyTerms(storedDefaults)) : null),
+    [copySource, user, storedDefaults],
   );
   // Why nothing was copied, when the link asked for a copy and there is none: the reason that is
   // actually the case, never a guess. An unreadable or missing source says what the server said; a
@@ -365,17 +372,12 @@ export function QuotationEditorPage({ user, showToast }) {
     setDealForm((prev) => ({ ...prev, ...patch }));
     setDirty(true);
   }
-  // Set once the inline flow's own `tickets.create` succeeds. Kept across a subsequent
-  // dealQuotations.create failure so a retry reuses this ticket instead of minting a second deal
-  // for the same customer/project (see handleInlineCreate below).
-  const [createdTicketId, setCreatedTicketId] = useState(null);
+  // The deals the inline flow's own `tickets.create` has made on this visit, by the customer and
+  // project each was made for. Kept across a subsequent dealQuotations.create failure so a retry
+  // reuses that ticket instead of minting a second deal for the same customer/project (see
+  // handleInlineCreate below).
+  const [createdTicketIds, setCreatedTicketIds] = useState({});
   const [creatingDeal, setCreatingDeal] = useState(false);
-
-  // The rep's own remembered defaults / recent picks (quotationPrefs.js). Read ONCE, lazily, so a
-  // browser that throws on `localStorage` (private window, blocked site data) throws inside the
-  // module's own try/catch during the initial state computation and never on a later render.
-  const [storedDefaults] = useState(() => readQuotationDefaults(user?.id));
-  const [recentPicks, setRecentPicks] = useState(() => readRecentCatalogPicks(user?.id));
 
   const [items, setItems] = useState([]);
   // v3: ส่วนลดพิเศษ rows live in their OWN ordered list, not in `items`. They always print LAST
@@ -1587,13 +1589,17 @@ export function QuotationEditorPage({ user, showToast }) {
   // Partial-failure contract (spec): if tickets.create fails, the form (dealForm/items/terms)
   // stays exactly as the user left it and the backend's own Thai message is toasted -- nothing
   // here resets state on error, so that falls out for free. If dealQuotations.create THEN fails
-  // (ticket already exists), createdTicketId stays set so the very next click skips tickets.create
-  // entirely and retries only the quotation -- a plain retry of createMutation-style logic would
-  // instead mint a SECOND ticket for the same customer/project on every retry.
+  // (ticket already exists), its id stays in createdTicketIds so the very next click skips
+  // tickets.create entirely and retries only the quotation -- a plain retry of createMutation-style
+  // logic would instead mint a SECOND ticket for the same customer/project on every retry.
   async function handleInlineCreate() {
     setCreatingDeal(true);
     try {
-      let ticketId = createdTicketId;
+      // A deal is remembered under the customer and project it was made for, and reused for those
+      // two only: after a refusal the rep can choose another customer or project before saving
+      // again, and that quotation must not land on the earlier choice's deal.
+      const madeFor = `${dealForm.customer.id}/${dealForm.project.id}`;
+      let ticketId = createdTicketIds[madeFor];
       if (!ticketId) {
         const ticketRes = await api.tickets.create({
           title: dealForm.customer.name,
@@ -1613,7 +1619,7 @@ export function QuotationEditorPage({ user, showToast }) {
         // `.summary.id`, never `.ticket.id`/`.id`.
         ticketId = ticketRes.ticket?.summary?.id;
         if (!ticketId) throw new Error('สร้างดีลไม่สำเร็จ');
-        setCreatedTicketId(ticketId);
+        setCreatedTicketIds((made) => ({ ...made, [madeFor]: ticketId }));
       }
       const quotationRes = await api.dealQuotations.create(ticketId, buildUpsertPayload());
       setDirty(false);
@@ -2121,6 +2127,11 @@ export function QuotationEditorPage({ user, showToast }) {
               attach one, so they cannot come along. Said only when there was one to lose. */}
           {(copySource.items ?? []).some((item) => item.hasPicture) ? (
             <p className="m-0 mt-1">รูปภาพประกอบรายการของใบเดิมไม่ได้คัดลอกมาด้วย</p>
+          ) : null}
+          {/* A ยืนราคา date that has gone by is not carried either (quotationCopy#TERMS_IN_A_COPY),
+              so ยืนราคา below is a new quotation's. Said only when that is what happened. */}
+          {copyState.validityDatePassed ? (
+            <p className="m-0 mt-1">วันที่ยืนราคาของใบเดิมผ่านไปแล้ว จึงไม่ได้คัดลอกมา กรุณากำหนดยืนราคาของใบนี้ใหม่</p>
           ) : null}
         </div>
       ) : null}

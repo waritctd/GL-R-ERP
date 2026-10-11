@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { copyFromQuotation } from './quotationCopy.js';
 import { canCopyDealQuotation, rowPriceMode } from './quotationMeta.js';
 import { adjustmentInputFromRow, itemInputFromRow, rowFromServerItem } from './QuotationItemRow.jsx';
@@ -19,6 +19,12 @@ vi.mock('../../api/index.js', () => ({ api: { catalog: { prices: vi.fn() } } }))
 //
 // The save itself (a new deal, then a new quotation on it) is the editor's, and is pinned in
 // QuotationEditorPage.copyFrom.test.jsx.
+
+// Today, for every case in this file (Asia/Bangkok). SOURCE's ยืนราคา date, 2026-11-30, is still
+// ahead of it; a case about a date that has passed moves the source's date, never the clock.
+const TODAY = '2026-11-02';
+beforeEach(() => { vi.setSystemTime(new Date(`${TODAY}T09:00:00+07:00`)); });
+afterEach(() => { vi.useRealTimers(); });
 
 function deepFreeze(value) {
   if (value && typeof value === 'object') {
@@ -244,6 +250,110 @@ describe('copyFromQuotation — nothing of the source survives (wrong way round)
     ]) {
       expect(everything, `"${leaked}" leaked into the copied state`).not.toContain(leaked);
     }
+  });
+});
+
+// ยืนราคา. A deadline that is still ahead is the job's, like every other term: a promotion ends on
+// the same day for every bidder. One that has gone by is refused by the server on the copy's
+// FIRST save ("วันที่ยืนราคาต้องไม่ก่อนวันที่ใบเสนอราคา": DealQuotationService
+// #requireValidityUntilForMode refuses a date before the document's own, which on a create is
+// today), and by then the new deal has already been created, so it is left behind with nothing on
+// it. Such a copy starts its validity where any new quotation starts it, and says that it did.
+describe('copyFromQuotation — a ยืนราคา date that has passed', () => {
+  const YESTERDAY = '2026-11-01';
+  const TOMORROW = '2026-11-03';
+
+  // What a brand-new quotation of this rep's starts with: the editor's own emptyTerms, seeded with
+  // the terms the rep last saved. Wherever a new quotation can differ from SOURCE it does, so each
+  // key of a copy shows which of the two it came from.
+  const NEW_QUOTATION_TERMS = deepFreeze({
+    unitCode: '', offerDate: TODAY, depositPercent: 50, depositPercentCustom: false, noDeposit: false,
+    fullPaymentTerm: '', remainderMode: 'ON_DELIVERY', creditDays: '',
+    validityDays: 60, validityMode: 'DAYS', validityUntil: '',
+    customerNotes: '', printedByDisplayId: '', salesRepDisplayId: '', projectName: '',
+    orderedByName: '', orderedByPhone: '', orderedByEmail: '', hideProjectName: false,
+  });
+
+  const copyOf = (overrides) => copyFromQuotation(source(overrides), NEW_QUOTATION_TERMS);
+
+  it('starts all three validity terms as a new quotation starts them, and takes nothing else from one', () => {
+    expect(copyOf({ validityUntil: YESTERDAY }).terms).toEqual({
+      // ── as on any new quotation: SOURCE's own were ระบุวันที่, 30 วัน, and the date that passed ──
+      validityMode: 'DAYS',
+      validityDays: 60,
+      validityUntil: '',
+      // ── every other term, exactly as in THE TABLE above ──
+      unitCode: 'A001',
+      depositPercent: 45,
+      depositPercentCustom: true,
+      noDeposit: false,
+      fullPaymentTerm: '',
+      remainderMode: 'CREDIT',
+      creditDays: 30,
+      customerNotes: 'ส่งของภายใน 30 วันหลังยืนยัน',
+      printedByDisplayId: 4,
+      salesRepDisplayId: 9,
+      hideProjectName: true,
+      offerDate: TODAY,
+      projectName: '',
+      orderedByName: '',
+      orderedByPhone: '',
+      orderedByEmail: '',
+    });
+  });
+
+  // The boundary is the server's: it refuses a date BEFORE the document's own, and a quotation
+  // made today may be valid until today.
+  it('a date that is today has not passed: copied as typed', () => {
+    expect(copyOf({ validityUntil: TODAY }).terms)
+      .toMatchObject({ validityMode: 'DATE', validityDays: 30, validityUntil: TODAY });
+  });
+
+  it('a date after today is copied as typed', () => {
+    expect(copyOf({ validityUntil: TOMORROW }).terms)
+      .toMatchObject({ validityMode: 'DATE', validityDays: 30, validityUntil: TOMORROW });
+  });
+
+  // The rule is about a date the rep fixed. A validity counted in days has none, because the
+  // server stores no date beside it, and it stays the source's even if a date were ever left there.
+  it('a validity counted in days is copied as typed', () => {
+    expect(copyOf({ validityMode: 'DAYS', validityUntil: null }).terms)
+      .toMatchObject({ validityMode: 'DAYS', validityDays: 30, validityUntil: '' });
+    expect(copyOf({ validityMode: 'DAYS', validityUntil: YESTERDAY }).terms)
+      .toMatchObject({ validityMode: 'DAYS', validityDays: 30, validityUntil: YESTERDAY });
+  });
+
+  // A draft saved on ระบุวันที่ before its date was typed. No date is not a date that has passed.
+  it('ระบุวันที่ with no date typed yet is copied as typed', () => {
+    expect(copyOf({ validityUntil: null }).terms)
+      .toMatchObject({ validityMode: 'DATE', validityDays: 30, validityUntil: '' });
+  });
+
+  // What the editor's notice is written from.
+  it('says whether the date had passed — true for a date before today, and for nothing else', () => {
+    const cases = [
+      ['a date before today', { validityUntil: YESTERDAY }, true],
+      ['a date that is today', { validityUntil: TODAY }, false],
+      ['a date after today', { validityUntil: TOMORROW }, false],
+      ['counted in days', { validityMode: 'DAYS', validityUntil: null }, false],
+      ['counted in days, with a date left beside it', { validityMode: 'DAYS', validityUntil: YESTERDAY }, false],
+      ['ระบุวันที่ with no date typed yet', { validityUntil: null }, false],
+    ];
+    const verdicts = (pick) => Object.fromEntries(cases.map((row) => [row[0], pick(row)]));
+
+    expect(verdicts(([, overrides]) => copyOf(overrides).validityDatePassed))
+      .toEqual(verdicts(([, , expected]) => expected));
+  });
+
+  // Wrong way round. Not carried means carried nowhere: not in the terms, and not in something
+  // added beside them to say what the date used to be.
+  it('the date that passed appears nowhere in the copied state', () => {
+    // The control: this same search does find a date that has NOT passed.
+    expect(JSON.stringify(copyOf({ validityUntil: TOMORROW }))).toContain(TOMORROW);
+
+    const state = copyOf({ validityUntil: YESTERDAY });
+    expect(state.items).toHaveLength(3); // the state is a real copy, not an empty one
+    expect(JSON.stringify(state)).not.toContain(YESTERDAY);
   });
 });
 

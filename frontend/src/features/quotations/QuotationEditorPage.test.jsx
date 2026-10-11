@@ -868,6 +868,117 @@ describe('QuotationEditorPage inline deal creation', () => {
     expect(await screen.findByText('navigated-to-99')).not.toBeNull();
   });
 
+  // The retry above reuses the deal it already made. That deal was made for ONE customer and ONE
+  // project, so it may be reused only while the form still says those two. A rep whose first save
+  // was refused can change either before trying again, and a quotation saved onto the earlier
+  // choice's deal would sit in another customer's records.
+  describe('the deal a retry reuses is the one made for the customer and project on the form', () => {
+    const otherCustomer = { id: 2, name: 'บริษัท รุ่งเรือง ดีเวลลอปเมนท์ จำกัด', taxId: '0105565067890' };
+    // The same id as testProject, on purpose: an id is whatever the server gave, and a different
+    // customer has to be enough on its own.
+    const otherCustomersProject = { id: 1, customerId: 2, name: 'โครงการ The Mall บางกะปิ' };
+    const secondProjectOfTheSameCustomer = { id: 8, customerId: 1, name: 'โครงการ Central Ladprao ชั้น 3' };
+
+    const saveButton = () => screen.getByRole('button', { name: 'บันทึกร่าง' });
+    const dealsQuotedOn = () => api.dealQuotations.create.mock.calls.map(([dealId]) => dealId);
+
+    // A filled row is previewed 300ms later, and these cases are still on the form by then.
+    beforeEach(() => {
+      api.dealQuotations.calculateLine.mockResolvedValue({ item: {} });
+    });
+
+    // As selectCustomerAndProject above, in two steps and for any customer. `onFile` is every
+    // project that customer has.
+    async function chooseCustomer(customer, onFile) {
+      api.customers.search.mockResolvedValue({ customers: [customer] });
+      api.customers.projects.mockResolvedValue({ projects: onFile });
+      fireEvent.change(await screen.findByLabelText(/^ลูกค้า/), { target: { value: customer.name } });
+      fireEvent.mouseDown(await screen.findByRole('option', { name: new RegExp(customer.name) }));
+      await waitFor(() => expect(api.customers.projects).toHaveBeenCalledWith(customer.id));
+    }
+    async function chooseProject(project) {
+      fireEvent.focus(await screen.findByLabelText(/^โครงการ/));
+      fireEvent.mouseDown(await screen.findByRole('option', { name: new RegExp(project.name) }));
+    }
+
+    /** The first save: deal 42 is made for testCustomer and testProject, and the quotation on it
+     * is refused. Every deal made after it gets the next id, as a server would give it. */
+    async function saveAndBeRefused(projectsOnFile = [testProject]) {
+      let nextDealId = 42;
+      api.tickets.create.mockImplementation(async () => {
+        const id = nextDealId;
+        nextDealId += 1;
+        return { ticket: { summary: { id } } };
+      });
+      api.dealQuotations.create.mockResolvedValue({ quotation: { id: 99 } });
+      api.dealQuotations.create.mockRejectedValueOnce(new Error('บันทึกไม่สำเร็จ (ทดสอบ)'));
+
+      const { showToast } = renderInlineCreate();
+      await chooseCustomer(testCustomer, projectsOnFile);
+      await chooseProject(testProject);
+      await fillOneValidItem();
+      await waitFor(() => expect(saveButton().disabled).toBe(false));
+      fireEvent.click(saveButton());
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'บันทึกไม่สำเร็จ (ทดสอบ)'));
+      expect(dealsQuotedOn()).toEqual([42]);
+    }
+
+    async function saveAgain() {
+      await waitFor(() => expect(saveButton().disabled).toBe(false));
+      fireEvent.click(saveButton());
+      await waitFor(() => expect(api.dealQuotations.create).toHaveBeenCalledTimes(2));
+    }
+
+    // Wrong way round: the second quotation is NOT on deal 42.
+    it('a DIFFERENT customer gets a deal of its own — the quotation never lands on the first customer\'s deal', async () => {
+      await saveAndBeRefused();
+
+      fireEvent.click(screen.getByRole('button', { name: 'ล้างลูกค้าที่เลือก' }));
+      await chooseCustomer(otherCustomer, [otherCustomersProject]);
+      await chooseProject(otherCustomersProject);
+      await saveAgain();
+
+      expect(dealsQuotedOn()).toEqual([42, 43]);
+      expect(api.tickets.create).toHaveBeenCalledTimes(2);
+      expect(api.tickets.create.mock.calls[1][0]).toMatchObject({
+        customerId: otherCustomer.id, customerName: otherCustomer.name, projectId: otherCustomersProject.id,
+      });
+      expect(await screen.findByText('navigated-to-99')).not.toBeNull();
+    }, 10000);
+
+    it('a DIFFERENT project of the same customer gets a deal of its own too', async () => {
+      await saveAndBeRefused([testProject, secondProjectOfTheSameCustomer]);
+
+      fireEvent.click(screen.getByRole('button', { name: 'ล้างโครงการที่เลือก' }));
+      await chooseProject(secondProjectOfTheSameCustomer);
+      await saveAgain();
+
+      expect(dealsQuotedOn()).toEqual([42, 43]);
+      expect(api.tickets.create).toHaveBeenCalledTimes(2);
+      expect(api.tickets.create.mock.calls[1][0]).toMatchObject({
+        customerId: testCustomer.id, projectId: secondProjectOfTheSameCustomer.id,
+      });
+      expect(await screen.findByText('navigated-to-99')).not.toBeNull();
+    }, 10000);
+
+    // REGRESSION GUARD: green before the two cases above were, and it has to stay green. The
+    // question is what the form SAYS when it is saved, not whether it was touched in between:
+    // the customer cleared and chosen again, with the same project, is still the customer and
+    // project deal 42 was made for. Left untouched and retried is the test before this block.
+    it('the SAME customer and project, chosen again, still reuse the first deal — no second one', async () => {
+      await saveAndBeRefused();
+
+      fireEvent.click(screen.getByRole('button', { name: 'ล้างลูกค้าที่เลือก' }));
+      await chooseCustomer(testCustomer, [testProject]);
+      await chooseProject(testProject);
+      await saveAgain();
+
+      expect(dealsQuotedOn()).toEqual([42, 42]);
+      expect(api.tickets.create).toHaveBeenCalledTimes(1);
+      expect(await screen.findByText('navigated-to-99')).not.toBeNull();
+    }, 10000);
+  });
+
   // "?ticket= present" is the OLD behaviour, unchanged (inline-deal-spec.md: "as today") -- the
   // card renders the deal read-only instead of DealCustomerCard, now with a link back to it.
   it('with ?ticket= present, the deal renders read-only with a link to /tickets/{id} -- DealCustomerCard does not render', async () => {

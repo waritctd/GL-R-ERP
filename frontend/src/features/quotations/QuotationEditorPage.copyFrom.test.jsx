@@ -2,11 +2,12 @@ import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes, useLocation, useParams } from 'react-router-dom';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { QuotationEditorPage } from './QuotationEditorPage.jsx';
 import { api } from '../../api/index.js';
 import { rowPriceMode } from './quotationMeta.js';
 import { adjustmentInputFromRow, itemInputFromRow, rowFromServerItem } from './QuotationItemRow.jsx';
+import { writeQuotationDefaults } from './quotationPrefs.js';
 import { bangkokTodayIso } from '../../utils/format.js';
 
 globalThis.React = React;
@@ -55,6 +56,28 @@ vi.mock('../../api/index.js', async (importOriginal) => {
 });
 
 const COPY = 'คัดลอกเป็นใบใหม่';
+
+// Today, for every case in this file (Asia/Bangkok). The source's ยืนราคา date, 2026-11-30, is
+// still ahead of it; a case about a date that has passed moves the source's date, never the clock.
+// Only `Date` is pinned. The debounced searches and the waits below run on real timers.
+const TODAY = '2026-11-02';
+const YESTERDAY = '2026-11-01';
+beforeEach(() => { vi.setSystemTime(new Date(`${TODAY}T09:00:00+07:00`)); });
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
+
+/** A Storage that stores. This repo's Node ships a built-in `localStorage` that keeps nothing (see
+ * quotationPrefs.test.js), so a case about the terms a rep's quotations start with brings its own. */
+function memoryStorage() {
+  const map = new Map();
+  return {
+    getItem: (key) => (map.has(key) ? map.get(key) : null),
+    setItem: (key, value) => { map.set(key, String(value)); },
+    removeItem: (key) => { map.delete(key); },
+  };
+}
 
 const salesUser = { id: 6, name: 'คุณสมหมาย ขายดี', role: 'sales', employeeId: null };
 const ceoUser = { id: 8, name: 'ราม', role: 'ceo', employeeId: 136 };
@@ -381,6 +404,22 @@ describe('/quotations/new?copyFrom= — the draft it opens', () => {
     expect(document.querySelector('img[src*="/api/deal-quotations/"]')).toBeNull();
   });
 
+  // A ยืนราคา date that has gone by is not carried: the server refuses it on the first save, which
+  // is after the new deal has been made. The draft says the validity has to be set again, and
+  // says nothing about ยืนราคา when the date did come along.
+  it('says so when the source\'s ยืนราคา date had passed — and only then', async () => {
+    const stillAhead = await openCopy(); // the control: the same source, its date still ahead
+    expect(byId('validityUntil').value).toBe('2026-11-30');
+    expect(screen.getByTestId('copy-notice').textContent).not.toContain('ยืนราคา');
+    stillAhead.unmount();
+
+    api.dealQuotations.get.mockResolvedValue({ quotation: source({ validityUntil: YESTERDAY }) });
+    await openCopy();
+
+    expect(screen.getByTestId('copy-notice').textContent).toContain('ยืนราคา');
+    expect(everythingOnThePage()).not.toContain(YESTERDAY);
+  });
+
   // Same job, different bidder. A project is a record under a customer, so the name cannot pick
   // one until the rep has said who the customer is — and then it is already in the box.
   it('offers the source\'s project name as soon as the new customer is chosen', async () => {
@@ -462,6 +501,29 @@ describe('/quotations/new?copyFrom= — saving it', () => {
     }
 
     expect(await screen.findByText('navigated-to-31337')).not.toBeNull();
+  });
+
+  // Wrong way round for the save: what was not carried is not sent. The validity that IS sent is
+  // the one a new quotation of this rep's starts with, their own remembered 60 days, and not the
+  // source's 30 days on a fixed date.
+  it('saves a copy whose source\'s ยืนราคา date had passed with a new quotation\'s validity, and never sends that date', async () => {
+    vi.stubGlobal('localStorage', memoryStorage());
+    writeQuotationDefaults(salesUser.id, { validityDays: 60 });
+    api.dealQuotations.get.mockResolvedValue({ quotation: source({ validityUntil: YESTERDAY }) });
+    await openCopy();
+    await chooseTheNewCustomer();
+    await chooseItsProject();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
+
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+
+    await waitFor(() => expect(api.dealQuotations.create).toHaveBeenCalledTimes(1));
+    const [, payload] = api.dealQuotations.create.mock.calls[0];
+    expect({ validityMode: payload.validityMode, validityDays: payload.validityDays, validityUntil: payload.validityUntil })
+      .toEqual({ validityMode: 'DAYS', validityDays: 60, validityUntil: null });
+    expect(JSON.stringify([api.tickets.create.mock.calls, api.dealQuotations.create.mock.calls])).not.toContain(YESTERDAY);
+    // Only ยืนราคา started over: the other terms are still the source's.
+    expect(payload).toMatchObject({ unitCode: 'A001', depositPercent: 45, remainderMode: 'CREDIT', creditDays: 30 });
   });
 });
 
