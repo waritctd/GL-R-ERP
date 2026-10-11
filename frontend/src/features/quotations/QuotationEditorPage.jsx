@@ -478,18 +478,24 @@ export function QuotationEditorPage({ user, showToast }) {
   useEffect(() => {
     const key = id ? `q-${id}` : copyFromId ? `c-${copyFromId}` : `t-${effectiveTicketId ?? ''}`;
     if (initializedFor === key) return;
+    // The document being edited is five pieces of state, the shape
+    // quotationCopy#editorStateFromQuotation returns. Every branch below seeds all five through
+    // this one function, then sets what is its own: which rows count as touched, whether the form
+    // starts dirty, and the settings notice.
+    const applyEditorState = (state) => {
+      setGroups(state.groups);
+      setItems(state.items);
+      setAdjustments(state.adjustments);
+      setDocSettings(state.docSettings);
+      setTerms(state.terms);
+    };
     if (id) {
       if (!quotation) return;
       // The DTO as editor state — see quotationCopy#editorStateFromQuotation, which the copy path
       // shares, for how each part is read.
-      const loaded = editorStateFromQuotation(quotation);
-      setGroups(loaded.groups);
-      setItems(loaded.items);
-      setAdjustments(loaded.adjustments);
-      setDocSettings(loaded.docSettings);
+      applyEditorState(editorStateFromQuotation(quotation));
       setSettingsNotice(null);
       setTouchedRowIds(new Set(quotation.items.map((it) => it.id)));
-      setTerms(loaded.terms);
       setDirty(false);
       setInitializedFor(key);
     } else if (copyFromId) {
@@ -498,24 +504,22 @@ export function QuotationEditorPage({ user, showToast }) {
       if (!copyState) return;
       // One batch, so the "ระบุวันที่ needs special pricing" effect above sees the copied rows
       // and the copied validity mode together, and does not flip a dated validity back to days.
-      setGroups(copyState.groups);
-      setItems(copyState.items);
-      setAdjustments(copyState.adjustments);
-      setDocSettings(copyState.docSettings);
+      applyEditorState(copyState);
       setSettingsNotice(null);
       // Touched, like a duplicated row: a copy of an incomplete row shows what it still lacks.
       setTouchedRowIds(new Set([...copyState.items, ...copyState.adjustments].map((row) => row.clientId)));
-      setTerms(copyState.terms);
       // Unsaved work from the first moment — which is also what puts the checklist (customer,
       // project) on screen at once rather than after the first keystroke.
       setDirty(true);
       setInitializedFor(key);
     } else if (effectiveTicketId) {
-      setItems([]);
-      setAdjustments([]);
-      setDocSettings(defaultDocSettings());
-      setGroups([{ groupId: newLocationGroupId(), label: '' }]);
-      setTerms(emptyTerms(storedDefaults));
+      applyEditorState({
+        items: [],
+        adjustments: [],
+        docSettings: defaultDocSettings(),
+        groups: [{ groupId: newLocationGroupId(), label: '' }],
+        terms: emptyTerms(storedDefaults),
+      });
       setTouchedRowIds(new Set());
       setDirty(false);
       setInitializedFor(key);
