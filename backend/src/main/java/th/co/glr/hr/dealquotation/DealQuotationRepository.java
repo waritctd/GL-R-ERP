@@ -626,7 +626,11 @@ public class DealQuotationRepository {
         // Javadoc. Optional/nullable; null on every call site that has no manual name to carry
         // over yet (a brand-new PRICING_REQUEST-origin create has nothing to inherit — the rep
         // sets it later via #update, same as any other DEAL_DIRECT document).
-        String orderedByName) {
+        String orderedByName,
+        // V192.3 — how to reach the person orderedByName names; see DealQuotationDtos#orderedByPhone.
+        // They travel beside orderedByName on every path it travels, so they sit beside it here:
+        // already trimmed and checked by DealQuotationService, null where there is none to carry.
+        String orderedByPhone, String orderedByEmail) {
 
         /** The pre-GLA-123 shape — every DEAL_DIRECT call site. Defaults origin to
          * {@code DEAL_DIRECT}, recipientType to {@code UNSPECIFIED} (this class's own historic
@@ -643,14 +647,14 @@ public class DealQuotationRepository {
             boolean omitContactHonorific, String fullPaymentTerm,
             BigDecimal subtotal, Long parentQuotationId, int revisionNo,
             Long derivedFromQuotationId,
-            List<NewItem> items, String orderedByName) {
+            List<NewItem> items, String orderedByName, String orderedByPhone, String orderedByEmail) {
             this(ticketId, number, createdById, salesRepId, customerName, customerAddress, customerTaxId,
                 customerPhone, contact, projectName, deptCode, unitCode, offerDate, depositPercent,
                 remainderMode, creditDays, validityDays, validityMode, validityUntil, customerNotes,
                 priceMode, documentLanguage, currency, printedByDisplayId, salesRepDisplayId,
                 omitContactHonorific, fullPaymentTerm, subtotal, parentQuotationId, revisionNo,
                 derivedFromQuotationId, items, "DEAL_DIRECT", "UNSPECIFIED", null, null, null,
-                orderedByName);
+                orderedByName, orderedByPhone, orderedByEmail);
         }
     }
 
@@ -673,7 +677,8 @@ public class DealQuotationRepository {
                  printed_by_display_id, sales_rep_display_id,
                  omit_contact_honorific, full_payment_term,
                  parent_quotation_id, derived_from_quotation_id, updated_at,
-                 pricing_request_id, pricing_decision_id, ordered_by_name)
+                 pricing_request_id, pricing_decision_id,
+                 ordered_by_name, ordered_by_phone, ordered_by_email)
             VALUES
                 (:ticketId, :number, :salesRepId, now(), :totalAmount, :currency, :version,
                  'DRAFT', :recipientType, :recipientLabel, :revisionNo, :origin, :createdById, :salesRepId,
@@ -684,7 +689,8 @@ public class DealQuotationRepository {
                  :printedByDisplayId, :salesRepDisplayId,
                  :omitContactHonorific, :fullPaymentTerm,
                  :parentQuotationId, :derivedFromQuotationId, now(),
-                 :pricingRequestId, :pricingDecisionId, :orderedByName)
+                 :pricingRequestId, :pricingDecisionId,
+                 :orderedByName, :orderedByPhone, :orderedByEmail)
             """,
             new MapSqlParameterSource()
                 .addValue("ticketId", p.ticketId())
@@ -735,7 +741,9 @@ public class DealQuotationRepository {
                 .addValue("parentQuotationId", p.parentQuotationId())
                 .addValue("derivedFromQuotationId", p.derivedFromQuotationId())
                 // Owner-directed reversal of F2 (2026-09-26) — see DealQuotationDtos#orderedByName.
-                .addValue("orderedByName", p.orderedByName()),
+                .addValue("orderedByName", p.orderedByName())
+                .addValue("orderedByPhone", p.orderedByPhone())
+                .addValue("orderedByEmail", p.orderedByEmail()),
             keyHolder, new String[]{"quotation_id"});
         long quotationId = keyHolder.getKey().longValue();
         insertItems(quotationId, p.items());
@@ -1002,7 +1010,11 @@ public class DealQuotationRepository {
                             // sends its current value" discipline as projectName just above: a
                             // null/blank here genuinely CLEARS the manual name back to the dotted
                             // placeholder, it does not leave a stale one in place.
-                            String orderedByName) {
+                            String orderedByName,
+                            // V192.3 — the same discipline as orderedByName just above: the editor
+                            // always sends both, so null clears. Frozen with the rest of the header by
+                            // the doc_status = 'DRAFT' predicate below.
+                            String orderedByPhone, String orderedByEmail) {
         return jdbc.update("""
             UPDATE sales.quotation
                SET contact_id = :contactId, contact_name = :contactName,
@@ -1019,6 +1031,7 @@ public class DealQuotationRepository {
                    printed_by_display_id = :printedByDisplayId, sales_rep_display_id = :salesRepDisplayId,
                    omit_contact_honorific = :omitContactHonorific, full_payment_term = :fullPaymentTerm,
                    ordered_by_name = :orderedByName,
+                   ordered_by_phone = :orderedByPhone, ordered_by_email = :orderedByEmail,
                    total_amount = :subtotal, updated_at = now()
              -- GLA-123 slice S1: widened from origin = 'DEAL_DIRECT' — this is the ONE shared
              -- draft-header save both origins use (DealQuotationService#update). Every OTHER
@@ -1058,6 +1071,8 @@ public class DealQuotationRepository {
                 .addValue("omitContactHonorific", omitContactHonorific)
                 .addValue("fullPaymentTerm", fullPaymentTerm)
                 .addValue("orderedByName", orderedByName)
+                .addValue("orderedByPhone", orderedByPhone)
+                .addValue("orderedByEmail", orderedByEmail)
                 .addValue("subtotal", subtotal));
     }
 
@@ -1804,6 +1819,8 @@ public class DealQuotationRepository {
                    -- ผู้สั่งซื้อ signature-slot name — see DealQuotationDtos#orderedByName's own
                    -- Javadoc. NULL on every pre-V192 row.
                    q.ordered_by_name,
+                   -- V192.3: the sales-record phone and email beside it. Never printed.
+                   q.ordered_by_phone, q.ordered_by_email,
                    -- Sales feedback #5 (V192.1, 2026-10-06): "ไม่แสดงชื่อโครงการในใบเสนอราคา" — see
                    -- DealQuotationDtos#hideProjectName's own Javadoc. FALSE on every pre-V192.1 row.
                    q.hide_project_name
@@ -1943,7 +1960,10 @@ public class DealQuotationRepository {
             // DealQuotationDtos#orderedByName's own Javadoc. NULL prints the dotted placeholder.
             rs.getString("ordered_by_name"),
             // Sales feedback #5 (V192.1) — NOT NULL DEFAULT FALSE, so never SQL NULL here.
-            rs.getBoolean("hide_project_name")
+            rs.getBoolean("hide_project_name"),
+            // V192.3 — NULL on every row nobody typed them into.
+            rs.getString("ordered_by_phone"),
+            rs.getString("ordered_by_email")
         );
     }
 

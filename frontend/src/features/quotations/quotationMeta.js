@@ -155,14 +155,23 @@ export function canReviseDealQuotation(user, quotation) {
 }
 
 /** "คัดลอกเป็นใบใหม่": whether `user` may open `quotation` as the starting point of a brand-new
- * quotation on a new deal. The ONE gate for the button and for `/quotations/new?copyFrom=`, so the
+ * quotation on a NEW deal. The ONE gate for the button and for `/quotations/new?copyFrom=`, so the
  * two cannot disagree.
  *
- * PHASE 1 SCAFFOLD: refuses everyone. quotationCopy.test.jsx holds the table this must satisfy. */
+ * Two conditions, and no third:
+ *   - the viewer may start a quotation at all — canCreateDealQuotationStandalone, the gate the
+ *     "สร้างใบเสนอราคา" entry already uses, because saving a copy IS that same inline create;
+ *   - the source is a direct-deal quotation. Never one written from a คำขอราคา: its prices are the
+ *     CEO's decision for THAT request and are not the rep's to re-issue to another customer.
+ *     Stated as "is DEAL_DIRECT", not "is not PRICING_REQUEST", so an origin added later is
+ *     refused until someone decides otherwise.
+ *
+ * Deliberately no status condition: the source is only read, never changed, so a draft, a
+ * superseded or a cancelled quotation is as good a starting point as an approved one. And no
+ * ownership condition of its own: the server decides who may READ the source
+ * (DealQuotationService#requireViewAccess), and a reader who may create gets their own new deal. */
 export function canCopyDealQuotation(user, quotation) {
-  void user;
-  void quotation;
-  return false;
+  return quotation?.origin === 'DEAL_DIRECT' && canCreateDealQuotationStandalone(user);
 }
 
 /** Mirrors DealQuotationService.approve/reject's gate: sales_manager or ceo, role-only (the
@@ -1683,6 +1692,8 @@ export function validateAdjustment(adjustment) {
 //   items                → #buildItem / #requireStoredItemComplete, and "at least one row"
 //   locationLabels       → the editor's own MED-4 rule (an unsaveable-without-loss state, pre-existing)
 //   priceModeLanguage    → #requirePriceModeAvailableInLanguage (SPECIAL_SQM on EN → 400)
+//   orderedByEmail       → #resolveOrderedByEmail (a typed-but-malformed ผู้ติดต่อ Email → 400;
+//                          owner ruling 2026-10-11)
 // Everything else is a WARNING: shown, clickable, never blocking. An earlier owner ruling
 // (F7, 2026-09-10) says a customer with no tax id must still be quotable, and the owner has NOT
 // ruled on whether a missing ที่อยู่ or โทร. should block — so they do not, until she does.
@@ -1709,6 +1720,10 @@ export const QUOTATION_CHECK = Object.freeze({
   // submit. Two check names so the two severities can never share one blocking/non-blocking flag.
   CREDIT_DAYS: 'creditDays',
   CREDIT_DAYS_INVALID: 'creditDaysInvalid',
+  // V192.3: ผู้ติดต่อ's Email is optional, so there is no "missing" check — only this one, for an
+  // address that is typed but malformed, which DealQuotationService refuses on every save.
+  // Blocking (owner ruling 2026-10-11 — see QUOTATION_BLOCKING_CHECKS).
+  ORDERED_BY_EMAIL: 'orderedByEmail',
 });
 
 /** THE blocking set — the one place that decides which checklist entries disable บันทึกร่าง and
@@ -1720,6 +1735,10 @@ export const QUOTATION_BLOCKING_CHECKS = Object.freeze(new Set([
   QUOTATION_CHECK.PRICE_MODE_LANGUAGE,
   QUOTATION_CHECK.ITEMS,
   QUOTATION_CHECK.CREDIT_DAYS_INVALID,
+  // Owner ruling 2026-10-11: the server refuses a malformed ผู้ติดต่อ Email with a 400 on every
+  // save (DealQuotationService#resolveOrderedByEmail), so the editor says so before the click
+  // rather than letting the save fail. A BLANK one is not in question — the field is optional.
+  QUOTATION_CHECK.ORDERED_BY_EMAIL,
 ]));
 
 /** DOM id of each editor field the checklist can focus. The three customer-detail ids are the
@@ -1784,14 +1803,20 @@ export function isEffectiveZeroDeposit({ noDeposit = false, depositPercentCustom
   return depositPercentCustom && depositPercent !== '' && Number(depositPercent) === 0;
 }
 
-/** What is wrong with ผู้ติดต่อ's Email as typed — the Thai message to show under the field — or
- * `undefined` when it is blank (the field is optional) or looks like an address. Mirrors the shape
- * DealQuotationService refuses with a 400, so the rep is told before the save rather than by it.
- *
- * PHASE 1 SCAFFOLD: accepts everything. quotationOrderedByContact.test.jsx holds the table. */
+// ผู้ติดต่อ's Email (V192.3): one @, no whitespace, a dot in the domain — "somchai@example" is the
+// ".com" nobody typed. The same shape DealQuotationService#ORDERED_BY_EMAIL_SHAPE refuses with a
+// 400. Keep the two in step: quotationOrderedByContact.test.jsx and
+// DealQuotationOrderedByContactIntegrationTest hold the same list of addresses for that reason,
+// and mockApi.js checks with THIS function rather than a third copy.
+const ORDERED_BY_EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** What is wrong with ผู้ติดต่อ's Email as typed — the Thai sentence to show under the field — or
+ * `undefined` when it is blank (the field is optional) or looks like an address. Checked on the
+ * trimmed value, which is what is saved. Tells the rep before the save what the server would
+ * otherwise tell them by refusing it. */
 export function orderedByEmailError(value) {
-  void value;
-  return undefined;
+  const email = String(value ?? '').trim();
+  return !email || ORDERED_BY_EMAIL_SHAPE.test(email) ? undefined : 'รูปแบบอีเมลไม่ถูกต้อง';
 }
 
 /**
@@ -1842,6 +1867,8 @@ export function buildQuotationChecklist({
   // QUOTATION_CHECK.CREDIT_DAYS/CREDIT_DAYS_INVALID above for the two severities.
   remainderMode = '',
   creditDays = '',
+  // V192.3: ผู้ติดต่อ's Email as typed. Blank (the default) is fine — see #orderedByEmailError.
+  orderedByEmail = '',
 } = {}) {
   const entries = [];
   const push = (check, message, targetId = null) => {
@@ -1873,6 +1900,12 @@ export function buildQuotationChecklist({
     if (customer.phone !== undefined && blankValue(customer.phone)) {
       push(QUOTATION_CHECK.CUSTOMER_PHONE, 'ยังไม่ได้กรอกเบอร์โทรลูกค้า', QUOTATION_FIELD_IDS.customerPhone);
     }
+  }
+  // The same sentence the server's 400 says, so a rep sees one sentence for one problem. The field
+  // has a different id on each entry path (two forms, one page never renders both).
+  if (orderedByEmailError(orderedByEmail)) {
+    push(QUOTATION_CHECK.ORDERED_BY_EMAIL, `Email ของผู้ติดต่อ: ${orderedByEmailError(orderedByEmail)}`,
+      isInlineCreate ? 'orderedByEmailInline' : 'orderedByEmailCard');
   }
   if (duplicateGroupIndex != null) {
     push(QUOTATION_CHECK.LOCATION_LABELS,

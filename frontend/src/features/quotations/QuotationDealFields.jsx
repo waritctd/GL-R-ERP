@@ -1,4 +1,7 @@
+import { useState } from 'react';
+import { FormField } from '../../components/common/FormField.jsx';
 import { DesignerPicker } from './DesignerPicker.jsx';
+import { orderedByEmailError } from './quotationMeta.js';
 
 /**
  * "ไม่แสดงชื่อโครงการในใบเสนอราคา" (sales feedback #5, 2026-10-06, V192.1).
@@ -37,6 +40,69 @@ export function ProjectNamePrintToggle({ id, checked, onChange, disabled = false
         </span>
       </span>
     </label>
+  );
+}
+
+// The one line that tells the rep these two are different from the name above them, which DOES
+// print. Said once, under the pair, and tied to both inputs.
+const ORDERED_BY_CONTACT_HINT = 'Phone และ Email เป็นบันทึกของฝ่ายขาย ไม่พิมพ์ในใบเสนอราคา';
+
+/**
+ * ผู้ติดต่อ's Phone and Email (V192.3) — owner: "ผู้ติดต่อ should also have an Email and Phone this
+ * is for sales record only (it should show in the details of the quotation but doesn't need to be
+ * render in the actual pdf)". Rendered directly under the ผู้ติดต่อ name field on both entry paths;
+ * one component for both, for the reason ProjectNamePrintToggle above states. `idSuffix` is
+ * "Inline" or "Card", the same pair of suffixes the name field's own two ids carry.
+ *
+ * The labels are the English words the admin team asked for. Neither field is required.
+ *
+ * Phone is a plain text box on purpose: an extension or a second number is normal
+ * ("02-123-4567 ต่อ 12"), and a telephone keypad cannot type one.
+ *
+ * Email is checked for its shape (quotationMeta#orderedByEmailError, the shape the server refuses)
+ * and the message appears once the rep has LEFT the field, then stays live until the address is
+ * right — not from the first keystroke, when every address is still malformed. Not `type="email"`:
+ * that brings the browser's own validation bubble and silently rewrites what was typed.
+ */
+export function OrderedByContactFields({ terms, onChange, idSuffix }) {
+  const phoneId = `orderedByPhone${idSuffix}`;
+  const emailId = `orderedByEmail${idSuffix}`;
+  const hintId = `orderedByContactHint${idSuffix}`;
+  const [emailLeft, setEmailLeft] = useState(false);
+  const emailError = emailLeft ? orderedByEmailError(terms.orderedByEmail) : undefined;
+
+  return (
+    <div className="col-span-full grid gap-[7px]">
+      <div className="grid grid-cols-2 gap-3 mobile:grid-cols-1">
+        <FormField label="Phone" htmlFor={phoneId}>
+          <input
+            id={phoneId}
+            autoComplete="off"
+            maxLength={50}
+            aria-describedby={hintId}
+            value={terms.orderedByPhone}
+            onChange={(e) => onChange({ orderedByPhone: e.target.value })}
+          />
+        </FormField>
+        <FormField label="Email" htmlFor={emailId} error={emailError}>
+          <input
+            id={emailId}
+            inputMode="email"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            autoComplete="off"
+            maxLength={254}
+            aria-describedby={hintId}
+            value={terms.orderedByEmail}
+            onChange={(e) => onChange({ orderedByEmail: e.target.value })}
+            onBlur={() => setEmailLeft(true)}
+          />
+        </FormField>
+      </div>
+      {/* The same type as FormField's own hint line, so it reads as one. */}
+      <p id={hintId} className="m-0 text-xs font-medium text-text-muted">{ORDERED_BY_CONTACT_HINT}</p>
+    </div>
   );
 }
 

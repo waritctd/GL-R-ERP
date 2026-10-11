@@ -16,7 +16,7 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { downloadBlob } from '../../utils/download.js';
 import { addDaysIso, bangkokTodayIso } from '../../utils/format.js';
 import {
-  canApproveDealQuotation, canApproveDealQuotationNow, canCancelDealQuotation, canCreateDealQuotation,
+  canApproveDealQuotation, canApproveDealQuotationNow, canCancelDealQuotation, canCopyDealQuotation, canCreateDealQuotation,
   canCreateDealQuotationStandalone, canDecideDealQuotation, canEditDealQuotation,
   canReviseDealQuotation, canSubmitDealQuotation, DEPOSIT_PERCENT_PRESETS,
   availablePriceModes, PRICE_MODE_OPTIONS, adjustmentDescriptionPreview, buildQuotationChecklist, currencyForLanguage, DOCUMENT_LANGUAGE_OPTIONS,
@@ -28,18 +28,19 @@ import {
   rowPriceMode, summarizeRowPriceModes,
   dealQuotationStatusLabel, isDealQuotationEditable, isDealQuotationReadOnlyViewer,
   duplicateLocationLabelGroupIds, emptyLocationGroupIds,
-  locationGroupsFromItems, newLocationGroupId,
+  newLocationGroupId,
   REMAINDER_MODE_OPTIONS, UNLABELLED_LOCATION_TEXT, validateQuotationItem, VALIDITY_DAYS_OPTIONS,
   VALIDITY_MODE_OPTIONS, FULL_PAYMENT_TERM_OPTIONS,
 } from './quotationMeta.js';
 import { CustomerDetailsFields } from './CustomerDetailsFields.jsx';
 import { DealCustomerCard } from './DealCustomerCard.jsx';
-import { ProjectNamePrintToggle, QuotationDealFields } from './QuotationDealFields.jsx';
+import { OrderedByContactFields, ProjectNamePrintToggle, QuotationDealFields } from './QuotationDealFields.jsx';
 import { focusQuotationField, QuotationChecklist } from './QuotationChecklist.jsx';
 import { QuotationDocumentView } from './QuotationDocumentView.jsx';
+import { copyFromQuotation, editorStateFromQuotation } from './quotationCopy.js';
 import {
   adjustmentInputFromRow, ceoOriginalPriceText, emptyAdjustment, emptyPlainItem, emptyQuotationItem,
-  itemInputFromRow, newItemClientId, QuotationItemRow, rowFromServerItem,
+  itemInputFromRow, newItemClientId, QuotationItemRow,
 } from './QuotationItemRow.jsx';
 import { QuotationPlainItemRow } from './QuotationPlainItemRow.jsx';
 import { QuotationAdjustmentRow } from './QuotationAdjustmentRow.jsx';
@@ -174,6 +175,9 @@ function emptyTerms(defaults = null) {
     // types deliberately, not a rep-wide preference, so a brand-new quotation always starts blank
     // -- the dotted signature line, exactly as before this feature.
     orderedByName: '',
+    // V192.3 — how to reach that person: a sales record, never printed. Not remembered either.
+    orderedByPhone: '',
+    orderedByEmail: '',
     // Sales feedback #5 (2026-10-06, V192.1) — "ไม่แสดงชื่อโครงการในใบเสนอราคา". NOT remembered
     // either: whether THIS document names its project is a fact about this customer and this
     // deal, so a brand-new quotation always starts unticked (the project prints, as it always has).
@@ -313,6 +317,46 @@ export function QuotationEditorPage({ user, showToast }) {
   // customer and project right here instead of being sent to /tickets first. Stable per-render
   // (not stateful): it only ever describes the URL the page was loaded with.
   const isInlineCreate = !id && !ticketIdParam;
+
+  // ── "คัดลอกเป็นใบใหม่" — /quotations/new?copyFrom=<quotation id> ──────────────────────────────
+  // The same job quoted to another bidder: this is the ordinary new-quotation form, opened already
+  // filled in from a saved quotation. Nothing is written here; the first บันทึกร่าง is the ordinary
+  // inline create below, so the copy gets its own deal and its own number and the server never
+  // learns the two documents are related.
+  //
+  // Honoured on the inline-create entry only: a copy is FOR another customer, and a `?ticket=`
+  // visit already has its customer. The source is read through the same GET (and the same cache
+  // entry) as its own page, so the server decides whether this viewer may read it — and it is not
+  // even asked for a viewer who may not start a quotation, who gets the refusal further down.
+  const copyFromId = isInlineCreate ? searchParams.get('copyFrom') : null;
+  const copySourceQuery = useQuery({
+    queryKey: queryKeys.dealQuotationDetail(copyFromId),
+    queryFn: () => api.dealQuotations.get(copyFromId).then((r) => r.quotation),
+    enabled: Boolean(copyFromId) && canCreateDealQuotationStandalone(user),
+  });
+  const copySource = copySourceQuery.data ?? null;
+  // What the form opens with — or null while the source is on its way, or when it may not be
+  // copied (canCopyDealQuotation: the SAME question the button on the source's page asks, because
+  // a hidden button does not stop a typed, bookmarked or shared link).
+  const copyState = useMemo(
+    () => (copySource && canCopyDealQuotation(user, copySource) ? copyFromQuotation(copySource) : null),
+    [copySource, user],
+  );
+  // Why nothing was copied, when the link asked for a copy and there is none: the reason that is
+  // actually the case, never a guess. An unreadable or missing source says what the server said; a
+  // source of the wrong kind says which kind. (A viewer who may not create quotations at all is
+  // told so by the page's own refusal further down, so there is nothing to add here.)
+  let copyRefusal = null;
+  if (copyFromId && !copyState && !copySourceQuery.isLoading) {
+    if (copySourceQuery.isError) {
+      copyRefusal = copySourceQuery.error?.message || 'ไม่พบใบเสนอราคาที่จะคัดลอก';
+    } else if (copySource?.origin === 'PRICING_REQUEST') {
+      copyRefusal = `ใบเสนอราคา ${copySource.number} ออกจากคำขอราคา ราคาในใบเป็นราคาที่ CEO อนุมัติสำหรับคำขอนั้น จึงคัดลอกไปเสนอลูกค้ารายอื่นไม่ได้`;
+    } else if (copySource && copySource.origin !== 'DEAL_DIRECT') {
+      copyRefusal = `ใบเสนอราคา ${copySource.number} เป็นประเภทที่คัดลอกเป็นใบใหม่ไม่ได้`;
+    }
+  }
+
   const [dealForm, setDealForm] = useState(emptyDealForm);
   // Owner-directed reversal of F2 (2026-09-26): DealCustomerCard no longer reports a `contact` or
   // `omitContactHonorific` key at all (both removed along with QuotationContactPicker), so this
@@ -430,53 +474,39 @@ export function QuotationEditorPage({ user, showToast }) {
   // Seeds local editable state from the server exactly once per quotation/ticket -- after that,
   // the user's own edits are the source of truth until the next save round-trips a fresh copy.
   useEffect(() => {
-    const key = id ? `q-${id}` : `t-${effectiveTicketId ?? ''}`;
+    const key = id ? `q-${id}` : copyFromId ? `c-${copyFromId}` : `t-${effectiveTicketId ?? ''}`;
     if (initializedFor === key) return;
     if (id) {
       if (!quotation) return;
-      // F1: "loading rebuilds groups from consecutive equal labels" -- the flat items array the
-      // server sends IS the document order, so the runs of equal `locationLabel` in it are exactly
-      // the headings the renderer prints. Never re-sorted here.
-      const storedMode = quotation.priceMode || 'NET';
-      // V192.5: each row is read in the mode IT was priced in (the document's, or on a mixed
-      // document the row's own) — that is what recovers a ราคาสุทธิ row's typed net.
-      const rows = quotation.items.map((it) => rowFromServerItem(it, rowPriceMode(storedMode, it)));
-      const rebuilt = locationGroupsFromItems(rows.filter((it) => lineTypeOf(it) !== LINE_TYPE_ADJUSTMENT));
-      setGroups(rebuilt.groups);
-      setItems(rebuilt.items);
-      setAdjustments(rows.filter((it) => lineTypeOf(it) === LINE_TYPE_ADJUSTMENT));
-      setDocSettings({ priceMode: storedMode, documentLanguage: quotation.documentLanguage || 'TH' });
+      // The DTO as editor state — see quotationCopy#editorStateFromQuotation, which the copy path
+      // shares, for how each part is read.
+      const loaded = editorStateFromQuotation(quotation);
+      setGroups(loaded.groups);
+      setItems(loaded.items);
+      setAdjustments(loaded.adjustments);
+      setDocSettings(loaded.docSettings);
       setSettingsNotice(null);
       setTouchedRowIds(new Set(quotation.items.map((it) => it.id)));
-      setTerms({
-        // quotation.deptCode is deliberately NOT read into the form: ฝ่าย has no field any
-        // more, and a value an older draft still carries is cleared by the next save.
-        unitCode: quotation.unitCode ?? '',
-        offerDate: quotation.offerDate ?? todayIso(),
-        depositPercent: quotation.depositPercent ?? '',
-        depositPercentCustom: quotation.depositPercent != null && !DEPOSIT_PERCENT_PRESETS.includes(quotation.depositPercent),
-        // Item 4 ("ไม่รับมัดจำ", V181) — depositPercent === 0 is the ONE signal the server stores
-        // (see WastageCalculator's own comment); a null/other percentage is never "no deposit".
-        noDeposit: quotation.depositPercent === 0,
-        fullPaymentTerm: quotation.fullPaymentTerm ?? '',
-        remainderMode: quotation.remainderMode ?? '', creditDays: quotation.creditDays ?? '',
-        validityDays: quotation.validityDays ?? '', customerNotes: quotation.customerNotes ?? '',
-        // V178: a stored NULL validityMode (every pre-V178 row) normalises to DAYS, same as the
-        // server's own read-side default.
-        validityMode: quotation.validityMode ?? 'DAYS', validityUntil: quotation.validityUntil ?? '',
-        // V179: null (the DTO's own default) reads as "(ค่าเริ่มต้น)" — the select's own empty option.
-        printedByDisplayId: quotation.printedByDisplayId ?? '',
-        salesRepDisplayId: quotation.salesRepDisplayId ?? '',
-        projectName: quotation.projectName ?? '',
-        // Owner-directed reversal of F2 (2026-09-26) — manual, optional ผู้สั่งซื้อ signature
-        // name; null (every pre-V192 row, and any document nobody has typed one into) reads as
-        // blank, same "no value stored" convention as every other field here.
-        orderedByName: quotation.orderedByName ?? '',
-        // Sales feedback #5 (V192.1) — a DTO with no such key (a row served by a backend that
-        // predates the column) reads as false: print the project, exactly as it did.
-        hideProjectName: quotation.hideProjectName === true,
-      });
+      setTerms(loaded.terms);
       setDirty(false);
+      setInitializedFor(key);
+    } else if (copyFromId) {
+      // "คัดลอกเป็นใบใหม่". Nothing is seeded until the source has arrived AND may be copied; a
+      // refused copy leaves the blank new-quotation form exactly as it is.
+      if (!copyState) return;
+      // One batch, so the "ระบุวันที่ needs special pricing" effect above sees the copied rows
+      // and the copied validity mode together, and does not flip a dated validity back to days.
+      setGroups(copyState.groups);
+      setItems(copyState.items);
+      setAdjustments(copyState.adjustments);
+      setDocSettings(copyState.docSettings);
+      setSettingsNotice(null);
+      // Touched, like a duplicated row: a copy of an incomplete row shows what it still lacks.
+      setTouchedRowIds(new Set([...copyState.items, ...copyState.adjustments].map((row) => row.clientId)));
+      setTerms(copyState.terms);
+      // Unsaved work from the first moment — which is also what puts the checklist (customer,
+      // project) on screen at once rather than after the first keystroke.
+      setDirty(true);
       setInitializedFor(key);
     } else if (effectiveTicketId) {
       setItems([]);
@@ -491,7 +521,7 @@ export function QuotationEditorPage({ user, showToast }) {
     // setDirty is a useCallback with an empty dep list (stable identity forever), so listing it
     // here can never cause an extra run of this effect -- it only satisfies exhaustive-deps now
     // that setDirty is no longer the raw, hook-recognised useState setter.
-  }, [id, quotation, effectiveTicketId, initializedFor, storedDefaults, setDirty]);
+  }, [id, quotation, effectiveTicketId, initializedFor, storedDefaults, setDirty, copyFromId, copyState]);
 
   // Opus review fix (2026-09-14): the main seeding effect (above) marks `initializedFor` on the
   // FIRST render of a `?ticket=` visit, before `ticketQuery` has resolved, so seeding
@@ -1084,9 +1114,12 @@ export function QuotationEditorPage({ user, showToast }) {
     // CREDIT_DAYS_INVALID's own comment in quotationMeta.js for the two severities.
     remainderMode: terms.remainderMode,
     creditDays: terms.creditDays,
+    // V192.3 — a typed-but-malformed address is what DealQuotationService refuses on every save.
+    orderedByEmail: terms.orderedByEmail,
   }), [isInlineCreate, checklistCustomer, dealForm.project, checklistProjectName, items, itemErrorsByRow,
     adjustments, adjustmentErrorsByRow, duplicateGroupIndex, docSettings, terms.noDeposit,
-    terms.depositPercentCustom, terms.depositPercent, terms.fullPaymentTerm, terms.remainderMode, terms.creditDays]);
+    terms.depositPercentCustom, terms.depositPercent, terms.fullPaymentTerm, terms.remainderMode, terms.creditDays,
+    terms.orderedByEmail]);
   const validationErrors = useMemo(() => checklist.filter((e) => e.blocking).map((e) => e.message), [checklist]);
   const checklistWarnings = useMemo(() => checklist.filter((e) => !e.blocking), [checklist]);
   const hasValidationErrors = validationErrors.length > 0;
@@ -1177,6 +1210,12 @@ export function QuotationEditorPage({ user, showToast }) {
     // Always sent explicitly, blank included, same "no missing-keeps-stored" discipline as
     // projectName/customerNotes above: a blank genuinely clears it back to the dotted line.
     orderedByName: terms.orderedByName || null,
+    // V192.3 — ผู้ติดต่อ's Phone and Email, a sales record that is never printed. Always sent, like
+    // the name beside them: a blank one is an explicit null, which is what clears it. Trimmed
+    // here because the Email is CHECKED trimmed (orderedByEmailError), so what is sent is what
+    // was checked.
+    orderedByPhone: terms.orderedByPhone.trim() || null,
+    orderedByEmail: terms.orderedByEmail.trim() || null,
     // Sales feedback #5 (2026-10-06, V192.1) — "ไม่แสดงชื่อโครงการในใบเสนอราคา". ALWAYS an explicit
     // boolean, never omitted. The server reads a MISSING value on update as "keep what is stored"
     // (so a stale browser tab from before this field existed cannot un-hide a project — see
@@ -1687,11 +1726,9 @@ export function QuotationEditorPage({ user, showToast }) {
     onSuccess: (res) => {
       queryClient.setQueryData(queryKeys.dealQuotationDetail(id), res.quotation);
       queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
-      const storedMode = res.quotation.priceMode || 'NET';
-      const rows = res.quotation.items.map((it) => rowFromServerItem(it, rowPriceMode(storedMode, it)));
-      const rebuilt = locationGroupsFromItems(rows.filter((it) => lineTypeOf(it) !== LINE_TYPE_ADJUSTMENT));
-      setGroups(rebuilt.groups);
-      setItems(rebuilt.items);
+      const restored = editorStateFromQuotation(res.quotation);
+      setGroups(restored.groups);
+      setItems(restored.items);
       setTouchedRowIds(new Set(res.quotation.items.map((it) => it.id)));
       showToast('success', 'คืนรายการแล้ว');
     },
@@ -1815,6 +1852,8 @@ export function QuotationEditorPage({ user, showToast }) {
   }
 
   if (id && quotationQuery.isLoading) return <RouteFallback />;
+  // A blank form shown while the source is on its way would be typed into, and then replaced.
+  if (copyFromId && copySourceQuery.isLoading) return <RouteFallback />;
   if (id && quotationQuery.isError) {
     return (
       <PageStack>
@@ -1994,6 +2033,27 @@ export function QuotationEditorPage({ user, showToast }) {
             {quotation && canReviseDealQuotation(user, quotation) ? (
               <Button variant="secondary" onClick={() => setReorderConfirmOpen(true)}>สร้างจากใบเดิม (สั่งเหมือนเดิม)</Button>
             ) : null}
+            {/* "คัดลอกเป็นใบใหม่" — the third way to make another document from this one, beside the
+                two above and before the destructive action: a revision keeps this number (-1 → -2),
+                a reorder stays on this deal and this customer, and this opens a NEW quotation for
+                another customer on a new deal. A navigation only — nothing is created until the
+                copy is saved, and this quotation is never touched — which is why, unlike its two
+                neighbours, it is offered in every status.
+                Disabled while this draft has unsaved edits (or a save is on the wire): the copy is
+                made from what is SAVED, so it would silently lack them, and leaving the page would
+                lose them here too. The title says why, as a disabled action on this page does. */}
+            {quotation && canCopyDealQuotation(user, quotation) ? (
+              <Button
+                variant="secondary"
+                disabled={dirty || saving}
+                title={dirty || saving
+                  ? 'บันทึกร่างก่อน จึงจะคัดลอกได้ (คัดลอกจากฉบับที่บันทึกแล้ว)'
+                  : 'เปิดใบเสนอราคาใบใหม่ที่มีรายการและเงื่อนไขเหมือนใบนี้ สำหรับลูกค้ารายอื่น'}
+                onClick={() => navigate(`/quotations/new?copyFrom=${quotation.id}`)}
+              >
+                คัดลอกเป็นใบใหม่
+              </Button>
+            ) : null}
             {quotation && canCancelDealQuotation(user, quotation) ? (
               <Button variant="danger" onClick={() => setCancelConfirmOpen(true)}>ยกเลิกร่าง</Button>
             ) : null}
@@ -2046,6 +2106,34 @@ export function QuotationEditorPage({ user, showToast }) {
         </div>
       ) : null}
 
+      {/* "คัดลอกเป็นใบใหม่" — says where this unsaved draft came from and what is still the rep's to
+          fill in. The same quiet note as "สั่งเหมือนเดิมจากใบเสนอราคา…" above: it is provenance, not
+          a warning. The source's number is plain text and not a link — following a link from an
+          UNSAVED draft would throw the draft away. */}
+      {copyState && isEditable ? (
+        <div role="status" data-testid="copy-notice" className="rounded-md border border-border bg-surface p-4 text-sm text-text-muted">
+          <strong className="block text-text">คัดลอกจากใบเสนอราคา {copySource.number}</strong>
+          <p className="m-0 mt-1">
+            รายการสินค้าและเงื่อนไขมาจากใบเดิมแล้ว ยังต้องเลือกลูกค้าและโครงการ และกรอกผู้ติดต่อ (ชื่อ, Phone, Email)
+            ของใบนี้ใหม่ ใบนี้จะได้เลขที่ของตัวเองเมื่อบันทึกร่าง
+          </p>
+          {/* Item pictures are stored against the source's rows and this editor has no way to
+              attach one, so they cannot come along. Said only when there was one to lose. */}
+          {(copySource.items ?? []).some((item) => item.hasPicture) ? (
+            <p className="m-0 mt-1">รูปภาพประกอบรายการของใบเดิมไม่ได้คัดลอกมาด้วย</p>
+          ) : null}
+        </div>
+      ) : null}
+      {/* The link asked for a copy and there is none. Amber, not red: nothing is broken and nothing
+          was lost — the form below is an ordinary blank quotation, and the last line says so. */}
+      {copyRefusal && isEditable ? (
+        <div role="alert" data-testid="copy-refused" className="rounded-md border border-warning-border bg-warning/10 p-4 text-sm text-warning">
+          <strong className="block">คัดลอกเป็นใบใหม่ไม่ได้</strong>
+          <p className="m-0 mt-1">{copyRefusal}</p>
+          <p className="m-0 mt-1 text-text-muted">แบบฟอร์มด้านล่างเป็นใบเสนอราคาเปล่า กรอกใหม่ได้ตามปกติ</p>
+        </div>
+      ) : null}
+
       {!isEditable && quotation ? (
         <QuotationDocumentView quotation={quotation} />
       ) : !isEditable && !quotation ? (
@@ -2074,6 +2162,10 @@ export function QuotationEditorPage({ user, showToast }) {
               <DealCustomerCard
                 value={dealForm}
                 onChange={updateDealForm}
+                // "คัดลอกเป็นใบใหม่": same job, different bidder. A project is a record under a
+                // customer, so the source's name is what the โครงการ box offers once the new
+                // customer is chosen — picked or created there in a click, never written silently.
+                suggestedProjectName={copyState?.suggestedProjectName}
                 errors={{
                   customer: showValidationSummary && !dealForm.customer ? 'กรุณาเลือกลูกค้า' : undefined,
                   project: showValidationSummary && dealForm.customer && !dealForm.project ? 'กรุณาเลือกโครงการ' : undefined,
@@ -2086,18 +2178,27 @@ export function QuotationEditorPage({ user, showToast }) {
                     to render is gone). It prints straight into the signature slot; left blank, the
                     document prints its dotted line instead. Never a checklist blocker.
                     Labelled ผู้ติดต่อ since 2026-10-06 — see ORDERED_BY_FIELD_LABEL. */}
-                <FormField
-                  label={ORDERED_BY_FIELD_LABEL}
-                  htmlFor="orderedByNameInline"
-                  hint={ORDERED_BY_FIELD_HINT}
-                >
-                  <input
-                    id="orderedByNameInline"
-                    value={terms.orderedByName}
-                    maxLength={255}
-                    onChange={(e) => { setTerms((t) => ({ ...t, orderedByName: e.target.value })); setDirty(true); }}
+                {/* V192.3 — the name and, directly under it, how to reach that person. One group,
+                    spaced as the rest of this page spaces a field from the next (gap-3). */}
+                <div className="grid gap-3">
+                  <FormField
+                    label={ORDERED_BY_FIELD_LABEL}
+                    htmlFor="orderedByNameInline"
+                    hint={ORDERED_BY_FIELD_HINT}
+                  >
+                    <input
+                      id="orderedByNameInline"
+                      value={terms.orderedByName}
+                      maxLength={255}
+                      onChange={(e) => { setTerms((t) => ({ ...t, orderedByName: e.target.value })); setDirty(true); }}
+                    />
+                  </FormField>
+                  <OrderedByContactFields
+                    terms={terms}
+                    onChange={(patch) => { setTerms((current) => ({ ...current, ...patch })); setDirty(true); }}
+                    idSuffix="Inline"
                   />
-                </FormField>
+                </div>
                 <QuotationDealFields
                   terms={terms}
                   onChange={(patch) => { setTerms((current) => ({ ...current, ...patch })); setDirty(true); }}
@@ -2204,6 +2305,13 @@ export function QuotationEditorPage({ user, showToast }) {
                     onChange={(e) => { setTerms((t) => ({ ...t, orderedByName: e.target.value })); setDirty(true); }}
                   />
                 </FormField>
+                {/* V192.3 — directly under the name: how to reach that person. Spans the card's
+                    two columns, so Phone and Email sit side by side under ผู้ติดต่อ. */}
+                <OrderedByContactFields
+                  terms={terms}
+                  onChange={(patch) => { setTerms((current) => ({ ...current, ...patch })); setDirty(true); }}
+                  idSuffix="Card"
+                />
                 <QuotationDealFields
                   terms={terms}
                   onChange={(patch) => { setTerms((current) => ({ ...current, ...patch })); setDirty(true); }}

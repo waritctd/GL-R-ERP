@@ -330,7 +330,8 @@ public final class DealQuotationDtos {
                 salesRepDisplayPhone, omitContactHonorific, fullPaymentTerm, derivedFromQuotationId,
                 derivedFromQuotationNumber, derivedFromQuotationStatus, items, createdAt, updatedAt, origin,
                 pricingRequestId, priceModeChangedFromCeo, ceoPriceMode, pricingRequestCode,
-                itemsRemovedFromCeoCount, removedItems, orderedByName, hideProjectName);
+                itemsRemovedFromCeoCount, removedItems, orderedByName, hideProjectName,
+                orderedByPhone, orderedByEmail);
         }
 
         /** This DTO carrying {@code value} as its {@link #orderedByName} — same appended-field
@@ -350,7 +351,8 @@ public final class DealQuotationDtos {
                 salesRepDisplayPhone, omitContactHonorific, fullPaymentTerm, derivedFromQuotationId,
                 derivedFromQuotationNumber, derivedFromQuotationStatus, items, createdAt, updatedAt, origin,
                 pricingRequestId, priceModeChangedFromCeo, ceoPriceMode, pricingRequestCode,
-                itemsRemovedFromCeoCount, removedCeoItems, value, hideProjectName);
+                itemsRemovedFromCeoCount, removedCeoItems, value, hideProjectName,
+                orderedByPhone, orderedByEmail);
         }
 
         /** This DTO carrying {@code value} as its {@link #hideProjectName} — the same
@@ -370,7 +372,8 @@ public final class DealQuotationDtos {
                 salesRepDisplayPhone, omitContactHonorific, fullPaymentTerm, derivedFromQuotationId,
                 derivedFromQuotationNumber, derivedFromQuotationStatus, items, createdAt, updatedAt, origin,
                 pricingRequestId, priceModeChangedFromCeo, ceoPriceMode, pricingRequestCode,
-                itemsRemovedFromCeoCount, removedCeoItems, orderedByName, value);
+                itemsRemovedFromCeoCount, removedCeoItems, orderedByName, value,
+                orderedByPhone, orderedByEmail);
         }
 
         /** The pre-M4(c) shape (no {@link #itemsRemovedFromCeoCount}) — kept so every existing

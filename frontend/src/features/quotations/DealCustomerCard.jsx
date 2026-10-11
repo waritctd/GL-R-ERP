@@ -36,7 +36,7 @@ function emptyNewCustomer() {
  * (`terms.orderedByName`) the editor itself renders next to this card, not something this card
  * collects at all.
  */
-export function DealCustomerCard({ value, onChange, errors, showToast }) {
+export function DealCustomerCard({ value, onChange, errors, showToast, suggestedProjectName = '' }) {
   const { customer, project, entryChannel } = value;
 
   // ── ลูกค้า typeahead ──────────────────────────────────────────────────────────────────────
@@ -182,7 +182,11 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
     setCustomerResults([]);
     setCustomerOpen(false);
     setShowNewCustomer(false);
-    setProjectSearch('');
+    // "คัดลอกเป็นใบใหม่" (QuotationEditorPage): the copied quotation's project name is offered
+    // here, as if the rep had typed it -- so the box filters this customer's projects to that name,
+    // and "เพิ่มโครงการใหม่" opens already carrying it. Blank on every ordinary visit, which is
+    // exactly the reset this line always did.
+    setProjectSearch(suggestedProjectName);
     closeProjectDropdown();
   }
 

@@ -12,6 +12,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -93,6 +94,17 @@ public class DealQuotationService {
     // v3: a PLAIN row applies its own discount percent the same way WastageCalculator does
     // for a tile (which keeps its own copy of this, being a no-Spring pure class).
     private static final BigDecimal HUNDRED = BigDecimal.valueOf(100);
+
+    // V192.3 — ผู้ติดต่อ's Phone and Email: a sales record kept beside orderedByName, never printed.
+    // The two limits are the widths of sales.quotation.ordered_by_phone / ordered_by_email, so a
+    // value too long for its column is a 400 from #resolveOrderedByPhone / #resolveOrderedByEmail
+    // and never a SQL error.
+    private static final int ORDERED_BY_PHONE_MAX = 50;
+    private static final int ORDERED_BY_EMAIL_MAX = 254;
+    // One @, no whitespace, a dot in the domain: "somchai@example" is the ".com" nobody typed. The
+    // editor checks the same shape before it saves (quotationMeta.js#orderedByEmailError); keep the
+    // two in step, or the rep meets a refusal the form gave no warning of.
+    private static final Pattern ORDERED_BY_EMAIL_SHAPE = Pattern.compile("[^\\s@]+@[^\\s@]+\\.[^\\s@]+");
 
     private static final Set<String> EDIT_ROLES = Set.of("sales", "sales_manager");
     private static final Set<String> APPROVE_ROLES = Set.of("sales_manager", "ceo");
@@ -279,6 +291,9 @@ public class DealQuotationService {
         Integer creditDays = noDeposit ? null : request.creditDays();
         requireValidCreditDays(remainderMode, creditDays);
         String fullPaymentTerm = resolveFullPaymentTerm(request.depositPercent(), request.fullPaymentTerm());
+        // V192.3 — refused here, before a quotation number is taken and before anything is written.
+        String orderedByPhone = resolveOrderedByPhone(request.orderedByPhone());
+        String orderedByEmail = resolveOrderedByEmail(request.orderedByEmail());
         // Owner feedback 2026-09-11 ("มีรันเลข -1 -2 ต่อท้ายตี้วแต่แรก" / "ใบแรกเป็น QT-2026-0014-1"):
         // the FIRST issued document now carries the revision suffix too, so a fresh sequence value
         // ("0014") is minted here and immediately formatted as revision 1 of itself
@@ -307,7 +322,8 @@ public class DealQuotationService {
             subtotal, null, 1, null, items,
             // Owner-directed reversal of F2 (2026-09-26) — manual, optional buyer name; blank
             // clears it to null, same discipline as every other free-text header field here.
-            blankToNull(request.orderedByName())));
+            blankToNull(request.orderedByName()),
+            orderedByPhone, orderedByEmail));
         // Sales feedback #5 (V192.1, 2026-10-06) — "ไม่แสดงชื่อโครงการในใบเสนอราคา". A brand-new
         // document prints its project unless the request says otherwise (null = false on CREATE),
         // so only an explicit true needs writing: the row was just inserted on the column's own
@@ -517,8 +533,8 @@ public class DealQuotationService {
             summary.id(), decision.id(),
             // Owner-directed reversal of F2 (2026-09-26) — nothing to inherit on a brand-new
             // PRICING_REQUEST-origin create; the rep sets a manual name later via #update, same
-            // as any DEAL_DIRECT document.
-            null));
+            // as any DEAL_DIRECT document. V192.3: nor a phone or an email for that name.
+            null, null, null));
 
         pricingRequests.addEvent(summary.id(), summary.ticketId(), actor.id(), actor.name(),
             PricingRequestEventKind.CUSTOMER_QUOTATION_CREATED, summary.status(), summary.status(),
@@ -859,6 +875,10 @@ public class DealQuotationService {
         // is always rendered, never omitted), so, same as printedByDisplayId/projectName, there is
         // no "missing keeps stored" case: a null on the wire means UNticked, exactly like create.
         boolean omitContactHonorific = resolveOmitContactHonorific(request.omitContactHonorific());
+        // V192.3 — same check as #create, and likewise before the header is written: a refused
+        // phone or email leaves the stored pair, and everything else on the row, as it was.
+        String orderedByPhone = resolveOrderedByPhone(request.orderedByPhone());
+        String orderedByEmail = resolveOrderedByEmail(request.orderedByEmail());
         // Compare-and-set FIRST, before touching a single item row — a header update that finds
         // the row no longer DRAFT (a concurrent submit/approve) must leave the items untouched.
         // F7 (2026-09-10): re-snapshot the ลูกค้า columns from the LIVE customer row on every DRAFT
@@ -883,7 +903,9 @@ public class DealQuotationService {
             // Owner-directed reversal of F2 (2026-09-26) — manual, optional buyer name; the
             // editor always sends its current value, so blank genuinely clears it back to the
             // dotted placeholder, same discipline as projectName/customerNotes above.
-            blankToNull(request.orderedByName()));
+            blankToNull(request.orderedByName()),
+            // V192.3 — and so do a blank phone and a blank email beside it.
+            orderedByPhone, orderedByEmail);
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงแก้ไขไม่ได้");
         }
@@ -2048,7 +2070,9 @@ public class DealQuotationService {
             nextRevisionNo, derivedFromQuotationId, items,
             // Owner-directed reversal of F2 (2026-09-26) — the copy inherits the source's manual
             // buyer name VERBATIM, same "copy every header field" rule as everything else here.
-            source.orderedByName()));
+            // V192.3: and the phone and email recorded for that person — a re-issue is the same
+            // job and the same person to call. Stored values, already checked when they were saved.
+            source.orderedByName(), source.orderedByPhone(), source.orderedByEmail()));
         // GLA-75: "the copy carries the source's items verbatim" includes their pictures — the new
         // row's items point at the source's (immutable, shared) picture rows, matched by seq.
         // Shared by revisions and reorder clones alike.
@@ -2613,6 +2637,42 @@ public class DealQuotationService {
      */
     private boolean resolveOmitContactHonorific(Boolean omitContactHonorific) {
         return Boolean.TRUE.equals(omitContactHonorific);
+    }
+
+    /**
+     * V192.3 — ผู้ติดต่อ's Phone as it is stored: trimmed, and a blank one read as none. Free text
+     * on purpose (an extension or several numbers is normal), so only its length is checked, and on
+     * the TRIMMED value — which is why this is here and not a bean-validation annotation on the
+     * request. Shared by {@link #create}/{@link #update}; both call it before they write anything.
+     */
+    private String resolveOrderedByPhone(String orderedByPhone) {
+        String phone = blankToNull(orderedByPhone);
+        if (phone != null && phone.length() > ORDERED_BY_PHONE_MAX) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "Phone ของผู้ติดต่อยาวเกิน " + ORDERED_BY_PHONE_MAX + " ตัวอักษร");
+        }
+        return phone;
+    }
+
+    /**
+     * V192.3 — ผู้ติดต่อ's Email as it is stored: trimmed, a blank one read as none, and otherwise
+     * kept exactly as typed (it records what the rep was given; it is not a login to normalise).
+     * Refused when it is too long for its column or does not look like an address
+     * ({@link #ORDERED_BY_EMAIL_SHAPE}).
+     */
+    private String resolveOrderedByEmail(String orderedByEmail) {
+        String email = blankToNull(orderedByEmail);
+        if (email == null) {
+            return null;
+        }
+        if (email.length() > ORDERED_BY_EMAIL_MAX) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "Email ของผู้ติดต่อยาวเกิน " + ORDERED_BY_EMAIL_MAX + " ตัวอักษร");
+        }
+        if (!ORDERED_BY_EMAIL_SHAPE.matcher(email).matches()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Email ของผู้ติดต่อ: รูปแบบอีเมลไม่ถูกต้อง");
+        }
+        return email;
     }
 
     /**

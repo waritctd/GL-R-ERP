@@ -124,6 +124,10 @@ export function QuotationDocumentView({ quotation }) {
     quotation.contactPhone?.trim() ? `โทร. ${quotation.contactPhone.trim()}` : null,
     quotation.contactEmail,
   ]);
+  // V192.3 — ผู้ติดต่อ's Phone and Email: a sales record that DealQuotationRenderAdapter never
+  // reads. Only the ones that were typed, so a missing one leaves no bare label.
+  const salesContact = [['Phone', quotation.orderedByPhone], ['Email', quotation.orderedByEmail]]
+    .filter(([, value]) => value?.trim());
   return (
     <div className="grid gap-[18px]">
       <Panel title="ข้อมูลลูกค้า">
@@ -166,6 +170,23 @@ export function QuotationDocumentView({ quotation }) {
                   as a duplicate. */}
               <span className="block text-2xs font-bold uppercase text-text-muted">ติดต่อผู้สั่งซื้อ</span>
               <strong>{contactLine}</strong>
+            </div>
+          ) : null}
+          {/* V192.3 — owner: "it should show in the details of the quotation but doesn't need to
+              be render in the actual pdf". Everything else in this panel reproduces what the
+              document prints, so this cell says in words that it does not — the same device as
+              the "ไม่แสดงในใบเสนอราคา" line under โครงการ above. Deliberately a SECOND cell and not
+              part of ติดต่อผู้สั่งซื้อ: that line is the customer-master contact the header prints.
+              `min-w-0` + overflow-wrap because an address has no spaces to break at. */}
+          {salesContact.length ? (
+            <div className="min-w-0" data-testid="doc-sales-contact">
+              <span className="block text-2xs font-bold uppercase text-text-muted">ผู้ติดต่อ</span>
+              {salesContact.map(([label, value]) => (
+                <span key={label} className="block [overflow-wrap:anywhere]">
+                  <span className="text-text-muted">{label}</span> <strong>{value.trim()}</strong>
+                </span>
+              ))}
+              <span className="block text-xs text-text-muted">บันทึกของฝ่ายขาย ไม่พิมพ์ในใบเสนอราคา</span>
             </div>
           ) : null}
           {quotation.customerTaxId?.trim() ? (

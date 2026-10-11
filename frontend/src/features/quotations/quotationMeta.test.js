@@ -1422,8 +1422,12 @@ describe('buildQuotationChecklist', () => {
     //
     // Owner-directed reversal of F2/V167 (2026-09-26): 'contact' is GONE from this set —
     // ผู้สั่งซื้อ is now a single optional free-text field with nothing left to block on.
+    //
+    // Owner ruling 2026-10-11: orderedByEmail joins the set — the server refuses a malformed
+    // ผู้ติดต่อ Email with a 400 on every save, so the editor says so before the click. (A blank
+    // one is fine: the field is optional, and there is no "missing" check for it at all.)
     expect([...meta.QUOTATION_BLOCKING_CHECKS].sort()).toEqual(
-      ['creditDaysInvalid', 'customer', 'items', 'locationLabels', 'priceModeLanguage', 'project'],
+      ['creditDaysInvalid', 'customer', 'items', 'locationLabels', 'orderedByEmail', 'priceModeLanguage', 'project'],
     );
     // Wrong-way-round: none of the header fields a customer might simply not have is blocking,
     // and the blank-creditDays reminder is a warning, not a blocker (fix 6).

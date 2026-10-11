@@ -54,6 +54,9 @@ import {
   // V178: the SAME hasSpecialPricing quotationMeta.js exports for the editor's own toggle — not a
   // second copy, so the mock's create/update gate cannot drift from what the toggle itself hides.
   hasSpecialPricing,
+  // V192.3: the SAME email shape check the editor runs before it saves — see
+  // resolveDealQuotationOrderedByContact below.
+  orderedByEmailError,
 } from '../features/quotations/quotationMeta.js';
 // fix/commission-figures-from-backend: mock mode no longer imports the commission tier math —
 // see the fenced MOCK COMMISSION FIXTURES block near the `commissions` namespace below for why,
@@ -5605,6 +5608,22 @@ function resolveDealQuotationContact(ticket, payload, current = null) {
   };
 }
 
+// ผู้ติดต่อ's Phone and Email (V192.3) — a sales record kept beside orderedByName, never printed,
+// and NOT the contact snapshot above. Mirrors DealQuotationService#resolveOrderedByPhone /
+// #resolveOrderedByEmail: each is trimmed, a blank one is stored as null, a phone over 50
+// characters or an email over 254 is refused, and so is an email that does not look like an
+// address — with the service's own sentences, so a screen driven in mock mode shows what the real
+// refusal says. The shape rule is quotationMeta.js#orderedByEmailError (imported, not restated);
+// the Java side is pinned by DealQuotationOrderedByContactIntegrationTest, never by this mock.
+function resolveDealQuotationOrderedByContact(payload) {
+  const orderedByPhone = blankToNullMock(payload?.orderedByPhone);
+  const orderedByEmail = blankToNullMock(payload?.orderedByEmail);
+  if (orderedByPhone && orderedByPhone.length > 50) fail('Phone ของผู้ติดต่อยาวเกิน 50 ตัวอักษร', 400);
+  if (orderedByEmail && orderedByEmail.length > 254) fail('Email ของผู้ติดต่อยาวเกิน 254 ตัวอักษร', 400);
+  if (orderedByEmailError(orderedByEmail)) fail(`Email ของผู้ติดต่อ: ${orderedByEmailError(orderedByEmail)}`, 400);
+  return { orderedByPhone, orderedByEmail };
+}
+
 /** Mirrors DealQuotationService#customerSnapshot: the ลูกค้า columns are read from the deal's LIVE
  * customer row at create AND on every DRAFT update (F7), so a ที่อยู่/เลขภาษี/โทร. corrected on the
  * customer master reaches the document on the next save. This used to write null for all three,
@@ -6530,6 +6549,11 @@ function buildDealQuotationDto(row) {
     // ordered_by_name column), null when nobody has typed one (the dotted placeholder). Mirrors
     // DealQuotationDto#orderedByName / DealQuotationRenderAdapter#orderedByName exactly.
     orderedByName: row.orderedByName ?? null,
+    // V192.3 — how to reach that person: a sales record, shown on the quotation's details and
+    // never printed. Null on a row nobody typed them into (every seed row). Mirrors
+    // DealQuotationDto#orderedByPhone / #orderedByEmail.
+    orderedByPhone: row.orderedByPhone ?? null,
+    orderedByEmail: row.orderedByEmail ?? null,
     // Sales feedback #5 (V192.1, 2026-10-06) — "ไม่แสดงชื่อโครงการในใบเสนอราคา". NOT NULL DEFAULT
     // FALSE on the real column, so a seed/pre-V192.1 row normalises to false here. Mirrors
     // DealQuotationDto#hideProjectName. projectName below is returned regardless: the flag only
@@ -14717,6 +14741,8 @@ export const api = {
       // set from, so the two can never disagree about "today".
       const { validityMode, validityUntil } = resolveDealQuotationValidity(
         payload, header.priceMode, items, now.slice(0, 10));
+      // V192.3 — refused before a number is taken or a row exists, as DealQuotationService#create does.
+      const orderedByContact = resolveDealQuotationOrderedByContact(payload);
       const row = {
         id: mockDealQuotationSeq++,
         // Owner feedback 2026-09-11: the FIRST issued document now carries the revision suffix
@@ -14774,6 +14800,7 @@ export const api = {
         // name; blank/omitted stores null (the dotted placeholder), mirrors
         // DealQuotationService#create's blankToNull(request.orderedByName()).
         orderedByName: blankToNullMock(payload.orderedByName),
+        ...orderedByContact,
         // Sales feedback #5 (V192.1) — a brand-new document prints its project unless the request
         // says otherwise; mirrors DealQuotationService#create (null/absent = false).
         hideProjectName: payload.hideProjectName === true,
@@ -14975,6 +15002,10 @@ export const api = {
       // DATE mode here, before anything is persisted.
       const { validityMode, validityUntil } = resolveDealQuotationValidity(
         payload, header.priceMode, items, row.quotationDate, row);
+      // V192.3 — refused before the row is touched, so a refused phone or email leaves the stored
+      // pair (and everything else) as it was. Same DIRECT-assignment discipline as orderedByName
+      // below: a blank or missing value clears it.
+      const orderedByContact = resolveDealQuotationOrderedByContact(payload);
       // #M7: DIRECT assignment, matching DealQuotationService.updateHeader -> DealQuotationRepository
       // .updateHeader, which writes every one of these columns straight from the request with no
       // "keep the old value" fallback at all. The previous `payload.X ?? row.X` shape meant an
@@ -15018,6 +15049,7 @@ export const api = {
         // genuinely clears it back to the dotted placeholder, mirroring
         // DealQuotationService#update's blankToNull(request.orderedByName()).
         orderedByName: blankToNullMock(payload.orderedByName),
+        ...orderedByContact,
         // Sales feedback #5 (V192.1) — DELIBERATELY NOT the #M7 "missing clears it" discipline every
         // field above uses. A missing hideProjectName KEEPS the stored choice, mirroring
         // DealQuotationService#update: a browser tab still running the bundle from before this

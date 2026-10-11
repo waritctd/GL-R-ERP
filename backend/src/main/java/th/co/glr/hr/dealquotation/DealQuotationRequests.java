@@ -570,7 +570,8 @@ public final class DealQuotationRequests {
             return new UpsertDealQuotationRequest(contactId, deptCode, unitCode, offerDate, depositPercent,
                 remainderMode, creditDays, validityDays, validityMode, validityUntil, customerNotes, priceMode,
                 documentLanguage, currency, printedByDisplayId, salesRepDisplayId, projectName,
-                omitContactHonorific, fullPaymentTerm, orderedByName, newHideProjectName, items);
+                omitContactHonorific, fullPaymentTerm, orderedByName, newHideProjectName,
+                orderedByPhone, orderedByEmail, items);
         }
 
         /** The pre-orderedByName shape (today's canonical, minus {@link #orderedByName}) — kept
