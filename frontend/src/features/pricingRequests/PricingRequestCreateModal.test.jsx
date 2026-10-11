@@ -306,7 +306,7 @@ describe('PricingRequestCreateModal', () => {
   });
 
   // ── GLA-125 item 4 (header terms) ───────────────────────────────────────────────────────
-  it('sends the header-terms section (payment term, validity, dept/unit code, omit-honorific) in the create payload', async () => {
+  it('sends the header-terms section (payment term, validity, unit code, omit-honorific) in the create payload', async () => {
     const { createFn } = renderModal();
     fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
     fillRequiredFields();
@@ -314,7 +314,6 @@ describe('PricingRequestCreateModal', () => {
     fireEvent.click(screen.getByLabelText('เครดิต'));
     fireEvent.change(screen.getByLabelText('ระยะเวลาเครดิต (วัน)'), { target: { value: '30' } });
     fireEvent.change(screen.getByLabelText('ยืนราคา (วัน)'), { target: { value: '15' } });
-    fireEvent.change(screen.getByLabelText('ฝ่าย'), { target: { value: 'ขาย' } });
     fireEvent.change(screen.getByLabelText('หน่วยงาน / รหัสผู้ออกแบบ'), { target: { value: 'D01' } });
     // GLA-125 follow-up: this checkbox now lives on the reused QuotationContactPicker (its own
     // typographic-quote copy, "ไม่เติม “คุณ”..."), not a standalone PCR-only control.
@@ -327,10 +326,18 @@ describe('PricingRequestCreateModal', () => {
       paymentTermMode: 'CREDIT',
       creditDays: 30,
       validityDays: 15,
-      deptCode: 'ขาย',
+      deptCode: null,
       unitCode: 'D01',
       omitContactHonorific: true,
     });
+  });
+
+  // Owner, 2026-10-06: "remove ฝ่าย field completely". The quotation editor, the คำขอราคา page and
+  // every printed form lost it then; this form still collected a value nothing showed or printed,
+  // and the quotation's first save wiped it.
+  it('has no ฝ่าย field', () => {
+    renderModal();
+    expect(screen.queryByLabelText('ฝ่าย')).toBeNull();
   });
 
   it('never sends creditDays when paymentTermMode is ON_DELIVERY, even if a stale value is still in the field', async () => {
@@ -454,6 +461,31 @@ describe('PricingRequestCreateModal edit mode (Fix 2)', () => {
       items: [expect.objectContaining({ productDescription: 'กระเบื้องพื้น SCG A1' })],
     })));
     expect(onCreated).toHaveBeenCalledTimes(1);
+  });
+
+  // The wrong-way-round case for the removed ฝ่าย field: a draft saved before the removal still
+  // carries one, and with no field to show or edit it, it must not ride along on the next save.
+  it('saves a draft that still carries a ฝ่าย WITHOUT it, and shows it nowhere', async () => {
+    const updateFn = vi.fn().mockResolvedValue({});
+    const stored = editInitialValue();
+    render(
+      <PricingRequestCreateModal
+        mode="edit"
+        initialValue={{ ...stored, summary: { ...stored.summary, deptCode: 'P003' } }}
+        onClose={vi.fn()}
+        onCreated={vi.fn()}
+        updateFn={updateFn}
+      />,
+    );
+
+    // Control: the form did seed from this draft.
+    expect(screen.getByDisplayValue('โน้ตเดิม')).not.toBeNull();
+    expect(screen.queryByDisplayValue('P003')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
+
+    await waitFor(() => expect(updateFn).toHaveBeenCalledTimes(1));
+    expect(updateFn.mock.calls[0][1].deptCode).toBeNull();
   });
 
   it('seeds ผู้สั่งซื้อ from the persisted request\'s recipientContactId/customerId (GLA-125 follow-up), and preserves it on save', async () => {
