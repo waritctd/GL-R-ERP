@@ -1551,6 +1551,30 @@ describe('QuotationEditorPage ไม่แสดงชื่อโครงก�
     expect(screen.getByRole('checkbox', { name: new RegExp(TOGGLE) }).checked).toBe(false);
   });
 
+  // Owner, 2026-10-12: "ไม่แสดงชื่อโครงการในใบเสนอราคา should be under the โครงการ input itself".
+  // On an inline create that input is the โครงการ box of the ลูกค้าและโครงการ card; the tick box
+  // used to sit at the end of the card below it, after ผู้ติดต่อ and หน่วยงาน / ผู้ออกแบบ.
+  const nextFormControlAfter = (field) => {
+    const controls = [...document.querySelectorAll('input, select, textarea')];
+    return controls[controls.indexOf(field) + 1];
+  };
+
+  it('sits directly under the โครงการ box on an inline-created quotation', async () => {
+    renderEditor('/quotations/new');
+    const project = await screen.findByLabelText(/^โครงการ/);
+
+    expect(nextFormControlAfter(project)).toBe(screen.getByRole('checkbox', { name: new RegExp(TOGGLE) }));
+  });
+
+  // Regression guard: already true before the inline form was moved.
+  it('sits directly under the โครงการ field of an existing draft', async () => {
+    draft();
+    renderEditor('/quotations/5');
+    const box = await screen.findByRole('checkbox', { name: new RegExp(TOGGLE) });
+
+    expect(nextFormControlAfter(screen.getByLabelText(/^โครงการ/))).toBe(box);
+  });
+
   // The wrong-way-round case: a document that already hides its project must not start printing
   // it again just because the rep saved something else.
   it('a draft that hides its project loads TICKED, and a save that never touches the box keeps it', async () => {

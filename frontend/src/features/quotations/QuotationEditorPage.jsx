@@ -2166,6 +2166,16 @@ export function QuotationEditorPage({ user, showToast }) {
                 // customer, so the source's name is what the โครงการ box offers once the new
                 // customer is chosen — picked or created there in a click, never written silently.
                 suggestedProjectName={copyState?.suggestedProjectName}
+                // Sales feedback #5 (V192.1), and the owner on 2026-10-12: "should be under the
+                // โครงการ input itself". No deal exists yet, so that input is this card's own
+                // โครงการ box.
+                belowProject={(
+                  <ProjectNamePrintToggle
+                    id="hideProjectNameInline"
+                    checked={terms.hideProjectName}
+                    onChange={(hideProjectName) => { setTerms((t) => ({ ...t, hideProjectName })); setDirty(true); }}
+                  />
+                )}
                 errors={{
                   customer: showValidationSummary && !dealForm.customer ? 'กรุณาเลือกลูกค้า' : undefined,
                   project: showValidationSummary && dealForm.customer && !dealForm.project ? 'กรุณาเลือกโครงการ' : undefined,
@@ -2178,8 +2188,9 @@ export function QuotationEditorPage({ user, showToast }) {
                     to render is gone). It prints straight into the signature slot; left blank, the
                     document prints its dotted line instead. Never a checklist blocker.
                     Labelled ผู้ติดต่อ since 2026-10-06 — see ORDERED_BY_FIELD_LABEL. */}
-                {/* V192.3 — the name and, directly under it, how to reach that person. One group,
-                    spaced as the rest of this page spaces a field from the next (gap-3). */}
+                {/* V192.3 — the name and, directly under it, how to reach that person; then the
+                    designer. One group, spaced as the rest of this page spaces a field from the
+                    next (gap-3). */}
                 <div className="grid gap-3">
                   <FormField
                     label={ORDERED_BY_FIELD_LABEL}
@@ -2198,23 +2209,13 @@ export function QuotationEditorPage({ user, showToast }) {
                     onChange={(patch) => { setTerms((current) => ({ ...current, ...patch })); setDirty(true); }}
                     idSuffix="Inline"
                   />
+                  <QuotationDealFields
+                    terms={terms}
+                    onChange={(patch) => { setTerms((current) => ({ ...current, ...patch })); setDirty(true); }}
+                    idPrefix="inline-quotation"
+                    showToast={showToast}
+                  />
                 </div>
-                <QuotationDealFields
-                  terms={terms}
-                  onChange={(patch) => { setTerms((current) => ({ ...current, ...patch })); setDirty(true); }}
-                  idPrefix="inline-quotation"
-                  showToast={showToast}
-                />
-                {/* Sales feedback #5 (2026-10-06, V192.1). No deal exists yet, so the project is
-                    chosen in the ดีล card above and this card has no โครงการ field to sit under;
-                    it goes last here, with the other things that decide what the document's
-                    header prints (ผู้สั่งซื้อ, ฝ่าย, หน่วยงาน) and after them because it is the
-                    one a rep rarely needs. */}
-                <ProjectNamePrintToggle
-                  id="hideProjectNameInline"
-                  checked={terms.hideProjectName}
-                  onChange={(hideProjectName) => { setTerms((t) => ({ ...t, hideProjectName })); setDirty(true); }}
-                />
               </Panel>
             </>
           ) : (
@@ -2591,10 +2592,16 @@ export function QuotationEditorPage({ user, showToast }) {
                         is its min-content unless this is set — the same mechanism that let the
                         item rows' selects force the page wide (see QuotationItemRow).
 
+                        The three kinds of "add" on this panel are told apart by shape, not by
+                        position (owner, 2026-10-12: "very clustered ... the position where they are
+                        are correct"): these two are the FOOTER of their box, under a rule; "เพิ่ม
+                        ตำแหน่ง" is a dashed, empty box where the next one will go; ส่วนลดพิเศษ is
+                        its own section under a rule of the panel.
+
                         GLA-123 slice S1: hidden for a PRICING_REQUEST origin — see the Panel's own
                         "เพิ่มรายการอื่นได้ที่คำขอราคา" note above. */}
                     {!isPricingRequestOrigin ? (
-                      <div className="flex min-w-0 flex-wrap items-center gap-2">
+                      <div className="flex min-w-0 flex-wrap items-center gap-2 border-t border-border-subtle pt-3">
                         <Button variant="secondary" size="sm" onClick={() => addItem(group.groupId)}>
                           <Icon name="plus" size={13} />
                           เพิ่มรายการในตำแหน่งนี้
@@ -2623,7 +2630,7 @@ export function QuotationEditorPage({ user, showToast }) {
                   The hint is the same voice as เพิ่มส่วนลดพิเศษ's just below, and is what tells a
                   ตำแหน่ง apart from a รายการ now that both "add" buttons sit near each other. */}
               {!isPricingRequestOrigin ? (
-                <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-dashed border-border-muted p-3">
                   <Button variant="secondary" size="sm" onClick={addGroup}>
                     <Icon name="plus" size={14} />
                     เพิ่มตำแหน่ง
@@ -2635,7 +2642,7 @@ export function QuotationEditorPage({ user, showToast }) {
               {/* ── ส่วนลดพิเศษ (v3 S3) — always AFTER every group, because it always prints last:
                   it is a percentage of the rows above it. Offered only once there is a product row
                   to take it from; an adjustment-only quotation is a server 400. */}
-              <section aria-label="ส่วนลดพิเศษ" className="grid gap-3">
+              <section aria-label="ส่วนลดพิเศษ" className="grid gap-3 border-t border-border pt-4">
                 {adjustments.length ? (
                   <ul className="grid gap-3">
                     {adjustments.map((adjustment, adjIndex) => {

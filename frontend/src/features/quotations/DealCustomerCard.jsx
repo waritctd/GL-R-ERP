@@ -36,7 +36,7 @@ function emptyNewCustomer() {
  * (`terms.orderedByName`) the editor itself renders next to this card, not something this card
  * collects at all.
  */
-export function DealCustomerCard({ value, onChange, errors, showToast, suggestedProjectName = '' }) {
+export function DealCustomerCard({ value, onChange, errors, showToast, suggestedProjectName = '', belowProject = null }) {
   const { customer, project, entryChannel } = value;
 
   // ── ลูกค้า typeahead ──────────────────────────────────────────────────────────────────────
@@ -424,6 +424,10 @@ export function DealCustomerCard({ value, onChange, errors, showToast, suggested
               ))}
             </ul>
           ) : null}
+          {/* Whatever qualifies the project (the editor's "ไม่แสดงชื่อโครงการในใบเสนอราคา" tick
+              box) sits directly under its box. After the listbox in the DOM, so the open list
+              still drops from the box and covers this, as a dropdown covers what is below it. */}
+          {belowProject}
         </div>
       </div>
 
