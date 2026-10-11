@@ -144,5 +144,6 @@ agents/attendance/*roster*.csv
 # graphify knowledge-graph output (/graphify): regenerated on demand from source, not source.
 # Bare name so it matches at every depth (backend/graphify-out, frontend/graphify-out, root).
 graphify-out
-# Obsidian vault exported from the backend graph — same generated artifact, different shape.
+# Obsidian vaults exported from the graphs — same generated artifact, different shape.
 backend-graph-vault/
+integration-map-vault/
