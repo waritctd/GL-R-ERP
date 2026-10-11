@@ -37,8 +37,6 @@ export function editorStateFromQuotation(quotation) {
     adjustments: rows.filter((row) => lineTypeOf(row) === LINE_TYPE_ADJUSTMENT),
     docSettings: { priceMode, documentLanguage: quotation.documentLanguage || 'TH' },
     terms: {
-      // quotation.deptCode is deliberately NOT read into the form: ฝ่าย has no field any more, and
-      // a value an older draft still carries is cleared by the next save.
       unitCode: quotation.unitCode ?? '',
       offerDate: quotation.offerDate ?? bangkokTodayIso(),
       depositPercent: quotation.depositPercent ?? '',

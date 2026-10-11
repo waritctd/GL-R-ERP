@@ -774,10 +774,11 @@ public class DealQuotationService {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         // The preview endpoint carries no quotation, so it has no per-quotation price mode to
-        // read. Infer it from the row itself: a ราคาพิเศษ means SPECIAL_SQM, a typed net means
-        // DIRECT_NET, and neither means NET. This keeps `POST .../calculate-line`'s request shape
-        // unchanged (no new endpoint, no new parameter) and cannot disagree with the saved
-        // document, because #buildTileItem reads exactly the same two fields.
+        // read. #inferPriceMode takes it from the row itself: the mode the row STATES when it
+        // states one (V192.5 — a mixed document's row always does), otherwise a ราคาพิเศษ means
+        // SPECIAL_SQM, a typed net (per แผ่น or per ตร.ม.) means DIRECT_NET, and neither means NET.
+        // The guess cannot disagree with the saved document, because #buildTileItem prices the row
+        // from those same fields.
         // The preview carries no quotation, so it has no language either — TH, whose 7% is what the
         // stored per-item vat column has always held. The preview never shows that column and the
         // saved row is recomputed by #buildItems with the document's REAL language, so this cannot

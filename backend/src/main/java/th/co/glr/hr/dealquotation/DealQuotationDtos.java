@@ -277,9 +277,10 @@ public final class DealQuotationDtos {
         }
 
         /** This DTO carrying {@code value} as its {@link #hideProjectName} — the same
-         * appended-field device as {@link #withOrderedByName}: {@code DealQuotationRepository}'s
-         * mapper and every test built from an older constructor shape (none of which know this
-         * field) set it here rather than repeating the canonical constructor by hand. */
+         * appended-field device as {@link #withOrderedByName}: a test built from an older
+         * constructor shape (none of which know this field) sets it here rather than repeating the
+         * canonical constructor by hand. Only tests call it; {@code DealQuotationRepository}'s
+         * mapper passes the column straight to the canonical constructor. */
         public DealQuotationDto withHideProjectName(boolean value) {
             return new DealQuotationDto(id, number, ticketId, docStatus, revisionNo, parentQuotationId,
                 createdById, createdByName, createdByNameEn, salesRepId, salesRepName, salesRepNameEn,

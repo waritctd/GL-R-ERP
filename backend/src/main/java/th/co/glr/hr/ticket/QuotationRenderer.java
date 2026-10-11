@@ -108,8 +108,6 @@ public class QuotationRenderer {
     private static final String EN_COL_DISCOUNT = "Disc.";
     private static final String EN_COL_NET_PRICE = "Net price";
     private static final String EN_COL_AMOUNT_PREFIX = "Amount";
-    // No EN_LABEL_DEPT: the ฝ่าย / "Dept." line left BOTH forms on 2026-10-06 — see the note at
-    // DEPT_VALUE_ROW below.
     private static final String EN_LABEL_REF = "Ref.";
     // ⚠️ ASK-THE-OWNER: QN6900902-6 prints "D.Co." here and QN6900933 prints "D.Name" — the same
     // slot, two labels. "D.Co." is used because it appears on the more recent of the two samples
@@ -173,10 +171,12 @@ public class QuotationRenderer {
 
     // Header value cells (ฝ่าย / เลขที่อ้างอิง / หน่วยงาน) — found by dumping the template with POI;
     // see the class Javadoc / PR body for the raw dump. H3/H4/H5 are the template's own LABEL
-    // cells ("ฝ่าย" / "เลขที่อ้างอิง" / "หน่วยงาน") and are never touched; I3/I4/I5 are their value
-    // slots. A prior version of this renderer mis-attributed I3 as an unused "salesperson code"
-    // cell and blanked H5 (the หน่วยงาน LABEL) to "" — both fixed here: I3 is the ฝ่าย value, and
-    // the หน่วยงาน label at H5 is left alone.
+    // cells ("ฝ่าย" / "เลขที่อ้างอิง" / "หน่วยงาน"); I3/I4/I5 are their value slots. The labels are
+    // the template's text except where #toXls says otherwise: it clears H3 on every document (the
+    // next paragraph) and H5 on a v2 document with no unit code, and on an English document
+    // #writeEnglishHeaderLabels rewrites H4 and H5. A prior version of this renderer
+    // mis-attributed I3 as an unused "salesperson code" cell and blanked H5 (the หน่วยงาน LABEL)
+    // to "" — both fixed here: I3 is the ฝ่าย value, and H5 is cleared only in the one case above.
     //
     // 2026-10-06 — the ฝ่าย line is GONE from the printed document. Sales feedback Admin 1d: the
     // ฝ่าย box was filled wrongly (some reps typed their own name into it) — "ไม่มีดีกว่า"; take it
@@ -412,43 +412,33 @@ public class QuotationRenderer {
             setStr(sh, DEPT_VALUE_ROW, VALUE_COL, "");                           // I3 — (ฝ่าย / Dept., removed)
             setStr(sh, NUMBER_VALUE_ROW, VALUE_COL, nullSafe(model.number()));   // I4 — เลขที่อ้างอิง / Ref.
             setStr(sh, UNIT_VALUE_ROW, VALUE_COL, nullSafe(model.unitCode()));   // I5 — หน่วยงาน / D.Co.
-            // ฝ่าย/ผู้ออกแบบ optional (2026-09-16): both fields became optional on the deal (commit
-            // 3003bd0c) and the value cell above already prints blank via nullSafe when unset — but
-            // H3/H5's own LABEL never followed: it is the Thai TEMPLATE's own baked-in text ("ฝ่าย" /
-            // "หน่วยงาน", never written by the Thai branch — see this class's H3/H4/H5 comment above)
-            // or, on English, the "Dept."/"D.Co." literal #writeEnglishHeaderLabels just wrote a few
-            // lines above. Either way a blank value used to still print its label with nothing after
-            // it ("ฝ่าย" / "Dept." with an empty I3/I5), which reads as a field the rep forgot to
-            // fill rather than one that is genuinely inapplicable. Clearing H3/H5 here — AFTER both
-            // the Thai template's own text and the English overwrite have already been decided —
-            // handles both languages with the one guard: when filled, neither cell is touched, so a
-            // filled document renders byte-for-byte as before this change.
-            //
-            // Opus review fix (2026-09-16, F1): gated on model.signatureLabelsV2() — this fix is
-            // scoped to the v2/direct-deal render only. deptCode/unitCode became optional on the
-            // DEAL aggregate (DealQuotationRenderAdapter's caller), not on the legacy TicketDto/
-            // QuotationDto shape: #buildLegacyModel above hands this method deptCode=null/unitCode=
-            // null UNCONDITIONALLY for every legacy/PCR ticket quotation (it never reads a
-            // deptCode/unitCode off TicketDto/QuotationDto at all — there is no such field), so an
-            // ungated guard here would have started clearing H3/H5 on every legacy document ever
-            // rendered, not just the ones a rep deliberately left blank — a silent behaviour change
-            // to a document nobody asked to touch. signatureLabelsV2 is this exact class's own
-            // established discriminator for "is this the v2/direct-deal render" (see this field's
-            // Javadoc on QuotationRenderModel, and its other three uses in this method/class below:
-            // v2CompactRemarks, the Project-heading centring a few lines down, alwaysShowSeq, and
-            // writeSignatureBlock) — DealQuotationRenderAdapter#toRenderModel passes signatureLabelsV2
-            // = true (line ~208, alongside the real quotation.deptCode()/unitCode()), buildLegacyModel
-            // passes false (line ~318, alongside its hardcoded null/null) — so it is already exactly
-            // "was this model built from a real deal's dept/unit fields, or a legacy shape that never
-            // had them". Legacy documents keep the template's baked-in หน่วยงาน label exactly as
-            // they always have.
-            //
-            // 2026-10-06: all of the above still describes H5 (หน่วยงาน). It no longer describes
-            // H3: the ฝ่าย label is cleared UNCONDITIONALLY — filled or blank, v2 or legacy — because
+            // H3, the ฝ่าย label, is cleared UNCONDITIONALLY — filled or blank, v2 or legacy — because
             // the line itself was removed from the document ("remove ฝ่าย field completely"; see
             // DEPT_VALUE_ROW). That deliberately includes the legacy document, which only ever
             // printed the template's bare "ฝ่าย" with nothing after it: same form, same ruling.
             clearCell(sh, DEPT_VALUE_ROW, SALES_LINE_COL); // H3 — the ฝ่าย label, on every document
+            // H5, the หน่วยงาน label, follows its value (2026-09-16, when หน่วยงาน / ผู้ออกแบบ became
+            // optional on the deal, commit 3003bd0c). With no unit code the value cell above prints
+            // blank via nullSafe, and the label left on its own — the Thai TEMPLATE's baked-in
+            // "หน่วยงาน", or the "D.Co." #writeEnglishHeaderLabels wrote a few lines above — reads as
+            // a field the rep forgot to fill rather than one that is genuinely inapplicable.
+            // Clearing it here, AFTER both the Thai template's own text and the English overwrite
+            // have been decided, handles both languages with the one guard: when filled, the cell
+            // is not touched, so a filled document renders byte-for-byte as before.
+            //
+            // Opus review fix (2026-09-16, F1): gated on model.signatureLabelsV2(). unitCode became
+            // optional on the DEAL aggregate (DealQuotationRenderAdapter's caller), not on the
+            // legacy TicketDto/QuotationDto shape: #buildLegacyModel above hands this method
+            // unitCode=null UNCONDITIONALLY for every legacy/PCR ticket quotation (there is no such
+            // field on TicketDto/QuotationDto to read), so an ungated guard would have started
+            // clearing H5 on every legacy document ever rendered, not just the ones a rep
+            // deliberately left blank — a silent behaviour change to a document nobody asked to
+            // touch. signatureLabelsV2 is this class's own established discriminator for "is this
+            // the v2/direct-deal render" (see that field's Javadoc on QuotationRenderModel):
+            // DealQuotationRenderAdapter#toRenderModel passes true alongside the real
+            // quotation.unitCode(), #buildLegacyModel passes false alongside its hardcoded null.
+            // Legacy documents keep the template's baked-in หน่วยงาน label exactly as they always
+            // have.
             if (model.signatureLabelsV2() && (model.unitCode() == null || model.unitCode().isBlank())) {
                 clearCell(sh, UNIT_VALUE_ROW, SALES_LINE_COL); // H5 label
             }
@@ -1088,8 +1078,6 @@ public class QuotationRenderer {
         setStr(sh, 2, 1, "                            Tel. +662 711 5995    e-mail : info@glr.co.th"
             + "    Line:@glr_tiles");
 
-        // H3 (ฝ่าย -> "Dept.") is not written: the line was removed from both forms on 2026-10-06,
-        // and #toXls clears the template's own Thai text from that cell for every document.
         setStr(sh, NUMBER_VALUE_ROW, SALES_LINE_COL, EN_LABEL_REF);      // H4  เลขที่อ้างอิง -> Ref.
         setStr(sh, UNIT_VALUE_ROW, SALES_LINE_COL, EN_LABEL_UNIT_CODE);  // H5  หน่วยงาน    -> D.Co.
         setStr(sh, 3, 0, EN_LABEL_DATE);                                  // A4  วันที่       -> Date
@@ -1210,10 +1198,9 @@ public class QuotationRenderer {
      * the signature block). Each document prints its own: {@link #TH_FORM_TAG} on the Thai form,
      * {@link #EN_FORM_TAG} on the English one.
      *
-     * <p>Until 2026-10-06 the Thai path BLANKED this cell ("F-SM-002 tag, not customer-facing")
-     * and only the English path wrote. Sales feedback Admin #6 / owner ruling that day: the Thai
-     * number must print too. That is a visible change to EVERY Thai document, made on purpose —
-     * see {@code QuotationFormTagTest}.
+     * <p>The Thai number printing at all is a visible change to EVERY Thai document, made on
+     * purpose on 2026-10-06 (the ruling is told at {@link #TH_FORM_TAG}) — see
+     * {@code QuotationFormTagTest}.
      *
      * <p>Nothing else moves. Every layout decision already counted this row whether or not it
      * held text ({@link #onePageScale} sums through {@code FOOTER_END}, and

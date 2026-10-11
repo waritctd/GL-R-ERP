@@ -1695,7 +1695,7 @@ export function validateAdjustment(adjustment) {
 //   customer / project   → TicketService.create ("ต้องเลือกโครงการก่อนสร้างดีล"), inline path only
 //   items                → #buildItem / #requireStoredItemComplete, and "at least one row"
 //   locationLabels       → the editor's own MED-4 rule (an unsaveable-without-loss state, pre-existing)
-//   priceModeLanguage    → #requirePriceModeAvailableInLanguage (SPECIAL_SQM on EN → 400)
+//   priceModeLanguage    → #requirePriceModeAllowed (MIXED on EN → 400)
 //   orderedByEmail       → #resolveOrderedByEmail (a typed-but-malformed ผู้ติดต่อ Email → 400;
 //                          owner ruling 2026-10-11)
 // Everything else is a WARNING: shown, clickable, never blocking. An earlier owner ruling
@@ -1896,9 +1896,8 @@ export function buildQuotationChecklist({
   // dropped QUOTATION_CHECK.CONTACT/CONTACT_PHONE/CONTACT_EMAIL along with the required
   // contact-picker they gated: ผู้สั่งซื้อ is now a single optional free-text field
   // (`terms.orderedByName`) that can never be "missing" in a way worth flagging.
-  // ผู้ออกแบบ (unitCode) is deliberately NOT checked (ฝ่าย / deptCode was not either, and has had
-  // no field at all since 2026-10-06) — owner ruling 2026-09-16,
-  // "make ผู้ออกแบบ optional including ฝ่าย". The backend never required either; this list used to
+  // ผู้ออกแบบ (unitCode) is deliberately NOT checked — owner ruling 2026-09-16,
+  // "make ผู้ออกแบบ optional including ฝ่าย". The backend never required it; this list used to
   // warn "ยังไม่ได้เลือกผู้ออกแบบ", which read as a required field.
 
   if (customer) {

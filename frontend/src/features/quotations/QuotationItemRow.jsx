@@ -980,9 +980,11 @@ export function QuotationItemRow({
             </select>
           </FormField>
         ) : null}
-        {/* v3: the two price fields follow the QUOTATION's price mode, chosen once in the
-            "รูปแบบเอกสาร" block — never per row, because every tile row of every one of the owner's
-            nine documents shares one mode. Each mode asks for exactly what the rep has in hand.
+        {/* v3: the two price fields follow the price mode this row is in. That is the QUOTATION's,
+            chosen once in the "รูปแบบเอกสาร" block — every tile row of every one of the owner's
+            nine documents shares one mode — unless the document is "ผสมหลายวิธี" (V192.5), where it
+            is the row's own, chosen in "วิธีคิดราคา" just above. Each mode asks for exactly what the
+            rep has in hand.
 
             On a THAI document (sales feedback #1, 2026-10-06 — "แก้เป็น ตร.ม. รวม VAT ทุกแบบ") every
             one of these is typed per ตร.ม. INCLUDING VAT, carries the unit inside the field, and

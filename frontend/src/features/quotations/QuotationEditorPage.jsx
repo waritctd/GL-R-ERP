@@ -140,7 +140,6 @@ function emptyTerms(defaults = null) {
   // reading `defaults?.noDeposit` at all, in case a stale stored blob still has the key.)
   const noDeposit = false;
   return {
-    // No `deptCode`: the ฝ่าย field was removed (owner, 2026-10-06) — see buildUpsertPayload.
     unitCode: '', offerDate: todayIso(),
     depositPercent,
     depositPercentCustom: depositPercent !== '' && !DEPOSIT_PERCENT_PRESETS.includes(Number(depositPercent)),
@@ -826,7 +825,7 @@ export function QuotationEditorPage({ user, showToast }) {
   function addPlainItem(targetGroupId) {
     setDirty(true);
     const groupId = targetGroupId ?? groups[groups.length - 1]?.groupId ?? null;
-    // Built OUTSIDE the updater (it used to be built inside it) so its clientId is known here.
+    // Built OUTSIDE the updater so its clientId is known here.
     const row = emptyPlainItem(groupId);
     pendingFocusRef.current = { rowId: row.clientId };
     setItems((prev) => insertIntoGroup(prev, row, groupId));
@@ -2485,8 +2484,6 @@ export function QuotationEditorPage({ user, showToast }) {
               // shown-then-refused.
               <span className="text-2xs font-bold text-text-muted">เพิ่มรายการอื่นได้ที่คำขอราคา</span>
             ) : null}
-            // Sales feedback #3 (2026-10-06): "เพิ่มตำแหน่ง" used to be this header's action. It now
-            // sits under the last ตำแหน่ง below — see the "add actions" note there.
           >
             <div className="grid gap-4">
               {groups.map((group, groupIndex) => {
@@ -2513,8 +2510,7 @@ export function QuotationEditorPage({ user, showToast }) {
                       </div>
                       {/* The group's SUMMARY stays up here with its name — how many rows it holds,
                           and the one thing you can do to the group itself (remove it, when
-                          empty). Its "เพิ่ม…" actions moved to the bottom of the box (sales
-                          feedback #3, 2026-10-06) — see the note above them. */}
+                          empty). */}
                       <div className="flex min-w-0 flex-wrap items-center gap-2">
                         <span className="text-2xs font-bold text-text-muted">{groupItems.length} รายการ</span>
                         {/* Only for an EMPTY group, and never for the last one standing — see
@@ -2640,7 +2636,7 @@ export function QuotationEditorPage({ user, showToast }) {
               })}
 
               {/* "เพิ่มตำแหน่ง" — under the LAST ตำแหน่ง, which is exactly where the new one
-                  appears (sales feedback #3, 2026-10-06; it was the Panel header's action). Outside
+                  appears (sales feedback #3, 2026-10-06). Outside
                   every group's box, because it adds a sibling of them rather than a row inside one.
                   The hint is the same voice as เพิ่มส่วนลดพิเศษ's just below, and is what tells a
                   ตำแหน่ง apart from a รายการ now that both "add" buttons sit near each other. */}
@@ -3161,16 +3157,6 @@ export function QuotationEditorPage({ user, showToast }) {
         </Modal>
       ) : null}
 
-      {/* GLA-74 part 1 ("สร้างจากใบเดิม" / สั่งเหมือนเดิม) — explains up front that this is NOT a
-          revision: the new draft is a completely separate document the rep can freely edit before
-          submitting again.
-          ⚠️ Owner ruling 2026-09-19: this copy USED TO say the original stays approved and
-          untouched, full stop — that is no longer true once ANY newer quotation in this deal
-          (not only the one this dialog is about to create) is approved. A deal may hold only ONE
-          APPROVED DEAL_DIRECT quotation, so the wording now says the original stays approved
-          only until SOME quotation in the deal is approved next, at which point THAT one replaces
-          it (DealQuotationService#approve's same-ticket sweep, which supersedes every OTHER
-          APPROVED sibling regardless of which one triggered it). */}
       {/* V192.5 — "ผสมหลายวิธี" → one mode for the whole document. Asked only when it would
           re-price rows (#changePriceMode); the title names the mode and the body the number of
           rows, so the rep is agreeing to something specific. Cancelling leaves every row, and
@@ -3184,6 +3170,16 @@ export function QuotationEditorPage({ user, showToast }) {
         onConfirm={() => applyOnePriceModeToTheDocument(leaveMixedConfirm.priceMode)}
         onCancel={() => setLeaveMixedConfirm(null)}
       />
+      {/* GLA-74 part 1 ("สร้างจากใบเดิม" / สั่งเหมือนเดิม) — explains up front that this is NOT a
+          revision: the new draft is a completely separate document the rep can freely edit before
+          submitting again.
+          ⚠️ Owner ruling 2026-09-19: this copy USED TO say the original stays approved and
+          untouched, full stop — that is no longer true once ANY newer quotation in this deal
+          (not only the one this dialog is about to create) is approved. A deal may hold only ONE
+          APPROVED DEAL_DIRECT quotation, so the wording now says the original stays approved
+          only until SOME quotation in the deal is approved next, at which point THAT one replaces
+          it (DealQuotationService#approve's same-ticket sweep, which supersedes every OTHER
+          APPROVED sibling regardless of which one triggered it). */}
       {reorderConfirmOpen ? (
         <Modal
           title="สร้างใบเสนอราคาจากใบเดิม"

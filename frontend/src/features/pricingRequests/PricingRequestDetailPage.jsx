@@ -1531,10 +1531,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
             Import — they carry no price or discount, only when/how the eventual quotation would
             be paid for and printed. Rendered only when at least one is actually set, so a
             pre-GLA-125 request (every field null) shows nothing extra here. NOT yet reflected on
-            the quotation itself — see V185's migration header (Phase 3).
-            ฝ่าย (summary.deptCode) used to be one of these lines. It was removed from the
-            quotation altogether on 2026-10-06 (sales feedback Admin 1d; owner: "remove ฝ่าย field
-            completely"), so it is neither shown here nor a reason to open this block. */}
+            the quotation itself — see V185's migration header (Phase 3). */}
         {(summary.paymentTermMode || summary.validityDays != null
           || summary.unitCode || summary.printedByDisplayId != null || summary.salesRepDisplayId != null
           || summary.omitContactHonorific) ? (

@@ -876,9 +876,10 @@ export const api = {
     // every call, no uploader short-circuit, CEO excluded) is enforced entirely server-side by
     // TaxAllowanceDeclarationService#requireOwnerOrHr -- see that method's javadoc.
     //
-    // csrfHeaders('POST') is applied explicitly here (unlike several older attachment call sites
-    // in this file, which forget it and 403 in production) -- see the tax-allowance plan doc's PR C
-    // section, "two traps that will cost a day if missed".
+    // csrfHeaders('POST') is applied explicitly here (several older attachment call sites in this
+    // file used to forget it and 403 in production; hrApi.uploadCsrf.test.js now fails on any
+    // unsafe raw fetch() that does) -- see the tax-allowance plan doc's PR C section, "two traps
+    // that will cost a day if missed".
     // sectionKey (V135, feat/tax-allowance-sections): which of TAX_ALLOWANCE_GROUPS' five keys this
     // evidence belongs to -- optional, so callers outside the tax-allowance section flow (none
     // today) can omit it and get the pre-existing "general/uncategorized" behaviour. Sent as a plain

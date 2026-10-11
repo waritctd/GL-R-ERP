@@ -1436,7 +1436,7 @@ describe('mock dealQuotations.create/update -- omitContactHonorific (V180)', () 
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 // Sales feedback #5 (2026-10-06, V192.1) — "ไม่แสดงชื่อโครงการในใบเสนอราคา". Mirrors
-// DealQuotationService#create/#update/#cloneQuotation's handling of hideProjectName. This is
+// DealQuotationService#create/#update/#insertCopyOf's handling of hideProjectName. This is
 // PLUMBING evidence only (the field survives the mock's own create/update/clone paths); that the
 // printed document really drops the line is proven against the Java renderer, not here.
 // ─────────────────────────────────────────────────────────────────────────────────────────────

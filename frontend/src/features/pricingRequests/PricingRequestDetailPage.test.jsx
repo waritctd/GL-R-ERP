@@ -2335,13 +2335,6 @@ describe('PricingRequestDetailPage mobile layout', () => {
   });
 });
 
-// V185 (direct-deal-form parity) + owner ruling 2026-09-18 (label reversed back to โรงงาน, not
-// ยี่ห้อ — see PricingRequestDetailPage.jsx's own comment on brandDisplay): the "รายการสินค้าและ
-// ราคาตั้งต้น" item card shows every sales-entered tile field read-only, and hides เผื่อ
-// (wastage)/the pre-wastage quantity from Import specifically — everyone else (sales, CEO) still
-// sees the full breakdown. UI scoping only, no backend authz change (buildRequest's base fixture
-// already carries color/thicknessMm/sqmPerPiece/quantityMode/piecesInput/piecesPerBox — see that
-// fixture's own V185 comment).
 // Sales feedback Admin 1d / owner 2026-10-06: "remove ฝ่าย field completely". The request's
 // read-only header terms used to repeat it ("ฝ่าย: —") beside the designer code and the validity.
 // It is asserted absent on a request that DOES carry one, so the line cannot survive by being
@@ -2372,6 +2365,13 @@ describe('PricingRequestDetailPage header terms — ฝ่าย is not shown (o
   });
 });
 
+// V185 (direct-deal-form parity) + owner ruling 2026-09-18 (label reversed back to โรงงาน, not
+// ยี่ห้อ — see PricingRequestDetailPage.jsx's own comment on brandDisplay): the "รายการสินค้าและ
+// ราคาตั้งต้น" item card shows every sales-entered tile field read-only, and hides เผื่อ
+// (wastage)/the pre-wastage quantity from Import specifically — everyone else (sales, CEO) still
+// sees the full breakdown. UI scoping only, no backend authz change (buildRequest's base fixture
+// already carries color/thicknessMm/sqmPerPiece/quantityMode/piecesInput/piecesPerBox — see that
+// fixture's own V185 comment).
 describe('PricingRequestDetailPage item card — V185 sales-entered fields', () => {
   it('shows the sales-entered tile fields read-only to every viewer', async () => {
     renderDetailPage({ user: salesOwner });
