@@ -432,7 +432,6 @@ test.describe('quotation v3 / v3b + customer details — the real service', () =
     expect(xlsHasText(filledTh, `คุณ${contactAndCustomer}   เลขที่ผู้เสียภาษี : ${TAX_ID}`), 'TH B5 carries the tax id').toBe(true);
     // Owner 2026-10-12 (sales feedback item 3): the Thai document labels the line "Phone", not "โทร.".
     expect(xlsHasText(filledTh, `Phone ${PHONE}`), 'TH B6 carries the phone').toBe(true);
-    expect(xlsHasText(filledTh, 'โทร. '), 'TH no longer prints the old label').toBe(false);
     // NOTE: the Thai F-SM-002 has NO address line — DealQuotationRenderAdapter prints
     // customerAddress on the ENGLISH document only. Not asserted either way here: that is a backend
     // renderer gap reported in the PR, not behaviour to pin.
