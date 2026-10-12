@@ -60,7 +60,7 @@ export function DealStageStepper({ catalog = EMPTY_STAGE_CATALOG, salesStage, lo
           <div key={phaseId} className="border-b border-border last:border-b-0">
             <button
               type="button"
-              className="flex w-full items-center gap-3 bg-transparent px-4 py-3 text-left"
+              className="flex w-full items-center gap-3 border-0 bg-transparent px-4 py-3 text-left text-text"
               aria-expanded={isOpen}
               onClick={() => toggle(phaseId)}
             >

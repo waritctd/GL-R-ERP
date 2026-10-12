@@ -84,7 +84,7 @@ export function FactoryProgressBar({ row, editable = false, advancing = false, o
 
       {/* The bar. Scrolls horizontally on a narrow screen rather than squashing the labels. */}
       <div className="mt-3 overflow-x-auto">
-        <ol className="flex min-w-[560px] items-start">
+        <ol className="m-0 flex min-w-[560px] list-none items-start p-0">
           {IMPORT_STEPS.map((step, i) => {
             const isDone = currentIdx >= 0 && i < currentIdx;
             const isCurrent = i === currentIdx;

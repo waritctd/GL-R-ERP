@@ -63,7 +63,7 @@ export function StatCard({ icon, label, value, helper, tone = 'indigo', onClick 
         'stat-card',
         'bg-surface border border-border rounded-md p-4 mobile:p-3',
         onClick && [
-          'w-full text-left cursor-pointer transition-colors',
+          'w-full text-left text-text cursor-pointer transition-colors',
           'hover:border-primary/50 hover:bg-surface-hover',
           'focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] focus-visible:border-primary-hover',
         ],

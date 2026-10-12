@@ -318,7 +318,7 @@ export function ImportOverview({ user, employee }) {
                   key={ticket.id}
                   type="button"
                   onClick={() => navigate(`/tickets/${ticket.id}`)}
-                  className="flex items-center justify-between gap-3 border-t border-border-subtle px-4 py-3 text-left first:border-t-0 hover:bg-surface-hover"
+                  className="flex items-center justify-between gap-3 border-0 border-t border-border-subtle bg-transparent px-4 py-3 text-left text-text first:border-t-0 hover:bg-surface-hover"
                 >
                   <span className="min-w-0">
                     <strong className="block truncate text-sm text-text">{ticket.customerName || ticket.title}</strong>

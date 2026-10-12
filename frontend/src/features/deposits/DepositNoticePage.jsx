@@ -651,7 +651,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
                     {customers.map((c) => (
                       <button key={c.id} type="button"
                         onClick={() => selectCustomer(c)}
-                        className="w-full cursor-pointer border-0 border-b border-surface-subtle bg-transparent px-3 py-2 text-left text-sm">
+                        className="w-full cursor-pointer border-0 border-b border-surface-subtle bg-transparent px-3 py-2 text-left text-sm text-text">
                         <strong className="block">{c.name}</strong>
                         <span className="text-2xs text-text-muted">{c.taxId} · {c.address}</span>
                       </button>
