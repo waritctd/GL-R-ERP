@@ -223,21 +223,33 @@ describe('download flushes unsaved edits before rendering the document (2026-09-
     )).toHaveLength(1);
   });
 
-  it('picking PDF twice fast only flushes+downloads once: the menu lists both formats as busy until it is done', async () => {
+  // The PDF is held open (a deferred mock) so the busy window is still open when the menu is
+  // reopened; an instantly-resolving mock would close it before the second look.
+  it('picking PDF again while it is still downloading does nothing: the menu lists both formats as busy until it is done', async () => {
+    let finishPdf;
+    api.dealQuotations.downloadPdf.mockReturnValue(new Promise((resolve) => { finishPdf = resolve; }));
     renderEditor('/quotations/5');
     const notes = await screen.findByLabelText('หมายเหตุเพิ่มเติม');
     fireEvent.change(notes, { target: { value: 'x' } });
 
     await pickDownload('PDF');
+    await waitFor(() => expect(api.dealQuotations.downloadPdf).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole('button', { name: 'ดาวน์โหลด' }).textContent).toContain('กำลังดาวน์โหลด');
+
     fireEvent.click(screen.getByRole('button', { name: 'ดาวน์โหลด' }));
     const menu = within(await screen.findByRole('menu', { name: 'ดาวน์โหลด' }));
+    // A busy item's name carries its reason ("PDF กำลังดาวน์โหลด…"), hence the prefix match.
+    const item = (format) => menu.getByRole('menuitem', { name: new RegExp(`^${format}`) });
     for (const format of ['PDF', 'Excel']) {
-      expect(menu.getByRole('menuitem', { name: format }).getAttribute('aria-disabled')).toBe('true');
+      expect(item(format).getAttribute('aria-disabled')).toBe('true');
     }
-    expect(menu.getByText('กำลังดาวน์โหลด…')).not.toBeNull();
-    fireEvent.click(menu.getByRole('menuitem', { name: 'PDF' }));
+    expect(menu.getAllByText('กำลังดาวน์โหลด…')).toHaveLength(2);
+    fireEvent.click(item('PDF'));
+    fireEvent.click(item('Excel'));
 
-    await waitFor(() => expect(api.dealQuotations.downloadPdf).toHaveBeenCalledTimes(1));
+    finishPdf({ type: 'application/pdf' });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'ดาวน์โหลด' }).textContent).toBe('ดาวน์โหลด'));
+    expect(api.dealQuotations.downloadPdf).toHaveBeenCalledTimes(1);
     expect(api.dealQuotations.update).toHaveBeenCalledTimes(1);
     expect(api.dealQuotations.downloadXlsx).not.toHaveBeenCalled();
   });

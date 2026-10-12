@@ -10,6 +10,7 @@ import { FormField } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Panel, PageStack } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
+import { OverflowMenu } from '../../components/common/OverflowMenu.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { RouteFallback } from '../../components/common/RouteFallback.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
@@ -1657,8 +1658,6 @@ export function QuotationEditorPage({ user, showToast }) {
   const [rejectOpen, setRejectOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
   const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
-  // GLA-74 part 1 ("สร้างจากใบเดิม" / สั่งเหมือนเดิม).
-  const [reorderConfirmOpen, setReorderConfirmOpen] = useState(false);
   const approveMutation = useMutation({
     mutationFn: (payload) => api.dealQuotations.approve(id, payload || {}),
     onSuccess: (res) => {
@@ -1705,28 +1704,6 @@ export function QuotationEditorPage({ user, showToast }) {
       navigate(`/quotations/${res.quotation.id}`);
     },
     onError: (error) => showToast('error', error.message || 'สร้างฉบับแก้ไขไม่สำเร็จ'),
-  });
-
-  // GLA-74 part 1 ("สร้างจากใบเดิม" / สั่งเหมือนเดิม): clone an APPROVED quotation into a new,
-  // INDEPENDENT draft. Same gate as reviseMutation above (canReviseDealQuotation -- see the
-  // Confirm dialog below for why the same gate is reused rather than a new quotationMeta.js
-  // export: the rule is byte-for-byte identical, "APPROVED + edit access").
-  //
-  // ⚠️ Owner ruling 2026-09-19: the SOURCE is untouched only at THIS moment (clone creation) --
-  // not invalidated/refetched here because it genuinely has not changed YET. It stays APPROVED
-  // only until the NEW clone is itself later submitted and approved, at which point the backend's
-  // one-APPROVED-per-deal rule (DealQuotationService#approve's same-ticket sweep) supersedes it —
-  // a page open on the source at that later moment picks that up the same way it would pick up
-  // any other quotation's status changing under it (refetch/invalidation elsewhere), not here.
-  const reorderMutation = useMutation({
-    mutationFn: () => api.dealQuotations.createReorder(id, {}),
-    onSuccess: (res) => {
-      queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
-      showToast('success', 'สร้างใบเสนอราคาจากใบเดิมแล้ว');
-      setReorderConfirmOpen(false);
-      navigate(`/quotations/${res.quotation.id}`);
-    },
-    onError: (error) => showToast('error', error.message || 'สร้างจากใบเดิมไม่สำเร็จ'),
   });
 
   /** M4(d) fix (Opus review, 2026-09-20) — "คืนรายการ": re-adds a CEO-linked line a prior save
@@ -1942,6 +1919,24 @@ export function QuotationEditorPage({ user, showToast }) {
     <PageStack>
       <PageHeader
         title={quotation ? `ใบเสนอราคา ${quotation.number}` : 'สร้างใบเสนอราคา'}
+        // Offered in every status: it only navigates, nothing is created until the copy is saved.
+        // Disabled while dirty/saving because the copy is made from what is SAVED and would
+        // silently lack unsaved edits.
+        titleAside={quotation && canCopyDealQuotation(user, quotation) ? (
+          <Button
+            variant="icon"
+            size="sm"
+            className="mobile:w-11 mobile:min-h-[44px]"
+            aria-label="คัดลอกเป็นใบใหม่"
+            disabled={dirty || saving}
+            title={dirty || saving
+              ? 'บันทึกร่างก่อน จึงจะคัดลอกได้ (คัดลอกจากฉบับที่บันทึกแล้ว)'
+              : 'เปิดใบเสนอราคาใบใหม่ที่มีรายการและเงื่อนไขเหมือนใบนี้ สำหรับลูกค้ารายอื่น'}
+            onClick={() => navigate(`/quotations/new?copyFrom=${quotation.id}`)}
+          >
+            <Icon name="copy" size={16} />
+          </Button>
+        ) : null}
         subtitle={customerName
           ? `${customerName}${projectName ? ` · ${projectName}` : ''}`
           : 'เริ่มจากเลือกลูกค้าและโครงการด้านล่าง'}
@@ -1977,30 +1972,15 @@ export function QuotationEditorPage({ user, showToast }) {
         actions={(
           <>
             {quotation ? (
-              <>
-                {/* Bug fix (2026-09-16): `loading` shows the busy spinner on whichever format was
-                    actually clicked; `disabled` (with no spinner) covers the OTHER button while a
-                    flush+download is already running, so a second click can never fire a second,
-                    overlapping save+download. Same Tailwind Button primitive as everywhere else —
-                    no layout shift, and the spinner is an overlay (Button.jsx), so the header
-                    action bar's width/height on mobile is unaffected either way. */}
-                <Button
-                  variant="secondary"
-                  loading={downloading === 'pdf'}
-                  disabled={downloading != null && downloading !== 'pdf'}
-                  onClick={() => handleDownload('pdf')}
-                >
-                  ดาวน์โหลด PDF
-                </Button>
-                <Button
-                  variant="secondary"
-                  loading={downloading === 'xlsx'}
-                  disabled={downloading != null && downloading !== 'xlsx'}
-                  onClick={() => handleDownload('xlsx')}
-                >
-                  ดาวน์โหลด Excel
-                </Button>
-              </>
+              <OverflowMenu
+                label="ดาวน์โหลด"
+                triggerLabel={downloading ? 'กำลังดาวน์โหลด…' : 'ดาวน์โหลด'}
+                triggerIcon="download"
+                items={[
+                  { key: 'pdf', label: 'PDF', icon: 'fileText', onSelect: () => handleDownload('pdf'), disabled: downloading != null, disabledReason: 'กำลังดาวน์โหลด…' },
+                  { key: 'xlsx', label: 'Excel', icon: 'fileText', onSelect: () => handleDownload('xlsx'), disabled: downloading != null, disabledReason: 'กำลังดาวน์โหลด…' },
+                ]}
+              />
             ) : null}
             {quotation && canSubmitDealQuotation(user, quotation) ? (
               // GLA-123 slice S2: submit is now LIVE for a PRICING_REQUEST-origin quotation too —
@@ -2044,34 +2024,6 @@ export function QuotationEditorPage({ user, showToast }) {
             ) : null}
             {quotation && canReviseDealQuotation(user, quotation) ? (
               <Button variant="secondary" loading={reviseMutation.isPending} onClick={() => reviseMutation.mutate()}>สร้างฉบับแก้ไข</Button>
-            ) : null}
-            {/* GLA-74 part 1 ("สร้างจากใบเดิม" / สั่งเหมือนเดิม) — beside "สร้างฉบับแก้ไข", same
-                gate (canReviseDealQuotation: APPROVED + edit access — the rule is identical, only
-                the resulting document's relationship to this one differs), so both actions are
-                offered together on an approved document. */}
-            {quotation && canReviseDealQuotation(user, quotation) ? (
-              <Button variant="secondary" onClick={() => setReorderConfirmOpen(true)}>สร้างจากใบเดิม (สั่งเหมือนเดิม)</Button>
-            ) : null}
-            {/* "คัดลอกเป็นใบใหม่" — the third way to make another document from this one, beside the
-                two above and before the destructive action: a revision keeps this number (-1 → -2),
-                a reorder stays on this deal and this customer, and this opens a NEW quotation for
-                another customer on a new deal. A navigation only — nothing is created until the
-                copy is saved, and this quotation is never touched — which is why, unlike its two
-                neighbours, it is offered in every status.
-                Disabled while this draft has unsaved edits (or a save is on the wire): the copy is
-                made from what is SAVED, so it would silently lack them, and leaving the page would
-                lose them here too. The title says why, as a disabled action on this page does. */}
-            {quotation && canCopyDealQuotation(user, quotation) ? (
-              <Button
-                variant="secondary"
-                disabled={dirty || saving}
-                title={dirty || saving
-                  ? 'บันทึกร่างก่อน จึงจะคัดลอกได้ (คัดลอกจากฉบับที่บันทึกแล้ว)'
-                  : 'เปิดใบเสนอราคาใบใหม่ที่มีรายการและเงื่อนไขเหมือนใบนี้ สำหรับลูกค้ารายอื่น'}
-                onClick={() => navigate(`/quotations/new?copyFrom=${quotation.id}`)}
-              >
-                คัดลอกเป็นใบใหม่
-              </Button>
             ) : null}
             {quotation && canCancelDealQuotation(user, quotation) ? (
               <Button variant="danger" onClick={() => setCancelConfirmOpen(true)}>ยกเลิกร่าง</Button>
@@ -3191,37 +3143,6 @@ export function QuotationEditorPage({ user, showToast }) {
         onConfirm={() => applyOnePriceModeToTheDocument(leaveMixedConfirm.priceMode)}
         onCancel={() => setLeaveMixedConfirm(null)}
       />
-      {/* GLA-74 part 1 ("สร้างจากใบเดิม" / สั่งเหมือนเดิม) — explains up front that this is NOT a
-          revision: the new draft is a completely separate document the rep can freely edit before
-          submitting again.
-          ⚠️ Owner ruling 2026-09-19: this copy USED TO say the original stays approved and
-          untouched, full stop — that is no longer true once ANY newer quotation in this deal
-          (not only the one this dialog is about to create) is approved. A deal may hold only ONE
-          APPROVED DEAL_DIRECT quotation, so the wording now says the original stays approved
-          only until SOME quotation in the deal is approved next, at which point THAT one replaces
-          it (DealQuotationService#approve's same-ticket sweep, which supersedes every OTHER
-          APPROVED sibling regardless of which one triggered it). */}
-      {reorderConfirmOpen ? (
-        <Modal
-          title="สร้างใบเสนอราคาจากใบเดิม"
-          onClose={() => setReorderConfirmOpen(false)}
-          footer={(
-            <>
-              <Button variant="secondary" onClick={() => setReorderConfirmOpen(false)}>ปิด</Button>
-              <Button variant="primary" loading={reorderMutation.isPending} onClick={() => reorderMutation.mutate()}>
-                ยืนยันสร้าง
-              </Button>
-            </>
-          )}
-        >
-          <p>
-            ระบบจะคัดลอกรายการสินค้าและเงื่อนไขทั้งหมดจากใบเสนอราคา {quotation?.number} ไปเป็นร่างใบเสนอราคาใบใหม่
-            (เลขที่ใหม่) ที่แก้ไขได้อย่างอิสระ — <strong>ดีลนี้มีใบเสนอราคาที่อนุมัติแล้วได้เพียงใบเดียวในเวลาเดียวกัน
-            ใบเสนอราคาเดิมจะยังคงสถานะอนุมัติแล้ว จนกว่าใบเสนอราคาใบใดใบหนึ่งในดีลนี้ (รวมถึงใบใหม่นี้) จะได้รับอนุมัติ
-            ซึ่งจะเข้ามาแทนที่ใบที่อนุมัติอยู่ในปัจจุบันทันที</strong>
-          </p>
-        </Modal>
-      ) : null}
     </PageStack>
   );
 }
