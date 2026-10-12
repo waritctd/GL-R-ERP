@@ -436,7 +436,6 @@ export function PricingRequestCreateModal({
   const [salesRepDisplayId, setSalesRepDisplayId] = useState(() => (
     initialSummary?.salesRepDisplayId != null ? String(initialSummary.salesRepDisplayId) : ''
   ));
-  const [deptCode, setDeptCode] = useState(() => initialSummary?.deptCode ?? '');
   // unitCode doubles as the ผู้ออกแบบ picker's target, exactly as on the direct-deal form (V173) —
   // a designer pick is a frontend convenience that writes this SAME free-text field, never a
   // separate column; the designer's own name never reaches it, only the code does.
@@ -647,7 +646,10 @@ export function PricingRequestCreateModal({
       validityDays: validityDays !== '' ? Number(validityDays) : null,
       printedByDisplayId: printedByDisplayId !== '' ? Number(printedByDisplayId) : null,
       salesRepDisplayId: salesRepDisplayId !== '' ? Number(salesRepDisplayId) : null,
-      deptCode: deptCode.trim() || null,
+      // ฝ่าย has no field any more (owner, 2026-10-06: "remove ฝ่าย field completely"), on this form
+      // or on the quotation. Always null, so a value an older draft still carries is cleared by the
+      // next save instead of riding along unseen.
+      deptCode: null,
       unitCode: unitCode.trim() || null,
       omitContactHonorific,
       items: items.map(pricingRequestItemInputFromRow),
@@ -951,10 +953,6 @@ export function PricingRequestCreateModal({
                 <option value="">(ใช้ชื่อผู้สร้างคำขอราคา)</option>
                 {displayNameOptions.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
               </select>
-            </label>
-            <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
-              ฝ่าย
-              <input value={deptCode} onChange={(e) => setDeptCode(e.target.value)} placeholder="ไม่บังคับ" />
             </label>
             <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
               หน่วยงาน / รหัสผู้ออกแบบ

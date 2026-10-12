@@ -346,6 +346,32 @@ describe('QuotationDocumentView ผู้สั่งซื้อ signature slot
     expect(getByText('ผู้สั่งซื้อ')).not.toBeNull();
     expect(container.textContent).toContain('-');
   });
+
+  // Owner, 2026-10-06: the EDITOR's field for this name is now labelled ผู้ติดต่อ, "but the pdf
+  // still render as ผู้สั่งซื้อ". This view is the document as the customer receives it, so it is
+  // on the PDF's side of that line — its heading must not follow the editor's. Wrong-way-round:
+  // the new word is asserted ABSENT, so a tidy-minded "make the two agree" edit goes red here.
+  it('still heads the slot ผู้สั่งซื้อ — the editor\'s ผู้ติดต่อ label never reaches the document', () => {
+    const { getByText } = render(
+      <QuotationDocumentView quotation={docQuotation({ orderedByName: 'คุณวิชัย มั่นคง' })} />,
+    );
+    const signatures = within(getByText('ผู้เกี่ยวข้อง').closest('section'));
+    expect(signatures.getByText('ผู้สั่งซื้อ')).not.toBeNull();
+    expect(signatures.queryByText('ผู้ติดต่อ')).toBeNull();
+    expect(signatures.getByText('คุณวิชัย มั่นคง')).not.toBeNull();
+  });
+
+  it('the English document keeps "Ordered by" for the same slot', () => {
+    const { getByText } = render(
+      <QuotationDocumentView
+        quotation={docQuotation({ documentLanguage: 'EN', currency: 'USD', orderedByName: 'Mr. Wichai' })}
+      />,
+    );
+    const signatures = within(getByText('ผู้เกี่ยวข้อง').closest('section'));
+    expect(signatures.getByText('Ordered by')).not.toBeNull();
+    expect(signatures.queryByText('ผู้ติดต่อ')).toBeNull();
+    expect(signatures.getByText('Mr. Wichai')).not.toBeNull();
+  });
 });
 
 // ── Quotation v3 / v3b rows and the English form (owner feedback pass 3, 2026-09-11) ────────────
@@ -402,6 +428,39 @@ describe('QuotationDocumentView — PLAIN / ADJUSTMENT rows, like the printed fo
     const subLine = [...tileRow.querySelectorAll('span')].find((el) => el.textContent.startsWith('(ราคาพิเศษ'));
     expect(subLine.tagName).toBe('SPAN');
     expect(tileRow.querySelector('div')).toBeNull();
+  });
+
+  // Mixed price modes (V192.5; sales feedback #14, owner 2026-10-06): on a MIXED document each tile
+  // row was priced in its own mode, and its ส่วนลด cell says so — exactly what
+  // DealQuotationRenderAdapter#discountLabel prints, so the page and the PDF agree row by row.
+  // Wrong-way-round built in: read by the DOCUMENT's mode ("MIXED" is none of the three) every
+  // one of these rows would fall through to the percent rule and the two พิเศษ rows would say Net.
+  it('a MIXED document labels each tile row by ITS mode: 20%, พิเศษ, พิเศษ, Net — and prints the sub-line on the ราคาพิเศษ row only', () => {
+    const tile = (id, seq, extra) => ({
+      id, seq, lineType: 'TILE', descriptionLine: `Row ${seq}`, sizeLine: '60x120', calculationLine: '(calc)',
+      specialPriceLine: null, quantity: 10, unit: 'แผ่น', piecesFinal: 10, unitPrice: 1210.25, ...extra,
+    });
+    const mixed = {
+      ...quotation, docStatus: 'APPROVED', priceMode: 'MIXED',
+      items: [
+        tile(31, 1, { priceMode: 'NET', discountPct: 20, netUnitPrice: 968.2, lineAmount: 9682 }),
+        tile(32, 2, {
+          priceMode: 'SPECIAL_SQM', netUnitPrice: 531.16, lineAmount: 5311.6,
+          specialPriceLine: '(ราคาพิเศษ 790 บาท/ตรม ราคารวมภาษีมูลค่าเพิ่ม)',
+        }),
+        tile(33, 3, { priceMode: 'DIRECT_NET', netUnitPrice: 531.16, lineAmount: 5311.6 }),
+        tile(34, 4, { priceMode: 'DIRECT_NET', netUnitPrice: 1210.25, lineAmount: 12102.5 }),
+      ],
+    };
+    const { container } = render(<QuotationDocumentView quotation={mixed} />);
+    const rows = [...container.querySelectorAll('.data-row[data-line-type="TILE"]')];
+
+    expect(rows.map((tileRow) => cell(tileRow, 'ส่วนลด'))).toEqual(['20%', 'พิเศษ', 'พิเศษ', 'Net']);
+    const withSubLine = rows.map((tileRow) => [...tileRow.querySelectorAll('span')]
+      .some((el) => el.textContent.startsWith('(ราคาพิเศษ')));
+    expect(withSubLine).toEqual([false, true, false, false]);
+    // The engine's own word for the document's setting never reaches the customer-facing view.
+    expect(container.textContent).not.toMatch(/MIXED|SPECIAL_SQM|DIRECT_NET/);
   });
 });
 
@@ -546,5 +605,38 @@ describe('QuotationDocumentView — V179 ผู้พิมพ์/พนัก�
     })} />);
     expect(container.textContent).toContain('Printed by');
     expect(container.textContent).toContain('จินตนา');
+  });
+});
+
+// Sales feedback #5 (2026-10-06, V192.1) — "ไม่แสดงชื่อโครงการในใบเสนอราคา". The printed document
+// drops its "Project : …" line (DealQuotationRenderAdapter hands the renderer no project name).
+// This screen is the INTERNAL view of the same document: the approver still needs to know which
+// project they are approving, so the name stays — with the fact that it will not print said in
+// words beside it, so screen and paper are never silently different.
+describe('QuotationDocumentView — ไม่แสดงชื่อโครงการ (sales feedback #5, 2026-10-06)', () => {
+  it('an ordinary document names its project with no note', () => {
+    const { getByText, queryByText } = render(
+      <QuotationDocumentView quotation={docQuotation({ projectName: 'บ้านเอกมัย ซอย 5' })} />,
+    );
+    expect(getByText('บ้านเอกมัย ซอย 5')).not.toBeNull();
+    expect(queryByText(/ไม่แสดงในใบเสนอราคา/)).toBeNull();
+  });
+
+  it('a document that hides its project still names it here, and says it will not print', () => {
+    const { getByText, getByTestId } = render(
+      <QuotationDocumentView quotation={docQuotation({ projectName: 'บ้านเอกมัย ซอย 5', hideProjectName: true })} />,
+    );
+    expect(getByText('บ้านเอกมัย ซอย 5')).not.toBeNull();
+    // In words, next to the name it qualifies — DESIGN.md §2.7: a state is text, never colour alone.
+    const note = getByTestId('doc-project-hidden');
+    expect(note.textContent).toContain('ไม่แสดงในใบเสนอราคา');
+    expect(note.closest('div')).toBe(getByText('บ้านเอกมัย ซอย 5').closest('div'));
+  });
+
+  it('says nothing about hiding when there is no project name to hide', () => {
+    const { queryByTestId } = render(
+      <QuotationDocumentView quotation={docQuotation({ projectName: null, hideProjectName: true })} />,
+    );
+    expect(queryByTestId('doc-project-hidden')).toBeNull();
   });
 });

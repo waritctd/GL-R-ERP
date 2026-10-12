@@ -21,8 +21,8 @@ import {
   LINE_TYPE_ADJUSTMENT,
   LINE_TYPE_PLAIN,
   LINE_TYPE_TILE,
-  listPricePerSqmIncVat,
   parseSizeText,
+  perSqmIncVatFromPerPiece,
   piecesPerSqmFromSqmPerPiece,
   quotationItemMissingSummary,
   remainderModeLabel,
@@ -374,9 +374,11 @@ describe('validateQuotationItem (#M4, owner ruling 2026-09-10)', () => {
     expect(validateQuotationItem(completeItem({ piecesPerBox: 0 }))).toEqual({ piecesPerBox: 'กรุณาระบุแผ่น/กล่อง' });
   });
 
-  it('flags a missing or non-positive ราคา/หน่วย', () => {
-    expect(validateQuotationItem(completeItem({ unitPrice: null }))).toEqual({ unitPrice: 'กรุณาระบุราคา/หน่วย' });
-    expect(validateQuotationItem(completeItem({ unitPrice: 0 }))).toEqual({ unitPrice: 'กรุณาระบุราคา/หน่วย' });
+  // The box this names on a Thai tile row is ราคา/ตร.ม. since sales feedback #1 (2026-10-06); the
+  // error KEY is still `unitPrice` (it names the box, `price-N`). See quotationPerSqmPrice.test.jsx.
+  it('flags a missing or non-positive price', () => {
+    expect(validateQuotationItem(completeItem({ unitPrice: null }))).toEqual({ unitPrice: 'กรุณาระบุราคา/ตร.ม.' });
+    expect(validateQuotationItem(completeItem({ unitPrice: 0 }))).toEqual({ unitPrice: 'กรุณาระบุราคา/ตร.ม.' });
   });
 
   it('AREA mode requires a positive พื้นที่, ignoring piecesInput entirely', () => {
@@ -569,29 +571,29 @@ describe('piecesPerSqmFromSqmPerPiece / sqmPerPieceFromPiecesPerSqm (แผ่�
   });
 });
 
-describe('listPricePerSqmIncVat (Thai SPECIAL_SQM ราคาตั้ง shown per ตร.ม., owner feedback 2026-09-14)', () => {
+describe('perSqmIncVatFromPerPiece (Thai SPECIAL_SQM ราคาตั้ง shown per ตร.ม., owner feedback 2026-09-14)', () => {
   // The four real-document figures the owner gave, each round2(unitPrice x piecesPerSqm x 1.07)
   // where piecesPerSqm is piecesPerSqmFromSqmPerPiece(sqmPerPiece) -- the SAME reciprocal exercised
   // above, never a second one.
   it('reproduces all four owner figures exactly', () => {
-    expect(listPricePerSqmIncVat(1299.0, 0.72)).toBe(1932.0);
-    expect(listPricePerSqmIncVat(881.46, 0.36)).toBe(2621.99);
-    expect(listPricePerSqmIncVat(843.14, 0.36)).toBe(2508.0);
-    expect(listPricePerSqmIncVat(900.63, 0.36)).toBe(2679.01);
+    expect(perSqmIncVatFromPerPiece(1299.0, 0.72)).toBe(1932.0);
+    expect(perSqmIncVatFromPerPiece(881.46, 0.36)).toBe(2621.99);
+    expect(perSqmIncVatFromPerPiece(843.14, 0.36)).toBe(2508.0);
+    expect(perSqmIncVatFromPerPiece(900.63, 0.36)).toBe(2679.01);
   });
 
   it('returns null when unitPrice is missing, zero or negative', () => {
-    expect(listPricePerSqmIncVat(null, 0.36)).toBeNull();
-    expect(listPricePerSqmIncVat('', 0.36)).toBeNull();
-    expect(listPricePerSqmIncVat(0, 0.36)).toBeNull();
-    expect(listPricePerSqmIncVat(-1, 0.36)).toBeNull();
+    expect(perSqmIncVatFromPerPiece(null, 0.36)).toBeNull();
+    expect(perSqmIncVatFromPerPiece('', 0.36)).toBeNull();
+    expect(perSqmIncVatFromPerPiece(0, 0.36)).toBeNull();
+    expect(perSqmIncVatFromPerPiece(-1, 0.36)).toBeNull();
   });
 
   it('returns null when sqmPerPiece is missing, zero or negative', () => {
-    expect(listPricePerSqmIncVat(1299.0, null)).toBeNull();
-    expect(listPricePerSqmIncVat(1299.0, '')).toBeNull();
-    expect(listPricePerSqmIncVat(1299.0, 0)).toBeNull();
-    expect(listPricePerSqmIncVat(1299.0, -0.36)).toBeNull();
+    expect(perSqmIncVatFromPerPiece(1299.0, null)).toBeNull();
+    expect(perSqmIncVatFromPerPiece(1299.0, '')).toBeNull();
+    expect(perSqmIncVatFromPerPiece(1299.0, 0)).toBeNull();
+    expect(perSqmIncVatFromPerPiece(1299.0, -0.36)).toBeNull();
   });
 });
 
@@ -1266,7 +1268,7 @@ describe('v3 row validation', () => {
     expect(meta.validateQuotationItem({ ...perSqm, piecesPerBox: '' }, 'SPECIAL_SQM', 'EN').piecesPerBox).toBeTruthy();
     expect(meta.validateQuotationItem({ ...perSqm, sqmPerBox: 0.1234567 }, 'SPECIAL_SQM', 'EN').sqmPerBox).toBe('ทศนิยมได้ไม่เกิน 6 ตำแหน่ง');
     // The same row in THAI ราคาพิเศษ still needs its list price, and never asks for ตร.ม./กล่อง.
-    expect(meta.validateQuotationItem({ ...perSqm, sqmPerBox: null }, 'SPECIAL_SQM', 'TH')).toEqual({ unitPrice: 'กรุณาระบุราคาตั้ง (บาท/แผ่น)' });
+    expect(meta.validateQuotationItem({ ...perSqm, sqmPerBox: null }, 'SPECIAL_SQM', 'TH')).toEqual({ unitPrice: 'กรุณาระบุราคาตั้ง (บาท/ตร.ม.)' });
     expect(meta.quotationItemMissingSummary({ sqmPerBox: 'x', specialPriceSqm: 'y' }, 0)).toBe('รายการที่ 1: ขาด ตร.ม./กล่อง, ราคาต่อ ตร.ม.');
   });
 
@@ -1323,8 +1325,8 @@ describe('v3 row validation', () => {
     expect(meta.validateQuotationItem({ ...tile, specialPriceSqm: 1350.125 }, 'SPECIAL_SQM').specialPriceSqm).toBe('ทศนิยมได้ไม่เกิน 2 ตำแหน่ง');
   });
 
-  it('DIRECT_NET needs the net per piece and lets the list price stay blank', () => {
-    expect(meta.validateQuotationItem({ ...tile, unitPrice: '', directNetPrice: '' }, 'DIRECT_NET')).toEqual({ directNetPrice: 'กรุณาระบุราคาสุทธิ/แผ่น' });
+  it('DIRECT_NET needs the net and lets the list price stay blank', () => {
+    expect(meta.validateQuotationItem({ ...tile, unitPrice: '', directNetPrice: '' }, 'DIRECT_NET')).toEqual({ directNetPrice: 'กรุณาระบุราคาสุทธิ (บาท/ตร.ม.)' });
     expect(meta.validateQuotationItem({ ...tile, unitPrice: '', directNetPrice: 500 }, 'DIRECT_NET')).toEqual({});
   });
 
@@ -1420,8 +1422,12 @@ describe('buildQuotationChecklist', () => {
     //
     // Owner-directed reversal of F2/V167 (2026-09-26): 'contact' is GONE from this set —
     // ผู้สั่งซื้อ is now a single optional free-text field with nothing left to block on.
+    //
+    // Owner ruling 2026-10-11: orderedByEmail joins the set — the server refuses a malformed
+    // ผู้ติดต่อ Email with a 400 on every save, so the editor says so before the click. (A blank
+    // one is fine: the field is optional, and there is no "missing" check for it at all.)
     expect([...meta.QUOTATION_BLOCKING_CHECKS].sort()).toEqual(
-      ['creditDaysInvalid', 'customer', 'items', 'locationLabels', 'priceModeLanguage', 'project'],
+      ['creditDaysInvalid', 'customer', 'items', 'locationLabels', 'orderedByEmail', 'priceModeLanguage', 'project'],
     );
     // Wrong-way-round: none of the header fields a customer might simply not have is blocking,
     // and the blank-creditDays reminder is a warning, not a blocker (fix 6).
@@ -1500,7 +1506,7 @@ describe('buildQuotationChecklist', () => {
       adjustmentErrorsByRow: [{ adjustmentPct: 'กรุณาระบุเปอร์เซ็นต์ส่วนลด' }],
     });
     expect(entries.map((e) => [e.blocking, e.targetId, e.message])).toEqual([
-      [true, 'thickness-0', 'รายการที่ 1: ขาด ความหนา, แผ่น/ตร.ม., แผ่น/กล่อง, ราคา/หน่วย, จำนวน (พื้นที่)'],
+      [true, 'thickness-0', 'รายการที่ 1: ขาด ความหนา, แผ่น/ตร.ม., แผ่น/กล่อง, ราคา, จำนวน (พื้นที่)'],
       [true, 'plain-unit-1', 'รายการที่ 2: ขาด หน่วย'],
       [true, 'adj-pct-2', 'รายการที่ 3: ขาด เปอร์เซ็นต์ส่วนลด'],
     ]);

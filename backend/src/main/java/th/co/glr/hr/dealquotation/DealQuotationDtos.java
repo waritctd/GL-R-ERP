@@ -211,7 +211,26 @@ public final class DealQuotationDtos {
          * manual, OPTIONAL field a sales rep types in the editor ({@code sales.quotation.ordered_by_name},
          * V192). Null/blank (the default, and every pre-V192 row) prints the dotted placeholder —
          * the customer signs on paper — exactly like every other signature slot with nothing set. */
-        String orderedByName
+        String orderedByName,
+        /** Sales feedback #5 (2026-10-06, V192.1) — "ไม่แสดงชื่อโครงการในใบเสนอราคา"
+         * ({@code sales.quotation.hide_project_name}). When {@code true},
+         * {@code DealQuotationRenderAdapter} hands the renderer no project name, so the printed
+         * document carries no "Project : …" line. {@link #projectName} itself is untouched — the
+         * editor, the เอกสาร register and the deal still read it; only the customer's copy loses
+         * it. {@code false} (the column default, and every pre-V192.1 row) prints the project,
+         * exactly as before. Set per document by the rep; a revision / reorder clone inherits it. */
+        boolean hideProjectName,
+        /** V192.3 — how to reach the person named in {@link #orderedByName} (the editor's
+         * ผู้ติดต่อ): {@code sales.quotation.ordered_by_phone}. A SALES RECORD only — shown on the
+         * quotation's details and NEVER printed: {@code DealQuotationRenderAdapter} does not read
+         * it. Not {@link #contactPhone}, which is the customer-master contact snapshot the document
+         * header prints. Null when nobody typed one (every pre-V192.3 row). A revision / reorder
+         * clone inherits it. */
+        String orderedByPhone,
+        /** V192.3 — the email beside {@link #orderedByPhone}
+         * ({@code sales.quotation.ordered_by_email}); same record-only, never-printed contract, and
+         * likewise not {@link #contactEmail}. */
+        String orderedByEmail
     ) {
         /** This DTO carrying {@link #removedCeoItems} — same device as {@code
          * DealQuotationItemDto#withCeoComparison} (appended field written after the shorter
@@ -232,7 +251,8 @@ public final class DealQuotationDtos {
                 salesRepDisplayPhone, omitContactHonorific, fullPaymentTerm, derivedFromQuotationId,
                 derivedFromQuotationNumber, derivedFromQuotationStatus, items, createdAt, updatedAt, origin,
                 pricingRequestId, priceModeChangedFromCeo, ceoPriceMode, pricingRequestCode,
-                itemsRemovedFromCeoCount, removedItems, orderedByName);
+                itemsRemovedFromCeoCount, removedItems, orderedByName, hideProjectName,
+                orderedByPhone, orderedByEmail);
         }
 
         /** This DTO carrying {@code value} as its {@link #orderedByName} — same appended-field
@@ -252,7 +272,30 @@ public final class DealQuotationDtos {
                 salesRepDisplayPhone, omitContactHonorific, fullPaymentTerm, derivedFromQuotationId,
                 derivedFromQuotationNumber, derivedFromQuotationStatus, items, createdAt, updatedAt, origin,
                 pricingRequestId, priceModeChangedFromCeo, ceoPriceMode, pricingRequestCode,
-                itemsRemovedFromCeoCount, removedCeoItems, value);
+                itemsRemovedFromCeoCount, removedCeoItems, value, hideProjectName,
+                orderedByPhone, orderedByEmail);
+        }
+
+        /** This DTO carrying {@code value} as its {@link #hideProjectName} — the same
+         * appended-field device as {@link #withOrderedByName}: a test built from an older
+         * constructor shape (none of which know this field) sets it here rather than repeating the
+         * canonical constructor by hand. Only tests call it; {@code DealQuotationRepository}'s
+         * mapper passes the column straight to the canonical constructor. */
+        public DealQuotationDto withHideProjectName(boolean value) {
+            return new DealQuotationDto(id, number, ticketId, docStatus, revisionNo, parentQuotationId,
+                createdById, createdByName, createdByNameEn, salesRepId, salesRepName, salesRepNameEn,
+                salesRepPhone, submittedAt, approvedById, approvedByName, approvedByNameEn, approvedAt,
+                approvalNote, quotationDate, customerName, customerAddress, customerTaxId, customerPhone,
+                contactId, contactName, contactPhone, contactEmail, projectName, deptCode, unitCode, offerDate,
+                depositPercent, remainderMode, creditDays, validityDays, validityDate, validityMode,
+                validityUntil, customerNotes, priceMode, documentLanguage, subtotalAmount, vatAmount,
+                grandTotal, currency, approverHasSignature, printedByDisplayId, printedByDisplayName,
+                printedByDisplayNameEn, salesRepDisplayId, salesRepDisplayName, salesRepDisplayNameEn,
+                salesRepDisplayPhone, omitContactHonorific, fullPaymentTerm, derivedFromQuotationId,
+                derivedFromQuotationNumber, derivedFromQuotationStatus, items, createdAt, updatedAt, origin,
+                pricingRequestId, priceModeChangedFromCeo, ceoPriceMode, pricingRequestCode,
+                itemsRemovedFromCeoCount, removedCeoItems, orderedByName, value,
+                orderedByPhone, orderedByEmail);
         }
 
         /** The pre-M4(c) shape (no {@link #itemsRemovedFromCeoCount}) — kept so every existing
@@ -289,7 +332,7 @@ public final class DealQuotationDtos {
                 salesRepDisplayId, salesRepDisplayName, salesRepDisplayNameEn, salesRepDisplayPhone,
                 omitContactHonorific, fullPaymentTerm, derivedFromQuotationId, derivedFromQuotationNumber,
                 derivedFromQuotationStatus, items, createdAt, updatedAt, origin, pricingRequestId,
-                priceModeChangedFromCeo, ceoPriceMode, pricingRequestCode, 0, List.of(), null);
+                priceModeChangedFromCeo, ceoPriceMode, pricingRequestCode, 0, List.of(), null, false, null, null);
         }
 
         /** The pre-GLA-123 shape (no {@link #origin}/{@link #pricingRequestId}/CEO-comparison
@@ -606,8 +649,42 @@ public final class DealQuotationDtos {
          * shows. Non-null exactly when this row is linked to a decision item (i.e. the one signal
          * that replaces the old boolean "priceLocked" flag — a {@code DEAL_DIRECT} row or an
          * unlinked TILE row always reads null here). */
-        BigDecimal ceoNetUnitPrice
+        BigDecimal ceoNetUnitPrice,
+        /** Sales feedback #1 (2026-10-06, V192.2) — the list price (ราคาตั้ง) exactly as the rep
+         * typed it: บาท per ตร.ม. INCLUDING VAT ({@code sales.quotation_item.list_price_sqm}).
+         * {@link #unitPrice} is the per-แผ่น figure the server derived from it, and is what the
+         * document prints. Null on a row whose list price was stated per แผ่น — every pre-V192.2 row,
+         * every English-document row, every row created from a pricing request. Served so the
+         * editor can show the rep the figure they typed rather than one recovered from
+         * {@link #unitPrice}, which does not round-trip. */
+        BigDecimal listPriceSqm,
+        /** The same for {@code DIRECT_NET} mode's net price (ราคาสุทธิ): บาท per ตร.ม. INCLUDING
+         * VAT as typed ({@code sales.quotation_item.direct_net_price_sqm}); {@link #netUnitPrice}
+         * is the per-แผ่น figure derived from it. Null in every other mode and on every row whose
+         * net was stated per แผ่น. */
+        BigDecimal directNetPriceSqm,
+        /** This row's OWN price mode — "NET" | "SPECIAL_SQM" | "DIRECT_NET" — as stored in
+         * {@code sales.quotation_item.price_mode} (V192.5; sales feedback #14, owner 2026-10-06).
+         * Non-null ONLY on a TILE row of a document whose {@code priceMode} is {@code MIXED}; on
+         * every other row it is null and the document's mode applies
+         * ({@code WastageCalculator#rowPriceMode} is the one rule). */
+        String priceMode
     ) {
+        /** This item carrying {@code value} as its own {@link #priceMode} — the same appended-field
+         * device as {@link #withSqmPerBox}. Every other copy method on this record passes it
+         * through, so the order they are chained in does not matter. */
+        public DealQuotationItemDto withPriceMode(String value) {
+            return new DealQuotationItemDto(id, seq, locationLabel, catalogPriceId, productCode, brand, model,
+                color, texture, sizeText, thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput,
+                wastageMode, wastageValue, piecesPerBox, unitPrice, discountPct, originCountry, leadTimeMinDays,
+                leadTimeMaxDays, itemNotes, piecesPerSqm, piecesBeforeWastage, piecesAfterWastage, piecesFinal,
+                boxes, netUnitPrice, lineAmount, descriptionLine, sizeLine, calculationLine, lineType, quantity,
+                unit, specialPriceSqm, adjustmentPct, adjustmentDeadline, specialPriceLine, adjustmentAmount,
+                hasPicture, picturePlacement, pictureUrl, sqmPerBox, roundToFullBox,
+                priceChangedFromCeo, ceoListUnitPrice, ceoDiscountPct, ceoSpecialPriceSqm, ceoDirectNetPrice,
+                ceoNetUnitPrice, listPriceSqm, directNetPriceSqm, value);
+        }
+
         /** The pre-GLA-123 canonical shape (no CEO-original/changed-flag fields) — kept so every
          * existing construction site (tests, mostly) compiles unchanged. Defaults every new field
          * to false/null, correct for every DEAL_DIRECT fixture (nothing before this feature was
@@ -633,7 +710,7 @@ public final class DealQuotationDtos {
                 lineAmount, descriptionLine, sizeLine, calculationLine, lineType, quantity, unit,
                 specialPriceSqm, adjustmentPct, adjustmentDeadline, specialPriceLine, adjustmentAmount,
                 hasPicture, picturePlacement, pictureUrl, sqmPerBox, roundToFullBox,
-                false, null, null, null, null, null);
+                false, null, null, null, null, null, null, null, null);
         }
 
         /** The pre-V176 canonical shape (no {@link #sqmPerBox}). */
@@ -694,7 +771,7 @@ public final class DealQuotationDtos {
                 unit, specialPriceSqm, adjustmentPct, adjustmentDeadline, specialPriceLine, adjustmentAmount,
                 hasPicture, picturePlacement, pictureUrl, value, roundToFullBox,
                 priceChangedFromCeo, ceoListUnitPrice, ceoDiscountPct, ceoSpecialPriceSqm, ceoDirectNetPrice,
-                ceoNetUnitPrice);
+                ceoNetUnitPrice, listPriceSqm, directNetPriceSqm, priceMode);
         }
 
         /** This item carrying {@code value} as its {@link #roundToFullBox} — same device as
@@ -709,7 +786,7 @@ public final class DealQuotationDtos {
                 unit, specialPriceSqm, adjustmentPct, adjustmentDeadline, specialPriceLine, adjustmentAmount,
                 hasPicture, picturePlacement, pictureUrl, sqmPerBox, value,
                 priceChangedFromCeo, ceoListUnitPrice, ceoDiscountPct, ceoSpecialPriceSqm, ceoDirectNetPrice,
-                ceoNetUnitPrice);
+                ceoNetUnitPrice, listPriceSqm, directNetPriceSqm, priceMode);
         }
 
         /** This item carrying the GLA-123 CEO-comparison fields — same device as
@@ -724,7 +801,24 @@ public final class DealQuotationDtos {
                 boxes, netUnitPrice, lineAmount, descriptionLine, sizeLine, calculationLine, lineType, quantity,
                 unit, specialPriceSqm, adjustmentPct, adjustmentDeadline, specialPriceLine, adjustmentAmount,
                 hasPicture, picturePlacement, pictureUrl, sqmPerBox, roundToFullBox,
-                changed, listUnitPrice, discountPct2, specialPriceSqm2, directNetPrice, netUnitPrice2);
+                changed, listUnitPrice, discountPct2, specialPriceSqm2, directNetPrice, netUnitPrice2,
+                listPriceSqm, directNetPriceSqm, priceMode);
+        }
+
+        /** This item carrying the per-ตร.ม. prices as the rep typed them (V192.2) — the same
+         * appended-field device as {@link #withSqmPerBox}, for the repository read path and the
+         * calculate-line preview. Every other copy method on this record passes both through, so
+         * the order they are chained in does not matter. */
+        public DealQuotationItemDto withPerSqmPrices(BigDecimal list, BigDecimal directNet) {
+            return new DealQuotationItemDto(id, seq, locationLabel, catalogPriceId, productCode, brand, model,
+                color, texture, sizeText, thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput,
+                wastageMode, wastageValue, piecesPerBox, unitPrice, discountPct, originCountry, leadTimeMinDays,
+                leadTimeMaxDays, itemNotes, piecesPerSqm, piecesBeforeWastage, piecesAfterWastage, piecesFinal,
+                boxes, netUnitPrice, lineAmount, descriptionLine, sizeLine, calculationLine, lineType, quantity,
+                unit, specialPriceSqm, adjustmentPct, adjustmentDeadline, specialPriceLine, adjustmentAmount,
+                hasPicture, picturePlacement, pictureUrl, sqmPerBox, roundToFullBox,
+                priceChangedFromCeo, ceoListUnitPrice, ceoDiscountPct, ceoSpecialPriceSqm, ceoDirectNetPrice,
+                ceoNetUnitPrice, list, directNet, priceMode);
         }
 
         /** This item with its picture fields set from the stored link (repository read path). */
@@ -740,7 +834,30 @@ public final class DealQuotationDtos {
                 has ? "/api/deal-quotations/" + quotationId + "/items/" + id + "/picture" : null, sqmPerBox,
                 roundToFullBox,
                 priceChangedFromCeo, ceoListUnitPrice, ceoDiscountPct, ceoSpecialPriceSqm, ceoDirectNetPrice,
-                ceoNetUnitPrice);
+                ceoNetUnitPrice, listPriceSqm, directNetPriceSqm, priceMode);
         }
     }
+
+    /**
+     * One เอกสารแนบ of a quotation, as {@code GET /api/deal-quotations/{id}/attachments} lists it.
+     * The bytes are never on this record. Only the file endpoint serves them.
+     *
+     * <p>{@code quotationId} and {@code quotationNumber} name the quotation the file is STORED on.
+     * When a revision lists a file stored on an earlier document of its chain, they name that
+     * earlier document and {@code inherited} is true. Such a file can be read from the revision
+     * and removed only from the document it is on. {@code uploadedById} and {@code uploadedByName}
+     * are null once that employee row is gone.
+     */
+    public record DealQuotationAttachmentDto(
+        long id,
+        long quotationId,
+        String quotationNumber,
+        String fileName,
+        String mimeType,
+        Long fileSize,
+        Long uploadedById,
+        String uploadedByName,
+        Instant uploadedAt,
+        boolean inherited
+    ) {}
 }

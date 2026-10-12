@@ -1,12 +1,23 @@
 import { Icon } from '../../components/common/Icon.jsx';
 
-/** Moves focus to a checklist entry's field. `scrollIntoView` first so the field is on screen
- * before the focus ring lands on it; optional-chained because jsdom does not implement it. */
+/** DESIGN.md §11/§19 — "Reduced motion is not optional." An explicit `behavior: 'smooth'` passed to
+ * `scrollIntoView` is NOT overridden by a CSS `scroll-behavior`, so the preference is read here.
+ * Guarded because jsdom has no `matchMedia` at all. */
+function prefersReducedMotion() {
+  return typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+/** Moves focus to a field by id — a checklist entry's field, and (sales feedback #3, 2026-10-06)
+ * the row or ตำแหน่ง a "เพิ่ม…" action has just added in QuotationEditorPage. `scrollIntoView`
+ * first so the field is on screen before the focus ring lands on it; optional-chained because
+ * jsdom does not implement it. */
 export function focusQuotationField(targetId) {
   if (!targetId || typeof document === 'undefined') return false;
   const element = document.getElementById(targetId);
   if (!element) return false;
-  element.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+  element.scrollIntoView?.({ block: 'center', behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
   element.focus({ preventScroll: true });
   return true;
 }
@@ -22,7 +33,7 @@ function Entry({ entry, tone }) {
           keeps each entry a real touch target on a phone. */}
       <button
         type="button"
-        className={`flex min-h-8 w-full items-center gap-2 rounded px-1 text-left text-xs mobile:min-h-[44px] hover:underline ${tone}`}
+        className={`flex min-h-8 w-full items-center gap-2 rounded border-0 bg-transparent px-1 text-left text-xs mobile:min-h-[44px] hover:underline ${tone}`}
         onClick={() => focusQuotationField(entry.targetId)}
       >
         <Icon name="chevronRight" size={12} className="shrink-0" />
@@ -54,16 +65,16 @@ export function QuotationChecklist({ entries }) {
   return (
     <section
       aria-label="ข้อมูลที่ยังไม่ครบ"
-      className="grid gap-3 rounded-md border border-warning-border bg-warning/10 p-3.5"
+      className="grid gap-3 rounded-md border border-warning-border bg-warning-bg-soft p-3.5"
       data-testid="quotation-checklist"
     >
       <strong className="text-sm text-text">ข้อมูลที่ยังไม่ครบ</strong>
       {blocking.length ? (
         // role="alert": these are the reasons the save/submit buttons are disabled.
         <div role="alert" className="grid gap-1">
-          <p className="m-0 text-2xs font-extrabold text-danger">ต้องกรอกก่อนบันทึกหรือส่งขออนุมัติ</p>
+          <p className="m-0 text-2xs font-extrabold text-danger-dark">ต้องกรอกก่อนบันทึกหรือส่งขออนุมัติ</p>
           <ul className="m-0 grid list-none gap-0.5 pl-0" data-testid="checklist-blocking">
-            {blocking.map((entry) => <Entry key={`${entry.check}-${entry.message}`} entry={entry} tone="text-danger" />)}
+            {blocking.map((entry) => <Entry key={`${entry.check}-${entry.message}`} entry={entry} tone="text-danger-dark" />)}
           </ul>
         </div>
       ) : null}
@@ -72,9 +83,9 @@ export function QuotationChecklist({ entries }) {
           {/* Deliberately NOT "…จะไม่ปรากฏในเอกสาร": the Thai F-SM-002 has no address line at all
               (only the English form prints one), so that promise would be false for the commonest
               document. The data still autofills this customer's next quotation. */}
-          <p className="m-0 text-2xs font-extrabold text-warning">ควรกรอก — ไม่บังคับ ยังบันทึกและส่งขออนุมัติได้</p>
+          <p className="m-0 text-2xs font-extrabold text-warning-dark">ควรกรอก — ไม่บังคับ ยังบันทึกและส่งขออนุมัติได้</p>
           <ul className="m-0 grid list-none gap-0.5 pl-0" data-testid="checklist-warnings">
-            {warnings.map((entry) => <Entry key={`${entry.check}-${entry.message}`} entry={entry} tone="text-warning" />)}
+            {warnings.map((entry) => <Entry key={`${entry.check}-${entry.message}`} entry={entry} tone="text-warning-dark" />)}
           </ul>
         </div>
       ) : null}

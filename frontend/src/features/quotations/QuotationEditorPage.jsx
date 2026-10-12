@@ -5,6 +5,7 @@ import { api } from '../../api/index.js';
 import { canAccessPath } from '../../app/permissions.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
+import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Panel, PageStack } from '../../components/common/Layout.jsx';
@@ -15,27 +16,32 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { downloadBlob } from '../../utils/download.js';
 import { addDaysIso, bangkokTodayIso } from '../../utils/format.js';
 import {
-  canApproveDealQuotation, canApproveDealQuotationNow, canCancelDealQuotation, canCreateDealQuotation,
+  canApproveDealQuotation, canApproveDealQuotationNow, canCancelDealQuotation, canCopyDealQuotation, canCreateDealQuotation,
   canCreateDealQuotationStandalone, canDecideDealQuotation, canEditDealQuotation,
   canReviseDealQuotation, canSubmitDealQuotation, DEPOSIT_PERCENT_PRESETS,
   availablePriceModes, PRICE_MODE_OPTIONS, adjustmentDescriptionPreview, buildQuotationChecklist, currencyForLanguage, DOCUMENT_LANGUAGE_OPTIONS,
   isEffectiveZeroDeposit,
   estimateAdjustmentAmount, formatQuotationMoney, hasSpecialPricing, isEnglishPerSqm, LINE_TYPE_ADJUSTMENT, LINE_TYPE_PLAIN, LINE_TYPE_TILE,
   lineTypeOf, priceModeForLanguage, rowHasPriceForPreview, rowsWithPricesCleared, validateAdjustment, vatRateForLanguage,
+  hasTypedPrice, usesListPriceSqm,
+  isMixedPriceMode, isPriceModeAvailable, mixedPriceModeAvailable, PRICE_MODE_MIXED, PRICE_MODE_MIXED_OPTION,
+  rowPriceMode, summarizeRowPriceModes,
   dealQuotationStatusLabel, isDealQuotationEditable, isDealQuotationReadOnlyViewer,
   duplicateLocationLabelGroupIds, emptyLocationGroupIds,
-  locationGroupsFromItems, newLocationGroupId,
+  newLocationGroupId,
   REMAINDER_MODE_OPTIONS, UNLABELLED_LOCATION_TEXT, validateQuotationItem, VALIDITY_DAYS_OPTIONS,
   VALIDITY_MODE_OPTIONS, FULL_PAYMENT_TERM_OPTIONS,
 } from './quotationMeta.js';
 import { CustomerDetailsFields } from './CustomerDetailsFields.jsx';
 import { DealCustomerCard } from './DealCustomerCard.jsx';
-import { QuotationDealFields } from './QuotationDealFields.jsx';
+import { OrderedByContactFields, ProjectNamePrintToggle, QuotationDealFields } from './QuotationDealFields.jsx';
 import { focusQuotationField, QuotationChecklist } from './QuotationChecklist.jsx';
 import { QuotationDocumentView } from './QuotationDocumentView.jsx';
+import { QuotationAttachmentsLink, QuotationAttachmentsPanel } from './QuotationAttachmentsPanel.jsx';
+import { copyFromQuotation, editorStateFromQuotation } from './quotationCopy.js';
 import {
   adjustmentInputFromRow, ceoOriginalPriceText, emptyAdjustment, emptyPlainItem, emptyQuotationItem,
-  itemInputFromRow, newItemClientId, QuotationItemRow, rowFromServerItem,
+  itemInputFromRow, newItemClientId, QuotationItemRow,
 } from './QuotationItemRow.jsx';
 import { QuotationPlainItemRow } from './QuotationPlainItemRow.jsx';
 import { QuotationAdjustmentRow } from './QuotationAdjustmentRow.jsx';
@@ -93,6 +99,33 @@ function pickCalculatedFields(source) {
   return result;
 }
 
+// V192.2 (sales feedback #1, 2026-10-06) — the ONE input-named field a calculate-line response may
+// write onto a row, and only in one situation.
+//
+// `unitPrice` is deliberately NOT in CALCULATED_ITEM_FIELDS: it is the box a rep types into on an
+// English tile row and on every สินค้า/บริการอื่น row, and #H2 is the bug of letting a response
+// overwrite one of those. But on a tile row whose ราคาตั้ง is typed per ตร.ม. (`listPriceSqm`),
+// nothing on the page writes `unitPrice` at all — it is the server's per-แผ่น derivation, and
+// this response is where it comes from. `requested` is the row exactly as it was SENT (the caller
+// has already discarded a response superseded by a newer edit), and it must be the ROW that is
+// asked, not the payload: a ราคาสุทธิ row with ราคาตั้ง left blank sends its net as `listPriceSqm`
+// too, and the list price derived for THAT must not appear in a box the rep left empty.
+function derivedUnitPrice(requested, documentLanguage, responseItem) {
+  if (!usesListPriceSqm(requested, documentLanguage) || !responseItem || !('unitPrice' in responseItem)) return {};
+  return { unitPrice: responseItem.unitPrice };
+}
+
+/** The money a preview fills in, blanked — for a row that has nothing honest to preview, or whose
+ * preview the server refused. On a row priced per ตร.ม. that includes the per-แผ่น list price,
+ * which is itself a derivation there (see derivedUnitPrice): left in place it would go on showing
+ * what the PREVIOUS price came to, under a box that now says something else. */
+function withoutPreviewedMoney(row) {
+  return {
+    netUnitPrice: null, lineAmount: null,
+    ...(hasTypedPrice(row.listPriceSqm) ? { unitPrice: null } : {}),
+  };
+}
+
 // `defaults` is readQuotationDefaults()'s own return value (quotationPrefs.js) -- the rep's last
 // saved terms, or null. Only ever seeds a BRAND-NEW quotation; an existing one always loads its
 // own stored values (see the init effect below), so a remembered default can never overwrite what
@@ -108,7 +141,7 @@ function emptyTerms(defaults = null) {
   // reading `defaults?.noDeposit` at all, in case a stale stored blob still has the key.)
   const noDeposit = false;
   return {
-    deptCode: '', unitCode: '', offerDate: todayIso(),
+    unitCode: '', offerDate: todayIso(),
     depositPercent,
     depositPercentCustom: depositPercent !== '' && !DEPOSIT_PERCENT_PRESETS.includes(Number(depositPercent)),
     noDeposit,
@@ -142,8 +175,26 @@ function emptyTerms(defaults = null) {
     // types deliberately, not a rep-wide preference, so a brand-new quotation always starts blank
     // -- the dotted signature line, exactly as before this feature.
     orderedByName: '',
+    // V192.3 — how to reach that person: a sales record, never printed. Not remembered either.
+    orderedByPhone: '',
+    orderedByEmail: '',
+    // Sales feedback #5 (2026-10-06, V192.1) — "ไม่แสดงชื่อโครงการในใบเสนอราคา". NOT remembered
+    // either: whether THIS document names its project is a fact about this customer and this
+    // deal, so a brand-new quotation always starts unticked (the project prints, as it always has).
+    hideProjectName: false,
   };
 }
+
+// The label and hint of the one free-text field that writes `terms.orderedByName`.
+//
+// Owner, 2026-10-06: "the field ผู้สั่งซื้อ make it name ผู้ติดต่อ instead but the pdf still render as
+// ผู้สั่งซื้อ". Sales know this person as the one they are in contact with; the printed form's fourth
+// signature slot keeps its own heading (QuotationRenderer#SIG_LABELS, and DOC_LABELS.orderedBy in
+// QuotationDocumentView for the on-screen copy) — neither is touched. Because the field's name and
+// the document's heading now DIFFER, the hint is what tells the rep they are the same slot: it
+// names the slot in the document's own word. Do not "tidy" the two into agreement.
+const ORDERED_BY_FIELD_LABEL = 'ผู้ติดต่อ';
+const ORDERED_BY_FIELD_HINT = 'ชื่อที่จะพิมพ์ในช่องลงนาม “ผู้สั่งซื้อ” ของใบเสนอราคา — ถ้าเว้นว่าง จะเป็นเส้นประให้ลูกค้าเซ็นเอง';
 
 // Owner ask 2026-09-10 ("inline deal creation", inline-deal-spec.md): the "ลูกค้าและโครงการ" card
 // state for a brand-new /quotations/new visit with no `?ticket=` -- nothing here exists on the
@@ -266,6 +317,58 @@ export function QuotationEditorPage({ user, showToast }) {
   // customer and project right here instead of being sent to /tickets first. Stable per-render
   // (not stateful): it only ever describes the URL the page was loaded with.
   const isInlineCreate = !id && !ticketIdParam;
+
+  // The rep's own remembered defaults / recent picks (quotationPrefs.js). Read ONCE, lazily, so a
+  // browser that throws on `localStorage` (private window, blocked site data) throws inside the
+  // module's own try/catch during the initial state computation and never on a later render.
+  const [storedDefaults] = useState(() => readQuotationDefaults(user?.id));
+  const [recentPicks, setRecentPicks] = useState(() => readRecentCatalogPicks(user?.id));
+
+  // ── "คัดลอกเป็นใบใหม่" — /quotations/new?copyFrom=<quotation id> ──────────────────────────────
+  // The same job quoted to another bidder: this is the ordinary new-quotation form, opened already
+  // filled in from a saved quotation. Nothing is written here; the first บันทึกร่าง is the ordinary
+  // inline create below, so the copy gets its own deal and its own number and the server never
+  // learns the two documents are related.
+  //
+  // Honoured on the inline-create entry only: a copy is FOR another customer, and a `?ticket=`
+  // visit already has its customer. The source is read through the same GET (and the same cache
+  // entry) as its own page, so the server decides whether this viewer may read it — and it is not
+  // even asked for a viewer who may not start a quotation, who gets the refusal further down.
+  const copyFromId = isInlineCreate ? searchParams.get('copyFrom') : null;
+  const copySourceAsked = Boolean(copyFromId) && canCreateDealQuotationStandalone(user);
+  const copySourceQuery = useQuery({
+    queryKey: queryKeys.dealQuotationDetail(copyFromId),
+    queryFn: () => api.dealQuotations.get(copyFromId).then((r) => r.quotation),
+    enabled: copySourceAsked,
+  });
+  const copySource = copySourceQuery.data ?? null;
+  // Asked for and not answered yet. `isPending`, not `isLoading`: a request that is held back
+  // (offline, or between retries while the tab is hidden) is not fetching, and it is not an answer
+  // either. A form shown then would be typed into and replaced the moment the source arrives.
+  const copySourcePending = copySourceAsked && copySourceQuery.isPending;
+  // What the form opens with — or null while the source is on its way, or when it may not be
+  // copied (canCopyDealQuotation: the SAME question the button on the source's page asks, because
+  // a hidden button does not stop a typed, bookmarked or shared link).
+  const copyState = useMemo(
+    () => (copySource && canCopyDealQuotation(user, copySource)
+      ? copyFromQuotation(copySource, emptyTerms(storedDefaults)) : null),
+    [copySource, user, storedDefaults],
+  );
+  // Why nothing was copied, when the link asked for a copy and there is none: the reason that is
+  // actually the case, never a guess. An unreadable or missing source says what the server said; a
+  // source of the wrong kind says which kind. (A viewer who may not create quotations at all is
+  // told so by the page's own refusal further down, so there is nothing to add here.)
+  let copyRefusal = null;
+  if (copyFromId && !copyState && !copySourcePending) {
+    if (copySourceQuery.isError) {
+      copyRefusal = copySourceQuery.error?.message || 'ไม่พบใบเสนอราคาที่จะคัดลอก';
+    } else if (copySource?.origin === 'PRICING_REQUEST') {
+      copyRefusal = `ใบเสนอราคา ${copySource.number} ออกจากคำขอราคา ราคาในใบเป็นราคาที่ CEO อนุมัติสำหรับคำขอนั้น จึงคัดลอกไปเสนอลูกค้ารายอื่นไม่ได้`;
+    } else if (copySource && copySource.origin !== 'DEAL_DIRECT') {
+      copyRefusal = `ใบเสนอราคา ${copySource.number} เป็นประเภทที่คัดลอกเป็นใบใหม่ไม่ได้`;
+    }
+  }
+
   const [dealForm, setDealForm] = useState(emptyDealForm);
   // Owner-directed reversal of F2 (2026-09-26): DealCustomerCard no longer reports a `contact` or
   // `omitContactHonorific` key at all (both removed along with QuotationContactPicker), so this
@@ -274,17 +377,12 @@ export function QuotationEditorPage({ user, showToast }) {
     setDealForm((prev) => ({ ...prev, ...patch }));
     setDirty(true);
   }
-  // Set once the inline flow's own `tickets.create` succeeds. Kept across a subsequent
-  // dealQuotations.create failure so a retry reuses this ticket instead of minting a second deal
-  // for the same customer/project (see handleInlineCreate below).
-  const [createdTicketId, setCreatedTicketId] = useState(null);
+  // The deals the inline flow's own `tickets.create` has made on this visit, by the customer and
+  // project each was made for. Kept across a subsequent dealQuotations.create failure so a retry
+  // reuses that ticket instead of minting a second deal for the same customer/project (see
+  // handleInlineCreate below).
+  const [createdTicketIds, setCreatedTicketIds] = useState({});
   const [creatingDeal, setCreatingDeal] = useState(false);
-
-  // The rep's own remembered defaults / recent picks (quotationPrefs.js). Read ONCE, lazily, so a
-  // browser that throws on `localStorage` (private window, blocked site data) throws inside the
-  // module's own try/catch during the initial state computation and never on a later render.
-  const [storedDefaults] = useState(() => readQuotationDefaults(user?.id));
-  const [recentPicks, setRecentPicks] = useState(() => readRecentCatalogPicks(user?.id));
 
   const [items, setItems] = useState([]);
   // v3: ส่วนลดพิเศษ rows live in their OWN ordered list, not in `items`. They always print LAST
@@ -297,6 +395,10 @@ export function QuotationEditorPage({ user, showToast }) {
   // A mode/currency change the rep did not directly choose (e.g. SPECIAL_SQM moved off when the
   // document became English) is SAID, persistently, until the next settings change.
   const [settingsNotice, setSettingsNotice] = useState(null);
+  // V192.5 — leaving "ผสมหลายวิธี" for one mode re-prices every row that is in another, so the rep
+  // is asked first. `{ priceMode, count }` while the question is up (count = rows it would
+  // re-price), null otherwise. See #changePriceMode.
+  const [leaveMixedConfirm, setLeaveMixedConfirm] = useState(null);
   // The last save's refusal, kept on screen (a toast vanishes). A 400 like "ยอดรวมหลังหักส่วนลด
   // พิเศษติดลบ" is exactly the kind of error that must not be swallowed or scroll away.
   const [saveError, setSaveError] = useState(null);
@@ -379,53 +481,50 @@ export function QuotationEditorPage({ user, showToast }) {
   // Seeds local editable state from the server exactly once per quotation/ticket -- after that,
   // the user's own edits are the source of truth until the next save round-trips a fresh copy.
   useEffect(() => {
-    const key = id ? `q-${id}` : `t-${effectiveTicketId ?? ''}`;
+    const key = id ? `q-${id}` : copyFromId ? `c-${copyFromId}` : `t-${effectiveTicketId ?? ''}`;
     if (initializedFor === key) return;
+    // The document being edited is five pieces of state, the shape
+    // quotationCopy#editorStateFromQuotation returns. Every branch below seeds all five through
+    // this one function, then sets what is its own: which rows count as touched, whether the form
+    // starts dirty, and the settings notice.
+    const applyEditorState = (state) => {
+      setGroups(state.groups);
+      setItems(state.items);
+      setAdjustments(state.adjustments);
+      setDocSettings(state.docSettings);
+      setTerms(state.terms);
+    };
     if (id) {
       if (!quotation) return;
-      // F1: "loading rebuilds groups from consecutive equal labels" -- the flat items array the
-      // server sends IS the document order, so the runs of equal `locationLabel` in it are exactly
-      // the headings the renderer prints. Never re-sorted here.
-      const storedMode = quotation.priceMode || 'NET';
-      const rows = quotation.items.map((it) => rowFromServerItem(it, storedMode));
-      const rebuilt = locationGroupsFromItems(rows.filter((it) => lineTypeOf(it) !== LINE_TYPE_ADJUSTMENT));
-      setGroups(rebuilt.groups);
-      setItems(rebuilt.items);
-      setAdjustments(rows.filter((it) => lineTypeOf(it) === LINE_TYPE_ADJUSTMENT));
-      setDocSettings({ priceMode: storedMode, documentLanguage: quotation.documentLanguage || 'TH' });
+      // The DTO as editor state — see quotationCopy#editorStateFromQuotation, which the copy path
+      // shares, for how each part is read.
+      applyEditorState(editorStateFromQuotation(quotation));
       setSettingsNotice(null);
       setTouchedRowIds(new Set(quotation.items.map((it) => it.id)));
-      setTerms({
-        deptCode: quotation.deptCode ?? '', unitCode: quotation.unitCode ?? '',
-        offerDate: quotation.offerDate ?? todayIso(),
-        depositPercent: quotation.depositPercent ?? '',
-        depositPercentCustom: quotation.depositPercent != null && !DEPOSIT_PERCENT_PRESETS.includes(quotation.depositPercent),
-        // Item 4 ("ไม่รับมัดจำ", V181) — depositPercent === 0 is the ONE signal the server stores
-        // (see WastageCalculator's own comment); a null/other percentage is never "no deposit".
-        noDeposit: quotation.depositPercent === 0,
-        fullPaymentTerm: quotation.fullPaymentTerm ?? '',
-        remainderMode: quotation.remainderMode ?? '', creditDays: quotation.creditDays ?? '',
-        validityDays: quotation.validityDays ?? '', customerNotes: quotation.customerNotes ?? '',
-        // V178: a stored NULL validityMode (every pre-V178 row) normalises to DAYS, same as the
-        // server's own read-side default.
-        validityMode: quotation.validityMode ?? 'DAYS', validityUntil: quotation.validityUntil ?? '',
-        // V179: null (the DTO's own default) reads as "(ค่าเริ่มต้น)" — the select's own empty option.
-        printedByDisplayId: quotation.printedByDisplayId ?? '',
-        salesRepDisplayId: quotation.salesRepDisplayId ?? '',
-        projectName: quotation.projectName ?? '',
-        // Owner-directed reversal of F2 (2026-09-26) — manual, optional ผู้สั่งซื้อ signature
-        // name; null (every pre-V192 row, and any document nobody has typed one into) reads as
-        // blank, same "no value stored" convention as every other field here.
-        orderedByName: quotation.orderedByName ?? '',
-      });
       setDirty(false);
       setInitializedFor(key);
+    } else if (copyFromId) {
+      // "คัดลอกเป็นใบใหม่". Nothing is seeded until the source has arrived AND may be copied; a
+      // refused copy leaves the blank new-quotation form exactly as it is.
+      if (!copyState) return;
+      // One batch, so the "ระบุวันที่ needs special pricing" effect above sees the copied rows
+      // and the copied validity mode together, and does not flip a dated validity back to days.
+      applyEditorState(copyState);
+      setSettingsNotice(null);
+      // Touched, like a duplicated row: a copy of an incomplete row shows what it still lacks.
+      setTouchedRowIds(new Set([...copyState.items, ...copyState.adjustments].map((row) => row.clientId)));
+      // Unsaved work from the first moment — which is also what puts the checklist (customer,
+      // project) on screen at once rather than after the first keystroke.
+      setDirty(true);
+      setInitializedFor(key);
     } else if (effectiveTicketId) {
-      setItems([]);
-      setAdjustments([]);
-      setDocSettings(defaultDocSettings());
-      setGroups([{ groupId: newLocationGroupId(), label: '' }]);
-      setTerms(emptyTerms(storedDefaults));
+      applyEditorState({
+        items: [],
+        adjustments: [],
+        docSettings: defaultDocSettings(),
+        groups: [{ groupId: newLocationGroupId(), label: '' }],
+        terms: emptyTerms(storedDefaults),
+      });
       setTouchedRowIds(new Set());
       setDirty(false);
       setInitializedFor(key);
@@ -433,7 +532,7 @@ export function QuotationEditorPage({ user, showToast }) {
     // setDirty is a useCallback with an empty dep list (stable identity forever), so listing it
     // here can never cause an extra run of this effect -- it only satisfies exhaustive-deps now
     // that setDirty is no longer the raw, hook-recognised useState setter.
-  }, [id, quotation, effectiveTicketId, initializedFor, storedDefaults, setDirty]);
+  }, [id, quotation, effectiveTicketId, initializedFor, storedDefaults, setDirty, copyFromId, copyState]);
 
   // Opus review fix (2026-09-14): the main seeding effect (above) marks `initializedFor` on the
   // FIRST render of a `?ticket=` visit, before `ticketQuery` has resolved, so seeding
@@ -477,13 +576,17 @@ export function QuotationEditorPage({ user, showToast }) {
     // shape anyway.
     const currentItem = items.find((it) => it.clientId === clientId);
     if (!currentItem) return; // row was removed (e.g. by a fast double-click on ลบรายการ)
-    scheduleCalc(clientId, { ...currentItem, ...patch }, docSettings.priceMode, docSettings.documentLanguage);
+    const target = { ...currentItem, ...patch };
+    // V192.5: previewed in the mode THIS row is in — the document's, or on a mixed document its own.
+    scheduleCalc(clientId, target, rowPriceMode(docSettings.priceMode, target), docSettings.documentLanguage,
+      isMixedPriceMode(docSettings.priceMode));
   }
 
-  /** The debounced calculate-line call for one row, in the QUOTATION's price mode (which decides
-   * which mode-specific price itemInputFromRow sends — see its ⚠️ note). Split out of updateItem so
-   * a price-mode switch can re-preview every tile row through the exact same path. */
-  function scheduleCalc(clientId, target, priceMode, documentLanguage) {
+  /** The debounced calculate-line call for one row, in the price mode THAT ROW is in (which
+   * decides which mode-specific price itemInputFromRow sends — see its ⚠️ note): the quotation's,
+   * or on a mixed document the row's own, in which case `mixed` makes the request STATE it. Split
+   * out of updateItem so a price-mode switch can re-preview every tile row through the same path. */
+  function scheduleCalc(clientId, target, priceMode, documentLanguage, mixed = false) {
     clearTimeout(calcTimers.current[clientId]);
     const seq = (calcSeq.current[clientId] = (calcSeq.current[clientId] ?? 0) + 1);
     // A row missing the price its mode needs has nothing honest to preview (quotationMeta
@@ -493,14 +596,14 @@ export function QuotationEditorPage({ user, showToast }) {
     // switch") from reappearing with a stale figure in the row or the totals.
     if (!rowHasPriceForPreview(target, priceMode, documentLanguage)) {
       setItems((cur) => cur.map((it) => (
-        it.clientId === clientId ? { ...it, netUnitPrice: null, lineAmount: null, calcPending: false } : it
+        it.clientId === clientId ? { ...it, ...withoutPreviewedMoney(it), calcPending: false } : it
       )));
       return;
     }
     calcTimers.current[clientId] = setTimeout(() => {
       // Owner decision 2026-09-13 (B): the preview is computed in the DOCUMENT's language, so its
       // lines (and, on English per-sqm, its quantity) are what the saved document will print.
-      api.dealQuotations.calculateLine(itemInputFromRow(target, priceMode, documentLanguage), documentLanguage)
+      api.dealQuotations.calculateLine(itemInputFromRow(target, priceMode, documentLanguage, { mixed }), documentLanguage)
         .then((res) => {
           // A newer edit (and therefore a newer, still-in-flight or already-settled request)
           // superseded this one while it was on the wire -- discard rather than let an older,
@@ -508,7 +611,12 @@ export function QuotationEditorPage({ user, showToast }) {
           // response echoes the request's own input fields back).
           if (calcSeq.current[clientId] !== seq) return;
           setItems((cur) => cur.map((it) => (
-            it.clientId === clientId ? { ...it, ...pickCalculatedFields(res.item ?? {}), calcPending: false } : it
+            it.clientId === clientId
+              ? {
+                ...it, ...pickCalculatedFields(res.item ?? {}),
+                ...derivedUnitPrice(target, documentLanguage, res.item), calcPending: false,
+              }
+              : it
           )));
         })
         .catch(() => {
@@ -518,7 +626,7 @@ export function QuotationEditorPage({ user, showToast }) {
           // not keep showing an amount — least of all a net per piece from a previous price mode,
           // which the ราคาพิเศษ field would then present as its own derivation.
           setItems((cur) => cur.map((it) => (
-            it.clientId === clientId ? { ...it, netUnitPrice: null, lineAmount: null, calcPending: false } : it
+            it.clientId === clientId ? { ...it, ...withoutPreviewedMoney(it), calcPending: false } : it
           )));
         });
     }, 300);
@@ -527,9 +635,14 @@ export function QuotationEditorPage({ user, showToast }) {
   // ── Document settings (v3/v3b) ────────────────────────────────────────────────────────────
 
   /** Switches the QUOTATION's tile price mode and re-previews every tile row in it. `prefill`
-   * carries the net already on screen into ราคาสุทธิ/แผ่น when moving INTO DIRECT_NET — the rep
-   * typed nothing and the figure does not change, which is the least-typing reading of "I want to
-   * state the net directly". Never done across a currency change (see changeLanguage). */
+   * carries the net already on screen into ราคาสุทธิ when moving INTO DIRECT_NET — the rep typed
+   * nothing and the figure does not change, which is the least-typing reading of "I want to state
+   * the net directly". Never done across a currency change (see changeLanguage).
+   *
+   * The carried net is the per-แผ่น figure, kept per แผ่น (V192.2: the Thai box then SHOWS it per
+   * ตร.ม., and says which figure it came from) — carrying it as a per-ตร.ม. number would send it
+   * through the conversion and could move it by a satang. A row that already has a net typed per
+   * ตร.ม. keeps that one instead. */
   function applyPriceMode(priceMode, {
     prefill = true, documentLanguage = docSettings.documentLanguage, clearPrices = false,
   } = {}) {
@@ -546,13 +659,11 @@ export function QuotationEditorPage({ user, showToast }) {
     const perSqm = isEnglishPerSqm(priceMode, documentLanguage);
     const next = (clearPrices ? rowsWithPricesCleared(items) : items).map((it) => {
       if (lineTypeOf(it) !== LINE_TYPE_TILE) return it;
-      const carried = prefill && priceMode === 'DIRECT_NET'
-        && (it.directNetPrice === '' || it.directNetPrice == null) && it.netUnitPrice != null
-        ? { directNetPrice: it.netUnitPrice } : {};
-      // The previous mode's derived money is dropped until the new preview lands — see the
-      // calc-error note above for why a stale net must never be shown under the new mode.
       return {
-        ...it, ...carried, netUnitPrice: null, lineAmount: null, specialPriceLine: null, calcPending: true,
+        ...tileRowMovedToPriceMode(it, priceMode, prefill),
+        // V192.5: ONE mode for the whole document — so no row keeps a mode of its own. (This is the
+        // only way out of a mix, and a no-op on a document that was never one.)
+        priceMode: null,
         ...(perSqm && Number(it.sqmPerBox) > 0 ? { roundToFullBox: true } : {}),
       };
     });
@@ -561,11 +672,67 @@ export function QuotationEditorPage({ user, showToast }) {
     next.filter((it) => lineTypeOf(it) === LINE_TYPE_TILE).forEach((it) => scheduleCalc(it.clientId, it, priceMode, documentLanguage));
   }
 
+  /** One tile row as it stands the moment it moves to `priceMode` — the step a whole-document
+   * switch (#applyPriceMode) and a single row's own switch (#changeRowPriceMode) share, so the two
+   * cannot treat a row differently. Moving INTO ราคาสุทธิ carries the net already on screen (see
+   * #applyPriceMode's Javadoc); the previous mode's derived money is dropped until the new preview
+   * lands — a stale net must never be shown under the new mode (see the calc-error note above). */
+  function tileRowMovedToPriceMode(row, priceMode, prefill = true) {
+    const carried = prefill && priceMode === 'DIRECT_NET'
+      && !hasTypedPrice(row.directNetPrice) && !hasTypedPrice(row.directNetPriceSqm)
+      && row.netUnitPrice != null
+      ? { directNetPrice: row.netUnitPrice } : {};
+    return { ...row, ...carried, netUnitPrice: null, lineAmount: null, specialPriceLine: null, calcPending: true };
+  }
+
+  /** The "วิธีกรอกราคากระเบื้อง" picker. Three different moves, deliberately told apart:
+   *
+   *  - one mode → another (as before): every tile row is re-asked and re-previewed in it;
+   *  - any one mode → ผสมหลายวิธี: NOTHING is re-priced. Each row is simply given the mode the
+   *    document was in as its own, and gains its picker — so trying the mix out costs nothing;
+   *  - ผสมหลายวิธี → one mode: rows that are in another mode would be re-priced, so the rep is
+   *    asked first (#leaveMixedConfirm) — unless every row is already in that mode, when there is
+   *    nothing to lose and nothing to ask. */
   function changePriceMode(priceMode) {
     if (priceMode === docSettings.priceMode) return;
+    if (isMixedPriceMode(priceMode)) {
+      const current = docSettings.priceMode;
+      setItems((prev) => prev.map((it) => (lineTypeOf(it) === LINE_TYPE_TILE ? { ...it, priceMode: current } : it)));
+      setDocSettings((prev) => ({ ...prev, priceMode: PRICE_MODE_MIXED }));
+      setSettingsNotice(null);
+      setDirty(true);
+      return;
+    }
+    if (isMixedPriceMode(docSettings.priceMode)) {
+      const inAnotherMode = items.filter((it) => (
+        lineTypeOf(it) === LINE_TYPE_TILE && rowPriceMode(PRICE_MODE_MIXED, it) !== priceMode
+      )).length;
+      if (inAnotherMode > 0) {
+        setLeaveMixedConfirm({ priceMode, count: inAnotherMode });
+        return;
+      }
+    }
+    applyOnePriceModeToTheDocument(priceMode);
+  }
+
+  function applyOnePriceModeToTheDocument(priceMode) {
+    setLeaveMixedConfirm(null);
     setDocSettings((prev) => ({ ...prev, priceMode }));
     setSettingsNotice(null);
     applyPriceMode(priceMode);
+  }
+
+  /** One row's own "วิธีคิดราคา" on a mixed document: that row, and only that row, moves to
+   * `priceMode` exactly as every row does on a whole-document switch, and is re-previewed stating
+   * its mode. Marked touched so the new mode's still-missing price shows its hint at once. */
+  function changeRowPriceMode(clientId, priceMode) {
+    const current = items.find((it) => it.clientId === clientId);
+    if (!current || rowPriceMode(PRICE_MODE_MIXED, current) === priceMode) return;
+    const moved = { ...tileRowMovedToPriceMode(current, priceMode), priceMode };
+    setItems((prev) => prev.map((it) => (it.clientId === clientId ? moved : it)));
+    setTouchedRowIds((prev) => (prev.has(clientId) ? prev : new Set(prev).add(clientId)));
+    setDirty(true);
+    scheduleCalc(clientId, moved, priceMode, docSettings.documentLanguage, true);
   }
 
   /** The ONE choice that carries others with it: currency (TH→THB, EN→USD) and, on English, the
@@ -586,7 +753,11 @@ export function QuotationEditorPage({ user, showToast }) {
         ? 'เปลี่ยนภาษาเอกสาร: ล้างราคาทั้งหมดแล้ว — กรุณากรอกราคาใหม่เป็น USD (ไม่มี VAT)'
         : 'เปลี่ยนภาษาเอกสาร: ล้างราคาทั้งหมดแล้ว — กรุณากรอกราคาใหม่เป็นบาท',
     ];
-    if (moved) {
+    if (moved && isMixedPriceMode(docSettings.priceMode)) {
+      // V192.5: a mix is a Thai-document choice. Announced, never applied silently — every row is
+      // about to be asked the same way, which the rep did not pick.
+      notices.push('เอกสารภาษาอังกฤษกรอกราคาแบบ “ผสมหลายวิธี” ไม่ได้ — เปลี่ยนเป็น “ราคาตั้ง − ส่วนลด %” ทั้งใบให้แล้ว');
+    } else if (moved) {
       notices.push('เอกสารภาษาอังกฤษใช้ "ราคาพิเศษ บาท/ตร.ม." ไม่ได้ (ราคานั้นรวม VAT แต่เอกสารภาษาอังกฤษไม่มี VAT) — เปลี่ยนวิธีกรอกราคาเป็น "ราคาสุทธิต่อแผ่น" ให้แล้ว กรุณากรอกราคาสุทธิของทุกรายการ');
     }
     setDocSettings({ priceMode, documentLanguage });
@@ -625,10 +796,45 @@ export function QuotationEditorPage({ user, showToast }) {
     setAdjustments((prev) => prev.filter((a) => a.clientId !== clientId));
   }
 
+  // ── "Take me to what I just added" (sales feedback #3, 2026-10-06) ─────────────────────────────
+  //
+  // The "เพิ่ม…" actions sit at the BOTTOM of the list they append to (see the render below). A new
+  // tile row is a tall card, so without this the rep clicks, the card pushes the button further
+  // down the page, and they scroll back up to find the field they meant to type into — the same
+  // back-and-forth the move to the bottom was asked for to remove ("เวลาพิมพ์เสร็จจะพิมพ์รายการ
+  // ต่อไป ต้องคอยเลื่อนกลับขึ้นไปด้านบน").
+  //
+  // Each add records WHAT it added here; the effect resolves that to the DOM id the row actually
+  // rendered with — ids carry the FLAT index, which is only known once insertIntoGroup has placed
+  // the row (a row added to ตำแหน่ง 1 of 3 lands mid-list, not last) — and hands it to the same
+  // focusQuotationField the checklist uses. A ref, not state: it is consumed exactly once and
+  // must never cause a render of its own. Nothing but an explicit add ever sets it, so loading a
+  // draft, a save round-trip, or a calculate-line response can never take the viewport.
+  const pendingFocusRef = useRef(null);
+  useEffect(() => {
+    const pending = pendingFocusRef.current;
+    if (!pending) return;
+    let targetId = null;
+    if (pending.groupId) {
+      const groupIndex = groups.findIndex((g) => g.groupId === pending.groupId);
+      if (groupIndex >= 0) targetId = `group-label-${groupIndex}`;
+    } else {
+      const index = items.findIndex((it) => it.clientId === pending.rowId);
+      if (index >= 0) targetId = lineTypeOf(items[index]) === LINE_TYPE_PLAIN ? `plain-desc-${index}` : `model-${index}`;
+    }
+    // Not in this render yet — leave it pending for the render that does carry the new row.
+    if (!targetId) return;
+    pendingFocusRef.current = null;
+    focusQuotationField(targetId);
+  }, [items, groups]);
+
   function addPlainItem(targetGroupId) {
     setDirty(true);
     const groupId = targetGroupId ?? groups[groups.length - 1]?.groupId ?? null;
-    setItems((prev) => insertIntoGroup(prev, emptyPlainItem(groupId), groupId));
+    // Built OUTSIDE the updater so its clientId is known here.
+    const row = emptyPlainItem(groupId);
+    pendingFocusRef.current = { rowId: row.clientId };
+    setItems((prev) => insertIntoGroup(prev, row, groupId));
   }
 
   // ── ตำแหน่งติดตั้ง group operations (owner feedback F1, 2026-09-10) ──────────────────────────
@@ -663,7 +869,17 @@ export function QuotationEditorPage({ user, showToast }) {
   function addItem(targetGroupId) {
     setDirty(true);
     const groupId = targetGroupId ?? groups[groups.length - 1]?.groupId ?? null;
-    setItems((prev) => insertIntoGroup(prev, emptyQuotationItem(groupId, storedDefaults), groupId));
+    const row = {
+      ...emptyQuotationItem(groupId, storedDefaults),
+      // V192.5: on a mixed document a new row starts in the mode of the tile row before it — rows
+      // are usually entered in runs of the same method — and in ราคาตั้ง − ส่วนลด % if it is the
+      // first. On a single-mode document a row has no mode of its own.
+      ...(isMixedPriceMode(docSettings.priceMode)
+        ? { priceMode: rowPriceMode(PRICE_MODE_MIXED, items.filter((it) => lineTypeOf(it) === LINE_TYPE_TILE).at(-1)) }
+        : {}),
+    };
+    pendingFocusRef.current = { rowId: row.clientId };
+    setItems((prev) => insertIntoGroup(prev, row, groupId));
   }
 
   /** MED-4: a new group is born BLANK, so adding one while an existing group is also blank would
@@ -671,13 +887,19 @@ export function QuotationEditorPage({ user, showToast }) {
    * and both runs are ''), which then merge on the next reload. Refused with the reason instead —
    * naming the existing one first is the whole fix, and it takes one word. */
   function addGroup() {
-    const unnamed = groups.find((g) => !(g.label ?? '').trim());
-    if (unnamed) {
+    const unnamedIndex = groups.findIndex((g) => !(g.label ?? '').trim());
+    if (unnamedIndex >= 0) {
       showToast('error', 'กรุณาตั้งชื่อตำแหน่งติดตั้งที่ยังว่างก่อน มิฉะนั้นสองตำแหน่งจะรวมเป็นตำแหน่งเดียวกันในเอกสาร');
+      // Sales feedback #3 (2026-10-06): "เพิ่มตำแหน่ง" now sits at the bottom of the list, so the
+      // unnamed ตำแหน่ง this refusal is about can be a full screen above. Take the rep to the one
+      // field that fixes it rather than leaving them to hunt for it from a toast.
+      focusQuotationField(`group-label-${unnamedIndex}`);
       return;
     }
     setDirty(true);
-    setGroups((prev) => [...prev, { groupId: newLocationGroupId(), label: '' }]);
+    const groupId = newLocationGroupId();
+    pendingFocusRef.current = { groupId };
+    setGroups((prev) => [...prev, { groupId, label: '' }]);
   }
 
   function updateGroupLabel(groupId, label) {
@@ -798,7 +1020,7 @@ export function QuotationEditorPage({ user, showToast }) {
   // below AND each row's inline hints (QuotationItemRow's `errors` prop) read off the exact same
   // computation -- never two independent checks that could disagree about the same row.
   const itemErrorsByRow = useMemo(
-    () => items.map((it) => validateQuotationItem(it, docSettings.priceMode, docSettings.documentLanguage)),
+    () => items.map((it) => validateQuotationItem(it, rowPriceMode(docSettings.priceMode, it), docSettings.documentLanguage)),
     [items, docSettings.priceMode, docSettings.documentLanguage],
   );
   const adjustmentErrorsByRow = useMemo(() => adjustments.map((a) => validateAdjustment(a)), [adjustments]);
@@ -810,7 +1032,7 @@ export function QuotationEditorPage({ user, showToast }) {
   // is refused server-side). `index` here is the printed "รายการที่" number the same way
   // buildUpsertPayload sends `items` — tiles in document order, adjustments always last.
   const submitItemErrorsByRow = useMemo(
-    () => items.map((it) => validateQuotationItem(it, docSettings.priceMode, docSettings.documentLanguage,
+    () => items.map((it) => validateQuotationItem(it, rowPriceMode(docSettings.priceMode, it), docSettings.documentLanguage,
       { requireLeadTime: true })),
     [items, docSettings.priceMode, docSettings.documentLanguage],
   );
@@ -891,7 +1113,7 @@ export function QuotationEditorPage({ user, showToast }) {
     duplicateGroupIndex,
     // Wrong-way-round: a mode the language does not offer (none today — owner decision 2026-09-13
     // made SPECIAL_SQM available on English) stays unsaveable if some path ever reaches it.
-    priceModeLanguageConflict: !availablePriceModes(docSettings.documentLanguage).some((opt) => opt.code === docSettings.priceMode),
+    priceModeLanguageConflict: !isPriceModeAvailable(docSettings.priceMode, docSettings.documentLanguage),
     noDeposit: terms.noDeposit,
     // Opus review fix (2026-09-16, F2): the checklist entry now recognises BOTH routes to
     // depositPercent = 0 (the checkbox and a custom-typed "0") — see #isEffectiveZeroDeposit's own
@@ -903,9 +1125,12 @@ export function QuotationEditorPage({ user, showToast }) {
     // CREDIT_DAYS_INVALID's own comment in quotationMeta.js for the two severities.
     remainderMode: terms.remainderMode,
     creditDays: terms.creditDays,
+    // V192.3 — a typed-but-malformed address is what DealQuotationService refuses on every save.
+    orderedByEmail: terms.orderedByEmail,
   }), [isInlineCreate, checklistCustomer, dealForm.project, checklistProjectName, items, itemErrorsByRow,
     adjustments, adjustmentErrorsByRow, duplicateGroupIndex, docSettings, terms.noDeposit,
-    terms.depositPercentCustom, terms.depositPercent, terms.fullPaymentTerm, terms.remainderMode, terms.creditDays]);
+    terms.depositPercentCustom, terms.depositPercent, terms.fullPaymentTerm, terms.remainderMode, terms.creditDays,
+    terms.orderedByEmail]);
   const validationErrors = useMemo(() => checklist.filter((e) => e.blocking).map((e) => e.message), [checklist]);
   const checklistWarnings = useMemo(() => checklist.filter((e) => !e.blocking), [checklist]);
   const hasValidationErrors = validationErrors.length > 0;
@@ -943,7 +1168,11 @@ export function QuotationEditorPage({ user, showToast }) {
     // one exists there, and now returns a blank snapshot instead of refusing the save when it
     // doesn't -- see that method's own comment for the relaxed rule.
     contactId: null,
-    deptCode: terms.deptCode || null,
+    // ฝ่าย was removed from the quotation (sales feedback Admin 1d; owner 2026-10-06, "remove ฝ่าย
+    // field completely"). Sent as an explicit null on EVERY save rather than left out: the server
+    // stores what it is sent, so this is what clears a ฝ่าย an older draft still carries — and a
+    // full save states every field, so nothing is left for the server to guess from a missing key.
+    deptCode: null,
     unitCode: terms.unitCode || null,
     offerDate: terms.offerDate || null,
     // Item 4 ("ไม่รับมัดจำ", V181, owner ruling 2026-09-16): noDeposit always wins over whatever
@@ -992,6 +1221,18 @@ export function QuotationEditorPage({ user, showToast }) {
     // Always sent explicitly, blank included, same "no missing-keeps-stored" discipline as
     // projectName/customerNotes above: a blank genuinely clears it back to the dotted line.
     orderedByName: terms.orderedByName || null,
+    // V192.3 — ผู้ติดต่อ's Phone and Email, a sales record that is never printed. Always sent, like
+    // the name beside them: a blank one is an explicit null, which is what clears it. Trimmed
+    // here because the Email is CHECKED trimmed (orderedByEmailError), so what is sent is what
+    // was checked.
+    orderedByPhone: terms.orderedByPhone.trim() || null,
+    orderedByEmail: terms.orderedByEmail.trim() || null,
+    // Sales feedback #5 (2026-10-06, V192.1) — "ไม่แสดงชื่อโครงการในใบเสนอราคา". ALWAYS an explicit
+    // boolean, never omitted. The server reads a MISSING value on update as "keep what is stored"
+    // (so a stale browser tab from before this field existed cannot un-hide a project — see
+    // UpsertDealQuotationRequest#hideProjectName), which means only an explicit false can untick
+    // it. projectName just above is deliberately still sent in full: hiding is not clearing.
+    hideProjectName: terms.hideProjectName === true,
     // F1: still the FLAT items array the API has always taken, in group order — `items` is
     // already stored that way (see insertIntoGroup), so this is a plain map with no sort. Each
     // row's `locationLabel` is stamped from ITS GROUP, which is the only place that text lives
@@ -1001,7 +1242,9 @@ export function QuotationEditorPage({ user, showToast }) {
     // the server would put them anyway, so the order sent is the order printed.
     items: [
       ...items.map((item) => ({
-        ...itemInputFromRow(item, docSettings.priceMode, docSettings.documentLanguage),
+        // V192.5: each row in the mode IT is in; on a mixed document the row also states it.
+        ...itemInputFromRow(item, rowPriceMode(docSettings.priceMode, item), docSettings.documentLanguage,
+          { mixed: isMixedPriceMode(docSettings.priceMode) }),
         locationLabel: (labelByGroupId.get(item.groupId) || '').trim() || null,
       })),
       ...adjustments.map(adjustmentInputFromRow),
@@ -1355,13 +1598,17 @@ export function QuotationEditorPage({ user, showToast }) {
   // Partial-failure contract (spec): if tickets.create fails, the form (dealForm/items/terms)
   // stays exactly as the user left it and the backend's own Thai message is toasted -- nothing
   // here resets state on error, so that falls out for free. If dealQuotations.create THEN fails
-  // (ticket already exists), createdTicketId stays set so the very next click skips tickets.create
-  // entirely and retries only the quotation -- a plain retry of createMutation-style logic would
-  // instead mint a SECOND ticket for the same customer/project on every retry.
+  // (ticket already exists), its id stays in createdTicketIds so the very next click skips
+  // tickets.create entirely and retries only the quotation -- a plain retry of createMutation-style
+  // logic would instead mint a SECOND ticket for the same customer/project on every retry.
   async function handleInlineCreate() {
     setCreatingDeal(true);
     try {
-      let ticketId = createdTicketId;
+      // A deal is remembered under the customer and project it was made for, and reused for those
+      // two only: after a refusal the rep can choose another customer or project before saving
+      // again, and that quotation must not land on the earlier choice's deal.
+      const madeFor = `${dealForm.customer.id}/${dealForm.project.id}`;
+      let ticketId = createdTicketIds[madeFor];
       if (!ticketId) {
         const ticketRes = await api.tickets.create({
           title: dealForm.customer.name,
@@ -1381,7 +1628,7 @@ export function QuotationEditorPage({ user, showToast }) {
         // `.summary.id`, never `.ticket.id`/`.id`.
         ticketId = ticketRes.ticket?.summary?.id;
         if (!ticketId) throw new Error('สร้างดีลไม่สำเร็จ');
-        setCreatedTicketId(ticketId);
+        setCreatedTicketIds((made) => ({ ...made, [madeFor]: ticketId }));
       }
       const quotationRes = await api.dealQuotations.create(ticketId, buildUpsertPayload());
       setDirty(false);
@@ -1494,11 +1741,9 @@ export function QuotationEditorPage({ user, showToast }) {
     onSuccess: (res) => {
       queryClient.setQueryData(queryKeys.dealQuotationDetail(id), res.quotation);
       queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
-      const storedMode = res.quotation.priceMode || 'NET';
-      const rows = res.quotation.items.map((it) => rowFromServerItem(it, storedMode));
-      const rebuilt = locationGroupsFromItems(rows.filter((it) => lineTypeOf(it) !== LINE_TYPE_ADJUSTMENT));
-      setGroups(rebuilt.groups);
-      setItems(rebuilt.items);
+      const restored = editorStateFromQuotation(res.quotation);
+      setGroups(restored.groups);
+      setItems(restored.items);
       setTouchedRowIds(new Set(res.quotation.items.map((it) => it.id)));
       showToast('success', 'คืนรายการแล้ว');
     },
@@ -1622,6 +1867,8 @@ export function QuotationEditorPage({ user, showToast }) {
   }
 
   if (id && quotationQuery.isLoading) return <RouteFallback />;
+  // A blank form shown while the source is on its way would be typed into, and then replaced.
+  if (copySourcePending) return <RouteFallback />;
   if (id && quotationQuery.isError) {
     return (
       <PageStack>
@@ -1701,6 +1948,10 @@ export function QuotationEditorPage({ user, showToast }) {
         context={(
           <>
             {status ? <StatusBadge tone={status.tone}>{status.label}</StatusBadge> : null}
+            {/* "เอกสารแนบ {n} ไฟล์", beside the status of the read-only details (see
+                QuotationAttachmentsLink). Not on the edit form, whose reader is the rep who
+                attached them. */}
+            {quotation && !isEditable ? <QuotationAttachmentsLink user={user} quotation={quotation} /> : null}
             {/* GLA-123 slice S1 — provenance link back to the pricing request this quotation was
                 created from (createFromPricingRequest). Falls back to the numeric id on a row
                 whose PR join came back null (should not happen in practice — every PRICING_REQUEST
@@ -1801,6 +2052,27 @@ export function QuotationEditorPage({ user, showToast }) {
             {quotation && canReviseDealQuotation(user, quotation) ? (
               <Button variant="secondary" onClick={() => setReorderConfirmOpen(true)}>สร้างจากใบเดิม (สั่งเหมือนเดิม)</Button>
             ) : null}
+            {/* "คัดลอกเป็นใบใหม่" — the third way to make another document from this one, beside the
+                two above and before the destructive action: a revision keeps this number (-1 → -2),
+                a reorder stays on this deal and this customer, and this opens a NEW quotation for
+                another customer on a new deal. A navigation only — nothing is created until the
+                copy is saved, and this quotation is never touched — which is why, unlike its two
+                neighbours, it is offered in every status.
+                Disabled while this draft has unsaved edits (or a save is on the wire): the copy is
+                made from what is SAVED, so it would silently lack them, and leaving the page would
+                lose them here too. The title says why, as a disabled action on this page does. */}
+            {quotation && canCopyDealQuotation(user, quotation) ? (
+              <Button
+                variant="secondary"
+                disabled={dirty || saving}
+                title={dirty || saving
+                  ? 'บันทึกร่างก่อน จึงจะคัดลอกได้ (คัดลอกจากฉบับที่บันทึกแล้ว)'
+                  : 'เปิดใบเสนอราคาใบใหม่ที่มีรายการและเงื่อนไขเหมือนใบนี้ สำหรับลูกค้ารายอื่น'}
+                onClick={() => navigate(`/quotations/new?copyFrom=${quotation.id}`)}
+              >
+                คัดลอกเป็นใบใหม่
+              </Button>
+            ) : null}
             {quotation && canCancelDealQuotation(user, quotation) ? (
               <Button variant="danger" onClick={() => setCancelConfirmOpen(true)}>ยกเลิกร่าง</Button>
             ) : null}
@@ -1853,6 +2125,39 @@ export function QuotationEditorPage({ user, showToast }) {
         </div>
       ) : null}
 
+      {/* "คัดลอกเป็นใบใหม่" — says where this unsaved draft came from and what is still the rep's to
+          fill in. The same quiet note as "สั่งเหมือนเดิมจากใบเสนอราคา…" above: it is provenance, not
+          a warning. The source's number is plain text and not a link — following a link from an
+          UNSAVED draft would throw the draft away. */}
+      {copyState && isEditable ? (
+        <div role="status" data-testid="copy-notice" className="rounded-md border border-border bg-surface p-4 text-sm text-text-muted">
+          <strong className="block text-text">คัดลอกจากใบเสนอราคา {copySource.number}</strong>
+          <p className="m-0 mt-1">
+            รายการสินค้าและเงื่อนไขมาจากใบเดิมแล้ว ยังต้องเลือกลูกค้าและโครงการ และกรอกผู้ติดต่อ (ชื่อ, Phone, Email)
+            ของใบนี้ใหม่ ใบนี้จะได้เลขที่ของตัวเองเมื่อบันทึกร่าง
+          </p>
+          {/* Item pictures are stored against the source's rows and this editor has no way to
+              attach one, so they cannot come along. Said only when there was one to lose. */}
+          {(copySource.items ?? []).some((item) => item.hasPicture) ? (
+            <p className="m-0 mt-1">รูปภาพประกอบรายการของใบเดิมไม่ได้คัดลอกมาด้วย</p>
+          ) : null}
+          {/* A ยืนราคา date that has gone by is not carried either (quotationCopy#VALIDITY),
+              so ยืนราคา below is a new quotation's. Said only when that is what happened. */}
+          {copyState.validityDatePassed ? (
+            <p className="m-0 mt-1">วันที่ยืนราคาของใบเดิมผ่านไปแล้ว จึงไม่ได้คัดลอกมา กรุณากำหนดยืนราคาของใบนี้ใหม่</p>
+          ) : null}
+        </div>
+      ) : null}
+      {/* The link asked for a copy and there is none. Amber, not red: nothing is broken and nothing
+          was lost — the form below is an ordinary blank quotation, and the last line says so. */}
+      {copyRefusal && isEditable ? (
+        <div role="alert" data-testid="copy-refused" className="rounded-md border border-warning-border bg-warning/10 p-4 text-sm text-warning">
+          <strong className="block">คัดลอกเป็นใบใหม่ไม่ได้</strong>
+          <p className="m-0 mt-1">{copyRefusal}</p>
+          <p className="m-0 mt-1 text-text-muted">แบบฟอร์มด้านล่างเป็นใบเสนอราคาเปล่า กรอกใหม่ได้ตามปกติ</p>
+        </div>
+      ) : null}
+
       {!isEditable && quotation ? (
         <QuotationDocumentView quotation={quotation} />
       ) : !isEditable && !quotation ? (
@@ -1881,6 +2186,20 @@ export function QuotationEditorPage({ user, showToast }) {
               <DealCustomerCard
                 value={dealForm}
                 onChange={updateDealForm}
+                // "คัดลอกเป็นใบใหม่": same job, different bidder. A project is a record under a
+                // customer, so the source's name is what the โครงการ box offers once the new
+                // customer is chosen — picked or created there in a click, never written silently.
+                suggestedProjectName={copyState?.suggestedProjectName}
+                // Sales feedback #5 (V192.1), and the owner on 2026-10-12: "should be under the
+                // โครงการ input itself". No deal exists yet, so that input is this card's own
+                // โครงการ box.
+                belowProject={(
+                  <ProjectNamePrintToggle
+                    id="hideProjectNameInline"
+                    checked={terms.hideProjectName}
+                    onChange={(hideProjectName) => { setTerms((t) => ({ ...t, hideProjectName })); setDirty(true); }}
+                  />
+                )}
                 errors={{
                   customer: showValidationSummary && !dealForm.customer ? 'กรุณาเลือกลูกค้า' : undefined,
                   project: showValidationSummary && dealForm.customer && !dealForm.project ? 'กรุณาเลือกโครงการ' : undefined,
@@ -1891,25 +2210,36 @@ export function QuotationEditorPage({ user, showToast }) {
                 {/* Owner-directed reversal of F2/V167 (2026-09-26) — ผู้สั่งซื้อ is now this ONE
                     optional free-text field (the required contact-picker dropdown this card used
                     to render is gone). It prints straight into the signature slot; left blank, the
-                    document prints its dotted line instead. Never a checklist blocker. */}
-                <FormField
-                  label="ผู้สั่งซื้อ"
-                  htmlFor="orderedByNameInline"
-                  hint="ชื่อที่จะพิมพ์ในช่องลงนาม — ถ้าเว้นว่าง จะเป็นเส้นประให้ลูกค้าเซ็นเอง"
-                >
-                  <input
-                    id="orderedByNameInline"
-                    value={terms.orderedByName}
-                    maxLength={255}
-                    onChange={(e) => { setTerms((t) => ({ ...t, orderedByName: e.target.value })); setDirty(true); }}
+                    document prints its dotted line instead. Never a checklist blocker.
+                    Labelled ผู้ติดต่อ since 2026-10-06 — see ORDERED_BY_FIELD_LABEL. */}
+                {/* V192.3 — the name and, directly under it, how to reach that person; then the
+                    designer. One group, spaced as the rest of this page spaces a field from the
+                    next (gap-3). */}
+                <div className="grid gap-3">
+                  <FormField
+                    label={ORDERED_BY_FIELD_LABEL}
+                    htmlFor="orderedByNameInline"
+                    hint={ORDERED_BY_FIELD_HINT}
+                  >
+                    <input
+                      id="orderedByNameInline"
+                      value={terms.orderedByName}
+                      maxLength={255}
+                      onChange={(e) => { setTerms((t) => ({ ...t, orderedByName: e.target.value })); setDirty(true); }}
+                    />
+                  </FormField>
+                  <OrderedByContactFields
+                    terms={terms}
+                    onChange={(patch) => { setTerms((current) => ({ ...current, ...patch })); setDirty(true); }}
+                    idSuffix="Inline"
                   />
-                </FormField>
-                <QuotationDealFields
-                  terms={terms}
-                  onChange={(patch) => { setTerms((current) => ({ ...current, ...patch })); setDirty(true); }}
-                  idPrefix="inline-quotation"
-                  showToast={showToast}
-                />
+                  <QuotationDealFields
+                    terms={terms}
+                    onChange={(patch) => { setTerms((current) => ({ ...current, ...patch })); setDirty(true); }}
+                    idPrefix="inline-quotation"
+                    showToast={showToast}
+                  />
+                </div>
               </Panel>
             </>
           ) : (
@@ -1925,6 +2255,14 @@ export function QuotationEditorPage({ user, showToast }) {
                     value={terms.projectName}
                     maxLength={200}
                     onChange={(e) => { setTerms((t) => ({ ...t, projectName: e.target.value })); setDirty(true); }}
+                  />
+                  {/* Sales feedback #5 (2026-10-06, V192.1) — directly under the field it qualifies,
+                      inside the same FormField so the two read as one unit and stay together when
+                      the grid reflows to one column on a phone. */}
+                  <ProjectNamePrintToggle
+                    id="hideProjectNameCard"
+                    checked={terms.hideProjectName}
+                    onChange={(hideProjectName) => { setTerms((t) => ({ ...t, hideProjectName })); setDirty(true); }}
                   />
                 </FormField>
                 {/* V179: the SAME salesRepDisplayId select as the เงื่อนไข panel below (owner,
@@ -1978,11 +2316,12 @@ export function QuotationEditorPage({ user, showToast }) {
                     optional free-text field; the required QuotationContactPicker dropdown (and
                     its โทร./อีเมล display and "ไม่เติม “คุณ”" checkbox) that used to render here is
                     removed. It prints straight into the signature slot; left blank, the document
-                    prints its dotted line instead. Never a checklist blocker. */}
+                    prints its dotted line instead. Never a checklist blocker.
+                    Labelled ผู้ติดต่อ since 2026-10-06 — see ORDERED_BY_FIELD_LABEL. */}
                 <FormField
-                  label="ผู้สั่งซื้อ"
+                  label={ORDERED_BY_FIELD_LABEL}
                   htmlFor="orderedByNameCard"
-                  hint="ชื่อที่จะพิมพ์ในช่องลงนาม — ถ้าเว้นว่าง จะเป็นเส้นประให้ลูกค้าเซ็นเอง"
+                  hint={ORDERED_BY_FIELD_HINT}
                 >
                   <input
                     id="orderedByNameCard"
@@ -1991,6 +2330,13 @@ export function QuotationEditorPage({ user, showToast }) {
                     onChange={(e) => { setTerms((t) => ({ ...t, orderedByName: e.target.value })); setDirty(true); }}
                   />
                 </FormField>
+                {/* V192.3 — directly under the name: how to reach that person. Spans the card's
+                    two columns, so Phone and Email sit side by side under ผู้ติดต่อ. */}
+                <OrderedByContactFields
+                  terms={terms}
+                  onChange={(patch) => { setTerms((current) => ({ ...current, ...patch })); setDirty(true); }}
+                  idSuffix="Card"
+                />
                 <QuotationDealFields
                   terms={terms}
                   onChange={(patch) => { setTerms((current) => ({ ...current, ...patch })); setDirty(true); }}
@@ -2027,23 +2373,59 @@ export function QuotationEditorPage({ user, showToast }) {
               </FormField>
               <FormField
                 label="วิธีกรอกราคากระเบื้อง"
-                hint={availablePriceModes(docSettings.documentLanguage).find((opt) => opt.code === docSettings.priceMode)?.hint}
+                hint={isMixedPriceMode(docSettings.priceMode)
+                  ? PRICE_MODE_MIXED_OPTION.hint
+                  : availablePriceModes(docSettings.documentLanguage).find((opt) => opt.code === docSettings.priceMode)?.hint}
               >
-                <div className="flex flex-wrap gap-2" role="group" aria-label="วิธีกรอกราคากระเบื้อง">
-                  {/* SPECIAL_SQM is not RENDERED on an English document — not merely disabled:
-                      a greyed-out option still invites the question, and there is no state in
-                      which choosing it would be accepted. */}
-                  {availablePriceModes(docSettings.documentLanguage).map((opt) => (
-                    <button
-                      key={opt.code}
-                      type="button"
-                      aria-pressed={docSettings.priceMode === opt.code}
-                      className={`min-h-[38px] mobile:min-h-[44px] rounded-md border px-3 text-xs font-bold ${docSettings.priceMode === opt.code ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface'}`}
-                      onClick={() => changePriceMode(opt.code)}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
+                {/* ONE control, two kinds of answer (V192.5 — sales feedback #14; owner 2026-10-06,
+                    "an option to apply this mode for all or mix mode"). The three modes are the
+                    whole-document choice they have always been; "ผสมหลายวิธี" is the other kind of
+                    answer — let each row decide — so it sits on its own line under its own words,
+                    rather than as a fourth button that reads like a fourth way to price a tile.
+                    Both lines stay inside the one role="group" so the picker is still a single
+                    thing to a screen reader, and to everything that finds it by this name. */}
+                <div className="flex flex-col gap-2" role="group" aria-label="วิธีกรอกราคากระเบื้อง">
+                  {mixedPriceModeAvailable(docSettings.documentLanguage, quotation?.origin) ? (
+                    <span className="text-2xs font-bold text-text-muted">ใช้วิธีเดียวทั้งใบ</span>
+                  ) : null}
+                  <div className="flex flex-wrap gap-2">
+                    {/* SPECIAL_SQM is not RENDERED on an English document — not merely disabled:
+                        a greyed-out option still invites the question, and there is no state in
+                        which choosing it would be accepted. */}
+                    {availablePriceModes(docSettings.documentLanguage).map((opt) => (
+                      <button
+                        key={opt.code}
+                        type="button"
+                        aria-pressed={docSettings.priceMode === opt.code}
+                        className={`min-h-[38px] mobile:min-h-[44px] rounded-md border px-3 text-xs font-bold ${docSettings.priceMode === opt.code ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface'}`}
+                        onClick={() => changePriceMode(opt.code)}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                  {/* Not rendered where it cannot be chosen (an English document, a quotation from
+                      a คำขอราคา) — the same "not merely disabled" rule as SPECIAL_SQM above. */}
+                  {mixedPriceModeAvailable(docSettings.documentLanguage, quotation?.origin) ? (
+                    <>
+                      <span className="text-2xs font-bold text-text-muted">หรือให้แต่ละรายการเลือกเอง</span>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          aria-pressed={isMixedPriceMode(docSettings.priceMode)}
+                          className={`min-h-[38px] mobile:min-h-[44px] rounded-md border px-3 text-xs font-bold ${isMixedPriceMode(docSettings.priceMode) ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface'}`}
+                          onClick={() => changePriceMode(PRICE_MODE_MIXED)}
+                        >
+                          {PRICE_MODE_MIXED_OPTION.label}
+                        </button>
+                        {isMixedPriceMode(docSettings.priceMode) ? (
+                          <span className="text-2xs text-text-muted" data-testid="mixed-price-mode-summary">
+                            ตอนนี้: {summarizeRowPriceModes(items, docSettings.documentLanguage)}
+                          </span>
+                        ) : null}
+                      </div>
+                    </>
+                  ) : null}
                 </div>
               </FormField>
             </div>
@@ -2111,12 +2493,7 @@ export function QuotationEditorPage({ user, showToast }) {
               // request itself, a later slice — every "เพิ่ม…" action below is hidden rather than
               // shown-then-refused.
               <span className="text-2xs font-bold text-text-muted">เพิ่มรายการอื่นได้ที่คำขอราคา</span>
-            ) : (
-              <Button variant="secondary" size="sm" onClick={addGroup}>
-                <Icon name="plus" size={14} />
-                เพิ่มตำแหน่ง
-              </Button>
-            )}
+            ) : null}
           >
             <div className="grid gap-4">
               {groups.map((group, groupIndex) => {
@@ -2141,34 +2518,11 @@ export function QuotationEditorPage({ user, showToast }) {
                           />
                         </FormField>
                       </div>
-                      {/* `min-w-0` so this action cluster is squeezable: "เพิ่มรายการในตำแหน่งนี้"
-                          is a 179 px unbreakable-ish Thai run, and a flex item's automatic minimum
-                          size is its min-content unless this is set — the same mechanism that let
-                          the item rows' selects force the page wide (see QuotationItemRow). */}
+                      {/* The group's SUMMARY stays up here with its name — how many rows it holds,
+                          and the one thing you can do to the group itself (remove it, when
+                          empty). */}
                       <div className="flex min-w-0 flex-wrap items-center gap-2">
                         <span className="text-2xs font-bold text-text-muted">{groupItems.length} รายการ</span>
-                        {/* GLA-123 slice S1: hidden for this origin — see the Panel's own
-                            "เพิ่มรายการอื่นได้ที่คำขอราคา" note above. */}
-                        {!isPricingRequestOrigin ? (
-                          <Button variant="secondary" size="sm" onClick={() => addItem(group.groupId)}>
-                            <Icon name="plus" size={13} />
-                            เพิ่มรายการในตำแหน่งนี้
-                          </Button>
-                        ) : null}
-                        {/* v3 S2: freight, consumables, a cut service, sanitary ware — a row with
-                            none of the tile fields. Deliberately NOT worded "เพิ่มรายการ…": the
-                            tile button above keeps that name, and this one says what it is for. */}
-                        {!isPricingRequestOrigin ? (
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            aria-label="เพิ่มสินค้าหรือบริการอื่นในตำแหน่งนี้"
-                            onClick={() => addPlainItem(group.groupId)}
-                          >
-                            <Icon name="plus" size={13} />
-                            สินค้า/บริการอื่น
-                          </Button>
-                        ) : null}
                         {/* Only for an EMPTY group, and never for the last one standing — see
                             removeGroup. Removing a group that still holds items would delete
                             them, which this label does not say. */}
@@ -2188,7 +2542,7 @@ export function QuotationEditorPage({ user, showToast }) {
                         ยังไม่มีรายการในตำแหน่งนี้ — ตำแหน่งที่ไม่มีรายการจะไม่ถูกบันทึกและไม่ปรากฏในเอกสาร
                       </p>
                     ) : (
-                      <ul className="grid gap-3">
+                      <ul className="m-0 grid list-none gap-3 pl-0">
                         {groupItems.map((item) => {
                           // The FLAT index — what "รายการที่ N" in the validation summary counts,
                           // and the order the document prints — never the index within the group.
@@ -2212,7 +2566,11 @@ export function QuotationEditorPage({ user, showToast }) {
                           }
                           return (
                             <QuotationItemRow
-                              priceMode={docSettings.priceMode}
+                              // V192.5: the mode THIS row is in. On a single-mode document that is
+                              // the document's, exactly as before.
+                              priceMode={rowPriceMode(docSettings.priceMode, item)}
+                              mixedPriceModes={isMixedPriceMode(docSettings.priceMode)}
+                              onChangePriceMode={(mode) => changeRowPriceMode(item.clientId, mode)}
                               ceoPriceMode={quotation?.ceoPriceMode}
                               documentLanguage={docSettings.documentLanguage}
                               currency={currency}
@@ -2238,16 +2596,76 @@ export function QuotationEditorPage({ user, showToast }) {
                         })}
                       </ul>
                     )}
+
+                    {/* ── Add actions, at the END of the rows they append to (sales feedback #3,
+                        2026-10-06: "เวลาพิมพ์เสร็จจะพิมพ์รายการต่อไป ต้องคอยเลื่อนกลับขึ้นไปด้านบน").
+                        These two used to sit in the group header, above every row — so on a long
+                        quotation the rep finished a row at the bottom, scrolled up to add the next,
+                        then back down to type it. A new row lands right above this row of buttons
+                        (insertIntoGroup appends to the group), so the button stays where the hand
+                        already is; addItem/addPlainItem also move focus to the new row.
+
+                        Inside the group's box on purpose: containment is what says "into THIS
+                        ตำแหน่ง", which matters once "เพิ่มตำแหน่ง" sits just below the box.
+
+                        `min-w-0` so the cluster is squeezable: "เพิ่มรายการในตำแหน่งนี้" is a
+                        179 px unbreakable-ish Thai run, and a flex item's automatic minimum size
+                        is its min-content unless this is set — the same mechanism that let the
+                        item rows' selects force the page wide (see QuotationItemRow).
+
+                        The three kinds of "add" on this panel are told apart by shape, not by
+                        position (owner, 2026-10-12: "very clustered ... the position where they are
+                        are correct"): these two are the FOOTER of their box, under a rule; "เพิ่ม
+                        ตำแหน่ง" is a dashed, empty box where the next one will go; ส่วนลดพิเศษ is
+                        its own section under a rule of the panel.
+
+                        GLA-123 slice S1: hidden for a PRICING_REQUEST origin — see the Panel's own
+                        "เพิ่มรายการอื่นได้ที่คำขอราคา" note above. */}
+                    {!isPricingRequestOrigin ? (
+                      <div className="flex min-w-0 flex-wrap items-center gap-2 border-t border-border-subtle pt-3">
+                        <Button variant="secondary" size="sm" onClick={() => addItem(group.groupId)}>
+                          <Icon name="plus" size={13} />
+                          เพิ่มรายการในตำแหน่งนี้
+                        </Button>
+                        {/* v3 S2: freight, consumables, a cut service, sanitary ware — a row with
+                            none of the tile fields. Deliberately NOT worded "เพิ่มรายการ…": the
+                            tile button above keeps that name, and this one says what it is for. */}
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          aria-label="เพิ่มสินค้าหรือบริการอื่นในตำแหน่งนี้"
+                          onClick={() => addPlainItem(group.groupId)}
+                        >
+                          <Icon name="plus" size={13} />
+                          สินค้า/บริการอื่น
+                        </Button>
+                      </div>
+                    ) : null}
                   </section>
                 );
               })}
 
+              {/* "เพิ่มตำแหน่ง" — under the LAST ตำแหน่ง, which is exactly where the new one
+                  appears (sales feedback #3, 2026-10-06). Outside
+                  every group's box, because it adds a sibling of them rather than a row inside one.
+                  The hint is the same voice as เพิ่มส่วนลดพิเศษ's just below, and is what tells a
+                  ตำแหน่ง apart from a รายการ now that both "add" buttons sit near each other. */}
+              {!isPricingRequestOrigin ? (
+                <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-dashed border-border-muted p-3">
+                  <Button variant="secondary" size="sm" onClick={addGroup}>
+                    <Icon name="plus" size={14} />
+                    เพิ่มตำแหน่ง
+                  </Button>
+                  <span className="text-2xs text-text-muted">ตำแหน่งติดตั้งใหม่ เช่น อีกชั้นหรืออีกโซน</span>
+                </div>
+              ) : null}
+
               {/* ── ส่วนลดพิเศษ (v3 S3) — always AFTER every group, because it always prints last:
                   it is a percentage of the rows above it. Offered only once there is a product row
                   to take it from; an adjustment-only quotation is a server 400. */}
-              <section aria-label="ส่วนลดพิเศษ" className="grid gap-3">
+              <section aria-label="ส่วนลดพิเศษ" className="grid gap-3 border-t border-border pt-4">
                 {adjustments.length ? (
-                  <ul className="grid gap-3">
+                  <ul className="m-0 grid list-none gap-3 pl-0">
                     {adjustments.map((adjustment, adjIndex) => {
                       const clean = Boolean(quotation) && !dirty;
                       const saved = clean ? serverAdjustments[adjIndex] : null;
@@ -2514,14 +2932,17 @@ export function QuotationEditorPage({ user, showToast }) {
                 </select>
               </FormField>
             </div>
-            <FormField label="หมายเหตุเพิ่มเติม" htmlFor="customerNotes">
-              <textarea
-                id="customerNotes"
-                className="min-h-24"
-                value={terms.customerNotes}
-                onChange={(e) => { setTerms((t) => ({ ...t, customerNotes: e.target.value })); setDirty(true); }}
-              />
-            </FormField>
+            {/* One FormGrid gap below the grid above; a bare FormField has no margin of its own. */}
+            <div className="mt-3.5">
+              <FormField label="หมายเหตุเพิ่มเติม" htmlFor="customerNotes">
+                <textarea
+                  id="customerNotes"
+                  className="min-h-24"
+                  value={terms.customerNotes}
+                  onChange={(e) => { setTerms((t) => ({ ...t, customerNotes: e.target.value })); setDirty(true); }}
+                />
+              </FormField>
+            </div>
           </Panel>
 
           <Panel title="ยอดรวม">
@@ -2587,6 +3008,14 @@ export function QuotationEditorPage({ user, showToast }) {
           ) : null}
         </>
       )}
+
+      {/* เอกสารแนบ is the last block of the page, under the details and under the form alike. It is
+          outside both on purpose. The details reproduce the printed form and these files are
+          never printed, and an upload is stored at once, so it is not part of what บันทึกร่าง
+          saves and never stands between a rep and ส่งขออนุมัติ. Not drawn on the refusal a viewer
+          gets who may not start a quotation. The panel itself draws nothing for import and
+          account. */}
+      {quotation || isEditable ? <QuotationAttachmentsPanel user={user} quotation={quotation} /> : null}
 
       {submitConfirmOpen ? (
         <Modal
@@ -2749,6 +3178,19 @@ export function QuotationEditorPage({ user, showToast }) {
         </Modal>
       ) : null}
 
+      {/* V192.5 — "ผสมหลายวิธี" → one mode for the whole document. Asked only when it would
+          re-price rows (#changePriceMode); the title names the mode and the body the number of
+          rows, so the rep is agreeing to something specific. Cancelling leaves every row, and
+          the mix, exactly as they were. */}
+      <ConfirmDialog
+        open={leaveMixedConfirm != null}
+        title={`ใช้ “${availablePriceModes(docSettings.documentLanguage).find((opt) => opt.code === leaveMixedConfirm?.priceMode)?.label ?? ''}” ทั้งใบ?`}
+        message={`มี ${leaveMixedConfirm?.count ?? 0} รายการที่กรอกราคาด้วยวิธีอื่นอยู่ — เมื่อเปลี่ยนแล้ว รายการเหล่านั้นจะคิดราคาด้วยวิธีนี้แทน และต้องตรวจหรือกรอกราคาใหม่ตามวิธีนี้`}
+        confirmLabel="เปลี่ยนทั้งใบ"
+        cancelLabel="ยกเลิก"
+        onConfirm={() => applyOnePriceModeToTheDocument(leaveMixedConfirm.priceMode)}
+        onCancel={() => setLeaveMixedConfirm(null)}
+      />
       {/* GLA-74 part 1 ("สร้างจากใบเดิม" / สั่งเหมือนเดิม) — explains up front that this is NOT a
           revision: the new draft is a completely separate document the rep can freely edit before
           submitting again.

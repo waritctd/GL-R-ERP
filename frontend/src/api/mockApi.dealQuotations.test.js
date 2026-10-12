@@ -8,6 +8,9 @@ import { api } from './mockApi.js';
 
 const salesUser = { role: 'sales' }; // id 6, owns ticket 18's rows (demoData.js)
 
+// A direct quotation on demo ticket 18. A plain create: nothing on a deal stands in its way here.
+const createOn18 = (payload) => api.dealQuotations.create(18, payload);
+
 // One complete tile row. UpsertDealQuotationRequest.items is `@NotEmpty`, so the real service 400s
 // an empty list — and since quotation v3 the mock does too (buildDealQuotationItems). These fixtures
 // used to create with `items: []`, which only ever worked because the mock was MORE permissive than
@@ -20,6 +23,269 @@ const ONE_ITEM = {
   quantityMode: 'AREA', areaSqm: 20, wastageMode: 'NONE', wastageValue: 0, piecesPerBox: 3, unitPrice: 850, discountPct: 0,
   leadTimeMinDays: 30, leadTimeMaxDays: 45,
 };
+
+// Sales feedback #1 (2026-10-06, V192.2) — a Thai tile row may state its prices per ตร.ม. including
+// VAT. Mirrors DealQuotationService#withPerPiecePricesFromPerSqm's RULES (what is refused, what is
+// kept, which mode reads what).
+//
+// ⚠️ The per-แผ่น figures below come from mockNetPerPieceFromSpecialSqm — a labelled, non-
+// authoritative MIRROR of WastageCalculator. These cases prove the mock's plumbing and nothing
+// about the algorithm (CLAUDE.md, "where the mock MIRRORS a backend computation"); the conversion
+// itself is pinned on the real service by WastageCalculatorPerSqmPriceTest and
+// DealQuotationPerSqmPriceIntegrationTest.
+describe('mock dealQuotations -- prices typed per ตร.ม. รวม VAT (V192.2)', () => {
+  const TILE_60X120 = {
+    model: 'Trilogy', color: 'Ivory', texture: 'Lappato', sizeText: '60x120', thicknessMm: 10, sqmPerPiece: 0.72,
+    quantityMode: 'PIECES', piecesInput: 10, wastageMode: 'NONE', wastageValue: 0, piecesPerBox: 2,
+    leadTimeMinDays: 30, leadTimeMaxDays: 45,
+  };
+  const perSqm = (fields) => ({ ...TILE_60X120, unitPrice: null, discountPct: 0, ...fields });
+
+  it('NET: derives the per-แผ่น list price, keeps the typed figure, and prices the line off the derived one', async () => {
+    await api.auth.login(salesUser);
+    const { quotation } = await createOn18({ items: [perSqm({ listPriceSqm: 1800, discountPct: 20 })] });
+    expect(quotation.items[0]).toMatchObject({
+      listPriceSqm: 1800, unitPrice: 1210.25, netUnitPrice: 968.2, lineAmount: 9682, directNetPriceSqm: null,
+    });
+  });
+
+  it('a per-แผ่น price sent beside the per-ตร.ม. one is not consulted', async () => {
+    await api.auth.login(salesUser);
+    const { quotation } = await createOn18({ items: [perSqm({ listPriceSqm: 1800, unitPrice: 1 })] });
+    expect(quotation.items[0].unitPrice).toBe(1210.25);
+  });
+
+  it('DIRECT_NET: both the net and the list are read per ตร.ม.', async () => {
+    await api.auth.login(salesUser);
+    const { quotation } = await createOn18({
+      priceMode: 'DIRECT_NET', items: [perSqm({ listPriceSqm: 1800, directNetPriceSqm: 790, discountPct: null })],
+    });
+    expect(quotation.items[0]).toMatchObject({
+      listPriceSqm: 1800, directNetPriceSqm: 790, unitPrice: 1210.25, netUnitPrice: 531.16, lineAmount: 5311.6,
+    });
+  });
+
+  it('a net per ตร.ม. outside DIRECT_NET prices nothing and is not kept', async () => {
+    await api.auth.login(salesUser);
+    const { quotation } = await createOn18({ items: [perSqm({ listPriceSqm: 1800, directNetPriceSqm: 790 })] });
+    expect(quotation.items[0]).toMatchObject({ unitPrice: 1210.25, netUnitPrice: 1210.25, directNetPriceSqm: null });
+  });
+
+  it('a request that still states its price per แผ่น is priced exactly as before, with no per-ตร.ม. figure', async () => {
+    await api.auth.login(salesUser);
+    const { quotation } = await createOn18({ items: [{ ...TILE_60X120, unitPrice: 1748.13, discountPct: 0 }] });
+    expect(quotation.items[0]).toMatchObject({ unitPrice: 1748.13, netUnitPrice: 1748.13, listPriceSqm: null, directNetPriceSqm: null });
+  });
+
+  it('repricing a saved row per แผ่น drops the per-ตร.ม. figure it carried', async () => {
+    await api.auth.login(salesUser);
+    const { quotation } = await createOn18({ items: [perSqm({ listPriceSqm: 1800 })] });
+    const { quotation: saved } = await api.dealQuotations.update(quotation.id, {
+      items: [{ ...TILE_60X120, id: quotation.items[0].id, unitPrice: 999, discountPct: 0 }],
+    });
+    expect(saved.items[0]).toMatchObject({ id: quotation.items[0].id, unitPrice: 999, listPriceSqm: null });
+  });
+
+  // The refusals — a mock MORE permissive than the service is the dangerous direction.
+  it('refuses a VAT-inclusive per-ตร.ม. price on an English document (400)', async () => {
+    await api.auth.login(salesUser);
+    await expect(createOn18({
+      documentLanguage: 'EN', currency: 'USD', items: [perSqm({ listPriceSqm: 1800, unitPrice: 15 })],
+    })).rejects.toMatchObject({ status: 400, message: expect.stringContaining('ใช้ได้กับใบเสนอราคาภาษาไทยเท่านั้น') });
+  });
+
+  it('refuses a per-ตร.ม. price on a row with no area per piece (400) — never read as a price per แผ่น', async () => {
+    await api.auth.login(salesUser);
+    await expect(createOn18({ items: [perSqm({ listPriceSqm: 1800, unitPrice: 1800, sqmPerPiece: null })] }))
+      .rejects.toMatchObject({ status: 400, message: expect.stringContaining('ขาด แผ่น/ตร.ม.') });
+    await expect(api.dealQuotations.calculateLine(perSqm({ listPriceSqm: 1800, unitPrice: 1800, sqmPerPiece: null }), 'TH'))
+      .rejects.toMatchObject({ status: 400, message: expect.stringContaining('ขาด แผ่น/ตร.ม.') });
+  });
+
+  it('refuses a zero or negative per-ตร.ม. price (400), even beside a valid per-แผ่น one', async () => {
+    await api.auth.login(salesUser);
+    for (const bad of [0, -1800]) {
+      await expect(createOn18({ items: [perSqm({ listPriceSqm: bad, unitPrice: 1210.25 })] }))
+        .rejects.toMatchObject({ status: 400, message: expect.stringContaining('ราคาตั้งต่อ ตร.ม. ต้องมากกว่าศูนย์') });
+      await expect(createOn18({
+        priceMode: 'DIRECT_NET', items: [perSqm({ listPriceSqm: 1800, directNetPriceSqm: bad, discountPct: null })],
+      })).rejects.toMatchObject({ status: 400, message: expect.stringContaining('ราคาสุทธิต่อ ตร.ม. ต้องมากกว่าศูนย์') });
+    }
+  });
+
+  it('calculate-line previews a per-ตร.ม. price, and reads a net per ตร.ม. as ราคาสุทธิ mode', async () => {
+    await api.auth.login(salesUser);
+    const net = await api.dealQuotations.calculateLine(perSqm({ listPriceSqm: 1800, discountPct: 20 }), 'TH');
+    expect(net.item).toMatchObject({ listPriceSqm: 1800, unitPrice: 1210.25, netUnitPrice: 968.2, lineAmount: 9682 });
+    const direct = await api.dealQuotations.calculateLine(
+      perSqm({ listPriceSqm: 1800, directNetPriceSqm: 790, discountPct: null }), 'TH');
+    expect(direct.item).toMatchObject({ unitPrice: 1210.25, netUnitPrice: 531.16, lineAmount: 5311.6 });
+  });
+
+  it('a revision carries the typed per-ตร.ม. prices', async () => {
+    await api.auth.login(salesUser);
+    const { quotation } = await createOn18({
+      priceMode: 'DIRECT_NET', items: [perSqm({ listPriceSqm: 1800, directNetPriceSqm: 790, discountPct: null })],
+    });
+    await api.dealQuotations.submit(quotation.id);
+    await api.auth.login({ role: 'sales_manager' });
+    await api.dealQuotations.approve(quotation.id, {});
+    await api.auth.login(salesUser);
+    const { quotation: revision } = await api.dealQuotations.createRevision(quotation.id);
+    expect(revision.items[0]).toMatchObject({ listPriceSqm: 1800, directNetPriceSqm: 790, unitPrice: 1210.25, netUnitPrice: 531.16 });
+  });
+});
+
+// Mixed price modes (V192.5; sales feedback #14, owner 2026-10-06). Mirrors the RULES of
+// DealQuotationService#buildItems / #requirePriceModeAllowed and WastageCalculator#rowPriceMode:
+// which document may be MIXED, that each tile row must then state its own mode, that the row is
+// priced in it, and that none of it touches a single-mode document.
+//
+// ⚠️ Evidence note (CLAUDE.md, "Mock API contract"): these prove the MOCK's plumbing. That the
+// real service prices a mixed document correctly is DealQuotationMixedPriceModeIntegrationTest's;
+// a Thai ราคาพิเศษ row's net is "not computed in mock mode" here, exactly as on a single-mode
+// ราคาพิเศษ document, and that is asserted rather than papered over.
+describe('mock dealQuotations -- mixed price modes (V192.5)', () => {
+  const TILE_60X120 = {
+    model: 'Trilogy', color: 'Ivory', texture: 'Lappato', sizeText: '60x120', thicknessMm: 10, sqmPerPiece: 0.72,
+    quantityMode: 'PIECES', piecesInput: 10, wastageMode: 'NONE', wastageValue: 0, piecesPerBox: 2,
+    leadTimeMinDays: 30, leadTimeMaxDays: 45, unitPrice: null,
+  };
+  const netRow = (discountPct = 20) => ({ ...TILE_60X120, priceMode: 'NET', listPriceSqm: 1800, discountPct });
+  const specialRow = () => ({ ...TILE_60X120, priceMode: 'SPECIAL_SQM', listPriceSqm: 1800, specialPriceSqm: 790, discountPct: null });
+  const directRow = () => ({ ...TILE_60X120, priceMode: 'DIRECT_NET', listPriceSqm: 1800, directNetPriceSqm: 790, discountPct: null });
+  const freight = () => ({ lineType: 'PLAIN', description: 'ค่าขนส่ง', quantity: 2, unit: 'JOB', unitPrice: 500, discountPct: 0 });
+
+  it('stores the document as MIXED and prices each tile row in its own mode', async () => {
+    await api.auth.login(salesUser);
+    const { quotation } = await createOn18({ priceMode: 'MIXED', items: [netRow(), specialRow(), directRow(), freight()] });
+
+    expect(quotation.priceMode).toBe('MIXED');
+    expect(quotation.items.map((it) => it.priceMode)).toEqual(['NET', 'SPECIAL_SQM', 'DIRECT_NET', null]);
+    expect(quotation.items[0]).toMatchObject({ unitPrice: 1210.25, discountPct: 20, netUnitPrice: 968.2, lineAmount: 9682 });
+    // ราคาพิเศษ: the rule is mirrored (the row keeps its ราคาพิเศษ and its sub-line, no percent);
+    // its net is the server's to compute and is null here, as on any mock ราคาพิเศษ document.
+    expect(quotation.items[1]).toMatchObject({ specialPriceSqm: 790, discountPct: null, netUnitPrice: null });
+    expect(quotation.items[1].specialPriceLine).toContain('ราคาพิเศษ 790');
+    expect(quotation.items[2]).toMatchObject({ directNetPriceSqm: 790, netUnitPrice: 531.16, lineAmount: 5311.6, discountPct: null });
+    expect(quotation.items[0].specialPriceLine).toBeNull();
+  });
+
+  it('a read serves the row modes back', async () => {
+    await api.auth.login(salesUser);
+    const { quotation } = await createOn18({ priceMode: 'MIXED', items: [netRow(), specialRow()] });
+    const { quotation: reread } = await api.dealQuotations.get(quotation.id);
+    expect(reread.priceMode).toBe('MIXED');
+    expect(reread.items.map((it) => it.priceMode)).toEqual(['NET', 'SPECIAL_SQM']);
+  });
+
+  // Wrong-way-round, and the guard for every quotation that is not mixed.
+  it('on a single-mode document a row\'s own mode changes nothing and is not stored', async () => {
+    await api.auth.login(salesUser);
+    const { quotation } = await createOn18({ priceMode: 'NET', items: [{ ...specialRow(), discountPct: 0 }] });
+    expect(quotation.priceMode).toBe('NET');
+    expect(quotation.items[0]).toMatchObject({ priceMode: null, netUnitPrice: 1210.25, specialPriceSqm: null });
+  });
+
+  // The refusals — a mock MORE permissive than the service is the dangerous direction.
+  it('refuses a tile row that states no mode on a mixed document (400), naming the row', async () => {
+    await api.auth.login(salesUser);
+    const noMode = { ...specialRow() };
+    delete noMode.priceMode;
+    await expect(createOn18({ priceMode: 'MIXED', items: [netRow(), noMode] }))
+      .rejects.toMatchObject({ status: 400, message: expect.stringMatching(/รายการที่ 2.*วิธีคิดราคา/) });
+  });
+
+  it('refuses a row mode the engine does not know, and MIXED as a ROW mode (400)', async () => {
+    await api.auth.login(salesUser);
+    for (const bad of ['MIXED', 'net', 'PER_ITEM']) {
+      await expect(createOn18({ priceMode: 'MIXED', items: [{ ...netRow(), priceMode: bad }] }))
+        .rejects.toMatchObject({ status: 400 });
+    }
+  });
+
+  it('refuses a mixed English document (400)', async () => {
+    await api.auth.login(salesUser);
+    await expect(createOn18({
+      priceMode: 'MIXED', documentLanguage: 'EN', currency: 'USD',
+      items: [{ ...TILE_60X120, priceMode: 'NET', unitPrice: 100, discountPct: 0 }],
+    })).rejects.toMatchObject({ status: 400, message: expect.stringContaining('ภาษาไทย') });
+  });
+
+  it('refuses an unknown document mode as before (400)', async () => {
+    await api.auth.login(salesUser);
+    await expect(createOn18({ priceMode: 'MIX', items: [netRow()] })).rejects.toMatchObject({ status: 400 });
+  });
+
+  it('changing one row\'s mode on a saved draft re-prices that row and keeps its id', async () => {
+    await api.auth.login(salesUser);
+    const { quotation } = await createOn18({ priceMode: 'MIXED', items: [netRow(), netRow(10)] });
+    const [first, second] = quotation.items;
+    const { quotation: saved } = await api.dealQuotations.update(quotation.id, {
+      priceMode: 'MIXED', items: [{ ...netRow(), id: first.id }, { ...directRow(), id: second.id }],
+    });
+    expect(saved.items.map((it) => it.id)).toEqual([first.id, second.id]);
+    expect(saved.items.map((it) => it.priceMode)).toEqual(['NET', 'DIRECT_NET']);
+    expect(saved.items[1]).toMatchObject({ netUnitPrice: 531.16, discountPct: null });
+  });
+
+  it('back to one mode: every row is priced in it and the row modes are cleared', async () => {
+    await api.auth.login(salesUser);
+    const { quotation } = await createOn18({ priceMode: 'MIXED', items: [netRow(), directRow()] });
+    const { quotation: saved } = await api.dealQuotations.update(quotation.id, {
+      priceMode: 'NET', items: quotation.items.map((it) => ({ ...netRow(10), id: it.id })),
+    });
+    expect(saved.priceMode).toBe('NET');
+    expect(saved.items.map((it) => it.priceMode)).toEqual([null, null]);
+  });
+
+  it('an update that omits the document mode keeps it mixed', async () => {
+    await api.auth.login(salesUser);
+    const { quotation } = await createOn18({ priceMode: 'MIXED', items: [netRow(), directRow()] });
+    const { quotation: saved } = await api.dealQuotations.update(quotation.id, { items: [netRow(10), directRow()] });
+    expect(saved.priceMode).toBe('MIXED');
+    expect(saved.items.map((it) => it.priceMode)).toEqual(['NET', 'DIRECT_NET']);
+  });
+
+  it('calculate-line uses the mode the row states, over what its fields suggest', async () => {
+    await api.auth.login(salesUser);
+    // A row just switched to ราคาตั้ง − ส่วนลด % that still carries its old ราคาพิเศษ.
+    const { item } = await api.dealQuotations.calculateLine({ ...netRow(), specialPriceSqm: 790 }, 'TH');
+    expect(item).toMatchObject({ netUnitPrice: 968.2, lineAmount: 9682, specialPriceLine: null });
+    // …and one that states none is still inferred from its fields, as before.
+    const direct = await api.dealQuotations.calculateLine(
+      { ...TILE_60X120, listPriceSqm: 1800, directNetPriceSqm: 790, discountPct: null }, 'TH');
+    expect(direct.item).toMatchObject({ netUnitPrice: 531.16 });
+  });
+
+  it('ยืนราคาแบบระบุวันที่ is accepted when one row has special pricing, refused when none has', async () => {
+    await api.auth.login(salesUser);
+    const until = '2099-12-31';
+    const { quotation } = await createOn18({
+      priceMode: 'MIXED', validityMode: 'DATE', validityUntil: until, items: [netRow(0), specialRow()],
+    });
+    expect(quotation.validityMode).toBe('DATE');
+    await expect(createOn18({
+      priceMode: 'MIXED', validityMode: 'DATE', validityUntil: until,
+      items: [netRow(0), { ...TILE_60X120, priceMode: 'DIRECT_NET', listPriceSqm: 1800, directNetPriceSqm: 1800, discountPct: null }],
+    })).rejects.toMatchObject({ status: 400, message: expect.stringContaining('ระบุวันที่ยืนราคาได้เฉพาะ') });
+  });
+
+  it('a revision and a reorder carry the mix and every row\'s mode', async () => {
+    await api.auth.login(salesUser);
+    const { quotation } = await createOn18({ priceMode: 'MIXED', items: [netRow(), directRow(), freight()] });
+    await api.dealQuotations.submit(quotation.id);
+    await api.auth.login({ role: 'sales_manager' });
+    await api.dealQuotations.approve(quotation.id, {});
+    await api.auth.login(salesUser);
+    const { quotation: reorder } = await api.dealQuotations.createReorder(quotation.id);
+    const { quotation: revision } = await api.dealQuotations.createRevision(quotation.id);
+    for (const copy of [reorder, revision]) {
+      expect(copy.priceMode).toBe('MIXED');
+      expect(copy.items.map((it) => it.priceMode)).toEqual(['NET', 'DIRECT_NET', null]);
+    }
+  });
+});
 
 describe('mock dealQuotations -- items are @NotEmpty, as on the service', () => {
   it('refuses to create a quotation with no items (400), rather than storing an empty document', async () => {
@@ -1165,6 +1431,73 @@ describe('mock dealQuotations.create/update -- omitContactHonorific (V180)', () 
     await api.auth.login(salesUser);
     const { quotation: revision } = await api.dealQuotations.createRevision(approved.id);
     expect(revision.omitContactHonorific).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// Sales feedback #5 (2026-10-06, V192.1) — "ไม่แสดงชื่อโครงการในใบเสนอราคา". Mirrors
+// DealQuotationService#create/#update/#insertCopyOf's handling of hideProjectName. This is
+// PLUMBING evidence only (the field survives the mock's own create/update/clone paths); that the
+// printed document really drops the line is proven against the Java renderer, not here.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+describe('mock dealQuotations.create/update -- hideProjectName (V192.1)', () => {
+  it('defaults false when the request omits it', async () => {
+    await api.auth.login(salesUser);
+    const { quotation } = await createOn18({ items: [ONE_ITEM] });
+    expect(quotation.hideProjectName).toBe(false);
+  });
+
+  it('true round-trips through create -> get, and the project name itself is kept', async () => {
+    await api.auth.login(salesUser);
+    const { quotation: created } = await createOn18({
+      projectName: 'บ้านเอกมัย ซอย 5', hideProjectName: true, items: [ONE_ITEM],
+    });
+    expect(created.hideProjectName).toBe(true);
+    const { quotation: reread } = await api.dealQuotations.get(created.id);
+    expect(reread.hideProjectName).toBe(true);
+    expect(reread.projectName).toBe('บ้านเอกมัย ซอย 5');
+  });
+
+  // DELIBERATELY the opposite of omitContactHonorific just above ("an update that omits it clears
+  // it"). A browser tab still running the bundle from before this field existed sends no
+  // hideProjectName at all; treating that as false would silently start PRINTING a project name a
+  // rep had chosen to hide. Missing means "say nothing", so the stored choice stands.
+  it('an update that omits it KEEPS a previously-set true', async () => {
+    await api.auth.login(salesUser);
+    const { quotation: created } = await createOn18({ hideProjectName: true, items: [ONE_ITEM] });
+    const { quotation: updated } = await api.dealQuotations.update(created.id, { items: [ONE_ITEM] });
+    expect(updated.hideProjectName).toBe(true);
+  });
+
+  it('an explicit false on update clears it', async () => {
+    await api.auth.login(salesUser);
+    const { quotation: created } = await createOn18({ hideProjectName: true, items: [ONE_ITEM] });
+    const { quotation: updated } = await api.dealQuotations.update(created.id, {
+      hideProjectName: false, items: [ONE_ITEM],
+    });
+    expect(updated.hideProjectName).toBe(false);
+  });
+
+  it('an explicit true on update sets it on a document that printed its project before', async () => {
+    await api.auth.login(salesUser);
+    const { quotation: created } = await createOn18({ items: [ONE_ITEM] });
+    const { quotation: updated } = await api.dealQuotations.update(created.id, {
+      hideProjectName: true, items: [ONE_ITEM],
+    });
+    expect(updated.hideProjectName).toBe(true);
+  });
+
+  it('createRevision and createReorder both copy it — a re-issue must not un-hide the project', async () => {
+    await api.auth.login(salesUser);
+    const { quotation: created } = await createOn18({ hideProjectName: true, items: [ONE_ITEM] });
+    await api.dealQuotations.submit(created.id);
+    await api.auth.login({ role: 'sales_manager' });
+    const { quotation: approved } = await api.dealQuotations.approve(created.id, {});
+    await api.auth.login(salesUser);
+    const { quotation: reorder } = await api.dealQuotations.createReorder(approved.id, {});
+    expect(reorder.hideProjectName).toBe(true);
+    const { quotation: revision } = await api.dealQuotations.createRevision(approved.id);
+    expect(revision.hideProjectName).toBe(true);
   });
 });
 

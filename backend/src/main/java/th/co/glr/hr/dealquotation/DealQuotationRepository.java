@@ -450,8 +450,60 @@ public class DealQuotationRepository {
         // — NOT DealQuotationService#requireLockedPriceUnchanged, a method that never shipped: the
         // owner ruling revised 2026-09-19 replaced a price LOCK with sales editing price freely,
         // flagged for CEO re-approval, before this whole field ever reached a released build.
-        Long pricingRequestItemId, Long pricingDecisionItemId
+        Long pricingRequestItemId, Long pricingDecisionItemId,
+        // ── Sales feedback #1 (2026-10-06, V192.2) — "แก้เป็น ตร.ม. รวม VAT ทุกแบบ" ────────────────
+        // The list price / the DIRECT_NET net exactly as the rep typed them, per ตร.ม. including
+        // VAT. PERSISTED (sales.quotation_item.list_price_sqm / direct_net_price_sqm) beside the
+        // per-แผ่น unitPrice / netUnitPrice the service derived from them, which stay what every
+        // sum, comparison and printed cell reads. Null on a row priced per แผ่น, and on every
+        // PLAIN / ADJUSTMENT row.
+        BigDecimal listPriceSqm, BigDecimal directNetPriceSqm,
+        // ── Mixed price modes (V192.5; sales feedback #14, owner 2026-10-06) ─────────────────────
+        // The row's OWN price mode, PERSISTED in sales.quotation_item.price_mode. Non-null only on
+        // a TILE row of a document whose price_mode is MIXED; null everywhere else, where the
+        // document's mode applies (WastageCalculator#rowPriceMode).
+        String priceMode
     ) {
+        /** The pre-V192.5 canonical shape (no per-row price mode) — kept so every existing
+         * construction site compiles unchanged. Defaults it to null: a row priced in its
+         * document's mode. */
+        public NewItem(
+            String locationLabel, Long catalogPriceId, String productCode, String brand, String model,
+            String color, String texture, String sizeText, BigDecimal thicknessMm, BigDecimal sqmPerPiece,
+            String quantityMode, BigDecimal areaSqm, Integer piecesInput, String wastageMode,
+            BigDecimal wastageValue, Integer piecesPerBox, int piecesBeforeWastage, int piecesAfterWastage,
+            int piecesFinal, Integer boxes, BigDecimal unitPrice, BigDecimal discountPct,
+            BigDecimal netUnitPrice, BigDecimal lineAmount, BigDecimal vat, BigDecimal lineTotal,
+            String originCountry, Integer leadTimeMinDays, Integer leadTimeMaxDays, String itemNotes,
+            String descriptionLine, String lineType, BigDecimal quantity, String unit,
+            BigDecimal specialPriceSqm, BigDecimal adjustmentPct, java.time.LocalDate adjustmentDeadline,
+            BigDecimal catalogWidthMm, BigDecimal catalogHeightMm, BigDecimal sqmPerBox,
+            boolean roundToFullBox, Long pricingRequestItemId, Long pricingDecisionItemId,
+            BigDecimal listPriceSqm, BigDecimal directNetPriceSqm) {
+            this(
+                locationLabel, catalogPriceId, productCode, brand, model, color, texture, sizeText,
+                thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput, wastageMode, wastageValue,
+                piecesPerBox, piecesBeforeWastage, piecesAfterWastage, piecesFinal, boxes, unitPrice,
+                discountPct, netUnitPrice, lineAmount, vat, lineTotal, originCountry, leadTimeMinDays,
+                leadTimeMaxDays, itemNotes, descriptionLine, lineType, quantity, unit, specialPriceSqm,
+                adjustmentPct, adjustmentDeadline, catalogWidthMm, catalogHeightMm, sqmPerBox,
+                roundToFullBox, pricingRequestItemId, pricingDecisionItemId, listPriceSqm,
+                directNetPriceSqm, null);
+        }
+
+        /** This row carrying {@code value} as its own price mode, everything else unchanged. */
+        public NewItem withPriceMode(String value) {
+            return new NewItem(
+                locationLabel, catalogPriceId, productCode, brand, model, color, texture, sizeText,
+                thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput, wastageMode, wastageValue,
+                piecesPerBox, piecesBeforeWastage, piecesAfterWastage, piecesFinal, boxes, unitPrice,
+                discountPct, netUnitPrice, lineAmount, vat, lineTotal, originCountry, leadTimeMinDays,
+                leadTimeMaxDays, itemNotes, descriptionLine, lineType, quantity, unit, specialPriceSqm,
+                adjustmentPct, adjustmentDeadline, catalogWidthMm, catalogHeightMm, sqmPerBox,
+                roundToFullBox, pricingRequestItemId, pricingDecisionItemId, listPriceSqm,
+                directNetPriceSqm, value);
+        }
+
         /** The pre-GLA-123 shape (no pricing-request/decision item link) — kept so every existing
          * construction site (tests, mostly, plus every DEAL_DIRECT call site in this class and
          * DealQuotationService) compiles unchanged. Defaults both to null, correct for every
@@ -476,7 +528,7 @@ public class DealQuotationRepository {
                 discountPct, netUnitPrice, lineAmount, vat, lineTotal, originCountry, leadTimeMinDays,
                 leadTimeMaxDays, itemNotes, descriptionLine, lineType, quantity, unit, specialPriceSqm,
                 adjustmentPct, adjustmentDeadline, catalogWidthMm, catalogHeightMm, sqmPerBox, roundToFullBox,
-                null, null);
+                null, null, null, null);
         }
 
         /** The pre-V176 shape (no sqmPerBox/roundToFullBox) — PLAIN/ADJUSTMENT rows and existing
@@ -550,7 +602,11 @@ public class DealQuotationRepository {
         // Javadoc. Optional/nullable; null on every call site that has no manual name to carry
         // over yet (a brand-new PRICING_REQUEST-origin create has nothing to inherit — the rep
         // sets it later via #update, same as any other DEAL_DIRECT document).
-        String orderedByName) {
+        String orderedByName,
+        // V192.3 — how to reach the person orderedByName names; see DealQuotationDtos#orderedByPhone.
+        // They travel beside orderedByName on every path it travels, so they sit beside it here:
+        // already trimmed and checked by DealQuotationService, null where there is none to carry.
+        String orderedByPhone, String orderedByEmail) {
 
         /** The pre-GLA-123 shape — every DEAL_DIRECT call site. Defaults origin to
          * {@code DEAL_DIRECT}, recipientType to {@code UNSPECIFIED} (this class's own historic
@@ -567,14 +623,14 @@ public class DealQuotationRepository {
             boolean omitContactHonorific, String fullPaymentTerm,
             BigDecimal subtotal, Long parentQuotationId, int revisionNo,
             Long derivedFromQuotationId,
-            List<NewItem> items, String orderedByName) {
+            List<NewItem> items, String orderedByName, String orderedByPhone, String orderedByEmail) {
             this(ticketId, number, createdById, salesRepId, customerName, customerAddress, customerTaxId,
                 customerPhone, contact, projectName, deptCode, unitCode, offerDate, depositPercent,
                 remainderMode, creditDays, validityDays, validityMode, validityUntil, customerNotes,
                 priceMode, documentLanguage, currency, printedByDisplayId, salesRepDisplayId,
                 omitContactHonorific, fullPaymentTerm, subtotal, parentQuotationId, revisionNo,
                 derivedFromQuotationId, items, "DEAL_DIRECT", "UNSPECIFIED", null, null, null,
-                orderedByName);
+                orderedByName, orderedByPhone, orderedByEmail);
         }
     }
 
@@ -597,7 +653,8 @@ public class DealQuotationRepository {
                  printed_by_display_id, sales_rep_display_id,
                  omit_contact_honorific, full_payment_term,
                  parent_quotation_id, derived_from_quotation_id, updated_at,
-                 pricing_request_id, pricing_decision_id, ordered_by_name)
+                 pricing_request_id, pricing_decision_id,
+                 ordered_by_name, ordered_by_phone, ordered_by_email)
             VALUES
                 (:ticketId, :number, :salesRepId, now(), :totalAmount, :currency, :version,
                  'DRAFT', :recipientType, :recipientLabel, :revisionNo, :origin, :createdById, :salesRepId,
@@ -608,7 +665,8 @@ public class DealQuotationRepository {
                  :printedByDisplayId, :salesRepDisplayId,
                  :omitContactHonorific, :fullPaymentTerm,
                  :parentQuotationId, :derivedFromQuotationId, now(),
-                 :pricingRequestId, :pricingDecisionId, :orderedByName)
+                 :pricingRequestId, :pricingDecisionId,
+                 :orderedByName, :orderedByPhone, :orderedByEmail)
             """,
             new MapSqlParameterSource()
                 .addValue("ticketId", p.ticketId())
@@ -659,7 +717,9 @@ public class DealQuotationRepository {
                 .addValue("parentQuotationId", p.parentQuotationId())
                 .addValue("derivedFromQuotationId", p.derivedFromQuotationId())
                 // Owner-directed reversal of F2 (2026-09-26) — see DealQuotationDtos#orderedByName.
-                .addValue("orderedByName", p.orderedByName()),
+                .addValue("orderedByName", p.orderedByName())
+                .addValue("orderedByPhone", p.orderedByPhone())
+                .addValue("orderedByEmail", p.orderedByEmail()),
             keyHolder, new String[]{"quotation_id"});
         long quotationId = keyHolder.getKey().longValue();
         insertItems(quotationId, p.items());
@@ -730,7 +790,12 @@ public class DealQuotationRepository {
             .addValue("roundToFullBox", item.roundToFullBox())
             // GLA-123 slice S1
             .addValue("pricingRequestItemId", item.pricingRequestItemId())
-            .addValue("pricingDecisionItemId", item.pricingDecisionItemId());
+            .addValue("pricingDecisionItemId", item.pricingDecisionItemId())
+            // V192.2 — the per-ตร.ม. prices as typed; null on a row priced per แผ่น.
+            .addValue("listPriceSqm", item.listPriceSqm())
+            .addValue("directNetPriceSqm", item.directNetPriceSqm())
+            // V192.5 — the row's own price mode; null on every row of a single-mode document.
+            .addValue("priceMode", item.priceMode());
     }
 
     private static final String INSERT_ITEM_SQL = """
@@ -742,7 +807,8 @@ public class DealQuotationRepository {
              pieces_before_wastage, pieces_after_wastage, boxes, discount_pct, origin_country,
              lead_time_min_days, lead_time_max_days, item_notes,
              line_type, special_price_sqm, adjustment_pct, adjustment_deadline, sqm_per_box,
-             round_to_full_box, pricing_request_item_id, pricing_decision_item_id)
+             round_to_full_box, pricing_request_item_id, pricing_decision_item_id,
+             list_price_sqm, direct_net_price_sqm, price_mode)
         VALUES
             (:quotationId, :seq, :brand, :model, :color, :texture, :size, :rawUnit, :qty, :unitPrice, :amount,
              :salesDiscount, :finalUnitPrice, :lineSubtotal, :vat, :lineTotal, :description,
@@ -751,7 +817,8 @@ public class DealQuotationRepository {
              :piecesBeforeWastage, :piecesAfterWastage, :boxes, :discountPct, :originCountry,
              :leadTimeMinDays, :leadTimeMaxDays, :itemNotes,
              :lineType, :specialPriceSqm, :adjustmentPct, :adjustmentDeadline, :sqmPerBox,
-             :roundToFullBox, :pricingRequestItemId, :pricingDecisionItemId)
+             :roundToFullBox, :pricingRequestItemId, :pricingDecisionItemId,
+             :listPriceSqm, :directNetPriceSqm, :priceMode)
         """;
 
     /** One row about to be inserted at an explicit {@code seq} — {@link #insertItemsAtSeq}, the
@@ -817,7 +884,14 @@ public class DealQuotationRepository {
                    item_notes = :itemNotes,
                    line_type = :lineType, special_price_sqm = :specialPriceSqm,
                    adjustment_pct = :adjustmentPct, adjustment_deadline = :adjustmentDeadline,
-                   sqm_per_box = :sqmPerBox, round_to_full_box = :roundToFullBox
+                   sqm_per_box = :sqmPerBox, round_to_full_box = :roundToFullBox,
+                   -- V192.2: rewritten on every save like every other price column, so a row
+                   -- repriced per แผ่น drops a per-ตร.ม. figure that no longer describes it.
+                   list_price_sqm = :listPriceSqm, direct_net_price_sqm = :directNetPriceSqm,
+                   -- V192.5: the row's own price mode, rewritten on every save for the same reason —
+                   -- a row whose mode changed must not keep the old one, and a document switched
+                   -- back to ONE mode must have every row's cleared (the service sends NULL then).
+                   price_mode = :priceMode
              WHERE quotation_id = :quotationId AND quotation_item_id = :itemId
             """, batch);
     }
@@ -852,6 +926,27 @@ public class DealQuotationRepository {
             params, (rs, rowNum) -> rs.getLong("picture_id"));
         jdbc.update("DELETE FROM sales.quotation_item WHERE " + scope, params);
         return pictureIds;
+    }
+
+    /** Sales feedback #5 (V192.1, 2026-10-06) — sets whether a quotation's printed document names
+     * its project ("ไม่แสดงชื่อโครงการในใบเสนอราคา"). DRAFT-only via the WHERE clause (the
+     * enforcement, as for {@link #updateHeader}): a document that has been submitted or approved
+     * is frozen at what it printed then. A separate statement rather than one more positional
+     * argument on {@link #updateHeader}/{@link InsertDraftParams} — it leaves every INSERT that
+     * predates the column (the legacy customerquotation/ engine included) correct on the
+     * column's own DEFAULT FALSE.
+     *
+     * @return the rowcount (0 or 1). */
+    public int updateHideProjectName(long quotationId, boolean hideProjectName) {
+        return jdbc.update("""
+            UPDATE sales.quotation
+               SET hide_project_name = :hideProjectName,
+                   updated_at = now()
+             WHERE quotation_id = :id
+               AND doc_status = 'DRAFT'
+            """, new MapSqlParameterSource()
+                .addValue("id", quotationId)
+                .addValue("hideProjectName", hideProjectName));
     }
 
     /** DRAFT-only via the WHERE clause — the enforcement, not a service-layer check the caller
@@ -891,7 +986,11 @@ public class DealQuotationRepository {
                             // sends its current value" discipline as projectName just above: a
                             // null/blank here genuinely CLEARS the manual name back to the dotted
                             // placeholder, it does not leave a stale one in place.
-                            String orderedByName) {
+                            String orderedByName,
+                            // V192.3 — the same discipline as orderedByName just above: the editor
+                            // always sends both, so null clears. Frozen with the rest of the header by
+                            // the doc_status = 'DRAFT' predicate below.
+                            String orderedByPhone, String orderedByEmail) {
         return jdbc.update("""
             UPDATE sales.quotation
                SET contact_id = :contactId, contact_name = :contactName,
@@ -908,6 +1007,7 @@ public class DealQuotationRepository {
                    printed_by_display_id = :printedByDisplayId, sales_rep_display_id = :salesRepDisplayId,
                    omit_contact_honorific = :omitContactHonorific, full_payment_term = :fullPaymentTerm,
                    ordered_by_name = :orderedByName,
+                   ordered_by_phone = :orderedByPhone, ordered_by_email = :orderedByEmail,
                    total_amount = :subtotal, updated_at = now()
              -- GLA-123 slice S1: widened from origin = 'DEAL_DIRECT' — this is the ONE shared
              -- draft-header save both origins use (DealQuotationService#update). Every OTHER
@@ -947,6 +1047,8 @@ public class DealQuotationRepository {
                 .addValue("omitContactHonorific", omitContactHonorific)
                 .addValue("fullPaymentTerm", fullPaymentTerm)
                 .addValue("orderedByName", orderedByName)
+                .addValue("orderedByPhone", orderedByPhone)
+                .addValue("orderedByEmail", orderedByEmail)
                 .addValue("subtotal", subtotal));
     }
 
@@ -1527,6 +1629,10 @@ public class DealQuotationRepository {
                    final_unit_price, amount,
                    raw_unit, description, line_type, qi.special_price_sqm, adjustment_pct, adjustment_deadline,
                    picture_placement, sqm_per_box, round_to_full_box,
+                   qi.list_price_sqm, qi.direct_net_price_sqm,
+                   -- V192.5: the ROW's own mode. Aliased because "price_mode" below is already the
+                   -- DOCUMENT's (the subselect), and #mapItemColumns needs both to tell them apart.
+                   qi.price_mode AS item_price_mode,
                    -- GLA-123 slice S1 (owner ruling revised 2026-09-19: editable, not locked) —
                    -- the CEO's ORIGINAL decision-item values, joined by the link this row was
                    -- created with, so #mapItemColumns can detect a deviation on every read without
@@ -1574,6 +1680,10 @@ public class DealQuotationRepository {
                    final_unit_price, amount,
                    raw_unit, description, line_type, qi.special_price_sqm, adjustment_pct, adjustment_deadline,
                    picture_placement, sqm_per_box, round_to_full_box,
+                   qi.list_price_sqm, qi.direct_net_price_sqm,
+                   -- V192.5: the ROW's own mode. Aliased because "price_mode" below is already the
+                   -- DOCUMENT's (the subselect), and #mapItemColumns needs both to tell them apart.
+                   qi.price_mode AS item_price_mode,
                    -- GLA-123 slice S1 — see #findItems's identical fragment for the full comment.
                    qi.pricing_decision_item_id,
                    -- B1 fix (Opus review, 2026-09-20): the CEO's EFFECTIVE list price under NET is
@@ -1684,7 +1794,12 @@ public class DealQuotationRepository {
                    -- Owner-directed reversal of F2 (V192, 2026-09-26): the manual, optional
                    -- ผู้สั่งซื้อ signature-slot name — see DealQuotationDtos#orderedByName's own
                    -- Javadoc. NULL on every pre-V192 row.
-                   q.ordered_by_name
+                   q.ordered_by_name,
+                   -- V192.3: the sales-record phone and email beside it. Never printed.
+                   q.ordered_by_phone, q.ordered_by_email,
+                   -- Sales feedback #5 (V192.1, 2026-10-06): "ไม่แสดงชื่อโครงการในใบเสนอราคา" — see
+                   -- DealQuotationDtos#hideProjectName's own Javadoc. FALSE on every pre-V192.1 row.
+                   q.hide_project_name
               FROM sales.quotation q
               LEFT JOIN hr.employee cb  ON cb.employee_id = q.created_by
               LEFT JOIN hr.employee rep ON rep.employee_id = q.sales_rep_id
@@ -1819,7 +1934,12 @@ public class DealQuotationRepository {
             List.of(),
             // Owner-directed reversal of F2 (V192, 2026-09-26) — see
             // DealQuotationDtos#orderedByName's own Javadoc. NULL prints the dotted placeholder.
-            rs.getString("ordered_by_name")
+            rs.getString("ordered_by_name"),
+            // Sales feedback #5 (V192.1) — NOT NULL DEFAULT FALSE, so never SQL NULL here.
+            rs.getBoolean("hide_project_name"),
+            // V192.3 — NULL on every row nobody typed them into.
+            rs.getString("ordered_by_phone"),
+            rs.getString("ordered_by_email")
         );
     }
 
@@ -1909,8 +2029,17 @@ public class DealQuotationRepository {
         String documentLanguage = rs.getString("document_language") == null
             ? WastageCalculator.DOCUMENT_LANGUAGE_TH : rs.getString("document_language");
         // NULL price_mode (every pre-V168 row) reads as NET, exactly as #mapQuotation does.
-        String priceMode = rs.getString("price_mode") == null
+        String documentPriceMode = rs.getString("price_mode") == null
             ? WastageCalculator.PRICE_MODE_NET : rs.getString("price_mode");
+        // V192.5 — the row's own mode, stored only on a tile row of a MIXED document. Served on the
+        // DTO only there too: a stray value on a single-mode document's row (the write path stores
+        // none) must not be handed to a client as if it meant something.
+        String itemPriceMode = WastageCalculator.PRICE_MODE_MIXED.equals(documentPriceMode)
+            ? rs.getString("item_price_mode") : null;
+        // The mode THIS row is priced and printed in. Everything below that used to read the
+        // document's mode — the CEO comparison, DealQuotationLines#tilePrint — reads this, so a
+        // single-mode document is mapped exactly as it always was.
+        String priceMode = WastageCalculator.rowPriceMode(documentPriceMode, itemPriceMode);
         // GLA-123 slice S1 (owner ruling revised 2026-09-19: editable, not locked) — see
         // DealQuotationItemDto#priceChangedFromCeo's own Javadoc. Applied via #withCeoComparison
         // below (mirroring #withSqmPerBox/#withRoundToFullBox's own device) so the two constructor
@@ -2054,7 +2183,12 @@ public class DealQuotationRepository {
             // never disagree about the rule.
             DealQuotationLines.flatAdjustmentAmount(lineType, adjustmentPct, null)
         ).withSqmPerBox(sqmPerBox).withRoundToFullBox(roundToFullBox).withCeoComparison(priceChangedFromCeo,
-            ceoListUnitPrice, ceoDiscountPct, ceoSpecialPriceSqm, ceoDirectNetPrice, ceoNetUnitPrice);
+            ceoListUnitPrice, ceoDiscountPct, ceoSpecialPriceSqm, ceoDirectNetPrice, ceoNetUnitPrice)
+            // V192.2 — the per-ตร.ม. prices as typed. TILE rows only: nothing ever writes them on a
+            // PLAIN or ADJUSTMENT row, so the non-tile branch above has nothing to read.
+            .withPerSqmPrices(rs.getBigDecimal("list_price_sqm"), rs.getBigDecimal("direct_net_price_sqm"))
+            // V192.5 — TILE rows only, like the two above: a PLAIN / ADJUSTMENT row has no price mode.
+            .withPriceMode(itemPriceMode);
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────

@@ -36,7 +36,7 @@ function emptyNewCustomer() {
  * (`terms.orderedByName`) the editor itself renders next to this card, not something this card
  * collects at all.
  */
-export function DealCustomerCard({ value, onChange, errors, showToast }) {
+export function DealCustomerCard({ value, onChange, errors, showToast, suggestedProjectName = '', belowProject = null }) {
   const { customer, project, entryChannel } = value;
 
   // ── ลูกค้า typeahead ──────────────────────────────────────────────────────────────────────
@@ -182,7 +182,11 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
     setCustomerResults([]);
     setCustomerOpen(false);
     setShowNewCustomer(false);
-    setProjectSearch('');
+    // "คัดลอกเป็นใบใหม่" (QuotationEditorPage): the copied quotation's project name is offered
+    // here, as if the rep had typed it -- so the box filters this customer's projects to that name,
+    // and "เพิ่มโครงการใหม่" opens already carrying it. Blank on every ordinary visit, which is
+    // exactly the reset this line always did.
+    setProjectSearch(suggestedProjectName);
     closeProjectDropdown();
   }
 
@@ -305,7 +309,7 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
               <li className="sticky top-0 z-10 border-b border-border-subtle bg-surface-muted">
                 <button
                   type="button"
-                  className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-xs font-bold text-link"
+                  className="flex w-full items-center gap-1.5 border-0 bg-transparent px-3 py-2 text-left text-xs font-bold text-link"
                   onMouseDown={(e) => {
                     e.preventDefault();
                     // Keep the name the rep already typed in the search box when opening the
@@ -331,7 +335,7 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
                     type="button"
                     role="option"
                     aria-selected={false}
-                    className="block w-full px-3 py-2 text-left text-xs hover:bg-surface-hover"
+                    className="block w-full border-0 bg-transparent px-3 py-2 text-left text-xs text-text hover:bg-surface-hover"
                     onMouseDown={(e) => { e.preventDefault(); selectCustomer(c); }}
                   >
                     <strong>{c.name}</strong>
@@ -391,7 +395,7 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
                   id="project-new-option"
                   role="option"
                   aria-selected={projectActiveIndex === 0}
-                  className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-xs font-bold text-link"
+                  className="flex w-full items-center gap-1.5 border-0 bg-transparent px-3 py-2 text-left text-xs font-bold text-link"
                   onMouseEnter={() => setProjectActiveIndex(0)}
                   onMouseDown={(e) => { e.preventDefault(); openNewProjectFromDropdown(); }}
                 >
@@ -410,7 +414,7 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
                     id={`project-option-${idx + 1}`}
                     role="option"
                     aria-selected={idx + 1 === projectActiveIndex}
-                    className={`block w-full px-3 py-2 text-left text-xs hover:bg-surface-hover ${idx + 1 === projectActiveIndex ? 'bg-surface-hover' : ''}`}
+                    className={`block w-full border-0 px-3 py-2 text-left text-xs text-text hover:bg-surface-hover ${idx + 1 === projectActiveIndex ? 'bg-surface-hover' : 'bg-transparent'}`}
                     onMouseEnter={() => setProjectActiveIndex(idx + 1)}
                     onMouseDown={(e) => { e.preventDefault(); selectProject(p); }}
                   >
@@ -420,6 +424,10 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
               ))}
             </ul>
           ) : null}
+          {/* Whatever qualifies the project (the editor's "ไม่แสดงชื่อโครงการในใบเสนอราคา" tick
+              box) sits directly under its box. After the listbox in the DOM, so the open list
+              still drops from the box and covers this, as a dropdown covers what is below it. */}
+          {belowProject}
         </div>
       </div>
 

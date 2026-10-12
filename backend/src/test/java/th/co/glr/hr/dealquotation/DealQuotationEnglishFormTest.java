@@ -66,15 +66,19 @@ class DealQuotationEnglishFormTest {
     }
 
     @Test
-    void header_printsDeptRefAndDCoRatherThanTheThaiLabels() throws Exception {
+    void header_printsRefAndDCoRatherThanTheThaiLabels_andNoDeptLine() throws Exception {
         Sheet sheet = renderEnglish();
-        assertThat(str(sheet, 2, 7)).isEqualTo("Dept.");    // H3 was ฝ่าย
         assertThat(str(sheet, 3, 7)).isEqualTo("Ref.");     // H4 was เลขที่อ้างอิง
         assertThat(str(sheet, 4, 7)).isEqualTo("D.Co.");    // H5 was หน่วยงาน
         // The VALUES beside them are unchanged — same columns, same model fields.
-        assertThat(str(sheet, 2, VALUE_COL)).isEqualTo("P003");
         assertThat(str(sheet, 3, VALUE_COL)).isEqualTo("QT-2026-0001");
         assertThat(str(sheet, 4, VALUE_COL)).isEqualTo("D002");
+        // "Dept." used to head this block, with the quotation's deptCode ("P003" on this fixture)
+        // beside it. Sales feedback Admin 1d / owner 2026-10-06: "remove ฝ่าย field completely" —
+        // the same field, so it leaves the English form with the Thai one.
+        assertThat(englishQuotation().deptCode()).as("the fixture still carries one").isEqualTo("P003");
+        assertThat(blank(sheet, 2, 7)).as("H3 — no 'Dept.' label").isTrue();
+        assertThat(blank(sheet, 2, VALUE_COL)).as("I3 — no department").isTrue();
     }
 
     /**
@@ -410,6 +414,14 @@ class DealQuotationEnglishFormTest {
         assertThat(str(renderEnglish(), FORM_TAG_ROW, VALUE_COL)).isEqualTo("F-SM-008 (01)");
     }
 
+    /** Admin #6 / owner 2026-10-06: the Thai document prints ITS form number in that same cell —
+     * through the adapter, i.e. the model a real quotation produces, not a hand-built one. (Every
+     * layout branch, and "bottom right of what prints", are QuotationFormTagTest's.) */
+    @Test
+    void formTag_readsFSM002_onTheThaiDocument() throws Exception {
+        assertThat(str(render(thaiQuotation()), FORM_TAG_ROW, VALUE_COL)).isEqualTo("F-SM-002 (03)");
+    }
+
     // ── the regression that matters ────────────────────────────────────────────────────────
 
     /**
@@ -455,7 +467,12 @@ class DealQuotationEnglishFormTest {
     void thaiDocument_stillPrintsItsOwnLabelsTotalsAndBuddhistEraDate() throws Exception {
         Sheet sheet = render(thaiQuotation());
         assertThat(str(sheet, 0, 7)).contains("ใบเสนอราคา");
-        assertThat(str(sheet, 2, 7)).isEqualTo("ฝ่าย");
+        // ฝ่าย headed the block top right until 2026-10-06; "remove ฝ่าย field completely" — it is
+        // off the Thai document, label and value, although this quotation still stores "P003".
+        assertThat(thaiQuotation().deptCode()).isEqualTo("P003");
+        assertThat(blank(sheet, 2, 7)).as("H3 — no ฝ่าย label").isTrue();
+        assertThat(blank(sheet, 2, VALUE_COL)).as("I3 — no department").isTrue();
+        assertThat(str(sheet, 3, 7)).isEqualTo("เลขที่อ้างอิง");
         assertThat(str(sheet, 3, 0)).isEqualTo("วันที่");
         assertThat(str(sheet, 3, 1)).isEqualTo("8 กันยายน 2569");
         assertThat(str(sheet, 4, 0)).isEqualTo("เรียน");
@@ -466,9 +483,10 @@ class DealQuotationEnglishFormTest {
         assertThat(str(sheet, VAT_ROW, 4)).isEqualTo("ภาษีมูลค่าเพิ่ม");
         assertThat(sheet.getRow(VAT_ROW).getCell(7).getNumericCellValue()).isEqualTo(0.07);
         assertThat(str(sheet, TOTAL_ROW, 7)).isEqualTo("รวมเป็นเงินทั้งสิ้น");
-        // And the form tag stays BLANKED on the Thai path — a pre-existing decision the English
-        // work must not reach into. (The English path writes F-SM-008 (01); see #formTag_readsFSM008.)
-        assertThat(blank(sheet, FORM_TAG_ROW, VALUE_COL)).isTrue();
+        // The Thai form's own number, in the same cell the English path writes F-SM-008 (01) into
+        // (see #formTag_readsFSM008). It was BLANKED here until 2026-10-06 ("not customer-facing");
+        // sales feedback Admin #6 / owner ruling that day: "ต้องเพิ่ม" — it prints.
+        assertThat(str(sheet, FORM_TAG_ROW, VALUE_COL)).isEqualTo("F-SM-002 (03)");
         assertThat(str(sheet, LABELS_ROW, 0)).contains("ผู้พิมพ์").contains("ผู้สั่งซื้อ");
     }
 

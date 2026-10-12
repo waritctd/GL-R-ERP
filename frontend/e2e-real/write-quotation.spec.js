@@ -491,7 +491,11 @@ test.describe('quotation editor UI — v3 controls, ที่อยู่, and t
     // just above until this reversal) is gone from the editor entirely -- ผู้สั่งซื้อ is now a
     // single optional free-text input, blank by default (this quotation was created via the API
     // with a contactId, but the field no longer reads it at all).
-    await expect(page.getByLabel(/^ผู้สั่งซื้อ/)).toHaveValue('');
+    // Labelled ผู้ติดต่อ since 2026-10-06 (owner: "the field ผู้สั่งซื้อ make it name ผู้ติดต่อ instead
+    // but the pdf still render as ผู้สั่งซื้อ") — the same input, found by its new label; and no
+    // field answers to the old one any more.
+    await expect(page.getByLabel(/^ผู้ติดต่อ/)).toHaveValue('');
+    await expect(page.getByLabel(/^ผู้สั่งซื้อ/)).toHaveCount(0);
 
     // Clicking the entry lands on the field; typing + leaving it saves to the customer master…
     await checklist.getByRole('button', { name: 'ยังไม่ได้กรอกที่อยู่ลูกค้า' }).click();

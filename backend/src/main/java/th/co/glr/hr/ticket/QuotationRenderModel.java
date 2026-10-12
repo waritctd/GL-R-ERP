@@ -28,6 +28,9 @@ import java.util.List;
 public record QuotationRenderModel(
     LocalDate issueDate,
     String number,
+    /** ฝ่าย / Dept. — <b>no longer printed</b> (2026-10-06, sales feedback Admin 1d / owner:
+     * "remove ฝ่าย field completely"). {@code QuotationRenderer} never reads it; the component
+     * stays only so the many positional constructions of this record need not all change. */
     String deptCode,
     String unitCode,
     String salesLine,
@@ -96,7 +99,26 @@ public record QuotationRenderModel(
      * packed layout — it sets this {@code true} unconditionally, superseding the size check rather
      * than duplicating it.
      */
-    boolean forceCompactRemarks
+    boolean forceCompactRemarks,
+    /**
+     * Sales feedback #5 (2026-10-06, V192.1) — "ไม่แสดงชื่อโครงการในใบเสนอราคา": when {@code true}
+     * {@code QuotationRenderer} BLANKS the project cell (B8) instead of filling it.
+     *
+     * <p>A separate flag, not just a null {@link #projectName}, because the two are not the same
+     * on paper: {@code quotation_template.xls} carries the literal label {@code "Project  : "} in
+     * that cell, and the renderer only ever overwrites it when there is a name. A document with a
+     * merely blank project name therefore prints the bare label — as it always has — while a
+     * document whose rep ticked the box must print nothing there at all (a dangling
+     * {@code "Project  : "} on the customer's copy would announce that something was left out).
+     *
+     * <p>{@code false} (every constructor below except the canonical one) preserves today's
+     * output byte-for-byte, a blank name included: documents are rendered fresh from the database
+     * on every request, so an already-approved one must not change what it prints because of this
+     * field. Only {@link th.co.glr.hr.dealquotation.DealQuotationRenderAdapter} ever sets it, from
+     * {@code sales.quotation.hide_project_name}; it also passes a null {@link #projectName} in
+     * that case, so the name itself never reaches the renderer.
+     */
+    boolean hideProjectLine
 ) {
     /** The pre-V182 fourteen-argument shape — every caller before {@code forceCompactRemarks}
      * existed. Defaults it to {@code false}: the renderer keeps choosing the v2/legacy remark
@@ -108,7 +130,7 @@ public record QuotationRenderModel(
         String documentLanguage, String currency
     ) {
         this(issueDate, number, deptCode, unitCode, salesLine, attnLine, phoneLine, projectName,
-            items, remarkLines, signatories, signatureLabelsV2, documentLanguage, currency, false);
+            items, remarkLines, signatories, signatureLabelsV2, documentLanguage, currency, false, false);
     }
 
     /** The pre-v3b shape: a Thai/THB document, which is what every caller predating the English
