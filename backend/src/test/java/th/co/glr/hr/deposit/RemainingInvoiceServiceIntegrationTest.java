@@ -140,7 +140,8 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
             tickets, fxRates, notifications, landedCostCalculator, formulaEngine);
 
         TicketService ticketService = new TicketService(tickets, notifications,
-            objectMapper, customers, new QuotationRenderer(), pricingRequestService, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc));
+            objectMapper, customers, new QuotationRenderer(), pricingRequestService, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc), new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
+            new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
 
         CustomerQuotationRepository quotationRepository = new CustomerQuotationRepository(jdbc);
         quotationService = new CustomerQuotationService(quotationRepository, pricingRequests, decisionRepository,
@@ -759,7 +760,8 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         ProjectDto project = projectsRepo.create(customer.id(), "โครงการ RI " + label);
         TicketService ticketServiceForCreate = new TicketService(tickets,
             new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP), new ObjectMapper(), customersRepo,
-            new QuotationRenderer(), pricingRequestService, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc));
+            new QuotationRenderer(), pricingRequestService, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc), new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
+            new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
         TicketDto created = ticketServiceForCreate.create(
             new CreateTicketRequest("ดีล RI " + label, "NORMAL", customer.name(), customer.id(), project.id(), null,
                 null, null, List.of(ticketItem("SCG", "Tile RI " + label, FACTORY))),

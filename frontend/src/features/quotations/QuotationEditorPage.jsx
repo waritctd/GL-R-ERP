@@ -18,7 +18,7 @@ import { downloadBlob } from '../../utils/download.js';
 import { addDaysIso, bangkokTodayIso } from '../../utils/format.js';
 import {
   canApproveDealQuotation, canApproveDealQuotationNow, canCancelDealQuotation, canCopyDealQuotation, canCreateDealQuotation,
-  canCreateDealQuotationStandalone, canDecideDealQuotation, canEditDealQuotation,
+  canChangeDealCustomer, canCreateDealQuotationStandalone, canDecideDealQuotation, canEditDealQuotation,
   canReviseDealQuotation, canSubmitDealQuotation, DEPOSIT_PERCENT_PRESETS,
   availablePriceModes, PRICE_MODE_OPTIONS, adjustmentDescriptionPreview, buildQuotationChecklist, currencyForLanguage, DOCUMENT_LANGUAGE_OPTIONS,
   isEffectiveZeroDeposit,
@@ -1882,11 +1882,8 @@ export function QuotationEditorPage({ user, showToast }) {
       ? canCreateDealQuotationStandalone(user)
       : canCreateDealQuotation(user, ticket);
   const readOnlyViewer = isDealQuotationReadOnlyViewer(user);
-  // Mirrors TicketService.changeCustomer: the deal's owning rep or sales_manager, and (server side)
-  // no quotation of the deal past DRAFT. A pricing-request quotation's customer is the one its
-  // price was requested for, so it is never re-pointed from here.
-  const canChangeCustomer = Boolean(quotation) && isEditable && quotation.origin !== 'PRICING_REQUEST'
-    && (user.role === 'sales' || user.role === 'sales_manager');
+  // canChangeDealCustomer mirrors TicketService.changeCustomer; the page adds only "is saved".
+  const canChangeCustomer = Boolean(quotation) && canChangeDealCustomer(user, ticket, quotation);
   const status = quotation ? dealQuotationStatusLabel(quotation.docStatus) : null;
   // V7 (owner review 2026-09-10): a pristine /quotations/new has no customer yet, and the `'-'`
   // fallback rendered the page subtitle as a bare "-" — a dash where a sentence belongs reads as a
@@ -3117,12 +3114,17 @@ export function QuotationEditorPage({ user, showToast }) {
           ticketId={effectiveTicketId}
           showToast={showToast}
           onClose={() => setChangeCustomerOpen(false)}
-          onChanged={async (customer, project) => {
-            await queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(effectiveTicketId) });
-            setCustomerOverride(customer);
+          onChanged={async (project) => {
+            // The server re-snapshotted every draft of the deal in the same call, so re-read the deal
+            // and this quotation and show them; there is nothing left for a save to do. The one
+            // piece of local state that still holds the old value is the project field, which every
+            // save sends in full: seed it from the project the server just wrote.
+            await Promise.all([
+              queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(effectiveTicketId) }),
+              queryClient.invalidateQueries({ queryKey: queryKeys.dealQuotationDetail(id) }),
+            ]);
             setTerms((t) => ({ ...t, projectName: project.name }));
-            setDirty(true);
-            showToast('success', 'เปลี่ยนลูกค้าแล้ว กดบันทึกร่างเพื่อให้ใบเสนอราคาใช้ข้อมูลลูกค้าใหม่');
+            showToast('success', 'เปลี่ยนลูกค้าแล้ว');
           }}
         />
       ) : null}

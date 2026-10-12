@@ -155,7 +155,8 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
             tickets, fxRates, notifications, landedCostCalculator, formulaEngine);
 
         ticketService = new TicketService(tickets, notifications,
-            objectMapper, customersRepo, new QuotationRenderer(), pricingRequestService, employeeAuth);
+            objectMapper, customersRepo, new QuotationRenderer(), pricingRequestService, employeeAuth, new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
+            new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
 
         CustomerQuotationRepository quotationRepository = new CustomerQuotationRepository(jdbc);
         quotationService = new CustomerQuotationService(quotationRepository, pricingRequests, decisionRepository,
@@ -1259,7 +1260,8 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
         ProjectDto project = projectsRepo.create(customer.id(), "โครงการ BN " + label);
         TicketService ticketServiceForCreate = new TicketService(tickets,
             new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP), new ObjectMapper(), customersRepo,
-            new QuotationRenderer(), pricingRequestService, employeeAuth);
+            new QuotationRenderer(), pricingRequestService, employeeAuth, new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
+            new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
         TicketDto created = ticketServiceForCreate.create(
             new CreateTicketRequest("ดีล BN " + label, "NORMAL", customer.name(), customer.id(), project.id(), null,
                 null, null, List.of(ticketItem("SCG", "Tile BN " + label, FACTORY))),

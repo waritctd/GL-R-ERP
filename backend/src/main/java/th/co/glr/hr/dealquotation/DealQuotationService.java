@@ -1178,8 +1178,14 @@ public class DealQuotationService {
 
     @Transactional
     public DealQuotationDto submit(long id, UserPrincipal actor) {
+        DealQuotationDto found = requireQuotation(id);
+        requireEditAccessForQuotation(actor, found);
+        // The deal's lock, like create/approve/cancel/reorder: TicketService#changeCustomer takes it
+        // too, and a submit that slipped between its "nothing sent yet" check and its writes would
+        // leave a PENDING_APPROVAL document printing the old customer. Re-read under the lock: what
+        // was loaded above may be what the change we just waited for rewrote.
+        quotations.lockTicket(found.ticketId());
         DealQuotationDto quotation = requireQuotation(id);
-        requireEditAccessForQuotation(actor, quotation);
         // GLA-123 slice S2: submit is now LIVE for BOTH origins — every validation below (item
         // completeness, payment term, validity date) is origin-agnostic and applies unchanged;
         // only approve/reject/issue diverge (see #approve/#reject's own origin branch).

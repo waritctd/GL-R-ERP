@@ -156,7 +156,8 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         decisionService = new PricingDecisionService(decisionRepository, pricingRequests, costingRepository,
             tickets, fxRates, notifications, landedCostCalculator, formulaEngine);
         TicketService ticketService = new TicketService(tickets, notifications,
-            objectMapper, customers, new QuotationRenderer(), pricingRequestService, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc));
+            objectMapper, customers, new QuotationRenderer(), pricingRequestService, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc), new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
+            new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
 
         salesRepId = createEmployee(employees, "พนักงานขาย สาม", "sales-step3@glr.co.th", "SALES", "แผนกขาย");
         long otherSalesId = createEmployee(employees, "พนักงานขาย อื่น", "sales-step3-other@glr.co.th", "SALES", "แผนกขาย");

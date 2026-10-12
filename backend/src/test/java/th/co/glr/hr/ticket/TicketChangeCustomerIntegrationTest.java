@@ -3,17 +3,18 @@ package th.co.glr.hr.ticket;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -39,10 +40,12 @@ import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
+import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.dealquotation.EmployeeSignatureRepository;
 import th.co.glr.hr.notification.NotificationEmailService;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
+import th.co.glr.hr.pricingrequest.PricingRequestRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
@@ -90,11 +93,14 @@ class TicketChangeCustomerIntegrationTest extends AbstractPostgresIntegrationTes
         tickets = new TicketRepository(jdbc);
         NotificationRepository notifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
         CustomerRepository customers = new CustomerRepository(jdbc);
-        PricingRequestService pricingRequests = mock(PricingRequestService.class);
-        when(pricingRequests.cancelOpenForTicket(anyLong(), anyString(), any()))
-            .thenReturn(new PricingRequestService.CancelOpenForTicketResult(0, List.of()));
+        // REAL pricing-request service: changeCustomer's "live pricing request" gate is now asked of
+        // it, and a mock would answer "none" whatever the table holds.
+        PricingRequestService pricingRequests = new PricingRequestService(new PricingRequestRepository(jdbc),
+            tickets, notifications, new ObjectMapper(), new ContactRepository(jdbc),
+            new FileStorageService("/tmp/glr-change-customer-test-uploads"), factoryQuoteCarryForward());
         ticketService = new TicketService(tickets, notifications,
-            new ObjectMapper(), customers, new QuotationRenderer(), pricingRequests, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc));
+            new ObjectMapper(), customers, new QuotationRenderer(), pricingRequests, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc), new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
+            new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
 
         EmployeeRepository employees = new EmployeeRepository(
             jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
@@ -245,9 +251,8 @@ class TicketChangeCustomerIntegrationTest extends AbstractPostgresIntegrationTes
     // ── the happy paths ──────────────────────────────────────────────────────
 
     @Test
-    void theOwnerMovesTheDealToTheOtherCustomer_andWritesAnEvent_andLeavesTheQuotationsPrintedNameAlone() {
+    void theOwnerMovesTheDealToTheOtherCustomer_andWritesAnEvent() {
         long ticketId = createTicketUnderCustomerA();
-        long draftQuotationId = insertDirectQuotation(ticketId, "DRAFT", custA.name());
         int eventsBefore = eventCount(ticketId);
 
         TicketDto result = ticketService.changeCustomer(ticketId, toCustomerB(contactB.id()), ownerRep);
@@ -262,10 +267,66 @@ class TicketChangeCustomerIntegrationTest extends AbstractPostgresIntegrationTes
 
         assertThat(eventCount(ticketId)).isEqualTo(eventsBefore + 1);
         assertThat(lastEventMessage(ticketId)).contains("เปลี่ยนลูกค้าเป็น").contains(custB.name());
+    }
 
-        // The quotation's printed customer is re-snapshotted by the editor's next SAVE, never here.
-        assertThat(quotationCustomerName(draftQuotationId)).isEqualTo(custA.name());
-        assertThat(quotationStatus(draftQuotationId)).isEqualTo("DRAFT");
+    // ── review A: the drafts' printed header moves in the SAME transaction as the deal ──────────
+
+    /**
+     * The header a reader of the draft sees (customer block + project) must already be the new
+     * customer's the moment {@code changeCustomer} returns, with NO {@code update} call: a draft
+     * reloaded or submitted before any autosave must never show customer A on deal B.
+     */
+    @Test
+    void theDraftsPrintedHeaderIsResnapshottedToTheNewCustomerInTheSameCall_withoutAnyUpdate() {
+        long ticketId = createTicketUnderCustomerA();
+        DealQuotationDto draft = quotationService.create(ticketId, saveRequest(), ownerRep);
+        Map<String, Object> before = quotationHeader(draft.id());
+        assertThat(before.get("customer_name")).isEqualTo(custA.name());
+        assertThat(before.get("project_name")).isEqualTo(projectA.name());
+        java.sql.Timestamp updatedBefore = (java.sql.Timestamp) before.get("updated_at");
+
+        ticketService.changeCustomer(ticketId, toCustomerB(contactB.id()), ownerRep);
+
+        Map<String, Object> after = quotationHeader(draft.id());
+        assertThat(after.get("customer_name")).as("customer_name").isEqualTo(custB.name());
+        assertThat(after.get("customer_address")).as("customer_address").isEqualTo(custB.address());
+        assertThat(after.get("customer_tax_id")).as("customer_tax_id").isEqualTo(custB.taxId());
+        assertThat(after.get("customer_phone")).as("customer_phone").isEqualTo(custB.phone());
+        assertThat(after.get("project_name")).as("project_name").isEqualTo(projectB.name());
+        assertThat(((java.sql.Timestamp) after.get("updated_at")).after(updatedBefore))
+            .as("updated_at advanced").isTrue();
+    }
+
+    @Test
+    void everyDraftOfTheDealIsResnapshotted_aCancelledRowIsLeftAlone() {
+        long ticketId = createTicketUnderCustomerA();
+        DealQuotationDto first = quotationService.create(ticketId, saveRequest(), ownerRep);
+        DealQuotationDto second = quotationService.create(ticketId, saveRequest(), ownerRep);
+        long cancelled = insertDirectQuotation(ticketId, "CANCELLED", custA.name());
+
+        ticketService.changeCustomer(ticketId, toCustomerB(null), ownerRep);
+
+        assertThat(quotationHeader(first.id()).get("customer_name")).isEqualTo(custB.name());
+        assertThat(quotationHeader(second.id()).get("customer_name")).isEqualTo(custB.name());
+        // CANCELLED is a dead document, not a live draft: it keeps the customer it was cancelled under.
+        assertThat(quotationHeader(cancelled).get("customer_name")).isEqualTo(custA.name());
+    }
+
+    /** Wrong way round: another deal's rows must not move, whatever their status. */
+    @Test
+    void aQuotationOfAnotherDealIsNeverTouched_pendingOrDraft() {
+        long ticketId = createTicketUnderCustomerA();
+        quotationService.create(ticketId, saveRequest(), ownerRep);
+        long otherDeal = createTicketUnderCustomerA();
+        long pendingOnOtherDeal = insertDirectQuotation(otherDeal, "PENDING_APPROVAL", custA.name());
+        DealQuotationDto draftOnOtherDeal = quotationService.create(otherDeal, saveRequest(), ownerRep);
+        Map<String, Object> pendingBefore = quotationHeader(pendingOnOtherDeal);
+        Map<String, Object> draftBefore = quotationHeader(draftOnOtherDeal.id());
+
+        ticketService.changeCustomer(ticketId, toCustomerB(null), ownerRep);
+
+        assertThat(quotationHeader(pendingOnOtherDeal)).isEqualTo(pendingBefore);
+        assertThat(quotationHeader(draftOnOtherDeal.id())).isEqualTo(draftBefore);
     }
 
     @Test
@@ -360,6 +421,117 @@ class TicketChangeCustomerIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(ticketRow(ticketId).get("customer_id")).isEqualTo(custB.id());
     }
 
+    // ── review B: the checks and the writes are serialised on the deal's lock ───────────────────
+
+    /**
+     * A submit is in flight (uncommitted, holding the deal's lock). A change of customer that
+     * started AFTER it must wait for it and then see a quotation that has left DRAFT: 409, and the
+     * ticket is still under customer A. Without the lock the change passes its "still a draft?"
+     * check against the pre-submit snapshot, moves the ticket, and leaves a PENDING_APPROVAL
+     * document printing customer A on a deal that is customer B's.
+     */
+    @Test
+    void aChangeWaitsForASubmitInFlight_andThenIsRefusedBecauseTheQuotationIsPending() throws Exception {
+        long ticketId = createTicketUnderCustomerA();
+        DealQuotationDto draft = quotationService.create(ticketId, saveRequest(), ownerRep);
+        TicketService changing = transactional(ticketService);
+
+        ExecutorService otherConnection = Executors.newSingleThreadExecutor();
+        try {
+            Future<Throwable> change = transactionTemplate.execute(submitting -> {
+                quotationService.submit(draft.id(), ownerRep);
+                Future<Throwable> started = otherConnection.submit(
+                    () -> catchThrowable(() -> changing.changeCustomer(ticketId, toCustomerB(null), ownerRep)));
+                assertThat(isOverWithin(started, 1_000))
+                    .as("whether the change is over while the submit is still uncommitted").isFalse();
+                return started;
+            });
+
+            Throwable outcome = change.get(10, TimeUnit.SECONDS);
+            assertThat(outcome).isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus().value()).isEqualTo(409);
+                assertThat(e.getMessage()).isEqualTo("เปลี่ยนลูกค้าไม่ได้ เนื่องจากมีใบเสนอราคาที่ส่งขออนุมัติแล้ว");
+            });
+        } finally {
+            otherConnection.shutdownNow();
+        }
+        assertTicketStillUnderCustomerA(ticketId);
+        assertThat(quotationHeader(draft.id()).get("customer_name")).isEqualTo(custA.name());
+        assertThat(quotationStatus(draft.id())).isEqualTo("PENDING_APPROVAL");
+    }
+
+    /**
+     * The other order: a change is in flight (uncommitted, holding the lock). A submit that started
+     * after it waits, then succeeds, and the document it sends for approval carries customer B.
+     */
+    @Test
+    void aSubmitWaitsForAChangeInFlight_andThenSendsTheNewCustomersDocument() throws Exception {
+        long ticketId = createTicketUnderCustomerA();
+        DealQuotationDto draft = quotationService.create(ticketId, saveRequest(), ownerRep);
+        DealQuotationService submitting = transactional(quotationService);
+
+        ExecutorService otherConnection = Executors.newSingleThreadExecutor();
+        try {
+            Future<Throwable> submit = transactionTemplate.execute(changing -> {
+                ticketService.changeCustomer(ticketId, toCustomerB(null), ownerRep);
+                Future<Throwable> started = otherConnection.submit(
+                    () -> catchThrowable(() -> submitting.submit(draft.id(), ownerRep)));
+                assertThat(isOverWithin(started, 1_000))
+                    .as("whether the submit is over while the change is still uncommitted").isFalse();
+                return started;
+            });
+
+            assertThat(submit.get(10, TimeUnit.SECONDS)).as("the submit, which waited, goes through").isNull();
+        } finally {
+            otherConnection.shutdownNow();
+        }
+        Map<String, Object> header = quotationHeader(draft.id());
+        assertThat(quotationStatus(draft.id())).isEqualTo("PENDING_APPROVAL");
+        assertThat(header.get("customer_name")).isEqualTo(custB.name());
+        assertThat(header.get("project_name")).isEqualTo(projectB.name());
+    }
+
+    /**
+     * The change test above would still pass if only the change took the lock, because the change's
+     * own UPDATE of the draft row makes the submit wait on a row lock. This one holds the deal's
+     * lock with nothing else, so it is red unless {@code submit} itself takes it.
+     */
+    @Test
+    void aSubmitWaitsForTheDealsLockEvenWhenNothingElseIsHeld() throws Exception {
+        long ticketId = createTicketUnderCustomerA();
+        DealQuotationDto draft = quotationService.create(ticketId, saveRequest(), ownerRep);
+        DealQuotationService submitting = transactional(quotationService);
+        DealQuotationRepository lockOnly = new DealQuotationRepository(jdbc, new CatalogRepository(jdbc));
+
+        ExecutorService otherConnection = Executors.newSingleThreadExecutor();
+        try {
+            Future<Throwable> submit = transactionTemplate.execute(holding -> {
+                lockOnly.lockTicket(ticketId);
+                Future<Throwable> started = otherConnection.submit(
+                    () -> catchThrowable(() -> submitting.submit(draft.id(), ownerRep)));
+                assertThat(isOverWithin(started, 1_000))
+                    .as("whether the submit is over while the deal's lock is held").isFalse();
+                return started;
+            });
+            assertThat(submit.get(10, TimeUnit.SECONDS)).isNull();
+        } finally {
+            otherConnection.shutdownNow();
+        }
+        assertThat(quotationStatus(draft.id())).isEqualTo("PENDING_APPROVAL");
+    }
+
+    /** Whether {@code task} is over within {@code millis}. One that waits for a lock is not. */
+    private static boolean isOverWithin(Future<?> task, long millis) {
+        try {
+            task.get(millis, TimeUnit.MILLISECONDS);
+            return true;
+        } catch (TimeoutException stillWaiting) {
+            return false;
+        } catch (InterruptedException | java.util.concurrent.ExecutionException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     private ChangeCustomerRequest toCustomerB(Long contactId) {
@@ -398,9 +570,12 @@ class TicketChangeCustomerIntegrationTest extends AbstractPostgresIntegrationTes
             Map.of("id", ticketId), String.class);
     }
 
-    private String quotationCustomerName(long quotationId) {
-        return jdbc.queryForObject("SELECT customer_name FROM sales.quotation WHERE quotation_id = :id",
-            Map.of("id", quotationId), String.class);
+    private Map<String, Object> quotationHeader(long quotationId) {
+        return jdbc.queryForMap("""
+            SELECT customer_name, customer_address, customer_tax_id, customer_phone, project_name,
+                   contact_id, contact_name, contact_phone, contact_email, doc_status, updated_at
+              FROM sales.quotation WHERE quotation_id = :id
+            """, Map.of("id", quotationId));
     }
 
     private Long quotationContactId(long quotationId) {

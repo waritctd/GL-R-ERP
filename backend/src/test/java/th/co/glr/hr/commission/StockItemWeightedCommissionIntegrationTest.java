@@ -95,7 +95,8 @@ class StockItemWeightedCommissionIntegrationTest extends AbstractPostgresIntegra
         when(pricingRequests.cancelOpenForTicket(anyLong(), anyString(), any()))
             .thenReturn(new PricingRequestService.CancelOpenForTicketResult(0, List.of()));
         ticketService = new TicketService(tickets, notifications,
-            new ObjectMapper(), customers, new QuotationRenderer(), pricingRequests, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc));
+            new ObjectMapper(), customers, new QuotationRenderer(), pricingRequests, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc), new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
+            new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
         // tickets is the REAL repository (not mocked) — CommissionService's own
         // computeItemDerivedWeight needs it to read real ticket_item rows, exactly as it will in
         // production.

@@ -101,7 +101,8 @@ class DealQuotationAttachmentPricingRequestOriginIntegrationTest extends Abstrac
         decisionService = new PricingDecisionService(new PricingDecisionRepository(jdbc), pricingRequests,
             new PricingCostingRepository(jdbc), tickets, fxRates, notifications, landedCostCalculator, formulaEngine);
         TicketService ticketService = new TicketService(tickets, notifications, objectMapper, customers,
-            new QuotationRenderer(), pricingRequestService, new EmployeeAuthRepository(jdbc));
+            new QuotationRenderer(), pricingRequestService, new EmployeeAuthRepository(jdbc), new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
+            new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
 
         catalogProductIdFactoryA = insertCatalogProduct("Factory A-ATT", "IT", "TEST-A-ATT-001",
             new BigDecimal("100.00"), "THB", "per_piece");

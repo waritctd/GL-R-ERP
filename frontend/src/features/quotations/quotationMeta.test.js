@@ -3,6 +3,7 @@ import * as meta from './quotationMeta.js';
 import {
   canApproveDealQuotation,
   canCancelDealQuotation,
+  canChangeDealCustomer,
   canCreateDealQuotation,
   canCreateDealQuotationStandalone,
   canDecideDealQuotation,
@@ -221,6 +222,52 @@ describe('canSubmitDealQuotation / canCancelDealQuotation / canReviseDealQuotati
     expect(canReviseDealQuotation(salesOwner, quotation({ docStatus: 'DRAFT' }))).toBe(false);
     expect(canReviseDealQuotation(salesOwner, quotation({ docStatus: 'PENDING_APPROVAL' }))).toBe(false);
     expect(canReviseDealQuotation(otherSales, quotation({ docStatus: 'APPROVED' }))).toBe(false);
+  });
+});
+
+// Mirrors TicketService.changeCustomer: requireDealOwnership (owning sales rep, sales_manager, ceo —
+// and NOT a canCreateQuotation grant holder), plus the two state gates the page can see: the
+// quotation is a DRAFT and it came from the deal itself rather than from a pricing request.
+describe('canChangeDealCustomer', () => {
+  const draftDirect = quotation({ origin: 'DEAL_DIRECT' });
+
+  it('refuses the wrong people first: a grant holder, another rep, and every other role', () => {
+    expect(canChangeDealCustomer(qcWithGrant, ownedTicket, draftDirect)).toBe(false);
+    expect(canChangeDealCustomer({ ...salesOwner, canCreateQuotation: true }, otherTicket, draftDirect)).toBe(false);
+    expect(canChangeDealCustomer(otherSales, ownedTicket, draftDirect)).toBe(false);
+    for (const user of [importUser, accountUser, hrUser, qcUser, warehouseUser]) {
+      expect(canChangeDealCustomer(user, ownedTicket, draftDirect), user.role).toBe(false);
+    }
+    expect(canChangeDealCustomer(null, ownedTicket, draftDirect)).toBe(false);
+    expect(canChangeDealCustomer(salesOwner, null, draftDirect)).toBe(false);
+    expect(canChangeDealCustomer(salesOwner, ownedTicket, null)).toBe(false);
+  });
+
+  it('refuses a quotation that has left DRAFT, whoever asks', () => {
+    for (const docStatus of ['PENDING_APPROVAL', 'APPROVED', 'REJECTED', 'SUPERSEDED', 'CANCELLED']) {
+      for (const user of [salesOwner, salesManager, ceo]) {
+        expect(canChangeDealCustomer(user, ownedTicket, quotation({ origin: 'DEAL_DIRECT', docStatus })), `${user.role} on ${docStatus}`).toBe(false);
+      }
+    }
+  });
+
+  it('refuses a pricing-request quotation, and one whose origin is missing or new', () => {
+    for (const origin of ['PRICING_REQUEST', undefined, null, 'SOMETHING_ELSE']) {
+      expect(canChangeDealCustomer(salesOwner, ownedTicket, quotation({ origin })), String(origin)).toBe(false);
+      expect(canChangeDealCustomer(salesManager, ownedTicket, quotation({ origin })), String(origin)).toBe(false);
+    }
+  });
+
+  it('allows the owning sales rep, the sales_manager and the ceo on a DRAFT direct quotation', () => {
+    expect(canChangeDealCustomer(salesOwner, ownedTicket, draftDirect)).toBe(true);
+    expect(canChangeDealCustomer(salesManager, ownedTicket, draftDirect)).toBe(true);
+    expect(canChangeDealCustomer(salesManager, otherTicket, draftDirect)).toBe(true);
+    expect(canChangeDealCustomer(ceo, otherTicket, draftDirect)).toBe(true);
+  });
+
+  it('compares ids as numbers, like the server', () => {
+    expect(canChangeDealCustomer({ id: '6', role: 'sales' }, { createdById: 6 }, draftDirect)).toBe(true);
+    expect(canChangeDealCustomer({ id: 6, role: 'sales' }, { createdById: null }, draftDirect)).toBe(false);
   });
 });
 

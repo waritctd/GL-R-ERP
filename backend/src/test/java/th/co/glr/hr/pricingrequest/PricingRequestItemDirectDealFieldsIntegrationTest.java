@@ -79,7 +79,8 @@ class PricingRequestItemDirectDealFieldsIntegrationTest extends AbstractPostgres
             pricingRequests, tickets, notifications, objectMapper, new ContactRepository(jdbc),
             new FileStorageService("/tmp/glr-pricing-item-fields-test-uploads"), factoryQuoteCarryForward());
         TicketService ticketService = new TicketService(tickets, notifications, objectMapper, customers,
-            new QuotationRenderer(), pricingRequestService, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc));
+            new QuotationRenderer(), pricingRequestService, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc), new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
+            new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
 
         salesRepId = employees.create(new UpsertEmployeeRequest(
             null, null, "พนักงานขาย V185", null, null, null, null, null, null, null,

@@ -27,9 +27,10 @@ vi.setConfig({ testTimeout: 15000 });
 //     keeps its id `deal-customer`, the project input `deal-project`), in a dialog (role="dialog")
 //     or inline — both are handled below;
 //   * a confirm button whose accessible name starts with "ยืนยัน";
-//   * on success the quotation is left DIRTY (observed the way copyFrom.test.jsx observes it: the
-//     "คัดลอกเป็นใบใหม่" button disables while unsaved edits are on the page), because only the next
-//     draft save re-snapshots the customer onto the document.
+//   * on success the page is NOT left dirty (observed the way copyFrom.test.jsx observes it: the
+//     "คัดลอกเป็นใบใหม่" button disables while unsaved edits are on the page): the server has already
+//     re-snapshotted the draft's printed customer in the same call, so the editor refetches the
+//     quotation and shows it — nothing is waiting for a save, and the change itself never PUTs.
 //
 // Evidence note: every server response here is a vi.fn(). Who may change a deal's customer, and the
 // 409 once a quotation has been submitted, are the SERVER's decisions —
@@ -125,10 +126,23 @@ const byId = (id) => document.getElementById(id);
 // api.tickets.get answers from it — which is how "refresh the ticket" is observed.
 let dealCustomer;
 let dealProject;
+// The quotation as the SERVER holds it. changeCustomer re-snapshots its customer block in the same
+// call (TicketService#changeCustomer -> DealQuotationRepository#resnapshotDraftsForDealCustomerChange),
+// and every later api.dealQuotations.get answers from it.
+let serverQuotation;
+let dealOwnerId;
+
+function resnapshotted(quotation) {
+  return {
+    ...quotation,
+    customerName: dealCustomer.name, customerAddress: dealCustomer.address,
+    customerTaxId: dealCustomer.taxId, customerPhone: dealCustomer.phone, projectName: dealProject.name,
+  };
+}
 
 function ticketSummary() {
   return {
-    id: TICKET_ID, createdById: 6, createdByName: 'คุณสมหมาย ขายดี',
+    id: TICKET_ID, createdById: dealOwnerId, createdByName: 'คุณสมหมาย ขายดี',
     customerName: dealCustomer.name, customerId: dealCustomer.id,
     projectId: dealProject.id, projectName: dealProject.name, contactId: null, contactName: null,
   };
@@ -147,7 +161,7 @@ function Providers({ path, children, client }) {
 
 /** The saved quotation's own page, as `user`. Returns the toast spy so a refusal can be read. */
 function renderSaved(quotation, user = salesUser) {
-  api.dealQuotations.get.mockResolvedValue({ quotation });
+  serverQuotation = quotation;
   const showToast = vi.fn();
   const result = render(
     <Providers path={`/quotations/${quotation.id}`}>
@@ -200,21 +214,21 @@ beforeEach(() => {
   vi.clearAllMocks();
   dealCustomer = OLD_CUSTOMER;
   dealProject = OLD_PROJECT;
-  api.dealQuotations.get.mockResolvedValue({ quotation: draft() });
+  dealOwnerId = 6;
+  serverQuotation = draft();
+  api.dealQuotations.get.mockImplementation(async () => ({ quotation: serverQuotation }));
   api.dealQuotations.displayNameOptions.mockResolvedValue({ items: [] });
   api.dealQuotations.calculateLine.mockResolvedValue({ item: {} });
   // What the real server does on a DRAFT save: re-snapshot the DEAL's customer onto the document.
   api.dealQuotations.update.mockImplementation(async () => ({
-    quotation: draft({
-      customerName: dealCustomer.name, customerAddress: dealCustomer.address,
-      customerTaxId: dealCustomer.taxId, customerPhone: dealCustomer.phone, projectName: dealProject.name,
-    }),
+    quotation: resnapshotted(draft()),
   }));
   api.tickets.get.mockImplementation(async () => ({ ticket: { summary: ticketSummary() } }));
   api.tickets.changeCustomer.mockImplementation(async (_ticketId, request) => {
     expect(request.customerId).toBe(NEW_CUSTOMER.id);
     dealCustomer = NEW_CUSTOMER;
     dealProject = NEW_CUSTOMERS_PROJECT;
+    serverQuotation = resnapshotted(serverQuotation);
     return { ticket: { summary: ticketSummary() } };
   });
   api.customers.search.mockResolvedValue({ customers: [OLD_CUSTOMER, NEW_CUSTOMER] });
@@ -225,7 +239,7 @@ beforeEach(() => {
 });
 
 describe('"เปลี่ยนลูกค้า" on a saved DRAFT direct quotation', () => {
-  it('is offered to the owning rep, and confirming moves the deal and fills the customer fields in', async () => {
+  it('is offered to the owning rep, and confirming moves the deal and shows the re-snapshotted draft', async () => {
     renderSaved(draft());
 
     // The control: the summary shows today's customer, and nothing is unsaved yet.
@@ -243,7 +257,7 @@ describe('"เปลี่ยนลูกค้า" on a saved DRAFT direct quot
       TICKET_ID, { customerId: NEW_CUSTOMER.id, projectId: NEW_CUSTOMERS_PROJECT.id, contactId: null },
     );
 
-    // The editor's own customer fields now show the NEW customer's record …
+    // The editor's own customer fields now show the NEW customer, read from the REFETCHED quotation …
     await waitFor(() => expect(fieldValue(QUOTATION_FIELD_IDS.customerName)).toBe(NEW_CUSTOMER.name));
     expect(fieldValue(QUOTATION_FIELD_IDS.customerTaxId)).toBe(NEW_CUSTOMER.taxId);
     expect(fieldValue(QUOTATION_FIELD_IDS.customerAddress)).toBe(NEW_CUSTOMER.address);
@@ -254,32 +268,37 @@ describe('"เปลี่ยนลูกค้า" on a saved DRAFT direct quot
     expect(everything).not.toContain(OLD_CUSTOMER.address);
     // The deal was re-read, so the header (which is the ticket's customer) agrees with the fields.
     await waitFor(() => expect(screen.getByRole('heading', { level: 1 }).closest('header').textContent).toContain(NEW_CUSTOMER.name));
-    // Left dirty: the document still carries the OLD snapshot until the next save.
-    expect(isDirty()).toBe(true);
+    // The quotation was re-read (the server re-snapshotted it), the change itself never saved it,
+    // and nothing is left unsaved: the form already shows what the server holds.
+    expect(api.dealQuotations.get.mock.calls.length).toBeGreaterThan(1);
+    expect(api.dealQuotations.update).not.toHaveBeenCalled();
+    expect(fieldValue('projectNameCard')).toBe(NEW_CUSTOMERS_PROJECT.name);
+    expect(isDirty()).toBe(false);
   });
 
-  it('the next บันทึกร่าง is the ordinary draft save, with nothing of the old customer in it, and it settles the form', async () => {
+  it('a later ordinary edit and save carries the NEW project and nothing of the old customer', async () => {
     renderSaved(draft());
     await waitFor(() => expect(fieldValue(QUOTATION_FIELD_IDS.customerName)).toBe(OLD_CUSTOMER.name));
     const scope = await openThePickers();
     await pickTheOtherCustomerAndProject(scope);
     confirmTheChange(scope);
     await waitFor(() => expect(fieldValue(QUOTATION_FIELD_IDS.customerName)).toBe(NEW_CUSTOMER.name));
-    expect(isDirty()).toBe(true);
+    expect(api.dealQuotations.update).not.toHaveBeenCalled();
 
+    fireEvent.change(byId('offerDate'), { target: { value: '2026-09-19' } });
+    expect(isDirty()).toBe(true);
     fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
 
     await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalledTimes(1));
     const [quotationId, payload] = api.dealQuotations.update.mock.calls[0];
     expect(Number(quotationId)).toBe(918273); // the editor passes the route param as it came, a string
-    // The customer on the printed document is re-snapshotted by the SERVER from the deal
-    // (DealQuotationService#customerSnapshot), so the request never carries customer columns — what
-    // matters is that no stale copy of the old customer rides along.
+    // The project name is a field the rep owns and every save sends in full, so it must already be
+    // the new project's — an old one here would put customer A's project back on the document.
+    expect(payload.projectName).toBe(NEW_CUSTOMERS_PROJECT.name);
     const sent = JSON.stringify(payload);
-    for (const stale of [OLD_CUSTOMER.name, OLD_CUSTOMER.taxId, OLD_CUSTOMER.address, OLD_CUSTOMER.phone]) {
+    for (const stale of [OLD_CUSTOMER.name, OLD_CUSTOMER.taxId, OLD_CUSTOMER.address, OLD_CUSTOMER.phone, OLD_PROJECT.name]) {
       expect(sent).not.toContain(stale);
     }
-    // The save landed, so the form is clean again and shows the customer the server now prints.
     await waitFor(() => expect(isDirty()).toBe(false));
     expect(fieldValue(QUOTATION_FIELD_IDS.customerName)).toBe(NEW_CUSTOMER.name);
   });
@@ -349,6 +368,37 @@ describe('"เปลี่ยนลูกค้า" is not offered where the cus
       expect(screen.queryByRole('button', { name: CHANGE }), `offered to ${viewer.role}`).toBeNull();
       page.unmount();
     }
+  });
+
+  // The gate is TicketService#requireDealOwnership: the OWNING rep, not any sales rep who can edit
+  // the quotation. canChangeDealCustomer mirrors it, so the button and the server cannot disagree.
+  it('not to a sales rep who does not own the deal, even one who can edit the quotation', async () => {
+    await theControlIsThere();
+
+    dealOwnerId = 99; // the deal belongs to someone else; the quotation still names this rep
+    renderSaved(draft({ salesRepId: salesUser.id }));
+    await pageIsUp();
+
+    expect(screen.queryByRole('button', { name: CHANGE })).toBeNull();
+  });
+
+  it('not to a canCreateQuotation grant holder who is not the owner, a manager or the ceo', async () => {
+    await theControlIsThere();
+
+    renderSaved(draft(), { id: 20, name: 'คุณภิญญดา', role: 'qc', canCreateQuotation: true });
+    await pageIsUp();
+
+    expect(screen.queryByRole('button', { name: CHANGE })).toBeNull();
+  });
+
+  // requireDealOwnership lets the sales_manager through for any deal. (The ceo passes it too, and
+  // canChangeDealCustomer says so in quotationMeta.test.js, but the control sits in the editor card
+  // the ceo's read-only view does not render, so it is not asserted here.)
+  it('to the sales_manager, on a deal they do not own', async () => {
+    dealOwnerId = 99;
+    renderSaved(draft(), { id: 9, name: 'ผจก.ขาย', role: 'sales_manager' });
+
+    expect(await screen.findByRole('button', { name: CHANGE })).toBeTruthy();
   });
 
   // There is no deal yet, so there is nothing to re-point: the customer is simply picked, in the

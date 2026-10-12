@@ -799,6 +799,12 @@ public class PricingRequestService {
         return requests.findAttachment(attachment.id()).orElseThrow();
     }
 
+    /** Whether the deal has a pricing request that is not CANCELLED. Same predicate as
+     * {@link #cancelOpenForTicket}'s cascade, so "live" means one thing in this module. */
+    public boolean hasOpenForTicket(long ticketId) {
+        return !requests.findOpenIdsForTicket(ticketId).isEmpty();
+    }
+
     /**
      * Internal cascade: when a deal reaches a terminal lifecycle state (lost or
      * cancelled — see {@code TicketService.markLost}/{@code cancel}), any pricing

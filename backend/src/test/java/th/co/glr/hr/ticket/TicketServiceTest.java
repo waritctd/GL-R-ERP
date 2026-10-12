@@ -76,7 +76,9 @@ class TicketServiceTest {
     }
     private final TicketService service = new TicketService(
         ticketRepo, notifRepo, new ObjectMapper(), customerRepo, quotationRenderer,
-        pricingRequestService, employeeAuthRepo);
+        pricingRequestService, employeeAuthRepo,
+        mock(th.co.glr.hr.customer.ContactRepository.class), mock(th.co.glr.hr.customer.ProjectRepository.class),
+        mock(th.co.glr.hr.dealquotation.DealQuotationRepository.class));
 
     private final UserPrincipal salesActor   = actor(1L, "sales");
     private final UserPrincipal otherSales   = actor(2L, "sales");

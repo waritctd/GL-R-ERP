@@ -1114,6 +1114,51 @@ public class DealQuotationRepository {
                 .addValue("refreshName", refreshName));
     }
 
+    /**
+     * Moves the printed header of every DRAFT quotation of a deal onto the deal's NEW customer, in
+     * the caller's transaction: the customer block, the project name and the ผู้สั่งซื้อ. Called by
+     * {@code TicketService#changeCustomer} right after it re-points the ticket, so a draft reloaded
+     * or submitted before the editor's next autosave never prints customer A on customer B's deal.
+     *
+     * <p>Same {@code doc_status = 'DRAFT'} enforcement as {@link #updateHeader}, same origin
+     * widening: a submitted, approved or CANCELLED document keeps what it was frozen with. (The
+     * caller has already refused the change when any non-DRAFT, non-CANCELLED row exists.)
+     *
+     * <p>The contact columns are cleared here and, when {@code contactId} is given, refilled by
+     * {@link #refreshDraftContactSnapshot} rather than by a second copy of its SELECT, so the
+     * {@code NULLIF(TRIM(...))} normalisation lives in one place. That call is keyed on the contact,
+     * not the deal, so another deal's DRAFT that already points at the same contact id is refreshed
+     * to the contact's live values too, exactly as editing the contact would do.
+     *
+     * @return the number of drafts moved.
+     */
+    public int resnapshotDraftsForDealCustomerChange(long ticketId, CustomerSnapshot customer,
+                                                     String projectName, Long contactId) {
+        int rows = jdbc.update("""
+            UPDATE sales.quotation
+               SET customer_name = :customerName, customer_address = :customerAddress,
+                   customer_tax_id = :customerTaxId, customer_phone = :customerPhone,
+                   project_name = :projectName,
+                   contact_id = :contactId, contact_name = NULL, contact_phone = NULL, contact_email = NULL,
+                   updated_at = now()
+             WHERE ticket_id = :ticketId
+               AND origin IN ('DEAL_DIRECT', 'PRICING_REQUEST')
+               AND doc_status = 'DRAFT'
+            """,
+            new MapSqlParameterSource()
+                .addValue("ticketId", ticketId)
+                .addValue("customerName", customer.name())
+                .addValue("customerAddress", customer.address())
+                .addValue("customerTaxId", customer.taxId())
+                .addValue("customerPhone", customer.phone())
+                .addValue("projectName", projectName)
+                .addValue("contactId", contactId));
+        if (contactId != null) {
+            refreshDraftContactSnapshot(contactId, true);
+        }
+        return rows;
+    }
+
     /** Compare-and-set DRAFT -> PENDING_APPROVAL. Rowcount 0 means not open for submit. Clears any
      * stale rejection reason from a prior cycle (V165's own header comment: "cleared on the next
      * submit"). GLA-123 slice S2: widened from {@code origin = 'DEAL_DIRECT'} to include {@code

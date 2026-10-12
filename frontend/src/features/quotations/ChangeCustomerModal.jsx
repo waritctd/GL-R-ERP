@@ -7,9 +7,9 @@ import { DealCustomerCard } from './DealCustomerCard.jsx';
 /**
  * Re-points a deal at another customer + project (owner, 2026-10-12: "ลูกค้า must also be editable
  * when still not sent for approval, in case of a typo"). Not the same as renaming the customer
- * record, which ชื่อลูกค้า on the summary already does. The picked customer comes back through
- * `onChanged` so the editor can show its details at once; the document itself only picks the new
- * customer up on its next draft save.
+ * record, which ชื่อลูกค้า on the summary already does. The server moves the deal and re-snapshots
+ * every draft's printed customer in the same call; the picked project comes back through
+ * `onChanged` so the editor can refetch and re-seed its project field.
  */
 export function ChangeCustomerModal({ ticketId, onClose, onChanged, showToast }) {
   const [form, setForm] = useState({ customer: null, project: null });
@@ -21,7 +21,7 @@ export function ChangeCustomerModal({ ticketId, onClose, onChanged, showToast })
       await api.tickets.changeCustomer(ticketId, {
         customerId: form.customer.id, projectId: form.project.id, contactId: null,
       });
-      await onChanged(form.customer, form.project);
+      await onChanged(form.project);
       onClose();
     } catch (error) {
       showToast('error', error.message || 'เปลี่ยนลูกค้าไม่สำเร็จ');
@@ -32,7 +32,7 @@ export function ChangeCustomerModal({ ticketId, onClose, onChanged, showToast })
   return (
     <Modal
       title="เปลี่ยนลูกค้า"
-      subtitle="เปลี่ยนได้จนกว่าจะส่งขออนุมัติ ข้อมูลในใบเสนอราคาจะเปลี่ยนเมื่อกดบันทึกร่าง"
+      subtitle="เปลี่ยนได้จนกว่าจะส่งขออนุมัติ ใบเสนอราคาฉบับร่างจะใช้ข้อมูลลูกค้าใหม่ทันที"
       onClose={onClose}
       footer={(
         <>

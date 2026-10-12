@@ -122,7 +122,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         // pricingRequests (last arg) is dead-deal-cascade-only (markLost/cancel) -- unused by
         // create(), the only TicketService method this test calls.
         ticketService = new TicketService(tickets, notifications, objectMapper, customers,
-            new QuotationRenderer(), null, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc));
+            new QuotationRenderer(), null, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc), new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
+            new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
 
         quotationRepository = new DealQuotationRepository(jdbc, new CatalogRepository(jdbc));
         mailer = new CapturingMailer();

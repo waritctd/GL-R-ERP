@@ -8169,8 +8169,12 @@ export const api = {
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 
-    // Mirrors TicketService.changeCustomer. Quotation rows are untouched: a draft re-snapshots the
-    // deal's customer on its next save.
+    // Mirrors TicketService.changeCustomer: same gate order (ownership, active, a quotation past
+    // DRAFT, a live pricing request, then the customer/project/contact checks), and the same write
+    // set -- the ticket, every DRAFT quotation of the deal (DealQuotationRepository
+    // #resnapshotDraftsForDealCustomerChange), and an EDITED event. CANCELLED rows are left as they
+    // were, like the repository's. NOT mirrored: the deal's advisory lock, which a single-threaded
+    // mock has no use for.
     async changeCustomer(id, payload) {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
@@ -8178,6 +8182,10 @@ export const api = {
       requireActive(ticket);
       if (mockDealQuotations.some((q) => q.ticketId === ticket.id && !['DRAFT', 'CANCELLED'].includes(q.docStatus))) {
         fail('เปลี่ยนลูกค้าไม่ได้ เนื่องจากมีใบเสนอราคาที่ส่งขออนุมัติแล้ว', 409);
+      }
+      // PricingRequestRepository#findOpenIdsForTicket's predicate: status <> 'CANCELLED'.
+      if (mockPricingRequests.some((pr) => pr.ticketId === ticket.id && pr.status !== 'CANCELLED')) {
+        fail('เปลี่ยนลูกค้าไม่ได้ เนื่องจากดีลนี้มีคำขอราคาอยู่', 409);
       }
       const customer = mockCustomers.find((c) => c.id === Number(payload?.customerId));
       if (!customer) fail('ไม่พบลูกค้าที่เลือก', 400);
@@ -8195,6 +8203,15 @@ export const api = {
       ticket.projectId = project.id;
       ticket.contactId = contactId == null ? null : Number(contactId);
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
+      const resnapshotAt = new Date().toISOString();
+      mockDealQuotations
+        .filter((q) => q.ticketId === ticket.id && q.docStatus === 'DRAFT')
+        .forEach((q) => Object.assign(q, {
+          ...mockDealQuotationCustomerSnapshot(ticket),
+          ...resolveDealQuotationContact(ticket, {}),
+          projectName: project.name,
+          updatedAt: resnapshotAt,
+        }));
       pushEvent(ticket, user, 'EDITED', ticket.salesStage, ticket.salesStage, `เปลี่ยนลูกค้าเป็น ${customer.name}`);
       return delay({ ticket: buildTicketDetail(ticket) });
     },
