@@ -75,7 +75,9 @@ export function PageHeader({
         {eyebrow ? (
           <span className="mb-1 block text-xs font-extrabold uppercase tracking-normal text-text-muted">{eyebrow}</span>
         ) : null}
-        <div className="flex flex-wrap items-center gap-2">
+        {/* No wrap: on a phone the title wraps its own text and the aside stays at the end of
+            the first line, instead of dropping to a line of its own under the title. */}
+        <div className="flex items-start gap-2">
           <h1
             id={titleId}
             className={cn('m-0 min-w-0 text-2xl leading-[1.2] [overflow-wrap:anywhere] text-balance', headingClassName)}
