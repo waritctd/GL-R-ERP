@@ -13,7 +13,7 @@ export function FieldList({ columns = 2, className, children, ...props }) {
   return (
     <dl
       className={cn(
-        'grid gap-x-[18px] gap-y-[15px] mt-4 mobile:grid-cols-1',
+        'grid gap-x-[18px] gap-y-[15px] mb-0 mt-4 mobile:grid-cols-1',
         // dt: field labels are real data captions the user reads, not icons/
         // placeholders, so per DESIGN.md's Muted Floor Rule they sit at Ink
         // Muted (not Ink Faint, which is ~2.6:1 on white).
