@@ -13,6 +13,7 @@ import java.lang.reflect.Modifier;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -20,6 +21,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import org.junit.jupiter.api.Test;
+import th.co.glr.hr.attachment.FileAttachmentBlobRepository;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationAttachmentDto;
@@ -375,8 +377,9 @@ class DealQuotationAttachmentAuthzIntegrationTest extends AbstractDealQuotationA
      *
      * <p>Two real transactions on two connections. The resubmission is the real
      * {@code DealQuotationService#submit}, left uncommitted, so it holds the lock it takes in
-     * production. The delete goes through {@link #transactional}, because this suite's services
-     * are hand-wired and a bare call would give the lock up at the end of its own statement.
+     * production. The delete goes through {@link #transactional}, as it runs in production. This
+     * order does not depend on that: a bare delete still waits for a lock someone else holds. The
+     * next test is the order that does.
      */
     @Test
     void aDeleteWaitsForAResubmissionInFlight_andThenLeavesTheFileItsRevisionShows() throws Exception {
@@ -415,6 +418,66 @@ class DealQuotationAttachmentAuthzIntegrationTest extends AbstractDealQuotationA
             otherConnection.shutdownNow();
         }
         assertThat(storedBytes(file)).isEqualTo(VENDOR_QUOTE);
+    }
+
+    /**
+     * The other order: the delete is first. It has passed its check and holds the deal's lock, so
+     * a resubmission must wait until it has committed. What holds the lock that long is
+     * {@code @Transactional} on {@code DealQuotationAttachmentService#delete}. Without it the lock
+     * is given up at the end of its own statement, a resubmission mints its revision in the gap,
+     * and the delete then removes a file that revision lists.
+     */
+    @Test
+    void aResubmissionWaitsForADeleteInFlight_soNoRevisionListsAFileThatIsAboutToGo() throws Exception {
+        DealQuotationDto rejected = draftOwnedBy(salesActor);
+        long file = seed(rejected.id(), FILE, VENDOR_QUOTE, salesActor);
+        quotationService.submit(rejected.id(), salesActor);
+        quotationService.reject(rejected.id(), new RejectRequest("ราคาสูงเกินไป"), salesManagerActor);
+
+        // The delete, stopped after its checks and just before its statement.
+        CountDownLatch atItsStatement = new CountDownLatch(1);
+        CountDownLatch goOn = new CountDownLatch(1);
+        DealQuotationAttachmentRepository stopsBeforeDeleting = new DealQuotationAttachmentRepository(
+                jdbc, new FileAttachmentBlobRepository(jdbc)) {
+            @Override
+            public int deleteFromDraft(long attachmentId) {
+                atItsStatement.countDown();
+                try {
+                    goOn.await(20, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(e);
+                }
+                return super.deleteFromDraft(attachmentId);
+            }
+        };
+        DealQuotationAttachmentService deleting = transactional(
+            new DealQuotationAttachmentService(quotationService, stopsBeforeDeleting, fileStorage));
+        DealQuotationService resubmitting = transactional(quotationService);
+
+        ExecutorService twoConnections = Executors.newFixedThreadPool(2);
+        try {
+            Future<Throwable> delete = twoConnections.submit(
+                () -> catchThrowable(() -> deleting.delete(file, salesActor)));
+            assertThat(atItsStatement.await(10, TimeUnit.SECONDS)).as("the delete passed its checks").isTrue();
+
+            Future<DealQuotationDto> resubmit = twoConnections.submit(
+                () -> resubmitting.submit(rejected.id(), salesActor));
+            boolean resubmittedMeanwhile = isOverWithin(resubmit, 1_500);
+            goOn.countDown();
+
+            assertThat(delete.get(15, TimeUnit.SECONDS)).as("the delete, which was first, goes through").isNull();
+            DealQuotationDto revision = resubmit.get(15, TimeUnit.SECONDS);
+            assertThat(resubmittedMeanwhile)
+                .as("whether the resubmission went ahead while the delete was between its check and its statement")
+                .isFalse();
+            assertThat(rowExists(file)).isFalse();
+            assertThat(attachmentService.list(revision.id(), ceoActor))
+                .as("the revision never listed the file").isEmpty();
+        } finally {
+            goOn.countDown();
+            twoConnections.shutdownNow();
+        }
     }
 
     /** Whether {@code task} is over within {@code millis}. One that waits for a lock is not. */

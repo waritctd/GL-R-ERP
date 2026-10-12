@@ -42,7 +42,8 @@ import th.co.glr.hr.leave.LeaveAttachmentRepository;
  */
 class DealQuotationAttachmentHttpIntegrationTest extends AbstractDealQuotationAttachmentIntegrationTest {
 
-    private static final String FILE = "ใบเสนอราคา ผู้ขาย (VENDOR-7F3A91) #2.pdf";
+    /** Parentheses, a space and a #: what the Content-Disposition header has to survive. */
+    private static final String AWKWARD_NAME = "ใบเสนอราคา ผู้ขาย (VENDOR-7F3A91) #2.pdf";
     private static final String CSRF = "csrf-token-for-this-browser";
 
     private MockMvc mvc;
@@ -61,11 +62,11 @@ class DealQuotationAttachmentHttpIntegrationTest extends AbstractDealQuotationAt
         DealQuotationDto quotation = draftOwnedBy(salesActor);
 
         String uploaded = mvc.perform(withCsrf(multipart("/api/deal-quotations/{id}/attachments", quotation.id())
-                .file(new MockMultipartFile("file", FILE, PDF, VENDOR_QUOTE))
+                .file(new MockMultipartFile("file", AWKWARD_NAME, PDF, VENDOR_QUOTE))
                 .session(signedIn(salesActor))))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.attachment.id").isNumber())
-            .andExpect(jsonPath("$.attachment.fileName").value(FILE))
+            .andExpect(jsonPath("$.attachment.fileName").value(AWKWARD_NAME))
             .andExpect(jsonPath("$.attachment.mimeType").value(PDF))
             .andExpect(jsonPath("$.attachment.fileSize").value(VENDOR_QUOTE.length))
             .andExpect(jsonPath("$.attachment.quotationId").value(Math.toIntExact(quotation.id())))
@@ -83,7 +84,7 @@ class DealQuotationAttachmentHttpIntegrationTest extends AbstractDealQuotationAt
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.items.length()").value(1))
             .andExpect(jsonPath("$.items[0].id").value(Math.toIntExact(id)))
-            .andExpect(jsonPath("$.items[0].fileName").value(FILE))
+            .andExpect(jsonPath("$.items[0].fileName").value(AWKWARD_NAME))
             .andExpect(jsonPath("$.items[0].inherited").value(false));
         MockHttpServletResponse served = mvc.perform(
                 get("/api/deal-quotation-attachments/{id}/file", id).session(signedIn(ceoActor)))
@@ -95,7 +96,7 @@ class DealQuotationAttachmentHttpIntegrationTest extends AbstractDealQuotationAt
         // with spaces and punctuation must survive the header.
         ContentDisposition disposition = ContentDisposition.parse(served.getHeader(HttpHeaders.CONTENT_DISPOSITION));
         assertThat(disposition.isAttachment()).as("Content-Disposition: %s", disposition).isTrue();
-        assertThat(disposition.getFilename()).isEqualTo(FILE);
+        assertThat(disposition.getFilename()).isEqualTo(AWKWARD_NAME);
         assertThat(served.getHeader("X-Content-Type-Options")).isEqualTo("nosniff");
         assertThat(served.getHeader(HttpHeaders.CACHE_CONTROL)).contains("no-store");
     }
@@ -121,7 +122,7 @@ class DealQuotationAttachmentHttpIntegrationTest extends AbstractDealQuotationAt
     @Test
     void aRefusedCaller_getsTheStatus_andNotOneByteOfTheFile() throws Exception {
         DealQuotationDto quotation = draftOwnedBy(salesActor);
-        long file = seed(quotation.id(), FILE, VENDOR_QUOTE, salesActor);
+        long file = seed(quotation.id(), AWKWARD_NAME, VENDOR_QUOTE, salesActor);
         byte[] certificate = "medical certificate, confidential".getBytes(StandardCharsets.UTF_8);
         long leaveFile = new LeaveAttachmentRepository(jdbc).saveWithContent(quotation.id(), "ใบรับรองแพทย์.pdf",
             "leave/" + quotation.id() + "/certificate.pdf", PDF, (long) certificate.length, employeeActor.id(),
@@ -150,7 +151,7 @@ class DealQuotationAttachmentHttpIntegrationTest extends AbstractDealQuotationAt
     @Test
     void aDelete_removesTheFile_andAnswersOk() throws Exception {
         DealQuotationDto quotation = draftOwnedBy(salesActor);
-        long file = seed(quotation.id(), FILE, VENDOR_QUOTE, salesActor);
+        long file = seed(quotation.id(), AWKWARD_NAME, VENDOR_QUOTE, salesActor);
 
         mvc.perform(withCsrf(delete("/api/deal-quotation-attachments/{id}", file).session(signedIn(salesActor))))
             .andExpect(status().isOk())
@@ -165,7 +166,7 @@ class DealQuotationAttachmentHttpIntegrationTest extends AbstractDealQuotationAt
     @Test
     void everyRoute_needsASession() throws Exception {
         DealQuotationDto quotation = draftOwnedBy(salesActor);
-        long file = seed(quotation.id(), FILE, VENDOR_QUOTE, salesActor);
+        long file = seed(quotation.id(), AWKWARD_NAME, VENDOR_QUOTE, salesActor);
 
         mvc.perform(get("/api/deal-quotations/{id}/attachments", quotation.id())).andExpect(status().isUnauthorized());
         mvc.perform(get("/api/deal-quotation-attachments/{id}/file", file)).andExpect(status().isUnauthorized());
