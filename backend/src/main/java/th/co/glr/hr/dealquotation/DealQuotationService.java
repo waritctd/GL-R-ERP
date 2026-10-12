@@ -706,9 +706,12 @@ public class DealQuotationService {
     }
 
     /** Whether a revision of this quotation is still DRAFT or PENDING_APPROVAL, which is what
-     * {@link #cancel} refuses on. Package-private, for {@link DealQuotationAttachmentService}. */
-    boolean hasOpenRevision(long quotationId) {
-        return quotations.hasOpenRevision(quotationId);
+     * {@link #cancel} refuses on. Like cancel it takes the deal's lock first, so a resubmission
+     * that is minting one right now is waited for and then seen, and none can start until the
+     * caller's transaction ends. Package-private, for {@link DealQuotationAttachmentService}. */
+    boolean hasOpenRevisionUnderLock(DealQuotationDto quotation) {
+        quotations.lockTicket(quotation.ticketId());
+        return quotations.hasOpenRevision(quotation.id());
     }
 
     public List<DealQuotationDto> listForTicket(long ticketId, UserPrincipal actor) {

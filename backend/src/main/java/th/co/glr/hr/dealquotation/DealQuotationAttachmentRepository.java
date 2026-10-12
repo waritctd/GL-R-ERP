@@ -124,8 +124,9 @@ public class DealQuotationAttachmentRepository {
      * Removes the file, row and bytes, if the quotation it is stored on is a DRAFT at the moment
      * of the delete, and answers how many rows went. Zero means the quotation is no longer a
      * draft. The status is part of the statement, as it is in every DRAFT-only write of {@link
-     * DealQuotationRepository}, so a submit that lands between the service's checks and this
-     * delete cannot take a file away from the approver.
+     * DealQuotationRepository}, so a first submit that lands between the service's checks and
+     * this delete cannot take a file away from the approver. A resubmission leaves the row a
+     * DRAFT, so this statement cannot see it. The service closes that one with the deal's lock.
      */
     public int deleteFromDraft(long attachmentId) {
         return jdbc.update("""

@@ -104,8 +104,8 @@ public class DealQuotationAttachmentService {
     @Transactional
     public void delete(long attachmentId, UserPrincipal actor) {
         DealQuotationAttachmentDto attachment = requireAttachment(attachmentId);
-        requireEditor(attachment.quotationId(), actor);
-        if (quotations.hasOpenRevision(attachment.quotationId())) {
+        DealQuotationDto quotation = requireEditor(attachment.quotationId(), actor);
+        if (quotations.hasOpenRevisionUnderLock(quotation)) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "ลบเอกสารแนบไม่ได้ เนื่องจากมีฉบับแก้ไขของใบเสนอราคานี้ที่ใช้เอกสารนี้อยู่");
         }

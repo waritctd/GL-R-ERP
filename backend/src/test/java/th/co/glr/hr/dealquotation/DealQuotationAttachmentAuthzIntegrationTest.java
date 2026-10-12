@@ -1,6 +1,7 @@
 package th.co.glr.hr.dealquotation;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.assertj.core.api.Assertions.tuple;
 import static org.springframework.http.HttpStatus.BAD_REQUEST;
 import static org.springframework.http.HttpStatus.CONFLICT;
@@ -12,6 +13,12 @@ import java.lang.reflect.Modifier;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import org.junit.jupiter.api.Test;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
@@ -362,6 +369,68 @@ class DealQuotationAttachmentAuthzIntegrationTest extends AbstractDealQuotationA
         quotationService.reject(onlyRejected.id(), new RejectRequest("แก้ราคา"), salesManagerActor);
         attachmentService.delete(removable, salesActor);
         assertThat(rowExists(removable)).isFalse();
+    }
+
+    /**
+     * The same rule under a race, which the test above cannot show. A resubmission and a delete can
+     * overlap, and the rejected row is a DRAFT before, during and after, so the DRAFT condition in
+     * the delete statement stops nothing. What closes it is the deal's lock, which
+     * {@code DealQuotationService#cancel} takes before it looks for an open revision.
+     *
+     * <p>Two real transactions on two connections. The resubmission is the real
+     * {@code DealQuotationService#submit}, left uncommitted, so it holds the lock it takes in
+     * production. The delete goes through {@link #transactional}, because this suite's services
+     * are hand-wired and a bare call would give the lock up at the end of its own statement.
+     */
+    @Test
+    void aDeleteWaitsForAResubmissionInFlight_andThenLeavesTheFileItsRevisionShows() throws Exception {
+        DealQuotationDto rejected = draftOwnedBy(salesActor);
+        long file = seed(rejected.id(), FILE, VENDOR_QUOTE, salesActor);
+        long spare = seed(rejected.id(), "spare.pdf", VENDOR_QUOTE, salesActor);
+        quotationService.submit(rejected.id(), salesActor);
+        quotationService.reject(rejected.id(), new RejectRequest("ราคาสูงเกินไป"), salesManagerActor);
+        DealQuotationAttachmentService inItsOwnTransaction = transactional(attachmentService);
+
+        // Control: with no resubmission in flight, this caller deletes a file of this draft this way.
+        inItsOwnTransaction.delete(spare, salesActor);
+        assertThat(rowExists(spare)).isFalse();
+
+        ExecutorService otherConnection = Executors.newSingleThreadExecutor();
+        try {
+            Future<Throwable> delete = transactionTemplate.execute(resubmitting -> {
+                DealQuotationDto resubmission = quotationService.submit(rejected.id(), salesActor);
+                assertThat(resubmission.parentQuotationId()).isEqualTo(rejected.id());
+
+                Future<Throwable> started = otherConnection.submit(
+                    () -> catchThrowable(() -> inItsOwnTransaction.delete(file, salesActor)));
+                assertThat(isOverWithin(started, 1_000))
+                    .as("whether the delete is over while the resubmission is still uncommitted").isFalse();
+                return started;
+            });
+
+            // The resubmission has committed. The delete now gets the lock, and sees the revision.
+            Throwable outcome = delete.get(10, TimeUnit.SECONDS);
+            refused("the owner deleting a file while its resubmission lands", CONFLICT, () -> {
+                if (outcome != null) {
+                    throw outcome;
+                }
+            });
+        } finally {
+            otherConnection.shutdownNow();
+        }
+        assertThat(storedBytes(file)).isEqualTo(VENDOR_QUOTE);
+    }
+
+    /** Whether {@code task} is over within {@code millis}. One that waits for a lock is not. */
+    private static boolean isOverWithin(Future<?> task, long millis) {
+        try {
+            task.get(millis, TimeUnit.MILLISECONDS);
+            return true;
+        } catch (TimeoutException stillWaiting) {
+            return false;
+        } catch (InterruptedException | ExecutionException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     // ── another domain's file ────────────────────────────────────────────────────────────────
