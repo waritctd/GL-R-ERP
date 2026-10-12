@@ -33,7 +33,6 @@ describe('hrApi.dealQuotations, เอกสารแนบ', () => {
   });
 
   it('listAttachments(id) GETs the quotation\'s list and answers the envelope', async () => {
-    expect(api.dealQuotations.listAttachments).toBeTypeOf('function');
     const items = [{ id: 71, fileName: 'vendor.pdf', inherited: false }];
     fetchMock.mockResolvedValue(json({ items }));
 
@@ -48,7 +47,6 @@ describe('hrApi.dealQuotations, เอกสารแนบ', () => {
   });
 
   it('uploadAttachment(id, file) POSTs the file as the multipart part `file`, with the CSRF header', async () => {
-    expect(api.dealQuotations.uploadAttachment).toBeTypeOf('function');
     const attachment = { id: 72, fileName: 'vendor.pdf', inherited: false };
     fetchMock.mockResolvedValue(json({ attachment }));
     const file = new File(['%PDF-1.4'], 'vendor.pdf', { type: 'application/pdf' });
@@ -73,7 +71,6 @@ describe('hrApi.dealQuotations, เอกสารแนบ', () => {
   });
 
   it('uploadAttachment rejects with the server\'s own message when the file is refused', async () => {
-    expect(api.dealQuotations.uploadAttachment).toBeTypeOf('function');
     fetchMock.mockResolvedValue(json({ message: 'ใบเสนอราคานี้แนบเอกสารได้สูงสุด 10 ไฟล์', status: 409 }, 409));
 
     await expect(api.dealQuotations.uploadAttachment(41, new File(['x'], 'eleventh.pdf', { type: 'application/pdf' })))
@@ -81,7 +78,6 @@ describe('hrApi.dealQuotations, เอกสารแนบ', () => {
   });
 
   it('deleteAttachment(attachmentId) DELETEs the file by its own id, with the CSRF header', async () => {
-    expect(api.dealQuotations.deleteAttachment).toBeTypeOf('function');
     fetchMock.mockResolvedValue(json({ ok: true }));
 
     const answer = await api.dealQuotations.deleteAttachment(72);
@@ -95,7 +91,6 @@ describe('hrApi.dealQuotations, เอกสารแนบ', () => {
   });
 
   it('deleteAttachment rejects with the server\'s own message when the removal is refused', async () => {
-    expect(api.dealQuotations.deleteAttachment).toBeTypeOf('function');
     fetchMock.mockResolvedValue(json({ message: 'ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงลบเอกสารแนบไม่ได้', status: 409 }, 409));
 
     await expect(api.dealQuotations.deleteAttachment(72))
@@ -103,8 +98,6 @@ describe('hrApi.dealQuotations, เอกสารแนบ', () => {
   });
 
   it('attachmentUrl(attachmentId) is the file route, for a link, and fetches nothing', () => {
-    expect(api.dealQuotations.attachmentUrl).toBeTypeOf('function');
-
     expect(api.dealQuotations.attachmentUrl(72)).toBe('/api/deal-quotation-attachments/72/file');
     expect(fetchMock).not.toHaveBeenCalled();
   });

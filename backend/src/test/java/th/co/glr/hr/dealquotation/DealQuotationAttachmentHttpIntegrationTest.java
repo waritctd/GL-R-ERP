@@ -63,7 +63,7 @@ class DealQuotationAttachmentHttpIntegrationTest extends AbstractDealQuotationAt
         String uploaded = mvc.perform(withCsrf(multipart("/api/deal-quotations/{id}/attachments", quotation.id())
                 .file(new MockMultipartFile("file", FILE, PDF, VENDOR_QUOTE))
                 .session(signedIn(salesActor))))
-            .andExpect(status().is2xxSuccessful())
+            .andExpect(status().isOk())
             .andExpect(jsonPath("$.attachment.id").isNumber())
             .andExpect(jsonPath("$.attachment.fileName").value(FILE))
             .andExpect(jsonPath("$.attachment.mimeType").value(PDF))
@@ -108,7 +108,7 @@ class DealQuotationAttachmentHttpIntegrationTest extends AbstractDealQuotationAt
         // Control: with the header, this same session and this same part are stored.
         mvc.perform(withCsrf(multipart("/api/deal-quotations/{id}/attachments", quotation.id())
                 .file(part).session(signedIn(salesActor))))
-            .andExpect(status().is2xxSuccessful());
+            .andExpect(status().isOk());
         assertThat(filesOf(quotation.id())).as("the upload that carries the header is stored").isEqualTo(1);
 
         // The browser sends the cookie by itself. Without the header that echoes it: 403.
@@ -127,7 +127,7 @@ class DealQuotationAttachmentHttpIntegrationTest extends AbstractDealQuotationAt
             "leave/" + quotation.id() + "/certificate.pdf", PDF, (long) certificate.length, employeeActor.id(),
             certificate).id();
 
-        // account opens the quotation on main; it gets neither the list nor the file.
+        // account opens the quotation itself. It gets neither the list nor the file.
         mvc.perform(get("/api/deal-quotations/{id}/attachments", quotation.id()).session(signedIn(accountActor)))
             .andExpect(status().isForbidden());
         assertThat(bodyOf(get("/api/deal-quotation-attachments/{id}/file", file).session(signedIn(accountActor)), 403))

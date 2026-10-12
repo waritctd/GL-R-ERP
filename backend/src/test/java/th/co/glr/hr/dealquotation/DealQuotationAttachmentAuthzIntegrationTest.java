@@ -38,7 +38,7 @@ import th.co.glr.hr.ticket.QuotationStatus;
  *
  * <p>Every case is written wrong-way-round. It asserts a caller is REFUSED, then reads the tables
  * back to show nothing was stored or removed. Each refusal has a control on the same fixture,
- * either the same caller doing the neighbouring thing main allows or a permitted caller doing the
+ * either the same caller doing the neighbouring thing it is allowed or a permitted caller doing the
  * refused thing, so the fixture cannot be what refuses.
  *
  * <p>The files are seeded, not uploaded (see {@link AbstractDealQuotationAttachmentIntegrationTest}),
@@ -58,10 +58,6 @@ import th.co.glr.hr.ticket.QuotationStatus;
  */
 class DealQuotationAttachmentAuthzIntegrationTest extends AbstractDealQuotationAttachmentIntegrationTest {
 
-    /** Distinctive, so "nothing this caller can read names the file" is a search for one token. */
-    private static final String TOKEN = "VENDOR-7F3A91";
-    private static final String FILE = "ใบเสนอราคาผู้ขาย " + TOKEN + ".pdf";
-
     // ── reading ──────────────────────────────────────────────────────────────────────────────
 
     @Test
@@ -72,7 +68,7 @@ class DealQuotationAttachmentAuthzIntegrationTest extends AbstractDealQuotationA
 
         for (UserPrincipal reader : List.of(accountActor, importActor)) {
             String who = reader.role();
-            // Control: on main this caller reads the quotation itself.
+            // Control: this caller reads the quotation itself.
             assertThat(quotationService.get(quotation.id(), reader).number()).as(who).isEqualTo(quotation.number());
 
             refused(who + " listing the files", FORBIDDEN, () -> attachmentService.list(quotation.id(), reader));
@@ -99,7 +95,7 @@ class DealQuotationAttachmentAuthzIntegrationTest extends AbstractDealQuotationA
 
         for (UserPrincipal holder : List.of(accountWithGrantActor, importWithGrantActor)) {
             String who = holder.role() + " holding the quotation grant";
-            // Control: main's grant lets this caller open AND save the quotation itself.
+            // Control: the grant lets this caller open AND save the quotation itself.
             assertThat(quotationService.get(quotation.id(), holder).id()).as(who).isEqualTo(quotation.id());
             assertThat(quotationService.update(quotation.id(), draft(), holder).docStatus())
                 .as(who).isEqualTo(QuotationStatus.DRAFT);
@@ -130,8 +126,8 @@ class DealQuotationAttachmentAuthzIntegrationTest extends AbstractDealQuotationA
         // Another rep (not this deal's), qc without the grant, and a plain employee.
         for (UserPrincipal stranger : List.of(otherSalesActor, qcActor, employeeActor)) {
             String who = stranger.role() + " " + stranger.id() + ", who may not open the quotation,";
-            // Control: main refuses this caller the quotation itself.
-            refusal(() -> quotationService.get(quotation.id(), stranger), FORBIDDEN);
+            // Control: this caller is refused the quotation itself.
+            refused(who + " opening the quotation", FORBIDDEN, () -> quotationService.get(quotation.id(), stranger));
 
             refused(who + " listing its files", FORBIDDEN, () -> attachmentService.list(quotation.id(), stranger));
             refused(who + " downloading a file", FORBIDDEN, () -> attachmentService.download(file, stranger));

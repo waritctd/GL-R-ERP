@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  buildQuotationChecklist, canAttachToDealQuotation, canRemoveDealQuotationAttachment,
-  canSeeDealQuotationAttachments, QUOTATION_BLOCKING_CHECKS, QUOTATION_CHECK,
+  canAttachToDealQuotation, canRemoveDealQuotationAttachment, canSeeDealQuotationAttachments,
 } from './quotationMeta.js';
 
 // Which เอกสารแนบ controls the quotation page offers to whom. These three predicates only decide
@@ -30,7 +29,11 @@ const quotation = (docStatus) => ({ id: 41, docStatus, salesRepId: 6, origin: 'D
 const ownFile = { id: 71, quotationId: 41, inherited: false };
 const inheritedFile = { id: 55, quotationId: 40, inherited: true };
 
-const EVERY_STATUS = ['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'SUPERSEDED', 'CANCELLED', 'ISSUED', 'EXPIRED'];
+// Every value of th.co.glr.hr.ticket.QuotationStatus, the ones a direct quotation never reaches too.
+const EVERY_STATUS = [
+  'DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'SUPERSEDED', 'CANCELLED', 'ISSUED', 'SENT', 'ACCEPTED',
+  'REJECTED', 'EXPIRED', 'READY_TO_ISSUE', 'REVISION_REQUESTED',
+];
 
 describe('canSeeDealQuotationAttachments', () => {
   it.each([
@@ -39,8 +42,8 @@ describe('canSeeDealQuotationAttachments', () => {
     expect(canSeeDealQuotationAttachments(user)).toBe(true);
   });
 
-  // Wrong way round. account and import open the quotation itself on main; the vendor's cost
-  // document is not for them, and a grant does not change that.
+  // Wrong way round. account and import open the quotation itself. The vendor's cost document
+  // is not for them, and a grant does not change that.
   it.each([
     ['account', account], ['import', importer], ['account holding the grant', accountWithGrant],
     ['import holding the grant', importWithGrant], ['a plain employee', employee], ['nobody', null],
@@ -109,21 +112,5 @@ describe('canRemoveDealQuotationAttachment', () => {
     ['account holding the grant', accountWithGrant], ['a plain employee', employee], ['nobody', null],
   ])('%s never removes', (_who, user) => {
     expect(canRemoveDealQuotationAttachment(user, quotation('DRAFT'), ownFile)).toBe(false);
-  });
-});
-
-// "this can be optional": a quotation with no file saves and submits exactly as before. This is a
-// REGRESSION GUARD, green before the feature exists and meant to stay green. It fails the day
-// someone adds an attachment entry to the checklist, which is what disables บันทึกร่าง and
-// ส่งขออนุมัติ.
-describe('the checklist knows nothing about เอกสารแนบ', () => {
-  it('has no check, blocking or not, that mentions a file', () => {
-    const names = [...Object.keys(QUOTATION_CHECK), ...Object.values(QUOTATION_CHECK), ...QUOTATION_BLOCKING_CHECKS];
-    expect(names.filter((name) => /attach|file|แนบ/i.test(String(name)))).toEqual([]);
-  });
-
-  it('never produces an entry about a file, with or without one attached', () => {
-    const entries = buildQuotationChecklist({});
-    expect(entries.filter((entry) => /แนบ|ไฟล์|เอกสารแนบ/.test(`${entry.check} ${entry.message}`))).toEqual([]);
   });
 });

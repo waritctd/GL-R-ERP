@@ -61,7 +61,7 @@ import th.co.glr.hr.ticket.TicketService;
 
 /**
  * เอกสารแนบ on a quotation written from a คำขอราคา ({@code origin = 'PRICING_REQUEST'}), where
- * main's view and edit rules are NARROWER than for a direct quotation: sales (owner),
+ * DealQuotationService's view and edit rules are NARROWER than for a direct quotation: sales (owner),
  * sales_manager and ceo only, and the {@code can_create_quotation} grant opens nothing. The
  * attachment routes must apply that origin's rule, not the direct one.
  *
@@ -72,7 +72,6 @@ import th.co.glr.hr.ticket.TicketService;
  */
 class DealQuotationAttachmentPricingRequestOriginIntegrationTest extends AbstractDealQuotationAttachmentIntegrationTest {
 
-    private static final String FILE = "ใบเสนอราคาผู้ขาย VENDOR-7F3A91.pdf";
     private static final byte[] FACTORY_COST = "factory price list, cost per piece".getBytes(StandardCharsets.UTF_8);
 
     private PricingRequestService pricingRequestService;
@@ -130,8 +129,8 @@ class DealQuotationAttachmentPricingRequestOriginIntegrationTest extends Abstrac
         for (UserPrincipal outsider : List.of(grantedQcActor, accountWithGrantActor, accountActor, importActor,
                 otherSalesActor)) {
             String who = outsider.role() + " " + outsider.id();
-            // Control: main's rule for this origin refuses this caller the quotation itself.
-            refusal(() -> quotationService.get(quotation.id(), outsider), FORBIDDEN);
+            // Control: the rule for this origin refuses this caller the quotation itself.
+            refused(who + " opening the quotation", FORBIDDEN, () -> quotationService.get(quotation.id(), outsider));
 
             refused(who + " listing the files", FORBIDDEN, () -> attachmentService.list(quotation.id(), outsider));
             refused(who + " downloading a file", FORBIDDEN, () -> attachmentService.download(file, outsider));
@@ -197,7 +196,8 @@ class DealQuotationAttachmentPricingRequestOriginIntegrationTest extends Abstrac
         // Control: Import, whose file it is, reads it where it belongs.
         assertThat(factoryQuoteService.getAttachment(chain.factoryQuoteFile(), importActor).fileName())
             .isEqualTo("factory-cost.pdf");
-        refusal(() -> factoryQuoteService.getAttachment(chain.factoryQuoteFile(), salesActor), FORBIDDEN);
+        refused("sales reading the factory quote's file where it belongs", FORBIDDEN,
+            () -> factoryQuoteService.getAttachment(chain.factoryQuoteFile(), salesActor));
 
         for (UserPrincipal caller : List.of(salesActor, salesManagerActor, ceoActor)) {
             refused(caller.role() + " downloading the factory's file by its id", NOT_FOUND,

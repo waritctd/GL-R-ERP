@@ -23,16 +23,8 @@ const draftOn18 = async () => (await api.dealQuotations.create(18, { items: [ONE
 const pdf = (name = 'vendor-quote.pdf') => new File(['%PDF-1.4 vendor cost'], name, { type: 'application/pdf' });
 const ids = (answer) => answer.items.map((item) => item.id);
 
-/** Fails on an assertion, not a TypeError, while a method is still missing. */
-function expectTheFourMethods() {
-  for (const name of ['listAttachments', 'uploadAttachment', 'deleteAttachment', 'attachmentUrl']) {
-    expect(api.dealQuotations[name], `mockApi.dealQuotations.${name}`).toBeTypeOf('function');
-  }
-}
-
 describe('mock dealQuotations, เอกสารแนบ', () => {
   it('upload keeps the file, list returns it, and delete takes it away again', async () => {
-    expectTheFourMethods();
     await api.auth.login(sales);
     const quotation = await draftOn18();
 
@@ -46,21 +38,20 @@ describe('mock dealQuotations, เอกสารแนบ', () => {
     expect(attachment.uploadedByName).toBeTruthy();
     expect(Number.isNaN(Date.parse(attachment.uploadedAt))).toBe(false);
     expect(await api.dealQuotations.listAttachments(quotation.id)).toEqual({ items: [attachment] });
-    expect(api.dealQuotations.attachmentUrl(attachment.id)).toMatch(/\S/);
+    expect(api.dealQuotations.attachmentUrl(attachment.id)).toBe(`#mock-deal-quotation-attachment-${attachment.id}`);
 
     expect(await api.dealQuotations.deleteAttachment(attachment.id)).toEqual({ ok: true });
     expect(await api.dealQuotations.listAttachments(quotation.id)).toEqual({ items: [] });
   });
 
   it('refuses account and import the list and the upload, and the CEO the upload', async () => {
-    expectTheFourMethods();
     await api.auth.login(sales);
     const quotation = await draftOn18();
     const { attachment } = await api.dealQuotations.uploadAttachment(quotation.id, pdf());
 
     for (const role of ['account', 'import']) {
       await api.auth.login({ role });
-      // Control: this role does open the quotation itself in the mock, as on main.
+      // Control: this role does open the quotation itself in the mock.
       expect((await api.dealQuotations.get(quotation.id)).quotation.id, role).toBe(quotation.id);
       await expect(api.dealQuotations.listAttachments(quotation.id), role).rejects.toMatchObject({ status: 403 });
       await expect(api.dealQuotations.uploadAttachment(quotation.id, pdf()), role).rejects.toMatchObject({ status: 403 });
@@ -74,7 +65,6 @@ describe('mock dealQuotations, เอกสารแนบ', () => {
   });
 
   it('takes files while DRAFT and PENDING_APPROVAL only, and gives one up while DRAFT only', async () => {
-    expectTheFourMethods();
     await api.auth.login(sales);
     const quotation = await draftOn18();
     const { attachment: first } = await api.dealQuotations.uploadAttachment(quotation.id, pdf('first.pdf'));
@@ -92,7 +82,6 @@ describe('mock dealQuotations, เอกสารแนบ', () => {
   });
 
   it('refuses the eleventh file and a type that is not PDF, JPG or PNG, and keeps neither', async () => {
-    expectTheFourMethods();
     await api.auth.login(sales);
     const quotation = await draftOn18();
 
@@ -107,7 +96,6 @@ describe('mock dealQuotations, เอกสารแนบ', () => {
   });
 
   it('a revision lists the earlier document\'s files as inherited; a reorder starts with none', async () => {
-    expectTheFourMethods();
     await api.auth.login(sales);
     const first = await draftOn18();
     const { attachment: onFirst } = await api.dealQuotations.uploadAttachment(first.id, pdf('first.pdf'));

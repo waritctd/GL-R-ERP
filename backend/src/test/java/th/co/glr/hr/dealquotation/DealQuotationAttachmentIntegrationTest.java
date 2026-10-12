@@ -27,9 +27,6 @@ import th.co.glr.hr.ticket.QuotationStatus;
  */
 class DealQuotationAttachmentIntegrationTest extends AbstractDealQuotationAttachmentIntegrationTest {
 
-    private static final String TOKEN = "VENDOR-7F3A91";
-    private static final String FILE = "ใบเสนอราคาผู้ขาย " + TOKEN + ".pdf";
-
     // ── attach ───────────────────────────────────────────────────────────────────────────────
 
     /** Also pins the shape {@link #seed} writes. Every other test stores its fixture files in it. */

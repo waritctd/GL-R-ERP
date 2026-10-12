@@ -101,9 +101,9 @@ abstract class AbstractDealDirectQuotationIntegrationTest extends AbstractPostgr
             new CustomerQuotationRepository(jdbc));
         quotationService.wireTicketService(ticketService);
 
-        salesActor = actor(createEmployee(employees, "พนักงานขาย ใบเสนอราคา", "sales-dq@glr.co.th", "แผนกขาย", null),
-            "sales");
-        salesManagerActor = actor(createEmployee(employees, "ผจก.ขาย ใบเสนอราคา", "sm-dq@glr.co.th", "ฝ่ายขาย",
+        salesActor = actor(createEmployee(employees, "พนักงานขาย ใบเสนอราคา", "sales-dq@glr.co.th", "SALES", "แผนกขาย",
+            null), "sales");
+        salesManagerActor = actor(createEmployee(employees, "ผจก.ขาย ใบเสนอราคา", "sm-dq@glr.co.th", "SALES", "ฝ่ายขาย",
             "ผู้จัดการฝ่ายขาย"), "sales_manager");
 
         customer = customers.create("บริษัท ทดสอบใบเสนอราคา จำกัด", "0100000000202", "202 ถนนทดสอบ", "สนญ.",
@@ -224,15 +224,15 @@ abstract class AbstractDealDirectQuotationIntegrationTest extends AbstractPostgr
         return e;
     }
 
-    private static long createEmployee(EmployeeRepository employees, String nameTh, String email,
-                                       String divisionNameTh, String positionNameTh) {
+    protected static long createEmployee(EmployeeRepository employees, String nameTh, String email,
+                                         String divisionSourceCode, String divisionNameTh, String positionNameTh) {
         return employees.create(new UpsertEmployeeRequest(
             null, null, nameTh, null, null, null, null, null, null, null,
-            email, null, "SALES", divisionNameTh, divisionNameTh,
+            email, null, divisionSourceCode, divisionNameTh, divisionNameTh,
             positionNameTh, null, null, "ACT", new BigDecimal("30000"), null, null, null, null, null, null, null));
     }
 
-    private static UserPrincipal actor(long employeeId, String role) {
+    protected static UserPrincipal actor(long employeeId, String role) {
         return new UserPrincipal(employeeId, employeeId + "@glr.co.th", "Actor " + employeeId, role, employeeId,
             true, LocalDate.now(), false, null, false);
     }

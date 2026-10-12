@@ -3,10 +3,8 @@ package th.co.glr.hr.dealquotation;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
-import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
-import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import org.assertj.core.api.ThrowableAssert;
@@ -22,7 +20,6 @@ import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
-import th.co.glr.hr.employee.UpsertEmployeeRequest;
 
 /**
  * Real-Postgres wiring for the tests of a quotation's เอกสารแนบ: the production
@@ -41,6 +38,10 @@ abstract class AbstractDealQuotationAttachmentIntegrationTest extends AbstractDe
     /** {@code hr.file_attachment.domain} of a quotation's file. A literal on purpose. The tests
      * state the contract and do not read it back from the code under test. */
     protected static final String DOMAIN = "deal_quotation";
+
+    /** Distinctive, so "nothing this caller can read names the file" is a search for one token. */
+    protected static final String TOKEN = "VENDOR-7F3A91";
+    protected static final String FILE = "ใบเสนอราคาผู้ขาย " + TOKEN + ".pdf";
 
     protected static final String PDF = "application/pdf";
     protected static final byte[] VENDOR_QUOTE = "%PDF-1.4 vendor cost 85,000.00 THB".getBytes(StandardCharsets.UTF_8);
@@ -70,16 +71,16 @@ abstract class AbstractDealQuotationAttachmentIntegrationTest extends AbstractDe
 
         EmployeeRepository employees = new EmployeeRepository(
             jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
-        otherSalesActor = principal(employee(employees, "พนักงานขาย อีกคน", "sales-att-2@glr.co.th", "SALES", "แผนกขาย"), "sales");
-        ceoActor = principal(employee(employees, "ผู้บริหาร เอกสารแนบ", "ceo-att@glr.co.th", "MD", "ผู้บริหาร"), "ceo");
-        accountActor = principal(employee(employees, "บัญชี เอกสารแนบ", "acct-att@glr.co.th", "ACCT", "ฝ่ายบัญชี"), "account");
-        importActor = principal(employee(employees, "นำเข้า เอกสารแนบ", "import-att@glr.co.th", "PCIM", "ฝ่ายนำเข้า"), "import");
-        grantedQcActor = principal(granted(employee(employees, "คิวซี ได้สิทธิ์", "qc-grant-att@glr.co.th", "QC", "ฝ่าย QC")), "qc");
-        qcActor = principal(employee(employees, "คิวซี ไม่มีสิทธิ์", "qc-att@glr.co.th", "QC", "ฝ่าย QC"), "qc");
-        employeeActor = principal(employee(employees, "พนักงาน ทั่วไป", "emp-att@glr.co.th", "OTHER", "ฝ่ายอื่น"), "employee");
-        accountWithGrantActor = principal(
+        otherSalesActor = actor(employee(employees, "พนักงานขาย อีกคน", "sales-att-2@glr.co.th", "SALES", "แผนกขาย"), "sales");
+        ceoActor = actor(employee(employees, "ผู้บริหาร เอกสารแนบ", "ceo-att@glr.co.th", "MD", "ผู้บริหาร"), "ceo");
+        accountActor = actor(employee(employees, "บัญชี เอกสารแนบ", "acct-att@glr.co.th", "ACCT", "ฝ่ายบัญชี"), "account");
+        importActor = actor(employee(employees, "นำเข้า เอกสารแนบ", "import-att@glr.co.th", "PCIM", "ฝ่ายนำเข้า"), "import");
+        grantedQcActor = actor(granted(employee(employees, "คิวซี ได้สิทธิ์", "qc-grant-att@glr.co.th", "QC", "ฝ่าย QC")), "qc");
+        qcActor = actor(employee(employees, "คิวซี ไม่มีสิทธิ์", "qc-att@glr.co.th", "QC", "ฝ่าย QC"), "qc");
+        employeeActor = actor(employee(employees, "พนักงาน ทั่วไป", "emp-att@glr.co.th", "OTHER", "ฝ่ายอื่น"), "employee");
+        accountWithGrantActor = actor(
             granted(employee(employees, "บัญชี ได้สิทธิ์", "acct-grant-att@glr.co.th", "ACCT", "ฝ่ายบัญชี")), "account");
-        importWithGrantActor = principal(
+        importWithGrantActor = actor(
             granted(employee(employees, "นำเข้า ได้สิทธิ์", "import-grant-att@glr.co.th", "PCIM", "ฝ่ายนำเข้า")), "import");
     }
 
@@ -197,22 +198,15 @@ abstract class AbstractDealQuotationAttachmentIntegrationTest extends AbstractDe
 
     // ── people ───────────────────────────────────────────────────────────────────────────────
 
+    /** An employee of that division who holds no position. */
     private static long employee(EmployeeRepository employees, String nameTh, String email,
                                  String divisionSourceCode, String divisionNameTh) {
-        return employees.create(new UpsertEmployeeRequest(
-            null, null, nameTh, null, null, null, null, null, null, null,
-            email, null, divisionSourceCode, divisionNameTh, divisionNameTh,
-            null, null, null, "ACT", new BigDecimal("30000"), null, null, null, null, null, null, null));
+        return createEmployee(employees, nameTh, email, divisionSourceCode, divisionNameTh, null);
     }
 
     private long granted(long employeeId) {
         jdbc.update("UPDATE hr.employee SET can_create_quotation = TRUE WHERE employee_id = :id",
             Map.of("id", employeeId));
         return employeeId;
-    }
-
-    protected static UserPrincipal principal(long employeeId, String role) {
-        return new UserPrincipal(employeeId, employeeId + "@glr.co.th", "Actor " + employeeId, role, employeeId,
-            true, LocalDate.now(), false, null, false);
     }
 }

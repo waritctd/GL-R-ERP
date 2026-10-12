@@ -72,11 +72,6 @@ function show(user, quotationOrNull) {
 
 /** The panel, or null when it is not on the page. */
 const panel = () => screen.queryByRole('heading', { name: TITLE })?.closest('section') ?? null;
-/** The panel once its list has settled into rows (or into one of its sentences). */
-async function settledPanel() {
-  await waitFor(() => expect(panel()).not.toBeNull());
-  return panel();
-}
 const rows = () => screen.queryAllByTestId('quotation-attachment');
 const rowOf = (file) => rows().find((row) => row.textContent.includes(file.fileName)) ?? null;
 const attachInput = () => screen.queryByLabelText(/แนบเอกสาร/);
@@ -114,7 +109,7 @@ describe('a quotation that has never been saved', () => {
   it('says a file can be attached after the first บันทึกร่าง, and offers no picker', async () => {
     show(owner, null);
 
-    const shown = await settledPanel();
+    const shown = panel();
     expect(shown.textContent).toContain('บันทึกร่าง');
     expect(shown.textContent).toContain(NOT_PRINTED);
     expect(attachInput()).toBeNull();
@@ -325,7 +320,7 @@ describe('when there is nothing to list', () => {
     api.dealQuotations.listAttachments.mockResolvedValue({ items: [] });
     show(owner, quotation('DRAFT'));
 
-    const shown = await settledPanel();
+    const shown = panel();
     await waitFor(() => expect(shown.textContent).toContain('ยังไม่มีเอกสารแนบ'));
     expect(attachInput()).not.toBeNull();
     expect(rows()).toHaveLength(0);
@@ -335,7 +330,7 @@ describe('when there is nothing to list', () => {
     api.dealQuotations.listAttachments.mockResolvedValue({ items: [] });
     show(ceo, quotation('PENDING_APPROVAL'));
 
-    const shown = await settledPanel();
+    const shown = panel();
     await waitFor(() => expect(shown.textContent).toContain('ไม่มีเอกสารแนบ'));
     // "Not yet" is for someone who could add one.
     expect(shown.textContent).not.toContain('ยังไม่มีเอกสารแนบ');
@@ -364,7 +359,7 @@ describe('when there is nothing to list', () => {
     api.dealQuotations.listAttachments.mockRejectedValue(new Error('ไม่มีสิทธิ์เข้าถึงรายการนี้'));
     show(ceo, quotation('PENDING_APPROVAL'));
 
-    const shown = await settledPanel();
+    const shown = panel();
     await waitFor(() => expect(shown.textContent).toContain('โหลดเอกสารแนบไม่สำเร็จ'));
     expect(shown.textContent).toContain('ไม่มีสิทธิ์เข้าถึงรายการนี้');
     expect(rows()).toHaveLength(0);
