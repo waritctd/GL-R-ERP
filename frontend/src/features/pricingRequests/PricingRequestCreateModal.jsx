@@ -610,8 +610,8 @@ export function PricingRequestCreateModal({
       });
       // Opus review finding #2 (2026-09-18): a cheap, DISPLAY-ONLY early warning for the same
       // case PricingRequestService#resolveItem now rejects server-side with a 400 -- AREA mode
-      // deriving 0 pieces. The server rounds every fraction of a piece UP, so any positive area is
-      // at least 1 piece and this can no longer fire for one; it stays as a backstop. Mirrors ONLY
+      // deriving 0 pieces. The server rounds every fraction of a piece UP, so a positive area is at
+      // least 1 piece unless pieces/ตร.ม. itself rounds to 0.00 -- the only case this still catches. Mirrors ONLY
       // piecesPerSqmFromSqmPerPiece's already-DISPLAY-ONLY reciprocal (see that helper's own
       // comment), never WastageCalculator itself, so it deliberately does NOT catch every
       // zero-piece cause the server checks (e.g. an explicit piecesInput of 0 would already be

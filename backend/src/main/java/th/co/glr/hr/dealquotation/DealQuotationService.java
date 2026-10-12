@@ -3017,7 +3017,7 @@ public class DealQuotationService {
         }
         // Wording-scan fix 5 (2026-09-17): PIECES wastage must be a whole number of แผ่น — a
         // fractional value (e.g. 0.5) saved today, but WastageCalculator#applyWastage's PIECES
-        // branch silently ROUNDS it (HALF_UP) for the arithmetic while the STORED/PRINTED
+        // branch silently ROUNDS it UP for the arithmetic while the STORED/PRINTED
         // wastageValue stays the untouched fraction, so the printed "+ เผื่อ 0.5 แผ่น" disagrees
         // with the piece count the document actually adds. Refused here, before the value ever
         // reaches WastageCalculator, so it can never be stored at all. PERCENT wastage is

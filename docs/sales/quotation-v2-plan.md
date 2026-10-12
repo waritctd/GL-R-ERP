@@ -49,14 +49,8 @@ AMOUNT derived from pct (NOT NULL), `final_unit_price` = net unit price, `amount
 image BYTEA NOT NULL, uploaded_by BIGINT, uploaded_at TIMESTAMPTZ NOT NULL DEFAULT now())`.
 
 ## Arithmetic (backend-owned, pure class `WastageCalculator`, unit-tested)
-⚠️ **Ruled again 2026-10-12 (owner, sales feedback item 8): every fraction of a PIECE rounds UP** —
-in the AREA step (`piecesBefore = ceil(areaSqm × piecesPerSqm)`), the PERCENT wastage step
-(`piecesAfter = ceil(piecesBefore × (1 + pct/100))`) and a fractional flat wastage. `piecesPerSqm`
-stays 2dp nearest; box rounding and every money rounding are unchanged. The owner made this ruling
-knowing the three rows that pinned HALF_UP below no longer reproduce their printed figures:
-QN6900981-1 row 1 now gives 3,883 → 3,884, QN6900648 row 4 gives 711 → 712 and QN6900595-3 item1
-gives 871 → 872. The R-B/R-C paragraphs below are kept as the record of that evidence; the formulas
-further down carry the current rule. `QuotationGoldenDocumentsTest` pins the new figures.
+⚠️ **Ruled again 2026-10-12 (owner, sales feedback item 8): every fraction of a PIECE rounds UP.** The
+formula bullets and the reference-figures paragraph below carry the rule; `QuotationGoldenDocumentsTest` pins it.
 
 ⚠️ **Corrected 2026-09-15 (quotation arithmetic reconciliation)** — this section used to state the
 "meeting rule" as pieces-round-UP (CEILING) throughout, pinned against a single reference document

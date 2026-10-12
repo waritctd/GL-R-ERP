@@ -20,26 +20,15 @@ import java.util.List;
  * reproduce: QN6900981-1 row 1 (2,793 × 1.39 = 3,882.27, printed 3,882, now 3,883 → 3,884),
  * QN6900648 row 4 (511 × 1.39 = 710.29, printed 710, now 711 → 712) and QN6900595-3 item 1
  * (791 × 1.10 = 870.1, printed 870, now 871 → 872). {@code piecesPerSqm} still rounds to 2 decimals
- * to nearest, box rounding still rounds up, and money still rounds to 2 decimal places HALF_UP. The
- * 2026-09-15 evidence, kept as the record of what was printed:
- * <ul>
- *   <li><b>R-B (AREA pieces, was HALF_UP)</b> was proven by two rows: QN6900981-1 row 1 and
- *       QN6900648 row 4 (above). FLOOR is refuted by QN6900648 row 1 (1,313.55 → printed 1,314) and
- *       QN6900981-1 row 2 (380.86 → printed 381).</li>
- *   <li><b>R-C (PERCENT wastage, was HALF_UP)</b> rested on ONE line only: the spec's own recorded
- *       reference, QN6900595-3 item1. None of the eight ATTACHED documents (QN6900971-4,
- *       QN6900971 ใบสรุป, QN6900981-1, QN6900902-6, QN6900704-2, QN6900933, QN6900648,
- *       QN6900782-2) has any wastage at all.</li>
- *   <li><b>R-D (single-rounding line amount)</b> is proven by QN6900971-4 (D1) rows 5.3-5.7: list
- *       × qty × (1−pct/100) rounded once gives 35,799.63/16,502.43/11,445.23, matching the
- *       printed amounts, where rounding the already-2dp net price first and then multiplying gives
- *       35,799.64/16,502.44/11,445.24 instead.</li>
- * </ul>
- * <p>The remaining four attached documents — QN6900971 ใบสรุป, QN6900902-6, QN6900933,
- * QN6900782-2 — discriminate NONE of R-B/R-C/R-D: they are PLAIN-row or no-wastage/no-box-rounding
- * fixtures that reproduce identically under the old and new rules alike. They still appear in
- * {@code QuotationGoldenDocumentsTest} as regression coverage, just not as evidence for any of the
- * three corrections above.
+ * to nearest, box rounding still rounds up, and money still rounds to 2 decimal places HALF_UP.
+ * The superseded 2026-09-15 evidence is kept in docs/sales/quotation-v2-plan.md.
+ *
+ * <p><b>R-D (single-rounding line amount)</b> is proven by QN6900971-4 (D1) rows 5.3-5.7: list
+ * × qty × (1−pct/100) rounded once gives 35,799.63/16,502.43/11,445.23, matching the
+ * printed amounts, where rounding the already-2dp net price first and then multiplying gives
+ * 35,799.64/16,502.44/11,445.24 instead. The other attached documents (QN6900971 ใบสรุป,
+ * QN6900902-6, QN6900933, QN6900782-2) discriminate nothing: they reproduce identically under the
+ * old and new rules and serve only as regression coverage in {@code QuotationGoldenDocumentsTest}.
  *
  * <p>No Spring wiring, no DB access, no I/O — a static-methods-only pure class, deliberately, so
  * every branch is exercised by a plain unit test rather than an integration test.
@@ -436,13 +425,9 @@ public final class WastageCalculator {
     private static final BigDecimal MAX_WASTAGE_PIECES = BigDecimal.valueOf(1_000_000);
 
     /**
-     * Package-private, not {@code private} (wording-scan fix 1, 2026-09-17): {@link
-     * DealQuotationLines#calculationLine} needs the post-wastage, PRE-box-rounding piece count to
-     * decide whether box rounding actually changed anything — it is the one fact this method's own
-     * caller ({@link #calculate}) already derives but does not hand back on {@link Result} (only
-     * the FINAL, post-rounding count is). Re-deriving it here (the single source of truth) rather
-     * than duplicating the wastage arithmetic in the rendering layer is what keeps a future change
-     * to this formula from silently drifting the printed line out of step with the stored numbers.
+     * The post-wastage, PRE-box-rounding piece count: the one place the wastage arithmetic lives.
+     * Package-private so a test can derive the number the same way {@link #calculate} does; the
+     * printed calculation line is handed the stored {@link Result#piecesAfterWastage} instead.
      */
     static int applyWastage(int piecesBefore, String wastageMode, BigDecimal wastageValue) {
         if (wastageMode == null || WASTAGE_MODE_NONE.equals(wastageMode)) {

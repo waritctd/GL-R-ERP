@@ -35,9 +35,10 @@ function emptyNewCustomer() {
  * comment -- just no longer here). ผู้สั่งซื้อ is now a single optional free-text field
  * (`terms.orderedByName`) the editor itself renders next to this card, not something this card
  * collects at all.
+ *
+ * `pickOnly`: only the customer and project boxes. "เปลี่ยนลูกค้า" re-points an existing deal, so the
+ * customer-record fields (the editor already shows them) and the entry channel are not its business.
  */
-// `pickOnly`: only the customer and project boxes. "เปลี่ยนลูกค้า" re-points an existing deal, so the
-// customer-record fields (the editor already shows them) and the entry channel are not its business.
 export function DealCustomerCard({
   value, onChange, errors, showToast, suggestedProjectName = '', belowProject = null, pickOnly = false,
 }) {

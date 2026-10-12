@@ -60,7 +60,6 @@ import {
   // V192.5 / V192.3: the SAME row price-mode codes and ผู้ติดต่อ length limits the editor uses — not
   // a second list of them.
   ROW_PRICE_MODES, PRICE_MODE_MIXED, ORDERED_BY_PHONE_MAX, ORDERED_BY_EMAIL_MAX,
-  // Float-safe round-up, the BigDecimal ceilToInt the server uses (see computeDealQuotationLine).
   ceilPieces,
 } from '../features/quotations/quotationMeta.js';
 // fix/commission-figures-from-backend: mock mode no longer imports the commission tier math —
