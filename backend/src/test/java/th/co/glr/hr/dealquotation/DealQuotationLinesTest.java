@@ -518,9 +518,9 @@ class DealQuotationLinesTest {
     }
 
     /**
-     * Review F5: a row STORED under the old HALF_UP rule (791 + 10% = 870, 2/box) must print what
-     * is stored. Recomputing (now: 871) used to print "และปัดขึ้นเต็มกล่อง = 870" -- a rounding
-     * clause that contradicts its own numbers.
+     * A row STORED under the old HALF_UP rule (791 + 10% = 870, 2/box) must print what is stored.
+     * Recomputing would give 871 and print "และปัดขึ้นเต็มกล่อง = 870" -- a rounding clause that
+     * contradicts its own numbers.
      */
     @Test
     void calculationLine_storedPreCeilingRow_describesTheStoredNumbers_noBoxClause() {

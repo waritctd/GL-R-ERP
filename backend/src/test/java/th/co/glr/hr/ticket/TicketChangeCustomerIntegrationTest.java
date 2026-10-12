@@ -59,10 +59,6 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  * every refusal case asserts the {@code sales.ticket} row did not move, not merely that something
  * threw. Modelled on {@link DealStageQuoteOwnerAndRouteIntegrationTest}. {@code @Transactional} is
  * inert in this suite, so no assertion relies on a rollback.
- *
- * <p>The service is wired with the same seven collaborators as every sibling test. If the
- * implementation needs a project/contact repository injected into {@link TicketService}, this
- * wiring is the one place to extend.
  */
 class TicketChangeCustomerIntegrationTest extends AbstractPostgresIntegrationTest {
 
@@ -99,8 +95,8 @@ class TicketChangeCustomerIntegrationTest extends AbstractPostgresIntegrationTes
             tickets, notifications, new ObjectMapper(), new ContactRepository(jdbc),
             new FileStorageService("/tmp/glr-change-customer-test-uploads"), factoryQuoteCarryForward());
         ticketService = new TicketService(tickets, notifications,
-            new ObjectMapper(), customers, new QuotationRenderer(), pricingRequests, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc), new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
-            new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
+            new ObjectMapper(), customers, new QuotationRenderer(), pricingRequests, new EmployeeAuthRepository(jdbc), new ContactRepository(jdbc), new ProjectRepository(jdbc),
+            new DealQuotationRepository(jdbc, new CatalogRepository(jdbc)));
 
         EmployeeRepository employees = new EmployeeRepository(
             jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
@@ -227,12 +223,18 @@ class TicketChangeCustomerIntegrationTest extends AbstractPostgresIntegrationTes
 
         assertThatThrownBy(() -> ticketService.changeCustomer(ticketId,
             new ChangeCustomerRequest(999_999_001L, projectB.id(), null), ownerRep))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isIn(400, 404));
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus().value()).isEqualTo(400);
+                assertThat(e.getMessage()).isEqualTo("ไม่พบลูกค้าที่เลือก");
+            });
         assertTicketStillUnderCustomerA(ticketId);
 
         assertThatThrownBy(() -> ticketService.changeCustomer(ticketId,
             new ChangeCustomerRequest(custB.id(), 999_999_002L, null), ownerRep))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isIn(400, 404));
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus().value()).isEqualTo(400);
+                assertThat(e.getMessage()).isEqualTo("ไม่พบโครงการที่เลือก");
+            });
         assertTicketStillUnderCustomerA(ticketId);
     }
 
@@ -269,7 +271,7 @@ class TicketChangeCustomerIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(lastEventMessage(ticketId)).contains("เปลี่ยนลูกค้าเป็น").contains(custB.name());
     }
 
-    // ── review A: the drafts' printed header moves in the SAME transaction as the deal ──────────
+    // ── the drafts' printed header moves in the SAME transaction as the deal ──────────────────
 
     /**
      * The header a reader of the draft sees (customer block + project) must already be the new
@@ -354,12 +356,12 @@ class TicketChangeCustomerIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(ticketRow(byCeo).get("customer_id")).isEqualTo(custB.id());
     }
 
-    // ── review F1: a draft's frozen contact must follow the deal's customer ──
+    // ── a draft's frozen contact must follow the deal's customer ──
 
     /**
-     * The reviewer's repro: a draft copies the deal's contact (customer A's) at create; after the
-     * deal moves to customer B with no contact, the editor's next save (contactId always null) used
-     * to resolve the stored A-contact against B and fail 400 "กรุณาระบุผู้สั่งซื้อ".
+     * A draft copies the deal's contact (customer A's) at create; after the deal moves to customer B
+     * with no contact, its stored contact is cleared, so the editor's next save (contactId always
+     * null) does not resolve customer A's contact against B and fail 400 "กรุณาระบุผู้สั่งซื้อ".
      */
     @Test
     void aDraftCarryingTheOldCustomersContactCanStillBeSavedAfterTheChange_andItsContactIsCleared() {
@@ -421,7 +423,7 @@ class TicketChangeCustomerIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(ticketRow(ticketId).get("customer_id")).isEqualTo(custB.id());
     }
 
-    // ── review B: the checks and the writes are serialised on the deal's lock ───────────────────
+    // ── the checks and the writes are serialised on the deal's lock ───────────────────────────
 
     /**
      * A submit is in flight (uncommitted, holding the deal's lock). A change of customer that
@@ -611,7 +613,7 @@ class TicketChangeCustomerIntegrationTest extends AbstractPostgresIntegrationTes
             Map.of("id", quotationId), String.class);
     }
 
-    /** A direct-deal quotation row, inserted directly (no DealQuotationService wiring in this suite). */
+    /** A direct-deal quotation row, inserted directly so it can sit in any status. */
     private long insertDirectQuotation(long ticketId, String docStatus, String customerName) {
         int n = SEQ.incrementAndGet();
         jdbc.update("""

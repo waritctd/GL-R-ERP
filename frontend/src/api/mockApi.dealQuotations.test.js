@@ -287,10 +287,10 @@ describe('mock dealQuotations -- mixed price modes (V192.5)', () => {
   });
 });
 
-// Review F3 (2026-10-12): any fraction of a piece rounds UP (WastageCalculator#ceilToInt), but the
+// 2026-10-12: any fraction of a piece rounds UP (WastageCalculator#ceilToInt), but the
 // server does it on BigDecimal and the mock on floats, where 100 * (7 / 100) is 7.000000000000001
 // and a bare Math.ceil turns an exact 7 into 8.
-describe('mock dealQuotations -- rounding up is not fooled by float noise (F3)', () => {
+describe('mock dealQuotations -- rounding up is not fooled by float noise', () => {
   const TILE = {
     model: 'Trilogy', color: 'Ash', texture: 'Matt', sizeText: '40x40', thicknessMm: 10,
     wastageMode: 'NONE', wastageValue: 0, piecesPerBox: 1, unitPrice: 100, discountPct: 0,

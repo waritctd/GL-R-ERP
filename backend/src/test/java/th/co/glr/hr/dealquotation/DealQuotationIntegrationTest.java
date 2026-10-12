@@ -2055,22 +2055,20 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(created.items().get(0).leadTimeMaxDays()).isNull();
     }
 
-    // ── Wording-scan fix 4 (2026-09-17): an AREA-mode row that computes to ZERO pieces ──────────
+    // ── a tiny AREA quantity rounds up to one piece ─────────────────────────────────────────
 
-    /** Was: 0.01 sqm x 2.78 = 0.0278 rounded HALF_UP to 0 pieces and was refused ("รวม 0 แผ่น", a
-     * line selling nothing). Since the owner's 2026-10-12 ruling ("ปัดขึ้นทุกกรณี") any positive
-     * area rounds UP to at least 1 piece, so that refusal can no longer be reached with a real
-     * area: the same input is now accepted as 1 piece. (The guard in
-     * {@code DealQuotationService} stays as a backstop; it has no input that trips it any more.) */
+    /** 0.01 sqm × 2.78 = 0.0278 rounds UP to 1 piece (owner ruling 2026-10-12, "ปัดขึ้นทุกกรณี"), so
+     * the row is accepted. (The zero-piece guard in {@code DealQuotationService} stays as a backstop;
+     * no positive area trips it.) */
     @Test
-    void create_aTinyAreaRoundsUpToOnePiece_insteadOfBeingRefusedAsZero() {
+    void create_aTinyAreaRoundsUpToOnePiece() {
         DealQuotationDto created = quotationService.create(ticketId,
             upsertRequest(List.of(itemMutated(m -> m.withAreaMode(new BigDecimal("0.01"))))), salesActor);
         assertThat(created.items().get(0).piecesBeforeWastage()).isEqualTo(1);
     }
 
     /**
-     * Review F5, through the read path: a row stored under the old HALF_UP rule (791 + 10% = 870,
+     * Through the read path: a row stored under the old HALF_UP rule (791 + 10% = 870,
      * 2/box) must print its STORED numbers when read back, not be recomputed to 871 and print a
      * box-rounding clause that contradicts "= 870".
      */
@@ -2091,14 +2089,13 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
     /** The same on the lenient calculate-line preview. */
     @Test
-    void calculateLine_aTinyAreaRoundsUpToOnePiece_insteadOfBeingRefusedAsZero() {
+    void calculateLine_aTinyAreaRoundsUpToOnePiece() {
         assertThat(quotationService.calculateLine(
             itemMutated(m -> m.withAreaMode(new BigDecimal("0.01"))), "TH", salesActor)
             .piecesBeforeWastage()).isEqualTo(1);
     }
 
-    /** An area that lands on exactly 1 piece is accepted. 0.35 sqm x 2.78 = 0.973 -> 1. (This used
-     * to use 0.36 sqm, 1.0008 -> 1 under HALF_UP; rounding up now makes that 2.) */
+    /** An area that lands on exactly 1 piece is accepted. 0.35 sqm x 2.78 = 0.973 rounds UP to 1. */
     @Test
     void create_acceptsAnAreaThatComputesToExactlyOnePiece() {
         DealQuotationDto created = quotationService.create(ticketId,

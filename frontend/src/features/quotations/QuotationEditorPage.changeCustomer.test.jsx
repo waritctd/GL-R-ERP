@@ -16,16 +16,14 @@ vi.setConfig({ testTimeout: 15000 });
 
 // "เปลี่ยนลูกค้า" — owner, 2026-10-12: "ลูกค้า must also be editable when still not sent for approval,
 // in case of a typo". A direct-deal quotation's customer belongs to its DEAL (sales.ticket), and
-// today nothing can change a deal's customer: ชื่อลูกค้า on the summary renames the customer RECORD
-// (PUT /api/customers/{id}), which is a different thing. So a saved DRAFT direct quotation gains a
-// button that re-points the deal at another customer + project through
+// ชื่อลูกค้า on the summary renames the customer RECORD (PUT /api/customers/{id}), which is a
+// different thing. So a saved DRAFT direct quotation has a button that re-points the deal at another customer + project through
 // PUT /api/tickets/{id}/customer (api.tickets.changeCustomer).
 //
-// Contract these tests pin on the (not yet written) UI, so the implementation can be held to it:
+// Contract these tests pin:
 //   * a button whose accessible name is exactly "เปลี่ยนลูกค้า", on the ลูกค้า summary;
 //   * it opens the SAME DealCustomerCard pickers the inline-create path uses (the typeahead input
-//     keeps its id `deal-customer`, the project input `deal-project`), in a dialog (role="dialog")
-//     or inline — both are handled below;
+//     keeps its id `deal-customer`, the project input `deal-project`), in a dialog (role="dialog");
 //   * a confirm button whose accessible name starts with "ยืนยัน";
 //   * on success the page is NOT left dirty (observed the way copyFrom.test.jsx observes it: the
 //     "คัดลอกเป็นใบใหม่" button disables while unsaved edits are on the page): the server has already
@@ -44,7 +42,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       tickets: { get: vi.fn(), create: vi.fn(), changeCustomer: vi.fn() },
       dealQuotations: {
         get: vi.fn(), create: vi.fn(), update: vi.fn(), calculateLine: vi.fn(), submit: vi.fn(),
-        approve: vi.fn(), reject: vi.fn(), createRevision: vi.fn(), createReorder: vi.fn(), cancel: vi.fn(),
+        approve: vi.fn(), reject: vi.fn(), createRevision: vi.fn(), cancel: vi.fn(),
         downloadPdf: vi.fn(), downloadXlsx: vi.fn(), displayNameOptions: vi.fn(),
       },
       catalog: { prices: vi.fn() },
@@ -178,17 +176,13 @@ async function pageIsUp() {
   await new Promise((resolve) => { setTimeout(resolve, 60); });
 }
 
-/** Opens the pickers and returns the part of the page they live in (the dialog if there is one). */
+/** Opens the pickers and returns the dialog they live in. */
 async function openThePickers() {
   fireEvent.click(await screen.findByRole('button', { name: CHANGE }));
-  return screen.queryByRole('dialog') ?? document.body;
+  return screen.getByRole('dialog');
 }
 
-async function pickTheOtherCustomerAndProject(scope) {
-  // If the pickers open pre-filled with the current customer, take that choice off first.
-  const clear = within(scope).queryByRole('button', { name: 'ล้างลูกค้าที่เลือก' });
-  if (clear) fireEvent.click(clear);
-
+async function pickTheOtherCustomerAndProject() {
   fireEvent.change(await waitFor(() => {
     const input = byId(QUOTATION_FIELD_IDS.customer);
     expect(input).not.toBeNull();
@@ -247,7 +241,7 @@ describe('"เปลี่ยนลูกค้า" on a saved DRAFT direct quot
     expect(isDirty()).toBe(false);
 
     const scope = await openThePickers();
-    await pickTheOtherCustomerAndProject(scope);
+    await pickTheOtherCustomerAndProject();
     // Picking is not saving: nothing has gone to the server yet.
     expect(api.tickets.changeCustomer).not.toHaveBeenCalled();
     confirmTheChange(scope);
@@ -280,7 +274,7 @@ describe('"เปลี่ยนลูกค้า" on a saved DRAFT direct quot
     renderSaved(draft());
     await waitFor(() => expect(fieldValue(QUOTATION_FIELD_IDS.customerName)).toBe(OLD_CUSTOMER.name));
     const scope = await openThePickers();
-    await pickTheOtherCustomerAndProject(scope);
+    await pickTheOtherCustomerAndProject();
     confirmTheChange(scope);
     await waitFor(() => expect(fieldValue(QUOTATION_FIELD_IDS.customerName)).toBe(NEW_CUSTOMER.name));
     expect(api.dealQuotations.update).not.toHaveBeenCalled();
@@ -311,7 +305,7 @@ describe('"เปลี่ยนลูกค้า" on a saved DRAFT direct quot
     await waitFor(() => expect(fieldValue(QUOTATION_FIELD_IDS.customerName)).toBe(OLD_CUSTOMER.name));
 
     const scope = await openThePickers();
-    await pickTheOtherCustomerAndProject(scope);
+    await pickTheOtherCustomerAndProject();
     confirmTheChange(scope);
 
     await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', CONFLICT));
