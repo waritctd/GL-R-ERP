@@ -1,7 +1,7 @@
 import React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { Button } from './Button.jsx';
+import { Button, buttonVariants } from './Button.jsx';
 
 globalThis.React = React;
 
@@ -138,5 +138,66 @@ describe('Button', () => {
     expect(button.className).not.toContain('px-4');
     expect(button.className).toContain('min-h-[40px]');
     expect(button.className).not.toContain('min-h-[38px]');
+  });
+});
+
+// cva answers a variant it does not know with the base classes alone, so the
+// element renders with the browser's own button face and nothing reports it.
+// That is how variant="ghost" reached develop unnoticed.
+describe('Button variant check', () => {
+  const KNOWN_VARIANTS = ['primary', 'secondary', 'success', 'danger', 'text', 'icon'];
+  // null skips the 'primary' default and reaches cva as "no variant". false is
+  // what `variant={flag && 'danger'}` passes. 'constructor' is inherited from
+  // Object.prototype, so a plain key lookup would call it known.
+  const UNKNOWN_VARIANTS = ['ghost', null, false, 'constructor'];
+
+  let consoleError;
+
+  beforeEach(() => {
+    consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    consoleError.mockRestore();
+    vi.unstubAllEnvs();
+  });
+
+  it.each(UNKNOWN_VARIANTS)('rejects the unknown variant %s on <Button> in development', (variant) => {
+    expect(() => render(<Button variant={variant}>ย้อนกลับ</Button>)).toThrow(`variant="${variant}"`);
+  });
+
+  it.each(UNKNOWN_VARIANTS)('rejects the unknown variant %s on a direct buttonVariants call in development', (variant) => {
+    expect(() => buttonVariants({ variant })).toThrow(`variant="${variant}"`);
+  });
+
+  it('lists the known variants in the error', () => {
+    for (const known of KNOWN_VARIANTS) {
+      expect(() => buttonVariants({ variant: 'ghost' })).toThrow(known);
+    }
+  });
+
+  it('reports an unknown variant once in production and still renders the button', () => {
+    vi.stubEnv('DEV', false);
+    render(<Button variant="ghost">ย้อนกลับ</Button>);
+
+    expect(screen.getByRole('button', { name: 'ย้อนกลับ' }).className).toContain('inline-flex');
+    expect(consoleError).toHaveBeenCalledTimes(1);
+    expect(consoleError).toHaveBeenCalledWith(expect.stringContaining('variant="ghost"'));
+  });
+
+  it.each(KNOWN_VARIANTS)('accepts the %s variant on both entry points', (variant) => {
+    render(<Button variant={variant} aria-label="ปุ่ม">i</Button>);
+
+    expect(screen.getByRole('button', { name: 'ปุ่ม' })).toBeTruthy();
+    expect(buttonVariants({ variant })).toContain('inline-flex');
+    expect(consoleError).not.toHaveBeenCalled();
+  });
+
+  it('keeps the buttonVariants call shape: size passes through and an omitted variant is primary', () => {
+    expect(buttonVariants({ variant: 'secondary', size: 'sm' })).toContain('border-border-input');
+    expect(buttonVariants({ variant: 'secondary', size: 'sm' })).toContain('min-h-[32px]');
+    expect(buttonVariants({ size: 'sm' })).toContain('bg-primary');
+    expect(buttonVariants()).toContain('bg-primary');
+    expect(consoleError).not.toHaveBeenCalled();
   });
 });
