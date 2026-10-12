@@ -1274,7 +1274,8 @@ class DealQuotationEnglishFormTest {
             DealQuotationLines.descriptionLine(lang, model, color, texture, code, inlineSize ? "60x60" : "200x305",
                 thickness),
             DealQuotationLines.sizeLine(lang, "200x305", thickness, new BigDecimal("200"), new BigDecimal("305")),
-            DealQuotationLines.calculationLine(lang, quantityMode, area, pps, before, wastageMode, wastage, fin, box),
+            DealQuotationLines.calculationLine(lang, quantityMode, area, pps, before, wastageMode, wastage,
+                WastageCalculator.applyWastage(before, wastageMode, wastage), fin, box, true),
             WastageCalculator.LINE_TYPE_TILE, BigDecimal.valueOf(fin), unit, null, null, null,
             DealQuotationLines.specialPriceLine(lang, null), null);
     }

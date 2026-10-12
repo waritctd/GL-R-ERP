@@ -432,16 +432,8 @@ public final class DealQuotationLines {
      * The wastage/box-rounding calculation line — see docs/sales/quotation-v2-plan.md's "Printed lines"
      * section for the four variants this reproduces (AREA vs PIECES quantity mode; PERCENT vs
      * PIECES vs NONE wastage; with vs without a pieces-per-box).
-     */
-    public static String calculationLine(String quantityMode, BigDecimal areaSqm, BigDecimal piecesPerSqm,
-                                         int piecesBeforeWastage, String wastageMode, BigDecimal wastageValue,
-                                         int piecesFinal, Integer piecesPerBox) {
-        return calculationLine(WastageCalculator.DOCUMENT_LANGUAGE_TH, quantityMode, areaSqm, piecesPerSqm,
-            piecesBeforeWastage, wastageMode, wastageValue, piecesFinal, piecesPerBox, true);
-    }
-
-    /**
-     * Owner ruling 2026-09-13 (1) — the English calculation line, clause for clause the Thai one:
+     *
+     * <p>Owner ruling 2026-09-13 (1) — the English line is clause for clause the Thai one:
      * <pre>
      *   (Area 300 sqm @ 16.39 pcs/sqm = 4,917 pcs + 5% allowance, rounded up to full boxes = 5,180 pcs) (20 pcs/box)
      *   (Quantity 200 pcs + 10 pcs allowance, rounded up to full boxes = 220 pcs) (20 pcs/box)
@@ -449,16 +441,8 @@ public final class DealQuotationLines {
      * </pre>
      * The zero-wastage omission and the grouped number format are shared with the Thai line, so
      * the two cannot drift apart on anything but the words.
-     */
-    public static String calculationLine(String documentLanguage, String quantityMode, BigDecimal areaSqm,
-                                         BigDecimal piecesPerSqm, int piecesBeforeWastage, String wastageMode,
-                                         BigDecimal wastageValue, int piecesFinal, Integer piecesPerBox) {
-        return calculationLine(documentLanguage, quantityMode, areaSqm, piecesPerSqm, piecesBeforeWastage,
-            wastageMode, wastageValue, piecesFinal, piecesPerBox, true);
-    }
-
-    /**
-     * Owner-approved "sell loose pieces" (2026-09-16): the tenth argument. {@code true} — the
+     *
+     * <p>Owner-approved "sell loose pieces" (2026-09-16): {@code roundToFullBox}. {@code true} — the
      * default, and today's ONLY behaviour when box data is present — keeps every existing printed
      * line unchanged EXCEPT for one wording correction (owner decision, 2026-09-16, same day):
      * {@code "และปัดลงกล่อง"} ("rounded DOWN to the box") was misleading — the arithmetic
@@ -470,21 +454,11 @@ public final class DealQuotationLines {
      * loose-piece remainder, e.g. {@code (จำนวน 32 แผ่น = 3 กล่อง + 2 แผ่น) (บรรจุ 10 แผ่น/กล่อง)}.
      * See {@code WastageCalculatorTest}/{@code DealQuotationLinesTest} for every shape this prints
      * (loose = 0, full boxes = 0, with/without wastage).
-     */
-    public static String calculationLine(String documentLanguage, String quantityMode, BigDecimal areaSqm,
-                                         BigDecimal piecesPerSqm, int piecesBeforeWastage, String wastageMode,
-                                         BigDecimal wastageValue, int piecesFinal, Integer piecesPerBox,
-                                         boolean roundToFullBox) {
-        return calculationLine(documentLanguage, quantityMode, areaSqm, piecesPerSqm, piecesBeforeWastage,
-            wastageMode, wastageValue, WastageCalculator.applyWastage(piecesBeforeWastage, wastageMode, wastageValue),
-            piecesFinal, piecesPerBox, roundToFullBox);
-    }
-
-    /**
-     * The line for a row whose pieces-after-wastage is KNOWN (stored): the box-rounding clause is
-     * decided from that number, never re-derived, because the wastage rounding rule has changed
-     * over time (HALF_UP, then ceiling) and a stored 870 must not print as if it were 871. The
-     * overloads above recompute it, which is right only for a row computed just now.
+     *
+     * <p>{@code piecesAfterWastage} is passed in — stored on a read, freshly computed on a write —
+     * and the box-rounding clause is decided from that number, never re-derived, because the
+     * wastage rounding rule has changed over time (HALF_UP, then ceiling) and a stored 870 must
+     * not print as if it were 871.
      */
     public static String calculationLine(String documentLanguage, String quantityMode, BigDecimal areaSqm,
                                          BigDecimal piecesPerSqm, int piecesBeforeWastage, String wastageMode,
@@ -529,8 +503,7 @@ public final class DealQuotationLines {
 
         // Wording-scan fix 1 (2026-09-17): the box-rounding phrase and its "= N แผ่น" echo used to
         // print even when box rounding was a pure no-op -- the count going in (piecesAfterWastage,
-        // re-derived here via WastageCalculator#applyWastage, the single source of truth for that
-        // number) was ALREADY a whole number of boxes, so "และปัดขึ้นเต็มกล่อง = 20 แผ่น" on a row
+        // passed in: stored on a read, freshly computed on a write) was ALREADY a whole number of boxes, so "และปัดขึ้นเต็มกล่อง = 20 แผ่น" on a row
         // that never rounded anything was actively misleading (21 real production items print this
         // shape). Only when box rounding genuinely moved the count does the old wording/echo stay;
         // otherwise the line ends with the box count instead -- new, genuine information the old
@@ -656,8 +629,8 @@ public final class DealQuotationLines {
         // Wording-scan fix 1 (2026-09-17): the Thai mirror of this method's own comment applies
         // here verbatim -- see #calculationLine's matching block for the full reasoning, including
         // why "changed" is asked of piecesAfterWastage % ppb directly rather than by comparing
-        // against piecesFinal. piecesAfterWastage is re-derived (never duplicated) via
-        // WastageCalculator#applyWastage, the single source of truth for that number.
+        // against piecesFinal. piecesAfterWastage is passed in (stored on a read, freshly computed
+        // on a write).
         boolean boxRoundingChangedCount = hasBox && piecesAfterWastage % piecesPerBox != 0;
         String roundingPart = boxRoundingChangedCount ? ", rounded up to full boxes" : "";
         if (boxes != null) {
@@ -811,38 +784,15 @@ public final class DealQuotationLines {
      *       {@code sqmPerPiece} itself is missing/non-positive — a hand-edited row, since a normal
      *       save always resolves and stores one; it prints pieces rather than inventing an area.</li>
      * </ul>
-     */
-    public static TilePrint tilePrint(String documentLanguage, String priceMode, String quantityMode,
-                                      BigDecimal areaSqm, BigDecimal sqmPerPiece, BigDecimal piecesPerSqm,
-                                      int piecesBeforeWastage, String wastageMode, BigDecimal wastageValue,
-                                      int piecesFinal, Integer piecesPerBox, Integer boxes, BigDecimal sqmPerBox,
-                                      BigDecimal storedQuantity, String storedUnit, BigDecimal specialPriceSqm) {
-        return tilePrint(documentLanguage, priceMode, quantityMode, areaSqm, sqmPerPiece, piecesPerSqm,
-            piecesBeforeWastage, wastageMode, wastageValue, piecesFinal, piecesPerBox, boxes, sqmPerBox,
-            storedQuantity, storedUnit, specialPriceSqm, true);
-    }
-
-    /** As the 17-argument overload, recomputing pieces-after-wastage (right for a row computed just now). */
-    public static TilePrint tilePrint(String documentLanguage, String priceMode, String quantityMode,
-                                      BigDecimal areaSqm, BigDecimal sqmPerPiece, BigDecimal piecesPerSqm,
-                                      int piecesBeforeWastage, String wastageMode, BigDecimal wastageValue,
-                                      int piecesFinal, Integer piecesPerBox, Integer boxes, BigDecimal sqmPerBox,
-                                      BigDecimal storedQuantity, String storedUnit, BigDecimal specialPriceSqm,
-                                      boolean roundToFullBox) {
-        return tilePrint(documentLanguage, priceMode, quantityMode, areaSqm, sqmPerPiece, piecesPerSqm,
-            piecesBeforeWastage, wastageMode, wastageValue,
-            WastageCalculator.applyWastage(piecesBeforeWastage, wastageMode, wastageValue), piecesFinal,
-            piecesPerBox, boxes, sqmPerBox, storedQuantity, storedUnit, specialPriceSqm, roundToFullBox);
-    }
-
-    /**
-     * Owner-approved "sell loose pieces" (2026-09-16): the trailing {@code roundToFullBox}. The
-     * 16-argument overload above always passes {@code true} — today's only behaviour when a box area
-     * is present, unchanged. English per-sqm WITH a box area can never reach the loose-pieces branch
-     * (the service still refuses {@code roundToFullBox = false} whenever ตร.ม./กล่อง is filled — see
+     *
+     * <p>Owner-approved "sell loose pieces" (2026-09-16): {@code roundToFullBox}. English per-sqm WITH a
+     * box area can never reach the loose-pieces branch (the service still refuses
+     * {@code roundToFullBox = false} whenever ตร.ม./กล่อง is filled — see
      * {@code DealQuotationService#buildTileItem}'s {@code hasBoxArea} branch), so that row's
      * box-count calculation line always rounds, exactly as before. WITHOUT a box area, {@code
      * roundToFullBox} is honoured normally (Option B).
+     *
+     * <p>{@code piecesAfterWastage} is passed in (stored on a read, freshly computed on a write).
      */
     public static TilePrint tilePrint(String documentLanguage, String priceMode, String quantityMode,
                                       BigDecimal areaSqm, BigDecimal sqmPerPiece, BigDecimal piecesPerSqm,
