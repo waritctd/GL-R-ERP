@@ -2064,6 +2064,50 @@ public class TicketRepository {
                 .addValue("ticketId", ticketId));
     }
 
+    public void updateCustomer(long ticketId, long customerId, long projectId, Long contactId,
+                               String customerName) {
+        jdbc.update("""
+            UPDATE sales.ticket
+               SET customer_id   = :customerId,
+                   project_id    = :projectId,
+                   contact_id    = :contactId,
+                   customer_name = :customerName,
+                   updated_at    = now()
+             WHERE ticket_id = :ticketId
+            """,
+            new MapSqlParameterSource()
+                .addValue("customerId", customerId)
+                .addValue("projectId", projectId)
+                .addValue("contactId", contactId)
+                .addValue("customerName", customerName)
+                .addValue("ticketId", ticketId));
+    }
+
+    /** Owning customer of a project, or empty when the project does not exist. */
+    public Optional<Long> findProjectCustomerId(long projectId) {
+        return jdbc.queryForList("SELECT customer_id FROM customers.project WHERE project_id = :id",
+            Map.of("id", projectId), Long.class).stream().findFirst();
+    }
+
+    /** Owning customer of a contact, or empty when the contact does not exist. */
+    public Optional<Long> findContactCustomerId(long contactId) {
+        return jdbc.queryForList("SELECT customer_id FROM customers.contact WHERE contact_id = :id",
+            Map.of("id", contactId), Long.class).stream().findFirst();
+    }
+
+    /**
+     * True once any quotation of the deal has left DRAFT (or been cancelled): from then on the
+     * customer is printed on a document that has been, or is being, approved. Origin-agnostic, like
+     * {@link #hasAcceptedQuotation}.
+     */
+    public boolean hasNonDraftQuotation(long ticketId) {
+        Boolean value = jdbc.queryForObject(
+            "SELECT EXISTS(SELECT 1 FROM sales.quotation WHERE ticket_id = :ticketId"
+                + " AND doc_status NOT IN ('DRAFT','CANCELLED'))",
+            Map.of("ticketId", ticketId), Boolean.class);
+        return Boolean.TRUE.equals(value);
+    }
+
     public long insertDealActivity(long ticketId, LocalDate activityDate, String kind, String note,
                                    long createdById) {
         GeneratedKeyHolder keys = new GeneratedKeyHolder();

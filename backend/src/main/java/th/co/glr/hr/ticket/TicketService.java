@@ -2111,6 +2111,40 @@ public class TicketService {
         return requireTicket(ticketId);
     }
 
+    /**
+     * Re-points the deal at another customer/project/contact (a typo fix before anything has been
+     * sent for approval). Refused once any quotation of the deal has left DRAFT. Quotation rows are
+     * deliberately not touched: a draft re-snapshots the deal's customer on its next save.
+     */
+    @Transactional
+    public TicketDto changeCustomer(long ticketId, ChangeCustomerRequest request, UserPrincipal actor) {
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        requireDealOwnership(s, actor);
+        requireActive(s);
+        if (tickets.hasNonDraftQuotation(ticketId)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "เปลี่ยนลูกค้าไม่ได้ เนื่องจากมีใบเสนอราคาที่ส่งขออนุมัติแล้ว");
+        }
+        CustomerDto customer = customers.findById(request.customerId())
+            .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "ไม่พบลูกค้าที่เลือก"));
+        Long projectCustomerId = tickets.findProjectCustomerId(request.projectId())
+            .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "ไม่พบโครงการที่เลือก"));
+        if (projectCustomerId != customer.id()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "โครงการนี้ไม่ได้อยู่ภายใต้ลูกค้าที่เลือก");
+        }
+        if (request.contactId() != null) {
+            Long contactCustomerId = tickets.findContactCustomerId(request.contactId())
+                .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "ไม่พบผู้ติดต่อที่เลือก"));
+            if (contactCustomerId != customer.id()) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "ผู้ติดต่อนี้ไม่ได้อยู่ภายใต้ลูกค้าที่เลือก");
+            }
+        }
+        tickets.updateCustomer(ticketId, customer.id(), request.projectId(), request.contactId(), customer.name());
+        tickets.addEvent(ticketId, actor.id(), actor.name(),
+            TicketEventKind.EDITED, s.salesStage(), s.salesStage(), "เปลี่ยนลูกค้าเป็น " + customer.name());
+        return requireTicket(ticketId);
+    }
+
     @Transactional
     public TicketDto markLost(long ticketId, String reason, String note, UserPrincipal actor) {
         if (!DealLostReason.isValid(reason)) {

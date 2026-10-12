@@ -8164,6 +8164,36 @@ export const api = {
       pushEvent(ticket, user, 'POLICY_CHANGED', ticket.salesStage, ticket.salesStage, 'อัปเดตข้อมูลติดตามดีล');
       return delay({ ticket: buildTicketDetail(ticket) });
     },
+
+    // Mirrors TicketService.changeCustomer. Quotation rows are untouched: a draft re-snapshots the
+    // deal's customer on its next save.
+    async changeCustomer(id, payload) {
+      const user = requireSession();
+      const ticket = findTicketRaw(Number(id));
+      if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      requireActive(ticket);
+      if (mockDealQuotations.some((q) => q.ticketId === ticket.id && !['DRAFT', 'CANCELLED'].includes(q.docStatus))) {
+        fail('เปลี่ยนลูกค้าไม่ได้ เนื่องจากมีใบเสนอราคาที่ส่งขออนุมัติแล้ว', 409);
+      }
+      const customer = mockCustomers.find((c) => c.id === Number(payload?.customerId));
+      if (!customer) fail('ไม่พบลูกค้าที่เลือก', 400);
+      const project = mockProjects.find((p) => p.id === Number(payload?.projectId));
+      if (!project) fail('ไม่พบโครงการที่เลือก', 400);
+      if (project.customerId !== customer.id) fail('โครงการนี้ไม่ได้อยู่ภายใต้ลูกค้าที่เลือก', 400);
+      const contactId = payload?.contactId ?? null;
+      if (contactId != null) {
+        const contact = mockContacts.find((c) => c.id === Number(contactId));
+        if (!contact) fail('ไม่พบผู้ติดต่อที่เลือก', 400);
+        if (contact.customerId !== customer.id) fail('ผู้ติดต่อนี้ไม่ได้อยู่ภายใต้ลูกค้าที่เลือก', 400);
+      }
+      ticket.customerId = customer.id;
+      ticket.customerName = customer.name;
+      ticket.projectId = project.id;
+      ticket.contactId = contactId == null ? null : Number(contactId);
+      ticket.updatedAt = new Date().toISOString().slice(0, 10);
+      pushEvent(ticket, user, 'EDITED', ticket.salesStage, ticket.salesStage, `เปลี่ยนลูกค้าเป็น ${customer.name}`);
+      return delay({ ticket: buildTicketDetail(ticket) });
+    },
   },
 
   // Mirrors LeaveController + LeaveService (leave/).

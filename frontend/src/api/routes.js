@@ -166,6 +166,7 @@ export const API_ROUTES = {
     // Deal tracking + activity (V83, Slice B1/B2 "kill the weekly report" — handoff 103).
     activities: (id) => `/api/tickets/${id}/activities`,
     tracking: (id) => `/api/tickets/${id}/tracking`,
+    customer: (id) => `/api/tickets/${id}/customer`,
   },
   depositNotices: {
     get: (id) => `/api/deposit-notices/${id}`,

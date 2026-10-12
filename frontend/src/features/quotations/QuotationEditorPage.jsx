@@ -34,6 +34,7 @@ import {
   VALIDITY_MODE_OPTIONS, FULL_PAYMENT_TERM_OPTIONS,
 } from './quotationMeta.js';
 import { CustomerDetailsFields } from './CustomerDetailsFields.jsx';
+import { ChangeCustomerModal } from './ChangeCustomerModal.jsx';
 import { DealCustomerCard } from './DealCustomerCard.jsx';
 import { OrderedByContactFields, ProjectNamePrintToggle, QuotationDealFields } from './QuotationDealFields.jsx';
 import { focusQuotationField, QuotationChecklist } from './QuotationChecklist.jsx';
@@ -1478,6 +1479,7 @@ export function QuotationEditorPage({ user, showToast }) {
   }, [runUpdateAsync]);
 
   const [submitConfirmOpen, setSubmitConfirmOpen] = useState(false);
+  const [changeCustomerOpen, setChangeCustomerOpen] = useState(false);
 
   const submitMutation = useMutation({
     // Unsaved edits are SAVED first. Submit acts on the STORED quotation, and the autosave is a
@@ -1880,14 +1882,19 @@ export function QuotationEditorPage({ user, showToast }) {
       ? canCreateDealQuotationStandalone(user)
       : canCreateDealQuotation(user, ticket);
   const readOnlyViewer = isDealQuotationReadOnlyViewer(user);
+  // Mirrors TicketService.changeCustomer: the deal's owning rep or sales_manager, and (server side)
+  // no quotation of the deal past DRAFT. A pricing-request quotation's customer is the one its
+  // price was requested for, so it is never re-pointed from here.
+  const canChangeCustomer = Boolean(quotation) && isEditable && quotation.origin !== 'PRICING_REQUEST'
+    && (user.role === 'sales' || user.role === 'sales_manager');
   const status = quotation ? dealQuotationStatusLabel(quotation.docStatus) : null;
   // V7 (owner review 2026-09-10): a pristine /quotations/new has no customer yet, and the `'-'`
   // fallback rendered the page subtitle as a bare "-" — a dash where a sentence belongs reads as a
   // failed load, not as "nothing chosen yet". Kept as `null` here so the subtitle below can say
   // what to do instead; the `'-'` fallback still applies wherever a dash is genuinely a value
   // (salesRepName in the document context strip).
-  const customerName = quotation?.customerName ?? ticket?.customerName ?? (isInlineCreate ? dealForm.customer?.name : null) ?? null;
-  const projectName = quotation?.projectName ?? ticket?.projectName ?? (isInlineCreate ? dealForm.project?.name : null) ?? null;
+  const customerName = summaryCustomer?.name ?? quotation?.customerName ?? ticket?.customerName ?? (isInlineCreate ? dealForm.customer?.name : null) ?? null;
+  const projectName = ((isEditable && quotation ? terms.projectName : null) || quotation?.projectName) ?? ticket?.projectName ?? (isInlineCreate ? dealForm.project?.name : null) ?? null;
   // The REAL rep's name -- what "(ค่าเริ่มต้น)" (no override) actually means on both
   // salesRepDisplayId selects. Opus review fix (2026-09-14): this used to feed an
   // override-AWARE salesRepName/salesRepPhone pair too, used only by the card select's empty
@@ -2203,7 +2210,13 @@ export function QuotationEditorPage({ user, showToast }) {
           ) : (
             <Panel title="ข้อมูลลูกค้าและผู้ขาย">
               <div className="grid grid-cols-2 gap-3 mobile:grid-cols-1 text-sm">
-                <div><span className="block text-2xs font-bold uppercase text-text-muted">ลูกค้า</span><strong>{customerName ?? '-'}</strong></div>
+                <div>
+                  <span className="block text-2xs font-bold uppercase text-text-muted">ลูกค้า</span>
+                  <strong>{customerName ?? '-'}</strong>
+                  {canChangeCustomer ? (
+                    <Button variant="secondary" size="sm" className="ml-2" onClick={() => setChangeCustomerOpen(true)}>เปลี่ยนลูกค้า</Button>
+                  ) : null}
+                </div>
                 {/* Owner feedback 2026-09-14 ("sometimes there's a typo ... they should be able to
                     correct it") — was static text; now a real field on `terms`, same as every
                     other เงื่อนไข input, saved on the next draft save. */}
@@ -3095,6 +3108,21 @@ export function QuotationEditorPage({ user, showToast }) {
             </div>
           ) : null}
         </Modal>
+      ) : null}
+
+      {changeCustomerOpen ? (
+        <ChangeCustomerModal
+          ticketId={effectiveTicketId}
+          showToast={showToast}
+          onClose={() => setChangeCustomerOpen(false)}
+          onChanged={async (customer, project) => {
+            await queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(effectiveTicketId) });
+            setCustomerOverride(customer);
+            setTerms((t) => ({ ...t, projectName: project.name }));
+            setDirty(true);
+            showToast('success', 'เปลี่ยนลูกค้าแล้ว กดบันทึกร่างเพื่อให้ใบเสนอราคาใช้ข้อมูลลูกค้าใหม่');
+          }}
+        />
       ) : null}
 
       {rejectOpen ? (

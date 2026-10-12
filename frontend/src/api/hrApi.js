@@ -471,6 +471,7 @@ export const api = {
     addActivity: (id, payload) => apiRequest(API_ROUTES.tickets.activities(id), { method: 'POST', body: payload }),
     listActivities: (id) => apiRequest(API_ROUTES.tickets.activities(id)),
     updateTracking: (id, payload) => apiRequest(API_ROUTES.tickets.tracking(id), { method: 'PUT', body: payload }),
+    changeCustomer: (id, payload) => apiRequest(API_ROUTES.tickets.customer(id), { method: 'PUT', body: payload }),
   },
   depositNotices: {
     noteTemplates: () => apiRequest(API_ROUTES.depositNotices.noteTemplates),
