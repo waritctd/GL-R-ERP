@@ -99,12 +99,16 @@ public abstract class SpringdocContractSupport {
      * <p>Surefire runs with {@code backend/} as the working directory, but some IDEs run from the
      * repo root, and a relative path that silently resolves somewhere else would write a digest to
      * a location nothing reads — passing green while guarding nothing.
+     *
+     * <p>The marker is {@code backend/pom.xml} beside {@code docs/api/}, the directory these
+     * digests live in. It used to be {@code CLAUDE.md}, which {@code develop} stopped tracking on
+     * 2026-10-10 (8e8c7345), after which every backend CI run against {@code develop} failed here.
      */
     protected static Path repositoryRoot() {
         Path current = Paths.get("").toAbsolutePath();
         for (Path candidate = current; candidate != null; candidate = candidate.getParent()) {
-            if (Files.exists(candidate.resolve("CLAUDE.md"))
-                && Files.isDirectory(candidate.resolve("backend"))) {
+            if (Files.exists(candidate.resolve("backend/pom.xml"))
+                && Files.isDirectory(candidate.resolve("docs/api"))) {
                 return candidate;
             }
         }

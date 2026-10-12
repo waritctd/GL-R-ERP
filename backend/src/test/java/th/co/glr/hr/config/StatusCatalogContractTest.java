@@ -336,7 +336,7 @@ class StatusCatalogContractTest {
     private static Path repositoryRoot() {
         Path current = Paths.get("").toAbsolutePath();
         for (Path candidate = current; candidate != null; candidate = candidate.getParent()) {
-            if (Files.exists(candidate.resolve("CLAUDE.md")) && Files.isDirectory(candidate.resolve("backend"))) {
+            if (Files.exists(candidate.resolve("backend/pom.xml")) && Files.isDirectory(candidate.resolve("docs/api"))) {
                 return candidate;
             }
         }
