@@ -2,6 +2,21 @@ import React, { forwardRef } from 'react';
 import { cva } from 'class-variance-authority';
 import { cn } from '../../utils/cn.js';
 
+const VARIANT_CLASSES = {
+  primary: 'bg-primary text-surface px-4',
+  secondary: 'bg-surface text-icon-muted border-border-input px-[13px]',
+  success: 'bg-success text-surface px-[13px]',
+  danger: 'bg-surface text-danger border-danger-border px-[13px]',
+  // Opts out of the 44px mobile floor only: forcing an inline prose link
+  // into a tap box breaks text flow. Keeps the 38px desktop floor it
+  // already had, so desktop is unchanged.
+  text: 'border-0 bg-transparent text-primary p-0 mobile:min-h-0',
+  // Stays 44x44 at every width: DESIGN.md specs the icon button as a
+  // 44x44 square, and it already cleared the touch floor — shrinking it
+  // to 38px on desktop would regress the spec and the topbar.
+  icon: 'w-11 min-h-[44px] p-0 bg-surface text-icon-muted border-border-input',
+};
+
 // Touch targets: DESIGN.md documents 38-44px as the button height range, and
 // Fitts's-law/touch ergonomics only matter where input is actually touch — so
 // the base/default size is 38px (desktop mouse) and grows to 44px only at
@@ -9,20 +24,7 @@ import { cn } from '../../utils/cn.js';
 // visually unchanged from before. The `text` variant (borderless inline link,
 // padding:0 per DESIGN.md) is intentionally excluded: forcing it to 44px would
 // pad prose links into ugly tap boxes that break inline text flow.
-/**
- * Exported because some controls that must LOOK like a button cannot BE one.
- * A react-router `<Link>` and an `<a href>` render anchors, and `<Button>`
- * renders a `<button>`, which has no `href` and cannot navigate. A `<label>`
- * wrapping a hidden file input must stay a `<label>` — a `<button>` cannot
- * open a file picker. Those call sites previously carried the legacy
- * `.primary-button` / `.secondary-button` classes, which is the only reason
- * those rules could not be deleted; `buttonVariants({ variant })` gives them
- * the identical class string without pretending they are buttons.
- *
- * Use `<Button>` for anything that IS a button. This is the escape hatch, not
- * an alternative.
- */
-export const buttonVariants = cva(
+const buttonClasses = cva(
   [
     'inline-flex',
     'items-center',
@@ -42,20 +44,7 @@ export const buttonVariants = cva(
   ],
   {
     variants: {
-      variant: {
-        primary: 'bg-primary text-surface px-4',
-        secondary: 'bg-surface text-icon-muted border-border-input px-[13px]',
-        success: 'bg-success text-surface px-[13px]',
-        danger: 'bg-surface text-danger border-danger-border px-[13px]',
-        // Opts out of the 44px mobile floor only: forcing an inline prose link
-        // into a tap box breaks text flow. Keeps the 38px desktop floor it
-        // already had, so desktop is unchanged.
-        text: 'border-0 bg-transparent text-primary p-0 mobile:min-h-0',
-        // Stays 44x44 at every width: DESIGN.md specs the icon button as a
-        // 44x44 square, and it already cleared the touch floor — shrinking it
-        // to 38px on desktop would regress the spec and the topbar.
-        icon: 'w-11 min-h-[44px] p-0 bg-surface text-icon-muted border-border-input',
-      },
+      variant: VARIANT_CLASSES,
       size: {
         md: '',
         sm: 'min-h-[32px] px-3 text-sm',
@@ -80,6 +69,36 @@ export const buttonVariants = cva(
   },
 );
 
+// Loud in development, non-fatal in production. A missing icon label or an
+// unknown variant is a defect worth failing a dev build over, but throwing from
+// a shared primitive would take the whole page down for a user over a typo.
+function reportMisuse(message) {
+  if (import.meta.env.DEV) throw new Error(message);
+  console.error(message);
+}
+
+/**
+ * Exported because some controls that must LOOK like a button cannot BE one.
+ * A react-router `<Link>` and an `<a href>` render anchors, and `<Button>`
+ * renders a `<button>`, which has no `href` and cannot navigate. A `<label>`
+ * wrapping a hidden file input must stay a `<label>` — a `<button>` cannot
+ * open a file picker. Those call sites previously carried the legacy
+ * `.primary-button` / `.secondary-button` classes, which is the only reason
+ * those rules could not be deleted; `buttonVariants({ variant })` gives them
+ * the identical class string without pretending they are buttons.
+ *
+ * Use `<Button>` for anything that IS a button. This is the escape hatch, not
+ * an alternative.
+ */
+export function buttonVariants(props) {
+  const variant = props?.variant;
+  if (variant !== undefined && !Object.hasOwn(VARIANT_CLASSES, variant)) {
+    const known = Object.keys(VARIANT_CLASSES).join(', ');
+    reportMisuse(`Button variant="${variant}" is not a known variant. Use one of: ${known}.`);
+  }
+  return buttonClasses(props);
+}
+
 export const Button = forwardRef(function Button({
   variant = 'primary',
   size = 'md',
@@ -100,13 +119,8 @@ export const Button = forwardRef(function Button({
     || Boolean(fallbackAriaLabel)
     || Boolean(ariaLabelledBy);
 
-  // Loud in development, non-fatal in production: a missing label is an a11y
-  // defect worth failing a dev build over, but throwing from a shared primitive
-  // would take the whole page down for a user over a label typo.
   if (!hasIconName) {
-    const message = 'Button variant="icon" requires an accessible name via aria-label, aria-labelledby, or title.';
-    if (import.meta.env.DEV) throw new Error(message);
-    console.error(message);
+    reportMisuse('Button variant="icon" requires an accessible name via aria-label, aria-labelledby, or title.');
   }
 
   return (
