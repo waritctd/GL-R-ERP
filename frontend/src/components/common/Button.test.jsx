@@ -146,10 +146,10 @@ describe('Button', () => {
 // That is how variant="ghost" reached develop unnoticed.
 describe('Button variant check', () => {
   const KNOWN_VARIANTS = ['primary', 'secondary', 'success', 'danger', 'text', 'icon'];
-  // null skips the 'primary' default and reaches cva as "no variant".
-  // 'constructor' is inherited from Object.prototype, so a plain key lookup
-  // would call it known.
-  const UNKNOWN_VARIANTS = ['ghost', null, 'constructor'];
+  // null skips the 'primary' default and reaches cva as "no variant". false is
+  // what `variant={flag && 'danger'}` passes. 'constructor' is inherited from
+  // Object.prototype, so a plain key lookup would call it known.
+  const UNKNOWN_VARIANTS = ['ghost', null, false, 'constructor'];
 
   let consoleError;
 
