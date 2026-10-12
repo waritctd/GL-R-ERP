@@ -517,7 +517,7 @@ export function PricingRequestQueuePage({ user, showToast }) {
                 type="button"
                 aria-pressed={active}
                 className={`inline-flex min-h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-bold ${
-                  active ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface text-text-secondary hover:bg-surface-hover'
+                  active ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface text-text hover:bg-surface-hover'
                 }`}
                 onClick={() => setFilterKey(option.key)}
               >
