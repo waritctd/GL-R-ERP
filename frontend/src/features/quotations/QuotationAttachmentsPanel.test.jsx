@@ -1,5 +1,5 @@
 import React from 'react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { onlineManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { QuotationAttachmentsPanel } from './QuotationAttachmentsPanel.jsx';
@@ -340,6 +340,24 @@ describe('when there is nothing to list', () => {
     // "Not yet" is for someone who could add one.
     expect(shown.textContent).not.toContain('ยังไม่มีเอกสารแนบ');
     expect(attachInput()).toBeNull();
+  });
+
+  // The request can be HELD BACK before it settles: offline, or between retries while the tab is
+  // hidden. That is not an answer. An approver told "ไม่มีเอกสารแนบ" then would decide without the
+  // cost the rep attached.
+  it('does not say there is none while the list request is held back', async () => {
+    onlineManager.setOnline(false);
+    try {
+      show(ceo, quotation('PENDING_APPROVAL'));
+      await new Promise((resolve) => { setTimeout(resolve, 50); });
+
+      // Control: the request really is paused, not sent.
+      expect(api.dealQuotations.listAttachments).not.toHaveBeenCalled();
+      expect(panel().textContent).toContain('กำลังโหลดเอกสารแนบ');
+      expect(panel().textContent).not.toContain('ไม่มีเอกสารแนบ');
+    } finally {
+      onlineManager.setOnline(true);
+    }
   });
 
   it('says so when the list could not be loaded, with the server\'s reason', async () => {

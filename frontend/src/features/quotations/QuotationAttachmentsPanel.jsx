@@ -167,7 +167,9 @@ export function QuotationAttachmentsPanel({ user, quotation }) {
           ) : null}
           {!quotation ? (
             <p className="m-0 text-text-muted">แนบเอกสารได้หลังจากบันทึกร่างครั้งแรก</p>
-          ) : list.isLoading ? (
+          ) : list.isPending ? (
+            // `isPending`, not `isLoading`: a request that is held back (offline, or between
+            // retries while the tab is hidden) is not an answer, and must not read as "none".
             <p role="status" className="m-0 text-text-muted">กำลังโหลดเอกสารแนบ…</p>
           ) : list.isError ? (
             <p role="alert" className="m-0 text-danger">
