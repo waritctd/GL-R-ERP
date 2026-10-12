@@ -1948,11 +1948,9 @@ export function QuotationEditorPage({ user, showToast }) {
         context={(
           <>
             {status ? <StatusBadge tone={status.tone}>{status.label}</StatusBadge> : null}
-            {/* "เอกสารแนบ {n} ไฟล์", beside the status of the read-only details. The owner wants the
-                approver to see the cost at once, and the files are the last block of the page, so
-                this says they are there and goes to them. The component draws nothing at zero
-                files, while the list loads, and for import and account. Not on the edit form,
-                whose reader is the rep who attached them. */}
+            {/* "เอกสารแนบ {n} ไฟล์", beside the status of the read-only details (see
+                QuotationAttachmentsLink). Not on the edit form, whose reader is the rep who
+                attached them. */}
             {quotation && !isEditable ? <QuotationAttachmentsLink user={user} quotation={quotation} /> : null}
             {/* GLA-123 slice S1 — provenance link back to the pricing request this quotation was
                 created from (createFromPricingRequest). Falls back to the numeric id on a row

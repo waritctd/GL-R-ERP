@@ -103,7 +103,7 @@ export function QuotationAttachmentsPanel({ user, quotation }) {
   const files = list.data ?? [];
   const mayAttach = canAttachToDealQuotation(user, quotation);
   const full = files.filter((file) => !file.inherited).length >= MAX_OWN_FILES;
-  const picking = !full && !attach.isPending;
+  const canPick = !full && !attach.isPending;
 
   function attachPicked(event) {
     const file = event.target.files?.[0];
@@ -130,13 +130,13 @@ export function QuotationAttachmentsPanel({ user, quotation }) {
             className={cn(
               buttonVariants({ variant: 'secondary' }),
               'has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-primary-hover',
-              picking ? 'cursor-pointer' : 'cursor-not-allowed opacity-55',
+              canPick ? 'cursor-pointer' : 'cursor-not-allowed opacity-55',
             )}
           >
             <input
               type="file"
               accept={ACCEPT}
-              disabled={!picking}
+              disabled={!canPick}
               onChange={attachPicked}
               className="sr-only h-px min-h-0 w-px border-0 p-0"
             />
@@ -151,7 +151,9 @@ export function QuotationAttachmentsPanel({ user, quotation }) {
           </p>
           {mayAttach ? (
             <p className="m-0 text-xs text-text-muted">
-              {full ? 'แนบครบ 10 ไฟล์แล้ว' : 'แนบได้เฉพาะ PDF, JPG หรือ PNG ไม่เกิน 10 ไฟล์ต่อใบเสนอราคา'}
+              {full
+                ? `แนบครบ ${MAX_OWN_FILES} ไฟล์แล้ว`
+                : `แนบได้เฉพาะ PDF, JPG หรือ PNG ไม่เกิน ${MAX_OWN_FILES} ไฟล์ต่อใบเสนอราคา`}
               {quotation.docStatus === 'PENDING_APPROVAL' ? ' ระหว่างรออนุมัติ แนบเพิ่มได้ แต่ลบไม่ได้' : ''}
             </p>
           ) : null}

@@ -41,7 +41,7 @@ import th.co.glr.hr.ticket.QuotationStatus;
 public class DealQuotationAttachmentService {
     /** The most files one quotation may hold. Files it inherits from earlier documents of its
      * revision chain are not counted, because they are stored on those documents. */
-    public static final int MAX_ATTACHMENTS_PER_QUOTATION = 10;
+    private static final int MAX_ATTACHMENTS_PER_QUOTATION = 10;
 
     /** The prefix of the storage key, beside {@code leave} and {@code factory-quotes}. */
     private static final String STORAGE_DOMAIN = "deal-quotation";

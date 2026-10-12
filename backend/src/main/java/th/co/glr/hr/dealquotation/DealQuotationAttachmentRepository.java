@@ -21,10 +21,11 @@ import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationAttachmentDto;
  */
 @Repository
 public class DealQuotationAttachmentRepository {
-    /** {@code hr.file_attachment.domain} for these rows. Every statement here states it, so an id
-     * that belongs to another domain's file is never found through this class. {@code owner_id}
-     * has no foreign key, and a leave request or a factory quote can share a quotation's number. */
-    static final String DOMAIN = "deal_quotation";
+    /** {@code hr.file_attachment.domain} for these rows. Every statement on that table states it,
+     * so an id that belongs to another domain's file is never found there. {@link #findContent}
+     * reads the bytes by id alone and must only follow {@link #findById}. {@code owner_id} has no
+     * foreign key, and a leave request or a factory quote can share a quotation's number. */
+    private static final String DOMAIN = "deal_quotation";
 
     /** The longest revision chain {@link #findForQuotation} walks. Chains are a few documents
      * long, so this only stops the walk if a row were ever made its own ancestor. */
@@ -140,18 +141,14 @@ public class DealQuotationAttachmentRepository {
     }
 
     private static DealQuotationAttachmentDto map(ResultSet rs) throws SQLException {
-        long size = rs.getLong("file_size");
-        Long fileSize = rs.wasNull() ? null : size;
-        long uploader = rs.getLong("uploaded_by");
-        Long uploadedById = rs.wasNull() ? null : uploader;
         return new DealQuotationAttachmentDto(
             rs.getLong("attachment_id"),
             rs.getLong("quotation_id"),
             rs.getString("number"),
             rs.getString("file_name"),
             rs.getString("mime_type"),
-            fileSize,
-            uploadedById,
+            rs.getObject("file_size", Long.class),
+            rs.getObject("uploaded_by", Long.class),
             rs.getString("uploaded_by_name"),
             rs.getTimestamp("uploaded_at").toInstant(),
             rs.getInt("depth") > 0);

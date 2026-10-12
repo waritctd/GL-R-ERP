@@ -257,7 +257,7 @@ export function canAttachToDealQuotation(user, quotation) {
  * is that document's. */
 export function canRemoveDealQuotationAttachment(user, quotation, attachment) {
   return canSeeDealQuotationAttachments(user) && canEditDealQuotation(user, quotation)
-    && quotation.docStatus === 'DRAFT' && !attachment?.inherited;
+    && isDealQuotationEditable(quotation) && !attachment?.inherited;
 }
 
 // ── Terms card options (editor) ────────────────────────────────────────────────────────────────
