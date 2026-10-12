@@ -489,9 +489,12 @@ export function QuotationItemRow({
         {!readOnly ? (
           // `min-w-0 flex-1` so this column can be squeezed at all; without it the two selects
           // below push the whole row past the viewport on a phone (see their comment).
-          // `mobile:contents` puts its children on the row's own lines there: the number and ✕
-          // share the first, and the two full-width selects follow (`mobile:order-*` below).
-          <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-1.5 mobile:contents">
+          // `max-sm:contents` puts its children on the row's own lines there: the number and ✕
+          // share the first, and the two full-width selects follow (`max-sm:order-*` below).
+          // `max-sm:`, not `mobile:`: it has to flip exactly where the selects stop being full
+          // width, which is `sm:`. Between 640 and 720px `mobile:` would put ✕ in front of two
+          // inline selects.
+          <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-1.5 max-sm:contents">
             {moveTargets.length ? (
               <>
                 <label htmlFor={`move-${index}`} className="sr-only">ย้ายไปตำแหน่ง</label>
@@ -514,7 +517,7 @@ export function QuotationItemRow({
                     control instead of widening the page. */}
                 <select
                   id={`move-${index}`}
-                  className="h-8 mobile:order-2 mobile:h-11 w-full min-w-0 py-0 text-2xs mobile:text-base sm:w-auto sm:min-w-[9.5rem] sm:max-w-[13rem]"
+                  className="h-8 max-sm:order-2 mobile:h-11 w-full min-w-0 py-0 text-2xs mobile:text-base sm:w-auto sm:min-w-[9.5rem] sm:max-w-[13rem]"
                   value=""
                   onChange={(e) => { if (e.target.value) onMove?.(e.target.value); }}
                 >
@@ -529,7 +532,7 @@ export function QuotationItemRow({
                     <label htmlFor={`dup-${index}`} className="sr-only">ทำซ้ำรายการ</label>
                     <select
                       id={`dup-${index}`}
-                      className="h-8 mobile:order-2 mobile:h-11 w-full min-w-0 py-0 text-2xs mobile:text-base sm:w-auto sm:min-w-[9.5rem] sm:max-w-[13rem]"
+                      className="h-8 max-sm:order-2 mobile:h-11 w-full min-w-0 py-0 text-2xs mobile:text-base sm:w-auto sm:min-w-[9.5rem] sm:max-w-[13rem]"
                       value=""
                       onChange={(e) => { if (e.target.value) onDuplicate?.(e.target.value); }}
                     >
@@ -547,7 +550,7 @@ export function QuotationItemRow({
               // so the duplicate degrades to a plain button rather than a one-option dropdown.
               <Button variant="secondary" size="sm" onClick={() => onDuplicate?.(groupId)}>ทำซ้ำรายการ</Button>
             )}
-            <Button variant="icon" size="sm" className="mobile:order-1 mobile:ml-auto mobile:min-h-[44px] mobile:w-11" onClick={onRemove} title="ลบรายการ" aria-label="ลบรายการ">
+            <Button variant="icon" size="sm" className="max-sm:order-1 max-sm:ml-auto mobile:min-h-[44px] mobile:w-11" onClick={onRemove} title="ลบรายการ" aria-label="ลบรายการ">
               <Icon name="close" size={16} />
             </Button>
           </div>
@@ -1275,11 +1278,11 @@ export function QuotationItemRow({
           permanently-zero ฿ amount, which would read as a real number rather than "not
           applicable". */}
       {hidePricing ? null : (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-surface-subtle px-3 py-2.5 mobile:flex-col mobile:items-stretch">
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-surface-subtle px-3 py-2.5 max-sm:flex-col max-sm:items-stretch">
           <p className="m-0 min-w-0 flex-1 text-xs text-text-muted">
             {item.calcPending ? 'กำลังคำนวณ...' : (item.calculationLine || 'กรอกจำนวนและเผื่อเพื่อคำนวณ')}
           </p>
-          <span className="tabular-nums text-md font-extrabold text-text mobile:text-right">{formatQuotationMoney(item.lineAmount, currency)}</span>
+          <span className="tabular-nums text-md font-extrabold text-text max-sm:text-right">{formatQuotationMoney(item.lineAmount, currency)}</span>
         </div>
       )}
     </li>
