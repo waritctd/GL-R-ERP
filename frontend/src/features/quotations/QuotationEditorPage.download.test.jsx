@@ -234,7 +234,8 @@ describe('download flushes unsaved edits before rendering the document (2026-09-
 
     await pickDownload('PDF');
     await waitFor(() => expect(api.dealQuotations.downloadPdf).toHaveBeenCalledTimes(1));
-    expect(screen.getByRole('button', { name: 'ดาวน์โหลด' }).textContent).toContain('กำลังดาวน์โหลด');
+    // The trigger's text is its name in every state (label in name); the menu carries the busy state.
+    expect(screen.getByRole('button', { name: 'ดาวน์โหลด' }).textContent).toBe('ดาวน์โหลด');
 
     fireEvent.click(screen.getByRole('button', { name: 'ดาวน์โหลด' }));
     const menu = within(await screen.findByRole('menu', { name: 'ดาวน์โหลด' }));

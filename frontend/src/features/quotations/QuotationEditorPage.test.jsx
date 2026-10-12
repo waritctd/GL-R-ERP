@@ -591,9 +591,8 @@ describe('QuotationEditorPage reorder / สร้างจากใบเดิ�
     renderEditor('/quotations/5');
     // The control: the sibling action that shared its old gate (canReviseDealQuotation) is there.
     await screen.findByRole('button', { name: 'สร้างฉบับแก้ไข' });
-    expect(screen.queryByRole('button', { name: /สร้างจากใบเดิม/ })).toBeNull();
-    expect(screen.queryByRole('button', { name: /สั่งเหมือนเดิม/ })).toBeNull();
-    expect(api.dealQuotations.createReorder).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: /สร้างจากใบเดิม|สั่งเหมือนเดิม/ })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: /สร้างจากใบเดิม|สั่งเหมือนเดิม/ })).toBeNull();
   });
 
     // Opus review (2026-09-19): the note must NOT claim "stays approved" when the source has

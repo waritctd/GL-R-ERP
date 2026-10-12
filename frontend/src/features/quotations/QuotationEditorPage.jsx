@@ -1926,7 +1926,9 @@ export function QuotationEditorPage({ user, showToast }) {
           <Button
             variant="icon"
             size="sm"
-            className="mobile:w-11 mobile:min-h-[44px]"
+            // shrink-0: beside a title that fills the row the button would otherwise give up
+            // width; mobile:w-11 lifts the sm icon button to the 44px touch floor there.
+            className="shrink-0 mobile:w-11"
             aria-label="คัดลอกเป็นใบใหม่"
             disabled={dirty || saving}
             title={dirty || saving
@@ -1972,10 +1974,14 @@ export function QuotationEditorPage({ user, showToast }) {
         actions={(
           <>
             {quotation ? (
+              // align="start": on phones the action bar is left-aligned and this is its first
+              // control, so an end-aligned panel (12rem minimum) would open off the left edge.
+              // The trigger's text stays its name; while a download runs the items say so.
               <OverflowMenu
                 label="ดาวน์โหลด"
-                triggerLabel={downloading ? 'กำลังดาวน์โหลด…' : 'ดาวน์โหลด'}
+                triggerLabel="ดาวน์โหลด"
                 triggerIcon="download"
+                align="start"
                 items={[
                   { key: 'pdf', label: 'PDF', icon: 'fileText', onSelect: () => handleDownload('pdf'), disabled: downloading != null, disabledReason: 'กำลังดาวน์โหลด…' },
                   { key: 'xlsx', label: 'Excel', icon: 'fileText', onSelect: () => handleDownload('xlsx'), disabled: downloading != null, disabledReason: 'กำลังดาวน์โหลด…' },
