@@ -335,12 +335,17 @@ export function QuotationEditorPage({ user, showToast }) {
   // entry) as its own page, so the server decides whether this viewer may read it — and it is not
   // even asked for a viewer who may not start a quotation, who gets the refusal further down.
   const copyFromId = isInlineCreate ? searchParams.get('copyFrom') : null;
+  const copySourceAsked = Boolean(copyFromId) && canCreateDealQuotationStandalone(user);
   const copySourceQuery = useQuery({
     queryKey: queryKeys.dealQuotationDetail(copyFromId),
     queryFn: () => api.dealQuotations.get(copyFromId).then((r) => r.quotation),
-    enabled: Boolean(copyFromId) && canCreateDealQuotationStandalone(user),
+    enabled: copySourceAsked,
   });
   const copySource = copySourceQuery.data ?? null;
+  // Asked for and not answered yet. `isPending`, not `isLoading`: a request that is held back
+  // (offline, or between retries while the tab is hidden) is not fetching, and it is not an answer
+  // either. A form shown then would be typed into and replaced the moment the source arrives.
+  const copySourcePending = copySourceAsked && copySourceQuery.isPending;
   // What the form opens with — or null while the source is on its way, or when it may not be
   // copied (canCopyDealQuotation: the SAME question the button on the source's page asks, because
   // a hidden button does not stop a typed, bookmarked or shared link).
@@ -354,7 +359,7 @@ export function QuotationEditorPage({ user, showToast }) {
   // source of the wrong kind says which kind. (A viewer who may not create quotations at all is
   // told so by the page's own refusal further down, so there is nothing to add here.)
   let copyRefusal = null;
-  if (copyFromId && !copyState && !copySourceQuery.isLoading) {
+  if (copyFromId && !copyState && !copySourcePending) {
     if (copySourceQuery.isError) {
       copyRefusal = copySourceQuery.error?.message || 'ไม่พบใบเสนอราคาที่จะคัดลอก';
     } else if (copySource?.origin === 'PRICING_REQUEST') {
@@ -1863,7 +1868,7 @@ export function QuotationEditorPage({ user, showToast }) {
 
   if (id && quotationQuery.isLoading) return <RouteFallback />;
   // A blank form shown while the source is on its way would be typed into, and then replaced.
-  if (copyFromId && copySourceQuery.isLoading) return <RouteFallback />;
+  if (copySourcePending) return <RouteFallback />;
   if (id && quotationQuery.isError) {
     return (
       <PageStack>

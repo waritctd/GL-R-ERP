@@ -1,5 +1,5 @@
 import React from 'react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { onlineManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes, useLocation, useParams } from 'react-router-dom';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -321,6 +321,24 @@ describe('/quotations/new?copyFrom= — the draft it opens', () => {
     await waitFor(() => expect(api.dealQuotations.get).toHaveBeenCalledTimes(1));
     expect(screen.queryByLabelText(/^ลูกค้า/)).toBeNull();
     expect(screen.queryByRole('button', { name: 'บันทึกร่าง' })).toBeNull();
+  });
+
+  // The request can also be HELD BACK before it settles: offline, or between retries while the
+  // tab is hidden. That is neither loading nor an answer, and a form shown then would be typed
+  // into and then replaced the moment the source arrives.
+  it('shows no form while the source request is held back, either', async () => {
+    onlineManager.setOnline(false);
+    try {
+      renderCopy();
+      await new Promise((resolve) => { setTimeout(resolve, 50); });
+
+      // Control: the request really is paused, not sent.
+      expect(api.dealQuotations.get).not.toHaveBeenCalled();
+      expect(screen.queryByLabelText(/^ลูกค้า/)).toBeNull();
+      expect(screen.queryByRole('button', { name: 'บันทึกร่าง' })).toBeNull();
+    } finally {
+      onlineManager.setOnline(true);
+    }
   });
 
   it('is the new-quotation editor, already filled in from the source and not yet saved', async () => {
