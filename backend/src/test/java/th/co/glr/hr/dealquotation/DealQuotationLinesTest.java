@@ -517,6 +517,41 @@ class DealQuotationLinesTest {
         assertThat(line).isEqualTo("(จำนวน 100 แผ่น + เผื่อ 5 แผ่น และปัดขึ้นเต็มกล่อง = 108 แผ่น) (บรรจุ 12 แผ่น/กล่อง)");
     }
 
+    /**
+     * Review F5: a row STORED under the old HALF_UP rule (791 + 10% = 870, 2/box) must print what
+     * is stored. Recomputing (now: 871) used to print "และปัดขึ้นเต็มกล่อง = 870" -- a rounding
+     * clause that contradicts its own numbers.
+     */
+    @Test
+    void calculationLine_storedPreCeilingRow_describesTheStoredNumbers_noBoxClause() {
+        String line = DealQuotationLines.calculationLine(WastageCalculator.DOCUMENT_LANGUAGE_TH,
+            WastageCalculator.QUANTITY_MODE_PIECES, null, null, 791,
+            WastageCalculator.WASTAGE_MODE_PERCENT, new BigDecimal("10"), 870, 870, 2, true);
+
+        assertThat(line).isEqualTo("(จำนวน 791 แผ่น + เผื่อ 10% = 870 แผ่น = 435 กล่อง) (บรรจุ 2 แผ่น/กล่อง)");
+    }
+
+    @Test
+    void calculationLine_freshlyComputedRow_791Plus10Percent_printsTheBoxClause() {
+        String line = DealQuotationLines.calculationLine(WastageCalculator.DOCUMENT_LANGUAGE_TH,
+            WastageCalculator.QUANTITY_MODE_PIECES, null, null, 791,
+            WastageCalculator.WASTAGE_MODE_PERCENT, new BigDecimal("10"), 871, 872, 2, true);
+
+        assertThat(line).isEqualTo(
+            "(จำนวน 791 แผ่น + เผื่อ 10% และปัดขึ้นเต็มกล่อง = 872 แผ่น) (บรรจุ 2 แผ่น/กล่อง)");
+    }
+
+    /** The English twin of the stored-row case, through {@code tilePrint} (the entry point the repository calls). */
+    @Test
+    void tilePrint_storedPreCeilingRow_english_describesTheStoredNumbers() {
+        DealQuotationLines.TilePrint p = DealQuotationLines.tilePrint(EN, "PER_PIECE",
+            WastageCalculator.QUANTITY_MODE_PIECES, null, null, null, 791,
+            WastageCalculator.WASTAGE_MODE_PERCENT, new BigDecimal("10"), 870, 870, 2, null, null,
+            new BigDecimal("870"), "PCS", null, true);
+
+        assertThat(p.calculationLine()).isEqualTo("(Quantity 791 pcs + 10% allowance = 870 pcs = 435 boxes) (2 pcs/box)");
+    }
+
     @Test
     void calculationLine_noneWastage_omitsWastagePhrase() {
         String line = DealQuotationLines.calculationLine(

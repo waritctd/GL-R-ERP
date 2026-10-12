@@ -2068,6 +2068,26 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(created.items().get(0).piecesBeforeWastage()).isEqualTo(1);
     }
 
+    /**
+     * Review F5, through the read path: a row stored under the old HALF_UP rule (791 + 10% = 870,
+     * 2/box) must print its STORED numbers when read back, not be recomputed to 871 and print a
+     * box-rounding clause that contradicts "= 870".
+     */
+    @Test
+    void get_aRowStoredBeforeTheCeilingRule_printsItsStoredNumbers_notARecomputedBoxClause() {
+        DealQuotationDto created = quotationService.create(ticketId, upsertRequest(List.of(itemMutated(m -> m
+            .withPiecesInput(791).withPiecesPerBox(2)
+            .withWastage(WastageCalculator.WASTAGE_MODE_PERCENT, new BigDecimal("10"))))), salesActor);
+        assertThat(created.items().get(0).calculationLine())
+            .as("a freshly computed row rounds 871 up to the box").contains("และปัดขึ้นเต็มกล่อง = 872 แผ่น");
+
+        jdbc.update("UPDATE sales.quotation_item SET pieces_after_wastage = 870, qty = 870"
+            + " WHERE quotation_id = :id", java.util.Map.of("id", created.id()));
+
+        assertThat(quotationService.get(created.id(), salesActor).items().get(0).calculationLine())
+            .isEqualTo("(จำนวน 791 แผ่น + เผื่อ 10% = 870 แผ่น = 435 กล่อง) (บรรจุ 2 แผ่น/กล่อง)");
+    }
+
     /** The same on the lenient calculate-line preview. */
     @Test
     void calculateLine_aTinyAreaRoundsUpToOnePiece_insteadOfBeingRefusedAsZero() {

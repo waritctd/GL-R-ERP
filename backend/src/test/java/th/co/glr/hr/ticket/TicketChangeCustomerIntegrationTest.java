@@ -18,7 +18,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import th.co.glr.hr.auth.EmployeeAuthRepository;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.brand.BrandAssets;
+import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.customer.ContactDto;
 import th.co.glr.hr.customer.ContactRepository;
@@ -26,10 +29,18 @@ import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.customer.ProjectDto;
 import th.co.glr.hr.customer.ProjectRepository;
+import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto;
+import th.co.glr.hr.dealquotation.DealQuotationRepository;
+import th.co.glr.hr.dealquotation.DealQuotationRequests.ItemInput;
+import th.co.glr.hr.dealquotation.DealQuotationRequests.UpsertDealQuotationRequest;
+import th.co.glr.hr.dealquotation.DealQuotationService;
+import th.co.glr.hr.dealquotation.WastageCalculator;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
+import th.co.glr.hr.dealquotation.EmployeeSignatureRepository;
+import th.co.glr.hr.notification.NotificationEmailService;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
@@ -56,6 +67,8 @@ class TicketChangeCustomerIntegrationTest extends AbstractPostgresIntegrationTes
 
     private TicketRepository tickets;
     private TicketService ticketService;
+    private DealQuotationService quotationService;
+    private ContactRepository contactRepository;
 
     private long ownerRepId;
     private UserPrincipal ownerRep;
@@ -95,6 +108,12 @@ class TicketChangeCustomerIntegrationTest extends AbstractPostgresIntegrationTes
 
         ProjectRepository projects = new ProjectRepository(jdbc);
         ContactRepository contacts = new ContactRepository(jdbc);
+        contactRepository = contacts;
+        quotationService = new DealQuotationService(new DealQuotationRepository(jdbc, new CatalogRepository(jdbc)),
+            tickets, customers, contacts, notifications,
+            new NotificationEmailService(null, new BrandAssets(), "", "", "https://portal.test"),
+            new QuotationRenderer(), new EmployeeAuthRepository(jdbc), new EmployeeSignatureRepository(jdbc),
+            new CatalogRepository(jdbc), "https://portal.test", "", "", "");
         int n = SEQ.incrementAndGet();
         custA = customers.create("บริษัท เอ ทดสอบ จำกัด " + n, taxId(n, 1), "1 ถนนเอ", "สำนักงานใหญ่", "02-111-1111");
         projectA = projects.create(custA.id(), "โครงการ เอ " + n);
@@ -226,7 +245,7 @@ class TicketChangeCustomerIntegrationTest extends AbstractPostgresIntegrationTes
     // ── the happy paths ──────────────────────────────────────────────────────
 
     @Test
-    void theOwnerMovesTheDealToTheOtherCustomer_andWritesAnEvent_andLeavesTheQuotationRowAlone() {
+    void theOwnerMovesTheDealToTheOtherCustomer_andWritesAnEvent_andLeavesTheQuotationsPrintedNameAlone() {
         long ticketId = createTicketUnderCustomerA();
         long draftQuotationId = insertDirectQuotation(ticketId, "DRAFT", custA.name());
         int eventsBefore = eventCount(ticketId);
@@ -274,6 +293,73 @@ class TicketChangeCustomerIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(ticketRow(byCeo).get("customer_id")).isEqualTo(custB.id());
     }
 
+    // ── review F1: a draft's frozen contact must follow the deal's customer ──
+
+    /**
+     * The reviewer's repro: a draft copies the deal's contact (customer A's) at create; after the
+     * deal moves to customer B with no contact, the editor's next save (contactId always null) used
+     * to resolve the stored A-contact against B and fail 400 "กรุณาระบุผู้สั่งซื้อ".
+     */
+    @Test
+    void aDraftCarryingTheOldCustomersContactCanStillBeSavedAfterTheChange_andItsContactIsCleared() {
+        long ticketId = createTicketUnderCustomerA();
+        DealQuotationDto draft = quotationService.create(ticketId, saveRequest(), ownerRep);
+        assertThat(quotationContactId(draft.id())).isEqualTo(contactA.id());
+
+        ticketService.changeCustomer(ticketId, toCustomerB(null), ownerRep);
+
+        Map<String, Object> q = quotationContact(draft.id());
+        assertThat(q.get("contact_id")).as("contact_id").isNull();
+        assertThat(q.get("contact_name")).as("contact_name").isNull();
+        assertThat(q.get("contact_phone")).as("contact_phone").isNull();
+        assertThat(q.get("contact_email")).as("contact_email").isNull();
+        assertThatCode(() -> quotationService.update(draft.id(), saveRequest(), ownerRep))
+            .doesNotThrowAnyException();
+        assertThat(quotationContactId(draft.id())).isNull();
+    }
+
+    @Test
+    void aContactOfTheNewCustomerIsFrozenOntoTheDraftInsteadOfTheOldOne() {
+        long ticketId = createTicketUnderCustomerA();
+        DealQuotationDto draft = quotationService.create(ticketId, saveRequest(), ownerRep);
+
+        ticketService.changeCustomer(ticketId, toCustomerB(contactB.id()), ownerRep);
+
+        Map<String, Object> q = quotationContact(draft.id());
+        ContactDto b = contactRepository.findById(contactB.id()).orElseThrow();
+        assertThat(q.get("contact_id")).isEqualTo(contactB.id());
+        assertThat(q.get("contact_name")).isEqualTo(b.fullName());
+        assertThat(q.get("contact_phone")).isEqualTo(b.phone());
+        assertThat(q.get("contact_email")).isEqualTo(b.email());
+        assertThatCode(() -> quotationService.update(draft.id(), saveRequest(), ownerRep))
+            .doesNotThrowAnyException();
+    }
+
+    @Test
+    void aLivePricingRequestFreezesTheCustomer_409_andTheCustomerDoesNotMove() {
+        for (String status : List.of("DRAFT", "SUBMITTED", "IMPORT_REVIEWING", "READY_FOR_CEO_REVIEW", "QUOTATION_ISSUED")) {
+            long ticketId = createTicketUnderCustomerA();
+            insertPricingRequest(ticketId, status);
+            assertThatThrownBy(() -> ticketService.changeCustomer(ticketId, toCustomerB(null), ownerRep))
+                .as("a pricing request in %s", status)
+                .isInstanceOfSatisfying(ApiException.class, e -> {
+                    assertThat(e.getStatus().value()).isEqualTo(409);
+                    assertThat(e.getMessage()).isEqualTo("เปลี่ยนลูกค้าไม่ได้ เนื่องจากดีลนี้มีคำขอราคาอยู่");
+                });
+            assertTicketStillUnderCustomerA(ticketId);
+        }
+    }
+
+    @Test
+    void aDealWhoseOnlyPricingRequestIsCancelledMayChangeCustomer() {
+        long ticketId = createTicketUnderCustomerA();
+        insertPricingRequest(ticketId, "CANCELLED");
+
+        assertThatCode(() -> ticketService.changeCustomer(ticketId, toCustomerB(null), ownerRep))
+            .doesNotThrowAnyException();
+        assertThat(ticketRow(ticketId).get("customer_id")).isEqualTo(custB.id());
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     private ChangeCustomerRequest toCustomerB(Long contactId) {
@@ -315,6 +401,34 @@ class TicketChangeCustomerIntegrationTest extends AbstractPostgresIntegrationTes
     private String quotationCustomerName(long quotationId) {
         return jdbc.queryForObject("SELECT customer_name FROM sales.quotation WHERE quotation_id = :id",
             Map.of("id", quotationId), String.class);
+    }
+
+    private Long quotationContactId(long quotationId) {
+        return (Long) quotationContact(quotationId).get("contact_id");
+    }
+
+    private Map<String, Object> quotationContact(long quotationId) {
+        return jdbc.queryForMap(
+            "SELECT contact_id, contact_name, contact_phone, contact_email FROM sales.quotation WHERE quotation_id = :id",
+            Map.of("id", quotationId));
+    }
+
+    private UpsertDealQuotationRequest saveRequest() {
+        ItemInput item = new ItemInput(null, null, null, "Brand A", "Model A", "White", "Matte", "60x60",
+            new BigDecimal("10"), new BigDecimal("0.36"),
+            WastageCalculator.QUANTITY_MODE_PIECES, null, 10, WastageCalculator.WASTAGE_MODE_NONE, null, 1,
+            new BigDecimal("100.00"), BigDecimal.ZERO, "ไทย-สต็อก", 30, 45, null);
+        return new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
+            "หมายเหตุทดสอบ", List.of(item));
+    }
+
+    private void insertPricingRequest(long ticketId, String status) {
+        jdbc.update("""
+            INSERT INTO sales.pricing_request (request_code, ticket_id, recipient_type, requested_by, status, cancelled_at)
+            VALUES (:code, :ticketId, 'BUYER', :requestedBy, :status,
+                    CASE WHEN :status = 'CANCELLED' THEN now() END)
+            """, Map.of("code", "PCR-CC-F1-" + SEQ.incrementAndGet(), "ticketId", ticketId,
+                "requestedBy", ownerRepId, "status", status));
     }
 
     private String quotationStatus(long quotationId) {

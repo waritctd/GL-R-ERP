@@ -60,6 +60,8 @@ import {
   // V192.5 / V192.3: the SAME row price-mode codes and ผู้ติดต่อ length limits the editor uses — not
   // a second list of them.
   ROW_PRICE_MODES, PRICE_MODE_MIXED, ORDERED_BY_PHONE_MAX, ORDERED_BY_EMAIL_MAX,
+  // Float-safe round-up, the BigDecimal ceilToInt the server uses (see computeDealQuotationLine).
+  ceilPieces,
 } from '../features/quotations/quotationMeta.js';
 // fix/commission-figures-from-backend: mock mode no longer imports the commission tier math —
 // see the fenced MOCK COMMISSION FIXTURES block near the `commissions` namespace below for why,
@@ -6017,13 +6019,13 @@ function computeDealQuotationLine(input = {}, documentLanguage = 'TH') {
   // the area step, the percent step and a fractional flat wastage alike.
   const piecesBeforeWastage = quantityMode === 'PIECES'
     ? Math.round(piecesInput)
-    : Math.ceil(areaSqm * (piecesPerSqm ?? 0));
+    : ceilPieces(areaSqm * (piecesPerSqm ?? 0));
   const wastageMode = input.wastageMode ?? 'NONE';
   const wastageValue = Number(input.wastageValue) || 0;
   const wastageExtra = wastageMode === 'PERCENT'
-    ? Math.ceil(piecesBeforeWastage * (wastageValue / 100))
+    ? ceilPieces(piecesBeforeWastage * (wastageValue / 100))
     : wastageMode === 'PIECES'
-      ? Math.ceil(wastageValue)
+      ? ceilPieces(wastageValue)
       : 0;
   const piecesAfterWastage = piecesBeforeWastage + wastageExtra;
   const piecesPerBox = Number(input.piecesPerBox) || 0;

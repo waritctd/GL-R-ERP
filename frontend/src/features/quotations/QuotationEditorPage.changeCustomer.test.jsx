@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { QuotationEditorPage } from './QuotationEditorPage.jsx';
 import { api } from '../../api/index.js';
 import { QUOTATION_FIELD_IDS } from './quotationMeta.js';
+import { queryKeys } from '../../api/queryKeys.js';
 
 globalThis.React = React;
 
@@ -133,8 +134,8 @@ function ticketSummary() {
   };
 }
 
-function Providers({ path, children }) {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+function Providers({ path, children, client }) {
+  const queryClient = client ?? new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return (
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={[path]}>
@@ -365,5 +366,31 @@ describe('"เปลี่ยนลูกค้า" is not offered where the cus
 
     expect(screen.queryByRole('button', { name: CHANGE })).toBeNull();
     expect(api.tickets.changeCustomer).not.toHaveBeenCalled();
+  });
+});
+
+describe('the header names the FROZEN customer once the quotation is no longer a draft', () => {
+  // react-query keeps the deal's live customer record cached after a draft is submitted (the query
+  // is only disabled, not evicted), so a customer renamed since then must not reach the header of
+  // an approved document, whose printed customer is the snapshot taken at submit.
+  it('shows the snapshot name, not a renamed live customer record, on a PENDING_APPROVAL quotation', async () => {
+    const RENAMED = 'บริษัท ชื่อใหม่หลังส่งอนุมัติ จำกัด';
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    // Both queries are disabled off DRAFT, but data cached while it was one is still served.
+    client.setQueryData(queryKeys.ticketDetail(TICKET_ID), ticketSummary());
+    client.setQueryData(queryKeys.customerRecord(OLD_CUSTOMER.id), { ...OLD_CUSTOMER, name: RENAMED });
+    const quotation = draft({ docStatus: 'PENDING_APPROVAL', submittedAt: '2026-09-21T03:00:00Z' });
+    api.dealQuotations.get.mockResolvedValue({ quotation });
+    render(
+      <Providers path={`/quotations/${quotation.id}`} client={client}>
+        <Route path="/quotations/:id" element={<QuotationEditorPage user={salesUser} showToast={vi.fn()} />} />
+      </Providers>,
+    );
+    await screen.findByRole('heading', { level: 1 });
+    await new Promise((resolve) => { setTimeout(resolve, 60); });
+
+    const header = screen.getByRole('heading', { level: 1 }).closest('header');
+    expect(header.textContent).toContain(OLD_CUSTOMER.name);
+    expect(header.textContent).not.toContain(RENAMED);
   });
 });

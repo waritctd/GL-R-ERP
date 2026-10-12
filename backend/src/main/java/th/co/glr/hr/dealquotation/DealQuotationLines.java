@@ -475,9 +475,24 @@ public final class DealQuotationLines {
                                          BigDecimal piecesPerSqm, int piecesBeforeWastage, String wastageMode,
                                          BigDecimal wastageValue, int piecesFinal, Integer piecesPerBox,
                                          boolean roundToFullBox) {
+        return calculationLine(documentLanguage, quantityMode, areaSqm, piecesPerSqm, piecesBeforeWastage,
+            wastageMode, wastageValue, WastageCalculator.applyWastage(piecesBeforeWastage, wastageMode, wastageValue),
+            piecesFinal, piecesPerBox, roundToFullBox);
+    }
+
+    /**
+     * The line for a row whose pieces-after-wastage is KNOWN (stored): the box-rounding clause is
+     * decided from that number, never re-derived, because the wastage rounding rule has changed
+     * over time (HALF_UP, then ceiling) and a stored 870 must not print as if it were 871. The
+     * overloads above recompute it, which is right only for a row computed just now.
+     */
+    public static String calculationLine(String documentLanguage, String quantityMode, BigDecimal areaSqm,
+                                         BigDecimal piecesPerSqm, int piecesBeforeWastage, String wastageMode,
+                                         BigDecimal wastageValue, int piecesAfterWastage, int piecesFinal,
+                                         Integer piecesPerBox, boolean roundToFullBox) {
         if (english(documentLanguage)) {
             return englishCalculationLine(quantityMode, areaSqm, piecesPerSqm, piecesBeforeWastage, wastageMode,
-                wastageValue, piecesFinal, piecesPerBox, null, roundToFullBox);
+                wastageValue, piecesAfterWastage, piecesFinal, piecesPerBox, null, roundToFullBox);
         }
         String quantityPart = WastageCalculator.QUANTITY_MODE_PIECES.equals(quantityMode)
             ? "จำนวน " + format(piecesBeforeWastage) + " แผ่น"
@@ -527,7 +542,6 @@ public final class DealQuotationLines {
         // piecesFinal comparison) it stays correct even if a caller's piecesFinal ever disagreed
         // with what ceilToMultiple(piecesAfterWastage, ppb) would produce -- it can never derive a
         // box count that does not evenly divide piecesFinal in the branch below.
-        int piecesAfterWastage = WastageCalculator.applyWastage(piecesBeforeWastage, wastageMode, wastageValue);
         boolean boxRoundingChangedCount = hasBox && piecesAfterWastage % piecesPerBox != 0;
 
         // Owner decision (2026-09-16): was "และปัดลงกล่อง" ("rounded DOWN") -- the arithmetic
@@ -612,8 +626,8 @@ public final class DealQuotationLines {
      */
     private static String englishCalculationLine(String quantityMode, BigDecimal areaSqm, BigDecimal piecesPerSqm,
                                                  int piecesBeforeWastage, String wastageMode,
-                                                 BigDecimal wastageValue, int piecesFinal, Integer piecesPerBox,
-                                                 Integer boxes, boolean roundToFullBox) {
+                                                 BigDecimal wastageValue, int piecesAfterWastage, int piecesFinal,
+                                                 Integer piecesPerBox, Integer boxes, boolean roundToFullBox) {
         String quantityPart = WastageCalculator.QUANTITY_MODE_PIECES.equals(quantityMode)
             ? "Quantity " + format(piecesBeforeWastage) + " " + pluralPcs(piecesBeforeWastage)
             : "Area " + format(areaSqm) + " sqm @ " + format(piecesPerSqm) + " " + pluralPcs(piecesPerSqm)
@@ -644,7 +658,6 @@ public final class DealQuotationLines {
         // why "changed" is asked of piecesAfterWastage % ppb directly rather than by comparing
         // against piecesFinal. piecesAfterWastage is re-derived (never duplicated) via
         // WastageCalculator#applyWastage, the single source of truth for that number.
-        int piecesAfterWastage = WastageCalculator.applyWastage(piecesBeforeWastage, wastageMode, wastageValue);
         boolean boxRoundingChangedCount = hasBox && piecesAfterWastage % piecesPerBox != 0;
         String roundingPart = boxRoundingChangedCount ? ", rounded up to full boxes" : "";
         if (boxes != null) {
@@ -809,6 +822,19 @@ public final class DealQuotationLines {
             storedQuantity, storedUnit, specialPriceSqm, true);
     }
 
+    /** As the 17-argument overload, recomputing pieces-after-wastage (right for a row computed just now). */
+    public static TilePrint tilePrint(String documentLanguage, String priceMode, String quantityMode,
+                                      BigDecimal areaSqm, BigDecimal sqmPerPiece, BigDecimal piecesPerSqm,
+                                      int piecesBeforeWastage, String wastageMode, BigDecimal wastageValue,
+                                      int piecesFinal, Integer piecesPerBox, Integer boxes, BigDecimal sqmPerBox,
+                                      BigDecimal storedQuantity, String storedUnit, BigDecimal specialPriceSqm,
+                                      boolean roundToFullBox) {
+        return tilePrint(documentLanguage, priceMode, quantityMode, areaSqm, sqmPerPiece, piecesPerSqm,
+            piecesBeforeWastage, wastageMode, wastageValue,
+            WastageCalculator.applyWastage(piecesBeforeWastage, wastageMode, wastageValue), piecesFinal,
+            piecesPerBox, boxes, sqmPerBox, storedQuantity, storedUnit, specialPriceSqm, roundToFullBox);
+    }
+
     /**
      * Owner-approved "sell loose pieces" (2026-09-16): the trailing {@code roundToFullBox}. The
      * 16-argument overload above always passes {@code true} — today's only behaviour when a box area
@@ -821,16 +847,16 @@ public final class DealQuotationLines {
     public static TilePrint tilePrint(String documentLanguage, String priceMode, String quantityMode,
                                       BigDecimal areaSqm, BigDecimal sqmPerPiece, BigDecimal piecesPerSqm,
                                       int piecesBeforeWastage, String wastageMode, BigDecimal wastageValue,
-                                      int piecesFinal, Integer piecesPerBox, Integer boxes, BigDecimal sqmPerBox,
-                                      BigDecimal storedQuantity, String storedUnit, BigDecimal specialPriceSqm,
-                                      boolean roundToFullBox) {
+                                      int piecesAfterWastage, int piecesFinal, Integer piecesPerBox, Integer boxes,
+                                      BigDecimal sqmPerBox, BigDecimal storedQuantity, String storedUnit,
+                                      BigDecimal specialPriceSqm, boolean roundToFullBox) {
         boolean perSqm = WastageCalculator.isEnglishPerSqm(documentLanguage, priceMode);
         boolean hasBoxArea = sqmPerBox != null && sqmPerBox.signum() > 0;
         if (perSqm && hasBoxArea && boxes != null && piecesPerBox != null && piecesPerBox > 0) {
             // Unchanged from before Option B — byte-identical for every existing box-area document.
             return new TilePrint(
                 englishCalculationLine(quantityMode, areaSqm, piecesPerSqm, piecesBeforeWastage, wastageMode,
-                    wastageValue, piecesFinal, piecesPerBox, boxes, true),
+                    wastageValue, piecesAfterWastage, piecesFinal, piecesPerBox, boxes, true),
                 WastageCalculator.sqmQuantityFromBoxes(boxes, sqmPerBox), TILE_UNIT_SQM,
                 boxLine(piecesPerBox, sqmPerBox));
         }
@@ -840,12 +866,12 @@ public final class DealQuotationLines {
             // present, or the exact wastage-adjusted count when it is not / loose pieces is ticked).
             return new TilePrint(
                 calculationLine(documentLanguage, quantityMode, areaSqm, piecesPerSqm, piecesBeforeWastage,
-                    wastageMode, wastageValue, piecesFinal, piecesPerBox, roundToFullBox),
+                    wastageMode, wastageValue, piecesAfterWastage, piecesFinal, piecesPerBox, roundToFullBox),
                 WastageCalculator.sqmQuantityFromPieces(piecesFinal, sqmPerPiece), TILE_UNIT_SQM, null);
         }
         return new TilePrint(
             calculationLine(documentLanguage, quantityMode, areaSqm, piecesPerSqm, piecesBeforeWastage, wastageMode,
-                wastageValue, piecesFinal, piecesPerBox, roundToFullBox),
+                wastageValue, piecesAfterWastage, piecesFinal, piecesPerBox, roundToFullBox),
             storedQuantity, printedTileUnit(documentLanguage, storedUnit),
             specialPriceLine(documentLanguage, specialPriceSqm));
     }

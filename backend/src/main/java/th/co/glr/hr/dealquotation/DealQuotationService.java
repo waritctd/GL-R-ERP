@@ -3663,8 +3663,8 @@ public class DealQuotationService {
         DealQuotationLines.TilePrint print = tile
             ? DealQuotationLines.tilePrint(documentLanguage, priceMode, item.quantityMode(), item.areaSqm(),
                 item.sqmPerPiece(), piecesPerSqm, item.piecesBeforeWastage(), item.wastageMode(), item.wastageValue(),
-                item.piecesFinal(), item.piecesPerBox(), item.boxes(), item.sqmPerBox(), item.quantity(), item.unit(),
-                item.specialPriceSqm(), item.roundToFullBox())
+                item.piecesAfterWastage(), item.piecesFinal(), item.piecesPerBox(), item.boxes(), item.sqmPerBox(),
+                item.quantity(), item.unit(), item.specialPriceSqm(), item.roundToFullBox())
             : null;
         // A tile's description is recomposed in the document's language, exactly as the read path
         // does; a PLAIN/ADJUSTMENT row's is the one the build step composed or the rep typed.

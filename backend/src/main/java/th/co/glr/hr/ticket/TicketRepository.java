@@ -2108,6 +2108,33 @@ public class TicketRepository {
         return Boolean.TRUE.equals(value);
     }
 
+    /** True when the deal has a pricing request that is not CANCELLED (its recipient contact belongs to the customer). */
+    public boolean hasLivePricingRequest(long ticketId) {
+        Boolean value = jdbc.queryForObject(
+            "SELECT EXISTS(SELECT 1 FROM sales.pricing_request WHERE ticket_id = :ticketId AND status <> 'CANCELLED')",
+            Map.of("ticketId", ticketId), Boolean.class);
+        return Boolean.TRUE.equals(value);
+    }
+
+    /**
+     * Re-freezes the ผู้สั่งซื้อ snapshot (V167 contact_id/name/phone/email) of every DRAFT or
+     * CANCELLED quotation of the deal from {@code contactId}; a null contact (or one without a row)
+     * clears all four. Same name/phone/email derivation as V167's backfill.
+     */
+    public void resnapshotDraftQuotationContacts(long ticketId, Long contactId) {
+        jdbc.update("""
+            UPDATE sales.quotation q
+               SET contact_id    = ct.contact_id,
+                   contact_name  = NULLIF(TRIM(CONCAT_WS(' ', ct.first_name, ct.last_name)), ''),
+                   contact_phone = ct.phone,
+                   contact_email = ct.email
+              FROM (SELECT CAST(:contactId AS BIGINT) AS id) want
+              LEFT JOIN customers.contact ct ON ct.contact_id = want.id
+             WHERE q.ticket_id = :ticketId AND q.doc_status IN ('DRAFT','CANCELLED')
+            """,
+            new MapSqlParameterSource().addValue("ticketId", ticketId).addValue("contactId", contactId));
+    }
+
     public long insertDealActivity(long ticketId, LocalDate activityDate, String kind, String note,
                                    long createdById) {
         GeneratedKeyHolder keys = new GeneratedKeyHolder();

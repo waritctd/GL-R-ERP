@@ -135,20 +135,33 @@ describe('PricingRequestCreateModal', () => {
     expect(createFn).not.toHaveBeenCalled();
   });
 
-  it('shows a client-side hint when an AREA-mode quantity derives to 0 pieces (Opus review #2 -- mirrors the server\'s own zero-piece rejection)', async () => {
+  // Owner ruling 2026-10-12: any fraction of a piece rounds UP on the server, so a tiny positive
+  // area is 1 piece and is no longer warned about; only a zero/blank area derives nothing.
+  it('does not warn when a tiny AREA-mode quantity rounds up to 1 piece (server rounds every fraction up)', async () => {
     const { createFn } = renderModal();
     fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
     fillRequiredFields();
-    // Switch to AREA mode and set a tiny area against a small piece-per-sqm figure -- 0.3 m² at
-    // แผ่น/ตร.ม. 1.39 (sqmPerPiece ≈ 0.72) rounds DOWN to 0 pieces, the same fixture
-    // mockApi.pricingRequests.test.js's own zero-piece test uses.
+    // 0.3 m² at แผ่น/ตร.ม. 1.39 (sqmPerPiece ≈ 0.72) = 0.417 pieces -> 1.
     fireEvent.click(screen.getByRole('button', { name: 'ตร.ม.' }));
     fireEvent.change(screen.getByLabelText(/^แผ่น\/ตร\.ม\./), { target: { value: '1.39' } });
     fireEvent.change(screen.getByLabelText(/^จำนวน/), { target: { value: '0.3' } });
 
     fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
 
-    expect(await screen.findByText(/0 ชิ้น/)).not.toBeNull();
+    await waitFor(() => expect(createFn).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(/0 ชิ้น/)).toBeNull();
+  });
+
+  it('still warns when the AREA-mode quantity is zero (nothing to round up)', async () => {
+    const { createFn } = renderModal();
+    fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
+    fillRequiredFields();
+    fireEvent.click(screen.getByRole('button', { name: 'ตร.ม.' }));
+    fireEvent.change(screen.getByLabelText(/^แผ่น\/ตร\.ม\./), { target: { value: '1.39' } });
+    fireEvent.change(screen.getByLabelText(/^จำนวน/), { target: { value: '0' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
+
     expect(createFn).not.toHaveBeenCalled();
   });
 

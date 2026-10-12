@@ -698,6 +698,12 @@ function round2(n) {
   return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 }
 
+/** Round a piece count UP like the server's BigDecimal `ceilToInt`; the epsilon absorbs float noise
+ * (`100 * (7 / 100)` is 7.000000000000001, which a bare `Math.ceil` turns into 8). */
+export function ceilPieces(n) {
+  return Math.ceil(n - 1e-9);
+}
+
 /** ตร.ม./แผ่น (stored `item.sqmPerPiece`) → แผ่น/ตร.ม. (what the field shows). `null` when there
  * is nothing to invert yet, so an empty/zero field reads as empty rather than as `Infinity`. */
 export function piecesPerSqmFromSqmPerPiece(sqmPerPiece) {

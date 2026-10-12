@@ -1893,7 +1893,9 @@ export function QuotationEditorPage({ user, showToast }) {
   // failed load, not as "nothing chosen yet". Kept as `null` here so the subtitle below can say
   // what to do instead; the `'-'` fallback still applies wherever a dash is genuinely a value
   // (salesRepName in the document context strip).
-  const customerName = summaryCustomer?.name ?? quotation?.customerName ?? ticket?.customerName ?? (isInlineCreate ? dealForm.customer?.name : null) ?? null;
+  // The live customer record wins only while the document is a draft: react-query keeps serving a
+  // cached record after submit, and a renamed customer must not rewrite a frozen quotation's header.
+  const customerName = (isEditable ? summaryCustomer?.name : null) ?? quotation?.customerName ?? ticket?.customerName ?? (isInlineCreate ? dealForm.customer?.name : null) ?? null;
   const projectName = ((isEditable && quotation ? terms.projectName : null) || quotation?.projectName) ?? ticket?.projectName ?? (isInlineCreate ? dealForm.project?.name : null) ?? null;
   // The REAL rep's name -- what "(ค่าเริ่มต้น)" (no override) actually means on both
   // salesRepDisplayId selects. Opus review fix (2026-09-14): this used to feed an

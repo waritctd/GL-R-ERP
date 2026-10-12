@@ -2113,8 +2113,13 @@ public class TicketService {
 
     /**
      * Re-points the deal at another customer/project/contact (a typo fix before anything has been
-     * sent for approval). Refused once any quotation of the deal has left DRAFT. Quotation rows are
-     * deliberately not touched: a draft re-snapshots the deal's customer on its next save.
+     * sent for approval). Refused once any quotation of the deal has left DRAFT, or while the deal
+     * has a live pricing request (its recipient contact would go stale).
+     *
+     * <p>DRAFT/CANCELLED quotation rows get their frozen ผู้สั่งซื้อ (contact_id/name/phone/email)
+     * re-pointed at the request's contact (cleared when none), because a draft keeps its stored
+     * contact on save and one of the old customer's would fail validation against the new one.
+     * Their printed customer name is still re-snapshotted by the editor's next save, not here.
      */
     @Transactional
     public TicketDto changeCustomer(long ticketId, ChangeCustomerRequest request, UserPrincipal actor) {
@@ -2124,6 +2129,9 @@ public class TicketService {
         if (tickets.hasNonDraftQuotation(ticketId)) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "เปลี่ยนลูกค้าไม่ได้ เนื่องจากมีใบเสนอราคาที่ส่งขออนุมัติแล้ว");
+        }
+        if (tickets.hasLivePricingRequest(ticketId)) {
+            throw new ApiException(HttpStatus.CONFLICT, "เปลี่ยนลูกค้าไม่ได้ เนื่องจากดีลนี้มีคำขอราคาอยู่");
         }
         CustomerDto customer = customers.findById(request.customerId())
             .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "ไม่พบลูกค้าที่เลือก"));
@@ -2140,6 +2148,7 @@ public class TicketService {
             }
         }
         tickets.updateCustomer(ticketId, customer.id(), request.projectId(), request.contactId(), customer.name());
+        tickets.resnapshotDraftQuotationContacts(ticketId, request.contactId());
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.EDITED, s.salesStage(), s.salesStage(), "เปลี่ยนลูกค้าเป็น " + customer.name());
         return requireTicket(ticketId);
