@@ -926,7 +926,7 @@ export function PricingRequestCreateModal({
               <Icon name="plus" size={13} /> เพิ่มรายการ
             </Button>
           </div>
-          <ul className="grid list-none gap-3 pl-0">
+          <ul className="m-0 grid list-none gap-3 pl-0">
             {items.map((item, index) => (
               <QuotationItemRow
                 key={item.clientId}
@@ -1001,7 +1001,7 @@ export function PricingRequestCreateModal({
           ) : attachments.length === 0 ? (
             <p className="text-2xs text-text-muted">ยังไม่มีไฟล์แนบ</p>
           ) : (
-            <ul className="flex flex-col gap-1.5">
+            <ul className="m-0 flex list-none flex-col gap-1.5 pl-0">
               {attachments.map((attachment) => (
                 <li
                   key={attachment.id}
