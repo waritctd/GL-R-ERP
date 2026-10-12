@@ -266,6 +266,21 @@ describe('the "คัดลอกเป็นใบใหม่" button on a sav
     expect(api.tickets.create).not.toHaveBeenCalled();
   });
 
+  // Owner 2026-10-12: "a small button to duplicate beside the quotation line instead of ... inside,
+  // its too much cta". So it is an icon button next to the title, named for the reader by its
+  // aria-label, and it is neither part of the heading's text nor one of the action-bar CTAs.
+  it('is a small icon button beside the title, outside the heading and outside the action bar', async () => {
+    renderSaved(source());
+
+    const button = await screen.findByRole('button', { name: COPY });
+    const heading = screen.getByRole('heading', { level: 1 });
+    expect(button.textContent).toBe('');
+    expect(heading.textContent).toBe('ใบเสนอราคา QT-2026-0777-1');
+    expect(heading.contains(button)).toBe(false);
+    expect(heading.parentElement.contains(button)).toBe(true);
+    expect(button.closest('.page-actions')).toBeNull();
+  });
+
   // The copy is made from what is SAVED. A draft with edits still on the page would be copied
   // without them — and leaving the page would lose them from the source too — so the button waits
   // for the save rather than quietly doing either.
@@ -293,7 +308,7 @@ describe('the "คัดลอกเป็นใบใหม่" button on a sav
       priceMode: 'NET', items: [{ ...TILE, priceMode: null }],
     }));
 
-    await screen.findByRole('button', { name: 'ดาวน์โหลด PDF' }); // the page is up
+    await screen.findByRole('button', { name: 'ดาวน์โหลด' }); // the page is up
     expect(screen.queryByRole('button', { name: COPY })).toBeNull();
   });
 
@@ -305,7 +320,7 @@ describe('the "คัดลอกเป็นใบใหม่" button on a sav
 
     for (const viewer of [ceoUser, importUser, accountUser]) {
       const page = renderSaved(source(), viewer);
-      await screen.findByRole('button', { name: 'ดาวน์โหลด PDF' });
+      await screen.findByRole('button', { name: 'ดาวน์โหลด' });
       expect(screen.queryByRole('button', { name: COPY }), `offered to ${viewer.role}`).toBeNull();
       page.unmount();
     }
@@ -371,7 +386,7 @@ describe('/quotations/new?copyFrom= — the draft it opens', () => {
 
     // It is a NEW quotation: the page is not the source's, and nothing has been written.
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('สร้างใบเสนอราคา');
-    expect(screen.queryByRole('button', { name: 'ดาวน์โหลด PDF' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ดาวน์โหลด' })).toBeNull();
     expect(api.tickets.create).not.toHaveBeenCalled();
     expect(api.dealQuotations.create).not.toHaveBeenCalled();
     expect(api.dealQuotations.update).not.toHaveBeenCalled();
