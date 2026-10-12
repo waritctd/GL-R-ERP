@@ -5985,14 +5985,13 @@ function mockApproveDealQuotationPricingRequestOrigin(row, payload, user) {
  * persisting, so the editor's live calculation line and totals have SOMETHING to render under
  * VITE_USE_MOCKS=true. It is deliberately NOT the real backend algorithm:
  *
- *   - Corrected 2026-09-15 (quotation arithmetic reconciliation): the real WastageCalculator
- *     (backend, pure class, unit-tested) rounds PIECES HALF_UP, not CEILING as this comment used
- *     to say — the old "meeting rule" reading was wrong, settled against real owner documents;
- *     see that class's own Javadoc for the evidence. This stub's `Math.round` for
- *     `piecesBeforeWastage`/`wastageExtra` now happens to AGREE with the real engine's piece
- *     rounding (both are round-half-up) — that convergence is incidental to this stub still being
- *     a placeholder, not a claim that the two are kept in sync on purpose; box-multiple rounding
- *     (`Math.ceil` at the ppb step) is unchanged and still correct either way.
+ *   - PIECES: the real WastageCalculator rounds every fraction of a piece UP (owner ruling
+ *     2026-10-12, which replaced the 2026-09-15 HALF_UP reading), and this stub's `ceilPieces`
+ *     follows it in the area step, the percent step and a fractional flat wastage, so a mock
+ *     run cannot disagree with the server by a piece on ordinary inputs. That is parity for the
+ *     UI's sake, not evidence about the engine: WastageCalculatorTest and
+ *     QuotationGoldenDocumentsTest are the evidence. Box-multiple rounding (`Math.ceil` at the
+ *     ppb step) is unchanged.
  *   - The MONEY math below is still NOT the real algorithm and remains a placeholder: `lineAmount`
  *     here is `round2(piecesFinal × netUnitPrice)` — the double-rounded formula the real engine no
  *     longer uses (R-D: the real `lineAmount` is a single rounding of `list × piecesFinal ×

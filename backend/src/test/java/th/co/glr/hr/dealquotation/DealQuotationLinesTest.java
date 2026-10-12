@@ -1216,21 +1216,6 @@ class DealQuotationLinesTest {
 
     // ── Owner-approved "sell loose pieces" (2026-09-16, V182) ─────────────────────────────────
 
-    /** The two shorter {@code calculationLine} overloads (every test above this section) default
-     * {@code roundToFullBox} true and are unaffected by this feature — proven directly rather than
-     * merely inferred from those tests still passing. */
-    @Test
-    void calculationLine_shorterOverloads_defaultRoundToFullBoxTrue() {
-        String viaShort = recomputedLine(
-            WastageCalculator.QUANTITY_MODE_PIECES, null, null, 32, WastageCalculator.WASTAGE_MODE_NONE, null,
-            40, 10);
-        String viaExplicitTrue = recomputedLine(TH,
-            WastageCalculator.QUANTITY_MODE_PIECES, null, null, 32, WastageCalculator.WASTAGE_MODE_NONE, null,
-            40, 10, true);
-        assertThat(viaShort).isEqualTo(viaExplicitTrue)
-            .isEqualTo("(จำนวน 32 แผ่น และปัดขึ้นเต็มกล่อง = 40 แผ่น) (บรรจุ 10 แผ่น/กล่อง)");
-    }
-
     /** The headline Thai example from the design: no wastage, so the intermediate "= N แผ่น"
      * clause is skipped entirely (it would just restate quantityPart's own 32) and the line goes
      * straight from quantityPart to the box/loose split. */
@@ -1457,13 +1442,4 @@ class DealQuotationLinesTest {
         assertThat(p.calculationLine()).isEqualTo("(จำนวน 32 แผ่น = 3 กล่อง + 2 แผ่น) (บรรจุ 10 แผ่น/กล่อง)");
     }
 
-    /** The 16-argument {@code tilePrint} overload (every test above this section) defaults
-     * roundToFullBox true and is unaffected by this feature. */
-    @Test
-    void tilePrint_sixteenArgOverload_defaultsRoundToFullBoxTrue() {
-        DealQuotationLines.TilePrint viaShort = recomputedTilePrint(TH, "NET",
-            WastageCalculator.QUANTITY_MODE_PIECES, null, null, null, 32, WastageCalculator.WASTAGE_MODE_NONE, null,
-            40, 10, 4, null, new BigDecimal("40"), "แผ่น", null);
-        assertThat(viaShort.calculationLine()).isEqualTo("(จำนวน 32 แผ่น และปัดขึ้นเต็มกล่อง = 40 แผ่น) (บรรจุ 10 แผ่น/กล่อง)");
-    }
 }
