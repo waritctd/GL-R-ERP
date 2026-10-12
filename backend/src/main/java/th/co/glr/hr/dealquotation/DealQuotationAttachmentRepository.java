@@ -122,12 +122,16 @@ public class DealQuotationAttachmentRepository {
     }
 
     /**
-     * Removes the file, row and bytes, if the quotation it is stored on is a DRAFT at the moment
-     * of the delete, and answers how many rows went. Zero means the quotation is no longer a
-     * draft. The status is part of the statement, as it is in every DRAFT-only write of {@link
-     * DealQuotationRepository}, so a first submit that lands between the service's checks and
-     * this delete cannot take a file away from the approver. A resubmission leaves the row a
-     * DRAFT, so this statement cannot see it. The service closes that one with the deal's lock.
+     * Removes the file, row and bytes, if the quotation it is stored on is a DRAFT when the
+     * statement runs, and answers how many rows went. Zero means the quotation is no longer a
+     * draft, or the file is already gone.
+     *
+     * <p>What must never happen is a delete AFTER the approver has the document. A first submit
+     * that has committed is caught here, by the status. The status is read from a joined row
+     * that is neither locked nor re-read, so a submit still in flight is not seen. That delete
+     * lands as one made just before the submit, which is allowed. A resubmission leaves the row
+     * a DRAFT, so this statement cannot see it at all. The service closes that one with the
+     * deal's lock.
      */
     public int deleteFromDraft(long attachmentId) {
         return jdbc.update("""
@@ -141,14 +145,20 @@ public class DealQuotationAttachmentRepository {
     }
 
     private static DealQuotationAttachmentDto map(ResultSet rs) throws SQLException {
+        // getLong and wasNull, not getObject(.., Long.class): the driver refuses that for any
+        // column that is not BIGINT, and a list of files is not worth failing over a column type.
+        long size = rs.getLong("file_size");
+        Long fileSize = rs.wasNull() ? null : size;
+        long uploader = rs.getLong("uploaded_by");
+        Long uploadedById = rs.wasNull() ? null : uploader;
         return new DealQuotationAttachmentDto(
             rs.getLong("attachment_id"),
             rs.getLong("quotation_id"),
             rs.getString("number"),
             rs.getString("file_name"),
             rs.getString("mime_type"),
-            rs.getObject("file_size", Long.class),
-            rs.getObject("uploaded_by", Long.class),
+            fileSize,
+            uploadedById,
             rs.getString("uploaded_by_name"),
             rs.getTimestamp("uploaded_at").toInstant(),
             rs.getInt("depth") > 0);
