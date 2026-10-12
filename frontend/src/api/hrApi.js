@@ -1243,6 +1243,32 @@ export const api = {
     restoreRemovedItem: (id, pricingDecisionItemId) => apiRequest(
       API_ROUTES.dealQuotations.restoreRemovedItem(id, pricingDecisionItemId), { method: 'POST' },
     ),
+    // The files attached to a quotation (เอกสารแนบ). Mirrors
+    // th.co.glr.hr.dealquotation.DealQuotationAttachmentController. `{ items }` lists the
+    // quotation's own files and then those of the documents it revises (`inherited: true`).
+    listAttachments: (id) => apiRequest(API_ROUTES.dealQuotations.attachments(id)),
+    // A raw fetch, because the body is FormData. apiRequest would have added the CSRF header, so
+    // this adds it itself (hrApi.uploadCsrf.test.js fails if it ever stops).
+    uploadAttachment: async (id, file) => {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch(API_ROUTES.dealQuotations.attachments(id), {
+        method: 'POST',
+        credentials: 'include',
+        headers: csrfHeaders('POST'),
+        body: formData,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'แนบเอกสารไม่สำเร็จ');
+      }
+      return res.json();
+    },
+    deleteAttachment: (attachmentId) => apiRequest(
+      API_ROUTES.dealQuotations.attachment(attachmentId), { method: 'DELETE' },
+    ),
+    // A link's address, not a request. The server answers it as a download.
+    attachmentUrl: (attachmentId) => API_ROUTES.dealQuotations.attachmentFile(attachmentId),
     downloadPdf: async (id) => {
       const res = await fetch(API_ROUTES.dealQuotations.file(id, 'pdf'), { credentials: 'include' });
       if (!res.ok) throw new Error('Download failed');

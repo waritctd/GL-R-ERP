@@ -246,3 +246,100 @@ describe('the panel never stands in the way of บันทึกร่าง or
     await saveThenSubmit();
   });
 });
+
+// The owner asked that the approver "จะเห็นต้นทุนประกอบการอนุมัติทันที". The panel is the last block of the
+// page, so a reader would have to scroll to learn there is anything to read. In the read-only details,
+// one link beside the status says how many files there are and goes to the panel. It is shown only
+// when there is a file to go to.
+describe('the link to the files, beside the status', () => {
+  const EARLIER = {
+    ...VENDOR_QUOTE, id: 55, quotationId: 4, quotationNumber: 'QT-2026-0004-1',
+    fileName: 'vendor-quote-first-round.pdf', inherited: true,
+  };
+  const jumpLink = () => screen.queryByRole('link', { name: /^เอกสารแนบ \d+ ไฟล์$/ });
+  const awaitingApproval = () => {
+    api.dealQuotations.get.mockResolvedValue({ quotation: quotation({ docStatus: 'PENDING_APPROVAL' }) });
+  };
+
+  it('tells the approver how many files there are, above the document, and goes to the panel', async () => {
+    awaitingApproval();
+    api.dealQuotations.listAttachments.mockResolvedValue({ items: [VENDOR_QUOTE, EARLIER] });
+    open('/quotations/5', ceoUser);
+
+    await waitFor(() => expect(jumpLink()).not.toBeNull());
+    const link = jumpLink();
+    // Inherited files are files to read too, so both are counted.
+    expect(link.textContent).toContain('เอกสารแนบ 2 ไฟล์');
+    // In the page's own header, with the title and the status, and above the document.
+    const header = link.closest('header');
+    expect(header).not.toBeNull();
+    expect(header.contains(screen.getByRole('heading', { name: 'ใบเสนอราคา QT-2026-0005-1' }))).toBe(true);
+    expect(follows(link, screen.getByRole('heading', { name: 'ข้อมูลลูกค้า' }))).toBe(true);
+    // It goes to the panel. Its address is the panel's id, and following it puts focus there.
+    expect(panel().id).toBeTruthy();
+    expect(link.getAttribute('href')).toBe(`#${panel().id}`);
+    fireEvent.click(link);
+    expect(document.activeElement).toBe(panel());
+    // The link and the panel read one request, not one each.
+    expect(api.dealQuotations.listAttachments).toHaveBeenCalledTimes(1);
+  });
+
+  it('tells its own rep the same while the quotation awaits approval', async () => {
+    awaitingApproval();
+    open('/quotations/5', salesUser);
+
+    await waitFor(() => expect(jumpLink()).not.toBeNull());
+    expect(jumpLink().textContent).toContain('เอกสารแนบ 1 ไฟล์');
+    expect(jumpLink().getAttribute('href')).toBe(`#${panel().id}`);
+  });
+
+  it('says nothing when there is no file', async () => {
+    awaitingApproval();
+    api.dealQuotations.listAttachments.mockResolvedValue({ items: [] });
+    open('/quotations/5', ceoUser);
+
+    // Control: the list did come back, and the panel says it is empty.
+    await waitFor(() => expect(panel()?.textContent ?? '').toContain('ไม่มีเอกสารแนบ'));
+    expect(jumpLink()).toBeNull();
+  });
+
+  it('says nothing while the list is loading, or when it could not be loaded', async () => {
+    awaitingApproval();
+    api.dealQuotations.listAttachments.mockReturnValue(new Promise(() => {}));
+    const loading = open('/quotations/5', ceoUser);
+    await waitFor(() => expect(panelHeading()).not.toBeNull());
+    expect(jumpLink()).toBeNull();
+    loading.unmount();
+
+    api.dealQuotations.listAttachments.mockRejectedValue(new Error('เกิดข้อผิดพลาดภายในระบบ'));
+    open('/quotations/5', ceoUser);
+    await waitFor(() => expect(panel()?.textContent ?? '').toContain('โหลดเอกสารแนบไม่สำเร็จ'));
+    expect(jumpLink()).toBeNull();
+  });
+
+  // Wrong way round, control first: this same quotation shows the CEO the link.
+  it.each([
+    ['account', accountUser], ['import', importUser],
+  ])('%s is shown no link, and the list is never requested', async (_who, excluded) => {
+    awaitingApproval();
+    const approver = open('/quotations/5', ceoUser);
+    await waitFor(() => expect(jumpLink()).not.toBeNull());
+    approver.unmount();
+    api.dealQuotations.listAttachments.mockClear();
+
+    open('/quotations/5', excluded);
+
+    await screen.findByRole('heading', { name: 'ผู้เกี่ยวข้อง' });
+    await new Promise((resolve) => { setTimeout(resolve, 50); });
+    expect(jumpLink()).toBeNull();
+    expect(api.dealQuotations.listAttachments).not.toHaveBeenCalled();
+  });
+
+  it('is for the read-only details, so a draft being edited lists the file in the panel and shows no link', async () => {
+    open('/quotations/5', salesUser);
+
+    // Control: there is a file the link could have pointed at.
+    await waitFor(() => expect(fileLink()).not.toBeNull());
+    expect(jumpLink()).toBeNull();
+  });
+});

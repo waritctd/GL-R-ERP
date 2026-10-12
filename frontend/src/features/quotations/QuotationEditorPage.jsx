@@ -37,6 +37,7 @@ import { DealCustomerCard } from './DealCustomerCard.jsx';
 import { OrderedByContactFields, ProjectNamePrintToggle, QuotationDealFields } from './QuotationDealFields.jsx';
 import { focusQuotationField, QuotationChecklist } from './QuotationChecklist.jsx';
 import { QuotationDocumentView } from './QuotationDocumentView.jsx';
+import { QuotationAttachmentsLink, QuotationAttachmentsPanel } from './QuotationAttachmentsPanel.jsx';
 import { copyFromQuotation, editorStateFromQuotation } from './quotationCopy.js';
 import {
   adjustmentInputFromRow, ceoOriginalPriceText, emptyAdjustment, emptyPlainItem, emptyQuotationItem,
@@ -1942,6 +1943,12 @@ export function QuotationEditorPage({ user, showToast }) {
         context={(
           <>
             {status ? <StatusBadge tone={status.tone}>{status.label}</StatusBadge> : null}
+            {/* "เอกสารแนบ {n} ไฟล์", beside the status of the read-only details. The owner wants the
+                approver to see the cost at once, and the files are the last block of the page, so
+                this says they are there and goes to them. The component draws nothing at zero
+                files, while the list loads, and for import and account. Not on the edit form,
+                whose reader is the rep who attached them. */}
+            {quotation && !isEditable ? <QuotationAttachmentsLink user={user} quotation={quotation} /> : null}
             {/* GLA-123 slice S1 — provenance link back to the pricing request this quotation was
                 created from (createFromPricingRequest). Falls back to the numeric id on a row
                 whose PR join came back null (should not happen in practice — every PRICING_REQUEST
@@ -2995,6 +3002,14 @@ export function QuotationEditorPage({ user, showToast }) {
           ) : null}
         </>
       )}
+
+      {/* เอกสารแนบ is the last block of the page, under the details and under the form alike. It is
+          outside both on purpose. The details reproduce the printed form and these files are
+          never printed, and an upload is stored at once, so it is not part of what บันทึกร่าง
+          saves and never stands between a rep and ส่งขออนุมัติ. Not drawn on the refusal a viewer
+          gets who may not start a quotation. The panel itself draws nothing for import and
+          account. */}
+      {quotation || isEditable ? <QuotationAttachmentsPanel user={user} quotation={quotation} /> : null}
 
       {submitConfirmOpen ? (
         <Modal

@@ -695,6 +695,22 @@ public class DealQuotationService {
         return quotation;
     }
 
+    /** The quotation, for a caller who may EDIT it. This applies the identity rule {@link #update}
+     * applies ({@link #requireEditAccessForQuotation}) and no rule about its status. It is
+     * package-private, for {@link DealQuotationAttachmentService}. Who may attach a file is who
+     * may edit the quotation, and that rule stays written once, in this class. */
+    DealQuotationDto getForEdit(long id, UserPrincipal actor) {
+        DealQuotationDto quotation = requireQuotation(id);
+        requireEditAccessForQuotation(actor, quotation);
+        return quotation;
+    }
+
+    /** Whether a revision of this quotation is still DRAFT or PENDING_APPROVAL, which is what
+     * {@link #cancel} refuses on. Package-private, for {@link DealQuotationAttachmentService}. */
+    boolean hasOpenRevision(long quotationId) {
+        return quotations.hasOpenRevision(quotationId);
+    }
+
     public List<DealQuotationDto> listForTicket(long ticketId, UserPrincipal actor) {
         TicketSummaryDto ticket = requireTicketSummary(ticketId);
         if (!hasQuotationGrant(actor)) {

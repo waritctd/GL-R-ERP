@@ -5737,6 +5737,59 @@ function hasOpenDealQuotationRevision(parentId) {
     && (q.docStatus === 'DRAFT' || q.docStatus === 'PENDING_APPROVAL'));
 }
 
+// ── เอกสารแนบ of a quotation ───────────────────────────────────────────────────────────────────
+// Mirrors DealQuotationAttachmentService. The mock keeps a file's name, type and size, never its
+// bytes.
+//
+// ⚠️ AUTHZ CAVEAT (CLAUDE.md "Mock API contract"): the gates below approximate the Java service's
+// and are NOT authoritative. DealQuotationAttachmentAuthzIntegrationTest is the evidence.
+
+// Mirrors DealQuotationAttachmentService.MAX_ATTACHMENTS_PER_QUOTATION and its ALLOWED_TYPES.
+const MOCK_DEAL_QUOTATION_ATTACHMENT_LIMIT = 10;
+const MOCK_DEAL_QUOTATION_ATTACHMENT_TYPES = ['application/pdf', 'image/jpeg', 'image/png'];
+let mockDealQuotationAttachmentSeq = 1;
+const mockDealQuotationAttachments = [];
+
+// account and import open the quotation itself and are refused its files, grant or not.
+function requireDealQuotationAttachmentRole(user) {
+  if (user.role === 'account' || user.role === 'import') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+}
+
+// The quotation, for a caller who may read its files. That is whoever may view it, less those two
+// roles.
+function dealQuotationForAttachmentReader(id) {
+  const row = requireDealQuotationRowViewable(id);
+  requireDealQuotationAttachmentRole(requireSession());
+  return row;
+}
+
+// The quotation, for a caller who may attach to it or remove from it. That is whoever may edit it.
+function dealQuotationForAttachmentEditor(id) {
+  const user = requireSession();
+  const row = mockDealQuotations.find((q) => q.id === Number(id));
+  if (!row) fail('ไม่พบใบเสนอราคานี้', 404);
+  requireDealQuotationWriteAccess(db.tickets.find((t) => t.id === row.ticketId), user, row.origin);
+  requireDealQuotationAttachmentRole(user);
+  return row;
+}
+
+// Mirrors DealQuotationDtos.DealQuotationAttachmentDto. `listedOnId` is the quotation whose list
+// the row appears in. A file stored on an earlier document of the chain is `inherited` there.
+function buildDealQuotationAttachmentDto(stored, listedOnId) {
+  return {
+    id: stored.id,
+    quotationId: stored.quotationId,
+    quotationNumber: mockDealQuotations.find((q) => q.id === stored.quotationId)?.number ?? null,
+    fileName: stored.fileName,
+    mimeType: stored.mimeType,
+    fileSize: stored.fileSize,
+    uploadedById: stored.uploadedById,
+    uploadedByName: db.users.find((u) => u.id === stored.uploadedById)?.name ?? null,
+    uploadedAt: stored.uploadedAt,
+    inherited: stored.quotationId !== listedOnId,
+  };
+}
+
 // The revision-copy step createRevision() and submit()'s owner-clarification (2026-09-15)
 // "resubmit after a ตีกลับ mints a new number" branch both need: a new DRAFT child of `parent`,
 // every header field copied VERBATIM, its items copied, at the next revision number. Callers are
@@ -15492,6 +15545,73 @@ export const api = {
       row.docStatus = 'CANCELLED';
       row.updatedAt = new Date().toISOString();
       return delay({ quotation: buildDealQuotationDto(row) });
+    },
+
+    // ── เอกสารแนบ. Mirrors DealQuotationAttachmentController + DealQuotationAttachmentService. ──
+
+    // Mirrors DealQuotationAttachmentRepository#findForQuotation and its ORDER BY (chain.depth,
+    // uploaded_at DESC, attachment_id DESC), with no LIMIT. The quotation's own files come first,
+    // newest first, then those of each document it revises, nearest first. Mock ids rise with
+    // upload time, so the id alone gives that order. A reorder has no parentQuotationId, so it
+    // lists nothing of its source.
+    async listAttachments(id) {
+      const listedOn = dealQuotationForAttachmentReader(id);
+      const items = [];
+      let document = listedOn;
+      while (document) {
+        const stored = mockDealQuotationAttachments.filter((a) => a.quotationId === document.id);
+        items.push(...stored.sort((a, b) => b.id - a.id).map((a) => buildDealQuotationAttachmentDto(a, listedOn.id)));
+        const parentId = document.parentQuotationId;
+        document = parentId == null ? null : mockDealQuotations.find((q) => q.id === parentId);
+      }
+      return delay({ items });
+    },
+
+    // Mirrors DealQuotationAttachmentService#upload. An editor, while DRAFT or PENDING_APPROVAL,
+    // at most ten files of the quotation's own, PDF/JPG/PNG.
+    async uploadAttachment(id, file) {
+      const row = dealQuotationForAttachmentEditor(id);
+      if (row.docStatus !== 'DRAFT' && row.docStatus !== 'PENDING_APPROVAL') {
+        fail('แนบเอกสารได้เฉพาะใบเสนอราคาที่เป็นร่างหรือรออนุมัติเท่านั้น', 409);
+      }
+      const own = mockDealQuotationAttachments.filter((a) => a.quotationId === row.id).length;
+      if (own >= MOCK_DEAL_QUOTATION_ATTACHMENT_LIMIT) {
+        fail(`ใบเสนอราคานี้แนบเอกสารได้สูงสุด ${MOCK_DEAL_QUOTATION_ATTACHMENT_LIMIT} ไฟล์`, 409);
+      }
+      if (!file?.size) fail('ไฟล์ว่างเปล่า', 400);
+      if (!MOCK_DEAL_QUOTATION_ATTACHMENT_TYPES.includes(file.type)) fail('รองรับเฉพาะไฟล์ PDF, JPG หรือ PNG', 400);
+      const stored = {
+        id: mockDealQuotationAttachmentSeq++,
+        quotationId: row.id,
+        fileName: file.name ?? 'file',
+        mimeType: file.type,
+        fileSize: file.size,
+        uploadedById: requireSession().id,
+        uploadedAt: new Date().toISOString(),
+      };
+      mockDealQuotationAttachments.push(stored);
+      return delay({ attachment: buildDealQuotationAttachmentDto(stored, row.id) });
+    },
+
+    // Mirrors DealQuotationAttachmentService#delete. An editor of the quotation the file is on,
+    // while that quotation is DRAFT and has no revision open.
+    async deleteAttachment(attachmentId) {
+      requireSession();
+      const stored = mockDealQuotationAttachments.find((a) => a.id === Number(attachmentId));
+      if (!stored) fail('ไม่พบเอกสารแนบนี้', 404);
+      const row = dealQuotationForAttachmentEditor(stored.quotationId);
+      if (hasOpenDealQuotationRevision(row.id)) {
+        fail('ลบเอกสารแนบไม่ได้ เนื่องจากมีฉบับแก้ไขของใบเสนอราคานี้ที่ใช้เอกสารนี้อยู่', 409);
+      }
+      if (row.docStatus !== 'DRAFT') fail('ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงลบเอกสารแนบไม่ได้', 409);
+      mockDealQuotationAttachments.splice(mockDealQuotationAttachments.indexOf(stored), 1);
+      return delay({ ok: true });
+    },
+
+    // The mock keeps no bytes, so there is nothing to download. Same shape as
+    // pricingRequests.attachmentUrl above.
+    attachmentUrl(attachmentId) {
+      return `#mock-deal-quotation-attachment-${attachmentId}`;
     },
 
     async downloadPdf(id) {

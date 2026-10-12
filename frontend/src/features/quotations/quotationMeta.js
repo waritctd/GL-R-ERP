@@ -235,18 +235,30 @@ export function isDealQuotationReadOnlyViewer(user) {
 }
 
 // ── เอกสารแนบ (the files attached to a quotation) ─────────────────────────────────────────────
-// Phase 1 placeholders. These are the three questions the panel will ask. Each answers nothing
-// yet, so that quotationMeta.attachments.test.js can import them and fail on its assertions. That
-// test and DealQuotationAttachmentService's own tests state the rules.
+// What the quotation page DRAWS. DealQuotationAttachmentService decides who gets what, and
+// DealQuotationAttachmentAuthzIntegrationTest proves it. These three only echo that rule.
 
-/** Takes (user). May this viewer see a quotation's เอกสารแนบ at all? */
-export function canSeeDealQuotationAttachments() {}
+/** Whether this viewer is shown a quotation's เอกสารแนบ at all. That is whoever may view a
+ * quotation, except import and account. Those two open the quotation itself and are refused its
+ * files, with or without the canCreateQuotation grant. */
+export function canSeeDealQuotationAttachments(user) {
+  return canViewDealQuotation(user) && !isDealQuotationReadOnlyViewer(user);
+}
 
-/** Takes (user, quotation). May this viewer attach a file to this quotation now? */
-export function canAttachToDealQuotation() {}
+/** Whether this viewer may attach a file now. That is whoever may edit the quotation, while it is
+ * a draft or awaits approval. False for a quotation that has never been saved. */
+export function canAttachToDealQuotation(user, quotation) {
+  return canSeeDealQuotationAttachments(user) && canEditDealQuotation(user, quotation)
+    && (quotation.docStatus === 'DRAFT' || quotation.docStatus === 'PENDING_APPROVAL');
+}
 
-/** Takes (user, quotation, attachment). May this viewer remove this file from this quotation now? */
-export function canRemoveDealQuotationAttachment() {}
+/** Whether this viewer may remove this file now. That is whoever may edit the quotation, while it
+ * is a draft, and only a file stored on this quotation. A file inherited from an earlier document
+ * is that document's. */
+export function canRemoveDealQuotationAttachment(user, quotation, attachment) {
+  return canSeeDealQuotationAttachments(user) && canEditDealQuotation(user, quotation)
+    && quotation.docStatus === 'DRAFT' && !attachment?.inherited;
+}
 
 // ── Terms card options (editor) ────────────────────────────────────────────────────────────────
 
