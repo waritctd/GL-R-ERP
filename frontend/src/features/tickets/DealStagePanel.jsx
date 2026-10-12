@@ -224,7 +224,8 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
       actions={(
         <Button
           type="button"
-          variant="ghost"
+          variant="text"
+          className="mobile:min-h-[44px]"
           style={{ fontSize: 12 }}
           onClick={() => setShowSteps((v) => !v)}
         >

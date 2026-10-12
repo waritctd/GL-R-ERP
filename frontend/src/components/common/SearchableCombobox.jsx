@@ -44,7 +44,7 @@ export function SearchableCombobox({ id, label, value, options, onChange, disabl
         {!loading && !filtered.length ? <li role="presentation" className="p-3 text-sm text-text-muted">ไม่พบข้อมูล</li> : null}
         {!loading && filtered.map((item, index) => <li key={item.code} role="presentation">
           <button type="button" role="option" id={`${id}-option-${index}`} tabIndex={-1} aria-selected={index === active}
-            className={`min-h-11 w-full cursor-pointer border-0 px-3 py-2 text-left text-sm hover:bg-surface-hover ${index === active ? 'bg-surface-hover' : 'bg-surface'}`}
+            className={`min-h-11 w-full cursor-pointer border-0 px-3 py-2 text-left text-sm text-text hover:bg-surface-hover ${index === active ? 'bg-surface-hover' : 'bg-surface'}`}
             onMouseDown={(e) => e.preventDefault()} onClick={() => select(item)} onMouseEnter={() => setActive(index)}>{item.nameTh}</button>
         </li>)}
       </ul> : null}

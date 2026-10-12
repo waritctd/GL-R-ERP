@@ -112,7 +112,7 @@ export function UpdateStageModal({
           <div className="rounded-lg border border-border bg-surface-muted">
             <button
               type="button"
-              className="flex w-full items-center justify-between gap-2 bg-transparent px-3 py-2 text-left text-xs font-bold text-text-secondary"
+              className="flex w-full items-center justify-between gap-2 border-0 bg-transparent px-3 py-2 text-left text-xs font-bold text-text-secondary"
               aria-expanded={showBlocked}
               onClick={() => setShowBlocked((open) => !open)}
               data-testid="update-stage-blocked-toggle"

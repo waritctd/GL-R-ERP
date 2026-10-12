@@ -216,7 +216,7 @@ export function TaxAllowanceEvidencePanel({
             <li key={attachment.attachmentId} className="flex items-center justify-between gap-3 rounded-md border border-border-subtle bg-surface-subtle px-3 py-2">
               <button
                 type="button"
-                className="flex min-w-0 flex-1 items-center gap-2 truncate text-left text-sm font-bold text-primary"
+                className="flex min-w-0 flex-1 items-center gap-2 truncate border-0 bg-transparent text-left text-sm font-bold text-primary"
                 onClick={() => handleDownload(attachment)}
               >
                 <Icon name="fileText" size={14} />
@@ -252,7 +252,7 @@ export function TaxAllowanceEvidencePanel({
                 <li key={attachment.attachmentId} className="flex items-center justify-between gap-3 rounded-md border border-border-subtle bg-surface-subtle px-3 py-2">
                   <button
                     type="button"
-                    className="flex min-w-0 flex-1 items-center gap-2 truncate text-left text-sm font-bold text-primary"
+                    className="flex min-w-0 flex-1 items-center gap-2 truncate border-0 bg-transparent text-left text-sm font-bold text-primary"
                     onClick={() => handleDownload(attachment)}
                   >
                     <Icon name="fileText" size={14} />

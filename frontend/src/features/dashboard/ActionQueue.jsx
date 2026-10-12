@@ -54,9 +54,9 @@ export function ActionQueue({ items }) {
               type={item.to ? 'button' : undefined}
               onClick={item.to}
               className={cn(
-                'flex min-h-11 w-full items-center justify-between gap-3 border-t border-border px-5 py-3 text-left',
+                'flex min-h-11 w-full items-center justify-between gap-3 border-0 border-t border-border px-5 py-3 text-left',
                 item.to
-                  ? 'cursor-pointer transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:bg-surface-hover focus-visible:shadow-[inset_var(--shadow-focus-ring)]'
+                  ? 'cursor-pointer bg-transparent text-text transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:bg-surface-hover focus-visible:shadow-[inset_var(--shadow-focus-ring)]'
                   : null,
               )}
             >

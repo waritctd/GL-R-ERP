@@ -558,7 +558,7 @@ export function AttendancePage({ user, showToast }) {
             </Button>
           </div>
           {unmappedOpen ? (
-            <ul className="mt-3 grid gap-2">
+            <ul className="m-0 mt-3 grid list-none gap-2 pl-0">
               {unmapped.map((badge) => (
                 <li
                   key={badge.badge_code}
@@ -585,7 +585,7 @@ export function AttendancePage({ user, showToast }) {
         <div className="rounded-md border border-border bg-surface">
           <button
             type="button"
-            className="flex w-full items-center justify-between gap-3 px-[14px] py-3 text-left"
+            className="flex w-full items-center justify-between gap-3 border-0 bg-transparent px-[14px] py-3 text-left text-text"
             onClick={() => setImportOpen((open) => !open)}
             aria-expanded={importOpen}
           >
@@ -959,12 +959,12 @@ function MarkPresentModal({ employees, defaultDate, minDate, maxDate, submitting
         <span className="text-sm font-bold text-text-secondary">
           รายชื่อพนักงาน ({selected.size}/{employees.length} คน)
         </span>
-        <button type="button" className="text-xs font-bold text-primary" onClick={toggleAll}>
+        <button type="button" className="border-0 bg-transparent p-0 text-xs font-bold text-primary" onClick={toggleAll}>
           {selected.size === employees.length ? 'ไม่เลือกทั้งหมด' : 'เลือกทั้งหมด'}
         </button>
       </div>
 
-      <ul className="mt-2 max-h-80 overflow-y-auto rounded-md border border-border">
+      <ul className="m-0 mt-2 max-h-80 list-none overflow-y-auto rounded-md border border-border pl-0">
         {employees.length === 0 ? (
           <li className="px-3 py-2 text-xs text-text-muted">ไม่พบรายชื่อพนักงาน</li>
         ) : employees.map((employee) => {
@@ -1075,7 +1075,7 @@ export function PunchDetail({ punches }) {
     return <span className="text-xs text-text-muted">ไม่มีรายการสแกนในวันนี้</span>;
   }
   return (
-    <ul className="grid gap-1">
+    <ul className="m-0 grid list-none gap-1 pl-0">
       {punches.map((punch, index) => {
         const role = punchRole(index, punches.length);
         return (

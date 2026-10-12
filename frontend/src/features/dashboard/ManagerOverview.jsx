@@ -302,7 +302,7 @@ export function ManagerOverview({ user, employee, showToast }) {
                           type="button"
                           key={ticket.id}
                           onClick={() => navigate(`/tickets/${ticket.id}`)}
-                          className="flex cursor-pointer items-center justify-between gap-3 border-t border-border px-5 py-3 text-left first:border-t-0 hover:bg-surface-hover mobile:flex-col mobile:items-stretch mobile:gap-2 mobile:p-4"
+                          className="flex cursor-pointer items-center justify-between gap-3 border-0 border-t border-border bg-transparent px-5 py-3 text-left text-text first:border-t-0 hover:bg-surface-hover mobile:flex-col mobile:items-stretch mobile:gap-2 mobile:p-4"
                         >
                           <div className="min-w-0 flex-1">
                             <div className="flex flex-wrap items-center gap-2">
