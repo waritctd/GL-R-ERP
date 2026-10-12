@@ -309,7 +309,7 @@ export function DealCustomerCard({ value, onChange, errors, showToast, suggested
               <li className="sticky top-0 z-10 border-b border-border-subtle bg-surface-muted">
                 <button
                   type="button"
-                  className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-xs font-bold text-link"
+                  className="flex w-full items-center gap-1.5 border-0 bg-transparent px-3 py-2 text-left text-xs font-bold text-link"
                   onMouseDown={(e) => {
                     e.preventDefault();
                     // Keep the name the rep already typed in the search box when opening the
@@ -335,7 +335,7 @@ export function DealCustomerCard({ value, onChange, errors, showToast, suggested
                     type="button"
                     role="option"
                     aria-selected={false}
-                    className="block w-full px-3 py-2 text-left text-xs hover:bg-surface-hover"
+                    className="block w-full border-0 bg-transparent px-3 py-2 text-left text-xs text-text hover:bg-surface-hover"
                     onMouseDown={(e) => { e.preventDefault(); selectCustomer(c); }}
                   >
                     <strong>{c.name}</strong>
@@ -395,7 +395,7 @@ export function DealCustomerCard({ value, onChange, errors, showToast, suggested
                   id="project-new-option"
                   role="option"
                   aria-selected={projectActiveIndex === 0}
-                  className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-xs font-bold text-link"
+                  className="flex w-full items-center gap-1.5 border-0 bg-transparent px-3 py-2 text-left text-xs font-bold text-link"
                   onMouseEnter={() => setProjectActiveIndex(0)}
                   onMouseDown={(e) => { e.preventDefault(); openNewProjectFromDropdown(); }}
                 >
@@ -414,7 +414,7 @@ export function DealCustomerCard({ value, onChange, errors, showToast, suggested
                     id={`project-option-${idx + 1}`}
                     role="option"
                     aria-selected={idx + 1 === projectActiveIndex}
-                    className={`block w-full px-3 py-2 text-left text-xs hover:bg-surface-hover ${idx + 1 === projectActiveIndex ? 'bg-surface-hover' : ''}`}
+                    className={`block w-full border-0 px-3 py-2 text-left text-xs text-text hover:bg-surface-hover ${idx + 1 === projectActiveIndex ? 'bg-surface-hover' : 'bg-transparent'}`}
                     onMouseEnter={() => setProjectActiveIndex(idx + 1)}
                     onMouseDown={(e) => { e.preventDefault(); selectProject(p); }}
                   >

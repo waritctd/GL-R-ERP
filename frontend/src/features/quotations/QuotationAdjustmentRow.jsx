@@ -26,7 +26,7 @@ export function QuotationAdjustmentRow({
 }) {
   const flat = adjustment.adjustmentKind === 'AMOUNT';
   return (
-    <li className="grid gap-3 rounded-md border border-dashed border-border p-3.5" data-line-type="ADJUSTMENT">
+    <li className="grid gap-3 rounded-md border border-dashed border-border bg-surface p-3.5" data-line-type="ADJUSTMENT">
       <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
         <span className="inline-flex min-w-0 items-center gap-2">
           <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-surface-subtle text-2xs font-extrabold text-text-muted">

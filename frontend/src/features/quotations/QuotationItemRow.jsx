@@ -481,7 +481,7 @@ export function QuotationItemRow({
           : null;
 
   return (
-    <li className="grid gap-3 rounded-md border border-border p-3.5">
+    <li className="grid gap-3 rounded-md border border-border bg-surface p-3.5">
       <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
         <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-surface-subtle text-2xs font-extrabold text-text-muted">
           {index + 1}
@@ -489,7 +489,9 @@ export function QuotationItemRow({
         {!readOnly ? (
           // `min-w-0 flex-1` so this column can be squeezed at all; without it the two selects
           // below push the whole row past the viewport on a phone (see their comment).
-          <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-1.5">
+          // `mobile:contents` puts its children on the row's own lines there: the number and ✕
+          // share the first, and the two full-width selects follow (`mobile:order-*` below).
+          <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-1.5 mobile:contents">
             {moveTargets.length ? (
               <>
                 <label htmlFor={`move-${index}`} className="sr-only">ย้ายไปตำแหน่ง</label>
@@ -512,7 +514,7 @@ export function QuotationItemRow({
                     control instead of widening the page. */}
                 <select
                   id={`move-${index}`}
-                  className="h-8 mobile:h-11 w-full min-w-0 py-0 text-2xs sm:w-auto sm:min-w-[9.5rem] sm:max-w-[13rem]"
+                  className="h-8 mobile:order-2 mobile:h-11 w-full min-w-0 py-0 text-2xs mobile:text-base sm:w-auto sm:min-w-[9.5rem] sm:max-w-[13rem]"
                   value=""
                   onChange={(e) => { if (e.target.value) onMove?.(e.target.value); }}
                 >
@@ -527,7 +529,7 @@ export function QuotationItemRow({
                     <label htmlFor={`dup-${index}`} className="sr-only">ทำซ้ำรายการ</label>
                     <select
                       id={`dup-${index}`}
-                      className="h-8 mobile:h-11 w-full min-w-0 py-0 text-2xs sm:w-auto sm:min-w-[9.5rem] sm:max-w-[13rem]"
+                      className="h-8 mobile:order-2 mobile:h-11 w-full min-w-0 py-0 text-2xs mobile:text-base sm:w-auto sm:min-w-[9.5rem] sm:max-w-[13rem]"
                       value=""
                       onChange={(e) => { if (e.target.value) onDuplicate?.(e.target.value); }}
                     >
@@ -545,7 +547,7 @@ export function QuotationItemRow({
               // so the duplicate degrades to a plain button rather than a one-option dropdown.
               <Button variant="secondary" size="sm" onClick={() => onDuplicate?.(groupId)}>ทำซ้ำรายการ</Button>
             )}
-            <Button variant="icon" size="sm" className="mobile:min-h-[44px] mobile:w-11" onClick={onRemove} title="ลบรายการ" aria-label="ลบรายการ">
+            <Button variant="icon" size="sm" className="mobile:order-1 mobile:ml-auto mobile:min-h-[44px] mobile:w-11" onClick={onRemove} title="ลบรายการ" aria-label="ลบรายการ">
               <Icon name="close" size={16} />
             </Button>
           </div>
@@ -605,7 +607,7 @@ export function QuotationItemRow({
                     type="button"
                     role="option"
                     aria-selected={false}
-                    className="block w-full px-3 py-2 text-left text-xs hover:bg-surface-hover"
+                    className="block w-full border-0 bg-transparent px-3 py-2 text-left text-xs text-text hover:bg-surface-hover"
                     onMouseDown={(e) => { e.preventDefault(); pickCatalog(cat); }}
                   >
                     <strong>{cat.collection ?? cat.productName ?? cat.productCode}</strong>
@@ -821,7 +823,7 @@ export function QuotationItemRow({
                   type="button"
                   disabled={readOnly}
                   aria-pressed={item.quantityMode === opt.code}
-                  className={`min-h-[38px] mobile:min-h-[44px] px-3 text-xs font-bold ${item.quantityMode === opt.code ? 'bg-primary text-surface' : 'bg-surface text-icon-muted'}`}
+                  className={`min-h-[38px] mobile:min-h-[44px] mobile:min-w-11 border-0 px-3 text-xs font-bold ${item.quantityMode === opt.code ? 'bg-primary text-surface' : 'bg-surface text-icon-muted'}`}
                   onClick={() => patch({ quantityMode: opt.code })}
                 >
                   {opt.label}
@@ -857,7 +859,7 @@ export function QuotationItemRow({
                     type="button"
                     disabled={readOnly}
                     aria-pressed={item.wastageMode === opt.code}
-                    className={`min-h-[38px] mobile:min-h-[44px] px-3 text-xs font-bold ${item.wastageMode === opt.code ? 'bg-primary text-surface' : 'bg-surface text-icon-muted'}`}
+                    className={`min-h-[38px] mobile:min-h-[44px] mobile:min-w-11 border-0 px-3 text-xs font-bold ${item.wastageMode === opt.code ? 'bg-primary text-surface' : 'bg-surface text-icon-muted'}`}
                     onClick={() => patch({
                       wastageMode: opt.code,
                       wastageValue: item.wastageMode === opt.code ? item.wastageValue : 0,
@@ -889,13 +891,14 @@ export function QuotationItemRow({
                 ambiguous about this single box; PriceInputWithSuffix already renders exactly that
                 adornment for the price fields above, so it is reused here rather than inventing a
                 second version of the same pattern. */}
-            <div>
+            {/* The width is on the wrapper, so the unit sits inside the box and not at the far
+                edge of the column. */}
+            <div className="w-32">
               <span className="block text-2xs font-bold text-text-muted">กรอกเอง</span>
               <PriceInputWithSuffix
                 id={`waste-${index}`}
                 type="number"
                 disabled={readOnly}
-                className="w-32"
                 suffix={item.wastageMode === 'PIECES' ? 'แผ่น' : '%'}
                 value={item.wastageValue ?? ''}
                 onChange={(e) => patch({ wastageValue: e.target.value === '' ? 0 : Number(e.target.value) })}
@@ -1272,11 +1275,11 @@ export function QuotationItemRow({
           permanently-zero ฿ amount, which would read as a real number rather than "not
           applicable". */}
       {hidePricing ? null : (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-surface-subtle px-3 py-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-surface-subtle px-3 py-2.5 mobile:flex-col mobile:items-stretch">
           <p className="m-0 min-w-0 flex-1 text-xs text-text-muted">
             {item.calcPending ? 'กำลังคำนวณ...' : (item.calculationLine || 'กรอกจำนวนและเผื่อเพื่อคำนวณ')}
           </p>
-          <span className="tabular-nums text-md font-extrabold text-text">{formatQuotationMoney(item.lineAmount, currency)}</span>
+          <span className="tabular-nums text-md font-extrabold text-text mobile:text-right">{formatQuotationMoney(item.lineAmount, currency)}</span>
         </div>
       )}
     </li>

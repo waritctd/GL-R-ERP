@@ -2542,7 +2542,7 @@ export function QuotationEditorPage({ user, showToast }) {
                         ยังไม่มีรายการในตำแหน่งนี้ — ตำแหน่งที่ไม่มีรายการจะไม่ถูกบันทึกและไม่ปรากฏในเอกสาร
                       </p>
                     ) : (
-                      <ul className="grid gap-3">
+                      <ul className="m-0 grid list-none gap-3 pl-0">
                         {groupItems.map((item) => {
                           // The FLAT index — what "รายการที่ N" in the validation summary counts,
                           // and the order the document prints — never the index within the group.
@@ -2665,7 +2665,7 @@ export function QuotationEditorPage({ user, showToast }) {
                   to take it from; an adjustment-only quotation is a server 400. */}
               <section aria-label="ส่วนลดพิเศษ" className="grid gap-3 border-t border-border pt-4">
                 {adjustments.length ? (
-                  <ul className="grid gap-3">
+                  <ul className="m-0 grid list-none gap-3 pl-0">
                     {adjustments.map((adjustment, adjIndex) => {
                       const clean = Boolean(quotation) && !dirty;
                       const saved = clean ? serverAdjustments[adjIndex] : null;
@@ -2932,14 +2932,17 @@ export function QuotationEditorPage({ user, showToast }) {
                 </select>
               </FormField>
             </div>
-            <FormField label="หมายเหตุเพิ่มเติม" htmlFor="customerNotes">
-              <textarea
-                id="customerNotes"
-                className="min-h-24"
-                value={terms.customerNotes}
-                onChange={(e) => { setTerms((t) => ({ ...t, customerNotes: e.target.value })); setDirty(true); }}
-              />
-            </FormField>
+            {/* One FormGrid gap below the grid above; a bare FormField has no margin of its own. */}
+            <div className="mt-3.5">
+              <FormField label="หมายเหตุเพิ่มเติม" htmlFor="customerNotes">
+                <textarea
+                  id="customerNotes"
+                  className="min-h-24"
+                  value={terms.customerNotes}
+                  onChange={(e) => { setTerms((t) => ({ ...t, customerNotes: e.target.value })); setDirty(true); }}
+                />
+              </FormField>
+            </div>
           </Panel>
 
           <Panel title="ยอดรวม">
