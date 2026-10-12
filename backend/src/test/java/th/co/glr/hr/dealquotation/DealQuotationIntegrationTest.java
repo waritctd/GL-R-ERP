@@ -2056,37 +2056,32 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
     // ── Wording-scan fix 4 (2026-09-17): an AREA-mode row that computes to ZERO pieces ──────────
 
-    /** {@code (พื้นที่ 0.01 ตร.ม.ๆละ 2.78 แผ่น รวม 0 แผ่น ...)} saved today -- a document line
-     * selling nothing. sqmPerPiece 0.36 (sampleItem's fixed value) -> ~2.78 pcs/sqm; 0.01 sqm
-     * rounds to 0 pieces before wastage (round2(0.01 x 2.78) = round(0.0278) = 0). */
+    /** Was: 0.01 sqm x 2.78 = 0.0278 rounded HALF_UP to 0 pieces and was refused ("รวม 0 แผ่น", a
+     * line selling nothing). Since the owner's 2026-10-12 ruling ("ปัดขึ้นทุกกรณี") any positive
+     * area rounds UP to at least 1 piece, so that refusal can no longer be reached with a real
+     * area: the same input is now accepted as 1 piece. (The guard in
+     * {@code DealQuotationService} stays as a backstop; it has no input that trips it any more.) */
     @Test
-    void create_refusesAnAreaThatComputesToZeroPieces() {
-        assertThatThrownBy(() -> quotationService.create(ticketId,
-            upsertRequest(List.of(itemMutated(m -> m.withAreaMode(new BigDecimal("0.01"))))), salesActor))
-            .isInstanceOf(ApiException.class)
-            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
-            .hasMessageContaining("รายการที่ 1")
-            .hasMessageContaining("พื้นที่น้อยเกินไป คำนวณได้ 0 แผ่น");
+    void create_aTinyAreaRoundsUpToOnePiece_insteadOfBeingRefusedAsZero() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(itemMutated(m -> m.withAreaMode(new BigDecimal("0.01"))))), salesActor);
+        assertThat(created.items().get(0).piecesBeforeWastage()).isEqualTo(1);
     }
 
-    /** The same check on the LENIENT calculate-line preview -- consistent with how every other
-     * item error already behaves there (#requirePriceValidForType's own precedent). */
+    /** The same on the lenient calculate-line preview. */
     @Test
-    void calculateLine_refusesAnAreaThatComputesToZeroPieces() {
-        assertThatThrownBy(() -> quotationService.calculateLine(
-            itemMutated(m -> m.withAreaMode(new BigDecimal("0.01"))), "TH", salesActor))
-            .isInstanceOf(ApiException.class)
-            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
-            .hasMessageContaining("พื้นที่น้อยเกินไป คำนวณได้ 0 แผ่น");
+    void calculateLine_aTinyAreaRoundsUpToOnePiece_insteadOfBeingRefusedAsZero() {
+        assertThat(quotationService.calculateLine(
+            itemMutated(m -> m.withAreaMode(new BigDecimal("0.01"))), "TH", salesActor)
+            .piecesBeforeWastage()).isEqualTo(1);
     }
 
-    /** Wrong-way-round: an area that rounds to exactly 1 piece (not 0) is accepted -- this rule
-     * refuses only a genuine zero, never a small-but-real quantity. */
+    /** An area that lands on exactly 1 piece is accepted. 0.35 sqm x 2.78 = 0.973 -> 1. (This used
+     * to use 0.36 sqm, 1.0008 -> 1 under HALF_UP; rounding up now makes that 2.) */
     @Test
     void create_acceptsAnAreaThatComputesToExactlyOnePiece() {
-        // 0.36 sqm/piece (sampleItem) -> 2.78 pcs/sqm; 0.36 sqm x 2.78 = 1.0008 -> rounds to 1.
         DealQuotationDto created = quotationService.create(ticketId,
-            upsertRequest(List.of(itemMutated(m -> m.withAreaMode(new BigDecimal("0.36"))))), salesActor);
+            upsertRequest(List.of(itemMutated(m -> m.withAreaMode(new BigDecimal("0.35"))))), salesActor);
         assertThat(created.items().get(0).piecesBeforeWastage()).isEqualTo(1);
     }
 
@@ -4668,22 +4663,22 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     void goldenDocument_D3_QN6900981_1_areaModeSpecialSqmNoWastage() {
         DealQuotationDto created = quotationService.create(ticketId,
             upsertRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM, List.of(
-                // Row 1: 2,793 × 1.39 = 3,882.27 HALF_UPs to the printed 3,882 (an even box
-                // multiple already) — CEILING would give 3,883, box-rounding up to 3,884.
+                // Row 1: 2,793 × 1.39 = 3,882.27. The document printed 3,882 (HALF_UP); since the
+                // owner's 2026-10-12 round-up ruling this prints 3,883 → 3,884 (two per box).
                 areaSpecialSqmItem("2793", "0.72", 2, "790"),
                 areaSpecialSqmItem("274", "0.72", 2, "790"))),
             salesActor);
         DealQuotationDto saved = quotationService.get(created.id(), salesActor);
         assertThat(saved.items()).hasSize(2);
-        assertThat(saved.items().get(0).piecesFinal()).isEqualTo(3882);
+        assertThat(saved.items().get(0).piecesFinal()).isEqualTo(3884);
         assertThat(saved.items().get(0).netUnitPrice()).isEqualByComparingTo("531.16");
-        assertThat(saved.items().get(0).lineAmount()).isEqualByComparingTo("2061963.12");
+        assertThat(saved.items().get(0).lineAmount()).isEqualByComparingTo("2063025.44");
         assertThat(saved.items().get(1).piecesFinal()).isEqualTo(382);
         assertThat(saved.items().get(1).netUnitPrice()).isEqualByComparingTo("531.16");
         assertThat(saved.items().get(1).lineAmount()).isEqualByComparingTo("202903.12");
-        assertThat(saved.subtotalAmount()).isEqualByComparingTo("2264866.24");
-        assertThat(saved.vatAmount()).isEqualByComparingTo("158540.64");
-        assertThat(saved.grandTotal()).isEqualByComparingTo("2423406.88");
+        assertThat(saved.subtotalAmount()).isEqualByComparingTo("2265928.56");
+        assertThat(saved.vatAmount()).isEqualByComparingTo("158615.00");
+        assertThat(saved.grandTotal()).isEqualByComparingTo("2424543.56");
     }
 
     @Test
@@ -4720,25 +4715,25 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
                 areaSpecialSqmItem("945", "0.72", 2, "1800"),
                 areaSpecialSqmItem("339", "0.72", 2, "1800"),
                 areaSpecialSqmItem("159", "0.72", 2, "860"),
-                // The OTHER headline R-B example: 511 × 1.39 = 710.29 HALF_UPs to the printed
-                // 710 (already even); CEILING gives 711, box-rounding up again to 712.
+                // 511 × 1.39 = 710.29. The document printed 710 (HALF_UP); since the owner's
+                // 2026-10-12 round-up ruling this prints 711 → 712 (two per box).
                 areaSpecialSqmItem("511", "0.72", 2, "1800"),
                 areaSpecialSqmItem("1200", "0.72", 2, "1800"))),
             salesActor);
         DealQuotationDto saved = quotationService.get(created.id(), salesActor);
         assertThat(saved.items()).hasSize(5);
-        int[] pieces = {1314, 472, 222, 710, 1668};
+        int[] pieces = {1314, 472, 222, 712, 1668};
         String[] nets = {"1210.25", "1210.25", "578.23", "1210.25", "1210.25"};
-        String[] amounts = {"1590268.50", "571238.00", "128367.06", "859277.50", "2018697.00"};
+        String[] amounts = {"1590268.50", "571238.00", "128367.06", "861698.00", "2018697.00"};
         for (int i = 0; i < 5; i++) {
             var item = saved.items().get(i);
             assertThat(item.piecesFinal()).as("D7 row %s pieces", i + 1).isEqualTo(pieces[i]);
             assertThat(item.netUnitPrice()).as("D7 row %s net", i + 1).isEqualByComparingTo(nets[i]);
             assertThat(item.lineAmount()).as("D7 row %s amount", i + 1).isEqualByComparingTo(amounts[i]);
         }
-        assertThat(saved.subtotalAmount()).isEqualByComparingTo("5167848.06");
-        assertThat(saved.vatAmount()).isEqualByComparingTo("361749.36");
-        assertThat(saved.grandTotal()).isEqualByComparingTo("5529597.42");
+        assertThat(saved.subtotalAmount()).isEqualByComparingTo("5170268.56");
+        assertThat(saved.vatAmount()).isEqualByComparingTo("361918.80");
+        assertThat(saved.grandTotal()).isEqualByComparingTo("5532187.36");
     }
 
     @Test

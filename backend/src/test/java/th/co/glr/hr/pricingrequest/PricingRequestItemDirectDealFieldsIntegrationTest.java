@@ -152,14 +152,15 @@ class PricingRequestItemDirectDealFieldsIntegrationTest extends AbstractPostgres
 
     @Test
     void createDraft_derivesRequestedQtyFromAreaMode() {
-        // AREA mode: areaSqm=3.6, sqmPerPiece=0.36 -> piecesPerSqm = round2(1/0.36) = 2.78,
-        // pieces = round(3.6 * 2.78) = round(10.008) = 10, no wastage. piecesPerBox is required
+        // AREA mode: areaSqm=3.5, sqmPerPiece=0.36 -> piecesPerSqm = round2(1/0.36) = 2.78,
+        // pieces = ceil(3.5 * 2.78) = ceil(9.73) = 10, no wastage (owner ruling 2026-10-12: every
+        // fraction of a piece rounds up; 3.6 would now give ceil(10.008) = 11). piecesPerBox is required
         // (owner ruling) even here, so this uses piecesPerBox=10 -- an EXACT multiple of the
         // derived 10 pieces, so full-box rounding (the default) is a no-op and does not obscure
         // what this test actually exercises (the AREA -> pieces conversion).
         PricingRequestDetailDto detail = pricingRequestService.createDraft(ticketId,
             createRequest(List.of(completeItem(b -> b
-                .quantityMode(WastageCalculator.QUANTITY_MODE_AREA).areaSqm(new BigDecimal("3.6"))
+                .quantityMode(WastageCalculator.QUANTITY_MODE_AREA).areaSqm(new BigDecimal("3.5"))
                 .wastageMode(WastageCalculator.WASTAGE_MODE_NONE).piecesPerBox(10)))),
             salesActor);
 
@@ -402,25 +403,18 @@ class PricingRequestItemDirectDealFieldsIntegrationTest extends AbstractPostgres
     // ── zero-piece rejection (Opus review finding #2, 2026-09-18) ──────────────────────────
 
     @Test
-    void createDraft_rejectsAnAreaModeLineThatDerivesToZeroPieces() {
-        // 0.3 m² at 0.72 m²/piece rounds DOWN to 0 pieces (piecesPerSqm = round2(1/0.72) = 1.39,
-        // pieces = round(0.3 * 1.39) = round(0.417) = 0) -- before this fix that 0 would reach
-        // sales.pricing_request_item.requested_qty and violate V59's
-        // chk_pricing_request_item_qty (requested_qty > 0), surfacing as a raw 500 instead of a
-        // caller-fixable 400.
-        assertThatThrownBy(() -> pricingRequestService.createDraft(ticketId,
+    void createDraft_aTinyAreaRoundsUpToOnePiece_insteadOfBeingRefusedAsZero() {
+        // Was: 0.3 m2 at 0.72 m2/piece (piecesPerSqm 1.39) = 0.417 rounded HALF_UP to 0 pieces,
+        // refused with a 400 because requested_qty 0 would violate V59's chk_pricing_request_item_qty.
+        // Since the owner's 2026-10-12 ruling ("ปัดขึ้นทุกกรณี") any positive area rounds UP to at
+        // least 1 piece, so that zero can no longer be derived: the line is accepted as 1 piece.
+        PricingRequestDetailDto detail = pricingRequestService.createDraft(ticketId,
             createRequest(List.of(completeItem(b -> b
                 .quantityMode(WastageCalculator.QUANTITY_MODE_AREA).areaSqm(new BigDecimal("0.3"))
                 .sqmPerPiece(new BigDecimal("0.72")).wastageMode(WastageCalculator.WASTAGE_MODE_NONE)
                 .piecesPerBox(10).roundToFullBox(false)))),
-            salesActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
-                assertThat(e.getMessage()).contains("0 ชิ้น");
-            });
-        assertThat(jdbc.queryForObject(
-            "SELECT COUNT(*) FROM sales.pricing_request WHERE ticket_id = :id", Map.of("id", ticketId), Long.class))
-            .isZero();
+            salesActor);
+        assertThat(onlyItem(detail).requestedQty()).isEqualByComparingTo("1");
     }
 
     // ── required-field validation (owner ruling 1) ──────────────────────────────────────────

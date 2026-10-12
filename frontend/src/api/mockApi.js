@@ -6013,15 +6013,17 @@ function computeDealQuotationLine(input = {}, documentLanguage = 'TH') {
   const quantityMode = input.quantityMode === 'PIECES' ? 'PIECES' : 'AREA';
   const areaSqm = Number(input.areaSqm) || 0;
   const piecesInput = Number(input.piecesInput) || 0;
+  // Owner ruling 2026-10-12: any fraction of a piece rounds UP (WastageCalculator#ceilToInt), in
+  // the area step, the percent step and a fractional flat wastage alike.
   const piecesBeforeWastage = quantityMode === 'PIECES'
     ? Math.round(piecesInput)
-    : Math.round(areaSqm * (piecesPerSqm ?? 0));
+    : Math.ceil(areaSqm * (piecesPerSqm ?? 0));
   const wastageMode = input.wastageMode ?? 'NONE';
   const wastageValue = Number(input.wastageValue) || 0;
   const wastageExtra = wastageMode === 'PERCENT'
-    ? Math.round(piecesBeforeWastage * (wastageValue / 100))
+    ? Math.ceil(piecesBeforeWastage * (wastageValue / 100))
     : wastageMode === 'PIECES'
-      ? Math.round(wastageValue)
+      ? Math.ceil(wastageValue)
       : 0;
   const piecesAfterWastage = piecesBeforeWastage + wastageExtra;
   const piecesPerBox = Number(input.piecesPerBox) || 0;

@@ -10,27 +10,26 @@ import java.util.List;
  * its own worked reference figures (QN6900595-3 items 1/3/5 — pinned by
  * {@code WastageCalculatorTest}).
  *
- * <p><b>Corrected 2026-09-15 (quotation arithmetic reconciliation):</b> pieces round HALF_UP, not
- * CEILING, both for the AREA-mode piece count (R-B) and for PERCENT wastage (R-C) — and a line
- * amount is a single rounding of the unrounded product, not a rounding of an already-rounded net
- * price (R-D). The three rules rest on DIFFERENT evidence, stated precisely rather than as one
- * blanket "nine documents settle it" claim — see {@code QuotationGoldenDocumentsTest} for all nine
- * documents reproduced to the satang, but only some of the nine actually DISCRIMINATE a rule:
+ * <p><b>History of the piece-rounding rule.</b> On 2026-09-15 (quotation arithmetic reconciliation)
+ * pieces were read as rounding HALF_UP, not CEILING, both for the AREA-mode piece count (R-B) and for
+ * PERCENT wastage (R-C); a line amount is a single rounding of the unrounded product, not a rounding
+ * of an already-rounded net price (R-D). <b>On 2026-10-12 the owner ruled "ปัดขึ้นทุกกรณี" for every
+ * document issued from now on: every fraction of a PIECE rounds UP</b> (the AREA area × pieces/ตร.ม.
+ * step, PERCENT wastage, and the PIECES wastage value). R-B and R-C are therefore superseded; R-D is
+ * untouched. The owner made the ruling knowing three rows that were evidence for HALF_UP no longer
+ * reproduce: QN6900981-1 row 1 (2,793 × 1.39 = 3,882.27, printed 3,882, now 3,883 → 3,884),
+ * QN6900648 row 4 (511 × 1.39 = 710.29, printed 710, now 711 → 712) and QN6900595-3 item 1
+ * (791 × 1.10 = 870.1, printed 870, now 871 → 872). {@code piecesPerSqm} still rounds to 2 decimals
+ * to nearest, box rounding still rounds up, and money still rounds to 2 decimal places HALF_UP. The
+ * 2026-09-15 evidence, kept as the record of what was printed:
  * <ul>
- *   <li><b>R-B (AREA pieces HALF_UP)</b> is proven by two rows in two attached documents:
- *       QN6900981-1 row 1 (2,793 × 1.39 = 3,882.27 → printed 3,882; CEILING would give an odd
- *       3,883 that box-rounds up again to 3,884) and QN6900648 row 4 (511 × 1.39 = 710.29 →
- *       printed 710; CEILING would give an odd 711 that box-rounds up to 712). FLOOR is refuted by
- *       QN6900648 row 1 (1,313.55 → printed 1,314) and QN6900981-1 row 2 (380.86 → printed 381),
- *       both of which would floor DOWN.</li>
- *   <li><b>R-C (PERCENT wastage HALF_UP)</b> rests on ONE line only: the spec's own recorded
- *       reference, QN6900595-3 item1 (791 × 1.10 = 870.1 → printed 870; the old CEILING reading
- *       gave 871 → box-rounded to 872). None of the eight ATTACHED documents (QN6900971-4,
+ *   <li><b>R-B (AREA pieces, was HALF_UP)</b> was proven by two rows: QN6900981-1 row 1 and
+ *       QN6900648 row 4 (above). FLOOR is refuted by QN6900648 row 1 (1,313.55 → printed 1,314) and
+ *       QN6900981-1 row 2 (380.86 → printed 381).</li>
+ *   <li><b>R-C (PERCENT wastage, was HALF_UP)</b> rested on ONE line only: the spec's own recorded
+ *       reference, QN6900595-3 item1. None of the eight ATTACHED documents (QN6900971-4,
  *       QN6900971 ใบสรุป, QN6900981-1, QN6900902-6, QN6900704-2, QN6900933, QN6900648,
- *       QN6900782-2) has any wastage at all, so none of them can corroborate or refute this rule —
- *       QN6900595-3 is the sole evidence. This REVERSES the earlier judgement (recorded in this
- *       class's git history and the old plan doc) that 870 was a human rounding error the meeting
- *       rule deliberately diverged from; it is now read as the correct figure instead.</li>
+ *       QN6900782-2) has any wastage at all.</li>
  *   <li><b>R-D (single-rounding line amount)</b> is proven by QN6900971-4 (D1) rows 5.3-5.7: list
  *       × qty × (1−pct/100) rounded once gives 35,799.63/16,502.43/11,445.23, matching the
  *       printed amounts, where rounding the already-2dp net price first and then multiplying gives
@@ -40,7 +39,7 @@ import java.util.List;
  * QN6900782-2 — discriminate NONE of R-B/R-C/R-D: they are PLAIN-row or no-wastage/no-box-rounding
  * fixtures that reproduce identically under the old and new rules alike. They still appear in
  * {@code QuotationGoldenDocumentsTest} as regression coverage, just not as evidence for any of the
- * three corrections above. Money still rounds to 2 decimal places HALF_UP throughout.
+ * three corrections above.
  *
  * <p>No Spring wiring, no DB access, no I/O — a static-methods-only pure class, deliberately, so
  * every branch is exercised by a plain unit test rather than an integration test.
@@ -259,7 +258,7 @@ public final class WastageCalculator {
                 throw new IllegalArgumentException("areaSqm is required in AREA quantity mode");
             }
             piecesPerSqm = piecesPerSqm(in.sqmPerPiece());
-            piecesBefore = roundHalfUpToInt(in.areaSqm().multiply(piecesPerSqm));
+            piecesBefore = ceilToInt(in.areaSqm().multiply(piecesPerSqm));
         } else {
             throw new IllegalArgumentException("quantityMode must be AREA or PIECES, got: " + in.quantityMode());
         }
@@ -457,14 +456,14 @@ public final class WastageCalculator {
             if (value.compareTo(MAX_WASTAGE_PIECES) > 0) {
                 throw new IllegalArgumentException("wastageValue must be <= " + MAX_WASTAGE_PIECES + " pieces, got: " + value);
             }
-            return piecesBefore + value.setScale(0, RoundingMode.HALF_UP).intValueExact();
+            return piecesBefore + value.setScale(0, RoundingMode.CEILING).intValueExact();
         }
         if (WASTAGE_MODE_PERCENT.equals(wastageMode)) {
             if (value.compareTo(MAX_WASTAGE_PERCENT) > 0) {
                 throw new IllegalArgumentException("wastageValue must be <= 100 percent, got: " + value);
             }
             BigDecimal factor = BigDecimal.ONE.add(value.divide(HUNDRED, 10, RoundingMode.HALF_UP));
-            return roundHalfUpToInt(BigDecimal.valueOf(piecesBefore).multiply(factor));
+            return ceilToInt(BigDecimal.valueOf(piecesBefore).multiply(factor));
         }
         throw new IllegalArgumentException("wastageMode must be PERCENT, PIECES or NONE, got: " + wastageMode);
     }
@@ -587,10 +586,10 @@ public final class WastageCalculator {
     // for the regression this guards.
     // ─────────────────────────────────────────────────────────────────────────────────────────
 
-    /** R-B/R-C: pieces round HALF_UP, not CEILING — see the class Javadoc. Box-multiple rounding
-     * ({@link #ceilToMultiple}) is untouched and still rounds up. */
-    private static int roundHalfUpToInt(BigDecimal value) {
-        return value.setScale(0, RoundingMode.HALF_UP).intValueExact();
+    /** Any fraction of a piece rounds up (owner ruling 2026-10-12) — see the class Javadoc.
+     * Box-multiple rounding ({@link #ceilToMultiple}) also rounds up. */
+    private static int ceilToInt(BigDecimal value) {
+        return value.setScale(0, RoundingMode.CEILING).intValueExact();
     }
 
     private static int ceilToMultiple(int value, int multiple) {

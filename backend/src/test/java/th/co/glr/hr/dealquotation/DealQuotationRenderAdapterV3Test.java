@@ -112,14 +112,14 @@ class DealQuotationRenderAdapterV3Test {
     void thaiDocument_printsTheCustomerAddressAlongsideThePhoneNumber() {
         QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
             quotationWithCustomer("99/1 ถนนสุขุมวิท กรุงเทพฯ 10110", "081-234-5678"), null, null);
-        assertThat(model.phoneLine()).isEqualTo("ที่อยู่ 99/1 ถนนสุขุมวิท กรุงเทพฯ 10110   โทร. 081-234-5678");
+        assertThat(model.phoneLine()).isEqualTo("ที่อยู่ 99/1 ถนนสุขุมวิท กรุงเทพฯ 10110   Phone 081-234-5678");
     }
 
     @Test
     void thaiDocument_withNoAddress_stillPrintsJustThePhoneNumber() {
         QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
             quotationWithCustomer(null, "081-234-5678"), null, null);
-        assertThat(model.phoneLine()).isEqualTo("โทร. 081-234-5678");
+        assertThat(model.phoneLine()).isEqualTo("Phone 081-234-5678");
     }
 
     @Test
@@ -139,7 +139,7 @@ class DealQuotationRenderAdapterV3Test {
     void thaiDocument_doesNotPrintThePhoneLabelTwiceWhenTheStoredValueCarriesItsOwn() {
         QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
             quotationWithCustomer(null, "โทร 02 314 354-2"), null, null);
-        assertThat(model.phoneLine()).isEqualTo("โทร. 02 314 354-2");
+        assertThat(model.phoneLine()).isEqualTo("Phone 02 314 354-2");
     }
 
     /** The same doubling on the English form, whose own label is "Tel." — and a Thai-labelled value
@@ -378,7 +378,7 @@ class DealQuotationRenderAdapterV3Test {
         var wb = WorkbookFactory.create(new ByteArrayInputStream(xls));
         Sheet sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
         assertThat(sheet.getRow(5).getCell(1).getStringCellValue())
-            .isEqualTo("ที่อยู่ 99/1 ถนนสุขุมวิท กรุงเทพฯ 10110   โทร. 081-234-5678");
+            .isEqualTo("ที่อยู่ 99/1 ถนนสุขุมวิท กรุงเทพฯ 10110   Phone 081-234-5678");
     }
 
     @Test
@@ -1096,21 +1096,21 @@ class DealQuotationRenderAdapterV3Test {
     void thaiDocument_phoneLine_fallsBackToContactPhoneAndPrintsTheContactEmail() {
         QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
             quotationWithPhoneAndEmail(null, "062-328-7555", "qs.twcfurline@gmail.com", null), null, null);
-        assertThat(model.phoneLine()).isEqualTo("อีเมล qs.twcfurline@gmail.com   โทร. 062-328-7555");
+        assertThat(model.phoneLine()).isEqualTo("Email qs.twcfurline@gmail.com   Phone 062-328-7555");
     }
 
     @Test
     void thaiDocument_phoneLine_customerPhoneWinsOverContactPhoneWhenBothPresent() {
         QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
             quotationWithPhoneAndEmail("02-999-9999", "062-328-7555", null, null), null, null);
-        assertThat(model.phoneLine()).isEqualTo("โทร. 02-999-9999");
+        assertThat(model.phoneLine()).isEqualTo("Phone 02-999-9999");
     }
 
     @Test
     void thaiDocument_phoneLine_noPhoneAtAll_stillPrintsTheEmailAlone() {
         QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
             quotationWithPhoneAndEmail(null, null, "qs.twcfurline@gmail.com", null), null, null);
-        assertThat(model.phoneLine()).isEqualTo("อีเมล qs.twcfurline@gmail.com");
+        assertThat(model.phoneLine()).isEqualTo("Email qs.twcfurline@gmail.com");
     }
 
     @Test

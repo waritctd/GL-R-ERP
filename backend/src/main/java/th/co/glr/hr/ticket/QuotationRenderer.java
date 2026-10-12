@@ -314,7 +314,7 @@ public class QuotationRenderer {
         // never printed. Left as-is: this is the legacy TicketDto/QuotationDto path (predates the
         // v2 direct-deal model this class's own Javadoc documents), out of scope for that fix.
         String phonePart = customer != null && customer.phone() != null && !customer.phone().isBlank()
-            ? "โทร. " + customer.phone() : "";
+            ? "Phone " + customer.phone() : "";
 
         List<TicketItemDto> priceItems = ticket.items().stream()
             .filter(it -> it.approvedPrice() != null)

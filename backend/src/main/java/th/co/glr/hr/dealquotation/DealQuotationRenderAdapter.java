@@ -182,17 +182,17 @@ public final class DealQuotationRenderAdapter {
             // branch only ever read customerPhone (never contactPhone, which existed on the DTO
             // unused) and never read contactEmail at all. #effectiveCustomerPhone falls back to the
             // deal's own contact phone when the customer master carries none, and the e-mail joins
-            // the same ที่อยู่/โทร. line the English branch above already folds Address/E/Tel into
+            // the same ที่อยู่/Phone line the English branch above already folds Address/E/Tel into
             // (this template has no free row of its own for either — see the bug-fix comment just
             // above for why the address already lives here).
             if (!blank(quotation.contactEmail())) {
-                parts.add("อีเมล " + quotation.contactEmail().trim());
+                parts.add("Email " + quotation.contactEmail().trim());
             }
             // QT-2026-0032-1 (2026-09-15): B6 printed "โทร. โทร 02 314 354-2" — the customer master
             // row's own phone value opens with the label. See #stripPhoneLabel's Javadoc.
             String phone = effectiveCustomerPhone(quotation);
             if (!blank(stripPhoneLabel(phone))) {
-                parts.add("โทร. " + stripPhoneLabel(phone));
+                parts.add("Phone " + stripPhoneLabel(phone));
             }
             phoneLine = String.join("   ", parts);
         }
