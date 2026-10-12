@@ -101,7 +101,7 @@ function EntryChannelControl({ entryChannel, editable, reasonRequired, disabled,
           >
             บันทึก
           </Button>
-          <Button type="button" variant="ghost" onClick={() => { setPending(null); setReason(''); }}>
+          <Button type="button" variant="secondary" onClick={() => { setPending(null); setReason(''); }}>
             ยกเลิก
           </Button>
         </span>
