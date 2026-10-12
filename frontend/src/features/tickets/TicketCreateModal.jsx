@@ -308,7 +308,7 @@ function BackLink({ onClick, label = 'กลับ' }) {
     <button
       type="button"
       onClick={onClick}
-      className="inline-flex w-fit items-center gap-1 text-sm font-extrabold text-primary"
+      className="inline-flex w-fit items-center gap-1 border-0 bg-transparent p-0 text-sm font-extrabold text-primary"
     >
       <Icon name="chevronLeft" size={15} /> {label}
     </button>
@@ -1199,14 +1199,14 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
             <p className="flex items-center gap-1.5 text-xs font-extrabold text-danger-dark">
               <Icon name="triangleAlert" size={14} /> ยังกรอกไม่ครบ {hubMissingKeys.length} รายการ
             </p>
-            <ul className="mt-1.5 flex list-disc flex-col gap-1 pl-4 text-2xs text-danger-dark">
+            <ul className="mb-0 mt-1.5 flex list-disc flex-col gap-1 pl-4 text-2xs text-danger-dark">
               {hubMissingKeys.map((key) => (
                 <li key={key}>
                   {hubMissingErrors[key]}
                   {' — '}
                   <button
                     type="button"
-                    className="font-extrabold underline"
+                    className="border-0 bg-transparent p-0 font-extrabold text-danger-dark underline"
                     onClick={() => { setFieldErrors(hubMissingErrors); jumpToField(key); }}
                   >
                     ไปที่ขั้นตอน
@@ -1325,7 +1325,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                 <div className="flex flex-wrap gap-1.5">
                   {projectOptions.map((p) => (
                     <button key={p.id} type="button"
-                      className="cursor-pointer rounded-pill border border-border-muted bg-surface px-2.5 py-1 text-xs"
+                      className="cursor-pointer rounded-pill border border-border-muted bg-surface px-2.5 py-1 text-xs text-text"
                       onClick={() => { setSelectedProject(p); clearFieldError('project'); }}>
                       {p.name}
                     </button>
@@ -1364,7 +1364,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                 </span>
               ))}. ตรวจสอบก่อนสร้างดีลซ้ำ
             </span>
-            <button type="button" onClick={() => setDuplicateDismissed(true)} aria-label="ปิดคำเตือนดีลซ้ำ" className="shrink-0 text-warning-dark">
+            <button type="button" onClick={() => setDuplicateDismissed(true)} aria-label="ปิดคำเตือนดีลซ้ำ" className="shrink-0 border-0 bg-transparent text-warning-dark">
               <Icon name="close" size={13} />
             </button>
           </div>
@@ -1459,7 +1459,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                 <div className="flex flex-wrap gap-1.5">
                   {contactOptions.map((c) => (
                     <button key={c.id} type="button"
-                      className="cursor-pointer rounded-pill border border-border-muted bg-surface px-2.5 py-1 text-left text-xs"
+                      className="cursor-pointer rounded-pill border border-border-muted bg-surface px-2.5 py-1 text-left text-xs text-text"
                       onClick={() => setSelectedContact(c)}>
                       {c.firstName} {c.lastName}
                       {c.position ? <span className="ml-1 text-text-muted">({c.position})</span> : null}

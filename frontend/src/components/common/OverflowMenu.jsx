@@ -234,7 +234,7 @@ export function OverflowMenu({
               data-testid={item.testId}
               aria-disabled={item.disabled || undefined}
               title={item.disabled ? item.disabledReason : undefined}
-              className={`flex w-full flex-col items-start justify-center gap-0.5 px-3 py-2 text-left text-sm font-bold mobile:min-h-[44px] mobile:px-4 mobile:py-3 focus-visible:outline-none ${
+              className={`flex w-full flex-col items-start justify-center gap-0.5 border-0 bg-transparent px-3 py-2 text-left text-sm font-bold mobile:min-h-[44px] mobile:px-4 mobile:py-3 focus-visible:outline-none ${
                 item.disabled
                   ? 'cursor-not-allowed opacity-60'
                   : 'hover:bg-surface-hover focus-visible:bg-surface-hover'

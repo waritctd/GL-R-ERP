@@ -26,7 +26,7 @@ function WorklistRow({ deal, action, onClick }) {
     <button
       type="button"
       onClick={onClick}
-      className="flex min-h-11 w-full items-center justify-between gap-3 border-b border-border-subtle py-3 text-left last:border-b-0 transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:bg-surface-hover focus-visible:shadow-[inset_var(--shadow-focus-ring)]"
+      className="flex min-h-11 w-full items-center justify-between gap-3 border-0 border-b border-border-subtle bg-transparent py-3 text-left text-text last:border-b-0 transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:bg-surface-hover focus-visible:shadow-[inset_var(--shadow-focus-ring)]"
     >
       <span className="flex min-w-0 flex-col gap-0.5">
         <strong className="min-w-0 truncate text-sm font-bold text-text">{deal.customerName || deal.title}</strong>
@@ -209,7 +209,7 @@ export function SalesOverview({ user, employee }) {
                     key={deal.id}
                     type="button"
                     onClick={() => navigate(`/tickets/${deal.id}`)}
-                    className="flex min-h-11 items-center justify-between gap-2 border-b border-border-subtle py-2 text-left last:border-b-0 transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:bg-surface-hover focus-visible:shadow-[inset_var(--shadow-focus-ring)]"
+                    className="flex min-h-11 items-center justify-between gap-2 border-0 border-b border-border-subtle bg-transparent py-2 text-left text-text last:border-b-0 transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:bg-surface-hover focus-visible:shadow-[inset_var(--shadow-focus-ring)]"
                   >
                     <span className="min-w-0 truncate text-sm text-text">{deal.customerName || deal.title}</span>
                     <StatusBadge tone={followUpStatus(deal, todayIso) === 'overdue' ? 'danger' : 'teal'}>

@@ -138,7 +138,7 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
               <div key={pr.id} className="overflow-hidden rounded-lg border border-border bg-surface">
                 <button
                   type="button"
-                  className="flex w-full flex-wrap items-center gap-2 px-3 py-2.5 text-left"
+                  className="flex w-full flex-wrap items-center gap-2 border-0 bg-transparent px-3 py-2.5 text-left text-text"
                   onClick={() => setExpandedId(expanded ? null : pr.id)}
                   aria-expanded={expanded}
                 >

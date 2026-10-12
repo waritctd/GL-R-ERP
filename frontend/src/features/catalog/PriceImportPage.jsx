@@ -262,7 +262,7 @@ function UploadResultCard({ result }) {
           <summary className="cursor-pointer text-sm text-yellow-700 font-medium">
             ดูรายละเอียด ({result.errors.length} รายการ)
           </summary>
-          <ul className="mt-2 space-y-1 max-h-40 overflow-y-auto">
+          <ul className="m-0 mt-2 list-none space-y-1 max-h-40 overflow-y-auto pl-0">
             {result.errors.map((e, i) => (
               <li key={i} className="text-xs text-yellow-800 bg-yellow-50 px-3 py-1 rounded font-mono">
                 {e}
@@ -348,7 +348,7 @@ function VersionsPanel({ versions, currentVersionId }) {
   if (!versions.length) return null;
   return (
     <Panel title="ประวัติการนำเข้า">
-      <ul className="space-y-2 max-h-48 overflow-y-auto">
+      <ul className="m-0 list-none space-y-2 max-h-48 overflow-y-auto pl-0">
         {versions.map((v) => (
           <li
             key={v.versionId}

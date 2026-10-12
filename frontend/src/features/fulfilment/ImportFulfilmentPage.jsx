@@ -423,7 +423,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
               aria-pressed={active}
               className={cn(
                 'inline-flex min-h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-bold',
-                active ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface hover:bg-surface-hover',
+                active ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface text-text hover:bg-surface-hover',
               )}
               onClick={() => setStepFilter(option.key)}
               data-testid={`step-chip-${option.key}`}
