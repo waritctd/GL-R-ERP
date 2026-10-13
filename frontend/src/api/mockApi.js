@@ -2548,6 +2548,50 @@ function requireDealEntry() {
 let mockImportRequestSeq = 1;
 const mockImportRequests = []; // ImportRequestDto-shaped rows, each carrying its own `items` array.
 
+// Dev seed (owner request 2026-10-01): give `npm run dev` ONE per-factory ใบขอซื้อ out of the box.
+// mockImportRequests is otherwise EMPTY until Sales createDrafts + issue through the UI, so a fresh
+// mock session could not exercise import's S12–S17 step advance at all (the reported "ออกคำขอนำเข้า
+// แล้วแต่เลื่อนไม่ได้" — that was the legacy DEAL-level flow, which has no per-factory steps).
+//
+// Attached to demo deal 19 (สยามพารากอน, item from Cotto Industry #11, not from stock) by RUNTIME
+// lookup of its real item ids — the demo item ids are sequence-based, so never hardcode them. The
+// deal is nudged into a coherent "import in progress" state, which is also exactly what makes it
+// REACH import in the first place — two separate gates, both load-bearing:
+//   - salesStage = PROCUREMENT: dealInScope('import') only admits a deal from PROCUREMENT onward
+//     (salesViewScope.js), so at the demo's own ORDER_RECEIVED import's ticket list never even
+//     contains it.
+//   - fulfillmentStatus = IR_ISSUED: ImportFulfilmentPage's candidateIds filter drops any deal with
+//     a null status, and a per-factory-tracked deal carries IR_ISSUED from its first factory's
+//     issue (see that page's header).
+// paymentStatus is deliberately LEFT ALONE — deal 19's DEPOSIT_NOTICE_ISSUED is load-bearing for
+// the deposit/billing-candidate suites, and the import workspace does not read it anyway.
+// Import can advance this row S12→S17 immediately.
+(function seedPerFactoryImportRequestForDev() {
+  const ticket = (db.tickets ?? []).find((t) => t.id === 19);
+  const factory = mockPriceImportFactories.find((f) => f.name === 'Cotto Industry');
+  if (!ticket || !ticket.items?.length || !factory) return;
+  ticket.salesStage = 'PROCUREMENT';
+  ticket.fulfillmentStatus = 'IR_ISSUED';
+  const id = mockImportRequestSeq++;
+  mockImportRequests.push({
+    id, ticketId: ticket.id, ticketCode: ticket.code,
+    brand: ticket.items[0].brand, factoryId: factory.factoryId, factoryName: factory.name,
+    version: 1, status: 'ISSUED', docNumber: 'IR69019', issueDate: '2026-08-12', firstIssuedDate: '2026-08-12',
+    customerName: ticket.customerName ?? null, projectName: ticket.projectName ?? null,
+    requestedByName: 'สมหญิง ขายดี', requiredByNote: 'Within 30/9/26', depositReceivedDate: null,
+    vesselEtaNote: null, checkedByName: null, checkedDate: null, approvedByName: null, approvedDate: null,
+    importStep: 'CONTACTED', importStepAt: '2026-08-12', importStepById: 3, importStepByName: 'ฝ่ายนำเข้า หนึ่ง', importStepNote: null,
+    leadTimeMinDays: 20, leadTimeMaxDays: 35,
+    emailTo: null, emailSubject: null, emailBody: null, emailSentAt: null, emailSentById: null, emailSentByName: null,
+    createdById: 1, createdByName: 'สมหญิง ขายดี', issuedById: 1, issuedByName: 'สมหญิง ขายดี', issuedByEmail: null,
+    supersededById: null, createdAt: '2026-08-11T09:00:00Z', updatedAt: '2026-08-12T09:00:00Z', issuedAt: '2026-08-12T09:00:00Z',
+    items: ticket.items.map((it, i) => ({
+      id: `${id}-${i + 1}`, importRequestId: id, ticketItemId: it.id, seq: i + 1,
+      code: it.model, size: it.size, qty: it.qty, unit: 'piece',
+    })),
+  });
+})();
+
 // ── The STORED ใบแจ้งหนี้ส่วนที่เหลือ aggregate (V188, GLA-99 step 2) ─────────────────────────────
 // One row per (deal, issued document). Mirrors th.co.glr.hr.deposit.RemainingInvoiceService's
 // lifecycle/numbering shape (DRAFT -> ISSUED -> SUPERSEDED, base_number carried across a revision,
