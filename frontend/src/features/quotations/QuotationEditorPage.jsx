@@ -393,6 +393,8 @@ export function QuotationEditorPage({ user, showToast }) {
   // never has to reason about a row with no group, and the payload is simply items + adjustments,
   // which is already the server's printed order.
   const [adjustments, setAdjustments] = useState([]);
+  // Files picked in the เอกสารแนบ panel before the quotation has ever been saved (File[]).
+  const [pendingAttachments, setPendingAttachments] = useState([]);
   const [docSettings, setDocSettings] = useState(defaultDocSettings);
   // A mode/currency change the rep did not directly choose (e.g. SPECIAL_SQM moved off when the
   // document became English) is SAID, persistently, until the next settings change.
@@ -495,6 +497,7 @@ export function QuotationEditorPage({ user, showToast }) {
       setAdjustments(state.adjustments);
       setDocSettings(state.docSettings);
       setTerms(state.terms);
+      setPendingAttachments([]);
     };
     if (id) {
       if (!quotation) return;
@@ -1368,9 +1371,24 @@ export function QuotationEditorPage({ user, showToast }) {
     });
   }
 
+  // Files picked before the first บันทึกร่าง. Sent one at a time once the quotation exists; a
+  // refused file is named in a toast and the rest still go up. The page then moves to the new
+  // quotation, whose panel lists what was stored.
+  async function attachPending(quotationId) {
+    for (const file of pendingAttachments) {
+      try {
+        await api.dealQuotations.uploadAttachment(quotationId, file);
+      } catch (error) {
+        showToast('error', `แนบ ${file.name} ไม่สำเร็จ: ${error.message || 'แนบเอกสารไม่สำเร็จ'}`);
+      }
+    }
+    // This page is not re-mounted by the navigate that follows, so what was sent must not be held.
+    setPendingAttachments([]);
+  }
+
   const createMutation = useMutation({
     mutationFn: () => api.dealQuotations.create(effectiveTicketId, buildUpsertPayload()),
-    onSuccess: (res) => {
+    onSuccess: async (res) => {
       // NOT applySavedQuotation: a brand-new quotation has no prior editSeq worth comparing (there
       // was nothing to race with yet) and this immediately navigates to /quotations/:id, which
       // re-mounts the page and re-hydrates from the server anyway. A KNOWN, genuinely UNFIXED edge
@@ -1381,6 +1399,7 @@ export function QuotationEditorPage({ user, showToast }) {
       rememberDefaults();
       queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
       showToast('success', 'บันทึกร่างแล้ว');
+      await attachPending(res.quotation.id);
       navigate(`/quotations/${res.quotation.id}`, { replace: true });
     },
     onError: (error) => {
@@ -1639,6 +1658,7 @@ export function QuotationEditorPage({ user, showToast }) {
       rememberDefaults();
       queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
       showToast('success', 'บันทึกร่างแล้ว');
+      await attachPending(quotationRes.quotation.id);
       navigate(`/quotations/${quotationRes.quotation.id}`, { replace: true });
     } catch (error) {
       setSaveError(error.message || 'บันทึกไม่สำเร็จ');
@@ -2915,6 +2935,17 @@ export function QuotationEditorPage({ user, showToast }) {
             </div>
           </Panel>
 
+          {/* Above ยอดรวม so a rep attaches while still filling the document in. An upload is stored
+              at once (or, before the first save, held and sent by it), so it is not part of what
+              บันทึกร่าง saves and never stands between a rep and ส่งขออนุมัติ. */}
+          <QuotationAttachmentsPanel
+            user={user}
+            quotation={quotation}
+            pending={pendingAttachments}
+            onPendingChange={setPendingAttachments}
+            busy={!quotation && saving}
+          />
+
           <Panel title="ยอดรวม">
             {/* v3b: an English document prints Grand Total (USD) and NO VAT row at all, so the
                 editor shows no VAT line for it either — not a "0.00" one, which would imply a
@@ -2979,13 +3010,11 @@ export function QuotationEditorPage({ user, showToast }) {
         </>
       )}
 
-      {/* เอกสารแนบ is the last block of the page, under the details and under the form alike. It is
-          outside both on purpose. The details reproduce the printed form and these files are
-          never printed, and an upload is stored at once, so it is not part of what บันทึกร่าง
-          saves and never stands between a rep and ส่งขออนุมัติ. Not drawn on the refusal a viewer
-          gets who may not start a quotation. The panel itself draws nothing for import and
-          account. */}
-      {quotation || isEditable ? <QuotationAttachmentsPanel user={user} quotation={quotation} /> : null}
+      {/* The read-only details end with เอกสารแนบ (the header link jumps to it). It is outside the
+          details' panels on purpose: they reproduce the printed form and these files are never
+          printed. The edit form draws it above ยอดรวม instead. The panel draws nothing for
+          import and account. */}
+      {quotation && !isEditable ? <QuotationAttachmentsPanel user={user} quotation={quotation} /> : null}
 
       {submitConfirmOpen ? (
         <Modal

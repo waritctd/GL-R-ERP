@@ -11,9 +11,9 @@ globalThis.React = React;
 // ผู้ตรวจจะเห็นต้นทุนประกอบการอนุมัติทันที … this can be optional, it show should in the details of
 // the quotation page".
 //
-// One panel, the last block of the quotation page, for a draft being edited and for the read-only
-// details alike. This file is the panel on its own: what each audience is shown, and the attach
-// and remove flows including the refusals the server sends back.
+// One panel, in the edit form above ยอดรวม and as the last block of the read-only details. This
+// file is the panel on its own: what each audience is shown, and the attach and remove flows
+// including the refusals the server sends back.
 //
 // Evidence note: every server answer here is a vi.fn(). Who the server refuses is proven against
 // Java and real Postgres (DealQuotationAttachmentAuthzIntegrationTest); this file only shows what
@@ -106,14 +106,118 @@ describe('who is shown the panel', () => {
 });
 
 describe('a quotation that has never been saved', () => {
-  it('says a file can be attached after the first บันทึกร่าง, and offers no picker', async () => {
-    show(owner, null);
+  // Files picked here are held by the page (`pending`) and sent once the first บันทึกร่าง has made
+  // the quotation. A wrapper owns that state, as the page does, so the list re-renders.
+  const onPendingChange = vi.fn();
+  function Unsaved({ user = owner, initial = [], busy = false }) {
+    const [pending, setPending] = React.useState(initial);
+    return (
+      <QuotationAttachmentsPanel
+        user={user}
+        quotation={null}
+        busy={busy}
+        pending={pending}
+        onPendingChange={(next) => { onPendingChange(next); setPending(next); }}
+      />
+    );
+  }
+  function showUnsaved(props) {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    return render(
+      <QueryClientProvider client={queryClient}><Unsaved {...props} /></QueryClientProvider>,
+    );
+  }
+  const pendingFile = (name, size) => {
+    const file = pdf(name);
+    Object.defineProperty(file, 'size', { value: size });
+    return file;
+  };
+  const removePending = (name) => screen.queryByRole('button', { name: `นำออก ${name}` });
+
+  it('offers the picker, says the files are attached on the first บันทึกร่าง, and asks the server nothing', async () => {
+    showUnsaved();
 
     const shown = panel();
-    expect(shown.textContent).toContain('บันทึกร่าง');
+    expect(attachInput()).not.toBeNull();
+    expect(attachInput().disabled).toBe(false);
+    expect(shown.textContent).toContain('บันทึกร่างครั้งแรก');
     expect(shown.textContent).toContain(NOT_PRINTED);
-    expect(attachInput()).toBeNull();
-    expect(shown.querySelector('input[type="file"]')).toBeNull();
+    expect(shown.textContent).toContain('ยังไม่มีเอกสารแนบ');
+    expect(rows()).toHaveLength(0);
+    await new Promise((resolve) => { setTimeout(resolve, 50); });
+    expect(api.dealQuotations.listAttachments).not.toHaveBeenCalled();
+  });
+
+  it('lists a picked file by name and size, holds it back from the server, and นำออก drops it without asking', () => {
+    showUnsaved();
+    const picked = pendingFile('vendor.pdf', 250880);
+
+    fireEvent.change(attachInput(), { target: { files: [picked] } });
+
+    expect(onPendingChange).toHaveBeenCalledWith([picked]);
+    expect(api.dealQuotations.uploadAttachment).not.toHaveBeenCalled();
+    expect(rows()).toHaveLength(1);
+    expect(rows()[0].textContent).toContain('vendor.pdf');
+    expect(rows()[0].textContent).toContain('245 KB');
+    expect(rows()[0].textContent).toContain('รอบันทึกร่าง');
+    // Nothing is stored yet, so there is nothing to open.
+    expect(within(rows()[0]).queryByRole('link')).toBeNull();
+    expect(panel().textContent).not.toContain('ยังไม่มีเอกสารแนบ');
+
+    fireEvent.click(removePending('vendor.pdf'));
+
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(rows()).toHaveLength(0);
+    expect(onPendingChange).toHaveBeenLastCalledWith([]);
+    expect(panel().textContent).toContain('ยังไม่มีเอกสารแนบ');
+    expect(api.dealQuotations.deleteAttachment).not.toHaveBeenCalled();
+  });
+
+  it('keeps earlier picks when another is added, and นำออก removes only the one it names', () => {
+    const a = pendingFile('a.pdf', 1024);
+    const b = pendingFile('b.pdf', 2048);
+    showUnsaved({ initial: [a] });
+
+    fireEvent.change(attachInput(), { target: { files: [b] } });
+    expect(onPendingChange).toHaveBeenLastCalledWith([a, b]);
+    expect(rows()).toHaveLength(2);
+
+    fireEvent.click(removePending('b.pdf'));
+    expect(rows()).toHaveLength(1);
+    expect(rows()[0].textContent).toContain('a.pdf');
+    expect(rows()[0].textContent).not.toContain('b.pdf');
+    expect(onPendingChange).toHaveBeenLastCalledWith([a]);
+  });
+
+  // While the page is saving it is about to send what is held, so a pick or a removal now would
+  // be silently lost.
+  it('while the page is saving, takes no pick and no removal', () => {
+    showUnsaved({ initial: [pendingFile('a.pdf', 1024)], busy: true });
+
+    expect(attachInput().disabled).toBe(true);
+    expect(removePending('a.pdf').disabled).toBe(true);
+  });
+
+  it('is closed at ten picked files, and says so', () => {
+    showUnsaved({ initial: Array.from({ length: 10 }, (_, n) => pendingFile(`p-${n}.pdf`, 1024)) });
+
+    expect(attachInput().disabled).toBe(true);
+    expect(panel().textContent).toContain(FULL);
+  });
+
+  // Wrong way round, control first: the same panel, unsaved, offers the picker to the rep.
+  it.each([
+    ['account', account], ['import', importer], ['account holding the quotation grant', accountWithGrant],
+  ])('%s gets no panel and no request', async (_who, excluded) => {
+    const rep = showUnsaved();
+    expect(attachInput()).not.toBeNull();
+    rep.unmount();
+
+    const { container } = showUnsaved({ user: excluded });
+    await new Promise((resolve) => { setTimeout(resolve, 50); });
+
+    expect(container.textContent).toBe('');
+    expect(panel()).toBeNull();
     expect(api.dealQuotations.listAttachments).not.toHaveBeenCalled();
   });
 });
