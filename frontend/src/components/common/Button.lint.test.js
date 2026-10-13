@@ -3,28 +3,32 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ESLint } from 'eslint';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
+import eslintConfig from '../../../eslint.config.js';
 import { buttonVariants } from './Button.jsx';
 
 // The guard in Button.jsx throws on an unknown variant, but only when the element renders. A typo
 // in a branch that no test and no dev session visits still ships, and the untaken side of a
-// ternary is exactly such a branch. The lint rule reads the source instead, so it sees every
-// variant that is written out, rendered or not.
+// ternary is exactly such a branch. The lint rule reads the source instead, so it sees a variant
+// written at the call site whether or not it ever renders. eslint.config.js lists what it cannot see.
 //
-// These tests run the real ESLint with the project's own config over small snippets. A selector in
-// eslint.config.js cannot be shown wrong any other way: one that matches nothing is silent.
+// These tests run the real ESLint over small snippets, with the project's own config. A selector
+// cannot be shown wrong any other way: one that matches nothing is silent. The config is imported
+// here, and not only found on disk by ESLint, so that CI's changed-files run picks this file up
+// when eslint.config.js is the only thing that changed.
 
 const FRONTEND = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const SNIPPET_FILE = 'src/features/example/Example.jsx';
-const eslint = new ESLint({ cwd: FRONTEND });
+const eslint = new ESLint({ cwd: FRONTEND, overrideConfigFile: true, overrideConfig: eslintConfig });
 
 // What the runtime guard accepts, read from its own error message, so this file holds no second
 // list that could drift from Button.jsx.
 function runtimeVariants() {
   try {
-    // eslint-disable-next-line no-restricted-syntax -- the one deliberate unknown variant: it makes the guard list its names
     buttonVariants({ variant: 'not-a-variant' });
   } catch (error) {
-    return error.message.match(/Use one of: ([^.]+)\./)[1].split(', ');
+    const names = error.message.match(/Use one of: ([^.]+)\./);
+    if (!names) throw new Error(`Button.jsx no longer ends its unknown-variant error with "Use one of: a, b, c." It said: ${error.message}`);
+    return names[1].split(', ');
   }
   throw new Error('the runtime guard in Button.jsx did not throw');
 }
@@ -88,6 +92,7 @@ describe('lint: an unknown Button variant', () => {
   it.each([
     ['<Badge variant="ghost">x</Badge>'],
     ['<StatusChip variant="soft" />'],
+    ['<IconButton variant="ghost" />'],
     // The unknown variant sits inside the Button's opening tag but belongs to the Badge.
     ['<Button variant="primary" icon={<Badge variant="ghost" />}>x</Button>'],
   ])('leaves another component\'s variant alone: %s', async (jsx) => {
@@ -128,21 +133,36 @@ describe('lint: an unknown Button variant', () => {
     }
   });
 
-  it('still applies in SafeForm.jsx, whose exemption drops the raw-form rule only', async () => {
-    const reports = await variantReports(component('<Button variant="ghost">x</Button>'), 'src/components/common/SafeForm.jsx');
+  // Assembled from two pieces so that this file does not itself contain the forbidden class.
+  const exclusiveBreakpoint = `${'max-'}${'[720px]:hidden'}`;
+  const rawFormWithExclusiveBreakpoint = component(`<form className="${exclusiveBreakpoint}"><Button>ok</Button></form>`);
 
-    expect(reports).toHaveLength(1);
+  it('still applies in SafeForm.jsx, whose exemption drops the raw-form rule only', async () => {
+    const file = 'src/components/common/SafeForm.jsx';
+    expect(await variantReports(component('<Button variant="ghost">x</Button>'), file)).toHaveLength(1);
+
+    const others = await lint(rawFormWithExclusiveBreakpoint, file);
+    expect(others.some((message) => message.message.includes('SafeForm'))).toBe(false);
+    expect(others.some((message) => message.message.includes('EXCLUSIVE'))).toBe(true);
   });
 
-  it('lets Button.test.jsx write an unknown variant, and keeps the other guards on in that file', async () => {
-    // Button.test.jsx renders an unknown variant on purpose, to test the runtime guard.
-    const file = 'src/components/common/Button.test.jsx';
+  it.each([
+    ['src/components/common/Button.test.jsx'],
+    ['src/components/common/Button.lint.test.js'],
+  ])('lets %s write an unknown variant, and keeps the other guards on in that file', async (file) => {
     expect(await variantReports(component('<Button variant="ghost">x</Button>'), file)).toHaveLength(0);
 
-    // Assembled from two pieces so that this file does not itself contain the forbidden class.
-    const exclusiveBreakpoint = `${'max-'}${'[720px]:hidden'}`;
-    const others = await lint(component(`<form className="${exclusiveBreakpoint}"><Button>ok</Button></form>`), file);
+    const others = await lint(rawFormWithExclusiveBreakpoint, file);
     expect(others.some((message) => message.message.includes('SafeForm'))).toBe(true);
     expect(others.some((message) => message.message.includes('EXCLUSIVE'))).toBe(true);
+  });
+
+  it.each([
+    ['src/components/common/Button.jsx'],
+    ['src/components/common/ButtonGroup.test.jsx'],
+    ['src/components/common/ConfirmDialog.test.jsx'],
+    ['src/features/tickets/DealStagePanel.test.jsx'],
+  ])('exempts no other file: %s', async (file) => {
+    expect(await variantReports(component('<Button variant="ghost">x</Button>'), file)).toHaveLength(1);
   });
 });
