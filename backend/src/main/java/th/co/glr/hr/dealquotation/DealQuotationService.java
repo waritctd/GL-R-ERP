@@ -1178,8 +1178,14 @@ public class DealQuotationService {
 
     @Transactional
     public DealQuotationDto submit(long id, UserPrincipal actor) {
+        DealQuotationDto found = requireQuotation(id);
+        requireEditAccessForQuotation(actor, found);
+        // The deal's lock, like create/approve/cancel/reorder: TicketService#changeCustomer takes it
+        // too, and a submit that slipped between its "nothing sent yet" check and its writes would
+        // leave a PENDING_APPROVAL document printing the old customer. Re-read under the lock: what
+        // was loaded above may be what the change we just waited for rewrote.
+        quotations.lockTicket(found.ticketId());
         DealQuotationDto quotation = requireQuotation(id);
-        requireEditAccessForQuotation(actor, quotation);
         // GLA-123 slice S2: submit is now LIVE for BOTH origins — every validation below (item
         // completeness, payment term, validity date) is origin-agnostic and applies unchanged;
         // only approve/reject/issue diverge (see #approve/#reject's own origin branch).
@@ -3011,7 +3017,7 @@ public class DealQuotationService {
         }
         // Wording-scan fix 5 (2026-09-17): PIECES wastage must be a whole number of แผ่น — a
         // fractional value (e.g. 0.5) saved today, but WastageCalculator#applyWastage's PIECES
-        // branch silently ROUNDS it (HALF_UP) for the arithmetic while the STORED/PRINTED
+        // branch silently ROUNDS it UP for the arithmetic while the STORED/PRINTED
         // wastageValue stays the untouched fraction, so the printed "+ เผื่อ 0.5 แผ่น" disagrees
         // with the piece count the document actually adds. Refused here, before the value ever
         // reaches WastageCalculator, so it can never be stored at all. PERCENT wastage is
@@ -3663,8 +3669,8 @@ public class DealQuotationService {
         DealQuotationLines.TilePrint print = tile
             ? DealQuotationLines.tilePrint(documentLanguage, priceMode, item.quantityMode(), item.areaSqm(),
                 item.sqmPerPiece(), piecesPerSqm, item.piecesBeforeWastage(), item.wastageMode(), item.wastageValue(),
-                item.piecesFinal(), item.piecesPerBox(), item.boxes(), item.sqmPerBox(), item.quantity(), item.unit(),
-                item.specialPriceSqm(), item.roundToFullBox())
+                item.piecesAfterWastage(), item.piecesFinal(), item.piecesPerBox(), item.boxes(), item.sqmPerBox(),
+                item.quantity(), item.unit(), item.specialPriceSqm(), item.roundToFullBox())
             : null;
         // A tile's description is recomposed in the document's language, exactly as the read path
         // does; a PLAIN/ADJUSTMENT row's is the one the build step composed or the rep typed.

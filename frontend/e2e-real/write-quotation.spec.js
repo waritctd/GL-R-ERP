@@ -402,7 +402,7 @@ test.describe('quotation v3 / v3b + customer details — the real service', () =
     const bareTh = await render(thaiId);
     expect(xlsHasText(bareTh, `คุณ${contactAndCustomer}`), 'TH B5: contact / customer, nothing after it').toBe(true);
     expect(xlsHasText(bareTh, 'เลขที่ผู้เสียภาษี : '), 'TH must not print an empty tax-id label').toBe(false);
-    expect(xlsHasText(bareTh, 'โทร. 0'), 'TH must not print a phone line').toBe(false);
+    expect(xlsHasText(bareTh, 'Phone 0'), 'TH must not print a phone line').toBe(false);
 
     // Fill the customer master — what the editor's ที่อยู่ / เลขที่ผู้เสียภาษี / โทร. fields do on blur.
     for (const patch of [{ address: ADDRESS }, { phone: PHONE }, { taxId: TAX_ID }]) {
@@ -430,7 +430,8 @@ test.describe('quotation v3 / v3b + customer details — the real service', () =
 
     const filledTh = await render(thaiId);
     expect(xlsHasText(filledTh, `คุณ${contactAndCustomer}   เลขที่ผู้เสียภาษี : ${TAX_ID}`), 'TH B5 carries the tax id').toBe(true);
-    expect(xlsHasText(filledTh, `โทร. ${PHONE}`), 'TH B6 carries the phone').toBe(true);
+    // Owner 2026-10-12 (sales feedback item 3): the Thai document labels the line "Phone", not "โทร.".
+    expect(xlsHasText(filledTh, `Phone ${PHONE}`), 'TH B6 carries the phone').toBe(true);
     // NOTE: the Thai F-SM-002 has NO address line — DealQuotationRenderAdapter prints
     // customerAddress on the ENGLISH document only. Not asserted either way here: that is a backend
     // renderer gap reported in the PR, not behaviour to pin.

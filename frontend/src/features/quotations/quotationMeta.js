@@ -174,6 +174,21 @@ export function canCopyDealQuotation(user, quotation) {
   return quotation?.origin === 'DEAL_DIRECT' && canCreateDealQuotationStandalone(user);
 }
 
+/** "เปลี่ยนลูกค้า": whether `user` may re-point `ticket`'s deal at another customer while
+ * `quotation` is on the page. Mirrors TicketService.changeCustomer: requireDealOwnership — the
+ * owning sales rep, sales_manager or ceo, and NOT a canCreateQuotation grant holder, who may edit a
+ * quotation but not rewrite the deal under it — plus the two states the page can see: the
+ * quotation is a DRAFT, and it is a direct-deal one (a pricing-request quotation's customer is the
+ * one its price was asked for). Origin is stated positively, like canCopyDealQuotation, so an
+ * origin added later is refused until someone decides otherwise. The server still refuses once any
+ * OTHER quotation of the deal has left DRAFT, or a pricing request is live; this cannot see that. */
+export function canChangeDealCustomer(user, ticket, quotation) {
+  if (!user || !ticket || !quotation) return false;
+  if (quotation.docStatus !== 'DRAFT' || quotation.origin !== 'DEAL_DIRECT') return false;
+  if (user.role === 'sales_manager' || user.role === 'ceo') return true;
+  return user.role === 'sales' && ticket.createdById != null && Number(ticket.createdById) === Number(user.id);
+}
+
 /** Mirrors DealQuotationService.approve/reject's gate: sales_manager or ceo, role-only (the
  * plan states "No self-exclusion (matches repo convention; flagged)") -- the caller combines
  * this with canDecideDealQuotation below, or its own PENDING_APPROVAL check, before rendering a
@@ -696,6 +711,12 @@ export function usesDirectNetPriceSqm(item, documentLanguage = 'TH') {
 // actually travels to the server, and back, is still ตร.ม./แผ่น.
 function round2(n) {
   return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+}
+
+/** Round a piece count UP like the server's BigDecimal `ceilToInt`; the epsilon absorbs float noise
+ * (`100 * (7 / 100)` is 7.000000000000001, which a bare `Math.ceil` turns into 8). */
+export function ceilPieces(n) {
+  return Math.ceil(n - 1e-9);
 }
 
 /** ตร.ม./แผ่น (stored `item.sqmPerPiece`) → แผ่น/ตร.ม. (what the field shows). `null` when there

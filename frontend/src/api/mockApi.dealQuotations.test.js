@@ -287,6 +287,37 @@ describe('mock dealQuotations -- mixed price modes (V192.5)', () => {
   });
 });
 
+// 2026-10-12: any fraction of a piece rounds UP (WastageCalculator#ceilToInt), but the
+// server does it on BigDecimal and the mock on floats, where 100 * (7 / 100) is 7.000000000000001
+// and a bare Math.ceil turns an exact 7 into 8.
+describe('mock dealQuotations -- rounding up is not fooled by float noise', () => {
+  const TILE = {
+    model: 'Trilogy', color: 'Ash', texture: 'Matt', sizeText: '40x40', thicknessMm: 10,
+    wastageMode: 'NONE', wastageValue: 0, piecesPerBox: 1, unitPrice: 100, discountPct: 0,
+    leadTimeMinDays: 30, leadTimeMaxDays: 45,
+  };
+  const line = async (fields) => {
+    await api.auth.login(salesUser);
+    return (await api.dealQuotations.calculateLine({ ...TILE, ...fields }, 'TH')).item;
+  };
+
+  it('100 pieces + 7% is exactly 107, not 108', async () => {
+    const item = await line({ sqmPerPiece: 0.16, quantityMode: 'PIECES', piecesInput: 100,
+      wastageMode: 'PERCENT', wastageValue: 7 });
+    expect(item.piecesAfterWastage).toBe(107);
+  });
+
+  it('1.12 sqm at 0.16 sqm/piece (6.25 pcs/sqm) is exactly 7 pieces, not 8', async () => {
+    const item = await line({ sqmPerPiece: 0.16, quantityMode: 'AREA', areaSqm: 1.12 });
+    expect(item.piecesBeforeWastage).toBe(7);
+  });
+
+  it('a genuine fraction still rounds up: 2,793 sqm at 0.72 sqm/piece (1.39 pcs/sqm) is 3,883', async () => {
+    const item = await line({ sqmPerPiece: 0.72, quantityMode: 'AREA', areaSqm: 2793 });
+    expect(item.piecesBeforeWastage).toBe(3883);
+  });
+});
+
 describe('mock dealQuotations -- items are @NotEmpty, as on the service', () => {
   it('refuses to create a quotation with no items (400), rather than storing an empty document', async () => {
     await api.auth.login(salesUser);

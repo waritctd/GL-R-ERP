@@ -98,7 +98,8 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
             jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
         employeeAuth = new EmployeeAuthRepository(jdbc);
         ticketService = new TicketService(tickets, notifications, objectMapper, customers,
-            new QuotationRenderer(), null, employeeAuth);
+            new QuotationRenderer(), null, employeeAuth, new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
+            new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
 
         quotationRepository = new DealQuotationRepository(jdbc, new CatalogRepository(jdbc));
         NotificationEmailService approvalMailer = new NotificationEmailService(

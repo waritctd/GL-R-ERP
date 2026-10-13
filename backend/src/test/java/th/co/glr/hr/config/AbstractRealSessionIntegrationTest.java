@@ -212,13 +212,26 @@ abstract class AbstractRealSessionIntegrationTest {
      * Makes the stored session look as if its last request was {@code idle} ago — exactly what a
      * browser left alone produces. {@code StandardSession#setCreationTime} is the container's own
      * public setter for the three timestamps its idle check reads (creation, last access, this
-     * access); it exists for session persistence and replication, and it is what lets this be
-     * done without sleeping.
+     * access); it exists for session persistence and replication.
+     *
+     * <p>Re-applied until it sticks: the browser gets its response before the request thread has
+     * finished, and Tomcat's {@code endAccess()} then stamps {@code thisAccessedTime = now}. On a
+     * slow runner that stamp can land AFTER the ageing and silently undo it, so the next request
+     * sees an idle time of zero (seen as "expected 401 but was 200" on CI, never locally). The
+     * loop watches the timestamp it set and sets it again when a late {@code endAccess} moved it.
      */
     void ageSession(Browser browser, Duration idle) throws Exception {
         StandardSession session = stored(browser);
         assertThat(session).as("the session to age").isNotNull();
-        session.setCreationTime(System.currentTimeMillis() - idle.toMillis());
+        long past = System.currentTimeMillis() - idle.toMillis();
+        for (int attempt = 0; attempt < 100; attempt++) {
+            session.setCreationTime(past);
+            Thread.sleep(20);
+            if (session.getThisAccessedTimeInternal() == past && session.getLastAccessedTimeInternal() == past) {
+                return;
+            }
+        }
+        throw new AssertionError("the session's access time kept being reset by an in-flight request");
     }
 
     /** Tomcat's background pass that throws expired sessions away, run now instead of on its timer. */

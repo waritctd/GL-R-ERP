@@ -174,7 +174,6 @@
     "POST /api/deal-quotations/{id}/items/{pricingDecisionItemId}/restore",
     "POST /api/deal-quotations/{id}/outcome",
     "POST /api/deal-quotations/{id}/reject",
-    "POST /api/deal-quotations/{id}/reorders",
     "POST /api/deal-quotations/{id}/revisions",
     "POST /api/deal-quotations/{id}/submit",
     "POST /api/deposit-notices/{docId}/issue",
@@ -304,6 +303,7 @@
     "PUT /api/pricing-requests/{id}",
     "PUT /api/pricing-requests/{id}/items/{itemId}/factory",
     "PUT /api/remaining-invoices/{id}",
+    "PUT /api/tickets/{id}/customer",
     "PUT /api/tickets/{id}/tracking",
     "PUT /api/tickets/{ticketId}/required-by-note"
   ]

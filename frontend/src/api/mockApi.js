@@ -60,6 +60,7 @@ import {
   // V192.5 / V192.3: the SAME row price-mode codes and ผู้ติดต่อ length limits the editor uses — not
   // a second list of them.
   ROW_PRICE_MODES, PRICE_MODE_MIXED, ORDERED_BY_PHONE_MAX, ORDERED_BY_EMAIL_MAX,
+  ceilPieces,
 } from '../features/quotations/quotationMeta.js';
 // fix/commission-figures-from-backend: mock mode no longer imports the commission tier math —
 // see the fenced MOCK COMMISSION FIXTURES block near the `commissions` namespace below for why,
@@ -5984,14 +5985,13 @@ function mockApproveDealQuotationPricingRequestOrigin(row, payload, user) {
  * persisting, so the editor's live calculation line and totals have SOMETHING to render under
  * VITE_USE_MOCKS=true. It is deliberately NOT the real backend algorithm:
  *
- *   - Corrected 2026-09-15 (quotation arithmetic reconciliation): the real WastageCalculator
- *     (backend, pure class, unit-tested) rounds PIECES HALF_UP, not CEILING as this comment used
- *     to say — the old "meeting rule" reading was wrong, settled against real owner documents;
- *     see that class's own Javadoc for the evidence. This stub's `Math.round` for
- *     `piecesBeforeWastage`/`wastageExtra` now happens to AGREE with the real engine's piece
- *     rounding (both are round-half-up) — that convergence is incidental to this stub still being
- *     a placeholder, not a claim that the two are kept in sync on purpose; box-multiple rounding
- *     (`Math.ceil` at the ppb step) is unchanged and still correct either way.
+ *   - PIECES: the real WastageCalculator rounds every fraction of a piece UP (owner ruling
+ *     2026-10-12, which replaced the 2026-09-15 HALF_UP reading), and this stub's `ceilPieces`
+ *     follows it in the area step, the percent step and a fractional flat wastage, so a mock
+ *     run cannot disagree with the server by a piece on ordinary inputs. That is parity for the
+ *     UI's sake, not evidence about the engine: WastageCalculatorTest and
+ *     QuotationGoldenDocumentsTest are the evidence. Box-multiple rounding (`Math.ceil` at the
+ *     ppb step) is unchanged.
  *   - The MONEY math below is still NOT the real algorithm and remains a placeholder: `lineAmount`
  *     here is `round2(piecesFinal × netUnitPrice)` — the double-rounded formula the real engine no
  *     longer uses (R-D: the real `lineAmount` is a single rounding of `list × piecesFinal ×
@@ -6013,15 +6013,17 @@ function computeDealQuotationLine(input = {}, documentLanguage = 'TH') {
   const quantityMode = input.quantityMode === 'PIECES' ? 'PIECES' : 'AREA';
   const areaSqm = Number(input.areaSqm) || 0;
   const piecesInput = Number(input.piecesInput) || 0;
+  // Owner ruling 2026-10-12: any fraction of a piece rounds UP (WastageCalculator#ceilToInt), in
+  // the area step, the percent step and a fractional flat wastage alike.
   const piecesBeforeWastage = quantityMode === 'PIECES'
     ? Math.round(piecesInput)
-    : Math.round(areaSqm * (piecesPerSqm ?? 0));
+    : ceilPieces(areaSqm * (piecesPerSqm ?? 0));
   const wastageMode = input.wastageMode ?? 'NONE';
   const wastageValue = Number(input.wastageValue) || 0;
   const wastageExtra = wastageMode === 'PERCENT'
-    ? Math.round(piecesBeforeWastage * (wastageValue / 100))
+    ? ceilPieces(piecesBeforeWastage * (wastageValue / 100))
     : wastageMode === 'PIECES'
-      ? Math.round(wastageValue)
+      ? ceilPieces(wastageValue)
       : 0;
   const piecesAfterWastage = piecesBeforeWastage + wastageExtra;
   const piecesPerBox = Number(input.piecesPerBox) || 0;
@@ -8162,6 +8164,53 @@ export const api = {
       ticket.nextFollowUpAt = payload?.nextFollowUpAt || null;
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
       pushEvent(ticket, user, 'POLICY_CHANGED', ticket.salesStage, ticket.salesStage, 'อัปเดตข้อมูลติดตามดีล');
+      return delay({ ticket: buildTicketDetail(ticket) });
+    },
+
+    // Mirrors TicketService.changeCustomer: same gate order (ownership, active, a quotation past
+    // DRAFT, a live pricing request, then the customer/project/contact checks), and the same write
+    // set -- the ticket, every DRAFT quotation of the deal (DealQuotationRepository
+    // #resnapshotDraftsForDealCustomerChange), and an EDITED event. CANCELLED rows are left as they
+    // were, like the repository's. NOT mirrored: the deal's advisory lock, which a single-threaded
+    // mock has no use for.
+    async changeCustomer(id, payload) {
+      const user = requireSession();
+      const ticket = findTicketRaw(Number(id));
+      if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      requireActive(ticket);
+      if (mockDealQuotations.some((q) => q.ticketId === ticket.id && !['DRAFT', 'CANCELLED'].includes(q.docStatus))) {
+        fail('เปลี่ยนลูกค้าไม่ได้ เนื่องจากมีใบเสนอราคาที่ส่งขออนุมัติแล้ว', 409);
+      }
+      // PricingRequestRepository#findOpenIdsForTicket's predicate: status <> 'CANCELLED'.
+      if (mockPricingRequests.some((pr) => pr.ticketId === ticket.id && pr.status !== 'CANCELLED')) {
+        fail('เปลี่ยนลูกค้าไม่ได้ เนื่องจากดีลนี้มีคำขอราคาอยู่', 409);
+      }
+      const customer = mockCustomers.find((c) => c.id === Number(payload?.customerId));
+      if (!customer) fail('ไม่พบลูกค้าที่เลือก', 400);
+      const project = mockProjects.find((p) => p.id === Number(payload?.projectId));
+      if (!project) fail('ไม่พบโครงการที่เลือก', 400);
+      if (project.customerId !== customer.id) fail('โครงการนี้ไม่ได้อยู่ภายใต้ลูกค้าที่เลือก', 400);
+      const contactId = payload?.contactId ?? null;
+      if (contactId != null) {
+        const contact = mockContacts.find((c) => c.id === Number(contactId));
+        if (!contact) fail('ไม่พบผู้ติดต่อที่เลือก', 400);
+        if (contact.customerId !== customer.id) fail('ผู้ติดต่อนี้ไม่ได้อยู่ภายใต้ลูกค้าที่เลือก', 400);
+      }
+      ticket.customerId = customer.id;
+      ticket.customerName = customer.name;
+      ticket.projectId = project.id;
+      ticket.contactId = contactId == null ? null : Number(contactId);
+      ticket.updatedAt = new Date().toISOString().slice(0, 10);
+      const resnapshotAt = new Date().toISOString();
+      mockDealQuotations
+        .filter((q) => q.ticketId === ticket.id && q.docStatus === 'DRAFT')
+        .forEach((q) => Object.assign(q, {
+          ...mockDealQuotationCustomerSnapshot(ticket),
+          ...resolveDealQuotationContact(ticket, {}),
+          projectName: project.name,
+          updatedAt: resnapshotAt,
+        }));
+      pushEvent(ticket, user, 'EDITED', ticket.salesStage, ticket.salesStage, `เปลี่ยนลูกค้าเป็น ${customer.name}`);
       return delay({ ticket: buildTicketDetail(ticket) });
     },
   },

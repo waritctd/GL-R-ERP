@@ -310,6 +310,14 @@ public class TicketController {
         return new TicketDetailResponse(ticketService.updateTracking(id, request, user));
     }
 
+    @PutMapping("/{id}/customer")
+    TicketDetailResponse changeCustomer(@PathVariable long id,
+                                        @Valid @RequestBody ChangeCustomerRequest request,
+                                        HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(ticketService.changeCustomer(id, request, user));
+    }
+
     record UpdateStageRequest(@jakarta.validation.constraints.NotBlank String stage,
                               @jakarta.validation.constraints.Size(max = 2000) String note) {}
 

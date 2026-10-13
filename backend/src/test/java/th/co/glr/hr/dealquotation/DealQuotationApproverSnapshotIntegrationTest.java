@@ -97,7 +97,8 @@ class DealQuotationApproverSnapshotIntegrationTest extends AbstractPostgresInteg
             jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
         employeeRepository = employees;
         TicketService ticketService = new TicketService(tickets, notifications, new ObjectMapper(), customers,
-            new QuotationRenderer(), null, new EmployeeAuthRepository(jdbc));
+            new QuotationRenderer(), null, new EmployeeAuthRepository(jdbc), new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
+            new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
         signatureRepository = new EmployeeSignatureRepository(jdbc);
         Mailer noMail = new Mailer() {
             @Override

@@ -13,7 +13,8 @@ import th.co.glr.hr.dealquotation.WastageCalculator.Result;
 /**
  * Pins docs/sales/quotation-v2-plan.md's own worked reference figures (QN6900595-3, items 1/3/5) plus every
  * branch of the arithmetic — see {@link WastageCalculator}'s class Javadoc for the corrected
- * rounding rule (pieces round HALF_UP, not CEILING; see the 2026-09-15 reconciliation).
+ * rounding rule (every fraction of a piece rounds UP, owner ruling 2026-10-12; it replaced the
+ * 2026-09-15 HALF_UP reading).
  */
 class WastageCalculatorTest {
 
@@ -32,10 +33,9 @@ class WastageCalculatorTest {
 
         assertThat(r.piecesPerSqm()).isEqualByComparingTo("2.78");
         assertThat(r.piecesBeforeWastage()).isEqualTo(242);
-        // R-C (2026-09-15): 242 × 1.10 = 266.20 rounds HALF_UP to 266, not CEILING's 267 — the
-        // box-multiple rounding on top still lands on the same printed 268 either way, so this
-        // line alone could not tell the two rules apart; see item1 below for one that can.
-        assertThat(r.piecesAfterWastage()).isEqualTo(266);
+        // Owner ruling 2026-10-12: any fraction of a piece rounds UP. 242 × 1.10 = 266.20 → 267
+        // (HALF_UP gave 266); the box multiple lands on the same printed 268 either way.
+        assertThat(r.piecesAfterWastage()).isEqualTo(267);
         assertThat(r.piecesFinal()).isEqualTo(268);
         assertThat(r.boxes()).isEqualTo(67);
     }
@@ -54,16 +54,14 @@ class WastageCalculatorTest {
     }
 
     /**
-     * Item1 (quotation arithmetic reconciliation, 2026-09-15): reproduces the owner's OWN printed
-     * reference figure, 870 — the "round UP throughout" reading this test used to pin (872) was
-     * wrong, settled by nine other real, owner-confirmed quotations (see the class Javadoc on
-     * {@link WastageCalculator}). 569 × 1.39 = 790.91 rounds HALF_UP to 791 (unchanged — CEILING
-     * agrees here since the fractional part is already > 0.5); 791 × 1.10 = 870.1 rounds HALF_UP
-     * to 870, where CEILING gave 871 and then box-rounded UP again to 872 — a double error in the
-     * same direction that this rule removes.
+     * Item1: the line that tells the two rounding rules apart. 569 × 1.39 = 790.91 → 791 under
+     * either rule; 791 × 1.10 = 870.1 → 871 rounding up, which the box multiple lifts to 872.
+     * The 2026-09-15 reconciliation read the owner's printed 870 as HALF_UP evidence; on
+     * 2026-10-12 the owner ruled "ปัดขึ้นทุกกรณี" for documents from now on, knowing this
+     * document (and QN6900981-1 row 1, QN6900648 row 4) would no longer reproduce.
      */
     @Test
-    void item1_area569_piecesPerSqm1_39_wastage10pct_ppb2_reproducesTheOwnersPrinted870() {
+    void item1_area569_piecesPerSqm1_39_wastage10pct_ppb2_roundsEveryFractionUp_872() {
         Result r = WastageCalculator.calculate(new Input(
             sqmPerPieceFor("1.39"), WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("569"), null,
             WastageCalculator.WASTAGE_MODE_PERCENT, new BigDecimal("10"), 2,
@@ -71,10 +69,46 @@ class WastageCalculatorTest {
 
         assertThat(r.piecesPerSqm()).isEqualByComparingTo("1.39");
         assertThat(r.piecesBeforeWastage()).isEqualTo(791);
-        assertThat(r.piecesAfterWastage()).isEqualTo(870);
-        assertThat(r.piecesFinal()).isEqualTo(870);
-        assertThat(r.piecesFinal()).isNotEqualTo(872);
-        assertThat(r.boxes()).isEqualTo(435);
+        assertThat(r.piecesAfterWastage()).isEqualTo(871);
+        assertThat(r.piecesFinal()).isEqualTo(872);
+        assertThat(r.boxes()).isEqualTo(436);
+    }
+
+    /** A fraction as small as a hundredth of a piece still rounds up: 0.01 above a whole number
+     * of pieces is one more piece, in the area step and in the wastage step alike. */
+    @Test
+    void anyFractionOfAPieceRoundsUp_areaStepAndWastageStep() {
+        // 2,793 × 1.39 = 3,882.27 → 3,883 (QN6900981-1 row 1 printed 3,882 under the old rule).
+        Result area = WastageCalculator.calculate(new Input(
+            new BigDecimal("0.72"), WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("2793"), null,
+            WastageCalculator.WASTAGE_MODE_NONE, null, null,
+            new BigDecimal("100"), BigDecimal.ZERO));
+        assertThat(area.piecesBeforeWastage()).isEqualTo(3883);
+        assertThat(area.piecesFinal()).isEqualTo(3883);
+
+        // 100 pieces + 0.5% = 100.5 → 101; + 0.1% = 100.1 → 101 as well.
+        for (String pct : List.of("0.5", "0.1")) {
+            Result wastage = WastageCalculator.calculate(new Input(
+                null, WastageCalculator.QUANTITY_MODE_PIECES, null, 100,
+                WastageCalculator.WASTAGE_MODE_PERCENT, new BigDecimal(pct), null,
+                new BigDecimal("100"), BigDecimal.ZERO));
+            assertThat(wastage.piecesAfterWastage()).as("+%s%%", pct).isEqualTo(101);
+        }
+
+        // A fractional flat wastage (2.1 pieces) adds 3.
+        Result flat = WastageCalculator.calculate(new Input(
+            null, WastageCalculator.QUANTITY_MODE_PIECES, null, 100,
+            WastageCalculator.WASTAGE_MODE_PIECES, new BigDecimal("2.1"), null,
+            new BigDecimal("100"), BigDecimal.ZERO));
+        assertThat(flat.piecesAfterWastage()).isEqualTo(103);
+
+        // An exact whole number stays: 100 × 1.39 = 139.00, and 139 + 0% = 139.
+        Result exact = WastageCalculator.calculate(new Input(
+            new BigDecimal("0.72"), WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("100"), null,
+            WastageCalculator.WASTAGE_MODE_PERCENT, BigDecimal.ZERO, null,
+            new BigDecimal("100"), BigDecimal.ZERO));
+        assertThat(exact.piecesBeforeWastage()).isEqualTo(139);
+        assertThat(exact.piecesAfterWastage()).isEqualTo(139);
     }
 
     @Test
@@ -536,7 +570,7 @@ class WastageCalculatorTest {
         assertThat(r.loosePieces()).isEqualTo(7);
     }
 
-    /** PERCENT wastage still applies (HALF_UP, unchanged) before the loose-pieces split — only
+    /** PERCENT wastage still applies (rounds up, like everywhere else) before the loose-pieces split — only
      * the BOX step stops rounding, not the wastage step upstream of it. */
     @Test
     void roundToFullBoxFalse_percentWastage_appliesBeforeTheLooseSplit() {
@@ -546,7 +580,7 @@ class WastageCalculatorTest {
             new BigDecimal("50"), BigDecimal.ZERO, false));
 
         assertThat(r.piecesBeforeWastage()).isEqualTo(100);
-        assertThat(r.piecesAfterWastage()).isEqualTo(110); // 100 * 1.10, HALF_UP
+        assertThat(r.piecesAfterWastage()).isEqualTo(110); // 100 * 1.10 = 110.0, exact
         assertThat(r.piecesFinal()).isEqualTo(110); // NOT ceil(110/12)*12 = 120
         assertThat(r.boxes()).isEqualTo(9); // 110 / 12 = 9 full boxes
         assertThat(r.loosePieces()).isEqualTo(2); // 110 - 9*12

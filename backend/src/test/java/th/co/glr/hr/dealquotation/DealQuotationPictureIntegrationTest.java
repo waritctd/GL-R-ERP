@@ -91,7 +91,8 @@ class DealQuotationPictureIntegrationTest extends AbstractPostgresIntegrationTes
         EmployeeRepository employees = new EmployeeRepository(
             jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
         TicketService ticketService = new TicketService(tickets, notifications, new ObjectMapper(), customers,
-            new QuotationRenderer(), null, new EmployeeAuthRepository(jdbc));
+            new QuotationRenderer(), null, new EmployeeAuthRepository(jdbc), new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
+            new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
         NotificationEmailService approvalMailer =
             new NotificationEmailService(new NoOpMailer(), new BrandAssets(), "", "", "https://portal.test");
         quotationService = new DealQuotationService(new DealQuotationRepository(jdbc, new CatalogRepository(jdbc)), tickets, customers, contacts,

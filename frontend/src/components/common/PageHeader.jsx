@@ -13,9 +13,14 @@ import { Breadcrumbs } from './Breadcrumbs.jsx';
  * h1/p`/`.ticket-list-page .page-actions` mobile overrides without those
  * legacy selectors (deleted from styles.css along with the base rule) — most
  * callers should never need them.
+ *
+ * `titleAside` sits beside the title, not inside the <h1>, so it stays out of the
+ * heading's accessible name. Use it for a small control that belongs to the
+ * document itself (a copy button), not for the page's actions.
  */
 export function PageHeader({
   title,
+  titleAside,
   subtitle,
   actions,
   breadcrumbs,
@@ -70,12 +75,17 @@ export function PageHeader({
         {eyebrow ? (
           <span className="mb-1 block text-xs font-extrabold uppercase tracking-normal text-text-muted">{eyebrow}</span>
         ) : null}
-        <h1
-          id={titleId}
-          className={cn('m-0 text-2xl leading-[1.2] [overflow-wrap:anywhere] text-balance', headingClassName)}
-        >
-          {title}
-        </h1>
+        {/* No wrap: on a phone the title wraps its own text and the aside stays at the end of
+            the first line, instead of dropping to a line of its own under the title. */}
+        <div className="flex items-start gap-2">
+          <h1
+            id={titleId}
+            className={cn('m-0 min-w-0 text-2xl leading-[1.2] [overflow-wrap:anywhere] text-balance', headingClassName)}
+          >
+            {title}
+          </h1>
+          {titleAside}
+        </div>
         {subtitle ? (
           // Explicit mt-1/mx-0/mb-0 (not a shorthand `m-0` + `mt-1` combo,
           // whose cascade order Tailwind does not contractually guarantee):

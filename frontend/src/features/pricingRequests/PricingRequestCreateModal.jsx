@@ -6,7 +6,7 @@ import { Modal } from '../../components/common/Modal.jsx';
 import { RECIPIENT_OPTIONS } from './pricingRequestMeta.js';
 import { QuotationItemRow, newItemClientId } from '../quotations/QuotationItemRow.jsx';
 import { QuotationContactPicker } from '../quotations/QuotationContactPicker.jsx';
-import { piecesPerSqmFromSqmPerPiece, validateQuotationItem } from '../quotations/quotationMeta.js';
+import { ceilPieces, piecesPerSqmFromSqmPerPiece, validateQuotationItem } from '../quotations/quotationMeta.js';
 import { entryChannelLabel } from '../../utils/format.js';
 
 // ลักษณะจำนวน / วันที่ต้องการส่งมอบ / สถานที่ส่งมอบ / ข้อกำหนดพิเศษ were removed from this form
@@ -610,7 +610,8 @@ export function PricingRequestCreateModal({
       });
       // Opus review finding #2 (2026-09-18): a cheap, DISPLAY-ONLY early warning for the same
       // case PricingRequestService#resolveItem now rejects server-side with a 400 -- AREA mode
-      // rounding down to 0 pieces (e.g. 0.3 m² against 0.72 m²/piece). This mirrors ONLY
+      // deriving 0 pieces. The server rounds every fraction of a piece UP, so a positive area is at
+      // least 1 piece unless pieces/ตร.ม. itself rounds to 0.00 -- the only case this still catches. Mirrors ONLY
       // piecesPerSqmFromSqmPerPiece's already-DISPLAY-ONLY reciprocal (see that helper's own
       // comment), never WastageCalculator itself, so it deliberately does NOT catch every
       // zero-piece cause the server checks (e.g. an explicit piecesInput of 0 would already be
@@ -619,7 +620,7 @@ export function PricingRequestCreateModal({
       if (!fieldErrors.areaSqm && item?.quantityMode === 'AREA') {
         const area = Number(item?.areaSqm);
         const piecesPerSqm = piecesPerSqmFromSqmPerPiece(item?.sqmPerPiece);
-        if (area > 0 && piecesPerSqm != null && Math.round(area * piecesPerSqm) < 1) {
+        if (area > 0 && piecesPerSqm != null && ceilPieces(area * piecesPerSqm) < 1) {
           fieldErrors.areaSqm = 'จำนวนที่คำนวณได้จะเป็น 0 ชิ้น กรุณาระบุพื้นที่ให้มากขึ้น';
         }
       }

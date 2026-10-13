@@ -35,8 +35,13 @@ function emptyNewCustomer() {
  * comment -- just no longer here). ผู้สั่งซื้อ is now a single optional free-text field
  * (`terms.orderedByName`) the editor itself renders next to this card, not something this card
  * collects at all.
+ *
+ * `pickOnly`: only the customer and project boxes. "เปลี่ยนลูกค้า" re-points an existing deal, so the
+ * customer-record fields (the editor already shows them) and the entry channel are not its business.
  */
-export function DealCustomerCard({ value, onChange, errors, showToast, suggestedProjectName = '', belowProject = null }) {
+export function DealCustomerCard({
+  value, onChange, errors, showToast, suggestedProjectName = '', belowProject = null, pickOnly = false,
+}) {
   const { customer, project, entryChannel } = value;
 
   // ── ลูกค้า typeahead ──────────────────────────────────────────────────────────────────────
@@ -431,7 +436,7 @@ export function DealCustomerCard({ value, onChange, errors, showToast, suggested
         </div>
       </div>
 
-      {customer ? (
+      {customer && !pickOnly ? (
         // Present, prefilled and editable the moment a customer is selected — deliberately NOT
         // behind an "แก้ไข" affordance, because the point is that the rep sees what the document is
         // about to print, and a repeat customer arrives already filled. Saved on blur; none is
@@ -514,6 +519,7 @@ export function DealCustomerCard({ value, onChange, errors, showToast, suggested
         </Modal>
       ) : null}
 
+      {pickOnly ? null : (
       <div className="mt-3">
         <span className="mb-1 block text-xs">ช่องทางรับงาน</span>
         <div className="flex flex-wrap gap-2">
@@ -530,7 +536,7 @@ export function DealCustomerCard({ value, onChange, errors, showToast, suggested
           ))}
         </div>
       </div>
-
+      )}
     </Panel>
   );
 }

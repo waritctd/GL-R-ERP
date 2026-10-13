@@ -25,6 +25,12 @@ import th.co.glr.hr.common.Page;
 import th.co.glr.hr.common.PageRequest;
 import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
+import th.co.glr.hr.customer.ContactDto;
+import th.co.glr.hr.customer.ContactRepository;
+import th.co.glr.hr.customer.ProjectDto;
+import th.co.glr.hr.customer.ProjectRepository;
+import th.co.glr.hr.dealquotation.DealQuotationRepository;
+import th.co.glr.hr.dealquotation.DealQuotationRepository.CustomerSnapshot;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.pricingrequest.PricingRequestService.CancelOpenForTicketResult;
@@ -117,11 +123,19 @@ public class TicketService {
     // Deal-ENTRY authz only (see DealEntryAccess's own Javadoc) -- create() below is the ONE call
     // site that uses this; every other SALES_ROLES check in this class is untouched.
     private final EmployeeAuthRepository employeeAuth;
+    // changeCustomer only. Repositories, not DealQuotationService: that service holds a TicketService
+    // (wireTicketService), so injecting it here would be a constructor/setter cycle -- the same
+    // reason CustomerService reaches the quotation module through DealQuotationRepository.
+    private final ContactRepository contacts;
+    private final ProjectRepository projects;
+    private final DealQuotationRepository dealQuotations;
 
     public TicketService(TicketRepository tickets, NotificationRepository notifications,
                          ObjectMapper objectMapper,
                          CustomerRepository customers, QuotationRenderer quotationRenderer,
-                         PricingRequestService pricingRequests, EmployeeAuthRepository employeeAuth) {
+                         PricingRequestService pricingRequests, EmployeeAuthRepository employeeAuth,
+                         ContactRepository contacts, ProjectRepository projects,
+                         DealQuotationRepository dealQuotations) {
         this.tickets           = tickets;
         this.notifications     = notifications;
         this.objectMapper      = objectMapper;
@@ -129,6 +143,9 @@ public class TicketService {
         this.quotationRenderer = quotationRenderer;
         this.pricingRequests   = pricingRequests;
         this.employeeAuth      = employeeAuth;
+        this.contacts          = contacts;
+        this.projects          = projects;
+        this.dealQuotations    = dealQuotations;
     }
 
     public List<TicketSummaryDto> list(String status, UserPrincipal actor) {
@@ -2108,6 +2125,55 @@ public class TicketService {
             blankToNull(request.ownerName()), blankToNull(request.buyerName()), request.nextFollowUpAt());
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.POLICY_CHANGED, s.salesStage(), s.salesStage(), "tracking fields updated");
+        return requireTicket(ticketId);
+    }
+
+    /**
+     * Re-points the deal at another customer/project/contact (a typo fix before anything has been
+     * sent for approval). Refused once any quotation of the deal has left DRAFT, or while the deal
+     * has a live pricing request (its recipient contact would go stale).
+     *
+     * <p>Serialised on the deal's advisory lock (the one create/submit/approve/cancel take), so the
+     * "nothing has been sent" check below cannot be overtaken by a submit between the check and the
+     * writes.
+     *
+     * <p>Every DRAFT quotation of the deal has its printed header (customer block, project,
+     * ผู้สั่งซื้อ) re-snapshotted to the new customer in this same transaction, so no reader sees a
+     * draft that disagrees with its deal. CANCELLED rows are left as they were cancelled.
+     */
+    @Transactional
+    public TicketDto changeCustomer(long ticketId, ChangeCustomerRequest request, UserPrincipal actor) {
+        requireDealOwnership(requireTicket(ticketId).summary(), actor);
+        dealQuotations.lockTicket(ticketId);
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        requireActive(s);
+        if (tickets.hasNonDraftQuotation(ticketId)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "เปลี่ยนลูกค้าไม่ได้ เนื่องจากมีใบเสนอราคาที่ส่งขออนุมัติแล้ว");
+        }
+        if (pricingRequests.hasOpenForTicket(ticketId)) {
+            throw new ApiException(HttpStatus.CONFLICT, "เปลี่ยนลูกค้าไม่ได้ เนื่องจากดีลนี้มีคำขอราคาอยู่");
+        }
+        CustomerDto customer = customers.findById(request.customerId())
+            .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "ไม่พบลูกค้าที่เลือก"));
+        ProjectDto project = projects.findById(request.projectId())
+            .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "ไม่พบโครงการที่เลือก"));
+        if (project.customerId() != customer.id()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "โครงการนี้ไม่ได้อยู่ภายใต้ลูกค้าที่เลือก");
+        }
+        if (request.contactId() != null) {
+            ContactDto contact = contacts.findById(request.contactId())
+                .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "ไม่พบผู้ติดต่อที่เลือก"));
+            if (contact.customerId() != customer.id()) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "ผู้ติดต่อนี้ไม่ได้อยู่ภายใต้ลูกค้าที่เลือก");
+            }
+        }
+        tickets.updateCustomer(ticketId, customer.id(), request.projectId(), request.contactId(), customer.name());
+        dealQuotations.resnapshotDraftsForDealCustomerChange(ticketId,
+            new CustomerSnapshot(customer.name(), customer.address(), customer.taxId(), customer.phone()),
+            project.name(), request.contactId());
+        tickets.addEvent(ticketId, actor.id(), actor.name(),
+            TicketEventKind.EDITED, s.salesStage(), s.salesStage(), "เปลี่ยนลูกค้าเป็น " + customer.name());
         return requireTicket(ticketId);
     }
 

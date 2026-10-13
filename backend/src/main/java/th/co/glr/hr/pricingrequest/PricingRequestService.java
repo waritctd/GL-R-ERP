@@ -799,6 +799,12 @@ public class PricingRequestService {
         return requests.findAttachment(attachment.id()).orElseThrow();
     }
 
+    /** Whether the deal has a pricing request that is not CANCELLED. Same predicate as
+     * {@link #cancelOpenForTicket}'s cascade, so "live" means one thing in this module. */
+    public boolean hasOpenForTicket(long ticketId) {
+        return !requests.findOpenIdsForTicket(ticketId).isEmpty();
+    }
+
     /**
      * Internal cascade: when a deal reaches a terminal lifecycle state (lost or
      * cancelled — see {@code TicketService.markLost}/{@code cancel}), any pricing
@@ -1229,8 +1235,9 @@ public class PricingRequestService {
             throw new ApiException(HttpStatus.BAD_REQUEST,
                 "รายการที่ " + (rowNumber + 1) + ": ข้อมูลรายการไม่ถูกต้อง: " + e.getMessage());
         }
-        // Opus review finding #2 (2026-09-18): a small AREA input against a large sqmPerPiece can
-        // derive to ZERO pieces (e.g. 0.3 m² at 0.72 m²/piece rounds down to 0) -- and 0 violates
+        // Opus review finding #2 (2026-09-18): the calculation can still derive ZERO pieces -- every
+        // fraction of a piece rounds UP, so a positive AREA gives at least 1, but a zero/absent
+        // quantity (or a pieces/ตร.ม. that rounds to 0.00) does not -- and 0 violates
         // V59's chk_pricing_request_item_qty (requested_qty > 0), which would otherwise reach the
         // repository as a raw DataIntegrityViolationException (500) instead of a caller-fixable
         // 400. Caught here, before that INSERT, with the same per-row Thai message shape as every
