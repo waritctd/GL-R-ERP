@@ -88,8 +88,9 @@ public class EmployeeAuthRepository {
 
     /**
      * Whether this employee holds the per-employee "can create quotations" capability (owner
-     * ruling, Ploy 2026-09-09 — ภิญญดา, employee 144, QC&amp;ISO / role {@code qc}, needs to create
-     * deal quotations without being given the {@code sales} or {@code sales_manager} role).
+     * ruling, Ploy 2026-09-09 — ภิญญดา, employee 144, QC&amp;ISO, needs to create deal quotations
+     * from outside ฝ่ายขาย; since 2026-10-14 {@code DivisionAccessPolicy#roleFor} also gives an
+     * employee/qc/warehouse holder the {@code sales} role).
      *
      * <p>Same shape and same discipline as {@link #isAdmin}: a live read against
      * {@code hr.employee.can_create_quotation}, restricted to active rows, decided fresh on every

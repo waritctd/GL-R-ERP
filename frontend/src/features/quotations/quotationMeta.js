@@ -90,7 +90,8 @@ export function dealQuotationStatusLabel(status) {
 // removed.
 
 /** The per-employee "can create quotations" capability (owner ruling, Ploy 2026-09-09 --
- * ภิญญดา, employee 144, QC&ISO / role `qc`), mirroring `AuthResponse.canCreateQuotation` /
+ * ภิญญดา, employee 144, QC&ISO; role `sales` since 2026-10-14), mirroring
+ * `AuthResponse.canCreateQuotation` /
  * `hr.employee.can_create_quotation` (V166). A CAPABILITY, not a role -- deliberately not
  * further role-restricted, same shape as the existing `admin` capability (App.jsx's
  * userFromAuthResponse flattens it onto `user.canCreateQuotation`). It grants "any deal", same
@@ -490,8 +491,8 @@ export function filterDealQuotationRows(rows, { repId = '', text = '', amount = 
   // The customer master (customers.customer, moved from sales.customer by V41) has NO email column
   // (V16: name/tax_id/address/branch/phone; V177 added only address parts), so "the customer has
   // an email" means the quotation's own two snapshots: contactEmail (V167, the customer-master
-  // contact printed on the document) or orderedByEmail (V192.3, the ผู้ติดต่อ email the rep typed,
-  // record-only). Either one non-blank counts as "has". Trimmed here because V167's backfill copied
+  // contact snapshot, no longer printed) or orderedByEmail (V192.3, the ผู้ติดต่อ email the rep
+  // typed, which prints). Either one non-blank counts as "has". Trimmed here because V167's backfill copied
   // contact.email raw, so a whitespace-only value is possible on old rows.
   if (email === 'has' || email === 'none') {
     const hasEmail = (row) => Boolean((row?.contactEmail ?? '').trim() || (row?.orderedByEmail ?? '').trim());

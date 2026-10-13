@@ -104,8 +104,7 @@ class DealQuotationEnglishFormTest {
         // and this fixture types none (DealQuotationOrderedByContactRenderTest covers the typed
         // English labels "Tel." / "E :").
         assertThat(str(sheet, 5, 1))
-            .isEqualTo("Address : 12 Boduthakurufaanu Magu, Male, Maldives")
-            .doesNotContain("aisha@bluelagoon.mv").doesNotContain("+960 330 1234");
+            .isEqualTo("Address : 12 Boduthakurufaanu Magu, Male, Maldives");
         // No Thai left in the customer block.
         assertThat(str(sheet, 4, 1)).doesNotContain("คุณ");
         assertThat(str(sheet, 5, 1)).doesNotContain("โทร.");

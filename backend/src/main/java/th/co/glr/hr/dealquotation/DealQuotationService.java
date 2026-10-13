@@ -73,8 +73,9 @@ import th.co.glr.hr.ticket.TicketSummaryDto;
  * calls {@code sessions.requireUser} and delegates) — this codebase's standing convention.
  *
  * <p><strong>Per-employee grant (owner ruling, Ploy 2026-09-09):</strong> ภิญญดา (employee 144,
- * QC&amp;ISO / role {@code qc}) must be able to create quotations without being given the
- * {@code sales} or {@code sales_manager} role. {@code hr.employee.can_create_quotation}
+ * QC&amp;ISO) must be able to create quotations from outside ฝ่ายขาย. Since 2026-10-14 a holder
+ * whose division role is employee/qc/warehouse also resolves to role {@code sales}
+ * ({@code DivisionAccessPolicy#roleFor}). {@code hr.employee.can_create_quotation}
  * (V165) is a CAPABILITY in the exact shape of the existing admin capability
  * ({@code hr.employee.is_admin} → {@link EmployeeAuthRepository#isAdmin} →
  * {@code AuthResponse.admin}): a plain boolean, read LIVE at decision time via
@@ -3713,7 +3714,8 @@ public class DealQuotationService {
      * Ploy, per docs/sales/quotation-v2-plan.md: whether plain {@code sales} may act on another rep's deal —
      * implemented as NO, the conservative reading, until answered); {@code sales_manager} on any
      * deal; OR a {@code canCreateQuotation}-granted employee (owner ruling, Ploy 2026-09-09 —
-     * ภิญญดา, employee 144, QC&amp;ISO / role {@code qc}) on ANY deal, regardless of role — the
+     * ภิญญดา, employee 144, QC&amp;ISO, role {@code sales} since 2026-10-14) on ANY deal,
+     * regardless of role — the
      * grant is deliberately not further role-restricted; it is a per-person capability, not a
      * role. Read LIVE via {@link #hasQuotationGrant}, never from {@code actor}. */
     private void requireEditAccess(UserPrincipal actor, TicketSummaryDto ticket) {
