@@ -423,7 +423,7 @@
   /* No Tailwind preflight is loaded, so without these resets a button that has
      no classes would show the browser's own face: a 2px outset bevel, a grey
      fill and black text. This rule leaves padding alone on purpose. Raw buttons
-     across the app still take the browser's 6px side padding, so zeroing it
+     across the app still take the browser's own side padding, so zeroing it
      would move them. It sets `border-width` and not the `border` shorthand,
      because the shorthand also resets the border colour. A class in styles.css
      or any utility still wins, because `base` comes before `legacy` and
