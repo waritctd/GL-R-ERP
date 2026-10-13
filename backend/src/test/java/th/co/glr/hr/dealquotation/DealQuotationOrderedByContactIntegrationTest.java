@@ -15,8 +15,8 @@ import th.co.glr.hr.ticket.QuotationRenderModel;
 import th.co.glr.hr.ticket.QuotationRenderer;
 
 /**
- * V192.3 — ผู้ติดต่อ gains a Phone and an Email ("for sales record only … doesn't need to be render
- * in the actual pdf"), through the REAL {@link DealQuotationService} against real Postgres (the
+ * V192.3 — ผู้ติดต่อ gains a Phone and an Email (first "for sales record only", reversed by the
+ * owner 2026-10-13: they print on the document's customer contact line when filled), through the REAL {@link DealQuotationService} against real Postgres (the
  * production classes, hand-wired by {@link AbstractDealDirectQuotationIntegrationTest} — no Mockito
  * anywhere).
  *
@@ -26,23 +26,21 @@ import th.co.glr.hr.ticket.QuotationRenderer;
  *       and READ back by the query every other read path uses;</li>
  *   <li>a value the service refuses leaves the row exactly as it was;</li>
  *   <li>a revision / a reorder clone carries both forward;</li>
- *   <li>the document the service renders from that stored row carries neither.</li>
+ *   <li>the document the service renders from that stored row prints both (the master
+ *       contact's own are not printed), and prints nothing for one left blank.</li>
  * </ul>
  *
  * <p>Written wrong-way-round where it matters: what must NOT be stored (a malformed address, an
- * over-long value), what must NOT change (an approved document), and what must NOT print. Every
+ * over-long value), what must NOT change (an approved document), and what must NOT print (a blank one, as a bare label). Every
  * "is absent" assertion below follows an assertion that the value was really there to begin with,
  * so none of them can pass on a row that simply never carried it.
  */
 class DealQuotationOrderedByContactIntegrationTest extends AbstractDealDirectQuotationIntegrationTest {
 
     private static final String NAME = "คุณวิชัย มั่นคง";
-    /** Free text on purpose — an extension is normal. {@link #PHONE_NUMBER} is the part a search of
-     * a rendered document looks for, so a renderer that reformatted the rest would still be caught. */
+    /** Free text on purpose — an extension is normal. */
     private static final String PHONE = "089-765-4321 ต่อ 77";
-    private static final String PHONE_NUMBER = "089-765-4321";
     private static final String EMAIL = "bid.contact@contractor-b.example";
-    private static final String EMAIL_DOMAIN = "contractor-b.example";
 
     // ── create ───────────────────────────────────────────────────────────────────────────────
 
@@ -125,7 +123,7 @@ class DealQuotationOrderedByContactIntegrationTest extends AbstractDealDirectQuo
             .containsEntry("ordered_by_name", NAME);
     }
 
-    /** The same lock as every other header field: an APPROVED document is frozen, the sales record
+    /** The same lock as every other header field: an APPROVED document is frozen, the typed contact
      * on it included. The edit is refused and the row keeps what it was approved with. */
     @Test
     void anApprovedDocument_keepsItsContact_whenAnEditIsRefused() {
@@ -277,28 +275,27 @@ class DealQuotationOrderedByContactIntegrationTest extends AbstractDealDirectQuo
     // ── the document the service renders from the stored row ─────────────────────────────────
 
     /**
-     * "Doesn't need to be render in the actual pdf." The workbook the service itself renders for
-     * the stored quotation, and the HTML the PDF is printed from, carry the NAME (that is what the
-     * ผู้สั่งซื้อ slot is for) and neither the phone nor the email — not as typed, and not as the bare
-     * number or the address's domain a reformatting renderer might leave behind.
+     * Owner, 2026-10-13: "rendered if they have it, if not just leave it". The workbook the service
+     * itself renders for the stored quotation, and the HTML the PDF is printed from, carry the NAME
+     * (that is what the ผู้สั่งซื้อ slot is for) AND the phone and the email the rep typed.
      */
     @Test
-    void theDocumentTheServiceRenders_printsTheName_butNeverThePhoneOrEmail() {
+    void theDocumentTheServiceRenders_printsTheName_andThePhoneAndEmail() {
         DealQuotationDto created = quotationService.create(deal(salesActor), contact(NAME, PHONE, EMAIL), salesActor);
         DealQuotationDto stored = quotationService.get(created.id(), salesActor);
-        // Without these two, everything below would hold for a document that never carried them.
+        // Without these two, everything below could hold for a document that printed some OTHER contact.
         assertThat(stored.orderedByPhone()).isEqualTo(PHONE);
         assertThat(stored.orderedByEmail()).isEqualTo(EMAIL);
 
         List<String> cells = sheetTexts(created.id());
         assertThat(cells).as("control: the name beside them prints").anyMatch(text -> text.contains(NAME));
-        assertThat(cells).noneMatch(text -> text.contains(PHONE) || text.contains(PHONE_NUMBER));
-        assertThat(cells).noneMatch(text -> text.contains(EMAIL) || text.contains(EMAIL_DOMAIN));
+        assertThat(cells).anyMatch(text -> text.contains(PHONE));
+        assertThat(cells).anyMatch(text -> text.contains(EMAIL));
 
         QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(stored, null, null);
         String html = new QuotationRenderer().toHtml(model);
         assertThat(html).as("control: the name beside them prints").contains(NAME);
-        assertThat(html).doesNotContain(PHONE_NUMBER).doesNotContain(EMAIL).doesNotContain(EMAIL_DOMAIN);
+        assertThat(html).contains(PHONE).contains(EMAIL);
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────────────────────

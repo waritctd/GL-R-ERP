@@ -99,10 +99,13 @@ class DealQuotationEnglishFormTest {
         Sheet sheet = renderEnglish();
         assertThat(str(sheet, 4, 0)).isEqualTo("Attn :");                 // A5 was เรียน
         assertThat(str(sheet, 4, 1)).isEqualTo("Ms. Aisha Rahman   /   Blue Lagoon Resort Pvt Ltd");
+        // Owner, 2026-10-13: the customer master's phone and the registry contact's e-mail are no
+        // longer printed on this line — only a ผู้ติดต่อ phone/e-mail typed on the quotation is,
+        // and this fixture types none (DealQuotationOrderedByContactRenderTest covers the typed
+        // English labels "Tel." / "E :").
         assertThat(str(sheet, 5, 1))
-            .contains("Address : 12 Boduthakurufaanu Magu, Male, Maldives")
-            .contains("E : aisha@bluelagoon.mv")
-            .contains("Tel. +960 330 1234");
+            .isEqualTo("Address : 12 Boduthakurufaanu Magu, Male, Maldives")
+            .doesNotContain("aisha@bluelagoon.mv").doesNotContain("+960 330 1234");
         // No Thai left in the customer block.
         assertThat(str(sheet, 4, 1)).doesNotContain("คุณ");
         assertThat(str(sheet, 5, 1)).doesNotContain("โทร.");

@@ -177,7 +177,7 @@ function emptyTerms(defaults = null) {
     // types deliberately, not a rep-wide preference, so a brand-new quotation always starts blank
     // -- the dotted signature line, exactly as before this feature.
     orderedByName: '',
-    // V192.3 — how to reach that person: a sales record, never printed. Not remembered either.
+    // V192.3 — how to reach that person: printed on the document when filled. Not remembered either.
     orderedByPhone: '',
     orderedByEmail: '',
     // Sales feedback #5 (2026-10-06, V192.1) — "ไม่แสดงชื่อโครงการในใบเสนอราคา". NOT remembered
@@ -1226,7 +1226,7 @@ export function QuotationEditorPage({ user, showToast }) {
     // Always sent explicitly, blank included, same "no missing-keeps-stored" discipline as
     // projectName/customerNotes above: a blank genuinely clears it back to the dotted line.
     orderedByName: terms.orderedByName || null,
-    // V192.3 — ผู้ติดต่อ's Phone and Email, a sales record that is never printed. Always sent, like
+    // V192.3 — ผู้ติดต่อ's Phone and Email, printed on the document when filled. Always sent, like
     // the name beside them: a blank one is an explicit null, which is what clears it. Trimmed
     // here because the Email is CHECKED trimmed (orderedByEmailError), so what is sent is what
     // was checked.

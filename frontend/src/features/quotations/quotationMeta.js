@@ -1886,6 +1886,15 @@ export const ORDERED_BY_EMAIL_MAX = 254;
 // and mockApi.js checks with THIS function rather than a third copy.
 const ORDERED_BY_EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+// Mirrors DealQuotationRenderAdapter#stripPhoneLabel (PHONE_LABEL_PREFIX): drops a LEADING
+// โทร./Tel.-style label so the on-screen document shows what the PDF prints.
+const PHONE_LABEL_PREFIX = /^(?:โทรศัพท์|เบอร์โทรศัพท์|เบอร์โทร|เบอร์|โทร|telephone|tel|phone)\s*[.:：]?\s*(?=[0-9+(]|$)/i;
+
+/** The phone as the PDF prints it: trimmed, a leading label removed; '' when nothing is left. */
+export function stripPhoneLabel(value) {
+  return (value ?? '').trim().replace(PHONE_LABEL_PREFIX, '').trim();
+}
+
 /** What is wrong with ผู้ติดต่อ's Email as typed — the Thai sentence to show under the field — or
  * `undefined` when it is blank (the field is optional) or looks like an address. Checked on the
  * trimmed value, which is what is saved. Tells the rep before the save what the server would

@@ -5612,7 +5612,7 @@ function resolveDealQuotationContact(ticket, payload, current = null) {
   };
 }
 
-// ผู้ติดต่อ's Phone and Email (V192.3) — a sales record kept beside orderedByName, never printed,
+// ผู้ติดต่อ's Phone and Email (V192.3) — kept beside orderedByName and printed on the document when filled,
 // and NOT the contact snapshot above. Mirrors DealQuotationService#resolveOrderedByPhone /
 // #resolveOrderedByEmail: each is trimmed, a blank one is stored as null, a phone over 50
 // characters or an email over 254 is refused, and so is an email that does not look like an
@@ -6611,8 +6611,8 @@ function buildDealQuotationDto(row) {
     // ordered_by_name column), null when nobody has typed one (the dotted placeholder). Mirrors
     // DealQuotationDto#orderedByName / DealQuotationRenderAdapter#orderedByName exactly.
     orderedByName: row.orderedByName ?? null,
-    // V192.3 — how to reach that person: a sales record, shown on the quotation's details and
-    // never printed. Null on a row nobody typed them into (every seed row). Mirrors
+    // V192.3 — how to reach that person: shown on the quotation's details and
+    // printed on the document when filled. Null on a row nobody typed them into (every seed row). Mirrors
     // DealQuotationDto#orderedByPhone / #orderedByEmail.
     orderedByPhone: row.orderedByPhone ?? null,
     orderedByEmail: row.orderedByEmail ?? null,

@@ -514,7 +514,7 @@ public final class DealQuotationRequests {
         Boolean hideProjectName,
         /**
          * V192.3 — how to reach the person named in {@link #orderedByName} (the editor's ผู้ติดต่อ).
-         * A SALES RECORD only: shown on the quotation's details, NEVER printed on the document.
+         * Shown on the quotation's details and, when filled, printed on the document's customer contact line (owner ruling 2026-10-13).
          * Free text (an extension or several numbers is normal), optional. Travels exactly like
          * {@link #orderedByName}: the editor always sends its current value, so a null/blank on a
          * PUT clears it.
@@ -524,8 +524,8 @@ public final class DealQuotationRequests {
          * {@code DealQuotationService} on the trimmed value.
          */
         String orderedByPhone,
-        /** V192.3 — the email beside {@link #orderedByPhone}; same record-only, never-printed,
-         * clears-on-blank contract. Its shape and 254-character limit are likewise enforced by
+        /** V192.3 — the email beside {@link #orderedByPhone}; same printed-when-filled (owner,
+         * 2026-10-13), clears-on-blank contract. Its shape and 254-character limit are likewise enforced by
          * {@code DealQuotationService} after trimming, not here. */
         String orderedByEmail,
         @NotEmpty List<@Valid ItemInput> items

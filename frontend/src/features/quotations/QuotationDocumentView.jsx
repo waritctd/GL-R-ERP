@@ -4,6 +4,7 @@ import { formatThaiDate } from '../../utils/format.js';
 import {
   currencyForLanguage, dealQuotationStatusLabel, documentDiscountLabel, formatQuotationMoney,
   fullPaymentTermLabel, joinPresent, LINE_TYPE_ADJUSTMENT, LINE_TYPE_TILE, lineTypeOf, remainderModeLabel,
+  stripPhoneLabel,
 } from './quotationMeta.js';
 
 // v3b: the item table, totals and signature block follow the DOCUMENT's language, because this
@@ -119,15 +120,19 @@ export function QuotationDocumentView({ quotation }) {
     : name(quotation.salesRepNameEn, quotation.salesRepName);
   const quotedByPhone = quotation.salesRepDisplayId != null
     ? quotation.salesRepDisplayPhone : quotation.salesRepPhone;
+  // Owner ruling 2026-10-13: the paper prints ONLY the ผู้ติดต่อ phone/email typed on the quotation,
+  // and nothing when blank -- no customer-master or contact fallback -- so this panel shows the same.
+  const typedPhone = stripPhoneLabel(quotation.orderedByPhone);
   const contactLine = joinPresent([
     quotation.contactName,
-    quotation.contactPhone?.trim() ? `โทร. ${quotation.contactPhone.trim()}` : null,
-    quotation.contactEmail,
+    typedPhone ? `โทร. ${typedPhone}` : null,
+    quotation.orderedByEmail?.trim(),
   ]);
-  // V192.3 — ผู้ติดต่อ's Phone and Email: a sales record that DealQuotationRenderAdapter never
-  // reads. Only the ones that were typed, so a missing one leaves no bare label.
+  // V192.3 — ผู้ติดต่อ's Phone and Email: printed by DealQuotationRenderAdapter when filled
+  // (owner ruling 2026-10-13). Only the ones that were typed, so a missing one leaves no bare label.
   const salesContact = [['Phone', quotation.orderedByPhone], ['Email', quotation.orderedByEmail]]
-    .filter(([, value]) => value?.trim());
+    // A label-only phone ("โทร.") prints nothing, so it earns no block either; the raw value is shown.
+    .filter(([label, value]) => (label === 'Phone' ? stripPhoneLabel(value) : value?.trim()));
   return (
     <div className="grid gap-[18px]">
       <Panel title="ข้อมูลลูกค้า">
@@ -161,8 +166,9 @@ export function QuotationDocumentView({ quotation }) {
           </div>
           {/* The header lines the printed document carries (owner, 2026-09-11) — each rendered ONLY
               when it has a value, so a missing one leaves no bare label and no dangling separator
-              (joinPresent). These are the FROZEN snapshot columns the DTO carries, i.e. exactly
-              what the renderer prints. */}
+              (joinPresent). The contact name is the FROZEN snapshot the DTO carries; the phone and
+              e-mail are ONLY ผู้ติดต่อ's typed ones (V192.3, owner ruling 2026-10-13) -- what the
+              renderer prints. */}
           {contactLine ? (
             <div data-testid="doc-contact">
               {/* "ติดต่อผู้สั่งซื้อ", not a second "ผู้สั่งซื้อ": that word already heads the fourth
@@ -172,12 +178,9 @@ export function QuotationDocumentView({ quotation }) {
               <strong>{contactLine}</strong>
             </div>
           ) : null}
-          {/* V192.3 — owner: "it should show in the details of the quotation but doesn't need to
-              be render in the actual pdf". Everything else in this panel reproduces what the
-              document prints, so this cell says in words that it does not — the same device as
-              the "ไม่แสดงในใบเสนอราคา" line under โครงการ above. Deliberately a SECOND cell and not
-              part of ติดต่อผู้สั่งซื้อ: that line is the customer-master contact the header prints.
-              `min-w-0` + overflow-wrap because an address has no spaces to break at. */}
+          {/* V192.3 — ผู้ติดต่อ's typed Phone and Email, listed under their own words; they also
+              print (owner ruling 2026-10-13, reversing 2026-10-06's "sales record only") in the
+              ติดต่อผู้สั่งซื้อ / โทร. cells around it, and the note says so. `min-w-0` + overflow-wrap because an address has no spaces to break at. */}
           {salesContact.length ? (
             <div className="min-w-0" data-testid="doc-sales-contact">
               <span className="block text-2xs font-bold uppercase text-text-muted">ผู้ติดต่อ</span>
@@ -186,7 +189,7 @@ export function QuotationDocumentView({ quotation }) {
                   <span className="text-text-muted">{label}</span> <strong>{value.trim()}</strong>
                 </span>
               ))}
-              <span className="block text-xs text-text-muted">บันทึกของฝ่ายขาย ไม่พิมพ์ในใบเสนอราคา</span>
+              <span className="block text-xs text-text-muted">พิมพ์ในใบเสนอราคาเมื่อกรอก</span>
             </div>
           ) : null}
           {quotation.customerTaxId?.trim() ? (
@@ -195,10 +198,10 @@ export function QuotationDocumentView({ quotation }) {
               <strong>{quotation.customerTaxId.trim()}</strong>
             </div>
           ) : null}
-          {quotation.customerPhone?.trim() ? (
+          {typedPhone ? (
             <div data-testid="doc-customer-phone">
               <span className="block text-2xs font-bold uppercase text-text-muted">โทร.</span>
-              <strong>{quotation.customerPhone.trim()}</strong>
+              <strong>{typedPhone}</strong>
             </div>
           ) : null}
           {quotation.customerAddress?.trim() ? (

@@ -95,7 +95,7 @@ public class DealQuotationService {
     // for a tile (which keeps its own copy of this, being a no-Spring pure class).
     private static final BigDecimal HUNDRED = BigDecimal.valueOf(100);
 
-    // V192.3 — ผู้ติดต่อ's Phone and Email: a sales record kept beside orderedByName, never printed.
+    // V192.3 — ผู้ติดต่อ's Phone and Email: kept beside orderedByName; printed on the document when filled (owner ruling 2026-10-13).
     // The two limits are the widths of sales.quotation.ordered_by_phone / ordered_by_email, so a
     // value too long for its column is a 400 from #resolveOrderedByPhone / #resolveOrderedByEmail
     // and never a SQL error.

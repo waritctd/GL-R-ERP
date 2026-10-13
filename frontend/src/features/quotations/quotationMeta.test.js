@@ -1144,8 +1144,8 @@ describe('filterDealQuotationRows', () => {
 
   // Owner ask 2026-10-13 ("filter according to the ลูกค้า as email or not"). The customer master
   // (customers.customer, V41) has NO email column, so "the customer has an email" can only mean the
-  // quotation's own snapshots: contactEmail (V167, the customer-master contact printed on the
-  // document) OR orderedByEmail (V192.3, the ผู้ติดต่อ email the rep typed, record-only). Either
+  // quotation's own snapshots: contactEmail (V167, the customer-master contact snapshot, no
+  // longer printed) OR orderedByEmail (V192.3, the ผู้ติดต่อ email the rep typed, which prints). Either
   // one non-blank = มีอีเมล; whitespace counts as blank (the live writers NULLIF(TRIM()) these
   // columns, but V167's backfill copied contact.email raw, so old rows can carry whitespace).
   it('filters by email: has = contactEmail OR orderedByEmail non-blank, none = both blank', () => {

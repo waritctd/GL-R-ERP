@@ -1840,7 +1840,7 @@ public class DealQuotationRepository {
                    -- ผู้สั่งซื้อ signature-slot name — see DealQuotationDtos#orderedByName's own
                    -- Javadoc. NULL on every pre-V192 row.
                    q.ordered_by_name,
-                   -- V192.3: the sales-record phone and email beside it. Never printed.
+                   -- V192.3: the phone and email beside it, printed when filled (2026-10-13).
                    q.ordered_by_phone, q.ordered_by_email,
                    -- Sales feedback #5 (V192.1, 2026-10-06): "ไม่แสดงชื่อโครงการในใบเสนอราคา" — see
                    -- DealQuotationDtos#hideProjectName's own Javadoc. FALSE on every pre-V192.1 row.
