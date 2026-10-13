@@ -1142,6 +1142,43 @@ describe('filterDealQuotationRows', () => {
     expect(meta.filterDealQuotationRows(rows, { repId: 6, amount: 'gte1m' })).toEqual([]);
   });
 
+  // Owner ask 2026-10-13 ("filter according to the ลูกค้า as email or not"). The customer master
+  // (customers.customer, V41) has NO email column, so "the customer has an email" can only mean the
+  // quotation's own snapshots: contactEmail (V167, the customer-master contact printed on the
+  // document) OR orderedByEmail (V192.3, the ผู้ติดต่อ email the rep typed, record-only). Either
+  // one non-blank = มีอีเมล; whitespace counts as blank (the live writers NULLIF(TRIM()) these
+  // columns, but V167's backfill copied contact.email raw, so old rows can carry whitespace).
+  it('filters by email: has = contactEmail OR orderedByEmail non-blank, none = both blank', () => {
+    const emailRows = [
+      { id: 1, contactEmail: 'a@example.co.th', orderedByEmail: null },
+      { id: 2, contactEmail: null, orderedByEmail: 'b@example.co.th' },
+      { id: 3, contactEmail: '   ', orderedByEmail: '' },
+      { id: 4 },
+      { id: 5, contactEmail: 'c@example.co.th', orderedByEmail: 'd@example.co.th' },
+    ];
+    const ids = (opts) => meta.filterDealQuotationRows(emailRows, opts).map((r) => r.id);
+    expect(ids({ email: 'has' })).toEqual([1, 2, 5]);
+    expect(ids({ email: 'none' })).toEqual([3, 4]);
+    // Unknown / empty email value is a no-op, like amount.
+    expect(ids({ email: 'nonsense' })).toEqual([1, 2, 3, 4, 5]);
+    expect(ids({ email: '' })).toEqual([1, 2, 3, 4, 5]);
+    // Composes with repId (AND).
+    const mixed = [
+      { id: 1, salesRepId: 6, contactEmail: 'a@example.co.th' },
+      { id: 2, salesRepId: 9, contactEmail: 'b@example.co.th' },
+      { id: 3, salesRepId: 6, contactEmail: null },
+    ];
+    expect(meta.filterDealQuotationRows(mixed, { repId: 6, email: 'has' }).map((r) => r.id)).toEqual([1]);
+    expect(meta.filterDealQuotationRows(mixed, { repId: 9, email: 'none' })).toEqual([]);
+  });
+
+  it('offers exactly มีอีเมล / ไม่มีอีเมล as the email filter options, keyed has / none', () => {
+    expect(meta.DEAL_QUOTATION_EMAIL_OPTIONS).toEqual([
+      { value: 'has', label: 'มีอีเมล' },
+      { value: 'none', label: 'ไม่มีอีเมล' },
+    ]);
+  });
+
   it('is a no-op when both filters are empty/absent', () => {
     expect(meta.filterDealQuotationRows(rows)).toEqual(rows);
     expect(meta.filterDealQuotationRows(rows, {})).toEqual(rows);
