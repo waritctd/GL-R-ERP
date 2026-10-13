@@ -48,6 +48,30 @@ const INCLUSIVE_BREAKPOINT_RULES = [
   { selector: 'TemplateElement[value.raw=/max-\\[\\d+px\\]:/]', message: INCLUSIVE_BREAKPOINT_MESSAGE },
 ];
 
+// An unknown Button variant renders with the browser's own look, and the guard in Button.jsx
+// only throws when the element renders, so a typo in a branch nobody visits still ships. These
+// selectors read the source instead. They report a string that is not a known name when it is
+// the variant of a Button (plain, in braces, in a ternary branch, or after ??, || or &&) or the
+// variant key of a buttonVariants call. They cannot see a value that arrives through a
+// variable, an object map, a spread or a prop.
+const BUTTON_VARIANTS = ['primary', 'secondary', 'success', 'danger', 'text', 'icon'];
+
+const BUTTON_VARIANT_MESSAGE =
+  "A variant that Button does not know renders with the browser's own look. Button.jsx " +
+  'throws on it in development and in tests, but only when the element renders. ' +
+  `Use one of: ${BUTTON_VARIANTS.join(', ')}.`;
+
+const UNKNOWN_VARIANT = `Literal[value=type(string)]:not([value=/^(${BUTTON_VARIANTS.join('|')})$/])`;
+const VARIANT_ATTRIBUTE = 'JSXOpeningElement[name.name="Button"] > JSXAttribute[name.name="variant"]';
+
+const BUTTON_VARIANT_RULES = [
+  `${VARIANT_ATTRIBUTE} > ${UNKNOWN_VARIANT}`,
+  `${VARIANT_ATTRIBUTE} > JSXExpressionContainer > ${UNKNOWN_VARIANT}`,
+  `${VARIANT_ATTRIBUTE} > JSXExpressionContainer > ConditionalExpression > ${UNKNOWN_VARIANT}:matches(.consequent, .alternate)`,
+  `${VARIANT_ATTRIBUTE} > JSXExpressionContainer > LogicalExpression > ${UNKNOWN_VARIANT}.right`,
+  `CallExpression[callee.name="buttonVariants"] > ObjectExpression > Property[key.name="variant"] > ${UNKNOWN_VARIANT}`,
+].map((selector) => ({ selector, message: BUTTON_VARIANT_MESSAGE }));
+
 export default [
   { ignores: ['dist/**', 'node_modules/**'] },
   js.configs.recommended,
@@ -103,7 +127,7 @@ export default [
       // to prevent a repeat of -- but "every `<form>`" would overstate what a lint rule can
       // actually promise. SafeForm.jsx itself is exempted below; it is the one place a raw
       // `<form>` is correct, because it IS the primitive.
-      'no-restricted-syntax': ['error', RAW_FORM_RULE, ...INCLUSIVE_BREAKPOINT_RULES],
+      'no-restricted-syntax': ['error', RAW_FORM_RULE, ...INCLUSIVE_BREAKPOINT_RULES, ...BUTTON_VARIANT_RULES],
     },
   },
   {
@@ -112,7 +136,15 @@ export default [
     // would quietly exempt this file from the breakpoint guard too, for no reason.
     files: ['src/components/common/SafeForm.jsx'],
     rules: {
-      'no-restricted-syntax': ['error', ...INCLUSIVE_BREAKPOINT_RULES],
+      'no-restricted-syntax': ['error', ...INCLUSIVE_BREAKPOINT_RULES, ...BUTTON_VARIANT_RULES],
+    },
+  },
+  {
+    // Button.test.jsx renders an unknown variant on purpose, to test the runtime guard in
+    // Button.jsx. It drops the variant entries only, so the form and breakpoint guards stay on.
+    files: ['src/components/common/Button.test.jsx'],
+    rules: {
+      'no-restricted-syntax': ['error', RAW_FORM_RULE, ...INCLUSIVE_BREAKPOINT_RULES],
     },
   },
 ];
