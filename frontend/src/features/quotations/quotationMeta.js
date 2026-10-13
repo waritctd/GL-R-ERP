@@ -460,14 +460,22 @@ export const DEAL_QUOTATION_AMOUNT_OPTIONS = [
   { value: 'gte1m', label: 'มากกว่าหนึ่งล้านบาท' },
 ];
 
+/** The two อีเมลลูกค้า filter options, offered to every role, in display order. `''` ("ทั้งหมด")
+ * is added by the caller as the leading option. */
+export const DEAL_QUOTATION_EMAIL_OPTIONS = [
+  { value: 'has', label: 'มีอีเมล' },
+  { value: 'none', label: 'ไม่มีอีเมล' },
+];
+
 /** Client-side, presentation-only narrowing of an already-server-scoped row list -- NOT a
  * security boundary (see the section comment above). `repId` filters on `row.salesRepId`
  * (string-compared, so `''`/`null`/`undefined` all mean "no filter"); `text` matches
  * case-insensitively against `${customerName} ${projectName}`; `amount` is `'lt1m'` (grandTotal
  * below {@link DEAL_QUOTATION_AMOUNT_THRESHOLD}) or `'gte1m'` (at/above it), anything else meaning
- * "no filter". All three compose with AND, each is a no-op when empty/absent, and the function is
- * null-safe throughout. */
-export function filterDealQuotationRows(rows, { repId = '', text = '', amount = '' } = {}) {
+ * "no filter"; `email` is `'has'` / `'none'` (see below), anything else meaning "no filter". All
+ * four compose with AND, each is a no-op when empty/absent, and the function is null-safe
+ * throughout. */
+export function filterDealQuotationRows(rows, { repId = '', text = '', amount = '', email = '' } = {}) {
   let list = rows ?? [];
   if (repId) list = list.filter((row) => String(row?.salesRepId ?? '') === String(repId));
   const needle = (text ?? '').trim().toLowerCase();
@@ -478,6 +486,16 @@ export function filterDealQuotationRows(rows, { repId = '', text = '', amount = 
     list = list.filter((row) => Number(row?.grandTotal ?? 0) < DEAL_QUOTATION_AMOUNT_THRESHOLD);
   } else if (amount === 'gte1m') {
     list = list.filter((row) => Number(row?.grandTotal ?? 0) >= DEAL_QUOTATION_AMOUNT_THRESHOLD);
+  }
+  // The customer master (customers.customer, moved from sales.customer by V41) has NO email column
+  // (V16: name/tax_id/address/branch/phone; V177 added only address parts), so "the customer has
+  // an email" means the quotation's own two snapshots: contactEmail (V167, the customer-master
+  // contact printed on the document) or orderedByEmail (V192.3, the ผู้ติดต่อ email the rep typed,
+  // record-only). Either one non-blank counts as "has". Trimmed here because V167's backfill copied
+  // contact.email raw, so a whitespace-only value is possible on old rows.
+  if (email === 'has' || email === 'none') {
+    const hasEmail = (row) => Boolean((row?.contactEmail ?? '').trim() || (row?.orderedByEmail ?? '').trim());
+    list = list.filter((row) => hasEmail(row) === (email === 'has'));
   }
   return list;
 }

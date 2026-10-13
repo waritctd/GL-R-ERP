@@ -201,6 +201,56 @@ describe('QuotationListPage', () => {
 
     expect(screen.getByText('QD69-0001')).not.toBeNull();
     expect(screen.queryByText('QD69-0002')).toBeNull();
+    // The อีเมลลูกค้า filter sits beside the rep filter for see-all roles too (owner ask 2026-10-13).
+    expect(screen.getByRole('combobox', { name: 'กรองตามอีเมลลูกค้า' })).not.toBeNull();
+  });
+
+  // Owner ask 2026-10-13: filter by whether the ลูกค้า has an email. Not a scope question, so
+  // EVERY role gets it (a plain sales rep included), unlike the see-all-only rep filter. "มีอีเมล"
+  // is contactEmail OR orderedByEmail non-blank — see quotationMeta.test.js for why those two.
+  it('a plain sales user can filter by ไม่มีอีเมล / มีอีเมล, which narrows the rows', async () => {
+    api.dealQuotations.list.mockResolvedValue({
+      items: [
+        row({ id: 1, number: 'QD69-0001', contactEmail: 'a@example.co.th', orderedByEmail: null }),
+        row({ id: 2, number: 'QD69-0002', contactEmail: null, orderedByEmail: 'b@example.co.th' }),
+        row({ id: 3, number: 'QD69-0003', contactEmail: null, orderedByEmail: null }),
+      ],
+    });
+    renderListPage(salesUser);
+    await screen.findByText('QD69-0001');
+
+    const select = screen.getByRole('combobox', { name: 'กรองตามอีเมลลูกค้า' });
+    expect([...select.options].map((o) => o.textContent)).toEqual(['ทั้งหมด', 'มีอีเมล', 'ไม่มีอีเมล']);
+
+    fireEvent.change(select, { target: { value: 'none' } });
+    expect(screen.queryByText('QD69-0001')).toBeNull();
+    expect(screen.queryByText('QD69-0002')).toBeNull();
+    expect(screen.getByText('QD69-0003')).not.toBeNull();
+
+    fireEvent.change(select, { target: { value: 'has' } });
+    expect(screen.getByText('QD69-0001')).not.toBeNull();
+    expect(screen.getByText('QD69-0002')).not.toBeNull();
+    expect(screen.queryByText('QD69-0003')).toBeNull();
+
+    fireEvent.change(select, { target: { value: '' } });
+    expect(screen.getByText('QD69-0003')).not.toBeNull();
+  });
+
+  // retainHeaderWhenEmpty keeps the COLUMN HEADER ROW (not the search box, which DataTable's
+  // toolbar renders unconditionally) when a filter empties the list. It used to be see-all only;
+  // now every role can empty the list via the email filter, so a plain sales user must get it too.
+  it('keeps the column header row for a plain sales user whose email filter empties the list', async () => {
+    api.dealQuotations.list.mockResolvedValue({
+      items: [row({ id: 1, number: 'QD69-0001', contactEmail: 'a@example.co.th' })],
+    });
+    const { container } = renderListPage(salesUser);
+    await screen.findByText('QD69-0001');
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'กรองตามอีเมลลูกค้า' }), { target: { value: 'none' } });
+
+    await waitFor(() => expect(screen.queryByText('QD69-0001')).toBeNull());
+    expect(screen.getByText('ไม่มีใบเสนอราคาในเงื่อนไขนี้')).not.toBeNull();
+    expect(container.querySelector('.table-head'), 'column header row must stay mounted').not.toBeNull();
   });
 
   it('a plain sales user does not see the rep dropdown, but does see the customer/project search box', async () => {
