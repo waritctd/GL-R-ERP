@@ -1,6 +1,6 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useParams } from 'react-router-dom';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { QuotationEditorPage } from './QuotationEditorPage.jsx';
@@ -13,11 +13,11 @@ globalThis.React = React;
 // QuotationAttachmentsPanel.test.jsx. This file is only its place in /quotations/new and
 // /quotations/:id.
 //
-// The structure pinned here is the information-architecture decision. There is one panel, and it
-// is the LAST block of the page in both modes. In the edit form it follows the บันทึกร่าง bar,
-// because an upload is stored at once and is not part of what that button saves. In the details
-// view it follows the last panel, because the details reproduce the printed form and these files
-// are never printed.
+// The structure pinned here is the information-architecture decision. There is one panel. In the
+// edit form it sits just above ยอดรวม, so a rep attaches while still filling the document in, and
+// before the first บันทึกร่าง too: the files are held by the page and sent once the quotation
+// exists. In the details view it is the last block, after the last panel, because the details
+// reproduce the printed form and these files are never printed.
 //
 // Evidence note: every server answer is a vi.fn(). That account and import are REFUSED the files
 // is the server's doing, proven in DealQuotationAttachmentAuthzIntegrationTest; here it is only
@@ -136,12 +136,13 @@ beforeEach(() => {
 });
 
 describe('where the panel sits', () => {
-  it('a draft being edited: last on the page, after the บันทึกร่าง bar, with the file and the picker', async () => {
+  it('a draft being edited: above ยอดรวม, which precedes the บันทึกร่าง bar, with the file and the picker', async () => {
     open('/quotations/5', salesUser);
 
     await waitFor(() => expect(panelHeading()).not.toBeNull());
-    const save = screen.getByRole('button', { name: 'บันทึกร่าง' });
-    expect(follows(save, panelHeading())).toBe(true);
+    const total = screen.getByRole('heading', { name: 'ยอดรวม' });
+    expect(follows(panelHeading(), total)).toBe(true);
+    expect(follows(total, screen.getByRole('button', { name: 'บันทึกร่าง' }))).toBe(true);
     await waitFor(() => expect(fileLink()).not.toBeNull());
     expect(panel().contains(fileLink())).toBe(true);
     expect(fileLink().getAttribute('href')).toBe('/api/deal-quotation-attachments/71/file');
@@ -173,13 +174,13 @@ describe('where the panel sits', () => {
     expect(attachInput()).not.toBeNull();
   });
 
-  it('a quotation that has never been saved: says to save first, offers no picker, asks the server nothing', async () => {
+  it('a quotation that has never been saved: above ยอดรวม, offers the picker, asks the server nothing', async () => {
     open('/quotations/new', salesUser);
 
     await waitFor(() => expect(panelHeading()).not.toBeNull());
-    expect(follows(screen.getByRole('button', { name: 'บันทึกร่าง' }), panelHeading())).toBe(true);
-    expect(panel().textContent).toContain('บันทึกร่าง');
-    expect(panel().querySelector('input[type="file"]')).toBeNull();
+    expect(follows(panelHeading(), screen.getByRole('heading', { name: 'ยอดรวม' }))).toBe(true);
+    expect(attachInput()).not.toBeNull();
+    expect(panel().textContent).toContain('บันทึกร่างครั้งแรก');
     expect(api.dealQuotations.listAttachments).not.toHaveBeenCalled();
   });
 });
@@ -342,4 +343,218 @@ describe('the link to the files, beside the status', () => {
     await waitFor(() => expect(fileLink()).not.toBeNull());
     expect(jumpLink()).toBeNull();
   });
+});
+
+// A rep can pick the vendor's quotation before the first บันทึกร่าง. The page holds the files, and
+// sends them one at a time to the quotation the save has just made, then moves to it.
+describe('files picked before the first บันทึกร่าง', () => {
+  const fileA = new File(['%PDF-A'], 'vendor-a.pdf', { type: 'application/pdf' });
+  const fileB = new File(['%PDF-B'], 'vendor-b.pdf', { type: 'application/pdf' });
+  const testCustomer = { id: 1, name: 'บริษัท ก้าวหน้า คอนสตรัคชั่น จำกัด', taxId: '0105565012345' };
+  const testProject = { id: 1, customerId: 1, name: 'โครงการ Central Ladprao ชั้น B1' };
+
+  function IdProbe() {
+    const { id } = useParams();
+    return <p>navigated-to-{id}</p>;
+  }
+  function openNew(path) {
+    const showToast = vi.fn();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={[path]}>
+          <Routes>
+            <Route path="/quotations/new" element={<QuotationEditorPage user={salesUser} showToast={showToast} />} />
+            <Route path="/quotations/:id" element={<IdProbe />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    return { showToast };
+  }
+
+  // Same complete row the other editor tests fill, so บันทึกร่าง is not gated on anything looser.
+  async function fillOneValidItem() {
+    fireEvent.click(await screen.findByRole('button', { name: /เพิ่มรายการ/ }));
+    fireEvent.change(screen.getByLabelText(/^รุ่น \/ ค้นหาแคตตาล็อก/), { target: { value: 'Trilogy' } });
+    fireEvent.change(screen.getByLabelText(/^สี/), { target: { value: 'Ivory' } });
+    fireEvent.change(screen.getByLabelText(/^ผิว/), { target: { value: 'Lappato' } });
+    fireEvent.change(screen.getByLabelText(/^ขนาด/), { target: { value: '60x120' } });
+    fireEvent.change(screen.getByLabelText(/^ความหนา/), { target: { value: '10' } });
+    fireEvent.change(screen.getByLabelText(/^แผ่น\/ตร\.ม\./), { target: { value: '1.39' } });
+    fireEvent.change(screen.getByLabelText(/^แผ่น\/กล่อง/), { target: { value: '3' } });
+    fireEvent.change(screen.getByLabelText(/^ราคา\/ตร\.ม\./), { target: { value: '850' } });
+    fireEvent.change(screen.getByLabelText(/^จำนวน/), { target: { value: '36' } });
+  }
+
+  async function selectCustomerAndProject(project = testProject) {
+    api.customers.search.mockResolvedValue({ customers: [testCustomer] });
+    api.customers.projects.mockResolvedValue({ projects: [project] });
+    fireEvent.change(await screen.findByLabelText(/^ลูกค้า/), { target: { value: 'ก้าวหน้า' } });
+    fireEvent.mouseDown(await screen.findByRole('option', { name: new RegExp(testCustomer.name) }));
+    await waitFor(() => expect(api.customers.projects).toHaveBeenCalledWith(testCustomer.id));
+    fireEvent.focus(await screen.findByLabelText(/^โครงการ/));
+    fireEvent.mouseDown(await screen.findByRole('option', { name: new RegExp(project.name) }));
+  }
+
+  const pick = (...files) => files.forEach((file) => fireEvent.change(attachInput(), { target: { files: [file] } }));
+  async function save() {
+    const button = screen.getByRole('button', { name: 'บันทึกร่าง' });
+    await waitFor(() => expect(button.disabled).toBe(false));
+    fireEvent.click(button);
+  }
+  function expectSentAfterCreate() {
+    const [created] = api.dealQuotations.create.mock.invocationCallOrder;
+    for (const sent of api.dealQuotations.uploadAttachment.mock.invocationCallOrder) {
+      expect(sent).toBeGreaterThan(created);
+    }
+  }
+
+  beforeEach(() => {
+    api.dealQuotations.create.mockResolvedValue({ quotation: { id: 99 } });
+    api.dealQuotations.uploadAttachment.mockResolvedValue({ attachment: { id: 1 } });
+  });
+
+  it('are sent to the new quotation, in the order picked and after it exists, then the page moves to it', async () => {
+    openNew('/quotations/new?ticket=18');
+    await fillOneValidItem();
+    pick(fileA, fileB);
+    // Held on the page, not sent: there is no quotation to send them to yet.
+    expect(api.dealQuotations.uploadAttachment).not.toHaveBeenCalled();
+
+    await save();
+
+    expect(await screen.findByText('navigated-to-99')).not.toBeNull();
+    expect(api.dealQuotations.create).toHaveBeenCalledTimes(1);
+    expect(api.dealQuotations.uploadAttachment.mock.calls).toEqual([[99, fileA], [99, fileB]]);
+    expectSentAfterCreate();
+  }, 15000);
+
+  it('a refused file is named in a toast, the rest still go up, and the page still moves on', async () => {
+    api.dealQuotations.uploadAttachment
+      .mockRejectedValueOnce(new Error('รองรับเฉพาะไฟล์ PDF, JPG หรือ PNG'))
+      .mockResolvedValue({ attachment: { id: 2 } });
+    const { showToast } = openNew('/quotations/new?ticket=18');
+    await fillOneValidItem();
+    pick(fileA, fileB);
+
+    await save();
+
+    expect(await screen.findByText('navigated-to-99')).not.toBeNull();
+    expect(api.dealQuotations.uploadAttachment.mock.calls).toEqual([[99, fileA], [99, fileB]]);
+    const refusal = showToast.mock.calls.find(([kind]) => kind === 'error');
+    expect(refusal).toBeDefined();
+    expect(refusal[1]).toContain('vendor-a.pdf');
+    expect(refusal[1]).toContain('รองรับเฉพาะไฟล์ PDF, JPG หรือ PNG');
+    // Only the refused file is named.
+    expect(refusal[1]).not.toContain('vendor-b.pdf');
+  }, 15000);
+
+  it('are sent after the inline-create path has made the deal and the quotation', async () => {
+    api.tickets.create.mockResolvedValue({ ticket: { summary: { id: 42 } } });
+    openNew('/quotations/new');
+    await selectCustomerAndProject();
+    await fillOneValidItem();
+    pick(fileA, fileB);
+
+    await save();
+
+    expect(await screen.findByText('navigated-to-99')).not.toBeNull();
+    expect(api.tickets.create).toHaveBeenCalledTimes(1);
+    expect(api.dealQuotations.create).toHaveBeenCalledWith(42, expect.anything());
+    expect(api.dealQuotations.uploadAttachment.mock.calls).toEqual([[99, fileA], [99, fileB]]);
+    expectSentAfterCreate();
+  }, 20000);
+
+  it('the page waits for the uploads before it moves on, with บันทึกร่าง busy meanwhile', async () => {
+    let finish;
+    api.dealQuotations.uploadAttachment.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    openNew('/quotations/new?ticket=18');
+    await fillOneValidItem();
+    pick(fileA);
+
+    await save();
+
+    await waitFor(() => expect(api.dealQuotations.uploadAttachment).toHaveBeenCalledTimes(1));
+    // Created, upload still running: still on the form, and the save button is busy.
+    expect(api.dealQuotations.create).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText('navigated-to-99')).toBeNull();
+    expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).getAttribute('aria-busy')).toBe('true');
+
+    finish({ attachment: { id: 1 } });
+
+    expect(await screen.findByText('navigated-to-99')).not.toBeNull();
+  }, 15000);
+
+  // The editor is one component at both /quotations/new and /quotations/:id, so it is not
+  // re-mounted by the navigate that follows the first save. What it was holding must not outlive
+  // the save, or the next new quotation uploads it again.
+  it('does not carry sent files over to the next new quotation, so a copy is not uploaded again', async () => {
+    api.dealQuotations.get.mockImplementation(async (id) => ({
+      quotation: quotation({ id: Number(id), number: `QT-2026-${String(id).padStart(4, '0')}-1` }),
+    }));
+    api.tickets.create.mockResolvedValue({ ticket: { summary: { id: 42 } } });
+    api.dealQuotations.create
+      .mockResolvedValueOnce({ quotation: { id: 99 } })
+      .mockResolvedValueOnce({ quotation: { id: 100 } });
+    open('/quotations/new?ticket=18', salesUser);
+    await fillOneValidItem();
+    pick(fileA);
+    await save();
+    await waitFor(() => expect(api.dealQuotations.uploadAttachment).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'คัดลอกเป็นใบใหม่' }));
+
+    // The copy starts with nothing held, and says so.
+    await waitFor(() => expect(attachInput()).not.toBeNull());
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'ยอดรวม' })).not.toBeNull());
+    expect(screen.queryAllByTestId('quotation-attachment')).toHaveLength(0);
+    expect(panel().textContent).toContain('ยังไม่มีเอกสารแนบ');
+    expect(panel().textContent).not.toContain('vendor-a.pdf');
+
+    // A copy keeps the source's project name to offer under the new customer.
+    await selectCustomerAndProject({ ...testProject, name: 'โครงการ A' });
+    await save();
+
+    await waitFor(() => expect(api.dealQuotations.create).toHaveBeenCalledTimes(2));
+    // Let the copy's own save finish and the page move to it, so a stray upload would be in by now.
+    expect(await screen.findByText('ใบเสนอราคา QT-2026-0100-1')).not.toBeNull();
+    expect(api.dealQuotations.uploadAttachment).toHaveBeenCalledTimes(1);
+  }, 30000);
+
+  // Held files are sent by the save that creates the quotation, so only that save closes the
+  // picker. A saved draft's autosave must not.
+  it('the picker is closed while the first save runs', async () => {
+    api.dealQuotations.create.mockReturnValue(new Promise(() => {}));
+    openNew('/quotations/new?ticket=18');
+    await fillOneValidItem();
+    expect(attachInput().disabled).toBe(false);
+
+    await save();
+
+    await waitFor(() => expect(api.dealQuotations.create).toHaveBeenCalledTimes(1));
+    expect(attachInput().disabled).toBe(true);
+  }, 15000);
+
+  it('the picker of a saved draft stays open while an autosave runs', async () => {
+    api.dealQuotations.update.mockReturnValue(new Promise(() => {}));
+    open('/quotations/5', salesUser);
+    await waitFor(() => expect(attachInput()).not.toBeNull());
+
+    fireEvent.change(await screen.findByLabelText('หมายเหตุเพิ่มเติม'), { target: { value: 'แก้ไขหมายเหตุ' } });
+
+    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalledTimes(1), { timeout: 10000 });
+    expect(attachInput().disabled).toBe(false);
+  }, 20000);
+
+  it('control: with nothing picked the draft is created and the page moves on, with no upload', async () => {
+    openNew('/quotations/new?ticket=18');
+    await fillOneValidItem();
+
+    await save();
+
+    expect(await screen.findByText('navigated-to-99')).not.toBeNull();
+    expect(api.dealQuotations.create).toHaveBeenCalledTimes(1);
+    expect(api.dealQuotations.uploadAttachment).not.toHaveBeenCalled();
+  }, 15000);
 });
