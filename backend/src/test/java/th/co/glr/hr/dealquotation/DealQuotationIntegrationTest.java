@@ -2475,8 +2475,10 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(renderedStrings(resaved.id()))
             .as("and the rendered document prints it, not the stale one")
             .anyMatch(s -> s.contains("0105566778899"))
-            .anyMatch(s -> s.contains("02-777-7777"))
-            .noneMatch(s -> s.contains("0100000000099"));
+            .noneMatch(s -> s.contains("0100000000099"))
+            // Owner ruling 2026-10-13: the customer-master phone is snapshotted (above) but never
+            // printed; only the ผู้ติดต่อ Phone typed on the quotation is.
+            .noneMatch(s -> s.contains("02-777-7777"));
 
         // Approve, then correct the customer AGAIN: the approved document must not move.
         DealQuotationDto approved = quotationService.approve(
