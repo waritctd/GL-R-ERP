@@ -430,15 +430,28 @@ test.describe('quotation v3 / v3b + customer details — the real service', () =
 
     const filledTh = await render(thaiId);
     expect(xlsHasText(filledTh, `คุณ${contactAndCustomer}   เลขที่ผู้เสียภาษี : ${TAX_ID}`), 'TH B5 carries the tax id').toBe(true);
-    // Owner 2026-10-12 (sales feedback item 3): the Thai document labels the line "Phone", not "โทร.".
-    expect(xlsHasText(filledTh, `Phone ${PHONE}`), 'TH B6 carries the phone').toBe(true);
-    // NOTE: the Thai F-SM-002 has NO address line — DealQuotationRenderAdapter prints
-    // customerAddress on the ENGLISH document only. Not asserted either way here: that is a backend
-    // renderer gap reported in the PR, not behaviour to pin.
+    // Owner 2026-10-13: the customer master's phone is snapshotted but NOT printed. Only the Phone
+    // typed under ผู้ติดต่อ prints, and nothing has been typed yet.
+    expect(xlsHasText(filledTh, `Phone ${PHONE}`), 'TH does not print the customer-master phone').toBe(false);
     const filledEn = await render(englishId);
+    expect(xlsHasText(filledEn, `Address : ${ADDRESS}`), 'EN B6 carries the address').toBe(true);
+    expect(xlsHasText(filledEn, `Address : ${ADDRESS}   Tel.`), 'EN does not print the customer-master phone').toBe(false);
+
+    // The rep types the ผู้ติดต่อ Phone on each draft: that one prints.
+    const TYPED = '086-303-9572';
+    await resave(thaiId, draftBody(contactId, {
+      priceMode: 'SPECIAL_SQM', documentLanguage: 'TH', orderedByPhone: TYPED,
+      items: [tile({ sqmPerPiece: 0.36, specialPriceSqm: 1350 }), plain, adjustment()],
+    }));
+    await resave(englishId, draftBody(contactId, {
+      priceMode: 'DIRECT_NET', documentLanguage: 'EN', orderedByPhone: TYPED,
+      items: [tile({ unitPrice: 15, directNetPrice: 12.5, discountPct: null })],
+    }));
+    // Owner 2026-10-12 (sales feedback item 3): the Thai document labels the line "Phone", not "โทร.".
+    expect(xlsHasText(await render(thaiId), `Phone ${TYPED}`), 'TH B6 carries the typed phone').toBe(true);
     // ONE exact string: the address, then the phone, joined by the adapter's single separator — so
-    // this also proves no "E :" is printed for the contact's missing email, and no doubled separator.
-    expect(xlsHasText(filledEn, `Address : ${ADDRESS}   Tel. ${PHONE}`), 'EN B6: Address + Tel, nothing between').toBe(true);
+    // this also proves no "E :" is printed for the missing email, and no doubled separator.
+    expect(xlsHasText(await render(englishId), `Address : ${ADDRESS}   Tel. ${TYPED}`), 'EN B6: Address + Tel, nothing between').toBe(true);
   });
 
   test('a repeat customer: the NEXT quotation starts with the details already filled', async () => {

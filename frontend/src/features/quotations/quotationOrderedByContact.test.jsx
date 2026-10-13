@@ -12,9 +12,9 @@ globalThis.React = React;
 // Whole-editor cases, several of which fill a complete item row and save.
 vi.setConfig({ testTimeout: 15000 });
 
-// ผู้ติดต่อ gains a Phone and an Email — owner: "ผู้ติดต่อ should also have an Email and Phone this is
-// for sales record only (it should show in the details of the quotation but doesn't need to be
-// render in the actual pdf)".
+// ผู้ติดต่อ gains a Phone and an Email — first a sales record only (owner, 2026-10-06), then
+// reversed by the owner on 2026-10-13: they print on the document's customer contact line when
+// filled, and a blank one prints nothing.
 //
 // ผู้ติดต่อ is the editor's name for `orderedByName`, the free text that prints in the document's
 // ผู้สั่งซื้อ signature slot. The two new fields sit directly under it and are saved beside it
@@ -22,7 +22,7 @@ vi.setConfig({ testTimeout: 15000 });
 // its snapshot), which this editor has not collected since 2026-09-26 and still does not.
 //
 // Evidence note: every server response here is a vi.fn(). What the server stores, refuses and
-// never prints is DealQuotationOrderedByContactIntegrationTest / …RenderTest (Java, real Postgres);
+// prints is DealQuotationOrderedByContactIntegrationTest / …RenderTest (Java, real Postgres);
 // this file is what the editor shows, checks and sends.
 vi.mock('../../api/index.js', async (importOriginal) => {
   const actual = await importOriginal();
@@ -47,7 +47,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
 
 const PHONE = '089-765-4321 ต่อ 77';
 const EMAIL = 'bid.contact@contractor-b.example';
-const NOT_PRINTED = 'ไม่พิมพ์ในใบเสนอราคา';
+const PRINTED_WHEN_FILLED = 'พิมพ์ในใบเสนอราคาเมื่อกรอก';
 const BAD_EMAIL = 'รูปแบบอีเมลไม่ถูกต้อง';
 
 // The same shapes DealQuotationOrderedByContactIntegrationTest refuses on the server. Keep the two
@@ -200,19 +200,20 @@ describe('ผู้ติดต่อ — Phone and Email, directly under the na
     expect([phone.maxLength, email.maxLength]).toEqual([50, 254]);
   });
 
-  // The name beside them prints on the document; these two do not. The line under each says so —
-  // otherwise a rep has every reason to think a phone typed on a quotation goes out on it.
-  it('each says it is for the sales record and is not printed — in both forms', async () => {
+  // The name beside them prints on the document, and so do these two when filled. The line under
+  // each says so, so a rep knows what a phone typed on a quotation does.
+  it('each says it prints in the quotation when filled — in both forms', async () => {
     const first = renderEditor('/quotations/new?ticket=18');
     await screen.findByLabelText(/^ผู้ติดต่อ/);
-    expect(describedBy(screen.getByLabelText('Phone'))).toContain(NOT_PRINTED);
-    expect(describedBy(screen.getByLabelText('Email'))).toContain(NOT_PRINTED);
+    expect(describedBy(screen.getByLabelText('Phone'))).toContain(PRINTED_WHEN_FILLED);
+    expect(describedBy(screen.getByLabelText('Phone'))).not.toContain('ไม่พิมพ์');
+    expect(describedBy(screen.getByLabelText('Email'))).toContain(PRINTED_WHEN_FILLED);
     first.unmount();
 
     renderEditor('/quotations/new');
     await screen.findByLabelText(/^ลูกค้า/);
-    expect(describedBy(screen.getByLabelText('Phone'))).toContain(NOT_PRINTED);
-    expect(describedBy(screen.getByLabelText('Email'))).toContain(NOT_PRINTED);
+    expect(describedBy(screen.getByLabelText('Phone'))).toContain(PRINTED_WHEN_FILLED);
+    expect(describedBy(screen.getByLabelText('Email'))).toContain(PRINTED_WHEN_FILLED);
   });
 });
 

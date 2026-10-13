@@ -124,14 +124,17 @@ public final class DealQuotationRenderAdapter {
             if (!blank(quotation.customerAddress())) {
                 parts.add("Address : " + quotation.customerAddress().trim().replace('\n', ' '));
             }
-            if (!blank(quotation.contactEmail())) {
-                parts.add("E : " + quotation.contactEmail().trim());
+            // Owner ruling 2026-10-13: ONLY the ผู้ติดต่อ e-mail/phone typed on the quotation print,
+            // and nothing when they are null -- no customer-master or contact fallback (see
+            // #printedEmail / #printedPhone). #stripPhoneLabel — the typed value may open with its
+            // OWN label; see its Javadoc.
+            String email = printedEmail(quotation);
+            if (!blank(email)) {
+                parts.add("E : " + email);
             }
-            // Fix (2026-09-15): #effectiveCustomerPhone -- see its Javadoc. #stripPhoneLabel — the
-            // stored value may open with its OWN label; see its Javadoc.
-            String phone = effectiveCustomerPhone(quotation);
-            if (!blank(stripPhoneLabel(phone))) {
-                parts.add("Tel. " + stripPhoneLabel(phone));
+            String phone = printedPhone(quotation);
+            if (!blank(phone)) {
+                parts.add("Tel. " + phone);
             }
             phoneLine = String.join("   ", parts);
         } else {
@@ -178,21 +181,23 @@ public final class DealQuotationRenderAdapter {
                 parts.add("ที่อยู่ " + quotation.customerAddress().trim().replace('\n', ' '));
             }
             // Fix (2026-09-15): production example customer_phone=null, contact_phone=
-            // "062-328-7555", contact_email="qs.twcfurline@gmail.com" printed NEITHER -- this
-            // branch only ever read customerPhone (never contactPhone, which existed on the DTO
-            // unused) and never read contactEmail at all. #effectiveCustomerPhone falls back to the
-            // deal's own contact phone when the customer master carries none, and the e-mail joins
-            // the same ที่อยู่/Phone line the English branch above already folds Address/E/Tel into
-            // (this template has no free row of its own for either — see the bug-fix comment just
-            // above for why the address already lives here).
-            if (!blank(quotation.contactEmail())) {
-                parts.add("Email " + quotation.contactEmail().trim());
+            // "062-328-7555", contact_email="qs.twcfurline@gmail.com" printed NEITHER, so the
+            // contact phone/e-mail became a fallback and the e-mail joined this same ที่อยู่/Phone
+            // line (the English branch above folds Address/E/Tel into one line too; this template
+            // has no free row of its own for either — see the bug-fix comment just above for why
+            // the address already lives here). Owner ruling 2026-10-13 REMOVED every such fallback:
+            // only the ผู้ติดต่อ e-mail/phone typed on the quotation print, and nothing when they
+            // are null (see #printedEmail / #printedPhone). The ADDRESS still prints from the
+            // customer master.
+            String email = printedEmail(quotation);
+            if (!blank(email)) {
+                parts.add("Email " + email);
             }
-            // QT-2026-0032-1 (2026-09-15): B6 printed "โทร. โทร 02 314 354-2" — the customer master
-            // row's own phone value opens with the label. See #stripPhoneLabel's Javadoc.
-            String phone = effectiveCustomerPhone(quotation);
-            if (!blank(stripPhoneLabel(phone))) {
-                parts.add("Phone " + stripPhoneLabel(phone));
+            // QT-2026-0032-1 (2026-09-15): B6 printed "โทร. โทร 02 314 354-2" — the stored phone
+            // value opened with the label. See #stripPhoneLabel's Javadoc.
+            String phone = printedPhone(quotation);
+            if (!blank(phone)) {
+                parts.add("Phone " + phone);
             }
             phoneLine = String.join("   ", parts);
         }
@@ -1320,16 +1325,25 @@ public final class DealQuotationRenderAdapter {
         return !followingVowelOrTone;
     }
 
-    // ── Fix (2026-09-15, production complaint): customer phone falls back to the deal's own ──
-    // ── contact phone; the contact e-mail joins the same line ────────────────────────────────
+    // ── Customer-contact line phone / e-mail ─────────────────────────────────────────────────
+    // 2026-09-15 made the deal's contact phone/e-mail a fallback for the customer-master phone
+    // (production complaint); 2026-10-13 (owner: "if the field is null just don't render
+    // anything") removed every fallback.
 
-    /** The phone to print for this customer: {@code customerPhone} (the customer-master value)
-     * when present, else {@code contactPhone} (the deal's own contact snapshot) -- production
-     * example: {@code customer_phone=null}, {@code contact_phone="062-328-7555"} printed nothing
-     * at all, even though a phone number for this exact deal WAS recorded, just on the contact
-     * rather than the customer row. Shared by both TH/EN branches. */
-    static String effectiveCustomerPhone(DealQuotationDto quotation) {
-        return !blank(quotation.customerPhone()) ? quotation.customerPhone() : quotation.contactPhone();
+    /** Owner ruling 2026-10-13: the phone the customer-contact line prints -- ONLY the ผู้ติดต่อ
+     * phone typed on the quotation ({@code orderedByPhone}), label-stripped and trimmed. Null when
+     * it is null, blank or only a label ("โทร."): no customer-master or contact fallback. Both
+     * TH/EN branches. */
+    static String printedPhone(DealQuotationDto quotation) {
+        String typed = stripPhoneLabel(quotation.orderedByPhone());
+        return typed.isEmpty() ? null : typed;
+    }
+
+    /** The e-mail twin of {@link #printedPhone}: ONLY {@code orderedByEmail}, trimmed; null when
+     * null or blank. */
+    static String printedEmail(DealQuotationDto quotation) {
+        String typed = quotation.orderedByEmail();
+        return blank(typed) ? null : typed.trim();
     }
 
     // ── the customer phone's own label (QT-2026-0032-1, 2026-09-15) ─────────────────────────

@@ -529,12 +529,24 @@ describe('QuotationDocumentView — the header lines the document prints (owner,
     contactName: 'ธนพล ศรีวัฒนกุล', contactPhone: '081-234-5678', contactEmail: 'thanaphon@example.co.th',
   };
 
-  it('shows every filled field', () => {
-    const { getByTestId } = render(<QuotationDocumentView quotation={filled} />);
+  // Owner, 2026-10-13: the phone and e-mail on the printed customer line are the ผู้ติดต่อ ones
+  // typed on the quotation, or nothing — the customer master's phone and the registry contact's
+  // phone/e-mail are not printed, so this panel does not show them as printed either.
+  it('shows every filled field — but not the master phone/e-mail, which the paper no longer prints', () => {
+    const { getByTestId, queryByTestId } = render(<QuotationDocumentView quotation={filled} />);
     expect(getByTestId('doc-address').textContent).toContain('201 ซอยสุขุมวิท 63');
     expect(getByTestId('doc-tax-id').textContent).toContain('0105551234567');
-    expect(getByTestId('doc-customer-phone').textContent).toContain('02-000-0000');
-    expect(getByTestId('doc-contact').textContent).toBe('ติดต่อผู้สั่งซื้อธนพล ศรีวัฒนกุล · โทร. 081-234-5678 · thanaphon@example.co.th');
+    expect(queryByTestId('doc-customer-phone')).toBeNull();
+    expect(getByTestId('doc-contact').textContent).toBe('ติดต่อผู้สั่งซื้อธนพล ศรีวัฒนกุล');
+  });
+
+  it('shows the typed ผู้ติดต่อ phone and e-mail as the printed ones', () => {
+    const { getByTestId } = render(<QuotationDocumentView quotation={{
+      ...filled, orderedByPhone: '089-765-4321 ต่อ 77', orderedByEmail: 'bid.contact@contractor-b.example',
+    }} />);
+    expect(getByTestId('doc-customer-phone').textContent).toContain('089-765-4321 ต่อ 77');
+    expect(getByTestId('doc-contact').textContent)
+      .toBe('ติดต่อผู้สั่งซื้อธนพล ศรีวัฒนกุล · โทร. 089-765-4321 ต่อ 77 · bid.contact@contractor-b.example');
   });
 
   it('a missing field leaves NO bare label and NO dangling separator', () => {
@@ -545,7 +557,7 @@ describe('QuotationDocumentView — the header lines the document prints (owner,
     expect(queryByTestId('doc-tax-id')).toBeNull();
     expect(queryByTestId('doc-customer-phone')).toBeNull();
     const contactLine = getByTestId('doc-contact').textContent;
-    expect(contactLine).toBe('ติดต่อผู้สั่งซื้อธนพล ศรีวัฒนกุล · thanaphon@example.co.th');
+    expect(contactLine).toBe('ติดต่อผู้สั่งซื้อธนพล ศรีวัฒนกุล');
     expect(contactLine).not.toMatch(/·\s*·|·\s*$|โทร\.\s*(·|$)/);
   });
 

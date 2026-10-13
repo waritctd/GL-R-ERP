@@ -221,15 +221,16 @@ public final class DealQuotationDtos {
          * exactly as before. Set per document by the rep; a revision / reorder clone inherits it. */
         boolean hideProjectName,
         /** V192.3 — how to reach the person named in {@link #orderedByName} (the editor's
-         * ผู้ติดต่อ): {@code sales.quotation.ordered_by_phone}. A SALES RECORD only — shown on the
-         * quotation's details and NEVER printed: {@code DealQuotationRenderAdapter} does not read
-         * it. Not {@link #contactPhone}, which is the customer-master contact snapshot the document
-         * header prints. Null when nobody typed one (every pre-V192.3 row). A revision / reorder
+         * ผู้ติดต่อ): {@code sales.quotation.ordered_by_phone}. Shown on the
+         * quotation's details AND (owner ruling 2026-10-13) printed on the document's customer
+         * contact line when filled: see {@code DealQuotationRenderAdapter#printedPhone}. It is
+         * the ONLY phone that line prints. Not {@link #contactPhone}, the customer-master contact
+         * snapshot, which that line does not print. Null when nobody typed one (every pre-V192.3 row). A revision / reorder
          * clone inherits it. */
         String orderedByPhone,
         /** V192.3 — the email beside {@link #orderedByPhone}
-         * ({@code sales.quotation.ordered_by_email}); same record-only, never-printed contract, and
-         * likewise not {@link #contactEmail}. */
+         * ({@code sales.quotation.ordered_by_email}); same contract (the ONLY e-mail the line
+         * prints; {@link #contactEmail} is not printed there). */
         String orderedByEmail
     ) {
         /** This DTO carrying {@link #removedCeoItems} — same device as {@code

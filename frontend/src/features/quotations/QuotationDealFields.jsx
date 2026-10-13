@@ -42,14 +42,15 @@ export function ProjectNamePrintToggle({ id, checked, onChange }) {
   );
 }
 
-// The one line that tells the rep these two are different from the name above them, which DOES
-// print. Said once, under the pair, and tied to both inputs.
-const ORDERED_BY_CONTACT_HINT = 'Phone และ Email เป็นบันทึกของฝ่ายขาย ไม่พิมพ์ในใบเสนอราคา';
+// The one line that tells the rep these two print when filled (a blank one prints nothing). Said
+// once, under the pair, and tied to both inputs.
+const ORDERED_BY_CONTACT_HINT = 'Phone และ Email พิมพ์ในใบเสนอราคาเมื่อกรอก';
 
 /**
- * ผู้ติดต่อ's Phone and Email (V192.3) — owner: "ผู้ติดต่อ should also have an Email and Phone this
- * is for sales record only (it should show in the details of the quotation but doesn't need to be
- * render in the actual pdf)". Rendered directly under the ผู้ติดต่อ name field on both entry paths;
+ * ผู้ติดต่อ's Phone and Email (V192.3) — owner ruling 2026-10-13 (reversing 2026-10-06's "sales record
+ * only, not in the pdf"): Phone and Email print on the document's customer contact line when filled
+ * and are the only phone/email that line prints (the customer-master contact's are not printed); a
+ * blank one prints nothing. Rendered directly under the ผู้ติดต่อ name field on both entry paths;
  * one component for both, for the reason ProjectNamePrintToggle above states. `idSuffix` is
  * "Inline" or "Card", the same pair of suffixes the name field's own two ids carry.
  *

@@ -65,7 +65,7 @@ class EmployeeServiceResetPasswordTest {
         EmployeeAuthRepository loginRepo = mock(EmployeeAuthRepository.class);
         EmployeeLoginRecord record = new EmployeeLoginRecord(
             42L, "GLR-42", "user@glr.co.th", "User", true, null, null, null, null,
-            LocalDate.now(), hash.getValue(), /* mustChangePassword */ true);
+            LocalDate.now(), hash.getValue(), /* mustChangePassword */ true, false);
         when(loginRepo.findByEmail("user@glr.co.th")).thenReturn(Optional.of(record));
         AuthService authService = new AuthService(loginRepo, encoder, org.mockito.Mockito.mock(th.co.glr.hr.audit.AuditService.class));
 
