@@ -18,6 +18,9 @@ import java.util.Locale;
  *       งานขาย involvement is a separate, later change.</li>
  *   <li>SA-ฝ่ายขาย division → {@code sales_manager} if the person is a manager, else {@code sales}.</li>
  *   <li>everything else (including null/blank — treated as inactive employees) → {@code employee}.</li>
+ *   <li>Finally, an active holder of {@code hr.employee.can_create_quotation} whose role came out as
+ *       {@code employee}, {@code qc} or {@code warehouse} acts as {@code sales}; every other role is
+ *       unchanged (owner ruling, Ploy 2026-10-14).</li>
  * </ol>
  *
  * <p>Independently, {@link #isManager} flags anyone whose position contains "ผู้จัดการ"
@@ -52,6 +55,16 @@ public final class DivisionAccessPolicy {
     }
 
     public static String roleFor(EmployeeLoginRecord employee) {
+        String role = divisionRole(employee);
+        // The can_create_quotation grant makes an employee-tier person act as a sales rep.
+        if (employee != null && employee.active() && employee.canCreateQuotation()
+            && ("employee".equals(role) || "qc".equals(role) || "warehouse".equals(role))) {
+            return "sales";
+        }
+        return role;
+    }
+
+    private static String divisionRole(EmployeeLoginRecord employee) {
         String code = divisionCode(employee);
         if ("md".equals(code) || isExecutive(employee)) {
             return "ceo";

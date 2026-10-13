@@ -20,6 +20,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import th.co.glr.hr.auth.EmployeeAuthRepository;
+import th.co.glr.hr.auth.SessionAccountResolver;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.brand.BrandAssets;
 import th.co.glr.hr.catalog.CatalogRepository;
@@ -538,6 +539,61 @@ class TicketChangeCustomerIntegrationTest extends AbstractPostgresIntegrationTes
 
     private ChangeCustomerRequest toCustomerB(Long contactId) {
         return new ChangeCustomerRequest(custB.id(), projectB.id(), contactId);
+    }
+
+    // ── can_create_quotation grant holder outside ฝ่ายขาย acts as sales (owner ruling 2026-10-14) ──
+    // The actor comes from SessionAccountResolver on a real QC-division row, never a hand-written role.
+
+    @Test
+    void qcEmployeeWithGrantWhoCreatedTheDealChangesItsCustomer() {
+        long qcId = createQcEmployee("qc-owner-cc@glr.co.th", true);
+        UserPrincipal actor = new SessionAccountResolver(new EmployeeAuthRepository(jdbc)).current(qcId).orElseThrow();
+        long ticketId = createTicketCreatedBy(qcId);
+
+        ticketService.changeCustomer(ticketId, toCustomerB(null), actor);
+
+        assertThat(ticketRow(ticketId).get("customer_id")).isEqualTo(custB.id());
+    }
+
+    @Test
+    void qcEmployeeWithoutGrantIsRefusedOnHisOwnDeal_andTheCustomerDoesNotMove() {
+        long qcId = createQcEmployee("qc-nogrant-cc@glr.co.th", false);
+        UserPrincipal actor = new SessionAccountResolver(new EmployeeAuthRepository(jdbc)).current(qcId).orElseThrow();
+        long ticketId = createTicketCreatedBy(qcId);
+
+        assertThatThrownBy(() -> ticketService.changeCustomer(ticketId, toCustomerB(null), actor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(403));
+        assertTicketStillUnderCustomerA(ticketId);
+    }
+
+    @Test
+    void qcEmployeeWithGrantIsRefusedOnADealAnotherRepCreated_andTheCustomerDoesNotMove() {
+        long qcId = createQcEmployee("qc-other-cc@glr.co.th", true);
+        UserPrincipal actor = new SessionAccountResolver(new EmployeeAuthRepository(jdbc)).current(qcId).orElseThrow();
+        long ticketId = createTicketUnderCustomerA(); // created by ownerRepId
+
+        assertThatThrownBy(() -> ticketService.changeCustomer(ticketId, toCustomerB(null), actor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(403));
+        assertTicketStillUnderCustomerA(ticketId);
+    }
+
+    private long createQcEmployee(String email, boolean grant) {
+        EmployeeRepository employees = new EmployeeRepository(
+            jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
+        long id = employees.create(new UpsertEmployeeRequest(
+            null, null, "QC ผู้ถือสิทธิ์", null, null, null, null, null, null, null,
+            email, null, "QC", "QC-QC&ISO", "QC-QC&ISO",
+            null, null, null, "ACT", new BigDecimal("30000"), null, null, null, null, null, null, null));
+        jdbc.update("UPDATE hr.employee SET can_create_quotation = :g WHERE employee_id = :id",
+            Map.of("g", grant, "id", id));
+        return id;
+    }
+
+    private long createTicketCreatedBy(long employeeId) {
+        return tickets.create(
+            new CreateTicketRequest("ดีลของ QC", "NORMAL", custA.name(),
+                custA.id(), projectA.id(), contactA.id(), null, null, List.of()),
+            tickets.nextTicketCode(), employeeId, "QC ผู้ถือสิทธิ์");
     }
 
     private long createTicketUnderCustomerA() {

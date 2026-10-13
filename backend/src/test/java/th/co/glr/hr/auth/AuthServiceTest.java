@@ -297,7 +297,8 @@ class AuthServiceTest {
             positionName,
             LocalDate.now(),
             passwordHash,
-            mustChangePassword
+            mustChangePassword,
+            false
         );
     }
 

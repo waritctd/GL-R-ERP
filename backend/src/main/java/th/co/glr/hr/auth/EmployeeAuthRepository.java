@@ -21,6 +21,7 @@ public class EmployeeAuthRepository {
                e.created_at::date AS created_at,
                e.password_hash,
                e.must_change_password,
+               e.can_create_quotation,
                d.division_id,
                d.source_code AS division_code,
                d.name_th AS division_name,
@@ -205,7 +206,8 @@ public class EmployeeAuthRepository {
             rs.getString("position_name"),
             rs.getObject("created_at", LocalDate.class),
             rs.getString("password_hash"),
-            rs.getBoolean("must_change_password")
+            rs.getBoolean("must_change_password"),
+            rs.getBoolean("can_create_quotation")
         );
     }
 
