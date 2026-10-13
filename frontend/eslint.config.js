@@ -4,8 +4,8 @@ import reactHooks from 'eslint-plugin-react-hooks';
 import jsxA11y from 'eslint-plugin-jsx-a11y';
 import globals from 'globals';
 
-// Extracted so the exemption block at the bottom can drop ONE of these rules without
-// silently losing the other. (`no-restricted-syntax: 'off'` would drop both, which is how
+// Extracted so each exemption block at the bottom can drop ONE of these guards without
+// silently losing the others. (`no-restricted-syntax: 'off'` would drop them all, which is how
 // a file ends up quietly exempt from a guard nobody meant to exempt it from.)
 const RAW_FORM_RULE = {
   selector: 'JSXOpeningElement[name.name="form"]',
@@ -51,9 +51,11 @@ const INCLUSIVE_BREAKPOINT_RULES = [
 // An unknown Button variant renders with the browser's own look, and the guard in Button.jsx
 // only throws when the element renders, so a typo in a branch nobody visits still ships. These
 // selectors read the source instead. They report a string that is not a known name when it is
-// the variant of a Button (plain, in braces, in a ternary branch, or after ??, || or &&) or the
+// the variant of a Button (plain, in braces, a branch of a ternary that is the whole value, or
+// the right side of ??, || or && that is the whole value) or the plain string given as the
 // variant key of a buttonVariants call. They cannot see a value that arrives through a
-// variable, an object map, a spread or a prop.
+// variable, an object map, a spread or a prop. They also do not read a ternary nested in
+// another ternary, a template literal, or null and false, which the runtime guard rejects too.
 const BUTTON_VARIANTS = ['primary', 'secondary', 'success', 'danger', 'text', 'icon'];
 
 const BUTTON_VARIANT_MESSAGE =
@@ -131,18 +133,20 @@ export default [
     },
   },
   {
-    // The one exemption: SafeForm.jsx's own <form> IS the primitive the rule above tells every
-    // other file to use instead. It drops RAW_FORM_RULE only -- turning the whole rule off here
-    // would quietly exempt this file from the breakpoint guard too, for no reason.
+    // SafeForm.jsx's own <form> IS the primitive the rule above tells every other file to use
+    // instead. It drops RAW_FORM_RULE only -- turning the whole rule off here would quietly
+    // exempt this file from the breakpoint and Button variant guards too, for no reason.
     files: ['src/components/common/SafeForm.jsx'],
     rules: {
       'no-restricted-syntax': ['error', ...INCLUSIVE_BREAKPOINT_RULES, ...BUTTON_VARIANT_RULES],
     },
   },
   {
-    // Button.test.jsx renders an unknown variant on purpose, to test the runtime guard in
-    // Button.jsx. It drops the variant entries only, so the form and breakpoint guards stay on.
-    files: ['src/components/common/Button.test.jsx'],
+    // The two test files of the guard write an unknown variant on purpose: Button.test.jsx to
+    // test the runtime guard, Button.lint.test.js to make that guard list its names. They drop
+    // the variant entries only, so the form and breakpoint guards stay on. Exempt by path, like
+    // SafeForm.jsx above, so that this file is the one place that grants an exemption.
+    files: ['src/components/common/Button.test.jsx', 'src/components/common/Button.lint.test.js'],
     rules: {
       'no-restricted-syntax': ['error', RAW_FORM_RULE, ...INCLUSIVE_BREAKPOINT_RULES],
     },
