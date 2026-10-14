@@ -133,7 +133,8 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
         decisionService = new PricingDecisionService(decisionRepository, pricingRequests, costingRepository,
             tickets, fxRates, notifications, landedCostCalculator, formulaEngine);
         TicketService ticketService = new TicketService(tickets, notifications,
-            objectMapper, customers, new QuotationRenderer(), pricingRequestService, new EmployeeAuthRepository(jdbc));
+            objectMapper, customers, new QuotationRenderer(), pricingRequestService, new EmployeeAuthRepository(jdbc), new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
+            new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
 
         Mailer noMail = new Mailer() {
             @Override
@@ -580,6 +581,35 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
         for (DealQuotationItemDto item : switched.items()) {
             assertThat(item.priceChangedFromCeo()).isTrue();
         }
+    }
+
+    /** Mixed price modes (V192.5, sales feedback #14 / owner 2026-10-06) are for the quotations sales
+     * price THEMSELVES. A quotation created from a pricing request carries the CEO's decision, and
+     * that decision has exactly one price mode ({@code pricing_decision.price_mode}); every
+     * "changed from the CEO" comparison on this origin is made against it, row by row. Letting
+     * such a document go MIXED would leave those comparisons with nothing sound to compare to —
+     * so it is refused outright, with the stored document untouched, rather than accepted and
+     * silently flagged. (Switching it to ONE other mode is still allowed and still flagged — the
+     * test above.) */
+    @Test
+    void aPricingRequestQuotation_cannotBeSwitchedToMixed() {
+        PricingDecisionDto decision = approvedDecision("NET",
+            items -> List.of(discountItem(items.get(0).id(), BigDecimal.ZERO)));
+        DealQuotationDto quotation = quotationService.createFromPricingRequest(decision.pricingRequestId(), salesActor);
+
+        List<ItemInput> eachStatingItsMode = quotation.items().stream()
+            .map(item -> existingTileInput(item).withPriceMode("NET"))
+            .toList();
+        assertThatThrownBy(() -> quotationService.update(quotation.id(),
+                upsertRequestWithItems(quotation, "MIXED", eachStatingItsMode), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("คำขอราคา");
+
+        DealQuotationDto untouched = quotationService.get(quotation.id(), salesActor);
+        assertThat(untouched.priceMode()).isEqualTo("NET");
+        assertThat(untouched.priceModeChangedFromCeo()).isFalse();
+        assertThat(untouched.items()).extracting(DealQuotationItemDto::priceMode).containsOnlyNulls();
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────

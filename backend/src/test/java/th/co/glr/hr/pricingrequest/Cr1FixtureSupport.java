@@ -96,7 +96,8 @@ abstract class Cr1FixtureSupport extends AbstractPostgresIntegrationTest {
         leadTimeChangeService = new LeadTimeChangeService(new LeadTimeChangeRepository(jdbc), factoryQuotes,
             pricingRequests, tickets, notifications);
         TicketService ticketService = new TicketService(tickets, notifications, objectMapper, customers,
-            new QuotationRenderer(), pricingRequestService, new EmployeeAuthRepository(jdbc));
+            new QuotationRenderer(), pricingRequestService, new EmployeeAuthRepository(jdbc), new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
+            new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
 
         salesRepId = createEmployee(employees, "พนักงานขาย ทดสอบ", "sales-cr1@glr.co.th", "SALES", "แผนกขาย");
         otherSalesRepId = createEmployee(employees, "พนักงานขาย อีกคน", "sales-other-cr1@glr.co.th", "SALES", "แผนกขาย");

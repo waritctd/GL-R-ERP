@@ -12,6 +12,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -77,8 +78,9 @@ import th.co.glr.hr.ticket.TicketSummaryDto;
  * calls {@code sessions.requireUser} and delegates) — this codebase's standing convention.
  *
  * <p><strong>Per-employee grant (owner ruling, Ploy 2026-09-09):</strong> ภิญญดา (employee 144,
- * QC&amp;ISO / role {@code qc}) must be able to create quotations without being given the
- * {@code sales} or {@code sales_manager} role. {@code hr.employee.can_create_quotation}
+ * QC&amp;ISO) must be able to create quotations from outside ฝ่ายขาย. Since 2026-10-14 a holder
+ * whose division role is employee/qc/warehouse also resolves to role {@code sales}
+ * ({@code DivisionAccessPolicy#roleFor}). {@code hr.employee.can_create_quotation}
  * (V165) is a CAPABILITY in the exact shape of the existing admin capability
  * ({@code hr.employee.is_admin} → {@link EmployeeAuthRepository#isAdmin} →
  * {@code AuthResponse.admin}): a plain boolean, read LIVE at decision time via
@@ -98,6 +100,17 @@ public class DealQuotationService {
     // v3: a PLAIN row applies its own discount percent the same way WastageCalculator does
     // for a tile (which keeps its own copy of this, being a no-Spring pure class).
     private static final BigDecimal HUNDRED = BigDecimal.valueOf(100);
+
+    // V192.3 — ผู้ติดต่อ's Phone and Email: kept beside orderedByName; printed on the document when filled (owner ruling 2026-10-13).
+    // The two limits are the widths of sales.quotation.ordered_by_phone / ordered_by_email, so a
+    // value too long for its column is a 400 from #resolveOrderedByPhone / #resolveOrderedByEmail
+    // and never a SQL error.
+    private static final int ORDERED_BY_PHONE_MAX = 50;
+    private static final int ORDERED_BY_EMAIL_MAX = 254;
+    // One @, no whitespace, a dot in the domain: "somchai@example" is the ".com" nobody typed. The
+    // editor checks the same shape before it saves (quotationMeta.js#orderedByEmailError); keep the
+    // two in step, or the rep meets a refusal the form gave no warning of.
+    private static final Pattern ORDERED_BY_EMAIL_SHAPE = Pattern.compile("[^\\s@]+@[^\\s@]+\\.[^\\s@]+");
 
     private static final Set<String> EDIT_ROLES = Set.of("sales", "sales_manager");
     private static final Set<String> APPROVE_ROLES = Set.of("sales_manager", "ceo");
@@ -287,6 +300,9 @@ public class DealQuotationService {
         ContactSnapshot contact = resolveContact(request.contactId(), null, ticket);
         String priceMode = resolvePriceMode(request.priceMode());
         String documentLanguage = resolveDocumentLanguage(request.documentLanguage());
+        // V192.5 — #create only ever makes a DEAL_DIRECT document, so the origin half of the rule
+        // cannot bite here; the language half can.
+        requirePriceModeAllowed(priceMode, documentLanguage, false);
         String currency = resolveCurrency(documentLanguage, request.currency());
         List<NewItem> items = buildItems(request.items(), priceMode, documentLanguage);
         BigDecimal subtotal = WastageCalculator.subtotal(items.stream().map(NewItem::lineAmount).toList());
@@ -312,6 +328,9 @@ public class DealQuotationService {
         Integer creditDays = noDeposit ? null : request.creditDays();
         requireValidCreditDays(remainderMode, creditDays);
         String fullPaymentTerm = resolveFullPaymentTerm(request.depositPercent(), request.fullPaymentTerm());
+        // V192.3 — refused here, before a quotation number is taken and before anything is written.
+        String orderedByPhone = resolveOrderedByPhone(request.orderedByPhone());
+        String orderedByEmail = resolveOrderedByEmail(request.orderedByEmail());
         // Owner feedback 2026-09-11 ("มีรันเลข -1 -2 ต่อท้ายตี้วแต่แรก" / "ใบแรกเป็น QT-2026-0014-1"):
         // the FIRST issued document now carries the revision suffix too, so a fresh sequence value
         // ("0014") is minted here and immediately formatted as revision 1 of itself
@@ -345,8 +364,17 @@ public class DealQuotationService {
             null, null,
             // Owner-directed reversal of F2 (2026-09-26) — manual, optional buyer name; blank
             // clears it to null, same discipline as every other free-text header field here.
-            blankToNull(request.orderedByName())));
+            blankToNull(request.orderedByName()),
+            orderedByPhone, orderedByEmail));
         // Deal-stage rule hook — owned by the entry-channel/stage-route work (.design/deal-route-staging §5 Flow 10): recipient → stage, forward-only via TicketService.autoAdvanceStage. Intentionally empty here.
+        // Sales feedback #5 (V192.1, 2026-10-06) — "ไม่แสดงชื่อโครงการในใบเสนอราคา". A brand-new
+        // document prints its project unless the request says otherwise (null = false on CREATE),
+        // so only an explicit true needs writing: the row was just inserted on the column's own
+        // DEFAULT FALSE. A statement of its own rather than one more InsertDraftParams argument —
+        // see DealQuotationRepository#updateHideProjectName.
+        if (Boolean.TRUE.equals(request.hideProjectName())) {
+            quotations.updateHideProjectName(id, true);
+        }
         return requireQuotation(id);
     }
 
@@ -564,8 +592,8 @@ public class DealQuotationService {
             summary.id(), decision.id(),
             // Owner-directed reversal of F2 (2026-09-26) — nothing to inherit on a brand-new
             // PRICING_REQUEST-origin create; the rep sets a manual name later via #update, same
-            // as any DEAL_DIRECT document.
-            null));
+            // as any DEAL_DIRECT document. V192.3: nor a phone or an email for that name.
+            null, null, null));
 
         pricingRequests.addEvent(summary.id(), summary.ticketId(), actor.id(), actor.name(),
             PricingRequestEventKind.CUSTOMER_QUOTATION_CREATED, summary.status(), summary.status(),
@@ -664,7 +692,13 @@ public class DealQuotationService {
             item.vat(), item.lineTotal(), item.originCountry(), item.leadTimeMinDays(), item.leadTimeMaxDays(),
             item.itemNotes(), item.descriptionLine(), item.lineType(), item.quantity(), item.unit(),
             item.specialPriceSqm(), item.adjustmentPct(), item.adjustmentDeadline(), item.catalogWidthMm(),
-            item.catalogHeightMm(), item.sqmPerBox(), item.roundToFullBox(), prItemId, decItemId);
+            item.catalogHeightMm(), item.sqmPerBox(), item.roundToFullBox(), prItemId, decItemId,
+            // V192.2 — whatever the row already carries (a revision's copy of its parent's typed
+            // prices; null on a row freshly built from the CEO's decision).
+            item.listPriceSqm(), item.directNetPriceSqm(),
+            // V192.5 — always null today (this origin can never be MIXED — #requirePriceModeAllowed),
+            // passed through so that stays a rule rather than an accident of this constructor.
+            item.priceMode());
     }
 
     /** M4(a)/(b) fix (Opus review, 2026-09-20): refuses changing a CEO-linked line's TYPE (must
@@ -727,6 +761,25 @@ public class DealQuotationService {
      */
     private static DealQuotationDto forViewer(DealQuotationDto quotation, UserPrincipal actor) {
         return "account".equals(actor.role()) ? quotation.withoutPriceInternals() : quotation;
+    }
+
+    /** The quotation, for a caller who may EDIT it. This applies the identity rule {@link #update}
+     * applies ({@link #requireEditAccessForQuotation}) and no rule about its status. It is
+     * package-private, for {@link DealQuotationAttachmentService}. Who may attach a file is who
+     * may edit the quotation, and that rule stays written once, in this class. */
+    DealQuotationDto getForEdit(long id, UserPrincipal actor) {
+        DealQuotationDto quotation = requireQuotation(id);
+        requireEditAccessForQuotation(actor, quotation);
+        return quotation;
+    }
+
+    /** Whether a revision of this quotation is still DRAFT or PENDING_APPROVAL, which is what
+     * {@link #cancel} refuses on. Like cancel it takes the deal's lock first, so a resubmission
+     * that is minting one right now is waited for and then seen, and none can start until the
+     * caller's transaction ends. Package-private, for {@link DealQuotationAttachmentService}. */
+    boolean hasOpenRevisionUnderLock(DealQuotationDto quotation) {
+        quotations.lockTicket(quotation.ticketId());
+        return quotations.hasOpenRevision(quotation.id());
     }
 
     public List<DealQuotationDto> listForTicket(long ticketId, UserPrincipal actor) {
@@ -873,10 +926,11 @@ public class DealQuotationService {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         // The preview endpoint carries no quotation, so it has no per-quotation price mode to
-        // read. Infer it from the row itself: a ราคาพิเศษ means SPECIAL_SQM, a typed net means
-        // DIRECT_NET, and neither means NET. This keeps `POST .../calculate-line`'s request shape
-        // unchanged (no new endpoint, no new parameter) and cannot disagree with the saved
-        // document, because #buildTileItem reads exactly the same two fields.
+        // read. #inferPriceMode takes it from the row itself: the mode the row STATES when it
+        // states one (V192.5 — a mixed document's row always does), otherwise a ราคาพิเศษ means
+        // SPECIAL_SQM, a typed net (per แผ่น or per ตร.ม.) means DIRECT_NET, and neither means NET.
+        // The guess cannot disagree with the saved document, because #buildTileItem prices the row
+        // from those same fields.
         // The preview carries no quotation, so it has no language either — TH, whose 7% is what the
         // stored per-item vat column has always held. The preview never shows that column and the
         // saved row is recomputed by #buildItems with the document's REAL language, so this cannot
@@ -944,6 +998,9 @@ public class DealQuotationService {
         String documentLanguage = isBlank(request.documentLanguage())
             ? resolveDocumentLanguage(existing.documentLanguage())
             : resolveDocumentLanguage(request.documentLanguage());
+        // V192.5 — checked on the RESOLVED pair, so it also catches a switch to English on an
+        // already-mixed draft and a save that omits the mode on one, not only an explicit MIXED.
+        requirePriceModeAllowed(priceMode, documentLanguage, "PRICING_REQUEST".equals(existing.origin()));
         // ⚠️ NOT enforced here (owner ruling 2026-09-13, "Clear all prices on switch"): a TH↔EN switch
         // must not carry ANY typed amount into the other currency as the same number — list price,
         // net price, per-sqm price, PLAIN price and flat adjustment are all re-entered by the rep.
@@ -989,6 +1046,10 @@ public class DealQuotationService {
         // is always rendered, never omitted), so, same as printedByDisplayId/projectName, there is
         // no "missing keeps stored" case: a null on the wire means UNticked, exactly like create.
         boolean omitContactHonorific = resolveOmitContactHonorific(request.omitContactHonorific());
+        // V192.3 — same check as #create, and likewise before the header is written: a refused
+        // phone or email leaves the stored pair, and everything else on the row, as it was.
+        String orderedByPhone = resolveOrderedByPhone(request.orderedByPhone());
+        String orderedByEmail = resolveOrderedByEmail(request.orderedByEmail());
         // Compare-and-set FIRST, before touching a single item row — a header update that finds
         // the row no longer DRAFT (a concurrent submit/approve) must leave the items untouched.
         // F7 (2026-09-10): re-snapshot the ลูกค้า columns from the LIVE customer row on every DRAFT
@@ -1013,7 +1074,9 @@ public class DealQuotationService {
             // Owner-directed reversal of F2 (2026-09-26) — manual, optional buyer name; the
             // editor always sends its current value, so blank genuinely clears it back to the
             // dotted placeholder, same discipline as projectName/customerNotes above.
-            blankToNull(request.orderedByName()));
+            blankToNull(request.orderedByName()),
+            // V192.3 — and so do a blank phone and a blank email beside it.
+            orderedByPhone, orderedByEmail);
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงแก้ไขไม่ได้");
         }
@@ -1030,6 +1093,19 @@ public class DealQuotationService {
             }
             if (recipientChanged) {
                 // Deal-stage rule hook — owned by the entry-channel/stage-route work (.design/deal-route-staging §5 Flow 10): recipient → stage, forward-only via TicketService.autoAdvanceStage. Intentionally empty here.
+            }
+        }
+        // Sales feedback #5 (V192.1, 2026-10-06) — "ไม่แสดงชื่อโครงการในใบเสนอราคา". UNLIKE every
+        // header field written just above, a MISSING value here means "keep what is stored", not
+        // "clear it" (see UpsertDealQuotationRequest#hideProjectName): a browser tab still running
+        // the bundle from before this field existed sends none, and reading that as false would
+        // start printing a project name the rep had chosen to hide. So this writes only when the
+        // request states a value AND it differs. The header CAS above has just proven the row is
+        // still a DRAFT inside this transaction, and updateHideProjectName's own WHERE re-states
+        // DRAFT, so 0 rows here can only mean the row moved under us.
+        if (request.hideProjectName() != null && request.hideProjectName() != existing.hideProjectName()) {
+            if (quotations.updateHideProjectName(id, request.hideProjectName()) == 0) {
+                throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงแก้ไขไม่ได้");
             }
         }
         // Item ids are STABLE across a draft save (fix for the picture-dropping race this
@@ -1268,8 +1344,14 @@ public class DealQuotationService {
 
     @Transactional
     public DealQuotationDto submit(long id, UserPrincipal actor) {
+        DealQuotationDto found = requireQuotation(id);
+        requireEditAccessForQuotation(actor, found);
+        // The deal's lock, like create/approve/cancel/reorder: TicketService#changeCustomer takes it
+        // too, and a submit that slipped between its "nothing sent yet" check and its writes would
+        // leave a PENDING_APPROVAL document printing the old customer. Re-read under the lock: what
+        // was loaded above may be what the change we just waited for rewrote.
+        quotations.lockTicket(found.ticketId());
         DealQuotationDto quotation = requireQuotation(id);
-        requireEditAccessForQuotation(actor, quotation);
         // GLA-123 slice S2: submit is now LIVE for BOTH origins — every validation below (item
         // completeness, payment term, validity date) is origin-agnostic and applies unchanged;
         // only approve/reject/issue diverge (see #approve/#reject's own origin branch).
@@ -2406,7 +2488,9 @@ public class DealQuotationService {
             prSource ? source.pricingRequestId() : null, sourceDecisionId,
             // Owner-directed reversal of F2 (2026-09-26) — the copy inherits the source's manual
             // buyer name VERBATIM, same "copy every header field" rule as everything else here.
-            source.orderedByName()));
+            // V192.3: and the phone and email recorded for that person — a re-issue is the same
+            // job and the same person to call. Stored values, already checked when they were saved.
+            source.orderedByName(), source.orderedByPhone(), source.orderedByEmail()));
         // GLA-75: "the copy carries the source's items verbatim" includes their pictures — the new
         // row's items point at the source's (immutable, shared) picture rows, matched by seq.
         // Shared by revisions and reorder clones alike.
@@ -2416,6 +2500,13 @@ public class DealQuotationService {
         // CEO-required-when-changed gate (#requireCeoApprovalIfChanged).
         if (prSource && source.itemsRemovedFromCeoCount() > 0) {
             quotations.incrementItemsRemovedFromCeo(newId, source.itemsRemovedFromCeoCount());
+        }
+        // Sales feedback #5 (V192.1, 2026-10-06): the copy inherits "ไม่แสดงชื่อโครงการในใบเสนอราคา"
+        // VERBATIM, the same "copy every header field" rule as everything above — re-issuing a
+        // document that hid its project must not start printing it. The new row is a DRAFT on the
+        // column's DEFAULT FALSE, so only a true needs writing.
+        if (source.hideProjectName()) {
+            quotations.updateHideProjectName(newId, true);
         }
         return newId;
     }
@@ -2820,9 +2911,21 @@ public class DealQuotationService {
         List<NewItem> items = new ArrayList<>();
         BigDecimal adjustmentBase = BigDecimal.ZERO;
         int seq = 0;
+        boolean mixed = WastageCalculator.PRICE_MODE_MIXED.equals(priceMode);
         for (ItemInput input : ordered) {
             seq++;
-            NewItem item = buildItem(input, seq, priceMode, documentLanguage, adjustmentBase);
+            // V192.5 — the mode THIS row is priced in: the document's, unless the document is MIXED,
+            // in which case it is the one the row states. Everything below #buildItem takes it as
+            // "the price mode" exactly as before, which is the whole design: a row of a mixed
+            // document runs the very code a single-mode document's row runs.
+            String rowPriceMode = rowPriceMode(input, priceMode, seq);
+            NewItem item = buildItem(input, seq, rowPriceMode, documentLanguage, adjustmentBase);
+            // …and it is STORED on the row only where it is the row's to decide. On a single-mode
+            // document the column stays NULL, so nothing a client left on a row can sit there
+            // unseen and decide a price the day the document is switched to MIXED.
+            if (mixed && WastageCalculator.LINE_TYPE_TILE.equals(item.lineType())) {
+                item = item.withPriceMode(rowPriceMode);
+            }
             if (!WastageCalculator.LINE_TYPE_ADJUSTMENT.equals(item.lineType())) {
                 adjustmentBase = adjustmentBase.add(item.lineAmount());
             }
@@ -2874,6 +2977,72 @@ public class DealQuotationService {
         return isBlank(priceMode) ? WastageCalculator.PRICE_MODE_NET : priceMode.trim();
     }
 
+    /**
+     * Where a MIXED document (V192.5 — each tile row in its own price mode) is allowed at all.
+     * Sales feedback #14 / owner 2026-10-06 asked for it on the quotations sales price themselves:
+     *
+     * <ul>
+     *   <li><b>Thai documents only.</b> On the English form SPECIAL_SQM is not just another way to
+     *       reach a per-piece net — it changes the row's UNIT and quantity (USD per sqm, quantity
+     *       in square metres; {@link WastageCalculator#isEnglishPerSqm}), and submit checks stored
+     *       rows on that basis for the document as a whole. Mixing there is a different document
+     *       nobody asked for.</li>
+     *   <li><b>Never a quotation that came from a pricing request.</b> Its mode is the CEO's
+     *       decision ({@code pricing_decision.price_mode}, exactly one per decision), and every
+     *       "changed from the CEO" comparison on that origin is made against it. A mixed document
+     *       would leave those comparisons nothing sound to compare to — so it is refused, rather
+     *       than accepted and quietly flagged.</li>
+     * </ul>
+     *
+     * Any other mode passes untouched: this method adds no rule to a single-mode document.
+     */
+    private void requirePriceModeAllowed(String priceMode, String documentLanguage, boolean pricingRequestOrigin) {
+        if (!WastageCalculator.PRICE_MODE_MIXED.equals(priceMode)) {
+            return;
+        }
+        if (pricingRequestOrigin) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "ใบเสนอราคาที่สร้างจากคำขอราคาใช้วิธีคิดราคาตามที่ CEO อนุมัติ จึงกรอกราคาแบบผสมหลายวิธีไม่ได้");
+        }
+        if (!WastageCalculator.DOCUMENT_LANGUAGE_TH.equals(documentLanguage)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "การกรอกราคาแบบผสมหลายวิธีในใบเดียว ใช้ได้กับใบเสนอราคาภาษาไทยเท่านั้น");
+        }
+    }
+
+    /**
+     * The price mode ONE row of a document being written is priced in — the write-path face of
+     * {@link WastageCalculator#rowPriceMode}, which states the rule. It differs from that method in
+     * the one way a WRITE must: on a MIXED document a tile row that states no mode is REFUSED,
+     * naming the row, where a read falls back to NET. Guessing a mode from whichever price fields
+     * a row happens to carry is exactly the silent repricing the rest of this class is built to
+     * prevent (see #update's own comment on a missing document mode).
+     *
+     * <p>A PLAIN or ADJUSTMENT row has no price mode on any document; on a MIXED one it is handed
+     * NET, the mode such a row has always been built under — never MIXED itself, which nothing
+     * below this point knows how to price.
+     */
+    private String rowPriceMode(ItemInput input, String documentPriceMode, int rowNumber) {
+        if (!WastageCalculator.PRICE_MODE_MIXED.equals(documentPriceMode)) {
+            return documentPriceMode;
+        }
+        if (!WastageCalculator.LINE_TYPE_TILE.equals(lineType(input))) {
+            return WastageCalculator.PRICE_MODE_NET;
+        }
+        if (isBlank(input.priceMode())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "รายการที่ " + rowNumber
+                + ": กรุณาเลือกวิธีคิดราคาของรายการนี้ (ใบเสนอราคานี้กรอกราคาแบบผสมหลายวิธี)");
+        }
+        String rowMode = input.priceMode().trim();
+        // Bean validation already bounds this on the HTTP path; the service is also called
+        // directly (tests, other services), so the bound is restated where it is relied on.
+        if (!WastageCalculator.isRowPriceMode(rowMode)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "รายการที่ " + rowNumber + ": วิธีคิดราคาไม่ถูกต้อง: " + rowMode);
+        }
+        return rowMode;
+    }
+
     /** v3b: {@code null}/blank reads as TH — the Thai F-SM-002, the only document that existed
      * before V169 and what every pre-V169 row stores. */
     private String resolveDocumentLanguage(String documentLanguage) {
@@ -2913,6 +3082,42 @@ public class DealQuotationService {
      */
     private boolean resolveOmitContactHonorific(Boolean omitContactHonorific) {
         return Boolean.TRUE.equals(omitContactHonorific);
+    }
+
+    /**
+     * V192.3 — ผู้ติดต่อ's Phone as it is stored: trimmed, and a blank one read as none. Free text
+     * on purpose (an extension or several numbers is normal), so only its length is checked, and on
+     * the TRIMMED value — which is why this is here and not a bean-validation annotation on the
+     * request. Shared by {@link #create}/{@link #update}; both call it before they write anything.
+     */
+    private String resolveOrderedByPhone(String orderedByPhone) {
+        String phone = blankToNull(orderedByPhone);
+        if (phone != null && phone.length() > ORDERED_BY_PHONE_MAX) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "Phone ของผู้ติดต่อยาวเกิน " + ORDERED_BY_PHONE_MAX + " ตัวอักษร");
+        }
+        return phone;
+    }
+
+    /**
+     * V192.3 — ผู้ติดต่อ's Email as it is stored: trimmed, a blank one read as none, and otherwise
+     * kept exactly as typed (it records what the rep was given; it is not a login to normalise).
+     * Refused when it is too long for its column or does not look like an address
+     * ({@link #ORDERED_BY_EMAIL_SHAPE}).
+     */
+    private String resolveOrderedByEmail(String orderedByEmail) {
+        String email = blankToNull(orderedByEmail);
+        if (email == null) {
+            return null;
+        }
+        if (email.length() > ORDERED_BY_EMAIL_MAX) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "Email ของผู้ติดต่อยาวเกิน " + ORDERED_BY_EMAIL_MAX + " ตัวอักษร");
+        }
+        if (!ORDERED_BY_EMAIL_SHAPE.matcher(email).matches()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Email ของผู้ติดต่อ: รูปแบบอีเมลไม่ถูกต้อง");
+        }
+        return email;
     }
 
     /**
@@ -3036,12 +3241,26 @@ public class DealQuotationService {
     // language (WastageCalculator#isEnglishPerSqm): VAT-inclusive baht turned into a per-piece net
     // on Thai (unchanged), USD per sqm with the quantity printed in sqm on English.
 
-    /** See {@link #calculateLine} — the stateless preview has no quotation to read a mode off. */
+    /** See {@link #calculateLine} — the stateless preview has no quotation to read a mode off.
+     *
+     * <p>V192.5: a row that STATES its mode is previewed in it. On a mixed document the editor
+     * always does, and it must win over the guess below — a row just switched from ราคาพิเศษ to
+     * ราคาตั้ง − ส่วนลด % can still carry the ราคาพิเศษ in its (now hidden) box, and guessing from
+     * the fields would go on previewing the price the rep has just turned away from. */
     private String inferPriceMode(ItemInput input) {
+        if (!isBlank(input.priceMode())) {
+            String stated = input.priceMode().trim();
+            if (!WastageCalculator.isRowPriceMode(stated)) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "วิธีคิดราคาไม่ถูกต้อง: " + stated);
+            }
+            return stated;
+        }
         if (input.specialPriceSqm() != null) {
             return WastageCalculator.PRICE_MODE_SPECIAL_SQM;
         }
-        if (input.directNetPrice() != null) {
+        // V192.2: a net typed per ตร.ม. says "ราคาสุทธิ" exactly as one typed per แผ่น does. Without
+        // this the row would preview as NET, off its list price — a number for a price nobody typed.
+        if (input.directNetPrice() != null || input.directNetPriceSqm() != null) {
             return WastageCalculator.PRICE_MODE_DIRECT_NET;
         }
         return WastageCalculator.PRICE_MODE_NET;
@@ -3070,6 +3289,13 @@ public class DealQuotationService {
     private NewItem buildItem(ItemInput input, Integer rowNumber, String priceMode,
                               String documentLanguage, BigDecimal adjustmentBase) {
         String lineType = lineType(input);
+        // V192.2 (sales feedback #1, 2026-10-06): a Thai TILE row may state its prices per ตร.ม.
+        // including VAT. Converted HERE, first, so that everything below — the price rules, the
+        // completeness check, WastageCalculator, the stored row — keeps seeing the per-แผ่น figures
+        // it has always worked with and none of it had to learn a second unit.
+        if (WastageCalculator.LINE_TYPE_TILE.equals(lineType)) {
+            input = withPerPiecePricesFromPerSqm(input, priceMode, documentLanguage, rowNumber);
+        }
         // ALWAYS, including the lenient preview path — see #requirePriceValidForType's Javadoc for
         // why this is not gated on rowNumber the way the completeness check is.
         requirePriceValidForType(input, lineType, priceMode, documentLanguage, rowNumber);
@@ -3095,6 +3321,75 @@ public class DealQuotationService {
             default -> throw new ApiException(HttpStatus.BAD_REQUEST,
                 "ประเภทรายการไม่ถูกต้อง: " + lineType);
         };
+    }
+
+    /**
+     * Sales feedback #1 (2026-10-06, V192.2) — "แก้เป็น ตร.ม. รวม VAT ทุกแบบ". Returns {@code input}
+     * with its per-แผ่น prices filled in from the per-ตร.ม. ones, when it has any:
+     *
+     * <ul>
+     *   <li>{@code listPriceSqm} → {@code unitPrice} (ราคาตั้ง), in every price mode;</li>
+     *   <li>{@code directNetPriceSqm} → {@code directNetPrice} (ราคาสุทธิ), in DIRECT_NET only —
+     *       under another mode it prices nothing, exactly as {@code specialPriceSqm} is only read
+     *       in its own.</li>
+     * </ul>
+     *
+     * <p>Each is independent: a row may state one price per ตร.ม. and the other per แผ่น (a draft
+     * saved before this change, with one box since retyped). A per-ตร.ม. price REPLACES its
+     * per-แผ่น counterpart — one sent beside it is not consulted — so the stored row's typed and
+     * derived figures cannot disagree. A row with neither is returned untouched and is priced
+     * exactly as before: that is every English document, every row saved before V192.2, and every
+     * row created from a pricing request.
+     *
+     * <p>Refused rather than guessed at:
+     * <ul>
+     *   <li>on an English document — USD with no VAT row, where "รวม VAT" means nothing;</li>
+     *   <li>a zero or negative price;</li>
+     *   <li>a row with no area per piece. Never a fallback to reading 1,800 per ตร.ม. as 1,800 a
+     *       piece. This holds on the lenient calculate-line preview too: there is no honest number
+     *       to preview.</li>
+     * </ul>
+     */
+    private ItemInput withPerPiecePricesFromPerSqm(ItemInput input, String priceMode, String documentLanguage,
+                                                   Integer rowNumber) {
+        BigDecimal listPriceSqm = input.listPriceSqm();
+        BigDecimal directNetPriceSqm = WastageCalculator.PRICE_MODE_DIRECT_NET.equals(priceMode)
+            ? input.directNetPriceSqm() : null;
+        if (listPriceSqm == null && directNetPriceSqm == null) {
+            return input;
+        }
+        String where = rowNumber == null ? "" : "รายการที่ " + rowNumber + ": ";
+        if (WastageCalculator.DOCUMENT_LANGUAGE_EN.equals(documentLanguage)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                where + "ราคาต่อ ตร.ม. รวม VAT ใช้ได้กับใบเสนอราคาภาษาไทยเท่านั้น");
+        }
+        if (listPriceSqm != null && listPriceSqm.signum() <= 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, where + "ราคาตั้งต่อ ตร.ม. ต้องมากกว่าศูนย์");
+        }
+        if (directNetPriceSqm != null && directNetPriceSqm.signum() <= 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, where + "ราคาสุทธิต่อ ตร.ม. ต้องมากกว่าศูนย์");
+        }
+        // #resolveSqmPerPiece's own order — the row's figure, else the catalogue's. The catalogue
+        // is only asked when the row states no area of its own, so the usual row costs no lookup
+        // here (#buildTileItem fetches the basis once itself, for more than the area).
+        BigDecimal sqmPerPiece = resolveSqmPerPiece(input,
+            input.sqmPerPiece() != null ? null : resolveCatalogBasis(input));
+        if (sqmPerPiece == null || sqmPerPiece.signum() <= 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                where + "ขาด แผ่น/ตร.ม. จึงแปลงราคาต่อ ตร.ม. เป็นราคาต่อแผ่นไม่ได้");
+        }
+        try {
+            return input.withPerPiecePrices(
+                listPriceSqm != null
+                    ? WastageCalculator.perPieceExVatFromSqmIncVat(listPriceSqm, sqmPerPiece) : input.unitPrice(),
+                directNetPriceSqm != null
+                    ? WastageCalculator.perPieceExVatFromSqmIncVat(directNetPriceSqm, sqmPerPiece)
+                    : input.directNetPrice());
+        } catch (IllegalArgumentException e) {
+            // An area per piece outside WastageCalculator's sanity bounds — the same wrap every
+            // other WastageCalculator refusal in this class gets.
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ข้อมูลรายการไม่ถูกต้อง: " + e.getMessage());
+        }
     }
 
     private NewItem buildTileItem(ItemInput input, Integer rowNumber, String priceMode,
@@ -3141,7 +3436,7 @@ public class DealQuotationService {
         }
         // Wording-scan fix 5 (2026-09-17): PIECES wastage must be a whole number of แผ่น — a
         // fractional value (e.g. 0.5) saved today, but WastageCalculator#applyWastage's PIECES
-        // branch silently ROUNDS it (HALF_UP) for the arithmetic while the STORED/PRINTED
+        // branch silently ROUNDS it UP for the arithmetic while the STORED/PRINTED
         // wastageValue stays the untouched fraction, so the printed "+ เผื่อ 0.5 แผ่น" disagrees
         // with the piece count the document actually adds. Refused here, before the value ever
         // reaches WastageCalculator, so it can never be stored at all. PERCENT wastage is
@@ -3269,7 +3564,16 @@ public class DealQuotationService {
             specialPriceSqm, null, null,
             catalogBasis == null ? null : catalogBasis.widthMm(),
             catalogBasis == null ? null : catalogBasis.heightMm(),
-            input.sqmPerBox(), roundToFullBox);
+            input.sqmPerBox(), roundToFullBox,
+            // No pricing-request link on a row built from a request — #withDecisionLink adds one.
+            null, null,
+            // V192.2 — the per-ตร.ม. prices as typed, kept beside the per-แผ่น unitPrice/netUnitPrice
+            // #withPerPiecePricesFromPerSqm derived from them above (this `input` is already that
+            // method's result). ราคาสุทธิ/ตร.ม. is kept only in the mode that read it. An English
+            // row never reaches here with either: that method refuses them.
+            input.listPriceSqm() == null ? null : money2(input.listPriceSqm()),
+            WastageCalculator.PRICE_MODE_DIRECT_NET.equals(priceMode) && input.directNetPriceSqm() != null
+                ? money2(input.directNetPriceSqm()) : null);
     }
 
     /**
@@ -3411,7 +3715,16 @@ public class DealQuotationService {
             // Transient render-only fields (see NewItem#catalogWidthMm) -- this NewItem is bound
             // for insertDraft, never for #toItemDto, so there is nothing here to carry through.
             null, null,
-            item.sqmPerBox(), item.roundToFullBox());
+            item.sqmPerBox(), item.roundToFullBox(),
+            // No link here — a PRICING_REQUEST copy re-attaches its own via #withDecisionLink.
+            null, null,
+            // V192.2 — a copy carries its parent's typed per-ตร.ม. prices VERBATIM, like every other
+            // figure on the row: it is a copy, not a recalculation.
+            item.listPriceSqm(), item.directNetPriceSqm(),
+            // V192.5 — and the mode the row was priced in, on a mixed document (null otherwise): the
+            // copy's header says MIXED too (#insertCopyOf copies source.priceMode()), and a mixed
+            // document whose rows had lost their modes would be re-read with every row as NET.
+            item.priceMode());
     }
 
     // ProductPriceDto's/price_catalog.product_prices' own price_unit for a linear-metre trim
@@ -3775,8 +4088,8 @@ public class DealQuotationService {
         DealQuotationLines.TilePrint print = tile
             ? DealQuotationLines.tilePrint(documentLanguage, priceMode, item.quantityMode(), item.areaSqm(),
                 item.sqmPerPiece(), piecesPerSqm, item.piecesBeforeWastage(), item.wastageMode(), item.wastageValue(),
-                item.piecesFinal(), item.piecesPerBox(), item.boxes(), item.sqmPerBox(), item.quantity(), item.unit(),
-                item.specialPriceSqm(), item.roundToFullBox())
+                item.piecesAfterWastage(), item.piecesFinal(), item.piecesPerBox(), item.boxes(), item.sqmPerBox(),
+                item.quantity(), item.unit(), item.specialPriceSqm(), item.roundToFullBox())
             : null;
         // A tile's description is recomposed in the document's language, exactly as the read path
         // does; a PLAIN/ADJUSTMENT row's is the one the build step composed or the rep typed.
@@ -3799,7 +4112,10 @@ public class DealQuotationService {
             print == null ? item.unit() : print.unit(), item.specialPriceSqm(), item.adjustmentPct(),
             item.adjustmentDeadline(), print == null ? null : print.subLine(),
             DealQuotationLines.flatAdjustmentAmount(item.lineType(), item.adjustmentPct(), item.unitPrice()))
-            .withSqmPerBox(item.sqmPerBox()).withRoundToFullBox(item.roundToFullBox());
+            .withSqmPerBox(item.sqmPerBox()).withRoundToFullBox(item.roundToFullBox())
+            // V192.2 — echoed so the preview's own response says which per-ตร.ม. figures its
+            // per-แผ่น unitPrice/netUnitPrice were derived from.
+            .withPerSqmPrices(item.listPriceSqm(), item.directNetPriceSqm());
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -3816,7 +4132,8 @@ public class DealQuotationService {
      * Ploy, per docs/sales/quotation-v2-plan.md: whether plain {@code sales} may act on another rep's deal —
      * implemented as NO, the conservative reading, until answered); {@code sales_manager} on any
      * deal; OR a {@code canCreateQuotation}-granted employee (owner ruling, Ploy 2026-09-09 —
-     * ภิญญดา, employee 144, QC&amp;ISO / role {@code qc}) on ANY deal, regardless of role — the
+     * ภิญญดา, employee 144, QC&amp;ISO, role {@code sales} since 2026-10-14) on ANY deal,
+     * regardless of role — the
      * grant is deliberately not further role-restricted; it is a per-person capability, not a
      * role. Read LIVE via {@link #hasQuotationGrant}, never from {@code actor}. */
     private void requireEditAccess(UserPrincipal actor, TicketSummaryDto ticket) {

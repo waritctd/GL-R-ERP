@@ -10,37 +10,25 @@ import java.util.List;
  * its own worked reference figures (QN6900595-3 items 1/3/5 — pinned by
  * {@code WastageCalculatorTest}).
  *
- * <p><b>Corrected 2026-09-15 (quotation arithmetic reconciliation):</b> pieces round HALF_UP, not
- * CEILING, both for the AREA-mode piece count (R-B) and for PERCENT wastage (R-C) — and a line
- * amount is a single rounding of the unrounded product, not a rounding of an already-rounded net
- * price (R-D). The three rules rest on DIFFERENT evidence, stated precisely rather than as one
- * blanket "nine documents settle it" claim — see {@code QuotationGoldenDocumentsTest} for all nine
- * documents reproduced to the satang, but only some of the nine actually DISCRIMINATE a rule:
- * <ul>
- *   <li><b>R-B (AREA pieces HALF_UP)</b> is proven by two rows in two attached documents:
- *       QN6900981-1 row 1 (2,793 × 1.39 = 3,882.27 → printed 3,882; CEILING would give an odd
- *       3,883 that box-rounds up again to 3,884) and QN6900648 row 4 (511 × 1.39 = 710.29 →
- *       printed 710; CEILING would give an odd 711 that box-rounds up to 712). FLOOR is refuted by
- *       QN6900648 row 1 (1,313.55 → printed 1,314) and QN6900981-1 row 2 (380.86 → printed 381),
- *       both of which would floor DOWN.</li>
- *   <li><b>R-C (PERCENT wastage HALF_UP)</b> rests on ONE line only: the spec's own recorded
- *       reference, QN6900595-3 item1 (791 × 1.10 = 870.1 → printed 870; the old CEILING reading
- *       gave 871 → box-rounded to 872). None of the eight ATTACHED documents (QN6900971-4,
- *       QN6900971 ใบสรุป, QN6900981-1, QN6900902-6, QN6900704-2, QN6900933, QN6900648,
- *       QN6900782-2) has any wastage at all, so none of them can corroborate or refute this rule —
- *       QN6900595-3 is the sole evidence. This REVERSES the earlier judgement (recorded in this
- *       class's git history and the old plan doc) that 870 was a human rounding error the meeting
- *       rule deliberately diverged from; it is now read as the correct figure instead.</li>
- *   <li><b>R-D (single-rounding line amount)</b> is proven by QN6900971-4 (D1) rows 5.3-5.7: list
- *       × qty × (1−pct/100) rounded once gives 35,799.63/16,502.43/11,445.23, matching the
- *       printed amounts, where rounding the already-2dp net price first and then multiplying gives
- *       35,799.64/16,502.44/11,445.24 instead.</li>
- * </ul>
- * <p>The remaining four attached documents — QN6900971 ใบสรุป, QN6900902-6, QN6900933,
- * QN6900782-2 — discriminate NONE of R-B/R-C/R-D: they are PLAIN-row or no-wastage/no-box-rounding
- * fixtures that reproduce identically under the old and new rules alike. They still appear in
- * {@code QuotationGoldenDocumentsTest} as regression coverage, just not as evidence for any of the
- * three corrections above. Money still rounds to 2 decimal places HALF_UP throughout.
+ * <p><b>History of the piece-rounding rule.</b> On 2026-09-15 (quotation arithmetic reconciliation)
+ * pieces were read as rounding HALF_UP, not CEILING, both for the AREA-mode piece count (R-B) and for
+ * PERCENT wastage (R-C); a line amount is a single rounding of the unrounded product, not a rounding
+ * of an already-rounded net price (R-D). <b>On 2026-10-12 the owner ruled "ปัดขึ้นทุกกรณี" for every
+ * document issued from now on: every fraction of a PIECE rounds UP</b> (the AREA area × pieces/ตร.ม.
+ * step, PERCENT wastage, and the PIECES wastage value). R-B and R-C are therefore superseded; R-D is
+ * untouched. The owner made the ruling knowing three rows that were evidence for HALF_UP no longer
+ * reproduce: QN6900981-1 row 1 (2,793 × 1.39 = 3,882.27, printed 3,882, now 3,883 → 3,884),
+ * QN6900648 row 4 (511 × 1.39 = 710.29, printed 710, now 711 → 712) and QN6900595-3 item 1
+ * (791 × 1.10 = 870.1, printed 870, now 871 → 872). {@code piecesPerSqm} still rounds to 2 decimals
+ * to nearest, box rounding still rounds up, and money still rounds to 2 decimal places HALF_UP.
+ * The superseded 2026-09-15 evidence is kept in docs/sales/quotation-v2-plan.md.
+ *
+ * <p><b>R-D (single-rounding line amount)</b> is proven by QN6900971-4 (D1) rows 5.3-5.7: list
+ * × qty × (1−pct/100) rounded once gives 35,799.63/16,502.43/11,445.23, matching the
+ * printed amounts, where rounding the already-2dp net price first and then multiplying gives
+ * 35,799.64/16,502.44/11,445.24 instead. The other attached documents (QN6900971 ใบสรุป,
+ * QN6900902-6, QN6900933, QN6900782-2) discriminate nothing: they reproduce identically under the
+ * old and new rules and serve only as regression coverage in {@code QuotationGoldenDocumentsTest}.
  *
  * <p>No Spring wiring, no DB access, no I/O — a static-methods-only pure class, deliberately, so
  * every branch is exercised by a plain unit test rather than an integration test.
@@ -71,6 +59,42 @@ public final class WastageCalculator {
     public static final String PRICE_MODE_SPECIAL_SQM = "SPECIAL_SQM";
     /** The rep types the per-piece net price directly; the ราคา column still shows the list price. */
     public static final String PRICE_MODE_DIRECT_NET = "DIRECT_NET";
+    /**
+     * A document with NO single price mode: each TILE row carries its own — one of the three above
+     * — in {@code sales.quotation_item.price_mode} (V192.5). Sales feedback #14 / owner 2026-10-06:
+     * "อยากให้เลือกการคิดราคาแต่ละข้อไม่เหมือนกันได้ เช่น บางข้อราคาพิเศษต่อตรม บางข้อลด% ตามสเต็ป".
+     *
+     * <p>It is a property of the DOCUMENT, never of a row: a row is always priced, stored and
+     * printed in exactly one of NET / SPECIAL_SQM / DIRECT_NET, by the very code a single-mode
+     * document runs — see {@link #rowPriceMode}. Thai, direct-deal documents only
+     * ({@code DealQuotationService#requirePriceModeAllowed}).
+     */
+    public static final String PRICE_MODE_MIXED = "MIXED";
+
+    /**
+     * The price mode ONE tile row is priced and printed in: the document's own, unless the
+     * document is {@link #PRICE_MODE_MIXED}, in which case it is the row's. THE one statement of
+     * that rule — the write path, the read path, the printed ส่วนลด cell and the "has special
+     * pricing" gate all ask here, so no two of them can decide differently.
+     *
+     * <p>A row's own mode is consulted ONLY on a MIXED document. On a single-mode document it is
+     * ignored even when present (and the write path stores none there), so nothing a client leaves
+     * on a row can reprice a document whose header names one mode. A MIXED document's row with no
+     * mode of its own reads as NET: unreachable through the write path, which refuses such a row,
+     * but a READ must never fail on a row it cannot place.
+     */
+    public static String rowPriceMode(String documentPriceMode, String itemPriceMode) {
+        if (!PRICE_MODE_MIXED.equals(documentPriceMode)) {
+            return documentPriceMode;
+        }
+        return itemPriceMode == null || itemPriceMode.isBlank() ? PRICE_MODE_NET : itemPriceMode.trim();
+    }
+
+    /** One of the three modes a tile ROW can be priced in — i.e. anything but MIXED. */
+    public static boolean isRowPriceMode(String priceMode) {
+        return PRICE_MODE_NET.equals(priceMode) || PRICE_MODE_SPECIAL_SQM.equals(priceMode)
+            || PRICE_MODE_DIRECT_NET.equals(priceMode);
+    }
 
     // ── Quotation v3b (owner, 2026-09-11 overnight) — the ENGLISH document ────────────────────
     /** The Thai document, form F-SM-002 (03). The default, and the ONLY behaviour before V169. */
@@ -223,7 +247,7 @@ public final class WastageCalculator {
                 throw new IllegalArgumentException("areaSqm is required in AREA quantity mode");
             }
             piecesPerSqm = piecesPerSqm(in.sqmPerPiece());
-            piecesBefore = roundHalfUpToInt(in.areaSqm().multiply(piecesPerSqm));
+            piecesBefore = ceilToInt(in.areaSqm().multiply(piecesPerSqm));
         } else {
             throw new IllegalArgumentException("quantityMode must be AREA or PIECES, got: " + in.quantityMode());
         }
@@ -334,14 +358,46 @@ public final class WastageCalculator {
      * {@code WastageCalculatorTest#netPerPieceFromSpecialSqm_dividesByThe2dpReciprocal_notTheExactOne}.
      */
     public static BigDecimal netPerPieceFromSpecialSqm(BigDecimal specialPerSqmIncVat, BigDecimal sqmPerPiece) {
-        if (specialPerSqmIncVat == null || specialPerSqmIncVat.signum() <= 0) {
-            throw new IllegalArgumentException("ราคาพิเศษ must be positive, got: " + specialPerSqmIncVat);
+        return perPieceFromSqm(specialPerSqmIncVat, sqmPerPiece, "ราคาพิเศษ", "a SPECIAL_SQM price");
+    }
+
+    /**
+     * A per-แผ่น price, before VAT, from a price quoted in บาท per ตร.ม. INCLUDING VAT — for ANY
+     * of a Thai tile row's price boxes. Sales feedback #1 (2026-10-06, "แก้เป็น ตร.ม. รวม VAT
+     * ทุกแบบ"): ราคาตั้ง in every price mode, and ราคาสุทธิ in DIRECT_NET, are now typed per ตร.ม.
+     * including VAT exactly as ราคาพิเศษ always was, and converted here.
+     *
+     * <p><b>This is {@link #netPerPieceFromSpecialSqm}'s rule, not a second one</b> — both are the
+     * same private computation, deliberately. The rounding order that method's Javadoc spends its
+     * length on (divide by the 2dp pieces-per-ตร.ม., carry the VAT-stripped figure unrounded) was
+     * reconciled to the satang against the owner's documents; a ราคาตั้ง and a ราคาพิเศษ typed as
+     * the same figure must come out as the same per-แผ่น figure, or a row whose list and special
+     * prices are equal would print a discount that does not exist. Pinned by
+     * {@code WastageCalculatorPerSqmPriceTest}.
+     *
+     * <p>The result cannot be converted back: on a 10×10 tile 1,800 per ตร.ม. is 16.82 a piece,
+     * and 16.82 a piece is 1,799.74 per ตร.ม. That is why the typed figure is stored beside the
+     * derived one (V192.2) rather than recovered from it.
+     *
+     * @throws IllegalArgumentException when the price is missing or not positive, or there is no
+     *     usable area per piece — never a fallback to reading the figure as a per-แผ่น price.
+     */
+    public static BigDecimal perPieceExVatFromSqmIncVat(BigDecimal perSqmIncVat, BigDecimal sqmPerPiece) {
+        return perPieceFromSqm(perSqmIncVat, sqmPerPiece, "ราคาต่อ ตร.ม.", "a per-sqm price");
+    }
+
+    /** The one computation behind both entry points above; {@code priceName}/{@code needFor} only
+     * word the refusal, so each keeps saying what it always said. */
+    private static BigDecimal perPieceFromSqm(BigDecimal perSqmIncVat, BigDecimal sqmPerPiece,
+                                              String priceName, String needFor) {
+        if (perSqmIncVat == null || perSqmIncVat.signum() <= 0) {
+            throw new IllegalArgumentException(priceName + " must be positive, got: " + perSqmIncVat);
         }
         if (sqmPerPiece == null || sqmPerPiece.signum() <= 0) {
-            throw new IllegalArgumentException("sqmPerPiece is required for a SPECIAL_SQM price");
+            throw new IllegalArgumentException("sqmPerPiece is required for " + needFor);
         }
         requireReasonableSqmPerPiece(sqmPerPiece);
-        BigDecimal exVat = specialPerSqmIncVat.divide(BigDecimal.ONE.add(VAT_RATE), 10, RoundingMode.HALF_UP);
+        BigDecimal exVat = perSqmIncVat.divide(BigDecimal.ONE.add(VAT_RATE), 10, RoundingMode.HALF_UP);
         return round2(exVat.divide(piecesPerSqm(sqmPerPiece), 10, RoundingMode.HALF_UP));
     }
 
@@ -369,13 +425,9 @@ public final class WastageCalculator {
     private static final BigDecimal MAX_WASTAGE_PIECES = BigDecimal.valueOf(1_000_000);
 
     /**
-     * Package-private, not {@code private} (wording-scan fix 1, 2026-09-17): {@link
-     * DealQuotationLines#calculationLine} needs the post-wastage, PRE-box-rounding piece count to
-     * decide whether box rounding actually changed anything — it is the one fact this method's own
-     * caller ({@link #calculate}) already derives but does not hand back on {@link Result} (only
-     * the FINAL, post-rounding count is). Re-deriving it here (the single source of truth) rather
-     * than duplicating the wastage arithmetic in the rendering layer is what keeps a future change
-     * to this formula from silently drifting the printed line out of step with the stored numbers.
+     * The post-wastage, PRE-box-rounding piece count: the one place the wastage arithmetic lives.
+     * Package-private so a test can derive the number the same way {@link #calculate} does; the
+     * printed calculation line is handed the stored {@link Result#piecesAfterWastage} instead.
      */
     static int applyWastage(int piecesBefore, String wastageMode, BigDecimal wastageValue) {
         if (wastageMode == null || WASTAGE_MODE_NONE.equals(wastageMode)) {
@@ -389,14 +441,14 @@ public final class WastageCalculator {
             if (value.compareTo(MAX_WASTAGE_PIECES) > 0) {
                 throw new IllegalArgumentException("wastageValue must be <= " + MAX_WASTAGE_PIECES + " pieces, got: " + value);
             }
-            return piecesBefore + value.setScale(0, RoundingMode.HALF_UP).intValueExact();
+            return piecesBefore + value.setScale(0, RoundingMode.CEILING).intValueExact();
         }
         if (WASTAGE_MODE_PERCENT.equals(wastageMode)) {
             if (value.compareTo(MAX_WASTAGE_PERCENT) > 0) {
                 throw new IllegalArgumentException("wastageValue must be <= 100 percent, got: " + value);
             }
             BigDecimal factor = BigDecimal.ONE.add(value.divide(HUNDRED, 10, RoundingMode.HALF_UP));
-            return roundHalfUpToInt(BigDecimal.valueOf(piecesBefore).multiply(factor));
+            return ceilToInt(BigDecimal.valueOf(piecesBefore).multiply(factor));
         }
         throw new IllegalArgumentException("wastageMode must be PERCENT, PIECES or NONE, got: " + wastageMode);
     }
@@ -519,10 +571,10 @@ public final class WastageCalculator {
     // for the regression this guards.
     // ─────────────────────────────────────────────────────────────────────────────────────────
 
-    /** R-B/R-C: pieces round HALF_UP, not CEILING — see the class Javadoc. Box-multiple rounding
-     * ({@link #ceilToMultiple}) is untouched and still rounds up. */
-    private static int roundHalfUpToInt(BigDecimal value) {
-        return value.setScale(0, RoundingMode.HALF_UP).intValueExact();
+    /** Any fraction of a piece rounds up (owner ruling 2026-10-12) — see the class Javadoc.
+     * Box-multiple rounding ({@link #ceilToMultiple}) also rounds up. */
+    private static int ceilToInt(BigDecimal value) {
+        return value.setScale(0, RoundingMode.CEILING).intValueExact();
     }
 
     private static int ceilToMultiple(int value, int multiple) {

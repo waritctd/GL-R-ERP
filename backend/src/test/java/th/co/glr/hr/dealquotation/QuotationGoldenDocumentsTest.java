@@ -100,19 +100,21 @@ class QuotationGoldenDocumentsTest {
         BigDecimal net = WastageCalculator.netPerPieceFromSpecialSqm(specialPriceSqm, sqmPerPiece);
         assertThat(net).isEqualByComparingTo("531.16");
 
-        // Row 1: area 2,793 → 2,793 × 1.39 = 3,882.27 HALF_UPs to 3,882 (an even box multiple, so
-        // the printed pieces stay 3,882 — CEILING would give 3,883, box-rounding up to 3,884).
+        // Row 1: area 2,793 → 2,793 × 1.39 = 3,882.27. The document printed 3,882 (HALF_UP, the
+        // 2026-09-15 reading); since the owner's 2026-10-12 ruling every fraction rounds UP, so a
+        // document issued today prints 3,883 → 3,884 (two per box). This row therefore pins the
+        // new rule, not the printed document; the rest of this document still reproduces.
         Result row1 = WastageCalculator.calculate(new Input(
             sqmPerPiece, WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("2793"), null,
             WastageCalculator.WASTAGE_MODE_NONE, null, 2,
             new BigDecimal("1299.00"), null));
-        assertThat(row1.piecesBeforeWastage()).isEqualTo(3882);
-        assertThat(row1.piecesFinal()).isEqualTo(3882);
+        assertThat(row1.piecesBeforeWastage()).isEqualTo(3883);
+        assertThat(row1.piecesFinal()).isEqualTo(3884);
         BigDecimal amount1 = net.multiply(BigDecimal.valueOf(row1.piecesFinal())).setScale(2, java.math.RoundingMode.HALF_UP);
-        assertThat(amount1).isEqualByComparingTo("2061963.12");
+        assertThat(amount1).isEqualByComparingTo("2063025.44");
 
-        // Row 2: area 274 → 274 × 1.39 = 380.86 HALF_UPs to 381 (CEILING agrees here — the
-        // fraction is already > 0.5), box-rounds up to 382 ("381 แผ่น + เพื่อปัดขึ้นเต็มกล่อง = 382").
+        // Row 2: area 274 → 274 × 1.39 = 380.86 → 381 under either rule, box-rounds up to 382
+        // ("381 แผ่น + เพื่อปัดขึ้นเต็มกล่อง = 382").
         Result row2 = WastageCalculator.calculate(new Input(
             sqmPerPiece, WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("274"), null,
             WastageCalculator.WASTAGE_MODE_NONE, null, 2,
@@ -123,10 +125,10 @@ class QuotationGoldenDocumentsTest {
         assertThat(amount2).isEqualByComparingTo("202903.12");
 
         BigDecimal subtotal = WastageCalculator.subtotal(List.of(amount1, amount2));
-        assertThat(subtotal).isEqualByComparingTo("2264866.24");
+        assertThat(subtotal).isEqualByComparingTo("2265928.56");
         BigDecimal vat = WastageCalculator.vat(subtotal);
-        assertThat(vat).isEqualByComparingTo("158540.64");
-        assertThat(WastageCalculator.grandTotal(subtotal, vat)).isEqualByComparingTo("2423406.88");
+        assertThat(vat).isEqualByComparingTo("158615.00");
+        assertThat(WastageCalculator.grandTotal(subtotal, vat)).isEqualByComparingTo("2424543.56");
     }
 
     // ── D4 — QN6900902-6 (F-SM-008, EN, USD, six PLAIN rows, NET, no VAT) ────────────────────
@@ -259,29 +261,29 @@ class QuotationGoldenDocumentsTest {
         Result row2 = WastageCalculator.calculate(new Input(
             sqmPerPiece, WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("339"), null,
             WastageCalculator.WASTAGE_MODE_NONE, null, 2, new BigDecimal("1"), null));
-        assertThat(row2.piecesBeforeWastage()).isEqualTo(471); // 339 × 1.39 = 471.21 → HALF_UP 471
-        assertThat(row2.piecesFinal()).isEqualTo(472); // 471 box-rounds up to 472
+        assertThat(row2.piecesBeforeWastage()).isEqualTo(472); // 339 × 1.39 = 471.21 → rounds up to 472
+        assertThat(row2.piecesFinal()).isEqualTo(472); // already a box multiple
         BigDecimal amount2 = net1800.multiply(BigDecimal.valueOf(row2.piecesFinal())).setScale(2, java.math.RoundingMode.HALF_UP);
         assertThat(amount2).isEqualByComparingTo("571238.00");
 
         Result row3 = WastageCalculator.calculate(new Input(
             sqmPerPiece, WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("159"), null,
             WastageCalculator.WASTAGE_MODE_NONE, null, 2, new BigDecimal("1"), null));
-        assertThat(row3.piecesBeforeWastage()).isEqualTo(221); // 159 × 1.39 = 221.01 → HALF_UP 221
+        assertThat(row3.piecesBeforeWastage()).isEqualTo(222); // 159 × 1.39 = 221.01 → rounds up to 222
         assertThat(row3.piecesFinal()).isEqualTo(222);
         BigDecimal amount3 = net860.multiply(BigDecimal.valueOf(row3.piecesFinal())).setScale(2, java.math.RoundingMode.HALF_UP);
         assertThat(amount3).isEqualByComparingTo("128367.06");
 
-        // Row 4: the OTHER headline R-B example — 511 × 1.39 = 710.29 HALF_UPs to 710 (already an
-        // even box multiple, so the printed pieces stay 710); CEILING gives 711, an odd multiple
-        // that box-rounds up again to 712.
+        // Row 4: 511 × 1.39 = 710.29. The document printed 710 (HALF_UP); under the owner's
+        // 2026-10-12 round-up ruling a document issued today prints 711 → 712 (two per box), so
+        // this row and the totals below pin the new rule rather than the printed document.
         Result row4 = WastageCalculator.calculate(new Input(
             sqmPerPiece, WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("511"), null,
             WastageCalculator.WASTAGE_MODE_NONE, null, 2, new BigDecimal("1"), null));
-        assertThat(row4.piecesBeforeWastage()).isEqualTo(710);
-        assertThat(row4.piecesFinal()).isEqualTo(710);
+        assertThat(row4.piecesBeforeWastage()).isEqualTo(711);
+        assertThat(row4.piecesFinal()).isEqualTo(712);
         BigDecimal amount4 = net1800.multiply(BigDecimal.valueOf(row4.piecesFinal())).setScale(2, java.math.RoundingMode.HALF_UP);
-        assertThat(amount4).isEqualByComparingTo("859277.50");
+        assertThat(amount4).isEqualByComparingTo("861698.00");
 
         Result row5 = WastageCalculator.calculate(new Input(
             sqmPerPiece, WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("1200"), null,
@@ -292,10 +294,10 @@ class QuotationGoldenDocumentsTest {
         assertThat(amount5).isEqualByComparingTo("2018697.00");
 
         BigDecimal subtotal = WastageCalculator.subtotal(List.of(amount1, amount2, amount3, amount4, amount5));
-        assertThat(subtotal).isEqualByComparingTo("5167848.06");
+        assertThat(subtotal).isEqualByComparingTo("5170268.56");
         BigDecimal vat = WastageCalculator.vat(subtotal);
-        assertThat(vat).isEqualByComparingTo("361749.36");
-        assertThat(WastageCalculator.grandTotal(subtotal, vat)).isEqualByComparingTo("5529597.42");
+        assertThat(vat).isEqualByComparingTo("361918.80");
+        assertThat(WastageCalculator.grandTotal(subtotal, vat)).isEqualByComparingTo("5532187.36");
     }
 
     // ── D8 — QN6900782-2 (TH, three PLAIN rows, NET) ─────────────────────────────────────────
@@ -320,13 +322,13 @@ class QuotationGoldenDocumentsTest {
 
     @Test
     void D9_QN6900595_3_areaModePercentWastage_piecesOnly() {
-        // item1: 569 ตร.ม., sqmPerPiece 0.72 (1.39 แผ่น/ตร.ม.), +10% wastage, 2/box → printed 870
-        // (NOT 872 — see WastageCalculator's class Javadoc for the full R-B/R-C derivation).
+        // item1: 569 ตร.ม., sqmPerPiece 0.72 (1.39 แผ่น/ตร.ม.), +10% wastage, 2/box. The spec's
+        // reference printed 870; under the owner's 2026-10-12 round-up ruling 870.1 → 871 → 872.
         Result item1 = WastageCalculator.calculate(new Input(
             new BigDecimal("0.72"), WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("569"), null,
             WastageCalculator.WASTAGE_MODE_PERCENT, new BigDecimal("10"), 2,
             new BigDecimal("100"), null));
-        assertThat(item1.piecesFinal()).isEqualTo(870);
+        assertThat(item1.piecesFinal()).isEqualTo(872);
 
         // item3: 87 ตร.ม., sqmPerPiece 0.36 (2.78 แผ่น/ตร.ม.), +10% wastage, 4/box → printed 268.
         Result item3 = WastageCalculator.calculate(new Input(

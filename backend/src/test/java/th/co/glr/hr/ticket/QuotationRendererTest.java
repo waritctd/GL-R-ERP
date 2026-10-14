@@ -1535,6 +1535,13 @@ class QuotationRendererTest {
     // after it. H3/H5 are confirmed distinct from SALES_LINE_ROW (row 6, "Sales/{name}") by this
     // class's own row constants (DEPT_VALUE_ROW=2, UNIT_VALUE_ROW=4, SALES_LINE_ROW=5) — clearing
     // them cannot touch the sales line.
+    //
+    // 2026-10-06 — ฝ่าย is no longer one of the two. Sales feedback Admin 1d / owner: "remove ฝ่าย
+    // field completely" (off the form AND the printout). So H3/I3 are now empty on EVERY render,
+    // filled model or not, v2 or legacy; หน่วยงาน (H5/I5) keeps the rule this block was written
+    // for. The two "…WhenFilled" tests below used to assert the ฝ่าย line printing byte-for-byte;
+    // they now assert the opposite for ฝ่าย and the same as before for หน่วยงาน. See
+    // QuotationDeptLineRemovedTest for the same rule across every layout branch.
 
     @Test
     void deptAndUnitLabels_clearedWhenBlank_thai() throws Exception {
@@ -1561,7 +1568,7 @@ class QuotationRendererTest {
     }
 
     @Test
-    void deptAndUnitLabels_printByteForByteAsTodayWhenFilled_thai() throws Exception {
+    void unitLabelPrintsWhenFilled_andTheDeptLineNeverDoes_thai() throws Exception {
         QuotationRenderModel.RenderItem item = renderItem(null, threeLines("A"), BigDecimal.ONE,
             new BigDecimal("100.00"), "Net", new BigDecimal("100.00"), new BigDecimal("100.00"));
         QuotationRenderModel model = new QuotationRenderModel(
@@ -1573,10 +1580,11 @@ class QuotationRendererTest {
         byte[] xls = renderer.toXls(model);
         try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xls))) {
             var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
-            // The Thai branch never writes H3/H5 itself (they are the template's own baked-in
-            // text) -- this only proves the new guard did not blank them when the value is filled.
-            assertThat(cellIsEmpty(sheet, 2, 7)).as("H3 label untouched when deptCode filled").isFalse();
-            assertThat(sheet.getRow(2).getCell(8).getStringCellValue()).isEqualTo("P003");
+            // ฝ่าย is gone even though this model carries "P003": no label, no value.
+            assertThat(cellIsEmpty(sheet, 2, 7)).as("H3 ฝ่าย label cleared although deptCode is filled").isTrue();
+            assertThat(sheet.getRow(2).getCell(8).getStringCellValue()).as("I3 prints no department").isEmpty();
+            // หน่วยงาน is untouched: the Thai branch never writes H5 itself (it is the template's
+            // own baked-in text), and a filled value still prints beside it.
             assertThat(cellIsEmpty(sheet, 4, 7)).as("H5 label untouched when unitCode filled").isFalse();
             assertThat(sheet.getRow(4).getCell(8).getStringCellValue()).isEqualTo("D002");
         }
@@ -1603,7 +1611,7 @@ class QuotationRendererTest {
     }
 
     @Test
-    void deptAndUnitLabels_printByteForByteAsTodayWhenFilled_english() throws Exception {
+    void unitLabelPrintsWhenFilled_andTheDeptLineNeverDoes_english() throws Exception {
         QuotationRenderModel.RenderItem item = renderItem(null, threeLines("A"), BigDecimal.ONE,
             new BigDecimal("100.00"), "Net", new BigDecimal("100.00"), new BigDecimal("100.00"));
         QuotationRenderModel model = new QuotationRenderModel(
@@ -1615,8 +1623,9 @@ class QuotationRendererTest {
         byte[] xls = renderer.toXls(model);
         try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xls))) {
             var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
-            assertThat(sheet.getRow(2).getCell(7).getStringCellValue()).isEqualTo("Dept.");
-            assertThat(sheet.getRow(2).getCell(8).getStringCellValue()).isEqualTo("P003");
+            // No "Dept." and no "P003", although the model carries one.
+            assertThat(cellIsEmpty(sheet, 2, 7)).as("H3 'Dept.' label is not written").isTrue();
+            assertThat(sheet.getRow(2).getCell(8).getStringCellValue()).as("I3 prints no department").isEmpty();
             assertThat(sheet.getRow(4).getCell(7).getStringCellValue()).isEqualTo("D.Co.");
             assertThat(sheet.getRow(4).getCell(8).getStringCellValue()).isEqualTo("D002");
         }
@@ -1629,19 +1638,24 @@ class QuotationRendererTest {
     // feature. Exercised through the REAL legacy entry point (toXlsx(TicketDto, QuotationDto,
     // CustomerDto)), not a hand-built QuotationRenderModel, so this actually proves
     // #buildLegacyModel's real null/null shape rather than an assumption about it.
+    //
+    // 2026-10-06: that still holds for หน่วยงาน, and no longer for ฝ่าย. The legacy document never
+    // had a department to print — only the template's bare "ฝ่าย" label with nothing after it —
+    // and "remove ฝ่าย field completely" takes that label off this document too. It is the same
+    // printed form (F-SM-002), still issued from the คำขอราคา page.
     @Test
-    void deptAndUnitLabels_legacyPathKeepsTemplateLabelsEvenThoughCodesAreAlwaysBlank() throws Exception {
+    void legacyPath_keepsTheUnitLabel_andLosesTheDeptLabel() throws Exception {
         byte[] xlsx = renderer.toXlsx(
             ticket(List.of(item(1, "Cotto", "Marble Series", BigDecimal.ONE, new BigDecimal("580.00")))),
             quotation(), customer(null));
 
         try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xlsx))) {
             var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
-            // DEPT_VALUE_ROW=2/UNIT_VALUE_ROW=4, SALES_LINE_COL=7 (H3/H5) — the template's own
-            // "ฝ่าย"/"หน่วยงาน" text — must survive on a legacy render, where deptCode/unitCode are
-            // always null (buildLegacyModel never reads them off TicketDto/QuotationDto at all).
-            assertThat(cellIsEmpty(sheet, 2, 7)).as("H3 ฝ่าย label NOT cleared on legacy render").isFalse();
-            assertThat(sheet.getRow(2).getCell(7).getStringCellValue()).isEqualTo("ฝ่าย");
+            // DEPT_VALUE_ROW=2/UNIT_VALUE_ROW=4, SALES_LINE_COL=7 (H3/H5). The template's own
+            // "หน่วยงาน" text must survive on a legacy render, where unitCode is always null
+            // (buildLegacyModel never reads it off TicketDto/QuotationDto at all); its "ฝ่าย" text
+            // must not, since 2026-10-06.
+            assertThat(cellIsEmpty(sheet, 2, 7)).as("H3 ฝ่าย label cleared on a legacy render too").isTrue();
             assertThat(cellIsEmpty(sheet, 4, 7)).as("H5 หน่วยงาน label NOT cleared on legacy render").isFalse();
             assertThat(sheet.getRow(4).getCell(7).getStringCellValue()).isEqualTo("หน่วยงาน");
             // The value cells (I3/I5) stay blank, exactly as they always have (nullSafe) — only the

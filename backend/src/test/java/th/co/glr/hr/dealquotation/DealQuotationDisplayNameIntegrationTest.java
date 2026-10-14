@@ -77,7 +77,8 @@ class DealQuotationDisplayNameIntegrationTest extends AbstractPostgresIntegratio
         EmployeeRepository employees = new EmployeeRepository(
             jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
         TicketService ticketService = new TicketService(tickets, notifications, new ObjectMapper(), customers,
-            new QuotationRenderer(), null, new EmployeeAuthRepository(jdbc));
+            new QuotationRenderer(), null, new EmployeeAuthRepository(jdbc), new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
+            new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
         Mailer noMail = new Mailer() {
             @Override
             public void send(String to, String subject, String body) {}

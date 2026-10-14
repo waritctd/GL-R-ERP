@@ -60,7 +60,8 @@ class ImportRequestLeadTimeFromPricingRequestIntegrationTest extends AbstractPos
             factoryQuoteCarryForward());
         TicketService ticketService = new TicketService(tickets, notifications, objectMapper,
             new CustomerRepository(jdbc), new QuotationRenderer(), pricingRequestService,
-            new EmployeeAuthRepository(jdbc));
+            new EmployeeAuthRepository(jdbc), new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
+            new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
         service = new ImportRequestService(new ImportRequestQueryRepository(jdbc), new ImportRequestRenderer(),
             new ImportRequestRepository(jdbc), new FactoryConfigRepository(jdbc), tickets, ticketService);
         ownerId = jdbc.queryForObject(

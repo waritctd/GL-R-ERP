@@ -1,7 +1,7 @@
 import React from 'react';
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
-import { QuotationChecklist } from './QuotationChecklist.jsx';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { focusQuotationField, QuotationChecklist } from './QuotationChecklist.jsx';
 
 globalThis.React = React;
 
@@ -51,5 +51,46 @@ describe('QuotationChecklist', () => {
   it('says so when nothing is missing', () => {
     render(<QuotationChecklist entries={[]} />);
     expect(screen.getByRole('status').textContent).toContain('ข้อมูลในเอกสารครบแล้ว');
+  });
+});
+
+// focusQuotationField is shared: the checklist entries above use it, and (sales feedback #3,
+// 2026-10-06) so does the editor every time a "เพิ่ม…" action lands the rep on a new row.
+describe('focusQuotationField', () => {
+  const originalScrollIntoView = Element.prototype.scrollIntoView;
+  const originalMatchMedia = window.matchMedia;
+  afterEach(() => {
+    Element.prototype.scrollIntoView = originalScrollIntoView;
+    window.matchMedia = originalMatchMedia;
+  });
+
+  function fieldWithScrollSpy() {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    render(<input id="target-field" />);
+    return scrollIntoView;
+  }
+
+  it('scrolls the field to the middle of the screen, smoothly, then focuses it', () => {
+    const scrollIntoView = fieldWithScrollSpy();
+    expect(focusQuotationField('target-field')).toBe(true);
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'center', behavior: 'smooth' });
+    expect(document.activeElement?.id).toBe('target-field');
+  });
+
+  // DESIGN.md §11/§19: "Reduced motion is not optional." An explicit `behavior: 'smooth'` is NOT
+  // overridden by CSS, so the preference has to be read here.
+  it('jumps instead of animating when the user asked for reduced motion', () => {
+    const scrollIntoView = fieldWithScrollSpy();
+    window.matchMedia = vi.fn((query) => ({ matches: query === '(prefers-reduced-motion: reduce)' }));
+    expect(focusQuotationField('target-field')).toBe(true);
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'center', behavior: 'auto' });
+    expect(document.activeElement?.id).toBe('target-field');
+  });
+
+  it('reports false, and touches nothing, for a field that is not on the page', () => {
+    const scrollIntoView = fieldWithScrollSpy();
+    expect(focusQuotationField('no-such-field')).toBe(false);
+    expect(scrollIntoView).not.toHaveBeenCalled();
   });
 });

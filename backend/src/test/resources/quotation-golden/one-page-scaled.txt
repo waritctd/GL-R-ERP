@@ -31,8 +31,8 @@ row 1 h=405
   c14 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
 row 2 h=405
   c1 STRING style=113 b=NONE/NONE/NONE/NONE font=5 wrap=false al=GENERAL : "                            โทรศัพท์ 0-2711-5995    e-mail : info@glr.co.th    Line:@glr_tiles"
-  c7 STRING style=97 b=NONE/NONE/NONE/NONE font=13 wrap=false al=CENTER : "ฝ่าย"
-  c8 STRING style=66 b=NONE/NONE/NONE/NONE font=14 wrap=false al=LEFT : "P003"
+  c7 BLANK style=97 b=NONE/NONE/NONE/NONE font=13 wrap=false al=CENTER : 
+  c8 STRING style=66 b=NONE/NONE/NONE/NONE font=14 wrap=false al=LEFT : ""
   c9 BLANK style=66 b=NONE/NONE/NONE/NONE font=14 wrap=false al=LEFT : 
   c10 BLANK style=146 b=NONE/NONE/NONE/NONE font=18 wrap=false al=CENTER : 
   c11 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
@@ -589,7 +589,7 @@ row 47 h=555
   c5 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
   c6 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
   c7 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
-  c8 BLANK style=104 b=NONE/NONE/NONE/NONE font=15 wrap=false al=CENTER : 
+  c8 STRING style=104 b=NONE/NONE/NONE/NONE font=15 wrap=false al=CENTER : "F-SM-002 (03)"
   c9 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
   c10 BLANK style=100 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
 row 48 h=375

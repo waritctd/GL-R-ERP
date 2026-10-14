@@ -128,7 +128,8 @@ async function fillCompleteQuotationItem() {
   fireEvent.change(screen.getByLabelText(/^ความหนา/), { target: { value: '10' } });
   fireEvent.change(screen.getByLabelText(/^แผ่น\/ตร\.ม\./), { target: { value: '1.39' } });
   fireEvent.change(screen.getByLabelText(/^แผ่น\/กล่อง/), { target: { value: '3' } });
-  fireEvent.change(screen.getByLabelText(/^ราคา\/หน่วย/), { target: { value: '850' } });
+  // Per ตร.ม. including VAT on a Thai document (sales feedback #1, 2026-10-06) — main's rule.
+  fireEvent.change(screen.getByLabelText(/^ราคา\/ตร\.ม\./), { target: { value: '850' } });
   fireEvent.change(screen.getByLabelText(/^จำนวน/), { target: { value: '36' } });
 }
 

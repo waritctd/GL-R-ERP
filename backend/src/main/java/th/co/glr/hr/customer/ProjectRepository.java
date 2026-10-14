@@ -2,6 +2,7 @@ package th.co.glr.hr.customer;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
@@ -26,6 +27,14 @@ public class ProjectRepository {
             Map.of("customerId", customerId),
             (rs, i) -> new ProjectDto(rs.getLong("project_id"), rs.getLong("customer_id"), rs.getString("name"))
         );
+    }
+
+    public Optional<ProjectDto> findById(long projectId) {
+        return jdbc.query(
+            "SELECT project_id, customer_id, name FROM customers.project WHERE project_id = :id",
+            Map.of("id", projectId),
+            (rs, i) -> new ProjectDto(rs.getLong("project_id"), rs.getLong("customer_id"), rs.getString("name"))
+        ).stream().findFirst();
     }
 
     public ProjectDto create(long customerId, String name) {

@@ -79,6 +79,24 @@ import th.co.glr.hr.ticket.QuotationRenderModel.Signatories;
  * of the five fixtures. None of these fixtures' phoneLine text itself changed (all five keep the
  * pre-existing "โทร. 02-000-0000" — no address in any of them), which is exactly why this is pure
  * style-table churn and not a content regression.
+ *
+ * <p><b>Re-baselined 2026-10-06, BY HAND, for two deliberate changes to the printed form</b> (sales
+ * feedback Admin 6 and Admin 1d; owner rulings the same day):
+ * <ol>
+ *   <li>the Thai document prints its ISO form number — the tag cell (column I of the print area's
+ *       last row) turns from {@code BLANK} into {@code STRING "F-SM-002 (03)"} in the four Thai
+ *       fixtures; {@code english} is untouched (it always printed {@code F-SM-008 (01)});</li>
+ *   <li>the ฝ่าย / Dept. line left BOTH forms — in all five fixtures row 2's H cell (the label)
+ *       turns {@code BLANK} and its I cell (the value, "P003" here) turns into the empty string.</li>
+ * </ol>
+ * By hand, because this file cannot be regenerated where those changes were made: that PC has no
+ * licensed Thai fonts (column unit 110 twips, not these goldens' 102), so — exactly like CI — the
+ * comparison below skips there, and {@code -Dquotation.golden.update=true} would have rewritten
+ * all five files under the wrong geometry. Neither change depends on geometry: a before/after
+ * canonical dump on that machine differed in exactly those lines per fixture and nothing else (no
+ * row height, break, print area, merge or style index moved), and the same lines were edited here.
+ * Verified by an actual run on 2026-10-11, on a machine with the fonts: the five files match a
+ * real render, and the byte hashes in the second test were re-pinned there.
  */
 class QuotationRendererNoPictureGoldenTest {
     private static final String UPDATE_PROPERTY = "quotation.golden.update";
@@ -191,18 +209,24 @@ class QuotationRendererNoPictureGoldenTest {
         // names/dates rows and the picture anchor shift by a few pixels/characters (the
         // runStart/runEnd values they target moved because the underscore run's own sizing rule
         // changed) but stay centred. legacy-shape (no signature block) is unchanged.
+        // Re-pinned 2026-10-11 for the two changes in this class's Javadoc ("Re-baselined
+        // 2026-10-06": the Thai ISO form number, and the ฝ่าย / Dept. line removed from both forms),
+        // which deliberately change every fixture's bytes. Derived on a machine with the licensed
+        // Thai fonts (column unit 102), where the unchanged renderer still matched the old pins
+        // 10/10 and the hand-edited .txt dumps above matched a real render line for line — so the
+        // only byte difference these new values absorb is those two changes.
         java.util.Map<String, String> preFeatureSha256 = java.util.Map.of(
-            "single-page", "a98c381f1d6a66a357a1f5ce79e720848efc2eaa3f858f6bf311b83d80cbcd70",
-            "one-page-scaled", "72e222df3ec7ecd1e4c1223f8598ad3c030ff53627e864a0618595eedf9204f9",
-            "paginated", "d018b85ca70c36442c792cf66dc6f01e63257447a15d14ad04e96c47bfddd1cb",
+            "single-page", "dbceb48f49514b6ae4b462970eeff9cccb428be7a5d84e4f0d82f90a1bf77334",
+            "one-page-scaled", "854ca4d157091dfb7edff572fba41f375ca9dd85e18966b1bd912c6c0d9f87ba",
+            "paginated", "b403e4b3c1c5fa4b51c954f49d2d5a5e518b4a6d43621aca07138d95f65731f9",
             // Re-pinned on develop 80f2484e: #930 deliberately changed the English form's output.
             // Re-pinned again 2026-09-13 (owner ruling 2): QuotationRenderer#applyEnglishTotals now
             // strips every border from the emptied subtotal/VAT rows and hides them, so Grand Total
             // sits directly under the table box. The regenerated english.txt differs from its prior
             // version ONLY in those two rows (hidden, b=NONE) plus the style indices the new
             // borderless styles shift; the four Thai fixtures are byte-identical.
-            "english", "8220bcbcda9086265b048ddda833b7d696edc8ed80b38f349369c91fbcd1c43f",
-            "legacy-shape", "a92e576f622abb6fd0c2a49051e5513ae162adadbfb4b21636f56b7484de28fe");
+            "english", "63e62581ce80b8cedf3dca7bff487ae2820fe0dde8bfeb148b09acec03bb42a7",
+            "legacy-shape", "0e623ab5fe9cbd81e977b88569882840d4c73ee84f8002d5c4f6d7b8d9169ec0");
         byte[] xls = renderer.toXls(model(fixture));
         String expectedUnit = Files.readString(Path.of("src/test/resources/quotation-golden", fixture + ".txt"),
             StandardCharsets.UTF_8).lines().findFirst().orElse("");

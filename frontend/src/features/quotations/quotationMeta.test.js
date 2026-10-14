@@ -5,6 +5,7 @@ import { routeForChannel } from '../tickets/stageCatalog.js';
 import {
   canApproveDealQuotation,
   canCancelDealQuotation,
+  canChangeDealCustomer,
   canCreateDealQuotation,
   canCreateDealQuotationStandalone,
   canDecideDealQuotation,
@@ -24,8 +25,8 @@ import {
   LINE_TYPE_ADJUSTMENT,
   LINE_TYPE_PLAIN,
   LINE_TYPE_TILE,
-  listPricePerSqmIncVat,
   parseSizeText,
+  perSqmIncVatFromPerPiece,
   piecesPerSqmFromSqmPerPiece,
   quotationItemMissingSummary,
   remainderModeLabel,
@@ -290,6 +291,52 @@ describe('canPromoteDealQuotationToDeal', () => {
   });
 });
 
+// Mirrors TicketService.changeCustomer: requireDealOwnership (owning sales rep, sales_manager, ceo —
+// and NOT a canCreateQuotation grant holder), plus the two state gates the page can see: the
+// quotation is a DRAFT and it came from the deal itself rather than from a pricing request.
+describe('canChangeDealCustomer', () => {
+  const draftDirect = quotation({ origin: 'DEAL_DIRECT' });
+
+  it('refuses the wrong people first: a grant holder, another rep, and every other role', () => {
+    expect(canChangeDealCustomer(qcWithGrant, ownedTicket, draftDirect)).toBe(false);
+    expect(canChangeDealCustomer({ ...salesOwner, canCreateQuotation: true }, otherTicket, draftDirect)).toBe(false);
+    expect(canChangeDealCustomer(otherSales, ownedTicket, draftDirect)).toBe(false);
+    for (const user of [importUser, accountUser, hrUser, qcUser, warehouseUser]) {
+      expect(canChangeDealCustomer(user, ownedTicket, draftDirect), user.role).toBe(false);
+    }
+    expect(canChangeDealCustomer(null, ownedTicket, draftDirect)).toBe(false);
+    expect(canChangeDealCustomer(salesOwner, null, draftDirect)).toBe(false);
+    expect(canChangeDealCustomer(salesOwner, ownedTicket, null)).toBe(false);
+  });
+
+  it('refuses a quotation that has left DRAFT, whoever asks', () => {
+    for (const docStatus of ['PENDING_APPROVAL', 'APPROVED', 'REJECTED', 'SUPERSEDED', 'CANCELLED']) {
+      for (const user of [salesOwner, salesManager, ceo]) {
+        expect(canChangeDealCustomer(user, ownedTicket, quotation({ origin: 'DEAL_DIRECT', docStatus })), `${user.role} on ${docStatus}`).toBe(false);
+      }
+    }
+  });
+
+  it('refuses a pricing-request quotation, and one whose origin is missing or new', () => {
+    for (const origin of ['PRICING_REQUEST', undefined, null, 'SOMETHING_ELSE']) {
+      expect(canChangeDealCustomer(salesOwner, ownedTicket, quotation({ origin })), String(origin)).toBe(false);
+      expect(canChangeDealCustomer(salesManager, ownedTicket, quotation({ origin })), String(origin)).toBe(false);
+    }
+  });
+
+  it('allows the owning sales rep, the sales_manager and the ceo on a DRAFT direct quotation', () => {
+    expect(canChangeDealCustomer(salesOwner, ownedTicket, draftDirect)).toBe(true);
+    expect(canChangeDealCustomer(salesManager, ownedTicket, draftDirect)).toBe(true);
+    expect(canChangeDealCustomer(salesManager, otherTicket, draftDirect)).toBe(true);
+    expect(canChangeDealCustomer(ceo, otherTicket, draftDirect)).toBe(true);
+  });
+
+  it('compares ids as numbers, like the server', () => {
+    expect(canChangeDealCustomer({ id: '6', role: 'sales' }, { createdById: 6 }, draftDirect)).toBe(true);
+    expect(canChangeDealCustomer({ id: 6, role: 'sales' }, { createdById: null }, draftDirect)).toBe(false);
+  });
+});
+
 describe('canApproveDealQuotation / canDecideDealQuotation', () => {
   it('sales_manager and ceo may approve, role-only', () => {
     expect(canApproveDealQuotation(salesManager)).toBe(true);
@@ -440,9 +487,11 @@ describe('validateQuotationItem (#M4, owner ruling 2026-09-10)', () => {
     expect(validateQuotationItem(completeItem({ piecesPerBox: 0 }))).toEqual({ piecesPerBox: 'กรุณาระบุแผ่น/กล่อง' });
   });
 
-  it('flags a missing or non-positive ราคา/หน่วย', () => {
-    expect(validateQuotationItem(completeItem({ unitPrice: null }))).toEqual({ unitPrice: 'กรุณาระบุราคา/หน่วย' });
-    expect(validateQuotationItem(completeItem({ unitPrice: 0 }))).toEqual({ unitPrice: 'กรุณาระบุราคา/หน่วย' });
+  // The box this names on a Thai tile row is ราคา/ตร.ม. since sales feedback #1 (2026-10-06); the
+  // error KEY is still `unitPrice` (it names the box, `price-N`). See quotationPerSqmPrice.test.jsx.
+  it('flags a missing or non-positive price', () => {
+    expect(validateQuotationItem(completeItem({ unitPrice: null }))).toEqual({ unitPrice: 'กรุณาระบุราคา/ตร.ม.' });
+    expect(validateQuotationItem(completeItem({ unitPrice: 0 }))).toEqual({ unitPrice: 'กรุณาระบุราคา/ตร.ม.' });
   });
 
   it('AREA mode requires a positive พื้นที่, ignoring piecesInput entirely', () => {
@@ -635,29 +684,29 @@ describe('piecesPerSqmFromSqmPerPiece / sqmPerPieceFromPiecesPerSqm (แผ่�
   });
 });
 
-describe('listPricePerSqmIncVat (Thai SPECIAL_SQM ราคาตั้ง shown per ตร.ม., owner feedback 2026-09-14)', () => {
+describe('perSqmIncVatFromPerPiece (Thai SPECIAL_SQM ราคาตั้ง shown per ตร.ม., owner feedback 2026-09-14)', () => {
   // The four real-document figures the owner gave, each round2(unitPrice x piecesPerSqm x 1.07)
   // where piecesPerSqm is piecesPerSqmFromSqmPerPiece(sqmPerPiece) -- the SAME reciprocal exercised
   // above, never a second one.
   it('reproduces all four owner figures exactly', () => {
-    expect(listPricePerSqmIncVat(1299.0, 0.72)).toBe(1932.0);
-    expect(listPricePerSqmIncVat(881.46, 0.36)).toBe(2621.99);
-    expect(listPricePerSqmIncVat(843.14, 0.36)).toBe(2508.0);
-    expect(listPricePerSqmIncVat(900.63, 0.36)).toBe(2679.01);
+    expect(perSqmIncVatFromPerPiece(1299.0, 0.72)).toBe(1932.0);
+    expect(perSqmIncVatFromPerPiece(881.46, 0.36)).toBe(2621.99);
+    expect(perSqmIncVatFromPerPiece(843.14, 0.36)).toBe(2508.0);
+    expect(perSqmIncVatFromPerPiece(900.63, 0.36)).toBe(2679.01);
   });
 
   it('returns null when unitPrice is missing, zero or negative', () => {
-    expect(listPricePerSqmIncVat(null, 0.36)).toBeNull();
-    expect(listPricePerSqmIncVat('', 0.36)).toBeNull();
-    expect(listPricePerSqmIncVat(0, 0.36)).toBeNull();
-    expect(listPricePerSqmIncVat(-1, 0.36)).toBeNull();
+    expect(perSqmIncVatFromPerPiece(null, 0.36)).toBeNull();
+    expect(perSqmIncVatFromPerPiece('', 0.36)).toBeNull();
+    expect(perSqmIncVatFromPerPiece(0, 0.36)).toBeNull();
+    expect(perSqmIncVatFromPerPiece(-1, 0.36)).toBeNull();
   });
 
   it('returns null when sqmPerPiece is missing, zero or negative', () => {
-    expect(listPricePerSqmIncVat(1299.0, null)).toBeNull();
-    expect(listPricePerSqmIncVat(1299.0, '')).toBeNull();
-    expect(listPricePerSqmIncVat(1299.0, 0)).toBeNull();
-    expect(listPricePerSqmIncVat(1299.0, -0.36)).toBeNull();
+    expect(perSqmIncVatFromPerPiece(1299.0, null)).toBeNull();
+    expect(perSqmIncVatFromPerPiece(1299.0, '')).toBeNull();
+    expect(perSqmIncVatFromPerPiece(1299.0, 0)).toBeNull();
+    expect(perSqmIncVatFromPerPiece(1299.0, -0.36)).toBeNull();
   });
 });
 
@@ -1159,6 +1208,43 @@ describe('filterDealQuotationRows', () => {
     expect(meta.filterDealQuotationRows(rows, { repId: 6, amount: 'gte1m' })).toEqual([]);
   });
 
+  // Owner ask 2026-10-13 ("filter according to the ลูกค้า as email or not"). The customer master
+  // (customers.customer, V41) has NO email column, so "the customer has an email" can only mean the
+  // quotation's own snapshots: contactEmail (V167, the customer-master contact snapshot, no
+  // longer printed) OR orderedByEmail (V192.3, the ผู้ติดต่อ email the rep typed, which prints). Either
+  // one non-blank = มีอีเมล; whitespace counts as blank (the live writers NULLIF(TRIM()) these
+  // columns, but V167's backfill copied contact.email raw, so old rows can carry whitespace).
+  it('filters by email: has = contactEmail OR orderedByEmail non-blank, none = both blank', () => {
+    const emailRows = [
+      { id: 1, contactEmail: 'a@example.co.th', orderedByEmail: null },
+      { id: 2, contactEmail: null, orderedByEmail: 'b@example.co.th' },
+      { id: 3, contactEmail: '   ', orderedByEmail: '' },
+      { id: 4 },
+      { id: 5, contactEmail: 'c@example.co.th', orderedByEmail: 'd@example.co.th' },
+    ];
+    const ids = (opts) => meta.filterDealQuotationRows(emailRows, opts).map((r) => r.id);
+    expect(ids({ email: 'has' })).toEqual([1, 2, 5]);
+    expect(ids({ email: 'none' })).toEqual([3, 4]);
+    // Unknown / empty email value is a no-op, like amount.
+    expect(ids({ email: 'nonsense' })).toEqual([1, 2, 3, 4, 5]);
+    expect(ids({ email: '' })).toEqual([1, 2, 3, 4, 5]);
+    // Composes with repId (AND).
+    const mixed = [
+      { id: 1, salesRepId: 6, contactEmail: 'a@example.co.th' },
+      { id: 2, salesRepId: 9, contactEmail: 'b@example.co.th' },
+      { id: 3, salesRepId: 6, contactEmail: null },
+    ];
+    expect(meta.filterDealQuotationRows(mixed, { repId: 6, email: 'has' }).map((r) => r.id)).toEqual([1]);
+    expect(meta.filterDealQuotationRows(mixed, { repId: 9, email: 'none' })).toEqual([]);
+  });
+
+  it('offers exactly มีอีเมล / ไม่มีอีเมล as the email filter options, keyed has / none', () => {
+    expect(meta.DEAL_QUOTATION_EMAIL_OPTIONS).toEqual([
+      { value: 'has', label: 'มีอีเมล' },
+      { value: 'none', label: 'ไม่มีอีเมล' },
+    ]);
+  });
+
   it('is a no-op when both filters are empty/absent', () => {
     expect(meta.filterDealQuotationRows(rows)).toEqual(rows);
     expect(meta.filterDealQuotationRows(rows, {})).toEqual(rows);
@@ -1332,7 +1418,7 @@ describe('v3 row validation', () => {
     expect(meta.validateQuotationItem({ ...perSqm, piecesPerBox: '' }, 'SPECIAL_SQM', 'EN').piecesPerBox).toBeTruthy();
     expect(meta.validateQuotationItem({ ...perSqm, sqmPerBox: 0.1234567 }, 'SPECIAL_SQM', 'EN').sqmPerBox).toBe('ทศนิยมได้ไม่เกิน 6 ตำแหน่ง');
     // The same row in THAI ราคาพิเศษ still needs its list price, and never asks for ตร.ม./กล่อง.
-    expect(meta.validateQuotationItem({ ...perSqm, sqmPerBox: null }, 'SPECIAL_SQM', 'TH')).toEqual({ unitPrice: 'กรุณาระบุราคาตั้ง (บาท/แผ่น)' });
+    expect(meta.validateQuotationItem({ ...perSqm, sqmPerBox: null }, 'SPECIAL_SQM', 'TH')).toEqual({ unitPrice: 'กรุณาระบุราคาตั้ง (บาท/ตร.ม.)' });
     expect(meta.quotationItemMissingSummary({ sqmPerBox: 'x', specialPriceSqm: 'y' }, 0)).toBe('รายการที่ 1: ขาด ตร.ม./กล่อง, ราคาต่อ ตร.ม.');
   });
 
@@ -1389,8 +1475,8 @@ describe('v3 row validation', () => {
     expect(meta.validateQuotationItem({ ...tile, specialPriceSqm: 1350.125 }, 'SPECIAL_SQM').specialPriceSqm).toBe('ทศนิยมได้ไม่เกิน 2 ตำแหน่ง');
   });
 
-  it('DIRECT_NET needs the net per piece and lets the list price stay blank', () => {
-    expect(meta.validateQuotationItem({ ...tile, unitPrice: '', directNetPrice: '' }, 'DIRECT_NET')).toEqual({ directNetPrice: 'กรุณาระบุราคาสุทธิ/แผ่น' });
+  it('DIRECT_NET needs the net and lets the list price stay blank', () => {
+    expect(meta.validateQuotationItem({ ...tile, unitPrice: '', directNetPrice: '' }, 'DIRECT_NET')).toEqual({ directNetPrice: 'กรุณาระบุราคาสุทธิ (บาท/ตร.ม.)' });
     expect(meta.validateQuotationItem({ ...tile, unitPrice: '', directNetPrice: 500 }, 'DIRECT_NET')).toEqual({});
   });
 
@@ -1498,9 +1584,12 @@ describe('buildQuotationChecklist', () => {
     //
     // Owner ruling 2026-09-30 (one pricing route per deal): 'livePricingRequest' joins — it mirrors
     // DealQuotationService#create's 409 on a deal holding a live pricing request.
+    // Owner ruling 2026-10-11: orderedByEmail joins the set — the server refuses a malformed
+    // ผู้ติดต่อ Email with a 400 on every save, so the editor says so before the click. (A blank
+    // one is fine: the field is optional, and there is no "missing" check for it at all.)
     expect([...meta.QUOTATION_BLOCKING_CHECKS].sort()).toEqual(
       ['creditDaysInvalid', 'customer', 'deal', 'entryChannel', 'items', 'liveDirectQuotation', 'livePricingRequest',
-        'locationLabels', 'priceModeLanguage', 'project', 'recipient'],
+        'locationLabels', 'orderedByEmail', 'priceModeLanguage', 'project', 'recipient'],
     );
     // Wrong-way-round: none of the header fields a customer might simply not have is blocking,
     // and the blank-creditDays reminder is a warning, not a blocker (fix 6).
@@ -1684,7 +1773,7 @@ describe('buildQuotationChecklist', () => {
       adjustmentErrorsByRow: [{ adjustmentPct: 'กรุณาระบุเปอร์เซ็นต์ส่วนลด' }],
     });
     expect(entries.map((e) => [e.blocking, e.targetId, e.message])).toEqual([
-      [true, 'thickness-0', 'รายการที่ 1: ขาด ความหนา, แผ่น/ตร.ม., แผ่น/กล่อง, ราคา/หน่วย, จำนวน (พื้นที่)'],
+      [true, 'thickness-0', 'รายการที่ 1: ขาด ความหนา, แผ่น/ตร.ม., แผ่น/กล่อง, ราคา, จำนวน (พื้นที่)'],
       [true, 'plain-unit-1', 'รายการที่ 2: ขาด หน่วย'],
       [true, 'adj-pct-2', 'รายการที่ 3: ขาด เปอร์เซ็นต์ส่วนลด'],
     ]);

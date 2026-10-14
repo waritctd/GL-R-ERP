@@ -81,7 +81,8 @@ abstract class FinanceDealTestBase extends AbstractPostgresIntegrationTest {
         // exactly as DealEntryAccessIntegrationTest's own wiring already does.
         ticketService = new TicketService(tickets, notifications, new ObjectMapper(), new CustomerRepository(jdbc),
             new QuotationRenderer(), (th.co.glr.hr.pricingrequest.PricingRequestService) null,
-            new EmployeeAuthRepository(jdbc));
+            new EmployeeAuthRepository(jdbc), new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
+            new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
         service = new FinanceDealService(tickets, new FinanceDealRepository(jdbc), depositNotices,
             remainingInvoices, attachments, ticketService);
         financeMvc = MockMvcBuilders.standaloneSetup(new FinanceDealController(service, new SessionContext()))

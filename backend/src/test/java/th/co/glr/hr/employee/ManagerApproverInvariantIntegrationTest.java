@@ -215,7 +215,7 @@ class ManagerApproverInvariantIntegrationTest extends AbstractPostgresIntegratio
                     rs.getLong("employee_id"), null, null, null, rs.getBoolean("is_active"),
                     rs.wasNull() ? null : divisionId, rs.getString("division_code"),
                     rs.getString("division_name"), rs.getString("position_name"),
-                    LocalDate.now(), null, false);
+                    LocalDate.now(), null, false, false);
                 // Build the principal exactly as login does, so the `manager` flag under test is
                 // derived rather than asserted by the fixture.
                 UserPrincipal candidate = new UserPrincipal(
@@ -262,7 +262,7 @@ class ManagerApproverInvariantIntegrationTest extends AbstractPostgresIntegratio
                 EmployeeLoginRecord record = new EmployeeLoginRecord(
                     reportsToId, null, null, null, true, null,
                     rs.getString("division_code"), rs.getString("division_name"),
-                    rs.getString("position_name"), LocalDate.now(), null, false);
+                    rs.getString("position_name"), LocalDate.now(), null, false, false);
                 return "ceo".equals(DivisionAccessPolicy.roleFor(record));
             })
             .stream()

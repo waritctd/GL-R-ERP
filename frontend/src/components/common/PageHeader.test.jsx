@@ -61,6 +61,27 @@ describe('PageHeader', () => {
     expect(header.className).toContain('mobile:grid-cols-[minmax(0,1fr)]');
   });
 
+  // `titleAside` is for a small control that belongs to the title itself (the quotation page's
+  // copy button, owner 2026-10-12), as opposed to `actions`, the page's CTAs. It sits in the
+  // title's row, after the heading, and is not part of the heading's text, so the page's
+  // accessible name stays the title alone.
+  it('renders titleAside beside the heading, outside it and outside the actions', () => {
+    render(
+      <PageHeader
+        title="ใบเสนอราคา QT-1"
+        titleAside={<button type="button" aria-label="คัดลอกเป็นใบใหม่">⧉</button>}
+        actions={<button type="button">ดาวน์โหลด</button>}
+      />,
+    );
+
+    const heading = screen.getByRole('heading', { level: 1 });
+    const aside = screen.getByRole('button', { name: 'คัดลอกเป็นใบใหม่' });
+    expect(heading.textContent).toBe('ใบเสนอราคา QT-1');
+    expect(heading.contains(aside)).toBe(false);
+    expect(heading.parentElement.contains(aside)).toBe(true);
+    expect(aside.parentElement.contains(screen.getByRole('button', { name: 'ดาวน์โหลด' }))).toBe(false);
+  });
+
   // The floor is a DEFAULT, not a lock: a caller passing its own grid-cols must still win, because
   // `cn` is twMerge and both classes live in the same merge group. AttendancePage relied on exactly
   // this before the floor moved into the component.

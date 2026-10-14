@@ -10,6 +10,7 @@ import {
   factoryQuoteStatusLabel,
   formatAddress,
   quotationRecipientLabel,
+  formatFileSize,
   formatMoney,
   OFFERED_TO_LABEL,
   formatShortDate,
@@ -474,5 +475,33 @@ describe('S1 LEAD_APPROACH wording follows the entry channel', () => {
       expect(dealStageLabel('DELIVERY_SCHEDULING', channel).label)
         .toBe(dealStageLabel('DELIVERY_SCHEDULING').label);
     });
+  });
+});
+
+// A stored file's size beside its name, in the list of a quotation's เอกสารแนบ.
+describe('formatFileSize', () => {
+  it('reads in whole KB under one megabyte', () => {
+    expect(formatFileSize(250880)).toBe('245 KB');
+    expect(formatFileSize(1536)).toBe('2 KB');
+  });
+
+  it('reads in MB with one decimal from one megabyte up', () => {
+    expect(formatFileSize(1024 * 1024)).toBe('1.0 MB');
+    expect(formatFileSize(1258291)).toBe('1.2 MB');
+    expect(formatFileSize(10 * 1024 * 1024)).toBe('10.0 MB');
+  });
+
+  it('reads a size that rounds up to a megabyte as 1.0 MB, never as "1024 KB"', () => {
+    expect(formatFileSize(1024 * 1024 - 1)).toBe('1.0 MB');
+  });
+
+  it('never reads "0 KB", which would look like an empty file', () => {
+    expect(formatFileSize(1)).toBe('1 KB');
+    expect(formatFileSize(300)).toBe('1 KB');
+  });
+
+  it('reads "-" when the size is not known', () => {
+    expect(formatFileSize(null)).toBe('-');
+    expect(formatFileSize(undefined)).toBe('-');
   });
 });

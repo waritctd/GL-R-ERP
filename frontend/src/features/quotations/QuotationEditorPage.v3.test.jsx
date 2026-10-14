@@ -335,7 +335,8 @@ describe('v3/v3b document settings', () => {
     renderEditor('/quotations/new?ticket=18');
     await screen.findByRole('group', { name: 'วิธีกรอกราคากระเบื้อง' });
     fireEvent.click(screen.getByRole('button', { name: /เพิ่มรายการในตำแหน่งนี้/ }));
-    fireEvent.change(screen.getByLabelText(/^ราคา\/หน่วย/), { target: { value: '350' } });
+    fireEvent.change(screen.getByLabelText(/^แผ่น\/ตร\.ม\./), { target: { value: '1.39' } });
+    fireEvent.change(screen.getByLabelText(/^ราคา\/ตร\.ม\./), { target: { value: '350' } });
     await waitFor(() => expect(api.dealQuotations.calculateLine).toHaveBeenCalled(), { timeout: 1000 });
     expect(api.dealQuotations.calculateLine.mock.calls.at(-1)[1]).toBe('TH');
   });
@@ -357,12 +358,17 @@ describe('v3/v3b document settings', () => {
     // The Thai ราคาพิเศษ needs its list price as well (DealQuotationService#requirePriceValidForType
     // refuses a TILE row without one); until both are typed the editor previews nothing at all —
     // quotationMeta#rowHasPriceForPreview — rather than a figure priced under another mode.
-    fireEvent.change(screen.getByLabelText(/^ราคาตั้ง \(บาท\/แผ่น\)/), { target: { value: '2000' } });
-    fireEvent.change(screen.getByLabelText(/^ราคาพิเศษ \(บาท\/ตร\.ม\./), { target: { value: '1350' } });
+    // Both are per ตร.ม. including VAT since sales feedback #1 (2026-10-06), so the row needs its
+    // แผ่น/ตร.ม. before either can be previewed.
+    fireEvent.change(screen.getByLabelText(/^แผ่น\/ตร\.ม\./), { target: { value: '2.78' } });
+    fireEvent.change(screen.getByLabelText(/^ราคาตั้ง\/ตร\.ม\. \(รวม VAT\)/), { target: { value: '2000' } });
+    fireEvent.change(screen.getByLabelText(/^ราคาพิเศษ\/ตร\.ม\./), { target: { value: '1350' } });
 
     await waitFor(() => expect(screen.getByTestId('special-net-0').textContent).toBe('= สุทธิ ฿453.84/แผ่น (ก่อน VAT)'));
     const sent = api.dealQuotations.calculateLine.mock.calls.at(-1)[0];
-    expect(sent).toMatchObject({ lineType: 'TILE', specialPriceSqm: 1350, directNetPrice: null, discountPct: null });
+    expect(sent).toMatchObject({
+      lineType: 'TILE', specialPriceSqm: 1350, listPriceSqm: 2000, unitPrice: null, directNetPrice: null, discountPct: null,
+    });
   });
 });
 
@@ -687,6 +693,166 @@ describe('ยืนราคา — จำนวนวัน / ระบุว�
     await waitFor(() => expect(screen.queryByLabelText('ยืนราคาถึงวันที่')).toBeNull());
     expect(document.getElementById('validityDays')).not.toBeNull();
     expect(within(group('ยืนราคา')).queryByRole('button', { name: 'ระบุวันที่' })).toBeNull();
+  });
+});
+
+// Sales feedback #1 (แจ้งปัญหาการใช้งาน เสนอราคา, 2026-10-06, V192.2) — "แก้เป็น ตร.ม. รวม VAT ทุกแบบ",
+// driven through the whole editor: what a typed price asks the server, what comes back onto the
+// row, and what a save carries. quotationPerSqmPrice.test.jsx pins the row and the pure helpers.
+describe('ราคา/ตร.ม. รวม VAT ทุกแบบ (sales feedback #1, 2026-10-06, V192.2)', () => {
+  const byId = (id) => document.getElementById(id);
+  const lastPreviewed = () => api.dealQuotations.calculateLine.mock.calls.at(-1)[0];
+  // A row priced per ตร.ม.: the owner's 60×120, 1,800 → 1,210.25 a piece (the server's figures).
+  const TYPED_ITEM = {
+    ...TILE_ITEM, sizeText: '60x120', sqmPerPiece: 0.72, unitPrice: 1210.25, netUnitPrice: 1210.25,
+    listPriceSqm: 1800, directNetPriceSqm: null,
+  };
+  const TYPED_NET_ITEM = { ...TYPED_ITEM, netUnitPrice: 531.16, directNetPriceSqm: 790 };
+
+  async function addRowWithArea() {
+    await screen.findByRole('group', { name: 'วิธีกรอกราคากระเบื้อง' });
+    fireEvent.click(screen.getByRole('button', { name: /เพิ่มรายการในตำแหน่งนี้/ }));
+    fireEvent.change(screen.getByLabelText(/^แผ่น\/ตร\.ม\./), { target: { value: '1.39' } });
+  }
+
+  async function savedItem() {
+    fireEvent.change(screen.getByLabelText('หมายเหตุเพิ่มเติม'), { target: { value: 'x' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalled());
+    return api.dealQuotations.update.mock.calls[0][1].items[0];
+  }
+
+  it('typing ราคา/ตร.ม. asks the server with that figure and no per-แผ่น price, then shows the per-แผ่น answer', async () => {
+    api.dealQuotations.calculateLine.mockResolvedValue({
+      item: { unitPrice: 1210.25, netUnitPrice: 1210.25, lineAmount: 12102.5, calculationLine: '(server calc)' },
+    });
+    renderEditor('/quotations/new?ticket=18');
+    await addRowWithArea();
+    fireEvent.change(screen.getByLabelText(/^ราคา\/ตร\.ม\./), { target: { value: '1800' } });
+
+    await waitFor(() => expect(screen.getByTestId('list-per-piece-0').textContent).toBe('= ฿1,210.25/แผ่น (ก่อน VAT)'));
+    expect(lastPreviewed()).toMatchObject({ lineType: 'TILE', listPriceSqm: 1800, unitPrice: null, directNetPriceSqm: null });
+    // The box keeps what the rep typed — the per-แผ่น answer goes UNDER it, never into it.
+    expect(screen.getByLabelText(/^ราคา\/ตร\.ม\./).value).toBe('1800');
+  });
+
+  it('a draft priced per ตร.ม. opens showing the typed figure, and a save re-sends exactly that', async () => {
+    api.dealQuotations.get.mockResolvedValue({ quotation: draft({ items: [TYPED_ITEM] }) });
+    renderEditor('/quotations/5');
+    await screen.findByTestId('checklist-warnings');
+
+    expect(byId('price-0').value).toBe('1800');
+    expect(screen.getByTestId('list-per-piece-0').textContent).toBe('= ฿1,210.25/แผ่น (ก่อน VAT)');
+    expect(await savedItem()).toMatchObject({ id: 101, listPriceSqm: 1800, unitPrice: null });
+  });
+
+  // The no-drift guarantee for every draft that exists today. 850 a piece shows as 2,528.41 per
+  // ตร.ม. (850 × 2.78 × 1.07) — and is saved back as 850 a piece, not as a re-derived figure.
+  it('a draft saved before this change is SHOWN per ตร.ม. but saved back per แผ่น, so an untouched price cannot move', async () => {
+    renderEditor('/quotations/5');
+    await screen.findByTestId('checklist-warnings');
+
+    expect(byId('price-0').value).toBe('2528.41');
+    expect(screen.getByTestId('list-per-piece-0').textContent).toBe('คิดจากราคา ฿850.00/แผ่น (ก่อน VAT)');
+    expect(await savedItem()).toMatchObject({ id: 101, unitPrice: 850, listPriceSqm: null });
+  });
+
+  it('retyping the price on such a draft makes that row a per-ตร.ม. one from then on', async () => {
+    api.dealQuotations.calculateLine.mockResolvedValue({
+      item: { unitPrice: 676.39, netUnitPrice: 676.39, lineAmount: 38554.23, calculationLine: '(server calc)' },
+    });
+    renderEditor('/quotations/5');
+    await screen.findByTestId('checklist-warnings');
+    fireEvent.change(byId('price-0'), { target: { value: '2012' } });
+
+    await waitFor(() => expect(screen.getByTestId('list-per-piece-0').textContent).toBe('= ฿676.39/แผ่น (ก่อน VAT)'));
+    expect(lastPreviewed()).toMatchObject({ listPriceSqm: 2012, unitPrice: null });
+    expect(await savedItem()).toMatchObject({ id: 101, listPriceSqm: 2012, unitPrice: null });
+  });
+
+  // A refused preview must not leave the PREVIOUS price's per-แผ่น figure sitting under a box
+  // that now says something else.
+  it('a refused preview clears the per-แผ่น figure and keeps what was typed', async () => {
+    api.dealQuotations.get.mockResolvedValue({ quotation: draft({ items: [TYPED_ITEM] }) });
+    api.dealQuotations.calculateLine.mockRejectedValue(new Error('400'));
+    renderEditor('/quotations/5');
+    await screen.findByTestId('checklist-warnings');
+    expect(screen.getByTestId('list-per-piece-0').textContent).toBe('= ฿1,210.25/แผ่น (ก่อน VAT)');
+
+    fireEvent.change(byId('price-0'), { target: { value: '1900' } });
+
+    await waitFor(() => expect(api.dealQuotations.calculateLine).toHaveBeenCalled(), { timeout: 1000 });
+    await waitFor(() => expect(screen.getByTestId('list-per-piece-0').textContent).toBe('ระบบคำนวณราคาต่อแผ่นให้'));
+    expect(byId('price-0').value).toBe('1900');
+  });
+
+  // The server refuses to convert a per-ตร.ม. price with no area per piece, so nothing is asked —
+  // and the row says what is missing instead of showing a number.
+  it('a per-ตร.ม. price on a row with no แผ่น/ตร.ม. is not sent for a preview', async () => {
+    renderEditor('/quotations/new?ticket=18');
+    await screen.findByRole('group', { name: 'วิธีกรอกราคากระเบื้อง' });
+    fireEvent.click(screen.getByRole('button', { name: /เพิ่มรายการในตำแหน่งนี้/ }));
+    fireEvent.change(screen.getByLabelText(/^ราคา\/ตร\.ม\./), { target: { value: '1800' } });
+
+    await new Promise((resolve) => { setTimeout(resolve, 450); });
+    expect(api.dealQuotations.calculateLine).not.toHaveBeenCalled();
+    expect(screen.getByTestId('list-per-piece-0').textContent).toBe('กรอกแผ่น/ตร.ม. ก่อน ระบบจึงคำนวณราคาต่อแผ่นได้');
+  });
+
+  it('ราคาสุทธิ: the net is typed per ตร.ม., and a blank ราคาตั้ง is sent as that same net — without filling its own box in', async () => {
+    api.dealQuotations.calculateLine.mockResolvedValue({
+      item: { unitPrice: 531.16, netUnitPrice: 531.16, lineAmount: 5311.6, calculationLine: '(server calc)' },
+    });
+    renderEditor('/quotations/new?ticket=18');
+    await screen.findByRole('group', { name: 'วิธีกรอกราคากระเบื้อง' });
+    fireEvent.click(within(group('วิธีกรอกราคากระเบื้อง')).getByRole('button', { name: 'ราคาสุทธิ บาท/ตร.ม.' }));
+    await addRowWithArea();
+    fireEvent.change(screen.getByLabelText(/^ราคาสุทธิ\/ตร\.ม\./), { target: { value: '790' } });
+
+    await waitFor(() => expect(screen.getByTestId('direct-net-per-piece-0').textContent).toBe('= สุทธิ ฿531.16/แผ่น (ก่อน VAT)'));
+    expect(lastPreviewed()).toMatchObject({ directNetPriceSqm: 790, listPriceSqm: 790, unitPrice: null, directNetPrice: null });
+    // "เว้นว่าง = ใช้ราคาสุทธิ" has to stay blank: the list price the server derived for THIS request
+    // was the editor's own stand-in, not something the rep typed.
+    expect(byId('price-0').value).toBe('');
+  });
+
+  // docHasSpecialPricing (a ราคาสุทธิ row whose list and net differ) gates ระบุวันที่, and losing it
+  // resets ยืนราคา to จำนวนวัน on the spot. The per-แผ่น list price must therefore not blink out
+  // between a keystroke and the server's answer.
+  it('ราคาสุทธิ: retyping ราคาตั้ง does not knock ยืนราคา out of ระบุวันที่ while the server works it out', async () => {
+    api.dealQuotations.get.mockResolvedValue({
+      quotation: draft({ priceMode: 'DIRECT_NET', items: [TYPED_NET_ITEM], validityMode: 'DATE', validityUntil: '2026-12-31' }),
+    });
+    let answer;
+    api.dealQuotations.calculateLine.mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+    renderEditor('/quotations/5');
+    await screen.findByTestId('checklist-warnings');
+    expect(screen.getByLabelText('ยืนราคาถึงวันที่').value).toBe('2026-12-31');
+
+    fireEvent.change(byId('price-0'), { target: { value: '1900' } });
+    await waitFor(() => expect(api.dealQuotations.calculateLine).toHaveBeenCalled(), { timeout: 1000 });
+    expect(screen.getByLabelText('ยืนราคาถึงวันที่').value).toBe('2026-12-31');
+
+    answer({ item: { unitPrice: 1277.49, netUnitPrice: 531.16, lineAmount: 30276.12, calculationLine: '(server calc)' } });
+    await waitFor(() => expect(screen.getByTestId('list-per-piece-0').textContent).toBe('= ฿1,277.49/แผ่น (ก่อน VAT)'));
+    expect(screen.getByLabelText('ยืนราคาถึงวันที่').value).toBe('2026-12-31');
+  });
+
+  it('switching the document to English clears the per-ตร.ม. price and goes back to a per-piece box', async () => {
+    api.dealQuotations.get.mockResolvedValue({ quotation: draft({ items: [TYPED_ITEM] }) });
+    renderEditor('/quotations/5');
+    await screen.findByTestId('checklist-warnings');
+    fireEvent.click(within(group('ภาษาเอกสาร')).getByRole('button', { name: /English/ }));
+
+    const box = await screen.findByLabelText(/^ราคา\/หน่วย/);
+    expect(box.value).toBe('');
+    expect(screen.queryByLabelText(/^ราคา\/ตร\.ม\./)).toBeNull();
+
+    fireEvent.change(box, { target: { value: '15' } });
+    await waitFor(() => expect(api.dealQuotations.calculateLine).toHaveBeenCalled(), { timeout: 1000 });
+    expect(lastPreviewed()).toMatchObject({ unitPrice: 15, listPriceSqm: null, directNetPriceSqm: null });
+    expect(api.dealQuotations.calculateLine.mock.calls.at(-1)[1]).toBe('EN');
   });
 });
 

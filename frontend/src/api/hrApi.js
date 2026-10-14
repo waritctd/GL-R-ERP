@@ -473,6 +473,7 @@ export const api = {
     addActivity: (id, payload) => apiRequest(API_ROUTES.tickets.activities(id), { method: 'POST', body: payload }),
     listActivities: (id) => apiRequest(API_ROUTES.tickets.activities(id)),
     updateTracking: (id, payload) => apiRequest(API_ROUTES.tickets.tracking(id), { method: 'PUT', body: payload }),
+    changeCustomer: (id, payload) => apiRequest(API_ROUTES.tickets.customer(id), { method: 'PUT', body: payload }),
   },
   depositNotices: {
     noteTemplates: () => apiRequest(API_ROUTES.depositNotices.noteTemplates),
@@ -728,7 +729,7 @@ export const api = {
       formData.append('attachType', attachType || 'OTHER');
       if (quotationId) formData.append('quotationId', String(quotationId));
       const res = await fetch(API_ROUTES.attachments.upload(ticketId), {
-        method: 'POST', credentials: 'include', body: formData,
+        method: 'POST', credentials: 'include', headers: csrfHeaders('POST'), body: formData,
       });
       if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.message || 'อัปโหลดไม่สำเร็จ'); }
       return res.json();
@@ -773,6 +774,7 @@ export const api = {
       const res = await fetch(API_ROUTES.commissions.create, {
         method: 'POST',
         credentials: 'include',
+        headers: csrfHeaders('POST'),
         body: formData,
       });
       if (!res.ok) {
@@ -801,17 +803,10 @@ export const api = {
       formData.append('withholdingTax', String(payload.withholdingTax ?? 0));
       formData.append('overpayment', String(payload.overpayment ?? 0));
       if (payload.invoiceAttachment) formData.append('invoiceAttachment', payload.invoiceAttachment);
-      // Hand-rolled multipart fetch() must attach X-XSRF-TOKEN itself — apiRequest() does it for
-      // JSON calls, but this bypasses it for the file upload. Omitting it makes CsrfCookieFilter
-      // reject POST /api/commissions/from-deal with 403 "Invalid CSRF token". Same block as
-      // priceImport.upload below (see the leave-submit regression note at the top of this file).
-      const csrfToken = document.cookie.split('; ')
-        .find((c) => c.startsWith('XSRF-TOKEN='))
-        ?.split('=')[1];
       const res = await fetch(API_ROUTES.commissions.createFromDeal, {
         method: 'POST',
         credentials: 'include',
-        headers: csrfToken ? { 'X-XSRF-TOKEN': csrfToken } : {},
+        headers: csrfHeaders('POST'),
         body: formData,
       });
       if (!res.ok) {
@@ -952,9 +947,10 @@ export const api = {
     // every call, no uploader short-circuit, CEO excluded) is enforced entirely server-side by
     // TaxAllowanceDeclarationService#requireOwnerOrHr -- see that method's javadoc.
     //
-    // csrfHeaders('POST') is applied explicitly here (unlike several older attachment call sites
-    // in this file, which forget it and 403 in production) -- see the tax-allowance plan doc's PR C
-    // section, "two traps that will cost a day if missed".
+    // csrfHeaders('POST') is applied explicitly here (several older attachment call sites in this
+    // file used to forget it and 403 in production; hrApi.uploadCsrf.test.js now fails on any
+    // unsafe raw fetch() that does) -- see the tax-allowance plan doc's PR C section, "two traps
+    // that will cost a day if missed".
     // sectionKey (V135, feat/tax-allowance-sections): which of TAX_ALLOWANCE_GROUPS' five keys this
     // evidence belongs to -- optional, so callers outside the tax-allowance section flow (none
     // today) can omit it and get the pre-existing "general/uncategorized" behaviour. Sent as a plain
@@ -1224,6 +1220,7 @@ export const api = {
       const res = await fetch(API_ROUTES.pricingRequests.factoryQuoteAttachments(id), {
         method: 'POST',
         credentials: 'include',
+        headers: csrfHeaders('POST'),
         body: formData,
       });
       if (!res.ok) {
@@ -1246,6 +1243,7 @@ export const api = {
       const res = await fetch(API_ROUTES.pricingRequests.attachments(id), {
         method: 'POST',
         credentials: 'include',
+        headers: csrfHeaders('POST'),
         body: formData,
       });
       if (!res.ok) {
@@ -1322,6 +1320,32 @@ export const api = {
     restoreRemovedItem: (id, pricingDecisionItemId) => apiRequest(
       API_ROUTES.dealQuotations.restoreRemovedItem(id, pricingDecisionItemId), { method: 'POST' },
     ),
+    // The files attached to a quotation (เอกสารแนบ). Mirrors
+    // th.co.glr.hr.dealquotation.DealQuotationAttachmentController. `{ items }` lists the
+    // quotation's own files and then those of the documents it revises (`inherited: true`).
+    listAttachments: (id) => apiRequest(API_ROUTES.dealQuotations.attachments(id)),
+    // A raw fetch, because the body is FormData. apiRequest would have added the CSRF header, so
+    // this adds it itself (hrApi.uploadCsrf.test.js fails if it ever stops).
+    uploadAttachment: async (id, file) => {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch(API_ROUTES.dealQuotations.attachments(id), {
+        method: 'POST',
+        credentials: 'include',
+        headers: csrfHeaders('POST'),
+        body: formData,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'แนบเอกสารไม่สำเร็จ');
+      }
+      return res.json();
+    },
+    deleteAttachment: (attachmentId) => apiRequest(
+      API_ROUTES.dealQuotations.attachment(attachmentId), { method: 'DELETE' },
+    ),
+    // A link's address, not a request. The server answers it as a download.
+    attachmentUrl: (attachmentId) => API_ROUTES.dealQuotations.attachmentFile(attachmentId),
     downloadPdf: async (id) => {
       const res = await fetch(API_ROUTES.dealQuotations.file(id, 'pdf'), { credentials: 'include' });
       if (!res.ok) throw new Error('Download failed');

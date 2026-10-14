@@ -88,7 +88,8 @@ class DealEntryAccessIntegrationTest extends AbstractPostgresIntegrationTest {
         // pricingRequests (dead-deal cascade only) is never reached by create() -- null is safe,
         // exactly as DealQuotationIntegrationTest's own wiring already does.
         ticketService = new TicketService(tickets, notifications, new ObjectMapper(), customers,
-            new QuotationRenderer(), (PricingRequestService) null, employeeAuth);
+            new QuotationRenderer(), (PricingRequestService) null, employeeAuth, new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
+            new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
 
         JsonMapper jsonMapper = JsonMapper.builder()
             .configure(DeserializationFeature.ACCEPT_EMPTY_STRING_AS_NULL_OBJECT, true)
