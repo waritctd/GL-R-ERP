@@ -149,9 +149,13 @@ function emptyNewCustomer() {
  * before) — then ผู้รับใบเสนอราคา* for either branch. ช่องทางรับงาน belongs to a NEW deal only.
  * Without `onModeChange` the card behaves as the plain customer/project card it always was
  * (`mode` defaults to 'create'), which is what its older tests exercise.
+ *
+ * `pickOnly`: only the customer and project boxes. "เปลี่ยนลูกค้า" re-points an existing deal, so the
+ * customer-record fields (the editor already shows them), the entry channel and the recipient are not
+ * its business.
  */
 export function DealCustomerCard({
-  value, onChange, errors, showToast,
+  value, onChange, errors, showToast, suggestedProjectName = '', belowProject = null, pickOnly = false,
   user = null, mode = 'create', onModeChange = null, selectedDeal = null,
 }) {
   const { customer, project, entryChannel } = value;
@@ -300,7 +304,11 @@ export function DealCustomerCard({
     setCustomerResults([]);
     setCustomerOpen(false);
     setShowNewCustomer(false);
-    setProjectSearch('');
+    // "คัดลอกเป็นใบใหม่" (QuotationEditorPage): the copied quotation's project name is offered
+    // here, as if the rep had typed it -- so the box filters this customer's projects to that name,
+    // and "เพิ่มโครงการใหม่" opens already carrying it. Blank on every ordinary visit, which is
+    // exactly the reset this line always did.
+    setProjectSearch(suggestedProjectName);
     closeProjectDropdown();
   }
 
@@ -447,7 +455,7 @@ export function DealCustomerCard({
               <li className="sticky top-0 z-10 border-b border-border-subtle bg-surface-muted">
                 <button
                   type="button"
-                  className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-xs font-bold text-link"
+                  className="flex w-full items-center gap-1.5 border-0 bg-transparent px-3 py-2 text-left text-xs font-bold text-link"
                   onMouseDown={(e) => {
                     e.preventDefault();
                     // Keep the name the rep already typed in the search box when opening the
@@ -473,7 +481,7 @@ export function DealCustomerCard({
                     type="button"
                     role="option"
                     aria-selected={false}
-                    className="block w-full px-3 py-2 text-left text-xs hover:bg-surface-hover"
+                    className="block w-full border-0 bg-transparent px-3 py-2 text-left text-xs text-text hover:bg-surface-hover"
                     onMouseDown={(e) => { e.preventDefault(); selectCustomer(c); }}
                   >
                     <strong>{c.name}</strong>
@@ -533,7 +541,7 @@ export function DealCustomerCard({
                   id="project-new-option"
                   role="option"
                   aria-selected={projectActiveIndex === 0}
-                  className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-xs font-bold text-link"
+                  className="flex w-full items-center gap-1.5 border-0 bg-transparent px-3 py-2 text-left text-xs font-bold text-link"
                   onMouseEnter={() => setProjectActiveIndex(0)}
                   onMouseDown={(e) => { e.preventDefault(); openNewProjectFromDropdown(); }}
                 >
@@ -552,7 +560,7 @@ export function DealCustomerCard({
                     id={`project-option-${idx + 1}`}
                     role="option"
                     aria-selected={idx + 1 === projectActiveIndex}
-                    className={`block w-full px-3 py-2 text-left text-xs hover:bg-surface-hover ${idx + 1 === projectActiveIndex ? 'bg-surface-hover' : ''}`}
+                    className={`block w-full border-0 px-3 py-2 text-left text-xs text-text hover:bg-surface-hover ${idx + 1 === projectActiveIndex ? 'bg-surface-hover' : 'bg-transparent'}`}
                     onMouseEnter={() => setProjectActiveIndex(idx + 1)}
                     onMouseDown={(e) => { e.preventDefault(); selectProject(p); }}
                   >
@@ -562,10 +570,14 @@ export function DealCustomerCard({
               ))}
             </ul>
           ) : null}
+          {/* Whatever qualifies the project (the editor's "ไม่แสดงชื่อโครงการในใบเสนอราคา" tick
+              box) sits directly under its box. After the listbox in the DOM, so the open list
+              still drops from the box and covers this, as a dropdown covers what is below it. */}
+          {belowProject}
         </div>
       </div>
 
-      {customer ? (
+      {customer && !pickOnly ? (
         // Present, prefilled and editable the moment a customer is selected — deliberately NOT
         // behind an "แก้ไข" affordance, because the point is that the rep sees what the document is
         // about to print, and a repeat customer arrives already filled. Saved on blur; none is
@@ -654,7 +666,7 @@ export function DealCustomerCard({
       {/* ช่องทางรับงาน — a NEW deal's own field (#1085: a real channel is required, UNSPECIFIED is no
           longer offered, and a missing one shows its error here). Only on the สร้างดีลใหม่ branch: a
           picked deal already has its channel. */}
-      {creating ? (
+      {creating && !pickOnly ? (
         <div className="mt-4">
           <span className="mb-1 block text-xs">ช่องทางรับงาน</span>
           <div id="deal-entry-channel" role="group" aria-label="ช่องทางรับงาน" aria-describedby={errors?.entryChannel ? 'deal-entry-channel-error' : undefined} tabIndex={-1} className="flex flex-wrap gap-2">
@@ -679,6 +691,7 @@ export function DealCustomerCard({
           sits at is owned elsewhere (owner ruling 2026-09-30, slice-2 scope reduction). The route the
           off-route note compares against is the channel being chosen here on a NEW deal, the picked
           deal's own channel otherwise (owner ruling #1). */}
+      {pickOnly ? null : (
       <div className="mt-4">
         <QuotationRecipientField
           value={value.recipientType ?? ''}
@@ -687,7 +700,7 @@ export function DealCustomerCard({
           entryChannel={creating ? entryChannel : (selectedDeal?.entryChannel ?? null)}
         />
       </div>
-
+      )}
     </Panel>
   );
 }

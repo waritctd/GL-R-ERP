@@ -14,6 +14,7 @@ public record EmployeeLoginRecord(
     String positionName,
     LocalDate createdAt,
     String passwordHash,
-    boolean mustChangePassword
+    boolean mustChangePassword,
+    boolean canCreateQuotation
 ) {
 }

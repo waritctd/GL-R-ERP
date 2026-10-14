@@ -156,12 +156,14 @@ describe('mockApi.pricingRequests.create item validation', () => {
   // database, which a fresh in-memory mock session has no equivalent of.
 
   // ── Opus review finding #2 (2026-09-18): zero-piece rejection ──────────────────────────
-  it('rejects an AREA-mode item that derives to 0 pieces (small area against a large sqmPerPiece)', async () => {
+  // Owner ruling 2026-10-12: any fraction of a piece rounds UP, so a tiny positive area derives 1
+  // piece instead of 0 and is accepted -- the mirror of the backend's
+  // DealQuotationIntegrationTest#*_aTinyAreaRoundsUpToOnePiece_*. (The 0-piece guard stays as a
+  // backstop; a zero/blank area is refused by the input checks before it.)
+  it('accepts an AREA-mode item with a tiny area, which rounds up to 1 piece', async () => {
     const ticket = await ownedActiveTicketWithItems();
     const payload = validPayload(ticket.items[0]);
-    // 0.3 m² at 0.72 m²/piece: piecesPerSqm = round2(1/0.72) = 1.39, pieces =
-    // round(0.3 * 1.39) = round(0.417) = 0 -- mirrors the backend IT's identical fixture
-    // (PricingRequestItemDirectDealFieldsIntegrationTest#createDraft_rejectsAnAreaModeLineThatDerivesToZeroPieces).
+    // 0.3 m² at 0.72 m²/piece: piecesPerSqm = round2(1/0.72) = 1.39, 0.3 * 1.39 = 0.417 -> 1.
     payload.items[0].quantityMode = 'AREA';
     payload.items[0].areaSqm = 0.3;
     payload.items[0].piecesInput = null;
@@ -169,7 +171,9 @@ describe('mockApi.pricingRequests.create item validation', () => {
     payload.items[0].wastageMode = 'NONE';
     payload.items[0].piecesPerBox = 10;
     payload.items[0].roundToFullBox = false;
-    await expect(api.pricingRequests.create(ticket.summary.id, payload)).rejects.toThrow(/0 ชิ้น/);
+    const { pricingRequest } = await api.pricingRequests.create(ticket.summary.id, payload);
+    expect(pricingRequest.summary.status).toBe('DRAFT');
+    expect(pricingRequest.items[0].requestedQty).toBe(1);
   });
 
   // ── Opus review finding #9 (2026-09-18): RESTORED requestedUnitBasis / wastage-cap checks ──

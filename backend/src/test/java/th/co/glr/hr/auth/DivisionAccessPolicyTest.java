@@ -124,9 +124,46 @@ class DivisionAccessPolicyTest {
         assertThat(DivisionAccessPolicy.isManager(record(null, null, null))).isFalse();
     }
 
+    // ── can_create_quotation grant: an employee-tier role acts as sales (owner ruling 2026-10-14) ──
+
+    @Test
+    void grantHolderInQcWarehouseOrUnmappedDivisionActsAsSales() {
+        assertThat(DivisionAccessPolicy.roleFor(record("QC", "QC-QC&ISO", "พนักงาน", true))).isEqualTo("sales");
+        assertThat(DivisionAccessPolicy.roleFor(record("WH", "WH-คลังสินค้า", "พนักงาน", true))).isEqualTo("sales");
+        assertThat(DivisionAccessPolicy.roleFor(record("OTHER", "ฝ่ายอื่น", "พนักงาน", true))).isEqualTo("sales");
+    }
+
+    @Test
+    void qcWithoutGrantStaysQc() {
+        assertThat(DivisionAccessPolicy.roleFor(record("QC", "QC-QC&ISO", "พนักงาน", false))).isEqualTo("qc");
+    }
+
+    @Test
+    void grantNeverChangesAnyOtherRole() {
+        assertThat(DivisionAccessPolicy.roleFor(record("SA", "SA-ฝ่ายขาย", "ผู้จัดการฝ่ายขาย", true))).isEqualTo("sales_manager");
+        assertThat(DivisionAccessPolicy.roleFor(record("SA", "SA-ฝ่ายขาย", "พนักงาน", true))).isEqualTo("sales");
+        assertThat(DivisionAccessPolicy.roleFor(record("AC", "AC-ฝ่ายบัญชี", "พนักงาน", true))).isEqualTo("account");
+        assertThat(DivisionAccessPolicy.roleFor(record("PCIM", "PCIM-จัดซื้อต่างประเทศ", "พนักงาน", true))).isEqualTo("import");
+        assertThat(DivisionAccessPolicy.roleFor(record("HR", "HR-บุคคล", "พนักงาน", true))).isEqualTo("hr");
+        assertThat(DivisionAccessPolicy.roleFor(record("QC", "QC-QC&ISO", "กรรมการ", true))).isEqualTo("ceo");
+        assertThat(DivisionAccessPolicy.roleFor(record("MD", "MD-ผู้บริหารระดับสูง", "พนักงาน", true))).isEqualTo("ceo");
+    }
+
+    @Test
+    void inactiveGrantHolderIsNotPromoted() {
+        EmployeeLoginRecord inactive = new EmployeeLoginRecord(
+            1L, "E1", "e1@glr.co.th", "E One", false,
+            1L, "QC", "QC-QC&ISO", "พนักงาน", LocalDate.now(), "hash", false, true);
+        assertThat(DivisionAccessPolicy.roleFor(inactive)).isEqualTo("qc");
+    }
+
     private EmployeeLoginRecord record(String divisionCode, String divisionName, String position) {
+        return record(divisionCode, divisionName, position, false);
+    }
+
+    private EmployeeLoginRecord record(String divisionCode, String divisionName, String position, boolean canCreateQuotation) {
         return new EmployeeLoginRecord(
             1L, "E1", "e1@glr.co.th", "E One", true,
-            1L, divisionCode, divisionName, position, LocalDate.now(), "hash", false);
+            1L, divisionCode, divisionName, position, LocalDate.now(), "hash", false, canCreateQuotation);
     }
 }

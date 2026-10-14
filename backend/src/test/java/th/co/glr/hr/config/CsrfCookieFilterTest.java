@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import jakarta.servlet.http.Cookie;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.mock.web.MockFilterChain;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
@@ -135,5 +137,56 @@ class CsrfCookieFilterTest {
 
         assertThat(chain.getRequest()).as("non-/api paths skip the CSRF filter").isNotNull();
         assertThat(response.getStatus()).isEqualTo(200);
+    }
+
+    // The five multipart upload routes whose frontend call sites sent no X-XSRF-TOKEN header (see
+    // frontend/src/api/hrApi.uploadCsrf.test.js). The browser attaches the cookie by itself, so the
+    // request below is exactly what those calls sent. There is no multipart exemption: the fix
+    // belongs in the caller, and exempting file uploads here would reopen cross-site uploads.
+    // The sixth, a quotation's เอกสารแนบ, was written after that fix and is here so it stays covered.
+    @ParameterizedTest
+    @ValueSource(strings = {
+        "/api/tickets/11/attachments",
+        "/api/commissions",
+        "/api/commissions/from-deal",
+        "/api/factory-quotes/7/attachments",
+        "/api/pricing-requests/7/attachments",
+        "/api/deal-quotations/7/attachments"})
+    void aMultipartUploadWithTheCookieButNoHeaderIsRejected(String uploadRoute) throws Exception {
+        MockHttpServletRequest request = multipartUpload(uploadRoute);
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        MockFilterChain chain = new MockFilterChain();
+
+        filter.doFilter(request, response, chain);
+
+        assertThat(response.getStatus()).isEqualTo(403);
+        assertThat(chain.getRequest()).as("upload never reaches the controller").isNull();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+        "/api/tickets/11/attachments",
+        "/api/commissions",
+        "/api/commissions/from-deal",
+        "/api/factory-quotes/7/attachments",
+        "/api/pricing-requests/7/attachments",
+        "/api/deal-quotations/7/attachments"})
+    void aMultipartUploadWithTheMatchingHeaderPasses(String uploadRoute) throws Exception {
+        MockHttpServletRequest request = multipartUpload(uploadRoute);
+        request.addHeader(HEADER, "upload-token");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        MockFilterChain chain = new MockFilterChain();
+
+        filter.doFilter(request, response, chain);
+
+        assertThat(response.getStatus()).isEqualTo(200);
+        assertThat(chain.getRequest()).as("upload reaches the controller").isNotNull();
+    }
+
+    private static MockHttpServletRequest multipartUpload(String route) {
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", route);
+        request.setContentType("multipart/form-data; boundary=----upload");
+        request.setCookies(new Cookie(COOKIE, "upload-token"));
+        return request;
     }
 }

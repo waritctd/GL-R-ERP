@@ -869,6 +869,15 @@ export function addDaysIso(iso, deltaDays) {
   return `${y}-${m}-${d}`;
 }
 
+// A stored file's size for a list row, as "245 KB" or "1.2 MB". Anything under 1 KB reads "1 KB",
+// because "0 KB" beside a file name reads as an empty file. The unit is chosen after rounding, so
+// a size just under a megabyte reads "1.0 MB" and never "1024 KB".
+export function formatFileSize(bytes) {
+  if (bytes == null) return '-';
+  const kilobytes = Math.max(1, Math.round(Number(bytes) / 1024));
+  return kilobytes < 1024 ? `${kilobytes} KB` : `${(Number(bytes) / 1024 / 1024).toFixed(1)} MB`;
+}
+
 // Clock time only, pinned to Bangkok. Used by the attendance day table, where the date already
 // labels the row and repeating it in every cell is noise.
 export function formatBangkokTime(value) {

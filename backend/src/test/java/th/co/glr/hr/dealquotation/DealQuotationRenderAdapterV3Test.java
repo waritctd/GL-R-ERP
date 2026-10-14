@@ -101,6 +101,20 @@ class DealQuotationRenderAdapterV3Test {
     }
 
     // ── customer header: Thai document's B6 line (bug fix) ─────────────────────────────────
+    // Owner, 2026-10-13: the phone on this line is the ผู้ติดต่อ phone the rep typed on the
+    // quotation (V192.3) and nothing else — the customer-master phone is NOT a fallback. The
+    // address still comes from the customer master. `typedPhone` sets the typed one.
+
+    @Test
+    void thaiDocument_theCustomerMasterPhone_neverPrints() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithCustomer("99/1 ถนนสุขุมวิท กรุงเทพฯ 10110", "081-234-5678"), null, null);
+        assertThat(model.phoneLine()).isEqualTo("ที่อยู่ 99/1 ถนนสุขุมวิท กรุงเทพฯ 10110");
+
+        QuotationRenderModel english = DealQuotationRenderAdapter.toRenderModel(
+            englishQuotationWithCustomerPhone("+960 330 1234"), null, null);
+        assertThat(english.phoneLine()).doesNotContain("Tel.").doesNotContain("+960");
+    }
 
     /** Bug fix: the Thai branch of {@code DealQuotationRenderAdapter#toRenderModel} built "เรียน"/
      * "โทร." but never read {@code quotation.customerAddress()} at all, so every Thai-form
@@ -111,15 +125,15 @@ class DealQuotationRenderAdapterV3Test {
     @Test
     void thaiDocument_printsTheCustomerAddressAlongsideThePhoneNumber() {
         QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
-            quotationWithCustomer("99/1 ถนนสุขุมวิท กรุงเทพฯ 10110", "081-234-5678"), null, null);
-        assertThat(model.phoneLine()).isEqualTo("ที่อยู่ 99/1 ถนนสุขุมวิท กรุงเทพฯ 10110   โทร. 081-234-5678");
+            typedPhone(quotationWithCustomer("99/1 ถนนสุขุมวิท กรุงเทพฯ 10110", null), "081-234-5678"), null, null);
+        assertThat(model.phoneLine()).isEqualTo("ที่อยู่ 99/1 ถนนสุขุมวิท กรุงเทพฯ 10110   Phone 081-234-5678");
     }
 
     @Test
     void thaiDocument_withNoAddress_stillPrintsJustThePhoneNumber() {
         QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
-            quotationWithCustomer(null, "081-234-5678"), null, null);
-        assertThat(model.phoneLine()).isEqualTo("โทร. 081-234-5678");
+            typedPhone(quotationWithCustomer(null, null), "081-234-5678"), null, null);
+        assertThat(model.phoneLine()).isEqualTo("Phone 081-234-5678");
     }
 
     @Test
@@ -134,12 +148,13 @@ class DealQuotationRenderAdapterV3Test {
     /** Production bug: B6 printed "โทร. โทร 02 314 354-2" on QT-2026-0032-1. The customer master
      * row for บริษัท อุณากรรณ จำกัด stores {@code phone = "โทร 02 314 354-2"} — the imported GL&amp;R
      * directory kept the Thai label INSIDE the value — and this branch prefixes its own. 299 of
-     * 4320 customer rows are shaped that way, so this is every quotation for any of them. */
+     * 4320 customer rows are shaped that way. Since 2026-10-13 the line prints the TYPED phone,
+     * which a rep copies out of that same directory, so the strip still has to hold. */
     @Test
     void thaiDocument_doesNotPrintThePhoneLabelTwiceWhenTheStoredValueCarriesItsOwn() {
         QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
-            quotationWithCustomer(null, "โทร 02 314 354-2"), null, null);
-        assertThat(model.phoneLine()).isEqualTo("โทร. 02 314 354-2");
+            typedPhone(quotationWithCustomer(null, null), "โทร 02 314 354-2"), null, null);
+        assertThat(model.phoneLine()).isEqualTo("Phone 02 314 354-2");
     }
 
     /** The same doubling on the English form, whose own label is "Tel." — and a Thai-labelled value
@@ -148,11 +163,11 @@ class DealQuotationRenderAdapterV3Test {
     @Test
     void englishDocument_doesNotPrintThePhoneLabelTwiceEither() {
         QuotationRenderModel thaiLabel = DealQuotationRenderAdapter.toRenderModel(
-            englishQuotationWithCustomerPhone("โทร 02 314 354-2"), null, null);
+            typedPhone(englishQuotationWithCustomerPhone(null), "โทร 02 314 354-2"), null, null);
         assertThat(thaiLabel.phoneLine()).isEqualTo("Tel. 02 314 354-2");
 
         QuotationRenderModel englishLabel = DealQuotationRenderAdapter.toRenderModel(
-            englishQuotationWithCustomerPhone("Tel: 02 314 354-2"), null, null);
+            typedPhone(englishQuotationWithCustomerPhone(null), "Tel: 02 314 354-2"), null, null);
         assertThat(englishLabel.phoneLine()).isEqualTo("Tel. 02 314 354-2");
     }
 
@@ -190,7 +205,7 @@ class DealQuotationRenderAdapterV3Test {
     @Test
     void thaiDocument_aPhoneValueThatIsOnlyALabelPrintsNoPhoneLineAtAll() {
         QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
-            quotationWithCustomer("99/1 ถนนสุขุมวิท กรุงเทพฯ 10110", "โทร."), null, null);
+            typedPhone(quotationWithCustomer("99/1 ถนนสุขุมวิท กรุงเทพฯ 10110", null), "โทร."), null, null);
         assertThat(model.phoneLine()).isEqualTo("ที่อยู่ 99/1 ถนนสุขุมวิท กรุงเทพฯ 10110");
     }
 
@@ -373,12 +388,12 @@ class DealQuotationRenderAdapterV3Test {
     @Test
     void thaiDocument_theAddressLineActuallyReachesCellB6() throws Exception {
         QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
-            quotationWithCustomer("99/1 ถนนสุขุมวิท กรุงเทพฯ 10110", "081-234-5678"), null, null);
+            typedPhone(quotationWithCustomer("99/1 ถนนสุขุมวิท กรุงเทพฯ 10110", null), "081-234-5678"), null, null);
         byte[] xls = new QuotationRenderer().toXls(model);
         var wb = WorkbookFactory.create(new ByteArrayInputStream(xls));
         Sheet sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
         assertThat(sheet.getRow(5).getCell(1).getStringCellValue())
-            .isEqualTo("ที่อยู่ 99/1 ถนนสุขุมวิท กรุงเทพฯ 10110   โทร. 081-234-5678");
+            .isEqualTo("ที่อยู่ 99/1 ถนนสุขุมวิท กรุงเทพฯ 10110   Phone 081-234-5678");
     }
 
     @Test
@@ -1086,49 +1101,42 @@ class DealQuotationRenderAdapterV3Test {
         assertThat(model.signatories().orderedBy()).isNull();
     }
 
-    // ── fix (2026-09-15): customer phone falls back to the contact phone; contact e-mail prints ──
+    // ── 2026-09-15 made the contact phone/e-mail a fallback; 2026-10-13 removed every fallback ──
 
-    /** The exact production example: customer_phone=null, contact_phone="062-328-7555",
-     * contact_email="qs.twcfurline@gmail.com" printed NEITHER -- customerPhone wins when present
-     * (unaffected by this fix, tested separately below), contactPhone is the fallback, and the
-     * e-mail joins the same line. */
+    /** The 2026-09-15 production example (customer_phone=null, contact_phone="062-328-7555",
+     * contact_email="qs.twcfurline@gmail.com") prints NEITHER again — on purpose now: with nothing
+     * typed under ผู้ติดต่อ the line carries no phone and no e-mail, in either language. */
     @Test
-    void thaiDocument_phoneLine_fallsBackToContactPhoneAndPrintsTheContactEmail() {
-        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
-            quotationWithPhoneAndEmail(null, "062-328-7555", "qs.twcfurline@gmail.com", null), null, null);
-        assertThat(model.phoneLine()).isEqualTo("อีเมล qs.twcfurline@gmail.com   โทร. 062-328-7555");
+    void nothingTyped_printsNeitherTheCustomerNorTheContactPhoneNorEmail() {
+        for (String language : new String[] {null, WastageCalculator.DOCUMENT_LANGUAGE_EN}) {
+            for (String customerPhone : new String[] {null, "02-999-9999"}) {
+                QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+                    quotationWithPhoneAndEmail(customerPhone, "062-328-7555", "qs.twcfurline@gmail.com", language), null, null);
+                assertThat(model.phoneLine()).as(String.valueOf(language))
+                    .doesNotContain("Phone").doesNotContain("Tel.").doesNotContain("Email").doesNotContain("E :")
+                    .doesNotContain("062-328-7555").doesNotContain("02-999-9999").doesNotContain("qs.twcfurline");
+            }
+        }
     }
 
-    @Test
-    void thaiDocument_phoneLine_customerPhoneWinsOverContactPhoneWhenBothPresent() {
-        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
-            quotationWithPhoneAndEmail("02-999-9999", "062-328-7555", null, null), null, null);
-        assertThat(model.phoneLine()).isEqualTo("โทร. 02-999-9999");
-    }
-
-    @Test
-    void thaiDocument_phoneLine_noPhoneAtAll_stillPrintsTheEmailAlone() {
-        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
-            quotationWithPhoneAndEmail(null, null, "qs.twcfurline@gmail.com", null), null, null);
-        assertThat(model.phoneLine()).isEqualTo("อีเมล qs.twcfurline@gmail.com");
-    }
-
-    @Test
-    void englishDocument_phoneLine_fallsBackToContactPhoneAndPrintsTheContactEmail() {
-        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
-            quotationWithPhoneAndEmail(null, "062-328-7555", "qs.twcfurline@gmail.com",
-                WastageCalculator.DOCUMENT_LANGUAGE_EN), null, null);
-        assertThat(model.phoneLine()).isEqualTo("E : qs.twcfurline@gmail.com   Tel. 062-328-7555");
-    }
-
-    @Test
-    void effectiveCustomerPhone_directly_prefersCustomerPhoneThenFallsBackToContactPhone() {
-        assertThat(DealQuotationRenderAdapter.effectiveCustomerPhone(
-            quotationWithPhoneAndEmail("02-999-9999", "062-328-7555", null, null))).isEqualTo("02-999-9999");
-        assertThat(DealQuotationRenderAdapter.effectiveCustomerPhone(
-            quotationWithPhoneAndEmail(null, "062-328-7555", null, null))).isEqualTo("062-328-7555");
-        assertThat(DealQuotationRenderAdapter.effectiveCustomerPhone(
-            quotationWithPhoneAndEmail(null, null, null, null))).isNull();
+    /** {@code q} with {@code phone} typed under ผู้ติดต่อ (V192.3 orderedByPhone), everything else as is. */
+    private static DealQuotationDto typedPhone(DealQuotationDto q, String phone) {
+        return new DealQuotationDto(q.id(), q.number(), q.ticketId(), q.docStatus(), q.revisionNo(),
+            q.parentQuotationId(), q.createdById(), q.createdByName(), q.createdByNameEn(), q.salesRepId(),
+            q.salesRepName(), q.salesRepNameEn(), q.salesRepPhone(), q.submittedAt(), q.approvedById(),
+            q.approvedByName(), q.approvedByNameEn(), q.approvedAt(), q.approvalNote(), q.quotationDate(),
+            q.customerName(), q.customerAddress(), q.customerTaxId(), q.customerPhone(), q.contactId(),
+            q.contactName(), q.contactPhone(), q.contactEmail(), q.projectName(), q.deptCode(), q.unitCode(),
+            q.offerDate(), q.depositPercent(), q.remainderMode(), q.creditDays(), q.validityDays(),
+            q.validityDate(), q.validityMode(), q.validityUntil(), q.customerNotes(), q.priceMode(),
+            q.documentLanguage(), q.subtotalAmount(), q.vatAmount(), q.grandTotal(), q.currency(),
+            q.approverHasSignature(), q.printedByDisplayId(), q.printedByDisplayName(),
+            q.printedByDisplayNameEn(), q.salesRepDisplayId(), q.salesRepDisplayName(),
+            q.salesRepDisplayNameEn(), q.salesRepDisplayPhone(), q.omitContactHonorific(), q.fullPaymentTerm(),
+            q.derivedFromQuotationId(), q.derivedFromQuotationNumber(), q.derivedFromQuotationStatus(),
+            q.items(), q.createdAt(), q.updatedAt(), q.origin(), q.pricingRequestId(),
+            q.priceModeChangedFromCeo(), q.ceoPriceMode(), q.pricingRequestCode(), q.itemsRemovedFromCeoCount(),
+            q.removedCeoItems(), q.orderedByName(), q.hideProjectName(), phone, q.orderedByEmail());
     }
 
     private DealQuotationDto quotationWithPhoneAndEmail(String customerPhone, String contactPhone,

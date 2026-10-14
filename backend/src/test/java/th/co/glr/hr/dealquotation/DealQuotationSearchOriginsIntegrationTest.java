@@ -110,7 +110,8 @@ class DealQuotationSearchOriginsIntegrationTest extends AbstractPostgresIntegrat
             notifications, objectMapper, new ContactRepository(jdbc),
             new FileStorageService("/tmp/glr-qdl-s1-search-test-uploads"), factoryQuoteCarryForward());
         ticketService = new TicketService(tickets, notifications, objectMapper, customers, new QuotationRenderer(),
-            pricingRequestService, new EmployeeAuthRepository(jdbc));
+            pricingRequestService, new EmployeeAuthRepository(jdbc), new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
+            new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
         Mailer noMail = new Mailer() {
             @Override
             public void send(String to, String subject, String body) {}

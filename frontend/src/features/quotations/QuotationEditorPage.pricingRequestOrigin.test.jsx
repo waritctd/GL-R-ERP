@@ -418,7 +418,9 @@ describe('QuotationEditorPage — coordinator follow-up: LOCAL CEO marker before
     await waitFor(() => expect(screen.getByText('ราคาจาก CEO')).toBeTruthy());
     expect(screen.queryByText('เปลี่ยนวิธีกรอกราคาจาก CEO — ต้องให้ CEO อนุมัติ')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'ราคาสุทธิต่อแผ่น' }));
+    // The Thai editor's own name for DIRECT_NET since sales feedback #1 (2026-10-06); the CEO's
+    // screen, and the "CEO เลือก: …" marker quoting it below, keep the CEO's per-แผ่น wording.
+    fireEvent.click(screen.getByRole('button', { name: 'ราคาสุทธิ บาท/ตร.ม.' }));
     await waitFor(() => expect(screen.getByText('เปลี่ยนวิธีกรอกราคาจาก CEO — ต้องให้ CEO อนุมัติ')).toBeTruthy());
     expect(screen.getByText(/CEO เลือก: ราคาตั้ง/)).toBeTruthy();
     expect(api.dealQuotations.update).not.toHaveBeenCalled();

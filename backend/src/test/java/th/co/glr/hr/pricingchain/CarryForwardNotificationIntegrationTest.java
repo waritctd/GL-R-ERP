@@ -166,7 +166,8 @@ class CarryForwardNotificationIntegrationTest extends AbstractPostgresIntegratio
 
         TicketService ticketService = new TicketService(tickets, notifications,
             objectMapper, customers, new QuotationRenderer(), pricingRequestService,
-            new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc));
+            new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc), new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
+            new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
         quotationService = new CustomerQuotationService(new CustomerQuotationRepository(jdbc), pricingRequests,
             decisions, tickets, ticketService, customers, new QuotationRenderer(), notifications,
             new DiscountApprovalRepository(jdbc));

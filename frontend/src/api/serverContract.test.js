@@ -571,6 +571,11 @@ const UNREACHABLE_FROM_UI = new Set([
   // price_catalog.v_priceable_product are all untouched, so this is "UI unreachable", not "dead".
   'GET /api/catalog/thickness-defaults',
   'GET /api/customer-quotations/{}',
+  // "สร้างจากใบเดิม (สั่งเหมือนเดิม)" left the quotation page on 2026-10-12 (owner: too many
+  // CTAs). hrApi.js still carries dealQuotations.createReorder and the endpoint, its service and
+  // tests are untouched, so this is "UI unreachable", not "dead"; drop the endpoint in its own PR
+  // if the action never returns.
+  'POST /api/deal-quotations/{}/reorders',
   'GET /api/deposit-notices/{}',
   'GET /api/factory-configs',
   'GET /api/factory-quotes/{}',

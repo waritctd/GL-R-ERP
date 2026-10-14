@@ -140,7 +140,8 @@ public abstract class AbstractStockLineIntegrationTest extends AbstractPostgresI
         decisionService = new PricingDecisionService(decisionRepository, pricingRequests,
             costingRepository, tickets, fxRates, notifications, landedCost, formulaEngine);
         TicketService ticketService = new TicketService(tickets, notifications, objectMapper, customers,
-            new QuotationRenderer(), pricingRequestService, new EmployeeAuthRepository(jdbc));
+            new QuotationRenderer(), pricingRequestService, new EmployeeAuthRepository(jdbc), new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
+            new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
 
         salesRepId = createEmployee(employees, "พนักงานขาย สต็อก", "sales-stock@glr.co.th", "SALES", "แผนกขาย");
         otherSalesRepId = createEmployee(employees, "พนักงานขายอื่น สต็อก", "sales-stock-2@glr.co.th", "SALES", "แผนกขาย");

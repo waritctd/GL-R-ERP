@@ -13,7 +13,7 @@ import { cn } from '../../utils/cn.js';
 import { formatMoney, formatThaiDate } from '../../utils/format.js';
 import {
   canApproveDealQuotation, canCreateDealQuotationStandalone, DEAL_QUOTATION_AMOUNT_OPTIONS,
-  DEAL_QUOTATION_STATUS_TABS, dealQuotationListSeesAll, dealQuotationRepOptions,
+  DEAL_QUOTATION_EMAIL_OPTIONS, DEAL_QUOTATION_STATUS_TABS, dealQuotationListSeesAll, dealQuotationRepOptions,
   dealQuotationStatusLabel, dealQuotationStatusTab, defaultDealQuotationStatusTab,
   filterDealQuotationRows, isDealQuotationReadOnlyViewer,
 } from './quotationMeta.js';
@@ -227,15 +227,17 @@ export function QuotationListPage({ user }) {
   // so switching status tabs can shrink the option set out from under a previously-picked value —
   // the `repOptions.some(...)` fallback below is what keeps a stale repFilter from silently hiding
   // every row instead of just resetting the control to "ทั้งหมด".
+  // The อีเมลลูกค้า filter (owner ask 2026-10-13) is not a scope question, so EVERY role gets it.
   const seesAll = dealQuotationListSeesAll(user);
   const repOptions = useMemo(() => (seesAll ? dealQuotationRepOptions(rows) : []), [seesAll, rows]);
   const [repFilter, setRepFilter] = useState('');
   const [amountFilter, setAmountFilter] = useState('');
+  const [emailFilter, setEmailFilter] = useState('');
   const effectiveRepFilter = seesAll && repOptions.some((option) => option.id === repFilter) ? repFilter : '';
   const effectiveAmountFilter = seesAll ? amountFilter : '';
   const filteredRows = useMemo(
-    () => filterDealQuotationRows(rows, { repId: effectiveRepFilter, amount: effectiveAmountFilter }),
-    [rows, effectiveRepFilter, effectiveAmountFilter],
+    () => filterDealQuotationRows(rows, { repId: effectiveRepFilter, amount: effectiveAmountFilter, email: emailFilter }),
+    [rows, effectiveRepFilter, effectiveAmountFilter, emailFilter],
   );
 
   // Owner follow-up (2026-09-24, same day as the original ask): the header-embedded filters below
@@ -327,7 +329,7 @@ export function QuotationListPage({ user }) {
         })}
       </div>
       <div id="quotation-list-panel" role="tabpanel">
-        {/* พนักงานขาย/ยอดรวม filters for see-all roles (sales_manager/ceo) -- moved OUT of the
+        {/* Filter row: พนักงานขาย/ยอดรวม for see-all roles (sales_manager/ceo), อีเมลลูกค้า for everyone -- moved OUT of the
             column headers (2026-09-24 owner follow-up) and rendered here, above DataTable's own
             search input (which renders inside `data-table-toolbar`), at every breakpoint. Not
             via DataTable's `toolbarExtra`: that prop renders INLINE alongside the search field in
@@ -336,40 +338,56 @@ export function QuotationListPage({ user }) {
             Compact, content-sized selects (not full-width) — this is a filter chip row, not a
             form — wrapping onto a second line on a narrow screen instead of stretching full width.
             44px touch target restored under `mobile:` even though the box itself stays small. */}
-        {seesAll ? (
-          <div className="mb-3 flex flex-wrap items-end gap-3">
-            {repOptions.length > 0 ? (
+        <div className="mb-3 flex flex-wrap items-end gap-3">
+          {seesAll ? (
+            <>
+              {repOptions.length > 0 ? (
+                <label className="flex flex-col gap-1">
+                  <span className="text-2xs font-extrabold uppercase tracking-wide text-text-muted">พนักงานขาย</span>
+                  <select
+                    value={effectiveRepFilter}
+                    onChange={(event) => setRepFilter(event.target.value)}
+                    aria-label="กรองตามพนักงานขาย"
+                    className="h-8 mobile:min-h-[44px] w-auto rounded border border-border bg-surface px-2 text-xs text-text"
+                  >
+                    <option value="">ทั้งหมด</option>
+                    {repOptions.map((option) => (
+                      <option key={option.id} value={option.id}>{option.name}</option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
               <label className="flex flex-col gap-1">
-                <span className="text-2xs font-extrabold uppercase tracking-wide text-text-muted">พนักงานขาย</span>
+                <span className="text-2xs font-extrabold uppercase tracking-wide text-text-muted">ยอดรวม</span>
                 <select
-                  value={effectiveRepFilter}
-                  onChange={(event) => setRepFilter(event.target.value)}
-                  aria-label="กรองตามพนักงานขาย"
+                  value={effectiveAmountFilter}
+                  onChange={(event) => setAmountFilter(event.target.value)}
+                  aria-label="กรองตามยอดรวม"
                   className="h-8 mobile:min-h-[44px] w-auto rounded border border-border bg-surface px-2 text-xs text-text"
                 >
                   <option value="">ทั้งหมด</option>
-                  {repOptions.map((option) => (
-                    <option key={option.id} value={option.id}>{option.name}</option>
+                  {DEAL_QUOTATION_AMOUNT_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
                 </select>
               </label>
-            ) : null}
-            <label className="flex flex-col gap-1">
-              <span className="text-2xs font-extrabold uppercase tracking-wide text-text-muted">ยอดรวม</span>
-              <select
-                value={effectiveAmountFilter}
-                onChange={(event) => setAmountFilter(event.target.value)}
-                aria-label="กรองตามยอดรวม"
-                className="h-8 mobile:min-h-[44px] w-auto rounded border border-border bg-surface px-2 text-xs text-text"
-              >
-                <option value="">ทั้งหมด</option>
-                {DEAL_QUOTATION_AMOUNT_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
-                ))}
-              </select>
-            </label>
-          </div>
-        ) : null}
+            </>
+          ) : null}
+          <label className="flex flex-col gap-1">
+            <span className="text-2xs font-extrabold uppercase tracking-wide text-text-muted">อีเมลลูกค้า</span>
+            <select
+              value={emailFilter}
+              onChange={(event) => setEmailFilter(event.target.value)}
+              aria-label="กรองตามอีเมลลูกค้า"
+              className="h-8 mobile:min-h-[44px] w-auto rounded border border-border bg-surface px-2 text-xs text-text"
+            >
+              <option value="">ทั้งหมด</option>
+              {DEAL_QUOTATION_EMAIL_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+        </div>
 
         <DataTable
           columns={columns}
@@ -380,11 +398,13 @@ export function QuotationListPage({ user }) {
           mobileCard={(row) => <QuotationCard row={row} />}
           searchable
           searchPlaceholder="ค้นหาลูกค้า / โครงการ"
-          // The พนักงานขาย/ยอดรวม filters render outside DataTable now (see above) and are always
-          // visible regardless of this flag. This still keeps DataTable's OWN search input/header
-          // visible when a filter narrows the list to zero rows, so the user isn't trapped staring
-          // at an empty state with no visible control to change the free-text search either.
-          retainHeaderWhenEmpty={seesAll}
+          // The filters render outside DataTable now (see above) and are always visible regardless
+          // of this flag, and so is DataTable's own search box (its toolbar is unconditional). What
+          // this keeps is the COLUMN HEADER ROW when a filter narrows the list to zero rows, so the
+          // table keeps its shape under the empty-state line instead of swapping to a bare panel.
+          // See-all roles always (as before); everyone else only while their email filter is set,
+          // so a rep with genuinely no quotations still gets the plain empty-state panel.
+          retainHeaderWhenEmpty={seesAll || emailFilter !== ''}
           loading={listQuery.isLoading}
           emptyState={{ icon: 'fileText', title: 'ไม่มีใบเสนอราคาในเงื่อนไขนี้' }}
         />

@@ -208,6 +208,8 @@ export const queryKeys = {
   // No parameters: the scope is the caller's own session (sales/sales_manager or the grant), same
   // as dealQuotationCounts above.
   dealQuotationDisplayNameOptions: () => ['dealQuotations', 'displayNameOptions'],
+  // One quotation's เอกสารแนบ, its own files and those it inherits from the documents it revises.
+  dealQuotationAttachments: (quotationId) => ['dealQuotations', 'attachments', quotationId ?? ''],
   employeeSignature: (employeeId) => ['employeeSignature', employeeId ?? ''],
   // Step 7: Factory Purchase Order and Import Execution.
   // Attendance calendar admin (PR #480's API, this branch's UI). `holidays` is per year-range

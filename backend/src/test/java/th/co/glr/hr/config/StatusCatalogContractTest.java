@@ -278,7 +278,7 @@ class StatusCatalogContractTest {
         return new EmployeeLoginRecord(
             1L, "E001", "sample@example.invalid", "Sample Employee", true,
             1L, divisionCode, divisionName, positionName,
-            LocalDate.now(), "hash", false
+            LocalDate.now(), "hash", false, false
         );
     }
 

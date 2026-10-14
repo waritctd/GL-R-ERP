@@ -421,7 +421,7 @@ test.describe('quotation v3 / v3b + customer details — the real service', () =
     const bareTh = await render(thaiId);
     expect(xlsHasText(bareTh, `คุณ${contactAndCustomer}`), 'TH B5: contact / customer, nothing after it').toBe(true);
     expect(xlsHasText(bareTh, 'เลขที่ผู้เสียภาษี : '), 'TH must not print an empty tax-id label').toBe(false);
-    expect(xlsHasText(bareTh, 'โทร. 0'), 'TH must not print a phone line').toBe(false);
+    expect(xlsHasText(bareTh, 'Phone 0'), 'TH must not print a phone line').toBe(false);
 
     // Fill the customer master — what the editor's ที่อยู่ / เลขที่ผู้เสียภาษี / โทร. fields do on blur.
     for (const patch of [{ address: ADDRESS }, { phone: PHONE }, { taxId: TAX_ID }]) {
@@ -449,14 +449,28 @@ test.describe('quotation v3 / v3b + customer details — the real service', () =
 
     const filledTh = await render(thaiId);
     expect(xlsHasText(filledTh, `คุณ${contactAndCustomer}   เลขที่ผู้เสียภาษี : ${TAX_ID}`), 'TH B5 carries the tax id').toBe(true);
-    expect(xlsHasText(filledTh, `โทร. ${PHONE}`), 'TH B6 carries the phone').toBe(true);
-    // NOTE: the Thai F-SM-002 has NO address line — DealQuotationRenderAdapter prints
-    // customerAddress on the ENGLISH document only. Not asserted either way here: that is a backend
-    // renderer gap reported in the PR, not behaviour to pin.
+    // Owner 2026-10-13: the customer master's phone is snapshotted but NOT printed. Only the Phone
+    // typed under ผู้ติดต่อ prints, and nothing has been typed yet.
+    expect(xlsHasText(filledTh, `Phone ${PHONE}`), 'TH does not print the customer-master phone').toBe(false);
     const filledEn = await render(englishId);
+    expect(xlsHasText(filledEn, `Address : ${ADDRESS}`), 'EN B6 carries the address').toBe(true);
+    expect(xlsHasText(filledEn, `Address : ${ADDRESS}   Tel.`), 'EN does not print the customer-master phone').toBe(false);
+
+    // The rep types the ผู้ติดต่อ Phone on each draft: that one prints.
+    const TYPED = '086-303-9572';
+    await resave(thaiId, draftBody(contactId, {
+      priceMode: 'SPECIAL_SQM', documentLanguage: 'TH', orderedByPhone: TYPED,
+      items: [tile({ sqmPerPiece: 0.36, specialPriceSqm: 1350 }), plain, adjustment()],
+    }));
+    await resave(englishId, draftBody(contactId, {
+      priceMode: 'DIRECT_NET', documentLanguage: 'EN', orderedByPhone: TYPED,
+      items: [tile({ unitPrice: 15, directNetPrice: 12.5, discountPct: null })],
+    }));
+    // Owner 2026-10-12 (sales feedback item 3): the Thai document labels the line "Phone", not "โทร.".
+    expect(xlsHasText(await render(thaiId), `Phone ${TYPED}`), 'TH B6 carries the typed phone').toBe(true);
     // ONE exact string: the address, then the phone, joined by the adapter's single separator — so
-    // this also proves no "E :" is printed for the contact's missing email, and no doubled separator.
-    expect(xlsHasText(filledEn, `Address : ${ADDRESS}   Tel. ${PHONE}`), 'EN B6: Address + Tel, nothing between').toBe(true);
+    // this also proves no "E :" is printed for the missing email, and no doubled separator.
+    expect(xlsHasText(await render(englishId), `Address : ${ADDRESS}   Tel. ${TYPED}`), 'EN B6: Address + Tel, nothing between').toBe(true);
   });
 
   test('a repeat customer: the NEXT quotation starts with the details already filled', async () => {
@@ -510,7 +524,11 @@ test.describe('quotation editor UI — v3 controls, ที่อยู่, and t
     // just above until this reversal) is gone from the editor entirely -- ผู้สั่งซื้อ is now a
     // single optional free-text input, blank by default (this quotation was created via the API
     // with a contactId, but the field no longer reads it at all).
-    await expect(page.getByLabel(/^ผู้สั่งซื้อ/)).toHaveValue('');
+    // Labelled ผู้ติดต่อ since 2026-10-06 (owner: "the field ผู้สั่งซื้อ make it name ผู้ติดต่อ instead
+    // but the pdf still render as ผู้สั่งซื้อ") — the same input, found by its new label; and no
+    // field answers to the old one any more.
+    await expect(page.getByLabel(/^ผู้ติดต่อ/)).toHaveValue('');
+    await expect(page.getByLabel(/^ผู้สั่งซื้อ/)).toHaveCount(0);
 
     // Clicking the entry lands on the field; typing + leaving it saves to the customer master…
     await checklist.getByRole('button', { name: 'ยังไม่ได้กรอกที่อยู่ลูกค้า' }).click();

@@ -377,7 +377,8 @@ class StockDeclarationNotificationIntegrationTest extends AbstractPostgresIntegr
         when(pricingRequests.cancelOpenForTicket(anyLong(), anyString(), any()))
             .thenReturn(new PricingRequestService.CancelOpenForTicketResult(0, List.of()));
         return new TicketService(ticketRepository, notificationRepository,
-            new ObjectMapper(), new CustomerRepository(jdbc), new QuotationRenderer(), pricingRequests, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc));
+            new ObjectMapper(), new CustomerRepository(jdbc), new QuotationRenderer(), pricingRequests, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc), new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
+            new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
     }
 
     private static StockReservationRequest declare(long itemId, String qtyFromStock) {

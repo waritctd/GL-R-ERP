@@ -57,6 +57,13 @@ import {
   // Slice 2 (S2-B1/S2-B3): the recipient table (code -> Thai label) and the live DEAL_DIRECT status
   // set, shared with the editor so the mock validates and labels recipients exactly as the pills do.
   isLiveDirectQuotation, quotationRecipientOption, hasLivePricingRequest, LIVE_PRICING_REQUEST_BLOCK_MESSAGE,
+  // V192.3: the SAME email shape check the editor runs before it saves — see
+  // resolveDealQuotationOrderedByContact below.
+  orderedByEmailError,
+  // V192.5 / V192.3: the SAME row price-mode codes and ผู้ติดต่อ length limits the editor uses — not
+  // a second list of them.
+  ROW_PRICE_MODES, PRICE_MODE_MIXED, ORDERED_BY_PHONE_MAX, ORDERED_BY_EMAIL_MAX,
+  ceilPieces,
 } from '../features/quotations/quotationMeta.js';
 // fix/commission-figures-from-backend: mock mode no longer imports the commission tier math —
 // see the fenced MOCK COMMISSION FIXTURES block near the `commissions` namespace below for why,
@@ -6189,6 +6196,27 @@ function resolveDealQuotationContact(ticket, payload, current = null) {
   };
 }
 
+// ผู้ติดต่อ's Phone and Email (V192.3) — kept beside orderedByName and printed on the document when filled,
+// and NOT the contact snapshot above. Mirrors DealQuotationService#resolveOrderedByPhone /
+// #resolveOrderedByEmail: each is trimmed, a blank one is stored as null, a phone over 50
+// characters or an email over 254 is refused, and so is an email that does not look like an
+// address — with the service's own sentences, so a screen driven in mock mode shows what the real
+// refusal says. The shape rule is quotationMeta.js#orderedByEmailError (imported, not restated);
+// the Java side is pinned by DealQuotationOrderedByContactIntegrationTest, never by this mock.
+function resolveDealQuotationOrderedByContact(payload) {
+  const orderedByPhone = blankToNullMock(payload?.orderedByPhone);
+  const orderedByEmail = blankToNullMock(payload?.orderedByEmail);
+  if (orderedByPhone && orderedByPhone.length > ORDERED_BY_PHONE_MAX) {
+    fail(`Phone ของผู้ติดต่อยาวเกิน ${ORDERED_BY_PHONE_MAX} ตัวอักษร`, 400);
+  }
+  if (orderedByEmail && orderedByEmail.length > ORDERED_BY_EMAIL_MAX) {
+    fail(`Email ของผู้ติดต่อยาวเกิน ${ORDERED_BY_EMAIL_MAX} ตัวอักษร`, 400);
+  }
+  const emailError = orderedByEmailError(orderedByEmail);
+  if (emailError) fail(`Email ของผู้ติดต่อ: ${emailError}`, 400);
+  return { orderedByPhone, orderedByEmail };
+}
+
 /** Mirrors DealQuotationService#customerSnapshot: the ลูกค้า columns are read from the deal's LIVE
  * customer row at create AND on every DRAFT update (F7), so a ที่อยู่/เลขภาษี/โทร. corrected on the
  * customer master reaches the document on the next save. This used to write null for all three,
@@ -6292,6 +6320,59 @@ function quotationRevisionNumber(baseNumber, revisionNo) {
 function hasOpenDealQuotationRevision(parentId) {
   return mockDealQuotations.some((q) => q.parentQuotationId === parentId
     && (q.docStatus === 'DRAFT' || q.docStatus === 'PENDING_APPROVAL'));
+}
+
+// ── เอกสารแนบ of a quotation ───────────────────────────────────────────────────────────────────
+// Mirrors DealQuotationAttachmentService. The mock keeps a file's name, type and size, never its
+// bytes.
+//
+// ⚠️ AUTHZ CAVEAT (CLAUDE.md "Mock API contract"): the gates below approximate the Java service's
+// and are NOT authoritative. DealQuotationAttachmentAuthzIntegrationTest is the evidence.
+
+// Mirrors DealQuotationAttachmentService.MAX_ATTACHMENTS_PER_QUOTATION and its ALLOWED_TYPES.
+const MOCK_DEAL_QUOTATION_ATTACHMENT_LIMIT = 10;
+const MOCK_DEAL_QUOTATION_ATTACHMENT_TYPES = ['application/pdf', 'image/jpeg', 'image/png'];
+let mockDealQuotationAttachmentSeq = 1;
+const mockDealQuotationAttachments = [];
+
+// account and import open the quotation itself and are refused its files, grant or not.
+function requireDealQuotationAttachmentRole(user) {
+  if (user.role === 'account' || user.role === 'import') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+}
+
+// The quotation, for a caller who may read its files. That is whoever may view it, less those two
+// roles.
+function dealQuotationForAttachmentReader(id) {
+  const row = requireDealQuotationRowViewable(id);
+  requireDealQuotationAttachmentRole(requireSession());
+  return row;
+}
+
+// The quotation, for a caller who may attach to it or remove from it. That is whoever may edit it.
+function dealQuotationForAttachmentEditor(id) {
+  const user = requireSession();
+  const row = mockDealQuotations.find((q) => q.id === Number(id));
+  if (!row) fail('ไม่พบใบเสนอราคานี้', 404);
+  requireDealQuotationWriteAccess(db.tickets.find((t) => t.id === row.ticketId), user, row.origin);
+  requireDealQuotationAttachmentRole(user);
+  return row;
+}
+
+// Mirrors DealQuotationDtos.DealQuotationAttachmentDto. `listedOnId` is the quotation whose list
+// the row appears in. A file stored on an earlier document of the chain is `inherited` there.
+function buildDealQuotationAttachmentDto(stored, listedOnId) {
+  return {
+    id: stored.id,
+    quotationId: stored.quotationId,
+    quotationNumber: mockDealQuotations.find((q) => q.id === stored.quotationId)?.number ?? null,
+    fileName: stored.fileName,
+    mimeType: stored.mimeType,
+    fileSize: stored.fileSize,
+    uploadedById: stored.uploadedById,
+    uploadedByName: db.users.find((u) => u.id === stored.uploadedById)?.name ?? null,
+    uploadedAt: stored.uploadedAt,
+    inherited: stored.quotationId !== listedOnId,
+  };
 }
 
 // The revision-copy step createRevision() and submit()'s owner-clarification (2026-09-15)
@@ -6502,14 +6583,13 @@ function mockApproveDealQuotationPricingRequestOrigin(row, payload, user) {
  * persisting, so the editor's live calculation line and totals have SOMETHING to render under
  * VITE_USE_MOCKS=true. It is deliberately NOT the real backend algorithm:
  *
- *   - Corrected 2026-09-15 (quotation arithmetic reconciliation): the real WastageCalculator
- *     (backend, pure class, unit-tested) rounds PIECES HALF_UP, not CEILING as this comment used
- *     to say — the old "meeting rule" reading was wrong, settled against real owner documents;
- *     see that class's own Javadoc for the evidence. This stub's `Math.round` for
- *     `piecesBeforeWastage`/`wastageExtra` now happens to AGREE with the real engine's piece
- *     rounding (both are round-half-up) — that convergence is incidental to this stub still being
- *     a placeholder, not a claim that the two are kept in sync on purpose; box-multiple rounding
- *     (`Math.ceil` at the ppb step) is unchanged and still correct either way.
+ *   - PIECES: the real WastageCalculator rounds every fraction of a piece UP (owner ruling
+ *     2026-10-12, which replaced the 2026-09-15 HALF_UP reading), and this stub's `ceilPieces`
+ *     follows it in the area step, the percent step and a fractional flat wastage, so a mock
+ *     run cannot disagree with the server by a piece on ordinary inputs. That is parity for the
+ *     UI's sake, not evidence about the engine: WastageCalculatorTest and
+ *     QuotationGoldenDocumentsTest are the evidence. Box-multiple rounding (`Math.ceil` at the
+ *     ppb step) is unchanged.
  *   - The MONEY math below is still NOT the real algorithm and remains a placeholder: `lineAmount`
  *     here is `round2(piecesFinal × netUnitPrice)` — the double-rounded formula the real engine no
  *     longer uses (R-D: the real `lineAmount` is a single rounding of `list × piecesFinal ×
@@ -6531,15 +6611,17 @@ function computeDealQuotationLine(input = {}, documentLanguage = 'TH') {
   const quantityMode = input.quantityMode === 'PIECES' ? 'PIECES' : 'AREA';
   const areaSqm = Number(input.areaSqm) || 0;
   const piecesInput = Number(input.piecesInput) || 0;
+  // Owner ruling 2026-10-12: any fraction of a piece rounds UP (WastageCalculator#ceilToInt), in
+  // the area step, the percent step and a fractional flat wastage alike.
   const piecesBeforeWastage = quantityMode === 'PIECES'
     ? Math.round(piecesInput)
-    : Math.round(areaSqm * (piecesPerSqm ?? 0));
+    : ceilPieces(areaSqm * (piecesPerSqm ?? 0));
   const wastageMode = input.wastageMode ?? 'NONE';
   const wastageValue = Number(input.wastageValue) || 0;
   const wastageExtra = wastageMode === 'PERCENT'
-    ? Math.round(piecesBeforeWastage * (wastageValue / 100))
+    ? ceilPieces(piecesBeforeWastage * (wastageValue / 100))
     : wastageMode === 'PIECES'
-      ? Math.round(wastageValue)
+      ? ceilPieces(wastageValue)
       : 0;
   const piecesAfterWastage = piecesBeforeWastage + wastageExtra;
   const piecesPerBox = Number(input.piecesPerBox) || 0;
@@ -6688,18 +6770,101 @@ function dealQuotationLineType(input) {
   return input?.lineType || 'TILE';
 }
 
-/** DealQuotationService#inferPriceMode — what calculate-line uses, having no quotation. */
+// ── Mixed price modes (V192.5; sales feedback #14, owner 2026-10-06) ─────────────────────────────
+// Mirrors WastageCalculator#rowPriceMode / DealQuotationService#rowPriceMode and
+// #requirePriceModeAllowed: a document's priceMode may be 'MIXED', and then every TILE row states
+// its own (one of quotationMeta.js's ROW_PRICE_MODES) and is priced in it; on any other document a
+// row's own mode is not consulted and none is stored. The RULES are mirrored in full, same messages
+// — a mock more permissive than the service is the dangerous direction. As everywhere in this
+// section the MATH is not: each row is handed to the same per-mode stub a single-mode document uses.
+
+/** ItemInput#priceMode's @Pattern — bean validation, so it bites on EVERY row that states a mode,
+ * whatever the document's own mode and whether or not that mode will be consulted. */
+function requireMockRowPriceModeWellFormed(input) {
+  if (input?.priceMode != null && !ROW_PRICE_MODES.includes(input.priceMode)) {
+    fail('วิธีคิดราคาของรายการต้องเป็น NET, SPECIAL_SQM หรือ DIRECT_NET', 400);
+  }
+}
+
+/** DealQuotationService#rowPriceMode: the mode ONE row of a document being written is priced in.
+ * On a MIXED document a tile row that states none is REFUSED, naming the row — never guessed from
+ * its fields; a PLAIN / ADJUSTMENT row has no price mode and is handed NET, as always. */
+function mockRowPriceMode(input, documentPriceMode, rowNumber) {
+  requireMockRowPriceModeWellFormed(input);
+  if (documentPriceMode !== PRICE_MODE_MIXED) return documentPriceMode;
+  if (dealQuotationLineType(input) !== 'TILE') return 'NET';
+  if (input?.priceMode == null || String(input.priceMode).trim() === '') {
+    fail(`รายการที่ ${rowNumber}: กรุณาเลือกวิธีคิดราคาของรายการนี้ (ใบเสนอราคานี้กรอกราคาแบบผสมหลายวิธี)`, 400);
+  }
+  return input.priceMode;
+}
+
+/** DealQuotationService#inferPriceMode — what calculate-line uses, having no quotation. V192.5: a row
+ * that STATES its mode is previewed in it (on a mixed document the editor always does); only a
+ * row that states none is guessed from its fields, as before. */
 function inferMockPriceMode(input) {
+  requireMockRowPriceModeWellFormed(input);
+  if (input?.priceMode != null) return input.priceMode;
   if (input?.specialPriceSqm != null) return 'SPECIAL_SQM';
-  if (input?.directNetPrice != null) return 'DIRECT_NET';
+  // V192.2: a net typed per ตร.ม. says "ราคาสุทธิ" exactly as one typed per แผ่น does.
+  if (input?.directNetPrice != null || input?.directNetPriceSqm != null) return 'DIRECT_NET';
   return 'NET';
 }
 
-function computeDealQuotationV3Line(input = {}, priceMode = 'NET', documentLanguage = 'TH') {
-  const lineType = dealQuotationLineType(input);
+// V192.2 (sales feedback #1, 2026-10-06) — mirrors DealQuotationService#withPerPiecePricesFromPerSqm:
+// a Thai TILE row may state its ราคาตั้ง (`listPriceSqm`, every price mode) and its ราคาสุทธิ
+// (`directNetPriceSqm`, DIRECT_NET only) per ตร.ม. INCLUDING VAT; each REPLACES its per-แผ่น
+// counterpart (one sent beside it is not consulted) and is kept on the row as typed. A row with
+// neither comes back untouched, both fields null — every per-แผ่น request, priced as before.
+//
+// The RULES are mirrored in full, same messages, same order — a mock more permissive than the
+// service is the dangerous direction: refused on an English document, refused when zero or
+// negative, refused on a row with no area per piece (never read as a price per แผ่น instead), and
+// a net per ตร.ม. outside DIRECT_NET prices nothing and is dropped. One deliberate difference, on
+// the STRICT side: the service can take a missing area from the catalogue row
+// (#resolveSqmPerPiece); this stub only reads the row's own.
+//
+// ⚠️ The per-แผ่น FIGURE is the exception to this section's "never its MATH" rule above. It comes
+// from mockNetPerPieceFromSpecialSqm — the labelled, non-authoritative MIRROR of
+// WastageCalculator already in this file (review finding #7). Returning "not computed" instead
+// would leave EVERY Thai tile row without a price in mock mode, since every one of them is typed
+// per ตร.ม. now. So CLAUDE.md's warning applies in full: a green mock-driven test over these
+// figures is evidence about plumbing, never that the conversion is right. That is pinned on the
+// real service — WastageCalculatorPerSqmPriceTest, DealQuotationPerSqmPriceIntegrationTest.
+function withMockPerPiecePricesFromPerSqm(input, priceMode, documentLanguage) {
+  const listPriceSqm = input.listPriceSqm ?? null;
+  const directNetPriceSqm = priceMode === 'DIRECT_NET' ? (input.directNetPriceSqm ?? null) : null;
+  if (listPriceSqm == null && directNetPriceSqm == null) {
+    return { ...input, listPriceSqm: null, directNetPriceSqm: null };
+  }
+  if (documentLanguage === 'EN') fail('ราคาต่อ ตร.ม. รวม VAT ใช้ได้กับใบเสนอราคาภาษาไทยเท่านั้น', 400);
+  if (listPriceSqm != null && !(Number(listPriceSqm) > 0)) fail('ราคาตั้งต่อ ตร.ม. ต้องมากกว่าศูนย์', 400);
+  if (directNetPriceSqm != null && !(Number(directNetPriceSqm) > 0)) fail('ราคาสุทธิต่อ ตร.ม. ต้องมากกว่าศูนย์', 400);
+  if (!(Number(input.sqmPerPiece) > 0)) fail('ขาด แผ่น/ตร.ม. จึงแปลงราคาต่อ ตร.ม. เป็นราคาต่อแผ่นไม่ได้', 400);
+  return {
+    ...input,
+    listPriceSqm: listPriceSqm == null ? null : round2(Number(listPriceSqm)),
+    directNetPriceSqm: directNetPriceSqm == null ? null : round2(Number(directNetPriceSqm)),
+    unitPrice: listPriceSqm == null
+      ? input.unitPrice : mockNetPerPieceFromSpecialSqm(listPriceSqm, input.sqmPerPiece),
+    directNetPrice: directNetPriceSqm == null
+      ? input.directNetPrice : mockNetPerPieceFromSpecialSqm(directNetPriceSqm, input.sqmPerPiece),
+  };
+}
+
+function computeDealQuotationV3Line(rawInput = {}, priceMode = 'NET', documentLanguage = 'TH') {
+  const lineType = dealQuotationLineType(rawInput);
+  // V192.2: a TILE row's per-ตร.ม. prices are turned into per-แผ่น ones FIRST, exactly where the
+  // service does it (DealQuotationService#buildItem), so everything below keeps reading the
+  // per-แผ่น figures it always has. PLAIN and ADJUSTMENT rows have no per-ตร.ม. price at all.
+  const input = lineType === 'TILE'
+    ? withMockPerPiecePricesFromPerSqm(rawInput, priceMode, documentLanguage) : rawInput;
   const v3Nulls = {
     specialPriceSqm: null, adjustmentPct: null, adjustmentDeadline: null,
     specialPriceLine: null, adjustmentAmount: null,
+    // V192.2 — null on every row that is not a tile priced per ตร.ม.; the TILE branch below puts
+    // back whatever withMockPerPiecePricesFromPerSqm kept.
+    listPriceSqm: null, directNetPriceSqm: null,
   };
   if (lineType === 'PLAIN') {
     const quantity = Number(input.quantity) || 1;
@@ -6734,6 +6899,7 @@ function computeDealQuotationV3Line(input = {}, priceMode = 'NET', documentLangu
   const tile = computeDealQuotationLine(input, documentLanguage);
   const common = {
     ...tile, ...v3Nulls, lineType: 'TILE', quantity: tile.piecesFinal, unit: documentLanguage === 'EN' ? 'PCS' : 'แผ่น',
+    listPriceSqm: input.listPriceSqm, directNetPriceSqm: input.directNetPriceSqm,
   };
   if (priceMode === 'SPECIAL_SQM' && documentLanguage === 'EN') {
     // English per-sqm — the RULE is mirrored, never the quantity/amount MATH (boxes × ตร.ม./กล่อง,
@@ -6811,9 +6977,21 @@ function buildDealQuotationItemRow(input, seq, priceMode = 'NET', existingIds = 
  * default. */
 function resolveDealQuotationV3Header(payload, current = null) {
   const priceMode = payload.priceMode || current?.priceMode || 'NET';
-  if (!['NET', 'SPECIAL_SQM', 'DIRECT_NET'].includes(priceMode)) fail('ต้องเป็น NET, SPECIAL_SQM หรือ DIRECT_NET', 400);
+  if (![...ROW_PRICE_MODES, PRICE_MODE_MIXED].includes(priceMode)) {
+    fail('ต้องเป็น NET, SPECIAL_SQM, DIRECT_NET หรือ MIXED', 400);
+  }
   const documentLanguage = String(payload.documentLanguage || current?.documentLanguage || 'TH').toUpperCase();
   if (!['TH', 'EN'].includes(documentLanguage)) fail('ต้องเป็น TH หรือ EN', 400);
+  // DealQuotationService#requirePriceModeAllowed (V192.5), on the RESOLVED pair and in its order:
+  // never a quotation that came from a คำขอราคา (its mode is the CEO's), and Thai documents only.
+  if (priceMode === PRICE_MODE_MIXED) {
+    if (current?.origin === 'PRICING_REQUEST') {
+      fail('ใบเสนอราคาที่สร้างจากคำขอราคาใช้วิธีคิดราคาตามที่ CEO อนุมัติ จึงกรอกราคาแบบผสมหลายวิธีไม่ได้', 400);
+    }
+    if (documentLanguage !== 'TH') {
+      fail('การกรอกราคาแบบผสมหลายวิธีในใบเดียว ใช้ได้กับใบเสนอราคาภาษาไทยเท่านั้น', 400);
+    }
+  }
   const expectedCurrency = documentLanguage === 'EN' ? 'USD' : 'THB';
   const currency = payload.currency ? String(payload.currency).toUpperCase() : expectedCurrency;
   if (currency !== expectedCurrency) {
@@ -6908,7 +7086,16 @@ function buildDealQuotationItems(inputs, priceMode, existingItems = null, docume
   // can be recognised as "keep this row" rather than minted fresh — see buildDealQuotationItemRow.
   // null on create, where nothing exists yet.
   const existingIds = existingItems ? new Set(existingItems.map((it) => it.id)) : null;
-  const items = [...products, ...adjustments].map((item, index) => buildDealQuotationItemRow(item, index + 1, priceMode, existingIds, documentLanguage));
+  // V192.5: each row is built in the mode IT is priced in, and that mode is STORED on the row only
+  // where it is the row's to decide — a tile row of a MIXED document. Everywhere else the stored
+  // value is null, whatever the client sent (computeDealQuotationV3Line echoes its input, so the
+  // key is overwritten here rather than trusted).
+  const mixed = priceMode === PRICE_MODE_MIXED;
+  const items = [...products, ...adjustments].map((item, index) => {
+    const rowMode = mockRowPriceMode(item, priceMode, index + 1);
+    const row = buildDealQuotationItemRow(item, index + 1, rowMode, existingIds, documentLanguage);
+    return { ...row, priceMode: mixed && dealQuotationLineType(item) === 'TILE' ? rowMode : null };
+  });
   const known = items.every((it) => it.lineAmount != null);
   if (known && round2(items.reduce((sum, it) => sum + Number(it.lineAmount), 0)) < 0) {
     fail('ยอดรวมหลังหักส่วนลดพิเศษติดลบ กรุณาตรวจสอบส่วนลดพิเศษ', 400);
@@ -7060,6 +7247,16 @@ function buildDealQuotationDto(row) {
     // ordered_by_name column), null when nobody has typed one (the dotted placeholder). Mirrors
     // DealQuotationDto#orderedByName / DealQuotationRenderAdapter#orderedByName exactly.
     orderedByName: row.orderedByName ?? null,
+    // V192.3 — how to reach that person: shown on the quotation's details and
+    // printed on the document when filled. Null on a row nobody typed them into (every seed row). Mirrors
+    // DealQuotationDto#orderedByPhone / #orderedByEmail.
+    orderedByPhone: row.orderedByPhone ?? null,
+    orderedByEmail: row.orderedByEmail ?? null,
+    // Sales feedback #5 (V192.1, 2026-10-06) — "ไม่แสดงชื่อโครงการในใบเสนอราคา". NOT NULL DEFAULT
+    // FALSE on the real column, so a seed/pre-V192.1 row normalises to false here. Mirrors
+    // DealQuotationDto#hideProjectName. projectName below is returned regardless: the flag only
+    // ever changes what DealQuotationRenderAdapter PRINTS, which this mock does not render at all.
+    hideProjectName: row.hideProjectName ?? false,
     // Item 2 (V180, "ไม่เติม “คุณ”", owner ruling 2026-09-16): NOT NULL DEFAULT FALSE on the real
     // column — a stored/never-set value normalises to false here, same device as priceMode/
     // documentLanguage above. Mirrors DealQuotationDto#omitContactHonorific.
@@ -8872,6 +9069,53 @@ export const api = {
       ticket.nextFollowUpAt = payload?.nextFollowUpAt || null;
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
       pushEvent(ticket, user, 'POLICY_CHANGED', ticket.salesStage, ticket.salesStage, 'อัปเดตข้อมูลติดตามดีล');
+      return delay({ ticket: buildTicketDetail(ticket) });
+    },
+
+    // Mirrors TicketService.changeCustomer: same gate order (ownership, active, a quotation past
+    // DRAFT, a live pricing request, then the customer/project/contact checks), and the same write
+    // set -- the ticket, every DRAFT quotation of the deal (DealQuotationRepository
+    // #resnapshotDraftsForDealCustomerChange), and an EDITED event. CANCELLED rows are left as they
+    // were, like the repository's. NOT mirrored: the deal's advisory lock, which a single-threaded
+    // mock has no use for.
+    async changeCustomer(id, payload) {
+      const user = requireSession();
+      const ticket = findTicketRaw(Number(id));
+      if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      requireActive(ticket);
+      if (mockDealQuotations.some((q) => q.ticketId === ticket.id && !['DRAFT', 'CANCELLED'].includes(q.docStatus))) {
+        fail('เปลี่ยนลูกค้าไม่ได้ เนื่องจากมีใบเสนอราคาที่ส่งขออนุมัติแล้ว', 409);
+      }
+      // PricingRequestRepository#findOpenIdsForTicket's predicate: status <> 'CANCELLED'.
+      if (mockPricingRequests.some((pr) => pr.ticketId === ticket.id && pr.status !== 'CANCELLED')) {
+        fail('เปลี่ยนลูกค้าไม่ได้ เนื่องจากดีลนี้มีคำขอราคาอยู่', 409);
+      }
+      const customer = mockCustomers.find((c) => c.id === Number(payload?.customerId));
+      if (!customer) fail('ไม่พบลูกค้าที่เลือก', 400);
+      const project = mockProjects.find((p) => p.id === Number(payload?.projectId));
+      if (!project) fail('ไม่พบโครงการที่เลือก', 400);
+      if (project.customerId !== customer.id) fail('โครงการนี้ไม่ได้อยู่ภายใต้ลูกค้าที่เลือก', 400);
+      const contactId = payload?.contactId ?? null;
+      if (contactId != null) {
+        const contact = mockContacts.find((c) => c.id === Number(contactId));
+        if (!contact) fail('ไม่พบผู้ติดต่อที่เลือก', 400);
+        if (contact.customerId !== customer.id) fail('ผู้ติดต่อนี้ไม่ได้อยู่ภายใต้ลูกค้าที่เลือก', 400);
+      }
+      ticket.customerId = customer.id;
+      ticket.customerName = customer.name;
+      ticket.projectId = project.id;
+      ticket.contactId = contactId == null ? null : Number(contactId);
+      ticket.updatedAt = new Date().toISOString().slice(0, 10);
+      const resnapshotAt = new Date().toISOString();
+      mockDealQuotations
+        .filter((q) => q.ticketId === ticket.id && q.docStatus === 'DRAFT')
+        .forEach((q) => Object.assign(q, {
+          ...mockDealQuotationCustomerSnapshot(ticket),
+          ...resolveDealQuotationContact(ticket, {}),
+          projectName: project.name,
+          updatedAt: resnapshotAt,
+        }));
+      pushEvent(ticket, user, 'EDITED', ticket.salesStage, ticket.salesStage, `เปลี่ยนลูกค้าเป็น ${customer.name}`);
       return delay({ ticket: buildTicketDetail(ticket) });
     },
   },
@@ -16236,6 +16480,8 @@ export const api = {
       // set from, so the two can never disagree about "today".
       const { validityMode, validityUntil } = resolveDealQuotationValidity(
         payload, header.priceMode, items, now.slice(0, 10));
+      // V192.3 — refused before a number is taken or a row exists, as DealQuotationService#create does.
+      const orderedByContact = resolveDealQuotationOrderedByContact(payload);
       const row = {
         id: mockDealQuotationSeq++,
         // Owner feedback 2026-09-11: the FIRST issued document now carries the revision suffix
@@ -16297,6 +16543,10 @@ export const api = {
         // direct row (a PRICING_REQUEST row's carries its คำขอราคา's own label — Round 8).
         recipientType,
         recipientLabel: quotationRecipientOption(recipientType).label,
+        ...orderedByContact,
+        // Sales feedback #5 (V192.1) — a brand-new document prints its project unless the request
+        // says otherwise; mirrors DealQuotationService#create (null/absent = false).
+        hideProjectName: payload.hideProjectName === true,
         items,
         createdAt: now, updatedAt: now,
       };
@@ -16510,6 +16760,10 @@ export const api = {
       // DATE mode here, before anything is persisted.
       const { validityMode, validityUntil } = resolveDealQuotationValidity(
         payload, header.priceMode, items, row.quotationDate, row);
+      // V192.3 — refused before the row is touched, so a refused phone or email leaves the stored
+      // pair (and everything else) as it was. Same DIRECT-assignment discipline as orderedByName
+      // below: a blank or missing value clears it.
+      const orderedByContact = resolveDealQuotationOrderedByContact(payload);
       // #M7: DIRECT assignment, matching DealQuotationService.updateHeader -> DealQuotationRepository
       // .updateHeader, which writes every one of these columns straight from the request with no
       // "keep the old value" fallback at all. The previous `payload.X ?? row.X` shape meant an
@@ -16553,6 +16807,15 @@ export const api = {
         // genuinely clears it back to the dotted placeholder, mirroring
         // DealQuotationService#update's blankToNull(request.orderedByName()).
         orderedByName: blankToNullMock(payload.orderedByName),
+        ...orderedByContact,
+        // Sales feedback #5 (V192.1) — DELIBERATELY NOT the #M7 "missing clears it" discipline every
+        // field above uses. A missing hideProjectName KEEPS the stored choice, mirroring
+        // DealQuotationService#update: a browser tab still running the bundle from before this
+        // field existed sends none, and reading that as false would start PRINTING a project name
+        // the rep had chosen to hide. Only an explicit true/false changes it.
+        hideProjectName: payload.hideProjectName == null
+          ? (row.hideProjectName ?? false)
+          : payload.hideProjectName === true,
         items,
         // M4(c) fix (Opus review, 2026-09-20) — mirrors
         // DealQuotationRepository#incrementItemsRemovedFromCeo's GREATEST(0, ...) floor.
@@ -17067,6 +17330,73 @@ export const api = {
       row.docStatus = 'CANCELLED';
       row.updatedAt = new Date().toISOString();
       return delay({ quotation: buildDealQuotationDto(row) });
+    },
+
+    // ── เอกสารแนบ. Mirrors DealQuotationAttachmentController + DealQuotationAttachmentService. ──
+
+    // Mirrors DealQuotationAttachmentRepository#findForQuotation and its ORDER BY (chain.depth,
+    // uploaded_at DESC, attachment_id DESC), with no LIMIT. The quotation's own files come first,
+    // newest first, then those of each document it revises, nearest first. Mock ids rise with
+    // upload time, so the id alone gives that order. A reorder has no parentQuotationId, so it
+    // lists nothing of its source.
+    async listAttachments(id) {
+      const listedOn = dealQuotationForAttachmentReader(id);
+      const items = [];
+      let document = listedOn;
+      while (document) {
+        const stored = mockDealQuotationAttachments.filter((a) => a.quotationId === document.id);
+        items.push(...stored.sort((a, b) => b.id - a.id).map((a) => buildDealQuotationAttachmentDto(a, listedOn.id)));
+        const parentId = document.parentQuotationId;
+        document = parentId == null ? null : mockDealQuotations.find((q) => q.id === parentId);
+      }
+      return delay({ items });
+    },
+
+    // Mirrors DealQuotationAttachmentService#upload. An editor, while DRAFT or PENDING_APPROVAL,
+    // at most ten files of the quotation's own, PDF/JPG/PNG.
+    async uploadAttachment(id, file) {
+      const row = dealQuotationForAttachmentEditor(id);
+      if (row.docStatus !== 'DRAFT' && row.docStatus !== 'PENDING_APPROVAL') {
+        fail('แนบเอกสารได้เฉพาะใบเสนอราคาที่เป็นร่างหรือรออนุมัติเท่านั้น', 409);
+      }
+      const own = mockDealQuotationAttachments.filter((a) => a.quotationId === row.id).length;
+      if (own >= MOCK_DEAL_QUOTATION_ATTACHMENT_LIMIT) {
+        fail(`ใบเสนอราคานี้แนบเอกสารได้สูงสุด ${MOCK_DEAL_QUOTATION_ATTACHMENT_LIMIT} ไฟล์`, 409);
+      }
+      if (!file?.size) fail('ไฟล์ว่างเปล่า', 400);
+      if (!MOCK_DEAL_QUOTATION_ATTACHMENT_TYPES.includes(file.type)) fail('รองรับเฉพาะไฟล์ PDF, JPG หรือ PNG', 400);
+      const stored = {
+        id: mockDealQuotationAttachmentSeq++,
+        quotationId: row.id,
+        fileName: file.name ?? 'file',
+        mimeType: file.type,
+        fileSize: file.size,
+        uploadedById: requireSession().id,
+        uploadedAt: new Date().toISOString(),
+      };
+      mockDealQuotationAttachments.push(stored);
+      return delay({ attachment: buildDealQuotationAttachmentDto(stored, row.id) });
+    },
+
+    // Mirrors DealQuotationAttachmentService#delete. An editor of the quotation the file is on,
+    // while that quotation is DRAFT and has no revision open.
+    async deleteAttachment(attachmentId) {
+      requireSession();
+      const stored = mockDealQuotationAttachments.find((a) => a.id === Number(attachmentId));
+      if (!stored) fail('ไม่พบเอกสารแนบนี้', 404);
+      const row = dealQuotationForAttachmentEditor(stored.quotationId);
+      if (hasOpenDealQuotationRevision(row.id)) {
+        fail('ลบเอกสารแนบไม่ได้ เนื่องจากมีฉบับแก้ไขของใบเสนอราคานี้ที่ใช้เอกสารนี้อยู่', 409);
+      }
+      if (row.docStatus !== 'DRAFT') fail('ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงลบเอกสารแนบไม่ได้', 409);
+      mockDealQuotationAttachments.splice(mockDealQuotationAttachments.indexOf(stored), 1);
+      return delay({ ok: true });
+    },
+
+    // The mock keeps no bytes, so there is nothing to download. Same shape as
+    // pricingRequests.attachmentUrl above.
+    attachmentUrl(attachmentId) {
+      return `#mock-deal-quotation-attachment-${attachmentId}`;
     },
 
     async downloadPdf(id) {

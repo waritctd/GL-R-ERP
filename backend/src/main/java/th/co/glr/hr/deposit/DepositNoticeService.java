@@ -842,8 +842,8 @@ public class DepositNoticeService {
      * {@link #itemsFromQuotationForRemainingInvoice}'s own {@code amount} field below —
      * {@code line_subtotal} is nullable (V74), so a null there must never silently diverge between
      * the options preview and the actual renderer input. Stored {@code lineSubtotal} wins when
-     * present (the customer's own agreed figure — see quotation-arithmetic-reconciled: pieces are
-     * HALF_UP, not ceil, so it can differ from a naive recompute by a rounding fraction); otherwise
+     * present (the customer's own agreed figure — see quotation-arithmetic-reconciled: pieces were
+     * HALF_UP until 2026-10-12 and round UP since, so it can differ from a naive recompute by a piece); otherwise
      * HALF_UP(finalUnitPrice × qty). */
     private BigDecimal quotationLineAmount(CustomerQuotationItemDto item) {
         if (item.lineSubtotal() != null) return item.lineSubtotal();

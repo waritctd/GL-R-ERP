@@ -109,7 +109,8 @@ class CommissionFinanceHttpWiringIntegrationTest extends AbstractPostgresIntegra
             new CeoApproverRepository(jdbc));
         TicketService ticketService = new TicketService(tickets, notificationRepository, new ObjectMapper(),
             new CustomerRepository(jdbc), new QuotationRenderer(),
-            (th.co.glr.hr.pricingrequest.PricingRequestService) null, new EmployeeAuthRepository(jdbc));
+            (th.co.glr.hr.pricingrequest.PricingRequestService) null, new EmployeeAuthRepository(jdbc), new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
+            new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
         FinanceDealService financeService = new FinanceDealService(tickets, new FinanceDealRepository(jdbc),
             new DepositNoticeRepository(jdbc), new RemainingInvoiceRepository(jdbc), attachments, ticketService);
 

@@ -33,7 +33,7 @@ export function QuotationPlainItemRow({
   const blank = !item.description && !item.unit;
 
   return (
-    <li className="grid gap-3 rounded-md border border-border p-3.5" data-line-type="PLAIN">
+    <li className="grid gap-3 rounded-md border border-border bg-surface p-3.5" data-line-type="PLAIN">
       <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
         <span className="inline-flex min-w-0 items-center gap-2">
           <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-surface-subtle text-2xs font-extrabold text-text-muted">
@@ -42,7 +42,7 @@ export function QuotationPlainItemRow({
           <span className="text-2xs font-extrabold uppercase tracking-wide text-text-muted">สินค้า/บริการอื่น</span>
         </span>
         {!readOnly ? (
-          <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-1.5">
+          <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-1.5 max-sm:contents">
             {moveTargets.length ? (
               <>
                 <label htmlFor={`plain-move-${index}`} className="sr-only">ย้ายไปตำแหน่ง</label>
@@ -51,7 +51,7 @@ export function QuotationPlainItemRow({
                     shrink (`min-w-0`) or it pushes the page wide on a phone. */}
                 <select
                   id={`plain-move-${index}`}
-                  className="h-8 mobile:h-11 w-full min-w-0 py-0 text-2xs sm:w-auto sm:min-w-[9.5rem] sm:max-w-[13rem]"
+                  className="h-8 max-sm:order-2 mobile:h-11 w-full min-w-0 py-0 text-2xs mobile:text-base sm:w-auto sm:min-w-[9.5rem] sm:max-w-[13rem]"
                   value=""
                   onChange={(e) => { if (e.target.value) onMove?.(e.target.value); }}
                 >
@@ -62,7 +62,7 @@ export function QuotationPlainItemRow({
                 </select>
               </>
             ) : null}
-            <Button variant="icon" size="sm" className="mobile:min-h-[44px] mobile:w-11" onClick={onRemove} title="ลบรายการ" aria-label="ลบรายการ">
+            <Button variant="icon" size="sm" className="max-sm:order-1 max-sm:ml-auto mobile:min-h-[44px] mobile:w-11" onClick={onRemove} title="ลบรายการ" aria-label="ลบรายการ">
               <Icon name="close" size={16} />
             </Button>
           </div>
@@ -158,11 +158,11 @@ export function QuotationPlainItemRow({
         </FormField>
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-surface-subtle px-3 py-2.5">
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-surface-subtle px-3 py-2.5 max-sm:flex-col max-sm:items-stretch">
         <p className="m-0 min-w-0 flex-1 text-xs text-text-muted">
           {item.calcPending ? 'กำลังคำนวณ...' : 'จำนวน × ราคา/หน่วย'}
         </p>
-        <span className="tabular-nums text-md font-extrabold text-text">{formatQuotationMoney(item.lineAmount, currency)}</span>
+        <span className="tabular-nums text-md font-extrabold text-text max-sm:text-right">{formatQuotationMoney(item.lineAmount, currency)}</span>
       </div>
     </li>
   );

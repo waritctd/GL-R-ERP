@@ -49,6 +49,9 @@ AMOUNT derived from pct (NOT NULL), `final_unit_price` = net unit price, `amount
 image BYTEA NOT NULL, uploaded_by BIGINT, uploaded_at TIMESTAMPTZ NOT NULL DEFAULT now())`.
 
 ## Arithmetic (backend-owned, pure class `WastageCalculator`, unit-tested)
+⚠️ **Ruled again 2026-10-12 (owner, sales feedback item 8): every fraction of a PIECE rounds UP.** The
+formula bullets and the reference-figures paragraph below carry the rule; `QuotationGoldenDocumentsTest` pins it.
+
 ⚠️ **Corrected 2026-09-15 (quotation arithmetic reconciliation)** — this section used to state the
 "meeting rule" as pieces-round-UP (CEILING) throughout, pinned against a single reference document
 (QN6900595-3) that turned out to be ambiguous on two of its three lines. Three separate rules were
@@ -73,8 +76,8 @@ See `WastageCalculator`'s class Javadoc and `QuotationGoldenDocumentsTest` for t
 reconciliation against all nine documents, to the satang.
 - `piecesPerSqm = round(1 / sqmPerPiece, 2, HALF_UP)`; `sqmPerPiece` from catalog, else W×H(mm)/1e6 parsed
   from the size text ("60x120" cm → 0.72), else sales types it.
-- AREA mode: `piecesBefore = round(areaSqm × piecesPerSqm, 0, HALF_UP)`; PIECES mode: `piecesBefore = piecesInput`.
-- PERCENT: `piecesAfter = round(piecesBefore × (1 + pct/100), 0, HALF_UP)`; PIECES: `piecesBefore + n`; NONE: `piecesBefore`.
+- AREA mode: `piecesBefore = ceil(areaSqm × piecesPerSqm)` (2026-10-12; was HALF_UP); PIECES mode: `piecesBefore = piecesInput`.
+- PERCENT: `piecesAfter = ceil(piecesBefore × (1 + pct/100))` (2026-10-12; was HALF_UP); PIECES: `piecesBefore + ceil(n)`; NONE: `piecesBefore`.
 - `piecesFinal = ppb > 0 ? ceil(piecesAfter / ppb) × ppb : piecesAfter`; `boxes = ppb > 0 ? piecesFinal / ppb : null`.
   (Box-multiple rounding is unchanged — it still rounds UP to the next full box.)
 - `list = round(unitPrice, 2)` (review fix, 2026-09-15: `sales.quotation_item.unit_price` is
@@ -88,12 +91,11 @@ reconciliation against all nine documents, to the satang.
   evidence: the double-rounded formula gives 35,799.64/16,502.44/11,445.24 against the printed
   35,799.63/16,502.43/11,445.23).
 - `subtotal = Σ lineAmount`; `vat = round(subtotal × 0.07, 2)`; `grandTotal = subtotal + vat`.
-Reference figures pinned (QN6900595-3): item3 87 ตร.ม., 2.78, 10%, 4/box → 242 → 266 → **268**
-(unchanged from before — the box-multiple rounding on top lands on the same 268 either way, so this
-line alone discriminates neither rule); item5 124 ตร.ม. → 345 → 380 → **380** (unchanged, same
-reason); item1 569 ตร.ม., 1.39, 10%, 2/box → 791 → **870** (HALF_UP) — R-C's sole evidence — this now
-REPRODUCES the owner's own printed reference figure exactly. It is no longer a recorded divergence:
-the old CEILING rule gave 791 → 871 → 872, which is what used to diverge from her printed 870.
+Reference figures pinned (QN6900595-3), under the 2026-10-12 round-up rule: item3 87 ตร.ม., 2.78,
+10%, 4/box → 242 → 267 → **268** (the box multiple lands on 268 under either rule); item5 124 ตร.ม.
+→ 345 → 380 → **380** (379.5 rounds to 380 either way); item1 569 ตร.ม., 1.39, 10%, 2/box → 791 →
+871 → **872**. The document itself printed 870 for item1; that was R-C's sole evidence for HALF_UP
+(2026-09-15), and the owner chose the round-up rule over it on 2026-10-12.
 
 ## Printed lines (renderer)
 Per item, rows: [optional location heading row, underlined, no borders, only when the label changes from

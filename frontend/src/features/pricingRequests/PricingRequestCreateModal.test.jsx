@@ -137,20 +137,33 @@ describe('PricingRequestCreateModal', () => {
     expect(createFn).not.toHaveBeenCalled();
   });
 
-  it('shows a client-side hint when an AREA-mode quantity derives to 0 pieces (Opus review #2 -- mirrors the server\'s own zero-piece rejection)', async () => {
+  // Owner ruling 2026-10-12: any fraction of a piece rounds UP on the server, so a tiny positive
+  // area is 1 piece and is no longer warned about; only a zero/blank area derives nothing.
+  it('does not warn when a tiny AREA-mode quantity rounds up to 1 piece (server rounds every fraction up)', async () => {
     const { createFn } = renderModal();
     fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
     fillRequiredFields();
-    // Switch to AREA mode and set a tiny area against a small piece-per-sqm figure -- 0.3 m² at
-    // แผ่น/ตร.ม. 1.39 (sqmPerPiece ≈ 0.72) rounds DOWN to 0 pieces, the same fixture
-    // mockApi.pricingRequests.test.js's own zero-piece test uses.
+    // 0.3 m² at แผ่น/ตร.ม. 1.39 (sqmPerPiece ≈ 0.72) = 0.417 pieces -> 1.
     fireEvent.click(screen.getByRole('button', { name: 'ตร.ม.' }));
     fireEvent.change(screen.getByLabelText(/^แผ่น\/ตร\.ม\./), { target: { value: '1.39' } });
     fireEvent.change(screen.getByLabelText(/^จำนวน/), { target: { value: '0.3' } });
 
     fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
 
-    expect(await screen.findByText(/0 ชิ้น/)).not.toBeNull();
+    await waitFor(() => expect(createFn).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(/0 ชิ้น/)).toBeNull();
+  });
+
+  it('still warns when the AREA-mode quantity is zero (nothing to round up)', async () => {
+    const { createFn } = renderModal();
+    fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
+    fillRequiredFields();
+    fireEvent.click(screen.getByRole('button', { name: 'ตร.ม.' }));
+    fireEvent.change(screen.getByLabelText(/^แผ่น\/ตร\.ม\./), { target: { value: '1.39' } });
+    fireEvent.change(screen.getByLabelText(/^จำนวน/), { target: { value: '0' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
+
     expect(createFn).not.toHaveBeenCalled();
   });
 
@@ -344,6 +357,14 @@ describe('PricingRequestCreateModal', () => {
     });
   });
 
+  // Owner, 2026-10-06: "remove ฝ่าย field completely". The quotation editor, the คำขอราคา page and
+  // every printed form lost it then; this form still collected a value nothing showed or printed,
+  // and the quotation's first save wiped it.
+  it('has no ฝ่าย field', () => {
+    renderModal();
+    expect(screen.queryByLabelText('ฝ่าย')).toBeNull();
+  });
+
   // ── GLA-125 follow-up: ผู้สั่งซื้อ (QuotationContactPicker reuse) ──────────────────────────
   it('scopes ผู้สั่งซื้อ to the deal\'s customer, and sends the picked contact\'s id as recipientContactId', async () => {
     api.customers.contacts.mockResolvedValueOnce({
@@ -482,6 +503,8 @@ describe('PricingRequestCreateModal edit mode (Fix 2)', () => {
       />,
     );
 
+    // Control: the stored ฝ่าย is shown nowhere.
+    expect(screen.queryByDisplayValue('ขาย')).toBeNull();
     // Confirm there is genuinely no box to re-enter these in.
     expect(screen.queryByText('เงื่อนไขสำหรับใบเสนอราคา (ไม่บังคับ)')).toBeNull();
 
@@ -493,9 +516,35 @@ describe('PricingRequestCreateModal edit mode (Fix 2)', () => {
       validityDays: 15,
       printedByDisplayId: 8,
       salesRepDisplayId: 9,
-      deptCode: 'ขาย',
+      // ฝ่าย has no field any more (owner 2026-10-06): a stored one is cleared, not preserved.
+      deptCode: null,
       unitCode: 'D01',
     })));
+  });
+
+  // The wrong-way-round case for the removed ฝ่าย field: a draft saved before the removal still
+  // carries one, and with no field to show or edit it, it must not ride along on the next save.
+  it('saves a draft that still carries a ฝ่าย WITHOUT it, and shows it nowhere', async () => {
+    const updateFn = vi.fn().mockResolvedValue({});
+    const stored = editInitialValue();
+    render(
+      <PricingRequestCreateModal
+        mode="edit"
+        initialValue={{ ...stored, summary: { ...stored.summary, deptCode: 'P003' } }}
+        onClose={vi.fn()}
+        onCreated={vi.fn()}
+        updateFn={updateFn}
+      />,
+    );
+
+    // Control: the form did seed from this draft.
+    expect(screen.getByDisplayValue('โน้ตเดิม')).not.toBeNull();
+    expect(screen.queryByDisplayValue('P003')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
+
+    await waitFor(() => expect(updateFn).toHaveBeenCalledTimes(1));
+    expect(updateFn.mock.calls[0][1].deptCode).toBeNull();
   });
 
   it('seeds ผู้สั่งซื้อ from the persisted request\'s recipientContactId/customerId (GLA-125 follow-up), and preserves it on save', async () => {

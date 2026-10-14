@@ -7,7 +7,7 @@ import { RECIPIENT_OPTIONS, UNIT_BASIS_OPTIONS } from './pricingRequestMeta.js';
 import { FormField } from '../../components/common/FormField.jsx';
 import { QuotationItemRow, newItemClientId } from '../quotations/QuotationItemRow.jsx';
 import { QuotationContactPicker } from '../quotations/QuotationContactPicker.jsx';
-import { piecesPerSqmFromSqmPerPiece, validateQuotationItem } from '../quotations/quotationMeta.js';
+import { ceilPieces, piecesPerSqmFromSqmPerPiece, validateQuotationItem } from '../quotations/quotationMeta.js';
 
 // CR-1 (GLA-167, R1 / F4): the currency and price unit Sales fixes on each line; import cannot
 // change them afterwards. The currency list is the trade currencies this business quotes in (the
@@ -472,7 +472,6 @@ export function PricingRequestCreateModal({
   const validityDays = initialSummary?.validityDays != null ? String(initialSummary.validityDays) : '';
   const printedByDisplayId = initialSummary?.printedByDisplayId != null ? String(initialSummary.printedByDisplayId) : '';
   const salesRepDisplayId = initialSummary?.salesRepDisplayId != null ? String(initialSummary.salesRepDisplayId) : '';
-  const deptCode = initialSummary?.deptCode ?? '';
   // unitCode doubles as the ผู้ออกแบบ picker's target, exactly as on the direct-deal form (V173) —
   // a designer pick is a frontend convenience that writes this SAME free-text field, never a
   // separate column; the designer's own name never reaches it, only the code does.
@@ -632,7 +631,8 @@ export function PricingRequestCreateModal({
       });
       // Opus review finding #2 (2026-09-18): a cheap, DISPLAY-ONLY early warning for the same
       // case PricingRequestService#resolveItem now rejects server-side with a 400 -- AREA mode
-      // rounding down to 0 pieces (e.g. 0.3 m² against 0.72 m²/piece). This mirrors ONLY
+      // deriving 0 pieces. The server rounds every fraction of a piece UP, so a positive area is at
+      // least 1 piece unless pieces/ตร.ม. itself rounds to 0.00 -- the only case this still catches. Mirrors ONLY
       // piecesPerSqmFromSqmPerPiece's already-DISPLAY-ONLY reciprocal (see that helper's own
       // comment), never WastageCalculator itself, so it deliberately does NOT catch every
       // zero-piece cause the server checks (e.g. an explicit piecesInput of 0 would already be
@@ -641,7 +641,7 @@ export function PricingRequestCreateModal({
       if (!fieldErrors.areaSqm && item?.quantityMode === 'AREA') {
         const area = Number(item?.areaSqm);
         const piecesPerSqm = piecesPerSqmFromSqmPerPiece(item?.sqmPerPiece);
-        if (area > 0 && piecesPerSqm != null && Math.round(area * piecesPerSqm) < 1) {
+        if (area > 0 && piecesPerSqm != null && ceilPieces(area * piecesPerSqm) < 1) {
           fieldErrors.areaSqm = 'จำนวนที่คำนวณได้จะเป็น 0 ชิ้น กรุณาระบุพื้นที่ให้มากขึ้น';
         }
       }
@@ -671,7 +671,10 @@ export function PricingRequestCreateModal({
       validityDays: validityDays !== '' ? Number(validityDays) : null,
       printedByDisplayId: printedByDisplayId !== '' ? Number(printedByDisplayId) : null,
       salesRepDisplayId: salesRepDisplayId !== '' ? Number(salesRepDisplayId) : null,
-      deptCode: deptCode.trim() || null,
+      // ฝ่าย has no field any more (owner, 2026-10-06: "remove ฝ่าย field completely"), on this form
+      // or on the quotation. Always null, so a value an older draft still carries is cleared by the
+      // next save instead of riding along unseen.
+      deptCode: null,
       unitCode: unitCode.trim() || null,
       omitContactHonorific,
       items: items.map(pricingRequestItemInputFromRow),

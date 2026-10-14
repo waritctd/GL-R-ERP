@@ -166,6 +166,7 @@ export const API_ROUTES = {
     // Deal tracking + activity (V83, Slice B1/B2 "kill the weekly report" — handoff 103).
     activities: (id) => `/api/tickets/${id}/activities`,
     tracking: (id) => `/api/tickets/${id}/tracking`,
+    customer: (id) => `/api/tickets/${id}/customer`,
   },
   depositNotices: {
     get: (id) => `/api/deposit-notices/${id}`,
@@ -629,6 +630,11 @@ export const API_ROUTES = {
     // M4(d) fix (Opus review, 2026-09-20) — "คืนรายการ": re-adds a CEO-linked line a prior save
     // dropped. Mirrors DealQuotationController#restoreRemovedItem.
     restoreRemovedItem: (id, pricingDecisionItemId) => `/api/deal-quotations/${id}/items/${pricingDecisionItemId}/restore`,
+    // เอกสารแนบ of a quotation. Mirrors DealQuotationAttachmentController. The list and the upload
+    // are addressed by the quotation, and one stored file by its own id.
+    attachments: (id) => `/api/deal-quotations/${id}/attachments`,
+    attachment: (attachmentId) => `/api/deal-quotation-attachments/${attachmentId}`,
+    attachmentFile: (attachmentId) => `/api/deal-quotation-attachments/${attachmentId}/file`,
   },
 };
 

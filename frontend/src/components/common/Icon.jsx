@@ -37,6 +37,8 @@ import SlidersHorizontal from 'lucide-react/dist/esm/icons/sliders-horizontal.mj
 import TriangleAlert from 'lucide-react/dist/esm/icons/triangle-alert.mjs';
 import Upload from 'lucide-react/dist/esm/icons/upload.mjs';
 import Paperclip from 'lucide-react/dist/esm/icons/paperclip.mjs';
+import Copy from 'lucide-react/dist/esm/icons/copy.mjs';
+import Download from 'lucide-react/dist/esm/icons/download.mjs';
 import Calculator from 'lucide-react/dist/esm/icons/calculator.mjs';
 import UserCog from 'lucide-react/dist/esm/icons/user-cog.mjs';
 import UserPlus from 'lucide-react/dist/esm/icons/user-plus.mjs';
@@ -86,6 +88,8 @@ const icons = {
   upload: Upload,
   paperclip: Paperclip,
   calculator: Calculator,
+  copy: Copy,
+  download: Download,
   user: CircleUserRound,
   userCog: UserCog,
   userPlus: UserPlus,

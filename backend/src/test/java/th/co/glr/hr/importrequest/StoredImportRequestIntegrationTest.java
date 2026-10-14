@@ -82,7 +82,8 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
             new ContactRepository(jdbc), fileStorage, factoryQuoteCarryForward());
         EmployeeAuthRepository auth = new EmployeeAuthRepository(jdbc);
         TicketService ticketService = new TicketService(tickets, notifications, objectMapper, customers,
-            new QuotationRenderer(), pricingRequestService, auth);
+            new QuotationRenderer(), pricingRequestService, auth, new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
+            new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
 
         service = new ImportRequestService(queries, new ImportRequestRenderer(), stored, factories,
             tickets, ticketService);

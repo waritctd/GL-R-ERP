@@ -111,7 +111,8 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
             pricingRequests, tickets, notifications, objectMapper, new ContactRepository(jdbc),
             new FileStorageService("/tmp/glr-pricing-flow-test-uploads"), factoryQuoteCarryForward());
         ticketService = new TicketService(tickets, notifications,
-            objectMapper, customers, new QuotationRenderer(), pricingRequestService, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc));
+            objectMapper, customers, new QuotationRenderer(), pricingRequestService, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc), new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
+            new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
 
         salesRepId = createEmployee(employees, "พนักงานขาย หนึ่ง", "sales1@glr.co.th", "SALES", "แผนกขาย");
         secondSalesRepId = createEmployee(employees, "พนักงานขาย สอง", "sales2@glr.co.th", "SALES", "แผนกขาย");

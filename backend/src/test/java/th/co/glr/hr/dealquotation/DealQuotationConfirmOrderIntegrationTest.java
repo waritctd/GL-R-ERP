@@ -129,7 +129,8 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
             new ContactRepository(jdbc), new FileStorageService("/tmp/glr-gla136-promote-test-uploads"),
             factoryQuoteCarryForward());
         ticketService = new TicketService(tickets, notifications, objectMapper, customers, new QuotationRenderer(),
-            pricingRequestService, new EmployeeAuthRepository(jdbc));
+            pricingRequestService, new EmployeeAuthRepository(jdbc), new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
+            new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
 
         Mailer noMail = new Mailer() {
             @Override

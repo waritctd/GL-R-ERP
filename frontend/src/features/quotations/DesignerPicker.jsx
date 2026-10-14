@@ -205,7 +205,7 @@ export function DesignerPicker({ value, onSelectCode, disabled = false, idPrefix
           <li className="sticky top-0 z-10 border-b border-border-subtle bg-surface-muted">
             <button
               type="button"
-              className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-xs font-bold text-link"
+              className="flex w-full items-center gap-1.5 border-0 bg-transparent px-3 py-2 text-left text-xs font-bold text-link"
               onMouseDown={(e) => { e.preventDefault(); openNewDesignerFromDropdown(); }}
             >
               <Icon name="plus" size={13} />
@@ -223,7 +223,7 @@ export function DesignerPicker({ value, onSelectCode, disabled = false, idPrefix
                 id={`${idPrefix}-option-${idx}`}
                 role="option"
                 aria-selected={idx === activeIndex}
-                className={`block w-full px-3 py-2 text-left text-xs hover:bg-surface-hover ${idx === activeIndex ? 'bg-surface-hover' : ''}`}
+                className={`block w-full border-0 px-3 py-2 text-left text-xs text-text hover:bg-surface-hover ${idx === activeIndex ? 'bg-surface-hover' : 'bg-transparent'}`}
                 onMouseEnter={() => setActiveIndex(idx)}
                 onMouseDown={(e) => { e.preventDefault(); selectDesigner(d); }}
               >

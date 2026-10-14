@@ -97,7 +97,8 @@ class DepositPolicyAuthzIntegrationTest extends AbstractPostgresIntegrationTest 
             .thenReturn(new PricingRequestService.CancelOpenForTicketResult(0, List.of()));
         ticketService = new TicketService(tickets, notifications,
             new ObjectMapper(), customers, new QuotationRenderer(), pricingRequests,
-            new EmployeeAuthRepository(jdbc));
+            new EmployeeAuthRepository(jdbc), new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
+            new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
 
         EmployeeRepository employees = new EmployeeRepository(
             jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));

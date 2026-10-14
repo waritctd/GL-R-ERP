@@ -130,7 +130,8 @@ class ImportCommentAndDocumentAuthzIntegrationTest extends AbstractPostgresInteg
             new PricingRequestRepository(jdbc), tickets, notifications, objectMapper,
             new ContactRepository(jdbc), fileStorage, factoryQuoteCarryForward());
         ticketService = new TicketService(tickets, notifications, objectMapper, new CustomerRepository(jdbc),
-            new QuotationRenderer(), pricingRequestService, new EmployeeAuthRepository(jdbc));
+            new QuotationRenderer(), pricingRequestService, new EmployeeAuthRepository(jdbc), new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
+            new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
         mvc = MockMvcBuilders.standaloneSetup(new AttachmentController(new AttachmentRepository(jdbc),
                 new SessionContext(), tickets, new AuditService(new AuditLogRepository(jdbc), objectMapper),
                 fileStorage))
