@@ -613,6 +613,14 @@ export function QuotationEditorPage({ user, showToast }) {
       setSettingsNotice(null);
       // Touched, like a duplicated row: a copy of an incomplete row shows what it still lacks.
       setTouchedRowIds(new Set([...copyState.items, ...copyState.adjustments].map((row) => row.clientId)));
+      // This page instance survives /quotations/:id -> /quotations/new?copyFrom=, so what the earlier
+      // visit left in its state is cleared: a copy is for another customer on a NEW deal, so no
+      // recipient, no deal choice and no customer/project are carried over. (The copy's own project
+      // name is offered by DealCustomerCard once the new customer is chosen, so it is unaffected.)
+      setRecipientType('');
+      recipientTouchedRef.current = false;
+      setDealModeChoice(null);
+      setDealForm(emptyDealForm());
       // Unsaved work from the first moment — which is also what puts the checklist (customer,
       // project) on screen at once rather than after the first keystroke.
       setDirty(true);
@@ -623,7 +631,7 @@ export function QuotationEditorPage({ user, showToast }) {
       // the deal-derived bits (โครงการ, and ผู้รับ unless the rep chose it) re-seed from the newly
       // picked deal via the two effects below. A first visit has nothing to keep, so the full reset
       // below is unchanged for it (and for anything arriving from an existing quotation).
-      if (initializedFor === null || initializedFor.startsWith('t-')) {
+      if (initializedFor === null || initializedFor.startsWith('t-') || initializedFor.startsWith('c-')) {
         setTerms((t) => ({ ...t, projectName: '' }));
         projectNameSeededForTicket.current = null;
         recipientSeededForTicket.current = null;

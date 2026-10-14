@@ -1,6 +1,6 @@
 import React from 'react';
 import { onlineManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter, Route, Routes, useLocation, useParams } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { QuotationEditorPage } from './QuotationEditorPage.jsx';
@@ -39,7 +39,8 @@ vi.mock('../../api/index.js', async (importOriginal) => {
   return {
     ...actual,
     api: {
-      tickets: { get: vi.fn(), create: vi.fn() },
+      tickets: { get: vi.fn(), create: vi.fn(), list: vi.fn() },
+      pricingRequests: { listForTicket: vi.fn() },
       dealQuotations: {
         get: vi.fn(), create: vi.fn(), update: vi.fn(), calculateLine: vi.fn(), submit: vi.fn(),
         approve: vi.fn(), reject: vi.fn(), createRevision: vi.fn(), createReorder: vi.fn(), cancel: vi.fn(),
@@ -253,6 +254,8 @@ beforeEach(() => {
     },
   });
   api.tickets.create.mockResolvedValue({ ticket: { summary: { id: 4242 } } });
+  api.tickets.list.mockResolvedValue({ tickets: [] });
+  api.pricingRequests.listForTicket.mockResolvedValue({ items: [] });
   api.customers.search.mockResolvedValue({ customers: [NEW_CUSTOMER] });
   api.customers.projects.mockResolvedValue({ projects: [NEW_CUSTOMERS_PROJECT] });
   api.customers.contacts.mockResolvedValue({ contacts: [] });
@@ -614,5 +617,106 @@ describe('/quotations/new?copyFrom= — when it must not copy', () => {
     expect(byId('model-0')).toBeNull();
     expect(screen.queryByRole('button', { name: 'บันทึกร่าง' })).toBeNull();
     expect(screen.queryByTestId('copy-notice')).toBeNull();
+  });
+});
+
+
+// A page instance outlives a route change (/quotations/:id and /quotations/new render the same
+// component at the same place), so these cases mount BOTH routes with the real editor.
+function renderBothRoutes(path, user = salesUser) {
+  const showToast = vi.fn();
+  const result = render(
+    <Providers path={path}>
+      <Route path="/quotations/new" element={<QuotationEditorPage user={user} showToast={showToast} />} />
+      <Route path="/quotations/:id" element={<QuotationEditorPage user={user} showToast={showToast} />} />
+    </Providers>,
+  );
+  return { ...result, showToast };
+}
+
+describe('/quotations/new?copyFrom= — then picking an existing deal', () => {
+  it('keeps the copied rows, and the save lands on the picked deal — no second deal is made', async () => {
+    api.tickets.list.mockResolvedValue({
+      tickets: [{
+        id: 18, code: 'DL-2026-0018', createdById: 6, customerName: 'บริษัท ผู้รับเหมา บี จำกัด', customerId: 2,
+        projectName: 'คอนโด ริเวอร์ไซด์ ชั้น 5', lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', liveDirectQuotation: null,
+      }],
+    });
+    api.tickets.get.mockResolvedValue({
+      ticket: {
+        summary: {
+          id: 18, code: 'DL-2026-0018', createdById: 6, createdByName: 'คุณสมหมาย ขายดี',
+          customerName: 'บริษัท ผู้รับเหมา บี จำกัด', customerId: 2, projectId: 77, projectName: 'คอนโด ริเวอร์ไซด์ ชั้น 5',
+          contactId: null, contactName: null, salesStage: 'QUOTE_DESIGN_SIDE', entryChannel: 'DESIGNER_LED',
+        },
+      },
+    });
+    renderBothRoutes('/quotations/new?copyFrom=918273');
+    await waitFor(() => expect(byId('model-0')?.value).toBe('Trilogy'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'เลือกดีลที่มีอยู่' }));
+    fireEvent.focus(await screen.findByRole('combobox', { name: /ดีล/ }));
+    fireEvent.mouseDown(await screen.findByRole('option', { name: /DL-2026-0018/ }));
+    await waitFor(() => expect(api.tickets.get).toHaveBeenCalledWith(18));
+
+    // The half-built form is not wiped by choosing a deal.
+    await waitFor(() => expect(screen.getByRole('radio', { name: 'ผู้ออกแบบ' }).getAttribute('aria-checked')).toBe('true'));
+    expect(byId('model-0')?.value).toBe('Trilogy');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+
+    await waitFor(() => expect(api.dealQuotations.create).toHaveBeenCalledTimes(1));
+    expect(api.dealQuotations.create.mock.calls[0][0]).toBe(18);
+    expect(api.dealQuotations.create.mock.calls[0][1].items).toHaveLength(4);
+    expect(api.tickets.create).not.toHaveBeenCalled();
+  });
+});
+
+// The page instance survives /quotations/:id -> /quotations/new?copyFrom=, so what the earlier visit
+// left in its state must not reach the copy.
+describe('a copy opened from a page that was already showing something else', () => {
+  const GO_COPY = 'go-copy';
+  function GoCopy() {
+    const navigate = useNavigate();
+    return <button type="button" onClick={() => navigate('/quotations/new?copyFrom=918273')}>{GO_COPY}</button>;
+  }
+  function renderWithGoCopy(path) {
+    const showToast = vi.fn();
+    return render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}>
+        <MemoryRouter initialEntries={[path]}>
+          <GoCopy />
+          <Routes>
+            <Route path="/quotations/new" element={<QuotationEditorPage user={salesUser} showToast={showToast} />} />
+            <Route path="/quotations/:id" element={<QuotationEditorPage user={salesUser} showToast={showToast} />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+  }
+  const recipientRadios = () => within(screen.getByRole('radiogroup', { name: 'ผู้รับใบเสนอราคา' })).getAllByRole('radio');
+
+  it('preselects no recipient, and blocks บันทึกร่าง until one is chosen, even if the source had one', async () => {
+    api.dealQuotations.get.mockResolvedValue({ quotation: source({ recipientType: 'DESIGNER', recipientLabel: 'ผู้ออกแบบ' }) });
+    renderBothRoutes('/quotations/918273');
+    fireEvent.click(await screen.findByRole('button', { name: COPY }));
+
+    await waitFor(() => expect(byId('model-0')?.value).toBe('Trilogy'));
+    expect(recipientRadios().map((r) => r.getAttribute('aria-checked'))).toEqual(['false', 'false', 'false']);
+    expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(true);
+    expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).title).toContain('ต้องเลือกผู้รับใบเสนอราคา');
+  });
+
+  it('opens on สร้างดีลใหม่ even after the rep chose เลือกดีลที่มีอยู่ on an earlier new-quotation visit', async () => {
+    renderWithGoCopy('/quotations/new');
+    fireEvent.click(await screen.findByRole('button', { name: 'สร้างดีลใหม่' }));
+    fireEvent.click(screen.getByRole('button', { name: 'เลือกดีลที่มีอยู่' }));
+    expect(screen.getByRole('button', { name: 'เลือกดีลที่มีอยู่' }).getAttribute('aria-pressed')).toBe('true');
+
+    fireEvent.click(screen.getByRole('button', { name: GO_COPY }));
+
+    await waitFor(() => expect(byId('model-0')?.value).toBe('Trilogy'));
+    expect(screen.getByRole('button', { name: 'สร้างดีลใหม่' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByLabelText(/^ลูกค้า/)).not.toBeNull();
   });
 });

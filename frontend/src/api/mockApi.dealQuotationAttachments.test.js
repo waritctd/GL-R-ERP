@@ -77,6 +77,29 @@ describe('mock dealQuotations, เอกสารแนบ', () => {
     await expect(api.dealQuotations.deleteAttachment(attachment.id)).rejects.toMatchObject({ status: 403 });
   });
 
+  // The refusal that belongs to the FILE role, with the status rule out of the way: an APPROVED
+  // quotation on a deal inside account's scope (seed deal 19), which account really does open.
+  // The DRAFT case above is refused by the status rule before the file rule is ever reached.
+  it('refuses account and import the files of an APPROVED quotation they can themselves open', async () => {
+    await api.auth.login(sales);
+    retireLiveDirectQuotationsForTests(19);
+    retireLivePricingRequestsForTests(19);
+    const { quotation: created } = await api.dealQuotations.create(19, { recipientType: 'DESIGNER', items: [ONE_ITEM] });
+    const { attachment } = await api.dealQuotations.uploadAttachment(created.id, pdf());
+    await api.dealQuotations.submit(created.id);
+    await api.auth.login({ role: 'sales_manager' });
+    await api.dealQuotations.approve(created.id, {});
+
+    for (const role of ['account', 'import']) {
+      await api.auth.login({ role });
+      // Control: this role opens the approved quotation itself, so only the file rule can refuse below.
+      expect((await api.dealQuotations.get(created.id)).quotation.docStatus, role).toBe('APPROVED');
+      await expect(api.dealQuotations.listAttachments(created.id), role).rejects.toMatchObject({ status: 403 });
+      await expect(api.dealQuotations.uploadAttachment(created.id, pdf()), role).rejects.toMatchObject({ status: 403 });
+      await expect(api.dealQuotations.deleteAttachment(attachment.id), role).rejects.toMatchObject({ status: 403 });
+    }
+  });
+
   it('takes files while DRAFT and PENDING_APPROVAL only, and gives one up while DRAFT only', async () => {
     await api.auth.login(sales);
     const quotation = await draftOn18();
