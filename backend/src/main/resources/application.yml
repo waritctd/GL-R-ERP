@@ -109,6 +109,12 @@ app:
       recalc-enabled: ${APP_ATTENDANCE_RECALC_ENABLED:true}
       recalc-lookback-days: ${APP_ATTENDANCE_RECALC_LOOKBACK_DAYS:7}
       backfill-on-startup: ${APP_ATTENDANCE_BACKFILL_ON_STARTUP:false}
+    # Month-end attendance-day count email (AttendanceMonthlyReportJob): 08:00 Asia/Bangkok on the 1st,
+    # covering the previous month. Blank recipient = off. The address is set on the deployment, not
+    # here — this repo is public and it is a personal mailbox.
+    monthly-report:
+      to: ${APP_ATTENDANCE_MONTHLY_REPORT_TO:}
+      employee-codes: ${APP_ATTENDANCE_MONTHLY_REPORT_EMPLOYEE_CODES:10016,10030}
   auth:
     # OFF by default: never seed the low-entropy employee_code as a temp login password (guessable
     # before first login). Opt in for local dev only; secure onboarding uses the HR reset endpoint.
