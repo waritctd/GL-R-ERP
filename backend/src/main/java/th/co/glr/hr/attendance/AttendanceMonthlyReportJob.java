@@ -3,6 +3,8 @@ package th.co.glr.hr.attendance;
 import java.time.Clock;
 import java.time.YearMonth;
 import java.time.ZoneId;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.time.format.TextStyle;
 import java.util.HashMap;
 import java.util.List;
@@ -16,17 +18,23 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import th.co.glr.hr.mail.Mailer;
+import th.co.glr.hr.notification.NotificationEmailService;
 
 /**
- * Emails one recipient, at 08:00 Asia/Bangkok on the 1st of each month, how many days each
- * configured employee attended in the previous calendar month.
+ * Emails the configured recipient (and CC list), at 12:00 noon Asia/Bangkok on the last day of each
+ * month, how many days each configured employee attended in that month. The run happens at noon, so
+ * the last day counts only scans made before then.
  *
  * <p>A day counts when the employee has at least one {@code hr.attendance_punch} row with that
  * {@code work_date} — a lone clock-in or a lone clock-out is a day attended. Punches resolve to an
- * employee the same way the rest of attendance does ({@link AttendanceSql}: stored employee_id, else
- * badge = card number or employee code). A blank recipient (or no employee codes) turns the report
- * off. A mail failure propagates so the scheduled-run event recorder logs it as an error.
+ * employee the same way the rest of attendance does ({@link AttendanceSql}: stored employee_id,
+ * else badge = card number or employee code). A blank recipient (or no employee codes) turns the
+ * report off.
+ *
+ * <p>Sent through {@link NotificationEmailService#sendLeaveSubmission}, the leave-email path
+ * (branded HTML, CC list, subject suffix), so its log lines say "leave submission email". That
+ * method is {@code @Async} and best-effort: a send failure is logged there and not rethrown, so the
+ * scheduled run itself never fails on a mail outage.
  */
 @Component
 public class AttendanceMonthlyReportJob {
@@ -34,7 +42,8 @@ public class AttendanceMonthlyReportJob {
     private static final ZoneId BANGKOK = ZoneId.of("Asia/Bangkok");
 
     private final NamedParameterJdbcTemplate jdbc;
-    private final Mailer mailer;
+    private final NotificationEmailService emailService;
+    private final List<String> cc;
     private final String to;
     private final List<String> employeeCodes;
     private final Clock clock;
@@ -42,34 +51,41 @@ public class AttendanceMonthlyReportJob {
     @Autowired
     public AttendanceMonthlyReportJob(
         NamedParameterJdbcTemplate jdbc,
-        Mailer mailer,
+        NotificationEmailService emailService,
         @Value("${app.attendance.monthly-report.to:}") String to,
+        @Value("${app.attendance.monthly-report.cc:}") List<String> cc,
         @Value("${app.attendance.monthly-report.employee-codes:}") List<String> employeeCodes
     ) {
-        this(jdbc, mailer, to, employeeCodes, Clock.system(BANGKOK));
+        this(jdbc, emailService, to, cc, employeeCodes, Clock.system(BANGKOK));
     }
 
-    /** Lets tests pin "today" so the 1st-of-month and New Year rollovers are deterministic. */
-    AttendanceMonthlyReportJob(NamedParameterJdbcTemplate jdbc, Mailer mailer, String to,
-                               List<String> employeeCodes, Clock clock) {
+    /** Lets tests pin "now" so month-end and New Year's Eve runs are deterministic. */
+    AttendanceMonthlyReportJob(NamedParameterJdbcTemplate jdbc,
+                               NotificationEmailService emailService, String to,
+                               List<String> cc, List<String> employeeCodes, Clock clock) {
         this.jdbc = jdbc;
-        this.mailer = mailer;
+        this.emailService = emailService;
         this.to = to == null ? "" : to.trim();
-        this.employeeCodes = employeeCodes.stream()
-            .map(String::trim)
-            .filter(c -> !c.isEmpty())
-            .toList();
+        this.cc = cc;
+        this.employeeCodes = trimmed(employeeCodes);
         this.clock = clock;
     }
 
-    @Scheduled(cron = "0 0 8 1 * *", zone = "Asia/Bangkok")
-    public void sendPreviousMonth() {
-        send(YearMonth.now(clock).minusMonths(1));
+    private static List<String> trimmed(List<String> values) {
+        return values.stream()
+            .map(String::trim)
+            .filter(c -> !c.isEmpty())
+            .toList();
+    }
+
+    @Scheduled(cron = "0 0 12 L * *", zone = "Asia/Bangkok")
+    public void sendThisMonth() {
+        send(YearMonth.now(clock));
     }
 
     void send(YearMonth month) {
         if (to.isEmpty() || employeeCodes.isEmpty()) {
-            log.info("Monthly attendance report is off (no recipient or no employee codes configured)");
+            log.info("Monthly attendance report is off (no recipient or employee codes configured)");
             return;
         }
         Map<String, String> daysByCode = new HashMap<>();
@@ -100,15 +116,25 @@ public class AttendanceMonthlyReportJob {
                     + "(" + code + "): " + rs.getInt("days") + " วัน");
             });
 
-        String label = month.getMonth().getDisplayName(TextStyle.FULL, Locale.forLanguageTag("th"))
-            + " " + (month.getYear() + 543);
+        String label = thaiMonthYear(month);
+        ZonedDateTime now = ZonedDateTime.now(clock).withZoneSameInstant(BANGKOK);
         StringBuilder body = new StringBuilder("สรุปจำนวนวันเข้างาน ").append(label).append('\n')
-            .append("นับทุกวันที่มีการสแกนอย่างน้อย 1 ครั้ง (สแกนเข้าหรือสแกนออกอย่างใดอย่างหนึ่งก็นับ)\n\n");
+            .append("นับทุกวันที่มีการสแกนอย่างน้อย 1 ครั้ง "
+                + "(สแกนเข้าหรือสแกนออกอย่างใดอย่างหนึ่งก็นับ)\n")
+            .append("ข้อมูลถึงวันที่ ").append(now.getDayOfMonth()).append(' ')
+            .append(thaiMonthYear(YearMonth.from(now))).append(" เวลา ")
+            .append(now.format(DateTimeFormatter.ofPattern("HH:mm"))).append(" น.\n\n");
         for (String code : employeeCodes) {
             body.append("- ")
                 .append(daysByCode.getOrDefault(code, code + ": ไม่พบรหัสพนักงานนี้ในระบบ"))
                 .append('\n');
         }
-        mailer.send(to, "สรุปจำนวนวันเข้างาน " + label, body.toString());
+        emailService.sendLeaveSubmission(
+            to, cc, "สรุปจำนวนวันเข้างาน " + label, body.toString(), null, List.of());
+    }
+
+    private static String thaiMonthYear(YearMonth month) {
+        return month.getMonth().getDisplayName(TextStyle.FULL, Locale.forLanguageTag("th"))
+            + " " + (month.getYear() + 543);
     }
 }
