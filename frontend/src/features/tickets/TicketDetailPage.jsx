@@ -38,7 +38,7 @@ import { convertToThb, formatThb } from './catalogPriceDisplay.js';
 import { activePricingRequestsSummary } from '../pricingRequests/pricingRequestMeta.js';
 import { PricingRequestPanel } from '../pricingRequests/PricingRequestPanel.jsx';
 import { CancelDealModal } from './CancelDealModal.jsx';
-import { hasActivitySince, isReadyToAdvance, lastStageChangeAt, STAGE_ADVANCE_GATE_HINT } from './dealTrackingMeta.js';
+import { hasActivitySince, isReadyToAdvance, lastStageChangeAt, STAGE_ADVANCE_GATE_HINT, STAGE_ADVANCE_GATE_MESSAGE } from './dealTrackingMeta.js';
 import { ContextSection, FieldRow } from './DealMetaFields.jsx';
 import { DealAttachmentsPanel } from './DealAttachmentsPanel.jsx';
 import { DealDepositPanel } from './DealDepositPanel.jsx';
@@ -1132,6 +1132,37 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // replacement for the primary บันทึกผลใบเสนอราคา — the client may simply accept the original.
   const reviseSecondary = secondaryWorkActions(user, summary, pricingRequests, { reviseTarget })[0] ?? null;
   const workStateAction = workState.action;
+  const lost = summary.lifecycle === 'CLOSED_LOST';
+  const isActiveLifecycle = (summary.lifecycle ?? 'ACTIVE') === 'ACTIVE';
+  // Mirrors DealStagePanel's own `next`/`canAdvance` byte-for-byte, PLUS the
+  // explicit `isActiveLifecycle` guard DealStagePanel got "for free" from
+  // which JSX branch rendered its old inline "เลื่อนไป" button (only the
+  // plain-ACTIVE branch — never ON_HOLD/DORMANT/lost, which each render their
+  // own dedicated recovery/reopen actions instead) — same class of implicit
+  // gate this file already had to make explicit for canEditStage/
+  // canHoldDeal/canDormantDeal above (ON_HOLD lifecycle regression, see that
+  // describe block in TicketDetailPage.test.jsx).
+  //
+  // Deliberately NOT this file's own `hasAction(action)` above (single-arg,
+  // "is this action name present at all") — DealStagePanel's own hasAction
+  // takes a second `targetStage` argument and requires an exact match, so an
+  // ADVANCE_STAGE entry for some OTHER target stage would false-positive
+  // through the single-arg version. Checked directly against
+  // `availableActions` here so this stays byte-identical to DealStagePanel's
+  // gate, not just same-named.
+  const next = isActiveLifecycle && !lost ? nextOnRoute(stageCatalog, summary.salesStage, stageDecisions) : null;
+  const hasAdvanceStageAction = Boolean(next) && availableActions.some(
+    (item) => item.action === 'ADVANCE_STAGE' && item.targetStage === next.code,
+  );
+  // No local re-derivation left: hasAdvanceStageAction IS the server's verdict for this exact
+  // target (TicketService.addStageActions now derives ADVANCE_STAGE from stageDecisions, so it
+  // reflects the fact gates too, not just the role gate).
+  const canAdvance = Boolean(next) && !next.auto && hasAdvanceStageAction;
+  // The one block the rep clears themselves (follow-up date + an activity since the last move),
+  // read off the server's own reason, as DealStagePanel's `readinessBlocked` does.
+  const nextDecision = next ? stageDecisions.find((decision) => decision.stage === next.code) : null;
+  const advanceAwaitsReadiness = Boolean(next) && !next.auto && nextDecision?.blockedReason === STAGE_ADVANCE_GATE_MESSAGE;
+  let advanceInHeader = false;
   let stickyPrimaryLabel = nextAction;
   let stickyPrimaryAction = primaryAction;
   if (!stickyPrimaryAction && workStateAction) {
@@ -1261,6 +1292,19 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         </Button>
       );
       stickyPrimaryLabel = workStateAction.label;
+    } else if (actionKey === 'advance_stage') {
+      // ขั้น 1–2 are moved by hand (owner ruling 2026-10-15). Offered only when the rep can move:
+      // DealStagePanel's startAdvance moves at once when ready, else opens its follow-up + activity form.
+      if (canAdvance || advanceAwaitsReadiness) {
+        advanceInHeader = true;
+        stickyPrimaryLabel = `เลื่อนไป: ${next.no}. ${dealStageLabel(next.code, summary.entryChannel).label}`;
+        stickyPrimaryAction = (
+          <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey} disabled={actionLoading} onClick={() => dealStagePanelRef.current?.startAdvance()}>
+            {stickyPrimaryLabel}
+            <Icon name="chevronRight" size={14} />
+          </Button>
+        );
+      }
     } else if (jumpId) {
       // Every IN_PAGE_JUMP_TARGET id now lives inside a tab — JUMP_TARGET_TAB
       // names which one, so runOnTab can switch there before scrolling.
@@ -1310,7 +1354,6 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // menu never offers something that panel itself wouldn't also allow. DealStagePanel stays the single actual authority —
   // see its own doc comment on why the ref-exposed open functions re-check
   // these same conditions instead of trusting the caller.
-  const lost = summary.lifecycle === 'CLOSED_LOST';
   // DealStagePanel only ever rendered its แก้ไขสถานะ…/เสียงาน/พักดีลไว้/พัก
   // dormant row inside its final "lifecycle is plain ACTIVE" JSX branch
   // (neither the ON_HOLD/DORMANT recovery banner nor the lost banner) — that
@@ -1320,36 +1363,11 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // transition — DealStagePanel's OWN ON_HOLD banner already offers that
   // exact button). Mirrored explicitly here so the header overflow menu
   // can't duplicate it.
-  const isActiveLifecycle = (summary.lifecycle ?? 'ACTIVE') === 'ACTIVE';
   const canEditStage = isActiveLifecycle && hasAction('UPDATE_STAGE')
     && stageDecisions.some((decision) => decision.allowed) && !lost;
   const canLostDeal = isActiveLifecycle && hasAction('MARK_LOST') && !lost && summary.salesStage !== 'CLOSED_PAID';
   const canHoldDeal = isActiveLifecycle && hasAction('PLACE_ON_HOLD');
   const canDormantDeal = isActiveLifecycle && hasAction('MARK_DORMANT');
-  // Mirrors DealStagePanel's own `next`/`canAdvance` byte-for-byte, PLUS the
-  // explicit `isActiveLifecycle` guard DealStagePanel got "for free" from
-  // which JSX branch rendered its old inline "เลื่อนไป" button (only the
-  // plain-ACTIVE branch — never ON_HOLD/DORMANT/lost, which each render their
-  // own dedicated recovery/reopen actions instead) — same class of implicit
-  // gate this file already had to make explicit for canEditStage/
-  // canHoldDeal/canDormantDeal above (ON_HOLD lifecycle regression, see that
-  // describe block in TicketDetailPage.test.jsx).
-  //
-  // Deliberately NOT this file's own `hasAction(action)` above (single-arg,
-  // "is this action name present at all") — DealStagePanel's own hasAction
-  // takes a second `targetStage` argument and requires an exact match, so an
-  // ADVANCE_STAGE entry for some OTHER target stage would false-positive
-  // through the single-arg version. Checked directly against
-  // `availableActions` here so this stays byte-identical to DealStagePanel's
-  // gate, not just same-named.
-  const next = isActiveLifecycle && !lost ? nextOnRoute(stageCatalog, summary.salesStage, stageDecisions) : null;
-  const hasAdvanceStageAction = Boolean(next) && availableActions.some(
-    (item) => item.action === 'ADVANCE_STAGE' && item.targetStage === next.code,
-  );
-  // No local re-derivation left: hasAdvanceStageAction IS the server's verdict for this exact
-  // target (TicketService.addStageActions now derives ADVANCE_STAGE from stageDecisions, so it
-  // reflects the fact gates too, not just the role gate).
-  const canAdvance = Boolean(next) && !next.auto && hasAdvanceStageAction;
 
   // Stage-advance readiness (dealTrackingMeta.js's own gate, shared with
   // DealTrackingPanel's badge): lifted up here (Phase-1 audit finding #3,
@@ -1636,6 +1654,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         // "one primary CTA" — see its own doc comment) — not passed here too, to avoid
         // rendering the exact same button twice on one page.
         advanceReady={readyToAdvance}
+        advanceInHeader={advanceInHeader}
         actionLoading={actionLoading}
         onUpdateStage={(payload) => doAction(() => api.tickets.updateStage(ticketId, payload), 'อัปเดตสถานะดีลแล้ว')}
         onMarkLost={(payload) => doAction(() => api.tickets.markLost(ticketId, payload), 'บันทึกเสียงานแล้ว')}
@@ -2292,7 +2311,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               this panel. */}
           <div id="pricing-request-panel" tabIndex={-1} className="scroll-mt-[300px] mobile:scroll-mt-[420px] outline-none">
             {canViewPricingRequests && Boolean(sections.pricingRequest) ? (
-              <PricingRequestPanel ref={pricingRequestPanelRef} ticketId={ticketId} deal={summary} ticketItems={items} user={user} showToast={showToast} showCreate={workStateAction?.pricingRequestInTab === true} />
+              <PricingRequestPanel ref={pricingRequestPanelRef} ticketId={ticketId} deal={summary} ticketItems={items} user={user} showToast={showToast} />
             ) : null}
           </div>
       </TabPanel>

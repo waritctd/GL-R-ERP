@@ -79,7 +79,7 @@ function daysSince(iso) {
 export const DealStagePanel = forwardRef(function DealStagePanel({
   summary, availableActions = [], stageDecisions = [], catalog = EMPTY_STAGE_CATALOG,
   docActions, primaryAction, actionLoading,
-  advanceReady = true,
+  advanceReady = true, advanceInHeader = false,
   onUpdateStage, onMarkLost, onReopen, onHold, onDormant, onResume, onSetTenderRequirement,
   onSetEntryChannel,
 }, ref) {
@@ -129,6 +129,8 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   const readinessBlocked = Boolean(next) && !next.auto && !canAdvance
     && Boolean(nextDecision) && !nextDecision.allowed
     && nextDecision.blockedReason === STAGE_ADVANCE_GATE_MESSAGE;
+  // The page's main button carries เลื่อนไป on ขั้น 1–2; one copy on the page.
+  const showGuidedOpener = readinessBlocked && !advanceInHeader;
   // One click, three writes IN ORDER: set the follow-up date (+ optional win%), log the activity,
   // then advance through the PARENT's own onUpdateStage so its invalidation + toast still run. The
   // gate itself is unchanged — this just satisfies it in one place instead of two scattered panels.
@@ -188,6 +190,12 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
     // that got dropped when the button moved into the overflow menu — see
     // the FIX 3 note above).
     openAdvance: () => { if (canAdvance && advanceReady && !actionLoading && next) onUpdateStage({ stage: next.code }); },
+    // The page's ขั้น 1–2 main button: move now when ready, else collect the follow-up + activity first.
+    startAdvance: () => {
+      if (!next || actionLoading) return;
+      if (canAdvance && advanceReady) onUpdateStage({ stage: next.code });
+      else if (canAdvance || readinessBlocked) setGuidedOpen(true);
+    },
   }));
 
   // When the next stage isn't one this user can one-click into, explain who or
@@ -353,13 +361,13 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
                   <div className="flex flex-wrap items-center gap-2">{primaryAction}</div>
                 ) : null}
               </div>
-            ) : primaryAction || readinessBlocked ? (
+            ) : primaryAction || showGuidedOpener ? (
               <div className="flex flex-wrap items-center gap-2">
                 {primaryAction}
                 {/* Not a dead hint: the rep CAN advance — they just have to log the follow-up + an
                     activity first, which this button collects and then advances, in one go. The
                     "who moves it" hint for everyone else is part of the ถัดไป line above. */}
-                {readinessBlocked ? (
+                {showGuidedOpener ? (
                   <Button
                     type="button"
                     variant="primary"

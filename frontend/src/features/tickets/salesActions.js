@@ -59,6 +59,7 @@ export const SALES_ACTION = {
   // PR A: แก้ใบเสนอราคา — revise (or open the open revision of) an approved/issued quotation. Only
   // ever produced when the caller hands nextSalesAction a `reviseTarget`.
   REVISE_QUOTATION: 'revise_quotation',
+  ADVANCE_STAGE: 'advance_stage',
   CREATE_PCR: 'create_pcr',
   ISSUE_QUOTATION: 'issue_quotation',
   CONFIRM_ORDER: 'confirm_order',
@@ -75,6 +76,8 @@ const ACTION_LABEL = {
   // act — the customer ordered — whichever route priced the deal.
   [SALES_ACTION.CONFIRM_ORDER_DIRECT]: 'ยืนยันคำสั่งซื้อ',
   [SALES_ACTION.CREATE_PCR]: 'สร้างคำขอราคา',
+  // Generic for the worklist; the deal page names the next stage (เลื่อนไป: 2. นำเสนอสินค้า).
+  [SALES_ACTION.ADVANCE_STAGE]: 'เลื่อนขั้น',
   [SALES_ACTION.REVISE_QUOTATION]: 'แก้ใบเสนอราคา',
   [SALES_ACTION.ISSUE_QUOTATION]: 'ออกใบเสนอราคา',
   [SALES_ACTION.CONFIRM_ORDER]: 'ยืนยันคำสั่งซื้อ',
@@ -116,6 +119,7 @@ const ACTION_RANK = {
   [SALES_ACTION.SUBMIT_DIRECT_QUOTATION]: 2,
   [SALES_ACTION.RECORD_QUOTATION_OUTCOME]: 3,
   [SALES_ACTION.CREATE_PCR]: 4,
+  [SALES_ACTION.ADVANCE_STAGE]: 4,
   [SALES_ACTION.REVISE_QUOTATION]: 4,
   [SALES_ACTION.RECORD_DELIVERY]: 5,
   [SALES_ACTION.AWAIT_DIRECT_APPROVAL]: 5,
@@ -203,6 +207,13 @@ export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = nul
   // revised rather than left to fall through to CREATE_PCR.
   if (confirmRefused && reviseTarget) return reviseAction(reviseTarget);
 
+  // Owner ruling 2026-10-15: ขั้น 1 → 2 → 3 are moved by hand, and the price request starts at ขั้น 3.
+  // So on ขั้น 1–2 the one action is moving the stage — nothing below (a due follow-up, an older
+  // price request) takes it over.
+  if (PRE_SPEC_STAGES.has(deal.salesStage)) {
+    return { key: SALES_ACTION.ADVANCE_STAGE, label: ACTION_LABEL[SALES_ACTION.ADVANCE_STAGE] };
+  }
+
   const ownPrs = pricingRequests.filter((pr) => pr.ticketId === deal.id);
 
   // 1. No pricing request has ever been SUBMITTED for this deal (none exist,
@@ -248,13 +259,6 @@ export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = nul
     const pricedOutsidePcrChain = ownPrs.length === 0
       && (QUOTED_STATUSES.has(deal.status) || deal.paymentStatus != null);
     if (!pricedOutsidePcrChain) {
-      // Owner ruling 2026-10-15: before the spec is agreed (ขั้น 1–2) a price request is not the next
-      // step. Lead with the stage's own work instead and offer the request in the สินค้าและราคา tab.
-      if (PRE_SPEC_STAGES.has(deal.salesStage)) {
-        const followUp = followUpStatus(deal);
-        const key = followUp ? SALES_ACTION.FOLLOW_UP : SALES_ACTION.LOG_ACTIVITY;
-        return { key, label: ACTION_LABEL[key], ...(followUp && { followUp }), pricingRequestInTab: true };
-      }
       return { key: SALES_ACTION.CREATE_PCR, label: ACTION_LABEL[SALES_ACTION.CREATE_PCR] };
     }
   }

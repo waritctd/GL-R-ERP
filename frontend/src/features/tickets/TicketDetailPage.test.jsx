@@ -8,6 +8,7 @@ import { ITEM_FIELD_META, missingQtyMessage } from './ticketItemFields.jsx';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { DEAL_STAGE_CATALOG } from '../../data/dealStageCatalog.js';
+import { STAGE_ADVANCE_GATE_MESSAGE } from './dealTrackingMeta.js';
 import * as quotationMeta from '../quotations/quotationMeta.js';
 
 globalThis.React = React;
@@ -619,7 +620,7 @@ describe('TicketDetailPage', () => {
   describe('quotation-first deal (GLA-136 hiding reverted, IA §7)', () => {
     it.each([[true], [false]])('quotationOnly=%s: stage panel and primary CTA present, no "not in the pipeline" banner', async (quotationOnly) => {
       api.tickets.get.mockResolvedValue({
-        ticket: buildTicket({ summary: { status: 'draft', salesStage: 'LEAD_APPROACH', lifecycle: 'ACTIVE', createdById: 1, quotationOnly } }),
+        ticket: buildTicket({ summary: { status: 'draft', salesStage: 'SPEC_APPROVED', lifecycle: 'ACTIVE', createdById: 1, quotationOnly } }),
       });
       renderTicketDetailPage(salesOwnerUser);
 
@@ -1861,58 +1862,90 @@ describe('TicketDetailPage', () => {
     });
   });
 
-  // Owner ruling 2026-10-15: before the spec is agreed (ขั้น 1–2) สร้างคำขอราคา is not the main
-  // button — the rep is pointed at บันทึกกิจกรรม / ติดตามลูกค้า — but the owning rep can still start a
-  // price request from the สินค้าและราคา tab, where the คำขอราคา panel shows its own button. At ขั้น 3+
-  // the sticky bar owns that label alone (the describe above).
-  describe('ขั้น 1–2 — the main button is บันทึกกิจกรรม; สร้างคำขอราคา moves to the สินค้าและราคา tab', () => {
-    function earlyDeal(salesStage) {
+  // Owner ruling 2026-10-15: ขั้น 1 → 2 → 3 are moved by hand, and the price request starts at ขั้น 3.
+  // On ขั้น 1–2 the main button is เลื่อนไป: <next stage>. When the rep is ready (a follow-up date and an
+  // activity since the last move) it moves at once; when not, it opens the stage panel's form that
+  // collects both and then moves. It is the only เลื่อนไป button on the page body, and สร้างคำขอราคา
+  // is not offered anywhere, the สินค้าและราคา tab included.
+  describe('ขั้น 1–2 — the main button is เลื่อนไป, and สร้างคำขอราคา is not offered', () => {
+    const READY_ACTIVITIES = {
+      items: [{
+        id: 1, ticketId: 701, activityDate: '2026-07-03', kind: 'CALL', note: 'โทรติดตาม',
+        createdById: 1, createdByName: 'พนักงานขาย', createdAt: '2026-07-03T09:00:00.000Z',
+      }],
+    };
+
+    // `decision` overrides the server's verdict on the next stage, for the cannot-reach case.
+    function earlyDeal(salesStage, nextStage, { ready = false, decision = {} } = {}) {
       api.tickets.get.mockResolvedValue({
-        ticket: buildTicket({ summary: { lifecycle: 'ACTIVE', salesStage, status: 'draft', createdById: 1 } }),
+        ticket: buildTicket({
+          summary: {
+            lifecycle: 'ACTIVE', salesStage, status: 'draft', createdById: 1, nextFollowUpAt: ready ? '2026-07-15' : null,
+          },
+        }),
       });
+      const nextDecision = {
+        stage: nextStage, allowed: ready, requiresReason: false, onRoute: true,
+        blockedReason: ready ? null : STAGE_ADVANCE_GATE_MESSAGE, ...decision,
+      };
       api.tickets.actions.mockResolvedValue({
         currentState: { lifecycle: 'ACTIVE', salesStage, paymentStatus: null, fulfillmentStatus: null, status: 'draft' },
-        availableActions: [],
+        availableActions: nextDecision.allowed ? [{ action: 'ADVANCE_STAGE', targetStage: nextStage }] : [],
+        stageDecisions: [nextDecision],
       });
+      api.tickets.listActivities.mockResolvedValue(ready ? READY_ACTIVITIES : { items: [] });
       api.pricingRequests.listForTicket.mockResolvedValue({ items: [] });
     }
 
-    it.each(['LEAD_APPROACH', 'PRESENTATION'])('%s: the owning rep gets บันทึกกิจกรรม as the main button, and one สร้างคำขอราคา button in the tab that opens the create form', async (salesStage) => {
-      earlyDeal(salesStage);
+    it('ขั้น 1, ready: the main button reads เลื่อนไป: 2. นำเสนอสินค้า and moves the deal in one click', async () => {
+      earlyDeal('LEAD_APPROACH', 'PRESENTATION', { ready: true });
+      api.tickets.updateStage.mockResolvedValue({});
       renderTicketDetailPage(salesOwnerUser);
 
-      await waitFor(() => expect(screen.getByTestId('ticket-primary-action').getAttribute('data-action')).toBe('log_activity'));
-      expect(screen.getByTestId('ticket-primary-action').textContent).toContain('บันทึกกิจกรรม');
-      expect(screen.queryByRole('button', { name: /สร้างคำขอราคา/ })).toBeNull();
+      await waitFor(() => expect(screen.getByTestId('ticket-primary-action').getAttribute('data-action')).toBe('advance_stage'));
+      const button = screen.getByTestId('ticket-primary-action');
+      expect(button.textContent).toContain('เลื่อนไป: 2. นำเสนอสินค้า');
 
-      await openTab(/สินค้าและราคา/);
-      const tabButtons = await screen.findAllByRole('button', { name: /สร้างคำขอราคา/ });
-      expect(tabButtons).toHaveLength(1);
-      expect(tabButtons[0].getAttribute('data-testid')).not.toBe('ticket-primary-action');
-      // The empty state must not send the rep to a top-bar button that is not there.
-      expect(screen.queryByText(/บนแถบด้านบนของหน้า/)).toBeNull();
+      fireEvent.click(button);
+      await waitFor(() => expect(api.tickets.updateStage).toHaveBeenCalledWith(701, { stage: 'PRESENTATION' }));
+      expect(screen.queryByTestId('guided-advance-modal')).toBeNull();
+    });
 
-      fireEvent.click(tabButtons[0]);
-      expect(await screen.findByRole('dialog')).not.toBeNull();
+    it('ขั้น 2, not ready: the main button reads เลื่อนไป: 3. … and opens the follow-up + activity form instead of moving', async () => {
+      earlyDeal('PRESENTATION', 'SPEC_APPROVED');
+      renderTicketDetailPage(salesOwnerUser);
+
+      await waitFor(() => expect(screen.getByTestId('ticket-primary-action').getAttribute('data-action')).toBe('advance_stage'));
+      expect(screen.getByTestId('ticket-primary-action').textContent).toMatch(/เลื่อนไป: 3\./);
+      // One เลื่อนไป button on the page body: the stage panel's own opener steps aside for it.
+      expect(screen.queryByTestId('guided-advance-open')).toBeNull();
+
+      fireEvent.click(screen.getByTestId('ticket-primary-action'));
+      expect(await screen.findByTestId('guided-advance-modal')).not.toBeNull();
+      expect(api.tickets.updateStage).not.toHaveBeenCalled();
     });
 
     it.each([
-      ['account', accountUser],
-      ['the CEO', ceoUser],
-    ])('cannot reach: %s on a ขั้น 1 deal sees no สร้างคำขอราคา button in the tab', async (_label, user) => {
-      earlyDeal('LEAD_APPROACH');
-      renderTicketDetailPage(user);
+      ['LEAD_APPROACH', 'PRESENTATION'],
+      ['PRESENTATION', 'SPEC_APPROVED'],
+    ])('%s: the owning rep sees no สร้างคำขอราคา button, not even in the สินค้าและราคา tab', async (salesStage, nextStage) => {
+      earlyDeal(salesStage, nextStage);
+      renderTicketDetailPage(salesOwnerUser);
+
+      await waitFor(() => expect(screen.getByTestId('ticket-primary-action').getAttribute('data-action')).toBe('advance_stage'));
       await openTab(/สินค้าและราคา/);
-      await screen.findByRole('heading', { level: 2, name: /^รายการสินค้า/ });
+      await screen.findByText('ยังไม่มีคำขอราคา');
       expect(screen.queryByRole('button', { name: /สร้างคำขอราคา/ })).toBeNull();
     });
 
-    it('cannot reach: a sales rep who does not own the ขั้น 1 deal sees no สร้างคำขอราคา button in the tab', async () => {
-      earlyDeal('LEAD_APPROACH');
+    it('cannot reach: when the server refuses the move for another reason, no เลื่อนไป main button is offered', async () => {
+      earlyDeal('LEAD_APPROACH', 'PRESENTATION', { decision: { blockedReason: 'เฉพาะผู้รับผิดชอบดีลเท่านั้น' } });
       renderTicketDetailPage({ id: 2, employeeId: 2, name: 'พนักงานขายอีกคน', role: 'sales' });
-      await openTab(/สินค้าและราคา/);
-      await screen.findByRole('heading', { level: 2, name: /^รายการสินค้า/ });
-      expect(screen.queryByRole('button', { name: /สร้างคำขอราคา/ })).toBeNull();
+
+      // The stage panel's "who moves it" hint proves the server's verdict has loaded.
+      await screen.findByText(/ขั้นถัดไปอัปเดตโดย/);
+      expect(screen.queryByText(/เลื่อนไป: 2\./)).toBeNull();
+      expect(screen.queryByTestId('ticket-primary-action')?.getAttribute('data-action')).not.toBe('advance_stage');
     });
   });
 
