@@ -144,3 +144,7 @@ services:
       # dashboard without a rebuild.
       - key: APP_LEAVE_SUBMISSION_INBOX
         sync: false
+      # Recipient of the month-end attendance-day count email (1st, 08:00 Bangkok). Blank = off.
+      # Set on the dashboard; the address is deliberately not in this public repo.
+      - key: APP_ATTENDANCE_MONTHLY_REPORT_TO
+        sync: false
