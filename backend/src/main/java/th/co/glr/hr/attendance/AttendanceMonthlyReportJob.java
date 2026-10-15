@@ -43,8 +43,8 @@ public class AttendanceMonthlyReportJob {
 
     private final NamedParameterJdbcTemplate jdbc;
     private final NotificationEmailService emailService;
-    private final List<String> cc;
     private final String to;
+    private final List<String> cc;
     private final List<String> employeeCodes;
     private final Clock clock;
 
@@ -67,15 +67,11 @@ public class AttendanceMonthlyReportJob {
         this.emailService = emailService;
         this.to = to == null ? "" : to.trim();
         this.cc = cc;
-        this.employeeCodes = trimmed(employeeCodes);
-        this.clock = clock;
-    }
-
-    private static List<String> trimmed(List<String> values) {
-        return values.stream()
+        this.employeeCodes = employeeCodes.stream()
             .map(String::trim)
             .filter(c -> !c.isEmpty())
             .toList();
+        this.clock = clock;
     }
 
     @Scheduled(cron = "0 0 12 L * *", zone = "Asia/Bangkok")
