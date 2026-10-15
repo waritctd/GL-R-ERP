@@ -16,11 +16,13 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.scheduling.support.CronExpression;
+import th.co.glr.hr.brand.BrandAssets;
 import th.co.glr.hr.mail.Mailer;
+import th.co.glr.hr.notification.NotificationEmailService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
 /**
- * The month-end attendance email: one mail to one recipient, one line per configured employee, and
+ * The month-end attendance email: one mail to the recipient (plus CC), one line per employee, and
  * the count is the number of distinct days with at least one punch — a lone clock-in or a lone
  * clock-out is a day attended.
  */
@@ -31,6 +33,8 @@ class AttendanceMonthlyReportJobIntegrationTest extends AbstractPostgresIntegrat
     private static final String RECIPIENT = "report@example.test";
 
     private final CapturingMailer mailer = new CapturingMailer();
+    private final NotificationEmailService emailService =
+        new NotificationEmailService(mailer, new BrandAssets(), "", "", "");
 
     private long alice;
     private long bob;
@@ -131,17 +135,54 @@ class AttendanceMonthlyReportJobIntegrationTest extends AbstractPostgresIntegrat
     }
 
     @Test
-    void aBlankRecipientSendsNothing() {
+    void copiesEveryConfiguredCcAddress() {
+        new AttendanceMonthlyReportJob(jdbc, emailService, RECIPIENT,
+            List.of(" cc@example.test ", "", "second@example.test"), List.of("10016")).send(OCTOBER);
+
+        assertThat(mailer.sent).hasSize(1);
+        assertThat(mailer.sent.get(0).to()).isEqualTo(RECIPIENT);
+        assertThat(mailer.sent.get(0).cc()).containsExactly("cc@example.test", "second@example.test");
+    }
+
+    @Test
+    void withNoCcConfiguredTheMailHasNoCc() {
+        job(List.of("10016")).send(OCTOBER);
+
+        assertThat(mailer.sent).hasSize(1);
+        assertThat(mailer.sent.get(0).cc()).isEmpty();
+    }
+
+    /** The CC path is the rich send, which needs an HTML part; names come from the DB, so escape them. */
+    @Test
+    void theHtmlPartRepeatsTheLinesWithNamesEscaped() {
+        jdbc.update("""
+            INSERT INTO hr.employee (employee_code, first_name_th, last_name_th, is_active)
+            VALUES ('10051', 'ชื่อ', '<b>สกุล</b>', TRUE)
+            """, Map.of());
         insertPunch(alice, at(1, 8, 20));
 
-        new AttendanceMonthlyReportJob(jdbc, mailer, " ", List.of("10016")).send(OCTOBER);
+        job(List.of("10016", "10051")).send(OCTOBER);
+
+        assertThat(mailer.sent.get(0).html())
+            .contains("ทดสอบ หนึ่ง (10016): 1 วัน")
+            .contains("&lt;b&gt;สกุล&lt;/b&gt;")
+            .doesNotContain("<b>สกุล</b>");
+    }
+
+    /** With a CC configured, so the leave path's own "no recipient at all" skip cannot mask this one. */
+    @Test
+    void aBlankRecipientSendsNothingEvenWithACcConfigured() {
+        insertPunch(alice, at(1, 8, 20));
+
+        new AttendanceMonthlyReportJob(jdbc, emailService, " ", List.of("cc@example.test"), List.of("10016"))
+            .send(OCTOBER);
 
         assertThat(mailer.sent).isEmpty();
     }
 
     @Test
     void noEmployeeCodesSendsNothing() {
-        new AttendanceMonthlyReportJob(jdbc, mailer, RECIPIENT, List.of(" ", "")).send(OCTOBER);
+        new AttendanceMonthlyReportJob(jdbc, emailService, RECIPIENT, List.of(), List.of(" ", "")).send(OCTOBER);
 
         assertThat(mailer.sent).isEmpty();
     }
@@ -155,50 +196,57 @@ class AttendanceMonthlyReportJobIntegrationTest extends AbstractPostgresIntegrat
         assertThat(mailer.onlyBody()).contains("(10050): 0 วัน").doesNotContain("null");
     }
 
+    /** The run at noon on the last day reports that same month, including that morning's scans. */
     @Test
-    void theRunOnTheFirstReportsTheMonthThatJustEnded() {
+    void theRunAtNoonOnTheLastDayReportsThatMonthIncludingThatMorning() {
         insertPunch(alice, at(20, 8, 30));
-        Clock firstOfNovember = Clock.fixed(
-            ZonedDateTime.of(2026, 11, 1, 8, 0, 0, 0, BANGKOK).toInstant(), BANGKOK);
+        insertPunch(alice, at(31, 8, 15));
+        Clock noonOn31October = Clock.fixed(
+            ZonedDateTime.of(2026, 10, 31, 12, 0, 0, 0, BANGKOK).toInstant(), BANGKOK);
 
-        new AttendanceMonthlyReportJob(jdbc, mailer, RECIPIENT, List.of("10016"), firstOfNovember)
-            .sendPreviousMonth();
+        new AttendanceMonthlyReportJob(jdbc, emailService, RECIPIENT, List.of(), List.of("10016"), noonOn31October)
+            .sendThisMonth();
 
         assertThat(mailer.sent.get(0).subject()).contains("ตุลาคม 2569");
-        assertThat(mailer.onlyBody()).contains("(10016): 1 วัน");
+        assertThat(mailer.onlyBody())
+            .contains("(10016): 2 วัน")
+            .contains("ข้อมูลถึงวันที่ 31 ตุลาคม 2569 เวลา 12:00 น.");
     }
 
     @Test
-    void theRunOnNewYearsDayReportsDecemberOfTheYearBefore() {
-        Clock firstOfJanuary = Clock.fixed(
-            ZonedDateTime.of(2027, 1, 1, 8, 0, 0, 0, BANGKOK).toInstant(), BANGKOK);
+    void theRunOnTheLastDayOfDecemberReportsDecember() {
+        Clock noonOn31December = Clock.fixed(
+            ZonedDateTime.of(2026, 12, 31, 12, 0, 0, 0, BANGKOK).toInstant(), BANGKOK);
 
-        new AttendanceMonthlyReportJob(jdbc, mailer, RECIPIENT, List.of("10016"), firstOfJanuary)
-            .sendPreviousMonth();
+        new AttendanceMonthlyReportJob(jdbc, emailService, RECIPIENT, List.of(), List.of("10016"), noonOn31December)
+            .sendThisMonth();
 
         assertThat(mailer.sent).hasSize(1);
         assertThat(mailer.sent.get(0).subject()).contains("ธันวาคม 2569");
     }
 
     @Test
-    void firesOnTheFirstOfEveryMonthAt0800Bangkok() throws Exception {
+    void firesAtNoonBangkokOnTheLastDayOfEveryMonth() throws Exception {
         Scheduled scheduled = AttendanceMonthlyReportJob.class
-            .getMethod("sendPreviousMonth")
+            .getMethod("sendThisMonth")
             .getAnnotation(Scheduled.class);
-        assertThat(scheduled).as("sendPreviousMonth must be @Scheduled").isNotNull();
+        assertThat(scheduled).as("sendThisMonth must be @Scheduled").isNotNull();
         assertThat(scheduled.zone()).isEqualTo("Asia/Bangkok");
 
         CronExpression cron = CronExpression.parse(scheduled.cron());
         ZonedDateTime midOctober = ZonedDateTime.of(2026, 10, 15, 12, 0, 0, 0, BANGKOK);
         ZonedDateTime first = cron.next(midOctober);
-        ZonedDateTime second = cron.next(first);
 
-        assertThat(first).isEqualTo(ZonedDateTime.of(2026, 11, 1, 8, 0, 0, 0, BANGKOK));
-        assertThat(second).isEqualTo(ZonedDateTime.of(2026, 12, 1, 8, 0, 0, 0, BANGKOK));
+        assertThat(first).isEqualTo(ZonedDateTime.of(2026, 10, 31, 12, 0, 0, 0, BANGKOK));
+        assertThat(cron.next(first)).isEqualTo(ZonedDateTime.of(2026, 11, 30, 12, 0, 0, 0, BANGKOK));
+        assertThat(cron.next(ZonedDateTime.of(2027, 2, 1, 0, 0, 0, 0, BANGKOK)))
+            .isEqualTo(ZonedDateTime.of(2027, 2, 28, 12, 0, 0, 0, BANGKOK));
+        assertThat(cron.next(ZonedDateTime.of(2028, 2, 1, 0, 0, 0, 0, BANGKOK)))
+            .isEqualTo(ZonedDateTime.of(2028, 2, 29, 12, 0, 0, 0, BANGKOK));
     }
 
     private AttendanceMonthlyReportJob job(List<String> employeeCodes) {
-        return new AttendanceMonthlyReportJob(jdbc, mailer, RECIPIENT, employeeCodes);
+        return new AttendanceMonthlyReportJob(jdbc, emailService, RECIPIENT, List.of(), employeeCodes);
     }
 
     /**
@@ -237,7 +285,7 @@ class AttendanceMonthlyReportJobIntegrationTest extends AbstractPostgresIntegrat
     }
 
     private static final class CapturingMailer implements Mailer {
-        record SentMail(String to, String subject, String body) {}
+        record SentMail(String to, List<String> cc, String subject, String body, String html) {}
 
         final List<SentMail> sent = new ArrayList<>();
 
@@ -247,24 +295,29 @@ class AttendanceMonthlyReportJobIntegrationTest extends AbstractPostgresIntegrat
         }
 
         @Override
+        public void send(OutgoingEmail email) {
+            sent.add(new SentMail(email.to(), email.cc(), email.subject(), email.textBody(), email.htmlBody()));
+        }
+
+        @Override
         public void send(String to, String subject, String body) {
-            sent.add(new SentMail(to, subject, body));
+            sent.add(new SentMail(to, List.of(), subject, body, null));
         }
 
         @Override
         public void sendHtml(String to, String subject, String htmlBody, String textBody,
                              List<InlineImage> inlineImages) {
-            sent.add(new SentMail(to, subject, textBody));
+            sent.add(new SentMail(to, List.of(), subject, textBody, htmlBody));
         }
 
         @Override
         public void sendWithAttachment(String to, String subject, String body, String filename, byte[] bytes) {
-            sent.add(new SentMail(to, subject, body));
+            sent.add(new SentMail(to, List.of(), subject, body, null));
         }
 
         @Override
         public void sendWithAttachments(String to, String subject, String body, List<Attachment> attachments) {
-            sent.add(new SentMail(to, subject, body));
+            sent.add(new SentMail(to, List.of(), subject, body, null));
         }
     }
 }
