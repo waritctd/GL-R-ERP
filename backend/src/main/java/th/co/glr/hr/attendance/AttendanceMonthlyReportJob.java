@@ -116,9 +116,9 @@ public class AttendanceMonthlyReportJob {
                     + "(" + code + "): " + rs.getInt("days") + " วัน");
             });
 
-        String label = thaiMonthYear(month);
+        String title = "สรุปจำนวนวันเข้างาน " + thaiMonthYear(month);
         ZonedDateTime now = ZonedDateTime.now(clock).withZoneSameInstant(BANGKOK);
-        StringBuilder body = new StringBuilder("สรุปจำนวนวันเข้างาน ").append(label).append('\n')
+        StringBuilder body = new StringBuilder(title).append('\n')
             .append("นับทุกวันที่มีการสแกนอย่างน้อย 1 ครั้ง "
                 + "(สแกนเข้าหรือสแกนออกอย่างใดอย่างหนึ่งก็นับ)\n")
             .append("ข้อมูลถึงวันที่ ").append(now.getDayOfMonth()).append(' ')
@@ -129,8 +129,7 @@ public class AttendanceMonthlyReportJob {
                 .append(daysByCode.getOrDefault(code, code + ": ไม่พบรหัสพนักงานนี้ในระบบ"))
                 .append('\n');
         }
-        emailService.sendLeaveSubmission(
-            to, cc, "สรุปจำนวนวันเข้างาน " + label, body.toString(), null, List.of());
+        emailService.sendLeaveSubmission(to, cc, title, body.toString(), null, List.of());
     }
 
     private static String thaiMonthYear(YearMonth month) {
