@@ -55,8 +55,9 @@ const EVENT_LABEL = {
  * `deal` is the ticket's summary (createdById + lifecycle) — used only for the
  * create gate; this component does not know about ticket status/stage.
  *
- * Ticket-detail IA rebuild Phase 1 clutter follow-up: this panel no longer
- * renders its own "สร้างคำขอราคา" button — the sticky header's primary CTA
+ * Ticket-detail IA rebuild Phase 1 clutter follow-up: this panel renders its
+ * own "สร้างคำขอราคา" button only when `showCreate` says the sticky bar is not
+ * offering it (ขั้น 1–2, owner ruling 2026-10-15) — otherwise the sticky header's primary CTA
  * (TicketDetailPage's `workState`-derived `CREATE_PCR` action) owns that
  * action outright now, and opens THIS panel's create modal via the forwardRef
  * below (same "parent triggers, panel stays the sole gate + mutation owner"
@@ -65,7 +66,7 @@ const EVENT_LABEL = {
  * sticky bar's own copy, plus this panel's) — the Phase-1 follow-up audit's
  * FIX 1.
  */
-export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ ticketId, deal, ticketItems = [], user, showToast }, ref) {
+export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ ticketId, deal, ticketItems = [], user, showToast, showCreate = false }, ref) {
   const queryClient = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
   const [expandedId, setExpandedId] = useState(null);
@@ -118,6 +119,7 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
   });
 
   const canCreate = canCreatePricingRequest(user, deal);
+  const offerCreate = showCreate && canCreate;
 
   // Defensive re-check before acting (same convention as DealStagePanel's
   // ref-exposed openers): a stale or over-eager caller cannot force the
@@ -127,14 +129,25 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
   }));
 
   return (
-    <Panel flush title="คำขอราคา">
+    <Panel
+      flush
+      title="คำขอราคา"
+      actions={offerCreate ? (
+        <Button type="button" variant="secondary" onClick={() => setCreateOpen(true)}>
+          <Icon name="plus" size={14} />
+          สร้างคำขอราคา
+        </Button>
+      ) : null}
+    >
       {requests.length === 0 ? (
         <EmptyState
           icon="fileText"
           title="ยังไม่มีคำขอราคา"
-          description={canCreate
-            ? 'คำขอราคาส่งรายละเอียดสินค้าให้ฝ่ายนำเข้าเสนอราคา — สร้างได้จากปุ่ม “สร้างคำขอราคา” บนแถบด้านบนของหน้า'
-            : 'ยังไม่มีคำขอราคาสำหรับดีลนี้'}
+          description={offerCreate
+            ? 'คำขอราคาส่งรายละเอียดสินค้าให้ฝ่ายนำเข้าเสนอราคา'
+            : canCreate
+              ? 'คำขอราคาส่งรายละเอียดสินค้าให้ฝ่ายนำเข้าเสนอราคา — สร้างได้จากปุ่ม “สร้างคำขอราคา” บนแถบด้านบนของหน้า'
+              : 'ยังไม่มีคำขอราคาสำหรับดีลนี้'}
         />
       ) : (
         <div className="flex flex-col gap-2 p-4">

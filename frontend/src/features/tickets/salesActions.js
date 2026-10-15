@@ -171,6 +171,8 @@ const BRIDGEABLE_TICKET_STATUSES = new Set(['draft', 'quotation_issued']);
 
 const QUOTED_STATUSES = new Set(['quotation_issued', 'document_issued']);
 
+const PRE_SPEC_STAGES = new Set(['LEAD_APPROACH', 'PRESENTATION']);
+
 /**
  * The one next action `deal` needs from its owning sales rep right now, or
  * null if nothing in the 7-bucket cascade applies (e.g. the request is with
@@ -246,6 +248,13 @@ export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = nul
     const pricedOutsidePcrChain = ownPrs.length === 0
       && (QUOTED_STATUSES.has(deal.status) || deal.paymentStatus != null);
     if (!pricedOutsidePcrChain) {
+      // Owner ruling 2026-10-15: before the spec is agreed (ขั้น 1–2) a price request is not the next
+      // step. Lead with the stage's own work instead and offer the request in the สินค้าและราคา tab.
+      if (PRE_SPEC_STAGES.has(deal.salesStage)) {
+        const followUp = followUpStatus(deal);
+        const key = followUp ? SALES_ACTION.FOLLOW_UP : SALES_ACTION.LOG_ACTIVITY;
+        return { key, label: ACTION_LABEL[key], ...(followUp && { followUp }), pricingRequestInTab: true };
+      }
       return { key: SALES_ACTION.CREATE_PCR, label: ACTION_LABEL[SALES_ACTION.CREATE_PCR] };
     }
   }

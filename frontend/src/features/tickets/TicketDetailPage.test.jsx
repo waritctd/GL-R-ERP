@@ -1825,10 +1825,10 @@ describe('TicketDetailPage', () => {
   describe('sticky header primary CTA — CREATE_PCR owns "สร้างคำขอราคา" alone', () => {
     it('renders exactly one "สร้างคำขอราคา" control (the sticky primary), and clicking it opens the PCR panel\'s own create modal', async () => {
       api.tickets.get.mockResolvedValue({
-        ticket: buildTicket({ summary: { lifecycle: 'ACTIVE', salesStage: 'LEAD_APPROACH', createdById: 1 } }),
+        ticket: buildTicket({ summary: { lifecycle: 'ACTIVE', salesStage: 'SPEC_APPROVED', createdById: 1 } }),
       });
       api.tickets.actions.mockResolvedValue({
-        currentState: { lifecycle: 'ACTIVE', salesStage: 'LEAD_APPROACH', paymentStatus: null, fulfillmentStatus: null, status: 'price_proposed' },
+        currentState: { lifecycle: 'ACTIVE', salesStage: 'SPEC_APPROVED', paymentStatus: null, fulfillmentStatus: null, status: 'price_proposed' },
         availableActions: [],
       });
       api.pricingRequests.listForTicket.mockResolvedValue({ items: [] });
@@ -1858,6 +1858,61 @@ describe('TicketDetailPage', () => {
       // the modal's own title text uses the same string, so this scopes to
       // buttons only (not headings) to keep proving "no duplicate button".
       expect(screen.getAllByRole('button', { name: /สร้างคำขอราคา/ })).toHaveLength(1);
+    });
+  });
+
+  // Owner ruling 2026-10-15: before the spec is agreed (ขั้น 1–2) สร้างคำขอราคา is not the main
+  // button — the rep is pointed at บันทึกกิจกรรม / ติดตามลูกค้า — but the owning rep can still start a
+  // price request from the สินค้าและราคา tab, where the คำขอราคา panel shows its own button. At ขั้น 3+
+  // the sticky bar owns that label alone (the describe above).
+  describe('ขั้น 1–2 — the main button is บันทึกกิจกรรม; สร้างคำขอราคา moves to the สินค้าและราคา tab', () => {
+    function earlyDeal(salesStage) {
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({ summary: { lifecycle: 'ACTIVE', salesStage, status: 'draft', createdById: 1 } }),
+      });
+      api.tickets.actions.mockResolvedValue({
+        currentState: { lifecycle: 'ACTIVE', salesStage, paymentStatus: null, fulfillmentStatus: null, status: 'draft' },
+        availableActions: [],
+      });
+      api.pricingRequests.listForTicket.mockResolvedValue({ items: [] });
+    }
+
+    it.each(['LEAD_APPROACH', 'PRESENTATION'])('%s: the owning rep gets บันทึกกิจกรรม as the main button, and one สร้างคำขอราคา button in the tab that opens the create form', async (salesStage) => {
+      earlyDeal(salesStage);
+      renderTicketDetailPage(salesOwnerUser);
+
+      await waitFor(() => expect(screen.getByTestId('ticket-primary-action').getAttribute('data-action')).toBe('log_activity'));
+      expect(screen.getByTestId('ticket-primary-action').textContent).toContain('บันทึกกิจกรรม');
+      expect(screen.queryByRole('button', { name: /สร้างคำขอราคา/ })).toBeNull();
+
+      await openTab(/สินค้าและราคา/);
+      const tabButtons = await screen.findAllByRole('button', { name: /สร้างคำขอราคา/ });
+      expect(tabButtons).toHaveLength(1);
+      expect(tabButtons[0].getAttribute('data-testid')).not.toBe('ticket-primary-action');
+      // The empty state must not send the rep to a top-bar button that is not there.
+      expect(screen.queryByText(/บนแถบด้านบนของหน้า/)).toBeNull();
+
+      fireEvent.click(tabButtons[0]);
+      expect(await screen.findByRole('dialog')).not.toBeNull();
+    });
+
+    it.each([
+      ['account', accountUser],
+      ['the CEO', ceoUser],
+    ])('cannot reach: %s on a ขั้น 1 deal sees no สร้างคำขอราคา button in the tab', async (_label, user) => {
+      earlyDeal('LEAD_APPROACH');
+      renderTicketDetailPage(user);
+      await openTab(/สินค้าและราคา/);
+      await screen.findByRole('heading', { level: 2, name: /^รายการสินค้า/ });
+      expect(screen.queryByRole('button', { name: /สร้างคำขอราคา/ })).toBeNull();
+    });
+
+    it('cannot reach: a sales rep who does not own the ขั้น 1 deal sees no สร้างคำขอราคา button in the tab', async () => {
+      earlyDeal('LEAD_APPROACH');
+      renderTicketDetailPage({ id: 2, employeeId: 2, name: 'พนักงานขายอีกคน', role: 'sales' });
+      await openTab(/สินค้าและราคา/);
+      await screen.findByRole('heading', { level: 2, name: /^รายการสินค้า/ });
+      expect(screen.queryByRole('button', { name: /สร้างคำขอราคา/ })).toBeNull();
     });
   });
 
@@ -3726,7 +3781,7 @@ describe('TicketDetailPage', () => {
     });
 
     it('สร้างคำขอราคา exists exactly once for the owning rep — the sticky CTA, not a second copy in the documents tab', async () => {
-      activeDeal();
+      activeDeal({ salesStage: 'SPEC_APPROVED' });
       renderTicketDetailPage(salesOwnerUser);
       await waitFor(() => expect(screen.getByTestId('ticket-primary-action').getAttribute('data-action')).toBe('create_pcr'));
       await openTab(/เอกสาร/);

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { SALES_ACTION, nextSalesAction, sortWorklist } from './salesActions.js';
+import { bangkokTodayIso } from '../../utils/format.js';
 
 // First direct unit-test file for this module (previously only exercised indirectly through
 // workState.test.js's resolveWorkState cases — see that file's own "nextSalesAction — CREATE_PCR
@@ -396,5 +397,75 @@ describe('nextSalesAction — REVISE_QUOTATION (PR A)', () => {
       row(1, SALES_ACTION.FOLLOW_UP), row(2, REVISE), row(3, SALES_ACTION.CONFIRM_ORDER),
     ]).map((item) => item.deal.id);
     expect(sorted).toEqual([3, 2, 1]);
+  });
+});
+
+// Owner ruling 2026-10-15: before the spec is agreed (ขั้น 1 LEAD_APPROACH, ขั้น 2 PRESENTATION) a
+// price request is not the next step, so สร้างคำขอราคา stops leading the main button. The rep is
+// pointed at the work those stages actually need — a follow-up, or one logged activity (the stage
+// move's own requirement) — and the request is offered in the สินค้าและราคา tab instead
+// (`pricingRequestInTab`). From ขั้น 3 SPEC_APPROVED onwards nothing changes.
+describe('ขั้น 1–2 (before the spec is agreed): สร้างคำขอราคา is not the main action', () => {
+  it.each(['LEAD_APPROACH', 'PRESENTATION'])('%s with no price request -> LOG_ACTIVITY, and the request is offered in the tab', (salesStage) => {
+    const action = nextSalesAction(baseDeal({ salesStage }), []);
+    expect(action).toMatchObject({ key: SALES_ACTION.LOG_ACTIVITY, label: 'บันทึกกิจกรรม', pricingRequestInTab: true });
+  });
+
+  it('ขั้น 1 with a follow-up overdue -> FOLLOW_UP (overdue), still offering the request in the tab', () => {
+    const action = nextSalesAction(baseDeal({ salesStage: 'LEAD_APPROACH', nextFollowUpAt: '2020-01-01' }), []);
+    expect(action).toMatchObject({ key: SALES_ACTION.FOLLOW_UP, label: 'ติดตามลูกค้า', followUp: 'overdue', pricingRequestInTab: true });
+  });
+
+  it('ขั้น 2 with a follow-up due today -> FOLLOW_UP (today)', () => {
+    const action = nextSalesAction(baseDeal({ salesStage: 'PRESENTATION', nextFollowUpAt: bangkokTodayIso() }), []);
+    expect(action).toMatchObject({ key: SALES_ACTION.FOLLOW_UP, followUp: 'today', pricingRequestInTab: true });
+  });
+
+  it('ขั้น 1 with a follow-up in the future -> LOG_ACTIVITY (a not-yet-due follow-up is not the action)', () => {
+    const action = nextSalesAction(baseDeal({ salesStage: 'LEAD_APPROACH', nextFollowUpAt: '2999-01-01' }), []);
+    expect(action).toMatchObject({ key: SALES_ACTION.LOG_ACTIVITY, pricingRequestInTab: true });
+  });
+
+  it('ขั้น 1 with only a private DRAFT and a CANCELLED request (no live one) -> still LOG_ACTIVITY, never CREATE_PCR', () => {
+    const prs = [{ id: 1, ticketId: 1, status: 'DRAFT' }, { id: 2, ticketId: 1, status: 'CANCELLED' }];
+    const action = nextSalesAction(baseDeal({ salesStage: 'LEAD_APPROACH' }), prs);
+    expect(action).toMatchObject({ key: SALES_ACTION.LOG_ACTIVITY, pricingRequestInTab: true });
+  });
+
+  it.each(['SPEC_APPROVED', 'QUOTE_DESIGN_SIDE', 'QUOTE_OWNER', 'OWNER_SIGNOFF', 'AWAITING_BUYER', 'QUOTE_BUYER', 'NEGOTIATION'])(
+    'boundary: %s with no price request -> CREATE_PCR leads the main button, as before',
+    (salesStage) => {
+      const action = nextSalesAction(baseDeal({ salesStage }), []);
+      expect(action).toEqual({ key: SALES_ACTION.CREATE_PCR, label: 'สร้างคำขอราคา' });
+    },
+  );
+
+  it('a deal whose stage is missing keeps CREATE_PCR (an unknown stage must never strand the rep)', () => {
+    expect(nextSalesAction(baseDeal({ salesStage: undefined }), [])).toMatchObject({ key: SALES_ACTION.CREATE_PCR });
+  });
+
+  it('a request already created from the tab at ขั้น 2 still drives the cascade: APPROVED_FOR_QUOTATION -> ISSUE_QUOTATION', () => {
+    const prs = [{ id: 1, ticketId: 1, status: 'APPROVED_FOR_QUOTATION' }];
+    const action = nextSalesAction(baseDeal({ salesStage: 'PRESENTATION' }), prs);
+    expect(action).toMatchObject({ key: SALES_ACTION.ISSUE_QUOTATION });
+    expect(action).not.toHaveProperty('pricingRequestInTab');
+  });
+
+  it('a live request at ขั้น 1 sitting with import -> not offered again in the tab (one live request at a time)', () => {
+    const prs = [{ id: 1, ticketId: 1, status: 'SUBMITTED' }];
+    const action = nextSalesAction(baseDeal({ salesStage: 'LEAD_APPROACH' }), prs);
+    expect(action?.pricingRequestInTab).toBeUndefined();
+    expect(action?.key).not.toBe(SALES_ACTION.CREATE_PCR);
+  });
+
+  it('a live direct quotation at ขั้น 1 still wins (bucket 0), with no price request offered beside it', () => {
+    const deal = baseDeal({ salesStage: 'LEAD_APPROACH', liveDirectQuotation: { id: 77, number: 'QT-2026-0077-1', docStatus: 'DRAFT' } });
+    const action = nextSalesAction(deal, []);
+    expect(action).toMatchObject({ key: SALES_ACTION.SUBMIT_DIRECT_QUOTATION });
+    expect(action).not.toHaveProperty('pricingRequestInTab');
+  });
+
+  it('a non-ACTIVE deal at ขั้น 1 gets nothing', () => {
+    expect(nextSalesAction(baseDeal({ salesStage: 'LEAD_APPROACH', lifecycle: 'ON_HOLD' }), [])).toBeNull();
   });
 });

@@ -1219,7 +1219,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
 
         <div className="flex items-start gap-2 rounded-lg border border-info-border bg-info-bg px-3 py-2.5 text-xs text-info-dark">
           <Icon name="info" size={15} className="mt-0.5 shrink-0" />
-          <span>ดีลที่สร้างยังไม่มีราคา — ขั้นต่อไปคือ “สร้างคำขอราคา” จากหน้าดีล ซึ่งต้องมีรายการสินค้าอย่างน้อย 1 รายการ</span>
+          <span>ดีลที่สร้างยังไม่มีราคา — สร้างคำขอราคาได้จากแท็บ “สินค้าและราคา” ในหน้าดีล ซึ่งต้องมีรายการสินค้าอย่างน้อย 1 รายการ</span>
         </div>
 
         {error ? <div className="py-2.5 px-3 rounded-md bg-danger-bg text-danger-dark font-bold text-[length:var(--text-sm)]" role="alert">{error}</div> : null}
