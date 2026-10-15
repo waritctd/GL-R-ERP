@@ -55,7 +55,10 @@ public class AttendanceMonthlyReportJob {
         this.jdbc = jdbc;
         this.mailer = mailer;
         this.to = to == null ? "" : to.trim();
-        this.employeeCodes = employeeCodes.stream().map(String::trim).filter(c -> !c.isEmpty()).toList();
+        this.employeeCodes = employeeCodes.stream()
+            .map(String::trim)
+            .filter(c -> !c.isEmpty())
+            .toList();
         this.clock = clock;
     }
 
