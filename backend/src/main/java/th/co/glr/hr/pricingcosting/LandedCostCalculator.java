@@ -525,11 +525,19 @@ public class LandedCostCalculator {
     private BigDecimal resolveThicknessMm(PricingRequestItemDto requestItem,
                                           Map<Long, CatalogRepository.CatalogPricingKey> catalogKeys) {
         Long priceId = catalogPriceId(requestItem);
-        if (priceId == null) {
-            return null;
+        BigDecimal fromCatalog = null;
+        if (priceId != null) {
+            CatalogRepository.CatalogPricingKey key = catalogKeys.get(priceId);
+            fromCatalog = key == null ? null : key.thicknessMm();
         }
-        CatalogRepository.CatalogPricingKey key = catalogKeys.get(priceId);
-        return key == null ? null : key.thicknessMm();
+        // Catalog wins; fall back to the Sales-entered thickness on the request item (V185) when
+        // the catalogue carries none — a free-text line (no catalog row), a catalogue row still
+        // blank, or an in-flight deal submitted before the submit-time write-back
+        // (PricingRequestRepository#fillCatalogThicknessFromItems) ran. Nothing is priced on a
+        // guessed thickness: this is a value a human (Sales) actually entered for THIS line, the
+        // same provenance the write-back persists to the catalogue. Mirrors resolveSqmPerPiece's
+        // catalog-then-request fallback shape.
+        return fromCatalog != null ? fromCatalog : requestItem.thicknessMm();
     }
 
     /**
