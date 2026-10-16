@@ -77,6 +77,23 @@ function topLevelRules(block) {
   return rules;
 }
 
+// A selector list split at its top-level commas only, so the commas inside `:where(...)` stay put.
+function selectorParts(selector) {
+  const parts = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < selector.length; i += 1) {
+    if (selector[i] === '(') depth += 1;
+    else if (selector[i] === ')') depth -= 1;
+    else if (selector[i] === ',' && depth === 0) {
+      parts.push(selector.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+  parts.push(selector.slice(start).trim());
+  return parts;
+}
+
 const BASE = layerBaseBody(stripComments(INDEX_CSS));
 const RULES = BASE ? topLevelRules(BASE) : [];
 const find = (pred) => RULES.findIndex(pred);
@@ -96,6 +113,15 @@ const CHECKBOX_RESET = find((r) => r.selector.includes("input[type='checkbox']")
 const LABEL = find((r) => r.selector === 'label');
 const TEXTAREA = find((r) => r.selector === 'textarea');
 const MOBILE_OVERRIDE = find((r) => r.selector.startsWith('@media') && r.selector.includes('720px'));
+const BUTTON = find((r) => r.selector === 'button');
+const LIST_RESET = find((r) => selectorParts(r.selector).sort().join(', ') === 'ol, ul');
+// Every rule that styles the button element itself, in any state: `button`, a selector list that
+// names it, `button:disabled`. Rules nested in an at-rule (the 720px block, `@supports`) are
+// lifted out first. The focus rule is NOT one of these: it only reaches a button through
+// `:where(...)`, which is why the list is split at its top-level commas and not at every comma.
+const BUTTON_RULES = RULES.flatMap((r) => (r.selector.startsWith('@') ? topLevelRules(r.body) : [r])).filter((r) =>
+  selectorParts(r.selector).some((part) => /^button(:|$)/.test(part)),
+);
 
 describe('@layer base — the global base layer', () => {
   it('exists in index.css and parses into top-level rules', () => {
@@ -156,6 +182,42 @@ describe('the four load-bearing declarations', () => {
     const { body } = ruleAt(LABEL, 'label');
     expect(body).toMatch(/align-content:\s*start/);
     expect(body).toMatch(/display:\s*grid/);
+  });
+});
+
+// No Tailwind preflight is loaded, so a raw <button> or list keeps the browser's own look unless
+// its classes reset it: a 2px outset bevel, a grey face and black text on a button, a 40px indent
+// and 1em margins on a list. These two rules are the reset. Like everything else in this file
+// they are pinned as SOURCE TEXT. jsdom computes none of this, so the rendered proof is a crawl of
+// the running app, recorded on the pull request that added the rules.
+describe('the raw button and list reset', () => {
+  it('resets the three properties that give a bare button the browser face', () => {
+    const { body } = ruleAt(BUTTON, 'button');
+    expect(body).toMatch(/(^|[\s;])border-width:\s*0\s*;/);
+    expect(body).toMatch(/(^|[\s;])background-color:\s*transparent\s*;/);
+    expect(body).toMatch(/(^|[\s;])color:\s*inherit\s*;/);
+  });
+
+  it('leaves button padding and border colour alone', () => {
+    // Raw buttons across the app still take the browser's own side padding, so zeroing it would
+    // move them. Every border property other than a width, a style or a radius resets the colour,
+    // and a button with a width utility and no colour class would then change its border colour.
+    // `all` resets both at once.
+    expect(BUTTON_RULES.length).toBeGreaterThan(0);
+    for (const { selector, body } of BUTTON_RULES) {
+      expect(body, `\`${selector}\` must not set padding`).not.toMatch(/(^|[\s;])padding(-[a-z-]+)?\s*:/);
+      expect(body, `\`${selector}\` must not reset the border colour`).not.toMatch(
+        /(^|[\s;])border(?!-(?:[a-z]+-)*(?:width|style|radius)\s*:)[a-z-]*\s*:/,
+      );
+      expect(body, `\`${selector}\` must not use \`all\``).not.toMatch(/(^|[\s;])all\s*:/);
+    }
+  });
+
+  it('resets margin, padding and bullets on ul and ol', () => {
+    const { body } = ruleAt(LIST_RESET, 'ul, ol');
+    expect(body).toMatch(/(^|[\s;])margin:\s*0\s*;/);
+    expect(body).toMatch(/(^|[\s;])padding:\s*0\s*;/);
+    expect(body).toMatch(/(^|[\s;])list-style:\s*none\s*;/);
   });
 });
 
