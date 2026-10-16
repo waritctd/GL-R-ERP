@@ -206,6 +206,38 @@ class TaxAllowanceAttachmentScopeIntegrationTest extends AbstractPostgresIntegra
         assertThat(uploaded.sectionKey()).isNull();
     }
 
+    // ---- The file's type --------------------------------------------------------------------------
+    //
+    // Not an authorization change either. A file with no declared type and a name that gives none
+    // away used to throw inside FileStorageService and reach the caller as a 500. It is refused as
+    // an unsupported type, through the same real service and real Postgres as everything above.
+
+    @Test
+    void anEvidenceFileWithNoTypeIsRefusedAsAnUnsupportedType_andNothingIsStored() {
+        long declarationId = submit(employeeA);
+        long fileRowsBefore = count("hr.file_attachment");
+        long blobRowsBefore = count("hr.file_attachment_blob");
+
+        for (String declaredType : new String[] {null, ""}) {
+            MockMultipartFile typeless = new MockMultipartFile(
+                "file", "scan.unknownext", declaredType, "หลักฐานประกอบการยื่นแบบ".getBytes());
+
+            assertThatThrownBy(() -> service.uploadAttachment(declarationId, typeless, null, employeeActor(employeeA)))
+                .as("declared type \"%s\"", declaredType)
+                .isInstanceOfSatisfying(ApiException.class, e -> {
+                    assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                    assertThat(e.getMessage()).contains("PDF");
+                });
+        }
+        assertThat(count("hr.file_attachment")).as("no file row").isEqualTo(fileRowsBefore);
+        assertThat(count("hr.file_attachment_blob")).as("no bytes").isEqualTo(blobRowsBefore);
+        assertThat(service.listAttachments(declarationId, employeeActor(employeeA))).isEmpty();
+
+        // Control: the same owner and the same declaration, with a PDF. The refusal above is the file's.
+        assertThat(uploadPdf(declarationId, employeeActor(employeeA)).fileName()).isEqualTo("evidence.pdf");
+        assertThat(count("hr.file_attachment")).isEqualTo(fileRowsBefore + 1);
+    }
+
     // --- helpers ---------------------------------------------------------------------------------
 
     private long submit(long employeeId) {
@@ -232,6 +264,10 @@ class TaxAllowanceAttachmentScopeIntegrationTest extends AbstractPostgresIntegra
         MockMultipartFile file = new MockMultipartFile(
             "file", "evidence.pdf", "application/pdf", "หลักฐานประกอบการยื่นแบบ".getBytes());
         return service.uploadAttachment(declarationId, file, sectionKey, actor);
+    }
+
+    private long count(String table) {
+        return jdbc.queryForObject("SELECT count(*) FROM " + table, Map.of(), Long.class);
     }
 
     private long seedEmployee(String code) {
