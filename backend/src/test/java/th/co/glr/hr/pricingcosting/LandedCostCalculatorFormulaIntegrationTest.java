@@ -388,6 +388,39 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
     }
 
     @Test
+    void salesEnteredThickness_makesACatalogNullThicknessLineCostable() {
+        // Owner ruling 2026-10-15: a thickness Sales typed on the line is honoured by costing when
+        // the catalogue carries none — so a product the CEO used to see as "no thickness" (null
+        // catalogue thickness) is now costable from the Sales value. Pins resolveThicknessMm's
+        // catalog-then-request fallback.
+        long nullThicknessProductId = insertCatalogProduct("Sales Thickness Factory", "IT", "SALES-TH-001",
+            new BigDecimal("100.00"), "THB", "per_piece", "ACTIVE", null);
+        long pricingRequestId = readyForReviewWithProduct(nullThicknessProductId, "Sales Thickness Factory",
+            new BigDecimal("10"), UnitBasis.PER_PIECE, UnitBasis.PER_PIECE, new BigDecimal("10"), "100.00",
+            new BigDecimal("1"), null, null);
+        // The line carries a Sales-entered thickness (9mm, inside V109's Italy [8,12) band) while
+        // the catalogue row stays null — the in-flight/legacy shape the read-time fallback exists
+        // for (submit's write-back fills the catalogue FROM the item, so set it directly here to
+        // isolate the READ fallback rather than the write-back).
+        jdbc.update("UPDATE sales.pricing_request_item SET thickness_mm = 9 WHERE pricing_request_id = :id",
+            Map.of("id", pricingRequestId));
+        BigDecimal catalogThickness = jdbc.queryForObject(
+            "SELECT thickness_mm FROM price_catalog.product_prices WHERE price_id = :id",
+            Map.of("id", nullThicknessProductId), BigDecimal.class);
+        assertThat(catalogThickness).as("precondition: the catalogue row genuinely has no thickness").isNull();
+
+        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
+
+        PricingCostingItemDto item = costingItemFor(decision);
+        assertThat(item.uncostableReason())
+            .as("the Sales thickness feeds the freight lookup, so the line is NOT set aside as uncostable")
+            .isNull();
+        assertThat(item.totalLandedCostThb()).isNotNull();
+        assertThat(decision.items().get(0).frozenLandedCostPerRequestedUnitThb()).isNotNull();
+    }
+
+    @Test
     void missingFreightBand_countryNotInFormulaConfig_refusesToPrice_neverZero() {
         // "TH" is a genuinely valid, V151-seeded price_catalog.country row (so the catalog INSERT
         // itself succeeds) — V109 simply never seeded any Thailand freight rows, so the lookup
