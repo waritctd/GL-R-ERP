@@ -1,5 +1,11 @@
 # GL&R Attendance Agent
 
+> **Showroom scanner replaced (2026-09-07).** The showroom now uses a ZKTeco
+> SenseFace 3A that sends punches only to ZKBio CVAccess. Its ERP feed is
+> `cvaccess_agent.py`; set it up with [CVACCESS_AGENT_SETUP.md](CVACCESS_AGENT_SETUP.md).
+> The SC700 instructions below describe the retired showroom device; the
+> warehouse scanner has its own runbook, [WAREHOUSE_SCANNER_SETUP.md](WAREHOUSE_SCANNER_SETUP.md).
+
 Showroom-first Python scripts for the ZKTeco SC700.
 
 The agent connects to the SC700 over TCP port `4370`, reads attendance logs with `pyzk`, and posts normalized punch JSON to the Spring Boot backend. It is intended to run on the Dell T360 server as a Windows service after the backend attendance endpoint is implemented.
