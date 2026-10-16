@@ -828,6 +828,32 @@ public class PricingRequestRepository {
             """, Map.of("pricingRequestId", pricingRequestId));
     }
 
+    /**
+     * Sales-entered thickness → the catalogue, so the CEO's landed-cost calc (which reads thickness
+     * ONLY from {@code price_catalog.product_prices}, see {@code LandedCostCalculator#resolveThicknessMm})
+     * and every other reader see it. Run right AFTER {@link #snapshotCatalogSelections} at submit,
+     * so {@code catalog_price_id} already points at the resolved ACTIVE price row.
+     *
+     * <p>Fills ONLY a catalogue row whose own {@code thickness_mm IS NULL} ("catalog wins" — a
+     * product that already states a thickness is never overwritten by a per-deal entry), and only
+     * for a catalog-LINKED item (a free-text line has no {@code catalog_price_id} to update — that
+     * line's thickness stays on the pricing-request item and is honoured by the costing fallback).
+     * Owner ruling 2026-10-15: a new product Sales types a thickness for should persist to the
+     * catalogue; an existing one should already carry it, but if it does not, Sales's value fills
+     * the gap.
+     */
+    public int fillCatalogThicknessFromItems(long pricingRequestId) {
+        return jdbc.update("""
+            UPDATE price_catalog.product_prices pp
+               SET thickness_mm = pri.thickness_mm
+              FROM sales.pricing_request_item pri
+             WHERE pri.pricing_request_id = :pricingRequestId
+               AND pri.catalog_price_id = pp.price_id
+               AND pri.thickness_mm IS NOT NULL
+               AND pp.thickness_mm IS NULL
+            """, Map.of("pricingRequestId", pricingRequestId));
+    }
+
     public List<PricingRequestEventDto> findEvents(long pricingRequestId) {
         return jdbc.query("""
             SELECT pricing_request_event_id, pricing_request_id, ticket_id, actor_id, actor_name,
