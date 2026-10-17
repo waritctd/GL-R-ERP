@@ -590,22 +590,78 @@ describe('DealStagePanel route awareness', () => {
       expect(nextText()).toContain('4. เสนอราคาผู้ออกแบบ');
     });
 
-    it('the guided-advance opener names the ROUTE\'s next stage when the readiness gate is the only block', () => {
+    /**
+     * SPLIT by the owner's 2026-10-16 quote-stage ruling (.design/quote-stage-gates D-4), not
+     * weakened. This test used to assert ONE thing with TWO halves at once: that the guided opener
+     * names the ROUTE's next stage (stepping over the off-route S4), using OWNER_DIRECT at S3 whose
+     * route-next is S5.
+     *
+     * S5 is now `auto`, so no opener renders there at all — and the two halves can no longer be
+     * tested together. Among the route-variable stages S4–S8 only S6 and S7 are still non-auto, and
+     * reaching either as `nextOnRoute` means already standing on S5 or S6, which no channel skips.
+     * So:
+     *
+     *   - the ROUTE-SKIPPING half is still pinned, by the three `ถัดไป follows the route` tests
+     *     above: `deal-stage-next` renders regardless of `auto`, so they are unaffected and remain
+     *     the proof that S4 is stepped over.
+     *   - the READINESS-GATE half is pinned here, re-based onto S5 → S6 (a non-auto target on the
+     *     owner route) so the opener still has something to name.
+     *   - the new rule itself is pinned by the sibling test below.
+     */
+    it('the guided-advance opener names the route\'s next stage when the readiness gate is the only block', () => {
+      const gated = routeDecisions(OWNER_OFF).map((decision) => (
+        decision.stage === 'OWNER_SIGNOFF'
+          ? { ...decision, allowed: false, blockedReason: STAGE_ADVANCE_GATE_MESSAGE }
+          : decision
+      ));
+      renderPanel({
+        summary: baseSummary({ id: 601, salesStage: 'QUOTE_OWNER', entryChannel: 'OWNER_DIRECT' }),
+        availableActions: [],
+        stageDecisions: gated,
+      });
+      expect(screen.getByTestId('guided-advance-open').textContent).toContain('6. เจ้าของอนุมัติสเปค');
+    });
+
+    /**
+     * THE NEW RULE (owner ruling 2026-10-16, D-2/D-4): a quote stage is reached by QUOTING that
+     * party, never by clicking. So when the route's next stage is a quote stage, the guided opener
+     * must NOT appear even with the readiness gate as the only recorded block — the readiness gate
+     * is not what the rep has to satisfy, a document is.
+     *
+     * The stronger half of the split above, and the one that would silently regress if `auto` were
+     * ever dropped from the three quote stages: the panel would start offering a one-click move into
+     * ขั้น 5 again while the server answers 409. `AUTO_STAGE_HINT` wording stands in its place,
+     * naming the document as the way forward instead of leaving a dead end.
+     */
+    it('offers NO guided opener when the route\'s next stage is a quote stage, and explains it instead', () => {
       const gated = routeDecisions(OWNER_OFF).map((decision) => (
         decision.stage === 'QUOTE_OWNER'
           ? { ...decision, allowed: false, blockedReason: STAGE_ADVANCE_GATE_MESSAGE }
           : decision
       ));
       renderPanel({
-        summary: baseSummary({ id: 601, salesStage: 'SPEC_APPROVED', entryChannel: 'OWNER_DIRECT' }),
-        availableActions: [],
+        summary: baseSummary({ id: 602, salesStage: 'SPEC_APPROVED', entryChannel: 'OWNER_DIRECT' }),
+        availableActions: [{ action: 'ADVANCE_STAGE', targetStage: 'QUOTE_OWNER' }],
         stageDecisions: gated,
       });
-      expect(screen.getByTestId('guided-advance-open').textContent).toContain('5. เสนอราคาเจ้าของโครงการ');
+      expect(screen.queryByTestId('guided-advance-open')).toBeNull();
+      // …and the line that replaces it names the document, not a department.
+      expect(nextText()).toContain('5. เสนอราคาเจ้าของโครงการ');
+      expect(nextText()).toContain(AUTO_STAGE_HINT.QUOTE_OWNER);
+      expect(screen.queryByText(/อัปเดตโดย/)).toBeNull();
     });
   });
 
   describe('an off-route target is never one click away', () => {
+    /**
+     * ⚠️ Since the owner's 2026-10-16 quote-stage ruling this test passes for TWO independent
+     * reasons, and the one it is NAMED for is no longer the only thing holding it: S4 is off the
+     * owner-direct route (the original point) AND S4 is now `auto` (D-4), either of which alone
+     * makes `canAdvance` false. So a regression that broke the off-route check would still leave
+     * this green. The route half is pinned independently by `ถัดไป follows the route` above, which
+     * reads `deal-stage-next` and does not consult `auto` at all — that is the test to trust for
+     * route behaviour, and the one to fix first if this pair ever disagrees.
+     */
     it('openAdvance() does not move to S4 on an owner-direct deal even if the server listed ADVANCE_STAGE for it', () => {
       noopHandlers.onUpdateStage.mockClear();
       const { ref } = renderPanelWithRef({
@@ -617,7 +673,31 @@ describe('DealStagePanel route awareness', () => {
       expect(noopHandlers.onUpdateStage).not.toHaveBeenCalled();
     });
 
-    it('openAdvance() moves to the ON-route S5 when that is the stage the server offers', () => {
+    /**
+     * The POSITIVE control for the refusal above — without it, a panel that refused every advance
+     * would pass the whole block. Re-based from S3→S5 to S5→S6 by the 2026-10-16 ruling: S5 is now
+     * `auto`, so it can no longer serve as the "one click does work" example, while S6
+     * (OWNER_SIGNOFF) is on the owner route and still a manual move.
+     */
+    it('openAdvance() moves to the ON-route S6 when that is the stage the server offers', () => {
+      noopHandlers.onUpdateStage.mockClear();
+      const { ref } = renderPanelWithRef({
+        summary: baseSummary({ salesStage: 'QUOTE_OWNER', entryChannel: 'OWNER_DIRECT' }),
+        stageDecisions: routeDecisions(OWNER_OFF),
+        availableActions: [{ action: 'ADVANCE_STAGE', targetStage: 'OWNER_SIGNOFF' }],
+      });
+      act(() => ref.current.openAdvance());
+      expect(noopHandlers.onUpdateStage).toHaveBeenCalledWith({ stage: 'OWNER_SIGNOFF' });
+    });
+
+    /**
+     * THE NEW RULE at the click seam (owner ruling 2026-10-16, D-2/D-4): an ON-ROUTE quote stage the
+     * server even listed `ADVANCE_STAGE` for is still not one click away, because the way into it is
+     * a quotation addressed to that party. Distinct from the off-route refusal above — here the
+     * route permits the stage and `auto` alone is what refuses, so this is the assertion that goes
+     * red if `auto` is dropped from the quote stages while the backend keeps 409-ing the manual move.
+     */
+    it('openAdvance() does not move into an ON-route quote stage, even when the server offers it', () => {
       noopHandlers.onUpdateStage.mockClear();
       const { ref } = renderPanelWithRef({
         summary: baseSummary({ salesStage: 'SPEC_APPROVED', entryChannel: 'OWNER_DIRECT' }),
@@ -625,7 +705,7 @@ describe('DealStagePanel route awareness', () => {
         availableActions: [{ action: 'ADVANCE_STAGE', targetStage: 'QUOTE_OWNER' }],
       });
       act(() => ref.current.openAdvance());
-      expect(noopHandlers.onUpdateStage).toHaveBeenCalledWith({ stage: 'QUOTE_OWNER' });
+      expect(noopHandlers.onUpdateStage).not.toHaveBeenCalled();
     });
   });
 

@@ -175,17 +175,36 @@ class DealStageQuoteOwnerAndRouteIntegrationTest extends AbstractPostgresIntegra
         }
     }
 
+    /**
+     * The permitted half of the authz pair above, and it must stay an authz test.
+     *
+     * <p>Each deal is given an OWNER quotation first (owner ruling 2026-10-16,
+     * {@code .design/quote-stage-gates} D-3: a manual move into ขั้น 5 is refused until the deal
+     * holds a quotation addressed to that party). Without it all three PERMITTED actors are refused
+     * 409 and this test cannot say anything about who may write the stage.
+     *
+     * <p>Its sibling refusal test needs no such fixture and deliberately has none: the role gate
+     * ({@code requireStageWriteAccess}, rung 2) runs before the fact gate (rung 5), so account,
+     * import and a non-owning rep still meet their 403 whether a quotation exists or not. The pair
+     * therefore still distinguishes "you may not" from "there is nothing to be on this stage for".
+     *
+     * <p>The quotation is inserted directly, not issued through {@code DealQuotationService}: the
+     * subject here is WRITE ACCESS, and dragging the pricing chain in would test something else.
+     */
     @Test
     void quoteOwnerIsWritableByTheOwningRepBySalesManagerAndByCeo() {
         long byOwner = readyToAdvanceFrom(DealStage.SPEC_APPROVED);
+        quotationOnDeal(byOwner, QuotationRecipient.OWNER);
         ticketService.updateStage(byOwner, DealStage.QUOTE_OWNER, null, ownerRep);
         assertThat(stageOf(byOwner)).isEqualTo(DealStage.QUOTE_OWNER);
 
         long byManager = readyToAdvanceFrom(DealStage.SPEC_APPROVED);
+        quotationOnDeal(byManager, QuotationRecipient.OWNER);
         ticketService.updateStage(byManager, DealStage.QUOTE_OWNER, null, salesManager);
         assertThat(stageOf(byManager)).isEqualTo(DealStage.QUOTE_OWNER);
 
         long byCeo = readyToAdvanceFrom(DealStage.SPEC_APPROVED);
+        quotationOnDeal(byCeo, QuotationRecipient.OWNER);
         ticketService.updateStage(byCeo, DealStage.QUOTE_OWNER, null, ceo);
         assertThat(stageOf(byCeo)).isEqualTo(DealStage.QUOTE_OWNER);
     }
@@ -207,20 +226,36 @@ class DealStageQuoteOwnerAndRouteIntegrationTest extends AbstractPostgresIntegra
 
     // ── Part C: the business's real routes need no written justification ─────
 
-    /** Case C — a contractor arrives with a BOQ and a spec, so the deal opens straight at S8. */
+    /**
+     * Case C — a contractor arrives with a BOQ and a spec, so the deal opens straight at S8.
+     *
+     * <p>Subject is the NOTE rule: S1 -> S8 crosses only route-dependent stages (none of S2-S7 is
+     * {@code MANDATORY}), so {@code requiresJustification} asks for no written reason, and this
+     * passes {@code null} and requires it to succeed. The BUYER quotation is fixture, not subject
+     * (owner ruling 2026-10-16, {@code .design/quote-stage-gates} D-3) — it only clears the fact
+     * gate so the manual call is reachable and the note rule is what gets exercised.
+     *
+     * <p>This is also where {@code SalesRouteWalkIntegrationTest}'s route-C note assertion moved
+     * to: that suite now opens S8 through the document, which never consults the note rule.
+     */
     @Test
     void caseC_leadApproachStraightToQuoteBuyer_needsNoNote() {
         long ticketId = readyToAdvanceFrom(DealStage.LEAD_APPROACH);
+        quotationOnDeal(ticketId, QuotationRecipient.BUYER);
 
         ticketService.updateStage(ticketId, DealStage.QUOTE_BUYER, null, ownerRep);
 
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.QUOTE_BUYER);
     }
 
-    /** Case B — the owner buys directly, so S3 and S4 never happen. */
+    /**
+     * Case B — the owner buys directly, so S3 and S4 never happen. Subject is the NOTE rule, as in
+     * case C above; the OWNER quotation is fixture clearing the D-3 fact gate, nothing more.
+     */
     @Test
     void caseB_presentationStraightToQuoteOwner_needsNoNote() {
         long ticketId = readyToAdvanceFrom(DealStage.PRESENTATION);
+        quotationOnDeal(ticketId, QuotationRecipient.OWNER);
 
         ticketService.updateStage(ticketId, DealStage.QUOTE_OWNER, null, ownerRep);
 
@@ -294,6 +329,27 @@ class DealStageQuoteOwnerAndRouteIntegrationTest extends AbstractPostgresIntegra
      * (a next follow-up date and one activity logged after the last stage change), so that a test
      * asserting the NOTE rule fails on the note rule and nothing else.
      */
+    /**
+     * An ISSUED quotation on {@code ticketId} addressed to {@code recipientType} — fixture that
+     * clears the D-3 quote-stage fact gate so a MANUAL {@code updateStage} into that stage is
+     * reachable, letting the tests above keep exercising the note rule and write access rather
+     * than the gate. Inserted directly for the reason {@code StageFactGateIntegrationTest}'s twin
+     * helper states: going through {@code DealQuotationService} would drag the whole pricing chain
+     * into tests about one stage move. Columns are the NOT NULLs without a default (V6) plus the
+     * two the gate reads ({@code recipient_type}, V52; {@code doc_status}, V27).
+     */
+    private void quotationOnDeal(long ticketId, String recipientType) {
+        jdbc.update("""
+            INSERT INTO sales.quotation (ticket_id, number, issued_by, recipient_type, doc_status)
+            VALUES (:ticketId, :number, :issuedBy, :recipientType, 'ISSUED')
+            """,
+            new MapSqlParameterSource()
+                .addValue("ticketId", ticketId)
+                .addValue("number", "QT-QOR-" + ticketId + "-" + recipientType)
+                .addValue("issuedBy", ownerRepId)
+                .addValue("recipientType", recipientType));
+    }
+
     private long readyToAdvanceFrom(String stage) {
         long ticketId = createTicket();
         jdbc.update("UPDATE sales.ticket SET sales_stage = :stage WHERE ticket_id = :id",

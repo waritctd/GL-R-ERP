@@ -153,6 +153,15 @@ class StageDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
                     // fresh deal cannot reach them; they are excluded here and asserted there.
                     .filter(stage -> !DealStage.ORDER_RECEIVED.equals(stage))
                     .filter(stage -> !DealStage.DELIVERED.equals(stage))
+                    // The three quote stages are fact-gated the same way since the 2026-10-16
+                    // ruling — their fact is a quotation addressed to that recipient, and this
+                    // deal has none — so they drop out for exactly the reason the two above do.
+                    // They stay in SALES_TARGET_STAGES on purpose: the refusal is a 409 about a
+                    // missing document, not a 403 about who the rep is, which is what the
+                    // FORBIDDEN loop below still asserts for the money and import stages.
+                    .filter(stage -> !DealStage.QUOTE_DESIGN_SIDE.equals(stage))
+                    .filter(stage -> !DealStage.QUOTE_OWNER.equals(stage))
+                    .filter(stage -> !DealStage.QUOTE_BUYER.equals(stage))
                     .collect(Collectors.toSet()));
 
         for (String forbidden : List.of(DealStage.DEPOSIT_RECEIVED, DealStage.CLOSED_PAID, DealStage.PROCUREMENT)) {
@@ -307,16 +316,26 @@ class StageDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         List<StageDecisionDto> decisions = decisionsFor(ticketId, ownerRep);
         // Case C: S1 -> S8 crosses S2..S7, none of which is MANDATORY.
         assertThat(requiresReasonFor(decisions, DealStage.QUOTE_BUYER)).isFalse();
-        assertThat(allowedFor(decisions, DealStage.QUOTE_BUYER)).isTrue();
+        // …and since the 2026-10-16 ruling it is also not currently REACHABLE, because no
+        // quotation has been addressed to the buyer yet. The two facts are independent, which is
+        // this suite's own established principle (see
+        // requiresReasonIsReportedEvenForAStageTheCallerMayNotReach): requiresReason answers "what
+        // would this move cost", not "may I make it". Case C itself is unaffected — the deal still
+        // opens at S8, by quoting the buyer rather than by this call, which
+        // StageFactGateIntegrationTest's caseC_aDealThatOpensStraightAtQuoteBuyer_isUnaffected walks.
+        assertThat(allowedFor(decisions, DealStage.QUOTE_BUYER)).isFalse();
         // Case B (owner buys direct) and Case D (all from stock) cross nothing mandatory either.
         assertThat(requiresReasonFor(decisions, DealStage.QUOTE_OWNER)).isFalse();
         assertThat(requiresReasonFor(decisions, DealStage.AWAITING_BUYER)).isFalse();
         // …but stepping over NEGOTIATION (S9), which every route has in common, does.
         assertThat(requiresReasonFor(decisions, DealStage.DELIVERY_SCHEDULING)).isTrue();
 
-        // The decision is honoured on the write, in both directions.
-        ticketService.updateStage(ticketId, DealStage.QUOTE_BUYER, null, ownerRep);
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.QUOTE_BUYER);
+        // The decision is honoured on the write, in both directions. The no-reason direction uses
+        // AWAITING_BUYER (S7): asserted requiresReason-false just above, skips only route-dependent
+        // stages, and is not fact-gated — so it still demonstrates the note rule's permissive side
+        // now that S8 needs a document first.
+        ticketService.updateStage(ticketId, DealStage.AWAITING_BUYER, null, ownerRep);
+        assertThat(stageOf(ticketId)).isEqualTo(DealStage.AWAITING_BUYER);
 
         logAnActivityAndFollowUp(ticketId);
         assertThatThrownBy(() ->
@@ -325,7 +344,7 @@ class StageDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
                 assertThat(e.getMessage()).isEqualTo("การข้ามขั้นตอนต้องระบุเหตุผล");
             });
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.QUOTE_BUYER);
+        assertThat(stageOf(ticketId)).isEqualTo(DealStage.AWAITING_BUYER);
     }
 
     /**

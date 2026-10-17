@@ -152,23 +152,39 @@ public final class DealStage {
     }
 
     /**
-     * Stages the deal normally reaches on its own, from an operational transition rather than a
-     * rep picking them out of a list: {@code confirmCustomer} → ORDER_RECEIVED,
-     * {@code reconcilePaymentStatus} → DEPOSIT_RECEIVED, {@code issueImportRequest} →
-     * PROCUREMENT, {@code maybeAdvanceClosedPaid} → CLOSED_PAID. Read off this class's own
-     * "Auto-advanced stages" header, which lists exactly these four.
+     * Stages the deal reaches on its own rather than from a rep picking them out of a list. Two
+     * kinds, for two different reasons:
      *
-     * <p>Purely descriptive — it changes no gate. A UI uses it to explain where a stage comes
-     * from instead of offering a one-click advance into it; the manual fallback still exists and
-     * is still governed by the target sets above (and, for all four of these, by
-     * {@code TicketService.requireStageFactsHold}).
+     * <ul>
+     *   <li><b>Operational</b> — from a transition on the deal itself: {@code confirmCustomer} →
+     *       ORDER_RECEIVED, {@code reconcilePaymentStatus} → DEPOSIT_RECEIVED,
+     *       {@code issueImportRequest} → PROCUREMENT, {@code maybeAdvanceClosedPaid} →
+     *       CLOSED_PAID. These are this class's own "Auto-advanced stages" header.
+     *   <li><b>Document-driven</b> (owner ruling 2026-10-16) — from a quotation being addressed to
+     *       a party: {@code advanceStageForCustomerQuotationIssue} → QUOTE_DESIGN_SIDE /
+     *       QUOTE_OWNER / QUOTE_BUYER, by recipient.
+     * </ul>
+     *
+     * <p><b>No longer purely descriptive.</b> This set used to change no gate. Now
+     * {@code TicketService.requireStageFactsHold} refuses a manual move into any of these until its
+     * fact holds, so membership here and that refusal are two halves of one rule and must change
+     * together.
      *
      * <p>DELIVERY_SCHEDULING is deliberately absent although {@code recordDelivery} and
      * {@code reserveStock} auto-advance into it: the rep also reaches it by hand as a normal part
      * of the flow, so presenting it as "the system does this for you" would be wrong.
      */
     private static final Set<String> AUTO_ADVANCED = Set.of(
-        ORDER_RECEIVED, DEPOSIT_RECEIVED, PROCUREMENT, CLOSED_PAID);
+        ORDER_RECEIVED, DEPOSIT_RECEIVED, PROCUREMENT, CLOSED_PAID,
+        // The three quote stages (owner ruling 2026-10-16): a quotation addressed to a recipient is
+        // what moves the deal onto that recipient's stage. Document-driven rather than operational,
+        // but identical to the rep — the stage arrives, it is not clicked.
+        //
+        // Membership here withdraws the one-click เลื่อนไป from three of the four UI surfaces at
+        // once, since the flag rides on the catalog and the deal page gates on `!next.auto`. The
+        // stage picker stands down separately, off requireStageFactsHold's `allowed` — see
+        // .design/quote-stage-gates D-4's verification note.
+        QUOTE_DESIGN_SIDE, QUOTE_OWNER, QUOTE_BUYER);
 
     public static boolean isAutoAdvanced(String stage) {
         return AUTO_ADVANCED.contains(stage);

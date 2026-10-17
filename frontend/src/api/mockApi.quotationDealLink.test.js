@@ -5,7 +5,8 @@ import { api, setPricingRequestStatusForTests } from './mockApi.js';
 // backend contract so VITE_USE_MOCKS=true drives the same flow the Java service will serve —
 //   S2-B1  recipientType on create/update (required on a DEAL_DIRECT create; DRAFT-only; refused on
 //          a PRICING_REQUEST-origin row), persisted as recipientType + a Thai recipientLabel
-//   S2-B2  OUT of slice 2 (owner ruling 2026-09-30): pinned that the recipient does NOT move the stage
+//   S2-B2  LANDED (owner ruling 2026-10-16, .design/quote-stage-gates D-2): the recipient MOVES the
+//          stage, at create time — and the manual move into a quote stage is fact-gated (D-3)
 //   S2-B3  N6: a second create while a live DEAL_DIRECT quotation exists -> 409 naming the live one
 //   S2-B4  TicketSummaryDto.liveDirectQuotation on list rows AND get()
 // This is evidence about the mock's own plumbing ONLY. It is not evidence about the Java service
@@ -23,10 +24,10 @@ async function asRole(role) {
 }
 
 /** A fresh ordinary pipeline deal (not quotation-only) owned by the mock `sales` user, at S1. */
-async function freshDeal() {
+async function freshDeal(entryChannel = 'DESIGNER_LED') {
   await asRole('sales');
   const { ticket } = await api.tickets.create({
-    entryChannel: 'DESIGNER_LED',
+    entryChannel,
     title: 'ดีลทดสอบ slice 2', customerName: 'ลูกค้า slice 2', projectId: 1, contactId: null,
     priority: 'NORMAL', items: [], nextFollowUpAt: '2026-10-07',
   });
@@ -51,6 +52,11 @@ async function listRow(ticketId) {
 async function createDirect(ticketId, recipientType) {
   const { quotation } = await api.dealQuotations.create(ticketId, { recipientType, items: [TILE] });
   return quotation;
+}
+
+/** The mock's stageDecisions, the one place it decides anything stage-shaped (D-3's gate lives here). */
+async function decisionsOf(ticketId) {
+  return (await api.tickets.actions(ticketId)).stageDecisions;
 }
 
 describe('mock dealQuotations — recipientType (S2-B1)', () => {
@@ -180,28 +186,106 @@ describe('mock dealQuotations — a PRICING_REQUEST-origin row takes its recipie
   });
 });
 
-// Owner ruling 2026-09-30 (slice-2 scope reduction): the spec's S2-B2 — the recipient moving the
-// deal's stage — is OUT of slice 2; the deal-stage rule is owned by another session. Pinned here the
-// right way round so the removal cannot quietly come back: a direct quotation moves NOTHING on its
-// deal, on create or on a recipient change, and writes no STAGE_CHANGED event.
-describe('mock dealQuotations — the recipient does NOT move the deal stage (S2-B2 out of slice 2)', () => {
+// S2-B2 LANDED (owner ruling 2026-10-16, .design/quote-stage-gates D-2), and these two tests are
+// the 2026-09-30 pins turned around rather than deleted.
+//
+// The 2026-09-30 reduction took the recipient → stage rule out of slice 2 and handed it to another
+// session, and this describe block pinned "a direct quotation moves NOTHING". That session never
+// filled the two hooks; the ruling has now been implemented, and the stage moves at CREATE time.
+//
+// Why the mock must move it too, rather than being left permissive: the backend has simultaneously
+// CLOSED the manual move into the three quote stages. A mock that still refuses to advance on
+// create, while also mirroring that refusal, would leave mock-mode QA with no way to reach ขั้น
+// 4/5/8 at all — the stage would be unreachable in the mock stack and reachable in production.
+describe('mock dealQuotations — the recipient MOVES the deal stage at create (D-2)', () => {
   beforeEach(async () => { await asRole('sales'); });
 
-  it('create with OWNER on a LEAD_APPROACH deal leaves the deal at LEAD_APPROACH, with no STAGE_CHANGED', async () => {
+  it('create with OWNER on a LEAD_APPROACH deal moves it to QUOTE_OWNER, with a STAGE_CHANGED', async () => {
     const ticketId = await freshDeal();
     expect((await summaryOf(ticketId)).salesStage).toBe('LEAD_APPROACH');
     await createDirect(ticketId, 'OWNER');
+    expect((await summaryOf(ticketId)).salesStage).toBe('QUOTE_OWNER');
+    expect((await eventsOf(ticketId)).filter((e) => e.kind === 'STAGE_CHANGED')).toHaveLength(1);
+  });
+
+  it('a DRAFT recipient change (DESIGNER -> BUYER) moves the stage with it', async () => {
+    const ticketId = await freshDeal();
+    const created = await createDirect(ticketId, 'DESIGNER');
+    expect((await summaryOf(ticketId)).salesStage).toBe('QUOTE_DESIGN_SIDE');
+
+    const { quotation } = await api.dealQuotations.update(created.id, { recipientType: 'BUYER', items: [TILE] });
+
+    expect(quotation.recipientType).toBe('BUYER');
+    expect((await summaryOf(ticketId)).salesStage).toBe('QUOTE_BUYER');
+    expect((await eventsOf(ticketId)).filter((e) => e.kind === 'STAGE_CHANGED')).toHaveLength(2);
+  });
+
+  // The mock's autoAdvanceStage was missing the Java's ROUTE check, which this ruling makes
+  // reachable on a common path: OWNER_DIRECT's route skips ขั้น 4 (no designer to quote), so a
+  // designer-addressed quotation there must move NOTHING and still be created. Without the check
+  // the mock advanced to an off-route stage production refuses to enter — mock looser than
+  // production, the direction that matters.
+  it('does not advance to a stage off the deal route, and still creates the quotation', async () => {
+    const ticketId = await freshDeal('OWNER_DIRECT');
+    expect((await summaryOf(ticketId)).salesStage).toBe('LEAD_APPROACH');
+
+    const created = await createDirect(ticketId, 'DESIGNER');
+
+    expect(created.recipientType).toBe('DESIGNER');
     expect((await summaryOf(ticketId)).salesStage).toBe('LEAD_APPROACH');
     expect((await eventsOf(ticketId)).filter((e) => e.kind === 'STAGE_CHANGED')).toHaveLength(0);
   });
 
-  it('a DRAFT recipient change (DESIGNER -> BUYER) is saved but moves nothing either', async () => {
+  it('is forward-only: re-addressing BUYER -> DESIGNER leaves the deal on QUOTE_BUYER', async () => {
     const ticketId = await freshDeal();
-    const created = await createDirect(ticketId, 'DESIGNER');
-    const { quotation } = await api.dealQuotations.update(created.id, { recipientType: 'BUYER', items: [TILE] });
-    expect(quotation.recipientType).toBe('BUYER');
-    expect((await summaryOf(ticketId)).salesStage).toBe('LEAD_APPROACH');
-    expect((await eventsOf(ticketId)).filter((e) => e.kind === 'STAGE_CHANGED')).toHaveLength(0);
+    const created = await createDirect(ticketId, 'BUYER');
+    expect((await summaryOf(ticketId)).salesStage).toBe('QUOTE_BUYER');
+
+    await api.dealQuotations.update(created.id, { recipientType: 'DESIGNER', items: [TILE] });
+
+    expect((await summaryOf(ticketId)).salesStage).toBe('QUOTE_BUYER');
+    expect((await eventsOf(ticketId)).filter((e) => e.kind === 'STAGE_CHANGED')).toHaveLength(1);
+  });
+});
+
+// The other half of the same ruling (D-3): the mock's stage-decision gate must refuse a MANUAL move
+// into a quote stage until the document exists, and allow it once it does. A mock that stayed
+// permissive here is a drift with no guard — the #742 shape, for the quote stages this time.
+describe('mock stageDecisions — the quote stages are fact-gated on a quotation to that party', () => {
+  beforeEach(async () => { await asRole('sales'); });
+
+  it('refuses QUOTE_OWNER on a deal with no quotation, naming the missing document', async () => {
+    const ticketId = await freshDeal();
+
+    const decision = (await decisionsOf(ticketId)).find((d) => d.stage === 'QUOTE_OWNER');
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.blockedReason).toContain('ยังไม่มีใบเสนอราคาถึง');
+  });
+
+  it('opens QUOTE_OWNER once a quotation is addressed to the owner', async () => {
+    const ticketId = await freshDeal();
+    await createDirect(ticketId, 'OWNER');
+
+    const decisions = await decisionsOf(ticketId);
+
+    // The create already advanced the deal ONTO QUOTE_OWNER, so the stage now reports "already in
+    // this stage" rather than the fact refusal — which is the real point: the fact gate is no
+    // longer what stands in the way. A party NOT quoted still is.
+    expect(decisions.find((d) => d.stage === 'QUOTE_OWNER').blockedReason)
+      .not.toContain('ยังไม่มีใบเสนอราคาถึง');
+    expect(decisions.find((d) => d.stage === 'QUOTE_BUYER').blockedReason)
+      .toContain('ยังไม่มีใบเสนอราคาถึง');
+  });
+
+  it('reads the RECIPIENT, not merely "this deal has a quotation"', async () => {
+    const ticketId = await freshDeal();
+    await createDirect(ticketId, 'DESIGNER');
+
+    const decisions = await decisionsOf(ticketId);
+
+    expect(decisions.find((d) => d.stage === 'QUOTE_OWNER').blockedReason)
+      .toContain('ยังไม่มีใบเสนอราคาถึง');
   });
 });
 
@@ -372,5 +456,31 @@ describe('mock dealQuotations.create — one pricing route per deal (a live pric
     await dealWithDraftPricingRequest();
     const ticketId = await freshDeal();
     await expect(createDirect(ticketId, 'OWNER')).resolves.toMatchObject({ ticketId });
+  });
+});
+
+// B-4 (owner ruling 2026-10-17): issuing supersedes the deal's other live offer, whatever its origin.
+// Mirrors DealQuotationRepository#supersedeOtherLiveOnTicket. Two independent pricing-route rows on one
+// deal are not reachable through this helper (one pricing request per deal), so the reachable pin is a
+// revision: before B-4 its parent was flipped silently by the ancestor walk; now the sweep logs it.
+describe('mock dealQuotations — issuing a pricing-route quotation supersedes the live one, with an event (B-4)', () => {
+  it('issuing a revision flips the ISSUED parent to SUPERSEDED and writes exactly one DEAL_QUOTATION_SUPERSEDED', async () => {
+    const { ticketId, quotation } = await pricingRequestOriginDraft();
+    await api.dealQuotations.update(quotation.id, { validityDays: 30, items: quotation.items.map((it) => ({ ...it })) });
+    await api.dealQuotations.submit(quotation.id);
+    await asRole('sales_manager');
+    const issued = (await api.dealQuotations.approve(quotation.id, {})).quotation;
+    expect(issued.docStatus).toBe('ISSUED');
+
+    await asRole('sales');
+    const { quotation: revision } = await api.dealQuotations.createRevision(issued.id, {});
+    await api.dealQuotations.submit(revision.id);
+    await asRole('sales_manager');
+    const reissued = (await api.dealQuotations.approve(revision.id, {})).quotation;
+
+    expect(reissued.docStatus).toBe('ISSUED');
+    expect((await api.dealQuotations.get(issued.id)).quotation.docStatus).toBe('SUPERSEDED');
+    const events = (await eventsOf(ticketId)).filter((e) => e.kind === 'DEAL_QUOTATION_SUPERSEDED');
+    expect(events.map((e) => e.message)).toEqual([`ใบ ${issued.number} ถูกแทนที่ด้วย ${reissued.number}`]);
   });
 });

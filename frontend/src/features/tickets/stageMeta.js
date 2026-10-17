@@ -33,10 +33,17 @@ export const GATE_LABEL = {
  * the backend, so this map only supplies words for the ones that have it.
  */
 export const AUTO_STAGE_HINT = {
-  ORDER_RECEIVED:   'อัปเดตอัตโนมัติเมื่อฝ่ายขายยืนยันใบสั่งซื้อของดีลนี้',
-  DEPOSIT_RECEIVED: 'อัปเดตอัตโนมัติเมื่อฝ่ายบัญชียืนยันรับมัดจำของดีลนี้',
-  PROCUREMENT:      'อัปเดตอัตโนมัติเมื่อฝ่ายนำเข้าออกใบขอซื้อ (IR) ของดีลนี้',
-  CLOSED_PAID:      'อัปเดตอัตโนมัติเมื่อฝ่ายบัญชียืนยันรับเงินครบของดีลนี้',
+  // Operational — a transition on the deal itself.
+  ORDER_RECEIVED:    'อัปเดตอัตโนมัติเมื่อฝ่ายขายยืนยันใบสั่งซื้อของดีลนี้',
+  DEPOSIT_RECEIVED:  'อัปเดตอัตโนมัติเมื่อฝ่ายบัญชียืนยันรับมัดจำของดีลนี้',
+  PROCUREMENT:       'อัปเดตอัตโนมัติเมื่อฝ่ายนำเข้าออกใบขอซื้อ (IR) ของดีลนี้',
+  CLOSED_PAID:       'อัปเดตอัตโนมัติเมื่อฝ่ายบัญชียืนยันรับเงินครบของดีลนี้',
+  // Document-driven (owner ruling 2026-10-16) — a quotation addressed to that party. Each names
+  // the DOCUMENT rather than a department, because unlike the four above the way in is something
+  // this rep does themselves: the stage arrives when they quote that party.
+  QUOTE_DESIGN_SIDE: 'อัปเดตอัตโนมัติเมื่อสร้างใบเสนอราคาถึงผู้ออกแบบของดีลนี้',
+  QUOTE_OWNER:       'อัปเดตอัตโนมัติเมื่อสร้างใบเสนอราคาถึงเจ้าของโครงการของดีลนี้',
+  QUOTE_BUYER:       'อัปเดตอัตโนมัติเมื่อสร้างใบเสนอราคาถึงผู้ซื้อ / ผู้รับเหมาของดีลนี้',
 };
 
 export const LOST_REASON_LABEL = {

@@ -276,6 +276,58 @@ class DealQuotationPricingRequestRevisionIntegrationTest extends AbstractPostgre
         assertThat(quotationService.get(source.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.ISSUED);
     }
 
+    /**
+     * <b>Owner ruling 2026-10-17: a revision CARRIES the parent's discount forward.</b>
+     *
+     * <p>Asked directly, because {@code .design/quote-stage-gates} D-5 had specified the opposite
+     * ("lines are copied at the CEO-approved price with discount ZERO") and cited the 2026-08-13
+     * reissue-through-CEO-chain ruling for it. That ruling governs the pricing-request chain and
+     * says nothing about {@code toNewItemFromDto}; the owner chose carry-forward, which is what
+     * {@code DealQuotationService#insertCopyOf} already did — "a copy, not a recalculation".
+     *
+     * <p>Pinned here because the ruling promotes that from incidental to REQUIRED. The sibling test
+     * above would already catch zeroing, but only sideways: it asserts
+     * {@code priceChangedFromCeo == false}, which goes red on a zeroed discount merely because this
+     * fixture's CEO decision happens to carry 10%/5%. An assertion that depends on the fixture's
+     * numbers being non-zero is not a statement of the rule — this one names it.
+     *
+     * <p>Why carry-forward cannot ratchet, which is the hazard D-5 was guarding against: the
+     * comparison baseline is the CEO's OWN decision item ({@code pricing_decision_item.discount_pct},
+     * via the {@code ceo_*} columns — see {@code DealQuotationRepository#priceChangedFromCeo}), never
+     * the parent quotation. So an already-approved discount reads "unchanged" and ผจก.ขาย may
+     * approve, while DEEPENING it reads "changed" and meets {@code requireCeoApprovalIfChanged}'s
+     * 403 — which {@code revisionDraft_changingAnItemPriceFromTheCeos_requiresCeoApproval} pins.
+     * Version 5 therefore cannot quietly hold a discount nobody approved.
+     */
+    @Test
+    void createRevision_carriesTheCeoApprovedDiscountForward_notZero() {
+        DealQuotationDto source = issuedQuotation();
+        // The fixture's CEO decision prices both lines WITH a discount; a copy that zeroed it would
+        // be a different offer to the customer, not a new version of the same one.
+        assertThat(source.items()).as("fixture must carry a non-zero discount or this proves nothing")
+            .anySatisfy(item -> assertThat(item.discountPct()).isNotNull().isNotEqualByComparingTo(BigDecimal.ZERO));
+
+        DealQuotationDto revision = quotationService.createRevision(source.id(), salesActor);
+
+        assertThat(revision.items()).hasSameSizeAs(source.items());
+        for (int i = 0; i < revision.items().size(); i++) {
+            DealQuotationItemDto child = revision.items().get(i);
+            DealQuotationItemDto parent = source.items().get(i);
+            assertThat(child.discountPct()).as("row %d discountPct", i)
+                .isEqualByComparingTo(parent.discountPct());
+            // The whole priced row travels, not just the discount field — net unit price and line
+            // amount are what the customer actually reads.
+            assertThat(child.unitPrice()).as("row %d unitPrice", i).isEqualByComparingTo(parent.unitPrice());
+            assertThat(child.netUnitPrice()).as("row %d netUnitPrice", i)
+                .isEqualByComparingTo(parent.netUnitPrice());
+            assertThat(child.lineAmount()).as("row %d lineAmount", i)
+                .isEqualByComparingTo(parent.lineAmount());
+        }
+        // And the consequence that makes the ruling workable: no new CEO pricing decision is needed,
+        // so ผจก.ขาย can approve this version (D-1's approval split).
+        assertThat(revision.items()).allSatisfy(item -> assertThat(item.priceChangedFromCeo()).isFalse());
+    }
+
     @Test
     void createRevision_ofRevisionRequested_succeeds_andIssuingTheRevisionSupersedesIt() {
         DealQuotationDto source = issuedQuotation();

@@ -84,8 +84,18 @@ public class DealQuotationRepository {
     /** Serializes every mutating operation this feature performs against a given deal, against
      * each other. Mirrors {@code CustomerQuotationRepository.lockPricingRequest}'s idiom, keyed on
      * the ticket id instead — this feature has no pricing-request row to lock on. */
+    /** Two-int-key overload: its own keyspace, separate from the single-bigint locks every
+     * pricing-request locker uses (CustomerQuotationRepository, PricingRequestRepository,
+     * PricingDecisionRepository, FactoryQuoteRepository), so a ticket id can never alias a
+     * pricing-request id. Before 2026-10-17 no transaction held both, so the aliasing was harmless;
+     * createFromPricingRequest and approveAndIssuePricingRequestOrigin now take PR-then-ticket, and
+     * with crossed ids the shared keyspace deadlocked. Ticket ids are in the hundreds, so the int
+     * cast is safe for the life of this system. Class id differs from PDFT/FACT. */
+    private static final int TICKET_LOCK_CLASS_ID = 0x54494B54; // "TIKT", arbitrary but stable
+
     public void lockTicket(long ticketId) {
-        jdbc.query("SELECT pg_advisory_xact_lock(:id)", Map.of("id", ticketId), (rs, rowNum) -> 0);
+        jdbc.query("SELECT pg_advisory_xact_lock(:classId, CAST(:id AS int))",
+            Map.of("classId", TICKET_LOCK_CLASS_ID, "id", ticketId), (rs, rowNum) -> 0);
     }
 
     /** M3: whether {@code parentQuotationId} already has a child revision sitting open
@@ -368,10 +378,13 @@ public class DealQuotationRepository {
      * invariant ("one live quotation per pricing request") is scoped to the pricing request, not
      * the ticket. Still race-safe (two concurrent escape-hatch calls for the SAME pricing request
      * fully serialise on that lock), just not via the ticket lock this Javadoc used to imply
-     * unconditionally. The two origins can never collide on a shared {@code ticket_id} either way:
-     * each mints its own base number from its own {@link #nextQuotationCode()} call at first
-     * creation, so widening this predicate only ever WIDENS the MAX() scan, never merges two
-     * unrelated numbering families.
+     * unconditionally.
+     *
+     * <p><b>Owner ruling 2026-10-17:</b> the base number belongs to the DEAL
+     * ({@link #findDealBaseNumber}), so both origins deliberately SHARE one family and this MAX() is
+     * their single counter — which is why the predicate spans both. This Javadoc previously asserted
+     * the opposite ("each mints its own base number … never merges two unrelated numbering
+     * families"); that premise is gone. See {@code .design/quote-stage-gates/VERSIONING.md}.
      */
     public int nextRevisionNo(long ticketId, String baseNumber) {
         Integer max = jdbc.queryForObject("""
@@ -385,6 +398,43 @@ public class DealQuotationRepository {
                 .addValue("basePrefix", baseNumber + "-%"),
             Integer.class);
         return (max == null ? 0 : max) + 1;
+    }
+
+    /**
+     * The base number this deal's quotation family is on, or empty when it has none yet — the
+     * owner's 2026-10-17 ruling that the base number belongs to the DEAL.
+     *
+     * <p>Read from the NEWEST row by {@code quotation_id} (creation order), via the same
+     * {@link #baseNumber} formula every other caller uses, so legacy bare numbers and suffixed ones
+     * both resolve with no special-casing.
+     *
+     * <p>Newest rather than "the only one" because a deal CAN already hold two families, from when
+     * every create minted its own — one does in prod (ticket 114). Taking the newest converges
+     * those forward instead of throwing; a hard assertion here would 500 the next create on them.
+     *
+     * <p>Origin scope matches {@link #nextRevisionNo} exactly. A legacy row ({@code origin IS NULL})
+     * must NOT seed the family — it sits outside that counter's scan, so adopting its number would
+     * hand the deal a family the counter cannot see.
+     */
+    public Optional<String> findDealBaseNumber(long ticketId) {
+        List<String> newest = jdbc.query("""
+            SELECT number, quotation_revision_no FROM sales.quotation
+             WHERE ticket_id = :ticketId AND origin IN ('DEAL_DIRECT', 'PRICING_REQUEST')
+             ORDER BY quotation_id DESC
+             LIMIT 1
+            """,
+            new MapSqlParameterSource().addValue("ticketId", ticketId),
+            (rs, rowNum) -> baseNumber(rs.getString("number"), rs.getInt("quotation_revision_no")));
+        return newest.isEmpty() ? Optional.empty() : Optional.of(newest.get(0));
+    }
+
+    /**
+     * The deal's family, or a freshly minted base when it has none — the one place the
+     * "continue, else mint" decision is made, so {@code DealQuotationService#create} and
+     * {@code #createFromPricingRequest} cannot drift on it. Callers must hold {@link #lockTicket}.
+     */
+    public String dealBaseNumberOrMint(long ticketId) {
+        return findDealBaseNumber(ticketId).orElseGet(this::nextQuotationCode);
     }
 
     /**
@@ -592,8 +642,9 @@ public class DealQuotationRepository {
         // origin: 'DEAL_DIRECT' (every call site before this feature) or 'PRICING_REQUEST'
         // (DealQuotationService#createFromPricingRequest). recipientType/recipientLabel: for a NEW
         // DEAL_DIRECT document (DealQuotationService#create, slice 2 S2-B1) the rep's DESIGNER/OWNER/
-        // BUYER and its Thai label; 'UNSPECIFIED'/null via the short constructor below (revisions
-        // and reorders — see #insertCopyOf's callers); for PRICING_REQUEST, the SOURCE pricing
+        // BUYER and its Thai label; for a revision or reorder, the SOURCE document's own recipient
+        // copied verbatim (#insertCopyOf) — never defaulted, since the short constructor that used
+        // to supply 'UNSPECIFIED' here is deleted; for PRICING_REQUEST, the SOURCE pricing
         // request's own recipientType/recipientLabel (ผู้ออกแบบ/เจ้าของ/ผู้ซื้อ), carried over so
         // a later slice's issue() can reuse TicketService#advanceStageForCustomerQuotationIssue's
         // existing recipient->stage mapping unchanged. pricingRequestId/pricingDecisionId: the
@@ -610,31 +661,13 @@ public class DealQuotationRepository {
         // already trimmed and checked by DealQuotationService, null where there is none to carry.
         String orderedByPhone, String orderedByEmail) {
 
-        /** The pre-GLA-123 shape. Defaults origin to {@code DEAL_DIRECT}, recipientType to
-         * {@code UNSPECIFIED} (this class's own historic hardcoded literal), and everything else to
-         * null. Since slice 2, {@code DealQuotationService#create} no longer uses it (it passes the
-         * rep's recipient through the canonical constructor). */
-        public InsertDraftParams(
-            long ticketId, String number, long createdById, long salesRepId,
-            String customerName, String customerAddress, String customerTaxId, String customerPhone,
-            ContactSnapshot contact,
-            String projectName, String deptCode, String unitCode, LocalDate offerDate,
-            Integer depositPercent, String remainderMode, Integer creditDays, Integer validityDays,
-            String validityMode, LocalDate validityUntil,
-            String customerNotes, String priceMode, String documentLanguage, String currency,
-            Long printedByDisplayId, Long salesRepDisplayId,
-            boolean omitContactHonorific, String fullPaymentTerm,
-            BigDecimal subtotal, Long parentQuotationId, int revisionNo,
-            Long derivedFromQuotationId,
-            List<NewItem> items, String orderedByName, String orderedByPhone, String orderedByEmail) {
-            this(ticketId, number, createdById, salesRepId, customerName, customerAddress, customerTaxId,
-                customerPhone, contact, projectName, deptCode, unitCode, offerDate, depositPercent,
-                remainderMode, creditDays, validityDays, validityMode, validityUntil, customerNotes,
-                priceMode, documentLanguage, currency, printedByDisplayId, salesRepDisplayId,
-                omitContactHonorific, fullPaymentTerm, subtotal, parentQuotationId, revisionNo,
-                derivedFromQuotationId, items, "DEAL_DIRECT", "UNSPECIFIED", null, null, null,
-                orderedByName, orderedByPhone, orderedByEmail);
-        }
+        // The pre-GLA-123 convenience constructor is GONE (owner ruling 2026-10-16, "remove the
+        // unspecified option") — it was the last code that could write 'UNSPECIFIED', and had no
+        // caller left once every create path stated its own recipient.
+        //
+        // UNSPECIFIED survives READ-ONLY: V52 defaulted pre-existing rows to it and they are served
+        // raw, while both write paths refuse it. Do not reintroduce a constructor that supplies a
+        // recipient by default — a quotation is addressed to somebody or it is not written.
     }
 
     @Transactional
@@ -1404,42 +1437,39 @@ public class DealQuotationRepository {
             """, Map.of("id", quotationId));
     }
 
-    /** One sibling {@link #supersedeOtherApprovedOnTicket} actually flipped — {@code number} is
+    /** One sibling {@link #supersedeOtherLiveOnTicket} actually flipped — {@code number} is
      * read back in the SAME statement (a data-modifying CTE, same device as {@link #approve}'s
      * own approver-snapshot insert) so the caller never needs a second round trip just to name it
      * in a ticket event. */
     public record SupersededSibling(long id, String number) {}
 
     /**
-     * Owner ruling (2026-09-19): a deal may hold only ONE APPROVED {@code DEAL_DIRECT} quotation
-     * at a time — approving {@code approvedId} supersedes every OTHER {@code DEAL_DIRECT}
-     * quotation on the SAME {@code ticketId} that is currently {@code APPROVED}. Called from
-     * {@code DealQuotationService#approve} in the SAME transaction as the compare-and-set that put
-     * {@code approvedId} into {@code APPROVED}, under the SAME ticket advisory lock
-     * {@link #lockTicket} already serialises {@link #hasOpenRevision}/{@code createReorder}
-     * against — see that method's own Javadoc for why two concurrent approvals on the same ticket
-     * cannot both end APPROVED.
+     * Owner ruling (2026-10-17, VERSIONING.md B-4): the unit of "one live offer" is the DEAL, not
+     * the origin or the recipient. Approving/issuing {@code approvedId} supersedes every OTHER live
+     * quotation on the SAME {@code ticketId}: a {@code DEAL_DIRECT} row that is {@code APPROVED},
+     * or a {@code PRICING_REQUEST} row that is {@code ISSUED} or {@code REVISION_REQUESTED} (the
+     * same live vocabulary {@link #supersede} uses per origin). Supersedes the 2026-09-19 rule,
+     * which covered {@code DEAL_DIRECT} only.
      *
-     * <p>Deliberately a SEPARATE rule from {@link #supersede}'s ancestor-chain walk, not a
-     * replacement for it: this sweeps every APPROVED sibling regardless of lineage (covers "two
-     * independent first-issue quotations" and "revise an approved parent" alike), while the
-     * ancestor walk still climbs a REJECTED/DRAFT lineage {@code parentQuotationId} chain that
-     * this sweep's {@code doc_status = 'APPROVED'} predicate does not reach (those ancestors are
-     * DRAFT, not APPROVED). Calling both is safe and not double-counted: a row this sweep already
-     * flipped simply no-ops under {@link #supersede}'s own compare-and-set when the ancestor walk
-     * reaches it too.
+     * <p>{@code ACCEPTED} is deliberately not live: a recorded customer outcome is a fact about the
+     * past, not an offer still on the table. Legacy {@code origin IS NULL} rows stay out too.
+     * Called in the SAME transaction as the compare-and-set that put {@code approvedId} live,
+     * under the {@link #lockTicket} advisory lock, so two concurrent approvals cannot both end live.
      *
-     * <p>Existing data is NOT rewritten: this only ever runs going forward, from the next
-     * {@code approve()} call — any ticket that already holds two or more APPROVED {@code
-     * DEAL_DIRECT} rows from before this rule shipped stays exactly as it is until its next
-     * approval.
+     * <p>Deliberately separate from {@link #supersede}'s ancestor-chain walk: this sweeps by deal
+     * regardless of lineage, the walk climbs a DRAFT parent chain this predicate does not reach.
+     * Calling both is safe — a row this sweep already flipped no-ops under the walk.
+     *
+     * <p>Existing data is NOT rewritten: this only runs going forward, from the next approval — a
+     * ticket already holding two or more live rows stays as it is until then.
      */
-    public List<SupersededSibling> supersedeOtherApprovedOnTicket(long ticketId, long approvedId) {
+    public List<SupersededSibling> supersedeOtherLiveOnTicket(long ticketId, long approvedId) {
         return jdbc.query("""
             UPDATE sales.quotation
                SET doc_status = 'SUPERSEDED', updated_at = now()
-             WHERE ticket_id = :ticketId AND origin = 'DEAL_DIRECT' AND doc_status = 'APPROVED'
-               AND quotation_id <> :approvedId
+             WHERE ticket_id = :ticketId AND quotation_id <> :approvedId
+               AND ((origin = 'DEAL_DIRECT' AND doc_status = 'APPROVED')
+                    OR (origin = 'PRICING_REQUEST' AND doc_status IN ('ISSUED', 'REVISION_REQUESTED')))
             RETURNING quotation_id, number
             """,
             new MapSqlParameterSource().addValue("ticketId", ticketId).addValue("approvedId", approvedId),

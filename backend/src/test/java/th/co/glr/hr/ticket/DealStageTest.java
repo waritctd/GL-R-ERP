@@ -271,13 +271,36 @@ class DealStageTest {
      * by hand as part of the normal flow.
      */
     @Test
-    void autoAdvancedIsExactlyTheFourFactGatedStages() {
+    void autoAdvancedIsExactlyTheSevenFactGatedStages() {
+        // In DealStage.ORDER sequence, not grouped by kind: the three quote stages sit in the
+        // middle of the pipeline, between SPEC_APPROVED and the operational four.
         assertThat(DealStage.ORDER.stream().filter(DealStage::isAutoAdvanced).toList())
-            .containsExactly(DealStage.ORDER_RECEIVED, DealStage.DEPOSIT_RECEIVED,
+            .containsExactly(DealStage.QUOTE_DESIGN_SIDE, DealStage.QUOTE_OWNER,
+                DealStage.QUOTE_BUYER, DealStage.ORDER_RECEIVED, DealStage.DEPOSIT_RECEIVED,
                 DealStage.PROCUREMENT, DealStage.CLOSED_PAID);
         assertThat(DealStage.isAutoAdvanced(DealStage.DELIVERY_SCHEDULING)).isFalse();
         assertThat(DealStage.isAutoAdvanced("NOT_A_STAGE")).isFalse();
     }
+
+    /**
+     * Owner ruling 2026-10-16: a quote stage is reached by addressing a quotation to that
+     * recipient, never by hand — so the three of them are system-driven in exactly the sense
+     * {@link DealStage#isAutoAdvanced} reports.
+     *
+     * <p>Membership here is load-bearing rather than cosmetic, which is why this is its own test:
+     * the catalog serves the flag per stage, and the deal page's one-click เลื่อนไป is gated on
+     * {@code !next.auto}. So these three entries are what withdraw the manual advance from the
+     * stage panel's inline button, the ⋯ menu, the stage picker and the page's sticky CTA at once.
+     * The refusal that makes it true server-side is
+     * {@code TicketService.requireStageFactsHold}'s own quote-stage gate.
+     */
+    @Test
+    void theThreeQuoteStagesAreAutoAdvanced() {
+        assertThat(DealStage.isAutoAdvanced(DealStage.QUOTE_DESIGN_SIDE)).isTrue();
+        assertThat(DealStage.isAutoAdvanced(DealStage.QUOTE_OWNER)).isTrue();
+        assertThat(DealStage.isAutoAdvanced(DealStage.QUOTE_BUYER)).isTrue();
+    }
+
 
     private static void assertNoNoteAlongPath(List<String> path) {
         for (int i = 0; i + 1 < path.size(); i++) {

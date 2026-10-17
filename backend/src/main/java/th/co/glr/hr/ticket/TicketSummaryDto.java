@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.Set;
 
 public record TicketSummaryDto(
     long id,
@@ -135,7 +136,20 @@ public record TicketSummaryDto(
      * deal page's CTA cascade and the {@code /quotations/new} deal picker key on it. See
      * {@link LiveDirectQuotationDto} for the one "live" definition.
      */
-    LiveDirectQuotationDto liveDirectQuotation
+    LiveDirectQuotationDto liveDirectQuotation,
+    /**
+     * The recipients this deal has a quotation addressed to (a subset of
+     * {@code QuotationRecipient.ADDRESSABLE}, plus legacy {@code UNSPECIFIED}); never null, empty
+     * when nobody has been quoted. Filled by {@code TicketRepository#enrichSummary}.
+     *
+     * <p>The fact behind the three quote stages (owner ruling 2026-10-16). It rides on the summary
+     * rather than being read inside the gate because {@code TicketService#stageDecisions} loops
+     * every gate over all fifteen stages — a repository call in a gate turns one query into fifteen,
+     * which {@code TicketActionsQueryCountIntegrationTest}'s statement budget catches. Carried by
+     * the statement that already fetches {@link #commissionRecorded} and
+     * {@link #liveDirectQuotation}, so it costs no extra round trip.
+     */
+    Set<String> quotedRecipients
 ) {
     /** The shape before the derived payment-due fields existed: they default to "no structured term". */
     public TicketSummaryDto(
@@ -164,7 +178,7 @@ public record TicketSummaryDto(
             nextFollowUpAt, paymentStage, amountPayable, amountPaid, amountOutstanding, overdue,
             closeConfirmedAt, closeConfirmedByName, invoiceOnFile, cancelReason, cancelledAt,
             winProbabilityOverride, designerName, ownerName, buyerName, stale, commissionRecorded,
-            reopenedAt, reopenCount, quotationOnly, null, null, null, null);
+            reopenedAt, reopenCount, quotationOnly, null, null, null, null, Set.of());
     }
 
     /**
@@ -201,7 +215,7 @@ public record TicketSummaryDto(
             closeConfirmedAt, closeConfirmedByName, invoiceOnFile, cancelReason, cancelledAt,
             winProbabilityOverride, designerName, ownerName, buyerName, stale, commissionRecorded,
             reopenedAt, reopenCount, quotationOnly, paymentDueDate, paymentDueBasis,
-            paymentDueCreditDays, null);
+            paymentDueCreditDays, null, Set.of());
     }
 
     /**
@@ -299,7 +313,7 @@ public record TicketSummaryDto(
             amountOutstanding, overdue, closeConfirmedAt, closeConfirmedByName, invoiceOnFile,
             cancelReason, cancelledAt, winProbabilityOverride, designerName, ownerName, buyerName, stale,
             commissionRecorded, reopenedAt, reopenCount, quotationOnly, paymentDueDate, paymentDueBasis,
-            paymentDueCreditDays, liveDirectQuotation);
+            paymentDueCreditDays, liveDirectQuotation, quotedRecipients);
     }
 
     /**

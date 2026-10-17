@@ -456,7 +456,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     // ⚠️ Owner ruling 2026-09-19 (INVERTS this section's own former header comment, which said
     // "the SOURCE stays APPROVED, never superseded, neither on clone creation nor once the clone
     // itself is submitted and approved" -- that second half is now FALSE): a deal may hold only
-    // ONE APPROVED DEAL_DIRECT quotation at a time. Clone CREATION itself still leaves the source
+    // ONE live quotation at a time (since 2026-10-17 the sweep is origin-agnostic: DEAL_DIRECT
+    // APPROVED, PRICING_REQUEST ISSUED/REVISION_REQUESTED). Clone CREATION itself still leaves the source
     // untouched (still APPROVED) -- that half is unchanged, see the first test below -- but once
     // the CLONE ITSELF reaches APPROVED, DealQuotationService#approve's same-ticket sweep
     // supersedes the source then, exactly as approving a revision or a second, wholly independent
@@ -504,7 +505,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
      * now be SUPERSEDED once the clone is itself approved, not stay APPROVED as this test
      * originally asserted. Still APPROVED while the clone is merely DRAFT or PENDING_APPROVAL —
      * this is the entire point of the sweep firing at APPROVAL time, not at clone-creation time.
-     * Mutation-checked: temporarily made {@code DealQuotationRepository#supersedeOtherApprovedOnTicket}
+     * Mutation-checked: temporarily made {@code DealQuotationRepository#supersedeOtherLiveOnTicket}
      * a no-op and confirmed this exact test (and the two-independent-quotations test below) went
      * red, then restored — see the PR body for the run.
      */
@@ -526,7 +527,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(approvedReorder.docStatus()).isEqualTo(QuotationStatus.APPROVED);
 
         // The moment of truth: approving the CLONE now supersedes the SOURCE -- a deal may hold
-        // only ONE APPROVED DEAL_DIRECT quotation, and the clone is the one just approved.
+        // only ONE live quotation (origin-agnostic sweep), and the clone is the one just approved.
         DealQuotationDto reloadedSource = quotationService.get(source.id(), salesActor);
         assertThat(reloadedSource.docStatus()).isEqualTo(QuotationStatus.SUPERSEDED);
         // Exactly ONE quotation on this ticket is APPROVED -- the clone.
@@ -626,9 +627,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     /**
      * A PCR/customerquotation row on the SAME ticket ({@code origin} NULL, {@code
      * pricing_request_id} set — the legacy pricing-chain flow's own shape, V74/V165's own header)
-     * must never be touched by this sweep: {@code supersedeOtherApprovedOnTicket}'s WHERE clause
-     * filters {@code origin = 'DEAL_DIRECT'} explicitly, so a PCR-chain row is invisible to it
-     * regardless of ticket or status. Inserted directly via SQL (no CustomerQuotationService
+     * must never be touched by this sweep: {@code supersedeOtherLiveOnTicket}'s WHERE clause
+     * matches neither branch of its origin predicate for a legacy PCR-chain row ({@code origin IS
+     * NULL}), so that row is invisible to it regardless of ticket or status. Inserted directly via SQL (no CustomerQuotationService
      * wiring in this suite) — the minimal legal row this table's own constraints allow.
      */
     @Test
@@ -853,7 +854,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     /** The general invariant (owner ruling 2026-09-19), checked after a SEQUENCE of approvals
      * spanning every mechanism this ticket can mint a sibling through -- a second first-issue
      * quotation, a clone, and a revision of the clone -- rather than any single pairwise case:
-     * {@code count(APPROVED DEAL_DIRECT quotations WHERE ticket_id = X) <= 1} always holds. */
+     * {@code count(APPROVED DEAL_DIRECT quotations WHERE ticket_id = X) <= 1} always holds (the
+     * sweep itself is origin-agnostic since 2026-10-17; this test exercises its DEAL_DIRECT arm). */
     @Test
     void createReorder_invariant_atMostOneApprovedDealDirectQuotationPerTicket_acrossMixedApprovals() {
         DealQuotationDto first = createSubmittedApproved(ticketId, salesActor, salesManagerActor);
