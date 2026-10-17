@@ -21,9 +21,9 @@ Both halves were already half-built and then left:
   2026-09-30). Its two hook points were deliberately left empty when stage ownership was handed to
   the `deal-route-staging` work, which never filled them; this work filled them.
 - Versioning was believed switched **off** for quotations that come out of a คำขอราคา
-  (`requireStatusMachineEnabled`: "จะเปิดใช้งานในระยะถัดไป"). **Corrected 2026-10-17, see "D-5 as
+  (the guard then called `requireStatusMachineEnabled`, now `requireReorderAllowedForOrigin`: "จะเปิดใช้งานในระยะถัดไป"). **Corrected 2026-10-17, see "D-5 as
   verified against the code" below:** `createRevision` no longer calls
-  `requireStatusMachineEnabled` at all; a PRICING_REQUEST-origin quotation can already be revised,
+  that guard at all; a PRICING_REQUEST-origin quotation can already be revised,
   and is already numbered deal-scoped. What remained undone was narrower, and one piece of it
   contradicts behaviour the code implements on purpose.
 
@@ -264,12 +264,12 @@ the difference changes the size of the work and raises one question only the own
 
 **Already built — do not rebuild:**
 
-- **PCR-origin quotations are already revisable.** `createRevision` (`DealQuotationService:2342`)
-  does not call `requireStatusMachineEnabled`; it has an explicit "PR B" branch admitting
+- **PCR-origin quotations are already revisable.** `createRevision`
+  does not call the reorder guard; it has an explicit "PR B" branch admitting
   ISSUED/REVISION_REQUESTED PRICING_REQUEST rows, gated to the **owning rep** via
   `requireOutcomeAccess` — deliberately narrower than `requireEditAccessForQuotation`, on the
   reasoning that the manager's job is to approve a revision, not author it. The only remaining
-  caller of `requireStatusMachineEnabled` is `createReorder` (`:2404`), which is exactly where this
+  caller of the guard — now named `requireReorderAllowedForOrigin` — is `createReorder`, which is exactly where this
   design wants it.
 - **Deal-scoped numbering** — `insertCopyOf` (see the corrected constraint above).
 - **The legacy bare-number base case** — `DealQuotationRepository.baseNumber` handles both eras with

@@ -895,8 +895,8 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
     }
 
     /** Mirror direction (owner ruling: "make them consistent") — REJECTED is unreachable for a
-     * PRICING_REQUEST-origin row in S1 (requireReorderAllowedForOrigin refuses submit/approve/
-     * reject/revise/reorder for this origin), so this forces it via SQL to prove
+     * PRICING_REQUEST-origin row in S1 (the S1 guard refused submit/approve/reject/revise/reorder for this
+     * origin; today only createReorder is refused, via requireReorderAllowedForOrigin), so this forces it via SQL to prove
      * hasLivePricingRequestQuotation's own predicate is ALREADY correct for the day S2 makes it
      * reachable, rather than leaving an untested guess. */
     @Test
