@@ -129,8 +129,8 @@ class DealRouteGateIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void ownerDirect_stillReachesTheStagesOnItsRoute() {
         long ticketId = dealAt(EntryChannel.OWNER_DIRECT, DealStage.PRESENTATION);
-        quotationOnDeal(ticketId, QuotationRecipient.OWNER);
-        quotationOnDeal(ticketId, QuotationRecipient.BUYER);
+        QuoteStageFixtures.issuedQuotationOnDeal(jdbc, ticketId, ownerRepId, QuotationRecipient.OWNER);
+        QuoteStageFixtures.issuedQuotationOnDeal(jdbc, ticketId, ownerRepId, QuotationRecipient.BUYER);
 
         for (String onRoute : List.of(DealStage.SPEC_APPROVED, DealStage.QUOTE_OWNER,
                 DealStage.OWNER_SIGNOFF, DealStage.AWAITING_BUYER, DealStage.QUOTE_BUYER,
@@ -159,9 +159,9 @@ class DealRouteGateIntegrationTest extends AbstractPostgresIntegrationTest {
         // corrected at all since GLA-156, which is precisely why the ROUTE must refuse nothing
         // here. Keeping the fixture lets the test still prove the route refuses nothing, end to
         // end, instead of stopping at the first unrelated gate.
-        quotationOnDeal(ticketId, QuotationRecipient.DESIGNER);
-        quotationOnDeal(ticketId, QuotationRecipient.OWNER);
-        quotationOnDeal(ticketId, QuotationRecipient.BUYER);
+        QuoteStageFixtures.issuedQuotationOnDeal(jdbc, ticketId, ownerRepId, QuotationRecipient.DESIGNER);
+        QuoteStageFixtures.issuedQuotationOnDeal(jdbc, ticketId, ownerRepId, QuotationRecipient.OWNER);
+        QuoteStageFixtures.issuedQuotationOnDeal(jdbc, ticketId, ownerRepId, QuotationRecipient.BUYER);
 
         assertNoStageIsOffRoute(decisionsFor(ticketId));
         for (String stage : List.of(DealStage.QUOTE_DESIGN_SIDE, DealStage.QUOTE_OWNER,
@@ -188,9 +188,9 @@ class DealRouteGateIntegrationTest extends AbstractPostgresIntegrationTest {
             .isEqualTo(allowedStages(decisionsFor(unspecified)));
 
         // The walk does need it, for the reason given in the UNSPECIFIED test above.
-        quotationOnDeal(designerLed, QuotationRecipient.DESIGNER);
-        quotationOnDeal(designerLed, QuotationRecipient.OWNER);
-        quotationOnDeal(designerLed, QuotationRecipient.BUYER);
+        QuoteStageFixtures.issuedQuotationOnDeal(jdbc, designerLed, ownerRepId, QuotationRecipient.DESIGNER);
+        QuoteStageFixtures.issuedQuotationOnDeal(jdbc, designerLed, ownerRepId, QuotationRecipient.OWNER);
+        QuoteStageFixtures.issuedQuotationOnDeal(jdbc, designerLed, ownerRepId, QuotationRecipient.BUYER);
         for (String stage : List.of(DealStage.QUOTE_DESIGN_SIDE, DealStage.QUOTE_OWNER,
                 DealStage.OWNER_SIGNOFF, DealStage.AWAITING_BUYER, DealStage.QUOTE_BUYER)) {
             logAnActivityAndFollowUp(designerLed);
@@ -213,7 +213,7 @@ class DealRouteGateIntegrationTest extends AbstractPostgresIntegrationTest {
     void aDealSittingOnAnOffRouteStage_canStillMoveForward() {
         long ticketId = dealAt(EntryChannel.DESIGNER_LED, DealStage.QUOTE_DESIGN_SIDE);
         tickets.updateEntryChannel(ticketId, EntryChannel.OWNER_DIRECT); // the correction
-        quotationOnDeal(ticketId, QuotationRecipient.OWNER);
+        QuoteStageFixtures.issuedQuotationOnDeal(jdbc, ticketId, ownerRepId, QuotationRecipient.OWNER);
 
         assertThat(DealRoute.isOnRoute(EntryChannel.OWNER_DIRECT, stageOf(ticketId))).isFalse();
         assertThat(decision(decisionsFor(ticketId), DealStage.QUOTE_OWNER).allowed()).isTrue();
@@ -393,27 +393,6 @@ class DealRouteGateIntegrationTest extends AbstractPostgresIntegrationTest {
     private static StageDecisionDto decision(List<StageDecisionDto> decisions, String stage) {
         return decisions.stream().filter(d -> d.stage().equals(stage)).findFirst()
             .orElseThrow(() -> new AssertionError("no decision for " + stage));
-    }
-
-    /**
-     * An ISSUED quotation on {@code ticketId} addressed to {@code recipientType} — fixture only,
-     * clearing the D-3 quote-stage fact gate (owner ruling 2026-10-16) so that a test about the
-     * ROUTE is answered by the route and not by a missing document. Inserted directly for the
-     * reason {@code StageFactGateIntegrationTest}'s twin helper gives: {@code DealQuotationService}
-     * would drag the pricing chain into a test about one stage move. Note this writes the row and
-     * nothing else — it never advances the stage, which is what makes it safe to use on a deal
-     * deliberately parked at a particular stage.
-     */
-    private void quotationOnDeal(long ticketId, String recipientType) {
-        jdbc.update("""
-            INSERT INTO sales.quotation (ticket_id, number, issued_by, recipient_type, doc_status)
-            VALUES (:ticketId, :number, :issuedBy, :recipientType, 'ISSUED')
-            """,
-            Map.of(
-                "ticketId", ticketId,
-                "number", "QT-ROUTE-" + ticketId + "-" + recipientType,
-                "issuedBy", ownerRepId,
-                "recipientType", recipientType));
     }
 
     /** A live deal at {@code stage} with {@code channel}, tracking fields current so forward moves are ready. */

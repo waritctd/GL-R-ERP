@@ -1,7 +1,6 @@
 package th.co.glr.hr.dealquotation;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatCode;
 
 import java.time.LocalDate;
 import java.util.List;
@@ -141,8 +140,7 @@ class QuotationCreationStageAdvanceIntegrationTest extends AbstractDealQuotation
     void create_addressedToTheDesignerOnAnOwnerDirectDeal_movesNothing_andStillCreatesTheQuotation() {
         long ticket = deal(salesActor, EntryChannel.OWNER_DIRECT);
 
-        DealQuotationDto created = assertThatCreated(() ->
-            quotationService.create(ticket, draft("DESIGNER"), salesActor));
+        DealQuotationDto created = quotationService.create(ticket, draft("DESIGNER"), salesActor);
 
         assertThat(created.recipientType()).isEqualTo("DESIGNER");
         assertThat(summary(ticket).salesStage()).isEqualTo(DealStage.LEAD_APPROACH);
@@ -156,8 +154,7 @@ class QuotationCreationStageAdvanceIntegrationTest extends AbstractDealQuotation
         long ticket = deal(salesActor, EntryChannel.DESIGNER_LED);
         tickets.updateLifecycle(ticket, DealLifecycle.ON_HOLD);
 
-        DealQuotationDto created = assertThatCreated(() ->
-            quotationService.create(ticket, draft("DESIGNER"), salesActor));
+        DealQuotationDto created = quotationService.create(ticket, draft("DESIGNER"), salesActor);
 
         assertThat(quotationCount(ticket)).isEqualTo(1);
         assertThat(created.recipientType()).isEqualTo("DESIGNER");
@@ -199,14 +196,5 @@ class QuotationCreationStageAdvanceIntegrationTest extends AbstractDealQuotation
         return ticketService.create(new CreateTicketRequest("ดีลจากใบเสนอราคา", "NORMAL", customer.name(),
             customer.id(), projectId, null, null, null, List.of(), LocalDate.now().plusDays(7), true),
             salesActor).summary().id();
-    }
-
-    /** Runs {@code call} and asserts it did not throw, returning what it produced — the "no move,
-     * no throw, document still written" shape both off-route no-ops above assert. */
-    private static DealQuotationDto assertThatCreated(java.util.function.Supplier<DealQuotationDto> call) {
-        DealQuotationDto[] created = new DealQuotationDto[1];
-        assertThatCode(() -> created[0] = call.get()).doesNotThrowAnyException();
-        assertThat(created[0]).isNotNull();
-        return created[0];
     }
 }

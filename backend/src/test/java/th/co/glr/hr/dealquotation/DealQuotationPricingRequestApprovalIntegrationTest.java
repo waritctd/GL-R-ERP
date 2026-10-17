@@ -409,13 +409,11 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
 
     /**
      * D-2 (owner ruling 2026-10-16, superseding their own earlier answer): the stage moves at
-     * CREATION, not approval. This test used to assert the opposite — that the stage was still
-     * anything-but-S4 up to the moment of issue — which is exactly the claim the ruling reverses,
-     * so the pre-issue assertion is inverted rather than dropped.
+     * CREATION, not approval.
      *
-     * <p>The approve-time advance at {@code DealQuotationService}'s issue hook is KEPT (builder's
-     * recommendation): it is idempotent under forward-only, and it still covers a recipient changed
-     * between draft and approval. So S4 must be true both before and after, and the issue hook must
+     * <p>The approve-time advance at {@code DealQuotationService}'s issue hook is kept: it is
+     * idempotent under forward-only, and it still covers a recipient changed between draft and
+     * approval. So S4 must be true both before and after, and the issue hook must
      * not write a second STAGE_CHANGED — which is what "idempotent" has to mean here.
      */
     @Test
@@ -511,15 +509,8 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
 
     @Test
     void expireOverdueQuotations_neverTouchesADealDirectQuotation() {
-        DealQuotationRequests.ItemInput item = new DealQuotationRequests.ItemInput(
-            null, null, null, "Brand A", "Model A", "White", "Matte", "60x60",
-            new BigDecimal("10"), new BigDecimal("0.36"),
-            WastageCalculator.QUANTITY_MODE_PIECES, null, 10, WastageCalculator.WASTAGE_MODE_NONE, null, 1,
-            new BigDecimal("100.00"), BigDecimal.ZERO, "ไทย-สต็อก", 30, 45, null);
-        DealQuotationRequests.UpsertDealQuotationRequest request = new DealQuotationRequests.UpsertDealQuotationRequest(
-            null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30, "หมายเหตุทดสอบ", List.of(item)).withRecipientType("OWNER");
-        DealQuotationDto directDraft = quotationService.create(ticketId, request, salesActor);
-        DealQuotationDto submittedDirect = quotationService.submit(directDraft.id(), salesActor);
+        DealQuotationDto created = quotationService.create(ticketId, directDraft(), salesActor);
+        DealQuotationDto submittedDirect = quotationService.submit(created.id(), salesActor);
         DealQuotationDto approvedDirect = quotationService.approve(
             submittedDirect.id(), new ApproveRequest(null), salesManagerActor);
         assertThat(approvedDirect.docStatus()).isEqualTo(QuotationStatus.APPROVED);
@@ -613,48 +604,10 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
     }
 
-
     // ─────────────────────────────────────────────────────────────────────────────────────
     // B-4 (VERSIONING.md, owner ruling 2026-10-17): one LIVE offer per DEAL, origin-agnostic.
     // Issuing/approving any quotation retires every OTHER live one on the deal.
     // ─────────────────────────────────────────────────────────────────────────────────────
-
-    private DealQuotationDto issuedRound() {
-        return quotationService.approve(submittedQuotation().id(), new ApproveRequest(null), salesManagerActor);
-    }
-
-    private String statusOf(long id) {
-        return jdbc.queryForObject("SELECT doc_status FROM sales.quotation WHERE quotation_id = :id",
-            java.util.Map.of("id", id), String.class);
-    }
-
-    private int rawSeq = 0;
-
-    private long insertRawQuotation(long onTicket, String number, String origin, String status) {
-        return jdbc.queryForObject("""
-            INSERT INTO sales.quotation (ticket_id, number, issued_by, doc_status, origin, total_amount,
-                                         quotation_revision_no, quotation_version)
-            VALUES (:t, :n, :by, :s, :o, 1000.00, 1, :v) RETURNING quotation_id
-            """,
-            new org.springframework.jdbc.core.namedparam.MapSqlParameterSource()
-                .addValue("t", onTicket).addValue("n", number).addValue("by", salesRepId)
-                .addValue("s", status).addValue("o", origin).addValue("v", 900 + rawSeq++),
-            Long.class);
-    }
-
-    private long supersededEventCount(long onTicket, String oldNumber, String newNumber) {
-        return jdbc.queryForObject("""
-            SELECT COUNT(*) FROM sales.ticket_event WHERE ticket_id = :t AND kind = :k AND message = :m
-            """,
-            java.util.Map.of("t", onTicket, "k", th.co.glr.hr.ticket.TicketEventKind.DEAL_QUOTATION_SUPERSEDED,
-                "m", "ใบ " + oldNumber + " ถูกแทนที่ด้วย " + newNumber),
-            Long.class);
-    }
-
-    private long liveCount(String status) {
-        return jdbc.queryForObject("SELECT COUNT(*) FROM sales.quotation WHERE ticket_id = :t AND doc_status = :s",
-            java.util.Map.of("t", ticketId, "s", status), Long.class);
-    }
 
     @Test
     void issue_aSecondRoundsQuotation_supersedesTheFirstIssuedOne_andWritesTheEvent() {
@@ -664,7 +617,7 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
         assertThat(statusOf(first.id())).isEqualTo("SUPERSEDED");
         assertThat(statusOf(second.id())).isEqualTo("ISSUED");
         assertThat(supersededEventCount(ticketId, first.number(), second.number())).isEqualTo(1);
-        assertThat(liveCount("ISSUED")).isEqualTo(1);
+        assertThat(countWithStatus("ISSUED")).isEqualTo(1);
     }
 
     @Test
@@ -705,7 +658,7 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
     @Test
     void approve_ofADirectQuotation_supersedesAnIssuedPricingRouteSibling() {
         long pr = insertRawQuotation(ticketId, "QN-B4-PR", "PRICING_REQUEST", "ISSUED");
-        DealQuotationDto direct = quotationService.create(ticketId, directDraftForFamilyTest(), salesActor);
+        DealQuotationDto direct = quotationService.create(ticketId, directDraft(), salesActor);
         quotationService.submit(direct.id(), salesActor);
         DealQuotationDto approved = quotationService.approve(direct.id(), new ApproveRequest(null), salesManagerActor);
 
@@ -731,8 +684,7 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
 
     @Test
     void issue_neverTouchesALegacyOriginNullRow() {
-        long legacy = insertRawQuotation(ticketId, "QN-B4-LEGACY", "PLACEHOLDER", "ISSUED");
-        jdbc.update("UPDATE sales.quotation SET origin = NULL WHERE quotation_id = :id", java.util.Map.of("id", legacy));
+        long legacy = insertRawQuotation(ticketId, "QN-B4-LEGACY", null, "ISSUED");
         issuedRound();
 
         assertThat(statusOf(legacy)).isEqualTo("ISSUED");
@@ -770,7 +722,7 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
     }
 
     /** Pins "only the LATEST row decides": parent SUPERSEDED by its own revision, child EXPIRED
-     * -> the expiry escape hatch still works. Green before and after the guard. */
+     * -> the expiry escape hatch still works. */
     @Test
     void createFromPricingRequest_whenTheLatestIsAnExpiredRevisionOfASupersededParent_stillAllowed() {
         DealQuotationDto parent = issuedRound();
@@ -798,6 +750,43 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
     // ─────────────────────────────────────────────────────────────────────────────────────
     // Helpers
     // ─────────────────────────────────────────────────────────────────────────────────────
+
+    private DealQuotationDto issuedRound() {
+        return quotationService.approve(submittedQuotation().id(), new ApproveRequest(null), salesManagerActor);
+    }
+
+    private String statusOf(long id) {
+        return jdbc.queryForObject("SELECT doc_status FROM sales.quotation WHERE quotation_id = :id",
+            java.util.Map.of("id", id), String.class);
+    }
+
+    private int rawSeq = 0;
+
+    private long insertRawQuotation(long onTicket, String number, String origin, String status) {
+        return jdbc.queryForObject("""
+            INSERT INTO sales.quotation (ticket_id, number, issued_by, doc_status, origin, total_amount,
+                                         quotation_revision_no, quotation_version)
+            VALUES (:t, :n, :by, :s, :o, 1000.00, 1, :v) RETURNING quotation_id
+            """,
+            new org.springframework.jdbc.core.namedparam.MapSqlParameterSource()
+                .addValue("t", onTicket).addValue("n", number).addValue("by", salesRepId)
+                .addValue("s", status).addValue("o", origin).addValue("v", 900 + rawSeq++),
+            Long.class);
+    }
+
+    private long supersededEventCount(long onTicket, String oldNumber, String newNumber) {
+        return jdbc.queryForObject("""
+            SELECT COUNT(*) FROM sales.ticket_event WHERE ticket_id = :t AND kind = :k AND message = :m
+            """,
+            java.util.Map.of("t", onTicket, "k", th.co.glr.hr.ticket.TicketEventKind.DEAL_QUOTATION_SUPERSEDED,
+                "m", "ใบ " + oldNumber + " ถูกแทนที่ด้วย " + newNumber),
+            Long.class);
+    }
+
+    private long countWithStatus(String status) {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM sales.quotation WHERE ticket_id = :t AND doc_status = :s",
+            java.util.Map.of("t", ticketId, "s", status), Long.class);
+    }
 
     private DealQuotationRequests.UpsertDealQuotationRequest upsertWithValidityDays(DealQuotationDto quotation, int days) {
         List<DealQuotationRequests.ItemInput> items = quotation.items().stream()
@@ -910,20 +899,18 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
      * {@code .design/quote-stage-gates/VERSIONING.md}: the base number belongs to the DEAL, so a
      * second pricing round on the same deal continues the family instead of starting a new one.
      *
-     * <p>Today it does not. {@code createFromPricingRequest} continues a family only on the expiry
-     * escape hatch, and even then it finds the base through
-     * {@code findLatestForPricingRequest(pricingRequestId)} — scoped to ONE request. A second
-     * request is a different request, so the lookup sees none of the first's quotations and falls
-     * through to the fresh-base branch. That is the whole reason a รอบราคาใหม่ costs the rep their
-     * version number, and the only reason.
+     * <p>A lookup scoped to ONE pricing request (the old {@code findLatestForPricingRequest}) would
+     * see none of the first request's quotations on a second request and fall through to a fresh
+     * base, costing the rep their version number on every รอบราคาใหม่. The family is read from the
+     * deal instead.
      *
      * <p>The first quotation is cancelled because a live one blocks a second create. That is the
      * real flow, not a workaround: the rep abandons the document precisely BECAUSE they are going
      * back for a new price, which is the moment the number is currently lost.
      *
      * <p>Prod note (audit 2026-10-17): zero PRICING_REQUEST-origin quotations exist in production,
-     * so this defect has never actually reached a customer — it is latent, and this test is what
-     * stops it shipping the day the route is first used.
+     * so the defect never reached a customer; this test keeps it from shipping the day the route is
+     * first used.
      */
     @Test
     void createFromPricingRequest_aSecondRoundOnTheSameDeal_continuesTheFamily() {
@@ -950,7 +937,7 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
      */
     @Test
     void createFromPricingRequest_afterADirectQuotationWasCancelled_continuesTheSameFamily() {
-        DealQuotationDto direct = quotationService.create(ticketId, directDraftForFamilyTest(), salesActor);
+        DealQuotationDto direct = quotationService.create(ticketId, directDraft(), salesActor);
         String base = DealQuotationRepository.baseNumber(direct.number(), direct.revisionNo());
         quotationService.cancel(direct.id(), new DealQuotationRequests.CancelRequest(null), salesActor);
 
@@ -962,9 +949,8 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
         assertThat(fromRequest.revisionNo()).isEqualTo(2);
     }
 
-    /** A DEAL_DIRECT draft on this class's own deal — the same shape
-     * {@code expireOverdueQuotations_neverTouchesADealDirectQuotation} builds inline. */
-    private DealQuotationRequests.UpsertDealQuotationRequest directDraftForFamilyTest() {
+    /** A DEAL_DIRECT draft on this class's own deal. */
+    private DealQuotationRequests.UpsertDealQuotationRequest directDraft() {
         DealQuotationRequests.ItemInput item = new DealQuotationRequests.ItemInput(
             null, null, null, "Brand A", "Model A", "White", "Matte", "60x60",
             new BigDecimal("10"), new BigDecimal("0.36"),

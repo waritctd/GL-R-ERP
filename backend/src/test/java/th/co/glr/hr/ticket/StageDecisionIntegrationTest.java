@@ -143,25 +143,21 @@ class StageDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void theDealOwner_isNeverOfferedTheMoneyOrImportStages_andIsRefusedOnEachOfThem() {
         long ticketId = readyToAdvanceFrom(DealStage.PRESENTATION);
+        // Sales-gated but fact-gated, so a fresh deal cannot reach them; excluded here and asserted
+        // in StageFactGateIntegrationTest. ORDER_RECEIVED and DELIVERED are fact-gated (Part B); the
+        // three quote stages since the 2026-10-16 ruling, their fact being a quotation addressed to
+        // that recipient, which this deal has none of. They stay in SALES_TARGET_STAGES on purpose:
+        // the refusal is a 409 about a missing document, not a 403 about who the rep is, which is
+        // what the FORBIDDEN loop below still asserts for the money and import stages.
+        Set<String> factGated = Set.of(DealStage.ORDER_RECEIVED, DealStage.DELIVERED,
+            DealStage.QUOTE_DESIGN_SIDE, DealStage.QUOTE_OWNER, DealStage.QUOTE_BUYER);
 
         assertThat(allowedStages(decisionsFor(ticketId, ownerRep)))
             .doesNotContain(DealStage.DEPOSIT_RECEIVED, DealStage.CLOSED_PAID, DealStage.PROCUREMENT)
             .containsExactlyInAnyOrderElementsOf(
                 DealStage.SALES_TARGET_STAGES.stream()
                     .filter(stage -> !DealStage.PRESENTATION.equals(stage))
-                    // ORDER_RECEIVED and DELIVERED are sales-gated but fact-gated (Part B), so a
-                    // fresh deal cannot reach them; they are excluded here and asserted there.
-                    .filter(stage -> !DealStage.ORDER_RECEIVED.equals(stage))
-                    .filter(stage -> !DealStage.DELIVERED.equals(stage))
-                    // The three quote stages are fact-gated the same way since the 2026-10-16
-                    // ruling — their fact is a quotation addressed to that recipient, and this
-                    // deal has none — so they drop out for exactly the reason the two above do.
-                    // They stay in SALES_TARGET_STAGES on purpose: the refusal is a 409 about a
-                    // missing document, not a 403 about who the rep is, which is what the
-                    // FORBIDDEN loop below still asserts for the money and import stages.
-                    .filter(stage -> !DealStage.QUOTE_DESIGN_SIDE.equals(stage))
-                    .filter(stage -> !DealStage.QUOTE_OWNER.equals(stage))
-                    .filter(stage -> !DealStage.QUOTE_BUYER.equals(stage))
+                    .filter(stage -> !factGated.contains(stage))
                     .collect(Collectors.toSet()));
 
         for (String forbidden : List.of(DealStage.DEPOSIT_RECEIVED, DealStage.CLOSED_PAID, DealStage.PROCUREMENT)) {

@@ -1,7 +1,6 @@
 package th.co.glr.hr.dealquotation;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatCode;
 
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -75,9 +74,7 @@ class AdvisoryLockKeyspaceIntegrationTest extends AbstractPostgresIntegrationTes
     @Test
     void lockTicket_doesNotBlock_lockPricingRequestOnTheSameId() throws Exception {
         Throwable bFailure = holdThenTry(deals()::lockTicket, 424242L, requests()::lockPricingRequest, 424242L);
-        assertThatCode(() -> {
-            if (bFailure != null) throw bFailure;
-        }).doesNotThrowAnyException();
+        assertThat(bFailure).isNull();
     }
 
     @Test

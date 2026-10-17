@@ -1,7 +1,6 @@
 package th.co.glr.hr.ticket;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -272,8 +271,7 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
         // cannot assert that here any more. DealStageQuoteOwnerAndRouteIntegrationTest
         // #caseC_leadApproachStraightToQuoteBuyer_needsNoNote is where that rule is pinned now,
         // with a quotation fixture in place so the manual call is reachable.
-        assertThatCode(() -> ticketService.advanceStageForCustomerQuotationIssue(
-            ticketId, QuotationRecipient.BUYER, ownerRep)).doesNotThrowAnyException();
+        ticketService.advanceStageForCustomerQuotationIssue(ticketId, QuotationRecipient.BUYER, ownerRep);
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.QUOTE_BUYER);
 
         advanceTo(ticketId, DealStage.NEGOTIATION, null);
@@ -502,7 +500,7 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
      * passes {@code null} — and this keeps that true.
      */
     private void advanceTo(long ticketId, String stage, String note) {
-        String recipient = quotationRecipientFor(stage);
+        String recipient = TicketService.quotationRecipientForStage(stage);
         if (recipient != null) {
             assertThat(note).as("a quote stage arrives from its quotation, so %s cannot carry a note", stage)
                 .isNull();
@@ -512,20 +510,6 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
             ticketService.updateStage(ticketId, stage, note, ownerRep);
         }
         assertThat(stageOf(ticketId)).as("expected to land on %s", stage).isEqualTo(stage);
-    }
-
-    /** The party whose quotation lands a deal on {@code stage}, or null for every other stage. */
-    private static String quotationRecipientFor(String stage) {
-        if (DealStage.QUOTE_DESIGN_SIDE.equals(stage)) {
-            return QuotationRecipient.DESIGNER;
-        }
-        if (DealStage.QUOTE_OWNER.equals(stage)) {
-            return QuotationRecipient.OWNER;
-        }
-        if (DealStage.QUOTE_BUYER.equals(stage)) {
-            return QuotationRecipient.BUYER;
-        }
-        return null;
     }
 
     /**

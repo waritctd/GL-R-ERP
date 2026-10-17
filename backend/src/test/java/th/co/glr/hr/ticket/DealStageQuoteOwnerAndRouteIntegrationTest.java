@@ -194,17 +194,17 @@ class DealStageQuoteOwnerAndRouteIntegrationTest extends AbstractPostgresIntegra
     @Test
     void quoteOwnerIsWritableByTheOwningRepBySalesManagerAndByCeo() {
         long byOwner = readyToAdvanceFrom(DealStage.SPEC_APPROVED);
-        quotationOnDeal(byOwner, QuotationRecipient.OWNER);
+        QuoteStageFixtures.issuedQuotationOnDeal(jdbc, byOwner, ownerRepId, QuotationRecipient.OWNER);
         ticketService.updateStage(byOwner, DealStage.QUOTE_OWNER, null, ownerRep);
         assertThat(stageOf(byOwner)).isEqualTo(DealStage.QUOTE_OWNER);
 
         long byManager = readyToAdvanceFrom(DealStage.SPEC_APPROVED);
-        quotationOnDeal(byManager, QuotationRecipient.OWNER);
+        QuoteStageFixtures.issuedQuotationOnDeal(jdbc, byManager, ownerRepId, QuotationRecipient.OWNER);
         ticketService.updateStage(byManager, DealStage.QUOTE_OWNER, null, salesManager);
         assertThat(stageOf(byManager)).isEqualTo(DealStage.QUOTE_OWNER);
 
         long byCeo = readyToAdvanceFrom(DealStage.SPEC_APPROVED);
-        quotationOnDeal(byCeo, QuotationRecipient.OWNER);
+        QuoteStageFixtures.issuedQuotationOnDeal(jdbc, byCeo, ownerRepId, QuotationRecipient.OWNER);
         ticketService.updateStage(byCeo, DealStage.QUOTE_OWNER, null, ceo);
         assertThat(stageOf(byCeo)).isEqualTo(DealStage.QUOTE_OWNER);
     }
@@ -241,7 +241,7 @@ class DealStageQuoteOwnerAndRouteIntegrationTest extends AbstractPostgresIntegra
     @Test
     void caseC_leadApproachStraightToQuoteBuyer_needsNoNote() {
         long ticketId = readyToAdvanceFrom(DealStage.LEAD_APPROACH);
-        quotationOnDeal(ticketId, QuotationRecipient.BUYER);
+        QuoteStageFixtures.issuedQuotationOnDeal(jdbc, ticketId, ownerRepId, QuotationRecipient.BUYER);
 
         ticketService.updateStage(ticketId, DealStage.QUOTE_BUYER, null, ownerRep);
 
@@ -255,7 +255,7 @@ class DealStageQuoteOwnerAndRouteIntegrationTest extends AbstractPostgresIntegra
     @Test
     void caseB_presentationStraightToQuoteOwner_needsNoNote() {
         long ticketId = readyToAdvanceFrom(DealStage.PRESENTATION);
-        quotationOnDeal(ticketId, QuotationRecipient.OWNER);
+        QuoteStageFixtures.issuedQuotationOnDeal(jdbc, ticketId, ownerRepId, QuotationRecipient.OWNER);
 
         ticketService.updateStage(ticketId, DealStage.QUOTE_OWNER, null, ownerRep);
 
@@ -329,27 +329,6 @@ class DealStageQuoteOwnerAndRouteIntegrationTest extends AbstractPostgresIntegra
      * (a next follow-up date and one activity logged after the last stage change), so that a test
      * asserting the NOTE rule fails on the note rule and nothing else.
      */
-    /**
-     * An ISSUED quotation on {@code ticketId} addressed to {@code recipientType} — fixture that
-     * clears the D-3 quote-stage fact gate so a MANUAL {@code updateStage} into that stage is
-     * reachable, letting the tests above keep exercising the note rule and write access rather
-     * than the gate. Inserted directly for the reason {@code StageFactGateIntegrationTest}'s twin
-     * helper states: going through {@code DealQuotationService} would drag the whole pricing chain
-     * into tests about one stage move. Columns are the NOT NULLs without a default (V6) plus the
-     * two the gate reads ({@code recipient_type}, V52; {@code doc_status}, V27).
-     */
-    private void quotationOnDeal(long ticketId, String recipientType) {
-        jdbc.update("""
-            INSERT INTO sales.quotation (ticket_id, number, issued_by, recipient_type, doc_status)
-            VALUES (:ticketId, :number, :issuedBy, :recipientType, 'ISSUED')
-            """,
-            new MapSqlParameterSource()
-                .addValue("ticketId", ticketId)
-                .addValue("number", "QT-QOR-" + ticketId + "-" + recipientType)
-                .addValue("issuedBy", ownerRepId)
-                .addValue("recipientType", recipientType));
-    }
-
     private long readyToAdvanceFrom(String stage) {
         long ticketId = createTicket();
         jdbc.update("UPDATE sales.ticket SET sales_stage = :stage WHERE ticket_id = :id",

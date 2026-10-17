@@ -23,14 +23,11 @@ import th.co.glr.hr.ticket.TicketSummaryDto;
  * {@code recipient_label}; on update omitted/null keeps the stored value, a value on a non-DRAFT row
  * is 409, a value on a PRICING_REQUEST-origin row is 409, an invalid value is 400.
  *
- * <p><b>The handover landed (owner ruling 2026-10-16, {@code .design/quote-stage-gates} D-2).</b>
- * This class used to pin the opposite: that neither create nor update touched {@code sales_stage},
- * because the recipient → stage rule was handed to the entry-channel/stage-route work. That work
- * never filled the two hooks, and the rule has now been implemented here — so both stage
- * assertions below are inverted rather than deleted, and the stage they assert is the recipient's.
- * The full behaviour (forward-only, the three silent no-ops, "start" as well as "move") lives in
- * {@link QuotationCreationStageAdvanceIntegrationTest}; these two keep the recipient slice's own
- * tests honest about the side effect its writes now have.
+ * <p><b>Stage side effect (owner ruling 2026-10-16, {@code .design/quote-stage-gates} D-2).</b>
+ * Create and update move the deal to the recipient's stage. The full behaviour (forward-only, the
+ * three silent no-ops, "start" as well as "move") lives in
+ * {@link QuotationCreationStageAdvanceIntegrationTest}; the two stage assertions here keep the
+ * recipient slice's own tests honest about that side effect.
  *
  * <p>Written wrong-way-round: every refusal asserts nothing was written.
  */
@@ -88,8 +85,7 @@ class DealQuotationRecipientIntegrationTest extends AbstractDealQuotationSlice2I
     }
 
     /** A BUYER quotation on a LEAD_APPROACH deal IS S8 under D-2, and S8 is on BUYER_DIRECT's
-     * route — so the create moves the stage and writes the STAGE_CHANGED event. The inverse of
-     * what this test asserted before the ruling. */
+     * route — so the create moves the stage and writes the STAGE_CHANGED event. */
     @Test
     void create_movesTheStageToTheRecipientsStage_andWritesAStageChangedEvent() {
         long ticket = deal(salesActor, "BUYER_DIRECT");

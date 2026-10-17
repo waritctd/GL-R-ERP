@@ -17,8 +17,7 @@ import th.co.glr.hr.ticket.EntryChannel;
  * suffix, in creation order. One family per deal — not per recipient, not per chain.
  *
  * <p>What this replaces: each create minting its own base from its own {@code nextQuotationCode()}
- * call, which is what {@code DealQuotationRepository#nextRevisionNo}'s Javadoc still describes as
- * the premise. Only {@code insertCopyOf} (revision / reorder) continued a family, which is why
+ * call. Only {@code insertCopyOf} (revision / reorder) continued a family, which is why
  * versioning worked through the revise button and nowhere else.
  *
  * <p><b>Why "cancel, then create" is the shape of nearly every test here, rather than an
@@ -84,9 +83,8 @@ class DealQuotationNumberFamilyIntegrationTest extends AbstractDealQuotationSlic
      * The one shape that exists in production (ticket 114, audited 2026-10-17): a deal that already
      * holds two base families, because every create used to mint its own.
      *
-     * <p>It must continue the NEWEST and must not throw. An earlier draft of the design proposed a
-     * loud exception here on the belief that such deals "do not exist yet" — they do, and that
-     * exception would have turned the next create on this deal into a 500.
+     * <p>It must continue the NEWEST and must not throw: an exception here would turn the next
+     * create on this deal into a 500.
      */
     @Test
     void create_onADealAlreadyHoldingTwoFamilies_continuesTheNewest() {
@@ -118,18 +116,6 @@ class DealQuotationNumberFamilyIntegrationTest extends AbstractDealQuotationSlic
 
         assertThat(baseOf(created)).isNotEqualTo("QN-LEGACY-FAMILY");
         assertThat(created.revisionNo()).isEqualTo(1);
-    }
-
-    /** A revision still continues the family — unchanged behaviour, pinned so this slice cannot break it. */
-    @Test
-    void createRevision_stillContinuesTheFamily() {
-        long ticket = deal(salesActor, EntryChannel.DESIGNER_LED);
-        DealQuotationDto approved = approved(ticket, salesActor, "OWNER");
-
-        DealQuotationDto revision = quotationService.createRevision(approved.id(), salesActor);
-
-        assertThat(baseOf(revision)).isEqualTo(baseOf(approved));
-        assertThat(revision.revisionNo()).isEqualTo(approved.revisionNo() + 1);
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────────────────────────

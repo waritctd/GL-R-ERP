@@ -264,14 +264,21 @@ class DealStageTest {
     }
 
     /**
-     * The four auto-advanced stages are exactly the four with an {@code autoAdvanceStage} call
-     * site keyed to them, and exactly the four {@code TicketService.requireStageFactsHold} gates —
-     * a stage the system normally reaches for you is a stage whose fact must already hold.
-     * DELIVERY_SCHEDULING is auto-advanced too but is deliberately absent: the rep also reaches it
-     * by hand as part of the normal flow.
+     * The seven stages the rep does not click into: the four with an {@code autoAdvanceStage} call
+     * site (ORDER_RECEIVED, DEPOSIT_RECEIVED, PROCUREMENT, CLOSED_PAID) plus the three quote
+     * stages, which a quotation addressed to that recipient moves the deal onto (owner ruling
+     * 2026-10-16). The quote-stage entries are load-bearing, not cosmetic: the catalog serves the
+     * flag per stage and the deal page's one-click เลื่อนไป is gated on {@code !next.auto}, so
+     * these three entries withdraw the manual advance from the stage panel's inline button, the ⋯
+     * menu, the stage picker and the page's sticky CTA at once. The server-side refusal is
+     * {@code TicketService.requireStageFactsHold}'s own quote-stage gate.
+     *
+     * <p>This is not the fact-gated set: PROCUREMENT is auto-advanced but not gated, and DELIVERED
+     * is gated but absent here, as is DELIVERY_SCHEDULING — the rep also reaches both by hand as
+     * part of the normal flow.
      */
     @Test
-    void autoAdvancedIsExactlyTheSevenFactGatedStages() {
+    void autoAdvancedIsExactlyTheSevenStagesTheRepDoesNotClickInto() {
         // In DealStage.ORDER sequence, not grouped by kind: the three quote stages sit in the
         // middle of the pipeline, between SPEC_APPROVED and the operational four.
         assertThat(DealStage.ORDER.stream().filter(DealStage::isAutoAdvanced).toList())
@@ -281,26 +288,6 @@ class DealStageTest {
         assertThat(DealStage.isAutoAdvanced(DealStage.DELIVERY_SCHEDULING)).isFalse();
         assertThat(DealStage.isAutoAdvanced("NOT_A_STAGE")).isFalse();
     }
-
-    /**
-     * Owner ruling 2026-10-16: a quote stage is reached by addressing a quotation to that
-     * recipient, never by hand — so the three of them are system-driven in exactly the sense
-     * {@link DealStage#isAutoAdvanced} reports.
-     *
-     * <p>Membership here is load-bearing rather than cosmetic, which is why this is its own test:
-     * the catalog serves the flag per stage, and the deal page's one-click เลื่อนไป is gated on
-     * {@code !next.auto}. So these three entries are what withdraw the manual advance from the
-     * stage panel's inline button, the ⋯ menu, the stage picker and the page's sticky CTA at once.
-     * The refusal that makes it true server-side is
-     * {@code TicketService.requireStageFactsHold}'s own quote-stage gate.
-     */
-    @Test
-    void theThreeQuoteStagesAreAutoAdvanced() {
-        assertThat(DealStage.isAutoAdvanced(DealStage.QUOTE_DESIGN_SIDE)).isTrue();
-        assertThat(DealStage.isAutoAdvanced(DealStage.QUOTE_OWNER)).isTrue();
-        assertThat(DealStage.isAutoAdvanced(DealStage.QUOTE_BUYER)).isTrue();
-    }
-
 
     private static void assertNoNoteAlongPath(List<String> path) {
         for (int i = 0; i + 1 < path.size(); i++) {

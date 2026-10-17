@@ -192,7 +192,7 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void aQuotationToAnotherRecipient_doesNotUnlockThisRecipientsStage() {
         long ticketId = readyToAdvanceFrom(DealStage.SPEC_APPROVED);
-        quotationOnDeal(ticketId, QuotationRecipient.OWNER, "ISSUED");
+        QuoteStageFixtures.quotationOnDeal(jdbc, ticketId, ownerRepId, QuotationRecipient.OWNER, "ISSUED");
 
         assertThatThrownBy(() ->
             ticketService.updateStage(ticketId, DealStage.QUOTE_DESIGN_SIDE, null, ownerRep))
@@ -212,7 +212,7 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void aCancelledQuotation_doesNotCountAsHavingQuotedAnyone() {
         long ticketId = readyToAdvanceFrom(DealStage.SPEC_APPROVED);
-        quotationOnDeal(ticketId, QuotationRecipient.DESIGNER, "CANCELLED");
+        QuoteStageFixtures.quotationOnDeal(jdbc, ticketId, ownerRepId, QuotationRecipient.DESIGNER, "CANCELLED");
 
         assertThatThrownBy(() ->
             ticketService.updateStage(ticketId, DealStage.QUOTE_DESIGN_SIDE, null, ownerRep))
@@ -231,7 +231,7 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void aQuotationToTheDesigner_makesQuoteDesignSideSettableAgain() {
         long ticketId = readyToAdvanceFrom(DealStage.SPEC_APPROVED);
-        quotationOnDeal(ticketId, QuotationRecipient.DESIGNER, "DRAFT");
+        QuoteStageFixtures.quotationOnDeal(jdbc, ticketId, ownerRepId, QuotationRecipient.DESIGNER, "DRAFT");
 
         ticketService.updateStage(ticketId, DealStage.QUOTE_DESIGN_SIDE, null, ownerRep);
 
@@ -782,26 +782,6 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
         tickets.updateSalesStage(ticketId, stage);
         logAnActivityAndFollowUp(ticketId);
         return ticketId;
-    }
-
-    /**
-     * A quotation row on {@code ticketId} addressed to {@code recipientType}, inserted directly:
-     * what the quote-stage gate reads is the row, and going through {@code DealQuotationService}
-     * would drag the whole pricing-request chain into a test about one stage refusal. The columns
-     * set are exactly the NOT NULLs without a default (V6) plus the two the gate keys on
-     * ({@code recipient_type}, V52; {@code doc_status}, V27).
-     */
-    private void quotationOnDeal(long ticketId, String recipientType, String docStatus) {
-        jdbc.update("""
-            INSERT INTO sales.quotation (ticket_id, number, issued_by, recipient_type, doc_status)
-            VALUES (:ticketId, :number, :issuedBy, :recipientType, :docStatus)
-            """,
-            new MapSqlParameterSource()
-                .addValue("ticketId", ticketId)
-                .addValue("number", "QT-GATE-" + ticketId + "-" + recipientType + "-" + docStatus)
-                .addValue("issuedBy", ownerRepId)
-                .addValue("recipientType", recipientType)
-                .addValue("docStatus", docStatus));
     }
 
     private void logAnActivityAndFollowUp(long ticketId) {

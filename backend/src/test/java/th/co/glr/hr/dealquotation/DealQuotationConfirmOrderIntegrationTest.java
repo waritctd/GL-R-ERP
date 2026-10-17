@@ -639,10 +639,10 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
         tickets.markQuotationIssuedForOrderConfirmation(advancedStatus);
         long noQuotation = pipelineTicket(salesActor);           // no quotation at all
         // Undo D-2's creation-time advance on every case EXCEPT advancedStage — see the Javadoc.
-        resetToLeadApproach(ghost, withPricingRequest, mixedOrigin, advancedStatus);
         // The reset is load-bearing, so it is asserted rather than assumed: a silent no-op here
         // would put three of the six assertions back to passing for the wrong reason.
         for (long id : new long[] {ghost, withPricingRequest, mixedOrigin, advancedStatus}) {
+            tickets.updateSalesStage(id, DealStage.LEAD_APPROACH);
             assertThat(summary(id).salesStage()).as("fixture %s reset", id).isEqualTo(DealStage.LEAD_APPROACH);
         }
 
@@ -657,12 +657,6 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
         assertThat(summary(noQuotation).quotationOnly()).isFalse();
     }
 
-    /** Puts deals back at the pipeline's starting point, undoing D-2's creation-time advance. */
-    private void resetToLeadApproach(long... ticketIds) {
-        for (long ticketId : ticketIds) {
-            tickets.updateSalesStage(ticketId, DealStage.LEAD_APPROACH);
-        }
-    }
 
     /** chk_event_kind as re-declared by V193 still accepts every kind V186 added, plus the new one. */
     @Test
