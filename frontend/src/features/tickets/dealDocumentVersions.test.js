@@ -67,16 +67,7 @@ describe('dealDocumentVersions', () => {
   });
 
   // ── grouping is per RECIPIENT, not per base (owner ruling 2026-10-17) ──────────────────────
-  //
-  // The base number belongs to the DEAL now, so every document on a deal shares one base. Grouping
-  // on the base alone therefore collapsed DIFFERENT PARTIES' documents into one "version chain":
-  // the owner's brand-new first quotation rendered as "ครั้งที่ 2" nested beneath the designer's as
-  // an older version of it. Both statements were false, and a rep opening the top row to see "the
-  // current version" got a different party's offer.
-  //
-  // The recipient is what still identifies a document, because a genuine revision copies its
-  // parent's recipient verbatim (DealQuotationService#insertCopyOf) — so real chains stay grouped
-  // while separate offers separate.
+  // Why: see groupDirectQuotations — the base is deal-wide, so the recipient identifies a document.
   it('splits two recipients sharing one deal family into separate documents', () => {
     const groups = groupDirectQuotations([
       { id: 1, number: 'QT-2026-0014-1', revisionNo: 1, recipientType: 'DESIGNER', createdAt: '2026-10-01' },

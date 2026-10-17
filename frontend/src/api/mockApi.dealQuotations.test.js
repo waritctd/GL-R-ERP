@@ -536,7 +536,7 @@ describe('mock nextMockDealQuotationNumber -- #M10 number FORMAT', () => {
   // mockDealQuotations is shared state that grows as the suite runs — so the exact suffix here is
   // both correct-as-N and order-dependent. The FORMAT is the contract this test names; the
   // continuation rule itself is pinned in mockApi.quotationDealLink.test.js against a fresh deal.
-  it('produces QT-{year}-{4-digit seq}-{n}, matching dealBaseNumberOrMint + revisionNumber, not a bare QT-{year}-{seq} or QD{BE-year}', async () => {
+  it('produces QT-{year}-{4-digit seq}-{n}, matching nextNumberOnDeal, not a bare QT-{year}-{seq} or QD{BE-year}', async () => {
     await api.auth.login(salesUser);
     const { quotation } = await createOn18({ items: [ONE_ITEM] });
     expect(quotation.number).toMatch(/^QT-\d{4}-\d{4}-\d+$/);
@@ -548,6 +548,8 @@ describe('mock nextMockDealQuotationNumber -- #M10 number FORMAT', () => {
   });
 });
 
+// Suffixes in these tests are relative to the created row, not fixed at 1: per-deal families mean a
+// create on seeded demo ticket 18 continues the family (owner ruling 2026-10-17).
 describe('mock dealQuotations revision numbering -- #M10', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -1001,8 +1003,6 @@ describe('mock dealQuotations counts / needsRework -- owner feedback F5', () => 
     await api.auth.login(salesUser);
     const created = await createOn18({ items: [ONE_ITEM] });
     const base = created.quotation.number.replace(/-\d+$/, '');
-    // Suffixes are relative to the created row, not fixed at 1: per-deal families mean a create
-    // on seeded demo ticket 18 continues the family (owner ruling 2026-10-17).
     const n = created.quotation.revisionNo;
 
     await api.dealQuotations.submit(created.quotation.id);
@@ -1065,8 +1065,6 @@ describe('mock dealQuotations counts / needsRework -- owner feedback F5', () => 
     await api.auth.login(salesUser);
     const created = await createOn18({ items: [ONE_ITEM] });
     const base = created.quotation.number.replace(/-\d+$/, '');
-    // Suffixes are relative to the created row, not fixed at 1: per-deal families mean a create
-    // on seeded demo ticket 18 continues the family (owner ruling 2026-10-17).
     const n = created.quotation.revisionNo;
     const originalId = created.quotation.id;
 

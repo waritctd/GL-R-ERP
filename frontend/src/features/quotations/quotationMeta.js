@@ -276,8 +276,8 @@ export function isDealQuotationReadOnlyViewer(user) {
 // The three recipients, in S-order, each paired with TicketService#stageForQuotationRecipient's own
 // quote stage (DESIGNER -> S4, OWNER -> S5, BUYER -> S8). Slice 2 only READS that pairing — to
 // preselect the recipient from a deal already sitting at a quote stage (flow B); owner ruling
-// 2026-09-30 took the recipient -> stage MOVE (spec S2-B2) out of this slice, since the deal-stage
-// rule is owned by another session. UNSPECIFIED is never offered (IA §8). Labels are Thai-only —
+// 2026-09-30 left the recipient -> stage MOVE (spec S2-B2) to the server; the mock mirrors it in
+// DealQuotationService#advanceDealToRecipientStage. UNSPECIFIED is never offered (IA §8). Labels are Thai-only —
 // pricingRequestMeta's RECIPIENT_OPTIONS carries "ผู้ออกแบบ (Designer)", a mixed-script label
 // DESIGN.md §18 bans on a new control.
 export const QUOTATION_RECIPIENT_OPTIONS = Object.freeze([

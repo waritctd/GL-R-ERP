@@ -591,22 +591,11 @@ describe('DealStagePanel route awareness', () => {
     });
 
     /**
-     * SPLIT by the owner's 2026-10-16 quote-stage ruling (.design/quote-stage-gates D-4), not
-     * weakened. This test used to assert ONE thing with TWO halves at once: that the guided opener
-     * names the ROUTE's next stage (stepping over the off-route S4), using OWNER_DIRECT at S3 whose
-     * route-next is S5.
-     *
-     * S5 is now `auto`, so no opener renders there at all — and the two halves can no longer be
-     * tested together. Among the route-variable stages S4–S8 only S6 and S7 are still non-auto, and
-     * reaching either as `nextOnRoute` means already standing on S5 or S6, which no channel skips.
-     * So:
-     *
-     *   - the ROUTE-SKIPPING half is still pinned, by the three `ถัดไป follows the route` tests
-     *     above: `deal-stage-next` renders regardless of `auto`, so they are unaffected and remain
-     *     the proof that S4 is stepped over.
-     *   - the READINESS-GATE half is pinned here, re-based onto S5 → S6 (a non-auto target on the
-     *     owner route) so the opener still has something to name.
-     *   - the new rule itself is pinned by the sibling test below.
+     * Readiness-gate half only (owner's 2026-10-16 quote-stage ruling, D-4): a route-skipping
+     * pair now always lands on an `auto` stage, which renders no opener, so this is based on
+     * S5 → S6 (a non-auto target on the owner route). Route skipping itself is pinned by the
+     * `ถัดไป follows the route` tests above (`deal-stage-next` renders regardless of `auto`); the
+     * auto-stage rule by the sibling test below.
      */
     it('the guided-advance opener names the route\'s next stage when the readiness gate is the only block', () => {
       const gated = routeDecisions(OWNER_OFF).map((decision) => (

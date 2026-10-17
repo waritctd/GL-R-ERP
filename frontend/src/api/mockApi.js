@@ -4321,15 +4321,12 @@ function mockQuotedRecipients(ticketId) {
  * D-2: move the deal onto the stage of the party this quotation is addressed to. The mock's mirror
  * of DealQuotationService#advanceDealToRecipientStage → TicketService
  * #advanceStageForCustomerQuotationIssue, and the ONE place the mock does it, so create,
- * createFromPricingRequest and a DRAFT re-address cannot drift apart.
+ * createFromPricingRequest, a DRAFT re-address and the legacy customer-quotation issue cannot
+ * drift apart.
  *
  * Inverts MOCK_QUOTE_STAGE_RECIPIENT rather than restating the mapping — same reason the Java
  * inverts instead of restating. A recipient that maps to no stage (legacy UNSPECIFIED, or anything
  * unrecognised) advances nothing and throws nothing.
- *
- * No-throw by construction, like the Java: autoAdvanceStage below is forward-only, ACTIVE-only and
- * route-aware, and a target it will not take is a silent no-op — never a failure of the create that
- * triggered it.
  */
 function advanceDealToQuotationRecipientStage(ticket, recipientType, user) {
   const stage = Object.keys(MOCK_QUOTE_STAGE_RECIPIENT)
@@ -6492,12 +6489,9 @@ function nextMockDealQuotationRevisionNo(ticketId, base) {
 }
 
 /**
- * Mirrors DealQuotationRepository#findDealBaseNumber / #dealBaseNumberOrMint — owner ruling
- * 2026-10-17, the base number belongs to the DEAL. The newest row (highest id = creation order)
- * decides the family; a deal with none mints one.
- *
- * Scoped to the two real origins exactly as the Java is: a legacy row (origin NULL / LEGACY here)
- * must not seed the family, because nextMockDealQuotationRevisionNo cannot see it either.
+ * Mirrors DealQuotationRepository#nextNumberOnDeal — owner ruling 2026-10-17, the base number
+ * belongs to the DEAL. The newest row (highest id = creation order) decides the family; a deal
+ * with none mints one.
  *
  * The mock needs this for the same reason it needed the stage mirror: without it mock-mode QA
  * demonstrates the OLD numbering on the one thing the owner actually ruled about — the printed
@@ -6505,8 +6499,7 @@ function nextMockDealQuotationRevisionNo(ticketId, base) {
  */
 function mockDealBaseNumberOrMint(ticketId) {
   const newest = mockDealQuotations
-    .filter((q) => q.ticketId === Number(ticketId)
-      && ['DEAL_DIRECT', 'PRICING_REQUEST'].includes(q.origin ?? 'DEAL_DIRECT'))
+    .filter((q) => q.ticketId === Number(ticketId))
     .sort((a, b) => b.id - a.id)[0];
   return newest
     ? quotationBaseNumber(newest.number, newest.revisionNo ?? 1)
@@ -6624,7 +6617,7 @@ function supersedeOtherLiveMockDealQuotations(row, user, now) {
   const ticket = db.tickets.find((t) => t.id === row.ticketId);
   mockDealQuotations
     .filter((q) => q.id !== row.id && q.ticketId === row.ticketId
-      && (((q.origin || 'DEAL_DIRECT') === 'DEAL_DIRECT' && q.docStatus === 'APPROVED')
+      && ((isDealDirectOrigin(q) && q.docStatus === 'APPROVED')
         || (q.origin === 'PRICING_REQUEST' && ['ISSUED', 'REVISION_REQUESTED'].includes(q.docStatus))))
     .forEach((sibling) => {
       sibling.docStatus = 'SUPERSEDED';
@@ -6685,9 +6678,7 @@ function mockApproveDealQuotationPricingRequestOrigin(row, payload, user) {
   if (pr && ticket) {
     // PR B: the QUOTATION's recipient (a revision may be re-addressed), not the request's.
     const recipient = row.recipientType ?? pr.recipientType;
-    if (recipient === 'DESIGNER') autoAdvanceStage(ticket, 'QUOTE_DESIGN_SIDE', user);
-    if (recipient === 'OWNER') autoAdvanceStage(ticket, 'QUOTE_OWNER', user);
-    if (recipient === 'BUYER') autoAdvanceStage(ticket, 'QUOTE_BUYER', user);
+    advanceDealToQuotationRecipientStage(ticket, recipient, user);
     pushEvent(ticket, user, 'QUOTATION_ISSUED', null, null, `อนุมัติและออกใบเสนอราคา ${row.number}`);
     pushPricingRequestEvent(pr, user, 'CUSTOMER_QUOTATION_ISSUED', null, null, `ออกใบเสนอราคา ${row.number}`);
     // Parity with the real service's unconditional CEO-visibility notification on issue (redundant
@@ -15911,13 +15902,8 @@ export const api = {
       }
       // Rule 7: reuse the EXACT SAME stage-advance the legacy quotation() mock action already
       // performs — not a second path.
-      // Mirrors TicketService.stageForQuotationRecipient. V143 split the recipients that used to
-      // collapse onto one stage: DESIGNER -> S4, OWNER -> S5, BUYER -> S8. This line routed OWNER
-      // to QUOTE_DESIGN_SIDE until now, so issuing an owner quotation in mock mode advanced the
-      // deal to the designer's milestone and "has the owner been quoted?" stayed unanswerable.
-      if (preview.recipientType === 'DESIGNER') autoAdvanceStage(ticket, 'QUOTE_DESIGN_SIDE', user);
-      if (preview.recipientType === 'OWNER') autoAdvanceStage(ticket, 'QUOTE_OWNER', user);
-      if (preview.recipientType === 'BUYER') autoAdvanceStage(ticket, 'QUOTE_BUYER', user);
+      // Mirrors TicketService.stageForQuotationRecipient: DESIGNER -> S4, OWNER -> S5, BUYER -> S8.
+      advanceDealToQuotationRecipientStage(ticket, preview.recipientType, user);
       pushEvent(ticket, user, 'QUOTATION_ISSUED', null, null,
         `ออกใบเสนอราคาลูกค้า ${preview.number} (revision ${preview.quotationRevisionNo})`);
       pushPricingRequestEvent(pr, user, 'CUSTOMER_QUOTATION_ISSUED', null, null, `ออกใบเสนอราคาลูกค้า ${preview.number}`);
@@ -16694,9 +16680,8 @@ export const api = {
       };
       mockDealQuotations.push(row);
       // D-2 (owner ruling 2026-10-16): addressing the document to a party moves the deal onto that
-      // party's stage, at CREATE. Mirrors DealQuotationService#create's advanceDealToRecipientStage.
-      // Pushed AFTER the row exists, so the stage and the quotation the fact gate reads land
-      // together. autoAdvanceStage is forward-only and ACTIVE-only, as the Java's is.
+      // party's stage, at CREATE. Pushed AFTER the row exists, so the stage and the quotation the
+      // fact gate reads land together.
       advanceDealToQuotationRecipientStage(ticket, recipientType, user);
       return delay({ quotation: buildDealQuotationDto(row) });
     },
@@ -17359,8 +17344,8 @@ export const api = {
     // hasOpenDealQuotationRevision guard, since multiple clones of the same source are explicitly
     // allowed. CLONE CREATION ITSELF still leaves the SOURCE APPROVED, untouched -- owner ruling
     // 2026-09-19: that stops being true once the CLONE is itself approved, at which point the
-    // approve() sweep above supersedes the source (a deal may hold only ONE live quotation). Cloning an already-SUPERSEDED source is refused below the same way a DRAFT/
-    // PENDING one is.
+    // approve() sweep above supersedes the source (a deal may hold only ONE live quotation).
+    // Cloning an already-SUPERSEDED source is refused below the same way a DRAFT/PENDING one is.
     async createReorder(id, payload = {}) {
       void payload;
       const user = requireSession();

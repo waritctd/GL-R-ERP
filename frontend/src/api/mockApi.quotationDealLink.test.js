@@ -186,12 +186,7 @@ describe('mock dealQuotations — a PRICING_REQUEST-origin row takes its recipie
   });
 });
 
-// S2-B2 LANDED (owner ruling 2026-10-16, .design/quote-stage-gates D-2), and these two tests are
-// the 2026-09-30 pins turned around rather than deleted.
-//
-// The 2026-09-30 reduction took the recipient → stage rule out of slice 2 and handed it to another
-// session, and this describe block pinned "a direct quotation moves NOTHING". That session never
-// filled the two hooks; the ruling has now been implemented, and the stage moves at CREATE time.
+// S2-B2 (owner ruling 2026-10-16, .design/quote-stage-gates D-2): the stage moves at CREATE time.
 //
 // Why the mock must move it too, rather than being left permissive: the backend has simultaneously
 // CLOSED the manual move into the three quote stages. A mock that still refuses to advance on

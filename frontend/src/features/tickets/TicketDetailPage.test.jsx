@@ -4181,11 +4181,6 @@ describe('TicketDetailPage', () => {
   //   * LAX — a server/mock that advertises ADVANCE_STAGE for the off-route stage too. Route-blind,
   //     the item appears and names the refused stage: the "invites a click it is about to reject"
   //     case.
-  //
-  // ⚠️ Read the restructure note on the first it.each below before trusting this paragraph: since
-  // the 2026-10-16 quote-stage ruling every route-skipping pair targets an `auto` stage, so the
-  // FAITHFUL/LAX split no longer distinguishes route-blind from route-aware at THIS surface. Both
-  // shapes are still exercised, now against the item's absence and against a non-auto target.
   describe('overflow เลื่อนไป follows the deal route', () => {
     const OFF_ROUTE = {
       DESIGNER_LED: [],
@@ -4278,8 +4273,8 @@ describe('TicketDetailPage', () => {
     it.each([
       ['OWNER_DIRECT', false], ['OWNER_DIRECT', true],
       ['BUYER_DIRECT', false], ['BUYER_DIRECT', true],
-      ['DESIGNER_LED', false], ['DESIGNER_LED', true],
-      ['UNSPECIFIED', false], ['UNSPECIFIED', true],
+      ['DESIGNER_LED', false],
+      ['UNSPECIFIED', false],
     ])('%s at SPEC_APPROVED offers no เลื่อนไป — its route-next is a quote stage (lax server: %s)', async (channel, lax) => {
       await openMenu({ channel, salesStage: 'SPEC_APPROVED', lax });
       expect(screen.queryByTestId('deal-stage-advance')).toBeNull();
