@@ -1,6 +1,6 @@
 # ขั้น 4/5/8 come from a quotation — and a second quotation is a version
 
-Owner rulings, 2026-10-16 (Ploy). Design doc; nothing implemented yet.
+Owner rulings, 2026-10-16 (Ploy). Implemented on `feat/quote-stage-gates-and-versioning` (f8b98dc4, 2026-10-17); D-5 step 2 still awaits the owner.
 
 ## Intent
 
@@ -11,7 +11,7 @@ work closes: **the quote stages are reached by quoting someone, never by clickin
 The same ruling has a second half. Once the only way into ขั้น 4 is a quotation, the quotation
 document itself has to carry versions properly — because every later conversation with that same
 recipient ("the customer wants more tiles") is a new version of the same offer, not a new offer.
-Today those land as unrelated documents with unrelated numbers.
+Before this work those landed as unrelated documents with unrelated numbers.
 
 ## Why now
 
@@ -19,14 +19,13 @@ Both halves were already half-built and then left:
 
 - The recipient → stage rule is the owner's own **D1** (`.design/quotation-deal-link`, approved
   2026-09-30). Its two hook points were deliberately left empty when stage ownership was handed to
-  the `deal-route-staging` work, which never filled them. They are still empty comments.
-- ~~Versioning works on direct quotations and is switched **off** for quotations that come out of a
-  คำขอราคา (`requireStatusMachineEnabled`: "จะเปิดใช้งานในระยะถัดไป"). Once ขั้น 4 only arrives via
-  the PCR, that is every designer quotation — so the deferred phase is now the blocking one.~~
-  **STALE — corrected 2026-10-17, see "D-5 as verified against the code" below.** `createRevision`
-  no longer calls `requireStatusMachineEnabled` at all; a PRICING_REQUEST-origin quotation can
-  already be revised, and is already numbered deal-scoped. What remains undone is narrower, and one
-  piece of it contradicts behaviour the code implements on purpose.
+  the `deal-route-staging` work, which never filled them; this work filled them.
+- Versioning was believed switched **off** for quotations that come out of a คำขอราคา
+  (`requireStatusMachineEnabled`: "จะเปิดใช้งานในระยะถัดไป"). **Corrected 2026-10-17, see "D-5 as
+  verified against the code" below:** `createRevision` no longer calls
+  `requireStatusMachineEnabled` at all; a PRICING_REQUEST-origin quotation can already be revised,
+  and is already numbered deal-scoped. What remained undone was narrower, and one piece of it
+  contradicts behaviour the code implements on purpose.
 
 ## Goals
 
@@ -147,22 +146,14 @@ removes the way that skipped the document.
 
 ### D-4 — One backend change removes the CTA from four screens
 
-`DealStage.AUTO_ADVANCED` is purely descriptive ("it changes no gate") and is served to the client.
-The frontend's `canAdvance` already requires `!next.auto`, and `DealStagePanel` reads every gate off
-the server's `stageDecisions` rather than recomputing it. So adding the three quote stages to
-`AUTO_ADVANCED` withdraws the one-click advance from all four surfaces at once:
+`DealStage.AUTO_ADVANCED` names the stages the system advances into, and since this ruling also the
+fact-gated quote stages (see the `DealStage` Javadoc: membership and the `requireStageFactsHold`
+refusal are two halves of one rule). It is served to the client. The frontend's `canAdvance` already
+requires `!next.auto`, and `DealStagePanel` reads every gate off the server's `stageDecisions` rather
+than recomputing it. So adding the three quote stages to `AUTO_ADVANCED` withdraws the one-click
+advance from the surfaces that ride on `!next.auto`; the verified breakdown is below.
 
-| Surface | File |
-| --- | --- |
-| Stage panel's inline button | `DealStagePanel.jsx:378` |
-| ⋯ menu item | `DealStagePanel.jsx` `openAdvance` |
-| Stage picker's target list | `UpdateStageModal` |
-| Page's sticky primary CTA | `TicketDetailPage.jsx:1300`, `:1437` |
-
-Each still gets re-checked below; "it should follow automatically" is a claim to verify, not to
-trust.
-
-#### Verified 2026-10-17, with two corrections to the above
+#### Verified 2026-10-17, with two corrections to the original claims
 
 The conclusion holds — all four surfaces do stand down from the one `AUTO_ADVANCED` edit — but two
 of the sentences justifying it were wrong, and one surface stands down for a different reason than
@@ -221,18 +212,11 @@ marking a quote stage manual again.
 
 Owner chose this shape over "fix both doors", 2026-10-16.
 
-**The problem being designed away.** Today there are two revise doors at two different levels, and
-the rep has to classify their own edit to pick one:
-
-| | Door A — `createRevision` (on the quotation) | Door B — `createCustomerChangeRevision` (on the คำขอราคา) |
-| --- | --- | --- |
-| Keeps the number | yes, `{base}-{n+1}` | **no**, mints a fresh base |
-| Price / quantity | **refused** (2026-08-13) | this is its whole purpose |
-| PCR-origin quotations | **switched off** entirely | works |
-
-So "the customer wants more tiles" costs the version number, and a rep who files it through Door A
-instead is the loophole the 2026-08-13 ruling exists to close. Neither door is wrong; having two of
-them at different levels is.
+**The problem being designed away.** Two revise doors at two different levels — Door A
+(`createRevision`, on the quotation) and Door B (`createCustomerChangeRevision`, on the คำขอราคา) —
+where Door B minted a fresh base and so cost the version number. Per-deal numbering removed that
+cost: see `VERSIONING.md` (B-2), which also records why the two doors are now harmless and are not
+collapsed into one.
 
 **The redesign.** The quotation becomes the spine. One action — `สร้างฉบับแก้ไข` — on any issued
 quotation, available to the owning rep:
@@ -242,19 +226,17 @@ quotation, available to the owning rep:
 2. Recipient is locked to the parent's, mirroring the GLA-102 guard that already forces this on a
    request child. Same recipient → same pipeline index → the forward-only advance leaves the stage
    alone, which is goal 3 for free.
-3. ~~Lines are copied at the CEO-approved price with discount **ZERO**. This is not a detail: the
-   discount carry-forward is precisely what the 2026-08-13 ruling removed, and the new door must not
-   quietly reintroduce it.~~ **OVERRULED by the owner, 2026-10-17: the discount is CARRIED
-   FORWARD.** Lines are copied verbatim, which is what `insertCopyOf`/`toNewItemFromDto` already do
-   ("a copy, not a recalculation"). See the ruling note at the end of this decision.
+3. Lines are copied verbatim, discount included. **Owner ruling 2026-10-17: the discount is CARRIED
+   FORWARD** (`insertCopyOf`/`toNewItemFromDto`: "a copy, not a recalculation"). See the ruling note
+   at the end of this decision.
 4. The rep edits. Nothing is declared up front.
 5. On submit the approval is routed by **what actually changed**, not by which door was opened:
    - document fields, terms, validity, contact, or a **quantity change at the approved unit price**
      → PENDING_APPROVAL → ผจก.ขาย or CEO approves → ISSUED. (D-1.)
    - a unit price below the approved minimum → the existing `DiscountApprovalService` CEO gate,
      already wired through `raiseDiscountApprovalsIfNeeded`. No new mechanism.
-6. The parent is superseded only once the new version is **issued** — the existing ancestor walk at
-   `DealQuotationService.java:1813` already does this.
+6. The parent is superseded only once the new version is **issued** — the existing ancestor walk
+   already does this.
 
 **The signal the classifier runs on already exists.** `withDecisionLink` stores
 `pricingRequestItemId` / `pricingDecisionItemId` on every quotation item created from a pricing
@@ -363,26 +345,6 @@ customer reads.
 
 Both directions are cheap to implement; the cost is in picking wrong. Not implemented either way.
 
-D-5 says lines are copied "at the CEO-approved price with discount **ZERO**", and calls the discount
-carry-forward "precisely what the 2026-08-13 ruling removed". The code does the **opposite**, on
-purpose: `toNewItemFromDto` (`DealQuotationService:3750`) copies `item.discountPct()` verbatim, and
-the comment beside it defends that choice — "a revision copies its parent's rows VERBATIM,
-adjustments included — it is a copy, not a recalculation, so an already-approved ส่วนลดพิเศษ figure
-is carried across rather than re-derived (re-deriving would silently move the number if the parent
-had been saved under an older rule)."
-
-Both positions are defensible and they are not reconcilable by implementation:
-
-- **Zero the discount** (D-5 as written): a new version starts from the approved list price, so a
-  concession has to be re-won. Protects against a discount riding along unnoticed into version 5.
-- **Carry it forward** (the code today): a version is a copy, and an already-approved discount is a
-  fact about this deal. Protects against the printed number silently changing under the rep.
-
-Note the 2026-08-13 ruling itself is about the *pricing-request* chain and does not mention
-`toNewItemFromDto`, so citing it does not settle the question. Do not implement either side until
-the owner rules; whichever way it goes, the losing comment must be rewritten rather than left in
-place contradicting the code.
-
 ## Constraints
 
 - `sales.quotation.number` is UNIQUE (V6); `nextRevisionNo` (MAX over every row that ever existed
@@ -392,15 +354,13 @@ place contradicting the code.
   `DealQuotationRepository.nextRevisionNo(ticketId, base)` by deal. A customer-change revision child
   is a *different* คำขอราคา from its parent, so anything scoped by `pricingRequestId` cannot see the
   parent's quotations and will restart the family at `-1`. The continuation must go through the
-  deal-scoped (`ticketId`) one. ~~This is the whole reason D-5 is not a two-line change.~~
-  **Half-stale, corrected 2026-10-17:** the trap itself is real, but it does not apply to the door
-  D-5 builds on. `DealQuotationService.insertCopyOf` — shared by `createRevision`, `createReorder`
-  and the resubmit-after-ตีกลับ path — *already* calls the deal-scoped
+  deal-scoped (`ticketId`) one. The trap does not apply to the
+  door D-5 builds on: `DealQuotationService.insertCopyOf` — shared by `createRevision`,
+  `createReorder` and the resubmit-after-ตีกลับ path — already calls the deal-scoped
   `quotations.nextRevisionNo(source.ticketId(), baseNumber)`, and its own comment explains that it
   chose that over `source.revisionNo() + 1` for this exact duplicate-key reason. The request-scoped
   counter belongs to the OLD `customerquotation` engine, which is what Door B's eventual quotation
-  goes through. So the trap is a reason not to route the continuation through Door B — not a reason
-  D-5 is large.
+  goes through — a reason not to route the continuation through Door B.
 - Legacy quotations carry a bare number with no `-1`. `QuotationNumbering.baseNumber` has the
   fallback; revising one yields `{bare}-2`.
 - `sales.factory_quote_item.pricing_request_item_id` is `ON DELETE RESTRICT`, which is why factory
@@ -420,18 +380,14 @@ Verified against develop while scoping this, so the builder does not re-derive i
   DESIGNER→S4, OWNER→S5, BUYER→S8, forward-only, keyed on the quotation's own recipient.
 - The all-stock → CEO route (V194), as above.
 
-## Left to the builder
+## Settled by the builder
 
-- Whether the creation-time advance belongs in `DealQuotationService.create`,
-  `createFromPricingRequest` and the recipient-change path as three call sites, or behind one
-  private helper. Three call sites exist today (two empty hooks at `:369` and `:1095`, plus
-  `createFromPricingRequest`, which has no hook yet); one helper is the obvious shape, but the
-  decision is the builder's.
-- Exact Thai wording for the new `AUTO_STAGE_HINT` entries and the fact-gate 409 messages, in the
-  voice of the existing four.
-- Whether the old approve-time call at `DealQuotationService.java:1813` is kept (harmless and
-  idempotent under forward-only, and it still covers a recipient changed between draft and
-  approval) or removed as redundant. Recommend keeping it.
+- One helper, `DealQuotationService#advanceDealToRecipientStage`, called from `create`,
+  `createFromPricingRequest` and the recipient-change path.
+- The approve-time `advanceStageForCustomerQuotationIssue` call is kept: it is idempotent under
+  forward-only and still covers a recipient changed between draft and approval.
+- Exact Thai wording for the `AUTO_STAGE_HINT` entries and the fact-gate 409 messages is presentation
+  only, in the voice of the existing four.
 
 ## Test plan — written and failing before any production code
 
@@ -453,7 +409,7 @@ red for the right reason (an assertion on missing behaviour, never a compile or 
 
 - Creating a PCR-origin quotation addressed to DESIGNER on a ขั้น 3 deal → deal is on ขั้น 4.
 - OWNER → ขั้น 5; BUYER → ขั้น 8.
-- Changing a DRAFT's recipient from DESIGNER to OWNER → ขั้น 5 (the `:1095` hook).
+- Changing a DRAFT's recipient from DESIGNER to OWNER → ขั้น 5 (the recipient-change hook).
 - A second quotation to the **same** recipient → stage unchanged.
 - A backward recipient (OWNER-stage deal, new DESIGNER quotation) → stage unchanged.
 - `UNSPECIFIED`/unknown recipient → no move, no throw.
@@ -470,13 +426,11 @@ red for the right reason (an assertion on missing behaviour, never a compile or 
 - A legacy bare-numbered source revises to `{bare}-2`, not `{bare}-1` and not a fresh code.
 - The new version is numbered by the **deal-scoped** `nextRevisionNo(ticketId, base)`. Pinned with a
   sibling คำขอราคา present on the same deal, which is the case a request-scoped lookup gets wrong.
-- ~~Recipient is locked: a revision cannot be re-addressed to another party.~~ **BLOCKED on the
+- Recipient is locked: a revision cannot be re-addressed to another party. **BLOCKED on the
   owner's step-2 decision** — the shipped behaviour is the opposite and is already pinned by three
   tests. Do not write this test until the question is answered; writing it would put the suite in
   direct contradiction with itself.
-- ~~Lines arrive at the CEO-approved price with discount **zero** — a source carrying a discount does
-  not pass it to its child.~~ **INVERTED by the owner's 2026-10-17 ruling:** lines arrive carrying
-  the parent's CEO-approved discount, and `priceChangedFromCeo` stays false so ผจก.ขาย can still
+- Lines arrive carrying the parent's CEO-approved discount (**owner ruling 2026-10-17**), and `priceChangedFromCeo` stays false so ผจก.ขาย can still
   approve. DONE — `createRevision_carriesTheCeoApprovedDiscountForward_notZero`, mutation-checked
   (zeroing the discount fails it on `[row 0 discountPct]`, and fails eight sibling tests with the
   CEO-approval 403).
@@ -510,20 +464,6 @@ red for the right reason (an assertion on missing behaviour, never a compile or 
 
 ## Delivery
 
-One branch, test-first, Sonnet implementing and Opus reviewing per the standing rule. Backend before
-frontend, since the frontend reads its gates off the server's answer. No commit, no PR and no merge
-without the owner's explicit say-so.
-
-**After implementation** (owner request, 2026-10-16), in this order:
-
-1. `superpowers:requesting-code-review` on the branch — the structured review pass.
-2. A dead-code and stale-comment sweep. This work *creates* stale comments by construction: the two
-   "Intentionally empty here" hooks at `DealQuotationService.java:369` and `:1095` stop being empty,
-   `requireStatusMachineEnabled`'s "จะเปิดใช้งานในระยะถัดไป" stops being true for `createRevision`,
-   and `createFromPricingRequest`'s MAJOR-3 comment describing the expiry case as the *only*
-   continuation stops being accurate. Each must be rewritten or deleted, not left to rot.
-3. A blast-radius pass on the question "does this create another bug" — specifically: the automatic
-   advance still working with the fact gate in place, the mock/real drift on the gate, and whether
-   any existing test depended on reaching ขั้น 4 by hand (two tests in `ef9b17dc` already had to be
-   re-based onto ขั้น 3 for a similar reason, so expect more).
-4. `superpowers:verification-before-completion` before any claim that it is done.
+One branch, test-first, implemented by Sonnet and reviewed by Opus per the standing rule (B-4 was
+Opus-reviewed), clean-review applied 2026-10-17. D-5 step 2 (recipient lock on a revision) is still
+**BLOCKED** on the owner's ruling.

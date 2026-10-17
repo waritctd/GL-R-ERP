@@ -5,10 +5,7 @@ Design for the quotation versioning workflow. Supersedes **D-5** of
 2026-10-17" note for the premises that went stale), and supersedes this document's own first draft,
 which built an elaborate mechanism to solve a problem the owner then dissolved with one question.
 
-Status: **implemented on `feat/quote-stage-gates-and-versioning`, uncommitted (2026-10-17).** B-1, B-2 and
-the deal-register grouping landed first; B-4 landed last (test-first, 8 integration tests in
-`DealQuotationPricingRequestApprovalIntegrationTest`, two `DealQuotationOutcomeIntegrationTest` cases
-rewritten because they asserted the two-live-offers behaviour this slice removes). Opus review pending.
+Status: **implemented and committed on `feat/quote-stage-gates-and-versioning` (f8b98dc4, 2026-10-17); clean-review applied.**
 
 ## The rule
 
@@ -42,11 +39,9 @@ Three things make this work, and all three already exist:
 
 | Already true | Where |
 | --- | --- |
-| ~~Superseding is **deal-wide and lineage-independent**~~ **FALSE — builder check 2026-10-17.** That sweep is scoped `origin = 'DEAL_DIRECT'` and is called only from `approve`'s DEAL_DIRECT branch. `approveAndIssuePricingRequestOrigin` deliberately skips it and retires **only** through the `parent_quotation_id` ancestor walk — and a Door B document has no parent link, so that walk is a no-op. **Nothing retires the older document on the pricing route.** Blocked on Q1 below; see the note under B-3. | `DealQuotationRepository#supersedeOtherApprovedOnTicket`, `DealQuotationService#approve` / `#approveAndIssuePricingRequestOrigin` |
+| Superseding is **deal-wide — B-4**, `DealQuotationRepository#supersedeOtherLiveOnTicket`, origin-agnostic | `DealQuotationRepository#supersedeOtherLiveOnTicket`, `DealQuotationService#approve` / `#approveAndIssuePricingRequestOrigin` |
 | The suffix counter is already **MAX+1 over the family on the deal** | `DealQuotationRepository#nextRevisionNo(ticketId, baseNumber)` |
 | "Continue the family rather than mint a fresh base" is already a ruled-in behaviour, quoting the owner: *"it is a later version of the same offer"*, and explicitly noting that **only the printed NUMBER continues** — no chain linkage implied | `DealQuotationService#createFromPricingRequest`'s MAJOR-3 rule, 2026-09-20 |
-
-So the parent chain was never what retired the old document, and the counter was never the problem.
 
 ## The one actual defect
 
@@ -75,19 +70,12 @@ existing quotation on the deal with `origin IN ('DEAL_DIRECT','PRICING_REQUEST')
 Legacy rows (`origin IS NULL`) do **not** seed the family, matching `nextRevisionNo`'s own scope —
 otherwise a legacy import would capture the family of a deal it predates.
 
-**⚠ CORRECTION, builder check 2026-10-17 — this paragraph used to be wrong, and the error mattered.**
-
-It previously claimed every such row on a deal already shares one base, so the lookup "has a single
-answer", and recommended a loud exception when it does not, on the grounds that the deals this would
-hit "do not exist yet". **All of that is false.** Nothing limits a deal to one pricing request
-(`PricingRequestService#createDraft` refuses only a live *direct* quotation), and
-`createFromPricingRequest` mints a fresh base for every request except the expiry path —
-`nextRevisionNo`'s own Javadoc states the premise outright: *"each mints its own base number from its
-own `nextQuotationCode()` call at first creation"*.
-
-So **every multi-recipient deal already carries two or three bases today**, as does every deal that
-has been through Door B. A hard exception here would turn the next create on each of those deals
-into a 500 — bricking creates on exactly the deals this feature exists to help.
+**Settled rule for a deal that holds several families:** nothing limits a deal to one pricing
+request (`PricingRequestService#createDraft` refuses only a live *direct* quotation), and
+`createFromPricingRequest` used to mint a fresh base for every request except the expiry path, so
+multi-recipient deals and Door B deals can carry two or three bases. The lookup therefore takes the
+**newest** family and never asserts a single base — an exception would turn the next create on those
+deals into a 500.
 
 **Prod audit, 2026-10-17 (read-only, Supabase `tdyzcqzxmhtxpbouewud`).** The builder was right about
 the mechanism and wrong about the scale — measured, not assumed:
@@ -112,10 +100,6 @@ Two consequences that reshape this slice:
    once happened to a real customer, and the B-4 retirement gap is entirely **latent**. Meanwhile
    versioning is in heavy real use on the direct route (~100 revisions, one chain six deep).
 
-That inverts the risk: the dangerous edit is **B-2's change to `create`**, which touches the only
-route in use, on 302 live documents. The Door B work is safe by comparison because nothing depends
-on it yet. Sequence accordingly, and do not let the urgent-sounding Door B fix drag the live-path
-change along behind it.
 
 **The rule for a deal that already has several families** (owner to confirm the shape, but the data
 makes it nearly moot): continue the base of the most recent existing document on the deal. Never
@@ -124,9 +108,9 @@ new on that deal continues `QT-2026-0114`.
 
 ### B-2 — every create continues the family
 
-Three call sites, all currently minting a fresh base:
+Three call sites (the first two minted a fresh base before this slice):
 
-| Call site | Today | After |
+| Call site | Before | After |
 | --- | --- | --- |
 | `createFromPricingRequest` | continues the family only after an expiry, request-scoped | always continues the deal's family (B-1); mints only when the deal has none |
 | `create` (DEAL_DIRECT) | always `nextQuotationCode()` | continues the deal's family; mints only when the deal has none |
@@ -136,15 +120,11 @@ Once `createFromPricingRequest` continues the family, **Door B stops costing the
 change to Door B at all** — the document its round eventually produces simply arrives as the next
 suffix.
 
-### B-3 — ~~demote `parent_quotation_id` to provenance~~ REVERSED by the builder check
+### B-3 — keep `parent_quotation_id`
 
-**Do not demote it.** This slice rested on "neither numbering nor superseding depends on it", which
-is false for PRICING_REQUEST origin: there, the ancestor walk is the **only** retirement mechanism,
-because the deal-wide sweep is DEAL_DIRECT-scoped. Demoting the column would leave the pricing route
-with nothing retiring anything.
-
-Keep the column, keep writing it, keep the ancestor walk. `requireNoOpenRevision` also legitimately
-uses it to stop two open revisions of one source.
+Keep the column and keep writing it: the DRAFT ancestor walk and `requireNoOpenRevision` use it.
+Retirement no longer depends on it — B-4's deal-wide sweep covers the pricing route, which has no
+parent link.
 
 ### B-4 — retirement on the pricing route (NEW)
 
@@ -163,17 +143,18 @@ protecting a different shape: genuinely parallel recipients, which this pipeline
 The consequence to accept: a designer holding `QT-2026-0014-1` sees it superseded when the owner is
 quoted at `-2`. That is the intended meaning of one family per deal.
 
-**What to build:** the same-deal sweep currently runs only on the DEAL_DIRECT branch of `approve` and
-is scoped `origin = 'DEAL_DIRECT' AND doc_status = 'APPROVED'`. It must become origin-agnostic and
-run on the pricing route too. Mind the status vocabularies: a DEAL_DIRECT document's live terminal
-state is `APPROVED`, a PRICING_REQUEST one's is `ISSUED` — a sweep that only matches `APPROVED`
-would silently skip every pricing-route document, which is the bug this is fixing.
+**What was built:** the same-deal sweep used to run only on the DEAL_DIRECT branch of `approve`,
+scoped `origin = 'DEAL_DIRECT' AND doc_status = 'APPROVED'`. It is now origin-agnostic and runs on the
+pricing route too. Mind the status vocabularies: a DEAL_DIRECT document's live terminal state is
+`APPROVED`, a PRICING_REQUEST one's is `ISSUED` — a sweep that only matched `APPROVED` would
+silently skip every pricing-route document.
 
 ---
 
-#### Why this slice is required at all (the gap it closes)
+#### Why this slice was required (the gap it closes)
 
-The design's goal 3 is not met on the pricing route today, and this change makes the gap
+The design's goal 3 was not met on the pricing route, and the per-deal family would have made the
+gap **customer-visible** rather than creating it:
 **customer-visible** rather than creating it:
 
 - Door B's document carries no `parent_quotation_id` (`createFromPricingRequest` passes null), so the
@@ -182,12 +163,12 @@ The design's goal 3 is not met on the pricing route today, and this change makes
   this origin "has no 'one live document per ticket' sweep".
 - The old engine's equivalent, `supersedeSupersededChainQuotations`, is only called from the old
   engine's `issue`.
-
-So after a Door B round the deal holds **two live ISSUED documents and nothing retires the first**.
-That is true today — but today they carry different base numbers, so they read as two unrelated
+After a Door B round the deal held **two live ISSUED documents and nothing retired the first**.
+offers. Under the per-deal family rule they become `QT-2026-0014-1` and `QT-2026-0014-2`: same
+family, both live, in front of the same customer. One of them would be a lie about which offer stands.
 offers. Under the per-deal family rule they become `QT-2026-0014-1` and `QT-2026-0014-2`: same
 family, both live, in front of the same customer. One of them is a lie about which offer stands.
-
+This slice closed it. It was the one place where "just continue the family" was not free.
 This slice must close it. It is the one place where "just continue the family" is not free.
 
 ## What this design deletes
@@ -231,8 +212,8 @@ decision. Flagged as my reading, not the owner's ruling.
 
 ## Anti-goals
 
-- A deal holding two different base families. That is the rule broken, and it should fail loudly
-  (B-1), not resolve to whichever row sorted first.
+- A deal already holding two families continues the NEWEST; it never throws (an exception would
+  500 the next create on ticket 114).
 - Reusing a suffix. `nextRevisionNo` is MAX over every row that ever existed under the base,
   including cancelled ones, and must stay that way — a reused suffix means two different documents
   were called the same thing in front of a customer.
@@ -261,9 +242,9 @@ Stated plainly so nobody is surprised on a customer call.
   reason the family restarts today.
 - `QuotationNumbering.baseNumber` already handles both eras: a post-2026-09-11 `QT-2026-0014-1` and a
   legacy bare `QT-2026-0014`. A bare-numbered source continues as `{bare}-2`.
-- Concurrency: two creates on one deal must not read the same MAX. `create` already takes the deal's
-  advisory lock (`lockTicket`) and `insertCopyOf`'s callers already lock before computing the
-  suffix; `createFromPricingRequest` must do the same once it starts continuing the family.
+- Concurrency: two creates on one deal must not read the same MAX. `create` takes the deal's
+  advisory lock (`lockTicket`), `insertCopyOf`'s callers lock before computing the suffix, and
+  `createFromPricingRequest` does the same now that it continues the family.
 - No migration expected. If one becomes necessary, confirm the next free Flyway version against both
   develop and the merge queue — V200 has been claimed by more than one branch before.
 
@@ -283,14 +264,15 @@ Tests first, coverage list in chat before implementing, each red for the right r
 - Cancel `-1`, create again → `-2`. A suffix is never reused.
 - A legacy bare-numbered quotation does **not** seed the family: the first real document on that
   deal still mints its own base.
-- A deal somehow holding two distinct bases fails loudly rather than picking one.
+- A deal somehow holding two distinct bases continues the NEWEST and never throws
+  (`create_onADealAlreadyHoldingTwoFamilies_continuesTheNewest`).
 
 **Nothing else regressed**
 
 - A quantity change at the approved price still goes to ผจก.ขาย, never the CEO. *(The
   already-smooth case. Named as an anti-goal; this is its guard.)*
 - A price below the approved minimum still raises the CEO discount approval.
-- Approving a document still supersedes every other APPROVED one on the deal, including one with no
+- Approving a document still supersedes every other live one on the deal, including one with no
   parent link at all — the sweep, not the chain.
 - `createReorder` on a PCR-origin quotation is still refused.
 - Concurrent creates on one deal produce two different suffixes and no duplicate-key crash.
@@ -302,18 +284,23 @@ Tests first, coverage list in chat before implementing, each red for the right r
 - The DEAL_DIRECT pricing route's lack of a CEO baseline (non-goal; it is D-2's second approved
   route).
 
-## Left to the builder
+## Settled by the builder
 
-- Whether B-1 lives on `DealQuotationRepository` beside `nextRevisionNo` (likely) or on
-  `TicketRepository` with the deal's other derived facts.
-- ~~Whether the "two distinct bases" assertion is an exception or a logged warning.~~ **Settled: no
-  assertion.** The claim that "the deals it would hit do not exist yet" was false — the prod audit
-  found one (ticket 114), and an exception would have 500'd the next create on it. The newest family
-  is taken instead.
-- Exact Thai wording for any new refusal.
-- Whether `/quotations` should group a deal's documents visually by family now that the family is
-  meaningful per deal. Presentation only; no backend implication. (The DEAL page's register was NOT
-  presentation-only — see below.)
+- B-1 lives on `DealQuotationRepository` beside `nextRevisionNo`, folded into `nextNumberOnDeal`.
+- **No "two distinct bases" assertion.** The claim that "the deals it would hit do not exist yet" was
+  false — the prod audit found one (ticket 114), and an exception would have 500'd the next create on
+  it. The newest family is taken instead.
+- Exact Thai wording for any new refusal, and whether `/quotations` groups a deal's documents by
+  family, are presentation only. (The DEAL page's register was NOT presentation-only — see below.)
+
+## Shipped
+
+- B-1 / B-2 → `DealQuotationRepository#nextNumberOnDeal`, used by `create` and
+  `createFromPricingRequest` (test: `DealQuotationNumberFamilyIntegrationTest`).
+- B-4 → `DealQuotationRepository#supersedeOtherLiveOnTicket`, origin-agnostic, plus the stale-round
+  409 in `createFromPricingRequest` (owner ruling 2026-10-17 evening).
+- `lockTicket` uses the two-int `pg_advisory_xact_lock(classId, id)` form, so its keyspace is
+  separate from the single-bigint pricing-request locks.
 
 ## The deal document register — owner ruling 2026-10-17, DONE
 
