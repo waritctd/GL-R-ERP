@@ -1214,3 +1214,69 @@ export async function runPricingChainToOrder(sessions, ticketId, opts) {
   const result = await confirmOrder(sessions, pricingRequestId);
   return { pricingRequestId, quotationId, ticket: result.ticket };
 }
+
+// ── Direct (deal-level) quotations ───────────────────────────────────────────────────────────
+const DIRECT_QUOTATION_ITEM = {
+  lineType: 'TILE',
+  brand: 'Pietre Di Sardegna',
+  model: 'Pietre Di Sardegna',
+  color: 'Punta Molara',
+  texture: 'R11',
+  sizeText: '60x120',
+  thicknessMm: 2,
+  sqmPerPiece: 0.72,
+  quantityMode: 'AREA',
+  areaSqm: 120,
+  wastageMode: 'PERCENT',
+  wastageValue: 10,
+  piecesPerBox: 2,
+  unitPrice: 1748.13,
+  discountPct: 0,
+  originCountry: 'อิตาลี',
+  leadTimeMinDays: 75,
+  leadTimeMaxDays: 90,
+  locationLabel: null,
+};
+
+export function inDays(days) {
+  const bangkokToday = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(new Date());
+  const date = new Date(`${bangkokToday}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+/** QuotationEditorPage#buildUpsertPayload's shape. `recipientType` is OMITTED (never null) when
+ * there is none — exactly how that method spreads it. */
+export function directQuotationBody(recipientType) {
+  return {
+    contactId: null,
+    deptCode: 'P003',
+    unitCode: 'D002',
+    offerDate: inDays(0),
+    depositPercent: 50,
+    remainderMode: 'ON_DELIVERY',
+    creditDays: null,
+    validityDays: 30,
+    validityMode: 'DAYS',
+    validityUntil: null,
+    customerNotes: null,
+    priceMode: 'NET',
+    documentLanguage: 'TH',
+    currency: 'THB',
+    printedByDisplayId: null,
+    salesRepDisplayId: null,
+    projectName: null,
+    omitContactHonorific: false,
+    orderedByName: null,
+    items: [DIRECT_QUOTATION_ITEM],
+    ...(recipientType ? { recipientType } : {}),
+  };
+}
+
+/** POST /api/tickets/{id}/deal-quotations. Quoting a recipient on an ACTIVE deal moves it onto that
+ * recipient's stage (D-2) — the legitimate way to reach ขั้น 4/5/8, since a hand move there is 409 (D-3). */
+export async function createDirectQuotation(sessions, dealId, recipientType) {
+  const response = await apiWrite(sessions.sales, 'post', `/api/tickets/${dealId}/deal-quotations`, directQuotationBody(recipientType));
+  expect(response.status(), 'POST /api/tickets/{id}/deal-quotations').toBe(201);
+  return (await response.json()).quotation;
+}

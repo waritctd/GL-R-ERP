@@ -10,6 +10,7 @@ import java.time.Year;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import th.co.glr.hr.common.PageRequest;
@@ -1236,7 +1237,7 @@ public class TicketRepository {
             facts.commissionRecorded(), s.reopenedAt(), s.reopenCount(), s.quotationOnly(),
             due == null ? null : due.date(), due == null ? null : due.basis(),
             due == null ? null : due.creditDays(),
-            facts.liveDirectQuotation());
+            facts.liveDirectQuotation(), facts.quotedRecipients());
     }
 
     /**
@@ -1274,21 +1275,38 @@ public class TicketRepository {
         """;
 
     private record CommissionAndLiveQuotation(boolean commissionRecorded,
-                                              LiveDirectQuotationDto liveDirectQuotation) {}
+                                              LiveDirectQuotationDto liveDirectQuotation,
+                                              Set<String> quotedRecipients) {}
+
+    /** A Postgres {@code text[]} as a {@link Set}; empty for SQL NULL, which is what
+     * {@code array_agg} returns over no rows. */
+    private static Set<String> readTextArray(ResultSet rs, String column)
+            throws SQLException {
+        java.sql.Array array = rs.getArray(column);
+        if (array == null) {
+            return Set.of();
+        }
+        return Set.of((String[]) array.getArray());
+    }
 
     /**
-     * {@link #HAS_RECORDED_COMMISSION} and {@link #findLiveDirectQuotation}'s row in ONE statement.
-     * They are unrelated facts; they share a round trip only because {@link #enrichSummary} runs on
-     * the single-deal path of {@code TicketService#actions}, which
+     * {@link #HAS_RECORDED_COMMISSION}, {@link #findLiveDirectQuotation}'s row and the deal's
+     * quoted recipients in ONE statement. Unrelated facts sharing a round trip only because
+     * {@link #enrichSummary} runs on {@code TicketService#actions}' single-deal path, which
      * {@code TicketActionsQueryCountIntegrationTest} caps below {@code DealStage.ORDER.size()}
-     * statements — a separate live-quotation query was the fifteenth. The LATERAL subquery is
+     * statements — each of these was the fifteenth query in turn. Anything else this endpoint needs
+     * per deal belongs here too, not in a query of its own. The LATERAL subquery is
      * {@link #LIVE_DIRECT_QUOTATION_SELECT}, the very text {@link #findLiveDirectQuotation} runs, so
      * the list/detail field and the N6 refusal cannot disagree about which row is live.
      */
     private CommissionAndLiveQuotation recordedCommissionAndLiveDirectQuotation(long ticketId) {
         return jdbc.queryForObject("SELECT " + HAS_RECORDED_COMMISSION + """
                    AS commission_recorded,
-                   q.quotation_id, q.number, q.doc_status, q.recipient_type
+                   q.quotation_id, q.number, q.doc_status, q.recipient_type,
+                   (SELECT array_agg(DISTINCT r.recipient_type)
+                      FROM sales.quotation r
+                     WHERE r.ticket_id = :ticketId
+                       AND r.doc_status <> 'CANCELLED') AS quoted_recipients
               FROM (SELECT 1) AS one
               LEFT JOIN LATERAL (
             """ + LIVE_DIRECT_QUOTATION_SELECT + """
@@ -1299,7 +1317,8 @@ public class TicketRepository {
                 LiveDirectQuotationDto live = rs.wasNull() ? null
                     : new LiveDirectQuotationDto(quotationId, rs.getString("number"),
                         rs.getString("doc_status"), rs.getString("recipient_type"));
-                return new CommissionAndLiveQuotation(rs.getBoolean("commission_recorded"), live);
+                return new CommissionAndLiveQuotation(rs.getBoolean("commission_recorded"), live,
+                    readTextArray(rs, "quoted_recipients"));
             });
     }
 

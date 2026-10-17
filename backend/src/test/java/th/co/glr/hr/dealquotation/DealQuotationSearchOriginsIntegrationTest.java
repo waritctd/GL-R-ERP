@@ -179,7 +179,9 @@ class DealQuotationSearchOriginsIntegrationTest extends AbstractPostgresIntegrat
         assertThat(legacy.customerName()).isEqualTo("ลูกค้าเดิม A");
         assertThat(legacy.ticketId()).isEqualTo(dealA);
         assertThat(legacy.ticketCode()).isEqualTo(code(dealA)).isNotBlank();
-        assertThat(legacy.dealStage()).isEqualTo(DealStage.LEAD_APPROACH);
+        // ขั้น 5 (see #directDraft): dealStage is read live from the DEAL, not from the legacy
+        // document, which carries no recipient of its own.
+        assertThat(legacy.dealStage()).isEqualTo(DealStage.QUOTE_OWNER);
         assertThat(legacy.subtotalAmount()).isEqualByComparingTo("1000.00");
         assertThat(legacy.items()).as("legacy lines are never mapped through this engine").isEmpty();
         assertThat(legacy.pricingRequestId()).isNull();
@@ -188,11 +190,13 @@ class DealQuotationSearchOriginsIntegrationTest extends AbstractPostgresIntegrat
         assertThat(rows.stream().filter(r -> "DEAL_DIRECT".equals(r.origin())).map(DealQuotationDto::id))
             .containsExactlyInAnyOrder(directA, directB);
 
+        // ขั้น 5 on every row — see #directDraft; #pricingRequestOrigin also creates through the
+        // real #create before re-labelling the row's origin in SQL.
         for (long id : List.of(directA, prA2, directB, prB)) {
             DealQuotationDto row = byId(rows, id);
             assertThat(row.readOnly()).as("row %d readOnly", id).isFalse();
             assertThat(row.ticketCode()).as("row %d ticketCode", id).isEqualTo(code(row.ticketId()));
-            assertThat(row.dealStage()).as("row %d dealStage", id).isEqualTo(DealStage.LEAD_APPROACH);
+            assertThat(row.dealStage()).as("row %d dealStage", id).isEqualTo(DealStage.QUOTE_OWNER);
         }
         assertThat(byId(rows, prA2).origin()).isEqualTo("PRICING_REQUEST");
     }
@@ -300,7 +304,8 @@ class DealQuotationSearchOriginsIntegrationTest extends AbstractPostgresIntegrat
     void findById_carriesTicketCodeAndDealStage() {
         DealQuotationDto detail = quotationService.get(directA, salesA);
         assertThat(detail.ticketCode()).isEqualTo(code(dealA)).isNotBlank();
-        assertThat(detail.dealStage()).isEqualTo(DealStage.LEAD_APPROACH);
+        // ขั้น 5, not ขั้น 1 — see #directDraft. The field still reads LIVE from the deal.
+        assertThat(detail.dealStage()).isEqualTo(DealStage.QUOTE_OWNER);
         assertThat(detail.readOnly()).isFalse();
 
         // Read live from the deal, never frozen on the quotation.
@@ -381,6 +386,12 @@ class DealQuotationSearchOriginsIntegrationTest extends AbstractPostgresIntegrat
                 .addValue("total", totalAmount), Long.class);
     }
 
+    /**
+     * A DEAL_DIRECT draft addressed to the OWNER. Creating one is what puts its deal on the
+     * owner's stage (ขั้น 5; D-2, owner ruling 2026-10-16, {@code .design/quote-stage-gates}), so
+     * every deal built from this fixture reads ขั้น 5 rather than ขั้น 1, and a second quotation to
+     * the SAME recipient is a forward-only no-op.
+     */
     private UpsertDealQuotationRequest directDraft() {
         ItemInput tile = new ItemInput(
             null, null, null, "SCG", "Link Tile", "White", "Matte", "60x60", new BigDecimal("10.00"),

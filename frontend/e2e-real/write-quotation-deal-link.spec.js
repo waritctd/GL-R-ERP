@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { test, expect } from '@playwright/test';
 import { apiSessionsFor, apiWrite, disposeSessions } from './helpers/api.js';
+import { directQuotationBody, inDays } from './helpers/sales.js';
 
 /**
  * Quotation ↔ deal linking, SLICE 2 — the contract PR #1090's UI codes against, proven against the
@@ -26,65 +27,8 @@ import { apiSessionsFor, apiWrite, disposeSessions } from './helpers/api.js';
  * the real controllers, so the fixtures here are already known to be accepted by the service.
  */
 
-const ITEM = {
-  lineType: 'TILE',
-  brand: 'Pietre Di Sardegna',
-  model: 'Pietre Di Sardegna',
-  color: 'Punta Molara',
-  texture: 'R11',
-  sizeText: '60x120',
-  thicknessMm: 2,
-  sqmPerPiece: 0.72,
-  quantityMode: 'AREA',
-  areaSqm: 120,
-  wastageMode: 'PERCENT',
-  wastageValue: 10,
-  piecesPerBox: 2,
-  unitPrice: 1748.13,
-  discountPct: 0,
-  originCountry: 'อิตาลี',
-  leadTimeMinDays: 75,
-  leadTimeMaxDays: 90,
-  locationLabel: null,
-};
-
 const LIVE_PRICING_REQUEST_MESSAGE =
   'ดีลนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน';
-
-function inDays(days) {
-  const bangkokToday = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(new Date());
-  const date = new Date(`${bangkokToday}T00:00:00Z`);
-  date.setUTCDate(date.getUTCDate() + days);
-  return date.toISOString().slice(0, 10);
-}
-
-/** QuotationEditorPage#buildUpsertPayload's shape. `recipientType` is OMITTED (never null) when
- * there is none — exactly how that method spreads it. */
-function quotationBody(recipientType) {
-  return {
-    contactId: null,
-    deptCode: 'P003',
-    unitCode: 'D002',
-    offerDate: inDays(0),
-    depositPercent: 50,
-    remainderMode: 'ON_DELIVERY',
-    creditDays: null,
-    validityDays: 30,
-    validityMode: 'DAYS',
-    validityUntil: null,
-    customerNotes: null,
-    priceMode: 'NET',
-    documentLanguage: 'TH',
-    currency: 'THB',
-    printedByDisplayId: null,
-    salesRepDisplayId: null,
-    projectName: null,
-    omitContactHonorific: false,
-    orderedByName: null,
-    items: [ITEM],
-    ...(recipientType ? { recipientType } : {}),
-  };
-}
 
 test.describe('quotation ↔ deal link (slice 2) — the real service', () => {
   let sessions;
@@ -114,7 +58,7 @@ test.describe('quotation ↔ deal link (slice 2) — the real service', () => {
   }
 
   const createQuotation = (dealId, recipientType) =>
-    apiWrite(sessions.sales, 'post', `/api/tickets/${dealId}/deal-quotations`, quotationBody(recipientType));
+    apiWrite(sessions.sales, 'post', `/api/tickets/${dealId}/deal-quotations`, directQuotationBody(recipientType));
 
   async function summaryOf(dealId) {
     const response = await sessions.sales.get(`/api/tickets/${dealId}`);
@@ -158,8 +102,10 @@ test.describe('quotation ↔ deal link (slice 2) — the real service', () => {
     const live = { id: quotation.id, number: quotation.number, docStatus: 'DRAFT', recipientType: 'DESIGNER' };
     const after = await summaryOf(dealId);
     expect(after.liveDirectQuotation, 'GET /api/tickets/{id}').toEqual(live);
-    // The recipient → stage rule is owned by the stage-route work, not this slice: nothing moves.
-    expect(after.salesStage).toBe(before.salesStage);
+    // D-2 (.design/quote-stage-gates, 2026-10-16): quoting a recipient moves the deal onto that
+    // recipient's stage at creation. DESIGNER_LED routes through QUOTE_DESIGN_SIDE, so it moves.
+    expect(before.salesStage).toBe('LEAD_APPROACH');
+    expect(after.salesStage).toBe('QUOTE_DESIGN_SIDE');
 
     const list = await sessions.sales.get('/api/tickets');
     expect(list.status(), 'GET /api/tickets').toBe(200);
@@ -187,6 +133,8 @@ test.describe('quotation ↔ deal link (slice 2) — the real service', () => {
     expect(again.status(), 'N6 lifts once the live quotation is cancelled').toBe(201);
     const replacement = (await again.json()).quotation;
     expect((await summaryOf(dealId)).liveDirectQuotation).toMatchObject({ id: replacement.id, recipientType: 'OWNER' });
+    // D-2 again: the OWNER quotation moves the deal forward from ขั้น 4 to ขั้น 5.
+    expect((await summaryOf(dealId)).salesStage).toBe('QUOTE_OWNER');
 
     const cleanup = await apiWrite(sessions.sales, 'post', `/api/deal-quotations/${replacement.id}/cancel`, {});
     expect(cleanup.status(), 'cancel what this test created').toBe(200);

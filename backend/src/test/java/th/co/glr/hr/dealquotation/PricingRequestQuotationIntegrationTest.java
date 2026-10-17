@@ -437,9 +437,9 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     /** GLA-123 slice S2: submit is now LIVE for this origin — {@code
-     * DealQuotationService#requireStatusMachineEnabled} no longer guards submit/approve/reject
-     * (it now covers only createRevision/createReorder, still refused here — D12, a revision of
-     * an ACCEPTED quotation is S3's territory). This test used to pin the S1-era 409 refusal by
+     * DealQuotationService#requireReorderAllowedForOrigin} no longer guards submit/approve/reject
+     * (it now covers only createReorder, still refused here; createRevision is no longer
+     * guarded by it). This test used to pin the S1-era 409 refusal by
      * name (commit history: {@code submit_refusedForPricingRequestOrigin}); it now pins the
      * opposite — see {@code DealQuotationPricingRequestApprovalIntegrationTest} for the FULL
      * approval matrix (unchanged/changed x sales_manager/ceo, the CEO-required-when-changed gate,
@@ -467,9 +467,9 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
 
     // ─────────────────────────────────────────────────────────────────────────────────────
     // GLA-123 slice S2 update: submit/approve/reject are now LIVE for this origin (see
-    // submit_nowLiveForPricingRequestOrigin above), but createRevision/createReorder remain
-    // explicitly refused by #requireStatusMachineEnabled (D12 — a revision of an ACCEPTED
-    // quotation is S3's territory; this origin has no customer-outcome/acceptance step yet).
+    // submit_nowLiveForPricingRequestOrigin above), but only createReorder remains
+    // explicitly refused by #requireReorderAllowedForOrigin (createRevision is no longer guarded
+    // by it for this origin).
     // Doubly true in practice: this origin's own status machine skips APPROVED entirely
     // (PENDING_APPROVAL -> ISSUED on one approval, by sales_manager or ceo, never APPROVED as a
     // resting state — see DealQuotationService#approveAndIssuePricingRequestOrigin), and both
@@ -895,8 +895,8 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
     }
 
     /** Mirror direction (owner ruling: "make them consistent") — REJECTED is unreachable for a
-     * PRICING_REQUEST-origin row in S1 (requireStatusMachineEnabled refuses submit/approve/
-     * reject/revise/reorder for this origin), so this forces it via SQL to prove
+     * PRICING_REQUEST-origin row in S1 (the S1 guard refused submit/approve/reject/revise/reorder for this
+     * origin; today only createReorder is refused, via requireReorderAllowedForOrigin), so this forces it via SQL to prove
      * hasLivePricingRequestQuotation's own predicate is ALREADY correct for the day S2 makes it
      * reachable, rather than leaving an untested guess. */
     @Test

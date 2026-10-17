@@ -202,14 +202,18 @@ describe('mockApi dealQuotations.createRevision -- PRICING_REQUEST origin (PR B)
     expect(again.revisionNo).toBe(source.revisionNo + 2);
   });
 
-  it('a revision DRAFT may change the recipient (to OWNER); the parent keeps its own', async () => {
+  // Owner ruling 2026-10-17 (D-5 step 2, option 1): a revision keeps its parent's recipient. This
+  // test used to pin PR B's opposite ("a revision DRAFT may change the recipient to OWNER"); the
+  // real rule now lives in DealQuotationService#update and is pinned there by
+  // DealQuotationPricingRequestRevisionIntegrationTest#revisionDraft_cannotBeReaddressed_409_andNothingChanges.
+  it('a revision DRAFT cannot be re-addressed (409); child and parent both keep the recipient', async () => {
     const { quotation: source } = await issuedQuotation();
     await api.auth.login({ role: 'sales' });
     const { quotation: child } = await api.dealQuotations.createRevision(source.id);
-    const { quotation: updated } = await api.dealQuotations.update(child.id, {
+    await expect(api.dealQuotations.update(child.id, {
       ...child, items: child.items, recipientType: 'OWNER',
-    });
-    expect(updated.recipientType).toBe('OWNER');
+    })).rejects.toMatchObject({ status: 409, message: expect.stringContaining('ฉบับแก้ไขต้องส่งถึงผู้รับเดิม') });
+    expect((await api.dealQuotations.get(child.id)).quotation.recipientType).toBe('DESIGNER');
     expect((await api.dealQuotations.get(source.id)).quotation.recipientType).toBe('DESIGNER');
   });
 });

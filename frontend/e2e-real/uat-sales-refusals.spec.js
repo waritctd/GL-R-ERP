@@ -5,6 +5,8 @@ import {
   advanceStage,
   cancelDeal,
   createDeal,
+  createDirectQuotation,
+  AUTO_STAGE_MESSAGE,
   readDeal,
   runId,
   setTracking,
@@ -196,9 +198,10 @@ test.describe('@uat-sales refusal matrix — stage/note/readiness/role guards', 
     const deal = await createDeal(sessions, { caseName: 'refusal4 routine backward' });
     created.push(deal.id);
 
-    // LEAD_APPROACH -> QUOTE_DESIGN_SIDE steps over only PRESENTATION and SPEC_APPROVED, neither
-    // MANDATORY, so this setup hop needs no note either.
-    await advanceStage(sessions, 'sales', deal.id, 'QUOTE_DESIGN_SIDE');
+    // ขั้น 4 is reached by quoting the designer (D-2: creating a quotation moves the deal onto the
+    // recipient's stage). A hand move into QUOTE_DESIGN_SIDE is 409 without such a quotation (D-3).
+    // createDeal sends no entryChannel -> UNSPECIFIED, which has no route, so the advance fires.
+    await createDirectQuotation(sessions, deal.id, 'DESIGNER');
 
     // The allowlisted pair (DealStage.isRoutineBackwardMove) — no note needed even though it is
     // backward.
@@ -207,8 +210,8 @@ test.describe('@uat-sales refusal matrix — stage/note/readiness/role guards', 
     const moved = await readDeal(sessions, 'sales', deal.id);
     expect(moved.summary.salesStage).toBe('SPEC_APPROVED');
     const history = await stageHistory(sessions, 'sales', deal.id);
-    expect(history, 'both hops recorded, neither carrying a note').toEqual([
-      { from: 'LEAD_APPROACH', to: 'QUOTE_DESIGN_SIDE', message: null },
+    expect(history, 'both hops recorded; the first is automatic, the backward one carries no note').toEqual([
+      { from: 'LEAD_APPROACH', to: 'QUOTE_DESIGN_SIDE', message: AUTO_STAGE_MESSAGE },
       { from: 'QUOTE_DESIGN_SIDE', to: 'SPEC_APPROVED', message: null },
     ]);
   });

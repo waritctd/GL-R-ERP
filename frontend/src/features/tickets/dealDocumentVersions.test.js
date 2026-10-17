@@ -51,15 +51,60 @@ describe('dealDocumentVersions', () => {
 
   it('direct base number: when the number does not end with -revisionNo it is returned unchanged (no regex guess)', () => {
     const groups = groupDirectQuotations([
-      { id: 1, number: 'QT-A-1', revisionNo: 2 },
-      { id: 2, number: 'QT-A-2', revisionNo: 2 },
+      { id: 1, number: 'QT-A-1', revisionNo: 2, recipientType: 'OWNER' },
+      { id: 2, number: 'QT-A-2', revisionNo: 2, recipientType: 'OWNER' },
     ]);
     expect(groups).toHaveLength(2); // QT-A-1 is not a revision-2 suffix, so it is its own base
-    expect(groups.map((g) => g.key).sort()).toEqual(['direct:QT-A', 'direct:QT-A-1']);
+    expect(groups.map((g) => g.key).sort()).toEqual(['direct:QT-A-1:OWNER', 'direct:QT-A:OWNER']);
   });
 
   it('direct base number: the short-suffix regex applies only when revisionNo is null', () => {
-    const groups = groupDirectQuotations([{ id: 1, number: 'QT-A-1', revisionNo: null }, { id: 2, number: 'QT-A-2', revisionNo: null }]);
+    const groups = groupDirectQuotations([
+      { id: 1, number: 'QT-A-1', revisionNo: null, recipientType: 'OWNER' },
+      { id: 2, number: 'QT-A-2', revisionNo: null, recipientType: 'OWNER' },
+    ]);
     expect(groups).toHaveLength(1);
+  });
+
+  // ── grouping is per RECIPIENT, not per base (owner ruling 2026-10-17) ──────────────────────
+  // Why: see groupDirectQuotations — the base is deal-wide, so the recipient identifies a document.
+  it('splits two recipients sharing one deal family into separate documents', () => {
+    const groups = groupDirectQuotations([
+      { id: 1, number: 'QT-2026-0014-1', revisionNo: 1, recipientType: 'DESIGNER', createdAt: '2026-10-01' },
+      { id: 2, number: 'QT-2026-0014-2', revisionNo: 2, recipientType: 'OWNER', createdAt: '2026-10-02' },
+    ]);
+
+    expect(groups).toHaveLength(2);
+    expect(groups.map((g) => g.key).sort())
+      .toEqual(['direct:QT-2026-0014:DESIGNER', 'direct:QT-2026-0014:OWNER']);
+    // Neither is nested under the other — one version each.
+    expect(groups.map((g) => g.versions.length)).toEqual([1, 1]);
+  });
+
+  it('still groups a real revision chain, which shares its parent\'s recipient', () => {
+    const groups = groupDirectQuotations([
+      { id: 1, number: 'QT-2026-0014-1', revisionNo: 1, recipientType: 'DESIGNER', createdAt: '2026-10-01' },
+      { id: 2, number: 'QT-2026-0014-3', revisionNo: 3, recipientType: 'DESIGNER', createdAt: '2026-10-03' },
+    ]);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].key).toBe('direct:QT-2026-0014:DESIGNER');
+    expect(groups[0].versions.map((v) => v.id)).toEqual([2, 1]); // newest suffix first
+  });
+
+  /** An older backend omits recipientType (DealDocumentRegister's own note). Those rows must group
+   * together under one stable token rather than each becoming its own singleton — and must not be
+   * merged with a row that DOES state a recipient. */
+  it('groups rows with no recipientType together, separately from rows that have one', () => {
+    const groups = groupDirectQuotations([
+      { id: 1, number: 'QT-2026-0014-1', revisionNo: 1, createdAt: '2026-10-01' },
+      { id: 2, number: 'QT-2026-0014-2', revisionNo: 2, createdAt: '2026-10-02' },
+      { id: 3, number: 'QT-2026-0014-3', revisionNo: 3, recipientType: 'OWNER', createdAt: '2026-10-03' },
+    ]);
+
+    expect(groups).toHaveLength(2);
+    expect(groups.map((g) => g.key).sort())
+      .toEqual(['direct:QT-2026-0014:OWNER', 'direct:QT-2026-0014:UNKNOWN']);
+    expect(groups.find((g) => g.key.endsWith(':UNKNOWN')).versions.map((v) => v.id)).toEqual([2, 1]);
   });
 });

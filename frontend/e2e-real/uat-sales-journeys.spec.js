@@ -376,7 +376,7 @@ test.describe('@uat-sales pipeline journeys — Cases A-D', () => {
       expectNeverEntered(history, [...STEPPED_OVER, 'NEGOTIATION']);
     });
 
-    await test.step('deal 2 (manual): the SAME landing stage, this time an explicit manual move with note: null', async () => {
+    await test.step('deal 2 (manual): the SAME landing stage by hand is now REFUSED — D-3 fact gate, 2026-10-16', async () => {
       const deal = await createDeal(sessions, { caseName: 'caseC2 buyer-direct manual' });
       created.push(deal.id);
       await setEntryChannel(sessions, deal.id, 'BUYER_DIRECT');
@@ -384,18 +384,21 @@ test.describe('@uat-sales pipeline journeys — Cases A-D', () => {
       const baseline = await stageHistory(sessions, 'sales', deal.id);
       expect(baseline, 'a freshly created deal must have no STAGE_CHANGED history').toEqual([]);
 
-      // Six stages stepped over, none MANDATORY: DealStage.requiresJustification's forward rule
-      // only asks whether a MANDATORY stage lies STRICTLY BETWEEN LEAD_APPROACH and QUOTE_BUYER,
-      // and none of STEPPED_OVER is in MANDATORY = {NEGOTIATION, ORDER_RECEIVED,
-      // DELIVERY_SCHEDULING, DELIVERED, CLOSED_PAID}.
-      await advanceStage(sessions, 'sales', deal.id, 'QUOTE_BUYER', { note: null });
+      // Until 2026-10-16 this hop went through with note: null — six stages stepped over, none
+      // MANDATORY, so the note rule had nothing to say. The owner's D-3 ruling
+      // (.design/quote-stage-gates) now closes the hand move into a quote stage altogether:
+      // QUOTE_BUYER claims "the buyer has been quoted", and TicketService.requireStageFactsHold
+      // refuses the move with 409 until a quotation addressed to ผู้ซื้อ / ผู้รับเหมา exists on the
+      // deal. The note rule is never reached, which is the point: deal 1 above is the ONLY way onto
+      // ขั้น 8 — by quoting the buyer — and the refusal below is what proves it.
+      const refused = await advanceStage(sessions, 'sales', deal.id, 'QUOTE_BUYER', { note: null, expect: 409 });
+      const body = await refused.json();
+      expect(body.message).toContain('ยังไม่มีใบเสนอราคาถึง');
 
       const history = await stageHistory(sessions, 'sales', deal.id);
-      // Differs from deal 1 ONLY in the hop's message: null (a human's own POST /stage call) in
-      // place of AUTO_STAGE_MESSAGE. Same starting stage, same landing stage, provably different
-      // mechanism.
-      expectRoute(history, ['LEAD_APPROACH', 'QUOTE_BUYER'], [null]);
-      expectNeverEntered(history, STEPPED_OVER);
+      expect(history, 'a refused fact-gate move must write no STAGE_CHANGED event').toEqual([]);
+      const untouched = await readDeal(sessions, 'sales', deal.id);
+      expect(untouched.summary.salesStage).toBe('LEAD_APPROACH');
     });
   });
 

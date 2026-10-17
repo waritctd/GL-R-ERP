@@ -119,10 +119,18 @@ class DealRouteGateIntegrationTest extends AbstractPostgresIntegrationTest {
     /**
      * Only the OFF-route stages are refused: on an owner-direct deal S3 (kept, only re-worded) and
      * the rest of the route still move normally. Guards against a gate that over-reaches.
+     *
+     * <p>The deal is pre-quoted to the owner and the buyer because the walk passes through ขั้น 5
+     * and ขั้น 8, which the D-3 fact gate holds shut until such a quotation exists (owner ruling
+     * 2026-10-16). That gate is not this test's subject and must not be allowed to answer for the
+     * route: without the fixture this would go red on a missing document while saying "the route
+     * refused an on-route stage", which is the opposite of what it exists to detect.
      */
     @Test
     void ownerDirect_stillReachesTheStagesOnItsRoute() {
         long ticketId = dealAt(EntryChannel.OWNER_DIRECT, DealStage.PRESENTATION);
+        QuoteStageFixtures.issuedQuotationOnDeal(jdbc, ticketId, ownerRepId, QuotationRecipient.OWNER);
+        QuoteStageFixtures.issuedQuotationOnDeal(jdbc, ticketId, ownerRepId, QuotationRecipient.BUYER);
 
         for (String onRoute : List.of(DealStage.SPEC_APPROVED, DealStage.QUOTE_OWNER,
                 DealStage.OWNER_SIGNOFF, DealStage.AWAITING_BUYER, DealStage.QUOTE_BUYER,
@@ -144,6 +152,16 @@ class DealRouteGateIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void unspecified_isRefusedNothing_everyStageStillReachable() {
         long ticketId = dealAt(EntryChannel.UNSPECIFIED, DealStage.PRESENTATION);
+        // Pre-quoted to all three parties: the walk below crosses ขั้น 4/5/8, which the D-3 fact
+        // gate holds until each party's quotation exists (owner ruling 2026-10-16). That gate is
+        // emphatically NOT the brick this test guards against — a rep clears it by quoting
+        // someone, which is a remedy they have — whereas the channel on these rows cannot be
+        // corrected at all since GLA-156, which is precisely why the ROUTE must refuse nothing
+        // here. Keeping the fixture lets the test still prove the route refuses nothing, end to
+        // end, instead of stopping at the first unrelated gate.
+        QuoteStageFixtures.issuedQuotationOnDeal(jdbc, ticketId, ownerRepId, QuotationRecipient.DESIGNER);
+        QuoteStageFixtures.issuedQuotationOnDeal(jdbc, ticketId, ownerRepId, QuotationRecipient.OWNER);
+        QuoteStageFixtures.issuedQuotationOnDeal(jdbc, ticketId, ownerRepId, QuotationRecipient.BUYER);
 
         assertNoStageIsOffRoute(decisionsFor(ticketId));
         for (String stage : List.of(DealStage.QUOTE_DESIGN_SIDE, DealStage.QUOTE_OWNER,
@@ -161,10 +179,18 @@ class DealRouteGateIntegrationTest extends AbstractPostgresIntegrationTest {
         long designerLed = dealAt(EntryChannel.DESIGNER_LED, DealStage.PRESENTATION);
         long unspecified = dealAt(EntryChannel.UNSPECIFIED, DealStage.PRESENTATION);
 
+        // The allowedStages COMPARISON below needs no quotation fixture and deliberately gets
+        // none: both deals are equally un-quoted, so the D-3 fact gate blocks ขั้น 4/5/8 on both
+        // and cancels out of the equality. That is the assertion's whole strength — it asks only
+        // whether the two channels are treated alike, so it is immune to any gate they share.
         assertNoStageIsOffRoute(decisionsFor(designerLed));
         assertThat(allowedStages(decisionsFor(designerLed)))
             .isEqualTo(allowedStages(decisionsFor(unspecified)));
 
+        // The walk does need it, for the reason given in the UNSPECIFIED test above.
+        QuoteStageFixtures.issuedQuotationOnDeal(jdbc, designerLed, ownerRepId, QuotationRecipient.DESIGNER);
+        QuoteStageFixtures.issuedQuotationOnDeal(jdbc, designerLed, ownerRepId, QuotationRecipient.OWNER);
+        QuoteStageFixtures.issuedQuotationOnDeal(jdbc, designerLed, ownerRepId, QuotationRecipient.BUYER);
         for (String stage : List.of(DealStage.QUOTE_DESIGN_SIDE, DealStage.QUOTE_OWNER,
                 DealStage.OWNER_SIGNOFF, DealStage.AWAITING_BUYER, DealStage.QUOTE_BUYER)) {
             logAnActivityAndFollowUp(designerLed);
@@ -178,11 +204,16 @@ class DealRouteGateIntegrationTest extends AbstractPostgresIntegrationTest {
     /**
      * A deal sitting ON an off-route stage (it got there, then the channel was corrected to
      * owner-direct) must still be able to move FORWARD. Gating the current stage would strand it.
+     *
+     * <p>The forward target is ขั้น 5, so the owner's quotation is fixture for the D-3 fact gate
+     * (owner ruling 2026-10-16) — this test is about the ROUTE gate reading the target and never
+     * the current stage, and a 409 about a missing document would mask exactly that.
      */
     @Test
     void aDealSittingOnAnOffRouteStage_canStillMoveForward() {
         long ticketId = dealAt(EntryChannel.DESIGNER_LED, DealStage.QUOTE_DESIGN_SIDE);
         tickets.updateEntryChannel(ticketId, EntryChannel.OWNER_DIRECT); // the correction
+        QuoteStageFixtures.issuedQuotationOnDeal(jdbc, ticketId, ownerRepId, QuotationRecipient.OWNER);
 
         assertThat(DealRoute.isOnRoute(EntryChannel.OWNER_DIRECT, stageOf(ticketId))).isFalse();
         assertThat(decision(decisionsFor(ticketId), DealStage.QUOTE_OWNER).allowed()).isTrue();

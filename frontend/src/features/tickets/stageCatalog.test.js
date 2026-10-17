@@ -112,13 +112,45 @@ function javaConstantMap(declaration) {
 }
 
 /**
+ * The stages a quote-stage gate can refuse, derived from the ONE recipient → stage mapping it is
+ * built on: `TicketService.stageForQuotationRecipient`'s `return DealStage.X;` lines.
+ *
+ * Read this way rather than hardcoded because the Java deliberately has no fourth copy of the
+ * mapping — `quotationRecipientForStage` inverts `stageForQuotationRecipient` at runtime instead
+ * of restating it, for exactly the drift reason that method's own Javadoc records. A guard that
+ * listed the three stages itself would be the copy the Java refused to make.
+ */
+function javaQuoteRecipientStages() {
+  const method = ticketServiceSource.match(
+    /private static String stageForQuotationRecipient\([^)]*\)\s*\{([\s\S]*?)\n {4}\}/,
+  );
+  if (!method) throw new Error('could not find stageForQuotationRecipient in TicketService.java');
+  const stages = [...method[1].matchAll(/return DealStage\.([A-Z_]+);/g)].map((hit) => hit[1]);
+  if (stages.length !== 3) {
+    throw new Error(`expected 3 recipient stages, parsed ${stages.length}: ${stages}`);
+  }
+  return stages;
+}
+
+/**
  * The stages `TicketService.requireStageFactsHold` actually refuses a manual move INTO.
  *
- * Read from the method body's own `DealStage.X.equals(targetStage)` guards rather than from any
- * named set, because there IS no named set — the four gates are four `if` statements, and the
- * absence of a constant to import is precisely why the mock reached for `AUTO_ADVANCED` instead
- * and got a different four (issue #742). The body is isolated first so an `equals(targetStage)`
- * elsewhere in this 2000-line service cannot leak in.
+ * Read from the method body rather than from any named set, because there IS no named set — the
+ * gates are `if` statements, and the absence of a constant to import is precisely why the mock
+ * reached for `AUTO_ADVANCED` instead and got a different four (issue #742). The body is isolated
+ * first so an `equals(targetStage)` elsewhere in this 2000-line service cannot leak in.
+ *
+ * TWO shapes are matched, because the method now has two:
+ *
+ *   1. the original four, each a literal `DealStage.X.equals(targetStage)`;
+ *   2. the three quote stages (owner ruling 2026-10-16), gated as ONE check —
+ *      `quotationRecipientForStage(targetStage)` returning non-null — rather than three literals.
+ *
+ * Matching only shape 1 is how this guard goes BLIND: the quote-stage gate landed in the service
+ * and the mock stub stayed at four, which is #742 recurring exactly. So the presence of the
+ * inverse-mapping call is what pulls {@link javaQuoteRecipientStages} in. If a future gate invents
+ * a third shape, this function must learn it too — a gate the guard cannot see is a mock that
+ * drifts silently.
  */
 function javaFactGatedStages() {
   const method = ticketServiceSource.match(
@@ -127,12 +159,13 @@ function javaFactGatedStages() {
     /private void requireStageFactsHold\([^)]*\)\s*\{([\s\S]*?)\n {4}\}/,
   );
   if (!method) throw new Error('could not find requireStageFactsHold in TicketService.java');
+  const body = method[1];
   const stages = new Set();
-  const pattern = /DealStage\.([A-Z_]+)\.equals\(targetStage\)/g;
-  let hit = pattern.exec(method[1]);
-  while (hit !== null) {
+  for (const hit of body.matchAll(/DealStage\.([A-Z_]+)\.equals\(targetStage\)/g)) {
     stages.add(hit[1]);
-    hit = pattern.exec(method[1]);
+  }
+  if (/quotationRecipientForStage\(targetStage\)/.test(body)) {
+    for (const stage of javaQuoteRecipientStages()) stages.add(stage);
   }
   return [...stages].sort();
 }

@@ -147,3 +147,6 @@ graphify-out
 # Obsidian vaults exported from the graphs — same generated artifact, different shape.
 backend-graph-vault/
 integration-map-vault/
+
+# Superpowers brainstorm scratch (visual companion mockups)
+.superpowers/

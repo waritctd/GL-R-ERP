@@ -528,15 +528,28 @@ describe('mock dealQuotations.update -- item id upsert (mirrors DealQuotationSer
 
 describe('mock nextMockDealQuotationNumber -- #M10 number FORMAT', () => {
   // Owner feedback 2026-09-11 ("มีรันเลข -1 -2 ต่อท้ายตี้วแต่แรก" / "ใบแรกเป็น QT-2026-0014-1"): the
-  // FIRST issued document now carries the revision suffix too.
-  it('produces QT-{year}-{4-digit seq}-1, matching DealQuotationRepository.nextQuotationCode + revisionNumber(_, 1), not a bare QT-{year}-{seq} or QD{BE-year}', async () => {
+  // FIRST issued document carries the revision suffix too.
+  //
+  // The suffix is no longer pinned to -1, and that is the owner's 2026-10-17 ruling rather than a
+  // loosened assertion: the base number belongs to the DEAL, so a create on a deal that already
+  // holds documents continues the family. Demo ticket 18 carries seed quotations, AND this module's
+  // mockDealQuotations is shared state that grows as the suite runs — so the exact suffix here is
+  // both correct-as-N and order-dependent. The FORMAT is the contract this test names; the
+  // continuation rule itself is pinned in mockApi.quotationDealLink.test.js against a fresh deal.
+  it('produces QT-{year}-{4-digit seq}-{n}, matching nextNumberOnDeal, not a bare QT-{year}-{seq} or QD{BE-year}', async () => {
     await api.auth.login(salesUser);
     const { quotation } = await createOn18({ items: [ONE_ITEM] });
-    expect(quotation.number).toMatch(/^QT-\d{4}-\d{4}-1$/);
-    expect(quotation.revisionNo).toBe(1);
+    expect(quotation.number).toMatch(/^QT-\d{4}-\d{4}-\d+$/);
+    expect(quotation.revisionNo).toBeGreaterThanOrEqual(1);
+    // The number and the suffix agree — a row whose number says -3 while revisionNo says 1 is the
+    // defect this pairing exists to catch.
+    expect(quotation.number).toBe(`QT-${new Date().getFullYear()}-${
+      quotation.number.split('-')[2]}-${quotation.revisionNo}`);
   });
 });
 
+// Suffixes in these tests are relative to the created row, not fixed at 1: per-deal families mean a
+// create on seeded demo ticket 18 continues the family (owner ruling 2026-10-17).
 describe('mock dealQuotations revision numbering -- #M10', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -546,10 +559,14 @@ describe('mock dealQuotations revision numbering -- #M10', () => {
     await api.auth.login(salesUser);
     const created = await createOn18({ items: [ONE_ITEM] });
     const rootNumber = created.quotation.number;
-    // rootNumber is now "{base}-1" (owner feedback 2026-09-11) -- recover the bare base the same
-    // way DealQuotationRepository#baseNumber does, rather than assuming rootNumber IS the base.
-    expect(rootNumber).toMatch(/-1$/);
-    const baseNumber = rootNumber.slice(0, -'-1'.length);
+    // Recover the bare base the same way DealQuotationRepository#baseNumber does — by stripping the
+    // row's OWN suffix, not a hardcoded "-1". Since the 2026-10-17 ruling the base belongs to the
+    // deal, so a create on demo ticket 18 (which carries seed quotations) continues the family and
+    // the root here is "{base}-N" for some N. Deriving the base from revisionNo is what makes this
+    // test about SUFFIX STACKING rather than about which number the root happened to get.
+    const rootRevisionNo = created.quotation.revisionNo;
+    const baseNumber = rootNumber.slice(0, -`-${rootRevisionNo}`.length);
+    expect(rootNumber).toBe(`${baseNumber}-${rootRevisionNo}`);
 
     await api.dealQuotations.submit(created.quotation.id);
     await api.auth.login({ role: 'sales_manager' });
@@ -558,8 +575,8 @@ describe('mock dealQuotations revision numbering -- #M10', () => {
 
     await api.auth.login(salesUser);
     const revision2 = await api.dealQuotations.createRevision(created.quotation.id, {});
-    expect(revision2.quotation.number).toBe(`${baseNumber}-2`);
-    expect(revision2.quotation.revisionNo).toBe(2);
+    expect(revision2.quotation.number).toBe(`${baseNumber}-${rootRevisionNo + 1}`);
+    expect(revision2.quotation.revisionNo).toBe(rootRevisionNo + 1);
 
     await api.dealQuotations.submit(revision2.quotation.id);
     await api.auth.login({ role: 'sales_manager' });
@@ -569,8 +586,8 @@ describe('mock dealQuotations revision numbering -- #M10', () => {
     const revision3 = await api.dealQuotations.createRevision(revision2.quotation.id, {});
     // The bug this guards: naively appending onto the SOURCE's own number (rather than
     // recovering the ORIGINAL base first) would produce "{root}-2-3" here.
-    expect(revision3.quotation.number).toBe(`${baseNumber}-3`);
-    expect(revision3.quotation.revisionNo).toBe(3);
+    expect(revision3.quotation.number).toBe(`${baseNumber}-${rootRevisionNo + 2}`);
+    expect(revision3.quotation.revisionNo).toBe(rootRevisionNo + 2);
   });
 
   // Legacy row: a quotation issued BEFORE this change (owner feedback 2026-09-11) carries a BARE
@@ -600,10 +617,10 @@ describe('mock dealQuotations revision numbering -- #M10', () => {
 //
 // ⚠️ Owner ruling 2026-09-19 (INVERTS this describe block's own former header comment, which said
 // "the SOURCE stays APPROVED forever, unlike a revision's parent" -- that is now FALSE): a deal
-// may hold only ONE APPROVED DEAL_DIRECT quotation at a time. Clone CREATION itself still leaves
+// may hold only ONE live quotation at a time (origin-agnostic sweep since 2026-10-17). Clone CREATION itself still leaves
 // the source untouched (still APPROVED) -- that half is unchanged -- but once the CLONE ITSELF is
 // approved, DealQuotationService#approve's same-ticket sweep (mirrored here via
-// DealQuotationRepository#supersedeOtherApprovedOnTicket) supersedes the source, exactly like
+// DealQuotationRepository#supersedeOtherLiveOnTicket) supersedes the source, exactly like
 // approving a revision or a second, wholly independent first-issue quotation would.
 describe('mock dealQuotations.createReorder -- GLA-74 part 1', () => {
   afterEach(() => {
@@ -623,7 +640,9 @@ describe('mock dealQuotations.createReorder -- GLA-74 part 1', () => {
     const { quotation: reorder } = await api.dealQuotations.createReorder(approved.quotation.id, {});
 
     expect(reorder.docStatus).toBe('DRAFT');
-    expect(reorder.number).toBe(`${baseNumber}-2`);
+    // Next suffix after the SOURCE, derived rather than hardcoded — per-deal families mean the
+    // source is not necessarily -1 (owner ruling 2026-10-17).
+    expect(reorder.number).toBe(`${baseNumber}-${created.quotation.revisionNo + 1}`);
     expect(reorder.derivedFromQuotationId).toBe(approved.quotation.id);
     expect(reorder.parentQuotationId).toBeNull();
     expect(reorder.items).toHaveLength(approved.quotation.items.length);
@@ -984,6 +1003,7 @@ describe('mock dealQuotations counts / needsRework -- owner feedback F5', () => 
     await api.auth.login(salesUser);
     const created = await createOn18({ items: [ONE_ITEM] });
     const base = created.quotation.number.replace(/-\d+$/, '');
+    const n = created.quotation.revisionNo;
 
     await api.dealQuotations.submit(created.quotation.id);
     await api.auth.login({ role: 'sales_manager' });
@@ -991,14 +1011,14 @@ describe('mock dealQuotations counts / needsRework -- owner feedback F5', () => 
 
     await api.auth.login(salesUser);
     const { quotation: revision2 } = await api.dealQuotations.submit(created.quotation.id);
-    expect(revision2.number).toBe(`${base}-2`);
+    expect(revision2.number).toBe(`${base}-${n + 1}`);
 
     await api.auth.login({ role: 'sales_manager' });
     await api.dealQuotations.reject(revision2.id, { reason: 'รอบ 2' });
 
     await api.auth.login(salesUser);
     const { quotation: revision3 } = await api.dealQuotations.submit(revision2.id);
-    expect(revision3.number).toBe(`${base}-3`);
+    expect(revision3.number).toBe(`${base}-${n + 2}`);
     expect(revision3.parentQuotationId).toBe(revision2.id);
   });
 
@@ -1045,6 +1065,7 @@ describe('mock dealQuotations counts / needsRework -- owner feedback F5', () => 
     await api.auth.login(salesUser);
     const created = await createOn18({ items: [ONE_ITEM] });
     const base = created.quotation.number.replace(/-\d+$/, '');
+    const n = created.quotation.revisionNo;
     const originalId = created.quotation.id;
 
     await api.dealQuotations.submit(originalId);
@@ -1053,7 +1074,7 @@ describe('mock dealQuotations counts / needsRework -- owner feedback F5', () => 
 
     await api.auth.login(salesUser);
     const { quotation: revision2 } = await api.dealQuotations.submit(originalId);
-    expect(revision2.number).toBe(`${base}-2`);
+    expect(revision2.number).toBe(`${base}-${n + 1}`);
 
     await api.auth.login({ role: 'sales_manager' });
     await api.dealQuotations.reject(revision2.id, { reason: 'รอบ 2' });
@@ -1065,7 +1086,7 @@ describe('mock dealQuotations counts / needsRework -- owner feedback F5', () => 
 
     // Must not collide with revision2's already-used -2.
     const { quotation: revision3 } = await api.dealQuotations.submit(originalId);
-    expect(revision3.number).toBe(`${base}-3`);
+    expect(revision3.number).toBe(`${base}-${n + 2}`);
     expect(revision3.number).not.toBe(revision2.number);
   });
 

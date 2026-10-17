@@ -339,8 +339,9 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         DealQuotationDto reIssued = quotationService.approve(submitted.id(), new ApproveRequest(null), salesManagerActor);
         assertThat(reIssued.docStatus()).isEqualTo(QuotationStatus.ISSUED);
 
-        // The old REVISION_REQUESTED row stays untouched, kept for audit.
-        assertThat(quotationService.get(issued.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.REVISION_REQUESTED);
+        // B-4 (owner ruling 2026-10-17): one live offer per deal, so the re-issue retires the old
+        // REVISION_REQUESTED row. It is kept for audit, as SUPERSEDED.
+        assertThat(quotationService.get(issued.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.SUPERSEDED);
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -724,10 +725,12 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
     @Test
     void recordOutcome_replayWithClientRequestIdBoundToADifferentQuotation_refused409() {
         DealQuotationDto issuedA = issuedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
-        DealQuotationDto issuedB = issuedNewOriginQuotation(PricingRequestRecipient.OWNER, new BigDecimal("5"));
+        // B-4: issuing B would supersede a still-ISSUED A. REJECTED is not swept, so record A's
+        // outcome FIRST; A keeps the clientRequestId binding the replay below runs against.
         String clientRequestId = UUID.randomUUID().toString();
         quotationService.recordOutcome(issuedA.id(),
             new RecordOutcomeRequest(QuotationStatus.REJECTED, null, clientRequestId), salesActor);
+        DealQuotationDto issuedB = issuedNewOriginQuotation(PricingRequestRecipient.OWNER, new BigDecimal("5"));
 
         assertThatThrownBy(() -> quotationService.recordOutcome(issuedB.id(),
             new RecordOutcomeRequest(QuotationStatus.ACCEPTED, null, clientRequestId), salesActor))

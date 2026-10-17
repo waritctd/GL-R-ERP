@@ -2532,22 +2532,34 @@ describe('TicketDetailPage', () => {
   // travel with it, so it renders present-but-disabled-with-reason in the
   // menu rather than just not being there.
   describe('stage-advance readiness travels with เลื่อนไป into the overflow menu', () => {
+    // RE-BASED S4→S5 onto S5→S6 by the owner's 2026-10-16 quote-stage ruling
+    // (.design/quote-stage-gates D-2/D-4). This describe's whole subject is the
+    // readiness GATE travelling into the menu — it needs a next stage the menu
+    // item can exist for at all, and all three quote stages are now `auto`, so
+    // `canAdvance` drops the item entirely rather than rendering it disabled.
+    // QUOTE_OWNER (S5) → OWNER_SIGNOFF (S6) is the nearest pair that is still a
+    // manual sales move, so the gate behaviour is pinned unchanged.
+    //
+    // The ruling's own effect — that a quote stage never gets this item — is
+    // pinned by the sibling test at the end of this block, not folded in here:
+    // a fixture that tested both would stop telling us which one broke.
     function actionsWithAdvance(overrides = {}) {
       return {
         currentState: {
-          lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', paymentStatus: null, fulfillmentStatus: null, status: 'price_proposed',
+          lifecycle: 'ACTIVE', salesStage: 'QUOTE_OWNER', paymentStatus: null, fulfillmentStatus: null, status: 'price_proposed',
         },
-        // QUOTE_OWNER, not OWNER_SIGNOFF: V143 inserted S5 between S4 and S6, so the stage after
-        // QUOTE_DESIGN_SIDE moved. This fixture said OWNER_SIGNOFF and stayed green for as long as
-        // the frontend carried its own 14-stage list — the same drift the catalog endpoint ends.
-        availableActions: [{ action: 'ADVANCE_STAGE', targetStage: 'QUOTE_OWNER' }],
+        // The target must be `next.code` EXACTLY — hasAdvanceStageAction matches on it, so a stale
+        // target silently drops the item. (This fixture once said OWNER_SIGNOFF while the stage was
+        // QUOTE_DESIGN_SIDE, left over from before V143 inserted S5, and stayed green for as long as
+        // the frontend carried its own 14-stage list — the drift the catalog endpoint ends.)
+        availableActions: [{ action: 'ADVANCE_STAGE', targetStage: 'OWNER_SIGNOFF' }],
         ...overrides,
       };
     }
 
     it('lists เลื่อนไป present-but-disabled with the gate hint readable when not ready', async () => {
       api.tickets.get.mockResolvedValue({
-        ticket: buildTicket({ summary: { salesStage: 'QUOTE_DESIGN_SIDE', nextFollowUpAt: null } }),
+        ticket: buildTicket({ summary: { salesStage: 'QUOTE_OWNER', nextFollowUpAt: null } }),
       });
       api.tickets.actions.mockResolvedValue(actionsWithAdvance());
 
@@ -2568,7 +2580,7 @@ describe('TicketDetailPage', () => {
 
     it('lists เลื่อนไป enabled with no disabled reason once ready, and it actually advances the stage', async () => {
       api.tickets.get.mockResolvedValue({
-        ticket: buildTicket({ summary: { salesStage: 'QUOTE_DESIGN_SIDE', nextFollowUpAt: '2026-07-15' } }),
+        ticket: buildTicket({ summary: { salesStage: 'QUOTE_OWNER', nextFollowUpAt: '2026-07-15' } }),
       });
       api.tickets.actions.mockResolvedValue(actionsWithAdvance());
       api.tickets.listActivities.mockResolvedValue({
@@ -2587,7 +2599,7 @@ describe('TicketDetailPage', () => {
       expect(screen.queryByText(/ต้องระบุวันติดตามครั้งถัดไป/)).toBeNull();
 
       fireEvent.click(advanceItem);
-      await waitFor(() => expect(api.tickets.updateStage).toHaveBeenCalledWith(701, { stage: 'QUOTE_OWNER' }));
+      await waitFor(() => expect(api.tickets.updateStage).toHaveBeenCalledWith(701, { stage: 'OWNER_SIGNOFF' }));
     });
 
     // FIX 3 (P2, clutter-follow-up review round 2): the old inline "เลื่อนไป"
@@ -2601,7 +2613,7 @@ describe('TicketDetailPage', () => {
     // disabled) — exactly one request total.
     it('a second click on เลื่อนไป while the first updateStage is still in flight does not fire a duplicate request', async () => {
       api.tickets.get.mockResolvedValue({
-        ticket: buildTicket({ summary: { salesStage: 'QUOTE_DESIGN_SIDE', nextFollowUpAt: '2026-07-15' } }),
+        ticket: buildTicket({ summary: { salesStage: 'QUOTE_OWNER', nextFollowUpAt: '2026-07-15' } }),
       });
       api.tickets.actions.mockResolvedValue(actionsWithAdvance());
       api.tickets.listActivities.mockResolvedValue({
@@ -2631,6 +2643,54 @@ describe('TicketDetailPage', () => {
       expect(api.tickets.updateStage).toHaveBeenCalledTimes(1);
 
       resolveUpdateStage({ ticket: buildTicket() });
+    });
+
+    /**
+     * THE RULE the re-base above exists because of (owner ruling 2026-10-16, D-2/D-4): a quote
+     * stage is reached by addressing a quotation to that party, so the ⋯ menu must not offer
+     * เลื่อนไป into one — not even disabled-with-a-reason, which is how a merely-ungated stage
+     * appears. The item is ABSENT, because "satisfy the readiness gate" is the wrong instruction:
+     * no follow-up date or logged activity gets this deal to ขั้น 5.
+     *
+     * Deliberately handed the server's own `ADVANCE_STAGE` for the quote stage, so the only thing
+     * refusing is `canAdvance`'s `!next.auto`. That makes this the test that goes red if `auto` is
+     * dropped from the quote stages while the backend keeps answering 409 — the mock/real drift
+     * this whole slice is closing.
+     */
+    it('does NOT list เลื่อนไป at all when the next stage is a quote stage', async () => {
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({ summary: { salesStage: 'QUOTE_DESIGN_SIDE', nextFollowUpAt: '2026-07-15' } }),
+      });
+      api.tickets.actions.mockResolvedValue(actionsWithAdvance({
+        currentState: {
+          lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', paymentStatus: null, fulfillmentStatus: null, status: 'price_proposed',
+        },
+        // UPDATE_STAGE (+ one allowed decision, which canEditStage also requires) so the menu has
+        // แก้ไขสถานะ… in it: without a second item the ⋯ trigger does not render at all, and the
+        // test would "pass" on a missing menu instead of a withdrawn item.
+        availableActions: [{ action: 'ADVANCE_STAGE', targetStage: 'QUOTE_OWNER' }, { action: 'UPDATE_STAGE' }],
+        stageDecisions: [{
+          stage: 'NEGOTIATION', no: 9, allowed: true, requiresReason: false, blockedReason: null, onRoute: true,
+        }],
+      }));
+      api.tickets.listActivities.mockResolvedValue({
+        items: [{
+          id: 1, ticketId: 701, activityDate: '2026-07-03', kind: 'CALL', note: 'โทรติดตาม',
+          createdById: 9, createdByName: 'CEO ทดสอบ', createdAt: '2026-07-03T09:00:00.000Z',
+        }],
+      });
+
+      renderTicketDetailPage(ceoUser);
+
+      fireEvent.click(await screen.findByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
+      // The menu itself opened (OverflowMenu's role="menu" panel), so an absent item is the
+      // finding rather than a render that never happened — the failure mode that would make this
+      // test pass for the wrong reason.
+      expect(await screen.findByRole('menu')).not.toBeNull();
+      expect(screen.getByText('แก้ไขสถานะ…')).not.toBeNull();
+      expect(screen.queryByTestId('deal-stage-advance')).toBeNull();
+      expect(screen.queryByText(/เลื่อนไป:/)).toBeNull();
+      expect(api.tickets.updateStage).not.toHaveBeenCalled();
     });
   });
 
@@ -4158,7 +4218,7 @@ describe('TicketDetailPage', () => {
       };
     }
 
-    async function openMenuItem({ channel, salesStage, lax }) {
+    async function openMenu({ channel, salesStage, lax }) {
       api.tickets.get.mockResolvedValue({
         ticket: buildTicket({ summary: { salesStage, entryChannel: channel, nextFollowUpAt: '2026-07-15' } }),
       });
@@ -4172,39 +4232,79 @@ describe('TicketDetailPage', () => {
       api.tickets.updateStage.mockResolvedValue({});
       renderTicketDetailPage(ceoUser);
       fireEvent.click(await screen.findByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
+      // The panel itself, so a later `queryByTestId(...)).toBeNull()` is an absent ITEM rather
+      // than a menu that never opened.
+      await screen.findByRole('menu');
+    }
+
+    async function openMenuItem(args) {
+      await openMenu(args);
       return screen.findByTestId('deal-stage-advance');
     }
 
-    it.each([false, true])('owner-direct at SPEC_APPROVED offers S5, not S4 (lax server: %s)', async (lax) => {
-      const item = await openMenuItem({ channel: 'OWNER_DIRECT', salesStage: 'SPEC_APPROVED', lax });
-      expect(item.textContent).toContain(`เลื่อนไป: ${ROUTE_NAME.QUOTE_OWNER}`);
+    /**
+     * ⚠️ RESTRUCTURED by the owner's 2026-10-16 quote-stage ruling (.design/quote-stage-gates
+     * D-2/D-4), and the reason is structural rather than a fixture detail.
+     *
+     * Every route-SKIPPING pair in the pipeline now lands on an `auto` stage — enumerated:
+     *
+     *   OWNER_DIRECT  SPEC_APPROVED     → skips S4 → QUOTE_OWNER  (auto)
+     *   BUYER_DIRECT  SPEC_APPROVED     → skips S4–S7 → QUOTE_BUYER (auto)
+     *   BUYER_DIRECT  QUOTE_DESIGN_SIDE → QUOTE_BUYER (auto)
+     *   BUYER_DIRECT  QUOTE_OWNER       → QUOTE_BUYER (auto)
+     *   BUYER_DIRECT  OWNER_SIGNOFF     → QUOTE_BUYER (auto)
+     *
+     * …because the only stages a route may ever skip are the party stages S4–S8, and of those only
+     * S6/S7 are non-auto — neither of which any channel skips. So THIS surface can no longer
+     * demonstrate route skipping at all: the item is absent either way, and a route-blind
+     * implementation would be indistinguishable from a route-aware one here.
+     *
+     * The route-skipping coverage is NOT lost — it moved to where it still works:
+     * `DealStagePanel.test.jsx`'s `ถัดไป follows the route`, which reads `deal-stage-next`. That
+     * line renders the route's next stage regardless of `auto`, so it still proves S4 is stepped
+     * over on an owner-direct deal. If this menu ever has to prove route-awareness again, that is
+     * the mechanism to copy — do not resurrect these fixtures expecting them to show it.
+     *
+     * What stays pinned HERE is the two things this block can still distinguish:
+     *   1. the item is ABSENT when the route's next stage is a quote stage (below, all three
+     *      channels, both server shapes) — the new rule;
+     *   2. the item NAMES and SENDS `nextOnRoute`'s stage, channel-worded, on a non-auto target.
+     */
+    it.each([
+      ['OWNER_DIRECT', false], ['OWNER_DIRECT', true],
+      ['BUYER_DIRECT', false], ['BUYER_DIRECT', true],
+      ['DESIGNER_LED', false],
+      ['UNSPECIFIED', false],
+    ])('%s at SPEC_APPROVED offers no เลื่อนไป — its route-next is a quote stage (lax server: %s)', async (channel, lax) => {
+      await openMenu({ channel, salesStage: 'SPEC_APPROVED', lax });
+      expect(screen.queryByTestId('deal-stage-advance')).toBeNull();
+      // Not merely absent by testId — no เลื่อนไป naming ANY quote stage leaked in under another key.
+      for (const name of Object.values(ROUTE_NAME)) {
+        expect(screen.queryByText(`เลื่อนไป: ${name}`)).toBeNull();
+      }
+      expect(api.tickets.updateStage).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The positive control, re-based from S3→S5 to S5→S6 (OWNER_SIGNOFF is on the owner route and
+     * still a manual move). Replaces `the advance click sends the ON-route stage, never the
+     * off-route one`: with a `lax` server advertising every stage including the off-route S4, the
+     * item must still name and send `nextOnRoute`'s answer. Without a positive case here, a menu
+     * that offered เลื่อนไป for NOTHING would satisfy the whole block.
+     */
+    it('names and sends nextOnRoute\'s stage on a non-auto target, even with a lax server', async () => {
+      const item = await openMenuItem({ channel: 'OWNER_DIRECT', salesStage: 'QUOTE_OWNER', lax: true });
+      expect(item.textContent).toContain('เลื่อนไป: เจ้าของอนุมัติสเปค');
       expect(item.textContent).not.toContain(ROUTE_NAME.QUOTE_DESIGN_SIDE);
-    });
 
-    it.each([false, true])('buyer-direct at SPEC_APPROVED offers S8, not S4 (lax server: %s)', async (lax) => {
-      const item = await openMenuItem({ channel: 'BUYER_DIRECT', salesStage: 'SPEC_APPROVED', lax });
-      expect(item.textContent).toContain(`เลื่อนไป: ${ROUTE_NAME.QUOTE_BUYER}`);
-      expect(item.textContent).not.toContain(ROUTE_NAME.QUOTE_DESIGN_SIDE);
-      expect(item.textContent).not.toContain(ROUTE_NAME.QUOTE_OWNER);
-    });
-
-    it('designer-led at SPEC_APPROVED still offers S4 (majority-route regression guard)', async () => {
-      const item = await openMenuItem({ channel: 'DESIGNER_LED', salesStage: 'SPEC_APPROVED' });
-      expect(item.textContent).toContain(`เลื่อนไป: ${ROUTE_NAME.QUOTE_DESIGN_SIDE}`);
-    });
-
-    it('an UNSPECIFIED / absent-channel deal at SPEC_APPROVED still offers S4', async () => {
-      const item = await openMenuItem({ channel: 'UNSPECIFIED', salesStage: 'SPEC_APPROVED' });
-      expect(item.textContent).toContain(`เลื่อนไป: ${ROUTE_NAME.QUOTE_DESIGN_SIDE}`);
-    });
-
-    it('the advance click sends the ON-route stage, never the off-route one', async () => {
-      const item = await openMenuItem({ channel: 'OWNER_DIRECT', salesStage: 'SPEC_APPROVED', lax: true });
       fireEvent.click(item);
-      await waitFor(() => expect(api.tickets.updateStage).toHaveBeenCalledWith(701, { stage: 'QUOTE_OWNER' }));
+      await waitFor(() => expect(api.tickets.updateStage).toHaveBeenCalledWith(701, { stage: 'OWNER_SIGNOFF' }));
       expect(api.tickets.updateStage).not.toHaveBeenCalledWith(701, { stage: 'QUOTE_DESIGN_SIDE' });
     });
 
+    // Unaffected by the ruling: PRESENTATION's next is SPEC_APPROVED (S3), which is not auto and on
+    // every route. Still the proof that the menu label runs through
+    // dealStageLabel(next.code, entryChannel) rather than a channel-blind string.
     it('the S3 wording in the menu follows the route too (owner-direct at PRESENTATION -> เจ้าของตกลงตามสเปคแล้ว)', async () => {
       const item = await openMenuItem({ channel: 'OWNER_DIRECT', salesStage: 'PRESENTATION' });
       expect(item.textContent).toContain('เลื่อนไป: เจ้าของตกลงตามสเปคแล้ว');

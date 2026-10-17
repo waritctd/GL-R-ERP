@@ -81,7 +81,11 @@ class DealQuotationSlice2HttpIntegrationTest extends AbstractDealQuotationSlice2
         assertThat(q.get("docStatus").asText()).isEqualTo("DRAFT");
         assertThat(q.get("ticketId").asLong()).isEqualTo(ticketId);
         assertThat(q.get("ticketCode").asText()).startsWith("PR-");
-        assertThat(q.get("dealStage").asText()).isEqualTo("LEAD_APPROACH");
+        // ขั้น 4 over HTTP, in the CREATE response itself: addressing the document to the designer
+        // is what moved the deal (owner ruling 2026-10-16, .design/quote-stage-gates D-2), and the
+        // 201 body already reports the new stage — so the editor needs no second fetch to render
+        // the deal's position. Worth pinning at the HTTP layer and not only in the service test.
+        assertThat(q.get("dealStage").asText()).isEqualTo("QUOTE_DESIGN_SIDE");
         assertThat(q.get("id").isIntegralNumber()).isTrue();
         assertThat(q.get("number").asText()).startsWith("QT-");
     }

@@ -1,7 +1,6 @@
 package th.co.glr.hr.ticket;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -261,12 +260,18 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
             "ผู้รับเหมานำ BOQ และสเปกมาเองตั้งแต่ต้น", ownerRep);
         assertThat(entryChannelOf(ticketId)).isEqualTo(EntryChannel.BUYER_DIRECT);
 
-        // LEAD_APPROACH -> QUOTE_BUYER crosses only route-dependent stages (none of S2-S7 is
-        // MANDATORY per DealStage.MANDATORY), so DealStage.requiresJustification says this needs
-        // no note. Asserted, not assumed: called with note=null and required to succeed.
-        logAnActivityAndFollowUp(ticketId);
-        assertThatCode(() -> ticketService.updateStage(ticketId, DealStage.QUOTE_BUYER, null, ownerRep))
-            .doesNotThrowAnyException();
+        // The deal opens at S8 by QUOTING THE CONTRACTOR (owner ruling 2026-10-16,
+        // .design/quote-stage-gates D-2) — a manual updateStage into ขั้น 8 is now refused until
+        // that document exists, which is exactly the bypass the ruling closes. The route itself is
+        // unchanged: still S1 straight to S8, skipping S2-S7.
+        //
+        // ⚠️ Coverage moved, not lost. This block also used to assert the NOTE rule for the long
+        // jump ("crosses only route-dependent stages, none MANDATORY, so no note is required —
+        // asserted, not assumed"). The document-driven advance never consults the note rule, so it
+        // cannot assert that here any more. DealStageQuoteOwnerAndRouteIntegrationTest
+        // #caseC_leadApproachStraightToQuoteBuyer_needsNoNote is where that rule is pinned now,
+        // with a quotation fixture in place so the manual call is reachable.
+        ticketService.advanceStageForCustomerQuotationIssue(ticketId, QuotationRecipient.BUYER, ownerRep);
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.QUOTE_BUYER);
 
         advanceTo(ticketId, DealStage.NEGOTIATION, null);
@@ -478,10 +483,32 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
      * one activity logged since the last stage change — {@code updateStage}'s forward-readiness
      * gate demands both) and then calls the real {@link TicketService#updateStage}, asserting the
      * landing stage so every route test reads as a clean list of hops.
+     *
+     * <p><b>The three quote stages are reached by QUOTING that party, not by a manual hop</b>
+     * (owner ruling 2026-10-16, {@code .design/quote-stage-gates} D-2/D-3):
+     * {@code requireStageFactsHold} refuses a manual {@code updateStage} into ขั้น 4/5/8 until the
+     * deal holds a quotation addressed to that recipient, and
+     * {@link TicketService#advanceStageForCustomerQuotationIssue} is the document-driven advance
+     * that production actually uses. Routing them here rather than editing each route test is the
+     * point: this suite's claim is that the owner's REAL routes are walkable the way the business
+     * walks them, and the business reaches a quote stage by issuing the quotation. Every route
+     * below therefore keeps reading as a clean list of hops, with no per-route fixture.
+     *
+     * <p>The note is deliberately rejected for those three rather than silently dropped: the
+     * document-driven advance never consults the note rule, so passing one here would read as
+     * tested when nothing had checked it. No caller does — every quote-stage hop in this file
+     * passes {@code null} — and this keeps that true.
      */
     private void advanceTo(long ticketId, String stage, String note) {
-        logAnActivityAndFollowUp(ticketId);
-        ticketService.updateStage(ticketId, stage, note, ownerRep);
+        String recipient = TicketService.quotationRecipientForStage(stage);
+        if (recipient != null) {
+            assertThat(note).as("a quote stage arrives from its quotation, so %s cannot carry a note", stage)
+                .isNull();
+            ticketService.advanceStageForCustomerQuotationIssue(ticketId, recipient, ownerRep);
+        } else {
+            logAnActivityAndFollowUp(ticketId);
+            ticketService.updateStage(ticketId, stage, note, ownerRep);
+        }
         assertThat(stageOf(ticketId)).as("expected to land on %s", stage).isEqualTo(stage);
     }
 

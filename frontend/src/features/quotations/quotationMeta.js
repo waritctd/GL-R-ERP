@@ -276,8 +276,8 @@ export function isDealQuotationReadOnlyViewer(user) {
 // The three recipients, in S-order, each paired with TicketService#stageForQuotationRecipient's own
 // quote stage (DESIGNER -> S4, OWNER -> S5, BUYER -> S8). Slice 2 only READS that pairing — to
 // preselect the recipient from a deal already sitting at a quote stage (flow B); owner ruling
-// 2026-09-30 took the recipient -> stage MOVE (spec S2-B2) out of this slice, since the deal-stage
-// rule is owned by another session. UNSPECIFIED is never offered (IA §8). Labels are Thai-only —
+// 2026-09-30 left the recipient -> stage MOVE (spec S2-B2) to the server; the server does it in
+// DealQuotationService#advanceDealToRecipientStage and mockApi mirrors it in advanceDealToQuotationRecipientStage. UNSPECIFIED is never offered (IA §8). Labels are Thai-only —
 // pricingRequestMeta's RECIPIENT_OPTIONS carries "ผู้ออกแบบ (Designer)", a mixed-script label
 // DESIGN.md §18 bans on a new control.
 export const QUOTATION_RECIPIENT_OPTIONS = Object.freeze([
@@ -338,6 +338,16 @@ const DEAD_PRICING_REQUEST_STATUSES = Object.freeze(new Set(['CANCELLED', 'SUPER
 
 export const LIVE_PRICING_REQUEST_BLOCK_MESSAGE =
   'ดีลนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน';
+
+// Owner ruling 2026-10-17 (D-5 step 2): a revision keeps its parent's recipient. The editor's
+// picker hint and the 409 DealQuotationService#update / mockApi return are ONE sentence; the 409
+// names the stored party between the two halves, the hint does not.
+const REVISION_RECIPIENT_LOCKED_HEAD = 'ฉบับแก้ไขต้องส่งถึงผู้รับเดิม';
+const REVISION_RECIPIENT_LOCKED_TAIL = 'หากจะเสนอราคาให้ผู้รับรายอื่น ให้สร้างใบเสนอราคาใหม่บนดีลนี้';
+export const REVISION_RECIPIENT_LOCKED_MESSAGE =
+  `${REVISION_RECIPIENT_LOCKED_HEAD} — ${REVISION_RECIPIENT_LOCKED_TAIL}`;
+export const revisionRecipientRefusal = (storedLabel) =>
+  `${REVISION_RECIPIENT_LOCKED_HEAD} (${storedLabel}) — ${REVISION_RECIPIENT_LOCKED_TAIL}`;
 
 /** True when `pricingRequests` holds a live request ON `ticketId` (ids compared as numbers). */
 export function hasLivePricingRequest(pricingRequests, ticketId) {
