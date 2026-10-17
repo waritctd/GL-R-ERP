@@ -22,7 +22,7 @@ import th.co.glr.hr.dealquotation.DealQuotationRequests.UpsertDealQuotationReque
  * <p><b>It hides them by {@code doc_status}, NOT by blanking {@code origin} — changed 2026-10-17
  * and the distinction is now load-bearing.</b> Blanking {@code origin} used to be safe because
  * nothing on the create path read it. Since the base number belongs to the DEAL, {@code create}
- * reads {@code DealQuotationRepository#findDealBaseNumber} and {@code #nextRevisionNo}, both scoped
+ * reads {@code DealQuotationRepository#nextNumberOnDeal} and {@code #nextRevisionNo}, both scoped
  * {@code origin IN ('DEAL_DIRECT','PRICING_REQUEST')} — so an {@code origin}-blanked row became
  * invisible to NUMBERING as well as to N6. That is a duplicate-key trap, not a cosmetic one: with a
  * visible row at {@code X-1} and a hidden live row already holding {@code X-2}, the counter would

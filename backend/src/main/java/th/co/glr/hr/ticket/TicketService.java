@@ -2514,7 +2514,7 @@ public class TicketService {
      * records that it exists because the recipient→stage mapping used to be duplicated in two
      * places that then disagreed. One literal, one direction, inverted here.
      */
-    private static String quotationRecipientForStage(String stage) {
+    static String quotationRecipientForStage(String stage) {
         for (String recipient : QuotationRecipient.ADDRESSABLE) {
             if (stage.equals(stageForQuotationRecipient(recipient))) {
                 return recipient;

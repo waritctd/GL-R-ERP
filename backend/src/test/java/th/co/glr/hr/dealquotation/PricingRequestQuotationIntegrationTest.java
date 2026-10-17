@@ -437,7 +437,7 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     /** GLA-123 slice S2: submit is now LIVE for this origin — {@code
-     * DealQuotationService#requireStatusMachineEnabled} no longer guards submit/approve/reject
+     * DealQuotationService#requireReorderAllowedForOrigin} no longer guards submit/approve/reject
      * (it now covers only createReorder, still refused here; createRevision is no longer
      * guarded by it). This test used to pin the S1-era 409 refusal by
      * name (commit history: {@code submit_refusedForPricingRequestOrigin}); it now pins the
@@ -468,7 +468,7 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
     // ─────────────────────────────────────────────────────────────────────────────────────
     // GLA-123 slice S2 update: submit/approve/reject are now LIVE for this origin (see
     // submit_nowLiveForPricingRequestOrigin above), but only createReorder remains
-    // explicitly refused by #requireStatusMachineEnabled (createRevision is no longer guarded
+    // explicitly refused by #requireReorderAllowedForOrigin (createRevision is no longer guarded
     // by it for this origin).
     // Doubly true in practice: this origin's own status machine skips APPROVED entirely
     // (PENDING_APPROVAL -> ISSUED on one approval, by sales_manager or ceo, never APPROVED as a
@@ -895,7 +895,7 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
     }
 
     /** Mirror direction (owner ruling: "make them consistent") — REJECTED is unreachable for a
-     * PRICING_REQUEST-origin row in S1 (requireStatusMachineEnabled refuses submit/approve/
+     * PRICING_REQUEST-origin row in S1 (requireReorderAllowedForOrigin refuses submit/approve/
      * reject/revise/reorder for this origin), so this forces it via SQL to prove
      * hasLivePricingRequestQuotation's own predicate is ALREADY correct for the day S2 makes it
      * reachable, rather than leaving an untested guess. */

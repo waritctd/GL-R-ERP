@@ -381,7 +381,7 @@ public class DealQuotationRepository {
      * collision risk this method was written to close.
      *
      * <p><b>Owner ruling 2026-10-17:</b> the base number belongs to the DEAL
-     * ({@link #findDealBaseNumber}), so both origins deliberately SHARE one family and this MAX() is
+     * ({@link #nextNumberOnDeal}), so both origins deliberately SHARE one family and this MAX() is
      * their single counter — which is why the predicate spans both.
      * See {@code .design/quote-stage-gates/VERSIONING.md}.
      */
@@ -399,13 +399,18 @@ public class DealQuotationRepository {
         return (max == null ? 0 : max) + 1;
     }
 
+    /** A quotation's printed {@code number} and its {@code revisionNo}, as {@link #nextNumberOnDeal} returns them. */
+    public record QuotationNumber(String number, int revisionNo) {}
+
     /**
-     * The base number this deal's quotation family is on, or empty when it has none yet — the
-     * owner's 2026-10-17 ruling that the base number belongs to the DEAL.
+     * The number and revision for the next quotation written on this deal — the one place the
+     * "continue the deal's family, else mint" decision is made, so {@code DealQuotationService#create}
+     * and {@code #createFromPricingRequest} cannot drift on it. Callers must hold {@link #lockTicket}.
      *
-     * <p>Read from the NEWEST row by {@code quotation_id} (creation order), via the same
-     * {@link #baseNumber} formula every other caller uses, so legacy bare numbers and suffixed ones
-     * both resolve with no special-casing.
+     * <p>The owner's 2026-10-17 ruling is that the base number belongs to the DEAL. It is read from
+     * the NEWEST row by {@code quotation_id} (creation order), via the same {@link #baseNumber}
+     * formula every other caller uses, so legacy bare numbers and suffixed ones both resolve with
+     * no special-casing. A deal with none gets a freshly minted {@link #nextQuotationCode()}.
      *
      * <p>Newest rather than "the only one" because a deal CAN already hold two families, from when
      * every create minted its own — one does in prod (ticket 114). Taking the newest converges
@@ -415,7 +420,7 @@ public class DealQuotationRepository {
      * must NOT seed the family — it sits outside that counter's scan, so adopting its number would
      * hand the deal a family the counter cannot see.
      */
-    public Optional<String> findDealBaseNumber(long ticketId) {
+    public QuotationNumber nextNumberOnDeal(long ticketId) {
         List<String> newest = jdbc.query("""
             SELECT number, quotation_revision_no FROM sales.quotation
              WHERE ticket_id = :ticketId AND origin IN ('DEAL_DIRECT', 'PRICING_REQUEST')
@@ -424,16 +429,9 @@ public class DealQuotationRepository {
             """,
             new MapSqlParameterSource().addValue("ticketId", ticketId),
             (rs, rowNum) -> baseNumber(rs.getString("number"), rs.getInt("quotation_revision_no")));
-        return newest.isEmpty() ? Optional.empty() : Optional.of(newest.get(0));
-    }
-
-    /**
-     * The deal's family, or a freshly minted base when it has none — the one place the
-     * "continue, else mint" decision is made, so {@code DealQuotationService#create} and
-     * {@code #createFromPricingRequest} cannot drift on it. Callers must hold {@link #lockTicket}.
-     */
-    public String dealBaseNumberOrMint(long ticketId) {
-        return findDealBaseNumber(ticketId).orElseGet(this::nextQuotationCode);
+        String base = newest.isEmpty() ? nextQuotationCode() : newest.get(0);
+        int revisionNo = nextRevisionNo(ticketId, base);
+        return new QuotationNumber(revisionNumber(base, revisionNo), revisionNo);
     }
 
     /**
