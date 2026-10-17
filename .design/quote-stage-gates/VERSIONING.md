@@ -321,8 +321,4 @@ grouped while separate offers separate. A row with no `recipientType` (an older 
 groups under `UNKNOWN` rather than becoming a singleton, and never merges with a row that states
 one. `ครั้งที่ N` stays: within one recipient's chain it is accurate again.
 
-**Interaction to watch — it couples to D-5 step 2.** A PRICING_REQUEST-origin revision can currently
-be re-addressed to another party (PR B, three tests pin it). Under recipient grouping such a revision
-**splits from its own parent** — correct by this grouping's logic, but it visually severs a real
-parent-child chain. If step 2 is ruled "recipient locked" the case disappears; if it is ruled the
-other way, this grouping and the `parentQuotationId` lineage will disagree for those documents.
+**Resolved by the 2026-10-17 ruling (D-5 step 2):** a revision keeps its parent's recipient, so base+recipient grouping and the `parentQuotationId` lineage agree.

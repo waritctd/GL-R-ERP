@@ -243,6 +243,30 @@ describe('mock dealQuotations — the recipient MOVES the deal stage at create (
   });
 });
 
+// Owner ruling 2026-10-17 (D-5 step 2): a revision keeps its parent's recipient. Mirrors
+// DealQuotationService#update; the Java pin is DealQuotationIntegrationTest#createRevision_draftCannotBeReaddressed_409.
+describe('mock dealQuotations.update — a revision draft cannot be re-addressed', () => {
+  it('refuses a changed recipient 409 (nothing moves) and accepts the stored one', async () => {
+    const ticketId = await freshDeal();
+    const draft = await createDirect(ticketId, 'DESIGNER');
+    await api.dealQuotations.submit(draft.id);
+    await asRole('sales_manager');
+    await api.dealQuotations.approve(draft.id);
+    await asRole('sales');
+    const { quotation: revision } = await api.dealQuotations.createRevision(draft.id, {});
+    const eventsBefore = (await eventsOf(ticketId)).filter((e) => e.kind === 'STAGE_CHANGED').length;
+
+    await expect(api.dealQuotations.update(revision.id, { recipientType: 'BUYER', items: [TILE] }))
+      .rejects.toMatchObject({ status: 409, message: expect.stringContaining('ฉบับแก้ไขต้องส่งถึงผู้รับเดิม (ผู้ออกแบบ)') });
+    expect((await api.dealQuotations.get(revision.id)).quotation.recipientType).toBe('DESIGNER');
+    expect((await summaryOf(ticketId)).salesStage).toBe('QUOTE_DESIGN_SIDE');
+    expect((await eventsOf(ticketId)).filter((e) => e.kind === 'STAGE_CHANGED')).toHaveLength(eventsBefore);
+
+    const { quotation } = await api.dealQuotations.update(revision.id, { recipientType: 'DESIGNER', items: [TILE] });
+    expect(quotation.recipientType).toBe('DESIGNER');
+  });
+});
+
 // The other half of the same ruling (D-3): the mock's stage-decision gate must refuse a MANUAL move
 // into a quote stage until the document exists, and allow it once it does. A mock that stayed
 // permissive here is a drift with no guard — the #742 shape, for the quote stages this time.

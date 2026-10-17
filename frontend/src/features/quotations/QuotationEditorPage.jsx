@@ -22,7 +22,7 @@ import {
   canApproveDealQuotation, canApproveDealQuotationNow, canCancelDealQuotation, canCopyDealQuotation, canCreateDealQuotation,
   canChangeDealCustomer, canCreateDealQuotationStandalone, canDecideDealQuotation, canEditDealQuotation,
   canPromoteDealQuotationToDeal, canReviseDealQuotation, canSubmitDealQuotation, DEPOSIT_PERCENT_PRESETS,
-  CONFIRM_ORDER_FROM_QUOTATION_COPY, quotationRecipientOption, recipientForDealStage, recipientForEntryChannel,
+  CONFIRM_ORDER_FROM_QUOTATION_COPY, REVISION_RECIPIENT_LOCKED_MESSAGE, quotationRecipientOption, recipientForDealStage, recipientForEntryChannel,
   availablePriceModes, PRICE_MODE_OPTIONS, adjustmentDescriptionPreview, buildQuotationChecklist, currencyForLanguage, DOCUMENT_LANGUAGE_OPTIONS,
   isEffectiveZeroDeposit,
   estimateAdjustmentAmount, formatQuotationMoney, hasSpecialPricing, isEnglishPerSqm, LINE_TYPE_ADJUSTMENT, LINE_TYPE_PLAIN, LINE_TYPE_TILE,
@@ -2600,6 +2600,16 @@ export function QuotationEditorPage({ user, showToast }) {
                           ) : null}
                         <span className="text-xs text-text-muted">จากคำขอราคา</span>
                       </span>
+                    </div>
+                  ) : quotation.parentQuotationId != null ? (
+                    // Owner ruling 2026-10-17 (D-5 step 2): a revision keeps its parent's recipient;
+                    // the picker would only lead to DealQuotationService#update's 409.
+                    <div className="col-span-full" data-testid="quotation-recipient-revision-locked">
+                      <span className="block text-sm font-bold text-text-secondary">ผู้รับใบเสนอราคา</span>
+                      <strong className="text-text">
+                        {quotationRecipientOption(quotation.recipientType)?.label ?? 'ไม่ระบุ'}
+                      </strong>
+                      <p className="m-0 mt-1 text-xs text-text-muted">{REVISION_RECIPIENT_LOCKED_MESSAGE}</p>
                     </div>
                   ) : (
                     <div className="col-span-full">

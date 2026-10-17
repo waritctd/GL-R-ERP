@@ -505,27 +505,43 @@ class DealQuotationPricingRequestRevisionIntegrationTest extends AbstractPostgre
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // Recipient: a revision may be re-addressed to the owner / buyer. sales.quotation already
-    // carries recipient_type/recipient_label (V52) — no schema change. Today update() refuses any
-    // recipient on a PRICING_REQUEST row; PR B opens that ONLY for a REVISION draft.
+    // Recipient: a revision keeps its parent's recipient (owner ruling 2026-10-17, D-5 step 2).
+    // A different party is a new quotation on the deal, not a re-addressed revision.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
-    void revisionDraft_mayChangeRecipientToOwner_parentKeepsItsOwn() {
+    void revisionDraft_cannotBeReaddressed_409_andNothingChanges() {
         DealQuotationDto source = issuedQuotation();
         assertThat(source.recipientType()).isEqualTo("DESIGNER");
         DealQuotationDto revision = quotationService.createRevision(source.id(), salesActor);
+        String stageBefore = tickets.findById(ticketId).orElseThrow().summary().salesStage();
+        Integer eventsBefore = stageChangedEvents();
+
+        assertThatThrownBy(() -> quotationService.update(revision.id(),
+            baseUpsert(revision, 30, itemInputs(revision)).withRecipientType("OWNER"), salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(e.getMessage()).isEqualTo("ฉบับแก้ไขต้องส่งถึงผู้รับเดิม ("
+                    + th.co.glr.hr.ticket.QuotationRecipient.thaiLabel("DESIGNER")
+                    + ") — หากจะเสนอราคาให้ผู้รับรายอื่น ให้สร้างใบเสนอราคาใหม่บนดีลนี้");
+            });
+
+        assertThat(quotationService.get(revision.id(), salesActor).recipientType()).isEqualTo("DESIGNER");
+        assertThat(quotationService.get(source.id(), salesActor).recipientType()).isEqualTo("DESIGNER");
+        assertThat(tickets.findById(ticketId).orElseThrow().summary().salesStage()).isEqualTo(stageBefore);
+        assertThat(stageChangedEvents()).isEqualTo(eventsBefore);
+    }
+
+    /** The editor re-sends the stored recipient on every save; only a CHANGE is refused. */
+    @Test
+    void revisionDraft_resavingTheSameRecipient_isAllowed() {
+        DealQuotationDto revision = quotationService.createRevision(issuedQuotation().id(), salesActor);
 
         DealQuotationDto updated = quotationService.update(revision.id(),
-            baseUpsert(revision, 30, itemInputs(revision)).withRecipientType("OWNER"), salesActor);
+            baseUpsert(revision, 45, itemInputs(revision)).withRecipientType("DESIGNER"), salesActor);
 
-        assertThat(updated.recipientType()).isEqualTo("OWNER");
-        // Label follows the new party (not the stale designer name) — same Thai label DEAL_DIRECT uses.
-        assertThat(updated.recipientLabel()).isEqualTo(th.co.glr.hr.ticket.QuotationRecipient.thaiLabel("OWNER"));
-        assertThat(quotationService.get(source.id(), salesActor).recipientType()).isEqualTo("DESIGNER");
-        // Still the same origin / chain.
-        assertThat(updated.origin()).isEqualTo("PRICING_REQUEST");
-        assertThat(updated.parentQuotationId()).isEqualTo(source.id());
+        assertThat(updated.recipientType()).isEqualTo("DESIGNER");
+        assertThat(updated.validityDays()).isEqualTo(45);
     }
 
     @Test
@@ -550,35 +566,27 @@ class DealQuotationPricingRequestRevisionIntegrationTest extends AbstractPostgre
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
     }
 
+    /** Goal 3 as a rule: a revision keeps its parent's recipient, so issuing it moves no stage. */
     @Test
-    void issuingARevisionAddressedToOwner_advancesTheStageToQuoteOwner_usingTheQuotationsRecipient() {
+    void issuingARevision_leavesTheStageWhereTheParentPutIt() {
         DealQuotationDto source = issuedQuotation();
-        // First issue was to the DESIGNER: stage S4.
-        assertThat(tickets.findById(ticketId).orElseThrow().summary().salesStage()).isEqualTo(DealStage.QUOTE_DESIGN_SIDE);
+        String stageBefore = tickets.findById(ticketId).orElseThrow().summary().salesStage();
+        assertThat(stageBefore).isEqualTo(DealStage.QUOTE_DESIGN_SIDE);
+        Integer eventsBefore = stageChangedEvents();
 
-        DealQuotationDto revision = quotationService.createRevision(source.id(), salesActor);
-        quotationService.update(revision.id(),
-            baseUpsert(revision, 30, itemInputs(revision)).withRecipientType("OWNER"), salesActor);
-        DealQuotationDto issued = submitAndIssue(revision);
+        DealQuotationDto issued = submitAndIssue(quotationService.createRevision(source.id(), salesActor));
 
-        assertThat(issued.recipientType()).isEqualTo("OWNER");
-        assertThat(tickets.findById(ticketId).orElseThrow().summary().salesStage()).isEqualTo(DealStage.QUOTE_OWNER);
+        assertThat(issued.recipientType()).isEqualTo("DESIGNER");
+        assertThat(tickets.findById(ticketId).orElseThrow().summary().salesStage()).isEqualTo(stageBefore);
+        assertThat(stageChangedEvents()).isEqualTo(eventsBefore);
         assertThat(quotationService.get(source.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.SUPERSEDED);
-        // The pricing request's own recipient is NOT rewritten (it is the request's, not the quotation's).
-        assertThat(pricingRequests.findSummary(source.pricingRequestId()).orElseThrow().recipientType())
-            .isEqualTo("DESIGNER");
     }
 
-    @Test
-    void issuingARevisionAddressedToBuyer_advancesTheStageToQuoteBuyer() {
-        DealQuotationDto source = issuedQuotation();
-        DealQuotationDto revision = quotationService.createRevision(source.id(), salesActor);
-        quotationService.update(revision.id(),
-            baseUpsert(revision, 30, itemInputs(revision)).withRecipientType("BUYER"), salesActor);
-        DealQuotationDto issued = submitAndIssue(revision);
-
-        assertThat(issued.recipientType()).isEqualTo("BUYER");
-        assertThat(tickets.findById(ticketId).orElseThrow().summary().salesStage()).isEqualTo(DealStage.QUOTE_BUYER);
+    private Integer stageChangedEvents() {
+        return jdbc.queryForObject(
+            "SELECT COUNT(*) FROM sales.ticket_event WHERE ticket_id = :id AND kind = :kind",
+            java.util.Map.of("id", ticketId, "kind", th.co.glr.hr.ticket.TicketEventKind.STAGE_CHANGED),
+            Integer.class);
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────

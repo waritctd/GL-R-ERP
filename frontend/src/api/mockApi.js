@@ -56,7 +56,7 @@ import {
   hasSpecialPricing,
   // Slice 2 (S2-B1/S2-B3): the recipient table (code -> Thai label) and the live DEAL_DIRECT status
   // set, shared with the editor so the mock validates and labels recipients exactly as the pills do.
-  isLiveDirectQuotation, quotationRecipientOption, hasLivePricingRequest, LIVE_PRICING_REQUEST_BLOCK_MESSAGE,
+  isLiveDirectQuotation, quotationRecipientOption, hasLivePricingRequest, LIVE_PRICING_REQUEST_BLOCK_MESSAGE, revisionRecipientRefusal,
   // V192.3: the SAME email shape check the editor runs before it saves — see
   // resolveDealQuotationOrderedByContact below.
   orderedByEmailError,
@@ -16841,6 +16841,13 @@ export const api = {
           fail('ผู้รับของใบเสนอราคาจากคำขอราคามาจากคำขอราคา — แก้ที่คำขอราคาต้นทาง', 409);
         }
         if (!quotationRecipientOption(nextRecipientType)) fail(`ไม่รองรับผู้รับใบเสนอราคา '${nextRecipientType}'`, 400);
+        // Owner ruling 2026-10-17 (D-5 step 2), mirrors DealQuotationService#update: a REVISION of
+        // EITHER origin keeps its parent's recipient — one chain = one party, so the register's
+        // base+recipient grouping and the parentQuotationId lineage cannot disagree. Refuse only a
+        // CHANGE: the editor re-sends the stored value on every save. After the 400 validation.
+        if (row.parentQuotationId != null && nextRecipientType !== row.recipientType) {
+          fail(revisionRecipientRefusal(quotationRecipientOption(row.recipientType)?.label ?? row.recipientType), 409);
+        }
       }
       // GLA-123 slice S1 (owner ruling 2026-09-19) — a PRICING_REQUEST-origin quotation's items
       // come ENTIRELY from createFromPricingRequest; adding an extra row (of any line type) is
@@ -16963,7 +16970,7 @@ export const api = {
       });
       // Slice 2 (S2-B1): a DEAL_DIRECT draft's recipient, when sent. D-2 (owner ruling 2026-10-16):
       // and re-addressing it MOVES the deal onto the new party's stage, mirroring
-      // DealQuotationService#update's own hook. Only on a genuine change, so a no-op re-save writes
+      // DealQuotationService#update's own hook (first-issue drafts only: a revision cannot change it). Only on a genuine change, so a no-op re-save writes
       // no stage event; forward-only, so a correction back to an earlier party moves nothing.
       if (nextRecipientType != null) {
         const recipientChanged = nextRecipientType !== row.recipientType;

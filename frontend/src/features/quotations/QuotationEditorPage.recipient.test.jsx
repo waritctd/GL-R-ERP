@@ -5,6 +5,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { QuotationEditorPage } from './QuotationEditorPage.jsx';
 import { api } from '../../api/index.js';
+import { REVISION_RECIPIENT_LOCKED_MESSAGE } from './quotationMeta.js';
 import { queryKeys } from '../../api/queryKeys.js';
 
 globalThis.React = React;
@@ -315,6 +316,15 @@ describe('recipient on an existing DRAFT (slice 2 §C)', () => {
     await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalled());
     const [, payload] = api.dealQuotations.update.mock.calls[0];
     expect(payload.recipientType).toBe('BUYER');
+  });
+
+  it('DEAL_DIRECT revision (parentQuotationId set): the recipient is locked, with the hint, and no radios', async () => {
+    api.dealQuotations.get.mockResolvedValue({ quotation: draft({ recipientType: 'OWNER', parentQuotationId: 4, revisionNo: 2 }) });
+    renderEditor('/quotations/5');
+    const locked = await screen.findByTestId('quotation-recipient-revision-locked');
+    expect(within(locked).getByText('เจ้าของโครงการ')).toBeTruthy();
+    expect(within(locked).getByText(REVISION_RECIPIENT_LOCKED_MESSAGE)).toBeTruthy();
+    expect(screen.queryByRole('radio', { name: 'ผู้ซื้อ / ผู้รับเหมา' })).toBeNull();
   });
 
   it('PRICING_REQUEST: read-only "จากคำขอราคา", no radios, and the update never sends a recipientType', async () => {

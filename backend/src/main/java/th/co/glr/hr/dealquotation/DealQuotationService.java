@@ -996,13 +996,22 @@ public class DealQuotationService {
             if (!QuotationStatus.DRAFT.equals(existing.docStatus())) {
                 throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงแก้ไขไม่ได้");
             }
-            // PR B: only a REVISION (parentQuotationId set) of a PRICING_REQUEST row may be re-addressed
-            // (to the owner / buyer); a first-issue row keeps its request's recipient.
+            // A first-issue PRICING_REQUEST row keeps its request's recipient.
             if ("PRICING_REQUEST".equals(existing.origin()) && existing.parentQuotationId() == null) {
                 throw new ApiException(HttpStatus.CONFLICT,
                     "ผู้รับของใบเสนอราคาจากคำขอราคามาจากคำขอราคา — แก้ที่คำขอราคาต้นทาง");
             }
             requireAddressableRecipient(requestedRecipient);
+            // Owner ruling 2026-10-17 (D-5 step 2): a REVISION (parentQuotationId set, either origin)
+            // keeps its parent's recipient. One chain = one party, so the register's base+recipient
+            // grouping and the parentQuotationId lineage cannot disagree; a different party is a NEW
+            // quotation on the deal (the next suffix). Refuse only a CHANGE: the editor re-sends the
+            // stored recipient on every DEAL_DIRECT save.
+            if (existing.parentQuotationId() != null && !requestedRecipient.equals(existing.recipientType())) {
+                throw new ApiException(HttpStatus.CONFLICT, "ฉบับแก้ไขต้องส่งถึงผู้รับเดิม ("
+                    + QuotationRecipient.thaiLabel(existing.recipientType())
+                    + ") — หากจะเสนอราคาให้ผู้รับรายอื่น ให้สร้างใบเสนอราคาใหม่บนดีลนี้");
+            }
         }
         ContactSnapshot contact = resolveContact(request.contactId(), existing.contactId(), ticket);
         // ⚠️ v3, review fix F1: a MISSING priceMode on UPDATE keeps the STORED one. #resolvePriceMode's
@@ -1823,9 +1832,9 @@ public class DealQuotationService {
         // Rule 7 (shared with CustomerQuotationService#issue): reuse the SAME stage transition,
         // not a second path. Forward-only and ACTIVE-deal-only — see
         // TicketService#advanceStageForCustomerQuotationIssue/#autoAdvanceStage's own guards.
-        // PR B: use the QUOTATION's own recipient, not the pricing request's — a revision may be
-        // re-addressed to the owner/buyer, and the stage must follow the party it now addresses. For a
-        // first-issue quotation the two are identical (it copies the request's recipient at create).
+        // Use the QUOTATION's own recipient. A revision cannot be re-addressed (D-5 step 2, 2026-10-17),
+        // so this equals the parent's and the call is a no-op for it; for a first-issue quotation it
+        // equals the request's (copied at create).
         // Since D-2 the stage has normally ARRIVED ALREADY, at create time
         // (#advanceDealToRecipientStage). This call is kept rather than removed: it is idempotent
         // under forward-only, and it is still the only thing that covers a recipient changed

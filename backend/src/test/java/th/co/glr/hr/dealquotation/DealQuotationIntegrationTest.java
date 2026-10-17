@@ -362,6 +362,26 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
+    void createRevision_draftCannotBeReaddressed_409() {
+        DealQuotationDto parent = createSubmittedApproved(ticketId, salesActor, salesManagerActor);
+        assertThat(parent.recipientType()).isEqualTo("OWNER");
+        DealQuotationDto revision = quotationService.createRevision(parent.id(), salesActor);
+
+        assertThatThrownBy(() -> quotationService.update(revision.id(),
+            upsertRequest(List.of(sampleItem("100.00", 10))).withRecipientType("BUYER"), salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(e.getMessage()).contains("ฉบับแก้ไขต้องส่งถึงผู้รับเดิม");
+            });
+        assertThat(quotationService.get(revision.id(), salesActor).recipientType()).isEqualTo("OWNER");
+
+        // The editor re-sends the stored recipient on every save: unchanged must still pass.
+        DealQuotationDto resaved = quotationService.update(revision.id(),
+            upsertRequest(List.of(sampleItem("100.00", 10))).withRecipientType("OWNER"), salesActor);
+        assertThat(resaved.recipientType()).isEqualTo("OWNER");
+    }
+
+    @Test
     void approve_supersedesParentOnlyWhenRevisionItselfReachesApproved() {
         DealQuotationDto parent = createSubmittedApproved(ticketId, salesActor, salesManagerActor);
         assertThat(quotationService.get(parent.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.APPROVED);

@@ -1,6 +1,6 @@
 # ขั้น 4/5/8 come from a quotation — and a second quotation is a version
 
-Owner rulings, 2026-10-16 (Ploy). Implemented on `feat/quote-stage-gates-and-versioning` (f8b98dc4, 2026-10-17); D-5 step 2 still awaits the owner.
+Owner rulings, 2026-10-16 (Ploy). Implemented on `feat/quote-stage-gates-and-versioning` (f8b98dc4, 2026-10-17); D-5 step 2 ruled 2026-10-17 (a revision keeps its parent's recipient).
 
 ## Intent
 
@@ -286,10 +286,7 @@ the difference changes the size of the work and raises one question only the own
 
 **Genuinely remaining:**
 
-1. A recipient **lock as a revision rule**. The PCR-origin refusal above is a side effect of the
-   origin rule, not of being a revision — a DEAL_DIRECT revision is a DRAFT and can still be
-   re-addressed through `update`. Goal 3 ("it leaves the stage where it is") therefore holds today
-   only by accident of which origin you are on.
+1. ~~A recipient lock as a revision rule~~ DONE 2026-10-17 (see the RULED block below).
 2. Routing the approval by **what actually changed** (D-5 step 5). Nothing does this yet.
 3. Refusing a version that adds a line with **no CEO-approved price** (the deliberate scope cut).
 4. Collapsing the two doors into one `สร้างฉบับแก้ไข`. Door B still exists and is still the only
@@ -318,32 +315,19 @@ approved. The one place with no CEO baseline at all is a **DEAL_DIRECT** row (un
 flag is never raised) — that is the กรอกราคาเอง route D-2 already records as a second approved route,
 not a new hole.
 
-**⚠ STILL needs an owner decision — D-5 step 2 contradicts deliberate behaviour, with tests.**
+**✅ RULED 2026-10-17 (Ploy, option 1): a revision keeps its parent's recipient.** Re-addressing a
+revision draft (either origin) is 409 (`ฉบับแก้ไขต้องส่งถึงผู้รับเดิม (<ผู้รับเดิม>) — หากจะเสนอราคาให้ผู้รับรายอื่น ให้สร้างใบเสนอราคาใหม่บนดีลนี้`);
+only a CHANGE is refused, because the editor re-sends the stored recipient on every save. The way to
+quote another party is a new quotation on the deal (the next suffix). Goal 3 is now a rule, and the
+register's base+recipient grouping and the `parentQuotationId` lineage can no longer disagree.
+Implemented in `DealQuotationService#update` (after the 400 validation), mirrored in `mockApi`, and the
+editor shows the recipient read-only with the same hint. The three PR-B tests were inverted/replaced:
 
-D-5 step 2 says the revision's "recipient is locked to the parent's, mirroring the GLA-102 guard
-that already forces this on a request child", and derives goal 3 from it ("same recipient → same
-pipeline index → the forward-only advance leaves the stage alone, which is goal 3 for free").
-
-The code does the **opposite, on purpose**. PR B deliberately opened re-addressing for a revision
-draft — `DealQuotationService#update`'s recipient rule refuses any recipient on a first-issue
-PRICING_REQUEST row but permits it on a REVISION draft — and three tests pin it:
-
-- `revisionDraft_mayChangeRecipientToOwner_parentKeepsItsOwn`
-- `issuingARevisionAddressedToOwner_advancesTheStageToQuoteOwner_usingTheQuotationsRecipient`
-- `issuingARevisionAddressedToBuyer_advancesTheStageToQuoteBuyer`
-
-Note what the last two mean: re-addressing a revision is *expected* to move the stage. So goal 3 is
-not "free" — it is only true while the recipient happens to be unchanged, and the shipped behaviour
-is that a re-addressed revision moves the deal.
-
-The business question, which the code cannot answer: **when a rep re-addresses version 2 from the
-designer to the owner, is that a correction (the offer was always for the owner) or a new offer (the
-owner is a different counterparty and deserves its own document and number)?** GLA-102 answers it
-one way for a *pricing request* child, and D-5 assumes that answer transfers to a *quotation*
-revision. It may not — a pricing request is an internal costing round, a quotation is the thing the
-customer reads.
-
-Both directions are cheap to implement; the cost is in picking wrong. Not implemented either way.
+- `revisionDraft_mayChangeRecipientToOwner_parentKeepsItsOwn` -> `revisionDraft_cannotBeReaddressed_409_andNothingChanges`
+- `issuingARevisionAddressedToOwner_...` and `issuingARevisionAddressedToBuyer_...` -> one
+  `issuingARevision_leavesTheStageWhereTheParentPutIt`
+- added `revisionDraft_resavingTheSameRecipient_isAllowed` and (DEAL_DIRECT)
+  `DealQuotationIntegrationTest#createRevision_draftCannotBeReaddressed_409`
 
 ## Constraints
 
@@ -426,10 +410,10 @@ red for the right reason (an assertion on missing behaviour, never a compile or 
 - A legacy bare-numbered source revises to `{bare}-2`, not `{bare}-1` and not a fresh code.
 - The new version is numbered by the **deal-scoped** `nextRevisionNo(ticketId, base)`. Pinned with a
   sibling คำขอราคา present on the same deal, which is the case a request-scoped lookup gets wrong.
-- Recipient is locked: a revision cannot be re-addressed to another party. **BLOCKED on the
-  owner's step-2 decision** — the shipped behaviour is the opposite and is already pinned by three
-  tests. Do not write this test until the question is answered; writing it would put the suite in
-  direct contradiction with itself.
+- Recipient is locked: a revision cannot be re-addressed to another party. DONE (owner ruling
+  2026-10-17) — `revisionDraft_cannotBeReaddressed_409_andNothingChanges`,
+  `revisionDraft_resavingTheSameRecipient_isAllowed`, `issuingARevision_leavesTheStageWhereTheParentPutIt`,
+  `DealQuotationIntegrationTest#createRevision_draftCannotBeReaddressed_409`.
 - Lines arrive carrying the parent's CEO-approved discount (**owner ruling 2026-10-17**), and `priceChangedFromCeo` stays false so ผจก.ขาย can still
   approve. DONE — `createRevision_carriesTheCeoApprovedDiscountForward_notZero`, mutation-checked
   (zeroing the discount fails it on `[row 0 discountPct]`, and fails eight sibling tests with the
@@ -465,5 +449,5 @@ red for the right reason (an assertion on missing behaviour, never a compile or 
 ## Delivery
 
 One branch, test-first, implemented by Sonnet and reviewed by Opus per the standing rule (B-4 was
-Opus-reviewed), clean-review applied 2026-10-17. D-5 step 2 (recipient lock on a revision) is still
-**BLOCKED** on the owner's ruling.
+Opus-reviewed), clean-review applied 2026-10-17. D-5 step 2 (recipient lock on a revision) was ruled and
+implemented 2026-10-17.
