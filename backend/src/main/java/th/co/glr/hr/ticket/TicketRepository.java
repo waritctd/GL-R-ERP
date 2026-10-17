@@ -1280,8 +1280,8 @@ public class TicketRepository {
 
     /** A Postgres {@code text[]} as a {@link Set}; empty for SQL NULL, which is what
      * {@code array_agg} returns over no rows. */
-    private static Set<String> readTextArray(java.sql.ResultSet rs, String column)
-            throws java.sql.SQLException {
+    private static Set<String> readTextArray(ResultSet rs, String column)
+            throws SQLException {
         java.sql.Array array = rs.getArray(column);
         if (array == null) {
             return Set.of();

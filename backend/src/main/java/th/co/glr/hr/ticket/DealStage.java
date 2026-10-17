@@ -166,19 +166,20 @@ public final class DealStage {
      * </ul>
      *
      * <p><b>No longer purely descriptive.</b> This set used to change no gate. Now
-     * {@code TicketService.requireStageFactsHold} refuses a manual move into any of these until its
-     * fact holds, so membership here and that refusal are two halves of one rule and must change
-     * together.
+     * {@code TicketService.requireStageFactsHold} refuses a manual move into the three quote stages
+     * and ORDER_RECEIVED / DEPOSIT_RECEIVED / CLOSED_PAID until the stage's fact holds, so
+     * membership here and that refusal are two halves of one rule and must change together.
+     * PROCUREMENT is listed as auto-advanced only; it is not fact-gated. DELIVERED is fact-gated
+     * but absent from this set, for the reason below.
      *
-     * <p>DELIVERY_SCHEDULING is deliberately absent although {@code recordDelivery} and
-     * {@code reserveStock} auto-advance into it: the rep also reaches it by hand as a normal part
-     * of the flow, so presenting it as "the system does this for you" would be wrong.
+     * <p>DELIVERY_SCHEDULING and DELIVERED are deliberately absent although
+     * {@code recordDelivery} and {@code reserveStock} auto-advance into DELIVERY_SCHEDULING: the
+     * rep also reaches both by hand as a normal part of the flow, so presenting them as "the system
+     * does this for you" would be wrong.
      */
     private static final Set<String> AUTO_ADVANCED = Set.of(
         ORDER_RECEIVED, DEPOSIT_RECEIVED, PROCUREMENT, CLOSED_PAID,
-        // The three quote stages (owner ruling 2026-10-16): a quotation addressed to a recipient is
-        // what moves the deal onto that recipient's stage. Document-driven rather than operational,
-        // but identical to the rep — the stage arrives, it is not clicked.
+        // The three quote stages.
         //
         // Membership here withdraws the one-click เลื่อนไป from three of the four UI surfaces at
         // once, since the flag rides on the catalog and the deal page gates on `!next.auto`. The

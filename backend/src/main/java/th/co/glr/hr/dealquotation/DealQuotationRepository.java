@@ -81,18 +81,24 @@ public class DealQuotationRepository {
         return th.co.glr.hr.ticket.QuotationNumbering.revisionNumber(baseNumber, revisionNo);
     }
 
-    /** Serializes every mutating operation this feature performs against a given deal, against
-     * each other. Mirrors {@code CustomerQuotationRepository.lockPricingRequest}'s idiom, keyed on
-     * the ticket id instead — this feature has no pricing-request row to lock on. */
-    /** Two-int-key overload: its own keyspace, separate from the single-bigint locks every
-     * pricing-request locker uses (CustomerQuotationRepository, PricingRequestRepository,
-     * PricingDecisionRepository, FactoryQuoteRepository), so a ticket id can never alias a
-     * pricing-request id. Before 2026-10-17 no transaction held both, so the aliasing was harmless;
-     * createFromPricingRequest and approveAndIssuePricingRequestOrigin now take PR-then-ticket, and
-     * with crossed ids the shared keyspace deadlocked. Ticket ids are in the hundreds, so the int
-     * cast is safe for the life of this system. Class id differs from PDFT/FACT. */
+    /** Advisory-lock class id for {@link #lockTicket}; differs from PDFT/FACT. */
     private static final int TICKET_LOCK_CLASS_ID = 0x54494B54; // "TIKT", arbitrary but stable
 
+    /**
+     * Serializes every mutating operation this feature performs against a given deal, against each
+     * other (revise, reorder, both create paths, the live-quotation sweep).
+     *
+     * <p><b>Lock order — the canonical rule.</b> A transaction that needs both a pricing-request
+     * lock and this one takes the pricing-request lock FIRST, then this one; never reverse.
+     * {@code createFromPricingRequest} and {@code approveAndIssuePricingRequestOrigin} hold both.
+     *
+     * <p>Uses the two-int {@code pg_advisory_xact_lock(classId, id)} form, so its keyspace is
+     * separate from the single-bigint locks every pricing-request locker uses
+     * (CustomerQuotationRepository, PricingRequestRepository, PricingDecisionRepository,
+     * FactoryQuoteRepository). Ticket ids used to alias pricing-request ids in one shared keyspace,
+     * which deadlocked once a transaction held both with crossed ids. The {@code int} cast of the
+     * ticket id is safe: ids are in the hundreds.
+     */
     public void lockTicket(long ticketId) {
         jdbc.query("SELECT pg_advisory_xact_lock(:classId, CAST(:id AS int))",
             Map.of("classId", TICKET_LOCK_CLASS_ID, "id", ticketId), (rs, rowNum) -> 0);
@@ -372,19 +378,12 @@ public class DealQuotationRepository {
      * fresh quotation written after the previous one EXPIRED (D9 — "the version never restarts"),
      * for the identical reason M3 gives above — a cancelled/expired row never frees its own
      * {@code number}, so the naive "one more than the latest row" formula has the same latent
-     * collision risk this method was written to close. NIT (Opus re-review, 2026-09-20): that
-     * caller does NOT hold {@link #lockTicket} — it serialises on {@code
-     * CustomerQuotationRepository#lockPricingRequest} instead, since the escape hatch's own
-     * invariant ("one live quotation per pricing request") is scoped to the pricing request, not
-     * the ticket. Still race-safe (two concurrent escape-hatch calls for the SAME pricing request
-     * fully serialise on that lock), just not via the ticket lock this Javadoc used to imply
-     * unconditionally.
+     * collision risk this method was written to close.
      *
      * <p><b>Owner ruling 2026-10-17:</b> the base number belongs to the DEAL
      * ({@link #findDealBaseNumber}), so both origins deliberately SHARE one family and this MAX() is
-     * their single counter — which is why the predicate spans both. This Javadoc previously asserted
-     * the opposite ("each mints its own base number … never merges two unrelated numbering
-     * families"); that premise is gone. See {@code .design/quote-stage-gates/VERSIONING.md}.
+     * their single counter — which is why the predicate spans both.
+     * See {@code .design/quote-stage-gates/VERSIONING.md}.
      */
     public int nextRevisionNo(long ticketId, String baseNumber) {
         Integer max = jdbc.queryForObject("""
@@ -643,8 +642,7 @@ public class DealQuotationRepository {
         // (DealQuotationService#createFromPricingRequest). recipientType/recipientLabel: for a NEW
         // DEAL_DIRECT document (DealQuotationService#create, slice 2 S2-B1) the rep's DESIGNER/OWNER/
         // BUYER and its Thai label; for a revision or reorder, the SOURCE document's own recipient
-        // copied verbatim (#insertCopyOf) — never defaulted, since the short constructor that used
-        // to supply 'UNSPECIFIED' here is deleted; for PRICING_REQUEST, the SOURCE pricing
+        // copied verbatim (#insertCopyOf); for PRICING_REQUEST, the SOURCE pricing
         // request's own recipientType/recipientLabel (ผู้ออกแบบ/เจ้าของ/ผู้ซื้อ), carried over so
         // a later slice's issue() can reuse TicketService#advanceStageForCustomerQuotationIssue's
         // existing recipient->stage mapping unchanged. pricingRequestId/pricingDecisionId: the
