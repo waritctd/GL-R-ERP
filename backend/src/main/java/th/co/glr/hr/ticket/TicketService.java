@@ -2071,14 +2071,10 @@ public class TicketService {
         if (targetStage.equals(s.salesStage())) {
             throw new ApiException(HttpStatus.CONFLICT, "ดีลนี้อยู่ในขั้นตอน " + targetStage + " อยู่แล้ว");
         }
-        // The fact gate. Deliberately BEFORE the note and tracking-field rules: those two ask
-        // "has the rep done the paperwork?", and a deal whose facts do not support the target stage
-        // must be refused whatever the paperwork says. Ordering it after them would have produced
-        // the misleading pair "write a note" -> "…now the fact is missing", and would have let a
-        // reader mistake the note rule for the thing doing the work.
-        requireStageFactsHold(s, targetStage);
-        // Rung 6 of the precedence ladder (design §12.1): the deal's ENTRY-CHANNEL route. Last on
-        // purpose — a deal missing its deposit must report the FACT gate, not blame the route.
+        // Rung 6 of the precedence ladder (design §12.1): the deal's ENTRY-CHANNEL route. Checked
+        // BEFORE the facts because an off-route target's actionable remedy is the channel, not the
+        // fact. Identical outcome for every reachable input: only S4–S8 can be off-route
+        // (DealRoute.ROUTE_VARIABLE) and S6/S7 carry no fact gate.
         //
         // ⚠️ Tests the TARGET only, NEVER s.salesStage(). A deal may legitimately be SITTING on an
         // off-route stage (it got there before someone corrected the channel); gating the current
@@ -2090,6 +2086,12 @@ public class TicketService {
             throw new ApiException(HttpStatus.CONFLICT,
                 DealRoute.refusalMessage(s.entryChannel(), targetStage));
         }
+        // The fact gate. Deliberately BEFORE the note and tracking-field rules: those two ask
+        // "has the rep done the paperwork?", and a deal whose facts do not support the target stage
+        // must be refused whatever the paperwork says. Ordering it after them would have produced
+        // the misleading pair "write a note" -> "…now the fact is missing", and would have let a
+        // reader mistake the note rule for the thing doing the work.
+        requireStageFactsHold(s, targetStage);
     }
 
     /**
@@ -2241,16 +2243,8 @@ public class TicketService {
         //
         // Not circular: creating the quotation moves the deal via #autoAdvanceStage, which never
         // reaches this method (StageFactGateIntegrationTest#theQuoteStagesStillArriveAutomatically).
-        //
-        // ⚠️ The ON-ROUTE condition deliberately INVERTS this method's "facts before route" ordering
-        // (see requireStageMoveAllowed). That ordering is right where the fact is reachable — a
-        // deposit CAN be received. For a quote stage off the deal's route it is not: the rep would be
-        // told to write a quotation, write it, and only then hear the stage is off-route. So an
-        // off-route target falls through to the route refusal, which names the real remedy
-        // (แก้ช่องทางดีลก่อน). Pinned by DealRouteGateIntegrationTest.
         String quotedRecipient = quotationRecipientForStage(targetStage);
-        if (quotedRecipient != null && DealRoute.isOnRoute(s.entryChannel(), targetStage)
-                && !s.quotedRecipients().contains(quotedRecipient)) {
+        if (quotedRecipient != null && !s.quotedRecipients().contains(quotedRecipient)) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "เลื่อนไปขั้นตอน " + targetStage + " ไม่ได้: ยังไม่มีใบเสนอราคาถึง"
                     + QuotationRecipient.thaiLabel(quotedRecipient)

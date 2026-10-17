@@ -4304,7 +4304,8 @@ const MOCK_QUOTATION_RECIPIENT_LABEL = {
 };
 
 /**
- * Mirrors TicketSummaryDto.quotedRecipients: the parties this deal has a quotation addressed to.
+ * Mirrors TicketSummaryDto.quotedRecipients — a SERVER-SIDE fact (@JsonIgnore, never on the wire):
+ * the parties this deal has a quotation addressed to.
  *
  * Any doc_status EXCEPT CANCELLED, and any origin — a DRAFT counts, because under the creation-time
  * advance a draft is exactly what moved the deal onto the stage, so excluding it would make the
@@ -4394,18 +4395,18 @@ function mockStageDecisions(ticket, user) {
       blockedReason = `ดีลไม่ได้อยู่ในสถานะ ACTIVE (${ticket.lifecycle}) จึงแก้ไขขั้นตอนนี้ไม่ได้`;
     } else if (code === ticket.salesStage) {
       blockedReason = `ดีลนี้อยู่ในขั้นตอน ${code} อยู่แล้ว`;
+    } else if (!mockIsOnRoute(ticket.entryChannel, code)) {
+      // Rung 6 — the deal's entry-channel route, checked BEFORE the fact gates (mirrors
+      // TicketService.requireStageMoveAllowed): an off-route target's remedy is the channel, not
+      // the fact. Tests the TARGET only, never ticket.salesStage — a deal may legitimately be
+      // SITTING on an off-route stage after its channel was corrected.
+      blockedReason = mockRouteRefusal(ticket.entryChannel, code);
     } else if (MOCK_QUOTE_STAGE_RECIPIENT[code]
-        && mockIsOnRoute(ticket.entryChannel, code)
         && !mockQuotedRecipients(ticket.id).has(MOCK_QUOTE_STAGE_RECIPIENT[code])) {
       // The quote stages (owner ruling 2026-10-16) — gated on the FACT, not stubbed out, because
       // the mock CAN hold the fact: a quotation addressed to that party. Closes while there is none
       // and opens once there is, which is what the real 409 does. Before the blanket branch below
       // so the three never fall into "the mock does not support this".
-      //
-      // The ON-ROUTE condition mirrors requireStageFactsHold's own deliberate exception: for a
-      // quote stage the deal's route does not visit, the route refusal further down is the
-      // actionable message, so this gate must not pre-empt it. Without it the mock told the rep to
-      // write a quotation that could never move the stage.
       blockedReason = `เลื่อนไปขั้นตอน ${code} ไม่ได้: ยังไม่มีใบเสนอราคาถึง`
         + `${MOCK_QUOTATION_RECIPIENT_LABEL[MOCK_QUOTE_STAGE_RECIPIENT[code]]}`
         + ' — ขั้นนี้อัปเดตอัตโนมัติเมื่อสร้างใบเสนอราคาถึงผู้รับรายนี้';
@@ -4413,12 +4414,6 @@ function mockStageDecisions(ticket, user) {
       // The stub, not a copy of requireStageFactsHold — see the block comment above.
       blockedReason = `เลื่อนไปขั้นตอน ${code} ไม่ได้: ขั้นตอนนี้อัปเดตอัตโนมัติจากขั้นตอนของดีล`
         + ' (โหมดจำลองไม่รองรับการตั้งค่าด้วยมือ)';
-    } else if (!mockIsOnRoute(ticket.entryChannel, code)) {
-      // Rung 6 — the deal's entry-channel route. AFTER the fact gate on purpose: a deal missing
-      // its deposit must report the FACT gate, not blame the route. Tests the TARGET only, never
-      // ticket.salesStage — a deal may legitimately be SITTING on an off-route stage after its
-      // channel was corrected, and gating the current stage would strand it.
-      blockedReason = mockRouteRefusal(ticket.entryChannel, code);
     } else if (dealStageIndex(code) > dealStageIndex(ticket.salesStage)) {
       const sinceIso = dealLastStageChangeAt(ticket.events, ticket.createdAt);
       const hasRecentActivity = dealHasActivitySince(dealActivitiesForTicket(ticket.id), sinceIso);

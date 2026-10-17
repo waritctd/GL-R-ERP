@@ -282,6 +282,18 @@ describe('mock stageDecisions — the quote stages are fact-gated on a quotation
     expect(decision.blockedReason).toContain('ยังไม่มีใบเสนอราคาถึง');
   });
 
+  // Mirrors TicketService.requireStageMoveAllowed: route before facts, so an off-route quote stage
+  // names the channel remedy, not a quotation that could never move the stage.
+  it('reports the ROUTE refusal, not the missing quotation, for an off-route quote stage', async () => {
+    const ticketId = await freshDeal('OWNER_DIRECT');
+
+    const decision = (await decisionsOf(ticketId)).find((d) => d.stage === 'QUOTE_DESIGN_SIDE');
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.blockedReason).toContain('แก้ช่องทางดีลก่อน');
+    expect(decision.blockedReason).not.toContain('ยังไม่มีใบเสนอราคาถึง');
+  });
+
   it('opens QUOTE_OWNER once a quotation is addressed to the owner', async () => {
     const ticketId = await freshDeal();
     await createDirect(ticketId, 'OWNER');

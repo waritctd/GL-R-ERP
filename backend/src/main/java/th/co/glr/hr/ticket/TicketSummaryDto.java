@@ -1,5 +1,6 @@
 package th.co.glr.hr.ticket;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -148,7 +149,11 @@ public record TicketSummaryDto(
      * which {@code TicketActionsQueryCountIntegrationTest}'s statement budget catches. Carried by
      * the statement that already fetches {@link #commissionRecorded} and
      * {@link #liveDirectQuotation}, so it costs no extra round trip.
+     *
+     * <p>Server-side fact only, hidden from JSON: un-ignore it when a screen needs it and mirror it
+     * in {@code mockApi.js}'s ticket summary at the same time.
      */
+    @JsonIgnore
     Set<String> quotedRecipients
 ) {
     /** The shape before the derived payment-due fields existed: they default to "no structured term". */
