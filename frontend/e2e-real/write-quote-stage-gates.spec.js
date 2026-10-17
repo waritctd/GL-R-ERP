@@ -7,11 +7,14 @@ import { directQuotationBody, inDays } from './helpers/sales.js';
 /**
  * UAT walk — quote stage gates + versioning (owner rulings 2026-10-16/17, .design/quote-stage-gates).
  * Every case drives the REAL UI in a real browser and asserts both what the screen shows and what
- * GET /api/tickets/{id} says. Screenshots land OUTSIDE the repo, one per numbered step.
+ * GET /api/tickets/{id} says. Screenshots land in E2E_SHOTS_DIR or the gitignored test-results-real/, one per numbered step.
  * Named write-* so a local run executes it (uat-* is testIgnored locally).
  */
-const SHOTS = '/private/tmp/claude-501/-Users-ploy-warit-Desktop-GL-R-ERP/ff0b6ec6-1027-4752-a0b8-6ea2df30552e/scratchpad/uat-shots';
-mkdirSync(SHOTS, { recursive: true });
+// Screenshots: E2E_SHOTS_DIR when set (a reviewer's own folder), else the gitignored
+// frontend/test-results-real/quote-stage-gates next to Playwright's own output. Created lazily on
+// the first shot so merely loading this file never writes anywhere (CI runs it from a clean checkout).
+const SHOTS = process.env.E2E_SHOTS_DIR
+  || new URL('../test-results-real/quote-stage-gates/', import.meta.url).pathname;
 
 const STAGE_MESSAGE = 'อัตโนมัติจากขั้นตอนของดีล';
 const REFUSED = /เลื่อนไปขั้นตอน .*ไม่ได้: ยังไม่มีใบเสนอราคาถึง/;
@@ -29,9 +32,12 @@ test.describe.serial('quote stage gates + versioning — real browser walk', () 
   const tag = `qsg-${Date.now().toString(36)}`;
   let shotNo = 0;
 
-  const shot = (page, name) => page.screenshot({
-    path: `${SHOTS}/${String(++shotNo).padStart(2, '0')}-${name}.png`, fullPage: true,
-  });
+  const shot = (page, name) => {
+    mkdirSync(SHOTS, { recursive: true });
+    return page.screenshot({
+      path: `${SHOTS}/${String(++shotNo).padStart(2, '0')}-${name}.png`, fullPage: true,
+    });
+  };
 
   async function newCustomer(label) {
     const name = `บริษัท ${tag} ${label} จำกัด`;
