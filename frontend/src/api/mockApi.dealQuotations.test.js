@@ -1118,21 +1118,32 @@ describe('mock dealQuotations counts / needsRework -- owner feedback F5', () => 
 });
 
 describe('mock dealQuotations ผู้สั่งซื้อ snapshot -- owner feedback F2', () => {
-  it('defaults contactId to the deal\'s own contact and FREEZES name/phone/email onto the row', async () => {
-    await api.auth.login(salesUser);
-    const { quotation } = await createOn18({ items: [ONE_ITEM] });
+  // Ruling 2026-10-18: the ผู้ติดต่อ is picked per quotation -- request contactId, else the row's
+  // own, else none; the deal's contact is NOT a fallback -- and the ผู้สั่งซื้อ signature name
+  // (orderedByName) is that contact's name, written on every DRAFT save; a name typed into the
+  // request is ignored. Mirrors DealQuotationService#resolveContact and its callers.
+  const TYPED = 'ชื่อที่พิมพ์เอง';
 
-    expect(quotation.contactId).toBe(6); // ticket 18's own contact
-    expect(quotation.contactName).toBe('ณัฐพงศ์ ศรีวิไล');
-    expect(quotation.contactPhone).toBe('086-222-3333');
-    expect(quotation.contactEmail).toBe('nattapong@fashionisland.co.th');
+  // Mirrors DealQuotationIntegrationTest#create_withNoContactId_doesNotInheritTheDealsContact.
+  it('does NOT inherit the deal\'s own contact: no contactId sent = a blank snapshot and no signature name', async () => {
+    await api.auth.login(salesUser);
+    const { ticket } = await api.tickets.get(18);
+    expect(ticket.summary.contactId).toBe(6); // the deal HAS a contact that could be inherited
+
+    const { quotation } = await createOn18({ orderedByName: TYPED, items: [ONE_ITEM] });
+    expect(quotation).toMatchObject({
+      contactId: null, contactName: null, contactPhone: null, contactEmail: null, orderedByName: null,
+    });
   });
 
-  it('an explicit contactId on the request wins over the deal\'s default', async () => {
+  // Mirrors DealQuotationIntegrationTest#create_withExplicitContact_usesIt_andRefusesAnotherCustomersContact.
+  it('a picked contactId FREEZES name/phone/email onto the row, and its name is the signature name', async () => {
     await api.auth.login(salesUser);
-    const { quotation } = await createOn18({ contactId: 7, items: [ONE_ITEM] });
-    expect(quotation.contactId).toBe(7);
-    expect(quotation.contactName).toBe('พิมพ์ใจ บุญมาก');
+    const { quotation } = await createOn18({ contactId: 7, orderedByName: TYPED, items: [ONE_ITEM] });
+    expect(quotation).toMatchObject({
+      contactId: 7, contactName: 'พิมพ์ใจ บุญมาก', contactPhone: '086-444-5555',
+      contactEmail: 'pimjai@fashionisland.co.th', orderedByName: 'พิมพ์ใจ บุญมาก',
+    });
   });
 
   // Wrong-way-round: a contact belonging to a DIFFERENT customer must be refused, not silently
@@ -1149,22 +1160,49 @@ describe('mock dealQuotations ผู้สั่งซื้อ snapshot -- owne
       .rejects.toThrow('กรุณาระบุผู้สั่งซื้อ');
   });
 
-  it('update() re-snapshots when the rep changes ผู้สั่งซื้อ', async () => {
+  // Mirrors DealQuotationIntegrationTest#update_keepsTheDraftsContactWhenOmitted_andSwitchesOnAnExplicitId.
+  // ล้าง (ruling 2026-10-18): a picked ผู้ติดต่อ may be cleared per quotation -- clearContact on
+  // update blanks the snapshot whatever contactId says; create ignores the flag.
+  it('update() re-snapshots when the rep changes ผู้ติดต่อ, the signature name follows, and clearContact blanks both', async () => {
     await api.auth.login(salesUser);
-    const created = await createOn18({ items: [ONE_ITEM] });
-    const { quotation } = await api.dealQuotations.update(created.quotation.id, { contactId: 7, items: [ONE_ITEM] });
-    expect(quotation.contactId).toBe(7);
-    expect(quotation.contactName).toBe('พิมพ์ใจ บุญมาก');
+    const created = await createOn18({ contactId: 6, clearContact: true, items: [ONE_ITEM] });
+    expect(created.quotation).toMatchObject({ contactId: 6, orderedByName: 'ณัฐพงศ์ ศรีวิไล' });
+
+    const { quotation } = await api.dealQuotations.update(created.quotation.id, {
+      contactId: 7, orderedByName: TYPED, items: [ONE_ITEM],
+    });
+    expect(quotation).toMatchObject({ contactId: 7, contactName: 'พิมพ์ใจ บุญมาก', orderedByName: 'พิมพ์ใจ บุญมาก' });
+
+    const { quotation: cleared } = await api.dealQuotations.update(created.quotation.id, {
+      contactId: null, clearContact: true, orderedByName: TYPED, items: [ONE_ITEM],
+    });
+    expect(cleared).toMatchObject({
+      contactId: null, contactName: null, contactPhone: null, contactEmail: null, orderedByName: null,
+    });
+  });
+
+  // The signature name is written by a DRAFT save, never derived on read, so a row nobody re-saves
+  // keeps serving what it stores: the seed's PENDING_APPROVAL row 2 carries contact 6 and no stored
+  // signature name. The seed's DRAFT row 1 (same contact, same empty name) takes the contact's name
+  // on its next save, which sends no contactId -- the row's own contact is kept.
+  it('a non-DRAFT row serves the signature name it stores; a DRAFT\'s next save writes its contact\'s name', async () => {
+    await api.auth.login(salesUser);
+    const { quotation: pending } = await api.dealQuotations.get(2);
+    expect(pending).toMatchObject({ docStatus: 'PENDING_APPROVAL', contactName: 'ณัฐพงศ์ ศรีวิไล', orderedByName: null });
+
+    const { quotation: draft } = await api.dealQuotations.get(1);
+    expect(draft).toMatchObject({ docStatus: 'DRAFT', contactId: 6, orderedByName: null });
+    const { quotation: saved } = await api.dealQuotations.update(1, { orderedByName: TYPED, items: [ONE_ITEM] });
+    expect(saved).toMatchObject({ contactId: 6, orderedByName: 'ณัฐพงศ์ ศรีวิไล' });
   });
 
   // ⚠️ Owner-directed reversal of V167/F2 (2026-09-26): create/update/submit used to REFUSE a deal
-  // with no resolvable ผู้สั่งซื้อ at all ("กรุณาระบุผู้สั่งซื้อ") -- the frontend's required
-  // contact-picker dropdown that rule existed for is gone (ผู้สั่งซื้อ is now a single optional
-  // free-text signature-name field, unrelated to this contact snapshot), so this proves the
-  // OPPOSITE: a deal ticket with no contact of its own, and no contactId ever sent on the wire,
-  // creates/updates/submits successfully with a blank contact snapshot throughout. Mirrors
-  // DealQuotationIntegrationTest#create_withNoResolvableContact_succeedsWithABlankContactSnapshot
-  // and #submit_succeedsOnARowWithNoContactSnapshot on the Java side.
+  // with no resolvable contact at all ("กรุณาระบุผู้สั่งซื้อ"). A contact is optional, so this
+  // proves the OPPOSITE: a deal ticket with no contact of its own, and no contactId ever sent on
+  // the wire, creates/updates/submits successfully with a blank contact snapshot throughout -- and
+  // with no signature name, a typed one ignored. Mirrors
+  // DealQuotationIntegrationTest#submit_succeedsOnARowWithNoContactSnapshot and
+  // DealQuotationOrderedByContactIntegrationTest#update_replacesBoth on the Java side.
   it('create/update/submit all succeed with a blank contact snapshot when the deal has no ผู้สั่งซื้อ at all', async () => {
     await api.auth.login(salesUser);
     const { customer } = await api.customers.create({
@@ -1184,8 +1222,9 @@ describe('mock dealQuotations ผู้สั่งซื้อ snapshot -- owne
     expect(created.quotation.contactId).toBeNull();
     expect(created.quotation.contactName).toBeNull();
 
-    const updated = await api.dealQuotations.update(created.quotation.id, { items: [ONE_ITEM] });
+    const updated = await api.dealQuotations.update(created.quotation.id, { orderedByName: TYPED, items: [ONE_ITEM] });
     expect(updated.quotation.contactId).toBeNull();
+    expect(updated.quotation.orderedByName).toBeNull();
 
     const submitted = await api.dealQuotations.submit(created.quotation.id);
     expect(submitted.quotation.contactId).toBeNull();
