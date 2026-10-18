@@ -752,7 +752,7 @@ public class TicketService {
             s.winProbabilityOverride(), s.designerName(), s.ownerName(), s.buyerName(), s.stale(),
             s.commissionRecorded(), s.reopenedAt(), s.reopenCount(), s.quotationOnly(),
             s.paymentDueDate(), s.paymentDueBasis(), s.paymentDueCreditDays(),
-            s.liveDirectQuotation());
+            s.liveDirectQuotation(), s.quotedRecipients());
     }
 
     /**
@@ -2071,14 +2071,10 @@ public class TicketService {
         if (targetStage.equals(s.salesStage())) {
             throw new ApiException(HttpStatus.CONFLICT, "ดีลนี้อยู่ในขั้นตอน " + targetStage + " อยู่แล้ว");
         }
-        // The fact gate. Deliberately BEFORE the note and tracking-field rules: those two ask
-        // "has the rep done the paperwork?", and a deal whose facts do not support the target stage
-        // must be refused whatever the paperwork says. Ordering it after them would have produced
-        // the misleading pair "write a note" -> "…now the fact is missing", and would have let a
-        // reader mistake the note rule for the thing doing the work.
-        requireStageFactsHold(s, targetStage);
-        // Rung 6 of the precedence ladder (design §12.1): the deal's ENTRY-CHANNEL route. Last on
-        // purpose — a deal missing its deposit must report the FACT gate, not blame the route.
+        // Rung 6 of the precedence ladder (design §12.1): the deal's ENTRY-CHANNEL route. Checked
+        // BEFORE the facts because an off-route target's actionable remedy is the channel, not the
+        // fact. Identical outcome for every reachable input: only S4–S8 can be off-route
+        // (DealRoute.ROUTE_VARIABLE) and S6/S7 carry no fact gate.
         //
         // ⚠️ Tests the TARGET only, NEVER s.salesStage(). A deal may legitimately be SITTING on an
         // off-route stage (it got there before someone corrected the channel); gating the current
@@ -2090,6 +2086,12 @@ public class TicketService {
             throw new ApiException(HttpStatus.CONFLICT,
                 DealRoute.refusalMessage(s.entryChannel(), targetStage));
         }
+        // The fact gate. Deliberately BEFORE the note and tracking-field rules: those two ask
+        // "has the rep done the paperwork?", and a deal whose facts do not support the target stage
+        // must be refused whatever the paperwork says. Ordering it after them would have produced
+        // the misleading pair "write a note" -> "…now the fact is missing", and would have let a
+        // reader mistake the note rule for the thing doing the work.
+        requireStageFactsHold(s, targetStage);
     }
 
     /**
@@ -2233,6 +2235,20 @@ public class TicketService {
         if (DealStage.CLOSED_PAID.equals(targetStage) && !closedPaidFactsHold(s)) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "เลื่อนไปขั้นตอน CLOSED_PAID ไม่ได้: ต้องรับชำระเงินครบและส่งมอบสินค้าครบก่อน");
+        }
+        // The three quote stages (owner ruling 2026-10-16). ขั้น 4/5/8 claim "this party has been
+        // quoted", so their fact is a quotation on the deal addressed to that party. A 409 ("there
+        // is nothing to be on this stage for"), never a 403 — which is why the stages stay in
+        // SALES_TARGET_STAGES: once the document exists the rep may correct the stage by hand.
+        //
+        // Not circular: creating the quotation moves the deal via #autoAdvanceStage, which never
+        // reaches this method (StageFactGateIntegrationTest#theQuoteStagesStillArriveAutomatically).
+        String quotedRecipient = quotationRecipientForStage(targetStage);
+        if (quotedRecipient != null && !s.quotedRecipients().contains(quotedRecipient)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "เลื่อนไปขั้นตอน " + targetStage + " ไม่ได้: ยังไม่มีใบเสนอราคาถึง"
+                    + QuotationRecipient.thaiLabel(quotedRecipient)
+                    + " — ขั้นนี้อัปเดตอัตโนมัติเมื่อสร้างใบเสนอราคาถึงผู้รับรายนี้");
         }
     }
 
@@ -2443,11 +2459,6 @@ public class TicketService {
     }
 
     /**
-     * Same-transaction stage advance from the deal's own operational transitions.
-     * No-throw by construction: no-op when the deal is lost or the target is not
-     * strictly forward (monotonic — re-running a transition can never regress).
-     */
-    /**
      * Step 4 (Customer Quotation Generation and Issuance): the EXACT stage-advance
      * {@link #generateQuotation} already performs for a recipient-scoped quotation, exposed as a
      * public entry point so {@code th.co.glr.hr.customerquotation.CustomerQuotationService} can
@@ -2488,6 +2499,35 @@ public class TicketService {
         return null;
     }
 
+    /**
+     * The inverse of {@link #stageForQuotationRecipient}: the recipient a quote stage claims has
+     * been quoted, or {@code null} for every stage that claims nothing of the kind.
+     *
+     * <p>Derived from that method rather than written out a second time, because a hand-copied
+     * inverse is exactly the pair that drifts — {@code stageForQuotationRecipient}'s own Javadoc
+     * records that it exists because the recipient→stage mapping used to be duplicated in two
+     * places that then disagreed. One literal, one direction, inverted here.
+     */
+    static String quotationRecipientForStage(String stage) {
+        for (String recipient : QuotationRecipient.ADDRESSABLE) {
+            if (stage.equals(stageForQuotationRecipient(recipient))) {
+                return recipient;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Same-transaction stage advance from the deal's own operational transitions — and, since the
+     * 2026-10-16 ruling, from a quotation being addressed to a recipient. No-throw by construction:
+     * a no-op when the deal is not ACTIVE, when the target is not strictly forward (monotonic, so
+     * re-running a transition can never regress) or when the target is off the deal's route.
+     *
+     * <p>Deliberately does NOT route through {@link #requireStageMoveAllowed}, and that is what
+     * makes {@link #requireStageFactsHold}'s gates safe rather than circular: each one fires
+     * <em>because</em> the fact just became true, so re-checking the fact here would refuse the
+     * very transition that recorded it.
+     */
     private void autoAdvanceStage(TicketSummaryDto s, String targetStage, UserPrincipal actor) {
         // ACTIVE is the whole test. The old `lostReason != null` clause would now
         // silently disable auto-advance on every reopened deal, since V58 keeps the

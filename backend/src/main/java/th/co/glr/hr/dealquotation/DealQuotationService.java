@@ -292,8 +292,8 @@ public class DealQuotationService {
         // or reorder of an existing direct quotation (#createRevision/#createReorder) is not a new
         // route choice, and #createFromPricingRequest IS the pricing route.
         th.co.glr.hr.ticket.DirectQuotationLocks.requireNoLivePricingRequest(tickets, ticketId);
-        // N6 (S2-B3): one live direct quotation per deal — a second create would mint a second base
-        // number. The 409 names the live one (liveQuotationId/number/docStatus, top-level in the JSON
+        // N6 (S2-B3): one live direct quotation per deal — a second create would leave two live
+        // documents on the deal. The 409 names the live one (liveQuotationId/number/docStatus, top-level in the JSON
         // body) so the client can offer "แก้ไขฉบับนั้น" / "สร้างฉบับแก้ไข". Under #lockTicket, so two
         // concurrent creates cannot both pass it.
         th.co.glr.hr.ticket.DirectQuotationLocks.requireNoLiveDirectQuotationForCreate(tickets, ticketId);
@@ -332,14 +332,16 @@ public class DealQuotationService {
         String orderedByPhone = resolveOrderedByPhone(request.orderedByPhone());
         String orderedByEmail = resolveOrderedByEmail(request.orderedByEmail());
         // Owner feedback 2026-09-11 ("มีรันเลข -1 -2 ต่อท้ายตี้วแต่แรก" / "ใบแรกเป็น QT-2026-0014-1"):
-        // the FIRST issued document now carries the revision suffix too, so a fresh sequence value
-        // ("0014") is minted here and immediately formatted as revision 1 of itself
-        // ({@link DealQuotationRepository#revisionNumber}) — "QT-2026-0014-1", not a bare
-        // "QT-2026-0014". The sequence allocation itself (nextQuotationCode) is unchanged: this
-        // only changes how revision 1's number is FORMATTED, never which "0014" a ticket gets.
-        String number = DealQuotationRepository.revisionNumber(quotations.nextQuotationCode(), 1);
+        // every document carries the revision suffix, including the first.
+        //
+        // Owner ruling 2026-10-17 — the base number belongs to the DEAL
+        // (.design/quote-stage-gates/VERSIONING.md): the deal's family is continued, so a rep who
+        // cancelled and rewrote keeps the thread; a fresh base is minted only when it has none.
+        // Serialised by #lockTicket above, so concurrent creates cannot read the same MAX and race
+        // the number's UNIQUE constraint.
+        DealQuotationRepository.QuotationNumber quotationNumber = quotations.nextNumberOnDeal(ticketId);
         long id = quotations.insertDraft(new InsertDraftParams(
-            ticketId, number, actor.id(), ticket.createdById(),
+            ticketId, quotationNumber.number(), actor.id(), ticket.createdById(),
             customerSnapshot.name(), customerSnapshot.address(),
             customerSnapshot.taxId(), customerSnapshot.phone(),
             contact,
@@ -355,10 +357,11 @@ public class DealQuotationService {
             printedByDisplayId, salesRepDisplayId,
             resolveOmitContactHonorific(request.omitContactHonorific()), fullPaymentTerm,
             // A brand-new document is neither a revision (parentQuotationId) nor a reorder clone
-            // (derivedFromQuotationId) — both null.
-            subtotal, null, 1, null, items,
-            // Slice 2 (S2-B1): the rep's ผู้รับ and its Thai label, where this call used to take
-            // the short constructor's hard-coded 'UNSPECIFIED'/null. Still DEAL_DIRECT, no source
+            // (derivedFromQuotationId) — both null. revisionNo is the deal family's next suffix
+            // (2026-10-17 ruling), not a hardcoded 1: this document may be the fourth on the deal
+            // without being a revision of anything.
+            subtotal, null, quotationNumber.revisionNo(), null, items,
+            // Slice 2 (S2-B1): the rep's ผู้รับ and its Thai label. Still DEAL_DIRECT, no source
             // pricing request/decision.
             DealQuotationRepository.ORIGIN_DEAL_DIRECT, recipientType, QuotationRecipient.thaiLabel(recipientType),
             null, null,
@@ -366,7 +369,7 @@ public class DealQuotationService {
             // clears it to null, same discipline as every other free-text header field here.
             blankToNull(request.orderedByName()),
             orderedByPhone, orderedByEmail));
-        // Deal-stage rule hook — owned by the entry-channel/stage-route work (.design/deal-route-staging §5 Flow 10): recipient → stage, forward-only via TicketService.autoAdvanceStage. Intentionally empty here.
+        advanceDealToRecipientStage(ticketId, recipientType, actor);
         // Sales feedback #5 (V192.1, 2026-10-06) — "ไม่แสดงชื่อโครงการในใบเสนอราคา". A brand-new
         // document prints its project unless the request says otherwise (null = false on CREATE),
         // so only an explicit true needs writing: the row was just inserted on the column's own
@@ -376,6 +379,27 @@ public class DealQuotationService {
             quotations.updateHideProjectName(id, true);
         }
         return requireQuotation(id);
+    }
+
+    /**
+     * D-2 (owner ruling 2026-10-16, {@code .design/quote-stage-gates}): a quotation addressed to a
+     * recipient moves the deal onto that recipient's stage, at CREATION. Called from
+     * {@link #create}, {@link #createFromPricingRequest} and {@link #update}'s recipient change.
+     *
+     * <p>Pure delegation — the mapping, forward-only rule, ACTIVE test and off-route no-op all live
+     * in {@code TicketService#autoAdvanceStage}, which writes straight to the repository and never
+     * calls {@code requireStageMoveAllowed}. That is what keeps this non-circular with the fact gate
+     * refusing the manual move into the same stages, and no-throw when the target is unreachable.
+     *
+     * <p>The null check is for hand-wired tests only: {@link #ticketService} is
+     * {@code required = false}, so a test that never wires it skips the advance instead of NPEing.
+     * A test asserting on the stage must call {@code wireTicketService}.
+     */
+    private void advanceDealToRecipientStage(long ticketId, String recipientType, UserPrincipal actor) {
+        if (ticketService == null) {
+            return;
+        }
+        ticketService.advanceStageForCustomerQuotationIssue(ticketId, recipientType, actor);
     }
 
     /** Slice 2 (S2-B1): a direct create must name its ผู้รับ — DESIGNER / OWNER / BUYER only. Returns
@@ -444,6 +468,9 @@ public class DealQuotationService {
         if (customerQuotations != null) {
             customerQuotations.lockPricingRequest(pricingRequestId);
         }
+        // PR lock first, then the deal's advisory lock — see DealQuotationRepository#lockTicket
+        // for the order rule; never reverse.
+        quotations.lockTicket(summary.ticketId());
         // MAJOR-3 fix (owner ruling via coordinator, 2026-09-20 — "the expiry escape hatch"): a
         // PRICING_REQUEST-origin quotation that EXPIRED (D5) used to be a permanent dead end — the
         // pricing request stays QUOTATION_ISSUED forever (nothing rolls it back), so this original
@@ -467,6 +494,21 @@ public class DealQuotationService {
         if (!prReadyForFirstQuotation && !prReadyForReplacementAfterExpiry) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "คำขอราคาต้องอยู่ในสถานะ 'อนุมัติราคาขายแล้ว' ก่อนจึงจะออกใบเสนอราคาลูกค้าได้ (ปัจจุบัน: " + summary.status() + ")");
+        }
+        // Owner ruling 2026-10-17 (VERSIONING.md B-4): issuing any quotation retires every other
+        // live one on the deal, so this request can sit at QUOTATION_ISSUED with its only document
+        // SUPERSEDED by a sibling request's issue. Re-quoting here would price off the OLDER CEO
+        // decision, and issuing it would in turn retire that sibling's NEWER offer. Only the LATEST
+        // row decides: an EXPIRED/CANCELLED/REJECTED latest (incl. an expired revision of a
+        // superseded parent) keeps the expiry escape hatch open.
+        if (prReadyForReplacementAfterExpiry) {
+            quotations.findLatestForPricingRequest(pricingRequestId)
+                .map(this::requireQuotation)
+                .filter(q -> QuotationStatus.SUPERSEDED.equals(q.docStatus()))
+                .ifPresent(q -> {
+                    throw new ApiException(HttpStatus.CONFLICT,
+                        "คำขอราคานี้ถูกแทนที่ด้วยใบเสนอราคาฉบับใหม่ของดีลแล้ว — ออกใบเสนอราคาจากคำขอราคาล่าสุด หรือสร้างคำขอราคาใหม่");
+                });
         }
         PricingDecisionDto decision = pricingDecisions.findByPricingRequest(pricingRequestId).stream()
             .filter(d -> "APPROVED".equals(d.status()))
@@ -544,37 +586,18 @@ public class DealQuotationService {
         // the quotation afterwards, exactly like every other draft header field.
         Integer creditDays = "CREDIT".equals(summary.paymentTermMode()) ? summary.creditDays() : null;
 
-        // MAJOR-3 fix (owner ruling, 2026-09-20) — re-creating after an expiry continues the SAME
-        // {base}-{n} number family (owner's explicit preference: "it is a later version of the
-        // same offer"), rather than minting an unrelated fresh base number. Falls back to a fresh
-        // number when there is nothing to continue (first-ever creation, or the pricing request's
-        // only prior quotation was on the OLD customerquotation engine, which this origin's own
-        // #findLatestForPricingRequest cannot see by construction). NOT wired through
-        // parentQuotationId/createRevision — this is a genuinely NEW, independent create (D12
-        // keeps createRevision/createReorder refused for this origin), so no revision-chain
-        // linkage or ancestor-supersede behaviour is implied; only the printed NUMBER continues.
+        // NOT wired through parentQuotationId/createRevision — this is a genuinely NEW, independent
+        // create, so no revision-chain linkage or ancestor-supersede behaviour is implied; only the
+        // printed NUMBER continues.
         //
-        // Review fix (2026-09-20): uses #nextRevisionNo (MAX across every row that EVER existed
-        // under this base, widened to include this origin — see that method's own Javadoc) rather
-        // than the naive {@code latest.revisionNo() + 1} — the identical latent duplicate-key risk
-        // M3 documented for createRevision applies here too (D9: "the version never restarts"), so
-        // reusing the SAME, already-hardened method is more robust than re-deriving the number by
-        // hand a second time.
-        String number;
-        int revisionNo;
-        Optional<Long> latestId = prReadyForReplacementAfterExpiry
-            ? quotations.findLatestForPricingRequest(pricingRequestId) : Optional.empty();
-        if (latestId.isPresent()) {
-            DealQuotationDto latest = requireQuotation(latestId.get());
-            String base = th.co.glr.hr.ticket.QuotationNumbering.baseNumber(latest.number(), latest.revisionNo());
-            revisionNo = quotations.nextRevisionNo(summary.ticketId(), base);
-            number = th.co.glr.hr.ticket.QuotationNumbering.revisionNumber(base, revisionNo);
-        } else {
-            revisionNo = 1;
-            number = DealQuotationRepository.revisionNumber(quotations.nextQuotationCode(), 1);
-        }
+        // Owner ruling 2026-10-17 — the base number belongs to the DEAL
+        // (.design/quote-stage-gates/VERSIONING.md): the deal's family is continued across pricing
+        // requests and origins by the same counter #create and #insertCopyOf use, so a รอบราคาใหม่
+        // keeps the rep's version number. prReadyForReplacementAfterExpiry only decides whether an
+        // expired round may be re-created; it does not affect numbering.
+        DealQuotationRepository.QuotationNumber quotationNumber = quotations.nextNumberOnDeal(summary.ticketId());
         long id = quotations.insertDraft(new InsertDraftParams(
-            summary.ticketId(), number, actor.id(), ticket.createdById(),
+            summary.ticketId(), quotationNumber.number(), actor.id(), ticket.createdById(),
             customerSnap.name(), customerSnap.address(), customerSnap.taxId(), customerSnap.phone(),
             contact,
             ticket.projectName(), blankToNull(summary.deptCode()), blankToNull(summary.unitCode()),
@@ -587,19 +610,23 @@ public class DealQuotationService {
             decision.priceMode(), WastageCalculator.DOCUMENT_LANGUAGE_TH, "THB",
             summary.printedByDisplayId(), summary.salesRepDisplayId(),
             summary.omitContactHonorific(), null,
-            subtotal, null, revisionNo, null, items,
+            subtotal, null, quotationNumber.revisionNo(), null, items,
             "PRICING_REQUEST", summary.recipientType(), summary.recipientLabel(),
             summary.id(), decision.id(),
             // Owner-directed reversal of F2 (2026-09-26) — nothing to inherit on a brand-new
             // PRICING_REQUEST-origin create; the rep sets a manual name later via #update, same
             // as any DEAL_DIRECT document. V192.3: nor a phone or an email for that name.
             null, null, null));
+        // D-2: the same creation-time advance #create performs, on the recipient this document
+        // carries over from its source คำขอราคา. Once ขั้น 4 is only reachable by quoting someone,
+        // THIS is the call that gets a PCR-route deal there.
+        advanceDealToRecipientStage(summary.ticketId(), summary.recipientType(), actor);
 
         pricingRequests.addEvent(summary.id(), summary.ticketId(), actor.id(), actor.name(),
             PricingRequestEventKind.CUSTOMER_QUOTATION_CREATED, summary.status(), summary.status(),
             "สร้างร่างใบเสนอราคาลูกค้า (เครื่องมือใบเสนอราคาแบบ direct)", null);
         tickets.addEvent(summary.ticketId(), actor.id(), actor.name(), TicketEventKind.EDITED, null, null,
-            "สร้างร่างใบเสนอราคา " + number + " จากคำขอราคา " + summary.requestCode());
+            "สร้างร่างใบเสนอราคา " + quotationNumber.number() + " จากคำขอราคา " + summary.requestCode());
         return requireQuotation(id);
     }
 
@@ -969,13 +996,22 @@ public class DealQuotationService {
             if (!QuotationStatus.DRAFT.equals(existing.docStatus())) {
                 throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงแก้ไขไม่ได้");
             }
-            // PR B: only a REVISION (parentQuotationId set) of a PRICING_REQUEST row may be re-addressed
-            // (to the owner / buyer); a first-issue row keeps its request's recipient.
+            // A first-issue PRICING_REQUEST row keeps its request's recipient.
             if ("PRICING_REQUEST".equals(existing.origin()) && existing.parentQuotationId() == null) {
                 throw new ApiException(HttpStatus.CONFLICT,
                     "ผู้รับของใบเสนอราคาจากคำขอราคามาจากคำขอราคา — แก้ที่คำขอราคาต้นทาง");
             }
             requireAddressableRecipient(requestedRecipient);
+            // Owner ruling 2026-10-17 (D-5 step 2): a REVISION (parentQuotationId set, either origin)
+            // keeps its parent's recipient. One chain = one party, so the register's base+recipient
+            // grouping and the parentQuotationId lineage cannot disagree; a different party is a NEW
+            // quotation on the deal (the next suffix). Refuse only a CHANGE: the editor re-sends the
+            // stored recipient on every DEAL_DIRECT save.
+            if (existing.parentQuotationId() != null && !requestedRecipient.equals(existing.recipientType())) {
+                throw new ApiException(HttpStatus.CONFLICT, "ฉบับแก้ไขต้องส่งถึงผู้รับเดิม ("
+                    + QuotationRecipient.thaiLabel(existing.recipientType())
+                    + ") — หากจะเสนอราคาให้ผู้รับรายอื่น ให้สร้างใบเสนอราคาใหม่บนดีลนี้");
+            }
         }
         ContactSnapshot contact = resolveContact(request.contactId(), existing.contactId(), ticket);
         // ⚠️ v3, review fix F1: a MISSING priceMode on UPDATE keeps the STORED one. #resolvePriceMode's
@@ -1092,7 +1128,11 @@ public class DealQuotationService {
                 }
             }
             if (recipientChanged) {
-                // Deal-stage rule hook — owned by the entry-channel/stage-route work (.design/deal-route-staging §5 Flow 10): recipient → stage, forward-only via TicketService.autoAdvanceStage. Intentionally empty here.
+                // Re-addressing a DRAFT is the rep correcting WHO the document is for, so the stage
+                // follows the correction. Only on a genuine change: a no-op re-save must not write
+                // a stage event. Forward-only, so a correction BACK to an earlier party leaves the
+                // deal where the later one put it.
+                advanceDealToRecipientStage(existing.ticketId(), requestedRecipient, actor);
             }
         }
         // Sales feedback #5 (V192.1, 2026-10-06) — "ไม่แสดงชื่อโครงการในใบเสนอราคา". UNLIKE every
@@ -1310,9 +1350,10 @@ public class DealQuotationService {
     // One sentence: ตีกลับ = แก้ใบเดิม เลขไม่เปลี่ยน (until resubmitted); resubmitting ที่ถูกตีกลับ
     // = ออกใบใหม่ เลขเปลี่ยน, the same way a revision of an approved document always has.
     //
-    // Owner ruling (2026-09-19): a deal may hold only ONE APPROVED DEAL_DIRECT quotation at a
-    // time. #approve therefore ALSO supersedes every OTHER currently-APPROVED DEAL_DIRECT
-    // quotation on the same ticket, regardless of lineage -- see its own same-ticket sweep,
+    // Owner ruling (2026-10-17, B-4; 2026-09-19 for DEAL_DIRECT alone): a deal may hold only ONE
+    // LIVE quotation at a time, any origin (DEAL_DIRECT APPROVED; PRICING_REQUEST
+    // ISSUED/REVISION_REQUESTED). #approve therefore ALSO supersedes every OTHER live quotation on
+    // the same ticket, regardless of lineage -- see its own same-ticket sweep,
     // ADDITIONAL to (not a replacement for) the ancestor-chain walk above. This is what makes
     // GLA-74's "สร้างจากใบเดิม" clone actually replace its source: cloning itself still leaves the
     // source APPROVED (see #createReorder), but the CLONE's own later approval now does supersede
@@ -1321,24 +1362,23 @@ public class DealQuotationService {
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     /**
-     * GLA-123 slice S2: submit/approve/reject are now LIVE for a PRICING_REQUEST-origin quotation
+     * Refuses a สั่งเหมือนเดิม clone ({@link #createReorder}) of a PRICING_REQUEST-origin quotation;
+     * it guards nothing else.
+     *
+     * <p>GLA-123 slice S2: submit/approve/reject are now LIVE for a PRICING_REQUEST-origin quotation
      * — {@link #submit} shares its compare-and-set with DEAL_DIRECT outright, and {@link #approve}
      * branches to {@link #approveAndIssuePricingRequestOrigin} only for its OWN extra issue hooks
      * (its own underlying compare-and-set is the SAME shared {@code DealQuotationRepository
      * #approve} DEAL_DIRECT uses); {@link #reject} is now fully shared, no branch at all. None of
      * the three calls this guard. What remains refused for this origin, and what this guard now
-     * exists FOR, is a revision of an ISSUED document ({@link #createRevision}) and a
-     * สั่งเหมือนเดิม clone ({@link #createReorder}) — both explicitly S3 territory (D12: "a
-     * revision of an ACCEPTED quotation is S3's territory"), not yet meaningful here since this
-     * origin has no customer-outcome/acceptance step at all until S3 lands (the owner's expiry
-     * escape hatch, {@link #createFromPricingRequest}, is a deliberately SEPARATE mechanism — a
-     * brand-new, independent create, not a revision of the expired row). A DEAL_DIRECT quotation
+     * exists FOR, is a สั่งเหมือนเดิม clone ({@link #createReorder}) only — {@link #createRevision}
+     * has its own PRICING_REQUEST branch since PR B and no longer calls it. A DEAL_DIRECT quotation
      * is completely unaffected; this is a pure no-op for it.
      */
-    private void requireStatusMachineEnabled(DealQuotationDto quotation) {
+    private void requireReorderAllowedForOrigin(DealQuotationDto quotation) {
         if ("PRICING_REQUEST".equals(quotation.origin())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ยังไม่เปิดใช้งานการทำฉบับแก้ไข/สั่งเหมือนเดิมสำหรับใบเสนอราคาจากคำขอราคา — จะเปิดใช้งานในระยะถัดไป");
+                "ยังไม่เปิดใช้งานการสั่งเหมือนเดิมสำหรับใบเสนอราคาจากคำขอราคา — จะเปิดใช้งานในระยะถัดไป");
         }
     }
 
@@ -1442,12 +1482,9 @@ public class DealQuotationService {
         // one approver, one decision — and returns to DRAFT with a reason exactly the same way).
         // A resubmit after ตีกลับ on THIS origin reuses the SAME row/number — no revision is minted — because
         // #insertRevisionCopyOf/#requireNoOpenRevision/#supersede below are all scoped to
-        // {@code origin = 'DEAL_DIRECT'} in the repository, and createRevision/createReorder stay
-        // refused outright for this origin (see #requireStatusMachineEnabled's own Javadoc, D12 —
-        // a revision of an ACCEPTED quotation is S3's territory). Forking that machinery to also
-        // understand a PRICING_REQUEST lineage is out of S2's scope; "ตีกลับ → sales fixes it →
-        // resubmits the SAME document" is exactly what R9 asks for, so this is not a regression,
-        // just a narrower rule than DEAL_DIRECT's.
+        // {@code origin = 'DEAL_DIRECT'} in the repository. "ตีกลับ → sales fixes it → resubmits
+        // the SAME document" is exactly what R9 asks for, so this is not a regression, just a
+        // narrower rule than DEAL_DIRECT's.
         if (QuotationStatus.DRAFT.equals(quotation.docStatus()) && quotation.approvalNote() != null
                 && !"PRICING_REQUEST".equals(quotation.origin())) {
             return submitAsRevisionOfRejected(quotation, actor);
@@ -1596,18 +1633,18 @@ public class DealQuotationService {
         // shared with it now (DealQuotationRepository#approve widened its own origin predicate),
         // but the ADDITIONAL issue hooks (PR status transition, stage advance, PR event) and the
         // CEO-required-when-changed gate are unique to this origin, so the branch stays.
-        // requireStatusMachineEnabled is NOT called on this branch (it would always refuse it);
-        // that guard now covers only createRevision/createReorder for this origin.
+        // requireReorderAllowedForOrigin is NOT called on this branch (it would always refuse it);
+        // that guard now covers only createReorder for this origin.
         if ("PRICING_REQUEST".equals(quotation.origin())) {
             return approveAndIssuePricingRequestOrigin(quotation, request, actor);
         }
-        // Owner ruling (2026-09-19): a deal may hold only ONE APPROVED DEAL_DIRECT quotation at a
-        // time -- approve() now ALSO sweeps every other currently-APPROVED sibling on this ticket
-        // (see below). Locks the ticket BEFORE the compare-and-set below (not merely before the
+        // Owner ruling (2026-10-17, B-4; 2026-09-19 for DEAL_DIRECT alone): a deal may hold only
+        // ONE LIVE quotation at a time, any origin -- approve() ALSO sweeps every other live
+        // sibling on this ticket (see below). Locks the ticket BEFORE the compare-and-set below (not merely before the
         // sweep), so two concurrent approve() calls on the SAME ticket -- even against two
         // DIFFERENT PENDING_APPROVAL rows -- fully serialise: the second caller only proceeds once
         // the first's UPDATE + sweep + commit is visible, so the two can never both land APPROVED
-        // together. Same advisory lock, same key (ticketId), and the SAME "lock the ticket first"
+        // together. Same #lockTicket, and the SAME "lock the ticket first"
         // ordering #createRevision/#createReorder already use (via #requireNoOpenRevision /
         // directly) -- a transaction here never holds a second ticket's lock at the same time, so
         // this cannot deadlock against either of them.
@@ -1633,37 +1670,15 @@ public class DealQuotationService {
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะรออนุมัติ จึงอนุมัติไม่ได้");
         }
         DealQuotationDto approved = requireQuotation(id);
-        // Owner ruling (2026-09-19): a deal may hold only ONE APPROVED DEAL_DIRECT quotation at a
-        // time. This SWEEP runs BEFORE the ancestor walk below (Opus review, item 4 -- it used to
-        // run after) precisely because the walk's own compare-and-set (DealQuotationRepository
-        // #supersede) is a no-op on a row this sweep already flipped, so running the sweep FIRST
-        // is what lets the MOST COMMON case -- an ordinary revision whose immediate parent is
-        // still APPROVED -- get exactly one DEAL_QUOTATION_SUPERSEDED event, from the sweep,
-        // instead of being superseded silently by the walk with no event at all (the walk itself
-        // stays silent, as it always has, when it touches a DRAFT ancestor from a reject/resubmit
-        // chain -- see that loop's own comment below for why that half is deliberately unchanged).
-        //
-        // UNLIKE the ancestor walk (which only ever climbs THIS row's own parentQuotationId
-        // lineage), this sweeps EVERY other currently-APPROVED DEAL_DIRECT quotation on the SAME
-        // ticket regardless of lineage -- the case the ancestor walk cannot reach on its own: two
-        // wholly independent first-issue quotations, or a GLA-74 reorder clone (which links to its
-        // source only via derivedFromQuotationId, never parentQuotationId, and so is invisible to
-        // the walk by construction -- see #createReorder). Existing data is NOT rewritten -- this
-        // only ever runs going forward, from THIS approval onward; a ticket that already holds
-        // two-or-more APPROVED rows from before this ruling stays exactly as it is until its next
-        // approval.
-        List<DealQuotationRepository.SupersededSibling> supersededSiblings =
-            quotations.supersedeOtherApprovedOnTicket(approved.ticketId(), approved.id());
-        for (DealQuotationRepository.SupersededSibling sibling : supersededSiblings) {
-            tickets.addEvent(approved.ticketId(), actor.id(), actor.name(), TicketEventKind.DEAL_QUOTATION_SUPERSEDED,
-                null, null, "ใบ " + sibling.number() + " ถูกแทนที่ด้วย " + approved.number());
-        }
+        // One-live-quotation sweep (see #supersedeOtherLiveOnTicket). Runs BEFORE the ancestor walk
+        // below so the parent's DEAL_QUOTATION_SUPERSEDED event comes from the sweep.
+        supersedeOtherLiveOnTicket(approved, actor);
         // The customer's last approved document stays valid until a REVISION actually reaches
         // APPROVED — see the class Javadoc's status-machine note. Only fires for a revision (a
         // first-ever quotation has no parent). Runs AFTER the sweep above (see that block's own
         // comment for why) and stays SILENT -- no ticket event -- exactly as it always has: a
         // DRAFT ancestor from a reject/resubmit chain is invisible to the sweep's own
-        // {@code doc_status = 'APPROVED'} predicate, so this walk is the ONLY thing that ever
+        // live-status predicate (APPROVED for DEAL_DIRECT, ISSUED/REVISION_REQUESTED for PRICING_REQUEST), so this walk is the ONLY thing that ever
         // supersedes one, and nothing currently asks for that to be logged. (If a DRAFT→SUPERSEDED
         // flip in this specific chain should also produce a ticket event, that is a separate,
         // not-yet-requested change -- left as-is here.)
@@ -1751,6 +1766,17 @@ public class DealQuotationService {
     // #requireCeoApprovalIfChanged below.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
+    /** B-4 (owner ruling 2026-10-17): one live offer per DEAL, whatever origin or recipient. Runs
+     * after the approving compare-and-set and BEFORE the ancestor walk, so a revision's parent gets
+     * its event from here and the walk no-ops. Caller holds the ticket lock. */
+    private void supersedeOtherLiveOnTicket(DealQuotationDto approved, UserPrincipal actor) {
+        for (DealQuotationRepository.SupersededSibling sibling
+                : quotations.supersedeOtherLiveOnTicket(approved.ticketId(), approved.id())) {
+            tickets.addEvent(approved.ticketId(), actor.id(), actor.name(), TicketEventKind.DEAL_QUOTATION_SUPERSEDED,
+                null, null, "ใบ " + sibling.number() + " ถูกแทนที่ด้วย " + approved.number());
+        }
+    }
+
     /**
      * The approve() branch for a PRICING_REQUEST-origin quotation. {@code actor}'s role is
      * already known to be {@code sales_manager} or {@code ceo} ({@link #requireApproveAccess} ran
@@ -1765,12 +1791,12 @@ public class DealQuotationService {
             throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "ฟีเจอร์นี้ยังไม่พร้อมใช้งาน");
         }
         long pricingRequestId = quotation.pricingRequestId();
-        // Same lock CustomerQuotationService#issue takes before its own compare-and-set — the PR
-        // (not just the ticket) is the shared resource two independent issue attempts on
-        // sibling/legacy quotations could otherwise race on. No ticket-level lock is needed here
-        // (unlike DEAL_DIRECT's own #approve): this origin has no "one live document per ticket"
-        // sweep to serialise — a single compare-and-set on THIS row is the whole invariant.
+        // Same lock CustomerQuotationService#issue takes before its own compare-and-set. Then the
+        // deal's lock, because issuing runs the deal-wide "one live offer" sweep (B-4). PR lock
+        // first, then the deal's advisory lock — see DealQuotationRepository#lockTicket for the
+        // order rule; never reverse.
         customerQuotations.lockPricingRequest(pricingRequestId);
+        quotations.lockTicket(quotation.ticketId());
         PricingRequestSummaryDto summary = pricingRequests.findSummary(pricingRequestId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบคำขอราคานี้"));
         // Same DATE-mode-with-special-pricing / DAYS-mode validity computation #approve already
@@ -1790,9 +1816,8 @@ public class DealQuotationService {
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะรออนุมัติ จึงอนุมัติไม่ได้");
         }
         DealQuotationDto issued = requireQuotation(quotation.id());
-        // Only the FIRST issue moves the pricing request — a re-issue (there is none for this
-        // origin yet; createRevision/createReorder both stay refused, see
-        // #requireStatusMachineEnabled) would be a no-op transition. The owner's expiry escape
+        // Only the FIRST issue moves the pricing request — a re-issue (a revision, which PR B
+        // gave its own branch; only createReorder is still refused) would be a no-op transition. The owner's expiry escape
         // hatch (#createFromPricingRequest) is what lets a SECOND, independent quotation reach
         // this method again with the PR already at QUOTATION_ISSUED — this guard is what makes
         // that re-issue a no-op transition instead of an IllegalStateException. Mirrors
@@ -1807,10 +1832,15 @@ public class DealQuotationService {
         // Rule 7 (shared with CustomerQuotationService#issue): reuse the SAME stage transition,
         // not a second path. Forward-only and ACTIVE-deal-only — see
         // TicketService#advanceStageForCustomerQuotationIssue/#autoAdvanceStage's own guards.
-        // PR B: use the QUOTATION's own recipient, not the pricing request's — a revision may be
-        // re-addressed to the owner/buyer, and the stage must follow the party it now addresses. For a
-        // first-issue quotation the two are identical (it copies the request's recipient at create).
+        // Use the QUOTATION's own recipient. A revision cannot be re-addressed (D-5 step 2, 2026-10-17),
+        // so this equals the parent's and the call is a no-op for it; for a first-issue quotation it
+        // equals the request's (copied at create).
+        // Since D-2 the stage has normally ARRIVED ALREADY, at create time
+        // (#advanceDealToRecipientStage). This call is kept rather than removed: it is idempotent
+        // under forward-only, and it is still the only thing that covers a recipient changed
+        // between draft and approval on a path #update's own hook does not reach.
         ticketService.advanceStageForCustomerQuotationIssue(summary.ticketId(), issued.recipientType(), actor);
+        supersedeOtherLiveOnTicket(issued, actor);
         // PR B: issuing a REVISION replaces its parent chain. Each hop is its own compare-and-set
         // (supersede() only flips an ISSUED/REVISION_REQUESTED row), so already-terminal ancestors
         // (earlier revisions, already SUPERSEDED) are a safe no-op.
@@ -2353,7 +2383,7 @@ public class DealQuotationService {
         DealQuotationDto source = requireQuotation(id);
         requireEditAccessForQuotation(actor, source);
         // GLA-123 slice S1, defence in depth — see #createRevision's identical comment.
-        requireStatusMachineEnabled(source);
+        requireReorderAllowedForOrigin(source);
         requireApprovedForClone(source, "สร้างจากใบเดิมได้จากใบเสนอราคาที่ได้รับอนุมัติแล้วเท่านั้น");
         // No requireNoOpenRevision here (deliberately) — multiple clones of the same APPROVED
         // source are allowed, and a clone never contends with an in-progress revision for anything.
@@ -2477,12 +2507,13 @@ public class DealQuotationService {
             source.subtotalAmount(), parentQuotationId,
             nextRevisionNo, derivedFromQuotationId, items,
             // Slice 2 (S2-B1): the copy inherits the source's ผู้รับ VERBATIM, like every other
-            // header field here — before slice 2 every direct row was 'UNSPECIFIED', so the short
-            // constructor's hard-coded literal was the same thing; now a DESIGNER quotation's
+            // header field here, so a DESIGNER quotation's
             // revision must stay DESIGNER (TicketSummaryDto.liveDirectQuotation serves the
-            // revision's). Every source reaching here is DEAL_DIRECT (createRevision/createReorder
-            // refuse PRICING_REQUEST via #requireStatusMachineEnabled, and #submit excludes that
-            // origin from the resubmit-as-revision path) — the origin is stated, not copied.
+            // revision's).
+            //
+            // The origin is COPIED, not stated. #createRevision has its own PRICING_REQUEST branch;
+            // only #createReorder still refuses the origin (#requireReorderAllowedForOrigin), and
+            // #submit's resubmit-as-revision path excludes it too, so that caller is DEAL_DIRECT-only.
             prSource ? "PRICING_REQUEST" : DealQuotationRepository.ORIGIN_DEAL_DIRECT,
             source.recipientType(), source.recipientLabel(),
             prSource ? source.pricingRequestId() : null, sourceDecisionId,

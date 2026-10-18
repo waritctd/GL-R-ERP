@@ -21,11 +21,14 @@ export const DEAL_STAGE_CATALOG = {
     { code: 'LEAD_APPROACH',       no: 1,  businessCode: 'S1',      phase: 1, gate: 'sales',   auto: false },
     { code: 'PRESENTATION',        no: 2,  businessCode: 'S2',      phase: 1, gate: 'sales',   auto: false },
     { code: 'SPEC_APPROVED',       no: 3,  businessCode: 'S3',      phase: 2, gate: 'sales',   auto: false },
-    { code: 'QUOTE_DESIGN_SIDE',   no: 4,  businessCode: 'S4',      phase: 2, gate: 'sales',   auto: false },
-    { code: 'QUOTE_OWNER',         no: 5,  businessCode: 'S5',      phase: 2, gate: 'sales',   auto: false },
+    // The three quote stages are `auto` since the owner's 2026-10-16 ruling: a quotation addressed
+    // to that party is what moves the deal onto its stage, so the UI must explain where the stage
+    // comes from instead of offering a one-click เลื่อนไป into it. Mirrors DealStage.AUTO_ADVANCED.
+    { code: 'QUOTE_DESIGN_SIDE',   no: 4,  businessCode: 'S4',      phase: 2, gate: 'sales',   auto: true },
+    { code: 'QUOTE_OWNER',         no: 5,  businessCode: 'S5',      phase: 2, gate: 'sales',   auto: true },
     { code: 'OWNER_SIGNOFF',       no: 6,  businessCode: 'S6',      phase: 2, gate: 'sales',   auto: false },
     { code: 'AWAITING_BUYER',      no: 7,  businessCode: 'S7',      phase: 3, gate: 'sales',   auto: false },
-    { code: 'QUOTE_BUYER',         no: 8,  businessCode: 'S8',      phase: 3, gate: 'sales',   auto: false },
+    { code: 'QUOTE_BUYER',         no: 8,  businessCode: 'S8',      phase: 3, gate: 'sales',   auto: true },
     { code: 'NEGOTIATION',         no: 9,  businessCode: 'S9',      phase: 3, gate: 'sales',   auto: false },
     { code: 'ORDER_RECEIVED',      no: 10, businessCode: 'S10',     phase: 4, gate: 'sales',   auto: true },
     { code: 'DEPOSIT_RECEIVED',    no: 11, businessCode: 'S11',     phase: 4, gate: 'account', auto: true },

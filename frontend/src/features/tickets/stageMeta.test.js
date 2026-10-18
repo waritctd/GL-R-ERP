@@ -38,11 +38,22 @@ describe('stageMeta holds labels, and only labels', () => {
   });
 
   it('explains where each auto-advanced stage comes from', () => {
+    // Seven since the owner's 2026-10-16 quote-stage ruling: the four OPERATIONAL stages, plus the
+    // three DOCUMENT-driven quote stages a quotation's recipient now advances the deal onto. The
+    // *set* is DealStage.AUTO_ADVANCED, pinned against the Java by stageCatalog.test.js; this only
+    // pins that every one of them has words, since a stage marked auto with no hint renders the
+    // panel's explanation blank exactly where the one-click button used to be.
     expect(Object.keys(AUTO_STAGE_HINT).sort()).toEqual(
-      ['CLOSED_PAID', 'DEPOSIT_RECEIVED', 'ORDER_RECEIVED', 'PROCUREMENT'],
+      ['CLOSED_PAID', 'DEPOSIT_RECEIVED', 'ORDER_RECEIVED', 'PROCUREMENT',
+        'QUOTE_BUYER', 'QUOTE_DESIGN_SIDE', 'QUOTE_OWNER'],
     );
     for (const hint of Object.values(AUTO_STAGE_HINT)) {
       expect(hint).toContain('อัตโนมัติ');
+    }
+    // The quote hints must name the DOCUMENT as the way in, not a department: that is the whole
+    // answer to "I cannot click เลื่อนไป any more, so what do I do?".
+    for (const code of ['QUOTE_DESIGN_SIDE', 'QUOTE_OWNER', 'QUOTE_BUYER']) {
+      expect(AUTO_STAGE_HINT[code], code).toContain('ใบเสนอราคา');
     }
   });
 

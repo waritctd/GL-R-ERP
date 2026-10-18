@@ -145,9 +145,17 @@ class DealTrackingAndActivityIntegrationTest extends AbstractPostgresIntegration
         assertThat(currentStage(ticketId)).isEqualTo(DealStage.SPEC_APPROVED);
     }
 
+    /**
+     * Subject is the TRACKING-field gate, not the stage gates. The DESIGNER quotation is fixture
+     * (owner ruling 2026-10-16, {@code .design/quote-stage-gates} D-3): a manual move into ขั้น 4
+     * is refused until the deal holds a quotation addressed to the designer, and this test needs to
+     * GET to ขั้น 4 in order to take the routine backward step away from it. Inserted directly so
+     * the walk below stays a sequence of real {@code updateStage} calls — the thing under test.
+     */
     @Test
     void routineBackwardMove_isNeverGatedByTrackingFields() {
         long ticketId = createTicket();
+        QuoteStageFixtures.issuedQuotationOnDeal(jdbc, ticketId, salesRepId, QuotationRecipient.DESIGNER);
         setNextFollowUp(ticketId, LocalDate.now().plusDays(3));
         logActivity(ticketId, DealActivityKind.CALL);
         ticketService.updateStage(ticketId, DealStage.PRESENTATION, null, salesRep);

@@ -76,10 +76,25 @@ function directBaseNumber(r) {
   const suffix = `-${r.revisionNo}`;
   return String(r.number).endsWith(suffix) ? String(r.number).slice(0, -suffix.length) : String(r.number);
 }
+/**
+ * Base AND recipient (owner ruling 2026-10-17). The base number belongs to the DEAL now, so every
+ * document on a deal shares one — and grouping on the base alone collapsed different parties'
+ * offers into a single "version chain": the owner's brand-new first quotation rendered as
+ * "ครั้งที่ 2" nested beneath the designer's, as though it were a later version of it.
+ *
+ * The recipient is what still identifies a document. A genuine revision copies its parent's
+ * recipient verbatim (`DealQuotationService#insertCopyOf`), so real chains stay grouped while
+ * separate offers stay separate.
+ *
+ * `UNKNOWN` for a row with no recipient: an older backend omits the field (see
+ * DealDocumentRegister's own note), and those rows must group with each other rather than each
+ * becoming a singleton — but must not merge with a row that states a recipient.
+ */
 export const groupDirectQuotations = (rows) => groupVersions(rows, {
   keyOf: (r) => {
     const base = directBaseNumber(r);
-    return base ? `direct:${base}` : `direct:id-${r.id}`;
+    const recipient = r.recipientType || 'UNKNOWN';
+    return base ? `direct:${base}:${recipient}` : `direct:id-${r.id}`;
   },
   versionOf: (r) => r.revisionNo,
   dateOf: (r) => r.approvedAt ?? r.createdAt,

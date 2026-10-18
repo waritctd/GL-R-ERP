@@ -1055,7 +1055,8 @@ public class PricingRequestRepository {
      * live until the replacement is issued (see that method's own Javadoc and this call's own
      * comment in {@code PricingRequestService#createCustomerChangeRevision}). That ruling is about
      * an issued, customer-facing document — it has no bearing on this origin, which in S1 can
-     * NEVER reach ISSUED (submit is refused — {@code DealQuotationService#requireStatusMachineEnabled}),
+     * NEVER reach ISSUED (S1 refused submit for this origin outright; since S2 only {@code createReorder}
+     * is still refused, via {@code DealQuotationService#requireReorderAllowedForOrigin}),
      * so DRAFT is the ONLY state to ever clean up here, and there is no "stays live until the
      * replacement issues" concept to preserve for it. Without this, a DRAFT quotation on this
      * engine would be left attached to a now-SUPERSEDED parent forever — nothing else in S1 ever

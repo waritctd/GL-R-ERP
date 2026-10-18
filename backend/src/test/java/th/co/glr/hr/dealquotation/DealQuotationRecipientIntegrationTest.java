@@ -23,9 +23,11 @@ import th.co.glr.hr.ticket.TicketSummaryDto;
  * {@code recipient_label}; on update omitted/null keeps the stored value, a value on a non-DRAFT row
  * is 409, a value on a PRICING_REQUEST-origin row is 409, an invalid value is 400.
  *
- * <p><b>The handover pin:</b> neither create nor update moves {@code sales_stage} or writes a
- * {@code STAGE_CHANGED} event — the recipient → stage rule is owned by the entry-channel/stage-route
- * work ({@code .design/deal-route-staging} §5 Flow 10), so this slice must not also own it.
+ * <p><b>Stage side effect (owner ruling 2026-10-16, {@code .design/quote-stage-gates} D-2).</b>
+ * Create and update move the deal to the recipient's stage. The full behaviour (forward-only, the
+ * three silent no-ops, "start" as well as "move") lives in
+ * {@link QuotationCreationStageAdvanceIntegrationTest}; the two stage assertions here keep the
+ * recipient slice's own tests honest about that side effect.
  *
  * <p>Written wrong-way-round: every refusal asserts nothing was written.
  */
@@ -82,10 +84,10 @@ class DealQuotationRecipientIntegrationTest extends AbstractDealQuotationSlice2I
         assertThat(quotationCount(ticket)).isZero();
     }
 
-    /** The handover pin: a BUYER quotation on a LEAD_APPROACH deal would be S8 under the rule this
-     * slice does NOT own — the stage must not move, and no STAGE_CHANGED may be written. */
+    /** A BUYER quotation on a LEAD_APPROACH deal IS S8 under D-2, and S8 is on BUYER_DIRECT's
+     * route — so the create moves the stage and writes the STAGE_CHANGED event. */
     @Test
-    void create_doesNotMoveTheStage_andWritesNoStageChangedEvent() {
+    void create_movesTheStageToTheRecipientsStage_andWritesAStageChangedEvent() {
         long ticket = deal(salesActor, "BUYER_DIRECT");
         TicketSummaryDto before = summary(ticket);
         assertThat(before.salesStage()).isEqualTo(DealStage.LEAD_APPROACH);
@@ -93,9 +95,9 @@ class DealQuotationRecipientIntegrationTest extends AbstractDealQuotationSlice2I
         quotationService.create(ticket, draft("BUYER"), salesActor);
 
         TicketSummaryDto after = summary(ticket);
-        assertThat(after.salesStage()).isEqualTo(DealStage.LEAD_APPROACH);
-        assertThat(after.stageUpdatedAt()).isEqualTo(before.stageUpdatedAt());
-        assertThat(eventCount(ticket, TicketEventKind.STAGE_CHANGED)).isZero();
+        assertThat(after.salesStage()).isEqualTo(DealStage.QUOTE_BUYER);
+        assertThat(after.stageUpdatedAt()).isNotEqualTo(before.stageUpdatedAt());
+        assertThat(eventCount(ticket, TicketEventKind.STAGE_CHANGED)).isEqualTo(1);
     }
 
     /** A revision or reorder copies every header field verbatim — the recipient included. Before
@@ -120,11 +122,14 @@ class DealQuotationRecipientIntegrationTest extends AbstractDealQuotationSlice2I
 
     // ── update ───────────────────────────────────────────────────────────────────────────────────
 
+    /** Re-addressing a DRAFT moves the stage with it (D-2's second hook): the create put this deal
+     * on S4 for the designer, and the correction to BUYER takes it to S8. */
     @Test
-    void update_onADraft_changesTheRecipient_andStillMovesNoStage() {
+    void update_onADraft_changesTheRecipient_andMovesTheStageWithIt() {
         long ticket = deal(salesActor, "DESIGNER_LED");
         DealQuotationDto created = quotationService.create(ticket, draft("DESIGNER"), salesActor);
         TicketSummaryDto before = summary(ticket);
+        assertThat(before.salesStage()).isEqualTo(DealStage.QUOTE_DESIGN_SIDE);
 
         DealQuotationDto updated = quotationService.update(created.id(), draft("BUYER"), salesActor);
 
@@ -132,9 +137,8 @@ class DealQuotationRecipientIntegrationTest extends AbstractDealQuotationSlice2I
         assertThat(updated.recipientLabel()).isEqualTo(THAI.get("BUYER"));
         assertThat(recipientColumns(created.id())).containsEntry("recipient_type", "BUYER");
         TicketSummaryDto after = summary(ticket);
-        assertThat(after.salesStage()).isEqualTo(before.salesStage());
-        assertThat(after.stageUpdatedAt()).isEqualTo(before.stageUpdatedAt());
-        assertThat(eventCount(ticket, TicketEventKind.STAGE_CHANGED)).isZero();
+        assertThat(after.salesStage()).isEqualTo(DealStage.QUOTE_BUYER);
+        assertThat(eventCount(ticket, TicketEventKind.STAGE_CHANGED)).isEqualTo(2);
     }
 
     @Test

@@ -594,6 +594,32 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
     // V193 backfill — V193 re-executed VERBATIM from the classpath over hand-shaped rows.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
+    /**
+     * V193's backfill predicate includes {@code sales_stage = 'LEAD_APPROACH'} — "it has never left
+     * the pipeline's starting point".
+     *
+     * <p><b>Why every fixture is now reset to LEAD_APPROACH, and why that is not cheating.</b> Since
+     * the owner's 2026-10-16 ruling ({@code .design/quote-stage-gates} D-2) creating a quotation
+     * moves the deal onto its recipient's stage, so {@code quotationService.create} no longer leaves
+     * ANY of these deals at LEAD_APPROACH. That has no production consequence — V193 is a one-shot
+     * backfill that already ran, and Flyway will never run it again — but it wrecks this test in a
+     * way worth stating plainly, because five of the six assertions would still have been GREEN:
+     *
+     * <ul>
+     *   <li>{@code ghost} fails outright (the one true positive, no longer matched).
+     *   <li>{@code withPricingRequest}, {@code mixedOrigin} and {@code advancedStatus} keep
+     *       reporting false — but excluded by the STAGE clause, not by the pricing-request, origin
+     *       and status clauses each one exists to exercise. Three assertions passing for the wrong
+     *       reason, proving nothing about the predicate they name.
+     * </ul>
+     *
+     * <p>So the resets restore each case to having exactly ONE reason to be excluded, which is what
+     * makes the test evidence rather than coincidence. This is legitimate here specifically because
+     * the section's own header says V193 is re-executed verbatim over HAND-SHAPED rows: the job is
+     * to reconstruct the historical state V193 was written against, and post-D-2 the service itself
+     * can no longer produce it. {@code advancedStage} is deliberately NOT reset — it is the case
+     * that tests the stage clause.
+     */
     @Test
     void v193Backfill_marksOnlyUntouchedDirectOnlyDraftTickets() throws Exception {
         long ghost = pipelineTicket(salesActor);                 // direct-only, draft, LEAD_APPROACH
@@ -612,6 +638,13 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
         quotationService.create(advancedStatus, directDraft(), salesActor);
         tickets.markQuotationIssuedForOrderConfirmation(advancedStatus);
         long noQuotation = pipelineTicket(salesActor);           // no quotation at all
+        // Undo D-2's creation-time advance on every case EXCEPT advancedStage — see the Javadoc.
+        // The reset is load-bearing, so it is asserted rather than assumed: a silent no-op here
+        // would put three of the six assertions back to passing for the wrong reason.
+        for (long id : new long[] {ghost, withPricingRequest, mixedOrigin, advancedStatus}) {
+            tickets.updateSalesStage(id, DealStage.LEAD_APPROACH);
+            assertThat(summary(id).salesStage()).as("fixture %s reset", id).isEqualTo(DealStage.LEAD_APPROACH);
+        }
 
         runV193();
         runV193(); // re-runnable
@@ -623,6 +656,7 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
         assertThat(summary(advancedStatus).quotationOnly()).isFalse();
         assertThat(summary(noQuotation).quotationOnly()).isFalse();
     }
+
 
     /** chk_event_kind as re-declared by V193 still accepts every kind V186 added, plus the new one. */
     @Test
@@ -689,11 +723,30 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
             new BigDecimal("1"), null, "PIECE", null, null, null, null, "THB");
     }
 
+    /**
+     * Every refusal above asserts through here: the promotion wrote NOTHING.
+     *
+     * <p><b>The stage assertion changed with the owner's 2026-10-16 quote-stage ruling</b>
+     * ({@code .design/quote-stage-gates} D-2), and the change is the point rather than an
+     * accommodation. It used to read {@code isEqualTo(LEAD_APPROACH)}, which conflated two
+     * different claims: "the promotion did not happen" (what this helper is for) and "nothing
+     * whatsoever has moved this deal's stage" (an accident of the fixture). Creating the quotation
+     * now moves the ghost deal onto its recipient's stage — {@code directDraft()} addresses the
+     * OWNER, so ขั้น 5 — so the old assertion failed on all nine call sites while the behaviour it
+     * exists to protect was untouched.
+     *
+     * <p>Asserted as QUOTE_OWNER rather than merely "not ORDER_RECEIVED" deliberately: that is the
+     * STRONGER statement. It says the refused promotion moved the stage neither forward nor back,
+     * and that the only thing which ever moved it was the create. A loose
+     * {@code isNotEqualTo(ORDER_RECEIVED)} would stay green if a refusal silently dragged the deal
+     * somewhere else entirely.
+     */
     private void assertNothingPromoted(long ticketId) {
         TicketSummaryDto s = summary(ticketId);
         assertThat(s.quotationOnly()).as("still quotation-only").isTrue();
         assertThat(s.status()).isEqualTo(TicketStatus.DRAFT);
-        assertThat(s.salesStage()).isEqualTo(DealStage.LEAD_APPROACH);
+        assertThat(s.salesStage()).as("the quotation's own recipient stage, untouched by the refusal")
+            .isEqualTo(DealStage.QUOTE_OWNER);
         assertThat(itemCount(ticketId)).isZero();
         assertThat(eventCount(ticketId, TicketEventKind.DEAL_PROMOTED_FROM_QUOTATION)).isZero();
     }
