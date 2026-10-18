@@ -806,7 +806,8 @@ public class TicketRepository {
     // MUST be a LEFT JOIN. catalog_price_id is nullable by design in two independent ways (V110's
     // own header): a "custom" line never had a catalog identity, and ON DELETE SET NULL clears it
     // when a catalog price is retired. An INNER JOIN would silently drop both kinds of row out of
-    // the items list -- a line item vanishing from a deal, not merely a missing price.
+    // the items list -- a line item vanishing from a deal, not merely a missing price. The factory
+    // join (origin country for the PCR form's seeded ประเทศต้นทาง, 2026-10-18) is LEFT for the same reason.
     private List<TicketItemDto> findItemsByTicketId(long ticketId) {
         return jdbc.query("""
             SELECT ti.item_id, ti.ticket_id, ti.brand, ti.model, ti.color, ti.texture, ti.size, ti.factory,
@@ -818,9 +819,12 @@ public class TicketRepository {
                    ti.catalog_price_id, ti.catalog_product_code, ti.weight_multiplier,
                    ti.sourced_from_stock, ti.stock_sale_price,
                    pp.price AS catalog_price, pp.currency AS catalog_currency,
-                   pp.price_unit AS catalog_price_unit, pp.sqm_per_piece AS catalog_sqm_per_piece
+                   pp.price_unit AS catalog_price_unit, pp.sqm_per_piece AS catalog_sqm_per_piece,
+                   pp.thickness_mm AS catalog_thickness_mm, pp.pcs_per_box AS catalog_pcs_per_box,
+                   f.country AS catalog_origin_country_code
               FROM sales.ticket_item ti
               LEFT JOIN price_catalog.product_prices pp ON pp.price_id = ti.catalog_price_id
+              LEFT JOIN price_catalog.factories      f  ON f.factory_id = pp.factory_id
              WHERE ti.ticket_id = :id
              ORDER BY ti.sort_order, ti.item_id
             """,
@@ -866,7 +870,10 @@ public class TicketRepository {
                     rs.getBigDecimal("catalog_sqm_per_piece"),
                     rs.getInt("weight_multiplier"),
                     rs.getBoolean("sourced_from_stock"),
-                    rs.getBigDecimal("stock_sale_price")
+                    rs.getBigDecimal("stock_sale_price"),
+                    rs.getBigDecimal("catalog_thickness_mm"),
+                    rs.getBigDecimal("catalog_pcs_per_box"),
+                    rs.getString("catalog_origin_country_code")
                 );
             });
     }

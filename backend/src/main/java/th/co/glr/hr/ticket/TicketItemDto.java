@@ -84,8 +84,38 @@ public record TicketItemDto(
     // false/null -- the same "not from stock" meaning the column's own DEFAULT false gives a
     // brand-new row.
     boolean sourcedFromStock,
-    BigDecimal stockSalePrice
+    BigDecimal stockSalePrice,
+    // UAT item 1 follow-up (owner ruling 2026-10-18, "fill from catalogue"): the PCR form seeds
+    // ความหนา / แผ่น-กล่อง / ประเทศต้นทาง for a catalogue-linked deal line. Resolved ONLY by
+    // TicketRepository.findItemsByTicketId's LEFT JOINs (product_prices + its factory), same as the
+    // Slice F fields above; null for a hand-typed line and for a catalogue row that lacks the value
+    // (41 % of the prod catalogue has no thickness). Appended last so every pre-existing positional
+    // constructor call keeps compiling via the compat constructor below.
+    BigDecimal catalogThicknessMm,
+    BigDecimal catalogPcsPerBox,
+    String catalogOriginCountryCode
 ) {
+    // Pre-2026-10-18 full shape (through stockSalePrice): defaults the three catalogue seed fields
+    // to null, the same "nothing resolved" meaning a hand-typed line has.
+    public TicketItemDto(
+        long id, long ticketId, String brand, String model, String color, String texture, String size,
+        String factory, BigDecimal qty, BigDecimal qtySqm, BigDecimal rawPrice, String rawCurrency,
+        String rawUnit, BigDecimal proposedPrice, BigDecimal approvedPrice, String currency, int sortOrder,
+        BigDecimal calcedCost, BigDecimal calcedPrice, Integer calcConfigVersion, String unitBasis,
+        BigDecimal manualPrice, String manualOverrideReason, BigDecimal qtyDelivered, BigDecimal qtyFromStock,
+        String stockNote, Long catalogPriceId, String catalogProductCode, String source, BigDecimal catalogPrice,
+        String catalogCurrency, String catalogPriceUnit, BigDecimal sqmPerPiece, int weightMultiplier,
+        boolean sourcedFromStock, BigDecimal stockSalePrice
+    ) {
+        this(id, ticketId, brand, model, color, texture, size, factory, qty, qtySqm,
+            rawPrice, rawCurrency, rawUnit, proposedPrice, approvedPrice, currency,
+            sortOrder, calcedCost, calcedPrice, calcConfigVersion, unitBasis,
+            manualPrice, manualOverrideReason, qtyDelivered, qtyFromStock, stockNote,
+            catalogPriceId, catalogProductCode, source, catalogPrice, catalogCurrency,
+            catalogPriceUnit, sqmPerPiece, weightMultiplier, sourcedFromStock, stockSalePrice,
+            null, null, null);
+    }
+
     // V183 compat shape: reproduces the full pre-V183 canonical parameter list (through
     // weightMultiplier) for every call site written before stock-sourced pricing existed (tests,
     // the write-path merge's other callers, quotation-item snapshot reconstruction). Defaults

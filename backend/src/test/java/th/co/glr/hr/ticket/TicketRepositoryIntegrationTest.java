@@ -300,7 +300,8 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void findItemsByTicketId_catalogLinkedItem_resolvesCatalogPriceFields() {
         long priceId = insertCatalogProductWithSqmPerPiece("Cotto Factory", "TH", "CT-400",
-            new BigDecimal("350.5000"), "THB", "per_sqm", new BigDecimal("1.440000"));
+            new BigDecimal("350.5000"), "THB", "per_sqm", new BigDecimal("1.440000"),
+            new BigDecimal("9.0"), new BigDecimal("2"));
 
         long ticketId = tickets.create(sampleTicket(
             itemWithCatalogLink("Cotto", "Stone Series", "White", "Matte", "60x60", priceId, "CT-400")),
@@ -312,6 +313,28 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(persisted.catalogCurrency()).isEqualTo("THB");
         assertThat(persisted.catalogPriceUnit()).isEqualTo("per_sqm");
         assertThat(persisted.sqmPerPiece()).isEqualByComparingTo("1.440000");
+        // UAT item 1 follow-up (owner ruling 2026-10-18, "fill from catalogue"): the PCR form seeds
+        // ความหนา / แผ่น-กล่อง / ประเทศต้นทาง for a catalogue-linked deal line, so the same join also
+        // carries pp.thickness_mm, pp.pcs_per_box and the factory's country.
+        assertThat(persisted.catalogThicknessMm()).isEqualByComparingTo("9.0");
+        assertThat(persisted.catalogPcsPerBox()).isEqualByComparingTo("2");
+        assertThat(persisted.catalogOriginCountryCode()).isEqualTo("TH");
+    }
+
+    @Test
+    void findItemsByTicketId_catalogRowWithoutThickness_leavesTheNewFieldsNull() {
+        // 41 % of the prod catalogue has no thickness: the fields must come back null, never 0.
+        long priceId = insertCatalogProductWithSqmPerPiece("Cotto Factory", "TH", "CT-402",
+            new BigDecimal("350.5000"), "THB", "per_sqm", new BigDecimal("1.440000"), null, null);
+
+        long ticketId = tickets.create(sampleTicket(
+            itemWithCatalogLink("Cotto", "Stone Series", "White", "Matte", "60x60", priceId, "CT-402")),
+            tickets.nextTicketCode(), actorId, "พนักงานขาย");
+
+        TicketItemDto persisted = tickets.findById(ticketId).orElseThrow().items().get(0);
+        assertThat(persisted.catalogThicknessMm()).isNull();
+        assertThat(persisted.catalogPcsPerBox()).isNull();
+        assertThat(persisted.catalogOriginCountryCode()).isEqualTo("TH");
     }
 
     @Test
@@ -330,6 +353,9 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(persisted.catalogCurrency()).isNull();
         assertThat(persisted.catalogPriceUnit()).isNull();
         assertThat(persisted.sqmPerPiece()).isNull();
+        assertThat(persisted.catalogThicknessMm()).isNull();
+        assertThat(persisted.catalogPcsPerBox()).isNull();
+        assertThat(persisted.catalogOriginCountryCode()).isNull();
     }
 
     @Test
@@ -356,6 +382,14 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
     private long insertCatalogProductWithSqmPerPiece(String factoryName, String countryCode2, String productCode,
                                                       BigDecimal price, String currency, String priceUnit,
                                                       BigDecimal sqmPerPiece) {
+        return insertCatalogProductWithSqmPerPiece(factoryName, countryCode2, productCode, price, currency, priceUnit,
+            sqmPerPiece, null, null);
+    }
+
+    private long insertCatalogProductWithSqmPerPiece(String factoryName, String countryCode2, String productCode,
+                                                      BigDecimal price, String currency, String priceUnit,
+                                                      BigDecimal sqmPerPiece, BigDecimal thicknessMm,
+                                                      BigDecimal pcsPerBox) {
         Long factoryId = jdbc.queryForObject("""
             INSERT INTO price_catalog.factories (name, country, default_currency)
             VALUES (:name, :country, :currency)
@@ -376,8 +410,10 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
             Long.class);
         return jdbc.queryForObject("""
             INSERT INTO price_catalog.product_prices
-                (factory_id, version_id, product_code, price, currency, price_unit, sqm_per_piece)
-            VALUES (:factoryId, :versionId, :productCode, :price, :currency, :priceUnit, :sqmPerPiece)
+                (factory_id, version_id, product_code, price, currency, price_unit, sqm_per_piece,
+                 thickness_mm, pcs_per_box)
+            VALUES (:factoryId, :versionId, :productCode, :price, :currency, :priceUnit, :sqmPerPiece,
+                    :thicknessMm, :pcsPerBox)
             RETURNING price_id
             """,
             new MapSqlParameterSource()
@@ -387,7 +423,9 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
                 .addValue("price", price)
                 .addValue("currency", currency)
                 .addValue("priceUnit", priceUnit)
-                .addValue("sqmPerPiece", sqmPerPiece),
+                .addValue("sqmPerPiece", sqmPerPiece)
+                .addValue("thicknessMm", thicknessMm)
+                .addValue("pcsPerBox", pcsPerBox),
             Long.class);
     }
 

@@ -220,17 +220,19 @@ class PricingRequestItemDirectDealFieldsIntegrationTest extends AbstractPostgres
         assertThat(item.originCountryOther()).isNull();
     }
 
-    // ── GLA-125 item 3: ระยะเวลานำเข้า required, min <= max ─────────────────────────────────
+    // ── ระยะเวลานำเข้า: NOT required on a pricing request (owner ruling 2026-10-18 — import gives
+    //    the time; the PCR form no longer shows the field); min <= max still holds when both are sent ──
 
     @Test
-    void createDraft_rejectsItemMissingLeadTime() {
-        assertThatThrownBy(() -> pricingRequestService.createDraft(ticketId,
+    void createDraft_acceptsItemWithoutLeadTime_importSuppliesItLater() {
+        PricingRequestDetailDto detail = pricingRequestService.createDraft(ticketId,
             createRequest(List.of(completeItem(b -> b.leadTimeMinDays(null).leadTimeMaxDays(null)))),
-            salesActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
-                assertThat(e.getMessage()).contains("ระยะเวลานำเข้า");
-            });
+            salesActor);
+        pricingRequestService.submit(detail.summary().id(), salesActor);
+
+        PricingRequestItemDto item = onlyItem(detail);
+        assertThat(item.leadTimeMinDays()).isNull();
+        assertThat(item.leadTimeMaxDays()).isNull();
     }
 
     @Test
@@ -241,6 +243,17 @@ class PricingRequestItemDirectDealFieldsIntegrationTest extends AbstractPostgres
             .isInstanceOfSatisfying(ApiException.class, e -> {
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
                 assertThat(e.getMessage()).contains("ต้องไม่มากกว่า");
+            });
+    }
+
+    @Test
+    void createDraft_rejectsHalfLeadTimePair() {
+        assertThatThrownBy(() -> pricingRequestService.createDraft(ticketId,
+            createRequest(List.of(completeItem(b -> b.leadTimeMinDays(30).leadTimeMaxDays(null)))),
+            salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                assertThat(e.getMessage()).contains("ทั้งต่ำสุดและสูงสุด");
             });
     }
 
