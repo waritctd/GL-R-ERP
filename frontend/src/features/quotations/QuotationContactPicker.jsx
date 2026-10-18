@@ -1,6 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { api } from '../../api/index.js';
 import { Button } from '../../components/common/Button.jsx';
+import { Icon } from '../../components/common/Icon.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
 
@@ -20,41 +21,51 @@ function emptyNewContact() {
 }
 
 /**
- * ผู้สั่งซื้อ picker — owner feedback F2, 2026-09-10 ("change ผู้ติดต่อ -> ผู้สั่งซื้อ, make
- * mandatory and use that name to auto fill in the name for signature in the quotation pdf").
+ * ผู้ติดต่อ picker — one of the customer's contact records (`customers.contact`), picked per
+ * document; the picked name prints as ผู้สั่งซื้อ on the quotation (owner rulings 2026-10-18,
+ * .design/quotation-contact/DESIGN.md). Optional everywhere — no required marker, no gate, phone
+ * and email optional too — and the one `hint` is the only explanatory text on the field.
  *
- * ⚠️ Owner-directed reversal of F2/V167 (2026-09-26): the direct-deal quotation editor
- * (QuotationEditorPage/DealCustomerCard) no longer renders this at all — ผู้สั่งซื้อ there is now a
- * single optional free-text field (`terms.orderedByName`). The ONE remaining consumer is
- * PricingRequestCreateModal (GLA-125 follow-up, 2026-09-18) — do not remove this component while
- * that import exists.
- *
- * ⚠️ Not required there either (UAT item 2, owner ruling 2026-10-18: "not information import needs
- * to know"): the `required` marker and the "prints in the signature box" hint are gone — since the
- * 2026-10-13 ruling the quotation prints only the ผู้สั่งซื้อ name/phone/email typed on the quotation
- * itself, so the hint now says exactly that. Nothing on the client or the server requires a contact
- * on a pricing request (PricingRequestService.validateRecipientIdentifiable accepts a label alone).
+ * Closed, it is a select-style button; a picked contact shows as a card (name, เบอร์/อีเมล editable
+ * in place, เปลี่ยน / ล้าง). Open, the list's FIRST row is "+ เพิ่มผู้ติดต่อใหม่" (the add-contact
+ * modal) so the rep never scrolls to add, then a client-side search over name / phone / email, then
+ * one row per contact with its phone · email.
  *
  * Contract with the parent: `value` is a contact OBJECT (or null) and the parent owns it, same
  * controlled-field shape QuotationItemRow uses. `value` may be a partial stand-in — `{ id,
  * firstName }` seeded from a frozen `contactId`/`contactName` snapshot — so a selected contact
- * that is not (yet) in the loaded option list is injected as its own option rather than falling
- * back to a blank select, which would read as "nobody chosen" for a request that in fact has one.
+ * that is not (yet) in the loaded option list is injected as its own option rather than reading
+ * as "nobody chosen" for a request that in fact has one.
  */
 export const QuotationContactPicker = forwardRef(function QuotationContactPicker({
   customerId, customerName, value, onChange, error, showToast, disabled = false, idPrefix = 'deal-contact', onResolve,
   // Item 2 (V180, "ไม่เติม “คุณ” หน้าชื่อผู้สั่งซื้อ", owner ruling 2026-09-16) — optional so a
-  // caller that has nothing to bind it to (none exists today, but future reuse of this shared
-  // picker should not be forced to wire a control it does not need) simply omits both and gets no
-  // extra UI. Both current callers (QuotationEditorPage directly, DealCustomerCard on the
-  // inline-create path) pass their own `terms.omitContactHonorific` through this.
+  // caller with nothing to bind it to simply omits both and gets no extra UI. Both current callers
+  // pass their own value through: QuotationEditorPage (its `terms.omitContactHonorific`, on the
+  // inline-create and ?ticket= paths alike) and PricingRequestCreateModal.
   omitContactHonorific = false, onChangeOmitContactHonorific,
+  label = 'ผู้ติดต่อ', hint = 'ชื่อจะพิมพ์เป็นผู้สั่งซื้อบนใบเสนอราคา',
 }, ref) {
   const [options, setOptions] = useState([]);
   const [loading, setLoading] = useState(false);
   const [showNew, setShowNew] = useState(false);
   const [newContact, setNewContact] = useState(emptyNewContact());
   const [saving, setSaving] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const triggerRef = useRef(null); // whichever button carries `id={idPrefix}`: the closed select or the card's เปลี่ยน
+  const searchRef = useRef(null);
+  const listRef = useRef(null);
+  const firstNameRef = useRef(null);
+  // Set before a pick / Escape / ล้าง / closing the add modal so focus lands back on the trigger
+  // after the re-render, which may have swapped the closed select for the card (or back).
+  const restoreFocusRef = useRef(false);
+  useEffect(() => { if (open) searchRef.current?.focus(); }, [open]);
+  useEffect(() => {
+    if (!restoreFocusRef.current) return;
+    restoreFocusRef.current = false;
+    triggerRef.current?.focus();
+  });
   // "ใช้ชื่อเดียวกับลูกค้า" (owner testing feedback, 2026-09-11: "when the customer and the
   // purchaser are the same person, let the rep reuse the customer name instead of retyping it").
   //
@@ -91,12 +102,15 @@ export const QuotationContactPicker = forwardRef(function QuotationContactPicker
   }, [customerId]);
 
   // The selected contact, guaranteed present in the rendered options (see the class doc). Compared
-  // as strings because a seeded id can arrive as a number from the DTO and as a string from the
-  // <select>'s own value.
+  // as strings because a seeded id can arrive as a number from the DTO and as a string elsewhere.
   const selectedId = value?.id ?? null;
   const hasSelectedOption = selectedId != null && options.some((c) => String(c.id) === String(selectedId));
   const renderedOptions = hasSelectedOption || selectedId == null ? options : [value, ...options];
   const selected = selectedId == null ? null : (options.find((c) => String(c.id) === String(selectedId)) ?? value);
+  const needle = query.trim().toLocaleLowerCase('th');
+  const filtered = renderedOptions.filter((c) => (
+    `${contactDisplayName(c)} ${c.phone ?? ''} ${c.email ?? ''}`.toLocaleLowerCase('th').includes(needle)
+  ));
 
   // A stand-in seeded from a NAME only (the ?ticket= path seeds `{ id, firstName }` off the
   // ticket) does not know the ผู้สั่งซื้อ's โทร./อีเมล. Once the real option arrives, hand it up
@@ -191,7 +205,7 @@ export const QuotationContactPicker = forwardRef(function QuotationContactPicker
         setContactEdits((prev) => ({ ...prev, [field]: previous }));
         lastSeededContactRef.current = { ...lastSeededContactRef.current, [field]: previous };
         onChange(restore);
-        showToast?.('error', err.message || 'บันทึกข้อมูลผู้สั่งซื้อไม่สำเร็จ');
+        showToast?.('error', err.message || 'บันทึกข้อมูลผู้ติดต่อไม่สำเร็จ');
       } finally {
         setSavingContactField(null);
         if (pendingContactSaveRef.current === promise) pendingContactSaveRef.current = null;
@@ -200,8 +214,20 @@ export const QuotationContactPicker = forwardRef(function QuotationContactPicker
     pendingContactSaveRef.current = promise;
   }
 
+  function closeList({ restoreFocus = false } = {}) {
+    restoreFocusRef.current = restoreFocus;
+    setOpen(false);
+    setQuery('');
+  }
+
+  function pick(contact) {
+    onChange(contact);
+    closeList({ restoreFocus: true });
+  }
+
   function closeNewContact() {
     if (saving) return;
+    restoreFocusRef.current = true;
     setShowNew(false);
     setNewContact(emptyNewContact());
     setSameAsCustomer(false);
@@ -219,82 +245,192 @@ export const QuotationContactPicker = forwardRef(function QuotationContactPicker
       });
       setOptions((prev) => [...prev, res.contact]);
       onChange(res.contact);
+      restoreFocusRef.current = true;
       setNewContact(emptyNewContact());
       setSameAsCustomer(false);
       setShowNew(false);
     } catch (err) {
-      showToast?.('error', err.message || 'เพิ่มผู้สั่งซื้อใหม่ไม่สำเร็จ');
+      showToast?.('error', err.message || 'เพิ่มผู้ติดต่อใหม่ไม่สำเร็จ');
     } finally {
       setSaving(false);
     }
   }
 
+  const locked = disabled || !customerId;
+  // FormField wires aria-describedby only onto a DIRECT child whose id matches; the trigger sits
+  // inside the wrapper below (and inside the card once picked), so it is wired by hand.
+  const triggerAria = {
+    'aria-haspopup': 'listbox',
+    'aria-expanded': open,
+    'aria-controls': open ? `${idPrefix}-list` : undefined,
+    'aria-describedby': [hint && `${idPrefix}-hint`, error && `${idPrefix}-error`].filter(Boolean).join(' ') || undefined,
+    'aria-invalid': error ? true : undefined,
+  };
+  const toggleList = () => (open ? closeList({ restoreFocus: true }) : setOpen(true));
+  // While the list is open, a press on the trigger keeps focus in the search box, so the click
+  // toggles it shut. Otherwise Safari and Firefox (which do not focus a pressed button) blur the
+  // search box with no relatedTarget, the wrapper closes the list, and the click re-opens it.
+  const keepFocusWhileOpen = (e) => { if (open) e.preventDefault(); };
+
   return (
     <>
-      <FormField label="ผู้สั่งซื้อ" htmlFor={idPrefix} error={error} hint="ไม่บังคับ — ฝ่ายนำเข้าไม่ใช้ข้อมูลนี้ ชื่อ เบอร์ และอีเมลที่จะพิมพ์บนใบเสนอราคากรอกตอนสร้างใบเสนอราคา">
-        <select
-          id={idPrefix}
-          disabled={disabled || !customerId}
-          value={selectedId ?? ''}
-          onChange={(e) => {
-            if (e.target.value === '__new__') { setShowNew(true); return; }
-            const found = renderedOptions.find((c) => String(c.id) === e.target.value) ?? null;
-            onChange(found);
+      <FormField label={label} htmlFor={idPrefix} error={error} hint={hint}>
+        {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions -- not a control: only catches focus leaving, and Escape bubbling up from, the real controls inside */}
+        <div
+          onBlur={(e) => { if (open && !e.currentTarget.contains(e.relatedTarget)) closeList(); }}
+          onKeyDown={(e) => {
+            // Stops here so an enclosing Modal's document-level Escape does not close it too.
+            if (e.key === 'Escape' && open) { e.stopPropagation(); closeList({ restoreFocus: true }); }
           }}
         >
-          <option value="">{customerId ? (loading ? 'กำลังโหลด…' : '- เลือกผู้สั่งซื้อ -') : 'เลือกลูกค้าก่อน'}</option>
-          {customerId && !disabled ? <option value="__new__">+ เพิ่มผู้สั่งซื้อใหม่</option> : null}
-          {renderedOptions.map((c) => (
-            <option key={c.id} value={c.id}>{contactDisplayName(c)}</option>
-          ))}
-        </select>
-        {/* The ผู้สั่งซื้อ's own โทร./อีเมล — prefilled from the contact record the moment one is
-            picked (a repeat customer's contacts arrive with them), editable in place (gap fix,
-            prod QT-2026-0041-1: a contact created without an e-mail could never gain one) and
-            saved back to PUT /api/customers/{customerId}/contacts/{contactId} on blur — same
-            pattern as CustomerDetailsFields' ที่อยู่/โทร. fields. The English form prints the
-            email ("E :"). A new ผู้สั่งซื้อ with corrected details from the start can still be
-            added via "+ เพิ่มผู้สั่งซื้อใหม่". */}
-        {selected ? (
-          selected.phone === undefined && selected.email === undefined ? (
-            <span className="block text-2xs text-text-muted" data-testid={`${idPrefix}-details`}>
-              กำลังโหลดเบอร์โทร/อีเมล…
-            </span>
-          ) : (
-            <div className="mt-1.5 grid grid-cols-2 gap-2 mobile:grid-cols-1" data-testid={`${idPrefix}-details`}>
-              <label className="m-0">
-                <span className={`text-2xs ${contactEdits.phone ? 'text-text-muted' : 'text-warning'}`}>โทร.{contactEdits.phone ? '' : ' (ยังไม่มี)'}</span>
-                <input
-                  aria-label="แก้ไขโทรศัพท์ผู้สั่งซื้อ"
-                  className="text-2xs"
-                  value={contactEdits.phone}
-                  maxLength={50}
-                  disabled={disabled || savingContactField === 'phone'}
-                  onChange={(e) => setContactEdits((prev) => ({ ...prev, phone: e.target.value }))}
-                  onBlur={() => saveContactField('phone')}
-                  onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-                />
-              </label>
-              <label className="m-0">
-                <span className={`text-2xs ${contactEdits.email ? 'text-text-muted' : 'text-warning'}`}>อีเมล{contactEdits.email ? '' : ' (ยังไม่มี)'}</span>
-                <input
-                  type="email"
-                  aria-label="แก้ไขอีเมลผู้สั่งซื้อ"
-                  className="text-2xs"
-                  value={contactEdits.email}
-                  maxLength={200}
-                  disabled={disabled || savingContactField === 'email'}
-                  onChange={(e) => setContactEdits((prev) => ({ ...prev, email: e.target.value }))}
-                  onBlur={() => saveContactField('email')}
-                  onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-                />
-              </label>
+          {selected ? (
+            <div className="rounded-md border border-border bg-surface-muted px-3.5 py-3">
+              <div className="flex items-start justify-between gap-3">
+                <span className="min-w-0 break-words text-base font-bold text-text">{contactDisplayName(selected)}</span>
+                <span className="flex shrink-0 gap-3">
+                  <Button
+                    ref={triggerRef} id={idPrefix} variant="text" size="sm" className="mobile:min-h-[44px]"
+                    aria-label="เปลี่ยนผู้ติดต่อ" {...triggerAria} disabled={locked}
+                    onMouseDown={keepFocusWhileOpen} onClick={toggleList}
+                  >
+                    เปลี่ยน
+                  </Button>
+                  <Button
+                    variant="text" size="sm" className="mobile:min-h-[44px]" aria-label="ล้างผู้ติดต่อ" disabled={locked}
+                    onClick={() => { closeList({ restoreFocus: true }); onChange(null); }}
+                  >
+                    ล้าง
+                  </Button>
+                </span>
+              </div>
+              {/* The ผู้ติดต่อ's own เบอร์/อีเมล — prefilled from the contact record, editable in
+                  place (gap fix, prod QT-2026-0041-1: a contact created without an e-mail could
+                  never gain one) and saved back to PUT /api/customers/{customerId}/contacts/
+                  {contactId} on blur — same pattern as CustomerDetailsFields' ที่อยู่/โทร. fields.
+                  A missing one is muted info, never a warning (owner ruling 2026-10-18). */}
+              {selected.phone === undefined && selected.email === undefined ? (
+                <span className="mt-1.5 block text-2xs text-text-muted" data-testid={`${idPrefix}-details`}>
+                  กำลังโหลดเบอร์โทร/อีเมล…
+                </span>
+              ) : (
+                <div className="mt-2 grid grid-cols-2 gap-2 mobile:grid-cols-1" data-testid={`${idPrefix}-details`}>
+                  <label className="m-0">
+                    <span className="text-2xs text-text-muted">เบอร์</span>
+                    <input
+                      aria-label="แก้ไขเบอร์ผู้ติดต่อ"
+                      className="text-2xs"
+                      placeholder="ไม่มีเบอร์"
+                      value={contactEdits.phone}
+                      maxLength={50}
+                      disabled={disabled || savingContactField === 'phone'}
+                      onChange={(e) => setContactEdits((prev) => ({ ...prev, phone: e.target.value }))}
+                      onBlur={() => saveContactField('phone')}
+                      onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                    />
+                  </label>
+                  <label className="m-0">
+                    <span className="text-2xs text-text-muted">อีเมล</span>
+                    <input
+                      type="email"
+                      aria-label="แก้ไขอีเมลผู้ติดต่อ"
+                      className="text-2xs"
+                      placeholder="ไม่มีอีเมล"
+                      value={contactEdits.email}
+                      maxLength={200}
+                      disabled={disabled || savingContactField === 'email'}
+                      onChange={(e) => setContactEdits((prev) => ({ ...prev, email: e.target.value }))}
+                      onBlur={() => saveContactField('email')}
+                      onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                    />
+                  </label>
+                </div>
+              )}
             </div>
-          )
-        ) : null}
+          ) : (
+            <button
+              ref={triggerRef}
+              id={idPrefix}
+              type="button"
+              className="flex h-10 w-full items-center justify-between gap-2 rounded-md border-[1.5px] border-border-input bg-surface px-3 text-left text-base text-text-muted mobile:h-11"
+              {...triggerAria}
+              disabled={locked}
+              onMouseDown={keepFocusWhileOpen}
+              onClick={toggleList}
+            >
+              <span className="truncate">{customerId ? (loading ? 'กำลังโหลด…' : '- เลือกผู้ติดต่อ -') : 'เลือกลูกค้าก่อน'}</span>
+              <Icon name="chevronDown" size={16} className="shrink-0" />
+            </button>
+          )}
+          {open ? (
+            // In the page's flow rather than floating, so a modal's scrolling body can never clip it.
+            // A press anywhere in the panel — a row, the padding round the search box, ไม่พบผู้ติดต่อ —
+            // cancels its mousedown so focus stays in the search box and the wrapper's blur-to-close
+            // never fires: Safari and Firefox do not focus a pressed button or box, so without this
+            // the blur arrives with no relatedTarget and reads as focus leaving. Two exceptions: the
+            // search box itself (a press must still place the caret) and the listbox element, whose
+            // only own press is its scrollbar — a cancelled mousedown can stop a scrollbar drag.
+            // eslint-disable-next-line jsx-a11y/no-static-element-interactions -- not a control: only keeps focus where it is
+            <div
+              className="mt-1.5 overflow-hidden rounded-md border border-border bg-surface shadow-[var(--shadow-lg-heavy)]"
+              onMouseDown={(e) => { if (e.target !== searchRef.current && e.target !== listRef.current) e.preventDefault(); }}
+            >
+              <button
+                type="button"
+                data-testid="contact-add-first"
+                className="flex min-h-11 w-full cursor-pointer items-center gap-2.5 border-0 border-b border-border-subtle bg-primary-bg px-3.5 text-left text-sm font-bold text-primary"
+                onClick={() => { closeList(); setShowNew(true); }}
+              >
+                <span className="grid h-6 w-6 shrink-0 place-items-center rounded-pill bg-primary text-surface" aria-hidden="true">
+                  <Icon name="plus" size={14} />
+                </span>
+                เพิ่มผู้ติดต่อใหม่
+              </button>
+              <div className="border-b border-border-subtle p-2.5">
+                <input
+                  ref={searchRef}
+                  type="search"
+                  autoComplete="off"
+                  aria-label="ค้นหาชื่อ เบอร์ หรืออีเมล"
+                  placeholder="ค้นหาชื่อ เบอร์ หรืออีเมล"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault(); }}
+                />
+              </div>
+              <ul ref={listRef} id={`${idPrefix}-list`} role="listbox" aria-label="รายชื่อผู้ติดต่อ" className="m-0 max-h-64 list-none overflow-auto p-0">
+                {loading ? <li role="presentation" className="px-3.5 py-2.5 text-sm text-text-muted">กำลังโหลด…</li> : null}
+                {!loading && filtered.length === 0 ? (
+                  <li role="presentation" className="px-3.5 py-2.5 text-sm text-text-muted">ไม่พบผู้ติดต่อ</li>
+                ) : null}
+                {filtered.map((c) => {
+                  const isSelected = String(c.id) === String(selectedId);
+                  return (
+                    <li key={c.id} role="presentation" className="border-b border-border-subtle last:border-b-0">
+                      <button
+                        type="button"
+                        role="option"
+                        aria-selected={isSelected}
+                        className={`grid w-full cursor-pointer gap-0.5 border-0 px-3.5 py-2.5 text-left hover:bg-surface-hover ${isSelected ? 'bg-surface-hover' : 'bg-surface'}`}
+                        onClick={() => pick(c)}
+                      >
+                        <span className="text-sm font-bold text-text">{contactDisplayName(c)}</span>
+                        <span className="text-xs text-text-secondary">
+                          <span className={c.phone ? undefined : 'text-text-faint'}>{c.phone || 'ไม่มีเบอร์'}</span>
+                          {' · '}
+                          <span className={c.email ? undefined : 'text-text-faint'}>{c.email || 'ไม่มีอีเมล'}</span>
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          ) : null}
+        </div>
       </FormField>
       {/* Item 2 (V180, "ไม่เติม “คุณ” หน้าชื่อผู้สั่งซื้อ", owner ruling 2026-09-16) — directly under
-          the ผู้สั่งซื้อ picker, per the owner's own placement. Whole row is the tappable label
+          the picker, per the owner's own placement. No sub-line: the field's hint is the only
+          explanatory text (owner ruling 2026-10-18). Whole row is the tappable label
           (not just the checkbox square) and grows to the mobile touch-target floor, same
           `mobile:min-h-[44px]` convention QuotationEditorPage's own terms-card toggle buttons use. */}
       {onChangeOmitContactHonorific ? (
@@ -310,71 +446,69 @@ export const QuotationContactPicker = forwardRef(function QuotationContactPicker
             disabled={disabled}
             onChange={(e) => onChangeOmitContactHonorific(e.target.checked)}
           />
-          <span className="text-xs">
-            ไม่เติม “คุณ” หน้าชื่อผู้สั่งซื้อ
-            <span className="mt-0.5 block text-2xs text-text-muted">
-              ใช้เมื่อผู้สั่งซื้อเป็นชื่อฝ่าย/แผนก เช่น “ฝ่ายจัดซื้อ”
-            </span>
-          </span>
+          <span className="text-xs">ไม่เติม “คุณ” หน้าชื่อผู้ติดต่อ</span>
         </label>
       ) : null}
 
       {showNew && customerId ? (
-        <Modal title="เพิ่มผู้สั่งซื้อใหม่" onClose={closeNewContact}>
+        <Modal
+          title="เพิ่มผู้ติดต่อใหม่"
+          subtitle={customerName ? `ลูกค้า: ${customerName}` : undefined}
+          onClose={closeNewContact}
+          initialFocusRef={firstNameRef}
+          footer={(
+            <>
+              <Button variant="secondary" disabled={saving} onClick={closeNewContact}>ยกเลิก</Button>
+              <Button variant="primary" loading={saving} disabled={!newContact.firstName.trim()} onClick={handleCreate}>
+                เพิ่มและเลือกคนนี้
+              </Button>
+            </>
+          )}
+        >
+          <div className="grid grid-cols-2 gap-3.5 mobile:grid-cols-1">
+            <FormField label="ชื่อ" htmlFor={`${idPrefix}-new-first-name`} required>
+              <input
+                id={`${idPrefix}-new-first-name`}
+                ref={firstNameRef}
+                value={newContact.firstName}
+                disabled={sameAsCustomer}
+                onChange={(e) => setNewContact((p) => ({ ...p, firstName: e.target.value }))}
+              />
+            </FormField>
+            <FormField label="นามสกุล" htmlFor={`${idPrefix}-new-last-name`}>
+              <input
+                id={`${idPrefix}-new-last-name`}
+                value={newContact.lastName}
+                onChange={(e) => setNewContact((p) => ({ ...p, lastName: e.target.value }))}
+              />
+            </FormField>
+            <FormField label="เบอร์โทร" htmlFor={`${idPrefix}-new-phone`}>
+              <input
+                id={`${idPrefix}-new-phone`}
+                type="tel"
+                value={newContact.phone}
+                onChange={(e) => setNewContact((p) => ({ ...p, phone: e.target.value }))}
+              />
+            </FormField>
+            <FormField label="อีเมล" htmlFor={`${idPrefix}-new-email`}>
+              <input
+                id={`${idPrefix}-new-email`}
+                type="email"
+                value={newContact.email}
+                onChange={(e) => setNewContact((p) => ({ ...p, email: e.target.value }))}
+              />
+            </FormField>
+          </div>
           {customerName ? (
-            <label className="m-0 flex items-center gap-1.5 text-2xs">
+            <label className="mt-3.5 flex cursor-pointer items-center gap-2.5 text-sm font-medium text-text">
               <input
                 type="checkbox"
                 checked={sameAsCustomer}
                 onChange={(e) => setSameAsCustomer(e.target.checked)}
               />
-              ใช้ชื่อเดียวกับลูกค้า ({customerName})
+              ใช้ชื่อเดียวกับลูกค้า
             </label>
           ) : null}
-          <div className="mt-3 grid grid-cols-2 gap-3 mobile:grid-cols-1">
-            <label className="m-0">
-              <span className="text-2xs">ชื่อ *</span>
-              <input
-                aria-label="ชื่อผู้สั่งซื้อ"
-                value={newContact.firstName}
-                disabled={sameAsCustomer}
-                onChange={(e) => setNewContact((p) => ({ ...p, firstName: e.target.value }))}
-              />
-            </label>
-            <label className="m-0">
-              <span className="text-2xs">นามสกุล</span>
-              <input
-                aria-label="นามสกุลผู้สั่งซื้อ"
-                value={newContact.lastName}
-                onChange={(e) => setNewContact((p) => ({ ...p, lastName: e.target.value }))}
-              />
-            </label>
-            <label className="m-0">
-              <span className="text-2xs">โทรศัพท์</span>
-              <input
-                aria-label="โทรศัพท์ผู้สั่งซื้อ"
-                value={newContact.phone}
-                onChange={(e) => setNewContact((p) => ({ ...p, phone: e.target.value }))}
-              />
-            </label>
-            <label className="m-0">
-              <span className="text-2xs">อีเมล</span>
-              <input
-                type="email"
-                aria-label="อีเมลผู้สั่งซื้อ"
-                value={newContact.email}
-                onChange={(e) => setNewContact((p) => ({ ...p, email: e.target.value }))}
-              />
-            </label>
-          </div>
-          <div className="mt-4 flex flex-wrap justify-end gap-2">
-            <Button variant="primary" size="sm" loading={saving} disabled={!newContact.firstName.trim() || saving} onClick={handleCreate}>
-              เพิ่มผู้สั่งซื้อ
-            </Button>
-            <Button variant="secondary" size="sm" disabled={saving} onClick={closeNewContact}>
-              ยกเลิก
-            </Button>
-          </div>
         </Modal>
       ) : null}
     </>

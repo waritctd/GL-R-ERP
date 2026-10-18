@@ -57,12 +57,9 @@ export function editorStateFromQuotation(quotation) {
       printedByDisplayId: quotation.printedByDisplayId ?? '',
       salesRepDisplayId: quotation.salesRepDisplayId ?? '',
       projectName: quotation.projectName ?? '',
-      // Owner-directed reversal of F2 (2026-09-26) — manual, optional ผู้สั่งซื้อ signature name;
-      // null (every pre-V192 row, and any document nobody has typed one into) reads as blank, same
-      // "no value stored" convention as every other field here.
-      orderedByName: quotation.orderedByName ?? '',
-      // V192.3 — null, or a DTO with no such key (a backend that predates the columns), reads as
-      // blank.
+      // V192.3 — the customer's phone and email. Null, or a DTO with no such key (a backend that
+      // predates the columns), reads as blank. (No orderedByName: since 2026-10-18 the server
+      // writes the signature name from the contact, and the editor neither shows nor sends it.)
       orderedByPhone: quotation.orderedByPhone ?? '',
       orderedByEmail: quotation.orderedByEmail ?? '',
       // Sales feedback #5 (V192.1) — a DTO with no such key (a row served by a backend that
@@ -146,10 +143,11 @@ export function copyFromQuotation(quotation, newQuotationTerms) {
       // source's name is offered there (suggestedProjectName) rather than written here, where the
       // new-deal form has no field that would show it.
       projectName: '',
-      // ผู้ติดต่อ is a person at the SOURCE's customer.
-      orderedByName: '',
+      // The SOURCE customer's phone and email. (Its ผู้ติดต่อ is not in terms; the editor drops it,
+      // and with it the "ไม่เติม คุณ" choice made for that person.)
       orderedByPhone: '',
       orderedByEmail: '',
+      omitContactHonorific: false,
     },
     suggestedProjectName: quotation.projectName ?? '',
     validityDatePassed,

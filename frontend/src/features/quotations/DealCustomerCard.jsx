@@ -137,11 +137,10 @@ function emptyNewCustomer() {
  * component owns only its own transient search/create UI state, exactly like QuotationItemRow's
  * catalog typeahead.
  *
- * Owner-directed reversal of F2/V167 (2026-09-26): ผู้สั่งซื้อ used to be required here too,
- * rendered by the shared QuotationContactPicker (still used elsewhere -- see its own header
- * comment -- just no longer here). ผู้สั่งซื้อ is now a single optional free-text field
- * (`terms.orderedByName`) the editor itself renders next to this card, not something this card
- * collects at all.
+ * This card does not collect the ผู้ติดต่อ. Ruling 2026-10-18: the editor renders the shared
+ * QuotationContactPicker itself, next to this card, on both the inline-create and ?ticket= paths.
+ * The ผู้ติดต่อ is picked per quotation (`contactId`), the server derives the ผู้สั่งซื้อ
+ * signature name (`ordered_by_name`) from it, and the deal's own contact is never inherited.
  *
  * Slice 2 — flow A (SLICE-2-FLOW-A.md §A): this card is now step 1, "ดีล". With `onModeChange`
  * set (the editor always sets it) it leads with a two-way choice — เลือกดีลที่มีอยู่ (DealPicker,

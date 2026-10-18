@@ -158,13 +158,49 @@ describe('/quotations/new — step 1 is "ดีล" (slice 2 §A)', () => {
     expect(saveButton().title).toContain('ต้องเลือกดีลก่อนบันทึกร่าง');
   });
 
-  it('picking a deal turns the page into the ?ticket= path (no second code path)', async () => {
-    renderEditor('/quotations/new');
+  // A ผู้ติดต่อ belongs to ONE customer and the server refuses another customer's contactId
+  // (DealQuotationService#resolveContact → 400), so switching to a deal of another customer drops
+  // the contact picked for the first deal.
+  it('picking a deal turns the page into the ?ticket= path (no second code path); switching deals drops the ผู้ติดต่อ picked for the first', async () => {
+    const OTHER = ticketSummary({
+      id: 19, code: 'DL-2026-0019', customerName: 'บริษัท อีกราย จำกัด', customerId: 9, salesStage: 'QUOTE_OWNER',
+    });
+    api.tickets.list.mockResolvedValue({ tickets: [ticketSummary(), OTHER] });
+    api.tickets.get.mockImplementation(async (ticketId) => ({ ticket: { summary: ticketId === 19 ? OTHER : ticketSummary() } }));
+    api.customers.contacts.mockImplementation(async (customerId) => ({
+      contacts: customerId === CUSTOMER.id
+        ? [{ id: 61, customerId: CUSTOMER.id, firstName: 'สมศรี', lastName: 'ลูกค้าแรก', phone: null, email: null }]
+        : [],
+    }));
+    api.dealQuotations.create.mockResolvedValue({ quotation: { id: 99 } });
+    renderEditor('/quotations/new', { idRoute: 'probe' });
     fireEvent.focus(await screen.findByRole('combobox', { name: /ดีล/ }));
     fireEvent.mouseDown(await screen.findByRole('option', { name: /DL-2026-0018/ }));
     await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/quotations/new?ticket=18'));
     await waitFor(() => expect(api.tickets.get).toHaveBeenCalledWith(18));
-  });
+
+    const trigger = await screen.findByLabelText(/^ผู้ติดต่อ/);
+    await waitFor(() => expect(trigger.disabled).toBe(false));
+    fireEvent.click(trigger);
+    fireEvent.click(await screen.findByRole('option', { name: /สมศรี/ }));
+    expect(screen.getByText('สมศรี ลูกค้าแรก')).not.toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'เปลี่ยนดีล' }));
+    fireEvent.focus(await screen.findByRole('combobox', { name: /ดีล/ }));
+    fireEvent.mouseDown(await screen.findByRole('option', { name: /DL-2026-0019/ }));
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/quotations/new?ticket=19'));
+    // Settled on deal 19 (its stage preselects ผู้รับ) before looking, so a loading frame cannot pass for it.
+    await waitFor(() => expect(screen.getByRole('radio', { name: 'เจ้าของโครงการ' }).getAttribute('aria-checked')).toBe('true'));
+    await waitFor(() => expect(api.customers.contacts).toHaveBeenCalledWith(9));
+    expect(screen.queryByText('สมศรี ลูกค้าแรก')).toBeNull();
+    expect(screen.getByLabelText(/^ผู้ติดต่อ/).textContent).toContain('- เลือกผู้ติดต่อ -');
+
+    await fillCompleteQuotationItem();
+    await waitFor(() => expect(saveButton().disabled).toBe(false));
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(api.dealQuotations.create).toHaveBeenCalledTimes(1));
+    expect(api.dealQuotations.create).toHaveBeenCalledWith(19, expect.objectContaining({ contactId: null }));
+  }, 15000);
 
   it('สร้างดีลใหม่ brings back the customer/project card; ผู้รับใบเสนอราคา is required there too', async () => {
     renderEditor('/quotations/new');

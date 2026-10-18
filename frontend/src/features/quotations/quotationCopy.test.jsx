@@ -88,7 +88,7 @@ const SOURCE = deepFreeze({
   subtotalAmount: 19165.84, vatAmount: 1341.61, grandTotal: 20507.45,
   printedByDisplayId: 4, printedByDisplayName: 'พนักงาน ได้สิทธิ์', printedByDisplayNameEn: null,
   salesRepDisplayId: 9, salesRepDisplayName: 'ผู้จัดการ ฝ่ายขาย', salesRepDisplayNameEn: null, salesRepDisplayPhone: '081-222-3333',
-  omitContactHonorific: false,
+  omitContactHonorific: true, // set, so the table below shows the copy does NOT carry it
   items: [TILE, SPECIAL_TILE, FREIGHT, EARLY_ORDER_DISCOUNT],
   createdAt: '2026-09-20T02:00:00Z', updatedAt: '2026-09-22T03:00:00Z',
 });
@@ -103,7 +103,7 @@ const NEW_QUOTATION_TERMS = deepFreeze({
   fullPaymentTerm: '', remainderMode: 'ON_DELIVERY', creditDays: '',
   validityDays: 60, validityMode: 'DAYS', validityUntil: '',
   customerNotes: '', printedByDisplayId: '', salesRepDisplayId: '', projectName: '',
-  orderedByName: '', orderedByPhone: '', orderedByEmail: '', hideProjectName: false,
+  orderedByPhone: '', orderedByEmail: '', hideProjectName: false, omitContactHonorific: false,
 });
 
 describe('copyFromQuotation — what the new draft starts with', () => {
@@ -115,7 +115,7 @@ describe('copyFromQuotation — what the new draft starts with', () => {
 
   // THE TABLE. One row per thing the editor's เงื่อนไข / header state holds, so a field added to
   // the editor later cannot be copied (or dropped) by accident: this equality names every key.
-  it('copies the terms, the display names, the designer and the project tick — and clears ผู้ติดต่อ with its Phone and Email', () => {
+  it('copies the terms, the display names, the designer and the project tick — and clears the customer phone and email', () => {
     expect(copyFromQuotation(SOURCE, NEW_QUOTATION_TERMS).terms).toEqual({
       // ── copied ──
       unitCode: 'A001',                       // หน่วยงาน / ผู้ออกแบบ — the project's designer, same job
@@ -136,9 +136,9 @@ describe('copyFromQuotation — what the new draft starts with', () => {
       offerDate: bangkokTodayIso(),           // not the source's 2026-09-18
       projectName: '',                        // see suggestedProjectName below
       // ── left for the rep ──
-      orderedByName: '',
       orderedByPhone: '',
       orderedByEmail: '',
+      omitContactHonorific: false,            // the "คุณ" box belongs with the ผู้ติดต่อ, which is not copied
     });
   });
 
@@ -296,9 +296,9 @@ describe('copyFromQuotation — a ยืนราคา date that has passed', (
       hideProjectName: true,
       offerDate: TODAY,
       projectName: '',
-      orderedByName: '',
       orderedByPhone: '',
       orderedByEmail: '',
+      omitContactHonorific: false,
     });
   });
 
