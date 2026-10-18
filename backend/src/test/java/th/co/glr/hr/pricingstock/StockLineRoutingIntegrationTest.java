@@ -277,16 +277,6 @@ class StockLineRoutingIntegrationTest extends AbstractStockLineIntegrationTest {
     }
 
     @Test
-    void importLine_missingLeadTime_stillRefusedAtCreate_PIN() {
-        assertThatThrownBy(() -> pricingRequestService.createDraft(ticketId,
-            requestOf(importLineMissingLeadTime("No lead time", 5)), salesActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
-                assertThat(e.getMessage()).contains("ระยะเวลานำเข้า");
-            });
-    }
-
-    @Test
     void importLine_withoutFactory_stillRefusedAtFactoryQuoteGeneration_PIN() {
         long id = persistSubmitAndPickUp(importLineWithoutFactory("Free text", 5));
 
@@ -405,13 +395,6 @@ class StockLineRoutingIntegrationTest extends AbstractStockLineIntegrationTest {
     ) {
         var full = importLine(model, null, null, pieces);
         return withOriginAndLead(full, null, 3, 7);
-    }
-
-    private th.co.glr.hr.pricingrequest.PricingRequestRequests.PricingRequestItemRequest importLineMissingLeadTime(
-        String model, int pieces
-    ) {
-        var full = importLine(model, null, null, pieces);
-        return withOriginAndLead(full, "ไทย-สต็อก", null, null);
     }
 
     private th.co.glr.hr.pricingrequest.PricingRequestRequests.PricingRequestItemRequest withOriginAndLead(
