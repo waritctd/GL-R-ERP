@@ -233,7 +233,6 @@ async function remoteSetup() {
     await anon.dispose();
   }
 
-  // eslint-disable-next-line no-console
   console.log(`[uat] preflight ok — ${UAT_SALES_ROLES.length} sessions captured, run id ${runId}`);
 }
 
@@ -308,7 +307,6 @@ async function captureSession(role, runId) {
       }
     }
 
-    // eslint-disable-next-line no-console
     console.log(`[uat] ${role.padEnd(13)} ${persona.email.padEnd(20)} → ${user.role} (run ${runId})`);
   } finally {
     await context.dispose();
