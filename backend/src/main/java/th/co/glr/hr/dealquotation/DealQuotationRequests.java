@@ -353,17 +353,19 @@ public final class DealQuotationRequests {
     }
 
     /**
-     * {@code contactId} (owner feedback F2, 2026-09-10 — ผู้สั่งซื้อ) is OPTIONAL on the wire and
-     * defaults to the deal's own contact ({@code sales.ticket.contact_id}).
+     * {@code contactId} is the ผู้ติดต่อ picked for this quotation, and it is OPTIONAL. Ruling
+     * 2026-10-18: no default is applied. A create with none stores a blank snapshot, and an update
+     * with none keeps the draft's own contact. The deal's {@code sales.ticket.contact_id} is never
+     * inherited.
      *
      * ⚠️ Owner-directed reversal of V167/F2 (2026-09-26): resolving to a contact is no longer
-     * REQUIRED either — the frontend's required contact-picker dropdown this field used to back is
-     * gone (replaced by an unrelated, always-optional free-text signature name, {@code
-     * orderedByName}), so create/update/submit no longer refuse a quotation with no contact
-     * anywhere in the resolution chain. A contact id that IS given (or inherited) must still belong
+     * REQUIRED either, so create/update/submit no longer refuse a quotation with no contact
+     * anywhere in the resolution chain. The picked contact's name is also the ผู้สั่งซื้อ signature
+     * name (ruling 2026-10-18): the server writes it to ordered_by_name and ignores {@code
+     * orderedByName}. A contact id that IS given (or kept from the draft) must still belong
      * to the deal's customer, refused as 400 otherwise; its name/phone/email are snapshotted onto
      * the quotation same as before (V167). Enforced in {@code DealQuotationService#resolveContact},
-     * not by bean validation, because the default is a DB lookup.
+     * not by bean validation, because the customer check is a DB lookup.
      */
     public record UpsertDealQuotationRequest(
         Long contactId,
@@ -488,13 +490,11 @@ public final class DealQuotationRequests {
             message = "ต้องเป็น BEFORE_DELIVERY, ON_DELIVERY หรือ ON_OR_BEFORE_DELIVERY")
         String fullPaymentTerm,
         /**
-         * Owner-directed reversal of F2 (2026-09-10, hardened 2026-09-15, reversed 2026-09-26):
-         * the ผู้สั่งซื้อ signature slot no longer auto-fills from the contact/customer name at
-         * all — this is the ONLY thing it ever prints there. Optional/nullable on the wire, and
-         * genuinely editable the same "editor always sends its current value" way as
-         * {@link #projectName} — a null/blank on a PUT is a real request to clear it back to the
-         * dotted placeholder, not "leave alone". {@code null} on CREATE means the same thing: a
-         * brand-new document starts with no manual name, i.e. the dotted line.
+         * IGNORED since the 2026-10-18 ruling. The ผู้สั่งซื้อ signature name is now the picked
+         * contact's name: {@code DealQuotationService} writes {@code ordered_by_name} from the
+         * resolved {@link #contactId} on every DRAFT save (null when no contact is picked) and never
+         * reads this field. It stays on the wire, still size-checked, so an older client's request
+         * is not refused.
          */
         @Size(max = 255) String orderedByName,
         /**
@@ -513,11 +513,10 @@ public final class DealQuotationRequests {
          */
         Boolean hideProjectName,
         /**
-         * V192.3 — how to reach the person named in {@link #orderedByName} (the editor's ผู้ติดต่อ).
-         * Shown on the quotation's details and, when filled, printed on the document's customer contact line (owner ruling 2026-10-13).
-         * Free text (an extension or several numbers is normal), optional. Travels exactly like
-         * {@link #orderedByName}: the editor always sends its current value, so a null/blank on a
-         * PUT clears it.
+         * V192.3 — the customer's phone, typed in the editor. Shown on the quotation's details and,
+         * when filled, printed on the document's customer contact line (owner ruling 2026-10-13).
+         * Free text (an extension or several numbers is normal), optional. The editor always sends
+         * its current value, so a null/blank on a PUT clears it.
          *
          * <p>Deliberately carries no bean-validation annotation: the value is trimmed first and a
          * blank one is not an error, so the 50-character limit is enforced by
@@ -542,8 +541,35 @@ public final class DealQuotationRequests {
          * "field + default message" shape.
          */
         String recipientType,
+        /**
+         * The picked ผู้ติดต่อ may be cleared per quotation (owner ruling 2026-10-18, Goal 6: the rep
+         * "picks, changes or clears it on each quotation"). {@link #contactId} null on UPDATE keeps
+         * the draft's own contact, so clearing needs its own signal: {@code true} on UPDATE stores
+         * a blank contact snapshot whatever {@link #contactId} says, and with it a null signature
+         * name. Optional; null/false has no effect. Ignored on CREATE (nothing to clear).
+         */
+        Boolean clearContact,
         @NotEmpty List<@Valid ItemInput> items
     ) {
+        /** The pre-clearContact canonical shape (no {@link #clearContact}) — kept so every existing
+         * construction site (tests, mostly) compiles unchanged. Defaults it to null: no clearing. */
+        public UpsertDealQuotationRequest(Long contactId, String deptCode, String unitCode,
+                                          LocalDate offerDate, Integer depositPercent,
+                                          String remainderMode, Integer creditDays,
+                                          Integer validityDays, String validityMode, LocalDate validityUntil,
+                                          String customerNotes, String priceMode, String documentLanguage,
+                                          String currency, Long printedByDisplayId, Long salesRepDisplayId,
+                                          String projectName, Boolean omitContactHonorific,
+                                          String fullPaymentTerm, String orderedByName,
+                                          Boolean hideProjectName, String orderedByPhone,
+                                          String orderedByEmail, String recipientType, List<ItemInput> items) {
+            this(contactId, deptCode, unitCode, offerDate, depositPercent, remainderMode,
+                creditDays, validityDays, validityMode, validityUntil, customerNotes, priceMode,
+                documentLanguage, currency, printedByDisplayId, salesRepDisplayId, projectName,
+                omitContactHonorific, fullPaymentTerm, orderedByName, hideProjectName,
+                orderedByPhone, orderedByEmail, recipientType, null, items);
+        }
+
         /** The pre-slice-2 shape (main's V192.3 canonical, no {@link #recipientType}) — kept so every
          * existing construction site (tests, mostly) compiles unchanged. Defaults recipientType to
          * null, which on UPDATE means "keep the stored recipient" and on CREATE is refused (400) — a
@@ -606,7 +632,7 @@ public final class DealQuotationRequests {
                 remainderMode, creditDays, validityDays, validityMode, validityUntil, customerNotes, priceMode,
                 documentLanguage, currency, printedByDisplayId, salesRepDisplayId, projectName,
                 omitContactHonorific, fullPaymentTerm, orderedByName, hideProjectName,
-                orderedByPhone, orderedByEmail, newRecipientType, items);
+                orderedByPhone, orderedByEmail, newRecipientType, clearContact, items);
         }
 
         /** Copy with only {@link #hideProjectName} replaced — every other field unchanged. */
@@ -615,7 +641,16 @@ public final class DealQuotationRequests {
                 remainderMode, creditDays, validityDays, validityMode, validityUntil, customerNotes, priceMode,
                 documentLanguage, currency, printedByDisplayId, salesRepDisplayId, projectName,
                 omitContactHonorific, fullPaymentTerm, orderedByName, newHideProjectName,
-                orderedByPhone, orderedByEmail, recipientType, items);
+                orderedByPhone, orderedByEmail, recipientType, clearContact, items);
+        }
+
+        /** Copy with only {@link #clearContact} replaced — every other field unchanged. */
+        public UpsertDealQuotationRequest withClearContact(Boolean newClearContact) {
+            return new UpsertDealQuotationRequest(contactId, deptCode, unitCode, offerDate, depositPercent,
+                remainderMode, creditDays, validityDays, validityMode, validityUntil, customerNotes, priceMode,
+                documentLanguage, currency, printedByDisplayId, salesRepDisplayId, projectName,
+                omitContactHonorific, fullPaymentTerm, orderedByName, hideProjectName,
+                orderedByPhone, orderedByEmail, recipientType, newClearContact, items);
         }
 
         /** The pre-orderedByName shape (today's canonical, minus {@link #orderedByName}) — kept

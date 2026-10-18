@@ -75,6 +75,9 @@ const NEW_CUSTOMER = {
   id: 2, name: 'บริษัท ผู้รับเหมา บี จำกัด', taxId: '0105550000002', address: '2 ถนนใหม่ เขตใหม่', phone: '02-222-2222',
 };
 const NEW_CUSTOMERS_PROJECT = { id: 77, customerId: 2, name: 'ทาวน์โฮม พระราม 9' };
+// The ผู้ติดต่อ picked on the draft — a contact of the OLD customer, which the server refuses on a
+// save once the deal is on the new one (DealQuotationService#resolveContact → 400).
+const OLD_CONTACT = { id: 41, customerId: 1, firstName: 'สมใจ', lastName: 'ติดต่อเดิม', phone: '089-111-4141', email: null };
 
 const TILE = {
   id: 5550001, seq: 1, lineType: 'TILE', locationLabel: 'ชั้น 5 โซน A', catalogPriceId: null, productCode: null,
@@ -222,14 +225,21 @@ beforeEach(() => {
     expect(request.customerId).toBe(NEW_CUSTOMER.id);
     dealCustomer = NEW_CUSTOMER;
     dealProject = NEW_CUSTOMERS_PROJECT;
-    serverQuotation = resnapshotted(serverQuotation);
+    // …and drops the old customer's contact from every draft (DealQuotationRepository
+    // #resnapshotDraftsForDealCustomerChange: contact_id = the request's, names and ordered_by_name NULL).
+    serverQuotation = {
+      ...resnapshotted(serverQuotation),
+      contactId: null, contactName: null, contactPhone: null, contactEmail: null, orderedByName: null,
+    };
     return { ticket: { summary: ticketSummary() } };
   });
   api.customers.search.mockResolvedValue({ customers: [OLD_CUSTOMER, NEW_CUSTOMER] });
   api.customers.projects.mockImplementation(async (customerId) => ({
     projects: customerId === NEW_CUSTOMER.id ? [NEW_CUSTOMERS_PROJECT] : [{ ...OLD_PROJECT, customerId: 1 }],
   }));
-  api.customers.contacts.mockResolvedValue({ contacts: [] });
+  api.customers.contacts.mockImplementation(async (customerId) => ({
+    contacts: customerId === OLD_CUSTOMER.id ? [OLD_CONTACT] : [],
+  }));
 });
 
 describe('"เปลี่ยนลูกค้า" on a saved DRAFT direct quotation', () => {
@@ -270,14 +280,22 @@ describe('"เปลี่ยนลูกค้า" on a saved DRAFT direct quot
     expect(isDirty()).toBe(false);
   });
 
-  it('a later ordinary edit and save carries the NEW project and nothing of the old customer', async () => {
-    renderSaved(draft());
+  it('a later ordinary edit and save carries the NEW project and nothing of the old customer — not its ผู้ติดต่อ either', async () => {
+    const contactName = `${OLD_CONTACT.firstName} ${OLD_CONTACT.lastName}`;
+    renderSaved(draft({
+      contactId: OLD_CONTACT.id, contactName, contactPhone: OLD_CONTACT.phone, contactEmail: null, orderedByName: contactName,
+    }));
     await waitFor(() => expect(fieldValue(QUOTATION_FIELD_IDS.customerName)).toBe(OLD_CUSTOMER.name));
+    // The control: the draft opens on its own contact's card.
+    expect(await screen.findByRole('button', { name: 'เปลี่ยนผู้ติดต่อ' })).not.toBeNull();
     const scope = await openThePickers();
     await pickTheOtherCustomerAndProject();
     confirmTheChange(scope);
     await waitFor(() => expect(fieldValue(QUOTATION_FIELD_IDS.customerName)).toBe(NEW_CUSTOMER.name));
     expect(api.dealQuotations.update).not.toHaveBeenCalled();
+    // The old customer's contact card is gone: the picker is back to choosing, for the new customer.
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'เปลี่ยนผู้ติดต่อ' })).toBeNull());
+    expect(screen.queryByText(contactName)).toBeNull();
 
     fireEvent.change(byId('offerDate'), { target: { value: '2026-09-19' } });
     expect(isDirty()).toBe(true);
@@ -289,8 +307,10 @@ describe('"เปลี่ยนลูกค้า" on a saved DRAFT direct quot
     // The project name is a field the rep owns and every save sends in full, so it must already be
     // the new project's — an old one here would put customer A's project back on the document.
     expect(payload.projectName).toBe(NEW_CUSTOMERS_PROJECT.name);
+    // No contact: an old-customer contactId here would be refused by the server as 400.
+    expect(payload.contactId).toBeNull();
     const sent = JSON.stringify(payload);
-    for (const stale of [OLD_CUSTOMER.name, OLD_CUSTOMER.taxId, OLD_CUSTOMER.address, OLD_CUSTOMER.phone, OLD_PROJECT.name]) {
+    for (const stale of [OLD_CUSTOMER.name, OLD_CUSTOMER.taxId, OLD_CUSTOMER.address, OLD_CUSTOMER.phone, OLD_PROJECT.name, OLD_CONTACT.firstName]) {
       expect(sent).not.toContain(stale);
     }
     await waitFor(() => expect(isDirty()).toBe(false));

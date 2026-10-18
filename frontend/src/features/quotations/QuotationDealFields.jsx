@@ -42,19 +42,15 @@ export function ProjectNamePrintToggle({ id, checked, onChange }) {
   );
 }
 
-// The one line that tells the rep these two print when filled (a blank one prints nothing). Said
-// once, under the pair, and tied to both inputs.
-const ORDERED_BY_CONTACT_HINT = 'Phone และ Email พิมพ์ในใบเสนอราคาเมื่อกรอก';
-
 /**
- * ผู้ติดต่อ's Phone and Email (V192.3) — owner ruling 2026-10-13 (reversing 2026-10-06's "sales record
- * only, not in the pdf"): Phone and Email print on the document's customer contact line when filled
- * and are the only phone/email that line prints (the customer-master contact's are not printed); a
- * blank one prints nothing. Rendered directly under the ผู้ติดต่อ name field on both entry paths;
- * one component for both, for the reason ProjectNamePrintToggle above states. `idSuffix` is
- * "Inline" or "Card", the same pair of suffixes the name field's own two ids carry.
- *
- * The labels are the English words the admin team asked for. Neither field is required.
+ * The CUSTOMER's phone and email (V192.3) — owner ruling 2026-10-13 (reversing 2026-10-06's "sales
+ * record only, not in the pdf"): printed on the document's customer contact line when filled, and
+ * the only phone/email that line prints; a blank one prints nothing. Relabelled โทรศัพท์ลูกค้า /
+ * อีเมลลูกค้า on 2026-10-18 to say whose they are (the ผู้ติดต่อ picker above them carries the
+ * contact's own) — the PDF's labels and values are untouched by that. No hint: the picker's is the
+ * only explanatory text on the form (owner ask). Rendered directly under the ผู้ติดต่อ picker on both
+ * entry paths; one component for both, for the reason ProjectNamePrintToggle above states.
+ * `idSuffix` is "Inline" or "Card". Neither field is required.
  *
  * Phone is a plain text box on purpose: an extension or a second number is normal
  * ("02-123-4567 ต่อ 12"), and a telephone keypad cannot type one.
@@ -67,41 +63,34 @@ const ORDERED_BY_CONTACT_HINT = 'Phone และ Email พิมพ์ในใ�
 export function OrderedByContactFields({ terms, onChange, idSuffix }) {
   const phoneId = `orderedByPhone${idSuffix}`;
   const emailId = `orderedByEmail${idSuffix}`;
-  const hintId = `orderedByContactHint${idSuffix}`;
   const [emailLeft, setEmailLeft] = useState(false);
   const emailError = emailLeft ? orderedByEmailError(terms.orderedByEmail) : undefined;
 
   return (
-    <div className="col-span-full grid gap-[7px]">
-      <div className="grid grid-cols-2 gap-3 mobile:grid-cols-1">
-        <FormField label="Phone" htmlFor={phoneId}>
-          <input
-            id={phoneId}
-            autoComplete="off"
-            maxLength={ORDERED_BY_PHONE_MAX}
-            aria-describedby={hintId}
-            value={terms.orderedByPhone}
-            onChange={(e) => onChange({ orderedByPhone: e.target.value })}
-          />
-        </FormField>
-        <FormField label="Email" htmlFor={emailId} error={emailError}>
-          <input
-            id={emailId}
-            inputMode="email"
-            autoCapitalize="none"
-            autoCorrect="off"
-            spellCheck={false}
-            autoComplete="off"
-            maxLength={ORDERED_BY_EMAIL_MAX}
-            aria-describedby={hintId}
-            value={terms.orderedByEmail}
-            onChange={(e) => onChange({ orderedByEmail: e.target.value })}
-            onBlur={() => setEmailLeft(true)}
-          />
-        </FormField>
-      </div>
-      {/* The same type as FormField's own hint line, so it reads as one. */}
-      <p id={hintId} className="m-0 text-xs font-medium text-text-muted">{ORDERED_BY_CONTACT_HINT}</p>
+    <div className="col-span-full grid grid-cols-2 gap-3 mobile:grid-cols-1">
+      <FormField label="โทรศัพท์ลูกค้า" htmlFor={phoneId}>
+        <input
+          id={phoneId}
+          autoComplete="off"
+          maxLength={ORDERED_BY_PHONE_MAX}
+          value={terms.orderedByPhone}
+          onChange={(e) => onChange({ orderedByPhone: e.target.value })}
+        />
+      </FormField>
+      <FormField label="อีเมลลูกค้า" htmlFor={emailId} error={emailError}>
+        <input
+          id={emailId}
+          inputMode="email"
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
+          autoComplete="off"
+          maxLength={ORDERED_BY_EMAIL_MAX}
+          value={terms.orderedByEmail}
+          onChange={(e) => onChange({ orderedByEmail: e.target.value })}
+          onBlur={() => setEmailLeft(true)}
+        />
+      </FormField>
     </div>
   );
 }

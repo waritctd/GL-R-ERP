@@ -42,6 +42,7 @@ import { DealCustomerCard, QuotationRecipientField } from './DealCustomerCard.js
 import { useDealHasLivePricingRequest } from './DealPicker.jsx';
 import { OrderedByContactFields, ProjectNamePrintToggle, QuotationDealFields } from './QuotationDealFields.jsx';
 import { focusQuotationField, QuotationChecklist } from './QuotationChecklist.jsx';
+import { QuotationContactPicker } from './QuotationContactPicker.jsx';
 import { QuotationDocumentView } from './QuotationDocumentView.jsx';
 import { QuotationAttachmentsLink, QuotationAttachmentsPanel } from './QuotationAttachmentsPanel.jsx';
 import { copyFromQuotation, editorStateFromQuotation } from './quotationCopy.js';
@@ -172,16 +173,10 @@ function emptyTerms(defaults = null) {
     // deal's own project name instead of leaving a rep looking at an empty box for a project the
     // deal already has.
     projectName: '',
-    // Owner-directed reversal of F2 (2026-09-26) — ผู้สั่งซื้อ is now this ONE optional free-text
-    // field: the required contact-picker dropdown, its โทร./อีเมล, and the "ไม่เติม “คุณ”" checkbox
-    // that used to sit under it are gone from this editor (QuotationContactPicker itself still
-    // exists — PricingRequestCreateModal reuses it for an unrelated flow — it is just no longer
-    // wired up here).
-    // NOT remembered (same reasoning as printedByDisplayId above): it is a per-document fact a rep
-    // types deliberately, not a rep-wide preference, so a brand-new quotation always starts blank
-    // -- the dotted signature line, exactly as before this feature.
-    orderedByName: '',
-    // V192.3 — how to reach that person: printed on the document when filled. Not remembered either.
+    // Item 2 (V180) — "ไม่เติม “คุณ” หน้าชื่อผู้ติดต่อ", the checkbox under the ผู้ติดต่อ picker
+    // (back since ruling 2026-10-18). Not remembered: it is about this document's contact.
+    omitContactHonorific: false,
+    // V192.3 — the CUSTOMER's phone and email: printed on the document when filled. Not remembered.
     orderedByPhone: '',
     orderedByEmail: '',
     // Sales feedback #5 (2026-10-06, V192.1) — "ไม่แสดงชื่อโครงการในใบเสนอราคา". NOT remembered
@@ -191,23 +186,10 @@ function emptyTerms(defaults = null) {
   };
 }
 
-// The label and hint of the one free-text field that writes `terms.orderedByName`.
-//
-// Owner, 2026-10-06: "the field ผู้สั่งซื้อ make it name ผู้ติดต่อ instead but the pdf still render as
-// ผู้สั่งซื้อ". Sales know this person as the one they are in contact with; the printed form's fourth
-// signature slot keeps its own heading (QuotationRenderer#SIG_LABELS, and DOC_LABELS.orderedBy in
-// QuotationDocumentView for the on-screen copy) — neither is touched. Because the field's name and
-// the document's heading now DIFFER, the hint is what tells the rep they are the same slot: it
-// names the slot in the document's own word. Do not "tidy" the two into agreement.
-const ORDERED_BY_FIELD_LABEL = 'ผู้ติดต่อ';
-const ORDERED_BY_FIELD_HINT = 'ชื่อที่จะพิมพ์ในช่องลงนาม “ผู้สั่งซื้อ” ของใบเสนอราคา — ถ้าเว้นว่าง จะเป็นเส้นประให้ลูกค้าเซ็นเอง';
-
 // Owner ask 2026-09-10 ("inline deal creation", inline-deal-spec.md): the "ลูกค้าและโครงการ" card
 // state for a brand-new /quotations/new visit with no `?ticket=` -- nothing here exists on the
 // server yet, unlike `terms`/`items` which round-trip a real ticket/quotation.
-// ผู้สั่งซื้อ is NOT here either: since the owner-directed reversal of F2 (2026-09-26) it is just
-// `terms.orderedByName`, a plain optional string the "ผู้สั่งซื้อ" input writes directly -- there
-// is no separate contact object or picker state to split out.
+// ผู้ติดต่อ is NOT here: it is picked per quotation (the `contact` state), never on the deal.
 function emptyDealForm() {
   return { customer: null, project: null, entryChannel: 'UNSPECIFIED' };
 }
@@ -449,9 +431,11 @@ export function QuotationEditorPage({ user, showToast }) {
   }
 
   const [dealForm, setDealForm] = useState(emptyDealForm);
-  // Owner-directed reversal of F2 (2026-09-26): DealCustomerCard no longer reports a `contact` or
-  // `omitContactHonorific` key at all (both removed along with QuotationContactPicker), so this
-  // is now a plain patch-upward with nothing to split out.
+  // ผู้ติดต่อ (owner rulings 2026-10-18): a contact OBJECT of the deal's customer, or null — the
+  // QuotationContactPicker value contract. Sent as `contactId`; the server writes the ผู้สั่งซื้อ
+  // signature name from it. The ref is for flushPendingContactSave (submit and download).
+  const [contact, setContact] = useState(null);
+  const contactPickerRef = useRef(null);
   function updateDealForm(patch) {
     // The ดีล card reports ผู้รับ through the same patch-upward channel; it is quotation state, not
     // deal-form state, so it is split out to its own setter.
@@ -465,6 +449,9 @@ export function QuotationEditorPage({ user, showToast }) {
       setRecipientType(recipientForEntryChannel(dealPatch.entryChannel));
     }
     if (Object.keys(dealPatch).length === 0) return;
+    // A contact belongs to one customer (the server 400s another customer's), so a different
+    // customer drops it. An edit of the same customer's ที่อยู่ also patches `customer`, so ids.
+    if ('customer' in dealPatch && String(dealPatch.customer?.id) !== String(dealForm.customer?.id)) setContact(null);
     setDealForm((prev) => ({ ...prev, ...dealPatch }));
     setDirty(true);
   }
@@ -588,13 +575,26 @@ export function QuotationEditorPage({ user, showToast }) {
       setAdjustments(state.adjustments);
       setDocSettings(state.docSettings);
       setTerms(state.terms);
+      setContact(state.contact ?? null);
       setPendingAttachments([]);
     };
     if (id) {
       if (!quotation) return;
       // The DTO as editor state — see quotationCopy#editorStateFromQuotation, which the copy path
-      // shares, for how each part is read.
-      applyEditorState(editorStateFromQuotation(quotation));
+      // shares, for how each part is read. ผู้ติดต่อ and its "คุณ" box are added here, not there: a
+      // copy is for another customer, so it carries neither. The contact is seeded from the frozen
+      // snapshot, the picker's `{ id, firstName }` stand-in shape (see its header).
+      const state = editorStateFromQuotation(quotation);
+      applyEditorState({
+        ...state,
+        terms: { ...state.terms, omitContactHonorific: quotation.omitContactHonorific === true },
+        contact: quotation.contactId
+          ? {
+            id: quotation.contactId, firstName: quotation.contactName ?? '', lastName: '',
+            phone: quotation.contactPhone, email: quotation.contactEmail,
+          }
+          : null,
+      });
       setSettingsNotice(null);
       setTouchedRowIds(new Set(quotation.items.map((it) => it.id)));
       // Slice 2 (S2-B1): the stored recipient. UNSPECIFIED (every pre-slice-2 direct row) reads as
@@ -633,6 +633,7 @@ export function QuotationEditorPage({ user, showToast }) {
       // below is unchanged for it (and for anything arriving from an existing quotation).
       if (initializedFor === null || initializedFor.startsWith('t-') || initializedFor.startsWith('c-')) {
         setTerms((t) => ({ ...t, projectName: '' }));
+        setContact(null); // picked for the previous deal's customer
         projectNameSeededForTicket.current = null;
         recipientSeededForTicket.current = null;
         setInitializedFor(key);
@@ -1307,12 +1308,12 @@ export function QuotationEditorPage({ user, showToast }) {
   // Every other caller (buildSaveRequest, createMutation, handleInlineCreate) just calls it same
   // as before -- a memoized function is still a function.
   const buildUpsertPayload = useCallback(() => ({
-    // Owner-directed reversal of F2/V167 (2026-09-26): ผู้สั่งซื้อ is no longer a contact the rep
-    // picks — the editor never collects a contactId at all any more, so this is always null.
-    // DealQuotationService#resolveContact (still) falls back to the deal's own ticket contact when
-    // one exists there, and now returns a blank snapshot instead of refusing the save when it
-    // doesn't -- see that method's own comment for the relaxed rule.
-    contactId: null,
+    // ผู้ติดต่อ (ruling 2026-10-18), picked or null. DealQuotationService#resolveContact snapshots it
+    // and writes the ผู้สั่งซื้อ signature name from it, so no `orderedByName` is sent at all. A null
+    // contactId on an update KEEPS the draft's contact, so ล้าง on a draft that had one also says
+    // `clearContact: true`; otherwise the key is left out.
+    contactId: contact?.id ?? null,
+    ...(quotation?.contactId != null && !contact ? { clearContact: true } : {}),
     // ฝ่าย was removed from the quotation (sales feedback Admin 1d; owner 2026-10-06, "remove ฝ่าย
     // field completely"). Sent as an explicit null on EVERY save rather than left out: the server
     // stores what it is sent, so this is what clears a ฝ่าย an older draft still carries — and a
@@ -1353,23 +1354,12 @@ export function QuotationEditorPage({ user, showToast }) {
     // able to correct it") — genuinely editable now, no "missing keeps stored": always sent
     // explicitly, blank included, same discipline as customerNotes just above.
     projectName: terms.projectName || null,
-    // Item 2 ("ไม่เติม “คุณ”", V180) is now DEAD from the editor's side — the checkbox lived under
-    // the ผู้สั่งซื้อ contact-picker, which the owner-directed reversal of F2/V167 (2026-09-26)
-    // removed, so there is no contact name left for it to prefix. Always sent explicitly false
-    // (never omitted, matching the discipline every other field here already uses) rather than
-    // dropped from the payload, so a full PUT never leaves the server guessing what "missing"
-    // means for this key; DealQuotationService#resolveOmitContactHonorific already treats a
-    // missing/null value the same as false, so this is a no-op either way for a document that
-    // predates the removal.
-    omitContactHonorific: false,
-    // Owner-directed reversal of F2 (2026-09-26) — manual, OPTIONAL ผู้สั่งซื้อ signature name.
-    // Always sent explicitly, blank included, same "no missing-keeps-stored" discipline as
-    // projectName/customerNotes above: a blank genuinely clears it back to the dotted line.
-    orderedByName: terms.orderedByName || null,
-    // V192.3 — ผู้ติดต่อ's Phone and Email, printed on the document when filled. Always sent, like
-    // the name beside them: a blank one is an explicit null, which is what clears it. Trimmed
-    // here because the Email is CHECKED trimmed (orderedByEmailError), so what is sent is what
-    // was checked.
+    // Item 2 ("ไม่เติม “คุณ”", V180) — the checkbox under the ผู้ติดต่อ picker. Always an explicit
+    // boolean, so a full PUT never leaves the server guessing what "missing" means.
+    omitContactHonorific: terms.omitContactHonorific === true,
+    // V192.3 — the customer's phone and email, printed on the document when filled. Always sent:
+    // a blank one is an explicit null, which is what clears it. Trimmed here because the Email is
+    // CHECKED trimmed (orderedByEmailError), so what is sent is what was checked.
     orderedByPhone: terms.orderedByPhone.trim() || null,
     orderedByEmail: terms.orderedByEmail.trim() || null,
     // Sales feedback #5 (2026-10-06, V192.1) — "ไม่แสดงชื่อโครงการในใบเสนอราคา". ALWAYS an explicit
@@ -1400,7 +1390,7 @@ export function QuotationEditorPage({ user, showToast }) {
     // to its คำขอราคา (the server 409s the field on that origin), and a legacy direct draft the rep
     // has not given a recipient yet keeps whatever is stored (omitted = unchanged).
     ...(quotation?.origin !== 'PRICING_REQUEST' && recipientType ? { recipientType } : {}),
-  }), [terms, docSettings, items, adjustments, labelByGroupId, quotation?.origin, recipientType]);
+  }), [contact, terms, docSettings, items, adjustments, labelByGroupId, quotation?.origin, quotation?.contactId, recipientType]);
 
   /** The ONE place that builds a save request — autosave, manual บันทึกร่าง, AND submit's own
    * pre-save all call this instead of pairing buildUpsertPayload() with editSeqRef.current
@@ -1678,6 +1668,9 @@ export function QuotationEditorPage({ user, showToast }) {
     // buildSaveRequest/applySavedQuotation exactly like updateMutation's own mutationFn/onSuccess,
     // so a submit's pre-save adopts server ids and clears `dirty` the same way an autosave would.
     mutationFn: async () => {
+      // The picker's in-flight เบอร์/อีเมล save first: the pre-save below makes the server re-read
+      // the live contact, and must not freeze the old value (see flushPendingContactSave).
+      await contactPickerRef.current?.flushPendingContactSave();
       if (dirty) {
         const { payload, sentSeq, sentClientIds } = buildSaveRequest();
         // D3 fix (Opus review 2026-09-16): tracked in `pendingSaveRef` by hand, the same
@@ -1805,9 +1798,7 @@ export function QuotationEditorPage({ user, showToast }) {
           customerName: dealForm.customer.name,
           customerId: dealForm.customer.id,
           projectId: dealForm.project.id,
-          // Owner-directed reversal of F2 (2026-09-26): the inline-create card no longer collects
-          // a ผู้สั่งซื้อ contact at all (see DealCustomerCard) — the ticket's own contactId is
-          // simply left unset.
+          // The deal never carries a ผู้ติดต่อ (ruling 2026-10-18): the quotation does, below.
           contactId: null,
           entryChannel: dealForm.entryChannel,
           priority: 'NORMAL',
@@ -1997,8 +1988,8 @@ export function QuotationEditorPage({ user, showToast }) {
    * editor's own state (autosave hasn't fired yet, or a save is still on the wire) was invisible
    * to it, so a rep who edited a size/รหัสสินค้า and downloaded immediately kept seeing the OLD
    * figures. On an editable (DRAFT, editable-by-this-user) quotation, download now flushes first:
-   *   1. Await the ผู้สั่งซื้อ picker's own in-flight โทร./อีเมล save, if any (same race submit's
-   *      pre-save now guards against — see that mutationFn's own comment).
+   *   1. Await the ผู้ติดต่อ picker's own in-flight เบอร์/อีเมล save, if any (same race submit's
+   *      pre-save guards against — see that mutationFn's own comment).
    *   2. Await whatever save is ALREADY in flight (autosave, a manual บันทึกร่าง, or submit's own
    *      tracked pre-save — see pendingSaveRef's own comment), so this flush never overlaps it.
    *   3. Cancel any pending autosave debounce (it would otherwise fire mid-flush and race the
@@ -2036,6 +2027,7 @@ export function QuotationEditorPage({ user, showToast }) {
     setDownloading(format);
     try {
       if (isEditable) {
+        await contactPickerRef.current?.flushPendingContactSave();
         if (pendingSaveRef.current) {
           // Already toasted by updateMutation's own onError if it fails — fall through to the
           // live dirty/validation checks below rather than assume it succeeded.
@@ -2126,6 +2118,27 @@ export function QuotationEditorPage({ user, showToast }) {
   // The live customer record wins only while the document is a draft: react-query keeps serving a
   // cached record after submit, and a renamed customer must not rewrite a frozen quotation's header.
   const customerName = (isEditable ? summaryCustomer?.name : null) ?? quotation?.customerName ?? ticket?.customerName ?? (isInlineCreate ? dealForm.customer?.name : null) ?? null;
+  // ผู้ติดต่อ (owner rulings 2026-10-18) — the picker over the deal customer's contacts, in the ONE
+  // place each entry path shows it (the two never render together). Its customer is the loaded
+  // deal's, or on a new deal the customer chosen in the ดีล card. With neither — a deal this user
+  // cannot read (a quotation-grant holder) — the picker sits in its own "เลือกลูกค้าก่อน" state.
+  // Optional, never a checklist blocker.
+  const contactPicker = (
+    <div className="col-span-full">
+      <QuotationContactPicker
+        ref={contactPickerRef}
+        customerId={ticket?.customerId ?? (isInlineCreate ? dealForm.customer?.id : null) ?? null}
+        customerName={customerName}
+        value={contact}
+        onChange={(next) => { setContact(next); setDirty(true); }}
+        onResolve={setContact}
+        showToast={showToast}
+        idPrefix="quotation-contact"
+        omitContactHonorific={terms.omitContactHonorific}
+        onChangeOmitContactHonorific={(next) => { setTerms((t) => ({ ...t, omitContactHonorific: next })); setDirty(true); }}
+      />
+    </div>
+  );
   const projectName = ((isEditable && quotation ? terms.projectName : null) || quotation?.projectName) ?? ticket?.projectName ?? (isInlineCreate ? dealForm.project?.name : null) ?? null;
   // The REAL rep's name -- what "(ค่าเริ่มต้น)" (no override) actually means on both
   // salesRepDisplayId selects. Opus review fix (2026-09-14): this used to feed an
@@ -2401,7 +2414,7 @@ export function QuotationEditorPage({ user, showToast }) {
         <div role="status" data-testid="copy-notice" className="rounded-md border border-border bg-surface p-4 text-sm text-text-muted">
           <strong className="block text-text">คัดลอกจากใบเสนอราคา {copySource.number}</strong>
           <p className="m-0 mt-1">
-            รายการสินค้าและเงื่อนไขมาจากใบเดิมแล้ว ยังต้องเลือกลูกค้าและโครงการ และกรอกผู้ติดต่อ (ชื่อ, Phone, Email)
+            รายการสินค้าและเงื่อนไขมาจากใบเดิมแล้ว ยังต้องเลือกลูกค้าและโครงการ และเลือกผู้ติดต่อ และกรอกโทรศัพท์/อีเมลลูกค้า
             ของใบนี้ใหม่ ใบนี้จะได้เลขที่ของตัวเองเมื่อบันทึกร่าง
           </p>
           {/* Item pictures are stored against the source's rows and this editor has no way to
@@ -2484,32 +2497,15 @@ export function QuotationEditorPage({ user, showToast }) {
           ) : null}
 
           {isInlineCreate ? (
-            // Owner ask 2026-09-10: no ticket exists yet -- ลูกค้า/โครงการ/ผู้ติดต่อ/ช่องทาง are
+            // Owner ask 2026-09-10: no ticket exists yet -- ลูกค้า/โครงการ/ช่องทาง are
             // picked (or created) in the ดีล card above instead of the read-only summary below,
             // which has nothing to summarize until the first บันทึกร่าง mints the ticket.
             <>
               <Panel title="ข้อมูลลูกค้าและผู้ขาย">
-                {/* Owner-directed reversal of F2/V167 (2026-09-26) — ผู้สั่งซื้อ is now this ONE
-                    optional free-text field (the required contact-picker dropdown this card used
-                    to render is gone). It prints straight into the signature slot; left blank, the
-                    document prints its dotted line instead. Never a checklist blocker.
-                    Labelled ผู้ติดต่อ since 2026-10-06 — see ORDERED_BY_FIELD_LABEL. */}
-                {/* V192.3 — the name and, directly under it, how to reach that person; then the
-                    designer. One group, spaced as the rest of this page spaces a field from the
-                    next (gap-3). */}
+                {/* ผู้ติดต่อ, directly under it the customer's phone/email, then the designer. One
+                    group, spaced as the rest of this page spaces a field from the next (gap-3). */}
                 <div className="grid gap-3">
-                  <FormField
-                    label={ORDERED_BY_FIELD_LABEL}
-                    htmlFor="orderedByNameInline"
-                    hint={ORDERED_BY_FIELD_HINT}
-                  >
-                    <input
-                      id="orderedByNameInline"
-                      value={terms.orderedByName}
-                      maxLength={255}
-                      onChange={(e) => { setTerms((t) => ({ ...t, orderedByName: e.target.value })); setDirty(true); }}
-                    />
-                  </FormField>
+                  {contactPicker}
                   <OrderedByContactFields
                     terms={terms}
                     onChange={(patch) => { setTerms((current) => ({ ...current, ...patch })); setDirty(true); }}
@@ -2637,26 +2633,9 @@ export function QuotationEditorPage({ user, showToast }) {
                     />
                   </div>
                 ) : null}
-                {/* Owner-directed reversal of F2/V167 (2026-09-26) — ผู้สั่งซื้อ is now this ONE
-                    optional free-text field; the required QuotationContactPicker dropdown (and
-                    its โทร./อีเมล display and "ไม่เติม “คุณ”" checkbox) that used to render here is
-                    removed. It prints straight into the signature slot; left blank, the document
-                    prints its dotted line instead. Never a checklist blocker.
-                    Labelled ผู้ติดต่อ since 2026-10-06 — see ORDERED_BY_FIELD_LABEL. */}
-                <FormField
-                  label={ORDERED_BY_FIELD_LABEL}
-                  htmlFor="orderedByNameCard"
-                  hint={ORDERED_BY_FIELD_HINT}
-                >
-                  <input
-                    id="orderedByNameCard"
-                    value={terms.orderedByName}
-                    maxLength={255}
-                    onChange={(e) => { setTerms((t) => ({ ...t, orderedByName: e.target.value })); setDirty(true); }}
-                  />
-                </FormField>
-                {/* V192.3 — directly under the name: how to reach that person. Spans the card's
-                    two columns, so Phone and Email sit side by side under ผู้ติดต่อ. */}
+                {contactPicker}
+                {/* V192.3 — directly under ผู้ติดต่อ: the customer's phone and email, side by side
+                    across the card's two columns. */}
                 <OrderedByContactFields
                   terms={terms}
                   onChange={(patch) => { setTerms((current) => ({ ...current, ...patch })); setDirty(true); }}
@@ -3495,6 +3474,8 @@ export function QuotationEditorPage({ user, showToast }) {
               queryClient.invalidateQueries({ queryKey: queryKeys.dealQuotationDetail(id) }),
             ]);
             setTerms((t) => ({ ...t, projectName: project.name }));
+            // The server dropped the old customer's contact from every draft; so does the picker.
+            setContact(null);
             showToast('success', 'เปลี่ยนลูกค้าแล้ว');
           }}
         />

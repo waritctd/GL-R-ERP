@@ -199,10 +199,10 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
             .contains("Printed by").contains("Quoted by").contains("Approved by").contains("Ordered by");
         assertThat(str(sheet, 38, 0))
             .contains("(Jennet Longsakul)").contains("(Rarm Itarat)");
-        // Owner-directed reversal of F2 (2026-09-26), F2-reversal regression guard: a contact
-        // ("Aisha Rahman") IS recorded on this deal, but no manual orderedByName was ever set on
-        // this request -- the ผู้สั่งซื้อ/"Ordered by" slot must stay the dotted placeholder,
-        // never fall back to the contact name any more.
+        // Regression guard, ruling 2026-10-18: a contact ("Aisha Rahman") IS recorded on this deal,
+        // but this request picks none and the deal's contact is never inherited, so the
+        // server-derived orderedByName is null -- the ผู้สั่งซื้อ/"Ordered by" slot stays the dotted
+        // placeholder and never falls back to a contact name (owner reversal of F2, 2026-09-26).
         assertThat(str(sheet, 38, 0)).doesNotContain("(Aisha Rahman)").contains("(..........................)");
         // No VAT row survived onto the sheet.
         assertThat(allText(sheet)).noneMatch(t -> t.contains("ภาษีมูลค่าเพิ่ม"));
@@ -861,12 +861,11 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
 
         String names = str(renderSheet(approved.id()), 38, 0);
         assertThat(names).contains("(สมชาย ไม่มีชื่ออังกฤษ)");
-        // Owner-directed reversal of F2 (2026-09-26): the placeholder's PRESENCE is no longer a
-        // signal about this fallback -- the ผู้สั่งซื้อ/"Ordered by" slot always prints it now
-        // (no manual orderedByName was set on this fixture), independent of the approver-name
-        // fallback this test is actually about. Assert the fallback name landed in the APPROVER
-        // slot specifically, rather than a blanket "no placeholder anywhere" that would no longer
-        // hold.
+        // The placeholder's PRESENCE is no signal about this fallback: the ผู้สั่งซื้อ/"Ordered by"
+        // slot prints it too, because this fixture picks no ผู้ติดต่อ (ruling 2026-10-18: the
+        // server derives orderedByName from the quotation's picked contact, null without one, and
+        // never from the deal's). Assert the fallback name landed in the APPROVER slot
+        // specifically, rather than a blanket "no placeholder anywhere" that would not hold.
         assertThat(names.indexOf("(สมชาย ไม่มีชื่ออังกฤษ)"))
             .as("the fallback name replaces the approver's own dotted slot, not the ผู้สั่งซื้อ one")
             .isLessThan(names.indexOf("(..........................)"));

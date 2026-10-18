@@ -376,8 +376,8 @@ describe('PricingRequestCreateModal', () => {
     expect(screen.queryByLabelText('ฝ่าย')).toBeNull();
   });
 
-  // ── GLA-125 follow-up: ผู้สั่งซื้อ (QuotationContactPicker reuse) ──────────────────────────
-  it('scopes ผู้สั่งซื้อ to the deal\'s customer, and sends the picked contact\'s id as recipientContactId', async () => {
+  // ── GLA-125 follow-up: ผู้ติดต่อ (QuotationContactPicker reuse; labelled ผู้สั่งซื้อ until 2026-10-18) ──
+  it('scopes ผู้ติดต่อ to the deal\'s customer, and sends the contact picked from the list as recipientContactId', async () => {
     api.customers.contacts.mockResolvedValueOnce({
       contacts: [{ id: 77, firstName: 'สมชาย', lastName: 'ทดสอบ', phone: '0812345678', email: 'somchai@example.com' }],
     });
@@ -386,7 +386,8 @@ describe('PricingRequestCreateModal', () => {
     fillRequiredFields();
 
     await waitFor(() => expect(api.customers.contacts).toHaveBeenCalledWith(501));
-    fireEvent.change(screen.getByLabelText(/^ผู้สั่งซื้อ/), { target: { value: '77' } });
+    fireEvent.click(screen.getByLabelText(/^ผู้ติดต่อ/));
+    fireEvent.click(await screen.findByRole('option', { name: /สมชาย ทดสอบ/ }));
 
     fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
 
@@ -394,12 +395,12 @@ describe('PricingRequestCreateModal', () => {
     expect(createFn.mock.calls[0][0]).toMatchObject({ recipientContactId: 77 });
   });
 
-  it('leaves ผู้สั่งซื้อ disabled with no customer to scope to, and sends recipientContactId: null', async () => {
+  it('leaves ผู้ติดต่อ disabled with no customer to scope to, and sends recipientContactId: null', async () => {
     const { createFn } = renderModal();
     fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
     fillRequiredFields();
 
-    expect(screen.getByLabelText(/^ผู้สั่งซื้อ/).disabled).toBe(true);
+    expect(screen.getByLabelText(/^ผู้ติดต่อ/).disabled).toBe(true);
 
     fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
 
@@ -689,7 +690,7 @@ describe('PricingRequestCreateModal edit mode (Fix 2)', () => {
     expect(updateFn.mock.calls[0][1].deptCode).toBeNull();
   });
 
-  it('seeds ผู้สั่งซื้อ from the persisted request\'s recipientContactId/customerId (GLA-125 follow-up), and preserves it on save', async () => {
+  it('seeds ผู้ติดต่อ from the persisted request\'s recipientContactId/customerId (GLA-125 follow-up), and preserves it on save', async () => {
     api.customers.contacts.mockResolvedValueOnce({
       contacts: [{ id: 42, firstName: 'วิภา', lastName: 'ทดสอบ', phone: '0898765432', email: 'wipa@example.com' }],
     });
@@ -712,11 +713,12 @@ describe('PricingRequestCreateModal edit mode (Fix 2)', () => {
     );
 
     // Seeded immediately as the "stand-in" ({ id, firstName: recipientLabel }) even before the
-    // real contact list resolves -- see the `contact` state's own comment.
-    expect(screen.getByLabelText(/^ผู้สั่งซื้อ/).value).toBe('42');
+    // real contact list resolves -- see the `contact` state's own comment. The selected card shows it.
+    expect(screen.getByText('เจ้าของโครงการ ข.')).not.toBeNull();
     await waitFor(() => expect(api.customers.contacts).toHaveBeenCalledWith(501));
-    // Once resolved, the SELECT shows the real contact's name, not the stand-in recipientLabel.
-    await waitFor(() => expect(screen.getByDisplayValue('วิภา ทดสอบ')).not.toBeNull());
+    // Once resolved, the card shows the real contact's name, not the stand-in recipientLabel.
+    await waitFor(() => expect(screen.getByText('วิภา ทดสอบ')).not.toBeNull());
+    expect(screen.queryByText('เจ้าของโครงการ ข.')).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
 

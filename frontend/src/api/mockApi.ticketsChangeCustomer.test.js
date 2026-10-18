@@ -31,8 +31,13 @@ async function freshDeal() {
 
 describe('mock tickets.changeCustomer', () => {
   it('re-snapshots every DRAFT quotation of the deal in the same call, and leaves other deals alone', async () => {
-    const { ticketId, to, toProject } = await freshDeal();
-    const { quotation: draft } = await api.dealQuotations.create(ticketId, { recipientType: 'DESIGNER', items: [ONE_ITEM] });
+    const { ticketId, from, to, fromProject, toProject } = await freshDeal();
+    // The draft carries a contact of the OLD customer, picked on it -- and its name as the signature name.
+    const { contact: fromContact } = await api.customers.createContact(from.id, { firstName: 'สมชาย', lastName: 'ลูกค้าเดิม' });
+    const { quotation: draft } = await api.dealQuotations.create(ticketId, {
+      recipientType: 'DESIGNER', contactId: fromContact.id, items: [ONE_ITEM],
+    });
+    expect(draft).toMatchObject({ contactId: fromContact.id, orderedByName: 'สมชาย ลูกค้าเดิม' });
     const { quotation: pendingOnOtherDeal } = await api.dealQuotations.get(2); // seeded, ticket 18, PENDING_APPROVAL
     expect(pendingOnOtherDeal.docStatus).toBe('PENDING_APPROVAL');
 
@@ -42,9 +47,17 @@ describe('mock tickets.changeCustomer', () => {
     expect(after).toMatchObject({
       customerName: to.name, customerAddress: to.address, customerTaxId: to.taxId, customerPhone: to.phone,
       projectName: toProject.name, contactId: null, contactName: null, contactPhone: null, contactEmail: null,
+      orderedByName: null, // the old customer's contact must not print (TicketChangeCustomerIntegrationTest)
     });
     const { quotation: otherAfter } = await api.dealQuotations.get(2);
     expect(otherAfter).toEqual(pendingOnOtherDeal);
+
+    // Back to the original customer WITH a contact: the drafts freeze that contact, name included.
+    await api.tickets.changeCustomer(ticketId, { customerId: from.id, projectId: fromProject.id, contactId: fromContact.id });
+    const { quotation: back } = await api.dealQuotations.get(draft.id);
+    expect(back).toMatchObject({
+      customerName: from.name, contactId: fromContact.id, contactName: 'สมชาย ลูกค้าเดิม', orderedByName: 'สมชาย ลูกค้าเดิม',
+    });
   });
 
   it('refuses a deal that has a live pricing request (409) and leaves the customer where it was', async () => {

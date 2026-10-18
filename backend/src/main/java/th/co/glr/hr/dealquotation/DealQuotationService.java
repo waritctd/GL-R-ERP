@@ -365,9 +365,9 @@ public class DealQuotationService {
             // pricing request/decision.
             DealQuotationRepository.ORIGIN_DEAL_DIRECT, recipientType, QuotationRecipient.thaiLabel(recipientType),
             null, null,
-            // Owner-directed reversal of F2 (2026-09-26) — manual, optional buyer name; blank
-            // clears it to null, same discipline as every other free-text header field here.
-            blankToNull(request.orderedByName()),
+            // Ruling 2026-10-18: the ผู้สั่งซื้อ signature name is the picked contact's name (null
+            // when none is picked), written on every DRAFT save. request.orderedByName() is ignored.
+            contact.name(),
             orderedByPhone, orderedByEmail));
         advanceDealToRecipientStage(ticketId, recipientType, actor);
         // Sales feedback #5 (V192.1, 2026-10-06) — "ไม่แสดงชื่อโครงการในใบเสนอราคา". A brand-new
@@ -613,10 +613,9 @@ public class DealQuotationService {
             subtotal, null, quotationNumber.revisionNo(), null, items,
             "PRICING_REQUEST", summary.recipientType(), summary.recipientLabel(),
             summary.id(), decision.id(),
-            // Owner-directed reversal of F2 (2026-09-26) — nothing to inherit on a brand-new
-            // PRICING_REQUEST-origin create; the rep sets a manual name later via #update, same
-            // as any DEAL_DIRECT document. V192.3: nor a phone or an email for that name.
-            null, null, null));
+            // Ruling 2026-10-18: the signature name is the recipient contact's name, as #create
+            // writes it. V192.3: no phone or email is carried over for it.
+            contact.name(), null, null));
         // D-2: the same creation-time advance #create performs, on the recipient this document
         // carries over from its source คำขอราคา. Once ขั้น 4 is only reachable by quoting someone,
         // THIS is the call that gets a PCR-route deal there.
@@ -1013,7 +1012,11 @@ public class DealQuotationService {
                     + ") — หากจะเสนอราคาให้ผู้รับรายอื่น ให้สร้างใบเสนอราคาใหม่บนดีลนี้");
             }
         }
-        ContactSnapshot contact = resolveContact(request.contactId(), existing.contactId(), ticket);
+        // ล้าง (ruling 2026-10-18): clearContact stores a blank snapshot whatever contactId says, so
+        // updateHeader also writes a null signature name below.
+        ContactSnapshot contact = Boolean.TRUE.equals(request.clearContact())
+            ? new ContactSnapshot(null, null, null, null)
+            : resolveContact(request.contactId(), existing.contactId(), ticket);
         // ⚠️ v3, review fix F1: a MISSING priceMode on UPDATE keeps the STORED one. #resolvePriceMode's
         // blank→NET default is correct on CREATE (a brand-new document with no mode chosen IS a NET
         // document) and catastrophic here. Any client that omits the field — a pre-v3 client, or a
@@ -1107,10 +1110,9 @@ public class DealQuotationService {
             // on this same call (customerNotes, deptCode, unitCode).
             blankToNull(request.projectName()),
             omitContactHonorific, fullPaymentTerm,
-            // Owner-directed reversal of F2 (2026-09-26) — manual, optional buyer name; the
-            // editor always sends its current value, so blank genuinely clears it back to the
-            // dotted placeholder, same discipline as projectName/customerNotes above.
-            blankToNull(request.orderedByName()),
+            // Ruling 2026-10-18: re-derived from the resolved contact on every DRAFT save, same as
+            // #create; request.orderedByName() is ignored.
+            contact.name(),
             // V192.3 — and so do a blank phone and a blank email beside it.
             orderedByPhone, orderedByEmail);
         if (rows == 0) {
@@ -1399,11 +1401,11 @@ public class DealQuotationService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ใบเสนอราคาต้องมีอย่างน้อยหนึ่งรายการก่อนส่งขออนุมัติ");
         }
         // ⚠️ Owner-directed reversal of V167/F2 (2026-09-26): ผู้สั่งซื้อ used to be mandatory here
-        // ("กรุณาระบุผู้สั่งซื้อ" refused a submit with no resolvable contact) — the frontend's
-        // required contact-picker dropdown is gone, replaced by a single optional free-text
-        // signature-name field (`orderedByName`, unrelated to `contactId`/`contactName`), so a
-        // quotation with no contact at all must now submit successfully. See #resolveContact's own
-        // comment for the matching create/update-side relaxation.
+        // ("กรุณาระบุผู้สั่งซื้อ" refused a submit with no resolvable contact); a quotation with no
+        // contact at all now submits successfully. Ruling 2026-10-18 keeps that: the ผู้ติดต่อ is
+        // picked per quotation and optional, the server derives the ผู้สั่งซื้อ signature name
+        // (ordered_by_name) from it, and the deal's own contact is never inherited. See
+        // #resolveContact's own comment for the matching create/update side.
         // Item 4 ("ไม่รับมัดจำ", V181, owner ruling 2026-09-16): a zero-deposit document must name
         // ONE of the three payment terms before an approver ever sees it — create/update allow a
         // DRAFT to be saved with no term chosen yet (isZeroDeposit(...) ? blankToNull(...) : null),
@@ -2476,8 +2478,9 @@ public class DealQuotationService {
         long newId = quotations.insertDraft(new InsertDraftParams(
             source.ticketId(), newNumber, actor.id(), source.salesRepId(),
             source.customerName(), source.customerAddress(), source.customerTaxId(), source.customerPhone(),
-            // The source's frozen snapshot, verbatim -- the rep re-chooses (or the ticket's
-            // contact re-defaults) only on the copy's own next save through #update.
+            // The source's frozen snapshot, verbatim -- the rep re-picks or clears it on the
+            // copy's own next save through #update; nothing re-defaults from the deal's contact
+            // (ruling 2026-10-18).
             new ContactSnapshot(source.contactId(), source.contactName(), source.contactPhone(), source.contactEmail()),
             source.projectName(), source.deptCode(), source.unitCode(), source.offerDate(),
             source.depositPercent(), source.remainderMode(), source.creditDays(), source.validityDays(),
@@ -2873,28 +2876,32 @@ public class DealQuotationService {
     }
 
     /**
-     * Resolves the ผู้สั่งซื้อ for a create/update and returns the FROZEN snapshot to store —
+     * Resolves the ผู้ติดต่อ for a create/update and returns the FROZEN snapshot to store —
      * precedence: the request's own {@code contactId}, else the contact the draft already carries
-     * ({@code existingContactId}, update only), else the deal's contact
-     * ({@code sales.ticket.contact_id}).
+     * ({@code existingContactId}, update only), else none (a blank snapshot).
+     *
+     * Ruling 2026-10-18: the contact is picked per quotation. The deal form no longer collects one,
+     * so the deal's {@code sales.ticket.contact_id} is NOT a fallback any more (it used to be the
+     * third arm) and nothing is pre-filled from it or from another quotation. The column itself
+     * stays, and {@code TicketService#changeCustomer} still rewrites it.
      *
      * ⚠️ Owner-directed reversal of V167/F2 (2026-09-26): a resolvable contact is NO LONGER
      * required. This used to throw 400 "กรุณาระบุผู้สั่งซื้อ" when nothing in the precedence chain
-     * resolved (the owner's original rule: a quotation could not be saved without one) — the
-     * frontend's required contact-picker dropdown that rule existed for is gone (ผู้สั่งซื้อ is now
-     * a single optional free-text signature-name field, `orderedByName`, tracked entirely
-     * separately from this contact snapshot), so a create/update/submit with no contact anywhere in
-     * the chain now returns a blank snapshot instead of refusing. A contact id that IS given (or
-     * inherited) is still validated exactly as before: it must exist and belong to the deal's
+     * resolved (the owner's original rule: a quotation could not be saved without one); a
+     * create/update/submit with no contact anywhere in the chain now returns a blank snapshot
+     * instead of refusing, and the 2026-10-18 ruling keeps the contact optional. A contact id that IS given (or
+     * kept from the draft) is still validated exactly as before: it must exist and belong to the deal's
      * customer — a contact id from another customer is a client bug or a probe, still refused as
      * 400 with the same wording so nothing about other customers' contacts leaks. The name/phone/
      * email are read NOW and written onto the quotation; a later edit of the contact row never
      * changes the document (see V167's header for why that matters for an approved, emailed PDF).
+     *
+     * <p>Ruling 2026-10-18: the snapshot's name is also the ผู้สั่งซื้อ signature name — #create,
+     * #update and #createFromPricingRequest write it to {@code ordered_by_name} — so a contact is
+     * still optional, but the free-text name is no longer taken from the request.
      */
     private ContactSnapshot resolveContact(Long requestedContactId, Long existingContactId, TicketSummaryDto ticket) {
-        Long contactId = requestedContactId != null ? requestedContactId
-            : existingContactId != null ? existingContactId
-            : ticket.contactId();
+        Long contactId = requestedContactId != null ? requestedContactId : existingContactId;
         if (contactId == null) {
             return new ContactSnapshot(null, null, null, null);
         }
@@ -3125,7 +3132,7 @@ public class DealQuotationService {
         String phone = blankToNull(orderedByPhone);
         if (phone != null && phone.length() > ORDERED_BY_PHONE_MAX) {
             throw new ApiException(HttpStatus.BAD_REQUEST,
-                "Phone ของผู้ติดต่อยาวเกิน " + ORDERED_BY_PHONE_MAX + " ตัวอักษร");
+                "Phone ของลูกค้ายาวเกิน " + ORDERED_BY_PHONE_MAX + " ตัวอักษร");
         }
         return phone;
     }
@@ -3143,10 +3150,10 @@ public class DealQuotationService {
         }
         if (email.length() > ORDERED_BY_EMAIL_MAX) {
             throw new ApiException(HttpStatus.BAD_REQUEST,
-                "Email ของผู้ติดต่อยาวเกิน " + ORDERED_BY_EMAIL_MAX + " ตัวอักษร");
+                "Email ของลูกค้ายาวเกิน " + ORDERED_BY_EMAIL_MAX + " ตัวอักษร");
         }
         if (!ORDERED_BY_EMAIL_SHAPE.matcher(email).matches()) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Email ของผู้ติดต่อ: รูปแบบอีเมลไม่ถูกต้อง");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Email ของลูกค้า: รูปแบบอีเมลไม่ถูกต้อง");
         }
         return email;
     }

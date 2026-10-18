@@ -1227,8 +1227,13 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
     @Test
     void refreshDraftContactSnapshot_updatesAPricingRequestOriginDraftToo() {
         PricingDecisionDto decision = approvedDecision("NET", id -> List.of());
+        // The PCR-origin draft's contact comes from the PCR's own picked recipient contact — the
+        // deal's contact is never inherited (ruling 2026-10-18, DealQuotationService#resolveContact).
+        jdbc.update("UPDATE sales.pricing_request SET recipient_contact_id = :contactId WHERE pricing_request_id = :id",
+            Map.of("contactId", contactId, "id", decision.pricingRequestId()));
         DealQuotationDto quotation = quotationService.createFromPricingRequest(decision.pricingRequestId(), salesActor);
         assertThat(quotation.contactPhone()).isEqualTo("081-000-0000");
+        assertThat(quotation.orderedByName()).as("signature name = the recipient contact's").isEqualTo("สมชาย ทดสอบ");
 
         jdbc.update("UPDATE customers.contact SET phone = :phone, email = :email WHERE contact_id = :id",
             Map.of("phone", "089-999-9999", "email", "updated-contact@example.com", "id", contactId));

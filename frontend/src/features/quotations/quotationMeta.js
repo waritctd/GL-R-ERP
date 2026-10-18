@@ -1882,9 +1882,10 @@ export function validateAdjustment(adjustment) {
 // ── "ข้อมูลที่ยังไม่ครบ" checklist (owner, 2026-09-11) ──────────────────────────────────────────
 // "validate with the quotation which field have not been filled yet". The fields are the ones her
 // reference documents print in their HEADER — customer name, ที่อยู่, เลขที่ผู้เสียภาษี, โทร.,
-// โครงการ — plus each item's own completeness. ผู้สั่งซื้อ used to be here too (its own
-// contact/โทร./อีเมล checks) until the owner-directed reversal of F2/V167 (2026-09-26) made it a
-// single optional free-text field with nothing left to validate.
+// โครงการ — plus each item's own completeness. ผู้สั่งซื้อ is not here: its contact/โทร./อีเมล
+// checks went with the owner-directed reversal of F2/V167 (2026-09-26), and since the ruling of
+// 2026-10-18 it is the optional ผู้ติดต่อ picked per quotation, from which the server derives the
+// signature name (`ordered_by_name`) — nothing is inherited from the deal, nothing to validate.
 //
 // ⚠️ Two tiers, and the split is deliberately NOT invented here. A check BLOCKS บันทึกร่าง /
 // ส่งขออนุมัติ only when the backend ALREADY refuses the same state:
@@ -2145,10 +2146,11 @@ export function buildQuotationChecklist({
   } else if (projectName !== undefined && blankValue(projectName)) {
     push(QUOTATION_CHECK.DEAL_PROJECT, 'ดีลนี้ยังไม่มีโครงการ (แก้ได้ที่หน้ารายละเอียดดีล)');
   }
-  // ผู้สั่งซื้อ is no longer checked here at all — owner-directed reversal of F2/V167 (2026-09-26)
-  // dropped QUOTATION_CHECK.CONTACT/CONTACT_PHONE/CONTACT_EMAIL along with the required
-  // contact-picker they gated: ผู้สั่งซื้อ is now a single optional free-text field
-  // (`terms.orderedByName`) that can never be "missing" in a way worth flagging.
+  // ผู้สั่งซื้อ is not checked here — QUOTATION_CHECK.CONTACT/CONTACT_PHONE/CONTACT_EMAIL went with
+  // the owner-directed reversal of F2/V167 (2026-09-26). Ruling 2026-10-18: it is the ผู้ติดต่อ
+  // picked per quotation (`contactId`), optional, and the server derives the signature name
+  // (`ordered_by_name`) from it; nothing is inherited from the deal's contact, so it can never be
+  // "missing" in a way worth flagging.
   // ผู้ออกแบบ (unitCode) is deliberately NOT checked — owner ruling 2026-09-16,
   // "make ผู้ออกแบบ optional including ฝ่าย". The backend never required it; this list used to
   // warn "ยังไม่ได้เลือกผู้ออกแบบ", which read as a required field.
@@ -2168,7 +2170,7 @@ export function buildQuotationChecklist({
   // has a different id on each entry path (two forms, one page never renders both).
   const emailError = orderedByEmailError(orderedByEmail);
   if (emailError) {
-    push(QUOTATION_CHECK.ORDERED_BY_EMAIL, `Email ของผู้ติดต่อ: ${emailError}`,
+    push(QUOTATION_CHECK.ORDERED_BY_EMAIL, `Email ของลูกค้า: ${emailError}`,
       isInlineCreate ? 'orderedByEmailInline' : 'orderedByEmailCard');
   }
   if (duplicateGroupIndex != null) {

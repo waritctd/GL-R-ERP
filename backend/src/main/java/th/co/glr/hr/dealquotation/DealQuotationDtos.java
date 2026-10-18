@@ -204,13 +204,13 @@ public final class DealQuotationDtos {
          * the list/search loops (which stay DEAL_DIRECT-only) — see
          * {@code DealQuotationService#requireQuotation}. */
         List<DealQuotationRepository.RemovedLinkedItemDto> removedCeoItems,
-        /** Owner-directed reversal of F2 (2026-09-10, hardened 2026-09-15, reversed 2026-09-26) —
-         * see {@code DealQuotationRenderAdapter#orderedByName}'s own Javadoc for the full history.
-         * The ผู้สั่งซื้อ signature slot no longer auto-fills from {@link #contactName}/
-         * {@link #customerName} at all: this is the ONLY source it ever prints, and it is a
-         * manual, OPTIONAL field a sales rep types in the editor ({@code sales.quotation.ordered_by_name},
-         * V192). Null/blank (the default, and every pre-V192 row) prints the dotted placeholder —
-         * the customer signs on paper — exactly like every other signature slot with nothing set. */
+        /** The ผู้สั่งซื้อ signature-slot name ({@code sales.quotation.ordered_by_name}, V192) — the
+         * ONLY source {@code DealQuotationRenderAdapter#orderedByName} prints there. Ruling
+         * 2026-10-18: {@code DealQuotationService} writes it from the picked contact's name on every
+         * DRAFT save (null when no contact is picked) and no longer takes it from the request, so a
+         * draft prints its contact or the dotted line. A row past DRAFT keeps whatever it was frozen
+         * with (a name typed under the 2026-09-26 rule included); a revision/reorder copies it.
+         * Null/blank prints the dotted placeholder — the customer signs on paper. */
         String orderedByName,
         /** Sales feedback #5 (2026-10-06, V192.1) — "ไม่แสดงชื่อโครงการในใบเสนอราคา"
          * ({@code sales.quotation.hide_project_name}). When {@code true},

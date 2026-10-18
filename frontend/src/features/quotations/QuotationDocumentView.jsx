@@ -321,12 +321,12 @@ export function QuotationDocumentView({ quotation }) {
       </Panel>
 
       {/* Four slots, matching the printed form's own signature block — ผู้สั่งซื้อ is the fourth.
-          Owner-directed REVERSAL of F2 (2026-09-10, hardened 2026-09-15, reversed 2026-09-26):
-          F2 used to auto-fill this slot from the contact/customer name; it never does any more.
-          The slot shows ONLY the rep's manually-typed `orderedByName` (see the "เขียนผู้สั่งซื้อ
-          เอง" field in the editor) and falls back to "-" here (the dotted signature line in the
-          actual PDF/XLSX) when left blank — mirroring exactly what
-          DealQuotationRenderAdapter#orderedByName prints, so screen and paper can never disagree. */}
+          It shows ONLY the stored `orderedByName` and falls back to "-" here (the dotted signature
+          line in the actual PDF/XLSX) when it is null — mirroring exactly what
+          DealQuotationRenderAdapter#orderedByName prints, so screen and paper can never disagree.
+          Ruling 2026-10-18: nobody types that name any more. The ผู้ติดต่อ is picked per quotation
+          and the server derives `orderedByName` from it on every draft save (null with none); the
+          deal's own contact is never inherited. Issued rows keep the name they were issued with. */}
       <Panel title="ผู้เกี่ยวข้อง">
         <div className="grid grid-cols-4 gap-4 tablet:grid-cols-2 mobile:grid-cols-1 text-center text-sm">
           <div>
