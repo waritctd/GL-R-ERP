@@ -112,8 +112,8 @@ export const QuotationContactPicker = forwardRef(function QuotationContactPicker
     `${contactDisplayName(c)} ${c.phone ?? ''} ${c.email ?? ''}`.toLocaleLowerCase('th').includes(needle)
   ));
 
-  // A stand-in seeded from a NAME only (the ?ticket= path seeds `{ id, firstName }` off the
-  // ticket) does not know the ผู้สั่งซื้อ's โทร./อีเมล. Once the real option arrives, hand it up
+  // A stand-in seeded from a NAME only (the PCR modal seeds `{ id, firstName }` off the deal's
+  // contact; the quotation editor no longer seeds anything) does not know the contact's โทร./อีเมล. Once the real option arrives, hand it up
   // through `onResolve` — deliberately NOT `onChange`, which the parent treats as the rep's own
   // edit (it marks the quotation dirty). `phone === undefined` is the "unknown" marker; a known
   // empty value is null/'' and is left alone.

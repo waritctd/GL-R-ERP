@@ -228,6 +228,9 @@ describe('QuotationContactPicker — ใช้ชื่อเดียวกั�
       1,
       expect.objectContaining({ firstName: 'วิภา สมิทธ์', lastName: null }),
     ));
+    // …and the created contact becomes the selection (the modal's button says เพิ่ม AND เลือก):
+    // the selected card, with its เปลี่ยน trigger, replaces the closed select.
+    expect(await screen.findByRole('button', { name: 'เปลี่ยนผู้ติดต่อ' })).toBeTruthy();
   });
 });
 
