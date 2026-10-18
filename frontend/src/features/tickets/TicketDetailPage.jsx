@@ -301,7 +301,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // The ticket workspace's persistent chrome (state header + detail tabs) is
   // content-dependent: primary actions, project names, and role-specific tabs
   // all change its height. Measure the rendered sticky region once and let
-  // scroll-padding + the desktop context rail read the same value.
+  // the content wrapper's descendant scroll-margin read the same value.
   const ticketStickyChromeRef = useRef(null);
   const [ticketChromeCondensed, setTicketChromeCondensed] = useState(false);
 
@@ -775,8 +775,19 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     const mobileQuery = typeof window.matchMedia === 'function'
       ? window.matchMedia('(max-width: 720px)')
       : null;
+    // Condensing removes most of the header's height. When the page is shorter than that, scrollHeight
+    // drops, scrollTop clamps to 0, the header un-condenses and the page can never be scrolled. So
+    // only condense when scroll room remains once condensed. The predicate reads the same either
+    // way: condensing shrinks maxScroll and the chrome by the same amount, so it cannot flip itself.
     const updateCondensed = () => {
-      setTicketChromeCondensed(scroller.scrollTop > 8 && !mobileQuery?.matches);
+      const maxScroll = scroller.scrollHeight - scroller.clientHeight;
+      // ponytail: the whole chrome height stands in for the shrink (expanded - condensed) because the
+      // condensed height is unknown until it renders; measure it if pages that are one condensed
+      // header short of condensing ever matter. Read live, in the same layout as scrollHeight above
+      // (which already forced it): a cached height lags a frame behind a condense and would flip
+      // the predicate on every scroll event.
+      const roomOnceCondensed = maxScroll - chrome.getBoundingClientRect().height;
+      setTicketChromeCondensed(scroller.scrollTop > 8 && roomOnceCondensed > 8 && !mobileQuery?.matches);
     };
 
     updateCondensed();
@@ -1600,6 +1611,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       <div
         ref={ticketStickyChromeRef}
         data-testid="ticket-detail-sticky-chrome"
+        data-sticky-chrome=""
         className="sticky top-[calc(var(--deal-scroll-pad-y)*-1)] z-10 bg-surface pt-[var(--deal-scroll-pad-y)] mobile:static mobile:bg-transparent mobile:pt-0"
       >
         <div className="overflow-hidden rounded-md border border-border bg-surface mobile:overflow-visible mobile:border-0 mobile:bg-transparent">
@@ -1634,7 +1646,11 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           full-width stack, since the rail is gone and its four sections were
           redistributed (see the overview TabPanel above and DealHistoryPanel
           below) rather than replaced with a second column of anything else. */}
-      <div className="flex min-w-0 flex-col gap-4">
+      {/* min-[721px]:[&_*:not([role=dialog]_*)]:scroll-mt: desktop-only header clearance on the content's
+          descendants, never on the sticky header's own controls (focusing those must not scroll the page)
+          and not inside non-portalled Modal bodies (role="dialog").
+          `mobile` is max-width:720px, so the two bands never overlap. */}
+      <div className="flex min-w-0 flex-col gap-4 min-[721px]:[&_*:not([role=dialog]_*)]:scroll-mt-[calc(var(--deal-header-h,18rem)_+_var(--space-4))]">
 
       {/* Deal pipeline (V50): the 14-stage journey with stage-gated doc actions.
           Generation buttons reuse the exact handlers/permissions of the action
@@ -1749,10 +1765,16 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               relocation). */}
           {canViewDealTracking ? (
             // id: the sticky bar's FOLLOW_UP/LOG_ACTIVITY jump target (see
-            // IN_PAGE_JUMP_TARGET above) — scroll-mt so it doesn't tuck under
-            // the sticky header, tabIndex so the jump can actually move focus
-            // here.
-            <div id="deal-tracking-panel" tabIndex={-1} className="scroll-mt-[300px] mobile:scroll-mt-[420px] outline-none">
+            // IN_PAGE_JUMP_TARGET above) — tabIndex so the jump can actually move
+            // focus here. On desktop the content wrapper's descendant scroll-margin
+            // (measured header height) clears the sticky header for every focus /
+            // scrollIntoView target, jump targets and Tab-focused controls alike; the
+            // jump lands the target just below the expanded header, and when the header
+            // then condenses, the shell's overflow-anchor:none (see AppShell) keeps scrollTop so the content shifts
+            // up by the shrink, leaving the target just below the condensed header.
+            // Mobile keeps its own 420px because the chrome is static there, with a
+            // fixed bottom action bar.
+            <div id="deal-tracking-panel" tabIndex={-1} className="mobile:scroll-mt-[420px] outline-none">
               <DealTrackingPanel
                 summary={summary}
                 events={events}
@@ -2309,7 +2331,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               exactly: `items` itself is unconditionally visible, so nothing
               upstream any longer enforces `sections.pricingRequest` for
               this panel. */}
-          <div id="pricing-request-panel" tabIndex={-1} className="scroll-mt-[300px] mobile:scroll-mt-[420px] outline-none">
+          <div id="pricing-request-panel" tabIndex={-1} className="mobile:scroll-mt-[420px] outline-none">
             {canViewPricingRequests && Boolean(sections.pricingRequest) ? (
               <PricingRequestPanel ref={pricingRequestPanelRef} ticketId={ticketId} deal={summary} ticketItems={items} user={user} showToast={showToast} />
             ) : null}
@@ -2360,7 +2382,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               wrapper stays for any other in-page anchor that might still
               want it. */}
           {sections.dealQuotation && canViewPricingRequests ? (
-            <div id="deal-quotation-panel" tabIndex={-1} className="scroll-mt-[300px] mobile:scroll-mt-[420px] outline-none">
+            <div id="deal-quotation-panel" tabIndex={-1} className="mobile:scroll-mt-[420px] outline-none">
               <DealQuotationPanel ref={dealQuotationPanelRef} ticketId={ticketId} pricingRequests={pricingRequests} user={user} showToast={showToast} />
             </div>
           ) : null}
@@ -2402,7 +2424,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               doc/payment bits that used to live directly on this page.
               id: the sticky bar's account-role jump target (chaseOverdue/
               confirmDeposit/confirmFinalPayment/confirmCloseReady). */}
-          <div id="deal-deposit-panel" tabIndex={-1} className="scroll-mt-[300px] mobile:scroll-mt-[420px] outline-none">
+          <div id="deal-deposit-panel" tabIndex={-1} className="mobile:scroll-mt-[420px] outline-none">
             {sections.depositNotice ? (
               <DealDepositPanel
                 ticketId={ticketId}
@@ -2486,7 +2508,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               directly on this page. Reuses the existing `delivery` section
               id (salesViewScope.js) rather than adding a parallel one.
               id (DOM): the sticky bar's import-role fulfilment jump target. */}
-          <div id="deal-fulfilment-panel" tabIndex={-1} className="scroll-mt-[300px] mobile:scroll-mt-[420px] outline-none">
+          <div id="deal-fulfilment-panel" tabIndex={-1} className="mobile:scroll-mt-[420px] outline-none">
             {sections.delivery ? (
               <DealFulfilmentPanel
                 ticketId={ticketId}

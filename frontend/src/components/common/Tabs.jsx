@@ -98,8 +98,6 @@ export function Tabs({ items, value, onChange, ariaLabel, idPrefix, onSurface = 
   const scrollTabIntoView = useCallback((tab) => {
     const list = listRef.current;
     if (!list || !tab) return;
-    tab.scrollIntoView?.({ inline: 'nearest', block: 'nearest', behavior: 'instant' });
-
     const styles = getComputedStyle(list);
     const paddingLeft = Number.parseFloat(styles.paddingLeft) || 0;
     const paddingRight = Number.parseFloat(styles.paddingRight) || 0;
@@ -139,7 +137,8 @@ export function Tabs({ items, value, onChange, ariaLabel, idPrefix, onSurface = 
     const tabs = listRef.current?.querySelectorAll('[role="tab"]');
     if (!tabs || !tabs.length) return;
     const bounded = (index + tabs.length) % tabs.length;
-    tabs[bounded].focus();
+    // preventScroll: a plain focus() scrolls the page vertically (scroll-padding on the shell scroller).
+    tabs[bounded].focus({ preventScroll: true });
     scrollTabIntoView(tabs[bounded]);
     onChange(items[bounded].id);
   }
