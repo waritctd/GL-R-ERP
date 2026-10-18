@@ -21,6 +21,17 @@ function baseDeal(overrides = {}) {
 }
 
 describe('resolveWorkState', () => {
+  // Sticky primary on TicketDetailPage for an import user: รับงาน must open the SUBMITTED request
+  // itself (the queue's default tab cannot list a SUBMITTED row), oldest first.
+  it('sends import\'s pickup action to the oldest SUBMITTED pricing request\'s detail page', () => {
+    const deal = baseDeal({ status: 'draft', fulfillmentStatus: null });
+    const result = resolveWorkState({ role: 'import' }, deal, [
+      { id: 12, status: 'SUBMITTED' },
+      { id: 8, status: 'SUBMITTED' },
+    ]);
+    expect(result.action.to).toBe('/pricing-requests/8');
+  });
+
   it('returns nothing when the deal is not ACTIVE (ON_HOLD/DORMANT/lost already have their own banner)', () => {
     const deal = baseDeal({ lifecycle: 'ON_HOLD' });
     expect(resolveWorkState({ role: 'sales' }, deal, [])).toEqual({ action: null });

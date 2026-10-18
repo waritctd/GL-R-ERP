@@ -58,8 +58,32 @@ describe('nextFulfilmentActionCode', () => {
 describe('nextImportAction', () => {
   it('prioritizes an unpicked (SUBMITTED) pricing request over any fulfilment-chain action', () => {
     const ticket = { id: 5, status: 'quotation_issued', fulfillmentStatus: 'IR_ISSUED' };
-    const action = nextImportAction(ticket, [{ status: 'SUBMITTED' }]);
-    expect(action).toEqual({ code: 'pickupPricingRequest', label: 'รับงาน · ขอราคา', to: '/pricing-requests' });
+    const action = nextImportAction(ticket, [{ id: 33, status: 'SUBMITTED' }]);
+    expect(action).toEqual({ code: 'pickupPricingRequest', label: 'รับงาน · ขอราคา', to: '/pricing-requests/33' });
+  });
+
+  // BUG B: the queue's default import tab cannot show a SUBMITTED row, so รับเรื่อง landing on
+  // /pricing-requests dead-ends. It must open the SUBMITTED request itself.
+  it('sends pickupPricingRequest to the SUBMITTED request\'s own detail page, not the queue', () => {
+    const ticket = { id: 5, status: 'quotation_issued', fulfillmentStatus: 'IR_ISSUED' };
+    const action = nextImportAction(ticket, [
+      { id: 40, status: 'IMPORT_REVIEWING' },
+      { id: 41, status: 'SUBMITTED' },
+    ]);
+    expect(action.code).toBe('pickupPricingRequest');
+    expect(action.to).toBe('/pricing-requests/41');
+  });
+
+  // Deterministic rule: with several SUBMITTED, the OLDEST (lowest id) is opened, regardless of
+  // the order the list happens to arrive in.
+  it('with two SUBMITTED requests opens the oldest (lowest id), independent of list order', () => {
+    const ticket = { id: 5, status: 'draft', fulfillmentStatus: null };
+    const action = nextImportAction(ticket, [
+      { id: 9, status: 'SUBMITTED' },
+      { id: 4, status: 'SUBMITTED' },
+      { id: 2, status: 'IMPORT_REVIEWING' },
+    ]);
+    expect(action.to).toBe('/pricing-requests/4');
   });
 
   // PR-B REVIEW ROUND 1, S8: IR_ISSUED is the status every IR-TRACKED deal (V184 per-factory)

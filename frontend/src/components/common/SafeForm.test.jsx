@@ -216,3 +216,67 @@ describe('SafeForm — prop forwarding', () => {
     expect(screen.getByText('form content')).toBeTruthy();
   });
 });
+
+// BUG (บันทึกโรงงาน reloads the page): SafeForm only called preventDefault when it BLOCKED a
+// submit, so an ALLOWED submit reached the browser's native GET submission (full reload under
+// BrowserRouter, in-memory drafts lost) unless each caller remembered its own preventDefault.
+// jsdom does not navigate, so the observable is the event itself: `defaultPrevented`, and
+// `dispatchEvent`'s return value (false = some listener called preventDefault).
+describe('SafeForm — an ALLOWED submit never falls through to native form submission', () => {
+  it('prevents the default BEFORE a handler that never calls preventDefault runs', () => {
+    let preventedWhenHandlerRan;
+    const onSubmit = vi.fn((event) => { preventedWhenHandlerRan = event.nativeEvent.defaultPrevented; });
+    formWithButton(onSubmit);
+
+    const proceeded = screen.getByTestId('safe-form').dispatchEvent(
+      new SubmitEvent('submit', { bubbles: true, cancelable: true, submitter: screen.getByRole('button', { name: 'Go' }) }),
+    );
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(preventedWhenHandlerRan).toBe(true);
+    expect(proceeded).toBe(false);
+  });
+
+  it('prevents the default even when the handler returns early without doing anything', () => {
+    formWithButton(() => {}); // e.g. ImportFactoryPicker's "already saving" / "nothing picked" returns
+
+    const proceeded = screen.getByTestId('safe-form').dispatchEvent(
+      new SubmitEvent('submit', { bubbles: true, cancelable: true, submitter: screen.getByRole('button', { name: 'Go' }) }),
+    );
+
+    expect(proceeded).toBe(false);
+  });
+
+  it('prevents the default when no onSubmit is passed at all', () => {
+    formWithButton(undefined);
+
+    const proceeded = screen.getByTestId('safe-form').dispatchEvent(
+      new SubmitEvent('submit', { bubbles: true, cancelable: true, submitter: screen.getByRole('button', { name: 'Go' }) }),
+    );
+
+    expect(proceeded).toBe(false);
+  });
+
+  it('prevents the default on an allowSubmitterlessSubmit submit too', () => {
+    const onSubmit = vi.fn();
+    formWithNoButton(onSubmit, { allowSubmitterlessSubmit: true });
+
+    const proceeded = screen.getByTestId('safe-form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(proceeded).toBe(false);
+  });
+
+  it('prevents the default on a canSubmit={true} submit that carries a submitter', () => {
+    const onSubmit = vi.fn();
+    formWithNoButton(onSubmit, { canSubmit: true });
+
+    const form = screen.getByTestId('safe-form');
+    const proceeded = form.dispatchEvent(
+      new SubmitEvent('submit', { bubbles: true, cancelable: true, submitter: document.createElement('button') }),
+    );
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(proceeded).toBe(false);
+  });
+});

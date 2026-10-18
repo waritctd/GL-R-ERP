@@ -189,6 +189,18 @@ describe('ImportOverview deal links', () => {
     expect(screen.getByTestId('location').textContent).toBe('/import/deals/1');
   });
 
+  // BUG B: รับงาน · ขอราคา used to navigate to the queue (/pricing-requests), whose default import
+  // tab cannot list a SUBMITTED row. It must land on the PCR itself (PRICING_REQUESTS[0] = id 101,
+  // SUBMITTED, ticket 6 -> บริษัท F).
+  it('sends the รับงาน · ขอราคา CTA to the SUBMITTED pricing request detail page', async () => {
+    renderWithProbe();
+    await screen.findAllByText(/^บริษัท /);
+    const panel = screen.getByText('สิ่งที่ต้องทำ').closest('section');
+    const row = within(panel).getByText('บริษัท F').closest('div').parentElement.parentElement;
+    fireEvent.click(within(row).getByRole('button', { name: 'รับงาน · ขอราคา' }));
+    expect(screen.getByTestId('location').textContent).toBe('/pricing-requests/101');
+  });
+
   it('sends an in-transit tile to /import/deals/:id', async () => {
     renderWithProbe();
     await screen.findAllByText(/^บริษัท /);

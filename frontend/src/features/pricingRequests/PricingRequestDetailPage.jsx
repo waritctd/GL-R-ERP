@@ -47,6 +47,10 @@ import {
   isCustomerQuotationEditable,
   isCustomerQuotationDiscountEditable,
   canTransition,
+  itemDisplayName,
+  itemFactoryName,
+  ceoGateBlockerMessage,
+  groupFactoryQuotesByFactory,
   pricingRequestRecipientLabel,
   unitBasisLabel,
 } from './pricingRequestMeta.js';
@@ -84,23 +88,6 @@ function isSales(user) {
 
 function canSeeRaw(user) {
   return user?.role === 'import' || user?.role === 'ceo';
-}
-
-// Mirrors PricingRequestItemDto.resolvedFactory(): the catalog snapshot first, then Sales's own
-// free text. `null` here is exactly what makes FactoryQuoteService.groupByFactory refuse to build
-// the factory-email drafts, so this one predicate decides both the warning and the input below.
-function itemFactoryName(item) {
-  return item?.resolvedFactoryName?.trim() || item?.factory?.trim() || null;
-}
-
-// Mirrors PricingRequestItemDto.displayName() — same fields, same precedence as the row heading
-// this page renders, so the server's "รายการที่ N (ชื่อสินค้า)" names something visible on screen.
-function itemDisplayName(item) {
-  const name = [item?.catalogBrand ?? item?.brand, item?.catalogModel ?? item?.model]
-    .map((part) => part?.trim())
-    .filter(Boolean)
-    .join(' ');
-  return name || item?.productDescription?.trim() || '-';
 }
 
 /**
@@ -353,50 +340,6 @@ function cleanResponsePayload(draft) {
       piecesPerBox: cleanNumber(item.piecesPerBox),
     })),
   };
-}
-
-/**
- * Groups a pricing request's factory quotes by factory (owner-supplied mockup, 2026-08-16 —
- * "grouped by factory" is an explicit requirement). `factoryQuotes` holds full revision history —
- * FactoryQuoteService.receive() supersedes-and-creates-a-new-row on every response after the
- * first, and PricingRequestDetailPage has always rendered that history unfiltered — so a factory
- * asked twice can own several rows here, only one of them `current`.
- *
- * Keyed by `factoryId` when the quote resolved to a canonical factory-master row, falling back to
- * `factoryName` — `FactoryQuoteDto.factoryId` is nullable (a quote can exist against a name with
- * no catalog/config row behind it). Group order follows first-appearance order in `factoryQuotes`,
- * which the API/mock already return in a stable (creation) order, so the section does not
- * reshuffle itself between renders.
- *
- * `current` is the live quote — what the item-editing grid and ยืนยันราคาเสนอ act on. `history` is
- * every OTHER quote for that same factory, oldest first: never re-rendered as a second editing
- * grid (the mockup shows one row per item, not one row per revision), but never dropped either —
- * surfaced as the same compact "ประวัติ: ..." line this page already uses for pricing-decision and
- * customer-quotation revisions, so the audit trail stays reachable, just de-emphasised.
- */
-function groupFactoryQuotesByFactory(factoryQuotes) {
-  const order = [];
-  const byKey = new Map();
-  for (const quote of factoryQuotes) {
-    const key = quote.factoryId != null ? `id:${quote.factoryId}` : `name:${quote.factoryName}`;
-    let group = byKey.get(key);
-    if (!group) {
-      group = { key, factoryName: quote.factoryName, quotes: [] };
-      byKey.set(key, group);
-      order.push(group);
-    }
-    group.quotes.push(quote);
-  }
-  return order.map((group) => {
-    const sorted = [...group.quotes].sort((a, b) => a.revisionNo - b.revisionNo);
-    const current = sorted.find((q) => q.current) ?? sorted[sorted.length - 1];
-    return {
-      ...group,
-      quotes: sorted,
-      current,
-      history: sorted.filter((q) => q.id !== current.id),
-    };
-  });
 }
 
 // One CSS-grid template shared by the column-header row and every item row beneath it (DESIGN.md
@@ -995,8 +938,10 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const { unitBases: unitBasisCatalog } = useUnitBasisCatalog();
 
   function invalidate() {
-    queryClient.invalidateQueries({ queryKey: queryKeys.pricingRequestDetail(pricingRequestId) });
-    queryClient.invalidateQueries({ queryKey: queryKeys.pricingRequestFactoryQuotes(pricingRequestId) });
+    const refetched = Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.pricingRequestDetail(pricingRequestId) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.pricingRequestFactoryQuotes(pricingRequestId) }),
+    ]);
     queryClient.invalidateQueries({ queryKey: queryKeys.pricingRequestCostings(pricingRequestId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.pricingRequestAttachments(pricingRequestId) });
     // CR-1 (F): a contact / lead-time decision on this page is visible on the deal page and the
@@ -1027,6 +972,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
     // superseded/replaced it).
     queryClient.invalidateQueries({ queryKey: ['customerQuotations', 'discountApprovals'] });
     queryClient.invalidateQueries({ queryKey: ['pricingRequests', 'queue'] });
+    return refetched; // resolves once the detail + factory quotes have been re-read
   }
 
   const canReturnToPricingQueue = hasPermission(user?.role, 'canViewPricingRequestQueue');
@@ -1171,12 +1117,19 @@ export function PricingRequestDetailPage({ user, showToast }) {
    * elsewhere computes the default without touching state) — so checking whether that key exists
    * already tracks exactly what a separate boolean flag would have to track by hand.
    */
-  const [confirmingFactoryQuoteId, setConfirmingFactoryQuoteId] = useState(null);
+  // Per-quote in-flight set: confirms on different factories can overlap, and one finishing must not
+  // re-enable another's button. The CEO-gate notice below also waits until this set is EMPTY, so a
+  // confirm that lands while another is still running cannot name the running one as "still waiting".
+  const [confirmingFactoryQuoteIds, setConfirmingFactoryQuoteIds] = useState(() => new Set());
+  // Set to this request's id after a confirm; the persistent notice (a toast's 3.2 s cannot carry a
+  // blocker list) is computed from the live queries while it matches. Cleared on the next confirm.
+  const [ceoGateCheckedForId, setCeoGateCheckedForId] = useState(null);
 
   async function confirmFactoryQuote(quote, draft) {
     const dirty = Boolean(responseDrafts[quote.id]);
     const needsReceive = dirty || ['DRAFT', 'REQUESTED'].includes(quote.status);
-    setConfirmingFactoryQuoteId(quote.id);
+    setConfirmingFactoryQuoteIds((cur) => new Set(cur).add(quote.id));
+    setCeoGateCheckedForId(null);
     try {
       let targetId = quote.id;
       if (needsReceive) {
@@ -1206,11 +1159,19 @@ export function PricingRequestDetailPage({ user, showToast }) {
         return next;
       });
       showToast?.('success', 'ยืนยันราคาเสนอแล้ว');
-      invalidate();
+      // markReadyForCosting advances the request only when every import line is routed and covered
+      // by a READY_FOR_COSTING quote; otherwise nothing visibly happens. Once the re-read lands,
+      // the notice below (computed at render from the live queries) says what still blocks it.
+      await invalidate(); // never rejects: refetchQueries swallows fetch errors unless throwOnError
+      setCeoGateCheckedForId(pricingRequestId);
     } catch (error) {
       showToast?.('error', error.message || 'ยืนยันราคาเสนอไม่สำเร็จ');
     } finally {
-      setConfirmingFactoryQuoteId(null);
+      setConfirmingFactoryQuoteIds((cur) => {
+        const next = new Set(cur);
+        next.delete(quote.id);
+        return next;
+      });
     }
   }
 
@@ -1640,6 +1601,14 @@ export function PricingRequestDetailPage({ user, showToast }) {
   // that has the identical gap the price grid had before the #1062 review fix.
   const inSendWindow = FACTORY_ROUTING_STATUSES.includes(summary?.status);
   const factoryQuotes = useMemo(() => factoryQuery.data ?? [], [factoryQuery.data]);
+  const ceoGateNotice = useMemo(
+    () => (ceoGateCheckedForId === pricingRequestId && confirmingFactoryQuoteIds.size === 0 && !detailQuery.isFetching && !factoryQuery.isFetching
+      && !detailQuery.isError && !factoryQuery.isError
+      ? ceoGateBlockerMessage(request, factoryQuotes)
+      : null),
+    [ceoGateCheckedForId, pricingRequestId, confirmingFactoryQuoteIds, detailQuery.isFetching, factoryQuery.isFetching,
+      detailQuery.isError, factoryQuery.isError, request, factoryQuotes],
+  );
   const factoryGroups = useMemo(() => groupFactoryQuotesByFactory(factoryQuotes), [factoryQuotes]);
   // pricingRequestItemId -> that item's line on the CURRENT factory quote, once Import has priced it.
   const importQuoteItemByRequestItem = useMemo(() => {
@@ -3141,6 +3110,12 @@ export function PricingRequestDetailPage({ user, showToast }) {
           ) : null}
           {factoryGroups.length > 0 ? (
             <div className="flex flex-col">
+              {ceoGateNotice ? (
+                <div role="status" data-testid="pcr-ceo-gate-notice" className="m-4 rounded-md border border-warning-border bg-warning-bg-soft p-3 text-xs text-warning-dark">
+                  <strong className="block">ยืนยันราคาเสนอแล้ว แต่ยังไม่ส่งถึง CEO</strong>
+                  <span>{ceoGateNotice}</span>
+                </div>
+              ) : null}
               {/* Column headers (DESIGN.md §13's .table-head idiom: surface-muted band, overline
                   caption) — shared FACTORY_ITEM_GRID keeps every item row below aligned to these
                   same five tracks regardless of which factory group it belongs to. md: (768px) up
@@ -3652,11 +3627,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
                           <Button
                             type="button"
                             variant="primary"
-                            disabled={confirmingFactoryQuoteId === current.id}
+                            disabled={confirmingFactoryQuoteIds.has(current.id)}
                             onClick={() => confirmFactoryQuote(current, draft)}
                             data-testid="pcr-submit-to-ceo"
                           >
-                            {confirmingFactoryQuoteId === current.id ? 'กำลังยืนยัน…' : 'ยืนยันราคาเสนอ'}
+                            {confirmingFactoryQuoteIds.has(current.id) ? 'กำลังยืนยัน…' : 'ยืนยันราคาเสนอ'}
                           </Button>
                         ) : null}
                       </div>
