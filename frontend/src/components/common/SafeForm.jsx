@@ -66,6 +66,10 @@ import { forwardRef } from 'react';
  * `new SubmitEvent('submit', { submitter, bubbles, cancelable })`) — see SafeForm.test.jsx and
  * this task's PR description for why the migrated forms' own tests needed the same treatment.
  *
+ * CONTRACT: an ALLOWED submit never reaches native form submission either — SafeForm calls
+ * `event.preventDefault()` before `onSubmit`, so callers need not (and early returns inside a
+ * handler cannot leak a page reload that wipes in-memory drafts). Calling it again is harmless.
+ *
  * Everything else is forwarded straight to the underlying `<form>` — `id`, `noValidate`,
  * `className`, `children`, and `ref` all behave exactly as they would on a raw `<form>`.
  */
@@ -86,6 +90,8 @@ export const SafeForm = forwardRef(function SafeForm(
       return;
     }
 
+    // An allowed submit never reaches the browser's native (GET, full-reload) submission.
+    event.preventDefault();
     onSubmit?.(event);
   }
 

@@ -5008,3 +5008,234 @@ describe('CEO pricing inside รายการสินค้าและรา
     expect(panel.getByTestId('pcr-ceo-cost-override-8001')).not.toBeNull();
   });
 });
+
+// ── BUG A: บันทึกโรงงาน must never fall through to the browser's native form submission ─────────
+// SafeForm only prevented the default when it BLOCKED a submit, and neither ImportFactoryPicker's
+// handleSubmit nor the page's onSave called preventDefault, so an allowed submit was a real GET
+// navigation (full reload under BrowserRouter -> every in-memory draft lost, in-flight mutation
+// possibly cancelled). jsdom never navigates, so the observable is the submit event's
+// `defaultPrevented`, recorded by a capture-phase document listener (runs before React's handler)
+// and inspected after dispatch completes.
+describe('PricingRequestDetailPage บันทึกโรงงาน does not trigger native form submission', () => {
+  let submitEvents;
+  const record = (e) => { submitEvents.push(e); };
+  beforeEach(() => {
+    submitEvents = [];
+    document.addEventListener('submit', record, true);
+  });
+  afterEach(() => document.removeEventListener('submit', record, true));
+
+  it('prevents the default on a real save (factory picked)', async () => {
+    const request = buildRequestWithBlankFactoryLine();
+    renderDetailPage({ user: importUser, request });
+    await waitForLoaded(request);
+
+    fireEvent.focus(screen.getByLabelText('ระบุโรงงาน'));
+    fireEvent.click(await screen.findByRole('option', { name: 'Cotto Industry' }));
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกโรงงาน' }));
+
+    await waitFor(() => expect(api.pricingRequests.setItemFactory).toHaveBeenCalledTimes(1));
+    expect(submitEvents).toHaveLength(1);
+    expect(submitEvents[0].defaultPrevented).toBe(true);
+  });
+
+  it('prevents the default on the "nothing picked" early return (BUG-20 warning path)', async () => {
+    const request = buildRequestWithBlankFactoryLine();
+    renderDetailPage({ user: importUser, request });
+    await waitForLoaded(request);
+
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกโรงงาน' }));
+
+    expect(screen.getByText('เลือกโรงงานจากรายการก่อนกดบันทึก')).toBeTruthy();
+    expect(api.pricingRequests.setItemFactory).not.toHaveBeenCalled();
+    expect(submitEvents).toHaveLength(1);
+    expect(submitEvents[0].defaultPrevented).toBe(true);
+  });
+
+  // The "already saving" early return IS reachable: two clicks inside one act() (see the
+  // double-click test above) -> the second submit hits the inFlight ref and returns early.
+  it('prevents the default on BOTH submits of a fast double click (second one hits the inFlight early return)', async () => {
+    api.pricingRequests.setItemFactory.mockReturnValue(new Promise(() => {}));
+    const request = buildRequestWithBlankFactoryLine();
+    renderDetailPage({ user: importUser, request });
+    await waitForLoaded(request);
+
+    fireEvent.focus(screen.getByLabelText('ระบุโรงงาน'));
+    fireEvent.click(await screen.findByRole('option', { name: 'Cotto Industry' }));
+    const save = screen.getByRole('button', { name: 'บันทึกโรงงาน' });
+    act(() => {
+      save.click();
+      save.click();
+    });
+
+    await waitFor(() => expect(api.pricingRequests.setItemFactory).toHaveBeenCalledTimes(1));
+    expect(submitEvents).toHaveLength(2);
+    expect(submitEvents.map((e) => e.defaultPrevented)).toEqual([true, true]);
+  });
+});
+
+// ── BUG C: ยืนยันราคาเสนอ must say what still blocks the CEO gate ──────────────────────────────
+// FactoryQuoteService.markReadyForCosting only advances the request to READY_FOR_CEO_REVIEW when
+// every IMPORT line (stockSource null; stock lines are exempt, IN_TRANSIT ones need an ETA) has a
+// factory AND a READY_FOR_COSTING quote covering it. Otherwise the click
+// "succeeded" with a green toast and the request silently stayed at AWAITING_FACTORY_RESPONSE.
+// UI-LEVEL ONLY: the status transition itself is the Java service's (mocked here by flipping what
+// api.pricingRequests.get / listFactoryQuotes return once markFactoryQuoteReady has been called).
+describe('PricingRequestDetailPage ยืนยันราคาเสนอ reports what still blocks the CEO gate', () => {
+
+  function twoFactoryRequest(statusOverride) {
+    const base = buildRequest();
+    return buildRequest({
+      summary: statusOverride,
+      items: [
+        { ...base.items[0], id: 1, resolvedFactoryName: 'SCG Ceramics' },
+        { ...base.items[0], id: 2, brand: 'COTTO', model: 'B2', productDescription: 'กระเบื้องผนัง COTTO B2', resolvedFactoryName: 'Cotto Industry' },
+      ],
+    });
+  }
+
+  const quoteFor = (id, factoryId, factoryName, itemId, status) => buildFactoryQuote({
+    id,
+    factoryId,
+    factoryName,
+    status,
+    items: [{ ...buildFactoryQuote().items[0], id: id * 10, pricingRequestItemId: itemId, rawUnitPrice: 50 }],
+  });
+
+  // Before the click the server holds `before`; once markFactoryQuoteReady has been called the
+  // refetches see `after`. Returns the showToast spy.
+  function renderWithServerTransition({ before, after, quotesBefore, quotesAfter }) {
+    const showToast = vi.fn();
+    const ready = () => api.pricingRequests.markFactoryQuoteReady.mock.calls.length > 0;
+    renderDetailPage({ user: importUser, request: before, factoryQuotes: quotesBefore, showToast });
+    api.pricingRequests.get.mockImplementation(async () => ({ pricingRequest: ready() ? after : before }));
+    api.pricingRequests.listFactoryQuotes.mockImplementation(async () => ({ items: ready() ? quotesAfter : quotesBefore }));
+    return showToast;
+  }
+
+  const notice = () => screen.queryByTestId('pcr-ceo-gate-notice');
+
+  it('(a) gate passed (refetch shows READY_FOR_CEO_REVIEW): success toast, and NO blocker warning', async () => {
+    const before = buildRequest({ summary: { status: 'AWAITING_FACTORY_RESPONSE' } });
+    const after = buildRequest({ summary: { status: 'READY_FOR_CEO_REVIEW' } });
+    const q = (status) => [quoteFor(91, 601, 'SCG Ceramics', 1, status)];
+    const showToast = renderWithServerTransition({
+      before, after, quotesBefore: q('RESPONSE_RECEIVED'), quotesAfter: q('READY_FOR_COSTING'),
+    });
+    await waitForLoaded(before);
+    await screen.findByText('SCG Ceramics');
+
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
+
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', 'ยืนยันราคาเสนอแล้ว'));
+    // let the post-mark-ready refetch settle before asserting an ABSENCE
+    await waitFor(() => expect(api.pricingRequests.get.mock.calls.length).toBeGreaterThan(1));
+    expect(notice()).toBeNull();
+  });
+
+  it('(b) gate NOT passed, one line has no factory: a warning names that line by position and product', async () => {
+    const before = buildRequestWithBlankFactoryLine({ summary: { status: 'AWAITING_FACTORY_RESPONSE' } });
+    const q = (status) => [quoteFor(91, 601, 'SCG Ceramics', 1, status)];
+    renderWithServerTransition({
+      before, after: before, quotesBefore: q('RESPONSE_RECEIVED'), quotesAfter: q('READY_FOR_COSTING'),
+    });
+    await waitForLoaded(before);
+    await screen.findByText('SCG Ceramics');
+
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
+
+    await waitFor(() => expect(api.pricingRequests.markFactoryQuoteReady).toHaveBeenCalledWith(91));
+    // A persistent notice (a toast's 3.2 s cannot carry a blocker list) naming the unrouted line.
+    const text = (await screen.findByTestId('pcr-ceo-gate-notice')).textContent;
+    expect(text).toContain('ยืนยันราคาเสนอแล้ว แต่ยังไม่ส่งถึง CEO');
+    expect(text).toContain('ยังไม่ได้ระบุโรงงาน');
+    expect(text).toContain('รายการที่ 2');
+    expect(text).toContain('กระเบื้องนำเข้าพิเศษ');
+    // the line that DOES have a routed + confirmed factory is not blamed
+    expect(text).not.toContain('รายการที่ 1');
+  });
+
+  it('(c) gate NOT passed, a second factory group is not yet confirmed: the warning names THAT factory, not the confirmed one', async () => {
+    const before = twoFactoryRequest({ status: 'AWAITING_FACTORY_RESPONSE' });
+    const quotesBefore = [
+      quoteFor(91, 601, 'SCG Ceramics', 1, 'RESPONSE_RECEIVED'),
+      quoteFor(92, 602, 'Cotto Industry', 2, 'REQUESTED'),
+    ];
+    const quotesAfter = [
+      quoteFor(91, 601, 'SCG Ceramics', 1, 'READY_FOR_COSTING'),
+      quoteFor(92, 602, 'Cotto Industry', 2, 'REQUESTED'),
+    ];
+    renderWithServerTransition({ before, after: before, quotesBefore, quotesAfter });
+    await waitForLoaded(before);
+    await screen.findByText('Cotto Industry');
+
+    // first button = the SCG group (groups render in quote order); confirm only that one
+    fireEvent.click(screen.getAllByRole('button', { name: 'ยืนยันราคาเสนอ' })[0]);
+
+    await waitFor(() => expect(api.pricingRequests.markFactoryQuoteReady).toHaveBeenCalledWith(91));
+    const text = (await screen.findByTestId('pcr-ceo-gate-notice')).textContent;
+    expect(text).toContain('รอยืนยันราคาโรงงาน');
+    expect(text).toContain('Cotto Industry');
+    expect(text).not.toContain('SCG Ceramics');
+    // no line is missing a factory here, so it must not claim that
+    expect(text).not.toContain('ยังไม่ได้ระบุโรงงาน');
+  });
+
+  // The notice is computed from the re-read; until that lands (or if it fails) the cache is stale
+  // and must not be presented as "what still blocks".
+  function renderAwaitingBlankLine() {
+    const before = buildRequestWithBlankFactoryLine({ summary: { status: 'AWAITING_FACTORY_RESPONSE' } });
+    const quotes = [quoteFor(91, 601, 'SCG Ceramics', 1, 'RESPONSE_RECEIVED')];
+    renderDetailPage({ user: importUser, request: before, factoryQuotes: quotes });
+    return { before, quotes, markedReady: () => api.pricingRequests.markFactoryQuoteReady.mock.calls.length > 0 };
+  }
+
+  it('shows no notice while the post-confirm factory-quote re-read is still pending, then shows it once it lands', async () => {
+    const { before, quotes, markedReady } = renderAwaitingBlankLine();
+    await waitForLoaded(before);
+    await screen.findByText('SCG Ceramics');
+    let release;
+    const deferred = new Promise((resolve) => { release = resolve; });
+    api.pricingRequests.listFactoryQuotes.mockImplementation(
+      () => (markedReady() ? deferred : Promise.resolve({ items: quotes })),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
+    await waitFor(() => expect(api.pricingRequests.listFactoryQuotes).toHaveBeenCalledTimes(2));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(notice()).toBeNull();
+
+    await act(async () => { release({ items: [{ ...quotes[0], status: 'READY_FOR_COSTING' }] }); });
+    expect((await screen.findByTestId('pcr-ceo-gate-notice')).textContent).toContain('รายการที่ 2');
+  });
+
+  it('shows no notice when the post-confirm re-read FAILED (stale cache is not evidence)', async () => {
+    const { before, quotes, markedReady } = renderAwaitingBlankLine();
+    await waitForLoaded(before);
+    await screen.findByText('SCG Ceramics');
+    api.pricingRequests.listFactoryQuotes.mockImplementation(
+      () => (markedReady() ? Promise.reject(new Error('boom')) : Promise.resolve({ items: quotes })),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
+    await waitFor(() => expect(api.pricingRequests.listFactoryQuotes).toHaveBeenCalledTimes(2));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(notice()).toBeNull();
+  });
+
+  it('the notice disappears once a later refetch shows the request past the gate', async () => {
+    const before = buildRequestWithBlankFactoryLine({ summary: { status: 'AWAITING_FACTORY_RESPONSE' } });
+    const quote = (status) => [quoteFor(91, 601, 'SCG Ceramics', 1, status)];
+    const { queryClient } = renderDetailPage({ user: importUser, request: before, factoryQuotes: quote('RESPONSE_RECEIVED') });
+    await waitForLoaded(before);
+    await screen.findByText('SCG Ceramics');
+
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
+    await screen.findByTestId('pcr-ceo-gate-notice');
+
+    api.pricingRequests.get.mockResolvedValue({ pricingRequest: buildRequest({ summary: { status: 'READY_FOR_CEO_REVIEW' } }) });
+    await act(async () => { await queryClient.invalidateQueries(); });
+
+    await waitFor(() => expect(notice()).toBeNull());
+  });
+});

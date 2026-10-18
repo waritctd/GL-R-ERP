@@ -131,7 +131,10 @@ export const FULFILMENT_WORKSPACE_CODES = ['markIrSent'];
  * `to` is the CTA's navigation target, and it always points at THE PAGE THAT CAN
  * PERFORM THE ACTION — never at a page that merely displays it:
  *
- *   pickupPricingRequest                        -> '/pricing-requests'  (คิวขอราคา — the pickup button)
+ *   pickupPricingRequest                        -> '/pricing-requests/:id' (the oldest SUBMITTED request's own
+ *                                                                         detail page, which has its รับเรื่อง button;
+ *                                                                         the queue's default import tab cannot list a
+ *                                                                         SUBMITTED row, so it would dead-end)
  *   markIrSent                                  -> '/fulfilment'        (งานนำเข้า — its legacy section)
  *   issueImportRequest/markShipping/
  *     markGoodsReceived                         -> '/import/deals/:id'  (import's own per-deal page, which
@@ -156,7 +159,11 @@ export const FULFILMENT_WORKSPACE_CODES = ['markIrSent'];
 export function nextImportAction(ticket, pricingRequests = []) {
   const hasUnpickedRequest = pricingRequests.some((pr) => pr.status === 'SUBMITTED');
   if (hasUnpickedRequest) {
-    return { code: 'pickupPricingRequest', label: IMPORT_ACTION_LABELS.pickupPricingRequest, to: '/pricing-requests' };
+    // Oldest (lowest id) SUBMITTED request, whatever order the list arrives in.
+    const oldest = pricingRequests
+      .filter((pr) => pr.status === 'SUBMITTED')
+      .reduce((a, b) => (b.id < a.id ? b : a));
+    return { code: 'pickupPricingRequest', label: IMPORT_ACTION_LABELS.pickupPricingRequest, to: `/pricing-requests/${oldest.id}` };
   }
   const code = nextFulfilmentActionCode(ticket);
   // recordDelivery is excluded here on purpose (see this function's own doc comment above) even
