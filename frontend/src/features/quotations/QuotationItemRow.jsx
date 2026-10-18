@@ -232,6 +232,10 @@ export function QuotationItemRow({
   // check itself lives in quotationMeta's validateQuotationItem (requireOriginCountry option),
   // not in this component.
   requireOriginCountry = false,
+  // PCR form (owner ruling 2026-10-18): ระยะเวลานำเข้า is import's to give, so the form does not
+  // show it. Render gate only — onOriginChange still writes the origin's default onto the row so
+  // import starts from a pre-filled range. The direct-deal editor never sets this.
+  hideLeadTime = false,
   // GLA-123 slice S1 (coordinator follow-up, 2026-09-20): a duplicated row has no server id, so
   // the resulting save would be refused as a new row on a PRICING_REQUEST-origin quotation
   // (DealQuotationService#update) — the control is hidden rather than left as a dead end.
@@ -555,9 +559,13 @@ export function QuotationItemRow({
               // so the duplicate degrades to a plain button rather than a one-option dropdown.
               <Button variant="secondary" size="sm" onClick={() => onDuplicate?.(groupId)}>ทำซ้ำรายการ</Button>
             )}
-            <Button variant="icon" size="sm" className="max-sm:order-1 max-sm:ml-auto mobile:min-h-[44px] mobile:w-11" onClick={onRemove} title="ลบรายการ" aria-label="ลบรายการ">
-              <Icon name="close" size={16} />
-            </Button>
+            {/* UAT item 1 (2026-10-18): no onRemove means nothing to remove (the PCR form's lone row),
+                so no dead ✕ — it used to render enabled and do nothing. */}
+            {onRemove ? (
+              <Button variant="icon" size="sm" className="max-sm:order-1 max-sm:ml-auto mobile:min-h-[44px] mobile:w-11" onClick={onRemove} title="ลบรายการ" aria-label="ลบรายการ">
+                <Icon name="close" size={16} />
+              </Button>
+            ) : null}
           </div>
         ) : null}
       </div>
@@ -1247,6 +1255,7 @@ export function QuotationItemRow({
               draft, or on first edit for a new row), same as every other field's error here. Opus
               review (2026-09-14): a prior version of this comment claimed the hint only appears
               after a submit attempt, which is false and contradicted the row's own test. */}
+          {hideLeadTime ? null : (
           <FormField label="ระยะเวลานำเข้า (วัน)" htmlFor={`lead-${index}`} error={errors.leadTimeMinDays}>
             <div className="flex items-center gap-1.5">
               <input
@@ -1267,6 +1276,7 @@ export function QuotationItemRow({
               />
             </div>
           </FormField>
+          )}
         </div>
       </div>
 

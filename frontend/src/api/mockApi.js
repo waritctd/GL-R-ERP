@@ -1501,6 +1501,10 @@ function mockPricingChainFallbackItemShape({ id, brand, model, color, texture, s
     catalogPriceId: null, catalogProductCode: null,
     source: 'custom', catalogPrice: null, catalogCurrency: null, catalogPriceUnit: null,
     sqmPerPiece: null, weightMultiplier: 1, sourcedFromStock: false, stockSalePrice: null,
+    // 2026-10-18: TicketItemDto's catalogue seed fields (thickness / pcs-per-box / origin for the PCR
+    // form). Shape only -- the mock never resolves catalogue fields on a deal item (source is always
+    // 'custom' here), a pre-existing gap it is honest about rather than half-fixing.
+    catalogThicknessMm: null, catalogPcsPerBox: null, catalogOriginCountryCode: null,
   };
 }
 
@@ -2024,7 +2028,7 @@ function requirePricingRequestHeaderTermsValid(payload) {
 // V185 (direct-deal-form parity, owner ruling 2026-09-18): every field the direct-deal quotation
 // form marks required is required here too — mirrors PricingRequestService#requireItemFieldsComplete
 // field-for-field (same Thai messages, same "รายการที่ N: ขาด ..." shape). Not required:
-// brand/productCode/originCountry/leadTimeMin/MaxDays — same as that Java method.
+// brand/productCode/leadTimeMin/MaxDays — same as that Java method.
 function requirePricingRequestItemFieldsComplete(items) {
   items.forEach((item, index) => {
     const missing = [];
@@ -2039,17 +2043,19 @@ function requirePricingRequestItemFieldsComplete(items) {
       ? Number(item.piecesInput) >= 1
       : Number(item.areaSqm) > 0;
     if (!hasQuantity) missing.push('จำนวน');
-    // GLA-125 (owner ruling 2026-09-18): ประเทศต้นทาง (+ typed name when "อื่นๆ") and
-    // ระยะเวลานำเข้า are required on the PCR form -- mirrors
-    // PricingRequestService#requireItemFieldsComplete exactly.
+    // GLA-125 (owner ruling 2026-09-18): ประเทศต้นทาง (+ typed name when "อื่นๆ") is required on
+    // the PCR form -- mirrors PricingRequestService#requireItemFieldsComplete.
     if (!item.originCountry?.trim()) {
       missing.push('ประเทศต้นทาง');
     } else if (item.originCountry === 'อื่นๆ' && !item.originCountryOther?.trim()) {
       missing.push('ชื่อประเทศต้นทาง (อื่นๆ)');
     }
-    if (item.leadTimeMinDays == null || item.leadTimeMaxDays == null) {
-      missing.push('ระยะเวลานำเข้า (วัน)');
-    } else if (Number(item.leadTimeMinDays) > Number(item.leadTimeMaxDays)) {
+    // ระยะเวลานำเข้า is NOT required (owner ruling 2026-10-18: import gives the time) -- both null
+    // passes; a half pair or min > max is still refused, mirroring the same Java method.
+    if ((item.leadTimeMinDays == null) !== (item.leadTimeMaxDays == null)) {
+      fail(`รายการที่ ${index + 1}: ระยะเวลานำเข้าต้องระบุทั้งต่ำสุดและสูงสุด หรือเว้นว่างทั้งคู่`, 400);
+    }
+    if (item.leadTimeMinDays != null && Number(item.leadTimeMinDays) > Number(item.leadTimeMaxDays)) {
       fail(`รายการที่ ${index + 1}: ระยะเวลานำเข้าต่ำสุดต้องไม่มากกว่าสูงสุด`, 400);
     }
     if (missing.length) {

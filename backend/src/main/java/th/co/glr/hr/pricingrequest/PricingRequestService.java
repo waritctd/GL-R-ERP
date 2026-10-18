@@ -1337,15 +1337,18 @@ public class PricingRequestService {
             // GLA-125 item 2: อื่นๆ needs the typed name too.
             missing.add("ชื่อประเทศต้นทาง (อื่นๆ)");
         }
-        // GLA-125 item 3: ระยะเวลานำเข้า is required (min <= max) — unlike the direct-deal
-        // quotation, where it is only required at SUBMIT time (DealQuotationService's own
-        // requireEveryTileItemHasALeadTime), never at create/update. A PricingRequest has no
-        // separate submit-time gate for this, so it is required from create/update onward instead.
-        if (stockLine) {
-            // exempt (R7)
-        } else if (item.leadTimeMinDays() == null || item.leadTimeMaxDays() == null) {
-            missing.add("ระยะเวลานำเข้า (วัน)");
-        } else if (item.leadTimeMinDays() > item.leadTimeMaxDays()) {
+        // ระยะเวลานำเข้า is NOT required on a pricing request (owner ruling 2026-10-18, reversing
+        // GLA-125 item 3): import gives the time — the PCR form no longer shows the field, sends the
+        // origin's default when there is one (null for อื่นๆ), and import adjusts it through the
+        // CR-1 lead-time change flow. The quotation still requires it at its own submit
+        // (DealQuotationService#requireEveryTileItemHasALeadTime). min <= max still holds when
+        // both are sent, and a half pair (one end only) is refused: both or neither.
+        if (!stockLine && (item.leadTimeMinDays() == null) != (item.leadTimeMaxDays() == null)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "รายการที่ " + (rowNumber + 1) + ": ระยะเวลานำเข้าต้องระบุทั้งต่ำสุดและสูงสุด หรือเว้นว่างทั้งคู่");
+        }
+        if (!stockLine && item.leadTimeMinDays() != null && item.leadTimeMaxDays() != null
+                && item.leadTimeMinDays() > item.leadTimeMaxDays()) {
             throw new ApiException(HttpStatus.BAD_REQUEST,
                 "รายการที่ " + (rowNumber + 1) + ": ระยะเวลานำเข้าต่ำสุดต้องไม่มากกว่าสูงสุด");
         }

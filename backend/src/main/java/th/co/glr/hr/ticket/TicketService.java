@@ -314,7 +314,8 @@ public class TicketService {
             null /* manualPrice */, null /* manualOverrideReason */,
             i.qtyDelivered(), i.qtyFromStock(), i.stockNote(), i.catalogPriceId(), i.catalogProductCode(),
             i.source(), null /* catalogPrice */, null /* catalogCurrency */, i.catalogPriceUnit(),
-            i.sqmPerPiece(), 1 /* weightMultiplier */, i.sourcedFromStock(), null /* stockSalePrice */);
+            i.sqmPerPiece(), 1 /* weightMultiplier */, i.sourcedFromStock(), null /* stockSalePrice */,
+            i.catalogThicknessMm(), i.catalogPcsPerBox(), i.catalogOriginCountryCode());
     }
 
     @Transactional

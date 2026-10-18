@@ -97,6 +97,26 @@ describe('mockApi.pricingRequests.create item validation', () => {
     expect(pricingRequest.items[0].requestedQty).toBe(10);
   });
 
+  // Owner ruling 2026-10-18: import gives the time, so ระยะเวลานำเข้า is optional on a PCR line —
+  // both null passes; a half pair or min > max still 400s (PricingRequestService#requireItemFieldsComplete).
+  it('accepts a line with no lead time, but rejects a half pair or min > max', async () => {
+    const ticket = await ownedActiveTicketWithItems();
+    const withLeadTime = (min, max) => {
+      const payload = validPayload(ticket.items[0]);
+      Object.assign(payload.items[0], { leadTimeMinDays: min, leadTimeMaxDays: max });
+      return payload;
+    };
+    const { pricingRequest } = await api.pricingRequests.create(ticket.summary.id, withLeadTime(null, null));
+    expect(pricingRequest.summary.status).toBe('DRAFT');
+    expect(pricingRequest.items[0]).toMatchObject({ leadTimeMinDays: null, leadTimeMaxDays: null });
+    await expect(api.pricingRequests.create(ticket.summary.id, withLeadTime(9, 3))).rejects.toMatchObject({
+      status: 400, message: 'รายการที่ 1: ระยะเวลานำเข้าต่ำสุดต้องไม่มากกว่าสูงสุด',
+    });
+    await expect(api.pricingRequests.create(ticket.summary.id, withLeadTime(3, null))).rejects.toMatchObject({
+      status: 400, message: 'รายการที่ 1: ระยะเวลานำเข้าต้องระบุทั้งต่ำสุดและสูงสุด หรือเว้นว่างทั้งคู่',
+    });
+  });
+
   it('update() rejects an item missing แผ่น/กล่อง on an existing draft the same way create() does', async () => {
     const ticket = await ownedActiveTicketWithItems();
     const created = await api.pricingRequests.create(ticket.summary.id, validPayload(ticket.items[0]));

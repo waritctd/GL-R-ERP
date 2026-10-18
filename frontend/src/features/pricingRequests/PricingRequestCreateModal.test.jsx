@@ -1,6 +1,6 @@
 import React from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PricingRequestCreateModal } from './PricingRequestCreateModal.jsx';
 import { api } from '../../api/index.js';
 
@@ -62,28 +62,29 @@ function renderModal(overrides = {}) {
 // direct-deal quotation's TILE row minus price/discount) — used to fill in the gaps
 // emptyItemFromTicketItem's seed leaves blank (thicknessMm has no ticket_item source at all,
 // piecesPerBox likewise), so a "happy path" test can reach createFn/updateFn/createRevisionFn.
-function fillRequiredFields() {
+function fillRequiredFields(rowIndex = 0) {
   // Fills every V185-required field a fixture might still be missing — safe to call whether the
   // row seeded from a ticket item (color/texture/size already present) or started fully blank.
-  if (!screen.getByLabelText(/^สี/).value) fireEvent.change(screen.getByLabelText(/^สี/), { target: { value: 'ขาว' } });
-  if (!screen.getByLabelText(/^ผิว/).value) fireEvent.change(screen.getByLabelText(/^ผิว/), { target: { value: 'ด้าน' } });
-  if (!screen.getByLabelText(/^ขนาด \(ซม\.\)/).value) {
-    fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '60x60' } });
+  // `rowIndex` picks the row on a multi-row form (2026-10-18); the default keeps the one-row tests as they were.
+  const field = (re) => screen.getAllByLabelText(re)[rowIndex];
+  if (!field(/^สี/).value) fireEvent.change(field(/^สี/), { target: { value: 'ขาว' } });
+  if (!field(/^ผิว/).value) fireEvent.change(field(/^ผิว/), { target: { value: 'ด้าน' } });
+  if (!field(/^ขนาด \(ซม\.\)/).value) {
+    fireEvent.change(field(/^ขนาด \(ซม\.\)/), { target: { value: '60x60' } });
   }
-  fireEvent.change(screen.getByLabelText(/^ความหนา \(มม\.\)/), { target: { value: '10' } });
-  fireEvent.change(screen.getByLabelText(/^แผ่น\/ตร\.ม\./), { target: { value: '2.78' } });
-  fireEvent.change(screen.getByLabelText(/^แผ่น\/กล่อง/), { target: { value: '4' } });
-  // GLA-125: ประเทศต้นทาง is now required too -- picking a fixed-list country (not อื่นๆ)
-  // auto-fills leadTimeMinDays/leadTimeMaxDays via QuotationItemRow's own onOriginChange, so
-  // that satisfies the ระยะเวลานำเข้า requirement as a side effect, exactly as it does for a rep
-  // clicking through the real form.
-  if (!screen.getByLabelText(/^ประเทศต้นทาง/).value) {
-    fireEvent.change(screen.getByLabelText(/^ประเทศต้นทาง/), { target: { value: 'ไทย-สต็อก' } });
+  fireEvent.change(field(/^ความหนา \(มม\.\)/), { target: { value: '10' } });
+  fireEvent.change(field(/^แผ่น\/ตร\.ม\./), { target: { value: '2.78' } });
+  fireEvent.change(field(/^แผ่น\/กล่อง/), { target: { value: '4' } });
+  // GLA-125: ประเทศต้นทาง is required -- picking a fixed-list country (not อื่นๆ) also writes the
+  // origin's default lead time onto the row (QuotationItemRow's onOriginChange), which the form
+  // no longer shows (owner ruling 2026-10-18: import gives the time).
+  if (!field(/^ประเทศต้นทาง/).value) {
+    fireEvent.change(field(/^ประเทศต้นทาง/), { target: { value: 'ไทย-สต็อก' } });
   }
   // CR-1 (R1 / F4): สกุลเงิน + หน่วยราคา are required per line too (blank for a hand-typed row).
-  const currency = screen.getByLabelText(/^สกุลเงิน \(ราคาโรงงาน\)/);
+  const currency = field(/^สกุลเงิน \(ราคาโรงงาน\)/);
   if (!currency.value) fireEvent.change(currency, { target: { value: 'EUR' } });
-  const unit = screen.getByLabelText(/^หน่วยราคา/);
+  const unit = field(/^หน่วยราคา/);
   if (!unit.value) fireEvent.change(unit, { target: { value: 'PER_SQM' } });
 }
 
@@ -93,6 +94,9 @@ describe('PricingRequestCreateModal', () => {
     // "จำนวน" combined toggle+input — PIECES mode selected, value 400.
     expect(screen.getByRole('button', { name: 'แผ่น', pressed: true })).not.toBeNull();
     expect(screen.getByDisplayValue('400')).not.toBeNull();
+    // A hand-typed deal line (no catalogPriceId) seeds nothing the catalogue would have supplied.
+    expect(screen.getByLabelText(/^ความหนา \(มม\.\)/).value).toBe('');
+    expect(screen.getByLabelText(/^ประเทศต้นทาง/).value).toBe('');
   });
 
   it('seeds AREA mode and the sqm quantity for an SQM-basis deal item', () => {
@@ -286,13 +290,19 @@ describe('PricingRequestCreateModal', () => {
   });
 
   // ── GLA-125 items 1-3 ────────────────────────────────────────────────────────────────────
-  it('picking a fixed-list ประเทศต้นทาง auto-fills ระยะเวลานำเข้า, exactly as the direct-deal form does', () => {
-    renderModal();
-
+  it('shows no ระยะเวลานำเข้า input (import gives the time, owner ruling 2026-10-18), yet picking a fixed-list ประเทศต้นทาง still sends the origin default for import to adjust', async () => {
+    const { createFn } = renderModal();
+    fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
+    expect(screen.queryByLabelText(/^ระยะเวลานำเข้า/)).toBeNull();
+    fillRequiredFields();
     fireEvent.change(screen.getByLabelText(/^ประเทศต้นทาง/), { target: { value: 'จีน' } });
 
-    expect(screen.getByDisplayValue('30')).not.toBeNull();
-    expect(screen.getByDisplayValue('45')).not.toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
+
+    await waitFor(() => expect(createFn).toHaveBeenCalledTimes(1));
+    const item = createFn.mock.calls[0][0].items[0];
+    expect(item.leadTimeMinDays).toBe(30);
+    expect(item.leadTimeMaxDays).toBe(45);
   });
 
   it('picking อื่นๆ reveals a required typed-name box, and blocks submission until it is filled', async () => {
@@ -300,8 +310,7 @@ describe('PricingRequestCreateModal', () => {
     fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
     fillRequiredFields();
     // fillRequiredFields already picked a fixed-list country -- switch to อื่นๆ instead, which
-    // carries no default lead time (ORIGIN_COUNTRY_OPTIONS' own "อื่นๆ" entry), so ระยะเวลานำเข้า
-    // needs typing in by hand too.
+    // carries no default lead time (ORIGIN_COUNTRY_OPTIONS' own "อื่นๆ" entry).
     fireEvent.change(screen.getByLabelText(/^ประเทศต้นทาง/), { target: { value: 'อื่นๆ' } });
     expect(screen.getByLabelText(/^ระบุประเทศต้นทาง/)).not.toBeNull();
 
@@ -310,14 +319,16 @@ describe('PricingRequestCreateModal', () => {
     expect(createFn).not.toHaveBeenCalled();
 
     fireEvent.change(screen.getByLabelText(/^ระบุประเทศต้นทาง/), { target: { value: 'เวียดนาม' } });
-    fireEvent.change(screen.getByLabelText(/^ระยะเวลานำเข้า/), { target: { value: '20' } });
-    fireEvent.change(screen.getByLabelText(/^ถึง \(วัน\)/), { target: { value: '25' } });
+    // อื่นๆ carries no default lead time and the form no longer asks for one: null is legal
+    // (owner ruling 2026-10-18 — import supplies it).
     fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
 
     await waitFor(() => expect(createFn).toHaveBeenCalledTimes(1));
     const item = createFn.mock.calls[0][0].items[0];
     expect(item.originCountry).toBe('อื่นๆ');
     expect(item.originCountryOther).toBe('เวียดนาม');
+    expect(item.leadTimeMinDays).toBeNull();
+    expect(item.leadTimeMaxDays).toBeNull();
   });
 
   // ── Owner request 2026-09-30: the "เงื่อนไขสำหรับใบเสนอราคา" box was removed from the form ──
@@ -396,7 +407,7 @@ describe('PricingRequestCreateModal', () => {
     expect(createFn.mock.calls[0][0]).toMatchObject({ recipientContactId: null });
   });
 
-  it('a catalogue pick autofills the โรงงาน-labelled brand field from the catalog factory name', async () => {
+  it('a catalogue pick autofills the โรงงาน-labelled brand field from the catalog factory name, and replaces a seeded origin, lead time, thickness and pieces-per-box with the picked product\'s', async () => {
     // Keyed on the query text, not mockResolvedValueOnce -- an earlier test's own debounced
     // (280ms) typeahead call can still be in flight when this test starts (see
     // QuotationItemRow.test.jsx's identical note on its own catalog-pick test).
@@ -406,16 +417,146 @@ describe('PricingRequestCreateModal', () => {
           priceId: 901, productCode: 'PC-901', factoryName: 'SCG Ceramics',
           collection: 'B2', sizeRaw: '30x30', color: 'ขาว', surface: 'ด้าน',
           price: 120, currency: 'THB', priceUnit: 'per_piece',
+          originCountryCode: 'CN', thicknessMm: null, pcsPerBox: 6,
         }] }
         : { items: [] }
     ));
-    renderModal({ ticketItems: [] });
+    // Seeded from an Italian catalogue line (อิตาลี, 75-90 days, 9 mm, 2 per box); on this form a pick
+    // means "the database has the information" (owner ruling 2026-10-18), so none of that may survive it.
+    const { createFn } = renderModal({ ticketItems: [ticketItem({
+      catalogPriceId: 777, catalogCurrency: 'EUR', catalogPriceUnit: 'per_sqm',
+      catalogThicknessMm: 9, catalogPcsPerBox: 2, catalogOriginCountryCode: 'IT',
+    })] });
 
     fireEvent.change(screen.getByLabelText(/รุ่น \/ ค้นหาแคตตาล็อก/), { target: { value: 'B2' } });
     const option = await waitFor(() => screen.getByRole('option', { name: /B2/ }), { timeout: 1000 });
     fireEvent.mouseDown(option);
 
     expect(screen.getByDisplayValue('SCG Ceramics')).not.toBeNull();
+    expect(screen.getByLabelText(/^ความหนา \(มม\.\)/).value).toBe('');   // the pick knows no thickness
+    fireEvent.change(screen.getByLabelText(/^ความหนา \(มม\.\)/), { target: { value: '8' } });
+    fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
+    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
+
+    await waitFor(() => expect(createFn).toHaveBeenCalledTimes(1));
+    expect(createFn.mock.calls[0][0].items[0]).toMatchObject({
+      originCountry: 'จีน', leadTimeMinDays: 30, leadTimeMaxDays: 45, piecesPerBox: 6,
+      requestedCurrency: 'THB', requestedPriceUnitBasis: 'PER_PIECE',
+    });
+  });
+});
+
+describe('PricingRequestCreateModal เพิ่มรายการ (UAT item 1, 2026-10-18)', () => {
+  it('renders the เพิ่มรายการ button BELOW the item rows, not above them', () => {
+    renderModal();
+    const button = screen.getByRole('button', { name: /เพิ่มรายการ/ });
+    const firstRow = screen.getByLabelText(/^รุ่น \/ ค้นหาแคตตาล็อก/);
+    // DOCUMENT_POSITION_FOLLOWING: the button comes after the first row's field in document order.
+    expect(firstRow.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('focuses the new row\'s รุ่น field after เพิ่มรายการ, and leaves focus alone on later re-renders', async () => {
+    renderModal();
+    fireEvent.click(screen.getByRole('button', { name: /เพิ่มรายการ/ }));
+    const models = screen.getAllByLabelText(/^รุ่น \/ ค้นหาแคตตาล็อก/);
+    expect(models).toHaveLength(2);
+    await waitFor(() => expect(document.activeElement).toBe(models[1]));
+    // Typing elsewhere re-renders the modal; that must not drag focus back to the added row.
+    const firstColor = screen.getAllByLabelText(/^สี/)[0];
+    firstColor.focus();
+    fireEvent.change(firstColor, { target: { value: 'เทา' } }); // a real change (the fixture is 'ขาว'), so it re-renders
+    expect(document.activeElement).toBe(firstColor);
+  });
+
+  it('offers ลบรายการ only while there is more than one row', () => {
+    renderModal();
+    expect(screen.queryByRole('button', { name: 'ลบรายการ' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /เพิ่มรายการ/ }));
+    expect(screen.getAllByRole('button', { name: 'ลบรายการ' })).toHaveLength(2);
+    fireEvent.click(screen.getAllByRole('button', { name: 'ลบรายการ' })[0]);
+    expect(screen.getAllByLabelText(/^รุ่น \/ ค้นหาแคตตาล็อก/)).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'ลบรายการ' })).toBeNull();
+  });
+
+  it('after a failed save, ทำซ้ำ and ลบรายการ keep the red marks on the rows they belong to — a copy is clean, whether the original sat mid-list or last', async () => {
+    renderModal();
+    fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
+    fireEvent.click(screen.getByRole('button', { name: /เพิ่มรายการ/ }));
+    fireEvent.click(screen.getByRole('button', { name: /เพิ่มรายการ/ }));   // rows 0,1,2
+    fillRequiredFields(0);                                                 // only row 0 is complete
+    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
+    const rowsErrored = () => screen.getAllByLabelText(/^สกุลเงิน \(ราคาโรงงาน\)/)
+      .map((el) => el.closest('li').textContent.includes('กรุณาระบุสกุลเงิน'));
+    await waitFor(() => expect(rowsErrored()).toEqual([false, true, true]));
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'ทำซ้ำรายการ' })[0]); // copy of row 0 lands at index 1
+    expect(rowsErrored()).toEqual([false, false, true, true]);
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'ทำซ้ำรายการ' })[3]); // copy of the LAST (errored) row
+    expect(rowsErrored()).toEqual([false, false, true, true, false]);
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'ลบรายการ' })[1]);   // remove the clean copy: marks move back up
+    expect(rowsErrored()).toEqual([false, true, true, false]);
+  });
+});
+
+describe('PricingRequestCreateModal typed โรงงาน → สกุลเงิน/หน่วยราคา default (UAT item 3, owner ruling 2026-10-18)', () => {
+  // "automatic if the database has the information, otherwise sales fills it by hand": a typed factory
+  // name that matches catalogue rows (GET /api/catalog/prices, open to every authenticated role) is
+  // "the database has the information".
+  const row = (factoryName, currency, priceUnit) => ({ factoryName, currency, priceUnit });
+  const currency = () => screen.getByLabelText(/^สกุลเงิน \(ราคาโรงงาน\)/);
+  const unit = () => screen.getByLabelText(/^หน่วยราคา/);
+  async function typeFactory(name) {
+    fireEvent.change(screen.getByLabelText('โรงงาน'), { target: { value: name } });
+    await act(async () => { await vi.advanceTimersByTimeAsync(350); });
+  }
+  beforeEach(() => { vi.useFakeTimers(); api.catalog.prices.mockClear(); });
+  afterEach(() => { vi.useRealTimers(); api.catalog.prices.mockResolvedValue({ items: [] }); });
+
+  it('fills สกุลเงิน and หน่วยราคา from the matched factory\'s catalogue rows, case-insensitively — a hand-typed deal line looks itself up on open, no typing', async () => {
+    api.catalog.prices.mockResolvedValue({ items: [row('Bode', 'USD', 'per_piece'), row('Bode', 'USD', 'per_piece')] });
+    renderModal({ ticketItems: [ticketItem({ catalogPriceId: null, brand: 'bode' })] });
+    await act(async () => { await vi.advanceTimersByTimeAsync(350); });
+    expect(api.catalog.prices).toHaveBeenCalledWith('bode', null, 200);
+    expect(currency().value).toBe('USD');
+    expect(unit().value).toBe('PER_PIECE');
+  });
+
+  it('re-derives what it filled when the rep corrects โรงงาน: blank where the new factory disagrees with itself, blank where nothing matches', async () => {
+    // Every query answers with the whole catalogue; only rows whose factory IS the typed name count.
+    api.catalog.prices.mockResolvedValue({ items: [row('Vives', 'EUR', 'per_sqm'), row('Padana', 'EUR', 'per_sqm'), row('Padana', 'USD', 'per_sqm')] });
+    renderModal({ ticketItems: [ticketItem({ catalogPriceId: null })] });
+    await typeFactory('Vives');
+    expect([currency().value, unit().value]).toEqual(['EUR', 'PER_SQM']);
+    await typeFactory('Padana');                                   // quotes in EUR and USD
+    expect([currency().value, unit().value]).toEqual(['', 'PER_SQM']);
+    await typeFactory('Nobody Tiles');
+    expect([currency().value, unit().value]).toEqual(['', '']);
+  });
+
+  it('drops an answer that arrives after the โรงงาน changed, and never overwrites a สกุลเงิน the rep already chose', async () => {
+    api.catalog.prices.mockResolvedValue({ items: [row('Bode', 'USD', 'per_piece')] });
+    let answerBode;
+    api.catalog.prices.mockImplementationOnce(() => new Promise((resolve) => { answerBode = resolve; }));
+    renderModal({ ticketItems: [ticketItem({ catalogPriceId: null })] });
+    await typeFactory('Bode');                                    // request fires, still unanswered
+    fireEvent.change(screen.getByLabelText('โรงงาน'), { target: { value: 'Bodex' } });
+    await act(async () => { answerBode({ items: [row('Bode', 'USD', 'per_piece')] }); });
+    expect(currency().value).toBe('');                            // the answer was for 'Bode', not 'Bodex'
+    expect(unit().value).toBe('');
+
+    fireEvent.change(currency(), { target: { value: 'THB' } });
+    await typeFactory('Bode');
+    expect(currency().value).toBe('THB');
+    expect(unit().value).toBe('PER_PIECE');
+  });
+
+  it('does not look anything up for a catalogue-linked row — its terms came from the pick', async () => {
+    renderModal({ ticketItems: [ticketItem({ catalogPriceId: 777, catalogCurrency: 'EUR', catalogPriceUnit: 'per_sqm' })] });
+    await typeFactory('Bode');
+    expect(api.catalog.prices).not.toHaveBeenCalledWith('Bode', null, 200);
+    expect(currency().value).toBe('EUR');
   });
 });
 
@@ -436,8 +577,9 @@ describe('PricingRequestCreateModal edit mode (Fix 2)', () => {
         productDescription: 'กระเบื้องพื้น SCG A1', texture: 'ด้าน', size: '60x60',
         thicknessMm: 10, sqmPerPiece: 0.36, quantityMode: 'PIECES', piecesInput: 20,
         wastageMode: 'NONE', piecesPerBox: 4, roundToFullBox: true,
-        // GLA-125: required on this form.
-        originCountry: 'ไทย-สต็อก', leadTimeMinDays: 3, leadTimeMaxDays: 7,
+        // GLA-125: required on this form. A min of 0 fails the lead-time range check, whose error has
+        // no visible field here (hideLeadTime), so it must never block a save.
+        originCountry: 'ไทย-สต็อก', leadTimeMinDays: 0, leadTimeMaxDays: 7,
         // CR-1: currency + price unit are required on every line now.
         requestedCurrency: 'THB', requestedPriceUnitBasis: 'PER_PIECE',
         quantityType: 'CONFIRMED', targetDeliveryDate: null, deliveryLocation: null, specialRequirement: null,
@@ -848,11 +990,40 @@ describe('PricingRequestCreateModal deal-derived autofill (V110)', () => {
     };
   }
 
-  it('prefills the catalog link and code from the ticket item — no re-search needed', () => {
-    renderModal({ ticketItems: [ticketItem({ catalogPriceId: 777, catalogProductCode: 'PC-777' })] });
+  it('prefills the catalog link and code from the ticket item — no re-search needed — plus ความหนา, แผ่น/กล่อง, ประเทศต้นทาง and the origin\'s lead time (owner ruling 2026-10-18)', async () => {
+    const { createFn } = renderModal({ ticketItems: [ticketItem({
+      catalogPriceId: 777, catalogProductCode: 'PC-777',
+      catalogThicknessMm: 9, catalogPcsPerBox: 2, catalogOriginCountryCode: 'IT',
+    })] });
     // QuotationItemRow's own provenance badge ("จาก catalog · <code>"), not a bespoke one.
     expect(screen.getByText(/จาก catalog/)).not.toBeNull();
     expect(screen.getByText(/PC-777/)).not.toBeNull();
+    expect(screen.getByLabelText(/^ความหนา \(มม\.\)/).value).toBe('9');
+    expect(screen.getByLabelText(/^แผ่น\/กล่อง/).value).toBe('2');
+    expect(screen.getByLabelText(/^ประเทศต้นทาง/).value).toBe('อิตาลี');
+    // The origin's default lead time rides along for import (no input for it on this form).
+    fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
+    fireEvent.change(screen.getByLabelText(/^แผ่น\/ตร\.ม\./), { target: { value: '2.78' } });
+    fireEvent.change(screen.getByLabelText(/^สกุลเงิน \(ราคาโรงงาน\)/), { target: { value: 'EUR' } });
+    fireEvent.change(screen.getByLabelText(/^หน่วยราคา/), { target: { value: 'PER_SQM' } });
+    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
+    await waitFor(() => expect(createFn).toHaveBeenCalledTimes(1));
+    const item = createFn.mock.calls[0][0].items[0];
+    expect([item.thicknessMm, item.piecesPerBox, item.originCountry, item.leadTimeMinDays, item.leadTimeMaxDays]).toEqual([9, 2, 'อิตาลี', 75, 90]);
+  });
+
+  it('seeds blanks — never 0 or a raw ISO code — when the catalogue row lacks thickness/pieces-per-box and its origin is outside the four options', async () => {
+    renderModal({ ticketItems: [ticketItem({
+      catalogPriceId: 778, catalogThicknessMm: null, catalogPcsPerBox: null, catalogOriginCountryCode: 'PT',
+    })] });
+    expect(screen.getByLabelText(/^ความหนา \(มม\.\)/).value).toBe('');
+    expect(screen.getByLabelText(/^แผ่น\/กล่อง/).value).toBe('');
+    expect(screen.getByLabelText(/^ประเทศต้นทาง/).value).toBe('');
+    // A select shows '' for a value it has no option for, so prove the row holds nothing: a raw 'PT'
+    // would pass the required-origin check and this error would not appear.
+    fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
+    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
+    expect(await screen.findByText('กรุณาระบุประเทศต้นทาง')).not.toBeNull();
   });
 
   it("autofills ผู้รับ's label per recipient type, from the deal", () => {

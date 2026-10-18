@@ -216,7 +216,14 @@ class TicketServiceTest {
     @Test
     void comment_importSeesTicketButQuotationIsProjectedOut() {
         QuotationDto quotation = quotationOf(1L, 10L, "QT-2026-0001");
-        stubDealWithQuotations(10L, 99L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
+        // A catalogue-linked line: the catalogue seed fields (ความหนา / แผ่น-กล่อง / ประเทศต้นทาง)
+        // are not costs, so withoutCosts must carry them through for import.
+        TicketItemDto catalogLine = new TicketItemDto(1L, 10L, "SCG", "A1", null, null, "60x60", null,
+            new BigDecimal("20"), null, new BigDecimal("12.50"), "EUR", "sqm", null, null, "THB", 0,
+            null, null, null, "SQM", null, null, null, null, null, 7L, "SCG-A1", "catalog",
+            new BigDecimal("12.50"), "EUR", "sqm", null, 1, false, null,
+            new BigDecimal("9.5"), new BigDecimal("4"), "IT");
+        stubDealWithQuotations(10L, 99L, TicketStatus.QUOTATION_ISSUED, List.of(catalogLine), null, null,
             DealStage.QUOTE_DESIGN_SIDE, DealLifecycle.ACTIVE, List.of(quotation));
         when(ticketRepo.isInImportScope(10L)).thenReturn(true);
 
@@ -224,6 +231,12 @@ class TicketServiceTest {
 
         assertThat(seen.quotation()).isNull();
         assertThat(seen.quotations()).isEmpty();
+        TicketItemDto item = seen.items().get(0);
+        assertThat(item.rawPrice()).isNull();
+        assertThat(item.catalogPrice()).isNull();
+        assertThat(item.catalogThicknessMm()).isEqualByComparingTo("9.5");
+        assertThat(item.catalogPcsPerBox()).isEqualByComparingTo("4");
+        assertThat(item.catalogOriginCountryCode()).isEqualTo("IT");
     }
 
     @Test

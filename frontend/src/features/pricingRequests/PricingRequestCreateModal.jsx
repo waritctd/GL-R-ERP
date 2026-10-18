@@ -7,7 +7,8 @@ import { RECIPIENT_OPTIONS, UNIT_BASIS_OPTIONS } from './pricingRequestMeta.js';
 import { FormField } from '../../components/common/FormField.jsx';
 import { QuotationItemRow, newItemClientId } from '../quotations/QuotationItemRow.jsx';
 import { QuotationContactPicker } from '../quotations/QuotationContactPicker.jsx';
-import { ceilPieces, piecesPerSqmFromSqmPerPiece, validateQuotationItem } from '../quotations/quotationMeta.js';
+import { focusQuotationField } from '../quotations/QuotationChecklist.jsx';
+import { ceilPieces, defaultLeadTimeForOrigin, originCountryFromCode, piecesPerSqmFromSqmPerPiece, validateQuotationItem } from '../quotations/quotationMeta.js';
 
 // CR-1 (GLA-167, R1 / F4): the currency and price unit Sales fixes on each line; import cannot
 // change them afterwards. The currency list is the trade currencies this business quotes in (the
@@ -29,6 +30,59 @@ function termsFromCatalog(cat) {
     requestedCurrency: typeof cat?.currency === 'string' ? cat.currency.trim().toUpperCase() : '',
     requestedPriceUnitBasis: CATALOG_PRICE_UNIT_TO_BASIS[cat?.priceUnit] ?? '',
   };
+}
+
+/**
+ * What a catalogue pick sets on THIS form, over QuotationItemRow.pickCatalog's own patch. That one keeps
+ * the row's origin (and so its lead time) and falls back to the row's thickness, which is right for a
+ * direct-deal rep's deliberate choice but wrong here: a PCR row's origin/thickness/box count were seeded
+ * from the deal's previous product, and a pick means "the database has the information" (owner ruling
+ * 2026-10-18), so the picked product's values replace them, blanks included.
+ */
+function catalogPickPatch(cat) {
+  const originCountry = originCountryFromCode(cat.originCountryCode) || '';
+  return {
+    ...termsFromCatalog(cat),
+    originCountry,
+    originCountryOther: null,
+    ...defaultLeadTimeForOrigin(originCountry),
+    thicknessMm: cat.thicknessMm ?? null,
+    piecesPerBox: cat.pcsPerBox ?? '',
+  };
+}
+
+/**
+ * UAT item 3 (owner ruling 2026-10-18): on a hand-typed line the currency and unit "default
+ * automatically if the database has the information, otherwise sales fills them by hand". The
+ * database has it when the typed โรงงาน names a catalogue factory: `items` are the catalogue rows
+ * `GET /api/catalog/prices?q=<brand>` returned (the search also matches product fields, so only the
+ * rows whose factory IS the typed name count). Returns null when none match; a field the matching
+ * rows disagree on comes back '' so a wrong value is never pre-filled silently.
+ */
+function termsFromFactoryMatches(brand, items = []) {
+  const wanted = String(brand ?? '').trim().toLowerCase();
+  if (!wanted) return null;
+  const mine = items.filter((it) => String(it?.factoryName ?? '').trim().toLowerCase() === wanted);
+  if (mine.length === 0) return null;
+  const terms = mine.map(termsFromCatalog);
+  const agree = (key) => (terms.every((t) => t[key] === terms[0][key]) ? terms[0][key] : '');
+  return { requestedCurrency: agree('requestedCurrency'), requestedPriceUnitBasis: agree('requestedPriceUnitBasis') };
+}
+const BRAND_LOOKUP_DEBOUNCE_MS = 300;
+const TERM_FIELDS = ['requestedCurrency', 'requestedPriceUnitBasis'];
+
+/**
+ * `autoTerms` (UI-only, never sent: pricingRequestItemInputFromRow names its fields) marks the terms the
+ * โรงงาน lookup filled. A term the rep or a catalogue pick sets stops being the lookup's; a โรงงาน edit
+ * blanks only the lookup's own, so the corrected name re-derives them and a rep's choice survives.
+ */
+function patchRow(item, patch) {
+  const next = { ...item, ...patch, autoTerms: { ...item.autoTerms } };
+  TERM_FIELDS.forEach((key) => {
+    if (key in patch) delete next.autoTerms[key];
+    else if ('brand' in patch && next.autoTerms[key]) { next[key] = ''; delete next.autoTerms[key]; }
+  });
+  return next;
 }
 
 // ลักษณะจำนวน / วันที่ต้องการส่งมอบ / สถานที่ส่งมอบ / ข้อกำหนดพิเศษ were removed from this form
@@ -76,6 +130,13 @@ function emptyItemFromTicketItem(ticketItem) {
   // Mirrors TicketDetailPage's own qtyDisplay logic: an SQM-basis line quotes its sqm quantity in
   // AREA mode; a PIECE-basis line quotes its piece count in PIECES mode.
   const quantityMode = ticketItem?.unitBasis === 'SQM' ? 'AREA' : 'PIECES';
+  // Owner ruling 2026-10-18 ("fill from catalogue"): a catalogue-linked deal line brings the
+  // catalogue's thickness / pieces-per-box / factory country along (TicketItemDto.catalog* via
+  // TicketRepository#findItemsByTicketId), and the origin implies the same default lead time a
+  // catalogue pick gets (QuotationItemRow.pickCatalog). A hand-typed deal line has none of it.
+  const fromCatalog = Boolean(ticketItem?.catalogPriceId);
+  const seededOrigin = fromCatalog ? (originCountryFromCode(ticketItem.catalogOriginCountryCode) || '') : '';
+  const seededLeadTime = defaultLeadTimeForOrigin(seededOrigin);
   return {
     clientId: newItemClientId(),
     // V110: seed the catalog link the deal-creation catalog picker already resolved (see
@@ -96,7 +157,7 @@ function emptyItemFromTicketItem(ticketItem) {
     color: ticketItem?.color ?? '',
     texture: ticketItem?.texture ?? '',
     sizeText: ticketItem?.size ?? '',
-    thicknessMm: null,
+    thicknessMm: fromCatalog ? (ticketItem.catalogThicknessMm ?? null) : null,
     sqmPerPiece: ticketItem?.sqmPerPiece ?? null,
     piecesPerSqmDisplay: null,
     sqmPerPieceSource: ticketItem?.sqmPerPiece != null ? 'catalog' : null,
@@ -113,15 +174,15 @@ function emptyItemFromTicketItem(ticketItem) {
     piecesInput: quantityMode === 'PIECES' ? (ticketItem?.qty ?? '') : '',
     wastageMode: 'PERCENT',
     wastageValue: 0,
-    piecesPerBox: '',
+    piecesPerBox: fromCatalog ? (ticketItem.catalogPcsPerBox ?? '') : '',
     // Owner-approved "sell loose pieces" default, same as the direct-deal form: every new row
     // rounds up to a full box unless the rep opts out.
     roundToFullBox: true,
-    originCountry: '',
+    originCountry: seededOrigin,
     // GLA-125: typed name when originCountry = "อื่นๆ" — see QuotationItemRow's own comment.
     originCountryOther: null,
-    leadTimeMinDays: null,
-    leadTimeMaxDays: null,
+    leadTimeMinDays: seededLeadTime.leadTimeMinDays,
+    leadTimeMaxDays: seededLeadTime.leadTimeMaxDays,
     // Maps to the wire `productDescription` — see this file's own module Javadoc above.
     itemNotes: '',
     // No longer user-editable — see DEFAULT_QUANTITY_TYPE above. Carried so buildPayload keeps
@@ -569,8 +630,49 @@ export function PricingRequestCreateModal({
     }
   }
 
+  // Per-row debounce timers for the typed-โรงงาน lookup below, keyed by clientId; cleared on unmount.
+  const brandLookupTimers = useRef(new Map());
+  useEffect(() => () => { brandLookupTimers.current.forEach((t) => clearTimeout(t)); brandLookupTimers.current.clear(); }, []);
+
+  /** Typed โรงงาน on a hand-typed line → default สกุลเงิน/หน่วยราคา from the catalogue (UAT item 3). */
+  function scheduleBrandLookup(row) {
+    const { clientId } = row;
+    const brand = String(row.brand ?? '').trim();
+    clearTimeout(brandLookupTimers.current.get(clientId));
+    if (!brand || row.catalogPriceId) return; // a catalogue pick already carried its own terms
+    brandLookupTimers.current.set(clientId, setTimeout(async () => {
+      brandLookupTimers.current.delete(clientId);
+      let terms = null;
+      try {
+        // ponytail: agreement is judged over the first 200 rows (CatalogController's cap) of a free-text
+        // search; a factory with more rows can hide a disagreeing one. A factory-scoped endpoint closes it.
+        terms = termsFromFactoryMatches(brand, (await api.catalog.prices(brand, null, 200))?.items);
+      } catch { /* a convenience, never a blocker: the rep can still pick by hand */ }
+      if (!terms) return;
+      setItems((cur) => cur.map((it) => {
+        // Only the row that asked, only while it still says this name, only into fields still blank.
+        if (it.clientId !== clientId || it.catalogPriceId || String(it.brand ?? '').trim() !== brand) return it;
+        const next = { ...it, autoTerms: { ...it.autoTerms } };
+        TERM_FIELDS.forEach((key) => {
+          if (!it[key] && terms[key]) { next[key] = terms[key]; next.autoTerms[key] = true; }
+        });
+        return next;
+      }));
+    }, BRAND_LOOKUP_DEBOUNCE_MS));
+  }
+
+  // A seeded hand-typed line (a deal line, or a legacy draft line) already names its โรงงาน, so it gets
+  // the same lookup on open that typing would trigger. Mount only: later lookups ride brand edits.
+  useEffect(() => {
+    items.forEach((row) => {
+      if (!row.requestedCurrency || !row.requestedPriceUnitBasis) scheduleBrandLookup(row);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   function updateItem(index, patch) {
-    setItems((cur) => cur.map((item, i) => (i === index ? { ...item, ...patch } : item)));
+    setItems((cur) => cur.map((item, i) => (i === index ? patchRow(item, patch) : item)));
+    if ('brand' in patch) scheduleBrandLookup({ ...items[index], ...patch });
     if (itemFieldErrors[index]) {
       setItemFieldErrors((cur) => {
         const next = { ...cur };
@@ -580,21 +682,41 @@ export function PricingRequestCreateModal({
     }
   }
 
+  // UAT item 1 (2026-10-18): the new row lands at the bottom of a tall modal, so focus must follow it.
+  // Same mechanism as QuotationEditorPage.jsx:947 — the add records the row's clientId in a ref, the
+  // effect resolves it to the DOM id the row rendered with (ids carry the flat index) and focuses it
+  // once. A ref, not state: consumed exactly once, and nothing but an explicit add ever sets it, so a
+  // re-render from typing elsewhere can never pull focus back to the added row.
+  const pendingFocusRef = useRef(null);
+  useEffect(() => {
+    const pending = pendingFocusRef.current;
+    if (!pending) return;
+    const index = items.findIndex((it) => it.clientId === pending.rowId);
+    if (index < 0) return;
+    pendingFocusRef.current = null;
+    focusQuotationField(`model-${index}`);
+  }, [items]);
+
   function addItem() {
-    setItems((cur) => [...cur, emptyItemFromTicketItem(null)]);
+    const row = emptyItemFromTicketItem(null);
+    pendingFocusRef.current = { rowId: row.clientId };
+    setItems((cur) => [...cur, row]);
+  }
+
+  // itemFieldErrors is keyed by row index, so any insert/remove must move the keys with the rows:
+  // `mapIndex` returns the row's new index, or null when the row is gone.
+  function reindexErrors(errors, mapIndex) {
+    const next = {};
+    Object.entries(errors).forEach(([key, value]) => {
+      const to = mapIndex(Number(key));
+      if (to != null) next[to] = value;
+    });
+    return next;
   }
 
   function removeItem(index) {
     setItems((cur) => cur.filter((_, i) => i !== index));
-    setItemFieldErrors((cur) => {
-      const next = {};
-      Object.entries(cur).forEach(([key, value]) => {
-        const i = Number(key);
-        if (i < index) next[i] = value;
-        else if (i > index) next[i - 1] = value;
-      });
-      return next;
-    });
+    setItemFieldErrors((cur) => reindexErrors(cur, (i) => (i < index ? i : i > index ? i - 1 : null)));
   }
 
   function duplicateItem(index) {
@@ -602,6 +724,8 @@ export function PricingRequestCreateModal({
       const copy = { ...cur[index], clientId: newItemClientId(), id: null, sourceTicketItemId: null };
       return [...cur.slice(0, index + 1), copy, ...cur.slice(index + 1)];
     });
+    // UAT item 1 (2026-10-18): the copy lands at index + 1 and starts clean; every row after it moves down one.
+    setItemFieldErrors((cur) => reindexErrors(cur, (i) => (i > index ? i + 1 : i)));
   }
 
   function validate() {
@@ -623,12 +747,15 @@ export function PricingRequestCreateModal({
     items.forEach((item, index) => {
       const fieldErrors = validateQuotationItem(item, 'NET', 'TH', {
         skipPricing: true,
-        // GLA-125: ประเทศต้นทาง and ระยะเวลานำเข้า are required on THIS form (owner ruling
-        // 2026-09-18) — requireLeadTime is direct-deal's own SUBMIT-only flag, reused here
-        // unconditionally since a PricingRequest has no separate submit-time gate to defer to.
-        requireLeadTime: true,
+        // GLA-125: ประเทศต้นทาง is required on THIS form (owner ruling 2026-09-18). ระยะเวลานำเข้า is
+        // NOT (owner ruling 2026-10-18: import gives the time) — the origin's default still rides
+        // along on the wire, and the field itself is hidden (hideLeadTime below).
         requireOriginCountry: true,
       });
+      // The lead-time range check still runs inside validateQuotationItem, but its error renders only in
+      // the field hideLeadTime removes, so it could block a save with nothing red on screen. The server
+      // still refuses min > max, with a visible banner.
+      delete fieldErrors.leadTimeMinDays;
       // Opus review finding #2 (2026-09-18): a cheap, DISPLAY-ONLY early warning for the same
       // case PricingRequestService#resolveItem now rejects server-side with a 400 -- AREA mode
       // deriving 0 pieces. The server rounds every fraction of a piece UP, so a positive area is at
@@ -923,12 +1050,7 @@ export function PricingRequestCreateModal({
             carried on the wire (see the header-terms constants above), so an existing draft's saved
             terms survive an edit; there is simply no longer any input for them here. */}
         <div>
-          <div className="mb-2 flex items-center justify-between">
-            <span className="text-sm font-bold text-text-secondary">รายการสินค้า *</span>
-            <Button type="button" variant="secondary" style={{ fontSize: 12 }} onClick={addItem}>
-              <Icon name="plus" size={13} /> เพิ่มรายการ
-            </Button>
-          </div>
+          <div className="mb-2 text-sm font-bold text-text-secondary">รายการสินค้า *</div>
           <ul className="m-0 grid list-none gap-3 pl-0">
             {items.map((item, index) => (
               <QuotationItemRow
@@ -937,15 +1059,17 @@ export function PricingRequestCreateModal({
                 index={index}
                 hidePricing
                 brandLabel="โรงงาน"
-                // GLA-125 (owner ruling 2026-09-18): ประเทศต้นทาง (and its "อื่นๆ" typed name) and
-                // ระยะเวลานำเข้า are required on THIS form only — direct-deal keeps both optional.
+                // GLA-125 (owner ruling 2026-09-18): ประเทศต้นทาง (and its "อื่นๆ" typed name) is
+                // required on THIS form only — direct-deal keeps it optional. ระยะเวลานำเข้า is not
+                // asked here at all (owner ruling 2026-10-18: import gives the time).
                 requireOriginCountry
+                hideLeadTime
                 errors={itemFieldErrors[index] ?? {}}
                 onChange={(patch) => updateItem(index, patch)}
                 onRemove={items.length > 1 ? () => removeItem(index) : undefined}
                 onDuplicate={() => duplicateItem(index)}
                 // CR-1: a catalogue pick auto-fills the currency + unit; sales may still change them.
-                onCatalogPicked={(cat) => updateItem(index, termsFromCatalog(cat))}
+                onCatalogPicked={(cat) => updateItem(index, catalogPickPatch(cat))}
                 renderTerms={(row, rowIndex) => {
                   const rowErrors = itemFieldErrors[rowIndex] ?? {};
                   const currencies = REQUEST_CURRENCY_OPTIONS.includes(row.requestedCurrency) || !row.requestedCurrency
@@ -973,6 +1097,11 @@ export function PricingRequestCreateModal({
               />
             ))}
           </ul>
+          {/* Under the rows (UAT item 1): a rep adding a third line is looking at the second, not at
+              the section header 760px above it — the direct-quotation editor made the same move. */}
+          <Button type="button" variant="secondary" className="mt-3" style={{ fontSize: 12 }} onClick={addItem}>
+            <Icon name="plus" size={13} /> เพิ่มรายการ
+          </Button>
         </div>
 
         <div>
