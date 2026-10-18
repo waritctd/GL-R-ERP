@@ -33,6 +33,24 @@ function Harness({
   );
 }
 
+// ── UAT item 2 (owner ruling 2026-10-18): on the PCR form — this component's only consumer —
+// ผู้สั่งซื้อ is NOT required ("not information import needs to know"), and the hint must stop
+// promising the signature box (the quotation prints only the typed ผู้สั่งซื้อ name/phone/email). ──
+describe('QuotationContactPicker — optional on the PCR form', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.customers.contacts.mockResolvedValue({ contacts: [] });
+  });
+
+  it('is not marked required, and its hint says import does not use it and the quotation collects it', async () => {
+    render(<Harness />);
+    const select = await screen.findByLabelText(/^ผู้สั่งซื้อ/);
+    expect(select.getAttribute('aria-required')).toBeNull();
+    expect(screen.getByText('ไม่บังคับ — ฝ่ายนำเข้าไม่ใช้ข้อมูลนี้ ชื่อ เบอร์ และอีเมลที่จะพิมพ์บนใบเสนอราคากรอกตอนสร้างใบเสนอราคา')).not.toBeNull();
+    expect(screen.queryByText(/ช่องลงนาม/)).toBeNull();
+  });
+});
+
 // ── "ใช้ชื่อเดียวกับลูกค้า" (owner testing feedback, 2026-09-11): "when the customer and the
 // purchaser are the same person, let the rep reuse the customer name instead of retyping it". ──
 describe('QuotationContactPicker — ใช้ชื่อเดียวกับลูกค้า', () => {
@@ -199,7 +217,6 @@ describe('QuotationContactPicker — ไม่เติม "คุณ" หน้
     const picker = await screen.findByLabelText(/^ผู้สั่งซื้อ/);
     const checkbox = screen.getByRole('checkbox', { name: /ไม่เติม/ });
     // DOCUMENT_POSITION_FOLLOWING (4): the checkbox comes AFTER the picker in document order.
-    // eslint-disable-next-line no-bitwise
     expect(picker.compareDocumentPosition(checkbox) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });

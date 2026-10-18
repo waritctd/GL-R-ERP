@@ -25,11 +25,15 @@ function emptyNewContact() {
  *
  * ⚠️ Owner-directed reversal of F2/V167 (2026-09-26): the direct-deal quotation editor
  * (QuotationEditorPage/DealCustomerCard) no longer renders this at all — ผู้สั่งซื้อ there is now a
- * single optional free-text field (`terms.orderedByName`), and the required-ness this component
- * enforces does not apply to that flow any more. The ONE remaining consumer is
- * PricingRequestCreateModal (GLA-125 follow-up, 2026-09-18), which reuses this component AS-IS for
- * its own, separate ผู้สั่งซื้อ requirement on a pricing request — do not remove this component
- * while that import exists, and do not assume a change here is scoped to quotations only.
+ * single optional free-text field (`terms.orderedByName`). The ONE remaining consumer is
+ * PricingRequestCreateModal (GLA-125 follow-up, 2026-09-18) — do not remove this component while
+ * that import exists.
+ *
+ * ⚠️ Not required there either (UAT item 2, owner ruling 2026-10-18: "not information import needs
+ * to know"): the `required` marker and the "prints in the signature box" hint are gone — since the
+ * 2026-10-13 ruling the quotation prints only the ผู้สั่งซื้อ name/phone/email typed on the quotation
+ * itself, so the hint now says exactly that. Nothing on the client or the server requires a contact
+ * on a pricing request (PricingRequestService.validateRecipientIdentifiable accepts a label alone).
  *
  * Contract with the parent: `value` is a contact OBJECT (or null) and the parent owns it, same
  * controlled-field shape QuotationItemRow uses. `value` may be a partial stand-in — `{ id,
@@ -227,7 +231,7 @@ export const QuotationContactPicker = forwardRef(function QuotationContactPicker
 
   return (
     <>
-      <FormField label="ผู้สั่งซื้อ" htmlFor={idPrefix} required error={error} hint="ชื่อนี้จะพิมพ์ในช่องลงนามของใบเสนอราคา">
+      <FormField label="ผู้สั่งซื้อ" htmlFor={idPrefix} error={error} hint="ไม่บังคับ — ฝ่ายนำเข้าไม่ใช้ข้อมูลนี้ ชื่อ เบอร์ และอีเมลที่จะพิมพ์บนใบเสนอราคากรอกตอนสร้างใบเสนอราคา">
         <select
           id={idPrefix}
           disabled={disabled || !customerId}
