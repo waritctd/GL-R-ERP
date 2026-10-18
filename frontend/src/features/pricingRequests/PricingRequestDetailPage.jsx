@@ -1117,7 +1117,10 @@ export function PricingRequestDetailPage({ user, showToast }) {
    * elsewhere computes the default without touching state) — so checking whether that key exists
    * already tracks exactly what a separate boolean flag would have to track by hand.
    */
-  const [confirmingFactoryQuoteId, setConfirmingFactoryQuoteId] = useState(null);
+  // Per-quote in-flight set: confirms on different factories can overlap, and one finishing must not
+  // re-enable another's button. The CEO-gate notice below also waits until this set is EMPTY, so a
+  // confirm that lands while another is still running cannot name the running one as "still waiting".
+  const [confirmingFactoryQuoteIds, setConfirmingFactoryQuoteIds] = useState(() => new Set());
   // Set to this request's id after a confirm; the persistent notice (a toast's 3.2 s cannot carry a
   // blocker list) is computed from the live queries while it matches. Cleared on the next confirm.
   const [ceoGateCheckedForId, setCeoGateCheckedForId] = useState(null);
@@ -1125,7 +1128,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
   async function confirmFactoryQuote(quote, draft) {
     const dirty = Boolean(responseDrafts[quote.id]);
     const needsReceive = dirty || ['DRAFT', 'REQUESTED'].includes(quote.status);
-    setConfirmingFactoryQuoteId(quote.id);
+    setConfirmingFactoryQuoteIds((cur) => new Set(cur).add(quote.id));
     setCeoGateCheckedForId(null);
     try {
       let targetId = quote.id;
@@ -1164,7 +1167,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
     } catch (error) {
       showToast?.('error', error.message || 'ยืนยันราคาเสนอไม่สำเร็จ');
     } finally {
-      setConfirmingFactoryQuoteId(null);
+      setConfirmingFactoryQuoteIds((cur) => {
+        const next = new Set(cur);
+        next.delete(quote.id);
+        return next;
+      });
     }
   }
 
@@ -1594,10 +1601,14 @@ export function PricingRequestDetailPage({ user, showToast }) {
   // that has the identical gap the price grid had before the #1062 review fix.
   const inSendWindow = FACTORY_ROUTING_STATUSES.includes(summary?.status);
   const factoryQuotes = useMemo(() => factoryQuery.data ?? [], [factoryQuery.data]);
-  const ceoGateNotice = ceoGateCheckedForId === pricingRequestId && !detailQuery.isFetching && !factoryQuery.isFetching
-    && !detailQuery.isError && !factoryQuery.isError
-    ? ceoGateBlockerMessage(request, factoryQuotes)
-    : null;
+  const ceoGateNotice = useMemo(
+    () => (ceoGateCheckedForId === pricingRequestId && confirmingFactoryQuoteIds.size === 0 && !detailQuery.isFetching && !factoryQuery.isFetching
+      && !detailQuery.isError && !factoryQuery.isError
+      ? ceoGateBlockerMessage(request, factoryQuotes)
+      : null),
+    [ceoGateCheckedForId, pricingRequestId, confirmingFactoryQuoteIds, detailQuery.isFetching, factoryQuery.isFetching,
+      detailQuery.isError, factoryQuery.isError, request, factoryQuotes],
+  );
   const factoryGroups = useMemo(() => groupFactoryQuotesByFactory(factoryQuotes), [factoryQuotes]);
   // pricingRequestItemId -> that item's line on the CURRENT factory quote, once Import has priced it.
   const importQuoteItemByRequestItem = useMemo(() => {
@@ -3616,11 +3627,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
                           <Button
                             type="button"
                             variant="primary"
-                            disabled={confirmingFactoryQuoteId === current.id}
+                            disabled={confirmingFactoryQuoteIds.has(current.id)}
                             onClick={() => confirmFactoryQuote(current, draft)}
                             data-testid="pcr-submit-to-ceo"
                           >
-                            {confirmingFactoryQuoteId === current.id ? 'กำลังยืนยัน…' : 'ยืนยันราคาเสนอ'}
+                            {confirmingFactoryQuoteIds.has(current.id) ? 'กำลังยืนยัน…' : 'ยืนยันราคาเสนอ'}
                           </Button>
                         ) : null}
                       </div>

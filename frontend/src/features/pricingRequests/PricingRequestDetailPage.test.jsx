@@ -5209,6 +5209,95 @@ describe('PricingRequestDetailPage ยืนยันราคาเสนอ re
     expect((await screen.findByTestId('pcr-ceo-gate-notice')).textContent).toContain('รายการที่ 2');
   });
 
+  // Two factories, A (quote 91) confirmed then B (quote 92) while A's refetch is held.
+  // Returns controls to release A's refetch (finishA) and B's mark-ready (finishB). With
+  // holdFirstMarkReady, A's mark-ready itself is held instead and finishFirstMarkReady releases it,
+  // so B can run to completion while A is still in flight.
+  async function overlapConfirms({ holdFirstMarkReady = false } = {}) {
+    const before = twoFactoryRequest({ status: 'AWAITING_FACTORY_RESPONSE' });
+    const quotesBefore = [
+      quoteFor(91, 601, 'SCG Ceramics', 1, 'RESPONSE_RECEIVED'),
+      quoteFor(92, 602, 'Cotto Industry', 2, 'RESPONSE_RECEIVED'),
+    ];
+    const quotesAfterA = [
+      quoteFor(91, 601, 'SCG Ceramics', 1, 'READY_FOR_COSTING'),
+      quoteFor(92, 602, 'Cotto Industry', 2, 'RESPONSE_RECEIVED'),
+    ];
+    renderDetailPage({ user: importUser, request: before, factoryQuotes: quotesBefore });
+    await waitForLoaded(before);
+    await screen.findByText('Cotto Industry');
+    let releaseA; let releaseB; let releaseMarkA;
+    const heldA = new Promise((resolve) => { releaseA = resolve; });
+    const heldMarkA = new Promise((resolve) => { releaseMarkA = resolve; });
+    const heldB = new Promise((resolve) => { releaseB = resolve; });
+    let aReleased = holdFirstMarkReady;
+    api.pricingRequests.markFactoryQuoteReady.mockImplementation((id) => {
+      if (holdFirstMarkReady) return id === 91 ? heldMarkA : Promise.resolve({});
+      return id === 92 ? heldB : Promise.resolve({});
+    });
+    api.pricingRequests.listFactoryQuotes.mockImplementation(() => {
+      if (api.pricingRequests.markFactoryQuoteReady.mock.calls.length === 0) return Promise.resolve({ items: quotesBefore });
+      if (holdFirstMarkReady) return Promise.resolve({ items: quotesBefore }); // server unchanged: A's button stays
+      return aReleased ? Promise.resolve({ items: quotesAfterA }) : heldA;
+    });
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'ยืนยันราคาเสนอ' })[0]);
+    if (holdFirstMarkReady) {
+      await waitFor(() => expect(api.pricingRequests.markFactoryQuoteReady).toHaveBeenCalledWith(91));
+    } else {
+      await waitFor(() => expect(api.pricingRequests.listFactoryQuotes).toHaveBeenCalledTimes(2));
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
+    await waitFor(() => expect(api.pricingRequests.markFactoryQuoteReady).toHaveBeenCalledWith(92));
+    return {
+      finishFirstMarkReady: async () => { await act(async () => { releaseMarkA({}); }); },
+      finishA: async () => {
+        aReleased = true;
+        await act(async () => { releaseA({ items: quotesAfterA }); });
+        // After A's refetch its quote is READY_FOR_COSTING, so A's button is gone; only B's busy
+        // button remains. (The single-slot mutation fails inside this wait, so A's finally has run.)
+        await waitFor(() => expect(screen.getAllByRole('button', { name: 'กำลังยืนยัน…' })).toHaveLength(1));
+      },
+      finishB: async () => { await act(async () => { releaseB({}); }); },
+    };
+  }
+
+  // Catches: tracking in-flight confirms in a single slot that the first confirm's finally nulls.
+  it("a second factory's ยืนยันราคาเสนอ stays busy after the first confirm's refetch resolves", async () => {
+    const { finishA, finishB } = await overlapConfirms();
+    await finishA();
+
+    const busy = screen.getAllByRole('button', { name: 'กำลังยืนยัน…' });
+    expect(busy).toHaveLength(1);
+    expect(busy[0].disabled).toBe(true);
+
+    await finishB();
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'กำลังยืนยัน…' })).toBeNull());
+  });
+
+  // Catches: the notice rendering while a later-started confirm is still in flight (no "set is empty" gate).
+  it('the notice waits for the LATEST confirm, not the first', async () => {
+    const { finishA, finishB } = await overlapConfirms();
+    await finishA();
+    expect(notice()).toBeNull();
+
+    await finishB();
+    expect((await screen.findByTestId('pcr-ceo-gate-notice')).textContent).toContain('Cotto Industry');
+  });
+
+  // Catches: ordering the notice by confirm START only, so a later-started confirm finishing first raises it while an earlier one is in flight.
+  it('the notice waits until NO confirm is in flight (second finishes first)', async () => {
+    const { finishFirstMarkReady } = await overlapConfirms({ holdFirstMarkReady: true });
+    // B ran to completion (its refetch landed); A is still waiting on markFactoryQuoteReady
+    await waitFor(() => expect(api.pricingRequests.listFactoryQuotes.mock.calls.length).toBeGreaterThan(1));
+    await waitFor(() => expect(screen.getAllByRole('button', { name: 'กำลังยืนยัน…' })).toHaveLength(1));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(notice()).toBeNull();
+
+    await finishFirstMarkReady();
+    expect((await screen.findByTestId('pcr-ceo-gate-notice')).textContent).toContain('Cotto Industry');
+  });
+
   it('shows no notice when the post-confirm re-read FAILED (stale cache is not evidence)', async () => {
     const { before, quotes, markedReady } = renderAwaitingBlankLine();
     await waitForLoaded(before);
