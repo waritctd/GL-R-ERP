@@ -10,7 +10,7 @@
     "dev": "vite --host 127.0.0.1 --port 5174 --strictPort",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1 --port 4174 --strictPort",
-    "lint": "eslint src",
+    "lint": "eslint src e2e-real playwright.real.config.js",
     "audit": "node scripts/audit-gate.mjs",
     "test": "vitest run",
     "test:e2e": "playwright test --config playwright.real.config.js",

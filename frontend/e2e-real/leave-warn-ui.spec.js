@@ -396,7 +396,7 @@ test.describe.serial('leave approver: warning visibility, pay-consequence confir
     await expect(dialog).toHaveCount(0);
   });
 
-  test('case 7: after approving, the paid/unpaid split is right and the employee quota has not moved', async ({}) => {
+  test('case 7: after approving, the paid/unpaid split is right and the employee quota has not moved', async () => {
     const after = await sessions.hr.get('/api/leave');
     expect(after.status()).toBe(200);
     const { requests } = await after.json();

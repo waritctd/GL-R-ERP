@@ -151,4 +151,17 @@ export default [
       'no-restricted-syntax': ['error', RAW_FORM_RULE, ...INCLUSIVE_BREAKPOINT_RULES],
     },
   },
+  {
+    // The real-backend Playwright suite and its config run under Node, not Vite: `process.env`
+    // picks the backend URL and `new URL(..., import.meta.url)` locates fixtures. Browser globals
+    // stay on too, because `page.evaluate(() => window...)` callbacks are written in these same
+    // files and run in Chromium. Until 2026-10-18 `npm run lint` covered `src` only, so this
+    // folder had 40 silent no-undef errors and nothing in CI could see a typo here.
+    files: ['e2e-real/**/*.js', 'playwright.real.config.js'],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: 'module',
+      globals: { ...globals.browser, ...globals.node },
+    },
+  },
 ];
