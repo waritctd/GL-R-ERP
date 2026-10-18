@@ -68,12 +68,14 @@ describe('Tabs', () => {
     fireEvent.keyDown(screen.getByRole('tab', { name: /ภาพรวม/ }), { key: 'End' });
 
     expect(onChange).toHaveBeenCalledWith('activity');
-    // scrollIntoView also scrolls the vertical page container: .content-scroll has a
-    // scroll-padding-top equal to the deal header height, so the browser treats a tab inside that
-    // padded band as hidden and scrolls the page up to "reveal" it.
+    // scrollIntoView scrolls EVERY scrollable ancestor, including the vertical page container.
+    // The deal page's tablist lives in a sticky header that re-renders on scroll, and this effect
+    // re-runs on each of those renders, so a vertical scroll from here dragged the page around.
+    // Horizontal visibility is handled by the scrollLeft math alone.
     expect(scrollIntoView).not.toHaveBeenCalled();
-    // A plain focus() scrolls the page the same way; focusing must not move the vertical scroll.
-    expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+    // Roving focus stays a plain focus(): on pages where the tablist is in the normal flow, the
+    // browser must still be free to bring an off-screen tab into view (preventScroll would hide it).
+    expect(focus).toHaveBeenCalledWith();
     // tabRight (500) - clientWidth (300) + paddingRight (0) + edge padding (8)
     expect(tablist.scrollLeft).toBe(208);
   });

@@ -137,8 +137,10 @@ export function Tabs({ items, value, onChange, ariaLabel, idPrefix, onSurface = 
     const tabs = listRef.current?.querySelectorAll('[role="tab"]');
     if (!tabs || !tabs.length) return;
     const bounded = (index + tabs.length) % tabs.length;
-    // preventScroll: a plain focus() scrolls the page vertically (scroll-padding on the shell scroller).
-    tabs[bounded].focus({ preventScroll: true });
+    // Plain focus(): where the tablist is in the normal flow the browser may still bring an
+    // off-screen tab into view. The vertical scroll must come from the browser's own focus
+    // handling only, never from scrollIntoView here (see scrollTabIntoView).
+    tabs[bounded].focus();
     scrollTabIntoView(tabs[bounded]);
     onChange(items[bounded].id);
   }
