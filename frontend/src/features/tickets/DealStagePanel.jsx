@@ -303,7 +303,7 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
         ) : (
           <div className="flex flex-col gap-3">
             <div className="flex items-start gap-3">
-              <span className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-info text-lg font-extrabold text-surface">
+              <span data-testid="deal-stage-no" className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-info text-lg font-extrabold text-surface">
                 {meta?.no ?? '-'}
               </span>
               <div className="min-w-0 flex-1">
