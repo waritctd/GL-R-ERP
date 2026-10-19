@@ -1,6 +1,6 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TicketDetailPage } from './TicketDetailPage.jsx';
@@ -464,6 +464,43 @@ describe('TicketDetailPage', () => {
     // old `.content-scroll` rule) for mobile focus scrolling — see
     // ticketWorkspaceLayout.test.js, unaffected by this.
     expect(screen.queryByTestId('ticket-context-rail')).toBeNull();
+  });
+
+  // Regression guard for the sticky-chrome jitter bug: the header must condense off the
+  // top sentinel's IntersectionObserver visibility, NEVER off a scroller.scrollTop
+  // threshold (whose feedback loop — condense shrinks the page, scrollTop re-crosses the
+  // threshold — made the page bounce / snap to the top). jsdom has no layout and no real
+  // IntersectionObserver, so this pins the WIRING (condense follows isIntersecting); the
+  // actual no-oscillation behaviour is verified in a real browser.
+  describe('sticky chrome condense is sentinel-driven (not scrollTop)', () => {
+    afterEach(() => { vi.unstubAllGlobals(); });
+
+    it('condenses when the top sentinel leaves view and expands when it returns', async () => {
+      const ioInstances = [];
+      class MockIntersectionObserver {
+        constructor(cb, opts) { this.cb = cb; this.opts = opts; this.elements = []; ioInstances.push(this); }
+        observe(el) { this.elements.push(el); }
+        unobserve() {}
+        disconnect() {}
+        takeRecords() { return []; }
+      }
+      vi.stubGlobal('IntersectionObserver', MockIntersectionObserver);
+
+      renderTicketDetailPage();
+      const header = await screen.findByTestId('deal-state-header');
+      expect(header.getAttribute('data-condensed')).toBe('false'); // expanded at the top
+
+      // The condense observer is the one wired with the sentinel's rootMargin — proving the
+      // trigger is a sentinel's visibility, not a scrollTop read.
+      const condenseIo = ioInstances.find((io) => io.opts?.rootMargin === '-8px 0px 0px 0px');
+      expect(condenseIo).toBeTruthy();
+
+      act(() => condenseIo.cb([{ isIntersecting: false }])); // top scrolled out of view
+      expect(screen.getByTestId('deal-state-header').getAttribute('data-condensed')).toBe('true');
+
+      act(() => condenseIo.cb([{ isIntersecting: true }])); // back at the top
+      expect(screen.getByTestId('deal-state-header').getAttribute('data-condensed')).toBe('false');
+    });
   });
 
   it('renders a dash for มูลค่าดีล until a price exists', async () => {
