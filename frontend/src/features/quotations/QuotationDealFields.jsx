@@ -47,9 +47,8 @@ export function ProjectNamePrintToggle({ id, checked, onChange }) {
  * record only, not in the pdf"): printed on the document's customer contact line when filled, and
  * the only phone/email that line prints; a blank one prints nothing. Labelled โทร. / อีเมล (owner ruling
  * 2026-10-19, M-8): the same โทร. the customer card above uses, so the two customer phones a few rows
- * apart read alike; the 2026-10-18 โทรศัพท์ลูกค้า / อีเมลลูกค้า wording is gone. The PDF's labels and
- * values are untouched by either relabel. No hint: the picker's is the
- * only explanatory text on the form (owner ask). Rendered directly under the ผู้ติดต่อ picker on both
+ * apart read alike. The PDF's labels are untouched. No hint: the picker's is the only explanatory
+ * text on the form (owner ask). Rendered directly under the ผู้ติดต่อ picker on both
  * entry paths; one component for both, for the reason ProjectNamePrintToggle above states.
  * `idSuffix` is "Inline" or "Card". Neither field is required.
  *

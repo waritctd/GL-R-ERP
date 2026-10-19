@@ -17,10 +17,8 @@ vi.setConfig({ testTimeout: 15000 });
 // writes the ผู้สั่งซื้อ signature name from that contact, so the editor sends no `orderedByName`.
 //
 // Under the picker sit the CUSTOMER's phone and email (`orderedByPhone`, `orderedByEmail`),
-// labelled โทร. / อีเมล (owner ruling 2026-10-19, M-8 — the same โทร. as the customer card, so the two
-// customer phones read alike; the queries below pick these two by id prefix, since the card's own โทร.
-// box is on the same screen). They print on the document's customer contact line when filled (owner
-// ruling 2026-10-13), a blank one prints nothing, and no relabel changes the PDF.
+// labelled โทร. / อีเมล. They print on the document's customer contact line when filled (owner ruling
+// 2026-10-13); a blank one prints nothing.
 //
 // Evidence note: every server response here is a vi.fn(). What the server stores, refuses and
 // prints is DealQuotationOrderedByContactIntegrationTest / …RenderTest (Java, real Postgres);
@@ -51,8 +49,7 @@ const EMAIL = 'bid.contact@contractor-b.example';
 const PRINTED_WHEN_FILLED = 'พิมพ์ในใบเสนอราคาเมื่อกรอก';
 const PHONE_LABEL = 'โทร.';
 const EMAIL_LABEL = 'อีเมล';
-// The customer card has its own โทร. box and the เพิ่มผู้ติดต่อใหม่ modal its own อีเมล, so the label alone
-// is ambiguous on this screen: narrow to the two boxes under the picker (ids orderedByPhone*/orderedByEmail*).
+// โทร. is also the customer card's box and อีเมล the picked contact's edit box: narrow to orderedBy*.
 const BOX = { selector: '[id^="orderedBy"]' };
 // A contact of the deal's customer (fictional).
 const SOMCHAI = { id: 31, customerId: 5, firstName: 'สมชาย', lastName: 'ใจดี', phone: '081-234-5678', email: null };
