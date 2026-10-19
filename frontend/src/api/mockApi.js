@@ -1436,20 +1436,25 @@ function mockDepositNoticeItemsFromQuotation(items) {
   }));
 }
 
-// Mirrors DepositNoticeRepository.findDealQuotationItems (the column pick that
-// findDealQuotationItemsForDeposit and OrderConfirmationService.createDepositNoticeFromQuotation's
-// new-engine branch share): one new-engine quotation's lines as deposit-notice items. Every money
-// figure is read off the DTO, never recomputed.
+// Mirrors DepositNoticeRepository.findDealQuotationItems — the column pick (seq, description,
+// qty, raw_unit, unit_price, sales_discount, final_unit_price) that findDealQuotationItemsForDeposit
+// and OrderConfirmationService.createDepositNoticeFromQuotation's new-engine branch share, with its
+// own blank fallbacks. unitPrice/netUnitPrice are read off the DTO, never recomputed.
 function mockDepositNoticeItemsFromDealQuotation(row) {
-  return buildDealQuotationDto(row).items.map((item, idx) => ({
-    seq: item.seq ?? idx + 1,
-    description: item.descriptionLine?.trim() || 'รายการสินค้า',
-    qty: item.piecesFinal,
-    unit: 'แผ่น',
-    unitPrice: item.unitPrice,
-    discountLabel: item.discountPct > 0 ? `ส่วนลด ${item.discountPct}% ต่อหน่วย` : null,
-    netUnitPrice: item.netUnitPrice,
-  }));
+  return buildDealQuotationDto(row).items.map((item, idx) => {
+    // Display label only: the mock stores no sales_discount, so this restates the column Java reads
+    // (DealQuotationRepository#itemParams writes it as unitPrice − netUnitPrice).
+    const salesDiscount = round2(item.unitPrice - item.netUnitPrice);
+    return {
+      seq: item.seq ?? idx + 1,
+      description: item.descriptionLine?.trim() ? item.descriptionLine : 'รายการสินค้า',
+      qty: item.quantity,
+      unit: item.unit?.trim() ? item.unit : 'หน่วย',
+      unitPrice: item.unitPrice,
+      discountLabel: salesDiscount > 0 ? `ส่วนลด ${salesDiscount} ต่อหน่วย` : null,
+      netUnitPrice: item.netUnitPrice,
+    };
+  });
 }
 
 // Branch fix: mirrors DepositNoticeService.pickQuotation — the latest ACCEPTED revision for

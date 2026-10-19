@@ -137,26 +137,14 @@ async function driveTicketToAcceptedQuotation() {
   return { ticketId, customer, project, quotation: issued };
 }
 
-// DealQuotationOutcomeIntegrationTest#upsertWithValidityDays: the stored draft re-sent with only
-// validityDays changed (recipientType is left out, as there — this origin refuses it).
-function upsertWithValidityDays(q, days) {
-  const {
-    contactId, deptCode, unitCode, offerDate, depositPercent, remainderMode, creditDays,
-    customerNotes, priceMode, documentLanguage, currency, items,
-  } = q;
-  return {
-    contactId, deptCode, unitCode, offerDate, depositPercent, remainderMode, creditDays,
-    validityDays: days, customerNotes, priceMode, documentLanguage, currency, items,
-  };
-}
-
 // New-engine (PRICING_REQUEST-origin) quotation, issued by the sales manager — the same drive as
 // DealQuotationOutcomeIntegrationTest#issuedNewOriginQuotation.
 async function driveTicketToNewEngineIssuedQuotation() {
   const { ticketId, prId } = await driveTicketToApprovedDecision({ priceMode: 'NET' });
   await api.auth.login({ role: 'sales' });
   const { quotation: draft } = await api.dealQuotations.createFromPricingRequest(prId);
-  await api.dealQuotations.update(draft.id, upsertWithValidityDays(draft, 30));
+  // Java's drive (DealQuotationOutcomeIntegrationTest) saves validityDays before submit; the
+  // mock's submit/approve/recordOutcome never require it, so that update is left out here.
   await api.dealQuotations.submit(draft.id, {});
   await api.auth.login({ role: 'sales_manager' });
   const { quotation: issued } = await api.dealQuotations.approve(draft.id, {});
@@ -229,8 +217,20 @@ describe('mockApi.pricingRequests.createDepositNoticeFromQuotation — new-engin
     const { depositNotice } = await api.pricingRequests.createDepositNoticeFromQuotation(prId, {});
     expect(depositNotice.reference).toBe(accepted.number);
     expect(depositNotice.items.length).toBeGreaterThan(0);
-    expect(depositNotice.items[0].qty).toBe(accepted.items[0].piecesFinal);
+    expect(depositNotice.items[0].qty).toBe(accepted.items[0].quantity);
     expect(depositNotice.items[0].netUnitPrice).toBe(accepted.items[0].netUnitPrice);
+  });
+
+  // Pin, not a reproduction: the ticket-level route with no items falls through the (empty)
+  // legacy sources to DepositNoticeRepository.findDealQuotationItemsForDeposit, which on a deal
+  // with one ACCEPTED new-engine quotation reads the same lines as the pricing-request route.
+  it('ticket-level createDraft with no items reads the same new-engine lines as the pricing-request route', async () => {
+    const { ticketId, prId } = await driveTicketToNewEngineAcceptedQuotation();
+    const { depositNotice: fromTicket } = await api.depositNotices.createDraft(ticketId, {});
+    const { depositNotice: fromPr } = await api.pricingRequests.createDepositNoticeFromQuotation(prId, {});
+    expect(fromTicket.items.length).toBeGreaterThan(0);
+    const pick = (items) => items.map(({ qty, netUnitPrice }) => ({ qty, netUnitPrice }));
+    expect(pick(fromTicket.items)).toEqual(pick(fromPr.items));
   });
 
   it('still 409s while the new-engine quotation is only ISSUED (customer has not accepted)', async () => {
