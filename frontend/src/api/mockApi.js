@@ -1436,10 +1436,8 @@ function mockDepositNoticeItemsFromQuotation(items) {
   }));
 }
 
-// Mirrors DepositNoticeRepository.findDealQuotationItems — the column pick (seq, description,
-// qty, raw_unit, unit_price, sales_discount, final_unit_price) that findDealQuotationItemsForDeposit
-// and OrderConfirmationService.createDepositNoticeFromQuotation's new-engine branch share, with its
-// own blank fallbacks. unitPrice/netUnitPrice are read off the DTO, never recomputed.
+// Mirrors DepositNoticeRepository.findDealQuotationItems. Values are read off the DTO, never
+// recomputed (label excepted — see below).
 function mockDepositNoticeItemsFromDealQuotation(row) {
   return buildDealQuotationDto(row).items.map((item, idx) => {
     // Display label only: the mock stores no sales_discount, so this restates the column Java reads
@@ -13284,17 +13282,16 @@ export const api = {
       // Branch fix (deposit-notice autofill): every deal created through the pricing-request
       // chain has approved_price = NULL on every ticket_item, so legacyItems above is always
       // empty for it — mirrors DepositNoticeService.buildItemsFromRequest's own new-chain
-      // fallback to the ticket's own customer quotation (latest ACCEPTED, else latest ISSUED),
-      // then to its live new-engine quotation (mirrors
-      // DepositNoticeRepository.findDealQuotationItemsForDeposit: ACCEPTED > ISSUED > APPROVED,
-      // newest id).
+      // fallback to the ticket's own customer quotation (latest ACCEPTED, else latest ISSUED).
       let items = payload.items?.length ? payload.items : legacyItems;
       if (!items.length) {
         const quotation = mockPickTicketQuotationForDepositNotice(ticketId);
         if (quotation) items = mockDepositNoticeItemsFromQuotation(quotation.items);
       }
       if (!items.length) {
-        // The picker labels legacy rows 'PRICING_REQUEST' too, so the array tells new-engine apart.
+        // Then the live new-engine quotation: findDealQuotationItemsForDeposit, ordered as
+        // mockPickLiveQuotationForItemFallback's own comment says. The picker labels legacy rows
+        // 'PRICING_REQUEST' too, so the array tells new-engine apart.
         const live = mockPickLiveQuotationForItemFallback(Number(ticketId));
         if (live && mockDealQuotations.includes(live.quotation)) {
           items = mockDepositNoticeItemsFromDealQuotation(live.quotation);
@@ -16195,11 +16192,8 @@ export const api = {
       if (ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
 
       // Mirrors OrderConfirmationService.createDepositNoticeFromQuotation: the ACCEPTED legacy
-      // quotation (mapped by DepositNoticeService.itemsFromQuotation), else THIS pricing request's
-      // ACCEPTED new-engine quotation (DealQuotationRepository.findAcceptedForPricingRequest, mapped
-      // by DepositNoticeRepository.findDealQuotationItems — the column pick
-      // findDealQuotationItemsForDeposit shares). Items/amounts trace to that quotation, never to a
-      // sales.ticket_item row or a sibling pricing request's quotation.
+      // quotation first, else THIS pricing request's ACCEPTED new-engine row
+      // (DealQuotationRepository.findAcceptedForPricingRequest).
       const accepted = mockCustomerQuotations.find(
         (q) => q.pricingRequestId === pr.id && q.docStatus === 'ACCEPTED');
       const newEngine = accepted ? null : mockDealQuotations.find(

@@ -234,10 +234,8 @@ describe('mockApi.pricingRequests.createDepositNoticeFromQuotation — new-engin
     expect(depositNotice.items[0].discountLabel).toBe('ส่วนลด 12 ต่อหน่วย');
   });
 
-  // Reproduces the fallback gap closed in 40d10c70: the ticket-level route with no items falls
-  // through the (empty) legacy sources to DepositNoticeRepository.findDealQuotationItemsForDeposit,
-  // which on a deal with one ACCEPTED new-engine quotation reads the same lines as the
-  // pricing-request route. Without that fallback the mock returned no items here.
+  // Covers the ticket-level new-engine fallback (DepositNoticeRepository.findDealQuotationItemsForDeposit):
+  // with no items and empty legacy sources, the route would return no items without it.
   it('ticket-level createDraft with no items reads the same new-engine lines as the pricing-request route', async () => {
     const { ticketId, prId } = await driveTicketToNewEngineAcceptedQuotation();
     const { depositNotice: fromTicket } = await api.depositNotices.createDraft(ticketId, {});
