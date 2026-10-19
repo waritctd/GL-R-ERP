@@ -82,10 +82,11 @@ public class OrderConfirmationService {
     private final CustomerQuotationRepository quotations;
     private final DepositNoticeService depositNotices;
     private final NotificationRepository notifications;
-    // GLA-123 slice S3 BLOCKER 2 fix — read-only dependency onto the new engine, used ONLY by
+    // GLA-123 slice S3 BLOCKER 2 fix — read-only dependency onto the new engine, used by
     // #reconcileTicketItems to prefer an ACCEPTED PRICING_REQUEST-origin quotation's own line
-    // quantities over the PR item's authored ones. SETTER-injected (not a constructor parameter),
-    // matching DealQuotationService's own established device (see its
+    // quantities over the PR item's authored ones, and by #createDepositNoticeFromQuotation to
+    // find the pricing request's ACCEPTED new-engine quotation. SETTER-injected (not a
+    // constructor parameter), matching DealQuotationService's own established device (see its
     // #wirePricingRequestDependencies Javadoc): 12 existing hand-wired
     // `new OrderConfirmationService(...)` test call sites keep compiling unchanged, Spring wires
     // it automatically via the @Autowired setter in production, and #reconcileTicketItems
@@ -106,8 +107,9 @@ public class OrderConfirmationService {
     }
 
     /** GLA-123 slice S3 BLOCKER 2 fix — see {@link #dealQuotations}'s own Javadoc for why this is
-     * setter- rather than constructor-injected. {@code required = false} so a hand-wired test that
-     * never exercises a PRICING_REQUEST-origin confirmOrder is unaffected either way. */
+     * setter- rather than constructor-injected. {@code required = false}: an unwired instance
+     * falls back to the PR item's own quantity in confirmOrder, and answers 409 on the new-engine
+     * branch of createDepositNoticeFromQuotation. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     public void wireDealQuotationRepository(th.co.glr.hr.dealquotation.DealQuotationRepository dealQuotations) {
         this.dealQuotations = dealQuotations;
@@ -440,9 +442,8 @@ public class OrderConfirmationService {
      * the same ticket can never supply them. The percent is still whatever {@code createDraft}
      * derives, which is ticket-scoped and legacy-first: on a ticket that also carries a sibling
      * pricing request's legacy ISSUED quotation, the percent comes from that legacy row. That is a
-     * known limitation the ticket-level route shares; this route does not introduce it. The 409
-     * semantics do not change: the customer must have accepted, and an ISSUED-only quotation still
-     * gets 409.
+     * known limitation the ticket-level route shares; this route does not introduce it. The
+     * customer must have accepted: an ISSUED-only quotation answers 409.
      */
     @Transactional
     public DepositNoticeDto createDepositNoticeFromQuotation(long pricingRequestId,
@@ -460,11 +461,8 @@ public class OrderConfirmationService {
         List<DepositNoticeItemRequest> items;
         if (accepted != null) {
             reference = accepted.number();
-            // Mapping itself now lives on DepositNoticeService (this branch's fix), shared with that
-            // class's own new-chain item fallback in buildItemsFromRequest — see its Javadoc.
             items = DepositNoticeService.itemsFromQuotation(accepted.items());
         } else {
-            // New-engine branch: the accepted quotation of THIS pricing request — see the Javadoc.
             th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto newEngine = dealQuotations == null
                 ? null
                 : dealQuotations.findAcceptedForPricingRequest(pricingRequestId)

@@ -118,11 +118,10 @@ public class DepositNoticeRepository {
      * each refuse a pricing request the other engine already quoted), so one ticket can carry a
      * legacy quotation on one pricing request and an origin-tagged one on another. On such a mixed
      * ticket both branches below can match, and trying legacy first IS a real preference: the
-     * percent comes from the legacy row.
-     * Returns empty when there is no live (ACCEPTED/ISSUED/APPROVED)
-     * quotation for this ticket, or its {@code deposit_percent} is null — the caller ({@link
-     * DepositNoticeService#createDraft}) falls back to 0.50 in that case, this document's
-     * long-standing default.
+     * percent comes from the legacy row. Returns empty when there is no live
+     * (ACCEPTED/ISSUED/APPROVED) quotation for this ticket, or its {@code deposit_percent} is
+     * null — the caller ({@link DepositNoticeService#createDraft}) falls back to 0.50 in that
+     * case, this document's long-standing default.
      */
     public Optional<BigDecimal> findDealQuotationDepositPercent(long ticketId) {
         Integer legacyPct = firstOrNull(jdbc.query("""
@@ -422,8 +421,9 @@ public class DepositNoticeRepository {
         return findDealQuotationItems(ids.get(0));
     }
 
-    /** One deal quotation's lines as deposit-notice items, read the same way {@link
-     * #findDealQuotationItemsForDeposit} reads the quotation it selects for a ticket. */
+    /** One deal quotation's {@code sales.quotation_item} lines, by {@code seq}, as deposit-notice
+     * items: the resolved display columns the quotation prints. {@link
+     * #findDealQuotationItemsForDeposit} delegates to this for the quotation it selects. */
     public List<DepositNoticeItemRequest> findDealQuotationItems(long quotationId) {
         return jdbc.query("""
             SELECT seq, description, qty, raw_unit, unit_price, sales_discount, final_unit_price
