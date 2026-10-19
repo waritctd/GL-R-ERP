@@ -422,25 +422,27 @@ public class OrderConfirmationService {
      * <p><strong>Deposit percent (owner ruling, 2026-09-29):</strong> {@code
      * request.depositPercent()} below is passed through but {@link
      * DepositNoticeService#createDraft} now IGNORES it unconditionally and re-derives the percent
-     * itself from {@code accepted}'s own {@code sales.quotation.deposit_percent} via {@code
+     * itself from {@code accepted}'s own {@code sales.quotation.deposit_percent} (legacy branch;
+     * the new-engine paragraph below covers the other branch) via {@code
      * DepositNoticeRepository#findDealQuotationDepositPercent(ticketId)} — this call site needs no
      * separate fix because it already funnels through that one shared method. Left the field on
      * {@link CreateDepositNoticeFromQuotationRequest} itself unremoved (an older frontend build
      * may still send it) rather than making it a breaking DTO change for a value that is now a
      * no-op either way.
      *
-     * <p><strong>New-engine quotation (2026-10-19 fix):</strong> when the pricing request has no
-     * ACCEPTED legacy quotation, this falls back to its new-engine {@code PRICING_REQUEST}-origin
-     * quotation ({@code DealQuotationService#createFromPricingRequest}) when that one is ACCEPTED.
-     * Before this, every deal quoted through the new engine got the 409 below. For that branch
-     * {@code items} is passed as {@code null}, so {@link DepositNoticeService#createDraft} sources
-     * the items through the same fallback chain the ticket-level route uses, which for a
-     * new-engine deal ends at {@code DepositNoticeRepository#findDealQuotationItemsForDeposit(ticketId)}.
-     * That source is scoped to the ticket, not to the pricing request. It is still safe here because
-     * R8 in {@code DealQuotationService#recordOutcome} ({@code TicketRepository#hasAcceptedQuotation})
-     * refuses a second ACCEPTED quotation on one ticket, so the ticket's accepted quotation is this
-     * pricing request's. The 409 semantics do not change: the customer must have accepted, and an
-     * ISSUED-only quotation still gets 409.
+     * <p><strong>New-engine quotation:</strong> when the pricing request has no ACCEPTED legacy
+     * quotation, this falls back to its ACCEPTED new-engine {@code PRICING_REQUEST}-origin
+     * quotation ({@code DealQuotationService#createFromPricingRequest}), found by {@code
+     * DealQuotationRepository#findAcceptedForPricingRequest} rather than by "latest", because an
+     * open revision draft can outrank the accepted row by id. The items come from that quotation,
+     * the accepted quotation of THIS pricing request ({@link
+     * DepositNoticeService#itemsFromDealQuotation}), so a sibling pricing request's quotation on
+     * the same ticket can never supply them. The percent is still whatever {@code createDraft}
+     * derives, which is ticket-scoped and legacy-first: on a ticket that also carries a sibling
+     * pricing request's legacy ISSUED quotation, the percent comes from that legacy row. That is a
+     * known limitation the ticket-level route shares; this route does not introduce it. The 409
+     * semantics do not change: the customer must have accepted, and an ISSUED-only quotation still
+     * gets 409.
      */
     @Transactional
     public DepositNoticeDto createDepositNoticeFromQuotation(long pricingRequestId,
@@ -462,18 +464,17 @@ public class OrderConfirmationService {
             // class's own new-chain item fallback in buildItemsFromRequest — see its Javadoc.
             items = DepositNoticeService.itemsFromQuotation(accepted.items());
         } else {
-            // New-engine branch: see this method's Javadoc for why items stay null here.
+            // New-engine branch: the accepted quotation of THIS pricing request — see the Javadoc.
             th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto newEngine = dealQuotations == null
                 ? null
-                : dealQuotations.findLatestForPricingRequest(pricingRequestId)
+                : dealQuotations.findAcceptedForPricingRequest(pricingRequestId)
                     .flatMap(dealQuotations::findById)
-                    .filter(q -> QuotationStatus.ACCEPTED.equals(q.docStatus()))
                     .orElse(null);
             if (newEngine == null) {
                 throw new ApiException(HttpStatus.CONFLICT, "ยังไม่มีใบเสนอราคาที่ลูกค้ายอมรับสำหรับคำขอราคานี้");
             }
             reference = newEngine.number();
-            items = null;
+            items = depositNotices.itemsFromDealQuotation(newEngine.id());
         }
 
         // request.depositPercent() is deliberately still passed through here even though

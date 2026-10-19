@@ -1271,6 +1271,12 @@ public class DepositNoticeService {
         return latestAccepted != null ? latestAccepted : latestIssued;
     }
 
+    /** The pricing-request route's new-engine item source, so the draft's rows come from the
+     * quotation its reference names. */
+    public List<DepositNoticeItemRequest> itemsFromDealQuotation(long quotationId) {
+        return docs.findDealQuotationItems(quotationId);
+    }
+
     /**
      * Maps a customer quotation's items to deposit-notice item requests. The single shared mapping
      * used by both {@link #buildItemsFromRequest} (this class's own ticket-chain fallback above)

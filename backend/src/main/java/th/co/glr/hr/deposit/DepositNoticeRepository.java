@@ -113,10 +113,13 @@ public class DepositNoticeRepository {
      *       single live quotation, preferring ACCEPTED, then ISSUED, then APPROVED (DEAL_DIRECT's
      *       own only live terminal state), newest by id.</li>
      * </ul>
-     * A given ticket's quotations are only ever ALL-legacy or ALL-origin-tagged (each engine
-     * stamps {@code origin} consistently for every row it writes), so at most one branch below
-     * ever matches — trying legacy first is a fixed, harmless order, not a real preference
-     * between the two lineages. Returns empty when there is no live (ACCEPTED/ISSUED/APPROVED)
+     * Engines are exclusive per pricing request, not per ticket ({@code
+     * CustomerQuotationService#create} and {@code DealQuotationService#createFromPricingRequest}
+     * each refuse a pricing request the other engine already quoted), so one ticket can carry a
+     * legacy quotation on one pricing request and an origin-tagged one on another. On such a mixed
+     * ticket both branches below can match, and trying legacy first IS a real preference: the
+     * percent comes from the legacy row.
+     * Returns empty when there is no live (ACCEPTED/ISSUED/APPROVED)
      * quotation for this ticket, or its {@code deposit_percent} is null — the caller ({@link
      * DepositNoticeService#createDraft}) falls back to 0.50 in that case, this document's
      * long-standing default.
@@ -416,12 +419,18 @@ public class DepositNoticeRepository {
         if (ids.isEmpty()) {
             return List.of();
         }
+        return findDealQuotationItems(ids.get(0));
+    }
+
+    /** One deal quotation's lines as deposit-notice items, read the same way {@link
+     * #findDealQuotationItemsForDeposit} reads the quotation it selects for a ticket. */
+    public List<DepositNoticeItemRequest> findDealQuotationItems(long quotationId) {
         return jdbc.query("""
             SELECT seq, description, qty, raw_unit, unit_price, sales_discount, final_unit_price
               FROM sales.quotation_item
              WHERE quotation_id = :quotationId
              ORDER BY seq
-            """, Map.of("quotationId", ids.get(0)), (rs, i) -> {
+            """, Map.of("quotationId", quotationId), (rs, i) -> {
                 String description = rs.getString("description");
                 if (description == null || description.isBlank()) {
                     description = "รายการสินค้า";
