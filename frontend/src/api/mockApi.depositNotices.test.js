@@ -20,7 +20,10 @@ function uuid() {
   return `77777777-7777-4777-8777-${String(seq).padStart(12, '0')}`;
 }
 
-async function driveTicketToAcceptedQuotation() {
+// Everything up to and including the CEO-approved pricing decision. `priceMode` is set only
+// by the new-engine drive: dealQuotations.createFromPricingRequest refuses a decision without
+// one, and the legacy drive below never set it.
+async function driveTicketToApprovedDecision({ priceMode } = {}) {
   const n = seq + 1;
 
   await api.auth.login({ role: 'sales' });
@@ -114,9 +117,16 @@ async function driveTicketToAcceptedQuotation() {
   await api.auth.login({ role: 'ceo' });
   const { decision } = await api.pricingRequests.startPricingDecision(prId, { defaultMarginPct: 0.2 });
   await api.pricingRequests.updatePricingDecision(decision.id, {
+    ...(priceMode ? { priceMode } : {}),
     items: decision.items.map((item) => ({ pricingDecisionItemId: item.id, minimumSellingPrice: 50 })),
   });
   await api.pricingRequests.approvePricingDecision(decision.id, {});
+
+  return { ticketId, prId, customer, project };
+}
+
+async function driveTicketToAcceptedQuotation() {
+  const { ticketId, prId, customer, project } = await driveTicketToApprovedDecision();
 
   await api.auth.login({ role: 'sales' });
   const { quotation: draftQuotation } = await api.pricingRequests.createCustomerQuotation(prId, {});
@@ -125,6 +135,42 @@ async function driveTicketToAcceptedQuotation() {
   await api.pricingRequests.confirmOrder(prId, {});
 
   return { ticketId, customer, project, quotation: issued };
+}
+
+// DealQuotationOutcomeIntegrationTest#upsertWithValidityDays: the stored draft re-sent with only
+// validityDays changed (recipientType is left out, as there — this origin refuses it).
+function upsertWithValidityDays(q, days) {
+  const {
+    contactId, deptCode, unitCode, offerDate, depositPercent, remainderMode, creditDays,
+    customerNotes, priceMode, documentLanguage, currency, items,
+  } = q;
+  return {
+    contactId, deptCode, unitCode, offerDate, depositPercent, remainderMode, creditDays,
+    validityDays: days, customerNotes, priceMode, documentLanguage, currency, items,
+  };
+}
+
+// New-engine (PRICING_REQUEST-origin) quotation, issued by the sales manager — the same drive as
+// DealQuotationOutcomeIntegrationTest#issuedNewOriginQuotation.
+async function driveTicketToNewEngineIssuedQuotation() {
+  const { ticketId, prId } = await driveTicketToApprovedDecision({ priceMode: 'NET' });
+  await api.auth.login({ role: 'sales' });
+  const { quotation: draft } = await api.dealQuotations.createFromPricingRequest(prId);
+  await api.dealQuotations.update(draft.id, upsertWithValidityDays(draft, 30));
+  await api.dealQuotations.submit(draft.id, {});
+  await api.auth.login({ role: 'sales_manager' });
+  const { quotation: issued } = await api.dealQuotations.approve(draft.id, {});
+  await api.auth.login({ role: 'sales' });
+  return { ticketId, prId, issued };
+}
+
+async function driveTicketToNewEngineAcceptedQuotation() {
+  const { ticketId, prId, issued } = await driveTicketToNewEngineIssuedQuotation();
+  const { quotation: accepted } = await api.dealQuotations.recordOutcome(issued.id, {
+    outcome: 'ACCEPTED', customerNote: null, clientRequestId: uuid(),
+  });
+  await api.pricingRequests.confirmOrder(prId, { clientRequestId: uuid() });
+  return { ticketId, prId, accepted };
 }
 
 describe('mockApi.depositNotices.createDraft autofill (branch fix: deposit-notice autofill)', () => {
@@ -170,6 +216,29 @@ describe('mockApi.depositNotices.createDraft autofill (branch fix: deposit-notic
     expect(depositNotice.customerTaxId).toBe(customer.taxId);
     expect(depositNotice.customerAddress).toBe(`${customer.address} ${customer.branch}`);
     expect(depositNotice.projectName).toBe(project.name);
+  });
+});
+
+// Mirrors OrderConfirmationService.createDepositNoticeFromQuotation's new-engine branch: with no
+// ACCEPTED legacy quotation, the draft comes from THIS pricing request's ACCEPTED new-engine
+// quotation (DealQuotationRepository.findAcceptedForPricingRequest), and an ISSUED-only one
+// still gets the 409.
+describe('mockApi.pricingRequests.createDepositNoticeFromQuotation — new-engine quotation (mirrors OrderConfirmationService fix)', () => {
+  it('creates the draft with the accepted quotation number as reference and items from that quotation', async () => {
+    const { prId, accepted } = await driveTicketToNewEngineAcceptedQuotation();
+    const { depositNotice } = await api.pricingRequests.createDepositNoticeFromQuotation(prId, {});
+    expect(depositNotice.reference).toBe(accepted.number);
+    expect(depositNotice.items.length).toBeGreaterThan(0);
+    expect(depositNotice.items[0].qty).toBe(accepted.items[0].piecesFinal);
+    expect(depositNotice.items[0].netUnitPrice).toBe(accepted.items[0].netUnitPrice);
+  });
+
+  it('still 409s while the new-engine quotation is only ISSUED (customer has not accepted)', async () => {
+    const { ticketId, prId } = await driveTicketToNewEngineIssuedQuotation();
+    await expect(api.pricingRequests.createDepositNoticeFromQuotation(prId, {}))
+      .rejects.toMatchObject({ status: 409, message: 'ยังไม่มีใบเสนอราคาที่ลูกค้ายอมรับสำหรับคำขอราคานี้' });
+    const { depositNotices } = await api.depositNotices.listByTicket(ticketId);
+    expect(depositNotices).toHaveLength(0);
   });
 });
 
