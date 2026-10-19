@@ -20,10 +20,10 @@ function uuid() {
   return `77777777-7777-4777-8777-${String(seq).padStart(12, '0')}`;
 }
 
-// Everything up to and including the CEO-approved pricing decision. `priceMode` is set only
-// by the new-engine drive: dealQuotations.createFromPricingRequest refuses a decision without
-// one, and the legacy drive below never set it.
-async function driveTicketToApprovedDecision({ priceMode } = {}) {
+// Everything up to and including the CEO-approved pricing decision. `priceMode`/`discountPct` are
+// set only by the new-engine drive: dealQuotations.createFromPricingRequest refuses a decision
+// without a priceMode, and the legacy drive below never set either.
+async function driveTicketToApprovedDecision({ priceMode, discountPct } = {}) {
   const n = seq + 1;
 
   await api.auth.login({ role: 'sales' });
@@ -118,7 +118,9 @@ async function driveTicketToApprovedDecision({ priceMode } = {}) {
   const { decision } = await api.pricingRequests.startPricingDecision(prId, { defaultMarginPct: 0.2 });
   await api.pricingRequests.updatePricingDecision(decision.id, {
     ...(priceMode ? { priceMode } : {}),
-    items: decision.items.map((item) => ({ pricingDecisionItemId: item.id, minimumSellingPrice: 50 })),
+    items: decision.items.map((item) => ({
+      pricingDecisionItemId: item.id, minimumSellingPrice: 50, ...(discountPct != null ? { discountPct } : {}),
+    })),
   });
   await api.pricingRequests.approvePricingDecision(decision.id, {});
 
@@ -138,9 +140,12 @@ async function driveTicketToAcceptedQuotation() {
 }
 
 // New-engine (PRICING_REQUEST-origin) quotation, issued by the sales manager — the same drive as
-// DealQuotationOutcomeIntegrationTest#issuedNewOriginQuotation.
+// DealQuotationOutcomeIntegrationTest#issuedNewOriginQuotation. The line carries a 10% discount
+// from the CEO decision, so the deposit mapper's baht discount label is exercised. The discount
+// sits on the decision, not on a quotation update: a line that differs from the CEO price makes
+// the mock's PRICING_REQUEST approve refuse sales_manager (403, CEO approval required).
 async function driveTicketToNewEngineIssuedQuotation() {
-  const { ticketId, prId } = await driveTicketToApprovedDecision({ priceMode: 'NET' });
+  const { ticketId, prId } = await driveTicketToApprovedDecision({ priceMode: 'NET', discountPct: 10 });
   await api.auth.login({ role: 'sales' });
   const { quotation: draft } = await api.dealQuotations.createFromPricingRequest(prId);
   // Java's drive (DealQuotationOutcomeIntegrationTest) saves validityDays before submit; the
@@ -217,13 +222,22 @@ describe('mockApi.pricingRequests.createDepositNoticeFromQuotation — new-engin
     const { depositNotice } = await api.pricingRequests.createDepositNoticeFromQuotation(prId, {});
     expect(depositNotice.reference).toBe(accepted.number);
     expect(depositNotice.items.length).toBeGreaterThan(0);
+    // qty is deliberately not distinguishable here: a mock TILE row sets quantity = piecesFinal.
     expect(depositNotice.items[0].qty).toBe(accepted.items[0].quantity);
     expect(depositNotice.items[0].netUnitPrice).toBe(accepted.items[0].netUnitPrice);
+    expect(depositNotice.items[0].unit).toBe(accepted.items[0].unit);
+    expect(depositNotice.items[0].description).toBe(accepted.items[0].descriptionLine);
+    expect(depositNotice.items[0].unitPrice).toBe(accepted.items[0].unitPrice);
+    // DepositNoticeRepository.findDealQuotationItems prints sales_discount (unitPrice − netUnitPrice)
+    // in baht, not the percent: ราคาตั้ง 120 at 10% off is net 108, so 12 baht.
+    expect([accepted.items[0].unitPrice, accepted.items[0].netUnitPrice]).toEqual([120, 108]);
+    expect(depositNotice.items[0].discountLabel).toBe('ส่วนลด 12 ต่อหน่วย');
   });
 
-  // Pin, not a reproduction: the ticket-level route with no items falls through the (empty)
-  // legacy sources to DepositNoticeRepository.findDealQuotationItemsForDeposit, which on a deal
-  // with one ACCEPTED new-engine quotation reads the same lines as the pricing-request route.
+  // Reproduces the fallback gap closed in 40d10c70: the ticket-level route with no items falls
+  // through the (empty) legacy sources to DepositNoticeRepository.findDealQuotationItemsForDeposit,
+  // which on a deal with one ACCEPTED new-engine quotation reads the same lines as the
+  // pricing-request route. Without that fallback the mock returned no items here.
   it('ticket-level createDraft with no items reads the same new-engine lines as the pricing-request route', async () => {
     const { ticketId, prId } = await driveTicketToNewEngineAcceptedQuotation();
     const { depositNotice: fromTicket } = await api.depositNotices.createDraft(ticketId, {});
