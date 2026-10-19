@@ -631,12 +631,8 @@ describe('TicketDetailPage', () => {
     });
   });
 
-  // Ticket-workspace IA rebuild Slice B ("retire the context rail, one comment
-  // composer"): วันสำคัญ / ผู้เกี่ยวข้อง moved here verbatim from the deleted
-  // TicketContextPanel.jsx sticky rail — same fields, same labels, same
-  // assignedImport role-scoped readout — now at the top of ภาพรวม instead of
-  // behind an always-visible sidebar (there is no more xl-collapse/mobile
-  // accordion to drive: the fields simply render whenever this tab is active).
+  // วันสำคัญ / ผู้เกี่ยวข้อง sit at the top of ภาพรวม and render whenever this tab
+  // is active (there is no collapse/accordion to drive).
   it('renders วันสำคัญ and ผู้เกี่ยวข้อง fields at the top of the ภาพรวม tab', async () => {
     api.tickets.get.mockResolvedValueOnce({
       ticket: buildTicket({
@@ -678,7 +674,13 @@ describe('TicketDetailPage', () => {
     // uniqueness.
     expect(within(peopleSection).getByText('สมชาย ใจดี')).not.toBeNull();
     expect(within(peopleSection).getByText('ยังไม่มีคำขอราคา')).not.toBeNull();
-    expect(within(peopleSection).getByText('คุณอรุณ ติดต่อ')).not.toBeNull();
+    // Wrong-way-round: the deal no longer shows a ผู้ติดต่อ (owner ruling
+    // 2026-10-18 — the contact is picked per quotation instead). FieldRow
+    // renders its label even when empty, so the missing label proves the row
+    // is gone; the fixture still sets contactName, so the missing value proves
+    // it does not surface by another route.
+    expect(within(peopleSection).queryByText('ผู้ติดต่อ')).toBeNull();
+    expect(within(peopleSection).queryByText('คุณอรุณ ติดต่อ')).toBeNull();
 
     // Wrong-way-round: the deleted roll-up's content must be absent from the
     // whole page while ภาพรวม is active, not just out of these two sections.

@@ -327,12 +327,9 @@ function itemFromExisting(item) {
   };
 }
 
-// Mirrors TicketSummaryDto's designerName/ownerName/buyerName/contactName/customerName — the
-// deal's own recipient-shaped fields, the closest available identity for each ผู้รับ chip.
-// Falls through recipientType-specific name -> contact -> customer, so the field is never left
-// blank as long as the deal has ANY name recorded on it. CREATE MODE ONLY — never consulted for
-// edit/revision (both seed recipientLabel from the persisted request instead, see the modal's
-// seedsFromExisting guard around every call site below).
+// Create-mode auto-fill for the ผู้รับ label: the per-type party name (TicketSummaryDto's
+// designerName/ownerName/buyerName), else the customer. Edit/revision never call this — they seed
+// recipientLabel from the persisted request (the seedsFromExisting guard at both call sites).
 function recipientLabelForDeal(deal, recipientType) {
   if (!deal) return '';
   const byType = {
@@ -340,7 +337,7 @@ function recipientLabelForDeal(deal, recipientType) {
     OWNER: deal.ownerName,
     BUYER: deal.buyerName,
   }[recipientType];
-  return byType || deal.contactName || deal.customerName || '';
+  return byType || deal.customerName || '';
 }
 
 function generateClientRequestId() {
@@ -473,31 +470,23 @@ export function PricingRequestCreateModal({
   // ผู้รับ chip must never overwrite what they typed (see the effect below). Stays false forever
   // in edit/revision mode since nothing ever writes recipientLabel from `deal` there.
   const [recipientLabelTouched, setRecipientLabelTouched] = useState(false);
-  // GLA-125 follow-up (owner directive, 2026-09-18): ผู้สั่งซื้อ — the SAME `QuotationContactPicker`
+  // GLA-125 follow-up (owner directive, 2026-09-18): ผู้ติดต่อ — the SAME `QuotationContactPicker`
   // the direct-deal quotation editor uses, bound to the SAME wire field the schema already
   // reserved for it (`recipientContactId`, V59) — this modal previously always sent that field as
   // `null` with no picker at all (see pricingRequestItemInputFromRow-era comment history). This is
   // deliberately SEPARATE from ผู้รับคำขอราคา (recipientType/recipientLabel above, which answers
   // "who is this PRICING REQUEST for" — designer/owner/buyer — a PCR-only categorisation with no
-  // equivalent on the quotation): ผู้สั่งซื้อ answers "which registered customer CONTACT actually
+  // equivalent on the quotation): ผู้ติดต่อ answers "which registered customer CONTACT actually
   // placed the order", exactly the quotation's own question, so it is never cross-wired into
   // recipientLabel's own auto-fill from `deal`/recipientType.
   //
-  // Seeded as a partial "stand-in" object (`{ id, firstName }`, no phone/email yet) from whichever
-  // frozen id+name snapshot this mode already has — the picker's own `onResolve` then fills in the
-  // rest once its contact list loads (see QuotationContactPicker's own class-level Javadoc for this
-  // exact contract; QuotationEditorPage seeds its own ผู้สั่งซื้อ picker off `ticket.contactId`/
-  // `ticket.contactName` the identical way for its `?ticket=` create path).
-  const [contact, setContact] = useState(() => {
-    if (seedsFromExisting) {
-      return initialSummary?.recipientContactId != null
-        ? { id: initialSummary.recipientContactId, firstName: initialSummary.recipientLabel ?? '', lastName: '' }
-        : null;
-    }
-    return deal?.contactId != null
-      ? { id: deal.contactId, firstName: deal.contactName ?? '', lastName: '' }
-      : null;
-  });
+  // Seeded only from a persisted request's `recipientContactId` (edit/revision), as a stand-in
+  // `{ id, firstName }` that the picker's `onResolve` completes once its contact list loads.
+  const [contact, setContact] = useState(() => (
+    initialSummary?.recipientContactId != null
+      ? { id: initialSummary.recipientContactId, firstName: initialSummary.recipientLabel ?? '', lastName: '' }
+      : null
+  ));
   // customerId/customerName: `deal` (create mode) or the persisted request's own summary (edit/
   // revision mode, GLA-125's `PricingRequestSummaryDto.customerId` addition) — whichever this mode
   // actually has. Without a customerId the picker just shows "เลือกลูกค้าก่อน" and stays disabled,
@@ -784,7 +773,7 @@ export function PricingRequestCreateModal({
   function buildPayload({ includeClientRequestId = false } = {}) {
     const payload = {
       recipientType,
-      // GLA-125 follow-up: ผู้สั่งซื้อ, wired to the SAME `recipientContactId` column this modal
+      // GLA-125 follow-up: ผู้ติดต่อ, wired to the SAME `recipientContactId` column this modal
       // always sent as implicitly undefined before — see the `contact` state's own comment above.
       recipientContactId: contact?.id ?? null,
       recipientLabel: recipientLabel.trim(),
@@ -1006,7 +995,7 @@ export function PricingRequestCreateModal({
           />
         </label>
 
-        {/* GLA-125 follow-up: ผู้สั่งซื้อ — see the `contact` state's own comment above for why
+        {/* GLA-125 follow-up: ผู้ติดต่อ — see the `contact` state's own comment above for why
             this is deliberately separate from ผู้รับคำขอราคา above. Renders disabled ("เลือกลูกค้า
             ก่อน") when neither `deal` nor the persisted request carries a customerId — a request
             whose ticket predates customer linkage, or a mock/test fixture that never set one. */}
