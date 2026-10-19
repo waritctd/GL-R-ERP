@@ -428,6 +428,19 @@ public class OrderConfirmationService {
      * {@link CreateDepositNoticeFromQuotationRequest} itself unremoved (an older frontend build
      * may still send it) rather than making it a breaking DTO change for a value that is now a
      * no-op either way.
+     *
+     * <p><strong>New-engine quotation (2026-10-19 fix):</strong> when the pricing request has no
+     * ACCEPTED legacy quotation, this falls back to its new-engine {@code PRICING_REQUEST}-origin
+     * quotation ({@code DealQuotationService#createFromPricingRequest}) when that one is ACCEPTED.
+     * Before this, every deal quoted through the new engine got the 409 below. For that branch
+     * {@code items} is passed as {@code null}, so {@link DepositNoticeService#createDraft} sources
+     * the items through the same fallback chain the ticket-level route uses, which for a
+     * new-engine deal ends at {@code DepositNoticeRepository#findDealQuotationItemsForDeposit(ticketId)}.
+     * That source is scoped to the ticket, not to the pricing request. It is still safe here because
+     * R8 in {@code DealQuotationService#recordOutcome} ({@code TicketRepository#hasAcceptedQuotation})
+     * refuses a second ACCEPTED quotation on one ticket, so the ticket's accepted quotation is this
+     * pricing request's. The 409 semantics do not change: the customer must have accepted, and an
+     * ISSUED-only quotation still gets 409.
      */
     @Transactional
     public DepositNoticeDto createDepositNoticeFromQuotation(long pricingRequestId,
@@ -439,23 +452,40 @@ public class OrderConfirmationService {
         CustomerQuotationDto accepted = quotations.findByPricingRequest(pricingRequestId).stream()
             .filter(q -> QuotationStatus.ACCEPTED.equals(q.docStatus()))
             .findFirst()
-            .orElseThrow(() -> new ApiException(HttpStatus.CONFLICT,
-                "ยังไม่มีใบเสนอราคาที่ลูกค้ายอมรับสำหรับคำขอราคานี้"));
+            .orElse(null);
 
-        // Mapping itself now lives on DepositNoticeService (this branch's fix), shared with that
-        // class's own new-chain item fallback in buildItemsFromRequest — see its Javadoc.
-        List<DepositNoticeItemRequest> items = DepositNoticeService.itemsFromQuotation(accepted.items());
+        String reference;
+        List<DepositNoticeItemRequest> items;
+        if (accepted != null) {
+            reference = accepted.number();
+            // Mapping itself now lives on DepositNoticeService (this branch's fix), shared with that
+            // class's own new-chain item fallback in buildItemsFromRequest — see its Javadoc.
+            items = DepositNoticeService.itemsFromQuotation(accepted.items());
+        } else {
+            // New-engine branch: see this method's Javadoc for why items stay null here.
+            th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto newEngine = dealQuotations == null
+                ? null
+                : dealQuotations.findLatestForPricingRequest(pricingRequestId)
+                    .flatMap(dealQuotations::findById)
+                    .filter(q -> QuotationStatus.ACCEPTED.equals(q.docStatus()))
+                    .orElse(null);
+            if (newEngine == null) {
+                throw new ApiException(HttpStatus.CONFLICT, "ยังไม่มีใบเสนอราคาที่ลูกค้ายอมรับสำหรับคำขอราคานี้");
+            }
+            reference = newEngine.number();
+            items = null;
+        }
 
         // request.depositPercent() is deliberately still passed through here even though
         // createDraft now ignores it as the source — see this method's own Javadoc above.
         DepositNoticeDraftRequest draftRequest = new DepositNoticeDraftRequest(
-            null, null, null, null, accepted.number(),
+            null, null, null, null, reference,
             request != null ? request.depositPercent() : null, null, items);
         DepositNoticeDto draft = depositNotices.createDraft(summary.ticketId(), draftRequest, actor);
 
         pricingRequests.addEvent(pricingRequestId, summary.ticketId(), actor.id(), actor.name(),
             PricingRequestEventKind.DEPOSIT_NOTICE_DRAFTED_FROM_QUOTATION, summary.status(), summary.status(),
-            "สร้างร่างใบแจ้งยอดเงินรับมัดจำจากใบเสนอราคา " + accepted.number(), null);
+            "สร้างร่างใบแจ้งยอดเงินรับมัดจำจากใบเสนอราคา " + reference, null);
         return draft;
     }
 
