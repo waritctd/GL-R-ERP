@@ -304,6 +304,54 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
             Map.of("id", ticketId), Long.class)).isZero();
     }
 
+    /** An open revision draft outranks the accepted quotation by id: recordOutcome has no
+     * open-revision guard, so "latest for this pricing request" is not "accepted". */
+    @Test
+    void createDepositNoticeFromQuotation_newEngineAcceptedWithAnOpenRevisionDraft_stillDraftsFromTheAcceptedOne() {
+        DealQuotationDto q1 = issuedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
+        DealQuotationDto q2 = quotationService.createRevision(q1.id(), salesActor);
+        assertThat(q2.id()).isGreaterThan(q1.id());
+        assertThat(q2.docStatus()).isEqualTo(QuotationStatus.DRAFT);
+        quotationService.recordOutcome(q1.id(),
+            new RecordOutcomeRequest(QuotationStatus.ACCEPTED, "ลูกค้าโอเค", UUID.randomUUID().toString()), salesActor);
+        long pricingRequestId = q1.pricingRequestId();
+        orderConfirmation.confirmOrder(pricingRequestId,
+            new OrderConfirmationRequests.ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
+
+        DepositNoticeDto draft = orderConfirmation.createDepositNoticeFromQuotation(pricingRequestId,
+            new OrderConfirmationRequests.CreateDepositNoticeFromQuotationRequest(null), salesActor);
+
+        assertThat(draft.reference()).isEqualTo(q1.number());
+        assertThat(draft.items()).isNotEmpty();
+    }
+
+    /** Engines are exclusive per pricing request, not per ticket: a sibling pricing request's
+     * legacy ISSUED quotation must not supply the lines of this pricing request's draft. */
+    @Test
+    void createDepositNoticeFromQuotation_newEngineAccepted_whenASiblingPricingRequestHasALegacyIssuedQuotation_draftsThisQuotationsLines() {
+        CustomerQuotationDto legacyIssued = issuedLegacyQuotation(PricingRequestRecipient.OWNER);
+        DealQuotationDto accepted = acceptedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
+        long pricingRequestId = accepted.pricingRequestId();
+        orderConfirmation.confirmOrder(pricingRequestId,
+            new OrderConfirmationRequests.ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
+
+        DepositNoticeDto draft = orderConfirmation.createDepositNoticeFromQuotation(pricingRequestId,
+            new OrderConfirmationRequests.CreateDepositNoticeFromQuotationRequest(null), salesActor);
+
+        List<String> thisQuotationsLines = jdbc.query("""
+            SELECT qty, final_unit_price FROM sales.quotation_item WHERE quotation_id = :id ORDER BY seq
+            """, Map.of("id", accepted.id()),
+            (rs, i) -> line(rs.getBigDecimal("qty"), rs.getBigDecimal("final_unit_price")));
+        List<String> siblingLegacyLines = DepositNoticeService.itemsFromQuotation(legacyIssued.items()).stream()
+            .map(it -> line(it.qty(), it.netUnitPrice())).toList();
+        // The fixture must make the two sources distinguishable, or the assertion below proves nothing.
+        assertThat(thisQuotationsLines).isNotEmpty().isNotEqualTo(siblingLegacyLines);
+
+        assertThat(draft.reference()).isEqualTo(accepted.number());
+        assertThat(draft.items().stream().map(it -> line(it.qty(), it.netUnitPrice())).toList())
+            .isEqualTo(thisQuotationsLines);
+    }
+
     @Test
     void recordOutcome_byNonOwningSales_refused_writesNothing() {
         DealQuotationDto issued = issuedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
@@ -862,6 +910,11 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
     // ─────────────────────────────────────────────────────────────────────────────────────
     // Fixture helpers
     // ─────────────────────────────────────────────────────────────────────────────────────
+
+    private static String line(BigDecimal qty, BigDecimal netUnitPrice) {
+        return (qty == null ? "null" : qty.stripTrailingZeros().toPlainString()) + " @ "
+            + (netUnitPrice == null ? "null" : netUnitPrice.stripTrailingZeros().toPlainString());
+    }
 
     private DealQuotationDto acceptedNewOriginQuotation(String recipient, BigDecimal qty) {
         DealQuotationDto issued = issuedNewOriginQuotation(recipient, qty);
