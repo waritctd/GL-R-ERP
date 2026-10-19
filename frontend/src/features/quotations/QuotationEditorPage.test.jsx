@@ -1709,7 +1709,7 @@ describe('QuotationEditorPage ไม่แสดงชื่อโครงก�
 
     const box = await screen.findByRole('checkbox', { name: new RegExp(TOGGLE) });
     await waitFor(() => expect(box.checked).toBe(true));
-    fireEvent.change(screen.getByLabelText('โทรศัพท์ลูกค้า'), { target: { value: '02-123-4567' } });
+    fireEvent.change(document.getElementById('orderedByPhoneCard'), { target: { value: '02-123-4567' } });
 
     expect((await saveDraft()).hideProjectName).toBe(true);
   });
