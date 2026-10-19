@@ -33,6 +33,8 @@ import th.co.glr.hr.customerquotation.DiscountApprovalRepository;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.ApproveRequest;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.RecordOutcomeRequest;
+import th.co.glr.hr.deposit.DepositNoticeDraftRequest;
+import th.co.glr.hr.deposit.DepositNoticeDto;
 import th.co.glr.hr.deposit.DepositNoticeRenderer;
 import th.co.glr.hr.deposit.DepositNoticeRepository;
 import th.co.glr.hr.deposit.DepositNoticeService;
@@ -106,6 +108,7 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
     private CustomerQuotationRepository legacyQuotationRepository;
     private CustomerQuotationService legacyQuotationService;
     private OrderConfirmationService orderConfirmation;
+    private DepositNoticeService depositNoticeService;
     private TicketRepository tickets;
     private TicketService ticketService;
 
@@ -184,7 +187,7 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
             new DiscountApprovalRepository(jdbc));
 
         DepositNoticeRepository depositNoticeRepository = new DepositNoticeRepository(jdbc);
-        DepositNoticeService depositNoticeService = new DepositNoticeService(depositNoticeRepository, tickets,
+        depositNoticeService = new DepositNoticeService(depositNoticeRepository, tickets,
             notifications, new DepositNoticeRenderer(), new RemainingInvoiceRenderer(), customers,
             legacyQuotationRepository);
         orderConfirmation = new OrderConfirmationService(
@@ -237,6 +240,68 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
             Map.of("id", issued.id()), Long.class);
         assertThat(pricingRequestService.get(pricingRequestId, salesActor).summary().status())
             .isEqualTo(PricingRequestStatus.QUOTATION_ACCEPTED);
+    }
+
+    // ── Deposit notice from the pricing-request route when the accepted quotation is NEW-engine ──
+    // QA finding 2026-10-18 (develop QA stack): DealDepositPanel/DepositNoticePage call
+    // POST /pricing-requests/{id}/deposit-notice whenever a QUOTATION_ACCEPTED pricing request exists;
+    // that route read only legacy CustomerQuotation rows and answered 409 for every deal quoted
+    // through DealQuotationService.createFromPricingRequest. Direct quotations never take this route.
+
+    @Test
+    void createDepositNoticeFromQuotation_newEngineAcceptedQuotation_createsTheSameDraftTheTicketRouteWould() {
+        DealQuotationDto accepted = acceptedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
+        long pricingRequestId = accepted.pricingRequestId();
+        orderConfirmation.confirmOrder(pricingRequestId,
+            new OrderConfirmationRequests.ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
+
+        DepositNoticeDto viaPricingRequest = orderConfirmation.createDepositNoticeFromQuotation(pricingRequestId,
+            new OrderConfirmationRequests.CreateDepositNoticeFromQuotationRequest(null), salesActor);
+
+        // The reference is the accepted quotation's number — the one thing this route adds over the ticket route.
+        assertThat(viaPricingRequest.reference()).isEqualTo(accepted.number());
+        assertThat(viaPricingRequest.items()).isNotEmpty();
+
+        // Items and percent are exactly what the ticket-level route produces for this deal (shared createDraft).
+        DepositNoticeDto viaTicket = depositNoticeService.createDraft(ticketId,
+            new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), salesActor);
+        assertThat(viaPricingRequest.depositPercent()).isEqualByComparingTo(viaTicket.depositPercent());
+        assertThat(viaPricingRequest.items())
+            .usingRecursiveComparison().ignoringFields("id")
+            .isEqualTo(viaTicket.items());
+
+        assertThat(jdbc.queryForObject("""
+            SELECT COUNT(*) FROM sales.pricing_request_event
+             WHERE pricing_request_id = :id AND event_kind = 'DEPOSIT_NOTICE_DRAFTED_FROM_QUOTATION'
+            """, Map.of("id", pricingRequestId), Long.class)).isEqualTo(1L);
+    }
+
+    @Test
+    void createDepositNoticeFromQuotation_newEngineIssuedNotAccepted_still409() {
+        DealQuotationDto issued = issuedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
+        long pricingRequestId = issued.pricingRequestId();
+
+        assertThatThrownBy(() -> orderConfirmation.createDepositNoticeFromQuotation(pricingRequestId,
+                new OrderConfirmationRequests.CreateDepositNoticeFromQuotationRequest(null), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("ยังไม่มีใบเสนอราคาที่ลูกค้ายอมรับสำหรับคำขอราคานี้");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sales.deposit_notice WHERE ticket_id = :id",
+            Map.of("id", ticketId), Long.class)).isZero();
+    }
+
+    @Test
+    void createDepositNoticeFromQuotation_newEngine_nonOwnerSales_cannotReach() {
+        DealQuotationDto accepted = acceptedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
+        long pricingRequestId = accepted.pricingRequestId();
+        orderConfirmation.confirmOrder(pricingRequestId,
+            new OrderConfirmationRequests.ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
+
+        assertThatThrownBy(() -> orderConfirmation.createDepositNoticeFromQuotation(pricingRequestId,
+                new OrderConfirmationRequests.CreateDepositNoticeFromQuotationRequest(null), otherSalesActor))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sales.deposit_notice WHERE ticket_id = :id",
+            Map.of("id", ticketId), Long.class)).isZero();
     }
 
     @Test
