@@ -144,12 +144,18 @@ async function driveTicketToAcceptedQuotation() {
 // from the CEO decision, so the deposit mapper's baht discount label is exercised. The discount
 // sits on the decision, not on a quotation update: a line that differs from the CEO price makes
 // the mock's PRICING_REQUEST approve refuse sales_manager (403, CEO approval required).
-async function driveTicketToNewEngineIssuedQuotation() {
+async function driveTicketToNewEngineIssuedQuotation({ depositPercent } = {}) {
   const { ticketId, prId } = await driveTicketToApprovedDecision({ priceMode: 'NET', discountPct: 10 });
   await api.auth.login({ role: 'sales' });
   const { quotation: draft } = await api.dealQuotations.createFromPricingRequest(prId);
   // Java's drive (DealQuotationOutcomeIntegrationTest) saves validityDays before submit; the
   // mock's submit/approve/recordOutcome never require it, so that update is left out here.
+  if (depositPercent != null) {
+    await api.dealQuotations.update(draft.id, {
+      priceMode: draft.priceMode, depositPercent, remainderMode: 'ON_DELIVERY',
+      items: draft.items.map((item) => ({ ...item, id: item.id })),
+    });
+  }
   await api.dealQuotations.submit(draft.id, {});
   await api.auth.login({ role: 'sales_manager' });
   const { quotation: issued } = await api.dealQuotations.approve(draft.id, {});
@@ -157,8 +163,8 @@ async function driveTicketToNewEngineIssuedQuotation() {
   return { ticketId, prId, issued };
 }
 
-async function driveTicketToNewEngineAcceptedQuotation() {
-  const { ticketId, prId, issued } = await driveTicketToNewEngineIssuedQuotation();
+async function driveTicketToNewEngineAcceptedQuotation(options) {
+  const { ticketId, prId, issued } = await driveTicketToNewEngineIssuedQuotation(options);
   const { quotation: accepted } = await api.dealQuotations.recordOutcome(issued.id, {
     outcome: 'ACCEPTED', customerNote: null, clientRequestId: uuid(),
   });
@@ -217,10 +223,13 @@ describe('mockApi.depositNotices.createDraft autofill (branch fix: deposit-notic
 // quotation (DealQuotationRepository.findAcceptedForPricingRequest), and an ISSUED-only one
 // still gets the 409.
 describe('mockApi.pricingRequests.createDepositNoticeFromQuotation — new-engine quotation (mirrors OrderConfirmationService fix)', () => {
-  it('creates the draft with the accepted quotation number as reference and items from that quotation', async () => {
-    const { prId, accepted } = await driveTicketToNewEngineAcceptedQuotation();
+  it('creates the draft with the accepted quotation number as reference, and items and percent from that quotation', async () => {
+    const { prId, accepted } = await driveTicketToNewEngineAcceptedQuotation({ depositPercent: 30 });
     const { depositNotice } = await api.pricingRequests.createDepositNoticeFromQuotation(prId, {});
     expect(depositNotice.reference).toBe(accepted.number);
+    // DepositNoticeService.createDraftFromQuotation: the chosen quotation's own whole-number percent.
+    expect(accepted.depositPercent).toBe(30);
+    expect(depositNotice.depositPercent).toBe(0.3);
     expect(depositNotice.items.length).toBeGreaterThan(0);
     // qty is deliberately not distinguishable here: a mock TILE row sets quantity = piecesFinal.
     expect(depositNotice.items[0].qty).toBe(accepted.items[0].quantity);
