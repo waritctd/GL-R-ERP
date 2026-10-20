@@ -195,6 +195,58 @@ class ImportRequestPaymentGateIntegrationTest extends AbstractPostgresIntegratio
         }
     }
 
+    // ── Owner ruling 2026-10-20: IMPORT may create + issue a per-factory ใบขอซื้อ itself ──────────
+    // (previously sales-owner / CEO only). The payment floor and ORDER_RECEIVED stage gate are
+    // unchanged; this only widens WHO may raise it. Permission change → real-service evidence here,
+    // written wrong-way-round (a role that must NOT reach it, and the floor that must still bite).
+
+    @Test
+    void import_canCreateAndIssueAPerFactoryImportRequest_onAPaidDeal() {
+        insertFactory("Import Issues Factory");
+        long ticketId = insertTicket("IMP-ISSUE-OK", "DEPOSIT_PAID");
+        insertItem(ticketId, "Import Issues Factory", "Line", "60x60", "10", "pcs", 0);
+        // A plain import user — NOT the deal's owning sales rep, and import has no ownership concept.
+        UserPrincipal importUser = principal(insertEmployee("IMP-ISSUE-U"), "import");
+
+        List<ImportRequestDto> drafts = service.createDrafts(ticketId, null, importUser);
+        ImportRequestDto issued = service.issue(drafts.get(0).id(), null, importUser);
+
+        assertThat(issued.status()).isEqualTo(ImportRequestStatus.ISSUED);
+        assertThat(issued.docNumber()).isNotBlank();
+        // The deal-level side effect import used to only get from the legacy one-shot path now comes
+        // from the per-factory issue it raised itself — so the FactoryProgressBar tracking starts.
+        assertThat(jdbc.queryForObject(
+            "SELECT fulfillment_status FROM sales.ticket WHERE ticket_id = :id", Map.of("id", ticketId), String.class))
+            .isEqualTo("IR_ISSUED");
+    }
+
+    @Test
+    void account_stillCannotCreateAPerFactoryImportRequest() {
+        insertFactory("Import Issues Deny Factory");
+        long ticketId = insertTicket("IMP-ISSUE-DENY", "DEPOSIT_PAID");
+        insertItem(ticketId, "Import Issues Deny Factory", "Line", "60x60", "10", "pcs", 0);
+        UserPrincipal accountUser = principal(insertEmployee("IMP-ISSUE-ACC"), "account");
+
+        assertThatThrownBy(() -> service.createDrafts(ticketId, null, accountUser))
+            .isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+    }
+
+    @Test
+    void import_canCreateButStillCannotIssue_whenTheDealHasNoDeposit() {
+        insertFactory("Import Issues NoDep Factory");
+        long ticketId = insertTicket("IMP-ISSUE-NODEP", null);
+        insertItem(ticketId, "Import Issues NoDep Factory", "Line", "60x60", "10", "pcs", 0);
+        UserPrincipal importUser = principal(insertEmployee("IMP-ISSUE-ND"), "import");
+
+        // createDrafts is gated on the ORDER_RECEIVED stage only (not payment), so it is allowed...
+        long id = service.createDrafts(ticketId, null, importUser).get(0).id();
+        // ...but the payment floor still bites at issue, for import exactly as for everyone else.
+        assertThatThrownBy(() -> service.issue(id, null, importUser))
+            .isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+    }
+
     // ── fixtures ──────────────────────────────────────────────────────────────────────────────
 
     private static ImportRequestDto byFactory(List<ImportRequestDto> rows, long factoryId) {
