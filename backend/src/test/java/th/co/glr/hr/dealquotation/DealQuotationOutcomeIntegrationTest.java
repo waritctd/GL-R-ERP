@@ -326,11 +326,15 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
     }
 
     /** Engines are exclusive per pricing request, not per ticket: a sibling pricing request's
-     * legacy ISSUED quotation must not supply the lines of this pricing request's draft. */
+     * legacy ISSUED quotation must not supply the lines or the percent of this pricing request's
+     * draft. */
     @Test
-    void createDepositNoticeFromQuotation_newEngineAccepted_whenASiblingPricingRequestHasALegacyIssuedQuotation_draftsThisQuotationsLines() {
+    void createDepositNoticeFromQuotation_newEngineAccepted_whenASiblingPricingRequestHasALegacyIssuedQuotation_draftsThisQuotationsLinesAndPercent() {
         CustomerQuotationDto legacyIssued = issuedLegacyQuotation(PricingRequestRecipient.OWNER);
-        DealQuotationDto accepted = acceptedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
+        // No code path writes deposit_percent on a legacy row; this stands in for one that carries it.
+        jdbc.update("UPDATE sales.quotation SET deposit_percent = 70 WHERE quotation_id = :id",
+            Map.of("id", legacyIssued.id()));
+        DealQuotationDto accepted = acceptedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"), 30);
         long pricingRequestId = accepted.pricingRequestId();
         orderConfirmation.confirmOrder(pricingRequestId,
             new OrderConfirmationRequests.ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
@@ -350,6 +354,8 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(draft.reference()).isEqualTo(accepted.number());
         assertThat(draft.items().stream().map(it -> line(it.qty(), it.netUnitPrice())).toList())
             .isEqualTo(thisQuotationsLines);
+        assertThat(accepted.depositPercent()).isEqualTo(30);
+        assertThat(draft.depositPercent()).isEqualByComparingTo("0.30");
     }
 
     @Test
@@ -917,15 +923,25 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
     }
 
     private DealQuotationDto acceptedNewOriginQuotation(String recipient, BigDecimal qty) {
-        DealQuotationDto issued = issuedNewOriginQuotation(recipient, qty);
+        return acceptedNewOriginQuotation(recipient, qty, null);
+    }
+
+    private DealQuotationDto acceptedNewOriginQuotation(String recipient, BigDecimal qty, Integer depositPercent) {
+        DealQuotationDto issued = issuedNewOriginQuotation(recipient, qty, depositPercent);
         return quotationService.recordOutcome(issued.id(),
             new RecordOutcomeRequest(QuotationStatus.ACCEPTED, "ลูกค้าโอเค", UUID.randomUUID().toString()), salesActor);
     }
 
     private DealQuotationDto issuedNewOriginQuotation(String recipient, BigDecimal qty) {
+        return issuedNewOriginQuotation(recipient, qty, null);
+    }
+
+    /** {@code depositPercent} null keeps the percent the quotation was created with. */
+    private DealQuotationDto issuedNewOriginQuotation(String recipient, BigDecimal qty, Integer depositPercent) {
         PricingDecisionDto decision = approvedDecision(recipient, qty);
         DealQuotationDto draft = quotationService.createFromPricingRequest(decision.pricingRequestId(), salesActor);
-        DealQuotationDto withValidity = quotationService.update(draft.id(), upsertWithValidityDays(draft, 30), salesActor);
+        DealQuotationDto withValidity = quotationService.update(draft.id(), upsertWithValidityDays(draft, 30,
+            depositPercent != null ? depositPercent : draft.depositPercent()), salesActor);
         DealQuotationDto submitted = quotationService.submit(withValidity.id(), salesActor);
         return quotationService.approve(submitted.id(), new ApproveRequest(null), salesManagerActor);
     }
@@ -1036,9 +1052,14 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
     }
 
     private DealQuotationRequests.UpsertDealQuotationRequest upsertWithValidityDays(DealQuotationDto q, int days) {
+        return upsertWithValidityDays(q, days, q.depositPercent());
+    }
+
+    private DealQuotationRequests.UpsertDealQuotationRequest upsertWithValidityDays(DealQuotationDto q, int days,
+                                                                                    Integer depositPercent) {
         List<DealQuotationRequests.ItemInput> items = q.items().stream().map(this::asItemInput).toList();
         return new DealQuotationRequests.UpsertDealQuotationRequest(q.contactId(), q.deptCode(), q.unitCode(),
-            q.offerDate(), q.depositPercent(), q.remainderMode(), q.creditDays(), days, q.customerNotes(),
+            q.offerDate(), depositPercent, q.remainderMode(), q.creditDays(), days, q.customerNotes(),
             q.priceMode(), q.documentLanguage(), q.currency(), items);
     }
 
