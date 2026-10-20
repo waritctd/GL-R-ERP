@@ -443,7 +443,8 @@ public class OrderConfirmationService {
      * {@code deposit_percent} goes to {@link DepositNoticeService#createDraftFromQuotation}, so a
      * sibling pricing request's legacy row on the same ticket cannot supply it either (a
      * new-engine sibling never could: R8 allows one ACCEPTED quotation per ticket and the lookup
-     * prefers ACCEPTED). The legacy branch passes no percent, because {@code CustomerQuotationDto}
+     * prefers ACCEPTED) when the quotation sets a percent; a null percent still falls back to the
+     * per-ticket lookup. The legacy branch passes no percent, because {@code CustomerQuotationDto}
      * carries none, so it keeps {@code createDraft}'s per-ticket derivation; the ticket-level
      * route does the same. The customer must have accepted: an ISSUED-only quotation answers 409.
      */

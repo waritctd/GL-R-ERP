@@ -332,8 +332,8 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
     void createDepositNoticeFromQuotation_newEngineAccepted_whenASiblingPricingRequestHasALegacyIssuedQuotation_draftsThisQuotationsLinesAndPercent() {
         CustomerQuotationDto legacyIssued = issuedLegacyQuotation(PricingRequestRecipient.OWNER);
         // No code path writes deposit_percent on a legacy row; this stands in for one that carries it.
-        jdbc.update("UPDATE sales.quotation SET deposit_percent = 70 WHERE quotation_id = :id",
-            Map.of("id", legacyIssued.id()));
+        assertThat(jdbc.update("UPDATE sales.quotation SET deposit_percent = 70 WHERE quotation_id = :id",
+            Map.of("id", legacyIssued.id()))).isEqualTo(1);
         DealQuotationDto accepted = acceptedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"), 30);
         long pricingRequestId = accepted.pricingRequestId();
         orderConfirmation.confirmOrder(pricingRequestId,
