@@ -20,7 +20,7 @@ vi.mock('../../api/index.js', () => ({
       uploadAttachment: vi.fn().mockResolvedValue({ attachment: null }),
       deleteAttachment: vi.fn().mockResolvedValue({ ok: true }),
     },
-    // GLA-125 follow-up: ผู้สั่งซื้อ (QuotationContactPicker) fetches this whenever a customerId
+    // GLA-125 follow-up: ผู้ติดต่อ (QuotationContactPicker) fetches this whenever a customerId
     // is present -- most tests here never set one (deal defaults to null), so it stays unmocked
     // for those; the tests that DO set customerId configure this themselves per-test.
     customers: {
@@ -381,18 +381,24 @@ describe('PricingRequestCreateModal', () => {
     api.customers.contacts.mockResolvedValueOnce({
       contacts: [{ id: 77, firstName: 'สมชาย', lastName: 'ทดสอบ', phone: '0812345678', email: 'somchai@example.com' }],
     });
-    const { createFn } = renderModal({ deal: { customerId: 501, customerName: 'บริษัท ทดสอบ จำกัด' } });
+    // The deal's stale contact (99, not in the list) must NOT pre-select ผู้ติดต่อ: the deal no
+    // longer carries one, and a PCR's ผู้ติดต่อ is the rep's pick on this form.
+    const { createFn } = renderModal({ deal: { customerId: 501, customerName: 'บริษัท ทดสอบ จำกัด', contactId: 99, contactName: 'ผู้ติดต่อเก่า ข.' } });
     fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
     fillRequiredFields();
 
     await waitFor(() => expect(api.customers.contacts).toHaveBeenCalledWith(501));
+    // Nothing pre-selected: the closed select is showing (no selected card, no เปลี่ยน trigger).
+    expect(screen.getByLabelText(/^ผู้ติดต่อ/).textContent).toContain('- เลือกผู้ติดต่อ -');
+    expect(screen.queryByRole('button', { name: 'เปลี่ยนผู้ติดต่อ' })).toBeNull();
     fireEvent.click(screen.getByLabelText(/^ผู้ติดต่อ/));
     fireEvent.click(await screen.findByRole('option', { name: /สมชาย ทดสอบ/ }));
 
     fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
 
     await waitFor(() => expect(createFn).toHaveBeenCalledTimes(1));
-    expect(createFn.mock.calls[0][0]).toMatchObject({ recipientContactId: 77 });
+    // The pick, never the deal's stale 99.
+    expect(createFn.mock.calls[0][0].recipientContactId).toBe(77);
   });
 
   it('leaves ผู้ติดต่อ disabled with no customer to scope to, and sends recipientContactId: null', async () => {
@@ -1049,9 +1055,10 @@ describe('PricingRequestCreateModal deal-derived autofill (V110)', () => {
     expect(screen.queryByDisplayValue('ผู้ซื้อ ข.')).toBeNull();
   });
 
-  it('falls back to contactName then customerName when the deal has no per-type recipient name', () => {
+  it('falls back to customerName — never the deal\'s old ผู้ติดต่อ — when the deal has no per-type recipient name', () => {
     renderModal({ deal: dealFixture({ designerName: null, ownerName: null, buyerName: null }) });
-    expect(screen.getByDisplayValue('ผู้ติดต่อ ค.')).not.toBeNull();
+    expect(screen.getByDisplayValue('ลูกค้า ง.')).not.toBeNull();
+    expect(screen.queryByDisplayValue('ผู้ติดต่อ ค.')).toBeNull();
   });
 
   it('seeds note from deal.note', () => {

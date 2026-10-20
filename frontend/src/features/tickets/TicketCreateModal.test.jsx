@@ -8,11 +8,9 @@ import { listDrafts, loadDraft, saveDraft } from './dealDrafts.js';
 
 globalThis.React = React;
 
-// UX-03 (still true after the section-hub rebuild, handoff 107): every
-// invalid field gets its own aria-invalid + aria-describedby + inline
-// role="alert" message, the first invalid field is focused on submit
-// (jumping to whichever hub section owns it), and the submit payload shape
-// is unchanged (plus the new entryChannel/priority fields).
+// UX-03: every invalid field gets its own aria-invalid + aria-describedby +
+// inline role="alert" message, and the first invalid field is focused on submit
+// (opening whichever accordion section owns it).
 
 vi.mock('../../api/index.js', async (importOriginal) => {
   const actual = await importOriginal();
@@ -22,10 +20,8 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       customers: {
         search: vi.fn(),
         projects: vi.fn(),
-        contacts: vi.fn(),
         createProject: vi.fn(),
         create: vi.fn(),
-        createContact: vi.fn(),
       },
       catalog: {
         prices: vi.fn(),
@@ -81,19 +77,22 @@ function catalogItem(overrides = {}) {
 // because the view gate rejected it -- this repo's own documented vacuous-test shape) and every
 // "submits" test fail outright. A manually constructed SubmitEvent with an explicit `submitter`
 // is picked up by React's onSubmit exactly like a real click (verified), so every call site below
-// now exercises `canSubmit` specifically: HUB lets it through, every other view still blocks it
-// even though a submitter is present.
+// now exercises `canSubmit` specifically: the one-page form lets it through, the draft picker
+// still blocks it even though a submitter is present.
 function submitForm() {
   const form = document.getElementById('ticket-create-form');
   form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true, submitter: document.createElement('button') }));
 }
 
-// Anchored to the start of the accessible name: a hub row's name is its
-// title + subtitle concatenated (e.g. "โครงการจำเป็นเลือกลูกค้าก่อน"), so an
-// unanchored search for "ลูกค้า" would also match the โครงการ row while it's
-// waiting on a customer.
-function goToSection(name) {
-  fireEvent.click(screen.getByRole('button', { name: new RegExp(`^${name}`) }));
+/** The accordion header button of one section, by section id (customer | project | entryChannel |
+ * items | details). Its name also carries the summary + badge, and a project pill can start with
+ * "โครงการ" too, so look it up by id, not by name. */
+function sectionHeader(id) {
+  return document.getElementById(`deal-section-${id}-header`);
+}
+// Opens an accordion section by id (idempotent — the open section stays open).
+function openSection(id) {
+  fireEvent.click(sectionHeader(id));
 }
 
 // Every render needs a QueryClientProvider — the modal fetches fxRates via react-query. A fresh
@@ -110,29 +109,26 @@ function renderModal(props = {}) {
 }
 
 // Drives the real customer/project pickers (not stubbed — this is the exact
-// flow the finding is about) via the ลูกค้า then โครงการ hub sections, so
+// flow the finding is about) via the ลูกค้า then โครงการ accordion sections, so
 // tests that need a valid customer+project exercise the real SearchSelect +
 // pill-button UI. Customer must be picked before project — projects are
 // nested under a customer via api.customers.projects(customerId).
 async function selectCustomerAndProject() {
-  goToSection('ลูกค้า');
+  openSection('customer');
   const searchInput = screen.getByPlaceholderText('พิมพ์ค้นหาชื่อบริษัท…');
   fireEvent.change(searchInput, { target: { value: 'บริษัท' } });
   const option = await screen.findByText(mockCustomer.name);
   fireEvent.mouseDown(option);
 
-  goToSection('กลับ');
-  goToSection('โครงการ');
+  openSection('project');
   const projectButton = await screen.findByRole('button', { name: mockProject.name });
   fireEvent.click(projectButton);
-  goToSection('กลับ');
 }
 
 /** The channel is required and has no default, so most create-path tests must state one. */
 function chooseEntryChannel(name = /ผู้ออกแบบนำ/) {
-  goToSection('ผู้ติดต่อ & เสนอแก่');
+  openSection('entryChannel');
   fireEvent.click(screen.getByRole('radio', { name }));
-  goToSection('กลับ');
 }
 
 /** Real wall-clock wait, for the handful of GLA-20 autosave tests where mixing fake timers with
@@ -170,7 +166,6 @@ beforeEach(() => {
   vi.stubGlobal('localStorage', createMemoryStorage());
   api.customers.search.mockResolvedValue({ customers: [mockCustomer] });
   api.customers.projects.mockResolvedValue({ projects: [mockProject] });
-  api.customers.contacts.mockResolvedValue({ contacts: [] });
   api.tickets.list.mockResolvedValue({ tickets: [] });
   // FX rates covering the catalogItem() fixture's EUR price. Individual tests override this to
   // exercise the "no rate for this currency" path.
@@ -202,15 +197,29 @@ describe('TicketCreateModal validation', () => {
     renderModal({ onSubmit, initialItems: [validItem({ size: '' })] });
 
     await selectCustomerAndProject();
-    // entryChannel now sits earlier than items in on-screen order (ลูกค้า → โครงการ → ผู้ติดต่อ &
-    // เสนอแก่ → รายการสินค้า), so it must be chosen or the failed-submit jump lands on the
+    // entryChannel sits earlier than items in on-screen order (ลูกค้า → โครงการ → เสนอแก่ →
+    // รายการสินค้า), so it must be chosen or the failed-submit jump lands on the
     // channel picker instead of this item's ขนาด field — this test would otherwise time out
     // waiting on a placeholder that never mounts.
     chooseEntryChannel();
-    submitForm();
+    // Walk away to another section first: the jump must close it and open the one owning ขนาด.
+    openSection('details');
+    // jsdom has no scrollIntoView, so record who scrolls, in order.
+    const scrolled = [];
+    Element.prototype.scrollIntoView = function recordScroll() { scrolled.push(this.id); };
+    try {
+      submitForm();
+      await waitFor(() => expect(document.activeElement?.id).toBe('item-0-size'));
+      // Header first, then the field: the other way round, the header's instant scroll would
+      // cancel the field's smooth one and could leave the focused field off screen.
+      expect(scrolled).toEqual(['deal-section-items-header', 'item-0-size']);
+    } finally {
+      delete Element.prototype.scrollIntoView;
+    }
+    expect(sectionHeader('details').getAttribute('aria-expanded')).toBe('false');
 
-    const sizeInput = await screen.findByPlaceholderText('เช่น 600x1200');
-    await waitFor(() => expect(sizeInput.getAttribute('aria-invalid')).toBe('true'));
+    const sizeInput = screen.getByPlaceholderText('เช่น 600x1200');
+    expect(sizeInput.getAttribute('aria-invalid')).toBe('true');
     expect(sizeInput.id).toBe('item-0-size');
     expect(sizeInput.getAttribute('aria-describedby')).toBe('item-0-size-error');
     expect(screen.getByText('กรุณากรอกขนาด')).toBeTruthy();
@@ -237,7 +246,7 @@ describe('TicketCreateModal validation', () => {
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     expect(onSubmit.mock.calls[0][0].items[0]).toMatchObject({ color: null, texture: null });
 
-    goToSection('รายการสินค้า');
+    openSection('items');
     fireEvent.click(screen.getByRole('button', { name: /^แก้ไขรายการที่ 1/ }));
     const colorInput = await screen.findByPlaceholderText('เช่น ขาว, เทา, ครีม');
     expect(colorInput.getAttribute('aria-invalid')).toBeNull();
@@ -295,7 +304,6 @@ describe('TicketCreateModal validation', () => {
       customerName: mockCustomer.name,
       customerId: mockCustomer.id,
       projectId: mockProject.id,
-      contactId: null,
       note: null,
       entryChannel: 'DESIGNER_LED',
       priority: 'NORMAL',
@@ -351,9 +359,8 @@ describe('TicketCreateModal validation', () => {
 
     await selectCustomerAndProject();
 
-    goToSection('ผู้ติดต่อ & เสนอแก่');
+    openSection('entryChannel');
     fireEvent.click(screen.getByRole('radio', { name: /เจ้าของตรง/ }));
-    goToSection('กลับ');
 
     submitForm();
 
@@ -365,7 +372,7 @@ describe('TicketCreateModal validation', () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     renderModal({ onSubmit });
 
-    // Hub's "สร้างดีล" stays disabled with nothing selected yet.
+    // "สร้างดีล" stays disabled with nothing selected yet.
     expect(screen.getByRole('button', { name: /^สร้างดีล/ }).disabled).toBe(true);
 
     await selectCustomerAndProject();
@@ -395,32 +402,144 @@ describe('TicketCreateModal validation', () => {
 
   it('starts with NO entry channel selected', async () => {
     renderModal({ onSubmit: vi.fn() });
-    goToSection('ผู้ติดต่อ & เสนอแก่');
+    openSection('entryChannel');
     const radios = screen.getAllByRole('radio');
     expect(radios).toHaveLength(3);
     // Wrong-way-round: assert none is checked, not that a particular one is.
     expect(radios.filter((r) => r.getAttribute('aria-checked') === 'true')).toHaveLength(0);
   });
 
-  it('wires the entry-channel error to the radiogroup and clears it once a channel is picked', async () => {
+  it('a failed submit opens เสนอแก่ from another section, focuses its first option and wires the error to the radiogroup', async () => {
     const onSubmit = vi.fn();
     renderModal({ onSubmit });
 
     await selectCustomerAndProject();
+    // Picking the project opened เสนอแก่, the one required section still missing.
+    expect(sectionHeader('entryChannel').getAttribute('aria-expanded')).toBe('true');
+    // Walk away first. With customer+project set and no items, the channel is the only failure a
+    // real สร้างดีล click can produce (the button is disabled without customer+project, and Enter
+    // is swallowed), so this is the reachable form of the jump.
+    openSection('details');
+    expect(sectionHeader('entryChannel').getAttribute('aria-expanded')).toBe('false');
+
     submitForm();
 
-    // No explicit goToSection here, deliberately: entryChannel is the only invalid field once
-    // customer+project are set and there are no items, so the failed submit's own
-    // jumpToField('entryChannel') (viewForFieldKey → 'contact') has already navigated here. Adding
-    // a goToSection('ผู้ติดต่อ & เสนอแก่') at this point would look harmless but throws — the
-    // hub row it clicks is no longer rendered once the jump has fired.
-    const group = await screen.findByRole('radiogroup', { name: 'เสนอแก่' });
-    await waitFor(() => expect(group.getAttribute('aria-invalid')).toBe('true'));
+    await waitFor(() => expect(sectionHeader('entryChannel').getAttribute('aria-expanded')).toBe('true'));
+    expect(sectionHeader('details').getAttribute('aria-expanded')).toBe('false');
+    const group = screen.getByRole('radiogroup', { name: 'เสนอแก่' });
+    await waitFor(() => expect(document.activeElement).toBe(within(group).getAllByRole('radio')[0]));
+    expect(group.getAttribute('aria-invalid')).toBe('true');
     expect(group.getAttribute('aria-describedby')).toBe('entry-channel-error');
+    expect(onSubmit).not.toHaveBeenCalled();
 
+    // Picking collapses the section, so re-open it to read the group's state again.
     fireEvent.click(screen.getByRole('radio', { name: /ผู้ซื้อตรง/ }));
-    expect(group.getAttribute('aria-invalid')).toBeNull();
-    expect(screen.queryByText('กรุณาเลือกว่าดีลนี้เสนอแก่ใคร')).toBeNull();
+    openSection('entryChannel');
+    expect(screen.getByRole('radiogroup', { name: 'เสนอแก่' }).getAttribute('aria-invalid')).toBeNull();
+  });
+
+  it('a finished section collapses to its value with a tick, and only a still-missing required one opens next', async () => {
+    api.customers.search.mockResolvedValue({ customers: [{ ...mockCustomer, taxId: '0105551234567' }] });
+    renderModal({ onSubmit: vi.fn() });
+    const customerHeader = sectionHeader('customer');
+    expect(customerHeader.getAttribute('aria-expanded')).toBe('true');
+    expect(customerHeader.textContent).toContain('จำเป็น');
+
+    // Channel first: picking it collapses เสนอแก่ and opens the first required section still
+    // missing, which is ลูกค้า.
+    chooseEntryChannel();
+    expect(sectionHeader('entryChannel').getAttribute('aria-expanded')).toBe('false');
+    expect(within(sectionHeader('entryChannel')).getByLabelText('เสร็จแล้ว')).not.toBeNull();
+    expect(customerHeader.getAttribute('aria-expanded')).toBe('true');
+
+    fireEvent.change(screen.getByPlaceholderText('พิมพ์ค้นหาชื่อบริษัท…'), { target: { value: 'บริษัท' } });
+    fireEvent.mouseDown(await screen.findByText(mockCustomer.name));
+
+    await waitFor(() => expect(customerHeader.getAttribute('aria-expanded')).toBe('false'));
+    expect(customerHeader.textContent).toContain(mockCustomer.name);
+    expect(customerHeader.textContent).toContain('เลขภาษี 0105551234567');
+    expect(customerHeader.textContent).not.toContain('จำเป็น');
+    expect(within(customerHeader).getByLabelText('เสร็จแล้ว')).not.toBeNull();
+    expect(sectionHeader('project').getAttribute('aria-expanded')).toBe('true');
+
+    // เสนอแก่ is already done, so picking the project forces nothing open.
+    fireEvent.click(await screen.findByRole('button', { name: mockProject.name }));
+    expect(sectionHeader('project').getAttribute('aria-expanded')).toBe('false');
+    expect(document.querySelectorAll('[id^="deal-section-"][id$="-header"][aria-expanded="true"]')).toHaveLength(0);
+  });
+
+  // Picking the project collapses โครงการ, and the duplicate check only answers after that
+  // (api.tickets.list resolves later), so the warning cannot live inside the โครงการ body.
+  it('shows the duplicate-deal warning while โครงการ is collapsed', async () => {
+    api.tickets.list.mockResolvedValue({ tickets: [{ id: 7, code: 'TK-0007', projectId: mockProject.id, status: 'OPEN' }] });
+    renderModal({ onSubmit: vi.fn() });
+
+    await selectCustomerAndProject();
+
+    expect((await screen.findByRole('status')).textContent).toMatch(/พบดีลที่ผูกกับโครงการนี้อยู่แล้ว/);
+    expect(screen.getByText('TK-0007')).toBeTruthy();
+    expect(sectionHeader('project').getAttribute('aria-expanded')).toBe('false');
+  });
+
+  // A create request can resolve after the rep has moved on; its auto-advance must judge what is on
+  // screen by then, not what was there at click time. Phase 1: a section finished meanwhile is not
+  // reopened. Phase 2: an item editor opened meanwhile, on a จากสต็อก row with no price, still blocks
+  // the advance exactly as a header click would.
+  it('a project created late neither reopens a finished section nor slips past an open item editor', async () => {
+    const resolveCreate = [];
+    api.customers.createProject.mockImplementation(() => new Promise((resolve) => { resolveCreate.push(resolve); }));
+    renderModal({ onSubmit: vi.fn(), initialItems: [validItem()] });
+    fireEvent.change(screen.getByPlaceholderText('พิมพ์ค้นหาชื่อบริษัท…'), { target: { value: 'บริษัท' } });
+    fireEvent.mouseDown(await screen.findByText(mockCustomer.name));
+    async function startProjectCreate(name) {
+      fireEvent.click(await screen.findByRole('button', { name: /เพิ่มโครงการใหม่/ }));
+      fireEvent.change(screen.getByPlaceholderText('ชื่อโครงการ'), { target: { value: name } });
+      fireEvent.click(screen.getByRole('button', { name: 'เพิ่ม' }));
+    }
+
+    await startProjectCreate('โครงการใหม่');
+    // While the request is in flight: เสนอแก่ is picked, and โครงการ (still missing) opens again.
+    chooseEntryChannel();
+    expect(sectionHeader('project').getAttribute('aria-expanded')).toBe('true');
+    await act(async () => { resolveCreate[0]({ project: { id: 11, name: 'โครงการใหม่' } }); });
+    expect(sectionHeader('project').textContent).toContain('โครงการใหม่');
+    expect(document.querySelectorAll('[id^="deal-section-"][id$="-header"][aria-expanded="true"]')).toHaveLength(0);
+
+    // Phase 2: clear the project and create another; meanwhile open row 1's editor and flag it
+    // จากสต็อก with no price.
+    openSection('project');
+    fireEvent.click(within(document.getElementById('project-field')).getAllByRole('button')[0]);
+    await startProjectCreate('โครงการ B');
+    openSection('items');
+    fireEvent.click(screen.getByRole('button', { name: /^แก้ไขรายการที่ 1/ }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /จากสต็อก/ }));
+    await act(async () => { resolveCreate[1]({ project: { id: 12, name: 'โครงการ B' } }); });
+
+    expect(sectionHeader('project').textContent).toContain('โครงการ B');
+    expect(sectionHeader('items').getAttribute('aria-expanded')).toBe('true');
+    const priceInput = screen.getByPlaceholderText('เช่น 350.00');
+    await waitFor(() => expect(priceInput.getAttribute('aria-invalid')).toBe('true'));
+    expect(screen.getByText('กรุณากรอกราคาขายเมื่อเลือกสินค้าจากสต็อก ในรายการที่ 1')).toBeTruthy();
+    // The footer matches the open editor.
+    expect(screen.getByRole('button', { name: 'ลบ' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /บันทึกรายการ/ })).toBeTruthy();
+    expect(screen.queryByTestId('ticket-create-submit')).toBeNull();
+  });
+
+  it('the customer dropdown and the project list both lead with their "+ เพิ่ม…" row', async () => {
+    renderModal({ onSubmit: vi.fn() });
+
+    fireEvent.change(screen.getByPlaceholderText('พิมพ์ค้นหาชื่อบริษัท…'), { target: { value: 'บริษัท' } });
+    const customerOption = await screen.findByText(mockCustomer.name);
+    const createCustomerRow = screen.getByText('เพิ่มลูกค้าใหม่');
+    expect(createCustomerRow.parentElement.contains(customerOption)).toBe(true);
+    expect(createCustomerRow.parentElement.firstElementChild).toBe(createCustomerRow);
+
+    fireEvent.mouseDown(customerOption);
+    const projectPill = await screen.findByRole('button', { name: mockProject.name });
+    const createProjectPill = screen.getByRole('button', { name: /เพิ่มโครงการใหม่/ });
+    expect(createProjectPill.parentElement).toBe(projectPill.parentElement);
+    expect(createProjectPill.parentElement.firstElementChild).toBe(createProjectPill);
   });
 
   it('sends exactly the channel the rep picked, not a default', async () => {
@@ -447,7 +566,7 @@ describe('TicketCreateModal validation', () => {
     const restoreButton = await screen.findByRole('button', { name: 'เปิดต่อ' });
     fireEvent.click(restoreButton);
 
-    goToSection('ผู้ติดต่อ & เสนอแก่');
+    openSection('entryChannel');
     expect(screen.getByRole('radio', { name: /เจ้าของตรง/ }).getAttribute('aria-checked')).toBe('true');
   });
 });
@@ -473,9 +592,9 @@ describe('TicketCreateModal draft picker (GLA-19)', () => {
     const rowB = screen.getByText('ดีล B').closest('div.rounded-xl');
     fireEvent.click(within(rowB).getByRole('button', { name: 'เปิดต่อ' }));
 
-    // The picker is gone; the hub shows the restored title.
+    // The picker is gone; the form shows the restored title.
     expect(screen.queryByText('ดีล A')).toBeNull();
-    goToSection('รายละเอียดดีล');
+    openSection('details');
     expect(screen.getByDisplayValue('ดีล B')).not.toBeNull();
 
     // A further edit autosaves into `b`'s id, not a new draft.
@@ -496,7 +615,7 @@ describe('TicketCreateModal draft picker (GLA-19)', () => {
     renderModal({ onSubmit: vi.fn() });
 
     fireEvent.click(await screen.findByRole('button', { name: /เริ่มดีลใหม่/ }));
-    goToSection('รายละเอียดดีล');
+    openSection('details');
     expect(screen.queryByDisplayValue('ดีลเก่า')).toBeNull();
   });
 
@@ -524,7 +643,8 @@ describe('TicketCreateModal draft picker (GLA-19)', () => {
 // quotation, commission) reads this pair yet, so a flagged line can still be attached to an
 // ordinary PricingRequest exactly as before; wiring it into that chain is a later follow-up.
 // Covers the checkbox + price-field wiring TicketCreateModal.jsx adds to renderItemEditor and
-// both of the item editor's own exits ("บันทึกรายการ" and the "กลับไปรายการสินค้า" back link) —
+// all three of the item editor's exits ("บันทึกรายการ", the "กลับไปรายการสินค้า" back link, and
+// opening another section by its header or a ไปที่ขั้นตอน jump) —
 // the equivalent backend behaviour (validation, request-wins-with-fallback merge) is covered by
 // TicketServiceTest/TicketRepositoryIntegrationTest.
 describe('TicketCreateModal stock-sourced pricing (V183)', () => {
@@ -535,13 +655,12 @@ describe('TicketCreateModal stock-sourced pricing (V183)', () => {
     await selectCustomerAndProject();
     chooseEntryChannel();
 
-    goToSection('รายการสินค้า');
+    openSection('items');
     fireEvent.click(screen.getByRole('button', { name: /^แก้ไขรายการที่ 1/ }));
     fireEvent.click(screen.getByRole('checkbox', { name: /จากสต็อก/ }));
     const priceInput = await screen.findByPlaceholderText('เช่น 350.00');
     fireEvent.change(priceInput, { target: { value: '420.50' } });
-    goToSection('กลับไปรายการสินค้า');
-    goToSection('กลับ');
+    fireEvent.click(screen.getByRole('button', { name: 'กลับไปรายการสินค้า' }));
 
     submitForm();
 
@@ -552,40 +671,57 @@ describe('TicketCreateModal stock-sourced pricing (V183)', () => {
     });
   });
 
-  it('blocks submit with a Thai error when a row already carries the invalid stock-price state', async () => {
+  it('blocks submit when a row already carries the invalid stock-price state, and no other section can be opened until the price is filled', async () => {
     const onSubmit = vi.fn();
     // Seeds the invalid state directly rather than checking the checkbox then trying to escape
-    // the item editor: BOTH editor exits ("บันทึกรายการ" and "กลับไปรายการสินค้า") now route
-    // through closeItemEditor() and block on an empty price before the summary is ever reachable
-    // — see the dedicated "both exits blocked" tests below. This test covers the OTHER way this
-    // state can exist at final-submit time: a row that already carries sourcedFromStock=true with
-    // no price (e.g. restored from a saved draft, or an item passed in via `initialItems`) still
-    // blocks the final สร้างดีล submit, proving that guard is not the ONLY thing standing between
-    // an invalid line and a create request.
+    // the item editor: every editor exit ("บันทึกรายการ", "กลับไปรายการสินค้า", and on the
+    // one-page form opening any other section by its header or a ไปที่ขั้นตอน jump) routes
+    // through closeItemEditor() and blocks on an empty price. This test covers the way this state
+    // can exist at final-submit time: a row that already carries sourcedFromStock=true with no
+    // price (e.g. restored from a saved draft, or an item passed in via `initialItems`) still
+    // blocks the final สร้างดีล submit, proving the editor check is not the ONLY thing standing
+    // between an invalid line and a create request. It then pins the section-switch exit.
     renderModal({ onSubmit, initialItems: [validItem({ sourcedFromStock: true, stockSalePrice: '' })] });
 
     await selectCustomerAndProject();
-    chooseEntryChannel();
-
+    // เสนอแก่ is left empty on purpose, so the ยังกรอกไม่ครบ list has a non-item line to jump to.
     submitForm();
 
-    // submit()'s own jumpToField opens the item editor and focuses the invalid price field —
-    // no manual navigation into the row needed.
+    await screen.findByText(/ยังกรอกไม่ครบ 2 รายการ/);
+    expect(onSubmit).not.toHaveBeenCalled();
+    const jumpFor = (message) => within(screen.getByText(message, { selector: 'li' })).getByRole('button', { name: 'ไปที่ขั้นตอน' });
+    fireEvent.click(jumpFor(/กรุณากรอกราคาขายเมื่อเลือกสินค้าจากสต็อก ในรายการที่ 1/));
     const priceInput = await screen.findByPlaceholderText('เช่น 350.00');
     await waitFor(() => expect(priceInput.getAttribute('aria-invalid')).toBe('true'));
-    expect(screen.getByText('กรุณากรอกราคาขายเมื่อเลือกสินค้าจากสต็อก ในรายการที่ 1')).toBeTruthy();
-    expect(onSubmit).not.toHaveBeenCalled();
+
+    // With the price still empty, neither a ไปที่ขั้นตอน jump nor a header click leaves the editor.
+    fireEvent.click(jumpFor(/กรุณาเลือกว่าดีลนี้เสนอแก่ใคร/));
+    expect(sectionHeader('items').getAttribute('aria-expanded')).toBe('true');
+    expect(sectionHeader('entryChannel').getAttribute('aria-expanded')).toBe('false');
+    expect(screen.getByPlaceholderText('เช่น 350.00')).toBeTruthy();
+    openSection('details');
+    expect(sectionHeader('items').getAttribute('aria-expanded')).toBe('true');
+    expect(sectionHeader('details').getAttribute('aria-expanded')).toBe('false');
+    expect(screen.getByPlaceholderText('เช่น 350.00')).toBeTruthy();
+
+    // A valid price lets the switch through, and the editor is closed on the way out.
+    fireEvent.change(priceInput, { target: { value: '420.50' } });
+    openSection('details');
+    expect(sectionHeader('details').getAttribute('aria-expanded')).toBe('true');
+    openSection('items');
+    expect(screen.queryByPlaceholderText('เช่น 350.00')).toBeNull();
+    expect(screen.getByRole('button', { name: /^แก้ไขรายการที่ 1/ })).toBeTruthy();
   });
 
-  // Gap A, second exit (review follow-up): the item editor has TWO ways out — the footer's
-  // "บันทึกรายการ" button (covered below) and this "กลับไปรายการสินค้า" back link at the top of
-  // the editor. The back link used to call setEditingItemIndex(null) directly, unguarded — a
-  // flagged/empty line could dodge the footer button's check entirely just by using the back
-  // link instead. Both now route through the same closeItemEditor().
+  // Gap A, second exit (review follow-up): besides the footer's "บันทึกรายการ" button (covered
+  // below) the item editor has this "กลับไปรายการสินค้า" back link at the top. The back link used
+  // to call setEditingItemIndex(null) directly, unguarded — a flagged/empty line could dodge the
+  // footer button's check entirely just by using the back link instead. Both now route through
+  // the same closeItemEditor(), as does the third exit (opening another section, pinned above).
   it('"กลับไปรายการสินค้า" back link also blocks leaving the item editor when จากสต็อก is checked with no price', async () => {
     renderModal({ onSubmit: vi.fn(), initialItems: [validItem()] });
 
-    goToSection('รายการสินค้า');
+    openSection('items');
     fireEvent.click(screen.getByRole('button', { name: /^แก้ไขรายการที่ 1/ }));
     fireEvent.click(screen.getByRole('checkbox', { name: /จากสต็อก/ }));
     const priceInput = await screen.findByPlaceholderText('เช่น 350.00');
@@ -607,7 +743,7 @@ describe('TicketCreateModal stock-sourced pricing (V183)', () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     renderModal({ onSubmit, initialItems: [validItem()] });
 
-    goToSection('รายการสินค้า');
+    openSection('items');
     fireEvent.click(screen.getByRole('button', { name: /^แก้ไขรายการที่ 1/ }));
     const checkbox = screen.getByRole('checkbox', { name: /จากสต็อก/ });
     fireEvent.click(checkbox);
@@ -616,8 +752,7 @@ describe('TicketCreateModal stock-sourced pricing (V183)', () => {
 
     fireEvent.click(checkbox);
     expect(screen.queryByPlaceholderText('เช่น 350.00')).toBeNull();
-    goToSection('กลับไปรายการสินค้า');
-    goToSection('กลับ');
+    fireEvent.click(screen.getByRole('button', { name: 'กลับไปรายการสินค้า' }));
 
     await selectCustomerAndProject();
     chooseEntryChannel();
@@ -636,7 +771,7 @@ describe('TicketCreateModal stock-sourced pricing (V183)', () => {
   it('"บันทึกรายการ" blocks closing the item editor when จากสต็อก is checked with no price', async () => {
     renderModal({ onSubmit: vi.fn(), initialItems: [validItem()] });
 
-    goToSection('รายการสินค้า');
+    openSection('items');
     fireEvent.click(screen.getByRole('button', { name: /^แก้ไขรายการที่ 1/ }));
     fireEvent.click(screen.getByRole('checkbox', { name: /จากสต็อก/ }));
     const priceInput = await screen.findByPlaceholderText('เช่น 350.00');
@@ -656,96 +791,60 @@ describe('TicketCreateModal stock-sourced pricing (V183)', () => {
   });
 });
 
-// HTML implicit submission (fix/form-enter-submits-real-records): a <form> with no submit button
-// but exactly ONE field that blocks implicit submission fires a real 'submit' event on Enter, no
-// button ever pressed. jsdom does not implement that algorithm at all (pressing "Enter" via
-// fireEvent does nothing special) -- e2e/implicit-submission.spec.js is the layer that reproduces
-// the real thing. What `submitForm()` proves here is narrower and complementary: given a genuine
-// 'submit' event WITH a submitter attached (deliberately, not the submitter-less dispatch a real
-// Enter-on-a-buttonless-view would actually produce -- see the helper's own comment), does
-// SafeForm's `canSubmit` gate on `<TicketCreateModal>`'s form still reject it on every view except
-// HUB? A submitter-less dispatch would pass every "does NOT submit" case below for free
-// (SafeForm's separate submitter guard would block it regardless of canSubmit), which would prove
-// nothing about `canSubmit` specifically -- this repo's own documented vacuous-test shape. Mirrors
-// TaxAllowanceForm.test.jsx's "form-level submit gate blocks Enter-key implicit submission"
-// describe block. HUB's own positive case (a real submit event with view==='hub') is already
-// exercised by every test above that calls `selectCustomerAndProject()` then `submitForm()`
-// directly — see `handleFormSubmit`'s own comment in TicketCreateModal.jsx for why HUB, unlike the
-// three views below, is deliberately left able to submit.
+// HTML implicit submission: Enter in a text input clicks the form's default button — here the
+// footer's real สร้างดีล — and would file a deal nobody asked for. The guard is a form-level keydown
+// that swallows Enter on <input>s and must leave every other control's keyboard use alone.
 describe('TicketCreateModal implicit submission (Enter-key) safety', () => {
-  it('does not submit a real submit event from the DETAILS view, even with a valid customer+project', async () => {
-    const onSubmit = vi.fn();
-    renderModal({ onSubmit, initialItems: [validItem()] });
+  it('swallows Enter in text inputs only — the textarea, section headers and เสนอแก่ radios still work', async () => {
+    renderModal({ onSubmit: vi.fn(), initialItems: [validItem()] });
+    const entryChannelSummary = (label) => () => sectionHeader('entryChannel').textContent.includes(label);
+    const rows = [
+      // [target, key, expected, reach it, what a button's click must do]
+      ['ลูกค้า search', 'Enter', 'swallowed', () => screen.getByPlaceholderText('พิมพ์ค้นหาชื่อบริษัท…')],
+      ['ชื่อโครงการ', 'Enter', 'swallowed', async () => {
+        fireEvent.change(screen.getByPlaceholderText('พิมพ์ค้นหาชื่อบริษัท…'), { target: { value: 'บริษัท' } });
+        fireEvent.mouseDown(await screen.findByText(mockCustomer.name));
+        fireEvent.click(await screen.findByRole('button', { name: /เพิ่มโครงการใหม่/ }));
+        return screen.getByPlaceholderText('ชื่อโครงการ');
+      }],
+      ['เสนอแก่ header', 'Enter', 'works', () => sectionHeader('entryChannel'),
+        () => sectionHeader('entryChannel').getAttribute('aria-expanded') === 'true'],
+      ['เสนอแก่ radio', 'Enter', 'works', () => { openSection('entryChannel'); return screen.getByRole('radio', { name: /ผู้ออกแบบนำ/ }); },
+        entryChannelSummary('ผู้ออกแบบนำ')],
+      ['เสนอแก่ radio', ' ', 'works', () => { openSection('entryChannel'); return screen.getByRole('radio', { name: /เจ้าของตรง/ }); },
+        entryChannelSummary('เจ้าของตรง')],
+      ['ชื่อดีล', 'Enter', 'swallowed', () => { openSection('details'); return screen.getByPlaceholderText(mockCustomer.name); }],
+      // A keydown left alone on the textarea is its newline.
+      ['หมายเหตุ', 'Enter', 'works', () => screen.getByPlaceholderText('ข้อมูลเพิ่มเติม (ถ้ามี)')],
+      ['item editor ขนาด', 'Enter', 'swallowed', () => {
+        openSection('items');
+        fireEvent.click(screen.getByRole('button', { name: /^แก้ไขรายการที่ 1/ }));
+        return screen.getByPlaceholderText('เช่น 600x1200');
+      }],
+    ];
 
-    await selectCustomerAndProject();
-    goToSection('รายละเอียดดีล');
-    // ชื่อดีล is DETAILS' only Enter-blocking field (renderDetailsView) — the textarea and
-    // role="radio" priority chips don't count toward HTML's implicit-submission rule.
-    fireEvent.change(screen.getByPlaceholderText(mockCustomer.name), { target: { value: 'ดีลทดสอบ Enter' } });
-
-    submitForm();
-
-    expect(onSubmit).not.toHaveBeenCalled();
+    const observed = [];
+    for (const [target, key, , reach, clickDoes] of rows) {
+      const el = await reach();
+      // fireEvent returns false when a handler called preventDefault. jsdom performs no default
+      // actions, so a button's keyboard activation is done here, as a browser would.
+      const kept = fireEvent.keyDown(el, { key });
+      if (kept && el.tagName === 'BUTTON') fireEvent.click(el);
+      observed.push([target, key, !kept ? 'swallowed' : (!clickDoes || clickDoes()) ? 'works' : 'broken']);
+    }
+    expect(observed).toEqual(rows.map(([target, key, expected]) => [target, key, expected]));
   });
 
-  it('does not submit a real submit event from the CUSTOMER view before a customer is chosen', async () => {
-    const onSubmit = vi.fn();
-    renderModal({ onSubmit });
-
-    goToSection('ลูกค้า');
-    // SearchSelect's own search input is the CUSTOMER view's only field while nothing is selected.
-    fireEvent.change(screen.getByPlaceholderText('พิมพ์ค้นหาชื่อบริษัท…'), { target: { value: 'บริษัท' } });
-
-    submitForm();
-
-    expect(onSubmit).not.toHaveBeenCalled();
-  });
-
-  it('does not submit a real submit event from the PROJECT view while creating a new project', async () => {
-    const onSubmit = vi.fn();
-    renderModal({ onSubmit });
-
-    goToSection('ลูกค้า');
-    fireEvent.change(screen.getByPlaceholderText('พิมพ์ค้นหาชื่อบริษัท…'), { target: { value: 'บริษัท' } });
-    fireEvent.mouseDown(await screen.findByText(mockCustomer.name));
-    goToSection('กลับ');
-
-    goToSection('โครงการ');
-    await screen.findByRole('button', { name: mockProject.name });
-    // Once "สร้างโครงการใหม่" is open, ชื่อโครงการ is the PROJECT view's only field —
-    // `selectedProject` is still null, so validateTicketForm() would fail regardless, but the
-    // implicit-submission gate must refuse to even try before that check ever runs.
-    fireEvent.click(screen.getByRole('button', { name: /สร้างโครงการใหม่/ }));
-    fireEvent.change(screen.getByPlaceholderText('ชื่อโครงการ'), { target: { value: 'โครงการทดสอบ' } });
-
-    submitForm();
-
-    expect(onSubmit).not.toHaveBeenCalled();
-  });
-
-  it('does not submit a real submit event from the ITEMS view', async () => {
-    const onSubmit = vi.fn();
-    renderModal({ onSubmit, initialItems: [validItem()] });
-
-    await selectCustomerAndProject();
-    goToSection('รายการสินค้า');
-
-    submitForm();
-
-    expect(onSubmit).not.toHaveBeenCalled();
-  });
-
-  // The positive half of the gate. HUB is the ONLY view that may submit now that ตรวจสอบ & บันทึก
-  // is gone, so this is what would catch `canSubmit` being narrowed to nothing — which would turn
-  // the footer's real สร้างดีล button into a dead click rather than closing any hole.
-  it('submits a real submit event dispatched from the HUB view', async () => {
+  // The positive half of the gate: the footer's real สร้างดีล button still submits — this is what
+  // would catch `canSubmit` being narrowed to nothing.
+  it('submits a real submit event from the สร้างดีล button', async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     renderModal({ onSubmit, initialItems: [validItem()] });
 
     await selectCustomerAndProject();
     chooseEntryChannel();
 
-    submitForm();
+    fireEvent.click(screen.getByTestId('ticket-create-submit'));
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
   });
@@ -784,7 +883,7 @@ describe('TicketCreateModal catalog picker (catalog link + factory-as-brand mapp
   // (debounced, real-timer) catalog search — the actual user flow, not a shortcut around it, since
   // the mapping under test lives inside applyCatalogItem and is reached only via a real pick.
   async function addItemAndSearchBrand(query) {
-    goToSection('รายการสินค้า');
+    openSection('items');
     fireEvent.click(screen.getByRole('button', { name: /^เพิ่มรายการสินค้า/ }));
     const brandInput = await screen.findByPlaceholderText('เช่น Panaria, LEA, Bode');
     fireEvent.change(brandInput, { target: { value: query } });
@@ -810,7 +909,6 @@ describe('TicketCreateModal catalog picker (catalog link + factory-as-brand mapp
     await waitFor(() => expect(brandInput.value).toBe('Bode'));
 
     fireEvent.click(screen.getByRole('button', { name: /บันทึกรายการ/ }));
-    goToSection('กลับ');
     submitForm();
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
@@ -872,7 +970,6 @@ describe('TicketCreateModal catalog picker (catalog link + factory-as-brand mapp
     fireEvent.change(screen.getByPlaceholderText('เช่น ขาว, เทา, ครีม'), { target: { value: 'เทาเข้ม' } });
 
     fireEvent.click(screen.getByRole('button', { name: /บันทึกรายการ/ }));
-    goToSection('กลับ');
     submitForm();
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
@@ -905,7 +1002,6 @@ describe('TicketCreateModal catalog picker (catalog link + factory-as-brand mapp
     fireEvent.focus(modelInput);
 
     fireEvent.click(screen.getByRole('button', { name: /บันทึกรายการ/ }));
-    goToSection('กลับ');
     submitForm();
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
@@ -999,7 +1095,7 @@ describe('TicketCreateModal catalog price display', () => {
     const item = catalogItem({ catalogPrice: 8.8, catalogCurrency: 'USD', catalogPriceUnit: 'per_sqm' });
     renderModal({ onSubmit: vi.fn(), initialItems: [item] });
 
-    goToSection('รายการสินค้า');
+    openSection('items');
 
     // 8.80 USD/ตร.ม. at 35.20 THB/USD = 309.76 บาท/ตร.ม. — a pure conversion, no markup.
     // The row renders from local state immediately; the baht line waits on the FX query, so it
@@ -1014,7 +1110,7 @@ describe('TicketCreateModal catalog price display', () => {
     const item = catalogItem({ catalogPrice: 8.8, catalogCurrency: 'USD', catalogPriceUnit: 'per_sqm' });
     renderModal({ onSubmit: vi.fn(), initialItems: [item] });
 
-    goToSection('รายการสินค้า');
+    openSection('items');
 
     const row = await screen.findByTestId('item-catalog-price-0');
     expect(within(row).getByText('8.80 USD/ตร.ม.')).toBeTruthy();
@@ -1029,14 +1125,13 @@ describe('TicketCreateModal catalog price display', () => {
 
     await selectCustomerAndProject();
     chooseEntryChannel();
-    goToSection('รายการสินค้า');
+    openSection('items');
 
     const row = await screen.findByTestId('item-catalog-price-0');
     expect(within(row).getByText('43.00 EUR/ตร.ม.')).toBeTruthy();
     expect(within(row).queryByText(/บาท/)).toBeNull();
 
     // A deal must stay creatable with no prices at all (V50).
-    goToSection('กลับ');
     submitForm();
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
   });
@@ -1044,7 +1139,7 @@ describe('TicketCreateModal catalog price display', () => {
   it('shows no ราคาตั้ง (ประมาณการ) figure or total anywhere', async () => {
     renderModal({ onSubmit: vi.fn(), initialItems: [catalogItem(), catalogItem()] });
 
-    goToSection('รายการสินค้า');
+    openSection('items');
     await screen.findByTestId('item-catalog-price-0');
 
     expect(screen.queryByText(/ราคาตั้ง/)).toBeNull();
@@ -1056,7 +1151,7 @@ describe('TicketCreateModal catalog price display', () => {
 describe('TicketCreateModal autosave debounce (GLA-20)', () => {
   it('does not write before 1000ms, and coalesces rapid edits into exactly one write', () => {
     renderModal({ onSubmit: vi.fn() });
-    goToSection('รายละเอียดดีล');
+    openSection('details');
     const titleInput = screen.getByPlaceholderText('ชื่อดีล'); // no customer selected -> fallback placeholder
 
     vi.useFakeTimers();
@@ -1091,9 +1186,8 @@ describe('TicketCreateModal autosave debounce (GLA-20)', () => {
 
   it('บันทึกร่าง saves immediately, without waiting for the debounce', () => {
     renderModal({ onSubmit: vi.fn() });
-    goToSection('รายละเอียดดีล');
+    openSection('details');
     fireEvent.change(screen.getByPlaceholderText('ชื่อดีล'), { target: { value: 'ดีลด่วน' } });
-    goToSection('เสร็จสิ้น');
 
     fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
     expect(listDrafts()).toHaveLength(1);
@@ -1136,7 +1230,7 @@ describe('TicketCreateModal beforeunload guard (GLA-20)', () => {
     const addSpy = vi.spyOn(window, 'addEventListener');
     try {
       renderModal({ onSubmit: vi.fn() });
-      goToSection('รายละเอียดดีล');
+      openSection('details');
       fireEvent.change(screen.getByPlaceholderText('ชื่อดีล'), { target: { value: 'ดีลค้างไว้' } });
 
       const handler = addSpy.mock.calls.find(([evt]) => evt === 'beforeunload')[1];
@@ -1162,7 +1256,7 @@ describe('TicketCreateModal beforeunload guard (GLA-20)', () => {
     });
     try {
       renderModal({ onSubmit: vi.fn() });
-      goToSection('รายละเอียดดีล');
+      openSection('details');
       fireEvent.change(screen.getByPlaceholderText('ชื่อดีล'), { target: { value: 'ดีลค้างไว้' } });
 
       const handler = addSpy.mock.calls.find(([evt]) => evt === 'beforeunload')[1];
@@ -1198,9 +1292,8 @@ describe('TicketCreateModal submit + autosave interaction (GLA-20)', () => {
 
     // A late edit right before submitting -- its own debounce timer is still pending (not yet
     // 1000ms old) at the moment submit() runs.
-    goToSection('รายละเอียดดีล');
+    openSection('details');
     fireEvent.change(screen.getByPlaceholderText(mockCustomer.name), { target: { value: 'แก้ไขล่าสุด' } });
-    goToSection('เสร็จสิ้น');
 
     submitForm();
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
@@ -1233,13 +1326,12 @@ describe('TicketCreateModal submit + autosave interaction (GLA-20)', () => {
 
     const setTimeoutSpy = vi.spyOn(window, 'setTimeout');
     try {
-      goToSection('รายละเอียดดีล');
+      openSection('details');
       fireEvent.change(screen.getByPlaceholderText(mockCustomer.name), { target: { value: 'แก้ไขล่าสุด' } });
       const scheduled = setTimeoutSpy.mock.calls.filter(([, ms]) => ms === 1000).at(-1);
       expect(scheduled).toBeTruthy();
       const staleCallback = scheduled[0];
 
-      goToSection('เสร็จสิ้น');
       submitForm();
       await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
       await waitFor(() => expect(listDrafts()).toHaveLength(0));
@@ -1335,7 +1427,7 @@ describe('TicketCreateModal restore baseline (review fix, GLA-19/20)', () => {
     renderModal({ onSubmit: vi.fn() });
 
     fireEvent.click(screen.getByRole('button', { name: 'เปิดต่อ' }));
-    goToSection('รายละเอียดดีล');
+    openSection('details');
 
     // Fake timers BEFORE the edit -- the debounce effect's setTimeout must be scheduled against
     // the fake clock, or advancing it below never fires the (still-real) pending timer.
@@ -1363,9 +1455,8 @@ describe('TicketCreateModal close confirmation (GLA-20)', () => {
   it('asks for confirmation when closing with meaningful data, flushing a save first', () => {
     const onClose = vi.fn();
     renderModal({ onSubmit: vi.fn(), onClose });
-    goToSection('รายละเอียดดีล');
+    openSection('details');
     fireEvent.change(screen.getByPlaceholderText('ชื่อดีล'), { target: { value: 'ดีลค้างไว้' } });
-    goToSection('เสร็จสิ้น');
 
     fireEvent.click(screen.getByRole('button', { name: 'ยกเลิก' }));
 
@@ -1377,9 +1468,8 @@ describe('TicketCreateModal close confirmation (GLA-20)', () => {
   it('เก็บร่างไว้ closes and keeps the draft', () => {
     const onClose = vi.fn();
     renderModal({ onSubmit: vi.fn(), onClose });
-    goToSection('รายละเอียดดีล');
+    openSection('details');
     fireEvent.change(screen.getByPlaceholderText('ชื่อดีล'), { target: { value: 'ดีลค้างไว้' } });
-    goToSection('เสร็จสิ้น');
     fireEvent.click(screen.getByRole('button', { name: 'ยกเลิก' }));
 
     fireEvent.click(screen.getByRole('button', { name: 'เก็บร่างไว้' }));
@@ -1390,9 +1480,8 @@ describe('TicketCreateModal close confirmation (GLA-20)', () => {
   it('ทิ้งร่างนี้ deletes the draft and closes', () => {
     const onClose = vi.fn();
     renderModal({ onSubmit: vi.fn(), onClose });
-    goToSection('รายละเอียดดีล');
+    openSection('details');
     fireEvent.change(screen.getByPlaceholderText('ชื่อดีล'), { target: { value: 'ดีลค้างไว้' } });
-    goToSection('เสร็จสิ้น');
     fireEvent.click(screen.getByRole('button', { name: 'ยกเลิก' }));
 
     fireEvent.click(screen.getByRole('button', { name: /ทิ้งร่างนี้ไปเลย/ }));
@@ -1403,9 +1492,8 @@ describe('TicketCreateModal close confirmation (GLA-20)', () => {
   it('กลับไปแก้ต่อ dismisses the confirm and keeps the modal open, untouched', () => {
     const onClose = vi.fn();
     renderModal({ onSubmit: vi.fn(), onClose });
-    goToSection('รายละเอียดดีล');
+    openSection('details');
     fireEvent.change(screen.getByPlaceholderText('ชื่อดีล'), { target: { value: 'ดีลค้างไว้' } });
-    goToSection('เสร็จสิ้น');
     fireEvent.click(screen.getByRole('button', { name: 'ยกเลิก' }));
 
     fireEvent.click(screen.getByRole('button', { name: 'กลับไปแก้ต่อ' }));
@@ -1422,9 +1510,8 @@ describe('TicketCreateModal close confirmation (GLA-20)', () => {
     renderModal({ onSubmit: vi.fn(), onClose });
 
     fireEvent.click(screen.getByRole('button', { name: 'เปิดต่อ' }));
-    goToSection('รายละเอียดดีล');
+    openSection('details');
     fireEvent.change(screen.getByDisplayValue('ดีลจะลบ'), { target: { value: '' } }); // back to blank
-    goToSection('เสร็จสิ้น');
 
     fireEvent.click(screen.getByRole('button', { name: 'ยกเลิก' }));
 
@@ -1453,9 +1540,8 @@ describe('TicketCreateModal close confirmation (GLA-20)', () => {
     try {
       const onClose = vi.fn();
       renderModal({ onSubmit: vi.fn(), onClose });
-      goToSection('รายละเอียดดีล');
+      openSection('details');
       fireEvent.change(screen.getByPlaceholderText('ชื่อดีล'), { target: { value: 'ดีลค้างไว้' } });
-      goToSection('เสร็จสิ้น');
 
       fireEvent.click(screen.getByRole('button', { name: 'ยกเลิก' }));
 
@@ -1492,9 +1578,8 @@ describe('TicketCreateModal close confirmation (GLA-20)', () => {
     try {
       const onClose = vi.fn();
       renderModal({ onSubmit: vi.fn(), onClose });
-      goToSection('รายละเอียดดีล');
+      openSection('details');
       fireEvent.change(screen.getByPlaceholderText('ชื่อดีล'), { target: { value: 'ดีลค้างไว้' } });
-      goToSection('เสร็จสิ้น');
       fireEvent.click(screen.getByRole('button', { name: 'ยกเลิก' }));
 
       fireEvent.click(screen.getByRole('button', { name: 'ปิดโดยไม่บันทึก' }));
@@ -1524,9 +1609,8 @@ describe('TicketCreateModal close confirmation (GLA-20)', () => {
       const onClose = vi.fn();
       renderModal({ onSubmit: vi.fn(), onClose });
       fireEvent.click(screen.getByRole('button', { name: /เริ่มดีลใหม่/ }));
-      goToSection('รายละเอียดดีล');
+      openSection('details');
       fireEvent.change(screen.getByPlaceholderText('ชื่อดีล'), { target: { value: 'ดีลใหม่เกินโควตา' } });
-      goToSection('เสร็จสิ้น');
       fireEvent.click(screen.getByRole('button', { name: 'ยกเลิก' }));
       expect(screen.getByText('ยังไม่ได้สร้างดีล')).not.toBeNull(); // confirm open, flush failed (at cap)
 
@@ -1535,7 +1619,7 @@ describe('TicketCreateModal close confirmation (GLA-20)', () => {
       expect(onClose).not.toHaveBeenCalled(); // the modal must stay open
       expect(screen.queryByText('ยังไม่ได้สร้างดีล')).toBeNull(); // only the confirm itself closed
       // The typed data is still there -- Escape must not have discarded anything.
-      goToSection('รายละเอียดดีล');
+      openSection('details');
       expect(screen.getByDisplayValue('ดีลใหม่เกินโควตา')).not.toBeNull();
     } finally {
       vi.useRealTimers();
@@ -1549,9 +1633,8 @@ describe('TicketCreateModal close confirmation (GLA-20)', () => {
       const onClose = vi.fn();
       renderModal({ onSubmit: vi.fn(), onClose });
       fireEvent.click(screen.getByRole('button', { name: /เริ่มดีลใหม่/ }));
-      goToSection('รายละเอียดดีล');
+      openSection('details');
       fireEvent.change(screen.getByPlaceholderText('ชื่อดีล'), { target: { value: 'ดีลใหม่เกินโควตา' } });
-      goToSection('เสร็จสิ้น');
       fireEvent.click(screen.getByRole('button', { name: 'ยกเลิก' }));
       expect(screen.getByText('ยังไม่ได้สร้างดีล')).not.toBeNull();
 
@@ -1562,7 +1645,7 @@ describe('TicketCreateModal close confirmation (GLA-20)', () => {
 
       expect(onClose).not.toHaveBeenCalled();
       expect(screen.queryByText('ยังไม่ได้สร้างดีล')).toBeNull();
-      goToSection('รายละเอียดดีล');
+      openSection('details');
       expect(screen.getByDisplayValue('ดีลใหม่เกินโควตา')).not.toBeNull();
     } finally {
       vi.useRealTimers();
@@ -1575,9 +1658,8 @@ describe('TicketCreateModal close confirmation (GLA-20)', () => {
     // Restore with a WORKING store first, so currentDraftIdRef is genuinely already assigned --
     // the whole point of this test is that the older copy predates the failure below.
     fireEvent.click(screen.getByRole('button', { name: 'เปิดต่อ' }));
-    goToSection('รายละเอียดดีล');
+    openSection('details');
     fireEvent.change(screen.getByDisplayValue('ร่างเดิมที่บันทึกไว้แล้ว'), { target: { value: 'ร่างเดิมที่บันทึกไว้แล้ว แก้ไข' } });
-    goToSection('เสร็จสิ้น');
 
     // NOW break storage, so the close-time flush of the latest edit fails.
     vi.stubGlobal('localStorage', {
@@ -1612,7 +1694,7 @@ describe('TicketCreateModal with broken localStorage (GLA-19/20)', () => {
     try {
       const onSubmit = vi.fn().mockResolvedValue(undefined);
       expect(() => renderModal({ onSubmit })).not.toThrow();
-      // No picker (listDrafts() degrades to []) -- straight to the blank hub form.
+      // No picker (listDrafts() degrades to []) -- straight to the blank form.
       expect(screen.getByRole('button', { name: /^ลูกค้า/ })).not.toBeNull();
 
       await selectCustomerAndProject();
@@ -1636,10 +1718,9 @@ describe('TicketCreateModal nested-dialog Escape/backdrop routing (review fix)',
   // earlier test's orphaned timer fired mid-way through a LATER test and wrote an extra draft
   // into its (by-then-current) storage stub. Fake timers make that scheduling inert: nothing here
   // advances the clock, so the timer is simply discarded when vi.useRealTimers() runs.
-  function typeMeaningfulTitleAndReturnToHub() {
-    goToSection('รายละเอียดดีล');
+  function typeMeaningfulTitle() {
+    openSection('details');
     fireEvent.change(screen.getByPlaceholderText('ชื่อดีล'), { target: { value: 'ดีลค้างไว้' } });
-    goToSection('เสร็จสิ้น');
   }
 
   it('P1: Escape while the close confirm is open closes only the confirm, not the modal', () => {
@@ -1647,7 +1728,7 @@ describe('TicketCreateModal nested-dialog Escape/backdrop routing (review fix)',
     try {
       const onClose = vi.fn();
       renderModal({ onSubmit: vi.fn(), onClose });
-      typeMeaningfulTitleAndReturnToHub();
+      typeMeaningfulTitle();
       fireEvent.click(screen.getByRole('button', { name: 'ยกเลิก' }));
       expect(screen.getByText('ยังไม่ได้สร้างดีล')).not.toBeNull();
 
@@ -1655,7 +1736,7 @@ describe('TicketCreateModal nested-dialog Escape/backdrop routing (review fix)',
 
       expect(screen.queryByText('ยังไม่ได้สร้างดีล')).toBeNull(); // the confirm itself is dismissed
       expect(onClose).not.toHaveBeenCalled(); // but the outer modal was NOT closed
-      expect(screen.getByRole('button', { name: /^ลูกค้า/ })).not.toBeNull(); // still on the hub
+      expect(sectionHeader('customer')).not.toBeNull(); // the form is still there
     } finally {
       vi.useRealTimers();
     }
@@ -1670,7 +1751,7 @@ describe('TicketCreateModal nested-dialog Escape/backdrop routing (review fix)',
     try {
       const onClose = vi.fn();
       renderModal({ onSubmit: vi.fn(), onClose });
-      typeMeaningfulTitleAndReturnToHub();
+      typeMeaningfulTitle();
       const backdrop = document.querySelector('[role="presentation"]');
       expect(backdrop).not.toBeNull();
       fireEvent.mouseDown(backdrop);
@@ -1686,7 +1767,7 @@ describe('TicketCreateModal nested-dialog Escape/backdrop routing (review fix)',
     try {
       const onClose = vi.fn();
       renderModal({ onSubmit: vi.fn(), onClose });
-      typeMeaningfulTitleAndReturnToHub();
+      typeMeaningfulTitle();
       fireEvent.click(screen.getByRole('button', { name: 'ปิด' }));
       expect(onClose).not.toHaveBeenCalled();
       expect(screen.getByText('ยังไม่ได้สร้างดีล')).not.toBeNull();
@@ -1719,7 +1800,7 @@ describe('TicketCreateModal nested-dialog Escape/backdrop routing (review fix)',
       renderModal({ onSubmit: vi.fn(), onClose });
 
       fireEvent.click(screen.getByRole('button', { name: /เริ่มดีลใหม่/ }));
-      typeMeaningfulTitleAndReturnToHub();
+      typeMeaningfulTitle();
 
       fireEvent.click(screen.getByRole('button', { name: 'ยกเลิก' }));
 

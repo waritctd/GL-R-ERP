@@ -1714,10 +1714,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           comment). */}
       <div className="min-w-0">
       <TabPanel id="deal" idPrefix="ticket-detail" active={visibleActiveTab === 'deal'}>
-          {/* Ticket-workspace IA rebuild Slice B ("retire the context rail, one
-              comment composer"): วันสำคัญ / ผู้เกี่ยวข้อง moved here verbatim from
-              the now-deleted TicketContextPanel.jsx sticky rail — same fields,
-              same labels, same assignedImport role-scoped readout. */}
+          {/* วันสำคัญ / ผู้เกี่ยวข้อง, with the assignedImport role-scoped readout. */}
           <div className="grid gap-4 sm:grid-cols-2">
             <section className="rounded-md border border-border bg-surface p-4">
               <ContextSection title="วันสำคัญ" helper="Key dates" icon="calendar">
@@ -1736,7 +1733,6 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                   <FieldRow label="เจ้าของดีล" value={summary.createdByName} />
                   <FieldRow label="ผู้รับเรื่องคำขอราคา" value={assignedImport} />
                   <FieldRow label="บัญชี" value={summary.closeConfirmedByName || 'ยังไม่ระบุ'} />
-                  <FieldRow label="ผู้ติดต่อ" value={summary.contactName} />
                 </dl>
               </ContextSection>
             </section>
