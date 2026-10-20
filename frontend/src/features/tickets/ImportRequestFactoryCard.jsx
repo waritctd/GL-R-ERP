@@ -40,8 +40,11 @@ function downloadBlob(blob, filename) {
  * One STORED ใบขอซื้อ row (V184, per factory) — draft or issued — as a self-contained card.
  * Used by DealFulfilmentPanel's "ใบขอซื้อรายโรงงาน" section (PR-B).
  *
- * Role shape (mirrors ImportRequestService — see its own Javadoc for the authoritative matrix):
- *   - `canFullWrite` (owning sales rep or CEO): edit the draft body/lead-time, issue, revise, delete.
+ * Role shape (mirrors ImportRequestService — see its own Javadoc for the authoritative matrix).
+ * Owner ruling 2026-10-20 (the handshake): the deal owner PREPARES/corrects the draft, IMPORT
+ * ISSUES it to the factory — so the DRAFT surface and the ISSUE action are DIFFERENT props now:
+ *   - `canFullWrite` (owning sales rep or CEO): edit the draft body/lead-time, revise, delete.
+ *   - `canIssue` (import or CEO): ออกเลข — issue a prepared draft to the factory. NOT the deal owner.
  *   - `canFooterWrite` (CEO only): Checked/Approved By+date, vessel ETA.
  *   - `canAdvance` (import/CEO): advance the per-factory step, set lead time AFTER issue.
  *   - `canEmailWrite` (owning rep, CEO, or import): edit/mark-sent the order-email draft.
@@ -49,7 +52,7 @@ function downloadBlob(blob, filename) {
  * are an affordance; the server is the authority, so a 403/409 surfaces its own Thai message.
  */
 export function ImportRequestFactoryCard({
-  row, ticketId, canFullWrite, canFooterWrite, canAdvance, canEmailWrite, showToast,
+  row, ticketId, canFullWrite, canIssue, canFooterWrite, canAdvance, canEmailWrite, showToast,
   showInlineDownload = false,
 }) {
   const queryClient = useQueryClient();
@@ -330,7 +333,7 @@ export function ImportRequestFactoryCard({
           <p className="m-0 min-w-0 flex-1 basis-64 text-xs text-text-muted" data-testid={`ir-draft-hint-${row.id}`}>
             {isRevisionDraft ? REVISION_DRAFT_HINT : FIRST_DRAFT_HINT}
           </p>
-          {canFullWrite ? (
+          {canIssue ? (
             <Button type="button" size="sm" variant="primary" className="whitespace-nowrap" disabled={issueMutation.isPending}
               onClick={() => issueMutation.mutate()} data-testid={`ir-issue-${row.id}`}>
               ออกเลข

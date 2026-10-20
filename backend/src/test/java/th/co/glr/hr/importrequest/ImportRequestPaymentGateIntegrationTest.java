@@ -47,6 +47,7 @@ class ImportRequestPaymentGateIntegrationTest extends AbstractPostgresIntegratio
 
     private long ownerId;
     private UserPrincipal owner;
+    private UserPrincipal importUser;
 
     @BeforeEach
     void wireRealCollaborators() {
@@ -72,6 +73,10 @@ class ImportRequestPaymentGateIntegrationTest extends AbstractPostgresIntegratio
 
         ownerId = insertEmployee("PAYGATE-OWN");
         owner = principal(ownerId, "sales");
+        // issue() is import/CEO only (owner ruling 2026-10-20 handshake) — this suite is about the
+        // PAYMENT floor, not authz, so it issues as import (the normal factory-order actor) and lets
+        // the floor, never the role gate, be the thing that refuses.
+        importUser = principal(insertEmployee("PAYGATE-IMP-STD"), "import");
     }
 
     @Test
@@ -85,13 +90,13 @@ class ImportRequestPaymentGateIntegrationTest extends AbstractPostgresIntegratio
         List<ImportRequestDto> drafts = service.createDrafts(ticketId, null, owner);
         long aId = byFactory(drafts, factoryA).id();
         long bId = byFactory(drafts, factoryB).id();
-        assertThat(service.issue(aId, null, owner).status()).isEqualTo(ImportRequestStatus.ISSUED);
+        assertThat(service.issue(aId, null, importUser).status()).isEqualTo(ImportRequestStatus.ISSUED);
 
         // The customer finishes paying the deal in full before factory B's own IR is ever touched —
         // the original (narrower) gate would have refused this; the widened one must not.
         setPaymentStatus(ticketId, "FULLY_PAID");
 
-        assertThat(service.issue(bId, null, owner).status()).isEqualTo(ImportRequestStatus.ISSUED);
+        assertThat(service.issue(bId, null, importUser).status()).isEqualTo(ImportRequestStatus.ISSUED);
     }
 
     @Test
@@ -100,12 +105,12 @@ class ImportRequestPaymentGateIntegrationTest extends AbstractPostgresIntegratio
         long ticketId = insertTicket("GATE-AWAITING", "DEPOSIT_PAID");
         insertItem(ticketId, "Pay Gate Revise Factory", "Line", "60x60", "10", "pcs", 0);
         long v1 = service.createDrafts(ticketId, null, owner).get(0).id();
-        assertThat(service.issue(v1, null, owner).status()).isEqualTo(ImportRequestStatus.ISSUED);
+        assertThat(service.issue(v1, null, importUser).status()).isEqualTo(ImportRequestStatus.ISSUED);
 
         setPaymentStatus(ticketId, "AWAITING_FINAL_PAYMENT");
 
         ImportRequestDto v2 = service.revise(v1, owner);
-        assertThat(service.issue(v2.id(), null, owner).status()).isEqualTo(ImportRequestStatus.ISSUED);
+        assertThat(service.issue(v2.id(), null, importUser).status()).isEqualTo(ImportRequestStatus.ISSUED);
     }
 
     /**
@@ -119,7 +124,7 @@ class ImportRequestPaymentGateIntegrationTest extends AbstractPostgresIntegratio
         insertItem(ticketId, "Pay Gate No Deposit Factory", "Line", "60x60", "10", "pcs", 0);
         long id = service.createDrafts(ticketId, null, owner).get(0).id();
 
-        assertThatThrownBy(() -> service.issue(id, null, owner))
+        assertThatThrownBy(() -> service.issue(id, null, importUser))
             .isInstanceOfSatisfying(ApiException.class,
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
     }
@@ -141,7 +146,7 @@ class ImportRequestPaymentGateIntegrationTest extends AbstractPostgresIntegratio
         insertItem(ticketId, "Pay Gate Customer Confirmed Factory", "Line", "60x60", "10", "pcs", 0);
         long id = service.createDrafts(ticketId, null, owner).get(0).id();
 
-        assertThatThrownBy(() -> service.issue(id, null, owner))
+        assertThatThrownBy(() -> service.issue(id, null, importUser))
             .isInstanceOfSatisfying(ApiException.class,
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
     }
@@ -159,7 +164,7 @@ class ImportRequestPaymentGateIntegrationTest extends AbstractPostgresIntegratio
         insertItem(ticketId, "Pay Gate Draft Factory", "Line", "60x60", "10", "pcs", 0);
         long id = service.createDrafts(ticketId, null, owner).get(0).id();
 
-        assertThat(service.issue(id, null, owner).status()).isEqualTo(ImportRequestStatus.ISSUED);
+        assertThat(service.issue(id, null, importUser).status()).isEqualTo(ImportRequestStatus.ISSUED);
     }
 
     /** Same rule on the legacy deal-level action behind POST /api/tickets/{id}/import-request. */
@@ -185,7 +190,7 @@ class ImportRequestPaymentGateIntegrationTest extends AbstractPostgresIntegratio
             insertItem(ticketId, "Pay Gate Draft Refused Factory", "Line", "60x60", "10", "pcs", 0);
             long id = service.createDrafts(ticketId, null, owner).get(0).id();
 
-            assertThatThrownBy(() -> service.issue(id, null, owner))
+            assertThatThrownBy(() -> service.issue(id, null, importUser))
                 .isInstanceOfSatisfying(ApiException.class,
                     e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
             assertThatThrownBy(() -> ticketService.issueImportRequest(ticketId,
@@ -195,52 +200,84 @@ class ImportRequestPaymentGateIntegrationTest extends AbstractPostgresIntegratio
         }
     }
 
-    // ── Owner ruling 2026-10-20: IMPORT may create + issue a per-factory ใบขอซื้อ itself ──────────
-    // (previously sales-owner / CEO only). The payment floor and ORDER_RECEIVED stage gate are
-    // unchanged; this only widens WHO may raise it. Permission change → real-service evidence here,
-    // written wrong-way-round (a role that must NOT reach it, and the floor that must still bite).
+    // ── Owner ruling 2026-10-20 (the HANDSHAKE): sales PREPARES the per-factory draft and sends it to
+    // import; IMPORT then ISSUES it to the factory. So createDrafts is the deal owner's (+CEO), issue
+    // is import's (+CEO), and the deal owner is BLOCKED from issue on purpose. The payment floor and
+    // ORDER_RECEIVED stage gate are unchanged; this only decides WHO raises/orders. Permission change
+    // → real-service evidence here, written wrong-way-round (the role that must NOT reach each half,
+    // and the floor that must still bite).
 
     @Test
-    void import_canCreateAndIssueAPerFactoryImportRequest_onAPaidDeal() {
+    void import_issuesAPerFactoryImportRequest_thatTheDealOwnerPrepared_onAPaidDeal() {
         insertFactory("Import Issues Factory");
         long ticketId = insertTicket("IMP-ISSUE-OK", "DEPOSIT_PAID");
         insertItem(ticketId, "Import Issues Factory", "Line", "60x60", "10", "pcs", 0);
-        // A plain import user — NOT the deal's owning sales rep, and import has no ownership concept.
-        UserPrincipal importUser = principal(insertEmployee("IMP-ISSUE-U"), "import");
 
-        List<ImportRequestDto> drafts = service.createDrafts(ticketId, null, importUser);
+        // Sales (the deal owner) prepares the draft — import cannot create one itself.
+        List<ImportRequestDto> drafts = service.createDrafts(ticketId, null, owner);
+        assertThatThrownBy(() -> service.createDrafts(ticketId, null, importUser))
+            .describedAs("import does not PREPARE drafts — that is the deal owner's half of the handshake")
+            .isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+
+        // Import issues the prepared draft to the factory.
         ImportRequestDto issued = service.issue(drafts.get(0).id(), null, importUser);
 
         assertThat(issued.status()).isEqualTo(ImportRequestStatus.ISSUED);
         assertThat(issued.docNumber()).isNotBlank();
-        // The deal-level side effect import used to only get from the legacy one-shot path now comes
-        // from the per-factory issue it raised itself — so the FactoryProgressBar tracking starts.
+        // The deal-level side effect (FactoryProgressBar tracking start) fires off the per-factory
+        // issue import just raised, exactly as the legacy one-shot path produced it.
         assertThat(jdbc.queryForObject(
             "SELECT fulfillment_status FROM sales.ticket WHERE ticket_id = :id", Map.of("id", ticketId), String.class))
             .isEqualTo("IR_ISSUED");
     }
 
+    /**
+     * The core of the handshake, wrong-way-round: the deal OWNER (sales) prepared the draft but may
+     * NOT order the factory — issue is import/CEO only. A 403 BEFORE the payment floor, and the draft
+     * does not move.
+     */
     @Test
-    void account_stillCannotCreateAPerFactoryImportRequest() {
+    void dealOwner_isBlockedFromIssue_evenOnAPaidDeal_andTheDraftDoesNotMove() {
+        insertFactory("Owner Blocked Factory");
+        long ticketId = insertTicket("OWNER-NO-ISSUE", "DEPOSIT_PAID");
+        insertItem(ticketId, "Owner Blocked Factory", "Line", "60x60", "10", "pcs", 0);
+        long id = service.createDrafts(ticketId, null, owner).get(0).id();
+
+        assertThatThrownBy(() -> service.issue(id, null, owner))
+            .isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+
+        assertThat(jdbc.queryForObject(
+            "SELECT status FROM sales.import_request WHERE import_request_id = :id", Map.of("id", id), String.class))
+            .isEqualTo("DRAFT");
+    }
+
+    @Test
+    void account_cannotPrepareOrIssueAPerFactoryImportRequest() {
         insertFactory("Import Issues Deny Factory");
         long ticketId = insertTicket("IMP-ISSUE-DENY", "DEPOSIT_PAID");
         insertItem(ticketId, "Import Issues Deny Factory", "Line", "60x60", "10", "pcs", 0);
         UserPrincipal accountUser = principal(insertEmployee("IMP-ISSUE-ACC"), "account");
+        long id = service.createDrafts(ticketId, null, owner).get(0).id();
 
         assertThatThrownBy(() -> service.createDrafts(ticketId, null, accountUser))
+            .isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        assertThatThrownBy(() -> service.issue(id, null, accountUser))
             .isInstanceOfSatisfying(ApiException.class,
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
     }
 
     @Test
-    void import_canCreateButStillCannotIssue_whenTheDealHasNoDeposit() {
+    void import_stillCannotIssue_whenTheDealHasNoDeposit() {
         insertFactory("Import Issues NoDep Factory");
         long ticketId = insertTicket("IMP-ISSUE-NODEP", null);
         insertItem(ticketId, "Import Issues NoDep Factory", "Line", "60x60", "10", "pcs", 0);
-        UserPrincipal importUser = principal(insertEmployee("IMP-ISSUE-ND"), "import");
 
-        // createDrafts is gated on the ORDER_RECEIVED stage only (not payment), so it is allowed...
-        long id = service.createDrafts(ticketId, null, importUser).get(0).id();
+        // Sales prepares the draft (createDrafts is gated on the ORDER_RECEIVED stage only, not
+        // payment, so it is allowed even with no deposit)...
+        long id = service.createDrafts(ticketId, null, owner).get(0).id();
         // ...but the payment floor still bites at issue, for import exactly as for everyone else.
         assertThatThrownBy(() -> service.issue(id, null, importUser))
             .isInstanceOfSatisfying(ApiException.class,

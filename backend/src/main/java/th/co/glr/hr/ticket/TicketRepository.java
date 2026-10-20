@@ -1454,6 +1454,31 @@ public class TicketRepository {
     }
 
     /**
+     * Owner ruling 2026-10-20: sales may not advance a deal into {@link DealStage#DELIVERY_SCHEDULING}
+     * (ขั้น 12 จัดซื้อ-นำเข้า → 13 นัดส่งสินค้า) until the goods have arrived in Thailand — every factory's
+     * per-factory ใบขอซื้อ has reached {@link ImportRequestStep#AWAITING_CUSTOMS} (ถึงไทยรอออกของ) or later.
+     *
+     * <p>Returns {@code true} (not blocked) when the deal is NOT per-factory tracked at all — no live
+     * row, i.e. a from-stock or legacy deal — so this gate only ever constrains an actual import.
+     * A live row that is still DRAFT (a factory import has not even issued), or an ISSUED row whose
+     * {@code import_step} is still before {@code AWAITING_CUSTOMS}, means "not arrived" and blocks.
+     * SUPERSEDED rows (replaced by a revision) are ignored, same as every other import rollup here.
+     */
+    public boolean importArrivedForDeliveryScheduling(long ticketId) {
+        Integer notArrived = jdbc.queryForObject("""
+            SELECT COUNT(*) FROM sales.import_request
+             WHERE ticket_id = :ticketId
+               AND status <> 'SUPERSEDED'
+               AND (status <> 'ISSUED'
+                    OR import_step IS NULL
+                    OR array_position(
+                         ARRAY['CONTACTED','ORDERED','PICKED_UP','IN_TRANSIT','AWAITING_CUSTOMS','RECEIVED'],
+                         import_step) < 5)
+            """, Map.of("ticketId", ticketId), Integer.class);
+        return notArrived != null && notArrived == 0;
+    }
+
+    /**
      * Locks {@code sales.ticket}'s own row {@code FOR UPDATE} for the remainder of the caller's
      * transaction. Used by {@code ImportRequestService#advanceStep} before its own "is every factory
      * now RECEIVED" re-check, so two concurrent "last factory reached RECEIVED" advances on the same

@@ -2200,10 +2200,13 @@ public class TicketService {
      * {@link #maybeAdvanceClosedPaid} requires payment AND delivery, so this does too; a manual path
      * able to claim a stage the automatic path would refuse would invert the whole point.
      *
-     * <p>{@link DealStage#NEGOTIATION}, {@link DealStage#PROCUREMENT} and {@link
-     * DealStage#DELIVERY_SCHEDULING} stay ungated on purpose: they are operational stages where the
-     * manual fallback is genuinely useful and a wrong value misreports nothing financial. The four
-     * above are the ones where a wrong stage misstates revenue or fulfilment.
+     * <p>{@link DealStage#NEGOTIATION} and {@link DealStage#PROCUREMENT} stay ungated on purpose:
+     * they are operational stages where the manual fallback is genuinely useful and a wrong value
+     * misreports nothing financial. {@link DealStage#DELIVERY_SCHEDULING} USED to be ungated too, but
+     * owner ruling 2026-10-20 gates it on the goods having arrived (every per-factory ใบขอซื้อ at
+     * AWAITING_CUSTOMS or later) — see its branch below; a from-stock/legacy deal with no per-factory
+     * rows still passes. The four financial stages above are the ones where a wrong stage misstates
+     * revenue or fulfilment.
      *
      * <p><strong>{@link #autoAdvanceStage} is NOT routed through here</strong>, and must never be:
      * it is the path that fires <em>because</em> the fact just became true, so gating it would be
@@ -2232,6 +2235,17 @@ public class TicketService {
         if (DealStage.DELIVERED.equals(targetStage) && !deliveryGateComplete(s)) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "เลื่อนไปขั้นตอน DELIVERED ไม่ได้: ยังส่งมอบสินค้าไม่ครบ");
+        }
+        // Owner ruling 2026-10-20: ขั้น 12 จัดซื้อ-นำเข้า (PROCUREMENT) → 13 นัดส่งสินค้า (DELIVERY_SCHEDULING)
+        // is blocked until the goods have ARRIVED — every per-factory ใบขอซื้อ at AWAITING_CUSTOMS
+        // (ถึงไทยรอออกของ) or later. Only constrains a per-factory import; a from-stock or legacy deal
+        // (no live import_request rows) passes. This is the MANUAL sales advance only: the auto-advances
+        // into DELIVERY_SCHEDULING (reserveStock → FROM_STOCK, recordDelivery after GOODS_RECEIVED) go
+        // through autoAdvanceStage, which never reaches this method.
+        if (DealStage.DELIVERY_SCHEDULING.equals(targetStage) && !tickets.importArrivedForDeliveryScheduling(s.id())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "เลื่อนไปขั้นตอน นัดส่งสินค้า ไม่ได้: สินค้ายังมาไม่ถึงไทย — ฝ่ายนำเข้าต้องนำเข้าทุกโรงงานให้ถึงขั้น "
+                    + "'รอผ่านพิธีการศุลกากร (ถึงไทยรอออกของ)' ก่อน");
         }
         if (DealStage.CLOSED_PAID.equals(targetStage) && !closedPaidFactsHold(s)) {
             throw new ApiException(HttpStatus.CONFLICT,

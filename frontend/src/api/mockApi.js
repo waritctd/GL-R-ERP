@@ -2494,6 +2494,18 @@ function requireOwningRepOrCeo(ticket) {
   return user;
 }
 
+// Mirrors ImportRequestService.ISSUE_ROLES / requireIssueWrite (owner ruling 2026-10-20 handshake):
+// ISSUING a prepared ใบขอซื้อ to the factory is import + CEO only. The deal owner prepares the draft
+// (requireOwningRepOrCeo above) but does NOT order the factory — so this gate has no ownership
+// carve-out and deliberately refuses sales, even the owning rep.
+function requireImportOrCeo() {
+  const user = requireSession();
+  if (user.role !== 'ceo' && user.role !== 'import') {
+    fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  }
+  return user;
+}
+
 // Mirrors DepositNoticeService#requireDepositNoticeIssueGate (backend, GLA-99 step 2) — EXACTLY
 // the predicate that gates issuing a deposit notice (sales-role + ticket ownership), reused
 // verbatim by storedRemainingInvoices' own create/update/issue/revise/delete gate. Deliberately
@@ -2835,6 +2847,17 @@ function mockColorSurfaceNote(color, texture) {
 // markGoodsReceived mutation refusal — see actions() and those three mutations below.
 function mockHasLiveImportRequests(ticketId) {
   return mockImportRequests.some((r) => r.ticketId === Number(ticketId) && r.status === 'ISSUED');
+}
+
+// Mirrors TicketRepository.importArrivedForDeliveryScheduling (owner ruling 2026-10-20): a deal may
+// move PROCUREMENT (S12) → DELIVERY_SCHEDULING (S13) only once EVERY live per-factory ใบขอซื้อ has
+// reached AWAITING_CUSTOMS (S16, "ถึงไทยรอออกของ") or later. A deal with no live rows at all
+// (from-stock / legacy) is NOT blocked — [].every(...) is true, exactly as the SQL's COUNT(*)=0 case.
+function mockImportArrivedForDeliveryScheduling(ticketId) {
+  const rows = mockImportRequests.filter(
+    (r) => r.ticketId === Number(ticketId) && r.status !== 'SUPERSEDED');
+  return rows.every((r) => r.status === 'ISSUED'
+    && mockImportRequestStepIndex(r.importStep) >= mockImportRequestStepIndex('AWAITING_CUSTOMS'));
 }
 
 function findStoredImportRequestRaw(id) {
@@ -4275,6 +4298,12 @@ export const MOCK_FACT_GATED_STAGES = new Set([
   'QUOTE_DESIGN_SIDE',
   'QUOTE_OWNER',
   'QUOTE_BUYER',
+  // DELIVERY_SCHEDULING (owner ruling 2026-10-20) is also CONDITIONAL — see
+  // mockImportArrivedForDeliveryScheduling. Unlike the four operational stages it IS reachable by a
+  // manual move (the rep nudges S12→S13 by hand as a normal flow step), so it must OPEN once every
+  // per-factory import has arrived; closed only while one has not. Its branch in mockStageDecisions
+  // sits before, and is excluded from, the blanket close below.
+  'DELIVERY_SCHEDULING',
 ]);
 
 /**
@@ -4416,8 +4445,17 @@ function mockStageDecisions(ticket, user) {
       blockedReason = `เลื่อนไปขั้นตอน ${code} ไม่ได้: ยังไม่มีใบเสนอราคาถึง`
         + `${MOCK_QUOTATION_RECIPIENT_LABEL[MOCK_QUOTE_STAGE_RECIPIENT[code]]}`
         + ' — ขั้นนี้อัปเดตอัตโนมัติเมื่อสร้างใบเสนอราคาถึงผู้รับรายนี้';
-    } else if (MOCK_FACT_GATED_STAGES.has(code)) {
-      // The stub, not a copy of requireStageFactsHold — see the block comment above.
+    } else if (code === 'DELIVERY_SCHEDULING' && !mockImportArrivedForDeliveryScheduling(ticket.id)) {
+      // Owner ruling 2026-10-20: sales cannot move S12→S13 until EVERY per-factory import has reached
+      // AWAITING_CUSTOMS ("ถึงไทยรอออกของ"). Conditional like the quote stages — opens once the goods
+      // have arrived — so it is handled HERE and excluded from the blanket close below, which would
+      // otherwise keep it shut even after arrival (the rep reaches S13 by hand as a normal step).
+      blockedReason = 'เลื่อนไปขั้นตอน นัดส่งสินค้า ไม่ได้: สินค้ายังมาไม่ถึงไทย'
+        + ' — ฝ่ายนำเข้าต้องนำเข้าทุกโรงงานให้ถึงขั้น \'รอผ่านพิธีการศุลกากร (ถึงไทยรอออกของ)\' ก่อน';
+    } else if (MOCK_FACT_GATED_STAGES.has(code) && code !== 'DELIVERY_SCHEDULING') {
+      // The stub, not a copy of requireStageFactsHold — see the block comment above. DELIVERY_SCHEDULING
+      // is excluded: its conditional branch just above both closes it (not yet arrived) and, by falling
+      // through, OPENS it (arrived) to the ordinary advance checks — it must stay manually reachable.
       blockedReason = `เลื่อนไปขั้นตอน ${code} ไม่ได้: ขั้นตอนนี้อัปเดตอัตโนมัติจากขั้นตอนของดีล`
         + ' (โหมดจำลองไม่รองรับการตั้งค่าด้วยมือ)';
     } else if (dealStageIndex(code) > dealStageIndex(ticket.salesStage)) {
@@ -12366,7 +12404,7 @@ export const api = {
     async issue(id, request) {
       const row = findStoredImportRequestRaw(id);
       const ticket = findTicketRaw(row.ticketId);
-      const user = requireOwningRepOrCeo(ticket);
+      const user = requireImportOrCeo(); // handshake: import/CEO order the factory, not the deal owner
       requireActive(ticket);
       if (row.status !== 'DRAFT') fail('ใบขอซื้อฉบับนี้ออกเลขไปแล้ว', 409);
       if (row.items.length === 0) fail('ใบขอซื้อยังไม่มีรายการสินค้า', 409);

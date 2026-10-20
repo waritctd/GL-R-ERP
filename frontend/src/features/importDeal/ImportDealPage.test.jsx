@@ -230,16 +230,18 @@ describe('ImportDealPage', () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.ticketDetail(1) });
   });
 
-  it('gives import full-write control on the factory cards (owner ruling 2026-10-20: import raises the IR itself)', async () => {
+  it('import gets the order-email action on a card but NOT the draft-side revise/delete (handshake: drafts stay with sales/CEO)', async () => {
     renderPage({ role: 'import' });
     await screen.findByTestId('ir-factory-card-11');
-    // Row 11 is ISSUED (step ORDERED): import may now revise it (re-issue a corrected version) —
-    // previously owner/CEO only. issue/delete are DRAFT-only controls, so they are absent on this
-    // ISSUED row regardless of the role (import's DRAFT-row issue is covered by its own test below).
-    expect(screen.getByTestId('ir-revise-11')).not.toBeNull();
+    // Owner ruling 2026-10-20 (the handshake): import ISSUES a draft the deal owner prepared, but the
+    // DRAFT surface — revise (re-issue a corrected version), delete, body edits — stays with the
+    // owning sales rep / CEO. Row 11 is ISSUED, so import must NOT see ir-revise here.
+    expect(screen.queryByTestId('ir-revise-11')).toBeNull();
+    // issue/delete are DRAFT-only controls, so they are absent on this ISSUED row regardless of role
+    // (import's DRAFT-row ออกเลข is covered by its own test below).
     expect(screen.queryByTestId('ir-issue-11')).toBeNull();
     expect(screen.queryByTestId('ir-delete-11')).toBeNull();
-    // ...and the order-email action stays import's.
+    // ...but the order-email action stays import's.
     expect(screen.getByTestId('ir-email-open-11')).not.toBeNull();
   });
 
@@ -315,15 +317,17 @@ describe('ImportDealPage', () => {
       expect(api.tickets.markGoodsReceived).not.toHaveBeenCalled();
     });
 
-    it('fulfillmentStatus null: shows สร้างใบขอซื้อรายโรงงาน (createDrafts) — NOT the legacy one-shot', async () => {
-      // Owner ruling 2026-10-20: import raises the per-factory ใบขอซื้อ itself at this point, so the
-      // legacy deal-level issueImportRequest (bare status flip, no email/tracking) is gone here.
+    it('fulfillmentStatus null: import waits for sales to send drafts — neither a create button nor the legacy one-shot', async () => {
+      // Owner ruling 2026-10-20 (the handshake): the DEAL OWNER prepares the per-factory ใบขอซื้อ on
+      // the deal page and sends it to import. So on THIS page there is no create button and no legacy
+      // deal-level issueImportRequest — just a hint that import is waiting for sales.
       api.importDeals.get.mockResolvedValue({ deal: legacyDeal({ fulfillmentStatus: null }) });
-      renderPage();
-      const btn = await screen.findByTestId('import-deal-create-ir-drafts');
+      renderPage({ role: 'import' });
+      const hint = await screen.findByTestId('import-deal-no-ir');
+      expect(hint.textContent).toContain('รอฝ่ายขาย');
+      expect(screen.queryByTestId('import-deal-create-ir-drafts')).toBeNull();
       expect(screen.queryByRole('button', { name: 'ออกคำขอนำเข้า' })).toBeNull();
-      fireEvent.click(btn);
-      await waitFor(() => expect(api.storedImportRequests.createDrafts).toHaveBeenCalledWith('1'));
+      expect(api.storedImportRequests.createDrafts).not.toHaveBeenCalled();
       expect(api.tickets.issueImportRequest).not.toHaveBeenCalled();
     });
 
@@ -467,7 +471,7 @@ describe('ImportDealPage', () => {
     it('renders no price or cost anywhere on a legacy deal', async () => {
       api.importDeals.get.mockResolvedValue({ deal: legacyDeal({ fulfillmentStatus: null }) });
       renderPage();
-      await screen.findByTestId('import-deal-create-ir-drafts');
+      await screen.findByTestId('import-deal-no-ir');
       const page = document.body.textContent;
       expect(page).not.toMatch(/777/);
       expect(page).not.toMatch(/ราคา|ต้นทุน|฿|THB|มูลค่า|ยอดรวม/);

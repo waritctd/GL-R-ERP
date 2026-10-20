@@ -146,16 +146,22 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       },
     );
 
-    it.each([['the owning rep', OWNER], ['CEO', CEO]])(
-      '%s gets ออกเลข beside the hint, not inside the collapsed details',
-      async (_label, user) => {
-        renderPanel(user, [draftRow()]);
-        const hint = await screen.findByTestId('ir-draft-hint-10');
-        const issue = screen.getByTestId('ir-issue-10');
-        expect(issue.closest('details')).toBeNull();
-        expect(hint.parentElement.contains(issue)).toBe(true);
-      },
-    );
+    it('CEO gets ออกเลข beside the hint, not inside the collapsed details', async () => {
+      renderPanel(CEO, [draftRow()]);
+      const hint = await screen.findByTestId('ir-draft-hint-10');
+      const issue = screen.getByTestId('ir-issue-10');
+      expect(issue.closest('details')).toBeNull();
+      expect(hint.parentElement.contains(issue)).toBe(true);
+    });
+
+    it('the owning rep prepares/corrects the draft but does NOT get ออกเลข — issuing to the factory is import/CEO (owner ruling 2026-10-20)', async () => {
+      renderPanel(OWNER, [draftRow()]);
+      await screen.findByTestId('ir-draft-hint-10');
+      // No ออกเลข for the deal owner: it prepared & "sent" this draft; import orders the factory.
+      expect(screen.queryByTestId('ir-issue-10')).toBeNull();
+      // ...but the DRAFT surface is still the owner's — e.g. it may delete the draft it prepared.
+      expect(screen.getByTestId('ir-delete-10')).not.toBeNull();
+    });
 
     it('sales_manager (read-only) gets the hint but no ออกเลข control', async () => {
       renderPanel(SALES_MANAGER, [draftRow()]);
@@ -181,7 +187,8 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
     it('a refused ออกเลข refetches, so a draft someone else already issued stops offering it', async () => {
       const showToast = vi.fn();
       api.storedImportRequests.issue.mockRejectedValue(new Error('ใบขอซื้อฉบับนี้ออกเลขไปแล้ว'));
-      renderPanel(OWNER, [draftRow()], { showToast });
+      // CEO is the issuer visible on this (sales) panel — the owning rep no longer sees ออกเลข.
+      renderPanel(CEO, [draftRow()], { showToast });
       const issue = await screen.findByTestId('ir-issue-10');
       api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: [issuedRow({ id: 10 })] });
       fireEvent.click(issue);

@@ -92,7 +92,7 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
         insertItem(ticketId, "Email Factory", "Lithos Nero", "60x60 cm", "100", "pcs", 0);
         long id = service.createDrafts(ticketId, null, owner).get(0).id();
 
-        ImportRequestDto issued = service.issue(id, null, owner);
+        ImportRequestDto issued = service.issue(id, null, importUser);
 
         assertThat(issued.emailTo()).isEqualTo("sales@emailfactory.example");
         assertThat(issued.emailSubject()).contains(issued.docNumber()).contains("GL&R");
@@ -143,7 +143,7 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
             "30x60 cm", "10", "pcs", 1, null, null);
         long id = service.createDrafts(ticketId, null, owner).get(0).id();
 
-        ImportRequestDto issued = service.issue(id, null, owner);
+        ImportRequestDto issued = service.issue(id, null, importUser);
         String body = issued.emailBody();
 
         assertThat(body).contains("1. Living Ceramics Lithos Nero")
@@ -187,7 +187,7 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
         service.update(id, new UpdateImportRequestRequest(null, null, null, null, null, null, null, null,
             edited, null, null, null), owner);
 
-        ImportRequestDto issued = service.issue(id, null, owner);
+        ImportRequestDto issued = service.issue(id, null, importUser);
         assertThat(issued.emailBody()).contains("Note: Pack in wooden crates, fragile");
     }
 
@@ -211,7 +211,7 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
                 .addValue("catalogPriceId", catalogPriceId));
         long id = service.createDrafts(ticketId, null, owner).get(0).id();
 
-        ImportRequestDto issued = service.issue(id, null, owner);
+        ImportRequestDto issued = service.issue(id, null, importUser);
         assertThat(issued.emailBody())
             .contains("1. Living Ceramics Lithos Nero Hand-Typed  (Code: CAT-CODE-777)");
     }
@@ -229,7 +229,7 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
         insertItem(ticketId, "Filename Tie Factory", "Line", "60x60", "10", "pcs", 0);
         long id = service.createDrafts(ticketId, null, owner).get(0).id();
 
-        ImportRequestDto issued = service.issue(id, null, owner);
+        ImportRequestDto issued = service.issue(id, null, importUser);
         String expectedFilename = ImportRequestService.downloadFileName(issued.docNumber(), issued.id(),
             issued.factoryName(), issued.brand(), true);
         assertThat(issued.emailBody()).contains("Attached: " + expectedFilename);
@@ -253,7 +253,7 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
         assertThat(service.get(id, owner).requiredByNote()).isNull();
         service.setRequiredByNote(ticketId, new SetRequiredByNoteRequest("Within 30 days"), owner);
 
-        ImportRequestDto issued = service.issue(id, null, owner);
+        ImportRequestDto issued = service.issue(id, null, importUser);
         assertThat(issued.requiredByNote()).isEqualTo("Within 30 days");
         assertThat(issued.emailBody())
             .as("the email's Required-by line must match what actually landed on the form")
@@ -272,7 +272,7 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
         insertItem(ticketId, "Privacy Factory", "Line", "60x60", "10", "pcs", 0);
         long id = service.createDrafts(ticketId, null, owner).get(0).id();
 
-        ImportRequestDto issued = service.issue(id, null, owner);
+        ImportRequestDto issued = service.issue(id, null, importUser);
 
         assertThat(issued.emailSubject()).isEqualTo("Purchase order " + issued.docNumber() + " - GL&R");
         assertThat(issued.customerName()).isNotBlank(); // sanity: the deal DOES carry a customer name
@@ -291,7 +291,7 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
         insertItem(ticketId, "No Email Factory", "Line", "60x60", "10", "pcs", 0);
         long id = service.createDrafts(ticketId, null, owner).get(0).id();
 
-        ImportRequestDto issued = service.issue(id, null, owner);
+        ImportRequestDto issued = service.issue(id, null, importUser);
 
         assertThat(issued.emailTo()).isNull();
         assertThat(issued.emailBody()).isNotBlank();
@@ -304,11 +304,11 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
         long ticketId = insertTicket("EM-REVISE");
         insertItem(ticketId, "Revision Email Factory", "Line A", "60x60", "10", "pcs", 0);
         long v1 = service.createDrafts(ticketId, null, owner).get(0).id();
-        ImportRequestDto issuedV1 = service.issue(v1, null, owner);
+        ImportRequestDto issuedV1 = service.issue(v1, null, importUser);
         assertThat(issuedV1.emailBody()).contains("Line A");
 
         ImportRequestDto v2 = service.revise(v1, owner);
-        ImportRequestDto issuedV2 = service.issue(v2.id(), null, owner);
+        ImportRequestDto issuedV2 = service.issue(v2.id(), null, importUser);
 
         assertThat(issuedV2.emailTo()).isEqualTo("old@example.com");
         assertThat(issuedV2.emailSubject()).contains(issuedV2.docNumber());
@@ -329,7 +329,7 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
         long ticketId = insertTicket("EM-HANDEDIT-PRESERVE");
         insertItem(ticketId, "Hand Edit Preserve Factory", "Line", "60x60", "10", "pcs", 0);
         long id = service.createDrafts(ticketId, null, owner).get(0).id();
-        service.issue(id, null, owner);
+        service.issue(id, null, importUser);
 
         ImportRequestDto handEdited = service.updateEmailDraft(id, new UpdateEmailDraftRequest(
             null, null, "A completely hand-written email, please ship ASAP"), owner);
@@ -344,8 +344,9 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
     /**
      * When the draft is STILL unedited, {@code setLeadTime} does regenerate it (the content must
      * move with the new range) — but the signature must always read the ORIGINAL issuer, never
-     * whoever happens to be the one nudging the lead time (here: {@code import}, a different person
-     * from the {@code owner} who actually issued the form).
+     * whoever happens to be the one nudging the lead time. The issuer here is {@code import} (owner
+     * ruling 2026-10-20: import orders the factory), and the lead-time nudge comes from a DIFFERENT
+     * import/ceo person ({@code ceo}), so the two emails cannot be confused.
      */
     @Test
     void setLeadTime_regeneratesAnUneditedEmail_butAlwaysSignsAsTheOriginalIssuer_notTheCaller() {
@@ -354,17 +355,17 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
         insertItem(ticketId, "Original Signer Factory", "Line", "60x60", "10", "pcs", 0);
         long id = service.createDrafts(ticketId, null, owner).get(0).id();
 
-        ImportRequestDto issued = service.issue(id, null, owner);
-        assertThat(issued.emailBody()).contains(owner.email());
+        ImportRequestDto issued = service.issue(id, null, importUser);
+        assertThat(issued.emailBody()).contains(importUser.email());
 
-        ImportRequestDto afterLeadTime = service.setLeadTime(id, new SetLeadTimeRequest(10, 20), importUser);
+        ImportRequestDto afterLeadTime = service.setLeadTime(id, new SetLeadTimeRequest(10, 20), ceoUser);
         assertThat(afterLeadTime.emailBody())
             .as("still unedited -- content DOES move with the new range")
             .isNotEqualTo(issued.emailBody());
         assertThat(afterLeadTime.emailBody())
             .as("but the signature stays the ORIGINAL issuer, never setLeadTime's own caller")
-            .contains(owner.email())
-            .doesNotContain(importUser.email());
+            .contains(importUser.email())
+            .doesNotContain(ceoUser.email());
     }
 
     // ── editing the draft ─────────────────────────────────────────────────────────────────────
@@ -375,7 +376,7 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
         long ticketId = insertTicket("EM-EDIT");
         insertItem(ticketId, "Edit Email Factory", "Line", "60x60", "10", "pcs", 0);
         long id = service.createDrafts(ticketId, null, owner).get(0).id();
-        service.issue(id, null, owner);
+        service.issue(id, null, importUser);
 
         ImportRequestDto afterOwner = service.updateEmailDraft(id,
             new UpdateEmailDraftRequest("b@example.com", null, null), owner);
@@ -407,7 +408,7 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
         long ticketId = insertTicket("EM-SENT-EDIT");
         insertItem(ticketId, "Sent Email Factory", "Line", "60x60", "10", "pcs", 0);
         long id = service.createDrafts(ticketId, null, owner).get(0).id();
-        service.issue(id, null, owner);
+        service.issue(id, null, importUser);
         service.markEmailSent(id, importUser);
 
         assertThatThrownBy(() -> service.updateEmailDraft(id,
@@ -446,7 +447,7 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
         long ticketId = insertTicket("EM-REPO-SENT");
         insertItem(ticketId, "Repo Guard Sent Factory", "Line", "60x60", "10", "pcs", 0);
         long id = service.createDrafts(ticketId, null, owner).get(0).id();
-        service.issue(id, null, owner);
+        service.issue(id, null, importUser);
         service.markEmailSent(id, importUser);
 
         ImportRequestRepository repo = new ImportRequestRepository(jdbc);
@@ -480,7 +481,7 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
 
         // Non-owning rep and sales_manager: refused.
         long draftForOther = service.createDrafts(ticketId, null, owner).get(0).id();
-        service.issue(draftForOther, null, owner);
+        service.issue(draftForOther, null, importUser);
         assertThatThrownBy(() -> service.markEmailSent(draftForOther, otherSalesRep))
             .isInstanceOfSatisfying(ApiException.class,
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
@@ -506,7 +507,7 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
         long ticketId = insertTicket("EM-MARK2");
         insertItem(ticketId, "Mark Sent Factory 2", "Line", "60x60", "10", "pcs", 0);
         long id = service.createDrafts(ticketId, null, owner).get(0).id();
-        service.issue(id, null, owner);
+        service.issue(id, null, importUser);
 
         ImportRequestDto afterOwner = service.markEmailSent(id, owner);
         assertThat(afterOwner.emailSentAt()).isNotNull();
@@ -518,7 +519,7 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
         long ticketId = insertTicket("EM-EVENT");
         insertItem(ticketId, "Event Factory", "Line", "60x60", "10", "pcs", 0);
         long id = service.createDrafts(ticketId, null, owner).get(0).id();
-        service.issue(id, null, owner);
+        service.issue(id, null, importUser);
 
         service.markEmailSent(id, importUser);
 

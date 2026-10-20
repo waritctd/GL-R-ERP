@@ -85,13 +85,22 @@ public class ImportRequestService {
     private static final Set<String> REQUIRED_BY_ROLES = Set.of("sales", "ceo");
 
     // ── STORED aggregate roles (owner decision 1, footer tightened by owner decision 09-19) ───────
-    /** Create / edit the BODY / issue / revise / delete. Sales here means the DEAL OWNER only;
-     * {@code import} and {@code ceo} are unrestricted (owner ruling 2026-10-20 added import, so it
-     * raises a per-factory ใบขอซื้อ + its factory emails itself once the deal is paid). The exact
-     * membership lives in {@link #canFullWrite}; this constant documents the set. The printed form's
-     * FOOTER is NOT part of this write surface — see {@link #requirePrintedFooterWrite} (CEO only,
-     * owner decision 09-19). */
-    private static final Set<String> FULL_WRITE_ROLES = Set.of("sales", "ceo", "import");
+    /** The DRAFT surface — create / edit the BODY / revise / delete the ใบขอซื้อ while it is a DRAFT.
+     * Sales here means the DEAL OWNER only; {@code ceo} is unrestricted. {@code import} is NOT on this
+     * surface: under the owner's 2026-10-20 handshake ruling the deal owner (sales) PREPARES the
+     * per-factory draft and "sends it to import", and import then {@link #issue}s it to the factory —
+     * so drafts belong to sales, the factory order belongs to import (see {@link #ISSUE_ROLES}). The
+     * exact membership lives in {@link #canFullWrite}; this constant documents the set. The printed
+     * form's FOOTER is NOT part of this write surface — see {@link #requirePrintedFooterWrite} (CEO
+     * only, owner decision 09-19). */
+    private static final Set<String> FULL_WRITE_ROLES = Set.of("sales", "ceo");
+    /** Who may ISSUE a prepared draft to the factory (mint the doc number, draft the factory email,
+     * start the per-factory tracking at CONTACTED) — {@code import} + {@code ceo} ONLY, per the
+     * owner's 2026-10-20 handshake ruling. The deal owner (sales) is deliberately BLOCKED here even
+     * though it prepared the draft: "ให้กลับไปที่ sales ว่าให้กดส่งใบ IR มาที่ import ก่อน แล้วค่อยให้
+     * import กดสั่งไปหาโรงงาน". Global — import has no per-deal ownership concept, same as
+     * {@link #ADVANCE_STEP_ROLES}. The deposit floor still applies on top (see {@link #issue}). */
+    private static final Set<String> ISSUE_ROLES = Set.of("import", "ceo");
     /** The ORDER-EMAIL draft's edit/mark-sent gate, in addition to {@link #FULL_WRITE_ROLES} — see
      * {@link #requireFooterWrite}'s Javadoc for why this is a DIFFERENT surface from the printed
      * form's footer (which {@link #requirePrintedFooterWrite} now gates, CEO only). */
@@ -519,7 +528,7 @@ public class ImportRequestService {
     @Transactional
     public ImportRequestDto issue(long id, IssueImportRequestRequest request, UserPrincipal actor) {
         ImportRequestDto draft = requireStored(id);
-        requireFullWrite(draft.ticketId(), actor);
+        requireIssueWrite(actor); // import/CEO only — the deal owner prepared this draft but does not order the factory
         TicketSnapshot dealSnapshot = requireTicket(draft.ticketId());
         requireDealActive(dealSnapshot); // REVIEW ROUND 1, S4
         if (!ImportRequestStatus.DRAFT.equals(draft.status())) {
@@ -1478,8 +1487,9 @@ public class ImportRequestService {
         throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
     }
 
-    /** STORED-aggregate full-write gate (owner decision 1; import added by owner ruling 2026-10-20):
-     * CEO or import (unrestricted), or the deal's own owning sales rep. */
+    /** STORED-aggregate DRAFT-side write gate (owner decision 1): CEO (unrestricted), or the deal's
+     * own owning sales rep. This is create / edit the body / revise / delete — NOT {@link #issue},
+     * which is import/CEO (see {@link #requireIssueWrite} and the owner's 2026-10-20 handshake). */
     private void requireFullWrite(long ticketId, UserPrincipal actor) {
         if (!canFullWrite(ticketId, actor)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
@@ -1488,14 +1498,22 @@ public class ImportRequestService {
 
     private boolean canFullWrite(long ticketId, UserPrincipal actor) {
         String role = actor.role();
-        // Owner ruling 2026-10-20: import may create/edit/issue a per-factory ใบขอซื้อ itself — so,
-        // once the deal is paid (the deposit floor in TicketService#requireImportRequestIssuable,
-        // enforced in issue()), import raises the IR + factory emails directly rather than via the
-        // legacy deal-level one-shot. Unrestricted like CEO — import has no per-deal ownership concept
-        // (same as ADVANCE_STEP_ROLES). The printed-footer surface stays CEO-only
-        // (requirePrintedFooterWrite), unaffected by this.
-        return "ceo".equals(role) || "import".equals(role)
+        // The deal owner prepares the draft; CEO is unrestricted. import is deliberately NOT here —
+        // under the 2026-10-20 handshake it does not touch drafts, it ISSUES them (see ISSUE_ROLES /
+        // requireIssueWrite). The printed-footer surface stays CEO-only (requirePrintedFooterWrite).
+        return "ceo".equals(role)
             || ("sales".equals(role) && repository.isDealOwner(ticketId, actor.id()));
+    }
+
+    /** ISSUE gate (owner ruling 2026-10-20 handshake): import + CEO only. The deal owner (sales) is
+     * blocked here on purpose — it prepared and "sent" the draft (via {@link #createDrafts}); the
+     * factory order itself ("กดสั่งไปหาโรงงาน") is import's. No ownership scoping: import has none, and
+     * CEO overrides. The deposit floor (TicketService#requireImportRequestIssuable) applies on top in
+     * {@link #issue}, so this only decides WHO, not WHEN. */
+    private void requireIssueWrite(UserPrincipal actor) {
+        if (!ISSUE_ROLES.contains(actor.role())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
     }
 
     /**

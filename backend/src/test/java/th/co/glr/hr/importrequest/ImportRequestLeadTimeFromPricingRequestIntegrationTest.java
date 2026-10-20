@@ -360,7 +360,7 @@ class ImportRequestLeadTimeFromPricingRequestIntegrationTest extends AbstractPos
         assertThat(v2.leadTimeMinDays()).isEqualTo(100);
         assertThat(v2.leadTimeMaxDays()).isEqualTo(120);
 
-        service.issue(v2.id(), null, owner);
+        service.issue(v2.id(), null, importUser);
         ImportRequestDto v3 = service.revise(v2.id(), owner);
         assertThat(v3.leadTimeMinDays()).isEqualTo(100);
         assertThat(v3.leadTimeMaxDays()).isEqualTo(120);
@@ -413,7 +413,7 @@ class ImportRequestLeadTimeFromPricingRequestIntegrationTest extends AbstractPos
         if (min != null) {
             assertThat(v1.leadTimeMinDays()).isEqualTo(min);
         }
-        service.issue(v1.id(), null, owner);
+        service.issue(v1.id(), null, importUser);
         return new long[] {v1.id(), pr, q};
     }
 

@@ -193,11 +193,16 @@ export function DealFulfilmentPanel({
   const isFulfilment = isImport || role === 'ceo';
   // Stored ใบขอซื้อ (V184, PR-B) role shape — mirrors ImportRequestService, see that class's own
   // Javadoc for the authoritative matrix. Distinct from `isFulfilment` above (the LEGACY
-  // deal-level chain's import/ceo pair) because the stored aggregate's write gate is the deal's
+  // deal-level chain's import/ceo pair) because the stored aggregate's DRAFT gate is the deal's
   // OWNING sales rep + CEO, not import.
   const isOwner = role === 'sales' && summary?.createdById === user?.id;
   const canReadStoredIr = isFulfilment || role === 'sales_manager' || isOwner;
   const canFullWriteStoredIr = role === 'ceo' || isOwner;
+  // Owner ruling 2026-10-20 (handshake): the deal owner PREPARES the per-factory draft and "sends it
+  // to import" (createDrafts), but ISSUING it to the factory (ออกเลข) is import/CEO — so on THIS page
+  // the sales owner can prepare but not issue; only CEO issues from here. See ISSUE_ROLES in the
+  // service. Import issues from its own /import/deals/:id page.
+  const canIssueStoredIr = role === 'ceo';
   const canFooterWriteStoredIr = role === 'ceo';
   const canAdvanceStoredIr = role === 'import' || role === 'ceo';
   const canEmailWriteStoredIr = canFullWriteStoredIr || role === 'import';
@@ -723,6 +728,7 @@ export function DealFulfilmentPanel({
                     row={row}
                     ticketId={ticketId}
                     canFullWrite={canFullWriteStoredIr}
+                    canIssue={canIssueStoredIr}
                     canFooterWrite={canFooterWriteStoredIr}
                     canAdvance={canAdvanceStoredIr}
                     canEmailWrite={canEmailWriteStoredIr}

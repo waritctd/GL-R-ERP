@@ -326,7 +326,7 @@ class ImportRequestFactoryResolutionIntegrationTest extends AbstractPostgresInte
             .containsExactly("SharedBrand", "SharedBrand");
 
         for (ImportRequestDto d : drafts) {
-            assertThat(service.issue(d.id(), null, owner).status()).isEqualTo(ImportRequestStatus.ISSUED);
+            assertThat(service.issue(d.id(), null, importUser).status()).isEqualTo(ImportRequestStatus.ISSUED);
         }
     }
 
@@ -406,7 +406,7 @@ class ImportRequestFactoryResolutionIntegrationTest extends AbstractPostgresInte
 
         List<ImportRequestDto> drafts = service.createDrafts(ticketId, null, owner);
         for (ImportRequestDto d : drafts) {
-            service.issue(d.id(), null, owner);
+            service.issue(d.id(), null, importUser);
         }
         assertThat(fulfillmentStatus(ticketId)).isEqualTo(FulfilmentStatus.IR_ISSUED);
 
@@ -438,7 +438,7 @@ class ImportRequestFactoryResolutionIntegrationTest extends AbstractPostgresInte
         insertItem(ticketId, "Brand", "Import Line", "60x60", "10", "pcs", 0, "Mixed Deal Factory");
 
         long irId = service.createDrafts(ticketId, null, owner).get(0).id();
-        service.issue(irId, null, owner);
+        service.issue(irId, null, importUser);
         assertThat(fulfillmentStatus(ticketId)).isEqualTo(FulfilmentStatus.IR_ISSUED);
 
         // Simulate: while this factory's goods were still in transit, the deal's stock-sourced lines
@@ -462,7 +462,7 @@ class ImportRequestFactoryResolutionIntegrationTest extends AbstractPostgresInte
         insertFactory("Legacy Refusal Factory", "IT", null);
         long ticketId = insertTicket("RESOLV-7");
         insertItem(ticketId, "Brand", "Line", "60x60", "10", "pcs", 0, "Legacy Refusal Factory");
-        service.issue(service.createDrafts(ticketId, null, owner).get(0).id(), null, owner);
+        service.issue(service.createDrafts(ticketId, null, owner).get(0).id(), null, importUser);
 
         assertThat(tickets.hasLiveImportRequests(ticketId)).isTrue();
         assertThatThrownBy(() -> ticketService.markIrSent(ticketId, importUser))
@@ -477,7 +477,7 @@ class ImportRequestFactoryResolutionIntegrationTest extends AbstractPostgresInte
         insertFactory("Legacy Issue Refusal Factory", "IT", null);
         long ticketId = insertTicket("RESOLV-8");
         insertItem(ticketId, "Brand", "Line", "60x60", "10", "pcs", 0, "Legacy Issue Refusal Factory");
-        service.issue(service.createDrafts(ticketId, null, owner).get(0).id(), null, owner);
+        service.issue(service.createDrafts(ticketId, null, owner).get(0).id(), null, importUser);
 
         // The legacy one-shot action itself 409s once fulfillment_status is already IR_ISSUED —
         // recordFirstImportRequestIssued sets exactly that, so the deal cannot tell which path

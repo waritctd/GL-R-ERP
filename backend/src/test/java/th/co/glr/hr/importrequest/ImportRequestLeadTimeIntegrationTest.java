@@ -137,14 +137,14 @@ class ImportRequestLeadTimeIntegrationTest extends AbstractPostgresIntegrationTe
         insertItem(ticketId, "No Default Factory", "Line", 0);
         long id = service.createDrafts(ticketId, null, owner).get(0).id();
 
-        assertThatThrownBy(() -> service.issue(id, null, owner))
+        assertThatThrownBy(() -> service.issue(id, null, importUser))
             .isInstanceOfSatisfying(ApiException.class,
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
 
         // Setting it (owning rep, DRAFT) clears the refusal.
         service.update(id, new UpdateImportRequestRequest(
             null, null, null, null, null, null, null, null, null, 10, 20, null), owner);
-        assertThat(service.issue(id, null, owner).status()).isEqualTo(ImportRequestStatus.ISSUED);
+        assertThat(service.issue(id, null, importUser).status()).isEqualTo(ImportRequestStatus.ISSUED);
     }
 
     // ── editable while DRAFT (owning rep/CEO), and after ISSUE (import/CEO) ──────────────────────
@@ -184,7 +184,7 @@ class ImportRequestLeadTimeIntegrationTest extends AbstractPostgresIntegrationTe
         long ticketId = insertTicket("LT-ISSUED-EDIT");
         insertItem(ticketId, "Editable Issued Factory", "Line", 0);
         long id = service.createDrafts(ticketId, null, owner).get(0).id();
-        service.issue(id, null, owner);
+        service.issue(id, null, importUser);
 
         // Import: allowed.
         ImportRequestDto afterImport = service.setLeadTime(id, new SetLeadTimeRequest(20, 40), importUser);
@@ -210,7 +210,7 @@ class ImportRequestLeadTimeIntegrationTest extends AbstractPostgresIntegrationTe
         long ticketId = insertTicket("LT-BADRANGE");
         insertItem(ticketId, "Bad Range Factory", "Line", 0);
         long id = service.createDrafts(ticketId, null, owner).get(0).id();
-        service.issue(id, null, owner);
+        service.issue(id, null, importUser);
 
         assertThatThrownBy(() -> service.setLeadTime(id, new SetLeadTimeRequest(50, 10), importUser))
             .isInstanceOfSatisfying(ApiException.class,
@@ -239,7 +239,7 @@ class ImportRequestLeadTimeIntegrationTest extends AbstractPostgresIntegrationTe
         insertItem(ticketId, "Revision Factory", "Line", 0);
         long v1 = service.createDrafts(ticketId, null, owner).get(0).id();
         // Import/CEO hand-refine the estimate AFTER issue.
-        service.issue(v1, null, owner);
+        service.issue(v1, null, importUser);
         service.setLeadTime(v1, new SetLeadTimeRequest(60, 65), importUser);
 
         ImportRequestDto v2 = service.revise(v1, owner);
@@ -262,7 +262,7 @@ class ImportRequestLeadTimeIntegrationTest extends AbstractPostgresIntegrationTe
         long ticketId = insertTicket("LT-ETA-REDERIVE");
         insertItem(ticketId, "ETA Redrive Factory", "Line", 0);
         long id = service.createDrafts(ticketId, null, owner).get(0).id();
-        ImportRequestDto issued = service.issue(id, null, owner);
+        ImportRequestDto issued = service.issue(id, null, importUser);
         String autoNoteFor75to90 = issued.vesselEtaNote();
         assertThat(autoNoteFor75to90).isNotBlank();
         assertThat(issued.emailBody()).contains(
@@ -284,7 +284,7 @@ class ImportRequestLeadTimeIntegrationTest extends AbstractPostgresIntegrationTe
         long ticketId = insertTicket("LT-ETA-CUSTOM");
         insertItem(ticketId, "ETA Custom Factory", "Line", 0);
         long id = service.createDrafts(ticketId, null, owner).get(0).id();
-        service.issue(id, null, owner);
+        service.issue(id, null, importUser);
         ImportRequestDto ceoTyped = service.update(id, new UpdateImportRequestRequest(
             null, null, null, "Vessel confirmed by phone, mid-December", null, null, null, null,
             null, null, null, null), ceoUser);
@@ -306,11 +306,11 @@ class ImportRequestLeadTimeIntegrationTest extends AbstractPostgresIntegrationTe
         long ticketId = insertTicket("LT-ETA-REVISE");
         insertItem(ticketId, "ETA Revise Factory", "Line", 0);
         long v1 = service.createDrafts(ticketId, null, owner).get(0).id();
-        ImportRequestDto issuedV1 = service.issue(v1, null, owner);
+        ImportRequestDto issuedV1 = service.issue(v1, null, importUser);
         assertThat(issuedV1.vesselEtaNote()).isNotBlank();
 
         ImportRequestDto v2 = service.revise(v1, owner);
-        ImportRequestDto issuedV2 = service.issue(v2.id(), null, owner);
+        ImportRequestDto issuedV2 = service.issue(v2.id(), null, importUser);
         // Same anchor (firstIssuedDate carried forward) and same range -- re-derivation reproduces
         // the identical text, so the note stays consistent with issuedV2's own derived window.
         assertThat(issuedV2.vesselEtaNote()).isEqualTo(issuedV1.vesselEtaNote());
@@ -334,7 +334,7 @@ class ImportRequestLeadTimeIntegrationTest extends AbstractPostgresIntegrationTe
         long ticketId = insertTicket("LT-ETA-REVISE-EDIT");
         insertItem(ticketId, "ETA Revise Then Edit Factory", "Line", 0);
         long v1 = service.createDrafts(ticketId, null, owner).get(0).id();
-        ImportRequestDto issuedV1 = service.issue(v1, null, owner);
+        ImportRequestDto issuedV1 = service.issue(v1, null, importUser);
         assertThat(issuedV1.vesselEtaNote()).contains("75").contains("90");
 
         ImportRequestDto v2 = service.revise(v1, owner);
@@ -344,7 +344,7 @@ class ImportRequestLeadTimeIntegrationTest extends AbstractPostgresIntegrationTe
         service.update(v2.id(), new UpdateImportRequestRequest(
             null, null, null, null, null, null, null, null, null, 60, 70, null), owner);
 
-        ImportRequestDto issuedV2 = service.issue(v2.id(), null, owner);
+        ImportRequestDto issuedV2 = service.issue(v2.id(), null, importUser);
         assertThat(issuedV2.vesselEtaNote())
             .contains("60").contains("70")
             .doesNotContain("75").doesNotContain("90");
@@ -364,13 +364,13 @@ class ImportRequestLeadTimeIntegrationTest extends AbstractPostgresIntegrationTe
         long ticketId = insertTicket("LT-ETA-REVISE-CUSTOM");
         insertItem(ticketId, "ETA Revise Custom Factory", "Line", 0);
         long v1 = service.createDrafts(ticketId, null, owner).get(0).id();
-        service.issue(v1, null, owner);
+        service.issue(v1, null, importUser);
         service.update(v1, new UpdateImportRequestRequest(
             null, null, null, "Confirmed by phone, ETA mid-Jan", null, null, null, null,
             null, null, null, null), ceoUser);
 
         ImportRequestDto v2 = service.revise(v1, owner);
-        ImportRequestDto issuedV2 = service.issue(v2.id(), null, owner);
+        ImportRequestDto issuedV2 = service.issue(v2.id(), null, importUser);
         assertThat(issuedV2.vesselEtaNote()).isEqualTo("Confirmed by phone, ETA mid-Jan");
     }
 
@@ -387,7 +387,7 @@ class ImportRequestLeadTimeIntegrationTest extends AbstractPostgresIntegrationTe
         assertThat(draft.expectedArrivalFrom()).isNull();
         assertThat(draft.expectedArrivalTo()).isNull();
 
-        ImportRequestDto issued = service.issue(draft.id(), null, owner);
+        ImportRequestDto issued = service.issue(draft.id(), null, importUser);
         assertThat(issued.expectedArrivalFrom()).isEqualTo(issued.issueDate().plusDays(75));
         assertThat(issued.expectedArrivalTo()).isEqualTo(issued.issueDate().plusDays(90));
     }

@@ -25,6 +25,7 @@ import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
+import th.co.glr.hr.importrequest.ImportRequestStep;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
@@ -41,6 +42,9 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  *       {@code DELIVERED} or {@code CLOSED_PAID} is refused unless the fact behind that stage is
  *       already recorded. Before this, {@code updateStage} validated stage membership only, so
  *       {@code LEAD_APPROACH -> CLOSED_PAID} succeeded in one call for the price of a note.
+ *       {@code DELIVERY_SCHEDULING} joined this gate on the owner's 2026-10-20 ruling, but
+ *       CONDITIONALLY: it is refused only while the deal's per-factory imports have not all reached
+ *       AWAITING_CUSTOMS, and a deal with no import rows is untouched (the import-arrival section).
  *   <li><b>The stock floor</b> ({@code TicketService.stockCoverageStageReached}): a stock-coverage
  *       declaration is refused below {@code ORDER_RECEIVED}, because it is uncorroborated (there
  *       is no inventory system) yet full coverage reroutes the deal past the whole import journey.
@@ -461,6 +465,83 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(stageChangedEvents(ticketId)).isZero();
     }
 
+    // ═══ The import-arrival gate on DELIVERY_SCHEDULING (owner ruling 2026-10-20) ══════════════
+    //
+    // S13 นัดส่งสินค้า claims the goods are in hand to schedule. The fact behind it, for a deal that
+    // IS importing, is that EVERY live per-factory ใบขอซื้อ has reached AWAITING_CUSTOMS (S16,
+    // "ถึงไทยรอออกของ") or later — see TicketRepository.importArrivedForDeliveryScheduling. Sales may
+    // not jump S12 PROCUREMENT -> S13 while any factory's import is still mid-journey (or still only a
+    // DRAFT import had not even been issued). A deal that is NOT importing (from stock, or a legacy
+    // deal with no stored rows at all) has no such fact to satisfy and is deliberately NOT blocked —
+    // the gate reads the import rows, not merely the stage.
+
+    /**
+     * Wrong-way-round: PROCUREMENT -> DELIVERY_SCHEDULING is refused while ANY live factory is short of
+     * AWAITING_CUSTOMS, whether that factory is still a DRAFT (never issued) or an ISSUED row mid-way
+     * through its steps. Driven across both shapes, and the deal does not move on either.
+     */
+    @Test
+    void deliveryScheduling_isRefused_whileAnyFactorysImportHasNotArrived_andTheDealDoesNotMove() {
+        for (boolean laggardIsDraft : new boolean[] {true, false}) {
+            long ticketId = readyToAdvanceFrom(DealStage.PROCUREMENT);
+            long arrived = insertFactory("Arrived " + laggardIsDraft);
+            long laggard = insertFactory("Laggard " + laggardIsDraft);
+            // One factory has arrived; the other has not — so the deal as a whole has not.
+            seedIssuedImportRequest(ticketId, arrived, ImportRequestStep.AWAITING_CUSTOMS);
+            if (laggardIsDraft) {
+                seedDraftImportRequest(ticketId, laggard);           // never issued
+            } else {
+                seedIssuedImportRequest(ticketId, laggard, ImportRequestStep.IN_TRANSIT); // S15 < S16
+            }
+
+            assertThatThrownBy(() ->
+                ticketService.updateStage(ticketId, DealStage.DELIVERY_SCHEDULING, "ของพร้อมส่ง", ownerRep))
+                .describedAs("laggard as %s must hold the deal at PROCUREMENT", laggardIsDraft ? "DRAFT" : "ISSUED/IN_TRANSIT")
+                .isInstanceOfSatisfying(ApiException.class,
+                    e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+
+            assertThat(stageOf(ticketId)).isEqualTo(DealStage.PROCUREMENT);
+            assertThat(stageChangedEvents(ticketId)).isZero();
+        }
+    }
+
+    /**
+     * The grant: once EVERY live factory is at AWAITING_CUSTOMS or beyond (RECEIVED here for one of
+     * them), the move is accepted. A SUPERSEDED row is ignored — only live rows count.
+     */
+    @Test
+    void deliveryScheduling_isAllowed_onceEveryFactorysImportHasArrived() {
+        long ticketId = readyToAdvanceFrom(DealStage.PROCUREMENT);
+        long f1 = insertFactory("Arrived F1");
+        long f2 = insertFactory("Arrived F2");
+        long f3 = insertFactory("Superseded F3");
+        seedIssuedImportRequest(ticketId, f1, ImportRequestStep.AWAITING_CUSTOMS);
+        seedIssuedImportRequest(ticketId, f2, ImportRequestStep.RECEIVED);
+        seedSupersededImportRequest(ticketId, f3); // an old corrected version — not a live row
+
+        ticketService.updateStage(ticketId, DealStage.DELIVERY_SCHEDULING, "ของถึงไทยครบแล้ว", ownerRep);
+
+        assertThat(stageOf(ticketId)).isEqualTo(DealStage.DELIVERY_SCHEDULING);
+    }
+
+    /**
+     * A deal that is not importing — from stock, or a legacy deal with no stored ใบขอซื้อ at all — has
+     * no arrival fact to satisfy, so the import gate does not touch it. (The broader "ungated stages
+     * keep their manual fallback" test below also covers the no-rows case; this states the import
+     * gate's own no-block contract explicitly, including a SUPERSEDED-only deal.)
+     */
+    @Test
+    void deliveryScheduling_onADealWithNoLiveImportRequests_isNotBlocked() {
+        long fromStock = readyToAdvanceFrom(DealStage.PROCUREMENT);
+        ticketService.updateStage(fromStock, DealStage.DELIVERY_SCHEDULING, "จากสต็อก", ownerRep);
+        assertThat(stageOf(fromStock)).isEqualTo(DealStage.DELIVERY_SCHEDULING);
+
+        long supersededOnly = readyToAdvanceFrom(DealStage.PROCUREMENT);
+        seedSupersededImportRequest(supersededOnly, insertFactory("Only Superseded"));
+        ticketService.updateStage(supersededOnly, DealStage.DELIVERY_SCHEDULING, "มีแต่ฉบับถูกแทนที่", ownerRep);
+        assertThat(stageOf(supersededOnly)).isEqualTo(DealStage.DELIVERY_SCHEDULING);
+    }
+
     // ═══ Part A — the grants: necessary, but not the evidence ════════════════
 
     /** Each gated stage becomes settable the moment its own fact is on the row, and not before. */
@@ -492,10 +573,11 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     /**
-     * The eleven ungated stages keep their manual fallback with no facts recorded at all —
-     * {@code NEGOTIATION}, {@code PROCUREMENT} and {@code DELIVERY_SCHEDULING} above all, the
-     * operational stages where a wrong value misreports nothing financial. A gate that quietly
-     * swallowed these would be worse than the hole it closes.
+     * The operational stages keep their manual fallback with no facts recorded at all —
+     * {@code NEGOTIATION} and {@code PROCUREMENT} unconditionally, and {@code DELIVERY_SCHEDULING}
+     * here because this deal has NO per-factory import rows (the import-arrival gate reads the rows,
+     * not the stage — see deliveryScheduling_onADealWithNoLiveImportRequests_isNotBlocked for that
+     * gate's own contract). A gate that quietly swallowed these would be worse than the hole it closes.
      */
     @Test
     void theUngatedStagesKeepTheirManualFallbackWithNoFactsRecorded() {
@@ -797,6 +879,46 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
             List.of(new TicketItemRequest("Brand", "Model", null, null, "60x60", "Factory A",
                 new BigDecimal("100.00"), null, "PIECE", null, null, null, null, "THB")));
         return tickets.create(request, tickets.nextTicketCode(), ownerRepId, "เจ้าของดีล ทดสอบ");
+    }
+
+    private long insertFactory(String name) {
+        return jdbc.queryForObject("""
+            INSERT INTO price_catalog.factories (name, country, default_currency)
+            VALUES (:name, 'IT', 'EUR') RETURNING factory_id
+            """, Map.of("name", name), Long.class);
+    }
+
+    /** A DRAFT per-factory ใบขอซื้อ — never issued, so it carries no number, date or step (the three
+     * pairing CHECKs V184 added all require NULL while DRAFT). A DRAFT is "not arrived" by definition. */
+    private void seedDraftImportRequest(long ticketId, long factoryId) {
+        jdbc.update("""
+            INSERT INTO sales.import_request (ticket_id, factory_id, factory_name, version, status)
+            VALUES (:t, :f, :fname, 1, 'DRAFT')
+            """, new MapSqlParameterSource().addValue("t", ticketId).addValue("f", factoryId)
+                .addValue("fname", "Factory " + factoryId));
+    }
+
+    /** An ISSUED per-factory ใบขอซื้อ sitting at {@code step} — carries the number/date/first-issue the
+     * V184 pairing CHECKs demand of any non-DRAFT row. */
+    private void seedIssuedImportRequest(long ticketId, long factoryId, String step) {
+        seedNonDraftImportRequest(ticketId, factoryId, "ISSUED", step);
+    }
+
+    /** A SUPERSEDED row (an old corrected version) — still non-DRAFT, so it too needs the issued
+     * fields, but it is NOT a live row and the gate must ignore it. */
+    private void seedSupersededImportRequest(long ticketId, long factoryId) {
+        seedNonDraftImportRequest(ticketId, factoryId, "SUPERSEDED", ImportRequestStep.CONTACTED);
+    }
+
+    private void seedNonDraftImportRequest(long ticketId, long factoryId, String status, String step) {
+        jdbc.update("""
+            INSERT INTO sales.import_request
+                (ticket_id, factory_id, factory_name, version, status, doc_number, issue_date,
+                 import_step, import_step_at, first_issued_date)
+            VALUES (:t, :f, :fname, 1, :status, :doc, CURRENT_DATE, :step, CURRENT_DATE, CURRENT_DATE)
+            """, new MapSqlParameterSource().addValue("t", ticketId).addValue("f", factoryId)
+                .addValue("fname", "Factory " + factoryId).addValue("status", status)
+                .addValue("doc", "IR-SG-" + factoryId + "-" + status).addValue("step", step));
     }
 
     private static StockReservationRequest declare(long itemId, String qtyFromStock) {

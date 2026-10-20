@@ -166,9 +166,10 @@ describe('mockApi storedImportRequests — S3: rollup requires EVERY required fa
       expect(panariaDraft).toBeTruthy();
       expect(refinDraft).toBeTruthy();
 
-      // Issue and fully advance ONLY Panaria SpA — REFIN stays a DRAFT, never issued.
-      const { importRequest: panariaIssued } = await api.storedImportRequests.issue(panariaDraft.id, {});
+      // Issue and fully advance ONLY Panaria SpA — REFIN stays a DRAFT, never issued. Issuing to the
+      // factory is import/CEO now (owner ruling 2026-10-20 handshake), so switch to import before ออกเลข.
       await api.auth.login({ role: 'import' });
+      const { importRequest: panariaIssued } = await api.storedImportRequests.issue(panariaDraft.id, {});
       for (const target of ['ORDERED', 'PICKED_UP', 'IN_TRANSIT', 'AWAITING_CUSTOMS']) {
         await api.storedImportRequests.advanceStep(panariaIssued.id, { targetStep: target });
       }
@@ -186,9 +187,8 @@ describe('mockApi storedImportRequests — S3: rollup requires EVERY required fa
       expect(afterPanaria.fulfillmentStatus).toBe('IR_ISSUED');
 
       // Now issue and receive REFIN too — every required factory has an ISSUED row, all RECEIVED.
-      await api.auth.login({ role: 'sales' });
+      // Still import (issue + advance are both import's on the handshake).
       const { importRequest: refinIssued } = await api.storedImportRequests.issue(refinDraft.id, {});
-      await api.auth.login({ role: 'import' });
       for (const target of ['ORDERED', 'PICKED_UP', 'IN_TRANSIT', 'AWAITING_CUSTOMS', 'RECEIVED']) {
         await api.storedImportRequests.advanceStep(refinIssued.id, { targetStep: target });
       }
@@ -213,6 +213,8 @@ describe('mockApi storedImportRequests — S4: bypass issue gate requires EXACTL
 
     const { importRequests: drafts } = await api.storedImportRequests.createDrafts(ticketId, {});
     const draft = drafts[0];
+    // Issuing is import/CEO now (owner ruling 2026-10-20 handshake) — the owning rep prepared it.
+    await api.auth.login({ role: 'import' });
     const { importRequest: issued } = await api.storedImportRequests.issue(draft.id, {});
     expect(issued.status).toBe('ISSUED');
   });
