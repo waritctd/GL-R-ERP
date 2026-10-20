@@ -467,15 +467,22 @@ describe('TicketDetailPage', () => {
   });
 
   // Regression guard for the sticky-chrome jitter bug: the header must condense off the
-  // top sentinel's IntersectionObserver visibility, NEVER off a scroller.scrollTop
-  // threshold (whose feedback loop — condense shrinks the page, scrollTop re-crosses the
-  // threshold — made the page bounce / snap to the top). jsdom has no layout and no real
-  // IntersectionObserver, so this pins the WIRING (condense follows isIntersecting); the
-  // actual no-oscillation behaviour is verified in a real browser.
-  describe('sticky chrome condense is sentinel-driven (not scrollTop)', () => {
-    afterEach(() => { vi.unstubAllGlobals(); });
+  // two sentinels' IntersectionObserver visibility, NEVER off a scroller.scrollTop threshold
+  // (whose feedback loop — condense shrinks the page, scrollTop re-crosses the threshold —
+  // made the page bounce / snap to the top), and with HYSTERESIS so slow scrolling parked at
+  // the trigger can't flip-flop the collapse. jsdom has no layout and no real
+  // IntersectionObserver, so this pins the WIRING (condense follows sentinel visibility + the
+  // dead-band); the actual no-oscillation behaviour is verified in a real browser.
+  describe('sticky chrome condense is sentinel-driven with hysteresis (not scrollTop)', () => {
+    // Restore ONLY IntersectionObserver — vi.unstubAllGlobals() would also revert globals the
+    // shared setup stubs (e.g. URL.createObjectURL), breaking later files in the same worker.
+    const originalIntersectionObserver = globalThis.IntersectionObserver;
+    afterEach(() => {
+      if (originalIntersectionObserver === undefined) delete globalThis.IntersectionObserver;
+      else globalThis.IntersectionObserver = originalIntersectionObserver;
+    });
 
-    it('condenses when the top sentinel leaves view and expands when it returns', async () => {
+    it('condenses past the lower sentinel, holds through the dead-band, expands at the top', async () => {
       const ioInstances = [];
       class MockIntersectionObserver {
         constructor(cb, opts) { this.cb = cb; this.opts = opts; this.elements = []; ioInstances.push(this); }
@@ -490,15 +497,25 @@ describe('TicketDetailPage', () => {
       const header = await screen.findByTestId('deal-state-header');
       expect(header.getAttribute('data-condensed')).toBe('false'); // expanded at the top
 
-      // The condense observer is the one wired with the sentinel's rootMargin — proving the
-      // trigger is a sentinel's visibility, not a scrollTop read.
-      const condenseIo = ioInstances.find((io) => io.opts?.rootMargin === '-8px 0px 0px 0px');
+      const expandSentinel = document.querySelector('[data-testid="deal-chrome-expand-sentinel"]');
+      const condenseSentinel = document.querySelector('[data-testid="deal-chrome-condense-sentinel"]');
+      expect(expandSentinel).toBeTruthy();
+      expect(condenseSentinel).toBeTruthy();
+      // The condense observer is the one watching BOTH sentinels — proving the trigger is
+      // sentinel visibility (with a dead-band), not a scrollTop read.
+      const condenseIo = ioInstances.find((io) => io.elements.length >= 2);
       expect(condenseIo).toBeTruthy();
 
-      act(() => condenseIo.cb([{ isIntersecting: false }])); // top scrolled out of view
+      // Scrolled past the lower sentinel → condense.
+      act(() => condenseIo.cb([{ target: condenseSentinel, isIntersecting: false }]));
       expect(screen.getByTestId('deal-state-header').getAttribute('data-condensed')).toBe('true');
 
-      act(() => condenseIo.cb([{ isIntersecting: true }])); // back at the top
+      // Slow scroll back INTO the dead-band (lower sentinel re-enters) → must stay condensed.
+      act(() => condenseIo.cb([{ target: condenseSentinel, isIntersecting: true }]));
+      expect(screen.getByTestId('deal-state-header').getAttribute('data-condensed')).toBe('true');
+
+      // All the way back to the very top (top sentinel visible) → expand.
+      act(() => condenseIo.cb([{ target: expandSentinel, isIntersecting: true }]));
       expect(screen.getByTestId('deal-state-header').getAttribute('data-condensed')).toBe('false');
     });
   });
