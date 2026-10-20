@@ -29,6 +29,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       },
       attachments: { list: vi.fn(), fileUrl: (id) => `/api/attachments/${id}/file` },
       storedImportRequests: {
+        createDrafts: vi.fn(),
         advanceStep: vi.fn(),
         setLeadTime: vi.fn(),
         updateEmailDraft: vi.fn(),
@@ -138,6 +139,7 @@ describe('ImportDealPage', () => {
     api.tickets.markShipping.mockResolvedValue({ ticket: {} });
     api.tickets.markGoodsReceived.mockResolvedValue({ ticket: {} });
     api.storedImportRequests.advanceStep.mockResolvedValue({ importRequest: irRow({ importStep: 'PICKED_UP' }) });
+    api.storedImportRequests.createDrafts.mockResolvedValue({ importRequests: [] });
   });
 
   it('loads the deal through api.importDeals.get — never the whole-deal endpoint', async () => {
@@ -228,13 +230,16 @@ describe('ImportDealPage', () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.ticketDetail(1) });
   });
 
-  it('gives import no issue / revise / delete control on the factory cards (those are owner/CEO only)', async () => {
+  it('gives import full-write control on the factory cards (owner ruling 2026-10-20: import raises the IR itself)', async () => {
     renderPage({ role: 'import' });
     await screen.findByTestId('ir-factory-card-11');
+    // Row 11 is ISSUED (step ORDERED): import may now revise it (re-issue a corrected version) —
+    // previously owner/CEO only. issue/delete are DRAFT-only controls, so they are absent on this
+    // ISSUED row regardless of the role (import's DRAFT-row issue is covered by its own test below).
+    expect(screen.getByTestId('ir-revise-11')).not.toBeNull();
     expect(screen.queryByTestId('ir-issue-11')).toBeNull();
-    expect(screen.queryByTestId('ir-revise-11')).toBeNull();
     expect(screen.queryByTestId('ir-delete-11')).toBeNull();
-    // ...but the order-email action is import's.
+    // ...and the order-email action stays import's.
     expect(screen.getByTestId('ir-email-open-11')).not.toBeNull();
   });
 
@@ -310,13 +315,16 @@ describe('ImportDealPage', () => {
       expect(api.tickets.markGoodsReceived).not.toHaveBeenCalled();
     });
 
-    it('fulfillmentStatus null: shows ออกคำขอนำเข้า and calls tickets.issueImportRequest', async () => {
+    it('fulfillmentStatus null: shows สร้างใบขอซื้อรายโรงงาน (createDrafts) — NOT the legacy one-shot', async () => {
+      // Owner ruling 2026-10-20: import raises the per-factory ใบขอซื้อ itself at this point, so the
+      // legacy deal-level issueImportRequest (bare status flip, no email/tracking) is gone here.
       api.importDeals.get.mockResolvedValue({ deal: legacyDeal({ fulfillmentStatus: null }) });
       renderPage();
-      const card = await screen.findByTestId('import-deal-legacy-action');
-      fireEvent.click(within(card).getByRole('button', { name: 'ออกคำขอนำเข้า' }));
-      await waitFor(() => expect(api.tickets.issueImportRequest).toHaveBeenCalledWith('1'));
-      expect(api.tickets.markShipping).not.toHaveBeenCalled();
+      const btn = await screen.findByTestId('import-deal-create-ir-drafts');
+      expect(screen.queryByRole('button', { name: 'ออกคำขอนำเข้า' })).toBeNull();
+      fireEvent.click(btn);
+      await waitFor(() => expect(api.storedImportRequests.createDrafts).toHaveBeenCalledWith('1'));
+      expect(api.tickets.issueImportRequest).not.toHaveBeenCalled();
     });
 
     it('SHIPPING: shows ยืนยันรับเข้าคลัง and calls tickets.markGoodsReceived', async () => {
@@ -379,7 +387,7 @@ describe('ImportDealPage', () => {
 
     // This page is the only place import meets a DRAFT card (import cannot open /tickets/:id), and
     // here the deal-level button below it is live — so the card must not tell import to wait.
-    it('IR_ISSUED with only a DRAFT row: import reads why the draft has no step, is not told to wait, and gets no ออกเลข', async () => {
+    it('IR_ISSUED with only a DRAFT row: import reads the draft hint AND now gets ออกเลข itself (owner ruling 2026-10-20)', async () => {
       api.importDeals.get.mockResolvedValue({
         deal: dealFixture({
           fulfillmentStatus: 'IR_ISSUED',
@@ -390,7 +398,8 @@ describe('ImportDealPage', () => {
       const hint = await screen.findByTestId('ir-draft-hint-14');
       expect(hint.textContent).toContain('ยังเป็นร่าง');
       expect(hint.textContent).not.toContain('รอฝ่ายขาย');
-      expect(screen.queryByTestId('ir-issue-14')).toBeNull();
+      // import may now issue the draft itself (was owner/CEO only).
+      expect(screen.getByTestId('ir-issue-14')).not.toBeNull();
       expect(screen.getByRole('button', { name: 'ส่งคำขอนำเข้าแล้ว' })).not.toBeNull();
     });
 
@@ -458,7 +467,7 @@ describe('ImportDealPage', () => {
     it('renders no price or cost anywhere on a legacy deal', async () => {
       api.importDeals.get.mockResolvedValue({ deal: legacyDeal({ fulfillmentStatus: null }) });
       renderPage();
-      await screen.findByTestId('import-deal-legacy-action');
+      await screen.findByTestId('import-deal-create-ir-drafts');
       const page = document.body.textContent;
       expect(page).not.toMatch(/777/);
       expect(page).not.toMatch(/ราคา|ต้นทุน|฿|THB|มูลค่า|ยอดรวม/);

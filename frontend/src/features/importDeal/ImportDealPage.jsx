@@ -36,10 +36,11 @@ const LEGACY_ACTIONS = {
     call: (ticketId) => api.tickets.markIrSent(ticketId),
     toast: 'ส่งคำขอนำเข้าแล้ว',
   },
-  issueImportRequest: {
-    call: (ticketId) => api.tickets.issueImportRequest(ticketId),
-    toast: 'ออกคำขอนำเข้าแล้ว',
-  },
+  // issueImportRequest (the legacy deal-level one-shot — a bare fulfillment_status flip, no factory
+  // email, no per-factory tracking) is intentionally NO LONGER here: owner ruling 2026-10-20 gives
+  // import the per-factory create+issue path itself, so a null-fulfillmentStatus deal now offers
+  // "สร้างใบขอซื้อรายโรงงาน" (createDrafts) instead of the legacy bypass. markShipping/markGoodsReceived
+  // stay for a genuinely-legacy deal already mid-chain (issued the old way before this ruling).
   markShipping: {
     call: (ticketId) => api.tickets.markShipping(ticketId),
     toast: 'สินค้าอยู่ระหว่างขนส่ง',
@@ -143,6 +144,21 @@ export function ImportDealPage({ user, showToast }) {
     onError: (err) => showToast?.('error', err.message || 'ดำเนินการไม่สำเร็จ'),
   });
 
+  // Owner ruling 2026-10-20: import raises the per-factory ใบขอซื้อ itself. This creates one DRAFT
+  // per factory on the deal; import then issues each (ออกเลข + factory email) on its card below. No
+  // newFactoryCountries payload here — the common case has every line's factory already resolved;
+  // a deal that needs a new factory's country gets a clear server message (follow-up: the picker).
+  const createDraftsMutation = useMutation({
+    mutationFn: () => api.storedImportRequests.createDrafts(ticketId),
+    onSuccess: () => {
+      showToast?.('success', 'สร้างใบขอซื้อรายโรงงานแล้ว — กดออกเลขทีละโรงงานด้านล่าง');
+      queryClient.invalidateQueries({ queryKey: queryKeys.storedImportRequests(ticketId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.importDeal(ticketId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(ticketId) });
+    },
+    onError: (err) => showToast?.('error', err.message || 'สร้างใบขอซื้อไม่สำเร็จ'),
+  });
+
   function submitComment() {
     const message = commentText.trim();
     if (!message) return;
@@ -206,6 +222,11 @@ export function ImportDealPage({ user, showToast }) {
   const legacyCode = canAdvance && issuedRows.length === 0 && nextAction && LEGACY_ACTIONS[nextAction.code]
     ? nextAction.code
     : null;
+  // Owner ruling 2026-10-20: at the SAME point the legacy "ออกคำขอนำเข้า" one-shot used to show
+  // (fulfillmentStatus null AND the deal eligible — quotation issued or deposit ready, i.e.
+  // nextImportAction's issueImportRequest code), import now creates the per-factory ใบขอซื้อ instead.
+  const canCreatePerFactoryDrafts = canAdvance && liveRows.length === 0
+    && nextAction?.code === 'issueImportRequest';
 
   const stage = dealStageLabel(deal.salesStage);
   const lifecycle = dealLifecycleLabel(deal.lifecycle ?? 'ACTIVE');
@@ -264,9 +285,29 @@ export function ImportDealPage({ user, showToast }) {
       >
         {liveRows.length === 0 ? (
           <div className="grid gap-4">
-            <p className="m-0 text-sm text-text-muted" data-testid="import-deal-no-ir">
-              ดีลนี้ยังไม่มีใบขอซื้อรายโรงงาน — ฝ่ายขายเป็นผู้สร้างและออกเลขใบขอซื้อ แล้วฝ่ายนำเข้าจึงเลื่อนสถานะรายโรงงานได้ที่นี่
-            </p>
+            {canCreatePerFactoryDrafts ? (
+              <>
+                <p className="m-0 text-sm text-text-muted">
+                  ดีลรับชำระแล้ว — กดเพื่อสร้างใบขอซื้อแยกตามโรงงาน จากนั้นออกเลข + ส่งอีเมลทีละโรงงานได้ด้านล่าง
+                </p>
+                <div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="primary"
+                    disabled={createDraftsMutation.isPending}
+                    onClick={() => createDraftsMutation.mutate()}
+                    data-testid="import-deal-create-ir-drafts"
+                  >
+                    {createDraftsMutation.isPending ? 'กำลังสร้าง…' : 'สร้างใบขอซื้อรายโรงงาน'}
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <p className="m-0 text-sm text-text-muted" data-testid="import-deal-no-ir">
+                ดีลนี้ยังไม่มีใบขอซื้อรายโรงงาน
+              </p>
+            )}
           </div>
         ) : (
           <div className="flex flex-col gap-3">
@@ -275,7 +316,7 @@ export function ImportDealPage({ user, showToast }) {
                 key={row.id}
                 row={row}
                 ticketId={ticketId}
-                canFullWrite={isCeo}
+                canFullWrite={isCeo || role === 'import'}
                 canFooterWrite={isCeo}
                 canAdvance={canAdvance}
                 canEmailWrite={canEmailWrite}
