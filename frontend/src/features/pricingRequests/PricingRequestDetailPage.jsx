@@ -232,6 +232,60 @@ function cleanNumber(value) {
   return Number(value);
 }
 
+/**
+ * Per-line margin input on a CEO legacy-formula decision line (owner request 2026-10-21): the CEO
+ * sets อัตรากำไร% PER product line — each line's price = cost × (1 + its own margin) × buffer —
+ * instead of relying on the one "อัตรากำไรเริ่มต้น" applied across the whole request. Seeded from the
+ * line's current {@code proposedMarginPct} (which the default-margin seed set at creation) and
+ * overridable here. A PLAIN input (no mandatory reason, unlike the cost/price-override modals):
+ * {@code onSave} PUTs a single-item {@code marginPct} payload and the server recomputes THIS line's
+ * selling price. Its own state so the parent's render-time {@code renderCeoDecisionItem} (called in
+ * a loop) never has to hold a hook, and it re-syncs when the server value changes after a refetch.
+ */
+function CeoLineMarginField({ item, disabled, onSave }) {
+  const server = item.proposedMarginPct;
+  const serverStr = server == null ? '' : String(server);
+  const [value, setValue] = useState(serverStr);
+  useEffect(() => { setValue(serverStr); }, [serverStr]);
+
+  const parsed = cleanNumber(value);
+  // Mirror PricingDecisionService#requireValidMargin: marginPct must be > -1 (price never negative).
+  const invalid = value.trim() !== '' && (parsed == null || Number.isNaN(parsed) || parsed <= -1);
+  const dirty = value.trim() !== '' && !invalid && parsed !== server;
+
+  return (
+    <div className="mt-1 flex flex-wrap items-end gap-2">
+      <FormField
+        label="อัตรากำไร (เช่น 0.3 = 30%)"
+        htmlFor={`pcr-ceo-margin-${item.id}`}
+        className="mb-0"
+        error={invalid ? 'อัตรากำไรต้องมากกว่า -1 (ราคาขายต้องไม่ติดลบ)' : null}
+      >
+        <input
+          id={`pcr-ceo-margin-${item.id}`}
+          className="w-28"
+          type="number"
+          step="0.01"
+          value={value}
+          disabled={disabled}
+          onChange={(e) => setValue(e.target.value)}
+          data-testid={`pcr-ceo-margin-input-${item.id}`}
+        />
+      </FormField>
+      <Button
+        type="button"
+        variant="secondary"
+        className="text-2xs px-2 py-[3px]"
+        disabled={disabled || !dirty}
+        onClick={() => onSave(parsed)}
+        data-testid={`pcr-ceo-margin-save-${item.id}`}
+      >
+        บันทึกกำไร
+      </Button>
+    </div>
+  );
+}
+
 function generateClientRequestId() {
   return crypto.randomUUID?.()
     ?? '00000000-0000-4000-8000-' + String(Date.now()).slice(-12).padStart(12, '0');
@@ -1267,6 +1321,18 @@ export function PricingRequestDetailPage({ user, showToast }) {
         }],
       }),
     'บันทึกราคาที่ปรับแล้ว',
+  );
+  // Per-line margin (owner request 2026-10-21): same PUT /pricing-decisions/{id} endpoint as the
+  // price override above, with a single-item marginPct payload — applyItemUpdates recomputes THIS
+  // line's selling price from cost × (1 + margin). No reason field (unlike the overrides): a margin
+  // is the ordinary formula input, not a price override. The clear* flags are omitted — the record
+  // is wire-tolerant (they default to false), so this leaves every other item column unchanged.
+  const saveLineMargin = useActionMutation(
+    ({ decision, item, marginPct }) =>
+      api.pricingRequests.updatePricingDecision(decision.id, {
+        items: [{ pricingDecisionItemId: item.id, marginPct }],
+      }),
+    'บันทึกอัตรากำไรแล้ว',
   );
   // Phase 2 (owner rulings 2026-09-18/19, V187): the mode picker — one PUT that sets priceMode
   // header-side (only the first time; the request omits it once already set, matching the
@@ -2397,12 +2463,23 @@ export function PricingRequestDetailPage({ user, showToast }) {
         {costingItem?.uncostableReason ? (
           <p className="mt-2 text-xs text-warning">{costingItem.uncostableReason}</p>
         ) : null}
-        {!editable ? (
+        {/* Per-line margin (owner request 2026-10-21): on an editable, formula-driven line the CEO
+            sets อัตรากำไร% for THIS line here. Hidden once a "ปรับราคาเอง" override is active (the
+            formula no longer drives the line) and once the decision is read-only — both fall back to
+            the read-only อัตรากำไร/ราคาขั้นต่ำ summary. The NEW-FORM (V187) path returns above and
+            never reaches here, so this stays the legacy formula path only. */}
+        {editable && !hasPriceOverride ? (
+          <CeoLineMarginField
+            item={item}
+            disabled={saveLineMargin.isPending}
+            onSave={(marginPct) => saveLineMargin.mutate({ decision, item, marginPct })}
+          />
+        ) : (
           <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-muted">
             <span>อัตรากำไร: {effectiveMargin ?? '-'}</span>
             <span>ราคาขั้นต่ำ: {item.minimumSellingPricePerRequestedUnit != null ? formatCurrency(item.minimumSellingPricePerRequestedUnit, decision.currency) : '-'}</span>
           </div>
-        ) : null}
+        )}
         <CollapsibleSection
           title="วิธีคำนวณราคานี้"
           defaultOpen={false}
