@@ -92,6 +92,15 @@ public class DepositNoticeService {
     // Create a DRAFT from approved ticket items
     @Transactional
     public DepositNoticeDto createDraft(long ticketId, DepositNoticeDraftRequest req, UserPrincipal actor) {
+        return createDraftFromQuotation(ticketId, req, null, actor);
+    }
+
+    /** {@link #createDraft} for a caller that has already chosen the source quotation: a non-null
+     * {@code sourceDepositPercent} (that quotation's own whole-number {@code deposit_percent}) is
+     * the draft's percent, instead of the per-ticket lookup. */
+    @Transactional
+    public DepositNoticeDto createDraftFromQuotation(long ticketId, DepositNoticeDraftRequest req,
+                                                     Integer sourceDepositPercent, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
         TicketSummaryDto s = requireApprovedTicket(ticketId, actor);
         requireActiveLifecycle(s);
@@ -128,9 +137,12 @@ public class DepositNoticeService {
         // document's long-standing 0.50 default only when the ticket has no live quotation to
         // read a percent from at all (e.g. a manually-approved legacy ticket with no quotation
         // chain) — see DepositNoticeRepository#findDealQuotationDepositPercent's own Javadoc for
-        // the full pick order.
-        BigDecimal effectiveDepositPercent = docs.findDealQuotationDepositPercent(ticketId)
-            .orElse(new BigDecimal("0.50"));
+        // the full pick order. The pricing-request route names its source quotation and passes
+        // that quotation's own percent; the ticket-level route passes null and still derives it
+        // per ticket.
+        BigDecimal effectiveDepositPercent = sourceDepositPercent != null
+            ? BigDecimal.valueOf(sourceDepositPercent, 2)
+            : docs.findDealQuotationDepositPercent(ticketId).orElse(new BigDecimal("0.50"));
 
         var effective = new DepositNoticeDraftRequest(
             req.customerName() != null ? req.customerName() : s.customerName(),

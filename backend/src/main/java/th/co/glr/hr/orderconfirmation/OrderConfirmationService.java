@@ -439,11 +439,13 @@ public class OrderConfirmationService {
      * open revision draft can outrank the accepted row by id. The items come from that quotation,
      * the accepted quotation of THIS pricing request ({@link
      * DepositNoticeService#itemsFromDealQuotation}), so a sibling pricing request's quotation on
-     * the same ticket can never supply them. The percent is still whatever {@code createDraft}
-     * derives, which is ticket-scoped and legacy-first: on a ticket that also carries a sibling
-     * pricing request's legacy ISSUED quotation, the percent comes from that legacy row. That is a
-     * known limitation the ticket-level route shares; this route does not introduce it. The
-     * customer must have accepted: an ISSUED-only quotation answers 409.
+     * the same ticket can never supply them. The percent also comes from that quotation: its own
+     * {@code deposit_percent} goes to {@link DepositNoticeService#createDraftFromQuotation}, so a
+     * sibling pricing request's legacy row on the same ticket cannot supply it either (a
+     * new-engine sibling never could: R8 allows one ACCEPTED quotation per ticket and the lookup
+     * prefers ACCEPTED). The legacy branch passes no percent, because {@code CustomerQuotationDto}
+     * carries none, so it keeps {@code createDraft}'s per-ticket derivation; the ticket-level
+     * route does the same. The customer must have accepted: an ISSUED-only quotation answers 409.
      */
     @Transactional
     public DepositNoticeDto createDepositNoticeFromQuotation(long pricingRequestId,
@@ -459,9 +461,11 @@ public class OrderConfirmationService {
 
         String reference;
         List<DepositNoticeItemRequest> items;
+        Integer sourceDepositPercent;
         if (accepted != null) {
             reference = accepted.number();
             items = DepositNoticeService.itemsFromQuotation(accepted.items());
+            sourceDepositPercent = null;
         } else {
             th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto newEngine = dealQuotations == null
                 ? null
@@ -473,6 +477,7 @@ public class OrderConfirmationService {
             }
             reference = newEngine.number();
             items = depositNotices.itemsFromDealQuotation(newEngine.id());
+            sourceDepositPercent = newEngine.depositPercent();
         }
 
         // request.depositPercent() is deliberately still passed through here even though
@@ -480,7 +485,8 @@ public class OrderConfirmationService {
         DepositNoticeDraftRequest draftRequest = new DepositNoticeDraftRequest(
             null, null, null, null, reference,
             request != null ? request.depositPercent() : null, null, items);
-        DepositNoticeDto draft = depositNotices.createDraft(summary.ticketId(), draftRequest, actor);
+        DepositNoticeDto draft = depositNotices.createDraftFromQuotation(summary.ticketId(), draftRequest,
+            sourceDepositPercent, actor);
 
         pricingRequests.addEvent(pricingRequestId, summary.ticketId(), actor.id(), actor.name(),
             PricingRequestEventKind.DEPOSIT_NOTICE_DRAFTED_FROM_QUOTATION, summary.status(), summary.status(),

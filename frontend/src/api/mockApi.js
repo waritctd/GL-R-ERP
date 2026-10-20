@@ -16225,7 +16225,12 @@ export const api = {
         customerName: ticket.customerName ?? '', customerTaxId: customerTaxId ?? '',
         customerAddress: customerAddress ?? '',
         projectName: projectName ?? '', reference,
-        depositPercent: payload.depositPercent ?? 0.5, vatPercent: 0.07,
+        // Mirrors DepositNoticeService.createDraftFromQuotation: the new-engine branch bills the
+        // chosen quotation's own whole-number percent; the legacy branch keeps the old stand-in.
+        depositPercent: newEngine?.depositPercent != null
+          ? newEngine.depositPercent / 100
+          : payload.depositPercent ?? 0.5,
+        vatPercent: 0.07,
         notes, items, issuedByName: null, preparerName: 'จินตนา หาญมนตรี',
         hasPdf: false, hasXlsx: false,
         createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
