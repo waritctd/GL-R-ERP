@@ -298,14 +298,21 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     }
   }, [activeTab]);
 
-  // The sticky deal chrome (state header + detail tabs) condenses once the top of the
-  // content has scrolled out of view. It is driven by a 0-size sentinel +
-  // IntersectionObserver (effect below), NOT by reading scroller.scrollTop against a
-  // threshold: condensing the header shrinks the whole page, and a scrollTop threshold
-  // let that shrink feed back across the threshold and oscillate — the "sticky chrome
-  // jitter / can't scroll down / snaps to top" bug. A sentinel's visibility does not
-  // depend on the chrome's own height, so there is no feedback loop.
-  const topSentinelRef = useRef(null);
+  // The sticky deal chrome (state header + detail tabs) condenses as you scroll down.
+  // Driven by TWO 0-size sentinels + IntersectionObserver (effect below) with hysteresis,
+  // NOT by reading scroller.scrollTop:
+  //   - condensing the header shrinks the page; a scrollTop threshold let that shrink feed
+  //     back across the threshold and oscillate — the original "jitter / snaps to top" bug;
+  //   - a single sentinel line still flickered on SLOW scroll parked right at the trigger.
+  // Two sentinels give a dead-band: condense once scrolled past the LOWER sentinel, expand
+  // only when the TOP sentinel is back in view. Slow-scrolling inside the band changes
+  // nothing, so the collapse can't flip-flop. Sentinel visibility never depends on the
+  // chrome's own height, so there is still no feedback loop. Plus "Gate A" (in the effect):
+  // a page only slightly taller than the viewport never condenses at all, because condensing
+  // it would shrink it below the condense line and clamp scrollTop back to the top — the
+  // remaining slow-scroll indecision. Only genuinely tall pages condense, where it is stable.
+  const expandSentinelRef = useRef(null);
+  const condenseSentinelRef = useRef(null);
   // Separately, the chrome's measured height is published to `--deal-header-h` (second
   // effect below) so AppShell's `scroll-pt-[calc(var(--deal-header-h,18rem) + …)]`
   // offsets scrollIntoView jumps below the sticky header. Measuring is orthogonal to the
@@ -774,29 +781,48 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketAttachments(ticketId) });
   }
 
-  // Condense the sticky chrome once the top-of-content sentinel scrolls out of the
-  // scroller — see the ticketChromeCondensed declaration for WHY this is driven by a
-  // sentinel's visibility rather than scrollTop (the jitter/feedback-loop fix).
+  // Condense the sticky chrome with hysteresis — see the ticketChromeCondensed declaration
+  // for WHY two sentinels (dead-band, no scrollTop, no feedback loop, no slow-scroll flicker).
   useEffect(() => {
     if (loading) return undefined;
-    const sentinel = topSentinelRef.current;
-    if (!sentinel || typeof IntersectionObserver === 'undefined') return undefined;
-    const scroller = sentinel.closest('.content-scroll');
+    const expandAt = expandSentinelRef.current;
+    const condenseAt = condenseSentinelRef.current;
+    if (!expandAt || !condenseAt || typeof IntersectionObserver === 'undefined') return undefined;
+    const scroller = expandAt.closest('.content-scroll');
     const mobileQuery = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
       ? window.matchMedia('(max-width: 720px)')
       : null;
     // Mobile renders the chrome static (never sticky, never condensed) — keep it expanded.
-    const onBreakpoint = () => {
-      if (mobileQuery?.matches) setTicketChromeCondensed(false);
+    // Gate A: only condense when the page overflows by MORE than the (expanded) chrome's own
+    // height. Condensing shrinks the chrome — and therefore the page — by at most that height;
+    // requiring the scroll overflow to exceed it guarantees the page stays scrolled past the
+    // condense line afterwards, so scrollTop can't clamp back to the top and re-expand. That
+    // clamp is what made a short/medium page (little taller than the viewport) flip "condense /
+    // don't condense" on slow scroll and fight scrolling down. A page that short simply never
+    // condenses — its full header is fine, there is barely anything to scroll. When the scroll
+    // box can't be measured (no .content-scroll ancestor, e.g. unit tests), fall back to
+    // condensing so the sentinel wiring stays observable.
+    const hasRoomToCondense = () => {
+      if (!scroller || scroller.clientHeight === 0) return true;
+      const chromeHeight = ticketStickyChromeRef.current?.getBoundingClientRect().height ?? 0;
+      return scroller.scrollHeight - scroller.clientHeight > chromeHeight + 80;
     };
-    // rootMargin -8px top mirrors the previous scrollTop>8 trigger point. The sentinel sits
-    // at the very top of the content, so condensing the chrome (which shrinks the page) can
-    // never move it back into view — no oscillation.
-    const observer = new IntersectionObserver(
-      ([entry]) => setTicketChromeCondensed(!entry.isIntersecting && !mobileQuery?.matches),
-      { root: scroller ?? null, rootMargin: '-8px 0px 0px 0px', threshold: 0 },
-    );
-    observer.observe(sentinel);
+    const onIntersect = (entries) => {
+      if (mobileQuery?.matches) { setTicketChromeCondensed(false); return; }
+      for (const entry of entries) {
+        // Back at the very top → expand. Scrolled past the lower sentinel → condense, but only
+        // when there is room (Gate A). Anything in the band between the two sentinels leaves the
+        // state unchanged (the dead-band / hysteresis).
+        if (entry.target === expandAt && entry.isIntersecting) setTicketChromeCondensed(false);
+        else if (entry.target === condenseAt && !entry.isIntersecting && hasRoomToCondense()) {
+          setTicketChromeCondensed(true);
+        }
+      }
+    };
+    const onBreakpoint = () => { if (mobileQuery?.matches) setTicketChromeCondensed(false); };
+    const observer = new IntersectionObserver(onIntersect, { root: scroller ?? null, threshold: 0 });
+    observer.observe(expandAt);
+    observer.observe(condenseAt);
     mobileQuery?.addEventListener?.('change', onBreakpoint);
     return () => {
       observer.disconnect();
@@ -1605,11 +1631,13 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
 
   return (
     <div className={`relative grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px] ${bannerText || stickyPrimaryAction || overflowItems.length > 0 ? 'mobile:pb-28' : ''}`}>
-      {/* Top-of-content sentinel for the sticky-chrome condense IntersectionObserver
-          (see the ticketChromeCondensed declaration). Absolutely positioned + 0-size so
-          it adds no layout/gap; it marks where "the top" is, independent of the chrome's
-          own height — which is what keeps condensing from feeding back into a scroll loop. */}
-      <div ref={topSentinelRef} aria-hidden="true" className="pointer-events-none absolute left-0 top-0 h-px w-px" />
+      {/* Hysteresis sentinels for the sticky-chrome condense IntersectionObserver (see the
+          ticketChromeCondensed declaration). Absolutely positioned + 0-size so they add no
+          layout/gap. The pair marks "the very top" and "scrolled past ~56px" independent of
+          the chrome's own height, giving a dead-band so slow scrolling can't flip-flop the
+          collapse — and no scroll-position feedback loop. */}
+      <div ref={expandSentinelRef} data-testid="deal-chrome-expand-sentinel" aria-hidden="true" className="pointer-events-none absolute left-0 top-0 h-px w-px" />
+      <div ref={condenseSentinelRef} data-testid="deal-chrome-condense-sentinel" aria-hidden="true" className="pointer-events-none absolute left-0 top-14 h-px w-px" />
       {/* F-14 (ticket-detail IA rebuild Phase 1): the breadcrumb is the single
           up-nav — a full-width "กลับ" bar underneath it just repeated the same
           affordance as page chrome. Verified safe to drop: every e2e "กลับ"
