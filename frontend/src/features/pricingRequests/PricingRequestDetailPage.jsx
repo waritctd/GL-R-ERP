@@ -232,6 +232,102 @@ function cleanNumber(value) {
   return Number(value);
 }
 
+/**
+ * Per-line margin input on a CEO legacy-formula decision line (owner request 2026-10-21): the CEO
+ * sets อัตรากำไร% PER product line — each line's price = cost × (1 + its own margin) × buffer —
+ * instead of relying on the one "อัตรากำไรเริ่มต้น" applied across the whole request. Seeded from the
+ * line's current {@code proposedMarginPct} (which the default-margin seed set at creation) and
+ * overridable here. A PLAIN input (no mandatory reason, unlike the cost/price-override modals):
+ * {@code onSave} PUTs a single-item {@code marginPct} payload and the server recomputes THIS line's
+ * selling price. Its own state so the parent's render-time {@code renderCeoDecisionItem} (called in
+ * a loop) never has to hold a hook, and it re-syncs when the server value changes after a refetch.
+ */
+function CeoLineMarginField({ item, disabled, onSave }) {
+  const server = item.proposedMarginPct;
+  const serverStr = server == null ? '' : String(server);
+  const [value, setValue] = useState(serverStr);
+  useEffect(() => { setValue(serverStr); }, [serverStr]);
+
+  const parsed = cleanNumber(value);
+  // Mirror PricingDecisionService#requireValidMargin: marginPct must be > -1 (price never negative).
+  const invalid = value.trim() !== '' && (parsed == null || Number.isNaN(parsed) || parsed <= -1);
+  const dirty = value.trim() !== '' && !invalid && parsed !== server;
+
+  return (
+    <div className="mt-1 flex flex-wrap items-end gap-2">
+      <FormField
+        label="อัตรากำไร (เช่น 0.3 = 30%)"
+        htmlFor={`pcr-ceo-margin-${item.id}`}
+        className="mb-0"
+        error={invalid ? 'อัตรากำไรต้องมากกว่า -1 (ราคาขายต้องไม่ติดลบ)' : null}
+      >
+        <input
+          id={`pcr-ceo-margin-${item.id}`}
+          className="w-28"
+          type="number"
+          step="0.01"
+          value={value}
+          disabled={disabled}
+          onChange={(e) => setValue(e.target.value)}
+          data-testid={`pcr-ceo-margin-input-${item.id}`}
+        />
+      </FormField>
+      <Button
+        type="button"
+        variant="secondary"
+        className="text-2xs px-2 py-[3px]"
+        disabled={disabled || !dirty}
+        onClick={() => onSave(parsed)}
+        data-testid={`pcr-ceo-margin-save-${item.id}`}
+      >
+        บันทึกกำไร
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * Realized per-unit margin for a decision line (owner request 2026-10-21): the NET price the
+ * customer actually pays (in the decision's currency) minus the frozen LANDED cost (THB), converted
+ * to THB with the decision's own FX rate. Pure + module-level so both the new-form and legacy line
+ * renderers show the SAME number and it is unit-testable. Returns null when either side is missing
+ * (an uncostable line, or a line with no price yet). This is a DERIVED read-out, not a change to how
+ * any price is computed. {@code pct} is of COST (the same markup basis as the อัตรากำไร input).
+ */
+function lineProfitThb(costThb, netPriceInCurrency, fxRate) {
+  if (costThb == null || netPriceInCurrency == null || netPriceInCurrency === '') return null;
+  const netThb = Number(netPriceInCurrency) * (Number(fxRate) || 1);
+  const cost = Number(costThb);
+  if (!Number.isFinite(netThb) || !Number.isFinite(cost)) return null;
+  const profitPerUnit = netThb - cost;
+  return { profitPerUnit, pct: cost > 0 ? (profitPerUnit / cost) * 100 : null };
+}
+
+/**
+ * Shows a line's realized margin in BOTH ฿ and % on EVERY price mode (owner request 2026-10-21:
+ * "ทุกโหมดอยากให้เห็นชัด ๆ ว่ากำไรกี่บาทกี่ %"). Profit/unit = NET selling price − landed cost; the
+ * % is of cost; รวม is profit × quantity. Dashes out when the line has no cost or no price yet.
+ */
+function LineMarginReadout({ costThb, netPrice, fxRate, qty, testid }) {
+  const m = lineProfitThb(costThb, netPrice, fxRate);
+  if (m == null) {
+    return (
+      <span className="text-2xs text-text-muted" data-testid={testid}>
+        กำไร/หน่วย: — (ต้องมีต้นทุนและราคาก่อน)
+      </span>
+    );
+  }
+  const total = qty != null && qty !== '' ? m.profitPerUnit * Number(qty) : null;
+  const tone = m.profitPerUnit < 0 ? 'text-danger' : 'text-success';
+  return (
+    <span className={`text-2xs font-semibold ${tone}`} data-testid={testid}>
+      กำไร/หน่วย: <code>{formatCurrency(round2(m.profitPerUnit), 'THB')}</code>
+      {m.pct != null ? ` (${m.pct.toFixed(1)}% ของต้นทุน)` : ''}
+      {total != null ? <> · รวม <code>{formatCurrency(round2(total), 'THB')}</code></> : null}
+    </span>
+  );
+}
+
 function generateClientRequestId() {
   return crypto.randomUUID?.()
     ?? '00000000-0000-4000-8000-' + String(Date.now()).slice(-12).padStart(12, '0');
@@ -1268,6 +1364,18 @@ export function PricingRequestDetailPage({ user, showToast }) {
       }),
     'บันทึกราคาที่ปรับแล้ว',
   );
+  // Per-line margin (owner request 2026-10-21): same PUT /pricing-decisions/{id} endpoint as the
+  // price override above, with a single-item marginPct payload — applyItemUpdates recomputes THIS
+  // line's selling price from cost × (1 + margin). No reason field (unlike the overrides): a margin
+  // is the ordinary formula input, not a price override. The clear* flags are omitted — the record
+  // is wire-tolerant (they default to false), so this leaves every other item column unchanged.
+  const saveLineMargin = useActionMutation(
+    ({ decision, item, marginPct }) =>
+      api.pricingRequests.updatePricingDecision(decision.id, {
+        items: [{ pricingDecisionItemId: item.id, marginPct }],
+      }),
+    'บันทึกอัตรากำไรแล้ว',
+  );
   // Phase 2 (owner rulings 2026-09-18/19, V187): the mode picker — one PUT that sets priceMode
   // header-side (only the first time; the request omits it once already set, matching the
   // "choose once" rule) — separate from the per-item price mutation below so switching modes
@@ -1302,11 +1410,19 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const saveCeoItemPrice = useActionMutation(
     ({ decision, item, draft, clears = {} }) => {
       const isStockLine = item.stockSource != null;
+      // Per-line margin (owner request 2026-10-21): under NET a live อัตรากำไร draft is saved as
+      // marginPct — the server derives ราคาตั้ง from it via the formula (no override, no reason),
+      // mutually exclusive with a manual ราคาตั้ง override, so when present it is the ONLY list-side
+      // field sent.
+      const marginValue = decision.priceMode === 'NET' && !isStockLine && !clears.clearSellingPriceOverride
+        ? cleanNumber(draft.marginPct) : null;
       const currentList = item.manualSellingPricePerRequestedUnit ?? item.listUnitPrice;
       const listDraft = decision.priceMode === 'NET' || isStockLine ? draft.listUnitPrice : undefined;
       const listValue = cleanNumber(listDraft);
       const listPart = {};
-      if (clears.clearSellingPriceOverride) {
+      if (marginValue != null) {
+        listPart.marginPct = marginValue;
+      } else if (clears.clearSellingPriceOverride) {
         Object.assign(listPart, { clearSellingPriceOverride: true, decisionNote: CEO_LIST_PRICE_NOTE });
       } else if (listDraft !== undefined && listValue != null && (currentList == null || listValue !== Number(currentList))) {
         if (isStockLine) listPart.listUnitPrice = listValue;
@@ -2006,18 +2122,35 @@ export function PricingRequestDetailPage({ user, showToast }) {
       // mirrors PricingDecisionService (override ?? listUnitPrice); the input starts from it and
       // the in-progress draft wins for the preview.
       const currentList = hasPriceOverride ? item.manualSellingPricePerRequestedUnit : item.listUnitPrice;
+      // Per-line margin (owner request 2026-10-21): under NET a typed อัตรากำไร drives THIS line's
+      // ราคาตั้ง LIVE (ต้นทุน × (1+กำไร) × ตัวคูณ, ÷fx for non-THB) — mirrors PricingDecisionService
+      // #computeSellingPrice so the preview matches what the server stores on บันทึกราคา (which then
+      // sends marginPct, not an override). Only on a cost-bearing NET line the formula drives.
+      const marginDraftRaw = decision.priceMode === 'NET' && !isStockLine ? draft.marginPct : undefined;
+      const marginDraftNum = cleanNumber(marginDraftRaw);
+      const marginDrives = marginDraftRaw != null && marginDraftRaw !== ''
+        && !hasPriceOverride && item.frozenLandedCostPerRequestedUnitThb != null;
+      const marginInvalid = marginDrives && !(marginDraftNum != null && marginDraftNum > -1);
+      const sellingBuffer = Number(formulaConfigQuery.data?.sellingBuffer) || 1;
+      const marginList = marginDrives && !marginInvalid
+        ? round2(Number(item.frozenLandedCostPerRequestedUnitThb) * (1 + marginDraftNum) * sellingBuffer
+            / (decision.currency === 'THB' ? 1 : (Number(decision.fxRateUsed) || 1)))
+        : null;
       const listDraft = draft.listUnitPrice;
-      const listInputValue = listDraft ?? currentList ?? '';
+      // When margin drives, ราคาตั้ง reflects the computed value (read-only); otherwise it is the
+      // CEO's own typed/stored list.
+      const listInputValue = marginList != null ? marginList : (listDraft ?? currentList ?? '');
       const listDraftNumber = cleanNumber(listDraft);
       // Java rejects a non-positive ราคาตั้ง (stock: "> 0"; override: non-negative, and 0 would
       // price the line at zero), so the UI refuses it up front instead of round-tripping a 400.
       // Blank is NOT invalid: on an override line it means "clear the override".
-      const listInvalid = listDraft != null && listDraft !== '' && !(listDraftNumber > 0);
+      const listInvalid = !marginDrives && listDraft != null && listDraft !== '' && !(listDraftNumber > 0);
       // A blanked input on a line that has an override means "drop the override" (server then
       // falls back to listUnitPrice); on any other line a blank simply leaves the price as saved.
-      const previewList = listDraftNumber != null && !listInvalid ? listDraftNumber
-        : (listDraft === '' && hasPriceOverride && !isStockLine) ? item.listUnitPrice
-          : currentList;
+      const previewList = marginList != null ? marginList
+        : (listDraftNumber != null && !listInvalid ? listDraftNumber
+          : (listDraft === '' && hasPriceOverride && !isStockLine) ? item.listUnitPrice
+            : currentList);
       const previewNet = previewCeoNetUnitPrice(decision.priceMode, {
         listUnitPrice: previewList,
         discountPct: draft.discountPct ?? item.discountPct,
@@ -2087,18 +2220,19 @@ export function PricingRequestDetailPage({ user, showToast }) {
       const missingModeInputForList = listChanged && isStockLine && (
         (decision.priceMode === 'DIRECT_NET' && modeInputBlank(draft.directNetPrice ?? item.directNetPrice))
         || (decision.priceMode === 'SPECIAL_SQM' && modeInputBlank(draft.specialPriceSqm ?? item.specialPriceSqm)));
-      const saveDisabled = listInvalid || missingModeInputForList || !(otherDraftDirty || listChanged);
+      const saveDisabled = listInvalid || marginInvalid || missingModeInputForList || !(otherDraftDirty || listChanged);
       const costForcedOpen = showCost && Boolean(costingItem?.uncostableReason || costingItem?.overrideStale);
       const listPriceField = (
         <div className="flex flex-col gap-1">
-          <FormField label="ราคาตั้ง/แผ่น" htmlFor={`pcr-ceo-list-price-${item.id}`}>
+          <FormField label="ราคาตั้ง/แผ่น" htmlFor={`pcr-ceo-list-price-${item.id}`}
+            hint={marginDrives ? 'คำนวณจากอัตรากำไร' : undefined}>
             <input
               id={`pcr-ceo-list-price-${item.id}`}
               type="number"
               min="0"
               max={PRICE_INPUT_MAX_12_2}
               step="0.01"
-              disabled={!editable}
+              disabled={!editable || marginDrives}
               value={listInputValue}
               onChange={(e) => updateCeoPriceDraft(item.id, { listUnitPrice: e.target.value })}
               data-testid={`pcr-ceo-list-price-${item.id}`}
@@ -2159,6 +2293,13 @@ export function PricingRequestDetailPage({ user, showToast }) {
           <span className="text-[length:var(--text-base)] font-bold text-text">
             รวมเป็นเงิน: {lineTotal != null ? formatCurrency(lineTotal, decision.currency) : '-'}
           </span>
+          <LineMarginReadout
+            costThb={item.frozenLandedCostPerRequestedUnitThb}
+            netPrice={displayNet}
+            fxRate={decision.fxRateUsed}
+            qty={item.requestedQuantity}
+            testid={`pcr-ceo-margin-readout-${item.id}`}
+          />
         </div>
       );
       return (
@@ -2191,6 +2332,25 @@ export function PricingRequestDetailPage({ user, showToast }) {
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               {decision.priceMode === 'NET' ? (
                 <>
+                  {/* Per-product margin (owner request 2026-10-21): a LIVE input (like ส่วนลด, no
+                      separate save button) — typing it drives THIS line's ราคาตั้ง in real time
+                      (ต้นทุน × (1+กำไร) × ตัวคูณ) and the net/กำไร readout update with it; saved by the
+                      shared "บันทึกราคา" below as marginPct. Shown only on a cost-bearing NET line the
+                      formula still drives (not a stock line, not a "ปรับราคาเอง" override). */}
+                  {showCost && !hasPriceOverride && item.frozenLandedCostPerRequestedUnitThb != null ? (
+                    <FormField label="อัตรากำไร (เช่น 0.3 = 30%)" htmlFor={`pcr-ceo-margin-${item.id}`}
+                      error={marginInvalid ? 'อัตรากำไรต้องมากกว่า -1' : null}>
+                      <input
+                        id={`pcr-ceo-margin-${item.id}`}
+                        type="number"
+                        step="0.01"
+                        disabled={!editable}
+                        value={draft.marginPct ?? item.proposedMarginPct ?? ''}
+                        onChange={(e) => updateCeoPriceDraft(item.id, { marginPct: e.target.value })}
+                        data-testid={`pcr-ceo-margin-input-${item.id}`}
+                      />
+                    </FormField>
+                  ) : null}
                   {listPriceField}
                   <FormField label="ส่วนลด %" htmlFor={`pcr-ceo-discount-${item.id}`}>
                     <div className="flex items-center gap-1.5">
@@ -2393,16 +2553,34 @@ export function PricingRequestDetailPage({ user, showToast }) {
           <span className="text-[length:var(--text-base)] font-bold text-text">
             ราคาขาย (ก่อน VAT): {formatCurrency(effectivePrice, decision.currency)}
           </span>
+          <LineMarginReadout
+            costThb={item.frozenLandedCostPerRequestedUnitThb}
+            netPrice={effectivePrice}
+            fxRate={decision.fxRateUsed}
+            qty={item.requestedQuantity}
+            testid={`pcr-ceo-margin-readout-${item.id}`}
+          />
         </div>
         {costingItem?.uncostableReason ? (
           <p className="mt-2 text-xs text-warning">{costingItem.uncostableReason}</p>
         ) : null}
-        {!editable ? (
+        {/* Per-line margin (owner request 2026-10-21): on an editable, formula-driven line the CEO
+            sets อัตรากำไร% for THIS line here. Hidden once a "ปรับราคาเอง" override is active (the
+            formula no longer drives the line) and once the decision is read-only — both fall back to
+            the read-only อัตรากำไร/ราคาขั้นต่ำ summary. The NEW-FORM (V187) path returns above and
+            never reaches here, so this stays the legacy formula path only. */}
+        {editable && !hasPriceOverride ? (
+          <CeoLineMarginField
+            item={item}
+            disabled={saveLineMargin.isPending}
+            onSave={(marginPct) => saveLineMargin.mutate({ decision, item, marginPct })}
+          />
+        ) : (
           <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-muted">
             <span>อัตรากำไร: {effectiveMargin ?? '-'}</span>
             <span>ราคาขั้นต่ำ: {item.minimumSellingPricePerRequestedUnit != null ? formatCurrency(item.minimumSellingPricePerRequestedUnit, decision.currency) : '-'}</span>
           </div>
-        ) : null}
+        )}
         <CollapsibleSection
           title="วิธีคำนวณราคานี้"
           defaultOpen={false}

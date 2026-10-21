@@ -1885,6 +1885,158 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     expect(api.pricingRequests.getPricingDecisionSalesView).not.toHaveBeenCalled();
   });
 
+  // Per-line margin (owner request 2026-10-21): the CEO sets อัตรากำไร% PER product line, not one
+  // combined default — each line's price = cost × (1 + its own margin). Reuses PUT
+  // /pricing-decisions/{id} (updatePricingDecision) with a single-item marginPct payload, the same
+  // endpoint applyItemUpdates handles for the selling-price override above. The single
+  // "อัตรากำไรเริ่มต้น" stays the creation-time seed; this is a per-line OVERRIDE of it, on the
+  // legacy formula path only (the NEW-FORM/V187 path prices through the mode picker, not margin).
+  describe('CEO per-line margin ("อัตรากำไรรายรายการ")', () => {
+    it('seeds the per-line margin input from the line proposedMarginPct and saves a single-item marginPct payload', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [buildDecision()] });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      const input = screen.getByTestId('pcr-ceo-margin-input-8001');
+      expect(input.value).toBe('0.2');
+
+      fireEvent.change(input, { target: { value: '0.35' } });
+      fireEvent.click(screen.getByTestId('pcr-ceo-margin-save-8001'));
+
+      await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalledWith(
+        7001,
+        { items: [{ pricingDecisionItemId: 8001, marginPct: 0.35 }] },
+      ));
+    });
+
+    it('lets two lines carry DIFFERENT margins — each save targets only its own line', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({ items: [
+          buildDecisionItem(),
+          buildDecisionItem({ id: 8002, pricingRequestItemId: 2, pricingCostingItemId: 2, model: 'A2', proposedMarginPct: 0.1 }),
+        ] })],
+      });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      expect(screen.getByTestId('pcr-ceo-margin-input-8001').value).toBe('0.2');
+      expect(screen.getByTestId('pcr-ceo-margin-input-8002').value).toBe('0.1');
+
+      fireEvent.change(screen.getByTestId('pcr-ceo-margin-input-8002'), { target: { value: '0.5' } });
+      fireEvent.click(screen.getByTestId('pcr-ceo-margin-save-8002'));
+
+      await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalledWith(
+        7001, { items: [{ pricingDecisionItemId: 8002, marginPct: 0.5 }] },
+      ));
+      // Only one line's save fired, and it carried ONLY its own id.
+      expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not call the API when the margin is unchanged (save stays disabled until edited)', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [buildDecision()] });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      fireEvent.click(screen.getByTestId('pcr-ceo-margin-save-8001'));
+      expect(api.pricingRequests.updatePricingDecision).not.toHaveBeenCalled();
+    });
+
+    it('offers no per-line margin input on a price-overridden line (the formula no longer drives it)', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({ items: [buildDecisionItem({ manualSellingPricePerRequestedUnit: 90 })] })],
+      });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      expect(screen.queryByTestId('pcr-ceo-margin-input-8001')).toBeNull();
+    });
+
+    it('new-form NET: the per-line margin is a LIVE input (no own button) that previews and saves via บันทึกราคา as marginPct', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        // cost 60, no selling buffer mocked → buffer defaults to 1: margin 0.5 → list 90, net 90.
+        items: [buildDecision({ priceMode: 'NET', items: [buildDecisionItem({ sqmPerPiece: 0.36 })] })],
+      });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      const input = screen.getByTestId('pcr-ceo-margin-input-8001');
+      expect(input.value).toBe('0.2');
+      // No separate margin save button — the realtime model has only the shared บันทึกราคา.
+      expect(screen.queryByTestId('pcr-ceo-margin-save-8001')).toBeNull();
+
+      // Typing updates the realized-margin readout LIVE, before any save (cost 60 → margin 0.5 →
+      // net 90 → profit 30/unit, 50%).
+      fireEvent.change(input, { target: { value: '0.5' } });
+      expect(screen.getByTestId('pcr-ceo-margin-readout-8001').textContent).toMatch(/฿30\.00.*50\.0%/);
+      // ราคาตั้ง reflects the margin-derived list (read-only).
+      expect(screen.getByTestId('pcr-ceo-list-price-8001').value).toBe('90');
+      expect(screen.getByTestId('pcr-ceo-list-price-8001').disabled).toBe(true);
+
+      fireEvent.click(screen.getByTestId('pcr-ceo-save-price-8001'));
+      await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalledWith(
+        7001, { items: [expect.objectContaining({ pricingDecisionItemId: 8001, marginPct: 0.5 })] }));
+    });
+
+    it('new-form SPECIAL_SQM: no margin input (price is set directly in that mode, not via margin)', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({ priceMode: 'SPECIAL_SQM', items: [buildDecisionItem({ sqmPerPiece: 0.36 })] })],
+      });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      expect(screen.queryByTestId('pcr-ceo-margin-input-8001')).toBeNull();
+    });
+
+    // Owner request 2026-10-21: "ทุกโหมดอยากให้เห็นชัด ๆ ว่ากำไรกี่บาทกี่ %".
+    it('shows the realized margin (฿ + % of cost + total) on a NEW-FORM NET line', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        // cost 60 THB, net 72 THB (fx 1), qty 20 → profit 12/unit, 20% of cost, 240 total.
+        items: [buildDecision({ priceMode: 'NET', items: [buildDecisionItem({ sqmPerPiece: 0.36, netUnitPrice: 72 })] })],
+      });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      const readout = screen.getByTestId('pcr-ceo-margin-readout-8001').textContent;
+      expect(readout).toMatch(/฿12\.00/);
+      expect(readout).toMatch(/20\.0%/);
+      expect(readout).toMatch(/฿240\.00/);
+    });
+
+    it('shows the realized margin on a LEGACY formula line, and dashes it out when the line has no cost', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({ items: [buildDecisionItem()] })], // legacy: cost 60, price 72 → 12/20%
+      });
+      const { unmount } = renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+      expect(screen.getByTestId('pcr-ceo-margin-readout-8001').textContent).toMatch(/฿12\.00.*20\.0%/);
+      unmount();
+
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({ items: [buildDecisionItem({ frozenLandedCostPerRequestedUnitThb: null })] })],
+      });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+      expect(screen.getByTestId('pcr-ceo-margin-readout-8001').textContent).toMatch(/ต้องมีต้นทุน/);
+    });
+  });
+
   // P0/P1a fix (2026-09): LandedCostCalculator now aggregates every problem across every item
   // into ONE 422 whose message is a heading line + one bullet per problem (see
   // LandedCostCalculator#aggregateProblems), and FxResolver's own staleness/missing-rate messages
