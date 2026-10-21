@@ -1410,11 +1410,19 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const saveCeoItemPrice = useActionMutation(
     ({ decision, item, draft, clears = {} }) => {
       const isStockLine = item.stockSource != null;
+      // Per-line margin (owner request 2026-10-21): under NET a live อัตรากำไร draft is saved as
+      // marginPct — the server derives ราคาตั้ง from it via the formula (no override, no reason),
+      // mutually exclusive with a manual ราคาตั้ง override, so when present it is the ONLY list-side
+      // field sent.
+      const marginValue = decision.priceMode === 'NET' && !isStockLine && !clears.clearSellingPriceOverride
+        ? cleanNumber(draft.marginPct) : null;
       const currentList = item.manualSellingPricePerRequestedUnit ?? item.listUnitPrice;
       const listDraft = decision.priceMode === 'NET' || isStockLine ? draft.listUnitPrice : undefined;
       const listValue = cleanNumber(listDraft);
       const listPart = {};
-      if (clears.clearSellingPriceOverride) {
+      if (marginValue != null) {
+        listPart.marginPct = marginValue;
+      } else if (clears.clearSellingPriceOverride) {
         Object.assign(listPart, { clearSellingPriceOverride: true, decisionNote: CEO_LIST_PRICE_NOTE });
       } else if (listDraft !== undefined && listValue != null && (currentList == null || listValue !== Number(currentList))) {
         if (isStockLine) listPart.listUnitPrice = listValue;
@@ -2114,18 +2122,35 @@ export function PricingRequestDetailPage({ user, showToast }) {
       // mirrors PricingDecisionService (override ?? listUnitPrice); the input starts from it and
       // the in-progress draft wins for the preview.
       const currentList = hasPriceOverride ? item.manualSellingPricePerRequestedUnit : item.listUnitPrice;
+      // Per-line margin (owner request 2026-10-21): under NET a typed อัตรากำไร drives THIS line's
+      // ราคาตั้ง LIVE (ต้นทุน × (1+กำไร) × ตัวคูณ, ÷fx for non-THB) — mirrors PricingDecisionService
+      // #computeSellingPrice so the preview matches what the server stores on บันทึกราคา (which then
+      // sends marginPct, not an override). Only on a cost-bearing NET line the formula drives.
+      const marginDraftRaw = decision.priceMode === 'NET' && !isStockLine ? draft.marginPct : undefined;
+      const marginDraftNum = cleanNumber(marginDraftRaw);
+      const marginDrives = marginDraftRaw != null && marginDraftRaw !== ''
+        && !hasPriceOverride && item.frozenLandedCostPerRequestedUnitThb != null;
+      const marginInvalid = marginDrives && !(marginDraftNum != null && marginDraftNum > -1);
+      const sellingBuffer = Number(formulaConfigQuery.data?.sellingBuffer) || 1;
+      const marginList = marginDrives && !marginInvalid
+        ? round2(Number(item.frozenLandedCostPerRequestedUnitThb) * (1 + marginDraftNum) * sellingBuffer
+            / (decision.currency === 'THB' ? 1 : (Number(decision.fxRateUsed) || 1)))
+        : null;
       const listDraft = draft.listUnitPrice;
-      const listInputValue = listDraft ?? currentList ?? '';
+      // When margin drives, ราคาตั้ง reflects the computed value (read-only); otherwise it is the
+      // CEO's own typed/stored list.
+      const listInputValue = marginList != null ? marginList : (listDraft ?? currentList ?? '');
       const listDraftNumber = cleanNumber(listDraft);
       // Java rejects a non-positive ราคาตั้ง (stock: "> 0"; override: non-negative, and 0 would
       // price the line at zero), so the UI refuses it up front instead of round-tripping a 400.
       // Blank is NOT invalid: on an override line it means "clear the override".
-      const listInvalid = listDraft != null && listDraft !== '' && !(listDraftNumber > 0);
+      const listInvalid = !marginDrives && listDraft != null && listDraft !== '' && !(listDraftNumber > 0);
       // A blanked input on a line that has an override means "drop the override" (server then
       // falls back to listUnitPrice); on any other line a blank simply leaves the price as saved.
-      const previewList = listDraftNumber != null && !listInvalid ? listDraftNumber
-        : (listDraft === '' && hasPriceOverride && !isStockLine) ? item.listUnitPrice
-          : currentList;
+      const previewList = marginList != null ? marginList
+        : (listDraftNumber != null && !listInvalid ? listDraftNumber
+          : (listDraft === '' && hasPriceOverride && !isStockLine) ? item.listUnitPrice
+            : currentList);
       const previewNet = previewCeoNetUnitPrice(decision.priceMode, {
         listUnitPrice: previewList,
         discountPct: draft.discountPct ?? item.discountPct,
@@ -2195,18 +2220,19 @@ export function PricingRequestDetailPage({ user, showToast }) {
       const missingModeInputForList = listChanged && isStockLine && (
         (decision.priceMode === 'DIRECT_NET' && modeInputBlank(draft.directNetPrice ?? item.directNetPrice))
         || (decision.priceMode === 'SPECIAL_SQM' && modeInputBlank(draft.specialPriceSqm ?? item.specialPriceSqm)));
-      const saveDisabled = listInvalid || missingModeInputForList || !(otherDraftDirty || listChanged);
+      const saveDisabled = listInvalid || marginInvalid || missingModeInputForList || !(otherDraftDirty || listChanged);
       const costForcedOpen = showCost && Boolean(costingItem?.uncostableReason || costingItem?.overrideStale);
       const listPriceField = (
         <div className="flex flex-col gap-1">
-          <FormField label="ราคาตั้ง/แผ่น" htmlFor={`pcr-ceo-list-price-${item.id}`}>
+          <FormField label="ราคาตั้ง/แผ่น" htmlFor={`pcr-ceo-list-price-${item.id}`}
+            hint={marginDrives ? 'คำนวณจากอัตรากำไร' : undefined}>
             <input
               id={`pcr-ceo-list-price-${item.id}`}
               type="number"
               min="0"
               max={PRICE_INPUT_MAX_12_2}
               step="0.01"
-              disabled={!editable}
+              disabled={!editable || marginDrives}
               value={listInputValue}
               onChange={(e) => updateCeoPriceDraft(item.id, { listUnitPrice: e.target.value })}
               data-testid={`pcr-ceo-list-price-${item.id}`}
@@ -2306,16 +2332,24 @@ export function PricingRequestDetailPage({ user, showToast }) {
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               {decision.priceMode === 'NET' ? (
                 <>
-                  {/* Per-product margin (owner request 2026-10-21): under NET the ราคาตั้ง starts from
-                      the formula (ต้นทุน × (1+กำไร) × ตัวคูณ), so setting a per-line margin here drives
-                      THIS line's ราคาตั้ง — ส่วนลด/สุทธิ then apply on top. Shown only on a cost-bearing
-                      line the formula still drives (not a stock line, not a "ปรับราคาเอง" override). */}
-                  {editable && showCost && !hasPriceOverride && item.frozenLandedCostPerRequestedUnitThb != null ? (
-                    <CeoLineMarginField
-                      item={item}
-                      disabled={saveLineMargin.isPending}
-                      onSave={(marginPct) => saveLineMargin.mutate({ decision, item, marginPct })}
-                    />
+                  {/* Per-product margin (owner request 2026-10-21): a LIVE input (like ส่วนลด, no
+                      separate save button) — typing it drives THIS line's ราคาตั้ง in real time
+                      (ต้นทุน × (1+กำไร) × ตัวคูณ) and the net/กำไร readout update with it; saved by the
+                      shared "บันทึกราคา" below as marginPct. Shown only on a cost-bearing NET line the
+                      formula still drives (not a stock line, not a "ปรับราคาเอง" override). */}
+                  {showCost && !hasPriceOverride && item.frozenLandedCostPerRequestedUnitThb != null ? (
+                    <FormField label="อัตรากำไร (เช่น 0.3 = 30%)" htmlFor={`pcr-ceo-margin-${item.id}`}
+                      error={marginInvalid ? 'อัตรากำไรต้องมากกว่า -1' : null}>
+                      <input
+                        id={`pcr-ceo-margin-${item.id}`}
+                        type="number"
+                        step="0.01"
+                        disabled={!editable}
+                        value={draft.marginPct ?? item.proposedMarginPct ?? ''}
+                        onChange={(e) => updateCeoPriceDraft(item.id, { marginPct: e.target.value })}
+                        data-testid={`pcr-ceo-margin-input-${item.id}`}
+                      />
+                    </FormField>
                   ) : null}
                   {listPriceField}
                   <FormField label="ส่วนลด %" htmlFor={`pcr-ceo-discount-${item.id}`}>

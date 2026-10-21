@@ -1959,9 +1959,10 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       expect(screen.queryByTestId('pcr-ceo-margin-input-8001')).toBeNull();
     });
 
-    it('new-form NET: offers the per-line margin input (it drives ราคาตั้ง), and saving sends a single-item marginPct payload', async () => {
+    it('new-form NET: the per-line margin is a LIVE input (no own button) that previews and saves via บันทึกราคา as marginPct', async () => {
       const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
       api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        // cost 60, no selling buffer mocked → buffer defaults to 1: margin 0.5 → list 90, net 90.
         items: [buildDecision({ priceMode: 'NET', items: [buildDecisionItem({ sqmPerPiece: 0.36 })] })],
       });
       renderDetailPage({ user: ceoUser, request });
@@ -1970,10 +1971,20 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
 
       const input = screen.getByTestId('pcr-ceo-margin-input-8001');
       expect(input.value).toBe('0.2');
-      fireEvent.change(input, { target: { value: '0.4' } });
-      fireEvent.click(screen.getByTestId('pcr-ceo-margin-save-8001'));
+      // No separate margin save button — the realtime model has only the shared บันทึกราคา.
+      expect(screen.queryByTestId('pcr-ceo-margin-save-8001')).toBeNull();
+
+      // Typing updates the realized-margin readout LIVE, before any save (cost 60 → margin 0.5 →
+      // net 90 → profit 30/unit, 50%).
+      fireEvent.change(input, { target: { value: '0.5' } });
+      expect(screen.getByTestId('pcr-ceo-margin-readout-8001').textContent).toMatch(/฿30\.00.*50\.0%/);
+      // ราคาตั้ง reflects the margin-derived list (read-only).
+      expect(screen.getByTestId('pcr-ceo-list-price-8001').value).toBe('90');
+      expect(screen.getByTestId('pcr-ceo-list-price-8001').disabled).toBe(true);
+
+      fireEvent.click(screen.getByTestId('pcr-ceo-save-price-8001'));
       await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalledWith(
-        7001, { items: [{ pricingDecisionItemId: 8001, marginPct: 0.4 }] }));
+        7001, { items: [expect.objectContaining({ pricingDecisionItemId: 8001, marginPct: 0.5 })] }));
     });
 
     it('new-form SPECIAL_SQM: no margin input (price is set directly in that mode, not via margin)', async () => {
