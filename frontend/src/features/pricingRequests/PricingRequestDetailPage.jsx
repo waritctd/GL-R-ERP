@@ -286,6 +286,48 @@ function CeoLineMarginField({ item, disabled, onSave }) {
   );
 }
 
+/**
+ * Realized per-unit margin for a decision line (owner request 2026-10-21): the NET price the
+ * customer actually pays (in the decision's currency) minus the frozen LANDED cost (THB), converted
+ * to THB with the decision's own FX rate. Pure + module-level so both the new-form and legacy line
+ * renderers show the SAME number and it is unit-testable. Returns null when either side is missing
+ * (an uncostable line, or a line with no price yet). This is a DERIVED read-out, not a change to how
+ * any price is computed. {@code pct} is of COST (the same markup basis as the อัตรากำไร input).
+ */
+function lineProfitThb(costThb, netPriceInCurrency, fxRate) {
+  if (costThb == null || netPriceInCurrency == null || netPriceInCurrency === '') return null;
+  const netThb = Number(netPriceInCurrency) * (Number(fxRate) || 1);
+  const cost = Number(costThb);
+  if (!Number.isFinite(netThb) || !Number.isFinite(cost)) return null;
+  const profitPerUnit = netThb - cost;
+  return { profitPerUnit, pct: cost > 0 ? (profitPerUnit / cost) * 100 : null };
+}
+
+/**
+ * Shows a line's realized margin in BOTH ฿ and % on EVERY price mode (owner request 2026-10-21:
+ * "ทุกโหมดอยากให้เห็นชัด ๆ ว่ากำไรกี่บาทกี่ %"). Profit/unit = NET selling price − landed cost; the
+ * % is of cost; รวม is profit × quantity. Dashes out when the line has no cost or no price yet.
+ */
+function LineMarginReadout({ costThb, netPrice, fxRate, qty, testid }) {
+  const m = lineProfitThb(costThb, netPrice, fxRate);
+  if (m == null) {
+    return (
+      <span className="text-2xs text-text-muted" data-testid={testid}>
+        กำไร/หน่วย: — (ต้องมีต้นทุนและราคาก่อน)
+      </span>
+    );
+  }
+  const total = qty != null && qty !== '' ? m.profitPerUnit * Number(qty) : null;
+  const tone = m.profitPerUnit < 0 ? 'text-danger' : 'text-success';
+  return (
+    <span className={`text-2xs font-semibold ${tone}`} data-testid={testid}>
+      กำไร/หน่วย: <code>{formatCurrency(round2(m.profitPerUnit), 'THB')}</code>
+      {m.pct != null ? ` (${m.pct.toFixed(1)}% ของต้นทุน)` : ''}
+      {total != null ? <> · รวม <code>{formatCurrency(round2(total), 'THB')}</code></> : null}
+    </span>
+  );
+}
+
 function generateClientRequestId() {
   return crypto.randomUUID?.()
     ?? '00000000-0000-4000-8000-' + String(Date.now()).slice(-12).padStart(12, '0');
@@ -2225,6 +2267,13 @@ export function PricingRequestDetailPage({ user, showToast }) {
           <span className="text-[length:var(--text-base)] font-bold text-text">
             รวมเป็นเงิน: {lineTotal != null ? formatCurrency(lineTotal, decision.currency) : '-'}
           </span>
+          <LineMarginReadout
+            costThb={item.frozenLandedCostPerRequestedUnitThb}
+            netPrice={displayNet}
+            fxRate={decision.fxRateUsed}
+            qty={item.requestedQuantity}
+            testid={`pcr-ceo-margin-readout-${item.id}`}
+          />
         </div>
       );
       return (
@@ -2257,6 +2306,17 @@ export function PricingRequestDetailPage({ user, showToast }) {
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               {decision.priceMode === 'NET' ? (
                 <>
+                  {/* Per-product margin (owner request 2026-10-21): under NET the ราคาตั้ง starts from
+                      the formula (ต้นทุน × (1+กำไร) × ตัวคูณ), so setting a per-line margin here drives
+                      THIS line's ราคาตั้ง — ส่วนลด/สุทธิ then apply on top. Shown only on a cost-bearing
+                      line the formula still drives (not a stock line, not a "ปรับราคาเอง" override). */}
+                  {editable && showCost && !hasPriceOverride && item.frozenLandedCostPerRequestedUnitThb != null ? (
+                    <CeoLineMarginField
+                      item={item}
+                      disabled={saveLineMargin.isPending}
+                      onSave={(marginPct) => saveLineMargin.mutate({ decision, item, marginPct })}
+                    />
+                  ) : null}
                   {listPriceField}
                   <FormField label="ส่วนลด %" htmlFor={`pcr-ceo-discount-${item.id}`}>
                     <div className="flex items-center gap-1.5">
@@ -2459,6 +2519,13 @@ export function PricingRequestDetailPage({ user, showToast }) {
           <span className="text-[length:var(--text-base)] font-bold text-text">
             ราคาขาย (ก่อน VAT): {formatCurrency(effectivePrice, decision.currency)}
           </span>
+          <LineMarginReadout
+            costThb={item.frozenLandedCostPerRequestedUnitThb}
+            netPrice={effectivePrice}
+            fxRate={decision.fxRateUsed}
+            qty={item.requestedQuantity}
+            testid={`pcr-ceo-margin-readout-${item.id}`}
+          />
         </div>
         {costingItem?.uncostableReason ? (
           <p className="mt-2 text-xs text-warning">{costingItem.uncostableReason}</p>
