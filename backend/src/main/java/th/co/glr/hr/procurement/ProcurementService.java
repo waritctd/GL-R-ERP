@@ -26,10 +26,8 @@ import th.co.glr.hr.procurement.ProcurementRequests.RecordGoodsReceivedRequest;
 import th.co.glr.hr.procurement.ProcurementRequests.RecordShippingDetailRequest;
 import th.co.glr.hr.procurement.ProcurementRequests.RecordSupplierProformaRequest;
 import th.co.glr.hr.notification.NotificationRepository;
-import th.co.glr.hr.ticket.DealStage;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
-import th.co.glr.hr.ticket.TicketSummaryDto;
 
 /**
  * Step 7 of the sales pricing-flow redesign: Factory Purchase Order and Import Execution.
@@ -56,13 +54,18 @@ import th.co.glr.hr.ticket.TicketSummaryDto;
  * weaker.</strong> A PO may only be created once BOTH: (1) {@code pricing_request.status ==
  * QUOTATION_ACCEPTED} (Step 5's terminal status — the only status a {@code pricing_costing_item}
  * chain can ever be trusted as "sold", since {@code PricingRequestStatus.ALLOWED} never moves a
- * request past it), AND (2) the deal has already reached {@code DealStage.PROCUREMENT} — i.e.
- * {@code TicketService.issueImportRequest} has already fired for this ticket. The task explicitly
- * asked for a gate "consistent with {@code issueImportRequest}'s own existing precondition, do
- * not invent a weaker gate" — reusing {@code DealStage.PROCUREMENT} (rather than re-deriving
- * {@code issueImportRequest}'s own quotation/deposit boolean logic a second time in a sibling
- * package) is the strictest available reading of that instruction: a PO cannot exist before
- * Import has actually issued the import request for this deal.
+ * request past it), AND (2) an import request has been issued for the deal — the durable {@code
+ * IR_ISSUED} ticket event that {@code TicketService.issueImportRequest} and {@code
+ * TicketService#recordFirstImportRequestIssued} write ({@code
+ * TicketRepository#hasIssuedImportRequest}). The task explicitly asked for a gate "consistent
+ * with {@code issueImportRequest}'s own existing precondition, do not invent a weaker gate" —
+ * reading that method's own event (rather than re-deriving its quotation/deposit boolean logic
+ * a second time in a sibling package) is the strictest available reading of that instruction: a
+ * PO cannot exist before Import has actually issued the import request for this deal. The deal
+ * stage is deliberately NOT consulted: a partial stock declaration advances a mixed deal past
+ * {@code DealStage.PROCUREMENT} to {@code DELIVERY_SCHEDULING} before its import lines are
+ * ordered (owner ruling 2026-10-22), and the same declaration can move a deal that never issued
+ * an import request there too.
  *
  * <p><strong>The PO rollup is now the source of truth for the ticket's IMPORT axis.</strong> Every
  * PO-progressing call here ({@link #recordShippingDetail}, {@link #recordGoodsReceived}, {@link
@@ -75,9 +78,11 @@ import th.co.glr.hr.ticket.TicketSummaryDto;
  * "delegate" to the PO record it doesn't reference, and refusing is the only option that invents
  * no data (see those two methods' own comments for the fuller reasoning). {@code
  * TicketService#markIrSent} and {@code #issueImportRequest} are UNAFFECTED — POs cannot exist
- * before {@code issueImportRequest} runs (they require {@code DealStage.PROCUREMENT}, which only
- * that method sets), and IR_SENT is a pre-shipment milestone the POs say nothing about, so neither
- * can ever be contradicted by the PO rollup. The DELIVERY axis ({@code reserveStock}/{@code
+ * before {@code issueImportRequest} runs (they require its {@code IR_ISSUED} event, written only
+ * by {@code issueImportRequest} and {@code recordFirstImportRequestIssued} — not the deal stage,
+ * which a partial stock declaration advances past PROCUREMENT, owner ruling 2026-10-22), and
+ * IR_SENT is a pre-shipment milestone the POs say nothing about, so neither can ever be
+ * contradicted by the PO rollup. The DELIVERY axis ({@code reserveStock}/{@code
  * recordPartialDelivery}/{@code completeDelivery}, {@code FROM_STOCK}/{@code
  * PARTIALLY_DELIVERED}/{@code FULLY_DELIVERED}) is untouched by any of this — the rollup only ever
  * writes while the ticket is still on the import axis, by design (the delivery-axis firewall in
@@ -139,10 +144,9 @@ public class ProcurementService {
             throw new ApiException(HttpStatus.CONFLICT,
                 "สร้างใบสั่งซื้อโรงงานได้เฉพาะคำขอราคาที่ลูกค้ายอมรับใบเสนอราคาแล้วเท่านั้น (ปัจจุบัน: " + summary.status() + ")");
         }
-        TicketSummaryDto ticket = requireTicketSummary(summary.ticketId());
-        if (!DealStage.PROCUREMENT.equals(ticket.salesStage())) {
+        if (!tickets.hasIssuedImportRequest(summary.ticketId())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "สร้างใบสั่งซื้อโรงงานได้หลังจากออกคำขอนำเข้า (Import Request) แล้วเท่านั้น (สถานะดีลปัจจุบัน: " + ticket.salesStage() + ")");
+                "สร้างใบสั่งซื้อโรงงานได้หลังจากออกคำขอนำเข้า (Import Request) แล้วเท่านั้น");
         }
 
         long pricingCostingId = purchaseOrders.findApprovedPricingCostingId(pricingRequestId)
@@ -346,12 +350,6 @@ public class ProcurementService {
     private PricingRequestSummaryDto requirePricingRequest(long pricingRequestId) {
         return pricingRequests.findSummary(pricingRequestId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบคำขอราคานี้"));
-    }
-
-    private TicketSummaryDto requireTicketSummary(long ticketId) {
-        return tickets.findById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"))
-            .summary();
     }
 
     private FactoryPurchaseOrderDto requirePo(long id) {
