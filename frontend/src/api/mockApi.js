@@ -3925,9 +3925,9 @@ function reserveStockForTicket(ticket, user, payload = {}) {
   if (allCovered && (ticket.fulfillmentStatus == null || ticket.fulfillmentStatus === 'FROM_STOCK')) {
     ticket.fulfillmentStatus = 'FROM_STOCK';
   }
-  // Mirrors TicketService#reserveStock, owner ruling 2026-10-22: sales must not wait on import or
-  // account to reach นัดส่ง. Any declared quantity advances straight to DELIVERY_SCHEDULING (S18),
-  // full coverage or not; only FROM_STOCK above stays tied to full coverage.
+  // Mirrors TicketService#reserveStock, owner ruling 2026-10-22: any declared quantity moves the
+  // deal to นัดส่ง (DELIVERY_SCHEDULING, S18) at once, full coverage or not, waiting on nobody
+  // else's step (import's IR, or anyone's approval); only FROM_STOCK above stays tied to full coverage.
   if (total > 0) autoAdvanceStage(ticket, 'DELIVERY_SCHEDULING', user);
 }
 

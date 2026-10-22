@@ -1203,8 +1203,9 @@ class TicketServiceTest {
 
     // ── any declaration moves the deal to นัดส่ง (owner ruling 2026-10-22) ─────────
     //
-    // Sales must not wait on import or account to reach DELIVERY_SCHEDULING: a declaration with any
-    // quantity advances the stage, while FROM_STOCK stays tied to full coverage.
+    // A declaration with any quantity moves the deal to DELIVERY_SCHEDULING at once, waiting on
+    // nobody else's step (import's IR, or anyone's approval), while FROM_STOCK stays tied to full
+    // coverage.
 
     @Test
     void reserveStock_partialCoverage_advancesToDeliverySchedulingButStaysOnImportAxis() {

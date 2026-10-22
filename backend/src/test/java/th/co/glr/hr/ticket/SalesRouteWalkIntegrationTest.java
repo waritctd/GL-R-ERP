@@ -381,9 +381,9 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.DEPOSIT_RECEIVED);
 
         // Declare item 1 fully covered from stock; item 2 is left untouched (0). Coverage is
-        // PARTIAL: the stage still moves to DELIVERY_SCHEDULING (owner ruling 2026-10-22 — sales
-        // must not wait on import or account to reach นัดส่ง), but FROM_STOCK is NOT set, so the
-        // deal stays on the import axis for item 2.
+        // PARTIAL: the stage still moves to DELIVERY_SCHEDULING (owner ruling 2026-10-22 — any
+        // declared quantity moves the deal to นัดส่ง at once, waiting on nobody else's step), but
+        // FROM_STOCK is NOT set, so the deal stays on the import axis for item 2.
         ticketService.reserveStock(ticketId,
             new StockReservationRequest(List.of(
                 new StockReservationRequest.Line(item1, new BigDecimal("40.00"), "มีของครบในสต็อก"))),
