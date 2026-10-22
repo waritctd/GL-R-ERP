@@ -157,11 +157,9 @@ public class DepositNoticeRepository {
         return v2Pct != null ? Optional.of(BigDecimal.valueOf(v2Pct, 2)) : Optional.empty();
     }
 
-    /** {@code list.stream().findFirst()} throws NPE the moment the single mapped row's own value
-     * is {@code null} ({@code Stream.findFirst}/{@code Optional.of} both reject a null element
-     * outright) — exactly the case a LIVE quotation with a not-yet-set {@code deposit_percent}
-     * hits. A plain index avoids that without changing what "no row" vs "row, null value" mean to
-     * the caller (both still read as "nothing usable here"). */
+    /** First mapped row or {@code null} when the query matched nothing. Both queries above now
+     * COALESCE the percent, so a mapped value is never null; this stays index-based rather than
+     * {@code stream().findFirst()} so a future null column cannot turn into an NPE. */
     private static <T> T firstOrNull(List<T> rows) {
         return rows.isEmpty() ? null : rows.get(0);
     }
