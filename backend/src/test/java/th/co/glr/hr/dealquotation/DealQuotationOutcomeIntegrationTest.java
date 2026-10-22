@@ -326,6 +326,34 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
             Map.of("id", ticketId), Long.class)).isZero();
     }
 
+    /** The ticket route (POST /api/tickets/{id}/deposit-notice/draft) had no owner check, unlike
+     * update/issue: another rep could draft on this deal and read its lines, prices and customer. */
+    @Test
+    void createDraft_ticketRoute_byNonOwningSales_refusedAndWritesNothing() {
+        var emptyRequest = new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null);
+        // Owner before status: a non-owner must not learn whether another rep's deal is approved yet
+        // (403 here, not the 409 the owner would get on this still-unapproved ticket).
+        assertThatThrownBy(() -> depositNoticeService.createDraft(ticketId, emptyRequest, otherSalesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.FORBIDDEN);
+
+        DealQuotationDto accepted = acceptedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
+        orderConfirmation.confirmOrder(accepted.pricingRequestId(),
+            new OrderConfirmationRequests.ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
+
+        assertThatThrownBy(() -> depositNoticeService.createDraft(ticketId, emptyRequest, otherSalesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.FORBIDDEN)
+            .hasMessageContaining("ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sales.deposit_notice WHERE ticket_id = :id",
+            Map.of("id", ticketId), Long.class)).isZero();
+
+        // Positive control: the owner still drafts on the same deal.
+        assertThat(depositNoticeService.createDraft(ticketId, emptyRequest, salesActor).ticketId()).isEqualTo(ticketId);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sales.deposit_notice WHERE ticket_id = :id",
+            Map.of("id", ticketId), Long.class)).isEqualTo(1L);
+    }
+
     /** An open revision draft outranks the accepted quotation by id: recordOutcome has no
      * open-revision guard, so "latest for this pricing request" is not "accepted". */
     @Test
