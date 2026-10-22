@@ -105,6 +105,12 @@ public class DepositNoticeService {
         requireTicketOwner(ticketId, actor);
         TicketSummaryDto s = requireApprovedTicket(ticketId, actor);
         requireActiveLifecycle(s);
+        // Both routes: a deal off the deposit path (a ไม่รับมัดจำ quotation, a waiver, a credit
+        // customer) has no deposit to bill, and issue() would refuse the draft anyway.
+        if (DepositPolicy.bypassesDepositNotice(s.depositPolicy())) {
+            throw new ApiException(HttpStatus.CONFLICT, "ดีลนี้ไม่ต้องเก็บมัดจำ (นโยบายมัดจำ "
+                + s.depositPolicy() + ") จึงสร้างใบแจ้งรับมัดจำไม่ได้");
+        }
 
         // Auto-populate items from approved ticket items (legacy) or, failing that, the
         // ticket's own customer-quotation chain (new pricing-request flow) if not provided.
@@ -211,8 +217,8 @@ public class DepositNoticeService {
         // not left to fall through to advancePaymentStatus below, which would throw an uncaught
         // IllegalStateException (ApiExceptionHandler has no handler for it, so it would surface as
         // an opaque 500, not a controlled conflict). Found while writing PaymentTrackIntegrationTest's
-        // off-path case; a bypass-policy deal CAN reach a DRAFT deposit notice today (createDraft
-        // does not check deposit_policy), so this is a genuinely reachable path, not hypothetical.
+        // off-path case; a bypass-policy deal CAN still hold a DRAFT deposit notice (one drafted while
+        // the deal was REQUIRED survives a later waiver), so this is a genuinely reachable path.
         // On a bypass policy, issuing a deposit notice now throws — a deliberate behaviour change
         // from rule 4; see the branch report.
         boolean paymentTrackReady = !DepositPolicy.bypassesDepositNotice(s.depositPolicy())
@@ -220,6 +226,11 @@ public class DepositNoticeService {
         if (!TicketStatus.QUOTATION_ISSUED.equals(s.status()) || !paymentTrackReady) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "ออกใบแจ้งรับมัดจำได้เฉพาะเมื่อออกใบเสนอราคาแล้วและลูกค้ายืนยันคำสั่งซื้อแล้วเท่านั้น");
+        }
+        // A 0-baht draft (e.g. a ticket-route draft on a deal whose quotation says ไม่รับมัดจำ but
+        // whose policy predates the confirmation sync) must not take a document number.
+        if (doc.depositAmount() == null || doc.depositAmount().signum() <= 0) {
+            throw new ApiException(HttpStatus.CONFLICT, "ใบแจ้งรับมัดจำนี้มียอดมัดจำ 0 บาท จึงออกเอกสารไม่ได้");
         }
         // Issuing advances the payment track — a paused/terminal deal must not move
         // (Phase 1 lifecycle gate; mirrors TicketService.requireActive).

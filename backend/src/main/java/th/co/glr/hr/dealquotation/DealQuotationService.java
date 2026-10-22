@@ -2178,7 +2178,7 @@ public class DealQuotationService {
         // or stock reservation exists — both key on quotation_issued or later), and the only other
         // reference to a ticket_item, pricing_request_item.source_ticket_item_id, is ON DELETE SET NULL.
         tickets.replaceItems(ticketId, ticketItemsFromQuotation(fresh));
-        ticketService.confirmCustomerForPromotedQuotation(ticketId, actor);
+        ticketService.confirmCustomerForPromotedQuotation(ticketId, fresh.number(), fresh.depositPercent(), actor);
         return promotionResult(ticketId, quotationId);
     }
 
