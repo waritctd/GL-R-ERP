@@ -61,6 +61,8 @@ export const SALES_ACTION = {
   REVISE_QUOTATION: 'revise_quotation',
   ADVANCE_STAGE: 'advance_stage',
   CREATE_PCR: 'create_pcr',
+  // Owner ruling 2026-10-22: after a non-buyer acceptance, เสนอราคา to a remaining party on the route.
+  QUOTE_NEXT_PARTY: 'quote_next_party',
   ISSUE_QUOTATION: 'issue_quotation',
   CONFIRM_ORDER: 'confirm_order',
   RECORD_QUOTATION_OUTCOME: 'record_quotation_outcome',
@@ -79,7 +81,6 @@ const ACTION_LABEL = {
   // Generic for the worklist; the deal page names the next stage (เลื่อนไป: 2. นำเสนอสินค้า).
   [SALES_ACTION.ADVANCE_STAGE]: 'เลื่อนขั้น',
   [SALES_ACTION.REVISE_QUOTATION]: 'แก้ใบเสนอราคา',
-  [SALES_ACTION.ISSUE_QUOTATION]: 'ออกใบเสนอราคา',
   [SALES_ACTION.CONFIRM_ORDER]: 'ยืนยันคำสั่งซื้อ',
   // "Record the quotation outcome" — deliberately not "ติดตามผล"/"ติดตามลูกค้า" (that's
   // FOLLOW_UP's own label, a nudge to go chase the customer): by the time this bucket fires, the
@@ -114,6 +115,7 @@ const ACTION_LABEL = {
 // rank (5): visible in the worklist, never ahead of something the rep can actually do.
 const ACTION_RANK = {
   [SALES_ACTION.CONFIRM_ORDER]: 1,
+  [SALES_ACTION.QUOTE_NEXT_PARTY]: 1,
   [SALES_ACTION.CONFIRM_ORDER_DIRECT]: 1,
   [SALES_ACTION.ISSUE_QUOTATION]: 2,
   [SALES_ACTION.SUBMIT_DIRECT_QUOTATION]: 2,
@@ -177,6 +179,37 @@ const QUOTED_STATUSES = new Set(['quotation_issued', 'document_issued']);
 
 const PRE_SPEC_STAGES = new Set(['LEAD_APPROACH', 'PRESENTATION']);
 
+// Quote route order. The labels are a short phrase for after a verb ("เสนอราคาผู้ซื้อ"), not the ผู้รับ
+// chip labels (ผู้ซื้อ / ผู้รับเหมา).
+const PARTY_ROUTE = ['DESIGNER', 'OWNER', 'BUYER'];
+export const PARTY_LABEL = { DESIGNER: 'ผู้ออกแบบ', OWNER: 'เจ้าของโครงการ', BUYER: 'ผู้ซื้อ' };
+const DEAD_PR_STATUSES = new Set(['CANCELLED', 'SUPERSEDED']);
+
+const isAcceptedUnconfirmed = (pr) => pr.status === 'QUOTATION_ACCEPTED' && !pr.orderConfirmedAt;
+
+/** canConfirmOrder's gate as seen from the list row: an accepted request on a ticket the order
+ * bridge can advance (OrderConfirmationService.isBridgeableTicketStatus). */
+function confirmOrderGatePasses(deal, pricingRequests = []) {
+  return pricingRequests.some((pr) => pr.ticketId === deal?.id && isAcceptedUnconfirmed(pr))
+    && (deal?.status == null || BRIDGEABLE_TICKET_STATUSES.has(deal.status));
+}
+
+/** Bucket 3's view of the route. `from` is the furthest accepted request's party (-1 for none or
+ * an unknown recipient); `inFlight` is true when a LATER party already has a live request, i.e. the
+ * rep has already chosen to continue the route; `remaining` lists every later party still on the
+ * route, in route order.
+ * An order already confirmed on this deal ends the route. */
+function routeState(ownPrs, offRouteParties) {
+  const confirmed = ownPrs.some((pr) => pr.orderConfirmedAt);
+  const from = Math.max(-1, ...ownPrs.filter(isAcceptedUnconfirmed).map((pr) => PARTY_ROUTE.indexOf(pr.recipientType)));
+  const inFlight = from >= 0 && ownPrs.some((pr) =>
+    PARTY_ROUTE.indexOf(pr.recipientType) > from && !DEAD_PR_STATUSES.has(pr.status));
+  const remaining = confirmed || from < 0 || inFlight
+    ? []
+    : PARTY_ROUTE.slice(from + 1).filter((party) => !offRouteParties?.has(party));
+  return { inFlight, remaining, acceptedParty: PARTY_ROUTE[from] };
+}
+
 /**
  * The one next action `deal` needs from its owning sales rep right now, or
  * null if nothing in the 7-bucket cascade applies (e.g. the request is with
@@ -186,7 +219,7 @@ const PRE_SPEC_STAGES = new Set(['LEAD_APPROACH', 'PRESENTATION']);
  * server-side, see api.pricingRequests.queue) — filtered here to the ones
  * belonging to this ticket.
  */
-export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = null } = {}) {
+export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = null, offRouteParties = null } = {}) {
   if (!deal || deal.lifecycle !== 'ACTIVE') return null;
 
   // 0. Slice 2 — flow A (SLICE-2-FLOW-A.md §E, IA §4): a LIVE direct quotation. Checked BEFORE
@@ -265,8 +298,14 @@ export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = nul
 
   // 2. A price is approved and ready to quote — canCreateCustomerQuotation's
   //    own gate (pricingRequestMeta.js) is exactly pr.status === 'APPROVED_FOR_QUOTATION'.
-  if (ownPrs.some((pr) => pr.status === 'APPROVED_FOR_QUOTATION')) {
-    return { key: SALES_ACTION.ISSUE_QUOTATION, label: ACTION_LABEL[SALES_ACTION.ISSUE_QUOTATION] };
+  //    "เสนอใบราคา<party>" writes the new-engine quotation from that request (owner ruling R2).
+  const approved = ownPrs.find((pr) => pr.status === 'APPROVED_FOR_QUOTATION');
+  if (approved) {
+    return {
+      key: SALES_ACTION.ISSUE_QUOTATION,
+      label: `เสนอใบราคา${PARTY_LABEL[approved.recipientType] ?? ''}`,
+      pricingRequestId: approved.id,
+    };
   }
 
   // 3. The customer accepted the quotation but the order isn't confirmed yet —
@@ -274,8 +313,20 @@ export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = nul
   //    Also gated on the deal's own ticket status being one the order-confirm bridge can advance
   //    (pricingRequestMeta's confirmOrderBlockedReason / OrderConfirmationService
   //    .isBridgeableTicketStatus) — otherwise the CTA is a button that can only 409.
-  if (ownPrs.some((pr) => pr.status === 'QUOTATION_ACCEPTED' && !pr.orderConfirmedAt)
-      && (deal.status == null || BRIDGEABLE_TICKET_STATUSES.has(deal.status))) {
+  //    A non-buyer acceptance with parties still on the route leads with เสนอราคา instead, listing
+  //    them (no ticket-status gate: creating a request never touches the bridge; no confirm offered).
+  //    Once the next party's request is in flight, bucket 3 offers neither: that request's own
+  //    buckets lead.
+  const route = routeState(ownPrs, offRouteParties);
+  if (route.remaining.length > 0) {
+    return {
+      key: SALES_ACTION.QUOTE_NEXT_PARTY,
+      label: `เสนอราคา${PARTY_LABEL[route.remaining[0]]}`,
+      parties: route.remaining,
+      acceptedParty: route.acceptedParty,
+    };
+  }
+  if (!route.inFlight && confirmOrderGatePasses(deal, ownPrs)) {
     return { key: SALES_ACTION.CONFIRM_ORDER, label: ACTION_LABEL[SALES_ACTION.CONFIRM_ORDER] };
   }
 
@@ -297,10 +348,13 @@ export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = nul
   //    sibling PR at QUOTATION_ISSUED (a stale, since-superseded round) while another reaches
   //    QUOTATION_ACCEPTED — CONFIRM_ORDER must win that race, same earliest-unblocked-step principle
   //    as the rest of this cascade.
-  if (ownPrs.some((pr) => pr.status === 'QUOTATION_ISSUED')) {
+  //    `pricingRequestId`: the outcome controls (both quotation engines) live on that request's page.
+  const issued = ownPrs.find((pr) => pr.status === 'QUOTATION_ISSUED');
+  if (issued) {
     return {
       key: SALES_ACTION.RECORD_QUOTATION_OUTCOME,
       label: ACTION_LABEL[SALES_ACTION.RECORD_QUOTATION_OUTCOME],
+      pricingRequestId: issued.id,
     };
   }
 

@@ -66,7 +66,7 @@ const deals = [
 ];
 
 const pricingRequests = [
-  { id: 1, ticketId: 602, status: 'APPROVED_FOR_QUOTATION', orderConfirmedAt: null },
+  { id: 1, ticketId: 602, status: 'APPROVED_FOR_QUOTATION', recipientType: 'BUYER', orderConfirmedAt: null },
   { id: 2, ticketId: 603, status: 'QUOTATION_ACCEPTED', orderConfirmedAt: null },
   { id: 3, ticketId: 604, status: 'SUBMITTED', orderConfirmedAt: null },
   { id: 4, ticketId: 605, status: 'IMPORT_REVIEWING', orderConfirmedAt: null },
@@ -166,7 +166,7 @@ describe('SalesOverview', () => {
     }
 
     expect(within(ctaFor('บริษัท เอ จำกัด')).getByText('สร้างคำขอราคา')).not.toBeNull(); // no PR at all
-    expect(within(ctaFor('บริษัท บี จำกัด')).getByText('ออกใบเสนอราคา')).not.toBeNull(); // APPROVED_FOR_QUOTATION
+    expect(within(ctaFor('บริษัท บี จำกัด')).getByText('เสนอใบราคาผู้ซื้อ')).not.toBeNull(); // APPROVED_FOR_QUOTATION, named for its recipient
     expect(within(ctaFor('บริษัท ซี จำกัด')).getByText('ยืนยันคำสั่งซื้อ')).not.toBeNull(); // QUOTATION_ACCEPTED, not confirmed
     expect(within(ctaFor('บริษัท ดี จำกัด')).getByText('ติดตามลูกค้า')).not.toBeNull(); // follow-up overdue
     expect(within(ctaFor('บริษัท อี จำกัด')).getByText('ติดตามลูกค้า')).not.toBeNull(); // follow-up due today

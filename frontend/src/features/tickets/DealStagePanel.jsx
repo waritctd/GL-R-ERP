@@ -16,6 +16,7 @@ import {
   AUTO_STAGE_HINT, GATE_LABEL, routeName, STAGE_HEADLINE,
 } from './stageMeta.js';
 import { UpdateStageModal } from './UpdateStageModal.jsx';
+import { stageForQuotationRecipient } from '../quotations/quotationMeta.js';
 
 function daysSince(iso) {
   if (!iso) return null;
@@ -80,6 +81,9 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   summary, availableActions = [], stageDecisions = [], catalog = EMPTY_STAGE_CATALOG,
   docActions, primaryAction, actionLoading,
   advanceReady = true, advanceInHeader = false,
+  // Owner ruling 2026-10-22: the parties the sticky เสนอราคา menu offers, in route order. With more
+  // than one, ถัดไป names the skip too ("… หรือข้ามไป 8. …").
+  quoteParties = null,
   onUpdateStage, onMarkLost, onReopen, onHold, onDormant, onResume, onSetTenderRequirement,
   onSetEntryChannel,
 }, ref) {
@@ -336,6 +340,12 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
               <div data-testid="deal-stage-next" className="text-sm leading-snug text-text">
                 <span className="font-bold text-text-muted">ถัดไป: </span>
                 <span className="font-extrabold">{next.no}. {dealStageLabel(next.code, summary.entryChannel).label}</span>
+                {quoteParties?.length > 1 ? quoteParties.slice(1).map((party) => {
+                  const stage = findStage(catalog, stageForQuotationRecipient(party));
+                  return stage ? (
+                    <span key={party}> หรือข้ามไป <span className="font-extrabold">{stage.no}. {dealStageLabel(stage.code, summary.entryChannel).label}</span></span>
+                  ) : null;
+                }) : null}
                 {nextHint ? <span className="text-text-secondary"> — {nextHint}</span> : null}
               </div>
             ) : null}

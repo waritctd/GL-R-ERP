@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useQueries, useQuery } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
@@ -316,6 +317,8 @@ export function DealDocumentRegister({
     meta: `ครั้งที่ ${q.revisionNo ?? 1}`,
     // Mirrors DealDirectQuotationPanel: PDF + Excel for every status.
     actions: pdfXlsx('direct', downloadDirectQuotation, q),
+    // The whole row opens the quotation (the query that lists these is gated on canViewDealQuotation).
+    to: `/quotations/${q.id}`,
   });
   const depositItem = (doc) => ({
     id: doc.id,
@@ -507,16 +510,23 @@ function DocumentGroup({ items }) {
 // 8px gap between them is kept by `gap-2`. Desktop stays compact.
 const TOUCH_TARGET = 'nav-drawer:min-h-11 nav-drawer:min-w-11';
 
-function DocumentRow({ testId, icon, title, meta, status, date, amount, recipient, actions = [], muted = false }) {
+function DocumentRow({ testId, icon, title, meta, status, date, amount, recipient, actions = [], muted = false, to }) {
   const hasAmount = amount !== undefined && amount !== null;
   const metaText = [date ? formatThaiDate(date) : null, meta].filter(Boolean).join(' · ');
   return (
     // Line 1: number + status + recipient (wraps). Line 2: date/meta. Line 3 (mobile) / right side
     // of line 2 (desktop): amount on the left, actions on the right.
-    <div data-testid={testId} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+    // `to`: the title is a link stretched over the whole row (keyboard-reachable as one link); the
+    // action buttons sit above that overlay so PDF/Excel never navigate. `isolate` keeps their z-10
+    // inside the row, so they never paint over the page's sticky header (also z-10, earlier in the DOM).
+    <div data-testid={testId} className={cn('flex flex-wrap items-center justify-between gap-x-3 gap-y-1', to && 'relative isolate rounded hover:bg-surface-hover')}>
       <div className="flex min-w-0 max-w-full flex-wrap items-center gap-x-2 gap-y-1">
         {!muted && icon ? <Icon name={icon} size={13} style={{ color: 'var(--color-text-muted)', flexShrink: 0 }} /> : null}
-        <span className={cn('min-w-0 truncate mobile:whitespace-normal mobile:break-all', muted ? 'text-xs text-text-muted' : 'text-sm font-bold text-text')}>{title}</span>
+        {to ? (
+          <Link to={to} className={cn('min-w-0 truncate text-link after:absolute after:inset-0 mobile:whitespace-normal mobile:break-all', muted ? 'text-xs' : 'text-sm font-bold')}>{title}</Link>
+        ) : (
+          <span className={cn('min-w-0 truncate mobile:whitespace-normal mobile:break-all', muted ? 'text-xs text-text-muted' : 'text-sm font-bold text-text')}>{title}</span>
+        )}
         {status ? <StatusBadge tone={status.tone}>{status.label}</StatusBadge> : null}
         {/* Recipient of the whole document: shown on the current (top) row only. */}
         {recipient && !muted ? (
@@ -533,7 +543,7 @@ function DocumentRow({ testId, icon, title, meta, status, date, amount, recipien
             <span className={cn('tabular-nums', muted ? 'text-xs text-text-muted' : 'text-sm text-text')}>{formatMoney(amount)}</span>
           ) : null}
           {actions.length > 0 ? (
-            <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+            <div className="relative z-10 ml-auto flex flex-wrap items-center justify-end gap-2">
               {actions.map((action) => (action.href ? (
                 // Not a <Button>: this is a real navigation link (target="_blank" to
                 // a file URL) — Button renders a <button>, which has no href.

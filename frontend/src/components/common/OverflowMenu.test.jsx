@@ -59,6 +59,19 @@ describe('OverflowMenu', () => {
     expect(trigger.textContent).toContain('เอกสาร');
   });
 
+  it('passes triggerProps (e.g. data-testid / data-action) onto the trigger, labelled or icon-only', () => {
+    const props = { 'data-testid': 'ticket-primary-action', 'data-action': 'quote_next_party' };
+    const { unmount } = render(<OverflowMenu items={items()} label="เสนอราคา" triggerLabel="เสนอราคา" triggerProps={props} />);
+    let trigger = screen.getByTestId('ticket-primary-action');
+    expect(trigger).toBe(screen.getByRole('button', { name: 'เสนอราคา' }));
+    expect(trigger.getAttribute('data-action')).toBe('quote_next_party');
+    unmount();
+
+    render(<OverflowMenu items={items()} triggerProps={props} />);
+    trigger = screen.getByTestId('ticket-primary-action');
+    expect(trigger).toBe(screen.getByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
+  });
+
   it('keeps menu items at the mobile 44px touch target floor without changing desktop density', () => {
     render(<OverflowMenu items={items()} />);
     fireEvent.click(screen.getByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));

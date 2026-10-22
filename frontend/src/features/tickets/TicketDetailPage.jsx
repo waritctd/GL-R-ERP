@@ -21,6 +21,7 @@ import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { fieldErrorId } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
+import { OverflowMenu } from '../../components/common/OverflowMenu.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { Skeleton, SkeletonText } from '../../components/common/Skeleton.jsx';
@@ -53,13 +54,14 @@ import { DealMoneyTimeline } from './DealMoneyTimeline.jsx';
 import { DealRemainingInvoiceCard } from './DealRemainingInvoiceCard.jsx';
 import { DealQuotationPanel } from './DealQuotationPanel.jsx';
 import {
-  canReviseDealQuotation, canViewDealQuotation, CONFIRM_ORDER_FROM_QUOTATION_COPY,
+  canReviseDealQuotation, canViewDealQuotation, CONFIRM_ORDER_FROM_QUOTATION_COPY, recipientForDealStage,
 } from '../quotations/quotationMeta.js';
 import { DealStagePanel } from './DealStagePanel.jsx';
 import { DealStateHeader } from './DealStateHeader.jsx';
 import { DealTrackingPanel } from './DealTrackingPanel.jsx';
 import { visibleSections } from './salesViewScope.js';
 import { nextOnRoute, useStageCatalog } from './stageCatalog.js';
+import { PARTY_LABEL } from './salesActions.js';
 import {
   resolveTicketDetailTab, TICKET_DETAIL_TABS, visibleTicketDetailTabIds,
 } from './ticketDetailTabs.js';
@@ -691,6 +693,15 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     },
   });
 
+  // "เสนอใบราคา<party>": write the new-engine quotation from the approved request and open it — the
+  // same call PricingRequestDetailPage makes. The server hands back the request's open draft instead
+  // of minting a second one (DealQuotationService#createFromPricingRequest).
+  const createQuotationFromRequestMutation = useMutation({
+    mutationFn: (pricingRequestId) => api.dealQuotations.createFromPricingRequest(pricingRequestId),
+    onSuccess: (res) => { if (res?.quotation?.id) navigate(`/quotations/${res.quotation.id}`); },
+    onError: (error) => showToast('error', error.message || 'ดำเนินการไม่สำเร็จ'),
+  });
+
   // R5: Attachments upload/delete — invalidate the attachments query instead
   // of manually reloading + setting local array state.
   const uploadAttachmentMutation = useMutation({
@@ -1127,10 +1138,15 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const reviseTarget = reviseCandidate
     ? { quotationId: reviseCandidate.id, number: reviseCandidate.number, openDraftId: openRevisionDraft?.id }
     : null;
-  const workState = resolveWorkState(user, summary, pricingRequests, { reviseTarget });
+  // Parties whose quote stage the server marks off this deal's route (stageDecisions onRoute=false).
+  const offRouteParties = new Set(stageDecisions
+    .filter((decision) => decision.onRoute === false)
+    .map((decision) => recipientForDealStage(decision.stage))
+    .filter(Boolean));
+  const workState = resolveWorkState(user, summary, pricingRequests, { reviseTarget, offRouteParties });
   // PR A: at the owner/buyer quote stages revise is an ADDITIONAL action (header "⋯" menu), never a
   // replacement for the primary บันทึกผลใบเสนอราคา — the client may simply accept the original.
-  const reviseSecondary = secondaryWorkActions(user, summary, pricingRequests, { reviseTarget })[0] ?? null;
+  const reviseSecondary = secondaryWorkActions(user, summary, pricingRequests, { reviseTarget, offRouteParties })[0] ?? null;
   const workStateAction = workState.action;
   const lost = summary.lifecycle === 'CLOSED_LOST';
   const isActiveLifecycle = (summary.lifecycle ?? 'ACTIVE') === 'ACTIVE';
@@ -1226,12 +1242,39 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         </Button>
       );
       stickyPrimaryLabel = workStateAction.label;
+    } else if (actionKey === 'quote_next_party') {
+      // Owner ruling 2026-10-22: "เสนอราคา<next party>". More than one party left: a menu, later
+      // parties reading "ข้ามไปเสนอราคา<party>"; one left: a plain button. Each opens the
+      // price-request form with ผู้รับ pre-filled.
+      const parties = workStateAction.parties;
+      const openFor = (party) => runOnTab('items', () => pricingRequestPanelRef.current?.openCreate({ recipientType: party }));
+      stickyPrimaryAction = parties.length > 1 ? (
+        <OverflowMenu
+          items={parties.map((party, index) => ({
+            key: party,
+            label: `${index > 0 ? 'ข้ามไป' : ''}เสนอราคา${PARTY_LABEL[party]}`,
+            testId: `quote-party-${party}`,
+            onSelect: () => openFor(party),
+          }))}
+          label={workStateAction.label}
+          triggerLabel={<>{workStateAction.label}<Icon name="chevronDown" size={14} /></>}
+          triggerIcon={null}
+          triggerClassName="border-primary bg-primary text-surface"
+          triggerProps={{ 'data-testid': 'ticket-primary-action', 'data-action': actionKey }}
+          align="end"
+          mobilePlacement="up"
+        />
+      ) : (
+        <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => openFor(parties[0])}>
+          {workStateAction.label}
+        </Button>
+      );
+      stickyPrimaryLabel = workStateAction.label;
     } else if (actionKey === 'issue_quotation') {
-      // DealQuotationPanel now lives inside the "เอกสาร" tab (Slice C2b
-      // renamed the old "ใบเสนอราคา" tab id from `quotations` to `documents`
-      // — same panel, same content, same gate).
       stickyPrimaryAction = (
-        <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => runOnTab('documents', () => dealQuotationPanelRef.current?.openIssueQuotation())}>
+        <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey}
+          disabled={createQuotationFromRequestMutation.isPending}
+          onClick={() => createQuotationFromRequestMutation.mutate(workStateAction.pricingRequestId)}>
           {workStateAction.label}
         </Button>
       );
@@ -1246,13 +1289,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       stickyPrimaryLabel = workStateAction.label;
     } else if (actionKey === 'record_quotation_outcome') {
       // salesActions.js's RECORD_QUOTATION_OUTCOME bucket (a QUOTATION_ISSUED PR whose customer
-      // decision hasn't been recorded yet). Unlike issue_quotation/confirm_order this never fires a
-      // mutation directly — the accept/reject/revision decision is the rep's own judgment call, not
-      // something a single click can default — so openRecordOutcome only scrolls DealQuotationPanel's
-      // existing outcome controls into view (same "DealQuotationPanel lives inside the เอกสาร tab"
-      // pattern as the two branches above).
+      // decision hasn't been recorded yet). The accept/reject/revision controls for both quotation
+      // engines live on the pricing-request page, so this opens it; it never records anything itself.
       stickyPrimaryAction = (
-        <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => runOnTab('documents', () => dealQuotationPanelRef.current?.openRecordOutcome())}>
+        <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => navigate(`/pricing-requests/${workStateAction.pricingRequestId}`)}>
           {workStateAction.label}
         </Button>
       );
@@ -1339,11 +1379,12 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // only by that four-branch cascade, and it always wins over the resolver.
   //
   // Slice 2: workState can hand back its own finished line (`workState.bannerText` — the rep's
-  // direct quotation waiting on ผจก.ขาย/CEO), which reads before the blocker line.
+  // direct quotation waiting on ผจก.ขาย/CEO), which reads before the blocker line. The เสนอราคา
+  // <party> primary also carries one (owner ruling 2026-10-22), shown beside its button.
   const bannerText = primaryAction
     ? nextAction
     : stickyPrimaryLabel
-      ? null
+      ? (workState.bannerText ?? null)
       : workState.bannerText
         ? workState.bannerText
         : blocker;
@@ -1582,7 +1623,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // DealFulfilmentPanel (Phase 3 Slice S4).
 
   return (
-    <div className={`grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px] ${bannerText || stickyPrimaryAction || overflowItems.length > 0 ? 'mobile:pb-28' : ''}`}>
+    <div className={`grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px] ${bannerText || stickyPrimaryAction || overflowItems.length > 0 ? 'mobile:pb-36' : ''}`}>
       {/* F-14 (ticket-detail IA rebuild Phase 1): the breadcrumb is the single
           up-nav — a full-width "กลับ" bar underneath it just repeated the same
           affordance as page chrome. Verified safe to drop: every e2e "กลับ"
@@ -1650,6 +1691,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         availableActions={availableActions}
         stageDecisions={stageDecisions}
         catalog={stageCatalog}
+        quoteParties={workStateAction?.key === 'quote_next_party' ? workStateAction.parties : null}
         // primaryAction now lives solely in DealStateHeader above (Phase 2 Slice S2's
         // "one primary CTA" — see its own doc comment) — not passed here too, to avoid
         // rendering the exact same button twice on one page.

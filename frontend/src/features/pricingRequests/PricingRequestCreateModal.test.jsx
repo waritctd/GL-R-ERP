@@ -1309,3 +1309,64 @@ describe('PricingRequestCreateModal — สกุลเงิน + หน่ว�
     expect(updateFn).not.toHaveBeenCalled();
   });
 });
+
+// Owner ruling 2026-10-22: the deal page's เสนอราคา menu opens this modal with ผู้รับ
+// already set to the next party on the route. `initialRecipientType` seeds the chip AND the ผู้รับ
+// label (from the deal's per-type name) — CREATE MODE ONLY; edit/revision keep the persisted recipient.
+describe('PricingRequestCreateModal initialRecipientType (owner ruling 2026-10-22)', () => {
+  const deal = {
+    designerName: 'สมชาย ผู้ออกแบบ',
+    ownerName: 'บริษัท เจ้าของ จำกัด',
+    buyerName: 'ผู้ซื้อ ข.',
+    customerName: 'ลูกค้า ง.',
+  };
+  const chip = (name) => screen.getByRole('radio', { name });
+
+  it('create mode: pre-selects เจ้าของโครงการ and pre-fills the ผู้รับ label from deal.ownerName', () => {
+    renderModal({ deal, initialRecipientType: 'OWNER' });
+    expect(chip(/เจ้าของโครงการ/).getAttribute('aria-checked')).toBe('true');
+    expect(chip(/ผู้ออกแบบ/).getAttribute('aria-checked')).toBe('false');
+    expect(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ').value).toBe('บริษัท เจ้าของ จำกัด');
+  });
+
+  it('create mode: BUYER pre-selects ผู้ซื้อ and fills deal.buyerName', () => {
+    renderModal({ deal, initialRecipientType: 'BUYER' });
+    expect(chip(/ผู้ซื้อ/).getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ').value).toBe('ผู้ซื้อ ข.');
+  });
+
+  it('create mode: the seeded recipient is what gets sent', async () => {
+    const { createFn } = renderModal({ deal, initialRecipientType: 'OWNER' });
+    fillRequiredFields();
+    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
+    await waitFor(() => expect(createFn).toHaveBeenCalledWith(expect.objectContaining({
+      recipientType: 'OWNER', recipientLabel: 'บริษัท เจ้าของ จำกัด',
+    })));
+  });
+
+  it('without the prop, create mode still defaults to ผู้ออกแบบ (unchanged)', () => {
+    renderModal({ deal });
+    expect(chip(/ผู้ออกแบบ/).getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ').value).toBe('สมชาย ผู้ออกแบบ');
+  });
+
+  it('edit mode ignores it: the persisted recipient and label win', () => {
+    render(
+      <PricingRequestCreateModal
+        mode="edit"
+        initialRecipientType="BUYER"
+        deal={deal}
+        initialValue={{
+          summary: { id: 77, recipientType: 'OWNER', recipientLabel: 'เจ้าของโครงการ ข.', targetCurrency: 'THB' },
+          items: [],
+        }}
+        onClose={vi.fn()}
+        onCreated={vi.fn()}
+        updateFn={vi.fn()}
+      />,
+    );
+    expect(chip(/เจ้าของโครงการ/).getAttribute('aria-checked')).toBe('true');
+    expect(chip(/ผู้ซื้อ/).getAttribute('aria-checked')).toBe('false');
+    expect(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ').value).toBe('เจ้าของโครงการ ข.');
+  });
+});
