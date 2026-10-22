@@ -420,13 +420,35 @@
     font: inherit;
   }
 
+  /* No Tailwind preflight is loaded, so without these resets a button that has
+     no classes would show the browser's own face: a 2px outset bevel, a grey
+     fill and black text. This rule leaves padding alone on purpose. Raw buttons
+     across the app still take the browser's own side padding, so zeroing it
+     would move them. It sets `border-width` and not the `border` shorthand,
+     because the shorthand also resets the border colour. A class in styles.css
+     or any utility still wins, because `base` comes before `legacy` and
+     `utilities`. */
   button {
     cursor: pointer;
+    border-width: 0;
+    background-color: transparent;
+    color: inherit;
   }
 
   button:disabled {
     cursor: not-allowed;
     opacity: 0.55;
+  }
+
+  /* No Tailwind preflight is loaded, so without this reset a bare `ul` or `ol`
+     would keep the browser's 40px indent, its 1em margins and its bullets or
+     numbers. A list that wants bullets has to ask for them, for example with
+     `list-disc` and a left padding. */
+  ul,
+  ol {
+    margin: 0;
+    padding: 0;
+    list-style: none;
   }
 
   code {
