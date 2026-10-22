@@ -11,12 +11,26 @@ const dealStateHeaderJsx = readFileSync(join(process.cwd(), 'src/features/ticket
 // shell conversion — see AppShell.jsx's CONTENT_SCROLL_CLASS comment) is the
 // direct equivalent of the old styles.css text guard.
 const appShellJsx = readFileSync(join(process.cwd(), 'src/components/layout/AppShell.jsx'), 'utf8');
+const ticketDetailPageJsx = readFileSync(join(process.cwd(), 'src/features/tickets/TicketDetailPage.jsx'), 'utf8');
 
 describe('ticket workspace sticky layout source guards', () => {
-  it('keeps one measured ticket chrome height token with a safe fallback', () => {
+  it('clears the sticky deal header via a desktop scroll-margin on the content descendants, not shell scroll-padding or per-target margins', () => {
     expect(indexCss).toContain('--app-topbar-h: 66px;');
     expect(indexCss).toContain('--deal-header-h: 18rem;');
-    expect(appShellJsx).toContain('scroll-pt-[calc(var(--deal-header-h,18rem)_+_var(--space-4))]');
+    // Desktop scroll-padding-top on the shell scroller made native focus into the sticky deal chrome
+    // (and, via the 18rem fallback, the top ~300px of every page) scroll the page.
+    expect(appShellJsx).not.toContain('scroll-pt-[calc(var(--deal-header-h');
+    expect(ticketDetailPageJsx).not.toContain('scroll-mt-[300px]');
+    // The clearance lives once, on the content wrapper's descendants (never on the header's own controls).
+    const bare = 'scroll-mt-[calc(var(--deal-header-h,18rem)_+_var(--space-4))]';
+    const wrapperToken = `min-[721px]:[&_*:not([role=dialog]_*)]:${bare}`; // non-portalled Modal bodies are excluded
+    expect(ticketDetailPageJsx.split(wrapperToken)).toHaveLength(2);
+    expect(ticketDetailPageJsx.split(bare)).toHaveLength(2); // only inside the wrapper token
+  });
+
+  it('opts the shell scroller out of scroll anchoring for any page that mounts a sticky chrome', () => {
+    expect(appShellJsx).toContain('has-[[data-sticky-chrome]]:[overflow-anchor:none]');
+    expect(ticketDetailPageJsx).toContain('data-sticky-chrome');
   });
 
   it('keeps mobile focus scrolling clear of the fixed bottom action bar', () => {

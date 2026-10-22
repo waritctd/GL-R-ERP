@@ -455,15 +455,69 @@ describe('TicketDetailPage', () => {
     expect(stickyChrome.className).toContain('sticky');
     expect(stickyChrome.className).toContain('top-[calc(var(--deal-scroll-pad-y)*-1)]');
     expect(within(stickyChrome).getByRole('tablist', { name: 'รายละเอียดดีล' })).not.toBeNull();
+    // Desktop header clearance for focus/jumps sits on the content wrapper (the chrome's next
+    // sibling) so the header's own controls never get it.
+    expect(stickyChrome.nextElementSibling.className).toContain(
+      'min-[721px]:[&_*:not([role=dialog]_*)]:scroll-mt-[calc(var(--deal-header-h,18rem)_+_var(--space-4))]',
+    );
 
     // Ticket-workspace IA rebuild Slice B: the sticky context rail (and its own
     // measured `--deal-header-h` sticky-offset classes) is retired — there is
     // no second column any more, so no `data-testid="ticket-context-rail"`
     // element exists at all. `--deal-header-h` itself stays defined (index.css)
-    // and consumed by AppShell.jsx's `scroll-pt-[...]` (Tailwind port of the
-    // old `.content-scroll` rule) for mobile focus scrolling — see
-    // ticketWorkspaceLayout.test.js, unaffected by this.
+    // and consumed by the content wrapper's descendant `scroll-mt-[...]` (see
+    // ticketWorkspaceLayout.test.js), unaffected by this.
     expect(screen.queryByTestId('ticket-context-rail')).toBeNull();
+  });
+
+  it('marks the sticky chrome with data-sticky-chrome so the shell scroller opts out of scroll anchoring (a desktop condense would otherwise loop scrollTop to 0)', async () => {
+    renderTicketDetailPage();
+
+    const chrome = await screen.findByTestId('ticket-detail-sticky-chrome');
+    expect(chrome.hasAttribute('data-sticky-chrome')).toBe(true);
+  });
+
+  // Condensing shrinks the header by most of its height. If the scrollable range is smaller
+  // than that, scrollHeight drops, scrollTop clamps to 0, the header un-condenses and the user can
+  // never scroll. So the header only condenses when scroll room is left once condensed.
+  describe('sticky chrome condense vs. scroll room', () => {
+    it('condenses only while scroll room remains once condensed (and expands again when it does not)', async () => {
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+      });
+      const { container } = render(
+        <div className="content-scroll">
+          <QueryClientProvider client={queryClient}>
+            <MemoryRouter>
+              <TicketDetailPage user={ceoUser} ticketId={701} onBack={vi.fn()} showToast={vi.fn()} />
+            </MemoryRouter>
+          </QueryClientProvider>
+        </div>,
+      );
+      const chrome = await screen.findByTestId('ticket-detail-sticky-chrome');
+      chrome.getBoundingClientRect = () => ({ height: 420, top: 0, bottom: 420, left: 0, right: 0, width: 0 });
+      const scroller = container.querySelector('.content-scroll');
+      const setLayout = (scrollHeight) => {
+        Object.defineProperties(scroller, {
+          scrollHeight: { configurable: true, value: scrollHeight },
+          clientHeight: { configurable: true, value: 800 },
+          scrollTop: { configurable: true, writable: true, value: 100 },
+        });
+        fireEvent.scroll(scroller);
+      };
+      const condensed = () => screen.getByTestId('deal-state-header').dataset.condensed;
+
+      // Long page: proves the scroll handler is live before the negative case is asserted.
+      setLayout(2000);
+      await waitFor(() => expect(condensed()).toBe('true'));
+
+      // Short page (room once condensed = 1000 - 800 - 420 < 8): synchronous, no waitFor on the negative.
+      setLayout(1000);
+      expect(condensed()).toBe('false');
+
+      setLayout(2000);
+      await waitFor(() => expect(condensed()).toBe('true'));
+    });
   });
 
   it('renders a dash for มูลค่าดีล until a price exists', async () => {

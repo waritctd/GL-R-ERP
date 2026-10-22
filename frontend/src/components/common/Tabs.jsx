@@ -98,8 +98,6 @@ export function Tabs({ items, value, onChange, ariaLabel, idPrefix, onSurface = 
   const scrollTabIntoView = useCallback((tab) => {
     const list = listRef.current;
     if (!list || !tab) return;
-    tab.scrollIntoView?.({ inline: 'nearest', block: 'nearest', behavior: 'instant' });
-
     const styles = getComputedStyle(list);
     const paddingLeft = Number.parseFloat(styles.paddingLeft) || 0;
     const paddingRight = Number.parseFloat(styles.paddingRight) || 0;
@@ -139,6 +137,9 @@ export function Tabs({ items, value, onChange, ariaLabel, idPrefix, onSurface = 
     const tabs = listRef.current?.querySelectorAll('[role="tab"]');
     if (!tabs || !tabs.length) return;
     const bounded = (index + tabs.length) % tabs.length;
+    // Plain focus(): where the tablist is in the normal flow the browser may still bring an
+    // off-screen tab into view. The vertical scroll must come from the browser's own focus
+    // handling only, never from scrollIntoView here (see scrollTabIntoView).
     tabs[bounded].focus();
     scrollTabIntoView(tabs[bounded]);
     onChange(items[bounded].id);
