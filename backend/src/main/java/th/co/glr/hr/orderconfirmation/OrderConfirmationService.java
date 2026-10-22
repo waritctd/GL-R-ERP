@@ -217,10 +217,22 @@ public class OrderConfirmationService {
         // customer-confirmed yet; a later revision's own confirmOrder call only needs the
         // reconciliation (already done above) and its own event/notification below.
         TicketSummaryDto currentTicketState = requireTicketSummary(locked.ticketId());
-        TicketDto ticketDto = currentTicketState.paymentStatus() == null
-            ? ticketService.confirmCustomer(locked.ticketId(), actor)
-            : tickets.findById(locked.ticketId())
+        TicketDto ticketDto;
+        if (currentTicketState.paymentStatus() == null) {
+            // The accepted new-engine quotation's percent decides the deposit policy (owner ruling
+            // 2026-10-22, see TicketService#applyCustomerConfirmation). A legacy quotation carries none.
+            th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto confirmed = dealQuotations == null
+                ? null
+                : dealQuotations.findAcceptedForPricingRequest(pricingRequestId)
+                    .flatMap(dealQuotations::findById)
+                    .orElse(null);
+            ticketDto = ticketService.confirmCustomer(locked.ticketId(),
+                confirmed == null ? null : confirmed.number(),
+                confirmed == null ? null : confirmed.depositPercent(), actor);
+        } else {
+            ticketDto = tickets.findById(locked.ticketId())
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
+        }
 
         pricingRequests.addEvent(pricingRequestId, locked.ticketId(), actor.id(), actor.name(),
             PricingRequestEventKind.ORDER_CONFIRMED, locked.status(), locked.status(),

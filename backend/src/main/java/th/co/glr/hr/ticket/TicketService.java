@@ -867,11 +867,19 @@ public class TicketService {
 
     @Transactional
     public TicketDto confirmCustomer(long ticketId, UserPrincipal actor) {
+        return confirmCustomer(ticketId, null, null, actor);
+    }
+
+    /** {@link #confirmCustomer} for a caller that knows the confirmed quotation; see
+     * {@link #applyCustomerConfirmation} for what its number and deposit percent do. */
+    @Transactional
+    public TicketDto confirmCustomer(long ticketId, String quotationNumber, Integer quotationDepositPercent,
+                                     UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
         TicketSummaryDto s = loadAndVerifyStatus(ticketId, TicketStatus.QUOTATION_ISSUED);
         requireActive(s);
         requireOwner(s, actor);
-        return applyCustomerConfirmation(ticketId, s, actor);
+        return applyCustomerConfirmation(ticketId, s, quotationNumber, quotationDepositPercent, actor);
     }
 
     /**
@@ -896,15 +904,26 @@ public class TicketService {
      * gate it relies on.
      */
     @Transactional
-    public TicketDto confirmCustomerForPromotedQuotation(long ticketId, UserPrincipal actor) {
+    public TicketDto confirmCustomerForPromotedQuotation(long ticketId, String quotationNumber,
+                                                         Integer quotationDepositPercent, UserPrincipal actor) {
         TicketSummaryDto s = loadAndVerifyStatus(ticketId, TicketStatus.QUOTATION_ISSUED);
         requireActive(s);
-        return applyCustomerConfirmation(ticketId, s, actor);
+        return applyCustomerConfirmation(ticketId, s, quotationNumber, quotationDepositPercent, actor);
     }
 
-    /** The shared body of {@link #confirmCustomer} and {@link #confirmCustomerForPromotedQuotation}
-     * — moved here verbatim (GLA-136) so the two cannot drift; behaviour is unchanged. */
-    private TicketDto applyCustomerConfirmation(long ticketId, TicketSummaryDto s, UserPrincipal actor) {
+    /**
+     * The shared body of {@link #confirmCustomer} and {@link #confirmCustomerForPromotedQuotation}
+     * (GLA-136), so the two cannot drift.
+     *
+     * <p>Owner ruling 2026-10-22: when the confirmed quotation says ไม่รับมัดจำ ({@code
+     * quotationDepositPercent == 0}), the first confirmation moves a REQUIRED deal to NOT_REQUIRED,
+     * so the import-request and final-payment gates take the no-deposit path without a manual
+     * {@link #waiveDeposit}. A policy someone already chose (CREDIT_CUSTOMER, WAIVED) is kept. The
+     * policy is written after the {@code null -> CUSTOMER_CONFIRMED} advance, an edge both paths
+     * share, so every later advance reads NOT_REQUIRED and walks the bypass path.
+     */
+    private TicketDto applyCustomerConfirmation(long ticketId, TicketSummaryDto s, String quotationNumber,
+                                                Integer quotationDepositPercent, UserPrincipal actor) {
         // Never downgrade the payment track: once past CUSTOMER_CONFIRMED, re-confirming
         // would reset paymentStatus and deadlock the later transitions.
         if (s.paymentStatus() != null && !"CUSTOMER_CONFIRMED".equals(s.paymentStatus())) {
@@ -922,6 +941,13 @@ public class TicketService {
             requirePaymentAdvanced(rows);
             tickets.addEvent(ticketId, actor.id(), actor.name(),
                 TicketEventKind.CUSTOMER_CONFIRMED, s.status(), s.status(), null);
+            if (Integer.valueOf(0).equals(quotationDepositPercent) && DepositPolicy.REQUIRED.equals(s.depositPolicy())) {
+                String reason = "ใบเสนอราคา " + quotationNumber + " ระบุไม่รับมัดจำ (ชำระเต็มจำนวน)";
+                tickets.updateDepositPolicy(ticketId, DepositPolicy.NOT_REQUIRED, reason, actor.id());
+                tickets.addEvent(ticketId, actor.id(), actor.name(),
+                    TicketEventKind.POLICY_CHANGED, s.salesStage(), s.salesStage(),
+                    "deposit_policy → " + DepositPolicy.NOT_REQUIRED + " — " + reason);
+            }
         }
         // Deal pipeline (V50): a confirmed PO advances the deal — guarded no-op inside.
         autoAdvanceStage(s, DealStage.ORDER_RECEIVED, actor);
