@@ -137,9 +137,7 @@ public class DepositNoticeService {
         // document's long-standing 0.50 default only when the ticket has no live quotation to
         // read a percent from at all (e.g. a manually-approved legacy ticket with no quotation
         // chain) — see DepositNoticeRepository#findDealQuotationDepositPercent's own Javadoc for
-        // the full pick order. The pricing-request route names its source quotation and passes
-        // that quotation's own percent; the ticket-level route passes null and still derives it
-        // per ticket.
+        // the full pick order.
         BigDecimal effectiveDepositPercent = sourceDepositPercent != null
             ? BigDecimal.valueOf(sourceDepositPercent, 2)
             : docs.findDealQuotationDepositPercent(ticketId).orElse(new BigDecimal("0.50"));

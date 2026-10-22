@@ -435,15 +435,15 @@ public class OrderConfirmationService {
      * <p><strong>New-engine quotation:</strong> when the pricing request has no ACCEPTED legacy
      * quotation, this falls back to its ACCEPTED new-engine {@code PRICING_REQUEST}-origin
      * quotation ({@code DealQuotationService#createFromPricingRequest}), found by {@code
-     * DealQuotationRepository#findAcceptedForPricingRequest} rather than by "latest", because an
-     * open revision draft can outrank the accepted row by id. The items come from that quotation,
+     * DealQuotationRepository#findAcceptedForPricingRequest} (its Javadoc says why "latest" is
+     * the wrong pick). The items come from that quotation,
      * the accepted quotation of THIS pricing request ({@link
      * DepositNoticeService#itemsFromDealQuotation}), so a sibling pricing request's quotation on
      * the same ticket can never supply them. The percent also comes from that quotation: its own
-     * {@code deposit_percent} goes to {@link DepositNoticeService#createDraftFromQuotation}, so a
-     * sibling pricing request's legacy row on the same ticket cannot supply it either (a
-     * new-engine sibling never could: R8 allows one ACCEPTED quotation per ticket and the lookup
-     * prefers ACCEPTED) when the quotation sets a percent; a null percent still falls back to the
+     * {@code deposit_percent} goes to {@link DepositNoticeService#createDraftFromQuotation}, so
+     * when the quotation sets a percent a sibling pricing request's legacy row on the same ticket
+     * cannot supply it either (a new-engine sibling never could: R8 allows one ACCEPTED quotation
+     * per ticket and the lookup prefers ACCEPTED); a null percent still falls back to the
      * per-ticket lookup. The legacy branch passes no percent, because {@code CustomerQuotationDto}
      * carries none, so it keeps {@code createDraft}'s per-ticket derivation; the ticket-level
      * route does the same. The customer must have accepted: an ISSUED-only quotation answers 409.

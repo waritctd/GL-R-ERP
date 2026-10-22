@@ -396,11 +396,7 @@ public class DepositNoticeRepository {
      * <b>Owner-confirmable:</b> that a deposit may autofill from an ISSUED-but-not-yet-ACCEPTED
      * PRICING_REQUEST quote (legacy parity) and from an APPROVED DEAL_DIRECT quote — this is item
      * <em>autofill</em> for a draft the user reviews before saving, not the deposit gate itself.
-     *
-     * <p>Reads the RESOLVED display columns the quotation itself prints
-     * ({@code qty}/{@code raw_unit}/{@code unit_price}/{@code final_unit_price}), NOT the legacy
-     * {@code requested_*}/{@code approved_unit_price} columns the V2 chain leaves null. The
-     * discount-label wording matches {@link DepositNoticeService#itemsFromQuotation}.
+     * The lines themselves come from {@link #findDealQuotationItems}.
      */
     public List<DepositNoticeItemRequest> findDealQuotationItemsForDeposit(long ticketId) {
         List<Long> ids = jdbc.query("""
@@ -422,8 +418,10 @@ public class DepositNoticeRepository {
     }
 
     /** One deal quotation's {@code sales.quotation_item} lines, by {@code seq}, as deposit-notice
-     * items: the resolved display columns the quotation prints. {@link
-     * #findDealQuotationItemsForDeposit} delegates to this for the quotation it selects. */
+     * items. Reads the RESOLVED display columns the quotation itself prints
+     * ({@code qty}/{@code raw_unit}/{@code unit_price}/{@code final_unit_price}), NOT the legacy
+     * {@code requested_*}/{@code approved_unit_price} columns the V2 chain leaves null. The
+     * discount-label wording matches {@link DepositNoticeService#itemsFromQuotation}. */
     public List<DepositNoticeItemRequest> findDealQuotationItems(long quotationId) {
         return jdbc.query("""
             SELECT seq, description, qty, raw_unit, unit_price, sales_discount, final_unit_price
