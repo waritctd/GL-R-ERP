@@ -65,7 +65,8 @@ export function OverflowMenu({
   triggerLabel,
   triggerIcon = 'moreHorizontal',
   triggerClassName,
-  // Extra attributes for the trigger button (e.g. a data-testid / data-action e2e hook).
+  // Extra attributes for the trigger button (e.g. a data-testid / data-action e2e hook); spread first,
+  // so they can never override the menu's own handlers or ARIA.
   triggerProps,
 }) {
   const [open, setOpen] = useState(false);
@@ -172,6 +173,7 @@ export function OverflowMenu({
           class, so it's left untouched rather than guessed into a variant. */}
       {triggerLabel ? (
         <button
+          {...triggerProps}
           type="button"
           ref={triggerRef}
           className={cn(
@@ -183,13 +185,13 @@ export function OverflowMenu({
           aria-label={label}
           title={label}
           onClick={() => setOpen((v) => !v)}
-          {...triggerProps}
         >
           {triggerIcon ? <Icon name={triggerIcon} size={18} /> : null}
           <span>{triggerLabel}</span>
         </button>
       ) : (
         <Button
+          {...triggerProps}
           type="button"
           ref={triggerRef}
           variant="icon"
@@ -199,7 +201,6 @@ export function OverflowMenu({
           aria-label={label}
           title={label}
           onClick={() => setOpen((v) => !v)}
-          {...triggerProps}
         >
           <Icon name={triggerIcon} size={18} />
         </Button>

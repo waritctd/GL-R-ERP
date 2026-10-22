@@ -60,7 +60,7 @@ import { DealStagePanel } from './DealStagePanel.jsx';
 import { DealStateHeader } from './DealStateHeader.jsx';
 import { DealTrackingPanel } from './DealTrackingPanel.jsx';
 import { visibleSections } from './salesViewScope.js';
-import { nextOnRoute, useStageCatalog } from './stageCatalog.js';
+import { nextOnRoute, offRouteCodes, useStageCatalog } from './stageCatalog.js';
 import { PARTY_LABEL } from './salesActions.js';
 import {
   resolveTicketDetailTab, TICKET_DETAIL_TABS, visibleTicketDetailTabIds,
@@ -1139,10 +1139,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     ? { quotationId: reviseCandidate.id, number: reviseCandidate.number, openDraftId: openRevisionDraft?.id }
     : null;
   // Parties whose quote stage the server marks off this deal's route (stageDecisions onRoute=false).
-  const offRouteParties = new Set(stageDecisions
-    .filter((decision) => decision.onRoute === false)
-    .map((decision) => recipientForDealStage(decision.stage))
-    .filter(Boolean));
+  const offRouteParties = new Set([...offRouteCodes(stageDecisions)].map(recipientForDealStage).filter(Boolean));
   const workState = resolveWorkState(user, summary, pricingRequests, { reviseTarget, offRouteParties });
   // PR A: at the owner/buyer quote stages revise is an ADDITIONAL action (header "⋯" menu), never a
   // replacement for the primary บันทึกผลใบเสนอราคา — the client may simply accept the original.
@@ -1385,9 +1382,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     ? nextAction
     : stickyPrimaryLabel
       ? (workState.bannerText ?? null)
-      : workState.bannerText
-        ? workState.bannerText
-        : blocker;
+      : (workState.bannerText || blocker);
 
   // Overflow-menu / danger-zone availability — mirrors DealStagePanel's own
   // canEditStage/canLost/canHold/canDormant gates byte-for-byte (same

@@ -16,6 +16,7 @@ import {
   quotationStatusLabel,
 } from '../../utils/format.js';
 import { downloadBlob } from '../../utils/download.js';
+import { PARTY_LABEL } from './salesActions.js';
 import {
   canConfirmOrder, confirmOrderBlockedReason, canCreateCustomerQuotation,
   canManageCustomerQuotation, canRecordCustomerQuotationOutcome, canViewCustomerQuotation,
@@ -34,7 +35,6 @@ function generateClientRequestId() {
 // Among the requests that DO qualify, the most recently created one is the
 // one this deal is currently working — ties broken by id (creation order).
 const QUOTATION_TAIL_STATUSES = new Set(['APPROVED_FOR_QUOTATION', 'QUOTATION_ISSUED', 'QUOTATION_ACCEPTED']);
-const NON_BUYER_PARTY_LABEL = { DESIGNER: 'ผู้ออกแบบ', OWNER: 'เจ้าของโครงการ' };
 
 function pickRelevantPricingRequest(pricingRequests = []) {
   return pricingRequests
@@ -89,6 +89,7 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticke
   const [downloadingFormat, setDownloadingFormat] = useState(null);
 
   const pr = useMemo(() => pickRelevantPricingRequest(pricingRequests), [pricingRequests]);
+  const acceptedPartyLabel = pr && pr.recipientType !== 'BUYER' ? PARTY_LABEL[pr.recipientType] : null;
   const canView = pr != null && canViewCustomerQuotation(user, pr);
 
   const quotationsQuery = useQuery({
@@ -267,9 +268,9 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticke
               // comment) — this explains the section instead of duplicating
               // the CTA.
               <p className="text-sm text-text-muted">
-                {NON_BUYER_PARTY_LABEL[pr.recipientType]
+                {acceptedPartyLabel
                   // Owner ruling 2026-10-22: a designer/owner acceptance goes on to the next party via เสนอราคา.
-                  ? `${NON_BUYER_PARTY_LABEL[pr.recipientType]}ยอมรับใบเสนอราคาแล้ว — เลือกผู้รับรายถัดไปจากปุ่ม “เสนอราคา” บนแถบด้านบน`
+                  ? `${acceptedPartyLabel}ยอมรับใบเสนอราคาแล้ว — เลือกผู้รับรายถัดไปจากปุ่ม “เสนอราคา” บนแถบด้านบน`
                   : 'ลูกค้ายอมรับใบเสนอราคาแล้ว — กดปุ่ม “ยืนยันคำสั่งซื้อ” บนแถบด้านบนของหน้าเพื่อเริ่มขั้นตอนรับมัดจำและนำเข้าสินค้า'}
               </p>
             ) : (

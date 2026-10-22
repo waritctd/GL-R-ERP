@@ -189,9 +189,9 @@ const isAcceptedUnconfirmed = (pr) => pr.status === 'QUOTATION_ACCEPTED' && !pr.
 
 /** canConfirmOrder's gate as seen from the list row: an accepted request on a ticket the order
  * bridge can advance (OrderConfirmationService.isBridgeableTicketStatus). */
-function confirmOrderGatePasses(deal, pricingRequests = []) {
-  return pricingRequests.some((pr) => pr.ticketId === deal?.id && isAcceptedUnconfirmed(pr))
-    && (deal?.status == null || BRIDGEABLE_TICKET_STATUSES.has(deal.status));
+function confirmOrderGatePasses(deal, ownPrs) {
+  return ownPrs.some(isAcceptedUnconfirmed)
+    && (deal.status == null || BRIDGEABLE_TICKET_STATUSES.has(deal.status));
 }
 
 /** Bucket 3's view of the route. `from` is the furthest accepted request's party (-1 for none or
