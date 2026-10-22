@@ -201,7 +201,7 @@ const SELF_SERVICE_EXEMPT_ROLES = ['hr', 'ceo', 'sales', 'sales_manager'];
 // Per-role release allowlist for roles that stay locked. Same prefix rule as
 // SELF_SERVICE_PATHS (the trailing slash is required, so `/finance` does not
 // admit `/finance-archive`). `/import/deals` is the queue's own per-deal
-// drill-down (importDealRedirectFor), not a wider surface.
+// drill-down (dealRedirectFor), not a wider surface.
 const RELEASED_PATHS_BY_ROLE = {
   import: ['/fulfilment', '/pricing-requests', '/import/deals'],
   account: ['/finance'],
@@ -303,7 +303,7 @@ export function isBillingNoteReleaseUser(user) {
  * (the pipeline browser) and `/tickets/:id/deposit` have no import equivalent and stay refused.
  * Returns null when no redirect applies. Routing convenience only; the backend is the authority.
  */
-export function importDealRedirectFor(path, user) {
+export function dealRedirectFor(path, user) {
   if (user?.role !== 'import') return null;
   const match = /^\/tickets\/(\d+)\/?$/.exec(path.split(/[?#]/)[0]);
   return match ? `/import/deals/${match[1]}` : null;

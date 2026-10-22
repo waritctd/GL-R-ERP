@@ -1,5 +1,5 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
-import { hasPermission, allowedRoute, canAccessPath, isDivisionManager, importDealRedirectFor } from './permissions.js';
+import { hasPermission, allowedRoute, canAccessPath, isDivisionManager, dealRedirectFor } from './permissions.js';
 
 describe('hasPermission', () => {
   it('grants a permission listed for the role', () => {
@@ -790,21 +790,21 @@ describe('quotation release through the self-service lockdown', () => {
 
 // An import user landing on a whole-deal URL (a backend notification deep-link, an old bookmark)
 // is sent to their own page for that deal instead of a dead-end refusal.
-describe('importDealRedirectFor', () => {
+describe('dealRedirectFor', () => {
   const importer = { role: 'import', employeeId: 2 };
 
   it('maps /tickets/:id to /import/deals/:id for import only', () => {
-    expect(importDealRedirectFor('/tickets/12', importer)).toBe('/import/deals/12');
-    expect(importDealRedirectFor('/tickets/12/', importer)).toBe('/import/deals/12');
+    expect(dealRedirectFor('/tickets/12', importer)).toBe('/import/deals/12');
+    expect(dealRedirectFor('/tickets/12/', importer)).toBe('/import/deals/12');
   });
 
   it('does not redirect other roles, other paths, or sub-paths', () => {
-    expect(importDealRedirectFor('/tickets/12', { role: 'ceo', employeeId: 1 })).toBeNull();
-    expect(importDealRedirectFor('/tickets/12', { role: 'sales', employeeId: 9 })).toBeNull();
-    expect(importDealRedirectFor('/tickets', importer)).toBeNull();
-    expect(importDealRedirectFor('/tickets/12/deposit', importer)).toBeNull();
-    expect(importDealRedirectFor('/tickets/abc', importer)).toBeNull();
-    expect(importDealRedirectFor('/fulfilment', importer)).toBeNull();
-    expect(importDealRedirectFor('/tickets/12', null)).toBeNull();
+    expect(dealRedirectFor('/tickets/12', { role: 'ceo', employeeId: 1 })).toBeNull();
+    expect(dealRedirectFor('/tickets/12', { role: 'sales', employeeId: 9 })).toBeNull();
+    expect(dealRedirectFor('/tickets', importer)).toBeNull();
+    expect(dealRedirectFor('/tickets/12/deposit', importer)).toBeNull();
+    expect(dealRedirectFor('/tickets/abc', importer)).toBeNull();
+    expect(dealRedirectFor('/fulfilment', importer)).toBeNull();
+    expect(dealRedirectFor('/tickets/12', null)).toBeNull();
   });
 });
