@@ -171,7 +171,7 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.DEPOSIT_RECEIVED);
         assertThat(paymentStatusOf(ticketId)).isEqualTo(PaymentTrack.DEPOSIT_PAID);
 
-        walkImportJourneyToDeliveryScheduling(ticketId); // PROCUREMENT -> ... -> DELIVERY_SCHEDULING
+        walkImportJourneyToDeliveryScheduling(ticketId, DealStage.PROCUREMENT); // PROCUREMENT -> ... -> DELIVERY_SCHEDULING
 
         ticketService.completeDelivery(ticketId,
             new CompleteDeliveryRequest("ส่งครบตามสัญญา", "คุณเจ้าของโครงการ"), ownerRep);
@@ -225,7 +225,7 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
         ticketService.confirmDepositPaid(ticketId, accountActor);
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.DEPOSIT_RECEIVED);
 
-        walkImportJourneyToDeliveryScheduling(ticketId);
+        walkImportJourneyToDeliveryScheduling(ticketId, DealStage.PROCUREMENT);
 
         ticketService.completeDelivery(ticketId,
             new CompleteDeliveryRequest("ส่งครบ", "เจ้าของโครงการ"), ownerRep);
@@ -283,7 +283,7 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
         ticketService.confirmDepositPaid(ticketId, accountActor);
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.DEPOSIT_RECEIVED);
 
-        walkImportJourneyToDeliveryScheduling(ticketId);
+        walkImportJourneyToDeliveryScheduling(ticketId, DealStage.PROCUREMENT);
 
         ticketService.completeDelivery(ticketId,
             new CompleteDeliveryRequest("ส่งครบ", "ผู้รับเหมา"), ownerRep);
@@ -381,19 +381,22 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.DEPOSIT_RECEIVED);
 
         // Declare item 1 fully covered from stock; item 2 is left untouched (0). Coverage is
-        // PARTIAL, so this must NOT auto-advance the stage or set FROM_STOCK.
+        // PARTIAL: the stage still moves to DELIVERY_SCHEDULING (owner ruling 2026-10-22 — sales
+        // must not wait on import or account to reach นัดส่ง), but FROM_STOCK is NOT set, so the
+        // deal stays on the import axis for item 2.
         ticketService.reserveStock(ticketId,
             new StockReservationRequest(List.of(
                 new StockReservationRequest.Line(item1, new BigDecimal("40.00"), "มีของครบในสต็อก"))),
             ownerRep);
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.DEPOSIT_RECEIVED);
+        assertThat(stageOf(ticketId)).isEqualTo(DealStage.DELIVERY_SCHEDULING);
         assertThat(fulfilmentOf(ticketId)).isNull();
         assertThat(qtyFromStockOf(item1)).isEqualByComparingTo("40.00");
         assertThat(qtyFromStockOf(item2)).isEqualByComparingTo("0.00");
 
         // fulfillment_status is still null (the partial declaration above did not set it), so the
-        // rest is procured for real — same journey as routes A/B/C.
-        walkImportJourneyToDeliveryScheduling(ticketId);
+        // rest is procured for real — same journey as routes A/B/C, except the IR no longer moves
+        // the stage: the declaration already put the deal past PROCUREMENT.
+        walkImportJourneyToDeliveryScheduling(ticketId, DealStage.DELIVERY_SCHEDULING);
 
         // Deliver item 1 from stock first ...
         ticketService.recordPartialDelivery(ticketId,
@@ -456,7 +459,7 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
         // No deposit notice, no confirmDepositPaid: PaymentTrack.BYPASS_ALLOWED has no entry for
         // DEPOSIT_NOTICE_ISSUED/DEPOSIT_PAID at all. issueImportRequest's bypass clause
         // (bypassesDepositNotice && CUSTOMER_CONFIRMED) is what actually lets this proceed.
-        walkImportJourneyToDeliveryScheduling(ticketId);
+        walkImportJourneyToDeliveryScheduling(ticketId, DealStage.PROCUREMENT);
 
         ticketService.completeDelivery(ticketId,
             new CompleteDeliveryRequest("ส่งของก่อนตามเครดิต", "ลูกค้า"), ownerRep);
@@ -520,9 +523,9 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
      * GOODS_RECEIVED} event (or full stock coverage), and only {@code markGoodsReceived} writes
      * that event — there is no shortcut through {@code updateStage} that produces it.
      */
-    private void walkImportJourneyToDeliveryScheduling(long ticketId) {
+    private void walkImportJourneyToDeliveryScheduling(long ticketId, String stageAfterIr) {
         ticketService.issueImportRequest(ticketId, importActor);
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.PROCUREMENT);
+        assertThat(stageOf(ticketId)).isEqualTo(stageAfterIr);
         assertThat(fulfilmentOf(ticketId)).isEqualTo(FulfilmentStatus.IR_ISSUED);
 
         ticketService.markIrSent(ticketId, importActor);

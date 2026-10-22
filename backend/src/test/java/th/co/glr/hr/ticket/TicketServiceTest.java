@@ -1201,6 +1201,49 @@ class TicketServiceTest {
             eq(TicketEventKind.STOCK_RESERVED), anyString(), anyString(), anyString());
     }
 
+    // ── any declaration moves the deal to นัดส่ง (owner ruling 2026-10-22) ─────────
+    //
+    // Sales must not wait on import or account to reach DELIVERY_SCHEDULING: a declaration with any
+    // quantity advances the stage, while FROM_STOCK stays tied to full coverage.
+
+    @Test
+    void reserveStock_partialCoverage_advancesToDeliverySchedulingButStaysOnImportAxis() {
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED,
+            List.of(deliveryItem(1L, "100.00", "0.00", "0.00"), deliveryItem(2L, "50.00", "0.00", "0.00")),
+            "DEPOSIT_PAID", null, DealStage.DEPOSIT_RECEIVED, null);
+
+        service.reserveStock(10L, new StockReservationRequest(List.of(
+            new StockReservationRequest.Line(1L, new BigDecimal("100.00"), null))), salesActor);
+
+        verify(ticketRepo).updateSalesStage(10L, DealStage.DELIVERY_SCHEDULING);
+        verify(ticketRepo, never()).updateFulfillmentStatus(eq(10L), any());
+    }
+
+    @Test
+    void reserveStock_allZeroDeclaration_doesNotAdvance() {
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED,
+            List.of(deliveryItem(1L, "100.00", "0.00", "0.00"), deliveryItem(2L, "50.00", "0.00", "0.00")),
+            "DEPOSIT_PAID", null, DealStage.DEPOSIT_RECEIVED, null);
+
+        service.reserveStock(10L, new StockReservationRequest(List.of(
+            new StockReservationRequest.Line(1L, new BigDecimal("0.00"), null),
+            new StockReservationRequest.Line(2L, new BigDecimal("0.00"), null))), salesActor);
+
+        verify(ticketRepo, never()).updateSalesStage(eq(10L), any());
+        verify(ticketRepo, never()).updateFulfillmentStatus(eq(10L), any());
+    }
+
+    @Test
+    void reserveStock_dealAlreadyPastDeliveryScheduling_doesNotMoveBackwards() {
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(deliveryItem(1L, "100.00", "0.00", "0.00")),
+            "DEPOSIT_PAID", null, DealStage.DELIVERED, null);
+
+        service.reserveStock(10L, new StockReservationRequest(List.of(
+            new StockReservationRequest.Line(1L, new BigDecimal("100.00"), null))), salesActor);
+
+        verify(ticketRepo, never()).updateSalesStage(eq(10L), any());
+    }
+
     @Test
     void reserveStock_rejectsQuantityAboveOrdered() {
         TicketItemDto item = deliveryItem(1L, "100.00", "0.00", "0.00");
