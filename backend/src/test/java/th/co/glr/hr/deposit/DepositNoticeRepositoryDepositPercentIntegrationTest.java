@@ -117,17 +117,45 @@ class DepositNoticeRepositoryDepositPercentIntegrationTest extends AbstractPostg
         assertThat(result).isEmpty();
     }
 
+    /** The legacy PDF prints a null percent as 50% ({@code ticket.QuotationRenderer}). */
     @Test
-    void legacyChain_nullDepositPercentOnTheLiveQuotationYieldsEmpty() {
+    void legacyChain_nullDepositPercentOnTheLiveQuotationYieldsTheFiftyItsPdfPrints() {
         long ticketId = newTicketWithPricingRequestDraft();
         insertLegacyQuotation(ticketId, "ACCEPTED", null);
 
         Optional<BigDecimal> result = depositNotices.findDealQuotationDepositPercent(ticketId);
 
-        assertThat(result).isEmpty();
+        assertThat(result).isPresent();
+        assertThat(result.get()).isEqualByComparingTo("0.50");
+    }
+
+    /** A live legacy row wins outright, so a sibling pricing request's v2 row (whose null reads as
+     * 30) is never consulted. */
+    @Test
+    void mixedTicket_liveLegacyNullPercent_winsOverASiblingV2NullPercent() {
+        long ticketId = newTicketWithPricingRequestDraft();
+        insertLegacyQuotation(ticketId, "ACCEPTED", null);
+        insertOriginTaggedQuotation(ticketId, "PRICING_REQUEST", "ISSUED", null);
+
+        Optional<BigDecimal> result = depositNotices.findDealQuotationDepositPercent(ticketId);
+
+        assertThat(result).isPresent();
+        assertThat(result.get()).isEqualByComparingTo("0.50");
     }
 
     // ── V2 deal-quotation chain (origin IN ('PRICING_REQUEST','DEAL_DIRECT')) ─────────────────
+
+    /** The new-engine PDF prints a null percent as 30% ({@code DealQuotationRenderAdapter}). */
+    @Test
+    void pricingRequestOrigin_nullDepositPercentOnTheLiveQuotationYieldsTheThirtyItsPdfPrints() {
+        long ticketId = newBareTicket();
+        insertOriginTaggedQuotation(ticketId, "PRICING_REQUEST", "ACCEPTED", null);
+
+        Optional<BigDecimal> result = depositNotices.findDealQuotationDepositPercent(ticketId);
+
+        assertThat(result).isPresent();
+        assertThat(result.get()).isEqualByComparingTo("0.30");
+    }
 
     @Test
     void dealDirectOrigin_readsApprovedQuotationsDepositPercent() {
