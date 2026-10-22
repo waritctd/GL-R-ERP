@@ -41,6 +41,7 @@ import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.factory.FactoryConfigRepository;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteRepository;
+import th.co.glr.hr.factoryquote.FactoryQuoteRequests.MarkFactoryContactedRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteItemRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteService;
@@ -406,16 +407,29 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
     // Issue hooks: PR status, stage advance, ticket event, validity date
     // ─────────────────────────────────────────────────────────────────────────────────────
 
+    /**
+     * D-2 (owner ruling 2026-10-16, superseding their own earlier answer): the stage moves at
+     * CREATION, not approval.
+     *
+     * <p>The approve-time advance at {@code DealQuotationService}'s issue hook is kept: it is
+     * idempotent under forward-only, and it still covers a recipient changed between draft and
+     * approval. So S4 must be true both before and after, and the issue hook must
+     * not write a second STAGE_CHANGED — which is what "idempotent" has to mean here.
+     */
     @Test
-    void issue_transitionsPricingRequestToQuotationIssued_andAdvancesStage() {
+    void issue_transitionsPricingRequestToQuotationIssued_andTheStageArrivedAtCreation() {
         PricingDecisionDto decision = approvedDecision();
         DealQuotationDto draft = quotationService.createFromPricingRequest(decision.pricingRequestId(), salesActor);
+
+        // The source คำขอราคา is addressed to the DESIGNER, so creating the quotation IS what put
+        // the deal on S4 — before any submit or approval exists.
+        assertThat(tickets.findById(ticketId).orElseThrow().summary().salesStage())
+            .isEqualTo(DealStage.QUOTE_DESIGN_SIDE);
+        Integer stageEventsAtCreation = stageChangedEvents();
+        assertThat(stageEventsAtCreation).isEqualTo(1);
+
         DealQuotationDto withValidity = quotationService.update(draft.id(), upsertWithValidityDays(draft, 30), salesActor);
         DealQuotationDto submitted = quotationService.submit(withValidity.id(), salesActor);
-
-        TicketDto beforeIssue = tickets.findById(ticketId).orElseThrow();
-        assertThat(beforeIssue.summary().salesStage()).isNotEqualTo(DealStage.QUOTE_DESIGN_SIDE);
-
         quotationService.approve(submitted.id(), new ApproveRequest(null), salesManagerActor);
 
         PricingRequestSummaryDto afterIssue = pricingRequests.findSummary(decision.pricingRequestId()).orElseThrow();
@@ -423,6 +437,14 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
 
         TicketDto afterIssueTicket = tickets.findById(ticketId).orElseThrow();
         assertThat(afterIssueTicket.summary().salesStage()).isEqualTo(DealStage.QUOTE_DESIGN_SIDE);
+        assertThat(stageChangedEvents()).isEqualTo(stageEventsAtCreation);
+    }
+
+    private Integer stageChangedEvents() {
+        return jdbc.queryForObject(
+            "SELECT COUNT(*) FROM sales.ticket_event WHERE ticket_id = :id AND kind = :kind",
+            java.util.Map.of("id", ticketId, "kind", th.co.glr.hr.ticket.TicketEventKind.STAGE_CHANGED),
+            Integer.class);
     }
 
     @Test
@@ -487,15 +509,8 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
 
     @Test
     void expireOverdueQuotations_neverTouchesADealDirectQuotation() {
-        DealQuotationRequests.ItemInput item = new DealQuotationRequests.ItemInput(
-            null, null, null, "Brand A", "Model A", "White", "Matte", "60x60",
-            new BigDecimal("10"), new BigDecimal("0.36"),
-            WastageCalculator.QUANTITY_MODE_PIECES, null, 10, WastageCalculator.WASTAGE_MODE_NONE, null, 1,
-            new BigDecimal("100.00"), BigDecimal.ZERO, "ไทย-สต็อก", 30, 45, null);
-        DealQuotationRequests.UpsertDealQuotationRequest request = new DealQuotationRequests.UpsertDealQuotationRequest(
-            null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30, "หมายเหตุทดสอบ", List.of(item));
-        DealQuotationDto directDraft = quotationService.create(ticketId, request, salesActor);
-        DealQuotationDto submittedDirect = quotationService.submit(directDraft.id(), salesActor);
+        DealQuotationDto created = quotationService.create(ticketId, directDraft(), salesActor);
+        DealQuotationDto submittedDirect = quotationService.submit(created.id(), salesActor);
         DealQuotationDto approvedDirect = quotationService.approve(
             submittedDirect.id(), new ApproveRequest(null), salesManagerActor);
         assertThat(approvedDirect.docStatus()).isEqualTo(QuotationStatus.APPROVED);
@@ -590,8 +605,188 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
+    // B-4 (VERSIONING.md, owner ruling 2026-10-17): one LIVE offer per DEAL, origin-agnostic.
+    // Issuing/approving any quotation retires every OTHER live one on the deal.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void issue_aSecondRoundsQuotation_supersedesTheFirstIssuedOne_andWritesTheEvent() {
+        DealQuotationDto first = issuedRound();
+        DealQuotationDto second = issuedRound();
+
+        assertThat(statusOf(first.id())).isEqualTo("SUPERSEDED");
+        assertThat(statusOf(second.id())).isEqualTo("ISSUED");
+        assertThat(supersededEventCount(ticketId, first.number(), second.number())).isEqualTo(1);
+        assertThat(countWithStatus("ISSUED")).isEqualTo(1);
+    }
+
+    @Test
+    void issue_supersedesARevisionRequestedSiblingToo() {
+        DealQuotationDto first = issuedRound();
+        jdbc.update("UPDATE sales.quotation SET doc_status = 'REVISION_REQUESTED' WHERE quotation_id = :id",
+            java.util.Map.of("id", first.id()));
+        DealQuotationDto second = issuedRound();
+
+        assertThat(statusOf(first.id())).isEqualTo("SUPERSEDED");
+        assertThat(supersededEventCount(ticketId, first.number(), second.number())).isEqualTo(1);
+    }
+
+    @Test
+    void issue_leavesAnAcceptedOrExpiredSiblingAlone() {
+        long accepted = insertRawQuotation(ticketId, "QN-B4-ACC", "PRICING_REQUEST", "ACCEPTED");
+        long expired = insertRawQuotation(ticketId, "QN-B4-EXP", "PRICING_REQUEST", "EXPIRED");
+        DealQuotationDto issued = issuedRound();
+
+        assertThat(statusOf(accepted)).isEqualTo("ACCEPTED");
+        assertThat(statusOf(expired)).isEqualTo("EXPIRED");
+        assertThat(supersededEventCount(ticketId, "QN-B4-ACC", issued.number())).isZero();
+        assertThat(supersededEventCount(ticketId, "QN-B4-EXP", issued.number())).isZero();
+    }
+
+    @Test
+    void issue_supersedesAnApprovedDirectQuotationOnTheSameDeal() {
+        // The pricing route refuses to START while a live direct quotation exists, so the pricing
+        // quotation is created+submitted first and the direct row lands afterwards, before approval.
+        DealQuotationDto submitted = submittedQuotation();
+        long direct = insertRawQuotation(ticketId, "QN-B4-DIRECT", "DEAL_DIRECT", "APPROVED");
+        DealQuotationDto issued = quotationService.approve(submitted.id(), new ApproveRequest(null), salesManagerActor);
+
+        assertThat(statusOf(direct)).isEqualTo("SUPERSEDED");
+        assertThat(supersededEventCount(ticketId, "QN-B4-DIRECT", issued.number())).isEqualTo(1);
+    }
+
+    @Test
+    void approve_ofADirectQuotation_supersedesAnIssuedPricingRouteSibling() {
+        long pr = insertRawQuotation(ticketId, "QN-B4-PR", "PRICING_REQUEST", "ISSUED");
+        DealQuotationDto direct = quotationService.create(ticketId, directDraft(), salesActor);
+        quotationService.submit(direct.id(), salesActor);
+        DealQuotationDto approved = quotationService.approve(direct.id(), new ApproveRequest(null), salesManagerActor);
+
+        assertThat(approved.docStatus()).isEqualTo(QuotationStatus.APPROVED);
+        assertThat(statusOf(pr)).isEqualTo("SUPERSEDED");
+        assertThat(supersededEventCount(ticketId, "QN-B4-PR", approved.number())).isEqualTo(1);
+    }
+
+    @Test
+    void issue_neverTouchesAQuotationOnAnotherDeal() {
+        java.util.Map<String, Object> t = jdbc.queryForMap(
+            "SELECT customer_id, project_id FROM sales.ticket WHERE ticket_id = :t", java.util.Map.of("t", ticketId));
+        long otherTicket = ticketService.create(
+            new CreateTicketRequest("ดีลอื่น B4", "NORMAL", "ลูกค้า B4", ((Number) t.get("customer_id")).longValue(),
+                ((Number) t.get("project_id")).longValue(), null, null, null,
+                List.of(ticketItem("SCG", "Tile A-S2", "Factory A-S2"))),
+            salesActor).summary().id();
+        long other = insertRawQuotation(otherTicket, "QN-B4-OTHER", "PRICING_REQUEST", "ISSUED");
+        issuedRound();
+
+        assertThat(statusOf(other)).isEqualTo("ISSUED");
+    }
+
+    @Test
+    void issue_neverTouchesALegacyOriginNullRow() {
+        long legacy = insertRawQuotation(ticketId, "QN-B4-LEGACY", null, "ISSUED");
+        issuedRound();
+
+        assertThat(statusOf(legacy)).isEqualTo("ISSUED");
+    }
+
+    @Test
+    void issue_ofARevision_writesExactlyOneSupersededEventForItsParent() {
+        DealQuotationDto parent = issuedRound();
+        DealQuotationDto revision = quotationService.createRevision(parent.id(), salesActor);
+        quotationService.submit(revision.id(), salesActor);
+        DealQuotationDto issued = quotationService.approve(revision.id(), new ApproveRequest(null), salesManagerActor);
+
+        assertThat(statusOf(parent.id())).isEqualTo("SUPERSEDED");
+        assertThat(supersededEventCount(ticketId, parent.number(), issued.number())).isEqualTo(1);
+    }
+
+    /**
+     * Owner ruling 2026-10-17: P1 stays QUOTATION_ISSUED while its only quotation is SUPERSEDED by
+     * sibling request P2's issue. Re-quoting P1 would price off the OLDER CEO decision and its
+     * issue would retire P2's newer offer, so the API refuses (the UI already hides the button).
+     */
+    @Test
+    void createFromPricingRequest_onARequestWhoseQuotationWasSupersededByASibling_refused409() {
+        long p1 = issuedRound().pricingRequestId();
+        issuedRound();
+        assertThat(statusOf(quotationIdsOnTicket().get(0))).isEqualTo("SUPERSEDED");
+        int before = quotationIdsOnTicket().size();
+
+        assertThatThrownBy(() -> quotationService.createFromPricingRequest(p1, salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(e.getMessage()).isEqualTo("คำขอราคานี้ถูกแทนที่ด้วยใบเสนอราคาฉบับใหม่ของดีลแล้ว — ออกใบเสนอราคาจากคำขอราคาล่าสุด หรือสร้างคำขอราคาใหม่");
+            });
+        assertThat(quotationIdsOnTicket()).hasSize(before);
+    }
+
+    /** Pins "only the LATEST row decides": parent SUPERSEDED by its own revision, child EXPIRED
+     * -> the expiry escape hatch still works. */
+    @Test
+    void createFromPricingRequest_whenTheLatestIsAnExpiredRevisionOfASupersededParent_stillAllowed() {
+        DealQuotationDto parent = issuedRound();
+        DealQuotationDto revision = quotationService.createRevision(parent.id(), salesActor);
+        quotationService.submit(revision.id(), salesActor);
+        DealQuotationDto child = quotationService.approve(revision.id(), new ApproveRequest(null), salesManagerActor);
+        assertThat(statusOf(parent.id())).isEqualTo("SUPERSEDED");
+        jdbc.update("UPDATE sales.quotation SET validity_date = CURRENT_DATE - 1 WHERE quotation_id = :id",
+            java.util.Map.of("id", child.id()));
+        assertThat(quotationService.expireOverdueQuotations()).isEqualTo(1);
+        assertThat(statusOf(child.id())).isEqualTo("EXPIRED");
+
+        DealQuotationDto next = quotationService.createFromPricingRequest(parent.pricingRequestId(), salesActor);
+
+        assertThat(next.docStatus()).isEqualTo(QuotationStatus.DRAFT);
+        assertThat(next.number()).isEqualTo(
+            DealQuotationRepository.baseNumber(parent.number(), parent.revisionNo()) + "-3");
+    }
+
+    private List<Long> quotationIdsOnTicket() {
+        return jdbc.queryForList("SELECT quotation_id FROM sales.quotation WHERE ticket_id = :t ORDER BY quotation_id",
+            java.util.Map.of("t", ticketId), Long.class);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
     // Helpers
     // ─────────────────────────────────────────────────────────────────────────────────────
+
+    private DealQuotationDto issuedRound() {
+        return quotationService.approve(submittedQuotation().id(), new ApproveRequest(null), salesManagerActor);
+    }
+
+    private String statusOf(long id) {
+        return jdbc.queryForObject("SELECT doc_status FROM sales.quotation WHERE quotation_id = :id",
+            java.util.Map.of("id", id), String.class);
+    }
+
+    private int rawSeq = 0;
+
+    private long insertRawQuotation(long onTicket, String number, String origin, String status) {
+        return jdbc.queryForObject("""
+            INSERT INTO sales.quotation (ticket_id, number, issued_by, doc_status, origin, total_amount,
+                                         quotation_revision_no, quotation_version)
+            VALUES (:t, :n, :by, :s, :o, 1000.00, 1, :v) RETURNING quotation_id
+            """,
+            new org.springframework.jdbc.core.namedparam.MapSqlParameterSource()
+                .addValue("t", onTicket).addValue("n", number).addValue("by", salesRepId)
+                .addValue("s", status).addValue("o", origin).addValue("v", 900 + rawSeq++),
+            Long.class);
+    }
+
+    private long supersededEventCount(long onTicket, String oldNumber, String newNumber) {
+        return jdbc.queryForObject("""
+            SELECT COUNT(*) FROM sales.ticket_event WHERE ticket_id = :t AND kind = :k AND message = :m
+            """,
+            java.util.Map.of("t", onTicket, "k", th.co.glr.hr.ticket.TicketEventKind.DEAL_QUOTATION_SUPERSEDED,
+                "m", "ใบ " + oldNumber + " ถูกแทนที่ด้วย " + newNumber),
+            Long.class);
+    }
+
+    private long countWithStatus(String status) {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM sales.quotation WHERE ticket_id = :t AND doc_status = :s",
+            java.util.Map.of("t", ticketId, "s", status), Long.class);
+    }
 
     private DealQuotationRequests.UpsertDealQuotationRequest upsertWithValidityDays(DealQuotationDto quotation, int days) {
         List<DealQuotationRequests.ItemInput> items = quotation.items().stream()
@@ -699,6 +894,73 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
             new ApprovePricingDecisionRequest("อนุมัติ", UUID.randomUUID().toString()), ceoActor);
     }
 
+    /**
+     * <b>THE DEFECT the versioning design exists to fix</b> — owner ruling 2026-10-17,
+     * {@code .design/quote-stage-gates/VERSIONING.md}: the base number belongs to the DEAL, so a
+     * second pricing round on the same deal continues the family instead of starting a new one.
+     *
+     * <p>A lookup scoped to ONE pricing request (the old {@code findLatestForPricingRequest}) would
+     * see none of the first request's quotations on a second request and fall through to a fresh
+     * base, costing the rep their version number on every รอบราคาใหม่. The family is read from the
+     * deal instead.
+     *
+     * <p>The first quotation is cancelled because a live one blocks a second create. That is the
+     * real flow, not a workaround: the rep abandons the document precisely BECAUSE they are going
+     * back for a new price, which is the moment the number is currently lost.
+     *
+     * <p>Prod note (audit 2026-10-17): zero PRICING_REQUEST-origin quotations exist in production,
+     * so the defect never reached a customer; this test keeps it from shipping the day the route is
+     * first used.
+     */
+    @Test
+    void createFromPricingRequest_aSecondRoundOnTheSameDeal_continuesTheFamily() {
+        DealQuotationDto first = quotationService.createFromPricingRequest(
+            approvedDecision().pricingRequestId(), salesActor);
+        String base = DealQuotationRepository.baseNumber(first.number(), first.revisionNo());
+        assertThat(first.revisionNo()).isEqualTo(1);
+        quotationService.cancel(first.id(), new DealQuotationRequests.CancelRequest(null), salesActor);
+
+        DealQuotationDto second = quotationService.createFromPricingRequest(
+            approvedDecision().pricingRequestId(), salesActor);
+
+        assertThat(DealQuotationRepository.baseNumber(second.number(), second.revisionNo()))
+            .as("the deal's family, not a fresh base").isEqualTo(base);
+        assertThat(second.revisionNo()).isEqualTo(2);
+        assertThat(second.number()).isEqualTo(base + "-2");
+    }
+
+    /**
+     * The cross-route case, scoped honestly. One-pricing-route-per-deal makes a deal holding a LIVE
+     * document of each origin unreachable — {@code DirectQuotationLocks}' own Javadoc calls that
+     * "the mixed-origin deal nobody has ever produced" — so this covers the reachable shape: the rep
+     * switches route after abandoning the first document, and the family survives the switch.
+     */
+    @Test
+    void createFromPricingRequest_afterADirectQuotationWasCancelled_continuesTheSameFamily() {
+        DealQuotationDto direct = quotationService.create(ticketId, directDraft(), salesActor);
+        String base = DealQuotationRepository.baseNumber(direct.number(), direct.revisionNo());
+        quotationService.cancel(direct.id(), new DealQuotationRequests.CancelRequest(null), salesActor);
+
+        DealQuotationDto fromRequest = quotationService.createFromPricingRequest(
+            approvedDecision().pricingRequestId(), salesActor);
+
+        assertThat(DealQuotationRepository.baseNumber(fromRequest.number(), fromRequest.revisionNo()))
+            .as("one family per deal, across both origins").isEqualTo(base);
+        assertThat(fromRequest.revisionNo()).isEqualTo(2);
+    }
+
+    /** A DEAL_DIRECT draft on this class's own deal. */
+    private DealQuotationRequests.UpsertDealQuotationRequest directDraft() {
+        DealQuotationRequests.ItemInput item = new DealQuotationRequests.ItemInput(
+            null, null, null, "Brand A", "Model A", "White", "Matte", "60x60",
+            new BigDecimal("10"), new BigDecimal("0.36"),
+            WastageCalculator.QUANTITY_MODE_PIECES, null, 10, WastageCalculator.WASTAGE_MODE_NONE, null, 1,
+            new BigDecimal("100.00"), BigDecimal.ZERO, "ไทย-สต็อก", 30, 45, null);
+        return new DealQuotationRequests.UpsertDealQuotationRequest(
+            null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30, "ครอบครัวเลขที่", List.of(item))
+            .withRecipientType("OWNER");
+    }
+
     private UpdatePricingDecisionItemRequest discountItem(long itemId, BigDecimal discountPct) {
         return new UpdatePricingDecisionItemRequest(itemId, null, null, null, null, false,
             discountPct, false, null, false, null, false);
@@ -711,6 +973,8 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
         pricingRequestService.pickup(pricingRequestId, importActor);
         List<FactoryQuoteDto> drafts = factoryQuoteService.generateDrafts(pricingRequestId, importActor);
         for (FactoryQuoteDto draft : drafts) {
+            factoryQuoteService.markContacted(draft.id(), new MarkFactoryContactedRequest(
+                java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
             FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(),
                 response("REF-" + draft.factoryName(), "THB", "100.00", draft.items().get(0).pricingRequestItemId()),
                 importActor);

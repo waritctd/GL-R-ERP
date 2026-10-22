@@ -35,6 +35,7 @@ async function startNewFormDecision(sqmPerPiece = 0.36) {
   });
   const { project } = await api.customers.createProject(customer.id, { name: 'โครงการ CEO Price Mode Mock' });
   const { ticket: created } = await api.tickets.create({
+    entryChannel: 'DESIGNER_LED',
     title: 'ดีล CEO Price Mode Mock',
     priority: 'NORMAL',
     customerName: customer.name,
@@ -77,6 +78,12 @@ async function startNewFormDecision(sqmPerPiece = 0.36) {
   await api.auth.login({ role: 'import' });
   await api.pricingRequests.pickup(prId);
   const { items: quotes } = await api.pricingRequests.generateFactoryEmailDrafts(prId);
+  // CR-1 (B-R2): price entry is locked until the factory is marked ติดต่อโรงงานแล้ว.
+  for (const q of quotes) {
+    await api.pricingRequests.markFactoryQuoteContacted(q.id, {
+      contactedOn: new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Bangkok' }).format(new Date()),
+    });
+  }
   const quote = quotes[0];
   const prItemId = quote.items[0].pricingRequestItemId;
   await api.pricingRequests.receiveFactoryQuote(quote.id, {

@@ -25,9 +25,14 @@ public final class TicketResponses {
      * @param blockedReason  the refused call's own Thai message when {@code allowed} is false,
      *                       else null. Deliberately server-supplied copy: only the service knows
      *                       why a given stage is refused.
+     * @param onRoute        whether the stage is on this deal's {@link DealRoute} (its entry
+     *                       channel's party route). False means a manual move INTO it is refused
+     *                       (see {@code blockedReason}) until the channel is corrected; a client
+     *                       uses it to de-emphasise the stage. Always true for a deal whose
+     *                       channel is DESIGNER_LED, UNSPECIFIED, unknown or absent.
      */
     public record StageDecisionDto(String stage, int no, boolean allowed, boolean requiresReason,
-                                   String blockedReason) {}
+                                   String blockedReason, boolean onRoute) {}
     public record TicketActionState(String lifecycle, String salesStage, String paymentStatus,
                                     String fulfillmentStatus, String status) {}
     public record TicketActionDto(String action, String kind, String label, String targetStage,

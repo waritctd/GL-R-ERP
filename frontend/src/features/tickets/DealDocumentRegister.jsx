@@ -9,19 +9,27 @@ import { Panel } from '../../components/common/Layout.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { downloadBlob } from '../../utils/download.js';
-import { depositNoticeStatusLabel, formatMoney, formatThaiDate, quotationStatusLabel } from '../../utils/format.js';
+import {
+  depositNoticeStatusLabel, formatMoney, formatThaiDate, quotationRecipientLabel, quotationStatusLabel,
+} from '../../utils/format.js';
 import { canViewCustomerQuotation } from '../pricingRequests/pricingRequestMeta.js';
-import { canViewDealQuotation } from '../quotations/quotationMeta.js';
+import { canViewDealQuotation, dealQuotationStatusLabel } from '../quotations/quotationMeta.js';
 import { isRemainingInvoiceReady } from './remainingInvoiceReadiness.js';
 import { buttonVariants } from '../../components/common/Button.jsx';
 import { cn } from '../../utils/cn.js';
 import { RemainingInvoiceDialog } from './RemainingInvoiceDialog.jsx';
+import {
+  dropLegacyDuplicatedByChain, groupChainQuotations, groupDepositNotices,
+  groupDirectQuotations, groupLegacyQuotations, groupRemainingInvoices, sortGroupsNewestFirst,
+} from './dealDocumentVersions.js';
 
 /**
  * Slice D ("the เอกสาร document register"): one read-only roll-up of every document a deal can
- * produce — customer quotations (both the PricingRequest/CustomerQuotation chain and the legacy
- * ticket-native rows), the deposit notice, the remaining-invoice download, and formal attachments
- * (PO / signed quotation / tax invoice / other) — rendered together in the เอกสาร tab.
+ * produce — customer quotations (the PricingRequest/CustomerQuotation chain, the legacy
+ * ticket-native rows and the direct v2 quotations), the deposit notice, the remaining invoice, and
+ * formal attachments (PO / signed quotation / tax invoice / other) — rendered together in the
+ * เอกสาร tab. Every document is shown with ALL its versions: the current (newest) version first,
+ * older versions always visible beneath it (see dealDocumentVersions.js for grouping).
  *
  * Deliberately a ROLL-UP, not a replacement: DealQuotationPanel/DealLegacyQuotations (also in this
  * same tab), DealDepositPanel (การเงิน), the docActions remaining-invoice button (DealStagePanel),
@@ -91,6 +99,7 @@ export function DealDocumentRegister({
   canViewPricingRequests,
   canViewDocumentsTab,
   pricingRequests = [],
+  pricingRequestsLoading = false,
   legacyQuotations = [],
   attachments = [],
   attachLoading = false,
@@ -133,27 +142,15 @@ export function DealDocumentRegister({
     (q.data ?? []).map((doc) => ({ ...doc, pricingRequestId: eligiblePricingRequests[idx]?.id }))
   )), [customerQuotationQueries, eligiblePricingRequests]);
 
-  // ── Quotation v2 direct quotations: COUNTED here, listed by DealDirectQuotationPanel ──────────
-  // The เอกสาร tab contradicted itself (owner review V3, 2026-09-10): this block printed
-  // "ยังไม่มีใบเสนอราคาสำหรับดีลนี้" directly above a panel listing five of them. The two are
-  // different row families — this register rolls up the PricingRequest CHAIN plus the legacy
-  // ticket-native rows, while `origin = 'DEAL_DIRECT'` rows belong to DealDirectQuotationPanel —
-  // but a reader has no way to know that, so the sentence simply read as false.
-  //
-  // Only the COUNT is taken, deliberately: the direct rows already render in full (with their own
-  // downloads) in the panel immediately below in the same tab, so listing them again here would
-  // duplicate every row rather than fix the contradiction. The empty state is therefore suppressed
-  // whenever ANY of the three families has rows, and replaced by a pointer to where they are.
-  //
-  // `Number(ticketId)` is required, not cosmetic: `ticketId` arrives here as the raw useParams()
-  // STRING, and DealDirectQuotationPanel keys the very same query with the numeric id. Passing the
-  // string would open a SECOND cache entry and fire a second request for data already on screen.
+  // Direct (v2) quotations, listed here with their versions. The query is shared with
+  // DealDirectQuotationPanel, so `Number(ticketId)` is required, not cosmetic: `ticketId` arrives
+  // as the raw useParams() STRING and that panel keys the very same query with the numeric id —
+  // the string would open a SECOND cache entry and fire a second request for data already loaded.
   const directQuotationsQuery = useQuery({
     queryKey: queryKeys.dealQuotationsByTicket(Number(ticketId)),
     queryFn: () => api.dealQuotations.listForTicket(Number(ticketId)).then((r) => r.items ?? []),
     enabled: Boolean(ticketId) && canViewQuotations && canViewDealQuotation(user),
   });
-  const directQuotationCount = (directQuotationsQuery.data ?? []).length;
 
   const depositNoticesQuery = useQuery({
     queryKey: queryKeys.depositNotices(ticketId),
@@ -162,7 +159,48 @@ export function DealDocumentRegister({
     // reasoning as TicketDetailPage's own `attachmentsQuery`/`activitiesQuery` `enabled` gates.
     enabled: Boolean(ticketId) && canViewDepositAndInvoice,
   });
-  const depositNotices = depositNoticesQuery.data ?? [];
+  const depositGroups = useMemo(() => groupDepositNotices(depositNoticesQuery.data ?? []), [depositNoticesQuery.data]);
+
+  // Stored remaining-invoice versions. Same key form as RemainingInvoiceDialog (raw `ticketId`)
+  // so both share one cache entry; same gate as the deposit notice (requireTicketViewer).
+  const remainingInvoicesQuery = useQuery({
+    queryKey: queryKeys.storedRemainingInvoices(ticketId),
+    queryFn: () => api.storedRemainingInvoices.listForTicket(ticketId).then((r) => r.remainingInvoices ?? []),
+    enabled: Boolean(ticketId) && canViewDepositAndInvoice,
+  });
+  const remainingGroups = useMemo(() => groupRemainingInvoices(remainingInvoicesQuery.data ?? []), [remainingInvoicesQuery.data]);
+
+  // CR-1 (R6/R9): the stored ใบขอซื้อ rows — one IR per factory — in a 5th section. Same read gate as
+  // ImportRequestService#requireRead (and DealFulfilmentPanel's canReadStoredIr): import / CEO /
+  // sales_manager, or the OWNING sales rep. Same query key as that panel, so one fetch feeds both.
+  const canViewImportRequests = ['import', 'ceo', 'sales_manager'].includes(user?.role)
+    || (user?.role === 'sales' && summary?.createdById != null && summary.createdById === user?.id);
+  const importRequestsQuery = useQuery({
+    queryKey: queryKeys.storedImportRequests(ticketId),
+    queryFn: () => api.storedImportRequests.listForTicket(ticketId).then((r) => r.importRequests ?? []),
+    enabled: Boolean(ticketId) && canViewImportRequests,
+  });
+  const importRequestRows = useMemo(
+    () => [...(importRequestsQuery.data ?? [])]
+      .filter((r) => r.status !== 'SUPERSEDED')
+      .sort((a, b) => (a.factoryName ?? '').localeCompare(b.factoryName ?? '', 'th') || (a.version ?? 0) - (b.version ?? 0)),
+    [importRequestsQuery.data],
+  );
+
+  const chainGroups = useMemo(() => groupChainQuotations(customerQuotationRows), [customerQuotationRows]);
+  // Legacy rows that also exist in the chain (same id) render once, as the chain row. Until the
+  // chain queries have settled ONCE we cannot tell which those are, so hold the legacy rows back
+  // rather than flash duplicates. Latched: a later pricing request starting to load must not make
+  // already-shown rows vanish.
+  const [chainSettledOnce, setChainSettledOnce] = useState(false);
+  if (!chainSettledOnce && !customerQuotationsLoading && !pricingRequestsLoading) setChainSettledOnce(true);
+  const legacyRows = useMemo(
+    () => (!chainSettledOnce ? [] : dropLegacyDuplicatedByChain(legacyQuotations, customerQuotationRows)),
+    [chainSettledOnce, legacyQuotations, customerQuotationRows],
+  );
+  const legacyGroups = useMemo(() => groupLegacyQuotations(legacyRows), [legacyRows]);
+  const directGroups = useMemo(() => groupDirectQuotations(directQuotationsQuery.data ?? []), [directQuotationsQuery.data]);
+  const quotationDocCount = chainGroups.length + legacyGroups.length + directGroups.length;
 
   const remainingInvoiceReady = isRemainingInvoiceReady(summary);
 
@@ -200,11 +238,31 @@ export function DealDocumentRegister({
     downloadBlob(blob, doc.docNumber ?? 'deposit-notice', format);
   }
 
+  async function downloadDirectQuotation(q, format) {
+    const key = `direct-${q.id}-${format}`;
+    const blob = await handleDownload(key, () => (format === 'pdf'
+      ? api.dealQuotations.downloadPdf(q.id)
+      : api.dealQuotations.downloadXlsx(q.id)));
+    downloadBlob(blob, q.number ?? `quotation-${q.id}`, format);
+  }
+
+  async function downloadRemainingInvoice(v) {
+    const key = `remaining-${v.id}-xlsx`;
+    const blob = await handleDownload(key, () => api.storedRemainingInvoices.download(v.id));
+    downloadBlob(blob, v.docNumber || `draft-${v.id}`, 'xlsx');
+  }
+
+  async function downloadImportRequest(row) {
+    const key = `ir-${row.id}-pdf`;
+    const blob = await handleDownload(key, () => api.storedImportRequests.download(row.id, undefined));
+    downloadBlob(blob, `IR-${row.docNumber ?? `draft-${row.id}`}-${row.factoryName}`, 'pdf');
+  }
+
   function openRemainingInvoiceDialog() {
     setRemainingInvoiceDialogOpen(true);
   }
 
-  const hasAnyVisibleSection = canViewQuotations || canViewDepositAndInvoice || canViewDocumentsTab;
+  const hasAnyVisibleSection = canViewQuotations || canViewDepositAndInvoice || canViewDocumentsTab || canViewImportRequests;
 
   if (!hasAnyVisibleSection) {
     return (
@@ -216,113 +274,175 @@ export function DealDocumentRegister({
     );
   }
 
+  const pdfXlsx = (busyPrefix, run, v) => [
+    { label: 'PDF', busy: busyKey === `${busyPrefix}-${v.id}-pdf`, onClick: () => run(v, 'pdf') },
+    { label: 'Excel', busy: busyKey === `${busyPrefix}-${v.id}-xlsx`, onClick: () => run(v, 'xlsx') },
+  ];
+
+  const chainItem = (q) => ({
+    id: q.id,
+    testId: `document-version-chain-${q.id}`,
+    title: q.number ?? `ร่างใบเสนอราคา #${q.id}`,
+    status: quotationStatusLabel(q.docStatus),
+    date: q.issuedAt ?? q.createdAt,
+    amount: q.grandTotal,
+    recipient: quotationRecipientLabel(q.recipientType ?? 'UNSPECIFIED').label,
+    meta: `ครั้งที่ ${q.quotationRevisionNo ?? 1}`,
+    // Download gate unchanged: only ISSUED / ACCEPTED chain rows.
+    actions: q.docStatus === 'ISSUED' || q.docStatus === 'ACCEPTED'
+      ? pdfXlsx('chain', downloadCustomerQuotation, q) : [],
+  });
+  const legacyItem = (q) => ({
+    id: q.id,
+    testId: `document-version-legacy-${q.id}`,
+    title: q.number,
+    status: quotationStatusLabel(q.docStatus),
+    date: q.issuedAt,
+    amount: q.totalAmount,
+    recipient: quotationRecipientLabel(q.recipientType ?? 'UNSPECIFIED').label,
+    meta: 'เอกสารเดิม',
+    actions: pdfXlsx('legacy', downloadLegacyQuotation, q),
+  });
+  const directItem = (q) => ({
+    id: q.id,
+    testId: `document-version-direct-${q.id}`,
+    title: q.number ?? `ร่างใบเสนอราคา #${q.id}`,
+    status: dealQuotationStatusLabel(q.docStatus),
+    date: q.approvedAt ?? q.createdAt,
+    amount: q.grandTotal,
+    // DealQuotationDto#recipientType (Round 8). An older backend omits it: undefined -> no chip
+    // (never a wrong one) — the frontend deploys before the backend image.
+    recipient: q.recipientType ? quotationRecipientLabel(q.recipientType).label : null,
+    meta: `ครั้งที่ ${q.revisionNo ?? 1}`,
+    // Mirrors DealDirectQuotationPanel: PDF + Excel for every status.
+    actions: pdfXlsx('direct', downloadDirectQuotation, q),
+  });
+  const depositItem = (doc) => ({
+    id: doc.id,
+    testId: `document-version-deposit-${doc.id}`,
+    title: doc.docNumber ?? `ร่างใบแจ้งยอดมัดจำ #${doc.id}`,
+    status: depositNoticeStatusLabel(doc.status),
+    date: doc.issueDate ?? doc.createdAt,
+    meta: `มัดจำ ${Math.round(Number(doc.depositPercent ?? 0.5) * 100)}%`,
+    // GLA-117: a SUPERSEDED notice was once ISSUED (DepositNoticeRepository#supersede only ever
+    // transitions FROM ISSUED, keeping doc_number/pdf_path/xlsx_path intact) and
+    // DepositNoticeService#getPdf/getXlsx re-render from that persisted snapshot with no status
+    // guard — so it stays downloadable exactly like an ISSUED one. Only DRAFT (never rendered, no
+    // doc number yet) has no download actions.
+    actions: doc.status === 'ISSUED' || doc.status === 'SUPERSEDED'
+      ? pdfXlsx('deposit', downloadDepositNotice, doc) : [],
+  });
+  const remainingItem = (v) => ({
+    id: v.id,
+    testId: `document-version-remaining-${v.id}`,
+    title: v.docNumber ?? 'ใบแจ้งหนี้ส่วนที่เหลือ (ยังไม่ออกเลข)',
+    status: depositNoticeStatusLabel(v.status),
+    date: v.issuedAt ?? v.createdAt,
+    amount: v.grandTotal,
+    // Same rule as RemainingInvoiceDialog's version history: any stored, non-DRAFT version.
+    actions: v.status === 'DRAFT' ? [] : [
+      { label: 'Excel', busy: busyKey === `remaining-${v.id}-xlsx`, onClick: () => downloadRemainingInvoice(v) },
+    ],
+  });
+
+  const importRequestItem = (r) => ({
+    id: r.id,
+    testId: `document-version-ir-${r.id}`,
+    // a draft has no number yet: a dash here, the ฉบับร่าง chip says the rest (once)
+    title: r.docNumber ?? '—',
+    status: r.status === 'ISSUED' ? { label: 'ออกเลขแล้ว', tone: 'success' } : { label: 'ฉบับร่าง', tone: 'neutral' },
+    date: r.issuedAt ?? r.createdAt,
+    // One IR per factory: the factory is what tells two rows apart, so it leads the meta line.
+    meta: r.factoryName,
+    // Every stored row has a renderable PDF (a draft included — sales downloads it on create).
+    actions: [{ label: 'PDF', busy: busyKey === `ir-${r.id}-pdf`, onClick: () => downloadImportRequest(r) }],
+  });
+
+  const renderGroups = (groups, toItem) => groups.map((g) => (
+    <DocumentGroup key={g.key} items={g.versions.map(toItem)} />
+  ));
+  // One list across the three quotation families, ordered by each document's newest version.
+  const quotationGroups = sortGroupsNewestFirst([
+    ...chainGroups.map((g) => ({ ...g, toItem: chainItem })),
+    ...legacyGroups.map((g) => ({ ...g, toItem: legacyItem })),
+    ...directGroups.map((g) => ({ ...g, toItem: directItem })),
+  ]);
+
   return (
-    <Panel flush className="flex flex-col gap-4" title="เอกสารของดีล" data-testid="deal-document-register">
+    <Panel flush className="flex flex-col" title="เอกสารของดีล" data-testid="deal-document-register">
       {canViewQuotations ? (
-        <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3" data-testid="register-quotations">
-          <strong className="text-sm">ใบเสนอราคา</strong>
-          {customerQuotationsLoading && customerQuotationRows.length === 0 && legacyQuotations.length === 0 ? (
-            // Only block on the async chain-quotation fetch while there is
-            // NOTHING else to show yet — legacy rows arrive as a prop (no
-            // fetch of their own) and must never wait on an unrelated query.
+        <RegisterSection testId="register-quotations" title="ใบเสนอราคา" count={quotationDocCount} unit="เอกสาร">
+          {customerQuotationsLoading && quotationDocCount === 0 ? (
+            // Only block on the async chain fetch while there is NOTHING else to show yet —
+            // legacy rows arrive as a prop and must never wait on an unrelated query.
             <Skeleton height={40} />
-          ) : (customerQuotationRows.length === 0 && legacyQuotations.length === 0) ? (
-            // See the directQuotationsQuery comment above: this branch may only claim the deal has
-            // no ใบเสนอราคา when the DIRECT rows are absent too, otherwise it contradicts the panel
-            // rendered right beneath it in this same tab.
-            directQuotationCount > 0 ? (
-              <p className="text-xs text-text-muted">
-                {`ใบเสนอราคาของดีลนี้ ${directQuotationCount} ฉบับ แสดงอยู่ในแผง “ใบเสนอราคา” ด้านล่าง`}
-              </p>
-            ) : (
-              <p className="text-xs text-text-muted">ยังไม่มีใบเสนอราคาสำหรับดีลนี้</p>
-            )
+          ) : quotationDocCount === 0 ? (
+            directQuotationsQuery.isLoading
+              ? <Skeleton height={40} />
+              : <p className="text-xs text-text-muted">ยังไม่มีใบเสนอราคาสำหรับดีลนี้</p>
           ) : (
-            <div className="flex flex-col gap-1.5">
-              {customerQuotationRows.map((q) => {
-                const status = quotationStatusLabel(q.docStatus);
-                return (
-                  <DocumentRow
-                    key={`chain-${q.id}`}
-                    icon="fileText"
-                    title={q.number ?? `ร่างใบเสนอราคา #${q.id}`}
-                    meta={`${formatMoney(q.totalAmount)} · ครั้งที่ ${q.quotationRevisionNo ?? 1}`}
-                    status={status}
-                    actions={q.docStatus === 'ISSUED' || q.docStatus === 'ACCEPTED' ? [
-                      { label: 'PDF', busy: busyKey === `chain-${q.id}-pdf`, onClick: () => downloadCustomerQuotation(q, 'pdf') },
-                      { label: 'Excel', busy: busyKey === `chain-${q.id}-xlsx`, onClick: () => downloadCustomerQuotation(q, 'xlsx') },
-                    ] : []}
-                  />
-                );
-              })}
-              {legacyQuotations.map((q) => {
-                const status = quotationStatusLabel(q.docStatus);
-                return (
-                  <DocumentRow
-                    key={`legacy-${q.id}`}
-                    icon="fileText"
-                    title={q.number}
-                    meta={`${formatMoney(q.totalAmount)} · เอกสารเดิม · ออก ${formatThaiDate(q.issuedAt)}`}
-                    status={status}
-                    actions={[
-                      { label: 'PDF', busy: busyKey === `legacy-${q.id}-pdf`, onClick: () => downloadLegacyQuotation(q, 'pdf') },
-                      { label: 'Excel', busy: busyKey === `legacy-${q.id}-xlsx`, onClick: () => downloadLegacyQuotation(q, 'xlsx') },
-                    ]}
-                  />
-                );
-              })}
+            <div className="flex flex-col gap-3">
+              {quotationGroups.map((g) => <DocumentGroup key={g.key} items={g.versions.map(g.toItem)} />)}
             </div>
           )}
-        </div>
+        </RegisterSection>
       ) : null}
 
       {canViewDepositAndInvoice ? (
-        <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3" data-testid="register-deposit-and-invoice">
-          <strong className="text-sm">ใบแจ้งยอดมัดจำ และใบแจ้งหนี้ส่วนที่เหลือ</strong>
+        <RegisterSection testId="register-deposit" title="ใบแจ้งยอดมัดจำ"
+          count={depositGroups.length} unit="เอกสาร">
           {depositNoticesQuery.isLoading ? (
             <Skeleton height={40} />
-          ) : depositNotices.length === 0 ? (
-            <p className="text-xs text-text-muted">ยังไม่มีใบแจ้งยอดมัดจำสำหรับดีลนี้</p>
+          ) : depositGroups[0]?.versions.length ? (
+            renderGroups(depositGroups, depositItem)
           ) : (
-            <div className="flex flex-col gap-1.5">
-              {depositNotices.map((doc) => (
-                <DocumentRow
-                  key={`deposit-${doc.id}`}
-                  icon="fileText"
-                  title={doc.docNumber ?? `ร่างใบแจ้งยอดมัดจำ #${doc.id}`}
-                  meta={`มัดจำ ${Math.round(Number(doc.depositPercent ?? 0.5) * 100)}%`}
-                  status={depositNoticeStatusLabel(doc.status)}
-                  // GLA-117: a SUPERSEDED notice was once ISSUED (DepositNoticeRepository#supersede
-                  // only ever transitions FROM ISSUED, keeping doc_number/pdf_path/xlsx_path
-                  // intact) and DepositNoticeService#getPdf/getXlsx re-render from that persisted
-                  // snapshot with no status guard at all — so it must stay downloadable exactly
-                  // like an ISSUED one. Only DRAFT (never rendered, no doc number yet) has no
-                  // download actions.
-                  actions={doc.status === 'ISSUED' || doc.status === 'SUPERSEDED' ? [
-                    { label: 'PDF', busy: busyKey === `deposit-${doc.id}-pdf`, onClick: () => downloadDepositNotice(doc, 'pdf') },
-                    { label: 'Excel', busy: busyKey === `deposit-${doc.id}-xlsx`, onClick: () => downloadDepositNotice(doc, 'xlsx') },
-                  ] : []}
-                />
-              ))}
+            <p className="text-xs text-text-muted">ยังไม่มีใบแจ้งยอดมัดจำสำหรับดีลนี้</p>
+          )}
+        </RegisterSection>
+      ) : null}
+
+      {canViewDepositAndInvoice ? (
+        <RegisterSection testId="register-remaining-invoice" title="ใบแจ้งหนี้ส่วนที่เหลือ" count={remainingGroups.length} unit="เอกสาร">
+          {/* The readiness row (create/download via the dialog) always leads the section; the
+              stored versions follow. Its title says what the button DOES, so it does not repeat
+              the section heading. */}
+          <DocumentRow
+            icon="fileText"
+            title="ออกใบแจ้งหนี้ส่วนที่เหลือ"
+            meta={remainingInvoiceReady ? 'พร้อมดาวน์โหลด' : 'ยังไม่ถึงขั้นตอน (ต้องออกใบเสนอราคาและสินค้าพร้อมส่งมอบก่อน)'}
+            status={{ label: remainingInvoiceReady ? 'พร้อมใช้งาน' : 'รอขั้นตอน', tone: remainingInvoiceReady ? 'success' : 'neutral' }}
+            actions={remainingInvoiceReady ? [
+              { label: 'Excel', busy: false, onClick: openRemainingInvoiceDialog },
+            ] : []}
+          />
+          {remainingGroups.length > 0 ? (
+            renderGroups(remainingGroups, remainingItem)
+          ) : remainingInvoicesQuery.isLoading ? (
+            <Skeleton height={40} />
+          ) : (
+            <p className="text-xs text-text-muted">ยังไม่มีใบแจ้งหนี้ส่วนที่เหลือสำหรับดีลนี้</p>
+          )}
+        </RegisterSection>
+      ) : null}
+
+      {canViewImportRequests ? (
+        <RegisterSection testId="register-import-requests" title="ใบขอซื้อ (รายโรงงาน)" count={importRequestRows.length} unit="เอกสาร">
+          {importRequestsQuery.isLoading ? (
+            <Skeleton height={40} />
+          ) : importRequestsQuery.isError ? (
+            <p className="text-xs font-bold text-danger">โหลดใบขอซื้อไม่สำเร็จ — ลองรีเฟรชหน้านี้</p>
+          ) : importRequestRows.length === 0 ? (
+            <p className="text-xs text-text-muted">ยังไม่มีใบขอซื้อสำหรับดีลนี้</p>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {importRequestRows.map((r) => <DocumentGroup key={`ir-${r.id}`} items={[importRequestItem(r)]} />)}
             </div>
           )}
-          <div className="mt-1 border-t border-border-subtle pt-2">
-            <DocumentRow
-              icon="fileText"
-              title="ใบแจ้งหนี้ส่วนที่เหลือ"
-              meta={remainingInvoiceReady ? 'พร้อมดาวน์โหลด' : 'ยังไม่ถึงขั้นตอน (ต้องออกใบเสนอราคาและสินค้าพร้อมส่งมอบก่อน)'}
-              status={{ label: remainingInvoiceReady ? 'พร้อมใช้งาน' : 'รอขั้นตอน', tone: remainingInvoiceReady ? 'success' : 'neutral' }}
-              actions={remainingInvoiceReady ? [
-                { label: 'Excel', busy: false, onClick: openRemainingInvoiceDialog },
-              ] : []}
-            />
-          </div>
-        </div>
+        </RegisterSection>
       ) : null}
 
       {canViewDocumentsTab ? (
-        <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3" data-testid="register-attachments">
-          <strong className="text-sm">ไฟล์แนบ (PO / ใบเซ็น / ใบกำกับภาษี)</strong>
+        <RegisterSection testId="register-attachments" title="ไฟล์แนบ (PO / ใบเซ็น / ใบกำกับภาษี)">
           {attachLoading ? (
             <Skeleton height={40} />
           ) : attachments.length === 0 ? (
@@ -344,7 +464,7 @@ export function DealDocumentRegister({
               ))}
             </div>
           )}
-        </div>
+        </RegisterSection>
       ) : null}
 
       {remainingInvoiceDialogOpen ? (
@@ -355,30 +475,81 @@ export function DealDocumentRegister({
   );
 }
 
-function DocumentRow({ icon, title, meta, status, actions = [] }) {
+// Sections are divided, not boxed: one Panel, a divider above every section but the first.
+function RegisterSection({ testId, title, count, unit, children }) {
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-md border border-border-subtle bg-surface-muted p-2">
-      <Icon name={icon} size={13} style={{ color: 'var(--color-text-muted)', flexShrink: 0 }} />
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="truncate text-sm font-bold text-text">{title}</span>
-          {status ? <StatusBadge tone={status.tone}>{status.label}</StatusBadge> : null}
-        </div>
-        {meta ? <div className="text-2xs text-text-muted">{meta}</div> : null}
+    <section className="flex flex-col gap-3 px-5 py-4 mobile:px-4 mobile:py-3.5 [&+&]:border-t [&+&]:border-border-subtle" data-testid={testId}>
+      <div className="flex items-baseline gap-2">
+        <strong className="text-sm font-bold text-text">{title}</strong>
+        {count > 0 ? <span className="text-xs text-text-muted">{`${count} ${unit}`}</span> : null}
       </div>
-      <div className="flex shrink-0 flex-wrap gap-1.5">
-        {actions.map((action) => (action.href ? (
-          // Not a <Button>: this is a real navigation link (target="_blank" to
-          // a file URL) — Button renders a <button>, which has no href.
-          <a key={action.label} href={action.href} target="_blank" rel="noreferrer" className={cn(buttonVariants({ variant: 'secondary' }), 'px-2.5 py-1 text-xs')}>
-            {action.label}
-          </a>
-        ) : (
-          <Button key={action.label} type="button" variant="secondary" style={{ fontSize: 12, padding: '4px 10px' }}
-            disabled={action.busy} onClick={action.onClick}>
-            {action.busy ? 'กำลังดาวน์โหลด…' : action.label}
-          </Button>
-        )))}
+      {children}
+    </section>
+  );
+}
+
+// One document: the current (newest) version as a normal row, older versions indented beneath.
+function DocumentGroup({ items }) {
+  const [current, ...older] = items;
+  return (
+    <div className="flex flex-col gap-1.5" data-testid="document-group">
+      <DocumentRow icon="fileText" {...current} />
+      {older.length > 0 ? (
+        <div className="ml-1.5 flex flex-col gap-1 border-l border-border-subtle pl-6 mobile:pl-3">
+          {older.map((v) => <DocumentRow key={v.testId} muted {...v} />)}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// Below desktop (<=1040px, the `nav-drawer` band) every button/link is a 44px touch target; the
+// 8px gap between them is kept by `gap-2`. Desktop stays compact.
+const TOUCH_TARGET = 'nav-drawer:min-h-11 nav-drawer:min-w-11';
+
+function DocumentRow({ testId, icon, title, meta, status, date, amount, recipient, actions = [], muted = false }) {
+  const hasAmount = amount !== undefined && amount !== null;
+  const metaText = [date ? formatThaiDate(date) : null, meta].filter(Boolean).join(' · ');
+  return (
+    // Line 1: number + status + recipient (wraps). Line 2: date/meta. Line 3 (mobile) / right side
+    // of line 2 (desktop): amount on the left, actions on the right.
+    <div data-testid={testId} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+      <div className="flex min-w-0 max-w-full flex-wrap items-center gap-x-2 gap-y-1">
+        {!muted && icon ? <Icon name={icon} size={13} style={{ color: 'var(--color-text-muted)', flexShrink: 0 }} /> : null}
+        <span className={cn('min-w-0 truncate mobile:whitespace-normal mobile:break-all', muted ? 'text-xs text-text-muted' : 'text-sm font-bold text-text')}>{title}</span>
+        {status ? <StatusBadge tone={status.tone}>{status.label}</StatusBadge> : null}
+        {/* Recipient of the whole document: shown on the current (top) row only. */}
+        {recipient && !muted ? (
+          <span data-testid="document-recipient" title={`สำหรับ: ${recipient}`}
+            className="max-w-full truncate rounded-pill border border-border-subtle bg-surface-muted px-2 text-xs font-bold text-text-secondary">
+            <span className="sr-only">สำหรับ: </span>{recipient}
+          </span>
+        ) : null}
+      </div>
+      <div className="flex min-w-0 flex-1 basis-full flex-wrap items-center justify-between gap-x-3 gap-y-2">
+        {metaText ? <span className="text-xs text-text-muted mobile:basis-full">{metaText}</span> : null}
+        <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-x-3 gap-y-2 mobile:w-full mobile:basis-full mobile:justify-between">
+          {hasAmount ? (
+            <span className={cn('tabular-nums', muted ? 'text-xs text-text-muted' : 'text-sm text-text')}>{formatMoney(amount)}</span>
+          ) : null}
+          {actions.length > 0 ? (
+            <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+              {actions.map((action) => (action.href ? (
+                // Not a <Button>: this is a real navigation link (target="_blank" to
+                // a file URL) — Button renders a <button>, which has no href.
+                <a key={action.label} href={action.href} target="_blank" rel="noreferrer"
+                  className={cn(buttonVariants({ variant: 'secondary' }), 'px-2.5 py-1 text-xs', TOUCH_TARGET)}>
+                  {action.label}
+                </a>
+              ) : (
+                <Button key={action.label} type="button" variant="secondary" className={TOUCH_TARGET}
+                  style={{ fontSize: 12, padding: '4px 10px' }} disabled={action.busy} onClick={action.onClick}>
+                  {action.busy ? 'กำลังดาวน์โหลด…' : action.label}
+                </Button>
+              )))}
+            </div>
+          ) : null}
+        </div>
       </div>
     </div>
   );

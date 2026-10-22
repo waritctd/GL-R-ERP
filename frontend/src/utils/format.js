@@ -531,11 +531,55 @@ export function hasDealStageLabel(stage) {
   return Object.prototype.hasOwnProperty.call(DEAL_STAGE_LABELS, stage);
 }
 
-export function dealStageLabel(stage) {
+/**
+ * Stages whose WORDING follows the deal's entry channel — `stage -> channel -> label`.
+ *
+ * Two stages qualify, and both for the same reason: their default label in `DEAL_STAGE_LABELS`
+ * hedges with a slash because one string had to serve every route. Now that the channel is known,
+ * the hedge can be resolved to the party the deal actually involves.
+ *   S1 LEAD_APPROACH — "เข้าถึงเจ้าของ/ผู้ออกแบบโครงการ" (owner ruling 2026-10-01)
+ *   S3 SPEC_APPROVED — not a designer stage; it means "the party who specifies has agreed the spec"
+ *
+ * A channel not listed here — DESIGNER_LED, UNSPECIFIED, unknown, absent — keeps the
+ * DEAL_STAGE_LABELS wording. For UNSPECIFIED that is the point: no channel was entered, so there is
+ * no party to name and the hedged label is the honest one.
+ *
+ * ⚠️ NOT every slash is a route hedge, and the others are deliberately left alone:
+ * S7 "รอผลประมูล / รอผู้ซื้อ" joins two different SITUATIONS, and S18
+ * "นัดส่งสินค้า / นัดรับเงินส่วนที่เหลือ" joins two ACTIVITIES. Neither varies by channel, so neither
+ * belongs here. A test pins that they stay identical across channels.
+ *
+ * Wording only. WHICH stages a route visits is the backend's (`DealRoute`), served as `onRoute`.
+ */
+const STAGE_LABEL_BY_CHANNEL = {
+  LEAD_APPROACH: {
+    DESIGNER_LED: 'เข้าถึงผู้ออกแบบโครงการ',
+    OWNER_DIRECT: 'เข้าถึงเจ้าของโครงการ',
+    BUYER_DIRECT: 'เข้าถึงผู้ซื้อ/ผู้รับเหมา',
+  },
+  SPEC_APPROVED: {
+    OWNER_DIRECT: 'เจ้าของตกลงตามสเปคแล้ว',
+    BUYER_DIRECT: 'ผู้ซื้อ/ผู้รับเหมาตกลงตามสเปคแล้ว',
+  },
+};
+
+/**
+ * @param {string} stage
+ * @param {string} [entryChannel] the deal's `entryChannel`. Optional on purpose: the many call
+ *   sites that have no deal in hand (lists, history) keep the one-argument form and the default
+ *   wording.
+ */
+export function dealStageLabel(stage, entryChannel) {
   // The fallback renders the raw code rather than throwing: a shipped build must still draw the
   // deal. It is deliberately ugly, and the guard above is what makes sure nobody has to rely on
   // seeing it — assertStageLabelsComplete has already thrown in dev/test by this point.
-  return DEAL_STAGE_LABELS[stage] ?? { label: stage || '-', tone: 'neutral' };
+  const base = DEAL_STAGE_LABELS[stage] ?? { label: stage || '-', tone: 'neutral' };
+  const byChannel = STAGE_LABEL_BY_CHANNEL[stage];
+  if (byChannel && Object.prototype.hasOwnProperty.call(byChannel, entryChannel)) {
+    // Only the label varies; tone stays the base's, so a stage's colour never depends on the route.
+    return { ...base, label: byChannel[entryChannel] };
+  }
+  return base;
 }
 
 // Project lost reason -> StatusBadge tone (V50). Canonical source.
@@ -626,6 +670,26 @@ export function fulfilmentStatusLabel(value) {
 }
 
 // Step 7: Factory Purchase Order and Import Execution — mirrors
+
+/**
+ * The FIELD labels for "who is this offered to" — owner ruling 2026-09-30 (R8).
+ *
+ * The deal's entry channel and the quotation's recipient are two different fields that answer the
+ * same question, so they share one label: เสนอแก่. Where both appear on the same surface (the
+ * new-deal card at /quotations/new) each is qualified; where only one appears, the plain form is
+ * used. Kept here, in one place, so the quotation side imports them rather than re-typing the Thai.
+ *
+ * ⚠️ This renames the FIELD only. The remedy button ("แก้ช่องทางดีล") and the server's own refusal
+ * ("… — แก้ช่องทางดีลก่อน", DealRoute.refusalMessage) deliberately keep the old wording — they name
+ * the ACTION, not the field, and the owner chose that inconsistency over editing merged server copy.
+ *
+ * ⚠️ The channel's OPTION labels below are NOT renamed and deliberately differ from
+ * {@link quotationRecipientLabel}'s. Owner ruling: the how-the-deal-arrived nuance ("ผู้ออกแบบนำดีล",
+ * "เจ้าของติดต่อโดยตรง") is worth more than symmetry between the two fields. Do not "fix" that.
+ */
+export const OFFERED_TO_LABEL = 'เสนอแก่';
+export const DEAL_OFFERED_TO_LABEL = 'ดีลนี้เสนอแก่';
+export const QUOTATION_OFFERED_TO_LABEL = 'ใบเสนอราคานี้เสนอแก่';
 
 export function entryChannelLabel(value) {
   const map = {

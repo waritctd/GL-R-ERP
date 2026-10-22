@@ -126,3 +126,27 @@ ERP-Knowledgebase.zip
 # via --roster; it must never be committed to this PUBLIC repo.
 agents/attendance/*roster*.json
 agents/attendance/*roster*.csv
+
+# Hallmark design-skill project memory (local run log; not a build artifact).
+.hallmark/
+
+# Internal agent-operating and design-context docs. Owner ruling 2026-10-10: these are
+# working notes for the team and its coding agents, not something to publish in this
+# PUBLIC repo. Kept locally on each machine; removed from tracking with `git rm --cached`
+# (they remain in history before that commit).
+/CLAUDE.md
+/AGENTS.md
+/DESIGN.md
+/PRODUCT.md
+/STACKED-PRS.md
+/UX_BLOCKED_DECISIONS.md
+
+# graphify knowledge-graph output (/graphify): regenerated on demand from source, not source.
+# Bare name so it matches at every depth (backend/graphify-out, frontend/graphify-out, root).
+graphify-out
+# Obsidian vaults exported from the graphs — same generated artifact, different shape.
+backend-graph-vault/
+integration-map-vault/
+
+# Superpowers brainstorm scratch (visual companion mockups)
+.superpowers/

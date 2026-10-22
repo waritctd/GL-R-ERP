@@ -63,8 +63,10 @@ const ROUTES = [
   '/quotations/new',
   '/quotations/1',
   '/fulfilment', // งานนำเข้า — Import's fulfilment workspace (import/ceo; every other role refuses)
+  '/import/deals/1', // Import's own per-deal page (GET /api/import/deals/{id}; import/ceo, import row-scoped)
   '/commissions',
   '/finance',
+  '/finance/deals/1', // Account's own per-deal finance page (GET /api/finance/deals/{id}; account/ceo, account row-scoped)
   '/price-import',
   '/ceo-settings',
   '/catalog',
@@ -196,6 +198,13 @@ test.describe('every role can open every route it is allowed to open', () => {
           .catch(() => {/* a page that keeps polling never idles; the checks below still hold */});
 
         const allowed = canAccessPath(route, user);
+        // A denied route may refuse by REDIRECTING to a page the role can use, rather than by
+        // showing the AccessDenied heading — e.g. import hitting a deal page (`/tickets/:id`) is
+        // sent to its own `/import/deals/:id` (RequireAccess; pinned in RequireAccess.test.jsx).
+        // Landing on a DIFFERENT path than the one requested is therefore a clean refusal, not a
+        // "denied but rendered" leak. (`canAccessPath` still governs whether the guard denies.)
+        const landedPath = new URL(page.url()).pathname;
+        const redirectedAway = landedPath !== route.split('?')[0];
         const deniedShown = await page
           .getByRole('heading', { name: 'ไม่มีสิทธิ์เข้าถึงหน้านี้' })
           .isVisible()
@@ -209,7 +218,7 @@ test.describe('every role can open every route it is allowed to open', () => {
 
         if (boundaryShown) crashed.push(route);
         if (allowed && deniedShown) misrendered.push(`${route} — allowed but refused`);
-        if (!allowed && !deniedShown) misrendered.push(`${route} — denied but rendered`);
+        if (!allowed && !deniedShown && !redirectedAway) misrendered.push(`${route} — denied but rendered`);
       }
 
       expect(crashed, `${role}: routes that hit the React error boundary`).toEqual([]);

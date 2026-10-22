@@ -133,7 +133,7 @@ abstract class AbstractDealDirectQuotationIntegrationTest extends AbstractPostgr
             null, null, null, WastageCalculator.LINE_TYPE_PLAIN, "ค่าขนส่ง", new BigDecimal("2"), "JOB", null, null,
             null, null, null, null, null, null);
         return new UpsertDealQuotationRequest(null, null, null, null, 50, "CASH_ON_DELIVERY",
-            0, 30, null, "NET", "TH", "THB", List.of(tile, plain));
+            0, 30, null, "NET", "TH", "THB", List.of(tile, plain)).withRecipientType("OWNER");
     }
 
     // ── a priced tile row, for the classes that are about how a row is priced ───────────────
@@ -189,7 +189,18 @@ abstract class AbstractDealDirectQuotationIntegrationTest extends AbstractPostgr
     /** A Thai request in {@code priceMode} holding {@code items}, on the terms {@link #draft} uses. */
     protected static UpsertDealQuotationRequest request(String priceMode, ItemInput... items) {
         return new UpsertDealQuotationRequest(null, null, null, null, 50, "CASH_ON_DELIVERY",
-            0, 30, null, priceMode, "TH", "THB", List.of(items));
+            0, 30, null, priceMode, "TH", "THB", List.of(items)).withRecipientType("OWNER");
+    }
+
+    /** Develop's H1 rule: {@code account} reads a quotation only once it is APPROVED (or later) AND its deal
+     * is in the account list scope (stage ORDER_RECEIVED or later). Fixture-only: puts a quotation there. */
+    protected void openToAccount(long quotationId) {
+        jdbc.update("UPDATE sales.quotation SET doc_status = 'APPROVED' WHERE quotation_id = :id",
+            java.util.Map.of("id", quotationId));
+        jdbc.update("""
+            UPDATE sales.ticket SET sales_stage = 'ORDER_RECEIVED'
+             WHERE ticket_id = (SELECT ticket_id FROM sales.quotation WHERE quotation_id = :id)
+            """, java.util.Map.of("id", quotationId));
     }
 
     protected DealQuotationDto approved(long ticketId, UserPrincipal creator) {

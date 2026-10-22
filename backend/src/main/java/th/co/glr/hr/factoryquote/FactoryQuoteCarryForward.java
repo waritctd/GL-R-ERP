@@ -79,8 +79,16 @@ public class FactoryQuoteCarryForward {
         if (!quotes.findByPricingRequest(child.id()).isEmpty()) {
             return false;
         }
+        List<PricingRequestItemDto> childItems = pricingRequests.findItems(child.id());
+        // Stock lines (V194): a request carrying any stock line takes the ordinary submit routing
+        // (all-in-Thailand straight to the CEO, otherwise Import confirms the ETAs). Copying a
+        // parent's factory quotes onto a request whose lines changed SOURCE is exactly the kind of
+        // fuzzy carry this class refuses to make.
+        if (childItems.stream().anyMatch(item -> item.stockSource() != null)) {
+            return false;
+        }
         Map<Long, Long> itemIdMapping = equivalentItemMapping(
-            pricingRequests.findItems(parentId), pricingRequests.findItems(child.id()));
+            pricingRequests.findItems(parentId), childItems);
         if (itemIdMapping == null) {
             return false;
         }
@@ -99,6 +107,15 @@ public class FactoryQuoteCarryForward {
             return false;
         }
         return true;
+    }
+
+    /**
+     * Stock lines (V194): {@link LandedCostCalculator#isReadyForCeoReview} - the ONE readiness
+     * predicate - exposed to {@code PricingRequestService}, which cannot take a new constructor
+     * dependency (every hand-wired test builds it positionally).
+     */
+    public boolean isReadyForCeoReview(PricingRequestSummaryDto summary) {
+        return landedCosts.isReadyForCeoReview(summary);
     }
 
     /**
@@ -154,6 +171,11 @@ public class FactoryQuoteCarryForward {
             && Objects.equals(a.factory(), b.factory())
             && Objects.equals(a.requestedUnit(), b.requestedUnit())
             && Objects.equals(a.requestedUnitBasis(), b.requestedUnitBasis())
+            // CR-1: the currency / price unit Sales asked the factory to quote in. A factory price is
+            // only meaningful in those terms, so a revision that changes just these must not carry
+            // the old quotes forward as ready.
+            && Objects.equals(a.requestedCurrency(), b.requestedCurrency())
+            && Objects.equals(a.requestedPriceUnitBasis(), b.requestedPriceUnitBasis())
             && Objects.equals(a.quantityType(), b.quantityType())
             && Objects.equals(a.productCode(), b.productCode())
             && Objects.equals(a.originCountry(), b.originCountry())

@@ -1,6 +1,6 @@
-import { Outlet, useLocation } from 'react-router-dom';
+import { Navigate, Outlet, useLocation } from 'react-router-dom';
 import { AccessDeniedPage } from '../components/common/AccessDeniedPage.jsx';
-import { canAccessPath } from './permissions.js';
+import { canAccessPath, importDealRedirectFor } from './permissions.js';
 
 // Route guard: renders the nested route (`<Outlet/>`) when `user` may access
 // the current path. Otherwise renders an in-place "insufficient privileges"
@@ -19,6 +19,10 @@ import { canAccessPath } from './permissions.js';
 export function RequireAccess({ user }) {
   const location = useLocation();
   if (!canAccessPath(location.pathname, user)) {
+    // Import no longer opens the whole-deal page; a stale deep-link goes to its own page for the
+    // same deal (query string dropped — the whole-deal page's params mean nothing there).
+    const importDealPath = importDealRedirectFor(location.pathname, user);
+    if (importDealPath) return <Navigate to={importDealPath} replace />;
     return <AccessDeniedPage />;
   }
   return <Outlet />;

@@ -38,4 +38,31 @@ describe('RequireAccess', () => {
 
     expect(screen.getByText('รายชื่อพนักงาน')).not.toBeNull();
   });
+
+  // Import no longer opens the whole-deal page (its GET 403s). A stale link to it — a backend
+  // notification deep-link, a bookmark — lands on the import user's OWN page for that deal
+  // rather than a dead end.
+  function renderDealRoutes(user) {
+    return render(
+      <MemoryRouter initialEntries={['/tickets/12']}>
+        <Routes>
+          <Route element={<RequireAccess user={user} />}>
+            <Route path="/tickets/:id" element={<div>หน้าดีลเต็ม</div>} />
+            <Route path="/import/deals/:ticketId" element={<div>หน้าดีลฝ่ายนำเข้า</div>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+  }
+
+  it('redirects import from /tickets/:id to /import/deals/:id instead of showing the whole deal', () => {
+    renderDealRoutes({ role: 'import', employeeId: 2 });
+    expect(screen.getByText('หน้าดีลฝ่ายนำเข้า')).not.toBeNull();
+    expect(screen.queryByText('หน้าดีลเต็ม')).toBeNull();
+  });
+
+  it('still renders the whole deal for the CEO', () => {
+    renderDealRoutes({ role: 'ceo', employeeId: 1 });
+    expect(screen.getByText('หน้าดีลเต็ม')).not.toBeNull();
+  });
 });

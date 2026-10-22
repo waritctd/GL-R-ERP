@@ -4,9 +4,11 @@ import { describe, expect, it } from 'vitest';
 import {
   ALLOWED_TRANSITIONS,
   activePricingRequestsSummary,
+  ceoGateBlockerMessage,
   canActOnPricingDecision,
   canCancelPricingRequest,
   canConfirmOrder,
+  confirmOrderBlockedReason,
   canCreateCommercialOnlyRevision,
   canCreateCustomerQuotation,
   canCreateDepositNoticeFromQuotation,
@@ -392,6 +394,31 @@ describe('canConfirmOrder', () => {
     expect(canConfirmOrder(salesOwner, pr({ status: 'QUOTATION_ACCEPTED', orderConfirmedAt: '2026-07-21T00:00:00Z' })))
       .toBe(false);
   });
+  it('rejects when the deal ticket sits in a status the bridge cannot advance (ticket-status gate)', () => {
+    for (const ticketStatus of ['approved', 'price_proposed', 'in_review', 'submitted', 'document_issued', 'closed', 'cancelled']) {
+      expect(canConfirmOrder(salesOwner, pr({ status: 'QUOTATION_ACCEPTED', ticketStatus }))).toBe(false);
+    }
+  });
+  it('allows the two ticket statuses the bridge handles, and an absent ticketStatus (server still guards)', () => {
+    for (const ticketStatus of ['draft', 'quotation_issued', null, undefined]) {
+      expect(canConfirmOrder(salesOwner, pr({ status: 'QUOTATION_ACCEPTED', ticketStatus }))).toBe(true);
+    }
+  });
+});
+
+describe('confirmOrderBlockedReason', () => {
+  it('names the ticket status when it is the blocker', () => {
+    expect(confirmOrderBlockedReason(pr({ status: 'QUOTATION_ACCEPTED', ticketStatus: 'approved' })))
+      .toContain('approved');
+  });
+  it('is null when the ticket status is bridgeable or unknown, or the PR is not accepted yet', () => {
+    expect(confirmOrderBlockedReason(pr({ status: 'QUOTATION_ACCEPTED', ticketStatus: 'draft' }))).toBeNull();
+    expect(confirmOrderBlockedReason(pr({ status: 'QUOTATION_ACCEPTED' }))).toBeNull();
+    expect(confirmOrderBlockedReason(pr({ status: 'DRAFT', ticketStatus: 'approved' }))).toBeNull();
+  });
+});
+
+describe('canConfirmOrder (roles)', () => {
   it('rejects a non-owning sales rep, ceo, and import', () => {
     const accepted = pr({ status: 'QUOTATION_ACCEPTED' });
     expect(canConfirmOrder(otherSales, accepted)).toBe(false);
@@ -477,5 +504,55 @@ describe('label helpers', () => {
   it('quantityTypeLabel falls back to the raw value', () => {
     expect(quantityTypeLabel('CONFIRMED')).toContain('ยืนยันแล้ว');
     expect(quantityTypeLabel('UNKNOWN_X')).toBe('UNKNOWN_X');
+  });
+});
+
+describe('ceoGateBlockerMessage', () => {
+  const AWAITING = { status: 'AWAITING_FACTORY_RESPONSE' };
+  const routed = { id: 1, resolvedFactoryName: 'A' };
+  const readyQuote = { factoryName: 'A', status: 'READY_FOR_COSTING', current: true, revisionNo: 1, items: [{ pricingRequestItemId: 1 }] };
+  const GENERIC = 'ระบบยังไม่พบว่าครบเงื่อนไขส่งถึง CEO — ตรวจสอบรายการและราคาโรงงานอีกครั้ง';
+
+  it('is null once the request reached the CEO', () => {
+    expect(ceoGateBlockerMessage({ summary: { status: 'READY_FOR_CEO_REVIEW' }, items: [routed] }, [readyQuote])).toBeNull();
+  });
+
+  it('falls back to a neutral line (no factory blame, no repeated heading) when nothing is derivable', () => {
+    expect(ceoGateBlockerMessage({ summary: AWAITING, items: [routed] }, [readyQuote])).toBe(GENERIC);
+  });
+
+  it('names a routed line that no quote covers', () => {
+    expect(ceoGateBlockerMessage({ summary: AWAITING, items: [routed, { id: 2, resolvedFactoryName: 'B' }] }, [readyQuote]))
+      .toBe('รอยืนยันราคาโรงงาน B');
+  });
+
+  // The server exempts stock lines from the factory + quote requirement (and setItemFactory 409s
+  // on them), so the UI must never tell Import to fix something it cannot.
+  it('never blames a stock line with no factory', () => {
+    const stock = { id: 2, stockSource: 'IN_THAILAND', productDescription: 'สต็อก' };
+    expect(ceoGateBlockerMessage({ summary: AWAITING, items: [routed, stock] }, [readyQuote])).toBe(GENERIC);
+  });
+
+  it('never waits on a factory quote for a stock line that carries a factory name', () => {
+    const stock = { id: 2, stockSource: 'IN_THAILAND', resolvedFactoryName: 'B' };
+    expect(ceoGateBlockerMessage({ summary: AWAITING, items: [routed, stock] }, [readyQuote])).toBe(GENERIC);
+  });
+
+  it('asks for the arrival date on an IN_TRANSIT stock line that has none', () => {
+    const transit = { id: 2, stockSource: 'IN_TRANSIT', productDescription: 'ของกำลังมา', expectedArrivalDate: null };
+    expect(ceoGateBlockerMessage({ summary: AWAITING, items: [routed, transit] }, [readyQuote]))
+      .toBe('รายการที่ 2 (ของกำลังมา) ยังไม่ได้ระบุวันที่คาดว่าจะถึง');
+  });
+
+  it('does not ask for an arrival date once it is set, or on an IN_THAILAND line', () => {
+    const transit = { id: 2, stockSource: 'IN_TRANSIT', expectedArrivalDate: '2026-11-01' };
+    const inThailand = { id: 3, stockSource: 'IN_THAILAND' };
+    expect(ceoGateBlockerMessage({ summary: AWAITING, items: [routed, transit, inThailand] }, [readyQuote])).toBe(GENERIC);
+  });
+
+  it('says a factory declined (NOT_AVAILABLE) instead of "waiting for confirmation"', () => {
+    const declined = { factoryName: 'B', status: 'NOT_AVAILABLE', current: true, revisionNo: 1, items: [{ pricingRequestItemId: 2 }] };
+    expect(ceoGateBlockerMessage({ summary: AWAITING, items: [routed, { id: 2, resolvedFactoryName: 'B' }] }, [readyQuote, declined]))
+      .toBe('โรงงาน B แจ้งไม่พร้อมเสนอราคา');
   });
 });

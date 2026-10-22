@@ -98,7 +98,6 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
   const [policyOpen, setPolicyOpen] = useState(false);
   const [policyValue, setPolicyValue] = useState('WAIVED');
   const [policyReason, setPolicyReason] = useState('');
-  const [depositPercentInput, setDepositPercentInput] = useState('0.5');
   const [downloadingFormat, setDownloadingFormat] = useState(null);
   const [previewHtml, setPreviewHtml] = useState('');
 
@@ -144,9 +143,10 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
   });
 
   const createNoticeMutation = useMutation({
-    mutationFn: () => api.pricingRequests.createDepositNoticeFromQuotation(pr.id, {
-      depositPercent: depositPercentInput === '' ? null : Number(depositPercentInput),
-    }),
+    // depositPercent is deliberately NOT sent here (see the create-notice UI's own comment
+    // below) — the backend now always ignores a caller-supplied value and re-sources it from
+    // the accepted quotation itself.
+    mutationFn: () => api.pricingRequests.createDepositNoticeFromQuotation(pr.id, {}),
     onSuccess: () => {
       showToast?.('success', 'สร้างร่างใบแจ้งยอดเงินรับมัดจำแล้ว');
       invalidateAfterDepositChange();
@@ -316,11 +316,11 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
           ) : canCreateNotice ? (
             <div className="flex flex-col gap-2">
               <p className="text-xs text-text-muted">ลูกค้ายืนยันคำสั่งซื้อแล้ว — สร้างใบแจ้งยอดเงินรับมัดจำจากใบเสนอราคาที่ยอมรับได้เลย</p>
-              <label className="flex items-center gap-2 text-sm">
-                % มัดจำ
-                <input type="number" min="0" max="1" step="0.05" className="w-24 rounded border border-border p-1 text-sm"
-                  value={depositPercentInput} onChange={(e) => setDepositPercentInput(e.target.value)} />
-              </label>
+              {/* Owner ruling (2026-09-29): the deposit % is LOCKED to the accepted quotation's
+                  own deposit_percent — createDraft ignores any client-supplied value and always
+                  re-sources it from the quotation (see DepositNoticeService.createDraft /
+                  DepositNoticeRepository#findDealQuotationDepositPercent). The % input that used
+                  to sit here is gone — there is nothing left for it to control. */}
               <Button type="button" variant="primary" className="self-start" disabled={createNoticeMutation.isPending}
                 onClick={() => createNoticeMutation.mutate()} data-testid="deal-deposit-create-notice">
                 สร้างใบแจ้งยอดเงินรับมัดจำ

@@ -175,6 +175,8 @@ class AttachmentControllerTest {
     @Test
     void accountCanListButCannotUpload() throws Exception {
         when(ticketRepository.findById(TICKET_ID)).thenReturn(Optional.of(ticket()));
+        // H1 lockdown: account reads a deal's documents only when the deal is inside its list scope.
+        when(ticketRepository.isInAccountScope(TICKET_ID)).thenReturn(true);
         when(attachmentRepository.findByTicketId(TICKET_ID)).thenReturn(List.of(attachment()));
 
         mvc.perform(get("/api/tickets/{ticketId}/attachments", TICKET_ID).session(session(STRANGER_ID, "account")))

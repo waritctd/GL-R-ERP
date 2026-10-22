@@ -43,7 +43,7 @@ import th.co.glr.hr.pricingrequest.PricingRequestRequests.UpdatePricingRequestRe
 public class PricingRequestRepository {
     private static final String SUMMARY_SELECT = """
         SELECT pr.*, t.code AS ticket_code, t.title AS ticket_title, t.created_by AS ticket_created_by,
-               p.name AS project_name, t.customer_name, t.customer_id,
+               p.name AS project_name, t.customer_name, t.customer_id, t.status AS ticket_status,
                er.first_name_th AS requested_by_first_name_th, er.last_name_th AS requested_by_last_name_th,
                ei.first_name_th AS assigned_import_first_name_th, ei.last_name_th AS assigned_import_last_name_th,
                (SELECT COUNT(*) FROM sales.pricing_request_item i
@@ -199,7 +199,13 @@ public class PricingRequestRepository {
                 // GLA-125: whatever PricingRequestService#resolveItem already normalized this to
                 // (null unless originCountry = "อื่นๆ") — this repository does no normalization
                 // itself, matching every other derived/validated item field on this same batch.
-                .addValue("originCountryOther", item.originCountryOther());
+                .addValue("originCountryOther", item.originCountryOther())
+                // Slice 1 stock-line scaffolding (V194): persisted exactly as sent; no validation
+                // or routing here (persistence only, per this class's header Javadoc).
+                .addValue("stockSource", item.stockSource())
+                // CR-1 (GLA-167): terms Sales fixes on the line; already normalized by the service.
+                .addValue("requestedCurrency", item.requestedCurrency())
+                .addValue("requestedPriceUnitBasis", item.requestedPriceUnitBasis());
         }
         jdbc.batchUpdate("""
             INSERT INTO sales.pricing_request_item
@@ -210,7 +216,8 @@ public class PricingRequestRepository {
                  product_code, thickness_mm, sqm_per_piece, quantity_mode, area_sqm, pieces_input,
                  wastage_mode, wastage_value, pieces_per_box, sqm_per_box, pieces_before_wastage,
                  pieces_after_wastage, boxes, round_to_full_box, origin_country,
-                 lead_time_min_days, lead_time_max_days, origin_country_other)
+                 lead_time_min_days, lead_time_max_days, origin_country_other, stock_source,
+                 requested_currency, requested_price_unit_basis)
             VALUES
                 (:pricingRequestId, :sourceTicketItemId, :productId, :variantId,
                  :brand, :model, :productDescription, :color, :texture, :size, :factory,
@@ -219,7 +226,8 @@ public class PricingRequestRepository {
                  :productCode, :thicknessMm, :sqmPerPiece, :quantityMode, :areaSqm, :piecesInput,
                  :wastageMode, :wastageValue, :piecesPerBox, :sqmPerBox, :piecesBeforeWastage,
                  :piecesAfterWastage, :boxes, :roundToFullBox, :originCountry,
-                 :leadTimeMinDays, :leadTimeMaxDays, :originCountryOther)
+                 :leadTimeMinDays, :leadTimeMaxDays, :originCountryOther, :stockSource,
+                 :requestedCurrency, :requestedPriceUnitBasis)
             """, batch);
     }
 
@@ -511,7 +519,7 @@ public class PricingRequestRepository {
                 "Illegal pricing request status transition: " + expected + " -> "
                     + PricingRequestStatus.SUPERSEDED);
         }
-        return jdbc.update("""
+        int rows = jdbc.update("""
             UPDATE sales.pricing_request
                SET status = 'SUPERSEDED',
                    superseded_at = now(),
@@ -523,6 +531,13 @@ public class PricingRequestRepository {
                 .addValue("id", id)
                 .addValue("expected", expected)
                 .addValue("supersededBy", supersededByPricingRequestId));
+        if (rows > 0) {
+            // CR-1: a pending lead-time change dies with the superseded request.
+            jdbc.update(LeadTimeChangeRepository.AUTO_WITHDRAW_SQL.formatted("c.pricing_request_id = :id"),
+                new MapSqlParameterSource().addValue("id", id)
+                    .addValue("autoReason", LeadTimeChangeRepository.AUTO_WITHDRAW_REASON));
+        }
+        return rows;
     }
 
     public void addEvent(long pricingRequestId, long ticketId, Long actorId, String actorName,
@@ -617,7 +632,9 @@ public class PricingRequestRepository {
                    product_code, thickness_mm, sqm_per_piece, quantity_mode, area_sqm, pieces_input,
                    wastage_mode, wastage_value, pieces_per_box, sqm_per_box, pieces_before_wastage,
                    pieces_after_wastage, boxes, round_to_full_box, origin_country,
-                   lead_time_min_days, lead_time_max_days, origin_country_other
+                   lead_time_min_days, lead_time_max_days, origin_country_other,
+                   stock_source, expected_arrival_date,
+                   requested_currency, requested_price_unit_basis
               FROM sales.pricing_request_item
              WHERE pricing_request_id = :id
              ORDER BY sort_order, pricing_request_item_id
@@ -646,8 +663,25 @@ public class PricingRequestRepository {
     }
 
     /**
-     * Fills in the free-text {@code factory} on ONE line that has none, so Import can route it to a
-     * factory email. Returns the number of rows written — 0 means the WHERE clause rejected it.
+     * Resolves a {@code price_catalog.factories} master row's canonical name by id — the picker
+     * (B6/GLA-135) sends a factoryId, and this is what {@code PricingRequestService#setItemFactory}
+     * uses to validate it and recover the exact name to persist. {@code Optional.empty()} when the
+     * id does not exist; the service turns that into a 404 rather than trusting an arbitrary id.
+     */
+    public Optional<String> findFactoryNameById(long factoryId) {
+        try {
+            return Optional.ofNullable(jdbc.queryForObject(
+                "SELECT name FROM price_catalog.factories WHERE factory_id = :id",
+                Map.of("id", factoryId), String.class));
+        } catch (EmptyResultDataAccessException e) {
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * Fills in the {@code factory}/{@code resolved_factory_id} on ONE line that has none, so
+     * Import can route it to a factory email. Returns the number of rows written — 0 means the
+     * WHERE clause rejected it.
      *
      * <p>The guard is IN THE SQL on purpose, not only in the service: the {@code WHERE} requires
      * the row to belong to {@code :pricingRequestId} AND to still have no factory of any kind. That
@@ -658,15 +692,26 @@ public class PricingRequestRepository {
      * and raises the precise 4xx; a 0 here after those checks passed is a lost race, and its caller
      * turns it into the same 409 {@link #transition} uses.
      *
-     * <p>{@code resolved_factory_name} is deliberately NOT written. That column is the price-catalog
-     * snapshot ({@link #snapshotCatalogSelections}) and a hand-typed name is not a catalog
-     * resolution; every downstream reader already falls back to {@code factory} via
+     * <p><b>B6 (GLA-135) fix:</b> {@code factoryId} is now written to {@code resolved_factory_id} —
+     * the column downstream readers ({@code FactoryQuoteService#groupByFactory} /
+     * {@code factoryConfigs.findByName(factoryName)}) actually key their factory-email + CEO
+     * landed-cost lookup on. Before this fix only the free-text {@code factory} column was written,
+     * so a typed name that did not exactly match a master row left {@code resolved_factory_id} NULL
+     * and dead-ended those lookups. {@code factory} is still written too — with the CALLER-RESOLVED
+     * canonical master name (see {@code findFactoryNameById} above), not raw user input, so every
+     * existing reader of the free-text column keeps working unchanged.
+     *
+     * <p>{@code resolved_factory_name} stays deliberately NOT written. That column is the
+     * price-catalog PRODUCT snapshot ({@link #snapshotCatalogSelections}) — a manually-picked
+     * factory (even now that it is master-row-resolved) is not a catalog product resolution; every
+     * downstream reader already falls back to {@code factory} via
      * {@code firstText(resolvedFactoryName, factory)}.
      */
-    public int fillItemFactory(long pricingRequestId, long pricingRequestItemId, String factory) {
+    public int fillItemFactory(long pricingRequestId, long pricingRequestItemId, long factoryId, String factory) {
         return jdbc.update("""
             UPDATE sales.pricing_request_item
-               SET factory = :factory
+               SET factory = :factory,
+                   resolved_factory_id = :factoryId
              WHERE pricing_request_item_id = :id
                AND pricing_request_id = :pricingRequestId
                AND COALESCE(NULLIF(BTRIM(resolved_factory_name), ''), NULLIF(BTRIM(factory), '')) IS NULL
@@ -674,7 +719,52 @@ public class PricingRequestRepository {
             new MapSqlParameterSource()
                 .addValue("id", pricingRequestItemId)
                 .addValue("pricingRequestId", pricingRequestId)
-                .addValue("factory", factory));
+                .addValue("factory", factory)
+                .addValue("factoryId", factoryId));
+    }
+
+    /**
+     * Stock lines (V194): records the วันที่คาดว่าจะถึง of ONE in-transit line, and who/when. The
+     * {@code stock_source = 'IN_TRANSIT'} predicate is in the WHERE so a line that stopped being in
+     * transit between the caller's read and this write matches zero rows (compare-and-set).
+     */
+    public int setItemExpectedArrival(long pricingRequestId, long pricingRequestItemId,
+                                      LocalDate expectedArrivalDate, long setById) {
+        return jdbc.update("""
+            UPDATE sales.pricing_request_item
+               SET expected_arrival_date      = :eta,
+                   expected_arrival_set_by_id = :by,
+                   expected_arrival_set_at    = now()
+             WHERE pricing_request_item_id = :id
+               AND pricing_request_id = :pricingRequestId
+               AND stock_source = 'IN_TRANSIT'
+            """,
+            new MapSqlParameterSource()
+                .addValue("id", pricingRequestItemId)
+                .addValue("pricingRequestId", pricingRequestId)
+                .addValue("eta", expectedArrivalDate)
+                .addValue("by", setById));
+    }
+
+    /**
+     * Stock lines (V194, R13): turns ONE in-transit line back into a normal import line. Source,
+     * ETA and the ETA's who/when are cleared in a SINGLE statement - chk_pricing_request_item_eta_only_in_transit
+     * forbids an ETA on a non-transit line, so clearing them in two updates would trip it.
+     */
+    public int convertItemInTransitToImport(long pricingRequestId, long pricingRequestItemId) {
+        return jdbc.update("""
+            UPDATE sales.pricing_request_item
+               SET stock_source               = NULL,
+                   expected_arrival_date      = NULL,
+                   expected_arrival_set_by_id = NULL,
+                   expected_arrival_set_at    = NULL
+             WHERE pricing_request_item_id = :id
+               AND pricing_request_id = :pricingRequestId
+               AND stock_source = 'IN_TRANSIT'
+            """,
+            new MapSqlParameterSource()
+                .addValue("id", pricingRequestItemId)
+                .addValue("pricingRequestId", pricingRequestId));
     }
 
     /**
@@ -965,7 +1055,8 @@ public class PricingRequestRepository {
      * live until the replacement is issued (see that method's own Javadoc and this call's own
      * comment in {@code PricingRequestService#createCustomerChangeRevision}). That ruling is about
      * an issued, customer-facing document — it has no bearing on this origin, which in S1 can
-     * NEVER reach ISSUED (submit is refused — {@code DealQuotationService#requireStatusMachineEnabled}),
+     * NEVER reach ISSUED (S1 refused submit for this origin outright; since S2 only {@code createReorder}
+     * is still refused, via {@code DealQuotationService#requireReorderAllowedForOrigin}),
      * so DRAFT is the ONLY state to ever clean up here, and there is no "stays live until the
      * replacement issues" concept to preserve for it. Without this, a DRAFT quotation on this
      * engine would be left attached to a now-SUPERSEDED parent forever — nothing else in S1 ever
@@ -1224,7 +1315,8 @@ public class PricingRequestRepository {
             rs.getString("dept_code"),
             rs.getString("unit_code"),
             rs.getBoolean("omit_contact_honorific"),
-            nullableLong(rs, "customer_id")
+            nullableLong(rs, "customer_id"),
+            rs.getString("ticket_status")
         );
     }
 
@@ -1291,7 +1383,11 @@ public class PricingRequestRepository {
             rs.getString("origin_country"),
             nullableInt(rs, "lead_time_min_days"),
             nullableInt(rs, "lead_time_max_days"),
-            rs.getString("origin_country_other")
+            rs.getString("origin_country_other"),
+            rs.getString("stock_source"),
+            rs.getObject("expected_arrival_date", LocalDate.class),
+            rs.getString("requested_currency"),
+            rs.getString("requested_price_unit_basis")
         );
     }
 

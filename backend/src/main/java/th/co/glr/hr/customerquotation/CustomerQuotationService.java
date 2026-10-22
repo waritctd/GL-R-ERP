@@ -712,7 +712,7 @@ public class CustomerQuotationService {
     // preview (before issue) can never issue.
     private RenderContext loadRenderContext(long quotationId, UserPrincipal actor) {
         CustomerQuotationDto quotation = requireQuotation(quotationId);
-        requireViewAccess(quotation, actor);
+        requireFileViewAccess(quotation, actor);
         TicketSummaryDto liveTicketSummary = requireTicketSummary(quotation.ticketId());
         List<TicketItemDto> snapshotItems = tickets.findQuotationItemsByQuotationId(quotationId, quotation.ticketId());
         // Rule 8 (issued quotations are immutable): render against the FROZEN customer/project
@@ -848,6 +848,26 @@ public class CustomerQuotationService {
         if ("sales".equals(actor.role()) && summary.ticketCreatedById() != actor.id()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
+    }
+
+    /**
+     * The FILE read only (renderPdf / renderXlsx). 2026-09-30 owner ruling: {@code account} may download the
+     * document the customer received -- an ISSUED / SENT / ACCEPTED quotation -- of a deal inside its list scope
+     * ({@code TicketRepository#isInAccountScope}). This is deliberately NOT added to {@link #VIEW_ROLES}: account
+     * still cannot get / list / create / edit / record outcomes, so nothing else in this service opens to it.
+     * Every other role goes through the unchanged {@link #requireViewAccess}.
+     */
+    private void requireFileViewAccess(CustomerQuotationDto quotation, UserPrincipal actor) {
+        if ("account".equals(actor.role())) {
+            boolean customerDocument = QuotationStatus.ISSUED.equals(quotation.docStatus())
+                || QuotationStatus.SENT.equals(quotation.docStatus())
+                || QuotationStatus.ACCEPTED.equals(quotation.docStatus());
+            if (!customerDocument || !tickets.isInAccountScope(quotation.ticketId())) {
+                throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+            }
+            return;
+        }
+        requireViewAccess(quotation, actor);
     }
 
     private void requireViewAccess(CustomerQuotationDto quotation, UserPrincipal actor) {

@@ -55,11 +55,11 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  *
  * <p>Per CLAUDE.md this is the required real-DB evidence: a mocked {@link TicketRepository} would
  * pass while the {@code UPDATE} did something else. {@link StockDeclarationAuthzIntegrationTest}
- * pins the SIBLING predicate for {@code reserveStock}/{@code canDeclareStockCoverage} —
- * deliberately NOT the same expression as {@code canWriteDelivery} any more (see that method's own
- * Javadoc: {@code isFulfilmentOrOwningRep} still admits import for stock-coverage declaration,
- * which this transfer does not touch), so a mutation to one must NOT be expected to turn the other
- * class red.
+ * pins the SIBLING predicate for {@code reserveStock}/{@code canDeclareStockCoverage}. Since the
+ * 2026-09-28 S18 decision removed import from stock coverage too, that predicate now happens to
+ * coincide with {@code canWriteDelivery} ("CEO, or the owning sales rep"), but the two remain
+ * SEPARATE methods on purpose (V184 split them so S18 and S19 can diverge again) — so a mutation to
+ * one must NOT be expected to turn the other class red.
  *
  * <p>Note the suite-wide trap on {@link AbstractPostgresIntegrationTest}: services are hand-wired
  * with {@code new}, so {@code @Transactional} is inert and no rollback is exercised. The "unmoved"

@@ -18,6 +18,21 @@ function renderRow(itemOverrides = {}, onChange = vi.fn()) {
   return { item, onChange, container };
 }
 
+describe('QuotationItemRow — PCR-form props', () => {
+  it('hides ระยะเวลานำเข้า under hideLeadTime while a picked origin still writes its default lead time (PCR form, owner ruling 2026-10-18)', () => {
+    const onChange = vi.fn();
+    render(<QuotationItemRow item={emptyQuotationItem()} index={0} onChange={onChange} onRemove={vi.fn()} hideLeadTime />);
+    expect(screen.queryByLabelText(/^ระยะเวลานำเข้า/)).toBeNull();
+    fireEvent.change(screen.getByLabelText(/^ประเทศต้นทาง/), { target: { value: 'อิตาลี' } });
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ originCountry: 'อิตาลี', leadTimeMinDays: 75, leadTimeMaxDays: 90 }));
+  });
+
+  it('renders no ลบรายการ button when onRemove is not given (a lone PCR row has nothing to remove)', () => {
+    render(<QuotationItemRow item={emptyQuotationItem()} index={0} onChange={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: 'ลบรายการ' })).toBeNull();
+  });
+});
+
 describe('QuotationItemRow — English per-sqm (owner decision 2026-09-13)', () => {
   function renderPerSqm(itemOverrides = {}, { priceMode = 'SPECIAL_SQM', documentLanguage = 'EN' } = {}) {
     const onChange = vi.fn();

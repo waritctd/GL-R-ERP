@@ -1,5 +1,5 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
-import { hasPermission, allowedRoute, canAccessPath, isDivisionManager } from './permissions.js';
+import { hasPermission, allowedRoute, canAccessPath, isDivisionManager, importDealRedirectFor } from './permissions.js';
 
 describe('hasPermission', () => {
   it('grants a permission listed for the role', () => {
@@ -236,6 +236,13 @@ describe('canAccessPath', () => {
     expect(canAccessPath('/finance', employee)).toBe(false);
   });
 
+  it('scopes the per-deal finance page /finance/deals/:id exactly like /finance (fails open if unclaimed)', () => {
+    expect(canAccessPath('/finance/deals/501', account)).toBe(true);
+    expect(canAccessPath('/finance/deals/501', ceo)).toBe(true);
+    expect(canAccessPath('/finance/deals/501', sales)).toBe(false);
+    expect(canAccessPath('/finance/deals/501', employee)).toBe(false);
+  });
+
   it('allows self-service paths for any user linked to an employee', () => {
     expect(canAccessPath('/profile', employee)).toBe(true);
     // overtime/leave are allowed for a linked employee even without the view-all permission
@@ -332,10 +339,36 @@ describe('canAccessPath', () => {
 
   // Role-scoped views (Import build): import is blocked from the pipeline
   // BROWSER (/tickets exact) but keeps ticket-detail read (/tickets/:id).
-  it('blocks import from the deal-pipeline browser but allows ticket detail', () => {
+  it('blocks import from the deal-pipeline browser AND from the whole-deal page', () => {
     expect(canAccessPath('/tickets', importer)).toBe(false);
-    expect(canAccessPath('/tickets/12', importer)).toBe(true);
-    expect(canAccessPath('/tickets/12/deposit', importer)).toBe(true);
+    // Import now has its own per-deal page (/import/deals/:id). The whole-deal GET
+    // /api/tickets/{id} 403s import server-side, so the frontend guard refuses it too.
+    expect(canAccessPath('/tickets/12', importer)).toBe(false);
+    // Deposit notices are denied to import outright (DepositNoticeService), so the whole
+    // /tickets/ prefix is closed to it, not just the bare detail path.
+    expect(canAccessPath('/tickets/12/deposit', importer)).toBe(false);
+  });
+
+  // Import's OWN per-deal page (ImportDealController: import + ceo only). Wrong-way-round first:
+  // every other role is refused, because canAccessPath fails OPEN for a path no guard claims —
+  // without an explicit entry every authenticated role would reach /import/deals/:id.
+  it('lets import and ceo — and nobody else — reach /import/deals/:id', () => {
+    expect(canAccessPath('/import/deals/12', importer)).toBe(true);
+    expect(canAccessPath('/import/deals/12', ceo)).toBe(true);
+    for (const user of [
+      sales, account, hr, employee,
+      { role: 'sales_manager', employeeId: 4 },
+      { role: 'warehouse', employeeId: 6 },
+      { role: 'qc', employeeId: 7 },
+    ]) {
+      expect(canAccessPath('/import/deals/12', user), `${user.role} must be refused`).toBe(false);
+    }
+  });
+
+  it('keeps ceo/sales/sales_manager/account on the whole-deal page', () => {
+    for (const user of [ceo, sales, account, { role: 'sales_manager', employeeId: 4 }]) {
+      expect(canAccessPath('/tickets/12', user), `${user.role} keeps /tickets/:id`).toBe(true);
+    }
   });
 
   // /procurement and /factory-purchase-orders(/:id) were removed 2026-08-11
@@ -412,7 +445,11 @@ describe('canAccessPath under the release lockdown', () => {
   const hr = { role: 'hr', employeeId: 47 };
   const ceo = { role: 'ceo', employeeId: 48 };
 
-  const LOCKED_ROLES = [sales, salesManager, importer, account, employee, divisionManager];
+  // Sales release (owner ruling, Ploy 2026-10-22): sales and sales_manager are exempt from the
+  // lock; import and account stay locked with a per-role allowlist (tested below). Only these two
+  // roles still see nothing but self-service.
+  const LOCKED_ROLES = [employee, divisionManager];
+  const SELF_SERVICE_ROLES = [importer, account, employee, divisionManager];
 
   // Paths the lock must REMOVE. Asserted wrong-way-round on purpose: each of
   // these is a page the role could otherwise reach, so the test fails if the
@@ -478,7 +515,7 @@ describe('canAccessPath under the release lockdown', () => {
   it('keeps every self-service path reachable for every locked role', async () => {
     const { canAccessPath: guard } = await locked();
     const refused = [];
-    for (const user of LOCKED_ROLES) {
+    for (const user of SELF_SERVICE_ROLES) {
       for (const path of VISIBLE) {
         if (!guard(path, user)) refused.push(`${user.role}${user.manager ? '(manager)' : ''} -> ${path}`);
       }
@@ -491,8 +528,44 @@ describe('canAccessPath under the release lockdown', () => {
   // `startsWith('/tax-allowance')` test would have admitted it.
   it('does not let /tax-allowance admit HR’s /tax-allowance-review', async () => {
     const { canAccessPath: guard } = await locked();
-    expect(guard('/tax-allowance', sales)).toBe(true);
-    expect(guard('/tax-allowance-review', sales)).toBe(false);
+    expect(guard('/tax-allowance', importer)).toBe(true);
+    expect(guard('/tax-allowance-review', importer)).toBe(false);
+  });
+
+  // Sales release (owner ruling, Ploy 2026-10-22): the sales stack opens for the sales roles,
+  // import gets ONLY งานนำเข้า and คิวขอราคา (plus its per-deal drill-down), account ONLY การเงิน.
+  // Wrong-way-round first: what each role must still NOT reach.
+  it('releases the sales stack to sales and sales_manager, nothing beyond their guards', async () => {
+    const { canAccessPath: guard } = await locked();
+    for (const user of [sales, salesManager]) {
+      for (const path of ['/tickets', '/tickets/7', '/pricing-requests/9', '/quotations', '/quotations/3', '/catalog']) {
+        expect(guard(path, user), `${user.role} -> ${path}`).toBe(true);
+      }
+      for (const path of ['/payroll', '/hr', '/employees', '/finance', '/tax-allowance-review', '/fulfilment']) {
+        expect(guard(path, user), `${user.role} -> ${path}`).toBe(false);
+      }
+    }
+    expect(guard('/commissions', salesManager)).toBe(true);
+  });
+
+  it('releases import only งานนำเข้า and คิวขอราคา', async () => {
+    const { canAccessPath: guard } = await locked();
+    for (const path of ['/fulfilment', '/pricing-requests', '/pricing-requests/9', '/import/deals/7', '/leave']) {
+      expect(guard(path, importer), `import -> ${path}`).toBe(true);
+    }
+    for (const path of ['/tickets', '/tickets/7', '/finance', '/catalog', '/quotations', '/commissions', '/payroll', '/price-import', '/some-feature-added-later']) {
+      expect(guard(path, importer), `import -> ${path}`).toBe(false);
+    }
+  });
+
+  it('releases account only การเงิน', async () => {
+    const { canAccessPath: guard } = await locked();
+    for (const path of ['/finance', '/finance/billing-notes', '/leave']) {
+      expect(guard(path, account), `account -> ${path}`).toBe(true);
+    }
+    for (const path of ['/tickets', '/tickets/7', '/tickets/7/deposit', '/fulfilment', '/pricing-requests', '/quotations', '/commissions', '/catalog', '/payroll', '/some-feature-added-later']) {
+      expect(guard(path, account), `account -> ${path}`).toBe(false);
+    }
   });
 
   // The lock flipped an unmatched path from allowed to refused, so a query
@@ -502,13 +575,16 @@ describe('canAccessPath under the release lockdown', () => {
   // to.
   it('matches on the pathname, ignoring a query string or hash', async () => {
     const { canAccessPath: guard } = await locked();
-    expect(guard('/employee-requests?tab=ot', sales)).toBe(true);
-    expect(guard('/employee-requests?tab=welfare', sales)).toBe(true);
-    expect(guard('/leave?status=pending#top', sales)).toBe(true);
+    expect(guard('/employee-requests?tab=ot', importer)).toBe(true);
+    expect(guard('/employee-requests?tab=welfare', importer)).toBe(true);
+    expect(guard('/leave?status=pending#top', importer)).toBe(true);
     // Still refused — the pathname is what is checked, so a query string is no
     // way around the lock.
-    expect(guard('/tickets?id=1', sales)).toBe(false);
-    expect(guard('/payroll?month=2026-08', sales)).toBe(false);
+    expect(guard('/tickets?id=1', importer)).toBe(false);
+    expect(guard('/payroll?month=2026-08', importer)).toBe(false);
+    // The per-role release allowlist matches on the pathname the same way.
+    expect(guard('/fulfilment?tab=pending', importer)).toBe(true);
+    expect(guard('/finance?tab=deposits', account)).toBe(true);
   });
 
   // The allowlist's reason for existing: canAccessPath fails OPEN for any path
@@ -516,7 +592,7 @@ describe('canAccessPath under the release lockdown', () => {
   // be hidden by default rather than silently exposed.
   it('refuses a path no guard claims — the lock is an allowlist, not a blocklist', async () => {
     const { canAccessPath: guard } = await locked();
-    expect(guard('/some-feature-added-later', sales)).toBe(false);
+    expect(guard('/some-feature-added-later', employee)).toBe(false);
     expect(guard('/some-feature-added-later', hr)).toBe(true);
   });
 
@@ -564,11 +640,13 @@ describe('isSelfServiceLocked', () => {
     vi.stubEnv('VITE_SELF_SERVICE_ONLY', 'true');
     vi.resetModules();
     const { isSelfServiceLocked: isLocked } = await import('./permissions.js');
-    for (const role of ['sales', 'sales_manager', 'import', 'account', 'employee', 'warehouse', 'qc']) {
+    for (const role of ['import', 'account', 'employee', 'warehouse', 'qc']) {
       expect(isLocked({ role })).toBe(true);
     }
-    expect(isLocked({ role: 'hr' })).toBe(false);
-    expect(isLocked({ role: 'ceo' })).toBe(false);
+    // hr/ceo always; sales/sales_manager since the sales release (owner ruling 2026-10-22).
+    for (const role of ['hr', 'ceo', 'sales', 'sales_manager']) {
+      expect(isLocked({ role })).toBe(false);
+    }
     // An unknown or absent role is locked, not exempt — fail closed.
     expect(isLocked({ role: undefined })).toBe(true);
     expect(isLocked(null)).toBe(true);
@@ -630,10 +708,10 @@ describe('activity log access (admin capability)', () => {
     }
 
     it('opens /activity-log to a flagged admin whose role is not exempt', async () => {
-      // วริศรา is role `sales`, which is NOT in SELF_SERVICE_EXEMPT_ROLES, so without the
-      // per-path exemption the lockdown would hide this page from its only holder.
+      // The holder's role must not matter: a locked role (import here — sales is exempt since
+      // the 2026-10-22 release) still reaches the page through the per-path exemption alone.
       const locked = await lockedCanAccessPath();
-      expect(locked('/activity-log', user('sales', { admin: true }))).toBe(true);
+      expect(locked('/activity-log', user('import', { admin: true }))).toBe(true);
     });
 
     it('unlocks NOTHING else for that admin', async () => {
@@ -642,7 +720,7 @@ describe('activity log access (admin capability)', () => {
       // lockdown bypass — which is exactly what adding `admin` to SELF_SERVICE_EXEMPT_ROLES
       // would have done, and why it was not done that way.
       const locked = await lockedCanAccessPath();
-      const admin = user('sales', { admin: true });
+      const admin = user('import', { admin: true });
       for (const path of ['/tickets', '/payroll', '/employees', '/commissions', '/catalog']) {
         expect(locked(path, admin)).toBe(false);
       }
@@ -678,10 +756,11 @@ describe('quotation release through the self-service lockdown', () => {
     }
   });
 
-  // Wrong-way-round: the exemption must not leak the rest of the sales stack to the same people.
-  it('keeps every other sales page locked for that audience', async () => {
+  // Wrong-way-round: the exemption must not leak the rest of the sales stack to a grantee outside
+  // the sales roles (sales/sales_manager are exempt from the lock since the 2026-10-22 release).
+  it('keeps every other sales page locked for a grantee outside the sales roles', async () => {
     const { canAccessPath: can } = await locked();
-    for (const u of [user('sales'), user('sales_manager'), user('qc', { canCreateQuotation: true })]) {
+    for (const u of [user('qc', { canCreateQuotation: true })]) {
       for (const path of OTHER_SALES_PATHS) {
         expect(can(path, u), `${u.role} ${path}`).toBe(false);
       }
@@ -706,5 +785,26 @@ describe('quotation release through the self-service lockdown', () => {
     expect(isQuotationReleaseUser(user('import'))).toBe(false);
     expect(isQuotationReleaseUser(user('account'))).toBe(false);
     expect(isQuotationReleaseUser(null)).toBe(false);
+  });
+});
+
+// An import user landing on a whole-deal URL (a backend notification deep-link, an old bookmark)
+// is sent to their own page for that deal instead of a dead-end refusal.
+describe('importDealRedirectFor', () => {
+  const importer = { role: 'import', employeeId: 2 };
+
+  it('maps /tickets/:id to /import/deals/:id for import only', () => {
+    expect(importDealRedirectFor('/tickets/12', importer)).toBe('/import/deals/12');
+    expect(importDealRedirectFor('/tickets/12/', importer)).toBe('/import/deals/12');
+  });
+
+  it('does not redirect other roles, other paths, or sub-paths', () => {
+    expect(importDealRedirectFor('/tickets/12', { role: 'ceo', employeeId: 1 })).toBeNull();
+    expect(importDealRedirectFor('/tickets/12', { role: 'sales', employeeId: 9 })).toBeNull();
+    expect(importDealRedirectFor('/tickets', importer)).toBeNull();
+    expect(importDealRedirectFor('/tickets/12/deposit', importer)).toBeNull();
+    expect(importDealRedirectFor('/tickets/abc', importer)).toBeNull();
+    expect(importDealRedirectFor('/fulfilment', importer)).toBeNull();
+    expect(importDealRedirectFor('/tickets/12', null)).toBeNull();
   });
 });

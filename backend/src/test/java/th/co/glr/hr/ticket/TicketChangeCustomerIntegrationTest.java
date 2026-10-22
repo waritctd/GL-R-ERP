@@ -304,13 +304,13 @@ class TicketChangeCustomerIntegrationTest extends AbstractPostgresIntegrationTes
     void everyDraftOfTheDealIsResnapshotted_aCancelledRowIsLeftAlone() {
         long ticketId = createTicketUnderCustomerA();
         DealQuotationDto first = quotationService.create(ticketId, saveRequest(), ownerRep);
-        DealQuotationDto second = quotationService.create(ticketId, saveRequest(), ownerRep);
+        long second = insertDirectQuotation(ticketId, "DRAFT", custA.name()); // N6: the service allows one live
         long cancelled = insertDirectQuotation(ticketId, "CANCELLED", custA.name());
 
         ticketService.changeCustomer(ticketId, toCustomerB(null), ownerRep);
 
         assertThat(quotationHeader(first.id()).get("customer_name")).isEqualTo(custB.name());
-        assertThat(quotationHeader(second.id()).get("customer_name")).isEqualTo(custB.name());
+        assertThat(quotationHeader(second).get("customer_name")).isEqualTo(custB.name());
         // CANCELLED is a dead document, not a live draft: it keeps the customer it was cancelled under.
         assertThat(quotationHeader(cancelled).get("customer_name")).isEqualTo(custA.name());
     }
@@ -322,14 +322,14 @@ class TicketChangeCustomerIntegrationTest extends AbstractPostgresIntegrationTes
         quotationService.create(ticketId, saveRequest(), ownerRep);
         long otherDeal = createTicketUnderCustomerA();
         long pendingOnOtherDeal = insertDirectQuotation(otherDeal, "PENDING_APPROVAL", custA.name());
-        DealQuotationDto draftOnOtherDeal = quotationService.create(otherDeal, saveRequest(), ownerRep);
+        long draftOnOtherDeal = insertDirectQuotation(otherDeal, "DRAFT", custA.name()); // N6: a pending one is already live there
         Map<String, Object> pendingBefore = quotationHeader(pendingOnOtherDeal);
-        Map<String, Object> draftBefore = quotationHeader(draftOnOtherDeal.id());
+        Map<String, Object> draftBefore = quotationHeader(draftOnOtherDeal);
 
         ticketService.changeCustomer(ticketId, toCustomerB(null), ownerRep);
 
         assertThat(quotationHeader(pendingOnOtherDeal)).isEqualTo(pendingBefore);
-        assertThat(quotationHeader(draftOnOtherDeal.id())).isEqualTo(draftBefore);
+        assertThat(quotationHeader(draftOnOtherDeal)).isEqualTo(draftBefore);
     }
 
     @Test
@@ -360,15 +360,16 @@ class TicketChangeCustomerIntegrationTest extends AbstractPostgresIntegrationTes
     // ── a draft's frozen contact must follow the deal's customer ──
 
     /**
-     * A draft copies the deal's contact (customer A's) at create; after the deal moves to customer B
-     * with no contact, its stored contact is cleared, so the editor's next save (contactId always
-     * null) does not resolve customer A's contact against B and fail 400 "กรุณาระบุผู้สั่งซื้อ".
+     * A draft carries customer A's contact (picked at create). After the deal moves to customer B
+     * with no contact, its stored contact is cleared, so the editor's next save with no contactId
+     * does not resolve customer A's contact against B and fail 400 "กรุณาระบุผู้สั่งซื้อ".
      */
     @Test
     void aDraftCarryingTheOldCustomersContactCanStillBeSavedAfterTheChange_andItsContactIsCleared() {
         long ticketId = createTicketUnderCustomerA();
-        DealQuotationDto draft = quotationService.create(ticketId, saveRequest(), ownerRep);
+        DealQuotationDto draft = quotationService.create(ticketId, saveRequest(contactA.id()), ownerRep);
         assertThat(quotationContactId(draft.id())).isEqualTo(contactA.id());
+        assertThat(quotationContact(draft.id()).get("ordered_by_name")).isEqualTo(contactA.fullName());
 
         ticketService.changeCustomer(ticketId, toCustomerB(null), ownerRep);
 
@@ -377,6 +378,7 @@ class TicketChangeCustomerIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(q.get("contact_name")).as("contact_name").isNull();
         assertThat(q.get("contact_phone")).as("contact_phone").isNull();
         assertThat(q.get("contact_email")).as("contact_email").isNull();
+        assertThat(q.get("ordered_by_name")).as("signature name: customer A's contact must not print").isNull();
         assertThatCode(() -> quotationService.update(draft.id(), saveRequest(), ownerRep))
             .doesNotThrowAnyException();
         assertThat(quotationContactId(draft.id())).isNull();
@@ -385,7 +387,7 @@ class TicketChangeCustomerIntegrationTest extends AbstractPostgresIntegrationTes
     @Test
     void aContactOfTheNewCustomerIsFrozenOntoTheDraftInsteadOfTheOldOne() {
         long ticketId = createTicketUnderCustomerA();
-        DealQuotationDto draft = quotationService.create(ticketId, saveRequest(), ownerRep);
+        DealQuotationDto draft = quotationService.create(ticketId, saveRequest(contactA.id()), ownerRep);
 
         ticketService.changeCustomer(ticketId, toCustomerB(contactB.id()), ownerRep);
 
@@ -393,6 +395,7 @@ class TicketChangeCustomerIntegrationTest extends AbstractPostgresIntegrationTes
         ContactDto b = contactRepository.findById(contactB.id()).orElseThrow();
         assertThat(q.get("contact_id")).isEqualTo(contactB.id());
         assertThat(q.get("contact_name")).isEqualTo(b.fullName());
+        assertThat(q.get("ordered_by_name")).as("signature name").isEqualTo(b.fullName());
         assertThat(q.get("contact_phone")).isEqualTo(b.phone());
         assertThat(q.get("contact_email")).isEqualTo(b.email());
         assertThatCode(() -> quotationService.update(draft.id(), saveRequest(), ownerRep))
@@ -642,17 +645,21 @@ class TicketChangeCustomerIntegrationTest extends AbstractPostgresIntegrationTes
 
     private Map<String, Object> quotationContact(long quotationId) {
         return jdbc.queryForMap(
-            "SELECT contact_id, contact_name, contact_phone, contact_email FROM sales.quotation WHERE quotation_id = :id",
+            "SELECT contact_id, contact_name, contact_phone, contact_email, ordered_by_name FROM sales.quotation WHERE quotation_id = :id",
             Map.of("id", quotationId));
     }
 
     private UpsertDealQuotationRequest saveRequest() {
+        return saveRequest(null);
+    }
+
+    private UpsertDealQuotationRequest saveRequest(Long contactId) {
         ItemInput item = new ItemInput(null, null, null, "Brand A", "Model A", "White", "Matte", "60x60",
             new BigDecimal("10"), new BigDecimal("0.36"),
             WastageCalculator.QUANTITY_MODE_PIECES, null, 10, WastageCalculator.WASTAGE_MODE_NONE, null, 1,
             new BigDecimal("100.00"), BigDecimal.ZERO, "ไทย-สต็อก", 30, 45, null);
-        return new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
-            "หมายเหตุทดสอบ", List.of(item));
+        return new UpsertDealQuotationRequest(contactId, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
+            "หมายเหตุทดสอบ", List.of(item)).withRecipientType("OWNER");
     }
 
     private void insertPricingRequest(long ticketId, String status) {

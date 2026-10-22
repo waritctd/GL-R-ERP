@@ -3,6 +3,7 @@ package th.co.glr.hr.factoryquote;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.time.LocalDate;
 import java.time.Year;
 import java.util.List;
 import java.util.Map;
@@ -40,8 +41,9 @@ public class FactoryQuoteRepository {
         return "FQ-" + Year.now() + "-" + String.format("%04d", seq == null ? 0 : seq);
     }
 
+    /** {@code defaultCurrency} is seeded from the lines' Sales-requested currency (CR-1); null = THB as before. */
     public long createDraft(long pricingRequestId, Long factoryId, String factoryName, String emailTo,
-                            String subject, String body, long actorId) {
+                            String subject, String body, long actorId, String defaultCurrency) {
         Long id = jdbc.queryForObject("""
             INSERT INTO sales.factory_quote
                 (quote_code, pricing_request_id, factory_id, factory_name_snapshot,
@@ -59,7 +61,7 @@ public class FactoryQuoteRepository {
                 .addValue("emailTo", emailTo)
                 .addValue("subject", subject)
                 .addValue("body", body)
-                .addValue("currency", "THB")
+                .addValue("currency", defaultCurrency == null ? "THB" : defaultCurrency)
                 .addValue("createdBy", actorId),
             Long.class);
         long quoteId = id == null ? 0L : id;
@@ -79,7 +81,11 @@ public class FactoryQuoteRepository {
                 .addValue("pricingRequestItemId", pricingRequestItemIds.get(i))
                 .addValue("sortOrder", i);
         }
-        // unit_basis is copied verbatim from the request item's own canonical
+        // CR-1 (R1): when Sales locked a price unit / currency on the line, the draft item starts from
+        // THOSE (unit_basis = requested_price_unit_basis, currency = requested_currency); a legacy line
+        // (both NULL) seeds exactly as before. quoted_quantity/quoted_unit stay the request quantity and
+        // the PER_SQM/PER_BOX/PER_LINEAR_M dimension fields stay NULL for import to fill, as today.
+        // unit_basis is otherwise copied verbatim from the request item's own canonical
         // requested_unit_basis (V68) rather than re-derived from the free-text requested_unit —
         // a text guess has no way to express PER_BOX / PER_LINEAR_M and used to silently seed
         // both as PER_PIECE. No COALESCE needed: V68 makes requested_unit_basis NOT NULL and
@@ -87,9 +93,10 @@ public class FactoryQuoteRepository {
         // direct copy always satisfies both sides.
         jdbc.batchUpdate("""
             INSERT INTO sales.factory_quote_item
-                (factory_quote_id, pricing_request_item_id, quoted_quantity, quoted_unit, unit_basis, sort_order)
+                (factory_quote_id, pricing_request_item_id, quoted_quantity, quoted_unit, unit_basis, currency, sort_order)
             SELECT :quoteId, pri.pricing_request_item_id, pri.requested_qty, pri.requested_unit,
-                   pri.requested_unit_basis,
+                   COALESCE(pri.requested_price_unit_basis, pri.requested_unit_basis),
+                   pri.requested_currency,
                    :sortOrder
               FROM sales.pricing_request_item pri
              WHERE pri.pricing_request_item_id = :pricingRequestItemId
@@ -108,7 +115,7 @@ public class FactoryQuoteRepository {
      * than raise anything, silently corrupting the quote's item list.
      *
      * <p>Only ever safe to call while the quote is still {@code DRAFT} — once a quote has been
-     * sent or answered its item set must never be mutated (see {@link #markRequested} and the
+     * sent or answered its item set must never be mutated (see {@link #markContacted} and the
      * guard {@code PricingRequestService#setItemFactory}'s Javadoc protects on the other side of
      * this same invariant); enforcing that is the caller's job, same division of labour as every
      * other status guard in this class.
@@ -132,9 +139,10 @@ public class FactoryQuoteRepository {
         // for why no COALESCE is needed.
         jdbc.batchUpdate("""
             INSERT INTO sales.factory_quote_item
-                (factory_quote_id, pricing_request_item_id, quoted_quantity, quoted_unit, unit_basis, sort_order)
+                (factory_quote_id, pricing_request_item_id, quoted_quantity, quoted_unit, unit_basis, currency, sort_order)
             SELECT :quoteId, pri.pricing_request_item_id, pri.requested_qty, pri.requested_unit,
-                   pri.requested_unit_basis,
+                   COALESCE(pri.requested_price_unit_basis, pri.requested_unit_basis),
+                   pri.requested_currency,
                    :sortOrder
               FROM sales.pricing_request_item pri
              WHERE pri.pricing_request_item_id = :pricingRequestItemId
@@ -161,25 +169,33 @@ public class FactoryQuoteRepository {
         return rows == 1;
     }
 
-    public int markRequested(long quoteId, String emailTo, String subject, String body, long actorId) {
+    /**
+     * CR-1 (GLA-167): "ติดต่อโรงงานแล้ว" -- DRAFT -> REQUESTED with the contacted fields. Guarded on
+     * {@code status = 'DRAFT'} so a double click / race is a 0-row no-op (caller throws 409) and the
+     * first contacted date can never be overwritten (no undo, no edit -- owner ruling R7).
+     * {@code email_sent_at}/{@code sent_by} are kept in step with the new columns because older
+     * readers (and the V198 backfill's own reading of "sent") still key on them.
+     */
+    public int markContacted(long quoteId, LocalDate contactedOn, String note, long actorId) {
         return jdbc.update("""
             UPDATE sales.factory_quote
                SET status = 'REQUESTED',
-                   email_to = COALESCE(NULLIF(BTRIM(:emailTo), ''), email_to),
-                   email_subject = COALESCE(:subject, email_subject),
-                   email_body = COALESCE(:body, email_body),
+                   contacted_on = :contactedOn,
+                   contacted_note = :note,
+                   contacted_by = :actorId,
+                   contacted_at = now(),
                    email_sent_at = now(),
                    requested_at = now(),
                    sent_by = :actorId,
                    updated_at = now()
              WHERE factory_quote_id = :quoteId
                AND status = 'DRAFT'
+               AND is_current
             """,
             new MapSqlParameterSource()
                 .addValue("quoteId", quoteId)
-                .addValue("emailTo", emailTo)
-                .addValue("subject", subject)
-                .addValue("body", body)
+                .addValue("contactedOn", contactedOn)
+                .addValue("note", note)
                 .addValue("actorId", actorId));
     }
 
@@ -219,6 +235,17 @@ public class FactoryQuoteRepository {
      *     alive), not a failure.
      */
     public int cancelOpenForPricingRequest(long pricingRequestId, String reason, long actorId) {
+        int cancelled = cancelOpenQuoteRows(pricingRequestId, reason, actorId);
+        // CR-1: pending lead-time changes on the dead request are withdrawn with it. Unconditional: a
+        // change can be PENDING even when this call cancelled no quote row (e.g. the quotes were
+        // already NOT_AVAILABLE).
+        jdbc.update(th.co.glr.hr.pricingrequest.LeadTimeChangeRepository.AUTO_WITHDRAW_SQL
+            .formatted("c.pricing_request_id = :pricingRequestId"), Map.of("pricingRequestId", pricingRequestId,
+                "autoReason", th.co.glr.hr.pricingrequest.LeadTimeChangeRepository.AUTO_WITHDRAW_REASON));
+        return cancelled;
+    }
+
+    private int cancelOpenQuoteRows(long pricingRequestId, String reason, long actorId) {
         return jdbc.update("""
             UPDATE sales.factory_quote
                SET status = 'CANCELLED',
@@ -278,13 +305,15 @@ public class FactoryQuoteRepository {
                  email_to, email_subject, email_body, email_sent_at, sent_by, requested_at,
                  supplier_quote_ref, default_currency, payment_terms, lead_time_text,
                  revision_reason, negotiation_note, received_at, root_factory_quote_id,
-                 parent_factory_quote_id, revision_no, is_current, created_by)
+                 parent_factory_quote_id, revision_no, is_current, created_by,
+                 contacted_on, contacted_note, contacted_by, contacted_at)
             VALUES
                 (:quoteCode, :pricingRequestId, :factoryId, :factoryName, 'RESPONSE_RECEIVED',
                  :emailTo, :emailSubject, :emailBody, :emailSentAt, :sentBy, :requestedAt,
                  :supplierQuoteRef, :currency, :paymentTerms, :leadTimeText,
                  :revisionReason, :negotiationNote, now(), :rootId,
-                 :parentId, :revisionNo, TRUE, :createdBy)
+                 :parentId, :revisionNo, TRUE, :createdBy,
+                 :contactedOn, :contactedNote, :contactedBy, :contactedAt)
             RETURNING factory_quote_id
             """,
             new MapSqlParameterSource()
@@ -307,7 +336,13 @@ public class FactoryQuoteRepository {
                 .addValue("rootId", previous.rootFactoryQuoteId())
                 .addValue("parentId", previous.id())
                 .addValue("revisionNo", nextRevision)
-                .addValue("createdBy", actorId),
+                .addValue("createdBy", actorId)
+                // CR-1: a price revision is the same conversation with the same factory, so who
+                // contacted it, when and the note ride along (they are never re-entered).
+                .addValue("contactedOn", previous.contactedOn())
+                .addValue("contactedNote", previous.contactedNote())
+                .addValue("contactedBy", previous.contactedBy())
+                .addValue("contactedAt", timestamp(previous.contactedAt())),
             Long.class);
         return id == null ? 0L : id;
     }
@@ -324,7 +359,7 @@ public class FactoryQuoteRepository {
      * 'SUPERSEDED' AND status <> 'CANCELLED'} guard ({@code
      * PricingRequestRepository#supersedeForCustomerRevision}, this method's sibling on the
      * PricingRequest aggregate) to match every OTHER status-guarded method already in this file
-     * ({@link #updateDraft}, {@link #markRequested}, {@link #updateFirstResponse}, {@link
+     * ({@link #updateDraft}, {@link #markContacted}, {@link #updateFirstResponse}, {@link
      * #startNegotiation}, {@link #markReady}, {@link #markNotAvailable}, {@link
      * #cancelOpenForPricingRequest}), which all use a positive {@code status IN (...)}/{@code
      * status = '...'}. An allowlist also fails safe: a 9th {@code FactoryQuoteStatus} added later
@@ -342,7 +377,7 @@ public class FactoryQuoteRepository {
      *     supersedable status. The caller MUST treat 0 as a refusal, not silently ignore it.
      */
     public int supersede(long quoteId) {
-        return jdbc.update("""
+        int rows = jdbc.update("""
             UPDATE sales.factory_quote
                SET status = 'SUPERSEDED',
                    is_current = FALSE,
@@ -350,6 +385,13 @@ public class FactoryQuoteRepository {
              WHERE factory_quote_id = :quoteId
                AND status IN ('DRAFT','REQUESTED','RESPONSE_RECEIVED','NEGOTIATING','READY_FOR_COSTING')
             """, Map.of("quoteId", quoteId));
+        if (rows > 0) {
+            // CR-1: a lead-time change raised on a row that is no longer current dies with it.
+            jdbc.update(th.co.glr.hr.pricingrequest.LeadTimeChangeRepository.AUTO_WITHDRAW_SQL
+                .formatted("c.factory_quote_id = :quoteId"), Map.of("quoteId", quoteId,
+                    "autoReason", th.co.glr.hr.pricingrequest.LeadTimeChangeRepository.AUTO_WITHDRAW_REASON));
+        }
+        return rows;
     }
 
     public void replaceResponseItems(long quoteId, List<ReceiveFactoryQuoteItemRequest> items) {
@@ -426,6 +468,17 @@ public class FactoryQuoteRepository {
     }
 
     public int markNotAvailable(long quoteId, String reason, long actorId) {
+        int rows = markNotAvailableRows(quoteId, reason, actorId);
+        if (rows > 0) {
+            // CR-1: the quote is retired (still "current", but dead), so a change raised on it dies too.
+            jdbc.update(th.co.glr.hr.pricingrequest.LeadTimeChangeRepository.AUTO_WITHDRAW_SQL
+                .formatted("c.factory_quote_id = :quoteId"), Map.of("quoteId", quoteId,
+                    "autoReason", th.co.glr.hr.pricingrequest.LeadTimeChangeRepository.AUTO_WITHDRAW_REASON));
+        }
+        return rows;
+    }
+
+    private int markNotAvailableRows(long quoteId, String reason, long actorId) {
         return jdbc.update("""
             UPDATE sales.factory_quote
                SET status = 'NOT_AVAILABLE',
@@ -561,12 +614,14 @@ public class FactoryQuoteRepository {
                      email_to, email_subject, email_body, email_provider_message_id, email_sent_at,
                      sent_by, supplier_quote_ref, default_currency, payment_terms, lead_time_text,
                      note, negotiation_note, requested_at, received_at, revision_no,
-                     revision_reason, is_current, created_by)
+                     revision_reason, is_current, created_by,
+                     contacted_on, contacted_note, contacted_by, contacted_at)
                 SELECT :quoteCode, :to, factory_id, factory_name_snapshot, 'READY_FOR_COSTING',
                        email_to, email_subject, email_body, email_provider_message_id, email_sent_at,
                        sent_by, supplier_quote_ref, default_currency, payment_terms, lead_time_text,
                        note, negotiation_note, requested_at, received_at, 1,
-                       'Carried forward from pricing request ' || :from, TRUE, :actorId
+                       'Carried forward from pricing request ' || :from, TRUE, :actorId,
+                       contacted_on, contacted_note, contacted_by, contacted_at
                   FROM sales.factory_quote
                  WHERE factory_quote_id = :sourceQuoteId
                 RETURNING factory_quote_id
@@ -801,7 +856,8 @@ public class FactoryQuoteRepository {
                    supplier_quote_ref, default_currency, payment_terms, lead_time_text, note,
                    negotiation_note, requested_at, received_at, root_factory_quote_id,
                    parent_factory_quote_id, revision_no, revision_reason, is_current,
-                   created_at, updated_at
+                   created_at, updated_at,
+                   contacted_on, contacted_note, contacted_by, contacted_at
               FROM sales.factory_quote fq
             """;
     }
@@ -836,7 +892,11 @@ public class FactoryQuoteRepository {
             rs.getTimestamp("created_at").toInstant(),
             rs.getTimestamp("updated_at").toInstant(),
             items,
-            attachments
+            attachments,
+            rs.getObject("contacted_on", LocalDate.class),
+            rs.getString("contacted_note"),
+            nullableLong(rs, "contacted_by"),
+            instant(rs, "contacted_at")
         );
     }
 

@@ -34,6 +34,7 @@ import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.factory.FactoryConfigRepository;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteRepository;
+import th.co.glr.hr.factoryquote.FactoryQuoteRequests.MarkFactoryContactedRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteItemRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteService;
@@ -436,9 +437,9 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     /** GLA-123 slice S2: submit is now LIVE for this origin — {@code
-     * DealQuotationService#requireStatusMachineEnabled} no longer guards submit/approve/reject
-     * (it now covers only createRevision/createReorder, still refused here — D12, a revision of
-     * an ACCEPTED quotation is S3's territory). This test used to pin the S1-era 409 refusal by
+     * DealQuotationService#requireReorderAllowedForOrigin} no longer guards submit/approve/reject
+     * (it now covers only createReorder, still refused here; createRevision is no longer
+     * guarded by it). This test used to pin the S1-era 409 refusal by
      * name (commit history: {@code submit_refusedForPricingRequestOrigin}); it now pins the
      * opposite — see {@code DealQuotationPricingRequestApprovalIntegrationTest} for the FULL
      * approval matrix (unchanged/changed x sales_manager/ceo, the CEO-required-when-changed gate,
@@ -466,9 +467,9 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
 
     // ─────────────────────────────────────────────────────────────────────────────────────
     // GLA-123 slice S2 update: submit/approve/reject are now LIVE for this origin (see
-    // submit_nowLiveForPricingRequestOrigin above), but createRevision/createReorder remain
-    // explicitly refused by #requireStatusMachineEnabled (D12 — a revision of an ACCEPTED
-    // quotation is S3's territory; this origin has no customer-outcome/acceptance step yet).
+    // submit_nowLiveForPricingRequestOrigin above), but only createReorder remains
+    // explicitly refused by #requireReorderAllowedForOrigin (createRevision is no longer guarded
+    // by it for this origin).
     // Doubly true in practice: this origin's own status machine skips APPROVED entirely
     // (PENDING_APPROVAL -> ISSUED on one approval, by sales_manager or ceo, never APPROVED as a
     // resting state — see DealQuotationService#approveAndIssuePricingRequestOrigin), and both
@@ -894,8 +895,8 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
     }
 
     /** Mirror direction (owner ruling: "make them consistent") — REJECTED is unreachable for a
-     * PRICING_REQUEST-origin row in S1 (requireStatusMachineEnabled refuses submit/approve/
-     * reject/revise/reorder for this origin), so this forces it via SQL to prove
+     * PRICING_REQUEST-origin row in S1 (the S1 guard refused submit/approve/reject/revise/reorder for this
+     * origin; today only createReorder is refused, via requireReorderAllowedForOrigin), so this forces it via SQL to prove
      * hasLivePricingRequestQuotation's own predicate is ALREADY correct for the day S2 makes it
      * reachable, rather than leaving an untested guess. */
     @Test
@@ -1226,8 +1227,13 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
     @Test
     void refreshDraftContactSnapshot_updatesAPricingRequestOriginDraftToo() {
         PricingDecisionDto decision = approvedDecision("NET", id -> List.of());
+        // The PCR-origin draft's contact comes from the PCR's own picked recipient contact — the
+        // deal's contact is never inherited (ruling 2026-10-18, DealQuotationService#resolveContact).
+        jdbc.update("UPDATE sales.pricing_request SET recipient_contact_id = :contactId WHERE pricing_request_id = :id",
+            Map.of("contactId", contactId, "id", decision.pricingRequestId()));
         DealQuotationDto quotation = quotationService.createFromPricingRequest(decision.pricingRequestId(), salesActor);
         assertThat(quotation.contactPhone()).isEqualTo("081-000-0000");
+        assertThat(quotation.orderedByName()).as("signature name = the recipient contact's").isEqualTo("สมชาย ทดสอบ");
 
         jdbc.update("UPDATE customers.contact SET phone = :phone, email = :email WHERE contact_id = :id",
             Map.of("phone", "089-999-9999", "email", "updated-contact@example.com", "id", contactId));
@@ -1291,6 +1297,24 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
 
         assertThat(forTicket).extracting(DealQuotationDto::id).containsExactly(created.id());
         assertThat(forTicket.get(0).origin()).isEqualTo("PRICING_REQUEST");
+    }
+
+    /** Round 8: sales.quotation.recipient_type/recipient_label were always persisted (copied from
+     * the source pricing request) but DealQuotationDto omitted them, so DealDocumentRegister could
+     * not say who a PRICING_REQUEST-origin quotation is for. Through the real service + repository
+     * (the row mapper and every SELECT feeding the DTO), listForTicket must serve them. */
+    @Test
+    void listForTicket_servesTheSourcePricingRequestsRecipient() {
+        PricingDecisionDto decision = approvedDecision("NET", id -> List.of());
+        jdbc.update("UPDATE sales.pricing_request SET recipient_type = 'BUYER', recipient_label = :label"
+            + " WHERE pricing_request_id = :id", Map.of("label", "คุณสมชาย (ผู้ซื้อ)", "id", decision.pricingRequestId()));
+        DealQuotationDto created = quotationService.createFromPricingRequest(decision.pricingRequestId(), salesActor);
+
+        DealQuotationDto listed = quotationService.listForTicket(ticketId, salesActor).stream()
+            .filter(q -> q.id() == created.id()).findFirst().orElseThrow();
+
+        assertThat(listed.recipientType()).isEqualTo("BUYER");
+        assertThat(listed.recipientLabel()).isEqualTo("คุณสมชาย (ผู้ซื้อ)");
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -1489,6 +1513,8 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
         pricingRequestService.pickup(pricingRequestId, importActor);
         List<FactoryQuoteDto> drafts = factoryQuoteService.generateDrafts(pricingRequestId, importActor);
         for (FactoryQuoteDto draft : drafts) {
+            factoryQuoteService.markContacted(draft.id(), new MarkFactoryContactedRequest(
+                java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
             FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(),
                 response("REF-" + draft.factoryName(), "THB", "100.00", draft.items().get(0).pricingRequestItemId()),
                 importActor);

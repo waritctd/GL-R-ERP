@@ -214,9 +214,10 @@ describe('DepositNoticePage', () => {
     fireEvent.click(createButton);
 
     await waitFor(() => expect(api.depositNotices.createDraft).toHaveBeenCalledTimes(1));
+    // depositPercent is deliberately NOT sent (owner ruling, 2026-09-29): the backend always
+    // ignores a caller-supplied value now and re-sources it from the ticket's own quotation.
     expect(api.depositNotices.createDraft).toHaveBeenCalledWith('701', {
       notes: ['หมายเหตุมาตรฐาน'],
-      depositPercent: 0.5,
     });
 
     // Mutation succeeding invalidates depositNotices(ticketId), which refetches
@@ -240,7 +241,9 @@ describe('DepositNoticePage', () => {
     fireEvent.click(createButton);
 
     await waitFor(() => expect(api.pricingRequests.createDepositNoticeFromQuotation).toHaveBeenCalledTimes(1));
-    expect(api.pricingRequests.createDepositNoticeFromQuotation).toHaveBeenCalledWith(502, { depositPercent: 0.5 });
+    // depositPercent is deliberately NOT sent (owner ruling, 2026-09-29) — the backend always
+    // ignores a caller-supplied value and re-sources it from the accepted quotation itself.
+    expect(api.pricingRequests.createDepositNoticeFromQuotation).toHaveBeenCalledWith(502, {});
     expect(api.depositNotices.createDraft).not.toHaveBeenCalled();
   });
 
@@ -259,7 +262,6 @@ describe('DepositNoticePage', () => {
     await waitFor(() => expect(api.depositNotices.createDraft).toHaveBeenCalledTimes(1));
     expect(api.depositNotices.createDraft).toHaveBeenCalledWith('701', {
       notes: ['หมายเหตุมาตรฐาน'],
-      depositPercent: 0.5,
     });
     expect(api.pricingRequests.createDepositNoticeFromQuotation).not.toHaveBeenCalled();
   });
@@ -276,7 +278,6 @@ describe('DepositNoticePage', () => {
     await waitFor(() => expect(api.depositNotices.createDraft).toHaveBeenCalledTimes(1));
     expect(api.depositNotices.createDraft).toHaveBeenCalledWith('701', {
       notes: ['หมายเหตุมาตรฐาน'],
-      depositPercent: 0.5,
     });
     expect(api.pricingRequests.createDepositNoticeFromQuotation).not.toHaveBeenCalled();
   });
@@ -294,6 +295,26 @@ describe('DepositNoticePage', () => {
 
     await waitFor(() => expect(screen.queryByText('ยังไม่มีใบแจ้งยอดเงินรับมัดจำ')).toBeNull());
     expect(await screen.findByDisplayValue('บริษัท ทดสอบ จำกัด')).not.toBeNull();
+  });
+
+  // Owner ruling (2026-09-29): the deposit % is LOCKED to the source quotation and is no longer
+  // user-settable at the deposit-notice stage — the 30/50/70/100% preset buttons are gone, and
+  // the % renders as a plain read-only label sourced from the loaded draft's own depositPercent.
+  it('renders the deposit percent as a read-only label, with no preset buttons to change it', async () => {
+    api.depositNotices.listByTicket.mockResolvedValue({
+      depositNotices: [{ ...validDraftDoc, depositPercent: 0.3 }],
+    });
+    renderDepositNoticePage();
+
+    await screen.findByDisplayValue('บริษัท ทดสอบ จำกัด');
+
+    // No interactive control can change the percent anymore.
+    for (const label of ['30%', '50%', '70%', '100%']) {
+      expect(screen.queryByRole('button', { name: label })).toBeNull();
+    }
+    // The value the draft was loaded with (30%, not the 0.5 default) still renders, as a label.
+    expect(screen.getByText('30%')).not.toBeNull();
+    expect(screen.getByText('ขอรับเงินมัดจำ (30%)')).not.toBeNull();
   });
 
   // Issue #756: the VAT rate must come from the served document's vatPercent, not a

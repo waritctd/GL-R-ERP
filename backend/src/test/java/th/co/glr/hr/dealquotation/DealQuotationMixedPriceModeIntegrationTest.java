@@ -211,7 +211,7 @@ class DealQuotationMixedPriceModeIntegrationTest extends AbstractDealDirectQuota
         long ticket = deal(salesActor);
         UpsertDealQuotationRequest english = new UpsertDealQuotationRequest(null, null, null, null, 50,
             "CASH_ON_DELIVERY", 0, 30, null, MIXED, "EN", "USD",
-            List.of(perPiece("100.00", "0").withPriceMode(NET)));
+            List.of(perPiece("100.00", "0").withPriceMode(NET))).withRecipientType("OWNER");
 
         ApiException refused = refusal(() -> quotationService.create(ticket, english, salesActor),
             HttpStatus.BAD_REQUEST);
@@ -453,7 +453,8 @@ class DealQuotationMixedPriceModeIntegrationTest extends AbstractDealDirectQuota
         return new UpsertDealQuotationRequest(base.contactId(), base.deptCode(), base.unitCode(),
             base.offerDate(), base.depositPercent(), base.remainderMode(), base.creditDays(),
             base.validityDays(), WastageCalculator.VALIDITY_MODE_DATE, until, base.customerNotes(),
-            base.priceMode(), base.documentLanguage(), base.currency(), base.items());
+            base.priceMode(), base.documentLanguage(), base.currency(), base.items())
+            .withRecipientType(base.recipientType());
     }
 
     private String storedDocumentMode(long quotationId) {

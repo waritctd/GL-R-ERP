@@ -10,7 +10,7 @@ import { Modal } from '../../components/common/Modal.jsx';
 import { fieldErrorId } from '../../components/common/FormField.jsx';
 import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { dealStageLabel, formatThaiDate, ticketPriorityLabel } from '../../utils/format.js';
+import { dealStageLabel, formatThaiDate, OFFERED_TO_LABEL, ticketPriorityLabel } from '../../utils/format.js';
 import { formatCatalogPrice } from './catalogPriceDisplay.js';
 import {
   applyCatalogPick,
@@ -101,7 +101,7 @@ function draftSaveNoticeCopy(reason) {
   return 'เบราว์เซอร์นี้ไม่รองรับการบันทึกร่าง';
 }
 
-// ── ช่องทางดีล (entry channel) — backend th.co.glr.hr.ticket.EntryChannel ──
+// ── เสนอแก่ — backend th.co.glr.hr.ticket.EntryChannel ──
 const ENTRY_CHANNEL_OPTIONS = [
   { code: 'DESIGNER_LED', label: 'ผู้ออกแบบนำ', sub: 'Designer-led' },
   { code: 'OWNER_DIRECT', label: 'เจ้าของตรง', sub: 'Owner-direct' },
@@ -159,7 +159,7 @@ const customerRequiredSchema = z.any().refine((v) => v != null, 'กรุณา
 const projectRequiredSchema = z.any().refine((v) => v != null, 'กรุณาเลือกโครงการ (1 ดีล = 1 Ticket ภายใต้โครงการ)');
 // Descriptive-only by owner ruling (it drives no behaviour), but it must be STATED — see the
 // no-default comment on the entryChannel state below.
-const entryChannelRequiredSchema = z.any().refine((v) => v != null, 'กรุณาเลือกช่องทางดีล (ระบุว่าดีลนี้เข้ามาทางไหน)');
+const entryChannelRequiredSchema = z.any().refine((v) => v != null, 'กรุณาเลือกว่าดีลนี้เสนอแก่ใคร');
 
 /**
  * Validates the whole form and returns every invalid field, plus `order`:
@@ -211,19 +211,6 @@ function validateTicketForm({ customer, project, entryChannel, items }) {
   return { errors, order };
 }
 
-// Which sub-view owns a given fieldErrors key — used to jump the user
-// straight to (and, once mounted, focus) the first invalid field.
-function viewForFieldKey(key) {
-  if (key === 'customer') return 'customer';
-  if (key === 'project') return 'project';
-  if (key === 'entryChannel') return 'contact';
-  if (key.startsWith('items.')) return 'items';
-  return 'hub';
-}
-function itemIndexForFieldKey(key) {
-  return key.startsWith('items.') ? Number(key.split('.')[1]) : null;
-}
-
 // ── small sub-components ──────────────────────────────────────────────────────
 
 // maxHeight 220 was sized for the old 720px-wide modal, where it squeezed the company picker's
@@ -269,6 +256,17 @@ function SearchSelect({ id, label, value, onSelect, placeholder, options, onSear
             // maxHeight stays inline: it's sourced from SEARCH_SELECT_OPTIONS_MAX_HEIGHT (a JS
             // constant), which a static Tailwind arbitrary-value class can't reference.
             <div className="absolute left-0 right-0 top-full z-50 overflow-y-auto rounded-[6px] border border-border-subtle bg-surface shadow-[0_4px_16px_rgba(0,0,0,0.1)]" style={{ maxHeight: SEARCH_SELECT_OPTIONS_MAX_HEIGHT }}>
+              {onCreateNew && (
+                // First and sticky, like DealCustomerCard's "+ เพิ่มลูกค้าใหม่": always reachable
+                // without scrolling; the opaque bg keeps scrolled options from showing through.
+                // eslint-disable-next-line jsx-a11y/no-static-element-interactions -- dropdown action row; onMouseDown (not click) preserves input focus
+                <div onMouseDown={() => { setOpen(false); onCreateNew(); }}
+                  className="sticky top-0 z-10 flex cursor-pointer items-center gap-1.5 border-b border-border-subtle bg-surface-muted px-3 py-2 text-xs font-semibold text-link hover:bg-info-row-active"
+                >
+                  <Icon name="plus" size={13} />
+                  {createNewLabel || 'สร้างรายการใหม่'}
+                </div>
+              )}
               {loading && <div className="px-3 py-2.5 text-xs text-text-muted">กำลังโหลด{label}…</div>}
               {!loading && options.length === 0 && <div className="px-3 py-2.5 text-xs text-text-muted">ไม่พบข้อมูล</div>}
               {options.map((opt) => (
@@ -279,15 +277,6 @@ function SearchSelect({ id, label, value, onSelect, placeholder, options, onSear
                   {renderOption(opt)}
                 </div>
               ))}
-              {onCreateNew && (
-                // eslint-disable-next-line jsx-a11y/no-static-element-interactions -- dropdown action row; onMouseDown (not click) preserves input focus
-                <div onMouseDown={() => { setOpen(false); onCreateNew(); }}
-                  className={`flex cursor-pointer items-center gap-1.5 bg-surface-muted px-3 py-2 text-xs font-semibold text-link hover:bg-info-row-active ${options.length > 0 ? 'border-t border-border-subtle' : ''}`}
-                >
-                  <Icon name="plus" size={13} />
-                  {createNewLabel || 'สร้างรายการใหม่'}
-                </div>
-              )}
             </div>
           )}
         </div>
@@ -302,50 +291,61 @@ function SearchSelect({ id, label, value, onSelect, placeholder, options, onSear
 // ItemFieldLabel/ItemField/CatalogOption/CatalogAutocompleteField moved to ticketItemFields.jsx
 // (imported above) — shared with TicketDetailPage's edit-items mode.
 
-/** Back-to-hub / back-to-list link used at the top of every sub-view. */
-function BackLink({ onClick, label = 'กลับ' }) {
+/**
+ * One accordion section (IA-deal-form.md). Same APG structure as CollapsibleSection — a heading
+ * wrapping the disclosure button, the body a region labelled by it — but controlled and open-only,
+ * so that component is not a drop-in. The header line reads title · summary once done · badge
+ * (จำเป็น / ไม่บังคับ / ✓) · chevron. `body()` runs only while open; `below` renders under the card
+ * either way.
+ */
+function Section({ id, title, required, done, summary, open, onOpen, body, below }) {
+  const headerRef = useRef(null);
+  const headerId = `deal-section-${id}-header`;
+  const bodyId = `deal-section-${id}-body`;
+  // Phones: an opened section scrolls its header into view. React runs this child effect before
+  // the form's pending-focus effect in the same commit, so a field's smooth scroll still wins.
+  useEffect(() => {
+    if (open) headerRef.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [open]);
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="inline-flex w-fit items-center gap-1 border-0 bg-transparent p-0 text-sm font-extrabold text-primary"
-    >
-      <Icon name="chevronLeft" size={15} /> {label}
-    </button>
-  );
-}
-
-/** One checklist row on the hub. */
-function HubRow({ title, subtitle, done, required, optional, active, onClick }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`flex items-center gap-3 rounded-xl border bg-surface px-3.5 py-3 text-left hover:bg-surface-hover ${active ? 'border-primary shadow-[var(--shadow-focus-ring)]' : 'border-border'}`}
-    >
-      <span
-        aria-hidden="true"
-        className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full ${done ? 'bg-success text-white' : 'border-2 border-dashed border-border-strong'}`}
-      >
-        {done ? <Icon name="check" size={12} /> : null}
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="flex flex-wrap items-center gap-1.5 text-sm font-extrabold text-text">
-          {title}
-          {/* WCAG AA fix (fix/ui-contrast-tokens): text-danger (#dc2626) on
-              bg-danger-bg (#fee2e2) measures 3.95:1, failing 4.5:1 — found
-              by an automated contrast scan of this modal, not the original
-              manual audit. text-danger-dark (#b91c1c) is the app's
-              established danger-on-danger-bg pairing (already asserted at
-              4.5+ in designTokens.test.js's 'status-danger text on danger
-              bg' case; StatusBadge's own danger tone uses it too). */}
-          {required && !done ? <span className="rounded-full bg-danger-bg px-1.5 text-2xs font-extrabold text-danger-dark">จำเป็น</span> : null}
-          {optional ? <span className="text-2xs font-semibold text-text-muted">(ไม่บังคับ)</span> : null}
-        </span>
-        <span className="block truncate text-xs text-text-muted">{subtitle}</span>
-      </span>
-      <Icon name="chevronRight" size={16} className="shrink-0 text-text-faint" />
-    </button>
+    <>
+      <div data-testid={`deal-section-${id}`} className={`rounded-xl border bg-surface ${open ? 'border-primary' : 'border-border'}`}>
+        {/* The button inherits its font (index.css), so the heading must not change it. */}
+        <h3 className="m-0 text-[length:inherit] font-normal">
+          <button
+            type="button"
+            id={headerId}
+            ref={headerRef}
+            aria-expanded={open}
+            aria-controls={open ? bodyId : undefined}
+            // Open-only by ruling (no toggle), so the open header announces that it cannot collapse.
+            aria-disabled={open || undefined}
+            onClick={onOpen}
+            // No preflight in this app: a raw <button> keeps the UA's grey bevel unless reset here.
+            className="flex min-h-11 w-full cursor-pointer items-center gap-3 rounded-xl border-0 bg-transparent px-3.5 py-2.5 text-left hover:bg-surface-hover"
+          >
+            <span className="shrink-0 text-sm font-extrabold text-text">{title}</span>
+            <span className="min-w-0 flex-1 truncate text-xs text-text-muted">{done ? summary : null}</span>
+            {done ? (
+              <span role="img" aria-label="เสร็จแล้ว" className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-success text-white">
+                <Icon name="check" size={12} />
+              </span>
+            ) : required ? (
+              <span className="shrink-0 rounded-full bg-danger-bg px-1.5 text-2xs font-extrabold text-danger-dark">จำเป็น</span>
+            ) : (
+              <span className="shrink-0 rounded-full bg-surface-subtle px-1.5 text-2xs font-semibold text-text-muted">ไม่บังคับ</span>
+            )}
+            <Icon name={open ? 'chevronDown' : 'chevronRight'} size={16} className="shrink-0 text-text-faint" />
+          </button>
+        </h3>
+        {open ? (
+          <div id={bodyId} role="region" aria-labelledby={headerId} className="border-t border-border-subtle px-3.5 pb-4 pt-3">
+            {body()}
+          </div>
+        ) : null}
+      </div>
+      {below}
+    </>
   );
 }
 
@@ -390,10 +390,10 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
   // risk — softer copy than "everything will be lost".
   const [closeHasOlderCopy, setCloseHasOlderCopy] = useState(false);
 
-  // hub | customer | project | contact | items | details
-  const [view, setView] = useState('hub');
-  // fieldErrors key waiting to be scrolled+focused once its owning view/item
-  // editor has actually mounted (see the effect below).
+  // The one open accordion section (a `sections` id, or null). Changed only by goToSection().
+  const [openSection, setOpenSection] = useState('customer');
+  // fieldErrors key waiting to be scrolled+focused once its section/item editor has actually
+  // mounted it (see the effect below).
   const [pendingFocusKey, setPendingFocusKey] = useState(null);
 
   const [form, setForm] = useState({ note: '' });
@@ -435,7 +435,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
     });
   }
 
-  // customer / project / contact state
+  // customer / project state
   const [customerSearch, setCustomerSearch] = useState('');
   const [customerOptions, setCustomerOptions] = useState([]);
   const [customerLoading, setCustomerLoading] = useState(false);
@@ -451,12 +451,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
   const [duplicateWarning, setDuplicateWarning] = useState(null);
   const [duplicateDismissed, setDuplicateDismissed] = useState(false);
 
-  const [contactOptions, setContactOptions] = useState([]);
-  const [selectedContact, setSelectedContact] = useState(null);
-  const [showNewContact, setShowNewContact] = useState(false);
-  const [newContact, setNewContact] = useState({ firstName: '', lastName: '', position: '', email: '', phone: '' });
   const [creatingProject, setCreatingProject] = useState(false);
-  const [creatingContact, setCreatingContact] = useState(false);
 
   // catalog autocomplete
   const [catalogResults, setCatalogResults] = useState([]);
@@ -536,7 +531,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
   function buildDraftSnapshot() {
     return {
       dealTitle, note: form.note, priority, entryChannel, nextFollowUpAt,
-      customer: selectedCustomer, project: selectedProject, contact: selectedContact,
+      customer: selectedCustomer, project: selectedProject,
       items,
     };
   }
@@ -546,8 +541,12 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
   // saves the LATEST snapshot, not the one at schedule time. This is what makes rapid coalesced
   // edits save once, with the final value, rather than once per keystroke with a stale one.
   const draftSnapshotRef = useRef(buildDraftSnapshot());
+  // The item editor's row, kept fresh the same way for closeItemEditor(): goToSection also runs
+  // after an await (a late create), whose closure predates any editor the rep opened meanwhile.
+  const editingItemIndexRef = useRef(editingItemIndex);
   useEffect(() => {
     draftSnapshotRef.current = buildDraftSnapshot();
+    editingItemIndexRef.current = editingItemIndex;
   });
 
   /** Meaningful AND different from what's already safely on disk — see lastPersistedSnapshotJsonRef. */
@@ -591,7 +590,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
     // before the next run) — that cancel-and-reschedule is the entire debounce mechanism: rapid
     // edits coalesce into whichever one is still pending 1s after the last of them.
     return () => clearTimeout(timer);
-  }, [dealTitle, form.note, priority, entryChannel, nextFollowUpAt, selectedCustomer, selectedProject, selectedContact, items, showPicker, loading]);
+  }, [dealTitle, form.note, priority, entryChannel, nextFollowUpAt, selectedCustomer, selectedProject, items, showPicker, loading]);
 
   // beforeunload guard (GLA-20) — mirrors PayrollPage.jsx's own beforeunload effect (~L1171):
   // refs only, registered once for the component's lifetime, removed on unmount. Unlike Payroll's
@@ -632,7 +631,6 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
       nextFollowUpAt: draft?.nextFollowUpAt ?? defaultNextFollowUpAt(),
       customer: draft?.customer ?? null,
       project: draft?.project ?? null,
-      contact: draft?.contact ?? null,
       items: draft?.items?.length ? draft.items : [],
     };
     setForm({ note: normalized.note });
@@ -643,7 +641,6 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
     setItems(normalized.items);
     setSelectedCustomer(normalized.customer);
     setSelectedProject(normalized.project);
-    setSelectedContact(normalized.contact);
     setFieldErrors({});
     setError('');
     return normalized;
@@ -669,7 +666,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
     // "has UNSAVED data").
     lastPersistedSnapshotJsonRef.current = JSON.stringify(normalized);
     setShowPicker(false);
-    setView('hub');
+    goToSection(firstMissingSection(normalized));
   }
 
   function handleStartNewDraft() {
@@ -683,7 +680,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
     // types something for the first time.
     lastPersistedSnapshotJsonRef.current = JSON.stringify(normalized);
     setShowPicker(false);
-    setView('hub');
+    goToSection(firstMissingSection(normalized));
   }
 
   function handleConfirmDeleteDraft() {
@@ -767,24 +764,20 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
     onClose();
   }
 
-  // load projects + contacts when customer is picked (also fires once on
-  // mount when a draft restored a customer, refreshing both lists).
+  // load projects when customer is picked (also fires once on mount when a draft restored a
+  // customer, refreshing the list). ผู้ติดต่อ is no longer part of the deal (picked per quotation).
   useEffect(() => {
     if (!selectedCustomer) {
-      setProjectOptions([]); setContactOptions([]);
-      setSelectedProject(null); setSelectedContact(null);
-      setShowNewProject(false); setShowNewContact(false);
+      setProjectOptions([]);
+      setSelectedProject(null);
+      setShowNewProject(false);
       return;
     }
-    Promise.all([
-      api.customers.projects(selectedCustomer.id),
-      api.customers.contacts(selectedCustomer.id),
-    ]).then(([pr, cr]) => {
+    api.customers.projects(selectedCustomer.id).then((pr) => {
       setProjectOptions(pr.projects ?? []);
-      setContactOptions(cr.contacts ?? []);
     }).catch(() => {
-      // load failed — leave the pickers empty rather than a dangling unhandled rejection
-      setProjectOptions([]); setContactOptions([]);
+      // load failed — leave the picker empty rather than a dangling unhandled rejection
+      setProjectOptions([]);
     });
   }, [selectedCustomer]);
 
@@ -805,8 +798,8 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
     return () => { cancelled = true; };
   }, [selectedProject]);
 
-  // Focus (and scroll to) a pending invalid field once its owning view/item
-  // editor has actually mounted the node.
+  // Focus (and scroll to) a pending field once its section/item editor has actually mounted the
+  // node. Each Section scrolls its own header first (see Section).
   useEffect(() => {
     if (!pendingFocusKey) return;
     const node = fieldRefs.current[pendingFocusKey];
@@ -816,7 +809,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
     }
     node.focus();
     setPendingFocusKey(null);
-  }, [pendingFocusKey, view, items, editingItemIndex]);
+  }, [pendingFocusKey, openSection, items, editingItemIndex]);
 
   // Opening the ลูกค้า step lands the cursor in its search box, which also opens the results list
   // (SearchSelect searches on focus). Without this the step arrives as one empty field in a tall
@@ -824,18 +817,34 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
   // while a validation jump is pending so the two never fight over focus, and once a customer is
   // chosen (the field is then a value chip, not an input).
   useEffect(() => {
-    if (view !== 'customer' || selectedCustomer || pendingFocusKey) return;
+    if (openSection !== 'customer' || selectedCustomer || pendingFocusKey) return;
     fieldRefs.current.customer?.focus();
-  }, [view, selectedCustomer, pendingFocusKey]);
+  }, [openSection, selectedCustomer, pendingFocusKey]);
 
+  // The one way the open section changes: a header click, the auto-advance after a pick, a
+  // ไปที่ขั้นตอน or failed-submit jump, restoring a draft or starting a new one. Leaving รายการสินค้า
+  // goes through closeItemEditor(), so a refused close keeps the rep in the editor. `item` opens
+  // that row's editor; `focusKey` is focused once its field has mounted.
+  function goToSection(section, { item = null, focusKey = null } = {}) {
+    if (section !== 'items' && !closeItemEditor()) return;
+    if (item != null) setEditingItemIndex(item);
+    setOpenSection(section);
+    if (focusKey) setPendingFocusKey(focusKey);
+  }
+
+  // Auto-advance (IA): `field` (customer | project | entryChannel) was just picked, so clear its
+  // error and open the next required section still missing, or none. Judged on the latest
+  // COMMITTED values plus this pick, not this render's closure: the create handlers call this after
+  // an await, by which time the rep may have finished another section.
+  function advancePast(field, value) {
+    clearFieldError(field);
+    goToSection(firstMissingSection({ ...draftSnapshotRef.current, [field]: value }));
+  }
+
+  /** Opens the section owning a fieldErrors key (its part before the first dot) and focuses it. */
   function jumpToField(key) {
-    setPendingFocusKey(key);
-    const targetView = viewForFieldKey(key);
-    if (targetView === 'items') {
-      const idx = itemIndexForFieldKey(key);
-      if (idx != null) setEditingItemIndex(idx);
-    }
-    setView(targetView);
+    const [section, row] = key.split('.');
+    goToSection(section, { item: row == null ? null : Number(row), focusKey: key });
   }
 
   async function searchCustomers(q) {
@@ -917,29 +926,27 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
   function onBrandInput(index, value) { onCatalogInput(index, 'brand', value); }
   function onModelInput(index, value) { onCatalogInput(index, 'model', value); }
 
-  // The item editor has TWO ways to close: the footer's "บันทึกรายการ" button, and the
-  // "กลับไปรายการสินค้า" BackLink at the top of renderItemEditor. Both used to just close with no
-  // validation of their own — a line flagged จากสต็อก with an empty price was accepted through
-  // either exit and only ever caught (if at all) by the final สร้างดีล submit's zod schema. Both
-  // now route through this one function, so a rep cannot dodge the check by using the back link
-  // instead of the button. This does NOT extend to the row's other required fields (ยี่ห้อ/รุ่น/
-  // ขนาด) — #994's edit-items rewrite left both exits with no required-field validation either,
-  // and widening that is out of scope here; only the V183 stock-price rule is checked. A rep can
-  // still close the editor with a blank ยี่ห้อ and only discover it at final submit, exactly as
-  // before.
-  function closeItemEditor(index) {
-    const item = items[index];
-    if (item && isStockSalePriceMissing(item)) {
+  // Every exit from the item editor — the footer's "บันทึกรายการ", the "กลับไปรายการสินค้า" link at
+  // the top of renderItemEditor, and opening another section (goToSection, including an
+  // auto-advance after a late create) — routes through here, so a จากสต็อก row with no price
+  // cannot be left by any of them: the price is flagged and focused instead, and this returns
+  // false. It reads the editor row and items from refs (the latest committed values), never this
+  // render's closure, so "editor open ⇒ รายการสินค้า open" holds on every path and the footer needs
+  // no section check. A ไปที่ขั้นตอน jump to ANOTHER row's field stays inside the section and
+  // switches rows without this check; the final submit still blocks the bad line. Only the V183
+  // stock-price rule is checked here — a blank ยี่ห้อ/รุ่น/ขนาด is caught at final submit, as on
+  // TicketDetailPage's edit-items mode (#994).
+  function closeItemEditor() {
+    const index = editingItemIndexRef.current;
+    if (index == null) return true;
+    if (isStockSalePriceMissing(draftSnapshotRef.current.items[index])) {
       const key = `items.${index}.stockSalePrice`;
       setFieldErrors((prev) => ({ ...prev, [key]: missingStockSalePriceMessage(index + 1) }));
-      const node = fieldRefs.current[key];
-      if (node) {
-        if (typeof node.scrollIntoView === 'function') node.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        node.focus();
-      }
-      return;
+      setPendingFocusKey(key);
+      return false;
     }
     setEditingItemIndex(null);
+    return true;
   }
 
   function addItem() {
@@ -968,7 +975,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
       const proj = res.project;
       setProjectOptions((prev) => [...prev, proj]);
       setSelectedProject(proj);
-      clearFieldError('project');
+      advancePast('project', proj);
       setNewProjectName('');
       setShowNewProject(false);
     } catch (err) {
@@ -986,28 +993,11 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
       const cust = res.customer;
       setCustomerOptions((prev) => [...prev, cust]);
       setSelectedCustomer(cust);
-      clearFieldError('customer');
+      advancePast('customer', cust);
       setShowNewCustomer(false);
       setNewCustomer({ name: '', taxId: '', branch: 'สำนักงานใหญ่', address: '', phone: '' });
     } finally {
       setCustomerSaving(false);
-    }
-  }
-
-  async function handleCreateContact() {
-    if (!newContact.firstName.trim()) return;
-    setCreatingContact(true);
-    try {
-      const res = await api.customers.createContact(selectedCustomer.id, newContact);
-      const ct = res.contact;
-      setContactOptions((prev) => [...prev, ct]);
-      setSelectedContact(ct);
-      setShowNewContact(false);
-      setNewContact({ firstName: '', lastName: '', position: '', email: '', phone: '' });
-    } catch (err) {
-      setError(err.message || 'เพิ่มผู้ติดต่อไม่สำเร็จ');
-    } finally {
-      setCreatingContact(false);
     }
   }
 
@@ -1046,7 +1036,6 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
         customerName: selectedCustomer.name,
         customerId: selectedCustomer.id,
         projectId: selectedProject.id,
-        contactId: selectedContact?.id ?? null,
         note: form.note.trim() || null,
         entryChannel,
         priority,
@@ -1101,47 +1090,85 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
     }
   }
 
-  // ── progress meter ──────────────────────────────────────────────────────
-  const sectionDone = {
-    customer: Boolean(selectedCustomer),
-    project: Boolean(selectedProject),
-    // ผู้ติดต่อ is optional (contactId is nullable); the REQUIRED thing in this section is the
-    // entry channel, so that is what ticks the row — same as ลูกค้า/โครงการ tracking theirs.
-    contact: Boolean(entryChannel),
-    items: items.length > 0,
-    details: Boolean(dealTitle.trim() || form.note.trim() || priority !== 'NORMAL'),
-  };
-  // 5 real sections. The separate "ตรวจสอบ & บันทึก" step used to be a sixth row that could never
-  // be ticked; it was removed on the owner's instruction after UAT — the hub already IS the
-  // review (every row shows what is filled in), and the สร้างดีล button sits in the footer beside
-  // it, so a dedicated step only added a click between the rep and the thing they came to do.
-  const TOTAL_SECTIONS = 5;
-  const doneCount = Object.values(sectionDone).filter(Boolean).length;
+  // ── sections ─────────────────────────────────────────────────────────────
+  const duplicateBanner = selectedProject && duplicateWarning && !duplicateDismissed ? (
+    <div role="status" className="flex items-start gap-2 rounded-lg border border-warning-border bg-warning-bg px-3 py-2.5 text-xs text-warning-dark">
+      <Icon name="triangleAlert" size={15} className="mt-0.5 shrink-0" />
+      <span className="flex-1">
+        พบดีลที่ผูกกับโครงการนี้อยู่แล้ว — {duplicateWarning.map((t, i) => (
+          <span key={t.id}>
+            {i > 0 ? ', ' : ''}
+            <strong>{t.code}</strong> ({dealStageLabel(t.salesStage)?.label ?? t.status})
+          </span>
+        ))}. ตรวจสอบก่อนสร้างดีลซ้ำ
+      </span>
+      <button type="button" onClick={() => setDuplicateDismissed(true)} aria-label="ปิดคำเตือนดีลซ้ำ" className="shrink-0 border-0 bg-transparent text-warning-dark">
+        <Icon name="close" size={13} />
+      </button>
+    </div>
+  ) : null;
 
-  // Outstanding fields listed on the hub after a failed submit. Recomputed from the CURRENT form
+  // The five accordion sections, in on-screen order (= validateTicketForm's order). Each id IS the
+  // fieldErrors key it owns (`items` owns every `items.<i>.<field>`; see jumpToField). done/summary
+  // read the draft-snapshot shape (buildDraftSnapshot, applyDraftToForm), so one test serves the
+  // progress line, the default-open choice and the auto-advance. Section shows a summary only once
+  // done.
+  const sections = [
+    {
+      id: 'customer', title: 'ลูกค้า', required: true, body: renderCustomerBody,
+      done: (s) => Boolean(s.customer),
+      summary: (s) => (
+        <>
+          {s.customer?.name}
+          {s.customer?.taxId ? <span className="ml-1.5 text-text-faint">เลขภาษี {s.customer.taxId}</span> : null}
+        </>
+      ),
+    },
+    {
+      id: 'project', title: 'โครงการ', required: true, body: renderProjectBody,
+      done: (s) => Boolean(s.project),
+      summary: (s) => s.project?.name,
+      // Under the card, outside the body: picking the project collapses the body, and the duplicate
+      // check only answers afterwards, so inside it the warning went unseen.
+      below: duplicateBanner,
+    },
+    {
+      id: 'entryChannel', title: OFFERED_TO_LABEL, required: true, body: renderEntryChannelBody,
+      done: (s) => Boolean(s.entryChannel),
+      summary: (s) => ENTRY_CHANNEL_OPTIONS.find((o) => o.code === s.entryChannel)?.label ?? s.entryChannel,
+    },
+    {
+      id: 'items', title: 'รายการสินค้า', required: false, body: renderItemsBody,
+      done: (s) => s.items.length > 0,
+      summary: (s) => `${s.items.length} รายการ`,
+    },
+    {
+      id: 'details', title: 'รายละเอียดดีล', required: false, body: renderDetailsBody,
+      done: (s) => Boolean(s.dealTitle.trim() || s.note.trim() || s.priority !== 'NORMAL'),
+      summary: (s) => s.dealTitle.trim() || (s.priority !== 'NORMAL' ? ticketPriorityLabel(s.priority).label : 'มีหมายเหตุ'),
+    },
+  ];
+  /** The first required section still missing its value in `state` (a draft snapshot), else null. */
+  const firstMissingSection = (state) => sections.find((s) => s.required && !s.done(state))?.id ?? null;
+  const snapshot = buildDraftSnapshot();
+  const doneCount = sections.filter((s) => s.done(snapshot)).length;
+
+  // Outstanding fields listed above the sections after a failed submit. Recomputed from the CURRENT form
   // rather than read off `fieldErrors`' key order, so the list shrinks as the rep fixes things and
   // stays in on-screen order (`fieldErrors` is a plain object and carries neither property).
-  const hubValidation = Object.keys(fieldErrors).length > 0
+  const missing = Object.keys(fieldErrors).length > 0
     ? validateTicketForm({ customer: selectedCustomer, project: selectedProject, entryChannel, items })
-    : null;
-  const hubMissingErrors = hubValidation?.errors ?? {};
-  const hubMissingKeys = hubValidation?.order ?? [];
+    : { errors: {}, order: [] };
   const canCreateNow = Boolean(selectedCustomer && selectedProject);
 
-  const entryChannelLabel = entryChannel
-    ? (ENTRY_CHANNEL_OPTIONS.find((o) => o.code === entryChannel)?.label ?? entryChannel)
-    : 'ยังไม่ได้เลือกช่องทาง';
-  const priorityLabel = PRIORITY_OPTIONS.find((p) => p.code === priority)?.label ?? priority;
-
-  // ── sub-views ────────────────────────────────────────────────────────────
-
-  function renderHub() {
+  /** The one page: progress line, the post-submit missing list, five accordion sections. */
+  function renderSections() {
     return (
-      <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-3">
         <div className="flex items-center gap-3 rounded-lg border border-border bg-surface px-3 py-2.5">
-          <span className="whitespace-nowrap text-xs font-extrabold text-text-secondary">{doneCount}/{TOTAL_SECTIONS} เสร็จ</span>
+          <span className="whitespace-nowrap text-xs font-extrabold text-text-secondary">{doneCount}/{sections.length} เสร็จ</span>
           <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface-subtle">
-            <div className="h-full rounded-full bg-accent" style={{ width: `${Math.round((doneCount / TOTAL_SECTIONS) * 100)}%` }} />
+            <div className="h-full rounded-full bg-accent" style={{ width: `${Math.round((doneCount / sections.length) * 100)}%` }} />
           </div>
           {draftSaveNotice ? (
             <span className="whitespace-nowrap text-2xs font-bold text-danger-dark">
@@ -1152,62 +1179,23 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
           ) : null}
         </div>
 
-        <div className="flex flex-col gap-2">
-          <HubRow
-            title="ลูกค้า"
-            required
-            done={sectionDone.customer}
-            subtitle={selectedCustomer ? selectedCustomer.name : 'ยังไม่ได้เลือก'}
-            onClick={() => setView('customer')}
-          />
-          <HubRow
-            title="โครงการ"
-            required
-            done={sectionDone.project}
-            subtitle={selectedProject ? selectedProject.name : (selectedCustomer ? 'ยังไม่ได้เลือก' : 'เลือกลูกค้าก่อน')}
-            onClick={() => setView('project')}
-          />
-          <HubRow
-            title="ผู้ติดต่อ & ช่องทางดีล"
-            required
-            done={sectionDone.contact}
-            subtitle={[selectedContact ? `${selectedContact.firstName} ${selectedContact.lastName}`.trim() : null, entryChannelLabel].filter(Boolean).join(' · ')}
-            onClick={() => setView('contact')}
-          />
-          <HubRow
-            title="รายการสินค้า"
-            optional
-            done={sectionDone.items}
-            subtitle={items.length ? `${items.length} รายการ` : 'ยังไม่มีรายการ'}
-            onClick={() => setView('items')}
-          />
-          <HubRow
-            title="รายละเอียดดีล"
-            optional
-            done={sectionDone.details}
-            subtitle={[dealTitle.trim(), priority !== 'NORMAL' ? priorityLabel : null, form.note.trim() ? 'มีหมายเหตุ' : null].filter(Boolean).join(' · ') || 'ชื่อดีล · ความสำคัญ · หมายเหตุ'}
-            onClick={() => setView('details')}
-          />
-        </div>
-
-        {/* Only after a submit attempt has actually failed — the จำเป็น badges above already say
-            what is outstanding, so showing a red block to someone who has just opened the form
-            would be nagging rather than helping. This is what the removed ตรวจสอบ step contributed
-            that the hub rows do not: a jump straight to a specific bad field inside an item row. */}
-        {hubMissingKeys.length > 0 ? (
+        {/* Only after a submit attempt has actually failed — the จำเป็น badges already say what is
+            outstanding, so a red block on a freshly opened form would be nagging rather than
+            helping. Each line jumps straight to (and opens the section of) a specific bad field. */}
+        {missing.order.length > 0 ? (
           <div className="rounded-lg border border-danger-border bg-danger-bg px-3 py-2.5">
             <p className="flex items-center gap-1.5 text-xs font-extrabold text-danger-dark">
-              <Icon name="triangleAlert" size={14} /> ยังกรอกไม่ครบ {hubMissingKeys.length} รายการ
+              <Icon name="triangleAlert" size={14} /> ยังกรอกไม่ครบ {missing.order.length} รายการ
             </p>
             <ul className="mb-0 mt-1.5 flex list-disc flex-col gap-1 pl-4 text-2xs text-danger-dark">
-              {hubMissingKeys.map((key) => (
+              {missing.order.map((key) => (
                 <li key={key}>
-                  {hubMissingErrors[key]}
+                  {missing.errors[key]}
                   {' — '}
                   <button
                     type="button"
                     className="border-0 bg-transparent p-0 font-extrabold text-danger-dark underline"
-                    onClick={() => { setFieldErrors(hubMissingErrors); jumpToField(key); }}
+                    onClick={() => { setFieldErrors(missing.errors); jumpToField(key); }}
                   >
                     ไปที่ขั้นตอน
                   </button>
@@ -1217,9 +1205,24 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
           </div>
         ) : null}
 
+        {sections.map((section) => (
+          <Section
+            key={section.id}
+            id={section.id}
+            title={section.title}
+            required={section.required}
+            done={section.done(snapshot)}
+            summary={section.summary(snapshot)}
+            open={openSection === section.id}
+            onOpen={() => goToSection(section.id)}
+            body={section.body}
+            below={section.below}
+          />
+        ))}
+
         <div className="flex items-start gap-2 rounded-lg border border-info-border bg-info-bg px-3 py-2.5 text-xs text-info-dark">
           <Icon name="info" size={15} className="mt-0.5 shrink-0" />
-          <span>ดีลที่สร้างยังไม่มีราคา — ขั้นต่อไปคือ “สร้างคำขอราคา” จากหน้าดีล ซึ่งต้องมีรายการสินค้าอย่างน้อย 1 รายการ</span>
+          <span>ดีลที่สร้างยังไม่มีราคา — สร้างคำขอราคาได้เมื่อดีลถึงขั้น 3 ซึ่งต้องมีรายการสินค้าอย่างน้อย 1 รายการ</span>
         </div>
 
         {error ? <div className="py-2.5 px-3 rounded-md bg-danger-bg text-danger-dark font-bold text-[length:var(--text-sm)]" role="alert">{error}</div> : null}
@@ -1227,15 +1230,14 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
     );
   }
 
-  function renderCustomerView() {
+  function renderCustomerBody() {
     return (
       <div className="flex flex-col gap-3">
-        <BackLink onClick={() => setView('hub')} />
         <SearchSelect
           id="customer-select"
-          label="บริษัท / ลูกค้า *"
+          label="ลูกค้า *"
           value={selectedCustomer}
-          onSelect={(c) => { setSelectedCustomer(c); if (c) { setShowNewCustomer(false); clearFieldError('customer'); } }}
+          onSelect={(c) => { setSelectedCustomer(c); if (c) { setShowNewCustomer(false); advancePast('customer', c); } }}
           placeholder="พิมพ์ค้นหาชื่อบริษัท…"
           options={customerOptions}
           onSearch={searchCustomers}
@@ -1249,7 +1251,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
             </div>
           )}
           renderValue={(c) => <span><strong>{c.name}</strong>{c.taxId ? <span className="ml-1.5 text-xs text-text-muted">({c.taxId})</span> : null}</span>}
-          createNewLabel="สร้างบริษัท / ลูกค้าใหม่"
+          createNewLabel="เพิ่มลูกค้าใหม่"
           onCreateNew={() => setShowNewCustomer(true)}
           inputRef={(el) => { fieldRefs.current.customer = el; }}
           error={fieldErrors.customer}
@@ -1257,7 +1259,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
 
         {showNewCustomer && !selectedCustomer && (
           <div className="flex flex-col gap-2 rounded-md border border-info-border bg-info-row-active p-3">
-            <p className="m-0 text-xs font-bold text-info">เพิ่มบริษัท / ลูกค้าใหม่</p>
+            <p className="m-0 text-xs font-bold text-info">เพิ่มลูกค้าใหม่</p>
             <div className="grid grid-cols-2 gap-2">
               <label className="col-span-2 m-0">
                 <span className="text-2xs">ชื่อบริษัท *</span>
@@ -1294,14 +1296,13 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
     );
   }
 
-  function renderProjectView() {
+  function renderProjectBody() {
     return (
       <div className="flex flex-col gap-3">
-        <BackLink onClick={() => setView('hub')} />
         {!selectedCustomer ? (
           <div className="flex flex-col items-start gap-2 rounded-lg border border-dashed border-border-strong bg-surface px-3.5 py-4 text-sm text-text-muted">
             <span>ต้องเลือกลูกค้าก่อน — โครงการต้องผูกกับลูกค้าเสมอ</span>
-            <Button variant="secondary" onClick={() => setView('customer')}>ไปที่ ลูกค้า</Button>
+            <Button variant="secondary" onClick={() => goToSection('customer')}>ไปที่ ลูกค้า</Button>
           </div>
         ) : (
           <div
@@ -1323,18 +1324,18 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
             ) : (
               <div className="flex flex-col gap-1.5">
                 <div className="flex flex-wrap gap-1.5">
-                  {projectOptions.map((p) => (
-                    <button key={p.id} type="button"
-                      className="cursor-pointer rounded-pill border border-border-muted bg-surface px-2.5 py-1 text-xs text-text"
-                      onClick={() => { setSelectedProject(p); clearFieldError('project'); }}>
-                      {p.name}
-                    </button>
-                  ))}
                   <button type="button"
                     className="cursor-pointer rounded-pill border border-dashed border-text-faint bg-transparent px-2.5 py-1 text-xs text-text-muted"
                     onClick={() => setShowNewProject((v) => !v)}>
-                    <Icon name="plus" size={12} /> สร้างโครงการใหม่
+                    <Icon name="plus" size={12} /> เพิ่มโครงการใหม่
                   </button>
+                  {projectOptions.map((p) => (
+                    <button key={p.id} type="button"
+                      className="cursor-pointer rounded-pill border border-border-muted bg-surface px-2.5 py-1 text-xs text-text"
+                      onClick={() => { setSelectedProject(p); advancePast('project', p); }}>
+                      {p.name}
+                    </button>
+                  ))}
                 </div>
                 {showNewProject && (
                   <div className="mt-1 flex gap-1.5">
@@ -1352,45 +1353,23 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
             ) : null}
           </div>
         )}
-
-        {selectedProject && duplicateWarning && !duplicateDismissed ? (
-          <div className="flex items-start gap-2 rounded-lg border border-warning-border bg-warning-bg px-3 py-2.5 text-xs text-warning-dark">
-            <Icon name="triangleAlert" size={15} className="mt-0.5 shrink-0" />
-            <span className="flex-1">
-              พบดีลที่ผูกกับโครงการนี้อยู่แล้ว — {duplicateWarning.map((t, i) => (
-                <span key={t.id}>
-                  {i > 0 ? ', ' : ''}
-                  <strong>{t.code}</strong> ({dealStageLabel(t.salesStage)?.label ?? t.status})
-                </span>
-              ))}. ตรวจสอบก่อนสร้างดีลซ้ำ
-            </span>
-            <button type="button" onClick={() => setDuplicateDismissed(true)} aria-label="ปิดคำเตือนดีลซ้ำ" className="shrink-0 border-0 bg-transparent text-warning-dark">
-              <Icon name="close" size={13} />
-            </button>
-          </div>
-        ) : null}
       </div>
     );
   }
 
-  function renderContactView() {
+  function renderEntryChannelBody() {
     return (
       <div className="flex flex-col gap-4">
-        <BackLink onClick={() => setView('hub')} />
 
         <div>
           <span className="mb-1 block text-sm font-bold text-text-secondary">
-            ช่องทางดีล (entry channel)
+            ดีลนี้เสนอแก่ใคร
             <span className="text-danger" aria-hidden="true"> *</span>
           </span>
-          {/* Why this is asked, so a forced choice does not become a random one. */}
-          <p className="mb-1.5 mt-0 text-2xs text-text-muted">
-            ดีลนี้เข้ามาทางไหน — ใช้อธิบายว่าทำไมดีลถึงข้ามขั้นตอนฝั่งออกแบบ
-          </p>
           <div
             className="grid grid-cols-3 gap-1.5"
             role="radiogroup"
-            aria-label="ช่องทางดีล"
+            aria-label={OFFERED_TO_LABEL}
             aria-required="true"
             aria-invalid={fieldErrors.entryChannel ? true : undefined}
             aria-describedby={fieldErrors.entryChannel ? fieldErrorId('entry-channel') : undefined}
@@ -1404,7 +1383,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                   role="radio"
                   aria-checked={selected}
                   ref={index === 0 ? (node) => { fieldRefs.current.entryChannel = node; } : undefined}
-                  onClick={() => { setEntryChannel(option.code); clearFieldError('entryChannel'); }}
+                  onClick={() => { setEntryChannel(option.code); advancePast('entryChannel', option.code); }}
                   className={`rounded-md border px-1.5 py-2.5 text-center text-xs font-extrabold leading-tight ${
                     selected
                       ? 'border-primary bg-primary/10 text-primary'
@@ -1412,7 +1391,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                         // A choice HAS been made, just not this one — plain solid, as before.
                         ? 'border-border bg-surface text-text-secondary'
                         // Nothing chosen yet. Dashed is this app's "not yet decided" idiom
-                        // (HubRow's incomplete check circle, the empty-state boxes, the add
+                        // (the empty-state boxes, the add
                         // pills) — it makes the blank state read as awaiting an answer rather
                         // than as a broken control, and it clears itself the moment one lands.
                         : 'border-dashed border-border-strong bg-surface text-text-secondary'
@@ -1430,78 +1409,6 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
             </p>
           ) : null}
         </div>
-
-        {!selectedCustomer ? (
-          <div className="flex flex-col items-start gap-2 rounded-lg border border-dashed border-border-strong bg-surface px-3.5 py-4 text-sm text-text-muted">
-            <span>เลือกลูกค้าก่อนจึงจะเพิ่มผู้ติดต่อได้</span>
-            <Button variant="secondary" onClick={() => setView('customer')}>ไปที่ ลูกค้า</Button>
-          </div>
-        ) : (
-          <div>
-            <span className="mb-1 block text-xs">ผู้ติดต่อหลัก</span>
-            {selectedContact ? (
-              <div className="flex items-center gap-2 rounded-[6px] border border-border-muted bg-surface px-2.5 py-1.5 text-sm">
-                <div className="flex-1">
-                  <strong>{selectedContact.firstName} {selectedContact.lastName}</strong>
-                  {selectedContact.position && <span className="ml-1.5 text-xs text-text-muted">{selectedContact.position}</span>}
-                  {(selectedContact.email || selectedContact.phone) && (
-                    <div className="mt-0.5 text-2xs text-text-muted">
-                      {selectedContact.email}{selectedContact.email && selectedContact.phone ? ' · ' : ''}{selectedContact.phone}
-                    </div>
-                  )}
-                </div>
-                <button type="button" onClick={() => setSelectedContact(null)} className="cursor-pointer border-0 bg-transparent p-0 text-text-faint">
-                  <Icon name="close" size={14} />
-                </button>
-              </div>
-            ) : (
-              <div className="flex flex-col gap-1.5">
-                <div className="flex flex-wrap gap-1.5">
-                  {contactOptions.map((c) => (
-                    <button key={c.id} type="button"
-                      className="cursor-pointer rounded-pill border border-border-muted bg-surface px-2.5 py-1 text-left text-xs text-text"
-                      onClick={() => setSelectedContact(c)}>
-                      {c.firstName} {c.lastName}
-                      {c.position ? <span className="ml-1 text-text-muted">({c.position})</span> : null}
-                    </button>
-                  ))}
-                  <button type="button"
-                    className="cursor-pointer rounded-pill border border-dashed border-text-faint bg-transparent px-2.5 py-1 text-xs text-text-muted"
-                    onClick={() => setShowNewContact((v) => !v)}>
-                    <Icon name="plus" size={12} /> เพิ่มผู้ติดต่อ
-                  </button>
-                </div>
-                {showNewContact && (
-                  <div className="mt-1 grid grid-cols-2 gap-1.5 rounded-[6px] border border-border-subtle bg-surface p-2.5">
-                    <label className="m-0">
-                      <span className="text-2xs">ชื่อ *</span>
-                      <input value={newContact.firstName} onChange={(e) => setNewContact((p) => ({ ...p, firstName: e.target.value }))} placeholder="ชื่อ" />
-                    </label>
-                    <label className="m-0">
-                      <span className="text-2xs">นามสกุล</span>
-                      <input value={newContact.lastName} onChange={(e) => setNewContact((p) => ({ ...p, lastName: e.target.value }))} placeholder="นามสกุล" />
-                    </label>
-                    <label className="m-0">
-                      <span className="text-2xs">ตำแหน่ง</span>
-                      <input value={newContact.position} onChange={(e) => setNewContact((p) => ({ ...p, position: e.target.value }))} placeholder="เช่น ผู้จัดการ" />
-                    </label>
-                    <label className="m-0">
-                      <span className="text-2xs">โทร</span>
-                      <input value={newContact.phone} onChange={(e) => setNewContact((p) => ({ ...p, phone: e.target.value }))} placeholder="08x-xxx-xxxx" />
-                    </label>
-                    <label className="col-span-2 m-0">
-                      <span className="text-2xs">อีเมล</span>
-                      <input value={newContact.email} onChange={(e) => setNewContact((p) => ({ ...p, email: e.target.value }))} placeholder="email@company.com" />
-                    </label>
-                    <Button variant="primary" className="col-span-2 text-xs" onClick={handleCreateContact} disabled={creatingContact}>
-                      {creatingContact ? 'กำลังเพิ่ม…' : 'เพิ่มผู้ติดต่อ'}
-                    </Button>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
 
         <div className="flex items-start gap-2 rounded-lg border border-info-border bg-info-bg px-3 py-2.5 text-xs text-info-dark">
           <Icon name="info" size={15} className="mt-0.5 shrink-0" />
@@ -1529,7 +1436,13 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
 
     return (
       <div className="flex flex-col gap-4">
-        <BackLink onClick={() => closeItemEditor(index)} label="กลับไปรายการสินค้า" />
+        <button
+          type="button"
+          onClick={closeItemEditor}
+          className="inline-flex w-fit items-center gap-1 border-0 bg-transparent p-0 text-sm font-extrabold text-primary"
+        >
+          <Icon name="chevronLeft" size={15} /> กลับไปรายการสินค้า
+        </button>
 
         {item.source === 'catalog' ? (
           <div className="flex flex-wrap items-center gap-2 rounded-lg border border-accent bg-accent/10 px-3 py-2 text-xs font-bold text-accent-dark">
@@ -1746,13 +1659,12 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
     );
   }
 
-  function renderItemsView() {
+  function renderItemsBody() {
     if (editingItemIndex != null && items[editingItemIndex]) {
       return renderItemEditor(editingItemIndex);
     }
     return (
       <div className="flex flex-col gap-3">
-        <BackLink onClick={() => setView('hub')} />
         <p className="text-xs text-text-muted">
           รายการที่เพิ่มตรงนี้เป็นข้อมูลเบื้องต้นของดีลเท่านั้น — ฝ่ายนำเข้าจะเห็นก็ต่อเมื่อสร้างคำขอราคาจากหน้าดีลแล้วส่งให้ฝ่ายนำเข้าเท่านั้น (ไม่บังคับตอนนี้)
         </p>
@@ -1839,10 +1751,9 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
     );
   }
 
-  function renderDetailsView() {
+  function renderDetailsBody() {
     return (
       <div className="flex flex-col gap-4">
-        <BackLink onClick={() => setView('hub')} />
         <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
           ชื่อดีล <span className="font-semibold text-text-muted">(ไม่บังคับ — ค่าเริ่มต้นคือชื่อลูกค้า)</span>
           <input
@@ -1895,7 +1806,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
     );
   }
 
-  /** GLA-19 — shown first whenever saved drafts exist (and no initialItems override), before HUB. */
+  /** GLA-19 — shown first whenever saved drafts exist (and no initialItems override), before the form. */
   function renderPicker() {
     const atCap = draftList.length >= MAX_DRAFTS;
     return (
@@ -1953,62 +1864,37 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
     if (showPicker) {
       return <Button variant="secondary" onClick={handleRequestClose}>ยกเลิก</Button>;
     }
-    if (view === 'hub') {
-      return (
-        <>
-          <Button variant="secondary" onClick={handleRequestClose} disabled={loading}>ยกเลิก</Button>
-          <Button variant="secondary" onClick={handleSaveDraft} disabled={loading}>บันทึกร่าง</Button>
-          <Button type="submit" form="ticket-create-form" variant="primary" disabled={loading || !canCreateNow} data-testid="ticket-create-submit">
-            <Icon name="fileText" />
-            {loading ? 'กำลังสร้าง…' : 'สร้างดีล'}
-          </Button>
-        </>
-      );
-    }
-    if (view === 'items' && editingItemIndex != null) {
+    if (editingItemIndex != null) {
       return (
         <>
           <Button variant="secondary" className="text-danger" onClick={() => removeItem(editingItemIndex)}>ลบ</Button>
-          <Button variant="primary" onClick={() => closeItemEditor(editingItemIndex)}>
+          <Button variant="primary" onClick={closeItemEditor}>
             <Icon name="check" size={14} /> บันทึกรายการ
           </Button>
         </>
       );
     }
     return (
-      <Button variant="primary" className="ml-auto" onClick={() => setView('hub')}>
-        <Icon name="check" size={14} /> {view === 'items' ? `เสร็จสิ้น · ${items.length} รายการ` : 'เสร็จสิ้น'}
-      </Button>
+      <>
+        <Button variant="secondary" onClick={handleRequestClose} disabled={loading}>ยกเลิก</Button>
+        <Button variant="secondary" onClick={handleSaveDraft} disabled={loading}>บันทึกร่าง</Button>
+        <Button type="submit" form="ticket-create-form" variant="primary" disabled={loading || !canCreateNow} data-testid="ticket-create-submit">
+          <Icon name="fileText" />
+          {loading ? 'กำลังสร้าง…' : 'สร้างดีล'}
+        </Button>
+      </>
     );
   }
 
-  // CRITICAL (HTML implicit submission, fix/form-enter-submits-real-records; migrated to
-  // SafeForm's `canSubmit` under #safe-form-primitive): this <form> wraps all 6 sub-views below,
-  // and a form with no submit button but exactly ONE field that blocks implicit submission fires
-  // a real 'submit' event on Enter with no button ever pressed. That was true for DETAILS
-  // (renderDetailsView's ชื่อดีล input is its only such field -- the textarea and role="radio"
-  // priority chips don't count) and, before a project/customer is picked, for PROJECT and
-  // CUSTOMER too — `submit()` used to run regardless of `view`, so typing a deal title and
-  // pressing Enter filed a real deal (confirmed in a real browser; jsdom does not implement
-  // implicit submission, which is why the suite stayed green with the bug live — see
-  // TicketCreateModal.test.jsx's `fireEvent.submit(form)` cases).
-  //
-  // `canSubmit={view === 'hub'}` matches renderFooter()'s own condition for when a real
-  // `type="submit" form="ticket-create-form"` button exists (above). It was
-  // `view === 'hub' || view === 'review'` until the ตรวจสอบ & บันทึก step was removed; HUB is now
-  // the only view that renders a submitter, and every other view is unconditionally blocked here.
-  // The protection is unchanged in strength — the set of submitting views shrank by one, and the
-  // one that went away is the one that no longer exists.
-  //
-  // HUB was never part of this bug class: a linked submit button is in the DOM the whole time HUB
-  // is showing (it lives in the modal's footer, a sibling of this <form>, wired via `form=` — see
-  // Modal.jsx), so HUB never satisfies "no submit button". Narrowing this gate further would
-  // silently turn that real, working button into a dead click instead of closing a hole.
-  // `canSubmit` is a RESTRICTION and never a permission (see SafeForm.jsx's header): SafeForm's
-  // submitter guard still applies on top of it, so BOTH must pass. That AND costs this form
-  // nothing — HUB's footer button is real and always in the DOM whenever `canSubmit` is true — but
-  // it does mean the happy-path tests have to carry a real submitter rather than dispatching a
-  // bare `fireEvent.submit(form)`; see `submitForm()` in TicketCreateModal.test.jsx.
+  // HTML implicit submission (fix/form-enter-submits-real-records, #safe-form-primitive): Enter in a
+  // text input clicks the form's default button — the footer's real สร้างดีล, wired via `form=` —
+  // and would file a deal nobody asked for. Every input and that button share one page, so Enter is
+  // swallowed on <input>s only. Buttons (Enter = click) and the textarea (Enter = newline) are
+  // untouched. SafeForm's submitter guard still applies on top — see its header — and the draft
+  // picker has no form fields at all.
+  function swallowEnterOnInputs(event) {
+    if (event.key === 'Enter' && event.target.tagName === 'INPUT') event.preventDefault();
+  }
 
   return (
     <>
@@ -2031,7 +1917,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
           our aria-wired per-field errors and scroll-to-first-invalid below
           would never run for exactly the case they exist to handle.
         */}
-        <SafeForm id="ticket-create-form" onSubmit={submit} canSubmit={!showPicker && view === 'hub'} noValidate>
+        <SafeForm id="ticket-create-form" onSubmit={submit} canSubmit={!showPicker} onKeyDown={swallowEnterOnInputs} noValidate>
           {/*
             min-height keeps the panel one consistent size across steps. Modal's body is
             `overflow-auto` with no floor, so a short view — ลูกค้า is a single search field — used to
@@ -2041,16 +1927,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
             with room to spare, and the body still scrolls normally on a short viewport.
           */}
           <div className="min-h-[26rem]">
-            {showPicker ? renderPicker() : (
-              <>
-                {view === 'hub' && renderHub()}
-                {view === 'customer' && renderCustomerView()}
-                {view === 'project' && renderProjectView()}
-                {view === 'contact' && renderContactView()}
-                {view === 'items' && renderItemsView()}
-                {view === 'details' && renderDetailsView()}
-              </>
-            )}
+            {showPicker ? renderPicker() : renderSections()}
           </div>
         </SafeForm>
       </Modal>

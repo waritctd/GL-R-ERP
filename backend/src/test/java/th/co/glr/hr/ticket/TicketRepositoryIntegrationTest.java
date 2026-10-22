@@ -300,7 +300,8 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void findItemsByTicketId_catalogLinkedItem_resolvesCatalogPriceFields() {
         long priceId = insertCatalogProductWithSqmPerPiece("Cotto Factory", "TH", "CT-400",
-            new BigDecimal("350.5000"), "THB", "per_sqm", new BigDecimal("1.440000"));
+            new BigDecimal("350.5000"), "THB", "per_sqm", new BigDecimal("1.440000"),
+            new BigDecimal("9.0"), new BigDecimal("2"));
 
         long ticketId = tickets.create(sampleTicket(
             itemWithCatalogLink("Cotto", "Stone Series", "White", "Matte", "60x60", priceId, "CT-400")),
@@ -312,6 +313,28 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(persisted.catalogCurrency()).isEqualTo("THB");
         assertThat(persisted.catalogPriceUnit()).isEqualTo("per_sqm");
         assertThat(persisted.sqmPerPiece()).isEqualByComparingTo("1.440000");
+        // UAT item 1 follow-up (owner ruling 2026-10-18, "fill from catalogue"): the PCR form seeds
+        // ความหนา / แผ่น-กล่อง / ประเทศต้นทาง for a catalogue-linked deal line, so the same join also
+        // carries pp.thickness_mm, pp.pcs_per_box and the factory's country.
+        assertThat(persisted.catalogThicknessMm()).isEqualByComparingTo("9.0");
+        assertThat(persisted.catalogPcsPerBox()).isEqualByComparingTo("2");
+        assertThat(persisted.catalogOriginCountryCode()).isEqualTo("TH");
+    }
+
+    @Test
+    void findItemsByTicketId_catalogRowWithoutThickness_leavesTheNewFieldsNull() {
+        // 41 % of the prod catalogue has no thickness: the fields must come back null, never 0.
+        long priceId = insertCatalogProductWithSqmPerPiece("Cotto Factory", "TH", "CT-402",
+            new BigDecimal("350.5000"), "THB", "per_sqm", new BigDecimal("1.440000"), null, null);
+
+        long ticketId = tickets.create(sampleTicket(
+            itemWithCatalogLink("Cotto", "Stone Series", "White", "Matte", "60x60", priceId, "CT-402")),
+            tickets.nextTicketCode(), actorId, "พนักงานขาย");
+
+        TicketItemDto persisted = tickets.findById(ticketId).orElseThrow().items().get(0);
+        assertThat(persisted.catalogThicknessMm()).isNull();
+        assertThat(persisted.catalogPcsPerBox()).isNull();
+        assertThat(persisted.catalogOriginCountryCode()).isEqualTo("TH");
     }
 
     @Test
@@ -330,6 +353,9 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(persisted.catalogCurrency()).isNull();
         assertThat(persisted.catalogPriceUnit()).isNull();
         assertThat(persisted.sqmPerPiece()).isNull();
+        assertThat(persisted.catalogThicknessMm()).isNull();
+        assertThat(persisted.catalogPcsPerBox()).isNull();
+        assertThat(persisted.catalogOriginCountryCode()).isNull();
     }
 
     @Test
@@ -356,6 +382,14 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
     private long insertCatalogProductWithSqmPerPiece(String factoryName, String countryCode2, String productCode,
                                                       BigDecimal price, String currency, String priceUnit,
                                                       BigDecimal sqmPerPiece) {
+        return insertCatalogProductWithSqmPerPiece(factoryName, countryCode2, productCode, price, currency, priceUnit,
+            sqmPerPiece, null, null);
+    }
+
+    private long insertCatalogProductWithSqmPerPiece(String factoryName, String countryCode2, String productCode,
+                                                      BigDecimal price, String currency, String priceUnit,
+                                                      BigDecimal sqmPerPiece, BigDecimal thicknessMm,
+                                                      BigDecimal pcsPerBox) {
         Long factoryId = jdbc.queryForObject("""
             INSERT INTO price_catalog.factories (name, country, default_currency)
             VALUES (:name, :country, :currency)
@@ -376,8 +410,10 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
             Long.class);
         return jdbc.queryForObject("""
             INSERT INTO price_catalog.product_prices
-                (factory_id, version_id, product_code, price, currency, price_unit, sqm_per_piece)
-            VALUES (:factoryId, :versionId, :productCode, :price, :currency, :priceUnit, :sqmPerPiece)
+                (factory_id, version_id, product_code, price, currency, price_unit, sqm_per_piece,
+                 thickness_mm, pcs_per_box)
+            VALUES (:factoryId, :versionId, :productCode, :price, :currency, :priceUnit, :sqmPerPiece,
+                    :thicknessMm, :pcsPerBox)
             RETURNING price_id
             """,
             new MapSqlParameterSource()
@@ -387,7 +423,9 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
                 .addValue("price", price)
                 .addValue("currency", currency)
                 .addValue("priceUnit", priceUnit)
-                .addValue("sqmPerPiece", sqmPerPiece),
+                .addValue("sqmPerPiece", sqmPerPiece)
+                .addValue("thicknessMm", thicknessMm)
+                .addValue("pcsPerBox", pcsPerBox),
             Long.class);
     }
 
@@ -653,6 +691,125 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThatThrownBy(() -> tickets.addEventWithDocument(ticketId, actorId, "พนักงานขาย",
             TicketEventKind.COMMENTED, null, null, "bad type", "INVOICE_PDF", 1L))
             .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    // ── B5 fix: findPricingChainFallbackItems — the read-only display fallback for a deal
+    //    whose sales.ticket_item is still empty (pre-order-confirmation), mirroring
+    //    DepositNoticeRepository#findDealQuotationItemsForDeposit's live-quotation pick.
+    //    Real Postgres only: the priority CASE/ORDER BY and the origin/doc_status filters
+    //    cannot be proven against a mocked repository. ─────────────────────────────────────
+
+    @Test
+    void findPricingChainFallbackItems_returnsIssuedPricingRequestQuotationItems() {
+        long ticketId = tickets.create(sampleTicket(), tickets.nextTicketCode(), actorId, "พนักงานขาย");
+        insertQuotationWithItem(ticketId, "PRICING_REQUEST", "ISSUED",
+            "SCG", "A1", "ขาว", "ด้าน", "60x60", new BigDecimal("20"));
+
+        List<TicketItemDto> fallback = tickets.findPricingChainFallbackItems(ticketId);
+
+        assertThat(fallback).hasSize(1);
+        TicketItemDto item = fallback.get(0);
+        assertThat(item.brand()).isEqualTo("SCG");
+        assertThat(item.model()).isEqualTo("A1");
+        assertThat(item.color()).isEqualTo("ขาว");
+        assertThat(item.texture()).isEqualTo("ด้าน");
+        assertThat(item.size()).isEqualTo("60x60");
+        assertThat(item.qty()).isEqualByComparingTo("20");
+        // Not a real ticket_item row -- every pricing-approval-history field stays at its
+        // TicketItemDto default, never borrowed from the quotation (see the repository
+        // method's own Javadoc on why).
+        assertThat(item.proposedPrice()).isNull();
+        assertThat(item.approvedPrice()).isNull();
+        assertThat(item.calcedCost()).isNull();
+        assertThat(item.weightMultiplier()).isEqualTo(1);
+        assertThat(item.sourcedFromStock()).isFalse();
+    }
+
+    @Test
+    void findPricingChainFallbackItems_prefersAcceptedOverIssued_acrossOrigins() {
+        long ticketId = tickets.create(sampleTicket(), tickets.nextTicketCode(), actorId, "พนักงานขาย");
+        // An older ISSUED PRICING_REQUEST-origin quotation...
+        insertQuotationWithItem(ticketId, "PRICING_REQUEST", "ISSUED",
+            "Stale", "Issued", null, null, null, new BigDecimal("1"));
+        // ...and a newer ACCEPTED DEAL_DIRECT-origin one. ACCEPTED must win regardless of
+        // which origin table it came from or insertion order (mirrors
+        // findDealQuotationItemsForDeposit's own CASE doc_status priority).
+        insertQuotationWithItem(ticketId, "DEAL_DIRECT", "ACCEPTED",
+            "Live", "Accepted", null, null, null, new BigDecimal("2"));
+
+        List<TicketItemDto> fallback = tickets.findPricingChainFallbackItems(ticketId);
+
+        assertThat(fallback).hasSize(1);
+        assertThat(fallback.get(0).brand()).isEqualTo("Live");
+    }
+
+    // Wrong-way-round: proves the fallback does NOT leak a quotation that has never reached
+    // ISSUED/ACCEPTED/APPROVED -- a rep's in-progress DRAFT must never render as if it were the
+    // deal's committed items. This is the assertion that actually guards the origin/doc_status
+    // filter; a test that only proves the happy path renders would pass even with `doc_status
+    // IN (...)` accidentally widened or dropped.
+    @Test
+    void findPricingChainFallbackItems_returnsEmpty_whenOnlyDraftQuotationExists() {
+        long ticketId = tickets.create(sampleTicket(), tickets.nextTicketCode(), actorId, "พนักงานขาย");
+        insertQuotationWithItem(ticketId, "PRICING_REQUEST", "DRAFT",
+            "NotYet", "Draft", null, null, null, new BigDecimal("1"));
+
+        assertThat(tickets.findPricingChainFallbackItems(ticketId)).isEmpty();
+    }
+
+    @Test
+    void findPricingChainFallbackItems_returnsEmpty_whenTicketHasNoQuotationAtAll() {
+        long ticketId = tickets.create(sampleTicket(), tickets.nextTicketCode(), actorId, "พนักงานขาย");
+
+        assertThat(tickets.findPricingChainFallbackItems(ticketId)).isEmpty();
+    }
+
+    // sales.quotation.number is VARCHAR(30) NOT NULL UNIQUE. A per-JVM-run counter alone
+    // collides across repeated runs against the same persistent local test DB (this suite has
+    // no @Transactional rollback / truncate-between-runs — see
+    // support/transactional-inert-in-integration-suite note), so this is keyed off `ticketId`
+    // too: ticket_id is a real GENERATED ALWAYS AS IDENTITY column, so it is unique forever
+    // across every run against this database, not just within one JVM.
+    private static final java.util.concurrent.atomic.AtomicLong TEST_QUOTATION_SEQ =
+        new java.util.concurrent.atomic.AtomicLong();
+
+    private long insertQuotationWithItem(long ticketId, String origin, String docStatus,
+                                         String brand, String model, String color, String texture,
+                                         String size, BigDecimal qty) {
+        // ux_quotation_ticket_recipient_version (V52) uniques on (ticket_id, recipient_type,
+        // quotation_version) -- recipient_type defaults 'UNSPECIFIED' for every row this test
+        // inserts, so two quotations on the SAME ticket (deliberate, in the
+        // "prefersAccepted...acrossOrigins" test) need distinct quotation_version too, or the
+        // second insert 409s against the first. A single monotonic counter, reused for both the
+        // `number` suffix and the version, is globally unique per call so it can never collide
+        // with itself OR with another ticket's rows.
+        long seq = TEST_QUOTATION_SEQ.incrementAndGet();
+        Long quotationId = jdbc.queryForObject("""
+            INSERT INTO sales.quotation (ticket_id, number, issued_by, origin, doc_status, quotation_version)
+            VALUES (:ticketId, :number, :issuedBy, :origin, :docStatus, :version)
+            RETURNING quotation_id
+            """,
+            new MapSqlParameterSource()
+                .addValue("ticketId", ticketId)
+                .addValue("number", "QT-B5-" + ticketId + "-" + seq)
+                .addValue("issuedBy", actorId)
+                .addValue("origin", origin)
+                .addValue("docStatus", docStatus)
+                .addValue("version", (int) seq),
+            Long.class);
+        jdbc.update("""
+            INSERT INTO sales.quotation_item (quotation_id, seq, brand, model, color, texture, size, qty, raw_unit, unit_price, amount)
+            VALUES (:quotationId, 1, :brand, :model, :color, :texture, :size, :qty, 'แผ่น', 100, 100)
+            """,
+            new MapSqlParameterSource()
+                .addValue("quotationId", quotationId)
+                .addValue("brand", brand)
+                .addValue("model", model)
+                .addValue("color", color)
+                .addValue("texture", texture)
+                .addValue("size", size)
+                .addValue("qty", qty));
+        return quotationId;
     }
 
     private CreateTicketRequest sampleTicket(TicketItemRequest... items) {

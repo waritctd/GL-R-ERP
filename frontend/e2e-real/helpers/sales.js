@@ -439,14 +439,10 @@ export async function generateFactoryEmailDrafts(sessions, pricingRequestId) {
  * (FactoryQuoteService.receive, factoryquote/FactoryQuoteService.java:464-586 — the
  * DRAFT/REQUESTED branch at :499-538 that a freshly-drafted quote always takes).
  *
- * This flow calls receive() directly rather than POST /api/factory-quotes/{id}/send, which
- * remains unneeded here: receive() accepts a quote straight from DRAFT (line 499). The mail-safety
- * reason this bullet used to give — that send() would call Resend and UAT's integration ignores
- * APP_MAIL_OVERRIDE_TO (issue #782) — no longer applies: the manual-RFQ redesign (2026-09-06) made
- * send() a synchronous, human-performed-send RECORD only; it never calls a mail provider any more
- * (FactoryQuoteService.send's own javadoc), and the factory-emails/send endpoint it also warned
- * about is deleted outright. send() is safe to call in any environment now — it is just not the
- * call this particular flow needs.
+ * CR-1 (GLA-167, B-R2): receive() now 409s on a still-DRAFT quote ("ต้องกด ติดต่อโรงงานแล้ว ก่อนกรอกราคา"),
+ * so this helper first records the factory as contacted (POST /api/factory-quotes/{id}/contacted,
+ * today in Asia/Bangkok) — the real-stack equivalent of Import pressing ติดต่อโรงงานแล้ว. The old
+ * POST .../send endpoint is gone. A quote that is already past DRAFT is left alone.
  *
  * currency is pinned THB (see this file's header). sqmPerUnit is supplied even though the
  * chosen unitBasis is PER_PIECE — see this file's header on why that field is unconditional.
@@ -469,6 +465,10 @@ export async function receiveFactoryQuote(
   { rawUnitPrice = 150, quotedQuantity = 10 } = {}
 ) {
   const tag = runId();
+  const contactedOn = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Bangkok' }).format(new Date());
+  const contacted = await apiWrite(sessions.import, 'post', `/api/factory-quotes/${factoryQuoteId}/contacted`, { contactedOn });
+  // 409 = already contacted by an earlier step of the same flow: fine, price entry is unlocked.
+  expect([200, 409], `POST /api/factory-quotes/${factoryQuoteId}/contacted`).toContain(contacted.status());
   const response = await apiWrite(sessions.import, 'post', `/api/factory-quotes/${factoryQuoteId}/receive`, {
     supplierQuoteRef: `${tag}-quote`,
     defaultCurrency: 'THB',
@@ -1129,8 +1129,10 @@ export async function completeDelivery(sessions, ticketId, { note, recipientName
 }
 
 /**
- * POST /api/tickets/{id}/final-payment — TicketController.confirmFinalPayment (ticket/
- * TicketController.java:400-404); TicketService.confirmFinalPayment requires PAYMENT_RECORD_ROLES
+ * POST /api/finance/deals/{id}/final-payment — FinanceDealController.confirmFinalPayment (finance/), which
+ * delegates to TicketService.confirmFinalPayment. H1 lockdown (2026-09-30): the old
+ * POST /api/tickets/{id}/final-payment route was REMOVED, and the response is now the finance view
+ * `{ deal }` (deal.salesStage, deal.money.*) instead of `{ ticket }`. TicketService.confirmFinalPayment requires PAYMENT_RECORD_ROLES
  * (GLA-118, owner ruling 2026-09-20, part A: account ONLY, no CEO fallback — this used to be
  * ACCOUNT_ROLES) and canConfirmFinalPaymentNow (paymentStatus AWAITING_FINAL_PAYMENT or
  * DEPOSIT_PAID, or a bypass deposit policy with paymentStatus CUSTOMER_CONFIRMED — see
@@ -1145,10 +1147,10 @@ export async function completeDelivery(sessions, ticketId, { note, recipientName
  * them delivery-then-payment.
  */
 export async function confirmFinalPayment(sessions, ticketId) {
-  const response = await apiWrite(sessions.account, 'post', `/api/tickets/${ticketId}/final-payment`);
-  expect(response.status(), `account POST /api/tickets/${ticketId}/final-payment`).toBe(200);
-  const { ticket } = await response.json();
-  return ticket;
+  const response = await apiWrite(sessions.account, 'post', `/api/finance/deals/${ticketId}/final-payment`);
+  expect(response.status(), `account POST /api/finance/deals/${ticketId}/final-payment`).toBe(200);
+  const { deal } = await response.json();
+  return deal;
 }
 
 /**
@@ -1211,4 +1213,70 @@ export async function runPricingChainToOrder(sessions, ticketId, opts) {
   await acceptCustomerQuotation(sessions, quotationId);
   const result = await confirmOrder(sessions, pricingRequestId);
   return { pricingRequestId, quotationId, ticket: result.ticket };
+}
+
+// ── Direct (deal-level) quotations ───────────────────────────────────────────────────────────
+const DIRECT_QUOTATION_ITEM = {
+  lineType: 'TILE',
+  brand: 'Pietre Di Sardegna',
+  model: 'Pietre Di Sardegna',
+  color: 'Punta Molara',
+  texture: 'R11',
+  sizeText: '60x120',
+  thicknessMm: 2,
+  sqmPerPiece: 0.72,
+  quantityMode: 'AREA',
+  areaSqm: 120,
+  wastageMode: 'PERCENT',
+  wastageValue: 10,
+  piecesPerBox: 2,
+  unitPrice: 1748.13,
+  discountPct: 0,
+  originCountry: 'อิตาลี',
+  leadTimeMinDays: 75,
+  leadTimeMaxDays: 90,
+  locationLabel: null,
+};
+
+export function inDays(days) {
+  const bangkokToday = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(new Date());
+  const date = new Date(`${bangkokToday}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+/** QuotationEditorPage#buildUpsertPayload's shape. `recipientType` is OMITTED (never null) when
+ * there is none — exactly how that method spreads it. */
+export function directQuotationBody(recipientType) {
+  return {
+    contactId: null,
+    deptCode: 'P003',
+    unitCode: 'D002',
+    offerDate: inDays(0),
+    depositPercent: 50,
+    remainderMode: 'ON_DELIVERY',
+    creditDays: null,
+    validityDays: 30,
+    validityMode: 'DAYS',
+    validityUntil: null,
+    customerNotes: null,
+    priceMode: 'NET',
+    documentLanguage: 'TH',
+    currency: 'THB',
+    printedByDisplayId: null,
+    salesRepDisplayId: null,
+    projectName: null,
+    omitContactHonorific: false,
+    orderedByName: null,
+    items: [DIRECT_QUOTATION_ITEM],
+    ...(recipientType ? { recipientType } : {}),
+  };
+}
+
+/** POST /api/tickets/{id}/deal-quotations. Quoting a recipient on an ACTIVE deal moves it onto that
+ * recipient's stage (D-2) — the legitimate way to reach ขั้น 4/5/8, since a hand move there is 409 (D-3). */
+export async function createDirectQuotation(sessions, dealId, recipientType) {
+  const response = await apiWrite(sessions.sales, 'post', `/api/tickets/${dealId}/deal-quotations`, directQuotationBody(recipientType));
+  expect(response.status(), 'POST /api/tickets/{id}/deal-quotations').toBe(201);
+  return (await response.json()).quotation;
 }

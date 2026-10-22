@@ -7,6 +7,8 @@ public final class CommissionResponses {
     }
 
     public record CommissionListResponse(List<CommissionRecord> commissions) {}
+    public record PendingCommissionsResponse(List<PendingCommissionDto> commissions) {}
+    public record PendingCommissionResponse(PendingCommissionDto pending) {}
     public record CommissionDetailResponse(CommissionRecord commission) {}
     public record CommissionSimulationResponse(CommissionSimulationDto simulation) {}
     public record PayrollSummaryResponse(PayrollCommissionSummaryDto summary) {}

@@ -27,9 +27,9 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteAttachmentDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
+import th.co.glr.hr.factoryquote.FactoryQuoteRequests.MarkFactoryContactedRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.MarkNotAvailableRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteRequest;
-import th.co.glr.hr.factoryquote.FactoryQuoteRequests.SendFactoryQuoteRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.StartNegotiationRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.UpdateFactoryQuoteDraftRequest;
 
@@ -75,14 +75,15 @@ public class FactoryQuoteController {
         return Map.of("factoryQuote", factoryQuotes.updateDraft(factoryQuoteId, request, user));
     }
 
-    @PostMapping("/factory-quotes/{factoryQuoteId}/send")
-    Map<String, FactoryQuoteDto> send(
+    // CR-1 (GLA-167): replaces POST .../send. Records "ติดต่อโรงงานแล้ว"; nothing is sent from here.
+    @PostMapping("/factory-quotes/{factoryQuoteId}/contacted")
+    Map<String, FactoryQuoteDto> markContacted(
         @PathVariable long factoryQuoteId,
-        @RequestBody SendFactoryQuoteRequest request,
+        @Valid @RequestBody MarkFactoryContactedRequest request,
         HttpSession session
     ) {
         UserPrincipal user = sessions.requireUser(session);
-        return Map.of("factoryQuote", factoryQuotes.send(factoryQuoteId, request, user));
+        return Map.of("factoryQuote", factoryQuotes.markContacted(factoryQuoteId, request, user));
     }
 
     @PostMapping("/factory-quotes/{factoryQuoteId}/receive")

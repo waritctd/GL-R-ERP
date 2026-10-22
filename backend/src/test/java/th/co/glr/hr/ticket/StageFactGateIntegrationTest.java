@@ -129,6 +129,173 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(stageChangedEvents(ticketId)).isZero();
     }
 
+    // ═══ The quote stages (owner ruling 2026-10-16) ═══════════════════════════
+    //
+    // ขั้น 4/5/8 claim "this party has been quoted". The fact behind them is a quotation on the
+    // deal addressed to that party, so the gate is the same shape as the four above: a MANUAL
+    // updateStage is refused until the document exists. The rep is not stranded — creating the
+    // quotation is what moves the deal, via TicketService.autoAdvanceStage, which never routes
+    // through this gate (proved by autoAdvanceStillReachesAllFourGatedStagesWhenTheFactBecomesTrue
+    // for the operational four, and by theQuoteStagesStillArriveAutomatically below for these).
+    //
+    // Before this gate, ขั้น 3 -> "เลื่อนไป: 4. เสนอราคาผู้ออกแบบ" was one click, so a rep could
+    // claim the designer had been quoted with no price approved and no document in existence.
+
+    @Test
+    void quoteDesignSide_withNoQuotationToTheDesigner_isRefused_andTheDealDoesNotMove() {
+        long ticketId = readyToAdvanceFrom(DealStage.SPEC_APPROVED);
+
+        assertThatThrownBy(() ->
+            ticketService.updateStage(ticketId, DealStage.QUOTE_DESIGN_SIDE, "เสนอราคาไปแล้ว", ownerRep))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(e.getMessage()).contains("QUOTE_DESIGN_SIDE");
+            });
+
+        assertThat(stageOf(ticketId)).isEqualTo(DealStage.SPEC_APPROVED);
+        assertThat(stageChangedEvents(ticketId)).isZero();
+    }
+
+    @Test
+    void quoteOwner_withNoQuotationToTheOwner_isRefused_andTheDealDoesNotMove() {
+        long ticketId = readyToAdvanceFrom(DealStage.QUOTE_DESIGN_SIDE);
+
+        assertThatThrownBy(() ->
+            ticketService.updateStage(ticketId, DealStage.QUOTE_OWNER, null, ownerRep))
+            .isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+
+        assertThat(stageOf(ticketId)).isEqualTo(DealStage.QUOTE_DESIGN_SIDE);
+        assertThat(stageChangedEvents(ticketId)).isZero();
+    }
+
+    @Test
+    void quoteBuyer_withNoQuotationToTheBuyer_isRefused_andTheDealDoesNotMove() {
+        long ticketId = readyToAdvanceFrom(DealStage.AWAITING_BUYER);
+
+        assertThatThrownBy(() ->
+            ticketService.updateStage(ticketId, DealStage.QUOTE_BUYER, null, ownerRep))
+            .isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+
+        assertThat(stageOf(ticketId)).isEqualTo(DealStage.AWAITING_BUYER);
+        assertThat(stageChangedEvents(ticketId)).isZero();
+    }
+
+    /**
+     * The gate reads the RECIPIENT, not merely "this deal has a quotation". Without this test an
+     * implementation that counted rows on the ticket would pass every refusal above and still let a
+     * rep claim the designer was quoted on the strength of the owner's document — which is the
+     * precise distinction V143 split {@link DealStage#QUOTE_OWNER} out of
+     * {@link DealStage#QUOTE_DESIGN_SIDE} to make expressible.
+     */
+    @Test
+    void aQuotationToAnotherRecipient_doesNotUnlockThisRecipientsStage() {
+        long ticketId = readyToAdvanceFrom(DealStage.SPEC_APPROVED);
+        QuoteStageFixtures.quotationOnDeal(jdbc, ticketId, ownerRepId, QuotationRecipient.OWNER, "ISSUED");
+
+        assertThatThrownBy(() ->
+            ticketService.updateStage(ticketId, DealStage.QUOTE_DESIGN_SIDE, null, ownerRep))
+            .isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+
+        assertThat(stageOf(ticketId)).isEqualTo(DealStage.SPEC_APPROVED);
+        assertThat(stageChangedEvents(ticketId)).isZero();
+    }
+
+    /**
+     * A CANCELLED document is not evidence anybody was quoted, so it must not hold a deal on a
+     * quote stage. Deliberately the only excluded status: a DRAFT counts, because under the
+     * creation-time advance a draft is exactly what moved the deal there, and excluding it would
+     * make the gate contradict the advance that produced the stage.
+     */
+    @Test
+    void aCancelledQuotation_doesNotCountAsHavingQuotedAnyone() {
+        long ticketId = readyToAdvanceFrom(DealStage.SPEC_APPROVED);
+        QuoteStageFixtures.quotationOnDeal(jdbc, ticketId, ownerRepId, QuotationRecipient.DESIGNER, "CANCELLED");
+
+        assertThatThrownBy(() ->
+            ticketService.updateStage(ticketId, DealStage.QUOTE_DESIGN_SIDE, null, ownerRep))
+            .isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+
+        assertThat(stageOf(ticketId)).isEqualTo(DealStage.SPEC_APPROVED);
+        assertThat(stageChangedEvents(ticketId)).isZero();
+    }
+
+    /**
+     * The positive case, and the reason the gate is a 409 rather than the stage leaving
+     * {@link DealStage#SALES_TARGET_STAGES}: once the document exists the rep may correct the
+     * stage by hand again. A DRAFT is enough (see the cancelled test's note).
+     */
+    @Test
+    void aQuotationToTheDesigner_makesQuoteDesignSideSettableAgain() {
+        long ticketId = readyToAdvanceFrom(DealStage.SPEC_APPROVED);
+        QuoteStageFixtures.quotationOnDeal(jdbc, ticketId, ownerRepId, QuotationRecipient.DESIGNER, "DRAFT");
+
+        ticketService.updateStage(ticketId, DealStage.QUOTE_DESIGN_SIDE, null, ownerRep);
+
+        assertThat(stageOf(ticketId)).isEqualTo(DealStage.QUOTE_DESIGN_SIDE);
+    }
+
+    /**
+     * The regression this whole gate risks: the AUTOMATIC path must still deliver the quote stages,
+     * because that is now the only way in. {@code autoAdvanceStage} writes through
+     * {@code TicketRepository.updateSalesStage} and never calls {@code requireStageMoveAllowed}, so
+     * the gate cannot reach it — this test is what proves that claim rather than asserting it.
+     */
+    @Test
+    void theQuoteStagesStillArriveAutomatically() {
+        long ticketId = readyToAdvanceFrom(DealStage.SPEC_APPROVED);
+
+        ticketService.advanceStageForCustomerQuotationIssue(ticketId, QuotationRecipient.DESIGNER, ownerRep);
+        assertThat(stageOf(ticketId)).isEqualTo(DealStage.QUOTE_DESIGN_SIDE);
+
+        ticketService.advanceStageForCustomerQuotationIssue(ticketId, QuotationRecipient.OWNER, ownerRep);
+        assertThat(stageOf(ticketId)).isEqualTo(DealStage.QUOTE_OWNER);
+
+        ticketService.advanceStageForCustomerQuotationIssue(ticketId, QuotationRecipient.BUYER, ownerRep);
+        assertThat(stageOf(ticketId)).isEqualTo(DealStage.QUOTE_BUYER);
+    }
+
+    /**
+     * A recipient that maps to no stage advances nothing and throws nothing. {@code UNSPECIFIED} is
+     * the legacy V52 bucket; an unknown code is a corrupt row. Neither is reachable through
+     * {@code DealQuotationService#create}, which 400s both — so this is pinned at the one layer
+     * where it IS reachable, because {@code stageForQuotationRecipient} returning null is what
+     * keeps a legacy row from throwing in the middle of an unrelated write.
+     */
+    @Test
+    void aRecipientThatMapsToNoStage_advancesNothing_andThrowsNothing() {
+        long ticketId = readyToAdvanceFrom(DealStage.SPEC_APPROVED);
+
+        for (String recipient : List.of(QuotationRecipient.UNSPECIFIED, "CEO")) {
+            assertThatCode(() ->
+                ticketService.advanceStageForCustomerQuotationIssue(ticketId, recipient, ownerRep))
+                .as(recipient)
+                .doesNotThrowAnyException();
+        }
+
+        assertThat(stageOf(ticketId)).isEqualTo(DealStage.SPEC_APPROVED);
+        assertThat(stageChangedEvents(ticketId)).isZero();
+    }
+
+    /**
+     * A second quotation to the SAME recipient leaves the stage alone — the owner's "version 2 stays
+     * on the same ขั้น" rule. It needs no rule of its own: the advance is forward-only, and the same
+     * recipient maps to the same pipeline index.
+     */
+    @Test
+    void aSecondQuotationToTheSameRecipient_doesNotMoveTheStageOnward() {
+        long ticketId = readyToAdvanceFrom(DealStage.SPEC_APPROVED);
+        ticketService.advanceStageForCustomerQuotationIssue(ticketId, QuotationRecipient.OWNER, ownerRep);
+        assertThat(stageOf(ticketId)).isEqualTo(DealStage.QUOTE_OWNER);
+
+        ticketService.advanceStageForCustomerQuotationIssue(ticketId, QuotationRecipient.OWNER, ownerRep);
+
+        assertThat(stageOf(ticketId)).isEqualTo(DealStage.QUOTE_OWNER);
+    }
+
     /**
      * {@code ORDER_RECEIVED} claims a verified customer order. The payment track's single entry
      * edge is {@code confirmCustomer}'s {@code CUSTOMER_CONFIRMED} write, so an untouched track is
@@ -160,8 +327,14 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
         tickets.updatePaymentStatusUnchecked(ticketId, PaymentTrack.DEPOSIT_NOTICE_ISSUED);
 
         for (UserPrincipal actor : List.of(accountActor, ceo)) {
-            assertThatThrownBy(() ->
-                ticketService.updateStage(ticketId, DealStage.DEPOSIT_RECEIVED, "รับมัดจำแล้ว", actor))
+            assertThatThrownBy(() -> {
+                // H1 lockdown: account reaches updateStage only through the finance entrypoint.
+                if ("account".equals(actor.role())) {
+                    ticketService.financeUpdateStage(ticketId, DealStage.DEPOSIT_RECEIVED, "รับมัดจำแล้ว", actor);
+                } else {
+                    ticketService.updateStage(ticketId, DealStage.DEPOSIT_RECEIVED, "รับมัดจำแล้ว", actor);
+                }
+            })
                 .describedAs("%s must not be able to claim a deposit that has not arrived", actor.role())
                 .isInstanceOfSatisfying(ApiException.class,
                     e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
@@ -212,7 +385,7 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
         tickets.updateFulfillmentStatus(ticketId, FulfilmentStatus.FULLY_DELIVERED);
 
         assertThatThrownBy(() ->
-            ticketService.updateStage(ticketId, DealStage.CLOSED_PAID, "ปิดงาน", accountActor))
+            ticketService.financeUpdateStage(ticketId, DealStage.CLOSED_PAID, "ปิดงาน", accountActor))
             .isInstanceOfSatisfying(ApiException.class,
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
 
@@ -243,7 +416,7 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
             }
 
             assertThatThrownBy(() ->
-                ticketService.updateStage(ticketId, DealStage.CLOSED_PAID, "รับเงินครบแล้ว", accountActor))
+                ticketService.financeUpdateStage(ticketId, DealStage.CLOSED_PAID, "รับเงินครบแล้ว", accountActor))
                 .describedAs("paid in full with fulfilment=%s must not reach CLOSED_PAID", fulfilment)
                 .isInstanceOfSatisfying(ApiException.class,
                     e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
@@ -269,7 +442,7 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
         tickets.updatePaymentStatusUnchecked(ticketId, PaymentTrack.FULLY_PAID);
         tickets.updateFulfillmentStatus(ticketId, FulfilmentStatus.FULLY_DELIVERED);
 
-        ticketService.updateStage(ticketId, DealStage.CLOSED_PAID, null, accountActor);
+        ticketService.financeUpdateStage(ticketId, DealStage.CLOSED_PAID, null, accountActor);
 
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.CLOSED_PAID);
     }
@@ -300,7 +473,7 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
 
         long deposit = readyToAdvanceFrom(DealStage.ORDER_RECEIVED);
         tickets.updatePaymentStatusUnchecked(deposit, PaymentTrack.DEPOSIT_PAID);
-        ticketService.updateStage(deposit, DealStage.DEPOSIT_RECEIVED, null, accountActor);
+        ticketService.financeUpdateStage(deposit, DealStage.DEPOSIT_RECEIVED, null, accountActor);
         assertThat(stageOf(deposit)).isEqualTo(DealStage.DEPOSIT_RECEIVED);
 
         long delivered = readyToAdvanceFrom(DealStage.DELIVERY_SCHEDULING);
@@ -314,7 +487,7 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
         long closed = readyToAdvanceFrom(DealStage.DELIVERED);
         tickets.updatePaymentStatusUnchecked(closed, PaymentTrack.FULLY_PAID);
         tickets.updateFulfillmentStatus(closed, FulfilmentStatus.FULLY_DELIVERED);
-        ticketService.updateStage(closed, DealStage.CLOSED_PAID, null, accountActor);
+        ticketService.financeUpdateStage(closed, DealStage.CLOSED_PAID, null, accountActor);
         assertThat(stageOf(closed)).isEqualTo(DealStage.CLOSED_PAID);
     }
 
@@ -350,22 +523,35 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
     // owner ruling. None of these routes touches a gated stage without its fact, which is the
     // whole point of gating on the fact rather than on the previous stage.
 
-    /** Case C — a contractor arrives with a BOQ and a spec, so the deal opens straight at S8. */
+    /**
+     * Case C — a contractor arrives with a BOQ and a spec, so the deal opens straight at S8.
+     *
+     * <p>Reaches S8 by QUOTING THE BUYER rather than by a manual {@code updateStage} (owner ruling
+     * 2026-10-16). The route is unchanged and still skips S1–S7; what changed is the mechanism
+     * that enters it, which is now the document rather than a click. Written this way deliberately
+     * rather than reaching past the gate with {@code readyToAdvanceFrom}: the point of the test is
+     * that the owner's route is still walkable through the real service, and a helper that writes
+     * the stage straight into Postgres would prove nothing about that.
+     */
     @Test
     void caseC_aDealThatOpensStraightAtQuoteBuyer_isUnaffected() {
         long ticketId = readyToAdvanceFrom(DealStage.LEAD_APPROACH);
 
-        ticketService.updateStage(ticketId, DealStage.QUOTE_BUYER, null, ownerRep);
+        ticketService.advanceStageForCustomerQuotationIssue(ticketId, QuotationRecipient.BUYER, ownerRep);
 
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.QUOTE_BUYER);
     }
 
-    /** Case B — the owner buys directly, so S3, S4, S7 and S8 never happen. */
+    /**
+     * Case B — the owner buys directly, so S3, S4, S7 and S8 never happen. S5 now arrives from the
+     * owner's quotation; OWNER_SIGNOFF and NEGOTIATION are still the rep's own manual hops, which
+     * is what this test proves is untouched.
+     */
     @Test
     void caseB_theOwnerBuysDirect_isUnaffected() {
         long ticketId = readyToAdvanceFrom(DealStage.PRESENTATION);
 
-        ticketService.updateStage(ticketId, DealStage.QUOTE_OWNER, null, ownerRep);
+        ticketService.advanceStageForCustomerQuotationIssue(ticketId, QuotationRecipient.OWNER, ownerRep);
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.QUOTE_OWNER);
 
         logAnActivityAndFollowUp(ticketId);
@@ -385,15 +571,37 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
     void caseA_theFullRoute_walksEveryStageWithItsFactsInPlace() {
         long ticketId = readyToAdvanceFrom(DealStage.LEAD_APPROACH);
 
-        for (String stage : List.of(DealStage.PRESENTATION, DealStage.QUOTE_DESIGN_SIDE,
-                DealStage.SPEC_APPROVED, DealStage.QUOTE_OWNER, DealStage.OWNER_SIGNOFF,
-                DealStage.AWAITING_BUYER, DealStage.QUOTE_BUYER, DealStage.NEGOTIATION)) {
+        // The front half of case A, with each stage arriving the way the business produces it: the
+        // three quote stages from quoting that party (owner ruling 2026-10-16), the rest by hand.
+        // S4 BEFORE S3 is case A's own order — the designer is quoted off the spec, then the spec
+        // is signed off — and QUOTE_DESIGN_SIDE -> SPEC_APPROVED is the one routine backward pair,
+        // still a manual hop needing no note.
+        logAnActivityAndFollowUp(ticketId);
+        ticketService.updateStage(ticketId, DealStage.PRESENTATION, null, ownerRep);
+        assertThat(stageOf(ticketId)).isEqualTo(DealStage.PRESENTATION);
+
+        ticketService.advanceStageForCustomerQuotationIssue(ticketId, QuotationRecipient.DESIGNER, ownerRep);
+        assertThat(stageOf(ticketId)).isEqualTo(DealStage.QUOTE_DESIGN_SIDE);
+
+        logAnActivityAndFollowUp(ticketId);
+        ticketService.updateStage(ticketId, DealStage.SPEC_APPROVED, null, ownerRep);
+        assertThat(stageOf(ticketId)).isEqualTo(DealStage.SPEC_APPROVED);
+
+        ticketService.advanceStageForCustomerQuotationIssue(ticketId, QuotationRecipient.OWNER, ownerRep);
+        assertThat(stageOf(ticketId)).isEqualTo(DealStage.QUOTE_OWNER);
+
+        for (String stage : List.of(DealStage.OWNER_SIGNOFF, DealStage.AWAITING_BUYER)) {
             logAnActivityAndFollowUp(ticketId);
-            // QUOTE_DESIGN_SIDE -> SPEC_APPROVED is the one routine backward pair; the rest are
-            // forward. Neither needs a note, and none of them is fact-gated.
             ticketService.updateStage(ticketId, stage, null, ownerRep);
             assertThat(stageOf(ticketId)).isEqualTo(stage);
         }
+
+        ticketService.advanceStageForCustomerQuotationIssue(ticketId, QuotationRecipient.BUYER, ownerRep);
+        assertThat(stageOf(ticketId)).isEqualTo(DealStage.QUOTE_BUYER);
+
+        logAnActivityAndFollowUp(ticketId);
+        ticketService.updateStage(ticketId, DealStage.NEGOTIATION, null, ownerRep);
+        assertThat(stageOf(ticketId)).isEqualTo(DealStage.NEGOTIATION);
 
         tickets.updatePaymentStatusUnchecked(ticketId, PaymentTrack.CUSTOMER_CONFIRMED);
         logAnActivityAndFollowUp(ticketId);
@@ -401,7 +609,7 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
 
         tickets.updatePaymentStatusUnchecked(ticketId, PaymentTrack.DEPOSIT_PAID);
         logAnActivityAndFollowUp(ticketId);
-        ticketService.updateStage(ticketId, DealStage.DEPOSIT_RECEIVED, null, accountActor);
+        ticketService.financeUpdateStage(ticketId, DealStage.DEPOSIT_RECEIVED, null, accountActor);
 
         logAnActivityAndFollowUp(ticketId);
         ticketService.updateStage(ticketId, DealStage.PROCUREMENT, null, importActor);
@@ -414,7 +622,7 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
 
         tickets.updatePaymentStatusUnchecked(ticketId, PaymentTrack.FULLY_PAID);
         logAnActivityAndFollowUp(ticketId);
-        ticketService.updateStage(ticketId, DealStage.CLOSED_PAID, null, accountActor);
+        ticketService.financeUpdateStage(ticketId, DealStage.CLOSED_PAID, null, accountActor);
 
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.CLOSED_PAID);
     }
@@ -495,7 +703,10 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
             long itemId = onlyItemId(ticketId);
             tickets.updateSalesStage(ticketId, stage);
 
-            for (UserPrincipal actor : List.of(ownerRep, importActor, ceo)) {
+            // Only the two roles that CAN declare (owning rep + CEO) reach the stage floor's 409;
+            // import is no longer a declarer at all (owner decision 2026-09-28) and is refused with a
+            // 403 before the floor — see StockDeclarationAuthzIntegrationTest.
+            for (UserPrincipal actor : List.of(ownerRep, ceo)) {
                 assertThatThrownBy(() -> ticketService.reserveStock(ticketId, declare(itemId, "100.00"), actor))
                     .describedAs("%s must not declare stock coverage at %s", actor.role(), stage)
                     .isInstanceOfSatisfying(ApiException.class,
@@ -541,7 +752,7 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
         long below = createDealWithOneItem();
         tickets.updateSalesStage(below, DealStage.NEGOTIATION);
         assertThat(actionCodes(below, ownerRep)).doesNotContain("RESERVE_STOCK");
-        assertThat(actionCodes(below, importActor)).doesNotContain("RESERVE_STOCK");
+        assertThat(actionCodes(below, ceo)).doesNotContain("RESERVE_STOCK");
         // …and the advertiser agrees with the gate on the very same deal.
         assertThatThrownBy(() ->
             ticketService.reserveStock(below, declare(onlyItemId(below), "100.00"), ownerRep))
@@ -550,7 +761,10 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
         long above = createDealWithOneItem();
         tickets.updateSalesStage(above, DealStage.ORDER_RECEIVED);
         assertThat(actionCodes(above, ownerRep)).contains("RESERVE_STOCK");
-        assertThat(actionCodes(above, importActor)).contains("RESERVE_STOCK");
+        assertThat(actionCodes(above, ceo)).contains("RESERVE_STOCK");
+        // import lost RESERVE_STOCK entirely on 2026-09-28 (S18 is Sales's) — not offered it even
+        // above the floor.
+        assertThat(actionCodes(above, importActor)).doesNotContain("RESERVE_STOCK");
         assertThatCode(() ->
             ticketService.reserveStock(above, declare(onlyItemId(above), "100.00"), ownerRep))
             .doesNotThrowAnyException();

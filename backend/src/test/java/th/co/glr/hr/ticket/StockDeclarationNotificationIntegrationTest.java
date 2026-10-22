@@ -86,7 +86,6 @@ class StockDeclarationNotificationIntegrationTest extends AbstractPostgresIntegr
     private long ceoId;
 
     private UserPrincipal owner;
-    private UserPrincipal importUser;
     private UserPrincipal ceoUser;
 
     @BeforeEach
@@ -122,8 +121,6 @@ class StockDeclarationNotificationIntegrationTest extends AbstractPostgresIntegr
             IMPORT_DIVISION, "ผู้จัดการฝ่ายจัดซื้อต่างประเทศ");
         ceoId = employee(employees, "กรรมการ ผู้จัดการ", "notif-ceo", EXECUTIVE_DIVISION, "กรรมการผู้จัดการ");
 
-        importUser = principal(employee(employees, "ฝ่ายนำเข้า ทดสอบ", "notif-import",
-            IMPORT_DIVISION, "เจ้าหน้าที่จัดซื้อ"), "ฝ่ายนำเข้า ทดสอบ", "import");
         ceoUser = principal(ceoId, "กรรมการ ผู้จัดการ", "ceo");
     }
 
@@ -266,17 +263,20 @@ class StockDeclarationNotificationIntegrationTest extends AbstractPostgresIntegr
     // ── trigger: only the rep's own declaration ──────────────────────────────
 
     /**
-     * Import and the CEO hold the identical ability and are the correction path — them declaring is
-     * the mitigation working, not the risk. Notifying on it would double the volume with the half
-     * that needs no supervision. Pinned rather than left implicit, because "notify on every
-     * declaration" is the obvious-looking change a future reader might make by accident.
+     * The CEO is the correction/override path — a CEO declaring is the mitigation working, not the
+     * risk. Notifying on it would double the volume with the half that needs no supervision. Pinned
+     * rather than left implicit, because "notify on every declaration" is the obvious-looking change
+     * a future reader might make by accident. (Import used to share this correction ability; the
+     * 2026-09-28 S18 decision removed it, so only a CEO correction is exercised here now.)
      */
     @Test
-    void anImportOrCeoCorrectionNotifiesNobody() {
+    void aCeoCorrectionNotifiesNobody() {
         long ticketId = createTicketWithOneItem();
         long itemId = onlyItemId(ticketId);
 
-        ticketService.reserveStock(ticketId, declare(itemId, "25.00"), importUser);
+        // Both declarations are the CEO's (never the owning rep's), so neither is the rep's own
+        // declaration that would notify the sales manager.
+        ticketService.reserveStock(ticketId, declare(itemId, "25.00"), ceoUser);
         ticketService.reserveStock(ticketId, declare(itemId, "30.00"), ceoUser);
 
         assertThat(everyRecipientOf(TicketEventKind.STOCK_RESERVED)).isEmpty();

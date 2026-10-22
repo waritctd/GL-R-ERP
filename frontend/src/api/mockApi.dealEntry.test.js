@@ -30,7 +30,7 @@ describe('mockApi deal-entry gate -- mirrors DealEntryAccess.canEnterDeal', () =
     expect(project.id).toBeTruthy();
     const { ticket } = await api.tickets.create({
       title: customer.name, customerName: customer.name, customerId: customer.id,
-      projectId: project.id, entryChannel: 'UNSPECIFIED', priority: 'NORMAL', items: [],
+      projectId: project.id, entryChannel: 'DESIGNER_LED', priority: 'NORMAL', items: [],
     });
     expect(ticket.summary.id).toBeTruthy();
   });
@@ -43,7 +43,7 @@ describe('mockApi deal-entry gate -- mirrors DealEntryAccess.canEnterDeal', () =
     expect(project.id).toBeTruthy();
     const { ticket } = await api.tickets.create({
       title: customer.name, customerName: customer.name, customerId: customer.id,
-      projectId: project.id, entryChannel: 'UNSPECIFIED', priority: 'NORMAL', items: [],
+      projectId: project.id, entryChannel: 'DESIGNER_LED', priority: 'NORMAL', items: [],
     });
     expect(ticket.summary.id).toBeTruthy();
   });

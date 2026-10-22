@@ -8,6 +8,33 @@ import { nextFulfilmentActionCode, nextImportAction } from './importActions.js';
 // importActions.js header). It named ProcurementFulfilmentPage until ebaf6888
 // deleted that page.
 describe('nextFulfilmentActionCode', () => {
+  it('offers issueImportRequest on a draft ticket once the deposit is in (no quotation_issued needed)', () => {
+    for (const paymentStatus of ['DEPOSIT_NOTICE_ISSUED', 'DEPOSIT_PAID']) {
+      expect(nextFulfilmentActionCode({ status: 'draft', fulfillmentStatus: null, paymentStatus })).toBe('issueImportRequest');
+    }
+    expect(nextFulfilmentActionCode({
+      status: 'draft', fulfillmentStatus: null, paymentStatus: 'CUSTOMER_CONFIRMED', depositPolicy: 'CREDIT_CUSTOMER',
+    })).toBe('issueImportRequest');
+  });
+  it('does NOT offer issueImportRequest on a draft ticket without a deposit (deposit floor stays)', () => {
+    expect(nextFulfilmentActionCode({ status: 'draft', fulfillmentStatus: null, paymentStatus: null })).toBeNull();
+    expect(nextFulfilmentActionCode({ status: 'draft', fulfillmentStatus: null, paymentStatus: 'CUSTOMER_CONFIRMED', depositPolicy: 'REQUIRED' })).toBeNull();
+  });
+  it('does not re-offer issueImportRequest once a fulfilment status exists, even on a draft ticket', () => {
+    expect(nextFulfilmentActionCode({ status: 'draft', fulfillmentStatus: 'IR_ISSUED', paymentStatus: 'DEPOSIT_PAID' })).not.toBe('issueImportRequest');
+  });
+  // The backend's markIrSent/markShipping/markGoodsReceived gate on fulfillmentStatus alone (never
+  // on ticket.status), and the redesigned pricing chain does not always reach quotation_issued — a
+  // deal whose IR is already out must still be advanceable (the buttons used to vanish).
+  it.each([
+    ['IR_ISSUED', 'markIrSent'],
+    ['IR_SENT', 'markShipping'],
+    ['SHIPPING', 'markGoodsReceived'],
+  ])('offers the %s step (%s) whatever the ticket status — the IR is already out', (fulfillmentStatus, code) => {
+    for (const status of ['draft', 'approved', 'quotation_issued', 'document_issued']) {
+      expect(nextFulfilmentActionCode({ status, fulfillmentStatus })).toBe(code);
+    }
+  });
   it('walks the linear fulfilment chain in order', () => {
     expect(nextFulfilmentActionCode({ status: 'quotation_issued', fulfillmentStatus: null })).toBe('issueImportRequest');
     expect(nextFulfilmentActionCode({ status: 'quotation_issued', fulfillmentStatus: 'IR_ISSUED' })).toBe('markIrSent');
@@ -31,8 +58,32 @@ describe('nextFulfilmentActionCode', () => {
 describe('nextImportAction', () => {
   it('prioritizes an unpicked (SUBMITTED) pricing request over any fulfilment-chain action', () => {
     const ticket = { id: 5, status: 'quotation_issued', fulfillmentStatus: 'IR_ISSUED' };
-    const action = nextImportAction(ticket, [{ status: 'SUBMITTED' }]);
-    expect(action).toEqual({ code: 'pickupPricingRequest', label: 'รับงาน · ขอราคา', to: '/pricing-requests' });
+    const action = nextImportAction(ticket, [{ id: 33, status: 'SUBMITTED' }]);
+    expect(action).toEqual({ code: 'pickupPricingRequest', label: 'รับงาน · ขอราคา', to: '/pricing-requests/33' });
+  });
+
+  // BUG B: the queue's default import tab cannot show a SUBMITTED row, so รับเรื่อง landing on
+  // /pricing-requests dead-ends. It must open the SUBMITTED request itself.
+  it('sends pickupPricingRequest to the SUBMITTED request\'s own detail page, not the queue', () => {
+    const ticket = { id: 5, status: 'quotation_issued', fulfillmentStatus: 'IR_ISSUED' };
+    const action = nextImportAction(ticket, [
+      { id: 40, status: 'IMPORT_REVIEWING' },
+      { id: 41, status: 'SUBMITTED' },
+    ]);
+    expect(action.code).toBe('pickupPricingRequest');
+    expect(action.to).toBe('/pricing-requests/41');
+  });
+
+  // Deterministic rule: with several SUBMITTED, the OLDEST (lowest id) is opened, regardless of
+  // the order the list happens to arrive in.
+  it('with two SUBMITTED requests opens the oldest (lowest id), independent of list order', () => {
+    const ticket = { id: 5, status: 'draft', fulfillmentStatus: null };
+    const action = nextImportAction(ticket, [
+      { id: 9, status: 'SUBMITTED' },
+      { id: 4, status: 'SUBMITTED' },
+      { id: 2, status: 'IMPORT_REVIEWING' },
+    ]);
+    expect(action.to).toBe('/pricing-requests/4');
   });
 
   // PR-B REVIEW ROUND 1, S8: IR_ISSUED is the status every IR-TRACKED deal (V184 per-factory)
@@ -50,7 +101,7 @@ describe('nextImportAction', () => {
     // PR-B REVIEW ROUND 2, X1: issueImportRequest now routes to the deal page — the rewritten
     // /fulfilment (per-factory tracker) can't act on it and doesn't even list a
     // null-fulfillmentStatus deal. See importActions.js's `to` table doc comment.
-    expect(action).toEqual({ code: 'issueImportRequest', label: 'ออกคำขอนำเข้า', to: '/tickets/5' });
+    expect(action).toEqual({ code: 'issueImportRequest', label: 'ออกคำขอนำเข้า', to: '/import/deals/5' });
   });
 
   // PR-B REVIEW ROUND 2, X1: only markIrSent still routes to /fulfilment (its legacy section
@@ -59,12 +110,12 @@ describe('nextImportAction', () => {
   // all — those three now route to the deal page, where DealFulfilmentPanel still performs
   // them. This test used to assert all four landed on /fulfilment, back when that page
   // performed each as a single deal-level click.
-  it('routes markIrSent to /fulfilment and the other three legacy codes to the deal page', () => {
+  it('routes markIrSent to /fulfilment and the other three legacy codes to import\'s own deal page (never /tickets/:id, which import can no longer open)', () => {
     const cases = [
-      [null, 'issueImportRequest', 'ออกคำขอนำเข้า', '/tickets/7'],
+      [null, 'issueImportRequest', 'ออกคำขอนำเข้า', '/import/deals/7'],
       ['IR_ISSUED', 'markIrSent', 'อัปเดตสถานะนำเข้า', '/fulfilment'],
-      ['IR_SENT', 'markShipping', 'บันทึกออกเดินทาง', '/tickets/7'],
-      ['SHIPPING', 'markGoodsReceived', 'ยืนยันรับเข้าคลัง', '/tickets/7'],
+      ['IR_SENT', 'markShipping', 'บันทึกออกเดินทาง', '/import/deals/7'],
+      ['SHIPPING', 'markGoodsReceived', 'ยืนยันรับเข้าคลัง', '/import/deals/7'],
     ];
     cases.forEach(([fulfillmentStatus, code, label, to]) => {
       const ticket = { id: 7, status: 'quotation_issued', fulfillmentStatus };

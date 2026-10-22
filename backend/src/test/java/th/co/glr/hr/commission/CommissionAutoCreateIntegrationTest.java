@@ -52,7 +52,7 @@ import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteRepository;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteItemRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteRequest;
-import th.co.glr.hr.factoryquote.FactoryQuoteRequests.SendFactoryQuoteRequest;
+import th.co.glr.hr.factoryquote.FactoryQuoteRequests.MarkFactoryContactedRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteService;
 import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.notification.NotificationRepository;
@@ -317,7 +317,7 @@ class CommissionAutoCreateIntegrationTest extends AbstractPostgresIntegrationTes
     @Test
     void createFromDeal_omittedGrossAmount_defaultsFromDealPayable() {
         long ticketId = driveDealToClosedPaid(new BigDecimal("10"));
-        BigDecimal payable = tickets.payableAmount(ticketId);
+        BigDecimal payable = tickets.payableAmountExVat(ticketId);
         assertThat(payable.signum()).isPositive();
 
         CommissionRecord created = commissionService.createFromDeal(
@@ -330,10 +330,34 @@ class CommissionAutoCreateIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(created.dealAmountMismatch()).isFalse();
     }
 
+    /**
+     * OWNER RULING 2026-09-30: the deal's PAYABLE is now the VAT-inclusive grand total, but commission is
+     * computed on the PRE-VAT figure it always got. This pins the default gross amount: it equals the ex-VAT
+     * quotation total, and is strictly LESS than the (VAT-inclusive) payable the customer is billed.
+     * Mutation check: point CommissionService at tickets.payableAmount(...) and this goes red.
+     */
+    @Test
+    void createFromDeal_omittedGrossAmount_staysPreVat_whilePayableIsVatInclusive() {
+        long ticketId = driveDealToClosedPaid(new BigDecimal("10"));
+        BigDecimal exVat = tickets.payableAmountExVat(ticketId);
+        BigDecimal inclVat = tickets.payableAmount(ticketId);
+
+        CommissionRecord created = commissionService.createFromDeal(
+            ticketId, "INV-VAT-PIN-" + UUID.randomUUID().toString().substring(0, 8),
+            LocalDate.of(2026, 6, 15), null, null, null, null, null, null, null, null,
+            invoiceFile(), accountActor);
+
+        assertThat(inclVat).isGreaterThan(exVat);
+        assertThat(inclVat).isEqualByComparingTo(exVat.multiply(new BigDecimal("1.07")).setScale(2, java.math.RoundingMode.HALF_UP));
+        assertThat(created.invoiceDetails().grossAmount()).isEqualByComparingTo(exVat);
+        assertThat(created.invoiceDetails().grossAmount()).isNotEqualByComparingTo(inclVat);
+        assertThat(created.dealAmountMismatch()).isFalse();
+    }
+
     @Test
     void createFromDeal_providedGrossAmount_isUsedAsGiven_insteadOfDealPayable() {
         long ticketId = driveDealToClosedPaid(new BigDecimal("10"));
-        BigDecimal payable = tickets.payableAmount(ticketId);
+        BigDecimal payable = tickets.payableAmountExVat(ticketId);
         BigDecimal override = payable.add(new BigDecimal("50000.00")); // deliberately different + beyond threshold
 
         CommissionRecord created = commissionService.createFromDeal(
@@ -458,10 +482,12 @@ class CommissionAutoCreateIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(issuedNotice.status()).isEqualTo("ISSUED");
         ticketService.confirmDepositPaid(ticketId, accountActor);
 
+        // S18 owner decision 2026-09-28: import no longer declares stock coverage. This is setup for
+        // a commission test, so the CEO (allowed on any deal) stands in for the declarer.
         ticketService.reserveStock(ticketId,
             new StockReservationRequest(List.of(
                 new StockReservationRequest.Line(ticketItemId, quantity, "จองครบจากสต็อก"))),
-            importActor);
+            ceoActor);
         // V184: completeDelivery's gate (canWriteDelivery) transferred from {import,ceo,owning-rep}
         // to {ceo, owning-rep} only -- import no longer completes delivery. salesActor (the deal
         // owner) is used here instead of importActor; this fixture is not testing delivery authz.
@@ -482,8 +508,8 @@ class CommissionAutoCreateIntegrationTest extends AbstractPostgresIntegrationTes
         FactoryQuoteDto draft = drafts.get(0);
         long pricingRequestItemId = draft.items().get(0).pricingRequestItemId();
         String email = factory.toLowerCase().replace(" ", "-") + "@example.com";
-        factoryQuoteService.send(draft.id(),
-            new SendFactoryQuoteRequest(email, null, null), importActor);
+        factoryQuoteService.markContacted(draft.id(),
+            new MarkFactoryContactedRequest(java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
         drainDispatches();
         ReceiveFactoryQuoteRequest response = new ReceiveFactoryQuoteRequest(
             "REF-" + UUID.randomUUID(), "THB", "30 days", "45 days", "revision", "note",

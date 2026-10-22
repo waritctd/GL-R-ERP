@@ -82,10 +82,11 @@ public class OrderConfirmationService {
     private final CustomerQuotationRepository quotations;
     private final DepositNoticeService depositNotices;
     private final NotificationRepository notifications;
-    // GLA-123 slice S3 BLOCKER 2 fix — read-only dependency onto the new engine, used ONLY by
+    // GLA-123 slice S3 BLOCKER 2 fix — read-only dependency onto the new engine, used by
     // #reconcileTicketItems to prefer an ACCEPTED PRICING_REQUEST-origin quotation's own line
-    // quantities over the PR item's authored ones. SETTER-injected (not a constructor parameter),
-    // matching DealQuotationService's own established device (see its
+    // quantities over the PR item's authored ones, and by #createDepositNoticeFromQuotation to
+    // find the pricing request's ACCEPTED new-engine quotation. SETTER-injected (not a
+    // constructor parameter), matching DealQuotationService's own established device (see its
     // #wirePricingRequestDependencies Javadoc): 12 existing hand-wired
     // `new OrderConfirmationService(...)` test call sites keep compiling unchanged, Spring wires
     // it automatically via the @Autowired setter in production, and #reconcileTicketItems
@@ -106,8 +107,9 @@ public class OrderConfirmationService {
     }
 
     /** GLA-123 slice S3 BLOCKER 2 fix — see {@link #dealQuotations}'s own Javadoc for why this is
-     * setter- rather than constructor-injected. {@code required = false} so a hand-wired test that
-     * never exercises a PRICING_REQUEST-origin confirmOrder is unaffected either way. */
+     * setter- rather than constructor-injected. {@code required = false}: an unwired instance
+     * falls back to the PR item's own quantity in confirmOrder, and answers 409 on the new-engine
+     * branch of createDepositNoticeFromQuotation. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     public void wireDealQuotationRepository(th.co.glr.hr.dealquotation.DealQuotationRepository dealQuotations) {
         this.dealQuotations = dealQuotations;
@@ -148,6 +150,18 @@ public class OrderConfirmationService {
         if (!PricingRequestStatus.QUOTATION_ACCEPTED.equals(locked.status())) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "ยืนยันคำสั่งซื้อได้เฉพาะคำขอราคาที่ลูกค้ายอมรับใบเสนอราคาแล้วเท่านั้น (ปัจจุบัน: " + locked.status() + ")");
+        }
+
+        // Gate BEFORE the first write: the bridge below can only handle a ticket sitting at
+        // 'draft' (it advances it) or already at 'quotation_issued' (a later accepted revision).
+        // Any other status used to be discovered only AFTER markOrderConfirmed had committed,
+        // stranding the deal half-confirmed. Refuse up front, naming the status.
+        String ticketStatus = requireTicketSummary(locked.ticketId()).status();
+        if (!isBridgeableTicketStatus(ticketStatus)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ไม่สามารถยืนยันคำสั่งซื้อได้ — สถานะดีล (ticket) เป็น '" + ticketStatus
+                    + "' ซึ่งไม่ตรงกับขั้นตอนนี้ (ต้องเป็น '" + TicketStatus.DRAFT + "' หรือ '"
+                    + TicketStatus.QUOTATION_ISSUED + "')");
         }
 
         int confirmedRows = pricingRequests.markOrderConfirmed(pricingRequestId, actor.id(), clientRequestId);
@@ -214,6 +228,12 @@ public class OrderConfirmationService {
             "คำขอราคา " + locked.requestCode() + " ยืนยันคำสั่งซื้อแล้ว");
 
         return new OrderConfirmationResultDto(ticketDto, requirePricingRequest(pricingRequestId));
+    }
+
+    /** The ticket statuses {@link #confirmOrder}'s bridge can proceed from. Public so the DTO
+     * exposed to the frontend (ticketStatus) and the UI gate share one definition. */
+    public static boolean isBridgeableTicketStatus(String ticketStatus) {
+        return TicketStatus.DRAFT.equals(ticketStatus) || TicketStatus.QUOTATION_ISSUED.equals(ticketStatus);
     }
 
     private OrderConfirmationResultDto currentResult(long pricingRequestId, long ticketId, UserPrincipal actor) {
@@ -400,6 +420,33 @@ public class OrderConfirmationService {
      * itself, and leaves the header fields {@code null} for {@code createDraft} to autofill from
      * the ticket's own customer/project, same as the ticket-level route) — see {@code
      * DepositNoticeService.createDraft}'s own comments for what changed and why.
+     *
+     * <p><strong>Deposit percent (owner ruling, 2026-09-29):</strong> {@code
+     * request.depositPercent()} below is passed through but {@link
+     * DepositNoticeService#createDraft} now IGNORES it unconditionally and re-derives the percent
+     * itself from {@code accepted}'s own {@code sales.quotation.deposit_percent} (legacy branch;
+     * the new-engine paragraph below covers the other branch) via {@code
+     * DepositNoticeRepository#findDealQuotationDepositPercent(ticketId)} — this call site needs no
+     * separate fix because it already funnels through that one shared method. Left the field on
+     * {@link CreateDepositNoticeFromQuotationRequest} itself unremoved (an older frontend build
+     * may still send it) rather than making it a breaking DTO change for a value that is now a
+     * no-op either way.
+     *
+     * <p><strong>New-engine quotation:</strong> when the pricing request has no ACCEPTED legacy
+     * quotation, this falls back to its ACCEPTED new-engine {@code PRICING_REQUEST}-origin
+     * quotation ({@code DealQuotationService#createFromPricingRequest}), found by {@code
+     * DealQuotationRepository#findAcceptedForPricingRequest} (its Javadoc says why "latest" is
+     * the wrong pick). The items come from that quotation,
+     * the accepted quotation of THIS pricing request ({@link
+     * DepositNoticeService#itemsFromDealQuotation}), so a sibling pricing request's quotation on
+     * the same ticket can never supply them. The percent also comes from that quotation: its own
+     * {@code deposit_percent} goes to {@link DepositNoticeService#createDraftFromQuotation}, so
+     * when the quotation sets a percent a sibling pricing request's legacy row on the same ticket
+     * cannot supply it either (a new-engine sibling never could: R8 allows one ACCEPTED quotation
+     * per ticket and the lookup prefers ACCEPTED); a null percent still falls back to the
+     * per-ticket lookup. The legacy branch passes no percent, because {@code CustomerQuotationDto}
+     * carries none, so it keeps {@code createDraft}'s per-ticket derivation; the ticket-level
+     * route does the same. The customer must have accepted: an ISSUED-only quotation answers 409.
      */
     @Transactional
     public DepositNoticeDto createDepositNoticeFromQuotation(long pricingRequestId,
@@ -411,21 +458,48 @@ public class OrderConfirmationService {
         CustomerQuotationDto accepted = quotations.findByPricingRequest(pricingRequestId).stream()
             .filter(q -> QuotationStatus.ACCEPTED.equals(q.docStatus()))
             .findFirst()
-            .orElseThrow(() -> new ApiException(HttpStatus.CONFLICT,
-                "ยังไม่มีใบเสนอราคาที่ลูกค้ายอมรับสำหรับคำขอราคานี้"));
+            .orElse(null);
 
-        // Mapping itself now lives on DepositNoticeService (this branch's fix), shared with that
-        // class's own new-chain item fallback in buildItemsFromRequest — see its Javadoc.
-        List<DepositNoticeItemRequest> items = DepositNoticeService.itemsFromQuotation(accepted.items());
+        String reference;
+        List<DepositNoticeItemRequest> items;
+        Integer sourceDepositPercent;
+        if (accepted != null) {
+            reference = accepted.number();
+            items = DepositNoticeService.itemsFromQuotation(accepted.items());
+            sourceDepositPercent = null;
+        } else {
+            th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto newEngine = dealQuotations == null
+                ? null
+                : dealQuotations.findAcceptedForPricingRequest(pricingRequestId)
+                    .flatMap(dealQuotations::findById)
+                    .orElse(null);
+            if (newEngine == null) {
+                throw new ApiException(HttpStatus.CONFLICT, "ยังไม่มีใบเสนอราคาที่ลูกค้ายอมรับสำหรับคำขอราคานี้");
+            }
+            // A zero-deposit quotation (DealQuotationService#isZeroDeposit: "ไม่รับมัดจำ", paid in
+            // full under fullPaymentTerm) has nothing to bill. Refuse here rather than draft a
+            // 0-baht notice: DepositNoticeService#issue reads the ticket's deposit_policy, which no
+            // path syncs from the quotation, so nothing downstream would stop that draft.
+            if (Integer.valueOf(0).equals(newEngine.depositPercent())) {
+                throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคา " + newEngine.number()
+                    + " ระบุไม่มีมัดจำ (ชำระเต็มจำนวน) จึงออกใบแจ้งยอดเงินรับมัดจำไม่ได้");
+            }
+            reference = newEngine.number();
+            items = depositNotices.itemsFromDealQuotation(newEngine.id());
+            sourceDepositPercent = newEngine.depositPercent();
+        }
 
+        // request.depositPercent() is deliberately still passed through here even though
+        // createDraft now ignores it as the source — see this method's own Javadoc above.
         DepositNoticeDraftRequest draftRequest = new DepositNoticeDraftRequest(
-            null, null, null, null, accepted.number(),
+            null, null, null, null, reference,
             request != null ? request.depositPercent() : null, null, items);
-        DepositNoticeDto draft = depositNotices.createDraft(summary.ticketId(), draftRequest, actor);
+        DepositNoticeDto draft = depositNotices.createDraftFromQuotation(summary.ticketId(), draftRequest,
+            sourceDepositPercent, actor);
 
         pricingRequests.addEvent(pricingRequestId, summary.ticketId(), actor.id(), actor.name(),
             PricingRequestEventKind.DEPOSIT_NOTICE_DRAFTED_FROM_QUOTATION, summary.status(), summary.status(),
-            "สร้างร่างใบแจ้งยอดเงินรับมัดจำจากใบเสนอราคา " + accepted.number(), null);
+            "สร้างร่างใบแจ้งยอดเงินรับมัดจำจากใบเสนอราคา " + reference, null);
         return draft;
     }
 

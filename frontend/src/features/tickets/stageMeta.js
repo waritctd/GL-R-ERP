@@ -19,7 +19,7 @@
 //
 // The rule for anything added below: if the backend also decides it, it does not belong here.
 
-import { hasDealStageLabel } from '../../utils/format.js';
+import { entryChannelLabel, hasDealStageLabel } from '../../utils/format.js';
 
 export const GATE_LABEL = {
   sales: 'ฝ่ายขาย',
@@ -33,10 +33,17 @@ export const GATE_LABEL = {
  * the backend, so this map only supplies words for the ones that have it.
  */
 export const AUTO_STAGE_HINT = {
-  ORDER_RECEIVED:   'อัปเดตอัตโนมัติเมื่อฝ่ายขายยืนยันใบสั่งซื้อของดีลนี้',
-  DEPOSIT_RECEIVED: 'อัปเดตอัตโนมัติเมื่อฝ่ายบัญชียืนยันรับมัดจำของดีลนี้',
-  PROCUREMENT:      'อัปเดตอัตโนมัติเมื่อฝ่ายนำเข้าออกใบขอซื้อ (IR) ของดีลนี้',
-  CLOSED_PAID:      'อัปเดตอัตโนมัติเมื่อฝ่ายบัญชียืนยันรับเงินครบของดีลนี้',
+  // Operational — a transition on the deal itself.
+  ORDER_RECEIVED:    'อัปเดตอัตโนมัติเมื่อฝ่ายขายยืนยันใบสั่งซื้อของดีลนี้',
+  DEPOSIT_RECEIVED:  'อัปเดตอัตโนมัติเมื่อฝ่ายบัญชียืนยันรับมัดจำของดีลนี้',
+  PROCUREMENT:       'อัปเดตอัตโนมัติเมื่อฝ่ายนำเข้าออกใบขอซื้อ (IR) ของดีลนี้',
+  CLOSED_PAID:       'อัปเดตอัตโนมัติเมื่อฝ่ายบัญชียืนยันรับเงินครบของดีลนี้',
+  // Document-driven (owner ruling 2026-10-16) — a quotation addressed to that party. Each names
+  // the DOCUMENT rather than a department, because unlike the four above the way in is something
+  // this rep does themselves: the stage arrives when they quote that party.
+  QUOTE_DESIGN_SIDE: 'อัปเดตอัตโนมัติเมื่อสร้างใบเสนอราคาถึงผู้ออกแบบของดีลนี้',
+  QUOTE_OWNER:       'อัปเดตอัตโนมัติเมื่อสร้างใบเสนอราคาถึงเจ้าของโครงการของดีลนี้',
+  QUOTE_BUYER:       'อัปเดตอัตโนมัติเมื่อสร้างใบเสนอราคาถึงผู้ซื้อ / ผู้รับเหมาของดีลนี้',
 };
 
 export const LOST_REASON_LABEL = {
@@ -162,4 +169,29 @@ export function assertStageLabelsComplete(codes) {
     throw new Error(message);
   }
   console.error(message);
+}
+
+/**
+ * Headline overrides for DealStagePanel, for stages whose own label does not say who the stage is
+ * dealing with. S4-S8 already do ("เสนอราคาผู้ออกแบบ", "เสนอราคาเจ้าของโครงการ", ...), so only
+ * ORDER_RECEIVED needs one. DISPLAY ONLY — the shared label in utils/format.js is unchanged, so
+ * lists and history keep saying "ได้รับใบสั่งซื้อ".
+ */
+export const STAGE_HEADLINE = {
+  ORDER_RECEIVED: 'ได้รับใบสั่งซื้อจากผู้รับเหมา/ผู้ซื้อ',
+};
+
+/**
+ * The channels that HAVE a route (DealRoute.java's three). UNSPECIFIED, an unknown value and an
+ * absent channel have none — every stage is reachable for them — so nothing may name a route for
+ * them. Wording only: which stages each route visits is the backend's, served per stage as `onRoute`.
+ */
+const ROUTE_CHANNELS = ['DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT'];
+
+/**
+ * The Thai name of the deal's route ("เจ้าของติดต่อโดยตรง"), or null when the channel has no route.
+ * null means "render nothing": a panel must never invent a route for a deal that has none.
+ */
+export function routeName(entryChannel) {
+  return ROUTE_CHANNELS.includes(entryChannel) ? entryChannelLabel(entryChannel).label : null;
 }

@@ -1,38 +1,33 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
-import imageCompression from 'browser-image-compression';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { Button } from '../../components/common/Button.jsx';
 import { CompactStatRow } from '../../components/common/CompactStatRow.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { DataTable } from '../../components/common/DataTable.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
-import { FileUploadField } from '../../components/common/FileUploadField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { FormGrid, formGridSpan2, Panel } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
+import { Tabs } from '../../components/common/Tabs.jsx';
 import { cn } from '../../utils/cn.js';
-import { commissionStatusLabel as statusInfo, dealStageLabel, formatMoney, formatThaiDate } from '../../utils/format.js';
+import { InvoiceFromDealForm } from './InvoiceFromDealForm.jsx';
+import { emptyInvoiceForm, prepareInvoiceAttachment, toCreateFromDealPayload } from './invoiceFromDeal.js';
+import { commissionStatusLabel as statusInfo, dealStageLabel, formatMoney, formatThaiDate, formatThaiMonthYearFromMonthInputValue } from '../../utils/format.js';
+import { CommissionStatement } from './CommissionStatement.jsx';
+import { MANUAL_KIND_LABELS, MANUAL_KINDS, describeCommissionWeight, isManualKind, kindLabel } from './commissionRecord.js';
+import { ReceiptChain } from './ReceiptChain.jsx';
+import { ReceiptLedger } from './ReceiptLedger.jsx';
+import { WeightSegmented } from './WeightSegmented.jsx';
+import { WeightingDesk } from './WeightingDesk.jsx';
 
-const today = new Date().toISOString().slice(0, 10);
+/* Hallmark · redesign · system: design.md (Operations Control Desk) · pre-emit critique: P4 H4 E3 S4 R4 V3 (V: design.md locks the system, so variety is deliberately low; E3: the stock-line segmented states are proven by tests, but only the locked import-line state was seen in a browser) */
 const thisMonth = new Date().toISOString().slice(0, 7);
 
-const emptyCreateForm = {
-  invoiceNumber: '',
-  invoiceDate: today,
-  grossAmount: '',
-  bankFees: '0',
-  suspenseVat: '0',
-  transportFee: '0',
-  cutFee: '0',
-  shortfall: '0',
-  withholdingTax: '0',
-  overpayment: '0',
-  invoiceAttachment: null,
-};
+const emptyCreateForm = emptyInvoiceForm();
 
 const emptyDeductionDraft = {
   grossAmount: 0,
@@ -47,43 +42,6 @@ const emptyDeductionDraft = {
   reason: '',
 };
 
-// Manual commission entries (feat/commission-manual-adjustments): ALL FOUR kinds are hand-typed
-// for now — owner decision: manual across the UI until the CEO-confirmed auto-config lands to
-// prefill suggestions for specific ones later (not implemented here, no auto-computation exists
-// anywhere in this form). Mirrors backend/.../commission/CommissionKind.java's four constants.
-const MANUAL_KIND_LABELS = {
-  ADJUSTMENT: 'ปรับปรุง/รับช่วงงาน',
-  MANAGER: 'ค่าคอมผู้จัดการ/ทีม',
-  STOCK_BONUS: 'โบนัสขายสต็อก',
-  INCENTIVE: 'Incentive ตามเป้า',
-};
-const MANUAL_KINDS = Object.keys(MANUAL_KIND_LABELS);
-
-function isManualKind(kind) {
-  return Object.prototype.hasOwnProperty.call(MANUAL_KIND_LABELS, kind);
-}
-
-// V148 (per-item stock-commission weighting): a record's weight badge now has two possible
-// sources — the frozen, blended per-item weight (effectiveWeightMultiplier, non-null only for a
-// SALE/CLAWBACK whose ticket had priced, stock-covered items at creation time) when one exists,
-// else the plain manager-set weightMultiplier fallback exactly as before this feature. When the
-// frozen weight is present it is authoritative for payroll (CommissionRepository
-// #sumActiveWeightedActualReceived's COALESCE) — editing the record-level dropdown below has no
-// effect on this record's money, so the badge must show the number that actually counts, not the
-// possibly-stale fallback field. Returns null when the effective weight is exactly 1 (nothing to
-// call out).
-function describeCommissionWeight(record) {
-  const itemDerived = record?.effectiveWeightMultiplier !== null && record?.effectiveWeightMultiplier !== undefined;
-  const value = Number(itemDerived ? record.effectiveWeightMultiplier : record?.weightMultiplier);
-  if (!(value > 1)) return null;
-  const formatted = Number.isInteger(value) ? String(value) : value.toFixed(2);
-  return {
-    itemDerived,
-    label: itemDerived ? `น้ำหนักจากรายการสินค้า ${formatted} เท่า` : `น้ำหนักฐานคอม ${formatted} เท่า`,
-    compactLabel: itemDerived ? `${formatted}x (รายการ)` : `${formatted}x`,
-  };
-}
-
 const emptyManualForm = {
   salesRepId: '',
   kind: 'ADJUSTMENT',
@@ -91,17 +49,6 @@ const emptyManualForm = {
   payrollMonth: '',
   reason: '',
 };
-
-function kindLabel(kind) {
-  if (kind === 'CLAWBACK') return 'คืน/ยกเลิก';
-  if (isManualKind(kind)) return MANUAL_KIND_LABELS[kind];
-  return 'ขาย';
-}
-
-function numberOrNull(value) {
-  if (value === '' || value === null || value === undefined) return null;
-  return Number(value);
-}
 
 // Debounces `value` by `delayMs` -- mirrors OvertimePanel.jsx/LeaveRequestPage.jsx's identically
 // named private helper (same reason: don't fire one request per keystroke). Kept as its own small
@@ -113,96 +60,6 @@ function useDebouncedValue(value, delayMs) {
     return () => clearTimeout(timer);
   }, [value, delayMs]);
   return debounced;
-}
-
-/**
- * Waterfall calculation-detail view — gross -> each deduction (including WHT) -> actualReceived
- * -> ÷1.07 -> commissionableBase, plus the weight multiplier (when >1) and status/owner. This is
- * the "clear calc breakdown" the sales read-only view needs (Slice A3), and is reused for
- * manager/CEO's row expansion too since every value here is display-only (the fields are exactly
- * what CommissionCalculator.calculateInvoice consumed server-side, not re-derived).
- */
-function CommissionCalcBreakdown({ record }) {
-  const status = statusInfo(record.status);
-  if (isManualKind(record.kind)) {
-    const amount = Number(record.manualAmount || 0);
-    return (
-      <div className="grid gap-3 text-sm">
-        <div className="flex flex-wrap items-center gap-2">
-          <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-          <StatusBadge tone="info">{MANUAL_KIND_LABELS[record.kind] || record.kind}</StatusBadge>
-        </div>
-        <div className="grid gap-1.5 rounded-md border border-border bg-surface-subtle p-3">
-          <div className="flex items-center justify-between gap-3 font-bold">
-            <span>จำนวนเงิน (พิมพ์เอง — ไม่ผ่านการคำนวณอัตโนมัติ)</span>
-            <code className={cn('font-mono', amount < 0 && 'text-danger')}>
-              {formatMoney(amount)}
-            </code>
-          </div>
-          <div className="flex items-start justify-between gap-3">
-            <span className="text-text-muted">เหตุผล</span>
-            <span className="text-right">{record.manualReason || '-'}</span>
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-3 text-xs text-text-muted sm:grid-cols-4">
-          <span>ผู้จัดการ: {record.managerApprovedAt ? `${record.managerApprovedByName || '-'} · ${formatThaiDate(record.managerApprovedAt)}` : '-'}</span>
-          <span>CEO: {record.ceoApprovedAt ? `${record.ceoApprovedByName || '-'} · ${formatThaiDate(record.ceoApprovedAt)}` : '-'}</span>
-        </div>
-      </div>
-    );
-  }
-  const invoice = record.invoiceDetails;
-  const lines = [
-    { label: 'ยอดใบกำกับ (Gross)', value: invoice.grossAmount, sign: '' },
-    { label: 'ค่าธรรมเนียมธนาคาร', value: invoice.bankFees, sign: '-' },
-    { label: 'ภาษีรอใช้สิทธิ (Suspense VAT)', value: invoice.suspenseVat, sign: '-' },
-    { label: 'ค่าขนส่ง', value: invoice.transportFee, sign: '-' },
-    { label: 'ค่าตัด', value: invoice.cutFee, sign: '-' },
-    { label: 'รับเงินขาด', value: invoice.shortfall, sign: '-' },
-    { label: 'หัก ณ ที่จ่าย (WHT)', value: invoice.withholdingTax, sign: '-' },
-    { label: 'รับเงินเกิน', value: invoice.overpayment, sign: '+' },
-  ];
-  return (
-    <div className="grid gap-3 text-sm">
-      <div className="flex flex-wrap items-center gap-2">
-        <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-        {describeCommissionWeight(record) ? (
-          <StatusBadge tone="info">{describeCommissionWeight(record).label}</StatusBadge>
-        ) : null}
-        {record.dealAmountMismatch ? <StatusBadge tone="warning">ยอดต่างจากยอดที่เรียกเก็บ</StatusBadge> : null}
-      </div>
-      <div className="grid gap-1.5 rounded-md border border-border bg-surface-subtle p-3">
-        {lines.map((line) => (
-          <div key={line.label} className="flex items-center justify-between gap-3">
-            <span className="text-text-muted">{line.label}</span>
-            <code className="font-mono">{line.sign}{formatMoney(line.value)}</code>
-          </div>
-        ))}
-        <div className="mt-1 flex items-center justify-between gap-3 border-t border-border pt-1.5 font-bold">
-          <span>= ยอดรับจริง (Actual Received)</span>
-          <code className="font-mono">{formatMoney(record.actualReceived)}</code>
-        </div>
-        <div className="flex items-center justify-between gap-3 text-text-muted">
-          {/* The VAT divisor itself is a policy number owned by CommissionCalculator, so it is
-              not restated here — both figures either side of this line are server-computed
-              columns off the record, and naming the divisor in JS is exactly the kind of stale
-              copy this branch removed from the monthly-tier panel's below-floor badge. */}
-          <span>÷ แยกภาษีมูลค่าเพิ่ม (VAT)</span>
-          <span />
-        </div>
-        <div className="flex items-center justify-between gap-3 font-bold">
-          <span>= ฐานค่าคอม (Commissionable Base)</span>
-          <code className="font-mono">{formatMoney(record.commissionableBase)}</code>
-        </div>
-      </div>
-      <div className="grid grid-cols-2 gap-3 text-xs text-text-muted sm:grid-cols-4">
-        <span>Invoice: {invoice.invoiceNumber} · {formatThaiDate(invoice.invoiceDate)}</span>
-        <span>ผู้จัดการ: {record.managerApprovedAt ? `${record.managerApprovedByName || '-'} · ${formatThaiDate(record.managerApprovedAt)}` : '-'}</span>
-        <span>CEO: {record.ceoApprovedAt ? `${record.ceoApprovedByName || '-'} · ${formatThaiDate(record.ceoApprovedAt)}` : '-'}</span>
-        <span>ไฟล์: {invoice.invoiceAttachmentFileName || '-'}</span>
-      </div>
-    </div>
-  );
 }
 
 /**
@@ -303,8 +160,22 @@ function CommissionCard({ record, canReview, isCeoReview, saving, expanded, onTo
   );
 }
 
+// The subset of a ticket summary the create-from-deal form reads, taken from FinanceDealDto.
+function summaryFromFinanceDeal(deal) {
+  if (!deal) return null;
+  return {
+    id: deal.id,
+    code: deal.code,
+    customerName: deal.customerName,
+    salesStage: deal.salesStage,
+    amountPayable: deal.money?.amountPayable ?? null,
+    // Pre-VAT payable: the invoice form's default ยอดรวม (older payloads lack it -> amountPayable).
+    amountPayableExVat: deal.money?.amountPayableExVat ?? null,
+  };
+}
+
 export function CommissionPage({ user, showToast }) {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const [month, setMonth] = useState(thisMonth);
   const [records, setRecords] = useState([]);
@@ -315,6 +186,18 @@ export function CommissionPage({ user, showToast }) {
   const [monthlyTierSummary, setMonthlyTierSummary] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+
+  // sales_manager/ceo รออนุมัติ view (?view=pending): every SUBMITTED sale record across ALL payroll
+  // months (GET /api/commissions/pending-approval) -- independent of the month filter above.
+  const [pending, setPending] = useState(null); // null = not loaded yet
+  const [pendingLoading, setPendingLoading] = useState(false);
+
+  // sales_manager / ceo "สรุปรายคน": the same statement the rep sees, for a chosen rep. The
+  // request counter drops a slow response for a previously picked rep / month.
+  const [pickedRepId, setPickedRepId] = useState('');
+  const [repSummary, setRepSummary] = useState(null);
+  const repSummaryRequestId = useRef(0);
+  const [repSummaryNonce, setRepSummaryNonce] = useState(0); // bumped to force a reload of the picked rep's statement
 
   // account: "record invoice" / create-from-deal flow
   const [ticketIdInput, setTicketIdInput] = useState(searchParams.get('ticketId') || '');
@@ -367,6 +250,58 @@ export function CommissionPage({ user, showToast }) {
   const canCreateManual = ROLE_PERMISSIONS.canCreateManualCommission.includes(user.role); // sales_manager, ceo
   const payrollOnly = ROLE_PERMISSIONS.canViewPayrollCommissions.includes(user.role); // hr
   const isSales = user.role === 'sales';
+  const view = canReview && searchParams.get('view') === 'pending' ? 'pending' : 'all';
+  const canAdjustWeights = user.role === 'sales_manager'; // CommissionService#adjustItemWeights: sales_manager only
+  // Worklist first: the sales_manager's queue (every SUBMITTED sale, any month) leads her page.
+  // The CEO's queue is the MANAGER_APPROVED records in the table below, so she keeps the old
+  // ทั้งหมด / รออนุมัติ tabs, where "รออนุมัติ" is the same queue read-only.
+  const isSalesManager = user.role === 'sales_manager';
+  const showWorklist = isSalesManager || view === 'pending';
+
+  function selectView(next) {
+    const params = new URLSearchParams(searchParams);
+    if (next === 'pending') params.set('view', 'pending');
+    else params.delete('view');
+    setSearchParams(params, { replace: true });
+  }
+
+  async function loadPending() {
+    setPendingLoading(true);
+    try {
+      const response = await api.commissions.pendingApproval();
+      setPending(response.commissions ?? []);
+    } catch (error) {
+      showToast('error', error.message || 'โหลดรายการรออนุมัติไม่สำเร็จ');
+    } finally {
+      setPendingLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!showWorklist) return;
+    loadPending();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fetch on entering the view; showToast is stable enough.
+  }, [showWorklist]);
+
+  // The desk owns the optimistic state; this only performs the write and keeps payroll fresh. The
+  // server recomputes effectiveWeight / weightedCommissionableBase / estimatedCommission and the
+  // entry is replaced with its answer, never patched locally.
+  async function adjustWeights(recordId, payload) {
+    const response = await api.commissions.adjustItemWeights(recordId, payload);
+    invalidatePayrollUpstream();
+    return response;
+  }
+
+  // A weight change moves the month's base: reload the records table and the picked rep's statement
+  // so "สรุปรายคน" and the table are not left showing the old figures.
+  function reloadAfterWeightChange() {
+    load();
+    setRepSummaryNonce((n) => n + 1);
+  }
+
+  function replacePendingEntry(updated) {
+    setPending((current) => (current ?? []).map((entry) => (entry.commission.id === updated.commission.id ? updated : entry)));
+  }
 
   async function load() {
     if (payrollOnly) {
@@ -413,6 +348,19 @@ export function CommissionPage({ user, showToast }) {
   // is intentionally omitted from the dependency array (re-running per render would be a no-op).
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, [month]);
+
+  // "สรุปรายคน": re-fetch the chosen rep's statement whenever the rep or the month changes.
+  useEffect(() => {
+    if (!canReview || !pickedRepId) {
+      setRepSummary(null);
+      return;
+    }
+    const requestId = (repSummaryRequestId.current += 1);
+    api.commissions.monthlySummary({ payrollMonth: month, salesRepId: Number(pickedRepId) })
+      .then((response) => { if (repSummaryRequestId.current === requestId) setRepSummary(response.summary ?? null); })
+      .catch(() => { if (repSummaryRequestId.current === requestId) setRepSummary(null); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- canReview is fixed for the page's lifetime.
+  }, [pickedRepId, month, repSummaryNonce]);
 
   // Best-effort convenience picker for account: the deals TicketRepository's account-role list
   // scoping surfaces are money-PENDING deals, so a CLOSED_PAID deal (already fully paid) often
@@ -702,30 +650,6 @@ export function CommissionPage({ user, showToast }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canReview, saving, user.role, expandedId]);
 
-  async function prepareInvoiceAttachment(file) {
-    if (!file) throw new Error('กรุณาแนบไฟล์ใบกำกับภาษี');
-    if (!['application/pdf', 'image/jpeg', 'image/png'].includes(file.type)) {
-      throw new Error('รองรับเฉพาะไฟล์ PDF, JPG หรือ PNG');
-    }
-    // imageCompression() returns a plain Blob, not a File -- it does not carry `file.name`
-    // through, so the FormData part built from it defaults to the literal filename "blob" per the
-    // Fetch/FormData spec. This matters here more than most: createFromDeal dual-writes this as
-    // the ticket's tax invoice attachment (see the NOTE below submitFromDeal), so an unwrapped
-    // Blob would corrupt the filename of the actual document that gates CONFIRM_CLOSE, not just a
-    // cosmetic display name. Re-wrapping in a File restores the original name. PDFs skip
-    // compression entirely and never hit this path. See #498/#504 for the reference fix.
-    if (!file.type.startsWith('image/')) return file;
-    return new File(
-      [await imageCompression(file, {
-        maxSizeMB: 2,
-        maxWidthOrHeight: 1600,
-        useWebWorker: true,
-      })],
-      file.name,
-      { type: file.type },
-    );
-  }
-
   function updateCreateForm(field, value) {
     setCreateForm((current) => ({ ...current, [field]: value }));
   }
@@ -742,8 +666,13 @@ export function CommissionPage({ user, showToast }) {
     setTicketLookupLoading(true);
     setTicketLookupError('');
     try {
-      const response = await api.tickets.get(ticketId);
-      const summary = response.ticket?.summary;
+      // H1 lockdown: account is refused on api.tickets.get and reads the deal through the finance
+      // view (api.finance.getDeal, FinanceDealDto). Only the fields this form uses are mapped —
+      // id, code, customerName, salesStage and the amount, which lives under `money` there. Every
+      // other role keeps the ticket read unchanged.
+      const summary = user.role === 'account'
+        ? summaryFromFinanceDeal((await api.finance.getDeal(ticketId)).deal)
+        : (await api.tickets.get(ticketId)).ticket?.summary;
       if (!summary) {
         setLoadedTicket(null);
         setTicketLookupError('ไม่พบดีลนี้');
@@ -751,11 +680,12 @@ export function CommissionPage({ user, showToast }) {
       }
       if (summary.salesStage !== 'CLOSED_PAID') {
         setLoadedTicket(null);
-        setTicketLookupError(`ดีลนี้ยังไม่ถึงขั้นตอนปิดงาน/รับเงินครบ (สถานะปัจจุบัน: ${dealStageLabel(summary.salesStage)}) จึงยังบันทึกค่าคอมไม่ได้`);
+        setTicketLookupError(`ดีลนี้ยังไม่ถึงขั้นตอนปิดงาน/รับเงินครบ (สถานะปัจจุบัน: ${dealStageLabel(summary.salesStage).label}) จึงยังบันทึกค่าคอมไม่ได้`);
         return;
       }
       setLoadedTicket(summary);
-      updateCreateForm('grossAmount', summary.amountPayable != null ? String(summary.amountPayable) : '');
+      const defaultGross = summary.amountPayableExVat ?? summary.amountPayable;
+      updateCreateForm('grossAmount', defaultGross != null ? String(defaultGross) : '');
     } catch (error) {
       setLoadedTicket(null);
       setTicketLookupError(error.message || 'ไม่พบดีลนี้');
@@ -779,27 +709,14 @@ export function CommissionPage({ user, showToast }) {
     setSaving(true);
     try {
       const invoiceAttachment = await prepareInvoiceAttachment(createForm.invoiceAttachment);
-      const response = await api.commissions.createFromDeal({
-        ticketId: loadedTicket.id,
-        invoiceNumber: createForm.invoiceNumber.trim(),
-        invoiceDate: createForm.invoiceDate,
-        grossAmount: numberOrNull(createForm.grossAmount),
-        bankFees: numberOrNull(createForm.bankFees) ?? 0,
-        suspenseVat: numberOrNull(createForm.suspenseVat) ?? 0,
-        transportFee: numberOrNull(createForm.transportFee) ?? 0,
-        cutFee: numberOrNull(createForm.cutFee) ?? 0,
-        shortfall: numberOrNull(createForm.shortfall) ?? 0,
-        withholdingTax: numberOrNull(createForm.withholdingTax) ?? 0,
-        overpayment: numberOrNull(createForm.overpayment) ?? 0,
-        invoiceAttachment,
-      });
+      const response = await api.commissions.createFromDeal(toCreateFromDealPayload(loadedTicket.id, createForm, invoiceAttachment));
       setRecentlyCreated((current) => [response.commission, ...current]);
       // createFromDeal is not commission-only: it dual-writes the tax invoice as an
       // AttachType.INVOICE attachment on the ticket, which flips that ticket's
       // invoiceOnFile and so unlocks CONFIRM_CLOSE. Without this the ticket's cached
       // detail/actions stay stale for staleTime (30s, api/queryClient.js), so account
       // returns to the deal — usually straight from this page — and still sees
-      // "บันทึกใบกำกับ + ออกค่าคอม" instead of "ยืนยันพร้อมปิดงาน".
+      // "บันทึกใบกำกับ" instead of "ยืนยันพร้อมปิดงาน".
       //
       // Invalidated by the ['tickets'] PREFIX rather than the exact
       // queryKeys.ticketDetail(id)/ticketActions(id)/ticketAttachments(id) triple, on
@@ -809,6 +726,9 @@ export function CommissionPage({ user, showToast }) {
       // ['tickets','detail','16'] and the invalidation would silently no-op. The
       // prefix also correctly refreshes the ticket lists, whose stage/scope changed.
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
+      // Account reads the deal through the finance view (['finance','deal',id]); its
+      // commissionRecorded flag drives the "บันทึกใบกำกับ" CTA, so it must go stale too.
+      queryClient.invalidateQueries({ queryKey: ['finance'] });
       invalidatePayrollUpstream();
       setCreateForm(emptyCreateForm);
       setFileInputKey((key) => key + 1);
@@ -985,6 +905,7 @@ export function CommissionPage({ user, showToast }) {
       showToast('success', 'อนุมัติค่าคอมแล้ว');
       invalidatePayrollUpstream();
       await load();
+      if (showWorklist) await loadPending();
     } catch (error) {
       showToast('error', error.message || 'อนุมัติไม่สำเร็จ');
     } finally {
@@ -1004,6 +925,7 @@ export function CommissionPage({ user, showToast }) {
       showToast('success', 'ปฏิเสธค่าคอมแล้ว');
       invalidatePayrollUpstream();
       await load();
+      if (showWorklist) await loadPending();
     } catch (error) {
       showToast('error', error.message || 'ปฏิเสธไม่สำเร็จ');
     } finally {
@@ -1031,16 +953,65 @@ export function CommissionPage({ user, showToast }) {
     }
   }
 
+  // Commission paid in payroll month N comes from money RECEIVED in month N-1 — the one rule every
+  // figure on this page hangs on, so it is stated at the top of every month-scoped view.
+  const receiptMonth = (() => {
+    const match = /^(\d{4})-(\d{2})$/.exec(month);
+    if (!match) return null;
+    const [year, monthNumber] = [Number(match[1]), Number(match[2])];
+    return monthNumber === 1 ? `${year - 1}-12` : `${year}-${String(monthNumber - 1).padStart(2, '0')}`;
+  })();
+  const pickedRepName = repOptions.find((rep) => String(rep.id) === String(pickedRepId))?.name;
+  const monthScoped = !canCreateFromDeal && view === 'all';
+
   return (
     <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
-      <PageHeader
-        title="ค่าคอมมิชชัน"
-        subtitle="Sales & Commission Management"
-        actions={!canCreateFromDeal ? (
-          <div className="flex flex-wrap items-center gap-3">
-            <label className="inline-flex items-center gap-2 text-sm font-bold">
+      <PageHeader title="ค่าคอมมิชชัน" subtitle="ตรวจสอบ อนุมัติ และติดตามค่าคอมมิชชันของฝ่ายขาย" />
+
+      {user.role === 'ceo' ? (
+        <Tabs
+          ariaLabel="มุมมองค่าคอม"
+          idPrefix="commission-view"
+          value={view}
+          onChange={selectView}
+          items={[
+            { id: 'all', label: 'ทั้งหมด' },
+            { id: 'pending', label: 'รออนุมัติ', badge: pending ? pending.length : undefined, badgeLabel: pending ? `${pending.length} รายการ` : undefined },
+          ]}
+        />
+      ) : null}
+
+      {showWorklist ? (
+        <WeightingDesk
+          title={isSalesManager ? 'รอคุณอนุมัติ' : 'รอผู้จัดการฝ่ายขายอนุมัติ'}
+          entries={pending}
+          loading={pendingLoading}
+          canAdjust={canAdjustWeights}
+          busy={saving}
+          canReviewRecord={canManagerReview}
+          onAdjust={adjustWeights}
+          onEntryUpdate={replacePendingEntry}
+          onSaved={reloadAfterWeightChange}
+          onApprove={setApproveId}
+          onReject={reject}
+        />
+      ) : null}
+
+      {isSalesManager && view === 'pending' ? (
+        <div>
+          <Button type="button" variant="text" className="whitespace-nowrap mobile:min-h-11" onClick={() => selectView('all')}>
+            ดูสรุปรายคนและรายการทั้งเดือน
+            <Icon name="chevronRight" size={14} />
+          </Button>
+        </div>
+      ) : null}
+
+      {monthScoped ? (
+        <div className="grid gap-2 border-b border-border pb-4">
+          <div className="flex flex-wrap items-end gap-x-3 gap-y-3">
+            <label className="grid w-[220px] gap-1.5 text-sm font-bold mobile:w-full">
               รอบเดือน
-              <input type="month" value={month} onChange={(event) => setMonth(event.target.value)} className="w-[150px]" />
+              <input type="month" value={month} onChange={(event) => setMonth(event.target.value)} className="hover:border-border-muted pointer-coarse:min-h-11" />
             </label>
             {/* A tax invoice recorded in month M lands in payroll month M+1, so a rep who closes a
                 deal and checks this page on the same day sees nothing — and the table's empty state
@@ -1050,6 +1021,7 @@ export function CommissionPage({ user, showToast }) {
             <Button
               type="button"
               variant="secondary"
+              className="whitespace-nowrap pointer-coarse:min-h-11 mobile:flex-1"
               data-testid="commission-next-cycle"
               title="ค่าคอมจากใบกำกับที่บันทึกเดือนนี้ จะอยู่ในรอบเดือนถัดไป"
               onClick={() => {
@@ -1062,14 +1034,24 @@ export function CommissionPage({ user, showToast }) {
               <Icon name="chevronRight" size={14} />
             </Button>
             {canCreateManual && (
-              <Button type="button" variant="secondary" onClick={() => (showManualForm ? setShowManualForm(false) : openManualForm())}>
+              <Button
+                type="button"
+                variant="secondary"
+                className="whitespace-nowrap pointer-coarse:min-h-11 mobile:flex-1 min-[721px]:ml-auto"
+                onClick={() => (showManualForm ? setShowManualForm(false) : openManualForm())}
+              >
                 <Icon name="plus" size={14} />
                 เพิ่มค่าคอมด้วยตนเอง
               </Button>
             )}
           </div>
-        ) : undefined}
-      />
+          {receiptMonth ? (
+            <p className="m-0 text-md font-bold text-text-secondary [overflow-wrap:anywhere]">
+              {`รอบจ่าย ${formatThaiMonthYearFromMonthInputValue(month)} · จากยอดรับเงินเดือน ${formatThaiMonthYearFromMonthInputValue(receiptMonth)}`}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
 
       {payrollOnly ? (
         <PayrollSummary summary={summary} loading={loading} />
@@ -1090,17 +1072,8 @@ export function CommissionPage({ user, showToast }) {
           saving={saving}
           recentlyCreated={recentlyCreated}
         />
-      ) : (
+      ) : view === 'all' ? (
         <>
-          <CompactStatRow
-            items={[
-              { key: 'base', label: 'ฐานค่าคอมเดือนนี้', value: formatMoney(totals.base), helper: 'Commissionable base' },
-              { key: 'approved', label: 'อนุมัติแล้ว', value: totals.approved, helper: 'Approved records' },
-              { key: 'submitted', label: 'รอผู้จัดการ', value: totals.submitted, helper: 'Submitted records' },
-              { key: 'managerApproved', label: 'รอ CEO', value: totals.managerApproved, helper: 'Manager approved' },
-            ]}
-          />
-
           {canCreateManual && showManualForm && (
             <ManualCommissionForm
               form={manualForm}
@@ -1112,60 +1085,109 @@ export function CommissionPage({ user, showToast }) {
             />
           )}
 
-          {monthlyTierSummary ? <MonthlyTierPanel summary={monthlyTierSummary} /> : null}
+          {isSales ? (
+            <>
+              {monthlyTierSummary ? <CommissionStatement summary={monthlyTierSummary} /> : null}
+              <ReceiptLedger records={records} loading={loading} />
+            </>
+          ) : (
+            <>
+              <section aria-label="สรุปค่าคอมเดือนนี้" className="grid min-w-0 grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] items-end gap-x-8 gap-y-4 nav-drawer:grid-cols-[minmax(0,1fr)]">
+                <div className="grid min-w-0 gap-1">
+                  <p className="m-0 text-sm font-bold text-text-secondary">ฐานค่าคอมเดือนนี้</p>
+                  <p className="m-0 text-4xl font-extrabold leading-tight tabular-nums text-text [overflow-wrap:anywhere] mobile:text-3xl">{formatMoney(totals.base)}</p>
+                </div>
+                <dl className="m-0 grid grid-cols-3 gap-x-4 gap-y-2 mobile:grid-cols-1">
+                  {[
+                    ['approved', 'อนุมัติแล้ว', totals.approved],
+                    ['submitted', 'รอผู้จัดการ', totals.submitted],
+                    ['managerApproved', 'รอ CEO', totals.managerApproved],
+                  ].map(([key, label, value]) => (
+                    <div key={key} className="grid min-w-0 gap-0.5">
+                      <dt className="text-sm text-text-muted">{label}</dt>
+                      <dd className="m-0 text-lg font-extrabold tabular-nums text-text">{`${value} รายการ`}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </section>
 
-          <DataTable
-            columns={commissionColumns}
-            rows={records}
-            getRowKey={(record) => record.id}
-            gridClassName="commission-table"
-            renderExpanded={(record) => (record.id === expandedId ? <CommissionCalcBreakdown record={record} /> : null)}
-            mobileCard={(record) => (
-              <CommissionCard
-                record={record}
-                canReview={canReview && canReviewRecord(record)}
-                isCeoReview={canCeoReview(record)}
-                saving={saving}
-                expanded={expandedId === record.id}
-                onToggleExpand={() => setExpandedId((current) => (current === record.id ? null : record.id))}
-                onApprove={() => setApproveId(record.id)}
-                onReject={() => reject(record.id)}
-              />
-            )}
-            pageSize={20}
-            searchable
-            searchPlaceholder="ค้นหาเลขที่ใบกำกับ / ชื่อ Sales"
-            loading={loading}
-            emptyState={{
-              icon: 'badge',
-              title: 'ยังไม่มีรายการค่าคอม',
-              description: 'ค่าคอมจากใบกำกับที่บันทึกเดือนนี้จะอยู่ในรอบเดือนถัดไป — ลองกด "รอบถัดไป" หรือรอฝ่ายบัญชีบันทึกใบกำกับ',
-            }}
-          />
+              <section aria-labelledby="by-rep-heading" className="grid min-w-0 gap-3">
+                <h2 id="by-rep-heading" className="m-0 text-lg font-extrabold text-text">สรุปรายคน</h2>
+                <div className="grid w-[320px] max-w-full gap-1.5 mobile:w-full">
+                  <label htmlFor="commission-rep-picker" className="text-sm font-bold">เลือกพนักงานขาย</label>
+                  <select
+                    id="commission-rep-picker"
+                    value={pickedRepId}
+                    onChange={(event) => setPickedRepId(event.target.value)}
+                    className="hover:border-border-muted pointer-coarse:min-h-11"
+                  >
+                    <option value="">— เลือกพนักงานขาย —</option>
+                    {repOptions.map((rep) => <option key={rep.id} value={String(rep.id)}>{rep.name}</option>)}
+                  </select>
+                </div>
+                {pickedRepId && repSummary ? (
+                  <CommissionStatement summary={repSummary} heading={`ค่าคอมของ ${pickedRepName ?? 'พนักงานขาย'}`} />
+                ) : (
+                  <p className="m-0 text-sm text-text-muted">
+                    {pickedRepId ? 'กำลังโหลดสรุปค่าคอม…' : 'เลือกพนักงานขายเพื่อดูสรุปค่าคอมเดือนนี้ในรูปแบบเดียวกับที่พนักงานเห็น'}
+                  </p>
+                )}
+              </section>
 
-          {editingId != null && (() => {
-            const editingRecord = records.find((record) => record.id === editingId);
-            if (!editingRecord) return null;
-            return (
-              <ManagerReviewEditPanel
-                record={editingRecord}
-                draft={deductionDraft}
-                onChange={updateDeductionDraft}
-                preview={deductionPreview}
-                saving={saving}
-                onSave={() => saveDeductions(editingRecord.id)}
-                onCancel={() => setEditingId(null)}
+              <DataTable
+                columns={commissionColumns}
+                rows={records}
+                getRowKey={(record) => record.id}
+                gridClassName="commission-table"
+                renderExpanded={(record) => (record.id === expandedId ? <ReceiptChain record={record} /> : null)}
+                mobileCard={(record) => (
+                  <CommissionCard
+                    record={record}
+                    canReview={canReview && canReviewRecord(record)}
+                    isCeoReview={canCeoReview(record)}
+                    saving={saving}
+                    expanded={expandedId === record.id}
+                    onToggleExpand={() => setExpandedId((current) => (current === record.id ? null : record.id))}
+                    onApprove={() => setApproveId(record.id)}
+                    onReject={() => reject(record.id)}
+                  />
+                )}
+                pageSize={20}
+                searchable
+                searchPlaceholder="ค้นหาเลขที่ใบกำกับ / ชื่อ Sales"
+                loading={loading}
+                emptyState={{
+                  icon: 'badge',
+                  title: 'ยังไม่มีรายการค่าคอม',
+                  description: 'ค่าคอมจากใบกำกับที่บันทึกเดือนนี้จะอยู่ในรอบเดือนถัดไป — ลองกด "รอบถัดไป" หรือรอฝ่ายบัญชีบันทึกใบกำกับ',
+                }}
               />
-            );
-          })()}
+
+              {editingId != null && (() => {
+                const editingRecord = records.find((record) => record.id === editingId);
+                if (!editingRecord) return null;
+                return (
+                  <ManagerReviewEditPanel
+                    record={editingRecord}
+                    draft={deductionDraft}
+                    onChange={updateDeductionDraft}
+                    preview={deductionPreview}
+                    saving={saving}
+                    onSave={() => saveDeductions(editingRecord.id)}
+                    onCancel={() => setEditingId(null)}
+                  />
+                );
+              })()}
+            </>
+          )}
         </>
-      )}
+      ) : null}
 
       <ConfirmDialog
         open={approveId != null}
         title="ยืนยันการอนุมัติค่าคอม"
         message={(() => {
-          const record = records.find((item) => item.id === approveId);
+          const record = [...records, ...(pending ?? []).map((entry) => entry.commission)].find((item) => item.id === approveId);
           if (!record) return 'ยืนยันการอนุมัติค่าคอมมิชชันรายการนี้?';
           // Status-transition copy quoted from api.commissions.approve
           // (src/api/mockApi.js): SUBMITTED -> MANAGER_APPROVED when a
@@ -1256,142 +1278,78 @@ function AccountCreateFromDeal({
   return (
     <>
       <Panel flush title="บันทึกใบกำกับภาษี / สร้างคำขอค่าคอมจากดีล">
-        <div className="grid gap-4 p-[18px]">
-          <div className="grid gap-2">
-            <label htmlFor="commission-ticket-lookup" className="text-sm font-bold">
-              เลขที่ Ticket ID ของดีลที่ปิดงาน/รับเงินครบแล้ว (CLOSED_PAID)
-            </label>
-            <div className="flex flex-wrap items-center gap-2">
-              <input
-                id="commission-ticket-lookup"
-                type="number"
-                min="1"
-                value={ticketIdInput}
-                onChange={(event) => setTicketIdInput(event.target.value)}
-                placeholder="เช่น 42"
-                className="max-w-[160px]"
-              />
-              <Button type="button" variant="secondary" disabled={ticketLookupLoading || !ticketIdInput} onClick={onLookup}>
-                <Icon name="search" size={14} />
-                {ticketLookupLoading ? 'กำลังโหลดข้อมูลดีล…' : 'โหลดข้อมูลดีล'}
-              </Button>
-            </div>
-            {eligibleTickets.length > 0 ? (
-              <label className="grid gap-1.5 text-sm">
-                หรือเลือกจากดีลที่ปรากฏในรายการ
-                <select value="" onChange={(event) => onSelectEligible(event.target.value)}>
-                  <option value="">— เลือกดีล —</option>
-                  {eligibleTickets.map((ticket) => (
-                    <option key={ticket.id} value={ticket.id}>
-                      {ticket.code} · {ticket.customerName || 'ไม่ระบุลูกค้า'}
-                    </option>
-                  ))}
-                </select>
+        <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,1.8fr)] nav-drawer:grid-cols-[minmax(0,1fr)]">
+          {/* Left half: which deal this invoice belongs to. */}
+          <div className="grid min-w-0 content-start gap-3 bg-surface-muted p-[18px] mobile:p-4 min-[1041px]:border-r min-[1041px]:border-border nav-drawer:border-b nav-drawer:border-border">
+            <h3 className="m-0 text-md font-extrabold text-text">ดีลที่จะบันทึกใบกำกับ</h3>
+            <div className="grid gap-2">
+              <label htmlFor="commission-ticket-lookup" className="text-sm font-bold">
+                เลขที่ Ticket ID ของดีลที่ปิดงาน/รับเงินครบแล้ว (CLOSED_PAID)
               </label>
-            ) : (
-              <p className="m-0 text-xs text-text-muted">
-                ดีลที่ปิดงาน/รับเงินครบแล้วอาจไม่ปรากฏในรายการอัตโนมัติ (รายการนี้แสดงเฉพาะดีลที่ยังรอดำเนินการด้านการเงิน) — กรอกเลขที่ Ticket ID ด้วยตนเองด้านบนได้เสมอ
-              </p>
-            )}
-            {ticketLookupError ? <StatusBadge tone="danger">{ticketLookupError}</StatusBadge> : null}
-            {loadedTicket ? (
-              <div className="rounded-md border border-border bg-surface-subtle p-3 text-sm">
-                <strong>{loadedTicket.code}</strong> · {loadedTicket.customerName || 'ไม่ระบุลูกค้า'}
-                <div className="mt-1 flex items-center justify-between">
-                  <span className="text-text-muted">ยอดที่ต้องชำระของดีล</span>
-                  <code className="font-mono">{formatMoney(loadedTicket.amountPayable)}</code>
-                </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  id="commission-ticket-lookup"
+                  type="number"
+                  min="1"
+                  value={ticketIdInput}
+                  onChange={(event) => setTicketIdInput(event.target.value)}
+                  placeholder="เช่น 42"
+                  className="max-w-[160px] hover:border-border-muted pointer-coarse:min-h-11"
+                />
+                <Button type="button" variant="secondary" className="whitespace-nowrap pointer-coarse:min-h-11" disabled={ticketLookupLoading || !ticketIdInput} onClick={onLookup}>
+                  <Icon name="search" size={14} />
+                  {ticketLookupLoading ? 'กำลังโหลดข้อมูลดีล…' : 'โหลดข้อมูลดีล'}
+                </Button>
               </div>
-            ) : null}
+              {eligibleTickets.length > 0 ? (
+                <label className="grid gap-1.5 text-sm">
+                  หรือเลือกจากดีลที่ปรากฏในรายการ
+                  <select value="" className="hover:border-border-muted pointer-coarse:min-h-11" onChange={(event) => onSelectEligible(event.target.value)}>
+                    <option value="">— เลือกดีล —</option>
+                    {eligibleTickets.map((ticket) => (
+                      <option key={ticket.id} value={ticket.id}>
+                        {ticket.code} · {ticket.customerName || 'ไม่ระบุลูกค้า'}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : (
+                <p className="m-0 text-xs text-text-muted">
+                  ดีลที่ปิดงาน/รับเงินครบแล้วอาจไม่ปรากฏในรายการอัตโนมัติ (รายการนี้แสดงเฉพาะดีลที่ยังรอดำเนินการด้านการเงิน) — กรอกเลขที่ Ticket ID ด้วยตนเองด้านบนได้เสมอ
+                </p>
+              )}
+              {ticketLookupError ? <StatusBadge tone="danger">{ticketLookupError}</StatusBadge> : null}
+              {loadedTicket ? (
+                <div className="rounded-md border border-success-border bg-surface p-3 text-sm">
+                  <strong>{loadedTicket.code}</strong> · {loadedTicket.customerName || 'ไม่ระบุลูกค้า'}
+                  <div className="mt-1 flex items-center justify-between gap-3">
+                    <span className="text-text-muted">ยอดที่ต้องชำระของดีล</span>
+                    <code className="font-mono">{formatMoney(loadedTicket.amountPayable)}</code>
+                  </div>
+                </div>
+              ) : null}
+            </div>
           </div>
 
-          {/* allowSubmitterlessSubmit, with a written reason (#safe-form-primitive): this form's
-              own file input carries a native `required`, and jsdom does not run real constraint
-              validation on it after a synthetic `fireEvent.change` -- CommissionPage.test.jsx's
-              two file-rewrap regression tests (`re-wraps the compressed invoice image...`, `does
-              not touch PDFs...`) both dispatch a submitter-less `fireEvent.submit(form)` directly
-              to route around that jsdom-only false negative, exactly as their own comment
-              explains (verified still current: switching either to `fireEvent.click(button)` or
-              to `form.requestSubmit(button)` -- which DOES carry a real submitter -- reproduces
-              the same false negative and times out waiting for `createFromDeal`).
-              The escape hatch itself is INERT in a real browser, not merely unneeded: the
-              `<Button type="submit">` below is unconditionally RENDERED -- only its `disabled`
-              attribute varies with `saving || !loadedTicket` -- and a real browser's default-
-              button resolution does not fall back to a submitter-less implicit submission when
-              that one submit button happens to be disabled; Enter simply does nothing at all in
-              that state (verified empirically -- see SafeForm.jsx's header comment). So `submitter`
-              can never actually be null here for a genuine keypress, with any number of fields;
-              the escape hatch exists purely to satisfy the two jsdom-only tests above, not because
-              production needs it. (An earlier version of this comment said the operative reason
-              was "ten Enter-blocking fields" -- true as a fact, but not what actually protects
-              this form; a future edit that trimmed the field count to one would still be safe for
-              the reason given here, and would NOT reopen anything.) Closing the jsdom gap for real
-              needs either `noValidate` here plus app-side required-field validation (a real
-              behaviour change, out of scope for this migration) or a jsdom/test-only fix upstream;
-              flagged as a followup rather than silently either weakening this gate everywhere or
-              leaving two tests red. */}
-          <SafeForm onSubmit={onSubmit} allowSubmitterlessSubmit>
-            <FormGrid>
-            <label>
-              Invoice Number *
-              <input value={createForm.invoiceNumber} onChange={(event) => updateCreateForm('invoiceNumber', event.target.value)} required />
-            </label>
-            <label>
-              Invoice Date *
-              <input type="date" value={createForm.invoiceDate} onChange={(event) => updateCreateForm('invoiceDate', event.target.value)} required />
-            </label>
-            <div className="grid gap-[7px]">
-              <label htmlFor="commission-invoice-file">Tax Invoice File *</label>
-              <FileUploadField
-                id="commission-invoice-file"
-                key={fileInputKey}
-                accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png"
-                onChange={(event) => updateCreateForm('invoiceAttachment', event.target.files?.[0] || null)}
-                required
-                helperText="PDF, JPG หรือ PNG"
-              />
-            </div>
-            <label>
-              Gross Amount * <small className="text-text-muted">(ค่าเริ่มต้นจากยอดที่ต้องชำระของดีล แก้ไขได้)</small>
-              <input type="number" min="0" step="0.01" value={createForm.grossAmount} onChange={(event) => updateCreateForm('grossAmount', event.target.value)} required />
-            </label>
-            <label>
-              Bank Fees
-              <input type="number" min="0" step="0.01" value={createForm.bankFees} onChange={(event) => updateCreateForm('bankFees', event.target.value)} />
-            </label>
-            <label>
-              Suspense VAT
-              <input type="number" min="0" step="0.01" value={createForm.suspenseVat} onChange={(event) => updateCreateForm('suspenseVat', event.target.value)} />
-            </label>
-            <label>
-              ค่าขนส่ง
-              <input type="number" min="0" step="0.01" value={createForm.transportFee} onChange={(event) => updateCreateForm('transportFee', event.target.value)} />
-            </label>
-            <label>
-              ค่าตัด
-              <input type="number" min="0" step="0.01" value={createForm.cutFee} onChange={(event) => updateCreateForm('cutFee', event.target.value)} />
-            </label>
-            <label>
-              รับเงินขาด
-              <input type="number" min="0" step="0.01" value={createForm.shortfall} onChange={(event) => updateCreateForm('shortfall', event.target.value)} />
-            </label>
-            <label>
-              หัก ณ ที่จ่าย (WHT)
-              <input type="number" min="0" step="0.01" value={createForm.withholdingTax} onChange={(event) => updateCreateForm('withholdingTax', event.target.value)} />
-            </label>
-            <label>
-              รับเงินเกิน
-              <input type="number" min="0" step="0.01" value={createForm.overpayment} onChange={(event) => updateCreateForm('overpayment', event.target.value)} />
-            </label>
-
-            <div className={`${formGridSpan2} flex flex-wrap justify-end gap-[10px] mobile:flex-col-reverse`}>
-              <Button type="submit" variant="primary" className="mobile:!min-h-11 mobile:!w-full" disabled={saving || !loadedTicket}>
-                <Icon name="check" size={14} />
-                บันทึกและสร้างคำขอค่าคอม
-              </Button>
-            </div>
-            </FormGrid>
-          </SafeForm>
+          {/* Right half: the invoice itself. */}
+          <div className="grid min-w-0 content-start gap-4 p-[18px] mobile:p-4">
+            {!loadedTicket ? (
+              <p className="m-0 flex items-start gap-2 text-sm text-text-muted">
+                <Icon name="info" size={16} className="mt-0.5 shrink-0" />
+                <span>โหลดข้อมูลดีลก่อน จึงจะบันทึกใบกำกับได้ — กรอกฟอร์มไว้ล่วงหน้าได้</span>
+              </p>
+            ) : null}
+            <InvoiceFromDealForm
+              form={createForm}
+              onChange={updateCreateForm}
+              onSubmit={onSubmit}
+              saving={saving}
+              disabled={!loadedTicket}
+              fileInputKey={fileInputKey}
+              fileInputId="commission-invoice-file"
+              submitLabel="บันทึกและสร้างคำขอค่าคอม"
+            />
+          </div>
         </div>
       </Panel>
 
@@ -1552,18 +1510,19 @@ function ManagerReviewEditPanel({ record, draft, onChange, preview, saving, onSa
             />
           </label>
         ))}
-        <label className="text-xs font-bold">
-          น้ำหนักฐานคอม (Weight Multiplier)
-          <select
-            value={draft.weightMultiplier}
-            onChange={(event) => onChange('weightMultiplier', Number(event.target.value))}
-            className="mt-1"
-          >
-            <option value={1}>1 เท่า (ปกติ)</option>
-            <option value={2}>2 เท่า (ยืนยันนโยบายแล้ว)</option>
-            <option value={3}>3 เท่า (ยืนยันนโยบายแล้ว)</option>
-          </select>
-        </label>
+        <div className="grid content-start gap-1.5 text-xs font-bold">
+          <span id="record-weight-label">น้ำหนักฐานคอมของรายการนี้</span>
+          <WeightSegmented
+            label="น้ำหนักฐานคอม"
+            labelledBy="record-weight-label"
+            disabled={saving}
+            busy={saving}
+            value={Number(draft.weightMultiplier)}
+            onChange={(weight) => onChange('weightMultiplier', weight)}
+            describedBy="record-weight-hint"
+          />
+          <span id="record-weight-hint" className="text-sm font-normal text-text-muted">×2 และ ×3 ใช้เมื่อยืนยันนโยบายแล้วเท่านั้น</span>
+        </div>
       </div>
       {record.effectiveWeightMultiplier !== null && record.effectiveWeightMultiplier !== undefined ? (
         // V148 (per-item stock-commission weighting): this record already carries a FROZEN,
@@ -1610,97 +1569,10 @@ function ManagerReviewEditPanel({ record, draft, onChange, preview, saving, onSa
   );
 }
 
-/**
- * sales-only: informational tier-by-tier breakdown of the currently selected payroll month.
- * `summary` is CommissionMonthlySummaryDto exactly, as returned by
- * GET /api/commissions/monthly-summary (CommissionService#monthlySummary) — every figure here is
- * server-computed, never re-derived client-side.
- */
-function MonthlyTierPanel({ summary }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <Panel
-      title="ขั้นบันไดค่าคอมเดือนนี้ (ประมาณการ)"
-      actions={(
-        <Button type="button" variant="icon" onClick={() => setOpen((current) => !current)} aria-expanded={open} title={open ? 'ย่อ' : 'ขยาย'}>
-          <Icon name={open ? 'chevronUp' : 'chevronDown'} size={16} />
-        </Button>
-      )}
-    >
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <span>
-          <small className="block text-text-muted">ฐานค่าคอมรวมเดือนนี้ (น้ำหนักรวมแล้ว)</small>
-          <code className="font-mono text-base font-bold">{formatMoney(summary.commissionableBase)}</code>
-        </span>
-        <span className="text-right">
-          <small className="block text-text-muted">ค่าคอมประมาณการ</small>
-          <code className="font-mono text-base font-bold">{formatMoney(summary.totalCommission)}</code>
-        </span>
-      </div>
-      {summary.incentiveAmount ? (
-        // Issue #405: the auto-computed INCENTIVE ladder amount, already folded into
-        // "ค่าคอมประมาณการ" on top of the tier commission — server-computed by the same call.
-        <div className="mt-2 flex items-center justify-between gap-3 text-sm">
-          <span className="text-text-muted">อินเซนทีฟ (นอกขั้นบันได)</span>
-          <code className="font-mono">{formatMoney(summary.incentiveAmount)}</code>
-        </div>
-      ) : null}
-      {summary.manualTotal ? (
-        // Manual entries (feat/commission-manual-adjustments) never feed the tier calc above —
-        // this is the rep's own APPROVED manual amount, already folded into "ค่าคอมประมาณการ"
-        // on top of the tier commission.
-        <div className="mt-2 flex items-center justify-between gap-3 text-sm">
-          <span className="text-text-muted">ค่าคอมปรับปรุง/โบนัสที่อนุมัติแล้ว (นอกขั้นบันได)</span>
-          <code className={cn('font-mono', summary.manualTotal < 0 && 'text-danger')}>
-            {formatMoney(summary.manualTotal)}
-          </code>
-        </div>
-      ) : null}
-      {summary.belowFloor ? (
-        // The floor amount itself is a policy number that must not live in the frontend — see
-        // CLAUDE.md's mock API contract note on commission constants. Named generically here.
-        <p className="mt-2">
-          <StatusBadge tone="neutral">ฐานเดือนนี้ต่ำกว่าเกณฑ์ขั้นต่ำตามนโยบาย — ยังไม่มีค่าคอมในเดือนนี้</StatusBadge>
-        </p>
-      ) : null}
-      {open ? (
-        summary.tiers.length === 0 ? (
-          // Mock mode (VITE_USE_MOCKS=true) does not know the real tier config — see mockApi.js's
-          // commissions.monthlySummary fixture. The totals above still render (they are the mock's
-          // own canned/summed figures); only the per-tier breakdown is unavailable.
-          <p className="mt-3 text-sm text-text-muted">ไม่มีรายละเอียดขั้นบันไดค่าคอมให้แสดงในขณะนี้</p>
-        ) : (
-          <div className="mt-3 overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="text-text-muted">
-                  <th className="pb-1 pr-3 font-semibold">ขั้น</th>
-                  <th className="pb-1 pr-3 font-semibold">ช่วง (บาท)</th>
-                  <th className="pb-1 pr-3 font-semibold text-right">อัตรา</th>
-                  <th className="pb-1 font-semibold text-right">ค่าคอมในขั้นนี้</th>
-                </tr>
-              </thead>
-              <tbody>
-                {summary.tiers.map((row) => (
-                  <tr key={row.tierNumber} className="border-t border-border">
-                    <td className="py-1 pr-3">{row.tierNumber}</td>
-                    <td className="py-1 pr-3">
-                      {formatMoney(row.lowerBound)} – {row.upperBound == null ? 'ขึ้นไป' : formatMoney(row.upperBound)}
-                    </td>
-                    {/* ratePercent arrives as a JSON number/string from a server BigDecimal —
-                        Number(...) first so a string value doesn't throw calling .toFixed. */}
-                    <td className="py-1 pr-3 text-right">{Number(row.ratePercent).toFixed(2)}%</td>
-                    <td className="py-1 text-right"><code className="font-mono">{formatMoney(row.commission)}</code></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )
-      ) : null}
-    </Panel>
-  );
-}
+// The legacy `.commission-payroll-table` rule in styles.css is 5 columns; a Tailwind utility beats it
+// (layer order), so the 6-column variant (ค่าคอมทีม shown) lives here.
+const PAYROLL_COLUMNS_BASE = 'grid-cols-[minmax(0,1.8fr)_repeat(4,minmax(0,1fr))]';
+const PAYROLL_COLUMNS_WITH_TEAM = 'grid-cols-[minmax(0,1.8fr)_repeat(5,minmax(0,1fr))]';
 
 function PayrollSummary({ summary, loading }) {
   if (loading) {
@@ -1709,6 +1581,13 @@ function PayrollSummary({ summary, loading }) {
   if (!summary) {
     return <EmptyState icon="badge" title="ยังไม่มีข้อมูลค่าคอม" description="เลือกรอบเดือนอื่นเพื่อตรวจสอบ" />;
   }
+  // The backend sends companyCommissionableBase = null when no override applies in the month, but
+  // ALWAYS sends totalTeamOverrideAmount (0.00) -- so only a non-null company base or a non-zero
+  // total means the override exists this month. Otherwise (every pre-October month) the ค่าคอมทีม
+  // column and footer would be all zeros and are left out.
+  const showTeam = summary.companyCommissionableBase != null
+    || (summary.totalTeamOverrideAmount != null && Number(summary.totalTeamOverrideAmount) !== 0);
+  const PAYROLL_TABLE_COLUMNS = showTeam ? PAYROLL_COLUMNS_WITH_TEAM : PAYROLL_COLUMNS_BASE;
   return (
     <>
       <CompactStatRow
@@ -1719,7 +1598,7 @@ function PayrollSummary({ summary, loading }) {
         ]}
       />
       <Panel flush>
-        <div className="commission-payroll-table table-head">
+        <div className={cn('commission-payroll-table table-head', PAYROLL_TABLE_COLUMNS)}>
           <span>Sales Rep</span>
           <span>ฐานค่าคอม</span>
           {/* Issue #405: the auto-computed INCENTIVE ladder + STOCK_BONUS, already folded into
@@ -1728,19 +1607,38 @@ function PayrollSummary({ summary, loading }) {
               all-zero until the CEO enables sales.stock_bonus_config -- that is expected. */}
           <span>อินเซนทีฟ</span>
           <span>โบนัสขายของในสต๊อค</span>
+          {/* The team override (ค่าคอมทีม) is already folded into the "ค่าคอม" total column — only
+              the override recipients carry a non-zero amount, so the column is mostly empty by
+              design rather than broken. */}
+          {showTeam ? <span>ค่าคอมทีม</span> : null}
           <span>ค่าคอม</span>
         </div>
         {(summary.salesReps ?? []).length === 0 ? (
           <EmptyState icon="badge" title="ไม่มีรายการอนุมัติ" description="ยังไม่มีค่าคอมที่พร้อมเข้า Payroll ในเดือนนี้" />
         ) : summary.salesReps.map((rep) => (
-          <div key={rep.salesRepId} className="commission-payroll-table data-row">
+          <div key={rep.salesRepId} className={cn('commission-payroll-table data-row', PAYROLL_TABLE_COLUMNS)}>
             <strong>{rep.salesRepName || rep.salesRepId}</strong>
             <code>{formatMoney(rep.commissionableBase)}</code>
             <code>{formatMoney(rep.incentiveAmount)}</code>
             <code>{formatMoney(rep.stockBonusAmount)}</code>
+            {showTeam ? <code>{formatMoney(rep.teamOverrideAmount)}</code> : null}
             <code>{formatMoney(rep.commissionAmount)}</code>
           </div>
         ))}
+        {showTeam ? (
+          <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 border-t border-border-subtle bg-surface-muted px-5 py-3 text-md mobile:px-4">
+            {summary.companyCommissionableBase != null ? (
+              <span className="text-text-secondary">
+                ยอดรับทั้งบริษัท (ไม่รวม VAT) <strong className="tabular-nums text-text">{formatMoney(summary.companyCommissionableBase)}</strong>
+              </span>
+            ) : <span />}
+            {summary.totalTeamOverrideAmount != null ? (
+              <span data-testid="payroll-team-override-total" className="text-text-secondary">
+                รวมค่าคอมทีม <strong className="tabular-nums text-text">{formatMoney(summary.totalTeamOverrideAmount)}</strong>
+              </span>
+            ) : null}
+          </div>
+        ) : null}
       </Panel>
     </>
   );

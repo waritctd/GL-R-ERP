@@ -38,7 +38,7 @@ public class ApiExceptionHandler {
     ResponseEntity<ErrorResponse> handleApiException(ApiException exception) {
         return ResponseEntity
             .status(exception.getStatus())
-            .body(new ErrorResponse(exception.getMessage(), exception.getStatus().value()));
+            .body(new ErrorResponse(exception.getMessage(), exception.getStatus().value(), exception.getDetails()));
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
@@ -217,6 +217,23 @@ public class ApiExceptionHandler {
         return error.getField() + " " + (error.getDefaultMessage() == null ? "ไม่ถูกต้อง" : error.getDefaultMessage());
     }
 
-    public record ErrorResponse(String message, int status) {
+    /**
+     * The one JSON error body. {@code details} is NOT a JSON key: it is {@code @JsonIgnore}d, and
+     * its entries are flattened to TOP-LEVEL fields by {@link #extraFields()} — so an ordinary
+     * refusal (empty details, which is every constructor call but one) serializes exactly as it did
+     * before details existed, {@code {"message":…,"status":…}}, while a structured refusal
+     * ({@link ApiException#ApiException(HttpStatus, String, java.util.Map)}) gains its fields beside
+     * them. {@code ApiErrorBodyTest} pins both shapes byte-for-byte through the real HTTP converter.
+     */
+    public record ErrorResponse(String message, int status,
+                                @com.fasterxml.jackson.annotation.JsonIgnore java.util.Map<String, Object> details) {
+        public ErrorResponse(String message, int status) {
+            this(message, status, java.util.Map.of());
+        }
+
+        @com.fasterxml.jackson.annotation.JsonAnyGetter
+        public java.util.Map<String, Object> extraFields() {
+            return details == null ? java.util.Map.of() : details;
+        }
     }
 }

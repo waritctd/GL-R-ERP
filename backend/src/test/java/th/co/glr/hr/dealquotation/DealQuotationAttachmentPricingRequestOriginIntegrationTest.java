@@ -229,6 +229,9 @@ class DealQuotationAttachmentPricingRequestOriginIntegrationTest extends Abstrac
         long factoryQuoteFile = factoryQuoteService.uploadAttachment(drafts.get(0).id(),
             file("factory-cost.pdf", PDF, FACTORY_COST), importActor).id();
         for (FactoryQuoteDto draft : drafts) {
+            // CR-1: the import side must mark the factory contacted before entering its price.
+            factoryQuoteService.markContacted(draft.id(), new th.co.glr.hr.factoryquote.FactoryQuoteRequests
+                .MarkFactoryContactedRequest(java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
             FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(),
                 response("REF-" + draft.factoryName(), draft.items().get(0).pricingRequestItemId()), importActor);
             factoryQuoteService.markReadyForCosting(responded.id(), importActor);

@@ -109,7 +109,10 @@ function selectableCountries(countries) {
   return countries;
 }
 
-function FactoryFormModal({ factory, countries, onClose, onSaved }) {
+// Exported (B6, GLA-135): PricingRequestDetailPage's import factory picker reuses this exact
+// form for its inline "เพิ่มโรงงานใหม่" affordance rather than a second, drifting copy of the
+// same five fields + validation — see that page's own comment at the picker call site.
+export function FactoryFormModal({ factory, countries, onClose, onSaved }) {
   const isEdit = Boolean(factory);
   const [name, setName]         = useState(factory?.name ?? '');
   const [country, setCountry]   = useState(factory?.country ?? '');
@@ -119,12 +122,19 @@ function FactoryFormModal({ factory, countries, onClose, onSaved }) {
   const [unit, setUnit]         = useState(factory?.unit ?? 'piece');
   const [saving, setSaving]     = useState(false);
   const [error, setError]       = useState('');
+  // QA BUG-20: hard lock against a double-submit. `saving` (the disabled attribute's source) only
+  // flips on the next render, so a fast second click/Enter can fire createFactory twice before the
+  // button disables — and a second create is a duplicate-name 409 at best, a duplicate row at worst.
+  // The ref blocks the repeat synchronously, in the same tick.
+  const submitting = useRef(false);
 
   async function handleSubmit(e) {
     e.preventDefault();
+    if (submitting.current) return;
     if (!name.trim()) { setError('กรุณาใส่ชื่อโรงงาน'); return; }
     if (!country) { setError('กรุณาเลือกประเทศ'); return; }
     if (country === 'ZZ' && !countryOther.trim()) { setError('กรุณาระบุชื่อประเทศเมื่อเลือก อื่นๆ'); return; }
+    submitting.current = true;
     setSaving(true);
     setError('');
     const otherToSend = country === 'ZZ' ? countryOther.trim() : null;
@@ -139,6 +149,7 @@ function FactoryFormModal({ factory, countries, onClose, onSaved }) {
       setError(err.message || (isEdit ? 'บันทึกโรงงานไม่สำเร็จ' : 'เพิ่มโรงงานไม่สำเร็จ'));
     } finally {
       setSaving(false);
+      submitting.current = false;
     }
   }
 

@@ -3,8 +3,8 @@ import { cn } from '../../utils/cn.js';
 import { Icon } from './Icon.jsx';
 
 /**
- * Shared worklist filter-chip row — the pattern `/finance`
- * (AccountFinancePage.jsx's `STAGE_FILTERS`) already got right: one
+ * Shared worklist filter-chip row — the pattern `/finance` used to use
+ * (AccountFinancePage.jsx has since moved to a view switch plus selects): one
  * horizontal row of real buttons, each a label plus an inline count,
  * `aria-pressed` reflecting selection. Factored out here so `/tickets` (and
  * any future worklist) can use the same chip row instead of hand-rolling a

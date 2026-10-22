@@ -207,7 +207,8 @@ class DealQuotationAttachmentIntegrationTest extends AbstractDealQuotationAttach
         DealQuotationDto source = approved(ticket, salesActor);
         long file = seed(source.id(), FILE, VENDOR_QUOTE, salesActor);
         DealQuotationDto reorder = quotationService.createReorder(source.id(), salesActor);
-        DealQuotationDto sibling = quotationService.create(ticket, draft(), salesActor);
+        // N6: a deal holds one live direct quotation, so the unrelated sibling lives on another deal.
+        DealQuotationDto sibling = quotationService.create(deal(salesActor), draft(), salesActor);
         DealQuotationDto revision = quotationService.createRevision(source.id(), salesActor);
         // The premise: one copy that is not a revision, one unrelated quotation, one revision.
         assertThat(reorder.derivedFromQuotationId()).isEqualTo(source.id());

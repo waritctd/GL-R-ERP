@@ -46,7 +46,7 @@ class QuotationRolesFromResolvedPrincipalIntegrationTest extends AbstractDealDir
         assertThat(created.docStatus()).isEqualTo(QuotationStatus.DRAFT);
 
         DealQuotationDto pending = quotationService.submit(
-            quotationService.create(othersDeal, draft(), salesActor).id(), salesActor);
+            quotationService.create(deal(salesActor), draft(), salesActor).id(), salesActor); // N6: one live per deal
         assertThat(pending.docStatus()).isEqualTo(QuotationStatus.PENDING_APPROVAL);
         assertThat(quotationService.approve(pending.id(), new ApproveRequest(null), jintana).docStatus())
             .isEqualTo(QuotationStatus.APPROVED);

@@ -143,16 +143,21 @@ class StageDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void theDealOwner_isNeverOfferedTheMoneyOrImportStages_andIsRefusedOnEachOfThem() {
         long ticketId = readyToAdvanceFrom(DealStage.PRESENTATION);
+        // Sales-gated but fact-gated, so a fresh deal cannot reach them; excluded here and asserted
+        // in StageFactGateIntegrationTest. ORDER_RECEIVED and DELIVERED are fact-gated (Part B); the
+        // three quote stages since the 2026-10-16 ruling, their fact being a quotation addressed to
+        // that recipient, which this deal has none of. They stay in SALES_TARGET_STAGES on purpose:
+        // the refusal is a 409 about a missing document, not a 403 about who the rep is, which is
+        // what the FORBIDDEN loop below still asserts for the money and import stages.
+        Set<String> factGated = Set.of(DealStage.ORDER_RECEIVED, DealStage.DELIVERED,
+            DealStage.QUOTE_DESIGN_SIDE, DealStage.QUOTE_OWNER, DealStage.QUOTE_BUYER);
 
         assertThat(allowedStages(decisionsFor(ticketId, ownerRep)))
             .doesNotContain(DealStage.DEPOSIT_RECEIVED, DealStage.CLOSED_PAID, DealStage.PROCUREMENT)
             .containsExactlyInAnyOrderElementsOf(
                 DealStage.SALES_TARGET_STAGES.stream()
                     .filter(stage -> !DealStage.PRESENTATION.equals(stage))
-                    // ORDER_RECEIVED and DELIVERED are sales-gated but fact-gated (Part B), so a
-                    // fresh deal cannot reach them; they are excluded here and asserted there.
-                    .filter(stage -> !DealStage.ORDER_RECEIVED.equals(stage))
-                    .filter(stage -> !DealStage.DELIVERED.equals(stage))
+                    .filter(stage -> !factGated.contains(stage))
                     .collect(Collectors.toSet()));
 
         for (String forbidden : List.of(DealStage.DEPOSIT_RECEIVED, DealStage.CLOSED_PAID, DealStage.PROCUREMENT)) {
@@ -169,15 +174,18 @@ class StageDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void accountAndImport_areEachConfinedToTheirOwnStages() {
         long ticketId = readyToAdvanceFrom(DealStage.PRESENTATION);
+        // H1 lockdown: account only reaches a deal inside its list scope, so its half of this test runs on
+        // its own deal at ORDER_RECEIVED (S10). Import keeps the original PRESENTATION deal.
+        long accountTicketId = readyToAdvanceFrom(DealStage.ORDER_RECEIVED);
 
         // account: DEPOSIT_RECEIVED and CLOSED_PAID are both fact-gated and the facts do not hold,
         // so what account is OFFERED here is nothing — but the reason must be the fact, not a 403,
         // and every sales stage must still be a 403.
-        List<StageDecisionDto> accountDecisions = decisionsFor(ticketId, accountActor);
+        List<StageDecisionDto> accountDecisions = decisionsFor(accountTicketId, accountActor);
         assertThat(allowedStages(accountDecisions)).isEmpty();
         assertThat(reasonFor(accountDecisions, DealStage.SPEC_APPROVED)).isEqualTo("ไม่มีสิทธิ์เข้าถึงรายการนี้");
         assertThat(reasonFor(accountDecisions, DealStage.DEPOSIT_RECEIVED)).contains("ยังไม่ได้รับชำระมัดจำ");
-        assertThatThrownBy(() -> ticketService.updateStage(ticketId, DealStage.SPEC_APPROVED, "x", accountActor))
+        assertThatThrownBy(() -> ticketService.financeUpdateStage(accountTicketId, DealStage.SPEC_APPROVED, "x", accountActor))
             .isInstanceOfSatisfying(ApiException.class,
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
 
@@ -190,7 +198,9 @@ class StageDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
 
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.PRESENTATION);
+        assertThat(stageOf(accountTicketId)).isEqualTo(DealStage.ORDER_RECEIVED);
         assertThat(stageChangedEvents(ticketId)).isZero();
+        assertThat(stageChangedEvents(accountTicketId)).isZero();
     }
 
     /**
@@ -229,6 +239,8 @@ class StageDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void theFourFactGatedStages_areBlockedWithTheFactAsTheReason_forTheRoleThatMayWriteThem() {
         long ticketId = readyToAdvanceFrom(DealStage.NEGOTIATION);
+        // H1 lockdown: the two money stages are exercised by account on ITS OWN in-scope deal (S10).
+        long accountTicketId = readyToAdvanceFrom(DealStage.ORDER_RECEIVED);
 
         Map<String, UserPrincipal> byPrincipal = Map.of(
             DealStage.ORDER_RECEIVED, ownerRep,
@@ -242,23 +254,26 @@ class StageDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
             DealStage.CLOSED_PAID, "ต้องรับชำระเงินครบและส่งมอบสินค้าครบก่อน");
 
         byPrincipal.forEach((stage, actor) -> {
-            List<StageDecisionDto> decisions = decisionsFor(ticketId, actor);
+            long dealId = "account".equals(actor.role()) ? accountTicketId : ticketId;
+            List<StageDecisionDto> decisions = decisionsFor(dealId, actor);
             assertThat(allowedFor(decisions, stage)).as("%s must not be allowed", stage).isFalse();
             assertThat(reasonFor(decisions, stage)).as("reason for %s", stage)
                 .contains(expectedFragment.get(stage));
             // The advertised verb list agrees with the decision — no dead ADVANCE_STAGE.
-            assertThat(advanceTargets(ticketId, actor)).as("%s must not be advertised", stage)
+            assertThat(advanceTargets(dealId, actor)).as("%s must not be advertised", stage)
                 .doesNotContain(stage);
             // And the write really is refused, with the same message the decision carried.
-            assertThatThrownBy(() -> ticketService.updateStage(ticketId, stage, "มีเหตุผลครบ", actor))
+            assertThatThrownBy(() -> updateStageAs(dealId, stage, "มีเหตุผลครบ", actor))
                 .isInstanceOfSatisfying(ApiException.class, e -> {
                     assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
-                    assertThat(e.getMessage()).isEqualTo(reasonFor(decisionsFor(ticketId, actor), stage));
+                    assertThat(e.getMessage()).isEqualTo(reasonFor(decisionsFor(dealId, actor), stage));
                 });
         });
 
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.NEGOTIATION);
+        assertThat(stageOf(accountTicketId)).isEqualTo(DealStage.ORDER_RECEIVED);
         assertThat(stageChangedEvents(ticketId)).isZero();
+        assertThat(stageChangedEvents(accountTicketId)).isZero();
     }
 
     /**
@@ -297,16 +312,26 @@ class StageDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         List<StageDecisionDto> decisions = decisionsFor(ticketId, ownerRep);
         // Case C: S1 -> S8 crosses S2..S7, none of which is MANDATORY.
         assertThat(requiresReasonFor(decisions, DealStage.QUOTE_BUYER)).isFalse();
-        assertThat(allowedFor(decisions, DealStage.QUOTE_BUYER)).isTrue();
+        // …and since the 2026-10-16 ruling it is also not currently REACHABLE, because no
+        // quotation has been addressed to the buyer yet. The two facts are independent, which is
+        // this suite's own established principle (see
+        // requiresReasonIsReportedEvenForAStageTheCallerMayNotReach): requiresReason answers "what
+        // would this move cost", not "may I make it". Case C itself is unaffected — the deal still
+        // opens at S8, by quoting the buyer rather than by this call, which
+        // StageFactGateIntegrationTest's caseC_aDealThatOpensStraightAtQuoteBuyer_isUnaffected walks.
+        assertThat(allowedFor(decisions, DealStage.QUOTE_BUYER)).isFalse();
         // Case B (owner buys direct) and Case D (all from stock) cross nothing mandatory either.
         assertThat(requiresReasonFor(decisions, DealStage.QUOTE_OWNER)).isFalse();
         assertThat(requiresReasonFor(decisions, DealStage.AWAITING_BUYER)).isFalse();
         // …but stepping over NEGOTIATION (S9), which every route has in common, does.
         assertThat(requiresReasonFor(decisions, DealStage.DELIVERY_SCHEDULING)).isTrue();
 
-        // The decision is honoured on the write, in both directions.
-        ticketService.updateStage(ticketId, DealStage.QUOTE_BUYER, null, ownerRep);
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.QUOTE_BUYER);
+        // The decision is honoured on the write, in both directions. The no-reason direction uses
+        // AWAITING_BUYER (S7): asserted requiresReason-false just above, skips only route-dependent
+        // stages, and is not fact-gated — so it still demonstrates the note rule's permissive side
+        // now that S8 needs a document first.
+        ticketService.updateStage(ticketId, DealStage.AWAITING_BUYER, null, ownerRep);
+        assertThat(stageOf(ticketId)).isEqualTo(DealStage.AWAITING_BUYER);
 
         logAnActivityAndFollowUp(ticketId);
         assertThatThrownBy(() ->
@@ -315,7 +340,7 @@ class StageDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
                 assertThat(e.getMessage()).isEqualTo("การข้ามขั้นตอนต้องระบุเหตุผล");
             });
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.QUOTE_BUYER);
+        assertThat(stageOf(ticketId)).isEqualTo(DealStage.AWAITING_BUYER);
     }
 
     /**
@@ -433,12 +458,24 @@ class StageDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
+    // H1 lockdown: account reads its stage decisions through financeActions (same gates, no /tickets view
+    // check) and writes a money stage through financeUpdateStage; every other role is unchanged.
     private List<StageDecisionDto> decisionsFor(long ticketId, UserPrincipal actor) {
-        return ticketService.actions(ticketId, actor).stageDecisions();
+        return actionsFor(ticketId, actor).stageDecisions();
     }
 
     private TicketActionsResponse actionsFor(long ticketId, UserPrincipal actor) {
-        return ticketService.actions(ticketId, actor);
+        return "account".equals(actor.role())
+            ? ticketService.financeActions(ticketId, actor)
+            : ticketService.actions(ticketId, actor);
+    }
+
+    private void updateStageAs(long ticketId, String stage, String note, UserPrincipal actor) {
+        if ("account".equals(actor.role())) {
+            ticketService.financeUpdateStage(ticketId, stage, note, actor);
+        } else {
+            ticketService.updateStage(ticketId, stage, note, actor);
+        }
     }
 
     private Set<String> actionNames(long ticketId, UserPrincipal actor) {

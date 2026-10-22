@@ -289,7 +289,7 @@ export function hasMeaningfulDraftData(snapshot) {
   const title = (snapshot.dealTitle || '').trim();
   const note = (snapshot.note || '').trim();
   if (title || note) return true;
-  if (snapshot.customer || snapshot.project || snapshot.contact) return true;
+  if (snapshot.customer || snapshot.project) return true;
   if (snapshot.entryChannel) return true;
   if (Array.isArray(snapshot.items) && snapshot.items.length > 0) return true;
   return false;

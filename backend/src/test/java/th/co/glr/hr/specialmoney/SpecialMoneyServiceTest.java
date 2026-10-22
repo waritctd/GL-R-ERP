@@ -375,7 +375,9 @@ class SpecialMoneyServiceTest {
         when(repository.findUsage(eq(10L), anyInt())).thenReturn(emptyUsage());
         when(repository.findPolicyAmounts(eq("AID_WEDDING"), any(LocalDate.class))).thenReturn(weddingPolicy());
         when(repository.findExcludedProvinces()).thenReturn(Set.of());
-        LocalDate expectedMonth = LocalDate.now().withDayOfMonth(1);
+        // The service assigns the month from the Bangkok date. LocalDate.now() (JVM default, UTC on
+        // CI) disagrees from 17:00-24:00 UTC on a month's last day, and the stub below then misses.
+        LocalDate expectedMonth = LocalDate.now(SpecialMoneyService.BUSINESS_ZONE).withDayOfMonth(1);
         when(repository.payrollMonthProcessed(expectedMonth)).thenReturn(false);
         when(repository.ceoApprove(eq(77L), eq(500L), any(), eq(expectedMonth), any(), any())).thenReturn(1);
 
@@ -394,7 +396,7 @@ class SpecialMoneyServiceTest {
         when(repository.findUsage(eq(10L), anyInt())).thenReturn(emptyUsage());
         when(repository.findPolicyAmounts(eq("AID_WEDDING"), any(LocalDate.class))).thenReturn(weddingPolicy());
         when(repository.findExcludedProvinces()).thenReturn(Set.of());
-        LocalDate thisMonth = LocalDate.now().withDayOfMonth(1);
+        LocalDate thisMonth = LocalDate.now(SpecialMoneyService.BUSINESS_ZONE).withDayOfMonth(1);
         LocalDate nextMonth = thisMonth.plusMonths(1);
         when(repository.payrollMonthProcessed(thisMonth)).thenReturn(true);
         when(repository.payrollMonthProcessed(nextMonth)).thenReturn(false);

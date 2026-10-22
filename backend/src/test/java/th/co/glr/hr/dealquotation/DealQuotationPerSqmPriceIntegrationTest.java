@@ -323,7 +323,7 @@ class DealQuotationPerSqmPriceIntegrationTest extends AbstractDealDirectQuotatio
         long ticket = deal(salesActor);
         UpsertDealQuotationRequest english = new UpsertDealQuotationRequest(null, null, null, null, 50,
             "CASH_ON_DELIVERY", 0, 30, null, NET, "EN", "USD",
-            List.of(item("60x120", "0.72", 2, "15.00", "0", null, "1800", null)));
+            List.of(item("60x120", "0.72", 2, "15.00", "0", null, "1800", null))).withRecipientType("OWNER");
 
         // The row ALSO states a perfectly good per-piece price, so nothing but the per-ตร.ม. figure
         // can be what is refused here.

@@ -25,5 +25,8 @@ public record SalesRepCommissionSummaryDto(
     // commissionAmount above. ZERO for every rep until the CEO enables sales.stock_bonus_config
     // (ships config-gated OFF) and ZERO when the rep already carries an approved MANUAL
     // STOCK_BONUS entry for the month (same double-count guard as incentiveAmount above).
-    BigDecimal stockBonusAmount
+    BigDecimal stockBonusAmount,
+    // Manager team override (V199), already folded into commissionAmount above. ZERO unless this
+    // rep is a configured recipient.
+    BigDecimal teamOverrideAmount
 ) {}

@@ -1,7 +1,7 @@
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { SALES_ENABLED } from '../../app/features.js';
-import { hasPermission, isDivisionManager, isQuotationReleaseUser, isSelfServiceLocked } from '../../app/permissions.js';
+import { hasPermission, isDivisionManager, isQuotationReleaseUser, isReleasedPath, isSelfServiceLocked } from '../../app/permissions.js';
 import { PRODUCT_NAME } from '../../app/product.js';
 import { cn } from '../../utils/cn.js';
 import { roleLabel } from '../../utils/format.js';
@@ -211,16 +211,20 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     // neighbour already owns that glyph, and the chain ends at the warehouse.
     { path: '/fulfilment', label: 'งานนำเข้า', helper: 'Import fulfilment worklist', icon: 'building', group: 'sales', show: hasPermission(user.role, 'canActOnFulfilment') && SALES_ENABLED },
     // Account has NO ค่าคอมมิชชัน nav item (finalized Account design, owner-confirmed
-    // 2026-07-24): the invoice+commission step (บันทึกใบกำกับ + ออกค่าคอม / create-from-deal
+    // 2026-07-24): the invoice+commission step (บันทึกใบกำกับ / create-from-deal
     // at close) is the LAST STAGE of the งานการเงิน money lifecycle + the Overview worklist
-    // (รับมัดจำ → รับชำระส่วนที่เหลือ → ยืนยันพร้อมปิดงาน → บันทึกใบกำกับ + ออกค่าคอม), not a
+    // (รับมัดจำ → รับชำระส่วนที่เหลือ → ยืนยันพร้อมปิดงาน → บันทึกใบกำกับ), not a
     // standalone menu. The /commissions ROUTE stays reachable (canViewCommissions still
-    // includes account) so the งานการเงิน worklist row can deep-link /commissions?ticketId=NN
-    // into the create-from-deal flow; account has no list access (canListCommissionRecords
+    // includes account) so /commissions?ticketId=NN still deep-links into the create-from-deal
+    // flow (the งานการเงิน deal page now records the invoice in-page via RECORD_INVOICE); account has no list access (canListCommissionRecords
     // excludes it — GET /api/commissions is sales/sales_manager/ceo only).
     { path: '/commissions', label: 'ค่าคอมมิชชัน', helper: 'Commissions', icon: 'badgeDollar', group: 'sales', show: hasPermission(user.role, 'canViewCommissions') && SALES_ENABLED && user.role !== 'account' },
     // Account's money-lifecycle worklist (Account role-scoped views): deposit
     // -> final payment -> close-ready -> record-invoice/commission, one page.
+    // Deliberately NOT OR'd with the per-employee canIssueBillingNote grant (GLA-129) yet — see
+    // permissions.js's isBillingNoteReleaseUser for why: the grant is wired into this nav item,
+    // the PATH_GUARDS entry, and AccountFinancePage.jsx's own tab scoping together, on the branch
+    // that adds the scoping.
     { path: '/finance', label: 'งานการเงิน', helper: 'Finance worklist', icon: 'badgeDollar', group: 'finance', show: hasPermission(user.role, 'canConfirmPayments') && SALES_ENABLED },
     { path: '/hr', label: 'ภาพรวม HR', helper: 'HR overview', icon: 'home', group: 'hr', show: hasPermission(user.role, 'canViewEmployees') },
     { path: '/employees', label: 'พนักงานทั้งหมด', helper: 'Employees', icon: 'users', group: 'hr', show: hasPermission(user.role, 'canViewEmployees') },
@@ -299,7 +303,10 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     // twin of permissions.js's quotation-release path exemption, keyed on the same predicate so
     // the two cannot disagree. It keeps its 'sales' group, so that header shows with this one item.
     .filter((item) => !navLocked || !item.group || item.group === 'self'
-      || (item.path === '/quotations' && isQuotationReleaseUser(user)));
+      || (item.path === '/quotations' && isQuotationReleaseUser(user))
+      // Sales release (owner ruling 2026-10-22): import's งานนำเข้า + คิวขอราคา and account's
+      // งานการเงิน survive the lock — the same allowlist canAccessPath applies.
+      || isReleasedPath(item.path, user));
 
   const closeTopbarPopover = useCallback(() => setActiveTopbarPopover(null), []);
   const closeDrawer = useCallback(() => setIsDrawerOpen(false), []);

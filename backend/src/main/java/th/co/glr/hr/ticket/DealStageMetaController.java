@@ -1,5 +1,6 @@
 package th.co.glr.hr.ticket;
 
+import java.util.List;
 import java.util.Map;
 import jakarta.servlet.http.HttpSession;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -61,7 +62,28 @@ public class DealStageMetaController {
                 .toList(),
             "phases", DealStage.ORDER.stream().map(DealStage::phaseOf).distinct().sorted().toList(),
             "lostReasons", DealLostReason.ORDER,
-            "cancelReasons", DealCancelReason.ORDER);
+            "cancelReasons", DealCancelReason.ORDER,
+            "routes", routes());
+    }
+
+    /**
+     * Every {@link EntryChannel}'s route, as ordered stage CODES — {@link DealRoute#path} verbatim,
+     * never a table re-declared here. Served so a deal LIST row, which carries
+     * {@code deal.entryChannel} but no per-deal decision payload, can print its position on its own
+     * route ("ขั้นตอน 4/11") without an N+1 fetch of {@code GET /api/tickets/{id}/actions} — the
+     * hazard {@code TicketService.stageDecisions}' Javadoc warns about. Codes only, like the rest
+     * of this endpoint: the route names and stage wording stay with the client.
+     *
+     * <p>{@code UNSPECIFIED} is listed explicitly and maps to all fifteen stages ({@code DealRoute}
+     * gives it, an unknown value and {@code null} an empty off-route set), so a client keyed by a
+     * row's stored channel never needs a "missing key" special case for it.
+     */
+    private static Map<String, List<String>> routes() {
+        return Map.of(
+            EntryChannel.DESIGNER_LED, DealRoute.path(EntryChannel.DESIGNER_LED),
+            EntryChannel.OWNER_DIRECT, DealRoute.path(EntryChannel.OWNER_DIRECT),
+            EntryChannel.BUYER_DIRECT, DealRoute.path(EntryChannel.BUYER_DIRECT),
+            EntryChannel.UNSPECIFIED, DealRoute.path(EntryChannel.UNSPECIFIED));
     }
 
     /**

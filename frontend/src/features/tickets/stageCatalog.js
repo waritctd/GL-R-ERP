@@ -28,7 +28,7 @@ import { assertStageLabelsComplete } from './stageMeta.js';
  * nothing) for the one frame it takes to arrive.
  */
 export const EMPTY_STAGE_CATALOG = Object.freeze({
-  stages: [], phases: [], lostReasons: [], cancelReasons: [],
+  stages: [], phases: [], lostReasons: [], cancelReasons: [], routes: {},
 });
 
 /**
@@ -67,6 +67,8 @@ function normalizeCatalog(data) {
     phases: data?.phases ?? [],
     lostReasons: data?.lostReasons ?? [],
     cancelReasons: data?.cancelReasons ?? [],
+    // entryChannel -> ordered stage codes (DealRoute.path). Absent on an older backend.
+    routes: data?.routes ?? {},
   };
 }
 
@@ -95,4 +97,96 @@ export function stagesInPhase(catalog, phaseId) {
 /** The phase id a stage belongs to, or null. */
 export function phaseIdOf(catalog, code) {
   return findStage(catalog, code)?.phase ?? null;
+}
+
+// ── Route-aware lookups ────────────────────────────────────────────────────────────────────────
+// A deal's entry channel decides which of the fifteen stages it visits (DealRoute.java). The
+// backend serves that verdict per stage as `onRoute` on GET /api/tickets/{id}/actions
+// (`stageDecisions`); the functions below only READ it — they never derive a route from a channel
+// name, so there is no second copy of DealRoute's tables to drift.
+//
+// Only an explicit `onRoute: false` takes a stage off the path. A missing decision, a decision
+// without the field (an older backend, a mock), or no decisions at all leave every stage on-route,
+// which is exactly today's behaviour.
+
+/** Codes the server marked `onRoute: false` for this deal. */
+function offRouteCodes(stageDecisions) {
+  return new Set(
+    (stageDecisions ?? []).filter((decision) => decision?.onRoute === false).map((d) => d.stage),
+  );
+}
+
+/** The stages this deal's route visits, in catalog order (never re-ordered). */
+export function routePath(catalog, stageDecisions) {
+  const off = offRouteCodes(stageDecisions);
+  return (catalog?.stages ?? []).filter((stage) => !off.has(stage.code));
+}
+
+/**
+ * "Which step of how many, on THIS deal's route" — the honest replacement for the catalog-wide
+ * `index + 1` / `stages.length`. `position` counts the on-route stages up to and including the
+ * current one, so a deal sitting on an off-route stage (channel corrected after it got there)
+ * reads as the number of on-route stages it has passed, never 0 and never past `total`.
+ * An unknown code has position 0.
+ */
+export function routePosition(catalog, salesStage, stageDecisions) {
+  const stages = catalog?.stages ?? [];
+  const off = offRouteCodes(stageDecisions);
+  const total = stages.filter((stage) => !off.has(stage.code)).length;
+  const currentIdx = stageIndexIn(catalog, salesStage);
+  if (currentIdx < 0) return { position: 0, total };
+  const passed = stages.slice(0, currentIdx + 1).filter((stage) => !off.has(stage.code)).length;
+  return { position: Math.min(Math.max(passed, 1), Math.max(total, 1)), total };
+}
+
+/**
+ * The next stage on this deal's route, or null at the end (and for an unknown code). Same contract
+ * as nextStageIn — which is left untouched for its other caller — except it steps over off-route
+ * stages. A lookup, not a permission: whether the user may actually move there is still the
+ * server's verdict on that stage's decision.
+ */
+export function nextOnRoute(catalog, salesStage, stageDecisions) {
+  const stages = catalog?.stages ?? [];
+  const idx = stageIndexIn(catalog, salesStage);
+  if (idx < 0) return null;
+  const off = offRouteCodes(stageDecisions);
+  return stages.slice(idx + 1).find((stage) => !off.has(stage.code)) ?? null;
+}
+
+// ── Route lookups by ENTRY CHANNEL (for rows that have no per-deal decisions) ──────────────────
+// A deal LIST row carries `deal.entryChannel` but not the per-deal `stageDecisions` payload above,
+// and fetching one per row would be an N+1 on the hottest sales endpoint. So the backend also
+// serves each channel's route as `catalog.routes` (GET /api/meta/deal-stages -> DealRoute.path).
+// These functions only READ that served data; the route table lives in DealRoute.java, and
+// stageCatalog.test.js pins the mock fixture against it.
+//
+// Anything without a served route — `routes` absent (older backend), an unknown channel, a null
+// channel — is the full pipeline, which is what a deal with no stated route has (UNSPECIFIED gates
+// nothing on the server either).
+
+/** The stages this channel's route visits, as catalog rows in catalog order; all stages if unserved. */
+export function routeForChannel(catalog, entryChannel) {
+  const stages = catalog?.stages ?? [];
+  const served = entryChannel == null ? null : catalog?.routes?.[entryChannel];
+  if (!Array.isArray(served) || served.length === 0) return stages;
+  const codes = new Set(served);
+  return stages.filter((stage) => codes.has(stage.code));
+}
+
+/**
+ * "Which step of how many, on this CHANNEL's route" — routePosition's contract, keyed by channel
+ * instead of per-deal decisions. `position` counts the route's stages up to and including the
+ * current one (so a deal sitting on a since-off-route stage reads as the on-route stages it has
+ * passed, never 0 and never past `total`); an unknown stage code is position 0.
+ */
+export function routePositionForChannel(catalog, salesStage, entryChannel) {
+  const route = routeForChannel(catalog, entryChannel);
+  const total = route.length;
+  const currentIdx = stageIndexIn(catalog, salesStage);
+  if (currentIdx < 0) return { position: 0, total };
+  const onRoute = new Set(route.map((stage) => stage.code));
+  const passed = (catalog?.stages ?? [])
+    .slice(0, currentIdx + 1)
+    .filter((stage) => onRoute.has(stage.code)).length;
+  return { position: Math.min(Math.max(passed, 1), Math.max(total, 1)), total };
 }

@@ -1,6 +1,7 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DealCustomerCard } from './DealCustomerCard.jsx';
 import data from '../../data/thai-locations.json';
@@ -10,9 +11,15 @@ globalThis.React = React;
 
 vi.mock('../../api/index.js', async (importOriginal) => {
   const actual = await importOriginal();
+  // Imported inside the factory, not at the top of the file: vi.mock is hoisted above every import.
+  const { DEAL_STAGE_CATALOG } = await import('../../data/dealStageCatalog.js');
   return {
     ...actual,
     api: {
+      // The ผู้รับ field reads the deal's route (owner ruling 2026-09-30 #1) from the served stage
+      // catalog — the SAME canned payload mockApi serves (data/dealStageCatalog.js, pinned against
+      // DealStage.java / DealRoute.java by stageCatalog.test.js), never a fixture of its own.
+      meta: { dealStages: vi.fn().mockResolvedValue(DEAL_STAGE_CATALOG) },
       locations: { provinces: vi.fn(), districts: vi.fn(), subdistricts: vi.fn() },
       customers: {
         search: vi.fn(),
@@ -23,6 +30,9 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         createContact: vi.fn(),
         update: vi.fn(),
       },
+      // Slice 2: the "เลือกดีลที่มีอยู่" branch mounts DealPicker, which reads the deal list.
+      tickets: { list: vi.fn() },
+      dealQuotations: { createRevision: vi.fn() },
     },
   };
 });
@@ -39,9 +49,9 @@ function wrap(ui) {
   return <QueryClientProvider client={client}>{ui}</QueryClientProvider>;
 }
 
-function Harness({ initial, showToast = vi.fn() }) {
+function Harness({ initial, showToast = vi.fn(), errors }) {
   const [value, setValue] = React.useState(initial ?? { customer: null, project: null, contact: null, entryChannel: 'UNSPECIFIED' });
-  return <DealCustomerCard value={value} onChange={(patch) => setValue((prev) => ({ ...prev, ...patch }))} showToast={showToast} />;
+  return <DealCustomerCard value={value} onChange={(patch) => setValue((prev) => ({ ...prev, ...patch }))} showToast={showToast} errors={errors} />;
 }
 
 describe('DealCustomerCard', () => {
@@ -212,15 +222,37 @@ describe('DealCustomerCard', () => {
     expect(screen.getByPlaceholderText('บริษัท … จำกัด').value).toBe('บริษัท ซ้ำ จำกัด');
   });
 
-  it('ช่องทางรับงาน defaults to ไม่ระบุ and toggles to the picked code on click', () => {
+  // ยังไม่ระบุช่องทาง is a stored default, never a choice: the rep picks one of the three real channels.
+  it('ช่องทางรับงาน offers only the three real channels — no ไม่ระบุ option', () => {
     render(wrap(<Harness />));
-    const unspecified = screen.getByRole('button', { name: /ไม่ระบุ/ });
-    expect(unspecified.getAttribute('aria-pressed')).toBe('true');
+    expect(screen.queryByRole('button', { name: /ไม่ระบุ/ })).toBeNull();
+    expect(screen.getAllByRole('button').filter((b) => b.hasAttribute('aria-pressed'))).toHaveLength(3);
+  });
 
-    const designerLed = screen.getAllByRole('button').find((b) => b.textContent.includes('ผู้ออกแบบ'));
+  it('ช่องทางรับงาน starts with nothing pressed and toggles to the picked code on click', () => {
+    render(wrap(<Harness />));
+    const channels = screen.getAllByRole('button').filter((b) => b.hasAttribute('aria-pressed'));
+    expect(channels.every((b) => b.getAttribute('aria-pressed') === 'false')).toBe(true);
+
+    const designerLed = channels.find((b) => b.textContent.includes('ผู้ออกแบบ'));
     fireEvent.click(designerLed);
     expect(designerLed.getAttribute('aria-pressed')).toBe('true');
-    expect(unspecified.getAttribute('aria-pressed')).toBe('false');
+    const buyer = channels.find((b) => b.textContent.includes('ผู้ซื้อ'));
+    fireEvent.click(buyer);
+    expect(buyer.getAttribute('aria-pressed')).toBe('true');
+    expect(designerLed.getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('ช่องทางรับงาน shows the inline hint when told it is missing, and exposes the control the checklist targets', () => {
+    render(wrap(<Harness errors={{ entryChannel: 'ต้องเลือกช่องทางรับงานก่อนบันทึกร่าง' }} />));
+    expect(screen.getByText('ต้องเลือกช่องทางรับงานก่อนบันทึกร่าง')).not.toBeNull();
+    expect(document.getElementById('deal-entry-channel')).not.toBeNull();
+  });
+
+  it('ช่องทางรับงาน shows no hint when there is no error', () => {
+    render(wrap(<Harness />));
+    expect(screen.queryByText('ต้องเลือกช่องทางรับงานก่อนบันทึกร่าง')).toBeNull();
+    expect(document.getElementById('deal-entry-channel')).not.toBeNull();
   });
 
   // ── F7 (owner, 2026-09-10): เลขที่ผู้เสียภาษี / โทร. on the SELECTED customer ────────────────
@@ -432,6 +464,204 @@ describe('DealCustomerCard — ที่อยู่ on the selected customer', 
     fireEvent.blur(address);
     await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'ไม่มีสิทธิ์เข้าถึงรายการนี้'));
     await waitFor(() => expect(screen.getByLabelText(/^ที่อยู่/).value).toBe(repeat.address));
+  });
+});
+
+// ── Slice 2 — flow A (SLICE-2-FLOW-A.md §A) ────────────────────────────────────────────────────
+// The card becomes step 1 "ดีล": a segmented choice (เลือกดีลที่มีอยู่ | สร้างดีลใหม่) over the
+// DealPicker / today's customer+project card, then ผู้รับใบเสนอราคา* (three pill radios, required,
+// in S-order). The spec's live "ดีลจะอยู่ที่ขั้น …" helper line was dropped by owner ruling
+// 2026-09-30 (the recipient no longer moves the deal's stage in slice 2).
+describe('DealCustomerCard — ดีล step (slice 2)', () => {
+  const salesUser = { id: 6, name: 'คุณสมหมาย ขายดี', role: 'sales' };
+
+  function ModeHarness({ initialMode = 'pick', initialValue, errors, onModeChange }) {
+    const [mode, setMode] = React.useState(initialMode);
+    const [value, setValue] = React.useState(initialValue
+      ?? { customer: null, project: null, entryChannel: 'UNSPECIFIED', recipientType: '' });
+    return (
+      <DealCustomerCard
+        user={salesUser}
+        mode={mode}
+        onModeChange={(next) => { onModeChange?.(next); setMode(next); }}
+        selectedDeal={null}
+        value={value}
+        onChange={(patch) => setValue((prev) => ({ ...prev, ...patch }))}
+        errors={errors}
+        showToast={vi.fn()}
+      />
+    );
+  }
+
+  function renderCard(props) {
+    return render(wrap(<MemoryRouter initialEntries={['/quotations/new']}><ModeHarness {...props} /></MemoryRouter>));
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.tickets.list.mockResolvedValue({ tickets: [] });
+    api.customers.projects.mockResolvedValue({ projects: [] });
+  });
+
+  it('is titled "ดีล" and opens on เลือกดีลที่มีอยู่: the deal search, no customer/project fields, no ช่องทางรับงาน', async () => {
+    renderCard();
+    expect(screen.getByRole('heading', { name: 'ดีล' })).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'เลือกดีลที่มีอยู่' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: 'สร้างดีลใหม่' }).getAttribute('aria-pressed')).toBe('false');
+    expect(await screen.findByRole('combobox', { name: /ดีล/ })).not.toBeNull();
+    expect(screen.queryByLabelText(/^ลูกค้า/)).toBeNull();
+    expect(screen.queryByText('ช่องทางรับงาน')).toBeNull();
+  });
+
+  it('สร้างดีลใหม่ swaps in today\'s customer + project card and ช่องทางรับงาน (reports the choice upward)', async () => {
+    const onModeChange = vi.fn();
+    renderCard({ onModeChange });
+    fireEvent.click(screen.getByRole('button', { name: 'สร้างดีลใหม่' }));
+    expect(onModeChange).toHaveBeenCalledWith('create');
+    expect(screen.getByRole('button', { name: 'สร้างดีลใหม่' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByLabelText(/^ลูกค้า/)).not.toBeNull();
+    expect(screen.getByText('ช่องทางรับงาน')).not.toBeNull();
+    expect(screen.queryByRole('combobox', { name: /^ดีล/ })).toBeNull();
+  });
+
+  it.each([['pick'], ['create']])('ผู้รับใบเสนอราคา is offered on the %s branch: three radios in S-order, none chosen', (initialMode) => {
+    renderCard({ initialMode });
+    const group = screen.getByRole('radiogroup', { name: 'ผู้รับใบเสนอราคา' });
+    const radios = within(group).getAllByRole('radio');
+    expect(radios.map((r) => r.textContent)).toEqual(['ผู้ออกแบบ', 'เจ้าของโครงการ', 'ผู้ซื้อ / ผู้รับเหมา']);
+    expect(radios.map((r) => r.getAttribute('aria-checked'))).toEqual(['false', 'false', 'false']);
+    expect(group.getAttribute('aria-required')).toBe('true');
+  });
+
+  it('choosing one checks it (and only it); the field promises no stage move', () => {
+    renderCard();
+    fireEvent.click(screen.getByRole('radio', { name: 'เจ้าของโครงการ' }));
+    expect(screen.getByRole('radio', { name: 'เจ้าของโครงการ' }).getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(screen.getByRole('radio', { name: 'ผู้ซื้อ / ผู้รับเหมา' }));
+    expect(screen.getAllByRole('radio').map((r) => r.getAttribute('aria-checked'))).toEqual(['false', 'false', 'true']);
+    // Owner ruling 2026-09-30 (slice-2 scope reduction): no "ดีลจะอยู่ที่ขั้น …" line — the recipient
+    // no longer moves the deal's stage, so the field must not say it will. And no S-codes (§18).
+    expect(screen.queryByText(/ดีลจะอยู่ที่ขั้น|ดีลอยู่ที่ขั้น/)).toBeNull();
+    expect(document.body.textContent).not.toMatch(/\bS\d+\b|QUOTE_/);
+  });
+
+  it('on a new deal the recipient pills sit BELOW the required ช่องทางรับงาน row (#1085 + slice 2)', () => {
+    renderCard({ initialMode: 'create' });
+    const channel = screen.getByRole('group', { name: 'ช่องทางรับงาน' });
+    const recipient = screen.getByRole('radiogroup', { name: 'ผู้รับใบเสนอราคา' });
+    expect(channel.compareDocumentPosition(recipient) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // #1085: UNSPECIFIED is not a pickable channel.
+    expect(within(channel).getAllByRole('button')).toHaveLength(3);
+  });
+
+  it('arrow keys move the choice inside the group (radiogroup keyboard pattern)', () => {
+    renderCard({ initialValue: { customer: null, project: null, entryChannel: 'UNSPECIFIED', recipientType: 'DESIGNER' } });
+    const designer = screen.getByRole('radio', { name: 'ผู้ออกแบบ' });
+    expect(designer.getAttribute('tabindex')).toBe('0');
+    expect(screen.getByRole('radio', { name: 'เจ้าของโครงการ' }).getAttribute('tabindex')).toBe('-1');
+    fireEvent.keyDown(designer, { key: 'ArrowRight' });
+    expect(screen.getByRole('radio', { name: 'เจ้าของโครงการ' }).getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('the required error renders in the field\'s own error slot and marks the group invalid', () => {
+    renderCard({ errors: { recipient: 'กรุณาเลือกผู้รับใบเสนอราคา' } });
+    expect(screen.getByRole('alert').textContent).toBe('กรุณาเลือกผู้รับใบเสนอราคา');
+    expect(screen.getByRole('radiogroup', { name: 'ผู้รับใบเสนอราคา' }).getAttribute('aria-invalid')).toBe('true');
+  });
+
+  // Owner ruling 2026-09-30 #1 — off-route recipient: ALLOW + inline note. All three pills stay
+  // selectable on every deal; when the chosen recipient's quote stage is not on the deal's route
+  // (read from the served catalog via routeForChannel), a quiet info line says so. No block, no modal.
+  // On the new-deal card the deal's channel is the one being chosen on that card.
+  describe('off-route recipient note (owner ruling #1)', () => {
+    const OFF_ROUTE_NOTE = 'ผู้รับนี้ไม่อยู่ในเส้นทางของดีล — ขั้นของดีลจะไม่ขยับ';
+
+    function createValue(entryChannel, recipientType) {
+      return { customer: null, project: null, entryChannel, recipientType };
+    }
+
+    it.each([
+      ['OWNER_DIRECT', 'DESIGNER'],
+      ['BUYER_DIRECT', 'DESIGNER'],
+      ['BUYER_DIRECT', 'OWNER'],
+    ])('new deal on %s with recipient %s: the note shows, as a status line under the pills', async (entryChannel, recipientType) => {
+      renderCard({ initialMode: 'create', initialValue: createValue(entryChannel, recipientType) });
+      const note = await screen.findByText(OFF_ROUTE_NOTE);
+      expect(note.closest('[role="status"]')).not.toBeNull();
+      const group = screen.getByRole('radiogroup', { name: 'ผู้รับใบเสนอราคา' });
+      expect(group.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    it.each([
+      ['DESIGNER_LED', 'DESIGNER'], ['DESIGNER_LED', 'OWNER'], ['DESIGNER_LED', 'BUYER'],
+      ['OWNER_DIRECT', 'OWNER'], ['OWNER_DIRECT', 'BUYER'],
+      ['BUYER_DIRECT', 'BUYER'],
+      ['UNSPECIFIED', 'DESIGNER'],
+    ])('new deal on %s with recipient %s: on-route (or no stated route) — no note', async (entryChannel, recipientType) => {
+      renderCard({ initialMode: 'create', initialValue: createValue(entryChannel, recipientType) });
+      // Let the catalog query settle before asserting absence.
+      await waitFor(() => expect(api.meta.dealStages).toHaveBeenCalled());
+      await new Promise((resolve) => { setTimeout(resolve, 0); });
+      expect(screen.queryByText(OFF_ROUTE_NOTE)).toBeNull();
+    });
+
+    it('never blocks: on a buyer-direct deal every recipient pill stays enabled and pickable', async () => {
+      renderCard({ initialMode: 'create', initialValue: createValue('BUYER_DIRECT', '') });
+      const radios = within(screen.getByRole('radiogroup', { name: 'ผู้รับใบเสนอราคา' })).getAllByRole('radio');
+      radios.forEach((radio) => expect(radio.disabled).toBe(false));
+      fireEvent.click(screen.getByRole('radio', { name: 'ผู้ออกแบบ' }));
+      expect(screen.getByRole('radio', { name: 'ผู้ออกแบบ' }).getAttribute('aria-checked')).toBe('true');
+      expect(await screen.findByText(OFF_ROUTE_NOTE)).not.toBeNull();
+      // Picking an on-route recipient clears it.
+      fireEvent.click(screen.getByRole('radio', { name: 'ผู้ซื้อ / ผู้รับเหมา' }));
+      await waitFor(() => expect(screen.queryByText(OFF_ROUTE_NOTE)).toBeNull());
+    });
+
+    it('changing the new deal\'s channel re-evaluates the note against the NEW route', async () => {
+      renderCard({ initialMode: 'create', initialValue: createValue('DESIGNER_LED', 'DESIGNER') });
+      await waitFor(() => expect(api.meta.dealStages).toHaveBeenCalled());
+      expect(screen.queryByText(OFF_ROUTE_NOTE)).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'เจ้าของติดต่อโดยตรง' }));
+      expect(await screen.findByText(OFF_ROUTE_NOTE)).not.toBeNull();
+    });
+  });
+});
+
+describe('DealCustomerCard — off-route note on a PICKED deal (owner ruling #1)', () => {
+  const OFF_ROUTE_NOTE = 'ผู้รับนี้ไม่อยู่ในเส้นทางของดีล — ขั้นของดีลจะไม่ขยับ';
+  const salesUser = { id: 6, name: 'คุณสมหมาย ขายดี', role: 'sales' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.tickets.list.mockResolvedValue({ tickets: [] });
+  });
+
+  function renderPicked(selectedDeal, recipientType) {
+    return render(wrap(
+      <MemoryRouter initialEntries={['/quotations/new?ticket=18']}>
+        <DealCustomerCard
+          user={salesUser}
+          mode="pick"
+          onModeChange={vi.fn()}
+          selectedDeal={selectedDeal}
+          value={{ customer: null, project: null, entryChannel: 'UNSPECIFIED', recipientType }}
+          onChange={vi.fn()}
+          showToast={vi.fn()}
+        />
+      </MemoryRouter>,
+    ));
+  }
+
+  it('reads the PICKED deal\'s own channel: an owner-direct deal + ผู้ออกแบบ shows the note', async () => {
+    renderPicked({ id: 18, code: 'DL-2026-0018', customerName: 'ก', salesStage: 'PRESENTATION', entryChannel: 'OWNER_DIRECT' }, 'DESIGNER');
+    expect(await screen.findByText(OFF_ROUTE_NOTE)).not.toBeNull();
+  });
+
+  it('a designer-led deal + ผู้ออกแบบ: no note', async () => {
+    renderPicked({ id: 18, code: 'DL-2026-0018', customerName: 'ก', salesStage: 'PRESENTATION', entryChannel: 'DESIGNER_LED' }, 'DESIGNER');
+    await waitFor(() => expect(api.meta.dealStages).toHaveBeenCalled());
+    await new Promise((resolve) => { setTimeout(resolve, 0); });
+    expect(screen.queryByText(OFF_ROUTE_NOTE)).toBeNull();
   });
 });
 

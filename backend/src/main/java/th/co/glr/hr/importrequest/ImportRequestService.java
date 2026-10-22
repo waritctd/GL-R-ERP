@@ -244,12 +244,19 @@ public class ImportRequestService {
             .map(ImportRequestDto::factoryId)
             .collect(Collectors.toSet());
 
+        // CR-1 (D, B-R4/B-R5): each factory's IR takes the lead time on the deal's current QUOTATION items.
+        List<ImportRequestQueryRepository.QuotationLeadTimeRow> quotationLeadTimes =
+            repository.currentQuotationLeadTimes(ticketId);
         int created = 0;
         for (FactoryGroup group : groups) {
             if (alreadyCovered.contains(group.factoryId())) {
                 continue;
             }
-            LeadTimeDefaults.Range leadTime = LeadTimeDefaults.forCountry(group.countryCode());
+            LeadTimeDefaults.Range derived = leadTimeFromQuotation(quotationLeadTimes, group.factoryId(), group.items());
+            LeadTimeDefaults.Range leadTime = derived;
+            if (leadTime == null) {
+                leadTime = LeadTimeDefaults.forCountry(group.countryCode());
+            }
             long id = stored.insertDraft(ticketId, group.factoryId(), group.factoryName(),
                 group.brandLabel(), stored.highestVersion(ticketId, group.factoryId()) + 1,
                 snapshot, leadTime == null ? null : leadTime.minDays(),
@@ -258,6 +265,9 @@ public class ImportRequestService {
                       // requiredByNote comes from the deal snapshot only, same as before.
                 actor.id(), actor.name());
             stored.replaceItems(id, group.items());
+            if (derived != null) {
+                stored.setDerivedLeadTime(id, derived.minDays(), derived.maxDays());
+            }
             created++;
         }
         if (created == 0) {
@@ -839,10 +849,45 @@ public class ImportRequestService {
         // forward too — leaving this out fell all the way back to `insertDraft`'s
         // snap.requiredByNote() default (the DEAL's CURRENT value), silently dropping anything the
         // rep had typed directly onto THIS form (e.g. "Before Songkran") the moment it was revised.
+        // CR-1 (B-R4/B-R5): the lead time follows the deal's current QUOTATION. The quotation-derived
+        // value an IR was built from is stored on it (derived_lead_time_*); on revise a freshly derived
+        // value that EQUALS the stored one means the quotation did not change, so the predecessor's
+        // possibly hand-edited lead time (POST /import-requests/{id}/lead-time) is carried forward
+        // exactly as before; a DIFFERENT derived value means a new quotation changed it, so that wins.
+        // No quotation lead time at all (or a row that predates the column) also carries forward. An
+        // approved lead-time change with no new quotation therefore never reaches the IR.
+        LeadTimeDefaults.Range freshDerived = leadTimeFromQuotation(
+            repository.currentQuotationLeadTimes(issued.ticketId()), issued.factoryId(),
+            issued.items().stream()
+                .map(it -> new ImportRequestItemInput(it.ticketItemId(), it.code(), it.size(),
+                    it.qty(), it.unit(), it.note(), it.color(), it.texture(), it.brand(), it.model()))
+                .toList());
+        int[] storedDerived = stored.findDerivedLeadTime(issued.id()).orElse(null);
+        boolean quotationChanged;
+        if (freshDerived == null) {
+            quotationChanged = false;
+        } else if (storedDerived != null) {
+            quotationChanged = storedDerived[0] != freshDerived.minDays() || storedDerived[1] != freshDerived.maxDays();
+        } else {
+            // Nothing records what this IR was built from (pre-V198 rows, and IRs first built from the
+            // country default). Its live lead time only counts as a HAND edit if it differs from that
+            // country default; an unedited default must not shadow a quotation value forever.
+            LeadTimeDefaults.Range countryDefault = LeadTimeDefaults.forCountry(
+                freshFactoryLookup(issued.factoryId()).map(FactoryConfigDto::country).orElse(null));
+            boolean handEdited = issued.leadTimeMinDays() != null && issued.leadTimeMaxDays() != null
+                && (countryDefault == null || issued.leadTimeMinDays() != countryDefault.minDays()
+                    || issued.leadTimeMaxDays() != countryDefault.maxDays());
+            quotationChanged = !handEdited;
+        }
+        Integer revisedMin = quotationChanged ? freshDerived.minDays() : issued.leadTimeMinDays();
+        Integer revisedMax = quotationChanged ? freshDerived.maxDays() : issued.leadTimeMaxDays();
         long revisionId = stored.insertDraft(issued.ticketId(), issued.factoryId(), issued.factoryName(),
             issued.brand(), stored.highestVersion(issued.ticketId(), issued.factoryId()) + 1,
-            snapshot, issued.leadTimeMinDays(), issued.leadTimeMaxDays(), issued.vesselEtaNote(),
+            snapshot, revisedMin, revisedMax, issued.vesselEtaNote(),
             issued.requiredByNote(), actor.id(), actor.name());
+        if (freshDerived != null) {
+            stored.setDerivedLeadTime(revisionId, freshDerived.minDays(), freshDerived.maxDays());
+        }
         stored.replaceItems(revisionId, issued.items().stream()
             .map(it -> new ImportRequestItemInput(it.ticketItemId(), it.code(), it.size(),
                 it.qty(), it.unit(), it.note(), it.color(), it.texture(), it.brand(), it.model()))
@@ -1191,6 +1236,32 @@ public class ImportRequestService {
                 countryCodeById.get(factoryId), brandLabel.isBlank() ? null : brandLabel, items));
         }
         return groups;
+    }
+
+    /**
+     * CR-1 (D): the LONGEST lead time among this factory's current-quotation items -- {@code min = max
+     * of the mins}, {@code max = max of the maxes}, each independently -- or {@code null} when none of
+     * them carries one (the caller then falls back to the country default / the predecessor's value).
+     * A PR-route row counts when its ticket item belongs to {@code items}; a direct-route row counts
+     * when its catalog factory is {@code factoryId}.
+     */
+    private static LeadTimeDefaults.Range leadTimeFromQuotation(
+            List<ImportRequestQueryRepository.QuotationLeadTimeRow> rows, long factoryId,
+            List<ImportRequestItemInput> items) {
+        Set<Long> ticketItemIds = items.stream().map(ImportRequestItemInput::ticketItemId)
+            .filter(java.util.Objects::nonNull).collect(Collectors.toSet());
+        Integer min = null;
+        Integer max = null;
+        for (ImportRequestQueryRepository.QuotationLeadTimeRow row : rows) {
+            boolean ours = row.ticketItemId() != null ? ticketItemIds.contains(row.ticketItemId())
+                : row.factoryId() != null && row.factoryId() == factoryId;
+            if (!ours) {
+                continue;
+            }
+            min = min == null ? row.minDays() : Math.max(min, row.minDays());
+            max = max == null ? row.maxDays() : Math.max(max, row.maxDays());
+        }
+        return min == null ? null : new LeadTimeDefaults.Range(min, max);
     }
 
     private Optional<FactoryConfigDto> freshFactoryLookup(long factoryId) {

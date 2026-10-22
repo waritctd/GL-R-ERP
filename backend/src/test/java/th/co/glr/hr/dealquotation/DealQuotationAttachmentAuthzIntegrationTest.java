@@ -67,6 +67,7 @@ class DealQuotationAttachmentAuthzIntegrationTest extends AbstractDealQuotationA
         DealQuotationDto quotation = draftOwnedBy(salesActor);
         long file = seed(quotation.id(), FILE, VENDOR_QUOTE, salesActor);
         long rows = fileRows();
+        openToAccount(quotation.id()); // account reads only an APPROVED quotation on a deal in its scope
 
         for (UserPrincipal reader : List.of(accountActor, importActor)) {
             String who = reader.role();
@@ -98,12 +99,23 @@ class DealQuotationAttachmentAuthzIntegrationTest extends AbstractDealQuotationA
         for (UserPrincipal holder : List.of(accountWithGrantActor, importWithGrantActor)) {
             String who = holder.role() + " holding the quotation grant";
             // Control: the grant lets this caller open AND save the quotation itself.
+            if ("account".equals(holder.role())) {
+                openToAccount(quotation.id()); // account may open only an APPROVED quotation in its scope
+            }
             assertThat(quotationService.get(quotation.id(), holder).id()).as(who).isEqualTo(quotation.id());
+
+            // Reading is refused HERE, while the quotation is still one this holder opens (for account:
+            // APPROVED and in scope). Refused only after forcing DRAFT, the account holder would be
+            // turned away by the status rule instead, and the file-role exclusion would go untested.
+            refused(who + " listing the files", FORBIDDEN, () -> attachmentService.list(quotation.id(), holder));
+            refused(who + " downloading a file", FORBIDDEN, () -> attachmentService.download(file, holder));
+
+            if ("account".equals(holder.role())) {
+                forceStatus(quotation.id(), QuotationStatus.DRAFT); // back to an editable draft for the save below
+            }
             assertThat(quotationService.update(quotation.id(), draft(), holder).docStatus())
                 .as(who).isEqualTo(QuotationStatus.DRAFT);
 
-            refused(who + " listing the files", FORBIDDEN, () -> attachmentService.list(quotation.id(), holder));
-            refused(who + " downloading a file", FORBIDDEN, () -> attachmentService.download(file, holder));
             refused(who + " uploading", FORBIDDEN, () -> attachmentService.upload(quotation.id(), pdf("x.pdf"), holder));
             refused(who + " deleting a file", FORBIDDEN, () -> attachmentService.delete(file, holder));
         }

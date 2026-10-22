@@ -46,6 +46,7 @@ async function driveTwoFactoryTicketToOrderReceived() {
   });
   const { project } = await api.customers.createProject(customer.id, { name: `โครงการนำเข้าทดสอบ ${n}` });
   const { ticket: created } = await api.tickets.create({
+    entryChannel: 'DESIGNER_LED',
     title: `ดีลนำเข้าทดสอบ ${n}`,
     priority: 'NORMAL',
     customerName: customer.name,
@@ -94,6 +95,12 @@ async function driveTwoFactoryTicketToOrderReceived() {
   await api.auth.login({ role: 'import' });
   await api.pricingRequests.pickup(prId);
   const { items: quotes } = await api.pricingRequests.generateFactoryEmailDrafts(prId);
+  // CR-1 (B-R2): price entry is locked until the factory is marked ติดต่อโรงงานแล้ว.
+  for (const q of quotes) {
+    await api.pricingRequests.markFactoryQuoteContacted(q.id, {
+      contactedOn: new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Bangkok' }).format(new Date()),
+    });
+  }
   expect(quotes).toHaveLength(2); // one per factory — the whole point of this fixture.
   for (const quote of quotes) {
     await api.pricingRequests.receiveFactoryQuote(quote.id, {
@@ -171,9 +178,12 @@ describe('mockApi storedImportRequests — S3: rollup requires EVERY required fa
       // with REFIN never issued, `liveRows` was just [Panaria], all RECEIVED, so the old mock
       // rolled the deal up here. The fixed mock must NOT, because REFIN is still a required
       // factory with no ISSUED row at all.
-      const { ticket: afterPanaria } = await api.tickets.get(ticketId);
-      expect(afterPanaria.summary.fulfillmentStatus).not.toBe('GOODS_RECEIVED');
-      expect(afterPanaria.summary.fulfillmentStatus).toBe('IR_ISSUED');
+      // Read as import through ITS OWN per-deal view: the whole-deal GET /api/tickets/{id} is
+      // refused to import now (feat/import-own-page), and importDeals.get carries the same
+      // server-computed fulfillmentStatus rollup.
+      const { deal: afterPanaria } = await api.importDeals.get(ticketId);
+      expect(afterPanaria.fulfillmentStatus).not.toBe('GOODS_RECEIVED');
+      expect(afterPanaria.fulfillmentStatus).toBe('IR_ISSUED');
 
       // Now issue and receive REFIN too — every required factory has an ISSUED row, all RECEIVED.
       await api.auth.login({ role: 'sales' });
@@ -183,8 +193,8 @@ describe('mockApi storedImportRequests — S3: rollup requires EVERY required fa
         await api.storedImportRequests.advanceStep(refinIssued.id, { targetStep: target });
       }
 
-      const { ticket: afterBoth } = await api.tickets.get(ticketId);
-      expect(afterBoth.summary.fulfillmentStatus).toBe('GOODS_RECEIVED');
+      const { deal: afterBoth } = await api.importDeals.get(ticketId);
+      expect(afterBoth.fulfillmentStatus).toBe('GOODS_RECEIVED');
     },
     20000,
   );

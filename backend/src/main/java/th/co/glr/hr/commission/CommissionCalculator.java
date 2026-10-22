@@ -193,6 +193,28 @@ public class CommissionCalculator {
     }
 
     /**
+     * Manager TEAM OVERRIDE (V199): {@code (companyBase - thresholdBase) x ratePercent / 100},
+     * HALF_UP to 2dp, where {@code companyBase} is the company-wide, UNWEIGHTED ex-VAT receipts
+     * ({@link #monthlyTierBase} of {@link CommissionRepository#sumCompanyActualReceived}) at full
+     * precision -- rounded once, at the final figure, like every other limb here. Mirrors the
+     * accountant's workbook (sheet อัตราค่าคอม K2): (ยอดรับเงินไม่รวม Vat - 3 ล้าน) x 0.075%.
+     * ZERO at 2dp when {@code config} is null or disabled, the base is null/non-positive, or the
+     * base is at or below the threshold.
+     */
+    public BigDecimal teamOverride(BigDecimal companyCommissionableBase, TeamOverrideConfig config) {
+        BigDecimal zero = BigDecimal.ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        if (config == null || !config.enabled()
+                || companyCommissionableBase == null || companyCommissionableBase.signum() <= 0) {
+            return zero;
+        }
+        BigDecimal excess = companyCommissionableBase.subtract(config.thresholdBase());
+        if (excess.signum() <= 0) {
+            return zero;
+        }
+        return excess.multiply(config.ratePercent()).divide(ONE_HUNDRED).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+    }
+
+    /**
      * V148 (per-item stock-commission weighting). Blends each line's own STOCK-EARNED weight into
      * ONE record-level effective weight, cash-weighted by each item's own share of the deal's
      * total item value -- the model:

@@ -3,11 +3,87 @@ import { api } from '../../api/index.js';
 import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
-import { RECIPIENT_OPTIONS } from './pricingRequestMeta.js';
+import { RECIPIENT_OPTIONS, UNIT_BASIS_OPTIONS } from './pricingRequestMeta.js';
+import { FormField } from '../../components/common/FormField.jsx';
 import { QuotationItemRow, newItemClientId } from '../quotations/QuotationItemRow.jsx';
 import { QuotationContactPicker } from '../quotations/QuotationContactPicker.jsx';
-import { ceilPieces, piecesPerSqmFromSqmPerPiece, validateQuotationItem } from '../quotations/quotationMeta.js';
-import { entryChannelLabel } from '../../utils/format.js';
+import { focusQuotationField } from '../quotations/QuotationChecklist.jsx';
+import { ceilPieces, defaultLeadTimeForOrigin, originCountryFromCode, piecesPerSqmFromSqmPerPiece, validateQuotationItem } from '../quotations/quotationMeta.js';
+
+// CR-1 (GLA-167, R1 / F4): the currency and price unit Sales fixes on each line; import cannot
+// change them afterwards. The currency list is the trade currencies this business quotes in (the
+// same ones the FX table tracks); the unit list is UnitBasis's four codes.
+const REQUEST_CURRENCY_OPTIONS = ['THB', 'EUR', 'USD', 'CNY'];
+
+// price_catalog.price_unit -> UnitBasis. 'unknown' (or anything else) is NOT guessed: the unit stays
+// blank and required, so a wrong basis can never be pre-filled silently.
+const CATALOG_PRICE_UNIT_TO_BASIS = {
+  per_sqm: 'PER_SQM',
+  per_piece: 'PER_PIECE',
+  per_box: 'PER_BOX',
+  per_linear_m: 'PER_LINEAR_M',
+};
+
+/** The fields a catalogue pick auto-fills (sales may still change them before submit). */
+function termsFromCatalog(cat) {
+  return {
+    requestedCurrency: typeof cat?.currency === 'string' ? cat.currency.trim().toUpperCase() : '',
+    requestedPriceUnitBasis: CATALOG_PRICE_UNIT_TO_BASIS[cat?.priceUnit] ?? '',
+  };
+}
+
+/**
+ * What a catalogue pick sets on THIS form, over QuotationItemRow.pickCatalog's own patch. That one keeps
+ * the row's origin (and so its lead time) and falls back to the row's thickness, which is right for a
+ * direct-deal rep's deliberate choice but wrong here: a PCR row's origin/thickness/box count were seeded
+ * from the deal's previous product, and a pick means "the database has the information" (owner ruling
+ * 2026-10-18), so the picked product's values replace them, blanks included.
+ */
+function catalogPickPatch(cat) {
+  const originCountry = originCountryFromCode(cat.originCountryCode) || '';
+  return {
+    ...termsFromCatalog(cat),
+    originCountry,
+    originCountryOther: null,
+    ...defaultLeadTimeForOrigin(originCountry),
+    thicknessMm: cat.thicknessMm ?? null,
+    piecesPerBox: cat.pcsPerBox ?? '',
+  };
+}
+
+/**
+ * UAT item 3 (owner ruling 2026-10-18): on a hand-typed line the currency and unit "default
+ * automatically if the database has the information, otherwise sales fills them by hand". The
+ * database has it when the typed โรงงาน names a catalogue factory: `items` are the catalogue rows
+ * `GET /api/catalog/prices?q=<brand>` returned (the search also matches product fields, so only the
+ * rows whose factory IS the typed name count). Returns null when none match; a field the matching
+ * rows disagree on comes back '' so a wrong value is never pre-filled silently.
+ */
+function termsFromFactoryMatches(brand, items = []) {
+  const wanted = String(brand ?? '').trim().toLowerCase();
+  if (!wanted) return null;
+  const mine = items.filter((it) => String(it?.factoryName ?? '').trim().toLowerCase() === wanted);
+  if (mine.length === 0) return null;
+  const terms = mine.map(termsFromCatalog);
+  const agree = (key) => (terms.every((t) => t[key] === terms[0][key]) ? terms[0][key] : '');
+  return { requestedCurrency: agree('requestedCurrency'), requestedPriceUnitBasis: agree('requestedPriceUnitBasis') };
+}
+const BRAND_LOOKUP_DEBOUNCE_MS = 300;
+const TERM_FIELDS = ['requestedCurrency', 'requestedPriceUnitBasis'];
+
+/**
+ * `autoTerms` (UI-only, never sent: pricingRequestItemInputFromRow names its fields) marks the terms the
+ * โรงงาน lookup filled. A term the rep or a catalogue pick sets stops being the lookup's; a โรงงาน edit
+ * blanks only the lookup's own, so the corrected name re-derives them and a rep's choice survives.
+ */
+function patchRow(item, patch) {
+  const next = { ...item, ...patch, autoTerms: { ...item.autoTerms } };
+  TERM_FIELDS.forEach((key) => {
+    if (key in patch) delete next.autoTerms[key];
+    else if ('brand' in patch && next.autoTerms[key]) { next[key] = ''; delete next.autoTerms[key]; }
+  });
+  return next;
+}
 
 // ลักษณะจำนวน / วันที่ต้องการส่งมอบ / สถานที่ส่งมอบ / ข้อกำหนดพิเศษ were removed from this form
 // (owner request, 2026-08-11): Sales does not have that information at คำขอราคา time, so the
@@ -54,6 +130,13 @@ function emptyItemFromTicketItem(ticketItem) {
   // Mirrors TicketDetailPage's own qtyDisplay logic: an SQM-basis line quotes its sqm quantity in
   // AREA mode; a PIECE-basis line quotes its piece count in PIECES mode.
   const quantityMode = ticketItem?.unitBasis === 'SQM' ? 'AREA' : 'PIECES';
+  // Owner ruling 2026-10-18 ("fill from catalogue"): a catalogue-linked deal line brings the
+  // catalogue's thickness / pieces-per-box / factory country along (TicketItemDto.catalog* via
+  // TicketRepository#findItemsByTicketId), and the origin implies the same default lead time a
+  // catalogue pick gets (QuotationItemRow.pickCatalog). A hand-typed deal line has none of it.
+  const fromCatalog = Boolean(ticketItem?.catalogPriceId);
+  const seededOrigin = fromCatalog ? (originCountryFromCode(ticketItem.catalogOriginCountryCode) || '') : '';
+  const seededLeadTime = defaultLeadTimeForOrigin(seededOrigin);
   return {
     clientId: newItemClientId(),
     // V110: seed the catalog link the deal-creation catalog picker already resolved (see
@@ -74,28 +157,32 @@ function emptyItemFromTicketItem(ticketItem) {
     color: ticketItem?.color ?? '',
     texture: ticketItem?.texture ?? '',
     sizeText: ticketItem?.size ?? '',
-    thicknessMm: null,
+    thicknessMm: fromCatalog ? (ticketItem.catalogThicknessMm ?? null) : null,
     sqmPerPiece: ticketItem?.sqmPerPiece ?? null,
     piecesPerSqmDisplay: null,
     sqmPerPieceSource: ticketItem?.sqmPerPiece != null ? 'catalog' : null,
     catalogSqmPerPiece: null,
     catalogPriceUnit: ticketItem?.catalogPriceUnit ?? null,
     catalogSizeText: null,
+    // CR-1: auto-filled only from a CATALOGUE line (the ticket item already resolved one); a
+    // hand-typed line starts blank and required.
+    requestedCurrency: ticketItem?.catalogPriceId ? termsFromCatalog({ currency: ticketItem.catalogCurrency, priceUnit: ticketItem.catalogPriceUnit }).requestedCurrency : '',
+    requestedPriceUnitBasis: ticketItem?.catalogPriceId ? termsFromCatalog({ currency: ticketItem.catalogCurrency, priceUnit: ticketItem.catalogPriceUnit }).requestedPriceUnitBasis : '',
     sqmPerBox: null,
     quantityMode,
     areaSqm: quantityMode === 'AREA' ? (ticketItem?.qtySqm ?? '') : '',
     piecesInput: quantityMode === 'PIECES' ? (ticketItem?.qty ?? '') : '',
     wastageMode: 'PERCENT',
     wastageValue: 0,
-    piecesPerBox: '',
+    piecesPerBox: fromCatalog ? (ticketItem.catalogPcsPerBox ?? '') : '',
     // Owner-approved "sell loose pieces" default, same as the direct-deal form: every new row
     // rounds up to a full box unless the rep opts out.
     roundToFullBox: true,
-    originCountry: '',
+    originCountry: seededOrigin,
     // GLA-125: typed name when originCountry = "อื่นๆ" — see QuotationItemRow's own comment.
     originCountryOther: null,
-    leadTimeMinDays: null,
-    leadTimeMaxDays: null,
+    leadTimeMinDays: seededLeadTime.leadTimeMinDays,
+    leadTimeMaxDays: seededLeadTime.leadTimeMaxDays,
     // Maps to the wire `productDescription` — see this file's own module Javadoc above.
     itemNotes: '',
     // No longer user-editable — see DEFAULT_QUANTITY_TYPE above. Carried so buildPayload keeps
@@ -213,6 +300,9 @@ function itemFromExisting(item) {
     catalogSqmPerPiece: null,
     catalogPriceUnit: null,
     catalogSizeText: null,
+    // CR-1: what Sales fixed on the persisted line; blank for a legacy line (must be completed).
+    requestedCurrency: item?.requestedCurrency ?? '',
+    requestedPriceUnitBasis: item?.requestedPriceUnitBasis ?? '',
     sqmPerBox: item?.sqmPerBox ?? null,
     quantityMode: quantitySeed.quantityMode,
     areaSqm: quantitySeed.areaSqm,
@@ -237,12 +327,9 @@ function itemFromExisting(item) {
   };
 }
 
-// Mirrors TicketSummaryDto's designerName/ownerName/buyerName/contactName/customerName — the
-// deal's own recipient-shaped fields, the closest available identity for each ผู้รับ chip.
-// Falls through recipientType-specific name -> contact -> customer, so the field is never left
-// blank as long as the deal has ANY name recorded on it. CREATE MODE ONLY — never consulted for
-// edit/revision (both seed recipientLabel from the persisted request instead, see the modal's
-// seedsFromExisting guard around every call site below).
+// Create-mode auto-fill for the ผู้รับ label: the per-type party name (TicketSummaryDto's
+// designerName/ownerName/buyerName), else the customer. Edit/revision never call this — they seed
+// recipientLabel from the persisted request (the seedsFromExisting guard at both call sites).
 function recipientLabelForDeal(deal, recipientType) {
   if (!deal) return '';
   const byType = {
@@ -250,7 +337,7 @@ function recipientLabelForDeal(deal, recipientType) {
     OWNER: deal.ownerName,
     BUYER: deal.buyerName,
   }[recipientType];
-  return byType || deal.contactName || deal.customerName || '';
+  return byType || deal.customerName || '';
 }
 
 function generateClientRequestId() {
@@ -310,6 +397,9 @@ function pricingRequestItemInputFromRow(item) {
     originCountryOther: item.originCountryOther?.trim() || null,
     leadTimeMinDays: item.leadTimeMinDays ?? null,
     leadTimeMaxDays: item.leadTimeMaxDays ?? null,
+    // CR-1: the locked terms import will see on the factory card.
+    requestedCurrency: item.requestedCurrency || null,
+    requestedPriceUnitBasis: item.requestedPriceUnitBasis || null,
     quantityType: item.quantityType ?? DEFAULT_QUANTITY_TYPE,
     targetDeliveryDate: item.targetDeliveryDate || null,
     deliveryLocation: item.deliveryLocation?.trim() || null,
@@ -380,31 +470,23 @@ export function PricingRequestCreateModal({
   // ผู้รับ chip must never overwrite what they typed (see the effect below). Stays false forever
   // in edit/revision mode since nothing ever writes recipientLabel from `deal` there.
   const [recipientLabelTouched, setRecipientLabelTouched] = useState(false);
-  // GLA-125 follow-up (owner directive, 2026-09-18): ผู้สั่งซื้อ — the SAME `QuotationContactPicker`
+  // GLA-125 follow-up (owner directive, 2026-09-18): ผู้ติดต่อ — the SAME `QuotationContactPicker`
   // the direct-deal quotation editor uses, bound to the SAME wire field the schema already
   // reserved for it (`recipientContactId`, V59) — this modal previously always sent that field as
   // `null` with no picker at all (see pricingRequestItemInputFromRow-era comment history). This is
   // deliberately SEPARATE from ผู้รับคำขอราคา (recipientType/recipientLabel above, which answers
   // "who is this PRICING REQUEST for" — designer/owner/buyer — a PCR-only categorisation with no
-  // equivalent on the quotation): ผู้สั่งซื้อ answers "which registered customer CONTACT actually
+  // equivalent on the quotation): ผู้ติดต่อ answers "which registered customer CONTACT actually
   // placed the order", exactly the quotation's own question, so it is never cross-wired into
   // recipientLabel's own auto-fill from `deal`/recipientType.
   //
-  // Seeded as a partial "stand-in" object (`{ id, firstName }`, no phone/email yet) from whichever
-  // frozen id+name snapshot this mode already has — the picker's own `onResolve` then fills in the
-  // rest once its contact list loads (see QuotationContactPicker's own class-level Javadoc for this
-  // exact contract; QuotationEditorPage seeds its own ผู้สั่งซื้อ picker off `ticket.contactId`/
-  // `ticket.contactName` the identical way for its `?ticket=` create path).
-  const [contact, setContact] = useState(() => {
-    if (seedsFromExisting) {
-      return initialSummary?.recipientContactId != null
-        ? { id: initialSummary.recipientContactId, firstName: initialSummary.recipientLabel ?? '', lastName: '' }
-        : null;
-    }
-    return deal?.contactId != null
-      ? { id: deal.contactId, firstName: deal.contactName ?? '', lastName: '' }
-      : null;
-  });
+  // Seeded only from a persisted request's `recipientContactId` (edit/revision), as a stand-in
+  // `{ id, firstName }` that the picker's `onResolve` completes once its contact list loads.
+  const [contact, setContact] = useState(() => (
+    initialSummary?.recipientContactId != null
+      ? { id: initialSummary.recipientContactId, firstName: initialSummary.recipientLabel ?? '', lastName: '' }
+      : null
+  ));
   // customerId/customerName: `deal` (create mode) or the persisted request's own summary (edit/
   // revision mode, GLA-125's `PricingRequestSummaryDto.customerId` addition) — whichever this mode
   // actually has. Without a customerId the picker just shows "เลือกลูกค้าก่อน" and stays disabled,
@@ -420,26 +502,30 @@ export function PricingRequestCreateModal({
     seedsFromExisting ? (initialSummary?.note ?? '') : (deal?.note ?? '')
   ));
   // GLA-125 (owner ruling 2026-09-18): header terms mirroring the direct-deal quotation's own
-  // (V165/V179/V180) — NOT yet carried onto the quotation itself (Phase 3). All optional. Create
-  // mode always starts blank (there is no "deal default" for any of these the way recipientLabel
-  // has one) — only edit/revision seed from the persisted request.
-  const [paymentTermMode, setPaymentTermMode] = useState(() => initialSummary?.paymentTermMode ?? '');
-  const [creditDays, setCreditDays] = useState(() => (
-    initialSummary?.creditDays != null ? String(initialSummary.creditDays) : ''
-  ));
-  const [validityDays, setValidityDays] = useState(() => (
-    initialSummary?.validityDays != null ? String(initialSummary.validityDays) : ''
-  ));
-  const [printedByDisplayId, setPrintedByDisplayId] = useState(() => (
-    initialSummary?.printedByDisplayId != null ? String(initialSummary.printedByDisplayId) : ''
-  ));
-  const [salesRepDisplayId, setSalesRepDisplayId] = useState(() => (
-    initialSummary?.salesRepDisplayId != null ? String(initialSummary.salesRepDisplayId) : ''
-  ));
+  // (V165/V179/V180) — NOT yet carried onto the quotation itself (Phase 3). All optional.
+  //
+  // The "เงื่อนไขสำหรับใบเสนอราคา" input box that used to edit these was REMOVED (owner request,
+  // 2026-09-30): Sales does not decide payment terms / validity / display-name / dept-unit at
+  // คำขอราคา time, so the box only ever collected noise before the CEO costing phase — exactly the
+  // same reasoning that retired the four quantity/delivery inputs on 2026-08-11 (see
+  // DEFAULT_QUANTITY_TYPE's own comment above). The BACKEND CONTRACT IS UNCHANGED — every field
+  // below is still sent by buildPayload — so these are now read-only, preserved values rather than
+  // user inputs:
+  //   - create mode has no persisted request, so each stays blank and sends null (nothing was
+  //     ever entered);
+  //   - edit/revision mode PRESERVES whatever the persisted request already holds, so removing the
+  //     box never nulls a term a draft was saved with. This is why they remain seeded from
+  //     initialSummary rather than dropped from the payload.
+  // Kept as plain constants (not useState) precisely because nothing sets them anymore.
+  const paymentTermMode = initialSummary?.paymentTermMode ?? '';
+  const creditDays = initialSummary?.creditDays != null ? String(initialSummary.creditDays) : '';
+  const validityDays = initialSummary?.validityDays != null ? String(initialSummary.validityDays) : '';
+  const printedByDisplayId = initialSummary?.printedByDisplayId != null ? String(initialSummary.printedByDisplayId) : '';
+  const salesRepDisplayId = initialSummary?.salesRepDisplayId != null ? String(initialSummary.salesRepDisplayId) : '';
   // unitCode doubles as the ผู้ออกแบบ picker's target, exactly as on the direct-deal form (V173) —
   // a designer pick is a frontend convenience that writes this SAME free-text field, never a
   // separate column; the designer's own name never reaches it, only the code does.
-  const [unitCode, setUnitCode] = useState(() => initialSummary?.unitCode ?? '');
+  const unitCode = initialSummary?.unitCode ?? '';
   const [omitContactHonorific, setOmitContactHonorific] = useState(() => initialSummary?.omitContactHonorific ?? false);
   const [revisionReason, setRevisionReason] = useState('');
   const [clientRequestId] = useState(() => generateClientRequestId());
@@ -507,21 +593,6 @@ export function PricingRequestCreateModal({
     return () => { cancelled = true; };
   }, [attachablePricingRequestId]);
 
-  // GLA-125: แสดงชื่อผู้พิมพ์เป็น/แสดงชื่อพนักงานขายเป็น reuse the SAME eligible-employee list
-  // the direct-deal quotation editor already fetches (DealQuotationRepository
-  // #findEligibleQuotationDisplayNameOptions — sales division employees plus any
-  // can_create_quotation grant holder). No PCR-specific endpoint needed.
-  const [displayNameOptions, setDisplayNameOptions] = useState([]);
-  const [displayNameOptionsLoading, setDisplayNameOptionsLoading] = useState(true);
-  useEffect(() => {
-    let cancelled = false;
-    api.dealQuotations.displayNameOptions()
-      .then((res) => { if (!cancelled) setDisplayNameOptions(res?.items ?? []); })
-      .catch(() => { /* non-critical: selects just render with no options */ })
-      .finally(() => { if (!cancelled) setDisplayNameOptionsLoading(false); });
-    return () => { cancelled = true; };
-  }, []);
-
   async function handleUploadAttachment(e) {
     const file = e.target.files?.[0];
     e.target.value = '';
@@ -548,8 +619,49 @@ export function PricingRequestCreateModal({
     }
   }
 
+  // Per-row debounce timers for the typed-โรงงาน lookup below, keyed by clientId; cleared on unmount.
+  const brandLookupTimers = useRef(new Map());
+  useEffect(() => () => { brandLookupTimers.current.forEach((t) => clearTimeout(t)); brandLookupTimers.current.clear(); }, []);
+
+  /** Typed โรงงาน on a hand-typed line → default สกุลเงิน/หน่วยราคา from the catalogue (UAT item 3). */
+  function scheduleBrandLookup(row) {
+    const { clientId } = row;
+    const brand = String(row.brand ?? '').trim();
+    clearTimeout(brandLookupTimers.current.get(clientId));
+    if (!brand || row.catalogPriceId) return; // a catalogue pick already carried its own terms
+    brandLookupTimers.current.set(clientId, setTimeout(async () => {
+      brandLookupTimers.current.delete(clientId);
+      let terms = null;
+      try {
+        // ponytail: agreement is judged over the first 200 rows (CatalogController's cap) of a free-text
+        // search; a factory with more rows can hide a disagreeing one. A factory-scoped endpoint closes it.
+        terms = termsFromFactoryMatches(brand, (await api.catalog.prices(brand, null, 200))?.items);
+      } catch { /* a convenience, never a blocker: the rep can still pick by hand */ }
+      if (!terms) return;
+      setItems((cur) => cur.map((it) => {
+        // Only the row that asked, only while it still says this name, only into fields still blank.
+        if (it.clientId !== clientId || it.catalogPriceId || String(it.brand ?? '').trim() !== brand) return it;
+        const next = { ...it, autoTerms: { ...it.autoTerms } };
+        TERM_FIELDS.forEach((key) => {
+          if (!it[key] && terms[key]) { next[key] = terms[key]; next.autoTerms[key] = true; }
+        });
+        return next;
+      }));
+    }, BRAND_LOOKUP_DEBOUNCE_MS));
+  }
+
+  // A seeded hand-typed line (a deal line, or a legacy draft line) already names its โรงงาน, so it gets
+  // the same lookup on open that typing would trigger. Mount only: later lookups ride brand edits.
+  useEffect(() => {
+    items.forEach((row) => {
+      if (!row.requestedCurrency || !row.requestedPriceUnitBasis) scheduleBrandLookup(row);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   function updateItem(index, patch) {
-    setItems((cur) => cur.map((item, i) => (i === index ? { ...item, ...patch } : item)));
+    setItems((cur) => cur.map((item, i) => (i === index ? patchRow(item, patch) : item)));
+    if ('brand' in patch) scheduleBrandLookup({ ...items[index], ...patch });
     if (itemFieldErrors[index]) {
       setItemFieldErrors((cur) => {
         const next = { ...cur };
@@ -559,21 +671,41 @@ export function PricingRequestCreateModal({
     }
   }
 
+  // UAT item 1 (2026-10-18): the new row lands at the bottom of a tall modal, so focus must follow it.
+  // Same mechanism as QuotationEditorPage.jsx:947 — the add records the row's clientId in a ref, the
+  // effect resolves it to the DOM id the row rendered with (ids carry the flat index) and focuses it
+  // once. A ref, not state: consumed exactly once, and nothing but an explicit add ever sets it, so a
+  // re-render from typing elsewhere can never pull focus back to the added row.
+  const pendingFocusRef = useRef(null);
+  useEffect(() => {
+    const pending = pendingFocusRef.current;
+    if (!pending) return;
+    const index = items.findIndex((it) => it.clientId === pending.rowId);
+    if (index < 0) return;
+    pendingFocusRef.current = null;
+    focusQuotationField(`model-${index}`);
+  }, [items]);
+
   function addItem() {
-    setItems((cur) => [...cur, emptyItemFromTicketItem(null)]);
+    const row = emptyItemFromTicketItem(null);
+    pendingFocusRef.current = { rowId: row.clientId };
+    setItems((cur) => [...cur, row]);
+  }
+
+  // itemFieldErrors is keyed by row index, so any insert/remove must move the keys with the rows:
+  // `mapIndex` returns the row's new index, or null when the row is gone.
+  function reindexErrors(errors, mapIndex) {
+    const next = {};
+    Object.entries(errors).forEach(([key, value]) => {
+      const to = mapIndex(Number(key));
+      if (to != null) next[to] = value;
+    });
+    return next;
   }
 
   function removeItem(index) {
     setItems((cur) => cur.filter((_, i) => i !== index));
-    setItemFieldErrors((cur) => {
-      const next = {};
-      Object.entries(cur).forEach(([key, value]) => {
-        const i = Number(key);
-        if (i < index) next[i] = value;
-        else if (i > index) next[i - 1] = value;
-      });
-      return next;
-    });
+    setItemFieldErrors((cur) => reindexErrors(cur, (i) => (i < index ? i : i > index ? i - 1 : null)));
   }
 
   function duplicateItem(index) {
@@ -581,6 +713,8 @@ export function PricingRequestCreateModal({
       const copy = { ...cur[index], clientId: newItemClientId(), id: null, sourceTicketItemId: null };
       return [...cur.slice(0, index + 1), copy, ...cur.slice(index + 1)];
     });
+    // UAT item 1 (2026-10-18): the copy lands at index + 1 and starts clean; every row after it moves down one.
+    setItemFieldErrors((cur) => reindexErrors(cur, (i) => (i > index ? i + 1 : i)));
   }
 
   function validate() {
@@ -602,12 +736,15 @@ export function PricingRequestCreateModal({
     items.forEach((item, index) => {
       const fieldErrors = validateQuotationItem(item, 'NET', 'TH', {
         skipPricing: true,
-        // GLA-125: ประเทศต้นทาง and ระยะเวลานำเข้า are required on THIS form (owner ruling
-        // 2026-09-18) — requireLeadTime is direct-deal's own SUBMIT-only flag, reused here
-        // unconditionally since a PricingRequest has no separate submit-time gate to defer to.
-        requireLeadTime: true,
+        // GLA-125: ประเทศต้นทาง is required on THIS form (owner ruling 2026-09-18). ระยะเวลานำเข้า is
+        // NOT (owner ruling 2026-10-18: import gives the time) — the origin's default still rides
+        // along on the wire, and the field itself is hidden (hideLeadTime below).
         requireOriginCountry: true,
       });
+      // The lead-time range check still runs inside validateQuotationItem, but its error renders only in
+      // the field hideLeadTime removes, so it could block a save with nothing red on screen. The server
+      // still refuses min > max, with a visible banner.
+      delete fieldErrors.leadTimeMinDays;
       // Opus review finding #2 (2026-09-18): a cheap, DISPLAY-ONLY early warning for the same
       // case PricingRequestService#resolveItem now rejects server-side with a 400 -- AREA mode
       // deriving 0 pieces. The server rounds every fraction of a piece UP, so a positive area is at
@@ -624,6 +761,9 @@ export function PricingRequestCreateModal({
           fieldErrors.areaSqm = 'จำนวนที่คำนวณได้จะเป็น 0 ชิ้น กรุณาระบุพื้นที่ให้มากขึ้น';
         }
       }
+      // CR-1 (R1): currency + price unit are required on every line sales submits.
+      if (!item?.requestedCurrency) fieldErrors.requestedCurrency = 'กรุณาระบุสกุลเงิน';
+      if (!item?.requestedPriceUnitBasis) fieldErrors.requestedPriceUnitBasis = 'กรุณาระบุหน่วยราคา';
       if (Object.keys(fieldErrors).length) next[index] = fieldErrors;
     });
     setItemFieldErrors(next);
@@ -633,7 +773,7 @@ export function PricingRequestCreateModal({
   function buildPayload({ includeClientRequestId = false } = {}) {
     const payload = {
       recipientType,
-      // GLA-125 follow-up: ผู้สั่งซื้อ, wired to the SAME `recipientContactId` column this modal
+      // GLA-125 follow-up: ผู้ติดต่อ, wired to the SAME `recipientContactId` column this modal
       // always sent as implicitly undefined before — see the `contact` state's own comment above.
       recipientContactId: contact?.id ?? null,
       recipientLabel: recipientLabel.trim(),
@@ -855,7 +995,7 @@ export function PricingRequestCreateModal({
           />
         </label>
 
-        {/* GLA-125 follow-up: ผู้สั่งซื้อ — see the `contact` state's own comment above for why
+        {/* GLA-125 follow-up: ผู้ติดต่อ — see the `contact` state's own comment above for why
             this is deliberately separate from ผู้รับคำขอราคา above. Renders disabled ("เลือกลูกค้า
             ก่อน") when neither `deal` nor the persisted request carries a customerId — a request
             whose ticket predates customer linkage, or a mock/test fixture that never set one. */}
@@ -893,90 +1033,13 @@ export function PricingRequestCreateModal({
           <textarea className="min-h-16" value={note} onChange={(e) => setNote(e.target.value)} placeholder="ข้อมูลเพิ่มเติมสำหรับฝ่ายนำเข้า (ถ้ามี)" />
         </label>
 
-        {/* GLA-125 (owner ruling 2026-09-18): header terms mirroring the direct-deal quotation's
-            own (V165/V179/V180) — none of these are required (a PricingRequest has no price yet,
-            so unlike quotation's deposit/remainder trio there is nothing here that MUST be
-            decided before saving). NOT yet carried onto the customer quotation itself — that is
-            Phase 3, see V185's migration header. "ไม่เติม 'คุณ'" now lives on the ผู้สั่งซื้อ
-            picker above (its own built-in control, wired via omitContactHonorific/
-            onChangeOmitContactHonorific), not duplicated here. */}
-        <div className="rounded-md border border-border bg-surface-subtle p-3">
-          <span className="mb-2 block text-sm font-bold text-text-secondary">เงื่อนไขสำหรับใบเสนอราคา (ไม่บังคับ)</span>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div>
-              <span className="mb-1.5 block text-sm font-bold text-text-secondary">เงื่อนไขการชำระเงิน</span>
-              <div className="flex flex-wrap items-center gap-2">
-                <label className="flex items-center gap-1.5 text-sm">
-                  <input
-                    type="radio"
-                    name="pcrPaymentTermMode"
-                    checked={paymentTermMode === 'CREDIT'}
-                    onChange={() => setPaymentTermMode('CREDIT')}
-                  />
-                  เครดิต
-                </label>
-                <input
-                  type="number"
-                  min="1"
-                  className="w-20"
-                  disabled={paymentTermMode !== 'CREDIT'}
-                  value={creditDays}
-                  onChange={(e) => setCreditDays(e.target.value)}
-                  placeholder="วัน"
-                  aria-label="ระยะเวลาเครดิต (วัน)"
-                />
-                <span className="text-text-muted">วัน</span>
-                <label className="flex items-center gap-1.5 text-sm">
-                  <input
-                    type="radio"
-                    name="pcrPaymentTermMode"
-                    checked={paymentTermMode === 'ON_DELIVERY'}
-                    onChange={() => setPaymentTermMode('ON_DELIVERY')}
-                  />
-                  ชำระเมื่อส่งมอบ
-                </label>
-              </div>
-            </div>
-            <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
-              ยืนราคา (วัน)
-              <input type="number" min="0" value={validityDays} onChange={(e) => setValidityDays(e.target.value)} placeholder="ไม่บังคับ" />
-            </label>
-            <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
-              แสดงชื่อผู้พิมพ์เป็น
-              <select value={printedByDisplayId} onChange={(e) => setPrintedByDisplayId(e.target.value)} disabled={displayNameOptionsLoading}>
-                <option value="">(ใช้ชื่อผู้สร้างคำขอราคา)</option>
-                {displayNameOptions.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-              </select>
-            </label>
-            <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
-              แสดงชื่อพนักงานขายเป็น
-              <select value={salesRepDisplayId} onChange={(e) => setSalesRepDisplayId(e.target.value)} disabled={displayNameOptionsLoading}>
-                <option value="">(ใช้ชื่อผู้สร้างคำขอราคา)</option>
-                {displayNameOptions.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-              </select>
-            </label>
-            <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
-              หน่วยงาน / รหัสผู้ออกแบบ
-              <input value={unitCode} onChange={(e) => setUnitCode(e.target.value)} placeholder="ไม่บังคับ" />
-            </label>
-          </div>
-          {/* GLA-125: ช่องทางรับงาน is sales.ticket.entry_channel (V51/V144), set once at
-              deal-creation time and immutable from here — this form only ever DISPLAYS it,
-              read-only, never a new column on sales.pricing_request. Only available in create
-              mode, where `deal` (the ticket summary) is actually passed in; edit/revision mode
-              has no reliable `deal` prop to read this from. */}
-          {deal?.entryChannel ? (
-            <p className="mt-3 text-xs text-text-muted">ช่องทางรับงาน: {entryChannelLabel(deal.entryChannel).label}</p>
-          ) : null}
-        </div>
-
+        {/* The "เงื่อนไขสำหรับใบเสนอราคา" box (payment term / validity / display-name / dept-unit,
+            plus the read-only ช่องทางรับงาน line) was removed on 2026-09-30 per owner request —
+            Sales does not set quotation terms at คำขอราคา time. The underlying fields are still
+            carried on the wire (see the header-terms constants above), so an existing draft's saved
+            terms survive an edit; there is simply no longer any input for them here. */}
         <div>
-          <div className="mb-2 flex items-center justify-between">
-            <span className="text-sm font-bold text-text-secondary">รายการสินค้า *</span>
-            <Button type="button" variant="secondary" style={{ fontSize: 12 }} onClick={addItem}>
-              <Icon name="plus" size={13} /> เพิ่มรายการ
-            </Button>
-          </div>
+          <div className="mb-2 text-sm font-bold text-text-secondary">รายการสินค้า *</div>
           <ul className="m-0 grid list-none gap-3 pl-0">
             {items.map((item, index) => (
               <QuotationItemRow
@@ -985,16 +1048,49 @@ export function PricingRequestCreateModal({
                 index={index}
                 hidePricing
                 brandLabel="โรงงาน"
-                // GLA-125 (owner ruling 2026-09-18): ประเทศต้นทาง (and its "อื่นๆ" typed name) and
-                // ระยะเวลานำเข้า are required on THIS form only — direct-deal keeps both optional.
+                // GLA-125 (owner ruling 2026-09-18): ประเทศต้นทาง (and its "อื่นๆ" typed name) is
+                // required on THIS form only — direct-deal keeps it optional. ระยะเวลานำเข้า is not
+                // asked here at all (owner ruling 2026-10-18: import gives the time).
                 requireOriginCountry
+                hideLeadTime
                 errors={itemFieldErrors[index] ?? {}}
                 onChange={(patch) => updateItem(index, patch)}
                 onRemove={items.length > 1 ? () => removeItem(index) : undefined}
                 onDuplicate={() => duplicateItem(index)}
+                // CR-1: a catalogue pick auto-fills the currency + unit; sales may still change them.
+                onCatalogPicked={(cat) => updateItem(index, catalogPickPatch(cat))}
+                renderTerms={(row, rowIndex) => {
+                  const rowErrors = itemFieldErrors[rowIndex] ?? {};
+                  const currencies = REQUEST_CURRENCY_OPTIONS.includes(row.requestedCurrency) || !row.requestedCurrency
+                    ? REQUEST_CURRENCY_OPTIONS : [row.requestedCurrency, ...REQUEST_CURRENCY_OPTIONS];
+                  return (
+                    <div className="grid grid-cols-[repeat(2,minmax(0,1fr))] gap-3 sm:max-w-md">
+                      <FormField label="สกุลเงิน (ราคาโรงงาน)" htmlFor={`req-currency-${rowIndex}`} error={rowErrors.requestedCurrency}
+                        hint="ฝ่ายนำเข้าเปลี่ยนไม่ได้">
+                        <select id={`req-currency-${rowIndex}`} value={row.requestedCurrency ?? ''}
+                          onChange={(e) => updateItem(rowIndex, { requestedCurrency: e.target.value })}>
+                          <option value="">-- เลือก --</option>
+                          {currencies.map((code) => <option key={code} value={code}>{code}</option>)}
+                        </select>
+                      </FormField>
+                      <FormField label="หน่วยราคา" htmlFor={`req-unit-${rowIndex}`} error={rowErrors.requestedPriceUnitBasis}>
+                        <select id={`req-unit-${rowIndex}`} value={row.requestedPriceUnitBasis ?? ''}
+                          onChange={(e) => updateItem(rowIndex, { requestedPriceUnitBasis: e.target.value })}>
+                          <option value="">-- เลือก --</option>
+                          {UNIT_BASIS_OPTIONS.map((option) => <option key={option.code} value={option.code}>{`ต่อ ${option.label}`}</option>)}
+                        </select>
+                      </FormField>
+                    </div>
+                  );
+                }}
               />
             ))}
           </ul>
+          {/* Under the rows (UAT item 1): a rep adding a third line is looking at the second, not at
+              the section header 760px above it — the direct-quotation editor made the same move. */}
+          <Button type="button" variant="secondary" className="mt-3" style={{ fontSize: 12 }} onClick={addItem}>
+            <Icon name="plus" size={13} /> เพิ่มรายการ
+          </Button>
         </div>
 
         <div>

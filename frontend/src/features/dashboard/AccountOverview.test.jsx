@@ -83,7 +83,9 @@ describe('AccountOverview', () => {
     expect(screen.getAllByText('เกินกำหนด').length).toBeGreaterThan(0);
     expect(screen.getByText('รอรับมัดจำ')).not.toBeNull();
     expect(screen.getByText('รอชำระส่วนที่เหลือ')).not.toBeNull();
-    expect(screen.getByText('ออกค่าคอม')).not.toBeNull();
+    // commissionPending bucket: account records the invoice; the commission itself is not account's to issue.
+    expect(screen.getByText('บันทึกใบกำกับ')).not.toBeNull();
+    expect(screen.queryByText(/ออกค่าคอม/)).toBeNull();
     // Overdue bucket carries the overdue ticket's outstanding balance (฿100,000.00).
     expect(screen.getAllByText('฿100,000.00').length).toBeGreaterThan(0);
   });

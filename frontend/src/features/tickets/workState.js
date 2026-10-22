@@ -23,15 +23,10 @@
 //     TicketService.java:702 only advances to PROCUREMENT once import issues
 //     the IR). Same false "รอฝ่ายบัญชี" negative.
 //
-// The fix: ask the matching resolver FIRST, unconditionally. Only when the
-// resolver comes back empty (nothing pending for this viewer) does the
-// module fall back to reading the CURRENT stage's `gate` (stageMeta.js,
-// SALES_STAGES) to say whose turn it looks like instead — the same field
-// DealStagePanel/UpdateStageModal use to decide who may manually set a
-// stage. ceo and sales_manager never get that fallback banner at all (see
-// resolveWorkState's own doc comment) — only sales/import/account have a
-// worklist resolver, and only those three's "nothing pending" case should
-// ever read as a real waiting state for anyone with actual work to look for.
+// The fix: ask the matching resolver FIRST, unconditionally. There is deliberately NO "whose turn
+// is it" fallback any more: when the resolver has nothing pending the module returns no action and
+// the header says nothing (GLA-156 — the "รอ<ฝ่าย>" bar looked expandable, did nothing and named
+// no next step, and on auto stages it named the wrong department).
 //
 // Presentation only, same convention as salesViewScope.js / accountActions.js
 // / importActions.js: this NEVER claims an action the server would reject,
@@ -39,14 +34,14 @@
 // canLost / canHold / canDormant / canResume in DealStagePanel.jsx (backed by
 // the real `GET /{id}/actions`) remain the sole authority on what is
 // actually clickable; this module only decides which ONE action (if any)
-// leads the sticky bar, and what the header banner says when there isn't
-// one for this viewer.
+// leads the sticky bar.
 
-import { EMPTY_STAGE_CATALOG, findStage } from './stageCatalog.js';
-import { GATE_LABEL } from './stageMeta.js';
-import { nextSalesAction } from './salesActions.js';
+import { nextSalesAction, reviseAction, REVISE_STAGES, SALES_ACTION } from './salesActions.js';
 import { nextImportAction } from './importActions.js';
 import { nextAccountAction } from './accountActions.js';
+
+/** The approver-side twin of salesActions' AWAIT_DIRECT_APPROVAL bucket (slice 2). */
+export const DIRECT_APPROVAL_ACTION_KEY = 'approve_direct_quotation';
 
 /**
  * The single next action for `user` on `deal`, or the "whose turn is it"
@@ -57,45 +52,70 @@ import { nextAccountAction } from './accountActions.js';
  * nextImportAction (see their own doc comments for the expected shape —
  * the ticket's own scoped list, e.g. `api.pricingRequests.listForTicket`).
  *
- * Returns `{ action, waitingRoleLabel }`:
- * - `action` is whatever the matching resolver returned for sales/import/
- *   account viewers — checked FIRST, before any stage-gate reasoning (FIX 1
- *   above). `null` for every other role (ceo's own two-signature-close
- *   action already has a real, server-gated button on the page — see
- *   TicketDetailPage's own `primaryAction` — this module does not duplicate
- *   it; sales_manager has no worklist resolver of its own yet).
- * - `waitingRoleLabel` (Thai, from stageMeta's GATE_LABEL) is set only when
- *   `action` is null — either because the resolver had nothing pending
- *   (sales/import/account) or because the role has no resolver at all
- *   (anything other than ceo/sales_manager, which get neither) — read off
- *   the deal's CURRENT stage gate. Never set alongside a real `action`.
+ * Returns `{ action }` — whatever the matching resolver returned for sales/
+ * import/account viewers, `null` for every other role and for any deal that is
+ * not ACTIVE. There is deliberately no "waiting on <department>" fallback: the
+ * "รอฝ่ายขาย" banner looked expandable, did nothing and named no next step
+ * (GLA-156), so it was removed rather than fixed.
  *
- * A CLOSED_LOST / ON_HOLD / DORMANT deal returns `{ action: null,
- * waitingRoleLabel: null }`: DealStagePanel already renders a dedicated,
- * unambiguous state banner for those (reopen / resume / dormant), so this
- * module stays out of the way rather than saying something that would
- * compete with it.
+ * Slice 2 adds exactly two things, both keyed on a live direct quotation
+ * (TicketSummaryDto.liveDirectQuotation) and both naming a concrete next step:
+ * - sales_manager / ceo on a PENDING_APPROVAL one get their own action
+ *   "อนุมัติใบเสนอราคา" -> /quotations/:id;
+ * - the rep on that same state gets no button but `bannerText` — "รอ ผจก.ขาย/CEO
+ *   อนุมัติใบเสนอราคา {number}" — a waiting line that names the document and who
+ *   decides it (unlike the retired department-only banner above). Absent otherwise.
  */
-export function resolveWorkState(user, deal, pricingRequests = [], catalog = EMPTY_STAGE_CATALOG) {
+export function resolveWorkState(user, deal, pricingRequests = [], { reviseTarget = null } = {}) {
   const role = user?.role;
-  if (!deal || deal.lifecycle !== 'ACTIVE') return { action: null, waitingRoleLabel: null };
+  if (!deal || deal.lifecycle !== 'ACTIVE') return { action: null };
 
-  const action = role === 'sales' ? nextSalesAction(deal, pricingRequests)
+  // Slice 2 (SLICE-2-FLOW-A.md §E): a live direct quotation waiting for approval is the approvers'
+  // move. sales_manager/ceo — exactly canApproveDealQuotation's audience — get their own action to
+  // the quotation, where the real (server-gated) อนุมัติ button is. They get NOTHING new for a
+  // DRAFT/APPROVED one: submitting and confirming the order are the rep's.
+  if ((role === 'sales_manager' || role === 'ceo') && deal.liveDirectQuotation?.docStatus === 'PENDING_APPROVAL') {
+    const live = deal.liveDirectQuotation;
+    return {
+      action: {
+        key: DIRECT_APPROVAL_ACTION_KEY,
+        label: 'อนุมัติใบเสนอราคา',
+        to: `/quotations/${live.id}`,
+        quotationId: live.id,
+        quotationNumber: live.number,
+      },
+    };
+  }
+
+  const action = role === 'sales' ? nextSalesAction(deal, pricingRequests, { reviseTarget })
     : role === 'import' ? nextImportAction(deal, pricingRequests)
       : role === 'account' ? nextAccountAction(deal)
         : null;
 
-  if (action) return { action, waitingRoleLabel: null };
+  // The rep's AWAIT_DIRECT_APPROVAL bucket is a WAITING state, not a button: it becomes the
+  // header's one work-state line, naming who it waits on and which document.
+  if (action?.key === SALES_ACTION.AWAIT_DIRECT_APPROVAL) {
+    return {
+      action: null,
+      bannerText: `รอ ผจก.ขาย/CEO อนุมัติใบเสนอราคา ${action.quotationNumber ?? ''}`.trim(),
+    };
+  }
 
-  // ceo always has its own dedicated close-action button elsewhere; sales_manager
-  // has no worklist resolver of its own yet. Neither gets a "waiting on someone
-  // else" banner — showing one to a role that never has a resolver-driven action
-  // in the first place would read as a permission statement this module doesn't
-  // make (see the module's own doc comment).
-  if (role === 'ceo' || role === 'sales_manager') return { action: null, waitingRoleLabel: null };
+  if (action) return { action };
 
-  // The stage's owning department is the backend's `gate` (from TicketService's three
-  // *_TARGET_STAGES sets), read off the catalog — not a local table. Null while it loads.
-  const meta = findStage(catalog, deal.salesStage);
-  return { action: null, waitingRoleLabel: meta ? GATE_LABEL[meta.gate] : null };
+  return { action: null };
+}
+
+/**
+ * PR A — ADDITIONAL (secondary) actions beside the sticky primary. At the owner / buyer quote stages
+ * the client may want a revision or be happy with the original, so แก้ใบเสนอราคา is offered
+ * alongside — never instead of — the primary บันทึกผลใบเสนอราคา. Sales only; `reviseTarget` is
+ * resolved by the caller through quotationMeta.canReviseDealQuotation (owner + status live there).
+ * Skipped when revise is already the primary (approved direct quotation past draft).
+ */
+export function secondaryWorkActions(user, deal, pricingRequests = [], { reviseTarget = null } = {}) {
+  if (user?.role !== 'sales' || !deal || deal.lifecycle !== 'ACTIVE') return [];
+  if (!reviseTarget || !REVISE_STAGES.has(deal.salesStage)) return [];
+  if (resolveWorkState(user, deal, pricingRequests, { reviseTarget }).action?.key === SALES_ACTION.REVISE_QUOTATION) return [];
+  return [reviseAction(reviseTarget)];
 }

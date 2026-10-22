@@ -143,6 +143,11 @@ public class NotificationRepository {
         Map.entry("PICKED_UP", "คำขอราคาถูกรับเรื่องแล้ว"),
         Map.entry("FACTORY_EMAIL_READY", "ร่างอีเมลโรงงานพร้อมตรวจ"),
         Map.entry("FACTORY_EMAIL_SENT", "ส่งคำขอโรงงานแล้ว"),
+        // CR-1 (GLA-167): "ติดต่อโรงงานแล้ว" replaces the send step; the lead-time change flow is new.
+        Map.entry("FACTORY_CONTACTED", "ติดต่อโรงงานแล้ว"),
+        Map.entry("LEAD_TIME_CHANGE_REQUESTED", "ขอเปลี่ยนระยะเวลานำเข้า รอฝ่ายขายอนุมัติ"),
+        Map.entry("LEAD_TIME_CHANGE_APPROVED", "อนุมัติการเปลี่ยนระยะเวลานำเข้าแล้ว"),
+        Map.entry("LEAD_TIME_CHANGE_REJECTED", "ไม่อนุมัติการเปลี่ยนระยะเวลานำเข้า"),
         Map.entry("FACTORY_RESPONSE_RECEIVED", "ได้รับราคาโรงงานแล้ว"),
         Map.entry("FACTORY_NEGOTIATION_STARTED", "เริ่มเจรจากับโรงงาน"),
         Map.entry("FACTORY_RESPONSE_READY_FOR_COSTING", "ราคาโรงงานพร้อมคำนวณต้นทุน"),
@@ -230,7 +235,39 @@ public class NotificationRepository {
         notifyByRoleInternal(role, type, message, link);
     }
 
+    /**
+     * CR-1 (GLA-167): in-app row only, NO email -- the lead-time change flow is deliberately
+     * bell-only (owner decision). Same INSERT as {@link #notifyEmployeeForPricingRequest}, minus the mailer.
+     */
+    public void notifyEmployeeForPricingRequestInAppOnly(long employeeId, long pricingRequestId, String type, String message) {
+        insertEmployeeNotification(employeeId, type, message, "/pricing-requests/" + pricingRequestId);
+    }
+
+    /**
+     * {@link #notifyByRoleForPricingRequest} that skips {@code excludeEmployeeId}: the person who did
+     * the thing (e.g. the CEO marking a factory contacted) is not told about their own action. Other
+     * members of the role still are. The role mailbox is only mailed when somebody else received a row.
+     */
+    public void notifyByRoleForPricingRequestExcluding(String role, long pricingRequestId, String type,
+                                                       String message, long excludeEmployeeId) {
+        notifyByRoleInternal(role, type, message, "/pricing-requests/" + pricingRequestId, true, excludeEmployeeId);
+    }
+
+    /** In-app-only counterpart of {@link #notifyByRoleForPricingRequest}; see above. */
+    public void notifyByRoleForPricingRequestInAppOnly(String role, long pricingRequestId, String type, String message) {
+        notifyByRoleInternal(role, type, message, "/pricing-requests/" + pricingRequestId, false);
+    }
+
     private void notifyEmployeeAt(long employeeId, String type, String message, String link) {
+        String title = insertEmployeeNotification(employeeId, type, message, link);
+        // The Thai TITLE, never `type`. `type` is a machine code (PRICING_DECISION_APPROVED) and
+        // mailing it would put a raw enum in a subject line at real people — the exact defect a
+        // previous round shipped when TRAVEL_PER_DIEM reached employees. Passing the same string the
+        // in-app row stores also means the bell and the inbox can never disagree about what happened.
+        salesMailer.emailForEmployee(employeeId, title, message, link);
+    }
+
+    private String insertEmployeeNotification(long employeeId, String type, String message, String link) {
         String title = ticketEventTitle(type);
         jdbc.update("""
             INSERT INTO hr.notification (employee_id, type, title, message, link)
@@ -242,11 +279,7 @@ public class NotificationRepository {
                 .addValue("title", title)
                 .addValue("message", message)
                 .addValue("link", link));
-        // The Thai TITLE, never `type`. `type` is a machine code (PRICING_DECISION_APPROVED) and
-        // mailing it would put a raw enum in a subject line at real people — the exact defect a
-        // previous round shipped when TRAVEL_PER_DIEM reached employees. Passing the same string the
-        // in-app row stores also means the bell and the inbox can never disagree about what happened.
-        salesMailer.emailForEmployee(employeeId, title, message, link);
+        return title;
     }
 
     /**
@@ -303,6 +336,15 @@ public class NotificationRepository {
     }
 
     private void notifyByRoleInternal(String role, String type, String message, String link) {
+        notifyByRoleInternal(role, type, message, link, true);
+    }
+
+    private void notifyByRoleInternal(String role, String type, String message, String link, boolean email) {
+        notifyByRoleInternal(role, type, message, link, email, null);
+    }
+
+    private void notifyByRoleInternal(String role, String type, String message, String link, boolean email,
+                                      Long excludeEmployeeId) {
         String divisionFilter = switch (role) {
             case "import" -> "d.source_code ILIKE 'PCIM%'";
             // Mirrors DivisionAccessPolicy#roleFor's hr branch ("hr".equals(divisionCode(employee))),
@@ -361,15 +403,20 @@ public class NotificationRepository {
               LEFT JOIN hr.division d ON d.division_id = e.division_id
               LEFT JOIN hr.position p ON p.position_id = e.position_id
              WHERE (%s) AND e.is_active = TRUE
+               AND (CAST(:excludeEmployeeId AS BIGINT) IS NULL OR e.employee_id <> :excludeEmployeeId)
             RETURNING employee_id
             """.formatted(divisionFilter),
             new MapSqlParameterSource()
                 .addValue("type", type)
                 .addValue("title", title)
                 .addValue("message", message)
-                .addValue("link", link),
+                .addValue("link", link)
+                .addValue("excludeEmployeeId", excludeEmployeeId),
             Long.class);
-        salesMailer.emailForRole(role, notified, title, message, link);
+        // With an exclusion the role mailbox is only worth mailing when somebody ELSE was notified.
+        if (email && (excludeEmployeeId == null || !notified.isEmpty())) {
+            salesMailer.emailForRole(role, notified, title, message, link);
+        }
     }
 
     private String ticketEventTitle(String type) {

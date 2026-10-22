@@ -228,7 +228,12 @@ export function createDemoDatabase() {
     // 2026-09-09 -- ภิญญดา, employee 144, QC&ISO / role `qc`, which this demo seed has no persona
     // for) on a non-sales `employee` role, mirroring AuthResponse.canCreateQuotation /
     // hr.employee.can_create_quotation (V166). See quotationMeta.js's hasDealQuotationGrant.
-    { id: 4, email: 'employee@glr.co.th', password: 'demo1234', name: employees[8].nameTh, role: 'employee', employeeId: employees[8].id, active: true, createdAt: iso(2025, 2, 11), canCreateQuotation: true },
+    // canIssueBillingNote: true exercises the billing-note per-employee grant (GLA-99/GLA-129,
+    // owner ruling 2026-09-19) on the same non-sales `employee` role -- on prod this is the same
+    // real person (ภิญญดา holds both grants), so reusing this persona rather than inventing a
+    // second one keeps the demo faithful. Mirrors AuthResponse.canIssueBillingNote /
+    // hr.employee.can_issue_billing_note (V189). See permissions.js's isBillingNoteReleaseUser.
+    { id: 4, email: 'employee@glr.co.th', password: 'demo1234', name: employees[8].nameTh, role: 'employee', employeeId: employees[8].id, active: true, createdAt: iso(2025, 2, 11), canCreateQuotation: true, canIssueBillingNote: true },
     // WHL division manager — lets the seeded stage-1 OT approval (OT#1, whose
     // employee reports to this ผู้จัดการฝ่าย) be demoed. role is 'employee' on
     // purpose: a division manager's OT-review authority is derived from the org

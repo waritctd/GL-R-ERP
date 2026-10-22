@@ -46,12 +46,11 @@ describe('hasMeaningfulDraftData', () => {
     expect(hasMeaningfulDraftData({ priority: 'NORMAL', nextFollowUpAt: '2026-10-01', items: [] })).toBe(false);
   });
 
-  it('is true when a title, note, customer, project, contact, channel or item is present', () => {
+  it('is true when a title, note, customer, project, channel or item is present', () => {
     expect(hasMeaningfulDraftData({ dealTitle: 'ดีลทดสอบ' })).toBe(true);
     expect(hasMeaningfulDraftData({ note: 'บันทึกเพิ่มเติม' })).toBe(true);
     expect(hasMeaningfulDraftData({ customer: { id: 1, name: 'บริษัท เอ' } })).toBe(true);
     expect(hasMeaningfulDraftData({ project: { id: 1, name: 'โครงการ เอ' } })).toBe(true);
-    expect(hasMeaningfulDraftData({ contact: { id: 1 } })).toBe(true);
     expect(hasMeaningfulDraftData({ entryChannel: 'OWNER_DIRECT' })).toBe(true);
     expect(hasMeaningfulDraftData({ items: [{ brand: 'A' }] })).toBe(true);
   });

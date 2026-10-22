@@ -273,6 +273,37 @@ public class ImportRequestRepository {
     }
 
     /**
+     * CR-1: records the quotation-derived lead time this row was BUILT from (null/null = built from
+     * the country default). Kept apart from {@code lead_time_*} so a manual post-issue edit does not
+     * overwrite it: {@code ImportRequestService#revise} compares a freshly derived value against this
+     * to tell "the quotation changed" from "import edited it by hand".
+     */
+    public void setDerivedLeadTime(long id, Integer minDays, Integer maxDays) {
+        jdbc.update("""
+            UPDATE sales.import_request
+               SET derived_lead_time_min_days = :min, derived_lead_time_max_days = :max
+             WHERE import_request_id = :id
+            """, new MapSqlParameterSource().addValue("id", id)
+                .addValue("min", minDays, java.sql.Types.SMALLINT).addValue("max", maxDays, java.sql.Types.SMALLINT));
+    }
+
+    /** {@code [min, max]} as stored by {@link #setDerivedLeadTime}, or empty when none was. */
+    public java.util.Optional<int[]> findDerivedLeadTime(long id) {
+        return jdbc.query("""
+            SELECT derived_lead_time_min_days, derived_lead_time_max_days
+              FROM sales.import_request WHERE import_request_id = :id
+            """, Map.of("id", id), rs -> {
+                if (!rs.next()) {
+                    return java.util.Optional.<int[]>empty();
+                }
+                Number min = (Number) rs.getObject("derived_lead_time_min_days");
+                Number max = (Number) rs.getObject("derived_lead_time_max_days");
+                return min == null || max == null ? java.util.Optional.<int[]>empty()
+                    : java.util.Optional.of(new int[] {min.intValue(), max.intValue()});
+            });
+    }
+
+    /**
      * Sets lead time (V184, owner decision 09-18 #2) directly — not COALESCE, unlike {@link
      * #updateDraftBody}/{@link #updateFooter} — because both callers ({@code
      * ImportRequestService#update} for the DRAFT-stage owning-rep/CEO edit, {@code #setLeadTime}

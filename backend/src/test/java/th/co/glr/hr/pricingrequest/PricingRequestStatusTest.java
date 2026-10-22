@@ -32,6 +32,24 @@ class PricingRequestStatusTest {
     }
 
     @Test
+    void importReviewing_toReadyForCeoReview_isAllowed_theNewEdgeForRequestsWithNoImportLines() {
+        // Stock-line feature, slice 1 (IA .design/stock-item-pricing 1.2): a request made only of
+        // stock lines (IN_THAILAND / IN_TRANSIT, no import line) has no factory quote to move it
+        // through AWAITING_FACTORY_RESPONSE, so once import has saved the last ETA it goes
+        // IMPORT_REVIEWING -> READY_FOR_CEO_REVIEW directly. PricingRequestRepository.transition
+        // ASSERTS this map, so without the edge that advance throws IllegalStateException.
+        assertThat(PricingRequestStatus.canTransition(
+            PricingRequestStatus.IMPORT_REVIEWING, PricingRequestStatus.READY_FOR_CEO_REVIEW)).isTrue();
+        // ...and it is a NEW edge only: nothing else about IMPORT_REVIEWING's exits changed.
+        assertThat(PricingRequestStatus.canTransition(
+            PricingRequestStatus.IMPORT_REVIEWING, PricingRequestStatus.AWAITING_FACTORY_RESPONSE)).isTrue();
+        assertThat(PricingRequestStatus.canTransition(
+            PricingRequestStatus.IMPORT_REVIEWING, PricingRequestStatus.CEO_REVIEWING)).isFalse();
+        assertThat(PricingRequestStatus.canTransition(
+            PricingRequestStatus.IMPORT_REVIEWING, PricingRequestStatus.APPROVED_FOR_QUOTATION)).isFalse();
+    }
+
+    @Test
     void readyForCeoReview_toCeoReviewing_isAllowed() {
         // The CEO explicitly starting review (PricingDecisionService.startReview) — the one entry
         // point into Step 3.

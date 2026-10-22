@@ -1,7 +1,7 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CommissionPage } from './CommissionPage.jsx';
 import { api } from '../../api/index.js';
@@ -24,6 +24,8 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         createFromDeal: vi.fn(),
         monthlySummary: vi.fn(),
         simulate: vi.fn(),
+        pendingApproval: vi.fn(),
+        adjustItemWeights: vi.fn(),
         // Default empty, same reasoning as tickets.list below: every sales_manager/ceo render
         // (canCreateManual) fires this effect on mount regardless of what a given test is
         // actually checking, so an unconfigured vi.fn() (resolving to undefined) would throw on
@@ -33,6 +35,9 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       tickets: {
         list: vi.fn().mockResolvedValue({ tickets: [] }),
         get: vi.fn(),
+      },
+      finance: {
+        getDeal: vi.fn(),
       },
     },
   };
@@ -58,6 +63,11 @@ function renderPage(user) {
     </MemoryRouter>,
   );
 }
+
+// The ×1/×2/×3 segmented control may be native radios or role="radio" buttons -- the contract is
+// the ARIA state, not the element type.
+const isChecked = (el) => el.checked === true || el.getAttribute('aria-checked') === 'true';
+const isDisabled = (el) => el.disabled === true || el.getAttribute('aria-disabled') === 'true';
 
 const hrUser = { id: 900, employeeId: 900, name: 'HR Test', role: 'hr' };
 const salesUser = { id: 10, employeeId: 10, name: 'พนักงานขาย ทดสอบ', role: 'sales' };
@@ -264,10 +274,12 @@ describe('CommissionPage — sales rep monthly incentive line renders the server
     await waitFor(() => expect(api.commissions.list).toHaveBeenCalled());
     await setMonthInput('2026-08');
 
-    expect(await screen.findByText('อินเซนทีฟ (นอกขั้นบันได)')).not.toBeNull();
-    // Two 15,000.00 occurrences would also be plausible depending on layout; assert the exact
-    // incentive figure is present at least once.
-    expect(screen.getAllByText('฿15,000.00').length).toBeGreaterThan(0);
+    // Redesign: the incentive is one limb of the "ค่าคอมของฉัน" statement ("+ Incentive ข้อ 12"),
+    // not a free-floating "อินเซนทีฟ (นอกขั้นบันได)" line. Scoped to the row because ฿15,000.00
+    // can legitimately also appear elsewhere (a receipt row, the tier panel).
+    const incentiveRow = await screen.findByTestId('statement-incentive');
+    expect(incentiveRow.textContent).toContain('Incentive ข้อ 12');
+    expect(incentiveRow.textContent).toContain('฿15,000.00');
   });
 
   it('hides the incentive line when the server reports incentiveAmount as zero', async () => {
@@ -291,10 +303,10 @@ describe('CommissionPage — sales rep monthly incentive line renders the server
     await waitFor(() => expect(api.commissions.list).toHaveBeenCalled());
     await setMonthInput('2026-08');
 
-    // Wait for the panel (proves records loaded and the month change took effect) before
-    // asserting the suppressed line is absent.
-    expect(await screen.findByText('ขั้นบันไดค่าคอมเดือนนี้ (ประมาณการ)')).not.toBeNull();
-    expect(screen.queryByText('อินเซนทีฟ (นอกขั้นบันได)')).toBeNull();
+    // Wait for the statement (proves records loaded and the month change took effect) before
+    // asserting the suppressed limb is absent.
+    expect(await screen.findByTestId('statement-total')).not.toBeNull();
+    expect(screen.queryByTestId('statement-incentive')).toBeNull();
   });
 });
 
@@ -334,8 +346,12 @@ describe('CommissionPage — monthly tier summary comes from the server, not cli
     await waitFor(() => expect(api.commissions.list).toHaveBeenCalled());
     await setMonthInput('2026-08');
 
-    expect(await screen.findByText('฿99,999.99')).not.toBeNull();
-    expect(screen.getByText('฿1,200,000.00')).not.toBeNull();
+    // Scoped to statement rows: 99,999.99 is BOTH the tier limb and the total here, so a bare
+    // getByText would now match twice. The point is unchanged -- the exact SERVER figure renders,
+    // not one recomputed from `records`.
+    expect((await screen.findByTestId('statement-tier')).textContent).toContain('฿99,999.99');
+    expect(screen.getByTestId('statement-total').textContent).toContain('฿99,999.99');
+    expect(screen.getByTestId('statement-base').textContent).toContain('฿1,200,000.00');
   });
 
   it('follows the server figure when it changes -- proves the render is wired to the DTO, not a frozen snapshot', async () => {
@@ -359,8 +375,9 @@ describe('CommissionPage — monthly tier summary comes from the server, not cli
     await waitFor(() => expect(api.commissions.list).toHaveBeenCalled());
     await setMonthInput('2026-08');
 
-    expect(await screen.findByText('฿4,567.89')).not.toBeNull();
-    expect(screen.getByText('฿654,321.09')).not.toBeNull();
+    expect((await screen.findByTestId('statement-tier')).textContent).toContain('฿4,567.89');
+    expect(screen.getByTestId('statement-total').textContent).toContain('฿4,567.89');
+    expect(screen.getByTestId('statement-base').textContent).toContain('฿654,321.09');
   });
 
   // The three cases above all stub `tiers: []` (what mock mode returns, since it has no DB tier
@@ -385,6 +402,8 @@ describe('CommissionPage — monthly tier summary comes from the server, not cli
           { tierNumber: 1, lowerBound: 0, upperBound: 250000, ratePercent: 0.25, highRoller: false, commission: 625 },
           // ratePercent as a STRING, and the open-ended top tier (upperBound null -> "ขึ้นไป").
           { tierNumber: 2, lowerBound: 250000, upperBound: null, ratePercent: '0.5000', highRoller: true, commission: 250.5 },
+          // A band the base never reached: commission 0 -> not listed in the disclosure.
+          { tierNumber: 3, lowerBound: 500000, upperBound: 750000, ratePercent: 0.75, highRoller: false, commission: 0 },
         ],
       },
     });
@@ -394,8 +413,13 @@ describe('CommissionPage — monthly tier summary comes from the server, not cli
     await waitFor(() => expect(api.commissions.list).toHaveBeenCalled());
     await setMonthInput('2026-08');
 
-    expect(await screen.findByText('ขั้นบันไดค่าคอมเดือนนี้ (ประมาณการ)')).not.toBeNull();
-    fireEvent.click(screen.getByTitle('ขยาย'));
+    // Redesign: the bands are a disclosure under the statement's "ค่าคอมตามขั้นบันได" limb, and it
+    // lists only the bands actually reached (commission != 0) -- hence the zero-commission band
+    // added to the fixture below, which must NOT appear.
+    const disclosure = await screen.findByRole('button', { name: /ขั้นบันไดที่ได้รับ/ });
+    expect(disclosure.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(disclosure);
+    expect(disclosure.getAttribute('aria-expanded')).toBe('true');
 
     // Rates come straight from the server rows, formatted but never recomputed.
     expect(await screen.findByText('0.25%')).not.toBeNull();
@@ -404,6 +428,8 @@ describe('CommissionPage — monthly tier summary comes from the server, not cli
     expect(screen.getByText('฿250.50')).not.toBeNull();
     // The open-ended top tier renders its bound as "ขึ้นไป", not "null".
     expect(screen.getByText(/ขึ้นไป/)).not.toBeNull();
+    // Only bands actually reached are listed.
+    expect(screen.queryByText('0.75%')).toBeNull();
     // The mock-mode empty state must NOT appear when the server did supply rows.
     expect(screen.queryByText('ไม่มีรายละเอียดขั้นบันไดค่าคอมให้แสดงในขณะนี้')).toBeNull();
   });
@@ -411,13 +437,14 @@ describe('CommissionPage — monthly tier summary comes from the server, not cli
 
 const accountUser = { id: 20, employeeId: 20, name: 'บัญชี ทดสอบ', role: 'account' };
 
-function closedPaidTicket(overrides = {}) {
+// The FinanceDealDto shape (backend finance/FinanceDealDto.java): the amount lives under `money`.
+function financeDeal(overrides = {}) {
   return {
     id: 42,
     code: 'TCK-0042',
     customerName: 'บริษัท ทดสอบ จำกัด',
     salesStage: 'CLOSED_PAID',
-    amountPayable: 3210000,
+    money: { amountPayable: 3210000 },
     ...overrides,
   };
 }
@@ -440,7 +467,9 @@ describe('CommissionPage — account create-from-deal tax invoice upload', () =>
   beforeEach(() => {
     vi.clearAllMocks();
     showToast = vi.fn();
-    api.tickets.get.mockResolvedValue({ ticket: { summary: closedPaidTicket() } });
+    // H1 lockdown: account reads a deal through the finance view only (api.tickets.get 403s for it).
+    api.finance.getDeal.mockResolvedValue({ deal: financeDeal() });
+    api.tickets.get.mockRejectedValue(new Error('account must not call api.tickets.get'));
     api.commissions.createFromDeal.mockResolvedValue({ commission: { id: 900, invoiceDetails: invoiceDetails() } });
   });
 
@@ -448,23 +477,72 @@ describe('CommissionPage — account create-from-deal tax invoice upload', () =>
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
-    return render(
+    const utils = render(
       <MemoryRouter>
         <QueryClientProvider client={queryClient}>
           <CommissionPage user={accountUser} showToast={showToast} />
         </QueryClientProvider>
       </MemoryRouter>,
     );
+    return { ...utils, queryClient };
   }
+
+  it('the Linked Deal lookup goes through api.finance.getDeal for account, never api.tickets.get', async () => {
+    renderAccountPage();
+    await loadEligibleDeal('42');
+    expect(api.finance.getDeal).toHaveBeenCalledWith(42);
+    expect(api.tickets.get).not.toHaveBeenCalled();
+    // fields are mapped from the finance view: code, customer, and the amount from `money`
+    expect(screen.getByText('TCK-0042')).not.toBeNull();
+    expect(screen.getByText(/฿3,210,000.00/)).not.toBeNull();
+    expect((screen.getByLabelText(/ยอดรวม/)).value).toBe('3210000');
+  });
+
+  it('a finance-view deal that has not reached CLOSED_PAID is refused with the stage in the message', async () => {
+    api.finance.getDeal.mockResolvedValue({ deal: financeDeal({ salesStage: 'DELIVERY_SCHEDULING' }) });
+    renderAccountPage();
+    fireEvent.change(screen.getByLabelText(/เลขที่ Ticket ID/), { target: { value: '42' } });
+    fireEvent.click(screen.getByRole('button', { name: /โหลดข้อมูลดีล/ }));
+    const msg = (await screen.findByText(/ยังไม่ถึงขั้นตอนปิดงาน/)).textContent;
+    // dealStageLabel() returns { label, tone }, never a string: interpolating the call itself
+    // renders "[object Object]" where the Thai stage name belongs. Pin the rendered text.
+    expect(msg).toContain('นัดส่งสินค้า / นัดรับเงินส่วนที่เหลือ');
+    expect(msg).not.toContain('[object Object]');
+  });
+
+  it('a stage with no Thai copy falls back to the raw code, still not "[object Object]"', async () => {
+    // dealStageLabel()'s fallback limb returns an object too, so a fix that only handles known
+    // stages would leak "[object Object]" here.
+    api.finance.getDeal.mockResolvedValue({ deal: financeDeal({ salesStage: 'FUTURE_STAGE' }) });
+    renderAccountPage();
+    fireEvent.change(screen.getByLabelText(/เลขที่ Ticket ID/), { target: { value: '42' } });
+    fireEvent.click(screen.getByRole('button', { name: /โหลดข้อมูลดีล/ }));
+    const msg = (await screen.findByText(/ยังไม่ถึงขั้นตอนปิดงาน/)).textContent;
+    expect(msg).toContain('FUTURE_STAGE');
+    expect(msg).not.toContain('[object Object]');
+  });
+
+  it('a successful create-from-deal invalidates the finance deal cache too, so the commission CTA is not stale', async () => {
+    const { queryClient } = renderAccountPage();
+    const spy = vi.spyOn(queryClient, 'invalidateQueries');
+    await loadEligibleDeal();
+    fireEvent.change(screen.getByLabelText(/เลขที่ใบกำกับ/), { target: { value: 'INV-0042' } });
+    const original = new File(['x'], 'tax-invoice-0042.jpg', { type: 'image/jpeg' });
+    fireEvent.change(document.getElementById('commission-invoice-file'), { target: { files: [original] } });
+    fireEvent.change(screen.getByLabelText(/ยอดรวม/), { target: { value: '3210000' } });
+    fireEvent.submit(screen.getByRole('button', { name: 'บันทึกและสร้างคำขอค่าคอม' }).closest('form'));
+    await waitFor(() => expect(api.commissions.createFromDeal).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(spy).toHaveBeenCalledWith({ queryKey: ['finance'] }));
+  });
 
   it('re-wraps the compressed invoice image so createFromDeal receives the original filename, not "blob"', async () => {
     renderAccountPage();
     await loadEligibleDeal();
 
-    fireEvent.change(screen.getByLabelText('Invoice Number *'), { target: { value: 'INV-0042' } });
+    fireEvent.change(screen.getByLabelText(/เลขที่ใบกำกับ/), { target: { value: 'INV-0042' } });
     const original = new File(['fake-jpeg-bytes'], 'tax-invoice-0042.jpg', { type: 'image/jpeg' });
     fireEvent.change(document.getElementById('commission-invoice-file'), { target: { files: [original] } });
-    fireEvent.change(screen.getByLabelText(/Gross Amount/), { target: { value: '3210000' } });
+    fireEvent.change(screen.getByLabelText(/ยอดรวม/), { target: { value: '3210000' } });
 
     // fireEvent.click on the submit button runs jsdom's native constraint validation first,
     // which (unlike a real browser) does not reliably see the file input as satisfied after a
@@ -488,10 +566,10 @@ describe('CommissionPage — account create-from-deal tax invoice upload', () =>
     renderAccountPage();
     await loadEligibleDeal();
 
-    fireEvent.change(screen.getByLabelText('Invoice Number *'), { target: { value: 'INV-0042' } });
+    fireEvent.change(screen.getByLabelText(/เลขที่ใบกำกับ/), { target: { value: 'INV-0042' } });
     const pdf = new File(['fake-pdf-bytes'], 'tax-invoice-0042.pdf', { type: 'application/pdf' });
     fireEvent.change(document.getElementById('commission-invoice-file'), { target: { files: [pdf] } });
-    fireEvent.change(screen.getByLabelText(/Gross Amount/), { target: { value: '3210000' } });
+    fireEvent.change(screen.getByLabelText(/ยอดรวม/), { target: { value: '3210000' } });
 
     // fireEvent.click on the submit button runs jsdom's native constraint validation first,
     // which (unlike a real browser) does not reliably see the file input as satisfied after a
@@ -596,7 +674,9 @@ describe('CommissionPage — manual-commission rep picker (issue #737)', () => {
     fireEvent.click(screen.getByRole('button', { name: /เพิ่มค่าคอมด้วยตนเอง/ }));
 
     // Present by name alone -- proves the rep with no deal reached the option list.
-    expect(await screen.findByText('ผู้จัดการ ไม่มีดีลเลย')).not.toBeNull();
+    // Scoped to the manual form's picker: the page's own "สรุปรายคน" picker now lists the same
+    // reps, so a bare findByText would match both.
+    expect(await within(await screen.findByLabelText(/หรือเลือกจากพนักงานขาย/)).findByText('ผู้จัดการ ไม่มีดีลเลย')).not.toBeNull();
 
     // api.tickets.list resolves { tickets: [] } by default (top-level mock) -- the OLD
     // ticket-derived picker could never have shown a rep with no deal. This picker never calls
@@ -631,10 +711,171 @@ describe('CommissionPage — manual-commission rep picker (issue #737)', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /เพิ่มค่าคอมด้วยตนเอง/ }));
 
-    expect(await screen.findByText('พนักงานขาย ตัวอย่าง')).not.toBeNull();
+    expect(await within(await screen.findByLabelText(/หรือเลือกจากพนักงานขาย/)).findByText('พนักงานขาย ตัวอย่าง')).not.toBeNull();
     // Concise (Ploy's request) but still names the scope (ฝ่ายขาย) and still points at the
     // numeric Employee-ID field for anyone the picker excludes -- dropping either would either
     // overclaim completeness or silently strand a caller with no way to reach someone.
     expect(screen.getByText('หรือเลือกจากพนักงานขาย (นอกฝ่ายขายให้กรอกรหัสพนักงานด้านบน)')).not.toBeNull();
+  });
+});
+
+// sales_manager รออนุมัติ view (?view=pending): every SUBMITTED sale record across ALL payroll months,
+// with per-item stock/weight lines, served by GET /api/commissions/pending-approval and adjusted by
+// POST /api/commissions/{id}/item-weights (sales_manager ONLY; ceo reads). MOCK-DRIVEN: these prove the
+// page's plumbing, NOT the authorization boundary (the Java integration tests own that) and NOT the
+// estimatedCommission / effectiveWeight maths, which come back from the server and are never recomputed here.
+describe('CommissionPage — รออนุมัติ pending-approval view', () => {
+  function renderAt(user, url) {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    return render(
+      <MemoryRouter initialEntries={[url]}>
+        <QueryClientProvider client={queryClient}>
+          <CommissionPage user={user} showToast={vi.fn()} />
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  const pendingRecord = () => saleRecord({
+    id: 701,
+    status: 'SUBMITTED',
+    payrollMonth: '2026-07-01', // deliberately NOT the current month: the view must not depend on the month filter
+    approvedById: null, approvedAt: null,
+    managerApprovedBy: null, managerApprovedByName: null, managerApprovedAt: null,
+    ceoApprovedBy: null, ceoApprovedByName: null, ceoApprovedAt: null,
+    commissionableBase: 4000000, // ex-VAT, BEFORE weighting (weightedCommissionableBase below is after)
+    invoiceDetails: invoiceDetails({ id: 701, invoiceNumber: 'INV-PEND-0701' }),
+  });
+  const pendingDto = (over = {}) => ({
+    commission: pendingRecord(),
+    ticketCode: 'TCK-0077',
+    customerName: 'บริษัท รออนุมัติ จำกัด',
+    items: [
+      { itemId: 11, description: 'PADANA 60x60 ผิวเงา', qty: 120, qtyFromStock: 30, weightMultiplier: 1 },
+      { itemId: 12, description: 'PADANA 30x60 ผิวด้าน', qty: 40, qtyFromStock: 0, weightMultiplier: 1 },
+    ],
+    effectiveWeight: 1.6,
+    weightedCommissionableBase: 4800000,
+    estimatedCommission: 95000.5,
+    ...over,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // list() returns OTHER-status records: they must never leak into the pending view.
+    api.commissions.list.mockResolvedValue({
+      commissions: [
+        saleRecord({ id: 801, status: 'APPROVED', invoiceDetails: invoiceDetails({ id: 801, invoiceNumber: 'INV-OTHER-APPROVED' }) }),
+        saleRecord({ id: 802, status: 'MANAGER_APPROVED', invoiceDetails: invoiceDetails({ id: 802, invoiceNumber: 'INV-OTHER-MGRAPPR' }) }),
+      ],
+    });
+    api.commissions.reps.mockResolvedValue({ reps: [] });
+    api.commissions.monthlySummary.mockResolvedValue({ summary: null });
+    api.commissions.pendingApproval.mockResolvedValue({ commissions: [pendingDto()] });
+  });
+
+  const pendingTab = () => screen.queryByRole('tab', { name: /รออนุมัติ/ }) ?? screen.queryByRole('button', { name: /^รออนุมัติ/ });
+
+  it('?view=pending shows the รออนุมัติ view from api.commissions.pendingApproval (no month argument) and only its items', async () => {
+    renderAt(salesManagerUser, '/commissions?view=pending');
+    expect(await screen.findByText('INV-PEND-0701')).not.toBeNull();
+    expect(api.commissions.pendingApproval).toHaveBeenCalledWith();
+    expect(screen.getByText(/TCK-0077/)).not.toBeNull();
+    expect(screen.getByText(/บริษัท รออนุมัติ จำกัด/)).not.toBeNull();
+    // other-status rows from list() do not appear in the pending view
+    expect(screen.queryByText('INV-OTHER-APPROVED')).toBeNull();
+    expect(screen.queryByText('INV-OTHER-MGRAPPR')).toBeNull();
+  });
+
+  it('each pending card shows product, qty, qty from stock, a ×1/×2/×3 weight segmented control, total weight (2dp) and the estimated commission', async () => {
+    renderAt(salesManagerUser, '/commissions?view=pending');
+    await screen.findByText('INV-PEND-0701');
+    expect(screen.getByText('PADANA 60x60 ผิวเงา')).not.toBeNull();
+    expect(screen.getByText('PADANA 30x60 ผิวด้าน')).not.toBeNull();
+    // Redesign: "สต็อก n/qty" replaces the separate จำนวน / จากสต็อก columns, and the native
+    // <select> becomes a ×1/×2/×3 segmented radiogroup per line.
+    expect(screen.getByText('สต็อก 30/120')).not.toBeNull();
+    expect(screen.queryAllByRole('combobox')).toHaveLength(0);
+    const groups = screen.getAllByRole('radiogroup');
+    expect(groups).toHaveLength(2);
+    expect(within(groups[0]).getAllByRole('radio').map((r) => r.textContent.trim())).toEqual(['×1', '×2', '×3']);
+    expect(isChecked(within(groups[0]).getByRole('radio', { name: '×1' }))).toBe(true);
+    // The manager sees the effect of her key-in: base before weighting -> base after weighting.
+    const entry = screen.getByTestId('pending-entry-701');
+    expect(entry.textContent).toContain('฿4,000,000.00');
+    expect(entry.textContent).toContain('฿4,800,000.00');
+    expect(screen.getByText(/น้ำหนักรวม/)).not.toBeNull();
+    expect(screen.getByText('1.60')).not.toBeNull();
+    // Relabelled (review fix): it is an ESTIMATE of the month's increment, and the weighted base
+    // -- the figure the manager is changing -- is the headline of the card, not this one.
+    expect(screen.getByText('ค่าคอมโดยประมาณ (ส่วนเพิ่มของเดือน)')).not.toBeNull();
+    expect(screen.queryByText(/ค่าคอมที่คำนวณได้/)).toBeNull();
+    expect(screen.getByText(/฿95,000\.50/)).not.toBeNull();
+  });
+
+  it('sales_manager changing an item weight calls adjustItemWeights(recordId, {lines}) and shows the SERVER-recomputed effectiveWeight', async () => {
+    api.commissions.adjustItemWeights.mockResolvedValue({
+      pending: pendingDto({
+        items: [
+          { itemId: 11, description: 'PADANA 60x60 ผิวเงา', qty: 120, qtyFromStock: 30, weightMultiplier: 3 },
+          { itemId: 12, description: 'PADANA 30x60 ผิวด้าน', qty: 40, qtyFromStock: 0, weightMultiplier: 1 },
+        ],
+        effectiveWeight: 2.2,
+        estimatedCommission: 130000,
+      }),
+    });
+    renderAt(salesManagerUser, '/commissions?view=pending');
+    await screen.findByText('INV-PEND-0701');
+    const line11 = () => within(screen.getByRole('radiogroup', { name: 'น้ำหนัก PADANA 60x60 ผิวเงา' }));
+    fireEvent.click(line11().getByRole('radio', { name: '×3' }));
+    await waitFor(() => expect(api.commissions.adjustItemWeights).toHaveBeenCalledTimes(1));
+    expect(api.commissions.adjustItemWeights).toHaveBeenCalledWith(701, { lines: [{ itemId: 11, weightMultiplier: 3 }] });
+    expect(await screen.findByText('2.20')).not.toBeNull();
+    expect(screen.queryByText('1.60')).toBeNull();
+    expect(isChecked(line11().getByRole('radio', { name: '×3' }))).toBe(true);
+  });
+
+  it('ceo sees the pending card but the weight selects are read-only (adjust is sales_manager only) and never call the API', async () => {
+    renderAt(ceoUser, '/commissions?view=pending');
+    await screen.findByText('INV-PEND-0701');
+    expect(api.commissions.pendingApproval).toHaveBeenCalled();
+    // Read-only for the CEO: the segmented control is still rendered (she can see the weights)
+    // but every radio is disabled, and clicking one never reaches the API.
+    const radios = screen.getAllByRole('radio');
+    expect(radios.length).toBeGreaterThan(0);
+    radios.forEach((radio) => expect(isDisabled(radio)).toBe(true));
+    expect(screen.getByText('1.60')).not.toBeNull();
+    fireEvent.click(within(screen.getByRole('radiogroup', { name: 'น้ำหนัก PADANA 60x60 ผิวเงา' })).getByRole('radio', { name: '×2' }));
+    expect(api.commissions.adjustItemWeights).not.toHaveBeenCalled();
+  });
+
+  // Deliberately rewritten (worklist-first redesign): the sales_manager no longer has a tab to
+  // REACH the queue -- the queue leads the default page. The CEO keeps the old tab behaviour.
+  it('sales_manager: the รออนุมัติ queue leads the default view (no tab to click), above the month\'s records', async () => {
+    renderAt(salesManagerUser, '/commissions');
+    expect(await screen.findByText('INV-PEND-0701')).not.toBeNull();
+    expect(api.commissions.pendingApproval).toHaveBeenCalled();
+    expect(pendingTab()).toBeNull();
+    // the month's records are still on the same page, after the queue
+    const other = await screen.findByText('INV-OTHER-APPROVED');
+    expect(screen.getByText('INV-PEND-0701').compareDocumentPosition(other) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('ceo still has a รออนุมัติ tab on the default view that switches to the pending view', async () => {
+    renderAt(ceoUser, '/commissions');
+    await waitFor(() => expect(api.commissions.list).toHaveBeenCalled());
+    const tab = pendingTab();
+    expect(tab).not.toBeNull();
+    fireEvent.click(tab);
+    expect(await screen.findByText('INV-PEND-0701')).not.toBeNull();
+    expect(api.commissions.pendingApproval).toHaveBeenCalled();
+    expect(screen.queryByText('INV-OTHER-APPROVED')).toBeNull();
+  });
+
+  it('a sales rep has no รออนุมัติ tab and ?view=pending never calls the pending endpoint for them', async () => {
+    renderAt(salesUser, '/commissions?view=pending');
+    await waitFor(() => expect(api.commissions.list).toHaveBeenCalled());
+    expect(pendingTab()).toBeNull();
+    expect(api.commissions.pendingApproval).not.toHaveBeenCalled();
   });
 });

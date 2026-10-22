@@ -7,12 +7,13 @@
 // written reason. Those come from the ticket's own decision payload (TicketService.stageDecisions).
 //
 // Mirrors DealStage.ORDER / gateOf / phaseOf / displayNoOf / businessCodeOf / isAutoAdvanced, and
-// DealLostReason.ORDER / DealCancelReason.ORDER.
+// DealLostReason.ORDER / DealCancelReason.ORDER, and DealRoute.path(channel) for `routes`.
 //
 // ⚠️ A mirror with no guard is the exact defect this whole change exists to remove: the frontend's
 // previous copy of this list silently stopped at fourteen stages when V143 added QUOTE_OWNER.
 // features/tickets/stageCatalog.test.js therefore reads DealStage.java out of the backend source
-// tree and asserts this file's codes, order, gates and phases against it. If you edit one, the
+// tree and asserts this file's codes, order, gates and phases against it — and, for `routes`, parses
+// DealRoute.java's OFF_ROUTE table and asserts each channel's list against it. If you edit one, the
 // test tells you about the other.
 
 export const DEAL_STAGE_CATALOG = {
@@ -20,11 +21,14 @@ export const DEAL_STAGE_CATALOG = {
     { code: 'LEAD_APPROACH',       no: 1,  businessCode: 'S1',      phase: 1, gate: 'sales',   auto: false },
     { code: 'PRESENTATION',        no: 2,  businessCode: 'S2',      phase: 1, gate: 'sales',   auto: false },
     { code: 'SPEC_APPROVED',       no: 3,  businessCode: 'S3',      phase: 2, gate: 'sales',   auto: false },
-    { code: 'QUOTE_DESIGN_SIDE',   no: 4,  businessCode: 'S4',      phase: 2, gate: 'sales',   auto: false },
-    { code: 'QUOTE_OWNER',         no: 5,  businessCode: 'S5',      phase: 2, gate: 'sales',   auto: false },
+    // The three quote stages are `auto` since the owner's 2026-10-16 ruling: a quotation addressed
+    // to that party is what moves the deal onto its stage, so the UI must explain where the stage
+    // comes from instead of offering a one-click เลื่อนไป into it. Mirrors DealStage.AUTO_ADVANCED.
+    { code: 'QUOTE_DESIGN_SIDE',   no: 4,  businessCode: 'S4',      phase: 2, gate: 'sales',   auto: true },
+    { code: 'QUOTE_OWNER',         no: 5,  businessCode: 'S5',      phase: 2, gate: 'sales',   auto: true },
     { code: 'OWNER_SIGNOFF',       no: 6,  businessCode: 'S6',      phase: 2, gate: 'sales',   auto: false },
     { code: 'AWAITING_BUYER',      no: 7,  businessCode: 'S7',      phase: 3, gate: 'sales',   auto: false },
-    { code: 'QUOTE_BUYER',         no: 8,  businessCode: 'S8',      phase: 3, gate: 'sales',   auto: false },
+    { code: 'QUOTE_BUYER',         no: 8,  businessCode: 'S8',      phase: 3, gate: 'sales',   auto: true },
     { code: 'NEGOTIATION',         no: 9,  businessCode: 'S9',      phase: 3, gate: 'sales',   auto: false },
     { code: 'ORDER_RECEIVED',      no: 10, businessCode: 'S10',     phase: 4, gate: 'sales',   auto: true },
     { code: 'DEPOSIT_RECEIVED',    no: 11, businessCode: 'S11',     phase: 4, gate: 'account', auto: true },
@@ -39,4 +43,29 @@ export const DEAL_STAGE_CATALOG = {
     'RELATIONSHIP', 'PROJECT_ON_HOLD', 'PROJECT_CANCELLED', 'ALREADY_PURCHASED',
   ],
   cancelReasons: ['OWNER_CANCELLED', 'PROJECT_SUSPENDED', 'BUDGET_CANCELLED', 'OTHER'],
+  // Stage CODES per entry channel, in DealStage.ORDER — what a deal LIST row reads to print its
+  // position on its own route (`4/11`) instead of the catalog-wide `8/15`. UNSPECIFIED is all
+  // fifteen: DealRoute gives it no off-route stage.
+  routes: {
+    DESIGNER_LED: [
+      'LEAD_APPROACH', 'PRESENTATION', 'SPEC_APPROVED', 'QUOTE_DESIGN_SIDE', 'QUOTE_OWNER',
+      'OWNER_SIGNOFF', 'AWAITING_BUYER', 'QUOTE_BUYER', 'NEGOTIATION', 'ORDER_RECEIVED',
+      'DEPOSIT_RECEIVED', 'PROCUREMENT', 'DELIVERY_SCHEDULING', 'DELIVERED', 'CLOSED_PAID',
+    ],
+    OWNER_DIRECT: [
+      'LEAD_APPROACH', 'PRESENTATION', 'SPEC_APPROVED', 'QUOTE_OWNER',
+      'OWNER_SIGNOFF', 'AWAITING_BUYER', 'QUOTE_BUYER', 'NEGOTIATION', 'ORDER_RECEIVED',
+      'DEPOSIT_RECEIVED', 'PROCUREMENT', 'DELIVERY_SCHEDULING', 'DELIVERED', 'CLOSED_PAID',
+    ],
+    BUYER_DIRECT: [
+      'LEAD_APPROACH', 'PRESENTATION', 'SPEC_APPROVED', 'QUOTE_BUYER', 'NEGOTIATION',
+      'ORDER_RECEIVED', 'DEPOSIT_RECEIVED', 'PROCUREMENT', 'DELIVERY_SCHEDULING', 'DELIVERED',
+      'CLOSED_PAID',
+    ],
+    UNSPECIFIED: [
+      'LEAD_APPROACH', 'PRESENTATION', 'SPEC_APPROVED', 'QUOTE_DESIGN_SIDE', 'QUOTE_OWNER',
+      'OWNER_SIGNOFF', 'AWAITING_BUYER', 'QUOTE_BUYER', 'NEGOTIATION', 'ORDER_RECEIVED',
+      'DEPOSIT_RECEIVED', 'PROCUREMENT', 'DELIVERY_SCHEDULING', 'DELIVERED', 'CLOSED_PAID',
+    ],
+  },
 };

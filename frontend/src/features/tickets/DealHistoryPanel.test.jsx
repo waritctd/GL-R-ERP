@@ -89,4 +89,23 @@ describe('DealHistoryPanel', () => {
     expect(item).toContain('ใบเสนอราคาถูกแทนที่');
     expect(item).not.toContain('DEAL_QUOTATION_SUPERSEDED');
   });
+
+  // Slice 2 (SLICE-2-FLOW-A.md §F, IA §8): the direct quotation's order confirmation is
+  // "ยืนยันคำสั่งซื้อ", not "สร้างดีล…" — under the linked design the deal already exists, so the
+  // event records the customer's order, and its history label says so.
+  it('labels DEAL_PROMOTED_FROM_QUOTATION as ยืนยันคำสั่งซื้อจากใบเสนอราคา', () => {
+    render(
+      <DealHistoryPanel
+        events={[
+          { id: 1, kind: 'DEAL_PROMOTED_FROM_QUOTATION', actorName: 'พนักงานขาย',
+            message: 'สร้างดีลจากใบเสนอราคา QT-2026-0005-1', createdAt: '2026-09-30T09:00:00.000Z' },
+        ]}
+        activities={[]}
+      />,
+    );
+
+    const item = screen.getByRole('listitem').textContent;
+    expect(item).toContain('ยืนยันคำสั่งซื้อจากใบเสนอราคา');
+    expect(item).not.toContain('DEAL_PROMOTED_FROM_QUOTATION');
+  });
 });

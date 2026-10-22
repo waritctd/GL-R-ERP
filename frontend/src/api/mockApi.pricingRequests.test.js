@@ -97,6 +97,26 @@ describe('mockApi.pricingRequests.create item validation', () => {
     expect(pricingRequest.items[0].requestedQty).toBe(10);
   });
 
+  // Owner ruling 2026-10-18: import gives the time, so ระยะเวลานำเข้า is optional on a PCR line —
+  // both null passes; a half pair or min > max still 400s (PricingRequestService#requireItemFieldsComplete).
+  it('accepts a line with no lead time, but rejects a half pair or min > max', async () => {
+    const ticket = await ownedActiveTicketWithItems();
+    const withLeadTime = (min, max) => {
+      const payload = validPayload(ticket.items[0]);
+      Object.assign(payload.items[0], { leadTimeMinDays: min, leadTimeMaxDays: max });
+      return payload;
+    };
+    const { pricingRequest } = await api.pricingRequests.create(ticket.summary.id, withLeadTime(null, null));
+    expect(pricingRequest.summary.status).toBe('DRAFT');
+    expect(pricingRequest.items[0]).toMatchObject({ leadTimeMinDays: null, leadTimeMaxDays: null });
+    await expect(api.pricingRequests.create(ticket.summary.id, withLeadTime(9, 3))).rejects.toMatchObject({
+      status: 400, message: 'รายการที่ 1: ระยะเวลานำเข้าต่ำสุดต้องไม่มากกว่าสูงสุด',
+    });
+    await expect(api.pricingRequests.create(ticket.summary.id, withLeadTime(3, null))).rejects.toMatchObject({
+      status: 400, message: 'รายการที่ 1: ระยะเวลานำเข้าต้องระบุทั้งต่ำสุดและสูงสุด หรือเว้นว่างทั้งคู่',
+    });
+  });
+
   it('update() rejects an item missing แผ่น/กล่อง on an existing draft the same way create() does', async () => {
     const ticket = await ownedActiveTicketWithItems();
     const created = await api.pricingRequests.create(ticket.summary.id, validPayload(ticket.items[0]));
@@ -345,6 +365,7 @@ async function driveToApprovedForQuotation() {
   });
   const { project } = await api.customers.createProject(customer.id, { name: `โครงการเลขที่ใบเสนอราคาทดสอบ ${n}` });
   const { ticket: created } = await api.tickets.create({
+    entryChannel: 'DESIGNER_LED',
     title: `ดีลเลขที่ใบเสนอราคาทดสอบ ${n}`,
     priority: 'NORMAL',
     customerName: customer.name,
@@ -394,6 +415,12 @@ async function driveToApprovedForQuotation() {
   await api.auth.login({ role: 'import' });
   await api.pricingRequests.pickup(prId);
   const { items: quotes } = await api.pricingRequests.generateFactoryEmailDrafts(prId);
+  // CR-1 (B-R2): price entry is locked until the factory is marked ติดต่อโรงงานแล้ว.
+  for (const q of quotes) {
+    await api.pricingRequests.markFactoryQuoteContacted(q.id, {
+      contactedOn: new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Bangkok' }).format(new Date()),
+    });
+  }
   const quote = quotes[0];
   const prItemId = quote.items[0].pricingRequestItemId;
   await api.pricingRequests.receiveFactoryQuote(quote.id, {

@@ -526,12 +526,12 @@ export function buildDemoSalesSeed() {
   //                                                       nextAccountAction)
   //   24  FULLY_PAID + FULLY_DELIVERED + invoice on file-> รอปิดงาน
   //   25  CLOSED_PAID, close already confirmed,
-  //       no SALE commission yet                        -> ออกค่าคอม
+  //       no SALE commission yet                        -> บันทึกใบกำกับ
   //
   // ⚠️ 24 and 25 are deliberately OUTSIDE the account role's own list scope.
   // accountListScopeIncludes() (mockApi.js) returns only deals with a pending
   // payment status or an overdue balance, and both of these have
-  // amountOutstanding = 0 — so "รอปิดงาน"/"ออกค่าคอม" still read 0 for the
+  // amountOutstanding = 0 — so "รอปิดงาน"/"บันทึกใบกำกับ" still read 0 for the
   // `account` persona. That scope is a reviewed authz decision, already
   // documented as a known gap in AccountOverview.jsx's own doc comment, and
   // widening it is explicitly out of scope for a seed change (CLAUDE.md).
@@ -569,7 +569,7 @@ export function buildDemoSalesSeed() {
    * ฝ่ายบัญชี banks the money and confirms the close.
    */
   function makeMoneyDeal({
-    id, title, customerName, owner = SALES1, priority = 'NORMAL',
+    id, title, customerName, customerId = null, owner = SALES1, priority = 'NORMAL',
     paymentStatus, fulfillmentStatus = null, salesStage,
     depositPolicy = 'REQUIRED', depositPolicyReason = null,
     entryChannel = 'BUYER_DIRECT',
@@ -611,7 +611,7 @@ export function buildDemoSalesSeed() {
       title, status: 'quotation_issued', priority,
       createdById: owner.id, createdByName: owner.name,
       assignedToId: IMPORT1.id, assignedToName: IMPORT1.name,
-      customerName, note: null,
+      customerName, customerId, note: null,
       createdAt, updatedAt, closedAt: null,
       salesStage, lostReason: null, lostAt: null,
       stageUpdatedAt: timeline[timeline.length - 1][1],
@@ -671,6 +671,10 @@ export function buildDemoSalesSeed() {
     makeMoneyDeal({
       id: 19, title: 'สยามพารากอน ดีเวลลอปเมนท์',
       customerName: 'บริษัท สยามพารากอน ดีเวลลอปเมนท์ จำกัด',
+      // customerId 6 (mockApi.js's own mockCustomers) — the ONE ISSUED-deposit-notice money-cycle
+      // deal linked to a real customer row, so mockApi.billingNotes.candidates() has at least one
+      // reachable REMAINING_INVOICE/DEPOSIT_NOTICE candidate in mock mode (GLA-129 review round 1).
+      customerId: 6,
       priority: 'HIGH',
       paymentStatus: 'DEPOSIT_NOTICE_ISSUED', fulfillmentStatus: null,
       salesStage: 'ORDER_RECEIVED',
@@ -805,7 +809,7 @@ export function buildDemoSalesSeed() {
       ],
     }),
 
-    // 25 — ออกค่าคอม. Same shape as 24 but ฝ่ายบัญชี has already confirmed the
+    // 25 — บันทึกใบกำกับ. Same shape as 24 but ฝ่ายบัญชี has already confirmed the
     // close, which is what takes it PAST the close-ready branch (closeReady()
     // requires closeConfirmedAt == null) and into the commission step. No SALE
     // commission row exists for this ticket in demoPayroll.js, so

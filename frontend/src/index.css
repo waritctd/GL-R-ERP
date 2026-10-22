@@ -170,6 +170,11 @@
   /* Brand / semantic colors */
   --color-primary: #4f46e5;
   --color-primary-hover: #6366f1;
+  /* Selection tint (indigo-100) — the *selection* fill, distinct from the
+     `info-*` status family. Paired with --color-primary text it reads ~6:1.
+     Use for "this is the active/selected one" chips (e.g. SalesTabs active tab),
+     not for informational status, which stays on --color-info-bg-alt. */
+  --color-primary-bg: #e0e7ff;
   --color-accent: #14b8a6;
   --color-accent-dark: #0f766e;
   /* WCAG AA fix (fix/ui-contrast-tokens): #059669 measured 3.77:1 as white

@@ -74,7 +74,7 @@ function closeReady(ticket) {
  *   4. close-ready (fully paid + fully delivered, not yet confirmed)
  *                                                      -> "ยืนยันพร้อมปิดงาน"
  *   5. CLOSED_PAID, commission not yet recorded
- *                                                      -> "บันทึกใบกำกับ + ออกค่าคอม"
+ *                                                      -> "บันทึกใบกำกับ" (recorded on the finance deal page)
  *
  * Step 5 is gated on `!ticket.commissionRecorded`. The flag is now served by the backend
  * (TicketSummaryDto.commissionRecorded, issue #736) and answers the exact same question
@@ -87,6 +87,9 @@ function closeReady(ticket) {
  * `commissionRecorded` may be absent on an old/hand-built row (e.g. a stale cached object) —
  * `!ticket.commissionRecorded` naturally treats `undefined` the same as `false` ("not recorded"),
  * which is the safe default: it never hides a step that might still be needed.
+ *
+ * `to` is the finance deal page (`/finance/deals/:id`) for every viewer role. The commission step
+ * always goes to `/commissions?ticketId=`.
  *
  * @param {string} [viewerRole] GLA-118 (owner ruling 2026-09-20, part A): steps 2 and 3 both
  *   record a payment (ยืนยันรับมัดจำ = confirmDepositPaid, รับชำระส่วนที่เหลือ = confirmFinalPayment),
@@ -103,24 +106,28 @@ export function nextAccountAction(ticket, viewerRole) {
   if (!ticket) return null;
   const outstanding = ticket.amountOutstanding != null && Number(ticket.amountOutstanding) > 0;
   const canRecordPayments = viewerRole === undefined || viewerRole === 'account';
+  // H1 lockdown: account is refused on the /tickets deal routes and works a deal on the finance page.
+  // The CEO reaches /finance too (owner ruling), so every viewer of this worklist helper lands on the
+  // finance deal page. (dealHref, used by the ticket list, still sends the ceo to /tickets/:id.)
+  const dealPath = `/finance/deals/${ticket.id}`;
 
   if (ticket.overdue && outstanding) {
-    return { key: 'chaseOverdue', label: 'ติดตามชำระ', to: `/tickets/${ticket.id}`, urgent: true };
+    return { key: 'chaseOverdue', label: 'ติดตามชำระ', to: dealPath, urgent: true };
   }
   if (canRecordPayments && ticket.status === 'quotation_issued' && ticket.paymentStatus === 'DEPOSIT_NOTICE_ISSUED') {
-    return { key: 'confirmDeposit', label: 'ยืนยันรับมัดจำ', to: `/tickets/${ticket.id}`, urgent: false };
+    return { key: 'confirmDeposit', label: 'ยืนยันรับมัดจำ', to: dealPath, urgent: false };
   }
   if (canRecordPayments && ticket.status === 'quotation_issued' && finalPaymentDue(ticket)) {
-    return { key: 'confirmFinalPayment', label: 'รับชำระส่วนที่เหลือ', to: `/tickets/${ticket.id}`, urgent: false };
+    return { key: 'confirmFinalPayment', label: 'รับชำระส่วนที่เหลือ', to: dealPath, urgent: false };
   }
   if (closeReady(ticket)) {
-    return { key: 'confirmCloseReady', label: 'ยืนยันพร้อมปิดงาน', to: `/tickets/${ticket.id}`, urgent: false };
+    return { key: 'confirmCloseReady', label: 'ยืนยันพร้อมปิดงาน', to: dealPath, urgent: false };
   }
   if (ticket.salesStage === 'CLOSED_PAID' && !ticket.commissionRecorded) {
     return {
       key: 'recordInvoiceCommission',
-      label: 'บันทึกใบกำกับ + ออกค่าคอม',
-      to: `/commissions?ticketId=${ticket.id}`,
+      label: 'บันทึกใบกำกับ',
+      to: dealPath,
       urgent: false,
     };
   }

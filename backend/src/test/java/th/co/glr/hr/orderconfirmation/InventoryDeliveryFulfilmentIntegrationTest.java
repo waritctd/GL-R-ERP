@@ -48,7 +48,7 @@ import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteRepository;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteItemRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteRequest;
-import th.co.glr.hr.factoryquote.FactoryQuoteRequests.SendFactoryQuoteRequest;
+import th.co.glr.hr.factoryquote.FactoryQuoteRequests.MarkFactoryContactedRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteService;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
@@ -316,7 +316,7 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         TicketDto afterReserve = ticketService.reserveStock(deal.ticketId,
             new StockReservationRequest(List.of(
                 new StockReservationRequest.Line(deal.ticketItemId, new BigDecimal("15"), "จองครบจากสต็อก"))),
-            importActor);
+            salesActor);
         assertThat(afterReserve.summary().fulfillmentStatus()).isEqualTo(FulfilmentStatus.FROM_STOCK);
         assertThat(afterReserve.summary().salesStage()).isEqualTo(DealStage.DELIVERY_SCHEDULING);
 
@@ -364,7 +364,7 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         ticketService.reserveStock(deal.ticketId,
             new StockReservationRequest(List.of(
                 new StockReservationRequest.Line(deal.ticketItemId, new BigDecimal("4"), null))),
-            importActor);
+            salesActor);
 
         ticketService.completeDelivery(deal.ticketId, new CompleteDeliveryRequest("ส่งครบ", null), salesActor);
 
@@ -407,7 +407,7 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         ticketService.reserveStock(deal.ticketId,
             new StockReservationRequest(List.of(
                 new StockReservationRequest.Line(deal.ticketItemId, new BigDecimal("10"), null))),
-            importActor);
+            salesActor);
         // 6 of the 10 are already delivered before any revision exists.
         ticketService.recordPartialDelivery(deal.ticketId,
             new RecordDeliveryRequest("STOCK", null,
@@ -498,7 +498,7 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         ticketService.reserveStock(deal.ticketId,
             new StockReservationRequest(List.of(
                 new StockReservationRequest.Line(deal.ticketItemAId, new BigDecimal("10"), null))),
-            importActor);
+            salesActor);
         TicketDto delivered = ticketService.completeDelivery(
             deal.ticketId, new CompleteDeliveryRequest("ส่งครบ", null), salesActor);
         // Reaches FULLY_DELIVERED / DealStage.DELIVERED — the exact outcome B's phantom open
@@ -537,7 +537,7 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         ticketService.reserveStock(deal.ticketId,
             new StockReservationRequest(List.of(
                 new StockReservationRequest.Line(deal.ticketItemBId, new BigDecimal("2"), null))),
-            importActor);
+            salesActor);
         ticketService.recordPartialDelivery(deal.ticketId,
             new RecordDeliveryRequest("STOCK", null,
                 List.of(new RecordDeliveryRequest.Line(deal.ticketItemBId, new BigDecimal("2"))), null),
@@ -659,8 +659,8 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         List<FactoryQuoteDto> drafts = factoryQuoteService.generateDrafts(pricingRequestId, importActor);
         FactoryQuoteDto draft = drafts.get(0);
         String email = FACTORY.toLowerCase().replace(" ", "-") + "@example.com";
-        factoryQuoteService.send(draft.id(),
-            new SendFactoryQuoteRequest(email, null, null), importActor);
+        factoryQuoteService.markContacted(draft.id(),
+            new MarkFactoryContactedRequest(java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
         drainDispatches();
         List<ReceiveFactoryQuoteItemRequest> responseItems = draft.items().stream()
             .map(draftItem -> new ReceiveFactoryQuoteItemRequest(
@@ -827,8 +827,8 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         FactoryQuoteDto draft = drafts.get(0);
         long pricingRequestItemId = draft.items().get(0).pricingRequestItemId();
         String email = factory.toLowerCase().replace(" ", "-") + "@example.com";
-        factoryQuoteService.send(draft.id(),
-            new SendFactoryQuoteRequest(email, null, null), importActor);
+        factoryQuoteService.markContacted(draft.id(),
+            new MarkFactoryContactedRequest(java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
         drainDispatches();
         ReceiveFactoryQuoteRequest response = new ReceiveFactoryQuoteRequest(
             "REF-" + UUID.randomUUID(), "THB", "30 days", "45 days", "revision", "note",

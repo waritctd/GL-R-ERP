@@ -79,7 +79,9 @@ export const ALLOWED_TRANSITIONS = {
   SUBMITTED: ['IMPORT_REVIEWING', 'READY_FOR_CEO_REVIEW', 'CANCELLED', 'SUPERSEDED'],
   // V140: Import's states. COSTING_IN_PROGRESS merged into AWAITING_FACTORY_RESPONSE
   // (เจรจาราคากับโรงงาน) and MORE_INFO_REQUIRED left the product.
-  IMPORT_REVIEWING: ['AWAITING_FACTORY_RESPONSE', 'CANCELLED', 'SUPERSEDED'],
+  // Stock lines (V194): IMPORT_REVIEWING -> READY_FOR_CEO_REVIEW mirrors the backend edge added by
+  // #1094 for a request with nothing left for Import to quote (see PricingRequestStatus.ALLOWED).
+  IMPORT_REVIEWING: ['AWAITING_FACTORY_RESPONSE', 'READY_FOR_CEO_REVIEW', 'CANCELLED', 'SUPERSEDED'],
   // V141: FactoryQuoteService.markReadyForCosting auto-advances straight to READY_FOR_CEO_REVIEW
   // once every item's quote is resolvable — there is no Import-driven costing step in between.
   AWAITING_FACTORY_RESPONSE: ['READY_FOR_CEO_REVIEW', 'CANCELLED', 'SUPERSEDED'],
@@ -283,7 +285,23 @@ export function canCreateCommercialOnlyRevision(user, pr, quotation) {
  * ONLY from QUOTATION_ACCEPTED (Step 5's terminal status), and only until the bridge has already
  * run once (orderConfirmedAt is set on the FIRST successful call and never cleared). */
 export function canConfirmOrder(user, pr) {
-  return canManageCustomerQuotation(user, pr) && pr?.status === 'QUOTATION_ACCEPTED' && !pr?.orderConfirmedAt;
+  return canManageCustomerQuotation(user, pr) && pr?.status === 'QUOTATION_ACCEPTED' && !pr?.orderConfirmedAt
+    && !confirmOrderBlockedReason(pr);
+}
+
+/** Mirrors OrderConfirmationService.isBridgeableTicketStatus: the bridge can only advance a
+ * ticket sitting at 'draft' (or already at 'quotation_issued'). Any other ticket status makes
+ * confirmOrder 409, so the UI refuses first. An absent ticketStatus (older payload / mock) is not
+ * blocked here — the server's own preflight still guards it. */
+const BRIDGEABLE_TICKET_STATUSES = ['draft', 'quotation_issued'];
+
+/** Why "ยืนยันคำสั่งซื้อ" cannot work on an accepted request, or null when nothing blocks it. */
+export function confirmOrderBlockedReason(pr) {
+  if (pr?.status !== 'QUOTATION_ACCEPTED' || pr?.orderConfirmedAt) return null;
+  const ticketStatus = pr?.ticketStatus;
+  if (ticketStatus == null || BRIDGEABLE_TICKET_STATUSES.includes(ticketStatus)) return null;
+  return `ยืนยันคำสั่งซื้อไม่ได้ — สถานะดีล (ticket) เป็น '${ticketStatus}' ซึ่งไม่ตรงกับขั้นตอนนี้ `
+    + `(ต้องเป็น 'draft' หรือ 'quotation_issued') กรุณาแจ้งทีมพัฒนา/ฝ่าย IT เพื่อตรวจสอบสถานะดีลนี้`;
 }
 
 /** Mirrors OrderConfirmationService.createDepositNoticeFromQuotation's gate: sales (ticket owner)
@@ -331,4 +349,109 @@ export function activePricingRequestsSummary(pricingRequests = []) {
     // changes.
     requests: [...active].sort((a, b) => a.id - b.id),
   };
+}
+
+// Mirrors PricingRequestItemDto.resolvedFactory(): the catalog snapshot first, then Sales's own
+// free text. `null` is exactly what makes FactoryQuoteService.groupByFactory refuse a line.
+export function itemFactoryName(item) {
+  return item?.resolvedFactoryName?.trim() || item?.factory?.trim() || null;
+}
+
+// Mirrors PricingRequestItemDto.displayName() — same fields, same precedence as the row heading
+// the detail page renders, so the server's "รายการที่ N (ชื่อสินค้า)" names something visible.
+export function itemDisplayName(item) {
+  const name = [item?.catalogBrand ?? item?.brand, item?.catalogModel ?? item?.model]
+    .map((part) => part?.trim())
+    .filter(Boolean)
+    .join(' ');
+  return name || item?.productDescription?.trim() || '-';
+}
+
+// Statuses before FactoryQuoteService.markReadyForCosting's auto-advance to READY_FOR_CEO_REVIEW.
+export const PRE_CEO_GATE_STATUSES = ['DRAFT', 'SUBMITTED', 'IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE'];
+
+/**
+ * After ยืนยันราคาเสนอ: why the request did NOT reach the CEO. Returns null when it did (or is
+ * past that point). Client-side only, from the detail DTO + factory quotes the page already has.
+ * Mirrors FactoryQuoteService.markReadyForCosting's gate, which EXEMPTS stock lines
+ * (stockSource != null: no factory, no quote; setItemFactory 409s on them), so those are never
+ * blamed for a factory — except an IN_TRANSIT line still missing its expectedArrivalDate.
+ * Lists, in order: unrouted import lines, IN_TRANSIT lines without an ETA, factories whose
+ * current quote is NOT_AVAILABLE (declined) or not yet READY_FOR_COSTING, and routed import lines
+ * no current quote covers. Falls back to a neutral line when nothing is derivable.
+ */
+export function ceoGateBlockerMessage(request, factoryQuotes = []) {
+  if (!PRE_CEO_GATE_STATUSES.includes(request?.summary?.status)) return null;
+  const items = request?.items ?? [];
+  const parts = [];
+  const numbered = items.map((item, index) => ({ item, label: `รายการที่ ${index + 1} (${itemDisplayName(item)})` }));
+  const importLines = numbered.filter(({ item }) => item.stockSource == null);
+
+  const missing = importLines.filter(({ item }) => !itemFactoryName(item)).map(({ label }) => label);
+  if (missing.length) parts.push(`ยังไม่ได้ระบุโรงงาน: ${missing.join(', ')}`);
+
+  numbered
+    .filter(({ item }) => item.stockSource === 'IN_TRANSIT' && !item.expectedArrivalDate)
+    .forEach(({ label }) => parts.push(`${label} ยังไม่ได้ระบุวันที่คาดว่าจะถึง`));
+
+  const waiting = new Set();
+  const declined = new Set();
+  const covered = new Set();
+  for (const { current } of groupFactoryQuotesByFactory(factoryQuotes)) {
+    (current.items ?? []).forEach((line) => covered.add(line.pricingRequestItemId));
+    if (current.status === 'NOT_AVAILABLE') declined.add(current.factoryName);
+    else if (current.status !== 'READY_FOR_COSTING') waiting.add(current.factoryName);
+  }
+  for (const { item } of importLines) {
+    const name = itemFactoryName(item);
+    if (name && !covered.has(item.id)) waiting.add(name);
+  }
+  declined.forEach((name) => parts.push(`โรงงาน ${name} แจ้งไม่พร้อมเสนอราคา`));
+  waiting.forEach((name) => parts.push(`รอยืนยันราคาโรงงาน ${name}`));
+
+  return parts.length ? parts.join(' · ') : 'ระบบยังไม่พบว่าครบเงื่อนไขส่งถึง CEO — ตรวจสอบรายการและราคาโรงงานอีกครั้ง';
+}
+
+/**
+ * Groups a pricing request's factory quotes by factory (owner-supplied mockup, 2026-08-16 —
+ * "grouped by factory" is an explicit requirement). `factoryQuotes` holds full revision history —
+ * FactoryQuoteService.receive() supersedes-and-creates-a-new-row on every response after the
+ * first, and PricingRequestDetailPage has always rendered that history unfiltered — so a factory
+ * asked twice can own several rows here, only one of them `current`.
+ *
+ * Keyed by `factoryId` when the quote resolved to a canonical factory-master row, falling back to
+ * `factoryName` — `FactoryQuoteDto.factoryId` is nullable (a quote can exist against a name with
+ * no catalog/config row behind it). Group order follows first-appearance order in `factoryQuotes`,
+ * which the API/mock already return in a stable (creation) order, so the section does not
+ * reshuffle itself between renders.
+ *
+ * `current` is the live quote — what the item-editing grid and ยืนยันราคาเสนอ act on. `history` is
+ * every OTHER quote for that same factory, oldest first: never re-rendered as a second editing
+ * grid (the mockup shows one row per item, not one row per revision), but never dropped either —
+ * surfaced as the same compact "ประวัติ: ..." line this page already uses for pricing-decision and
+ * customer-quotation revisions, so the audit trail stays reachable, just de-emphasised.
+ */
+export function groupFactoryQuotesByFactory(factoryQuotes) {
+  const order = [];
+  const byKey = new Map();
+  for (const quote of factoryQuotes) {
+    const key = quote.factoryId != null ? `id:${quote.factoryId}` : `name:${quote.factoryName}`;
+    let group = byKey.get(key);
+    if (!group) {
+      group = { key, factoryName: quote.factoryName, quotes: [] };
+      byKey.set(key, group);
+      order.push(group);
+    }
+    group.quotes.push(quote);
+  }
+  return order.map((group) => {
+    const sorted = [...group.quotes].sort((a, b) => a.revisionNo - b.revisionNo);
+    const current = sorted.find((q) => q.current) ?? sorted[sorted.length - 1];
+    return {
+      ...group,
+      quotes: sorted,
+      current,
+      history: sorted.filter((q) => q.id !== current.id),
+    };
+  });
 }

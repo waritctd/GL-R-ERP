@@ -25,7 +25,7 @@ describe('mock tickets.create -- nextFollowUpAt is persisted like the real INSER
     const { customer, project } = await anyCustomerAndProject();
     const { ticket } = await api.tickets.create({
       title: customer.name, customerName: customer.name, customerId: customer.id,
-      projectId: project.id, entryChannel: 'UNSPECIFIED', priority: 'NORMAL', items: [],
+      projectId: project.id, entryChannel: 'DESIGNER_LED', priority: 'NORMAL', items: [],
       nextFollowUpAt: '2026-09-17',
     });
     expect(ticket.summary.nextFollowUpAt).toBe('2026-09-17');
@@ -37,7 +37,58 @@ describe('mock tickets.create -- nextFollowUpAt is persisted like the real INSER
     const { customer, project } = await anyCustomerAndProject();
     const { ticket } = await api.tickets.create({
       title: customer.name, customerId: customer.id, projectId: project.id, items: [],
+      entryChannel: 'DESIGNER_LED',
     });
     expect(ticket.summary.nextFollowUpAt).toBeNull();
+  });
+});
+
+// Mirrors th.co.glr.hr.ticket.CreateTicketRequest (@NotBlank entryChannel, enforced by
+// TicketController's @Valid @RequestBody -> 400) plus TicketService.create's explicit refusal of
+// UNSPECIFIED (valid as STORED, invalid as a create INPUT -- see th.co.glr.hr.ticket.EntryChannel).
+// Owner ruling 2026-09-30: a NEW deal must state a real ช่องทางดีล, because the channel decides its
+// route. A mock more permissive than production is the dangerous direction (CLAUDE.md, issue #199).
+describe('mock tickets.create -- a new deal must state a real entry channel', () => {
+  async function createWith(channelFields) {
+    const { customer, project } = await anyCustomerAndProject();
+    return api.tickets.create({
+      title: customer.name, customerId: customer.id, projectId: project.id, items: [],
+      ...channelFields,
+    });
+  }
+
+  it('refuses a request with no entryChannel, 400', async () => {
+    await expect(createWith({})).rejects.toMatchObject({ status: 400 });
+  });
+
+  it('refuses a null entryChannel, 400', async () => {
+    await expect(createWith({ entryChannel: null })).rejects.toMatchObject({ status: 400 });
+  });
+
+  it('refuses an empty and a whitespace-only entryChannel, 400', async () => {
+    await expect(createWith({ entryChannel: '' })).rejects.toMatchObject({ status: 400 });
+    await expect(createWith({ entryChannel: '   ' })).rejects.toMatchObject({ status: 400 });
+  });
+
+  it('refuses UNSPECIFIED, 400, with a Thai message', async () => {
+    await expect(createWith({ entryChannel: 'UNSPECIFIED' })).rejects.toMatchObject({
+      status: 400,
+      message: expect.stringContaining('ช่องทาง'),
+    });
+  });
+
+  it('refuses an unknown channel value, 400 (mirrors EntryChannel.isValid)', async () => {
+    await expect(createWith({ entryChannel: 'WALK_IN' })).rejects.toMatchObject({ status: 400 });
+  });
+
+  it.each(['DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT'])('accepts %s and stores it', async (channel) => {
+    const { ticket } = await createWith({ entryChannel: channel });
+    expect(ticket.summary.entryChannel).toBe(channel);
+  });
+
+  it('writes nothing when it refuses', async () => {
+    const before = (await api.tickets.list()).tickets.length;
+    await expect(createWith({ entryChannel: 'UNSPECIFIED' })).rejects.toMatchObject({ status: 400 });
+    expect((await api.tickets.list()).tickets.length).toBe(before);
   });
 });

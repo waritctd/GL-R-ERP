@@ -1,10 +1,11 @@
+/* Hallmark · genre: modern-minimal · macrostructure: Workbench · design-system: design.md · designed-as-app · pre-emit critique: P4 H4 E4 S4 R4 V4 */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api } from '../../api/index.js';
 import { canAccessPath } from '../../app/permissions.js';
 import { queryKeys } from '../../api/queryKeys.js';
-import { Button } from '../../components/common/Button.jsx';
+import { Button, buttonVariants } from '../../components/common/Button.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
@@ -14,12 +15,14 @@ import { OverflowMenu } from '../../components/common/OverflowMenu.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { RouteFallback } from '../../components/common/RouteFallback.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
+import { cn } from '../../utils/cn.js';
 import { downloadBlob } from '../../utils/download.js';
-import { addDaysIso, bangkokTodayIso } from '../../utils/format.js';
+import { addDaysIso, bangkokTodayIso, dealStageLabel } from '../../utils/format.js';
 import {
   canApproveDealQuotation, canApproveDealQuotationNow, canCancelDealQuotation, canCopyDealQuotation, canCreateDealQuotation,
   canChangeDealCustomer, canCreateDealQuotationStandalone, canDecideDealQuotation, canEditDealQuotation,
-  canReviseDealQuotation, canSubmitDealQuotation, DEPOSIT_PERCENT_PRESETS,
+  canPromoteDealQuotationToDeal, canReviseDealQuotation, canSubmitDealQuotation, DEPOSIT_PERCENT_PRESETS,
+  CONFIRM_ORDER_FROM_QUOTATION_COPY, REVISION_RECIPIENT_LOCKED_MESSAGE, quotationRecipientOption, recipientForDealStage, recipientForEntryChannel,
   availablePriceModes, PRICE_MODE_OPTIONS, adjustmentDescriptionPreview, buildQuotationChecklist, currencyForLanguage, DOCUMENT_LANGUAGE_OPTIONS,
   isEffectiveZeroDeposit,
   estimateAdjustmentAmount, formatQuotationMoney, hasSpecialPricing, isEnglishPerSqm, LINE_TYPE_ADJUSTMENT, LINE_TYPE_PLAIN, LINE_TYPE_TILE,
@@ -35,9 +38,11 @@ import {
 } from './quotationMeta.js';
 import { CustomerDetailsFields } from './CustomerDetailsFields.jsx';
 import { ChangeCustomerModal } from './ChangeCustomerModal.jsx';
-import { DealCustomerCard } from './DealCustomerCard.jsx';
+import { DealCustomerCard, QuotationRecipientField } from './DealCustomerCard.jsx';
+import { useDealHasLivePricingRequest } from './DealPicker.jsx';
 import { OrderedByContactFields, ProjectNamePrintToggle, QuotationDealFields } from './QuotationDealFields.jsx';
 import { focusQuotationField, QuotationChecklist } from './QuotationChecklist.jsx';
+import { QuotationContactPicker } from './QuotationContactPicker.jsx';
 import { QuotationDocumentView } from './QuotationDocumentView.jsx';
 import { QuotationAttachmentsLink, QuotationAttachmentsPanel } from './QuotationAttachmentsPanel.jsx';
 import { copyFromQuotation, editorStateFromQuotation } from './quotationCopy.js';
@@ -168,16 +173,10 @@ function emptyTerms(defaults = null) {
     // deal's own project name instead of leaving a rep looking at an empty box for a project the
     // deal already has.
     projectName: '',
-    // Owner-directed reversal of F2 (2026-09-26) — ผู้สั่งซื้อ is now this ONE optional free-text
-    // field: the required contact-picker dropdown, its โทร./อีเมล, and the "ไม่เติม “คุณ”" checkbox
-    // that used to sit under it are gone from this editor (QuotationContactPicker itself still
-    // exists — PricingRequestCreateModal reuses it for an unrelated flow — it is just no longer
-    // wired up here).
-    // NOT remembered (same reasoning as printedByDisplayId above): it is a per-document fact a rep
-    // types deliberately, not a rep-wide preference, so a brand-new quotation always starts blank
-    // -- the dotted signature line, exactly as before this feature.
-    orderedByName: '',
-    // V192.3 — how to reach that person: printed on the document when filled. Not remembered either.
+    // Item 2 (V180) — "ไม่เติม “คุณ” หน้าชื่อผู้ติดต่อ", the checkbox under the ผู้ติดต่อ picker
+    // (back since ruling 2026-10-18). Not remembered: it is about this document's contact.
+    omitContactHonorific: false,
+    // V192.3 — the CUSTOMER's phone and email: printed on the document when filled. Not remembered.
     orderedByPhone: '',
     orderedByEmail: '',
     // Sales feedback #5 (2026-10-06, V192.1) — "ไม่แสดงชื่อโครงการในใบเสนอราคา". NOT remembered
@@ -187,23 +186,10 @@ function emptyTerms(defaults = null) {
   };
 }
 
-// The label and hint of the one free-text field that writes `terms.orderedByName`.
-//
-// Owner, 2026-10-06: "the field ผู้สั่งซื้อ make it name ผู้ติดต่อ instead but the pdf still render as
-// ผู้สั่งซื้อ". Sales know this person as the one they are in contact with; the printed form's fourth
-// signature slot keeps its own heading (QuotationRenderer#SIG_LABELS, and DOC_LABELS.orderedBy in
-// QuotationDocumentView for the on-screen copy) — neither is touched. Because the field's name and
-// the document's heading now DIFFER, the hint is what tells the rep they are the same slot: it
-// names the slot in the document's own word. Do not "tidy" the two into agreement.
-const ORDERED_BY_FIELD_LABEL = 'ผู้ติดต่อ';
-const ORDERED_BY_FIELD_HINT = 'ชื่อที่จะพิมพ์ในช่องลงนาม “ผู้สั่งซื้อ” ของใบเสนอราคา — ถ้าเว้นว่าง จะเป็นเส้นประให้ลูกค้าเซ็นเอง';
-
 // Owner ask 2026-09-10 ("inline deal creation", inline-deal-spec.md): the "ลูกค้าและโครงการ" card
 // state for a brand-new /quotations/new visit with no `?ticket=` -- nothing here exists on the
 // server yet, unlike `terms`/`items` which round-trip a real ticket/quotation.
-// ผู้สั่งซื้อ is NOT here either: since the owner-directed reversal of F2 (2026-09-26) it is just
-// `terms.orderedByName`, a plain optional string the "ผู้สั่งซื้อ" input writes directly -- there
-// is no separate contact object or picker state to split out.
+// ผู้ติดต่อ is NOT here: it is picked per quotation (the `contact` state), never on the deal.
 function emptyDealForm() {
   return { customer: null, project: null, entryChannel: 'UNSPECIFIED' };
 }
@@ -232,7 +218,7 @@ function defaultDocSettings() {
  */
 export function QuotationEditorPage({ user, showToast }) {
   const { id } = useParams();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const ticketIdParam = searchParams.get('ticket');
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -272,12 +258,41 @@ export function QuotationEditorPage({ user, showToast }) {
   // (address/tax id/phone autofill, below) and the editable โครงการ field both still need, and
   // only the ticket has it. Deliberately NOT fetched for a read-only/non-DRAFT quotation: the
   // document view prints the snapshot the DTO already carries and nothing here is editable.
+  //
+  // Slice 2 fix: the key carries its own 'summary' suffix. TicketDetailPage caches the WHOLE
+  // TicketDto under the bare queryKeys.ticketDetail(id) and renders from whatever is cached there,
+  // so this page caching a bare summary under that same key crashed the deal page ("Cannot read
+  // properties of undefined (reading 'status')") the moment a rep followed เปิดดีล from here —
+  // reproduced in the browser. Same device promotionTicketQuery below already uses; a prefix
+  // invalidation of ticketDetail(id) (or ['tickets']) still reaches it.
   const ticketQuery = useQuery({
-    queryKey: queryKeys.ticketDetail(effectiveTicketId),
+    queryKey: [...queryKeys.ticketDetail(effectiveTicketId), 'summary'],
     queryFn: () => api.tickets.get(effectiveTicketId).then((r) => r.ticket?.summary),
     enabled: !!effectiveTicketId && (!id || quotation?.docStatus === 'DRAFT'),
   });
   const ticket = ticketQuery.data ?? null;
+
+  // GLA-136 → IA §7/§8 (decision D3) — "ยืนยันคำสั่งซื้อ" (was "สร้างดีลจากใบเสนอราคา"). An APPROVED
+  // direct quotation's deal either still takes the order (offer the confirm) or already has it
+  // (offer "ไปที่ดีล" instead). The discriminator is the backend's OWN precondition: the deal's
+  // `status === 'draft'` (DealQuotationService#confirmOrderFromDirectQuotation 409s otherwise, and
+  // confirming flips it to 'quotation_issued'). NOT `quotationOnly` — provenance only since #1086,
+  // and false on every deal created on the deal page (flow B), which would hide the confirm on an
+  // order that was never confirmed. Only fetched for a user who could confirm, and under its OWN key
+  // suffix: ticketQuery above caches the bare summary under queryKeys.ticketDetail(id) while
+  // TicketDetailPage caches the whole TicketDto under that same key, so reading ticketQuery here
+  // would see whichever shape happened to be cached. retry:false — a 403 (e.g. a quotation-grant
+  // holder whose role cannot read tickets), or a summary with no status, just means "unknown", and
+  // the button then falls back to the confirm, which the server answers idempotently anyway.
+  const canPromoteToDeal = canPromoteDealQuotationToDeal(user, quotation);
+  const promotionTicketQuery = useQuery({
+    queryKey: [...queryKeys.ticketDetail(quotation?.ticketId), 'promotionSummary'],
+    queryFn: () => api.tickets.get(quotation.ticketId).then((r) => r.ticket?.summary ?? null),
+    enabled: canPromoteToDeal && quotation?.ticketId != null,
+    retry: false,
+  });
+  const promotionDealStatus = promotionTicketQuery.data?.status ?? null;
+  const promotedDealId = promotionDealStatus != null && promotionDealStatus !== 'draft' ? quotation?.ticketId ?? null : null;
 
   // The deal's customer MASTER row (owner, 2026-09-11: fill in the address, "autofill in later on
   // if they get the same customer"). On the ?ticket= and existing-draft paths the rep can now edit
@@ -319,6 +334,50 @@ export function QuotationEditorPage({ user, showToast }) {
   // customer and project right here instead of being sent to /tickets first. Stable per-render
   // (not stateful): it only ever describes the URL the page was loaded with.
   const isInlineCreate = !id && !ticketIdParam;
+
+  // Slice 2 — flow A (SLICE-2-FLOW-A.md §A): step 1 is "ดีล". `dealModeChoice` is the rep's pick
+  // between เลือกดีลที่มีอยู่ and สร้างดีลใหม่; a `?ticket=` in the URL IS the picked-deal branch
+  // (DealPicker only ever sets that param), so the URL wins over the stored choice. `needsDeal` is
+  // the one new-page state with no deal to hang the quotation on yet.
+  // A "คัดลอกเป็นใบใหม่" visit (?copyFrom=) is for ANOTHER customer on a NEW deal, so it opens on
+  // สร้างดีลใหม่ rather than asking to pick an existing deal first.
+  // Null until the rep chooses. Derived, not initialised: this page instance survives the move from
+  // /quotations/:id to /quotations/new?copyFrom=, and a copy is for a new deal.
+  const [dealModeChoice, setDealModeChoice] = useState(null);
+  const dealMode = ticketIdParam ? 'pick' : (dealModeChoice ?? (searchParams.get('copyFrom') ? 'create' : 'pick'));
+  const needsDeal = isInlineCreate && dealMode === 'pick';
+  // One pricing route per deal (owner ruling 2026-09-30): only a NEW quotation on a picked deal
+  // (?ticket=) asks — an existing quotation is already on its route. Same query as DealPicker's notice.
+  const dealHasLivePricingRequest = useDealHasLivePricingRequest(
+    ticketIdParam ? Number(ticketIdParam) : null,
+    !id && Boolean(ticketIdParam),
+  );
+  function changeDealMode(next) {
+    setDealModeChoice(next);
+    if (next === 'create' && ticketIdParam) {
+      setSearchParams((prev) => {
+        const params = new URLSearchParams(prev);
+        params.delete('ticket');
+        return params;
+      }, { replace: true });
+    }
+  }
+
+  // ผู้รับใบเสนอราคา (S2-B1). '' = not chosen. Seeded from the stored row on an existing quotation,
+  // and — on the ?ticket= path — preselected from the deal's own stage (flow B) until the rep
+  // touches it themselves (see the effect below).
+  const [recipientType, setRecipientType] = useState('');
+  const recipientTouchedRef = useRef(false);
+  // Once-per-ticket seed guards for the ?ticket= path (โครงการ and ผู้รับ — see their effects below).
+  // Declared here, ABOVE the main seeding effect, because that effect clears them when the rep picks
+  // a different deal through DealPicker.
+  const projectNameSeededForTicket = useRef(null);
+  const recipientSeededForTicket = useRef(null);
+  function changeRecipient(code) {
+    recipientTouchedRef.current = true;
+    setRecipientType(code);
+    setDirty(true);
+  }
 
   // The rep's own remembered defaults / recent picks (quotationPrefs.js). Read ONCE, lazily, so a
   // browser that throws on `localStorage` (private window, blocked site data) throws inside the
@@ -372,11 +431,28 @@ export function QuotationEditorPage({ user, showToast }) {
   }
 
   const [dealForm, setDealForm] = useState(emptyDealForm);
-  // Owner-directed reversal of F2 (2026-09-26): DealCustomerCard no longer reports a `contact` or
-  // `omitContactHonorific` key at all (both removed along with QuotationContactPicker), so this
-  // is now a plain patch-upward with nothing to split out.
+  // ผู้ติดต่อ (owner rulings 2026-10-18): a contact OBJECT of the deal's customer, or null — the
+  // QuotationContactPicker value contract. Sent as `contactId`; the server writes the ผู้สั่งซื้อ
+  // signature name from it. The ref is for flushPendingContactSave (submit and download).
+  const [contact, setContact] = useState(null);
+  const contactPickerRef = useRef(null);
   function updateDealForm(patch) {
-    setDealForm((prev) => ({ ...prev, ...patch }));
+    // The ดีล card reports ผู้รับ through the same patch-upward channel; it is quotation state, not
+    // deal-form state, so it is split out to its own setter.
+    const { recipientType: nextRecipient, ...dealPatch } = patch;
+    if (nextRecipient !== undefined) changeRecipient(nextRecipient);
+    // Owner ruling 2026-09-30 #2: on the new-deal card the channel pre-fills ผู้รับ (DESIGNER_LED →
+    // ผู้ออกแบบ, OWNER_DIRECT → เจ้าของโครงการ, BUYER_DIRECT → ผู้ซื้อ / ผู้รับเหมา) and a later channel
+    // change re-fills it — but ONLY while the rep has not picked a recipient themselves. A pre-fill is
+    // not a pick: it leaves recipientTouchedRef alone, so it never outranks a deliberate choice.
+    if (dealPatch.entryChannel !== undefined && !recipientTouchedRef.current) {
+      setRecipientType(recipientForEntryChannel(dealPatch.entryChannel));
+    }
+    if (Object.keys(dealPatch).length === 0) return;
+    // A contact belongs to one customer (the server 400s another customer's), so a different
+    // customer drops it. An edit of the same customer's ที่อยู่ also patches `customer`, so ids.
+    if ('customer' in dealPatch && String(dealPatch.customer?.id) !== String(dealForm.customer?.id)) setContact(null);
+    setDealForm((prev) => ({ ...prev, ...dealPatch }));
     setDirty(true);
   }
   // The deals the inline flow's own `tickets.create` has made on this visit, by the customer and
@@ -406,6 +482,8 @@ export function QuotationEditorPage({ user, showToast }) {
   // The last save's refusal, kept on screen (a toast vanishes). A 400 like "ยอดรวมหลังหักส่วนลด
   // พิเศษติดลบ" is exactly the kind of error that must not be swallowed or scroll away.
   const [saveError, setSaveError] = useState(null);
+  // Slice 2 — N6 (S2-B3): the live direct quotation a refused create named, if any.
+  const [saveErrorLiveQuotationId, setSaveErrorLiveQuotationId] = useState(null);
   // ตำแหน่งติดตั้ง groups (owner feedback F1), ordered. `items` stays the single flat, ordered
   // list it always was -- see locationGroupsFromItems' comment for the contiguity invariant every
   // mutation below maintains, which is what lets buildUpsertPayload save with no re-sorting.
@@ -497,15 +575,32 @@ export function QuotationEditorPage({ user, showToast }) {
       setAdjustments(state.adjustments);
       setDocSettings(state.docSettings);
       setTerms(state.terms);
+      setContact(state.contact ?? null);
       setPendingAttachments([]);
     };
     if (id) {
       if (!quotation) return;
       // The DTO as editor state — see quotationCopy#editorStateFromQuotation, which the copy path
-      // shares, for how each part is read.
-      applyEditorState(editorStateFromQuotation(quotation));
+      // shares, for how each part is read. ผู้ติดต่อ and its "คุณ" box are added here, not there: a
+      // copy is for another customer, so it carries neither. The contact is seeded from the frozen
+      // snapshot, the picker's `{ id, firstName }` stand-in shape (see its header).
+      const state = editorStateFromQuotation(quotation);
+      applyEditorState({
+        ...state,
+        terms: { ...state.terms, omitContactHonorific: quotation.omitContactHonorific === true },
+        contact: quotation.contactId
+          ? {
+            id: quotation.contactId, firstName: quotation.contactName ?? '', lastName: '',
+            phone: quotation.contactPhone, email: quotation.contactEmail,
+          }
+          : null,
+      });
       setSettingsNotice(null);
       setTouchedRowIds(new Set(quotation.items.map((it) => it.id)));
+      // Slice 2 (S2-B1): the stored recipient. UNSPECIFIED (every pre-slice-2 direct row) reads as
+      // "not chosen yet" — the choice is never invented for the rep.
+      setRecipientType(quotationRecipientOption(quotation.recipientType) ? quotation.recipientType : '');
+      recipientTouchedRef.current = false;
       setDirty(false);
       setInitializedFor(key);
     } else if (copyFromId) {
@@ -518,11 +613,32 @@ export function QuotationEditorPage({ user, showToast }) {
       setSettingsNotice(null);
       // Touched, like a duplicated row: a copy of an incomplete row shows what it still lacks.
       setTouchedRowIds(new Set([...copyState.items, ...copyState.adjustments].map((row) => row.clientId)));
+      // This page instance survives /quotations/:id -> /quotations/new?copyFrom=, so what the earlier
+      // visit left in its state is cleared: a copy is for another customer on a NEW deal, so no
+      // recipient, no deal choice and no customer/project are carried over. (The copy's own project
+      // name is offered by DealCustomerCard once the new customer is chosen, so it is unaffected.)
+      setRecipientType('');
+      recipientTouchedRef.current = false;
+      setDealModeChoice(null);
+      setDealForm(emptyDealForm());
       // Unsaved work from the first moment — which is also what puts the checklist (customer,
       // project) on screen at once rather than after the first keystroke.
       setDirty(true);
       setInitializedFor(key);
     } else if (effectiveTicketId) {
+      // Slice 2: picking a deal (DealPicker) or switching to another one only swaps the URL's
+      // ?ticket= — the rep's half-built items and terms stay put rather than being wiped, and only
+      // the deal-derived bits (โครงการ, and ผู้รับ unless the rep chose it) re-seed from the newly
+      // picked deal via the two effects below. A first visit has nothing to keep, so the full reset
+      // below is unchanged for it (and for anything arriving from an existing quotation).
+      if (initializedFor === null || initializedFor.startsWith('t-') || initializedFor.startsWith('c-')) {
+        setTerms((t) => ({ ...t, projectName: '' }));
+        setContact(null); // picked for the previous deal's customer
+        projectNameSeededForTicket.current = null;
+        recipientSeededForTicket.current = null;
+        setInitializedFor(key);
+        return;
+      }
       applyEditorState({
         items: [],
         adjustments: [],
@@ -553,13 +669,27 @@ export function QuotationEditorPage({ user, showToast }) {
   // who starts typing during the query window could have this effect fire afterward and clobber
   // it. Guard by checking the CURRENT field value inside the updater, not just the ref: only seed
   // when the rep hasn't already put something there.
-  const projectNameSeededForTicket = useRef(null);
+  // (projectNameSeededForTicket itself is declared up with the other refs, above the main seeding
+  // effect — that effect resets it when the rep picks a different deal, slice 2.)
   useEffect(() => {
     if (id || !ticket?.id || projectNameSeededForTicket.current === ticket.id) return;
     projectNameSeededForTicket.current = ticket.id;
     if (ticket.projectName) {
       setTerms((t) => (t.projectName ? t : { ...t, projectName: ticket.projectName }));
     }
+  }, [id, ticket]);
+
+  // Slice 2 — flow B's preselect (SLICE-2-FLOW-A.md §A, IA §4): a deal already sitting at a quote
+  // stage (S4 / S5 / S8) names its own recipient; any other stage leaves the choice empty so the rep
+  // is asked, never guessed for. Same once-per-ticket shape as the โครงการ seed above, and never
+  // over a choice the rep has already made themselves. Owner ruling 2026-09-30 #2: when the stage is
+  // not a quote stage, the deal's own entry channel names the recipient instead (UNSPECIFIED names
+  // none, so the rep is still asked).
+  useEffect(() => {
+    if (id || !ticket?.id || recipientSeededForTicket.current === ticket.id) return;
+    recipientSeededForTicket.current = ticket.id;
+    if (recipientTouchedRef.current) return;
+    setRecipientType(recipientForDealStage(ticket.salesStage) || recipientForEntryChannel(ticket.entryChannel));
   }, [id, ticket]);
 
   function updateItem(clientId, patch) {
@@ -1110,6 +1240,7 @@ export function QuotationEditorPage({ user, showToast }) {
     isInlineCreate,
     customer: checklistCustomer,
     hasProject: Boolean(dealForm.project),
+    hasEntryChannel: Boolean(dealForm.entryChannel) && dealForm.entryChannel !== 'UNSPECIFIED',
     projectName: checklistProjectName,
     items,
     itemErrorsByRow,
@@ -1130,12 +1261,22 @@ export function QuotationEditorPage({ user, showToast }) {
     // CREDIT_DAYS_INVALID's own comment in quotationMeta.js for the two severities.
     remainderMode: terms.remainderMode,
     creditDays: terms.creditDays,
+    // Slice 2 (SLICE-2-FLOW-A.md): a new quotation needs a deal, and a new DIRECT quotation needs a
+    // recipient (S2-B1's 400) on a deal with no live direct quotation (S2-B3's N6 409) — each one
+    // blocks บันทึกร่าง with its reason, before the server has to refuse it.
+    needsDeal,
+    recipientRequired: !quotation,
+    recipientType,
+    liveDirectQuotation: !quotation && !isInlineCreate ? (ticket?.liveDirectQuotation ?? null) : null,
+    // One pricing route per deal (owner ruling 2026-09-30): a NEW quotation on a picked deal that
+    // holds a live pricing request — DealQuotationService#create 409s it.
+    livePricingRequest: !quotation && !isInlineCreate && dealHasLivePricingRequest,
     // V192.3 — a typed-but-malformed address is what DealQuotationService refuses on every save.
     orderedByEmail: terms.orderedByEmail,
-  }), [isInlineCreate, checklistCustomer, dealForm.project, checklistProjectName, items, itemErrorsByRow,
+  }), [isInlineCreate, checklistCustomer, dealForm.project, dealForm.entryChannel, checklistProjectName, items, itemErrorsByRow,
     adjustments, adjustmentErrorsByRow, duplicateGroupIndex, docSettings, terms.noDeposit,
     terms.depositPercentCustom, terms.depositPercent, terms.fullPaymentTerm, terms.remainderMode, terms.creditDays,
-    terms.orderedByEmail]);
+    needsDeal, quotation, recipientType, ticket, dealHasLivePricingRequest, terms.orderedByEmail]);
   const validationErrors = useMemo(() => checklist.filter((e) => e.blocking).map((e) => e.message), [checklist]);
   const checklistWarnings = useMemo(() => checklist.filter((e) => !e.blocking), [checklist]);
   const hasValidationErrors = validationErrors.length > 0;
@@ -1167,12 +1308,12 @@ export function QuotationEditorPage({ user, showToast }) {
   // Every other caller (buildSaveRequest, createMutation, handleInlineCreate) just calls it same
   // as before -- a memoized function is still a function.
   const buildUpsertPayload = useCallback(() => ({
-    // Owner-directed reversal of F2/V167 (2026-09-26): ผู้สั่งซื้อ is no longer a contact the rep
-    // picks — the editor never collects a contactId at all any more, so this is always null.
-    // DealQuotationService#resolveContact (still) falls back to the deal's own ticket contact when
-    // one exists there, and now returns a blank snapshot instead of refusing the save when it
-    // doesn't -- see that method's own comment for the relaxed rule.
-    contactId: null,
+    // ผู้ติดต่อ (ruling 2026-10-18), picked or null. DealQuotationService#resolveContact snapshots it
+    // and writes the ผู้สั่งซื้อ signature name from it, so no `orderedByName` is sent at all. A null
+    // contactId on an update KEEPS the draft's contact, so ล้าง on a draft that had one also says
+    // `clearContact: true`; otherwise the key is left out.
+    contactId: contact?.id ?? null,
+    ...(quotation?.contactId != null && !contact ? { clearContact: true } : {}),
     // ฝ่าย was removed from the quotation (sales feedback Admin 1d; owner 2026-10-06, "remove ฝ่าย
     // field completely"). Sent as an explicit null on EVERY save rather than left out: the server
     // stores what it is sent, so this is what clears a ฝ่าย an older draft still carries — and a
@@ -1213,23 +1354,12 @@ export function QuotationEditorPage({ user, showToast }) {
     // able to correct it") — genuinely editable now, no "missing keeps stored": always sent
     // explicitly, blank included, same discipline as customerNotes just above.
     projectName: terms.projectName || null,
-    // Item 2 ("ไม่เติม “คุณ”", V180) is now DEAD from the editor's side — the checkbox lived under
-    // the ผู้สั่งซื้อ contact-picker, which the owner-directed reversal of F2/V167 (2026-09-26)
-    // removed, so there is no contact name left for it to prefix. Always sent explicitly false
-    // (never omitted, matching the discipline every other field here already uses) rather than
-    // dropped from the payload, so a full PUT never leaves the server guessing what "missing"
-    // means for this key; DealQuotationService#resolveOmitContactHonorific already treats a
-    // missing/null value the same as false, so this is a no-op either way for a document that
-    // predates the removal.
-    omitContactHonorific: false,
-    // Owner-directed reversal of F2 (2026-09-26) — manual, OPTIONAL ผู้สั่งซื้อ signature name.
-    // Always sent explicitly, blank included, same "no missing-keeps-stored" discipline as
-    // projectName/customerNotes above: a blank genuinely clears it back to the dotted line.
-    orderedByName: terms.orderedByName || null,
-    // V192.3 — ผู้ติดต่อ's Phone and Email, printed on the document when filled. Always sent, like
-    // the name beside them: a blank one is an explicit null, which is what clears it. Trimmed
-    // here because the Email is CHECKED trimmed (orderedByEmailError), so what is sent is what
-    // was checked.
+    // Item 2 ("ไม่เติม “คุณ”", V180) — the checkbox under the ผู้ติดต่อ picker. Always an explicit
+    // boolean, so a full PUT never leaves the server guessing what "missing" means.
+    omitContactHonorific: terms.omitContactHonorific === true,
+    // V192.3 — the customer's phone and email, printed on the document when filled. Always sent:
+    // a blank one is an explicit null, which is what clears it. Trimmed here because the Email is
+    // CHECKED trimmed (orderedByEmailError), so what is sent is what was checked.
     orderedByPhone: terms.orderedByPhone.trim() || null,
     orderedByEmail: terms.orderedByEmail.trim() || null,
     // Sales feedback #5 (2026-10-06, V192.1) — "ไม่แสดงชื่อโครงการในใบเสนอราคา". ALWAYS an explicit
@@ -1254,7 +1384,13 @@ export function QuotationEditorPage({ user, showToast }) {
       })),
       ...adjustments.map(adjustmentInputFromRow),
     ],
-  }), [terms, docSettings, items, adjustments, labelByGroupId]);
+    // Slice 2 (S2-B1) — ผู้รับใบเสนอราคา, persisted on the quotation (it does NOT move the deal's
+    // stage — owner ruling 2026-09-30, the stage rule is owned elsewhere).
+    // OMITTED, never null, when there is nothing to say: a PRICING_REQUEST row's recipient belongs
+    // to its คำขอราคา (the server 409s the field on that origin), and a legacy direct draft the rep
+    // has not given a recipient yet keeps whatever is stored (omitted = unchanged).
+    ...(quotation?.origin !== 'PRICING_REQUEST' && recipientType ? { recipientType } : {}),
+  }), [contact, terms, docSettings, items, adjustments, labelByGroupId, quotation?.origin, quotation?.contactId, recipientType]);
 
   /** The ONE place that builds a save request — autosave, manual บันทึกร่าง, AND submit's own
    * pre-save all call this instead of pairing buildUpsertPayload() with editSeqRef.current
@@ -1396,14 +1532,20 @@ export function QuotationEditorPage({ user, showToast }) {
       // lost, same as before this change -- out of scope here (see the handoff for this branch).
       setDirty(false);
       setSaveError(null);
+      setSaveErrorLiveQuotationId(null);
       rememberDefaults();
       queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
+      // Slice 2: the create just gave the deal a live direct quotation (S2-B4) — every cached deal
+      // list/summary (the CTA cascade and the DealPicker read it) is stale now.
+      queryClient.invalidateQueries({ queryKey: ['tickets'] });
       showToast('success', 'บันทึกร่างแล้ว');
       await attachPending(res.quotation.id);
       navigate(`/quotations/${res.quotation.id}`, { replace: true });
     },
     onError: (error) => {
       setSaveError(error.message || 'บันทึกไม่สำเร็จ');
+      // N6 (S2-B3): the 409 body names the live quotation — offer the way to it.
+      setSaveErrorLiveQuotationId(error.details?.liveQuotationId ?? null);
       showToast('error', error.message || 'บันทึกไม่สำเร็จ');
     },
   });
@@ -1429,14 +1571,19 @@ export function QuotationEditorPage({ user, showToast }) {
       const { payload, sentSeq, sentClientIds } = buildSaveRequest();
       try {
         const res = await api.dealQuotations.update(id, payload);
-        return { res, sentSeq, sentClientIds };
+        return { res, sentSeq, sentClientIds, sentRecipientType: payload.recipientType ?? null };
       } catch (error) {
         lastFailedAutoPayloadRef.current = JSON.stringify(payload);
         throw error;
       }
     },
-    onSuccess: ({ res, sentSeq, sentClientIds }, variables) => {
+    onSuccess: ({ res, sentSeq, sentClientIds, sentRecipientType }, variables) => {
       setSaveError(null);
+      // Slice 2: a CHANGED recipient changes the deal summary's liveDirectQuotation.recipientType
+      // (S2-B4) — refetch the cached deal reads so they agree with the quotation.
+      if (sentRecipientType && sentRecipientType !== quotation?.recipientType) {
+        queryClient.invalidateQueries({ queryKey: ['tickets'] });
+      }
       rememberDefaults();
       queryClient.setQueryData(queryKeys.dealQuotationDetail(id), res.quotation);
       queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
@@ -1498,6 +1645,15 @@ export function QuotationEditorPage({ user, showToast }) {
   }, [runUpdateAsync]);
 
   const [submitConfirmOpen, setSubmitConfirmOpen] = useState(false);
+  // Slice 2 (S2-B4): the deal page's sticky CTA and the sales worklist key on the deal summary's
+  // liveDirectQuotation, so every docStatus change of a direct quotation (submit / approve / reject
+  // / revise / reorder / cancel) changes the DEAL's data too. Invalidating only ['dealQuotations']
+  // left the deal page offering "ส่งขออนุมัติใบเสนอราคา" after the rep had already submitted (found
+  // in the browser). ['tickets'] is every deal query — list rows, the deal page's TicketDto, and this
+  // page's own deal summary.
+  function invalidateDealViews() {
+    queryClient.invalidateQueries({ queryKey: ['tickets'] });
+  }
   const [changeCustomerOpen, setChangeCustomerOpen] = useState(false);
 
   const submitMutation = useMutation({
@@ -1512,6 +1668,9 @@ export function QuotationEditorPage({ user, showToast }) {
     // buildSaveRequest/applySavedQuotation exactly like updateMutation's own mutationFn/onSuccess,
     // so a submit's pre-save adopts server ids and clears `dirty` the same way an autosave would.
     mutationFn: async () => {
+      // The picker's in-flight เบอร์/อีเมล save first: the pre-save below makes the server re-read
+      // the live contact, and must not freeze the old value (see flushPendingContactSave).
+      await contactPickerRef.current?.flushPendingContactSave();
       if (dirty) {
         const { payload, sentSeq, sentClientIds } = buildSaveRequest();
         // D3 fix (Opus review 2026-09-16): tracked in `pendingSaveRef` by hand, the same
@@ -1544,6 +1703,7 @@ export function QuotationEditorPage({ user, showToast }) {
       // with it (and a refresh would then re-fetch the OLD, now-superseded-in-waiting row).
       if (String(res.quotation.id) !== id) {
         queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
+        invalidateDealViews();
         showToast('success', 'ส่งขออนุมัติแล้ว (ฉบับแก้ไขใหม่ ' + res.quotation.number + ')');
         setSubmitConfirmOpen(false);
         navigate(`/quotations/${res.quotation.id}`);
@@ -1551,6 +1711,7 @@ export function QuotationEditorPage({ user, showToast }) {
       }
       queryClient.setQueryData(queryKeys.dealQuotationDetail(id), res.quotation);
       queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
+      invalidateDealViews();
       showToast('success', 'ส่งขออนุมัติแล้ว');
       setSubmitConfirmOpen(false);
     },
@@ -1637,14 +1798,17 @@ export function QuotationEditorPage({ user, showToast }) {
           customerName: dealForm.customer.name,
           customerId: dealForm.customer.id,
           projectId: dealForm.project.id,
-          // Owner-directed reversal of F2 (2026-09-26): the inline-create card no longer collects
-          // a ผู้สั่งซื้อ contact at all (see DealCustomerCard) — the ticket's own contactId is
-          // simply left unset.
+          // The deal never carries a ผู้ติดต่อ (ruling 2026-10-18): the quotation does, below.
           contactId: null,
           entryChannel: dealForm.entryChannel,
           priority: 'NORMAL',
           items: [],
           nextFollowUpAt: addDaysIso(todayIso(), 7),
+          // GLA-136 provenance ("this deal was created from a quotation"). Since #1086 it hides
+          // nothing and gates nothing — the deal is a normal pipeline deal from the start, and its
+          // order is confirmed with ยืนยันคำสั่งซื้อ while its status is 'draft'. See
+          // CreateTicketRequest#quotationOnly.
+          quotationOnly: true,
         });
         // TicketDto envelope (see the ticketQuery fix above) -- the new ticket's id lives at
         // `.summary.id`, never `.ticket.id`/`.id`.
@@ -1655,13 +1819,17 @@ export function QuotationEditorPage({ user, showToast }) {
       const quotationRes = await api.dealQuotations.create(ticketId, buildUpsertPayload());
       setDirty(false);
       setSaveError(null);
+      setSaveErrorLiveQuotationId(null);
       rememberDefaults();
       queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
+      // Slice 2: a new deal now exists, holding a live direct quotation (S2-B4).
+      queryClient.invalidateQueries({ queryKey: ['tickets'] });
       showToast('success', 'บันทึกร่างแล้ว');
       await attachPending(quotationRes.quotation.id);
       navigate(`/quotations/${quotationRes.quotation.id}`, { replace: true });
     } catch (error) {
       setSaveError(error.message || 'บันทึกไม่สำเร็จ');
+      setSaveErrorLiveQuotationId(error.details?.liveQuotationId ?? null);
       showToast('error', error.message || 'บันทึกไม่สำเร็จ');
     } finally {
       setCreatingDeal(false);
@@ -1680,11 +1848,14 @@ export function QuotationEditorPage({ user, showToast }) {
   const [rejectOpen, setRejectOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
   const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
+  // "ยืนยันคำสั่งซื้อ" confirm dialog (GLA-136's promote, renamed per IA §7/§8).
+  const [promoteConfirmOpen, setPromoteConfirmOpen] = useState(false);
   const approveMutation = useMutation({
     mutationFn: (payload) => api.dealQuotations.approve(id, payload || {}),
     onSuccess: (res) => {
       queryClient.setQueryData(queryKeys.dealQuotationDetail(id), res.quotation);
       queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
+      invalidateDealViews();
       // GLA-123 slice S2, REWORKED (owner reversed the dual-approval design, 2026-09-20): ONE
       // approval always issues a PRICING_REQUEST-origin quotation now (there is no second slot to
       // wait on), same as DEAL_DIRECT's own APPROVED outcome — one message either way.
@@ -1707,6 +1878,7 @@ export function QuotationEditorPage({ user, showToast }) {
     onSuccess: (res) => {
       queryClient.setQueryData(queryKeys.dealQuotationDetail(id), res.quotation);
       queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
+      invalidateDealViews();
       showToast('success', 'บันทึกการไม่อนุมัติแล้ว');
       setRejectOpen(false);
       setRejectReason('');
@@ -1722,10 +1894,41 @@ export function QuotationEditorPage({ user, showToast }) {
     mutationFn: () => api.dealQuotations.createRevision(id, {}),
     onSuccess: (res) => {
       queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
+      invalidateDealViews();
       showToast('success', 'สร้างฉบับแก้ไขแล้ว');
       navigate(`/quotations/${res.quotation.id}`);
     },
     onError: (error) => showToast('error', error.message || 'สร้างฉบับแก้ไขไม่สำเร็จ'),
+  });
+
+  // "ยืนยันคำสั่งซื้อ" (GLA-136's promote, renamed per IA §7/§8 / D3) — record the customer's order
+  // on this APPROVED direct quotation's deal (DealQuotationService#confirmOrderFromDirectQuotation,
+  // still called through the promote-to-deal alias), then open the deal.
+  // The deal-page cache for this ticket is DROPPED (not merely invalidated) before navigating:
+  // this page may have cached a bare summary under the same queryKeys.ticketDetail key that
+  // TicketDetailPage reads as a whole TicketDto, and it must not render that shape even once.
+  // Every failure — 403 and 409 included — surfaces the server's own Thai message (GLA-138: a
+  // silent 409 is exactly what this must not do); a 409 also refetches, since the quotation or
+  // the deal changed under this screen.
+  const promoteMutation = useMutation({
+    mutationFn: () => api.dealQuotations.promoteToDeal(id),
+    onSuccess: (res) => {
+      const dealId = res?.result?.ticketId ?? quotation?.ticketId;
+      queryClient.removeQueries({ queryKey: queryKeys.ticketDetail(dealId) });
+      queryClient.invalidateQueries({ queryKey: ['tickets'] });
+      queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
+      setPromoteConfirmOpen(false);
+      showToast('success', 'ยืนยันคำสั่งซื้อแล้ว');
+      navigate(`/tickets/${dealId}`);
+    },
+    onError: (error) => {
+      if (error.status === 409) {
+        quotationQuery.refetch();
+        promotionTicketQuery.refetch();
+      }
+      setPromoteConfirmOpen(false);
+      showToast('error', error.message || 'ยืนยันคำสั่งซื้อไม่สำเร็จ');
+    },
   });
 
   /** M4(d) fix (Opus review, 2026-09-20) — "คืนรายการ": re-adds a CEO-linked line a prior save
@@ -1754,6 +1957,7 @@ export function QuotationEditorPage({ user, showToast }) {
     onSuccess: (res) => {
       queryClient.setQueryData(queryKeys.dealQuotationDetail(id), res.quotation);
       queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
+      invalidateDealViews();
       showToast('success', 'ยกเลิกร่างแล้ว');
       setCancelConfirmOpen(false);
     },
@@ -1784,8 +1988,8 @@ export function QuotationEditorPage({ user, showToast }) {
    * editor's own state (autosave hasn't fired yet, or a save is still on the wire) was invisible
    * to it, so a rep who edited a size/รหัสสินค้า and downloaded immediately kept seeing the OLD
    * figures. On an editable (DRAFT, editable-by-this-user) quotation, download now flushes first:
-   *   1. Await the ผู้สั่งซื้อ picker's own in-flight โทร./อีเมล save, if any (same race submit's
-   *      pre-save now guards against — see that mutationFn's own comment).
+   *   1. Await the ผู้ติดต่อ picker's own in-flight เบอร์/อีเมล save, if any (same race submit's
+   *      pre-save guards against — see that mutationFn's own comment).
    *   2. Await whatever save is ALREADY in flight (autosave, a manual บันทึกร่าง, or submit's own
    *      tracked pre-save — see pendingSaveRef's own comment), so this flush never overlaps it.
    *   3. Cancel any pending autosave debounce (it would otherwise fire mid-flush and race the
@@ -1823,6 +2027,7 @@ export function QuotationEditorPage({ user, showToast }) {
     setDownloading(format);
     try {
       if (isEditable) {
+        await contactPickerRef.current?.flushPendingContactSave();
         if (pendingSaveRef.current) {
           // Already toasted by updateMutation's own onError if it fails — fall through to the
           // live dirty/validation checks below rather than assume it succeeded.
@@ -1913,6 +2118,27 @@ export function QuotationEditorPage({ user, showToast }) {
   // The live customer record wins only while the document is a draft: react-query keeps serving a
   // cached record after submit, and a renamed customer must not rewrite a frozen quotation's header.
   const customerName = (isEditable ? summaryCustomer?.name : null) ?? quotation?.customerName ?? ticket?.customerName ?? (isInlineCreate ? dealForm.customer?.name : null) ?? null;
+  // ผู้ติดต่อ (owner rulings 2026-10-18) — the picker over the deal customer's contacts, in the ONE
+  // place each entry path shows it (the two never render together). Its customer is the loaded
+  // deal's, or on a new deal the customer chosen in the ดีล card. With neither — a deal this user
+  // cannot read (a quotation-grant holder) — the picker sits in its own "เลือกลูกค้าก่อน" state.
+  // Optional, never a checklist blocker.
+  const contactPicker = (
+    <div className="col-span-full">
+      <QuotationContactPicker
+        ref={contactPickerRef}
+        customerId={ticket?.customerId ?? (isInlineCreate ? dealForm.customer?.id : null) ?? null}
+        customerName={customerName}
+        value={contact}
+        onChange={(next) => { setContact(next); setDirty(true); }}
+        onResolve={setContact}
+        showToast={showToast}
+        idPrefix="quotation-contact"
+        omitContactHonorific={terms.omitContactHonorific}
+        onChangeOmitContactHonorific={(next) => { setTerms((t) => ({ ...t, omitContactHonorific: next })); setDirty(true); }}
+      />
+    </div>
+  );
   const projectName = ((isEditable && quotation ? terms.projectName : null) || quotation?.projectName) ?? ticket?.projectName ?? (isInlineCreate ? dealForm.project?.name : null) ?? null;
   // The REAL rep's name -- what "(ค่าเริ่มต้น)" (no override) actually means on both
   // salesRepDisplayId selects. Opus review fix (2026-09-14): this used to feed an
@@ -1941,6 +2167,22 @@ export function QuotationEditorPage({ user, showToast }) {
     && docSettings.priceMode !== quotation.ceoPriceMode;
   const saving = createMutation.isPending || updateMutation.isPending || creatingDeal;
 
+  // Slice 2 §B — the deal behind this quotation, for the header strip. Slice 1's DealQuotationDto
+  // carries `ticketCode`/`dealStage` itself; THIS tree's DTO does not yet, so until it does the strip
+  // reads the deal summary this page already fetches — the ?ticket= / editable-DRAFT `ticket`, or
+  // the promoter's own summary on an APPROVED direct quotation. No extra request is made for it: a
+  // quotation this page has no summary for (e.g. a non-DRAFT viewed by an approver) shows no strip
+  // until the DTO carries the fields. Hidden while inline-creating: there is no deal yet.
+  const stripDeal = quotation?.ticketCode
+    ? {
+      id: quotation.ticketId, code: quotation.ticketCode,
+      customerName: quotation.customerName, salesStage: quotation.dealStage ?? null,
+    }
+    : (ticket ?? promotionTicketQuery.data ?? null);
+  const stripDealId = stripDeal?.id ?? effectiveTicketId;
+  const canOpenStripDeal = stripDealId != null && canAccessPath(`/tickets/${stripDealId}`, user);
+  const stripStage = stripDeal?.salesStage ? dealStageLabel(stripDeal.salesStage) : null;
+
   return (
     <PageStack>
       <PageHeader
@@ -1967,7 +2209,8 @@ export function QuotationEditorPage({ user, showToast }) {
         ) : null}
         subtitle={customerName
           ? `${customerName}${projectName ? ` · ${projectName}` : ''}`
-          : 'เริ่มจากเลือกลูกค้าและโครงการด้านล่าง'}
+          // Slice 2: step 1 is "ดีล" now — pick an existing deal or create one.
+          : 'เริ่มจากเลือกดีลด้านล่าง หรือสร้างดีลใหม่'}
         context={(
           <>
             {status ? <StatusBadge tone={status.tone}>{status.label}</StatusBadge> : null}
@@ -2057,12 +2300,66 @@ export function QuotationEditorPage({ user, showToast }) {
             {quotation && canReviseDealQuotation(user, quotation) ? (
               <Button variant="secondary" loading={reviseMutation.isPending} onClick={() => reviseMutation.mutate()}>สร้างฉบับแก้ไข</Button>
             ) : null}
+            {/* ยืนยันคำสั่งซื้อ (GLA-136's promote, renamed per IA §7/§8 — the same words as the deal
+                page's sticky CTA). Primary — on an APPROVED direct quotation it is the next thing
+                the rep does once the customer orders. Once the deal has left 'draft', the same slot
+                becomes a plain link to the deal instead, so the action is never offered twice. */}
+            {canPromoteToDeal ? (
+              promotedDealId != null ? (
+                <Link
+                  to={`/tickets/${promotedDealId}`}
+                  className={cn(buttonVariants({ variant: 'secondary' }))}
+                  data-testid="quotation-go-to-deal"
+                >
+                  <Icon name="chevronRight" size={14} />
+                  ไปที่ดีล
+                </Link>
+              ) : (
+                <Button
+                  variant="primary"
+                  loading={promoteMutation.isPending}
+                  onClick={() => setPromoteConfirmOpen(true)}
+                  data-testid="quotation-promote-to-deal"
+                >
+                  ยืนยันคำสั่งซื้อ
+                </Button>
+              )
+            ) : null}
             {quotation && canCancelDealQuotation(user, quotation) ? (
               <Button variant="danger" onClick={() => setCancelConfirmOpen(true)}>ยกเลิกร่าง</Button>
             ) : null}
           </>
         )}
       />
+
+      {/* Slice 2 §B — "ดีล <code> · <customer> · <stage> · เปิดดีล". One flat row ON the page (never a
+          card inside a card), directly under the header, so the deal's current stage is visible
+          where the rep is working (it is only ever DISPLAYED here — owner ruling 2026-09-30: nothing
+          on this page moves it). เปิดดีล is the ONE deal link on this page
+          (IA §8: "เปิดดีล — everywhere, one verb"), hidden for a role that cannot open the deal. */}
+      {!isInlineCreate && stripDeal ? (
+        <div
+          data-testid="quotation-deal-strip"
+          className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1.5 text-sm"
+        >
+          <span className="font-bold text-text-muted">ดีล</span>
+          <code className="font-mono text-sm text-text">{stripDeal.code ?? `#${stripDealId}`}</code>
+          <span aria-hidden="true" className="text-text-muted">·</span>
+          <span className="min-w-0 max-w-full truncate font-bold text-text" title={stripDeal.customerName ?? undefined}>
+            {stripDeal.customerName ?? '-'}
+          </span>
+          {stripStage ? <StatusBadge tone={stripStage.tone}>{stripStage.label}</StatusBadge> : null}
+          {canOpenStripDeal ? (
+            <Link
+              to={`/tickets/${stripDealId}`}
+              className="inline-flex min-h-[38px] items-center gap-1 rounded-md font-bold text-primary no-underline hover:text-primary-hover mobile:min-h-[44px]"
+            >
+              เปิดดีล
+              <Icon name="chevronRight" size={14} />
+            </Link>
+          ) : null}
+        </div>
+      ) : null}
 
       {wasRejected ? (
         <div className="rounded-md border border-danger-border bg-danger/10 p-4 text-sm text-danger">
@@ -2117,7 +2414,7 @@ export function QuotationEditorPage({ user, showToast }) {
         <div role="status" data-testid="copy-notice" className="rounded-md border border-border bg-surface p-4 text-sm text-text-muted">
           <strong className="block text-text">คัดลอกจากใบเสนอราคา {copySource.number}</strong>
           <p className="m-0 mt-1">
-            รายการสินค้าและเงื่อนไขมาจากใบเดิมแล้ว ยังต้องเลือกลูกค้าและโครงการ และกรอกผู้ติดต่อ (ชื่อ, Phone, Email)
+            รายการสินค้าและเงื่อนไขมาจากใบเดิมแล้ว ยังต้องเลือกลูกค้าและโครงการ และเลือกผู้ติดต่อ และกรอกโทรศัพท์/อีเมลลูกค้า
             ของใบนี้ใหม่ ใบนี้จะได้เลขที่ของตัวเองเมื่อบันทึกร่าง
           </p>
           {/* Item pictures are stored against the source's rows and this editor has no way to
@@ -2162,56 +2459,53 @@ export function QuotationEditorPage({ user, showToast }) {
               showValidationSummary documents; shown at once on an existing draft. */}
           {dirty || quotation ? <QuotationChecklist entries={checklist} /> : null}
 
+          {/* Slice 2 §A — step 1 "ดีล", on every NEW quotation: pick an existing deal (which turns
+              this page into the ?ticket= path) or create one inline, then ผู้รับใบเสนอราคา*. An
+              existing quotation already has its deal; its recipient lives in ข้อมูลลูกค้าและผู้ขาย
+              below (§C). */}
+          {!id ? (
+            <DealCustomerCard
+              user={user}
+              mode={dealMode}
+              onModeChange={changeDealMode}
+              selectedDeal={ticketIdParam ? ticket : null}
+              value={{ ...dealForm, recipientType }}
+              onChange={updateDealForm}
+              // "คัดลอกเป็นใบใหม่": same job, different bidder. A project is a record under a
+              // customer, so the source's name is what the โครงการ box offers once the new
+              // customer is chosen — picked or created there in a click, never written silently.
+              suggestedProjectName={copyState?.suggestedProjectName}
+              // Sales feedback #5 (V192.1), and the owner on 2026-10-12: "should be under the
+              // โครงการ input itself". On a new deal that input is this card's own โครงการ box.
+              belowProject={(
+                <ProjectNamePrintToggle
+                  id="hideProjectNameInline"
+                  checked={terms.hideProjectName}
+                  onChange={(hideProjectName) => { setTerms((t) => ({ ...t, hideProjectName })); setDirty(true); }}
+                />
+              )}
+              errors={{
+                deal: showValidationSummary && needsDeal ? 'กรุณาเลือกดีล' : undefined,
+                recipient: showValidationSummary && !recipientType ? 'กรุณาเลือกผู้รับใบเสนอราคา' : undefined,
+                customer: showValidationSummary && !dealForm.customer ? 'กรุณาเลือกลูกค้า' : undefined,
+                project: showValidationSummary && dealForm.customer && !dealForm.project ? 'กรุณาเลือกโครงการ' : undefined,
+                // #1085 — a real ช่องทางรับงาน is required before a NEW deal is created.
+                entryChannel: showValidationSummary && (!dealForm.entryChannel || dealForm.entryChannel === 'UNSPECIFIED') ? 'ต้องเลือกช่องทางรับงานก่อนบันทึกร่าง' : undefined,
+              }}
+              showToast={showToast}
+            />
+          ) : null}
+
           {isInlineCreate ? (
-            // Owner ask 2026-09-10: no ticket exists yet -- ลูกค้า/โครงการ/ผู้ติดต่อ/ช่องทาง are
-            // picked (or created) right here instead of the read-only summary below, which has
-            // nothing to summarize until the first บันทึกร่าง mints the ticket.
+            // Owner ask 2026-09-10: no ticket exists yet -- ลูกค้า/โครงการ/ช่องทาง are
+            // picked (or created) in the ดีล card above instead of the read-only summary below,
+            // which has nothing to summarize until the first บันทึกร่าง mints the ticket.
             <>
-              <DealCustomerCard
-                value={dealForm}
-                onChange={updateDealForm}
-                // "คัดลอกเป็นใบใหม่": same job, different bidder. A project is a record under a
-                // customer, so the source's name is what the โครงการ box offers once the new
-                // customer is chosen — picked or created there in a click, never written silently.
-                suggestedProjectName={copyState?.suggestedProjectName}
-                // Sales feedback #5 (V192.1), and the owner on 2026-10-12: "should be under the
-                // โครงการ input itself". No deal exists yet, so that input is this card's own
-                // โครงการ box.
-                belowProject={(
-                  <ProjectNamePrintToggle
-                    id="hideProjectNameInline"
-                    checked={terms.hideProjectName}
-                    onChange={(hideProjectName) => { setTerms((t) => ({ ...t, hideProjectName })); setDirty(true); }}
-                  />
-                )}
-                errors={{
-                  customer: showValidationSummary && !dealForm.customer ? 'กรุณาเลือกลูกค้า' : undefined,
-                  project: showValidationSummary && dealForm.customer && !dealForm.project ? 'กรุณาเลือกโครงการ' : undefined,
-                }}
-                showToast={showToast}
-              />
               <Panel title="ข้อมูลลูกค้าและผู้ขาย">
-                {/* Owner-directed reversal of F2/V167 (2026-09-26) — ผู้สั่งซื้อ is now this ONE
-                    optional free-text field (the required contact-picker dropdown this card used
-                    to render is gone). It prints straight into the signature slot; left blank, the
-                    document prints its dotted line instead. Never a checklist blocker.
-                    Labelled ผู้ติดต่อ since 2026-10-06 — see ORDERED_BY_FIELD_LABEL. */}
-                {/* V192.3 — the name and, directly under it, how to reach that person; then the
-                    designer. One group, spaced as the rest of this page spaces a field from the
-                    next (gap-3). */}
+                {/* ผู้ติดต่อ, directly under it the customer's phone/email, then the designer. One
+                    group, spaced as the rest of this page spaces a field from the next (gap-3). */}
                 <div className="grid gap-3">
-                  <FormField
-                    label={ORDERED_BY_FIELD_LABEL}
-                    htmlFor="orderedByNameInline"
-                    hint={ORDERED_BY_FIELD_HINT}
-                  >
-                    <input
-                      id="orderedByNameInline"
-                      value={terms.orderedByName}
-                      maxLength={255}
-                      onChange={(e) => { setTerms((t) => ({ ...t, orderedByName: e.target.value })); setDirty(true); }}
-                    />
-                  </FormField>
+                  {contactPicker}
                   <OrderedByContactFields
                     terms={terms}
                     onChange={(patch) => { setTerms((current) => ({ ...current, ...patch })); setDirty(true); }}
@@ -2280,14 +2574,51 @@ export function QuotationEditorPage({ user, showToast }) {
                     {displayNameOptions.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
                   </select>
                 </FormField>
-                {/* Hidden when the viewer cannot open the deal page — under the release lock
-                    (owner, 2026-09-11) a sales rep reaches /quotations but not /tickets, and a
-                    link straight to the access-denied page is worse than no link. */}
-                {effectiveTicketId && canAccessPath(`/tickets/${effectiveTicketId}`, user) ? (
-                  <div>
-                    <span className="block text-2xs font-bold uppercase text-text-muted">ดีล</span>
-                    <Link to={`/tickets/${effectiveTicketId}`} className="text-sm text-info underline">ดูรายละเอียดดีลนี้</Link>
-                  </div>
+                {/* The "ดีล / ดูรายละเอียดดีลนี้" link that sat here moved to the header strip as
+                    "เปิดดีล" (slice 2 §B) — one deal link per page, same canAccessPath gate. */}
+                {/* Slice 2 §C — ผู้รับใบเสนอราคา on an EXISTING draft (a new quotation asks for it in
+                    the ดีล card above). DEAL_DIRECT: the same pill radios, saved through update
+                    (DRAFT-only — this panel only renders on an editable draft). PRICING_REQUEST: read-only — that
+                    recipient belongs to its คำขอราคา, and the update never sends one. */}
+                {id && quotation ? (
+                  isPricingRequestOrigin ? (
+                    <div className="col-span-full" data-testid="quotation-recipient-readonly">
+                      <span className="block text-sm font-bold text-text-secondary">ผู้รับใบเสนอราคา</span>
+                      <span className="flex flex-wrap items-baseline gap-x-2">
+                        <strong className="text-text">
+                          {quotationRecipientOption(quotation.recipientType)?.label ?? 'ไม่ระบุ'}
+                        </strong>
+                        {/* The คำขอราคา's own free-text recipient (recipient_label, Round 8 #1084),
+                            when it says more than the role. */}
+                        {quotation.recipientLabel
+                          && quotation.recipientLabel !== quotationRecipientOption(quotation.recipientType)?.label ? (
+                            <span className="text-sm text-text-secondary">{quotation.recipientLabel}</span>
+                          ) : null}
+                        <span className="text-xs text-text-muted">จากคำขอราคา</span>
+                      </span>
+                    </div>
+                  ) : quotation.parentQuotationId != null ? (
+                    // Owner ruling 2026-10-17 (D-5 step 2): a revision keeps its parent's recipient;
+                    // the picker would only lead to DealQuotationService#update's 409.
+                    <div className="col-span-full" data-testid="quotation-recipient-revision-locked">
+                      <span className="block text-sm font-bold text-text-secondary">ผู้รับใบเสนอราคา</span>
+                      <strong className="text-text">
+                        {quotationRecipientOption(quotation.recipientType)?.label ?? 'ไม่ระบุ'}
+                      </strong>
+                      <p className="m-0 mt-1 text-xs text-text-muted">{REVISION_RECIPIENT_LOCKED_MESSAGE}</p>
+                    </div>
+                  ) : (
+                    <div className="col-span-full">
+                      <QuotationRecipientField
+                        value={recipientType}
+                        onChange={changeRecipient}
+                        idPrefix="quotation-recipient-edit"
+                        // Owner ruling #1: the off-route note reads this draft's deal's channel
+                        // (the deal summary is fetched for a DRAFT — see ticketQuery).
+                        entryChannel={ticket?.entryChannel ?? null}
+                      />
+                    </div>
+                  )
                 ) : null}
                 {/* Owner, 2026-09-11: the customer's ที่อยู่ / เลขที่ผู้เสียภาษี / โทร., prefilled
                     from the customer record and editable here too — the SAME component the
@@ -2302,26 +2633,9 @@ export function QuotationEditorPage({ user, showToast }) {
                     />
                   </div>
                 ) : null}
-                {/* Owner-directed reversal of F2/V167 (2026-09-26) — ผู้สั่งซื้อ is now this ONE
-                    optional free-text field; the required QuotationContactPicker dropdown (and
-                    its โทร./อีเมล display and "ไม่เติม “คุณ”" checkbox) that used to render here is
-                    removed. It prints straight into the signature slot; left blank, the document
-                    prints its dotted line instead. Never a checklist blocker.
-                    Labelled ผู้ติดต่อ since 2026-10-06 — see ORDERED_BY_FIELD_LABEL. */}
-                <FormField
-                  label={ORDERED_BY_FIELD_LABEL}
-                  htmlFor="orderedByNameCard"
-                  hint={ORDERED_BY_FIELD_HINT}
-                >
-                  <input
-                    id="orderedByNameCard"
-                    value={terms.orderedByName}
-                    maxLength={255}
-                    onChange={(e) => { setTerms((t) => ({ ...t, orderedByName: e.target.value })); setDirty(true); }}
-                  />
-                </FormField>
-                {/* V192.3 — directly under the name: how to reach that person. Spans the card's
-                    two columns, so Phone and Email sit side by side under ผู้ติดต่อ. */}
+                {contactPicker}
+                {/* V192.3 — directly under ผู้ติดต่อ: the customer's phone and email, side by side
+                    across the card's two columns. */}
                 <OrderedByContactFields
                   terms={terms}
                   onChange={(patch) => { setTerms((current) => ({ ...current, ...patch })); setDirty(true); }}
@@ -2983,6 +3297,13 @@ export function QuotationEditorPage({ user, showToast }) {
             {saveError ? (
               <p role="alert" className="m-0 mt-3 rounded-md border border-danger-border bg-danger/10 p-3 text-xs text-danger">
                 บันทึกไม่สำเร็จ: {saveError}
+                {/* N6 (S2-B3): the server named the live quotation — go there, don't retype it. */}
+                {saveErrorLiveQuotationId != null ? (
+                  <>
+                    {' '}
+                    <Link to={`/quotations/${saveErrorLiveQuotationId}`} className="font-bold underline">เปิดใบเสนอราคา</Link>
+                  </>
+                ) : null}
               </p>
             ) : null}
           </Panel>
@@ -3153,6 +3474,8 @@ export function QuotationEditorPage({ user, showToast }) {
               queryClient.invalidateQueries({ queryKey: queryKeys.dealQuotationDetail(id) }),
             ]);
             setTerms((t) => ({ ...t, projectName: project.name }));
+            // The server dropped the old customer's contact from every draft; so does the picker.
+            setContact(null);
             showToast('success', 'เปลี่ยนลูกค้าแล้ว');
           }}
         />
@@ -3197,6 +3520,34 @@ export function QuotationEditorPage({ user, showToast }) {
         </Modal>
       ) : null}
 
+      {/* GLA-136 — promotion is not reversible (nothing un-promotes a deal), so it is confirmed,
+          and the dialog says exactly where the deal lands and what it carries over. */}
+      {promoteConfirmOpen ? (
+        <Modal
+          title="ยืนยันคำสั่งซื้อ"
+          onClose={() => setPromoteConfirmOpen(false)}
+          footer={(
+            <>
+              <Button variant="secondary" onClick={() => setPromoteConfirmOpen(false)}>ปิด</Button>
+              <Button
+                variant="primary"
+                loading={promoteMutation.isPending}
+                onClick={() => promoteMutation.mutate()}
+                data-testid="quotation-promote-to-deal-confirm"
+              >
+                ยืนยันคำสั่งซื้อ
+              </Button>
+            </>
+          )}
+        >
+          {/* Slice 2: the copy lives in quotationMeta.js so the deal page's ยืนยันคำสั่งซื้อ CTA says
+              exactly the same thing (TicketDetailPage renders the same three parts). */}
+          <p className="m-0">
+            {CONFIRM_ORDER_FROM_QUOTATION_COPY.lead(quotation?.number)} <strong>{CONFIRM_ORDER_FROM_QUOTATION_COPY.stage}</strong>
+            {' '}{CONFIRM_ORDER_FROM_QUOTATION_COPY.tail}
+          </p>
+        </Modal>
+      ) : null}
       {/* V192.5 — "ผสมหลายวิธี" → one mode for the whole document. Asked only when it would
           re-price rows (#changePriceMode); the title names the mode and the body the number of
           rows, so the rep is agreeing to something specific. Cancelling leaves every row, and

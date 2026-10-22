@@ -119,6 +119,8 @@ beforeEach(() => {
       summary: {
         id: 18, createdById: 6, createdByName: 'คุณสมหมาย ขายดี', customerName: CUSTOMER.name, customerId: 5,
         projectId: 3, projectName: 'โครงการ A', contactId: null, contactName: null,
+        // A deal at a quote stage preselects its recipient (slice 2 flow B), so saving is not held back.
+        salesStage: 'QUOTE_DESIGN_SIDE',
       },
     },
   });
@@ -395,6 +397,9 @@ describe('files picked before the first บันทึกร่าง', () => {
     await waitFor(() => expect(api.customers.projects).toHaveBeenCalledWith(testCustomer.id));
     fireEvent.focus(await screen.findByLabelText(/^โครงการ/));
     fireEvent.mouseDown(await screen.findByRole('option', { name: new RegExp(project.name) }));
+    // Slice 2 (S2-B1) + #1085: a new deal's recipient and a real ช่องทางรับงาน gate บันทึกร่าง.
+    fireEvent.click(screen.getByRole('radio', { name: 'ผู้ออกแบบ' }));
+    fireEvent.click(screen.getByRole('button', { name: /ผู้ออกแบบนำดีล/ }));
   }
 
   const pick = (...files) => files.forEach((file) => fireEvent.change(attachInput(), { target: { files: [file] } }));
@@ -453,6 +458,8 @@ describe('files picked before the first บันทึกร่าง', () => {
   it('are sent after the inline-create path has made the deal and the quotation', async () => {
     api.tickets.create.mockResolvedValue({ ticket: { summary: { id: 42 } } });
     openNew('/quotations/new');
+    // Slice 2 flow A: /quotations/new opens on เลือกดีลที่มีอยู่; the inline card is the other branch.
+    fireEvent.click(await screen.findByRole('button', { name: 'สร้างดีลใหม่' }));
     await selectCustomerAndProject();
     await fillOneValidItem();
     pick(fileA, fileB);

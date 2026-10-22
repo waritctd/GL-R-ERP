@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { api } from './mockApi.js';
+import { api, retireLiveDirectQuotationsForTests, retireLivePricingRequestsForTests } from './mockApi.js';
 
 // V192.3 — ผู้ติดต่อ's Phone and Email (`orderedByPhone` / `orderedByEmail`). Mirrors
 // DealQuotationService#create/#update/#insertCopyOf's handling of the two fields.
@@ -10,7 +10,14 @@ import { api } from './mockApi.js';
 // (DealQuotationOrderedByContactIntegrationTest), never here.
 
 const salesUser = { role: 'sales' }; // id 6, owns demo ticket 18
-const createOn18 = (payload) => api.dealQuotations.create(18, payload);
+// Slice 2: a direct create needs a recipient (S2-B1) and refuses a deal that already holds a live
+// direct quotation (S2-B3, N6) or a live pricing request. Ticket 18's seed holds both, so this
+// retires them first -- the state a rep reaches by cancelling -- exactly as mockApi.dealQuotations.test.js does.
+const createOn18 = (payload) => {
+  retireLiveDirectQuotationsForTests(18);
+  retireLivePricingRequestsForTests(18);
+  return api.dealQuotations.create(18, { recipientType: 'DESIGNER', ...payload });
+};
 
 // The smallest body the real service accepts (see mockApi.dealQuotations.test.js's own ONE_ITEM).
 const ONE_ITEM = {
@@ -19,7 +26,11 @@ const ONE_ITEM = {
   leadTimeMinDays: 30, leadTimeMaxDays: 45,
 };
 
+// A name typed into the request's orderedByName: ignored since the 2026-10-18 ruling -- the
+// signature name is the picked contact's (PICKED_NAME, contact 7 of ticket 18's customer).
 const NAME = 'คุณวิชัย มั่นคง';
+const PICKED = { contactId: 7 };
+const PICKED_NAME = 'พิมพ์ใจ บุญมาก';
 const PHONE = '089-765-4321 ต่อ 77';
 const EMAIL = 'bid.contact@contractor-b.example';
 const contact = (fields = {}) => ({
@@ -34,8 +45,8 @@ const MALFORMED_EMAILS = [
 describe('mock dealQuotations — ผู้ติดต่อ Phone / Email (V192.3)', () => {
   it('create stores both beside the name, and get returns them', async () => {
     await api.auth.login(salesUser);
-    const { quotation: created } = await createOn18(contact());
-    expect(created).toMatchObject({ orderedByName: NAME, orderedByPhone: PHONE, orderedByEmail: EMAIL });
+    const { quotation: created } = await createOn18(contact(PICKED));
+    expect(created).toMatchObject({ orderedByName: PICKED_NAME, orderedByPhone: PHONE, orderedByEmail: EMAIL });
 
     const { quotation: reread } = await api.dealQuotations.get(created.id);
     expect(reread).toMatchObject({ orderedByPhone: PHONE, orderedByEmail: EMAIL });
@@ -65,24 +76,25 @@ describe('mock dealQuotations — ผู้ติดต่อ Phone / Email (V19
     expect(updated).toMatchObject({ orderedByPhone: '02-123-4567', orderedByEmail: 'purchasing@contractor-b.example' });
   });
 
-  // The same rule as orderedByName beside them: the editor states every header field on every
-  // save, so a blank — or a value it does not send at all — clears it.
+  // The editor states every header field on every save, so a blank phone or email — or one it does
+  // not send at all — clears it. The name stays: it is the picked contact's, kept by a save that
+  // sends no contactId (a typed one is ignored).
   it('an update that blanks or omits them clears them, and leaves the name alone', async () => {
     await api.auth.login(salesUser);
-    const { quotation: created } = await createOn18(contact());
+    const { quotation: created } = await createOn18(contact(PICKED));
     expect(created).toMatchObject({ orderedByPhone: PHONE, orderedByEmail: EMAIL }); // there is something to clear
 
     const { quotation: updated } = await api.dealQuotations.update(created.id, {
       orderedByName: NAME, orderedByEmail: '  ', items: [ONE_ITEM],
     });
-    expect(updated).toMatchObject({ orderedByName: NAME, orderedByPhone: null, orderedByEmail: null });
+    expect(updated).toMatchObject({ orderedByName: PICKED_NAME, orderedByPhone: null, orderedByEmail: null });
   });
 
   it('refuses a malformed email on create and on update, in the service\'s own words, and keeps what was stored', async () => {
     await api.auth.login(salesUser);
     for (const malformed of MALFORMED_EMAILS) {
       await expect(createOn18(contact({ orderedByEmail: malformed })), malformed)
-        .rejects.toMatchObject({ status: 400, message: expect.stringContaining('รูปแบบอีเมลไม่ถูกต้อง') });
+        .rejects.toMatchObject({ status: 400, message: 'Email ของลูกค้า: รูปแบบอีเมลไม่ถูกต้อง' });
     }
 
     const { quotation: created } = await createOn18(contact());
@@ -98,9 +110,9 @@ describe('mock dealQuotations — ผู้ติดต่อ Phone / Email (V19
     const longestPhone = '0'.repeat(50);
 
     await expect(createOn18(contact({ orderedByEmail: `a${longestEmail}` })))
-      .rejects.toMatchObject({ status: 400, message: expect.stringContaining('254') });
+      .rejects.toMatchObject({ status: 400, message: 'Email ของลูกค้ายาวเกิน 254 ตัวอักษร' });
     await expect(createOn18(contact({ orderedByPhone: `${longestPhone}1` })))
-      .rejects.toMatchObject({ status: 400, message: expect.stringContaining('50') });
+      .rejects.toMatchObject({ status: 400, message: 'Phone ของลูกค้ายาวเกิน 50 ตัวอักษร' });
 
     const { quotation } = await createOn18(contact({ orderedByEmail: longestEmail, orderedByPhone: longestPhone }));
     expect(quotation).toMatchObject({ orderedByEmail: longestEmail, orderedByPhone: longestPhone });

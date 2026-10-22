@@ -30,6 +30,7 @@ async function freshTicket() {
     firstName: 'สมศรี', lastName: 'ทดสอบ', phone: '081-000-0003', email: 'contact-s3outcome@example.com',
   });
   const { ticket: created } = await api.tickets.create({
+    entryChannel: 'DESIGNER_LED',
     title: 'ดีล S3 Outcome Mock',
     priority: 'NORMAL',
     customerName: customer.name,
@@ -79,6 +80,12 @@ async function approvedDecisionOn(ticketId, sourceItemId, recipientType) {
   await api.auth.login({ role: 'import' });
   await api.pricingRequests.pickup(prId);
   const { items: quotes } = await api.pricingRequests.generateFactoryEmailDrafts(prId);
+  // CR-1 (B-R2): price entry is locked until the factory is marked ติดต่อโรงงานแล้ว.
+  for (const q of quotes) {
+    await api.pricingRequests.markFactoryQuoteContacted(q.id, {
+      contactedOn: new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Bangkok' }).format(new Date()),
+    });
+  }
   const quote = quotes[0];
   const prItemId = quote.items[0].pricingRequestItemId;
   await api.pricingRequests.receiveFactoryQuote(quote.id, {
@@ -247,11 +254,14 @@ describe('mockApi dealQuotations.recordOutcome (GLA-123 slice S3)', () => {
       firstName: 'สมชาย', lastName: 'ทดสอบ', phone: '081-000-0004', email: 'contact-s3direct@example.com',
     });
     const { ticket } = await api.tickets.create({
+      entryChannel: 'DESIGNER_LED',
       title: 'ดีล S3 Direct Mock', priority: 'NORMAL', customerName: customer.name, customerId: customer.id,
       projectId: project.id, contactId: contact.id,
       items: [{ brand: 'SCG', model: 'Direct Tile', qty: 10, currency: 'THB' }],
     });
+    // recipientType: required on a DEAL_DIRECT create since slice 2 (S2-B1) — incidental here.
     const { quotation: draft } = await api.dealQuotations.create(ticket.summary.id, {
+      recipientType: 'DESIGNER',
       items: [{
         lineType: 'TILE', brand: 'SCG', model: 'Direct Tile', color: 'ขาว', texture: 'ด้าน', sizeText: '60x60',
         thicknessMm: 10, sqmPerPiece: 0.36, quantityMode: 'PIECES', piecesInput: 10, wastageMode: 'NONE',

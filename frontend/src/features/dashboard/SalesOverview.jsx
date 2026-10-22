@@ -1,3 +1,4 @@
+/* Hallmark · genre: modern-minimal · macrostructure: Workbench · design-system: design.md · designed-as-app · pre-emit critique: P4 H4 E4 S4 R5 V5 */
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
@@ -15,9 +16,12 @@ import { followUpStatus, nextSalesAction, sortWorklist, SALES_ACTION } from '../
 const FOLLOW_UP_LIST_LIMIT = 6;
 
 function WorklistRow({ deal, action, onClick }) {
+  // DESIGN.md §15: tone says whose move it is. Every rep-actionable bucket (the slice-2 direct
+  // SUBMIT/CONFIRM included) falls through to warning; AWAIT_DIRECT_APPROVAL is waiting on
+  // ผจก.ขาย/CEO, so it reads neutral like the other not-mine-yet row.
   const badgeTone = action.followUp === 'overdue'
     ? 'danger'
-    : action.key === SALES_ACTION.LOG_ACTIVITY
+    : action.key === SALES_ACTION.LOG_ACTIVITY || action.key === SALES_ACTION.AWAIT_DIRECT_APPROVAL
       ? 'neutral'
       : action.followUp === 'today'
         ? 'teal'

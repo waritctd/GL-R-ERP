@@ -20,7 +20,10 @@ function uuid() {
   return `77777777-7777-4777-8777-${String(seq).padStart(12, '0')}`;
 }
 
-async function driveTicketToAcceptedQuotation() {
+// Everything up to and including the CEO-approved pricing decision. `priceMode`/`discountPct` are
+// set only by the new-engine drive: dealQuotations.createFromPricingRequest refuses a decision
+// without a priceMode, and the legacy drive below never set either.
+async function driveTicketToApprovedDecision({ priceMode, discountPct } = {}) {
   const n = seq + 1;
 
   await api.auth.login({ role: 'sales' });
@@ -33,6 +36,7 @@ async function driveTicketToAcceptedQuotation() {
   });
   const { project } = await api.customers.createProject(customer.id, { name: `โครงการมัดจำทดสอบ ${n}` });
   const { ticket: created } = await api.tickets.create({
+    entryChannel: 'DESIGNER_LED',
     title: `ดีลมัดจำทดสอบ ${n}`,
     priority: 'NORMAL',
     customerName: customer.name,
@@ -82,10 +86,14 @@ async function driveTicketToAcceptedQuotation() {
   await api.auth.login({ role: 'import' });
   await api.pricingRequests.pickup(prId);
   const { items: quotes } = await api.pricingRequests.generateFactoryEmailDrafts(prId);
+  // CR-1 (B-R2): price entry is locked until the factory is marked ติดต่อโรงงานแล้ว.
+  for (const q of quotes) {
+    await api.pricingRequests.markFactoryQuoteContacted(q.id, {
+      contactedOn: new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Bangkok' }).format(new Date()),
+    });
+  }
   const quote = quotes[0];
   const prItemId = quote.items[0].pricingRequestItemId;
-  // receiveFactoryQuote accepts a still-DRAFT quote (see its own status check) — the
-  // send/dispatch step is a UX-polling simulation, not a gate this drive needs.
   await api.pricingRequests.receiveFactoryQuote(quote.id, {
     clientRequestId: uuid(),
     supplierQuoteRef: 'REF-MOCK',
@@ -109,9 +117,18 @@ async function driveTicketToAcceptedQuotation() {
   await api.auth.login({ role: 'ceo' });
   const { decision } = await api.pricingRequests.startPricingDecision(prId, { defaultMarginPct: 0.2 });
   await api.pricingRequests.updatePricingDecision(decision.id, {
-    items: decision.items.map((item) => ({ pricingDecisionItemId: item.id, minimumSellingPrice: 50 })),
+    priceMode,
+    items: decision.items.map((item) => ({
+      pricingDecisionItemId: item.id, minimumSellingPrice: 50, discountPct,
+    })),
   });
   await api.pricingRequests.approvePricingDecision(decision.id, {});
+
+  return { ticketId, prId, customer, project };
+}
+
+async function driveTicketToAcceptedQuotation() {
+  const { ticketId, prId, customer, project } = await driveTicketToApprovedDecision();
 
   await api.auth.login({ role: 'sales' });
   const { quotation: draftQuotation } = await api.pricingRequests.createCustomerQuotation(prId, {});
@@ -120,6 +137,40 @@ async function driveTicketToAcceptedQuotation() {
   await api.pricingRequests.confirmOrder(prId, {});
 
   return { ticketId, customer, project, quotation: issued };
+}
+
+// New-engine (PRICING_REQUEST-origin) quotation, issued by the sales manager — the same drive as
+// DealQuotationOutcomeIntegrationTest#issuedNewOriginQuotation. The line carries a 10% discount
+// from the CEO decision, so the deposit mapper's baht discount label is exercised. The discount
+// sits on the decision, not on a quotation update: a line that differs from the CEO price makes
+// the mock's PRICING_REQUEST approve refuse sales_manager (403, CEO approval required).
+async function driveTicketToNewEngineIssuedQuotation({ depositPercent, fullPaymentTerm } = {}) {
+  const { ticketId, prId } = await driveTicketToApprovedDecision({ priceMode: 'NET', discountPct: 10 });
+  await api.auth.login({ role: 'sales' });
+  const { quotation: draft } = await api.dealQuotations.createFromPricingRequest(prId);
+  // Java's drive (DealQuotationOutcomeIntegrationTest) saves validityDays before submit; the
+  // mock's submit/approve/recordOutcome never require it, so that update is left out here.
+  // fullPaymentTerm is only meaningful (and, for submit, required) when depositPercent is 0.
+  if (depositPercent != null) {
+    await api.dealQuotations.update(draft.id, {
+      priceMode: draft.priceMode, depositPercent, remainderMode: 'ON_DELIVERY', fullPaymentTerm,
+      items: draft.items.map((item) => ({ ...item })),
+    });
+  }
+  await api.dealQuotations.submit(draft.id, {});
+  await api.auth.login({ role: 'sales_manager' });
+  const { quotation: issued } = await api.dealQuotations.approve(draft.id, {});
+  await api.auth.login({ role: 'sales' });
+  return { ticketId, prId, issued };
+}
+
+async function driveTicketToNewEngineAcceptedQuotation(options) {
+  const { ticketId, prId, issued } = await driveTicketToNewEngineIssuedQuotation(options);
+  const { quotation: accepted } = await api.dealQuotations.recordOutcome(issued.id, {
+    outcome: 'ACCEPTED', customerNote: null, clientRequestId: uuid(),
+  });
+  await api.pricingRequests.confirmOrder(prId, { clientRequestId: uuid() });
+  return { ticketId, prId, accepted };
 }
 
 describe('mockApi.depositNotices.createDraft autofill (branch fix: deposit-notice autofill)', () => {
@@ -165,6 +216,61 @@ describe('mockApi.depositNotices.createDraft autofill (branch fix: deposit-notic
     expect(depositNotice.customerTaxId).toBe(customer.taxId);
     expect(depositNotice.customerAddress).toBe(`${customer.address} ${customer.branch}`);
     expect(depositNotice.projectName).toBe(project.name);
+  });
+});
+
+// Java picks the row with DealQuotationRepository.findAcceptedForPricingRequest.
+describe('mockApi.pricingRequests.createDepositNoticeFromQuotation — new-engine quotation (mirrors OrderConfirmationService fix)', () => {
+  it('creates the draft with the accepted quotation number as reference, and items and percent from that quotation', async () => {
+    const { prId, accepted } = await driveTicketToNewEngineAcceptedQuotation({ depositPercent: 30 });
+    const { depositNotice } = await api.pricingRequests.createDepositNoticeFromQuotation(prId, {});
+    expect(depositNotice.reference).toBe(accepted.number);
+    // DepositNoticeService.createDraftFromQuotation: the chosen quotation's own whole-number percent.
+    expect(accepted.depositPercent).toBe(30);
+    expect(depositNotice.depositPercent).toBe(0.3);
+    expect(depositNotice.items.length).toBeGreaterThan(0);
+    // qty is deliberately not distinguishable here: a mock TILE row sets quantity = piecesFinal.
+    const [line] = accepted.items;
+    expect(depositNotice.items[0]).toMatchObject({
+      qty: line.quantity, netUnitPrice: line.netUnitPrice, unit: line.unit,
+      description: line.descriptionLine, unitPrice: line.unitPrice,
+    });
+    // DepositNoticeRepository.findDealQuotationItems prints sales_discount (unitPrice − netUnitPrice)
+    // in baht, not the percent: ราคาตั้ง 120 at 10% off is net 108, so 12 baht.
+    expect([accepted.items[0].unitPrice, accepted.items[0].netUnitPrice]).toEqual([120, 108]);
+    expect(depositNotice.items[0].discountLabel).toBe('ส่วนลด 12 ต่อหน่วย');
+  });
+
+  // Covers the ticket-level new-engine fallback (DepositNoticeRepository.findDealQuotationItemsForDeposit):
+  // with no items and empty legacy sources, the route would return no items without it.
+  it('ticket-level createDraft with no items reads the same new-engine lines as the pricing-request route', async () => {
+    const { ticketId, prId } = await driveTicketToNewEngineAcceptedQuotation();
+    const { depositNotice: fromTicket } = await api.depositNotices.createDraft(ticketId, {});
+    const { depositNotice: fromPr } = await api.pricingRequests.createDepositNoticeFromQuotation(prId, {});
+    expect(fromTicket.items.length).toBeGreaterThan(0);
+    const pick = (items) => items.map(({ qty, netUnitPrice }) => ({ qty, netUnitPrice }));
+    expect(pick(fromTicket.items)).toEqual(pick(fromPr.items));
+  });
+
+  it('still 409s while the new-engine quotation is only ISSUED (customer has not accepted)', async () => {
+    const { ticketId, prId } = await driveTicketToNewEngineIssuedQuotation();
+    await expect(api.pricingRequests.createDepositNoticeFromQuotation(prId, {}))
+      .rejects.toMatchObject({ status: 409, message: 'ยังไม่มีใบเสนอราคาที่ลูกค้ายอมรับสำหรับคำขอราคานี้' });
+    const { depositNotices } = await api.depositNotices.listByTicket(ticketId);
+    expect(depositNotices).toHaveLength(0);
+  });
+
+  // A zero-deposit ("ไม่รับมัดจำ", full payment) quotation has nothing to bill: Java refuses rather
+  // than drafting a 0-baht document that nothing downstream would stop from being issued.
+  it('rejects a 0% (full-payment) new-engine quotation with 409 and creates no draft', async () => {
+    const { ticketId, prId, accepted } = await driveTicketToNewEngineAcceptedQuotation({
+      depositPercent: 0, fullPaymentTerm: 'BEFORE_DELIVERY',
+    });
+    expect(accepted.depositPercent).toBe(0);
+    await expect(api.pricingRequests.createDepositNoticeFromQuotation(prId, {}))
+      .rejects.toMatchObject({ status: 409, message: expect.stringContaining('ไม่มีมัดจำ') });
+    const { depositNotices } = await api.depositNotices.listByTicket(ticketId);
+    expect(depositNotices).toHaveLength(0);
   });
 });
 

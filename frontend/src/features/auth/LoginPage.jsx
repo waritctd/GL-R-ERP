@@ -40,9 +40,30 @@ const quickAccounts = [
   { role: 'ceo', label: 'CEO', helper: 'อนุมัติคำขอราคา · ภาพรวมทั้งหมด', icon: 'shield' },
 ];
 
+// One-click sign-in for the accounts the backend's `demo` profile seeds (db/migration-demo V21 +
+// V139, one per role, shared password — a committed showcase credential, not a real one). Lets a
+// dev on `npm run dev` against a local backend switch persona without typing.
+//
+// Shown ONLY on the dev server against a real backend: `import.meta.env.DEV` is false in
+// `vite build`, so this row (and the password literal) is dead-code-eliminated from every deployed
+// bundle. The mock row above covers mock mode, so the two never render together.
+const DEMO_PASSWORD = 'Demo@2026';
+const devQuickAccounts = [
+  { key: 'employee', label: 'พนักงาน' },
+  { key: 'hr', label: 'ฝ่ายบุคคล' },
+  { key: 'sales', label: 'ฝ่ายขาย' },
+  { key: 'salesmanager', label: 'ผู้จัดการฝ่ายขาย' },
+  { key: 'import', label: 'ฝ่ายนำเข้า' },
+  { key: 'account', label: 'ฝ่ายบัญชี' },
+  { key: 'warehouse', label: 'คลังสินค้า' },
+  { key: 'qc', label: 'QC' },
+  { key: 'ceo', label: 'CEO' },
+].map((account) => ({ ...account, email: `demo.${account.key}@demo.invalid` }));
+
 export function LoginPage({ onLogin, loading, error }) {
   const [form, setForm] = useState({ email: '', password: '' });
   const isMock = import.meta.env.VITE_USE_MOCKS === 'true';
+  const showDevQuickLogin = import.meta.env.DEV && !isMock;
   const navigate = useNavigate();
 
   function updateField(field, value) {
@@ -182,6 +203,28 @@ export function LoginPage({ onLogin, loading, error }) {
                       <strong className="text-sm">{account.label}</strong>
                       <small className="block text-text-muted text-2xs">{account.helper}</small>
                     </span>
+                  </Button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {showDevQuickLogin && (
+            <div className="border-t border-border pt-[14px]">
+              <p className="!m-0 !mb-[10px] text-xs !text-text-muted font-semibold">เดโม (เซิร์ฟเวอร์จริง) — เข้าสู่ระบบด่วน</p>
+              <div className="grid grid-cols-2 gap-[6px]">
+                {devQuickAccounts.map((account) => (
+                  <Button
+                    key={account.key}
+                    type="button"
+                    variant="secondary"
+                    className="justify-start py-[6px] px-3"
+                    data-testid={`login-dev-${account.email}`}
+                    disabled={loading}
+                    title={account.email}
+                    onClick={() => onLogin({ email: account.email, password: DEMO_PASSWORD })}
+                  >
+                    <strong className="text-sm">{account.label}</strong>
                   </Button>
                 ))}
               </div>

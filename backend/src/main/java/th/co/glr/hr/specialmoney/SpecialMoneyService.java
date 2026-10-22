@@ -56,7 +56,8 @@ import th.co.glr.hr.notification.NotificationService;
  */
 @Service
 public class SpecialMoneyService {
-    private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Bangkok");
+    /** Package-private so tests derive "today" from the same zone rather than the JVM default. */
+    static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Bangkok");
     private static final Set<String> VIEW_ALL_ROLES = Set.of("hr", "ceo");
 
     private final SpecialMoneyRepository repository;
