@@ -1562,6 +1562,21 @@ public class TicketRepository {
                 .addValue("id", ticketId));
     }
 
+    /** RED stub: today's unconditional system write, so the new tests compile and fail on their
+     * assertions. Replaced by the compare-and-set in the fix commit. */
+    public int syncDepositPolicyFromQuotation(long ticketId, String expected, String policy, String reason) {
+        return jdbc.update("""
+            UPDATE sales.ticket
+               SET deposit_policy = :policy, deposit_policy_reason = :reason,
+                   deposit_policy_set_by = NULL, updated_at = now()
+             WHERE ticket_id = :id
+            """,
+            new MapSqlParameterSource()
+                .addValue("policy", policy)
+                .addValue("reason", reason)
+                .addValue("id", ticketId));
+    }
+
     public void updateEntryChannel(long ticketId, String value) {
         jdbc.update(
             "UPDATE sales.ticket SET entry_channel = :value, updated_at = now() WHERE ticket_id = :id",
