@@ -336,15 +336,19 @@ describe('App / release lockdown (SELF_SERVICE_ONLY)', () => {
     expect(await screen.findByRole('heading', { name: 'ไม่มีสิทธิ์เข้าถึงหน้านี้' })).toBeTruthy();
   });
 
+  // Both await a positive marker first: right after render auth.me is still pending and no route
+  // has rendered, so a bare queryByRole(null) check would pass with the path locked out too.
   it('lets a locked import user reach the released งานนำเข้า page', async () => {
     await renderLockedAppAt('/fulfilment', importUser);
 
+    expect((await screen.findAllByText('งานนำเข้า')).length).toBeGreaterThan(0);
     expect(screen.queryByRole('heading', { name: 'ไม่มีสิทธิ์เข้าถึงหน้านี้' })).toBeNull();
   });
 
   it('still lets a locked role reach its own leave page', async () => {
-    await renderLockedAppAt('/leave', salesUser);
+    await renderLockedAppAt('/leave', importUser);
 
+    expect((await screen.findAllByText('วันลา')).length).toBeGreaterThan(0);
     expect(screen.queryByRole('heading', { name: 'ไม่มีสิทธิ์เข้าถึงหน้านี้' })).toBeNull();
   });
 

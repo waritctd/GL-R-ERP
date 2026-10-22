@@ -452,6 +452,9 @@ describe('AppShell navigation under the release lockdown', () => {
     expect(screen.queryByText('ใบเสนอราคา')).toBeNull();
     expect(screen.queryByText('รายการดีล')).toBeNull();
     expect(screen.queryByText('แคตตาล็อกสินค้า')).toBeNull();
+    // import holds canManagePriceImport, so นำเข้าราคา is removed by the lock filter alone — and
+    // '/price-import' must not ride on the '/pricing-requests' prefix.
+    expect(screen.queryByText('นำเข้าราคา')).toBeNull();
     expect(screen.queryByText('งานการเงิน')).toBeNull();
     expect(screen.getByText('วันลา')).toBeTruthy();
   });
@@ -464,6 +467,8 @@ describe('AppShell navigation under the release lockdown', () => {
     expect(screen.queryByText('งานนำเข้า')).toBeNull();
     expect(screen.queryByText('รายการดีล')).toBeNull();
     expect(screen.queryByText('ใบเสนอราคา')).toBeNull();
+    // account holds canViewCatalog; only the lock filter removes it.
+    expect(screen.queryByText('แคตตาล็อกสินค้า')).toBeNull();
     expect(screen.queryByText('ค่าคอมมิชชัน')).toBeNull();
   });
 
