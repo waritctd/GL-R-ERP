@@ -504,7 +504,7 @@ describe('PricingRequestCreateModal เพิ่มรายการ (UAT item 
 
     fireEvent.click(screen.getAllByRole('button', { name: 'ลบรายการ' })[1]);   // remove the clean copy: marks move back up
     expect(rowsErrored()).toEqual([false, true, true, false]);
-  });
+  }, 20000); // three saves + per-row waits: 5–17 s on a loaded CI runner, not a hang
 });
 
 describe('PricingRequestCreateModal typed โรงงาน → สกุลเงิน/หน่วยราคา default (UAT item 3, owner ruling 2026-10-18)', () => {
