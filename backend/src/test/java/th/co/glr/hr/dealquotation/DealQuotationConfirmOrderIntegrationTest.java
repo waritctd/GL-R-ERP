@@ -348,6 +348,30 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
         assertNothingPromoted(ghost);
     }
 
+    /** Owner ruling 2026-10-22: a ไม่รับมัดจำ (0%) direct quotation confirms onto the no-deposit
+     * payment path, so final payment is no longer blocked by a deposit that will never exist. */
+    @Test
+    void zeroDepositDirectQuotation_confirmsOntoTheNoDepositPath_andFinalPaymentIsNoLongerBlocked() {
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto created = quotationService.create(deal, zeroDepositDirectDraft(), salesActor);
+        DealQuotationDto submitted = quotationService.submit(created.id(), salesActor);
+        DealQuotationDto approved = quotationService.approve(submitted.id(), new ApproveRequest(null), salesManagerActor);
+        assertThat(approved.depositPercent()).isZero();
+
+        confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor);
+
+        TicketSummaryDto after = summary(deal);
+        assertThat(after.depositPolicy()).isEqualTo("NOT_REQUIRED");
+        assertThat(after.depositPolicyReason()).contains(approved.number()).contains("ไม่รับมัดจำ");
+        assertThat(eventCount(deal, TicketEventKind.POLICY_CHANGED)).isEqualTo(1);
+        assertThat(after.paymentStatus()).isEqualTo("CUSTOMER_CONFIRMED");
+        assertConflict(() -> depositNoticeService.createDraft(deal,
+            new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), salesActor), "ไม่ต้องเก็บมัดจำ");
+        // canConfirmFinalPaymentNow refuses a REQUIRED deal at CUSTOMER_CONFIRMED.
+        assertThat(ticketService.confirmFinalPayment(deal, accountActor).summary().paymentStatus())
+            .isEqualTo("FULLY_PAID");
+    }
+
     // ─────────────────────────────────────────────────────────────────────────────────────
     // Authz — WRONG-WAY-ROUND. Each refusal asserts nothing was written.
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -716,6 +740,15 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
             null, null, new BigDecimal("100.00"), null, null, null);
         return new UpsertDealQuotationRequest(null, null, null, null, 50, "CASH_ON_DELIVERY",
             0, 30, null, "NET", "TH", "THB", List.of(tile, plain, adjustment)).withRecipientType("OWNER");
+    }
+
+    /** {@link #directDraft} as a ไม่รับมัดจำ quotation: 0% submits only with a full-payment term. */
+    private UpsertDealQuotationRequest zeroDepositDirectDraft() {
+        UpsertDealQuotationRequest d = directDraft();
+        return new UpsertDealQuotationRequest(d.contactId(), d.deptCode(), d.unitCode(), d.offerDate(), 0,
+            d.remainderMode(), d.creditDays(), d.validityDays(), d.validityMode(), d.validityUntil(),
+            d.customerNotes(), d.priceMode(), d.documentLanguage(), d.currency(), null, null, null, null,
+            "BEFORE_DELIVERY", null, null, null, null, d.recipientType(), d.items());
     }
 
     private TicketItemRequest ticketItem() {

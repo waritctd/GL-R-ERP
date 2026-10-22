@@ -290,6 +290,36 @@ describe('mockApi.pricingRequests.createDepositNoticeFromQuotation — new-engin
     const { depositNotices } = await api.depositNotices.listByTicket(ticketId);
     expect(depositNotices).toHaveLength(0);
   });
+
+  // Mirrors TicketService.applyCustomerConfirmation's policy sync (owner ruling 2026-10-22).
+  it('confirmOrder on a 0% quotation sets depositPolicy NOT_REQUIRED, and both draft routes 409', async () => {
+    const { ticketId, prId, accepted } = await driveTicketToNewEngineAcceptedQuotation({
+      depositPercent: 0, fullPaymentTerm: 'BEFORE_DELIVERY',
+    });
+    const { ticket } = await api.tickets.get(ticketId);
+    expect(ticket.summary.depositPolicy).toBe('NOT_REQUIRED');
+    expect(ticket.summary.depositPolicyReason).toContain(accepted.number);
+    expect(ticket.events.filter((e) => e.kind === 'POLICY_CHANGED').map((e) => e.message))
+      .toEqual([expect.stringContaining(accepted.number)]);
+    await expect(api.depositNotices.createDraft(ticketId, {}))
+      .rejects.toMatchObject({ status: 409, message: expect.stringContaining('ไม่ต้องเก็บมัดจำ') });
+    await expect(api.pricingRequests.createDepositNoticeFromQuotation(prId, {}))
+      .rejects.toMatchObject({ status: 409 });
+    expect((await api.depositNotices.listByTicket(ticketId)).depositNotices).toHaveLength(0);
+  });
+
+  it('a 30% quotation leaves REQUIRED; once waived, both draft routes 409 on the policy', async () => {
+    const { ticketId, prId } = await driveTicketToNewEngineAcceptedQuotation({ depositPercent: 30 });
+    const { ticket } = await api.tickets.get(ticketId);
+    expect(ticket.summary.depositPolicy).toBe('REQUIRED');
+    expect(ticket.events.some((e) => e.kind === 'POLICY_CHANGED')).toBe(false);
+
+    await api.tickets.setDepositPolicy(ticketId, { policy: 'WAIVED', reason: 'ลูกค้าโอนเต็มจำนวนล่วงหน้า' });
+    const policyRefusal = { status: 409, message: expect.stringContaining('ไม่ต้องเก็บมัดจำ') };
+    await expect(api.depositNotices.createDraft(ticketId, {})).rejects.toMatchObject(policyRefusal);
+    await expect(api.pricingRequests.createDepositNoticeFromQuotation(prId, {})).rejects.toMatchObject(policyRefusal);
+    expect((await api.depositNotices.listByTicket(ticketId)).depositNotices).toHaveLength(0);
+  });
 });
 
 // Issue #752: the mock must reproduce production's one-render gap. Per
@@ -384,5 +414,19 @@ describe('mockApi.depositNotices.issue account notification (GLA-32)', () => {
 
     expect(own).toBeTruthy();
     expect(own.message).toContain('ไม่ระบุลูกค้า');
+  });
+});
+
+// Mirrors DepositNoticeService.issue's amount guard: a 0-baht notice must not take a document number.
+describe('mockApi.depositNotices.issue refuses a 0-baht notice', () => {
+  it('409s, and the draft stays DRAFT with no number', async () => {
+    const { ticketId } = await driveTicketToNewEngineAcceptedQuotation({ depositPercent: 30 });
+    // The mock honours a caller's depositPercent where Java ignores it: stands in for the Java test's jdbc force.
+    const { depositNotice: draft } = await api.depositNotices.createDraft(ticketId, { depositPercent: 0 });
+    expect(draft.depositAmount).toBe(0);
+    await expect(api.depositNotices.issue(draft.id))
+      .rejects.toMatchObject({ status: 409, message: expect.stringContaining('0 บาท') });
+    const { depositNotice } = await api.depositNotices.get(draft.id);
+    expect(depositNotice).toMatchObject({ status: 'DRAFT', docNumber: null });
   });
 });
