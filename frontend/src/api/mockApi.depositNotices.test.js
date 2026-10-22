@@ -252,6 +252,20 @@ describe('mockApi.pricingRequests.createDepositNoticeFromQuotation — new-engin
     expect(pick(fromTicket.items)).toEqual(pick(fromPr.items));
   });
 
+  // Mirrors DepositNoticeService.createDraftFromQuotation's owner guard. sales2@glr.co.th is a
+  // second seeded sales rep; the drive above runs as the first one, who owns the deal.
+  it('ticket-level createDraft refuses a sales rep who does not own the deal and creates nothing', async () => {
+    const { ticketId } = await driveTicketToNewEngineAcceptedQuotation();
+    await api.auth.login({ email: 'sales2@glr.co.th', password: 'demo1234' });
+    await expect(api.depositNotices.createDraft(ticketId, {}))
+      .rejects.toMatchObject({ status: 403, message: 'ไม่มีสิทธิ์เข้าถึงรายการนี้' });
+
+    await api.auth.login({ role: 'sales' });
+    expect((await api.depositNotices.listByTicket(ticketId)).depositNotices).toHaveLength(0);
+    const { depositNotice } = await api.depositNotices.createDraft(ticketId, {});
+    expect(depositNotice.ticketId).toBe(ticketId);
+  });
+
   it('still 409s while the new-engine quotation is only ISSUED (customer has not accepted)', async () => {
     const { ticketId, prId } = await driveTicketToNewEngineIssuedQuotation();
     await expect(api.pricingRequests.createDepositNoticeFromQuotation(prId, {}))
