@@ -260,6 +260,16 @@ describe('mockApi.pricingRequests.createDepositNoticeFromQuotation — new-engin
     expect(depositNotices).toHaveLength(0);
   });
 
+  // A never-set (null) percent: the customer PDF prints it as 30% (Java DealQuotationRenderAdapter,
+  // `depositPercent() != null ? depositPercent() : 30`; the mock's placeholder PDF prints no deposit
+  // line), so the notice must bill 0.3, not the 0.5 fallback.
+  it('bills the PDF percent (30%) for a new-engine quotation whose deposit percent was never set', async () => {
+    const { prId, accepted } = await driveTicketToNewEngineAcceptedQuotation();
+    expect(accepted.depositPercent).toBeNull();
+    const { depositNotice } = await api.pricingRequests.createDepositNoticeFromQuotation(prId, {});
+    expect(depositNotice.depositPercent).toBe(0.3);
+  });
+
   // A zero-deposit ("ไม่รับมัดจำ", full payment) quotation has nothing to bill: Java refuses rather
   // than drafting a 0-baht document that nothing downstream would stop from being issued.
   it('rejects a 0% (full-payment) new-engine quotation with 409 and creates no draft', async () => {
