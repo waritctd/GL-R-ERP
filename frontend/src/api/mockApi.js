@@ -1436,10 +1436,10 @@ function mockDepositNoticeItemsFromQuotation(items) {
   }));
 }
 
-// Mirrors DepositNoticeRepository.findDealQuotationItems. Values are read off the DTO, never
-// recomputed (label excepted — see below).
+// Mirrors DepositNoticeRepository.findDealQuotationItems. Values are read off the stored row,
+// never recomputed (label excepted — see below).
 function mockDepositNoticeItemsFromDealQuotation(row) {
-  return buildDealQuotationDto(row).items.map((item, idx) => {
+  return row.items.map((item, idx) => {
     // Display label only: the mock stores no sales_discount, so this restates the column Java reads
     // (DealQuotationRepository#itemParams writes it as unitPrice − netUnitPrice).
     const salesDiscount = round2(item.unitPrice - item.netUnitPrice);

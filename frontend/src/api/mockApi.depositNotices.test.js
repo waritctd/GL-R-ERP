@@ -117,9 +117,9 @@ async function driveTicketToApprovedDecision({ priceMode, discountPct } = {}) {
   await api.auth.login({ role: 'ceo' });
   const { decision } = await api.pricingRequests.startPricingDecision(prId, { defaultMarginPct: 0.2 });
   await api.pricingRequests.updatePricingDecision(decision.id, {
-    ...(priceMode ? { priceMode } : {}),
+    priceMode,
     items: decision.items.map((item) => ({
-      pricingDecisionItemId: item.id, minimumSellingPrice: 50, ...(discountPct != null ? { discountPct } : {}),
+      pricingDecisionItemId: item.id, minimumSellingPrice: 50, discountPct,
     })),
   });
   await api.pricingRequests.approvePricingDecision(decision.id, {});
@@ -154,7 +154,7 @@ async function driveTicketToNewEngineIssuedQuotation({ depositPercent, fullPayme
   if (depositPercent != null) {
     await api.dealQuotations.update(draft.id, {
       priceMode: draft.priceMode, depositPercent, remainderMode: 'ON_DELIVERY', fullPaymentTerm,
-      items: draft.items.map((item) => ({ ...item, id: item.id })),
+      items: draft.items.map((item) => ({ ...item })),
     });
   }
   await api.dealQuotations.submit(draft.id, {});
@@ -219,10 +219,7 @@ describe('mockApi.depositNotices.createDraft autofill (branch fix: deposit-notic
   });
 });
 
-// Mirrors OrderConfirmationService.createDepositNoticeFromQuotation's new-engine branch: with no
-// ACCEPTED legacy quotation, the draft comes from THIS pricing request's ACCEPTED new-engine
-// quotation (DealQuotationRepository.findAcceptedForPricingRequest), and an ISSUED-only one
-// still gets the 409.
+// Java picks the row with DealQuotationRepository.findAcceptedForPricingRequest.
 describe('mockApi.pricingRequests.createDepositNoticeFromQuotation — new-engine quotation (mirrors OrderConfirmationService fix)', () => {
   it('creates the draft with the accepted quotation number as reference, and items and percent from that quotation', async () => {
     const { prId, accepted } = await driveTicketToNewEngineAcceptedQuotation({ depositPercent: 30 });
@@ -233,11 +230,11 @@ describe('mockApi.pricingRequests.createDepositNoticeFromQuotation — new-engin
     expect(depositNotice.depositPercent).toBe(0.3);
     expect(depositNotice.items.length).toBeGreaterThan(0);
     // qty is deliberately not distinguishable here: a mock TILE row sets quantity = piecesFinal.
-    expect(depositNotice.items[0].qty).toBe(accepted.items[0].quantity);
-    expect(depositNotice.items[0].netUnitPrice).toBe(accepted.items[0].netUnitPrice);
-    expect(depositNotice.items[0].unit).toBe(accepted.items[0].unit);
-    expect(depositNotice.items[0].description).toBe(accepted.items[0].descriptionLine);
-    expect(depositNotice.items[0].unitPrice).toBe(accepted.items[0].unitPrice);
+    const [line] = accepted.items;
+    expect(depositNotice.items[0]).toMatchObject({
+      qty: line.quantity, netUnitPrice: line.netUnitPrice, unit: line.unit,
+      description: line.descriptionLine, unitPrice: line.unitPrice,
+    });
     // DepositNoticeRepository.findDealQuotationItems prints sales_discount (unitPrice − netUnitPrice)
     // in baht, not the percent: ราคาตั้ง 120 at 10% off is net 108, so 12 baht.
     expect([accepted.items[0].unitPrice, accepted.items[0].netUnitPrice]).toEqual([120, 108]);
