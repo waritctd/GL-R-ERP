@@ -173,4 +173,23 @@ describe('mock dealQuotations.promoteToDeal (GLA-136)', () => {
   it('404s an unknown quotation', async () => {
     await expect(api.dealQuotations.promoteToDeal(987654)).rejects.toMatchObject({ status: 404 });
   });
+
+  // Mirrors TicketService.applyCustomerConfirmation's policy sync (owner ruling 2026-10-22).
+  it('a 0% (ไม่รับมัดจำ) quotation confirms the deal onto depositPolicy NOT_REQUIRED', async () => {
+    const ghost = await quotationOnlyTicket();
+    const { quotation: draft } = await api.dealQuotations.create(ghost, {
+      recipientType: 'DESIGNER', depositPercent: 0, fullPaymentTerm: 'BEFORE_DELIVERY', items: [TILE, PLAIN],
+    });
+    await api.dealQuotations.submit(draft.id);
+    await asRole('sales_manager');
+    const { quotation: approved } = await api.dealQuotations.approve(draft.id);
+    await asRole('sales');
+
+    await api.dealQuotations.promoteToDeal(approved.id);
+
+    const { ticket } = await api.tickets.get(ghost);
+    expect(ticket.summary.depositPolicy).toBe('NOT_REQUIRED');
+    expect(ticket.events.filter((e) => e.kind === 'POLICY_CHANGED').map((e) => e.message))
+      .toEqual([expect.stringContaining(approved.number)]);
+  });
 });
