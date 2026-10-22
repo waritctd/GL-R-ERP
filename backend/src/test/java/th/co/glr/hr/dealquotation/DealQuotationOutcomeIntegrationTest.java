@@ -468,6 +468,42 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(draft.depositPercent()).isEqualByComparingTo("0.30");
     }
 
+    /** The reverse mix: an ACCEPTED legacy quotation's PDF prints a null percent as 50%
+     * ({@code ticket.QuotationRenderer}), so both routes bill 50% from the legacy row, never a
+     * sibling pricing request's null-percent new-engine 30%. */
+    @Test
+    void createDepositNotice_legacyAcceptedNullPercent_whenASiblingPricingRequestHasANullPercentNewEngineQuotation_bothRoutesBillTheLegacyPdfsFifty() {
+        CustomerQuotationDto legacyAccepted = acceptedLegacyQuotation(PricingRequestRecipient.DESIGNER);
+        assertThat(jdbc.queryForObject("SELECT deposit_percent IS NULL FROM sales.quotation WHERE quotation_id = :id",
+            Map.of("id", legacyAccepted.id()), Boolean.class)).isTrue();
+        DealQuotationDto siblingIssued = issuedNewOriginQuotation(PricingRequestRecipient.OWNER, new BigDecimal("10"));
+        assertDepositPercentIsNullAndThePdfPromises30(siblingIssued);
+        long pricingRequestId = legacyAccepted.pricingRequestId();
+        orderConfirmation.confirmOrder(pricingRequestId,
+            new OrderConfirmationRequests.ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
+
+        DepositNoticeDto viaPricingRequest = orderConfirmation.createDepositNoticeFromQuotation(pricingRequestId,
+            new OrderConfirmationRequests.CreateDepositNoticeFromQuotationRequest(null), salesActor);
+        DepositNoticeDto viaTicket = depositNoticeService.createDraft(ticketId,
+            new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), salesActor);
+
+        List<String> legacyLines = DepositNoticeService.itemsFromQuotation(legacyAccepted.items()).stream()
+            .map(it -> line(it.qty(), it.netUnitPrice())).toList();
+        List<String> siblingLines = jdbc.query("""
+            SELECT qty, final_unit_price FROM sales.quotation_item WHERE quotation_id = :id ORDER BY seq
+            """, Map.of("id", siblingIssued.id()),
+            (rs, i) -> line(rs.getBigDecimal("qty"), rs.getBigDecimal("final_unit_price")));
+        // The fixture must make the two sources distinguishable, or the item assertions prove nothing.
+        assertThat(legacyLines).isNotEmpty().isNotEqualTo(siblingLines);
+
+        assertThat(viaPricingRequest.reference()).isEqualTo(legacyAccepted.number());
+        for (DepositNoticeDto draft : List.of(viaPricingRequest, viaTicket)) {
+            assertThat(draft.depositPercent()).isEqualByComparingTo("0.50");
+            assertThat(draft.items().stream().map(it -> line(it.qty(), it.netUnitPrice())).toList())
+                .isEqualTo(legacyLines);
+        }
+    }
+
     @Test
     void recordOutcome_byNonOwningSales_refused_writesNothing() {
         DealQuotationDto issued = issuedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
