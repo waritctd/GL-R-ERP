@@ -408,6 +408,47 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(draft.depositPercent()).isEqualByComparingTo("0.30");
     }
 
+    // ── A quotation whose deposit percent was never set (NULL) ──
+    // createFromPricingRequest inserts deposit_percent NULL and nothing before ACCEPTED requires a
+    // value. The customer PDF prints NULL as 30%: DealQuotationRenderAdapter's remarkLines /
+    // nonTileRemarkLines (TH) and englishRemarkLines / englishNonTileRemarkLines (EN) all read
+    // `quotation.depositPercent() != null ? quotation.depositPercent() : 30`. The deposit notice
+    // must bill what the customer was shown, not DepositNoticeService's 0.50 fallback.
+
+    @Test
+    void createDepositNoticeFromQuotation_newEngineNullPercent_billsThePdfPercent() {
+        DealQuotationDto accepted = acceptedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
+        assertDepositPercentIsNullAndThePdfPromises30(accepted);
+        long pricingRequestId = accepted.pricingRequestId();
+        orderConfirmation.confirmOrder(pricingRequestId,
+            new OrderConfirmationRequests.ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
+
+        DepositNoticeDto draft = orderConfirmation.createDepositNoticeFromQuotation(pricingRequestId,
+            new OrderConfirmationRequests.CreateDepositNoticeFromQuotationRequest(null), salesActor);
+
+        assertThat(draft.depositPercent()).isEqualByComparingTo("0.30");
+    }
+
+    @Test
+    void createDraft_ticketRoute_newEngineNullPercent_billsThePdfPercent() {
+        DealQuotationDto accepted = acceptedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
+        assertDepositPercentIsNullAndThePdfPromises30(accepted);
+        orderConfirmation.confirmOrder(accepted.pricingRequestId(),
+            new OrderConfirmationRequests.ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
+
+        DepositNoticeDto draft = depositNoticeService.createDraft(ticketId,
+            new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), salesActor);
+
+        assertThat(draft.depositPercent()).isEqualByComparingTo("0.30");
+    }
+
+    private void assertDepositPercentIsNullAndThePdfPromises30(DealQuotationDto accepted) {
+        assertThat(jdbc.queryForObject("SELECT deposit_percent IS NULL FROM sales.quotation WHERE quotation_id = :id",
+            Map.of("id", accepted.id()), Boolean.class)).isTrue();
+        assertThat(DealQuotationRenderAdapter.toRenderModel(accepted, null, null).remarkLines())
+            .anyMatch(line -> line.contains("มัดจำ 30%"));
+    }
+
     @Test
     void recordOutcome_byNonOwningSales_refused_writesNothing() {
         DealQuotationDto issued = issuedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
