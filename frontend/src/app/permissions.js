@@ -181,16 +181,37 @@ const PATH_GUARDS = [
   { test: (p) => p === '/settings/leave-policy', can: (u) => hasPermission(u.role, 'canManageLeavePolicyDocument') },
 ];
 
-// Release lockdown (SELF_SERVICE_ONLY, app/features.js). HR and CEO are the
-// only roles that keep the full portal: HR runs payroll and works the ล.ย.01 /
-// profile-request registers, and CEO reads them. Every other role — sales,
-// sales_manager, import, account, warehouse, qc, employee, and a division
-// manager (role `employee` + manager flag) — is confined to self-service.
+// Release lockdown (SELF_SERVICE_ONLY, app/features.js). HR and CEO keep the
+// full portal: HR runs payroll and works the ล.ย.01 / profile-request
+// registers, and CEO reads them.
+//
+// Sales release (owner ruling, Ploy 2026-10-22): sales and sales_manager are
+// exempt too — they get back exactly what PATH_GUARDS already grants them (the
+// sales stack; never payroll or the HR registers). import and account stay
+// locked but get a per-role allowlist (RELEASED_PATHS_BY_ROLE below): import
+// sees งานนำเข้า and คิวขอราคา only, account sees การเงิน only. Every other
+// role — warehouse, qc, employee, and a division manager (role `employee` +
+// manager flag) — is confined to self-service.
 //
 // A division manager keeps their approval work despite being locked: leave and
 // OT approval live INSIDE /leave and /employee-requests, both self-service
 // paths, not on the DivisionManagerOverview landing this hides.
-const SELF_SERVICE_EXEMPT_ROLES = ['hr', 'ceo'];
+const SELF_SERVICE_EXEMPT_ROLES = ['hr', 'ceo', 'sales', 'sales_manager'];
+
+// Per-role release allowlist for roles that stay locked. Same prefix rule as
+// SELF_SERVICE_PATHS (the trailing slash is required, so `/finance` does not
+// admit `/finance-archive`). `/import/deals` is the queue's own per-deal
+// drill-down (importDealRedirectFor), not a wider surface.
+const RELEASED_PATHS_BY_ROLE = {
+  import: ['/fulfilment', '/pricing-requests', '/import/deals'],
+  account: ['/finance'],
+};
+
+export function isReleasedPath(path, user) {
+  const pathname = path.split(/[?#]/)[0];
+  return (RELEASED_PATHS_BY_ROLE[user?.role] ?? [])
+    .some((allowed) => pathname === allowed || pathname.startsWith(`${allowed}/`));
+}
 
 export function isSelfServiceLocked(user) {
   if (!SELF_SERVICE_ONLY) return false;
@@ -300,7 +321,8 @@ export function canAccessPath(path, user) {
   // wanting one page. Narrow exemption, deliberate.
   const adminActivityLog = isActivityLogPath(path) && Boolean(user.admin);
   const quotationRelease = isQuotationPath(path) && isQuotationReleaseUser(user);
-  if (isSelfServiceLocked(user) && !isSelfServicePath(path) && !adminActivityLog && !quotationRelease) return false;
+  if (isSelfServiceLocked(user) && !isSelfServicePath(path) && !adminActivityLog && !quotationRelease
+    && !isReleasedPath(path, user)) return false;
   const guard = PATH_GUARDS.find((entry) => entry.test(path));
   if (!guard) return true;
   return guard.can(user);
