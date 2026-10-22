@@ -330,10 +330,16 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
      * update/issue: another rep could draft on this deal and read its lines, prices and customer. */
     @Test
     void createDraft_ticketRoute_byNonOwningSales_refusedAndWritesNothing() {
+        var emptyRequest = new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null);
+        // Owner before status: a non-owner must not learn whether another rep's deal is approved yet
+        // (403 here, not the 409 the owner would get on this still-unapproved ticket).
+        assertThatThrownBy(() -> depositNoticeService.createDraft(ticketId, emptyRequest, otherSalesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.FORBIDDEN);
+
         DealQuotationDto accepted = acceptedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
         orderConfirmation.confirmOrder(accepted.pricingRequestId(),
             new OrderConfirmationRequests.ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
-        var emptyRequest = new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null);
 
         assertThatThrownBy(() -> depositNoticeService.createDraft(ticketId, emptyRequest, otherSalesActor))
             .isInstanceOf(ApiException.class)

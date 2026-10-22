@@ -259,6 +259,10 @@ describe('mockApi.pricingRequests.createDepositNoticeFromQuotation — new-engin
     await api.auth.login({ email: 'sales2@glr.co.th', password: 'demo1234' });
     await expect(api.depositNotices.createDraft(ticketId, {}))
       .rejects.toMatchObject({ status: 403, message: 'ไม่มีสิทธิ์เข้าถึงรายการนี้' });
+    // Role gate (SALES_ROLES = sales only) runs before the ticket lookup, as in Java: a non-sales
+    // caller gets 403 even for a ticket that does not exist, never the 404.
+    await api.auth.login({ role: 'ceo' });
+    await expect(api.depositNotices.createDraft(999999, {})).rejects.toMatchObject({ status: 403 });
 
     await api.auth.login({ role: 'sales' });
     expect((await api.depositNotices.listByTicket(ticketId)).depositNotices).toHaveLength(0);
