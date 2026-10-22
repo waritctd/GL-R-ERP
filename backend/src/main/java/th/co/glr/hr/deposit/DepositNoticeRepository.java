@@ -119,16 +119,20 @@ public class DepositNoticeRepository {
      * each refuse a pricing request the other engine already quoted), so one ticket can carry a
      * legacy quotation on one pricing request and an origin-tagged one on another. On such a mixed
      * ticket both branches below can match, and trying legacy first IS a real preference: the
-     * percent comes from the legacy row. A live v2 row whose {@code deposit_percent} is null
-     * reads as {@link DealQuotationRenderAdapter#DEFAULT_DEPOSIT_PERCENT}, the percent its PDF
-     * printed (owner ruling 2026-10-22). Returns empty when there is no live
-     * (ACCEPTED/ISSUED/APPROVED) quotation for this ticket, or only a legacy one with a null
-     * {@code deposit_percent} — the caller ({@link DepositNoticeService#createDraft}) falls back
-     * to 0.50 in that case, this document's long-standing default.
+     * percent comes from the legacy row. A null {@code deposit_percent} reads as the percent that
+     * engine's PDF printed (owner ruling 2026-10-22): 50 on a legacy row ({@code
+     * ticket.QuotationRenderer#buildLegacyModel}), {@link
+     * DealQuotationRenderAdapter#DEFAULT_DEPOSIT_PERCENT} (30) on a v2 row. So a live legacy row
+     * always wins, and the v2 branch is reached only when the ticket has no live legacy quotation.
+     * Returns empty only when there is no live (ACCEPTED/ISSUED/APPROVED) quotation for this
+     * ticket — the caller ({@link DepositNoticeService#createDraft}) falls back to 0.50 then,
+     * this document's long-standing default.
      */
     public Optional<BigDecimal> findDealQuotationDepositPercent(long ticketId) {
+        // 50 = the legacy PDF's own default: ticket.QuotationRenderer#buildLegacyModel prints
+        // `quotation.depositPercent() != null ? quotation.depositPercent() : 50`.
         Integer legacyPct = firstOrNull(jdbc.query("""
-            SELECT deposit_percent FROM sales.quotation
+            SELECT COALESCE(deposit_percent, 50) AS deposit_percent FROM sales.quotation
              WHERE ticket_id = :ticketId AND pricing_request_id IS NOT NULL AND origin IS NULL
                AND doc_status IN ('ACCEPTED','ISSUED')
              ORDER BY CASE doc_status WHEN 'ACCEPTED' THEN 0 ELSE 1 END, quotation_id DESC
