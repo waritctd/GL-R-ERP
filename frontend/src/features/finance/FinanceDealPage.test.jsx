@@ -67,13 +67,14 @@ describe('FinanceDealPage', () => {
   });
 
   describe('header', () => {
-    it('shows code, title, customer / project / contact and the real stage with its S-number from the catalog', async () => {
+    it('shows code, title, customer / project (never the deal\'s old ผู้ติดต่อ) and the real stage with its S-number from the catalog', async () => {
       renderPage();
       expect(await screen.findByRole('heading', { level: 1, name: /PR-2026-0501/ })).not.toBeNull();
       expect(screen.getByText(/ปูกระเบื้องคอนโดสุขุมวิท/)).not.toBeNull();
       expect(screen.getByText(/บริษัท สุขุมวิท พร็อพเพอร์ตี้ จำกัด/)).not.toBeNull();
       expect(screen.getByText(/คอนโด สุขุมวิท 31/)).not.toBeNull();
-      expect(screen.getByText(/คุณสมชาย ใจดี/)).not.toBeNull();
+      // The fixture still carries contactName — ผู้ติดต่อ left the deal (picked per quotation, 2026-10-18).
+      expect(screen.queryByText(/คุณสมชาย ใจดี/)).toBeNull();
       // DELIVERY_SCHEDULING is S18 in the catalog — never hardcoded on the page.
       expect(await screen.findByText(/S18/)).not.toBeNull();
       expect(screen.getByText(/นัดส่งสินค้า/)).not.toBeNull();
