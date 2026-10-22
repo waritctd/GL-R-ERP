@@ -19,8 +19,8 @@ import { canAccessPath, dealRedirectFor } from './permissions.js';
 export function RequireAccess({ user }) {
   const location = useLocation();
   if (!canAccessPath(location.pathname, user)) {
-    // Import no longer opens the whole-deal page; a stale deep-link goes to its own page for the
-    // same deal (query string dropped — the whole-deal page's params mean nothing there).
+    // Import and account are refused the whole-deal page; a stale deep-link goes to their own page
+    // for the same deal (query string dropped — the whole-deal page's params mean nothing there).
     const dealPath = dealRedirectFor(location.pathname, user);
     if (dealPath) return <Navigate to={dealPath} replace />;
     return <AccessDeniedPage />;

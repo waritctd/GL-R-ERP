@@ -296,17 +296,29 @@ export function isBillingNoteReleaseUser(user) {
   return Boolean(user?.canIssueBillingNote);
 }
 
+// Role -> its own per-deal page, and whether `/tickets/:id/<sub>` (the deposit page) follows.
+const DEAL_REDIRECTS = {
+  // `/tickets/:id/deposit` has no import equivalent and stays refused.
+  import: { prefix: '/import/deals', subPaths: false },
+  // Account works the deposit through the finance deal page. Under the self-service lock this is
+  // the ONLY way account's deal links land: RequireAccess refuses /tickets/* before
+  // TicketDetailRoute's own account redirect can mount (DepositNoticeService notifies account
+  // with a /tickets/:id link).
+  account: { prefix: '/finance/deals', subPaths: true },
+};
+
 /**
- * Where an `import` user landing on a whole-deal URL (`/tickets/:id`) should go instead: their own
+ * Where a user refused a whole-deal URL (`/tickets/:id`) should go instead: their role's own
  * per-deal page. Backend notification deep-links and old bookmarks still point at `/tickets/:id`,
- * and a dead-end refusal there helps nobody. Only the bare detail path redirects — `/tickets`
- * (the pipeline browser) and `/tickets/:id/deposit` have no import equivalent and stay refused.
+ * and a dead-end refusal there helps nobody. `/tickets` (the pipeline browser) never redirects.
  * Returns null when no redirect applies. Routing convenience only; the backend is the authority.
  */
 export function dealRedirectFor(path, user) {
-  if (user?.role !== 'import') return null;
-  const match = /^\/tickets\/(\d+)\/?$/.exec(path.split(/[?#]/)[0]);
-  return match ? `/import/deals/${match[1]}` : null;
+  const target = DEAL_REDIRECTS[user?.role];
+  if (!target) return null;
+  const match = /^\/tickets\/(\d+)(\/[^/]+)?\/?$/.exec(path.split(/[?#]/)[0]);
+  if (!match || (match[2] && !target.subPaths)) return null;
+  return `${target.prefix}/${match[1]}`;
 }
 
 export function canAccessPath(path, user) {
