@@ -282,16 +282,39 @@ public class DealQuotationRepository {
      * most recent PRICING_REQUEST-origin quotation for this pricing request, REGARDLESS of
      * status — used by {@code DealQuotationService#createFromPricingRequest} to continue the SAME
      * {@code {base}-{n}} number family when re-creating after an EXPIRED quotation, rather than
-     * minting an unrelated fresh base number. There is at most one LIVE row at a time (M2/the
-     * one-quotation-per-request rule) and this origin has no revision chain (D12), so "most
-     * recent by id" and "the only row" coincide in every reachable case today; ORDER BY id DESC
-     * is still the honest query to write in case that ever stops being true.
+     * minting an unrelated fresh base number. This origin has a revision chain: {@code
+     * DealQuotationService#createRevision} copies {@code origin} and {@code pricing_request_id}
+     * from an ISSUED or REVISION_REQUESTED source, so one pricing request can hold several rows
+     * and the newest by id can be an open revision DRAFT. Newest by id is what continuing the
+     * number family needs; a caller that needs the customer-accepted row uses {@link
+     * #findAcceptedForPricingRequest} instead.
      */
     public Optional<Long> findLatestForPricingRequest(long pricingRequestId) {
         try {
             return Optional.ofNullable(jdbc.queryForObject("""
                 SELECT quotation_id FROM sales.quotation
                  WHERE pricing_request_id = :pricingRequestId AND origin = 'PRICING_REQUEST'
+                 ORDER BY quotation_id DESC
+                 LIMIT 1
+                """, Map.of("pricingRequestId", pricingRequestId), Long.class));
+        } catch (EmptyResultDataAccessException e) {
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * The customer-ACCEPTED {@code PRICING_REQUEST}-origin quotation for this pricing request,
+     * newest by id. {@code OrderConfirmationService#createDepositNoticeFromQuotation} uses this
+     * rather than {@link #findLatestForPricingRequest} because an open revision draft can outrank
+     * the accepted row by id: {@code DealQuotationService#recordOutcome} has no open-revision
+     * guard, so the customer can accept Q1 while its revision Q2 is still a DRAFT.
+     */
+    public Optional<Long> findAcceptedForPricingRequest(long pricingRequestId) {
+        try {
+            return Optional.ofNullable(jdbc.queryForObject("""
+                SELECT quotation_id FROM sales.quotation
+                 WHERE pricing_request_id = :pricingRequestId AND origin = 'PRICING_REQUEST'
+                   AND doc_status = 'ACCEPTED'
                  ORDER BY quotation_id DESC
                  LIMIT 1
                 """, Map.of("pricingRequestId", pricingRequestId), Long.class));

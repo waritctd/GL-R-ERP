@@ -1436,6 +1436,25 @@ function mockDepositNoticeItemsFromQuotation(items) {
   }));
 }
 
+// Mirrors DepositNoticeRepository.findDealQuotationItems. Values are read off the stored row,
+// never recomputed (label excepted — see below).
+function mockDepositNoticeItemsFromDealQuotation(row) {
+  return row.items.map((item, idx) => {
+    // Display label only: the mock stores no sales_discount, so this restates the column Java reads
+    // (DealQuotationRepository#itemParams writes it as unitPrice − netUnitPrice).
+    const salesDiscount = round2(item.unitPrice - item.netUnitPrice);
+    return {
+      seq: item.seq ?? idx + 1,
+      description: item.descriptionLine?.trim() ? item.descriptionLine : 'รายการสินค้า',
+      qty: item.quantity,
+      unit: item.unit?.trim() ? item.unit : 'หน่วย',
+      unitPrice: item.unitPrice,
+      discountLabel: salesDiscount > 0 ? `ส่วนลด ${salesDiscount} ต่อหน่วย` : null,
+      netUnitPrice: item.netUnitPrice,
+    };
+  });
+}
+
 // Branch fix: mirrors DepositNoticeService.pickQuotation — the latest ACCEPTED revision for
 // this ticket, or (if none has been accepted yet) the latest ISSUED one. mockCustomerQuotations
 // carries no guaranteed ordering, so sort ascending by (quotationRevisionNo, id) first — same
@@ -13269,6 +13288,15 @@ export const api = {
         const quotation = mockPickTicketQuotationForDepositNotice(ticketId);
         if (quotation) items = mockDepositNoticeItemsFromQuotation(quotation.items);
       }
+      if (!items.length) {
+        // Then the live new-engine quotation: findDealQuotationItemsForDeposit, ordered as
+        // mockPickLiveQuotationForItemFallback's own comment says. The picker labels legacy rows
+        // 'PRICING_REQUEST' too, so the array tells new-engine apart.
+        const live = mockPickLiveQuotationForItemFallback(Number(ticketId));
+        if (live && mockDealQuotations.includes(live.quotation)) {
+          items = mockDepositNoticeItemsFromDealQuotation(live.quotation);
+        }
+      }
 
       // Branch fix: header autofill (mirrors DepositNoticeService.createDraft) — a caller-
       // supplied non-blank value always wins; a ticket with no linked customer master row
@@ -16163,15 +16191,22 @@ export const api = {
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
       if (ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
 
+      // Mirrors OrderConfirmationService.createDepositNoticeFromQuotation: the ACCEPTED legacy
+      // quotation first, else THIS pricing request's ACCEPTED new-engine row
+      // (DealQuotationRepository.findAcceptedForPricingRequest).
       const accepted = mockCustomerQuotations.find(
         (q) => q.pricingRequestId === pr.id && q.docStatus === 'ACCEPTED');
-      if (!accepted) fail('ยังไม่มีใบเสนอราคาที่ลูกค้ายอมรับสำหรับคำขอราคานี้', 409);
-
-      // Mirrors OrderConfirmationService.createDepositNoticeFromQuotation, which delegates the
-      // mapping to DepositNoticeService.itemsFromQuotation (shared with depositNotices
-      // .createDraft's own new-chain fallback below) — items/amounts trace to the quotation,
-      // never to any sales.ticket_item row.
-      const items = mockDepositNoticeItemsFromQuotation(accepted.items);
+      const newEngine = accepted ? null : mockDealQuotations.find(
+        (q) => q.pricingRequestId === pr.id && q.origin === 'PRICING_REQUEST' && q.docStatus === 'ACCEPTED');
+      if (!accepted && !newEngine) fail('ยังไม่มีใบเสนอราคาที่ลูกค้ายอมรับสำหรับคำขอราคานี้', 409);
+      // Mirrors the zero-deposit refusal: a 0% ("ไม่รับมัดจำ") quotation has nothing to bill.
+      if (newEngine?.depositPercent === 0) {
+        fail(`ใบเสนอราคา ${newEngine.number} ระบุไม่มีมัดจำ (ชำระเต็มจำนวน) จึงออกใบแจ้งยอดเงินรับมัดจำไม่ได้`, 409);
+      }
+      const reference = (accepted ?? newEngine).number;
+      const items = accepted
+        ? mockDepositNoticeItemsFromQuotation(accepted.items)
+        : mockDepositNoticeItemsFromDealQuotation(newEngine);
 
       // Requires quotation_issued (one of DepositNoticeService.requireApprovedTicket's three
       // accepted statuses) — mirrors what confirmOrder above already left in place; calling this
@@ -16193,8 +16228,13 @@ export const api = {
         version: nextVer, docNumber: null, issueDate: null, status: 'DRAFT',
         customerName: ticket.customerName ?? '', customerTaxId: customerTaxId ?? '',
         customerAddress: customerAddress ?? '',
-        projectName: projectName ?? '', reference: accepted.number,
-        depositPercent: payload.depositPercent ?? 0.5, vatPercent: 0.07,
+        projectName: projectName ?? '', reference,
+        // Mirrors DepositNoticeService.createDraftFromQuotation: the new-engine branch bills the
+        // chosen quotation's own whole-number percent; the legacy branch keeps the old stand-in.
+        depositPercent: newEngine?.depositPercent != null
+          ? newEngine.depositPercent / 100
+          : payload.depositPercent ?? 0.5,
+        vatPercent: 0.07,
         notes, items, issuedByName: null, preparerName: 'จินตนา หาญมนตรี',
         hasPdf: false, hasXlsx: false,
         createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
@@ -16202,7 +16242,7 @@ export const api = {
       mockDepositNotices.push(doc);
 
       pushPricingRequestEvent(pr, user, 'DEPOSIT_NOTICE_DRAFTED_FROM_QUOTATION', pr.status, pr.status,
-        `สร้างร่างใบแจ้งยอดเงินรับมัดจำจากใบเสนอราคา ${accepted.number}`);
+        `สร้างร่างใบแจ้งยอดเงินรับมัดจำจากใบเสนอราคา ${reference}`);
       return delay({ depositNotice: structuredClone(doc) });
     },
 
