@@ -298,10 +298,25 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     }
   }, [activeTab]);
 
-  // The ticket workspace's persistent chrome (state header + detail tabs) is
-  // content-dependent: primary actions, project names, and role-specific tabs
-  // all change its height. Measure the rendered sticky region once and let
-  // scroll-padding + the desktop context rail read the same value.
+  // The sticky deal chrome (state header + detail tabs) condenses as you scroll down.
+  // Driven by TWO 0-size sentinels + IntersectionObserver (effect below) with hysteresis,
+  // NOT by reading scroller.scrollTop:
+  //   - condensing the header shrinks the page; a scrollTop threshold let that shrink feed
+  //     back across the threshold and oscillate — the original "jitter / snaps to top" bug;
+  //   - a single sentinel line still flickered on SLOW scroll parked right at the trigger.
+  // Two sentinels give a dead-band: condense once scrolled past the LOWER sentinel, expand
+  // only when the TOP sentinel is back in view. Slow-scrolling inside the band changes
+  // nothing, so the collapse can't flip-flop. Sentinel visibility never depends on the
+  // chrome's own height, so there is still no feedback loop. Plus "Gate A" (in the effect):
+  // a page only slightly taller than the viewport never condenses at all, because condensing
+  // it would shrink it below the condense line and clamp scrollTop back to the top — the
+  // remaining slow-scroll indecision. Only genuinely tall pages condense, where it is stable.
+  const expandSentinelRef = useRef(null);
+  const condenseSentinelRef = useRef(null);
+  // Separately, the chrome's measured height is published to `--deal-header-h` (second
+  // effect below) so AppShell's `scroll-pt-[calc(var(--deal-header-h,18rem) + …)]`
+  // offsets scrollIntoView jumps below the sticky header. Measuring is orthogonal to the
+  // condense trigger above and does not affect scrollTop/scrollHeight.
   const ticketStickyChromeRef = useRef(null);
   const [ticketChromeCondensed, setTicketChromeCondensed] = useState(false);
 
@@ -766,28 +781,61 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketAttachments(ticketId) });
   }
 
-  useLayoutEffect(() => {
+  // Condense the sticky chrome with hysteresis — see the ticketChromeCondensed declaration
+  // for WHY two sentinels (dead-band, no scrollTop, no feedback loop, no slow-scroll flicker).
+  useEffect(() => {
     if (loading) return undefined;
-    const chrome = ticketStickyChromeRef.current;
-    if (!chrome || typeof window === 'undefined') return undefined;
-    const scroller = chrome.closest('.content-scroll');
-    if (!scroller) return undefined;
-    const mobileQuery = typeof window.matchMedia === 'function'
+    const expandAt = expandSentinelRef.current;
+    const condenseAt = condenseSentinelRef.current;
+    if (!expandAt || !condenseAt || typeof IntersectionObserver === 'undefined') return undefined;
+    const scroller = expandAt.closest('.content-scroll');
+    const mobileQuery = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
       ? window.matchMedia('(max-width: 720px)')
       : null;
-    const updateCondensed = () => {
-      setTicketChromeCondensed(scroller.scrollTop > 8 && !mobileQuery?.matches);
+    // Mobile renders the chrome static (never sticky, never condensed) — keep it expanded.
+    // Gate A: only condense when the page overflows by MORE than the (expanded) chrome's own
+    // height. Condensing shrinks the chrome — and therefore the page — by at most that height;
+    // requiring the scroll overflow to exceed it guarantees the page stays scrolled past the
+    // condense line afterwards, so scrollTop can't clamp back to the top and re-expand. That
+    // clamp is what made a short/medium page (little taller than the viewport) flip "condense /
+    // don't condense" on slow scroll and fight scrolling down. A page that short simply never
+    // condenses — its full header is fine, there is barely anything to scroll. When the scroll
+    // box can't be measured (no .content-scroll ancestor, e.g. unit tests), fall back to
+    // condensing so the sentinel wiring stays observable.
+    const hasRoomToCondense = () => {
+      if (!scroller || scroller.clientHeight === 0) return true;
+      const chromeHeight = ticketStickyChromeRef.current?.getBoundingClientRect().height ?? 0;
+      return scroller.scrollHeight - scroller.clientHeight > chromeHeight + 80;
     };
-
-    updateCondensed();
-    scroller.addEventListener('scroll', updateCondensed, { passive: true });
-    mobileQuery?.addEventListener?.('change', updateCondensed);
+    const onIntersect = (entries) => {
+      if (mobileQuery?.matches) { setTicketChromeCondensed(false); return; }
+      for (const entry of entries) {
+        // Back at the very top → expand. Scrolled past the lower sentinel → condense, but only
+        // when there is room (Gate A). Anything in the band between the two sentinels leaves the
+        // state unchanged (the dead-band / hysteresis).
+        if (entry.target === expandAt && entry.isIntersecting) setTicketChromeCondensed(false);
+        else if (entry.target === condenseAt && !entry.isIntersecting && hasRoomToCondense()) {
+          setTicketChromeCondensed(true);
+        }
+      }
+    };
+    const onBreakpoint = () => { if (mobileQuery?.matches) setTicketChromeCondensed(false); };
+    const observer = new IntersectionObserver(onIntersect, { root: scroller ?? null, threshold: 0 });
+    observer.observe(expandAt);
+    observer.observe(condenseAt);
+    mobileQuery?.addEventListener?.('change', onBreakpoint);
     return () => {
-      scroller.removeEventListener('scroll', updateCondensed);
-      mobileQuery?.removeEventListener?.('change', updateCondensed);
+      observer.disconnect();
+      mobileQuery?.removeEventListener?.('change', onBreakpoint);
     };
   }, [loading, ticketId]);
 
+  // Publish the chrome's measured height to `--deal-header-h` so AppShell's
+  // `scroll-pt-[calc(var(--deal-header-h,18rem) + …)]` offsets scrollIntoView jumps below
+  // the sticky header. Unchanged behaviour — only the condense TRIGGER above changed. This
+  // re-measures when the header condenses/expands (ResizeObserver), which is fine: writing
+  // a scroll-padding custom property never moves scrollTop/scrollHeight, so it cannot feed
+  // the condense loop.
   useLayoutEffect(() => {
     if (loading) return undefined;
     const chrome = ticketStickyChromeRef.current;
@@ -1582,7 +1630,14 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // DealFulfilmentPanel (Phase 3 Slice S4).
 
   return (
-    <div className={`grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px] ${bannerText || stickyPrimaryAction || overflowItems.length > 0 ? 'mobile:pb-28' : ''}`}>
+    <div className={`relative grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px] ${bannerText || stickyPrimaryAction || overflowItems.length > 0 ? 'mobile:pb-28' : ''}`}>
+      {/* Hysteresis sentinels for the sticky-chrome condense IntersectionObserver (see the
+          ticketChromeCondensed declaration). Absolutely positioned + 0-size so they add no
+          layout/gap. The pair marks "the very top" and "scrolled past ~56px" independent of
+          the chrome's own height, giving a dead-band so slow scrolling can't flip-flop the
+          collapse — and no scroll-position feedback loop. */}
+      <div ref={expandSentinelRef} data-testid="deal-chrome-expand-sentinel" aria-hidden="true" className="pointer-events-none absolute left-0 top-0 h-px w-px" />
+      <div ref={condenseSentinelRef} data-testid="deal-chrome-condense-sentinel" aria-hidden="true" className="pointer-events-none absolute left-0 top-14 h-px w-px" />
       {/* F-14 (ticket-detail IA rebuild Phase 1): the breadcrumb is the single
           up-nav — a full-width "กลับ" bar underneath it just repeated the same
           affordance as page chrome. Verified safe to drop: every e2e "กลับ"
