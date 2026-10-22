@@ -311,7 +311,12 @@ public class FileStorageService {
         if (mime != null) {
             mime = mime.toLowerCase(Locale.ROOT);
         }
-        if (allowedMimeTypes != null && !allowedMimeTypes.isEmpty() && !allowedMimeTypes.contains(mime)) {
+        // A file whose type could not be worked out (none declared, and a name that gives none
+        // away) is of no allowed type. `mime == null` is asked first on purpose: the callers pass
+        // immutable Set.of(..) allow-lists, and looking a null up in one throws, which reached the
+        // caller as a 500.
+        if (allowedMimeTypes != null && !allowedMimeTypes.isEmpty()
+                && (mime == null || !allowedMimeTypes.contains(mime))) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "รองรับเฉพาะไฟล์ PDF, JPG หรือ PNG");
         }
         return new Validated(originalName, mime);
