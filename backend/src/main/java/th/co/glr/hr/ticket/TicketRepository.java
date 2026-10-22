@@ -1562,18 +1562,28 @@ public class TicketRepository {
                 .addValue("id", ticketId));
     }
 
-    /** RED stub: today's unconditional system write, so the new tests compile and fail on their
-     * assertions. Replaced by the compare-and-set in the fix commit. */
+    /**
+     * The system's only write to {@code deposit_policy} (see {@code TicketService
+     * #followQuotationDepositPolicy}). A compare-and-set: it moves the row from {@code expected} to
+     * {@code policy} only while no person has set the policy ({@code deposit_policy_set_by IS NULL};
+     * {@link #updateDepositPolicy} always records one) and the payment track is still at
+     * CUSTOMER_CONFIRMED. It leaves {@code deposit_policy_set_by} NULL, so the row stays the
+     * system's. Returns the rowcount; 0 means leave the policy alone, e.g. a waiver committed first.
+     */
     public int syncDepositPolicyFromQuotation(long ticketId, String expected, String policy, String reason) {
         return jdbc.update("""
             UPDATE sales.ticket
                SET deposit_policy = :policy, deposit_policy_reason = :reason,
                    deposit_policy_set_by = NULL, updated_at = now()
              WHERE ticket_id = :id
+               AND deposit_policy = :expected
+               AND deposit_policy_set_by IS NULL
+               AND payment_status = 'CUSTOMER_CONFIRMED'
             """,
             new MapSqlParameterSource()
                 .addValue("policy", policy)
                 .addValue("reason", reason)
+                .addValue("expected", expected)
                 .addValue("id", ticketId));
     }
 

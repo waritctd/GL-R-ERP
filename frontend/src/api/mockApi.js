@@ -3727,15 +3727,24 @@ function requireDepositNoticePath(ticket) {
   }
 }
 
-// Mirrors TicketService.applyCustomerConfirmation (owner ruling 2026-10-22): at the first
-// confirmation a ไม่รับมัดจำ (0%) quotation moves a REQUIRED deal to NOT_REQUIRED.
-function syncNoDepositPolicy(ticket, quotation, user) {
-  if (quotation?.depositPercent !== 0 || (ticket.depositPolicy ?? 'REQUIRED') !== 'REQUIRED') return;
-  const reason = `ใบเสนอราคา ${quotation.number} ระบุไม่รับมัดจำ (ชำระเต็มจำนวน)`;
-  ticket.depositPolicy = 'NOT_REQUIRED';
+// Mirrors TicketService.followQuotationDepositPolicy and TicketRepository
+// .syncDepositPolicyFromQuotation's compare-and-set: while CUSTOMER_CONFIRMED, a policy the system
+// owns (no person recorded in depositPolicySetBy, which setDepositPolicy writes) follows the
+// quotation: 0% -> NOT_REQUIRED, any deposit -> REQUIRED. Called at confirmation and on a
+// DEAL_DIRECT approval. depositPolicySetBy is internal: buildTicketDetail does not serve it.
+function followQuotationDepositPolicy(ticket, quotation, user) {
+  if (quotation?.depositPercent == null) return;
+  const noDeposit = quotation.depositPercent === 0;
+  const expected = noDeposit ? 'REQUIRED' : 'NOT_REQUIRED';
+  if (ticket.paymentStatus !== 'CUSTOMER_CONFIRMED' || ticket.depositPolicySetBy != null
+    || (ticket.depositPolicy ?? 'REQUIRED') !== expected) return;
+  const policy = noDeposit ? 'NOT_REQUIRED' : 'REQUIRED';
+  const reason = `ใบเสนอราคา ${quotation.number} `
+    + (noDeposit ? 'ระบุไม่รับมัดจำ (ชำระเต็มจำนวน)' : `ระบุมัดจำ ${quotation.depositPercent}%`);
+  ticket.depositPolicy = policy;
   ticket.depositPolicyReason = reason;
   pushEvent(ticket, user, 'POLICY_CHANGED', ticket.salesStage, ticket.salesStage,
-    `deposit_policy → NOT_REQUIRED — ${reason}`);
+    `deposit_policy → ${policy} — ${reason}`);
 }
 
 function moneyValue(value) {
@@ -9180,6 +9189,7 @@ export const api = {
       }
       ticket.depositPolicy = payload.policy;
       ticket.depositPolicyReason = payload.reason.trim();
+      ticket.depositPolicySetBy = user.employeeId ?? user.id; // deposit_policy_set_by: a person chose it
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
       pushEvent(ticket, user, 'POLICY_CHANGED', ticket.salesStage, ticket.salesStage,
         `deposit_policy → ${payload.policy} — ${payload.reason.trim()}`);
@@ -16197,7 +16207,7 @@ export const api = {
         ticket.paymentStatus = 'CUSTOMER_CONFIRMED';
         ticket.updatedAt = now;
         pushEvent(ticket, user, 'CUSTOMER_CONFIRMED', ticket.status, ticket.status, null);
-        syncNoDepositPolicy(ticket, mockDealQuotations.find(
+        followQuotationDepositPolicy(ticket, mockDealQuotations.find(
           (q) => q.pricingRequestId === pr.id && q.origin === 'PRICING_REQUEST' && q.docStatus === 'ACCEPTED'), user);
         autoAdvanceStage(ticket, 'ORDER_RECEIVED', user);
       }
@@ -17273,6 +17283,9 @@ export const api = {
         }
         ancestorId = ancestor.parentQuotationId;
       }
+      // #1173 review F1 (DealQuotationService#approve -> TicketService#followQuotationDepositPolicy).
+      const dealTicket = db.tickets.find((t) => t.id === row.ticketId);
+      if (dealTicket) followQuotationDepositPolicy(dealTicket, row, user);
       return delay({ quotation: buildDealQuotationDto(row) });
     },
 
@@ -17515,7 +17528,7 @@ export const api = {
       if (ticket.paymentStatus == null) {
         ticket.paymentStatus = 'CUSTOMER_CONFIRMED';
         pushEvent(ticket, user, 'CUSTOMER_CONFIRMED', ticket.status, ticket.status, null);
-        syncNoDepositPolicy(ticket, row, user);
+        followQuotationDepositPolicy(ticket, row, user);
       }
       autoAdvanceStage(ticket, 'ORDER_RECEIVED', user);
       return result();
