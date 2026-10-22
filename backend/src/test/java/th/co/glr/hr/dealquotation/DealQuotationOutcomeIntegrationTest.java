@@ -449,6 +449,25 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
             .anyMatch(line -> line.contains("มัดจำ 30%"));
     }
 
+    /** The pricing-request route must bill THIS quotation's defaulted 30%, not hand the null to the
+     * per-ticket lookup, which tries a sibling pricing request's legacy row first. */
+    @Test
+    void createDepositNoticeFromQuotation_newEngineNullPercent_whenASiblingPricingRequestHasALegacyIssuedQuotation_billsThePdfPercentNotTheSiblings() {
+        CustomerQuotationDto legacyIssued = issuedLegacyQuotation(PricingRequestRecipient.OWNER);
+        assertThat(jdbc.update("UPDATE sales.quotation SET deposit_percent = 70 WHERE quotation_id = :id",
+            Map.of("id", legacyIssued.id()))).isEqualTo(1);
+        DealQuotationDto accepted = acceptedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
+        assertDepositPercentIsNullAndThePdfPromises30(accepted);
+        long pricingRequestId = accepted.pricingRequestId();
+        orderConfirmation.confirmOrder(pricingRequestId,
+            new OrderConfirmationRequests.ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
+
+        DepositNoticeDto draft = orderConfirmation.createDepositNoticeFromQuotation(pricingRequestId,
+            new OrderConfirmationRequests.CreateDepositNoticeFromQuotationRequest(null), salesActor);
+
+        assertThat(draft.depositPercent()).isEqualByComparingTo("0.30");
+    }
+
     @Test
     void recordOutcome_byNonOwningSales_refused_writesNothing() {
         DealQuotationDto issued = issuedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
