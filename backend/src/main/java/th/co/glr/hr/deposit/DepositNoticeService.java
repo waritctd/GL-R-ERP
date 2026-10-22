@@ -103,6 +103,7 @@ public class DepositNoticeService {
                                                      Integer sourceDepositPercent, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
         TicketSummaryDto s = requireApprovedTicket(ticketId, actor);
+        requireTicketOwner(ticketId, actor);
         requireActiveLifecycle(s);
 
         // Auto-populate items from approved ticket items (legacy) or, failing that, the
