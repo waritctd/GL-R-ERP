@@ -471,6 +471,23 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
         assertThat(pos).hasSize(2);
     }
 
+    @Test
+    void createPurchaseOrders_mixedDealJumpedToDeliverySchedulingByStockWithoutAnyImportRequest_isRejected() {
+        DealFixture deal = driveToProcurement(false);                      // DEPOSIT_RECEIVED, no IR
+        long firstItemId = ticketService.get(deal.ticketId, salesActor).items().get(0).id();
+        ticketService.reserveStock(deal.ticketId,
+            new StockReservationRequest(List.of(new StockReservationRequest.Line(firstItemId, new BigDecimal("1"), "บางส่วนจากสต็อก"))),
+            salesActor);
+        assertThat(ticketService.get(deal.ticketId, salesActor).summary().salesStage()).isEqualTo(DealStage.DELIVERY_SCHEDULING);
+
+        assertThatThrownBy(() -> procurement.createPurchaseOrders(deal.pricingRequestId,
+            new CreateFactoryPurchaseOrdersRequest(null), importActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        assertThat(jdbc.queryForObject("""
+            SELECT COUNT(*) FROM sales.factory_purchase_order WHERE pricing_request_id = :id
+            """, Map.of("id", deal.pricingRequestId), Long.class)).isZero();
+    }
+
     // ─────────────────────────────────────────────────────────────────────────────────────
     // Authorization — Import/CEO only, Sales/account excluded entirely.
     // ─────────────────────────────────────────────────────────────────────────────────────
