@@ -422,15 +422,17 @@ describe('AppShell navigation under the release lockdown', () => {
   // Asserted wrong-way-round: the items and the group headers must be GONE.
   // A test that only checked the self-service items are present would pass
   // just as happily with the whole sales menu still sitting beside them.
-  it('leaves a sales rep the self-service group and nothing else', async () => {
+  // Sales release (owner ruling, Ploy 2026-10-22): sales gets its whole group back; what it never
+  // had (การเงิน, งานนำเข้า) must still be absent.
+  it('gives a sales rep the sales group back, and nothing from finance or import', async () => {
     await renderLockedShell({ role: 'sales', employeeId: 41, name: 'ขาย ทดสอบ', email: 'sales@test.local' });
     await screen.findByText('เนื้อหา');
 
-    // Quotation release (owner, 2026-09-11): ใบเสนอราคา is the ONE sales item that survives.
     expect(screen.getByText('ใบเสนอราคา')).toBeTruthy();
-    expect(screen.queryByText('รายการดีล')).toBeNull();
-    expect(screen.queryByText('แคตตาล็อกสินค้า')).toBeNull();
-    expect(screen.queryByText('ค่าคอมมิชชัน')).toBeNull();
+    expect(screen.getByText('รายการดีล')).toBeTruthy();
+    expect(screen.getByText('แคตตาล็อกสินค้า')).toBeTruthy();
+    expect(screen.queryByText('งานการเงิน')).toBeNull();
+    expect(screen.queryByText('งานนำเข้า')).toBeNull();
 
     expect(screen.getByText('บุคคลของฉัน')).toBeTruthy();
     expect(screen.getByText('แดชบอร์ด')).toBeTruthy();
@@ -440,16 +442,29 @@ describe('AppShell navigation under the release lockdown', () => {
     expect(screen.getByText('ค่าลดหย่อนภาษี')).toBeTruthy();
   });
 
-  it('strips the import and account worklists too', async () => {
+  // Owner ruling 2026-10-22: import sees ONLY งานนำเข้า and คิวขอราคา; account ONLY งานการเงิน.
+  // Asserted wrong-way-round: every other sales-group item must be gone.
+  it('leaves import งานนำเข้า + คิวขอราคา and account งานการเงิน, nothing else from the sales group', async () => {
     await renderLockedShell({ role: 'import', employeeId: 42, name: 'นำเข้า ทดสอบ', email: 'import@test.local' });
     await screen.findByText('เนื้อหา');
+    expect(screen.getByText('คิวขอราคา')).toBeTruthy();
+    expect(screen.getByText('งานนำเข้า')).toBeTruthy();
+    expect(screen.queryByText('ใบเสนอราคา')).toBeNull();
+    expect(screen.queryByText('รายการดีล')).toBeNull();
+    expect(screen.queryByText('แคตตาล็อกสินค้า')).toBeNull();
+    expect(screen.queryByText('งานการเงิน')).toBeNull();
+    expect(screen.getByText('วันลา')).toBeTruthy();
+  });
+
+  it('leaves account งานการเงิน and nothing else from the sales group', async () => {
+    await renderLockedShell({ role: 'account', employeeId: 43, name: 'บัญชี ทดสอบ', email: 'account@test.local' });
+    await screen.findByText('เนื้อหา');
+    expect(screen.getByText('งานการเงิน')).toBeTruthy();
     expect(screen.queryByText('คิวขอราคา')).toBeNull();
     expect(screen.queryByText('งานนำเข้า')).toBeNull();
-    // import/account may READ quotations server-side but are not the quotation audience.
+    expect(screen.queryByText('รายการดีล')).toBeNull();
     expect(screen.queryByText('ใบเสนอราคา')).toBeNull();
-
-    await renderLockedShell({ role: 'account', employeeId: 43, name: 'บัญชี ทดสอบ', email: 'account@test.local' });
-    expect(screen.queryByText('งานการเงิน')).toBeNull();
+    expect(screen.queryByText('ค่าคอมมิชชัน')).toBeNull();
   });
 
   it('gives a can-create grantee ใบเสนอราคา even when their role is outside sales', async () => {

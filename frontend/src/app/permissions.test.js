@@ -445,7 +445,11 @@ describe('canAccessPath under the release lockdown', () => {
   const hr = { role: 'hr', employeeId: 47 };
   const ceo = { role: 'ceo', employeeId: 48 };
 
-  const LOCKED_ROLES = [sales, salesManager, importer, account, employee, divisionManager];
+  // Sales release (owner ruling, Ploy 2026-10-22): sales and sales_manager are exempt from the
+  // lock; import and account stay locked with a per-role allowlist (tested below). Only these two
+  // roles still see nothing but self-service.
+  const LOCKED_ROLES = [employee, divisionManager];
+  const SELF_SERVICE_ROLES = [importer, account, employee, divisionManager];
 
   // Paths the lock must REMOVE. Asserted wrong-way-round on purpose: each of
   // these is a page the role could otherwise reach, so the test fails if the
@@ -511,7 +515,7 @@ describe('canAccessPath under the release lockdown', () => {
   it('keeps every self-service path reachable for every locked role', async () => {
     const { canAccessPath: guard } = await locked();
     const refused = [];
-    for (const user of LOCKED_ROLES) {
+    for (const user of SELF_SERVICE_ROLES) {
       for (const path of VISIBLE) {
         if (!guard(path, user)) refused.push(`${user.role}${user.manager ? '(manager)' : ''} -> ${path}`);
       }
@@ -524,8 +528,44 @@ describe('canAccessPath under the release lockdown', () => {
   // `startsWith('/tax-allowance')` test would have admitted it.
   it('does not let /tax-allowance admit HR’s /tax-allowance-review', async () => {
     const { canAccessPath: guard } = await locked();
-    expect(guard('/tax-allowance', sales)).toBe(true);
-    expect(guard('/tax-allowance-review', sales)).toBe(false);
+    expect(guard('/tax-allowance', importer)).toBe(true);
+    expect(guard('/tax-allowance-review', importer)).toBe(false);
+  });
+
+  // Sales release (owner ruling, Ploy 2026-10-22): the sales stack opens for the sales roles,
+  // import gets ONLY งานนำเข้า and คิวขอราคา (plus its per-deal drill-down), account ONLY การเงิน.
+  // Wrong-way-round first: what each role must still NOT reach.
+  it('releases the sales stack to sales and sales_manager, nothing beyond their guards', async () => {
+    const { canAccessPath: guard } = await locked();
+    for (const user of [sales, salesManager]) {
+      for (const path of ['/tickets', '/tickets/7', '/pricing-requests/9', '/quotations', '/quotations/3', '/catalog']) {
+        expect(guard(path, user), `${user.role} -> ${path}`).toBe(true);
+      }
+      for (const path of ['/payroll', '/hr', '/employees', '/finance', '/tax-allowance-review', '/fulfilment']) {
+        expect(guard(path, user), `${user.role} -> ${path}`).toBe(false);
+      }
+    }
+    expect(guard('/commissions', salesManager)).toBe(true);
+  });
+
+  it('releases import only งานนำเข้า and คิวขอราคา', async () => {
+    const { canAccessPath: guard } = await locked();
+    for (const path of ['/fulfilment', '/pricing-requests', '/pricing-requests/9', '/import/deals/7', '/leave']) {
+      expect(guard(path, importer), `import -> ${path}`).toBe(true);
+    }
+    for (const path of ['/tickets', '/tickets/7', '/finance', '/catalog', '/quotations', '/commissions', '/payroll', '/price-import', '/some-feature-added-later']) {
+      expect(guard(path, importer), `import -> ${path}`).toBe(false);
+    }
+  });
+
+  it('releases account only การเงิน', async () => {
+    const { canAccessPath: guard } = await locked();
+    for (const path of ['/finance', '/finance/billing-notes', '/leave']) {
+      expect(guard(path, account), `account -> ${path}`).toBe(true);
+    }
+    for (const path of ['/tickets', '/tickets/7', '/tickets/7/deposit', '/fulfilment', '/pricing-requests', '/quotations', '/commissions', '/catalog', '/payroll', '/some-feature-added-later']) {
+      expect(guard(path, account), `account -> ${path}`).toBe(false);
+    }
   });
 
   // The lock flipped an unmatched path from allowed to refused, so a query
@@ -535,13 +575,16 @@ describe('canAccessPath under the release lockdown', () => {
   // to.
   it('matches on the pathname, ignoring a query string or hash', async () => {
     const { canAccessPath: guard } = await locked();
-    expect(guard('/employee-requests?tab=ot', sales)).toBe(true);
-    expect(guard('/employee-requests?tab=welfare', sales)).toBe(true);
-    expect(guard('/leave?status=pending#top', sales)).toBe(true);
+    expect(guard('/employee-requests?tab=ot', importer)).toBe(true);
+    expect(guard('/employee-requests?tab=welfare', importer)).toBe(true);
+    expect(guard('/leave?status=pending#top', importer)).toBe(true);
     // Still refused — the pathname is what is checked, so a query string is no
     // way around the lock.
-    expect(guard('/tickets?id=1', sales)).toBe(false);
-    expect(guard('/payroll?month=2026-08', sales)).toBe(false);
+    expect(guard('/tickets?id=1', importer)).toBe(false);
+    expect(guard('/payroll?month=2026-08', importer)).toBe(false);
+    // The per-role release allowlist matches on the pathname the same way.
+    expect(guard('/fulfilment?tab=pending', importer)).toBe(true);
+    expect(guard('/finance?tab=deposits', account)).toBe(true);
   });
 
   // The allowlist's reason for existing: canAccessPath fails OPEN for any path
@@ -549,7 +592,7 @@ describe('canAccessPath under the release lockdown', () => {
   // be hidden by default rather than silently exposed.
   it('refuses a path no guard claims — the lock is an allowlist, not a blocklist', async () => {
     const { canAccessPath: guard } = await locked();
-    expect(guard('/some-feature-added-later', sales)).toBe(false);
+    expect(guard('/some-feature-added-later', employee)).toBe(false);
     expect(guard('/some-feature-added-later', hr)).toBe(true);
   });
 
@@ -597,11 +640,13 @@ describe('isSelfServiceLocked', () => {
     vi.stubEnv('VITE_SELF_SERVICE_ONLY', 'true');
     vi.resetModules();
     const { isSelfServiceLocked: isLocked } = await import('./permissions.js');
-    for (const role of ['sales', 'sales_manager', 'import', 'account', 'employee', 'warehouse', 'qc']) {
+    for (const role of ['import', 'account', 'employee', 'warehouse', 'qc']) {
       expect(isLocked({ role })).toBe(true);
     }
-    expect(isLocked({ role: 'hr' })).toBe(false);
-    expect(isLocked({ role: 'ceo' })).toBe(false);
+    // hr/ceo always; sales/sales_manager since the sales release (owner ruling 2026-10-22).
+    for (const role of ['hr', 'ceo', 'sales', 'sales_manager']) {
+      expect(isLocked({ role })).toBe(false);
+    }
     // An unknown or absent role is locked, not exempt — fail closed.
     expect(isLocked({ role: undefined })).toBe(true);
     expect(isLocked(null)).toBe(true);
@@ -663,10 +708,10 @@ describe('activity log access (admin capability)', () => {
     }
 
     it('opens /activity-log to a flagged admin whose role is not exempt', async () => {
-      // วริศรา is role `sales`, which is NOT in SELF_SERVICE_EXEMPT_ROLES, so without the
-      // per-path exemption the lockdown would hide this page from its only holder.
+      // The holder's role must not matter: a locked role (import here — sales is exempt since
+      // the 2026-10-22 release) still reaches the page through the per-path exemption alone.
       const locked = await lockedCanAccessPath();
-      expect(locked('/activity-log', user('sales', { admin: true }))).toBe(true);
+      expect(locked('/activity-log', user('import', { admin: true }))).toBe(true);
     });
 
     it('unlocks NOTHING else for that admin', async () => {
@@ -675,7 +720,7 @@ describe('activity log access (admin capability)', () => {
       // lockdown bypass — which is exactly what adding `admin` to SELF_SERVICE_EXEMPT_ROLES
       // would have done, and why it was not done that way.
       const locked = await lockedCanAccessPath();
-      const admin = user('sales', { admin: true });
+      const admin = user('import', { admin: true });
       for (const path of ['/tickets', '/payroll', '/employees', '/commissions', '/catalog']) {
         expect(locked(path, admin)).toBe(false);
       }
@@ -711,10 +756,11 @@ describe('quotation release through the self-service lockdown', () => {
     }
   });
 
-  // Wrong-way-round: the exemption must not leak the rest of the sales stack to the same people.
-  it('keeps every other sales page locked for that audience', async () => {
+  // Wrong-way-round: the exemption must not leak the rest of the sales stack to a grantee outside
+  // the sales roles (sales/sales_manager are exempt from the lock since the 2026-10-22 release).
+  it('keeps every other sales page locked for a grantee outside the sales roles', async () => {
     const { canAccessPath: can } = await locked();
-    for (const u of [user('sales'), user('sales_manager'), user('qc', { canCreateQuotation: true })]) {
+    for (const u of [user('qc', { canCreateQuotation: true })]) {
       for (const path of OTHER_SALES_PATHS) {
         expect(can(path, u), `${u.role} ${path}`).toBe(false);
       }
