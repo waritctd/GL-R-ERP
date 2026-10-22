@@ -102,8 +102,8 @@ public class DepositNoticeService {
     public DepositNoticeDto createDraftFromQuotation(long ticketId, DepositNoticeDraftRequest req,
                                                      Integer sourceDepositPercent, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
-        TicketSummaryDto s = requireApprovedTicket(ticketId, actor);
         requireTicketOwner(ticketId, actor);
+        TicketSummaryDto s = requireApprovedTicket(ticketId, actor);
         requireActiveLifecycle(s);
 
         // Auto-populate items from approved ticket items (legacy) or, failing that, the
