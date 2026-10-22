@@ -18,6 +18,7 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
+import th.co.glr.hr.dealquotation.DealQuotationRenderAdapter;
 
 @Repository
 public class DepositNoticeRepository {
@@ -118,10 +119,12 @@ public class DepositNoticeRepository {
      * each refuse a pricing request the other engine already quoted), so one ticket can carry a
      * legacy quotation on one pricing request and an origin-tagged one on another. On such a mixed
      * ticket both branches below can match, and trying legacy first IS a real preference: the
-     * percent comes from the legacy row. Returns empty when there is no live
-     * (ACCEPTED/ISSUED/APPROVED) quotation for this ticket, or its {@code deposit_percent} is
-     * null — the caller ({@link DepositNoticeService#createDraft}) falls back to 0.50 in that
-     * case, this document's long-standing default.
+     * percent comes from the legacy row. A live v2 row whose {@code deposit_percent} is null
+     * reads as {@link DealQuotationRenderAdapter#DEFAULT_DEPOSIT_PERCENT}, the percent its PDF
+     * printed (owner ruling 2026-10-22). Returns empty when there is no live
+     * (ACCEPTED/ISSUED/APPROVED) quotation for this ticket, or only a legacy one with a null
+     * {@code deposit_percent} — the caller ({@link DepositNoticeService#createDraft}) falls back
+     * to 0.50 in that case, this document's long-standing default.
      */
     public Optional<BigDecimal> findDealQuotationDepositPercent(long ticketId) {
         Integer legacyPct = firstOrNull(jdbc.query("""
@@ -138,13 +141,13 @@ public class DepositNoticeRepository {
         }
 
         Integer v2Pct = firstOrNull(jdbc.query("""
-            SELECT deposit_percent FROM sales.quotation
+            SELECT COALESCE(deposit_percent, :pdfDefault) AS deposit_percent FROM sales.quotation
              WHERE ticket_id = :ticketId AND origin IN ('PRICING_REQUEST','DEAL_DIRECT')
                AND doc_status IN ('ACCEPTED','ISSUED','APPROVED')
              ORDER BY CASE doc_status WHEN 'ACCEPTED' THEN 0 WHEN 'ISSUED' THEN 1 ELSE 2 END,
                       quotation_id DESC
              LIMIT 1
-            """, Map.of("ticketId", ticketId),
+            """, Map.of("ticketId", ticketId, "pdfDefault", DealQuotationRenderAdapter.DEFAULT_DEPOSIT_PERCENT),
             (rs, i) -> (Integer) rs.getObject("deposit_percent")
         ));
         return v2Pct != null ? Optional.of(BigDecimal.valueOf(v2Pct, 2)) : Optional.empty();

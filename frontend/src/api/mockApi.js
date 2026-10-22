@@ -7153,6 +7153,10 @@ function resolveDealQuotationV3Header(payload, current = null) {
   return { priceMode, documentLanguage, currency };
 }
 
+// Mirrors DealQuotationRenderAdapter.DEFAULT_DEPOSIT_PERCENT: the percent a quotation's PDF
+// prints, and its deposit notice bills, when its depositPercent is null.
+const MOCK_DEFAULT_DEPOSIT_PERCENT = 30;
+
 /**
  * Item 4 (V181, "ไม่รับมัดจำ", owner ruling 2026-09-16) — mirrors
  * DealQuotationService#isZeroDeposit/#resolveFullPaymentTerm exactly: `depositPercent === 0` is
@@ -16229,10 +16233,11 @@ export const api = {
         customerName: ticket.customerName ?? '', customerTaxId: customerTaxId ?? '',
         customerAddress: customerAddress ?? '',
         projectName: projectName ?? '', reference,
-        // Mirrors DepositNoticeService.createDraftFromQuotation: the new-engine branch bills the
-        // chosen quotation's own whole-number percent; the legacy branch keeps the old stand-in.
-        depositPercent: newEngine?.depositPercent != null
-          ? newEngine.depositPercent / 100
+        // Mirrors OrderConfirmationService.createDepositNoticeFromQuotation: the new-engine branch
+        // bills the chosen quotation's own whole-number percent, a null one as the PDF's default;
+        // the legacy branch keeps the old stand-in.
+        depositPercent: newEngine
+          ? (newEngine.depositPercent ?? MOCK_DEFAULT_DEPOSIT_PERCENT) / 100
           : payload.depositPercent ?? 0.5,
         vatPercent: 0.07,
         notes, items, issuedByName: null, preparerName: 'จินตนา หาญมนตรี',

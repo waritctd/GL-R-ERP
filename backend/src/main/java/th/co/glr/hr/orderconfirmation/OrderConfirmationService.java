@@ -443,8 +443,8 @@ public class OrderConfirmationService {
      * {@code deposit_percent} goes to {@link DepositNoticeService#createDraftFromQuotation}, so
      * when the quotation sets a percent a sibling pricing request's legacy row on the same ticket
      * cannot supply it either (a new-engine sibling never could: R8 allows one ACCEPTED quotation
-     * per ticket and the lookup prefers ACCEPTED); a null percent still falls back to the
-     * per-ticket lookup. The legacy branch passes no percent, because {@code CustomerQuotationDto}
+     * per ticket and the lookup prefers ACCEPTED); a null percent bills the PDF's default 30%
+     * instead of the lookup. The legacy branch passes no percent, because {@code CustomerQuotationDto}
      * carries none, so it keeps {@code createDraft}'s per-ticket derivation; the ticket-level
      * route does the same. The customer must have accepted: an ISSUED-only quotation answers 409.
      */
@@ -486,7 +486,8 @@ public class OrderConfirmationService {
             }
             reference = newEngine.number();
             items = depositNotices.itemsFromDealQuotation(newEngine.id());
-            sourceDepositPercent = newEngine.depositPercent();
+            sourceDepositPercent = newEngine.depositPercent() != null ? newEngine.depositPercent()
+                : th.co.glr.hr.dealquotation.DealQuotationRenderAdapter.DEFAULT_DEPOSIT_PERCENT;
         }
 
         // request.depositPercent() is deliberately still passed through here even though
