@@ -16199,6 +16199,10 @@ export const api = {
       const newEngine = accepted ? null : mockDealQuotations.find(
         (q) => q.pricingRequestId === pr.id && q.origin === 'PRICING_REQUEST' && q.docStatus === 'ACCEPTED');
       if (!accepted && !newEngine) fail('ยังไม่มีใบเสนอราคาที่ลูกค้ายอมรับสำหรับคำขอราคานี้', 409);
+      // Mirrors the zero-deposit refusal: a 0% ("ไม่รับมัดจำ") quotation has nothing to bill.
+      if (newEngine?.depositPercent === 0) {
+        fail(`ใบเสนอราคา ${newEngine.number} ระบุไม่มีมัดจำ (ชำระเต็มจำนวน) จึงออกใบแจ้งยอดเงินรับมัดจำไม่ได้`, 409);
+      }
       const reference = (accepted ?? newEngine).number;
       const items = accepted
         ? mockDepositNoticeItemsFromQuotation(accepted.items)

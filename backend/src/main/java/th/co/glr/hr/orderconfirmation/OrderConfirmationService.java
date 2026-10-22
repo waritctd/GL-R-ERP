@@ -476,6 +476,14 @@ public class OrderConfirmationService {
             if (newEngine == null) {
                 throw new ApiException(HttpStatus.CONFLICT, "ยังไม่มีใบเสนอราคาที่ลูกค้ายอมรับสำหรับคำขอราคานี้");
             }
+            // A zero-deposit quotation (DealQuotationService#isZeroDeposit: "ไม่รับมัดจำ", paid in
+            // full under fullPaymentTerm) has nothing to bill. Refuse here rather than draft a
+            // 0-baht notice: DepositNoticeService#issue reads the ticket's deposit_policy, which no
+            // path syncs from the quotation, so nothing downstream would stop that draft.
+            if (Integer.valueOf(0).equals(newEngine.depositPercent())) {
+                throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคา " + newEngine.number()
+                    + " ระบุไม่มีมัดจำ (ชำระเต็มจำนวน) จึงออกใบแจ้งยอดเงินรับมัดจำไม่ได้");
+            }
             reference = newEngine.number();
             items = depositNotices.itemsFromDealQuotation(newEngine.id());
             sourceDepositPercent = newEngine.depositPercent();

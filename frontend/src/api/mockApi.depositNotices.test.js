@@ -144,15 +144,16 @@ async function driveTicketToAcceptedQuotation() {
 // from the CEO decision, so the deposit mapper's baht discount label is exercised. The discount
 // sits on the decision, not on a quotation update: a line that differs from the CEO price makes
 // the mock's PRICING_REQUEST approve refuse sales_manager (403, CEO approval required).
-async function driveTicketToNewEngineIssuedQuotation({ depositPercent } = {}) {
+async function driveTicketToNewEngineIssuedQuotation({ depositPercent, fullPaymentTerm } = {}) {
   const { ticketId, prId } = await driveTicketToApprovedDecision({ priceMode: 'NET', discountPct: 10 });
   await api.auth.login({ role: 'sales' });
   const { quotation: draft } = await api.dealQuotations.createFromPricingRequest(prId);
   // Java's drive (DealQuotationOutcomeIntegrationTest) saves validityDays before submit; the
   // mock's submit/approve/recordOutcome never require it, so that update is left out here.
+  // fullPaymentTerm is only meaningful (and, for submit, required) when depositPercent is 0.
   if (depositPercent != null) {
     await api.dealQuotations.update(draft.id, {
-      priceMode: draft.priceMode, depositPercent, remainderMode: 'ON_DELIVERY',
+      priceMode: draft.priceMode, depositPercent, remainderMode: 'ON_DELIVERY', fullPaymentTerm,
       items: draft.items.map((item) => ({ ...item, id: item.id })),
     });
   }
@@ -258,6 +259,19 @@ describe('mockApi.pricingRequests.createDepositNoticeFromQuotation — new-engin
     const { ticketId, prId } = await driveTicketToNewEngineIssuedQuotation();
     await expect(api.pricingRequests.createDepositNoticeFromQuotation(prId, {}))
       .rejects.toMatchObject({ status: 409, message: 'ยังไม่มีใบเสนอราคาที่ลูกค้ายอมรับสำหรับคำขอราคานี้' });
+    const { depositNotices } = await api.depositNotices.listByTicket(ticketId);
+    expect(depositNotices).toHaveLength(0);
+  });
+
+  // A zero-deposit ("ไม่รับมัดจำ", full payment) quotation has nothing to bill: Java refuses rather
+  // than drafting a 0-baht document that nothing downstream would stop from being issued.
+  it('rejects a 0% (full-payment) new-engine quotation with 409 and creates no draft', async () => {
+    const { ticketId, prId, accepted } = await driveTicketToNewEngineAcceptedQuotation({
+      depositPercent: 0, fullPaymentTerm: 'BEFORE_DELIVERY',
+    });
+    expect(accepted.depositPercent).toBe(0);
+    await expect(api.pricingRequests.createDepositNoticeFromQuotation(prId, {}))
+      .rejects.toMatchObject({ status: 409, message: expect.stringContaining('ไม่มีมัดจำ') });
     const { depositNotices } = await api.depositNotices.listByTicket(ticketId);
     expect(depositNotices).toHaveLength(0);
   });

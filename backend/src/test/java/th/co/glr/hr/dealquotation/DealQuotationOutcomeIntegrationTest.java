@@ -289,6 +289,28 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
             Map.of("id", ticketId), Long.class)).isZero();
     }
 
+    /** A zero-deposit quotation ("ไม่รับมัดจำ", full payment) has no deposit to bill: the route must
+     * refuse rather than draft a 0-baht document, which nothing downstream would stop from being
+     * issued ({@code DepositNoticeService#issue} reads the ticket's deposit_policy, which no path
+     * syncs from a 0% quotation). */
+    @Test
+    void createDepositNoticeFromQuotation_newEngineAcceptedZeroDeposit_409AndNoDraft() {
+        DealQuotationDto accepted = acceptedZeroDepositNewOriginQuotation(PricingRequestRecipient.DESIGNER,
+            new BigDecimal("10"));
+        long pricingRequestId = accepted.pricingRequestId();
+        assertThat(accepted.depositPercent()).isZero();
+        orderConfirmation.confirmOrder(pricingRequestId,
+            new OrderConfirmationRequests.ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
+
+        assertThatThrownBy(() -> orderConfirmation.createDepositNoticeFromQuotation(pricingRequestId,
+                new OrderConfirmationRequests.CreateDepositNoticeFromQuotationRequest(null), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.CONFLICT)
+            .hasMessageContaining("ไม่มีมัดจำ");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sales.deposit_notice WHERE ticket_id = :id",
+            Map.of("id", ticketId), Long.class)).isZero();
+    }
+
     @Test
     void createDepositNoticeFromQuotation_newEngine_nonOwnerSales_cannotReach() {
         DealQuotationDto accepted = acceptedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
@@ -928,6 +950,23 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
 
     private DealQuotationDto acceptedNewOriginQuotation(String recipient, BigDecimal qty, Integer depositPercent) {
         DealQuotationDto issued = issuedNewOriginQuotation(recipient, qty, depositPercent);
+        return quotationService.recordOutcome(issued.id(),
+            new RecordOutcomeRequest(QuotationStatus.ACCEPTED, "ลูกค้าโอเค", UUID.randomUUID().toString()), salesActor);
+    }
+
+    /** Like {@link #acceptedNewOriginQuotation} but with depositPercent 0, which {@code submit}
+     * only accepts together with a full-payment term ({@code resolveFullPaymentTerm}). */
+    private DealQuotationDto acceptedZeroDepositNewOriginQuotation(String recipient, BigDecimal qty) {
+        PricingDecisionDto decision = approvedDecision(recipient, qty);
+        DealQuotationDto draft = quotationService.createFromPricingRequest(decision.pricingRequestId(), salesActor);
+        DealQuotationRequests.UpsertDealQuotationRequest zeroDeposit = new DealQuotationRequests.UpsertDealQuotationRequest(
+            draft.contactId(), draft.deptCode(), draft.unitCode(), draft.offerDate(), 0, draft.remainderMode(),
+            draft.creditDays(), 30, null, null, draft.customerNotes(), draft.priceMode(), draft.documentLanguage(),
+            draft.currency(), null, null, null, null, "BEFORE_DELIVERY", null, null, null, null, null,
+            draft.items().stream().map(this::asItemInput).toList());
+        DealQuotationDto saved = quotationService.update(draft.id(), zeroDeposit, salesActor);
+        DealQuotationDto submitted = quotationService.submit(saved.id(), salesActor);
+        DealQuotationDto issued = quotationService.approve(submitted.id(), new ApproveRequest(null), salesManagerActor);
         return quotationService.recordOutcome(issued.id(),
             new RecordOutcomeRequest(QuotationStatus.ACCEPTED, "ลูกค้าโอเค", UUID.randomUUID().toString()), salesActor);
     }
