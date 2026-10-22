@@ -484,9 +484,9 @@ public class OrderConfirmationService {
                 throw new ApiException(HttpStatus.CONFLICT, "ยังไม่มีใบเสนอราคาที่ลูกค้ายอมรับสำหรับคำขอราคานี้");
             }
             // A zero-deposit quotation (DealQuotationService#isZeroDeposit: "ไม่รับมัดจำ", paid in
-            // full under fullPaymentTerm) has nothing to bill. Refuse here rather than draft a
-            // 0-baht notice: DepositNoticeService#issue reads the ticket's deposit_policy, which no
-            // path syncs from the quotation, so nothing downstream would stop that draft.
+            // full under fullPaymentTerm) has nothing to bill. Since #1173 the confirmation above
+            // moves such a deal to NOT_REQUIRED and createDraftFromQuotation refuses a bypass policy;
+            // this check stays for deals confirmed before that sync existed (still REQUIRED).
             if (Integer.valueOf(0).equals(newEngine.depositPercent())) {
                 throw DepositNoticeService.zeroDepositRefusal(newEngine.number());
             }

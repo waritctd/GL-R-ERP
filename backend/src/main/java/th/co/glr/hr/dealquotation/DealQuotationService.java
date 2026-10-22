@@ -1711,6 +1711,16 @@ public class DealQuotationService {
             quotations.supersede(ancestorId);
             ancestorId = ancestor.parentQuotationId();
         }
+        // #1173 review F1: on a confirmed deal the system-owned deposit policy follows the newly
+        // approved quotation, so a revision that adds or drops the deposit moves the deal with it.
+        // A no-op before confirmation (confirmOrderFromDirectQuotation applies the confirmed
+        // quotation's percent then). Null-tolerant for hand-wired tests, like
+        // #advanceDealToRecipientStage. PRICING_REQUEST origin never reaches this: R8 allows one
+        // accepted quotation per deal, and its percent is applied at OrderConfirmationService#confirmOrder.
+        if (ticketService != null) {
+            ticketService.followQuotationDepositPolicy(approved.ticketId(), approved.number(),
+                approved.depositPercent(), actor);
+        }
         tickets.addEventWithDocument(approved.ticketId(), actor.id(), actor.name(), TicketEventKind.QUOTATION_ISSUED,
             null, null, "อนุมัติใบเสนอราคา " + approved.number(), RelatedDocumentType.QUOTATION, id);
         String message = "ใบเสนอราคา " + approved.number() + " ได้รับอนุมัติแล้ว";
@@ -2107,9 +2117,10 @@ public class DealQuotationService {
      *   <li>{@code sales.ticket_item} replaced by the quotation's own goods lines (see
      *       {@link #ticketItemsFromQuotation}) — the delivery machinery's quantity source; the
      *       quotation is the agreed order, so it replaces any preliminary lines the deal carried;</li>
-     *   <li>{@code TicketService#confirmCustomerForPromotedQuotation} — the unmodified
-     *       confirmCustomer body: {@code payment_status = CUSTOMER_CONFIRMED}, stage auto-advanced to
-     *       {@code ORDER_RECEIVED}.</li>
+     *   <li>{@code TicketService#confirmCustomerForPromotedQuotation} — confirmCustomer's shared
+     *       body: {@code payment_status = CUSTOMER_CONFIRMED}, the deposit policy following this
+     *       quotation's percent ({@code TicketService#followQuotationDepositPolicy}), stage
+     *       auto-advanced to {@code ORDER_RECEIVED}.</li>
      * </ol>
      *
      * <p><strong>Order of checks</strong>: quotation exists on this engine (404 — a LEGACY
