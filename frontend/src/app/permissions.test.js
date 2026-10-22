@@ -788,10 +788,11 @@ describe('quotation release through the self-service lockdown', () => {
   });
 });
 
-// An import user landing on a whole-deal URL (a backend notification deep-link, an old bookmark)
-// is sent to their own page for that deal instead of a dead-end refusal.
+// An import or account user landing on a whole-deal URL (a backend notification deep-link, an old
+// bookmark) is sent to their own page for that deal instead of a dead-end refusal.
 describe('dealRedirectFor', () => {
   const importer = { role: 'import', employeeId: 2 };
+  const account = { role: 'account', employeeId: 3 };
 
   it('maps /tickets/:id to /import/deals/:id for import only', () => {
     expect(dealRedirectFor('/tickets/12', importer)).toBe('/import/deals/12');
@@ -806,5 +807,21 @@ describe('dealRedirectFor', () => {
     expect(dealRedirectFor('/tickets/abc', importer)).toBeNull();
     expect(dealRedirectFor('/fulfilment', importer)).toBeNull();
     expect(dealRedirectFor('/tickets/12', null)).toBeNull();
+  });
+
+  // Account's deposit-notice notification (DepositNoticeService -> notifyByRole('account')) links
+  // /tickets/:id; account works a deal on /finance/deals/:id. Unlike import, the sub-paths
+  // (/tickets/:id/deposit) have an account equivalent, so they redirect too.
+  it('maps /tickets/:id and its sub-paths to /finance/deals/:id for account', () => {
+    expect(dealRedirectFor('/tickets/12', account)).toBe('/finance/deals/12');
+    expect(dealRedirectFor('/tickets/12/', account)).toBe('/finance/deals/12');
+    expect(dealRedirectFor('/tickets/12/deposit', account)).toBe('/finance/deals/12');
+    expect(dealRedirectFor('/tickets/12?from=bell', account)).toBe('/finance/deals/12');
+  });
+
+  it('does not redirect account off the pipeline list or non-deal paths', () => {
+    expect(dealRedirectFor('/tickets', account)).toBeNull();
+    expect(dealRedirectFor('/tickets/abc', account)).toBeNull();
+    expect(dealRedirectFor('/quotations/5', account)).toBeNull();
   });
 });
