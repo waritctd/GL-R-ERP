@@ -1052,7 +1052,7 @@ class DepositNoticeServiceTest {
     }
 
     @Test
-    void update_refusesAZeroDepositPercent_andWritesNothing() {
+    void update_refusesAZeroOrFractionalDepositPercent_andWritesNothing() {
         stubDraft(99L, 10L);
         stubTicket(10L, TicketStatus.APPROVED, null);
 
@@ -1062,6 +1062,14 @@ class DepositNoticeServiceTest {
             .isInstanceOfSatisfying(ApiException.class, e -> {
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
                 assertThat(e.getMessage()).isEqualTo("เปอร์เซ็นต์มัดจำต้องมากกว่า 0");
+            });
+        // 40.5% would print as "41%" on the document while billing 40.5%.
+        assertThatThrownBy(() -> service.update(99L,
+                new DepositNoticeDraftRequest("ACME", null, null, null, "REF-2", new BigDecimal("0.405"), null, null),
+                owner))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                assertThat(e.getMessage()).isEqualTo("เปอร์เซ็นต์มัดจำต้องเป็นจำนวนเต็ม");
             });
         verify(docs, never()).update(anyLong(), any());
     }

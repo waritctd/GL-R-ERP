@@ -342,7 +342,7 @@ describe('mockApi.depositNotices.issue hasPdf/hasXlsx (issue #752: mock reproduc
 // Owner ruling 2026-10-23 (mirrors DepositNoticeService.update): sales may change the deposit %
 // on a DRAFT and the amount follows; 0 is refused; an ISSUED notice refuses every edit.
 describe('mockApi.depositNotices.update deposit percent', () => {
-  it('on a DRAFT takes the new percent and recomputes the amount; 0 is refused', async () => {
+  it('on a DRAFT takes the new percent and recomputes the amount; 0, over 100% and fractional are refused', async () => {
     const { ticketId } = await driveTicketToAcceptedQuotation();
     const { depositNotice: draft } = await api.depositNotices.createDraft(ticketId, { notes: [] });
     expect(draft.subtotal).toBeGreaterThan(0);
@@ -354,6 +354,13 @@ describe('mockApi.depositNotices.update deposit percent', () => {
 
     await expect(api.depositNotices.update(draft.id, { depositPercent: 0 }))
       .rejects.toMatchObject({ status: 400, message: 'เปอร์เซ็นต์มัดจำต้องมากกว่า 0' });
+    await expect(api.depositNotices.update(draft.id, { depositPercent: 1.5 }))
+      .rejects.toMatchObject({ status: 400, message: 'depositPercent เปอร์เซ็นต์มัดจำต้องไม่เกิน 100' });
+    await expect(api.depositNotices.update(draft.id, { depositPercent: 0.405 }))
+      .rejects.toMatchObject({ status: 400, message: 'เปอร์เซ็นต์มัดจำต้องเป็นจำนวนเต็ม' });
+    // 0.29 * 100 is 28.999999999999996 in floating point; it is still a whole 29%.
+    await api.depositNotices.update(draft.id, { depositPercent: 0.29, items: draft.items });
+    await api.depositNotices.update(draft.id, { depositPercent: 0.4, items: draft.items });
     const { depositNotice: reread } = await api.depositNotices.get(draft.id);
     expect(reread.depositPercent).toBe(0.4);
   });
