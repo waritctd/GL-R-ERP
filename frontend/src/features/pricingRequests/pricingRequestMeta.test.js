@@ -447,6 +447,9 @@ describe('canCreateDepositNoticeFromQuotation', () => {
       { docStatus: 'ACCEPTED', depositPercent: 0 })).toBe(false);
     expect(canCreateDepositNoticeFromQuotation(salesOwner, confirmed,
       { docStatus: 'ACCEPTED', depositPercent: 30 })).toBe(true);
+    // A blank percent is NOT ไม่รับมัดจำ: the PDF prints it as 30% (#1170), so the button stays.
+    expect(canCreateDepositNoticeFromQuotation(salesOwner, confirmed,
+      { docStatus: 'ACCEPTED', depositPercent: null })).toBe(true);
     expect(canCreateDepositNoticeFromQuotation(salesOwner, confirmed, null)).toBe(true); // legacy chain
   });
 });
