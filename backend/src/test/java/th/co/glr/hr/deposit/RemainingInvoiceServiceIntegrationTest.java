@@ -866,9 +866,13 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
 
         orderConfirmation.confirmOrder(pricingRequestId,
             new ConfirmOrderRequest(UUID.randomUUID().toString()), owner);
-        DepositNoticeDto depositDraft = orderConfirmation.createDepositNoticeFromQuotation(pricingRequestId,
-            new CreateDepositNoticeFromQuotationRequest(null), owner);
-        DepositNoticeDto depositIssued = depositNoticeService.issue(depositDraft.id(), owner);
+        // Chain A already holds an ISSUED deposit notice on this ticket, so both create routes refuse
+        // a second draft (owner ruling 2026-10-23). Chain B's notice is written by the repository with
+        // the reference and lines the pricing-request route would use, then issued for real.
+        long depositDraftId = new DepositNoticeRepository(jdbc).createDraft(ticketId,
+            new DepositNoticeDraftRequest(null, null, null, null, issuedB.number(), new BigDecimal("0.50"), List.of(), null),
+            DepositNoticeService.itemsFromQuotation(issuedB.items()));
+        DepositNoticeDto depositIssued = depositNoticeService.issue(depositDraftId, owner);
 
         return new DealFixture(ticketId, pricingRequestId, depositIssued.id());
     }

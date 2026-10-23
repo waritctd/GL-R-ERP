@@ -34,6 +34,8 @@ import th.co.glr.hr.dealquotation.DealQuotationRequests.ItemInput;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.UpsertDealQuotationRequest;
 import th.co.glr.hr.deposit.DepositNoticeDraftRequest;
 import th.co.glr.hr.deposit.DepositNoticeDto;
+import th.co.glr.hr.deposit.DepositNoticeItemDto;
+import th.co.glr.hr.deposit.DepositNoticeItemRequest;
 import th.co.glr.hr.deposit.DepositNoticeRenderer;
 import th.co.glr.hr.deposit.DepositNoticeRepository;
 import th.co.glr.hr.deposit.DepositNoticeService;
@@ -252,7 +254,30 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
         DepositNoticeDto draft = depositNoticeService.createDraft(ghost,
             new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), salesActor);
         assertThat(draft.ticketId()).isEqualTo(ghost);
-        assertThat(draft.items()).isNotEmpty();
+        // Owner ruling 2026-10-23: the ส่วนลดพิเศษ ADJUSTMENT row (qty -1, -100.00) is folded into the
+        // goods lines by amount: TILE 10 x 100 and PLAIN 2 x 500 take 50.00 each. No negative qty, the
+        // descriptions are the goods lines' own, and the subtotal is the quotation's 1,900.
+        assertThat(draft.items())
+            .extracting(i -> i.qty().stripTrailingZeros().toPlainString(), i -> i.unitPrice().toPlainString(),
+                i -> i.netUnitPrice().toPlainString(), DepositNoticeItemDto::discountLabel)
+            .containsExactly(
+                org.assertj.core.groups.Tuple.tuple("10", "100.00", "95.00", "ส่วนลด 5 ต่อหน่วย"),
+                org.assertj.core.groups.Tuple.tuple("2", "500.00", "475.00", "ส่วนลด 25 ต่อหน่วย"));
+        assertThat(draft.items()).extracting(DepositNoticeItemDto::description).doesNotContain("ส่วนลดพิเศษ")
+            .last().isEqualTo("ค่าขนส่ง");
+        assertThat(draft.subtotal()).isEqualByComparingTo("1900.00");
+
+        // The page sends every line back on save; @PositiveOrZero qty used to refuse the whole PUT.
+        DepositNoticeDraftRequest pagePut = new DepositNoticeDraftRequest(
+            draft.customerName(), draft.customerTaxId(), draft.customerAddress(), draft.projectName(),
+            draft.reference(), draft.depositPercent(), draft.notes(),
+            draft.items().stream().map(i -> new DepositNoticeItemRequest(i.seq(), i.description(), i.qty(),
+                i.unit(), i.unitPrice(), i.discountLabel(), i.netUnitPrice())).toList(),
+            draft.updatedAt());
+        try (var factory = jakarta.validation.Validation.buildDefaultValidatorFactory()) {
+            assertThat(factory.getValidator().validate(pagePut)).isEmpty();
+        }
+        assertThat(depositNoticeService.update(draft.id(), pagePut, salesActor).subtotal()).isEqualByComparingTo("1900.00");
     }
 
     /** The same deposit-notice draft is REFUSED before confirmation — the negative half of "the money

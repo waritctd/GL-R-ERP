@@ -248,6 +248,31 @@ class DepositNoticeIssueGuardIntegrationTest extends AbstractPostgresIntegration
         assertThat(secondReread.docNumber()).isEqualTo(secondDocNumber.get());
     }
 
+    // Owner ruling 2026-10-23: one deposit notice per deal. While one is ISSUED, neither create route
+    // drafts another (re-creating re-seeded the % from the quotation and a later issue silently
+    // superseded the customer's document). Re-versioning an issued notice is a separate change.
+    @Test
+    void createDraft_isRefusedOnBothRoutesWhileAnIssuedNoticeExists_noNewRow() {
+        IssuedNoticeFixture fixture = buildTicketWithIssuedDepositNotice();
+        String message = "ดีลนี้ออกใบแจ้งรับมัดจำเลขที่ " + fixture.docNumber() + " แล้ว จึงสร้างฉบับร่างใหม่ไม่ได้";
+
+        assertThatThrownBy(() -> depositNoticeService.createDraft(fixture.ticketId(),
+                new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(e.getMessage()).isEqualTo(message);
+            });
+        assertThatThrownBy(() -> orderConfirmation.createDepositNoticeFromQuotation(fixture.pricingRequestId(),
+                new CreateDepositNoticeFromQuotationRequest(null), salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(e.getMessage()).isEqualTo(message);
+            });
+
+        assertThat(depositNoticeRepository.findByTicket(fixture.ticketId()))
+            .extracting(DepositNoticeDto::id).containsExactly(fixture.docId());
+    }
+
     // Owner ruling 2026-10-23: sales may change the deposit % on a DRAFT; the amount follows.
     @Test
     void update_onADraft_changesThePercentAndTheAmountFollows() {

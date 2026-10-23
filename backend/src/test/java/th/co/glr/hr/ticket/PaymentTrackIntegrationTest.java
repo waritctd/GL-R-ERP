@@ -282,8 +282,14 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(paymentStatusOf(deal.ticketId())).isEqualTo(PaymentTrack.DEPOSIT_NOTICE_ISSUED);
 
         // A revision: a NEW draft on the SAME ticket, issued while payment_status is still
-        // DEPOSIT_NOTICE_ISSUED — PaymentTrack's one legal self-loop (guard e).
-        long secondDraftId = depositNoticeService.createDraft(deal.ticketId(), bareDraftRequest(), salesActor).id();
+        // DEPOSIT_NOTICE_ISSUED — PaymentTrack's one legal self-loop (guard e). Since the owner
+        // ruling of 2026-10-23 the create routes refuse a draft while a notice is ISSUED, so the
+        // second draft is written by the repository, as the separate re-version change will.
+        assertThatThrownBy(() -> depositNoticeService.createDraft(deal.ticketId(), bareDraftRequest(), salesActor))
+            .isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        long secondDraftId = depositNoticeRepository.createDraft(
+            deal.ticketId(), bareDraftRequest(), bareDraftRequest().items());
         DepositNoticeDto secondIssued = depositNoticeService.issue(secondDraftId, salesActor);
 
         assertThat(secondIssued.docNumber()).isNotEqualTo(firstIssued.docNumber());
