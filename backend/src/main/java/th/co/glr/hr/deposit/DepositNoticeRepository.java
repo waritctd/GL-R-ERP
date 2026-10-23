@@ -157,6 +157,31 @@ public class DepositNoticeRepository {
         return v2Pct != null ? Optional.of(BigDecimal.valueOf(v2Pct, 2)) : Optional.empty();
     }
 
+    /** The quotation a ticket-level deposit notice bills; {@code depositPercent} is a fraction (0.30). */
+    public record GoverningQuotation(long quotationId, boolean legacy, String number, BigDecimal depositPercent) {}
+
+    /** RED-commit compile scaffold: today's two-step pick (legacy first), unchanged behaviour. */
+    public Optional<GoverningQuotation> findGoverningQuotation(long ticketId) {
+        List<GoverningQuotation> legacy = jdbc.query("""
+            SELECT quotation_id, number, COALESCE(deposit_percent, 50) AS pct FROM sales.quotation
+             WHERE ticket_id = :ticketId AND pricing_request_id IS NOT NULL AND origin IS NULL
+               AND doc_status IN ('ACCEPTED','ISSUED')
+             ORDER BY CASE doc_status WHEN 'ACCEPTED' THEN 0 ELSE 1 END, quotation_id DESC
+             LIMIT 1
+            """, Map.of("ticketId", ticketId), (rs, i) -> new GoverningQuotation(
+                rs.getLong("quotation_id"), true, rs.getString("number"), BigDecimal.valueOf(rs.getInt("pct"), 2)));
+        if (!legacy.isEmpty()) return Optional.of(legacy.get(0));
+        return jdbc.query("""
+            SELECT quotation_id, number, COALESCE(deposit_percent, :pdfDefault) AS pct FROM sales.quotation
+             WHERE ticket_id = :ticketId AND origin IN ('PRICING_REQUEST','DEAL_DIRECT')
+               AND doc_status IN ('ACCEPTED','ISSUED','APPROVED')
+             ORDER BY CASE doc_status WHEN 'ACCEPTED' THEN 0 WHEN 'ISSUED' THEN 1 ELSE 2 END, quotation_id DESC
+             LIMIT 1
+            """, Map.of("ticketId", ticketId, "pdfDefault", DealQuotationRenderAdapter.DEFAULT_DEPOSIT_PERCENT),
+            (rs, i) -> new GoverningQuotation(rs.getLong("quotation_id"), false, rs.getString("number"),
+                BigDecimal.valueOf(rs.getInt("pct"), 2))).stream().findFirst();
+    }
+
     /** First mapped row or {@code null} when the query matched nothing. Both queries above now
      * COALESCE the percent, so a mapped value is never null; this stays index-based rather than
      * {@code stream().findFirst()} so a future null column cannot turn into an NPE. */
