@@ -694,8 +694,8 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     // ── B5 fix: findPricingChainFallbackItems — the read-only display fallback for a deal
-    //    whose sales.ticket_item is still empty (pre-order-confirmation), mirroring
-    //    DepositNoticeRepository#findDealQuotationItemsForDeposit's live-quotation pick.
+    //    whose sales.ticket_item is still empty (pre-order-confirmation), picking the deal's
+    //    live new-engine quotation.
     //    Real Postgres only: the priority CASE/ORDER BY and the origin/doc_status filters
     //    cannot be proven against a mocked repository. ─────────────────────────────────────
 
@@ -732,8 +732,7 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         insertQuotationWithItem(ticketId, "PRICING_REQUEST", "ISSUED",
             "Stale", "Issued", null, null, null, new BigDecimal("1"));
         // ...and a newer ACCEPTED DEAL_DIRECT-origin one. ACCEPTED must win regardless of
-        // which origin table it came from or insertion order (mirrors
-        // findDealQuotationItemsForDeposit's own CASE doc_status priority).
+        // which origin it came from or insertion order (the method's own CASE doc_status priority).
         insertQuotationWithItem(ticketId, "DEAL_DIRECT", "ACCEPTED",
             "Live", "Accepted", null, null, null, new BigDecimal("2"));
 

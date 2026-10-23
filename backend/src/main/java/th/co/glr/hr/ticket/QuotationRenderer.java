@@ -73,6 +73,12 @@ import th.co.glr.hr.ticket.QuotationRenderModel.Signatories;
 public class QuotationRenderer {
     private static final Logger log = LoggerFactory.getLogger(QuotationRenderer.class);
 
+    /** The deposit percent the legacy PDF prints when its {@code QuotationDto} carries none. A
+     * pricing-chain legacy quotation never carries one ({@code CustomerQuotationService
+     * #loadRenderContext}), so its PDF always prints this, and its deposit notice bills it (owner
+     * ruling 2026-10-23). */
+    public static final int LEGACY_DEPOSIT_PERCENT = 50;
+
     // Real company XLS template — sheet "Update"
     private static final String TEMPLATE = "templates/quotation_template.xls";
 
@@ -322,7 +328,7 @@ public class QuotationRenderer {
         List<RenderItem> items = priceItems.stream().map(this::toLegacyRenderItem).toList();
 
         LocalDate offerDate = quotation.offerDate() != null ? quotation.offerDate() : issueDate;
-        int depositPct = quotation.depositPercent() != null ? quotation.depositPercent() : 50;
+        int depositPct = quotation.depositPercent() != null ? quotation.depositPercent() : LEGACY_DEPOSIT_PERCENT;
         int deliveryDays = quotation.deliveryLeadDays() != null ? quotation.deliveryLeadDays() : 90;
         List<String> remarkLines = List.of(
             "1.จำนวนที่เสนอข้างต้นเป็นจำนวนที่ได้รับมาเมื่อวันที่  " + shortThaiDate(offerDate),
