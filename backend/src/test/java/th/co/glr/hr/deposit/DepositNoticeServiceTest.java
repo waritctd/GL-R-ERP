@@ -1078,6 +1078,28 @@ class DepositNoticeServiceTest {
             .containsExactly("0.333", "0.4");
     }
 
+    // DepositNoticeRepository#foldAdjustments (owner ruling 2026-10-23): the ส่วนลดพิเศษ amount is
+    // spread by line amount, HALF_UP per share, the remainder on the last line that has an amount,
+    // so the folded lines still sum to the quotation's total. A free line keeps its 0.
+    @Test
+    void foldAdjustments_putsTheRoundingRemainderOnTheLastLineWithAnAmount() {
+        List<DepositNoticeItemRequest> folded = DepositNoticeRepository.foldAdjustments(List.of(
+            foldLine(1, "1", "100.00"), foldLine(2, "1", "100.00"), foldLine(3, "1", "100.00"),
+            foldLine(4, "2", "0.00")), new BigDecimal("-100.00"));
+
+        assertThat(folded).extracting(it -> it.netUnitPrice().toPlainString())
+            .containsExactly("66.67", "66.67", "66.66", "0.00");
+        assertThat(folded.stream().map(it -> it.netUnitPrice().multiply(it.qty())).reduce(BigDecimal.ZERO, BigDecimal::add))
+            .isEqualByComparingTo("200.00");
+        assertThat(folded.get(2).discountLabel()).isEqualTo("ส่วนลด 33.34 ต่อหน่วย");
+        assertThat(folded.get(3).discountLabel()).isNull();
+    }
+
+    private static DepositNoticeItemRequest foldLine(int seq, String qty, String net) {
+        return new DepositNoticeItemRequest(seq, "Line " + seq, new BigDecimal(qty), "แผ่น",
+            new BigDecimal(net), null, new BigDecimal(net));
+    }
+
     private static void assertForbidden(org.assertj.core.api.ThrowableAssert.ThrowingCallable action) {
         assertThatThrownBy(action)
             .isInstanceOfSatisfying(ApiException.class, e ->

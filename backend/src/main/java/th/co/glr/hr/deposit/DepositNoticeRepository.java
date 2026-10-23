@@ -386,14 +386,23 @@ public class DepositNoticeRepository {
      * items. Reads the RESOLVED display columns the quotation itself prints
      * ({@code qty}/{@code raw_unit}/{@code unit_price}/{@code final_unit_price}), NOT the legacy
      * {@code requested_*}/{@code approved_unit_price} columns the V2 chain leaves null. The
-     * discount-label wording matches {@link DepositNoticeService#itemsFromQuotation}. */
+     * discount-label wording matches {@link DepositNoticeService#itemsFromQuotation}. An ADJUSTMENT
+     * row is folded into the goods lines, see {@link #foldAdjustments}. */
     public List<DepositNoticeItemRequest> findDealQuotationItems(long quotationId) {
-        return jdbc.query("""
-            SELECT seq, description, qty, raw_unit, unit_price, sales_discount, final_unit_price
+        List<DepositNoticeItemRequest> goods = new java.util.ArrayList<>();
+        BigDecimal[] adjustment = {BigDecimal.ZERO};
+        jdbc.query("""
+            SELECT seq, description, qty, raw_unit, unit_price, sales_discount, final_unit_price, line_type
               FROM sales.quotation_item
              WHERE quotation_id = :quotationId
              ORDER BY seq
-            """, Map.of("quotationId", quotationId), (rs, i) -> {
+            """, Map.of("quotationId", quotationId), rs -> {
+                if ("ADJUSTMENT".equals(rs.getString("line_type"))) {
+                    BigDecimal net = rs.getBigDecimal("final_unit_price");
+                    BigDecimal qty = rs.getBigDecimal("qty");
+                    if (net != null && qty != null) adjustment[0] = adjustment[0].add(net.multiply(qty));
+                    return;
+                }
                 String description = rs.getString("description");
                 if (description == null || description.isBlank()) {
                     description = "รายการสินค้า";
@@ -406,10 +415,52 @@ public class DepositNoticeRepository {
                 String discountLabel = discount != null && discount.signum() > 0
                     ? "ส่วนลด " + discount.stripTrailingZeros().toPlainString() + " ต่อหน่วย"
                     : null;
-                return new DepositNoticeItemRequest(
+                goods.add(new DepositNoticeItemRequest(
                     rs.getInt("seq"), description, rs.getBigDecimal("qty"), unit,
-                    rs.getBigDecimal("unit_price"), discountLabel, rs.getBigDecimal("final_unit_price"));
+                    rs.getBigDecimal("unit_price"), discountLabel, rs.getBigDecimal("final_unit_price")));
             });
+        return foldAdjustments(goods, adjustment[0]);
+    }
+
+    /**
+     * Owner ruling 2026-10-23: a DEAL_DIRECT ส่วนลดพิเศษ row (ADJUSTMENT, qty -1) cannot be a
+     * deposit line (the editor's PUT requires qty &gt;= 0), so its amount is spread over the goods
+     * lines in proportion to their amount: each share HALF_UP to 2 dp, the remainder on the last
+     * line with an amount, so the shares sum to the adjustment exactly. Descriptions are kept; a
+     * changed line's label shows its new per-unit discount.
+     * ponytail: the new net is stored at 2 dp, so a line whose qty does not divide its new amount
+     * moves the subtotal by under qty x 0.005 baht; spread per unit if that ever matters.
+     */
+    static List<DepositNoticeItemRequest> foldAdjustments(List<DepositNoticeItemRequest> goods,
+                                                          BigDecimal adjustment) {
+        BigDecimal goodsTotal = goods.stream().map(it -> it.netUnitPrice().multiply(it.qty()))
+            .reduce(BigDecimal.ZERO, BigDecimal::add);
+        if (adjustment.signum() == 0 || goodsTotal.signum() == 0) {
+            return goods;
+        }
+        int last = -1;
+        for (int i = 0; i < goods.size(); i++) {
+            if (goods.get(i).netUnitPrice().multiply(goods.get(i).qty()).signum() != 0) last = i;
+        }
+        List<DepositNoticeItemRequest> folded = new java.util.ArrayList<>();
+        BigDecimal left = adjustment;
+        for (int i = 0; i < goods.size(); i++) {
+            DepositNoticeItemRequest it = goods.get(i);
+            BigDecimal amount = it.netUnitPrice().multiply(it.qty());
+            if (amount.signum() == 0) {
+                folded.add(it);
+                continue;
+            }
+            BigDecimal share = i == last ? left
+                : adjustment.multiply(amount).divide(goodsTotal, 2, RoundingMode.HALF_UP);
+            left = left.subtract(share);
+            BigDecimal net = amount.add(share).divide(it.qty(), 2, RoundingMode.HALF_UP);
+            BigDecimal perUnit = it.unitPrice().subtract(net);
+            folded.add(new DepositNoticeItemRequest(it.seq(), it.description(), it.qty(), it.unit(), it.unitPrice(),
+                perUnit.signum() > 0 ? "ส่วนลด " + perUnit.stripTrailingZeros().toPlainString() + " ต่อหน่วย" : null,
+                net));
+        }
+        return folded;
     }
 
     private List<DepositNoticeItemDto> findItems(long docId) {

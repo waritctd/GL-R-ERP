@@ -103,6 +103,12 @@ public class DepositNoticeService {
                                                      Integer sourceDepositPercent, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
         requireTicketOwner(ticketId, actor);
+        // Owner ruling 2026-10-23: one deposit notice per deal. A new draft would re-seed the % from
+        // the quotation and, once issued, silently supersede the customer's document.
+        docs.findByTicket(ticketId).stream().filter(d -> "ISSUED".equals(d.status())).findFirst().ifPresent(d -> {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ดีลนี้ออกใบแจ้งรับมัดจำเลขที่ " + d.docNumber() + " แล้ว จึงสร้างฉบับร่างใหม่ไม่ได้");
+        });
         TicketSummaryDto s = requireApprovedTicket(ticketId, actor);
         requireActiveLifecycle(s);
         // Both routes: a deal off the deposit path (a ไม่รับมัดจำ quotation, a waiver, a credit
