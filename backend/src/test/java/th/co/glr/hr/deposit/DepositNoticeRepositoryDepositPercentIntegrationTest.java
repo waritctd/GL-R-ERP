@@ -99,11 +99,20 @@ class DepositNoticeRepositoryDepositPercentIntegrationTest extends AbstractPostg
         assertGoverning(ticketId, issued, true, "0.50");
     }
 
+    /** A ticket-level legacy quotation ({@code pricing_request_id IS NULL}) never governs, even
+     * ACCEPTED and newest: the scope is {@code CustomerQuotationRepository#findByTicket}'s. */
     @Test
-    void legacyChain_ignoresNonLiveStatusesLikeDraftOrRejected() {
+    void legacyChain_ignoresNonLiveStatusesAndTicketLevelQuotations() {
         long ticketId = newTicketWithPricingRequestDraft();
         insertLegacyQuotation(ticketId, "DRAFT", (short) 40);
         insertLegacyQuotation(ticketId, "REJECTED", (short) 50);
+        int version = ++quotationVersionSeq;
+        jdbc.update("""
+            INSERT INTO sales.quotation (ticket_id, number, issued_by, doc_status, quotation_version)
+            VALUES (:ticketId, :number, :issuedBy, 'ACCEPTED', :version)
+            """, new MapSqlParameterSource().addValue("ticketId", ticketId)
+                .addValue("number", "QTD" + ticketId + "-" + version).addValue("issuedBy", employeeId)
+                .addValue("version", version));
 
         assertThat(depositNotices.findGoverningQuotation(ticketId)).isEmpty();
     }
