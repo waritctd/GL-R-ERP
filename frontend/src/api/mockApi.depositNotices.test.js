@@ -290,15 +290,16 @@ describe('mockApi.pricingRequests.createDepositNoticeFromQuotation — new-engin
     expect(depositNotices).toHaveLength(0);
   });
 
-  // A zero-deposit ("ไม่รับมัดจำ", full payment) quotation has nothing to bill: Java refuses rather
-  // than drafting a 0-baht document that nothing downstream would stop from being issued.
-  it('rejects a 0% (full-payment) new-engine quotation with 409 and creates no draft', async () => {
+  // A zero-deposit ("ไม่รับมัดจำ", full payment) quotation has nothing to bill: Java refuses on both
+  // routes rather than drafting a 0-baht document that nothing downstream would stop from being issued.
+  it('rejects a 0% (full-payment) new-engine quotation with 409 on both routes and creates no draft', async () => {
     const { ticketId, prId, accepted } = await driveTicketToNewEngineAcceptedQuotation({
       depositPercent: 0, fullPaymentTerm: 'BEFORE_DELIVERY',
     });
     expect(accepted.depositPercent).toBe(0);
-    await expect(api.pricingRequests.createDepositNoticeFromQuotation(prId, {}))
-      .rejects.toMatchObject({ status: 409, message: expect.stringContaining('ไม่มีมัดจำ') });
+    const refusal = { status: 409, message: expect.stringContaining(`ใบเสนอราคา ${accepted.number} ระบุไม่มีมัดจำ`) };
+    await expect(api.pricingRequests.createDepositNoticeFromQuotation(prId, {})).rejects.toMatchObject(refusal);
+    await expect(api.depositNotices.createDraft(ticketId, {})).rejects.toMatchObject(refusal);
     const { depositNotices } = await api.depositNotices.listByTicket(ticketId);
     expect(depositNotices).toHaveLength(0);
   });

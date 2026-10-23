@@ -294,12 +294,13 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
             Map.of("id", ticketId), Long.class)).isZero();
     }
 
-    /** A zero-deposit quotation ("ไม่รับมัดจำ", full payment) has no deposit to bill: the route must
-     * refuse rather than draft a 0-baht document, which nothing downstream would stop from being
-     * issued ({@code DepositNoticeService#issue} reads the ticket's deposit_policy, which no path
-     * syncs from a 0% quotation). */
+    /** A zero-deposit quotation ("ไม่รับมัดจำ", full payment) has no deposit to bill: both routes
+     * must refuse rather than draft a 0-baht document, which nothing downstream would stop from
+     * being issued ({@code DepositNoticeService#issue} reads the ticket's deposit_policy, which no
+     * path syncs from a 0% quotation). The ticket route refuses because this quotation governs the
+     * ticket; a DEAL_DIRECT deal has only that route. */
     @Test
-    void createDepositNoticeFromQuotation_newEngineAcceptedZeroDeposit_409AndNoDraft() {
+    void createDepositNotice_newEngineAcceptedZeroDeposit_bothRoutes409AndNoDraft() {
         DealQuotationDto accepted = acceptedZeroDepositNewOriginQuotation(PricingRequestRecipient.DESIGNER,
             new BigDecimal("10"));
         long pricingRequestId = accepted.pricingRequestId();
@@ -307,11 +308,17 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         orderConfirmation.confirmOrder(pricingRequestId,
             new OrderConfirmationRequests.ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
 
+        String refusal = "ใบเสนอราคา " + accepted.number() + " ระบุไม่มีมัดจำ";
         assertThatThrownBy(() -> orderConfirmation.createDepositNoticeFromQuotation(pricingRequestId,
                 new OrderConfirmationRequests.CreateDepositNoticeFromQuotationRequest(null), salesActor))
             .isInstanceOf(ApiException.class)
             .hasFieldOrPropertyWithValue("status", HttpStatus.CONFLICT)
-            .hasMessageContaining("ไม่มีมัดจำ");
+            .hasMessageContaining(refusal);
+        assertThatThrownBy(() -> depositNoticeService.createDraft(ticketId,
+                new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.CONFLICT)
+            .hasMessageContaining(refusal);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sales.deposit_notice WHERE ticket_id = :id",
             Map.of("id", ticketId), Long.class)).isZero();
     }
