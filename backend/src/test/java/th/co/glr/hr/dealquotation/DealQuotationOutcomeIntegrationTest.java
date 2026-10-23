@@ -11,6 +11,8 @@ import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.http.HttpStatus;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.auth.EmployeeAuthRepository;
@@ -251,6 +253,8 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
     @Test
     void createDepositNoticeFromQuotation_newEngineAcceptedQuotation_createsTheSameDraftTheTicketRouteWould() {
         DealQuotationDto accepted = acceptedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
+        // The PDF prints a NULL percent as DealQuotationRenderAdapter.DEFAULT_DEPOSIT_PERCENT (30).
+        assertThat(accepted.depositPercent()).isNull();
         long pricingRequestId = accepted.pricingRequestId();
         orderConfirmation.confirmOrder(pricingRequestId,
             new OrderConfirmationRequests.ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
@@ -265,6 +269,7 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         // Items and percent are exactly what the ticket-level route produces for this deal (shared createDraft).
         DepositNoticeDto viaTicket = depositNoticeService.createDraft(ticketId,
             new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), salesActor);
+        assertThat(viaPricingRequest.depositPercent()).isEqualByComparingTo("0.30");
         assertThat(viaPricingRequest.depositPercent()).isEqualByComparingTo(viaTicket.depositPercent());
         assertThat(viaPricingRequest.items())
             .usingRecursiveComparison().ignoringFields("id")
@@ -349,14 +354,18 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
 
     /** Engines are exclusive per pricing request, not per ticket: a sibling pricing request's
      * legacy ISSUED quotation must not supply the lines or the percent of this pricing request's
-     * draft. */
-    @Test
-    void createDepositNoticeFromQuotation_newEngineAccepted_whenASiblingPricingRequestHasALegacyIssuedQuotation_draftsThisQuotationsLinesAndPercent() {
+     * draft. The draft bills this quotation's own percent, a NULL one as the 30% its PDF prints. */
+    @ParameterizedTest(name = "quotation percent {0} bills {1}")
+    @CsvSource({", 0.30", "50, 0.50"})
+    void createDepositNoticeFromQuotation_newEngineAccepted_whenASiblingPricingRequestHasALegacyIssuedQuotation_draftsThisQuotationsLinesAndPercent(
+            Integer quotationPercent, BigDecimal expectedDraftPercent) {
         CustomerQuotationDto legacyIssued = issuedLegacyQuotation(PricingRequestRecipient.OWNER);
         // No code path writes deposit_percent on a legacy row; this stands in for one that carries it.
         assertThat(jdbc.update("UPDATE sales.quotation SET deposit_percent = 70 WHERE quotation_id = :id",
             Map.of("id", legacyIssued.id()))).isEqualTo(1);
-        DealQuotationDto accepted = acceptedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"), 30);
+        DealQuotationDto accepted = acceptedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"),
+            quotationPercent);
+        assertThat(accepted.depositPercent()).isEqualTo(quotationPercent);
         long pricingRequestId = accepted.pricingRequestId();
         orderConfirmation.confirmOrder(pricingRequestId,
             new OrderConfirmationRequests.ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
@@ -376,80 +385,19 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(draft.reference()).isEqualTo(accepted.number());
         assertThat(draft.items().stream().map(it -> line(it.qty(), it.netUnitPrice())).toList())
             .isEqualTo(thisQuotationsLines);
-        assertThat(accepted.depositPercent()).isEqualTo(30);
-        assertThat(draft.depositPercent()).isEqualByComparingTo("0.30");
-    }
-
-    // ── A quotation whose deposit percent was never set (NULL) ──
-    // createFromPricingRequest inserts deposit_percent NULL and nothing before ACCEPTED requires a
-    // value. The customer PDF prints NULL as 30%: DealQuotationRenderAdapter's remarkLines /
-    // nonTileRemarkLines (TH) and englishRemarkLines / englishNonTileRemarkLines (EN) all read
-    // `quotation.depositPercent() != null ? quotation.depositPercent() : 30`. The deposit notice
-    // must bill what the customer was shown, not DepositNoticeService's 0.50 fallback.
-
-    @Test
-    void createDepositNoticeFromQuotation_newEngineNullPercent_billsThePdfPercent() {
-        DealQuotationDto accepted = acceptedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
-        assertDepositPercentIsNullAndThePdfPromises30(accepted);
-        long pricingRequestId = accepted.pricingRequestId();
-        orderConfirmation.confirmOrder(pricingRequestId,
-            new OrderConfirmationRequests.ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
-
-        DepositNoticeDto draft = orderConfirmation.createDepositNoticeFromQuotation(pricingRequestId,
-            new OrderConfirmationRequests.CreateDepositNoticeFromQuotationRequest(null), salesActor);
-
-        assertThat(draft.depositPercent()).isEqualByComparingTo("0.30");
-    }
-
-    @Test
-    void createDraft_ticketRoute_newEngineNullPercent_billsThePdfPercent() {
-        DealQuotationDto accepted = acceptedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
-        assertDepositPercentIsNullAndThePdfPromises30(accepted);
-        orderConfirmation.confirmOrder(accepted.pricingRequestId(),
-            new OrderConfirmationRequests.ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
-
-        DepositNoticeDto draft = depositNoticeService.createDraft(ticketId,
-            new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), salesActor);
-
-        assertThat(draft.depositPercent()).isEqualByComparingTo("0.30");
-    }
-
-    private void assertDepositPercentIsNullAndThePdfPromises30(DealQuotationDto accepted) {
-        assertThat(jdbc.queryForObject("SELECT deposit_percent IS NULL FROM sales.quotation WHERE quotation_id = :id",
-            Map.of("id", accepted.id()), Boolean.class)).isTrue();
-        assertThat(DealQuotationRenderAdapter.toRenderModel(accepted, null, null).remarkLines())
-            .anyMatch(line -> line.contains("มัดจำ 30%"));
-    }
-
-    /** The pricing-request route must bill THIS quotation's defaulted 30%, not hand the null to the
-     * per-ticket lookup, which tries a sibling pricing request's legacy row first. */
-    @Test
-    void createDepositNoticeFromQuotation_newEngineNullPercent_whenASiblingPricingRequestHasALegacyIssuedQuotation_billsThePdfPercentNotTheSiblings() {
-        CustomerQuotationDto legacyIssued = issuedLegacyQuotation(PricingRequestRecipient.OWNER);
-        assertThat(jdbc.update("UPDATE sales.quotation SET deposit_percent = 70 WHERE quotation_id = :id",
-            Map.of("id", legacyIssued.id()))).isEqualTo(1);
-        DealQuotationDto accepted = acceptedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
-        assertDepositPercentIsNullAndThePdfPromises30(accepted);
-        long pricingRequestId = accepted.pricingRequestId();
-        orderConfirmation.confirmOrder(pricingRequestId,
-            new OrderConfirmationRequests.ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
-
-        DepositNoticeDto draft = orderConfirmation.createDepositNoticeFromQuotation(pricingRequestId,
-            new OrderConfirmationRequests.CreateDepositNoticeFromQuotationRequest(null), salesActor);
-
-        assertThat(draft.depositPercent()).isEqualByComparingTo("0.30");
+        assertThat(draft.depositPercent()).isEqualByComparingTo(expectedDraftPercent);
     }
 
     /** The reverse mix: an ACCEPTED legacy quotation's PDF prints a null percent as 50%
      * ({@code ticket.QuotationRenderer}), so both routes bill 50% from the legacy row, never a
-     * sibling pricing request's null-percent new-engine 30%. */
+     * sibling pricing request's new-engine percent. */
     @Test
-    void createDepositNotice_legacyAcceptedNullPercent_whenASiblingPricingRequestHasANullPercentNewEngineQuotation_bothRoutesBillTheLegacyPdfsFifty() {
+    void createDepositNotice_legacyAcceptedNullPercent_whenASiblingPricingRequestHasAFortyPercentNewEngineQuotation_bothRoutesBillTheLegacyPdfsFifty() {
         CustomerQuotationDto legacyAccepted = acceptedLegacyQuotation(PricingRequestRecipient.DESIGNER);
         assertThat(jdbc.queryForObject("SELECT deposit_percent IS NULL FROM sales.quotation WHERE quotation_id = :id",
             Map.of("id", legacyAccepted.id()), Boolean.class)).isTrue();
-        DealQuotationDto siblingIssued = issuedNewOriginQuotation(PricingRequestRecipient.OWNER, new BigDecimal("10"));
-        assertDepositPercentIsNullAndThePdfPromises30(siblingIssued);
+        DealQuotationDto siblingIssued = issuedNewOriginQuotation(PricingRequestRecipient.OWNER, new BigDecimal("10"), 40);
+        assertThat(siblingIssued.depositPercent()).isEqualTo(40);
         long pricingRequestId = legacyAccepted.pricingRequestId();
         orderConfirmation.confirmOrder(pricingRequestId,
             new OrderConfirmationRequests.ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
