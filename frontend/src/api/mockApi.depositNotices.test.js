@@ -222,12 +222,12 @@ describe('mockApi.depositNotices.createDraft autofill (branch fix: deposit-notic
 // Java picks the row with DealQuotationRepository.findAcceptedForPricingRequest.
 describe('mockApi.pricingRequests.createDepositNoticeFromQuotation — new-engine quotation (mirrors OrderConfirmationService fix)', () => {
   it('creates the draft with the accepted quotation number as reference, and items and percent from that quotation', async () => {
-    const { prId, accepted } = await driveTicketToNewEngineAcceptedQuotation({ depositPercent: 30 });
+    const { prId, accepted } = await driveTicketToNewEngineAcceptedQuotation({ depositPercent: 50 });
     const { depositNotice } = await api.pricingRequests.createDepositNoticeFromQuotation(prId, {});
     expect(depositNotice.reference).toBe(accepted.number);
     // DepositNoticeService.createDraftFromQuotation: the chosen quotation's own whole-number percent.
-    expect(accepted.depositPercent).toBe(30);
-    expect(depositNotice.depositPercent).toBe(0.3);
+    expect(accepted.depositPercent).toBe(50);
+    expect(depositNotice.depositPercent).toBe(0.5);
     expect(depositNotice.items.length).toBeGreaterThan(0);
     // qty is deliberately not distinguishable here: a mock TILE row sets quantity = piecesFinal.
     const [line] = accepted.items;
@@ -244,9 +244,12 @@ describe('mockApi.pricingRequests.createDepositNoticeFromQuotation — new-engin
   // Covers the ticket-level new-engine fallback (DepositNoticeRepository.findDealQuotationItemsForDeposit):
   // with no items and empty legacy sources, the route would return no items without it.
   it('ticket-level createDraft with no items reads the same new-engine lines as the pricing-request route', async () => {
-    const { ticketId, prId } = await driveTicketToNewEngineAcceptedQuotation();
+    const { ticketId, prId, accepted } = await driveTicketToNewEngineAcceptedQuotation();
+    // The PDF prints a NULL percent as DealQuotationRenderAdapter.DEFAULT_DEPOSIT_PERCENT (30).
+    expect(accepted.depositPercent).toBeNull();
     const { depositNotice: fromTicket } = await api.depositNotices.createDraft(ticketId, {});
     const { depositNotice: fromPr } = await api.pricingRequests.createDepositNoticeFromQuotation(prId, {});
+    expect(fromPr.depositPercent).toBe(0.3);
     expect(fromTicket.items.length).toBeGreaterThan(0);
     const pick = (items) => items.map(({ qty, netUnitPrice }) => ({ qty, netUnitPrice }));
     expect(pick(fromTicket.items)).toEqual(pick(fromPr.items));
@@ -276,16 +279,6 @@ describe('mockApi.pricingRequests.createDepositNoticeFromQuotation — new-engin
       .rejects.toMatchObject({ status: 409, message: 'ยังไม่มีใบเสนอราคาที่ลูกค้ายอมรับสำหรับคำขอราคานี้' });
     const { depositNotices } = await api.depositNotices.listByTicket(ticketId);
     expect(depositNotices).toHaveLength(0);
-  });
-
-  // A never-set (null) percent: the customer PDF prints it as 30% (Java DealQuotationRenderAdapter,
-  // `depositPercent() != null ? depositPercent() : 30`; the mock's placeholder PDF prints no deposit
-  // line), so the notice must bill 0.3, not the 0.5 fallback.
-  it('bills the PDF percent (30%) for a new-engine quotation whose deposit percent was never set', async () => {
-    const { prId, accepted } = await driveTicketToNewEngineAcceptedQuotation();
-    expect(accepted.depositPercent).toBeNull();
-    const { depositNotice } = await api.pricingRequests.createDepositNoticeFromQuotation(prId, {});
-    expect(depositNotice.depositPercent).toBe(0.3);
   });
 
   // A zero-deposit ("ไม่รับมัดจำ", full payment) quotation has nothing to bill: Java refuses rather
