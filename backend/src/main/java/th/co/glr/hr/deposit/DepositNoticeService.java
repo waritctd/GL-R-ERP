@@ -113,7 +113,9 @@ public class DepositNoticeService {
         if (governing != null && governing.depositPercent().signum() == 0) {
             throw zeroDepositRefusal(governing.number());
         }
-        List<DepositNoticeItemRequest> items = buildItemsFromRequest(req, ticketId, governing);
+        List<DepositNoticeItemRequest> items = buildItemsFromRequest(req, ticketId);
+        boolean linesFromGoverning = items.isEmpty() && governing != null;
+        if (linesFromGoverning) items = itemsFromGoverning(governing);
         List<String> notes = req.notes() != null ? req.notes()
             : docs.findNoteTemplates().stream()
                 .filter(DocumentNoteTemplateDto::defaultSelected)
@@ -146,7 +148,7 @@ public class DepositNoticeService {
         BigDecimal effectiveDepositPercent = sourceDepositPercent != null
             ? BigDecimal.valueOf(sourceDepositPercent, 2)
             : governing != null ? governing.depositPercent() : new BigDecimal("0.50");
-        String reference = req.reference() == null && governing != null ? governing.number() : req.reference();
+        String reference = req.reference() == null && linesFromGoverning ? governing.number() : req.reference();
 
         var effective = new DepositNoticeDraftRequest(
             req.customerName() != null ? req.customerName() : s.customerName(),
@@ -1221,19 +1223,18 @@ public class DepositNoticeService {
         return new CustomerHeaderInfo(customerTaxId, customerAddress, addressOnly, branch, projectName);
     }
 
-    private List<DepositNoticeItemRequest> buildItemsFromRequest(DepositNoticeDraftRequest req, long ticketId,
-                                                                  DepositNoticeRepository.GoverningQuotation governing) {
+    private List<DepositNoticeItemRequest> buildItemsFromRequest(DepositNoticeDraftRequest req, long ticketId) {
         if (req.items() != null && !req.items().isEmpty()) return req.items();
 
         // Legacy path: sales.ticket_item.approved_price, written only by the @Deprecated
         // TicketService.approve (no controller route) — kept working for any ticket that still
         // carries it, e.g. one manually approved before the pricing-request chain existed.
-        List<DepositNoticeItemRequest> legacyItems = buildLegacyItems(ticketId);
-        if (!legacyItems.isEmpty()) return legacyItems;
+        return buildLegacyItems(ticketId);
+    }
 
-        // Every deal created through the pricing-request chain has approved_price = NULL on every
-        // ticket_item, so its lines come from the governing quotation, whichever engine it is.
-        if (governing == null) return List.of();
+    /** Every deal created through the pricing-request chain has approved_price = NULL on every
+     * ticket_item, so its lines come from the governing quotation, whichever engine it is. */
+    private List<DepositNoticeItemRequest> itemsFromGoverning(DepositNoticeRepository.GoverningQuotation governing) {
         if (!governing.legacy()) return docs.findDealQuotationItems(governing.quotationId());
         return quotations.findById(governing.quotationId())
             .map(q -> itemsFromQuotation(q.items()))
@@ -1269,7 +1270,7 @@ public class DepositNoticeService {
 
     /**
      * Maps a customer quotation's items to deposit-notice item requests. The single shared mapping
-     * used by both {@link #buildItemsFromRequest} (a legacy governing quotation's lines, above)
+     * used by both {@link #itemsFromGoverning} (a legacy governing quotation's lines, above)
      * and {@code OrderConfirmationService.createDepositNoticeFromQuotation} (the explicit
      * quotation-driven entry point), so the two paths can never drift apart — extracted here
      * (rather than duplicated, as it was before this branch) because both already depend on this

@@ -13305,7 +13305,8 @@ export const api = {
         fail(mockZeroDepositRefusal(governing.quotation.number), 409);
       }
       let items = payload.items?.length ? payload.items : legacyItems;
-      if (!items.length && governing) {
+      const linesFromGoverning = !items.length && governing != null;
+      if (linesFromGoverning) {
         items = governing.legacy
           ? mockDepositNoticeItemsFromQuotation(governing.quotation.items)
           : mockDepositNoticeItemsFromDealQuotation(governing.quotation);
@@ -13330,7 +13331,7 @@ export const api = {
         version: nextVer, docNumber: null, issueDate: null, status: 'DRAFT',
         customerName: payload.customerName ?? ticket.customerName ?? '',
         customerTaxId: customerTaxId ?? '', customerAddress: customerAddress ?? '',
-        projectName: projectName ?? '', reference: payload.reference ?? governing?.quotation.number ?? '',
+        projectName: projectName ?? '', reference: payload.reference ?? (linesFromGoverning ? governing.quotation.number : ''),
         depositPercent, vatPercent: 0.07,
         notes, items, issuedByName: null, preparerName: 'จินตนา หาญมนตรี',
         hasPdf: false, hasXlsx: false,
