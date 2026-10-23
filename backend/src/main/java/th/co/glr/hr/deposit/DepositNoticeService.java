@@ -102,6 +102,7 @@ public class DepositNoticeService {
     public DepositNoticeDto createDraftFromQuotation(long ticketId, DepositNoticeDraftRequest req,
                                                      Integer sourceDepositPercent, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
+        requireTicketOwner(ticketId, actor);
         TicketSummaryDto s = requireApprovedTicket(ticketId, actor);
         requireActiveLifecycle(s);
 

@@ -13277,8 +13277,10 @@ export const api = {
     },
 
     async createDraft(ticketId, payload) {
-      requireSession();
+      // Mirrors DepositNoticeService.createDraftFromQuotation: requireRole(SALES_ROLES) + requireTicketOwner.
+      const user = hasRole('sales');
       const ticket = findTicketRaw(Number(ticketId));
+      if (ticket.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       // Phase 1 lifecycle gate (mirrors DepositNoticeService.createDraft).
       requireActive(ticket);
       if (!['approved', 'quotation_issued', 'document_issued'].includes(ticket.status)) fail('ดีลต้องได้รับการอนุมัติก่อน', 409);
