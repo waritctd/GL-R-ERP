@@ -827,7 +827,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
                 % มัดจำ
                 <input type="number" min="1" max="100" step="1" disabled={isIssued}
                   value={form.depositPercent === '' ? '' : Math.round(Number(form.depositPercent) * 100)}
-                  onChange={(e) => setField('depositPercent', e.target.value === '' ? '' : Number(e.target.value) / 100)}
+                  onChange={(e) => setField('depositPercent', e.target.value === '' ? '' : Math.round(Number(e.target.value)) / 100)}
                   className="text-right" />
               </label>
               {[

@@ -166,6 +166,10 @@ public class DepositNoticeService {
         if (depositPercent.signum() <= 0) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "เปอร์เซ็นต์มัดจำต้องมากกว่า 0");
         }
+        // Whole percents only: the document prints the percent rounded (40.5% shows as "41%").
+        if (req.depositPercent() != null && req.depositPercent().movePointRight(2).stripTrailingZeros().scale() > 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "เปอร์เซ็นต์มัดจำต้องเป็นจำนวนเต็ม");
+        }
         var effective = new DepositNoticeDraftRequest(
             req.customerName(), req.customerTaxId(), req.customerAddress(),
             req.projectName(), req.reference(),
