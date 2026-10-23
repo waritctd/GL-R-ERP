@@ -3461,11 +3461,12 @@ describe('PricingRequestDetailPage Step 6: Deposit, Payment, and Order Confirmat
 
     expect(screen.queryByRole('button', { name: 'ยืนยันคำสั่งซื้อ' })).toBeNull();
     const button = await screen.findByRole('button', { name: 'สร้างใบแจ้งยอดเงินรับมัดจำ' });
+    // No "% มัดจำ" input: the backend bills the accepted quotation's own percent and ignores a typed one.
+    expect(screen.queryByLabelText('% มัดจำ')).toBeNull();
     fireEvent.click(button);
 
     await waitFor(() => expect(api.pricingRequests.createDepositNoticeFromQuotation).toHaveBeenCalledWith(
-      request.summary.id,
-      expect.objectContaining({ depositPercent: expect.any(Number) }),
+      request.summary.id, {},
     ));
   });
 
