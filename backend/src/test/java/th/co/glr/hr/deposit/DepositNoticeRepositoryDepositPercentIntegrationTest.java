@@ -140,19 +140,37 @@ class DepositNoticeRepositoryDepositPercentIntegrationTest extends AbstractPostg
         assertGoverning(ticketId, legacyAccepted, true, "0.50");
     }
 
+    /** Newest wins whichever engine it is: both insertion orders, so neither engine is preferred. */
     @Test
     void mixedTicket_withNothingAnswered_theNewestIssuedQuotationGoverns() {
-        long ticketId = newTicketWithPricingRequestDraft();
-        insertLegacyQuotation(ticketId, "ISSUED", null);
-        long v2Issued = insertOriginTaggedQuotation(ticketId, "PRICING_REQUEST", "ISSUED", (short) 40);
+        long v2Newer = newTicketWithPricingRequestDraft();
+        insertLegacyQuotation(v2Newer, "ISSUED", null);
+        long v2Issued = insertOriginTaggedQuotation(v2Newer, "PRICING_REQUEST", "ISSUED", (short) 40);
+        assertGoverning(v2Newer, v2Issued, false, "0.40");
 
-        assertGoverning(ticketId, v2Issued, false, "0.40");
+        long legacyNewer = newTicketWithPricingRequestDraft();
+        insertOriginTaggedQuotation(legacyNewer, "PRICING_REQUEST", "ISSUED", (short) 40);
+        long legacyIssued = insertLegacyQuotation(legacyNewer, "ISSUED", null);
+        assertGoverning(legacyNewer, legacyIssued, true, "0.50");
     }
 
+    /** The DEAL_DIRECT row is the OLDER one, so only its answered rank (not quotation_id) can pick it. */
     @Test
-    void mixedTicket_aDealDirectApprovedQuotationIsAnAnswer_andBeatsALegacyIssuedOne() {
+    void mixedTicket_aDealDirectApprovedQuotationIsAnAnswer_andBeatsANewerLegacyIssuedOne() {
         long ticketId = newTicketWithPricingRequestDraft();
+        long dealDirect = insertOriginTaggedQuotation(ticketId, "DEAL_DIRECT", "APPROVED", (short) 40);
         insertLegacyQuotation(ticketId, "ISSUED", null);
+
+        assertGoverning(ticketId, dealDirect, false, "0.40");
+    }
+
+    /** A DEAL_DIRECT approval is an answer level with ACCEPTED (owner ruling 2026-10-23), so the
+     * newer of the two governs. Only data from before the 2026-09-30 direct-quotation lock can
+     * hold both on one ticket. */
+    @Test
+    void mixedTicket_aDealDirectApprovedQuotationBeatsAnOlderAcceptedOne() {
+        long ticketId = newTicketWithPricingRequestDraft();
+        insertLegacyQuotation(ticketId, "ACCEPTED", null);
         long dealDirect = insertOriginTaggedQuotation(ticketId, "DEAL_DIRECT", "APPROVED", (short) 40);
 
         assertGoverning(ticketId, dealDirect, false, "0.40");
