@@ -479,8 +479,7 @@ public class OrderConfirmationService {
             // 0-baht notice: DepositNoticeService#issue reads the ticket's deposit_policy, which no
             // path syncs from the quotation, so nothing downstream would stop that draft.
             if (Integer.valueOf(0).equals(newEngine.depositPercent())) {
-                throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคา " + newEngine.number()
-                    + " ระบุไม่มีมัดจำ (ชำระเต็มจำนวน) จึงออกใบแจ้งยอดเงินรับมัดจำไม่ได้");
+                throw DepositNoticeService.zeroDepositRefusal(newEngine.number());
             }
             reference = newEngine.number();
             items = depositNotices.itemsFromDealQuotation(newEngine.id());
