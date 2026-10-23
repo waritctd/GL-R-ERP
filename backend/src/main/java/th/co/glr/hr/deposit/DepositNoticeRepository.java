@@ -205,8 +205,11 @@ public class DepositNoticeRepository {
         BigDecimal vatPct = new BigDecimal("0.07");
         List<DepositNoticeItemRequest> items = req.items() != null ? req.items() : List.of();
 
-        BigDecimal subtotal = items.stream()
-            .map(it -> it.netUnitPrice().multiply(it.qty()))
+        // No items in the request (null or empty) keeps the stored lines (they are only replaced
+        // below when items are sent), so the subtotal must come from those same stored lines.
+        BigDecimal subtotal = (items.isEmpty()
+                ? findItems(docId).stream().map(it -> it.netUnitPrice().multiply(it.qty()))
+                : items.stream().map(it -> it.netUnitPrice().multiply(it.qty())))
             .reduce(BigDecimal.ZERO, BigDecimal::add)
             .setScale(2, RoundingMode.HALF_UP);
         BigDecimal deposit = subtotal.multiply(depositPct).setScale(2, RoundingMode.HALF_UP);
