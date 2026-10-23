@@ -274,10 +274,9 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
       } catch {
         acceptedPricingRequestId = null;
       }
-      // depositPercent is deliberately NOT sent on either branch below (owner ruling,
-      // 2026-09-29): the backend always ignores a caller-supplied value now and re-sources it
-      // from the ticket's own quotation (see DepositNoticeService.createDraft), falling back to
-      // 0.50 only when there is no quotation to read it from at all.
+      // depositPercent is not sent on either branch below: the backend takes the new draft's
+      // percent from the ticket's own quotation (see DepositNoticeService.createDraft), falling
+      // back to 0.50 only when there is no quotation at all. Sales changes it on the draft.
       if (acceptedPricingRequestId != null) {
         return api.pricingRequests.createDepositNoticeFromQuotation(acceptedPricingRequestId, {});
       }
@@ -377,7 +376,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
   function setField(key, value) {
     setForm((f) => ({ ...f, [key]: value }));
     if (key === 'customerName') clearFieldError('customerName');
-    // The deposit % toggle feeds directly into `deposit`/`total` below —
+    // The deposit % field feeds directly into `deposit`/`total` below —
     // clear a stale "total must be > 0" error so it can be re-checked fresh
     // on the next issue attempt.
     if (key === 'depositPercent') clearFieldError('total');
@@ -469,7 +468,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
     const net = Number(it.netUnitPrice) || Number(it.unitPrice) || 0;
     return sum + net * (Number(it.qty) || 0);
   }, 0);
-  const deposit = subtotal * Number(form.depositPercent || 0.5);
+  const deposit = subtotal * (Number(form.depositPercent) || 0);
   // Issue #756: the served document's own vatPercent always wins once one exists — only
   // before that (no `doc` yet) does this fall back to FALLBACK_VAT_PERCENT above.
   const vatPercent = Number(doc?.vatPercent ?? FALLBACK_VAT_PERCENT);
@@ -822,21 +821,15 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
               aria-describedby={fieldErrors.total ? fieldErrorId('doc-summary-panel') : undefined}
               className="px-4.5 py-3.5"
             >
-              {/*
-                Owner rulings (2026-09-29, 2026-10-23): the deposit % is what the source
-                quotation's PDF printed (legacy 50%, new-engine its own, blank 30%; 50% with no
-                live quotation) and is never editable at the deposit-notice stage: createDraft
-                never reads a client-supplied value and update keeps the draft's stored one. The
-                30/50/70/100% preset buttons this used to be are gone; this is now a plain
-                read-only label, shown regardless of isIssued since there is no draft-only
-                editable state left to distinguish.
-              */}
-              <div className="mb-3 text-xs">
-                <span className="block text-icon-muted">% มัดจำ</span>
-                <span className="mt-1 inline-block rounded-[6px] border border-border-muted bg-surface-subtle px-3 py-1 text-sm text-text-secondary">
-                  {Math.round(Number(form.depositPercent) * 100)}%
-                </span>
-              </div>
+              {/* Owner ruling 2026-10-23: the % starts from the quotation; sales may change it on
+                  a DRAFT (whole number on screen, a fraction in the payload). Read-only once issued. */}
+              <label className="mb-3 block text-xs">
+                % มัดจำ
+                <input type="number" min="1" max="100" step="1" disabled={isIssued}
+                  value={form.depositPercent === '' ? '' : Math.round(Number(form.depositPercent) * 100)}
+                  onChange={(e) => setField('depositPercent', e.target.value === '' ? '' : Number(e.target.value) / 100)}
+                  className="text-right" />
+              </label>
               {[
                 { label: 'รวมเป็นเงิน', value: subtotal },
                 { label: `ขอรับเงินมัดจำ (${Math.round(Number(form.depositPercent) * 100)}%)`, value: deposit },

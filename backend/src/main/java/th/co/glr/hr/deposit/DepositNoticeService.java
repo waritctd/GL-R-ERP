@@ -149,7 +149,8 @@ public class DepositNoticeService {
         // req.depositPercent() is never read (DepositNoticeDraftRequest carries it for update's
         // round trip). 0.50 only when the ticket has no live quotation at all (e.g. a manually
         // approved legacy ticket with no quotation chain); see
-        // DepositNoticeRepository#findGoverningQuotation for the pick.
+        // DepositNoticeRepository#findGoverningQuotation for the pick. Sales may change the percent
+        // on the DRAFT afterwards (update, ruling 2026-10-23).
         BigDecimal effectiveDepositPercent = sourceDepositPercent != null
             ? BigDecimal.valueOf(sourceDepositPercent, 2)
             : governing != null ? governing.depositPercent() : new BigDecimal("0.50");
@@ -177,15 +178,17 @@ public class DepositNoticeService {
     public DepositNoticeDto update(long docId, DepositNoticeDraftRequest req, UserPrincipal actor) {
         DepositNoticeDto doc = requireDraft(docId);
         requireTicketOwner(doc.ticketId(), actor);
-        // Same owner ruling as createDraft above: the deposit percent is locked to the quotation
-        // at draft-creation time and must NEVER change on update. The frontend no longer offers a
-        // control for it, but a client (or a stale/forged request) sending a different value must
-        // not be trusted either — override whatever req carries with the draft's own already-
-        // stored depositPercent() before persisting.
+        // Owner ruling 2026-10-23: sales may change the deposit percent on a DRAFT (requireDraft
+        // above 409s an issued notice). docs.update recomputes the amount from it. A request
+        // without a percent keeps the draft's own.
+        BigDecimal depositPercent = req.depositPercent() != null ? req.depositPercent() : doc.depositPercent();
+        if (depositPercent.signum() <= 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "เปอร์เซ็นต์มัดจำต้องมากกว่า 0");
+        }
         var effective = new DepositNoticeDraftRequest(
             req.customerName(), req.customerTaxId(), req.customerAddress(),
             req.projectName(), req.reference(),
-            doc.depositPercent(),
+            depositPercent,
             req.notes(), req.items()
         );
         docs.update(docId, effective);
