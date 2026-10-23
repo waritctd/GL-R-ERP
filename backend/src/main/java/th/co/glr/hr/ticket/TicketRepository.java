@@ -892,10 +892,12 @@ public class TicketRepository {
      * across both PRICING_REQUEST and DEAL_DIRECT origins, most recent id wins a tie. It is NOT the
      * deposit notice's pick ({@code DepositNoticeRepository#findGoverningQuotation}), which also
      * reads legacy rows and ranks a DEAL_DIRECT APPROVED row as answered, level with ACCEPTED. The
-     * two agree on a ticket that holds one live new-engine quotation, which {@code
-     * DealQuotationRepository#supersedeOtherLiveOnTicket} keeps true since 2026-10-17; they can
-     * differ on a ticket with a live legacy quotation, or on older data that still holds both a
-     * DEAL_DIRECT APPROVED and a PRICING_REQUEST ISSUED row.
+     * two agree on a ticket with one live new-engine quotation. They differ when the ticket also
+     * has a live legacy quotation; when an ACCEPTED quotation is followed by a newer DEAL_DIRECT
+     * APPROVED one ({@code DealQuotationRepository#supersedeOtherLiveOnTicket} never supersedes an
+     * ACCEPTED row, so this shows the ACCEPTED lines while the deposit bills the DEAL_DIRECT one);
+     * and on data from before 2026-10-17 that still holds both a DEAL_DIRECT APPROVED and a
+     * PRICING_REQUEST ISSUED row.
      *
      * <p>Only brand/model/color/texture/size/qty/qtySqm/unitBasis/rawUnit are mapped -- pricing
      * fields (proposedPrice/approvedPrice/calcedCost/manualPrice/...) are deliberately left at
