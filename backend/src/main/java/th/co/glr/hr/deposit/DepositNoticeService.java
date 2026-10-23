@@ -611,6 +611,9 @@ public class DepositNoticeService {
      *   <li>else, if an ACCEPTED quotation exists but none qualifies under a deposit-required
      *       policy (the deposit notice for it was never issued) — blocked, not a silent
      *       fallback;</li>
+     *   <li>else, under a bypass policy with no ISSUED deposit notice, the newest ACCEPTED
+     *       new-engine ({@code sales.quotation} origin PRICING_REQUEST/DEAL_DIRECT) quotation's
+     *       own lines, referenced by its number, with no deposit deduction;</li>
      *   <li>else the pre-PCR-chain legacy fallbacks (issued deposit-notice item snapshot, then
      *       {@code ticket_item.approved_price}) — back-compat for a deal that predates the
      *       pricing-request chain and never had a CustomerQuotation at all.</li>
@@ -645,6 +648,17 @@ public class DepositNoticeService {
             CustomerQuotationDto latestAccepted = pickAcceptedQuotation(quotationCandidates);
             if (latestAccepted != null) {
                 return blocked("ยังไม่ได้ออกใบแจ้งยอดมัดจำจากใบเสนอราคา " + latestAccepted.number());
+            }
+        } else if (notices.stream().noneMatch(n -> "ISSUED".equals(n.status()))) {
+            // quotationCandidates holds legacy rows only, so a new-engine accepted quotation is read here.
+            List<DepositNoticeRepository.AcceptedDealQuotationLine> lines = docs.findAcceptedDealQuotationLines(ticketId);
+            if (!lines.isEmpty()) {
+                List<RemainingInvoiceItemDto> items = lines.stream()
+                    .map(l -> new RemainingInvoiceItemDto(l.seq(), l.description(), l.qty(), l.unit(), l.unitPrice(),
+                        shortDiscountLabel(l.salesDiscount()), l.finalUnitPrice(), l.amount()))
+                    .toList();
+                return new ResolvedRemainingInvoice(items, BigDecimal.ZERO, lines.get(0).quotationNumber(),
+                    List.of(), null, List.of(), List.of(), null, null, null);
             }
         }
         return resolveLegacy(ticketId, ticket, notices);
