@@ -450,14 +450,20 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(issued.grandTotal()).isEqualByComparingTo(accepted.grandTotal());
     }
 
-    /** An ISSUED notice stays the source: its (edited) lines, minus the deposit it billed, never the
-     * quotation's own lines — with the deposit required, and still once the policy reads as a bypass. */
+    /** Deposit required: refused until the notice is issued; then the ISSUED notice is the source —
+     * its (edited) lines, minus the deposit it billed, never the quotation's own lines — and stays so
+     * once the policy reads as a bypass. */
     @Test
     void remainingInvoice_newEngineDeal_issuedNotice_linesAndDeductionStillComeFromTheNotice_alsoUnderABypassPolicy() {
         DealQuotationDto accepted = acceptedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"), 30);
         long pricingRequestId = accepted.pricingRequestId();
         orderConfirmation.confirmOrder(pricingRequestId,
             new OrderConfirmationRequests.ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
+        // Deposit required and not yet billed: never the quotation's lines with a zero deduction.
+        assertThatThrownBy(() -> depositNoticeService.getRemainingInvoiceOptions(ticketId, salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.CONFLICT)
+            .hasMessageContaining("ไม่พบใบเสนอราคาที่ลูกค้ายอมรับ");
         DepositNoticeDto noticeDraft = orderConfirmation.createDepositNoticeFromQuotation(pricingRequestId,
             new OrderConfirmationRequests.CreateDepositNoticeFromQuotationRequest(null), salesActor);
         List<DepositNoticeItemRequest> editedLines = noticeDraft.items().stream()
