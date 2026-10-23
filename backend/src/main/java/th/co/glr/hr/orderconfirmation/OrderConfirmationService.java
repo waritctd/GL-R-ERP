@@ -423,14 +423,11 @@ public class OrderConfirmationService {
      * DepositNoticeService.createDraft}'s own comments for what changed and why.
      *
      * <p><strong>Deposit percent (owner rulings 2026-09-29, 2026-10-23):</strong> {@code
-     * request.depositPercent()} below is passed through but {@link
-     * DepositNoticeService#createDraftFromQuotation} IGNORES it unconditionally: the percent is the
-     * one the chosen quotation's PDF printed, passed as {@code sourceDepositPercent}. For the
-     * legacy branch that is always {@link QuotationRenderer#LEGACY_DEPOSIT_PERCENT}, because the
-     * legacy PDF never reads the stored column. Left the field on {@link
-     * CreateDepositNoticeFromQuotationRequest} itself unremoved (an older frontend build may still
-     * send it) rather than making it a breaking DTO change for a value that is now a no-op either
-     * way.
+     * request.depositPercent()} is never read: the percent is the one the chosen quotation's PDF
+     * printed, passed as {@code sourceDepositPercent}. For the legacy branch that is always {@link
+     * QuotationRenderer#LEGACY_DEPOSIT_PERCENT}, because the legacy PDF never reads the stored
+     * column. The field stays on {@link CreateDepositNoticeFromQuotationRequest} so an older
+     * frontend build that still sends it is not refused.
      *
      * <p><strong>New-engine quotation:</strong> when the pricing request has no ACCEPTED legacy
      * quotation, this falls back to its ACCEPTED new-engine {@code PRICING_REQUEST}-origin
@@ -487,11 +484,8 @@ public class OrderConfirmationService {
                 : th.co.glr.hr.dealquotation.DealQuotationRenderAdapter.DEFAULT_DEPOSIT_PERCENT;
         }
 
-        // request.depositPercent() is deliberately still passed through here even though
-        // createDraft now ignores it as the source — see this method's own Javadoc above.
         DepositNoticeDraftRequest draftRequest = new DepositNoticeDraftRequest(
-            null, null, null, null, reference,
-            request != null ? request.depositPercent() : null, null, items);
+            null, null, null, null, reference, null, null, items);
         DepositNoticeDto draft = depositNotices.createDraftFromQuotation(summary.ticketId(), draftRequest,
             sourceDepositPercent, actor);
 
