@@ -4090,7 +4090,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 </Button>
               </div>
             ) : null}
-            {canCreateDepositNoticeFromQuotation(user, summary) ? (
+            {canCreateDepositNoticeFromQuotation(user, summary, dealQuotationForPr) ? (
               <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3">
                 <p className="text-sm text-text-muted">
                   ยืนยันคำสั่งซื้อแล้ว — สร้างใบแจ้งยอดเงินรับมัดจำจากใบเสนอราคาที่ลูกค้ายอมรับ (แก้ไข/ออกเอกสารในหน้าใบแจ้งยอดเงินรับมัดจำ)
@@ -4109,10 +4109,13 @@ export function PricingRequestDetailPage({ user, showToast }) {
             {confirmOrderBlockedReason(summary) ? (
               <p className="text-sm text-danger" role="alert">{confirmOrderBlockedReason(summary)}</p>
             ) : null}
-            {!canConfirmOrder(user, summary) && !canCreateDepositNoticeFromQuotation(user, summary) ? (
+            {!canConfirmOrder(user, summary) && !canCreateDepositNoticeFromQuotation(user, summary, dealQuotationForPr) ? (
               <p className="text-sm text-text-muted">
                 {summary.orderConfirmedAt
-                  ? `ยืนยันคำสั่งซื้อแล้วเมื่อ ${formatThaiDate(summary.orderConfirmedAt)} — ดูใบแจ้งยอดเงินรับมัดจำได้ที่หน้าดีล`
+                  ? `ยืนยันคำสั่งซื้อแล้วเมื่อ ${formatThaiDate(summary.orderConfirmedAt)}${
+                    dealQuotationForPr?.docStatus === 'ACCEPTED' && dealQuotationForPr.depositPercent === 0
+                      ? ' — ใบเสนอราคานี้ไม่รับมัดจำ จึงไม่มีใบแจ้งยอดเงินรับมัดจำ'
+                      : ' — ดูใบแจ้งยอดเงินรับมัดจำได้ที่หน้าดีล'}`
                   : 'ยืนยันคำสั่งซื้อได้เฉพาะเจ้าของดีล (sales)'}
               </p>
             ) : null}
