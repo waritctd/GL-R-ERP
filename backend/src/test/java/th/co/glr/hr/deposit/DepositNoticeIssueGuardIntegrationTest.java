@@ -251,6 +251,22 @@ class DepositNoticeIssueGuardIntegrationTest extends AbstractPostgresIntegration
         assertThat(depositNoticeService.preview(draftId, salesActor))
             .contains("ขอรับเงินมัดจำ (40%)")
             .contains("40.00 บาท");
+
+        // A request without items (null, or an empty list) keeps the stored lines; the amount is
+        // recomputed from them at the new percent.
+        DepositNoticeDto nullItems = depositNoticeService.update(draftId, new DepositNoticeDraftRequest(
+            "ACME", "0100000000000", "Bangkok", "Showroom", "REF-2",
+            new BigDecimal("0.30"), List.of(), null), salesActor);
+        assertThat(nullItems.items()).isEqualTo(updated.items());
+        assertThat(nullItems.subtotal()).isEqualByComparingTo("100.00");
+        assertThat(nullItems.depositAmount()).isEqualByComparingTo("30.00");
+
+        DepositNoticeDto emptyItems = depositNoticeService.update(draftId, new DepositNoticeDraftRequest(
+            "ACME", "0100000000000", "Bangkok", "Showroom", "REF-2",
+            new BigDecimal("0.20"), List.of(), List.of()), salesActor);
+        assertThat(emptyItems.items()).isEqualTo(updated.items());
+        assertThat(emptyItems.subtotal()).isEqualByComparingTo("100.00");
+        assertThat(emptyItems.depositAmount()).isEqualByComparingTo("20.00");
     }
 
     @Test
