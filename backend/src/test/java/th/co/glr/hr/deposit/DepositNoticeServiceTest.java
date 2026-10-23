@@ -947,11 +947,10 @@ class DepositNoticeServiceTest {
         verify(quotationRepo, never()).findByTicket(10L);
     }
 
-    // ── Deposit percent LOCKED to the quotation (owner ruling, 2026-09-29) ────
-    // See DepositNoticeService.createDraft/update and DepositNoticeRepository
-    // #findDealQuotationDepositPercent's own comments for what changed and why: the deposit
-    // PERCENT is no longer sales-entered at the deposit-notice stage at all — it is read straight
-    // off the source quotation's deposit_percent and is not editable afterward.
+    // ── Deposit percent: defaults from the quotation, editable on a DRAFT ─────
+    // createDraft takes the percent from the source quotation's deposit_percent (a caller value is
+    // ignored there). Owner ruling 2026-10-23: update() then lets sales change it on a DRAFT; an
+    // ISSUED notice refuses any edit (requireDraft, 409).
 
     @Test
     void createDraft_sourcesDepositPercentFromQuotation_ignoringCallerSuppliedValue() {
@@ -1021,23 +1020,58 @@ class DepositNoticeServiceTest {
     }
 
     @Test
-    void update_preservesTheDraftsOwnStoredDepositPercent_ignoringCallerSuppliedValue() {
+    void update_onADraft_persistsTheCallersDepositPercent() {
         // stubDraft's fixture stores depositPercent = 0.50 on doc 99 / ticket 10.
         stubDraft(99L, 10L);
         stubTicket(10L, TicketStatus.APPROVED, null);
 
-        // A caller sends 0.99 — must never reach the repository update.
         service.update(99L,
             new DepositNoticeDraftRequest("ACME", null, null, null, "REF-2",
-                new BigDecimal("0.99"), null, null),
+                new BigDecimal("0.40"), null, null),
+            owner);
+
+        ArgumentCaptor<DepositNoticeDraftRequest> captor = ArgumentCaptor.forClass(DepositNoticeDraftRequest.class);
+        verify(docs).update(eq(99L), captor.capture());
+        assertThat(captor.getValue().depositPercent()).isEqualByComparingTo("0.40");
+        assertThat(captor.getValue().customerName()).isEqualTo("ACME");
+        assertThat(captor.getValue().reference()).isEqualTo("REF-2");
+    }
+
+    @Test
+    void update_withNoDepositPercent_keepsTheDraftsStoredPercent() {
+        stubDraft(99L, 10L); // stored 0.50
+        stubTicket(10L, TicketStatus.APPROVED, null);
+
+        service.update(99L,
+            new DepositNoticeDraftRequest("ACME", null, null, null, "REF-2", null, null, null),
             owner);
 
         ArgumentCaptor<DepositNoticeDraftRequest> captor = ArgumentCaptor.forClass(DepositNoticeDraftRequest.class);
         verify(docs).update(eq(99L), captor.capture());
         assertThat(captor.getValue().depositPercent()).isEqualByComparingTo("0.50");
-        // Every other field still passes through untouched — only depositPercent is overridden.
-        assertThat(captor.getValue().customerName()).isEqualTo("ACME");
-        assertThat(captor.getValue().reference()).isEqualTo("REF-2");
+    }
+
+    @Test
+    void update_refusesAZeroOrFractionalDepositPercent_andWritesNothing() {
+        stubDraft(99L, 10L);
+        stubTicket(10L, TicketStatus.APPROVED, null);
+
+        assertThatThrownBy(() -> service.update(99L,
+                new DepositNoticeDraftRequest("ACME", null, null, null, "REF-2", BigDecimal.ZERO, null, null),
+                owner))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                assertThat(e.getMessage()).isEqualTo("เปอร์เซ็นต์มัดจำต้องมากกว่า 0");
+            });
+        // 40.5% would print as "41%" on the document while billing 40.5%.
+        assertThatThrownBy(() -> service.update(99L,
+                new DepositNoticeDraftRequest("ACME", null, null, null, "REF-2", new BigDecimal("0.405"), null, null),
+                owner))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                assertThat(e.getMessage()).isEqualTo("เปอร์เซ็นต์มัดจำต้องเป็นจำนวนเต็ม");
+            });
+        verify(docs, never()).update(anyLong(), any());
     }
 
     private static void assertForbidden(org.assertj.core.api.ThrowableAssert.ThrowingCallable action) {

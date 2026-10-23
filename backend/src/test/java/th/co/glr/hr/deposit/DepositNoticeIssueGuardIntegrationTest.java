@@ -232,6 +232,63 @@ class DepositNoticeIssueGuardIntegrationTest extends AbstractPostgresIntegration
         assertThat(secondReread.docNumber()).isEqualTo(secondDocNumber.get());
     }
 
+    // Owner ruling 2026-10-23: sales may change the deposit % on a DRAFT; the amount follows.
+    @Test
+    void update_onADraft_changesThePercentAndTheAmountFollows() {
+        IssuedNoticeFixture fixture = buildTicketWithIssuedDepositNotice();
+        long draftId = depositNoticeRepository.createDraft(
+            fixture.ticketId(), secondDraftHeader(), secondDraftItems()); // 0.50 of 100.00
+
+        DepositNoticeDto updated = depositNoticeService.update(draftId, new DepositNoticeDraftRequest(
+            "ACME", "0100000000000", "Bangkok", "Showroom", "REF-2",
+            new BigDecimal("0.40"), List.of(), secondDraftItems()), salesActor);
+
+        assertThat(updated.depositPercent()).isEqualByComparingTo("0.40");
+        assertThat(updated.subtotal()).isEqualByComparingTo("100.00");
+        assertThat(updated.depositAmount()).isEqualByComparingTo("40.00");
+        assertThat(updated.vatAmount()).isEqualByComparingTo("2.80");
+        assertThat(updated.totalPayable()).isEqualByComparingTo("42.80");
+        assertThat(depositNoticeService.preview(draftId, salesActor))
+            .contains("ขอรับเงินมัดจำ (40%)")
+            .contains("40.00 บาท");
+
+        // A request without items (null, or an empty list) keeps the stored lines; the amount is
+        // recomputed from them at the new percent.
+        DepositNoticeDto nullItems = depositNoticeService.update(draftId, new DepositNoticeDraftRequest(
+            "ACME", "0100000000000", "Bangkok", "Showroom", "REF-2",
+            new BigDecimal("0.30"), List.of(), null), salesActor);
+        assertThat(nullItems.items()).isEqualTo(updated.items());
+        assertThat(nullItems.subtotal()).isEqualByComparingTo("100.00");
+        assertThat(nullItems.depositAmount()).isEqualByComparingTo("30.00");
+
+        DepositNoticeDto emptyItems = depositNoticeService.update(draftId, new DepositNoticeDraftRequest(
+            "ACME", "0100000000000", "Bangkok", "Showroom", "REF-2",
+            new BigDecimal("0.20"), List.of(), List.of()), salesActor);
+        assertThat(emptyItems.items()).isEqualTo(updated.items());
+        assertThat(emptyItems.subtotal()).isEqualByComparingTo("100.00");
+        assertThat(emptyItems.depositAmount()).isEqualByComparingTo("20.00");
+    }
+
+    @Test
+    void update_onAnIssuedNotice_refusesThePercentEditWith409_rowUnchanged() {
+        IssuedNoticeFixture fixture = buildTicketWithIssuedDepositNotice();
+        DepositNoticeDto before = depositNoticeRepository.findById(fixture.docId()).orElseThrow();
+
+        assertThatThrownBy(() -> depositNoticeService.update(fixture.docId(), new DepositNoticeDraftRequest(
+                "ACME", "0100000000000", "Bangkok", "Showroom", "REF-2",
+                new BigDecimal("0.40"), List.of(), secondDraftItems()), salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(e.getMessage()).isEqualTo("ใบแจ้งรับมัดจำนี้ไม่ได้อยู่ในสถานะร่าง (DRAFT)");
+            });
+
+        DepositNoticeDto reread = depositNoticeRepository.findById(fixture.docId()).orElseThrow();
+        assertThat(reread.status()).isEqualTo("ISSUED");
+        assertThat(reread.depositPercent()).isEqualByComparingTo(before.depositPercent());
+        assertThat(reread.depositAmount()).isEqualByComparingTo(before.depositAmount());
+        assertThat(reread.items()).isEqualTo(before.items());
+    }
+
     // ─────────────────────────────────────────────────────────────────────────────────────
     // Fixture helpers — mirrors InventoryDeliveryFulfilmentIntegrationTest's approach for
     // driving a deal to an issued deposit notice through the real Steps 1-6 services.

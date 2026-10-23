@@ -214,8 +214,8 @@ describe('DepositNoticePage', () => {
     fireEvent.click(createButton);
 
     await waitFor(() => expect(api.depositNotices.createDraft).toHaveBeenCalledTimes(1));
-    // depositPercent is deliberately NOT sent (owner ruling, 2026-09-29): the backend always
-    // ignores a caller-supplied value now and re-sources it from the ticket's own quotation.
+    // depositPercent is not sent on create: the draft's starting percent comes from the ticket's
+    // own quotation on the backend. Sales changes it on the draft afterwards.
     expect(api.depositNotices.createDraft).toHaveBeenCalledWith('701', {
       notes: ['หมายเหตุมาตรฐาน'],
     });
@@ -241,8 +241,7 @@ describe('DepositNoticePage', () => {
     fireEvent.click(createButton);
 
     await waitFor(() => expect(api.pricingRequests.createDepositNoticeFromQuotation).toHaveBeenCalledTimes(1));
-    // depositPercent is deliberately NOT sent (owner ruling, 2026-09-29) — the backend always
-    // ignores a caller-supplied value and re-sources it from the accepted quotation itself.
+    // depositPercent is not sent on create: the backend takes it from the accepted quotation.
     expect(api.pricingRequests.createDepositNoticeFromQuotation).toHaveBeenCalledWith(502, {});
     expect(api.depositNotices.createDraft).not.toHaveBeenCalled();
   });
@@ -297,24 +296,51 @@ describe('DepositNoticePage', () => {
     expect(await screen.findByDisplayValue('บริษัท ทดสอบ จำกัด')).not.toBeNull();
   });
 
-  // Owner ruling (2026-09-29): the deposit % is LOCKED to the source quotation and is no longer
-  // user-settable at the deposit-notice stage — the 30/50/70/100% preset buttons are gone, and
-  // the % renders as a plain read-only label sourced from the loaded draft's own depositPercent.
-  it('renders the deposit percent as a read-only label, with no preset buttons to change it', async () => {
+  // Owner ruling 2026-10-23: on a DRAFT the deposit % is an editable whole-number field (a typed
+  // 39.6 rounds to 40). The amount recalculates as sales types, and บันทึก sends the fraction.
+  // subtotal 500: 30% -> 150.00, 40% -> 200.00 deposit, 14.00 VAT, 214.00 total; cleared -> 0.
+  it('lets sales change the deposit percent on a draft, recalculates the amount, and saves it', async () => {
     api.depositNotices.listByTicket.mockResolvedValue({
       depositNotices: [{ ...validDraftDoc, depositPercent: 0.3 }],
     });
     renderDepositNoticePage();
 
     await screen.findByDisplayValue('บริษัท ทดสอบ จำกัด');
-
-    // No interactive control can change the percent anymore.
-    for (const label of ['30%', '50%', '70%', '100%']) {
-      expect(screen.queryByRole('button', { name: label })).toBeNull();
-    }
-    // The value the draft was loaded with (30%, not the 0.5 default) still renders, as a label.
-    expect(screen.getByText('30%')).not.toBeNull();
+    const percentInput = screen.getByLabelText('% มัดจำ');
+    expect(percentInput.disabled).toBe(false);
+    expect(percentInput.value).toBe('30');
     expect(screen.getByText('ขอรับเงินมัดจำ (30%)')).not.toBeNull();
+    expect(screen.getByText('150.00 บาท')).not.toBeNull();
+
+    fireEvent.change(percentInput, { target: { value: '39.6' } });
+
+    expect(percentInput.value).toBe('40');
+    expect(screen.getByText('ขอรับเงินมัดจำ (40%)')).not.toBeNull();
+    expect(screen.getByText('200.00 บาท')).not.toBeNull();
+    expect(screen.getByText('214.00 บาท')).not.toBeNull();
+    expect(screen.queryByText('150.00 บาท')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+    await waitFor(() => expect(api.depositNotices.update).toHaveBeenCalledWith(
+      9002, expect.objectContaining({ depositPercent: 0.4 }),
+    ));
+
+    // A cleared field bills nothing: 0% and ฿0 for deposit, VAT and total, never a silent 50%.
+    fireEvent.change(percentInput, { target: { value: '' } });
+    expect(screen.getByText('ขอรับเงินมัดจำ (0%)')).not.toBeNull();
+    expect(screen.getAllByText('0.00 บาท')).toHaveLength(3);
+  });
+
+  it('shows the deposit percent read-only once the notice is issued', async () => {
+    api.depositNotices.listByTicket.mockResolvedValue({
+      depositNotices: [{ ...validDraftDoc, status: 'ISSUED', docNumber: 'GLRD69001', depositPercent: 0.3 }],
+    });
+    renderDepositNoticePage();
+
+    await screen.findByDisplayValue('บริษัท ทดสอบ จำกัด');
+    const percentInput = screen.getByLabelText('% มัดจำ');
+    expect(percentInput.disabled).toBe(true);
+    expect(percentInput.value).toBe('30');
   });
 
   // Issue #756: the VAT rate must come from the served document's vatPercent, not a

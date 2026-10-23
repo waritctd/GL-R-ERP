@@ -316,11 +316,10 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
           ) : canCreateNotice ? (
             <div className="flex flex-col gap-2">
               <p className="text-xs text-text-muted">ลูกค้ายืนยันคำสั่งซื้อแล้ว — สร้างใบแจ้งยอดเงินรับมัดจำจากใบเสนอราคาที่ยอมรับได้เลย</p>
-              {/* Owner ruling (2026-09-29): the deposit % is LOCKED to the accepted quotation's
-                  own deposit_percent — createDraft ignores any client-supplied value and always
-                  re-sources it from the quotation (see DepositNoticeService.createDraft /
-                  DepositNoticeRepository#findDealQuotationDepositPercent). The % input that used
-                  to sit here is gone — there is nothing left for it to control. */}
+              {/* A new notice takes its deposit % from the accepted quotation's own deposit_percent
+                  — createDraft ignores any client-supplied value (see DepositNoticeService.createDraft /
+                  DepositNoticeRepository#findDealQuotationDepositPercent), so no % input here. Sales
+                  changes the % on the draft itself (DepositNoticePage, owner ruling 2026-10-23). */}
               <Button type="button" variant="primary" className="self-start" disabled={createNoticeMutation.isPending}
                 onClick={() => createNoticeMutation.mutate()} data-testid="deal-deposit-create-notice">
                 สร้างใบแจ้งยอดเงินรับมัดจำ

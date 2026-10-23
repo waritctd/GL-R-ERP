@@ -90,9 +90,9 @@ public class DepositNoticeRepository {
     }
 
     /**
-     * Owner ruling (2026-09-29): the deposit PERCENTAGE on a deposit notice is LOCKED to the
+     * Owner ruling (2026-09-29): a new deposit notice takes its deposit PERCENTAGE from the
      * source quotation's own {@code sales.quotation.deposit_percent} — the value sales set when
-     * creating the quotation — and is never entered or edited at the deposit-notice stage.
+     * creating the quotation. Sales may change it on the DRAFT afterwards (ruling 2026-10-23).
      * {@code deposit_percent} is a nullable SMALLINT whole-number percent (30/50/100); this
      * returns it as a fraction (50 -&gt; 0.50) via {@code BigDecimal.valueOf(pct, 2)}, which is
      * exact for any integer/100 (denominator 100 = 2^2*5^2 always terminates).
@@ -214,8 +214,11 @@ public class DepositNoticeRepository {
         BigDecimal vatPct = new BigDecimal("0.07");
         List<DepositNoticeItemRequest> items = req.items() != null ? req.items() : List.of();
 
-        BigDecimal subtotal = items.stream()
-            .map(it -> it.netUnitPrice().multiply(it.qty()))
+        // No items in the request (null or empty) keeps the stored lines (they are only replaced
+        // below when items are sent), so the subtotal must come from those same stored lines.
+        BigDecimal subtotal = (items.isEmpty()
+                ? findItems(docId).stream().map(it -> it.netUnitPrice().multiply(it.qty()))
+                : items.stream().map(it -> it.netUnitPrice().multiply(it.qty())))
             .reduce(BigDecimal.ZERO, BigDecimal::add)
             .setScale(2, RoundingMode.HALF_UP);
         BigDecimal deposit = subtotal.multiply(depositPct).setScale(2, RoundingMode.HALF_UP);

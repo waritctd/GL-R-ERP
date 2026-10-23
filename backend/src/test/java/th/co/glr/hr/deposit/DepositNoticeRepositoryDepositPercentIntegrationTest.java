@@ -36,8 +36,9 @@ import th.co.glr.hr.dealquotation.WastageCalculator;
 
 /**
  * Real-Postgres coverage for {@link DepositNoticeRepository#findDealQuotationDepositPercent} —
- * owner ruling (2026-09-29): the deposit-notice PERCENT is LOCKED to the source quotation's own
- * {@code sales.quotation.deposit_percent}, never editable at the deposit-notice stage. A Mockito
+ * a new deposit-notice draft takes its starting PERCENT from the source quotation's own
+ * {@code sales.quotation.deposit_percent} (sales may change it on the draft afterwards, owner
+ * ruling 2026-10-23). A Mockito
  * unit test on {@code DepositNoticeServiceTest} already proves the SERVICE calls this repository
  * method and trusts its result over a caller-supplied value — it cannot prove the method's own
  * SQL actually reads the right row out of {@code sales.quotation}. This class drives that SQL

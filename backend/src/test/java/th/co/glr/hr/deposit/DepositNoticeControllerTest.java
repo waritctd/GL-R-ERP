@@ -6,8 +6,10 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.math.BigDecimal;
@@ -122,6 +124,18 @@ class DepositNoticeControllerTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(body))
             .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void updateRejectsADepositPercentOver100WithAThaiMessage() throws Exception {
+        mvc.perform(put("/api/deposit-notices/99")
+                .session(session())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"depositPercent": 1.5}
+                    """))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.message").value("depositPercent เปอร์เซ็นต์มัดจำต้องไม่เกิน 100"));
     }
 
     @Test
