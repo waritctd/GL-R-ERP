@@ -1460,6 +1460,10 @@ function mockDepositNoticeItemsFromDealQuotation(row) {
 // answered (ACCEPTED, or a DEAL_DIRECT one APPROVED) wins, else the latest ISSUED one.
 // ponytail: "latest" compares ids across mockCustomerQuotations and mockDealQuotations, two
 // separate sequences where Java has one sales.quotation_id; good enough for single-engine mock deals.
+// Mirrors DepositNoticeService.zeroDepositRefusal: both deposit routes refuse a 0% quotation.
+const mockZeroDepositRefusal = (number) =>
+  `ใบเสนอราคา ${number} ระบุไม่มีมัดจำ (ชำระเต็มจำนวน) จึงออกใบแจ้งยอดเงินรับมัดจำไม่ได้`;
+
 function mockGoverningQuotationForDepositNotice(ticketId) {
   const candidates = [];
   for (const q of mockCustomerQuotations) {
@@ -13297,6 +13301,9 @@ export const api = {
       // ticket_item, so legacyItems above is empty for it: the governing quotation supplies the
       // lines, and always the percent and reference (DepositNoticeService.createDraftFromQuotation).
       const governing = mockGoverningQuotationForDepositNotice(Number(ticketId));
+      if (!governing?.legacy && governing?.quotation.depositPercent === 0) {
+        fail(mockZeroDepositRefusal(governing.quotation.number), 409);
+      }
       let items = payload.items?.length ? payload.items : legacyItems;
       if (!items.length && governing) {
         items = governing.legacy
@@ -16212,9 +16219,7 @@ export const api = {
         (q) => q.pricingRequestId === pr.id && q.origin === 'PRICING_REQUEST' && q.docStatus === 'ACCEPTED');
       if (!accepted && !newEngine) fail('ยังไม่มีใบเสนอราคาที่ลูกค้ายอมรับสำหรับคำขอราคานี้', 409);
       // Mirrors the zero-deposit refusal: a 0% ("ไม่รับมัดจำ") quotation has nothing to bill.
-      if (newEngine?.depositPercent === 0) {
-        fail(`ใบเสนอราคา ${newEngine.number} ระบุไม่มีมัดจำ (ชำระเต็มจำนวน) จึงออกใบแจ้งยอดเงินรับมัดจำไม่ได้`, 409);
-      }
+      if (newEngine?.depositPercent === 0) fail(mockZeroDepositRefusal(newEngine.number), 409);
       const reference = (accepted ?? newEngine).number;
       const items = accepted
         ? mockDepositNoticeItemsFromQuotation(accepted.items)

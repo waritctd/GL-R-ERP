@@ -110,6 +110,9 @@ public class DepositNoticeService {
         // supplies the lines, the percent and the reference, so they always come from one row.
         DepositNoticeRepository.GoverningQuotation governing = sourceDepositPercent == null
             ? docs.findGoverningQuotation(ticketId).orElse(null) : null;
+        if (governing != null && governing.depositPercent().signum() == 0) {
+            throw zeroDepositRefusal(governing.number());
+        }
         List<DepositNoticeItemRequest> items = buildItemsFromRequest(req, ticketId, governing);
         List<String> notes = req.notes() != null ? req.notes()
             : docs.findNoteTemplates().stream()
@@ -155,6 +158,12 @@ public class DepositNoticeService {
 
         long docId = docs.createDraft(ticketId, effective, items);
         return docs.findById(docId).orElseThrow();
+    }
+
+    /** The 409 both deposit routes give a ไม่รับมัดจำ (0%) quotation: there is no deposit to bill. */
+    public static ApiException zeroDepositRefusal(String quotationNumber) {
+        return new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคา " + quotationNumber
+            + " ระบุไม่มีมัดจำ (ชำระเต็มจำนวน) จึงออกใบแจ้งยอดเงินรับมัดจำไม่ได้");
     }
 
     @Transactional
