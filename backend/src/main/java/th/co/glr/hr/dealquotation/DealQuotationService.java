@@ -2193,7 +2193,7 @@ public class DealQuotationService {
      * qty_sqm, unit_basis, raw_unit. NO pricing field is copied (proposed/approved/raw price stay
      * null) — those columns carry the legacy ticket-native approval history, and a direct
      * quotation's typed price was never "approved" on this ticket in that sense; money documents
-     * read the quotation itself ({@code DepositNoticeRepository#findDealQuotationItemsForDeposit}).
+     * read the quotation itself ({@code DepositNoticeRepository#findDealQuotationItems}).
      *
      * <p>Only goods lines: an {@code ADJUSTMENT} row (a negative discount/surcharge line, quantity −1)
      * is money, not something to deliver, and a non-positive quantity would violate

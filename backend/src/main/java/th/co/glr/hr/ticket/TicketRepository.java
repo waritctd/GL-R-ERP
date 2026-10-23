@@ -888,12 +888,14 @@ public class TicketRepository {
      * own Javadoc on why this must not reach {@link #findById}/mutation call sites) falls back to
      * the deal's live quotation's line items, rendered READ-ONLY.
      *
-     * <p>"Live" is picked with the EXACT SAME rule as {@code DepositNoticeRepository
-     * #findDealQuotationItemsForDeposit} (ACCEPTED beats ISSUED beats APPROVED, across both
-     * PRICING_REQUEST and DEAL_DIRECT origins, most recent id wins a tie) -- duplicated here
-     * rather than called cross-package because deposit-notice and ticket-detail are separate
-     * bounded contexts, but it is the SAME business rule and must be changed in lockstep if that
-     * one ever changes.
+     * <p>"Live" is a display pick over new-engine rows only: ACCEPTED beats ISSUED beats APPROVED,
+     * across both PRICING_REQUEST and DEAL_DIRECT origins, most recent id wins a tie. It is NOT the
+     * deposit notice's pick ({@code DepositNoticeRepository#findGoverningQuotation}), which also
+     * reads legacy rows and ranks a DEAL_DIRECT APPROVED row as answered, level with ACCEPTED. The
+     * two agree on a ticket that holds one live new-engine quotation, which {@code
+     * DealQuotationRepository#supersedeOtherLiveOnTicket} keeps true since 2026-10-17; they can
+     * differ on a ticket with a live legacy quotation, or on older data that still holds both a
+     * DEAL_DIRECT APPROVED and a PRICING_REQUEST ISSUED row.
      *
      * <p>Only brand/model/color/texture/size/qty/qtySqm/unitBasis/rawUnit are mapped -- pricing
      * fields (proposedPrice/approvedPrice/calcedCost/manualPrice/...) are deliberately left at
