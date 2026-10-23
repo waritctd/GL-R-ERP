@@ -71,7 +71,6 @@ import th.co.glr.hr.pricingdecision.PricingDecisionRequests.StartPricingDecision
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.UpdatePricingDecisionItemRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.UpdatePricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionService;
-import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestSummaryDto;
 import th.co.glr.hr.pricingrequest.PricingRequestRecipient;
 import th.co.glr.hr.pricingrequest.PricingRequestRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests;
@@ -262,14 +261,15 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         DepositNoticeDto viaPricingRequest = orderConfirmation.createDepositNoticeFromQuotation(pricingRequestId,
             new OrderConfirmationRequests.CreateDepositNoticeFromQuotationRequest(null), salesActor);
 
-        // The reference is the accepted quotation's number — the one thing this route adds over the ticket route.
         assertThat(viaPricingRequest.reference()).isEqualTo(accepted.number());
         assertThat(viaPricingRequest.items()).isNotEmpty();
 
-        // Items and percent are exactly what the ticket-level route produces for this deal (shared createDraft).
+        // Reference, items and percent are exactly what the ticket-level route produces for this deal.
         DepositNoticeDto viaTicket = depositNoticeService.createDraft(ticketId,
             new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), salesActor);
+        assertThat(viaTicket.reference()).isEqualTo(viaPricingRequest.reference());
         assertThat(viaPricingRequest.depositPercent()).isEqualByComparingTo("0.30");
+        assertThat(viaTicket.depositPercent()).isEqualByComparingTo("0.30");
         assertThat(viaPricingRequest.depositPercent()).isEqualByComparingTo(viaTicket.depositPercent());
         assertThat(viaPricingRequest.items())
             .usingRecursiveComparison().ignoringFields("id")
@@ -353,11 +353,13 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
     }
 
     /** Engines are exclusive per pricing request, not per ticket: a sibling pricing request's
-     * legacy ISSUED quotation must not supply the lines or the percent of this pricing request's
-     * draft. The draft bills this quotation's own percent, a NULL one as the 30% its PDF prints. */
+     * older legacy ISSUED quotation must not supply the lines or the percent of the draft, on
+     * either route. The customer answered this quotation and not the sibling, so it governs the
+     * ticket route too (owner ruling 2026-10-23). The draft bills this quotation's own percent, a
+     * NULL one as the 30% its PDF prints. */
     @ParameterizedTest(name = "quotation percent {0} bills {1}")
-    @CsvSource({", 0.30", "50, 0.50"})
-    void createDepositNoticeFromQuotation_newEngineAccepted_whenASiblingPricingRequestHasALegacyIssuedQuotation_draftsThisQuotationsLinesAndPercent(
+    @CsvSource({", 0.30", "20, 0.20"})
+    void createDepositNotice_newEngineAccepted_whenASiblingPricingRequestHasAnOlderLegacyIssuedQuotation_bothRoutesDraftThisQuotationsLinesAndPercent(
             Integer quotationPercent, BigDecimal expectedDraftPercent) {
         CustomerQuotationDto legacyIssued = issuedLegacyQuotation(PricingRequestRecipient.OWNER);
         // No code path writes deposit_percent on a legacy row; this stands in for one that carries it.
@@ -366,12 +368,15 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         DealQuotationDto accepted = acceptedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"),
             quotationPercent);
         assertThat(accepted.depositPercent()).isEqualTo(quotationPercent);
+        assertThat(accepted.id()).isGreaterThan(legacyIssued.id());
         long pricingRequestId = accepted.pricingRequestId();
         orderConfirmation.confirmOrder(pricingRequestId,
             new OrderConfirmationRequests.ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
 
-        DepositNoticeDto draft = orderConfirmation.createDepositNoticeFromQuotation(pricingRequestId,
+        DepositNoticeDto viaPricingRequest = orderConfirmation.createDepositNoticeFromQuotation(pricingRequestId,
             new OrderConfirmationRequests.CreateDepositNoticeFromQuotationRequest(null), salesActor);
+        DepositNoticeDto viaTicket = depositNoticeService.createDraft(ticketId,
+            new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), salesActor);
 
         List<String> thisQuotationsLines = jdbc.query("""
             SELECT qty, final_unit_price FROM sales.quotation_item WHERE quotation_id = :id ORDER BY seq
@@ -382,17 +387,20 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         // The fixture must make the two sources distinguishable, or the assertion below proves nothing.
         assertThat(thisQuotationsLines).isNotEmpty().isNotEqualTo(siblingLegacyLines);
 
-        assertThat(draft.reference()).isEqualTo(accepted.number());
-        assertThat(draft.items().stream().map(it -> line(it.qty(), it.netUnitPrice())).toList())
-            .isEqualTo(thisQuotationsLines);
-        assertThat(draft.depositPercent()).isEqualByComparingTo(expectedDraftPercent);
+        for (DepositNoticeDto draft : List.of(viaPricingRequest, viaTicket)) {
+            assertThat(draft.items().stream().map(it -> line(it.qty(), it.netUnitPrice())).toList())
+                .isEqualTo(thisQuotationsLines);
+            assertThat(draft.depositPercent()).isEqualByComparingTo(expectedDraftPercent);
+            assertThat(draft.reference()).isEqualTo(accepted.number());
+        }
     }
 
-    /** The reverse mix: an ACCEPTED legacy quotation's PDF prints a null percent as 50%
-     * ({@code ticket.QuotationRenderer}), so both routes bill 50% from the legacy row, never a
-     * sibling pricing request's new-engine percent. */
+    /** The reverse mix: the customer answered the legacy quotation, and the sibling pricing
+     * request's newer new-engine quotation is only ISSUED. The answered legacy row governs both
+     * routes, and bills the 50% its PDF prints ({@code ticket.QuotationRenderer}), never the
+     * sibling's 40%. It wins because it was answered, not because it is legacy. */
     @Test
-    void createDepositNotice_legacyAcceptedNullPercent_whenASiblingPricingRequestHasAFortyPercentNewEngineQuotation_bothRoutesBillTheLegacyPdfsFifty() {
+    void createDepositNotice_legacyAcceptedNullPercent_whenASiblingPricingRequestHasANewerFortyPercentIssuedQuotation_bothRoutesBillTheAnsweredLegacyQuotationsFifty() {
         CustomerQuotationDto legacyAccepted = acceptedLegacyQuotation(PricingRequestRecipient.DESIGNER);
         assertThat(jdbc.queryForObject("SELECT deposit_percent IS NULL FROM sales.quotation WHERE quotation_id = :id",
             Map.of("id", legacyAccepted.id()), Boolean.class)).isTrue();
@@ -416,11 +424,12 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         // The fixture must make the two sources distinguishable, or the item assertions prove nothing.
         assertThat(legacyLines).isNotEmpty().isNotEqualTo(siblingLines);
 
-        assertThat(viaPricingRequest.reference()).isEqualTo(legacyAccepted.number());
+        assertThat(siblingIssued.id()).isGreaterThan(legacyAccepted.id());
         for (DepositNoticeDto draft : List.of(viaPricingRequest, viaTicket)) {
             assertThat(draft.depositPercent()).isEqualByComparingTo("0.50");
             assertThat(draft.items().stream().map(it -> line(it.qty(), it.netUnitPrice())).toList())
                 .isEqualTo(legacyLines);
+            assertThat(draft.reference()).isEqualTo(legacyAccepted.number());
         }
     }
 

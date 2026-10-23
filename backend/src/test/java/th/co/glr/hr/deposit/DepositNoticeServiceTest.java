@@ -260,8 +260,8 @@ class DepositNoticeServiceTest {
     void remainingInvoiceOptions_fallsBackToIssuedDepositNoticeItemsWhenNoAcceptedQuotation() {
         stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
         // An ISSUED (not ACCEPTED) quotation must be ignored by the remaining-invoice path —
-        // unlike buildItemsFromRequest's pickQuotation (deposit notice creation), which DOES fall
-        // back to ISSUED. See resolveRemainingInvoice's own Javadoc for why these differ.
+        // unlike DepositNoticeRepository#findGoverningQuotation (deposit notice creation), which
+        // DOES fall back to ISSUED. See resolveRemainingInvoice's own Javadoc for why these differ.
         //
         // Finding 1 (vacuous test): this test used to only assert itemCount/depositAmount, which
         // stayed green even under the mutation "let ISSUED quotations qualify too" — that mutation
@@ -842,7 +842,6 @@ class DepositNoticeServiceTest {
         stubTicketWithCustomer(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED", 42L, "Project Zeta");
         when(customerRepo.findById(42L)).thenReturn(Optional.of(
             new CustomerDto(42L, "ACME", "0100000000000", "123 Road", "Showroom", "02-000-0000")));
-        when(quotationRepo.findByTicket(10L)).thenReturn(List.of());
         when(docs.createDraft(eq(10L), any(), any())).thenReturn(201L);
         stubDraft(201L, 10L);
 
@@ -862,7 +861,6 @@ class DepositNoticeServiceTest {
         // Base fixture's ticket carries customerId = null — must not NPE, and the customer
         // repository must never even be consulted.
         stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
-        when(quotationRepo.findByTicket(10L)).thenReturn(List.of());
         when(docs.createDraft(eq(10L), any(), any())).thenReturn(202L);
         stubDraft(202L, 10L);
 
@@ -876,12 +874,16 @@ class DepositNoticeServiceTest {
         verify(customerRepo, never()).findById(anyLong());
     }
 
+    /** With no approved_price on any ticket item, the lines come from the governing quotation
+     * (DepositNoticeRepository#findGoverningQuotation), here a legacy one. */
     @Test
-    void createDraft_fallsBackToAcceptedQuotationWhenNoTicketItemHasApprovedPrice() {
+    void createDraft_takesTheLinesOfTheGoverningLegacyQuotationWhenNoTicketItemHasApprovedPrice() {
         stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED"); // items: List.of() — no approved_price
         CustomerQuotationItemDto item = quotationItem("กระเบื้อง A", new BigDecimal("10"), "PER_SQM",
             new BigDecimal("100"), BigDecimal.ZERO, new BigDecimal("100"));
-        when(quotationRepo.findByTicket(10L)).thenReturn(List.of(quotation(1L, 10L, "ACCEPTED", 1, List.of(item))));
+        when(docs.findGoverningQuotation(10L)).thenReturn(Optional.of(
+            new DepositNoticeRepository.GoverningQuotation(1L, true, "QT-2026-1", new BigDecimal("0.50"))));
+        when(quotationRepo.findById(1L)).thenReturn(Optional.of(quotation(1L, 10L, "ACCEPTED", 1, List.of(item))));
         when(docs.createDraft(eq(10L), any(), any())).thenReturn(203L);
         stubDraft(203L, 10L);
 
@@ -899,40 +901,15 @@ class DepositNoticeServiceTest {
     }
 
     @Test
-    void createDraft_prefersAcceptedQuotationOverAnIssuedOne() {
-        stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
-        CustomerQuotationItemDto issuedItem = quotationItem("Issued Item", BigDecimal.ONE, "PER_PIECE",
-            BigDecimal.TEN, BigDecimal.ZERO, BigDecimal.TEN);
-        CustomerQuotationItemDto acceptedItem = quotationItem("Accepted Item", BigDecimal.ONE, "PER_PIECE",
-            BigDecimal.TEN, BigDecimal.ZERO, BigDecimal.TEN);
-        // findByTicket's own contract: ascending by quotation_id ALONE (see its own Javadoc —
-        // quotation_revision_no is scoped to a single pricing request, not comparable across
-        // the multiple pricing requests one ticket can have) — the accepted revision here has
-        // the higher quotation_id, same as a real revise-after-accept flow.
-        when(quotationRepo.findByTicket(10L)).thenReturn(List.of(
-            quotation(1L, 10L, "ISSUED", 1, List.of(issuedItem)),
-            quotation(2L, 10L, "ACCEPTED", 2, List.of(acceptedItem))));
-        when(docs.createDraft(eq(10L), any(), any())).thenReturn(204L);
-        stubDraft(204L, 10L);
-
-        service.createDraft(10L,
-            new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), owner);
-
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<List<DepositNoticeItemRequest>> itemsCaptor = ArgumentCaptor.forClass(List.class);
-        verify(docs).createDraft(eq(10L), any(), itemsCaptor.capture());
-        assertThat(itemsCaptor.getValue()).hasSize(1);
-        assertThat(itemsCaptor.getValue().get(0).description()).isEqualTo("Accepted Item");
-    }
-
-    @Test
     void createDraft_legacyApprovedPriceItemsWinOverQuotationChainWhenBothExist() {
         TicketItemDto approvedItem = new TicketItemDto(1L, 10L, "SCG", "Model", "White", "Matte", "60x60",
             "Factory", new BigDecimal("10"), null, null, null, null, null, new BigDecimal("100"), "THB",
             0, null, null, null, "PIECE", null, null);
         stubTicketWithItems(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED", List.of(approvedItem));
-        // Even though an ACCEPTED quotation exists too, the legacy approved_price path must win
-        // and the quotation chain must never even be queried (buildLegacyItems short-circuits).
+        // Even though a governing quotation exists too, the legacy approved_price path must win
+        // and that quotation's lines must never even be read (buildLegacyItems short-circuits).
+        when(docs.findGoverningQuotation(10L)).thenReturn(Optional.of(
+            new DepositNoticeRepository.GoverningQuotation(1L, true, "QT-2026-1", new BigDecimal("0.50"))));
         when(docs.createDraft(eq(10L), any(), any())).thenReturn(205L);
         stubDraft(205L, 10L);
 
@@ -944,20 +921,21 @@ class DepositNoticeServiceTest {
         verify(docs).createDraft(eq(10L), any(), itemsCaptor.capture());
         assertThat(itemsCaptor.getValue()).hasSize(1);
         assertThat(itemsCaptor.getValue().get(0).unitPrice()).isEqualTo(new BigDecimal("100"));
-        verify(quotationRepo, never()).findByTicket(10L);
+        verify(quotationRepo, never()).findById(anyLong());
+        verify(docs, never()).findDealQuotationItems(anyLong());
     }
 
     // ── Deposit percent LOCKED to the quotation (owner ruling, 2026-09-29) ────
     // See DepositNoticeService.createDraft/update and DepositNoticeRepository
-    // #findDealQuotationDepositPercent's own comments for what changed and why: the deposit
+    // #findGoverningQuotation's own comments for what changed and why: the deposit
     // PERCENT is no longer sales-entered at the deposit-notice stage at all — it is read straight
     // off the source quotation's deposit_percent and is not editable afterward.
 
     @Test
     void createDraft_sourcesDepositPercentFromQuotation_ignoringCallerSuppliedValue() {
         stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
-        when(quotationRepo.findByTicket(10L)).thenReturn(List.of());
-        when(docs.findDealQuotationDepositPercent(10L)).thenReturn(Optional.of(new BigDecimal("0.30")));
+        when(docs.findGoverningQuotation(10L)).thenReturn(Optional.of(
+            new DepositNoticeRepository.GoverningQuotation(5L, false, "QT-5", new BigDecimal("0.30"))));
         when(docs.createDraft(eq(10L), any(), any())).thenReturn(301L);
         stubDraft(301L, 10L);
 
@@ -975,8 +953,7 @@ class DepositNoticeServiceTest {
     @Test
     void createDraft_fallsBackTo050WhenTicketHasNoQuotationDepositPercent() {
         stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
-        when(quotationRepo.findByTicket(10L)).thenReturn(List.of());
-        when(docs.findDealQuotationDepositPercent(10L)).thenReturn(Optional.empty());
+        when(docs.findGoverningQuotation(10L)).thenReturn(Optional.empty());
         when(docs.createDraft(eq(10L), any(), any())).thenReturn(302L);
         stubDraft(302L, 10L);
 
@@ -989,35 +966,35 @@ class DepositNoticeServiceTest {
     }
 
     /**
-     * Proves the final fallback's wiring (2026-09-29 fix): when the legacy ticket-item path AND
-     * the CustomerQuotation {@code pickQuotation} path both yield nothing (no approved_price on
-     * any ticket item, and {@code quotationRepo.findByTicket} returns an empty list — no {@code
-     * origin IS NULL} quotation at all), {@code buildItemsFromRequest} must return EXACTLY what
-     * {@code docs.findDealQuotationItemsForDeposit(ticketId)} returns, not an empty list (the old
-     * {@code return List.of();} this branch replaced). The sentinel item below ("V2 deal quotation
-     * item", unit price 999) is deliberately unlike anything else in this file so a test bug that
-     * accidentally sourced items from elsewhere would show up as the wrong description/price
-     * rather than merely "some non-empty list".
+     * Lines, percent and reference all come from the ONE governing quotation (owner ruling
+     * 2026-10-23), here a new-engine one: its lines via {@code docs.findDealQuotationItems}, its
+     * percent, and its number as the reference. The sentinel item ("V2 deal quotation item", unit
+     * price 999) and the 0.40 are deliberately unlike anything else in this file, so a draft that
+     * took its lines or percent from elsewhere shows up as the wrong value, not merely "some value".
      */
     @Test
-    void createDraft_fallsBackToDealQuotationRepositoryWhenLegacyAndPickQuotationBothYieldNothing() {
+    void createDraft_takesLinesPercentAndReferenceFromTheGoverningNewEngineQuotation() {
         stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED"); // items: List.of() — no approved_price
-        when(quotationRepo.findByTicket(10L)).thenReturn(List.of()); // pickQuotation -> null
+        when(docs.findGoverningQuotation(10L)).thenReturn(Optional.of(
+            new DepositNoticeRepository.GoverningQuotation(7L, false, "QT-7", new BigDecimal("0.40"))));
         DepositNoticeItemRequest sentinel = new DepositNoticeItemRequest(
             1, "V2 deal quotation item", new BigDecimal("3"), "แผ่น",
             new BigDecimal("999"), null, new BigDecimal("999"));
-        when(docs.findDealQuotationItemsForDeposit(10L)).thenReturn(List.of(sentinel));
+        when(docs.findDealQuotationItems(7L)).thenReturn(List.of(sentinel));
         when(docs.createDraft(eq(10L), any(), any())).thenReturn(206L);
         stubDraft(206L, 10L);
 
         service.createDraft(10L,
             new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), owner);
 
+        ArgumentCaptor<DepositNoticeDraftRequest> captor = ArgumentCaptor.forClass(DepositNoticeDraftRequest.class);
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<DepositNoticeItemRequest>> itemsCaptor = ArgumentCaptor.forClass(List.class);
-        verify(docs).createDraft(eq(10L), any(), itemsCaptor.capture());
+        verify(docs).createDraft(eq(10L), captor.capture(), itemsCaptor.capture());
         assertThat(itemsCaptor.getValue()).containsExactly(sentinel);
-        verify(docs).findDealQuotationItemsForDeposit(10L);
+        assertThat(captor.getValue().depositPercent()).isEqualByComparingTo("0.40");
+        assertThat(captor.getValue().reference()).isEqualTo("QT-7");
+        verify(quotationRepo, never()).findById(anyLong());
     }
 
     @Test
@@ -1133,9 +1110,9 @@ class DepositNoticeServiceTest {
             .thenReturn(Optional.of(new TicketDto(summary, items, List.of(), null, List.of())));
     }
 
-    // Minimal CustomerQuotationDto fixture — only the fields buildItemsFromRequest's pickQuotation
-    // and itemsFromQuotation actually read (ticketId, docStatus, quotationRevisionNo, items) carry
-    // meaningful values; everything else is a harmless placeholder.
+    // Minimal CustomerQuotationDto fixture — only the fields the service actually reads (ticketId,
+    // docStatus, quotationRevisionNo, items) carry meaningful values; everything else is a
+    // harmless placeholder.
     private CustomerQuotationDto quotation(long id, long ticketId, String docStatus, int revisionNo,
                                            List<CustomerQuotationItemDto> items) {
         return new CustomerQuotationDto(
