@@ -908,17 +908,22 @@ class DepositNoticeServiceTest {
         stubTicketWithItems(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED", List.of(approvedItem));
         // Even though a governing quotation exists too, the legacy approved_price path must win
         // and that quotation's lines must never even be read (buildLegacyItems short-circuits).
+        // Its percent still applies; its number is NOT stamped as the reference, because the
+        // remaining-invoice match keys on the reference and these lines are not that quotation's.
         when(docs.findGoverningQuotation(10L)).thenReturn(Optional.of(
-            new DepositNoticeRepository.GoverningQuotation(1L, true, "QT-2026-1", new BigDecimal("0.50"))));
+            new DepositNoticeRepository.GoverningQuotation(1L, false, "QT-2026-1", new BigDecimal("0.40"))));
         when(docs.createDraft(eq(10L), any(), any())).thenReturn(205L);
         stubDraft(205L, 10L);
 
         service.createDraft(10L,
             new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), owner);
 
+        ArgumentCaptor<DepositNoticeDraftRequest> requestCaptor = ArgumentCaptor.forClass(DepositNoticeDraftRequest.class);
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<DepositNoticeItemRequest>> itemsCaptor = ArgumentCaptor.forClass(List.class);
-        verify(docs).createDraft(eq(10L), any(), itemsCaptor.capture());
+        verify(docs).createDraft(eq(10L), requestCaptor.capture(), itemsCaptor.capture());
+        assertThat(requestCaptor.getValue().reference()).isNull();
+        assertThat(requestCaptor.getValue().depositPercent()).isEqualByComparingTo("0.40");
         assertThat(itemsCaptor.getValue()).hasSize(1);
         assertThat(itemsCaptor.getValue().get(0).unitPrice()).isEqualTo(new BigDecimal("100"));
         verify(quotationRepo, never()).findById(anyLong());
