@@ -1,8 +1,12 @@
 package th.co.glr.hr.deposit;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -13,9 +17,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockHttpSession;
@@ -127,15 +133,39 @@ class DepositNoticeControllerTest {
     }
 
     @Test
-    void updateRejectsADepositPercentOver100WithAThaiMessage() throws Exception {
+    void updateRejectsADepositPercentOutsideZeroTo100WithAThaiMessage() throws Exception {
+        for (String[] c : new String[][] {
+                {"1.5", "depositPercent เปอร์เซ็นต์มัดจำต้องไม่เกิน 100"},
+                {"-0.05", "depositPercent เปอร์เซ็นต์มัดจำต้องมากกว่า 0"},
+                {"0", "depositPercent เปอร์เซ็นต์มัดจำต้องมากกว่า 0"}}) {
+            mvc.perform(put("/api/deposit-notices/99")
+                    .session(session())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"depositPercent\": " + c[0] + "}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(c[1]));
+        }
+        verify(service, never()).update(anyLong(), any(), any());
+    }
+
+    // The record has a second, 8-argument constructor: the JSON must still bind through the
+    // canonical one, so the page's stamp reaches the service at full precision.
+    @Test
+    void updatePassesTheExpectedUpdatedAtStampThrough() throws Exception {
+        when(service.update(eq(99L), any(), any(UserPrincipal.class))).thenReturn(document());
+
         mvc.perform(put("/api/deposit-notices/99")
                 .session(session())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
-                    {"depositPercent": 1.5}
+                    {"depositPercent": 0.4, "expectedUpdatedAt": "2026-10-23T08:57:19.732123Z"}
                     """))
-            .andExpect(status().isBadRequest())
-            .andExpect(jsonPath("$.message").value("depositPercent เปอร์เซ็นต์มัดจำต้องไม่เกิน 100"));
+            .andExpect(status().isOk());
+
+        ArgumentCaptor<DepositNoticeDraftRequest> captor = ArgumentCaptor.forClass(DepositNoticeDraftRequest.class);
+        verify(service).update(eq(99L), captor.capture(), any(UserPrincipal.class));
+        assertThat(captor.getValue().expectedUpdatedAt().toInstant())
+            .isEqualTo(Instant.parse("2026-10-23T08:57:19.732123Z"));
     }
 
     @Test

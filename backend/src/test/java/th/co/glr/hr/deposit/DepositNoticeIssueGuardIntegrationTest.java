@@ -11,6 +11,7 @@ import static org.mockito.Mockito.when;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -210,14 +211,29 @@ class DepositNoticeIssueGuardIntegrationTest extends AbstractPostgresIntegration
     }
 
     @Test
-    void issue_secondDraftOnSameTicketSucceedsAndSupersedesTheFirst() {
-        // POSITIVE control: the guard must not block a genuine DRAFT -> ISSUED transition, and the
-        // pre-existing "supersede older ISSUED versions" behaviour in the same method must still
-        // work correctly with the new predicate in place.
+    void issue_secondDraftOnSameTicket_refusedUntilItsPercentAndAmountAreBillable_thenSupersedesTheFirst() {
         IssuedNoticeFixture fixture = buildTicketWithIssuedDepositNotice();
 
+        // A stored percent outside whole 1-100 (a 0% ticket-route draft on a ไม่รับมัดจำ quotation,
+        // a pre-09-29 free-typed 0.3330, an out-of-range 1.5) or a 0-baht amount takes no number.
         long secondDocId = depositNoticeRepository.createDraft(
-            fixture.ticketId(), secondDraftHeader(), secondDraftItems());
+            fixture.ticketId(), draftHeader(BigDecimal.ZERO), secondDraftItems());
+        assertIssueRefusedAndNothingChanged(fixture, secondDocId,
+            "ใบแจ้งรับมัดจำนี้มีเปอร์เซ็นต์มัดจำ 0% จึงออกเอกสารไม่ได้ (ต้องเป็นจำนวนเต็ม 1–100)");
+        assertIssueRefusedAndNothingChanged(fixture,
+            depositNoticeRepository.createDraft(fixture.ticketId(), draftHeader(new BigDecimal("0.3330")), secondDraftItems()),
+            "ใบแจ้งรับมัดจำนี้มีเปอร์เซ็นต์มัดจำ 33.3% จึงออกเอกสารไม่ได้ (ต้องเป็นจำนวนเต็ม 1–100)");
+        assertIssueRefusedAndNothingChanged(fixture,
+            depositNoticeRepository.createDraft(fixture.ticketId(), draftHeader(new BigDecimal("1.5")), secondDraftItems()),
+            "ใบแจ้งรับมัดจำนี้มีเปอร์เซ็นต์มัดจำ 150% จึงออกเอกสารไม่ได้ (ต้องเป็นจำนวนเต็ม 1–100)");
+        assertIssueRefusedAndNothingChanged(fixture,
+            depositNoticeRepository.createDraft(fixture.ticketId(), secondDraftHeader(), List.of(new DepositNoticeItemRequest(
+                1, "Free item", new BigDecimal("2"), "แผ่น", BigDecimal.ZERO, null, BigDecimal.ZERO))),
+            "ใบแจ้งรับมัดจำนี้มียอดมัดจำ 0 บาท จึงออกเอกสารไม่ได้");
+
+        // POSITIVE control: once the percent is billable, the DRAFT -> ISSUED transition and the
+        // "supersede older ISSUED versions" behaviour work with the repository predicate in place.
+        depositNoticeService.update(secondDocId, secondDraftHeader(), salesActor);
         Optional<String> secondDocNumber = depositNoticeRepository.issue(secondDocId, salesRepId, "Sales");
 
         assertThat(secondDocNumber).isPresent();
@@ -243,14 +259,15 @@ class DepositNoticeIssueGuardIntegrationTest extends AbstractPostgresIntegration
             "ACME", "0100000000000", "Bangkok", "Showroom", "REF-2",
             new BigDecimal("0.40"), List.of(), secondDraftItems()), salesActor);
 
+        // secondDraftItems: net x qty sums to 75.02 (unit x qty 90.00, stored amounts 75.03, nets alone 43.34).
         assertThat(updated.depositPercent()).isEqualByComparingTo("0.40");
-        assertThat(updated.subtotal()).isEqualByComparingTo("100.00");
-        assertThat(updated.depositAmount()).isEqualByComparingTo("40.00");
-        assertThat(updated.vatAmount()).isEqualByComparingTo("2.80");
-        assertThat(updated.totalPayable()).isEqualByComparingTo("42.80");
+        assertThat(updated.subtotal()).isEqualByComparingTo("75.02");
+        assertThat(updated.depositAmount()).isEqualByComparingTo("30.01");
+        assertThat(updated.vatAmount()).isEqualByComparingTo("2.10");
+        assertThat(updated.totalPayable()).isEqualByComparingTo("32.11");
         assertThat(depositNoticeService.preview(draftId, salesActor))
             .contains("ขอรับเงินมัดจำ (40%)")
-            .contains("40.00 บาท");
+            .contains("30.01 บาท");
 
         // A request without items (null, or an empty list) keeps the stored lines; the amount is
         // recomputed from them at the new percent.
@@ -258,15 +275,44 @@ class DepositNoticeIssueGuardIntegrationTest extends AbstractPostgresIntegration
             "ACME", "0100000000000", "Bangkok", "Showroom", "REF-2",
             new BigDecimal("0.30"), List.of(), null), salesActor);
         assertThat(nullItems.items()).isEqualTo(updated.items());
-        assertThat(nullItems.subtotal()).isEqualByComparingTo("100.00");
-        assertThat(nullItems.depositAmount()).isEqualByComparingTo("30.00");
+        assertThat(nullItems.subtotal()).isEqualByComparingTo("75.02");
+        assertThat(nullItems.depositAmount()).isEqualByComparingTo("22.51");
 
         DepositNoticeDto emptyItems = depositNoticeService.update(draftId, new DepositNoticeDraftRequest(
             "ACME", "0100000000000", "Bangkok", "Showroom", "REF-2",
             new BigDecimal("0.20"), List.of(), List.of()), salesActor);
         assertThat(emptyItems.items()).isEqualTo(updated.items());
-        assertThat(emptyItems.subtotal()).isEqualByComparingTo("100.00");
-        assertThat(emptyItems.depositAmount()).isEqualByComparingTo("20.00");
+        assertThat(emptyItems.subtotal()).isEqualByComparingTo("75.02");
+        assertThat(emptyItems.depositAmount()).isEqualByComparingTo("15.00");
+    }
+
+    // Two tabs on one draft: both loaded the same updatedAt. A saves; B's save with that now-stale
+    // stamp is refused and changes nothing; reloading (the fresh stamp) saves.
+    @Test
+    void update_withAStaleUpdatedAt_isRefused409_andTheFirstSaveStands() {
+        IssuedNoticeFixture fixture = buildTicketWithIssuedDepositNotice();
+        long draftId = depositNoticeRepository.createDraft(fixture.ticketId(), secondDraftHeader(), secondDraftItems());
+        OffsetDateTime loaded = depositNoticeRepository.findById(draftId).orElseThrow().updatedAt();
+
+        DepositNoticeDto savedByA = depositNoticeService.update(draftId, stampedRequest("0.40", secondDraftItems(), loaded), salesActor);
+
+        List<DepositNoticeItemRequest> tabBItems = List.of(new DepositNoticeItemRequest(
+            1, "Tab B item", new BigDecimal("1"), "แผ่น", new BigDecimal("999.00"), null, new BigDecimal("999.00")));
+        assertThatThrownBy(() -> depositNoticeService.update(draftId, stampedRequest("0.30", tabBItems, loaded), salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(e.getMessage()).isEqualTo("ใบแจ้งรับมัดจำนี้ถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
+            });
+        DepositNoticeDto reread = depositNoticeRepository.findById(draftId).orElseThrow();
+        assertThat(reread.depositPercent()).isEqualByComparingTo("0.40");
+        assertThat(reread.depositAmount()).isEqualByComparingTo(savedByA.depositAmount());
+        assertThat(reread.items()).isEqualTo(savedByA.items());
+        assertThat(reread.updatedAt()).isEqualTo(savedByA.updatedAt());
+
+        DepositNoticeDto reloaded = depositNoticeService.update(
+            draftId, stampedRequest("0.30", tabBItems, savedByA.updatedAt()), salesActor);
+        assertThat(reloaded.depositPercent()).isEqualByComparingTo("0.30");
+        assertThat(reloaded.subtotal()).isEqualByComparingTo("999.00");
     }
 
     @Test
@@ -277,6 +323,17 @@ class DepositNoticeIssueGuardIntegrationTest extends AbstractPostgresIntegration
         assertThatThrownBy(() -> depositNoticeService.update(fixture.docId(), new DepositNoticeDraftRequest(
                 "ACME", "0100000000000", "Bangkok", "Showroom", "REF-2",
                 new BigDecimal("0.40"), List.of(), secondDraftItems()), salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(e.getMessage()).isEqualTo("ใบแจ้งรับมัดจำนี้ไม่ได้อยู่ในสถานะร่าง (DRAFT)");
+            });
+
+        // Repository level: a save that passed requireDraft before issue() committed reaches the
+        // UPDATE with the row already ISSUED. It must refuse before touching the lines, which the
+        // PDF/XLSX print.
+        assertThatThrownBy(() -> depositNoticeRepository.update(fixture.docId(), new DepositNoticeDraftRequest(
+                "ACME", "0100000000000", "Bangkok", "Showroom", "REF-2",
+                new BigDecimal("0.40"), List.of(), secondDraftItems()), before.items()))
             .isInstanceOfSatisfying(ApiException.class, e -> {
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
                 assertThat(e.getMessage()).isEqualTo("ใบแจ้งรับมัดจำนี้ไม่ได้อยู่ในสถานะร่าง (DRAFT)");
@@ -297,15 +354,43 @@ class DepositNoticeIssueGuardIntegrationTest extends AbstractPostgresIntegration
     private record IssuedNoticeFixture(long ticketId, long pricingRequestId, long docId, String docNumber) {}
 
     private DepositNoticeDraftRequest secondDraftHeader() {
-        return new DepositNoticeDraftRequest(
-            "ACME", "0100000000000", "Bangkok", "Showroom", "REF-2",
-            new BigDecimal("0.50"), List.of(), null);
+        return draftHeader(new BigDecimal("0.50"));
     }
 
+    private DepositNoticeDraftRequest draftHeader(BigDecimal depositPercent) {
+        return new DepositNoticeDraftRequest(
+            "ACME", "0100000000000", "Bangkok", "Showroom", "REF-2",
+            depositPercent, List.of(), null);
+    }
+
+    private DepositNoticeDraftRequest stampedRequest(String depositPercent, List<DepositNoticeItemRequest> items,
+                                                     OffsetDateTime expectedUpdatedAt) {
+        return new DepositNoticeDraftRequest("ACME", "0100000000000", "Bangkok", "Showroom", "REF-2",
+            new BigDecimal(depositPercent), List.of(), items, expectedUpdatedAt);
+    }
+
+    // Fractional qty, net below unit: net x qty (49.995 + 25.025 = 75.02), unit x qty (90.00), the
+    // per-line rounded amounts (50.00 + 25.03 = 75.03) and the nets alone (43.34) all differ.
     private List<DepositNoticeItemRequest> secondDraftItems() {
-        return List.of(new DepositNoticeItemRequest(
-            1, "Second draft item", new BigDecimal("1"), "แผ่น",
-            new BigDecimal("100.00"), null, new BigDecimal("100.00")));
+        return List.of(
+            new DepositNoticeItemRequest(1, "Second draft item A", new BigDecimal("1.5"), "แผ่น",
+                new BigDecimal("40.00"), "ส่วนลด 6.67 ต่อหน่วย", new BigDecimal("33.33")),
+            new DepositNoticeItemRequest(2, "Second draft item B", new BigDecimal("2.5"), "แผ่น",
+                new BigDecimal("12.00"), "ส่วนลด 1.99 ต่อหน่วย", new BigDecimal("10.01")));
+    }
+
+    private void assertIssueRefusedAndNothingChanged(IssuedNoticeFixture fixture, long draftId, String message) {
+        assertThatThrownBy(() -> depositNoticeService.issue(draftId, salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(e.getMessage()).isEqualTo(message);
+            });
+        DepositNoticeDto draft = depositNoticeRepository.findById(draftId).orElseThrow();
+        assertThat(draft.status()).isEqualTo("DRAFT");
+        assertThat(draft.docNumber()).isNull();
+        DepositNoticeDto first = depositNoticeRepository.findById(fixture.docId()).orElseThrow();
+        assertThat(first.status()).isEqualTo("ISSUED");
+        assertThat(first.docNumber()).isEqualTo(fixture.docNumber());
     }
 
     private IssuedNoticeFixture buildTicketWithIssuedDepositNotice() {

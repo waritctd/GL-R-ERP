@@ -9,6 +9,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -61,8 +62,8 @@ class DepositNoticeServiceTest {
 
     private final UserPrincipal owner = new UserPrincipal(
         1L, "sales@glr.co.th", "Sales", "sales", 1L, true, LocalDate.of(2026, 1, 1), false, 1L, false);
-    // sales_manager: read-only oversight of deposit notices — never owns a ticket
-    // (no create access), so every owner-gated write is denied by ownership alone.
+    // sales_manager: read-only oversight of deposit notices. It can create (and so own) a deal
+    // since deal entry was widened, so every deposit-notice write is role-gated to sales.
     private final UserPrincipal salesManagerActor = new UserPrincipal(
         8L, "sales_manager@glr.co.th", "Sales Manager", "sales_manager", 8L, true,
         LocalDate.of(2026, 1, 1), false, null, false);
@@ -808,14 +809,18 @@ class DepositNoticeServiceTest {
 
     @Test
     void update_rejectsSalesManagerRole() {
-        // update() has NO role gate — only requireTicketOwner. sales_manager can
-        // never own a ticket, so the ownership check alone denies it.
+        // Role-gated (SALES_ROLES) like createDraft and issue: a sales_manager that OWNS the deal
+        // (stubTicket's createdById is 1) passes the owner check, so only the role gate refuses it.
+        UserPrincipal salesManagerOwner = new UserPrincipal(
+            1L, "sales_manager@glr.co.th", "Sales Manager", "sales_manager", 1L, true,
+            LocalDate.of(2026, 1, 1), false, null, false);
         stubDraft(99L, 10L);
         stubTicket(10L, TicketStatus.APPROVED, null);
 
         assertForbidden(() -> service.update(99L,
             new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null),
-            salesManagerActor));
+            salesManagerOwner));
+        verify(docs, never()).update(anyLong(), any(), any());
     }
 
     @Test
@@ -1036,8 +1041,9 @@ class DepositNoticeServiceTest {
     }
 
     @Test
-    void update_refusesAZeroOrFractionalDepositPercent_andWritesNothing() {
-        stubDraft(99L, 10L);
+    void update_refusesZeroAndANewFractionalPercent_butAStoredFractionSentBackUnchangedSaves() {
+        // Stored 0.3330: free input from before the whole-percent rule. The page shows it as 33.
+        stubDraft(99L, 10L, new BigDecimal("0.3330"));
         stubTicket(10L, TicketStatus.APPROVED, null);
 
         assertThatThrownBy(() -> service.update(99L,
@@ -1056,6 +1062,20 @@ class DepositNoticeServiceTest {
                 assertThat(e.getMessage()).isEqualTo("เปอร์เซ็นต์มัดจำต้องเป็นจำนวนเต็ม");
             });
         verify(docs, never()).update(anyLong(), any(), any());
+
+        // The stored value sent back unchanged (0.333 == 0.3330) still saves the rest of the draft;
+        // a whole percent replaces it.
+        service.update(99L,
+            new DepositNoticeDraftRequest("ACME", null, null, null, "REF-2", new BigDecimal("0.333"), null, null),
+            owner);
+        service.update(99L,
+            new DepositNoticeDraftRequest("ACME", null, null, null, "REF-2", new BigDecimal("0.40"), null, null),
+            owner);
+        ArgumentCaptor<DepositNoticeDraftRequest> captor = ArgumentCaptor.forClass(DepositNoticeDraftRequest.class);
+        verify(docs, times(2)).update(eq(99L), captor.capture(), any());
+        assertThat(captor.getAllValues())
+            .extracting(r -> r.depositPercent().stripTrailingZeros().toPlainString())
+            .containsExactly("0.333", "0.4");
     }
 
     private static void assertForbidden(org.assertj.core.api.ThrowableAssert.ThrowingCallable action) {
@@ -1067,10 +1087,14 @@ class DepositNoticeServiceTest {
     // ── fixtures ─────────────────────────────────────────────────────────────
 
     private void stubDraft(long docId, long ticketId) {
+        stubDraft(docId, ticketId, new BigDecimal("0.50"));
+    }
+
+    private void stubDraft(long docId, long ticketId, BigDecimal depositPercent) {
         DepositNoticeDto draft = new DepositNoticeDto(
             docId, ticketId, "DEPOSIT_NOTICE", 1, null, null, "DRAFT",
             "ACME", "0100000000000", "Bangkok", "Showroom", "REF-1", "THB",
-            new BigDecimal("0.50"), new BigDecimal("1000.00"), new BigDecimal("500.00"),
+            depositPercent, new BigDecimal("1000.00"), new BigDecimal("500.00"),
             new BigDecimal("0.07"), new BigDecimal("35.00"), new BigDecimal("535.00"),
             List.of(), false, false, "Sales", "Preparer", null, null, List.of());
         when(docs.findById(docId)).thenReturn(Optional.of(draft));
