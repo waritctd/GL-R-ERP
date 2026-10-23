@@ -41,10 +41,10 @@ import th.co.glr.hr.dealquotation.WastageCalculator;
  * This class drives that SQL directly.
  *
  * <p>Fixture note: rows are written straight over JDBC rather than through {@code
- * CustomerQuotationService}/{@code DealQuotationService} — neither ever writes {@code
- * deposit_percent} today (see the repository method's own Javadoc: the legacy engine's {@code
- * CreateCustomerQuotationRequest} has no such field at all, and only {@code DealQuotationService}'s
- * v2 engine writes it in production). A real {@code ticket_id} and, for the legacy-branch cases, a
+ * CustomerQuotationService}/{@code DealQuotationService}, so one test can set any status, origin,
+ * insertion order and stored {@code deposit_percent} (the legacy engine never writes that column:
+ * {@code CreateCustomerQuotationRequest} has no such field; only {@code DealQuotationService}
+ * writes it). A real {@code ticket_id} and, for the legacy-branch cases, a
  * real {@code pricing_request_id} are still required — both are real FK targets on {@code
  * sales.quotation} — so this still builds a genuine ticket (+ a draft pricing request for the
  * legacy cases only; the v2 branch's own FK, {@code origin}, needs no pricing request at all).

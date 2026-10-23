@@ -13298,8 +13298,9 @@ export const api = {
           return { seq: idx + 1, description: desc, qty: Number(it.qty), unit: 'แผ่น', unitPrice: Number(it.approvedPrice), discountLabel: null, netUnitPrice: Number(it.approvedPrice) };
         });
       // Every deal created through the pricing-request chain has approved_price = NULL on every
-      // ticket_item, so legacyItems above is empty for it: the governing quotation supplies the
-      // lines, and always the percent and reference (DepositNoticeService.createDraftFromQuotation).
+      // ticket_item, so legacyItems above is empty for it. The governing quotation always supplies
+      // the percent, and the lines and reference unless the payload or approved prices supply the
+      // lines (DepositNoticeService.createDraftFromQuotation).
       const governing = mockGoverningQuotationForDepositNotice(Number(ticketId));
       if (!governing?.legacy && governing?.quotation.depositPercent === 0) {
         fail(mockZeroDepositRefusal(governing.quotation.number), 409);

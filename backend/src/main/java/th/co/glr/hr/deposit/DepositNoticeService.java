@@ -107,7 +107,8 @@ public class DepositNoticeService {
         requireActiveLifecycle(s);
 
         // Ticket route: the governing quotation (DepositNoticeRepository#findGoverningQuotation)
-        // supplies the lines, the percent and the reference, so they always come from one row.
+        // always supplies the percent. It supplies the lines, and with them the reference, unless
+        // req.items or legacy approved_price rows already supply the lines.
         DepositNoticeRepository.GoverningQuotation governing = sourceDepositPercent == null
             ? docs.findGoverningQuotation(ticketId).orElse(null) : null;
         if (governing != null && governing.depositPercent().signum() == 0) {
@@ -135,16 +136,14 @@ public class DepositNoticeService {
         // address/tax id differently.
         CustomerHeaderInfo header = resolveCustomerHeader(s, req.customerTaxId(), req.customerAddress(), req.projectName());
 
-        // Owner ruling (2026-09-29, sales business-logic change, authorised per CLAUDE.md's
-        // "deposit-notice flow is UNFROZEN"): the deposit PERCENT is LOCKED to the source
-        // quotation's own sales.quotation.deposit_percent — the value sales set when creating the
-        // quotation — and is never editable at the deposit-notice stage. A caller-supplied
-        // req.depositPercent() is deliberately IGNORED as the source here (the quotation always
-        // wins); DepositNoticeDraftRequest still carries the field only because it round-trips
-        // through the DTO the frontend/OrderConfirmationService already send. Falls back to the
-        // document's long-standing 0.50 default only when the ticket has no live quotation to
-        // read a percent from at all (e.g. a manually-approved legacy ticket with no quotation
-        // chain) — see DepositNoticeRepository#findGoverningQuotation's own Javadoc for the pick.
+        // Owner rulings (2026-09-29, 2026-10-22, 2026-10-23): the deposit percent is the one the
+        // source quotation's PDF printed: a legacy quotation 50% (the constant its PDF prints), a
+        // new-engine one its own deposit_percent, a blank one 30%. The PR route passes it as
+        // sourceDepositPercent; the ticket route takes it from the governing quotation. On create,
+        // req.depositPercent() is never read (DepositNoticeDraftRequest carries it for update's
+        // round trip). 0.50 only when the ticket has no live quotation at all (e.g. a manually
+        // approved legacy ticket with no quotation chain); see
+        // DepositNoticeRepository#findGoverningQuotation for the pick.
         BigDecimal effectiveDepositPercent = sourceDepositPercent != null
             ? BigDecimal.valueOf(sourceDepositPercent, 2)
             : governing != null ? governing.depositPercent() : new BigDecimal("0.50");

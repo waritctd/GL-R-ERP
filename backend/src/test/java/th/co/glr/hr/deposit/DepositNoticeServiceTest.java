@@ -930,11 +930,11 @@ class DepositNoticeServiceTest {
         verify(docs, never()).findDealQuotationItems(anyLong());
     }
 
-    // ── Deposit percent LOCKED to the quotation (owner ruling, 2026-09-29) ────
-    // See DepositNoticeService.createDraft/update and DepositNoticeRepository
-    // #findGoverningQuotation's own comments for what changed and why: the deposit
-    // PERCENT is no longer sales-entered at the deposit-notice stage at all — it is read straight
-    // off the source quotation's deposit_percent and is not editable afterward.
+    // ── Deposit percent = what the source quotation's PDF printed (owner rulings 2026-09-29,
+    // 2026-10-23) ────
+    // The governing quotation's percent (DepositNoticeRepository#findGoverningQuotation: legacy
+    // 50, new-engine its own, blank 30); a caller-supplied percent is never read on create, and
+    // 0.50 applies only when the ticket has no live quotation.
 
     @Test
     void createDraft_sourcesDepositPercentFromQuotation_ignoringCallerSuppliedValue() {
