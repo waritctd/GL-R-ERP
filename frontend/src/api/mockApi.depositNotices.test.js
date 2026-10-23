@@ -229,12 +229,16 @@ describe('mockApi.depositNotices.createDraft autofill (branch fix: deposit-notic
 // Java picks the row with DealQuotationRepository.findAcceptedForPricingRequest.
 describe('mockApi.pricingRequests.createDepositNoticeFromQuotation — new-engine quotation (mirrors OrderConfirmationService fix)', () => {
   it('creates the draft with the accepted quotation number as reference, and items and percent from that quotation', async () => {
-    const { prId, accepted } = await driveTicketToNewEngineAcceptedQuotation({ depositPercent: 50 });
+    // 40, unlike the 30 default, the legacy 50 and the no-quotation 0.5, so only the quotation's own percent fits.
+    const { ticketId, prId, accepted } = await driveTicketToNewEngineAcceptedQuotation({ depositPercent: 40 });
     const { depositNotice } = await api.pricingRequests.createDepositNoticeFromQuotation(prId, {});
     expect(depositNotice.reference).toBe(accepted.number);
     // DepositNoticeService.createDraftFromQuotation: the chosen quotation's own whole-number percent.
-    expect(accepted.depositPercent).toBe(50);
-    expect(depositNotice.depositPercent).toBe(0.5);
+    expect(accepted.depositPercent).toBe(40);
+    expect(depositNotice.depositPercent).toBe(0.4);
+    // The ticket route bills the same quotation (DepositNoticeRepository.findGoverningQuotation).
+    const { depositNotice: fromTicket } = await api.depositNotices.createDraft(ticketId, {});
+    expect(fromTicket.depositPercent).toBe(0.4);
     expect(depositNotice.items.length).toBeGreaterThan(0);
     // qty is deliberately not distinguishable here: a mock TILE row sets quantity = piecesFinal.
     const [line] = accepted.items;
