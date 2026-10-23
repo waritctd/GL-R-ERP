@@ -195,7 +195,7 @@ public class DepositNoticeService {
             depositPercent,
             req.notes(), req.items()
         );
-        docs.update(docId, effective);
+        docs.update(docId, effective, doc.items());
         return docs.findById(docId).orElseThrow();
     }
 

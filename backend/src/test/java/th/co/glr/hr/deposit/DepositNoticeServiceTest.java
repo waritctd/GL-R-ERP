@@ -1015,7 +1015,7 @@ class DepositNoticeServiceTest {
             owner);
 
         ArgumentCaptor<DepositNoticeDraftRequest> captor = ArgumentCaptor.forClass(DepositNoticeDraftRequest.class);
-        verify(docs).update(eq(99L), captor.capture());
+        verify(docs).update(eq(99L), captor.capture(), any());
         assertThat(captor.getValue().depositPercent()).isEqualByComparingTo("0.40");
         assertThat(captor.getValue().customerName()).isEqualTo("ACME");
         assertThat(captor.getValue().reference()).isEqualTo("REF-2");
@@ -1031,7 +1031,7 @@ class DepositNoticeServiceTest {
             owner);
 
         ArgumentCaptor<DepositNoticeDraftRequest> captor = ArgumentCaptor.forClass(DepositNoticeDraftRequest.class);
-        verify(docs).update(eq(99L), captor.capture());
+        verify(docs).update(eq(99L), captor.capture(), any());
         assertThat(captor.getValue().depositPercent()).isEqualByComparingTo("0.50");
     }
 
@@ -1055,7 +1055,7 @@ class DepositNoticeServiceTest {
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
                 assertThat(e.getMessage()).isEqualTo("เปอร์เซ็นต์มัดจำต้องเป็นจำนวนเต็ม");
             });
-        verify(docs, never()).update(anyLong(), any());
+        verify(docs, never()).update(anyLong(), any(), any());
     }
 
     private static void assertForbidden(org.assertj.core.api.ThrowableAssert.ThrowingCallable action) {
