@@ -308,10 +308,18 @@ export function confirmOrderBlockedReason(pr) {
  * only, reachable once the bridge action above has run (the endpoint's own precondition —
  * ticket.status=quotation_issued — is only true after confirmOrder). `acceptedQuotation` is the
  * page's new-engine quotation, when it has one: a ไม่รับมัดจำ (0%) one 409s on the server (#1173),
- * so it is not offered. The deal's deposit policy is not on the pricing-request payload. */
-export function canCreateDepositNoticeFromQuotation(user, pr, acceptedQuotation = null) {
+ * so it is not offered. The deal's deposit policy is not on the pricing-request payload. Never
+ * offered while the deal has an ISSUED deposit notice (one per deal,
+ * DepositNoticeService.createDraftFromQuotation). */
+export function canCreateDepositNoticeFromQuotation(user, pr, acceptedQuotation = null, depositNotices = []) {
   return canManageCustomerQuotation(user, pr) && pr?.status === 'QUOTATION_ACCEPTED' && Boolean(pr?.orderConfirmedAt)
-    && !(acceptedQuotation?.docStatus === 'ACCEPTED' && acceptedQuotation.depositPercent === 0);
+    && !(acceptedQuotation?.docStatus === 'ACCEPTED' && acceptedQuotation.depositPercent === 0)
+    && !issuedDepositNotice(depositNotices);
+}
+
+/** The deal's ISSUED deposit notice (at most one is live), or null. */
+export function issuedDepositNotice(depositNotices = []) {
+  return (depositNotices ?? []).find((d) => d.status === 'ISSUED') ?? null;
 }
 
 /** Mirrors PricingRequestService.cancel: owner sales OR ceo, any cancellable status. */
