@@ -296,9 +296,9 @@ describe('DepositNoticePage', () => {
     expect(await screen.findByDisplayValue('บริษัท ทดสอบ จำกัด')).not.toBeNull();
   });
 
-  // Owner ruling 2026-10-23: on a DRAFT the deposit % is an editable whole-number field. The
-  // amount recalculates as sales types, and บันทึก sends the fraction. subtotal 500: 30% -> 150.00,
-  // 40% -> 200.00 deposit, 14.00 VAT, 214.00 total.
+  // Owner ruling 2026-10-23: on a DRAFT the deposit % is an editable whole-number field (a typed
+  // 39.6 rounds to 40). The amount recalculates as sales types, and บันทึก sends the fraction.
+  // subtotal 500: 30% -> 150.00, 40% -> 200.00 deposit, 14.00 VAT, 214.00 total; cleared -> 0.
   it('lets sales change the deposit percent on a draft, recalculates the amount, and saves it', async () => {
     api.depositNotices.listByTicket.mockResolvedValue({
       depositNotices: [{ ...validDraftDoc, depositPercent: 0.3 }],
@@ -312,8 +312,9 @@ describe('DepositNoticePage', () => {
     expect(screen.getByText('ขอรับเงินมัดจำ (30%)')).not.toBeNull();
     expect(screen.getByText('150.00 บาท')).not.toBeNull();
 
-    fireEvent.change(percentInput, { target: { value: '40' } });
+    fireEvent.change(percentInput, { target: { value: '39.6' } });
 
+    expect(percentInput.value).toBe('40');
     expect(screen.getByText('ขอรับเงินมัดจำ (40%)')).not.toBeNull();
     expect(screen.getByText('200.00 บาท')).not.toBeNull();
     expect(screen.getByText('214.00 บาท')).not.toBeNull();
@@ -323,6 +324,11 @@ describe('DepositNoticePage', () => {
     await waitFor(() => expect(api.depositNotices.update).toHaveBeenCalledWith(
       9002, expect.objectContaining({ depositPercent: 0.4 }),
     ));
+
+    // A cleared field bills nothing: 0% and ฿0 for deposit, VAT and total, never a silent 50%.
+    fireEvent.change(percentInput, { target: { value: '' } });
+    expect(screen.getByText('ขอรับเงินมัดจำ (0%)')).not.toBeNull();
+    expect(screen.getAllByText('0.00 บาท')).toHaveLength(3);
   });
 
   it('shows the deposit percent read-only once the notice is issued', async () => {
