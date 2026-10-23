@@ -147,7 +147,9 @@ describe('DepositNoticePage', () => {
   // UX-03 rule 4: a ฿0 deposit notice is meaningless and would still advance
   // the ticket's payment track — issuing it must be blocked even though
   // rules 1-3 (customer name, >=1 item, description+qty) are all satisfied.
-  it('blocks issue when the computed total is zero', async () => {
+  // A % outside a whole 1–100 gets its own message on the % field (it used to blame the unit
+  // price, or pass the gate at 150% and fail behind the confirm dialog).
+  it('blocks issue when the computed total is zero, or the % is outside 1–100, before the dialog', async () => {
     api.depositNotices.listByTicket.mockResolvedValue({
       depositNotices: [{
         ...validDraftDoc,
@@ -163,6 +165,20 @@ describe('DepositNoticePage', () => {
 
     expect(await screen.findByText(/ยอดเงินรวมต้องมากกว่า 0/)).not.toBeNull();
     expect(screen.queryByRole('dialog')).toBeNull();
+
+    fireEvent.change(document.getElementById('doc-item-0-qty'), { target: { value: '5' } });
+    fireEvent.change(screen.getByPlaceholderText('ราคา'), { target: { value: '100' } });
+    const percentInput = screen.getByLabelText('% มัดจำ');
+    for (const typed of ['0', '150']) {
+      fireEvent.change(percentInput, { target: { value: typed } });
+      fireEvent.click(screen.getByRole('button', { name: /ออกเอกสาร/ }));
+      const error = await screen.findByText('กรุณากรอก % มัดจำเป็นจำนวนเต็ม 1–100');
+      expect(percentInput.getAttribute('aria-invalid')).toBe('true');
+      expect(percentInput.getAttribute('aria-describedby')).toBe(error.id);
+      expect(document.activeElement).toBe(percentInput);
+      expect(screen.queryByText(/ยอดเงินรวมต้องมากกว่า 0/)).toBeNull();
+      expect(screen.queryByRole('dialog')).toBeNull();
+    }
     expect(api.depositNotices.issue).not.toHaveBeenCalled();
   });
 
@@ -186,6 +202,77 @@ describe('DepositNoticePage', () => {
     );
     // No issue-validation errors should have been introduced by saving.
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  // What บันทึก sends, and the summary beside it, must match what the backend stores:
+  // - a stored 0.333 (free input before whole percents) shows, labels and saves as 33%;
+  // - a 100%-discounted line (net 0, unit 100) adds 0 and is sent at net 0, never its unit price;
+  // - money rounds per step like the backend: 100.10 at 33% is 33.03 + VAT 2.31 = 35.34 (35.35 unrounded);
+  // - a blank เพิ่มรายการ row is left out (the backend refuses a line without a description);
+  // - the draft's updatedAt travels as expectedUpdatedAt (a stale save is refused server-side);
+  // - a cleared % sends null, so the save keeps the stored % instead of failing the whole PUT.
+  it('saves what the backend will store: rounded %, zero-net line, per-step rounding, no blank row, the stamp, null for a cleared %', async () => {
+    api.depositNotices.listByTicket.mockResolvedValue({
+      depositNotices: [{
+        ...validDraftDoc, depositPercent: 0.333, updatedAt: '2026-10-23T08:57:19.732123Z',
+        items: [
+          { seq: 1, description: 'กระเบื้อง A', qty: 1, unit: 'แผ่น', unitPrice: 100.1, netUnitPrice: 100.1 },
+          { seq: 2, description: 'ของแถม', qty: 2, unit: 'แผ่น', unitPrice: 100, netUnitPrice: 0 },
+        ],
+      }],
+    });
+    renderDepositNoticePage();
+
+    await screen.findByText('รายการสินค้า (2 รายการ)');
+    const percentInput = screen.getByLabelText('% มัดจำ');
+    expect(percentInput.value).toBe('33');
+    expect(screen.getByText('ขอรับเงินมัดจำ (33%)')).not.toBeNull();
+    expect(screen.getByText('100.10 บาท')).not.toBeNull();
+    expect(screen.getByText('33.03 บาท')).not.toBeNull();
+    expect(screen.getByText('2.31 บาท')).not.toBeNull();
+    expect(screen.getByText('35.34 บาท')).not.toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /เพิ่มรายการ/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+    await waitFor(() => expect(api.depositNotices.update).toHaveBeenCalledTimes(1));
+    const payload = api.depositNotices.update.mock.calls[0][1];
+    expect(payload).toMatchObject({ depositPercent: 0.33, expectedUpdatedAt: '2026-10-23T08:57:19.732123Z' });
+    expect(payload.items).toEqual([
+      expect.objectContaining({ seq: 1, unitPrice: 100.1, netUnitPrice: 100.1 }),
+      expect.objectContaining({ seq: 2, qty: 2, unitPrice: 100, netUnitPrice: 0 }),
+    ]);
+
+    fireEvent.change(percentInput, { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+    await waitFor(() => expect(api.depositNotices.update).toHaveBeenCalledTimes(2));
+    expect(api.depositNotices.update.mock.calls[1][1].depositPercent).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  // Someone else saved the draft since this page loaded it: the backend answers 409. The page
+  // reloads the draft (form and stamp) and shows the server's message, so the next save is a
+  // deliberate one over the fresh copy.
+  it('on a 409 save, reloads the draft and shows the server message', async () => {
+    const showToast = vi.fn();
+    api.depositNotices.listByTicket
+      .mockResolvedValueOnce({ depositNotices: [{ ...validDraftDoc, depositPercent: 0.3, updatedAt: 'T1' }] })
+      .mockResolvedValue({ depositNotices: [{ ...validDraftDoc, depositPercent: 0.4, updatedAt: 'T2' }] });
+    const stale = Object.assign(new Error('ใบแจ้งรับมัดจำนี้ถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง'), { status: 409 });
+    api.depositNotices.update.mockRejectedValueOnce(stale);
+    renderDepositNoticePage({ showToast });
+
+    await screen.findByDisplayValue('บริษัท ทดสอบ จำกัด');
+    const percentInput = screen.getByLabelText('% มัดจำ');
+    fireEvent.change(percentInput, { target: { value: '35' } });
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', stale.message));
+    expect(api.depositNotices.update.mock.calls[0][1]).toMatchObject({ depositPercent: 0.35, expectedUpdatedAt: 'T1' });
+    await waitFor(() => expect(percentInput.value).toBe('40'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+    await waitFor(() => expect(api.depositNotices.update).toHaveBeenCalledTimes(2));
+    expect(api.depositNotices.update.mock.calls[1][1]).toMatchObject({ depositPercent: 0.4, expectedUpdatedAt: 'T2' });
   });
 
   // A fully valid document opens the confirm dialog, and confirming it calls
@@ -214,8 +301,8 @@ describe('DepositNoticePage', () => {
     fireEvent.click(createButton);
 
     await waitFor(() => expect(api.depositNotices.createDraft).toHaveBeenCalledTimes(1));
-    // depositPercent is not sent on create: the draft's starting percent comes from the ticket's
-    // own quotation on the backend. Sales changes it on the draft afterwards.
+    // depositPercent is not sent on create: the backend picks the draft's starting percent.
+    // Sales changes it on the draft afterwards.
     expect(api.depositNotices.createDraft).toHaveBeenCalledWith('701', {
       notes: ['หมายเหตุมาตรฐาน'],
     });

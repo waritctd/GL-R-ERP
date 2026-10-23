@@ -75,6 +75,10 @@ vi.mock('../../api/index.js', () => ({
       confirmOrder: vi.fn(),
       createDepositNoticeFromQuotation: vi.fn(),
     },
+    // Step 6: the deal's deposit notices, so the create action is not offered once one is ISSUED.
+    depositNotices: {
+      listByTicket: vi.fn(),
+    },
     // CR-1 (GLA-167): lead-time change requests (R2 / R10).
     leadTimeChanges: {
       listForPricingRequest: vi.fn(),
@@ -328,6 +332,7 @@ function setApiDefaults() {
     result: { ticket: { summary: { id: 701 } }, pricingRequest: { id: 501, orderConfirmedAt: '2026-07-21T00:00:00Z' } },
   });
   api.pricingRequests.createDepositNoticeFromQuotation.mockResolvedValue({ depositNotice: { id: 9901, status: 'DRAFT' } });
+  api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [] });
   api.catalog.prices.mockResolvedValue({ items: [] });
   // B6 (GLA-135): a small real-looking factory roster — enough for the picker + duplicate-name
   // tests below without pulling in the full catalog fixture this file doesn't otherwise need.
@@ -3566,6 +3571,23 @@ describe('PricingRequestDetailPage Step 6: Deposit, Payment, and Order Confirmat
     await screen.findByText(accepted.number);
 
     expect(screen.queryByRole('button', { name: 'สร้างใบแจ้งยอดเงินรับมัดจำ' })).toBeNull();
+  });
+
+  // Owner ruling 2026-10-23: one deposit notice per deal. Once one is ISSUED the create action is
+  // gone (the backend 409s it) and the block says which notice exists and where to open it.
+  it('replaces "สร้างใบแจ้งยอดเงินรับมัดจำ" with a pointer to the deal\'s ISSUED notice', async () => {
+    api.depositNotices.listByTicket.mockResolvedValue({
+      depositNotices: [{ id: 77, status: 'ISSUED', docNumber: 'GLRD69001', version: 1 }],
+    });
+    const request = buildRequest({ summary: { status: 'QUOTATION_ACCEPTED', orderConfirmedAt: '2026-07-21T00:00:00Z' } });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+
+    const link = await screen.findByRole('link', { name: /GLRD69001/ });
+    expect(link.getAttribute('href')).toBe(`/tickets/${request.summary.ticketId}/deposit`);
+    expect(screen.getByText(/ออกใบแจ้งยอดเงินรับมัดจำแล้ว/)).not.toBeNull();
+    expect(screen.queryByRole('button', { name: 'สร้างใบแจ้งยอดเงินรับมัดจำ' })).toBeNull();
+    expect(api.depositNotices.listByTicket).toHaveBeenCalledWith(request.summary.ticketId);
   });
 
   it('never shows either Step 6 button to CEO or Import — read-only', async () => {
