@@ -4308,7 +4308,10 @@ export function PricingRequestDetailPage({ user, showToast }) {
             {!canConfirmOrder(user, summary) && !canCreateDepositNoticeFromQuotation(user, summary, dealQuotationForPr) ? (
               <p className="text-sm text-text-muted">
                 {summary.orderConfirmedAt
-                  ? `ยืนยันคำสั่งซื้อแล้วเมื่อ ${formatThaiDate(summary.orderConfirmedAt)} — ดูใบแจ้งยอดเงินรับมัดจำได้ที่หน้าดีล`
+                  ? `ยืนยันคำสั่งซื้อแล้วเมื่อ ${formatThaiDate(summary.orderConfirmedAt)}${
+                    dealQuotationForPr?.docStatus === 'ACCEPTED' && dealQuotationForPr.depositPercent === 0
+                      ? ' — ใบเสนอราคานี้ไม่รับมัดจำ จึงไม่มีใบแจ้งยอดเงินรับมัดจำ'
+                      : ' — ดูใบแจ้งยอดเงินรับมัดจำได้ที่หน้าดีล'}`
                   : 'ยืนยันคำสั่งซื้อได้เฉพาะเจ้าของดีล (sales)'}
               </p>
             ) : null}
