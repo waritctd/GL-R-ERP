@@ -2440,6 +2440,13 @@ function stripCeoPriceModeFields(decision, user) {
   };
 }
 
+// Mirrors DepositNoticeService.createDraftFromQuotation (both create routes): one deposit notice
+// per deal, so no new draft while one is ISSUED (owner ruling 2026-10-23).
+function requireNoIssuedDepositNotice(ticketId) {
+  const issued = mockDepositNotices.find((d) => d.ticketId === Number(ticketId) && d.status === 'ISSUED');
+  if (issued) fail(`ดีลนี้ออกใบแจ้งรับมัดจำเลขที่ ${issued.docNumber} แล้ว จึงสร้างฉบับร่างใหม่ไม่ได้`, 409);
+}
+
 function buildMockDoc(doc) {
   const items = doc.items ?? [];
   const depositPct = doc.depositPercent ?? 0.5;

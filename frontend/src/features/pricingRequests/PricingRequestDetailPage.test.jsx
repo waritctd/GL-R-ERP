@@ -3528,6 +3528,23 @@ describe('PricingRequestDetailPage Step 5: Customer Decision and Commercial Revi
 });
 
 describe('PricingRequestDetailPage Step 6: Deposit, Payment, and Order Confirmation', () => {
+  // Owner ruling 2026-10-23: one deposit notice per deal. Once one is ISSUED the create action is
+  // gone (the backend 409s it) and the block says which notice exists and where to open it.
+  it('replaces "สร้างใบแจ้งยอดเงินรับมัดจำ" with a pointer to the deal\'s ISSUED notice', async () => {
+    api.depositNotices.listByTicket.mockResolvedValue({
+      depositNotices: [{ id: 77, status: 'ISSUED', docNumber: 'GLRD69001', version: 1 }],
+    });
+    const request = buildRequest({ summary: { status: 'QUOTATION_ACCEPTED', orderConfirmedAt: '2026-07-21T00:00:00Z' } });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+
+    const link = await screen.findByRole('link', { name: /GLRD69001/ });
+    expect(link.getAttribute('href')).toBe(`/tickets/${request.summary.ticketId}/deposit`);
+    expect(screen.getByText(/ออกใบแจ้งยอดเงินรับมัดจำแล้ว/)).not.toBeNull();
+    expect(screen.queryByRole('button', { name: 'สร้างใบแจ้งยอดเงินรับมัดจำ' })).toBeNull();
+    expect(api.depositNotices.listByTicket).toHaveBeenCalledWith(request.summary.ticketId);
+  });
+
   it('offers "ยืนยันคำสั่งซื้อ" to the owning sales rep once QUOTATION_ACCEPTED, before the bridge has run', async () => {
     const request = buildRequest({ summary: { status: 'QUOTATION_ACCEPTED', orderConfirmedAt: null } });
     renderDetailPage({ user: salesOwner, request });
