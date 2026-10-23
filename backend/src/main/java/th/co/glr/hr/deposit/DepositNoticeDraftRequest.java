@@ -14,7 +14,8 @@ public record DepositNoticeDraftRequest(
     @Size(max = 255) String customerAddress,
     @Size(max = 255) String projectName,
     @Size(max = 255) String reference,
-    @DecimalMin("0") @DecimalMax(value = "1", message = "เปอร์เซ็นต์มัดจำต้องไม่เกิน 100") BigDecimal depositPercent,
+    @DecimalMin(value = "0", inclusive = false, message = "เปอร์เซ็นต์มัดจำต้องมากกว่า 0")
+    @DecimalMax(value = "1", message = "เปอร์เซ็นต์มัดจำต้องไม่เกิน 100") BigDecimal depositPercent,
     List<String> notes,
     @Valid List<DepositNoticeItemRequest> items,
     // The draft's updatedAt as this client last read it. null skips the stale-save check (older clients).

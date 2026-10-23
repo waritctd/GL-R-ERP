@@ -13,6 +13,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
@@ -20,9 +21,13 @@ import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 import th.co.glr.hr.dealquotation.DealQuotationRenderAdapter;
 import th.co.glr.hr.ticket.QuotationRenderer;
+import th.co.glr.hr.common.ApiException;
 
 @Repository
 public class DepositNoticeRepository {
+    static final String NOT_DRAFT = "ใบแจ้งรับมัดจำนี้ไม่ได้อยู่ในสถานะร่าง (DRAFT)";
+    static final String EDITED_ELSEWHERE = "ใบแจ้งรับมัดจำนี้ถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง";
+
     private final NamedParameterJdbcTemplate jdbc;
 
     public DepositNoticeRepository(NamedParameterJdbcTemplate jdbc) {
@@ -199,9 +204,14 @@ public class DepositNoticeRepository {
         return docId;
     }
 
+    /**
+     * Saves a DRAFT. Refuses with 409 before touching the lines when the row is no longer DRAFT
+     * (issued after the service read it) or, given {@code req.expectedUpdatedAt()}, someone else
+     * saved it since that stamp. {@code req.depositPercent()} is always set by the service.
+     */
     @Transactional
     public void update(long docId, DepositNoticeDraftRequest req, List<DepositNoticeItemDto> storedItems) {
-        BigDecimal depositPct = req.depositPercent() != null ? req.depositPercent() : new BigDecimal("0.50");
+        BigDecimal depositPct = req.depositPercent();
         BigDecimal vatPct = new BigDecimal("0.07");
         List<DepositNoticeItemRequest> items = req.items() != null ? req.items() : List.of();
 
@@ -218,7 +228,7 @@ public class DepositNoticeRepository {
 
         String[] notesArr = req.notes() != null ? req.notes().toArray(String[]::new) : new String[0];
 
-        jdbc.update("""
+        int rows = jdbc.update("""
             UPDATE sales.deposit_notice SET
                 customer_name    = :customerName,
                 customer_tax_id  = :customerTaxId,
@@ -233,9 +243,11 @@ public class DepositNoticeRepository {
                 notes            = :notes,
                 updated_at       = now()
              WHERE deposit_notice_id = :id AND status = 'DRAFT'
+               AND (CAST(:expectedUpdatedAt AS timestamptz) IS NULL OR updated_at = :expectedUpdatedAt)
             """,
             new MapSqlParameterSource()
                 .addValue("id",              docId)
+                .addValue("expectedUpdatedAt", req.expectedUpdatedAt())
                 .addValue("customerName",    req.customerName())
                 .addValue("customerTaxId",   req.customerTaxId())
                 .addValue("customerAddress", req.customerAddress())
@@ -248,6 +260,12 @@ public class DepositNoticeRepository {
                 .addValue("totalPayable",    total)
                 .addValue("notes",           notesArr)
         );
+        if (rows == 0) {
+            boolean stillDraft = req.expectedUpdatedAt() != null && !jdbc.queryForList(
+                "SELECT 1 FROM sales.deposit_notice WHERE deposit_notice_id = :id AND status = 'DRAFT'",
+                Map.of("id", docId), Integer.class).isEmpty();
+            throw new ApiException(HttpStatus.CONFLICT, stillDraft ? EDITED_ELSEWHERE : NOT_DRAFT);
+        }
         if (!items.isEmpty()) {
             jdbc.update("DELETE FROM sales.deposit_notice_item WHERE deposit_notice_id = :id", Map.of("id", docId));
             insertItems(docId, items);

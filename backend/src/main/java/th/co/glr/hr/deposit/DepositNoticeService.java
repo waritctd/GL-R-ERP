@@ -176,6 +176,7 @@ public class DepositNoticeService {
 
     @Transactional
     public DepositNoticeDto update(long docId, DepositNoticeDraftRequest req, UserPrincipal actor) {
+        requireRole(actor, SALES_ROLES);
         DepositNoticeDto doc = requireDraft(docId);
         requireTicketOwner(doc.ticketId(), actor);
         // Owner ruling 2026-10-23: sales may change the deposit percent on a DRAFT (requireDraft
@@ -185,15 +186,17 @@ public class DepositNoticeService {
         if (depositPercent.signum() <= 0) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "เปอร์เซ็นต์มัดจำต้องมากกว่า 0");
         }
-        // Whole percents only: the document prints the percent rounded (40.5% shows as "41%").
-        if (req.depositPercent() != null && req.depositPercent().movePointRight(2).stripTrailingZeros().scale() > 0) {
+        // Whole percents only: the document prints the percent rounded (40.5% shows as "41%"). A
+        // percent stored before that rule (0.3330) still saves while it is sent back unchanged;
+        // issue() refuses it until sales picks a whole one.
+        if (depositPercent.compareTo(doc.depositPercent()) != 0 && !isWholePercent(depositPercent)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "เปอร์เซ็นต์มัดจำต้องเป็นจำนวนเต็ม");
         }
         var effective = new DepositNoticeDraftRequest(
             req.customerName(), req.customerTaxId(), req.customerAddress(),
             req.projectName(), req.reference(),
             depositPercent,
-            req.notes(), req.items()
+            req.notes(), req.items(), req.expectedUpdatedAt()
         );
         docs.update(docId, effective, doc.items());
         return docs.findById(docId).orElseThrow();
@@ -215,6 +218,14 @@ public class DepositNoticeService {
         DepositNoticeDto doc = requireDraft(docId);
         requireRole(actor, SALES_ROLES);
         requireTicketOwner(doc.ticketId(), actor);
+        // The stored percent is what the document prints: outside a whole 1-100 (a 0% ticket-route
+        // draft, a 0.3330 typed before whole percents) it takes no number until fixed on the draft.
+        BigDecimal pct = doc.depositPercent();
+        if (pct.signum() <= 0 || pct.compareTo(BigDecimal.ONE) > 0 || !isWholePercent(pct)) {
+            throw new ApiException(HttpStatus.CONFLICT, "ใบแจ้งรับมัดจำนี้มีเปอร์เซ็นต์มัดจำ "
+                + pct.movePointRight(2).stripTrailingZeros().toPlainString()
+                + "% จึงออกเอกสารไม่ได้ (ต้องเป็นจำนวนเต็ม 1–100)");
+        }
 
         // Issuing the deposit-notice DOCUMENT is the payment-track step: it requires a
         // customer-confirmed quotation and advances paymentStatus, leaving the main
@@ -1127,7 +1138,7 @@ public class DepositNoticeService {
         DepositNoticeDto doc = docs.findById(docId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบใบแจ้งรับมัดจำนี้"));
         if (!"DRAFT".equals(doc.status())) {
-            throw new ApiException(HttpStatus.CONFLICT, "ใบแจ้งรับมัดจำนี้ไม่ได้อยู่ในสถานะร่าง (DRAFT)");
+            throw new ApiException(HttpStatus.CONFLICT, DepositNoticeRepository.NOT_DRAFT);
         }
         return doc;
     }
@@ -1176,6 +1187,11 @@ public class DepositNoticeService {
         if (!allowed.contains(actor.role())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
+    }
+
+    /** 0.40 is a whole 40%; 0.405 and 0.3330 are not. */
+    private static boolean isWholePercent(BigDecimal fraction) {
+        return fraction.movePointRight(2).stripTrailingZeros().scale() <= 0;
     }
 
     private String blankToNull(String value) {
