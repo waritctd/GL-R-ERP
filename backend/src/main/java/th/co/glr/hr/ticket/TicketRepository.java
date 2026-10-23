@@ -890,14 +890,18 @@ public class TicketRepository {
      *
      * <p>"Live" is a display pick over new-engine rows only: ACCEPTED beats ISSUED beats APPROVED,
      * across both PRICING_REQUEST and DEAL_DIRECT origins, most recent id wins a tie. It is NOT the
-     * deposit notice's pick ({@code DepositNoticeRepository#findGoverningQuotation}), which also
-     * reads legacy rows and ranks a DEAL_DIRECT APPROVED row as answered, level with ACCEPTED. The
-     * two agree on a ticket with one live new-engine quotation. They differ when the ticket also
-     * has a live legacy quotation; when an ACCEPTED quotation is followed by a newer DEAL_DIRECT
-     * APPROVED one ({@code DealQuotationRepository#supersedeOtherLiveOnTicket} never supersedes an
-     * ACCEPTED row, so this shows the ACCEPTED lines while the deposit bills the DEAL_DIRECT one);
-     * and on data from before 2026-10-17 that still holds both a DEAL_DIRECT APPROVED and a
-     * PRICING_REQUEST ISSUED row.
+     * ticket-route deposit notice's pick ({@code DepositNoticeRepository#findGoverningQuotation}),
+     * which also reads legacy rows and, by owner ruling 2026-10-23, counts a DEAL_DIRECT approval
+     * as the answer, level with ACCEPTED. The two agree on a ticket with one live new-engine
+     * quotation. They differ when the ticket also has a live legacy quotation. The DEAL_DIRECT
+     * cases exist only on pre-lock data (a DEAL_DIRECT quotation beside a pricing-request one,
+     * which {@code DirectQuotationLocks} now refuses): an ACCEPTED quotation followed by a newer
+     * DEAL_DIRECT APPROVED one ({@code DealQuotationRepository#supersedeOtherLiveOnTicket} never
+     * supersedes an ACCEPTED row), where this shows the ACCEPTED lines and a ticket-route draft
+     * bills the DEAL_DIRECT one; and data from before 2026-10-17 that still holds both a
+     * DEAL_DIRECT APPROVED and a PRICING_REQUEST ISSUED row. The UI drafts any deal with a
+     * QUOTATION_ACCEPTED pricing request through the pricing-request route, which bills that
+     * request's accepted quotation instead.
      *
      * <p>Only brand/model/color/texture/size/qty/qtySqm/unitBasis/rawUnit are mapped -- pricing
      * fields (proposedPrice/approvedPrice/calcedCost/manualPrice/...) are deliberately left at

@@ -14,7 +14,7 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  * Real-DB proof for the V2 deal-quotation item source of a ticket-level deposit notice (the
  * 2026-09-29 fix): {@link DepositNoticeRepository#findGoverningQuotation} picks the quotation and
  * {@link DepositNoticeRepository#findDealQuotationItems} reads its lines, the pair {@code
- * DepositNoticeService#buildItemsFromRequest} uses once the legacy {@code
+ * DepositNoticeService#itemsFromGoverning} uses once the legacy {@code
  * ticket_item.approved_price} path yields nothing. Mockito cannot exercise this: the job is the
  * SQL (the status/origin filter, the {@code ORDER BY} preference, the column mapping), so this
  * needs the real queries against real Postgres. The mixed legacy/v2 ranking is pinned in {@code
@@ -131,7 +131,7 @@ class DepositNoticeDealQuotationAutofillIntegrationTest extends AbstractPostgres
 
     // ── helpers ──────────────────────────────────────────────────────────────────────────────
 
-    /** The new-engine branch of {@code DepositNoticeService#buildItemsFromRequest}. */
+    /** The new-engine branch of {@code DepositNoticeService#itemsFromGoverning}. */
     private List<DepositNoticeItemRequest> itemsForDeposit(long ticketId) {
         return repo.findGoverningQuotation(ticketId)
             .map(governing -> repo.findDealQuotationItems(governing.quotationId()))

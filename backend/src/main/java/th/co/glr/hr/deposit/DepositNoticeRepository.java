@@ -91,14 +91,15 @@ public class DepositNoticeRepository {
         );
     }
 
-    /** The quotation a ticket-level deposit notice bills: its lines, its percent (a fraction,
-     * 30 -&gt; 0.30) and its number as the reference. See {@link #findGoverningQuotation}. */
+    /** The quotation a ticket-level deposit notice bills: always its percent (a fraction,
+     * 30 -&gt; 0.30); its lines and its number as the reference unless the caller or legacy
+     * approved_price rows supply the lines. See {@link #findGoverningQuotation}. */
     public record GoverningQuotation(long quotationId, boolean legacy, String number, BigDecimal depositPercent) {}
 
     /**
      * The ONE pick of the quotation a ticket-level deposit notice bills, across both engines, so
-     * its lines and its percent can never come from different rows (owner rulings 2026-09-29 and
-     * 2026-10-23). The PRICING-REQUEST route ({@code OrderConfirmationService
+     * when it supplies the lines they and the percent come from the same row (owner rulings
+     * 2026-09-29 and 2026-10-23). The PRICING-REQUEST route ({@code OrderConfirmationService
      * #createDepositNoticeFromQuotation}) already knows its quotation and does not call this.
      *
      * <p>Live rows: a legacy pricing-chain quotation ({@code origin IS NULL}, {@code
