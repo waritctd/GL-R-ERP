@@ -425,6 +425,39 @@ describe('mockApi.depositNotices.issue hasPdf/hasXlsx (issue #752: mock reproduc
   });
 });
 
+// Owner ruling 2026-10-23 (mirrors DepositNoticeService.update): sales may change the deposit %
+// on a DRAFT and the amount follows; 0 is refused; an ISSUED notice refuses every edit.
+describe('mockApi.depositNotices.update deposit percent', () => {
+  it('on a DRAFT takes the new percent and recomputes the amount; 0 is refused', async () => {
+    const { ticketId } = await driveTicketToAcceptedQuotation();
+    const { depositNotice: draft } = await api.depositNotices.createDraft(ticketId, { notes: [] });
+    expect(draft.subtotal).toBeGreaterThan(0);
+
+    // Items sent the way DepositNoticePage sends them on save.
+    const { depositNotice: updated } = await api.depositNotices.update(draft.id, { depositPercent: 0.4, items: draft.items });
+    expect(updated.depositPercent).toBe(0.4);
+    expect(updated.depositAmount).toBe(Math.round(draft.subtotal * 0.4 * 100) / 100);
+
+    await expect(api.depositNotices.update(draft.id, { depositPercent: 0 }))
+      .rejects.toMatchObject({ status: 400, message: 'เปอร์เซ็นต์มัดจำต้องมากกว่า 0' });
+    const { depositNotice: reread } = await api.depositNotices.get(draft.id);
+    expect(reread.depositPercent).toBe(0.4);
+  });
+
+  it('on an ISSUED notice is refused with 409 and changes nothing', async () => {
+    const { ticketId } = await driveTicketToAcceptedQuotation();
+    const { depositNotice: draft } = await api.depositNotices.createDraft(ticketId, { notes: [] });
+    await api.tickets.confirmCustomer(ticketId);
+    const { depositNotice: issued } = await api.depositNotices.issue(draft.id);
+
+    await expect(api.depositNotices.update(issued.id, { depositPercent: 0.4 }))
+      .rejects.toMatchObject({ status: 409 });
+    const { depositNotice: reread } = await api.depositNotices.get(issued.id);
+    expect(reread.depositPercent).toBe(issued.depositPercent);
+    expect(reread.depositAmount).toBe(issued.depositAmount);
+  });
+});
+
 // GLA-32 (2026-09-19): mirrors DepositNoticeService.issue's account-role notification (backend
 // backend/src/main/java/th/co/glr/hr/deposit/DepositNoticeService.java) — issuing a deposit
 // notice notifies the account role, in-app, so account picks up the deal here rather than

@@ -934,7 +934,8 @@ class DepositNoticeServiceTest {
     // 2026-10-23) ────
     // The governing quotation's percent (DepositNoticeRepository#findGoverningQuotation: legacy
     // 50, new-engine its own, blank 30); a caller-supplied percent is never read on create, and
-    // 0.50 applies only when the ticket has no live quotation.
+    // 0.50 applies only when the ticket has no live quotation. update() then lets sales change it
+    // on a DRAFT; an ISSUED notice refuses any edit (requireDraft, 409).
 
     @Test
     void createDraft_sourcesDepositPercentFromQuotation_ignoringCallerSuppliedValue() {
@@ -1003,23 +1004,50 @@ class DepositNoticeServiceTest {
     }
 
     @Test
-    void update_preservesTheDraftsOwnStoredDepositPercent_ignoringCallerSuppliedValue() {
+    void update_onADraft_persistsTheCallersDepositPercent() {
         // stubDraft's fixture stores depositPercent = 0.50 on doc 99 / ticket 10.
         stubDraft(99L, 10L);
         stubTicket(10L, TicketStatus.APPROVED, null);
 
-        // A caller sends 0.99 — must never reach the repository update.
         service.update(99L,
             new DepositNoticeDraftRequest("ACME", null, null, null, "REF-2",
-                new BigDecimal("0.99"), null, null),
+                new BigDecimal("0.40"), null, null),
+            owner);
+
+        ArgumentCaptor<DepositNoticeDraftRequest> captor = ArgumentCaptor.forClass(DepositNoticeDraftRequest.class);
+        verify(docs).update(eq(99L), captor.capture());
+        assertThat(captor.getValue().depositPercent()).isEqualByComparingTo("0.40");
+        assertThat(captor.getValue().customerName()).isEqualTo("ACME");
+        assertThat(captor.getValue().reference()).isEqualTo("REF-2");
+    }
+
+    @Test
+    void update_withNoDepositPercent_keepsTheDraftsStoredPercent() {
+        stubDraft(99L, 10L); // stored 0.50
+        stubTicket(10L, TicketStatus.APPROVED, null);
+
+        service.update(99L,
+            new DepositNoticeDraftRequest("ACME", null, null, null, "REF-2", null, null, null),
             owner);
 
         ArgumentCaptor<DepositNoticeDraftRequest> captor = ArgumentCaptor.forClass(DepositNoticeDraftRequest.class);
         verify(docs).update(eq(99L), captor.capture());
         assertThat(captor.getValue().depositPercent()).isEqualByComparingTo("0.50");
-        // Every other field still passes through untouched — only depositPercent is overridden.
-        assertThat(captor.getValue().customerName()).isEqualTo("ACME");
-        assertThat(captor.getValue().reference()).isEqualTo("REF-2");
+    }
+
+    @Test
+    void update_refusesAZeroDepositPercent_andWritesNothing() {
+        stubDraft(99L, 10L);
+        stubTicket(10L, TicketStatus.APPROVED, null);
+
+        assertThatThrownBy(() -> service.update(99L,
+                new DepositNoticeDraftRequest("ACME", null, null, null, "REF-2", BigDecimal.ZERO, null, null),
+                owner))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                assertThat(e.getMessage()).isEqualTo("เปอร์เซ็นต์มัดจำต้องมากกว่า 0");
+            });
+        verify(docs, never()).update(anyLong(), any());
     }
 
     private static void assertForbidden(org.assertj.core.api.ThrowableAssert.ThrowingCallable action) {
