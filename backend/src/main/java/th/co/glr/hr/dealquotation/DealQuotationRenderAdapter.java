@@ -32,6 +32,11 @@ public final class DealQuotationRenderAdapter {
 
     private static final ZoneId BANGKOK = ZoneId.of("Asia/Bangkok");
 
+    /** The deposit percent the PDF prints when a quotation's {@code deposit_percent} is NULL. The
+     * deposit notice bills the same default (owner ruling 2026-10-22), so the customer is billed
+     * what the accepted PDF promised. */
+    public static final int DEFAULT_DEPOSIT_PERCENT = 30;
+
     /** Overload for callers with no configured bank block — the English document then prints the
      * proforma-invoice line instead. Kept so tests and any hand-wired caller need not thread a
      * config value they do not care about. */
@@ -635,7 +640,7 @@ public final class DealQuotationRenderAdapter {
       * lead time (dropped entirely, not blanked, when nothing on the document carries one — same
       * {@link #dropLeadTimeLineAndRenumber} the tile set uses), and the no-exchange-or-return rule. */
     private static List<String> nonTileRemarkLines(DealQuotationDto quotation) {
-        int depositPct = quotation.depositPercent() != null ? quotation.depositPercent() : 30;
+        int depositPct = quotation.depositPercent() != null ? quotation.depositPercent() : DEFAULT_DEPOSIT_PERCENT;
         String remainderText = "CREDIT".equals(quotation.remainderMode())
             ? "เครดิต " + (quotation.creditDays() != null ? quotation.creditDays() : 0) + " วัน"
             : "ขอรับก่อนส่งมอบสินค้าหรือเมื่อส่งมอบสินค้า";
@@ -652,7 +657,7 @@ public final class DealQuotationRenderAdapter {
 
     private static List<String> remarkLines(DealQuotationDto quotation) {
         LocalDate offerDate = quotation.offerDate() != null ? quotation.offerDate() : LocalDate.now(BANGKOK);
-        int depositPct = quotation.depositPercent() != null ? quotation.depositPercent() : 30;
+        int depositPct = quotation.depositPercent() != null ? quotation.depositPercent() : DEFAULT_DEPOSIT_PERCENT;
         String remainderText = "CREDIT".equals(quotation.remainderMode())
             ? "เครดิต " + (quotation.creditDays() != null ? quotation.creditDays() : 0) + " วัน"
             : "ขอรับก่อนส่งมอบสินค้าหรือเมื่อส่งมอบสินค้า";
@@ -902,7 +907,7 @@ public final class DealQuotationRenderAdapter {
 
     private static List<String> englishRemarkLines(DealQuotationDto quotation, List<String> bankBlockLines) {
         LocalDate offerDate = quotation.offerDate() != null ? quotation.offerDate() : LocalDate.now(BANGKOK);
-        int depositPct = quotation.depositPercent() != null ? quotation.depositPercent() : 30;
+        int depositPct = quotation.depositPercent() != null ? quotation.depositPercent() : DEFAULT_DEPOSIT_PERCENT;
         // Wording-scan fix 7 (2026-09-17): singular "day credit" at exactly 1 day.
         String remainderText;
         if ("CREDIT".equals(quotation.remainderMode())) {
@@ -1029,7 +1034,7 @@ public final class DealQuotationRenderAdapter {
 
     /** The English twin of {@link #nonTileRemarkLines}. */
     private static List<String> englishNonTileRemarkLines(DealQuotationDto quotation, List<String> bankBlockLines) {
-        int depositPct = quotation.depositPercent() != null ? quotation.depositPercent() : 30;
+        int depositPct = quotation.depositPercent() != null ? quotation.depositPercent() : DEFAULT_DEPOSIT_PERCENT;
         // Wording-scan fix 7 (2026-09-17): singular "day credit" at exactly 1 day.
         String remainderText;
         if ("CREDIT".equals(quotation.remainderMode())) {

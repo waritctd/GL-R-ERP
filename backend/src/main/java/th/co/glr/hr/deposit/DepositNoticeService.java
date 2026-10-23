@@ -96,8 +96,8 @@ public class DepositNoticeService {
     }
 
     /** {@link #createDraft} for a caller that has already chosen the source quotation: a non-null
-     * {@code sourceDepositPercent} (that quotation's own whole-number {@code deposit_percent}) is
-     * the draft's percent, instead of the per-ticket lookup. */
+     * {@code sourceDepositPercent} (the whole-number percent that quotation's PDF printed) is the
+     * draft's percent, and the ticket's governing quotation is not consulted. */
     @Transactional
     public DepositNoticeDto createDraftFromQuotation(long ticketId, DepositNoticeDraftRequest req,
                                                      Integer sourceDepositPercent, UserPrincipal actor) {
@@ -106,9 +106,17 @@ public class DepositNoticeService {
         TicketSummaryDto s = requireApprovedTicket(ticketId, actor);
         requireActiveLifecycle(s);
 
-        // Auto-populate items from approved ticket items (legacy) or, failing that, the
-        // ticket's own customer-quotation chain (new pricing-request flow) if not provided.
+        // Ticket route: the governing quotation (DepositNoticeRepository#findGoverningQuotation)
+        // always supplies the percent. It supplies the lines, and with them the reference, unless
+        // req.items or legacy approved_price rows already supply the lines.
+        DepositNoticeRepository.GoverningQuotation governing = sourceDepositPercent == null
+            ? docs.findGoverningQuotation(ticketId).orElse(null) : null;
+        if (governing != null && governing.depositPercent().signum() == 0) {
+            throw zeroDepositRefusal(governing.number());
+        }
         List<DepositNoticeItemRequest> items = buildItemsFromRequest(req, ticketId);
+        boolean linesFromGoverning = items.isEmpty() && governing != null;
+        if (linesFromGoverning) items = itemsFromGoverning(governing);
         List<String> notes = req.notes() != null ? req.notes()
             : docs.findNoteTemplates().stream()
                 .filter(DocumentNoteTemplateDto::defaultSelected)
@@ -128,31 +136,35 @@ public class DepositNoticeService {
         // address/tax id differently.
         CustomerHeaderInfo header = resolveCustomerHeader(s, req.customerTaxId(), req.customerAddress(), req.projectName());
 
-        // Owner ruling (2026-09-29, sales business-logic change, authorised per CLAUDE.md's
-        // "deposit-notice flow is UNFROZEN"): the deposit PERCENT is LOCKED to the source
-        // quotation's own sales.quotation.deposit_percent — the value sales set when creating the
-        // quotation — and is never editable at the deposit-notice stage. A caller-supplied
-        // req.depositPercent() is deliberately IGNORED as the source here (the quotation always
-        // wins); DepositNoticeDraftRequest still carries the field only because it round-trips
-        // through the DTO the frontend/OrderConfirmationService already send. Falls back to the
-        // document's long-standing 0.50 default only when the ticket has no live quotation to
-        // read a percent from at all (e.g. a manually-approved legacy ticket with no quotation
-        // chain) — see DepositNoticeRepository#findDealQuotationDepositPercent's own Javadoc for
-        // the full pick order.
+        // Owner rulings (2026-09-29, 2026-10-22, 2026-10-23): the deposit percent is the one the
+        // source quotation's PDF printed: a legacy quotation 50% (the constant its PDF prints), a
+        // new-engine one its own deposit_percent, a blank one 30%. The PR route passes it as
+        // sourceDepositPercent; the ticket route takes it from the governing quotation. On create,
+        // req.depositPercent() is never read (DepositNoticeDraftRequest carries it for update's
+        // round trip). 0.50 only when the ticket has no live quotation at all (e.g. a manually
+        // approved legacy ticket with no quotation chain); see
+        // DepositNoticeRepository#findGoverningQuotation for the pick.
         BigDecimal effectiveDepositPercent = sourceDepositPercent != null
             ? BigDecimal.valueOf(sourceDepositPercent, 2)
-            : docs.findDealQuotationDepositPercent(ticketId).orElse(new BigDecimal("0.50"));
+            : governing != null ? governing.depositPercent() : new BigDecimal("0.50");
+        String reference = req.reference() == null && linesFromGoverning ? governing.number() : req.reference();
 
         var effective = new DepositNoticeDraftRequest(
             req.customerName() != null ? req.customerName() : s.customerName(),
             header.taxId(), header.address(),
-            header.projectName(), req.reference(),
+            header.projectName(), reference,
             effectiveDepositPercent,
             notes, items
         );
 
         long docId = docs.createDraft(ticketId, effective, items);
         return docs.findById(docId).orElseThrow();
+    }
+
+    /** The 409 both deposit routes give a ไม่รับมัดจำ (0%) quotation: there is no deposit to bill. */
+    public static ApiException zeroDepositRefusal(String quotationNumber) {
+        return new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคา " + quotationNumber
+            + " ระบุไม่มีมัดจำ (ชำระเต็มจำนวน) จึงออกใบแจ้งยอดเงินรับมัดจำไม่ได้");
     }
 
     @Transactional
@@ -839,7 +851,7 @@ public class DepositNoticeService {
 
     /** Latest ACCEPTED revision only — see {@link #resolveRemainingInvoice}'s own Javadoc for why
      * this deliberately does NOT fall back to the latest ISSUED-but-not-yet-accepted one the way
-     * {@link #pickQuotation} does for the deposit notice. */
+     * {@link DepositNoticeRepository#findGoverningQuotation} does for the deposit notice. */
     private CustomerQuotationDto pickAcceptedQuotation(List<CustomerQuotationDto> candidates) {
         CustomerQuotationDto latestAccepted = null;
         for (CustomerQuotationDto q : candidates) {
@@ -1216,24 +1228,16 @@ public class DepositNoticeService {
         // Legacy path: sales.ticket_item.approved_price, written only by the @Deprecated
         // TicketService.approve (no controller route) — kept working for any ticket that still
         // carries it, e.g. one manually approved before the pricing-request chain existed.
-        List<DepositNoticeItemRequest> legacyItems = buildLegacyItems(ticketId);
-        if (!legacyItems.isEmpty()) return legacyItems;
+        return buildLegacyItems(ticketId);
+    }
 
-        // New-chain fallback (this branch's fix): every deal created through the pricing-request
-        // chain has approved_price = NULL on every ticket_item (see this class's own diagnosis in
-        // the branch handoff) — buildLegacyItems above always returns empty for such a deal, which
-        // is exactly the bug. Source items from the ticket's own customer quotation instead.
-        CustomerQuotationDto chosen = pickQuotation(quotations.findByTicket(ticketId));
-        if (chosen != null) {
-            return itemsFromQuotation(chosen.items());
-        }
-
-        // V2 deal-quotation chain (2026-09-29 fix): the pickQuotation/findByTicket source above is
-        // scoped to origin IS NULL, so it never returns a DEAL_DIRECT or PRICING_REQUEST quotation
-        // — every deal issued through the deal-quotation flow fell through to an empty item list.
-        // docs.findDealQuotationItemsForDeposit reads the ticket's live deal quotation (ACCEPTED,
-        // else ISSUED) directly; see that method's Javadoc for the selection and column choices.
-        return docs.findDealQuotationItemsForDeposit(ticketId);
+    /** Every deal created through the pricing-request chain has approved_price = NULL on every
+     * ticket_item, so its lines come from the governing quotation, whichever engine it is. */
+    private List<DepositNoticeItemRequest> itemsFromGoverning(DepositNoticeRepository.GoverningQuotation governing) {
+        if (!governing.legacy()) return docs.findDealQuotationItems(governing.quotationId());
+        return quotations.findById(governing.quotationId())
+            .map(q -> itemsFromQuotation(q.items()))
+            .orElse(List.of());
     }
 
     private List<DepositNoticeItemRequest> buildLegacyItems(long ticketId) {
@@ -1257,31 +1261,6 @@ public class DepositNoticeService {
             .orElse(List.of());
     }
 
-    /**
-     * Picks the quotation to source deposit-notice items from when no explicit items were given
-     * and no legacy {@code approved_price} exists: the LATEST ACCEPTED revision, or — if the
-     * customer has not yet accepted any revision — the latest ISSUED one. {@code
-     * CustomerQuotationRepository#findByTicket} returns rows ordered ASCENDING by {@code
-     * quotation_id} ALONE — deliberately NOT by {@code quotation_revision_no} (see that method's
-     * own Javadoc: the revision counter is scoped to a single pricing request and is not
-     * comparable across the multiple pricing requests one ticket can have) — so a single forward
-     * scan that keeps overwriting "latest seen" for each status is equivalent to sorting
-     * descending by {@code quotation_id} and taking the first match, without a second
-     * list/comparator.
-     */
-    private CustomerQuotationDto pickQuotation(List<CustomerQuotationDto> candidates) {
-        CustomerQuotationDto latestAccepted = null;
-        CustomerQuotationDto latestIssued = null;
-        for (CustomerQuotationDto q : candidates) {
-            if (QuotationStatus.ACCEPTED.equals(q.docStatus())) {
-                latestAccepted = q;
-            } else if (QuotationStatus.ISSUED.equals(q.docStatus())) {
-                latestIssued = q;
-            }
-        }
-        return latestAccepted != null ? latestAccepted : latestIssued;
-    }
-
     /** The pricing-request route's new-engine item source, so the draft's rows come from the
      * quotation its reference names. */
     public List<DepositNoticeItemRequest> itemsFromDealQuotation(long quotationId) {
@@ -1290,7 +1269,7 @@ public class DepositNoticeService {
 
     /**
      * Maps a customer quotation's items to deposit-notice item requests. The single shared mapping
-     * used by both {@link #buildItemsFromRequest} (this class's own ticket-chain fallback above)
+     * used by both {@link #itemsFromGoverning} (a legacy governing quotation's lines, above)
      * and {@code OrderConfirmationService.createDepositNoticeFromQuotation} (the explicit
      * quotation-driven entry point), so the two paths can never drift apart — extracted here
      * (rather than duplicated, as it was before this branch) because both already depend on this

@@ -1228,7 +1228,6 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const [outcomeNote, setOutcomeNote] = useState('');
   // Step 6: Deposit, Payment, and Order Confirmation.
   const [confirmOrderClientRequestId, setConfirmOrderClientRequestId] = useState(() => generateClientRequestId());
-  const [depositPercentInput, setDepositPercentInput] = useState('0.5');
   const startCeoReview = useActionMutation(
     () => api.pricingRequests.startPricingDecision(pricingRequestId, {
       defaultMarginPct: cleanNumber(resolvedDefaultMargin),
@@ -1503,9 +1502,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
     onError: (error) => showToast?.('error', error.message || 'ดำเนินการไม่สำเร็จ'),
   });
   const createDepositNoticeFromQuotation = useMutation({
-    mutationFn: () => api.pricingRequests.createDepositNoticeFromQuotation(pricingRequestId, {
-      depositPercent: cleanNumber(depositPercentInput),
-    }),
+    mutationFn: () => api.pricingRequests.createDepositNoticeFromQuotation(pricingRequestId, {}),
     onSuccess: () => {
       showToast?.('success', 'สร้างร่างใบแจ้งยอดเงินรับมัดจำแล้ว');
       // Reuse the existing (legacy) deposit-notice page as-is — it already loads/edits/issues a
@@ -4095,11 +4092,6 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 <p className="text-sm text-text-muted">
                   ยืนยันคำสั่งซื้อแล้ว — สร้างใบแจ้งยอดเงินรับมัดจำจากใบเสนอราคาที่ลูกค้ายอมรับ (แก้ไข/ออกเอกสารในหน้าใบแจ้งยอดเงินรับมัดจำ)
                 </p>
-                <label className="flex items-center gap-2 text-sm">
-                  % มัดจำ
-                  <input type="number" min="0" max="1" step="0.05" className="w-24 rounded border border-border p-1 text-sm"
-                    value={depositPercentInput} onChange={(e) => setDepositPercentInput(e.target.value)} />
-                </label>
                 <Button type="button" variant="primary" className="self-start" disabled={createDepositNoticeFromQuotation.isPending}
                   onClick={() => createDepositNoticeFromQuotation.mutate()}>
                   สร้างใบแจ้งยอดเงินรับมัดจำ
