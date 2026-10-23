@@ -21,7 +21,6 @@ import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 import th.co.glr.hr.dealquotation.DealQuotationRenderAdapter;
 import th.co.glr.hr.ticket.QuotationRenderer;
-import th.co.glr.hr.common.ApiException;
 
 @Repository
 public class DepositNoticeRepository {
@@ -264,7 +263,7 @@ public class DepositNoticeRepository {
             boolean stillDraft = req.expectedUpdatedAt() != null && !jdbc.queryForList(
                 "SELECT 1 FROM sales.deposit_notice WHERE deposit_notice_id = :id AND status = 'DRAFT'",
                 Map.of("id", docId), Integer.class).isEmpty();
-            throw new ApiException(HttpStatus.CONFLICT, stillDraft ? EDITED_ELSEWHERE : NOT_DRAFT);
+            throw new th.co.glr.hr.common.ApiException(HttpStatus.CONFLICT, stillDraft ? EDITED_ELSEWHERE : NOT_DRAFT);
         }
         if (!items.isEmpty()) {
             jdbc.update("DELETE FROM sales.deposit_notice_item WHERE deposit_notice_id = :id", Map.of("id", docId));
