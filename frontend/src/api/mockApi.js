@@ -13394,7 +13394,11 @@ export const api = {
       const doc = mockDepositNotices.find((d) => d.id === Number(docId));
       if (!doc) fail('ไม่พบใบแจ้งรับมัดจำนี้', 404);
       if (doc.status !== 'DRAFT') fail('ใบแจ้งรับมัดจำนี้ไม่ได้อยู่ในสถานะร่าง (DRAFT)', 409);
-      if (payload.depositPercent != null && !(Number(payload.depositPercent) > 0)) fail('เปอร์เซ็นต์มัดจำต้องมากกว่า 0', 400);
+      // Mirrors DepositNoticeDraftRequest's @DecimalMax and DepositNoticeService.update's checks.
+      const pct = payload.depositPercent == null ? null : Number(payload.depositPercent) * 100;
+      if (pct != null && pct > 100) fail('depositPercent เปอร์เซ็นต์มัดจำต้องไม่เกิน 100', 400);
+      if (pct != null && !(pct > 0)) fail('เปอร์เซ็นต์มัดจำต้องมากกว่า 0', 400);
+      if (pct != null && Math.abs(pct - Math.round(pct)) > 1e-9) fail('เปอร์เซ็นต์มัดจำต้องเป็นจำนวนเต็ม', 400);
       Object.assign(doc, {
         customerName:    payload.customerName    ?? doc.customerName,
         customerTaxId:   payload.customerTaxId   ?? doc.customerTaxId,
