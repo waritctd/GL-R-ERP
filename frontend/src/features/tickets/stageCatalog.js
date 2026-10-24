@@ -110,7 +110,7 @@ export function phaseIdOf(catalog, code) {
 // which is exactly today's behaviour.
 
 /** Codes the server marked `onRoute: false` for this deal. */
-function offRouteCodes(stageDecisions) {
+export function offRouteCodes(stageDecisions) {
   return new Set(
     (stageDecisions ?? []).filter((decision) => decision?.onRoute === false).map((d) => d.stage),
   );

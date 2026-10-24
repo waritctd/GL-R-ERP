@@ -355,3 +355,23 @@ describe('resolveWorkState / secondaryWorkActions — reviseTarget (PR A)', () =
     expect(secondaryWorkActions({ role: 'sales' }, d, [], { reviseTarget: target })).toEqual([]);
   });
 });
+
+// Owner ruling 2026-10-22 (revised): after a non-buyer acceptance the one primary is เสนอราคา (a menu
+// of the remaining on-route parties); there is NO ยืนยันคำสั่งซื้อ secondary in that state.
+describe('resolveWorkState / secondaryWorkActions — เสนอราคา after a non-buyer acceptance (owner ruling 2026-10-22, final)', () => {
+  const sales = { role: 'sales' };
+  const accepted = (recipientType) => [{ id: 5, ticketId: 1, status: 'QUOTATION_ACCEPTED', orderConfirmedAt: null, recipientType }];
+
+  it('DESIGNER accepted: the primary is เสนอราคา and the banner names both choices', () => {
+    const deal = baseDeal({ status: 'draft' });
+    const result = resolveWorkState(sales, deal, accepted('DESIGNER'));
+    expect(result.action).toMatchObject({ key: 'quote_next_party', parties: ['OWNER', 'BUYER'] });
+    expect(result.bannerText).toBe('ผู้ออกแบบยอมรับแล้ว เลือกเสนอราคาเจ้าของโครงการ หรือข้ามไปผู้ซื้อ');
+  });
+
+  it('resolveWorkState passes offRouteParties through (owner off the route -> buyer only, one-party banner)', () => {
+    const result = resolveWorkState(sales, baseDeal({ status: 'draft' }), accepted('DESIGNER'), { offRouteParties: new Set(['OWNER']) });
+    expect(result.action).toMatchObject({ key: 'quote_next_party', parties: ['BUYER'] });
+    expect(result.bannerText).toBe('ผู้ออกแบบยอมรับแล้ว ถัดไปเสนอราคาผู้ซื้อ');
+  });
+});

@@ -36,7 +36,7 @@
 // actually clickable; this module only decides which ONE action (if any)
 // leads the sticky bar.
 
-import { nextSalesAction, reviseAction, REVISE_STAGES, SALES_ACTION } from './salesActions.js';
+import { nextSalesAction, PARTY_LABEL, reviseAction, REVISE_STAGES, SALES_ACTION } from './salesActions.js';
 import { nextImportAction } from './importActions.js';
 import { nextAccountAction } from './accountActions.js';
 
@@ -66,7 +66,7 @@ export const DIRECT_APPROVAL_ACTION_KEY = 'approve_direct_quotation';
  *   อนุมัติใบเสนอราคา {number}" — a waiting line that names the document and who
  *   decides it (unlike the retired department-only banner above). Absent otherwise.
  */
-export function resolveWorkState(user, deal, pricingRequests = [], { reviseTarget = null } = {}) {
+export function resolveWorkState(user, deal, pricingRequests = [], { reviseTarget = null, offRouteParties = null } = {}) {
   const role = user?.role;
   if (!deal || deal.lifecycle !== 'ACTIVE') return { action: null };
 
@@ -87,7 +87,7 @@ export function resolveWorkState(user, deal, pricingRequests = [], { reviseTarge
     };
   }
 
-  const action = role === 'sales' ? nextSalesAction(deal, pricingRequests, { reviseTarget })
+  const action = role === 'sales' ? nextSalesAction(deal, pricingRequests, { reviseTarget, offRouteParties })
     : role === 'import' ? nextImportAction(deal, pricingRequests)
       : role === 'account' ? nextAccountAction(deal)
         : null;
@@ -101,9 +101,21 @@ export function resolveWorkState(user, deal, pricingRequests = [], { reviseTarge
     };
   }
 
+  // Owner ruling 2026-10-22: the เสนอราคา<party> primary comes with a line naming the choice.
+  if (action?.key === SALES_ACTION.QUOTE_NEXT_PARTY) return { action, bannerText: quoteNextPartyBanner(action) };
+
   if (action) return { action };
 
   return { action: null };
+}
+
+/** "ผู้ออกแบบยอมรับแล้ว เลือกเสนอราคาเจ้าของโครงการ หรือข้ามไปผู้ซื้อ"; one party left reads
+ * "<party>ยอมรับแล้ว ถัดไปเสนอราคา<next>". */
+function quoteNextPartyBanner({ acceptedParty, parties }) {
+  const [next, ...later] = parties.map((party) => PARTY_LABEL[party]);
+  return later.length > 0
+    ? `${PARTY_LABEL[acceptedParty]}ยอมรับแล้ว เลือกเสนอราคา${next} หรือข้ามไป${later.join(', ')}`
+    : `${PARTY_LABEL[acceptedParty]}ยอมรับแล้ว ถัดไปเสนอราคา${next}`;
 }
 
 /**
@@ -113,9 +125,9 @@ export function resolveWorkState(user, deal, pricingRequests = [], { reviseTarge
  * resolved by the caller through quotationMeta.canReviseDealQuotation (owner + status live there).
  * Skipped when revise is already the primary (approved direct quotation past draft).
  */
-export function secondaryWorkActions(user, deal, pricingRequests = [], { reviseTarget = null } = {}) {
+export function secondaryWorkActions(user, deal, pricingRequests = [], { reviseTarget = null, offRouteParties = null } = {}) {
   if (user?.role !== 'sales' || !deal || deal.lifecycle !== 'ACTIVE') return [];
   if (!reviseTarget || !REVISE_STAGES.has(deal.salesStage)) return [];
-  if (resolveWorkState(user, deal, pricingRequests, { reviseTarget }).action?.key === SALES_ACTION.REVISE_QUOTATION) return [];
+  if (resolveWorkState(user, deal, pricingRequests, { reviseTarget, offRouteParties }).action?.key === SALES_ACTION.REVISE_QUOTATION) return [];
   return [reviseAction(reviseTarget)];
 }

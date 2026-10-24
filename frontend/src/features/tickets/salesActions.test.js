@@ -100,10 +100,11 @@ describe('nextSalesAction — RECORD_DELIVERY (stages 13-14, owner ruling 2026-0
 
 describe('nextSalesAction — RECORD_QUOTATION_OUTCOME (bucket 4, deal-page CTA discoverability fix)', () => {
   it('returns RECORD_QUOTATION_OUTCOME for a live PR at QUOTATION_ISSUED (previously fell through to follow-up/activity)', () => {
-    const prs = [{ id: 1, ticketId: 1, status: 'QUOTATION_ISSUED' }];
+    const prs = [{ id: 4, ticketId: 1, status: 'QUOTATION_ISSUED' }];
     expect(nextSalesAction(baseDeal(), prs)).toEqual({
       key: SALES_ACTION.RECORD_QUOTATION_OUTCOME,
       label: 'บันทึกผลใบเสนอราคา',
+      pricingRequestId: 4,
     });
   });
 
@@ -130,9 +131,11 @@ describe('nextSalesAction — full cascade baseline (buckets 1-3, 6-7)', () => {
     expect(nextSalesAction(baseDeal(), [])).toMatchObject({ key: SALES_ACTION.CREATE_PCR });
   });
 
-  it('ISSUE_QUOTATION — a live PR at APPROVED_FOR_QUOTATION', () => {
-    const prs = [{ id: 1, ticketId: 1, status: 'APPROVED_FOR_QUOTATION' }];
-    expect(nextSalesAction(baseDeal(), prs)).toMatchObject({ key: SALES_ACTION.ISSUE_QUOTATION });
+  it('ISSUE_QUOTATION — a live PR at APPROVED_FOR_QUOTATION, named for its recipient and carrying the PR id (new engine)', () => {
+    const prs = [{ id: 7, ticketId: 1, status: 'APPROVED_FOR_QUOTATION', recipientType: 'OWNER' }];
+    expect(nextSalesAction(baseDeal(), prs)).toEqual({
+      key: SALES_ACTION.ISSUE_QUOTATION, label: 'เสนอใบราคาเจ้าของโครงการ', pricingRequestId: 7,
+    });
   });
 
   it('CONFIRM_ORDER — QUOTATION_ACCEPTED but not yet order-confirmed', () => {
@@ -452,5 +455,109 @@ describe('ขั้น 1–2: the main action is always เลื่อนขั
       { deal: { id: 2, stageUpdatedAt: at }, action: { key: SALES_ACTION.ADVANCE_STAGE } },
     ]);
     expect(sorted.map((row) => row.deal.id)).toEqual([2, 1]);
+  });
+});
+
+// Owner ruling 2026-10-22 (final): after a NON-buyer party accepts, the one action is
+// "เสนอราคา<next party>" listing every remaining on-route party in route order (DESIGNER → OWNER →
+// BUYER); no ยืนยันคำสั่งซื้อ in that state. CONFIRM_ORDER leads only when no on-route party is left.
+describe('nextSalesAction — bucket 3 after a non-buyer acceptance: one เสนอราคา action listing the remaining parties (owner ruling 2026-10-22, final)', () => {
+  const QUOTE_NEXT = 'quote_next_party'; // literal on purpose: undefined in SALES_ACTION until implemented
+  const accepted = (recipientType, overrides = {}) => ({
+    id: 1, ticketId: 1, status: 'QUOTATION_ACCEPTED', orderConfirmedAt: null, recipientType, ...overrides,
+  });
+
+  it('exposes the action key', () => {
+    expect(SALES_ACTION.QUOTE_NEXT_PARTY).toBe(QUOTE_NEXT);
+  });
+
+  it('DESIGNER accepted -> "เสนอราคาเจ้าของโครงการ" listing owner then buyer', () => {
+    expect(nextSalesAction(baseDeal({ status: 'draft' }), [accepted('DESIGNER')])).toEqual({
+      key: QUOTE_NEXT, label: 'เสนอราคาเจ้าของโครงการ', parties: ['OWNER', 'BUYER'], acceptedParty: 'DESIGNER',
+    });
+  });
+
+  it('OWNER accepted -> "เสนอราคาผู้ซื้อ" listing the buyer only', () => {
+    expect(nextSalesAction(baseDeal({ status: 'draft' }), [accepted('OWNER')])).toEqual({
+      key: QUOTE_NEXT, label: 'เสนอราคาผู้ซื้อ', parties: ['BUYER'], acceptedParty: 'OWNER',
+    });
+  });
+
+  it('BUYER accepted -> CONFIRM_ORDER, unchanged (nobody left to quote)', () => {
+    expect(nextSalesAction(baseDeal({ status: 'draft' }), [accepted('BUYER')])).toEqual({
+      key: SALES_ACTION.CONFIRM_ORDER, label: 'ยืนยันคำสั่งซื้อ',
+    });
+  });
+
+  // The rep already chose to continue the route: the owner's request is in flight. Bucket 3 then
+  // offers nothing; the owner's own request drives the later buckets.
+  it('DESIGNER accepted and the owner\'s request is still in flight (SUBMITTED) -> neither เสนอราคา nor confirm', () => {
+    const prs = [accepted('DESIGNER'), { id: 2, ticketId: 1, status: 'SUBMITTED', recipientType: 'OWNER' }];
+    const action = nextSalesAction(baseDeal({ status: 'draft' }), prs);
+    expect([QUOTE_NEXT, SALES_ACTION.CONFIRM_ORDER]).not.toContain(action?.key);
+  });
+
+  it('DESIGNER accepted and the owner\'s quotation is ISSUED -> the owner\'s outcome leads (bucket 4)', () => {
+    const prs = [accepted('DESIGNER'), { id: 2, ticketId: 1, status: 'QUOTATION_ISSUED', recipientType: 'OWNER' }];
+    expect(nextSalesAction(baseDeal({ status: 'draft' }), prs)).toMatchObject({ key: SALES_ACTION.RECORD_QUOTATION_OUTCOME });
+  });
+
+  it.each(['CANCELLED', 'SUPERSEDED'])('DESIGNER accepted and the owner\'s only request is %s -> still owner then buyer (a dead request does not count)', (status) => {
+    const prs = [accepted('DESIGNER'), { id: 2, ticketId: 1, status, recipientType: 'OWNER' }];
+    expect(nextSalesAction(baseDeal({ status: 'draft' }), prs)).toMatchObject({ key: QUOTE_NEXT, parties: ['OWNER', 'BUYER'] });
+  });
+
+  it('another deal\'s owner request does not count (filtered to this ticket)', () => {
+    const prs = [accepted('DESIGNER'), { id: 2, ticketId: 999, status: 'SUBMITTED', recipientType: 'OWNER' }];
+    expect(nextSalesAction(baseDeal({ status: 'draft' }), prs)).toMatchObject({ key: QUOTE_NEXT, parties: ['OWNER', 'BUYER'] });
+  });
+
+  it('DESIGNER accepted, the owner is off this deal\'s route -> the buyer only', () => {
+    const action = nextSalesAction(baseDeal({ status: 'draft' }), [accepted('DESIGNER')], { offRouteParties: new Set(['OWNER']) });
+    expect(action).toEqual({ key: QUOTE_NEXT, label: 'เสนอราคาผู้ซื้อ', parties: ['BUYER'], acceptedParty: 'DESIGNER' });
+  });
+
+  it('DESIGNER accepted, owner AND buyer off the route -> CONFIRM_ORDER (no party left)', () => {
+    const action = nextSalesAction(baseDeal({ status: 'draft' }), [accepted('DESIGNER')], { offRouteParties: new Set(['OWNER', 'BUYER']) });
+    expect(action).toEqual({ key: SALES_ACTION.CONFIRM_ORDER, label: 'ยืนยันคำสั่งซื้อ' });
+  });
+
+  it('an empty offRouteParties set means every party is on the route (only an explicit verdict removes one)', () => {
+    const action = nextSalesAction(baseDeal({ status: 'draft' }), [accepted('DESIGNER')], { offRouteParties: new Set() });
+    expect(action).toMatchObject({ key: QUOTE_NEXT, parties: ['OWNER', 'BUYER'] });
+  });
+
+  it('DESIGNER accepted on a ticket the order bridge cannot advance (\'submitted\') -> still เสนอราคา (creating a request needs no bridgeable status)', () => {
+    expect(nextSalesAction(baseDeal({ status: 'submitted' }), [accepted('DESIGNER')])).toMatchObject({ key: QUOTE_NEXT });
+  });
+
+  it.each([null, undefined, 'UNSPECIFIED', 'SOMETHING_ELSE'])('accepted request with recipientType %s -> CONFIRM_ORDER (no known party to follow)', (recipientType) => {
+    expect(nextSalesAction(baseDeal({ status: 'draft' }), [accepted(recipientType)])).toMatchObject({ key: SALES_ACTION.CONFIRM_ORDER });
+  });
+
+  it('DESIGNER accepted but the order is already confirmed -> neither action (falls through as today)', () => {
+    const prs = [accepted('DESIGNER', { orderConfirmedAt: '2026-10-01T00:00:00.000Z' })];
+    expect(nextSalesAction(baseDeal({ status: 'quotation_issued' }), prs)).toBeNull();
+  });
+
+  it('the route counts from the accepted request furthest along it (DESIGNER and BUYER accepted -> CONFIRM_ORDER)', () => {
+    const prs = [accepted('DESIGNER'), accepted('BUYER', { id: 2 })];
+    expect(nextSalesAction(baseDeal({ status: 'draft' }), prs)).toMatchObject({ key: SALES_ACTION.CONFIRM_ORDER });
+  });
+
+  it('once an order is confirmed on this deal, an older accepted request no longer offers เสนอราคา (DESIGNER accepted, OWNER accepted and confirmed)', () => {
+    const prs = [accepted('DESIGNER'), accepted('OWNER', { id: 2, orderConfirmedAt: '2026-10-22T00:00:00.000Z' })];
+    expect(nextSalesAction(baseDeal({ status: 'quotation_issued' }), prs)).not.toMatchObject({ key: QUOTE_NEXT });
+  });
+
+  it('sortWorklist ranks QUOTE_NEXT_PARTY with CONFIRM_ORDER (1): ahead of ISSUE_QUOTATION, ties broken by the older stageUpdatedAt', () => {
+    const row = (id, key, stageUpdatedAt) => ({ deal: { id, stageUpdatedAt }, action: { key } });
+    const sorted = sortWorklist([
+      row(1, SALES_ACTION.ISSUE_QUOTATION, '2026-06-01T00:00:00.000Z'),
+      row(2, SALES_ACTION.FOLLOW_UP, '2026-05-01T00:00:00.000Z'),
+      row(3, SALES_ACTION.CONFIRM_ORDER, '2026-07-10T00:00:00.000Z'),
+      row(4, QUOTE_NEXT, '2026-07-01T00:00:00.000Z'),
+    ]).map((item) => item.deal.id);
+    expect(sorted).toEqual([4, 3, 1, 2]);
   });
 });

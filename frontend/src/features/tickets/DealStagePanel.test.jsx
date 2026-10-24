@@ -590,6 +590,26 @@ describe('DealStagePanel route awareness', () => {
       expect(nextText()).toContain('4. เสนอราคาผู้ออกแบบ');
     });
 
+    // Owner ruling 2026-10-22 (final): after the designer accepts, ถัดไป names both choices the
+    // sticky เสนอราคา menu offers; with one party left it reads as before.
+    it('designer accepted with owner and buyer left: "5. เสนอราคาเจ้าของโครงการ หรือข้ามไป 8. …", then the auto hint', () => {
+      renderPanel({
+        summary: baseSummary({ salesStage: 'QUOTE_DESIGN_SIDE', entryChannel: 'DESIGNER_LED' }),
+        stageDecisions: routeDecisions([]),
+        quoteParties: ['OWNER', 'BUYER'],
+      });
+      expect(nextText()).toBe(`ถัดไป: 5. เสนอราคาเจ้าของโครงการ หรือข้ามไป 8. เสนอราคาผู้ซื้อ/ผู้รับเหมา — ${AUTO_STAGE_HINT.QUOTE_OWNER}`);
+    });
+
+    it('one party left: the single next-stage form, no "หรือข้ามไป"', () => {
+      renderPanel({
+        summary: baseSummary({ salesStage: 'QUOTE_DESIGN_SIDE', entryChannel: 'DESIGNER_LED' }),
+        stageDecisions: routeDecisions([]),
+        quoteParties: ['OWNER'],
+      });
+      expect(nextText()).toBe(`ถัดไป: 5. เสนอราคาเจ้าของโครงการ — ${AUTO_STAGE_HINT.QUOTE_OWNER}`);
+    });
+
     /**
      * Readiness-gate half only (owner's 2026-10-16 quote-stage ruling, D-4): a route-skipping
      * pair now always lands on an `auto` stage, which renders no opener, so this is based on
