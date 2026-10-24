@@ -88,6 +88,7 @@ import th.co.glr.hr.ticket.DealStage;
 import th.co.glr.hr.ticket.FulfilmentStatus;
 import th.co.glr.hr.ticket.QuotationRenderer;
 import th.co.glr.hr.ticket.QuotationStatus;
+import th.co.glr.hr.ticket.StockReservationRequest;
 import th.co.glr.hr.ticket.TicketDto;
 import th.co.glr.hr.ticket.TicketItemRequest;
 import th.co.glr.hr.ticket.TicketRepository;
@@ -394,8 +395,8 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // Gate: reachable only from QUOTATION_ACCEPTED + DealStage.PROCUREMENT (as strict as
-    // issueImportRequest's own precondition, not weaker).
+    // Gate: reachable only from QUOTATION_ACCEPTED + an IR_ISSUED event (as strict as
+    // issueImportRequest's own precondition, not weaker; the deal stage is not consulted).
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
@@ -411,18 +412,18 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
 
     /**
      * Isolates the {@code PricingRequestStatus.QUOTATION_ACCEPTED} guard specifically from the
-     * {@code DealStage.PROCUREMENT} guard, since a deal driven by a SINGLE pricing request can
-     * never exercise them independently (the ticket cannot reach {@code DealStage.PROCUREMENT}
-     * without first going through {@code confirmOrder}, which itself requires {@code
-     * QUOTATION_ACCEPTED} — so "before QUOTATION_ACCEPTED" and "before PROCUREMENT" are always
-     * true together on a single-pricing-request deal; disabling either guard alone left {@code
-     * createPurchaseOrders_beforeQuotationAccepted_isRejected} above green during mutation-check,
-     * see the branch handoff's own Authz Evidence table). CLAUDE.md's own model — 1 Deal -&gt; 0..N
-     * Pricing Requests — makes the real isolating scenario reachable: a SECOND pricing request on
-     * the SAME ticket, left at SUBMITTED (never accepted), while the FIRST pricing request drives
-     * the ticket all the way to DealStage.PROCUREMENT. Calling createPurchaseOrders with the
-     * second (wrong, non-accepted) pricing request id must be rejected by the QUOTATION_ACCEPTED
-     * check alone, even though the ticket itself genuinely sits at PROCUREMENT.
+     * {@code IR_ISSUED} guard, since a deal driven by a SINGLE pricing request can
+     * never exercise them independently (the ticket cannot carry an {@code IR_ISSUED} event
+     * without {@code issueImportRequest}, which comes after {@code confirmOrder}, which itself
+     * requires {@code QUOTATION_ACCEPTED} — so "before QUOTATION_ACCEPTED" and "no IR_ISSUED
+     * event" are always true together on a single-pricing-request deal, and {@code
+     * createPurchaseOrders_beforeQuotationAccepted_isRejected} above cannot tell the two guards
+     * apart). CLAUDE.md's own model — 1 Deal -&gt; 0..N Pricing Requests — makes the real
+     * isolating scenario reachable: a SECOND pricing request on the SAME ticket, left at
+     * QUOTATION_ISSUED (never accepted), while the FIRST pricing request drives the ticket through
+     * {@code driveToProcurement(true)}, which records IR_ISSUED on it. The IR_ISSUED guard reads
+     * the ticket, not the pricing request, so it passes for the second pricing request too; only
+     * the QUOTATION_ACCEPTED check can refuse the call.
      */
     @Test
     void createPurchaseOrders_ticketAtProcurementButThisPricingRequestNotAccepted_isRejected() {
@@ -448,6 +449,37 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
         // Reaches QUOTATION_ACCEPTED and even DEPOSIT_PAID, but deliberately stops short of
         // calling issueImportRequest — the deal never reaches DealStage.PROCUREMENT.
         DealFixture deal = driveToProcurement(false);
+        assertThatThrownBy(() -> procurement.createPurchaseOrders(deal.pricingRequestId,
+            new CreateFactoryPurchaseOrdersRequest(null), importActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        assertThat(jdbc.queryForObject("""
+            SELECT COUNT(*) FROM sales.factory_purchase_order WHERE pricing_request_id = :id
+            """, Map.of("id", deal.pricingRequestId), Long.class)).isZero();
+    }
+
+    @Test
+    void createPurchaseOrders_mixedDealAlreadyAtDeliverySchedulingAfterPartialStock_isAccepted() {
+        DealFixture deal = driveToProcurement(true);                       // PROCUREMENT, IR_ISSUED
+        long firstItemId = ticketService.get(deal.ticketId, salesActor).items().get(0).id();
+        ticketService.reserveStock(deal.ticketId,
+            new StockReservationRequest(List.of(new StockReservationRequest.Line(firstItemId, new BigDecimal("1"), "บางส่วนจากสต็อก"))),
+            salesActor);
+        assertThat(ticketService.get(deal.ticketId, salesActor).summary().salesStage()).isEqualTo(DealStage.DELIVERY_SCHEDULING);
+
+        List<FactoryPurchaseOrderDto> pos = procurement.createPurchaseOrders(deal.pricingRequestId,
+            new CreateFactoryPurchaseOrdersRequest(null), importActor);
+        assertThat(pos).hasSize(2);
+    }
+
+    @Test
+    void createPurchaseOrders_mixedDealJumpedToDeliverySchedulingByStockWithoutAnyImportRequest_isRejected() {
+        DealFixture deal = driveToProcurement(false);                      // DEPOSIT_RECEIVED, no IR
+        long firstItemId = ticketService.get(deal.ticketId, salesActor).items().get(0).id();
+        ticketService.reserveStock(deal.ticketId,
+            new StockReservationRequest(List.of(new StockReservationRequest.Line(firstItemId, new BigDecimal("1"), "บางส่วนจากสต็อก"))),
+            salesActor);
+        assertThat(ticketService.get(deal.ticketId, salesActor).summary().salesStage()).isEqualTo(DealStage.DELIVERY_SCHEDULING);
+
         assertThatThrownBy(() -> procurement.createPurchaseOrders(deal.pricingRequestId,
             new CreateFactoryPurchaseOrdersRequest(null), importActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
@@ -524,21 +556,33 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // Mutation-check evidence (verbatim red output recorded in the branch handoff) — see
-    // docs/agent-handoffs/96_feat-procurement-factory-order.md "Authz Evidence" for the
-    // mutation-check narrative against these tests:
+    // Mutation-check evidence, two generations:
+    //
+    // 1. The original guards — retired docs/agent-handoffs/96_feat-procurement-factory-order.md,
+    //    "Authz Evidence" (history reference; read it back with the retired-docs skill). That
+    //    narrative was recorded against the superseded DealStage.PROCUREMENT stage guard, not the
+    //    IR_ISSUED guard below, and covers:
     //   insertItems_rejectsCostingItemFromADifferentPricingRequest  (cross-tenant guard)
     //   createPurchaseOrders_salesActor_cannotCreate / salesActor_cannotReadPurchaseOrders
     //   createPurchaseOrders_ticketAtProcurementButThisPricingRequestNotAccepted_isRejected
-    //       (the QUOTATION_ACCEPTED guard, isolated from DealStage.PROCUREMENT — see this test's
+    //       (the QUOTATION_ACCEPTED guard, isolated from the ticket-level guard — see this test's
     //       own Javadoc: createPurchaseOrders_beforeQuotationAccepted_isRejected above stays GREEN
     //       even with the QUOTATION_ACCEPTED check fully disabled, because on a single-pricing-
-    //       request deal the DealStage.PROCUREMENT guard alone already catches the same case; the
+    //       request deal the ticket-level guard alone already catches the same case; the
     //       two guards are redundant on that fixture, exactly the trap CLAUDE.md warns about, so
     //       it is NOT listed as evidence for the QUOTATION_ACCEPTED guard — only the isolated test
     //       above is)
+    //
+    // 2. The IR_ISSUED guard (TicketRepository#hasIssuedImportRequest) — recorded in the PR body
+    //    of fix/reserve-stock-advances-to-delivery-scheduling:
     //   createPurchaseOrders_quotationAcceptedButImportRequestNotYetIssued_isRejected
-    //       (the DealStage.PROCUREMENT guard, independently confirmed red when disabled alone)
+    //       (forcing hasIssuedImportRequest to return true turns this test red — and the
+    //       stock-bypass test below, which shares the no-IR fixture; the run that recorded
+    //       "only this test" predates that second test)
+    //   createPurchaseOrders_mixedDealJumpedToDeliverySchedulingByStockWithoutAnyImportRequest_isRejected
+    //       (restoring the superseded stage-based gate, stage at PROCUREMENT or later, turns only
+    //       this test red — it is the one that tells the event gate apart from a stage gate: the
+    //       deal sits past PROCUREMENT, at DELIVERY_SCHEDULING, with no IR ever issued)
 
     // ─────────────────────────────────────────────────────────────────────────────────────
     // Fixture helpers.

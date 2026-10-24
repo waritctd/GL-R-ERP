@@ -1350,9 +1350,17 @@ public class TicketService {
      * {@code frontend/src/api/mockApi.js} under a contract test.
      *
      * <p><strong>Stage floor (2026-08-13).</strong> Because nothing corroborates the claim, and
-     * because full coverage reroutes the deal (below: {@code FROM_STOCK} plus a jump to {@code
-     * DELIVERY_SCHEDULING}, which in turn blocks {@link #issueImportRequest}), a declaration is
-     * refused below {@link DealStage#ORDER_RECEIVED} — see {@link #stockCoverageStageReached}.
+     * because a declaration reroutes the deal (below: any declared quantity jumps it to {@code
+     * DELIVERY_SCHEDULING}, and full coverage also sets {@code FROM_STOCK}, which in turn blocks
+     * {@link #issueImportRequest}), a declaration is refused below {@link DealStage#ORDER_RECEIVED}
+     * — see {@link #stockCoverageStageReached}.
+     *
+     * <p><strong>Any declaration reaches นัดส่ง (owner ruling 2026-10-22).</strong> A declaration
+     * with any quantity above zero moves the deal to {@code DELIVERY_SCHEDULING} at once, even
+     * when only some lines are covered; nobody else's step (import's IR, or anyone's approval) is
+     * waited on.
+     * {@code FROM_STOCK} stays tied to full coverage, so a partly covered deal keeps its import
+     * axis open for the rest.
      *
      * <p><strong>Deliberate authorisation change — owner ruling 2026-08-13, "Sales declares,
      * Import can correct."</strong> This was gated to {@link #FULFILMENT_ROLES} alone, so the one
@@ -1366,9 +1374,9 @@ public class TicketService {
      * <p><strong>Only the gate moved.</strong> The commission formula is untouched — this changes
      * who may supply its input, never how it is computed. Everything below the gate is
      * deliberately identical whoever declares: the same per-line write, the same {@code
-     * STOCK_RESERVED} event, the same {@code allCovered → FROM_STOCK → DELIVERY_SCHEDULING}
-     * routing, the same {@link #requireActive} guard. One code path and one meaning for the
-     * field: routing follows the facts, not the declarer.
+     * STOCK_RESERVED} event, the same routing ({@code allCovered → FROM_STOCK}, any declared
+     * quantity {@code → DELIVERY_SCHEDULING}), the same {@link #requireActive} guard. One code
+     * path and one meaning for the field: routing follows the facts, not the declarer.
      *
      * <p>Two gates, in the order {@link #requireViewAccess} uses. The coarse {@link
      * #STOCK_DECLARATION_ROLES} check runs BEFORE the ticket is loaded so that widening this
@@ -1425,9 +1433,12 @@ public class TicketService {
             && (s.fulfillmentStatus() == null || FulfilmentStatus.FROM_STOCK.equals(s.fulfillmentStatus()));
         if (leavesTheImportAxis) {
             tickets.updateFulfillmentStatus(ticketId, FulfilmentStatus.FROM_STOCK);
-            // Fully covered from stock — no import journey, so the goods are ready
-            // now. Advance straight to DELIVERY_SCHEDULING (S18) rather than
-            // PROCUREMENT (an import step this deal never performs).
+        }
+        // Owner ruling 2026-10-22: any declared quantity moves the deal to นัดส่ง at once —
+        // DELIVERY_SCHEDULING (S18), full coverage or not — without waiting on anyone else's step
+        // (import's IR, or anyone's approval). Only FROM_STOCK above stays tied to full coverage.
+        // Forward-only, ACTIVE-only inside.
+        if (totalDeclared.signum() > 0) {
             autoAdvanceStage(s, DealStage.DELIVERY_SCHEDULING, actor);
         }
         notifySalesManagerOfRepDeclaration(s, actor, mergedStock, ticket.items(), leavesTheImportAxis);
@@ -3337,10 +3348,11 @@ public class TicketService {
      * but invisible, or advertised and then refused on click.
      *
      * <p><strong>Why ORDER_RECEIVED (S10), and why a floor is needed at all.</strong> The
-     * declaration is uncorroborated (see {@link #reserveStock}), yet a full-coverage one reroutes
-     * the deal: {@code fulfillment_status} becomes {@code FROM_STOCK} and {@link #autoAdvanceStage}
-     * — which checks only lifecycle and stage index — jumps it to {@code DELIVERY_SCHEDULING} from
-     * wherever it was, {@code LEAD_APPROACH} included. That also blocks {@link
+     * declaration is uncorroborated (see {@link #reserveStock}), yet it reroutes the deal: any
+     * declared quantity (owner ruling 2026-10-22) makes {@link #autoAdvanceStage} — which checks
+     * only lifecycle and stage index — jump it to {@code DELIVERY_SCHEDULING} from wherever it
+     * was, {@code LEAD_APPROACH} included, and full coverage also sets {@code fulfillment_status}
+     * to {@code FROM_STOCK}. That also blocks {@link
      * #issueImportRequest}, whose own guard requires {@code fulfillmentStatus == null}. So on one
      * rep's word an untouched lead could skip the entire import journey.
      *
@@ -3351,8 +3363,10 @@ public class TicketService {
      * as the procedural one — before S10 the quantities are not final, so a coverage declaration
      * is meaningless.
      *
-     * <p>Nothing above the floor changes: a full-coverage declaration still sets {@code FROM_STOCK}
-     * and still advances to {@code DELIVERY_SCHEDULING}, whoever declares.
+     * <p>Nothing above the floor changes: any declaration still advances to {@code
+     * DELIVERY_SCHEDULING}, and a full-coverage one still sets {@code FROM_STOCK}, whoever
+     * declares. The 2026-10-22 ruling did not move the floor itself: below {@code ORDER_RECEIVED}
+     * a declaration is still refused.
      *
      * <p>Fails closed on an unknown or null stage ({@link DealStage#indexOf} returns -1), which
      * {@code sales_stage NOT NULL} since V50 should already make unreachable.

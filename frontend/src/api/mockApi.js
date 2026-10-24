@@ -3924,10 +3924,11 @@ function reserveStockForTicket(ticket, user, payload = {}) {
     && ticket.items.every((item) => Number(item.qtyFromStock ?? 0) >= Number(item.qty ?? 0));
   if (allCovered && (ticket.fulfillmentStatus == null || ticket.fulfillmentStatus === 'FROM_STOCK')) {
     ticket.fulfillmentStatus = 'FROM_STOCK';
-    // Full stock coverage has no import journey — goods are ready now, so advance
-    // straight to DELIVERY_SCHEDULING (S18) rather than PROCUREMENT.
-    autoAdvanceStage(ticket, 'DELIVERY_SCHEDULING', user);
   }
+  // Mirrors TicketService#reserveStock, owner ruling 2026-10-22: any declared quantity moves the
+  // deal to นัดส่ง (DELIVERY_SCHEDULING, S18) at once, full coverage or not, waiting on nobody
+  // else's step (import's IR, or anyone's approval); only FROM_STOCK above stays tied to full coverage.
+  if (total > 0) autoAdvanceStage(ticket, 'DELIVERY_SCHEDULING', user);
 }
 
 // V148 (per-item stock-commission weighting): the manager-approved counterpart to
