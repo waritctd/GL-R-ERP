@@ -10,10 +10,16 @@
 -- whole config per factory (not a partial patch) so the stored profile is complete and self-
 -- consistent. Upsert on uq_profile_factory: a factory with no profile row (fresh env) gets one;
 -- an existing one is overwritten. A factory name that does not exist updates nothing.
+--
+-- NOTE: the JSON below is dollar-quoted with the ANONYMOUS double-dollar tag (as V40 does), NOT
+-- a named tag. Flyway runs placeholder replacement by default and does NOT skip NAMED-tag dollar
+-- quotes: a named tag immediately followed by the JSON opening brace is then read as a Flyway
+-- placeholder and the migration fails with "No value provided for placeholder". The anonymous
+-- tag is skipped by the replacer, so it stays safe even when the JSON opens with a brace.
 
 -- CDE: Cotto d'Este — columns unchanged from the 2026 list; adds the now-required size_unit/thickness_unit (mm, verified 150x600mm -> 0.09 x 2 = 0.18 m2/box).
 INSERT INTO price_catalog.import_profiles (factory_id, config)
-SELECT factory_id, $json${
+SELECT factory_id, $${
   "number_format": "eu",
   "size_unit": "mm",
   "thickness_unit": "mm",
@@ -38,14 +44,14 @@ SELECT factory_id, $json${
     "sqm_per_box": "SQM_BOX",
     "kg_per_box": "KGS_BOX"
   }
-}$json$::jsonb
+}$$::jsonb
   FROM price_catalog.factories WHERE name = 'CDE'
 ON CONFLICT ON CONSTRAINT uq_profile_factory
   DO UPDATE SET config = EXCLUDED.config, updated_at = now();
 
 -- LEA: LEA — new headers: Thickness (was SPESSORE), Pieces/box (was PZ_SCA), 'm² per box' (was MQ_SCA), kg/box. size_unit mm (300x600mm -> 0.18 x 8 = 1.44).
 INSERT INTO price_catalog.import_profiles (factory_id, config)
-SELECT factory_id, $json${
+SELECT factory_id, $${
   "number_format": "eu",
   "size_unit": "mm",
   "thickness_unit": "mm",
@@ -70,14 +76,14 @@ SELECT factory_id, $json${
     "kg_per_box": "kg/box",
     "barcode": "BARCODE"
   }
-}$json$::jsonb
+}$$::jsonb
   FROM price_catalog.factories WHERE name = 'LEA'
 ON CONFLICT ON CONSTRAINT uq_profile_factory
   DO UPDATE SET config = EXCLUDED.config, updated_at = now();
 
 -- Panaria: Panaria — header still on row 2; Thickness (was SPESSORE), Pieces/box (was PZ_SCA); MQ_SCA/KG_SCA unchanged. size_unit mm (150x300mm -> 0.045 x 8 = 0.36).
 INSERT INTO price_catalog.import_profiles (factory_id, config)
-SELECT factory_id, $json${
+SELECT factory_id, $${
   "number_format": "eu",
   "size_unit": "mm",
   "thickness_unit": "mm",
@@ -102,14 +108,14 @@ SELECT factory_id, $json${
     "sqm_per_box": "MQ_SCA",
     "kg_per_box": "KG_SCA"
   }
-}$json$::jsonb
+}$$::jsonb
   FROM price_catalog.factories WHERE name = 'Panaria'
 ON CONFLICT ON CONSTRAINT uq_profile_factory
   DO UPDATE SET config = EXCLUDED.config, updated_at = now();
 
 -- REFIN: REFIN — price column renamed to 'NEW PRICE 2027' (added to aliases); size_unit cm (header 'Size (cm)', 120x120cm -> 1.44 x 2 = 2.88); Trim-Tiles/accessories carry missing columns, handled by allow_missing_code + aliases exactly as before.
 INSERT INTO price_catalog.import_profiles (factory_id, config)
-SELECT factory_id, $json${
+SELECT factory_id, $${
   "number_format": "eu",
   "size_unit": "cm",
   "thickness_unit": "mm",
@@ -183,14 +189,14 @@ SELECT factory_id, $json${
       "SURFACE"
     ]
   }
-}$json$::jsonb
+}$$::jsonb
   FROM price_catalog.factories WHERE name = 'REFIN'
 ON CONFLICT ON CONSTRAINT uq_profile_factory
   DO UPDATE SET config = EXCLUDED.config, updated_at = now();
 
 -- Vives: Vives — price list re-issued with ENGLISH headers (Model/Name/Size/Pieces-Box/m²-Box/Weight-Box/EAN). Price is Price/Piece OR Price/m² (first_non_empty; cells are TEXT with comma decimals -> number_format eu). Size uses apostrophe decimal (15'8X31'6 = 15.8x31.6 cm), size_unit cm. No thickness in the main sheet (thickness_unit none); thickness joins from the SEPARATE workbook via Model<->Ref (value 'Thickness (mm)'). ~1964 of 4618 models match a sidecar Ref; the rest import thickness NULL, as the engine allows.
 INSERT INTO price_catalog.import_profiles (factory_id, config)
-SELECT factory_id, $json${
+SELECT factory_id, $${
   "number_format": "eu",
   "size_unit": "cm",
   "thickness_unit": "none",
@@ -230,7 +236,7 @@ SELECT factory_id, $json${
     ],
     "value_column": "Thickness (mm)"
   }
-}$json$::jsonb
+}$$::jsonb
   FROM price_catalog.factories WHERE name = 'Vives'
 ON CONFLICT ON CONSTRAINT uq_profile_factory
   DO UPDATE SET config = EXCLUDED.config, updated_at = now();
