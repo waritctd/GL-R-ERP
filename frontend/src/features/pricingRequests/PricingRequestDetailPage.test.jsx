@@ -1960,50 +1960,67 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     });
 
     it('new-form NET: the per-line margin is a LIVE input (no own button) that previews and saves via บันทึกราคา as marginPct', async () => {
-      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
-      api.pricingRequests.listPricingDecisions.mockResolvedValue({
-        // cost 60, no selling buffer mocked → buffer defaults to 1: margin 0.5 → list 90, net 90.
-        items: [buildDecision({ priceMode: 'NET', items: [buildDecisionItem({ sqmPerPiece: 0.36 })] })],
-      });
-      renderDetailPage({ user: ceoUser, request });
-      await waitForLoaded(request);
-      await screen.findByText('PCD-2026-0001');
+      // The live preview needs the selling buffer; with it = 1: cost 60 → margin 0.5 → list 90, net 90.
+      api.pricingFormulaConfig = { get: vi.fn().mockResolvedValue({ formulaConfig: { sellingBuffer: 1 } }) };
+      try {
+        const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+        api.pricingRequests.listPricingDecisions.mockResolvedValue({
+          items: [buildDecision({ priceMode: 'NET', items: [buildDecisionItem({ sqmPerPiece: 0.36 })] })],
+        });
+        renderDetailPage({ user: ceoUser, request });
+        await waitForLoaded(request);
+        await screen.findByText('PCD-2026-0001');
+        await waitFor(() => expect(api.pricingFormulaConfig.get).toHaveBeenCalled());
 
-      const input = screen.getByTestId('pcr-ceo-margin-input-8001');
-      expect(input.value).toBe('0.2');
-      // No separate margin save button — the realtime model has only the shared บันทึกราคา.
-      expect(screen.queryByTestId('pcr-ceo-margin-save-8001')).toBeNull();
+        const input = screen.getByTestId('pcr-ceo-margin-input-8001');
+        expect(input.value).toBe('0.2');
+        // No separate margin save button — the realtime model has only the shared บันทึกราคา.
+        expect(screen.queryByTestId('pcr-ceo-margin-save-8001')).toBeNull();
 
-      // Typing updates the realized-margin readout LIVE, before any save (cost 60 → margin 0.5 →
-      // net 90 → profit 30/unit, 50%).
-      fireEvent.change(input, { target: { value: '0.5' } });
-      expect(screen.getByTestId('pcr-ceo-margin-readout-8001').textContent).toMatch(/฿30\.00.*50\.0%/);
-      // ราคาตั้ง reflects the margin-derived list (read-only).
-      expect(screen.getByTestId('pcr-ceo-list-price-8001').value).toBe('90');
-      expect(screen.getByTestId('pcr-ceo-list-price-8001').disabled).toBe(true);
+        // Typing updates the realized-margin readout LIVE, before any save (cost 60 → margin 0.5 →
+        // net 90 → profit 30/unit, 50%).
+        fireEvent.change(input, { target: { value: '0.5' } });
+        await waitFor(() => expect(screen.getByTestId('pcr-ceo-margin-readout-8001').textContent).toMatch(/฿30\.00.*50\.0%/));
+        // ราคาตั้ง reflects the margin-derived list (read-only).
+        expect(screen.getByTestId('pcr-ceo-list-price-8001').value).toBe('90');
+        expect(screen.getByTestId('pcr-ceo-list-price-8001').disabled).toBe(true);
 
-      fireEvent.click(screen.getByTestId('pcr-ceo-save-price-8001'));
-      await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalledWith(
-        7001, { items: [expect.objectContaining({ pricingDecisionItemId: 8001, marginPct: 0.5 })] }));
+        fireEvent.click(screen.getByTestId('pcr-ceo-save-price-8001'));
+        await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalledWith(
+          7001, { items: [expect.objectContaining({ pricingDecisionItemId: 8001, marginPct: 0.5 })] }));
+      } finally {
+        delete api.pricingFormulaConfig;
+      }
     });
 
-    it('new-form SPECIAL_SQM: the margin input drives the ราคาพิเศษ prefill live (ported from #1117)', async () => {
+    it('new-form SPECIAL_SQM: no margin input — margin is NET-only (owner ruling 2026-10-23), price set directly', async () => {
       const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
       api.pricingRequests.listPricingDecisions.mockResolvedValue({
-        // cost 60, proposed 72, sqm/piece 0.36. special = price × round2(1/sqm) × 1.07.
         items: [buildDecision({ priceMode: 'SPECIAL_SQM', items: [buildDecisionItem({ sqmPerPiece: 0.36 })] })],
       });
       renderDetailPage({ user: ceoUser, request });
       await waitForLoaded(request);
       await screen.findByText('PCD-2026-0001');
 
-      // The margin input is offered in SPECIAL_SQM too now; ราคาพิเศษ pre-fills from the formula price.
-      const margin = screen.getByTestId('pcr-ceo-margin-input-8001');
-      const special = screen.getByTestId('pcr-ceo-special-sqm-8001');
-      expect(Number(special.value)).toBeCloseTo(214.17, 1); // from proposed 72
+      // Margin would be a no-op on the saved net here (SPECIAL_SQM sets the price directly), so the
+      // input is hidden; the ราคาพิเศษ prefill still comes from the stored formula price (214.17).
+      expect(screen.queryByTestId('pcr-ceo-margin-input-8001')).toBeNull();
+      expect(Number(screen.getByTestId('pcr-ceo-special-sqm-8001').value)).toBeCloseTo(214.17, 1);
+      // The กำไร readout does not mislabel a not-yet-saved SPECIAL_SQM line as "missing cost".
+      expect(screen.getByTestId('pcr-ceo-margin-readout-8001').textContent).not.toMatch(/ยังไม่มีต้นทุน/);
+    });
 
-      fireEvent.change(margin, { target: { value: '0.5' } }); // formula/piece → 90
-      expect(Number(screen.getByTestId('pcr-ceo-special-sqm-8001').value)).toBeCloseTo(267.71, 1);
+    it('margin input rejects an out-of-range value (> 999.999999), matching the server bound', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({ priceMode: 'NET', items: [buildDecisionItem({ sqmPerPiece: 0.36 })] })],
+      });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      fireEvent.change(screen.getByTestId('pcr-ceo-margin-input-8001'), { target: { value: '1000' } });
+      expect(screen.getByTestId('pcr-ceo-save-price-8001').disabled).toBe(true);
     });
 
     // Owner request 2026-10-21: "ทุกโหมดอยากให้เห็นชัด ๆ ว่ากำไรกี่บาทกี่ %".
@@ -2040,7 +2057,7 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       renderDetailPage({ user: ceoUser, request });
       await waitForLoaded(request);
       await screen.findByText('PCD-2026-0001');
-      expect(screen.getByTestId('pcr-ceo-margin-readout-8001').textContent).toMatch(/ต้องมีต้นทุน/);
+      expect(screen.getByTestId('pcr-ceo-margin-readout-8001').textContent).toMatch(/ยังไม่มีต้นทุน/);
     });
   });
 

@@ -233,6 +233,18 @@ function cleanNumber(value) {
 }
 
 /**
+ * The margin bound, mirroring PricingDecisionService#requireValidMargin exactly: a markup fraction
+ * must be > -1 (the selling price is never negative) AND <= MAX_MARGIN_PCT (the server's own raw
+ * upper guard; deriveListAndNet then also rejects a computed price past the NUMERIC column, which a
+ * margin this far below that ceiling never reaches on a real cost). One helper so the legacy per-line
+ * field and the new-form NET input cannot drift on either the bound or the message. */
+const MAX_MARGIN_PCT = 999.999999;
+function marginOutOfRange(n) {
+  return n == null || Number.isNaN(n) || n <= -1 || n > MAX_MARGIN_PCT;
+}
+const MARGIN_RANGE_ERROR = 'อัตรากำไรต้องอยู่ระหว่าง -1 ถึง 999.999999 (ราคาขายต้องไม่ติดลบและไม่เกินขอบเขต)';
+
+/**
  * Per-line margin input on a CEO legacy-formula decision line (owner request 2026-10-21): the CEO
  * sets อัตรากำไร% PER product line — each line's price = cost × (1 + its own margin) × buffer —
  * instead of relying on the one "อัตรากำไรเริ่มต้น" applied across the whole request. Seeded from the
@@ -249,8 +261,7 @@ function CeoLineMarginField({ item, disabled, onSave }) {
   useEffect(() => { setValue(serverStr); }, [serverStr]);
 
   const parsed = cleanNumber(value);
-  // Mirror PricingDecisionService#requireValidMargin: marginPct must be > -1 (price never negative).
-  const invalid = value.trim() !== '' && (parsed == null || Number.isNaN(parsed) || parsed <= -1);
+  const invalid = value.trim() !== '' && marginOutOfRange(parsed);
   const dirty = value.trim() !== '' && !invalid && parsed !== server;
 
   return (
@@ -259,7 +270,7 @@ function CeoLineMarginField({ item, disabled, onSave }) {
         label="อัตรากำไร (เช่น 0.3 = 30%)"
         htmlFor={`pcr-ceo-margin-${item.id}`}
         className="mb-0"
-        error={invalid ? 'อัตรากำไรต้องมากกว่า -1 (ราคาขายต้องไม่ติดลบ)' : null}
+        error={invalid ? MARGIN_RANGE_ERROR : null}
       >
         <input
           id={`pcr-ceo-margin-${item.id}`}
@@ -311,9 +322,12 @@ function lineProfitThb(costThb, netPriceInCurrency, fxRate) {
 function LineMarginReadout({ costThb, netPrice, fxRate, qty, testid }) {
   const m = lineProfitThb(costThb, netPrice, fxRate);
   if (m == null) {
+    // Distinguish the two null cases: no cost at all vs a cost but no computed net yet (e.g. a
+    // SPECIAL_SQM line whose net the server derives on save) — the latter is NOT "missing a price".
+    const message = costThb == null ? 'กำไร/หน่วย: — (ยังไม่มีต้นทุน)' : 'กำไร/หน่วย: คำนวณเมื่อบันทึก';
     return (
       <span className="text-2xs text-text-muted" data-testid={testid}>
-        กำไร/หน่วย: — (ต้องมีต้นทุนและราคาก่อน)
+        {message}
       </span>
     );
   }
@@ -1414,7 +1428,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
       // marginPct — the server derives ราคาตั้ง from it via the formula (no override, no reason),
       // mutually exclusive with a manual ราคาตั้ง override, so when present it is the ONLY list-side
       // field sent.
-      const marginValue = !isStockLine && !clears.clearSellingPriceOverride
+      const marginValue = decision.priceMode === 'NET' && !isStockLine && !clears.clearSellingPriceOverride
         ? cleanNumber(draft.marginPct) : null;
       const currentList = item.manualSellingPricePerRequestedUnit ?? item.listUnitPrice;
       const listDraft = decision.priceMode === 'NET' || isStockLine ? draft.listUnitPrice : undefined;
@@ -2118,14 +2132,18 @@ export function PricingRequestDetailPage({ user, showToast }) {
       // what the server stores on บันทึกราคา (which sends only marginPct). ONE figure, used by every
       // mode via formulaPerPiece below: it drives ราคาตั้ง (NET) and the ราคาพิเศษ prefill
       // (SPECIAL_SQM). Not on a stock line (no cost) or a "ปรับราคาเอง" override line.
-      const marginDraftRaw = isStockLine ? undefined : rawDraft.marginPct;
+      // Margin drives the price ONLY under NET (owner ruling 2026-10-23): SPECIAL_SQM/DIRECT_NET set
+      // the price directly, so a margin there would not change the saved net — the input is hidden.
+      const marginDraftRaw = (!isStockLine && decision.priceMode === 'NET') ? rawDraft.marginPct : undefined;
       const marginDraftNum = cleanNumber(marginDraftRaw);
       const marginDrives = marginDraftRaw != null && marginDraftRaw !== ''
         && !hasPriceOverride && item.frozenLandedCostPerRequestedUnitThb != null;
-      const marginInvalid = marginDrives && !(marginDraftNum != null && marginDraftNum > -1);
-      const sellingBuffer = Number(formulaConfigQuery.data?.sellingBuffer) || 1;
-      const formulaFromMargin = marginDrives && !marginInvalid
-        ? round2(Number(item.frozenLandedCostPerRequestedUnitThb) * (1 + marginDraftNum) * sellingBuffer
+      const marginInvalid = marginDrives && marginOutOfRange(marginDraftNum);
+      // No guessed buffer: if the formula config has not loaded yet (or failed), do NOT preview a
+      // price — the fallback-to-1 showed a figure ~buffer% below what the server would store.
+      const sellingBuffer = Number(formulaConfigQuery.data?.sellingBuffer);
+      const formulaFromMargin = marginDrives && !marginInvalid && sellingBuffer > 0
+        ? round2(round2(Number(item.frozenLandedCostPerRequestedUnitThb) * (1 + marginDraftNum) * sellingBuffer)
             / (decision.currency === 'THB' ? 1 : (Number(decision.fxRateUsed) || 1)))
         : null;
       // The per-piece formula price every mode reads: the margin-recomputed one while the CEO is
@@ -2297,7 +2315,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
           </span>
           <LineMarginReadout
             costThb={item.frozenLandedCostPerRequestedUnitThb}
-            netPrice={displayNet}
+            netPrice={displayNet ?? item.netUnitPrice}
             fxRate={decision.fxRateUsed}
             qty={item.requestedQuantity}
             testid={`pcr-ceo-margin-readout-${item.id}`}
@@ -2328,19 +2346,18 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 : null}
             </span>
           ) : null}
-          {/* Per-product margin (owner request 2026-10-21; SPECIAL_SQM path ported from #1117): a LIVE
-              input (like ส่วนลด — no separate save button). Typing it recomputes THIS line's formula
-              price in real time, which drives ราคาตั้ง under NET and the ราคาพิเศษ prefill under
-              SPECIAL_SQM, and the net/กำไร readout move with it; saved by the shared "บันทึกราคา" as
-              marginPct. Shown on a cost-bearing NET/SPECIAL_SQM line the formula still drives (not a
-              stock line, not a "ปรับราคาเอง" override; DIRECT_NET sets the price outright). */}
+          {/* Per-product margin (owner request 2026-10-21): a LIVE input (like ส่วนลด — no separate save
+              button). Typing it recomputes THIS line's ราคาตั้ง in real time, and the net/กำไร readout
+              move with it; saved by the shared "บันทึกราคา" as marginPct. NET ONLY (owner ruling
+              2026-10-23): SPECIAL_SQM/DIRECT_NET set the price directly, so a margin there would be a
+              no-op on the saved net. Not on a stock line or a "ปรับราคาเอง" override. */}
           {showCost && !hasPriceOverride && item.frozenLandedCostPerRequestedUnitThb != null
-            && (decision.priceMode === 'NET' || decision.priceMode === 'SPECIAL_SQM') ? (
+            && decision.priceMode === 'NET' ? (
               <FormField
                 label="อัตรากำไร (เช่น 0.3 = 30%)"
                 htmlFor={`pcr-ceo-margin-${item.id}`}
                 hint="ราคาตั้ง = ต้นทุน × (1 + อัตรากำไร) × ตัวคูณราคาขาย — กรอกแล้วคำนวณราคาใหม่ทันที"
-                error={marginInvalid ? 'อัตรากำไรต้องมากกว่า -1' : null}
+                error={marginInvalid ? MARGIN_RANGE_ERROR : null}
               >
                 <input
                   id={`pcr-ceo-margin-${item.id}`}
