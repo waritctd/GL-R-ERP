@@ -164,6 +164,13 @@ public abstract class AbstractStockLineIntegrationTest extends AbstractPostgresI
             new BigDecimal("100.00"), "THB", "per_piece");
         catalogProductFactoryB = insertCatalogProduct(FACTORY_B, "IT", "TEST-STOCK-B-001",
             new BigDecimal("100.00"), "THB", "per_piece");
+        // Seed the RFQ factory ROW that importLineUncostable routes to: costShipment's
+        // factoryConfigs.findByName (price_catalog.factories) is a per-shipment existence check that
+        // runs BEFORE the per-item set-aside and 422s on an unknown factory. The line links no
+        // catalog PRODUCT (so it stays uncostable for lack of a resolvable origin); only the factory
+        // row matters here, so its product is never linked.
+        insertCatalogProduct("Factory Uncostable-StockLine", "IT", "TEST-STOCK-U-001",
+            new BigDecimal("100.00"), "THB", "per_piece", "ACTIVE", null);
 
         CustomerDto customer = customers.create(
             "บริษัท Stock Line Test จำกัด", "0100000000194", "194 ถนนทดสอบ", "สำนักงานใหญ่", "02-000-0194");

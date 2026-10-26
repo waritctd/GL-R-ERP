@@ -156,8 +156,13 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
             new BigDecimal("100.00"), "THB", "per_piece");
         // The "starts uncostable" fixture the override/approve ITs below need is now a FREE-TEXT
         // line (see freeTextUncostableItem): since #1150 a null catalogue thickness no longer makes
-        // a line uncostable (resolveThicknessMm falls back to the Sales value), so no uncostable
-        // CATALOG product is seeded here any more.
+        // a line uncostable (resolveThicknessMm falls back to the Sales value), so the line links no
+        // catalog PRODUCT — it is uncostable for lack of a resolvable origin country instead.
+        // The factory ROW must still exist, though: costShipment's factoryConfigs.findByName (an
+        // RFQ-factory existence check, price_catalog.factories) runs per shipment BEFORE the per-item
+        // set-aside and 422s on an unknown factory. Seed just that row (its product is never linked).
+        insertCatalogProduct("Factory Uncostable-CEOP", "IT", "TEST-UNCOST-CEOP-001",
+            new BigDecimal("100.00"), "THB", "per_piece", "ACTIVE", null);
 
         CustomerDto customer = customers.create(
             "บริษัท CEO Pricing จำกัด", "0100000000099", "999 ถนนทดสอบ", "สำนักงานใหญ่", "02-000-0099");
