@@ -820,42 +820,82 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       }
     };
     const onBreakpoint = () => { if (mobileQuery?.matches) setTicketChromeCondensed(false); };
+    // The IntersectionObserver only fires as a sentinel crosses the scroll viewport. It does NOT
+    // re-fire when the content below grows/shrinks or the viewport resizes while the sentinels stay
+    // on the same side — which can leave the condensed state stale: a page that was too short to
+    // condense (Gate A failed) grows tall enough but stays expanded, or a condensed page shrinks
+    // below the condense line but stays condensed. Re-derive the state synchronously from the
+    // sentinels' current positions on those events (same dead-band as onIntersect). Needs real
+    // geometry, so it no-ops where the scroll box can't be measured (unit tests) — there the IO
+    // path drives, exactly as before.
+    const reevaluate = () => {
+      if (mobileQuery?.matches) { setTicketChromeCondensed(false); return; }
+      if (!scroller || scroller.clientHeight === 0) return;
+      if (!hasRoomToCondense()) { setTicketChromeCondensed(false); return; }
+      const viewTop = scroller.getBoundingClientRect().top;
+      if (expandAt.getBoundingClientRect().bottom >= viewTop) setTicketChromeCondensed(false);
+      else if (condenseAt.getBoundingClientRect().bottom < viewTop) setTicketChromeCondensed(true);
+      // else: between the two sentinels (the dead-band) — leave the state unchanged.
+    };
     const observer = new IntersectionObserver(onIntersect, { root: scroller ?? null, threshold: 0 });
     observer.observe(expandAt);
     observer.observe(condenseAt);
     mobileQuery?.addEventListener?.('change', onBreakpoint);
+    // Watch content growth (the content root's box) and viewport resize (the scroll box) so the
+    // re-check above actually runs on those changes.
+    const contentRoot = expandAt.parentElement;
+    let resize;
+    if (typeof ResizeObserver !== 'undefined') {
+      resize = new ResizeObserver(reevaluate);
+      if (contentRoot) resize.observe(contentRoot);
+      if (scroller) resize.observe(scroller);
+    }
     return () => {
       observer.disconnect();
+      resize?.disconnect();
       mobileQuery?.removeEventListener?.('change', onBreakpoint);
     };
   }, [loading, ticketId]);
 
   // Publish the chrome's measured height to `--deal-header-h` so AppShell's
   // `scroll-pt-[calc(var(--deal-header-h,18rem) + …)]` offsets scrollIntoView jumps below
-  // the sticky header. Unchanged behaviour — only the condense TRIGGER above changed. This
-  // re-measures when the header condenses/expands (ResizeObserver), which is fine: writing
-  // a scroll-padding custom property never moves scrollTop/scrollHeight, so it cannot feed
-  // the condense loop.
+  // the sticky header. This re-measures when the header condenses/expands (ResizeObserver),
+  // which is fine: writing a scroll-padding custom property never moves scrollTop/scrollHeight,
+  // so it cannot feed the condense loop. The write is coalesced per frame and skipped when the
+  // value is unchanged (see below).
   useLayoutEffect(() => {
     if (loading) return undefined;
     const chrome = ticketStickyChromeRef.current;
     if (!chrome || typeof document === 'undefined') return undefined;
+    let lastWritten = null;
     const writeHeight = () => {
       const height = Math.ceil(chrome.getBoundingClientRect().height);
-      if (height > 0) {
+      // Skip the write when the rounded height is unchanged — the condense/expand transition fires
+      // the ResizeObserver on every intermediate frame, but the pixel value only changes some of
+      // them, and most frames land on a value already written.
+      if (height > 0 && height !== lastWritten) {
+        lastWritten = height;
         document.documentElement.style.setProperty('--deal-header-h', `${height}px`);
       }
     };
+    // Coalesce the ResizeObserver burst during that animation to at most one measure+write per
+    // frame instead of one per observer callback.
+    const hasRaf = typeof requestAnimationFrame === 'function';
+    let frame = 0;
+    const schedule = hasRaf
+      ? () => { if (!frame) frame = requestAnimationFrame(() => { frame = 0; writeHeight(); }); }
+      : writeHeight;
 
     writeHeight();
     if (typeof ResizeObserver === 'undefined') {
       return () => document.documentElement.style.removeProperty('--deal-header-h');
     }
 
-    const observer = new ResizeObserver(writeHeight);
+    const observer = new ResizeObserver(schedule);
     observer.observe(chrome);
     return () => {
       observer.disconnect();
+      if (frame && hasRaf) cancelAnimationFrame(frame);
       document.documentElement.style.removeProperty('--deal-header-h');
     };
   }, [loading, ticketId]);
