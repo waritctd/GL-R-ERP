@@ -105,7 +105,6 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
     private long ticketId;
     private long catalogProductIdFactoryA;
     private long catalogProductIdFactoryB;
-    private long catalogProductIdUncostable;
 
     @BeforeEach
     void wireServicesAndCreateDeal() {
@@ -155,13 +154,10 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
             new BigDecimal("100.00"), "THB", "per_piece");
         catalogProductIdFactoryB = insertCatalogProduct("Factory B-CEOP", "IT", "TEST-B-CEOP-001",
             new BigDecimal("100.00"), "THB", "per_piece");
-        // V156 uncostable fixture (owner correction, 2026-09-19): thicknessMm=null means
-        // LandedCostCalculator#resolveThicknessMm can never resolve a freight band for this
-        // product, so any pricing-request item pointing at it reaches startReview with
-        // frozenLandedCostPerRequestedUnitThb == null -- exactly the "starts uncostable" state the
-        // new deriveListAndNet real-DB IT below needs.
-        catalogProductIdUncostable = insertCatalogProduct("Factory Uncostable-CEOP", "IT", "TEST-UNCOST-CEOP-001",
-            new BigDecimal("100.00"), "THB", "per_piece", "ACTIVE", null);
+        // The "starts uncostable" fixture the override/approve ITs below need is now a FREE-TEXT
+        // line (see freeTextUncostableItem): since #1150 a null catalogue thickness no longer makes
+        // a line uncostable (resolveThicknessMm falls back to the Sales value), so no uncostable
+        // CATALOG product is seeded here any more.
 
         CustomerDto customer = customers.create(
             "บริษัท CEO Pricing จำกัด", "0100000000099", "999 ถนนทดสอบ", "สำนักงานใหญ่", "02-000-0099");
@@ -218,9 +214,9 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
 
     @Test
     void overrideItemCost_onAnUncostedItem_populatesListUnitPrice_andNetApprovesAtListEqualsNet() {
-        // 1. An uncosted new-form item -- thickness_mm=null means startReview freezes it with a
-        // null cost, a null formula reference, and (per the ORIGINAL wrong design) a permanently
-        // null list_unit_price.
+        // 1. An uncosted new-form item -- a free-text line with no resolvable origin country means
+        // startReview freezes it with a null cost, a null formula reference, and (per the ORIGINAL
+        // wrong design) a permanently null list_unit_price.
         long pricingRequestId = oneItemUncostedSubmittedCosting();
         PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
             new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
@@ -1010,11 +1006,11 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
         return pricingRequestId;
     }
 
-    /** Mirrors {@link #twoItemSubmittedCosting}, but with a SINGLE new-form item pointing at
-     * {@code catalogProductIdUncostable} (thickness_mm=null) -- V156's "the whole shipment is
-     * uncostable" branch in {@code LandedCostCalculator#calculate} handles this as a valid,
-     * fully-supported state, not a failure: the item still reaches READY_FOR_CEO_REVIEW and then
-     * {@code startReview}, just with a null effective cost until the CEO resolves it via {@link
+    /** Mirrors {@link #twoItemSubmittedCosting}, but with a SINGLE new-form FREE-TEXT item (see
+     * {@link #freeTextUncostableItem}) -- V156's "the whole shipment is uncostable" branch in
+     * {@code LandedCostCalculator#calculate} handles this as a valid, fully-supported state, not a
+     * failure: the item still reaches READY_FOR_CEO_REVIEW and then {@code startReview}, just with a
+     * null effective cost until the CEO resolves it via {@link
      * PricingDecisionService#overrideItemCost}. */
     private long oneItemUncostedSubmittedCosting() {
         long pricingRequestId = pricingRequestService.createDraft(ticketId, oneItemUncostedPricingRequest(), salesActor)
@@ -1039,7 +1035,32 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
         return new PricingRequestRequests.CreatePricingRequestRequest(
             PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
             new BigDecimal("1000.00"), "THB", "ceo price mode uncosted request", UUID.randomUUID().toString(),
-            List.of(pricingItem("Uncostable", "Tile U-CEOP", "Factory Uncostable-CEOP", new BigDecimal("10"))));
+            List.of(freeTextUncostableItem("Uncostable", "Tile U-CEOP", "Factory Uncostable-CEOP", new BigDecimal("10"))));
+    }
+
+    /**
+     * A free-text import line (no catalog link) that reaches startReview UNCOSTABLE and set aside
+     * (frozenLandedCost == null), so the CEO's override/approve gates below have something to act on.
+     *
+     * <p>This replaced the old "catalog product with a null thickness" fixture: since #1150
+     * (Sales-entered thickness → costing, owner ruling 2026-10-15), LandedCostCalculator#resolveThicknessMm
+     * falls back to the line's own thicknessMm, so a null CATALOG thickness no longer makes a line
+     * uncostable — the Sales value (required at submit) costs it. The surviving set-aside path is a
+     * line with no resolvable ORIGIN country: resolveOriginCountryCode reads the catalogue only (no
+     * request fallback), so a line with productId == null has no country and is set aside before the
+     * freight lookup. A real factory's country is NOT NULL (V151), so only a free-text line can hit it.
+     */
+    private PricingRequestRequests.PricingRequestItemRequest freeTextUncostableItem(
+        String brand, String model, String factory, BigDecimal qty
+    ) {
+        // productId == null (free-text): the only field that differs from pricingItem(). factory is a
+        // free-text name — enough to route the factory-email/quote step, but it links no catalog row.
+        return new PricingRequestRequests.PricingRequestItemRequest(null, null, null, brand, model,
+            brand + " " + model, "White", "Matte", "60x60", factory, null, null, null, null,
+            QuantityType.CONFIRMED, null, null, null,
+            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+            null, qty.intValueExact(), WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+            false, "ไทย-สต็อก", 3, 7, null, null, null);
     }
 
     /** A single PER_BOX item (not the Phase 1 new-form shape) driven to READY_FOR_CEO_REVIEW --
@@ -1087,8 +1108,7 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
         String brand, String model, String factory, BigDecimal qty
     ) {
         Long productId = "Factory A-CEOP".equals(factory) ? catalogProductIdFactoryA
-            : "Factory B-CEOP".equals(factory) ? catalogProductIdFactoryB
-            : "Factory Uncostable-CEOP".equals(factory) ? catalogProductIdUncostable : null;
+            : "Factory B-CEOP".equals(factory) ? catalogProductIdFactoryB : null;
         // V185 (direct-deal-form parity): PER_PIECE, sqm_per_piece=0.36 -- the Phase 1 new-form
         // shape Phase 2's mode picker is eligible for. Mirrors PricingDecisionIntegrationTest's
         // own identical fixture.

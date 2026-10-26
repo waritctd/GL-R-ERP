@@ -110,8 +110,6 @@ public abstract class AbstractStockLineIntegrationTest extends AbstractPostgresI
     protected long ticketId;
     protected long catalogProductFactoryA;
     protected long catalogProductFactoryB;
-    /** thickness_mm = null, so any line pointing at it is UNCOSTABLE (V156). */
-    protected long catalogProductUncostable;
 
     @BeforeEach
     protected void wireStockLineFixture() {
@@ -166,8 +164,6 @@ public abstract class AbstractStockLineIntegrationTest extends AbstractPostgresI
             new BigDecimal("100.00"), "THB", "per_piece");
         catalogProductFactoryB = insertCatalogProduct(FACTORY_B, "IT", "TEST-STOCK-B-001",
             new BigDecimal("100.00"), "THB", "per_piece");
-        catalogProductUncostable = insertCatalogProduct("Factory Uncostable-StockLine", "IT", "TEST-STOCK-U-001",
-            new BigDecimal("100.00"), "THB", "per_piece", "ACTIVE", null);
 
         CustomerDto customer = customers.create(
             "บริษัท Stock Line Test จำกัด", "0100000000194", "194 ถนนทดสอบ", "สำนักงานใหญ่", "02-000-0194");
@@ -190,6 +186,20 @@ public abstract class AbstractStockLineIntegrationTest extends AbstractPostgresI
     /** An import line with NO factory, NO catalog link (a free-text product Import must route). */
     protected PricingRequestItemRequest importLineWithoutFactory(String model, int pieces) {
         return line(model, null, null, pieces, "ไทย-สต็อก", 3, 7, null);
+    }
+
+    /**
+     * An import line with a free-text factory (routable through the quote step) but NO catalog link,
+     * so it reaches startReview UNCOSTABLE and is set aside (frozenLandedCost == null).
+     *
+     * <p>Since #1150 (Sales-entered thickness → costing, owner ruling 2026-10-15) a null CATALOG
+     * thickness no longer makes a line uncostable — LandedCostCalculator#resolveThicknessMm falls
+     * back to the line's own thicknessMm. The surviving set-aside path is a line with no resolvable
+     * ORIGIN country: resolveOriginCountryCode reads the catalogue only (no request fallback), and a
+     * real factory's country is NOT NULL (V151), so only a free-text (productId == null) line has none.
+     */
+    protected PricingRequestItemRequest importLineUncostable(String model, String factory, int pieces) {
+        return line(model, null, factory, pieces, "ไทย-สต็อก", 3, 7, null);
     }
 
     /**
