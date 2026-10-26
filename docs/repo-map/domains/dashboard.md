@@ -3,7 +3,7 @@ title: Dashboard
 layer: Platform
 schemas: [hr, sales]
 tags: [repo-map, domain/dashboard]
-synced: develop@ef9b17dc
+synced: develop@fe5138dd
 ---
 # Dashboard
 > Cross-domain rollups and the landing dashboards.

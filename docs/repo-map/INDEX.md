@@ -1,7 +1,7 @@
 ---
 title: GL-R-ERP Repo Map
 tags: [repo-map, index]
-synced: develop@ef9b17dc
+synced: develop@fe5138dd
 ---
 # GL-R-ERP Repo Map
 > A domain-level map of the repo: each note is one **vertical slice** (backend ↔ frontend ↔ DB) so you can find where a feature lives — and how features relate — without grepping the whole tree.
@@ -11,7 +11,7 @@ synced: develop@ef9b17dc
 - Start here, open the domain you're touching, follow **Related** to its neighbours.
 - **Agents:** read this INDEX first, then the one relevant domain note, instead of scanning the tree. Treat each note's **Gotchas** as pointers — `CLAUDE.md` is authoritative.
 
-_Synced to `develop@ef9b17dc`. Re-run `python3 docs/repo-map/_tools/generate.py` after big merges to refresh the file listings._
+_Synced to `develop@fe5138dd`. Re-run `python3 docs/repo-map/_tools/generate.py` after big merges to refresh the file listings._
 
 ## Sales / CRM
 - [[sales-deal-ticket|Sales Deal & Ticket]] — The deal aggregate (1 ticket = 1 deal) and its sales-stage pipeline / actions.
@@ -34,4 +34,4 @@ _Synced to `develop@ef9b17dc`. Re-run `python3 docs/repo-map/_tools/generate.py`
 - [[notification-mail|Notification & Mail]] — In-app notifications and outbound email (quotations, resets, alerts).
 - [[activity-audit|Activity & Audit]] — The activity log (request filter + recorder) and the audit trail.
 - [[dashboard|Dashboard]] — Cross-domain rollups and the landing dashboards.
-- [[platform-common|Platform / Common]] — Shared infra: common utils, config, file attachments, and locations.
+- [[platform-common|Platform / Common]] — Shared infra: common utils, file attachments, and locations.

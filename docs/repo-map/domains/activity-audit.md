@@ -3,7 +3,7 @@ title: Activity & Audit
 layer: Platform
 schemas: [hr]
 tags: [repo-map, domain/activity-audit]
-synced: develop@ef9b17dc
+synced: develop@fe5138dd
 ---
 # Activity & Audit
 > The activity log (request filter + recorder) and the audit trail.

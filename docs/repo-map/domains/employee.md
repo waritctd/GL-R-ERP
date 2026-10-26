@@ -3,7 +3,7 @@ title: Employee & Self-service
 layer: HR
 schemas: [hr, hr_restricted]
 tags: [repo-map, domain/employee]
-synced: develop@ef9b17dc
+synced: develop@fe5138dd
 ---
 # Employee & Self-service
 > Employee master, profile, and self-service edit/requests (incl. tax allowance).

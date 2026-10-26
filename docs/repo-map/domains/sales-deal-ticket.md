@@ -3,7 +3,7 @@ title: Sales Deal & Ticket
 layer: Sales / CRM
 schemas: [sales]
 tags: [repo-map, domain/sales-deal-ticket]
-synced: develop@ef9b17dc
+synced: develop@fe5138dd
 ---
 # Sales Deal & Ticket
 > The deal aggregate (1 ticket = 1 deal) and its sales-stage pipeline / actions.

@@ -3,7 +3,7 @@ title: Quotation
 layer: Sales / CRM
 schemas: [sales, customers]
 tags: [repo-map, domain/quotation]
-synced: develop@ef9b17dc
+synced: develop@fe5138dd
 ---
 # Quotation
 > Customer-facing quotation generation, revisions, and the rendered PDF/XLSX.

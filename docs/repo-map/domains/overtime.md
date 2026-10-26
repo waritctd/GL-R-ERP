@@ -3,7 +3,7 @@ title: Overtime
 layer: HR
 schemas: [hr]
 tags: [repo-map, domain/overtime]
-synced: develop@ef9b17dc
+synced: develop@fe5138dd
 ---
 # Overtime
 > Overtime filing and the two-step (manager → CEO) approval chain.

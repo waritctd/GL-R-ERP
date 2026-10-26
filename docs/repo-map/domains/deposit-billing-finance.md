@@ -3,7 +3,7 @@ title: Deposit · Billing · Finance
 layer: Sales / CRM
 schemas: [sales, hr]
 tags: [repo-map, domain/deposit-billing-finance]
-synced: develop@ef9b17dc
+synced: develop@fe5138dd
 ---
 # Deposit · Billing · Finance
 > Deposit notices, billing notes, tax invoices, payments, and sales commission.

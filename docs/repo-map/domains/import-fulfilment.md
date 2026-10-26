@@ -3,7 +3,7 @@ title: Import / Fulfilment
 layer: Sales / CRM
 schemas: [sales]
 tags: [repo-map, domain/import-fulfilment]
-synced: develop@ef9b17dc
+synced: develop@fe5138dd
 ---
 # Import / Fulfilment
 > Per-factory import requests, procurement steps, and delivery fulfilment.
@@ -59,7 +59,7 @@ synced: develop@ef9b17dc
 
 ## Gotchas
 - TWO parallel import systems: legacy deal-level (fulfillmentStatus IR_ISSUED) vs per-factory V184 (sales.import_request).
-- A deal is in the import scope only when salesStage >= PROCUREMENT AND fulfillmentStatus != null.
+- A deal is in the import role's list scope (TicketRepository.appendRoleScope) when it is NOT closed/lost/cancelled AND (a non-terminal pricing request exists OR salesStage >= ORDER_RECEIVED). No fulfillmentStatus condition; the old PROCUREMENT floor was removed as self-defeating.
 - An item must be linked to a factory before it enters the import lane.
 
 > Authoritative details + history live in `CLAUDE.md` / `AGENTS.md` at the repo root.

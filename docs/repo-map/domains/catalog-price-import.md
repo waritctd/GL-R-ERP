@@ -3,7 +3,7 @@ title: Catalog & Price Import
 layer: Sales / CRM
 schemas: [price_catalog]
 tags: [repo-map, domain/catalog-price-import]
-synced: develop@ef9b17dc
+synced: develop@fe5138dd
 ---
 # Catalog & Price Import
 > The product price catalogue (import-managed, version-controlled) + brand reference.
@@ -39,7 +39,7 @@ synced: develop@ef9b17dc
 
 ## DB
 - Schemas: `price_catalog`
-- Key migrations: `V153 active-version filter`; `V171 import provenance`; `V172 size norm`; `V194 priceable basis`
+- Key migrations: `V153 priceable basis + active-version read`; `V171 import provenance`; `V172 size norm`
 
 ## Related
 [[pricing-flow|Pricing Flow]] · [[quotation|Quotation]]

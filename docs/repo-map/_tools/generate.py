@@ -13,7 +13,6 @@ the Graph view. The notes are also written to be read by a coding agent that nee
 orient in the repo quickly — INDEX.md first, then the relevant domain note.
 """
 from __future__ import annotations
-import os
 import subprocess
 from pathlib import Path
 
@@ -22,7 +21,6 @@ MAP_DIR = HERE.parent.parent              # docs/repo-map
 REPO = MAP_DIR.parent.parent              # repo root
 BACKEND_PKG = REPO / "backend/src/main/java/th/co/glr/hr"
 FRONTEND_FEAT = REPO / "frontend/src/features"
-MIGRATIONS = REPO / "backend/src/main/resources/db/migration"
 GH = "https://github.com/waritctd/GL-R-ERP/blob/develop"
 
 
@@ -68,7 +66,7 @@ DOMAINS = {
         "migrations": [
             "V61 factory_quote + costing foundation", "V109 formula engine (landed cost)",
             "V141 CEO owns costing", "V156 uncostable items", "V185 direct-deal item fields",
-            "V187 CEO price mode",
+            "V187 CEO price mode", "V194 stock lines on pricing request",
         ],
         "related": ["catalog-price-import", "sales-deal-ticket", "quotation", "import-fulfilment"],
         "gotchas": [
@@ -85,7 +83,7 @@ DOMAINS = {
         "backend": ["catalog", "brand"],
         "frontend": ["catalog"],
         "schemas": ["price_catalog"],
-        "migrations": ["V153 active-version filter", "V171 import provenance", "V172 size norm", "V194 priceable basis"],
+        "migrations": ["V153 priceable basis + active-version read", "V171 import provenance", "V172 size norm"],
         "related": ["pricing-flow", "quotation"],
         "gotchas": [
             "Catalogue reads filter price_list_versions.status = 'ACTIVE' (V153); non-active rows are invisible to pricing.",
@@ -133,7 +131,7 @@ DOMAINS = {
         "related": ["sales-deal-ticket", "pricing-flow"],
         "gotchas": [
             "TWO parallel import systems: legacy deal-level (fulfillmentStatus IR_ISSUED) vs per-factory V184 (sales.import_request).",
-            "A deal is in the import scope only when salesStage >= PROCUREMENT AND fulfillmentStatus != null.",
+            "A deal is in the import role's list scope (TicketRepository.appendRoleScope) when it is NOT closed/lost/cancelled AND (a non-terminal pricing request exists OR salesStage >= ORDER_RECEIVED). No fulfillmentStatus condition; the old PROCUREMENT floor was removed as self-defeating.",
             "An item must be linked to a factory before it enters the import lane.",
         ],
     },
@@ -230,7 +228,7 @@ DOMAINS = {
         "migrations": ["V19 spring_session"],
         "related": ["employee"],
         "gotchas": [
-            "SecurityConfig is default-deny; role checks live in CONTROLLERS, not the filter chain.",
+            "SecurityConfig only authenticates (default-deny); per-role/business authz lives in the SERVICE layer (requireWrite / isDealOwner / role checks), NOT the filter chain — a mock that skips it can diverge from the real 403.",
             "CSRF is app-rolled (CsrfCookieFilter), NOT Spring Security — do not 're-enable' Spring CSRF.",
             "Real AuthService refuses {role}-only login with 403; demo accounts are email+password (Demo@2026).",
         ],
@@ -275,8 +273,8 @@ DOMAINS = {
     "platform-common": {
         "title": "Platform / Common",
         "layer": "Platform",
-        "purpose": "Shared infra: common utils, config, file attachments, and locations.",
-        "backend": ["common", "config", "attachment", "location"],
+        "purpose": "Shared infra: common utils, file attachments, and locations.",
+        "backend": ["common", "attachment", "location"],
         "frontend": ["locations"],
         "schemas": ["hr"],
         "migrations": [],

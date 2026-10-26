@@ -3,10 +3,10 @@ title: Platform / Common
 layer: Platform
 schemas: [hr]
 tags: [repo-map, domain/platform-common]
-synced: develop@ef9b17dc
+synced: develop@fe5138dd
 ---
 # Platform / Common
-> Shared infra: common utils, config, file attachments, and locations.
+> Shared infra: common utils, file attachments, and locations.
 
 **Layer:** Platform  ·  **DB schemas:** `hr`
 
@@ -26,19 +26,6 @@ synced: develop@ef9b17dc
 - `backend/src/main/java/th/co/glr/hr/common/sheet/LibreOfficeMetrics.java`
 - `backend/src/main/java/th/co/glr/hr/common/sheet/SheetHtmlRenderer.java`
 - `backend/src/main/java/th/co/glr/hr/common/sheet/SheetPlan.java`
-### `th.co.glr.hr.config` — [config/](https://github.com/waritctd/GL-R-ERP/blob/develop/backend/src/main/java/th/co/glr/hr/config)
-- `backend/src/main/java/th/co/glr/hr/config/AppProperties.java`
-- `backend/src/main/java/th/co/glr/hr/config/CorrelationIdFilter.java`
-- `backend/src/main/java/th/co/glr/hr/config/CorsConfig.java`
-- `backend/src/main/java/th/co/glr/hr/config/CsrfCookieFilter.java`
-- `backend/src/main/java/th/co/glr/hr/config/FlywayEagerInitConfig.java`
-- `backend/src/main/java/th/co/glr/hr/config/JacksonConfig.java`
-- `backend/src/main/java/th/co/glr/hr/config/OpenApiConfig.java`
-- `backend/src/main/java/th/co/glr/hr/config/PasswordConfig.java`
-- `backend/src/main/java/th/co/glr/hr/config/ProductionReadinessConfig.java`
-- `backend/src/main/java/th/co/glr/hr/config/SchedulingConfig.java`
-- `backend/src/main/java/th/co/glr/hr/config/SecurityConfig.java`
-- `backend/src/main/java/th/co/glr/hr/config/SecurityHeadersFilter.java`
 ### `th.co.glr.hr.attachment` — [attachment/](https://github.com/waritctd/GL-R-ERP/blob/develop/backend/src/main/java/th/co/glr/hr/attachment)
 - `backend/src/main/java/th/co/glr/hr/attachment/AttachmentController.java`
 - `backend/src/main/java/th/co/glr/hr/attachment/AttachmentDto.java`

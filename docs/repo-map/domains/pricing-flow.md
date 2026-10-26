@@ -3,7 +3,7 @@ title: Pricing Flow
 layer: Sales / CRM
 schemas: [sales, price_catalog]
 tags: [repo-map, domain/pricing-flow]
-synced: develop@ef9b17dc
+synced: develop@fe5138dd
 ---
 # Pricing Flow
 > Pricing request → factory quote → landed cost → CEO selling-price decision.
@@ -87,7 +87,7 @@ synced: develop@ef9b17dc
 
 ## DB
 - Schemas: `sales, price_catalog`
-- Key migrations: `V61 factory_quote + costing foundation`; `V109 formula engine (landed cost)`; `V141 CEO owns costing`; `V156 uncostable items`; `V185 direct-deal item fields`; `V187 CEO price mode`
+- Key migrations: `V61 factory_quote + costing foundation`; `V109 formula engine (landed cost)`; `V141 CEO owns costing`; `V156 uncostable items`; `V185 direct-deal item fields`; `V187 CEO price mode`; `V194 stock lines on pricing request`
 
 ## Related
 [[catalog-price-import|Catalog & Price Import]] · [[sales-deal-ticket|Sales Deal & Ticket]] · [[quotation|Quotation]] · [[import-fulfilment|Import / Fulfilment]]

@@ -3,7 +3,7 @@ title: Notification & Mail
 layer: Platform
 schemas: [hr]
 tags: [repo-map, domain/notification-mail]
-synced: develop@ef9b17dc
+synced: develop@fe5138dd
 ---
 # Notification & Mail
 > In-app notifications and outbound email (quotations, resets, alerts).

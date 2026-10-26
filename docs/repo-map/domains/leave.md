@@ -3,7 +3,7 @@ title: Leave
 layer: HR
 schemas: [hr]
 tags: [repo-map, domain/leave]
-synced: develop@ef9b17dc
+synced: develop@fe5138dd
 ---
 # Leave
 > Leave requests, balances, policy rules, and approval.

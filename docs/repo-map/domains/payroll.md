@@ -3,7 +3,7 @@ title: Payroll
 layer: HR
 schemas: [hr, hr_restricted]
 tags: [repo-map, domain/payroll]
-synced: develop@ef9b17dc
+synced: develop@fe5138dd
 ---
 # Payroll
 > Payroll runs, deductions, consents, tax, and the payroll draft etag.

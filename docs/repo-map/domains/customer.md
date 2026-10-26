@@ -3,7 +3,7 @@ title: Customer
 layer: Sales / CRM
 schemas: [customers]
 tags: [repo-map, domain/customer]
-synced: develop@ef9b17dc
+synced: develop@fe5138dd
 ---
 # Customer
 > Customers, projects, contacts, designers, and Thai-address handling.

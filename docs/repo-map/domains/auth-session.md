@@ -3,7 +3,7 @@ title: Auth & Session
 layer: Platform
 schemas: [hr]
 tags: [repo-map, domain/auth-session]
-synced: develop@ef9b17dc
+synced: develop@fe5138dd
 ---
 # Auth & Session
 > Login, session (JDBC-backed), CSRF, password reset, and the security filter chain.
@@ -67,7 +67,7 @@ synced: develop@ef9b17dc
 [[employee|Employee & Self-service]]
 
 ## Gotchas
-- SecurityConfig is default-deny; role checks live in CONTROLLERS, not the filter chain.
+- SecurityConfig only authenticates (default-deny); per-role/business authz lives in the SERVICE layer (requireWrite / isDealOwner / role checks), NOT the filter chain — a mock that skips it can diverge from the real 403.
 - CSRF is app-rolled (CsrfCookieFilter), NOT Spring Security — do not 're-enable' Spring CSRF.
 - Real AuthService refuses {role}-only login with 403; demo accounts are email+password (Demo@2026).
 

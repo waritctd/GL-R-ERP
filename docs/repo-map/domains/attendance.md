@@ -3,7 +3,7 @@ title: Attendance
 layer: HR
 schemas: [hr]
 tags: [repo-map, domain/attendance]
-synced: develop@ef9b17dc
+synced: develop@fe5138dd
 ---
 # Attendance
 > Punch clock, attendance records, corrections, and the work calendar.
