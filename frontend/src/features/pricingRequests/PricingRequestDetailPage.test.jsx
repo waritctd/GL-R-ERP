@@ -1987,16 +1987,23 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
         7001, { items: [expect.objectContaining({ pricingDecisionItemId: 8001, marginPct: 0.5 })] }));
     });
 
-    it('new-form SPECIAL_SQM: no margin input (price is set directly in that mode, not via margin)', async () => {
+    it('new-form SPECIAL_SQM: the margin input drives the ราคาพิเศษ prefill live (ported from #1117)', async () => {
       const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
       api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        // cost 60, proposed 72, sqm/piece 0.36. special = price × round2(1/sqm) × 1.07.
         items: [buildDecision({ priceMode: 'SPECIAL_SQM', items: [buildDecisionItem({ sqmPerPiece: 0.36 })] })],
       });
       renderDetailPage({ user: ceoUser, request });
       await waitForLoaded(request);
       await screen.findByText('PCD-2026-0001');
 
-      expect(screen.queryByTestId('pcr-ceo-margin-input-8001')).toBeNull();
+      // The margin input is offered in SPECIAL_SQM too now; ราคาพิเศษ pre-fills from the formula price.
+      const margin = screen.getByTestId('pcr-ceo-margin-input-8001');
+      const special = screen.getByTestId('pcr-ceo-special-sqm-8001');
+      expect(Number(special.value)).toBeCloseTo(214.17, 1); // from proposed 72
+
+      fireEvent.change(margin, { target: { value: '0.5' } }); // formula/piece → 90
+      expect(Number(screen.getByTestId('pcr-ceo-special-sqm-8001').value)).toBeCloseTo(267.71, 1);
     });
 
     // Owner request 2026-10-21: "ทุกโหมดอยากให้เห็นชัด ๆ ว่ากำไรกี่บาทกี่ %".
