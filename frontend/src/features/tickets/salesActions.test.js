@@ -633,7 +633,7 @@ describe('nextSalesAction — the route choice once a designer/owner quotation i
 
   it('an accepted designer request on a ticket the order bridge cannot advance (\'submitted\') -> neither ยืนยันคำสั่งซื้อ nor a route choice', () => {
     const action = nextSalesAction(deal({ status: 'submitted' }), [request(1, 'DESIGNER', 'QUOTATION_ACCEPTED')], known([1, 'ACCEPTED']));
-    expect([QUOTE_NEXT, SALES_ACTION.CONFIRM_ORDER]).not.toContain(action?.key);
+    expect(action).toBeNull();
   });
 
   it('sortWorklist ranks QUOTE_NEXT_PARTY with CONFIRM_ORDER (1): ahead of ISSUE_QUOTATION, ties broken by the older stageUpdatedAt', () => {

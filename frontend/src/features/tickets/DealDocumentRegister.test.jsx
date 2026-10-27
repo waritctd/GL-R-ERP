@@ -283,7 +283,7 @@ describe('DealDocumentRegister', () => {
   // row (that part is CSS, which jsdom cannot see). The PDF/Excel downloads are pinned by 'lists
   // direct quotations … downloads PDF by id' above; "PDF does not navigate" could not fail in jsdom
   // (the button was never inside the link), so it is gone.
-  it('a direct quotation\'s number is a plain link to /quotations/<id>, wrapping the number only', async () => {
+  it('a direct quotation\'s number links to /quotations/<id>', async () => {
     api.dealQuotations.listForTicket.mockResolvedValue({
       items: [{ id: 77, number: 'QT-2026-0077-1', docStatus: 'APPROVED', revisionNo: 1, grandTotal: 2, origin: 'DEAL_DIRECT' }],
     });
