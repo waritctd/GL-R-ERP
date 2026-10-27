@@ -250,38 +250,6 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
     // through DealQuotationService.createFromPricingRequest. Direct quotations never take this route.
 
     @Test
-    void createDepositNoticeFromQuotation_newEngineAcceptedQuotation_createsTheSameDraftTheTicketRouteWould() {
-        DealQuotationDto accepted = acceptedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
-        // The PDF prints a NULL percent as DealQuotationRenderAdapter.DEFAULT_DEPOSIT_PERCENT (30).
-        assertThat(accepted.depositPercent()).isNull();
-        long pricingRequestId = accepted.pricingRequestId();
-        orderConfirmation.confirmOrder(pricingRequestId,
-            new OrderConfirmationRequests.ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
-
-        DepositNoticeDto viaPricingRequest = orderConfirmation.createDepositNoticeFromQuotation(pricingRequestId,
-            new OrderConfirmationRequests.CreateDepositNoticeFromQuotationRequest(null), salesActor);
-
-        assertThat(viaPricingRequest.reference()).isEqualTo(accepted.number());
-        assertThat(viaPricingRequest.items()).isNotEmpty();
-
-        // Reference, items and percent are exactly what the ticket-level route produces for this deal.
-        DepositNoticeDto viaTicket = depositNoticeService.createDraft(ticketId,
-            new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), salesActor);
-        assertThat(viaTicket.reference()).isEqualTo(viaPricingRequest.reference());
-        assertThat(viaPricingRequest.depositPercent()).isEqualByComparingTo("0.30");
-        assertThat(viaTicket.depositPercent()).isEqualByComparingTo("0.30");
-        assertThat(viaPricingRequest.depositPercent()).isEqualByComparingTo(viaTicket.depositPercent());
-        assertThat(viaPricingRequest.items())
-            .usingRecursiveComparison().ignoringFields("id")
-            .isEqualTo(viaTicket.items());
-
-        assertThat(jdbc.queryForObject("""
-            SELECT COUNT(*) FROM sales.pricing_request_event
-             WHERE pricing_request_id = :id AND event_kind = 'DEPOSIT_NOTICE_DRAFTED_FROM_QUOTATION'
-            """, Map.of("id", pricingRequestId), Long.class)).isEqualTo(1L);
-    }
-
-    @Test
     void createDepositNoticeFromQuotation_newEngineIssuedNotAccepted_still409() {
         DealQuotationDto issued = issuedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
         long pricingRequestId = issued.pricingRequestId();
@@ -428,6 +396,16 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
             assertThat(draft.depositPercent()).isEqualByComparingTo(expectedDraftPercent);
             assertThat(draft.reference()).isEqualTo(accepted.number());
         }
+        // Every line field, not just qty and net price, is the same on both routes.
+        assertThat(viaPricingRequest.items())
+            .usingRecursiveComparison().ignoringFields("id")
+            .isEqualTo(viaTicket.items());
+        // The new-engine branch writes the pricing-request event too (OrderConfirmationIntegrationTest
+        // pins the legacy branch).
+        assertThat(jdbc.queryForObject("""
+            SELECT COUNT(*) FROM sales.pricing_request_event
+             WHERE pricing_request_id = :id AND event_kind = 'DEPOSIT_NOTICE_DRAFTED_FROM_QUOTATION'
+            """, Map.of("id", pricingRequestId), Long.class)).isEqualTo(1L);
     }
 
     /** The reverse mix: the customer answered the legacy quotation, and the sibling pricing

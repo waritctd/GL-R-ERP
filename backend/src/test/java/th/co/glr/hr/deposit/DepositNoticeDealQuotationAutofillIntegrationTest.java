@@ -17,8 +17,8 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  * DepositNoticeService#itemsFromGoverning} uses once the legacy {@code
  * ticket_item.approved_price} path yields nothing. Mockito cannot exercise this: the job is the
  * SQL (the status/origin filter, the {@code ORDER BY} preference, the column mapping), so this
- * needs the real queries against real Postgres. The mixed legacy/v2 ranking is pinned in {@code
- * DepositNoticeRepositoryDepositPercentIntegrationTest}.
+ * needs the real queries against real Postgres. Which quotation wins (every origin, status and
+ * insertion order) is pinned in {@code DepositNoticeRepositoryDepositPercentIntegrationTest}.
  */
 class DepositNoticeDealQuotationAutofillIntegrationTest extends AbstractPostgresIntegrationTest {
 
@@ -63,43 +63,7 @@ class DepositNoticeDealQuotationAutofillIntegrationTest extends AbstractPostgres
         assertThat(items.get(1).discountLabel()).isNull();
     }
 
-    // ── (b) DEAL_DIRECT / APPROVED — the case the old IN ('ACCEPTED','ISSUED') filter MISSED ───
-
-    @Test
-    void dealDirectApprovedQuotation_isReturned_theCoreRegressionThisFixCloses() {
-        long ticketId = insertTicket("DEPNOT-B");
-        long quotationId = insertQuotation(ticketId, "DEAL_DIRECT", "APPROVED");
-        insertQuotationItem(quotationId, 1, "DEAL_DIRECT item", new BigDecimal("2"), "แผ่น",
-            new BigDecimal("1000.00"), BigDecimal.ZERO, new BigDecimal("1000.00"));
-
-        List<DepositNoticeItemRequest> items = itemsForDeposit(ticketId);
-
-        assertThat(items).hasSize(1);
-        assertThat(items.get(0).description()).isEqualTo("DEAL_DIRECT item");
-        assertThat(items.get(0).unitPrice()).isEqualByComparingTo("1000.00");
-        assertThat(items.get(0).discountLabel()).isNull();
-    }
-
-    // ── (c) ACCEPTED beats ISSUED (both PRICING_REQUEST, same ticket) ───────────────────────────
-
-    @Test
-    void acceptedPricingRequestQuotation_winsOverAnIssuedOne_onTheSameTicket() {
-        long ticketId = insertTicket("DEPNOT-C");
-        long issuedQuotationId = insertQuotation(ticketId, "PRICING_REQUEST", "ISSUED");
-        insertQuotationItem(issuedQuotationId, 1, "Issued item (must lose)", BigDecimal.ONE, "แผ่น",
-            new BigDecimal("111.00"), BigDecimal.ZERO, new BigDecimal("111.00"));
-        long acceptedQuotationId = insertQuotation(ticketId, "PRICING_REQUEST", "ACCEPTED");
-        insertQuotationItem(acceptedQuotationId, 1, "Accepted item (must win)", BigDecimal.ONE, "แผ่น",
-            new BigDecimal("222.00"), BigDecimal.ZERO, new BigDecimal("222.00"));
-
-        List<DepositNoticeItemRequest> items = itemsForDeposit(ticketId);
-
-        assertThat(items).hasSize(1);
-        assertThat(items.get(0).description()).isEqualTo("Accepted item (must win)");
-        assertThat(items.get(0).unitPrice()).isEqualByComparingTo("222.00");
-    }
-
-    // ── (d) NEGATIVE, wrong-way-round: nothing in a live status -> empty list ───────────────────
+    // ── (b) NEGATIVE, wrong-way-round: nothing in a live status -> empty list ───────────────────
 
     /**
      * Written wrong-way-round per CLAUDE.md's "Permission changes must ship evidence" guidance,
