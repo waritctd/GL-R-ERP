@@ -1,6 +1,6 @@
 /* Hallmark · genre: modern-minimal · macrostructure: Workbench · design-system: design.md · designed-as-app · pre-emit critique: P4 H4 E4 S4 R5 V5 */
 import { useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQueries, useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
@@ -11,7 +11,13 @@ import { PageStack, Panel, StatGrid } from '../../components/common/Layout.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { bangkokMonthStartIso, bangkokTodayIso, formatMoney, formatThaiDate, greetingName } from '../../utils/format.js';
+import { newestQuotationByRequest } from '../quotations/quotationMeta.js';
 import { followUpStatus, nextSalesAction, sortWorklist, SALES_ACTION } from '../tickets/salesActions.js';
+import { offRoutePartiesFor, useStageCatalog } from '../tickets/stageCatalog.js';
+
+// useQueries' `combine`: each query's rows. Module-level so react-query keeps the combined array
+// stable while the data is unchanged, and the worklist memo below holds.
+const dataOfQueries = (results) => results.map((result) => result.data);
 
 const FOLLOW_UP_LIST_LIMIT = 6;
 
@@ -89,13 +95,39 @@ export function SalesOverview({ user, employee }) {
   const loading = ticketsQuery.isLoading || pricingRequestsQuery.isLoading;
 
   const activeDeals = useMemo(() => deals.filter((deal) => deal.lifecycle === 'ACTIVE'), [deals]);
+  // Each deal's route (the served catalog.routes for its entryChannel), for the route choice.
+  const { catalog: stageCatalog } = useStageCatalog();
+
+  // Review V11: each quoted deal's quotation list (the deal page's own query, shared through the
+  // cache), so the worklist reads approval waits and redos the way the deal page does. Only deals
+  // with a request the list decides for; until a deal's list is read, it gets no route choice.
+  const quotedDealIds = useMemo(() => [...new Set(pricingRequests
+    .filter((pr) => pr.status === 'APPROVED_FOR_QUOTATION' || pr.status === 'QUOTATION_ISSUED')
+    .map((pr) => Number(pr.ticketId)))], [pricingRequests]);
+  const quotationRows = useQueries({
+    queries: quotedDealIds.map((id) => ({
+      queryKey: queryKeys.dealQuotationsByTicket(id),
+      queryFn: () => api.dealQuotations.listForTicket(id).then((response) => response.items ?? []),
+    })),
+    combine: dataOfQueries,
+  });
 
   const worklist = useMemo(() => {
+    const rowsByDeal = new Map(quotedDealIds.map((id, index) => [id, quotationRows[index]]));
     const items = activeDeals
-      .map((deal) => ({ deal, action: nextSalesAction(deal, pricingRequests) }))
+      .map((deal) => {
+        const rows = rowsByDeal.get(Number(deal.id));
+        return {
+          deal,
+          action: nextSalesAction(deal, pricingRequests, {
+            offRouteParties: rows ? offRoutePartiesFor(stageCatalog, deal.entryChannel) : null,
+            quotationByRequest: rows ? newestQuotationByRequest(rows) : undefined,
+          }),
+        };
+      })
       .filter((item) => item.action != null);
     return sortWorklist(items);
-  }, [activeDeals, pricingRequests]);
+  }, [activeDeals, pricingRequests, stageCatalog, quotedDealIds, quotationRows]);
 
   const pulse = useMemo(() => {
     let overdueFollowUp = 0;

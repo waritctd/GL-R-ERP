@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { cn } from '../../utils/cn.js';
 import { useIsMobile } from '../../hooks/useIsMobile.js';
@@ -65,8 +65,19 @@ export function OverflowMenu({
   triggerLabel,
   triggerIcon = 'moreHorizontal',
   triggerClassName,
+  // Extra attributes for the trigger button (e.g. a data-testid / data-action e2e hook); spread first,
+  // so they can never override the menu's own handlers or ARIA.
+  triggerProps,
+  // Told when the menu opens and closes (also closed on unmount) — the deal page holds its sticky
+  // header still while one is open, since condensing it remounts the trigger and closes the menu.
+  onOpenChange,
 }) {
   const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!open) return undefined;
+    onOpenChange?.(true);
+    return () => onOpenChange?.(false);
+  }, [open, onOpenChange]);
   const triggerRef = useRef(null);
   const menuRef = useRef(null);
   const isMobile = useIsMobile();
@@ -119,7 +130,7 @@ export function OverflowMenu({
       if (event.key === 'Escape') {
         event.stopPropagation();
         setOpen(false);
-        triggerRef.current?.focus();
+        triggerRef.current?.focus({ preventScroll: true });
         return;
       }
       // Tab/Shift+Tab: close the menu and let the browser's own default Tab
@@ -170,6 +181,7 @@ export function OverflowMenu({
           class, so it's left untouched rather than guessed into a variant. */}
       {triggerLabel ? (
         <button
+          {...triggerProps}
           type="button"
           ref={triggerRef}
           className={cn(
@@ -182,11 +194,12 @@ export function OverflowMenu({
           title={label}
           onClick={() => setOpen((v) => !v)}
         >
-          <Icon name={triggerIcon} size={18} />
-          <span>{triggerLabel}</span>
+          {triggerIcon ? <Icon name={triggerIcon} size={18} /> : null}
+          <span className="inline-flex items-center gap-[7px]">{triggerLabel}</span>
         </button>
       ) : (
         <Button
+          {...triggerProps}
           type="button"
           ref={triggerRef}
           variant="icon"
@@ -242,6 +255,9 @@ export function OverflowMenu({
               onClick={() => {
                 if (item.disabled) return;
                 setOpen(false);
+                // Focus back on the trigger first, so a dialog the item opens returns focus there. It
+                // was just clicked, so it is on screen: no scroll (a padded scroller would jump).
+                triggerRef.current?.focus({ preventScroll: true });
                 item.onSelect();
               }}
             >

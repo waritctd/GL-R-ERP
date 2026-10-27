@@ -5,10 +5,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
-import java.util.Optional;
+import java.util.stream.Stream;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.customer.ContactRepository;
@@ -35,19 +38,17 @@ import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.dealquotation.WastageCalculator;
 
 /**
- * Real-Postgres coverage for {@link DepositNoticeRepository#findDealQuotationDepositPercent} —
- * owner ruling (2026-09-29): the deposit-notice PERCENT is LOCKED to the source quotation's own
- * {@code sales.quotation.deposit_percent}, never editable at the deposit-notice stage. A Mockito
- * unit test on {@code DepositNoticeServiceTest} already proves the SERVICE calls this repository
- * method and trusts its result over a caller-supplied value — it cannot prove the method's own
- * SQL actually reads the right row out of {@code sales.quotation}. This class drives that SQL
- * directly.
+ * Real-Postgres coverage for {@link DepositNoticeRepository#findGoverningQuotation}, the one pick
+ * of the quotation a ticket-level deposit notice bills: its lines and its percent (owner rulings
+ * 2026-09-29 and 2026-10-23). {@code DepositNoticeServiceTest} proves the SERVICE takes both from
+ * the row this returns; it cannot prove the SQL picks the right row out of {@code sales.quotation}.
+ * This class drives that SQL directly.
  *
  * <p>Fixture note: rows are written straight over JDBC rather than through {@code
- * CustomerQuotationService}/{@code DealQuotationService} — neither ever writes {@code
- * deposit_percent} today (see the repository method's own Javadoc: the legacy engine's {@code
- * CreateCustomerQuotationRequest} has no such field at all, and only {@code DealQuotationService}'s
- * v2 engine writes it in production). A real {@code ticket_id} and, for the legacy-branch cases, a
+ * CustomerQuotationService}/{@code DealQuotationService}, so one test can set any status, origin,
+ * insertion order and stored {@code deposit_percent} (the legacy engine never writes that column:
+ * {@code CreateCustomerQuotationRequest} has no such field; only {@code DealQuotationService}
+ * writes it). A real {@code ticket_id} and, for the legacy-branch cases, a
  * real {@code pricing_request_id} are still required — both are real FK targets on {@code
  * sales.quotation} — so this still builds a genuine ticket (+ a draft pricing request for the
  * legacy cases only; the v2 branch's own FK, {@code origin}, needs no pricing request at all).
@@ -82,93 +83,191 @@ class DepositNoticeRepositoryDepositPercentIntegrationTest extends AbstractPostg
     }
 
     // ── Legacy chain (origin IS NULL, pricing_request_id IS NOT NULL): ACCEPTED > ISSUED ──────
+    // The legacy PDF prints 50% whatever the row stores (ticket.QuotationRenderer), so every live
+    // legacy row bills 0.50; the fixtures store other percents to prove the column is never read.
 
     @Test
-    void legacyChain_prefersAcceptedQuotationsDepositPercentOverAnIssuedOne() {
+    void legacyChain_anAcceptedQuotationBeatsANewerIssuedOne_andBillsItsPdfsFifty() {
         long ticketId = newTicketWithPricingRequestDraft();
+        long accepted = insertLegacyQuotation(ticketId, "ACCEPTED", (short) 30);
         insertLegacyQuotation(ticketId, "ISSUED", (short) 20);
-        insertLegacyQuotation(ticketId, "ACCEPTED", (short) 30);
 
-        Optional<BigDecimal> result = depositNotices.findDealQuotationDepositPercent(ticketId);
-
-        assertThat(result).isPresent();
-        assertThat(result.get()).isEqualByComparingTo("0.30");
+        assertGoverning(ticketId, accepted, true, "0.50");
     }
 
     @Test
-    void legacyChain_fallsBackToIssuedWhenNoneAccepted() {
+    void legacyChain_fallsBackToIssuedWhenNoneAccepted_andBillsItsPdfsFifty() {
         long ticketId = newTicketWithPricingRequestDraft();
-        insertLegacyQuotation(ticketId, "ISSUED", (short) 20);
+        long issued = insertLegacyQuotation(ticketId, "ISSUED", (short) 20);
 
-        Optional<BigDecimal> result = depositNotices.findDealQuotationDepositPercent(ticketId);
-
-        assertThat(result).isPresent();
-        assertThat(result.get()).isEqualByComparingTo("0.20");
+        assertGoverning(ticketId, issued, true, "0.50");
     }
 
+    /** A ticket-level legacy quotation ({@code pricing_request_id IS NULL}) never governs, even
+     * ACCEPTED and newest: the scope is {@code CustomerQuotationRepository#findByTicket}'s. */
     @Test
-    void legacyChain_ignoresNonLiveStatusesLikeDraftOrRejected() {
+    void legacyChain_ignoresNonLiveStatusesAndTicketLevelQuotations() {
         long ticketId = newTicketWithPricingRequestDraft();
         insertLegacyQuotation(ticketId, "DRAFT", (short) 40);
         insertLegacyQuotation(ticketId, "REJECTED", (short) 50);
+        int version = ++quotationVersionSeq;
+        jdbc.update("""
+            INSERT INTO sales.quotation (ticket_id, number, issued_by, doc_status, quotation_version)
+            VALUES (:ticketId, :number, :issuedBy, 'ACCEPTED', :version)
+            """, new MapSqlParameterSource().addValue("ticketId", ticketId)
+                .addValue("number", "QTD" + ticketId + "-" + version).addValue("issuedBy", employeeId)
+                .addValue("version", version));
 
-        Optional<BigDecimal> result = depositNotices.findDealQuotationDepositPercent(ticketId);
-
-        assertThat(result).isEmpty();
+        assertThat(depositNotices.findGoverningQuotation(ticketId)).isEmpty();
     }
 
     @Test
-    void legacyChain_nullDepositPercentOnTheLiveQuotationYieldsEmpty() {
+    void legacyChain_nullDepositPercentOnTheLiveQuotationYieldsTheFiftyItsPdfPrints() {
+        long ticketId = newTicketWithPricingRequestDraft();
+        long accepted = insertLegacyQuotation(ticketId, "ACCEPTED", null);
+
+        assertGoverning(ticketId, accepted, true, "0.50");
+    }
+
+    // ── Mixed ticket: the latest quotation the customer ANSWERED governs, whichever engine ─────
+    // (owner ruling 2026-10-23). Answered = ACCEPTED, or a DEAL_DIRECT quotation's terminal
+    // APPROVED. An unanswered ISSUED row governs only when nothing was answered.
+
+    /** The legacy row wins because the customer answered it, not because it is legacy: the
+     * sibling v2 row is newer. */
+    @Test
+    void mixedTicket_anAnsweredLegacyQuotationBeatsANewerUnansweredV2One() {
+        long ticketId = newTicketWithPricingRequestDraft();
+        long legacyAccepted = insertLegacyQuotation(ticketId, "ACCEPTED", null);
+        insertOriginTaggedQuotation(ticketId, "PRICING_REQUEST", "ISSUED", null);
+
+        assertGoverning(ticketId, legacyAccepted, true, "0.50");
+    }
+
+    /** Newest wins whichever engine it is: both insertion orders, so neither engine is preferred. */
+    @Test
+    void mixedTicket_withNothingAnswered_theNewestIssuedQuotationGoverns() {
+        long v2Newer = newTicketWithPricingRequestDraft();
+        insertLegacyQuotation(v2Newer, "ISSUED", null);
+        long v2Issued = insertOriginTaggedQuotation(v2Newer, "PRICING_REQUEST", "ISSUED", (short) 40);
+        assertGoverning(v2Newer, v2Issued, false, "0.40");
+
+        long legacyNewer = newTicketWithPricingRequestDraft();
+        insertOriginTaggedQuotation(legacyNewer, "PRICING_REQUEST", "ISSUED", (short) 40);
+        long legacyIssued = insertLegacyQuotation(legacyNewer, "ISSUED", null);
+        assertGoverning(legacyNewer, legacyIssued, true, "0.50");
+    }
+
+    /** The DEAL_DIRECT row is the OLDER one, so only its answered rank (not quotation_id) can pick it. */
+    @Test
+    void mixedTicket_aDealDirectApprovedQuotationIsAnAnswer_andBeatsANewerLegacyIssuedOne() {
+        long ticketId = newTicketWithPricingRequestDraft();
+        long dealDirect = insertOriginTaggedQuotation(ticketId, "DEAL_DIRECT", "APPROVED", (short) 40);
+        insertLegacyQuotation(ticketId, "ISSUED", null);
+
+        assertGoverning(ticketId, dealDirect, false, "0.40");
+    }
+
+    /** A DEAL_DIRECT approval is an answer level with ACCEPTED (owner ruling 2026-10-23), so the
+     * newer of the two governs. Only data from before the 2026-09-30 direct-quotation lock can
+     * hold both on one ticket. */
+    @Test
+    void mixedTicket_aDealDirectApprovedQuotationBeatsAnOlderAcceptedOne() {
         long ticketId = newTicketWithPricingRequestDraft();
         insertLegacyQuotation(ticketId, "ACCEPTED", null);
+        long dealDirect = insertOriginTaggedQuotation(ticketId, "DEAL_DIRECT", "APPROVED", (short) 40);
 
-        Optional<BigDecimal> result = depositNotices.findDealQuotationDepositPercent(ticketId);
-
-        assertThat(result).isEmpty();
+        assertGoverning(ticketId, dealDirect, false, "0.40");
     }
 
     // ── V2 deal-quotation chain (origin IN ('PRICING_REQUEST','DEAL_DIRECT')) ─────────────────
 
+    /** The new-engine PDF prints a null percent as 30% ({@code DealQuotationRenderAdapter}). */
     @Test
-    void dealDirectOrigin_readsApprovedQuotationsDepositPercent() {
+    void pricingRequestOrigin_nullDepositPercentOnTheLiveQuotationYieldsTheThirtyItsPdfPrints() {
         long ticketId = newBareTicket();
-        insertOriginTaggedQuotation(ticketId, "DEAL_DIRECT", "APPROVED", (short) 50);
+        long accepted = insertOriginTaggedQuotation(ticketId, "PRICING_REQUEST", "ACCEPTED", null);
 
-        Optional<BigDecimal> result = depositNotices.findDealQuotationDepositPercent(ticketId);
-
-        assertThat(result).isPresent();
-        assertThat(result.get()).isEqualByComparingTo("0.50");
+        assertGoverning(ticketId, accepted, false, "0.30");
     }
 
     @Test
-    void pricingRequestOrigin_prefersAcceptedOverIssuedOverApproved() {
+    void pricingRequestOrigin_anAcceptedQuotationBeatsANewerIssuedOne() {
         long ticketId = newBareTicket();
-        insertOriginTaggedQuotation(ticketId, "PRICING_REQUEST", "APPROVED", (short) 10);
+        long accepted = insertOriginTaggedQuotation(ticketId, "PRICING_REQUEST", "ACCEPTED", (short) 30);
         insertOriginTaggedQuotation(ticketId, "PRICING_REQUEST", "ISSUED", (short) 20);
-        insertOriginTaggedQuotation(ticketId, "PRICING_REQUEST", "ACCEPTED", (short) 30);
 
-        Optional<BigDecimal> result = depositNotices.findDealQuotationDepositPercent(ticketId);
-
-        assertThat(result).isPresent();
-        assertThat(result.get()).isEqualByComparingTo("0.30");
+        assertGoverning(ticketId, accepted, false, "0.30");
     }
 
+    /** APPROVED is live on DEAL_DIRECT only: a PRICING_REQUEST approval lands on ISSUED
+     * ({@code DealQuotationRepository#approve}), so no writer produces the PRICING_REQUEST row here. */
     @Test
-    void dealDirectOrigin_ignoresNonLiveStatusesLikeDraftOrCancelled() {
+    void v2Origins_ignoreNonLiveStatuses_includingAPricingRequestApproved() {
         long ticketId = newBareTicket();
         insertOriginTaggedQuotation(ticketId, "DEAL_DIRECT", "DRAFT", (short) 60);
         insertOriginTaggedQuotation(ticketId, "DEAL_DIRECT", "CANCELLED", (short) 70);
+        insertOriginTaggedQuotation(ticketId, "PRICING_REQUEST", "APPROVED", (short) 10);
 
-        Optional<BigDecimal> result = depositNotices.findDealQuotationDepositPercent(ticketId);
+        assertThat(depositNotices.findGoverningQuotation(ticketId)).isEmpty();
+    }
 
-        assertThat(result).isEmpty();
+    private static final List<String> ALL_DOC_STATUSES = List.of("DRAFT", "READY_TO_ISSUE", "PENDING_APPROVAL",
+        "APPROVED", "ISSUED", "SENT", "SUPERSEDED", "CANCELLED", "EXPIRED", "ACCEPTED", "REJECTED",
+        "REVISION_REQUESTED");
+
+    /** Every (origin, doc_status) pair in {@code chk_quotation_doc_status} the SQL must exclude:
+     * live is ACCEPTED/ISSUED for legacy and PRICING_REQUEST, plus APPROVED for DEAL_DIRECT. */
+    static Stream<Arguments> nonLivePairs() {
+        return Stream.of("LEGACY", "PRICING_REQUEST", "DEAL_DIRECT").flatMap(origin ->
+            ALL_DOC_STATUSES.stream()
+                .filter(st -> !(st.equals("ACCEPTED") || st.equals("ISSUED")
+                    || (origin.equals("DEAL_DIRECT") && st.equals("APPROVED"))))
+                .map(st -> Arguments.of(origin, st)));
+    }
+
+    /** A live ISSUED row plus a NEWER excluded one: an admitted excluded status would win on id
+     * (or, for APPROVED/ACCEPTED, on rank), so the ISSUED row must be the pick. */
+    @ParameterizedTest(name = "{0} {1} is not live")
+    @MethodSource("nonLivePairs")
+    void aNewerNonLiveStatusNeverBeatsALiveIssuedQuotation(String origin, String excludedStatus) {
+        boolean legacy = origin.equals("LEGACY");
+        long ticketId = legacy ? newTicketWithPricingRequestDraft() : newBareTicket();
+        long live = legacy ? insertLegacyQuotation(ticketId, "ISSUED", null)
+            : insertOriginTaggedQuotation(ticketId, origin, "ISSUED", (short) 40);
+        if (legacy) {
+            insertLegacyQuotation(ticketId, excludedStatus, (short) 10);
+        } else {
+            insertOriginTaggedQuotation(ticketId, origin, excludedStatus, (short) 10);
+        }
+
+        assertGoverning(ticketId, live, legacy, legacy ? "0.50" : "0.40");
+    }
+
+    /** Mirror of the DEAL_DIRECT-APPROVED-vs-older-ACCEPTED test: the OLDER APPROVED row loses to
+     * a NEWER ACCEPTED one, so APPROVED ranks level with ACCEPTED, not above it. */
+    @Test
+    void mixedTicket_aNewerAcceptedQuotationBeatsAnOlderDealDirectApprovedOne() {
+        long ticketId = newTicketWithPricingRequestDraft();
+        insertOriginTaggedQuotation(ticketId, "DEAL_DIRECT", "APPROVED", (short) 40);
+        long accepted = insertLegacyQuotation(ticketId, "ACCEPTED", null);
+
+        assertGoverning(ticketId, accepted, true, "0.50");
     }
 
     @Test
     void noQuotationAtAllYieldsEmpty() {
         long ticketId = newBareTicket();
 
-        assertThat(depositNotices.findDealQuotationDepositPercent(ticketId)).isEmpty();
+        assertThat(depositNotices.findGoverningQuotation(ticketId)).isEmpty();
+    }
+
+    private void assertGoverning(long ticketId, long quotationId, boolean legacy, String depositPercent) {
+        DepositNoticeRepository.GoverningQuotation governing =
+            depositNotices.findGoverningQuotation(ticketId).orElseThrow();
+        assertThat(governing.quotationId()).isEqualTo(quotationId);
+        assertThat(governing.legacy()).isEqualTo(legacy);
+        assertThat(governing.depositPercent()).isEqualByComparingTo(depositPercent);
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -213,16 +312,17 @@ class DepositNoticeRepositoryDepositPercentIntegrationTest extends AbstractPostg
 
     /** Legacy quotation row: {@code origin IS NULL}, {@code pricing_request_id IS NOT NULL} —
      * exactly the scope {@code CustomerQuotationRepository#findByTicket} uses. */
-    private void insertLegacyQuotation(long ticketId, String docStatus, Short depositPercent) {
+    private long insertLegacyQuotation(long ticketId, String docStatus, Short depositPercent) {
         long pricingRequestId = pricingRequests.findByTicket(ticketId).get(0).id();
         int version = ++quotationVersionSeq;
-        jdbc.update("""
+        return jdbc.queryForObject("""
             INSERT INTO sales.quotation
                 (ticket_id, number, issued_by, doc_status, quotation_version,
                  pricing_request_id, origin, deposit_percent)
             VALUES
                 (:ticketId, :number, :issuedBy, :docStatus, :version,
                  :pricingRequestId, NULL, :depositPercent)
+            RETURNING quotation_id
             """,
             new MapSqlParameterSource()
                 .addValue("ticketId", ticketId)
@@ -234,18 +334,19 @@ class DepositNoticeRepositoryDepositPercentIntegrationTest extends AbstractPostg
                 .addValue("docStatus", docStatus)
                 .addValue("version", version)
                 .addValue("pricingRequestId", pricingRequestId)
-                .addValue("depositPercent", depositPercent));
+                .addValue("depositPercent", depositPercent), Long.class);
     }
 
     /** V2 deal-quotation row: {@code origin IN ('PRICING_REQUEST','DEAL_DIRECT')} — no {@code
      * pricing_request_id} needed (nullable; the v2 engine's own scope is {@code origin} alone). */
-    private void insertOriginTaggedQuotation(long ticketId, String origin, String docStatus, Short depositPercent) {
+    private long insertOriginTaggedQuotation(long ticketId, String origin, String docStatus, Short depositPercent) {
         int version = ++quotationVersionSeq;
-        jdbc.update("""
+        return jdbc.queryForObject("""
             INSERT INTO sales.quotation
                 (ticket_id, number, issued_by, doc_status, quotation_version, origin, deposit_percent)
             VALUES
                 (:ticketId, :number, :issuedBy, :docStatus, :version, :origin, :depositPercent)
+            RETURNING quotation_id
             """,
             new MapSqlParameterSource()
                 .addValue("ticketId", ticketId)
@@ -254,7 +355,7 @@ class DepositNoticeRepositoryDepositPercentIntegrationTest extends AbstractPostg
                 .addValue("docStatus", docStatus)
                 .addValue("version", version)
                 .addValue("origin", origin)
-                .addValue("depositPercent", depositPercent));
+                .addValue("depositPercent", depositPercent), Long.class);
     }
 
     private TicketItemRequest ticketItem() {

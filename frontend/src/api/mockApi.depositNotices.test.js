@@ -1,5 +1,17 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { api } from './mockApi.js';
+import {
+  api, MOCK_DEFAULT_DEPOSIT_PERCENT, MOCK_LEGACY_DEPOSIT_PERCENT, retireLivePricingRequestsForTests,
+} from './mockApi.js';
+import { stripComments } from './apiSurface.js';
+
+// Copy of the canonical ONE_ITEM in mockApi.dealQuotations.test.js.
+const ONE_ITEM = {
+  model: 'Trilogy', color: 'Ash', texture: 'Matt', sizeText: '60x60', thicknessMm: 10, sqmPerPiece: 0.36,
+  quantityMode: 'AREA', areaSqm: 20, wastageMode: 'NONE', wastageValue: 0, piecesPerBox: 3, unitPrice: 850, discountPct: 0,
+  leadTimeMinDays: 30, leadTimeMaxDays: 45,
+};
 
 // Branch fix (deposit-notice autofill): drives the mock's own pricing-request chain end to end
 // — Step 1 create through Step 5 customer-accept, then confirmOrder — against the REAL mock
@@ -184,10 +196,13 @@ describe('mockApi.depositNotices.createDraft autofill (branch fix: deposit-notic
     expect(detail.items.every((it) => it.approvedPrice == null)).toBe(true);
     expect(detail.summary.status).toBe('quotation_issued');
 
+    // A typed percent is ignored: the legacy quotation's PDF prints 50%, so the draft bills 50%.
     const { depositNotice } = await api.depositNotices.createDraft(ticketId, {
       notes: [],
-      depositPercent: 0.5,
+      depositPercent: 0.9,
     });
+    expect(depositNotice.depositPercent).toBe(0.5);
+    expect(depositNotice.reference).toBe(quotation.number);
 
     // Items: sourced from the ACCEPTED quotation, not the (all-null) ticket_item rows.
     expect(depositNotice.items).toHaveLength(1);
@@ -209,9 +224,11 @@ describe('mockApi.depositNotices.createDraft autofill (branch fix: deposit-notic
     // delegates to — this endpoint itself never passes a customer/project explicitly.
     const prId = (await api.pricingRequests.listForTicket(quotation.ticketId)).items
       .find((pr) => pr.status === 'QUOTATION_ACCEPTED').id;
+    // A typed percent is ignored here too: the legacy branch bills its PDF's 50%.
     const { depositNotice } = await api.pricingRequests.createDepositNoticeFromQuotation(prId, {
-      depositPercent: 0.5,
+      depositPercent: 0.9,
     });
+    expect(depositNotice.depositPercent).toBe(0.5);
 
     expect(depositNotice.customerTaxId).toBe(customer.taxId);
     expect(depositNotice.customerAddress).toBe(`${customer.address} ${customer.branch}`);
@@ -222,12 +239,22 @@ describe('mockApi.depositNotices.createDraft autofill (branch fix: deposit-notic
 // Java picks the row with DealQuotationRepository.findAcceptedForPricingRequest.
 describe('mockApi.pricingRequests.createDepositNoticeFromQuotation — new-engine quotation (mirrors OrderConfirmationService fix)', () => {
   it('creates the draft with the accepted quotation number as reference, and items and percent from that quotation', async () => {
-    const { prId, accepted } = await driveTicketToNewEngineAcceptedQuotation({ depositPercent: 30 });
+    // 40, unlike the 30 default, the legacy 50 and the no-quotation 0.5, so only the quotation's own percent fits.
+    const { ticketId, prId, accepted } = await driveTicketToNewEngineAcceptedQuotation({ depositPercent: 40 });
     const { depositNotice } = await api.pricingRequests.createDepositNoticeFromQuotation(prId, {});
     expect(depositNotice.reference).toBe(accepted.number);
     // DepositNoticeService.createDraftFromQuotation: the chosen quotation's own whole-number percent.
-    expect(accepted.depositPercent).toBe(30);
-    expect(depositNotice.depositPercent).toBe(0.3);
+    expect(accepted.depositPercent).toBe(40);
+    expect(depositNotice.depositPercent).toBe(0.4);
+    // The ticket route bills the same quotation (DepositNoticeRepository.findGoverningQuotation).
+    const { depositNotice: fromTicket } = await api.depositNotices.createDraft(ticketId, {});
+    expect(fromTicket.depositPercent).toBe(0.4);
+    expect(fromTicket.reference).toBe(accepted.number);
+    // The caller supplies the lines (even this quotation's own), so the reference is null, as in
+    // Java; the percent still comes from the quotation (DepositNoticeService, linesFromGoverning).
+    const { depositNotice: ownLines } = await api.depositNotices.createDraft(ticketId, { items: fromTicket.items });
+    expect(ownLines.reference).toBeNull();
+    expect(ownLines.depositPercent).toBe(0.4);
     expect(depositNotice.items.length).toBeGreaterThan(0);
     // qty is deliberately not distinguishable here: a mock TILE row sets quantity = piecesFinal.
     const [line] = accepted.items;
@@ -241,12 +268,17 @@ describe('mockApi.pricingRequests.createDepositNoticeFromQuotation — new-engin
     expect(depositNotice.items[0].discountLabel).toBe('ส่วนลด 12 ต่อหน่วย');
   });
 
-  // Covers the ticket-level new-engine fallback (DepositNoticeRepository.findDealQuotationItemsForDeposit):
-  // with no items and empty legacy sources, the route would return no items without it.
-  it('ticket-level createDraft with no items reads the same new-engine lines as the pricing-request route', async () => {
-    const { ticketId, prId } = await driveTicketToNewEngineAcceptedQuotation();
+  // Covers the ticket-level route's governing quotation (DepositNoticeRepository.findGoverningQuotation):
+  // with no items and no legacy quotation, it bills the new-engine quotation's lines, percent and number.
+  it('ticket-level createDraft with no items drafts the same lines, percent and reference as the pricing-request route', async () => {
+    const { ticketId, prId, accepted } = await driveTicketToNewEngineAcceptedQuotation();
+    // The PDF prints a NULL percent as DealQuotationRenderAdapter.DEFAULT_DEPOSIT_PERCENT (30).
+    expect(accepted.depositPercent).toBeNull();
     const { depositNotice: fromTicket } = await api.depositNotices.createDraft(ticketId, {});
     const { depositNotice: fromPr } = await api.pricingRequests.createDepositNoticeFromQuotation(prId, {});
+    expect(fromPr.depositPercent).toBe(0.3);
+    expect(fromTicket.depositPercent).toBe(0.3);
+    expect(fromTicket.reference).toBe(fromPr.reference);
     expect(fromTicket.items.length).toBeGreaterThan(0);
     const pick = (items) => items.map(({ qty, netUnitPrice }) => ({ qty, netUnitPrice }));
     expect(pick(fromTicket.items)).toEqual(pick(fromPr.items));
@@ -278,17 +310,39 @@ describe('mockApi.pricingRequests.createDepositNoticeFromQuotation — new-engin
     expect(depositNotices).toHaveLength(0);
   });
 
-  // A zero-deposit ("ไม่รับมัดจำ", full payment) quotation has nothing to bill: Java refuses rather
-  // than drafting a 0-baht document that nothing downstream would stop from being issued.
-  it('rejects a 0% (full-payment) new-engine quotation with 409 and creates no draft', async () => {
+  // A zero-deposit ("ไม่รับมัดจำ", full payment) quotation has nothing to bill: Java refuses on both
+  // routes rather than drafting a 0-baht document that nothing downstream would stop from being issued.
+  it('rejects a 0% (full-payment) new-engine quotation with 409 on both routes and creates no draft', async () => {
     const { ticketId, prId, accepted } = await driveTicketToNewEngineAcceptedQuotation({
       depositPercent: 0, fullPaymentTerm: 'BEFORE_DELIVERY',
     });
     expect(accepted.depositPercent).toBe(0);
-    await expect(api.pricingRequests.createDepositNoticeFromQuotation(prId, {}))
-      .rejects.toMatchObject({ status: 409, message: expect.stringContaining('ไม่มีมัดจำ') });
+    const refusal = { status: 409, message: expect.stringContaining(`ใบเสนอราคา ${accepted.number} ระบุไม่มีมัดจำ`) };
+    await expect(api.pricingRequests.createDepositNoticeFromQuotation(prId, {})).rejects.toMatchObject(refusal);
+    await expect(api.depositNotices.createDraft(ticketId, {})).rejects.toMatchObject(refusal);
     const { depositNotices } = await api.depositNotices.listByTicket(ticketId);
     expect(depositNotices).toHaveLength(0);
+  });
+
+  // DepositNoticeRepositoryDepositPercentIntegrationTest#mixedTicket_aDealDirectApprovedQuotationBeatsAnOlderAcceptedOne
+  // on the mock: two answers in two mock arrays, so only "newest id" across both arrays can pick.
+  // Cancelling the pricing request stages the pre-lock data that lets a direct quotation sit beside it.
+  it('ticket-level createDraft bills a DEAL_DIRECT approval made after the accepted legacy quotation', async () => {
+    const { ticketId } = await driveTicketToAcceptedQuotation();
+    retireLivePricingRequestsForTests(ticketId);
+    const { quotation: draft } = await api.dealQuotations.create(ticketId, {
+      recipientType: 'DESIGNER', depositPercent: 40, remainderMode: 'ON_DELIVERY',
+      items: [ONE_ITEM],
+    });
+    await api.dealQuotations.submit(draft.id, {});
+    await api.auth.login({ role: 'sales_manager' });
+    const { quotation: approved } = await api.dealQuotations.approve(draft.id, {});
+    await api.auth.login({ role: 'sales' });
+    expect(approved.docStatus).toBe('APPROVED');
+
+    const { depositNotice } = await api.depositNotices.createDraft(ticketId, {});
+    expect(depositNotice.reference).toBe(approved.number);
+    expect(depositNotice.depositPercent).toBe(0.4);
   });
 });
 
@@ -384,5 +438,35 @@ describe('mockApi.depositNotices.issue account notification (GLA-32)', () => {
 
     expect(own).toBeTruthy();
     expect(own.message).toContain('ไม่ระบุลูกค้า');
+  });
+});
+
+// The mock's blank-percent defaults restate two Java constants; read them out of the source so the
+// copies cannot drift (the dealTrackingMeta.test.js approach). Throws rather than skips when the
+// files move, so the guard cannot quietly disable itself; comments are stripped first, so a
+// commented-out declaration does not count.
+function readBackendSource(relativePath) {
+  for (let dir = process.cwd(), depth = 0; depth < 8; depth += 1, dir = dirname(dir)) {
+    const candidate = resolve(dir, relativePath);
+    if (existsSync(candidate)) return readFileSync(candidate, 'utf8');
+  }
+  throw new Error(`could not find ${relativePath} above ${process.cwd()}`);
+}
+
+function javaIntConstant(relativePath, name) {
+  const match = stripComments(readBackendSource(relativePath)).match(new RegExp(`static final int ${name} = (\\d+);`));
+  if (!match) throw new Error(`could not find int ${name} in ${relativePath}`);
+  return Number(match[1]);
+}
+
+describe('mock deposit-percent defaults match the Java PDFs', () => {
+  it('a blank new-engine percent is DealQuotationRenderAdapter.DEFAULT_DEPOSIT_PERCENT', () => {
+    expect(MOCK_DEFAULT_DEPOSIT_PERCENT).toBe(javaIntConstant(
+      'backend/src/main/java/th/co/glr/hr/dealquotation/DealQuotationRenderAdapter.java', 'DEFAULT_DEPOSIT_PERCENT'));
+  });
+
+  it('a legacy quotation is QuotationRenderer.LEGACY_DEPOSIT_PERCENT', () => {
+    expect(MOCK_LEGACY_DEPOSIT_PERCENT).toBe(javaIntConstant(
+      'backend/src/main/java/th/co/glr/hr/ticket/QuotationRenderer.java', 'LEGACY_DEPOSIT_PERCENT'));
   });
 });

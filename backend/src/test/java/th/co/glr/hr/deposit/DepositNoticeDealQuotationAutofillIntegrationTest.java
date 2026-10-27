@@ -11,14 +11,15 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
 /**
- * Real-DB proof for {@link DepositNoticeRepository#findDealQuotationItemsForDeposit(long)} (the
- * 2026-09-29 fix) — the V2 deal-quotation item source {@code DepositNoticeService
- * #buildItemsFromRequest} falls back to once both the legacy {@code ticket_item.approved_price}
- * path and the {@code CustomerQuotationRepository}-scoped {@code pickQuotation} path yield
- * nothing. Mockito cannot exercise this: the method's whole job is the SQL — the status/origin
- * filter and the {@code ORDER BY} preference — so this needs the real query against real
- * Postgres, not a mocked repository. See that method's own Javadoc for the exact selection rule
- * this test pins.
+ * Real-DB proof for the V2 deal-quotation item source of a ticket-level deposit notice (the
+ * 2026-09-29 fix): {@link DepositNoticeRepository#findGoverningQuotation} picks the quotation and
+ * {@link DepositNoticeRepository#findDealQuotationItems} reads its lines, the pair {@code
+ * DepositNoticeService#itemsFromGoverning} uses once the legacy {@code
+ * ticket_item.approved_price} path yields nothing. Mockito cannot exercise this: the job is the
+ * SQL (the status/origin filter, the {@code ORDER BY} preference, the column mapping), so this
+ * needs the real queries against real Postgres. Which quotation wins (the ranking across origins
+ * and insertion order) is pinned in {@code DepositNoticeRepositoryDepositPercentIntegrationTest};
+ * this class's non-live test is the only pin for some excluded statuses, so it is not a duplicate.
  */
 class DepositNoticeDealQuotationAutofillIntegrationTest extends AbstractPostgresIntegrationTest {
 
@@ -44,7 +45,7 @@ class DepositNoticeDealQuotationAutofillIntegrationTest extends AbstractPostgres
         insertQuotationItem(quotationId, 1, "กระเบื้อง A", new BigDecimal("10"), "แผ่น",
             new BigDecimal("4365.29"), new BigDecimal("873.06"), new BigDecimal("3492.23"));
 
-        List<DepositNoticeItemRequest> items = repo.findDealQuotationItemsForDeposit(ticketId);
+        List<DepositNoticeItemRequest> items = itemsForDeposit(ticketId);
 
         assertThat(items).hasSize(2);
         assertThat(items.get(0).seq()).isEqualTo(1);
@@ -63,43 +64,7 @@ class DepositNoticeDealQuotationAutofillIntegrationTest extends AbstractPostgres
         assertThat(items.get(1).discountLabel()).isNull();
     }
 
-    // ── (b) DEAL_DIRECT / APPROVED — the case the old IN ('ACCEPTED','ISSUED') filter MISSED ───
-
-    @Test
-    void dealDirectApprovedQuotation_isReturned_theCoreRegressionThisFixCloses() {
-        long ticketId = insertTicket("DEPNOT-B");
-        long quotationId = insertQuotation(ticketId, "DEAL_DIRECT", "APPROVED");
-        insertQuotationItem(quotationId, 1, "DEAL_DIRECT item", new BigDecimal("2"), "แผ่น",
-            new BigDecimal("1000.00"), BigDecimal.ZERO, new BigDecimal("1000.00"));
-
-        List<DepositNoticeItemRequest> items = repo.findDealQuotationItemsForDeposit(ticketId);
-
-        assertThat(items).hasSize(1);
-        assertThat(items.get(0).description()).isEqualTo("DEAL_DIRECT item");
-        assertThat(items.get(0).unitPrice()).isEqualByComparingTo("1000.00");
-        assertThat(items.get(0).discountLabel()).isNull();
-    }
-
-    // ── (c) ACCEPTED beats ISSUED (both PRICING_REQUEST, same ticket) ───────────────────────────
-
-    @Test
-    void acceptedPricingRequestQuotation_winsOverAnIssuedOne_onTheSameTicket() {
-        long ticketId = insertTicket("DEPNOT-C");
-        long issuedQuotationId = insertQuotation(ticketId, "PRICING_REQUEST", "ISSUED");
-        insertQuotationItem(issuedQuotationId, 1, "Issued item (must lose)", BigDecimal.ONE, "แผ่น",
-            new BigDecimal("111.00"), BigDecimal.ZERO, new BigDecimal("111.00"));
-        long acceptedQuotationId = insertQuotation(ticketId, "PRICING_REQUEST", "ACCEPTED");
-        insertQuotationItem(acceptedQuotationId, 1, "Accepted item (must win)", BigDecimal.ONE, "แผ่น",
-            new BigDecimal("222.00"), BigDecimal.ZERO, new BigDecimal("222.00"));
-
-        List<DepositNoticeItemRequest> items = repo.findDealQuotationItemsForDeposit(ticketId);
-
-        assertThat(items).hasSize(1);
-        assertThat(items.get(0).description()).isEqualTo("Accepted item (must win)");
-        assertThat(items.get(0).unitPrice()).isEqualByComparingTo("222.00");
-    }
-
-    // ── (d) NEGATIVE, wrong-way-round: nothing in a live status -> empty list ───────────────────
+    // ── (b) NEGATIVE, wrong-way-round: nothing in a live status -> empty list ───────────────────
 
     /**
      * Written wrong-way-round per CLAUDE.md's "Permission changes must ship evidence" guidance,
@@ -124,12 +89,19 @@ class DepositNoticeDealQuotationAutofillIntegrationTest extends AbstractPostgres
         insertQuotationItem(pendingApprovalId, 1, "Pending-approval item", BigDecimal.ONE, "แผ่น",
             BigDecimal.TEN, BigDecimal.ZERO, BigDecimal.TEN);
 
-        List<DepositNoticeItemRequest> items = repo.findDealQuotationItemsForDeposit(ticketId);
+        List<DepositNoticeItemRequest> items = itemsForDeposit(ticketId);
 
         assertThat(items).isEmpty();
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────────────────────
+
+    /** The new-engine branch of {@code DepositNoticeService#itemsFromGoverning}. */
+    private List<DepositNoticeItemRequest> itemsForDeposit(long ticketId) {
+        return repo.findGoverningQuotation(ticketId)
+            .map(governing -> repo.findDealQuotationItems(governing.quotationId()))
+            .orElse(List.of());
+    }
 
     private long insertEmployee(String code) {
         return jdbc.queryForObject(
@@ -171,7 +143,7 @@ class DepositNoticeDealQuotationAutofillIntegrationTest extends AbstractPostgres
     private void insertQuotationItem(long quotationId, int seq, String description, BigDecimal qty,
                                      String rawUnit, BigDecimal unitPrice, BigDecimal salesDiscount,
                                      BigDecimal finalUnitPrice) {
-        // amount is legacy NOT NULL (V49) — irrelevant to findDealQuotationItemsForDeposit, which
+        // amount is legacy NOT NULL (V49) — irrelevant to findDealQuotationItems, which
         // reads unit_price/final_unit_price instead, so a harmless qty*unitPrice placeholder.
         BigDecimal amount = qty.multiply(unitPrice);
         jdbc.update("""

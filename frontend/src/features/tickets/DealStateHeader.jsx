@@ -119,7 +119,7 @@ function lastChipSpanClass(count) {
  * trigger at all.
  */
 export function DealStateHeader({
-  summary, pricingRequests = [], role, primaryAction, bannerText, overflowItems, onRefresh, condensed = false,
+  summary, pricingRequests = [], role, primaryAction, bannerText, overflowItems, onRefresh, condensed = false, onMenuOpenChange,
 }) {
   const lifecycle = dealLifecycleLabel(summary.lifecycle ?? 'ACTIVE');
   const status = ticketStatusLabel(summary.status);
@@ -173,7 +173,7 @@ export function DealStateHeader({
   const actionControls = (
     <div className="flex shrink-0 items-center gap-2">
       {primaryAction ? <div className="shrink-0">{primaryAction}</div> : null}
-      <OverflowMenu items={overflowItems} mobilePlacement="up" />
+      <OverflowMenu items={overflowItems} mobilePlacement="up" onOpenChange={onMenuOpenChange} />
     </div>
   );
 

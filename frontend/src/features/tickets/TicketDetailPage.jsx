@@ -10,17 +10,18 @@
  * while the deal holds a live คำขอราคา (and while those load); the route-comparison helper line
  * already goes with it. No new control, colour or layout. pre-emit critique: P4 H4 E4 S4 R4 V5.
  */
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Breadcrumbs } from '../../components/common/Breadcrumbs.jsx';
-import { Button } from '../../components/common/Button.jsx';
+import { Button, buttonVariants } from '../../components/common/Button.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { fieldErrorId } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
+import { OverflowMenu } from '../../components/common/OverflowMenu.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { Skeleton, SkeletonText } from '../../components/common/Skeleton.jsx';
@@ -53,13 +54,14 @@ import { DealMoneyTimeline } from './DealMoneyTimeline.jsx';
 import { DealRemainingInvoiceCard } from './DealRemainingInvoiceCard.jsx';
 import { DealQuotationPanel } from './DealQuotationPanel.jsx';
 import {
-  canReviseDealQuotation, canViewDealQuotation, CONFIRM_ORDER_FROM_QUOTATION_COPY,
+  canReviseDealQuotation, canViewDealQuotation, CONFIRM_ORDER_FROM_QUOTATION_COPY, newestQuotationByRequest,
 } from '../quotations/quotationMeta.js';
 import { DealStagePanel } from './DealStagePanel.jsx';
 import { DealStateHeader } from './DealStateHeader.jsx';
 import { DealTrackingPanel } from './DealTrackingPanel.jsx';
 import { visibleSections } from './salesViewScope.js';
-import { nextOnRoute, useStageCatalog } from './stageCatalog.js';
+import { nextOnRoute, offRoutePartiesFor, useStageCatalog } from './stageCatalog.js';
+import { PARTY_LABEL } from './salesActions.js';
 import {
   resolveTicketDetailTab, TICKET_DETAIL_TABS, visibleTicketDetailTabIds,
 } from './ticketDetailTabs.js';
@@ -95,9 +97,9 @@ import { resolveWorkState, secondaryWorkActions } from './workState.js';
 // Import's pickup step and account's commission step point at a different
 // ROUTE entirely (nextImportAction/nextAccountAction's own `to`), handled
 // separately below. CREATE_PCR/ISSUE_QUOTATION/CONFIRM_ORDER are NOT
-// scroll targets — each opens its owning panel's mutation directly via a
-// forwardRef instead (see pricingRequestPanelRef/dealQuotationPanelRef
-// below and their own FIX 1/FIX 2 doc comments), so they are deliberately
+// scroll targets — CREATE_PCR/CONFIRM_ORDER open their owning panel via a
+// forwardRef (see pricingRequestPanelRef/dealQuotationPanelRef below) and
+// ISSUE_QUOTATION writes its quotation on this page, so they are deliberately
 // absent from this map.
 const IN_PAGE_JUMP_TARGET = {
   // salesActions.js SALES_ACTION keys
@@ -125,7 +127,7 @@ const IN_PAGE_JUMP_TARGET = {
 };
 
 // Ticket-detail IA rebuild Phase 2: every one of the jump targets above (and
-// the ref-opened CREATE_PCR/ISSUE_QUOTATION/CONFIRM_ORDER panels) now lives
+// the ref-opened CREATE_PCR/CONFIRM_ORDER panels) now lives
 // inside a conditionally-MOUNTED TabPanel (Tabs.jsx keeps only the active
 // tab's children mounted — see its own doc comment). A trigger that lives
 // OUTSIDE the tabs (the sticky header primary CTA, the header's "⋯" overflow
@@ -320,6 +322,18 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // trigger above and does not affect scrollTop/scrollHeight.
   const ticketStickyChromeRef = useRef(null);
   const [ticketChromeCondensed, setTicketChromeCondensed] = useState(false);
+  // Review V10: an open menu in the sticky header holds it as it is — condensing moves the header's
+  // buttons to another place, which remounts the menu and closes it.
+  // A condense that came while a menu was open is applied when it closes.
+  const headerMenuOpenRef = useRef(false);
+  const heldCondensedRef = useRef(null);
+  const onHeaderMenuOpenChange = useCallback((open) => {
+    headerMenuOpenRef.current = open;
+    if (!open && heldCondensedRef.current !== null) {
+      setTicketChromeCondensed(heldCondensedRef.current);
+      heldCondensedRef.current = null;
+    }
+  }, []);
 
   // Imperative handle onto DealStagePanel (see its own doc comment): the
   // header overflow menu / bottom danger zone trigger its modals from here,
@@ -333,9 +347,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // dealStagePanelRef above.
   const pricingRequestPanelRef = useRef(null);
   // Imperative handle onto DealQuotationPanel (clutter follow-up round 2,
-  // FIX 2): the sticky header's ISSUE_QUOTATION/CONFIRM_ORDER primary CTAs
-  // trigger this panel's own mutations directly instead of scrolling to a
-  // second copy of each button — same convention as the two refs above.
+  // FIX 2): the sticky header's CONFIRM_ORDER primary CTA triggers this
+  // panel's confirm directly instead of scrolling to a second copy of the
+  // button — same convention as the two refs above.
   const dealQuotationPanelRef = useRef(null);
 
   // Edit-items mode
@@ -707,6 +721,31 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     },
   });
 
+  // "เสนอใบราคา<party>": write the new-engine quotation from the approved request and open it — the
+  // same call PricingRequestDetailPage makes. The server hands back the request's open draft instead
+  // of minting a second one (DealQuotationService#createFromPricingRequest). The create moves the
+  // deal's stage and lists, so those are re-read; the navigation belongs to the click (per-call
+  // callbacks), so a rep who has already left the deal is not pulled back.
+  const createQuotationFromRequestMutation = useMutation({
+    mutationFn: (pricingRequestId) => api.dealQuotations.createFromPricingRequest(pricingRequestId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(ticketId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.ticketActions(ticketId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.pricingRequestsByTicket(ticketId) });
+    },
+    // A refusal (409) is the way to the request page (review V12), so it reads as information.
+    onError: (error) => showToast(error?.status === 409 ? 'info' : 'error', error.message || 'ดำเนินการไม่สำเร็จ'),
+  });
+  function createQuotationFromRequest(pricingRequestId) {
+    createQuotationFromRequestMutation.mutate(pricingRequestId, {
+      onSuccess: (res) => { if (res?.quotation?.id) navigate(`/quotations/${res.quotation.id}`); },
+      // A refusal (legacy price mode, an old-engine quotation, …): both engines' controls are on the
+      // request page.
+      onError: (error) => { if (error?.status === 409) navigate(`/pricing-requests/${pricingRequestId}`); },
+    });
+  }
+
   // R5: Attachments upload/delete — invalidate the attachments query instead
   // of manually reloading + setting local array state.
   const uploadAttachmentMutation = useMutation({
@@ -808,15 +847,20 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       const chromeHeight = ticketStickyChromeRef.current?.getBoundingClientRect().height ?? 0;
       return scroller.scrollHeight - scroller.clientHeight > chromeHeight + 80;
     };
+    // While a header menu is open the change is held, and applied when it closes (review V10).
+    const setCondensed = (value) => {
+      if (headerMenuOpenRef.current) heldCondensedRef.current = value;
+      else setTicketChromeCondensed(value);
+    };
     const onIntersect = (entries) => {
       if (mobileQuery?.matches) { setTicketChromeCondensed(false); return; }
       for (const entry of entries) {
         // Back at the very top → expand. Scrolled past the lower sentinel → condense, but only
         // when there is room (Gate A). Anything in the band between the two sentinels leaves the
         // state unchanged (the dead-band / hysteresis).
-        if (entry.target === expandAt && entry.isIntersecting) setTicketChromeCondensed(false);
+        if (entry.target === expandAt && entry.isIntersecting) setCondensed(false);
         else if (entry.target === condenseAt && !entry.isIntersecting && hasRoomToCondense()) {
-          setTicketChromeCondensed(true);
+          setCondensed(true);
         }
       }
     };
@@ -832,10 +876,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     const reevaluate = () => {
       if (mobileQuery?.matches) { setTicketChromeCondensed(false); return; }
       if (!scroller || scroller.clientHeight === 0) return;
-      if (!hasRoomToCondense()) { setTicketChromeCondensed(false); return; }
+      if (!hasRoomToCondense()) { setCondensed(false); return; }
       const viewTop = scroller.getBoundingClientRect().top;
-      if (expandAt.getBoundingClientRect().bottom >= viewTop) setTicketChromeCondensed(false);
-      else if (condenseAt.getBoundingClientRect().bottom < viewTop) setTicketChromeCondensed(true);
+      if (expandAt.getBoundingClientRect().bottom >= viewTop) setCondensed(false);
+      else if (condenseAt.getBoundingClientRect().bottom < viewTop) setCondensed(true);
       // else: between the two sentinels (the dead-band) — leave the state unchanged.
     };
     const observer = new IntersectionObserver(onIntersect, { root: scroller ?? null, threshold: 0 });
@@ -1199,10 +1243,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // don't duplicate" (FIX 1 + FIX 2, Phase-1 clutter follow-up rounds 1/2):
   // each used to scroll to a panel that ALSO rendered its own button with
   // the exact same label — visible twice at once, since a sticky bar never
-  // scrolls out of view. Each now triggers its owning panel's mutation
-  // directly via a forwardRef (pricingRequestPanelRef / dealQuotationPanelRef),
-  // and that panel no longer renders a trigger of its own — the sticky bar
-  // is the only copy of each label on the page.
+  // scrolls out of view. CREATE_PCR/CONFIRM_ORDER now trigger their owning
+  // panel directly via a forwardRef (pricingRequestPanelRef / dealQuotationPanelRef);
+  // ISSUE_QUOTATION writes the new-engine quotation right here. No panel renders
+  // a trigger of its own — the sticky bar is the only copy of each label.
   // PR A — the quotation "แก้ใบเสนอราคา" would revise: the newest row this viewer may revise per
   // quotationMeta.canReviseDealQuotation (the single rule; owner + status live there), plus any
   // open revision draft already hanging off it. Same query key as DealDocumentRegister, so one fetch.
@@ -1216,10 +1260,20 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const reviseTarget = reviseCandidate
     ? { quotationId: reviseCandidate.id, number: reviseCandidate.number, openDraftId: openRevisionDraft?.id }
     : null;
-  const workState = resolveWorkState(user, summary, pricingRequests, { reviseTarget });
+  // For the sales route choice, the redo and the approval wait (owner ruling 2026-10-27). Empty
+  // while the list loads: requests then go by status.
+  const quotationByRequest = newestQuotationByRequest(dealQuotationRows);
+  // The deal's served route (catalog.routes for its entryChannel); null until the catalog loads.
+  // Review V5: until the quotation list is read, a sent designer quotation may be being redone —
+  // treated like an unknown route (no route choice; ⋯ still offers its outcome).
+  // (Read once is enough: a failed refetch keeps the rows it read.)
+  const offRouteParties = dealQuotationsQuery.data !== undefined ? offRoutePartiesFor(stageCatalog, summary.entryChannel) : null;
+  const workState = resolveWorkState(user, summary, pricingRequests, { reviseTarget, offRouteParties, quotationByRequest });
   // PR A: at the owner/buyer quote stages revise is an ADDITIONAL action (header "⋯" menu), never a
   // replacement for the primary บันทึกผลใบเสนอราคา — the client may simply accept the original.
-  const reviseSecondary = secondaryWorkActions(user, summary, pricingRequests, { reviseTarget })[0] ?? null;
+  const secondaryActions = secondaryWorkActions(user, summary, pricingRequests, { reviseTarget, offRouteParties, quotationByRequest });
+  const outcomeSecondary = secondaryActions.find((action) => action.key === 'record_quotation_outcome') ?? null;
+  const reviseSecondary = secondaryActions.find((action) => action.key === 'revise_quotation') ?? null;
   const workStateAction = workState.action;
   const lost = summary.lifecycle === 'CLOSED_LOST';
   const isActiveLifecycle = (summary.lifecycle ?? 'ACTIVE') === 'ACTIVE';
@@ -1315,12 +1369,50 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         </Button>
       );
       stickyPrimaryLabel = workStateAction.label;
-    } else if (actionKey === 'issue_quotation') {
-      // DealQuotationPanel now lives inside the "เอกสาร" tab (Slice C2b
-      // renamed the old "ใบเสนอราคา" tab id from `quotations` to `documents`
-      // — same panel, same content, same gate).
+    } else if (actionKey === 'quote_next_party') {
+      // Owner ruling 2026-10-27: "เสนอราคา<next party>" once a designer/owner quotation is sent. More
+      // than one party left: a menu, later parties reading "ข้ามไปเสนอราคา<party>"; one left: a plain
+      // button. Each opens the price-request form with ผู้รับ pre-filled.
+      const parties = workStateAction.parties;
+      const openFor = (party) => runOnTab('items', () => pricingRequestPanelRef.current?.openCreate({ recipientType: party }));
+      stickyPrimaryAction = parties.length > 1 ? (
+        <OverflowMenu
+          items={parties.map((party, index) => ({
+            key: party,
+            label: `${index > 0 ? 'ข้ามไป' : ''}เสนอราคา${PARTY_LABEL[party]}`,
+            testId: `quote-party-${party}`,
+            onSelect: () => openFor(party),
+          }))}
+          label={workStateAction.label}
+          triggerLabel={<>{workStateAction.label}<Icon name="chevronDown" size={14} /></>}
+          triggerIcon={null}
+          triggerClassName={buttonVariants({ variant: 'primary' })}
+          triggerProps={{ 'data-testid': 'ticket-primary-action', 'data-action': actionKey }}
+          align="end"
+          mobilePlacement="up"
+          onOpenChange={onHeaderMenuOpenChange}
+        />
+      ) : (
+        <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => openFor(parties[0])}>
+          {workStateAction.label}
+        </Button>
+      );
+      stickyPrimaryLabel = workStateAction.label;
+    } else if (actionKey === 'submit_pricing_request') {
+      // A later party's private DRAFT: sent to import through PricingRequestPanel's own ส่งให้ฝ่ายนำเข้า
+      // (its ref, on the items tab) rather than a scroll jump the deal page pulls back to the top.
       stickyPrimaryAction = (
-        <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => runOnTab('documents', () => dealQuotationPanelRef.current?.openIssueQuotation())}>
+        <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey}
+          onClick={() => runOnTab('items', () => pricingRequestPanelRef.current?.submit(workStateAction.pricingRequestId))}>
+          {workStateAction.label}
+        </Button>
+      );
+      stickyPrimaryLabel = workStateAction.label;
+    } else if (actionKey === 'issue_quotation') {
+      stickyPrimaryAction = (
+        <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey}
+          disabled={createQuotationFromRequestMutation.isPending}
+          onClick={() => createQuotationFromRequest(workStateAction.pricingRequestId)}>
           {workStateAction.label}
         </Button>
       );
@@ -1335,13 +1427,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       stickyPrimaryLabel = workStateAction.label;
     } else if (actionKey === 'record_quotation_outcome') {
       // salesActions.js's RECORD_QUOTATION_OUTCOME bucket (a QUOTATION_ISSUED PR whose customer
-      // decision hasn't been recorded yet). Unlike issue_quotation/confirm_order this never fires a
-      // mutation directly — the accept/reject/revision decision is the rep's own judgment call, not
-      // something a single click can default — so openRecordOutcome only scrolls DealQuotationPanel's
-      // existing outcome controls into view (same "DealQuotationPanel lives inside the เอกสาร tab"
-      // pattern as the two branches above).
+      // decision hasn't been recorded yet). The accept/reject/revision controls for both quotation
+      // engines live on the pricing-request page, so this opens it; it never records anything itself.
       stickyPrimaryAction = (
-        <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => runOnTab('documents', () => dealQuotationPanelRef.current?.openRecordOutcome())}>
+        <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => navigate(`/pricing-requests/${workStateAction.pricingRequestId}`)}>
           {workStateAction.label}
         </Button>
       );
@@ -1428,14 +1517,13 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // only by that four-branch cascade, and it always wins over the resolver.
   //
   // Slice 2: workState can hand back its own finished line (`workState.bannerText` — the rep's
-  // direct quotation waiting on ผจก.ขาย/CEO), which reads before the blocker line.
+  // direct quotation waiting on ผจก.ขาย/CEO), which reads before the blocker line. The เสนอราคา
+  // <party> primary also carries one (owner ruling 2026-10-27), shown beside its button.
   const bannerText = primaryAction
     ? nextAction
     : stickyPrimaryLabel
-      ? null
-      : workState.bannerText
-        ? workState.bannerText
-        : blocker;
+      ? (workState.bannerText ?? null)
+      : (workState.bannerText || blocker);
 
   // Overflow-menu / danger-zone availability — mirrors DealStagePanel's own
   // canEditStage/canLost/canHold/canDormant gates byte-for-byte (same
@@ -1535,6 +1623,13 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     },
     canHoldDeal && { key: 'hold', label: 'พักดีลไว้', disabled: actionLoading, onSelect: handleOpenHold },
     canDormantDeal && { key: 'dormant', label: 'พัก dormant', disabled: actionLoading, onSelect: handleOpenDormant },
+    // Owner ruling 2026-10-27 ("always in ⋯"): a sent designer/owner quotation's outcome is recorded on
+    // its request page, whatever the primary is.
+    outcomeSecondary && {
+      key: 'recordQuotationOutcome',
+      label: outcomeSecondary.label,
+      onSelect: () => navigate(`/pricing-requests/${outcomeSecondary.pricingRequestId}`),
+    },
     reviseSecondary && {
       key: 'reviseQuotation',
       label: reviseSecondary.label,
@@ -1671,7 +1766,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // DealFulfilmentPanel (Phase 3 Slice S4).
 
   return (
-    <div className={`relative grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px] ${bannerText || stickyPrimaryAction || overflowItems.length > 0 ? 'mobile:pb-28' : ''}`}>
+    <div className={`relative grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px] ${bannerText || stickyPrimaryAction || overflowItems.length > 0 ? 'mobile:pb-36' : ''}`}>
       {/* Hysteresis sentinels for the sticky-chrome condense IntersectionObserver (see the
           ticketChromeCondensed declaration). Absolutely positioned + 0-size so they add no
           layout/gap. The pair marks "the very top" and "scrolled past ~56px" independent of
@@ -1709,6 +1804,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             overflowItems={overflowItems}
             onRefresh={refreshTicket}
             condensed={ticketChromeCondensed}
+            onMenuOpenChange={onHeaderMenuOpenChange}
           />
           <div className="border-t border-border bg-surface px-4 sm:px-5">
             {/* onSurface: this strip is on a white card, unlike the two
@@ -1751,6 +1847,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         availableActions={availableActions}
         stageDecisions={stageDecisions}
         catalog={stageCatalog}
+        quoteParties={workStateAction?.key === 'quote_next_party' ? workStateAction.parties : null}
         // primaryAction now lives solely in DealStateHeader above (Phase 2 Slice S2's
         // "one primary CTA" — see its own doc comment) — not passed here too, to avoid
         // rendering the exact same button twice on one page.
@@ -2457,14 +2554,14 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               APPROVED_FOR_QUOTATION — see DealQuotationPanel's own doc
               comment. The factory/costing/CEO-price steps that precede that
               stay on PricingRequestDetailPage, linked from inside the panel.
-              The sticky bar's ISSUE_QUOTATION/CONFIRM_ORDER primary CTAs no
-              longer scroll here (FIX 2, clutter follow-up round 2) — they
-              call dealQuotationPanelRef directly — but the id/scroll-mt
+              The sticky bar's CONFIRM_ORDER primary CTA no longer scrolls
+              here (FIX 2, clutter follow-up round 2) — it calls
+              dealQuotationPanelRef directly — but the id/scroll-mt
               wrapper stays for any other in-page anchor that might still
               want it. */}
           {sections.dealQuotation && canViewPricingRequests ? (
             <div id="deal-quotation-panel" tabIndex={-1} className="mobile:scroll-mt-[420px] outline-none">
-              <DealQuotationPanel ref={dealQuotationPanelRef} ticketId={ticketId} pricingRequests={pricingRequests} user={user} showToast={showToast} />
+              <DealQuotationPanel ref={dealQuotationPanelRef} ticketId={ticketId} pricingRequests={pricingRequests} quotationByRequest={quotationByRequest} user={user} showToast={showToast} />
             </div>
           ) : null}
           {/* Legacy ticket-native quotation rows (region 12's "docs") join the
