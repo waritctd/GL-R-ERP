@@ -317,10 +317,11 @@ describe('mockApi.pricingRequests.createDepositNoticeFromQuotation — new-engin
       depositPercent: 0, fullPaymentTerm: 'BEFORE_DELIVERY',
     });
     expect(accepted.depositPercent).toBe(0);
-    const refusal = { status: 409, message: expect.stringMatching(
-      new RegExp(`ใบเสนอราคา ${accepted.number} ระบุไม่มีมัดจำ|ดีลนี้ไม่ต้องเก็บมัดจำ`)) }; // whichever guard runs first
-    await expect(api.pricingRequests.createDepositNoticeFromQuotation(prId, {})).rejects.toMatchObject(refusal);
-    await expect(api.depositNotices.createDraft(ticketId, {})).rejects.toMatchObject(refusal);
+    // Each route's own guard: the pricing-request route refuses on the quotation, the ticket route on the policy.
+    await expect(api.pricingRequests.createDepositNoticeFromQuotation(prId, {}))
+      .rejects.toMatchObject({ status: 409, message: expect.stringContaining(`ใบเสนอราคา ${accepted.number} ระบุไม่มีมัดจำ`) });
+    await expect(api.depositNotices.createDraft(ticketId, {}))
+      .rejects.toMatchObject({ status: 409, message: expect.stringContaining('ดีลนี้ไม่ต้องเก็บมัดจำ') });
     const { depositNotices } = await api.depositNotices.listByTicket(ticketId);
     expect(depositNotices).toHaveLength(0);
   });

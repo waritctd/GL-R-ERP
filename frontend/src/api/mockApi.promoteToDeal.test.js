@@ -232,6 +232,18 @@ describe('mock dealQuotations.promoteToDeal (GLA-136)', () => {
     expect(policyEvents(ticket)).toHaveLength(2);
   });
 
+  it('a confirmed 0% deal whose approved revision leaves the percent blank counts as 30 and is REQUIRED', async () => {
+    const ghost = await quotationOnlyTicket();
+    const zero = await approvedWith(ghost, ZERO);
+    await api.dealQuotations.promoteToDeal(zero.id);
+
+    const revision = await approvedRevisionOf(zero, { depositPercent: null, fullPaymentTerm: null, items: [TILE, PLAIN] });
+
+    const { ticket } = await api.tickets.get(ghost);
+    expect(ticket.summary.depositPolicy).toBe('REQUIRED');
+    expect(ticket.summary.depositPolicyReason).toBe(`ใบเสนอราคา ${revision.number} ระบุมัดจำ 30%`);
+  });
+
   it('a confirmed 50% deal whose approved revision says ไม่รับมัดจำ moves to NOT_REQUIRED', async () => {
     const ghost = await quotationOnlyTicket();
     const fifty = await approvedWith(ghost, FIFTY);

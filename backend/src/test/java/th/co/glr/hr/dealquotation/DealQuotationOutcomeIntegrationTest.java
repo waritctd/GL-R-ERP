@@ -276,21 +276,43 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         orderConfirmation.confirmOrder(pricingRequestId,
             new OrderConfirmationRequests.ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
 
-        // Whichever guard runs first answers: the ticket route hits the policy guard (the confirmation
-        // already moved the policy to NOT_REQUIRED), the pricing-request route the quotation guard.
+        // Each route's own guard: the pricing-request route refuses on the quotation, the ticket route on
+        // the policy (the confirmation already moved the deal to NOT_REQUIRED).
+        assertThatThrownBy(() -> orderConfirmation.createDepositNoticeFromQuotation(pricingRequestId,
+                new OrderConfirmationRequests.CreateDepositNoticeFromQuotationRequest(null), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.CONFLICT)
+            .hasMessageContaining("ใบเสนอราคา " + accepted.number() + " ระบุไม่มีมัดจำ");
+        assertThatThrownBy(() -> depositNoticeService.createDraft(ticketId, emptyDepositDraft(), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.CONFLICT)
+            .hasMessageContaining("ดีลนี้ไม่ต้องเก็บมัดจำ");
+        assertThat(depositNoticeCount()).isZero();
+    }
+
+    /** #1170's quotation guards, reached only by a deal still REQUIRED with a 0% quotation (confirmed
+     * before the policy sync): both routes refuse on the quotation and write nothing. */
+    @Test
+    void createDepositNotice_requiredDealWithZeroQuotation_bothRoutes409OnTheQuotation_andWriteNothing() {
+        DealQuotationDto accepted = acceptedZeroDepositNewOriginQuotation(PricingRequestRecipient.DESIGNER,
+            new BigDecimal("10"));
+        long pricingRequestId = accepted.pricingRequestId();
+        orderConfirmation.confirmOrder(pricingRequestId,
+            new OrderConfirmationRequests.ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
+        jdbc.update("UPDATE sales.ticket SET deposit_policy = 'REQUIRED', deposit_policy_reason = NULL WHERE ticket_id = :id",
+            Map.of("id", ticketId));
+
         String refusal = "ใบเสนอราคา " + accepted.number() + " ระบุไม่มีมัดจำ";
         assertThatThrownBy(() -> orderConfirmation.createDepositNoticeFromQuotation(pricingRequestId,
                 new OrderConfirmationRequests.CreateDepositNoticeFromQuotationRequest(null), salesActor))
             .isInstanceOf(ApiException.class)
             .hasFieldOrPropertyWithValue("status", HttpStatus.CONFLICT)
-            .hasMessageMatching("(?s).*(" + java.util.regex.Pattern.quote(refusal) + "|ไม่ต้องเก็บมัดจำ).*");
-        assertThatThrownBy(() -> depositNoticeService.createDraft(ticketId,
-                new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), salesActor))
+            .hasMessageContaining(refusal);
+        assertThatThrownBy(() -> depositNoticeService.createDraft(ticketId, emptyDepositDraft(), salesActor))
             .isInstanceOf(ApiException.class)
             .hasFieldOrPropertyWithValue("status", HttpStatus.CONFLICT)
-            .hasMessageMatching("(?s).*(" + java.util.regex.Pattern.quote(refusal) + "|ไม่ต้องเก็บมัดจำ).*");
-        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sales.deposit_notice WHERE ticket_id = :id",
-            Map.of("id", ticketId), Long.class)).isZero();
+            .hasMessageContaining(refusal);
+        assertThat(depositNoticeCount()).isZero();
     }
 
     @Test
