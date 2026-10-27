@@ -1177,7 +1177,9 @@ let mockPricingDecisionItemSeq = 1;
 // Step 4 quotation is keyed by pricingRequestId first — the legacy ticket-item-driven
 // `ticket.quotations` array is untouched by this section.
 const mockCustomerQuotations = [];
-let mockCustomerQuotationSeq = 1;
+// sales.quotation_id: one id sequence for mockCustomerQuotations AND mockDealQuotations, as Java
+// has one table, so "latest" (highest id) compares across both arrays.
+let mockQuotationSeq = 1;
 let mockCustomerQuotationItemSeq = 1;
 // CEO discount-approval workflow, Phase 2 (owner ruling 2026-08-16) — mirrors
 // sales.quotation_item_discount_approval (V155). Starts empty every session like every other
@@ -1214,7 +1216,8 @@ let mockDiscountApprovalSeq = 1;
   mockPricingDecisionSeq = salesSeed.nextSeq.pricingDecision;
   mockPricingDecisionItemSeq = salesSeed.nextSeq.pricingDecisionItem;
   mockCustomerQuotations.push(...salesSeed.customerQuotations);
-  mockCustomerQuotationSeq = salesSeed.nextSeq.customerQuotation;
+  // 3: past the two literal mockDealQuotations seeds (ids 1-2) further down.
+  mockQuotationSeq = Math.max(salesSeed.nextSeq.customerQuotation, 3);
   mockCustomerQuotationItemSeq = salesSeed.nextSeq.customerQuotationItem;
   // Deal-tracking readiness gate (dealIsReadyToAdvance) needs `ticket.nextFollowUpAt` set —
   // not part of the ticket's own literal object in demoSales.js since it's normally written
@@ -1455,15 +1458,16 @@ function mockDepositNoticeItemsFromDealQuotation(row) {
   });
 }
 
-// Mirrors DepositNoticeRepository#findGoverningQuotation: the quotation a ticket-level deposit
-// notice bills (lines, percent, reference), across both engines. The latest one the customer
-// answered (ACCEPTED, or a DEAL_DIRECT one APPROVED) wins, else the latest ISSUED one.
-// ponytail: "latest" compares ids across mockCustomerQuotations and mockDealQuotations, two
-// separate sequences where Java has one sales.quotation_id; good enough for single-engine mock deals.
 // Mirrors DepositNoticeService.zeroDepositRefusal: both deposit routes refuse a 0% quotation.
 const mockZeroDepositRefusal = (number) =>
   `ใบเสนอราคา ${number} ระบุไม่มีมัดจำ (ชำระเต็มจำนวน) จึงออกใบแจ้งยอดเงินรับมัดจำไม่ได้`;
 
+// Mirrors DepositNoticeRepository#findGoverningQuotation: the quotation a ticket-level deposit
+// notice bills (lines, percent, reference), across both engines. The latest one the customer
+// answered (ACCEPTED, or a DEAL_DIRECT one APPROVED) wins, else the latest ISSUED one. "Latest"
+// is the highest id, which mockQuotationSeq makes comparable across the two arrays.
+// ponytail: the two literal mockDealQuotations seeds (ids 1-2, ticket 18) repeat legacy seed ids
+// (ticket 5); no pick compares rows of different tickets, so renumber only if they ever share one.
 function mockGoverningQuotationForDepositNotice(ticketId) {
   const candidates = [];
   for (const q of mockCustomerQuotations) {
@@ -1689,7 +1693,7 @@ function reconcileTicketItemsFromPricingRequest(ticket, pr, user) {
 function buildMockCustomerQuotationDraft(pr, decision, ticket, user, payload, parentQuotationId, revisionNo, priorDiscounts, number) {
   const customer = ticket?.customerId ? mockCustomers.find((c) => c.id === ticket.customerId) : null;
   const project = ticket?.projectId ? mockProjects.find((p) => p.id === ticket.projectId) : null;
-  const id = mockCustomerQuotationSeq++;
+  const id = mockQuotationSeq++;
   const items = decision.items
     .filter((di) => di.approvedSellingPricePerRequestedUnit != null)
     .map((di, idx) => {
@@ -6388,19 +6392,19 @@ function nextMockDealQuotationNumber() {
 }
 
 // The pricing-request-chain (customerquotation/) flow's own number-space counter -- kept SEPARATE
-// from mockCustomerQuotationSeq (the id sequence) for the same reason mockDealQuotationNumberSeq
-// is kept separate from mockDealQuotationSeq above: a `number` and an `id` are different concerns
+// from mockQuotationSeq (the id sequence) for the same reason mockDealQuotationNumberSeq
+// is: a `number` and an `id` are different concerns
 // even though the real backend's sales.quotation_code_seq happens to be a global sequence shared
 // by BOTH flows' numbers (a fidelity gap this mock already had before today, pre-existing and out
 // of scope here -- the two flows' *own* number counters were already independent of one another).
-// Seeded from mockCustomerQuotationSeq's OWN already-final value (the state-matrix seed block
+// Seeded from mockQuotationSeq's already-final value (the state-matrix seed block
 // above, top-level code that has already run by the time this line executes, set it to one past
 // every demoSales.js-seeded row's id) -- every seeded row's bare number is literally
 // `QT-2026-{id}` (see demoSales.js#makeQuotation), so starting from the same point can never
 // collide with one of them. Mirrors `mockDealQuotationNumberSeq = 3` right after its own two-row
 // literal seed, just computed instead of hardcoded since this flow's seed count varies with
 // demoSales.js rather than being two fixed literal rows.
-let mockCustomerQuotationNumberSeq = mockCustomerQuotationSeq;
+let mockCustomerQuotationNumberSeq = mockQuotationSeq;
 function nextMockCustomerQuotationNumber() {
   return `QT-${new Date().getFullYear()}-${String(mockCustomerQuotationNumberSeq++).padStart(4, '0')}`;
 }
@@ -6560,7 +6564,7 @@ function mintDealQuotationRevision(parent, user) {
   const revisionNo = nextMockDealQuotationRevisionNo(parent.ticketId, base);
   return {
     ...structuredClone(parent),
-    id: mockDealQuotationSeq++,
+    id: mockQuotationSeq++,
     number: quotationRevisionNumber(base, revisionNo),
     docStatus: 'DRAFT',
     revisionNo,
@@ -6602,7 +6606,7 @@ function mintDealQuotationReorder(source, user) {
   const revisionNo = nextMockDealQuotationRevisionNo(source.ticketId, base);
   return {
     ...structuredClone(source),
-    id: mockDealQuotationSeq++,
+    id: mockQuotationSeq++,
     number: quotationRevisionNumber(base, revisionNo),
     docStatus: 'DRAFT',
     revisionNo,
@@ -7524,7 +7528,6 @@ function mockDealQuotationDocLines(row) {
 // ticket with 4 catalog-flavoured items already seeded in demoSales.js) -- one DRAFT, one
 // PENDING_APPROVAL, per the implementation brief.
 let mockDealQuotationItemSeq = 1;
-let mockDealQuotationSeq = 3;
 const mockDealQuotations = [
   {
     id: 1,
@@ -16678,7 +16681,7 @@ export const api = {
       const createBaseNumber = mockDealBaseNumberOrMint(ticket.id);
       const createRevisionNo = nextMockDealQuotationRevisionNo(ticket.id, createBaseNumber);
       const row = {
-        id: mockDealQuotationSeq++,
+        id: mockQuotationSeq++,
         // Owner feedback 2026-09-11: the FIRST issued document now carries the revision suffix
         // too -- "QT-2026-0014-1", not a bare "QT-2026-0014". Mirrors
         // DealQuotationService#create's own numbering — which since the 2026-10-17 ruling CONTINUES
@@ -16821,7 +16824,7 @@ export const api = {
       const prBaseNumber = mockDealBaseNumberOrMint(ticket.id);
       const prRevisionNo = nextMockDealQuotationRevisionNo(ticket.id, prBaseNumber);
       const row = {
-        id: mockDealQuotationSeq++,
+        id: mockQuotationSeq++,
         number: quotationRevisionNumber(prBaseNumber, prRevisionNo),
         ticketId: ticket.id,
         origin: 'PRICING_REQUEST',
