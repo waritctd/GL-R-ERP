@@ -144,13 +144,11 @@ test.describe('direct-deal ใบเสนอราคา — the real service',
     expect(Number(quotation.grandTotal)).toBeGreaterThan(0);
   });
 
-  // Owner-directed reversal of V167/F2 (2026-09-26): `contactId: null` on a deal whose ticket
-  // carries no contact used to be refused by DealQuotationService ("กรุณาระบุผู้สั่งซื้อ", 400) —
-  // the frontend's required contact-picker dropdown that rule existed for is gone (ผู้สั่งซื้อ is
-  // now a single optional free-text signature-name field, unrelated to this contactId at all), so
-  // this now proves the OPPOSITE: the create succeeds (201) with a blank contact snapshot. Mirrors
-  // the backend's own flip,
-  // DealQuotationIntegrationTest#create_withNoResolvableContact_succeedsWithABlankContactSnapshot.
+  // `contactId: null` used to be refused by DealQuotationService ("กรุณาระบุผู้สั่งซื้อ", 400) until
+  // the owner-directed reversal of V167/F2 (2026-09-26). Ruling 2026-10-18: the ผู้ติดต่อ is picked
+  // per quotation and optional, the server derives ordered_by_name from it, and the deal's own
+  // contact is never inherited — so the create succeeds (201) with a blank contact snapshot.
+  // Mirrors DealQuotationIntegrationTest#create_withNoContactId_doesNotInheritTheDealsContact.
   test('a quotation can be created with no ผู้สั่งซื้อ at all, and freezes a blank contact snapshot', async () => {
     const response = await apiWrite(
       sessions.sales, 'post', `/api/tickets/${await newDeal()}/deal-quotations`,
@@ -519,15 +517,12 @@ test.describe('quotation editor UI — v3 controls, ที่อยู่, and t
     await expect(checklist.getByTestId('checklist-warnings')).toContainText('ยังไม่ได้กรอกที่อยู่ลูกค้า');
     await expect(checklist.getByTestId('checklist-blocking')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'ส่งขออนุมัติ' })).toBeEnabled();
-    // Owner-directed reversal of V167/F2 (2026-09-26): the ผู้สั่งซื้อ contact-picker (its
-    // editable โทร./อีเมล fields, and the "ผู้สั่งซื้อยังไม่มีอีเมล" checklist warning asserted
-    // just above until this reversal) is gone from the editor entirely -- ผู้สั่งซื้อ is now a
-    // single optional free-text input, blank by default (this quotation was created via the API
-    // with a contactId, but the field no longer reads it at all).
-    // Labelled ผู้ติดต่อ since 2026-10-06 (owner: "the field ผู้สั่งซื้อ make it name ผู้ติดต่อ instead
-    // but the pdf still render as ผู้สั่งซื้อ") — the same input, found by its new label; and no
-    // field answers to the old one any more.
-    await expect(page.getByLabel(/^ผู้ติดต่อ/)).toHaveValue('');
+    // Ruling 2026-10-18 (.design/quotation-contact): ผู้ติดต่อ is a picker over the customer's
+    // contacts again, and this quotation was created via the API with วิไล's contactId — so the
+    // editor opens on her card (เปลี่ยน / ล้าง). Still no field answers to ผู้สั่งซื้อ (the label
+    // since 2026-10-06; the PDF keeps that heading), and no contact checklist warning came back.
+    await expect(page.getByText(`วิไล ${tag}`, { exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'เปลี่ยนผู้ติดต่อ' })).toBeVisible();
     await expect(page.getByLabel(/^ผู้สั่งซื้อ/)).toHaveCount(0);
 
     // Clicking the entry lands on the field; typing + leaving it saves to the customer master…

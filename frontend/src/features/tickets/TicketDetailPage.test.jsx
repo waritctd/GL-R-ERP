@@ -1,6 +1,6 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TicketDetailPage } from './TicketDetailPage.jsx';
@@ -470,53 +470,64 @@ describe('TicketDetailPage', () => {
     expect(screen.queryByTestId('ticket-context-rail')).toBeNull();
   });
 
-  it('marks the sticky chrome with data-sticky-chrome so the shell scroller opts out of scroll anchoring (a desktop condense would otherwise loop scrollTop to 0)', async () => {
+  it('marks the sticky chrome with data-sticky-chrome so the shell scroller opts out of scroll anchoring (condensing would otherwise pull scrollTop back up by the shrink)', async () => {
     renderTicketDetailPage();
 
     const chrome = await screen.findByTestId('ticket-detail-sticky-chrome');
     expect(chrome.hasAttribute('data-sticky-chrome')).toBe(true);
   });
 
-  // Condensing shrinks the header by most of its height. If the scrollable range is smaller
-  // than that, scrollHeight drops, scrollTop clamps to 0, the header un-condenses and the user can
-  // never scroll. So the header only condenses when scroll room is left once condensed.
-  describe('sticky chrome condense vs. scroll room', () => {
-    it('condenses only while scroll room remains once condensed (and expands again when it does not)', async () => {
-      const queryClient = new QueryClient({
-        defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-      });
-      const { container } = render(
-        <div className="content-scroll">
-          <QueryClientProvider client={queryClient}>
-            <MemoryRouter>
-              <TicketDetailPage user={ceoUser} ticketId={701} onBack={vi.fn()} showToast={vi.fn()} />
-            </MemoryRouter>
-          </QueryClientProvider>
-        </div>,
-      );
-      const chrome = await screen.findByTestId('ticket-detail-sticky-chrome');
-      chrome.getBoundingClientRect = () => ({ height: 420, top: 0, bottom: 420, left: 0, right: 0, width: 0 });
-      const scroller = container.querySelector('.content-scroll');
-      const setLayout = (scrollHeight) => {
-        Object.defineProperties(scroller, {
-          scrollHeight: { configurable: true, value: scrollHeight },
-          clientHeight: { configurable: true, value: 800 },
-          scrollTop: { configurable: true, writable: true, value: 100 },
-        });
-        fireEvent.scroll(scroller);
-      };
-      const condensed = () => screen.getByTestId('deal-state-header').dataset.condensed;
+  // Regression guard for the sticky-chrome jitter bug: the header must condense off the
+  // two sentinels' IntersectionObserver visibility, NEVER off a scroller.scrollTop threshold
+  // (whose feedback loop — condense shrinks the page, scrollTop re-crosses the threshold —
+  // made the page bounce / snap to the top), and with HYSTERESIS so slow scrolling parked at
+  // the trigger can't flip-flop the collapse. jsdom has no layout and no real
+  // IntersectionObserver, so this pins the WIRING (condense follows sentinel visibility + the
+  // dead-band); the actual no-oscillation behaviour is verified in a real browser.
+  describe('sticky chrome condense is sentinel-driven with hysteresis (not scrollTop)', () => {
+    // Restore ONLY IntersectionObserver — vi.unstubAllGlobals() would also revert globals the
+    // shared setup stubs (e.g. URL.createObjectURL), breaking later files in the same worker.
+    const originalIntersectionObserver = globalThis.IntersectionObserver;
+    afterEach(() => {
+      if (originalIntersectionObserver === undefined) delete globalThis.IntersectionObserver;
+      else globalThis.IntersectionObserver = originalIntersectionObserver;
+    });
 
-      // Long page: proves the scroll handler is live before the negative case is asserted.
-      setLayout(2000);
-      await waitFor(() => expect(condensed()).toBe('true'));
+    it('condenses past the lower sentinel, holds through the dead-band, expands at the top', async () => {
+      const ioInstances = [];
+      class MockIntersectionObserver {
+        constructor(cb, opts) { this.cb = cb; this.opts = opts; this.elements = []; ioInstances.push(this); }
+        observe(el) { this.elements.push(el); }
+        unobserve() {}
+        disconnect() {}
+        takeRecords() { return []; }
+      }
+      vi.stubGlobal('IntersectionObserver', MockIntersectionObserver);
 
-      // Short page (room once condensed = 1000 - 800 - 420 < 8): synchronous, no waitFor on the negative.
-      setLayout(1000);
-      expect(condensed()).toBe('false');
+      renderTicketDetailPage();
+      const header = await screen.findByTestId('deal-state-header');
+      expect(header.getAttribute('data-condensed')).toBe('false'); // expanded at the top
 
-      setLayout(2000);
-      await waitFor(() => expect(condensed()).toBe('true'));
+      const expandSentinel = document.querySelector('[data-testid="deal-chrome-expand-sentinel"]');
+      const condenseSentinel = document.querySelector('[data-testid="deal-chrome-condense-sentinel"]');
+      expect(expandSentinel).toBeTruthy();
+      expect(condenseSentinel).toBeTruthy();
+      // The condense observer is the one watching BOTH sentinels — proving the trigger is
+      // sentinel visibility (with a dead-band), not a scrollTop read.
+      const condenseIo = ioInstances.find((io) => io.elements.length >= 2);
+      expect(condenseIo).toBeTruthy();
+
+      // Scrolled past the lower sentinel → condense.
+      act(() => condenseIo.cb([{ target: condenseSentinel, isIntersecting: false }]));
+      expect(screen.getByTestId('deal-state-header').getAttribute('data-condensed')).toBe('true');
+
+      // Slow scroll back INTO the dead-band (lower sentinel re-enters) → must stay condensed.
+      act(() => condenseIo.cb([{ target: condenseSentinel, isIntersecting: true }]));
+      expect(screen.getByTestId('deal-state-header').getAttribute('data-condensed')).toBe('true');
+
+      // All the way back to the very top (top sentinel visible) → expand.
+      act(() => condenseIo.cb([{ target: expandSentinel, isIntersecting: true }]));
+      expect(screen.getByTestId('deal-state-header').getAttribute('data-condensed')).toBe('false');
     });
   });
 
@@ -685,12 +696,8 @@ describe('TicketDetailPage', () => {
     });
   });
 
-  // Ticket-workspace IA rebuild Slice B ("retire the context rail, one comment
-  // composer"): วันสำคัญ / ผู้เกี่ยวข้อง moved here verbatim from the deleted
-  // TicketContextPanel.jsx sticky rail — same fields, same labels, same
-  // assignedImport role-scoped readout — now at the top of ภาพรวม instead of
-  // behind an always-visible sidebar (there is no more xl-collapse/mobile
-  // accordion to drive: the fields simply render whenever this tab is active).
+  // วันสำคัญ / ผู้เกี่ยวข้อง sit at the top of ภาพรวม and render whenever this tab
+  // is active (there is no collapse/accordion to drive).
   it('renders วันสำคัญ and ผู้เกี่ยวข้อง fields at the top of the ภาพรวม tab', async () => {
     api.tickets.get.mockResolvedValueOnce({
       ticket: buildTicket({
@@ -732,7 +739,13 @@ describe('TicketDetailPage', () => {
     // uniqueness.
     expect(within(peopleSection).getByText('สมชาย ใจดี')).not.toBeNull();
     expect(within(peopleSection).getByText('ยังไม่มีคำขอราคา')).not.toBeNull();
-    expect(within(peopleSection).getByText('คุณอรุณ ติดต่อ')).not.toBeNull();
+    // Wrong-way-round: the deal no longer shows a ผู้ติดต่อ (owner ruling
+    // 2026-10-18 — the contact is picked per quotation instead). FieldRow
+    // renders its label even when empty, so the missing label proves the row
+    // is gone; the fixture still sets contactName, so the missing value proves
+    // it does not surface by another route.
+    expect(within(peopleSection).queryByText('ผู้ติดต่อ')).toBeNull();
+    expect(within(peopleSection).queryByText('คุณอรุณ ติดต่อ')).toBeNull();
 
     // Wrong-way-round: the deleted roll-up's content must be absent from the
     // whole page while ภาพรวม is active, not just out of these two sections.

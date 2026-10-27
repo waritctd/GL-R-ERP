@@ -270,7 +270,9 @@ describe('App / route branches division managers to DivisionManagerOverview', ()
 // this file already evaluated unlocked.
 describe('App / release lockdown (SELF_SERVICE_ONLY)', () => {
   const salesUser = { employeeId: 41, name: 'พนักงานขาย ทดสอบ', role: 'sales', email: 'sales@glr.co' };
-  const salesUserNoEmployeeId = { employeeId: null, name: 'ผู้ใช้ระบบ ทดสอบ', role: 'sales', email: 'noemp@glr.co' };
+  // import stays locked after the sales release (owner ruling 2026-10-22); sales does not.
+  const importUser = { employeeId: 42, name: 'ฝ่ายนำเข้า ทดสอบ', role: 'import', email: 'import@glr.co' };
+  const importUserNoEmployeeId = { employeeId: null, name: 'ผู้ใช้ระบบ ทดสอบ', role: 'import', email: 'noemp@glr.co' };
   const hrUser = { employeeId: 40, name: 'ฝ่ายบุคคล ทดสอบ', role: 'hr', email: 'hr@glr.co' };
 
   afterEach(() => {
@@ -297,43 +299,56 @@ describe('App / release lockdown (SELF_SERVICE_ONLY)', () => {
     );
   }
 
-  it('lands a sales rep on EmployeeSelfService, not SalesOverview', async () => {
+  it('lands a locked import user on EmployeeSelfService, not their worklist', async () => {
+    await renderLockedAppAt('/', importUser);
+
+    // EmployeeSelfService's greeting has NO comma; EmployeeDashboard's does ("สวัสดี, คุณ…").
+    expect(await screen.findByRole('heading', { name: `สวัสดี คุณ${importUser.name}` })).toBeTruthy();
+    expect(screen.getByText(/เวลาทำงานและคำขอของคุณ/)).toBeTruthy();
+  });
+
+  // Sales release (owner ruling 2026-10-22): a sales rep is exempt and gets SalesOverview back.
+  it('lands a sales rep on SalesOverview — sales is exempt from the lock', async () => {
     await renderLockedAppAt('/', salesUser);
 
-    // EmployeeSelfService's greeting has NO comma; EmployeeDashboard's does
-    // ("สวัสดี, คุณ…"). "ดีลของฉัน" is SalesOverview's own subtitle.
-    expect(await screen.findByRole('heading', { name: `สวัสดี คุณ${salesUser.name}` })).toBeTruthy();
-    expect(screen.getByText(/เวลาทำงานและคำขอของคุณ/)).toBeTruthy();
-    expect(screen.queryByText(/ดีลของฉัน/)).toBeNull();
+    expect(await screen.findByText(/ดีลของฉัน/)).toBeTruthy();
+    expect(screen.queryByText(/เวลาทำงานและคำขอของคุณ/)).toBeNull();
   });
 
   it('falls back to EmployeeDashboard for a locked user with no employee row', async () => {
-    await renderLockedAppAt('/', salesUserNoEmployeeId);
+    await renderLockedAppAt('/', importUserNoEmployeeId);
 
-    expect(await screen.findByRole('heading', { name: `สวัสดี, คุณ${salesUserNoEmployeeId.name}` })).toBeTruthy();
-    expect(screen.queryByRole('heading', { name: `สวัสดี คุณ${salesUserNoEmployeeId.name}` })).toBeNull();
+    expect(await screen.findByRole('heading', { name: `สวัสดี, คุณ${importUserNoEmployeeId.name}` })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: `สวัสดี คุณ${importUserNoEmployeeId.name}` })).toBeNull();
   });
 
   it('refuses a locked role the deal pipeline at /tickets', async () => {
-    await renderLockedAppAt('/tickets', salesUser);
+    await renderLockedAppAt('/tickets', importUser);
 
     expect(await screen.findByRole('heading', { name: 'ไม่มีสิทธิ์เข้าถึงหน้านี้' })).toBeTruthy();
   });
 
-  // /commissions, not /pricing-requests: canViewPricingRequestQueue is
-  // ['import','ceo','sales_manager'] (routes.js), so a sales rep is refused that
-  // path with or without the lock and the assertion would prove nothing about
-  // the lock. canViewCommissions DOES include sales, so this one can only pass
-  // because the lock refused it.
-  it('refuses a locked role a page its own role permits — /commissions', async () => {
-    await renderLockedAppAt('/commissions', salesUser);
+  // /quotations: canViewDealQuotations includes import (a VIEW-only role), so this path is
+  // refused ONLY because the lock's per-role allowlist (งานนำเข้า + คิวขอราคา) excludes it.
+  it('refuses a locked role a page its own role permits — /quotations', async () => {
+    await renderLockedAppAt('/quotations', importUser);
 
     expect(await screen.findByRole('heading', { name: 'ไม่มีสิทธิ์เข้าถึงหน้านี้' })).toBeTruthy();
+  });
+
+  // Both await a positive marker first: right after render auth.me is still pending and no route
+  // has rendered, so a bare queryByRole(null) check would pass with the path locked out too.
+  it('lets a locked import user reach the released งานนำเข้า page', async () => {
+    await renderLockedAppAt('/fulfilment', importUser);
+
+    expect((await screen.findAllByText('งานนำเข้า')).length).toBeGreaterThan(0);
+    expect(screen.queryByRole('heading', { name: 'ไม่มีสิทธิ์เข้าถึงหน้านี้' })).toBeNull();
   });
 
   it('still lets a locked role reach its own leave page', async () => {
-    await renderLockedAppAt('/leave', salesUser);
+    await renderLockedAppAt('/leave', importUser);
 
+    expect((await screen.findAllByText('วันลา')).length).toBeGreaterThan(0);
     expect(screen.queryByRole('heading', { name: 'ไม่มีสิทธิ์เข้าถึงหน้านี้' })).toBeNull();
   });
 

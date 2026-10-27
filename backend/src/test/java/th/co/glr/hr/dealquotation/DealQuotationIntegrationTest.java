@@ -168,9 +168,10 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         customer = customers.create(
             "บริษัท Deal Quotation จำกัด", "0100000000099", "999 ถนนทดสอบ", "สนญ.", "02-999-9999");
         ProjectDto project = projects.create(customer.id(), "โครงการ Deal Quotation");
-        // ผู้สั่งซื้อ (owner feedback F2): every deal here carries a contact, because create/update/
-        // submit now REFUSE a quotation without one -- the no-contact cases build their own ticket
-        // (see #create_withoutAnyResolvableContact_isBadRequest).
+        // ผู้ติดต่อ: every deal here is created WITH a contact on the ticket, so a case that picks
+        // none proves the 2026-10-18 ruling -- the ผู้ติดต่อ is picked per quotation, the server
+        // derives ordered_by_name from it, and the deal's contact is never inherited (see
+        // #create_withNoContactId_doesNotInheritTheDealsContact).
         contact = contacts.create(customer.id(), "สมหญิง", "ใจดี", "ผู้จัดการจัดซื้อ",
             "somying@customer.test", "081-111-2222");
         ticketId = createTicket("ดีล DQ", project.id(), contact.id(), salesActor);
@@ -2463,14 +2464,25 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     // Owner feedback pass 1 (2026-09-10) — F2 ผู้สั่งซื้อ: mandatory, snapshotted (V167)
     // ─────────────────────────────────────────────────────────────────────────────────────
 
+    /** Ruling 2026-10-18: ผู้ติดต่อ is picked per quotation and the deal form no longer collects
+     * one, so a quotation never inherits the deal's {@code sales.ticket.contact_id} — not on create,
+     * not on a later save. No contact picked = a blank snapshot (still no 400, per the 2026-09-26
+     * reversal). The deal here DOES carry a contact, which is what makes the "not inherited" real. */
     @Test
-    void create_defaultsToTheDealsContact_andSnapshotsNamePhoneEmail() {
+    void create_withNoContactId_doesNotInheritTheDealsContact() {
+        assertThat(jdbc.queryForObject("SELECT contact_id FROM sales.ticket WHERE ticket_id = :id",
+            java.util.Map.of("id", ticketId), Long.class)).as("the deal carries a contact").isEqualTo(contact.id());
+
         DealQuotationDto created = quotationService.create(ticketId,
-            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
-        assertThat(created.contactId()).isEqualTo(contact.id());
-        assertThat(created.contactName()).isEqualTo("สมหญิง ใจดี");
-        assertThat(created.contactPhone()).isEqualTo("081-111-2222");
-        assertThat(created.contactEmail()).isEqualTo("somying@customer.test");
+            upsertRequest(null, List.of(sampleItem("100.00", 10))), salesActor);
+        assertThat(created.contactId()).isNull();
+        assertThat(created.contactName()).isNull();
+        assertThat(created.contactPhone()).isNull();
+        assertThat(created.contactEmail()).isNull();
+
+        DealQuotationDto saved = quotationService.update(created.id(),
+            upsertRequest(null, List.of(sampleItem("200.00", 5))), salesActor);
+        assertThat(saved.contactId()).as("a save with no contact still does not pick up the deal's").isNull();
     }
 
     /** The snapshot is FROZEN: editing the contact row afterwards must not change what the
@@ -2479,7 +2491,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void contactSnapshot_isFrozen_laterContactEditDoesNotChangeTheQuotation() {
         DealQuotationDto created = quotationService.create(ticketId,
-            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+            upsertRequest(contact.id(), List.of(sampleItem("100.00", 10))), salesActor);
         jdbc.update("""
             UPDATE customers.contact SET first_name = 'สมชาย', last_name = 'เปลี่ยนแล้ว', phone = '099-000-0000'
              WHERE contact_id = :id
@@ -2611,23 +2623,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         return out;
     }
 
-    /** ⚠️ Owner-directed reversal of V167/F2 (2026-09-26): create used to refuse a deal with no
-     * resolvable contact ("กรุณาระบุผู้สั่งซื้อ") -- the frontend's required contact-picker dropdown
-     * that rule existed for is gone (ผู้สั่งซื้อ is now a single optional free-text signature-name
-     * field, unrelated to this contact snapshot), so this now proves the OPPOSITE: create succeeds
-     * with a blank contact snapshot. See #resolveContact's own Javadoc for the relaxed rule. */
-    @Test
-    void create_withNoResolvableContact_succeedsWithABlankContactSnapshot() {
-        ProjectDto project = projects.create(customer.id(), "โครงการไม่มีผู้ติดต่อ");
-        long noContactTicket = createTicket("ดีลไม่มีผู้สั่งซื้อ", project.id(), null, salesActor);
-        DealQuotationDto created = quotationService.create(noContactTicket,
-            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
-        assertThat(created.contactId()).isNull();
-        assertThat(created.contactName()).isNull();
-        assertThat(quotationRepository.findByTicket(noContactTicket)).as("the draft was inserted").isNotEmpty();
-    }
-
-    /** An explicit {@code contactId} overrides the deal's default — and a contact of ANOTHER
+    /** An explicit {@code contactId} is snapshotted — and a contact of ANOTHER
      * customer is refused with the same 400, wrong-way-round. */
     @Test
     void create_withExplicitContact_usesIt_andRefusesAnotherCustomersContact() {
@@ -2669,6 +2665,23 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             upsertRequest(contact.id(), List.of(sampleItem("200.00", 5))), salesActor);
         assertThat(switched.contactId()).isEqualTo(contact.id());
         assertThat(switched.contactName()).isEqualTo("สมหญิง ใจดี");
+        assertThat(switched.orderedByName()).as("a signature name to clear").isEqualTo("สมหญิง ใจดี");
+
+        // ล้าง: clearContact empties the snapshot and the signature name, even with a contactId sent.
+        DealQuotationDto cleared = quotationService.update(created.id(),
+            upsertRequest(contact.id(), List.of(sampleItem("200.00", 5))).withClearContact(true), salesActor);
+        assertThat(cleared.contactId()).as("clearContact wins over a contactId").isNull();
+        assertThat(cleared.contactName()).isNull();
+        assertThat(cleared.contactPhone()).isNull();
+        assertThat(cleared.contactEmail()).isNull();
+        assertThat(cleared.orderedByName()).isNull();
+        java.util.Map<String, Object> row = new java.util.HashMap<>(jdbc.queryForMap("""
+            SELECT contact_id, contact_name, contact_phone, contact_email, ordered_by_name
+              FROM sales.quotation WHERE quotation_id = :id
+            """, java.util.Map.of("id", created.id())));
+        assertThat(row).containsEntry("contact_id", null).containsEntry("contact_name", null)
+            .containsEntry("contact_phone", null).containsEntry("contact_email", null)
+            .containsEntry("ordered_by_name", null);
     }
 
     // ── owner feedback 2026-09-14: โครงการ (project name) is now editable, not write-once ──────
@@ -2770,43 +2783,35 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         return "วันที่ " + d.getDayOfMonth() + "/" + d.getMonthValue() + "/" + (d.getYear() + 543);
     }
 
-    /** Owner-directed reversal of F2 (2026-09-26): a DRAFT with a contact snapshot but no manual
-     * orderedByName must print the DOTTED placeholder in slot 4, never the contact's name any
-     * more -- this is the F2-reversal regression guard, end-to-end through the real service and
-     * repository (not just the adapter unit tests). */
+    /** Ruling 2026-10-18: slot 4 (ผู้สั่งซื้อ) prints the quotation's picked ผู้ติดต่อ, end-to-end
+     * (create -> render) through the real service and repository. {@code ordered_by_name} is
+     * written from the picked contact on every DRAFT save, so a name typed into the request is
+     * ignored. */
     @Test
-    void render_draft_neverAutoFillsContactNameInSlot4_evenThoughOneIsRecorded() throws Exception {
+    void render_draft_printsThePickedContactNameInSlot4_andIgnoresATypedOrderedByName() throws Exception {
         DealQuotationDto created = quotationService.create(ticketId,
-            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
-        assertThat(created.contactName()).as("a contact IS recorded on this deal").isEqualTo("สมหญิง ใจดี");
+            upsertRequestWithOrderedByName("คุณวิชัย มั่นคง", List.of(sampleItem("100.00", 10))), salesActor);
+        assertThat(created.contactName()).as("a contact IS picked on this quotation").isEqualTo("สมหญิง ใจดี");
+        assertThat(created.orderedByName()).as("the picked contact's name, not the typed one").isEqualTo("สมหญิง ใจดี");
         String[] rows = signatureRows(quotationService.renderXlsx(created.id(), salesActor));
         String names = rows[1];
         String dates = rows[2];
-        assertThat(names).doesNotContain("(สมหญิง ใจดี)");
-        // Draft: no approver name yet AND no manual ผู้สั่งซื้อ name -- two dotted placeholders.
-        assertThat(names.split("\\(\\.{26}\\)", -1)).hasSize(3);
+        assertThat(names).contains("(สมหญิง ใจดี)").doesNotContain("(คุณวิชัย มั่นคง)");
+        // Draft: no approver name yet -- the only dotted name placeholder.
+        assertThat(names.split("\\(\\.{26}\\)", -1)).hasSize(2);
         // Dates: ผู้พิมพ์ = created date; the other three slots stay dotted.
         assertThat(dates).contains(thaiShort(created.createdAt()));
         assertThat(dates.split("วันที่........./........./.........", -1)).as("three dotted date slots").hasSize(4);
     }
 
-    /** The manual override this reversal adds: a rep-typed {@code orderedByName} on the request
-     * reaches the printed signature slot exactly as typed, end-to-end (create -> render), even
-     * though the deal ALSO carries a contact snapshot the slot must NOT fall back to. */
-    @Test
-    void render_draft_printsTheManualOrderedByNameWhenSet_notTheContactName() throws Exception {
-        DealQuotationDto created = quotationService.create(ticketId,
-            upsertRequestWithOrderedByName("คุณวิชัย มั่นคง", List.of(sampleItem("100.00", 10))), salesActor);
-        assertThat(created.orderedByName()).isEqualTo("คุณวิชัย มั่นคง");
-        assertThat(created.contactName()).as("still a contact IS recorded on this deal").isEqualTo("สมหญิง ใจดี");
-        String[] rows = signatureRows(quotationService.renderXlsx(created.id(), salesActor));
-        String names = rows[1];
-        assertThat(names).contains("(คุณวิชัย มั่นคง)").doesNotContain("(สมหญิง ใจดี)");
-    }
-
     @Test
     void render_approved_printsAllThreeDates_andOrderedByStaysDottedWithNoManualName() throws Exception {
-        DealQuotationDto approved = createSubmittedApproved(ticketId, salesActor, salesManagerActor);
+        // No contact picked on this row (createSubmittedApproved picks one); the deal itself still
+        // carries "สมหญิง ใจดี", which must not reach the slot.
+        DealQuotationDto created = createAlongsideLive(ticketId,
+            upsertRequest(null, List.of(sampleItem("100.00", 10))), salesActor);
+        DealQuotationDto approved = quotationService.approve(quotationService.submit(created.id(), salesActor).id(),
+            new ApproveRequest(null), salesManagerActor);
         String[] rows = signatureRows(quotationService.renderXlsx(approved.id(), salesActor));
         String dates = rows[2];
         assertThat(dates).contains(thaiShort(approved.createdAt()));
@@ -2815,9 +2820,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         // ผู้สั่งซื้อ never gets a date -- the customer signs and dates on paper.
         assertThat(dates.split("วันที่........./........./.........", -1)).as("exactly one dotted date slot").hasSize(2);
         assertThat(dates.lastIndexOf("วันที่........./........./.........")).isGreaterThan(dates.lastIndexOf(thaiShort(approved.approvedAt())));
-        // F2-reversal regression guard: NO manual name was set on this fixture, so the ผู้สั่งซื้อ
-        // slot stays the dotted placeholder even though a contact ("สมหญิง ใจดี") is recorded.
+        // No contact on the row, so the ผู้สั่งซื้อ slot is the one dotted name placeholder.
         assertThat(rows[1]).contains("(" + approved.approvedByName() + ")").doesNotContain("(สมหญิง ใจดี)");
+        assertThat(rows[1].split("\\(\\.{26}\\)", -1)).as("one dotted name slot").hasSize(2);
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -3868,7 +3873,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void updateContact_pendingApprovalQuotation_snapshotNeverChanges() {
         DealQuotationDto created = quotationService.create(ticketId,
-            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+            upsertRequest(contact.id(), List.of(sampleItem("100.00", 10))), salesActor);
         DealQuotationDto submitted = quotationService.submit(created.id(), salesActor);
         assertThat(submitted.contactEmail()).isEqualTo(contact.email());
 
@@ -3903,7 +3908,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void updateContact_draftQuotation_phoneAndEmailRefreshedImmediately_nameLeftAlone() {
         DealQuotationDto draft = quotationService.create(ticketId,
-            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+            upsertRequest(contact.id(), List.of(sampleItem("100.00", 10))), salesActor);
         assertThat(draft.contactEmail()).isEqualTo(contact.email());
         String originalName = draft.contactName();
 
@@ -3918,18 +3923,20 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         // A phone/email-only edit never re-snapshots the printed NAME -- see
         // DealQuotationRepository#refreshDraftContactSnapshot's own Javadoc on `refreshName`.
         assertThat(reloaded.contactName()).isEqualTo(originalName);
+        assertThat(reloaded.orderedByName()).as("nor the signature name").isEqualTo(originalName);
     }
 
     @Test
     void updateContact_draftQuotation_nameRefreshedOnlyWhenNameFieldsAreSent() {
         DealQuotationDto draft = quotationService.create(ticketId,
-            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+            upsertRequest(contact.id(), List.of(sampleItem("100.00", 10))), salesActor);
 
         transactional(customerService).updateContact(customer.id(), contact.id(),
             "สมหญิง2", "ใจดี2", null, null, null);
 
         DealQuotationDto reloaded = quotationRepository.findById(draft.id()).orElseThrow();
         assertThat(reloaded.contactName()).isEqualTo("สมหญิง2 ใจดี2");
+        assertThat(reloaded.orderedByName()).as("the signature name follows the contact").isEqualTo("สมหญิง2 ใจดี2");
     }
 
     /**
@@ -3947,7 +3954,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void updateContact_anotherRepsDraftOnTheSameContact_isAlsoRefreshed() {
         DealQuotationDto repBsDraft = quotationService.create(otherTicketId,
-            upsertRequest(List.of(sampleItem("100.00", 10))), otherSalesActor);
+            upsertRequest(contact.id(), List.of(sampleItem("100.00", 10))), otherSalesActor);
         assertThat(repBsDraft.contactEmail()).isEqualTo(contact.email());
         assertThat(repBsDraft.salesRepId()).isEqualTo(otherSalesId);
 
@@ -3973,7 +3980,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void updateContact_draftQuotation_clearingEmailStoresNullNotEmptyString() {
         DealQuotationDto draft = quotationService.create(ticketId,
-            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+            upsertRequest(contact.id(), List.of(sampleItem("100.00", 10))), salesActor);
         assertThat(draft.contactEmail()).isEqualTo(contact.email());
 
         transactional(customerService).updateContact(customer.id(), contact.id(),
@@ -3998,9 +4005,10 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         return LegacyDirectQuotationFixtures.createAlongsideLive(jdbc, quotationService, ticketIdParam, request, actor);
     }
 
+    /** Picks the fixture's contact, so an approved row carries a contact snapshot. */
     private DealQuotationDto createSubmittedApproved(long ticketIdParam, UserPrincipal creator, UserPrincipal approver) {
         DealQuotationDto created = createAlongsideLive(ticketIdParam,
-            upsertRequest(List.of(sampleItem("100.00", 10))), creator);
+            upsertRequest(contact.id(), List.of(sampleItem("100.00", 10))), creator);
         DealQuotationDto submitted = quotationService.submit(created.id(), creator);
         return quotationService.approve(submitted.id(), new ApproveRequest(null), approver);
     }
@@ -4015,7 +4023,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         return upsertRequest(null, items);
     }
 
-    /** {@code contactId} null = "default to the deal's contact" (the normal wire shape). */
+    /** {@code contactId} null = no contact picked: a blank snapshot (the deal's contact is never
+     * inherited, ruling 2026-10-18). Pass {@code contact.id()} when a test needs one on the row. */
     private UpsertDealQuotationRequest upsertRequest(Long contactId, List<ItemInput> items) {
         return new UpsertDealQuotationRequest(contactId, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
             "หมายเหตุทดสอบ", items).withRecipientType("OWNER");
@@ -5215,10 +5224,10 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     /** Owner-directed reversal of F2 (2026-09-26) — the full canonical constructor, for the one
-     * field (orderedByName) none of this class's other helpers thread through. Every other field
-     * left at its "use the default" value. */
+     * field (orderedByName) none of this class's other helpers thread through. The fixture's
+     * contact is picked; every other field left at its "use the default" value. */
     private UpsertDealQuotationRequest upsertRequestWithOrderedByName(String orderedByName, List<ItemInput> items) {
-        return new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
+        return new UpsertDealQuotationRequest(contact.id(), "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
             null, null, "หมายเหตุทดสอบ", null, null, null, null, null, null, null, null, orderedByName, items).withRecipientType("OWNER");
     }
 

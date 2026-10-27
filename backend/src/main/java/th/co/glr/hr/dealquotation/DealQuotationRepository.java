@@ -282,16 +282,39 @@ public class DealQuotationRepository {
      * most recent PRICING_REQUEST-origin quotation for this pricing request, REGARDLESS of
      * status — used by {@code DealQuotationService#createFromPricingRequest} to continue the SAME
      * {@code {base}-{n}} number family when re-creating after an EXPIRED quotation, rather than
-     * minting an unrelated fresh base number. There is at most one LIVE row at a time (M2/the
-     * one-quotation-per-request rule) and this origin has no revision chain (D12), so "most
-     * recent by id" and "the only row" coincide in every reachable case today; ORDER BY id DESC
-     * is still the honest query to write in case that ever stops being true.
+     * minting an unrelated fresh base number. This origin has a revision chain: {@code
+     * DealQuotationService#createRevision} copies {@code origin} and {@code pricing_request_id}
+     * from an ISSUED or REVISION_REQUESTED source, so one pricing request can hold several rows
+     * and the newest by id can be an open revision DRAFT. Newest by id is what continuing the
+     * number family needs; a caller that needs the customer-accepted row uses {@link
+     * #findAcceptedForPricingRequest} instead.
      */
     public Optional<Long> findLatestForPricingRequest(long pricingRequestId) {
         try {
             return Optional.ofNullable(jdbc.queryForObject("""
                 SELECT quotation_id FROM sales.quotation
                  WHERE pricing_request_id = :pricingRequestId AND origin = 'PRICING_REQUEST'
+                 ORDER BY quotation_id DESC
+                 LIMIT 1
+                """, Map.of("pricingRequestId", pricingRequestId), Long.class));
+        } catch (EmptyResultDataAccessException e) {
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * The customer-ACCEPTED {@code PRICING_REQUEST}-origin quotation for this pricing request,
+     * newest by id. {@code OrderConfirmationService#createDepositNoticeFromQuotation} uses this
+     * rather than {@link #findLatestForPricingRequest} because an open revision draft can outrank
+     * the accepted row by id: {@code DealQuotationService#recordOutcome} has no open-revision
+     * guard, so the customer can accept Q1 while its revision Q2 is still a DRAFT.
+     */
+    public Optional<Long> findAcceptedForPricingRequest(long pricingRequestId) {
+        try {
+            return Optional.ofNullable(jdbc.queryForObject("""
+                SELECT quotation_id FROM sales.quotation
+                 WHERE pricing_request_id = :pricingRequestId AND origin = 'PRICING_REQUEST'
+                   AND doc_status = 'ACCEPTED'
                  ORDER BY quotation_id DESC
                  LIMIT 1
                 """, Map.of("pricingRequestId", pricingRequestId), Long.class));
@@ -647,10 +670,9 @@ public class DealQuotationRepository {
         // source request/decision, null for DEAL_DIRECT.
         String origin, String recipientType, String recipientLabel,
         Long pricingRequestId, Long pricingDecisionId,
-        // Owner-directed reversal of F2 (2026-09-26) — see DealQuotationDtos#orderedByName's own
-        // Javadoc. Optional/nullable; null on every call site that has no manual name to carry
-        // over yet (a brand-new PRICING_REQUEST-origin create has nothing to inherit — the rep
-        // sets it later via #update, same as any other DEAL_DIRECT document).
+        // The ผู้สั่งซื้อ signature name — see DealQuotationDtos#orderedByName. A new DRAFT carries
+        // its contact snapshot's name (null when none); a revision/reorder copy carries its
+        // source's stored value verbatim.
         String orderedByName,
         // V192.3 — how to reach the person orderedByName names; see DealQuotationDtos#orderedByPhone.
         // They travel beside orderedByName on every path it travels, so they sit beside it here:
@@ -1041,11 +1063,9 @@ public class DealQuotationRepository {
                             // apply) before calling this method, so there is nothing left to default
                             // here.
                             boolean omitContactHonorific, String fullPaymentTerm,
-                            // Owner-directed reversal of F2 (2026-09-26) — see
-                            // DealQuotationDtos#orderedByName's own Javadoc. Same "editor always
-                            // sends its current value" discipline as projectName just above: a
-                            // null/blank here genuinely CLEARS the manual name back to the dotted
-                            // placeholder, it does not leave a stale one in place.
+                            // The ผู้สั่งซื้อ signature name — see DealQuotationDtos#orderedByName.
+                            // DealQuotationService passes the resolved contact's name, null when
+                            // none, so a DRAFT save keeps it in step with the contact columns.
                             String orderedByName,
                             // V192.3 — the same discipline as orderedByName just above: the editor
                             // always sends both, so null clears. Frozen with the rest of the header by
@@ -1130,6 +1150,8 @@ public class DealQuotationRepository {
      * printed ผู้สั่งซื้อ NAME is a bigger, more visible change than a phone/email typo fix, so it is
      * only re-snapshotted when the caller confirms the edit actually touched {@code first_name}/
      * {@code last_name} — never recomputed as an incidental side effect of some other field's PATCH.
+     * {@code ordered_by_name} (the signature name) follows {@code contact_name} under the same flag
+     * (ruling 2026-10-18: a DRAFT's signature name is its contact's name).
      *
      * <p>Mirrors {@link #updateHeader}'s own {@code doc_status = 'DRAFT'} predicate exactly, so a
      * PENDING_APPROVAL/APPROVED/REJECTED/CANCELLED row's frozen snapshot is never touched — only a
@@ -1157,6 +1179,9 @@ public class DealQuotationRepository {
                    contact_name  = CASE WHEN :refreshName
                                         THEN NULLIF(TRIM(CONCAT_WS(' ', c.first_name, c.last_name)), '')
                                         ELSE q.contact_name END,
+                   ordered_by_name = CASE WHEN :refreshName
+                                        THEN NULLIF(TRIM(CONCAT_WS(' ', c.first_name, c.last_name)), '')
+                                        ELSE q.ordered_by_name END,
                    updated_at = now()
               FROM customers.contact c
              WHERE c.contact_id = :contactId
@@ -1190,6 +1215,9 @@ public class DealQuotationRepository {
      * not the deal, so another deal's DRAFT that already points at the same contact id is refreshed
      * to the contact's live values too, exactly as editing the contact would do.
      *
+     * <p>{@code ordered_by_name} (the signature name, ruling 2026-10-18) is cleared with the contact
+     * and refilled the same way, so a draft never prints the old customer's contact.
+     *
      * @return the number of drafts moved.
      */
     public int resnapshotDraftsForDealCustomerChange(long ticketId, CustomerSnapshot customer,
@@ -1200,6 +1228,7 @@ public class DealQuotationRepository {
                    customer_tax_id = :customerTaxId, customer_phone = :customerPhone,
                    project_name = :projectName,
                    contact_id = :contactId, contact_name = NULL, contact_phone = NULL, contact_email = NULL,
+                   ordered_by_name = NULL,
                    updated_at = now()
              WHERE ticket_id = :ticketId
                AND origin IN ('DEAL_DIRECT', 'PRICING_REQUEST')

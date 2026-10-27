@@ -403,12 +403,13 @@ describe('/quotations/new?copyFrom= — the draft it opens', () => {
 
   // Wrong way round: what the rep must fill in again is EMPTY, and the source's customer, contact
   // and ผู้ติดต่อ are nowhere on the page — not in a field, not in a line of text.
-  it('leaves the customer and ผู้ติดต่อ — name, Phone and Email — for the rep', async () => {
+  it('leaves the customer, the ผู้ติดต่อ and the customer phone/email for the rep', async () => {
     await openCopy();
 
     expect(screen.getByLabelText(/^ลูกค้า/).value).toBe('');
     expect(screen.getByLabelText(/^โครงการ/).disabled).toBe(true); // a project belongs to a customer
-    expect(byId('orderedByNameInline').value).toBe('');
+    // The picker holds no contact, and waits for the new customer (a contact belongs to one).
+    expect(screen.getByLabelText(/^ผู้ติดต่อ/).textContent).toContain('เลือกลูกค้าก่อน');
     expect(byId('orderedByPhoneInline')?.value).toBe('');
     expect(byId('orderedByEmailInline')?.value).toBe('');
 
@@ -424,7 +425,7 @@ describe('/quotations/new?copyFrom= — the draft it opens', () => {
     const notice = screen.getByTestId('copy-notice');
     expect(notice.textContent).toContain('QT-2026-0777-1');
     expect(notice.textContent).toContain('ลูกค้า');
-    expect(notice.textContent).toContain('ผู้ติดต่อ');
+    expect(notice.textContent).toContain('เลือกผู้ติดต่อ และกรอกโทรศัพท์/อีเมลลูกค้า');
     // None of the source's rows has a picture, so the notice has nothing to say about pictures.
     expect(notice.textContent).not.toContain('รูปภาพ');
   });
@@ -506,7 +507,6 @@ describe('/quotations/new?copyFrom= — saving it', () => {
     expect(payload).toEqual({
       // ── left for the rep, and left alone here ──
       contactId: null,
-      orderedByName: null,
       orderedByPhone: null,
       orderedByEmail: null,
       // The deal's own project — the one just chosen — is what the document names.
@@ -538,6 +538,8 @@ describe('/quotations/new?copyFrom= — saving it', () => {
         { ...adjustmentInputFromRow(rowFromServerItem(EARLY_ORDER_DISCOUNT)), id: null },
       ],
     });
+    // The signature name is the server's to write from the contact (ruling 2026-10-18): not sent.
+    expect(payload).not.toHaveProperty('orderedByName');
     expect(payload.items.map((row) => row.id)).toEqual([null, null, null, null]);
 
     const sent = JSON.stringify([dealPayload, payload]);

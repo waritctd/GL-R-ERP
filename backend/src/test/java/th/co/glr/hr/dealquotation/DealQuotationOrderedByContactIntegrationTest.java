@@ -37,34 +37,46 @@ import th.co.glr.hr.ticket.QuotationRenderer;
  */
 class DealQuotationOrderedByContactIntegrationTest extends AbstractDealDirectQuotationIntegrationTest {
 
+    /** A name typed into the request's {@code orderedByName}: ignored since the 2026-10-18 ruling. */
     private static final String NAME = "คุณวิชัย มั่นคง";
+    /** The customer contact picked on the quotation (see {@link #pickedContact}). Its own phone and
+     * email differ from {@link #PHONE}/{@link #EMAIL}, so a test can tell which pair was saved. */
+    private static final String PICKED_NAME = "สมศรี รับซื้อ";
     /** Free text on purpose — an extension is normal. */
     private static final String PHONE = "089-765-4321 ต่อ 77";
     private static final String EMAIL = "bid.contact@contractor-b.example";
 
     // ── create ───────────────────────────────────────────────────────────────────────────────
 
+    /** The phone and email are saved from the request. The name beside them is the picked
+     * contact's (ruling 2026-10-18): a name typed into the request is ignored. */
     @Test
     void create_storesPhoneAndEmailBesideTheName_andEveryReadReturnsThem() {
-        DealQuotationDto created = quotationService.create(deal(salesActor), contact(NAME, PHONE, EMAIL), salesActor);
+        long ticket = deal(salesActor);
+        DealQuotationDto created = quotationService.create(ticket,
+            contact(pickedContact(ticket), NAME, PHONE, EMAIL), salesActor);
 
         assertThat(created.orderedByPhone()).isEqualTo(PHONE);
         assertThat(created.orderedByEmail()).isEqualTo(EMAIL);
-        assertThat(created.orderedByName()).isEqualTo(NAME);
+        assertThat(created.orderedByName()).as("the picked contact's name, not the typed one").isEqualTo(PICKED_NAME);
         assertThat(stored(created.id()))
             .containsEntry("ordered_by_phone", PHONE)
             .containsEntry("ordered_by_email", EMAIL)
-            .containsEntry("ordered_by_name", NAME);
+            .containsEntry("ordered_by_name", PICKED_NAME);
         // A fresh read, not the object create() handed back.
         DealQuotationDto read = quotationService.get(created.id(), salesActor);
         assertThat(read.orderedByPhone()).isEqualTo(PHONE);
         assertThat(read.orderedByEmail()).isEqualTo(EMAIL);
+        assertThat(read.orderedByName()).isEqualTo(PICKED_NAME);
 
-        // …and a quotation whose rep typed neither has neither.
-        DealQuotationDto bare = quotationService.create(deal(salesActor), draft(), salesActor);
+        // …and a quotation with no contact picked has no name even with one typed, and one whose
+        // rep typed neither phone nor email has neither.
+        DealQuotationDto bare = quotationService.create(deal(salesActor), contact(NAME, null, null), salesActor);
+        assertThat(bare.orderedByName()).isNull();
         assertThat(bare.orderedByPhone()).isNull();
         assertThat(bare.orderedByEmail()).isNull();
-        assertThat(stored(bare.id())).containsEntry("ordered_by_phone", null).containsEntry("ordered_by_email", null);
+        assertThat(stored(bare.id())).containsEntry("ordered_by_name", null)
+            .containsEntry("ordered_by_phone", null).containsEntry("ordered_by_email", null);
     }
 
     @Test
@@ -85,28 +97,38 @@ class DealQuotationOrderedByContactIntegrationTest extends AbstractDealDirectQuo
 
     // ── update ───────────────────────────────────────────────────────────────────────────────
 
+    /** Also: a save with no contact picked writes no signature name — neither the name typed into
+     * the request nor a legacy typed name already on the row (ruling 2026-10-18). */
     @Test
     void update_replacesBoth() {
         DealQuotationDto created = quotationService.create(deal(salesActor), contact(NAME, PHONE, EMAIL), salesActor);
+        jdbc.update("UPDATE sales.quotation SET ordered_by_name = 'legacy typed' WHERE quotation_id = :id",
+            Map.of("id", created.id()));
+        assertThat(stored(created.id())).as("a legacy typed name to clear").containsEntry("ordered_by_name", "legacy typed");
 
         DealQuotationDto updated = quotationService.update(created.id(),
             contact(NAME, "02-123-4567", "purchasing@contractor-b.example"), salesActor);
 
         assertThat(updated.orderedByPhone()).isEqualTo("02-123-4567");
         assertThat(updated.orderedByEmail()).isEqualTo("purchasing@contractor-b.example");
+        assertThat(updated.orderedByName()).isNull();
         assertThat(stored(created.id()))
             .containsEntry("ordered_by_phone", "02-123-4567")
-            .containsEntry("ordered_by_email", "purchasing@contractor-b.example");
+            .containsEntry("ordered_by_email", "purchasing@contractor-b.example")
+            .containsEntry("ordered_by_name", null);
     }
 
     /**
-     * The same rule as the name beside them ({@code UpsertDealQuotationRequest#orderedByName}): the
-     * editor states every header field on every save, so a blank — or a value it does not send at
-     * all — is a real request to clear it. Clearing the contact leaves the name alone.
+     * The editor states every header field on every save, so a blank phone or email — or one it
+     * does not send at all — is a real request to clear it. Clearing them leaves the name alone:
+     * it is the picked contact's, kept by a save that sends no contact id, and a name typed into
+     * the request is ignored.
      */
     @Test
     void update_withABlankOrMissingValue_clearsIt_andLeavesTheNameAlone() {
-        DealQuotationDto created = quotationService.create(deal(salesActor), contact(NAME, PHONE, EMAIL), salesActor);
+        long ticket = deal(salesActor);
+        DealQuotationDto created = quotationService.create(ticket,
+            contact(pickedContact(ticket), NAME, PHONE, EMAIL), salesActor);
         assertThat(stored(created.id()))
             .as("there is something to clear")
             .containsEntry("ordered_by_phone", PHONE)
@@ -116,11 +138,11 @@ class DealQuotationOrderedByContactIntegrationTest extends AbstractDealDirectQuo
 
         assertThat(updated.orderedByPhone()).isNull();
         assertThat(updated.orderedByEmail()).isNull();
-        assertThat(updated.orderedByName()).isEqualTo(NAME);
+        assertThat(updated.orderedByName()).isEqualTo(PICKED_NAME);
         assertThat(stored(created.id()))
             .containsEntry("ordered_by_phone", null)
             .containsEntry("ordered_by_email", null)
-            .containsEntry("ordered_by_name", NAME);
+            .containsEntry("ordered_by_name", PICKED_NAME);
     }
 
     /** The same lock as every other header field: an APPROVED document is frozen, the typed contact
@@ -152,9 +174,10 @@ class DealQuotationOrderedByContactIntegrationTest extends AbstractDealDirectQuo
                 () -> quotationService.create(ticket, contact(NAME, PHONE, malformed), salesActor),
                 HttpStatus.BAD_REQUEST);
             // The sentence the editor shows under the field before the save (quotationMeta
-            // #orderedByEmailError) — one sentence for one problem, whoever catches it.
+            // #orderedByEmailError) — one sentence for one problem, whoever catches it. The box is
+            // the CUSTOMER's (อีเมลลูกค้า), so the sentence names the customer, not the ผู้ติดต่อ.
             assertThat(refused.getMessage()).as("the refusal of '%s'", malformed)
-                .contains("รูปแบบอีเมลไม่ถูกต้อง");
+                .isEqualTo("Email ของลูกค้า: รูปแบบอีเมลไม่ถูกต้อง");
         }
         assertThat(quotationCount(ticket)).isZero();
 
@@ -197,7 +220,7 @@ class DealQuotationOrderedByContactIntegrationTest extends AbstractDealDirectQuo
         ApiException refused = refusal(
             () -> quotationService.create(ticket, contact(NAME, null, "a" + longest), salesActor),
             HttpStatus.BAD_REQUEST);
-        assertThat(refused.getMessage()).contains("254");
+        assertThat(refused.getMessage()).isEqualTo("Email ของลูกค้ายาวเกิน 254 ตัวอักษร");
         assertThat(quotationCount(ticket)).isZero();
 
         DealQuotationDto accepted = quotationService.create(ticket, contact(NAME, null, longest), salesActor);
@@ -214,7 +237,7 @@ class DealQuotationOrderedByContactIntegrationTest extends AbstractDealDirectQuo
         ApiException refused = refusal(
             () -> quotationService.create(ticket, contact(NAME, fifty + "1", null), salesActor),
             HttpStatus.BAD_REQUEST);
-        assertThat(refused.getMessage()).contains("50");
+        assertThat(refused.getMessage()).isEqualTo("Phone ของลูกค้ายาวเกิน 50 ตัวอักษร");
         assertThat(quotationCount(ticket)).isZero();
 
         DealQuotationDto atTheLimit = quotationService.create(ticket, contact(NAME, fifty, null), salesActor);
@@ -240,7 +263,7 @@ class DealQuotationOrderedByContactIntegrationTest extends AbstractDealDirectQuo
         assertThat(stored(reorder.id()))
             .containsEntry("ordered_by_phone", PHONE)
             .containsEntry("ordered_by_email", EMAIL)
-            .containsEntry("ordered_by_name", NAME);
+            .containsEntry("ordered_by_name", PICKED_NAME);
 
         DealQuotationDto revision = quotationService.createRevision(approved.id(), salesActor);
         assertThat(revision.orderedByPhone()).isEqualTo(PHONE);
@@ -277,25 +300,31 @@ class DealQuotationOrderedByContactIntegrationTest extends AbstractDealDirectQuo
 
     /**
      * Owner, 2026-10-13: "rendered if they have it, if not just leave it". The workbook the service
-     * itself renders for the stored quotation, and the HTML the PDF is printed from, carry the NAME
-     * (that is what the ผู้สั่งซื้อ slot is for) AND the phone and the email the rep typed.
+     * itself renders for the stored quotation, and the HTML the PDF is printed from, carry the
+     * picked contact's NAME in the ผู้สั่งซื้อ slot (ruling 2026-10-18; never the typed one) AND the
+     * phone and the email the rep typed.
      */
     @Test
     void theDocumentTheServiceRenders_printsTheName_andThePhoneAndEmail() {
-        DealQuotationDto created = quotationService.create(deal(salesActor), contact(NAME, PHONE, EMAIL), salesActor);
+        long ticket = deal(salesActor);
+        DealQuotationDto created = quotationService.create(ticket,
+            contact(pickedContact(ticket), NAME, PHONE, EMAIL), salesActor);
         DealQuotationDto stored = quotationService.get(created.id(), salesActor);
         // Without these two, everything below could hold for a document that printed some OTHER contact.
         assertThat(stored.orderedByPhone()).isEqualTo(PHONE);
         assertThat(stored.orderedByEmail()).isEqualTo(EMAIL);
 
         List<String> cells = sheetTexts(created.id());
-        assertThat(cells).as("control: the name beside them prints").anyMatch(text -> text.contains(NAME));
+        assertThat(cells).as("the picked contact in the ผู้สั่งซื้อ slot")
+            .anyMatch(text -> text.contains("(" + PICKED_NAME + ")"));
+        assertThat(cells).as("the typed name prints nowhere").noneMatch(text -> text.contains(NAME));
         assertThat(cells).anyMatch(text -> text.contains(PHONE));
         assertThat(cells).anyMatch(text -> text.contains(EMAIL));
 
         QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(stored, null, null);
         String html = new QuotationRenderer().toHtml(model);
-        assertThat(html).as("control: the name beside them prints").contains(NAME);
+        assertThat(html).as("the picked contact in the ผู้สั่งซื้อ slot").contains("(" + PICKED_NAME + ")")
+            .doesNotContain(NAME);
         assertThat(html).contains(PHONE).contains(EMAIL);
     }
 
@@ -316,8 +345,13 @@ class DealQuotationOrderedByContactIntegrationTest extends AbstractDealDirectQuo
      * {@code DealQuotationHideProjectNameIntegrationTest#edit}).
      */
     private static UpsertDealQuotationRequest contact(String name, String phone, String email) {
+        return contact(null, name, phone, email);
+    }
+
+    /** {@link #contact(String, String, String)} with a picked customer contact. */
+    private static UpsertDealQuotationRequest contact(Long contactId, String name, String phone, String email) {
         UpsertDealQuotationRequest base = draft();
-        return new UpsertDealQuotationRequest(base.contactId(), base.deptCode(), base.unitCode(), base.offerDate(),
+        return new UpsertDealQuotationRequest(contactId, base.deptCode(), base.unitCode(), base.offerDate(),
             base.depositPercent(), base.remainderMode(), base.creditDays(), base.validityDays(),
             base.validityMode(), base.validityUntil(), base.customerNotes(), base.priceMode(),
             base.documentLanguage(), base.currency(), base.printedByDisplayId(), base.salesRepDisplayId(),
@@ -326,7 +360,16 @@ class DealQuotationOrderedByContactIntegrationTest extends AbstractDealDirectQuo
     }
 
     private DealQuotationDto approvedWithContact(long ticketId) {
-        return approved(ticketId, contact(NAME, PHONE, EMAIL), salesActor);
+        return approved(ticketId, contact(pickedContact(ticketId), NAME, PHONE, EMAIL), salesActor);
+    }
+
+    /** A contact named {@link #PICKED_NAME} of the deal's own customer, with a phone and an email
+     * of its own; returns its id. */
+    private long pickedContact(long ticketId) {
+        long customerId = jdbc.queryForObject("SELECT customer_id FROM sales.ticket WHERE ticket_id = :id",
+            Map.of("id", ticketId), Long.class);
+        return new th.co.glr.hr.customer.ContactRepository(jdbc)
+            .create(customerId, "สมศรี", "รับซื้อ", null, "purchasing@customer-a.example", "02-555-0100").id();
     }
 
     /** Someone of {@code role} who is not the deal's owner and holds no quotation grant (the id

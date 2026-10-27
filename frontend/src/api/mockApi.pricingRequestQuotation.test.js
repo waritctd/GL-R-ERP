@@ -44,6 +44,8 @@ async function approvedNetPricingRequest() {
 
   const { pricingRequest: draftPr } = await api.pricingRequests.create(ticketId, {
     recipientType: 'DESIGNER',
+    // The quotation's ผู้ติดต่อ comes from here: the deal's own contact is no fallback (ruling 2026-10-18).
+    recipientContactId: contact.id,
     recipientLabel: 'ผู้ออกแบบทดสอบ PCRQ',
     clientRequestId: nextClientRequestId(),
     items: [{
@@ -224,6 +226,9 @@ describe('mockApi.dealQuotations.createFromPricingRequest', () => {
     const { quotation } = await api.dealQuotations.createFromPricingRequest(prId);
     expect(quotation.recipientType).toBe('DESIGNER');
     expect(quotation.recipientLabel).toBe('ผู้ออกแบบทดสอบ PCRQ');
+    // ...and its recipient contact as the ผู้ติดต่อ, whose name is the signature name (ruling
+    // 2026-10-18). Mirrors DealQuotationService#createFromPricingRequest.
+    expect(quotation).toMatchObject({ contactName: 'สมชาย ทดสอบ', orderedByName: 'สมชาย ทดสอบ' });
     const { items } = await api.dealQuotations.listForTicket(ticketId);
     expect(items.find((q) => q.id === quotation.id).recipientType).toBe('DESIGNER');
   });

@@ -177,63 +177,76 @@ export function DealStateHeader({
     </div>
   );
 
-  if (condensed) {
-    return (
-      <section data-testid="deal-state-header" data-condensed="true" className="bg-surface px-4 py-3">
-        <div className="flex min-w-0 flex-wrap items-center gap-2 sm:gap-3">
-          <code className="rounded bg-surface-subtle px-2 py-0.5 text-xs text-text-muted">{summary.code}</code>
-          <h1 className="m-0 min-w-[12rem] flex-1 truncate text-base font-extrabold text-text">
-            {summary.customerName || summary.title}
-          </h1>
-          <StatusBadge tone={stage.tone}>{stage.label}</StatusBadge>
-          {bannerText ? (
-            <span className="hidden min-w-0 max-w-[22rem] truncate text-xs font-bold text-info xl:block">{bannerText}</span>
-          ) : null}
-          {onRefresh ? (
-            <Button type="button" variant="icon" onClick={onRefresh} title="รีเฟรช" aria-label="รีเฟรช">
-              <Icon name="refresh" />
-            </Button>
-          ) : null}
-          {hasActionBar ? (
-            <div data-testid="ticket-action-bar" className="ml-auto flex shrink-0 items-center gap-2">
-              {actionControls}
-            </div>
-          ) : null}
-        </div>
-      </section>
-    );
-  }
-
+  // ONE DOM for both states so the expand↔condense change can ANIMATE — a DOM swap (the old
+  // `if (condensed) return <bar/>`) can't. The identity row + the condensed action cluster stay
+  // mounted; the tall "extras" (meta line + the 5-chip stat grid) collapse to zero height via a
+  // grid-template-rows 1fr→0fr transition, which is what used to jump ~150px in one frame (the
+  // กระตุก). Mobile is never condensed (TicketDetailPage keeps it static/expanded), and the
+  // extras are force-open there. The expanded bottom action bar stays OUTSIDE the clipped
+  // collapsible region so the "⋯" OverflowMenu is never clipped.
   return (
-    <section data-testid="deal-state-header" data-condensed="false" className="flex flex-col gap-4 bg-surface p-4 sm:p-5 mobile:gap-3 mobile:rounded-md mobile:border mobile:border-border mobile:p-3">
-      <div className="relative flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0 mobile:pr-12">
-          <div className="flex flex-wrap items-center gap-2">
-            <code className="rounded bg-surface-subtle px-2 py-0.5 text-xs text-text-muted">{summary.code}</code>
-            <StatusBadge tone={lifecycle.tone}>{lifecycle.label}</StatusBadge>
-          </div>
-          <h1 className="mt-2 truncate text-xl font-extrabold text-text sm:text-2xl">
-            {summary.customerName || summary.title}
-          </h1>
-          {summary.projectName ? (
-            <p className="mt-0.5 truncate text-sm text-text-muted">{summary.projectName}</p>
-          ) : null}
-          <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-text-muted sm:gap-4">
-            <span className="mobile:hidden"><StatusBadge tone={status.tone}>{status.label}</StatusBadge></span>
-            {summary.hasEdits ? <span className="mobile:hidden"><StatusBadge tone="warning">✎ มีการแก้ไข</StatusBadge></span> : null}
-            <span className="mobile:hidden">สร้างโดย <strong className="text-text-secondary">{summary.createdByName || '-'}</strong> · {formatThaiDate(summary.createdAt)}</span>
-            {summary.assignedToName ? (
-              <span className="mobile:hidden">เจ้าหน้าที่นำเข้าที่ดูแล <strong className="text-text-secondary">{summary.assignedToName}</strong></span>
-            ) : null}
-            <span>อัปเดตล่าสุด <strong className="text-text-secondary">{formatThaiDate(summary.updatedAt)}</strong></span>
-          </div>
-        </div>
+    <section
+      data-testid="deal-state-header"
+      data-condensed={condensed ? 'true' : 'false'}
+      className={`flex flex-col bg-surface transition-[gap,padding] duration-200 ease-out mobile:rounded-md mobile:border mobile:border-border mobile:!gap-3 mobile:!p-3 ${
+        condensed ? 'gap-0 px-4 py-3' : 'gap-4 p-4 sm:p-5'
+      }`}
+    >
+      {/* Identity + (condensed) actions — always mounted, stays put across the transition.
+          data-testid lets a test scope to the VISIBLE bar (the collapsible extras below keep a
+          mounted-but-aria-hidden copy of the stage for the animation, which would otherwise make
+          a plain getByText ambiguous). */}
+      <div data-testid="deal-state-header-bar" className="relative flex min-w-0 flex-wrap items-center gap-2 sm:gap-3 mobile:pr-12">
+        <code className="rounded bg-surface-subtle px-2 py-0.5 text-xs text-text-muted">{summary.code}</code>
+        {condensed
+          ? <StatusBadge tone={stage.tone}>{stage.label}</StatusBadge>
+          : <StatusBadge tone={lifecycle.tone}>{lifecycle.label}</StatusBadge>}
+        <h1
+          className={`m-0 min-w-[12rem] flex-1 truncate font-extrabold text-text transition-[font-size] duration-200 ease-out ${
+            condensed ? 'text-base' : 'text-xl sm:text-2xl'
+          }`}
+        >
+          {summary.customerName || summary.title}
+        </h1>
+        {condensed && bannerText ? (
+          <span className="hidden min-w-0 max-w-[22rem] truncate text-xs font-bold text-info xl:block">{bannerText}</span>
+        ) : null}
         {onRefresh ? (
           <Button type="button" variant="icon" className="mobile:absolute mobile:right-0 mobile:top-0" onClick={onRefresh} title="รีเฟรช" aria-label="รีเฟรช">
             <Icon name="refresh" />
           </Button>
         ) : null}
+        {condensed && hasActionBar ? (
+          <div data-testid="ticket-action-bar" className="ml-auto flex shrink-0 items-center gap-2">
+            {actionControls}
+          </div>
+        ) : null}
       </div>
+
+      {/* Collapsible extras (meta + stat grid). grid-rows 1fr→0fr animates the height; the inner
+          min-h-0 + overflow-hidden clips during the collapse. Only non-interactive content lives
+          here, so overflow-hidden never clips a menu/tooltip. Force-open on mobile. */}
+      <div
+        className={`grid transition-[grid-template-rows,opacity] duration-200 ease-out mobile:!grid-rows-[1fr] mobile:!opacity-100 ${
+          condensed ? 'grid-rows-[0fr] opacity-0' : 'grid-rows-[1fr] opacity-100'
+        }`}
+        aria-hidden={condensed ? 'true' : undefined}
+      >
+        <div className="flex min-h-0 flex-col gap-4 overflow-hidden mobile:gap-3">
+          <div className="min-w-0">
+            {summary.projectName ? (
+              <p className="m-0 truncate text-sm text-text-muted">{summary.projectName}</p>
+            ) : null}
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-text-muted sm:gap-4">
+              <span className="mobile:hidden"><StatusBadge tone={status.tone}>{status.label}</StatusBadge></span>
+              {summary.hasEdits ? <span className="mobile:hidden"><StatusBadge tone="warning">✎ มีการแก้ไข</StatusBadge></span> : null}
+              <span className="mobile:hidden">สร้างโดย <strong className="text-text-secondary">{summary.createdByName || '-'}</strong> · {formatThaiDate(summary.createdAt)}</span>
+              {summary.assignedToName ? (
+                <span className="mobile:hidden">เจ้าหน้าที่นำเข้าที่ดูแล <strong className="text-text-secondary">{summary.assignedToName}</strong></span>
+              ) : null}
+              <span>อัปเดตล่าสุด <strong className="text-text-secondary">{formatThaiDate(summary.updatedAt)}</strong></span>
+            </div>
+          </div>
 
       {/* Responsive-overflow fix (Phase 2): `.status-badge` is
           `white-space: nowrap` (styles.css:1795). FIX 4 (Opus review —
@@ -290,13 +303,18 @@ export function DealStateHeader({
             className={index === chips.length - 1 ? lastChipSpanClass(chips.length) : ''}
           />
         ))}
-      </dl>
+          </dl>
+        </div>
+      </div>
 
       {/* The sticky action bar (IA "Action bar (sticky)"): ONE work-state
           line + the one primary CTA this viewer may act on + the "⋯"
           overflow. Hidden entirely when there is nothing to say and nothing
-          to do — never an empty chrome bar. */}
-      {hasActionBar ? (
+          to do — never an empty chrome bar. Lives OUTSIDE the collapsible
+          region (so the "⋯" OverflowMenu is never clipped) and only in the
+          expanded state — condensed surfaces its actions in the identity row
+          above. */}
+      {!condensed && hasActionBar ? (
         <div
           data-testid="ticket-action-bar"
           // No `bannerText`: the primary CTA IS the message (its own label

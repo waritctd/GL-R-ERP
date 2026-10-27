@@ -1436,6 +1436,25 @@ function mockDepositNoticeItemsFromQuotation(items) {
   }));
 }
 
+// Mirrors DepositNoticeRepository.findDealQuotationItems. Values are read off the stored row,
+// never recomputed (label excepted — see below).
+function mockDepositNoticeItemsFromDealQuotation(row) {
+  return row.items.map((item, idx) => {
+    // Display label only: the mock stores no sales_discount, so this restates the column Java reads
+    // (DealQuotationRepository#itemParams writes it as unitPrice − netUnitPrice).
+    const salesDiscount = round2(item.unitPrice - item.netUnitPrice);
+    return {
+      seq: item.seq ?? idx + 1,
+      description: item.descriptionLine?.trim() ? item.descriptionLine : 'รายการสินค้า',
+      qty: item.quantity,
+      unit: item.unit?.trim() ? item.unit : 'หน่วย',
+      unitPrice: item.unitPrice,
+      discountLabel: salesDiscount > 0 ? `ส่วนลด ${salesDiscount} ต่อหน่วย` : null,
+      netUnitPrice: item.netUnitPrice,
+    };
+  });
+}
+
 // Branch fix: mirrors DepositNoticeService.pickQuotation — the latest ACCEPTED revision for
 // this ticket, or (if none has been accepted yet) the latest ISSUED one. mockCustomerQuotations
 // carries no guaranteed ordering, so sort ascending by (quotationRevisionNo, id) first — same
@@ -6256,19 +6275,22 @@ function mockDealQuotationDisplayEmployee(id) {
   return { name: user?.name ?? null, nameEn: null, phone: mockSalesRepPhone(Number(id)) };
 }
 
-// ผู้สั่งซื้อ resolution + the frozen snapshot V167 stores (owner feedback F2, 2026-09-10).
-// Mirrors DealQuotationService#resolveContact: `contactId` is OPTIONAL on the wire and defaults to
-// the deal's own `sales.ticket.contact_id`.
+// ผู้ติดต่อ resolution + the frozen snapshot V167 stores (owner feedback F2, 2026-09-10).
+// Mirrors DealQuotationService#resolveContact: precedence is the request's `contactId`, else the
+// row's own (`current`, update only), else none. Ruling 2026-10-18: the deal's own
+// `sales.ticket.contact_id` is NOT a fallback any more — the contact is picked per quotation.
+// Callers write `contactName` to `orderedByName` too (the ผู้สั่งซื้อ signature name). update()
+// skips this when `clearContact` is true (ล้าง: a picked ผู้ติดต่อ may be cleared per quotation).
 //
 // ⚠️ Owner-directed reversal of V167/F2 (2026-09-26): resolving to a contact is no longer REQUIRED
 // either — this used to fail 400 "กรุณาระบุผู้สั่งซื้อ" when nothing resolved; it now mirrors the
 // relaxed Java method exactly and returns a blank snapshot instead. A contact id that IS given (or
-// inherited) still must belong to the deal's customer, still refused as 400 otherwise.
+// kept from the row) still must belong to the deal's customer, still refused as 400 otherwise.
 //
 // ⚠️ AUTHZ CAVEAT (CLAUDE.md "Mock API contract"): the customer-ownership check below approximates
 // the Java service's and is NOT authoritative. Verify it against DealQuotationService, never here.
 function resolveDealQuotationContact(ticket, payload, current = null) {
-  const requested = payload?.contactId ?? current?.contactId ?? ticket?.contactId ?? null;
+  const requested = payload?.contactId ?? current?.contactId ?? null;
   if (requested == null) {
     return { contactId: null, contactName: null, contactPhone: null, contactEmail: null };
   }
@@ -6296,13 +6318,13 @@ function resolveDealQuotationOrderedByContact(payload) {
   const orderedByPhone = blankToNullMock(payload?.orderedByPhone);
   const orderedByEmail = blankToNullMock(payload?.orderedByEmail);
   if (orderedByPhone && orderedByPhone.length > ORDERED_BY_PHONE_MAX) {
-    fail(`Phone ของผู้ติดต่อยาวเกิน ${ORDERED_BY_PHONE_MAX} ตัวอักษร`, 400);
+    fail(`Phone ของลูกค้ายาวเกิน ${ORDERED_BY_PHONE_MAX} ตัวอักษร`, 400);
   }
   if (orderedByEmail && orderedByEmail.length > ORDERED_BY_EMAIL_MAX) {
-    fail(`Email ของผู้ติดต่อยาวเกิน ${ORDERED_BY_EMAIL_MAX} ตัวอักษร`, 400);
+    fail(`Email ของลูกค้ายาวเกิน ${ORDERED_BY_EMAIL_MAX} ตัวอักษร`, 400);
   }
   const emailError = orderedByEmailError(orderedByEmail);
-  if (emailError) fail(`Email ของผู้ติดต่อ: ${emailError}`, 400);
+  if (emailError) fail(`Email ของลูกค้า: ${emailError}`, 400);
   return { orderedByPhone, orderedByEmail };
 }
 
@@ -7364,16 +7386,18 @@ function buildDealQuotationDto(row) {
     customerAddress: row.customerAddress,
     customerTaxId: row.customerTaxId,
     customerPhone: row.customerPhone,
-    // ผู้สั่งซื้อ — the FROZEN snapshot V167 stores at create/update (owner feedback F2,
-    // 2026-09-10), never a live read of the ticket's contact. Mirrors DealQuotationDto's own
-    // four fields; contactName is what the renderer prints in signature slot 4.
+    // ผู้ติดต่อ — the FROZEN snapshot V167 stores at create/update, of the contact picked on THIS
+    // quotation (ruling 2026-10-18: never inherited from the ticket's contact, never a live read).
+    // Mirrors DealQuotationDto's own four fields; contactName prints on the เรียน line, and the
+    // same name is what a draft save writes into orderedByName below.
     contactId: row.contactId ?? null,
     contactName: row.contactName,
     contactPhone: row.contactPhone ?? null,
     contactEmail: row.contactEmail ?? null,
-    // Owner-directed reversal of F2 (2026-09-26): the ผู้สั่งซื้อ SIGNATURE slot no longer reads
-    // contactName at all -- it prints ONLY this manual, optional rep-typed field (V192's
-    // ordered_by_name column), null when nobody has typed one (the dotted placeholder). Mirrors
+    // The ผู้สั่งซื้อ SIGNATURE slot prints ONLY this stored field (V192's ordered_by_name column),
+    // null = the dotted placeholder. Ruling 2026-10-18: every DRAFT save writes the resolved
+    // contact's name here (null without one) and ignores the request's orderedByName; it is never
+    // derived on read, so a row nobody re-saves keeps what it stores. Mirrors
     // DealQuotationDto#orderedByName / DealQuotationRenderAdapter#orderedByName exactly.
     orderedByName: row.orderedByName ?? null,
     // V192.3 — how to reach that person: shown on the quotation's details and
@@ -9236,11 +9260,14 @@ export const api = {
       ticket.contactId = contactId == null ? null : Number(contactId);
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
       const resnapshotAt = new Date().toISOString();
+      // The request's contact (null clears it), and its name as the signature name.
+      const contactSnapshot = resolveDealQuotationContact(ticket, { contactId: ticket.contactId });
       mockDealQuotations
         .filter((q) => q.ticketId === ticket.id && q.docStatus === 'DRAFT')
         .forEach((q) => Object.assign(q, {
           ...mockDealQuotationCustomerSnapshot(ticket),
-          ...resolveDealQuotationContact(ticket, {}),
+          ...contactSnapshot,
+          orderedByName: contactSnapshot.contactName,
           projectName: project.name,
           updatedAt: resnapshotAt,
         }));
@@ -13238,8 +13265,10 @@ export const api = {
     },
 
     async createDraft(ticketId, payload) {
-      requireSession();
+      // Mirrors DepositNoticeService.createDraftFromQuotation: requireRole(SALES_ROLES) + requireTicketOwner.
+      const user = hasRole('sales');
       const ticket = findTicketRaw(Number(ticketId));
+      if (ticket.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       // Phase 1 lifecycle gate (mirrors DepositNoticeService.createDraft).
       requireActive(ticket);
       if (!['approved', 'quotation_issued', 'document_issued'].includes(ticket.status)) fail('ดีลต้องได้รับการอนุมัติก่อน', 409);
@@ -13260,6 +13289,15 @@ export const api = {
       if (!items.length) {
         const quotation = mockPickTicketQuotationForDepositNotice(ticketId);
         if (quotation) items = mockDepositNoticeItemsFromQuotation(quotation.items);
+      }
+      if (!items.length) {
+        // Then the live new-engine quotation: findDealQuotationItemsForDeposit, ordered as
+        // mockPickLiveQuotationForItemFallback's own comment says. The picker labels legacy rows
+        // 'PRICING_REQUEST' too, so the array tells new-engine apart.
+        const live = mockPickLiveQuotationForItemFallback(Number(ticketId));
+        if (live && mockDealQuotations.includes(live.quotation)) {
+          items = mockDepositNoticeItemsFromDealQuotation(live.quotation);
+        }
       }
 
       // Branch fix: header autofill (mirrors DepositNoticeService.createDraft) — a caller-
@@ -16155,15 +16193,22 @@ export const api = {
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
       if (ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
 
+      // Mirrors OrderConfirmationService.createDepositNoticeFromQuotation: the ACCEPTED legacy
+      // quotation first, else THIS pricing request's ACCEPTED new-engine row
+      // (DealQuotationRepository.findAcceptedForPricingRequest).
       const accepted = mockCustomerQuotations.find(
         (q) => q.pricingRequestId === pr.id && q.docStatus === 'ACCEPTED');
-      if (!accepted) fail('ยังไม่มีใบเสนอราคาที่ลูกค้ายอมรับสำหรับคำขอราคานี้', 409);
-
-      // Mirrors OrderConfirmationService.createDepositNoticeFromQuotation, which delegates the
-      // mapping to DepositNoticeService.itemsFromQuotation (shared with depositNotices
-      // .createDraft's own new-chain fallback below) — items/amounts trace to the quotation,
-      // never to any sales.ticket_item row.
-      const items = mockDepositNoticeItemsFromQuotation(accepted.items);
+      const newEngine = accepted ? null : mockDealQuotations.find(
+        (q) => q.pricingRequestId === pr.id && q.origin === 'PRICING_REQUEST' && q.docStatus === 'ACCEPTED');
+      if (!accepted && !newEngine) fail('ยังไม่มีใบเสนอราคาที่ลูกค้ายอมรับสำหรับคำขอราคานี้', 409);
+      // Mirrors the zero-deposit refusal: a 0% ("ไม่รับมัดจำ") quotation has nothing to bill.
+      if (newEngine?.depositPercent === 0) {
+        fail(`ใบเสนอราคา ${newEngine.number} ระบุไม่มีมัดจำ (ชำระเต็มจำนวน) จึงออกใบแจ้งยอดเงินรับมัดจำไม่ได้`, 409);
+      }
+      const reference = (accepted ?? newEngine).number;
+      const items = accepted
+        ? mockDepositNoticeItemsFromQuotation(accepted.items)
+        : mockDepositNoticeItemsFromDealQuotation(newEngine);
 
       // Requires quotation_issued (one of DepositNoticeService.requireApprovedTicket's three
       // accepted statuses) — mirrors what confirmOrder above already left in place; calling this
@@ -16185,8 +16230,13 @@ export const api = {
         version: nextVer, docNumber: null, issueDate: null, status: 'DRAFT',
         customerName: ticket.customerName ?? '', customerTaxId: customerTaxId ?? '',
         customerAddress: customerAddress ?? '',
-        projectName: projectName ?? '', reference: accepted.number,
-        depositPercent: payload.depositPercent ?? 0.5, vatPercent: 0.07,
+        projectName: projectName ?? '', reference,
+        // Mirrors DepositNoticeService.createDraftFromQuotation: the new-engine branch bills the
+        // chosen quotation's own whole-number percent; the legacy branch keeps the old stand-in.
+        depositPercent: newEngine?.depositPercent != null
+          ? newEngine.depositPercent / 100
+          : payload.depositPercent ?? 0.5,
+        vatPercent: 0.07,
         notes, items, issuedByName: null, preparerName: 'จินตนา หาญมนตรี',
         hasPdf: false, hasXlsx: false,
         createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
@@ -16194,7 +16244,7 @@ export const api = {
       mockDepositNotices.push(doc);
 
       pushPricingRequestEvent(pr, user, 'DEPOSIT_NOTICE_DRAFTED_FROM_QUOTATION', pr.status, pr.status,
-        `สร้างร่างใบแจ้งยอดเงินรับมัดจำจากใบเสนอราคา ${accepted.number}`);
+        `สร้างร่างใบแจ้งยอดเงินรับมัดจำจากใบเสนอราคา ${reference}`);
       return delay({ depositNotice: structuredClone(doc) });
     },
 
@@ -16664,10 +16714,9 @@ export const api = {
         // Item 2 (V180, "ไม่เติม “คุณ”", owner ruling 2026-09-16) — UNticked is the only behaviour
         // on CREATE, same device as DealQuotationService#create.
         omitContactHonorific: payload.omitContactHonorific === true,
-        // Owner-directed reversal of F2 (2026-09-26) — manual, optional ผู้สั่งซื้อ signature
-        // name; blank/omitted stores null (the dotted placeholder), mirrors
-        // DealQuotationService#create's blankToNull(request.orderedByName()).
-        orderedByName: blankToNullMock(payload.orderedByName),
+        // Ruling 2026-10-18 — the ผู้สั่งซื้อ signature name is the picked contact's name (null
+        // when none); payload.orderedByName is ignored. Mirrors DealQuotationService#create.
+        orderedByName: contactSnapshot.contactName,
         // Slice 2 (S2-B1) — validated above; recipient_label carries the Thai role label for a
         // direct row (a PRICING_REQUEST row's carries its คำขอราคา's own label — Round 8).
         recipientType,
@@ -16777,6 +16826,9 @@ export const api = {
         quotationDate: now.slice(0, 10),
         ...mockDealQuotationCustomerSnapshot(ticket),
         ...contactSnapshot,
+        // Ruling 2026-10-18 — the recipient contact's name, as create() writes it. Mirrors
+        // DealQuotationService#createFromPricingRequest.
+        orderedByName: contactSnapshot.contactName,
         projectName: ticket.projectId ? (mockProjects.find((p) => p.id === ticket.projectId)?.name ?? null) : null,
         deptCode: pr.deptCode ?? null,
         unitCode: pr.unitCode ?? null,
@@ -16888,7 +16940,12 @@ export const api = {
         droppedLinkedCount = row.items.filter(
           (it) => it.pricingDecisionItemId != null && !claimedIds.has(it.id)).length;
       }
-      const contactSnapshot = resolveDealQuotationContact(ticket, payload, row);
+      // ล้าง (ruling 2026-10-18: a picked ผู้ติดต่อ may be cleared per quotation) — clearContact
+      // stores a blank snapshot whatever contactId says, so orderedByName is null below. Update
+      // only; create ignores the flag. Mirrors DealQuotationService#update.
+      const contactSnapshot = payload.clearContact === true
+        ? resolveDealQuotationContact(ticket, {})
+        : resolveDealQuotationContact(ticket, payload, row);
       const header = resolveDealQuotationV3Header(payload, row);
       const items = buildDealQuotationItems(payload.items, header.priceMode, row.items, header.documentLanguage);
       // Carry the pricing-request/decision-item LINK forward across the save, keyed by the
@@ -16908,7 +16965,7 @@ export const api = {
       const { validityMode, validityUntil } = resolveDealQuotationValidity(
         payload, header.priceMode, items, row.quotationDate, row);
       // V192.3 — refused before the row is touched, so a refused phone or email leaves the stored
-      // pair (and everything else) as it was. Same DIRECT-assignment discipline as orderedByName
+      // pair (and everything else) as it was. Same DIRECT-assignment discipline as projectName
       // below: a blank or missing value clears it.
       const orderedByContact = resolveDealQuotationOrderedByContact(payload);
       // #M7: DIRECT assignment, matching DealQuotationService.updateHeader -> DealQuotationRepository
@@ -16949,11 +17006,9 @@ export const api = {
         // above, which is out of scope here -- so "" and whitespace-only both clear the field
         // exactly as they do against the real backend.
         projectName: blankToNullMock(payload.projectName),
-        // Owner-directed reversal of F2 (2026-09-26) — same #M7 DIRECT-assignment discipline as
-        // projectName just above: the editor always sends its current value, so blankToNullMock
-        // genuinely clears it back to the dotted placeholder, mirroring
-        // DealQuotationService#update's blankToNull(request.orderedByName()).
-        orderedByName: blankToNullMock(payload.orderedByName),
+        // Ruling 2026-10-18 — re-derived from the resolved contact on every DRAFT save (null
+        // when none); payload.orderedByName is ignored. Mirrors DealQuotationService#update.
+        orderedByName: contactSnapshot.contactName,
         ...orderedByContact,
         // Sales feedback #5 (V192.1) — DELIBERATELY NOT the #M7 "missing clears it" discipline every
         // field above uses. A missing hideProjectName KEEPS the stored choice, mirroring

@@ -1123,24 +1123,22 @@ public final class DealQuotationRenderAdapter {
         return thai;
     }
 
-    // ── Owner-directed reversal of F2 (2026-09-26) ────────────────────────────────────────────
-    // F2 (2026-09-10, "use that name to auto fill in the name for signature") auto-filled the
-    // ผู้สั่งซื้อ signature slot from the deal's contact snapshot, and a 2026-09-15 production fix
-    // widened that to fall back to the CUSTOMER name when a deal recorded no separate contact.
-    // The owner has now REVERSED both of those: this slot must NEVER auto-fill from
-    // contactName/customerName any more. It always prints the dotted
-    // {@code QuotationRenderer#BLANK_NAME_PLACEHOLDER} by default — the customer signs on paper —
-    // unless a sales rep has typed a manual name into {@code DealQuotationDto#orderedByName}
-    // ({@code sales.quotation.ordered_by_name}, V192), in which case THAT exact text prints here
-    // instead. Deliberately does NOT touch #printContactPart/the "เรียน ..." greeting line above,
-    // which still reads contactName/customerName exactly as before — this reversal is scoped to
-    // the SIGNATURE slot only.
+    // ── The ผู้สั่งซื้อ signature slot ──────────────────────────────────────────────────────────
+    // Prints the stored {@code DealQuotationDto#orderedByName} ({@code sales.quotation.ordered_by_name},
+    // V192), else the dotted {@code QuotationRenderer#BLANK_NAME_PLACEHOLDER} — the customer signs
+    // on paper. It never auto-fills from contactName/customerName here (owner-directed reversal of
+    // F2, 2026-09-26). Ruling 2026-10-18: nobody types that name any more — the ผู้ติดต่อ is picked
+    // per quotation, and DealQuotationService writes that contact's name into ordered_by_name on
+    // every DRAFT save (null with no contact; the deal's own contact is never inherited). This
+    // renderer was deliberately left alone by that ruling: issued rows are never re-saved, so they
+    // print exactly what they printed. Deliberately does NOT touch #printContactPart/the "เรียน ..."
+    // greeting line above, which still reads contactName/customerName exactly as before.
 
-    /** The ผู้สั่งซื้อ signature-slot name: the rep's manually-typed {@link
-     * DealQuotationDto#orderedByName}, or null (the dotted placeholder) when they left it blank.
-     * {@code QuotationRenderer} only ever falls back to the placeholder when THIS returns null.
-     * Shared by both TH/EN documents -- {@code Signatories} is built once above for either
-     * language. */
+    /** The ผู้สั่งซื้อ signature-slot name: the stored {@link DealQuotationDto#orderedByName} (the
+     * server-derived name of the quotation's picked ผู้ติดต่อ), or null (the dotted placeholder)
+     * when it is blank. {@code QuotationRenderer} only ever falls back to the placeholder when THIS
+     * returns null. Shared by both TH/EN documents -- {@code Signatories} is built once above for
+     * either language. */
     static String orderedByName(DealQuotationDto quotation) {
         return blank(quotation.orderedByName()) ? null : quotation.orderedByName().trim();
     }

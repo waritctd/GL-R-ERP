@@ -358,7 +358,7 @@ export function FinanceDealPage() {
               <span className="tabular-nums">{deal.code}</span>{' '}<span className="font-bold">{deal.title}</span>
             </h1>
             <p className="m-0 grid min-w-0 gap-0.5 text-sm text-text-muted [overflow-wrap:anywhere]">
-              {[deal.customerName, deal.projectName, deal.contactName].filter(Boolean).map((part, i) => (
+              {[deal.customerName, deal.projectName].filter(Boolean).map((part, i) => (
                 <span key={i} className="min-w-0">{part}</span>
               ))}
             </p>
