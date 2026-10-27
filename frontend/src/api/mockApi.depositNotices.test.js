@@ -317,7 +317,8 @@ describe('mockApi.pricingRequests.createDepositNoticeFromQuotation — new-engin
       depositPercent: 0, fullPaymentTerm: 'BEFORE_DELIVERY',
     });
     expect(accepted.depositPercent).toBe(0);
-    const refusal = { status: 409, message: expect.stringContaining(`ใบเสนอราคา ${accepted.number} ระบุไม่มีมัดจำ`) };
+    const refusal = { status: 409, message: expect.stringMatching(
+      new RegExp(`ใบเสนอราคา ${accepted.number} ระบุไม่มีมัดจำ|ดีลนี้ไม่ต้องเก็บมัดจำ`)) }; // whichever guard runs first
     await expect(api.pricingRequests.createDepositNoticeFromQuotation(prId, {})).rejects.toMatchObject(refusal);
     await expect(api.depositNotices.createDraft(ticketId, {})).rejects.toMatchObject(refusal);
     const { depositNotices } = await api.depositNotices.listByTicket(ticketId);
@@ -505,8 +506,9 @@ describe('mock deposit-percent defaults match the Java PDFs', () => {
 describe('mockApi.depositNotices.issue refuses a 0-baht notice', () => {
   it('409s, and the draft stays DRAFT with no number', async () => {
     const { ticketId } = await driveTicketToNewEngineAcceptedQuotation({ depositPercent: 30 });
-    // The mock honours a caller's depositPercent where Java ignores it: stands in for the Java test's jdbc force.
-    const { depositNotice: draft } = await api.depositNotices.createDraft(ticketId, { depositPercent: 0 });
+    // create ignores a typed percent now; the mock's update still honours one, which stands in for the Java test's jdbc insert.
+    const { depositNotice: created } = await api.depositNotices.createDraft(ticketId, {});
+    const { depositNotice: draft } = await api.depositNotices.update(created.id, { depositPercent: 0 });
     expect(draft.depositAmount).toBe(0);
     await expect(api.depositNotices.issue(draft.id))
       .rejects.toMatchObject({ status: 409, message: expect.stringContaining('0 บาท') });

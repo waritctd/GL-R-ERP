@@ -276,17 +276,19 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         orderConfirmation.confirmOrder(pricingRequestId,
             new OrderConfirmationRequests.ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
 
+        // Whichever guard runs first answers: the ticket route hits the policy guard (the confirmation
+        // already moved the policy to NOT_REQUIRED), the pricing-request route the quotation guard.
         String refusal = "ใบเสนอราคา " + accepted.number() + " ระบุไม่มีมัดจำ";
         assertThatThrownBy(() -> orderConfirmation.createDepositNoticeFromQuotation(pricingRequestId,
                 new OrderConfirmationRequests.CreateDepositNoticeFromQuotationRequest(null), salesActor))
             .isInstanceOf(ApiException.class)
             .hasFieldOrPropertyWithValue("status", HttpStatus.CONFLICT)
-            .hasMessageContaining(refusal);
+            .hasMessageMatching("(?s).*(" + java.util.regex.Pattern.quote(refusal) + "|ไม่ต้องเก็บมัดจำ).*");
         assertThatThrownBy(() -> depositNoticeService.createDraft(ticketId,
                 new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), salesActor))
             .isInstanceOf(ApiException.class)
             .hasFieldOrPropertyWithValue("status", HttpStatus.CONFLICT)
-            .hasMessageContaining(refusal);
+            .hasMessageMatching("(?s).*(" + java.util.regex.Pattern.quote(refusal) + "|ไม่ต้องเก็บมัดจำ).*");
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sales.deposit_notice WHERE ticket_id = :id",
             Map.of("id", ticketId), Long.class)).isZero();
     }
@@ -542,7 +544,14 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         // Stands in for a deal confirmed before the sync existed.
         jdbc.update("UPDATE sales.ticket SET deposit_policy = 'REQUIRED', deposit_policy_reason = NULL WHERE ticket_id = :id",
             Map.of("id", ticketId));
-        DepositNoticeDto draft = depositNoticeService.createDraft(ticketId, emptyDepositDraft(), salesActor);
+        // Inserted directly: both draft routes now refuse a 0% deal, so a legacy 0-baht draft can
+        // only exist as data from before this fix.
+        Long draftId = jdbc.queryForObject("""
+            INSERT INTO sales.deposit_notice (ticket_id, version, customer_name, deposit_percent, subtotal,
+                                              deposit_amount, vat_percent, vat_amount, total_payable)
+            VALUES (:id, 1, 'x', 0, 0, 0, 0.07, 0, 0) RETURNING deposit_notice_id""",
+            Map.of("id", ticketId), Long.class);
+        DepositNoticeDto draft = depositNoticeService.getById(draftId, salesActor);
         assertThat(draft.depositAmount()).isEqualByComparingTo("0");
         long sequenceBefore = depositNoticeSequence();
 
