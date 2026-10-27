@@ -17,8 +17,9 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  * DepositNoticeService#itemsFromGoverning} uses once the legacy {@code
  * ticket_item.approved_price} path yields nothing. Mockito cannot exercise this: the job is the
  * SQL (the status/origin filter, the {@code ORDER BY} preference, the column mapping), so this
- * needs the real queries against real Postgres. Which quotation wins (every origin, status and
- * insertion order) is pinned in {@code DepositNoticeRepositoryDepositPercentIntegrationTest}.
+ * needs the real queries against real Postgres. Which quotation wins (the ranking across origins
+ * and insertion order) is pinned in {@code DepositNoticeRepositoryDepositPercentIntegrationTest};
+ * this class's non-live test is the only pin for some excluded statuses, so it is not a duplicate.
  */
 class DepositNoticeDealQuotationAutofillIntegrationTest extends AbstractPostgresIntegrationTest {
 
