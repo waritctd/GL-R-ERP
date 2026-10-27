@@ -359,6 +359,20 @@ export const REVISION_RECIPIENT_LOCKED_MESSAGE =
 export const revisionRecipientRefusal = (storedLabel) =>
   `${REVISION_RECIPIENT_LOCKED_HEAD} (${storedLabel}) — ${REVISION_RECIPIENT_LOCKED_TAIL}`;
 
+/** pricingRequestId -> that request's newest PRICING_REQUEST-origin quotation, from a deal's
+ * quotation list (DealQuotationDto rows) — the `quotationByRequest` salesActions.nextSalesAction
+ * reads. A cancelled row is skipped: a revision draft cancelled after ⋯ แก้ใบเสนอราคา must not
+ * stand in for the quotation it revised (the deal page and the request page read it the same way). */
+export function newestQuotationByRequest(rows) {
+  const byRequest = new Map();
+  for (const q of rows) {
+    if (q.origin !== 'PRICING_REQUEST' || q.pricingRequestId == null || q.docStatus === 'CANCELLED') continue;
+    const held = byRequest.get(q.pricingRequestId);
+    if (!held || q.id > held.id) byRequest.set(q.pricingRequestId, q);
+  }
+  return byRequest;
+}
+
 /** True when `pricingRequests` holds a live request ON `ticketId` (ids compared as numbers). */
 export function hasLivePricingRequest(pricingRequests, ticketId) {
   if (!Array.isArray(pricingRequests) || ticketId == null) return false;

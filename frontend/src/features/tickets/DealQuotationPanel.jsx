@@ -38,10 +38,17 @@ function generateClientRequestId() {
 const QUOTATION_TAIL_STATUSES = new Set(['APPROVED_FOR_QUOTATION', 'QUOTATION_ISSUED', 'QUOTATION_ACCEPTED']);
 
 function pickRelevantPricingRequest(pricingRequests = []) {
-  return pricingRequests
+  const tail = pricingRequests
     .filter((pr) => QUOTATION_TAIL_STATUSES.has(pr.status))
-    .sort((a, b) => b.id - a.id)[0] ?? null;
+    .sort((a, b) => b.id - a.id);
+  // The deal's order lives on its accepted request (one per deal, R8): the panel shows and confirms
+  // that one, not a later party's newer request (review V2).
+  return tail.find((pr) => pr.status === 'QUOTATION_ACCEPTED') ?? tail[0] ?? null;
 }
+
+// An old-engine quotation that no longer stands (CustomerQuotationRepository#hasLiveQuotation's
+// non-live set): it does not hide the request's new-engine quotation (review V6).
+const DEAD_CUSTOMER_QUOTATION_STATUSES = new Set(['CANCELLED', 'SUPERSEDED', 'EXPIRED', 'REJECTED']);
 
 /**
  * "ราคาและใบเสนอราคา" (Phase 2 Slice S2 — see
@@ -189,7 +196,7 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
 
         {quotationsQuery.isLoading ? (
           <p className="text-sm text-text-muted">กำลังโหลดใบเสนอราคาลูกค้า…</p>
-        ) : !current && prQuotation ? (
+        ) : prQuotation && !(current && !DEAD_CUSTOMER_QUOTATION_STATUSES.has(current.docStatus)) ? (
           <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-surface p-3">
             <span className="font-mono text-sm font-bold">{prQuotation.number}</span>
             <StatusBadge tone={prQuotationStatus.tone}>

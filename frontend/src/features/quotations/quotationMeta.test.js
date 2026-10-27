@@ -1955,3 +1955,15 @@ describe('hasSpecialPricing (#V178)', () => {
     expect(hasSpecialPricing('NET', undefined)).toBe(false);
   });
 });
+
+describe('newestQuotationByRequest — a deal\'s quotation map (deal page, request page)', () => {
+  const row = (id, pricingRequestId, docStatus) => ({ id, pricingRequestId, docStatus, origin: 'PRICING_REQUEST' });
+
+  // Clean-review finding: a revision draft cancelled after ⋯ แก้ใบเสนอราคา used to become the
+  // request's quotation, leaving the deal page with no button at all.
+  it('a cancelled draft never stands in for the quotation it revised: the newest row that is not CANCELLED', () => {
+    const byRequest = meta.newestQuotationByRequest([row(10, 1, 'ISSUED'), row(11, 1, 'CANCELLED'), row(12, 2, 'CANCELLED')]);
+    expect(byRequest.get(1)).toMatchObject({ id: 10, docStatus: 'ISSUED' });
+    expect(byRequest.has(2)).toBe(false);
+  });
+});

@@ -72,7 +72,7 @@ import {
 import { useUnitBasisCatalog } from './unitBasisCatalog.js';
 import { buttonVariants } from '../../components/common/Button.jsx';
 import { cn } from '../../utils/cn.js';
-import { acceptOutcomeConfirmCopy, PRICE_MODE_OPTIONS } from '../quotations/quotationMeta.js';
+import { acceptOutcomeConfirmCopy, newestQuotationByRequest, PRICE_MODE_OPTIONS } from '../quotations/quotationMeta.js';
 import { SearchableCombobox } from '../../components/common/SearchableCombobox.jsx';
 // B6 (GLA-135): reuses the catalog page's own add-factory dialog rather than a second, drifting
 // copy of the same five fields + validation — see ImportFactoryPicker's own comment below.
@@ -1009,7 +1009,19 @@ export function PricingRequestDetailPage({ user, showToast }) {
   // doomed request and surface a raw error where the panel should simply not query at all.
   const dealQuotationForPrQuery = useQuery({
     queryKey: queryKeys.dealQuotationForPricingRequest(pricingRequestId),
-    queryFn: () => api.dealQuotations.findForPricingRequest(pricingRequestId).then((r) => r.quotation ?? null),
+    // Review V4: the server's newest row may be a draft cancelled after แก้ใบเสนอราคา — then the
+    // quotation it revised is still this request's, read from the deal's list the way the deal page
+    // reads it (newest row that is not CANCELLED). If that list is not readable, the server's row.
+    queryFn: async () => {
+      const quotation = (await api.dealQuotations.findForPricingRequest(pricingRequestId)).quotation ?? null;
+      if (quotation?.docStatus !== 'CANCELLED') return quotation;
+      try {
+        const rows = (await api.dealQuotations.listForTicket(Number(detailQuery.data?.summary?.ticketId))).items ?? [];
+        return newestQuotationByRequest(rows).get(pricingRequestId) ?? null;
+      } catch {
+        return quotation;
+      }
+    },
     enabled: Number.isFinite(pricingRequestId) && canViewCustomerQuotation(user, detailQuery.data?.summary)
       && !isImport(user),
   });

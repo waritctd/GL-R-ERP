@@ -214,28 +214,30 @@ function isRedo(pr, quotation) {
     || (DECLINED_DOC_STATUSES.has(quotation?.docStatus) && !isDesignerOrOwner(pr));
 }
 
-/** pricingRequestId -> that request's newest PRICING_REQUEST-origin quotation, from the deal's
- * quotation list (DealQuotationDto rows). The `quotationByRequest` nextSalesAction reads. A
- * cancelled row is skipped: a revision draft cancelled after ⋯ แก้ใบเสนอราคา must not stand in
- * for the quotation it revised. */
-export function newestQuotationByRequest(rows) {
-  const byRequest = new Map();
-  for (const q of rows) {
-    if (q.origin !== 'PRICING_REQUEST' || q.pricingRequestId == null || q.docStatus === 'CANCELLED') continue;
-    const held = byRequest.get(q.pricingRequestId);
-    if (!held || q.id > held.id) byRequest.set(q.pricingRequestId, q);
-  }
-  return byRequest;
-}
-
 /** The quotation awaiting ผจก.ขาย/CEO on one of the deal's live requests (its first one, or a
  * revision). A cancelled request keeps its quotation PENDING_APPROVAL on the server; that one is
- * not the deal's to wait on or approve. */
+ * not the deal's to wait on or approve — nor is any once a request is accepted (the deal's order). */
 export function pendingRequestQuotation(deal, pricingRequests, quotationByRequest) {
-  return pricingRequests
-    .filter((pr) => pr.ticketId === deal.id && !DEAD_PRICING_REQUEST_STATUSES.has(pr.status))
+  const ownPrs = pricingRequests.filter((pr) => pr.ticketId === deal.id);
+  if (ownPrs.some((pr) => pr.status === 'QUOTATION_ACCEPTED')) return undefined;
+  return ownPrs
+    .filter((pr) => !DEAD_PRICING_REQUEST_STATUSES.has(pr.status))
     .map((pr) => quotationByRequest?.get(pr.id))
     .find((quotation) => quotation?.docStatus === 'PENDING_APPROVAL');
+}
+
+/** Owner ruling 2026-10-27 ("always in ⋯"): the sent designer/owner quotation whose outcome is still
+ * open (ISSUED, or QUOTATION_ISSUED with no row) — furthest along the route — offered as
+ * บันทึกผลใบเสนอราคา on its request page beside whatever the primary is. Null otherwise. */
+export function outcomeSecondaryAction(deal, pricingRequests, quotationByRequest) {
+  const open = pricingRequests
+    .filter((pr) => pr.ticketId === deal.id && pr.status === 'QUOTATION_ISSUED' && isDesignerOrOwner(pr)
+      && (quotationByRequest?.get(pr.id) == null || quotationByRequest.get(pr.id).docStatus === 'ISSUED'))
+    .sort(byRoute)
+    .at(-1);
+  return open
+    ? { key: SALES_ACTION.RECORD_QUOTATION_OUTCOME, label: ACTION_LABEL[SALES_ACTION.RECORD_QUOTATION_OUTCOME], pricingRequestId: open.id }
+    : null;
 }
 
 /**
@@ -262,15 +264,12 @@ function routeChoiceAction(ownPrs, quotationOf, offRouteParties) {
       ? { key: SALES_ACTION.SUBMIT_PRICING_REQUEST, label: `ส่งคำขอราคาถึง${PARTY_LABEL[draft.recipientType]}`, pricingRequestId: draft.id }
       : null;
   }
-  const anchorQuotation = quotationOf(anchor);
   return {
     key: SALES_ACTION.QUOTE_NEXT_PARTY,
     label: `เสนอราคา${PARTY_LABEL[parties[0]]}`,
     parties,
     anchorParty: anchor.recipientType,
-    anchorDeclined: DECLINED_DOC_STATUSES.has(anchorQuotation?.docStatus),
-    // Its outcome is still open (ISSUED, or no row): the page offers to record it in the ⋯ menu.
-    outcomeRequestId: anchorQuotation == null || anchorQuotation.docStatus === 'ISSUED' ? anchor.id : null,
+    anchorDeclined: DECLINED_DOC_STATUSES.has(quotationOf(anchor)?.docStatus),
   };
 }
 
@@ -369,11 +368,15 @@ export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = nul
   // the request status alone then decides, as before.
   const quotationOf = (pr) => quotationByRequest?.get(pr.id);
 
+  // An acceptance is the order (bucket 3), so nothing is quoted after it — no later request's
+  // quotation, route choice or redo once any request is accepted (spec B1).
+  const accepted = ownPrs.some((pr) => pr.status === 'QUOTATION_ACCEPTED');
+
   // 2. A price is approved and ready to quote — canCreateCustomerQuotation's
   //    own gate (pricingRequestMeta.js) is exactly pr.status === 'APPROVED_FOR_QUOTATION'.
   //    "เสนอใบราคา<party>" writes the new-engine quotation from that request (owner ruling R2); a
   //    DRAFT already written is opened instead (`to`), and one awaiting approval waits (below).
-  const approved = ownPrs.find((pr) => pr.status === 'APPROVED_FOR_QUOTATION'
+  const approved = !accepted && ownPrs.find((pr) => pr.status === 'APPROVED_FOR_QUOTATION'
     && quotationOf(pr)?.docStatus !== 'PENDING_APPROVAL');
   if (approved) return issueQuotationAction(approved, quotationOf(approved));
 
@@ -398,10 +401,6 @@ export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = nul
       quotationNumber: pending.number,
     };
   }
-
-  // An acceptance is the order (bucket 3), so nothing is quoted after it: a stale request's route
-  // choice or redo would offer a quotation once the order is confirmed (spec B1).
-  const accepted = ownPrs.some((pr) => pr.status === 'QUOTATION_ACCEPTED');
 
   // A designer/owner quotation went out: pick the next party (see routeChoiceAction).
   const routeAction = accepted ? null : routeChoiceAction(ownPrs, quotationOf, offRouteParties);

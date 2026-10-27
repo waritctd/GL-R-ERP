@@ -129,6 +129,11 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
       setCreateRecipientType(opts?.recipientType ?? null);
       setCreateOpen(true);
     },
+    // The deal page's "ส่งคำขอราคาถึง<party>": the draft's own ส่งให้ฝ่ายนำเข้า, under the same gate.
+    submit: (id) => {
+      const pr = requests.find((request) => request.id === id);
+      if (pr && canSubmitPricingRequest(user, pr) && !submitMutation.isPending) submitMutation.mutate(id);
+    },
   }));
 
   return (

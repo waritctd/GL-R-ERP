@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { cn } from '../../utils/cn.js';
 import { useIsMobile } from '../../hooks/useIsMobile.js';
@@ -68,8 +68,16 @@ export function OverflowMenu({
   // Extra attributes for the trigger button (e.g. a data-testid / data-action e2e hook); spread first,
   // so they can never override the menu's own handlers or ARIA.
   triggerProps,
+  // Told when the menu opens and closes (also closed on unmount) — the deal page holds its sticky
+  // header still while one is open, since condensing it remounts the trigger and closes the menu.
+  onOpenChange,
 }) {
   const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!open) return undefined;
+    onOpenChange?.(true);
+    return () => onOpenChange?.(false);
+  }, [open, onOpenChange]);
   const triggerRef = useRef(null);
   const menuRef = useRef(null);
   const isMobile = useIsMobile();
@@ -122,7 +130,7 @@ export function OverflowMenu({
       if (event.key === 'Escape') {
         event.stopPropagation();
         setOpen(false);
-        triggerRef.current?.focus();
+        triggerRef.current?.focus({ preventScroll: true });
         return;
       }
       // Tab/Shift+Tab: close the menu and let the browser's own default Tab
@@ -187,7 +195,7 @@ export function OverflowMenu({
           onClick={() => setOpen((v) => !v)}
         >
           {triggerIcon ? <Icon name={triggerIcon} size={18} /> : null}
-          <span>{triggerLabel}</span>
+          <span className="inline-flex items-center gap-[7px]">{triggerLabel}</span>
         </button>
       ) : (
         <Button

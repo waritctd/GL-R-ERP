@@ -19,6 +19,8 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       tickets: { list: vi.fn() },
       pricingRequests: { queue: vi.fn() },
       commissions: { monthlySummary: vi.fn() },
+      // Each quoted deal's quotation list (the same call the deal page makes) — none by default.
+      dealQuotations: { listForTicket: vi.fn().mockResolvedValue({ items: [] }) },
       // GET /api/meta/deal-stages: each deal's route (catalog.routes by entryChannel) for the
       // worklist's route choice. The same canned payload mockApi serves, pinned to DealRoute.java by
       // stageCatalog.test.js.
@@ -350,20 +352,30 @@ describe('SalesOverview — the next party after a designer quotation is sent fo
     { id: 811, code: 'DL-2026-0811', customerName: 'บริษัท ผู้ออกแบบนำ จำกัด', title: 'ผู้ออกแบบนำ', lifecycle: 'ACTIVE', entryChannel: 'DESIGNER_LED', salesStage: 'QUOTE_DESIGN_SIDE', amountPayable: 0, stale: false, nextFollowUpAt: null, stageUpdatedAt: at },
     // A designer quotation on a buyer-direct deal is off its route (allowed); the owner is off it too.
     { id: 812, code: 'DL-2026-0812', customerName: 'บริษัท ผู้ซื้อติดต่อตรง จำกัด', title: 'ผู้ซื้อติดต่อตรง', lifecycle: 'ACTIVE', entryChannel: 'BUYER_DIRECT', salesStage: 'SPEC_APPROVED', amountPayable: 0, stale: false, nextFollowUpAt: null, stageUpdatedAt: at },
+    { id: 813, code: 'DL-2026-0813', customerName: 'บริษัท ผู้ออกแบบขอแก้ จำกัด', title: 'ผู้ออกแบบขอแก้', lifecycle: 'ACTIVE', entryChannel: 'DESIGNER_LED', salesStage: 'QUOTE_DESIGN_SIDE', amountPayable: 0, stale: false, nextFollowUpAt: null, stageUpdatedAt: at },
   ];
   const sentRequests = [
     { id: 81, ticketId: 811, status: 'QUOTATION_ISSUED', recipientType: 'DESIGNER', orderConfirmedAt: null },
     { id: 82, ticketId: 812, status: 'QUOTATION_ISSUED', recipientType: 'DESIGNER', orderConfirmedAt: null },
+    { id: 83, ticketId: 813, status: 'QUOTATION_ISSUED', recipientType: 'DESIGNER', orderConfirmedAt: null },
   ];
+  // Each request's newest quotation, read from its deal's quotation list as the deal page reads it
+  // (review V11): the designer on 813 asked for changes.
+  const docStatusByRequest = { 81: 'ISSUED', 82: 'ISSUED', 83: 'REVISION_REQUESTED' };
 
   beforeEach(() => {
     vi.clearAllMocks();
     api.tickets.list.mockResolvedValue({ tickets: routeDeals });
     api.pricingRequests.queue.mockResolvedValue({ items: sentRequests });
     api.commissions.monthlySummary.mockResolvedValue({ summary: defaultCommissionSummary });
+    api.dealQuotations.listForTicket.mockImplementation((ticketId) => Promise.resolve({
+      items: sentRequests.filter((pr) => pr.ticketId === ticketId).map((pr) => ({
+        id: 9000 + pr.id, origin: 'PRICING_REQUEST', pricingRequestId: pr.id, docStatus: docStatusByRequest[pr.id],
+      })),
+    }));
   });
 
-  it('designer-led -> เสนอราคาเจ้าของโครงการ; buyer-direct, whose route skips the owner -> เสนอราคาผู้ซื้อ', async () => {
+  it('designer-led -> เสนอราคาเจ้าของโครงการ; buyer-direct, whose route skips the owner -> เสนอราคาผู้ซื้อ; a designer quotation being redone -> เสนอใบราคาผู้ออกแบบ', async () => {
     renderOverview();
     const worklist = within(worklistSection());
     await worklist.findByText('บริษัท ผู้ออกแบบนำ จำกัด');
@@ -373,6 +385,7 @@ describe('SalesOverview — the next party after a designer quotation is sent fo
     await waitFor(() => {
       expect(badgeOf('บริษัท ผู้ออกแบบนำ จำกัด').textContent).toBe('เสนอราคาเจ้าของโครงการ');
       expect(badgeOf('บริษัท ผู้ซื้อติดต่อตรง จำกัด').textContent).toBe('เสนอราคาผู้ซื้อ');
+      expect(badgeOf('บริษัท ผู้ออกแบบขอแก้ จำกัด').textContent).toBe('เสนอใบราคาผู้ออกแบบ');
     });
   });
 });

@@ -111,6 +111,7 @@ vi.mock('../../api/index.js', () => ({
       // every existing test in this file keeps seeing the SAME legacy-only panel state as before
       // this fix, rather than a leaked override from an earlier test or a thrown TypeError.
       findForPricingRequest: vi.fn(),
+      listForTicket: vi.fn(),
       createFromPricingRequest: vi.fn(),
       // GLA-123 slice S3 — the new engine's own outcome-recording endpoint, mirrors
       // pricingRequests.recordCustomerQuotationOutcome above.
@@ -3228,11 +3229,16 @@ describe('PricingRequestDetailPage GLA-123 slice S3: new-engine (dealQuotationFo
   }
 
   // Owner ruling 2026-10-27 (spec B2): a quotation sent to the BUYER is the last party's — accepting
-  // it is the order as before, one click, no question asked.
-  it('ISSUED, a buyer request: ลูกค้ายอมรับ records ACCEPTED at once via dealQuotations.recordOutcome (no confirmation step)', async () => {
-    const issued = newEngineQuotation({ docStatus: 'ISSUED' });
+  // it is the order as before, one click, no question asked. Review V4: a revision draft cancelled
+  // after แก้ใบเสนอราคา is the server's newest row; the page still records on the quotation it revised.
+  it('ISSUED, a buyer request: ลูกค้ายอมรับ records ACCEPTED at once via dealQuotations.recordOutcome (no confirmation step), even behind a cancelled revision draft', async () => {
+    const issued = newEngineQuotation({ docStatus: 'ISSUED', origin: 'PRICING_REQUEST', pricingRequestId: 501 });
+    const cancelledRevision = newEngineQuotation({
+      id: 9102, number: 'QT-2026-0101-2', docStatus: 'CANCELLED', origin: 'PRICING_REQUEST', pricingRequestId: 501, parentQuotationId: 9101,
+    });
     const request = buildRequest({ summary: { recipientType: 'BUYER', recipientLabel: 'ผู้รับเหมา ก.' } });
-    api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: issued });
+    api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: cancelledRevision });
+    api.dealQuotations.listForTicket.mockResolvedValue({ items: [issued, cancelledRevision] });
     renderDetailPage({ user: salesOwner, request });
     await waitForLoaded(request);
     await screen.findByText(issued.number);

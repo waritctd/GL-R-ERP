@@ -10,7 +10,7 @@
  * while the deal holds a live คำขอราคา (and while those load); the route-comparison helper line
  * already goes with it. No new control, colour or layout. pre-emit critique: P4 H4 E4 S4 R4 V5.
  */
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
@@ -54,14 +54,14 @@ import { DealMoneyTimeline } from './DealMoneyTimeline.jsx';
 import { DealRemainingInvoiceCard } from './DealRemainingInvoiceCard.jsx';
 import { DealQuotationPanel } from './DealQuotationPanel.jsx';
 import {
-  canReviseDealQuotation, canViewDealQuotation, CONFIRM_ORDER_FROM_QUOTATION_COPY,
+  canReviseDealQuotation, canViewDealQuotation, CONFIRM_ORDER_FROM_QUOTATION_COPY, newestQuotationByRequest,
 } from '../quotations/quotationMeta.js';
 import { DealStagePanel } from './DealStagePanel.jsx';
 import { DealStateHeader } from './DealStateHeader.jsx';
 import { DealTrackingPanel } from './DealTrackingPanel.jsx';
 import { visibleSections } from './salesViewScope.js';
 import { nextOnRoute, offRoutePartiesFor, useStageCatalog } from './stageCatalog.js';
-import { newestQuotationByRequest, PARTY_LABEL } from './salesActions.js';
+import { PARTY_LABEL } from './salesActions.js';
 import {
   resolveTicketDetailTab, TICKET_DETAIL_TABS, visibleTicketDetailTabIds,
 } from './ticketDetailTabs.js';
@@ -124,8 +124,6 @@ const IN_PAGE_JUMP_TARGET = {
   confirmDeposit: 'deal-deposit-panel',
   confirmFinalPayment: 'deal-deposit-panel',
   confirmCloseReady: 'deal-deposit-panel',
-  // A later party's private DRAFT request: its ส่งให้ฝ่ายนำเข้า is in the PricingRequestPanel.
-  submit_pricing_request: 'pricing-request-panel',
 };
 
 // Ticket-detail IA rebuild Phase 2: every one of the jump targets above (and
@@ -147,7 +145,6 @@ const JUMP_TARGET_TAB = {
   'deal-tracking-panel': 'deal',
   'deal-fulfilment-panel': 'fulfilment',
   'deal-deposit-panel': 'money',
-  'pricing-request-panel': 'items',
 };
 
 function scrollToSection(id) {
@@ -324,6 +321,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // condense trigger above and does not affect scrollTop/scrollHeight.
   const ticketStickyChromeRef = useRef(null);
   const [ticketChromeCondensed, setTicketChromeCondensed] = useState(false);
+  // Review V10: an open menu in the sticky header holds it as it is — condensing moves the header's
+  // buttons to another place, which remounts the menu and closes it.
+  const headerMenuOpenRef = useRef(false);
+  const onHeaderMenuOpenChange = useCallback((open) => { headerMenuOpenRef.current = open; }, []);
 
   // Imperative handle onto DealStagePanel (see its own doc comment): the
   // header overflow menu / bottom danger zone trigger its modals from here,
@@ -726,12 +727,22 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     },
     onError: (error) => showToast('error', error.message || 'ดำเนินการไม่สำเร็จ'),
   });
+  // A refusal (legacy price mode, an old-engine quotation, …): both engines' controls are on the
+  // request page. Remembered in the query cache for the session, so the next click goes straight
+  // there instead of failing again (review V12).
+  const quoteOnRequestPageKey = (pricingRequestId) => ['pricingRequests', 'quoteOnRequestPage', Number(pricingRequestId)];
   function createQuotationFromRequest(pricingRequestId) {
+    if (queryClient.getQueryData(quoteOnRequestPageKey(pricingRequestId))) {
+      navigate(`/pricing-requests/${pricingRequestId}`);
+      return;
+    }
     createQuotationFromRequestMutation.mutate(pricingRequestId, {
       onSuccess: (res) => { if (res?.quotation?.id) navigate(`/quotations/${res.quotation.id}`); },
-      // A refusal (legacy price mode, an old-engine quotation, …): both engines' controls are on the
-      // request page.
-      onError: (error) => { if (error?.status === 409) navigate(`/pricing-requests/${pricingRequestId}`); },
+      onError: (error) => {
+        if (error?.status !== 409) return;
+        queryClient.setQueryData(quoteOnRequestPageKey(pricingRequestId), true);
+        navigate(`/pricing-requests/${pricingRequestId}`);
+      },
     });
   }
 
@@ -838,6 +849,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     };
     const onIntersect = (entries) => {
       if (mobileQuery?.matches) { setTicketChromeCondensed(false); return; }
+      if (headerMenuOpenRef.current) return;
       for (const entry of entries) {
         // Back at the very top → expand. Scrolled past the lower sentinel → condense, but only
         // when there is room (Gate A). Anything in the band between the two sentinels leaves the
@@ -859,6 +871,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     // path drives, exactly as before.
     const reevaluate = () => {
       if (mobileQuery?.matches) { setTicketChromeCondensed(false); return; }
+      if (headerMenuOpenRef.current) return;
       if (!scroller || scroller.clientHeight === 0) return;
       if (!hasRoomToCondense()) { setTicketChromeCondensed(false); return; }
       const viewTop = scroller.getBoundingClientRect().top;
@@ -1248,11 +1261,15 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // while the list loads: requests then go by status.
   const quotationByRequest = newestQuotationByRequest(dealQuotationRows);
   // The deal's served route (catalog.routes for its entryChannel); null until the catalog loads.
-  const offRouteParties = offRoutePartiesFor(stageCatalog, summary.entryChannel);
+  // Review V5: until the quotation list is read, a sent designer quotation may be being redone —
+  // treated like an unknown route (no route choice; ⋯ still offers its outcome).
+  const offRouteParties = dealQuotationsQuery.isSuccess ? offRoutePartiesFor(stageCatalog, summary.entryChannel) : null;
   const workState = resolveWorkState(user, summary, pricingRequests, { reviseTarget, offRouteParties, quotationByRequest });
   // PR A: at the owner/buyer quote stages revise is an ADDITIONAL action (header "⋯" menu), never a
   // replacement for the primary บันทึกผลใบเสนอราคา — the client may simply accept the original.
-  const reviseSecondary = secondaryWorkActions(user, summary, pricingRequests, { reviseTarget, offRouteParties, quotationByRequest })[0] ?? null;
+  const secondaryActions = secondaryWorkActions(user, summary, pricingRequests, { reviseTarget, offRouteParties, quotationByRequest });
+  const outcomeSecondary = secondaryActions.find((action) => action.key === 'record_quotation_outcome') ?? null;
+  const reviseSecondary = secondaryActions.find((action) => action.key === 'revise_quotation') ?? null;
   const workStateAction = workState.action;
   const lost = summary.lifecycle === 'CLOSED_LOST';
   const isActiveLifecycle = (summary.lifecycle ?? 'ACTIVE') === 'ACTIVE';
@@ -1369,9 +1386,20 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           triggerProps={{ 'data-testid': 'ticket-primary-action', 'data-action': actionKey }}
           align="end"
           mobilePlacement="up"
+          onOpenChange={onHeaderMenuOpenChange}
         />
       ) : (
         <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => openFor(parties[0])}>
+          {workStateAction.label}
+        </Button>
+      );
+      stickyPrimaryLabel = workStateAction.label;
+    } else if (actionKey === 'submit_pricing_request') {
+      // A later party's private DRAFT: sent to import through PricingRequestPanel's own ส่งให้ฝ่ายนำเข้า
+      // (its ref, on the items tab) rather than a scroll jump the deal page pulls back to the top.
+      stickyPrimaryAction = (
+        <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey}
+          onClick={() => runOnTab('items', () => pricingRequestPanelRef.current?.submit(workStateAction.pricingRequestId))}>
           {workStateAction.label}
         </Button>
       );
@@ -1591,12 +1619,12 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     },
     canHoldDeal && { key: 'hold', label: 'พักดีลไว้', disabled: actionLoading, onSelect: handleOpenHold },
     canDormantDeal && { key: 'dormant', label: 'พัก dormant', disabled: actionLoading, onSelect: handleOpenDormant },
-    // Owner ruling 2026-10-27 (A4): beside the route choice, the sent designer/owner quotation's
-    // outcome (a rejection, a revision request) is recorded on its request page.
-    workStateAction?.key === 'quote_next_party' && workStateAction.outcomeRequestId != null && {
+    // Owner ruling 2026-10-27 ("always in ⋯"): a sent designer/owner quotation's outcome is recorded on
+    // its request page, whatever the primary is.
+    outcomeSecondary && {
       key: 'recordQuotationOutcome',
-      label: 'บันทึกผลใบเสนอราคา',
-      onSelect: () => navigate(`/pricing-requests/${workStateAction.outcomeRequestId}`),
+      label: outcomeSecondary.label,
+      onSelect: () => navigate(`/pricing-requests/${outcomeSecondary.pricingRequestId}`),
     },
     reviseSecondary && {
       key: 'reviseQuotation',
@@ -1771,6 +1799,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             overflowItems={overflowItems}
             onRefresh={refreshTicket}
             condensed={ticketChromeCondensed}
+            onMenuOpenChange={onHeaderMenuOpenChange}
           />
           <div className="border-t border-border bg-surface px-4 sm:px-5">
             {/* onSurface: this strip is on a white card, unlike the two

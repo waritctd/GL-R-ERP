@@ -421,24 +421,53 @@ describe('resolveWorkState — the route-choice line and the approval wait (owne
     },
   );
 
+  // Owner ruling 2026-10-27 ("always in ⋯"): while a sent designer/owner quotation has no outcome,
+  // the ⋯ menu offers บันทึกผลใบเสนอราคา on its request page, whatever the primary is.
+  it.each([
+    ['beside the route choice', [], 'ISSUED', true],
+    ['while the owner\'s request is with import/CEO', [request(6, 'OWNER', 'SUBMITTED')], 'ISSUED', true],
+    ['not once the designer said no', [], 'REJECTED', false],
+  ])('a sent designer quotation, ⋯ บันทึกผลใบเสนอราคา %s', (_label, later, docStatus, offered) => {
+    const prs = [request(5, 'DESIGNER', 'QUOTATION_ISSUED'), ...later];
+    const keys = secondaryWorkActions(sales, baseDeal({ status: 'draft' }), prs, {
+      offRouteParties: ROUTE_KNOWN, quotationByRequest: new Map([[5, quotation(9105, docStatus)]]),
+    });
+    const outcome = keys.find((action) => action.key === 'record_quotation_outcome');
+    expect(outcome ? { label: outcome.label, pricingRequestId: outcome.pricingRequestId } : null)
+      .toEqual(offered ? { label: 'บันทึกผลใบเสนอราคา', pricingRequestId: 5 } : null);
+  });
+
   // Review N-3: cancelling a request leaves its quotation PENDING_APPROVAL on the server; that
-  // quotation is not the deal's to wait on or to approve.
-  it('a cancelled request\'s quotation still awaiting approval is ignored: the rep gets the route choice, ผจก.ขาย gets no อนุมัติ', () => {
+  // quotation is not the deal's to wait on.
+  it('a cancelled request\'s quotation still awaiting approval is ignored: the rep gets the route choice', () => {
     const prs = [request(5, 'DESIGNER', 'QUOTATION_ISSUED'), request(6, 'OWNER', 'CANCELLED')];
     const opts = {
       offRouteParties: ROUTE_KNOWN,
       quotationByRequest: new Map([[5, quotation(9105, 'ISSUED')], [6, quotation(9106, 'PENDING_APPROVAL', 'QT-2026-0101-2')]]),
     };
     expect(resolveWorkState(sales, baseDeal({ status: 'draft' }), prs, opts).action).toMatchObject({ key: 'quote_next_party' });
-    expect(resolveWorkState({ role: 'sales_manager' }, baseDeal({ status: 'draft' }), prs, opts).action).toBeNull();
+  });
+
+  // ผจก.ขาย's อนุมัติ only for a quotation they can approve on a deal without its order (N-3, review
+  // G1: a price moved from the CEO's needs the CEO, review V1: nothing is approved after an acceptance).
+  it.each([
+    ['is on a cancelled request', [request(6, 'OWNER', 'CANCELLED')], {}],
+    ['needs the CEO (its price mode changed from the CEO\'s)', [request(6, 'OWNER', 'APPROVED_FOR_QUOTATION')], { priceModeChangedFromCeo: true }],
+    ['belongs to a later request after the designer accepted', [request(5, 'DESIGNER', 'QUOTATION_ACCEPTED'), request(6, 'OWNER', 'APPROVED_FOR_QUOTATION')], {}],
+  ])('ผจก.ขาย gets no อนุมัติใบเสนอราคา for a quotation awaiting approval that %s', (_label, prs, extra) => {
+    const pending = { ...quotation(9106, 'PENDING_APPROVAL'), origin: 'PRICING_REQUEST', ...extra };
+    const result = resolveWorkState({ role: 'sales_manager' }, baseDeal(), prs, {
+      offRouteParties: ROUTE_KNOWN, quotationByRequest: new Map([[6, pending]]),
+    });
+    expect(result.action).toBeNull();
   });
 
   it.each([
-    ['sales_manager', 'APPROVED_FOR_QUOTATION'],
-    ['ceo', 'QUOTATION_ISSUED'],
-  ])('%s opening that deal (request %s) gets their own อนุมัติใบเสนอราคา, to the quotation', (role, status) => {
+    ['sales_manager', 'APPROVED_FOR_QUOTATION', {}],
+    ['ceo', 'QUOTATION_ISSUED', { origin: 'PRICING_REQUEST', priceModeChangedFromCeo: true }],
+  ])('%s opening that deal (request %s) gets their own อนุมัติใบเสนอราคา, to the quotation (the CEO also for one that needs the CEO)', (role, status, extra) => {
     const result = resolveWorkState({ role }, baseDeal(), [request(5, 'OWNER', status)], {
-      offRouteParties: ROUTE_KNOWN, quotationByRequest: new Map([[5, quotation(9105, 'PENDING_APPROVAL')]]),
+      offRouteParties: ROUTE_KNOWN, quotationByRequest: new Map([[5, { ...quotation(9105, 'PENDING_APPROVAL'), ...extra }]]),
     });
     expect(result.action).toMatchObject({ label: 'อนุมัติใบเสนอราคา', to: '/quotations/9105' });
   });

@@ -1,6 +1,7 @@
 import React from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Modal } from './Modal.jsx';
 import { OverflowMenu } from './OverflowMenu.jsx';
 
 globalThis.React = React;
@@ -59,12 +60,18 @@ describe('OverflowMenu', () => {
     expect(trigger.textContent).toContain('เอกสาร');
   });
 
+  // The deal page's เสนอราคา trigger: its chevron rides inside triggerLabel and triggerIcon={null}
+  // drops the leading icon, so the label lays out in a row with a gap (review V9, V15).
   it('passes triggerProps (e.g. data-testid / data-action) onto the trigger, labelled or icon-only', () => {
     const props = { 'data-testid': 'ticket-primary-action', 'data-action': 'quote_next_party' };
-    const { unmount } = render(<OverflowMenu items={items()} label="เสนอราคา" triggerLabel="เสนอราคา" triggerProps={props} />);
+    const { unmount } = render(
+      <OverflowMenu items={items()} label="เสนอราคา" triggerLabel={<>เสนอราคา<svg /></>} triggerIcon={null} triggerProps={props} />,
+    );
     let trigger = screen.getByTestId('ticket-primary-action');
     expect(trigger).toBe(screen.getByRole('button', { name: 'เสนอราคา' }));
     expect(trigger.getAttribute('data-action')).toBe('quote_next_party');
+    expect(trigger.querySelectorAll('svg')).toHaveLength(1);
+    expect(trigger.firstElementChild.className).toEqual(expect.stringContaining('inline-flex items-center gap-[7px]'));
     unmount();
 
     render(<OverflowMenu items={items()} triggerProps={props} />);
@@ -123,31 +130,45 @@ describe('OverflowMenu', () => {
   // Spec J1 (2026-10-27): a dialog an item opens (a confirm, a form) hands focus back, when it
   // closes, to whatever held focus when it opened — that has to be this trigger, not the menu item
   // the click is about to unmount.
-  it('selecting an item hands focus back to the trigger before the item runs, without scrolling the page', () => {
+  // The trigger is on screen (it was just clicked); a scroller that pads its top (the deal page's
+  // sticky header) would jump to "reveal" it — on the way into the dialog and, via useDialogFocus,
+  // on the way out (review V7).
+  it('an item that opens a dialog: focus goes to the trigger before it runs and back to it on close, without scrolling the page', () => {
     let focusedWhenSelected = null;
-    render(<OverflowMenu items={[{ key: 'a', label: 'เปิดหน้าต่างยืนยัน', onSelect: () => { focusedWhenSelected = document.activeElement; } }]} />);
+    function Harness() {
+      const [open, setOpen] = React.useState(false);
+      const onSelect = () => { focusedWhenSelected = document.activeElement; setOpen(true); };
+      return (
+        <>
+          <OverflowMenu items={[{ key: 'a', label: 'เปิดหน้าต่างยืนยัน', onSelect }]} />
+          {open ? <Modal title="หน้าต่าง" onClose={() => setOpen(false)}><button type="button" onClick={() => setOpen(false)}>เสร็จ</button></Modal> : null}
+        </>
+      );
+    }
+    render(<Harness />);
     const trigger = screen.getByRole('button', { name: 'การดำเนินการเพิ่มเติม' });
     fireEvent.click(trigger);
     const focus = vi.spyOn(trigger, 'focus');
 
     fireEvent.click(screen.getByRole('menuitem', { name: 'เปิดหน้าต่างยืนยัน' }));
-
     expect(focusedWhenSelected).toBe(trigger);
-    // The trigger was just clicked, so it is on screen; a scroller that pads its top (the deal
-    // page's sticky header) would otherwise jump to "reveal" it.
-    expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+    fireEvent.click(screen.getByRole('button', { name: 'เสร็จ' }));
+
+    expect(focus.mock.calls).toEqual([[{ preventScroll: true }], [{ preventScroll: true }]]);
   });
 
-  it('Escape closes the menu and returns focus to the trigger', () => {
+  it('Escape closes the menu and returns focus to the trigger, without scrolling the page', () => {
     render(<OverflowMenu items={items()} />);
     const trigger = screen.getByRole('button', { name: 'การดำเนินการเพิ่มเติม' });
     fireEvent.click(trigger);
     expect(screen.getByRole('menu')).not.toBeNull();
+    const focus = vi.spyOn(trigger, 'focus');
 
     fireEvent.keyDown(document, { key: 'Escape' });
 
     expect(screen.queryByRole('menu')).toBeNull();
     expect(document.activeElement).toBe(trigger);
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true });
   });
 
   it('a click outside the menu closes it', () => {

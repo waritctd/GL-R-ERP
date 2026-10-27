@@ -36,8 +36,9 @@
 // actually clickable; this module only decides which ONE action (if any)
 // leads the sticky bar.
 
+import { canApproveDealQuotationNow } from '../quotations/quotationMeta.js';
 import {
-  nextSalesAction, PARTY_LABEL, pendingRequestQuotation, reviseAction, REVISE_STAGES, SALES_ACTION,
+  nextSalesAction, outcomeSecondaryAction, PARTY_LABEL, pendingRequestQuotation, reviseAction, REVISE_STAGES, SALES_ACTION,
 } from './salesActions.js';
 import { nextImportAction } from './importActions.js';
 import { nextAccountAction } from './accountActions.js';
@@ -82,7 +83,8 @@ export function resolveWorkState(user, deal, pricingRequests = [], { reviseTarge
     const pending = deal.liveDirectQuotation?.docStatus === 'PENDING_APPROVAL'
       ? deal.liveDirectQuotation
       : pendingRequestQuotation(deal, pricingRequests, quotationByRequest);
-    if (pending) {
+    // Only one this viewer may approve now: a price moved from the CEO's needs the CEO.
+    if (pending && canApproveDealQuotationNow(user, pending)) {
       return {
         action: {
           key: DIRECT_APPROVAL_ACTION_KEY,
@@ -128,15 +130,19 @@ function quoteNextPartyBanner({ anchorParty, anchorDeclined, parties }) {
 }
 
 /**
- * PR A — ADDITIONAL (secondary) actions beside the sticky primary. At the owner / buyer quote stages
- * the client may want a revision or be happy with the original, so แก้ใบเสนอราคา is offered
- * alongside — never instead of — the primary บันทึกผลใบเสนอราคา. Sales only; `reviseTarget` is
- * resolved by the caller through quotationMeta.canReviseDealQuotation (owner + status live there).
- * Skipped when revise is already the primary (approved direct quotation past draft).
+ * ADDITIONAL (secondary) actions beside the sticky primary, for the header's ⋯ menu. Sales only.
+ * - Owner ruling 2026-10-27 ("always in ⋯"): บันทึกผลใบเสนอราคา for a sent designer/owner quotation
+ *   whose outcome is still open (salesActions.outcomeSecondaryAction), whatever the primary is.
+ * - PR A: at the owner / buyer quote stages the client may want a revision or be happy with the
+ *   original, so แก้ใบเสนอราคา is offered alongside — never instead of — the primary. `reviseTarget`
+ *   is resolved by the caller through quotationMeta.canReviseDealQuotation (owner + status live
+ *   there). Skipped when revise is already the primary (approved direct quotation past draft).
  */
 export function secondaryWorkActions(user, deal, pricingRequests = [], { reviseTarget = null, offRouteParties = null, quotationByRequest = null } = {}) {
   if (user?.role !== 'sales' || !deal || deal.lifecycle !== 'ACTIVE') return [];
-  if (!reviseTarget || !REVISE_STAGES.has(deal.salesStage)) return [];
-  if (resolveWorkState(user, deal, pricingRequests, { reviseTarget, offRouteParties, quotationByRequest }).action?.key === SALES_ACTION.REVISE_QUOTATION) return [];
-  return [reviseAction(reviseTarget)];
+  const outcome = outcomeSecondaryAction(deal, pricingRequests, quotationByRequest);
+  const revise = reviseTarget && REVISE_STAGES.has(deal.salesStage)
+    && resolveWorkState(user, deal, pricingRequests, { reviseTarget, offRouteParties, quotationByRequest }).action?.key !== SALES_ACTION.REVISE_QUOTATION
+    ? reviseAction(reviseTarget) : null;
+  return [outcome, revise].filter(Boolean);
 }

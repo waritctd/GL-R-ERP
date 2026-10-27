@@ -1,7 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  SALES_ACTION, newestQuotationByRequest, nextSalesAction, sortWorklist,
-} from './salesActions.js';
+import { SALES_ACTION, nextSalesAction, sortWorklist } from './salesActions.js';
 import { bangkokTodayIso } from '../../utils/format.js';
 
 // First direct unit-test file for this module (previously only exercised indirectly through
@@ -628,9 +626,14 @@ describe('nextSalesAction — the route choice once a designer/owner quotation i
     },
   );
 
-  it('an accepted designer request -> ยืนยันคำสั่งซื้อ even while a later party\'s request is in flight (nothing holds the confirm back)', () => {
-    const prs = [request(1, 'DESIGNER', 'QUOTATION_ACCEPTED'), request(2, 'OWNER', 'SUBMITTED')];
-    expect(nextSalesAction(deal(), prs, known([1, 'ACCEPTED']))).toMatchObject({ key: SALES_ACTION.CONFIRM_ORDER });
+  // Review V1: an approved later request (bucket 2) does not hold it back either.
+  it.each([
+    ['SUBMITTED', []],
+    ['APPROVED_FOR_QUOTATION', []],
+    ['APPROVED_FOR_QUOTATION', [[2, 'PENDING_APPROVAL']]],
+  ])('an accepted designer request -> ยืนยันคำสั่งซื้อ even while the owner\'s request is %s %j (nothing holds the confirm back)', (status, ownerEntries) => {
+    const prs = [request(1, 'DESIGNER', 'QUOTATION_ACCEPTED'), request(2, 'OWNER', status)];
+    expect(nextSalesAction(deal(), prs, known([1, 'ACCEPTED'], ...ownerEntries))).toMatchObject({ key: SALES_ACTION.CONFIRM_ORDER });
   });
 
   it('an accepted designer request on a ticket the order bridge cannot advance (\'submitted\') -> neither ยืนยันคำสั่งซื้อ nor a route choice', () => {
@@ -638,12 +641,15 @@ describe('nextSalesAction — the route choice once a designer/owner quotation i
     expect(action).toBeNull();
   });
 
-  // Spec B1: an acceptance is the order, so nothing is quoted after it. Clean-review finding.
+  // Spec B1: an acceptance is the order, so nothing is quoted after it (clean-review finding; the
+  // last two rows are review V1: bucket 2 and the approval wait).
+  const confirmed = (id, party) => ({ ...request(id, party, 'QUOTATION_ACCEPTED'), orderConfirmedAt: '2026-10-27T10:00:00Z' });
   it.each([
-    ['a stale request of the same party (route choice)', [[2, 'DESIGNER'], [1, 'SUPERSEDED'], [2, 'ACCEPTED']]],
-    ['an earlier party\'s open redo draft (redo)', [[3, 'BUYER'], [1, 'DRAFT'], [3, 'ACCEPTED']]],
-  ])('after a confirmed order nothing is quoted again: %s -> null', (_label, [[acceptedId, party], ...entries]) => {
-    const prs = [designerSent, { ...request(acceptedId, party, 'QUOTATION_ACCEPTED'), orderConfirmedAt: '2026-10-27T10:00:00Z' }];
+    ['a stale request of the same party (route choice)', [designerSent, confirmed(2, 'DESIGNER')], [[1, 'SUPERSEDED'], [2, 'ACCEPTED']]],
+    ['an earlier party\'s open redo draft (redo)', [designerSent, confirmed(3, 'BUYER')], [[1, 'DRAFT'], [3, 'ACCEPTED']]],
+    ['a later party\'s approved request (bucket 2)', [confirmed(1, 'DESIGNER'), request(2, 'OWNER', 'APPROVED_FOR_QUOTATION')], [[1, 'ACCEPTED']]],
+    ['a later party\'s quotation awaiting approval (the wait)', [confirmed(1, 'DESIGNER'), request(2, 'OWNER', 'APPROVED_FOR_QUOTATION')], [[1, 'ACCEPTED'], [2, 'PENDING_APPROVAL']]],
+  ])('after a confirmed order nothing is quoted again: %s -> null', (_label, prs, entries) => {
     expect(nextSalesAction(deal(), prs, known(...entries))).toBeNull();
   });
 
@@ -656,17 +662,5 @@ describe('nextSalesAction — the route choice once a designer/owner quotation i
       row(4, QUOTE_NEXT, '2026-07-01T00:00:00.000Z'),
     ]).map((item) => item.deal.id);
     expect(sorted).toEqual([4, 3, 1, 2]);
-  });
-});
-
-describe('newestQuotationByRequest — the deal page\'s quotation map', () => {
-  const row = (id, pricingRequestId, docStatus) => ({ id, pricingRequestId, docStatus, origin: 'PRICING_REQUEST' });
-
-  // Clean-review finding: a revision draft cancelled after ⋯ แก้ใบเสนอราคา used to become the
-  // request's quotation, leaving the deal page with no button at all.
-  it('a cancelled draft never stands in for the quotation it revised: the newest row that is not CANCELLED', () => {
-    const byRequest = newestQuotationByRequest([row(10, 1, 'ISSUED'), row(11, 1, 'CANCELLED'), row(12, 2, 'CANCELLED')]);
-    expect(byRequest.get(1)).toMatchObject({ id: 10, docStatus: 'ISSUED' });
-    expect(byRequest.has(2)).toBe(false);
   });
 });
