@@ -94,7 +94,8 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
   const [confirmingAccept, setConfirmingAccept] = useState(false);
 
   const pr = useMemo(() => pickRelevantPricingRequest(pricingRequests), [pricingRequests]);
-  const prQuotation = pr ? quotationByRequest?.get(pr.id) ?? null : null;
+  const prQuotation = quotationByRequest?.get(pr?.id);
+  const prQuotationStatus = prQuotation && dealQuotationStatusLabel(prQuotation.docStatus);
   const acceptConfirm = acceptOutcomeConfirmCopy(pr?.recipientType);
   const canView = pr != null && canViewCustomerQuotation(user, pr);
 
@@ -191,8 +192,8 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
         ) : !current && prQuotation ? (
           <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-surface p-3">
             <span className="font-mono text-sm font-bold">{prQuotation.number}</span>
-            <StatusBadge tone={dealQuotationStatusLabel(prQuotation.docStatus).tone}>
-              {dealQuotationStatusLabel(prQuotation.docStatus).label}
+            <StatusBadge tone={prQuotationStatus.tone}>
+              {prQuotationStatus.label}
             </StatusBadge>
             <Link to={`/quotations/${prQuotation.id}`} className="text-sm font-bold text-link">เปิดใบเสนอราคา</Link>
           </div>

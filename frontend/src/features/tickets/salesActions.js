@@ -15,7 +15,7 @@
 // "bucket 0" inside nextSalesAction): a live DEAL_DIRECT quotation owns the
 // deal's CTA outright.
 //
-// The 7 CTA buckets below are a priority cascade, evaluated in pipeline
+// The CTA buckets below are a priority cascade, evaluated in pipeline
 // order (earliest-unblocked-step wins): a deal with no live pricing request
 // normally needs "สร้างคำขอราคา" first, even if it also happens to be overdue
 // on follow-up — there is nothing to follow up ABOUT yet. Once a deal has a
@@ -214,6 +214,18 @@ function isRedo(pr, quotation) {
     || (DECLINED_DOC_STATUSES.has(quotation?.docStatus) && !isDesignerOrOwner(pr));
 }
 
+/** pricingRequestId -> that request's newest PRICING_REQUEST-origin quotation, from the deal's
+ * quotation list (DealQuotationDto rows). The `quotationByRequest` nextSalesAction reads. */
+export function newestQuotationByRequest(rows) {
+  const byRequest = new Map();
+  for (const q of rows) {
+    if (q.origin !== 'PRICING_REQUEST' || q.pricingRequestId == null) continue;
+    const held = byRequest.get(q.pricingRequestId);
+    if (!held || q.id > held.id) byRequest.set(q.pricingRequestId, q);
+  }
+  return byRequest;
+}
+
 /** The quotation awaiting ผจก.ขาย/CEO on one of the deal's live requests (its first one, or a
  * revision). A cancelled request keeps its quotation PENDING_APPROVAL on the server; that one is
  * not the deal's to wait on or approve. */
@@ -228,8 +240,8 @@ export function pendingRequestQuotation(deal, pricingRequests, quotationByReques
  * Owner ruling 2026-10-27: once a designer/owner quotation is sent, the rep picks the next party.
  * The anchor is the request furthest along the route whose quotation went out (with no row for it,
  * QUOTATION_ISSUED alone decides). The later on-route parties are offered when none of them has a
- * request holding the choice back (anything not dead, except a quotation that party said no to);
- * a later party's private DRAFT is sent instead. Null otherwise — and while the route is unknown.
+ * live request holding the choice back (a later party that said no is the anchor itself); a later
+ * party's private DRAFT is sent instead. Null otherwise — and while the route is unknown.
  */
 function routeChoiceAction(ownPrs, quotationOf, offRouteParties) {
   const anchor = ownPrs
@@ -240,16 +252,14 @@ function routeChoiceAction(ownPrs, quotationOf, offRouteParties) {
   if (!anchor || !isDesignerOrOwner(anchor) || offRouteParties == null) return null;
   const parties = PARTY_ROUTE.slice(PARTY_ROUTE.indexOf(anchor.recipientType) + 1)
     .filter((party) => !offRouteParties.has(party));
-  const holding = ownPrs.filter((pr) => parties.includes(pr.recipientType)
-    && !DEAD_PRICING_REQUEST_STATUSES.has(pr.status)
-    && !(pr.status === 'QUOTATION_ISSUED' && DECLINED_DOC_STATUSES.has(quotationOf(pr)?.docStatus)));
+  if (parties.length === 0) return null;
+  const holding = ownPrs.filter((pr) => parties.includes(pr.recipientType) && !DEAD_PRICING_REQUEST_STATUSES.has(pr.status));
   if (holding.length > 0) {
     const draft = parties.map((party) => holding.find((pr) => pr.recipientType === party && pr.status === 'DRAFT')).find(Boolean);
     return draft
       ? { key: SALES_ACTION.SUBMIT_PRICING_REQUEST, label: `ส่งคำขอราคาถึง${PARTY_LABEL[draft.recipientType]}`, pricingRequestId: draft.id }
       : null;
   }
-  if (parties.length === 0) return null;
   const anchorQuotation = quotationOf(anchor);
   return {
     key: SALES_ACTION.QUOTE_NEXT_PARTY,
@@ -264,7 +274,7 @@ function routeChoiceAction(ownPrs, quotationOf, offRouteParties) {
 
 /**
  * The one next action `deal` needs from its owning sales rep right now, or
- * null if nothing in the 7-bucket cascade applies (e.g. the request is with
+ * null if nothing in the cascade applies (e.g. the request is with
  * import/CEO and the deal isn't due for a follow-up or stale).
  *
  * `pricingRequests` is the rep's OWN pricing-request queue (already scoped

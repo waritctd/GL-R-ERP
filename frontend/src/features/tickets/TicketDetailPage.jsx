@@ -61,7 +61,7 @@ import { DealStateHeader } from './DealStateHeader.jsx';
 import { DealTrackingPanel } from './DealTrackingPanel.jsx';
 import { visibleSections } from './salesViewScope.js';
 import { nextOnRoute, offRoutePartiesFor, useStageCatalog } from './stageCatalog.js';
-import { PARTY_LABEL } from './salesActions.js';
+import { newestQuotationByRequest, PARTY_LABEL } from './salesActions.js';
 import {
   resolveTicketDetailTab, TICKET_DETAIL_TABS, visibleTicketDetailTabIds,
 } from './ticketDetailTabs.js';
@@ -1244,14 +1244,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const reviseTarget = reviseCandidate
     ? { quotationId: reviseCandidate.id, number: reviseCandidate.number, openDraftId: openRevisionDraft?.id }
     : null;
-  // Each request's newest PRICING_REQUEST-origin quotation, for the sales route choice and the
-  // approval wait (owner ruling 2026-10-27). Empty while the list loads: requests then go by status.
-  const quotationByRequest = new Map();
-  for (const q of dealQuotationRows) {
-    if (q.origin !== 'PRICING_REQUEST' || q.pricingRequestId == null) continue;
-    const held = quotationByRequest.get(q.pricingRequestId);
-    if (!held || q.id > held.id) quotationByRequest.set(q.pricingRequestId, q);
-  }
+  // For the sales route choice, the redo and the approval wait (owner ruling 2026-10-27). Empty
+  // while the list loads: requests then go by status.
+  const quotationByRequest = newestQuotationByRequest(dealQuotationRows);
   // The deal's served route (catalog.routes for its entryChannel); null until the catalog loads.
   const offRouteParties = offRoutePartiesFor(stageCatalog, summary.entryChannel);
   const workState = resolveWorkState(user, summary, pricingRequests, { reviseTarget, offRouteParties, quotationByRequest });
