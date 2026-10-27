@@ -219,8 +219,14 @@ public class DepositNoticeService {
     }
 
     // Issue: assign doc number, freeze document, transition ticket to document_issued
+    // Without a stamp. @Transactional here too: a self-call from this overload would bypass the proxy.
     @Transactional
     public DepositNoticeDto issue(long docId, UserPrincipal actor) {
+        return issue(docId, null, actor);
+    }
+
+    @Transactional
+    public DepositNoticeDto issue(long docId, java.time.OffsetDateTime expectedUpdatedAt, UserPrincipal actor) {
         DepositNoticeDto doc = requireDraft(docId);
         requireRole(actor, SALES_ROLES);
         requireTicketOwner(doc.ticketId(), actor);
@@ -268,6 +274,9 @@ public class DepositNoticeService {
         if (doc.depositAmount() == null || doc.depositAmount().signum() <= 0) {
             throw new ApiException(HttpStatus.CONFLICT, "ใบแจ้งรับมัดจำนี้มียอดมัดจำ 0 บาท จึงออกเอกสารไม่ได้");
         }
+        // The guard below is check-then-act: lock the deal row first so two drafts issued at once
+        // serialize, and the second one sees the first as ISSUED.
+        tickets.lockTicketForUpdate(doc.ticketId());
         // Owner ruling 2026-10-23: one deposit notice per deal. A second draft (written before the
         // first was issued) must not silently supersede the customer's document.
         docs.findByTicket(doc.ticketId()).stream()
@@ -279,7 +288,7 @@ public class DepositNoticeService {
         // (Phase 1 lifecycle gate; mirrors TicketService.requireActive).
         requireActiveLifecycle(s);
 
-        String docNumber = docs.issue(docId, actor.id(), actor.name())
+        String docNumber = docs.issue(docId, actor.id(), actor.name(), expectedUpdatedAt)
             .orElseThrow(() -> new ApiException(HttpStatus.CONFLICT,
                 "ใบแจ้งรับมัดจำนี้ถูกออกไปแล้วโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง"));
 

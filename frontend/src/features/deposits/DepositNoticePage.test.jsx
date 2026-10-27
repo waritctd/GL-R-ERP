@@ -205,7 +205,7 @@ describe('DepositNoticePage', () => {
   });
 
   // What บันทึก sends, and the summary beside it, must match what the backend stores:
-  // - a stored 0.333 (free input before whole percents) shows, labels and saves as 33%;
+  // - a stored whole 0.33 shows, labels and saves as 33%;
   // - a 100%-discounted line (net 0, unit 100) adds 0 and is sent at net 0, never its unit price;
   // - money rounds per step like the backend: 100.10 at 33% is 33.03 + VAT 2.31 = 35.34 (35.35 unrounded);
   // - a blank เพิ่มรายการ row is left out (the backend refuses a line without a description);
@@ -214,7 +214,7 @@ describe('DepositNoticePage', () => {
   it('saves what the backend will store: rounded %, zero-net line, per-step rounding, no blank row, the stamp, null for a cleared %', async () => {
     api.depositNotices.listByTicket.mockResolvedValue({
       depositNotices: [{
-        ...validDraftDoc, depositPercent: 0.333, updatedAt: '2026-10-23T08:57:19.732123Z',
+        ...validDraftDoc, depositPercent: 0.33, updatedAt: '2026-10-23T08:57:19.732123Z',
         items: [
           { seq: 1, description: 'กระเบื้อง A', qty: 1, unit: 'แผ่น', unitPrice: 100.1, netUnitPrice: 100.1 },
           { seq: 2, description: 'ของแถม', qty: 2, unit: 'แผ่น', unitPrice: 100, netUnitPrice: 0 },
@@ -249,6 +249,39 @@ describe('DepositNoticePage', () => {
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
+  // The page must not rewrite what it did not edit: a stored 0.125 (shown as 13) survives a save of
+  // another field untouched.
+  it('keeps a stored non-whole % as-is when only another field is edited', async () => {
+    api.depositNotices.listByTicket.mockResolvedValue({
+      depositNotices: [{ ...validDraftDoc, depositPercent: 0.125, updatedAt: 'T1' }],
+    });
+    renderDepositNoticePage();
+
+    fireEvent.change(await screen.findByLabelText(/ที่อยู่/), { target: { value: 'ที่อยู่ใหม่' } });
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+    await waitFor(() => expect(api.depositNotices.update).toHaveBeenCalledTimes(1));
+    expect(api.depositNotices.update.mock.calls[0][1]).toMatchObject({ depositPercent: 0.125, customerAddress: 'ที่อยู่ใหม่' });
+  });
+
+  // Blank rows are dropped from the payload and the backend keeps the stored lines when `items` is
+  // empty — so saving/previewing an all-blank form would "succeed" and bring the old lines back.
+  it('refuses to save or preview when every row was cleared, with the items error, and calls no API', async () => {
+    api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [validDraftDoc] });
+    renderDepositNoticePage();
+
+    await screen.findByDisplayValue('บริษัท ทดสอบ จำกัด');
+    fireEvent.change(document.getElementById('doc-item-0-description'), { target: { value: '' } });
+    fireEvent.change(document.getElementById('doc-item-0-qty'), { target: { value: '0' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+    expect((await screen.findByText('กรุณาเพิ่มรายการสินค้าอย่างน้อย 1 รายการ')).getAttribute('role')).toBe('alert');
+    expect(api.depositNotices.update).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: /Preview|ตัวอย่าง/ }));
+    expect(api.depositNotices.update).not.toHaveBeenCalled();
+    expect(api.depositNotices.preview).not.toHaveBeenCalled();
+  });
+
   // Someone else saved the draft since this page loaded it: the backend answers 409. The page
   // reloads the draft (form and stamp) and shows the server's message, so the next save is a
   // deliberate one over the fresh copy.
@@ -277,8 +310,9 @@ describe('DepositNoticePage', () => {
 
   // A fully valid document opens the confirm dialog, and confirming it calls
   // api.depositNotices.issue for that document.
-  it('opens the confirm dialog for a valid document and issues it on confirm', async () => {
-    api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [validDraftDoc] });
+  it('opens the confirm dialog for a valid document and issues it on confirm, with the stamp its own save returned', async () => {
+    api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [{ ...validDraftDoc, updatedAt: 'T1' }] });
+    api.depositNotices.update.mockResolvedValue({ depositNotice: { updatedAt: 'T2' } });
     renderDepositNoticePage();
 
     await screen.findByDisplayValue('บริษัท ทดสอบ จำกัด');
@@ -289,7 +323,7 @@ describe('DepositNoticePage', () => {
 
     fireEvent.click(within(dialog).getByRole('button', { name: 'ออกเอกสาร' }));
 
-    await waitFor(() => expect(api.depositNotices.issue).toHaveBeenCalledWith(9002));
+    await waitFor(() => expect(api.depositNotices.issue).toHaveBeenCalledWith(9002, { expectedUpdatedAt: 'T2' }));
   });
 
   it('renders the empty-state and lets the user create a draft', async () => {

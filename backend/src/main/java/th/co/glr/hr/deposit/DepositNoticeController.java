@@ -98,9 +98,11 @@ public class DepositNoticeController {
 
     // Issue (assign doc number + transition ticket)
     @PostMapping("/deposit-notices/{docId}/issue")
-    Map<String, DepositNoticeDto> issue(@PathVariable long docId, HttpSession session) {
+    Map<String, DepositNoticeDto> issue(@PathVariable long docId,
+                                        @RequestBody(required = false) DepositNoticeIssueRequest body,
+                                        HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return Map.of("depositNotice", service.issue(docId, user));
+        return Map.of("depositNotice", service.issue(docId, body == null ? null : body.expectedUpdatedAt(), user));
     }
 
     // File download

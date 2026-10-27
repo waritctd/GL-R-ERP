@@ -44,6 +44,8 @@ function lineNet(item) {
 
 // An untouched เพิ่มรายการ row (or one emptied again): no description and nothing to bill. Left
 // out of the save (the backend refuses a line without a description) and of the issue checks.
+const NO_ITEMS_MESSAGE = 'กรุณาเพิ่มรายการสินค้าอย่างน้อย 1 รายการ';
+
 function isBlankRow(item) {
   return !String(item.description ?? '').trim() && !(lineNet(item) * (Number(item.qty) || 0));
 }
@@ -116,7 +118,7 @@ function validateIssueForm({ customerName, items, total, depositPercent }) {
   }
 
   if (items.every(isBlankRow)) {
-    errors.items = 'กรุณาเพิ่มรายการสินค้าอย่างน้อย 1 รายการ';
+    errors.items = NO_ITEMS_MESSAGE;
     order.push('items');
   } else {
     items.forEach((item, index) => {
@@ -274,9 +276,8 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
       customerAddress: address,
       projectName:     d.projectName   ?? '',
       reference:       d.reference     ?? '',
-      // Rounded to the whole % the field shows, so the field, the label and the payload agree
-      // (a draft stored at 0.3330 shows 33 and saves 0.33).
-      depositPercent:  Math.round(Number(d.depositPercent) * 100) / 100,
+      // As stored (null -> blank, which saves as "keep"): a save of another field must not rewrite it.
+      depositPercent:  d.depositPercent ?? '',
       notes:           d.notes         ?? [],
       items:           (d.items ?? []).map((it) => ({ ...it })),
     });
@@ -368,8 +369,16 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
     onError: (err) => onSaveError(err, 'บันทึกไม่สำเร็จ'),
   });
 
+  // Blank rows are not sent and an empty `items` makes the backend keep the stored lines, so a form
+  // whose rows were all cleared would "save" and bring the old lines back: refuse it instead.
+  function refusesClearedItems() {
+    if (!(doc.items?.length > 0 && form.items.every(isBlankRow))) return false;
+    setFieldErrors({ items: NO_ITEMS_MESSAGE });
+    return true;
+  }
+
   function handleSave() {
-    if (!doc) return;
+    if (!doc || refusesClearedItems()) return;
     saveMutation.mutate();
   }
 
@@ -387,7 +396,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
   });
 
   function handlePreview() {
-    if (!doc) return;
+    if (!doc || refusesClearedItems()) return;
     previewMutation.mutate();
   }
 
@@ -419,7 +428,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
     mutationFn: async () => {
       // Save first.
       await saveDraft();
-      return api.depositNotices.issue(doc.id);
+      return api.depositNotices.issue(doc.id, { expectedUpdatedAt: stampRef.current });
     },
     onSuccess: (res) => {
       showToast('success', `ออกเอกสาร ${res.depositNotice.docNumber} เรียบร้อย`);

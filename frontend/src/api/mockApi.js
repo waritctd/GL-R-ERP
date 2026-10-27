@@ -13462,7 +13462,7 @@ export const api = {
       return mockPreviewHtml(buildMockDoc(doc));
     },
 
-    async issue(docId) {
+    async issue(docId, payload) {
       const user = requireSession();
       const doc = mockDepositNotices.find((d) => d.id === Number(docId));
       if (!doc) fail('ไม่พบใบแจ้งรับมัดจำนี้', 404);
@@ -13490,6 +13490,10 @@ export const api = {
       if (!(Number(doc.depositAmount) > 0)) fail('ใบแจ้งรับมัดจำนี้มียอดมัดจำ 0 บาท จึงออกเอกสารไม่ได้', 409);
       // Phase 1 lifecycle gate (mirrors DepositNoticeService.requireActiveLifecycle).
       requireActive(ticket);
+      // DepositNoticeRepository#issue: the draft was saved after the caller read it.
+      if (payload?.expectedUpdatedAt != null && payload.expectedUpdatedAt !== doc.updatedAt) {
+        fail('ใบแจ้งรับมัดจำนี้ถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง', 409);
+      }
 
       const thaiYear = new Date().getFullYear() + 543;
       doc.docNumber = `GLRD${String(thaiYear).slice(-2)}${String(mockDocNumberSeq++).padStart(3,'0')}`;

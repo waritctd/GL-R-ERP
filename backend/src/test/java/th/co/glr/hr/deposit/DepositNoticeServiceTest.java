@@ -16,6 +16,7 @@ import static org.mockito.Mockito.when;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
@@ -74,7 +75,7 @@ class DepositNoticeServiceTest {
     void issue_advancesPaymentTrackAndKeepsTicketStatus() {
         stubDraft(99L, 10L);
         stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
-        when(docs.issue(99L, 1L, "Sales")).thenReturn(Optional.of("GLRD69001"));
+        when(docs.issue(eq(99L), eq(1L), eq("Sales"), any())).thenReturn(Optional.of("GLRD69001"));
 
         service.issue(99L, owner);
 
@@ -87,6 +88,24 @@ class DepositNoticeServiceTest {
             eq(TicketStatus.QUOTATION_ISSUED), eq(TicketStatus.QUOTATION_ISSUED), anyString());
         verify(ticketRepo, never()).addEvent(eq(10L), eq(1L), anyString(),
             eq(TicketEventKind.DOCUMENT_ISSUED), anyString(), anyString(), anyString());
+    }
+
+    // One notice per deal: the "another notice is ISSUED" guard is check-then-act, so the ticket
+    // row is locked first — two drafts issued at once serialize and the second sees the first.
+    // (A real two-thread race is not reproducible in this suite; this pins the order.)
+    @Test
+    void issue_locksTheTicketRowBeforeReadingTheOneIssuedGuard_andPassesTheStampOn() {
+        stubDraft(99L, 10L);
+        stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
+        OffsetDateTime stamp = OffsetDateTime.parse("2026-10-23T08:57:19.732123Z");
+        when(docs.issue(eq(99L), eq(1L), eq("Sales"), eq(stamp))).thenReturn(Optional.of("GLRD69001"));
+
+        service.issue(99L, stamp, owner);
+
+        var order = org.mockito.Mockito.inOrder(ticketRepo, docs);
+        order.verify(ticketRepo).lockTicketForUpdate(10L);
+        order.verify(docs).findByTicket(10L);
+        order.verify(docs).issue(99L, 1L, "Sales", stamp);
     }
 
     @Test
@@ -121,7 +140,7 @@ class DepositNoticeServiceTest {
     void issue_fromDepositNoticeIssued_isNowAllowedAsARevision() {
         stubDraft(99L, 10L);
         stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_NOTICE_ISSUED");
-        when(docs.issue(99L, 1L, "Sales")).thenReturn(Optional.of("GLRD69002"));
+        when(docs.issue(eq(99L), eq(1L), eq("Sales"), any())).thenReturn(Optional.of("GLRD69002"));
 
         service.issue(99L, owner); // must not throw
 

@@ -11,6 +11,7 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { depositNoticeStatusLabel, depositPolicyLabel } from '../../utils/format.js';
 import { downloadBlob } from '../../utils/download.js';
 import { canCreateDepositNoticeFromQuotation } from '../pricingRequests/pricingRequestMeta.js';
+import { newestQuotationByRequest } from '../quotations/quotationMeta.js';
 import { DepositIssueSummary } from '../deposits/DepositNoticePage.jsx';
 import { buttonVariants } from '../../components/common/Button.jsx';
 import { cn } from '../../utils/cn.js';
@@ -88,7 +89,7 @@ function pickAcceptedPricingRequest(pricingRequests = []) {
  * its own "ยืนยันคำสั่งซื้อ..." box. Both panels can show that specific
  * create action at once until a notice exists for this deal.
  */
-export function DealDepositPanel({ user, ticketId, summary, availableActions = [], pricingRequests = [], showToast }) {
+export function DealDepositPanel({ user, ticketId, summary, availableActions = [], pricingRequests = [], dealQuotations = [], showToast }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const role = user?.role;
@@ -160,7 +161,8 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
   });
 
   const issueMutation = useMutation({
-    mutationFn: () => api.depositNotices.issue(doc.id),
+    // The dialog shows the amounts as listed; the stamp makes the server refuse if the draft moved on since.
+    mutationFn: () => api.depositNotices.issue(doc.id, { expectedUpdatedAt: doc.updatedAt ?? null }),
     onSuccess: (res) => {
       showToast?.('success', `ออกเอกสาร ${res.depositNotice.docNumber} แล้ว`);
       setPreviewHtml('');
@@ -214,7 +216,7 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
   // Rule 4's cutoff), but the role/ownership check is kept here too, defense-in-depth, so this
   // control can never render editable off a stale/misconfigured availableActions response.
   const canSetPolicy = hasAction('WAIVE_DEPOSIT') && (role === 'sales_manager' || (isSales && isOwner));
-  const canCreateNotice = pr != null && canCreateDepositNoticeFromQuotation(user, pr, depositNoticesQuery.data);
+  const canCreateNotice = pr != null && canCreateDepositNoticeFromQuotation(user, pr, newestQuotationByRequest(dealQuotations).get(pr.id) ?? null, depositNoticesQuery.data);
   const canManageThisNotice = isSales && isOwner;
   // Legacy dual-track creation path (ticket.confirmCustomer → ISSUE_DEPOSIT_NOTICE),
   // independent of the PricingRequest/CustomerQuotation chain above — mirrors the

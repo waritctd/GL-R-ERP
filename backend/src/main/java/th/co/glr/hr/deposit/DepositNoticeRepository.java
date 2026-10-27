@@ -290,8 +290,12 @@ public class DepositNoticeRepository {
      *
      * @return the new doc number, or {@link Optional#empty()} if the row was not DRAFT.
      */
-    @Transactional
     public Optional<String> issue(long docId, long actorId, String actorName) {
+        return issue(docId, actorId, actorName, null);
+    }
+
+    @Transactional
+    public Optional<String> issue(long docId, long actorId, String actorName, java.time.OffsetDateTime expectedUpdatedAt) {
         int thaiYear = Year.now().getValue() + 543;
         String docNumber = nextDocNumber("DEPOSIT_NOTICE", thaiYear);
 
@@ -305,20 +309,22 @@ public class DepositNoticeRepository {
                 updated_at     = now()
              WHERE deposit_notice_id = :id
                AND status = 'DRAFT'
+               AND (CAST(:expectedUpdatedAt AS timestamptz) IS NULL OR updated_at = :expectedUpdatedAt)
             """,
-            Map.of("num", docNumber, "actorId", actorId, "actorName", actorName, "id", docId));
+            new MapSqlParameterSource()
+                .addValue("num", docNumber).addValue("actorId", actorId).addValue("actorName", actorName)
+                .addValue("id", docId).addValue("expectedUpdatedAt", expectedUpdatedAt));
 
         if (rows == 0) {
+            // Still a draft with a stamp given => it was saved after the caller read it.
+            boolean editedSince = expectedUpdatedAt != null && !jdbc.queryForList(
+                "SELECT 1 FROM sales.deposit_notice WHERE deposit_notice_id = :id AND status = 'DRAFT'",
+                Map.of("id", docId), Integer.class).isEmpty();
+            if (editedSince) {
+                throw new th.co.glr.hr.common.ApiException(HttpStatus.CONFLICT, EDITED_ELSEWHERE);
+            }
             return Optional.empty();
         }
-
-        // Supersede all older versions for same ticket
-        jdbc.update("""
-            UPDATE sales.deposit_notice SET status = 'SUPERSEDED', updated_at = now()
-             WHERE ticket_id = (SELECT ticket_id FROM sales.deposit_notice WHERE deposit_notice_id = :id)
-               AND deposit_notice_id <> :id
-               AND status = 'ISSUED'
-            """, Map.of("id", docId));
 
         return Optional.of(docNumber);
     }

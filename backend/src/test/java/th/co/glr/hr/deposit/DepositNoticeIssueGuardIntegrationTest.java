@@ -210,6 +210,28 @@ class DepositNoticeIssueGuardIntegrationTest extends AbstractPostgresIntegration
         assertThat(reread.status()).isEqualTo("ISSUED");
     }
 
+    // The deal page's confirm dialog showed amounts read at T0; the draft was saved since. Issuing
+    // with the old stamp is refused (nothing numbered); with the current one it issues. Repository
+    // level: the service's one-per-deal guard would answer first on this fixture's ticket.
+    @Test
+    void issue_withAStaleUpdatedAt_isRefused409_andNothingIsIssued() {
+        IssuedNoticeFixture fixture = buildTicketWithIssuedDepositNotice();
+        long draftId = depositNoticeRepository.createDraft(fixture.ticketId(), secondDraftHeader(), secondDraftItems());
+        OffsetDateTime loaded = depositNoticeRepository.findById(draftId).orElseThrow().updatedAt();
+        DepositNoticeDto saved = depositNoticeService.update(draftId, stampedRequest("0.40", secondDraftItems(), loaded), salesActor);
+
+        assertThatThrownBy(() -> depositNoticeRepository.issue(draftId, salesRepId, "x", loaded))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(e.getMessage()).isEqualTo("ใบแจ้งรับมัดจำนี้ถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
+            });
+        DepositNoticeDto reread = depositNoticeRepository.findById(draftId).orElseThrow();
+        assertThat(reread.status()).isEqualTo("DRAFT");
+        assertThat(reread.docNumber()).isNull();
+
+        assertThat(depositNoticeRepository.issue(draftId, salesRepId, "x", saved.updatedAt())).isPresent();
+    }
+
     @Test
     void issue_secondDraftOnSameTicket_refusedUntilBillable_thenStillRefusedWhileAnotherNoticeIsIssued() {
         IssuedNoticeFixture fixture = buildTicketWithIssuedDepositNotice();
