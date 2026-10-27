@@ -36,7 +36,9 @@
 // actually clickable; this module only decides which ONE action (if any)
 // leads the sticky bar.
 
-import { nextSalesAction, PARTY_LABEL, reviseAction, REVISE_STAGES, SALES_ACTION } from './salesActions.js';
+import {
+  nextSalesAction, PARTY_LABEL, pendingRequestQuotation, reviseAction, REVISE_STAGES, SALES_ACTION,
+} from './salesActions.js';
 import { nextImportAction } from './importActions.js';
 import { nextAccountAction } from './accountActions.js';
 
@@ -79,7 +81,7 @@ export function resolveWorkState(user, deal, pricingRequests = [], { reviseTarge
   if (role === 'sales_manager' || role === 'ceo') {
     const pending = deal.liveDirectQuotation?.docStatus === 'PENDING_APPROVAL'
       ? deal.liveDirectQuotation
-      : [...(quotationByRequest?.values() ?? [])].find((quotation) => quotation.docStatus === 'PENDING_APPROVAL');
+      : pendingRequestQuotation(deal, pricingRequests, quotationByRequest);
     if (pending) {
       return {
         action: {

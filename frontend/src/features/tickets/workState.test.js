@@ -421,6 +421,18 @@ describe('resolveWorkState — the route-choice line and the approval wait (owne
     },
   );
 
+  // Review N-3: cancelling a request leaves its quotation PENDING_APPROVAL on the server; that
+  // quotation is not the deal's to wait on or to approve.
+  it('a cancelled request\'s quotation still awaiting approval is ignored: the rep gets the route choice, ผจก.ขาย gets no อนุมัติ', () => {
+    const prs = [request(5, 'DESIGNER', 'QUOTATION_ISSUED'), request(6, 'OWNER', 'CANCELLED')];
+    const opts = {
+      offRouteParties: ROUTE_KNOWN,
+      quotationByRequest: new Map([[5, quotation(9105, 'ISSUED')], [6, quotation(9106, 'PENDING_APPROVAL', 'QT-2026-0101-2')]]),
+    };
+    expect(resolveWorkState(sales, baseDeal({ status: 'draft' }), prs, opts).action).toMatchObject({ key: 'quote_next_party' });
+    expect(resolveWorkState({ role: 'sales_manager' }, baseDeal({ status: 'draft' }), prs, opts).action).toBeNull();
+  });
+
   it.each([
     ['sales_manager', 'APPROVED_FOR_QUOTATION'],
     ['ceo', 'QUOTATION_ISSUED'],

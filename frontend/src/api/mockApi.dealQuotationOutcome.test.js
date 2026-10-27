@@ -366,3 +366,32 @@ describe('mockApi confirmOrder from a NEW-engine accepted quotation (GLA-123 sli
     expect(result.ticket.summary.salesStage).toBe('ORDER_RECEIVED');
   }, 20000);
 });
+
+// Owner ruling 2026-10-27 (redo): the deal page's "เสนอใบราคา<party>" re-quotes a request whose
+// quotation the customer rejected or sent back for changes. DealQuotationService
+// #createFromPricingRequest allows that from QUOTATION_ISSUED, except when the request's latest
+// quotation was superseded by a newer one on the deal. Mock parity only.
+describe('mockApi dealQuotations.createFromPricingRequest after an outcome — the re-quote (mock parity)', () => {
+  it.each(['REJECTED', 'REVISION_REQUESTED'])('after %s: a fresh DRAFT from the same request', async (outcome) => {
+    const { ticketId, sourceItemId } = await freshTicket();
+    const { prId, quotationId } = await issuedNewOriginQuotation(ticketId, sourceItemId, 'BUYER');
+    await api.auth.login({ role: 'sales' });
+    await api.dealQuotations.recordOutcome(quotationId, { outcome, clientRequestId: nextClientRequestId() });
+
+    const { quotation } = await api.dealQuotations.createFromPricingRequest(prId);
+    expect(quotation).toMatchObject({ docStatus: 'DRAFT', pricingRequestId: prId });
+    expect(quotation.id).not.toBe(quotationId);
+  }, 20000);
+
+  it('its quotation superseded by a later request\'s issue: 409, no re-quote from the older price', async () => {
+    const { ticketId, sourceItemId } = await freshTicket();
+    const designer = await issuedNewOriginQuotation(ticketId, sourceItemId, 'DESIGNER');
+    await issuedNewOriginQuotation(ticketId, sourceItemId, 'OWNER');
+    await api.auth.login({ role: 'sales' });
+
+    await expect(api.dealQuotations.createFromPricingRequest(designer.prId)).rejects.toMatchObject({
+      status: 409,
+      message: 'คำขอราคานี้ถูกแทนที่ด้วยใบเสนอราคาฉบับใหม่ของดีลแล้ว — ออกใบเสนอราคาจากคำขอราคาล่าสุด หรือสร้างคำขอราคาใหม่',
+    });
+  }, 20000);
+});

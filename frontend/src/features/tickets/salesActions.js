@@ -193,6 +193,36 @@ export const PARTY_LABEL = { DESIGNER: 'ผู้ออกแบบ', OWNER: '�
 const SENT_DOC_STATUSES = new Set(['ISSUED', 'SUPERSEDED', 'REJECTED', 'EXPIRED']);
 const DECLINED_DOC_STATUSES = new Set(['REJECTED', 'EXPIRED']);
 const isDesignerOrOwner = (pr) => pr.recipientType === 'DESIGNER' || pr.recipientType === 'OWNER';
+// Route order, then the newer request: the last one is the furthest along the route.
+const byRoute = (a, b) => PARTY_ROUTE.indexOf(a.recipientType) - PARTY_ROUTE.indexOf(b.recipientType) || a.id - b.id;
+
+/** "เสนอใบราคา<party>": writes the request's new-engine quotation, or opens its open DRAFT (`to`). */
+function issueQuotationAction(pr, quotation) {
+  return {
+    key: SALES_ACTION.ISSUE_QUOTATION,
+    label: `เสนอใบราคา${PARTY_LABEL[pr.recipientType] ?? ''}`,
+    pricingRequestId: pr.id,
+    ...(quotation?.docStatus === 'DRAFT' ? { to: `/quotations/${quotation.id}` } : {}),
+  };
+}
+
+/** Owner ruling 2026-10-27: a quotation to redo — its redo draft is open, the customer asked for
+ * changes, or the buyer said no or let it expire (DealQuotationService#createFromPricingRequest
+ * re-quotes those). A designer or owner who said no is not quoted again: the route moved on. */
+function isRedo(pr, quotation) {
+  return quotation?.docStatus === 'DRAFT' || quotation?.docStatus === 'REVISION_REQUESTED'
+    || (DECLINED_DOC_STATUSES.has(quotation?.docStatus) && !isDesignerOrOwner(pr));
+}
+
+/** The quotation awaiting ผจก.ขาย/CEO on one of the deal's live requests (its first one, or a
+ * revision). A cancelled request keeps its quotation PENDING_APPROVAL on the server; that one is
+ * not the deal's to wait on or approve. */
+export function pendingRequestQuotation(deal, pricingRequests, quotationByRequest) {
+  return pricingRequests
+    .filter((pr) => pr.ticketId === deal.id && !DEAD_PRICING_REQUEST_STATUSES.has(pr.status))
+    .map((pr) => quotationByRequest?.get(pr.id))
+    .find((quotation) => quotation?.docStatus === 'PENDING_APPROVAL');
+}
 
 /**
  * Owner ruling 2026-10-27: once a designer/owner quotation is sent, the rep picks the next party.
@@ -205,7 +235,7 @@ function routeChoiceAction(ownPrs, quotationOf, offRouteParties) {
   const anchor = ownPrs
     .filter((pr) => pr.status === 'QUOTATION_ISSUED' && PARTY_ROUTE.includes(pr.recipientType)
       && (quotationOf(pr) == null || SENT_DOC_STATUSES.has(quotationOf(pr).docStatus)))
-    .sort((a, b) => PARTY_ROUTE.indexOf(a.recipientType) - PARTY_ROUTE.indexOf(b.recipientType) || a.id - b.id)
+    .sort(byRoute)
     .at(-1);
   if (!anchor || !isDesignerOrOwner(anchor) || offRouteParties == null) return null;
   const parties = PARTY_ROUTE.slice(PARTY_ROUTE.indexOf(anchor.recipientType) + 1)
@@ -333,15 +363,7 @@ export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = nul
   //    DRAFT already written is opened instead (`to`), and one awaiting approval waits (below).
   const approved = ownPrs.find((pr) => pr.status === 'APPROVED_FOR_QUOTATION'
     && quotationOf(pr)?.docStatus !== 'PENDING_APPROVAL');
-  if (approved) {
-    const draft = quotationOf(approved)?.docStatus === 'DRAFT' ? quotationOf(approved) : null;
-    return {
-      key: SALES_ACTION.ISSUE_QUOTATION,
-      label: `เสนอใบราคา${PARTY_LABEL[approved.recipientType] ?? ''}`,
-      pricingRequestId: approved.id,
-      ...(draft ? { to: `/quotations/${draft.id}` } : {}),
-    };
-  }
+  if (approved) return issueQuotationAction(approved, quotationOf(approved));
 
   // 3. The customer accepted the quotation but the order isn't confirmed yet —
   //    canConfirmOrder's own gate: pr.status === 'QUOTATION_ACCEPTED' && !orderConfirmedAt.
@@ -354,8 +376,8 @@ export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = nul
     return { key: SALES_ACTION.CONFIRM_ORDER, label: ACTION_LABEL[SALES_ACTION.CONFIRM_ORDER] };
   }
 
-  // A request's quotation awaiting ผจก.ขาย/CEO (its first one, or a revision): the rep waits.
-  const pending = ownPrs.map(quotationOf).find((quotation) => quotation?.docStatus === 'PENDING_APPROVAL');
+  // A live request's quotation awaiting ผจก.ขาย/CEO: the rep waits.
+  const pending = pendingRequestQuotation(deal, ownPrs, quotationByRequest);
   if (pending) {
     return {
       key: SALES_ACTION.AWAIT_DIRECT_APPROVAL,
@@ -390,6 +412,12 @@ export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = nul
       pricingRequestId: issued.id,
     };
   }
+
+  // A quotation to redo (see isRedo) is written again for the same party: "เสนอใบราคา<party>", as in
+  // bucket 2. After bucket 4, so a live quotation's outcome comes first; the request furthest along
+  // the route wins, so an earlier party's stale redo draft never takes over a later party's.
+  const redo = ownPrs.filter((pr) => pr.status === 'QUOTATION_ISSUED' && isRedo(pr, quotationOf(pr))).sort(byRoute).at(-1);
+  if (redo) return issueQuotationAction(redo, quotationOf(redo));
 
   // 5. The deal is delivery-ready (goods received / from stock / mid-
   //    delivery) and nothing upstream of it (buckets 1-4) is still open.

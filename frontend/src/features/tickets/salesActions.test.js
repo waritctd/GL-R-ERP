@@ -504,13 +504,17 @@ describe('nextSalesAction — the route choice once a designer/owner quotation i
     },
   );
 
-  // (A revision awaiting approval is a waiting line instead — see workState.test.js.)
-  it.each(['REVISION_REQUESTED', 'DRAFT'])(
-    'a designer quotation awaiting a revision (newest row %s) is not "sent": no route choice and no outcome prompt',
-    (docStatus) => {
-      expect(nextSalesAction(deal(), [designerSent], known([1, docStatus]))).toBeNull();
-    },
-  );
+  // Ruling 2026-10-27 (redo): a quotation being redone is written again for the same party — a
+  // fresh one from the request after a change request, or the redo draft already open. (One
+  // awaiting approval is a waiting line instead — see workState.test.js.)
+  it.each([
+    ['REVISION_REQUESTED', {}],
+    ['DRAFT', { to: '/quotations/9101' }],
+  ])('a designer quotation being redone (newest row %s) -> "เสนอใบราคาผู้ออกแบบ", not the route choice', (docStatus, extra) => {
+    expect(nextSalesAction(deal(), [designerSent], known([1, docStatus]))).toEqual({
+      key: SALES_ACTION.ISSUE_QUOTATION, label: 'เสนอใบราคาผู้ออกแบบ', pricingRequestId: 1, ...extra,
+    });
+  });
 
   // Ruling 2026-10-27 (a): no row for the request means its status alone decides, as on main.
   it.each([
@@ -569,19 +573,49 @@ describe('nextSalesAction — the route choice once a designer/owner quotation i
     expect(sorted.map((row) => row.deal.id)).toEqual([1, 9]);
   });
 
-  it.each(['SUBMITTED', 'CEO_REVIEWING'])(
-    'a later party\'s request with import/CEO (%s) -> nothing for the rep: no route choice, no outcome prompt for the designer',
-    (status) => {
-      expect(nextSalesAction(deal(), [designerSent, request(2, 'OWNER', status)], known([1, 'ISSUED']))).toBeNull();
+  // A designer/owner who said no is never quoted again: the route moved on (ruling 2026-10-27).
+  it.each([
+    ['SUBMITTED', 'ISSUED'],
+    ['CEO_REVIEWING', 'REJECTED'],
+  ])('a later party\'s request with import/CEO (%s) -> nothing for the rep: no route choice, outcome prompt or redo for the designer\'s %s quotation', (status, designerDoc) => {
+    expect(nextSalesAction(deal(), [designerSent, request(2, 'OWNER', status)], known([1, designerDoc]))).toBeNull();
+  });
+
+  // Ruling 2026-10-27 (redo): the buyer said no, let it expire or asked for changes -> a fresh
+  // quotation from the same request (DealQuotationService#createFromPricingRequest's re-quote).
+  it.each(['REJECTED', 'EXPIRED', 'REVISION_REQUESTED'])(
+    'a buyer quotation %s -> "เสนอใบราคาผู้ซื้อ" writes a fresh one from the same request, not บันทึกผลใบเสนอราคา',
+    (docStatus) => {
+      expect(nextSalesAction(deal(), [request(1, 'BUYER', 'QUOTATION_ISSUED')], known([1, docStatus]))).toEqual({
+        key: SALES_ACTION.ISSUE_QUOTATION, label: 'เสนอใบราคาผู้ซื้อ', pricingRequestId: 1,
+      });
     },
   );
 
-  it.each(['REVISION_REQUESTED', 'REJECTED', 'EXPIRED', 'SUPERSEDED'])(
-    'a buyer quotation no longer ISSUED (%s) stops prompting บันทึกผลใบเสนอราคา',
-    (docStatus) => {
-      expect(nextSalesAction(deal(), [request(1, 'BUYER', 'QUOTATION_ISSUED')], known([1, docStatus]))).toBeNull();
-    },
-  );
+  it('a buyer quotation superseded by a newer one on the deal prompts nothing (the server refuses that re-quote)', () => {
+    expect(nextSalesAction(deal(), [request(1, 'BUYER', 'QUOTATION_ISSUED')], known([1, 'SUPERSEDED']))).toBeNull();
+  });
+
+  // The owner's went out after the designer's: the owner being redone holds the route choice back
+  // and is redone itself.
+  it.each([
+    ['REVISION_REQUESTED', {}],
+    ['DRAFT', { to: '/quotations/9102' }],
+  ])('the owner\'s quotation being redone (%s) after the designer\'s went out -> "เสนอใบราคาเจ้าของโครงการ"', (docStatus, extra) => {
+    const prs = [designerSent, request(2, 'OWNER', 'QUOTATION_ISSUED')];
+    expect(nextSalesAction(deal(), prs, known([1, 'SUPERSEDED'], [2, docStatus]))).toEqual({
+      key: SALES_ACTION.ISSUE_QUOTATION, label: 'เสนอใบราคาเจ้าของโครงการ', pricingRequestId: 2, ...extra,
+    });
+  });
+
+  it('an earlier party\'s open redo draft never takes over the buyer\'s quotation: a live one still asks for its outcome, a rejected one is redone for the buyer', () => {
+    const prs = [designerSent, request(3, 'BUYER', 'QUOTATION_ISSUED')];
+    expect(nextSalesAction(deal(), prs, known([1, 'DRAFT'], [3, 'ISSUED'])))
+      .toMatchObject({ key: SALES_ACTION.RECORD_QUOTATION_OUTCOME, pricingRequestId: 3 });
+    expect(nextSalesAction(deal(), prs, known([1, 'DRAFT'], [3, 'REJECTED']))).toEqual({
+      key: SALES_ACTION.ISSUE_QUOTATION, label: 'เสนอใบราคาผู้ซื้อ', pricingRequestId: 3,
+    });
+  });
 
   it.each(['DESIGNER', 'OWNER', 'BUYER', null, 'UNSPECIFIED'])(
     'an accepted, unconfirmed %s request -> ยืนยันคำสั่งซื้อ, as on main (an acceptance is the order, whoever accepted)',

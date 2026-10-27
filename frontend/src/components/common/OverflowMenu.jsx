@@ -247,8 +247,9 @@ export function OverflowMenu({
               onClick={() => {
                 if (item.disabled) return;
                 setOpen(false);
-                // Focus back on the trigger first, so a dialog the item opens returns focus there.
-                triggerRef.current?.focus();
+                // Focus back on the trigger first, so a dialog the item opens returns focus there. It
+                // was just clicked, so it is on screen: no scroll (a padded scroller would jump).
+                triggerRef.current?.focus({ preventScroll: true });
                 item.onSelect();
               }}
             >

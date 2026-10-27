@@ -16748,8 +16748,17 @@ export const api = {
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
       if (ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') fail('ดีลต้นทางต้องอยู่ในสถานะ ACTIVE', 409);
-      if (pr.status !== 'APPROVED_FOR_QUOTATION') {
+      // The service's re-quote: a request already QUOTATION_ISSUED may be quoted again (its quotation was
+      // rejected, expired or sent back for changes; the live-quotation guard below refuses the rest),
+      // but never once a newer quotation on the deal superseded its latest one.
+      if (pr.status !== 'APPROVED_FOR_QUOTATION' && pr.status !== 'QUOTATION_ISSUED') {
         fail(`คำขอราคาต้องอยู่ในสถานะ 'อนุมัติราคาขายแล้ว' ก่อนจึงจะออกใบเสนอราคาลูกค้าได้ (ปัจจุบัน: ${pr.status})`, 409);
+      }
+      const latest = mockDealQuotations
+        .filter((q) => q.pricingRequestId === pr.id && q.origin === 'PRICING_REQUEST')
+        .reduce((newest, q) => (newest == null || q.id > newest.id ? q : newest), null);
+      if (pr.status === 'QUOTATION_ISSUED' && latest?.docStatus === 'SUPERSEDED') {
+        fail('คำขอราคานี้ถูกแทนที่ด้วยใบเสนอราคาฉบับใหม่ของดีลแล้ว — ออกใบเสนอราคาจากคำขอราคาล่าสุด หรือสร้างคำขอราคาใหม่', 409);
       }
       const decision = mockPricingDecisions.find((d) => d.pricingRequestId === pr.id && d.status === 'APPROVED');
       if (!decision) fail('ยังไม่มีราคาขายที่ CEO อนุมัติสำหรับคำขอราคานี้', 409);

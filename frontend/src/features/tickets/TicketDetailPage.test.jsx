@@ -2359,18 +2359,22 @@ describe('TicketDetailPage', () => {
     });
 
     // D1: the quotation map holds the NEWEST PRICING_REQUEST-origin row per request — a newer DRAFT
-    // revision means the designer's quotation is awaiting its revision, not "sent".
-    it('a designer quotation awaiting its revision (a newer DRAFT revision exists): nothing on the sticky bar yet', async () => {
+    // revision means the designer's quotation is being redone (ruling 2026-10-27: open that draft).
+    it('a designer quotation being redone (a newer DRAFT revision exists): เสนอใบราคาผู้ออกแบบ opens that draft, with no new write', async () => {
       deal({
         quotations: [
           requestQuotation(),
           requestQuotation({ id: 9102, number: 'QT-2026-0101-2', docStatus: 'DRAFT', revisionNo: 2, parentQuotationId: 9101 }),
         ],
       });
-      renderTicketDetailPage(salesOwnerUser);
-      await stickyInputsSettled();
+      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
 
-      expect(screen.queryByTestId('ticket-primary-action')).toBeNull();
+      const primary = await primaryWithAction('issue_quotation');
+      expect(primary.textContent).toContain('เสนอใบราคาผู้ออกแบบ');
+      fireEvent.click(primary);
+
+      await waitFor(() => expect(screen.getByTestId('location-probe').textContent).toBe('/quotations/9102'));
+      expect(api.dealQuotations.createFromPricingRequest).not.toHaveBeenCalled();
     });
 
     // A5: the next party's request was saved as a private DRAFT (e.g. to attach files) — the one

@@ -123,15 +123,19 @@ describe('OverflowMenu', () => {
   // Spec J1 (2026-10-27): a dialog an item opens (a confirm, a form) hands focus back, when it
   // closes, to whatever held focus when it opened — that has to be this trigger, not the menu item
   // the click is about to unmount.
-  it('selecting an item hands focus back to the trigger before the item runs', () => {
+  it('selecting an item hands focus back to the trigger before the item runs, without scrolling the page', () => {
     let focusedWhenSelected = null;
     render(<OverflowMenu items={[{ key: 'a', label: 'เปิดหน้าต่างยืนยัน', onSelect: () => { focusedWhenSelected = document.activeElement; } }]} />);
     const trigger = screen.getByRole('button', { name: 'การดำเนินการเพิ่มเติม' });
     fireEvent.click(trigger);
+    const focus = vi.spyOn(trigger, 'focus');
 
     fireEvent.click(screen.getByRole('menuitem', { name: 'เปิดหน้าต่างยืนยัน' }));
 
     expect(focusedWhenSelected).toBe(trigger);
+    // The trigger was just clicked, so it is on screen; a scroller that pads its top (the deal
+    // page's sticky header) would otherwise jump to "reveal" it.
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true });
   });
 
   it('Escape closes the menu and returns focus to the trigger', () => {
