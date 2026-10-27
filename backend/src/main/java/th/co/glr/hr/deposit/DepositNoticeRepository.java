@@ -422,13 +422,14 @@ public class DepositNoticeRepository {
     }
 
     /**
-     * Owner ruling 2026-10-23: a DEAL_DIRECT ส่วนลดพิเศษ row (ADJUSTMENT, qty -1) cannot be a
+     * Owner rulings 2026-10-23: a DEAL_DIRECT ส่วนลดพิเศษ row (ADJUSTMENT, qty -1) cannot be a
      * deposit line (the editor's PUT requires qty &gt;= 0), so its amount is spread over the goods
-     * lines in proportion to their amount: each share HALF_UP to 2 dp, the remainder on the last
-     * line with an amount, so the shares sum to the adjustment exactly. Descriptions are kept; a
-     * changed line's label shows its new per-unit discount.
-     * ponytail: the new net is stored at 2 dp, so a line whose qty does not divide its new amount
-     * moves the subtotal by under qty x 0.005 baht; spread per unit if that ever matters.
+     * lines in proportion to their amount. "2 decimals for all": each share is HALF_UP to 2 dp and
+     * each line's new net price is 2 dp, with no remainder pushed onto a last line. The notice
+     * totals are the sum of its own stored 2 dp lines ({@code amount = net x qty}), so they can
+     * differ from the quotation's total by under qty x 0.005 baht per line; that is the ruled
+     * outcome, not a bug. A line keeps the quotation's own discount wording, and gains the folded
+     * discount after it only when the fold lowered its price. A free line stays as it is.
      */
     static List<DepositNoticeItemRequest> foldAdjustments(List<DepositNoticeItemRequest> goods,
                                                           BigDecimal adjustment) {
@@ -437,27 +438,23 @@ public class DepositNoticeRepository {
         if (adjustment.signum() == 0 || goodsTotal.signum() == 0) {
             return goods;
         }
-        int last = -1;
-        for (int i = 0; i < goods.size(); i++) {
-            if (goods.get(i).netUnitPrice().multiply(goods.get(i).qty()).signum() != 0) last = i;
-        }
         List<DepositNoticeItemRequest> folded = new java.util.ArrayList<>();
-        BigDecimal left = adjustment;
-        for (int i = 0; i < goods.size(); i++) {
-            DepositNoticeItemRequest it = goods.get(i);
+        for (DepositNoticeItemRequest it : goods) {
             BigDecimal amount = it.netUnitPrice().multiply(it.qty());
             if (amount.signum() == 0) {
                 folded.add(it);
                 continue;
             }
-            BigDecimal share = i == last ? left
-                : adjustment.multiply(amount).divide(goodsTotal, 2, RoundingMode.HALF_UP);
-            left = left.subtract(share);
+            BigDecimal share = adjustment.multiply(amount).divide(goodsTotal, 2, RoundingMode.HALF_UP);
             BigDecimal net = amount.add(share).divide(it.qty(), 2, RoundingMode.HALF_UP);
-            BigDecimal perUnit = it.unitPrice().subtract(net);
+            BigDecimal foldedPerUnit = it.netUnitPrice().subtract(net);
+            String label = it.discountLabel();
+            if (foldedPerUnit.signum() > 0) {
+                String extra = "ส่วนลดพิเศษ " + foldedPerUnit.stripTrailingZeros().toPlainString() + " ต่อหน่วย";
+                label = label == null || label.isBlank() ? extra : label + " + " + extra;
+            }
             folded.add(new DepositNoticeItemRequest(it.seq(), it.description(), it.qty(), it.unit(), it.unitPrice(),
-                perUnit.signum() > 0 ? "ส่วนลด " + perUnit.stripTrailingZeros().toPlainString() + " ต่อหน่วย" : null,
-                net));
+                label, net));
         }
         return folded;
     }

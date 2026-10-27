@@ -1442,42 +1442,37 @@ function mockDepositNoticeItemsFromQuotation(items) {
 // never recomputed (label excepted — see below).
 function mockDepositNoticeItemsFromDealQuotation(row) {
   // DepositNoticeRepository#foldAdjustments: an ADJUSTMENT row (qty -1) is no deposit line; its
-  // amount is spread over the goods lines by amount, the remainder on the last line with one.
+  // amount is spread over the goods lines by amount, each share and each new net price 2 dp (no
+  // remainder on a last line: the notice total is its own 2 dp lines). A line keeps the quotation's
+  // own discount wording and gains the folded discount after it.
   // ponytail: the mock computes no % adjustment amount (MOCK_NOT_COMPUTED), so that row is only dropped.
   const goods = row.items.filter((item) => item.lineType !== 'ADJUSTMENT');
   const adjustment = row.items.filter((item) => item.lineType === 'ADJUSTMENT')
     .reduce((sum, item) => sum + (Number(item.netUnitPrice) || 0) * Number(item.quantity), 0);
   const amountOf = (item) => item.netUnitPrice * item.quantity;
   const total = goods.reduce((sum, item) => sum + amountOf(item), 0);
-  const last = goods.findLastIndex((item) => amountOf(item) !== 0);
-  let left = adjustment;
   return goods.map((item, idx) => {
     let netUnitPrice = item.netUnitPrice;
     if (adjustment && total && amountOf(item)) {
-      const share = idx === last ? round2(left) : round2((adjustment * amountOf(item)) / total);
-      left -= share;
+      const share = round2((adjustment * amountOf(item)) / total);
       netUnitPrice = round2((amountOf(item) + share) / item.quantity);
     }
     // Display label only: the mock stores no sales_discount, so this restates the column Java reads
     // (DealQuotationRepository#itemParams writes it as unitPrice − netUnitPrice).
-    const salesDiscount = round2(item.unitPrice - netUnitPrice);
+    const salesDiscount = round2(item.unitPrice - item.netUnitPrice);
+    const folded = round2(item.netUnitPrice - netUnitPrice);
+    const own = salesDiscount > 0 ? `ส่วนลด ${salesDiscount} ต่อหน่วย` : null;
+    const extra = folded > 0 ? `ส่วนลดพิเศษ ${folded} ต่อหน่วย` : null;
     return {
       seq: item.seq ?? idx + 1,
       description: item.descriptionLine?.trim() ? item.descriptionLine : 'รายการสินค้า',
       qty: item.quantity,
       unit: item.unit?.trim() ? item.unit : 'หน่วย',
       unitPrice: item.unitPrice,
-      discountLabel: salesDiscount > 0 ? `ส่วนลด ${salesDiscount} ต่อหน่วย` : null,
+      discountLabel: own && extra ? `${own} + ${extra}` : own ?? extra,
       netUnitPrice,
     };
   });
-}
-
-// Mirrors DepositNoticeService.createDraftFromQuotation (both create routes): one deposit notice
-// per deal, so no new draft while one is ISSUED (owner ruling 2026-10-23).
-function requireNoIssuedDepositNotice(ticketId) {
-  const issued = mockDepositNotices.find((d) => d.ticketId === Number(ticketId) && d.status === 'ISSUED');
-  if (issued) fail(`ดีลนี้ออกใบแจ้งรับมัดจำเลขที่ ${issued.docNumber} แล้ว จึงสร้างฉบับร่างใหม่ไม่ได้`, 409);
 }
 
 // Mirrors DepositNoticeService.zeroDepositRefusal: both deposit routes refuse a 0% quotation.
@@ -13480,6 +13475,11 @@ export const api = {
         fail(`ใบแจ้งรับมัดจำนี้มีเปอร์เซ็นต์มัดจำ ${+pct.toFixed(4)}% จึงออกเอกสารไม่ได้ (ต้องเป็นจำนวนเต็ม 1–100)`, 409);
       }
 
+      // Mirrors DepositNoticeService.issue's one-notice-per-deal refusal (owner ruling 2026-10-23).
+      // Checked before the payment-state gate: the mock cannot re-issue from DEPOSIT_NOTICE_ISSUED.
+      const other = mockDepositNotices.find((d) => d.ticketId === doc.ticketId && d.id !== doc.id && d.status === 'ISSUED');
+      if (other) fail(`ดีลนี้ออกใบแจ้งรับมัดจำเลขที่ ${other.docNumber} แล้ว จึงออกฉบับร่างนี้ไม่ได้`, 409);
+
       // Mirrors DepositNoticeService.issue: the document IS the payment-track step.
       // Requires a customer-confirmed quotation; advances paymentStatus and leaves
       // the main status at quotation_issued (no more document_issued flip).
@@ -13490,9 +13490,6 @@ export const api = {
       if (!(Number(doc.depositAmount) > 0)) fail('ใบแจ้งรับมัดจำนี้มียอดมัดจำ 0 บาท จึงออกเอกสารไม่ได้', 409);
       // Phase 1 lifecycle gate (mirrors DepositNoticeService.requireActiveLifecycle).
       requireActive(ticket);
-
-      // Supersede previous issued docs
-      mockDepositNotices.forEach((d) => { if (d.ticketId === doc.ticketId && d.id !== doc.id && d.status === 'ISSUED') d.status = 'SUPERSEDED'; });
 
       const thaiYear = new Date().getFullYear() + 543;
       doc.docNumber = `GLRD${String(thaiYear).slice(-2)}${String(mockDocNumberSeq++).padStart(3,'0')}`;

@@ -508,8 +508,19 @@ describe('mockApi.depositNotices.update deposit percent', () => {
   it('on an ISSUED notice is refused with 409 and changes nothing; no second draft on either route', async () => {
     const { ticketId } = await driveTicketToAcceptedQuotation();
     const { depositNotice: draft } = await api.depositNotices.createDraft(ticketId, { notes: [] });
+    const { depositNotice: secondDraft } = await api.depositNotices.createDraft(ticketId, { notes: [] });
     await api.tickets.confirmCustomer(ticketId);
     const { depositNotice: issued } = await api.depositNotices.issue(draft.id);
+
+    // Owner ruling 2026-10-23: a second draft that predates the issue takes no number either.
+    await expect(api.depositNotices.issue(secondDraft.id)).rejects.toMatchObject({
+      status: 409,
+      message: `ดีลนี้ออกใบแจ้งรับมัดจำเลขที่ ${issued.docNumber} แล้ว จึงออกฉบับร่างนี้ไม่ได้`,
+    });
+    const { depositNotice: secondReread } = await api.depositNotices.get(secondDraft.id);
+    expect(secondReread.status).toBe('DRAFT');
+    expect(secondReread.docNumber).toBeNull();
+    expect((await api.depositNotices.get(issued.id)).depositNotice.status).toBe('ISSUED');
 
     await expect(api.depositNotices.update(issued.id, { depositPercent: 0.4 }))
       .rejects.toMatchObject({ status: 409 });
@@ -523,7 +534,7 @@ describe('mockApi.depositNotices.update deposit percent', () => {
     const prId = (await api.pricingRequests.listForTicket(ticketId)).items
       .find((pr) => pr.status === 'QUOTATION_ACCEPTED').id;
     await expect(api.pricingRequests.createDepositNoticeFromQuotation(prId, {})).rejects.toMatchObject({ status: 409, message });
-    expect((await api.depositNotices.listByTicket(ticketId)).depositNotices).toHaveLength(1);
+    expect((await api.depositNotices.listByTicket(ticketId)).depositNotices).toHaveLength(2); // no third
   });
 });
 
@@ -609,9 +620,11 @@ describe('mock deposit-percent defaults match the Java PDFs', () => {
 describe('mockApi.depositNotices.issue refuses a 0-baht notice', () => {
   it('409s, and the draft stays DRAFT with no number', async () => {
     const { ticketId } = await driveTicketToNewEngineAcceptedQuotation({ depositPercent: 30 });
-    // create ignores a typed percent now; the mock's update still honours one, which stands in for the Java test's jdbc insert.
+    // update refuses a 0% now, so a free line (net price 0) stands in for the Java test's jdbc insert.
     const { depositNotice: created } = await api.depositNotices.createDraft(ticketId, {});
-    const { depositNotice: draft } = await api.depositNotices.update(created.id, { depositPercent: 0 });
+    const { depositNotice: draft } = await api.depositNotices.update(created.id, {
+      items: [{ seq: 1, description: 'Free item', qty: 2, unit: 'แผ่น', unitPrice: 0, netUnitPrice: 0 }],
+    });
     expect(draft.depositAmount).toBe(0);
     await expect(api.depositNotices.issue(draft.id))
       .rejects.toMatchObject({ status: 409, message: expect.stringContaining('0 บาท') });

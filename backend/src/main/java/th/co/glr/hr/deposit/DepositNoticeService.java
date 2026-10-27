@@ -268,6 +268,13 @@ public class DepositNoticeService {
         if (doc.depositAmount() == null || doc.depositAmount().signum() <= 0) {
             throw new ApiException(HttpStatus.CONFLICT, "ใบแจ้งรับมัดจำนี้มียอดมัดจำ 0 บาท จึงออกเอกสารไม่ได้");
         }
+        // Owner ruling 2026-10-23: one deposit notice per deal. A second draft (written before the
+        // first was issued) must not silently supersede the customer's document.
+        docs.findByTicket(doc.ticketId()).stream()
+            .filter(d -> d.id() != docId && "ISSUED".equals(d.status())).findFirst().ifPresent(d -> {
+                throw new ApiException(HttpStatus.CONFLICT,
+                    "ดีลนี้ออกใบแจ้งรับมัดจำเลขที่ " + d.docNumber() + " แล้ว จึงออกฉบับร่างนี้ไม่ได้");
+            });
         // Issuing advances the payment track — a paused/terminal deal must not move
         // (Phase 1 lifecycle gate; mirrors TicketService.requireActive).
         requireActiveLifecycle(s);

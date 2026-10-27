@@ -1078,26 +1078,30 @@ class DepositNoticeServiceTest {
             .containsExactly("0.333", "0.4");
     }
 
-    // DepositNoticeRepository#foldAdjustments (owner ruling 2026-10-23): the ส่วนลดพิเศษ amount is
-    // spread by line amount, HALF_UP per share, the remainder on the last line that has an amount,
-    // so the folded lines still sum to the quotation's total. A free line keeps its 0.
+    // DepositNoticeRepository#foldAdjustments (owner rulings 2026-10-23, "2 decimals for all"): the
+    // ส่วนลดพิเศษ amount is spread by line amount, each share HALF_UP to 2 dp, each new net price
+    // 2 dp. There is no remainder trick: the notice total is the sum of its own 2 dp lines (here
+    // 200.01, a cent over the quotation's 200.00). A line keeps the quotation's own discount wording
+    // and gains the folded discount after it; a line the fold did not touch keeps its label as is.
     @Test
-    void foldAdjustments_putsTheRoundingRemainderOnTheLastLineWithAnAmount() {
+    void foldAdjustments_keepsEachLinesOwnLabel_appendsTheFoldedDiscount_andTotalsFollowTheTwoDpLines() {
         List<DepositNoticeItemRequest> folded = DepositNoticeRepository.foldAdjustments(List.of(
-            foldLine(1, "1", "100.00"), foldLine(2, "1", "100.00"), foldLine(3, "1", "100.00"),
-            foldLine(4, "2", "0.00")), new BigDecimal("-100.00"));
+            foldLine(1, "1", "100.00", "ส่วนลด 5 ต่อหน่วย"), foldLine(2, "1", "100.00", null),
+            foldLine(3, "1", "100.00", null), foldLine(4, "2", "0.00", "ส่วนลด 9 ต่อหน่วย")),
+            new BigDecimal("-100.00"));
 
         assertThat(folded).extracting(it -> it.netUnitPrice().toPlainString())
-            .containsExactly("66.67", "66.67", "66.66", "0.00");
+            .containsExactly("66.67", "66.67", "66.67", "0.00");
         assertThat(folded.stream().map(it -> it.netUnitPrice().multiply(it.qty())).reduce(BigDecimal.ZERO, BigDecimal::add))
-            .isEqualByComparingTo("200.00");
-        assertThat(folded.get(2).discountLabel()).isEqualTo("ส่วนลด 33.34 ต่อหน่วย");
-        assertThat(folded.get(3).discountLabel()).isNull();
+            .isEqualByComparingTo("200.01");
+        assertThat(folded).extracting(DepositNoticeItemRequest::discountLabel).containsExactly(
+            "ส่วนลด 5 ต่อหน่วย + ส่วนลดพิเศษ 33.33 ต่อหน่วย", "ส่วนลดพิเศษ 33.33 ต่อหน่วย",
+            "ส่วนลดพิเศษ 33.33 ต่อหน่วย", "ส่วนลด 9 ต่อหน่วย");
     }
 
-    private static DepositNoticeItemRequest foldLine(int seq, String qty, String net) {
+    private static DepositNoticeItemRequest foldLine(int seq, String qty, String net, String label) {
         return new DepositNoticeItemRequest(seq, "Line " + seq, new BigDecimal(qty), "แผ่น",
-            new BigDecimal(net), null, new BigDecimal(net));
+            new BigDecimal(net), label, new BigDecimal(net));
     }
 
     private static void assertForbidden(org.assertj.core.api.ThrowableAssert.ThrowingCallable action) {

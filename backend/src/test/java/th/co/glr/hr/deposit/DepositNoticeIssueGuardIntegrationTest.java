@@ -211,7 +211,7 @@ class DepositNoticeIssueGuardIntegrationTest extends AbstractPostgresIntegration
     }
 
     @Test
-    void issue_secondDraftOnSameTicket_refusedUntilItsPercentAndAmountAreBillable_thenSupersedesTheFirst() {
+    void issue_secondDraftOnSameTicket_refusedUntilBillable_thenStillRefusedWhileAnotherNoticeIsIssued() {
         IssuedNoticeFixture fixture = buildTicketWithIssuedDepositNotice();
 
         // A stored percent outside whole 1-100 (a 0% ticket-route draft on a ไม่รับมัดจำ quotation,
@@ -231,21 +231,12 @@ class DepositNoticeIssueGuardIntegrationTest extends AbstractPostgresIntegration
                 1, "Free item", new BigDecimal("2"), "แผ่น", BigDecimal.ZERO, null, BigDecimal.ZERO))),
             "ใบแจ้งรับมัดจำนี้มียอดมัดจำ 0 บาท จึงออกเอกสารไม่ได้");
 
-        // POSITIVE control: once the percent is billable, the DRAFT -> ISSUED transition and the
-        // "supersede older ISSUED versions" behaviour work with the repository predicate in place.
+        // Owner ruling 2026-10-23: one deposit notice per deal. Even once the percent is billable,
+        // a SECOND draft cannot take a number while another notice is ISSUED (it used to silently
+        // supersede the customer's document): 409, the draft keeps no number, the first stays ISSUED.
         depositNoticeService.update(secondDocId, secondDraftHeader(), salesActor);
-        Optional<String> secondDocNumber = depositNoticeRepository.issue(secondDocId, salesRepId, "Sales");
-
-        assertThat(secondDocNumber).isPresent();
-        assertThat(secondDocNumber.get()).isNotEqualTo(fixture.docNumber());
-
-        DepositNoticeDto firstReread = depositNoticeRepository.findById(fixture.docId()).orElseThrow();
-        assertThat(firstReread.status()).isEqualTo("SUPERSEDED");
-        assertThat(firstReread.docNumber()).isEqualTo(fixture.docNumber());
-
-        DepositNoticeDto secondReread = depositNoticeRepository.findById(secondDocId).orElseThrow();
-        assertThat(secondReread.status()).isEqualTo("ISSUED");
-        assertThat(secondReread.docNumber()).isEqualTo(secondDocNumber.get());
+        assertIssueRefusedAndNothingChanged(fixture, secondDocId,
+            "ดีลนี้ออกใบแจ้งรับมัดจำเลขที่ " + fixture.docNumber() + " แล้ว จึงออกฉบับร่างนี้ไม่ได้");
     }
 
     // Owner ruling 2026-10-23: one deposit notice per deal. While one is ISSUED, neither create route
