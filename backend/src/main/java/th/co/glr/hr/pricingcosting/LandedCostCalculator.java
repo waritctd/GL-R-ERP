@@ -481,7 +481,12 @@ public class LandedCostCalculator {
             sqmPerPiece, piecesPerBox, linearMPerUnit, source.requestItem()));
         BigDecimal qtyPieces = quantityToPieces(source.requestItem().requestedQty(),
             source.requestItem().requestedUnitBasis(), sqmPerPiece, piecesPerBox, linearMPerUnit, source.requestItem());
-        BigDecimal qtySqm = sqmPerPiece.multiply(qtyPieces);
+        // sqmPerPiece is null for a line whose sqm could not be resolved (resolveSqmPerPiece's P0
+        // hardening). It is then UNCOSTABLE — set aside in costShipment, never routed through the
+        // freight grouping that is qtySqm's only consumer — so a null qtySqm here is correct, not a
+        // gap. (The goods cost above still computes: a null sqm only ever reaches a quote basis that
+        // does not need sqm — see resolveSqmPerPiece's Javadoc.)
+        BigDecimal qtySqm = sqmPerPiece == null ? null : sqmPerPiece.multiply(qtyPieces);
         // C = P x E, goods cost in THB, for this item's FULL requested quantity (a TOTAL, not a
         // per-piece figure) — see PricingFormulaEngine's class Javadoc for why C must be a total
         // (TC = (C+i+F)x(1+T)xcost_buffer + S is dimensionally a total, divided by Q at the very
@@ -568,20 +573,37 @@ public class LandedCostCalculator {
     }
 
     /**
-     * Why this item cannot be costed, in the CEO's own language, or null when it can. Both inputs
-     * are freight-table lookup keys ({@code sales.pricing_freight_rate}), so missing either one
-     * makes the lookup impossible rather than merely inaccurate — see V156.
+     * Why this item cannot be costed, in the CEO's own language, or null when it can. All three
+     * inputs feed the freight calculation ({@code sales.pricing_freight_rate} is keyed on thickness
+     * and origin country; its {@code Q} is in sqm), so missing any one makes the freight lookup
+     * impossible rather than merely inaccurate — see V156 (thickness/origin) and the P0 sqm
+     * hardening (2026-10). sqm-per-piece has a DIFFERENT source from thickness/origin (the factory
+     * quote's {@code sqm_per_unit} or the request's own {@code requested_qty_sqm}, NOT the Price
+     * Catalog), so it carries its own clause.
      */
     private String uncostableReason(ItemPhysicals item) {
+        boolean noSqm = item.sqmPerPiece() == null;
         boolean noThickness = item.thicknessMm() == null;
         boolean noCountry = item.originCountryCode() == null;
-        if (!noThickness && !noCountry) {
+        if (!noSqm && !noThickness && !noCountry) {
             return null;
+        }
+        String label = itemLabel(item.source().requestItem());
+        if (noSqm) {
+            StringBuilder missing = new StringBuilder("ตร.ม./แผ่น (sqm per piece)");
+            if (noThickness) {
+                missing.append(", ความหนา (thickness_mm)");
+            }
+            if (noCountry) {
+                missing.append(", ประเทศต้นทาง (origin country)");
+            }
+            return label + " ไม่มี" + missing + " ที่จำเป็นต่อการคำนวณค่าขนส่ง "
+                + "— คำนวณต้นทุนอัตโนมัติไม่ได้ กรุณาระบุ ตร.ม./แผ่น ในใบเสนอราคาโรงงาน หรือระบุต้นทุนเอง";
         }
         String missing = noThickness && noCountry ? "ความหนา (thickness_mm) และประเทศต้นทาง"
             : noThickness ? "ความหนา (thickness_mm)"
             : "ประเทศต้นทาง (origin country)";
-        return itemLabel(item.source().requestItem()) + " ไม่มี" + missing + " จาก Price Catalog "
+        return label + " ไม่มี" + missing + " จาก Price Catalog "
             + "— คำนวณค่าขนส่งอัตโนมัติไม่ได้ กรุณาระบุต้นทุนเอง หรือเชื่อมรายการนี้กับสินค้าใน Price Catalog "
             + "ที่มีข้อมูลครบ";
     }
@@ -754,13 +776,28 @@ public class LandedCostCalculator {
     }
 
     /**
-     * The sqm-per-piece physical conversion factor for a line, needed unconditionally: freight/
-     * insurance are always priced against sqm-derived quantities (see {@link #costShipment}),
-     * regardless of whether either side's unit basis is PER_SQM. Prefers the factory quote item's
-     * own {@code sqmPerUnit} (what Import entered when recording the response); falls back to the
-     * pricing-request item's requestedQtySqm/requestedQty ratio only when the quote item did not
-     * provide one. Does NOT silently default to 1 when neither source has data — that would cost
-     * every piece as if it were exactly 1 sqm, very rarely true — it 422s instead.
+     * The sqm-per-piece physical conversion factor for a line: freight is priced against
+     * sqm-derived quantities for EVERY item (see {@link #costShipment}), regardless of whether
+     * either side's unit basis is PER_SQM. Prefers the factory quote item's own {@code sqmPerUnit}
+     * (what Import entered when recording the response); falls back to the pricing-request item's
+     * requestedQtySqm/requestedQty ratio only when the quote item did not provide one. Does NOT
+     * silently default to 1 when neither source has data — that would cost every piece as if it
+     * were exactly 1 sqm, very rarely true.
+     *
+     * <p><b>Returns null rather than throwing (P0 hardening, 2026-10).</b> It used to throw 422
+     * here, which — exactly like the pre-V156 missing-thickness defect — aborted the WHOLE
+     * calculation before any costing row was written, poisoning every other (costable) line in the
+     * request and blocking the CEO from the manual-cost override screen that resolves it. A null now
+     * marks the line UNCOSTABLE (see {@link #uncostableReason}): it is set aside with a stated reason
+     * and NULL freight-dependent costs, the rest of the request still costs, and
+     * {@code PricingDecisionService#approve} is what refuses to let the uncostable line through
+     * un-resolved. Nothing is ever priced on a guessed sqm — the guarantee moved, it did not weaken.
+     *
+     * <p>This is a LEGACY-data path: V185 derives {@code requested_qty_sqm} on every new request, and
+     * {@code FactoryQuoteService#receive} requires {@code sqmPerUnit} for a PER_SQM quote, so a new
+     * deal always resolves here. A missing sqm therefore only ever reaches a quote whose own goods
+     * cost needs NO sqm (PER_PIECE/PER_BOX/PER_LINEAR_M) — a PER_SQM quote with no sqm cannot even
+     * compute its goods cost and still fails loudly in {@link #pricePerPiece}.
      */
     private BigDecimal resolveSqmPerPiece(FactoryQuoteItemDto quoteItem, PricingRequestItemDto requestItem) {
         BigDecimal fromQuote = quoteItem.sqmPerUnit();
@@ -774,7 +811,7 @@ public class LandedCostCalculator {
                 return fromRequest;
             }
         }
-        throw missingFactor(requestItem, "sqmPerUnit");
+        return null;
     }
 
     /**
