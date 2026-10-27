@@ -188,20 +188,22 @@ class DepositNoticeRepositoryDepositPercentIntegrationTest extends AbstractPostg
     }
 
     @Test
-    void pricingRequestOrigin_anAcceptedQuotationBeatsNewerIssuedAndApprovedOnes() {
+    void pricingRequestOrigin_anAcceptedQuotationBeatsANewerIssuedOne() {
         long ticketId = newBareTicket();
         long accepted = insertOriginTaggedQuotation(ticketId, "PRICING_REQUEST", "ACCEPTED", (short) 30);
         insertOriginTaggedQuotation(ticketId, "PRICING_REQUEST", "ISSUED", (short) 20);
-        insertOriginTaggedQuotation(ticketId, "PRICING_REQUEST", "APPROVED", (short) 10);
 
         assertGoverning(ticketId, accepted, false, "0.30");
     }
 
+    /** APPROVED is live on DEAL_DIRECT only: a PRICING_REQUEST approval lands on ISSUED
+     * ({@code DealQuotationRepository#approve}), so no writer produces the PRICING_REQUEST row here. */
     @Test
-    void dealDirectOrigin_ignoresNonLiveStatusesLikeDraftOrCancelled() {
+    void v2Origins_ignoreNonLiveStatuses_includingAPricingRequestApproved() {
         long ticketId = newBareTicket();
         insertOriginTaggedQuotation(ticketId, "DEAL_DIRECT", "DRAFT", (short) 60);
         insertOriginTaggedQuotation(ticketId, "DEAL_DIRECT", "CANCELLED", (short) 70);
+        insertOriginTaggedQuotation(ticketId, "PRICING_REQUEST", "APPROVED", (short) 10);
 
         assertThat(depositNotices.findGoverningQuotation(ticketId)).isEmpty();
     }
