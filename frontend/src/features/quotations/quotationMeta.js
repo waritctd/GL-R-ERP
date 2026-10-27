@@ -882,7 +882,7 @@ export function usesDirectNetPriceSqm(item, documentLanguage = 'TH') {
 // still always the SERVER's (see itemInputFromRow's own comment on that), and nothing here feeds
 // money math. They exist solely so the input can render/accept "แผ่น/ตร.ม." while the value that
 // actually travels to the server, and back, is still ตร.ม./แผ่น.
-function round2(n) {
+export function round2(n) {
   return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 }
 

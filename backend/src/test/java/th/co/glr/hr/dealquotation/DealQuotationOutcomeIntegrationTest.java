@@ -580,7 +580,7 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         assertThatThrownBy(() -> depositNoticeService.issue(draft.id(), salesActor))
             .isInstanceOf(ApiException.class)
             .hasFieldOrPropertyWithValue("status", HttpStatus.CONFLICT)
-            .hasMessageContaining("0 บาท");
+            .hasMessageContaining("0%");
 
         Map<String, Object> row = jdbc.queryForMap(
             "SELECT status, doc_number FROM sales.deposit_notice WHERE deposit_notice_id = :id", Map.of("id", draft.id()));

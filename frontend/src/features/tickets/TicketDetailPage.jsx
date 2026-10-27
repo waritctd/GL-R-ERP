@@ -2598,6 +2598,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                 summary={summary}
                 availableActions={availableActions}
                 pricingRequests={pricingRequests}
+                dealQuotations={dealQuotationRows}
                 showToast={showToast}
               />
             ) : null}

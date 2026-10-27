@@ -480,7 +480,8 @@ export const api = {
     get: (id) => apiRequest(API_ROUTES.depositNotices.get(id)),
     update: (id, payload) => apiRequest(API_ROUTES.depositNotices.update(id), { method: 'PUT', body: payload }),
     preview: (id) => apiRequest(API_ROUTES.depositNotices.preview(id), { method: 'POST' }),
-    issue: (id) => apiRequest(API_ROUTES.depositNotices.issue(id), { method: 'POST' }),
+    // payload.expectedUpdatedAt (optional): the draft's updatedAt as the caller last read it; 409 if it moved on.
+    issue: (id, payload) => apiRequest(API_ROUTES.depositNotices.issue(id), { method: 'POST', body: payload }),
     downloadXlsx: async (id) => {
       const res = await fetch(API_ROUTES.depositNotices.file(id, 'xlsx'), { credentials: 'include' });
       if (!res.ok) throw new Error('Download failed');

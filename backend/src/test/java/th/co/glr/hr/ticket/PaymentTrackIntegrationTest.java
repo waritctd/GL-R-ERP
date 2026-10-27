@@ -272,7 +272,7 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
-    void depositNoticeRevision_secondIssueSucceeds_mintsNewDocSupersedesFirst_paymentStatusStaysDepositNoticeIssued() {
+    void depositNoticeSecondIssue_isRefused_firstStaysIssued_noNumberConsumed_paymentStatusUnchanged() {
         Deal deal = buildDealToQuotationAccepted("revision");
         orderConfirmation.confirmOrder(
             deal.pricingRequestId(), new ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
@@ -281,18 +281,26 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
         DepositNoticeDto firstIssued = depositNoticeService.issue(firstDraft.id(), salesActor);
         assertThat(paymentStatusOf(deal.ticketId())).isEqualTo(PaymentTrack.DEPOSIT_NOTICE_ISSUED);
 
-        // A revision: a NEW draft on the SAME ticket, issued while payment_status is still
-        // DEPOSIT_NOTICE_ISSUED — PaymentTrack's one legal self-loop (guard e).
-        long secondDraftId = depositNoticeService.createDraft(deal.ticketId(), bareDraftRequest(), salesActor).id();
-        DepositNoticeDto secondIssued = depositNoticeService.issue(secondDraftId, salesActor);
+        // Owner ruling 2026-10-23: one deposit notice per deal. The create routes refuse a draft
+        // while a notice is ISSUED; a second draft that exists anyway (written by the repository,
+        // as a concurrent or pre-ruling draft would be) is refused at issue(), so the
+        // DEPOSIT_NOTICE_ISSUED self-loop is not reachable through this service.
+        assertThatThrownBy(() -> depositNoticeService.createDraft(deal.ticketId(), bareDraftRequest(), salesActor))
+            .isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        long secondDraftId = depositNoticeRepository.createDraft(
+            deal.ticketId(), bareDraftRequest(), bareDraftRequest().items());
+        assertThatThrownBy(() -> depositNoticeService.issue(secondDraftId, salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(e.getMessage()).contains(firstIssued.docNumber());
+            });
 
-        assertThat(secondIssued.docNumber()).isNotEqualTo(firstIssued.docNumber());
-        assertThat(secondIssued.status()).isEqualTo("ISSUED");
-        // PR #698's "AND status = 'DRAFT'" guard on DepositNoticeRepository.issue composes with
-        // this change: the second row really was DRAFT (createDraft never touches payment_status)
-        // when it was issued.
+        DepositNoticeDto second = depositNoticeRepository.findById(secondDraftId).orElseThrow();
+        assertThat(second.status()).isEqualTo("DRAFT");
+        assertThat(second.docNumber()).isNull();
         DepositNoticeDto firstReread = depositNoticeRepository.findById(firstIssued.id()).orElseThrow();
-        assertThat(firstReread.status()).isEqualTo("SUPERSEDED");
+        assertThat(firstReread.status()).isEqualTo("ISSUED");
         assertThat(firstReread.docNumber()).isEqualTo(firstIssued.docNumber());
         assertThat(paymentStatusOf(deal.ticketId())).isEqualTo(PaymentTrack.DEPOSIT_NOTICE_ISSUED);
     }

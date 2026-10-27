@@ -3162,6 +3162,72 @@ describe('TicketDetailPage', () => {
       expect(section.queryByRole('button', { name: 'ยืนยันรับมัดจำ' })).toBeNull();
     });
 
+    // Owner ruling 2026-10-23: ออกเอกสาร on the deal page goes through a confirm dialog with the
+    // stored percent and amounts (the notice is a numbered customer document from then on).
+    it('the owning rep issues a draft notice only through a confirm dialog showing its % and amounts', async () => {
+      api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [{
+        id: 9002, ticketId: 701, version: 1, status: 'DRAFT', docNumber: null, customerName: 'บริษัท ทดสอบ จำกัด',
+        depositPercent: 0.4, depositAmount: 200, vatPercent: 0.07, vatAmount: 14, totalPayable: 214, items: [],
+        updatedAt: '2026-10-23T08:57:19.732123Z',
+      }] });
+      api.depositNotices.issue.mockResolvedValue({ depositNotice: { id: 9002, status: 'ISSUED', docNumber: 'GLRD69001' } });
+
+      renderTicketDetailPage(salesOwnerUser);
+      const section = await depositSection();
+      fireEvent.click(await section.findByRole('button', { name: 'ออกเอกสาร' }));
+
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByText('ขอรับเงินมัดจำ (40%)')).not.toBeNull();
+      expect(within(dialog).getByText('200.00 บาท')).not.toBeNull();
+      expect(within(dialog).getByText('ภาษีมูลค่าเพิ่ม 7%')).not.toBeNull();
+      expect(within(dialog).getByText('14.00 บาท')).not.toBeNull();
+      expect(within(dialog).getByText('214.00 บาท')).not.toBeNull();
+      expect(api.depositNotices.issue).not.toHaveBeenCalled();
+
+      fireEvent.click(within(dialog).getByRole('button', { name: 'ออกเอกสาร' }));
+      // The amounts in the dialog are the draft as read at that stamp; an edit since is refused server-side.
+      await waitFor(() => expect(api.depositNotices.issue).toHaveBeenCalledWith(9002, { expectedUpdatedAt: '2026-10-23T08:57:19.732123Z' }));
+    });
+
+    // Owner ruling 2026-10-23: one deposit notice per deal. With one ISSUED the panel never offers
+    // to create another (the backend 409s it), and says so beside the issued number.
+    it('with an ISSUED notice, offers no create action and says the deal already has its notice', async () => {
+      api.pricingRequests.listForTicket.mockResolvedValue({ items: [
+        { id: 501, ticketId: 701, ticketCreatedById: 1, status: 'QUOTATION_ACCEPTED', orderConfirmedAt: '2026-07-21T00:00:00Z' },
+      ] });
+      api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [{
+        id: 9001, ticketId: 701, version: 1, status: 'ISSUED', docNumber: 'GLRD69001', depositPercent: 0.4,
+        depositAmount: 200, vatPercent: 0.07, vatAmount: 14, totalPayable: 214, items: [],
+      }] });
+
+      renderTicketDetailPage(salesOwnerUser);
+      const section = await depositSection();
+
+      expect(await section.findByText('GLRD69001')).not.toBeNull();
+      expect(section.getByText('ดีลนี้ออกใบแจ้งยอดเงินรับมัดจำแล้ว — สร้างฉบับใหม่ไม่ได้')).not.toBeNull();
+      expect(section.queryByRole('button', { name: 'สร้างใบแจ้งยอดเงินรับมัดจำ' })).toBeNull();
+    });
+
+    // A ไม่รับมัดจำ (0%) accepted quotation 409s on the server (#1173): the panel passes the deal's
+    // accepted quotation (3rd arg) and the notices (4th) — it used to put the notices in the 3rd slot.
+    it('offers the create action for an accepted quotation, but not when that quotation is 0%', async () => {
+      api.pricingRequests.listForTicket.mockResolvedValue({ items: [
+        { id: 501, ticketId: 701, ticketCreatedById: 1, status: 'QUOTATION_ACCEPTED', orderConfirmedAt: '2026-07-21T00:00:00Z' },
+      ] });
+      const quotation = (depositPercent) => ({ id: 31, origin: 'PRICING_REQUEST', pricingRequestId: 501, docStatus: 'ACCEPTED', depositPercent });
+      api.dealQuotations.listForTicket.mockResolvedValue({ items: [quotation(0)] });
+      const { unmount } = renderTicketDetailPage(salesOwnerUser);
+      const section = await depositSection();
+      await waitFor(() => expect(api.dealQuotations.listForTicket).toHaveBeenCalled());
+      expect(section.queryByRole('button', { name: 'สร้างใบแจ้งยอดเงินรับมัดจำ' })).toBeNull();
+      unmount();
+
+      api.dealQuotations.listForTicket.mockResolvedValue({ items: [quotation(0.3)] });
+      renderTicketDetailPage(salesOwnerUser);
+      const section2 = await depositSection();
+      expect(await section2.findByRole('button', { name: 'สร้างใบแจ้งยอดเงินรับมัดจำ' })).not.toBeNull();
+    });
+
     it('import (no business in the deposit section) never gets a "การเงิน" tab at all', async () => {
       renderTicketDetailPage({ id: 7, employeeId: 7, name: 'ฝ่ายนำเข้า', role: 'import' });
 

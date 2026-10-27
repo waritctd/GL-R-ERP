@@ -13,6 +13,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
@@ -23,6 +24,9 @@ import th.co.glr.hr.ticket.QuotationRenderer;
 
 @Repository
 public class DepositNoticeRepository {
+    static final String NOT_DRAFT = "ใบแจ้งรับมัดจำนี้ไม่ได้อยู่ในสถานะร่าง (DRAFT)";
+    static final String EDITED_ELSEWHERE = "ใบแจ้งรับมัดจำนี้ถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง";
+
     private final NamedParameterJdbcTemplate jdbc;
 
     public DepositNoticeRepository(NamedParameterJdbcTemplate jdbc) {
@@ -199,14 +203,22 @@ public class DepositNoticeRepository {
         return docId;
     }
 
+    /**
+     * Saves a DRAFT. Refuses with 409 before touching the lines when the row is no longer DRAFT
+     * (issued after the service read it) or, given {@code req.expectedUpdatedAt()}, someone else
+     * saved it since that stamp. {@code req.depositPercent()} is always set by the service.
+     */
     @Transactional
-    public void update(long docId, DepositNoticeDraftRequest req) {
-        BigDecimal depositPct = req.depositPercent() != null ? req.depositPercent() : new BigDecimal("0.50");
+    public void update(long docId, DepositNoticeDraftRequest req, List<DepositNoticeItemDto> storedItems) {
+        BigDecimal depositPct = req.depositPercent();
         BigDecimal vatPct = new BigDecimal("0.07");
         List<DepositNoticeItemRequest> items = req.items() != null ? req.items() : List.of();
 
-        BigDecimal subtotal = items.stream()
-            .map(it -> it.netUnitPrice().multiply(it.qty()))
+        // No items in the request (null or empty) keeps the stored lines (they are only replaced
+        // below when items are sent), so the subtotal must come from those same stored lines.
+        BigDecimal subtotal = (items.isEmpty()
+                ? storedItems.stream().map(it -> it.netUnitPrice().multiply(it.qty()))
+                : items.stream().map(it -> it.netUnitPrice().multiply(it.qty())))
             .reduce(BigDecimal.ZERO, BigDecimal::add)
             .setScale(2, RoundingMode.HALF_UP);
         BigDecimal deposit = subtotal.multiply(depositPct).setScale(2, RoundingMode.HALF_UP);
@@ -215,7 +227,7 @@ public class DepositNoticeRepository {
 
         String[] notesArr = req.notes() != null ? req.notes().toArray(String[]::new) : new String[0];
 
-        jdbc.update("""
+        int rows = jdbc.update("""
             UPDATE sales.deposit_notice SET
                 customer_name    = :customerName,
                 customer_tax_id  = :customerTaxId,
@@ -230,9 +242,11 @@ public class DepositNoticeRepository {
                 notes            = :notes,
                 updated_at       = now()
              WHERE deposit_notice_id = :id AND status = 'DRAFT'
+               AND (CAST(:expectedUpdatedAt AS timestamptz) IS NULL OR updated_at = :expectedUpdatedAt)
             """,
             new MapSqlParameterSource()
                 .addValue("id",              docId)
+                .addValue("expectedUpdatedAt", req.expectedUpdatedAt())
                 .addValue("customerName",    req.customerName())
                 .addValue("customerTaxId",   req.customerTaxId())
                 .addValue("customerAddress", req.customerAddress())
@@ -245,6 +259,12 @@ public class DepositNoticeRepository {
                 .addValue("totalPayable",    total)
                 .addValue("notes",           notesArr)
         );
+        if (rows == 0) {
+            boolean stillDraft = req.expectedUpdatedAt() != null && !jdbc.queryForList(
+                "SELECT 1 FROM sales.deposit_notice WHERE deposit_notice_id = :id AND status = 'DRAFT'",
+                Map.of("id", docId), Integer.class).isEmpty();
+            throw new th.co.glr.hr.common.ApiException(HttpStatus.CONFLICT, stillDraft ? EDITED_ELSEWHERE : NOT_DRAFT);
+        }
         if (!items.isEmpty()) {
             jdbc.update("DELETE FROM sales.deposit_notice_item WHERE deposit_notice_id = :id", Map.of("id", docId));
             insertItems(docId, items);
@@ -270,8 +290,12 @@ public class DepositNoticeRepository {
      *
      * @return the new doc number, or {@link Optional#empty()} if the row was not DRAFT.
      */
-    @Transactional
     public Optional<String> issue(long docId, long actorId, String actorName) {
+        return issue(docId, actorId, actorName, null);
+    }
+
+    @Transactional
+    public Optional<String> issue(long docId, long actorId, String actorName, java.time.OffsetDateTime expectedUpdatedAt) {
         int thaiYear = Year.now().getValue() + 543;
         String docNumber = nextDocNumber("DEPOSIT_NOTICE", thaiYear);
 
@@ -285,20 +309,22 @@ public class DepositNoticeRepository {
                 updated_at     = now()
              WHERE deposit_notice_id = :id
                AND status = 'DRAFT'
+               AND (CAST(:expectedUpdatedAt AS timestamptz) IS NULL OR updated_at = :expectedUpdatedAt)
             """,
-            Map.of("num", docNumber, "actorId", actorId, "actorName", actorName, "id", docId));
+            new MapSqlParameterSource()
+                .addValue("num", docNumber).addValue("actorId", actorId).addValue("actorName", actorName)
+                .addValue("id", docId).addValue("expectedUpdatedAt", expectedUpdatedAt));
 
         if (rows == 0) {
+            // Still a draft with a stamp given => it was saved after the caller read it.
+            boolean editedSince = expectedUpdatedAt != null && !jdbc.queryForList(
+                "SELECT 1 FROM sales.deposit_notice WHERE deposit_notice_id = :id AND status = 'DRAFT'",
+                Map.of("id", docId), Integer.class).isEmpty();
+            if (editedSince) {
+                throw new th.co.glr.hr.common.ApiException(HttpStatus.CONFLICT, EDITED_ELSEWHERE);
+            }
             return Optional.empty();
         }
-
-        // Supersede all older versions for same ticket
-        jdbc.update("""
-            UPDATE sales.deposit_notice SET status = 'SUPERSEDED', updated_at = now()
-             WHERE ticket_id = (SELECT ticket_id FROM sales.deposit_notice WHERE deposit_notice_id = :id)
-               AND deposit_notice_id <> :id
-               AND status = 'ISSUED'
-            """, Map.of("id", docId));
 
         return Optional.of(docNumber);
     }
@@ -365,14 +391,23 @@ public class DepositNoticeRepository {
      * items. Reads the RESOLVED display columns the quotation itself prints
      * ({@code qty}/{@code raw_unit}/{@code unit_price}/{@code final_unit_price}), NOT the legacy
      * {@code requested_*}/{@code approved_unit_price} columns the V2 chain leaves null. The
-     * discount-label wording matches {@link DepositNoticeService#itemsFromQuotation}. */
+     * discount-label wording matches {@link DepositNoticeService#itemsFromQuotation}. An ADJUSTMENT
+     * row is folded into the goods lines, see {@link #foldAdjustments}. */
     public List<DepositNoticeItemRequest> findDealQuotationItems(long quotationId) {
-        return jdbc.query("""
-            SELECT seq, description, qty, raw_unit, unit_price, sales_discount, final_unit_price
+        List<DepositNoticeItemRequest> goods = new java.util.ArrayList<>();
+        BigDecimal[] adjustment = {BigDecimal.ZERO};
+        jdbc.query("""
+            SELECT seq, description, qty, raw_unit, unit_price, sales_discount, final_unit_price, line_type
               FROM sales.quotation_item
              WHERE quotation_id = :quotationId
              ORDER BY seq
-            """, Map.of("quotationId", quotationId), (rs, i) -> {
+            """, Map.of("quotationId", quotationId), rs -> {
+                if ("ADJUSTMENT".equals(rs.getString("line_type"))) {
+                    BigDecimal net = rs.getBigDecimal("final_unit_price");
+                    BigDecimal qty = rs.getBigDecimal("qty");
+                    if (net != null && qty != null) adjustment[0] = adjustment[0].add(net.multiply(qty));
+                    return;
+                }
                 String description = rs.getString("description");
                 if (description == null || description.isBlank()) {
                     description = "รายการสินค้า";
@@ -385,10 +420,49 @@ public class DepositNoticeRepository {
                 String discountLabel = discount != null && discount.signum() > 0
                     ? "ส่วนลด " + discount.stripTrailingZeros().toPlainString() + " ต่อหน่วย"
                     : null;
-                return new DepositNoticeItemRequest(
+                goods.add(new DepositNoticeItemRequest(
                     rs.getInt("seq"), description, rs.getBigDecimal("qty"), unit,
-                    rs.getBigDecimal("unit_price"), discountLabel, rs.getBigDecimal("final_unit_price"));
+                    rs.getBigDecimal("unit_price"), discountLabel, rs.getBigDecimal("final_unit_price")));
             });
+        return foldAdjustments(goods, adjustment[0]);
+    }
+
+    /**
+     * Owner rulings 2026-10-23: a DEAL_DIRECT ส่วนลดพิเศษ row (ADJUSTMENT, qty -1) cannot be a
+     * deposit line (the editor's PUT requires qty &gt;= 0), so its amount is spread over the goods
+     * lines in proportion to their amount. "2 decimals for all": each share is HALF_UP to 2 dp and
+     * each line's new net price is 2 dp, with no remainder pushed onto a last line. The notice
+     * totals are the sum of its own stored 2 dp lines ({@code amount = net x qty}), so they can
+     * differ from the quotation's total by under qty x 0.005 baht per line; that is the ruled
+     * outcome, not a bug. A line keeps the quotation's own discount wording, and gains the folded
+     * discount after it only when the fold lowered its price. A free line stays as it is.
+     */
+    static List<DepositNoticeItemRequest> foldAdjustments(List<DepositNoticeItemRequest> goods,
+                                                          BigDecimal adjustment) {
+        BigDecimal goodsTotal = goods.stream().map(it -> it.netUnitPrice().multiply(it.qty()))
+            .reduce(BigDecimal.ZERO, BigDecimal::add);
+        if (adjustment.signum() == 0 || goodsTotal.signum() == 0) {
+            return goods;
+        }
+        List<DepositNoticeItemRequest> folded = new java.util.ArrayList<>();
+        for (DepositNoticeItemRequest it : goods) {
+            BigDecimal amount = it.netUnitPrice().multiply(it.qty());
+            if (amount.signum() == 0) {
+                folded.add(it);
+                continue;
+            }
+            BigDecimal share = adjustment.multiply(amount).divide(goodsTotal, 2, RoundingMode.HALF_UP);
+            BigDecimal net = amount.add(share).divide(it.qty(), 2, RoundingMode.HALF_UP);
+            BigDecimal foldedPerUnit = it.netUnitPrice().subtract(net);
+            String label = it.discountLabel();
+            if (foldedPerUnit.signum() > 0) {
+                String extra = "ส่วนลดพิเศษ " + foldedPerUnit.stripTrailingZeros().toPlainString() + " ต่อหน่วย";
+                label = label == null || label.isBlank() ? extra : label + " + " + extra;
+            }
+            folded.add(new DepositNoticeItemRequest(it.seq(), it.description(), it.qty(), it.unit(), it.unitPrice(),
+                label, net));
+        }
+        return folded;
     }
 
     private List<DepositNoticeItemDto> findItems(long docId) {
