@@ -136,8 +136,8 @@ describe('mock dealQuotations.promoteToDeal (GLA-136)', () => {
     await api.dealQuotations.promoteToDeal(flat.id);
     const { depositNotice } = await api.depositNotices.createDraft(ghost, {});
     expect(depositNotice.items.map((i) => [i.qty, i.unitPrice, i.netUnitPrice, i.discountLabel])).toEqual([
-      [10, 850, 841.5, 'ส่วนลด 8.5 ต่อหน่วย'],
-      [2, 500, 495, 'ส่วนลด 5 ต่อหน่วย'],
+      [10, 850, 841.5, 'ส่วนลดพิเศษ 8.5 ต่อหน่วย'],
+      [2, 500, 495, 'ส่วนลดพิเศษ 5 ต่อหน่วย'],
     ]);
     expect(depositNotice.subtotal).toBe(9405);
 

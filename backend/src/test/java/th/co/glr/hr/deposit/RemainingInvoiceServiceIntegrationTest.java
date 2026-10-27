@@ -811,11 +811,11 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
 
     /** A SECOND, wholly separate pricing-request chain on an ALREADY-EXISTING ticket — its own
      * catalog product, pricing request, factory quote, pricing decision and CustomerQuotation,
-     * driven to ACCEPTED + its own issued deposit notice, exactly like {@link #buildAcceptedDeal}
+     * driven to ACCEPTED (no second deposit notice: one ISSUED per deal), exactly like {@link #buildAcceptedDeal}
      * except it reuses the given ticket (and its first ticket item) instead of creating a new one.
      * Used by the O2 (one live remaining invoice per deal) tests to prove superseding/blocking
      * reaches a genuinely different chain, not merely a different id on the same fixture. */
-    private DealFixture buildSecondAcceptedQuotationChain(long ticketId, UserPrincipal owner, String label) {
+    private void buildSecondAcceptedQuotationChain(long ticketId, UserPrincipal owner, String label) {
         long catalogProductId = insertCatalogProduct(FACTORY, "IT",
             "TEST-RI-" + label + "-" + UUID.randomUUID().toString().substring(0, 8),
             new BigDecimal("100.00"), "THB", "per_piece");
@@ -866,15 +866,14 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
 
         orderConfirmation.confirmOrder(pricingRequestId,
             new ConfirmOrderRequest(UUID.randomUUID().toString()), owner);
-        // Chain A already holds an ISSUED deposit notice on this ticket, so both create routes refuse
-        // a second draft (owner ruling 2026-10-23). Chain B's notice is written by the repository with
-        // the reference and lines the pricing-request route would use, then issued for real.
-        long depositDraftId = new DepositNoticeRepository(jdbc).createDraft(ticketId,
-            new DepositNoticeDraftRequest(null, null, null, null, issuedB.number(), new BigDecimal("0.50"), List.of(), null),
-            DepositNoticeService.itemsFromQuotation(issuedB.items()));
-        DepositNoticeDto depositIssued = depositNoticeService.issue(depositDraftId, owner);
+        // Chain B has no deposit notice of its own, so it qualifies for a remaining invoice only through
+        // the bypass branch: flip the deal to NOT_REQUIRED (chain A's drafts/invoices were made earlier).
+        jdbc.update("UPDATE sales.ticket SET deposit_policy = 'NOT_REQUIRED' WHERE ticket_id = :id",
+            Map.of("id", ticketId));
+        // No deposit notice for chain B: a deal has at most one ISSUED deposit notice (owner ruling
+        // 2026-10-28), so chain A's stays the deal's only one; the remaining-invoice rules under test
+        // key off the accepted quotations, not a second notice.
 
-        return new DealFixture(ticketId, pricingRequestId, depositIssued.id());
     }
 
     private void driveDraftPricingRequestToQuotationAccepted(long pricingRequestId, BigDecimal quantity, UserPrincipal owner) {

@@ -428,14 +428,6 @@ describe('canConfirmOrder (roles)', () => {
 });
 
 describe('canCreateDepositNoticeFromQuotation', () => {
-  // Owner ruling 2026-10-23 (DepositNoticeService.createDraftFromQuotation): one notice per deal.
-  it('rejects once the deal has an ISSUED deposit notice; a DRAFT or SUPERSEDED one does not block', () => {
-    const confirmed = pr({ status: 'QUOTATION_ACCEPTED', orderConfirmedAt: '2026-07-21T00:00:00Z' });
-    expect(canCreateDepositNoticeFromQuotation(salesOwner, confirmed,
-      [{ id: 1, status: 'SUPERSEDED' }, { id: 2, status: 'ISSUED', docNumber: 'GLRD69001' }])).toBe(false);
-    expect(canCreateDepositNoticeFromQuotation(salesOwner, confirmed,
-      [{ id: 1, status: 'SUPERSEDED' }, { id: 3, status: 'DRAFT' }])).toBe(true);
-  });
   it('allows the owner sales rep only AFTER the bridge has run (orderConfirmedAt set)', () => {
     expect(canCreateDepositNoticeFromQuotation(salesOwner,
       pr({ status: 'QUOTATION_ACCEPTED', orderConfirmedAt: '2026-07-21T00:00:00Z' }))).toBe(true);

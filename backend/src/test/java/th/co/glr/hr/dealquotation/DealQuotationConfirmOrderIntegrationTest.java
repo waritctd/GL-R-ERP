@@ -261,8 +261,8 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
             .extracting(i -> i.qty().stripTrailingZeros().toPlainString(), i -> i.unitPrice().toPlainString(),
                 i -> i.netUnitPrice().toPlainString(), DepositNoticeItemDto::discountLabel)
             .containsExactly(
-                org.assertj.core.groups.Tuple.tuple("10", "100.00", "95.00", "ส่วนลด 5 ต่อหน่วย"),
-                org.assertj.core.groups.Tuple.tuple("2", "500.00", "475.00", "ส่วนลด 25 ต่อหน่วย"));
+                org.assertj.core.groups.Tuple.tuple("10", "100.00", "95.00", "ส่วนลดพิเศษ 5 ต่อหน่วย"),
+                org.assertj.core.groups.Tuple.tuple("2", "500.00", "475.00", "ส่วนลดพิเศษ 25 ต่อหน่วย"));
         assertThat(draft.items()).extracting(DepositNoticeItemDto::description).doesNotContain("ส่วนลดพิเศษ")
             .last().isEqualTo("ค่าขนส่ง");
         assertThat(draft.subtotal()).isEqualByComparingTo("1900.00");
