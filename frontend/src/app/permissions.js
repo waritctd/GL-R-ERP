@@ -181,16 +181,37 @@ const PATH_GUARDS = [
   { test: (p) => p === '/settings/leave-policy', can: (u) => hasPermission(u.role, 'canManageLeavePolicyDocument') },
 ];
 
-// Release lockdown (SELF_SERVICE_ONLY, app/features.js). HR and CEO are the
-// only roles that keep the full portal: HR runs payroll and works the ล.ย.01 /
-// profile-request registers, and CEO reads them. Every other role — sales,
-// sales_manager, import, account, warehouse, qc, employee, and a division
-// manager (role `employee` + manager flag) — is confined to self-service.
+// Release lockdown (SELF_SERVICE_ONLY, app/features.js). HR and CEO keep the
+// full portal: HR runs payroll and works the ล.ย.01 / profile-request
+// registers, and CEO reads them.
+//
+// Sales release (owner ruling, Ploy 2026-10-22): sales and sales_manager are
+// exempt too — they get back exactly what PATH_GUARDS already grants them (the
+// sales stack; never payroll or the HR registers). import and account stay
+// locked but get a per-role allowlist (RELEASED_PATHS_BY_ROLE below): import
+// sees งานนำเข้า and คิวขอราคา only, account sees การเงิน only. Every other
+// role — warehouse, qc, employee, and a division manager (role `employee` +
+// manager flag) — is confined to self-service.
 //
 // A division manager keeps their approval work despite being locked: leave and
 // OT approval live INSIDE /leave and /employee-requests, both self-service
 // paths, not on the DivisionManagerOverview landing this hides.
-const SELF_SERVICE_EXEMPT_ROLES = ['hr', 'ceo'];
+const SELF_SERVICE_EXEMPT_ROLES = ['hr', 'ceo', 'sales', 'sales_manager'];
+
+// Per-role release allowlist for roles that stay locked. Same prefix rule as
+// SELF_SERVICE_PATHS (the trailing slash is required, so `/finance` does not
+// admit `/finance-archive`). `/import/deals` is the queue's own per-deal
+// drill-down (dealRedirectFor), not a wider surface.
+const RELEASED_PATHS_BY_ROLE = {
+  import: ['/fulfilment', '/pricing-requests', '/import/deals'],
+  account: ['/finance'],
+};
+
+export function isReleasedPath(path, user) {
+  const pathname = path.split(/[?#]/)[0];
+  return (RELEASED_PATHS_BY_ROLE[user?.role] ?? [])
+    .some((allowed) => pathname === allowed || pathname.startsWith(`${allowed}/`));
+}
 
 export function isSelfServiceLocked(user) {
   if (!SELF_SERVICE_ONLY) return false;
@@ -275,17 +296,29 @@ export function isBillingNoteReleaseUser(user) {
   return Boolean(user?.canIssueBillingNote);
 }
 
+// Role -> its own per-deal page, and whether `/tickets/:id/<sub>` (the deposit page) follows.
+const DEAL_REDIRECTS = {
+  // `/tickets/:id/deposit` has no import equivalent and stays refused.
+  import: { prefix: '/import/deals', subPaths: false },
+  // Account works the deposit through the finance deal page. Under the self-service lock this is
+  // the ONLY way account's deal links land: RequireAccess refuses /tickets/* before
+  // TicketDetailRoute's own account redirect can mount (DepositNoticeService notifies account
+  // with a /tickets/:id link).
+  account: { prefix: '/finance/deals', subPaths: true },
+};
+
 /**
- * Where an `import` user landing on a whole-deal URL (`/tickets/:id`) should go instead: their own
+ * Where a user refused a whole-deal URL (`/tickets/:id`) should go instead: their role's own
  * per-deal page. Backend notification deep-links and old bookmarks still point at `/tickets/:id`,
- * and a dead-end refusal there helps nobody. Only the bare detail path redirects — `/tickets`
- * (the pipeline browser) and `/tickets/:id/deposit` have no import equivalent and stay refused.
+ * and a dead-end refusal there helps nobody. `/tickets` (the pipeline browser) never redirects.
  * Returns null when no redirect applies. Routing convenience only; the backend is the authority.
  */
-export function importDealRedirectFor(path, user) {
-  if (user?.role !== 'import') return null;
-  const match = /^\/tickets\/(\d+)\/?$/.exec(path.split(/[?#]/)[0]);
-  return match ? `/import/deals/${match[1]}` : null;
+export function dealRedirectFor(path, user) {
+  const target = DEAL_REDIRECTS[user?.role];
+  if (!target) return null;
+  const match = /^\/tickets\/(\d+)(\/[^/]+)?\/?$/.exec(path.split(/[?#]/)[0]);
+  if (!match || (match[2] && !target.subPaths)) return null;
+  return `${target.prefix}/${match[1]}`;
 }
 
 export function canAccessPath(path, user) {
@@ -300,7 +333,8 @@ export function canAccessPath(path, user) {
   // wanting one page. Narrow exemption, deliberate.
   const adminActivityLog = isActivityLogPath(path) && Boolean(user.admin);
   const quotationRelease = isQuotationPath(path) && isQuotationReleaseUser(user);
-  if (isSelfServiceLocked(user) && !isSelfServicePath(path) && !adminActivityLog && !quotationRelease) return false;
+  if (isSelfServiceLocked(user) && !isSelfServicePath(path) && !adminActivityLog && !quotationRelease
+    && !isReleasedPath(path, user)) return false;
   const guard = PATH_GUARDS.find((entry) => entry.test(path));
   if (!guard) return true;
   return guard.can(user);

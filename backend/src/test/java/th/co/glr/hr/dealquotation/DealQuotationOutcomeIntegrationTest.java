@@ -33,6 +33,8 @@ import th.co.glr.hr.customerquotation.DiscountApprovalRepository;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.ApproveRequest;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.RecordOutcomeRequest;
+import th.co.glr.hr.deposit.DepositNoticeDraftRequest;
+import th.co.glr.hr.deposit.DepositNoticeDto;
 import th.co.glr.hr.deposit.DepositNoticeRenderer;
 import th.co.glr.hr.deposit.DepositNoticeRepository;
 import th.co.glr.hr.deposit.DepositNoticeService;
@@ -106,6 +108,7 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
     private CustomerQuotationRepository legacyQuotationRepository;
     private CustomerQuotationService legacyQuotationService;
     private OrderConfirmationService orderConfirmation;
+    private DepositNoticeService depositNoticeService;
     private TicketRepository tickets;
     private TicketService ticketService;
 
@@ -184,7 +187,7 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
             new DiscountApprovalRepository(jdbc));
 
         DepositNoticeRepository depositNoticeRepository = new DepositNoticeRepository(jdbc);
-        DepositNoticeService depositNoticeService = new DepositNoticeService(depositNoticeRepository, tickets,
+        depositNoticeService = new DepositNoticeService(depositNoticeRepository, tickets,
             notifications, new DepositNoticeRenderer(), new RemainingInvoiceRenderer(), customers,
             legacyQuotationRepository);
         orderConfirmation = new OrderConfirmationService(
@@ -237,6 +240,172 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
             Map.of("id", issued.id()), Long.class);
         assertThat(pricingRequestService.get(pricingRequestId, salesActor).summary().status())
             .isEqualTo(PricingRequestStatus.QUOTATION_ACCEPTED);
+    }
+
+    // ── Deposit notice from the pricing-request route when the accepted quotation is NEW-engine ──
+    // QA finding 2026-10-18 (develop QA stack): DealDepositPanel/DepositNoticePage call
+    // POST /pricing-requests/{id}/deposit-notice whenever a QUOTATION_ACCEPTED pricing request exists;
+    // that route read only legacy CustomerQuotation rows and answered 409 for every deal quoted
+    // through DealQuotationService.createFromPricingRequest. Direct quotations never take this route.
+
+    @Test
+    void createDepositNoticeFromQuotation_newEngineAcceptedQuotation_createsTheSameDraftTheTicketRouteWould() {
+        DealQuotationDto accepted = acceptedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
+        long pricingRequestId = accepted.pricingRequestId();
+        orderConfirmation.confirmOrder(pricingRequestId,
+            new OrderConfirmationRequests.ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
+
+        DepositNoticeDto viaPricingRequest = orderConfirmation.createDepositNoticeFromQuotation(pricingRequestId,
+            new OrderConfirmationRequests.CreateDepositNoticeFromQuotationRequest(null), salesActor);
+
+        // The reference is the accepted quotation's number — the one thing this route adds over the ticket route.
+        assertThat(viaPricingRequest.reference()).isEqualTo(accepted.number());
+        assertThat(viaPricingRequest.items()).isNotEmpty();
+
+        // Items and percent are exactly what the ticket-level route produces for this deal (shared createDraft).
+        DepositNoticeDto viaTicket = depositNoticeService.createDraft(ticketId,
+            new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), salesActor);
+        assertThat(viaPricingRequest.depositPercent()).isEqualByComparingTo(viaTicket.depositPercent());
+        assertThat(viaPricingRequest.items())
+            .usingRecursiveComparison().ignoringFields("id")
+            .isEqualTo(viaTicket.items());
+
+        assertThat(jdbc.queryForObject("""
+            SELECT COUNT(*) FROM sales.pricing_request_event
+             WHERE pricing_request_id = :id AND event_kind = 'DEPOSIT_NOTICE_DRAFTED_FROM_QUOTATION'
+            """, Map.of("id", pricingRequestId), Long.class)).isEqualTo(1L);
+    }
+
+    @Test
+    void createDepositNoticeFromQuotation_newEngineIssuedNotAccepted_still409() {
+        DealQuotationDto issued = issuedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
+        long pricingRequestId = issued.pricingRequestId();
+
+        assertThatThrownBy(() -> orderConfirmation.createDepositNoticeFromQuotation(pricingRequestId,
+                new OrderConfirmationRequests.CreateDepositNoticeFromQuotationRequest(null), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("ยังไม่มีใบเสนอราคาที่ลูกค้ายอมรับสำหรับคำขอราคานี้");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sales.deposit_notice WHERE ticket_id = :id",
+            Map.of("id", ticketId), Long.class)).isZero();
+    }
+
+    /** A zero-deposit quotation ("ไม่รับมัดจำ", full payment) has no deposit to bill: the route must
+     * refuse rather than draft a 0-baht document, which nothing downstream would stop from being
+     * issued ({@code DepositNoticeService#issue} reads the ticket's deposit_policy, which no path
+     * syncs from a 0% quotation). */
+    @Test
+    void createDepositNoticeFromQuotation_newEngineAcceptedZeroDeposit_409AndNoDraft() {
+        DealQuotationDto accepted = acceptedZeroDepositNewOriginQuotation(PricingRequestRecipient.DESIGNER,
+            new BigDecimal("10"));
+        long pricingRequestId = accepted.pricingRequestId();
+        assertThat(accepted.depositPercent()).isZero();
+        orderConfirmation.confirmOrder(pricingRequestId,
+            new OrderConfirmationRequests.ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
+
+        assertThatThrownBy(() -> orderConfirmation.createDepositNoticeFromQuotation(pricingRequestId,
+                new OrderConfirmationRequests.CreateDepositNoticeFromQuotationRequest(null), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.CONFLICT)
+            .hasMessageContaining("ไม่มีมัดจำ");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sales.deposit_notice WHERE ticket_id = :id",
+            Map.of("id", ticketId), Long.class)).isZero();
+    }
+
+    @Test
+    void createDepositNoticeFromQuotation_newEngine_nonOwnerSales_cannotReach() {
+        DealQuotationDto accepted = acceptedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
+        long pricingRequestId = accepted.pricingRequestId();
+        orderConfirmation.confirmOrder(pricingRequestId,
+            new OrderConfirmationRequests.ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
+
+        assertThatThrownBy(() -> orderConfirmation.createDepositNoticeFromQuotation(pricingRequestId,
+                new OrderConfirmationRequests.CreateDepositNoticeFromQuotationRequest(null), otherSalesActor))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sales.deposit_notice WHERE ticket_id = :id",
+            Map.of("id", ticketId), Long.class)).isZero();
+    }
+
+    /** The ticket route (POST /api/tickets/{id}/deposit-notice/draft) had no owner check, unlike
+     * update/issue: another rep could draft on this deal and read its lines, prices and customer. */
+    @Test
+    void createDraft_ticketRoute_byNonOwningSales_refusedAndWritesNothing() {
+        var emptyRequest = new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null);
+        // Owner before status: a non-owner must not learn whether another rep's deal is approved yet
+        // (403 here, not the 409 the owner would get on this still-unapproved ticket).
+        assertThatThrownBy(() -> depositNoticeService.createDraft(ticketId, emptyRequest, otherSalesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.FORBIDDEN);
+
+        DealQuotationDto accepted = acceptedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
+        orderConfirmation.confirmOrder(accepted.pricingRequestId(),
+            new OrderConfirmationRequests.ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
+
+        assertThatThrownBy(() -> depositNoticeService.createDraft(ticketId, emptyRequest, otherSalesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.FORBIDDEN)
+            .hasMessageContaining("ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sales.deposit_notice WHERE ticket_id = :id",
+            Map.of("id", ticketId), Long.class)).isZero();
+
+        // Positive control: the owner still drafts on the same deal.
+        assertThat(depositNoticeService.createDraft(ticketId, emptyRequest, salesActor).ticketId()).isEqualTo(ticketId);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sales.deposit_notice WHERE ticket_id = :id",
+            Map.of("id", ticketId), Long.class)).isEqualTo(1L);
+    }
+
+    /** An open revision draft outranks the accepted quotation by id: recordOutcome has no
+     * open-revision guard, so "latest for this pricing request" is not "accepted". */
+    @Test
+    void createDepositNoticeFromQuotation_newEngineAcceptedWithAnOpenRevisionDraft_stillDraftsFromTheAcceptedOne() {
+        DealQuotationDto q1 = issuedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
+        DealQuotationDto q2 = quotationService.createRevision(q1.id(), salesActor);
+        assertThat(q2.id()).isGreaterThan(q1.id());
+        assertThat(q2.docStatus()).isEqualTo(QuotationStatus.DRAFT);
+        quotationService.recordOutcome(q1.id(),
+            new RecordOutcomeRequest(QuotationStatus.ACCEPTED, "ลูกค้าโอเค", UUID.randomUUID().toString()), salesActor);
+        long pricingRequestId = q1.pricingRequestId();
+        orderConfirmation.confirmOrder(pricingRequestId,
+            new OrderConfirmationRequests.ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
+
+        DepositNoticeDto draft = orderConfirmation.createDepositNoticeFromQuotation(pricingRequestId,
+            new OrderConfirmationRequests.CreateDepositNoticeFromQuotationRequest(null), salesActor);
+
+        assertThat(draft.reference()).isEqualTo(q1.number());
+        assertThat(draft.items()).isNotEmpty();
+    }
+
+    /** Engines are exclusive per pricing request, not per ticket: a sibling pricing request's
+     * legacy ISSUED quotation must not supply the lines or the percent of this pricing request's
+     * draft. */
+    @Test
+    void createDepositNoticeFromQuotation_newEngineAccepted_whenASiblingPricingRequestHasALegacyIssuedQuotation_draftsThisQuotationsLinesAndPercent() {
+        CustomerQuotationDto legacyIssued = issuedLegacyQuotation(PricingRequestRecipient.OWNER);
+        // No code path writes deposit_percent on a legacy row; this stands in for one that carries it.
+        assertThat(jdbc.update("UPDATE sales.quotation SET deposit_percent = 70 WHERE quotation_id = :id",
+            Map.of("id", legacyIssued.id()))).isEqualTo(1);
+        DealQuotationDto accepted = acceptedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"), 30);
+        long pricingRequestId = accepted.pricingRequestId();
+        orderConfirmation.confirmOrder(pricingRequestId,
+            new OrderConfirmationRequests.ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
+
+        DepositNoticeDto draft = orderConfirmation.createDepositNoticeFromQuotation(pricingRequestId,
+            new OrderConfirmationRequests.CreateDepositNoticeFromQuotationRequest(null), salesActor);
+
+        List<String> thisQuotationsLines = jdbc.query("""
+            SELECT qty, final_unit_price FROM sales.quotation_item WHERE quotation_id = :id ORDER BY seq
+            """, Map.of("id", accepted.id()),
+            (rs, i) -> line(rs.getBigDecimal("qty"), rs.getBigDecimal("final_unit_price")));
+        List<String> siblingLegacyLines = DepositNoticeService.itemsFromQuotation(legacyIssued.items()).stream()
+            .map(it -> line(it.qty(), it.netUnitPrice())).toList();
+        // The fixture must make the two sources distinguishable, or the assertion below proves nothing.
+        assertThat(thisQuotationsLines).isNotEmpty().isNotEqualTo(siblingLegacyLines);
+
+        assertThat(draft.reference()).isEqualTo(accepted.number());
+        assertThat(draft.items().stream().map(it -> line(it.qty(), it.netUnitPrice())).toList())
+            .isEqualTo(thisQuotationsLines);
+        assertThat(accepted.depositPercent()).isEqualTo(30);
+        assertThat(draft.depositPercent()).isEqualByComparingTo("0.30");
     }
 
     @Test
@@ -798,16 +967,48 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
     // Fixture helpers
     // ─────────────────────────────────────────────────────────────────────────────────────
 
+    private static String line(BigDecimal qty, BigDecimal netUnitPrice) {
+        return (qty == null ? "null" : qty.stripTrailingZeros().toPlainString()) + " @ "
+            + (netUnitPrice == null ? "null" : netUnitPrice.stripTrailingZeros().toPlainString());
+    }
+
     private DealQuotationDto acceptedNewOriginQuotation(String recipient, BigDecimal qty) {
-        DealQuotationDto issued = issuedNewOriginQuotation(recipient, qty);
+        return acceptedNewOriginQuotation(recipient, qty, null);
+    }
+
+    private DealQuotationDto acceptedNewOriginQuotation(String recipient, BigDecimal qty, Integer depositPercent) {
+        DealQuotationDto issued = issuedNewOriginQuotation(recipient, qty, depositPercent);
+        return quotationService.recordOutcome(issued.id(),
+            new RecordOutcomeRequest(QuotationStatus.ACCEPTED, "ลูกค้าโอเค", UUID.randomUUID().toString()), salesActor);
+    }
+
+    /** Like {@link #acceptedNewOriginQuotation} but with depositPercent 0, which {@code submit}
+     * only accepts together with a full-payment term ({@code resolveFullPaymentTerm}). */
+    private DealQuotationDto acceptedZeroDepositNewOriginQuotation(String recipient, BigDecimal qty) {
+        PricingDecisionDto decision = approvedDecision(recipient, qty);
+        DealQuotationDto draft = quotationService.createFromPricingRequest(decision.pricingRequestId(), salesActor);
+        DealQuotationRequests.UpsertDealQuotationRequest zeroDeposit = new DealQuotationRequests.UpsertDealQuotationRequest(
+            draft.contactId(), draft.deptCode(), draft.unitCode(), draft.offerDate(), 0, draft.remainderMode(),
+            draft.creditDays(), 30, null, null, draft.customerNotes(), draft.priceMode(), draft.documentLanguage(),
+            draft.currency(), null, null, null, null, "BEFORE_DELIVERY", null, null, null, null, null,
+            draft.items().stream().map(this::asItemInput).toList());
+        DealQuotationDto saved = quotationService.update(draft.id(), zeroDeposit, salesActor);
+        DealQuotationDto submitted = quotationService.submit(saved.id(), salesActor);
+        DealQuotationDto issued = quotationService.approve(submitted.id(), new ApproveRequest(null), salesManagerActor);
         return quotationService.recordOutcome(issued.id(),
             new RecordOutcomeRequest(QuotationStatus.ACCEPTED, "ลูกค้าโอเค", UUID.randomUUID().toString()), salesActor);
     }
 
     private DealQuotationDto issuedNewOriginQuotation(String recipient, BigDecimal qty) {
+        return issuedNewOriginQuotation(recipient, qty, null);
+    }
+
+    /** {@code depositPercent} null keeps the percent the quotation was created with. */
+    private DealQuotationDto issuedNewOriginQuotation(String recipient, BigDecimal qty, Integer depositPercent) {
         PricingDecisionDto decision = approvedDecision(recipient, qty);
         DealQuotationDto draft = quotationService.createFromPricingRequest(decision.pricingRequestId(), salesActor);
-        DealQuotationDto withValidity = quotationService.update(draft.id(), upsertWithValidityDays(draft, 30), salesActor);
+        DealQuotationDto withValidity = quotationService.update(draft.id(), upsertWithValidityDays(draft, 30,
+            depositPercent != null ? depositPercent : draft.depositPercent()), salesActor);
         DealQuotationDto submitted = quotationService.submit(withValidity.id(), salesActor);
         return quotationService.approve(submitted.id(), new ApproveRequest(null), salesManagerActor);
     }
@@ -918,9 +1119,14 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
     }
 
     private DealQuotationRequests.UpsertDealQuotationRequest upsertWithValidityDays(DealQuotationDto q, int days) {
+        return upsertWithValidityDays(q, days, q.depositPercent());
+    }
+
+    private DealQuotationRequests.UpsertDealQuotationRequest upsertWithValidityDays(DealQuotationDto q, int days,
+                                                                                    Integer depositPercent) {
         List<DealQuotationRequests.ItemInput> items = q.items().stream().map(this::asItemInput).toList();
         return new DealQuotationRequests.UpsertDealQuotationRequest(q.contactId(), q.deptCode(), q.unitCode(),
-            q.offerDate(), q.depositPercent(), q.remainderMode(), q.creditDays(), days, q.customerNotes(),
+            q.offerDate(), depositPercent, q.remainderMode(), q.creditDays(), days, q.customerNotes(),
             q.priceMode(), q.documentLanguage(), q.currency(), items);
     }
 

@@ -1,7 +1,7 @@
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { SALES_ENABLED } from '../../app/features.js';
-import { hasPermission, isDivisionManager, isQuotationReleaseUser, isSelfServiceLocked } from '../../app/permissions.js';
+import { hasPermission, isDivisionManager, isQuotationReleaseUser, isReleasedPath, isSelfServiceLocked } from '../../app/permissions.js';
 import { PRODUCT_NAME } from '../../app/product.js';
 import { cn } from '../../utils/cn.js';
 import { roleLabel } from '../../utils/format.js';
@@ -303,7 +303,10 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     // twin of permissions.js's quotation-release path exemption, keyed on the same predicate so
     // the two cannot disagree. It keeps its 'sales' group, so that header shows with this one item.
     .filter((item) => !navLocked || !item.group || item.group === 'self'
-      || (item.path === '/quotations' && isQuotationReleaseUser(user)));
+      || (item.path === '/quotations' && isQuotationReleaseUser(user))
+      // Sales release (owner ruling 2026-10-22): import's งานนำเข้า + คิวขอราคา and account's
+      // งานการเงิน survive the lock — the same allowlist canAccessPath applies.
+      || isReleasedPath(item.path, user));
 
   const closeTopbarPopover = useCallback(() => setActiveTopbarPopover(null), []);
   const closeDrawer = useCallback(() => setIsDrawerOpen(false), []);

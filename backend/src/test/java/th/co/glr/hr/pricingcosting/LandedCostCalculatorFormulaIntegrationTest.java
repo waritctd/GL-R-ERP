@@ -388,6 +388,104 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
     }
 
     @Test
+    void salesEnteredThickness_makesACatalogNullThicknessLineCostable() {
+        // Owner ruling 2026-10-15: a thickness Sales typed on the line is honoured by costing when
+        // the catalogue carries none — so a product the CEO used to see as "no thickness" (null
+        // catalogue thickness) is now costable from the Sales value. Pins resolveThicknessMm's
+        // catalog-then-request fallback.
+        long nullThicknessProductId = insertCatalogProduct("Sales Thickness Factory", "IT", "SALES-TH-001",
+            new BigDecimal("100.00"), "THB", "per_piece", "ACTIVE", null);
+        long pricingRequestId = readyForReviewWithProduct(nullThicknessProductId, "Sales Thickness Factory",
+            new BigDecimal("10"), UnitBasis.PER_PIECE, UnitBasis.PER_PIECE, new BigDecimal("10"), "100.00",
+            new BigDecimal("1"), null, null);
+        // The line carries a Sales-entered thickness (9mm, inside V109's Italy [8,12) band) while
+        // the catalogue row stays null — the in-flight/legacy shape the read-time fallback exists
+        // for (submit's write-back fills the catalogue FROM the item, so set it directly here to
+        // isolate the READ fallback rather than the write-back).
+        jdbc.update("UPDATE sales.pricing_request_item SET thickness_mm = 9 WHERE pricing_request_id = :id",
+            Map.of("id", pricingRequestId));
+        BigDecimal catalogThickness = jdbc.queryForObject(
+            "SELECT thickness_mm FROM price_catalog.product_prices WHERE price_id = :id",
+            Map.of("id", nullThicknessProductId), BigDecimal.class);
+        assertThat(catalogThickness).as("precondition: the catalogue row genuinely has no thickness").isNull();
+
+        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
+
+        PricingCostingItemDto item = costingItemFor(decision);
+        assertThat(item.uncostableReason())
+            .as("the Sales thickness feeds the freight lookup, so the line is NOT set aside as uncostable")
+            .isNull();
+        assertThat(item.totalLandedCostThb()).isNotNull();
+        assertThat(decision.items().get(0).frozenLandedCostPerRequestedUnitThb()).isNotNull();
+    }
+
+    @Test
+    void missingSqm_perPieceQuote_setAsideAsUncostable_withoutAbortingTheOtherLines() {
+        // THE P0 LEGACY CASE (QA 2026-10): import quoted a price per แผ่น (PER_PIECE) with a BLANK
+        // sqm_per_unit, on a request item that also carries no requested_qty_sqm — a pre-V185 row
+        // (V185 now derives requested_qty_sqm on every NEW request, so this shape is only reachable
+        // for legacy data). V109's freight lookup needs sqm-per-piece for EVERY item (Q is in sqm),
+        // so this line cannot be costed.
+        //
+        // Before this fix resolveSqmPerPiece threw 422, which aggregateProblems turned into ONE 422
+        // that aborted startReview for the WHOLE request — poisoning the costable line beside it and
+        // blocking the CEO from the screen that owns the manual-cost override. It now behaves exactly
+        // like a missing thickness (V156): the line is set ASIDE as uncostable, the rest of the
+        // request still costs, and approve() is the gate that refuses it.
+        long pricingRequestId = mixedCostableAndNoSqmSameFactory();
+
+        // (a) startReview SUCCEEDS — no aggregated 422. RED before the fix (resolveSqmPerPiece throws,
+        // aggregateProblems aborts the whole calculation).
+        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
+        assertThat(decision.items()).hasSize(2);
+
+        List<PricingCostingItemDto> costingItems =
+            costingRepository.find(decision.pricingCostingId()).orElseThrow().items();
+        assertThat(costingItems).hasSize(2);
+
+        PricingCostingItemDto noSqm = costingItems.stream()
+            .filter(i -> i.uncostableReason() != null).findFirst()
+            .orElseThrow(() -> new AssertionError("expected one line set aside as uncostable"));
+        PricingCostingItemDto costable = costingItems.stream()
+            .filter(i -> i.uncostableReason() == null).findFirst()
+            .orElseThrow(() -> new AssertionError("expected one line to cost cleanly"));
+
+        // (b) the uncostable line: freight-dependent costs NULL, reason names the missing sqm — but
+        // goods cost IS still recorded (computable for a per-piece quote without sqm; this is why no
+        // schema change was needed — goods_cost_thb/insurance_cost_thb stay NOT NULL per V156).
+        assertThat(noSqm.sqmPerUnit()).isNull();
+        assertThat(noSqm.totalLandedCostThb()).isNull();
+        assertThat(noSqm.landedCostPerUnitThb()).isNull();
+        assertThat(noSqm.goodsCostThb()).isNotNull();
+        assertThat(noSqm.uncostableReason())
+            .as("the row states that it is the sqm-per-piece conversion that is missing, naming the item")
+            .contains("ตร.ม.")
+            .containsPattern("รายการที่ \\d+");
+
+        // (c) the line BESIDE it still costs cleanly — one unresolvable line no longer aborts the
+        // whole request.
+        assertThat(costable.totalLandedCostThb()).isNotNull();
+
+        // (d) the decision snapshot for the uncostable line carries NO frozen cost...
+        PricingDecisionItemDto noSqmDecisionItem = decision.items().stream()
+            .filter(i -> i.frozenLandedCostPerRequestedUnitThb() == null).findFirst()
+            .orElseThrow(() -> new AssertionError("the uncostable line's decision item should have no frozen cost"));
+        assertThat(noSqmDecisionItem.frozenLandedCostPerRequestedUnitThb()).isNull();
+
+        // (e) ...and the guarantee only MOVED to approve(): it refuses while the line is still
+        // uncostable and un-overridden (wrong-way-round, so it goes red the moment the sqm path ever
+        // starts silently pricing freight at zero).
+        assertThatThrownBy(() -> decisionService.approve(decision.id(),
+                new ApprovePricingDecisionRequest(null, UUID.randomUUID().toString()), ceoActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT);
+                assertThat(e.getMessage()).contains("ต้นทุน");
+            });
+    }
+
+    @Test
     void missingFreightBand_countryNotInFormulaConfig_refusesToPrice_neverZero() {
         // "TH" is a genuinely valid, V151-seeded price_catalog.country row (so the catalog INSERT
         // itself succeeds) — V109 simply never seeded any Thailand freight rows, so the lookup
@@ -733,6 +831,59 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
             .toList();
         ReceiveFactoryQuoteRequest response = new ReceiveFactoryQuoteRequest("REF-MULTI", "THB", "30 days", "45 days",
             "revision", "note", quoteItems, UUID.randomUUID().toString());
+        factoryQuoteService.markContacted(draft.id(), new MarkFactoryContactedRequest(
+            java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
+        FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(), response, importActor);
+        factoryQuoteService.markReadyForCosting(responded.id(), importActor);
+        return pricingRequestId;
+    }
+
+    /**
+     * One costable item and one whose sqm-per-piece CANNOT be resolved (a PER_PIECE factory quote
+     * with a blank {@code sqm_per_unit} AND a legacy request row with no {@code requested_qty_sqm}),
+     * both sourced from the SAME factory so they share one shipment — the fixture for proving the
+     * unresolvable line is set ASIDE as uncostable without aborting the costable one beside it.
+     * Wiring mirrors {@link #twoItemSameFactoryReadyForReview}; the only differences are item B's
+     * null {@code requested_qty_sqm} (position 12 of the compat constructor) and its quote item's
+     * null {@code sqmPerUnit}.
+     */
+    private long mixedCostableAndNoSqmSameFactory() {
+        long productCostable = insertCatalogProduct("Formula Factory", "IT", "V109-SQM-OK-" + UUID.randomUUID(),
+            new BigDecimal("100.00"), "THB", "per_piece");
+        long productNoSqm = insertCatalogProduct("Formula Factory", "IT", "V109-SQM-MISSING-" + UUID.randomUUID(),
+            new BigDecimal("100.00"), "THB", "per_piece");
+        // item A: requested_qty_sqm = 10 (sqm/piece = 1) -> sqm resolves -> costable.
+        PricingRequestItemRequest costable = new PricingRequestItemRequest(
+            null, productCostable, null, "Test", "ModelOK", "Test ModelOK", null, null, "1x1", "Formula Factory",
+            new BigDecimal("10"), new BigDecimal("10"), "piece", UnitBasis.PER_PIECE, QuantityType.CONFIRMED, null, null, null);
+        // item B: requested_qty_sqm = null (legacy) -> paired with a blank quote sqm_per_unit below,
+        // sqm is unresolvable.
+        PricingRequestItemRequest noSqm = new PricingRequestItemRequest(
+            null, productNoSqm, null, "Test", "ModelNoSqm", "Test ModelNoSqm", null, null, "1x1", "Formula Factory",
+            new BigDecimal("10"), null, "piece", UnitBasis.PER_PIECE, QuantityType.CONFIRMED, null, null, null);
+        CreatePricingRequestRequest request = new CreatePricingRequestRequest(
+            PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
+            null, "THB", "V109 missing-sqm test", UUID.randomUUID().toString(), List.of(costable, noSqm));
+        // V185: bypasses PricingRequestService.createDraft on purpose (same reason as the helpers
+        // above) — submit() does NOT re-derive requested_qty_sqm, so item B's null survives to the
+        // calculator.
+        long pricingRequestId = pricingRequests.create(ticketId, pricingRequests.nextRequestCode(), request, salesRepId);
+        pricingRequestService.submit(pricingRequestId, salesActor);
+        pricingRequestService.pickup(pricingRequestId, importActor);
+        FactoryQuoteDto draft = factoryQuoteService.generateDrafts(pricingRequestId, importActor).stream()
+            .filter(q -> "Formula Factory".equals(q.factoryName())).findFirst().orElseThrow();
+        // draft.items() preserves request-item order (item A first, item B second) — the same
+        // assumption twoItemSameFactoryReadyForReview relies on.
+        ReceiveFactoryQuoteItemRequest costableQuote = new ReceiveFactoryQuoteItemRequest(
+            draft.items().get(0).pricingRequestItemId(), null, null, new BigDecimal("10"),
+            UnitBasis.PER_PIECE, UnitBasis.PER_PIECE, new BigDecimal("100.00"), "THB", null,
+            new BigDecimal("1"), null, null, "45 days", null, null);
+        ReceiveFactoryQuoteItemRequest noSqmQuote = new ReceiveFactoryQuoteItemRequest(
+            draft.items().get(1).pricingRequestItemId(), null, null, new BigDecimal("10"),
+            UnitBasis.PER_PIECE, UnitBasis.PER_PIECE, new BigDecimal("100.00"), "THB", null,
+            null, null, null, "45 days", null, null); // sqmPerUnit = null — blank on a PER_PIECE quote
+        ReceiveFactoryQuoteRequest response = new ReceiveFactoryQuoteRequest("REF-NOSQM", "THB", "30 days", "45 days",
+            "revision", "note", List.of(costableQuote, noSqmQuote), UUID.randomUUID().toString());
         factoryQuoteService.markContacted(draft.id(), new MarkFactoryContactedRequest(
             java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
         FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(), response, importActor);

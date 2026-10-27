@@ -1,6 +1,6 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TicketDetailPage } from './TicketDetailPage.jsx';
@@ -466,6 +466,60 @@ describe('TicketDetailPage', () => {
     // old `.content-scroll` rule) for mobile focus scrolling — see
     // ticketWorkspaceLayout.test.js, unaffected by this.
     expect(screen.queryByTestId('ticket-context-rail')).toBeNull();
+  });
+
+  // Regression guard for the sticky-chrome jitter bug: the header must condense off the
+  // two sentinels' IntersectionObserver visibility, NEVER off a scroller.scrollTop threshold
+  // (whose feedback loop — condense shrinks the page, scrollTop re-crosses the threshold —
+  // made the page bounce / snap to the top), and with HYSTERESIS so slow scrolling parked at
+  // the trigger can't flip-flop the collapse. jsdom has no layout and no real
+  // IntersectionObserver, so this pins the WIRING (condense follows sentinel visibility + the
+  // dead-band); the actual no-oscillation behaviour is verified in a real browser.
+  describe('sticky chrome condense is sentinel-driven with hysteresis (not scrollTop)', () => {
+    // Restore ONLY IntersectionObserver — vi.unstubAllGlobals() would also revert globals the
+    // shared setup stubs (e.g. URL.createObjectURL), breaking later files in the same worker.
+    const originalIntersectionObserver = globalThis.IntersectionObserver;
+    afterEach(() => {
+      if (originalIntersectionObserver === undefined) delete globalThis.IntersectionObserver;
+      else globalThis.IntersectionObserver = originalIntersectionObserver;
+    });
+
+    it('condenses past the lower sentinel, holds through the dead-band, expands at the top', async () => {
+      const ioInstances = [];
+      class MockIntersectionObserver {
+        constructor(cb, opts) { this.cb = cb; this.opts = opts; this.elements = []; ioInstances.push(this); }
+        observe(el) { this.elements.push(el); }
+        unobserve() {}
+        disconnect() {}
+        takeRecords() { return []; }
+      }
+      vi.stubGlobal('IntersectionObserver', MockIntersectionObserver);
+
+      renderTicketDetailPage();
+      const header = await screen.findByTestId('deal-state-header');
+      expect(header.getAttribute('data-condensed')).toBe('false'); // expanded at the top
+
+      const expandSentinel = document.querySelector('[data-testid="deal-chrome-expand-sentinel"]');
+      const condenseSentinel = document.querySelector('[data-testid="deal-chrome-condense-sentinel"]');
+      expect(expandSentinel).toBeTruthy();
+      expect(condenseSentinel).toBeTruthy();
+      // The condense observer is the one watching BOTH sentinels — proving the trigger is
+      // sentinel visibility (with a dead-band), not a scrollTop read.
+      const condenseIo = ioInstances.find((io) => io.elements.length >= 2);
+      expect(condenseIo).toBeTruthy();
+
+      // Scrolled past the lower sentinel → condense.
+      act(() => condenseIo.cb([{ target: condenseSentinel, isIntersecting: false }]));
+      expect(screen.getByTestId('deal-state-header').getAttribute('data-condensed')).toBe('true');
+
+      // Slow scroll back INTO the dead-band (lower sentinel re-enters) → must stay condensed.
+      act(() => condenseIo.cb([{ target: condenseSentinel, isIntersecting: true }]));
+      expect(screen.getByTestId('deal-state-header').getAttribute('data-condensed')).toBe('true');
+
+      // All the way back to the very top (top sentinel visible) → expand.
+      act(() => condenseIo.cb([{ target: expandSentinel, isIntersecting: true }]));
+      expect(screen.getByTestId('deal-state-header').getAttribute('data-condensed')).toBe('false');
+    });
   });
 
   it('renders a dash for มูลค่าดีล until a price exists', async () => {

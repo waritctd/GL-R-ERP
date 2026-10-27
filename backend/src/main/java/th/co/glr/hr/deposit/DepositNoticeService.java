@@ -92,7 +92,17 @@ public class DepositNoticeService {
     // Create a DRAFT from approved ticket items
     @Transactional
     public DepositNoticeDto createDraft(long ticketId, DepositNoticeDraftRequest req, UserPrincipal actor) {
+        return createDraftFromQuotation(ticketId, req, null, actor);
+    }
+
+    /** {@link #createDraft} for a caller that has already chosen the source quotation: a non-null
+     * {@code sourceDepositPercent} (that quotation's own whole-number {@code deposit_percent}) is
+     * the draft's percent, instead of the per-ticket lookup. */
+    @Transactional
+    public DepositNoticeDto createDraftFromQuotation(long ticketId, DepositNoticeDraftRequest req,
+                                                     Integer sourceDepositPercent, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
+        requireTicketOwner(ticketId, actor);
         TicketSummaryDto s = requireApprovedTicket(ticketId, actor);
         requireActiveLifecycle(s);
 
@@ -129,8 +139,9 @@ public class DepositNoticeService {
         // read a percent from at all (e.g. a manually-approved legacy ticket with no quotation
         // chain) — see DepositNoticeRepository#findDealQuotationDepositPercent's own Javadoc for
         // the full pick order.
-        BigDecimal effectiveDepositPercent = docs.findDealQuotationDepositPercent(ticketId)
-            .orElse(new BigDecimal("0.50"));
+        BigDecimal effectiveDepositPercent = sourceDepositPercent != null
+            ? BigDecimal.valueOf(sourceDepositPercent, 2)
+            : docs.findDealQuotationDepositPercent(ticketId).orElse(new BigDecimal("0.50"));
 
         var effective = new DepositNoticeDraftRequest(
             req.customerName() != null ? req.customerName() : s.customerName(),
@@ -1269,6 +1280,12 @@ public class DepositNoticeService {
             }
         }
         return latestAccepted != null ? latestAccepted : latestIssued;
+    }
+
+    /** The pricing-request route's new-engine item source, so the draft's rows come from the
+     * quotation its reference names. */
+    public List<DepositNoticeItemRequest> itemsFromDealQuotation(long quotationId) {
+        return docs.findDealQuotationItems(quotationId);
     }
 
     /**
