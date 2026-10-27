@@ -567,9 +567,9 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
      * Same off-path fact, proven through the real SERVICE call this time — this is what proves a
      * gap found while writing this test class: {@code DepositNoticeService.issue}'s loosened
      * precondition (site 2) originally checked ONLY {@code paymentStatus}, not {@code
-     * deposit_policy}. {@code createDraft} never checked {@code deposit_policy} either (it only
-     * gates on ticket status), so a WAIVED deal that had reached {@code CUSTOMER_CONFIRMED} could
-     * still acquire a real DRAFT deposit notice and sail past the service-level guard into {@code
+     * deposit_policy}. {@code createDraft} now refuses a bypass-policy deal, but a DRAFT made while
+     * the deal was still REQUIRED survives a later waive, so a WAIVED deal at {@code
+     * CUSTOMER_CONFIRMED} can still hold a real DRAFT deposit notice and sail past the service-level guard into {@code
      * advancePaymentStatus}, which would throw {@link IllegalStateException} UNCAUGHT —
      * {@code ApiExceptionHandler} has no handler for it, so it would have surfaced as an opaque
      * 500 ("เกิดข้อผิดพลาดภายในระบบ"), not a clean conflict. Fixed by adding an explicit {@code
@@ -579,10 +579,10 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void depositNoticeServiceIssue_onWaivedPolicyDeal_isRefusedWithCleanConflict_notAnUncaughtException() {
         long ticketId = createBareTicket();
-        tickets.updateDepositPolicy(ticketId, DepositPolicy.WAIVED, "ทดสอบ", salesRepId);
         tickets.markQuotationIssuedForOrderConfirmation(ticketId);
         tickets.updatePaymentStatusUnchecked(ticketId, PaymentTrack.CUSTOMER_CONFIRMED);
         long docId = depositNoticeService.createDraft(ticketId, bareDraftRequest(), salesActor).id();
+        tickets.updateDepositPolicy(ticketId, DepositPolicy.WAIVED, "ทดสอบ", salesRepId);
 
         assertThatThrownBy(() -> depositNoticeService.issue(docId, salesActor))
             .isInstanceOfSatisfying(ApiException.class,

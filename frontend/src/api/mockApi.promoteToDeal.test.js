@@ -173,4 +173,100 @@ describe('mock dealQuotations.promoteToDeal (GLA-136)', () => {
   it('404s an unknown quotation', async () => {
     await expect(api.dealQuotations.promoteToDeal(987654)).rejects.toMatchObject({ status: 404 });
   });
+
+  // Mirrors TicketService.applyCustomerConfirmation's policy sync (owner ruling 2026-10-22).
+  it('a 0% (ไม่รับมัดจำ) quotation confirms the deal onto depositPolicy NOT_REQUIRED', async () => {
+    const ghost = await quotationOnlyTicket();
+    const { quotation: draft } = await api.dealQuotations.create(ghost, {
+      recipientType: 'DESIGNER', depositPercent: 0, fullPaymentTerm: 'BEFORE_DELIVERY', items: [TILE, PLAIN],
+    });
+    await api.dealQuotations.submit(draft.id);
+    await asRole('sales_manager');
+    const { quotation: approved } = await api.dealQuotations.approve(draft.id);
+    await asRole('sales');
+
+    await api.dealQuotations.promoteToDeal(approved.id);
+
+    const { ticket } = await api.tickets.get(ghost);
+    expect(ticket.summary.depositPolicy).toBe('NOT_REQUIRED');
+    expect(ticket.events.filter((e) => e.kind === 'POLICY_CHANGED').map((e) => e.message))
+      .toEqual([expect.stringContaining(approved.number)]);
+  });
+
+  // PR #1173 review F1, mirrors DealQuotationService#approve -> TicketService
+  // #followQuotationDepositPolicy: while CUSTOMER_CONFIRMED, a policy the system set follows the
+  // newly approved revision; a policy a person set is kept.
+  async function approvedWith(ticketId, payload) {
+    const { quotation: draft } = await api.dealQuotations.create(ticketId, { recipientType: 'DESIGNER', ...payload });
+    await api.dealQuotations.submit(draft.id);
+    await asRole('sales_manager');
+    const { quotation } = await api.dealQuotations.approve(draft.id);
+    await asRole('sales');
+    return quotation;
+  }
+
+  async function approvedRevisionOf(source, payload) {
+    const { quotation: revision } = await api.dealQuotations.createRevision(source.id);
+    await api.dealQuotations.update(revision.id, { recipientType: 'DESIGNER', ...payload });
+    await api.dealQuotations.submit(revision.id);
+    await asRole('sales_manager');
+    const { quotation } = await api.dealQuotations.approve(revision.id);
+    await asRole('sales');
+    return quotation;
+  }
+
+  const ZERO = { depositPercent: 0, fullPaymentTerm: 'BEFORE_DELIVERY', items: [TILE, PLAIN] };
+  const FIFTY = { depositPercent: 50, items: [TILE, PLAIN] };
+  const policyEvents = (ticket) => ticket.events.filter((e) => e.kind === 'POLICY_CHANGED').map((e) => e.message);
+
+  it('a confirmed 0% deal whose approved revision adds a deposit goes back to REQUIRED', async () => {
+    const ghost = await quotationOnlyTicket();
+    const zero = await approvedWith(ghost, ZERO);
+    await api.dealQuotations.promoteToDeal(zero.id);
+
+    const revision = await approvedRevisionOf(zero, FIFTY);
+
+    const { ticket } = await api.tickets.get(ghost);
+    expect(ticket.summary.depositPolicy).toBe('REQUIRED');
+    expect(ticket.summary.depositPolicyReason).toBe(`ใบเสนอราคา ${revision.number} ระบุมัดจำ 50%`);
+    expect(policyEvents(ticket)).toHaveLength(2);
+  });
+
+  it('a confirmed 0% deal whose approved revision leaves the percent blank counts as 30 and is REQUIRED', async () => {
+    const ghost = await quotationOnlyTicket();
+    const zero = await approvedWith(ghost, ZERO);
+    await api.dealQuotations.promoteToDeal(zero.id);
+
+    const revision = await approvedRevisionOf(zero, { depositPercent: null, fullPaymentTerm: null, items: [TILE, PLAIN] });
+
+    const { ticket } = await api.tickets.get(ghost);
+    expect(ticket.summary.depositPolicy).toBe('REQUIRED');
+    expect(ticket.summary.depositPolicyReason).toBe(`ใบเสนอราคา ${revision.number} ระบุมัดจำ 30%`);
+  });
+
+  it('a confirmed 50% deal whose approved revision says ไม่รับมัดจำ moves to NOT_REQUIRED', async () => {
+    const ghost = await quotationOnlyTicket();
+    const fifty = await approvedWith(ghost, FIFTY);
+    await api.dealQuotations.promoteToDeal(fifty.id);
+
+    const revision = await approvedRevisionOf(fifty, ZERO);
+
+    const { ticket } = await api.tickets.get(ghost);
+    expect(ticket.summary.depositPolicy).toBe('NOT_REQUIRED');
+    expect(policyEvents(ticket)).toEqual([expect.stringContaining(revision.number)]);
+  });
+
+  it('a NOT_REQUIRED a person set is kept when a revision still carries a deposit', async () => {
+    const ghost = await quotationOnlyTicket();
+    const fifty = await approvedWith(ghost, FIFTY);
+    await api.dealQuotations.promoteToDeal(fifty.id);
+    await api.tickets.setDepositPolicy(ghost, { policy: 'NOT_REQUIRED', reason: 'ลูกค้าโอนเต็มจำนวนล่วงหน้า' });
+
+    await approvedRevisionOf(fifty, FIFTY);
+
+    const { ticket } = await api.tickets.get(ghost);
+    expect(ticket.summary.depositPolicy).toBe('NOT_REQUIRED');
+    expect(ticket.summary.depositPolicyReason).toBe('ลูกค้าโอนเต็มจำนวนล่วงหน้า');
+    expect(policyEvents(ticket)).toHaveLength(1);
+  });
 });

@@ -3554,6 +3554,20 @@ describe('PricingRequestDetailPage Step 6: Deposit, Payment, and Order Confirmat
     ));
   });
 
+  // PR #1173 review F4: a ไม่รับมัดจำ (0%) accepted quotation has no deposit, and the server 409s
+  // the draft, so the button is not offered. Waits for the quotation itself to render first, so the
+  // absence below is not just "the query has not resolved yet".
+  it('hides "สร้างใบแจ้งยอดเงินรับมัดจำ" when the accepted quotation says ไม่รับมัดจำ (0%)', async () => {
+    const accepted = { id: 9102, number: 'QT-2026-0102-1', docStatus: 'ACCEPTED', depositPercent: 0 };
+    api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: accepted });
+    const request = buildRequest({ summary: { status: 'QUOTATION_ACCEPTED', orderConfirmedAt: '2026-07-21T00:00:00Z' } });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+    await screen.findByText(accepted.number);
+
+    expect(screen.queryByRole('button', { name: 'สร้างใบแจ้งยอดเงินรับมัดจำ' })).toBeNull();
+  });
+
   it('never shows either Step 6 button to CEO or Import — read-only', async () => {
     const request = buildRequest({ summary: { status: 'QUOTATION_ACCEPTED', orderConfirmedAt: null } });
     renderDetailPage({ user: ceoUser, request });

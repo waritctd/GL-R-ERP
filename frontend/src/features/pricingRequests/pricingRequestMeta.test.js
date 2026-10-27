@@ -439,6 +439,19 @@ describe('canCreateDepositNoticeFromQuotation', () => {
     expect(canCreateDepositNoticeFromQuotation(otherSales,
       pr({ status: 'QUOTATION_ACCEPTED', orderConfirmedAt: '2026-07-21T00:00:00Z' }))).toBe(false);
   });
+  // PR #1173 review F4: the server 409s a deposit notice for a ไม่รับมัดจำ quotation (and for the
+  // bypass policy the confirmation now sets), so the button must not be offered.
+  it('rejects an accepted new-engine quotation that says ไม่รับมัดจำ (0%)', () => {
+    const confirmed = pr({ status: 'QUOTATION_ACCEPTED', orderConfirmedAt: '2026-07-21T00:00:00Z' });
+    expect(canCreateDepositNoticeFromQuotation(salesOwner, confirmed,
+      { docStatus: 'ACCEPTED', depositPercent: 0 })).toBe(false);
+    expect(canCreateDepositNoticeFromQuotation(salesOwner, confirmed,
+      { docStatus: 'ACCEPTED', depositPercent: 30 })).toBe(true);
+    // A blank percent is NOT ไม่รับมัดจำ: the PDF prints it as 30% (#1170), so the button stays.
+    expect(canCreateDepositNoticeFromQuotation(salesOwner, confirmed,
+      { docStatus: 'ACCEPTED', depositPercent: null })).toBe(true);
+    expect(canCreateDepositNoticeFromQuotation(salesOwner, confirmed, null)).toBe(true); // legacy chain
+  });
 });
 
 describe('canCancelPricingRequest', () => {

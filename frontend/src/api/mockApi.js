@@ -3730,6 +3730,34 @@ function depositBypassesNotice(ticket) {
   return ['NOT_REQUIRED', 'WAIVED', 'CREDIT_CUSTOMER'].includes(ticket.depositPolicy);
 }
 
+// Mirrors DepositNoticeService.createDraftFromQuotation's policy refusal, shared by both draft routes.
+function requireDepositNoticePath(ticket) {
+  if (depositBypassesNotice(ticket)) {
+    fail(`ดีลนี้ไม่ต้องเก็บมัดจำ (นโยบายมัดจำ ${ticket.depositPolicy}) จึงสร้างใบแจ้งรับมัดจำไม่ได้`, 409);
+  }
+}
+
+// Mirrors TicketService.followQuotationDepositPolicy and TicketRepository
+// .syncDepositPolicyFromQuotation's compare-and-set: while CUSTOMER_CONFIRMED, a policy the system
+// owns (no person recorded in depositPolicySetBy, which setDepositPolicy writes) follows the
+// quotation: 0% -> NOT_REQUIRED, any deposit -> REQUIRED. Called at confirmation and on a
+// DEAL_DIRECT approval. depositPolicySetBy is internal: buildTicketDetail does not serve it.
+function followQuotationDepositPolicy(ticket, quotation, user) {
+  if (!quotation) return;
+  const percent = quotation.depositPercent ?? MOCK_DEFAULT_DEPOSIT_PERCENT; // blank new-engine % = 30
+  const noDeposit = percent === 0;
+  const expected = noDeposit ? 'REQUIRED' : 'NOT_REQUIRED';
+  if (ticket.paymentStatus !== 'CUSTOMER_CONFIRMED' || ticket.depositPolicySetBy != null
+    || (ticket.depositPolicy ?? 'REQUIRED') !== expected) return;
+  const policy = noDeposit ? 'NOT_REQUIRED' : 'REQUIRED';
+  const reason = `ใบเสนอราคา ${quotation.number} `
+    + (noDeposit ? 'ระบุไม่รับมัดจำ (ชำระเต็มจำนวน)' : `ระบุมัดจำ ${percent}%`);
+  ticket.depositPolicy = policy;
+  ticket.depositPolicyReason = reason;
+  pushEvent(ticket, user, 'POLICY_CHANGED', ticket.salesStage, ticket.salesStage,
+    `deposit_policy → ${policy} — ${reason}`);
+}
+
 function moneyValue(value) {
   return Math.round((Number(value) || 0) * 100) / 100;
 }
@@ -9180,6 +9208,7 @@ export const api = {
       }
       ticket.depositPolicy = payload.policy;
       ticket.depositPolicyReason = payload.reason.trim();
+      ticket.depositPolicySetBy = user.employeeId ?? user.id; // deposit_policy_set_by: a person chose it
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
       pushEvent(ticket, user, 'POLICY_CHANGED', ticket.salesStage, ticket.salesStage,
         `deposit_policy → ${payload.policy} — ${payload.reason.trim()}`);
@@ -13290,6 +13319,7 @@ export const api = {
       // Phase 1 lifecycle gate (mirrors DepositNoticeService.createDraft).
       requireActive(ticket);
       if (!['approved', 'quotation_issued', 'document_issued'].includes(ticket.status)) fail('ดีลต้องได้รับการอนุมัติก่อน', 409);
+      requireDepositNoticePath(ticket);
 
       // Legacy path: auto-build from approved ticket items (sales.ticket_item.approved_price —
       // written only by the @Deprecated, routeless TicketService.approve).
@@ -13402,6 +13432,8 @@ export const api = {
       if (ticket.status !== 'quotation_issued' || ticket.paymentStatus !== 'CUSTOMER_CONFIRMED') {
         fail('ออกใบแจ้งรับมัดจำได้เฉพาะเมื่อออกใบเสนอราคาแล้วและลูกค้ายืนยันคำสั่งซื้อแล้วเท่านั้น', 409);
       }
+      // Mirrors DepositNoticeService.issue's amount guard: a 0-baht notice takes no number.
+      if (!(Number(doc.depositAmount) > 0)) fail('ใบแจ้งรับมัดจำนี้มียอดมัดจำ 0 บาท จึงออกเอกสารไม่ได้', 409);
       // Phase 1 lifecycle gate (mirrors DepositNoticeService.requireActiveLifecycle).
       requireActive(ticket);
 
@@ -16197,6 +16229,8 @@ export const api = {
         ticket.paymentStatus = 'CUSTOMER_CONFIRMED';
         ticket.updatedAt = now;
         pushEvent(ticket, user, 'CUSTOMER_CONFIRMED', ticket.status, ticket.status, null);
+        followQuotationDepositPolicy(ticket, mockDealQuotations.find(
+          (q) => q.pricingRequestId === pr.id && q.origin === 'PRICING_REQUEST' && q.docStatus === 'ACCEPTED'), user);
         autoAdvanceStage(ticket, 'ORDER_RECEIVED', user);
       }
 
@@ -16236,6 +16270,7 @@ export const api = {
       if (!['approved', 'quotation_issued', 'document_issued'].includes(ticket.status)) {
         fail('สร้างใบแจ้งรับมัดจำได้เฉพาะดีลที่อนุมัติแล้วเท่านั้น', 409);
       }
+      requireDepositNoticePath(ticket);
 
       // Branch fix: header autofill — this entry point never received an explicit customer/
       // project from its caller, so it always sourced the header from the (blank) defaults
@@ -17288,6 +17323,9 @@ export const api = {
         }
         ancestorId = ancestor.parentQuotationId;
       }
+      // #1173 review F1 (DealQuotationService#approve -> TicketService#followQuotationDepositPolicy).
+      const dealTicket = db.tickets.find((t) => t.id === row.ticketId);
+      if (dealTicket) followQuotationDepositPolicy(dealTicket, row, user);
       return delay({ quotation: buildDealQuotationDto(row) });
     },
 
@@ -17530,6 +17568,7 @@ export const api = {
       if (ticket.paymentStatus == null) {
         ticket.paymentStatus = 'CUSTOMER_CONFIRMED';
         pushEvent(ticket, user, 'CUSTOMER_CONFIRMED', ticket.status, ticket.status, null);
+        followQuotationDepositPolicy(ticket, row, user);
       }
       autoAdvanceStage(ticket, 'ORDER_RECEIVED', user);
       return result();
