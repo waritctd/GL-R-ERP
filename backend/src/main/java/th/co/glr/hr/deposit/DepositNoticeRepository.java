@@ -104,18 +104,18 @@ public class DepositNoticeRepository {
      *
      * <p>Live rows: a legacy pricing-chain quotation ({@code origin IS NULL}, {@code
      * pricing_request_id IS NOT NULL}, the scope {@code CustomerQuotationRepository#findByTicket}
-     * uses) that is ACCEPTED or ISSUED, or a new-engine one ({@code origin IN
-     * ('PRICING_REQUEST','DEAL_DIRECT')}) that is ACCEPTED, ISSUED or APPROVED. Engines are
-     * exclusive per pricing request, not per ticket, so one ticket can hold both.
+     * uses) that is ACCEPTED or ISSUED, a {@code PRICING_REQUEST}-origin one that is ACCEPTED or
+     * ISSUED, or a {@code DEAL_DIRECT} one that is ACCEPTED, ISSUED or APPROVED. APPROVED is
+     * DEAL_DIRECT only: a PRICING_REQUEST approval lands on ISSUED ({@code DealQuotationRepository
+     * #approve}). Engines are exclusive per pricing request, not per ticket, so one ticket can hold
+     * both.
      *
      * <p>Ranking: the latest quotation the customer ANSWERED wins: ACCEPTED on either engine, or
      * APPROVED on a DEAL_DIRECT quotation (its terminal state; it is never ACCEPTED). Only when
-     * nothing was answered does the newest ISSUED row win, then APPROVED (never reached in
-     * practice: a PRICING_REQUEST approval lands on ISSUED, {@code DealQuotationRepository
-     * #approve}). "Latest" is {@code quotation_id DESC}: one sequence across every engine and
-     * pricing request, set at creation. Not {@code accepted_at}/{@code approved_at}: those time
-     * different events (a customer answer against an internal approval), and either can be NULL
-     * on older or imported rows.
+     * nothing was answered does the newest ISSUED row win. "Latest" is {@code quotation_id DESC}:
+     * one sequence across every engine and pricing request, set at creation. Not {@code
+     * accepted_at}/{@code approved_at}: those time different events (a customer answer against an
+     * internal approval), and either can be NULL on older or imported rows.
      *
      * <p>Percent: what that quotation's PDF printed. A legacy row is always {@link
      * QuotationRenderer#LEGACY_DEPOSIT_PERCENT}: the legacy PDF never reads the stored column, so
@@ -129,11 +129,9 @@ public class DepositNoticeRepository {
               FROM sales.quotation
              WHERE ticket_id = :ticketId
                AND ((origin IS NULL AND pricing_request_id IS NOT NULL AND doc_status IN ('ACCEPTED','ISSUED'))
-                 OR (origin IN ('PRICING_REQUEST','DEAL_DIRECT') AND doc_status IN ('ACCEPTED','ISSUED','APPROVED')))
-             ORDER BY CASE WHEN doc_status = 'ACCEPTED' OR (origin = 'DEAL_DIRECT' AND doc_status = 'APPROVED') THEN 0
-                           WHEN doc_status = 'ISSUED' THEN 1
-                           ELSE 2
-                      END, quotation_id DESC
+                 OR (origin = 'PRICING_REQUEST' AND doc_status IN ('ACCEPTED','ISSUED'))
+                 OR (origin = 'DEAL_DIRECT' AND doc_status IN ('ACCEPTED','ISSUED','APPROVED')))
+             ORDER BY CASE WHEN doc_status IN ('ACCEPTED','APPROVED') THEN 0 ELSE 1 END, quotation_id DESC
              LIMIT 1
             """, Map.of("ticketId", ticketId), (rs, i) -> {
                 boolean legacy = rs.getBoolean("legacy");

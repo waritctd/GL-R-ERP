@@ -1479,7 +1479,7 @@ function mockGoverningQuotationForDepositNotice(ticketId) {
     if (q.ticketId !== ticketId) continue;
     const answered = q.docStatus === 'ACCEPTED'
       || ((q.origin || 'DEAL_DIRECT') === 'DEAL_DIRECT' && q.docStatus === 'APPROVED');
-    const rank = answered ? 0 : { ISSUED: 1, APPROVED: 2 }[q.docStatus];
+    const rank = answered ? 0 : { ISSUED: 1 }[q.docStatus];
     if (rank != null) candidates.push({ rank, quotation: q, legacy: false });
   }
   candidates.sort((a, b) => (a.rank - b.rank) || (b.quotation.id - a.quotation.id));
