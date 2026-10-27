@@ -46,6 +46,7 @@ import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionItemDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionRepository;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ApprovePricingDecisionRequest;
+import th.co.glr.hr.pricingdecision.PricingDecisionRequests.CostOverrideRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ProductTypeOverrideRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.StartPricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionService;
@@ -502,6 +503,34 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
             .singleElement().satisfies(i -> assertThat(i.totalLandedCostThb()).isNotNull());
         assertThat(items.stream().filter(i -> i.uncostableReason() != null).toList())
             .singleElement().satisfies(i -> assertThat(i.uncostableReason()).contains("ตร.ม."));
+    }
+
+    @Test
+    void missingSqm_perSqmLine_manualCostOverrideRefused409_andNothingIsWritten_clearStillWorks() {
+        // A no-sqm PER_SQM line stores 0 pieces; a manual per-piece cost x 0 pieces would total
+        // 0 THB and the selling price would follow. The set is refused before anything is written.
+        long pricingRequestId = mixedCostableAndNoSqmSameFactory(UnitBasis.PER_SQM);
+        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
+        PricingDecisionItemDto noSqm = decision.items().stream()
+            .filter(i -> i.frozenLandedCostPerRequestedUnitThb() == null).findFirst().orElseThrow();
+
+        assertThatThrownBy(() -> decisionService.overrideItemCost(decision.id(), noSqm.id(),
+                new CostOverrideRequest(new BigDecimal("50.0000"), "ตั้งต้นทุนเอง"), ceoActor))
+            .isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+
+        assertThat(costingRepository.find(decision.pricingCostingId()).orElseThrow().items().stream()
+            .filter(i -> i.uncostableReason() != null).findFirst().orElseThrow().manualLandedCostPerUnitThb())
+            .as("no override stored").isNull();
+        PricingDecisionDto after = decisionService.overrideItemCost(decision.id(), noSqm.id(),
+            new CostOverrideRequest(null, "ล้างการปรับ"), ceoActor);
+        assertThat(after.items().stream().filter(i -> i.id() == noSqm.id()).findFirst().orElseThrow()
+            .frozenLandedCostPerRequestedUnitThb()).as("clearing still works, cost stays null").isNull();
+        assertThatThrownBy(() -> decisionService.approve(decision.id(),
+                new ApprovePricingDecisionRequest(null, UUID.randomUUID().toString()), ceoActor))
+            .isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT));
     }
 
     @Test
