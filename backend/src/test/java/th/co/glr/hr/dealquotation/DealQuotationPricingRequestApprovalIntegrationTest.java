@@ -1,6 +1,7 @@
 package th.co.glr.hr.dealquotation;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -10,6 +11,11 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.apache.poi.hssf.usermodel.HSSFPicture;
 import org.apache.poi.hssf.usermodel.HSSFSheet;
 import org.apache.poi.ss.usermodel.CellType;
@@ -837,8 +843,149 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
         assertThat(approvalQueueIds()).doesNotContain(pending.id());
     }
 
+    /** One lock (owner ruling 2026-10-27): cancel takes the request's advisory lock, the one
+     * approve takes first, so the two serialise instead of updating the quotation and request rows
+     * in opposite orders. Thread A stands in for an approve holding that lock. The cancel must queue
+     * for it while holding no row lock (the NOWAIT probe), then finish once the lock frees. */
+    @Test
+    void cancel_waitsForTheRequestLockAnApproveHolds_beforeItsFirstWrite() throws Exception {
+        DealQuotationDto pending = submittedQuotation();
+        long pricingRequestId = pending.pricingRequestId();
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        CountDownLatch aHolds = new CountDownLatch(1);
+        CountDownLatch releaseA = new CountDownLatch(1);
+        try {
+            Future<?> approveInFlight = pool.submit(() -> transactionTemplate.execute(s -> {
+                new th.co.glr.hr.customerquotation.CustomerQuotationRepository(jdbc).lockPricingRequest(pricingRequestId);
+                aHolds.countDown();
+                try {
+                    releaseA.await(30, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return null;
+            }));
+            assertThat(aHolds.await(10, TimeUnit.SECONDS)).isTrue();
+            Future<?> cancel = pool.submit(() -> transactionTemplate.execute(s -> {
+                jdbc.getJdbcTemplate().execute("SET LOCAL lock_timeout = '30s'");
+                return pricingRequestService.cancel(pricingRequestId, cancelRequest(), salesActor);
+            }));
+
+            assertThat(awaitWaiterOnRequestLock(pricingRequestId, cancel))
+                .as("cancel queues for the request's advisory lock").isTrue();
+            assertThatCode(() -> transactionTemplate.execute(s -> jdbc.queryForList("""
+                    SELECT pricing_request_id FROM sales.pricing_request
+                     WHERE pricing_request_id = :id FOR UPDATE NOWAIT
+                    """, java.util.Map.of("id", pricingRequestId), Long.class)))
+                .as("cancel queued before writing the request row").doesNotThrowAnyException();
+
+            releaseA.countDown();
+            cancel.get(30, TimeUnit.SECONDS);
+            approveInFlight.get(10, TimeUnit.SECONDS);
+        } finally {
+            releaseA.countDown();
+            pool.shutdown();
+            pool.awaitTermination(30, TimeUnit.SECONDS);
+        }
+        assertThat(pricingRequestStatusOf(pricingRequestId)).isEqualTo(PricingRequestStatus.CANCELLED);
+        assertThat(statusOf(pending.id())).isEqualTo("SUPERSEDED");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // A customer-change revision retires the old request's quotation that is still waiting for
+    // approval (owner ruling 2026-10-27), as it already retired a DRAFT. The new round's quotation
+    // then needs ผจก.ขาย/CEO approval like any other. An ISSUED offer stays live until its
+    // replacement is issued (reissue-through-CEO-chain ruling, 2026-08-13).
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void customerChangeRevision_supersedesTheOldRequestsPendingApprovalQuotation_andApproveIsRefused() {
+        DealQuotationDto pending = submittedQuotation();
+
+        pricingRequestService.createCustomerChangeRevision(pending.pricingRequestId(), customerChangeRevision(), salesActor);
+
+        assertThat(statusOf(pending.id())).isEqualTo("SUPERSEDED");
+        assertThat(approvalQueueIds()).doesNotContain(pending.id());
+        assertThatThrownBy(() -> quotationService.approve(pending.id(), new ApproveRequest(null), salesManagerActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        assertThat(statusOf(pending.id())).isEqualTo("SUPERSEDED");
+    }
+
+    /** From QUOTATION_ISSUED: the pending quotation revision goes, the issued offer it would have
+     * replaced stays. */
+    @Test
+    void customerChangeRevision_retiresAPendingQuotationRevision_andTheIssuedOfferStaysLive() {
+        DealQuotationDto issued = issuedRound();
+        DealQuotationDto revision = quotationService.createRevision(issued.id(), salesActor);
+        quotationService.submit(revision.id(), salesActor);
+        assertThat(statusOf(revision.id())).isEqualTo("PENDING_APPROVAL");
+
+        pricingRequestService.createCustomerChangeRevision(issued.pricingRequestId(), customerChangeRevision(), salesActor);
+
+        assertThat(statusOf(revision.id())).isEqualTo("SUPERSEDED");
+        assertThat(statusOf(issued.id())).isEqualTo("ISSUED");
+        assertThatThrownBy(() -> quotationService.approve(revision.id(), new ApproveRequest(null), salesManagerActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        assertThat(statusOf(issued.id())).isEqualTo("ISSUED");
+    }
+
+    /** The approve guard on its own for a SUPERSEDED request, the same way as the CANCELLED test
+     * above: built through the real revision, then the quotation put back to PENDING_APPROVAL. */
+    @Test
+    void approve_ofAPendingQuotationLeftOnASupersededRequest_isRefusedForEitherApprover_andWritesNothing() {
+        DealQuotationDto live = issuedRound();
+        DealQuotationDto pending = submittedQuotation();
+        pricingRequestService.createCustomerChangeRevision(pending.pricingRequestId(), customerChangeRevision(), salesActor);
+        jdbc.update("UPDATE sales.quotation SET doc_status = 'PENDING_APPROVAL' WHERE quotation_id = :id",
+            java.util.Map.of("id", pending.id()));
+
+        for (UserPrincipal approver : List.of(salesManagerActor, ceoActor)) {
+            assertThatThrownBy(() -> quotationService.approve(pending.id(), new ApproveRequest(null), approver))
+                .isInstanceOfSatisfying(ApiException.class, e -> {
+                    assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                    assertThat(e.getMessage())
+                        .isEqualTo("คำขอราคาของใบเสนอราคานี้ถูกแทนที่ด้วยคำขอราคาฉบับแก้ไขแล้ว จึงอนุมัติไม่ได้");
+                });
+        }
+
+        assertThat(statusOf(pending.id())).isEqualTo("PENDING_APPROVAL");
+        assertThat(approverSnapshotCount(pending.id())).isZero();
+        assertThat(statusOf(live.id())).isEqualTo("ISSUED");
+        assertThat(supersededEventCount(ticketId, live.number(), pending.number())).isZero();
+    }
+
     private PricingRequestRequests.CancelPricingRequestRequest cancelRequest() {
         return new PricingRequestRequests.CancelPricingRequestRequest("ลูกค้ายกเลิกโครงการ");
+    }
+
+    /** A customer-change revision of a request built by {@link #twoItemPricingRequest}: the same
+     * recipient and the same two lines. */
+    private PricingRequestRequests.CustomerChangeRevisionRequest customerChangeRevision() {
+        return new PricingRequestRequests.CustomerChangeRevisionRequest(
+            "ลูกค้าขอเปลี่ยนแปลงรายละเอียด", UUID.randomUUID().toString(), PricingRequestRecipient.DESIGNER, null,
+            "Designer Co.", LocalDate.now().plusDays(14), new BigDecimal("1000.00"), "THB", "revision note",
+            null, null, null, null, null, null, null, null,
+            List.of(pricingItem("SCG", "Tile A-S2", "Factory A-S2", new BigDecimal("10")),
+                pricingItem("Cotto", "Tile B-S2", "Factory B-S2", new BigDecimal("5"))));
+    }
+
+    /** Waits until a backend is queued for {@code pricingRequestId}'s advisory lock (the
+     * single-bigint form every request locker uses: classid 0, objid the id, objsubid 1), or until
+     * {@code caller} finishes without ever queueing. */
+    private boolean awaitWaiterOnRequestLock(long pricingRequestId, Future<?> caller) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20);
+        while (System.nanoTime() < deadline && !caller.isDone()) {
+            Long waiting = jdbc.queryForObject("""
+                SELECT COUNT(*) FROM pg_locks
+                 WHERE locktype = 'advisory' AND NOT granted
+                   AND classid::bigint = 0 AND objid::bigint = :id AND objsubid = 1
+                """, java.util.Map.of("id", pricingRequestId), Long.class);
+            if (waiting != null && waiting > 0) {
+                return true;
+            }
+            Thread.sleep(50);
+        }
+        return false;
     }
 
     /** The approvals queue: every PENDING_APPROVAL quotation, as the sales manager lists them. */
