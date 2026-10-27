@@ -3743,14 +3743,15 @@ function requireDepositNoticePath(ticket) {
 // quotation: 0% -> NOT_REQUIRED, any deposit -> REQUIRED. Called at confirmation and on a
 // DEAL_DIRECT approval. depositPolicySetBy is internal: buildTicketDetail does not serve it.
 function followQuotationDepositPolicy(ticket, quotation, user) {
-  if (quotation?.depositPercent == null) return;
-  const noDeposit = quotation.depositPercent === 0;
+  if (!quotation) return;
+  const percent = quotation.depositPercent ?? MOCK_DEFAULT_DEPOSIT_PERCENT; // blank new-engine % = 30
+  const noDeposit = percent === 0;
   const expected = noDeposit ? 'REQUIRED' : 'NOT_REQUIRED';
   if (ticket.paymentStatus !== 'CUSTOMER_CONFIRMED' || ticket.depositPolicySetBy != null
     || (ticket.depositPolicy ?? 'REQUIRED') !== expected) return;
   const policy = noDeposit ? 'NOT_REQUIRED' : 'REQUIRED';
   const reason = `ใบเสนอราคา ${quotation.number} `
-    + (noDeposit ? 'ระบุไม่รับมัดจำ (ชำระเต็มจำนวน)' : `ระบุมัดจำ ${quotation.depositPercent}%`);
+    + (noDeposit ? 'ระบุไม่รับมัดจำ (ชำระเต็มจำนวน)' : `ระบุมัดจำ ${percent}%`);
   ticket.depositPolicy = policy;
   ticket.depositPolicyReason = reason;
   pushEvent(ticket, user, 'POLICY_CHANGED', ticket.salesStage, ticket.salesStage,

@@ -63,6 +63,7 @@ import th.co.glr.hr.ticket.TicketDto;
 import th.co.glr.hr.ticket.TicketEventKind;
 import th.co.glr.hr.ticket.TicketItemRequest;
 import th.co.glr.hr.ticket.TicketRepository;
+import th.co.glr.hr.ticket.TicketResponses;
 import th.co.glr.hr.ticket.TicketService;
 import th.co.glr.hr.ticket.TicketStatus;
 import th.co.glr.hr.ticket.TicketSummaryDto;
@@ -367,9 +368,17 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
         assertThat(after.paymentStatus()).isEqualTo("CUSTOMER_CONFIRMED");
         assertConflict(() -> depositNoticeService.createDraft(deal,
             new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), salesActor), "ไม่ต้องเก็บมัดจำ");
+        // The whole 0% walk (owner ruling 2026-10-27: 0% skips the deposit path automatically).
+        assertThat(ticketService.actions(deal, salesActor).availableActions())
+            .extracting(TicketResponses.TicketActionDto::action).doesNotContain("ISSUE_DEPOSIT_NOTICE");
+        ticketService.requireImportRequestIssuable(after); // a REQUIRED deal 409s here with no deposit
         // canConfirmFinalPaymentNow refuses a REQUIRED deal at CUSTOMER_CONFIRMED.
         assertThat(ticketService.confirmFinalPayment(deal, accountActor).summary().paymentStatus())
             .isEqualTo("FULLY_PAID");
+        assertThat(summary(deal).salesStage()).isNotEqualTo(DealStage.DEPOSIT_RECEIVED);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sales.ticket_event WHERE ticket_id = :id"
+            + " AND (to_status = 'DEPOSIT_RECEIVED' OR from_status = 'DEPOSIT_RECEIVED')",
+            Map.of("id", deal), Integer.class)).isZero();
     }
 
     /**
@@ -396,6 +405,23 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
         DepositNoticeDto draft = depositNoticeService.createDraft(deal,
             new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), salesActor);
         assertThat(draft.depositPercent()).isEqualByComparingTo("0.50");
+    }
+
+    /** Owner ruling 2026-10-23: a blank new-engine percent means 30 (DealQuotationRenderAdapter's PDF
+     * default), so a 0% deal whose approved revision leaves the percent blank is back on the deposit path. */
+    @Test
+    void zeroDepositConfirmed_thenARevisionWithABlankPercent_countsAsThirty_andIsRequired() {
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto zero = approvedQuotation(deal, zeroDepositDirectDraft());
+        confirmer.confirmOrderFromDirectQuotation(zero.id(), salesActor);
+        assertThat(summary(deal).depositPolicy()).isEqualTo("NOT_REQUIRED");
+
+        DealQuotationDto revision = approvedRevision(zero, blankDepositDirectDraft());
+
+        assertThat(revision.depositPercent()).isNull();
+        TicketSummaryDto after = summary(deal);
+        assertThat(after.depositPolicy()).isEqualTo("REQUIRED");
+        assertThat(after.depositPolicyReason()).isEqualTo("ใบเสนอราคา " + revision.number() + " ระบุมัดจำ 30%");
     }
 
     /** The other direction: a confirmed 50% deal whose approved revision says ไม่รับมัดจำ leaves
@@ -845,6 +871,14 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
     }
 
     /** {@link #directDraft} as a ไม่รับมัดจำ quotation: 0% submits only with a full-payment term. */
+    private UpsertDealQuotationRequest blankDepositDirectDraft() {
+        UpsertDealQuotationRequest d = directDraft();
+        return new UpsertDealQuotationRequest(d.contactId(), d.deptCode(), d.unitCode(), d.offerDate(), null,
+            d.remainderMode(), d.creditDays(), d.validityDays(), d.validityMode(), d.validityUntil(),
+            d.customerNotes(), d.priceMode(), d.documentLanguage(), d.currency(), null, null, null, null,
+            d.fullPaymentTerm(), null, null, null, null, d.recipientType(), d.items());
+    }
+
     private UpsertDealQuotationRequest zeroDepositDirectDraft() {
         UpsertDealQuotationRequest d = directDraft();
         return new UpsertDealQuotationRequest(d.contactId(), d.deptCode(), d.unitCode(), d.offerDate(), 0,

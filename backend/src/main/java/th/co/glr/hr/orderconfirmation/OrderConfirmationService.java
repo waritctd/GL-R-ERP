@@ -220,7 +220,8 @@ public class OrderConfirmationService {
         TicketDto ticketDto;
         if (currentTicketState.paymentStatus() == null) {
             // The accepted new-engine quotation's percent decides the deposit policy (owner ruling
-            // 2026-10-22, see TicketService#applyCustomerConfirmation). A legacy quotation carries none.
+            // 2026-10-22, see TicketService#applyCustomerConfirmation; a blank percent means 30, ruling 10-23).
+            // A legacy quotation carries none, so the policy is left alone.
             th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto confirmed = dealQuotations == null
                 ? null
                 : dealQuotations.findAcceptedForPricingRequest(pricingRequestId)
@@ -228,7 +229,9 @@ public class OrderConfirmationService {
                     .orElse(null);
             ticketDto = ticketService.confirmCustomer(locked.ticketId(),
                 confirmed == null ? null : confirmed.number(),
-                confirmed == null ? null : confirmed.depositPercent(), actor);
+                confirmed == null ? null
+                    : th.co.glr.hr.dealquotation.DealQuotationRenderAdapter.effectiveDepositPercent(confirmed.depositPercent()),
+                actor);
         } else {
             ticketDto = tickets.findById(locked.ticketId())
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));

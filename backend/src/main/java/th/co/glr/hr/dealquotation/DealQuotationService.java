@@ -1719,7 +1719,7 @@ public class DealQuotationService {
         // accepted quotation per deal, and its percent is applied at OrderConfirmationService#confirmOrder.
         if (ticketService != null) {
             ticketService.followQuotationDepositPolicy(approved.ticketId(), approved.number(),
-                approved.depositPercent(), actor);
+                DealQuotationRenderAdapter.effectiveDepositPercent(approved.depositPercent()), actor);
         }
         tickets.addEventWithDocument(approved.ticketId(), actor.id(), actor.name(), TicketEventKind.QUOTATION_ISSUED,
             null, null, "อนุมัติใบเสนอราคา " + approved.number(), RelatedDocumentType.QUOTATION, id);
@@ -2189,7 +2189,8 @@ public class DealQuotationService {
         // or stock reservation exists — both key on quotation_issued or later), and the only other
         // reference to a ticket_item, pricing_request_item.source_ticket_item_id, is ON DELETE SET NULL.
         tickets.replaceItems(ticketId, ticketItemsFromQuotation(fresh));
-        ticketService.confirmCustomerForPromotedQuotation(ticketId, fresh.number(), fresh.depositPercent(), actor);
+        ticketService.confirmCustomerForPromotedQuotation(ticketId, fresh.number(),
+            DealQuotationRenderAdapter.effectiveDepositPercent(fresh.depositPercent()), actor);
         return promotionResult(ticketId, quotationId);
     }
 
