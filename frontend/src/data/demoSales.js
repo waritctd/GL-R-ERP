@@ -1218,7 +1218,7 @@ export function buildDemoSalesSeed() {
   // FactoryPurchaseOrder CANCELLED; DepositNotice DRAFT (pre-drafted off the accepted
   // quotation while the deposit is awaited — D4 fix: was built from quotation19's
   // REVISION_REQUESTED doc, which neither createDepositNoticeFromQuotation (mockApi.js's
-  // hard 409) nor mockPickTicketQuotationForDepositNotice's ACCEPTED->ISSUED fallback would
+  // hard 409) nor mockGoverningQuotationForDepositNotice's answered->ISSUED fallback would
   // ever ACTUALLY pick, so that row could not exist in the real app).
   const pr20 = makePr({
     ticketId: 18, recipientType: 'BUYER', recipientLabel: 'ผู้รับเหมา Fashion Island',

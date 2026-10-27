@@ -11,9 +11,10 @@ public final class OrderConfirmationRequests {
     public record ConfirmOrderRequest(String clientRequestId) {}
 
     /**
-     * {@code depositPercent} is optional — {@code null} lets {@code DepositNoticeService
-     * .createDraft}/{@code DepositNoticeRepository.createDraft} apply their own existing 50%
-     * default, exactly as the legacy deposit-notice draft flow already does.
+     * {@code depositPercent} is never read (owner ruling 2026-10-23): the draft bills the percent
+     * the accepted quotation's PDF printed. Deleting the field would refuse no client, because
+     * unknown JSON fields are ignored; while it stays, its bounds still answer 400 to a stale
+     * client that sends a value outside 0-1.
      */
     public record CreateDepositNoticeFromQuotationRequest(
         @DecimalMin("0") @DecimalMax("1") BigDecimal depositPercent
