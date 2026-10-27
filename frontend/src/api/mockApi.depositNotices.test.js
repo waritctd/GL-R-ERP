@@ -1,7 +1,9 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { api, MOCK_DEFAULT_DEPOSIT_PERCENT, MOCK_LEGACY_DEPOSIT_PERCENT } from './mockApi.js';
+import {
+  api, MOCK_DEFAULT_DEPOSIT_PERCENT, MOCK_LEGACY_DEPOSIT_PERCENT, retireLivePricingRequestsForTests,
+} from './mockApi.js';
 
 // Branch fix (deposit-notice autofill): drives the mock's own pricing-request chain end to end
 // — Step 1 create through Step 5 customer-accept, then confirmOrder — against the REAL mock
@@ -312,6 +314,31 @@ describe('mockApi.pricingRequests.createDepositNoticeFromQuotation — new-engin
     await expect(api.depositNotices.createDraft(ticketId, {})).rejects.toMatchObject(refusal);
     const { depositNotices } = await api.depositNotices.listByTicket(ticketId);
     expect(depositNotices).toHaveLength(0);
+  });
+
+  // DepositNoticeRepositoryDepositPercentIntegrationTest#mixedTicket_aDealDirectApprovedQuotationBeatsAnOlderAcceptedOne
+  // on the mock: two answers in two mock arrays, so only "newest id" across both arrays can pick.
+  // Cancelling the pricing request stages the pre-lock data that lets a direct quotation sit beside it.
+  it('ticket-level createDraft bills a DEAL_DIRECT approval made after the accepted legacy quotation', async () => {
+    const { ticketId } = await driveTicketToAcceptedQuotation();
+    retireLivePricingRequestsForTests(ticketId);
+    const { quotation: draft } = await api.dealQuotations.create(ticketId, {
+      recipientType: 'DESIGNER', depositPercent: 40, remainderMode: 'ON_DELIVERY',
+      items: [{
+        model: 'Trilogy', color: 'Ash', texture: 'Matt', sizeText: '60x60', thicknessMm: 10, sqmPerPiece: 0.36,
+        quantityMode: 'AREA', areaSqm: 20, wastageMode: 'NONE', wastageValue: 0, piecesPerBox: 3,
+        unitPrice: 850, discountPct: 0, leadTimeMinDays: 30, leadTimeMaxDays: 45,
+      }],
+    });
+    await api.dealQuotations.submit(draft.id, {});
+    await api.auth.login({ role: 'sales_manager' });
+    const { quotation: approved } = await api.dealQuotations.approve(draft.id, {});
+    await api.auth.login({ role: 'sales' });
+    expect(approved.docStatus).toBe('APPROVED');
+
+    const { depositNotice } = await api.depositNotices.createDraft(ticketId, {});
+    expect(depositNotice.reference).toBe(approved.number);
+    expect(depositNotice.depositPercent).toBe(0.4);
   });
 });
 
