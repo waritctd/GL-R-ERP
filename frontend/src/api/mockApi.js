@@ -1216,8 +1216,7 @@ let mockDiscountApprovalSeq = 1;
   mockPricingDecisionSeq = salesSeed.nextSeq.pricingDecision;
   mockPricingDecisionItemSeq = salesSeed.nextSeq.pricingDecisionItem;
   mockCustomerQuotations.push(...salesSeed.customerQuotations);
-  // 3: past the two literal mockDealQuotations seeds (ids 1-2) further down.
-  mockQuotationSeq = Math.max(salesSeed.nextSeq.customerQuotation, 3);
+  mockQuotationSeq = salesSeed.nextSeq.customerQuotation;
   mockCustomerQuotationItemSeq = salesSeed.nextSeq.customerQuotationItem;
   // Deal-tracking readiness gate (dealIsReadyToAdvance) needs `ticket.nextFollowUpAt` set —
   // not part of the ticket's own literal object in demoSales.js since it's normally written
@@ -1477,9 +1476,7 @@ function mockGoverningQuotationForDepositNotice(ticketId) {
   }
   for (const q of mockDealQuotations) {
     if (q.ticketId !== ticketId) continue;
-    const answered = q.docStatus === 'ACCEPTED'
-      || ((q.origin || 'DEAL_DIRECT') === 'DEAL_DIRECT' && q.docStatus === 'APPROVED');
-    const rank = answered ? 0 : { ISSUED: 1 }[q.docStatus];
+    const rank = isDealDirectOrigin(q) && q.docStatus === 'APPROVED' ? 0 : { ACCEPTED: 0, ISSUED: 1 }[q.docStatus];
     if (rank != null) candidates.push({ rank, quotation: q, legacy: false });
   }
   candidates.sort((a, b) => (a.rank - b.rank) || (b.quotation.id - a.quotation.id));
@@ -7631,6 +7628,8 @@ const mockDealQuotations = [
   },
 ];
 mockDealQuotationNumberSeq = 3;
+// One id sequence across both quotation arrays: start past the highest literal seed id above.
+mockQuotationSeq = Math.max(mockQuotationSeq, Math.max(...mockDealQuotations.map((q) => q.id)) + 1);
 
 
 // §5 WARN_UNPAID_* gates (V164 follow-up, 2026-09-09): `ruleWarnings`/`unpaidByRuleDays` on both
@@ -13335,7 +13334,7 @@ export const api = {
         version: nextVer, docNumber: null, issueDate: null, status: 'DRAFT',
         customerName: payload.customerName ?? ticket.customerName ?? '',
         customerTaxId: customerTaxId ?? '', customerAddress: customerAddress ?? '',
-        projectName: projectName ?? '', reference: payload.reference ?? (linesFromGoverning ? governing.quotation.number : ''),
+        projectName: projectName ?? '', reference: payload.reference ?? (linesFromGoverning ? governing.quotation.number : null),
         depositPercent, vatPercent: 0.07,
         notes, items, issuedByName: null, preparerName: 'จินตนา หาญมนตรี',
         hasPdf: false, hasXlsx: false,

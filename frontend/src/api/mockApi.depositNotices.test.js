@@ -6,6 +6,13 @@ import {
 } from './mockApi.js';
 import { stripComments } from './apiSurface.js';
 
+// Copy of the canonical ONE_ITEM in mockApi.dealQuotations.test.js.
+const ONE_ITEM = {
+  model: 'Trilogy', color: 'Ash', texture: 'Matt', sizeText: '60x60', thicknessMm: 10, sqmPerPiece: 0.36,
+  quantityMode: 'AREA', areaSqm: 20, wastageMode: 'NONE', wastageValue: 0, piecesPerBox: 3, unitPrice: 850, discountPct: 0,
+  leadTimeMinDays: 30, leadTimeMaxDays: 45,
+};
+
 // Branch fix (deposit-notice autofill): drives the mock's own pricing-request chain end to end
 // — Step 1 create through Step 5 customer-accept, then confirmOrder — against the REAL mock
 // state (not a stubbed api object), exercising mockApi.depositNotices.createDraft's new
@@ -243,10 +250,10 @@ describe('mockApi.pricingRequests.createDepositNoticeFromQuotation — new-engin
     const { depositNotice: fromTicket } = await api.depositNotices.createDraft(ticketId, {});
     expect(fromTicket.depositPercent).toBe(0.4);
     expect(fromTicket.reference).toBe(accepted.number);
-    // Lines the caller supplies are not that quotation's, so the reference stays blank; the
-    // percent still comes from it (DepositNoticeService.createDraftFromQuotation, linesFromGoverning).
+    // The caller supplies the lines (even this quotation's own), so the reference is null, as in
+    // Java; the percent still comes from the quotation (DepositNoticeService, linesFromGoverning).
     const { depositNotice: ownLines } = await api.depositNotices.createDraft(ticketId, { items: fromTicket.items });
-    expect(ownLines.reference).toBe('');
+    expect(ownLines.reference).toBeNull();
     expect(ownLines.depositPercent).toBe(0.4);
     expect(depositNotice.items.length).toBeGreaterThan(0);
     // qty is deliberately not distinguishable here: a mock TILE row sets quantity = piecesFinal.
@@ -325,11 +332,7 @@ describe('mockApi.pricingRequests.createDepositNoticeFromQuotation — new-engin
     retireLivePricingRequestsForTests(ticketId);
     const { quotation: draft } = await api.dealQuotations.create(ticketId, {
       recipientType: 'DESIGNER', depositPercent: 40, remainderMode: 'ON_DELIVERY',
-      items: [{
-        model: 'Trilogy', color: 'Ash', texture: 'Matt', sizeText: '60x60', thicknessMm: 10, sqmPerPiece: 0.36,
-        quantityMode: 'AREA', areaSqm: 20, wastageMode: 'NONE', wastageValue: 0, piecesPerBox: 3,
-        unitPrice: 850, discountPct: 0, leadTimeMinDays: 30, leadTimeMaxDays: 45,
-      }],
+      items: [ONE_ITEM],
     });
     await api.dealQuotations.submit(draft.id, {});
     await api.auth.login({ role: 'sales_manager' });
