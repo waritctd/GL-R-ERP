@@ -16747,6 +16747,7 @@ export const api = {
       const pr = findPricingRequestRaw(pricingRequestId);
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
       if (ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') fail('ดีลต้นทางต้องอยู่ในสถานะ ACTIVE', 409);
       if (pr.status !== 'APPROVED_FOR_QUOTATION') {
         fail(`คำขอราคาต้องอยู่ในสถานะ 'อนุมัติราคาขายแล้ว' ก่อนจึงจะออกใบเสนอราคาลูกค้าได้ (ปัจจุบัน: ${pr.status})`, 409);
       }
@@ -16755,10 +16756,20 @@ export const api = {
       if (!decision.priceMode) {
         fail('คำขอราคานี้ยังใช้รูปแบบราคาเดิม (ก่อน CEO เลือกวิธีกรอกราคา) กรุณาสร้างใบเสนอราคาแบบเดิมจากหน้านี้', 409);
       }
+      // Mutual exclusivity — CustomerQuotationRepository#hasLiveQuotation's set.
+      if (mockCustomerQuotations.some((q) => q.pricingRequestId === pr.id
+          && !['CANCELLED', 'SUPERSEDED', 'EXPIRED', 'REJECTED'].includes(q.docStatus))) {
+        fail('คำขอราคานี้มีใบเสนอราคาลูกค้า (แบบเดิม) อยู่แล้ว ไม่สามารถสร้างใบเสนอราคาแบบใหม่ซ้ำได้', 409);
+      }
       // Idempotent replay guard — same rule as DealQuotationRepository#findOpenDraftForPricingRequest.
       const existingDraft = mockDealQuotations.find(
         (q) => q.pricingRequestId === pr.id && q.origin === 'PRICING_REQUEST' && q.docStatus === 'DRAFT');
       if (existingDraft) return delay({ quotation: buildDealQuotationDto(existingDraft) });
+      // One live quotation per request — DealQuotationRepository#hasLivePricingRequestQuotation's set.
+      if (mockDealQuotations.some((q) => q.pricingRequestId === pr.id && q.origin === 'PRICING_REQUEST'
+          && !['CANCELLED', 'SUPERSEDED', 'EXPIRED', 'REJECTED', 'REVISION_REQUESTED'].includes(q.docStatus))) {
+        fail('คำขอราคานี้มีใบเสนอราคาที่ยังไม่หมดอายุอยู่แล้ว ไม่สามารถสร้างใบเสนอราคาใหม่ซ้ำได้', 409);
+      }
 
       const now = new Date().toISOString();
       const contactSnapshot = resolveDealQuotationContact(ticket, { contactId: pr.recipientContactId });

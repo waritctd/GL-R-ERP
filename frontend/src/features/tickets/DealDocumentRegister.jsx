@@ -317,7 +317,7 @@ export function DealDocumentRegister({
     meta: `ครั้งที่ ${q.revisionNo ?? 1}`,
     // Mirrors DealDirectQuotationPanel: PDF + Excel for every status.
     actions: pdfXlsx('direct', downloadDirectQuotation, q),
-    // The whole row opens the quotation (the query that lists these is gated on canViewDealQuotation).
+    // The number links to the quotation (the query that lists these is gated on canViewDealQuotation).
     to: `/quotations/${q.id}`,
   });
   const depositItem = (doc) => ({
@@ -516,14 +516,12 @@ function DocumentRow({ testId, icon, title, meta, status, date, amount, recipien
   return (
     // Line 1: number + status + recipient (wraps). Line 2: date/meta. Line 3 (mobile) / right side
     // of line 2 (desktop): amount on the left, actions on the right.
-    // `to`: the title is a link stretched over the whole row (keyboard-reachable as one link); the
-    // action buttons sit above that overlay so PDF/Excel never navigate. `isolate` keeps their z-10
-    // inside the row, so they never paint over the page's sticky header (also z-10, earlier in the DOM).
-    <div data-testid={testId} className={cn('flex flex-wrap items-center justify-between gap-x-3 gap-y-1', to && 'relative isolate rounded hover:bg-surface-hover')}>
+    // `to`: the number is a plain link to the document (the title only).
+    <div data-testid={testId} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
       <div className="flex min-w-0 max-w-full flex-wrap items-center gap-x-2 gap-y-1">
         {!muted && icon ? <Icon name={icon} size={13} style={{ color: 'var(--color-text-muted)', flexShrink: 0 }} /> : null}
         {to ? (
-          <Link to={to} className={cn('min-w-0 truncate text-link after:absolute after:inset-0 mobile:whitespace-normal mobile:break-all', muted ? 'text-xs' : 'text-sm font-bold')}>{title}</Link>
+          <Link to={to} className={cn('min-w-0 truncate text-link mobile:whitespace-normal mobile:break-all', muted ? 'text-xs' : 'text-sm font-bold')}>{title}</Link>
         ) : (
           <span className={cn('min-w-0 truncate mobile:whitespace-normal mobile:break-all', muted ? 'text-xs text-text-muted' : 'text-sm font-bold text-text')}>{title}</span>
         )}
@@ -543,7 +541,7 @@ function DocumentRow({ testId, icon, title, meta, status, date, amount, recipien
             <span className={cn('tabular-nums', muted ? 'text-xs text-text-muted' : 'text-sm text-text')}>{formatMoney(amount)}</span>
           ) : null}
           {actions.length > 0 ? (
-            <div className="relative z-10 ml-auto flex flex-wrap items-center justify-end gap-2">
+            <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
               {actions.map((action) => (action.href ? (
                 // Not a <Button>: this is a real navigation link (target="_blank" to
                 // a file URL) — Button renders a <button>, which has no href.

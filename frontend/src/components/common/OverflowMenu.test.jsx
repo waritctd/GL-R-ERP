@@ -120,6 +120,20 @@ describe('OverflowMenu', () => {
     expect(screen.queryByRole('menu')).toBeNull();
   });
 
+  // Spec J1 (2026-10-27): a dialog an item opens (a confirm, a form) hands focus back, when it
+  // closes, to whatever held focus when it opened — that has to be this trigger, not the menu item
+  // the click is about to unmount.
+  it('selecting an item hands focus back to the trigger before the item runs', () => {
+    let focusedWhenSelected = null;
+    render(<OverflowMenu items={[{ key: 'a', label: 'เปิดหน้าต่างยืนยัน', onSelect: () => { focusedWhenSelected = document.activeElement; } }]} />);
+    const trigger = screen.getByRole('button', { name: 'การดำเนินการเพิ่มเติม' });
+    fireEvent.click(trigger);
+
+    fireEvent.click(screen.getByRole('menuitem', { name: 'เปิดหน้าต่างยืนยัน' }));
+
+    expect(focusedWhenSelected).toBe(trigger);
+  });
+
   it('Escape closes the menu and returns focus to the trigger', () => {
     render(<OverflowMenu items={items()} />);
     const trigger = screen.getByRole('button', { name: 'การดำเนินการเพิ่มเติม' });

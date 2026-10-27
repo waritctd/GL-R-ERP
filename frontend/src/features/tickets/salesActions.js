@@ -49,10 +49,12 @@
 // why that interaction was checked, on purpose, and left alone.
 
 import { bangkokTodayIso } from '../../utils/format.js';
+import { DEAD_PRICING_REQUEST_STATUSES, QUOTATION_RECIPIENT_OPTIONS } from '../quotations/quotationMeta.js';
 import { nextFulfilmentActionCode } from './importActions.js';
 
 export const SALES_ACTION = {
   // Slice 2 — flow A (SLICE-2-FLOW-A.md §E): the three buckets a LIVE direct quotation drives.
+  // AWAIT_DIRECT_APPROVAL also covers a PRICING_REQUEST-origin quotation awaiting approval.
   SUBMIT_DIRECT_QUOTATION: 'submit_direct_quotation',
   AWAIT_DIRECT_APPROVAL: 'await_direct_approval',
   CONFIRM_ORDER_DIRECT: 'confirm_order_direct',
@@ -61,8 +63,10 @@ export const SALES_ACTION = {
   REVISE_QUOTATION: 'revise_quotation',
   ADVANCE_STAGE: 'advance_stage',
   CREATE_PCR: 'create_pcr',
-  // Owner ruling 2026-10-22: after a non-buyer acceptance, เสนอราคา to a remaining party on the route.
+  // Owner ruling 2026-10-27: once a designer/owner quotation is sent, เสนอราคา to a later party on
+  // the route — or, when that party's request is still a private DRAFT, send it to import.
   QUOTE_NEXT_PARTY: 'quote_next_party',
+  SUBMIT_PRICING_REQUEST: 'submit_pricing_request',
   ISSUE_QUOTATION: 'issue_quotation',
   CONFIRM_ORDER: 'confirm_order',
   RECORD_QUOTATION_OUTCOME: 'record_quotation_outcome',
@@ -121,6 +125,7 @@ const ACTION_RANK = {
   [SALES_ACTION.SUBMIT_DIRECT_QUOTATION]: 2,
   [SALES_ACTION.RECORD_QUOTATION_OUTCOME]: 3,
   [SALES_ACTION.CREATE_PCR]: 4,
+  [SALES_ACTION.SUBMIT_PRICING_REQUEST]: 4,
   [SALES_ACTION.ADVANCE_STAGE]: 4,
   [SALES_ACTION.REVISE_QUOTATION]: 4,
   [SALES_ACTION.RECORD_DELIVERY]: 5,
@@ -179,35 +184,52 @@ const QUOTED_STATUSES = new Set(['quotation_issued', 'document_issued']);
 
 const PRE_SPEC_STAGES = new Set(['LEAD_APPROACH', 'PRESENTATION']);
 
-// Quote route order. The labels are a short phrase for after a verb ("เสนอราคาผู้ซื้อ"), not the ผู้รับ
-// chip labels (ผู้ซื้อ / ผู้รับเหมา).
-const PARTY_ROUTE = ['DESIGNER', 'OWNER', 'BUYER'];
+// The quote route in S-order (DESIGNER → OWNER → BUYER). The labels are a short phrase for after a
+// verb ("เสนอราคาผู้ซื้อ"), not the ผู้รับ chip labels (ผู้ซื้อ / ผู้รับเหมา).
+const PARTY_ROUTE = QUOTATION_RECIPIENT_OPTIONS.map((option) => option.code);
 export const PARTY_LABEL = { DESIGNER: 'ผู้ออกแบบ', OWNER: 'เจ้าของโครงการ', BUYER: 'ผู้ซื้อ' };
-const DEAD_PR_STATUSES = new Set(['CANCELLED', 'SUPERSEDED']);
+// A request's quotation "went out": sent at least once and not awaiting a revision. A REJECTED or
+// EXPIRED one counts — that party said no.
+const SENT_DOC_STATUSES = new Set(['ISSUED', 'SUPERSEDED', 'REJECTED', 'EXPIRED']);
+const DECLINED_DOC_STATUSES = new Set(['REJECTED', 'EXPIRED']);
+const isDesignerOrOwner = (pr) => pr.recipientType === 'DESIGNER' || pr.recipientType === 'OWNER';
 
-const isAcceptedUnconfirmed = (pr) => pr.status === 'QUOTATION_ACCEPTED' && !pr.orderConfirmedAt;
-
-/** canConfirmOrder's gate as seen from the list row: an accepted request on a ticket the order
- * bridge can advance (OrderConfirmationService.isBridgeableTicketStatus). */
-function confirmOrderGatePasses(deal, ownPrs) {
-  return ownPrs.some(isAcceptedUnconfirmed)
-    && (deal.status == null || BRIDGEABLE_TICKET_STATUSES.has(deal.status));
-}
-
-/** Bucket 3's view of the route. `from` is the furthest accepted request's party (-1 for none or
- * an unknown recipient); `inFlight` is true when a LATER party already has a live request, i.e. the
- * rep has already chosen to continue the route; `remaining` lists every later party still on the
- * route, in route order.
- * An order already confirmed on this deal ends the route. */
-function routeState(ownPrs, offRouteParties) {
-  const confirmed = ownPrs.some((pr) => pr.orderConfirmedAt);
-  const from = Math.max(-1, ...ownPrs.filter(isAcceptedUnconfirmed).map((pr) => PARTY_ROUTE.indexOf(pr.recipientType)));
-  const inFlight = from >= 0 && ownPrs.some((pr) =>
-    PARTY_ROUTE.indexOf(pr.recipientType) > from && !DEAD_PR_STATUSES.has(pr.status));
-  const remaining = confirmed || from < 0 || inFlight
-    ? []
-    : PARTY_ROUTE.slice(from + 1).filter((party) => !offRouteParties?.has(party));
-  return { inFlight, remaining, acceptedParty: PARTY_ROUTE[from] };
+/**
+ * Owner ruling 2026-10-27: once a designer/owner quotation is sent, the rep picks the next party.
+ * The anchor is the request furthest along the route whose quotation went out (with no row for it,
+ * QUOTATION_ISSUED alone decides). The later on-route parties are offered when none of them has a
+ * request holding the choice back (anything not dead, except a quotation that party said no to);
+ * a later party's private DRAFT is sent instead. Null otherwise — and while the route is unknown.
+ */
+function routeChoiceAction(ownPrs, quotationOf, offRouteParties) {
+  const anchor = ownPrs
+    .filter((pr) => pr.status === 'QUOTATION_ISSUED' && PARTY_ROUTE.includes(pr.recipientType)
+      && (quotationOf(pr) == null || SENT_DOC_STATUSES.has(quotationOf(pr).docStatus)))
+    .sort((a, b) => PARTY_ROUTE.indexOf(a.recipientType) - PARTY_ROUTE.indexOf(b.recipientType) || a.id - b.id)
+    .at(-1);
+  if (!anchor || !isDesignerOrOwner(anchor) || offRouteParties == null) return null;
+  const parties = PARTY_ROUTE.slice(PARTY_ROUTE.indexOf(anchor.recipientType) + 1)
+    .filter((party) => !offRouteParties.has(party));
+  const holding = ownPrs.filter((pr) => parties.includes(pr.recipientType)
+    && !DEAD_PRICING_REQUEST_STATUSES.has(pr.status)
+    && !(pr.status === 'QUOTATION_ISSUED' && DECLINED_DOC_STATUSES.has(quotationOf(pr)?.docStatus)));
+  if (holding.length > 0) {
+    const draft = parties.map((party) => holding.find((pr) => pr.recipientType === party && pr.status === 'DRAFT')).find(Boolean);
+    return draft
+      ? { key: SALES_ACTION.SUBMIT_PRICING_REQUEST, label: `ส่งคำขอราคาถึง${PARTY_LABEL[draft.recipientType]}`, pricingRequestId: draft.id }
+      : null;
+  }
+  if (parties.length === 0) return null;
+  const anchorQuotation = quotationOf(anchor);
+  return {
+    key: SALES_ACTION.QUOTE_NEXT_PARTY,
+    label: `เสนอราคา${PARTY_LABEL[parties[0]]}`,
+    parties,
+    anchorParty: anchor.recipientType,
+    anchorDeclined: DECLINED_DOC_STATUSES.has(anchorQuotation?.docStatus),
+    // Its outcome is still open (ISSUED, or no row): the page offers to record it in the ⋯ menu.
+    outcomeRequestId: anchorQuotation == null || anchorQuotation.docStatus === 'ISSUED' ? anchor.id : null,
+  };
 }
 
 /**
@@ -218,8 +240,12 @@ function routeState(ownPrs, offRouteParties) {
  * `pricingRequests` is the rep's OWN pricing-request queue (already scoped
  * server-side, see api.pricingRequests.queue) — filtered here to the ones
  * belonging to this ticket.
+ *
+ * `offRouteParties`: a Set of the parties the deal's served route skips (empty = all on it); absent
+ * while the route is unknown. `quotationByRequest`: a Map, pricingRequestId -> the newest
+ * PRICING_REQUEST-origin quotation `{ id, number, docStatus }` — only the deal page has it.
  */
-export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = null, offRouteParties = null } = {}) {
+export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = null, offRouteParties = null, quotationByRequest = null } = {}) {
   if (!deal || deal.lifecycle !== 'ACTIVE') return null;
 
   // 0. Slice 2 — flow A (SLICE-2-FLOW-A.md §E, IA §4): a LIVE direct quotation. Checked BEFORE
@@ -296,15 +322,24 @@ export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = nul
     }
   }
 
+  // The newest PRICING_REQUEST-origin quotation the deal page read for a request. Undefined on the
+  // dashboard and for a request with none (a legacy old-engine quotation, the list not loaded):
+  // the request status alone then decides, as before.
+  const quotationOf = (pr) => quotationByRequest?.get(pr.id);
+
   // 2. A price is approved and ready to quote — canCreateCustomerQuotation's
   //    own gate (pricingRequestMeta.js) is exactly pr.status === 'APPROVED_FOR_QUOTATION'.
-  //    "เสนอใบราคา<party>" writes the new-engine quotation from that request (owner ruling R2).
-  const approved = ownPrs.find((pr) => pr.status === 'APPROVED_FOR_QUOTATION');
+  //    "เสนอใบราคา<party>" writes the new-engine quotation from that request (owner ruling R2); a
+  //    DRAFT already written is opened instead (`to`), and one awaiting approval waits (below).
+  const approved = ownPrs.find((pr) => pr.status === 'APPROVED_FOR_QUOTATION'
+    && quotationOf(pr)?.docStatus !== 'PENDING_APPROVAL');
   if (approved) {
+    const draft = quotationOf(approved)?.docStatus === 'DRAFT' ? quotationOf(approved) : null;
     return {
       key: SALES_ACTION.ISSUE_QUOTATION,
       label: `เสนอใบราคา${PARTY_LABEL[approved.recipientType] ?? ''}`,
       pricingRequestId: approved.id,
+      ...(draft ? { to: `/quotations/${draft.id}` } : {}),
     };
   }
 
@@ -313,43 +348,41 @@ export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = nul
   //    Also gated on the deal's own ticket status being one the order-confirm bridge can advance
   //    (pricingRequestMeta's confirmOrderBlockedReason / OrderConfirmationService
   //    .isBridgeableTicketStatus) — otherwise the CTA is a button that can only 409.
-  //    A non-buyer acceptance with parties still on the route leads with เสนอราคา instead, listing
-  //    them (no ticket-status gate: creating a request never touches the bridge; no confirm offered).
-  //    Once the next party's request is in flight, bucket 3 offers neither: that request's own
-  //    buckets lead.
-  const route = routeState(ownPrs, offRouteParties);
-  if (route.remaining.length > 0) {
-    return {
-      key: SALES_ACTION.QUOTE_NEXT_PARTY,
-      label: `เสนอราคา${PARTY_LABEL[route.remaining[0]]}`,
-      parties: route.remaining,
-      acceptedParty: route.acceptedParty,
-    };
-  }
-  if (!route.inFlight && confirmOrderGatePasses(deal, ownPrs)) {
+  //    Whoever accepted: an acceptance is the order (owner ruling 2026-10-27).
+  if (ownPrs.some((pr) => pr.status === 'QUOTATION_ACCEPTED' && !pr.orderConfirmedAt)
+      && (deal.status == null || BRIDGEABLE_TICKET_STATUSES.has(deal.status))) {
     return { key: SALES_ACTION.CONFIRM_ORDER, label: ACTION_LABEL[SALES_ACTION.CONFIRM_ORDER] };
   }
 
-  // 4. The quotation went out to the customer but nobody has recorded what the customer said yet —
-  //    canRecordCustomerQuotationOutcome's own gate (pricingRequestMeta.js) requires the customer
-  //    quotation's docStatus to be ISSUED, but that document-level detail isn't available here (this
-  //    module is deliberately built from the ticket-list row + PR queue alone, never a per-ticket
-  //    fetch — see this file's own module doc comment). pr.status === 'QUOTATION_ISSUED' is the
-  //    PR-level proxy: CustomerQuotationService.issue is what sets it, and it stays QUOTATION_ISSUED
-  //    until recordOutcome runs (an ACCEPTED outcome moves it to QUOTATION_ACCEPTED, handled by
-  //    bucket 3 above; REJECTED/REVISION_REQUESTED leave the PR itself at a terminal/superseded
-  //    status that falls out of `ownPrs` entirely once a revision exists, or stops matching this
-  //    bucket once recorded). Before this bucket existed, a deal parked here fell all the way
-  //    through to follow-up/log-activity — the sticky CTA never told the rep the accept/reject/
-  //    revision controls (DealQuotationPanel, "ราคาและใบเสนอราคา") were the actual next step, so an
-  //    issued quotation could sit un-decided indefinitely with no prompt anywhere on the page.
+  // A request's quotation awaiting ผจก.ขาย/CEO (its first one, or a revision): the rep waits.
+  const pending = ownPrs.map(quotationOf).find((quotation) => quotation?.docStatus === 'PENDING_APPROVAL');
+  if (pending) {
+    return {
+      key: SALES_ACTION.AWAIT_DIRECT_APPROVAL,
+      label: ACTION_LABEL[SALES_ACTION.AWAIT_DIRECT_APPROVAL],
+      quotationId: pending.id,
+      quotationNumber: pending.number,
+    };
+  }
+
+  // A designer/owner quotation went out: pick the next party (see routeChoiceAction).
+  const routeAction = routeChoiceAction(ownPrs, quotationOf, offRouteParties);
+  if (routeAction) return routeAction;
+
+  // 4. The quotation went out to the customer but nobody has recorded what the customer said yet.
+  //    The BUYER's (or a legacy/unknown recipient's): a designer/owner outcome is never prompted —
+  //    their quotation leads to the route choice above. canRecordCustomerQuotationOutcome needs the
+  //    quotation ISSUED: the deal page's row says so; without one, QUOTATION_ISSUED is the proxy.
+  //    Before this bucket existed, an issued quotation fell through to follow-up/log-activity with no
+  //    prompt anywhere on the page.
   //
   //    Placed AFTER bucket 3 (CONFIRM_ORDER), not before: a customer-change revision can leave one
   //    sibling PR at QUOTATION_ISSUED (a stale, since-superseded round) while another reaches
   //    QUOTATION_ACCEPTED — CONFIRM_ORDER must win that race, same earliest-unblocked-step principle
   //    as the rest of this cascade.
   //    `pricingRequestId`: the outcome controls (both quotation engines) live on that request's page.
-  const issued = ownPrs.find((pr) => pr.status === 'QUOTATION_ISSUED');
+  const issued = ownPrs.find((pr) => pr.status === 'QUOTATION_ISSUED' && !isDesignerOrOwner(pr)
+    && (quotationOf(pr) == null || quotationOf(pr).docStatus === 'ISSUED'));
   if (issued) {
     return {
       key: SALES_ACTION.RECORD_QUOTATION_OUTCOME,

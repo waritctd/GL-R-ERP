@@ -1,7 +1,9 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter, useLocation } from 'react-router-dom';
+import {
+  Link, MemoryRouter, Route, Routes, useLocation,
+} from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TicketDetailPage } from './TicketDetailPage.jsx';
 import { ITEM_FIELD_META, missingQtyMessage } from './ticketItemFields.jsx';
@@ -303,6 +305,16 @@ function renderTicketDetailPageAtRoute(initialEntries, user = ceoUser, showToast
     </QueryClientProvider>,
   );
   return { ...utils, queryClient };
+}
+
+// The lists the sticky bar reads (the deal's pricing requests and its quotations) have answered,
+// plus a beat for the render that follows — for assertions about what is NOT offered.
+async function stickyInputsSettled() {
+  await waitFor(() => {
+    expect(api.pricingRequests.listForTicket).toHaveBeenCalled();
+    expect(api.dealQuotations.listForTicket).toHaveBeenCalled();
+  });
+  await act(async () => { await new Promise((resolve) => { setTimeout(resolve, 50); }); });
 }
 
 describe('TicketDetailPage', () => {
@@ -2045,8 +2057,15 @@ describe('TicketDetailPage', () => {
   // button, once as DealQuotationPanel's own button underneath — both visible
   // at once since the sticky bar never scrolls away. Same "ref-opener, one
   // copy on the page, and it actually performs the mutation" fix as CREATE_PCR.
+  //
+  // Owner ruling 2026-10-27 (specs D2/D3/E1): "เสนอใบราคา<party>" reads the deal's quotation list —
+  // a DRAFT already written is opened, one awaiting approval is a waiting line — refreshes the deal
+  // after writing, never pulls a rep who already left, and a refusal opens the request page (where
+  // both engines' controls are).
   describe('sticky header primary CTA — ISSUE_QUOTATION/CONFIRM_ORDER own their labels alone', () => {
-    it('APPROVED_FOR_QUOTATION for the owner: the sticky "เสนอใบราคาเจ้าของโครงการ" writes the new-engine quotation and opens it (never the old issue chain)', async () => {
+    // The owner's request, priced and approved; `quotations` is the deal's quotation list
+    // (DealQuotationDto rows). A POST here would mint quotation 9201.
+    function approvedOwnerRequest({ quotations = [] } = {}) {
       api.tickets.get.mockResolvedValue({
         ticket: buildTicket({ summary: { lifecycle: 'ACTIVE', salesStage: 'QUOTE_OWNER', createdById: 1 } }),
       });
@@ -2060,19 +2079,120 @@ describe('TicketDetailPage', () => {
           status: 'APPROVED_FOR_QUOTATION', recipientType: 'OWNER', recipientLabel: null, orderConfirmedAt: null,
         }],
       });
-      api.dealQuotations.createFromPricingRequest.mockResolvedValue({ quotation: { id: 9101, docStatus: 'DRAFT' } });
+      api.dealQuotations.listForTicket.mockResolvedValue({ items: quotations });
+      api.dealQuotations.createFromPricingRequest.mockResolvedValue({ quotation: { id: 9201, docStatus: 'DRAFT' } });
+    }
+    const ownerQuotation = (docStatus) => ({
+      id: 9101, number: 'QT-2026-0101-1', origin: 'PRICING_REQUEST', pricingRequestId: 501, docStatus,
+      recipientType: 'OWNER', salesRepId: 1, revisionNo: 1, parentQuotationId: null, grandTotal: 1070,
+    });
+    const primaryAction = () => screen.queryByTestId('ticket-primary-action')?.getAttribute('data-action') ?? null;
+    const location = () => screen.getByTestId('location-probe').textContent;
 
+    // Later describes in this file read listForTicket bare (a rejected query) — keep it that way.
+    afterEach(() => {
+      api.dealQuotations.listForTicket.mockReset();
+      api.dealQuotations.createFromPricingRequest.mockReset();
+    });
+
+    it('เสนอใบราคาเจ้าของโครงการ writes the new-engine quotation, re-reads the deal (quotations, pricing requests, ticket, actions), then opens it', async () => {
+      approvedOwnerRequest();
       renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+      await waitFor(() => expect(primaryAction()).toBe('issue_quotation'));
+      await stickyInputsSettled();
+      await waitFor(() => expect(api.tickets.actions).toHaveBeenCalled());
+      const reads = () => ({
+        quotations: api.dealQuotations.listForTicket.mock.calls.length,
+        pricingRequests: api.pricingRequests.listForTicket.mock.calls.length,
+        ticket: api.tickets.get.mock.calls.length,
+        actions: api.tickets.actions.mock.calls.length,
+      });
+      const before = reads();
 
-      await waitFor(() => expect(screen.getByTestId('ticket-primary-action').getAttribute('data-action')).toBe('issue_quotation'));
       const primary = screen.getByTestId('ticket-primary-action');
       expect(primary.textContent).toContain('เสนอใบราคาเจ้าของโครงการ');
       fireEvent.click(primary);
 
       await waitFor(() => expect(api.dealQuotations.createFromPricingRequest).toHaveBeenCalledWith(501));
-      await waitFor(() => expect(screen.getByTestId('location-probe').textContent).toBe('/quotations/9101'));
-      expect(api.pricingRequests.createCustomerQuotation).not.toHaveBeenCalled();
-      expect(api.pricingRequests.issueCustomerQuotation).not.toHaveBeenCalled();
+      await waitFor(() => expect(location()).toBe('/quotations/9201'));
+      await waitFor(() => {
+        const after = reads();
+        for (const list of Object.keys(before)) expect(after[list], `re-read ${list}`).toBeGreaterThan(before[list]);
+      });
+    });
+
+    // C-13: a hook-level onSuccess runs after the page has unmounted; the navigation must belong to
+    // the click (a per-call onSuccess), so it dies with the page.
+    it('a เสนอใบราคา that finishes after the rep has left the deal does not pull them to the quotation', async () => {
+      approvedOwnerRequest();
+      let finishCreate;
+      api.dealQuotations.createFromPricingRequest.mockReturnValueOnce(new Promise((resolve) => { finishCreate = resolve; }));
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+      render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={['/tickets/701']}>
+            <LocationProbe />
+            <Link to="/tickets">ไปหน้ารายการดีล</Link>
+            <Routes>
+              <Route path="/tickets/701" element={<TicketDetailPage user={salesOwnerUser} ticketId={701} onBack={vi.fn()} showToast={vi.fn()} />} />
+              <Route path="*" element={null} />
+            </Routes>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+      await waitFor(() => expect(primaryAction()).toBe('issue_quotation'));
+      fireEvent.click(screen.getByTestId('ticket-primary-action'));
+      await waitFor(() => expect(api.dealQuotations.createFromPricingRequest).toHaveBeenCalledWith(501));
+
+      fireEvent.click(screen.getByRole('link', { name: 'ไปหน้ารายการดีล' }));
+      expect(location()).toBe('/tickets');
+      expect(screen.queryByTestId('ticket-primary-action')).toBeNull(); // the deal page is gone
+
+      await act(async () => {
+        finishCreate({ quotation: { id: 9201, docStatus: 'DRAFT' } });
+        await new Promise((resolve) => { setTimeout(resolve, 50); });
+      });
+      expect(location()).toBe('/tickets');
+    });
+
+    it('its DRAFT quotation is already written: เสนอใบราคาเจ้าของโครงการ opens that draft, with no new write', async () => {
+      approvedOwnerRequest({ quotations: [ownerQuotation('DRAFT')] });
+      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+      await waitFor(() => expect(primaryAction()).toBe('issue_quotation'));
+      await stickyInputsSettled();
+
+      const primary = screen.getByTestId('ticket-primary-action');
+      expect(primary.textContent).toContain('เสนอใบราคาเจ้าของโครงการ');
+      fireEvent.click(primary);
+
+      await waitFor(() => expect(location()).toBe('/quotations/9101'));
+      expect(api.dealQuotations.createFromPricingRequest).not.toHaveBeenCalled();
+    });
+
+    it('its quotation awaiting approval: no button for the rep, and the line says รอ ผจก.ขาย/CEO อนุมัติใบเสนอราคา <number>', async () => {
+      approvedOwnerRequest({ quotations: [ownerQuotation('PENDING_APPROVAL')] });
+      renderTicketDetailPage(salesOwnerUser);
+
+      expect((await screen.findAllByText('รอ ผจก.ขาย/CEO อนุมัติใบเสนอราคา QT-2026-0101-1')).length).toBeGreaterThan(0);
+      expect(screen.queryByTestId('ticket-primary-action')).toBeNull();
+    });
+
+    // D3 + ruling 2026-10-27 (e): only a refusal (409) opens the request page; any other failure
+    // just reports.
+    it.each([
+      [409, 'คำขอราคานี้ยังใช้รูปแบบราคาเดิม (ก่อน CEO เลือกวิธีกรอกราคา) กรุณาสร้างใบเสนอราคาแบบเดิมจากหน้านี้', '/pricing-requests/501'],
+      [500, 'ระบบขัดข้อง', '/tickets/701'],
+    ])('a failed เสนอใบราคา (%s) shows the server\'s message; only a refusal also opens the pricing request', async (status, message, expectedLocation) => {
+      approvedOwnerRequest();
+      api.dealQuotations.createFromPricingRequest.mockRejectedValue(Object.assign(new Error(message), { status }));
+      const showToast = vi.fn();
+      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser, showToast);
+      await waitFor(() => expect(primaryAction()).toBe('issue_quotation'));
+
+      fireEvent.click(screen.getByTestId('ticket-primary-action'));
+
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', message));
+      await waitFor(() => expect(location()).toBe(expectedLocation));
     });
 
     it('renders exactly one "ยืนยันคำสั่งซื้อ" control (the sticky primary), and clicking it confirms the order directly', async () => {
@@ -2105,13 +2225,28 @@ describe('TicketDetailPage', () => {
     });
   });
 
-  // Owner ruling 2026-10-22 (final): after a non-buyer acceptance the sticky primary is ONE
-  // "เสนอราคา<next party>" button — a menu when more than one party remains (later ones read
-  // "ข้ามไปเสนอราคา<party>"), a plain button when one does — beside a line naming the choice. Picking a
-  // party opens the price-request form with ผู้รับ pre-filled. No ยืนยันคำสั่งซื้อ anywhere in that
-  // state. A BUYER acceptance keeps ยืนยันคำสั่งซื้อ as the primary.
-  describe('sticky header — after a non-buyer acceptance: เสนอราคา<next party> (owner ruling 2026-10-22, final)', () => {
-    function acceptedTicket({ recipientType = 'DESIGNER', entryChannel = 'DESIGNER_LED', stageDecisions } = {}) {
+  // Owner ruling 2026-10-27 (PR #1168 made safe to ship): the rep picks the next party when the
+  // designer's or owner's quotation is SENT. The primary is ONE "เสนอราคา<next party>" — a menu when
+  // two parties remain (the later one reads "ข้ามไปเสนอราคา<party>"), a plain button for one — beside
+  // a line naming the sent quotation, with บันทึกผลใบเสนอราคา for it in the ⋯ menu while it is
+  // ISSUED. Picking a party opens the price-request form with ผู้รับ pre-filled. The parties come
+  // from the deal's served route (catalog.routes for its entryChannel). An ACCEPTED quotation is the
+  // order, whoever it went to: ยืนยันคำสั่งซื้อ, as on main.
+  describe('sticky header — once a designer/owner quotation is sent: เสนอราคา<next party> (owner ruling 2026-10-27)', () => {
+    const sentRequest = (overrides = {}) => ({
+      id: 501, requestCode: 'PCR-2026-0501', ticketId: 701, ticketCreatedById: 1,
+      status: 'QUOTATION_ISSUED', recipientType: 'DESIGNER', recipientLabel: null, orderConfirmedAt: null, ...overrides,
+    });
+    // The request's quotation as the deal's quotation list serves it (DealQuotationDto).
+    const requestQuotation = (overrides = {}) => ({
+      id: 9101, number: 'QT-2026-0101-1', origin: 'PRICING_REQUEST', pricingRequestId: 501, docStatus: 'ISSUED',
+      recipientType: 'DESIGNER', salesRepId: 1, revisionNo: 1, parentQuotationId: null, grandTotal: 1070, ...overrides,
+    });
+
+    // `actionsAnswered: false` leaves GET /actions pending, so no stageDecisions ever arrive.
+    function deal({
+      requests = [sentRequest()], quotations = [requestQuotation()], entryChannel = 'DESIGNER_LED', actionsAnswered = true,
+    } = {}) {
       api.tickets.get.mockResolvedValue({
         ticket: buildTicket({
           summary: {
@@ -2120,57 +2255,47 @@ describe('TicketDetailPage', () => {
           },
         }),
       });
-      api.tickets.actions.mockResolvedValue({
-        currentState: { lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', paymentStatus: null, fulfillmentStatus: null, status: 'draft' },
-        availableActions: [],
-        ...(stageDecisions ? { stageDecisions } : {}),
-      });
-      api.pricingRequests.listForTicket.mockResolvedValue({
-        items: [{
-          id: 501, requestCode: 'PCR-2026-0501', ticketId: 701, ticketCreatedById: 1,
-          status: 'QUOTATION_ACCEPTED', recipientType, recipientLabel: null, orderConfirmedAt: null,
-        }],
-      });
-      api.pricingRequests.confirmOrder.mockResolvedValue({});
+      if (actionsAnswered) {
+        api.tickets.actions.mockResolvedValue({
+          currentState: { lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', paymentStatus: null, fulfillmentStatus: null, status: 'draft' },
+          availableActions: [],
+        });
+      } else {
+        api.tickets.actions.mockReturnValue(new Promise(() => {}));
+      }
+      api.pricingRequests.listForTicket.mockResolvedValue({ items: requests });
+      api.dealQuotations.listForTicket.mockResolvedValue({ items: quotations });
     }
 
     async function primaryWithAction(action) {
       await waitFor(() => expect(screen.getByTestId('ticket-primary-action').getAttribute('data-action')).toBe(action));
       return screen.getByTestId('ticket-primary-action');
     }
+    const actionBarOf = (element) => element.closest('[data-testid="ticket-action-bar"]');
 
-    it('DESIGNER accepted: the primary "เสนอราคาเจ้าของโครงการ" opens a menu beside the choice line, and there is no ยืนยันคำสั่งซื้อ button anywhere', async () => {
-      acceptedTicket();
+    // Later describes in this file read listForTicket bare (a rejected query) — keep it that way.
+    afterEach(() => { api.dealQuotations.listForTicket.mockReset(); });
+
+    it('a sent designer quotation: the primary เสนอราคาเจ้าของโครงการ is a menu (owner, then ข้ามไปเสนอราคาผู้ซื้อ) beside "ใบเสนอราคาผู้ออกแบบส่งแล้ว…"', async () => {
+      deal();
       renderTicketDetailPage(salesOwnerUser);
 
       const primary = await primaryWithAction('quote_next_party');
       expect(primary.textContent).toBe('เสนอราคาเจ้าของโครงการ');
       expect(primary.getAttribute('aria-haspopup')).toBe('menu');
-      const bar = primary.closest('[data-testid="ticket-action-bar"]');
-      expect(bar.textContent).toContain('ผู้ออกแบบยอมรับแล้ว เลือกเสนอราคาเจ้าของโครงการ หรือข้ามไปผู้ซื้อ');
-      expect(screen.queryByTestId('ticket-secondary-action')).toBeNull();
-      expect(screen.queryByRole('button', { name: /ยืนยันคำสั่งซื้อ/ })).toBeNull();
-    });
+      expect(actionBarOf(primary).textContent).toContain('ใบเสนอราคาผู้ออกแบบส่งแล้ว เลือกเสนอราคาเจ้าของโครงการ หรือข้ามไปผู้ซื้อ');
 
-    it('the menu lists every remaining party in route order — and no ยืนยันคำสั่งซื้อ item', async () => {
-      acceptedTicket();
-      renderTicketDetailPage(salesOwnerUser);
-
-      fireEvent.click(await primaryWithAction('quote_next_party'));
-
+      fireEvent.click(primary);
       const items = await screen.findAllByRole('menuitem');
       expect(items.map((item) => item.textContent)).toEqual(['เสนอราคาเจ้าของโครงการ', 'ข้ามไปเสนอราคาผู้ซื้อ']);
-      expect(screen.getByTestId('quote-party-OWNER')).toBe(items[0]);
-      expect(screen.getByTestId('quote-party-BUYER')).toBe(items[1]);
-      expect(api.pricingRequests.confirmOrder).not.toHaveBeenCalled();
     });
 
-    it('picking the buyer opens the pricing-request form with ผู้รับ = ผู้ซื้อ / ผู้รับเหมา and the buyer\'s name filled in', async () => {
-      acceptedTicket();
+    it('picking ข้ามไปเสนอราคาผู้ซื้อ opens the pricing-request form with ผู้รับ = ผู้ซื้อ / ผู้รับเหมา and the buyer\'s name filled in', async () => {
+      deal();
       renderTicketDetailPage(salesOwnerUser);
 
       fireEvent.click(await primaryWithAction('quote_next_party'));
-      fireEvent.click(await screen.findByTestId('quote-party-BUYER'));
+      fireEvent.click(await screen.findByRole('menuitem', { name: 'ข้ามไปเสนอราคาผู้ซื้อ' }));
 
       const dialog = within(await screen.findByRole('dialog'));
       expect(dialog.getByRole('radio', { name: /ผู้ซื้อ \/ ผู้รับเหมา/ }).getAttribute('aria-checked')).toBe('true');
@@ -2178,39 +2303,111 @@ describe('TicketDetailPage', () => {
       expect(dialog.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ').value).toBe('ผู้รับเหมา ข.');
     });
 
-    it('one party left (QUOTE_OWNER off the route, from the actions payload): a plain "เสนอราคาผู้ซื้อ" button that opens the form directly', async () => {
-      const stageDecisions = DEAL_STAGE_CATALOG.stages.map((stage) => ({
-        stage: stage.code, no: stage.no, allowed: false, requiresReason: false, blockedReason: null,
-        onRoute: stage.code !== 'QUOTE_OWNER',
-      }));
-      acceptedTicket({ entryChannel: 'BUYER_DIRECT', stageDecisions });
+    it('the ⋯ menu offers บันทึกผลใบเสนอราคา for the sent designer quotation, opening its request page', async () => {
+      deal();
+      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+      await primaryWithAction('quote_next_party');
+
+      fireEvent.click(screen.getByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
+      fireEvent.click(await screen.findByRole('menuitem', { name: 'บันทึกผลใบเสนอราคา' }));
+
+      await waitFor(() => expect(screen.getByTestId('location-probe').textContent).toBe('/pricing-requests/501'));
+    });
+
+    it('a designer quotation the customer rejected: the line reads "ใบเสนอราคาผู้ออกแบบไม่ผ่าน…", and nothing offers to record its outcome', async () => {
+      deal({ quotations: [requestQuotation({ docStatus: 'REJECTED' })] });
+      renderTicketDetailPage(salesOwnerUser);
+
+      const primary = await primaryWithAction('quote_next_party');
+      expect(actionBarOf(primary).textContent).toContain('ใบเสนอราคาผู้ออกแบบไม่ผ่าน เลือกเสนอราคาเจ้าของโครงการ หรือข้ามไปผู้ซื้อ');
+      const more = screen.queryByRole('button', { name: 'การดำเนินการเพิ่มเติม' });
+      if (more) fireEvent.click(more);
+      expect(screen.queryByRole('menuitem', { name: 'บันทึกผลใบเสนอราคา' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'บันทึกผลใบเสนอราคา' })).toBeNull();
+    });
+
+    // H1: the route is the served catalog.routes for the deal's entryChannel — not stageDecisions,
+    // which are still missing while GET /actions is in flight (or after it failed).
+    it('one party left: on a BUYER_DIRECT deal the served route drops the owner, even before /actions answers — a plain เสนอราคาผู้ซื้อ button that opens the form', async () => {
+      deal({ entryChannel: 'BUYER_DIRECT', actionsAnswered: false });
       renderTicketDetailPage(salesOwnerUser);
 
       const primary = await primaryWithAction('quote_next_party');
       expect(primary.textContent).toBe('เสนอราคาผู้ซื้อ');
       expect(primary.getAttribute('aria-haspopup')).toBeNull();
-      expect(primary.closest('[data-testid="ticket-action-bar"]').textContent).toContain('ผู้ออกแบบยอมรับแล้ว ถัดไปเสนอราคาผู้ซื้อ');
+      expect(actionBarOf(primary).textContent).toContain('ใบเสนอราคาผู้ออกแบบส่งแล้ว ถัดไปเสนอราคาผู้ซื้อ');
 
       fireEvent.click(primary);
       const dialog = within(await screen.findByRole('dialog'));
       expect(dialog.getByRole('radio', { name: /ผู้ซื้อ \/ ผู้รับเหมา/ }).getAttribute('aria-checked')).toBe('true');
     });
 
-    it('BUYER accepted: ยืนยันคำสั่งซื้อ stays the primary, and there is no เสนอราคา menu', async () => {
-      acceptedTicket({ recipientType: 'BUYER' });
+    // H2 + ruling 2026-10-27 (b): an unknown route is never "every party is on it", and a sent
+    // designer/owner quotation is never prompted for its outcome — so nothing shows meanwhile.
+    it('no primary and no route line while the stage catalog is loading; the menu appears once the served route arrives', async () => {
+      let serveCatalog;
+      api.meta.dealStages.mockReturnValueOnce(new Promise((resolve) => { serveCatalog = resolve; }));
+      deal();
+      renderTicketDetailPage(salesOwnerUser);
+      await stickyInputsSettled();
+
+      expect(screen.queryByTestId('ticket-primary-action')).toBeNull();
+      expect(screen.queryByText(/ใบเสนอราคาผู้ออกแบบส่งแล้ว/)).toBeNull();
+
+      await act(async () => { serveCatalog(DEAL_STAGE_CATALOG); });
+      await primaryWithAction('quote_next_party');
+    });
+
+    // D1: the quotation map holds the NEWEST PRICING_REQUEST-origin row per request — a newer DRAFT
+    // revision means the designer's quotation is awaiting its revision, not "sent".
+    it('a designer quotation awaiting its revision (a newer DRAFT revision exists): nothing on the sticky bar yet', async () => {
+      deal({
+        quotations: [
+          requestQuotation(),
+          requestQuotation({ id: 9102, number: 'QT-2026-0101-2', docStatus: 'DRAFT', revisionNo: 2, parentQuotationId: 9101 }),
+        ],
+      });
+      renderTicketDetailPage(salesOwnerUser);
+      await stickyInputsSettled();
+
+      expect(screen.queryByTestId('ticket-primary-action')).toBeNull();
+    });
+
+    // A5: the next party's request was saved as a private DRAFT (e.g. to attach files) — the one
+    // step left is sending it to import, from the items tab where that draft lives.
+    it('a later party\'s draft request: ส่งคำขอราคาถึงเจ้าของโครงการ opens the สินค้าและราคา tab, where the draft\'s ส่งให้ฝ่ายนำเข้า is', async () => {
+      deal({
+        requests: [sentRequest(), sentRequest({ id: 502, requestCode: 'PCR-2026-0502', status: 'DRAFT', recipientType: 'OWNER' })],
+      });
       renderTicketDetailPage(salesOwnerUser);
 
-      await primaryWithAction('confirm_order');
-      expect(screen.queryByTestId('ticket-secondary-action')).toBeNull();
-      expect(screen.getAllByRole('button', { name: /ยืนยันคำสั่งซื้อ/ })).toHaveLength(1);
+      await waitFor(() => expect(screen.getByTestId('ticket-primary-action').textContent).toContain('ส่งคำขอราคาถึงเจ้าของโครงการ'));
+      fireEvent.click(screen.getByTestId('ticket-primary-action'));
+
+      expect(await screen.findByRole('button', { name: 'ส่งให้ฝ่ายนำเข้า' })).not.toBeNull();
+      expect(screen.getByRole('tab', { name: /สินค้าและราคา/ }).getAttribute('aria-selected')).toBe('true');
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+
+    it('an accepted designer quotation: ยืนยันคำสั่งซื้อ is the primary (main\'s behaviour), with no เสนอราคา menu and no route line', async () => {
+      deal({ requests: [sentRequest({ status: 'QUOTATION_ACCEPTED' })], quotations: [requestQuotation({ docStatus: 'ACCEPTED' })] });
+      renderTicketDetailPage(salesOwnerUser);
+
+      const primary = await primaryWithAction('confirm_order');
+      expect(primary.getAttribute('aria-haspopup')).toBeNull();
+      expect(actionBarOf(primary).textContent).not.toMatch(/เสนอราคา(เจ้าของโครงการ|ผู้ซื้อ)/);
     });
   });
 
   // Deal-page discoverability fix: a PR sitting at QUOTATION_ISSUED used to fall through
   // salesActions.js's cascade to follow-up/log-activity. The outcome controls (both engines) live on
-  // the pricing-request page, so the CTA opens it — it never records an outcome itself.
+  // the pricing-request page, so the CTA opens it — it never records an outcome itself. Owner ruling
+  // 2026-10-27: this prompt is for the BUYER's issued quotation (the designer's/owner's sits in the ⋯
+  // menu beside the route choice); the deal's quotation list shows it ISSUED.
   describe('sticky header primary CTA — RECORD_QUOTATION_OUTCOME opens the pricing request', () => {
-    it('renders exactly one "บันทึกผลใบเสนอราคา" sticky primary, and clicking it opens /pricing-requests/<id> without firing any mutation', async () => {
+    afterEach(() => { api.dealQuotations.listForTicket.mockReset(); });
+
+    it('an issued buyer quotation: exactly one "บันทึกผลใบเสนอราคา" sticky primary, and clicking it opens /pricing-requests/<id> without firing any mutation', async () => {
       api.tickets.get.mockResolvedValue({
         ticket: buildTicket({ summary: { lifecycle: 'ACTIVE', salesStage: 'QUOTE_BUYER', createdById: 1 } }),
       });
@@ -2222,6 +2419,12 @@ describe('TicketDetailPage', () => {
         items: [{
           id: 501, requestCode: 'PCR-2026-0501', ticketId: 701, ticketCreatedById: 1,
           status: 'QUOTATION_ISSUED', recipientType: 'BUYER', recipientLabel: null, orderConfirmedAt: null,
+        }],
+      });
+      api.dealQuotations.listForTicket.mockResolvedValue({
+        items: [{
+          id: 9101, number: 'QT-2026-0101-1', origin: 'PRICING_REQUEST', pricingRequestId: 501, docStatus: 'ISSUED',
+          recipientType: 'BUYER', salesRepId: 1, revisionNo: 1, parentQuotationId: null, grandTotal: 1070,
         }],
       });
 
@@ -2659,6 +2862,75 @@ describe('TicketDetailPage', () => {
       expect(screen.queryByRole('heading', { level: 2, name: 'ราคาและใบเสนอราคา' })).toBeNull();
       expect(screen.queryByTestId('register-quotations')).toBeNull();
       expect(api.pricingRequests.listCustomerQuotations).not.toHaveBeenCalled();
+    });
+
+    // Owner ruling 2026-10-27 (spec C1): an acceptance is the order whoever accepted, so the panel
+    // reads main's sentence again — never the retired "เลือกผู้รับรายถัดไป" pointer.
+    it('an accepted designer request reads the ยืนยันคำสั่งซื้อ sentence, never a next-party pointer', async () => {
+      api.pricingRequests.listForTicket.mockResolvedValue({
+        items: [{ ...approvedPr, ticketId: 701, status: 'QUOTATION_ACCEPTED', recipientType: 'DESIGNER' }],
+      });
+
+      renderTicketDetailPage(salesOwnerUser);
+      await openTab(/เอกสาร/);
+
+      const panel = within(await screen.findByTestId('deal-quotation-panel'));
+      expect(panel.getByText('ลูกค้ายอมรับใบเสนอราคาแล้ว — กดปุ่ม “ยืนยันคำสั่งซื้อ” บนแถบด้านบนของหน้าเพื่อเริ่มขั้นตอนรับมัดจำและนำเข้าสินค้า')).not.toBeNull();
+      expect(panel.queryByText(/ผู้รับรายถัดไป/)).toBeNull();
+    });
+
+    // Ruling 2026-10-27 (d): the panel's own (old-engine) ลูกค้ายอมรับ asks the B2 question too.
+    it('the panel\'s ลูกค้ายอมรับ on a designer request asks "ยืนยันว่าลูกค้ายอมรับใบเสนอราคานี้" first; confirming records ACCEPTED', async () => {
+      api.pricingRequests.listForTicket.mockResolvedValue({
+        items: [{ ...approvedPr, ticketId: 701, status: 'QUOTATION_ISSUED', recipientType: 'DESIGNER' }],
+      });
+      api.pricingRequests.listCustomerQuotations.mockResolvedValue({
+        items: [{ id: 9301, number: 'QT-2026-0301-1', docStatus: 'ISSUED', quotationRevisionNo: 1, grandTotal: 1000 }],
+      });
+      api.pricingRequests.recordCustomerQuotationOutcome.mockResolvedValue({ quotation: { id: 9301, docStatus: 'ACCEPTED' } });
+
+      renderTicketDetailPage(salesOwnerUser);
+      await openTab(/เอกสาร/);
+      fireEvent.click(await screen.findByTestId('deal-quotation-accept'));
+
+      const dialog = within(await screen.findByRole('dialog', { name: 'ยืนยันว่าลูกค้ายอมรับใบเสนอราคานี้' }));
+      expect(dialog.getByText('ใบเสนอราคานี้ส่งถึงผู้ออกแบบ ถ้าลูกค้ายอมรับ ดีลจะใช้ใบนี้ยืนยันคำสั่งซื้อและข้ามผู้รับรายถัดไป')).not.toBeNull();
+      expect(api.pricingRequests.recordCustomerQuotationOutcome).not.toHaveBeenCalled();
+      fireEvent.click(dialog.getByRole('button', { name: 'ยืนยัน' }));
+
+      await waitFor(() => expect(api.pricingRequests.recordCustomerQuotationOutcome).toHaveBeenCalledWith(
+        9301, expect.objectContaining({ outcome: 'ACCEPTED' }),
+      ));
+    });
+
+    // Spec F1: the panel sees the quotation the sticky เสนอใบราคา writes (the deal's quotation list,
+    // PRICING_REQUEST origin) — number, status, a link to it — and says "no quotation yet" only when
+    // neither engine has one.
+    describe('with the request\'s new-engine quotation in the deal\'s quotation list', () => {
+      afterEach(() => { api.dealQuotations.listForTicket.mockReset(); });
+
+      it.each([
+        ['APPROVED_FOR_QUOTATION', 'DRAFT'],
+        ['QUOTATION_ISSUED', 'ISSUED'],
+      ])('a %s request with its %s quotation: the panel shows its number, status and เปิดใบเสนอราคา — not "no quotation yet"', async (status, docStatus) => {
+        api.pricingRequests.listForTicket.mockResolvedValue({ items: [{ ...approvedPr, ticketId: 701, status }] });
+        api.dealQuotations.listForTicket.mockResolvedValue({
+          items: [{
+            id: 9101, number: 'QT-2026-0101-1', origin: 'PRICING_REQUEST', pricingRequestId: 501, docStatus,
+            recipientType: 'BUYER', salesRepId: 1, revisionNo: 1, parentQuotationId: null, grandTotal: 1070,
+          }],
+        });
+
+        renderTicketDetailPage(salesOwnerUser);
+        await openTab(/เอกสาร/);
+
+        const panel = within(await screen.findByTestId('deal-quotation-panel'));
+        expect(await panel.findByText('QT-2026-0101-1')).not.toBeNull();
+        expect(panel.getByText(quotationMeta.dealQuotationStatusLabel(docStatus).label)).not.toBeNull();
+        expect(panel.getByRole('link', { name: 'เปิดใบเสนอราคา' }).getAttribute('href')).toBe('/quotations/9101');
+        expect(panel.queryByText(/ยังไม่มีใบเสนอราคาลูกค้าสำหรับคำขอราคานี้/)).toBeNull();
+        expect(panel.queryByText(/กดปุ่ม “เสนอใบราคา”/)).toBeNull();
+      });
     });
   });
 
@@ -3822,13 +4094,21 @@ describe('TicketDetailPage', () => {
   describe('PR A — แก้ใบเสนอราคา (sticky primary past draft; overflow secondary at owner/buyer stages)', () => {
     const salesManagerUser = { id: 11, employeeId: 11, name: 'ผจก.ขาย', role: 'sales_manager' };
 
-    const quotationRow = (overrides = {}) => ({
-      id: 80, number: 'QT-2026-0080-1', origin: 'PRICING_REQUEST', docStatus: 'ISSUED', recipientType: 'DESIGNER',
-      salesRepId: 1, revisionNo: 1, parentQuotationId: null, grandTotal: 1070, ...overrides,
-    });
+    // A PRICING_REQUEST-origin row names its request (pricingRequestId, as DealQuotationDto does); a
+    // DEAL_DIRECT row has none.
+    const quotationRow = (overrides = {}) => {
+      const row = {
+        id: 80, number: 'QT-2026-0080-1', origin: 'PRICING_REQUEST', docStatus: 'ISSUED', recipientType: 'BUYER',
+        salesRepId: 1, revisionNo: 1, parentQuotationId: null, grandTotal: 1070, ...overrides,
+      };
+      return { pricingRequestId: row.origin === 'PRICING_REQUEST' ? 501 : null, ...row };
+    };
+    // The BUYER's request (owner ruling 2026-10-27): its issued quotation keeps บันทึกผลใบเสนอราคา as
+    // the primary. A designer's or owner's issued quotation leads with the route choice instead
+    // (see the "once a designer/owner quotation is sent" describe), so it cannot stand in here.
     const issuedPr = {
       id: 501, requestCode: 'PCR-2026-0501', ticketId: 701, ticketCreatedById: 1,
-      status: 'QUOTATION_ISSUED', recipientType: 'DESIGNER', recipientLabel: null, orderConfirmedAt: null,
+      status: 'QUOTATION_ISSUED', recipientType: 'BUYER', recipientLabel: null, orderConfirmedAt: null,
     };
 
     // PR-origin deal at `salesStage` with one issued quotation (and the PR that produced it).
@@ -3846,7 +4126,7 @@ describe('TicketDetailPage', () => {
 
     // DEAL_DIRECT deal whose only quotation is APPROVED and whose order was already confirmed.
     function directApprovedDeal({ rows } = {}) {
-      const approved = quotationRow({ id: 77, number: 'QT-2026-0077-1', origin: 'DEAL_DIRECT', docStatus: 'APPROVED' });
+      const approved = quotationRow({ id: 77, number: 'QT-2026-0077-1', origin: 'DEAL_DIRECT', docStatus: 'APPROVED', recipientType: 'DESIGNER' });
       api.tickets.get.mockResolvedValue({
         ticket: buildTicket({
           summary: {

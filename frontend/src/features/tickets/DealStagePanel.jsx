@@ -81,8 +81,7 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   summary, availableActions = [], stageDecisions = [], catalog = EMPTY_STAGE_CATALOG,
   docActions, primaryAction, actionLoading,
   advanceReady = true, advanceInHeader = false,
-  // Owner ruling 2026-10-22: the parties the sticky เสนอราคา menu offers, in route order. With more
-  // than one, ถัดไป names the skip too ("… หรือข้ามไป 8. …").
+  // Owner ruling 2026-10-27: the parties the sticky เสนอราคา menu offers, in route order.
   quoteParties = null,
   onUpdateStage, onMarkLost, onReopen, onHold, onDormant, onResume, onSetTenderRequirement,
   onSetEntryChannel,
@@ -209,6 +208,13 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   const nextHint = next && !canAdvance && !readinessBlocked
     ? (next.auto ? AUTO_STAGE_HINT[next.code] : `ขั้นถัดไปอัปเดตโดย${GATE_LABEL[next.gate]}`)
     : null;
+  // With the route choice on the sticky bar, ถัดไป names the parties' own quote stages (the first,
+  // then "หรือข้ามไป" the rest) with the first one's auto hint — not the stage after the current one.
+  // The first party's stage missing from the catalog: the plain next-stage line.
+  const [choiceStage, ...skipStages] = (quoteParties ?? []).map((party) => findStage(catalog, stageForQuotationRecipient(party)));
+  const lineStage = choiceStage ?? next;
+  const lineHint = choiceStage ? AUTO_STAGE_HINT[choiceStage.code] : nextHint;
+  const lineSkips = choiceStage ? skipStages.filter(Boolean) : [];
 
   async function submitStage(payload) {
     await onUpdateStage(payload);
@@ -336,17 +342,14 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
             {/* ONE "what happens next, and who moves it" line. It used to be a small "ถัดไป:" pill
                 plus a separate grey hint pill further down, with the hint — the only sentence that
                 says whose move it is — styled as the least important thing on screen. */}
-            {next && !isDone ? (
+            {lineStage && !isDone ? (
               <div data-testid="deal-stage-next" className="text-sm leading-snug text-text">
                 <span className="font-bold text-text-muted">ถัดไป: </span>
-                <span className="font-extrabold">{next.no}. {dealStageLabel(next.code, summary.entryChannel).label}</span>
-                {quoteParties?.length > 1 ? quoteParties.slice(1).map((party) => {
-                  const stage = findStage(catalog, stageForQuotationRecipient(party));
-                  return stage ? (
-                    <span key={party}> หรือข้ามไป <span className="font-extrabold">{stage.no}. {dealStageLabel(stage.code, summary.entryChannel).label}</span></span>
-                  ) : null;
-                }) : null}
-                {nextHint ? <span className="text-text-secondary"> — {nextHint}</span> : null}
+                <span className="font-extrabold">{lineStage.no}. {dealStageLabel(lineStage.code, summary.entryChannel).label}</span>
+                {lineSkips.map((stage) => (
+                  <span key={stage.code}> หรือข้ามไป <span className="font-extrabold">{stage.no}. {dealStageLabel(stage.code, summary.entryChannel).label}</span></span>
+                ))}
+                {lineHint ? <span className="text-text-secondary"> — {lineHint}</span> : null}
               </div>
             ) : null}
 

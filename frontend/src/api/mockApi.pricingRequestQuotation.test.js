@@ -248,6 +248,41 @@ describe('mockApi.dealQuotations.createFromPricingRequest', () => {
   });
 });
 
+// Spec L1 (2026-10-27): the deal page's sticky "เสนอใบราคา<party>" calls this endpoint, so the mock
+// refuses what DealQuotationService#createFromPricingRequest refuses (same 409s, same Thai messages)
+// instead of quietly writing a second quotation. Mock plumbing only — the real-DB tests are the
+// authority on the service itself.
+describe('mockApi.dealQuotations.createFromPricingRequest — refuses what the service refuses (mock parity)', () => {
+  it('a deal that is no longer ACTIVE: 409 "ดีลต้นทางต้องอยู่ในสถานะ ACTIVE"', async () => {
+    const { ticketId, prId } = await approvedNetPricingRequest();
+    await api.tickets.hold(ticketId, { note: 'ลูกค้าขอพักโครงการ' });
+
+    await expect(api.dealQuotations.createFromPricingRequest(prId))
+      .rejects.toMatchObject({ status: 409, message: 'ดีลต้นทางต้องอยู่ในสถานะ ACTIVE' });
+  });
+
+  it('the request\'s quotation already past DRAFT (awaiting approval): 409, and no second quotation is written', async () => {
+    const { ticketId, prId } = await approvedNetPricingRequest();
+    const { quotation } = await api.dealQuotations.createFromPricingRequest(prId);
+    await api.dealQuotations.submit(quotation.id);
+
+    await expect(api.dealQuotations.createFromPricingRequest(prId)).rejects.toMatchObject({
+      status: 409, message: 'คำขอราคานี้มีใบเสนอราคาที่ยังไม่หมดอายุอยู่แล้ว ไม่สามารถสร้างใบเสนอราคาใหม่ซ้ำได้',
+    });
+    const { items } = await api.dealQuotations.listForTicket(ticketId);
+    expect(items.filter((q) => q.pricingRequestId === prId).map((q) => q.id)).toEqual([quotation.id]);
+  });
+
+  it('a live old-engine customer quotation on the request: 409', async () => {
+    const { prId } = await approvedNetPricingRequest();
+    await api.pricingRequests.createCustomerQuotation(prId, { clientRequestId: nextClientRequestId() });
+
+    await expect(api.dealQuotations.createFromPricingRequest(prId)).rejects.toMatchObject({
+      status: 409, message: 'คำขอราคานี้มีใบเสนอราคาลูกค้า (แบบเดิม) อยู่แล้ว ไม่สามารถสร้างใบเสนอราคาแบบใหม่ซ้ำได้',
+    });
+  });
+});
+
 describe('mockApi.dealQuotations.update — origin=PRICING_REQUEST extra-row refusal', () => {
   it('refuses a payload that adds a new row, and writes nothing', async () => {
     const { prId } = await approvedNetPricingRequest();

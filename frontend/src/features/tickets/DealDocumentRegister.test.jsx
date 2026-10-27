@@ -279,17 +279,21 @@ describe('DealDocumentRegister', () => {
     expect(await screen.findByTestId('document-version-direct-77')).not.toBeNull();
   });
 
-  it('a direct quotation row opens /quotations/<id>; its PDF button downloads without navigating', async () => {
+  // Spec I1 (2026-10-27): the number is a plain link — the title only, no stretched overlay over the
+  // row (that part is CSS, which jsdom cannot see). The PDF/Excel downloads are pinned by 'lists
+  // direct quotations … downloads PDF by id' above; "PDF does not navigate" could not fail in jsdom
+  // (the button was never inside the link), so it is gone.
+  it('a direct quotation\'s number is a plain link to /quotations/<id>, wrapping the number only', async () => {
     api.dealQuotations.listForTicket.mockResolvedValue({
       items: [{ id: 77, number: 'QT-2026-0077-1', docStatus: 'APPROVED', revisionNo: 1, grandTotal: 2, origin: 'DEAL_DIRECT' }],
     });
     renderRegister({ ...SALES, pricingRequests: CHAIN_PR });
 
     const row = within(await screen.findByTestId('document-version-direct-77'));
-    fireEvent.click(row.getByRole('button', { name: 'PDF' }));
-    expect(screen.getByTestId('location-probe').textContent).toBe('/tickets/701');
+    const link = row.getByRole('link', { name: 'QT-2026-0077-1' });
+    expect(link.textContent).toBe('QT-2026-0077-1');
 
-    fireEvent.click(row.getByRole('link', { name: /QT-2026-0077-1/ }));
+    fireEvent.click(link);
     expect(screen.getByTestId('location-probe').textContent).toBe('/quotations/77');
   });
 

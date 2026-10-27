@@ -12,6 +12,7 @@ import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { bangkokMonthStartIso, bangkokTodayIso, formatMoney, formatThaiDate, greetingName } from '../../utils/format.js';
 import { followUpStatus, nextSalesAction, sortWorklist, SALES_ACTION } from '../tickets/salesActions.js';
+import { offRoutePartiesFor, useStageCatalog } from '../tickets/stageCatalog.js';
 
 const FOLLOW_UP_LIST_LIMIT = 6;
 
@@ -89,13 +90,18 @@ export function SalesOverview({ user, employee }) {
   const loading = ticketsQuery.isLoading || pricingRequestsQuery.isLoading;
 
   const activeDeals = useMemo(() => deals.filter((deal) => deal.lifecycle === 'ACTIVE'), [deals]);
+  // Each deal's route (the served catalog.routes for its entryChannel), for the route choice.
+  const { catalog: stageCatalog } = useStageCatalog();
 
   const worklist = useMemo(() => {
     const items = activeDeals
-      .map((deal) => ({ deal, action: nextSalesAction(deal, pricingRequests) }))
+      .map((deal) => ({
+        deal,
+        action: nextSalesAction(deal, pricingRequests, { offRouteParties: offRoutePartiesFor(stageCatalog, deal.entryChannel) }),
+      }))
       .filter((item) => item.action != null);
     return sortWorklist(items);
-  }, [activeDeals, pricingRequests]);
+  }, [activeDeals, pricingRequests, stageCatalog]);
 
   const pulse = useMemo(() => {
     let overdueFollowUp = 0;

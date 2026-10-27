@@ -247,6 +247,8 @@ export function OverflowMenu({
               onClick={() => {
                 if (item.disabled) return;
                 setOpen(false);
+                // Focus back on the trigger first, so a dialog the item opens returns focus there.
+                triggerRef.current?.focus();
                 item.onSelect();
               }}
             >

@@ -590,24 +590,37 @@ describe('DealStagePanel route awareness', () => {
       expect(nextText()).toContain('4. เสนอราคาผู้ออกแบบ');
     });
 
-    // Owner ruling 2026-10-22 (final): after the designer accepts, ถัดไป names both choices the
-    // sticky เสนอราคา menu offers; with one party left it reads as before.
-    it('designer accepted with owner and buyer left: "5. เสนอราคาเจ้าของโครงการ หรือข้ามไป 8. …", then the auto hint', () => {
+    // Owner ruling 2026-10-27 (spec G1): while the sticky bar offers the route choice, ถัดไป is
+    // built from the parties' OWN quote stages (the first, then "หรือข้ามไป" the next), followed by
+    // the first one's auto hint — never from the stage after the current one, since a deal can sit
+    // anywhere (moved by hand) while the choice stands.
+    it('route choices name the parties\' own stages: owner and buyer left at ขั้น 7 -> "ถัดไป: 5. เสนอราคาเจ้าของโครงการ หรือข้ามไป 8. …", then the owner\'s auto hint', () => {
       renderPanel({
-        summary: baseSummary({ salesStage: 'QUOTE_DESIGN_SIDE', entryChannel: 'DESIGNER_LED' }),
+        summary: baseSummary({ salesStage: 'AWAITING_BUYER', entryChannel: 'DESIGNER_LED' }),
         stageDecisions: routeDecisions([]),
         quoteParties: ['OWNER', 'BUYER'],
       });
       expect(nextText()).toBe(`ถัดไป: 5. เสนอราคาเจ้าของโครงการ หรือข้ามไป 8. เสนอราคาผู้ซื้อ/ผู้รับเหมา — ${AUTO_STAGE_HINT.QUOTE_OWNER}`);
     });
 
-    it('one party left: the single next-stage form, no "หรือข้ามไป"', () => {
+    it('one party left: "ถัดไป: 8. เสนอราคาผู้ซื้อ/ผู้รับเหมา" from the buyer\'s own stage, with no "หรือข้ามไป", even at ขั้น 5 whose next stage is 6', () => {
+      renderPanel({
+        summary: baseSummary({ salesStage: 'QUOTE_OWNER', entryChannel: 'DESIGNER_LED' }),
+        stageDecisions: routeDecisions([]),
+        quoteParties: ['BUYER'],
+      });
+      expect(nextText()).toBe(`ถัดไป: 8. เสนอราคาผู้ซื้อ/ผู้รับเหมา — ${AUTO_STAGE_HINT.QUOTE_BUYER}`);
+    });
+
+    // Ruling 2026-10-27 (e): the first party's stage missing from the catalog -> today's single line.
+    it('the first party\'s stage missing from the catalog: the plain next-stage line, with no "หรือข้ามไป"', () => {
       renderPanel({
         summary: baseSummary({ salesStage: 'QUOTE_DESIGN_SIDE', entryChannel: 'DESIGNER_LED' }),
+        catalog: { ...catalog, stages: catalog.stages.filter((stage) => stage.code !== 'QUOTE_OWNER') },
         stageDecisions: routeDecisions([]),
-        quoteParties: ['OWNER'],
+        quoteParties: ['OWNER', 'BUYER'],
       });
-      expect(nextText()).toBe(`ถัดไป: 5. เสนอราคาเจ้าของโครงการ — ${AUTO_STAGE_HINT.QUOTE_OWNER}`);
+      expect(nextText()).toBe(`ถัดไป: 6. เจ้าของอนุมัติสเปค — ขั้นถัดไปอัปเดตโดย${GATE_LABEL.sales}`);
     });
 
     /**

@@ -6,6 +6,7 @@ import { Link } from 'react-router-dom';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
+import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
@@ -16,12 +17,12 @@ import {
   quotationStatusLabel,
 } from '../../utils/format.js';
 import { downloadBlob } from '../../utils/download.js';
-import { PARTY_LABEL } from './salesActions.js';
 import {
   canConfirmOrder, confirmOrderBlockedReason, canCreateCustomerQuotation,
   canManageCustomerQuotation, canRecordCustomerQuotationOutcome, canViewCustomerQuotation,
   isCustomerQuotationEditable, pricingRequestRecipientLabel,
 } from '../pricingRequests/pricingRequestMeta.js';
+import { acceptOutcomeConfirmCopy, dealQuotationStatusLabel } from '../quotations/quotationMeta.js';
 import { buttonVariants } from '../../components/common/Button.jsx';
 
 function generateClientRequestId() {
@@ -69,13 +70,14 @@ function pickRelevantPricingRequest(pricingRequests = []) {
  *
  * Owner ruling R2 (2026-10-18/22): the sticky "เสนอใบราคา<party>" writes the NEW-engine quotation
  * (TicketDetailPage, api.dealQuotations.createFromPricingRequest); this panel no longer creates or
- * issues the old-engine customer quotation from the deal page.
+ * issues the old-engine customer quotation from the deal page. It shows that new-engine quotation
+ * (`quotationByRequest`, the deal's quotation list) with a link to it.
  *
  * Ticket-detail IA rebuild Phase 1 clutter follow-up round 2 (FIX 2): this
  * panel no longer renders its own "ออกใบเสนอราคา" / "ยืนยันคำสั่งซื้อ"
  * buttons — the sticky header's primary CTA (TicketDetailPage's
  * `workState`-derived ISSUE_QUOTATION/CONFIRM_ORDER action) owns both
- * outright now, and triggers them here via the forwardRef below (same
+ * outright now; CONFIRM_ORDER triggers the confirm here via the forwardRef below (same
  * "parent triggers, panel stays the sole gate + mutation owner" convention
  * DealStagePanel/PricingRequestPanel already use for their own openers).
  * Before this, "ออกใบเสนอราคา" and "ยืนยันคำสั่งซื้อ" each rendered twice on
@@ -83,13 +85,17 @@ function pickRelevantPricingRequest(pricingRequests = []) {
  * button) — since the sticky bar is `sticky top-0`, both copies of each
  * label were visible on screen simultaneously.
  */
-export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticketId, pricingRequests = [], user, showToast }, ref) {
+export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
+  ticketId, pricingRequests = [], quotationByRequest = null, user, showToast,
+}, ref) {
   const queryClient = useQueryClient();
   const [outcomeNote, setOutcomeNote] = useState('');
   const [downloadingFormat, setDownloadingFormat] = useState(null);
+  const [confirmingAccept, setConfirmingAccept] = useState(false);
 
   const pr = useMemo(() => pickRelevantPricingRequest(pricingRequests), [pricingRequests]);
-  const acceptedPartyLabel = pr && pr.recipientType !== 'BUYER' ? PARTY_LABEL[pr.recipientType] : null;
+  const prQuotation = pr ? quotationByRequest?.get(pr.id) ?? null : null;
+  const acceptConfirm = acceptOutcomeConfirmCopy(pr?.recipientType);
   const canView = pr != null && canViewCustomerQuotation(user, pr);
 
   const quotationsQuery = useQuery({
@@ -182,6 +188,14 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticke
 
         {quotationsQuery.isLoading ? (
           <p className="text-sm text-text-muted">กำลังโหลดใบเสนอราคาลูกค้า…</p>
+        ) : !current && prQuotation ? (
+          <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-surface p-3">
+            <span className="font-mono text-sm font-bold">{prQuotation.number}</span>
+            <StatusBadge tone={dealQuotationStatusLabel(prQuotation.docStatus).tone}>
+              {dealQuotationStatusLabel(prQuotation.docStatus).label}
+            </StatusBadge>
+            <Link to={`/quotations/${prQuotation.id}`} className="text-sm font-bold text-link">เปิดใบเสนอราคา</Link>
+          </div>
         ) : !current ? (
           canCreateCustomerQuotation(user, pr) ? (
             <p className="text-sm text-text-muted">
@@ -235,7 +249,8 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticke
                 />
                 <div className="flex flex-wrap gap-2">
                   <Button type="button" variant="primary" disabled={recordOutcome.isPending}
-                    onClick={() => recordOutcome.mutate('ACCEPTED')} data-testid="deal-quotation-accept">
+                    onClick={() => (acceptConfirm ? setConfirmingAccept(true) : recordOutcome.mutate('ACCEPTED'))}
+                    data-testid="deal-quotation-accept">
                     ลูกค้ายอมรับ
                   </Button>
                   <Button type="button" variant="secondary" style={{ color: 'var(--color-danger)', borderColor: 'var(--color-danger-border)' }}
@@ -268,10 +283,7 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticke
               // comment) — this explains the section instead of duplicating
               // the CTA.
               <p className="text-sm text-text-muted">
-                {acceptedPartyLabel
-                  // Owner ruling 2026-10-22: a designer/owner acceptance goes on to the next party via เสนอราคา.
-                  ? `${acceptedPartyLabel}ยอมรับใบเสนอราคาแล้ว — เลือกผู้รับรายถัดไปจากปุ่ม “เสนอราคา” บนแถบด้านบน`
-                  : 'ลูกค้ายอมรับใบเสนอราคาแล้ว — กดปุ่ม “ยืนยันคำสั่งซื้อ” บนแถบด้านบนของหน้าเพื่อเริ่มขั้นตอนรับมัดจำและนำเข้าสินค้า'}
+                ลูกค้ายอมรับใบเสนอราคาแล้ว — กดปุ่ม “ยืนยันคำสั่งซื้อ” บนแถบด้านบนของหน้าเพื่อเริ่มขั้นตอนรับมัดจำและนำเข้าสินค้า
               </p>
             ) : (
               <p className="text-sm text-text-muted">
@@ -287,6 +299,15 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticke
           </div>
         ) : null}
       </div>
+
+      <ConfirmDialog
+        open={confirmingAccept && Boolean(acceptConfirm)}
+        title={acceptConfirm?.title}
+        message={acceptConfirm?.message}
+        busy={recordOutcome.isPending}
+        onCancel={() => setConfirmingAccept(false)}
+        onConfirm={() => { setConfirmingAccept(false); recordOutcome.mutate('ACCEPTED'); }}
+      />
     </Panel>
   );
 });

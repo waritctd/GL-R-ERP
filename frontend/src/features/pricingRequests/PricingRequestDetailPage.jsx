@@ -72,7 +72,7 @@ import {
 import { useUnitBasisCatalog } from './unitBasisCatalog.js';
 import { buttonVariants } from '../../components/common/Button.jsx';
 import { cn } from '../../utils/cn.js';
-import { PRICE_MODE_OPTIONS } from '../quotations/quotationMeta.js';
+import { acceptOutcomeConfirmCopy, PRICE_MODE_OPTIONS } from '../quotations/quotationMeta.js';
 import { SearchableCombobox } from '../../components/common/SearchableCombobox.jsx';
 // B6 (GLA-135): reuses the catalog page's own add-factory dialog rather than a second, drifting
 // copy of the same five fields + validation — see ImportFactoryPicker's own comment below.
@@ -1082,6 +1082,10 @@ export function PricingRequestDetailPage({ user, showToast }) {
     // superseded/replaced it).
     queryClient.invalidateQueries({ queryKey: ['customerQuotations', 'discountApprovals'] });
     queryClient.invalidateQueries({ queryKey: ['pricingRequests', 'queue'] });
+    // The deal page's sticky bar reads its pricing requests and quotations. By prefix: that page
+    // keys them by its own route param.
+    queryClient.invalidateQueries({ queryKey: ['pricingRequests', 'byTicket'] });
+    queryClient.invalidateQueries({ queryKey: ['dealQuotations', 'byTicket'] });
     return refetched; // resolves once the detail + factory quotes have been re-read
   }
 
@@ -1336,6 +1340,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
   // Step 5: Customer Decision and Commercial Revisions.
   const [outcomeClientRequestId, setOutcomeClientRequestId] = useState(() => generateClientRequestId());
   const [outcomeNote, setOutcomeNote] = useState('');
+  // B2: the ACCEPTED outcome a DESIGNER/OWNER request asks about first — { engine, quotation }.
+  const [acceptToConfirm, setAcceptToConfirm] = useState(null);
   // Step 6: Deposit, Payment, and Order Confirmation.
   const [confirmOrderClientRequestId, setConfirmOrderClientRequestId] = useState(() => generateClientRequestId());
   const [depositPercentInput, setDepositPercentInput] = useState('0.5');
@@ -1697,6 +1703,15 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const request = detailQuery.data;
   const summary = request?.summary;
   const status = pricingRequestStatusLabel(summary?.status);
+  // B2 (owner ruling 2026-10-27): ลูกค้ายอมรับ on a DESIGNER/OWNER request asks first, both engines.
+  const acceptConfirm = acceptOutcomeConfirmCopy(summary?.recipientType);
+  function recordAccepted(engine, quotation) {
+    (engine === 'deal' ? recordDealQuotationOutcome : recordQuotationOutcome).mutate({ quotation, outcome: 'ACCEPTED' });
+  }
+  function acceptOutcome(engine, quotation) {
+    if (acceptConfirm) setAcceptToConfirm({ engine, quotation });
+    else recordAccepted(engine, quotation);
+  }
   // itemId -> the factoryId Import has picked (as a string, matching SearchableCombobox's own
   // `code` convention) for that line. B6 (GLA-135): this used to hold the free-typed factory
   // NAME; it holds an id now, resolved server-side to the canonical master name on save. Same
@@ -3929,7 +3944,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 />
                 <div className="flex flex-wrap gap-2">
                   <Button type="button" variant="primary" disabled={recordDealQuotationOutcome.isPending}
-                    onClick={() => recordDealQuotationOutcome.mutate({ quotation: dealQuotationForPr, outcome: 'ACCEPTED' })}>
+                    onClick={() => acceptOutcome('deal', dealQuotationForPr)}>
                     ลูกค้ายอมรับ
                   </Button>
                   <Button type="button" variant="danger" disabled={recordDealQuotationOutcome.isPending}
@@ -4230,7 +4245,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                       />
                       <div className="flex flex-wrap gap-2">
                         <Button type="button" variant="primary" disabled={recordQuotationOutcome.isPending}
-                          onClick={() => recordQuotationOutcome.mutate({ quotation, outcome: 'ACCEPTED' })}>
+                          onClick={() => acceptOutcome('customer', quotation)}>
                           ลูกค้ายอมรับ
                         </Button>
                         <Button type="button" variant="danger" disabled={recordQuotationOutcome.isPending}
@@ -4365,6 +4380,19 @@ export function PricingRequestDetailPage({ user, showToast }) {
           if (action?.type === 'approveDiscount') approveDiscount.mutate(action.approval);
           if (action?.type === 'rejectDiscount') rejectDiscount.mutate({ approval: action.approval, reason });
           if (action?.type === 'switchPriceMode') setCeoPriceMode.mutate({ decision: action.decision, priceMode: action.priceMode });
+        }}
+      />
+
+      <ConfirmDialog
+        open={Boolean(acceptToConfirm) && Boolean(acceptConfirm)}
+        title={acceptConfirm?.title}
+        message={acceptConfirm?.message}
+        busy={recordQuotationOutcome.isPending || recordDealQuotationOutcome.isPending}
+        onCancel={() => setAcceptToConfirm(null)}
+        onConfirm={() => {
+          const { engine, quotation } = acceptToConfirm;
+          setAcceptToConfirm(null);
+          recordAccepted(engine, quotation);
         }}
       />
 
