@@ -323,8 +323,16 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const [ticketChromeCondensed, setTicketChromeCondensed] = useState(false);
   // Review V10: an open menu in the sticky header holds it as it is — condensing moves the header's
   // buttons to another place, which remounts the menu and closes it.
+  // A condense that came while a menu was open is applied when it closes.
   const headerMenuOpenRef = useRef(false);
-  const onHeaderMenuOpenChange = useCallback((open) => { headerMenuOpenRef.current = open; }, []);
+  const heldCondensedRef = useRef(null);
+  const onHeaderMenuOpenChange = useCallback((open) => {
+    headerMenuOpenRef.current = open;
+    if (!open && heldCondensedRef.current !== null) {
+      setTicketChromeCondensed(heldCondensedRef.current);
+      heldCondensedRef.current = null;
+    }
+  }, []);
 
   // Imperative handle onto DealStagePanel (see its own doc comment): the
   // header overflow menu / bottom danger zone trigger its modals from here,
@@ -725,24 +733,15 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       queryClient.invalidateQueries({ queryKey: queryKeys.ticketActions(ticketId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.pricingRequestsByTicket(ticketId) });
     },
-    onError: (error) => showToast('error', error.message || 'ดำเนินการไม่สำเร็จ'),
+    // A refusal (409) is the way to the request page (review V12), so it reads as information.
+    onError: (error) => showToast(error?.status === 409 ? 'info' : 'error', error.message || 'ดำเนินการไม่สำเร็จ'),
   });
-  // A refusal (legacy price mode, an old-engine quotation, …): both engines' controls are on the
-  // request page. Remembered in the query cache for the session, so the next click goes straight
-  // there instead of failing again (review V12).
-  const quoteOnRequestPageKey = (pricingRequestId) => ['pricingRequests', 'quoteOnRequestPage', Number(pricingRequestId)];
   function createQuotationFromRequest(pricingRequestId) {
-    if (queryClient.getQueryData(quoteOnRequestPageKey(pricingRequestId))) {
-      navigate(`/pricing-requests/${pricingRequestId}`);
-      return;
-    }
     createQuotationFromRequestMutation.mutate(pricingRequestId, {
       onSuccess: (res) => { if (res?.quotation?.id) navigate(`/quotations/${res.quotation.id}`); },
-      onError: (error) => {
-        if (error?.status !== 409) return;
-        queryClient.setQueryData(quoteOnRequestPageKey(pricingRequestId), true);
-        navigate(`/pricing-requests/${pricingRequestId}`);
-      },
+      // A refusal (legacy price mode, an old-engine quotation, …): both engines' controls are on the
+      // request page.
+      onError: (error) => { if (error?.status === 409) navigate(`/pricing-requests/${pricingRequestId}`); },
     });
   }
 
@@ -847,16 +846,20 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       const chromeHeight = ticketStickyChromeRef.current?.getBoundingClientRect().height ?? 0;
       return scroller.scrollHeight - scroller.clientHeight > chromeHeight + 80;
     };
+    // While a header menu is open the change is held, and applied when it closes (review V10).
+    const setCondensed = (value) => {
+      if (headerMenuOpenRef.current) heldCondensedRef.current = value;
+      else setTicketChromeCondensed(value);
+    };
     const onIntersect = (entries) => {
       if (mobileQuery?.matches) { setTicketChromeCondensed(false); return; }
-      if (headerMenuOpenRef.current) return;
       for (const entry of entries) {
         // Back at the very top → expand. Scrolled past the lower sentinel → condense, but only
         // when there is room (Gate A). Anything in the band between the two sentinels leaves the
         // state unchanged (the dead-band / hysteresis).
-        if (entry.target === expandAt && entry.isIntersecting) setTicketChromeCondensed(false);
+        if (entry.target === expandAt && entry.isIntersecting) setCondensed(false);
         else if (entry.target === condenseAt && !entry.isIntersecting && hasRoomToCondense()) {
-          setTicketChromeCondensed(true);
+          setCondensed(true);
         }
       }
     };
@@ -871,12 +874,11 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     // path drives, exactly as before.
     const reevaluate = () => {
       if (mobileQuery?.matches) { setTicketChromeCondensed(false); return; }
-      if (headerMenuOpenRef.current) return;
       if (!scroller || scroller.clientHeight === 0) return;
-      if (!hasRoomToCondense()) { setTicketChromeCondensed(false); return; }
+      if (!hasRoomToCondense()) { setCondensed(false); return; }
       const viewTop = scroller.getBoundingClientRect().top;
-      if (expandAt.getBoundingClientRect().bottom >= viewTop) setTicketChromeCondensed(false);
-      else if (condenseAt.getBoundingClientRect().bottom < viewTop) setTicketChromeCondensed(true);
+      if (expandAt.getBoundingClientRect().bottom >= viewTop) setCondensed(false);
+      else if (condenseAt.getBoundingClientRect().bottom < viewTop) setCondensed(true);
       // else: between the two sentinels (the dead-band) — leave the state unchanged.
     };
     const observer = new IntersectionObserver(onIntersect, { root: scroller ?? null, threshold: 0 });
@@ -1263,7 +1265,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // The deal's served route (catalog.routes for its entryChannel); null until the catalog loads.
   // Review V5: until the quotation list is read, a sent designer quotation may be being redone —
   // treated like an unknown route (no route choice; ⋯ still offers its outcome).
-  const offRouteParties = dealQuotationsQuery.isSuccess ? offRoutePartiesFor(stageCatalog, summary.entryChannel) : null;
+  // (Read once is enough: a failed refetch keeps the rows it read.)
+  const offRouteParties = dealQuotationsQuery.data !== undefined ? offRoutePartiesFor(stageCatalog, summary.entryChannel) : null;
   const workState = resolveWorkState(user, summary, pricingRequests, { reviseTarget, offRouteParties, quotationByRequest });
   // PR A: at the owner/buyer quote stages revise is an ADDITIONAL action (header "⋯" menu), never a
   // replacement for the primary บันทึกผลใบเสนอราคา — the client may simply accept the original.

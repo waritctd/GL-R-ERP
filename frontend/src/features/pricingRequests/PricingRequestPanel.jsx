@@ -132,7 +132,9 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
     // The deal page's "ส่งคำขอราคาถึง<party>": the draft's own ส่งให้ฝ่ายนำเข้า, under the same gate.
     submit: (id) => {
       const pr = requests.find((request) => request.id === id);
-      if (pr && canSubmitPricingRequest(user, pr) && !submitMutation.isPending) submitMutation.mutate(id);
+      if (submitMutation.isPending) return;
+      if (pr && canSubmitPricingRequest(user, pr)) submitMutation.mutate(id);
+      else showToast?.('error', 'ส่งคำขอราคานี้ไม่ได้ ดูคำขอราคาในแท็บสินค้าและราคา');
     },
   }));
 

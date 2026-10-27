@@ -541,6 +541,9 @@ describe('TicketDetailPage', () => {
       act(() => condenseIo.cb([{ target: condenseSentinel, isIntersecting: false }]));
       expect(screen.getByTestId('deal-state-header').getAttribute('data-condensed')).toBe('false');
       expect(screen.getByRole('menu')).not.toBeNull();
+      // Closing the menu applies what was held back (review of cacff6d7).
+      fireEvent.keyDown(document, { key: 'Escape' });
+      expect(screen.getByTestId('deal-state-header').getAttribute('data-condensed')).toBe('true');
     });
   });
 
@@ -2188,11 +2191,12 @@ describe('TicketDetailPage', () => {
     });
 
     // D3 + ruling 2026-10-27 (e): only a refusal (409) opens the request page; any other failure
-    // just reports.
+    // just reports. Review V12: the refusal is the way to the request page, not an error (it is
+    // asked again on every click — the server decides, nothing is remembered).
     it.each([
-      [409, 'คำขอราคานี้ยังใช้รูปแบบราคาเดิม (ก่อน CEO เลือกวิธีกรอกราคา) กรุณาสร้างใบเสนอราคาแบบเดิมจากหน้านี้', '/pricing-requests/501'],
-      [500, 'ระบบขัดข้อง', '/tickets/701'],
-    ])('a failed เสนอใบราคา (%s) shows the server\'s message; only a refusal also opens the pricing request', async (status, message, expectedLocation) => {
+      [409, 'คำขอราคานี้ยังใช้รูปแบบราคาเดิม (ก่อน CEO เลือกวิธีกรอกราคา) กรุณาสร้างใบเสนอราคาแบบเดิมจากหน้านี้', '/pricing-requests/501', 'info'],
+      [500, 'ระบบขัดข้อง', '/tickets/701', 'error'],
+    ])('a failed เสนอใบราคา (%s) shows the server\'s message; only a refusal also opens the pricing request', async (status, message, expectedLocation, tone) => {
       approvedOwnerRequest();
       api.dealQuotations.createFromPricingRequest.mockRejectedValue(Object.assign(new Error(message), { status }));
       const showToast = vi.fn();
@@ -2201,27 +2205,8 @@ describe('TicketDetailPage', () => {
 
       fireEvent.click(screen.getByTestId('ticket-primary-action'));
 
-      await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', message));
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith(tone, message));
       await waitFor(() => expect(location()).toBe(expectedLocation));
-    });
-
-    // Review V12: a refusal means this request's quotation is written on its own page (a legacy
-    // price mode, an old-engine quotation); the next click goes there without failing again.
-    it('after a refusal (409), the next เสนอใบราคา click goes to the pricing request with no second write or error', async () => {
-      approvedOwnerRequest();
-      api.dealQuotations.createFromPricingRequest.mockRejectedValue(Object.assign(new Error('คำขอราคานี้ยังใช้รูปแบบราคาเดิม'), { status: 409 }));
-      const showToast = vi.fn();
-      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser, showToast);
-      await waitFor(() => expect(primaryAction()).toBe('issue_quotation'));
-      fireEvent.click(screen.getByTestId('ticket-primary-action'));
-      await waitFor(() => expect(location()).toBe('/pricing-requests/501'));
-
-      fireEvent.click(screen.getByTestId('ticket-primary-action'));
-      await act(async () => { await new Promise((resolve) => { setTimeout(resolve, 0); }); });
-
-      expect(api.dealQuotations.createFromPricingRequest).toHaveBeenCalledTimes(1);
-      expect(showToast).toHaveBeenCalledTimes(1);
-      expect(location()).toBe('/pricing-requests/501');
     });
 
     it('renders exactly one "ยืนยันคำสั่งซื้อ" control (the sticky primary), and clicking it confirms the order directly', async () => {
@@ -2417,32 +2402,52 @@ describe('TicketDetailPage', () => {
     // A5: the next party's request was saved as a private DRAFT (e.g. to attach files) — the one
     // step left is sending it to import, from the items tab where that draft lives.
     // Review V8: through the panel's ref, not a scroll jump (pulled back to the top until #1158).
-    it('a later party\'s draft request: ส่งคำขอราคาถึงเจ้าของโครงการ sends that draft to import, on the สินค้าและราคา tab', async () => {
+    // The second row: a draft the panel will not send (here, the deal is another rep's) says so
+    // instead of only switching tab (review of cacff6d7).
+    it.each([
+      ['the rep\'s own draft is sent', 1, true],
+      ['a draft the panel refuses says why it was not sent', 2, false],
+    ])('a later party\'s draft request: ส่งคำขอราคาถึงเจ้าของโครงการ on the สินค้าาและราคา tab — %s', async (_label, ticketCreatedById, sent) => {
       deal({
-        requests: [sentRequest(), sentRequest({ id: 502, requestCode: 'PCR-2026-0502', status: 'DRAFT', recipientType: 'OWNER' })],
+        requests: [sentRequest(), sentRequest({ id: 502, requestCode: 'PCR-2026-0502', status: 'DRAFT', recipientType: 'OWNER', ticketCreatedById })],
       });
       api.pricingRequests.submit.mockResolvedValue({ pricingRequest: {} });
-      renderTicketDetailPage(salesOwnerUser);
+      const showToast = vi.fn();
+      renderTicketDetailPage(salesOwnerUser, showToast);
 
       await waitFor(() => expect(screen.getByTestId('ticket-primary-action').textContent).toContain('ส่งคำขอราคาถึงเจ้าของโครงการ'));
       fireEvent.click(screen.getByTestId('ticket-primary-action'));
 
-      await waitFor(() => expect(api.pricingRequests.submit).toHaveBeenCalledWith(502));
-      expect(screen.getByRole('tab', { name: /สินค้าและราคา/ }).getAttribute('aria-selected')).toBe('true');
-      expect(screen.queryByRole('dialog')).toBeNull();
+      await waitFor(() => expect(screen.getByRole('tab', { name: /สินค้าและราคา/ }).getAttribute('aria-selected')).toBe('true'));
+      if (sent) {
+        await waitFor(() => expect(api.pricingRequests.submit).toHaveBeenCalledWith(502));
+      } else {
+        await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', expect.stringContaining('ส่งคำขอราคานี้ไม่ได้')));
+        expect(api.pricingRequests.submit).not.toHaveBeenCalled();
+      }
     });
 
     // Review V5: an unreadable list is not "no quotation" — the designer's may be being redone.
-    it('while the deal\'s quotation list cannot be read: no route choice, and ⋯ still offers บันทึกผลใบเสนอราคา', async () => {
+    it('while the deal\'s quotation list has never been read: no route choice, and ⋯ still offers บันทึกผลใบเสนอราคา; once read, a failed refetch keeps it', async () => {
       deal();
       api.dealQuotations.listForTicket.mockRejectedValue(new Error('network'));
-      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+      const { queryClient } = renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
       await stickyInputsSettled();
 
       expect(screen.queryByTestId('ticket-primary-action')).toBeNull();
       fireEvent.click(screen.getByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
       fireEvent.click(await screen.findByRole('menuitem', { name: 'บันทึกผลใบเสนอราคา' }));
       await waitFor(() => expect(screen.getByTestId('location-probe').textContent).toBe('/pricing-requests/501'));
+
+      api.dealQuotations.listForTicket.mockResolvedValue({ items: [requestQuotation()] });
+      await act(async () => { await queryClient.invalidateQueries({ queryKey: ['dealQuotations'] }); });
+      await primaryWithAction('quote_next_party');
+      api.dealQuotations.listForTicket.mockRejectedValue(new Error('network'));
+      await act(async () => { await queryClient.invalidateQueries({ queryKey: ['dealQuotations'] }); });
+      await waitFor(() => expect(queryClient.getQueryCache().findAll({ queryKey: ['dealQuotations'] })
+        .some((query) => query.state.status === 'error')).toBe(true));
+      await stickyInputsSettled();
+      expect(screen.getByTestId('ticket-primary-action').getAttribute('data-action')).toBe('quote_next_party');
     });
 
 

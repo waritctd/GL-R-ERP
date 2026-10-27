@@ -15,6 +15,10 @@ import { newestQuotationByRequest } from '../quotations/quotationMeta.js';
 import { followUpStatus, nextSalesAction, sortWorklist, SALES_ACTION } from '../tickets/salesActions.js';
 import { offRoutePartiesFor, useStageCatalog } from '../tickets/stageCatalog.js';
 
+// useQueries' `combine`: each query's rows. Module-level so react-query keeps the combined array
+// stable while the data is unchanged, and the worklist memo below holds.
+const dataOfQueries = (results) => results.map((result) => result.data);
+
 const FOLLOW_UP_LIST_LIMIT = 6;
 
 function WorklistRow({ deal, action, onClick }) {
@@ -100,15 +104,16 @@ export function SalesOverview({ user, employee }) {
   const quotedDealIds = useMemo(() => [...new Set(pricingRequests
     .filter((pr) => pr.status === 'APPROVED_FOR_QUOTATION' || pr.status === 'QUOTATION_ISSUED')
     .map((pr) => Number(pr.ticketId)))], [pricingRequests]);
-  const quotationQueries = useQueries({
+  const quotationRows = useQueries({
     queries: quotedDealIds.map((id) => ({
       queryKey: queryKeys.dealQuotationsByTicket(id),
       queryFn: () => api.dealQuotations.listForTicket(id).then((response) => response.items ?? []),
     })),
+    combine: dataOfQueries,
   });
 
   const worklist = useMemo(() => {
-    const rowsByDeal = new Map(quotedDealIds.map((id, index) => [id, quotationQueries[index]?.data]));
+    const rowsByDeal = new Map(quotedDealIds.map((id, index) => [id, quotationRows[index]]));
     const items = activeDeals
       .map((deal) => {
         const rows = rowsByDeal.get(Number(deal.id));
@@ -122,7 +127,7 @@ export function SalesOverview({ user, employee }) {
       })
       .filter((item) => item.action != null);
     return sortWorklist(items);
-  }, [activeDeals, pricingRequests, stageCatalog, quotedDealIds, quotationQueries]);
+  }, [activeDeals, pricingRequests, stageCatalog, quotedDealIds, quotationRows]);
 
   const pulse = useMemo(() => {
     let overdueFollowUp = 0;
