@@ -1031,6 +1031,14 @@ public class PricingRequestRepository {
      * request transition, and put a live offer in front of a customer whose deal was cancelled.
      * Retiring the draft here is what makes that unreachable.
      *
+     * <p><strong>{@code PENDING_APPROVAL} is in the predicate for the same reason.</strong> A
+     * PRICING_REQUEST-origin quotation ({@code th.co.glr.hr.dealquotation}) waits at
+     * PENDING_APPROVAL while the request is still APPROVED_FOR_QUOTATION, a status cancel admits.
+     * Left out of this list, it stayed in the approvals queue, and approving it issued an offer on
+     * the cancelled request and superseded the deal's live quotation through the one-live-offer
+     * sweep. {@code DealQuotationService#approveAndIssuePricingRequestOrigin} now also refuses a
+     * CANCELLED request, for a row orphaned before this status was added here.
+     *
      * <p>Not routed through {@code PricingDecisionRepository}/{@code CustomerQuotationRepository}
      * (this class's own dependency direction stays one-way, same as {@code cancelOpenStep2Children}
      * already reaching into {@code sales.factory_quote}/{@code sales.pricing_costing} directly) —
@@ -1043,7 +1051,7 @@ public class PricingRequestRepository {
             UPDATE sales.quotation
                SET doc_status = 'SUPERSEDED'
              WHERE pricing_request_id = :pricingRequestId
-               AND doc_status IN ('DRAFT', 'ISSUED', 'READY_TO_ISSUE', 'SENT', 'REVISION_REQUESTED')
+               AND doc_status IN ('DRAFT', 'PENDING_APPROVAL', 'ISSUED', 'READY_TO_ISSUE', 'SENT', 'REVISION_REQUESTED')
             """, Map.of("pricingRequestId", pricingRequestId));
     }
 

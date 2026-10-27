@@ -1801,6 +1801,12 @@ public class DealQuotationService {
         quotations.lockTicket(quotation.ticketId());
         PricingRequestSummaryDto summary = pricingRequests.findSummary(pricingRequestId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบคำขอราคานี้"));
+        // A cancelled request issues nothing. Its cancel supersedes a PENDING_APPROVAL quotation
+        // (PricingRequestRepository#supersedeOpenPricingDecisionAndQuotation); this refuses one
+        // orphaned before that status was in the cancel's list. Checked before the first write below.
+        if (PricingRequestStatus.CANCELLED.equals(summary.status())) {
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาของใบเสนอราคานี้ถูกยกเลิกแล้ว จึงอนุมัติไม่ได้");
+        }
         // Same DATE-mode-with-special-pricing / DAYS-mode validity computation #approve already
         // uses for DEAL_DIRECT — reused verbatim rather than forked so the two origins can never
         // compute this differently by accident.
