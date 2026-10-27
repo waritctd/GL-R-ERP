@@ -5,9 +5,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.stream.Stream;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.customer.ContactRepository;
@@ -206,6 +210,49 @@ class DepositNoticeRepositoryDepositPercentIntegrationTest extends AbstractPostg
         insertOriginTaggedQuotation(ticketId, "PRICING_REQUEST", "APPROVED", (short) 10);
 
         assertThat(depositNotices.findGoverningQuotation(ticketId)).isEmpty();
+    }
+
+    private static final List<String> ALL_DOC_STATUSES = List.of("DRAFT", "READY_TO_ISSUE", "PENDING_APPROVAL",
+        "APPROVED", "ISSUED", "SENT", "SUPERSEDED", "CANCELLED", "EXPIRED", "ACCEPTED", "REJECTED",
+        "REVISION_REQUESTED");
+
+    /** Every (origin, doc_status) pair in {@code chk_quotation_doc_status} the SQL must exclude:
+     * live is ACCEPTED/ISSUED for legacy and PRICING_REQUEST, plus APPROVED for DEAL_DIRECT. */
+    static Stream<Arguments> nonLivePairs() {
+        return Stream.of("LEGACY", "PRICING_REQUEST", "DEAL_DIRECT").flatMap(origin ->
+            ALL_DOC_STATUSES.stream()
+                .filter(st -> !(st.equals("ACCEPTED") || st.equals("ISSUED")
+                    || (origin.equals("DEAL_DIRECT") && st.equals("APPROVED"))))
+                .map(st -> Arguments.of(origin, st)));
+    }
+
+    /** A live ISSUED row plus a NEWER excluded one: an admitted excluded status would win on id
+     * (or, for APPROVED/ACCEPTED, on rank), so the ISSUED row must be the pick. */
+    @ParameterizedTest(name = "{0} {1} is not live")
+    @MethodSource("nonLivePairs")
+    void aNewerNonLiveStatusNeverBeatsALiveIssuedQuotation(String origin, String excludedStatus) {
+        boolean legacy = origin.equals("LEGACY");
+        long ticketId = legacy ? newTicketWithPricingRequestDraft() : newBareTicket();
+        long live = legacy ? insertLegacyQuotation(ticketId, "ISSUED", null)
+            : insertOriginTaggedQuotation(ticketId, origin, "ISSUED", (short) 40);
+        if (legacy) {
+            insertLegacyQuotation(ticketId, excludedStatus, (short) 10);
+        } else {
+            insertOriginTaggedQuotation(ticketId, origin, excludedStatus, (short) 10);
+        }
+
+        assertGoverning(ticketId, live, legacy, legacy ? "0.50" : "0.40");
+    }
+
+    /** Mirror of the DEAL_DIRECT-APPROVED-vs-older-ACCEPTED test: the OLDER APPROVED row loses to
+     * a NEWER ACCEPTED one, so APPROVED ranks level with ACCEPTED, not above it. */
+    @Test
+    void mixedTicket_aNewerAcceptedQuotationBeatsAnOlderDealDirectApprovedOne() {
+        long ticketId = newTicketWithPricingRequestDraft();
+        insertOriginTaggedQuotation(ticketId, "DEAL_DIRECT", "APPROVED", (short) 40);
+        long accepted = insertLegacyQuotation(ticketId, "ACCEPTED", null);
+
+        assertGoverning(ticketId, accepted, true, "0.50");
     }
 
     @Test
