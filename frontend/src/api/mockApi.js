@@ -1441,18 +1441,36 @@ function mockDepositNoticeItemsFromQuotation(items) {
 // Mirrors DepositNoticeRepository.findDealQuotationItems. Values are read off the stored row,
 // never recomputed (label excepted — see below).
 function mockDepositNoticeItemsFromDealQuotation(row) {
-  return row.items.map((item, idx) => {
+  // DepositNoticeRepository#foldAdjustments: an ADJUSTMENT row (qty -1) is no deposit line; its
+  // amount is spread over the goods lines by amount, each share and each new net price 2 dp (no
+  // remainder on a last line: the notice total is its own 2 dp lines). A line keeps the quotation's
+  // own discount wording and gains the folded discount after it.
+  // ponytail: the mock computes no % adjustment amount (MOCK_NOT_COMPUTED), so that row is only dropped.
+  const goods = row.items.filter((item) => item.lineType !== 'ADJUSTMENT');
+  const adjustment = row.items.filter((item) => item.lineType === 'ADJUSTMENT')
+    .reduce((sum, item) => sum + (Number(item.netUnitPrice) || 0) * Number(item.quantity), 0);
+  const amountOf = (item) => item.netUnitPrice * item.quantity;
+  const total = goods.reduce((sum, item) => sum + amountOf(item), 0);
+  return goods.map((item, idx) => {
+    let netUnitPrice = item.netUnitPrice;
+    if (adjustment && total && amountOf(item)) {
+      const share = round2((adjustment * amountOf(item)) / total);
+      netUnitPrice = round2((amountOf(item) + share) / item.quantity);
+    }
     // Display label only: the mock stores no sales_discount, so this restates the column Java reads
     // (DealQuotationRepository#itemParams writes it as unitPrice − netUnitPrice).
     const salesDiscount = round2(item.unitPrice - item.netUnitPrice);
+    const folded = round2(item.netUnitPrice - netUnitPrice);
+    const own = salesDiscount > 0 ? `ส่วนลด ${salesDiscount} ต่อหน่วย` : null;
+    const extra = folded > 0 ? `ส่วนลดพิเศษ ${folded} ต่อหน่วย` : null;
     return {
       seq: item.seq ?? idx + 1,
       description: item.descriptionLine?.trim() ? item.descriptionLine : 'รายการสินค้า',
       qty: item.quantity,
       unit: item.unit?.trim() ? item.unit : 'หน่วย',
       unitPrice: item.unitPrice,
-      discountLabel: salesDiscount > 0 ? `ส่วนลด ${salesDiscount} ต่อหน่วย` : null,
-      netUnitPrice: item.netUnitPrice,
+      discountLabel: own && extra ? `${own} + ${extra}` : own ?? extra,
+      netUnitPrice,
     };
   });
 }
@@ -2415,6 +2433,13 @@ function stripCeoPriceModeFields(decision, user) {
       netUnitPrice: null,
     })),
   };
+}
+
+// Mirrors DepositNoticeService.createDraftFromQuotation (both create routes): one deposit notice
+// per deal, so no new draft while one is ISSUED (owner ruling 2026-10-23).
+function requireNoIssuedDepositNotice(ticketId) {
+  const issued = mockDepositNotices.find((d) => d.ticketId === Number(ticketId) && d.status === 'ISSUED');
+  if (issued) fail(`ดีลนี้ออกใบแจ้งรับมัดจำเลขที่ ${issued.docNumber} แล้ว จึงสร้างฉบับร่างใหม่ไม่ได้`, 409);
 }
 
 function buildMockDoc(doc) {
@@ -13316,6 +13341,7 @@ export const api = {
       const user = hasRole('sales');
       const ticket = findTicketRaw(Number(ticketId));
       if (ticket.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      requireNoIssuedDepositNotice(ticket.id);
       // Phase 1 lifecycle gate (mirrors DepositNoticeService.createDraft).
       requireActive(ticket);
       if (!['approved', 'quotation_issued', 'document_issued'].includes(ticket.status)) fail('ดีลต้องได้รับการอนุมัติก่อน', 409);
@@ -13391,9 +13417,25 @@ export const api = {
 
     async update(docId, payload) {
       requireSession();
+      // DepositNoticeDraftRequest's @DecimalMin/@DecimalMax: @Valid runs before any lookup.
+      const sent = payload.depositPercent == null ? null : Number(payload.depositPercent) * 100;
+      if (sent != null && sent > 100) fail('depositPercent เปอร์เซ็นต์มัดจำต้องไม่เกิน 100', 400);
+      if (sent != null && !(sent > 0)) fail('depositPercent เปอร์เซ็นต์มัดจำต้องมากกว่า 0', 400);
+      // DepositNoticeService.update: sales only, a DRAFT, the deal owner, then the % rules.
+      const user = hasRole('sales');
       const doc = mockDepositNotices.find((d) => d.id === Number(docId));
       if (!doc) fail('ไม่พบใบแจ้งรับมัดจำนี้', 404);
       if (doc.status !== 'DRAFT') fail('ใบแจ้งรับมัดจำนี้ไม่ได้อยู่ในสถานะร่าง (DRAFT)', 409);
+      if (findTicketRaw(doc.ticketId).createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const stored = Number(doc.depositPercent) * 100;
+      const pct = sent ?? stored;
+      if (!(pct > 0)) fail('เปอร์เซ็นต์มัดจำต้องมากกว่า 0', 400);
+      // A stored legacy fraction sent back unchanged still saves.
+      if (pct !== stored && Math.abs(pct - Math.round(pct)) > 1e-9) fail('เปอร์เซ็นต์มัดจำต้องเป็นจำนวนเต็ม', 400);
+      // DepositNoticeRepository#update: a save over someone else's newer one is refused.
+      if (payload.expectedUpdatedAt != null && payload.expectedUpdatedAt !== doc.updatedAt) {
+        fail('ใบแจ้งรับมัดจำนี้ถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง', 409);
+      }
       Object.assign(doc, {
         customerName:    payload.customerName    ?? doc.customerName,
         customerTaxId:   payload.customerTaxId   ?? doc.customerTaxId,
@@ -13403,7 +13445,8 @@ export const api = {
         depositPercent:  payload.depositPercent  ?? doc.depositPercent,
         notes:           payload.notes           ?? doc.notes,
         items:           payload.items?.length ? payload.items : doc.items,
-        updatedAt:       new Date().toISOString(),
+        // Strictly later than the stored stamp, so two saves in one millisecond still differ.
+        updatedAt:       new Date(Math.max(Date.now(), (Date.parse(doc.updatedAt) || 0) + 1)).toISOString(),
       });
       const updated = buildMockDoc(doc);
       Object.assign(doc, updated);
@@ -13419,12 +13462,23 @@ export const api = {
       return mockPreviewHtml(buildMockDoc(doc));
     },
 
-    async issue(docId) {
+    async issue(docId, payload) {
       const user = requireSession();
       const doc = mockDepositNotices.find((d) => d.id === Number(docId));
       if (!doc) fail('ไม่พบใบแจ้งรับมัดจำนี้', 404);
       if (doc.status !== 'DRAFT') fail('ไม่ได้อยู่ในสถานะร่าง (DRAFT)', 409);
       const ticket = findTicketRaw(doc.ticketId);
+      // DepositNoticeService.issue: sales only, the deal owner, and a stored % the document can print.
+      if (user.role !== 'sales' || ticket.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const pct = Number(doc.depositPercent) * 100;
+      if (!(pct > 0 && pct <= 100) || Math.abs(pct - Math.round(pct)) > 1e-9) {
+        fail(`ใบแจ้งรับมัดจำนี้มีเปอร์เซ็นต์มัดจำ ${+pct.toFixed(4)}% จึงออกเอกสารไม่ได้ (ต้องเป็นจำนวนเต็ม 1–100)`, 409);
+      }
+
+      // Mirrors DepositNoticeService.issue's one-notice-per-deal refusal (owner ruling 2026-10-23).
+      // Checked before the payment-state gate: the mock cannot re-issue from DEPOSIT_NOTICE_ISSUED.
+      const other = mockDepositNotices.find((d) => d.ticketId === doc.ticketId && d.id !== doc.id && d.status === 'ISSUED');
+      if (other) fail(`ดีลนี้ออกใบแจ้งรับมัดจำเลขที่ ${other.docNumber} แล้ว จึงออกฉบับร่างนี้ไม่ได้`, 409);
 
       // Mirrors DepositNoticeService.issue: the document IS the payment-track step.
       // Requires a customer-confirmed quotation; advances paymentStatus and leaves
@@ -13436,9 +13490,10 @@ export const api = {
       if (!(Number(doc.depositAmount) > 0)) fail('ใบแจ้งรับมัดจำนี้มียอดมัดจำ 0 บาท จึงออกเอกสารไม่ได้', 409);
       // Phase 1 lifecycle gate (mirrors DepositNoticeService.requireActiveLifecycle).
       requireActive(ticket);
-
-      // Supersede previous issued docs
-      mockDepositNotices.forEach((d) => { if (d.ticketId === doc.ticketId && d.id !== doc.id && d.status === 'ISSUED') d.status = 'SUPERSEDED'; });
+      // DepositNoticeRepository#issue: the draft was saved after the caller read it.
+      if (payload?.expectedUpdatedAt != null && payload.expectedUpdatedAt !== doc.updatedAt) {
+        fail('ใบแจ้งรับมัดจำนี้ถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง', 409);
+      }
 
       const thaiYear = new Date().getFullYear() + 543;
       doc.docNumber = `GLRD${String(thaiYear).slice(-2)}${String(mockDocNumberSeq++).padStart(3,'0')}`;
@@ -16258,6 +16313,7 @@ export const api = {
       if (!accepted && !newEngine) fail('ยังไม่มีใบเสนอราคาที่ลูกค้ายอมรับสำหรับคำขอราคานี้', 409);
       // Mirrors the zero-deposit refusal: a 0% ("ไม่รับมัดจำ") quotation has nothing to bill.
       if (newEngine?.depositPercent === 0) fail(mockZeroDepositRefusal(newEngine.number), 409);
+      requireNoIssuedDepositNotice(ticket.id);
       const reference = (accepted ?? newEngine).number;
       const items = accepted
         ? mockDepositNoticeItemsFromQuotation(accepted.items)

@@ -277,42 +277,6 @@ class DepositNoticeAccountNotificationIntegrationTest extends AbstractPostgresIn
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // Revision re-issue (the DEPOSIT_NOTICE_ISSUED self-loop) notifies account again
-    // ─────────────────────────────────────────────────────────────────────────────────────
-
-    @Test
-    void issue_revisionReissue_notifiesAccountAgainMarkedAsARevision() {
-        DraftFixture fixture = buildDraftDepositNotice();
-        depositNoticeService.issue(fixture.docId(), salesActor);
-        assertThat(countAccountNotificationRows()).isEqualTo(1);
-        mailer.sent.clear();
-
-        // Repository-direct on purpose: DepositNoticeService.createDraft only ever sources the
-        // FIRST draft from the ticket's approved items/quotation, so building a literal SECOND
-        // draft (the revision) this way is the shortest path to the state under test here, and
-        // it is only issue() itself (called through the real service below) that this test cares
-        // about exercising faithfully.
-        long secondDocId = new DepositNoticeRepository(jdbc).createDraft(fixture.ticketId(),
-            new DepositNoticeDraftRequest("ACME Revision", "0100000000000", "Bangkok", "Showroom", "REF-REV",
-                new BigDecimal("0.50"), List.of(), null),
-            List.of(new DepositNoticeItemRequest(
-                1, "Revision item", new BigDecimal("1"), "แผ่น",
-                new BigDecimal("100.00"), null, new BigDecimal("100.00"))));
-
-        DepositNoticeDto revisionIssued = depositNoticeService.issue(secondDocId, salesActor);
-
-        assertThat(countAccountNotificationRows()).isEqualTo(2);
-        String secondMessage = (String) jdbc.queryForMap("""
-            SELECT message FROM hr.notification
-             WHERE employee_id = :accountId AND type = 'DEPOSIT_NOTICE_ISSUED'
-             ORDER BY notification_id DESC LIMIT 1
-            """, Map.of("accountId", accountEmployeeId)).get("message");
-        assertThat(secondMessage).contains("ฉบับแก้ไข");
-        assertThat(secondMessage).contains(revisionIssued.docNumber());
-        assertThat(mailer.recipients()).contains("account@glr.co.th");
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Rollback: the critical AfterCommit trap this branch exists to avoid regressing
     // ─────────────────────────────────────────────────────────────────────────────────────
 

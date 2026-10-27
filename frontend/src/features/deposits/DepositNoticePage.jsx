@@ -14,6 +14,7 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { fieldErrorId } from '../../components/common/FormField.jsx';
 import { depositNoticeStatusLabel, formatThaiDate } from '../../utils/format.js';
 import { downloadBlob } from '../../utils/download.js';
+import { round2 } from '../quotations/quotationMeta.js';
 
 function money(v) {
   if (v == null) return '—';
@@ -33,6 +34,43 @@ const FALLBACK_VAT_PERCENT = 0.07;
 // "7.000000000000001") never reaches the screen.
 function formatVatPercent(rate) {
   return String(Math.round(Number(rate) * 100 * 100) / 100);
+}
+
+// A line's net unit price: 0 is a real price (a 100%-discounted line), only a missing one falls
+// back to the unit price.
+function lineNet(item) {
+  return Number(item.netUnitPrice ?? item.unitPrice) || 0;
+}
+
+// An untouched เพิ่มรายการ row (or one emptied again): no description and nothing to bill. Left
+// out of the save (the backend refuses a line without a description) and of the issue checks.
+const NO_ITEMS_MESSAGE = 'กรุณาเพิ่มรายการสินค้าอย่างน้อย 1 รายการ';
+
+function isBlankRow(item) {
+  return !String(item.description ?? '').trim() && !(lineNet(item) * (Number(item.qty) || 0));
+}
+
+/** The confirm-before-issue amounts, shared by this editor and DealDepositPanel's ออกเอกสาร. */
+export function DepositIssueSummary({ customerName, depositPercent, deposit, vatPercent, vat, total }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="confirm-dialog-message text-text-secondary leading-normal m-0">
+        ตรวจสอบยอดเงินก่อนออกเอกสารให้ <strong>{customerName || 'ลูกค้า'}</strong> — <strong>หลังจากนี้จะไม่สามารถแก้ไขได้</strong>
+      </p>
+      <div className="flex justify-between border-t border-border pt-2 text-sm">
+        <span className="text-icon-muted">ขอรับเงินมัดจำ ({Math.round(Number(depositPercent) * 100)}%)</span>
+        <code className="font-mono">{money(deposit)} บาท</code>
+      </div>
+      <div className="flex justify-between text-sm">
+        <span className="text-icon-muted">ภาษีมูลค่าเพิ่ม {formatVatPercent(vatPercent)}%</span>
+        <code className="font-mono">{money(vat)} บาท</code>
+      </div>
+      <div className="flex justify-between text-md font-bold">
+        <span>รวมเป็นเงินที่ต้องชำระ</span>
+        <code className="font-mono">{money(total)} บาท</code>
+      </div>
+    </div>
+  );
 }
 
 // ── validation (UX-03) ──────────────────────────────────────────────────────
@@ -69,7 +107,7 @@ function makeLineItemSchema(rowNumber) {
  * handleIssue() can scroll/focus the first one without depending on zod's
  * internal issue ordering.
  */
-function validateIssueForm({ customerName, items, total }) {
+function validateIssueForm({ customerName, items, total, depositPercent }) {
   const errors = {};
   const order = [];
 
@@ -79,11 +117,12 @@ function validateIssueForm({ customerName, items, total }) {
     order.push('customerName');
   }
 
-  if (items.length === 0) {
-    errors.items = 'กรุณาเพิ่มรายการสินค้าอย่างน้อย 1 รายการ';
+  if (items.every(isBlankRow)) {
+    errors.items = NO_ITEMS_MESSAGE;
     order.push('items');
   } else {
     items.forEach((item, index) => {
+      if (isBlankRow(item)) return;
       const result = makeLineItemSchema(index + 1).safeParse(item);
       if (!result.success) {
         for (const issue of result.error.issues) {
@@ -93,6 +132,14 @@ function validateIssueForm({ customerName, items, total }) {
         }
       }
     });
+  }
+
+  // The % sits after the items on screen. A whole 1–100 is what the backend issues; outside it the
+  // ฿0 rule below would blame the unit price (0%) or the backend would refuse behind the dialog (150%).
+  const percent = depositPercent === '' ? NaN : Math.round(Number(depositPercent) * 100);
+  if (!(percent >= 1 && percent <= 100)) {
+    errors.depositPercent = 'กรุณากรอก % มัดจำเป็นจำนวนเต็ม 1–100';
+    order.push('depositPercent');
   }
 
   // Rule 4: issuing a ฿0 deposit notice is meaningless and would still
@@ -229,7 +276,8 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
       customerAddress: address,
       projectName:     d.projectName   ?? '',
       reference:       d.reference     ?? '',
-      depositPercent:  d.depositPercent ?? 0.5,
+      // As stored (null -> blank, which saves as "keep"): a save of another field must not rewrite it.
+      depositPercent:  d.depositPercent ?? '',
       notes:           d.notes         ?? [],
       items:           (d.items ?? []).map((it) => ({ ...it })),
     });
@@ -240,6 +288,10 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
   // background refetch of the same doc (e.g. a save doesn't bump
   // version/status, so no reseed fires and in-flight edits aren't clobbered).
   const docSeedKey = doc ? `${doc.id}:${doc.version}:${doc.status}` : null;
+  // The draft's updatedAt as last read from the server (the list, or this page's own save):
+  // sent as expectedUpdatedAt, so a save over someone else's newer one is refused (409).
+  const stampRef = useRef(null);
+  useEffect(() => { stampRef.current = doc?.updatedAt ?? null; }, [doc?.updatedAt]);
   useEffect(() => {
     if (doc) populateForm(doc, customers);
     // A reseed means a different document identity (or the same one flipping
@@ -251,6 +303,22 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
 
   function invalidateDepositNotices() {
     return queryClient.invalidateQueries({ queryKey: queryKeys.depositNotices(ticketId) });
+  }
+
+  async function saveDraft() {
+    const res = await api.depositNotices.update(doc.id, buildPayload());
+    stampRef.current = res?.depositNotice?.updatedAt ?? stampRef.current;
+    return res;
+  }
+
+  // A 409 means the server's copy moved on (saved elsewhere, or issued): reload it, form included,
+  // and show the server's message.
+  async function onSaveError(err, fallback) {
+    showToast('error', err.message || fallback);
+    if (err.status !== 409) return;
+    const { data } = await depositNoticesQuery.refetch();
+    const fresh = (data ?? []).find((d) => d.id === doc.id);
+    if (fresh) populateForm(fresh, customers);
   }
 
   const createDraftMutation = useMutation({
@@ -274,10 +342,9 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
       } catch {
         acceptedPricingRequestId = null;
       }
-      // depositPercent is deliberately NOT sent on either branch below (owner ruling,
-      // 2026-09-29): the backend always ignores a caller-supplied value now and re-sources it
-      // from the ticket's own quotation (see DepositNoticeService.createDraft), falling back to
-      // 0.50 only when there is no quotation to read it from at all.
+      // depositPercent is not sent on either branch below: the backend picks the new draft's
+      // percent (DepositNoticeService.createDraftFromQuotation; findGoverningQuotation, #1170).
+      // Sales changes it on the draft.
       if (acceptedPricingRequestId != null) {
         return api.pricingRequests.createDepositNoticeFromQuotation(acceptedPricingRequestId, {});
       }
@@ -294,34 +361,42 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
   }
 
   const saveMutation = useMutation({
-    mutationFn: () => api.depositNotices.update(doc.id, buildPayload()),
+    mutationFn: saveDraft,
     onSuccess: () => {
       showToast('success', 'บันทึกแล้ว');
       invalidateDepositNotices();
     },
-    onError: (err) => showToast('error', err.message || 'บันทึกไม่สำเร็จ'),
+    onError: (err) => onSaveError(err, 'บันทึกไม่สำเร็จ'),
   });
 
+  // Blank rows are not sent and an empty `items` makes the backend keep the stored lines, so a form
+  // whose rows were all cleared would "save" and bring the old lines back: refuse it instead.
+  function refusesClearedItems() {
+    if (!(doc.items?.length > 0 && form.items.every(isBlankRow))) return false;
+    setFieldErrors({ items: NO_ITEMS_MESSAGE });
+    return true;
+  }
+
   function handleSave() {
-    if (!doc) return;
+    if (!doc || refusesClearedItems()) return;
     saveMutation.mutate();
   }
 
   const previewMutation = useMutation({
     mutationFn: async () => {
       // Save first, then preview.
-      await api.depositNotices.update(doc.id, buildPayload());
+      await saveDraft();
       return api.depositNotices.preview(doc.id);
     },
     onSuccess: (html) => {
       setPreview(html);
       invalidateDepositNotices();
     },
-    onError: (err) => showToast('error', err.message || 'Preview ไม่สำเร็จ'),
+    onError: (err) => onSaveError(err, 'Preview ไม่สำเร็จ'),
   });
 
   function handlePreview() {
-    if (!doc) return;
+    if (!doc || refusesClearedItems()) return;
     previewMutation.mutate();
   }
 
@@ -331,7 +406,9 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
     // sure?" for something that's then going to fail. `total` is read here
     // (never written) from the money-math block below; see the HARD
     // CONSTRAINT comment on that block.
-    const { errors, order } = validateIssueForm({ customerName: form.customerName, items: form.items, total });
+    const { errors, order } = validateIssueForm({
+      customerName: form.customerName, items: form.items, total, depositPercent: form.depositPercent,
+    });
     if (order.length > 0) {
       setFieldErrors(errors);
       const node = fieldRefs.current[order[0]];
@@ -350,8 +427,8 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
   const issueMutation = useMutation({
     mutationFn: async () => {
       // Save first.
-      await api.depositNotices.update(doc.id, buildPayload());
-      return api.depositNotices.issue(doc.id);
+      await saveDraft();
+      return api.depositNotices.issue(doc.id, { expectedUpdatedAt: stampRef.current });
     },
     onSuccess: (res) => {
       showToast('success', `ออกเอกสาร ${res.depositNotice.docNumber} เรียบร้อย`);
@@ -363,7 +440,10 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
       queryClient.invalidateQueries({ queryKey: ['tickets', 'list'] });
       queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(ticketId) });
     },
-    onError: (err) => showToast('error', err.message || 'ออกเอกสารไม่สำเร็จ'),
+    onError: (err) => {
+      setConfirmIssue(false);
+      onSaveError(err, 'ออกเอกสารไม่สำเร็จ');
+    },
   });
 
   function confirmIssueDocument() {
@@ -377,10 +457,13 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
   function setField(key, value) {
     setForm((f) => ({ ...f, [key]: value }));
     if (key === 'customerName') clearFieldError('customerName');
-    // The deposit % toggle feeds directly into `deposit`/`total` below —
+    // The deposit % field feeds directly into `deposit`/`total` below —
     // clear a stale "total must be > 0" error so it can be re-checked fresh
     // on the next issue attempt.
-    if (key === 'depositPercent') clearFieldError('total');
+    if (key === 'depositPercent') {
+      clearFieldError('total');
+      clearFieldError('depositPercent');
+    }
   }
 
   function selectCustomer(c) {
@@ -450,31 +533,31 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
       customerAddress: form.customerAddress,
       projectName:     form.projectName,
       reference:       form.reference,
-      depositPercent:  Number(form.depositPercent),
+      // A cleared field keeps the stored % (null) rather than failing the whole save at 0.
+      depositPercent:  form.depositPercent === '' ? null : Number(form.depositPercent),
       notes:           form.notes,
-      items: form.items.map((it, idx) => ({
+      expectedUpdatedAt: stampRef.current,
+      items: form.items.filter((it) => !isBlankRow(it)).map((it, idx) => ({
         seq:          idx + 1,
         description:  it.description ?? '',
         qty:          Number(it.qty) || 0,
         unit:         it.unit ?? 'แผ่น',
         unitPrice:    Number(it.unitPrice) || 0,
         discountLabel: it.discountLabel ?? null,
-        netUnitPrice: Number(it.netUnitPrice) || Number(it.unitPrice) || 0,
+        netUnitPrice: lineNet(it),
       })),
     };
   }
 
-  // Recalculate summary from form items
-  const subtotal = form.items.reduce((sum, it) => {
-    const net = Number(it.netUnitPrice) || Number(it.unitPrice) || 0;
-    return sum + net * (Number(it.qty) || 0);
-  }, 0);
-  const deposit = subtotal * Number(form.depositPercent || 0.5);
+  // Recalculate summary from form items, rounding each step to the satang as
+  // DepositNoticeRepository does (HALF_UP), so the screen matches the stored document.
+  const subtotal = round2(form.items.reduce((sum, it) => sum + lineNet(it) * (Number(it.qty) || 0), 0));
+  const deposit = round2(subtotal * (Number(form.depositPercent) || 0));
   // Issue #756: the served document's own vatPercent always wins once one exists — only
   // before that (no `doc` yet) does this fall back to FALLBACK_VAT_PERCENT above.
   const vatPercent = Number(doc?.vatPercent ?? FALLBACK_VAT_PERCENT);
-  const vat = deposit * vatPercent;
-  const total = deposit + vat;
+  const vat = round2(deposit * vatPercent);
+  const total = round2(deposit + vat);
 
   if (loading) {
     return (
@@ -822,21 +905,24 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
               aria-describedby={fieldErrors.total ? fieldErrorId('doc-summary-panel') : undefined}
               className="px-4.5 py-3.5"
             >
-              {/*
-                Owner rulings (2026-09-29, 2026-10-23): the deposit % is what the source
-                quotation's PDF printed (legacy 50%, new-engine its own, blank 30%; 50% with no
-                live quotation) and is never editable at the deposit-notice stage: createDraft
-                never reads a client-supplied value and update keeps the draft's stored one. The
-                30/50/70/100% preset buttons this used to be are gone; this is now a plain
-                read-only label, shown regardless of isIssued since there is no draft-only
-                editable state left to distinguish.
-              */}
-              <div className="mb-3 text-xs">
-                <span className="block text-icon-muted">% มัดจำ</span>
-                <span className="mt-1 inline-block rounded-[6px] border border-border-muted bg-surface-subtle px-3 py-1 text-sm text-text-secondary">
-                  {Math.round(Number(form.depositPercent) * 100)}%
-                </span>
-              </div>
+              {/* Owner ruling 2026-10-23: the % starts from the quotation; sales may change it on
+                  a DRAFT (whole number on screen, a fraction in the payload). Read-only once issued. */}
+              <label className="mb-3 block text-xs">
+                % มัดจำ
+                <input type="number" min="1" max="100" step="1" disabled={isIssued}
+                  id="doc-deposit-percent"
+                  ref={(el) => { fieldRefs.current.depositPercent = el; }}
+                  value={form.depositPercent === '' ? '' : Math.round(Number(form.depositPercent) * 100)}
+                  onChange={(e) => setField('depositPercent', e.target.value === '' ? '' : Math.round(Number(e.target.value)) / 100)}
+                  aria-invalid={fieldErrors.depositPercent ? true : undefined}
+                  aria-describedby={fieldErrors.depositPercent ? fieldErrorId('doc-deposit-percent') : undefined}
+                  className="text-right" />
+              </label>
+              {fieldErrors.depositPercent ? (
+                <p id={fieldErrorId('doc-deposit-percent')} role="alert" className="mx-0 mb-2 mt-0 text-xs font-bold text-danger">
+                  {fieldErrors.depositPercent}
+                </p>
+              ) : null}
               {[
                 { label: 'รวมเป็นเงิน', value: subtotal },
                 { label: `ขอรับเงินมัดจำ (${Math.round(Number(form.depositPercent) * 100)}%)`, value: deposit },
@@ -900,23 +986,8 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
         open={confirmIssue}
         title="ยืนยันการออกเอกสาร"
         message={(
-          <div className="flex flex-col gap-2">
-            <p className="confirm-dialog-message text-text-secondary leading-normal m-0">
-              ตรวจสอบยอดเงินก่อนออกเอกสารให้ <strong>{form.customerName || 'ลูกค้า'}</strong> — <strong>หลังจากนี้จะไม่สามารถแก้ไขได้</strong>
-            </p>
-            <div className="flex justify-between border-t border-border pt-2 text-sm">
-              <span className="text-icon-muted">ขอรับเงินมัดจำ ({Math.round(Number(form.depositPercent) * 100)}%)</span>
-              <code className="font-mono">{money(deposit)} บาท</code>
-            </div>
-            <div className="flex justify-between text-sm">
-              <span className="text-icon-muted">ภาษีมูลค่าเพิ่ม {formatVatPercent(vatPercent)}%</span>
-              <code className="font-mono">{money(vat)} บาท</code>
-            </div>
-            <div className="flex justify-between text-md font-bold">
-              <span>รวมเป็นเงินที่ต้องชำระ</span>
-              <code className="font-mono">{money(total)} บาท</code>
-            </div>
-          </div>
+          <DepositIssueSummary customerName={form.customerName} depositPercent={form.depositPercent}
+            deposit={deposit} vatPercent={vatPercent} vat={vat} total={total} />
         )}
         confirmLabel="ออกเอกสาร"
         busy={saving}
