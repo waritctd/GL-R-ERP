@@ -215,11 +215,13 @@ function isRedo(pr, quotation) {
 }
 
 /** pricingRequestId -> that request's newest PRICING_REQUEST-origin quotation, from the deal's
- * quotation list (DealQuotationDto rows). The `quotationByRequest` nextSalesAction reads. */
+ * quotation list (DealQuotationDto rows). The `quotationByRequest` nextSalesAction reads. A
+ * cancelled row is skipped: a revision draft cancelled after ⋯ แก้ใบเสนอราคา must not stand in
+ * for the quotation it revised. */
 export function newestQuotationByRequest(rows) {
   const byRequest = new Map();
   for (const q of rows) {
-    if (q.origin !== 'PRICING_REQUEST' || q.pricingRequestId == null) continue;
+    if (q.origin !== 'PRICING_REQUEST' || q.pricingRequestId == null || q.docStatus === 'CANCELLED') continue;
     const held = byRequest.get(q.pricingRequestId);
     if (!held || q.id > held.id) byRequest.set(q.pricingRequestId, q);
   }
@@ -397,8 +399,12 @@ export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = nul
     };
   }
 
+  // An acceptance is the order (bucket 3), so nothing is quoted after it: a stale request's route
+  // choice or redo would offer a quotation once the order is confirmed (spec B1).
+  const accepted = ownPrs.some((pr) => pr.status === 'QUOTATION_ACCEPTED');
+
   // A designer/owner quotation went out: pick the next party (see routeChoiceAction).
-  const routeAction = routeChoiceAction(ownPrs, quotationOf, offRouteParties);
+  const routeAction = accepted ? null : routeChoiceAction(ownPrs, quotationOf, offRouteParties);
   if (routeAction) return routeAction;
 
   // 4. The quotation went out to the customer but nobody has recorded what the customer said yet.
@@ -426,7 +432,8 @@ export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = nul
   // A quotation to redo (see isRedo) is written again for the same party: "เสนอใบราคา<party>", as in
   // bucket 2. After bucket 4, so a live quotation's outcome comes first; the request furthest along
   // the route wins, so an earlier party's stale redo draft never takes over a later party's.
-  const redo = ownPrs.filter((pr) => pr.status === 'QUOTATION_ISSUED' && isRedo(pr, quotationOf(pr))).sort(byRoute).at(-1);
+  const redo = accepted ? null
+    : ownPrs.filter((pr) => pr.status === 'QUOTATION_ISSUED' && isRedo(pr, quotationOf(pr))).sort(byRoute).at(-1);
   if (redo) return issueQuotationAction(redo, quotationOf(redo));
 
   // 5. The deal is delivery-ready (goods received / from stock / mid-

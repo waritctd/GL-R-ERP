@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { SALES_ACTION, nextSalesAction, sortWorklist } from './salesActions.js';
+import {
+  SALES_ACTION, newestQuotationByRequest, nextSalesAction, sortWorklist,
+} from './salesActions.js';
 import { bangkokTodayIso } from '../../utils/format.js';
 
 // First direct unit-test file for this module (previously only exercised indirectly through
@@ -636,6 +638,15 @@ describe('nextSalesAction — the route choice once a designer/owner quotation i
     expect(action).toBeNull();
   });
 
+  // Spec B1: an acceptance is the order, so nothing is quoted after it. Clean-review finding.
+  it.each([
+    ['a stale request of the same party (route choice)', [[2, 'DESIGNER'], [1, 'SUPERSEDED'], [2, 'ACCEPTED']]],
+    ['an earlier party\'s open redo draft (redo)', [[3, 'BUYER'], [1, 'DRAFT'], [3, 'ACCEPTED']]],
+  ])('after a confirmed order nothing is quoted again: %s -> null', (_label, [[acceptedId, party], ...entries]) => {
+    const prs = [designerSent, { ...request(acceptedId, party, 'QUOTATION_ACCEPTED'), orderConfirmedAt: '2026-10-27T10:00:00Z' }];
+    expect(nextSalesAction(deal(), prs, known(...entries))).toBeNull();
+  });
+
   it('sortWorklist ranks QUOTE_NEXT_PARTY with CONFIRM_ORDER (1): ahead of ISSUE_QUOTATION, ties broken by the older stageUpdatedAt', () => {
     const row = (id, key, stageUpdatedAt) => ({ deal: { id, stageUpdatedAt }, action: { key } });
     const sorted = sortWorklist([
@@ -645,5 +656,17 @@ describe('nextSalesAction — the route choice once a designer/owner quotation i
       row(4, QUOTE_NEXT, '2026-07-01T00:00:00.000Z'),
     ]).map((item) => item.deal.id);
     expect(sorted).toEqual([4, 3, 1, 2]);
+  });
+});
+
+describe('newestQuotationByRequest — the deal page\'s quotation map', () => {
+  const row = (id, pricingRequestId, docStatus) => ({ id, pricingRequestId, docStatus, origin: 'PRICING_REQUEST' });
+
+  // Clean-review finding: a revision draft cancelled after ⋯ แก้ใบเสนอราคา used to become the
+  // request's quotation, leaving the deal page with no button at all.
+  it('a cancelled draft never stands in for the quotation it revised: the newest row that is not CANCELLED', () => {
+    const byRequest = newestQuotationByRequest([row(10, 1, 'ISSUED'), row(11, 1, 'CANCELLED'), row(12, 2, 'CANCELLED')]);
+    expect(byRequest.get(1)).toMatchObject({ id: 10, docStatus: 'ISSUED' });
+    expect(byRequest.has(2)).toBe(false);
   });
 });
