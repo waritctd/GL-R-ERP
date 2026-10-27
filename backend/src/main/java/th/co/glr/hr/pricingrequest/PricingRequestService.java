@@ -310,13 +310,8 @@ public class PricingRequestService {
                 "ไม่พบสินค้าใน price catalog ที่ active สำหรับรายการ: " + unresolvableCatalogItems);
         }
         requests.snapshotCatalogSelections(id);
-        // Owner ruling 2026-10-15: a thickness Sales typed for a catalog-linked product whose
-        // catalogue row has none is written back to the catalogue here, so the CEO's landed-cost
-        // calc and every other reader see it (see PricingRequestRepository#fillCatalogThicknessFromItems
-        // for the "catalog wins / linked-only" rules). A free-text line has no row to fill; its
-        // thickness stays on the item and is honoured by LandedCostCalculator#resolveThicknessMm's
-        // fallback. Runs AFTER the snapshot above so catalog_price_id is populated.
-        requests.fillCatalogThicknessFromItems(id);
+        // A thickness Sales typed stays on the item: the shared catalogue is never written from an
+        // unreviewed entry. LandedCostCalculator#resolveThicknessMm falls back to it.
         items = requests.findItems(id);
         // REMOVED 2026-08-11 (owner request): "Finding A" (financial-integrity review, commit 3)
         // used to require a fully-populated catalog snapshot on EVERY line here, 422-ing with

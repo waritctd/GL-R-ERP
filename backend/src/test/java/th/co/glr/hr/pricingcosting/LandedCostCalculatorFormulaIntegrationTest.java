@@ -486,6 +486,25 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
     }
 
     @Test
+    void missingSqm_perSqmRequestedBasis_setAsideAsUncostable_notA422ForTheWholeShipment() {
+        // A PER_SQM requested basis needs sqm-per-piece to convert the quantity (the receive step
+        // already rejects a PER_SQM *quote* without sqm); with it missing, quantityToPieces used
+        // to throw 422 before the line could be set aside.
+        long pricingRequestId = mixedCostableAndNoSqmSameFactory(UnitBasis.PER_SQM);
+
+        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
+
+        List<PricingCostingItemDto> items =
+            costingRepository.find(decision.pricingCostingId()).orElseThrow().items();
+        assertThat(items).hasSize(2);
+        assertThat(items.stream().filter(i -> i.uncostableReason() == null).toList())
+            .singleElement().satisfies(i -> assertThat(i.totalLandedCostThb()).isNotNull());
+        assertThat(items.stream().filter(i -> i.uncostableReason() != null).toList())
+            .singleElement().satisfies(i -> assertThat(i.uncostableReason()).contains("ตร.ม."));
+    }
+
+    @Test
     void missingFreightBand_countryNotInFormulaConfig_refusesToPrice_neverZero() {
         // "TH" is a genuinely valid, V151-seeded price_catalog.country row (so the catalog INSERT
         // itself succeeds) — V109 simply never seeded any Thailand freight rows, so the lookup
@@ -848,6 +867,10 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
      * null {@code sqmPerUnit}.
      */
     private long mixedCostableAndNoSqmSameFactory() {
+        return mixedCostableAndNoSqmSameFactory(UnitBasis.PER_PIECE);
+    }
+
+    private long mixedCostableAndNoSqmSameFactory(String noSqmRequestedBasis) {
         long productCostable = insertCatalogProduct("Formula Factory", "IT", "V109-SQM-OK-" + UUID.randomUUID(),
             new BigDecimal("100.00"), "THB", "per_piece");
         long productNoSqm = insertCatalogProduct("Formula Factory", "IT", "V109-SQM-MISSING-" + UUID.randomUUID(),
@@ -860,7 +883,7 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
         // sqm is unresolvable.
         PricingRequestItemRequest noSqm = new PricingRequestItemRequest(
             null, productNoSqm, null, "Test", "ModelNoSqm", "Test ModelNoSqm", null, null, "1x1", "Formula Factory",
-            new BigDecimal("10"), null, "piece", UnitBasis.PER_PIECE, QuantityType.CONFIRMED, null, null, null);
+            new BigDecimal("10"), null, "piece", noSqmRequestedBasis, QuantityType.CONFIRMED, null, null, null);
         CreatePricingRequestRequest request = new CreatePricingRequestRequest(
             PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
             null, "THB", "V109 missing-sqm test", UUID.randomUUID().toString(), List.of(costable, noSqm));
