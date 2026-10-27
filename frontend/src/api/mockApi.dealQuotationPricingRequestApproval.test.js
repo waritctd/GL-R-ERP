@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { api } from './mockApi.js';
+import { api, setPricingRequestStatusForTests } from './mockApi.js';
 
 // GLA-123 slice S2, REWORKED (owner reversed the dual-approval design, 2026-09-20): mock coverage
 // for DealQuotationService#approveAndIssuePricingRequestOrigin/#requireCeoApprovalIfChanged — ONE
@@ -207,5 +207,39 @@ describe('mockApi dealQuotations approval (GLA-123 slice S2, reworked)', () => {
       await api.auth.login({ role });
       await expect(api.dealQuotations.approve(quotationId, {})).rejects.toMatchObject({ status: 403 });
     }
+  });
+});
+
+// Mirrors PricingRequestService#cancel's quotation supersede (PricingRequestRepository
+// #supersedeOpenPricingDecisionAndQuotation) and the cancelled-request guard in DealQuotationService
+// #approveAndIssuePricingRequestOrigin. Mock plumbing only; the real-DB pins are the cancel/approve
+// tests in DealQuotationPricingRequestApprovalIntegrationTest.
+describe('mockApi pricingRequests.cancel takes the request\'s open quotation with it', () => {
+  it('supersedes a PENDING_APPROVAL quotation, which can then no longer be approved', async () => {
+    const { prId, quotationId } = await pendingApprovalPricingRequestQuotation();
+    await api.pricingRequests.cancel(prId, { reason: 'ลูกค้ายกเลิกโครงการ' });
+    const { quotation } = await api.dealQuotations.get(quotationId);
+    expect(quotation.docStatus).toBe('SUPERSEDED');
+    await api.auth.login({ role: 'sales_manager' });
+    await expect(api.dealQuotations.approve(quotationId, {})).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('supersedes a DRAFT quotation too', async () => {
+    const { prId, quotationId } = await draftPricingRequestQuotation();
+    await api.pricingRequests.cancel(prId, { reason: 'ลูกค้ายกเลิกโครงการ' });
+    const { quotation } = await api.dealQuotations.get(quotationId);
+    expect(quotation.docStatus).toBe('SUPERSEDED');
+  });
+
+  it('approve refuses a PENDING_APPROVAL quotation left on a CANCELLED request, for either approver', async () => {
+    const { prId, quotationId } = await pendingApprovalPricingRequestQuotation();
+    setPricingRequestStatusForTests(prId, 'CANCELLED');
+    for (const role of ['sales_manager', 'ceo']) {
+      await api.auth.login({ role });
+      await expect(api.dealQuotations.approve(quotationId, {}))
+        .rejects.toMatchObject({ status: 409, message: 'คำขอราคาของใบเสนอราคานี้ถูกยกเลิกแล้ว จึงอนุมัติไม่ได้' });
+    }
+    const { quotation } = await api.dealQuotations.get(quotationId);
+    expect(quotation.docStatus).toBe('PENDING_APPROVAL');
   });
 });
