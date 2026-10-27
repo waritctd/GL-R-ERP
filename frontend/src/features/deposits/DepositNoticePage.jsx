@@ -823,12 +823,13 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
               className="px-4.5 py-3.5"
             >
               {/*
-                Owner ruling (2026-09-29): the deposit % is LOCKED to the source quotation's own
-                deposit_percent (sales.quotation) and is never editable at the deposit-notice
-                stage — createDraft/update on the backend both ignore any client-supplied value
-                and always re-source it from the quotation. The 30/50/70/100% preset buttons this
-                used to be are gone; this is now a plain read-only label, shown regardless of
-                isIssued since there is no draft-only editable state left to distinguish.
+                Owner rulings (2026-09-29, 2026-10-23): the deposit % is what the source
+                quotation's PDF printed (legacy 50%, new-engine its own, blank 30%; 50% with no
+                live quotation) and is never editable at the deposit-notice stage: createDraft
+                never reads a client-supplied value and update keeps the draft's stored one. The
+                30/50/70/100% preset buttons this used to be are gone; this is now a plain
+                read-only label, shown regardless of isIssued since there is no draft-only
+                editable state left to distinguish.
               */}
               <div className="mb-3 text-xs">
                 <span className="block text-icon-muted">% มัดจำ</span>

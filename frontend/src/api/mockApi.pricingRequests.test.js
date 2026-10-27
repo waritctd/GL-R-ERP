@@ -490,8 +490,8 @@ describe('mockApi.pricingRequests customerQuotation numbering (review finding M1
 
   // Concrete failure this catches (CLAUDE.md's "Mock API contract": the mock is the default
   // verification surface, so silence here is the dangerous kind): if mockCustomerQuotationNumberSeq's
-  // top-level `let` (mockApi.js ~L4878, `= mockCustomerQuotationSeq`) ever executed BEFORE the
-  // top-level seed block (~L1161) advances mockCustomerQuotationSeq past every demoSales.js-seeded
+  // top-level `let` (mockApi.js, `= mockQuotationSeq`) ever executed BEFORE the
+  // top-level seed block advances mockQuotationSeq past every demoSales.js-seeded
   // row's id, the counter would start at 1 and mint a BASE identical to an already-seeded row's
   // bare number. Every seeded row's number is literally `QT-2026-{id}` (demoSales.js#makeQuotation)
   // and every mock-minted number always carries a `-{revisionNo}` suffix, so the two FULL strings
