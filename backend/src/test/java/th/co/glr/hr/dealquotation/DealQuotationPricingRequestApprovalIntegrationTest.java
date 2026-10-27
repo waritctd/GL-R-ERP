@@ -70,6 +70,7 @@ import th.co.glr.hr.pricingrequest.PricingRequestStatus;
 import th.co.glr.hr.pricingrequest.QuantityType;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.CreateTicketRequest;
+import th.co.glr.hr.ticket.DealLostReason;
 import th.co.glr.hr.ticket.DealStage;
 import th.co.glr.hr.ticket.QuotationRenderer;
 import th.co.glr.hr.ticket.QuotationStatus;
@@ -745,6 +746,127 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
     private List<Long> quotationIdsOnTicket() {
         return jdbc.queryForList("SELECT quotation_id FROM sales.quotation WHERE ticket_id = :t ORDER BY quotation_id",
             java.util.Map.of("t", ticketId), Long.class);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Cancelling the pricing request takes its PENDING_APPROVAL quotation with it. The cancel
+    // cascade (PricingRequestRepository#supersedeOpenPricingDecisionAndQuotation) retired DRAFT and
+    // every issued status but skipped PENDING_APPROVAL, so the quotation stayed in the approvals
+    // queue, and approving it issued an offer on a cancelled request and superseded the deal's live
+    // quotation through the B-4 sweep above.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    /** The cascade, through PricingRequestService#cancel. The sibling request's quotation is the
+     * control: the supersede is scoped to the cancelled request, never to the deal. */
+    @Test
+    void cancel_supersedesTheRequestsPendingApprovalQuotation_andTakesItOutOfTheApprovalsQueue() {
+        DealQuotationDto sibling = submittedQuotation();
+        DealQuotationDto pending = submittedQuotation();
+        long pricingRequestId = pending.pricingRequestId();
+        assertThat(approvalQueueIds()).contains(sibling.id(), pending.id());
+
+        pricingRequestService.cancel(pricingRequestId, cancelRequest(), salesActor);
+
+        assertThat(statusOf(pending.id())).isEqualTo("SUPERSEDED");
+        assertThat(approvalQueueIds()).doesNotContain(pending.id()).contains(sibling.id());
+        assertThat(statusOf(sibling.id())).isEqualTo("PENDING_APPROVAL");
+        // The same record the cascade's other statuses get: the request's one cancel event, and no
+        // quotation event of its own.
+        assertThat(cancelEvents(pricingRequestId))
+            .containsExactly("APPROVED_FOR_QUOTATION>CANCELLED:ลูกค้ายกเลิกโครงการ");
+        assertThat(ticketEventCount(th.co.glr.hr.ticket.TicketEventKind.DEAL_QUOTATION_SUPERSEDED)).isZero();
+    }
+
+    /** The defect the 10-27 review found: approving the cancelled request's quotation from the
+     * approvals queue issued it and retired the deal's live offer. Either half of the fix refuses
+     * it on its own (the cascade leaves nothing PENDING_APPROVAL to approve; the guard refuses a
+     * CANCELLED request), so the tests either side of this one pin each half separately. */
+    @Test
+    void approve_afterTheRequestWasCancelled_isRefused_andTheDealsLiveQuotationStaysLive() {
+        DealQuotationDto live = issuedRound();
+        DealQuotationDto pending = submittedQuotation();
+        pricingRequestService.cancel(pending.pricingRequestId(), cancelRequest(), salesActor);
+
+        assertThatThrownBy(() -> quotationService.approve(pending.id(), new ApproveRequest(null), salesManagerActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+
+        assertThat(statusOf(live.id())).isEqualTo("ISSUED");
+        assertThat(statusOf(pending.id())).isNotEqualTo("ISSUED");
+        assertThat(supersededEventCount(ticketId, live.number(), pending.number())).isZero();
+        assertThat(pricingRequestStatusOf(pending.pricingRequestId())).isEqualTo(PricingRequestStatus.CANCELLED);
+    }
+
+    /** The approve guard on its own. A request cancelled before this fix kept its PENDING_APPROVAL
+     * quotation and nothing retires that row, so approve refuses any quotation whose request is
+     * CANCELLED, whatever the row's own status. Built through the real cancel; only the quotation
+     * is put back to the PENDING_APPROVAL the old cascade left. The CEO is refused too: the CEO's
+     * early return from the price-change gate must not double as a way past this one. */
+    @Test
+    void approve_ofAPendingQuotationLeftOnACancelledRequest_isRefusedForEitherApprover_andWritesNothing() {
+        DealQuotationDto live = issuedRound();
+        DealQuotationDto pending = submittedQuotation();
+        pricingRequestService.cancel(pending.pricingRequestId(), cancelRequest(), salesActor);
+        jdbc.update("UPDATE sales.quotation SET doc_status = 'PENDING_APPROVAL' WHERE quotation_id = :id",
+            java.util.Map.of("id", pending.id()));
+
+        for (UserPrincipal approver : List.of(salesManagerActor, ceoActor)) {
+            assertThatThrownBy(() -> quotationService.approve(pending.id(), new ApproveRequest(null), approver))
+                .isInstanceOfSatisfying(ApiException.class, e -> {
+                    assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                    assertThat(e.getMessage()).isEqualTo("คำขอราคาของใบเสนอราคานี้ถูกยกเลิกแล้ว จึงอนุมัติไม่ได้");
+                });
+        }
+
+        // Refused before the first write: this suite has no transaction to roll a late refusal back.
+        assertThat(statusOf(pending.id())).isEqualTo("PENDING_APPROVAL");
+        assertThat(approverSnapshotCount(pending.id())).isZero();
+        assertThat(statusOf(live.id())).isEqualTo("ISSUED");
+        assertThat(supersededEventCount(ticketId, live.number(), pending.number())).isZero();
+    }
+
+    /** The deal-level cascade (TicketService#markLost -> PricingRequestService#cancelOpenForTicket)
+     * runs the same supersede, so a lost deal's pending quotation leaves the queue too. */
+    @Test
+    void markLost_cancelsTheRequest_andSupersedesItsPendingApprovalQuotation() {
+        DealQuotationDto pending = submittedQuotation();
+
+        ticketService.markLost(ticketId, DealLostReason.PRICE, null, salesActor);
+
+        assertThat(pricingRequestStatusOf(pending.pricingRequestId())).isEqualTo(PricingRequestStatus.CANCELLED);
+        assertThat(statusOf(pending.id())).isEqualTo("SUPERSEDED");
+        assertThat(approvalQueueIds()).doesNotContain(pending.id());
+    }
+
+    private PricingRequestRequests.CancelPricingRequestRequest cancelRequest() {
+        return new PricingRequestRequests.CancelPricingRequestRequest("ลูกค้ายกเลิกโครงการ");
+    }
+
+    /** The approvals queue: every PENDING_APPROVAL quotation, as the sales manager lists them. */
+    private List<Long> approvalQueueIds() {
+        return quotationService.search(List.of(QuotationStatus.PENDING_APPROVAL), false, salesManagerActor)
+            .stream().map(DealQuotationDto::id).toList();
+    }
+
+    private String pricingRequestStatusOf(long pricingRequestId) {
+        return jdbc.queryForObject("SELECT status FROM sales.pricing_request WHERE pricing_request_id = :id",
+            java.util.Map.of("id", pricingRequestId), String.class);
+    }
+
+    private List<String> cancelEvents(long pricingRequestId) {
+        return jdbc.queryForList("""
+            SELECT from_status || '>' || to_status || ':' || message FROM sales.pricing_request_event
+             WHERE pricing_request_id = :id AND event_kind = 'PRICING_REQUEST_CANCELLED'
+            """, java.util.Map.of("id", pricingRequestId), String.class);
+    }
+
+    private long ticketEventCount(String kind) {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM sales.ticket_event WHERE ticket_id = :t AND kind = :k",
+            java.util.Map.of("t", ticketId, "k", kind), Long.class);
+    }
+
+    private long approverSnapshotCount(long quotationId) {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM sales.quotation_approver_snapshot WHERE quotation_id = :id",
+            java.util.Map.of("id", quotationId), Long.class);
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
