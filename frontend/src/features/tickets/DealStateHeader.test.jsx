@@ -68,19 +68,24 @@ describe('DealStateHeader — stage chip is route-aware', () => {
     expect(stageChipText()).toBe(DESIGNER_S3);
   });
 
+  // Condensed now renders ONE DOM (so the expand↔condense change can animate) — the stat grid is
+  // kept mounted-but-collapsed (aria-hidden) for the transition, so the stage label also exists,
+  // hidden, in that grid. Scope the assertion to the VISIBLE bar (deal-state-header-bar) to pin
+  // what the condensed user actually sees.
   it('the condensed variant is route-aware too', () => {
     renderHeader({ entryChannel: 'OWNER_DIRECT' }, { condensed: true });
     expect(screen.getByTestId('deal-state-header').dataset.condensed).toBe('true');
-    expect(screen.getByText(OWNER_S3)).toBeTruthy();
-    expect(screen.queryByText(DESIGNER_S3)).toBeNull();
+    const bar = within(screen.getByTestId('deal-state-header-bar'));
+    expect(bar.getByText(OWNER_S3)).toBeTruthy();
+    expect(bar.queryByText(DESIGNER_S3)).toBeNull();
   });
 
   it('the condensed variant keeps ผู้ออกแบบอนุมัติสเปค for designer-led and absent channels', () => {
     const { unmount } = renderHeader({ entryChannel: 'DESIGNER_LED' }, { condensed: true });
-    expect(screen.getByText(DESIGNER_S3)).toBeTruthy();
+    expect(within(screen.getByTestId('deal-state-header-bar')).getByText(DESIGNER_S3)).toBeTruthy();
     unmount();
     renderHeader({ entryChannel: undefined }, { condensed: true });
-    expect(screen.getByText(DESIGNER_S3)).toBeTruthy();
+    expect(within(screen.getByTestId('deal-state-header-bar')).getByText(DESIGNER_S3)).toBeTruthy();
   });
 });
 
