@@ -5,6 +5,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PricingRequestDetailPage } from './PricingRequestDetailPage.jsx';
 import { api } from '../../api/index.js';
+import { queryKeys } from '../../api/queryKeys.js';
 
 // This component (and PricingRequestCreateModal, which it opens in mode="revision"
 // for the customer-change-revision flow) is exercised here against a hand-rolled
@@ -110,6 +111,7 @@ vi.mock('../../api/index.js', () => ({
       // every existing test in this file keeps seeing the SAME legacy-only panel state as before
       // this fix, rather than a leaked override from an earlier test or a thrown TypeError.
       findForPricingRequest: vi.fn(),
+      listForTicket: vi.fn(),
       createFromPricingRequest: vi.fn(),
       // GLA-123 slice S3 — the new engine's own outcome-recording endpoint, mirrors
       // pricingRequests.recordCustomerQuotationOutcome above.
@@ -3226,11 +3228,19 @@ describe('PricingRequestDetailPage GLA-123 slice S3: new-engine (dealQuotationFo
     return { id: 9101, number: 'QT-2026-0101-1', docStatus: 'ISSUED', ...overrides };
   }
 
-  it('ISSUED: offers the outcome-recording controls to the owning sales rep, and records ACCEPTED via dealQuotations.recordOutcome', async () => {
-    const issued = newEngineQuotation({ docStatus: 'ISSUED' });
-    api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: issued });
-    renderDetailPage({ user: salesOwner });
-    await waitForLoaded();
+  // Owner ruling 2026-10-27 (spec B2): a quotation sent to the BUYER is the last party's — accepting
+  // it is the order as before, one click, no question asked. Review V4: a revision draft cancelled
+  // after แก้ใบเสนอราคา is the server's newest row; the page still records on the quotation it revised.
+  it('ISSUED, a buyer request: ลูกค้ายอมรับ records ACCEPTED at once via dealQuotations.recordOutcome (no confirmation step), even behind a cancelled revision draft', async () => {
+    const issued = newEngineQuotation({ docStatus: 'ISSUED', origin: 'PRICING_REQUEST', pricingRequestId: 501 });
+    const cancelledRevision = newEngineQuotation({
+      id: 9102, number: 'QT-2026-0101-2', docStatus: 'CANCELLED', origin: 'PRICING_REQUEST', pricingRequestId: 501, parentQuotationId: 9101,
+    });
+    const request = buildRequest({ summary: { recipientType: 'BUYER', recipientLabel: 'ผู้รับเหมา ก.' } });
+    api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: cancelledRevision });
+    api.dealQuotations.listForTicket.mockResolvedValue({ items: [issued, cancelledRevision] });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
     await screen.findByText(issued.number);
 
     const acceptButton = await screen.findByRole('button', { name: 'ลูกค้ายอมรับ' });
@@ -3240,6 +3250,75 @@ describe('PricingRequestDetailPage GLA-123 slice S3: new-engine (dealQuotationFo
       issued.id,
       expect.objectContaining({ outcome: 'ACCEPTED', clientRequestId: expect.any(String) }),
     ));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  // Spec B2: accepting a DESIGNER/OWNER quotation makes it the order and skips the later parties, so
+  // the click asks first (the page's shared ConfirmDialog). The confirm button keeps ConfirmDialog's
+  // own default label, ยืนยัน (the spec names the title and body only).
+  it('ISSUED, a designer request: ลูกค้ายอมรับ first asks "ยืนยันว่าลูกค้ายอมรับใบเสนอราคานี้" (ส่งถึงผู้ออกแบบ…); confirming records ACCEPTED', async () => {
+    const issued = newEngineQuotation({ docStatus: 'ISSUED' });
+    api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: issued });
+    renderDetailPage({ user: salesOwner }); // buildRequest(): recipientType DESIGNER
+    await waitForLoaded();
+    await screen.findByText(issued.number);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'ลูกค้ายอมรับ' }));
+
+    const dialog = within(await screen.findByRole('dialog', { name: 'ยืนยันว่าลูกค้ายอมรับใบเสนอราคานี้' }));
+    expect(dialog.getByText('ใบเสนอราคานี้ส่งถึงผู้ออกแบบ ถ้าลูกค้ายอมรับ ดีลจะใช้ใบนี้ยืนยันคำสั่งซื้อและข้ามผู้รับรายถัดไป')).not.toBeNull();
+    expect(api.dealQuotations.recordOutcome).not.toHaveBeenCalled();
+    fireEvent.click(dialog.getByRole('button', { name: 'ยืนยัน' }));
+
+    await waitFor(() => expect(api.dealQuotations.recordOutcome).toHaveBeenCalledWith(
+      issued.id,
+      expect.objectContaining({ outcome: 'ACCEPTED', clientRequestId: expect.any(String) }),
+    ));
+  });
+
+  it('ISSUED, an owner request: the same question names เจ้าของโครงการ, and ยกเลิก records nothing', async () => {
+    const issued = newEngineQuotation({ docStatus: 'ISSUED' });
+    const request = buildRequest({ summary: { recipientType: 'OWNER', recipientLabel: 'เจ้าของ ก.' } });
+    api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: issued });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+    await screen.findByText(issued.number);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'ลูกค้ายอมรับ' }));
+
+    const dialog = within(await screen.findByRole('dialog', { name: 'ยืนยันว่าลูกค้ายอมรับใบเสนอราคานี้' }));
+    expect(dialog.getByText('ใบเสนอราคานี้ส่งถึงเจ้าของโครงการ ถ้าลูกค้ายอมรับ ดีลจะใช้ใบนี้ยืนยันคำสั่งซื้อและข้ามผู้รับรายถัดไป')).not.toBeNull();
+    fireEvent.click(dialog.getByRole('button', { name: 'ยกเลิก' }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    // A beat for any mutation the cancel might (wrongly) have started.
+    await act(async () => { await new Promise((resolve) => { setTimeout(resolve, 30); }); });
+    expect(api.dealQuotations.recordOutcome).not.toHaveBeenCalled();
+  });
+
+  // Spec E2: an outcome changes the deal page's sticky bar (route choice / confirm), so the request
+  // page also marks the deal page's own lists stale. Seeded the way the deal page keys them: its
+  // ticketId is the /tickets/:id route param (a string), and its quotation list key takes
+  // Number(ticketId).
+  it('recording an outcome also refreshes the deal page\'s pricing-request and quotation lists', async () => {
+    const issued = newEngineQuotation({ docStatus: 'ISSUED' });
+    api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: issued });
+    api.dealQuotations.recordOutcome.mockResolvedValue({ quotation: newEngineQuotation({ docStatus: 'REJECTED' }) });
+    const { queryClient } = renderDetailPage({ user: salesOwner });
+    const dealRequestsKey = queryKeys.pricingRequestsByTicket('701');
+    const dealQuotationsKey = queryKeys.dealQuotationsByTicket(701);
+    queryClient.setQueryData(dealRequestsKey, []);
+    queryClient.setQueryData(dealQuotationsKey, []);
+    await waitForLoaded();
+    await screen.findByText(issued.number);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'ลูกค้าปฏิเสธ' }));
+    await waitFor(() => expect(api.dealQuotations.recordOutcome).toHaveBeenCalled());
+
+    await waitFor(() => {
+      expect(queryClient.getQueryState(dealRequestsKey)?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryState(dealQuotationsKey)?.isInvalidated).toBe(true);
+    });
   });
 
   it('ISSUED: never shows the outcome-recording controls to CEO or Import — read-only', async () => {
@@ -3374,15 +3453,20 @@ describe('PricingRequestDetailPage GLA-123 slice S3: new-engine (dealQuotationFo
 });
 
 describe('PricingRequestDetailPage Step 5: Customer Decision and Commercial Revisions', () => {
-  it('offers the outcome-recording controls to the owning sales rep only while ISSUED, and records ACCEPTED on click', async () => {
+  // Spec B2 covers both engines' controls: the old engine's ลูกค้ายอมรับ on a DESIGNER request
+  // (buildRequest's default) asks the same question before recording.
+  it('ISSUED (old engine), a designer request: ลูกค้ายอมรับ asks "ยืนยันว่าลูกค้ายอมรับใบเสนอราคานี้" first; confirming records ACCEPTED', async () => {
     const issued = buildCustomerQuotation({ docStatus: 'ISSUED' });
     api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [issued] });
     renderDetailPage({ user: salesOwner });
     await waitForLoaded();
     await screen.findByText(issued.number);
 
-    const acceptButton = await screen.findByRole('button', { name: 'ลูกค้ายอมรับ' });
-    fireEvent.click(acceptButton);
+    fireEvent.click(await screen.findByRole('button', { name: 'ลูกค้ายอมรับ' }));
+
+    const dialog = within(await screen.findByRole('dialog', { name: 'ยืนยันว่าลูกค้ายอมรับใบเสนอราคานี้' }));
+    expect(dialog.getByText('ใบเสนอราคานี้ส่งถึงผู้ออกแบบ ถ้าลูกค้ายอมรับ ดีลจะใช้ใบนี้ยืนยันคำสั่งซื้อและข้ามผู้รับรายถัดไป')).not.toBeNull();
+    fireEvent.click(dialog.getByRole('button', { name: 'ยืนยัน' }));
 
     await waitFor(() => expect(api.pricingRequests.recordCustomerQuotationOutcome).toHaveBeenCalledWith(
       issued.id,

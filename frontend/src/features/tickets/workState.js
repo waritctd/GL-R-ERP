@@ -36,7 +36,10 @@
 // actually clickable; this module only decides which ONE action (if any)
 // leads the sticky bar.
 
-import { nextSalesAction, reviseAction, REVISE_STAGES, SALES_ACTION } from './salesActions.js';
+import { canApproveDealQuotationNow } from '../quotations/quotationMeta.js';
+import {
+  nextSalesAction, outcomeSecondaryAction, PARTY_LABEL, pendingRequestQuotation, reviseAction, REVISE_STAGES, SALES_ACTION,
+} from './salesActions.js';
 import { nextImportAction } from './importActions.js';
 import { nextAccountAction } from './accountActions.js';
 
@@ -65,29 +68,36 @@ export const DIRECT_APPROVAL_ACTION_KEY = 'approve_direct_quotation';
  * - the rep on that same state gets no button but `bannerText` — "รอ ผจก.ขาย/CEO
  *   อนุมัติใบเสนอราคา {number}" — a waiting line that names the document and who
  *   decides it (unlike the retired department-only banner above). Absent otherwise.
+ * The same two apply to a PRICING_REQUEST-origin quotation awaiting approval (owner ruling
+ * 2026-10-27), read from `quotationByRequest` (see nextSalesAction).
  */
-export function resolveWorkState(user, deal, pricingRequests = [], { reviseTarget = null } = {}) {
+export function resolveWorkState(user, deal, pricingRequests = [], { reviseTarget = null, offRouteParties = null, quotationByRequest = null } = {}) {
   const role = user?.role;
   if (!deal || deal.lifecycle !== 'ACTIVE') return { action: null };
 
-  // Slice 2 (SLICE-2-FLOW-A.md §E): a live direct quotation waiting for approval is the approvers'
-  // move. sales_manager/ceo — exactly canApproveDealQuotation's audience — get their own action to
-  // the quotation, where the real (server-gated) อนุมัติ button is. They get NOTHING new for a
+  // Slice 2 (SLICE-2-FLOW-A.md §E): a quotation waiting for approval is the approvers' move.
+  // sales_manager/ceo — exactly canApproveDealQuotation's audience — get their own action to the
+  // quotation, where the real (server-gated) อนุมัติ button is. They get NOTHING new for a
   // DRAFT/APPROVED one: submitting and confirming the order are the rep's.
-  if ((role === 'sales_manager' || role === 'ceo') && deal.liveDirectQuotation?.docStatus === 'PENDING_APPROVAL') {
-    const live = deal.liveDirectQuotation;
-    return {
-      action: {
-        key: DIRECT_APPROVAL_ACTION_KEY,
-        label: 'อนุมัติใบเสนอราคา',
-        to: `/quotations/${live.id}`,
-        quotationId: live.id,
-        quotationNumber: live.number,
-      },
-    };
+  if (role === 'sales_manager' || role === 'ceo') {
+    const pending = deal.liveDirectQuotation?.docStatus === 'PENDING_APPROVAL'
+      ? deal.liveDirectQuotation
+      : pendingRequestQuotation(deal, pricingRequests, quotationByRequest);
+    // Only one this viewer may approve now: a price moved from the CEO's needs the CEO.
+    if (pending && canApproveDealQuotationNow(user, pending)) {
+      return {
+        action: {
+          key: DIRECT_APPROVAL_ACTION_KEY,
+          label: 'อนุมัติใบเสนอราคา',
+          to: `/quotations/${pending.id}`,
+          quotationId: pending.id,
+          quotationNumber: pending.number,
+        },
+      };
+    }
   }
 
-  const action = role === 'sales' ? nextSalesAction(deal, pricingRequests, { reviseTarget })
+  const action = role === 'sales' ? nextSalesAction(deal, pricingRequests, { reviseTarget, offRouteParties, quotationByRequest })
     : role === 'import' ? nextImportAction(deal, pricingRequests)
       : role === 'account' ? nextAccountAction(deal)
         : null;
@@ -101,21 +111,38 @@ export function resolveWorkState(user, deal, pricingRequests = [], { reviseTarge
     };
   }
 
+  // Owner ruling 2026-10-27: the เสนอราคา<party> primary comes with a line naming the sent quotation.
+  if (action?.key === SALES_ACTION.QUOTE_NEXT_PARTY) return { action, bannerText: quoteNextPartyBanner(action) };
+
   if (action) return { action };
 
   return { action: null };
 }
 
+/** "ใบเสนอราคาผู้ออกแบบส่งแล้ว เลือกเสนอราคาเจ้าของโครงการ หรือข้ามไปผู้ซื้อ"; one party left reads
+ * "…ส่งแล้ว ถัดไปเสนอราคา<next>"; a quotation the party said no to reads "…ไม่ผ่าน" instead. */
+function quoteNextPartyBanner({ anchorParty, anchorDeclined, parties }) {
+  const sent = `ใบเสนอราคา${PARTY_LABEL[anchorParty]}${anchorDeclined ? 'ไม่ผ่าน' : 'ส่งแล้ว'}`;
+  const [next, ...later] = parties.map((party) => PARTY_LABEL[party]);
+  return later.length > 0
+    ? `${sent} เลือกเสนอราคา${next} หรือข้ามไป${later.join(', ')}`
+    : `${sent} ถัดไปเสนอราคา${next}`;
+}
+
 /**
- * PR A — ADDITIONAL (secondary) actions beside the sticky primary. At the owner / buyer quote stages
- * the client may want a revision or be happy with the original, so แก้ใบเสนอราคา is offered
- * alongside — never instead of — the primary บันทึกผลใบเสนอราคา. Sales only; `reviseTarget` is
- * resolved by the caller through quotationMeta.canReviseDealQuotation (owner + status live there).
- * Skipped when revise is already the primary (approved direct quotation past draft).
+ * ADDITIONAL (secondary) actions beside the sticky primary, for the header's ⋯ menu. Sales only.
+ * - Owner ruling 2026-10-27 ("always in ⋯"): บันทึกผลใบเสนอราคา for a sent designer/owner quotation
+ *   whose outcome is still open (salesActions.outcomeSecondaryAction), whatever the primary is.
+ * - PR A: at the owner / buyer quote stages the client may want a revision or be happy with the
+ *   original, so แก้ใบเสนอราคา is offered alongside — never instead of — the primary. `reviseTarget`
+ *   is resolved by the caller through quotationMeta.canReviseDealQuotation (owner + status live
+ *   there). Skipped when revise is already the primary (approved direct quotation past draft).
  */
-export function secondaryWorkActions(user, deal, pricingRequests = [], { reviseTarget = null } = {}) {
+export function secondaryWorkActions(user, deal, pricingRequests = [], { reviseTarget = null, offRouteParties = null, quotationByRequest = null } = {}) {
   if (user?.role !== 'sales' || !deal || deal.lifecycle !== 'ACTIVE') return [];
-  if (!reviseTarget || !REVISE_STAGES.has(deal.salesStage)) return [];
-  if (resolveWorkState(user, deal, pricingRequests, { reviseTarget }).action?.key === SALES_ACTION.REVISE_QUOTATION) return [];
-  return [reviseAction(reviseTarget)];
+  const outcome = outcomeSecondaryAction(deal, pricingRequests, quotationByRequest);
+  const revise = reviseTarget && REVISE_STAGES.has(deal.salesStage)
+    && resolveWorkState(user, deal, pricingRequests, { reviseTarget, offRouteParties, quotationByRequest }).action?.key !== SALES_ACTION.REVISE_QUOTATION
+    ? reviseAction(reviseTarget) : null;
+  return [outcome, revise].filter(Boolean);
 }

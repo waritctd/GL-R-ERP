@@ -1,11 +1,12 @@
 import {
-  forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState,
+  forwardRef, useImperativeHandle, useMemo, useState,
 } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
+import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
@@ -21,6 +22,7 @@ import {
   canManageCustomerQuotation, canRecordCustomerQuotationOutcome, canViewCustomerQuotation,
   isCustomerQuotationEditable, pricingRequestRecipientLabel,
 } from '../pricingRequests/pricingRequestMeta.js';
+import { acceptOutcomeConfirmCopy, dealQuotationStatusLabel } from '../quotations/quotationMeta.js';
 import { buttonVariants } from '../../components/common/Button.jsx';
 
 function generateClientRequestId() {
@@ -36,10 +38,17 @@ function generateClientRequestId() {
 const QUOTATION_TAIL_STATUSES = new Set(['APPROVED_FOR_QUOTATION', 'QUOTATION_ISSUED', 'QUOTATION_ACCEPTED']);
 
 function pickRelevantPricingRequest(pricingRequests = []) {
-  return pricingRequests
+  const tail = pricingRequests
     .filter((pr) => QUOTATION_TAIL_STATUSES.has(pr.status))
-    .sort((a, b) => b.id - a.id)[0] ?? null;
+    .sort((a, b) => b.id - a.id);
+  // The deal's order lives on its accepted request (one per deal, R8): the panel shows and confirms
+  // that one, not a later party's newer request (review V2).
+  return tail.find((pr) => pr.status === 'QUOTATION_ACCEPTED') ?? tail[0] ?? null;
 }
+
+// An old-engine quotation that no longer stands (CustomerQuotationRepository#hasLiveQuotation's
+// non-live set): it does not hide the request's new-engine quotation (review V6).
+const DEAD_CUSTOMER_QUOTATION_STATUSES = new Set(['CANCELLED', 'SUPERSEDED', 'EXPIRED', 'REJECTED']);
 
 /**
  * "ราคาและใบเสนอราคา" (Phase 2 Slice S2 — see
@@ -66,60 +75,35 @@ function pickRelevantPricingRequest(pricingRequests = []) {
  * component's git history for the removed `createDepositNotice`
  * mutation/`depositPercentInput` state if that overlap ever needs undoing.
  *
+ * Owner ruling R2 (2026-10-18/22): the sticky "เสนอใบราคา<party>" writes the NEW-engine quotation
+ * (TicketDetailPage, api.dealQuotations.createFromPricingRequest); this panel no longer creates or
+ * issues the old-engine customer quotation from the deal page. It shows that new-engine quotation
+ * (`quotationByRequest`, the deal's quotation list) with a link to it.
+ *
  * Ticket-detail IA rebuild Phase 1 clutter follow-up round 2 (FIX 2): this
  * panel no longer renders its own "ออกใบเสนอราคา" / "ยืนยันคำสั่งซื้อ"
  * buttons — the sticky header's primary CTA (TicketDetailPage's
  * `workState`-derived ISSUE_QUOTATION/CONFIRM_ORDER action) owns both
- * outright now, and triggers them here via the forwardRef below (same
+ * outright now; CONFIRM_ORDER triggers the confirm here via the forwardRef below (same
  * "parent triggers, panel stays the sole gate + mutation owner" convention
  * DealStagePanel/PricingRequestPanel already use for their own openers).
  * Before this, "ออกใบเสนอราคา" and "ยืนยันคำสั่งซื้อ" each rendered twice on
  * one page (the sticky bar's own scroll-to-here copy, plus this panel's own
  * button) — since the sticky bar is `sticky top-0`, both copies of each
  * label were visible on screen simultaneously.
- *
- * Handoff 117 follow-up ("A second, real bug found while making the specs
- * actually pass"): FIX 2 above made `openIssueQuotation` fire
- * `issueQuotation` straight through the ref, but `nextSalesAction`'s
- * ISSUE_QUOTATION bucket (salesActions.js) only checks
- * `pr.status === 'APPROVED_FOR_QUOTATION'` — it has no visibility into
- * whether a draft customer quotation exists yet, because that only comes
- * from THIS panel's own per-PR `listCustomerQuotations` fetch
- * (salesActions.js is deliberately built from the ticket-list row + PR queue
- * alone and documents that it never triggers a per-ticket detail fetch — see
- * its own module doc comment — so widening it to know "a draft exists" was
- * rejected as the fix). That mismatch meant the sticky "ออกใบเสนอราคา" button
- * appeared the instant CEO approved the price, but silently did nothing
- * until the rep separately clicked "สร้างร่างใบเสนอราคาลูกค้า" below to
- * create the draft `openIssueQuotation` requires.
- *
- * Fixed here (not in salesActions.js) by making `openIssueQuotation` smart:
- * when no draft exists yet but the PR/permissions genuinely support
- * creating one, it now creates the draft and issues it in one chained
- * mutation (`createAndIssueQuotation`) instead of no-op'ing. This is a
- * deliberate sales-workflow change (CLAUDE.md's "Sales flow redesign" —
- * authorised, not a side effect): issuing a quotation used to always take
- * two separate clicks (create, then issue) so a rep could review/discount
- * the draft first; now the sticky button can collapse that into one click
- * with default (no-discount) terms. The in-panel "สร้างร่างใบเสนอราคาลูกค้า"
- * button below is left in place specifically so a rep who wants to edit
- * discounts before issuing still has that path — see its updated copy. Every
- * branch that still can't do anything (query not yet settled, gates fail,
- * etc.) now shows a real `showToast?.('error', ...)` instead of doing
- * nothing — see `openIssueQuotation`'s own decision-tree comment below for
- * the exact branches.
  */
-export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticketId, pricingRequests = [], user, showToast }, ref) {
+export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
+  ticketId, pricingRequests = [], quotationByRequest = null, user, showToast,
+}, ref) {
   const queryClient = useQueryClient();
   const [outcomeNote, setOutcomeNote] = useState('');
   const [downloadingFormat, setDownloadingFormat] = useState(null);
-  // openRecordOutcome's scroll target — the "บันทึกผลจากลูกค้า" accept/reject/
-  // revision block below (only rendered while canRecordCustomerQuotationOutcome
-  // is true). Same "attach a ref, guard scrollIntoView for jsdom" convention as
-  // TicketDetailPage's own focusFirstInvalid.
-  const outcomeControlsRef = useRef(null);
+  const [confirmingAccept, setConfirmingAccept] = useState(false);
 
   const pr = useMemo(() => pickRelevantPricingRequest(pricingRequests), [pricingRequests]);
+  const prQuotation = quotationByRequest?.get(pr?.id);
+  const prQuotationStatus = prQuotation && dealQuotationStatusLabel(prQuotation.docStatus);
+  const acceptConfirm = acceptOutcomeConfirmCopy(pr?.recipientType);
   const canView = pr != null && canViewCustomerQuotation(user, pr);
 
   const quotationsQuery = useQuery({
@@ -143,39 +127,6 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticke
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(ticketId) });
   }
 
-  const createQuotation = useMutation({
-    mutationFn: () => api.pricingRequests.createCustomerQuotation(pr.id, { clientRequestId: generateClientRequestId() }),
-    onSuccess: () => { showToast?.('success', 'สร้างร่างใบเสนอราคาลูกค้าแล้ว'); invalidate(); },
-    onError: (err) => showToast?.('error', err.message || 'ดำเนินการไม่สำเร็จ'),
-  });
-  const issueQuotation = useMutation({
-    mutationFn: (quotationId) => api.pricingRequests.issueCustomerQuotation(quotationId, { clientRequestId: generateClientRequestId() }),
-    onSuccess: () => { showToast?.('success', 'ออกใบเสนอราคาลูกค้าแล้ว'); invalidate(); },
-    onError: (err) => showToast?.('error', err.message || 'ดำเนินการไม่สำเร็จ'),
-  });
-  // Silent-no-op fix (handoff 117, "A second, real bug found while making the
-  // specs actually pass"): salesActions.js's ISSUE_QUOTATION bucket fires the
-  // sticky primary CTA off `pr.status === 'APPROVED_FOR_QUOTATION'` alone —
-  // it has no way to know whether a draft customer quotation already exists,
-  // because that only comes from this panel's own per-PR
-  // `listCustomerQuotations` fetch (salesActions.js's own doc comment states
-  // it never triggers a per-ticket detail fetch, so it can't be widened to
-  // know this — see the handoff for why that option was rejected). So when
-  // the sticky button is clicked before anyone has pressed "สร้างร่างใบเสนอ
-  // ราคาลูกค้า" below, `current` is still null and the click used to do
-  // nothing at all. This mutation closes that gap by creating the draft and
-  // issuing it in one chained action when the PR/permissions genuinely
-  // support it — see openIssueQuotation below for the full decision tree.
-  const createAndIssueQuotation = useMutation({
-    mutationFn: async () => {
-      const created = await api.pricingRequests.createCustomerQuotation(pr.id, { clientRequestId: generateClientRequestId() });
-      const draft = created?.quotation;
-      if (draft?.id == null) throw new Error('สร้างร่างใบเสนอราคาไม่สำเร็จ');
-      return api.pricingRequests.issueCustomerQuotation(draft.id, { clientRequestId: generateClientRequestId() });
-    },
-    onSuccess: () => { showToast?.('success', 'สร้างร่างและออกใบเสนอราคาลูกค้าแล้ว'); invalidate(); },
-    onError: (err) => showToast?.('error', err.message || 'ดำเนินการไม่สำเร็จ'),
-  });
   const recordOutcome = useMutation({
     mutationFn: (outcome) => api.pricingRequests.recordCustomerQuotationOutcome(current.id, {
       outcome, customerNote: outcomeNote || null, clientRequestId: generateClientRequestId(),
@@ -189,92 +140,9 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticke
     onError: (err) => showToast?.('error', err.message || 'ดำเนินการไม่สำเร็จ'),
   });
 
-  // Defensive re-check before acting (same convention as DealStagePanel's
-  // openAdvance/openEditStage/... and PricingRequestPanel's openCreate): a
-  // stale or over-eager caller — the sticky header's primary CTA is derived
-  // from a snapshot of `pricingRequests`/`summary` that could in principle
-  // race a fresher render — cannot force either mutation past the real gate.
-  // `current`/`pr` are computed above via useMemo and may be null (no
-  // qualifying pricing request / no editable quotation yet); both guards
-  // are null-safe through their own predicates.
-  //
-  // openIssueQuotation's decision tree (handoff 117 fix for the "silent
-  // no-op" bug — see createAndIssueQuotation's own comment above for the
-  // root cause):
-  //   1. A mutation is already in flight → do nothing (a double-click must
-  //      never fire two mutations, and must never create two drafts).
-  //   2. An editable draft already exists → issue THAT draft (unchanged
-  //      original behaviour — this is still the common path once the rep
-  //      has used the in-panel "สร้างร่างใบเสนอราคาลูกค้า" button first).
-  //   3. No draft yet, but we genuinely don't know that for sure —
-  //      `quotationsQuery` hasn't resolved (it's `enabled: canView`, so also
-  //      gate on `canView` or a not-yet-enabled query reads as "not
-  //      success" forever). FIX 3 (Opus review — cross-tab dead end): queue
-  //      a silent retry instead of telling the rep to click again — see the
-  //      effect below.
-  //   4. No draft, the query has genuinely settled empty, and the PR/user
-  //      still pass the create gate → create the draft and issue it in one
-  //      chained mutation. This is the actual bug fix: the sticky button
-  //      now always does SOMETHING when nextSalesAction says ISSUE_QUOTATION.
-  //   5. None of the above → the click cannot do anything (e.g. the only
-  //      quotation is already ISSUED/ACCEPTED/etc). Never fail silently —
-  //      tell the rep where to look.
-  //
-  // FIX 3 (Opus review, cross-tab `issue_quotation` first-click dead end):
-  // TicketDetailPage's `runOnTab('quotations', () =>
-  // dealQuotationPanelRef.current?.openIssueQuotation())` switches to this
-  // tab and calls this ref in the SAME commit the tab mounts — this panel's
-  // own `quotationsQuery` has only just started fetching, so on a rep's
-  // FIRST click from a different tab (e.g. ภาพรวม), branch 3 above used to
-  // fire unconditionally: the rep saw "กำลังโหลดข้อมูลใบเสนอราคา — กรุณาลองอีกครั้ง"
-  // and nothing happened, even though the very next tick would have had
-  // everything needed to issue for real. A second click (now with a warm,
-  // already-`isSuccess` query) always "fixed" it, which is exactly what made
-  // this easy to miss — it only reproduces on a session's first visit to
-  // this deal. Fixed WITHOUT pre-mounting every panel (that reinstates the
-  // 4,000px page this rebuild retires): `attemptIssueQuotation` is factored
-  // out so it can run twice — once immediately (branch 3 now just queues a
-  // retry instead of toasting) and once more, automatically, the moment
-  // `quotationsQuery` actually settles (the effect below, keyed on
-  // `quotationsQuery.isSuccess`). No polling, no fixed delay — the retry is
-  // driven by the query's own real state transition.
-  const pendingIssueIntentRef = useRef(false);
-
-  function attemptIssueQuotation() {
-    if (issueQuotation.isPending || createQuotation.isPending || createAndIssueQuotation.isPending) return;
-    if (current && isCustomerQuotationEditable(current) && canManageCustomerQuotation(user, pr)) {
-      pendingIssueIntentRef.current = false;
-      issueQuotation.mutate(current.id);
-    } else if (!current && canView && !quotationsQuery.isSuccess) {
-      // Not settled yet — queue the retry (see the effect below) instead of
-      // telling the rep to click again; this is the exact race FIX 3 closes.
-      pendingIssueIntentRef.current = true;
-    } else if (!current && quotationsQuery.isSuccess && canCreateCustomerQuotation(user, pr)) {
-      pendingIssueIntentRef.current = false;
-      createAndIssueQuotation.mutate();
-    } else {
-      pendingIssueIntentRef.current = false;
-      showToast?.('error', 'ยังออกใบเสนอราคาไม่ได้ — ตรวจสอบสถานะคำขอราคาในส่วน "ราคาและใบเสนอราคา" ด้านล่าง');
-    }
-  }
-
-  // Fires the queued retry exactly once, the moment `quotationsQuery`
-  // actually resolves — `attemptIssueQuotation` re-reads `current`/
-  // `quotationsQuery.isSuccess` fresh (closures over this render's state),
-  // both already updated by the time this effect runs (the query settling
-  // is what triggered this very re-render). Re-entrant/idempotent by
-  // construction (the in-flight guard at the top of `attemptIssueQuotation`),
-  // so calling it again here is safe even if something else already resolved
-  // the intent in between.
-  useEffect(() => {
-    if (pendingIssueIntentRef.current && quotationsQuery.isSuccess) {
-      attemptIssueQuotation();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [quotationsQuery.isSuccess]);
-
+  // Defensive re-check before acting (same convention as DealStagePanel's openers): a stale caller
+  // cannot force a mutation past the real gate.
   useImperativeHandle(ref, () => ({
-    openIssueQuotation: attemptIssueQuotation,
     openConfirmOrder: () => {
       if (confirmOrder.isPending) return;
       if (pr && canConfirmOrder(user, pr)) {
@@ -282,26 +150,6 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticke
       } else {
         showToast?.('error', confirmOrderBlockedReason(pr)
           ?? 'ยังยืนยันคำสั่งซื้อไม่ได้ — ตรวจสอบสถานะคำขอราคาในส่วน "ราคาและใบเสนอราคา" ด้านล่าง');
-      }
-    },
-    // salesActions.js's RECORD_QUOTATION_OUTCOME bucket fires off `pr.status === 'QUOTATION_ISSUED'`
-    // alone (it has no visibility into the quotation document itself — see that bucket's own
-    // comment) — the real gate, canRecordCustomerQuotationOutcome, additionally requires
-    // `current.docStatus === 'ISSUED'`, which is only known once this panel's own quotationsQuery
-    // has resolved. Unlike openIssueQuotation/openConfirmOrder this never fires a mutation itself:
-    // the outcome (accept/reject/revision) is the rep's own judgment call, not something a single
-    // click can safely default — so this only ever scrolls the existing controls into view, same as
-    // FIX 2's rationale for keeping this panel the sole gate + mutation owner. Falls back to a toast
-    // (matching openConfirmOrder's own fallback copy/style) whenever the controls aren't actually on
-    // screen: the query hasn't settled yet, or the PR/quotation no longer qualifies (e.g. a stale
-    // sticky button click racing an outcome someone already recorded in another tab).
-    openRecordOutcome: () => {
-      const node = outcomeControlsRef.current;
-      if (node && canRecordCustomerQuotationOutcome(user, pr, current)) {
-        if (typeof node.scrollIntoView === 'function') node.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        node.focus?.({ preventScroll: true });
-      } else {
-        showToast?.('error', 'ยังบันทึกผลใบเสนอราคาไม่ได้ — ตรวจสอบสถานะคำขอราคาในส่วน "ราคาและใบเสนอราคา" ด้านล่าง');
       }
     },
   }));
@@ -348,20 +196,19 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticke
 
         {quotationsQuery.isLoading ? (
           <p className="text-sm text-text-muted">กำลังโหลดใบเสนอราคาลูกค้า…</p>
+        ) : prQuotation && !(current && !DEAD_CUSTOMER_QUOTATION_STATUSES.has(current.docStatus)) ? (
+          <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-surface p-3">
+            <span className="font-mono text-sm font-bold">{prQuotation.number}</span>
+            <StatusBadge tone={prQuotationStatus.tone}>
+              {prQuotationStatus.label}
+            </StatusBadge>
+            <Link to={`/quotations/${prQuotation.id}`} className="text-sm font-bold text-link">เปิดใบเสนอราคา</Link>
+          </div>
         ) : !current ? (
           canCreateCustomerQuotation(user, pr) ? (
-            <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3">
-              <p className="text-sm text-text-muted">
-                CEO อนุมัติราคาขายแล้ว — สร้างร่างใบเสนอราคาให้ลูกค้าได้เลย
-                หรือกดปุ่ม “ออกใบเสนอราคา” บนแถบด้านบนของหน้าเพื่อสร้างร่างและออกใบเสนอราคาในขั้นตอนเดียว
-                (ใช้ปุ่มด้านล่างนี้แทนหากต้องการแก้ไขส่วนลด/รายละเอียดก่อนออกจริง)
-              </p>
-              <Button type="button" variant="primary" className="self-start" disabled={createQuotation.isPending}
-                onClick={() => createQuotation.mutate()} data-testid="deal-quotation-create">
-                <Icon name="fileText" size={14} />
-                สร้างร่างใบเสนอราคาลูกค้า
-              </Button>
-            </div>
+            <p className="text-sm text-text-muted">
+              CEO อนุมัติราคาขายแล้ว — กดปุ่ม “เสนอใบราคา” บนแถบด้านบนเพื่อเขียนใบเสนอราคา
+            </p>
           ) : (
             <p className="text-sm text-text-muted">ยังไม่มีใบเสนอราคาลูกค้าสำหรับคำขอราคานี้</p>
           )
@@ -398,22 +245,8 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticke
               ) : null}
             </div>
 
-            {isCustomerQuotationEditable(current) && canManageCustomerQuotation(user, pr) ? (
-              // The "ออกใบเสนอราคา" button itself lives solely on the sticky
-              // header now (FIX 2, see this component's own doc comment) —
-              // this explains the section instead of duplicating the CTA.
-              <p className="text-xs text-text-muted">
-                พร้อมออกใบเสนอราคาแล้ว — กดปุ่ม “ออกใบเสนอราคา” บนแถบด้านบนของหน้า
-                หรือแก้ไขรายละเอียด/ส่วนลดก่อนได้ที่ลิงก์ด้านบน
-              </p>
-            ) : null}
-
             {canRecordCustomerQuotationOutcome(user, pr, current) ? (
-              // ref + tabIndex: openRecordOutcome's scroll-and-focus target (the sticky header's
-              // "บันทึกผลใบเสนอราคา" CTA, salesActions.js's RECORD_QUOTATION_OUTCOME bucket) — see
-              // this component's useImperativeHandle above. tabIndex={-1} makes the section
-              // programmatically focusable without adding it to the page's normal tab order.
-              <div ref={outcomeControlsRef} tabIndex={-1} data-testid="deal-quotation-outcome-controls" className="flex flex-col gap-2 border-t border-border-subtle pt-3 outline-none">
+              <div data-testid="deal-quotation-outcome-controls" className="flex flex-col gap-2 border-t border-border-subtle pt-3">
                 <strong className="text-sm">บันทึกผลจากลูกค้า</strong>
                 <textarea
                   className="rounded border border-border p-2 text-sm"
@@ -424,7 +257,8 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticke
                 />
                 <div className="flex flex-wrap gap-2">
                   <Button type="button" variant="primary" disabled={recordOutcome.isPending}
-                    onClick={() => recordOutcome.mutate('ACCEPTED')} data-testid="deal-quotation-accept">
+                    onClick={() => (acceptConfirm ? setConfirmingAccept(true) : recordOutcome.mutate('ACCEPTED'))}
+                    data-testid="deal-quotation-accept">
                     ลูกค้ายอมรับ
                   </Button>
                   <Button type="button" variant="secondary" style={{ color: 'var(--color-danger)', borderColor: 'var(--color-danger-border)' }}
@@ -473,6 +307,15 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticke
           </div>
         ) : null}
       </div>
+
+      <ConfirmDialog
+        open={confirmingAccept && Boolean(acceptConfirm)}
+        title={acceptConfirm?.title}
+        message={acceptConfirm?.message}
+        busy={recordOutcome.isPending}
+        onCancel={() => setConfirmingAccept(false)}
+        onConfirm={() => { setConfirmingAccept(false); recordOutcome.mutate('ACCEPTED'); }}
+      />
     </Panel>
   );
 });

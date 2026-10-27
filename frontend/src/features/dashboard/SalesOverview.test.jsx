@@ -11,12 +11,20 @@ globalThis.React = React;
 
 vi.mock('../../api/index.js', async (importOriginal) => {
   const actual = await importOriginal();
+  // Imported inside the factory: vi.mock is hoisted above every import.
+  const { DEAL_STAGE_CATALOG } = await import('../../data/dealStageCatalog.js');
   return {
     ...actual,
     api: {
       tickets: { list: vi.fn() },
       pricingRequests: { queue: vi.fn() },
       commissions: { monthlySummary: vi.fn() },
+      // Each quoted deal's quotation list (the same call the deal page makes) — none by default.
+      dealQuotations: { listForTicket: vi.fn().mockResolvedValue({ items: [] }) },
+      // GET /api/meta/deal-stages: each deal's route (catalog.routes by entryChannel) for the
+      // worklist's route choice. The same canned payload mockApi serves, pinned to DealRoute.java by
+      // stageCatalog.test.js.
+      meta: { dealStages: vi.fn().mockResolvedValue(DEAL_STAGE_CATALOG) },
     },
   };
 });
@@ -66,7 +74,7 @@ const deals = [
 ];
 
 const pricingRequests = [
-  { id: 1, ticketId: 602, status: 'APPROVED_FOR_QUOTATION', orderConfirmedAt: null },
+  { id: 1, ticketId: 602, status: 'APPROVED_FOR_QUOTATION', recipientType: 'BUYER', orderConfirmedAt: null },
   { id: 2, ticketId: 603, status: 'QUOTATION_ACCEPTED', orderConfirmedAt: null },
   { id: 3, ticketId: 604, status: 'SUBMITTED', orderConfirmedAt: null },
   { id: 4, ticketId: 605, status: 'IMPORT_REVIEWING', orderConfirmedAt: null },
@@ -166,7 +174,7 @@ describe('SalesOverview', () => {
     }
 
     expect(within(ctaFor('บริษัท เอ จำกัด')).getByText('สร้างคำขอราคา')).not.toBeNull(); // no PR at all
-    expect(within(ctaFor('บริษัท บี จำกัด')).getByText('ออกใบเสนอราคา')).not.toBeNull(); // APPROVED_FOR_QUOTATION
+    expect(within(ctaFor('บริษัท บี จำกัด')).getByText('เสนอใบราคาผู้ซื้อ')).not.toBeNull(); // APPROVED_FOR_QUOTATION, named for its recipient
     expect(within(ctaFor('บริษัท ซี จำกัด')).getByText('ยืนยันคำสั่งซื้อ')).not.toBeNull(); // QUOTATION_ACCEPTED, not confirmed
     expect(within(ctaFor('บริษัท ดี จำกัด')).getByText('ติดตามลูกค้า')).not.toBeNull(); // follow-up overdue
     expect(within(ctaFor('บริษัท อี จำกัด')).getByText('ติดตามลูกค้า')).not.toBeNull(); // follow-up due today
@@ -331,5 +339,53 @@ describe('SalesOverview — live direct quotation worklist tones (slice 2)', () 
     expect(badgeFor('บริษัท อนุมัติ จำกัด').className).toContain('status-warning');
     expect(badgeFor('บริษัท รอ จำกัด').textContent).toBe('รออนุมัติใบเสนอราคา');
     expect(badgeFor('บริษัท รอ จำกัด').className).toContain('status-neutral');
+  });
+});
+
+// Owner ruling 2026-10-27 (spec A7/H1): the worklist runs the deal page's resolver, so a designer
+// quotation that went out offers the next party — named from THAT deal's route (the served
+// catalog.routes for its entryChannel), not from a route every deal is assumed to share. There is
+// no quotation list here, so a request at QUOTATION_ISSUED counts as sent on its status alone.
+describe('SalesOverview — the next party after a designer quotation is sent follows each deal\'s route', () => {
+  const at = '2026-07-01T00:00:00.000Z';
+  const routeDeals = [
+    { id: 811, code: 'DL-2026-0811', customerName: 'บริษัท ผู้ออกแบบนำ จำกัด', title: 'ผู้ออกแบบนำ', lifecycle: 'ACTIVE', entryChannel: 'DESIGNER_LED', salesStage: 'QUOTE_DESIGN_SIDE', amountPayable: 0, stale: false, nextFollowUpAt: null, stageUpdatedAt: at },
+    // A designer quotation on a buyer-direct deal is off its route (allowed); the owner is off it too.
+    { id: 812, code: 'DL-2026-0812', customerName: 'บริษัท ผู้ซื้อติดต่อตรง จำกัด', title: 'ผู้ซื้อติดต่อตรง', lifecycle: 'ACTIVE', entryChannel: 'BUYER_DIRECT', salesStage: 'SPEC_APPROVED', amountPayable: 0, stale: false, nextFollowUpAt: null, stageUpdatedAt: at },
+    { id: 813, code: 'DL-2026-0813', customerName: 'บริษัท ผู้ออกแบบขอแก้ จำกัด', title: 'ผู้ออกแบบขอแก้', lifecycle: 'ACTIVE', entryChannel: 'DESIGNER_LED', salesStage: 'QUOTE_DESIGN_SIDE', amountPayable: 0, stale: false, nextFollowUpAt: null, stageUpdatedAt: at },
+  ];
+  const sentRequests = [
+    { id: 81, ticketId: 811, status: 'QUOTATION_ISSUED', recipientType: 'DESIGNER', orderConfirmedAt: null },
+    { id: 82, ticketId: 812, status: 'QUOTATION_ISSUED', recipientType: 'DESIGNER', orderConfirmedAt: null },
+    { id: 83, ticketId: 813, status: 'QUOTATION_ISSUED', recipientType: 'DESIGNER', orderConfirmedAt: null },
+  ];
+  // Each request's newest quotation, read from its deal's quotation list as the deal page reads it
+  // (review V11): the designer on 813 asked for changes.
+  const docStatusByRequest = { 81: 'ISSUED', 82: 'ISSUED', 83: 'REVISION_REQUESTED' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.tickets.list.mockResolvedValue({ tickets: routeDeals });
+    api.pricingRequests.queue.mockResolvedValue({ items: sentRequests });
+    api.commissions.monthlySummary.mockResolvedValue({ summary: defaultCommissionSummary });
+    api.dealQuotations.listForTicket.mockImplementation((ticketId) => Promise.resolve({
+      items: sentRequests.filter((pr) => pr.ticketId === ticketId).map((pr) => ({
+        id: 9000 + pr.id, origin: 'PRICING_REQUEST', pricingRequestId: pr.id, docStatus: docStatusByRequest[pr.id],
+      })),
+    }));
+  });
+
+  it('designer-led -> เสนอราคาเจ้าของโครงการ; buyer-direct, whose route skips the owner -> เสนอราคาผู้ซื้อ; a designer quotation being redone -> เสนอใบราคาผู้ออกแบบ', async () => {
+    renderOverview();
+    const worklist = within(worklistSection());
+    await worklist.findByText('บริษัท ผู้ออกแบบนำ จำกัด');
+    const badgeOf = (customerName) => worklist.getByText(customerName).closest('button').querySelector('.status-badge');
+
+    // waitFor: the label follows the stage catalog, which may land after the deal list.
+    await waitFor(() => {
+      expect(badgeOf('บริษัท ผู้ออกแบบนำ จำกัด').textContent).toBe('เสนอราคาเจ้าของโครงการ');
+      expect(badgeOf('บริษัท ผู้ซื้อติดต่อตรง จำกัด').textContent).toBe('เสนอราคาผู้ซื้อ');
+      expect(badgeOf('บริษัท ผู้ออกแบบขอแก้ จำกัด').textContent).toBe('เสนอใบราคาผู้ออกแบบ');
+    });
   });
 });

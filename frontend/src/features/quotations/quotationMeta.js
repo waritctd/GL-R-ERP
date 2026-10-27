@@ -290,6 +290,16 @@ export function quotationRecipientOption(code) {
   return QUOTATION_RECIPIENT_OPTIONS.find((o) => o.code === code) ?? null;
 }
 
+/** Owner ruling 2026-10-27 (B2): ลูกค้ายอมรับ on a DESIGNER/OWNER request makes that quotation the
+ * order and skips the later parties, so every outcome control asks first. null = record at once. */
+export function acceptOutcomeConfirmCopy(recipientType) {
+  if (recipientType !== 'DESIGNER' && recipientType !== 'OWNER') return null;
+  return {
+    title: 'ยืนยันว่าลูกค้ายอมรับใบเสนอราคานี้',
+    message: `ใบเสนอราคานี้ส่งถึง${quotationRecipientOption(recipientType).label} ถ้าลูกค้ายอมรับ ดีลจะใช้ใบนี้ยืนยันคำสั่งซื้อและข้ามผู้รับรายถัดไป`,
+  };
+}
+
 /** Mirrors TicketService#stageForQuotationRecipient. null for UNSPECIFIED/unknown. */
 export function stageForQuotationRecipient(code) {
   return quotationRecipientOption(code)?.stage ?? null;
@@ -334,7 +344,7 @@ export function isRecipientOffRoute(route, recipientCode) {
 // server 409s DealQuotationService#create with the sentence below. "Live" = any status except the two
 // dead ends, so a private DRAFT and a finished QUOTATION_ACCEPTED both count. This is the ONE
 // definition; every surface above (and mockApi's create) reads it from here.
-const DEAD_PRICING_REQUEST_STATUSES = Object.freeze(new Set(['CANCELLED', 'SUPERSEDED']));
+export const DEAD_PRICING_REQUEST_STATUSES = Object.freeze(new Set(['CANCELLED', 'SUPERSEDED']));
 
 export const LIVE_PRICING_REQUEST_BLOCK_MESSAGE =
   'ดีลนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน';
@@ -348,6 +358,20 @@ export const REVISION_RECIPIENT_LOCKED_MESSAGE =
   `${REVISION_RECIPIENT_LOCKED_HEAD} — ${REVISION_RECIPIENT_LOCKED_TAIL}`;
 export const revisionRecipientRefusal = (storedLabel) =>
   `${REVISION_RECIPIENT_LOCKED_HEAD} (${storedLabel}) — ${REVISION_RECIPIENT_LOCKED_TAIL}`;
+
+/** pricingRequestId -> that request's newest PRICING_REQUEST-origin quotation, from a deal's
+ * quotation list (DealQuotationDto rows) — the `quotationByRequest` salesActions.nextSalesAction
+ * reads. A cancelled row is skipped: a revision draft cancelled after ⋯ แก้ใบเสนอราคา must not
+ * stand in for the quotation it revised (the deal page and the request page read it the same way). */
+export function newestQuotationByRequest(rows) {
+  const byRequest = new Map();
+  for (const q of rows) {
+    if (q.origin !== 'PRICING_REQUEST' || q.pricingRequestId == null || q.docStatus === 'CANCELLED') continue;
+    const held = byRequest.get(q.pricingRequestId);
+    if (!held || q.id > held.id) byRequest.set(q.pricingRequestId, q);
+  }
+  return byRequest;
+}
 
 /** True when `pricingRequests` holds a live request ON `ticketId` (ids compared as numbers). */
 export function hasLivePricingRequest(pricingRequests, ticketId) {

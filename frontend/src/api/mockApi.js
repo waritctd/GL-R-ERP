@@ -16766,18 +16766,38 @@ export const api = {
       const pr = findPricingRequestRaw(pricingRequestId);
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
       if (ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      if (pr.status !== 'APPROVED_FOR_QUOTATION') {
+      if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') fail('ดีลต้นทางต้องอยู่ในสถานะ ACTIVE', 409);
+      // The service's re-quote: a request already QUOTATION_ISSUED may be quoted again (its quotation was
+      // rejected, expired or sent back for changes; the live-quotation guard below refuses the rest),
+      // but never once a newer quotation on the deal superseded its latest one.
+      if (pr.status !== 'APPROVED_FOR_QUOTATION' && pr.status !== 'QUOTATION_ISSUED') {
         fail(`คำขอราคาต้องอยู่ในสถานะ 'อนุมัติราคาขายแล้ว' ก่อนจึงจะออกใบเสนอราคาลูกค้าได้ (ปัจจุบัน: ${pr.status})`, 409);
+      }
+      const latest = mockDealQuotations
+        .filter((q) => q.pricingRequestId === pr.id && q.origin === 'PRICING_REQUEST')
+        .reduce((newest, q) => (newest == null || q.id > newest.id ? q : newest), null);
+      if (pr.status === 'QUOTATION_ISSUED' && latest?.docStatus === 'SUPERSEDED') {
+        fail('คำขอราคานี้ถูกแทนที่ด้วยใบเสนอราคาฉบับใหม่ของดีลแล้ว — ออกใบเสนอราคาจากคำขอราคาล่าสุด หรือสร้างคำขอราคาใหม่', 409);
       }
       const decision = mockPricingDecisions.find((d) => d.pricingRequestId === pr.id && d.status === 'APPROVED');
       if (!decision) fail('ยังไม่มีราคาขายที่ CEO อนุมัติสำหรับคำขอราคานี้', 409);
       if (!decision.priceMode) {
         fail('คำขอราคานี้ยังใช้รูปแบบราคาเดิม (ก่อน CEO เลือกวิธีกรอกราคา) กรุณาสร้างใบเสนอราคาแบบเดิมจากหน้านี้', 409);
       }
+      // Mutual exclusivity — CustomerQuotationRepository#hasLiveQuotation's set.
+      if (mockCustomerQuotations.some((q) => q.pricingRequestId === pr.id
+          && !['CANCELLED', 'SUPERSEDED', 'EXPIRED', 'REJECTED'].includes(q.docStatus))) {
+        fail('คำขอราคานี้มีใบเสนอราคาลูกค้า (แบบเดิม) อยู่แล้ว ไม่สามารถสร้างใบเสนอราคาแบบใหม่ซ้ำได้', 409);
+      }
       // Idempotent replay guard — same rule as DealQuotationRepository#findOpenDraftForPricingRequest.
       const existingDraft = mockDealQuotations.find(
         (q) => q.pricingRequestId === pr.id && q.origin === 'PRICING_REQUEST' && q.docStatus === 'DRAFT');
       if (existingDraft) return delay({ quotation: buildDealQuotationDto(existingDraft) });
+      // One live quotation per request — DealQuotationRepository#hasLivePricingRequestQuotation's set.
+      if (mockDealQuotations.some((q) => q.pricingRequestId === pr.id && q.origin === 'PRICING_REQUEST'
+          && !['CANCELLED', 'SUPERSEDED', 'EXPIRED', 'REJECTED', 'REVISION_REQUESTED'].includes(q.docStatus))) {
+        fail('คำขอราคานี้มีใบเสนอราคาที่ยังไม่หมดอายุอยู่แล้ว ไม่สามารถสร้างใบเสนอราคาใหม่ซ้ำได้', 409);
+      }
 
       const now = new Date().toISOString();
       const contactSnapshot = resolveDealQuotationContact(ticket, { contactId: pr.recipientContactId });

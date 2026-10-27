@@ -1,6 +1,7 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DealDocumentRegister } from './DealDocumentRegister.jsx';
 import { api } from '../../api/index.js';
@@ -70,10 +71,17 @@ const SALES_SECTIONS = { dealQuotation: true, quotation: true, depositNotice: tr
 const IMPORT_SECTIONS = { dealQuotation: false, quotation: false, depositNotice: false };
 const ACCOUNT_SECTIONS = { dealQuotation: true, quotation: true, depositNotice: true };
 
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-testid="location-probe">{location.pathname}</div>;
+}
+
 function renderRegister(props) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={['/tickets/701']}>
+      <LocationProbe />
       <DealDocumentRegister
         ticketId={701}
         summary={{ status: 'price_proposed', fulfillmentStatus: null }}
@@ -83,6 +91,7 @@ function renderRegister(props) {
         attachLoading={false}
         {...props}
       />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
 }
@@ -268,6 +277,24 @@ describe('DealDocumentRegister', () => {
 
     expect(await screen.findByTestId('document-version-chain-3')).not.toBeNull();
     expect(await screen.findByTestId('document-version-direct-77')).not.toBeNull();
+  });
+
+  // Spec I1 (2026-10-27): the number is a plain link — the title only, no stretched overlay over the
+  // row (that part is CSS, which jsdom cannot see). The PDF/Excel downloads are pinned by 'lists
+  // direct quotations … downloads PDF by id' above; "PDF does not navigate" could not fail in jsdom
+  // (the button was never inside the link), so it is gone.
+  it('a direct quotation\'s number links to /quotations/<id>', async () => {
+    api.dealQuotations.listForTicket.mockResolvedValue({
+      items: [{ id: 77, number: 'QT-2026-0077-1', docStatus: 'APPROVED', revisionNo: 1, grandTotal: 2, origin: 'DEAL_DIRECT' }],
+    });
+    renderRegister({ ...SALES, pricingRequests: CHAIN_PR });
+
+    const row = within(await screen.findByTestId('document-version-direct-77'));
+    const link = row.getByRole('link', { name: 'QT-2026-0077-1' });
+    expect(link.textContent).toBe('QT-2026-0077-1');
+
+    fireEvent.click(link);
+    expect(screen.getByTestId('location-probe').textContent).toBe('/quotations/77');
   });
 
   it('groups chain revisions of one pricing request together even when their numbers are unrelated', async () => {
