@@ -105,13 +105,20 @@ public class DepositNoticeRepository {
      * <p>Live rows: a legacy pricing-chain quotation ({@code origin IS NULL}, {@code
      * pricing_request_id IS NOT NULL}, the scope {@code CustomerQuotationRepository#findByTicket}
      * uses) that is ACCEPTED or ISSUED, a {@code PRICING_REQUEST}-origin one that is ACCEPTED or
-     * ISSUED, or a {@code DEAL_DIRECT} one that is ACCEPTED, ISSUED or APPROVED. APPROVED is
+     * ISSUED, or a {@code DEAL_DIRECT} one that is ACCEPTED, ISSUED or APPROVED (DEAL_DIRECT
+     * ACCEPTED/ISSUED are admitted but no live route produces them). APPROVED is
      * DEAL_DIRECT only: a PRICING_REQUEST approval lands on ISSUED ({@code DealQuotationRepository
      * #approve}). Engines are exclusive per pricing request, not per ticket, so one ticket can hold
      * both.
      *
+     * <p>A case needing no pre-lock data: a DEAL_DIRECT quotation stays revisable after its order
+     * is confirmed ({@code DealQuotationService#requireRevisableStatus}), and once that revision
+     * is APPROVED it governs the ticket-route deposit while the deal's ticket_item rows still hold
+     * the confirmed quotation's lines. Ploy 2026-10-27: revisions will lock after confirm
+     * (follow-up PR).
+     *
      * <p>Ranking: the latest quotation the customer ANSWERED wins: ACCEPTED on either engine, or
-     * APPROVED on a DEAL_DIRECT quotation (its terminal state; it is never ACCEPTED). Only when
+     * APPROVED on a DEAL_DIRECT quotation (its terminal state in practice). Only when
      * nothing was answered does the newest ISSUED row win. "Latest" is {@code quotation_id DESC}:
      * one sequence across every engine and pricing request, set at creation. Not {@code
      * accepted_at}/{@code approved_at}: those time different events (a customer answer against an

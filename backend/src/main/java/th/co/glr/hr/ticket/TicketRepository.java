@@ -899,11 +899,8 @@ public class TicketRepository {
      * DEAL_DIRECT APPROVED one ({@code DealQuotationRepository#supersedeOtherLiveOnTicket} never
      * supersedes an ACCEPTED row), where this shows the ACCEPTED lines and a ticket-route draft
      * bills the DEAL_DIRECT one; and data from before 2026-10-17 that still holds both a
-     * DEAL_DIRECT APPROVED and a PRICING_REQUEST ISSUED row. A third needs no pre-lock data: a
-     * DEAL_DIRECT quotation stays revisable after its order is confirmed ({@code
-     * DealQuotationService#requireRevisableStatus}), and once that revision is APPROVED it governs
-     * a ticket-route draft while the deal's ticket_item rows still hold the confirmed quotation's
-     * lines. The UI drafts any deal with a QUOTATION_ACCEPTED pricing request through the
+     * DEAL_DIRECT APPROVED and a PRICING_REQUEST ISSUED row.
+     * The UI drafts any deal with a QUOTATION_ACCEPTED pricing request through the
      * pricing-request route, which bills that request's accepted quotation instead.
      *
      * <p>Only brand/model/color/texture/size/qty/qtySqm/unitBasis/rawUnit are mapped -- pricing
