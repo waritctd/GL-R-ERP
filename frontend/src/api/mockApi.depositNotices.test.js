@@ -4,6 +4,7 @@ import { describe, it, expect } from 'vitest';
 import {
   api, MOCK_DEFAULT_DEPOSIT_PERCENT, MOCK_LEGACY_DEPOSIT_PERCENT, retireLivePricingRequestsForTests,
 } from './mockApi.js';
+import { stripComments } from './apiSurface.js';
 
 // Branch fix (deposit-notice autofill): drives the mock's own pricing-request chain end to end
 // — Step 1 create through Step 5 customer-accept, then confirmOrder — against the REAL mock
@@ -439,7 +440,8 @@ describe('mockApi.depositNotices.issue account notification (GLA-32)', () => {
 
 // The mock's blank-percent defaults restate two Java constants; read them out of the source so the
 // copies cannot drift (the dealTrackingMeta.test.js approach). Throws rather than skips when the
-// files move, so the guard cannot quietly disable itself.
+// files move, so the guard cannot quietly disable itself; comments are stripped first, so a
+// commented-out declaration does not count.
 function readBackendSource(relativePath) {
   for (let dir = process.cwd(), depth = 0; depth < 8; depth += 1, dir = dirname(dir)) {
     const candidate = resolve(dir, relativePath);
@@ -449,7 +451,7 @@ function readBackendSource(relativePath) {
 }
 
 function javaIntConstant(relativePath, name) {
-  const match = readBackendSource(relativePath).match(new RegExp(`static final int ${name} = (\\d+);`));
+  const match = stripComments(readBackendSource(relativePath)).match(new RegExp(`static final int ${name} = (\\d+);`));
   if (!match) throw new Error(`could not find int ${name} in ${relativePath}`);
   return Number(match[1]);
 }
