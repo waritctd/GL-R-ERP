@@ -426,8 +426,8 @@ public class OrderConfirmationService {
      * request.depositPercent()} is never read: the percent is the one the chosen quotation's PDF
      * printed, passed as {@code sourceDepositPercent}. For the legacy branch that is always {@link
      * QuotationRenderer#LEGACY_DEPOSIT_PERCENT}, because the legacy PDF never reads the stored
-     * column. The field stays on {@link CreateDepositNoticeFromQuotationRequest} so an older
-     * frontend build that still sends it is not refused.
+     * column. Deleting the field from {@link CreateDepositNoticeFromQuotationRequest} would refuse
+     * no client (unknown JSON fields are ignored); its bounds still 400 an out-of-range value.
      *
      * <p><strong>New-engine quotation:</strong> when the pricing request has no ACCEPTED legacy
      * quotation, this falls back to its ACCEPTED new-engine {@code PRICING_REQUEST}-origin

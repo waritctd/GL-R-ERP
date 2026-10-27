@@ -893,15 +893,18 @@ public class TicketRepository {
      * ticket-route deposit notice's pick ({@code DepositNoticeRepository#findGoverningQuotation}),
      * which also reads legacy rows and, by owner ruling 2026-10-23, counts a DEAL_DIRECT approval
      * as the answer, level with ACCEPTED. The two agree on a ticket with one live new-engine
-     * quotation. They differ when the ticket also has a live legacy quotation. The DEAL_DIRECT
+     * quotation. They differ when the ticket also has a live legacy quotation. Two DEAL_DIRECT
      * cases exist only on pre-lock data (a DEAL_DIRECT quotation beside a pricing-request one,
      * which {@code DirectQuotationLocks} now refuses): an ACCEPTED quotation followed by a newer
      * DEAL_DIRECT APPROVED one ({@code DealQuotationRepository#supersedeOtherLiveOnTicket} never
      * supersedes an ACCEPTED row), where this shows the ACCEPTED lines and a ticket-route draft
      * bills the DEAL_DIRECT one; and data from before 2026-10-17 that still holds both a
-     * DEAL_DIRECT APPROVED and a PRICING_REQUEST ISSUED row. The UI drafts any deal with a
-     * QUOTATION_ACCEPTED pricing request through the pricing-request route, which bills that
-     * request's accepted quotation instead.
+     * DEAL_DIRECT APPROVED and a PRICING_REQUEST ISSUED row. A third needs no pre-lock data: a
+     * DEAL_DIRECT quotation stays revisable after its order is confirmed ({@code
+     * DealQuotationService#requireRevisableStatus}), and once that revision is APPROVED it governs
+     * a ticket-route draft while the deal's ticket_item rows still hold the confirmed quotation's
+     * lines. The UI drafts any deal with a QUOTATION_ACCEPTED pricing request through the
+     * pricing-request route, which bills that request's accepted quotation instead.
      *
      * <p>Only brand/model/color/texture/size/qty/qtySqm/unitBasis/rawUnit are mapped -- pricing
      * fields (proposedPrice/approvedPrice/calcedCost/manualPrice/...) are deliberately left at
