@@ -6686,9 +6686,10 @@ function mockApproveDealQuotationPricingRequestOrigin(row, payload, user) {
       || dto.itemsRemovedFromCeoCount > 0;
     if (changed) fail('มีรายการที่เปลี่ยนจากราคา CEO — ต้องให้ CEO อนุมัติ', 403);
   }
-  // The service's cancelled-request guard: a cancelled request issues nothing. Read before any write.
+  // The service's guard: a cancelled or superseded request issues nothing. Read before any write.
   const pr = findPricingRequestRaw(row.pricingRequestId);
   if (pr.status === 'CANCELLED') fail('คำขอราคาของใบเสนอราคานี้ถูกยกเลิกแล้ว จึงอนุมัติไม่ได้', 409);
+  if (pr.status === 'SUPERSEDED') fail('คำขอราคาของใบเสนอราคานี้ถูกแทนที่ด้วยคำขอราคาฉบับแก้ไขแล้ว จึงอนุมัติไม่ได้', 409);
   const now = new Date().toISOString();
   row.docStatus = 'ISSUED';
   row.approvedById = user.employeeId ?? null;
@@ -16443,6 +16444,13 @@ export const api = {
       mockCustomerQuotations
         .filter((q) => q.pricingRequestId === parent.id
           && ['ISSUED', 'READY_TO_ISSUE', 'SENT', 'REVISION_REQUESTED'].includes(q.docStatus))
+        .forEach((q) => { q.docStatus = 'SUPERSEDED'; });
+      // Mirrors PricingRequestRepository#supersedeUnissuedPricingRequestOriginQuotations: the old
+      // request's new-engine quotations not yet issued go with it (PENDING_APPROVAL by owner ruling
+      // 2026-10-27). An ISSUED one stays live until its replacement is issued.
+      mockDealQuotations
+        .filter((q) => q.pricingRequestId === parent.id && q.origin === 'PRICING_REQUEST'
+          && ['DRAFT', 'PENDING_APPROVAL'].includes(q.docStatus))
         .forEach((q) => { q.docStatus = 'SUPERSEDED'; });
       pushPricingRequestEvent(parent, user, 'PRICING_REQUEST_REVISED', parentStatus, 'SUPERSEDED', payload.revisionReason);
       pushPricingRequestEvent(revision, user, 'PRICING_REQUEST_CREATED', null, 'DRAFT', payload.revisionReason);

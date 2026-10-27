@@ -734,6 +734,12 @@ public class PricingRequestService {
             throw new ApiException(HttpStatus.CONFLICT,
                 "ไม่สามารถยกเลิกคำขอราคาที่อยู่ในสถานะ '" + summary.status() + "' ได้");
         }
+        // The request's lock, the one DealQuotationService#approveAndIssuePricingRequestOrigin takes
+        // first (owner ruling 2026-10-27): a cancel and an approve of this request serialise instead
+        // of updating its quotation and request rows in opposite orders. Taken before the first
+        // write. An approve that got there first leaves the request QUOTATION_ISSUED, so the
+        // compare-and-set below refuses this cancel.
+        requests.lockPricingRequest(id);
         int rows = requests.transition(id, summary.status(), PricingRequestStatus.CANCELLED, null, actor.id());
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
@@ -855,13 +861,13 @@ public class PricingRequestService {
         // (sales.quotation_item), so superseding the decision cannot change what the customer was
         // quoted.
         requests.supersedeOpenPricingDecision(parent.id());
-        // MINOR fix (Opus review, 2026-09-20) — see supersedeOpenPricingRequestOriginDraft's own
-        // Javadoc for why this is a SEPARATE, narrower call from the decision supersede just
-        // above, and why it is safe alongside the "legacy ISSUED quotation stays live" ruling
-        // documented in the block comment above: this only ever touches an origin =
-        // 'PRICING_REQUEST' DRAFT, never the legacy (origin IS NULL) quotation that ruling
-        // protects.
-        requests.supersedeOpenPricingRequestOriginDraft(parent.id());
+        // The request's PRICING_REQUEST-origin quotations not yet issued go with it: DRAFT, and
+        // PENDING_APPROVAL by owner ruling 2026-10-27. See
+        // supersedeUnissuedPricingRequestOriginQuotations's own Javadoc for why this is a SEPARATE,
+        // narrower call from the decision supersede just above, and why it is safe alongside the
+        // "issued quotation stays live" ruling documented in the block comment above: it never
+        // touches an ISSUED offer, nor the legacy (origin IS NULL) quotation that ruling protects.
+        requests.supersedeUnissuedPricingRequestOriginQuotations(parent.id());
         requests.addEvent(parent.id(), parent.ticketId(), actor.id(), actor.name(),
             PricingRequestEventKind.PRICING_REQUEST_REVISED, parent.status(), PricingRequestStatus.SUPERSEDED,
             request.revisionReason(), toRevisionMetadataJson(newId));
