@@ -239,6 +239,12 @@ describe('mockApi.pricingRequests.createDepositNoticeFromQuotation — new-engin
     // The ticket route bills the same quotation (DepositNoticeRepository.findGoverningQuotation).
     const { depositNotice: fromTicket } = await api.depositNotices.createDraft(ticketId, {});
     expect(fromTicket.depositPercent).toBe(0.4);
+    expect(fromTicket.reference).toBe(accepted.number);
+    // Lines the caller supplies are not that quotation's, so the reference stays blank; the
+    // percent still comes from it (DepositNoticeService.createDraftFromQuotation, linesFromGoverning).
+    const { depositNotice: ownLines } = await api.depositNotices.createDraft(ticketId, { items: fromTicket.items });
+    expect(ownLines.reference).toBe('');
+    expect(ownLines.depositPercent).toBe(0.4);
     expect(depositNotice.items.length).toBeGreaterThan(0);
     // qty is deliberately not distinguishable here: a mock TILE row sets quantity = piecesFinal.
     const [line] = accepted.items;
