@@ -3533,7 +3533,7 @@ export function QuotationEditorPage({ user, showToast }) {
               <Button
                 variant="primary"
                 loading={promoteMutation.isPending}
-                onClick={() => promoteMutation.mutate()}
+                onClick={() => { setPromoteConfirmOpen(false); promoteMutation.mutate(); }}
                 data-testid="quotation-promote-to-deal-confirm"
               >
                 ยืนยันคำสั่งซื้อ

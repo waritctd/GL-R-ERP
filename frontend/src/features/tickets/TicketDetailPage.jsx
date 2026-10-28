@@ -3069,7 +3069,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         number={confirm?.number}
         cancelLabel="ปิด"
         busy={confirmOrderDirectMutation.isPending}
-        onConfirm={() => confirmOrderDirectMutation.mutate(confirm.quotationId)}
+        // Close first (as the pricing-request door does): a second click on the open dialog would send twice.
+        onConfirm={() => { const { quotationId } = confirm; setConfirm(null); confirmOrderDirectMutation.mutate(quotationId); }}
         onCancel={() => setConfirm(null)}
       />
     </div>

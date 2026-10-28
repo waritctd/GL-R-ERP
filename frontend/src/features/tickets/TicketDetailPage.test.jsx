@@ -4235,6 +4235,20 @@ describe('TicketDetailPage', () => {
       await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', 'ยืนยันคำสั่งซื้อแล้ว'));
     });
 
+    it('a double-click on the dialog\'s confirm sends ONE confirm request (VW-05), same as the pricing-request door', async () => {
+      activeDeal({ liveDirectQuotation: { ...DRAFT_LIVE, docStatus: 'APPROVED' } });
+      api.dealQuotations.promoteToDeal.mockReturnValue(new Promise(() => {})); // in flight: never settles
+      renderTicketDetailPage(salesOwnerUser);
+      await waitFor(() => expect(screen.getByTestId('ticket-primary-action').getAttribute('data-action')).toBe('confirm_order_direct'));
+      fireEvent.click(screen.getByTestId('ticket-primary-action'));
+      const confirmBtn = within(screen.getByRole('dialog')).getByRole('button', { name: 'ยืนยันคำสั่งซื้อ' });
+      fireEvent.click(confirmBtn);
+      fireEvent.click(confirmBtn);
+      await waitFor(() => expect(api.dealQuotations.promoteToDeal).toHaveBeenCalled());
+      await new Promise((r) => setTimeout(r, 50)); // let a second request surface
+      expect(api.dealQuotations.promoteToDeal).toHaveBeenCalledTimes(1);
+    });
+
     it('a refused confirm surfaces the server\'s own Thai message', async () => {
       activeDeal({ liveDirectQuotation: { ...DRAFT_LIVE, docStatus: 'APPROVED' } });
       api.dealQuotations.promoteToDeal.mockRejectedValue(Object.assign(new Error('ดีลไม่ได้อยู่ในสถานะ ACTIVE'), { status: 409 }));

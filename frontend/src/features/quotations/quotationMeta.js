@@ -1356,7 +1356,8 @@ export function validateQuotationItem(item, priceMode = 'NET', documentLanguage 
   }
   // Owner feedback #7 (2026-09-14): mirrors DealQuotationService#requireEveryTileItemHasALeadTime
   // — SUBMIT only (see this function's own Javadoc for why the default leaves it off).
-  if (requireLeadTime && (item?.leadTimeMinDays == null || item?.leadTimeMaxDays == null)) {
+  // In-Thailand stock lines (owner ruling 2026-10-28) skip import, so they have no import lead time; IN_TRANSIT still needs one (2026-10-29).
+  if (requireLeadTime && item?.stockSource !== 'IN_THAILAND' && (item?.leadTimeMinDays == null || item?.leadTimeMaxDays == null)) {
     errors.leadTimeMinDays = 'กรุณาระบุระยะเวลานำเข้า (วัน)';
   }
   // GLA-125 (owner ruling 2026-09-18): ประเทศต้นทาง is required on the PCR form only

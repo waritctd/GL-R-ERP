@@ -624,7 +624,7 @@ export const API_ROUTES = {
     // GLA-136 (owner ruling 2026-09-30) -- "สร้างดีลจากใบเสนอราคา": promote an APPROVED direct
     // quotation's quotation-only container ticket into the pipeline at ORDER_RECEIVED. Mirrors
     // DealQuotationController#promoteToDeal.
-    promoteToDeal: (id) => `/api/deal-quotations/${id}/promote-to-deal`,
+    promoteToDeal: (id) => `/api/deal-quotations/${id}/confirm-order`,
     cancel: (id) => `/api/deal-quotations/${id}/cancel`,
     file: (id, format) => `/api/deal-quotations/${id}/file?format=${format}`,
     // M4(d) fix (Opus review, 2026-09-20) — "คืนรายการ": re-adds a CEO-linked line a prior save
