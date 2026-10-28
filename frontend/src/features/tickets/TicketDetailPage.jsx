@@ -616,9 +616,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     enabled: readsDocs,
   });
   const depositNotice = pickDepositNotice(depositNoticesQuery.data);
-  const pickedRemainingInvoice = pickRemainingInvoice(remainingInvoicesQuery.data);
   // undefined until the list is read: nextSalesAction then never offers the invoice.
-  const remainingInvoice = remainingInvoicesQuery.data === undefined ? undefined : pickedRemainingInvoice;
+  const remainingInvoice = remainingInvoicesQuery.data === undefined ? undefined : pickRemainingInvoice(remainingInvoicesQuery.data);
   const createDepositNoticeMutation = useMutation({
     // Reads the list first (cached when loaded): an existing DRAFT is only opened, never doubled.
     mutationFn: async () => {
