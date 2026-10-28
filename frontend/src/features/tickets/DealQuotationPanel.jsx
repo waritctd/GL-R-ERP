@@ -94,7 +94,7 @@ const DEAD_CUSTOMER_QUOTATION_STATUSES = new Set(['CANCELLED', 'SUPERSEDED', 'EX
  * label were visible on screen simultaneously.
  */
 export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
-  ticketId, pricingRequests = [], quotationByRequest = null, user, showToast,
+  ticketId, pricingRequests = [], quotationByRequest = null, user, showToast, depositMainButtonLabel = null,
 }, ref) {
   const queryClient = useQueryClient();
   const [outcomeNote, setOutcomeNote] = useState('');
@@ -300,11 +300,11 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
             ) : (
               <p className="text-sm text-text-muted">
                 {confirmOrderBlockedReason(pr) ?? (pr.orderConfirmedAt
-                  // Deposit-notice creation moved to DealDepositPanel's own
-                  // "ใบแจ้งยอดมัดจำ" step (Phase 3 Slice S4 de-duplication —
-                  // see docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md)
-                  // — pointed at here rather than duplicated.
-                  ? `ยืนยันคำสั่งซื้อแล้วเมื่อ ${formatThaiDate(pr.orderConfirmedAt)} — ออกใบแจ้งยอดเงินรับมัดจำได้ที่ส่วน "มัดจำ" ด้านล่าง`
+                  // Owner rulings 2026-10-28: the main button creates the deposit notice (only while it offers
+                  // it); otherwise the notice lives on the การเงิน tab.
+                  ? `ยืนยันคำสั่งซื้อแล้วเมื่อ ${formatThaiDate(pr.orderConfirmedAt)} — ${depositMainButtonLabel
+                    ? `ขั้นต่อไป: กดปุ่ม "${depositMainButtonLabel}" ด้านบน`
+                    : 'ใบแจ้งยอดเงินรับมัดจำอยู่ที่แท็บ "การเงิน"'}`
                   : 'ยืนยันคำสั่งซื้อได้เฉพาะเจ้าของดีล (sales)')}
               </p>
             )}

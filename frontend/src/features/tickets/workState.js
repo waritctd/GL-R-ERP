@@ -71,7 +71,7 @@ export const DIRECT_APPROVAL_ACTION_KEY = 'approve_direct_quotation';
  * The same two apply to a PRICING_REQUEST-origin quotation awaiting approval (owner ruling
  * 2026-10-27), read from `quotationByRequest` (see nextSalesAction).
  */
-export function resolveWorkState(user, deal, pricingRequests = [], { reviseTarget = null, offRouteParties = null, quotationByRequest = null } = {}) {
+export function resolveWorkState(user, deal, pricingRequests = [], { reviseTarget = null, offRouteParties = null, quotationByRequest = null, depositNotice = null, remainingInvoice } = {}) {
   const role = user?.role;
   if (!deal || deal.lifecycle !== 'ACTIVE') return { action: null };
 
@@ -97,7 +97,7 @@ export function resolveWorkState(user, deal, pricingRequests = [], { reviseTarge
     }
   }
 
-  const action = role === 'sales' ? nextSalesAction(deal, pricingRequests, { reviseTarget, offRouteParties, quotationByRequest })
+  const action = role === 'sales' ? nextSalesAction(deal, pricingRequests, { reviseTarget, offRouteParties, quotationByRequest, depositNotice, remainingInvoice })
     : role === 'import' ? nextImportAction(deal, pricingRequests)
       : role === 'account' ? nextAccountAction(deal)
         : null;
@@ -138,11 +138,11 @@ function quoteNextPartyBanner({ anchorParty, anchorDeclined, parties }) {
  *   is resolved by the caller through quotationMeta.canReviseDealQuotation (owner + status live
  *   there). Skipped when revise is already the primary (approved direct quotation past draft).
  */
-export function secondaryWorkActions(user, deal, pricingRequests = [], { reviseTarget = null, offRouteParties = null, quotationByRequest = null } = {}) {
+export function secondaryWorkActions(user, deal, pricingRequests = [], { reviseTarget = null, offRouteParties = null, quotationByRequest = null, depositNotice = null, remainingInvoice } = {}) {
   if (user?.role !== 'sales' || !deal || deal.lifecycle !== 'ACTIVE') return [];
   const outcome = outcomeSecondaryAction(deal, pricingRequests, quotationByRequest);
   const revise = reviseTarget && REVISE_STAGES.has(deal.salesStage)
-    && resolveWorkState(user, deal, pricingRequests, { reviseTarget, offRouteParties, quotationByRequest }).action?.key !== SALES_ACTION.REVISE_QUOTATION
+    && resolveWorkState(user, deal, pricingRequests, { reviseTarget, offRouteParties, quotationByRequest, depositNotice, remainingInvoice }).action?.key !== SALES_ACTION.REVISE_QUOTATION
     ? reviseAction(reviseTarget) : null;
   return [outcome, revise].filter(Boolean);
 }

@@ -664,3 +664,69 @@ describe('nextSalesAction — the route choice once a designer/owner quotation i
     expect(sorted).toEqual([4, 3, 1, 2]);
   });
 });
+
+// Owner rulings 2026-10-28: the deal page's main button creates the deposit notice (ขั้น 10) and the
+// remaining invoice (ขั้น 13). `depositNotice` / `remainingInvoice` are page-only options; an
+// absent `remainingInvoice` (the dashboard worklist) never offers the invoice.
+describe('nextSalesAction — สร้างใบแจ้งยอดเงินรับมัดจำ / สร้างใบแจ้งหนี้ (owner rulings 2026-10-28)', () => {
+  const confirmedDeal = (overrides = {}) => baseDeal({ status: 'quotation_issued', paymentStatus: 'CUSTOMER_CONFIRMED', ...overrides });
+  const CREATE_DEPOSIT = { key: 'create_deposit_notice', label: 'สร้างใบแจ้งยอดเงินรับมัดจำ' };
+
+  it('ขั้น 10, pricing-request flow (CUSTOMER_CONFIRMED, order-confirmed accepted PR) -> สร้างใบแจ้งยอดเงินรับมัดจำ', () => {
+    expect(nextSalesAction(confirmedDeal(), [orderConfirmedPr()])).toEqual(CREATE_DEPOSIT);
+    expect(nextSalesAction(confirmedDeal({ depositPolicy: 'REQUIRED' }), [orderConfirmedPr()])).toEqual(CREATE_DEPOSIT);
+  });
+
+  it('ขั้น 10, direct-quotation flow (no pricing requests) -> the same action: the gate is paymentStatus, not a PR', () => {
+    expect(nextSalesAction(confirmedDeal({ liveDirectQuotation: null }), [])).toEqual(CREATE_DEPOSIT);
+  });
+
+  it('ขั้น 10, flow A after confirm: the direct quotation stays APPROVED + live and a reviseTarget exists -> still สร้างใบแจ้งยอดเงินรับมัดจำ, not แก้ใบเสนอราคา', () => {
+    const deal = confirmedDeal({ liveDirectQuotation: { id: 77, number: 'QT-2026-0077-1', docStatus: 'APPROVED', recipientType: 'DESIGNER' } });
+    expect(nextSalesAction(deal, [], { reviseTarget: { quotationId: 77, number: 'QT-2026-0077-1' } })).toEqual(CREATE_DEPOSIT);
+  });
+
+  it('a DRAFT notice already exists -> ออกใบแจ้งยอดเงินรับมัดจำ (same key)', () => {
+    expect(nextSalesAction(confirmedDeal(), [orderConfirmedPr()], { depositNotice: { status: 'DRAFT' } }))
+      .toEqual({ key: 'create_deposit_notice', label: 'ออกใบแจ้งยอดเงินรับมัดจำ' });
+  });
+
+  it.each(['NOT_REQUIRED', 'WAIVED', 'CREDIT_CUSTOMER'])('depositPolicy %s -> no deposit-notice action', (depositPolicy) => {
+    expect(nextSalesAction(confirmedDeal({ depositPolicy }), [orderConfirmedPr()])?.key).not.toBe('create_deposit_notice');
+  });
+
+  it.each(['DEPOSIT_NOTICE_ISSUED', 'DEPOSIT_PAID'])('paymentStatus %s (notice already out) -> no deposit-notice action', (paymentStatus) => {
+    expect(nextSalesAction(confirmedDeal({ paymentStatus }), [orderConfirmedPr()])?.key).not.toBe('create_deposit_notice');
+  });
+
+  it('regression: ยืนยันคำสั่งซื้อ still wins while an accepted PR has no orderConfirmedAt', () => {
+    const pr = { id: 1, ticketId: 1, status: 'QUOTATION_ACCEPTED', orderConfirmedAt: null };
+    expect(nextSalesAction(confirmedDeal(), [pr])).toMatchObject({ key: SALES_ACTION.CONFIRM_ORDER });
+  });
+
+  // ขั้น 13
+  const readyDeal = (overrides = {}) => baseDeal({ status: 'quotation_issued', fulfillmentStatus: 'FULLY_DELIVERED', paymentStatus: 'DEPOSIT_PAID', ...overrides });
+
+  it('ขั้น 13, ready deal with no remaining invoice -> สร้างใบแจ้งหนี้; a DRAFT one -> ออกใบแจ้งหนี้', () => {
+    expect(nextSalesAction(readyDeal(), [orderConfirmedPr()], { remainingInvoice: null }))
+      .toEqual({ key: 'create_remaining_invoice', label: 'สร้างใบแจ้งหนี้' });
+    expect(nextSalesAction(readyDeal(), [orderConfirmedPr()], { remainingInvoice: { status: 'DRAFT' } }))
+      .toEqual({ key: 'create_remaining_invoice', label: 'ออกใบแจ้งหนี้' });
+  });
+
+  it('an ISSUED remaining invoice, or the option omitted (dashboard worklist), -> no create_remaining_invoice', () => {
+    expect(nextSalesAction(readyDeal(), [orderConfirmedPr()], { remainingInvoice: { status: 'ISSUED' } })?.key).not.toBe('create_remaining_invoice');
+    expect(nextSalesAction(readyDeal(), [orderConfirmedPr()])?.key).not.toBe('create_remaining_invoice');
+  });
+
+  it('ordering (ruling 2026-10-22): the invoice is generated at นัดส่งสินค้า, so it wins over บันทึกส่งมอบ until it is issued', () => {
+    const deal = readyDeal({ fulfillmentStatus: 'GOODS_RECEIVED' });
+    expect(nextSalesAction(deal, [orderConfirmedPr()], { remainingInvoice: null })).toMatchObject({ key: 'create_remaining_invoice' });
+    expect(nextSalesAction(deal, [orderConfirmedPr()], { remainingInvoice: { status: 'ISSUED' } })).toMatchObject({ key: SALES_ACTION.RECORD_DELIVERY });
+  });
+
+  it('a deal not yet ready (SHIPPING) -> no create_remaining_invoice', () => {
+    expect(nextSalesAction(readyDeal({ fulfillmentStatus: 'SHIPPING' }), [orderConfirmedPr()], { remainingInvoice: null })?.key)
+      .not.toBe('create_remaining_invoice');
+  });
+});
