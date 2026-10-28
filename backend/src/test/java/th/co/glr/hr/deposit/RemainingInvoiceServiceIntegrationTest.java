@@ -99,6 +99,7 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
     private OrderConfirmationService orderConfirmation;
     private RemainingInvoiceRepository remainingInvoiceRepository;
     private RemainingInvoiceService remainingInvoiceService;
+    private TicketService ticketService;
 
     private long salesRepId;
     private long otherSalesRepId;
@@ -139,7 +140,7 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         decisionService = new PricingDecisionService(decisionRepository, pricingRequests, costingRepository,
             tickets, fxRates, notifications, landedCostCalculator, formulaEngine);
 
-        TicketService ticketService = new TicketService(tickets, notifications,
+        ticketService = new TicketService(tickets, notifications,
             objectMapper, customers, new QuotationRenderer(), pricingRequestService, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc), new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
             new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
 
@@ -175,6 +176,39 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
     // ─────────────────────────────────────────────────────────────────────────────────────
     // Lifecycle + numbering
     // ─────────────────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Owner ruling 2026-10-28 (SK-07): each tax invoice's VAT is rounded on its own net, so deposit + remaining can
+     * differ from the deal's VAT-inclusive payable by a satang -- and outstanding + the final BALANCE receipt then
+     * FOLLOW THE ISSUED DOCUMENTS: once the remaining invoice is issued, payable = deposit notice total + remaining
+     * invoice grand total, the deposit receipt is the notice total, the balance is exactly the invoice grand total
+     * and the deal closes FULLY_PAID with nothing left (no satang overpaid/underpaid).
+     */
+    @Test
+    void issuedRemainingInvoice_outstandingAndFinalPaymentFollowTheIssuedDocuments() {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "FollowDocs");
+        long ticketId = fixture.ticketId();
+        BigDecimal depositNoticeTotal = new DepositNoticeRepository(jdbc).findById(fixture.depositNoticeId()).orElseThrow().totalPayable();
+        ticketService.confirmDepositPaid(ticketId, accountActor);
+
+        BigDecimal payableBeforeInvoice = tickets.payableAmount(ticketId);
+        RemainingInvoiceDocumentDto issued = remainingInvoiceService.issue(
+            remainingInvoiceService.createDraft(ticketId, null, salesActor).id(), salesActor);
+        // fixture precondition: per-document rounding really does drift from the deal payable here
+        assertThat(payableBeforeInvoice.subtract(depositNoticeTotal)).isNotEqualByComparingTo(issued.grandTotal());
+
+        assertThat(tickets.payableAmount(ticketId)).isEqualByComparingTo(depositNoticeTotal.add(issued.grandTotal()));
+        assertThat(tickets.findSummaryById(ticketId).orElseThrow().amountOutstanding()).isEqualByComparingTo(issued.grandTotal());
+
+        ticketService.confirmFinalPayment(ticketId, accountActor);
+
+        assertThat(jdbc.queryForObject(
+            "SELECT amount FROM sales.payment_receipt WHERE ticket_id = :id AND kind = 'BALANCE'",
+            Map.of("id", ticketId), BigDecimal.class)).isEqualByComparingTo(issued.grandTotal());
+        var after = tickets.findSummaryById(ticketId).orElseThrow();
+        assertThat(after.paymentStatus()).isEqualTo("FULLY_PAID");
+        assertThat(after.amountOutstanding()).isEqualByComparingTo("0");
+    }
 
     @Test
     void createDraft_thenIssue_mintsFirstVersionOfANewBase() {

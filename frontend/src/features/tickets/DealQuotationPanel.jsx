@@ -7,6 +7,7 @@ import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
+import { ConfirmOrderDialog } from '../quotations/ConfirmOrderDialog.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
@@ -99,6 +100,9 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
   const [outcomeNote, setOutcomeNote] = useState('');
   const [downloadingFormat, setDownloadingFormat] = useState(null);
   const [confirmingAccept, setConfirmingAccept] = useState(false);
+  // SK-02: the order confirmation is irreversible (the deal can no longer go below ขั้น 10), so every door to it
+  // (sticky primary, ⋯, this panel) opens this dialog first.
+  const [confirmingOrder, setConfirmingOrder] = useState(false);
 
   const pr = useMemo(() => pickRelevantPricingRequest(pricingRequests), [pricingRequests]);
   const prQuotation = quotationByRequest?.get(pr?.id);
@@ -146,7 +150,7 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
     openConfirmOrder: () => {
       if (confirmOrder.isPending) return;
       if (pr && canConfirmOrder(user, pr)) {
-        confirmOrder.mutate();
+        setConfirmingOrder(true);
       } else {
         showToast?.('error', confirmOrderBlockedReason(pr)
           ?? 'ยังยืนยันคำสั่งซื้อไม่ได้ — ตรวจสอบสถานะคำขอราคาในส่วน "ราคาและใบเสนอราคา" ด้านล่าง');
@@ -308,6 +312,13 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
         ) : null}
       </div>
 
+      <ConfirmOrderDialog
+        open={confirmingOrder}
+        number={current?.number}
+        busy={confirmOrder.isPending}
+        onCancel={() => setConfirmingOrder(false)}
+        onConfirm={() => { setConfirmingOrder(false); confirmOrder.mutate(); }}
+      />
       <ConfirmDialog
         open={confirmingAccept && Boolean(acceptConfirm)}
         title={acceptConfirm?.title}

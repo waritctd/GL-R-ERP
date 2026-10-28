@@ -81,10 +81,8 @@ class RemainingInvoiceRendererTest {
     /**
      * The branch's own reference sample (owner-supplied, matches the real template's formulas
      * exactly): 46 แผ่น × 806.83 = 37,114.18; deposit 18,557.09 (ref AI2600145) deducted →
-     * remainder 18,557.09; I43 stores the UNROUNDED VAT 1298.9963 (18557.09 * 0.07), which the
-     * template's own cell format displays as 1,299.00 — this test evaluates the formula with POI
-     * directly (no LibreOffice needed) and checks the raw numeric value, not a rendered string, so
-     * it also pins that the stored figure is genuinely unrounded until display.
+     * remainder 18,557.09; the stored VAT 1,299.00 and total 19,856.09 are written as values (no
+     * LibreOffice needed: POI reads the cells directly).
      */
     @Test
     void referenceSampleFormulasEvaluateToTheOwnerSuppliedTotals() throws Exception {
@@ -103,7 +101,8 @@ class RemainingInvoiceRendererTest {
             List.of(new RemainingInvoiceItemDto(
                 1, "กระเบื้อง 60x60", new BigDecimal("46"), "แผ่น",
                 new BigDecimal("806.83"), null, new BigDecimal("806.83"), new BigDecimal("37114.18")
-            ))
+            )),
+            new BigDecimal("1299.00"), new BigDecimal("19856.09")
         );
 
         byte[] xlsx = renderer.toXlsx(doc);
@@ -114,13 +113,9 @@ class RemainingInvoiceRendererTest {
 
             // I42 = SUM(I11:I41) = 37114.18 (item) - 18557.09 (deposit) = 18557.09.
             assertThat(round2(eval.evaluate(cell(sh, 41, 8)).getNumberValue())).isEqualTo(18557.09);
-            // I43 = I42 * 0.07 — the RAW value is unrounded (1298.9963); rounds to 1,299.00 for display.
-            double vatRaw = eval.evaluate(cell(sh, 42, 8)).getNumberValue();
-            assertThat(vatRaw).isCloseTo(1298.9963, org.assertj.core.data.Offset.offset(0.0001));
-            assertThat(round2(vatRaw)).isEqualTo(1299.00);
-            // I44 = I42 + I43 = 18557.09 + 1298.9963 = 19856.0863, rounds to 19,856.09.
-            double totalRaw = eval.evaluate(cell(sh, 43, 8)).getNumberValue();
-            assertThat(round2(totalRaw)).isEqualTo(19856.09);
+            // I43 / I44 are the STORED, already-rounded figures (owner ruling 2026-10-28), not template formulas.
+            assertThat(cell(sh, 42, 8).getNumericCellValue()).isEqualTo(1299.00);
+            assertThat(cell(sh, 43, 8).getNumericCellValue()).isEqualTo(19856.09);
 
             // Item row present at row 13 (0-based 12).
             assertThat(cell(sh, 12, 1).getStringCellValue()).isEqualTo("กระเบื้อง 60x60");
@@ -339,6 +334,33 @@ class RemainingInvoiceRendererTest {
         return c;
     }
 
+    /**
+     * SK-07 (owner ruling 2026-10-28): the sheet prints the STORED VAT and total as values. Deal 11 (PR-2026-0006):
+     * 119,745.00 - 35,923.50 deposit = net 83,821.50; VAT = round2(net x 7%) = 5,867.51 (the template's I42 x 7%
+     * formula would hold 5,867.505) and total 89,689.01 (not 89,689.005).
+     */
+    @Test
+    void storedVatAndGrandTotal_areWrittenAsValues_deal11() throws Exception {
+        RemainingInvoiceDto doc = new RemainingInvoiceDto(
+            "GLR6900002-1", LocalDate.of(2026, 10, 28), "QT-2026-0006", "GLRD69002", "บริษัท ดีล 11 จำกัด", null,
+            "1 ถนนตัวอย่าง", "0105500000000", "โครงการ 11", new BigDecimal("35923.50"), List.of(),
+            List.of(new RemainingInvoiceItemDto(1, "Tile", new BigDecimal("1"), "lot",
+                new BigDecimal("119745.00"), null, new BigDecimal("119745.00"), new BigDecimal("119745.00"))),
+            new BigDecimal("5867.51"), new BigDecimal("89689.01"));
+
+        byte[] xlsx = renderer.toXlsx(doc);
+
+        try (Workbook wb = WorkbookFactory.create(new ByteArrayInputStream(xlsx))) {
+            Sheet sh = wb.getSheetAt(0);
+            FormulaEvaluator eval = wb.getCreationHelper().createFormulaEvaluator();
+            assertThat(round2(eval.evaluate(cell(sh, 41, 8)).getNumberValue())).isEqualTo(83821.50);
+            assertThat(cell(sh, 42, 8).getCellType()).isEqualTo(org.apache.poi.ss.usermodel.CellType.NUMERIC);
+            assertThat(cell(sh, 42, 8).getNumericCellValue()).isEqualTo(5867.51);
+            assertThat(cell(sh, 43, 8).getCellType()).isEqualTo(org.apache.poi.ss.usermodel.CellType.NUMERIC);
+            assertThat(cell(sh, 43, 8).getNumericCellValue()).isEqualTo(89689.01);
+        }
+    }
+
     private RemainingInvoiceDto document() {
         return new RemainingInvoiceDto(
             "GLRI69001",
@@ -361,7 +383,8 @@ class RemainingInvoiceRendererTest {
                 null,
                 new BigDecimal("979.40"),
                 new BigDecimal("64640.40")
-            ))
+            )),
+            new BigDecimal("2262.41"), new BigDecimal("34582.61")
         );
     }
 }

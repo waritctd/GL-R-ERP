@@ -407,100 +407,112 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
     }
 
     /**
-     * PR #1173 review F1: a confirmed 0% deal whose approved revision adds a deposit used to be
-     * stranded (NOT_REQUIRED kept, the draft 409'd, waiveDeposit refuses REQUIRED). While the
-     * payment track is at CUSTOMER_CONFIRMED a policy the system set follows the newly approved
-     * quotation.
+     * Owner ruling 2026-10-28: once the order is confirmed from a direct quotation, THAT quotation can no longer
+     * be revised (a revision's approval would supersede the agreed order and move the payable). Replaces the five
+     * #1173 tests that revised a confirmed quotation (their policy-sync scenarios are no longer reachable).
      */
     @Test
-    void zeroDepositConfirmed_thenARevisionAddsADeposit_policyFollowsBackToRequired_andTheDraftBillsIt() {
-        long deal = pipelineTicket(salesActor);
-        DealQuotationDto zero = approvedQuotation(deal, zeroDepositDirectDraft());
-        confirmer.confirmOrderFromDirectQuotation(zero.id(), salesActor);
-        assertThat(summary(deal).depositPolicy()).isEqualTo("NOT_REQUIRED");
-
-        DealQuotationDto revision = approvedRevision(zero, directDraft());
-
-        TicketSummaryDto after = summary(deal);
-        assertThat(after.depositPolicy()).isEqualTo("REQUIRED");
-        assertThat(after.depositPolicyReason()).isEqualTo("ใบเสนอราคา " + revision.number() + " ระบุมัดจำ 50%");
-        assertThat(after.paymentStatus()).isEqualTo("CUSTOMER_CONFIRMED");
-        assertThat(policyChangedMessages(deal)).hasSize(2)
-            .last().asString().contains("REQUIRED").contains(revision.number());
-        DepositNoticeDto draft = depositNoticeService.createDraft(deal,
-            new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), salesActor);
-        assertThat(draft.depositPercent()).isEqualByComparingTo("0.50");
-    }
-
-    /** Owner ruling 2026-10-23: a blank new-engine percent means 30 (DealQuotationRenderAdapter's PDF
-     * default), so a 0% deal whose approved revision leaves the percent blank is back on the deposit path. */
-    @Test
-    void zeroDepositConfirmed_thenARevisionWithABlankPercent_countsAsThirty_andIsRequired() {
-        long deal = pipelineTicket(salesActor);
-        DealQuotationDto zero = approvedQuotation(deal, zeroDepositDirectDraft());
-        confirmer.confirmOrderFromDirectQuotation(zero.id(), salesActor);
-        assertThat(summary(deal).depositPolicy()).isEqualTo("NOT_REQUIRED");
-
-        DealQuotationDto revision = approvedRevision(zero, blankDepositDirectDraft());
-
-        assertThat(revision.depositPercent()).isNull();
-        TicketSummaryDto after = summary(deal);
-        assertThat(after.depositPolicy()).isEqualTo("REQUIRED");
-        assertThat(after.depositPolicyReason()).isEqualTo("ใบเสนอราคา " + revision.number() + " ระบุมัดจำ 30%");
-    }
-
-    /** The other direction: a confirmed 50% deal whose approved revision says ไม่รับมัดจำ leaves
-     * the deposit path (this was the PR's "a later revision to 0% does not sync" known risk). */
-    @Test
-    void depositConfirmed_thenARevisionDropsTheDeposit_policyFollowsToNotRequired() {
+    void confirmedDirectQuotation_cannotBeRevised_409_andNoRowIsWritten() {
         long deal = pipelineTicket(salesActor);
         DealQuotationDto fifty = approvedDirectQuotation(deal, salesActor);
         confirmer.confirmOrderFromDirectQuotation(fifty.id(), salesActor);
+        int rowsBefore = quotationRows(deal);
+
+        assertConflict(() -> quotationService.createRevision(fifty.id(), salesActor), "ยืนยันคำสั่งซื้อแล้ว");
+
+        assertThat(quotationRows(deal)).isEqualTo(rowsBefore);
+        assertThat(quotationService.get(fifty.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.APPROVED);
+    }
+
+    /**
+     * Round 3: the two leaks around the revise gate. After the order is confirmed from v1, no OTHER direct
+     * quotation on the deal may be created from it (clone), submitted, or approved -- approving one would supersede
+     * the confirmed v1, move the payable and flip the deposit policy. v1 stays APPROVED, nothing is written.
+     */
+    @Test
+    void afterConfirm_aCloneOfTheConfirmedQuotation_isRefused() {
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto v1 = approvedDirectQuotation(deal, salesActor);
+        confirmer.confirmOrderFromDirectQuotation(v1.id(), salesActor);
+        int rows = quotationRows(deal);
+
+        assertConflict(() -> quotationService.createReorder(v1.id(), salesActor), "ยืนยันคำสั่งซื้อแล้ว");
+
+        assertThat(quotationRows(deal)).isEqualTo(rows);
+        assertStillTheAgreedOrder(deal, v1);
+    }
+
+    @Test
+    void afterConfirm_aCloneOrRevisionDraftOpenedBeforeConfirm_cannotBeSubmitted() {
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto v1 = approvedDirectQuotation(deal, salesActor);
+        DealQuotationDto clone = quotationService.createReorder(v1.id(), salesActor);
+        DealQuotationDto revisionDraft = quotationService.createRevision(v1.id(), salesActor);
+        confirmer.confirmOrderFromDirectQuotation(v1.id(), salesActor);
+
+        assertConflict(() -> quotationService.submit(clone.id(), salesActor), "ยืนยันคำสั่งซื้อจากใบเสนอราคาอื่นแล้ว");
+        assertConflict(() -> quotationService.submit(revisionDraft.id(), salesActor), "ยืนยันคำสั่งซื้อจากใบเสนอราคาอื่นแล้ว");
+
+        assertStillTheAgreedOrder(deal, v1);
+    }
+
+    @Test
+    void afterConfirm_aRevisionSubmittedBeforeConfirm_cannotBeApproved() {
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto v1 = approvedDirectQuotation(deal, salesActor);
+        DealQuotationDto revision = quotationService.createRevision(v1.id(), salesActor);
+        quotationService.update(revision.id(), zeroDepositDirectDraft(), salesActor);
+        quotationService.submit(revision.id(), salesActor);
+        confirmer.confirmOrderFromDirectQuotation(v1.id(), salesActor);
+
+        assertConflict(() -> quotationService.approve(revision.id(), new ApproveRequest(null), salesManagerActor),
+            "ยืนยันคำสั่งซื้อจากใบเสนอราคาอื่นแล้ว");
+
+        assertStillTheAgreedOrder(deal, v1);
+    }
+
+    private void assertStillTheAgreedOrder(long deal, DealQuotationDto v1) {
+        assertThat(quotationService.get(v1.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.APPROVED);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sales.quotation WHERE ticket_id = :id AND doc_status = 'APPROVED'",
+            Map.of("id", deal), Integer.class)).isEqualTo(1);
         assertThat(summary(deal).depositPolicy()).isEqualTo("REQUIRED");
-
-        DealQuotationDto revision = approvedRevision(fifty, zeroDepositDirectDraft());
-
-        TicketSummaryDto after = summary(deal);
-        assertThat(after.depositPolicy()).isEqualTo("NOT_REQUIRED");
-        assertThat(after.depositPolicyReason())
-            .isEqualTo("ใบเสนอราคา " + revision.number() + " ระบุไม่รับมัดจำ (ชำระเต็มจำนวน)");
-        assertThat(policyChangedMessages(deal)).hasSize(1);
-        assertConflict(() -> depositNoticeService.createDraft(deal,
-            new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), salesActor), "ไม่ต้องเก็บมัดจำ");
     }
 
-    /** Wrong-way-round: a policy a person chose (credit customer, typed reason) is never undone by
-     * a revision, and no POLICY_CHANGED is written for the attempt. */
+    /** Review finding 2: confirming the order must not strand the deal's other open direct quotations. */
     @Test
-    void humanCreditCustomer_isKept_whenARevisionAddsADeposit() {
+    void confirmOrder_cancelsTheDealsOtherOpenDirectQuotations_andLeavesTheConfirmedOneAlone() {
         long deal = pipelineTicket(salesActor);
-        DealQuotationDto zero = approvedQuotation(deal, zeroDepositDirectDraft());
-        confirmer.confirmOrderFromDirectQuotation(zero.id(), salesActor);
-        ticketService.waiveDeposit(deal, "CREDIT_CUSTOMER", "ลูกค้าเครดิต 30 วัน", salesActor);
+        DealQuotationDto v1 = approvedDirectQuotation(deal, salesActor);
+        DealQuotationDto clone = quotationService.createReorder(v1.id(), salesActor);          // DRAFT clone
+        DealQuotationDto pending = quotationService.createRevision(v1.id(), salesActor);        // revision ...
+        quotationService.update(pending.id(), zeroDepositDirectDraft(), salesActor);
+        quotationService.submit(pending.id(), salesActor);                                      // ... PENDING_APPROVAL
+        assertThat(quotationService.get(pending.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.PENDING_APPROVAL);
 
-        approvedRevision(zero, directDraft());
+        confirmer.confirmOrderFromDirectQuotation(v1.id(), salesActor);
 
-        TicketSummaryDto after = summary(deal);
-        assertThat(after.depositPolicy()).isEqualTo("CREDIT_CUSTOMER");
-        assertThat(after.depositPolicyReason()).isEqualTo("ลูกค้าเครดิต 30 วัน");
-        assertThat(policyChangedMessages(deal)).hasSize(2); // the sync at confirmation + the waiver
+        assertThat(quotationService.get(v1.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.APPROVED);
+        assertThat(quotationService.get(clone.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.CANCELLED);
+        assertThat(quotationService.get(pending.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.CANCELLED);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sales.ticket_event WHERE ticket_id = :id AND kind = :k",
+            Map.of("id", deal, "k", TicketEventKind.CANCELLED), Integer.class)).isEqualTo(2);
     }
 
-    /** Wrong-way-round, the case the set_by marker exists for: a NOT_REQUIRED a person typed is
-     * not the system's, so a 50% revision leaves it and writes no event. */
+    /** ...and before the order is confirmed the same revision still works. */
     @Test
-    void humanNotRequired_isKept_whenARevisionStillCarriesADeposit() {
+    void unconfirmedApprovedDirectQuotation_canStillBeRevised() {
         long deal = pipelineTicket(salesActor);
         DealQuotationDto fifty = approvedDirectQuotation(deal, salesActor);
-        confirmer.confirmOrderFromDirectQuotation(fifty.id(), salesActor);
-        ticketService.waiveDeposit(deal, "NOT_REQUIRED", "ลูกค้าโอนเต็มจำนวนล่วงหน้า", salesActor);
 
-        approvedRevision(fifty, directDraft());
+        DealQuotationDto revision = quotationService.createRevision(fifty.id(), salesActor);
 
-        TicketSummaryDto after = summary(deal);
-        assertThat(after.depositPolicy()).isEqualTo("NOT_REQUIRED");
-        assertThat(after.depositPolicyReason()).isEqualTo("ลูกค้าโอนเต็มจำนวนล่วงหน้า");
-        assertThat(policyChangedMessages(deal)).hasSize(1); // the waiver only
+        assertThat(revision.docStatus()).isEqualTo(QuotationStatus.DRAFT);
+        assertThat(revision.parentQuotationId()).isEqualTo(fifty.id());
+    }
+
+    private int quotationRows(long ticketId) {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM sales.quotation WHERE ticket_id = :id",
+            Map.of("id", ticketId), Integer.class);
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────

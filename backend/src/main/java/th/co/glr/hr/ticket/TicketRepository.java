@@ -1695,6 +1695,32 @@ public class TicketRepository {
     }
 
     /**
+     * QA-03, ONE rule for "the answered quotation" (payableAmountSelect, paymentTermsRowSql and
+     * {@code FinanceDealRepository#findPayableQuotation} all use it): ACCEPTED, or an APPROVED DEAL_DIRECT quotation
+     * that a DEAL_PROMOTED_FROM_QUOTATION event names -- confirm-order leaves a DEAL_DIRECT quotation APPROVED, and
+     * the event (related QUOTATION = q.quotation_id) is the per-quotation fact that its order was confirmed. An
+     * APPROVED, unconfirmed one is not payable. Table alias {@code q} must be sales.quotation.
+     */
+    public static final String ANSWERED_QUOTATION_SQL =
+        "(q.doc_status = 'ACCEPTED' OR (q.doc_status = 'APPROVED' AND q.origin = 'DEAL_DIRECT'"
+        + " AND EXISTS (SELECT 1 FROM sales.ticket_event pe WHERE pe.ticket_id = q.ticket_id"
+        + " AND pe.kind = '" + TicketEventKind.DEAL_PROMOTED_FROM_QUOTATION + "'"
+        + " AND pe.related_document_type = 'QUOTATION' AND pe.related_document_id = q.quotation_id)))";
+
+    /**
+     * SK-07 (owner ruling 2026-10-28): once a remaining invoice is ISSUED, what the customer owes follows the ISSUED
+     * documents -- the deposit notice's total_payable plus the remaining invoice's grand_total -- because each tax
+     * invoice rounds its own VAT, so the sum may sit a satang away from the deal's computed total. Trailing comma
+     * included; VAT-inclusive variant only (the ex-VAT figure stays the quotation's subtotal).
+     */
+    private static String issuedDocumentsPayable(String ticketIdRef) {
+        return "(SELECT COALESCE(dn.total_payable, 0) + ri.grand_total FROM sales.remaining_invoice ri"
+            + " LEFT JOIN sales.deposit_notice dn ON dn.deposit_notice_id = ri.deposit_notice_id"
+            + " WHERE ri.ticket_id = " + ticketIdRef + " AND ri.status = 'ISSUED' AND ri.grand_total IS NOT NULL"
+            + " ORDER BY ri.issued_at DESC, ri.id DESC LIMIT 1),";
+    }
+
+    /**
      * Full "amount payable" SELECT statement, correlated on {@code ticketIdRef} (either a bind
      * parameter like {@code ":ticketId"} for a standalone query, or an outer-query column
      * reference like {@code "t.ticket_id"} for use as a parenthesized scalar subquery inside a
@@ -1736,10 +1762,12 @@ public class TicketRepository {
             : "(SELECT " + itemsSum;
         return """
             SELECT COALESCE(
+                ISSUED_DOCUMENTS
                 (SELECT QUOTATION_AMOUNT
                    FROM sales.quotation q
-                  WHERE q.ticket_id = %1$s AND q.doc_status = 'ACCEPTED'
-                  ORDER BY CASE q.recipient_type
+                  WHERE q.ticket_id = %1$s AND ANSWERED
+                  ORDER BY CASE WHEN q.doc_status = 'ACCEPTED' THEN 0 ELSE 1 END,
+                           CASE q.recipient_type
                                WHEN 'BUYER' THEN 0
                                WHEN 'OWNER' THEN 1
                                ELSE 2
@@ -1770,6 +1798,8 @@ public class TicketRepository {
                 0
             )
             """.formatted(ticketIdRef)
+            .replace("ISSUED_DOCUMENTS", inclVat ? issuedDocumentsPayable(ticketIdRef) : "")
+            .replace("ANSWERED", ANSWERED_QUOTATION_SQL)
             .replace("QUOTATION_AMOUNT", quotationAmount)
             .replace("ITEMS_AMOUNT", itemsAmount);
     }
@@ -1811,8 +1841,8 @@ public class TicketRepository {
                            END AS basis,
                            CASE WHEN q.remainder_mode = 'CREDIT' AND q.credit_days IS NOT NULL THEN q.credit_days::int END AS credit_days
                       FROM sales.quotation q
-                     WHERE q.ticket_id = %1$s AND q.doc_status IN ('ACCEPTED', 'ISSUED', 'SENT')
-                     ORDER BY CASE WHEN q.doc_status = 'ACCEPTED' THEN 0 ELSE 1 END,
+                     WHERE q.ticket_id = %1$s AND (ANSWERED OR q.doc_status IN ('ISSUED', 'SENT'))
+                     ORDER BY CASE q.doc_status WHEN 'ACCEPTED' THEN 0 WHEN 'APPROVED' THEN 1 ELSE 2 END,
                               CASE q.recipient_type
                                   WHEN 'BUYER' THEN 0
                                   WHEN 'OWNER' THEN 1
@@ -1827,7 +1857,7 @@ public class TicketRepository {
                           WHERE dr.ticket_id = %1$s
                             AND (SELECT t2.fulfillment_status FROM sales.ticket t2 WHERE t2.ticket_id = %1$s)
                                 = 'FULLY_DELIVERED') dv
-            """.formatted(ticketIdRef);
+            """.formatted(ticketIdRef).replace("ANSWERED", ANSWERED_QUOTATION_SQL);
     }
 
     /** The derived due DATE as a scalar subquery (NULL when there is none) -- the list-scope predicate's twin. */
@@ -2244,6 +2274,17 @@ public class TicketRepository {
                SET quotation_only = FALSE, updated_at = now()
              WHERE ticket_id = :id AND quotation_only = TRUE
             """, Map.of("id", ticketId));
+    }
+
+    /** The DEAL_PROMOTED_FROM_QUOTATION event names the quotation whose confirm-order made the deal an order. */
+    public boolean isOrderConfirmedFromQuotation(long ticketId, long quotationId) {
+        Boolean value = jdbc.queryForObject("""
+            SELECT EXISTS(SELECT 1 FROM sales.ticket_event
+                           WHERE ticket_id = :ticketId AND kind = :kind
+                             AND related_document_type = 'QUOTATION' AND related_document_id = :quotationId)
+            """, Map.of("ticketId", ticketId, "kind", TicketEventKind.DEAL_PROMOTED_FROM_QUOTATION,
+                "quotationId", quotationId), Boolean.class);
+        return Boolean.TRUE.equals(value);
     }
 
     /**

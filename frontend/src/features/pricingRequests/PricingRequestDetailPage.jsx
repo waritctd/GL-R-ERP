@@ -9,6 +9,7 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { Button } from '../../components/common/Button.jsx';
 import { CollapsibleSection } from '../../components/common/CollapsibleSection.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
+import { ConfirmOrderDialog } from '../quotations/ConfirmOrderDialog.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
 import { InfoTip } from '../../components/common/InfoTip.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
@@ -883,6 +884,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const [emailDrafts, setEmailDrafts] = useState({});
   const [receiveClientRequestIds, setReceiveClientRequestIds] = useState({});
   const [confirmAction, setConfirmAction] = useState(null);
+  // SK-02: confirm-order is irreversible -> dialog first.
+  const [confirmingOrder, setConfirmingOrder] = useState(false);
   // Review remediation (COMMIT 5, P1 finding 3): the customer-change revision UI now reuses
   // PricingRequestCreateModal in mode="revision" (seeded from the current request, full item
   // editing, catalog picker, unit select) instead of the old inline reason-only form that copied
@@ -4322,7 +4325,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   ลูกค้ายอมรับใบเสนอราคาแล้ว — ยืนยันคำสั่งซื้อเพื่อเริ่มขั้นตอนรับมัดจำและนำเข้าสินค้า
                 </p>
                 <Button type="button" variant="primary" className="self-start" disabled={confirmOrder.isPending}
-                  onClick={() => confirmOrder.mutate()}>
+                  onClick={() => setConfirmingOrder(true)}>
                   ยืนยันคำสั่งซื้อ
                 </Button>
               </div>
@@ -4363,6 +4366,13 @@ export function PricingRequestDetailPage({ user, showToast }) {
         </Panel>
       ) : null}
 
+      <ConfirmOrderDialog
+        open={confirmingOrder}
+        number={summary?.requestCode}
+        busy={confirmOrder.isPending}
+        onCancel={() => setConfirmingOrder(false)}
+        onConfirm={() => { setConfirmingOrder(false); confirmOrder.mutate(); }}
+      />
       <ConfirmDialog
         open={Boolean(confirmAction)}
         title={confirmAction?.type === 'approveDecision' ? 'อนุมัติราคาขาย'

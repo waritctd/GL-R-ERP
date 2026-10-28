@@ -2209,7 +2209,7 @@ describe('TicketDetailPage', () => {
       await waitFor(() => expect(location()).toBe(expectedLocation));
     });
 
-    it('renders exactly one "ยืนยันคำสั่งซื้อ" control (the sticky primary), and clicking it confirms the order directly', async () => {
+    it('renders exactly one "ยืนยันคำสั่งซื้อ" control (the sticky primary); clicking it opens a confirm dialog first (SK-02), and only the dialog confirms', async () => {
       api.tickets.get.mockResolvedValue({
         ticket: buildTicket({ summary: { lifecycle: 'ACTIVE', salesStage: 'QUOTE_BUYER', createdById: 1, status: 'draft' } }),
       });
@@ -2232,10 +2232,24 @@ describe('TicketDetailPage', () => {
 
       fireEvent.click(stickyButtons[0]);
 
-      await waitFor(() => expect(api.pricingRequests.confirmOrder).toHaveBeenCalledWith(
+      // SK-02: irreversible (the deal can no longer go below ขั้น 10) -> a dialog first, nothing sent yet.
+      const dialog = await screen.findByRole('dialog', { name: 'ยืนยันคำสั่งซื้อ' });
+      expect(within(dialog).getByText(/ย้อนกลับไม่ได้/)).not.toBeNull();
+      expect(api.pricingRequests.confirmOrder).not.toHaveBeenCalled();
+
+      // Cancelling sends nothing.
+      fireEvent.click(within(dialog).getByRole('button', { name: 'ยกเลิก' }));
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'ยืนยันคำสั่งซื้อ' })).toBeNull());
+      expect(api.pricingRequests.confirmOrder).not.toHaveBeenCalled();
+
+      // Confirming sends exactly once.
+      fireEvent.click(screen.getAllByRole('button', { name: /ยืนยันคำสั่งซื้อ/ })[0]);
+      const again = await screen.findByRole('dialog', { name: 'ยืนยันคำสั่งซื้อ' });
+      fireEvent.click(within(again).getByRole('button', { name: 'ยืนยันคำสั่งซื้อ' }));
+      await waitFor(() => expect(api.pricingRequests.confirmOrder).toHaveBeenCalledTimes(1));
+      expect(api.pricingRequests.confirmOrder).toHaveBeenCalledWith(
         501, expect.objectContaining({ clientRequestId: expect.any(String) }),
-      ));
-      expect(screen.getAllByRole('button', { name: /ยืนยันคำสั่งซื้อ/ })).toHaveLength(1);
+      );
     });
   });
 
@@ -2469,6 +2483,9 @@ describe('TicketDetailPage', () => {
       expect(actionBarOf(primary).textContent).not.toMatch(/เสนอ(ใบ)?ราคา(เจ้าของโครงการ|ผู้ซื้อ)/);
 
       fireEvent.click(primary);
+      const dialog = await screen.findByRole('dialog', { name: 'ยืนยันคำสั่งซื้อ' });
+      expect(api.pricingRequests.confirmOrder).not.toHaveBeenCalled(); // SK-02: dialog first
+      fireEvent.click(within(dialog).getByRole('button', { name: 'ยืนยันคำสั่งซื้อ' }));
       await waitFor(() => expect(api.pricingRequests.confirmOrder).toHaveBeenCalledWith(501, expect.anything()));
     });
   });

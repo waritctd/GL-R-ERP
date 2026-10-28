@@ -301,7 +301,11 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
         // just because payableAmount() used to be blind to the new chain's own quotation total.
         BigDecimal paid = jdbc.queryForObject(
             "SELECT amount FROM sales.payment_receipt WHERE ticket_id = :id", Map.of("id", ticketId), BigDecimal.class);
-        assertThat(paid).isEqualByComparingTo(draftNotice.depositAmount());
+        // QA-01 (owner ruling 2026-10-28): the receipt is the notice's VAT-INCLUSIVE totalPayable
+        // (deal payable is VAT-inclusive), NOT the pre-VAT depositAmount.
+        assertThat(issuedNotice.vatAmount().signum()).as("fixture must carry VAT").isPositive();
+        assertThat(paid).isEqualByComparingTo(issuedNotice.totalPayable());
+        assertThat(paid).isGreaterThan(draftNotice.depositAmount());
         assertThat(paid).isLessThan(payableBeforePayment); // strictly partial — not an overpayment by construction.
         String note = jdbc.queryForObject(
             "SELECT note FROM sales.payment_receipt WHERE ticket_id = :id", Map.of("id", ticketId), String.class);

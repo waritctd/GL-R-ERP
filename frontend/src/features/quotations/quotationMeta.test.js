@@ -12,6 +12,7 @@ import {
   canEditDealQuotation,
   canPromoteDealQuotationToDeal,
   canReviseDealQuotation,
+  orderConfirmationOf,
   canSubmitDealQuotation,
   canTransitionDealQuotation,
   canViewDealQuotation,
@@ -225,6 +226,23 @@ describe('canSubmitDealQuotation / canCancelDealQuotation / canReviseDealQuotati
     expect(canReviseDealQuotation(salesOwner, quotation({ docStatus: 'DRAFT' }))).toBe(false);
     expect(canReviseDealQuotation(salesOwner, quotation({ docStatus: 'PENDING_APPROVAL' }))).toBe(false);
     expect(canReviseDealQuotation(otherSales, quotation({ docStatus: 'APPROVED' }))).toBe(false);
+  });
+
+  // Owner ruling 2026-10-28: once the order is confirmed from a direct quotation it is the agreed order -- no
+  // revise action (the server's createRevision answers 409). The third argument is the deal's order-confirmation
+  // fact; null means "unknown" (still loading / errored) and hides the action.
+  it('revise is hidden once the order is confirmed or while that is unknown, shown only when known-unconfirmed', () => {
+    const approved = quotation({ docStatus: 'APPROVED' });
+    expect(canReviseDealQuotation(salesOwner, approved, { confirmed: false })).toBe(true);
+    expect(canReviseDealQuotation(salesOwner, approved, { confirmed: true })).toBe(false);
+    expect(canReviseDealQuotation(salesManager, approved, { confirmed: true })).toBe(false);
+    expect(canReviseDealQuotation(salesOwner, approved, null)).toBe(false);
+  });
+
+  it('orderConfirmationOf reads the promotion event and the quotation it names from the ticket events', () => {
+    expect(orderConfirmationOf(undefined)).toBeNull();
+    expect(orderConfirmationOf([{ kind: 'COMMENT' }])).toEqual({ confirmed: false });
+    expect(orderConfirmationOf([{ kind: 'DEAL_PROMOTED_FROM_QUOTATION' }])).toEqual({ confirmed: true });
   });
 });
 

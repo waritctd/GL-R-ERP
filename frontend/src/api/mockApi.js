@@ -4248,6 +4248,18 @@ function pushEvent(ticket, actor, kind, fromStatus, toStatus, message, itemSnaps
   ticket.events.push({ id: nextId, ticketId: ticket.id, actorId: actor.id, actorName: actor.name, kind, fromStatus, toStatus, message, createdAt: new Date().toISOString(), itemSnapshot });
 }
 
+// Mirrors TicketRepository#isOrderConfirmedFromQuotation / hasPromotionFromQuotationEvent (owner ruling 2026-10-28):
+// the promotion event names the quotation the order was confirmed from; once it exists no OTHER direct quotation
+// on the deal may be submitted/approved, and the confirmed one may not be revised or cloned.
+function mockConfirmedQuotationEvent(ticket) {
+  return ticket?.events?.find((e) => e.kind === 'DEAL_PROMOTED_FROM_QUOTATION') ?? null;
+}
+function requireNoOtherDirectQuotationAfterConfirm(ticket, row) {
+  const promoted = mockConfirmedQuotationEvent(ticket);
+  if ((row.origin || 'DEAL_DIRECT') === 'PRICING_REQUEST' || !promoted || ticket.orderConfirmedQuotationId === row.id) return;
+  fail('ดีลนี้ยืนยันคำสั่งซื้อจากใบเสนอราคาอื่นแล้ว จึงส่ง/อนุมัติใบเสนอราคานี้ไม่ได้', 409);
+}
+
 function addNotification(userId, ticketId, ticketCode, type, message) {
   const nextId = Math.max(...db.notifications.map((n) => n.id), 0) + 1;
   db.notifications.unshift({ id: nextId, userId, ticketId, ticketCode, type, message, read: false, createdAt: new Date().toISOString() });
@@ -4483,6 +4495,10 @@ function mockStageDecisions(ticket, user) {
       blockedReason = `ดีลไม่ได้อยู่ในสถานะ ACTIVE (${ticket.lifecycle}) จึงแก้ไขขั้นตอนนี้ไม่ได้`;
     } else if (code === ticket.salesStage) {
       blockedReason = `ดีลนี้อยู่ในขั้นตอน ${code} อยู่แล้ว`;
+    } else if (dealStageIndex(ticket.salesStage) >= dealStageIndex('ORDER_RECEIVED')
+        && dealStageIndex(code) < dealStageIndex('ORDER_RECEIVED')) {
+      // QA-05: mirrors TicketService.requireStageMoveAllowed -- no rewind below ขั้น 10 once the order is confirmed.
+      blockedReason = 'ย้อนสถานะกลับก่อนขั้นรับคำสั่งซื้อไม่ได้ — ยืนยันคำสั่งซื้อไปแล้ว';
     } else if (!mockIsOnRoute(ticket.entryChannel, code)) {
       // Rung 6 — the deal's entry-channel route, checked BEFORE the fact gates (mirrors
       // TicketService.requireStageMoveAllowed): an off-route target's remedy is the channel, not
@@ -7809,7 +7825,7 @@ async function mockConfirmDepositPaid(id) {
   requireActive(ticket);
   if (ticket.paymentStatus !== 'DEPOSIT_NOTICE_ISSUED') fail('ต้องออกใบแจ้งรับมัดจำก่อนจึงจะยืนยันรับชำระมัดจำได้', 409);
   const notice = latestIssuedDepositNotice(ticket.id);
-  const amount = notice?.depositAmount ?? moneyValue(payableAmount(ticket) * 0.5);
+  const amount = notice?.totalPayable ?? moneyValue(payableAmount(ticket) * 0.5); // QA-01: VAT-inclusive
   if (amount <= 0) fail('ไม่พบยอดมัดจำสำหรับบันทึกรับชำระ', 409);
   recordPaymentForTicket(ticket, user, {
     kind: 'DEPOSIT',
@@ -17254,6 +17270,7 @@ export const api = {
       if (!row) fail('ไม่พบใบเสนอราคานี้', 404);
       const ticket = db.tickets.find((t) => t.id === row.ticketId);
       requireDealQuotationWriteAccess(ticket, user, row.origin);
+      requireNoOtherDirectQuotationAfterConfirm(ticket, row);
       // GLA-123 slice S2: submit is now LIVE for a PRICING_REQUEST-origin quotation too — mirrors
       // DealQuotationService#submit, which widened its own origin predicate rather than keeping
       // this refusal. Every validation below already applied to both origins in the mock; only
@@ -17327,6 +17344,7 @@ export const api = {
       if ((row.origin || 'DEAL_DIRECT') === 'PRICING_REQUEST') {
         return mockApproveDealQuotationPricingRequestOrigin(row, payload, user);
       }
+      requireNoOtherDirectQuotationAfterConfirm(db.tickets.find((t) => t.id === row.ticketId), row);
       if (!canTransitionDealQuotation(row.docStatus, 'APPROVED')) {
         fail(`อนุมัติไม่ได้ในสถานะ '${row.docStatus}'`, 409);
       }
@@ -17379,9 +17397,6 @@ export const api = {
         }
         ancestorId = ancestor.parentQuotationId;
       }
-      // #1173 review F1 (DealQuotationService#approve -> TicketService#followQuotationDepositPolicy).
-      const dealTicket = db.tickets.find((t) => t.id === row.ticketId);
-      if (dealTicket) followQuotationDepositPolicy(dealTicket, row, user);
       return delay({ quotation: buildDealQuotationDto(row) });
     },
 
@@ -17523,6 +17538,10 @@ export const api = {
         if (parent.docStatus !== 'APPROVED') {
           fail('สร้างฉบับแก้ไขได้เฉพาะใบเสนอราคาที่อนุมัติแล้วเท่านั้น', 409);
         }
+        // Owner ruling 2026-10-28: the confirmed quotation is the agreed order (mirrors DealQuotationService).
+        if (ticket?.orderConfirmedQuotationId === parent.id) {
+          fail('ใบเสนอราคานี้ยืนยันคำสั่งซื้อแล้ว จึงสร้างฉบับแก้ไขไม่ได้', 409);
+        }
       }
       // M3: mirrors DealQuotationRepository#hasOpenRevision's own guard -- a double-tap must not
       // silently mint two children sharing the same {base}-{n} number.
@@ -17551,6 +17570,9 @@ export const api = {
       requireDealQuotationWriteAccess(ticket, user, source.origin);
       if (source.docStatus !== 'APPROVED') {
         fail('สร้างจากใบเดิมได้เฉพาะใบเสนอราคาที่อนุมัติแล้วเท่านั้น', 409);
+      }
+      if (ticket?.orderConfirmedQuotationId === source.id) {
+        fail('ใบเสนอราคานี้ยืนยันคำสั่งซื้อแล้ว จึงสร้างจากใบเดิมไม่ได้', 409);
       }
       const clone = mintDealQuotationReorder(source, user);
       mockDealQuotations.push(clone);
@@ -17598,6 +17620,7 @@ export const api = {
       ticket.quotationOnly = false;
       ticket.status = 'quotation_issued';
       ticket.updatedAt = now;
+      ticket.orderConfirmedQuotationId = row.id; // mock-internal: which quotation the order was confirmed from
       pushEvent(ticket, user, 'DEAL_PROMOTED_FROM_QUOTATION', 'draft', 'quotation_issued',
         `ยืนยันคำสั่งซื้อจากใบเสนอราคา ${row.number}`);
       // DealQuotationService#ticketItemsFromQuotation: goods lines only (no ADJUSTMENT, no

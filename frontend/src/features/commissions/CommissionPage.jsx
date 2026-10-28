@@ -684,7 +684,7 @@ export function CommissionPage({ user, showToast }) {
         return;
       }
       setLoadedTicket(summary);
-      const defaultGross = summary.amountPayableExVat ?? summary.amountPayable;
+      const defaultGross = summary.amountPayable;
       updateCreateForm('grossAmount', defaultGross != null ? String(defaultGross) : '');
     } catch (error) {
       setLoadedTicket(null);
