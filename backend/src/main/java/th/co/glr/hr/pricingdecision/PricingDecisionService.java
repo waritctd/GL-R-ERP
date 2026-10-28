@@ -421,6 +421,13 @@ public class PricingDecisionService {
             .orElseThrow(() -> new ApiException(HttpStatus.CONFLICT, "ไม่พบรายการต้นทุนที่ผูกกับมติราคานี้"));
 
         BigDecimal roundedManualCost = manualCost == null ? null : money4(manualCost);
+        if (roundedManualCost != null && (costingItem.normalizedQuantityPieces() == null
+                || costingItem.normalizedQuantityPieces().signum() == 0)) {
+            // No piece count (no sqm-per-piece on a PER_SQM basis): per-piece cost x 0 would total 0 THB.
+            throw new ApiException(HttpStatus.CONFLICT,
+                "รายการนี้ยังไม่มีจำนวนแผ่น (ไม่มี ตร.ม./แผ่น) จึงใส่ต้นทุนเองไม่ได้ "
+                    + "กรุณาให้ฝ่ายนำเข้าระบุ ตร.ม./แผ่น ในใบเสนอราคาโรงงานก่อน");
+        }
         if (roundedManualCost != null) {
             costings.applyOverride(costingItem.id(), roundedManualCost, request.reason(), actor.id(),
                 costingItem.fxRate(), costingItem.calculationConfigVersion());

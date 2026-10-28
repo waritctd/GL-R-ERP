@@ -1579,6 +1579,11 @@ public class TicketRepository {
      * system's. Returns the rowcount; 0 means leave the policy alone, e.g. a waiver committed first.
      */
     public int syncDepositPolicyFromQuotation(long ticketId, String expected, String policy, String reason) {
+        // Dropping to NOT_REQUIRED is refused once a deposit notice is ISSUED: money was asked for.
+        String noIssuedNotice = DepositPolicy.NOT_REQUIRED.equals(policy) ? """
+               AND NOT EXISTS (SELECT 1 FROM sales.deposit_notice d
+                                WHERE d.ticket_id = sales.ticket.ticket_id AND d.status = 'ISSUED')
+            """ : "";
         return jdbc.update("""
             UPDATE sales.ticket
                SET deposit_policy = :policy, deposit_policy_reason = :reason,
@@ -1587,7 +1592,7 @@ public class TicketRepository {
                AND deposit_policy = :expected
                AND deposit_policy_set_by IS NULL
                AND payment_status = 'CUSTOMER_CONFIRMED'
-            """,
+            """ + noIssuedNotice,
             new MapSqlParameterSource()
                 .addValue("policy", policy)
                 .addValue("reason", reason)

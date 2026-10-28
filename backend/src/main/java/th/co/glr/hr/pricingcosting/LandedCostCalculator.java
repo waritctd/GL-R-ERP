@@ -426,8 +426,12 @@ public class LandedCostCalculator {
      */
     private PricingCostingWriteItem uncostableWriteItem(ItemPhysicals item, PricingFormulaConfigDto formulaConfig) {
         ResolvedSource source = item.source();
-        BigDecimal insurancePerPiece = money4(
+        // goods_cost_thb / insurance_cost_thb are NOT NULL (V156 left them so): a line whose goods
+        // cost could not be computed (missing sqm on a PER_SQM basis) records 0 here and the
+        // uncostable reason says why. ponytail: nullable columns via migration if 0 misleads.
+        BigDecimal insurancePerPiece = item.insuranceThb() == null ? ZERO : money4(
             item.insuranceThb().divide(item.qtyPieces(), 8, RoundingMode.HALF_UP));
+        BigDecimal goodsCostPerPiece = item.goodsCostPerPiece() == null ? ZERO : item.goodsCostPerPiece();
         return new PricingCostingWriteItem(
             source.requestItem().id(),
             source.quote().id(),
@@ -443,7 +447,7 @@ public class LandedCostCalculator {
             source.requestItem().requestedQty(),
             source.requestItem().requestedUnit(),
             source.requestItem().requestedUnitBasis(),
-            item.qtyPieces(),
+            item.qtyPieces() == null ? ZERO : item.qtyPieces(), // NOT NULL downstream (V72): 0 = unknown, line is uncostable
             source.quoteItem().linearMPerUnit(),
             item.sqmPerPiece(),
             source.quoteItem().piecesPerBox(),
@@ -453,7 +457,7 @@ public class LandedCostCalculator {
             item.fx().fetchedAt(),
             formulaConfig.formulaConfigId(),
             formulaConfig.version(),
-            item.goodsCostPerPiece(),
+            goodsCostPerPiece,
             null,               // freight_cost_thb — the freight table cannot be looked up
             insurancePerPiece,
             null,               // import_duty_thb — duty applies to CIF, which needs freight
@@ -477,22 +481,32 @@ public class LandedCostCalculator {
         FxSnapshot fx = resolveFx(source.quoteItem().currency());
 
         BigDecimal rawThb = source.quoteItem().rawUnitPrice().multiply(fx.rate());
-        BigDecimal goodsCostPerPiece = money4(pricePerPiece(rawThb, source.quoteItem().unitBasis(),
-            sqmPerPiece, piecesPerBox, linearMPerUnit, source.requestItem()));
-        BigDecimal qtyPieces = quantityToPieces(source.requestItem().requestedQty(),
-            source.requestItem().requestedUnitBasis(), sqmPerPiece, piecesPerBox, linearMPerUnit, source.requestItem());
-        // sqmPerPiece is null for a line whose sqm could not be resolved (resolveSqmPerPiece's P0
-        // hardening). It is then UNCOSTABLE — set aside in costShipment, never routed through the
-        // freight grouping that is qtySqm's only consumer — so a null qtySqm here is correct, not a
-        // gap. (The goods cost above still computes: a null sqm only ever reaches a quote basis that
-        // does not need sqm — see resolveSqmPerPiece's Javadoc.)
-        BigDecimal qtySqm = sqmPerPiece == null ? null : sqmPerPiece.multiply(qtyPieces);
-        // C = P x E, goods cost in THB, for this item's FULL requested quantity (a TOTAL, not a
-        // per-piece figure) — see PricingFormulaEngine's class Javadoc for why C must be a total
-        // (TC = (C+i+F)x(1+T)xcost_buffer + S is dimensionally a total, divided by Q at the very
-        // end to recover a per-sqm unit cost).
-        BigDecimal goodsCostThb = money4(goodsCostPerPiece.multiply(qtyPieces));
-        BigDecimal insuranceThb = formulaEngine.insurance(goodsCostThb, formulaConfig);
+        // No sqm-per-piece AND a basis that needs it (quote or requested PER_SQM): the conversions
+        // below would throw 422 for the whole shipment (requireFactor) before this line could be set
+        // aside. Leave every piece-derived figure null instead; uncostableReason() sees the null
+        // sqm and lists the line as uncostable while the shipment's other lines still cost.
+        boolean sqmNeededButMissing = sqmPerPiece == null
+            && (UnitBasis.PER_SQM.equals(source.quoteItem().unitBasis())
+                || UnitBasis.PER_SQM.equals(source.requestItem().requestedUnitBasis()));
+        BigDecimal goodsCostPerPiece = null;
+        BigDecimal qtyPieces = null;
+        BigDecimal qtySqm = null;
+        BigDecimal goodsCostThb = null;
+        BigDecimal insuranceThb = null;
+        if (!sqmNeededButMissing) {
+            goodsCostPerPiece = money4(pricePerPiece(rawThb, source.quoteItem().unitBasis(),
+                sqmPerPiece, piecesPerBox, linearMPerUnit, source.requestItem()));
+            qtyPieces = quantityToPieces(source.requestItem().requestedQty(),
+                source.requestItem().requestedUnitBasis(), sqmPerPiece, piecesPerBox, linearMPerUnit, source.requestItem());
+            // sqmPerPiece is null for a line whose sqm could not be resolved (resolveSqmPerPiece's P0
+            // hardening). It is then UNCOSTABLE: set aside in costShipment, never routed through the
+            // freight grouping that is qtySqm's only consumer, so a null qtySqm here is correct.
+            qtySqm = sqmPerPiece == null ? null : sqmPerPiece.multiply(qtyPieces);
+            // C = P x E, goods cost in THB, for this item's FULL requested quantity (a TOTAL, not a
+            // per-piece figure); see PricingFormulaEngine's class Javadoc.
+            goodsCostThb = money4(goodsCostPerPiece.multiply(qtyPieces));
+            insuranceThb = formulaEngine.insurance(goodsCostThb, formulaConfig);
+        }
         BigDecimal thicknessMm = resolveThicknessMm(source.requestItem(), catalogKeys);
         String originCountryCode = resolveOriginCountryCode(source.requestItem(), catalogKeys);
         String productType = resolveProductType(source.requestItem());
@@ -536,11 +550,9 @@ public class LandedCostCalculator {
             fromCatalog = key == null ? null : key.thicknessMm();
         }
         // Catalog wins; fall back to the Sales-entered thickness on the request item (V185) when
-        // the catalogue carries none — a free-text line (no catalog row), a catalogue row still
-        // blank, or an in-flight deal submitted before the submit-time write-back
-        // (PricingRequestRepository#fillCatalogThicknessFromItems) ran. Nothing is priced on a
-        // guessed thickness: this is a value a human (Sales) actually entered for THIS line, the
-        // same provenance the write-back persists to the catalogue. Mirrors resolveSqmPerPiece's
+        // the catalogue carries none (a free-text line or a blank catalogue row). It is never
+        // written to the catalogue: unreviewed. Nothing is priced on a guessed thickness; this is
+        // a value a human (Sales) entered for THIS line. Mirrors resolveSqmPerPiece's
         // catalog-then-request fallback shape.
         return fromCatalog != null ? fromCatalog : requestItem.thicknessMm();
     }

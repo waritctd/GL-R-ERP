@@ -838,6 +838,23 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(depositPolicyRow(noticeIssued)).containsEntry("deposit_policy", DepositPolicy.REQUIRED);
     }
 
+    /** A deposit notice already ISSUED pins the policy at REQUIRED even while the payment track is
+     * still CUSTOMER_CONFIRMED: approving a 0% revision must not flip it (0 rows, so the service
+     * records no POLICY_CHANGED event). The no-notice flip is pinned by the first sync test; the
+     * NOT_REQUIRED -> REQUIRED direction is unchanged by a notice. */
+    @Test
+    void syncDepositPolicyFromQuotation_keepsRequired_whileADepositNoticeIsIssued() {
+        long ticket = confirmedTicket();
+        jdbc.update("""
+            INSERT INTO sales.deposit_notice (ticket_id, version, status, customer_name, deposit_percent,
+                subtotal, deposit_amount, vat_percent, vat_amount, total_payable)
+            VALUES (:id, 1, 'ISSUED', 'x', 0.3, 0, 0, 0.07, 0, 0)""", Map.of("id", ticket));
+
+        assertThat(tickets.syncDepositPolicyFromQuotation(ticket, DepositPolicy.REQUIRED,
+            DepositPolicy.NOT_REQUIRED, "ใบเสนอราคา QT-5 ระบุไม่รับมัดจำ (ชำระเต็มจำนวน)")).isZero();
+        assertThat(depositPolicyRow(ticket)).containsEntry("deposit_policy", DepositPolicy.REQUIRED);
+    }
+
     private long confirmedTicket() {
         long ticketId = tickets.create(sampleTicket(), tickets.nextTicketCode(), actorId, "พนักงานขาย");
         jdbc.update("UPDATE sales.ticket SET payment_status = 'CUSTOMER_CONFIRMED' WHERE ticket_id = :id",
