@@ -179,6 +179,20 @@ describe('QuotationEditorPage — ยืนยันคำสั่งซื้�
     expect(showToast).toHaveBeenCalledWith('success', 'ยืนยันคำสั่งซื้อแล้ว');
   });
 
+  it('a double-click on the dialog\'s confirm sends ONE confirm request (VW-05)', async () => {
+    api.dealQuotations.get.mockResolvedValue({ quotation: quotation() });
+    api.dealQuotations.promoteToDeal.mockReturnValue(new Promise(() => {})); // in flight: never settles
+    renderEditor();
+
+    fireEvent.click(await screen.findByRole('button', { name: PROMOTE }));
+    const confirmBtn = within(screen.getByRole('dialog')).getByRole('button', { name: PROMOTE });
+    fireEvent.click(confirmBtn);
+    fireEvent.click(confirmBtn);
+    await waitFor(() => expect(api.dealQuotations.promoteToDeal).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 50)); // let a second request surface
+    expect(api.dealQuotations.promoteToDeal).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     [409, 'สร้างดีลได้เฉพาะใบเสนอราคาที่อนุมัติแล้วเท่านั้น (ปัจจุบัน: SUPERSEDED)'],
     [403, 'ไม่มีสิทธิ์เข้าถึงรายการนี้'],

@@ -835,11 +835,16 @@ public final class DealQuotationDtos {
          * Non-null ONLY on a TILE row of a document whose {@code priceMode} is {@code MIXED}; on
          * every other row it is null and the document's mode applies
          * ({@code WastageCalculator#rowPriceMode} is the one rule). */
-        String priceMode
+        String priceMode,
+        /** V194 — "IN_THAILAND" | "IN_TRANSIT" when this row came from a stock-flagged pricing-request
+         * line (owner ruling 2026-10-28: stock lines skip import, so they carry no import lead time);
+         * null = สั่งนำเข้า, and null on every DEAL_DIRECT row. Read-only: set at insert from the
+         * pricing-request item, never accepted from the client. */
+        String stockSource
     ) {
         /** Ruling 3 (2026-09-30): the account view -- net unit price and line amount stay; every list-price / discount / CEO pricing field is emptied. */
         public DealQuotationItemDto withoutPriceInternals() {
-            return new DealQuotationItemDto(id, seq, locationLabel, null, productCode, brand, model, color, texture, sizeText, thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput, wastageMode, wastageValue, piecesPerBox, null, null, originCountry, leadTimeMinDays, leadTimeMaxDays, itemNotes, piecesPerSqm, piecesBeforeWastage, piecesAfterWastage, piecesFinal, boxes, netUnitPrice, lineAmount, descriptionLine, sizeLine, null, lineType, quantity, unit, null, null, adjustmentDeadline, null, null, hasPicture, picturePlacement, pictureUrl, sqmPerBox, roundToFullBox, false, null, null, null, null, null, null, directNetPriceSqm, null);
+            return new DealQuotationItemDto(id, seq, locationLabel, null, productCode, brand, model, color, texture, sizeText, thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput, wastageMode, wastageValue, piecesPerBox, null, null, originCountry, leadTimeMinDays, leadTimeMaxDays, itemNotes, piecesPerSqm, piecesBeforeWastage, piecesAfterWastage, piecesFinal, boxes, netUnitPrice, lineAmount, descriptionLine, sizeLine, null, lineType, quantity, unit, null, null, adjustmentDeadline, null, null, hasPicture, picturePlacement, pictureUrl, sqmPerBox, roundToFullBox, false, null, null, null, null, null, null, directNetPriceSqm, null, stockSource);
         }
 
         /** This item carrying {@code value} as its own {@link #priceMode} — the same appended-field
@@ -854,7 +859,49 @@ public final class DealQuotationDtos {
                 unit, specialPriceSqm, adjustmentPct, adjustmentDeadline, specialPriceLine, adjustmentAmount,
                 hasPicture, picturePlacement, pictureUrl, sqmPerBox, roundToFullBox,
                 priceChangedFromCeo, ceoListUnitPrice, ceoDiscountPct, ceoSpecialPriceSqm, ceoDirectNetPrice,
-                ceoNetUnitPrice, listPriceSqm, directNetPriceSqm, value);
+                ceoNetUnitPrice, listPriceSqm, directNetPriceSqm, value, stockSource);
+        }
+
+        /** The pre-stockSource canonical shape (58 components) -- stockSource null (import). */
+        public DealQuotationItemDto(
+            long id, int seq, String locationLabel, Long catalogPriceId, String productCode,
+            String brand, String model, String color, String texture, String sizeText,
+            BigDecimal thicknessMm, BigDecimal sqmPerPiece, String quantityMode, BigDecimal areaSqm,
+            Integer piecesInput, String wastageMode, BigDecimal wastageValue, Integer piecesPerBox,
+            BigDecimal unitPrice, BigDecimal discountPct, String originCountry,
+            Integer leadTimeMinDays, Integer leadTimeMaxDays, String itemNotes,
+            BigDecimal piecesPerSqm, int piecesBeforeWastage, int piecesAfterWastage, int piecesFinal,
+            Integer boxes, BigDecimal netUnitPrice, BigDecimal lineAmount,
+            String descriptionLine, String sizeLine, String calculationLine,
+            String lineType, BigDecimal quantity, String unit, BigDecimal specialPriceSqm,
+            BigDecimal adjustmentPct, LocalDate adjustmentDeadline, String specialPriceLine,
+            BigDecimal adjustmentAmount, boolean hasPicture, String picturePlacement, String pictureUrl,
+            BigDecimal sqmPerBox, boolean roundToFullBox, boolean priceChangedFromCeo,
+            BigDecimal ceoListUnitPrice, BigDecimal ceoDiscountPct, BigDecimal ceoSpecialPriceSqm,
+            BigDecimal ceoDirectNetPrice, BigDecimal ceoNetUnitPrice, BigDecimal listPriceSqm,
+            BigDecimal directNetPriceSqm, String priceMode) {
+            this(id, seq, locationLabel, catalogPriceId, productCode, brand, model, color, texture, sizeText,
+                thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput, wastageMode, wastageValue,
+                piecesPerBox, unitPrice, discountPct, originCountry, leadTimeMinDays, leadTimeMaxDays, itemNotes,
+                piecesPerSqm, piecesBeforeWastage, piecesAfterWastage, piecesFinal, boxes, netUnitPrice,
+                lineAmount, descriptionLine, sizeLine, calculationLine, lineType, quantity, unit,
+                specialPriceSqm, adjustmentPct, adjustmentDeadline, specialPriceLine, adjustmentAmount,
+                hasPicture, picturePlacement, pictureUrl, sqmPerBox, roundToFullBox, priceChangedFromCeo,
+                ceoListUnitPrice, ceoDiscountPct, ceoSpecialPriceSqm, ceoDirectNetPrice, ceoNetUnitPrice,
+                listPriceSqm, directNetPriceSqm, priceMode, null);
+        }
+
+        /** This item carrying {@code value} as its {@link #stockSource}. */
+        public DealQuotationItemDto withStockSource(String value) {
+            return new DealQuotationItemDto(id, seq, locationLabel, catalogPriceId, productCode, brand, model,
+                color, texture, sizeText, thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput,
+                wastageMode, wastageValue, piecesPerBox, unitPrice, discountPct, originCountry, leadTimeMinDays,
+                leadTimeMaxDays, itemNotes, piecesPerSqm, piecesBeforeWastage, piecesAfterWastage, piecesFinal,
+                boxes, netUnitPrice, lineAmount, descriptionLine, sizeLine, calculationLine, lineType, quantity,
+                unit, specialPriceSqm, adjustmentPct, adjustmentDeadline, specialPriceLine, adjustmentAmount,
+                hasPicture, picturePlacement, pictureUrl, sqmPerBox, roundToFullBox,
+                priceChangedFromCeo, ceoListUnitPrice, ceoDiscountPct, ceoSpecialPriceSqm, ceoDirectNetPrice,
+                ceoNetUnitPrice, listPriceSqm, directNetPriceSqm, priceMode, value);
         }
 
         /** The pre-GLA-123 canonical shape (no CEO-original/changed-flag fields) — kept so every
@@ -943,7 +990,7 @@ public final class DealQuotationDtos {
                 unit, specialPriceSqm, adjustmentPct, adjustmentDeadline, specialPriceLine, adjustmentAmount,
                 hasPicture, picturePlacement, pictureUrl, value, roundToFullBox,
                 priceChangedFromCeo, ceoListUnitPrice, ceoDiscountPct, ceoSpecialPriceSqm, ceoDirectNetPrice,
-                ceoNetUnitPrice, listPriceSqm, directNetPriceSqm, priceMode);
+                ceoNetUnitPrice, listPriceSqm, directNetPriceSqm, priceMode, stockSource);
         }
 
         /** This item carrying {@code value} as its {@link #roundToFullBox} — same device as
@@ -958,7 +1005,7 @@ public final class DealQuotationDtos {
                 unit, specialPriceSqm, adjustmentPct, adjustmentDeadline, specialPriceLine, adjustmentAmount,
                 hasPicture, picturePlacement, pictureUrl, sqmPerBox, value,
                 priceChangedFromCeo, ceoListUnitPrice, ceoDiscountPct, ceoSpecialPriceSqm, ceoDirectNetPrice,
-                ceoNetUnitPrice, listPriceSqm, directNetPriceSqm, priceMode);
+                ceoNetUnitPrice, listPriceSqm, directNetPriceSqm, priceMode, stockSource);
         }
 
         /** This item carrying the GLA-123 CEO-comparison fields — same device as
@@ -974,7 +1021,7 @@ public final class DealQuotationDtos {
                 unit, specialPriceSqm, adjustmentPct, adjustmentDeadline, specialPriceLine, adjustmentAmount,
                 hasPicture, picturePlacement, pictureUrl, sqmPerBox, roundToFullBox,
                 changed, listUnitPrice, discountPct2, specialPriceSqm2, directNetPrice, netUnitPrice2,
-                listPriceSqm, directNetPriceSqm, priceMode);
+                listPriceSqm, directNetPriceSqm, priceMode, stockSource);
         }
 
         /** This item carrying the per-ตร.ม. prices as the rep typed them (V192.2) — the same
@@ -990,7 +1037,7 @@ public final class DealQuotationDtos {
                 unit, specialPriceSqm, adjustmentPct, adjustmentDeadline, specialPriceLine, adjustmentAmount,
                 hasPicture, picturePlacement, pictureUrl, sqmPerBox, roundToFullBox,
                 priceChangedFromCeo, ceoListUnitPrice, ceoDiscountPct, ceoSpecialPriceSqm, ceoDirectNetPrice,
-                ceoNetUnitPrice, list, directNet, priceMode);
+                ceoNetUnitPrice, list, directNet, priceMode, stockSource);
         }
 
         /** This item with its picture fields set from the stored link (repository read path). */
@@ -1006,7 +1053,7 @@ public final class DealQuotationDtos {
                 has ? "/api/deal-quotations/" + quotationId + "/items/" + id + "/picture" : null, sqmPerBox,
                 roundToFullBox,
                 priceChangedFromCeo, ceoListUnitPrice, ceoDiscountPct, ceoSpecialPriceSqm, ceoDirectNetPrice,
-                ceoNetUnitPrice, listPriceSqm, directNetPriceSqm, priceMode);
+                ceoNetUnitPrice, listPriceSqm, directNetPriceSqm, priceMode, stockSource);
         }
     }
 

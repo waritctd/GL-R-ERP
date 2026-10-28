@@ -563,6 +563,17 @@ describe('validateQuotationItem (#M4, owner ruling 2026-09-10)', () => {
         .toEqual({ leadTimeMinDays: 'กรุณาระบุระยะเวลานำเข้า (วัน)' });
     });
 
+    it('VW-01 (owner 2026-10-29): only an IN_THAILAND stock line is exempt; IN_TRANSIT and import (stockSource null) are still asked for a lead time', () => {
+      const stock = completeItem({ stockSource: 'IN_THAILAND', leadTimeMinDays: null, leadTimeMaxDays: null });
+      expect(validateQuotationItem(stock, 'NET', 'TH', { requireLeadTime: true })).toEqual({});
+      const inTransit = completeItem({ stockSource: 'IN_TRANSIT', leadTimeMinDays: null, leadTimeMaxDays: null });
+      expect(validateQuotationItem(inTransit, 'NET', 'TH', { requireLeadTime: true }))
+        .toEqual({ leadTimeMinDays: 'กรุณาระบุระยะเวลานำเข้า (วัน)' });
+      const imported = completeItem({ stockSource: null, leadTimeMinDays: null, leadTimeMaxDays: null });
+      expect(validateQuotationItem(imported, 'NET', 'TH', { requireLeadTime: true }))
+        .toEqual({ leadTimeMinDays: 'กรุณาระบุระยะเวลานำเข้า (วัน)' });
+    });
+
     it('a partially-filled lead time (only one of the two numbers) is still flagged', () => {
       const item = completeItem({ leadTimeMinDays: 30, leadTimeMaxDays: null });
       expect(validateQuotationItem(item, 'NET', 'TH', { requireLeadTime: true }))

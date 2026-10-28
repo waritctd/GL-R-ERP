@@ -1839,7 +1839,7 @@ public class DealQuotationRepository {
                    final_unit_price, amount,
                    raw_unit, description, line_type, qi.special_price_sqm, adjustment_pct, adjustment_deadline,
                    picture_placement, sqm_per_box, round_to_full_box,
-                   qi.list_price_sqm, qi.direct_net_price_sqm,
+                   qi.list_price_sqm, qi.direct_net_price_sqm, qi.stock_source,
                    -- V192.5: the ROW's own mode. Aliased because "price_mode" below is already the
                    -- DOCUMENT's (the subselect), and #mapItemColumns needs both to tell them apart.
                    qi.price_mode AS item_price_mode,
@@ -1890,7 +1890,7 @@ public class DealQuotationRepository {
                    final_unit_price, amount,
                    raw_unit, description, line_type, qi.special_price_sqm, adjustment_pct, adjustment_deadline,
                    picture_placement, sqm_per_box, round_to_full_box,
-                   qi.list_price_sqm, qi.direct_net_price_sqm,
+                   qi.list_price_sqm, qi.direct_net_price_sqm, qi.stock_source,
                    -- V192.5: the ROW's own mode. Aliased because "price_mode" below is already the
                    -- DOCUMENT's (the subselect), and #mapItemColumns needs both to tell them apart.
                    qi.price_mode AS item_price_mode,
@@ -2266,7 +2266,7 @@ public class DealQuotationRepository {
      * the bytes are served separately by {@link #findItemPicture}. An item without a picture
      * keeps the legacy constructor's {@code hasPicture=false} shape exactly. */
     private DealQuotationItemDto mapItem(ResultSet rs, Map<Long, CatalogSqmBasis> basisByPriceId) throws SQLException {
-        DealQuotationItemDto item = mapItemColumns(rs, basisByPriceId);
+        DealQuotationItemDto item = mapItemColumns(rs, basisByPriceId).withStockSource(rs.getString("stock_source"));
         String placement = rs.getString("picture_placement");
         return placement == null ? item : item.withPicture(rs.getLong("quotation_id"), placement);
     }
