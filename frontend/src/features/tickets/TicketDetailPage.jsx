@@ -43,7 +43,7 @@ import { CancelDealModal } from './CancelDealModal.jsx';
 import { hasActivitySince, isReadyToAdvance, lastStageChangeAt, STAGE_ADVANCE_GATE_HINT, STAGE_ADVANCE_GATE_MESSAGE } from './dealTrackingMeta.js';
 import { ContextSection, FieldRow } from './DealMetaFields.jsx';
 import { DealAttachmentsPanel } from './DealAttachmentsPanel.jsx';
-import { DealDepositPanel, pickDepositNotice } from './DealDepositPanel.jsx';
+import { DealDepositPanel, depositNoticesQueryOptions, pickDepositNotice } from './DealDepositPanel.jsx';
 import { createDepositNoticeDraft } from '../deposits/createDepositNoticeDraft.js';
 import { DealDocumentPipeline } from './DealDocumentPipeline.jsx';
 import { DealDocumentRegister } from './DealDocumentRegister.jsx';
@@ -604,12 +604,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // sales rep's page reads both. Same keys and shapes as DealDepositPanel / DealRemainingInvoiceCard,
   // so the cache is shared (one fetch).
   const readsDocs = role === 'sales' && ticket?.summary?.createdById === user.id && !!ticketId;
-  const loadDepositNotices = () => api.depositNotices.listByTicket(ticketId).then((r) => r.depositNotices ?? []);
-  const depositNoticesQuery = useQuery({
-    queryKey: queryKeys.depositNotices(ticketId),
-    queryFn: loadDepositNotices,
-    enabled: readsDocs,
-  });
+  const depositNoticesQuery = useQuery({ ...depositNoticesQueryOptions(ticketId), enabled: readsDocs });
   const remainingInvoicesQuery = useQuery({
     queryKey: queryKeys.storedRemainingInvoices(ticketId),
     queryFn: () => api.storedRemainingInvoices.listForTicket(ticketId).then((r) => r.remainingInvoices ?? []),
@@ -619,9 +614,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // undefined until the list is read: nextSalesAction then never offers the invoice.
   const remainingInvoice = remainingInvoicesQuery.data === undefined ? undefined : pickRemainingInvoice(remainingInvoicesQuery.data);
   const createDepositNoticeMutation = useMutation({
-    // Reads the list first (cached when loaded): an existing DRAFT is only opened, never doubled.
+    // Reads the list fresh (another tab may have made a draft): an existing DRAFT is only opened, never doubled.
     mutationFn: async () => {
-      const docs = await queryClient.ensureQueryData({ queryKey: queryKeys.depositNotices(ticketId), queryFn: loadDepositNotices });
+      const docs = await queryClient.fetchQuery({ ...depositNoticesQueryOptions(ticketId), staleTime: 0 });
       return pickDepositNotice(docs)?.status === 'DRAFT' ? null : createDepositNoticeDraft(ticketId);
     },
     onSuccess: () => {

@@ -4250,6 +4250,20 @@ describe('TicketDetailPage', () => {
       expect(api.depositNotices.createDraft).not.toHaveBeenCalled();
     });
 
+    it('a DRAFT made elsewhere after the page loaded (stale cache): the click opens it — nothing is created', async () => {
+      depositStageDeal();
+      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+      await waitFor(() => expect(primaryAction()).toBe('create_deposit_notice'));
+      await waitFor(() => expect(api.depositNotices.listByTicket).toHaveBeenCalled());
+      api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [{ id: 801, status: 'DRAFT', ticketId: 701, docNumber: null }] });
+
+      fireEvent.click(primary());
+
+      await waitFor(() => expect(location()).toBe('/tickets/701/deposit'));
+      expect(api.pricingRequests.createDepositNoticeFromQuotation).not.toHaveBeenCalled();
+      expect(api.depositNotices.createDraft).not.toHaveBeenCalled();
+    });
+
     it('a sales rep who does NOT own the deal gets no create_deposit_notice main button (the backend refuses non-owners)', async () => {
       depositStageDeal();
       renderTicketDetailPageAtRoute(['/tickets/701'], nonOwnerSales);

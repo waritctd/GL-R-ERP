@@ -56,6 +56,12 @@ function pickAcceptedPricingRequest(pricingRequests = []) {
     .sort((a, b) => b.id - a.id)[0] ?? null;
 }
 
+/** The ticket's deposit-notice list: one key + fetcher shared by this panel and TicketDetailPage's main button. */
+export const depositNoticesQueryOptions = (ticketId) => ({
+  queryKey: queryKeys.depositNotices(ticketId),
+  queryFn: () => api.depositNotices.listByTicket(ticketId).then((r) => r.depositNotices ?? []),
+});
+
 /** The ticket's DRAFT deposit notice, else its latest ISSUED one, else null (shared with TicketDetailPage's main button). */
 export function pickDepositNotice(docs = []) {
   const draft = docs.find((d) => d.status === 'DRAFT');
@@ -124,11 +130,7 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
 
   const pr = useMemo(() => pickAcceptedPricingRequest(pricingRequests), [pricingRequests]);
 
-  const depositNoticesQuery = useQuery({
-    queryKey: queryKeys.depositNotices(ticketId),
-    queryFn: () => api.depositNotices.listByTicket(ticketId).then((r) => r.depositNotices ?? []),
-    enabled: !!ticketId,
-  });
+  const depositNoticesQuery = useQuery({ ...depositNoticesQueryOptions(ticketId), enabled: !!ticketId });
   const doc = useMemo(() => pickDepositNotice(depositNoticesQuery.data), [depositNoticesQuery.data]);
 
   function invalidateAfterDepositChange() {
