@@ -178,8 +178,9 @@ test.describe('commission invoice approval journey (real stack)', () => {
     const before = await readFinanceDeal('account');
     expect(before.salesStage).toBe('CLOSED_PAID');
     expect(before.commissionInvoice, 'fixture must start with no recorded invoice').toBeNull();
-    const exVat = before.money.amountPayableExVat;
-    expect(typeof exVat, 'money.amountPayableExVat served as a number').toBe('number');
+    // Owner ruling 2026-10-28 (QA-02): the commission gross is the amount received INCLUDING VAT (workbook column L).
+    const inclVat = before.money.amountPayable;
+    expect(typeof inclVat, 'money.amountPayable served as a number').toBe('number');
 
     const notificationsBefore = await (await sessions.sales_manager.get('/api/notifications')).json();
     const pendingNoticesBefore = notificationsBefore.filter((n) => n.type === 'COMMISSION_PENDING_MANAGER').length;
@@ -195,13 +196,13 @@ test.describe('commission invoice approval journey (real stack)', () => {
       await shot(page, '01-account-finance-deal-primary-action');
     });
 
-    await test.step('clicking opens the in-page form, ยอดรวม defaulting to the pre-VAT figure', async () => {
+    await test.step('clicking opens the in-page form, ยอดรับจริง defaulting to the VAT-inclusive figure', async () => {
       await primary.click();
       await expect(page.getByRole('heading', { name: 'บันทึกใบกำกับภาษี' })).toBeVisible();
-      const gross = page.getByLabel(/ยอดรวม \(ก่อน VAT\)/);
+      const gross = page.getByLabel(/ยอดรับจริง \(รวม VAT\)/);
       await expect(gross).toBeVisible();
-      await expect(gross).toHaveValue(String(exVat));
-      expect(Number(await gross.inputValue())).toBeCloseTo(exVat, 2);
+      await expect(gross).toHaveValue(String(inclVat));
+      expect(Number(await gross.inputValue())).toBeCloseTo(inclVat, 2);
       await shot(page, '02-account-invoice-form-opened');
     });
 
