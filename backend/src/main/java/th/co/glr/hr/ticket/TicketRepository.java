@@ -233,13 +233,8 @@ public class TicketRepository {
                       AND t.sales_stage IN (:accountOrderStages))
                      OR t.payment_status IN (:accountPendingStatuses)
                      OR (""")
-               .append(paymentDueDateScalarSql("t.ticket_id"))
-               .append(" < ").append(BANGKOK_TODAY_SQL)
-               .append(" AND t.payment_status IS DISTINCT FROM 'DEPOSIT_NOTICE_ISSUED' AND ((")
-               .append(payableAmountSelect("t.ticket_id"))
-               .append(") - (")
-               .append(paidAmountSelect("t.ticket_id"))
-               .append(")) > 0)) ");
+               .append(paymentOverduePredicate("t.ticket_id"))
+               .append(")) ");
             params.addValue("accountOrderStages", ACCOUNT_ORDER_STAGE_SCOPE);
             params.addValue("accountPendingStatuses", ACCOUNT_PENDING_PAYMENT_STATUSES);
         }
@@ -1863,6 +1858,18 @@ public class TicketRepository {
     /** The derived due DATE as a scalar subquery (NULL when there is none) -- the list-scope predicate's twin. */
     private static String paymentDueDateScalarSql(String ticketIdRef) {
         return "(SELECT x.delivered_on + x.days FROM (" + paymentTermsRowSql(ticketIdRef) + ") x)";
+    }
+
+    /**
+     * The ONE overdue rule, as a boolean SQL fragment: derived due date is past (Bangkok), the deal is not still
+     * on the deposit notice, and payable minus paid is positive. The account list scope and the dashboard's
+     * {@code payment_overdue} count both use it, so they cannot disagree.
+     */
+    public static String paymentOverduePredicate(String ticketIdRef) {
+        return "(" + paymentDueDateScalarSql(ticketIdRef) + " < " + BANGKOK_TODAY_SQL
+            + " AND (SELECT tp.payment_status FROM sales.ticket tp WHERE tp.ticket_id = " + ticketIdRef
+            + ") IS DISTINCT FROM 'DEPOSIT_NOTICE_ISSUED' AND ((" + payableAmountSelect(ticketIdRef)
+            + ") - (" + paidAmountSelect(ticketIdRef) + ")) > 0)";
     }
 
     /** When the balance is due and on what basis; see {@link #paymentTermsRowSql}. */

@@ -47,6 +47,7 @@ class DashboardRepositoryIntegrationTest extends AbstractPostgresIntegrationTest
         insertTicket("PR-3", "closed", salesEmployee, today.minusDays(1));
         markOperationalBuckets("PR-1", "ON_HOLD", "PARTIALLY_DELIVERED", today.minusDays(2), BigDecimal.valueOf(100));
         markOperationalBuckets("PR-2", "DORMANT", null, null, null);
+        insertOverdueCreditDeal("PR-2", salesEmployee);
         insertCommission(salesEmployee, monthStart);
         insertNotification(salesEmployee, false);
         insertNotification(salesEmployee, true);
@@ -259,6 +260,22 @@ class DashboardRepositoryIntegrationTest extends AbstractPostgresIntegrationTest
                     .addValue("brand", code + "-item")
                     .addValue("approvedPrice", approvedLineAmount));
         }
+    }
+
+    /** Finance's overdue rule: ACCEPTED quotation, CREDIT 30 days, fully delivered 31 days ago, nothing paid. */
+    private void insertOverdueCreditDeal(String code, long deliveredBy) {
+        jdbc.update("""
+            INSERT INTO sales.quotation (ticket_id, number, issued_by, total_amount, doc_status,
+                                         remainder_mode, credit_days)
+            SELECT ticket_id, 'QT-' || code, :by, 100000, 'ACCEPTED', 'CREDIT', 30
+              FROM sales.ticket WHERE code = :code
+            """, Map.of("code", code, "by", deliveredBy));
+        jdbc.update("UPDATE sales.ticket SET fulfillment_status = 'FULLY_DELIVERED' WHERE code = :code",
+            Map.of("code", code));
+        jdbc.update("""
+            INSERT INTO sales.delivery_record (ticket_id, source, delivered_at, delivered_by)
+            SELECT ticket_id, 'WAREHOUSE', now() - interval '31 days', :by FROM sales.ticket WHERE code = :code
+            """, Map.of("code", code, "by", deliveredBy));
     }
 
     private void insertCommission(long salesRepId, LocalDate payrollMonth) {
