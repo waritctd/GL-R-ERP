@@ -263,7 +263,7 @@ class RemainingInvoicePdfRendererTest {
     void pdfManyItemsPaginateWithRepeatedHeaderAndAnUnsplitNotesTotalsSignatureBlock() throws Exception {
         requireLibreOffice();
         try (PDDocument doc = Loader.loadPDF(renderer.toPdf(
-                model(LocalDate.of(2026, 10, 28), DEPOSIT, manyItems(40))))) {
+                model(LocalDate.of(2026, 10, 28), DEPOSIT, manyItems(120))))) {
             assertThat(doc.getNumberOfPages()).isGreaterThan(1);
             int blockPages = 0;
             for (int p = 1; p <= doc.getNumberOfPages(); p++) {
