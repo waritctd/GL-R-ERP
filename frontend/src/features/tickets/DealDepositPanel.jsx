@@ -56,6 +56,21 @@ function pickAcceptedPricingRequest(pricingRequests = []) {
     .sort((a, b) => b.id - a.id)[0] ?? null;
 }
 
+/** The ticket's deposit-notice list: one key + fetcher shared by this panel and TicketDetailPage's main button. */
+export const depositNoticesQueryOptions = (ticketId) => ({
+  queryKey: queryKeys.depositNotices(ticketId),
+  queryFn: () => api.depositNotices.listByTicket(ticketId).then((r) => r.depositNotices ?? []),
+});
+
+/** The ticket's DRAFT deposit notice, else its latest ISSUED one, else null (shared with TicketDetailPage's main button). */
+export function pickDepositNotice(docs = []) {
+  const draft = docs.find((d) => d.status === 'DRAFT');
+  const latestIssued = [...docs]
+    .filter((d) => d.status === 'ISSUED')
+    .sort((a, b) => (b.version ?? 0) - (a.version ?? 0))[0];
+  return draft ?? latestIssued ?? null;
+}
+
 /**
  * "มัดจำ" (Phase 3 Slice S3 — see
  * docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md): one
@@ -89,7 +104,9 @@ function pickAcceptedPricingRequest(pricingRequests = []) {
  * its own "ยืนยันคำสั่งซื้อ..." box. Both panels can show that specific
  * create action at once until a notice exists for this deal.
  */
-export function DealDepositPanel({ user, ticketId, summary, availableActions = [], pricingRequests = [], dealQuotations = [], showToast }) {
+// `mainButtonCreatesNotice`: the deal page's main button already offers สร้างใบแจ้งยอดเงินรับมัดจำ
+// (owner rulings 2026-10-28), so this panel carries no second copy of it.
+export function DealDepositPanel({ user, ticketId, summary, availableActions = [], pricingRequests = [], dealQuotations = [], showToast, mainButtonCreatesNotice = false }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const role = user?.role;
@@ -113,19 +130,8 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
 
   const pr = useMemo(() => pickAcceptedPricingRequest(pricingRequests), [pricingRequests]);
 
-  const depositNoticesQuery = useQuery({
-    queryKey: queryKeys.depositNotices(ticketId),
-    queryFn: () => api.depositNotices.listByTicket(ticketId).then((r) => r.depositNotices ?? []),
-    enabled: !!ticketId,
-  });
-  const doc = useMemo(() => {
-    const docs = depositNoticesQuery.data ?? [];
-    const draft = docs.find((d) => d.status === 'DRAFT');
-    const latestIssued = [...docs]
-      .filter((d) => d.status === 'ISSUED')
-      .sort((a, b) => (b.version ?? 0) - (a.version ?? 0))[0];
-    return draft ?? latestIssued ?? null;
-  }, [depositNoticesQuery.data]);
+  const depositNoticesQuery = useQuery({ ...depositNoticesQueryOptions(ticketId), enabled: !!ticketId });
+  const doc = useMemo(() => pickDepositNotice(depositNoticesQuery.data), [depositNoticesQuery.data]);
 
   function invalidateAfterDepositChange() {
     queryClient.invalidateQueries({ queryKey: queryKeys.depositNotices(ticketId) });
@@ -326,6 +332,8 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
                 </div>
               ) : null}
             </>
+          ) : mainButtonCreatesNotice ? (
+            <p className="text-xs text-text-muted">ลูกค้ายืนยันคำสั่งซื้อแล้ว — กดปุ่ม &quot;สร้างใบแจ้งยอดเงินรับมัดจำ&quot; ด้านบน</p>
           ) : canCreateNotice ? (
             <div className="flex flex-col gap-2">
               <p className="text-xs text-text-muted">ลูกค้ายืนยันคำสั่งซื้อแล้ว — สร้างใบแจ้งยอดเงินรับมัดจำจากใบเสนอราคาที่ยอมรับได้เลย</p>

@@ -126,6 +126,8 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       // this namespace directly, same pattern as pricingRequests above.
       depositNotices: {
         listByTicket: vi.fn(),
+        // Direct-quotation deals: the sticky สร้างใบแจ้งยอดเงินรับมัดจำ creates the draft this way.
+        createDraft: vi.fn(),
         issue: vi.fn(),
         preview: vi.fn(),
         downloadXlsx: vi.fn(),
@@ -3339,6 +3341,8 @@ describe('TicketDetailPage', () => {
         // { items: [] }) + a non-null paymentStatus is the "priced outside the PCR chain" shape
         // (salesActions.js bucket 1's own guard) — the same shape demoData.js tickets 13/14 already
         // have, and the same shape salesActions.test.js / workState.test.js pin at the unit level.
+        // Ordering ruling 2026-10-22: the remaining invoice wins over บันทึกส่งมอบ until issued — so seed it issued.
+        api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [{ id: 901, ticketId: 701, status: 'ISSUED', docNumber: 'GLRI69001' }] });
         api.tickets.get.mockResolvedValue({
           ticket: buildTicket({
             summary: {
@@ -3359,6 +3363,7 @@ describe('TicketDetailPage', () => {
         await waitFor(() => expect(scrolledIds).toContain('deal-fulfilment-panel'));
       } finally {
         Element.prototype.scrollIntoView = original;
+        api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [] });
       }
     });
 
@@ -4024,7 +4029,9 @@ describe('TicketDetailPage', () => {
   // Finding 6 (both entry points must open the dialog, not download directly): this is one of
   // the two entry points — DealDocumentRegister.test.jsx pins the other.
   describe('remaining invoice download entry point (docActions button)', () => {
+    afterEach(() => { api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [] }); });
     it('clicking "ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ" opens the RemainingInvoiceDialog rather than downloading directly', async () => {
+      api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [{ id: 901, ticketId: 701, status: 'ISSUED', docNumber: 'GLRI69001' }] });
       api.tickets.get.mockResolvedValue({
         ticket: buildTicket({
           summary: { status: 'quotation_issued', fulfillmentStatus: 'GOODS_RECEIVED' },
@@ -4042,6 +4049,7 @@ describe('TicketDetailPage', () => {
 
       renderTicketDetailPage(salesOwnerUser);
 
+      await waitFor(() => expect(api.storedRemainingInvoices.listForTicket).toHaveBeenCalled());
       const button = await screen.findByRole('button', { name: 'ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ' });
       // Compact inline link like the quotation PDF, not a full-size bordered button.
       expect(button.className).not.toContain('border-border-input');
@@ -4098,14 +4106,17 @@ describe('TicketDetailPage', () => {
   // UI readiness only: DepositNoticeService#getRemainingInvoiceXlsx gates on ticket status alone.
   describe('remaining-invoice download gate', () => {
     const INVOICE_BUTTON = 'ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ';
+    afterEach(() => { api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [] }); });
 
     it.each(['FROM_STOCK', 'PARTIALLY_DELIVERED', 'FULLY_DELIVERED', 'GOODS_RECEIVED'])(
       'offers the download to the sales owner once fulfilment is %s',
       async (fulfillmentStatus) => {
+        api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [{ id: 901, ticketId: 701, status: 'ISSUED', docNumber: 'GLRI69001' }] });
         api.tickets.get.mockResolvedValueOnce({
           ticket: buildTicket({ summary: { status: 'quotation_issued', fulfillmentStatus, createdById: 1 } }),
         });
         renderTicketDetailPage(salesOwnerUser);
+        await waitFor(() => expect(api.storedRemainingInvoices.listForTicket).toHaveBeenCalled());
         expect(await screen.findByRole('button', { name: INVOICE_BUTTON })).not.toBeNull();
       },
     );
@@ -4130,6 +4141,190 @@ describe('TicketDetailPage', () => {
       renderTicketDetailPage(accountUser);
       expect(await screen.findByRole('heading', { level: 1 })).not.toBeNull();
       expect(screen.queryByRole('button', { name: INVOICE_BUTTON })).toBeNull();
+    });
+  });
+
+  // Owner rulings 2026-10-28: the deal page's ONE main button creates the deposit notice (ขั้น 10)
+  // and the remaining invoice (ขั้น 13); the panels no longer carry a second copy of either label.
+  describe('sticky primary — สร้างใบแจ้งยอดเงินรับมัดจำ (ขั้น 10) and สร้างใบแจ้งหนี้ (ขั้น 13), owner rulings 2026-10-28', () => {
+    const acceptedPr = {
+      id: 501, requestCode: 'PCR-2026-0501', ticketId: 701, ticketCreatedById: 1,
+      status: 'QUOTATION_ACCEPTED', recipientType: 'BUYER', recipientLabel: null, orderConfirmedAt: '2026-10-20T09:00:00.000Z',
+    };
+    const nonOwnerSales = { id: 2, employeeId: 2, name: 'เซลส์อื่น', role: 'sales' };
+    const primary = () => screen.queryByTestId('ticket-primary-action');
+    const primaryAction = () => primary()?.getAttribute('data-action') ?? null;
+    const location = () => screen.getByTestId('location-probe').textContent;
+
+    // A deal whose customer has confirmed the order (CUSTOMER_CONFIRMED) and has no notice yet.
+    function depositStageDeal({ prs = [acceptedPr], notices = [], availableActions = [], summary = {} } = {}) {
+      const state = {
+        lifecycle: 'ACTIVE', salesStage: 'ORDER_RECEIVED', paymentStatus: 'CUSTOMER_CONFIRMED', fulfillmentStatus: null, status: 'quotation_issued',
+      };
+      api.tickets.get.mockResolvedValue({ ticket: buildTicket({ summary: { ...state, createdById: 1, ...summary } }) });
+      api.tickets.actions.mockResolvedValue({ currentState: state, availableActions });
+      api.pricingRequests.listForTicket.mockResolvedValue({ items: prs });
+      api.dealQuotations.listForTicket.mockResolvedValue({ items: [] });
+      api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: notices });
+      api.pricingRequests.createDepositNoticeFromQuotation.mockResolvedValue({ depositNotice: { id: 801, status: 'DRAFT' } });
+      api.depositNotices.createDraft.mockResolvedValue({ depositNotice: { id: 801, status: 'DRAFT' } });
+    }
+
+    // A ขั้น 13 deal: goods delivered, deposit paid.
+    function invoiceStageDeal({ invoices = [] } = {}) {
+      const state = {
+        lifecycle: 'ACTIVE', salesStage: 'DELIVERY_SCHEDULING', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: 'FULLY_DELIVERED', status: 'quotation_issued',
+      };
+      api.tickets.get.mockResolvedValue({ ticket: buildTicket({ summary: { ...state, createdById: 1 } }) });
+      api.tickets.actions.mockResolvedValue({ currentState: state, availableActions: [] });
+      api.pricingRequests.listForTicket.mockResolvedValue({ items: [acceptedPr] });
+      api.dealQuotations.listForTicket.mockResolvedValue({ items: [] });
+      api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: invoices });
+      api.tickets.remainingInvoiceOptions.mockResolvedValue({
+        options: {
+          docNumber: 'GLRI69001', defaultIssueDate: '2026-09-01', defaultReference: null,
+          referenceOptions: [], defaultDepositReference: null, depositReferenceOptions: [],
+          noteTemplates: [], itemCount: 1, maxItems: 22, itemsTotal: 100, depositAmount: 0,
+          netAmount: 100, vatAmount: 7, totalPayable: 107,
+          quotationOptions: [], defaultQuotationId: null, blockingReason: null,
+        },
+      });
+    }
+
+    // Later describes read these bare (a rejected query) — keep it that way.
+    afterEach(() => {
+      api.dealQuotations.listForTicket.mockReset();
+      api.storedRemainingInvoices.listForTicket.mockReset();
+      api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [] });
+    });
+
+    it('ขั้น 10, order-confirmed accepted PR, no notice: the main button is สร้างใบแจ้งยอดเงินรับมัดจำ; clicking creates it from the quotation and opens /deposit', async () => {
+      depositStageDeal();
+      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+      await waitFor(() => expect(primaryAction()).toBe('create_deposit_notice'));
+      expect(primary().textContent).toContain('สร้างใบแจ้งยอดเงินรับมัดจำ');
+
+      fireEvent.click(primary());
+
+      await waitFor(() => expect(api.pricingRequests.createDepositNoticeFromQuotation).toHaveBeenCalledWith(501, {}));
+      await waitFor(() => expect(location()).toBe('/tickets/701/deposit'));
+      expect(api.depositNotices.createDraft).not.toHaveBeenCalled();
+    });
+
+    it('the legacy ลูกค้ายืนยัน re-confirm (CONFIRM_CUSTOMER advertised) does not take the slot at CUSTOMER_CONFIRMED', async () => {
+      depositStageDeal({ availableActions: [{ action: 'CONFIRM_CUSTOMER', kind: 'operational', label: 'ลูกค้ายืนยัน' }] });
+      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+      // The advertised action must have loaded, or the absence below proves nothing.
+      await waitFor(() => expect(api.tickets.actions).toHaveBeenCalled());
+      await stickyInputsSettled();
+      await waitFor(() => expect(primaryAction()).toBe('create_deposit_notice'));
+      expect(screen.queryByTestId('ticket-detail-confirm-customer')).toBeNull();
+    });
+
+    it('a direct-quotation deal (no pricing requests): the click creates the draft by ticket (depositNotices.createDraft), not the PR endpoint, then opens /deposit', async () => {
+      // Real post-confirm flow-A shape: the direct quotation stays APPROVED + live, and the rep may revise it.
+      depositStageDeal({ prs: [], summary: { liveDirectQuotation: { id: 77, number: 'QT-2026-0077-1', docStatus: 'APPROVED', recipientType: 'DESIGNER' } } });
+      api.dealQuotations.listForTicket.mockResolvedValue({
+        items: [{ id: 77, number: 'QT-2026-0077-1', origin: 'DEAL_DIRECT', docStatus: 'APPROVED', recipientType: 'DESIGNER', salesRepId: 1, revisionNo: 1, parentQuotationId: null, pricingRequestId: null }],
+      });
+      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+      await waitFor(() => expect(primaryAction()).toBe('create_deposit_notice'));
+
+      fireEvent.click(primary());
+
+      await waitFor(() => expect(api.depositNotices.createDraft).toHaveBeenCalledWith(701, expect.any(Object)));
+      await waitFor(() => expect(location()).toBe('/tickets/701/deposit'));
+      expect(api.pricingRequests.createDepositNoticeFromQuotation).not.toHaveBeenCalled();
+    });
+
+    it('a DRAFT notice already exists: the button reads ออกใบแจ้งยอดเงินรับมัดจำ and only opens /deposit — nothing is created', async () => {
+      depositStageDeal({ notices: [{ id: 801, status: 'DRAFT', ticketId: 701, docNumber: null }] });
+      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+      await waitFor(() => expect(primaryAction()).toBe('create_deposit_notice'));
+      await waitFor(() => expect(primary().textContent).toContain('ออกใบแจ้งยอดเงินรับมัดจำ'));
+
+      fireEvent.click(primary());
+
+      await waitFor(() => expect(location()).toBe('/tickets/701/deposit'));
+      expect(api.pricingRequests.createDepositNoticeFromQuotation).not.toHaveBeenCalled();
+      expect(api.depositNotices.createDraft).not.toHaveBeenCalled();
+    });
+
+    it('a DRAFT made elsewhere after the page loaded (stale cache): the click opens it — nothing is created', async () => {
+      depositStageDeal();
+      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+      await waitFor(() => expect(primaryAction()).toBe('create_deposit_notice'));
+      await waitFor(() => expect(api.depositNotices.listByTicket).toHaveBeenCalled());
+      api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [{ id: 801, status: 'DRAFT', ticketId: 701, docNumber: null }] });
+
+      fireEvent.click(primary());
+
+      await waitFor(() => expect(location()).toBe('/tickets/701/deposit'));
+      expect(api.pricingRequests.createDepositNoticeFromQuotation).not.toHaveBeenCalled();
+      expect(api.depositNotices.createDraft).not.toHaveBeenCalled();
+    });
+
+    it('a sales rep who does NOT own the deal gets no create_deposit_notice main button (the backend refuses non-owners)', async () => {
+      depositStageDeal();
+      renderTicketDetailPageAtRoute(['/tickets/701'], nonOwnerSales);
+      await stickyInputsSettled();
+      await screen.findByRole('heading', { level: 1 });
+      expect(primaryAction()).not.toBe('create_deposit_notice');
+    });
+
+    it('การเงิน tab: while the main button offers สร้างใบแจ้งยอดเงินรับมัดจำ the deposit panel has no second copy (deal-deposit-create-notice)', async () => {
+      depositStageDeal();
+      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+      await waitFor(() => expect(primaryAction()).toBe('create_deposit_notice'));
+      await openTab(/การเงิน/);
+      await screen.findByRole('heading', { level: 2, name: 'มัดจำ' });
+      await stickyInputsSettled();
+      expect(screen.queryByTestId('deal-deposit-create-notice')).toBeNull();
+      expect(screen.getAllByRole('button', { name: /สร้างใบแจ้งยอดเงินรับมัดจำ/ })).toHaveLength(1);
+    });
+
+    it('เอกสาร tab: after the order is confirmed the quotation panel points at the main button, not at the "มัดจำ" section below', async () => {
+      depositStageDeal();
+      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+      await openTab(/เอกสาร/);
+      const panel = within(await screen.findByTestId('deal-quotation-panel'));
+      expect(await panel.findByText(/ยืนยันคำสั่งซื้อแล้วเมื่อ/)).not.toBeNull();
+      expect(panel.queryByText(/ส่วน "มัดจำ"/)).toBeNull();
+      expect(panel.getByText(/สร้างใบแจ้งยอดเงินรับมัดจำ/)).not.toBeNull();
+    });
+
+    it('เอกสาร tab: at a later stage (notice already out) the main button no longer offers it, so the quotation panel keeps the neutral copy pointing at the "การเงิน" tab', async () => {
+      depositStageDeal({ summary: { paymentStatus: 'DEPOSIT_NOTICE_ISSUED' } });
+      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+      await stickyInputsSettled();
+      await openTab(/เอกสาร/);
+      const panel = within(await screen.findByTestId('deal-quotation-panel'));
+      expect(await panel.findByText(/ยืนยันคำสั่งซื้อแล้วเมื่อ/)).not.toBeNull();
+      expect(panel.getByText(/ใบแจ้งยอดเงินรับมัดจำอยู่ที่แท็บ "การเงิน"/)).not.toBeNull();
+      expect(panel.queryByText(/ด้านบน/)).toBeNull();
+    });
+
+    it('ขั้น 13, ready deal, no remaining invoice: the main button is สร้างใบแจ้งหนี้ and opens the RemainingInvoiceDialog; the stage link reads สร้างใบแจ้งหนี้ส่วนที่เหลือ', async () => {
+      invoiceStageDeal();
+      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+      await waitFor(() => expect(primaryAction()).toBe('create_remaining_invoice'));
+      expect(primary().textContent).toContain('สร้างใบแจ้งหนี้');
+      expect(screen.getByRole('button', { name: 'สร้างใบแจ้งหนี้ส่วนที่เหลือ' })).not.toBeNull();
+      expect(screen.queryByRole('button', { name: 'ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ' })).toBeNull();
+
+      fireEvent.click(primary());
+
+      expect(await screen.findByTestId('remaining-invoice-dialog')).not.toBeNull();
+    });
+
+    it('ขั้น 13 with an ISSUED remaining invoice: no create_remaining_invoice main button, and the link reads ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ', async () => {
+      invoiceStageDeal({ invoices: [{ id: 901, ticketId: 701, status: 'ISSUED', docNumber: 'GLRI69001' }] });
+      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+      expect(await screen.findByRole('button', { name: 'ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ' })).not.toBeNull();
+      await waitFor(() => expect(api.storedRemainingInvoices.listForTicket).toHaveBeenCalled());
+      await stickyInputsSettled();
+      expect(primaryAction()).not.toBe('create_remaining_invoice');
+      expect(screen.queryByRole('button', { name: 'สร้างใบแจ้งหนี้ส่วนที่เหลือ' })).toBeNull();
     });
   });
 

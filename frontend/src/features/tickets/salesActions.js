@@ -51,6 +51,7 @@
 import { bangkokTodayIso } from '../../utils/format.js';
 import { DEAD_PRICING_REQUEST_STATUSES, QUOTATION_RECIPIENT_OPTIONS } from '../quotations/quotationMeta.js';
 import { nextFulfilmentActionCode } from './importActions.js';
+import { isRemainingInvoiceReady } from './remainingInvoiceReadiness.js';
 
 export const SALES_ACTION = {
   // Slice 2 — flow A (SLICE-2-FLOW-A.md §E): the three buckets a LIVE direct quotation drives.
@@ -69,6 +70,9 @@ export const SALES_ACTION = {
   SUBMIT_PRICING_REQUEST: 'submit_pricing_request',
   ISSUE_QUOTATION: 'issue_quotation',
   CONFIRM_ORDER: 'confirm_order',
+  // Owner rulings 2026-10-28: the deal page's main button makes the ขั้น 10 deposit notice and the ขั้น 13 invoice.
+  CREATE_DEPOSIT_NOTICE: 'create_deposit_notice',
+  CREATE_REMAINING_INVOICE: 'create_remaining_invoice',
   RECORD_QUOTATION_OUTCOME: 'record_quotation_outcome',
   RECORD_DELIVERY: 'record_delivery',
   FOLLOW_UP: 'follow_up',
@@ -86,6 +90,8 @@ const ACTION_LABEL = {
   [SALES_ACTION.ADVANCE_STAGE]: 'เลื่อนขั้น',
   [SALES_ACTION.REVISE_QUOTATION]: 'แก้ใบเสนอราคา',
   [SALES_ACTION.CONFIRM_ORDER]: 'ยืนยันคำสั่งซื้อ',
+  [SALES_ACTION.CREATE_DEPOSIT_NOTICE]: 'สร้างใบแจ้งยอดเงินรับมัดจำ',
+  [SALES_ACTION.CREATE_REMAINING_INVOICE]: 'สร้างใบแจ้งหนี้',
   // "Record the quotation outcome" — deliberately not "ติดตามผล"/"ติดตามลูกค้า" (that's
   // FOLLOW_UP's own label, a nudge to go chase the customer): by the time this bucket fires, the
   // quotation is already out and canRecordCustomerQuotationOutcome's own gate is what the button
@@ -121,6 +127,8 @@ const ACTION_RANK = {
   [SALES_ACTION.CONFIRM_ORDER]: 1,
   [SALES_ACTION.QUOTE_NEXT_PARTY]: 1,
   [SALES_ACTION.CONFIRM_ORDER_DIRECT]: 1,
+  [SALES_ACTION.CREATE_DEPOSIT_NOTICE]: 1,
+  [SALES_ACTION.CREATE_REMAINING_INVOICE]: 1,
   [SALES_ACTION.ISSUE_QUOTATION]: 2,
   [SALES_ACTION.SUBMIT_DIRECT_QUOTATION]: 2,
   [SALES_ACTION.RECORD_QUOTATION_OUTCOME]: 3,
@@ -179,6 +187,9 @@ const LIVE_PR_STATUSES = new Set(['DRAFT', 'CANCELLED', 'SUPERSEDED']);
 // The ticket statuses OrderConfirmationService.confirmOrder can proceed from (mirror of
 // pricingRequestMeta's BRIDGEABLE_TICKET_STATUSES).
 const BRIDGEABLE_TICKET_STATUSES = new Set(['draft', 'quotation_issued']);
+
+// No deposit notice is made for these (deposit policy).
+const DEPOSIT_NOT_NEEDED = new Set(['NOT_REQUIRED', 'WAIVED', 'CREDIT_CUSTOMER']);
 
 const QUOTED_STATUSES = new Set(['quotation_issued', 'document_issued']);
 
@@ -286,7 +297,7 @@ function routeChoiceAction(ownPrs, quotationOf, offRouteParties) {
  * while the route is unknown. `quotationByRequest`: a Map, pricingRequestId -> the newest
  * PRICING_REQUEST-origin quotation `{ id, number, docStatus }` — only the deal page has it.
  */
-export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = null, offRouteParties = null, quotationByRequest = null } = {}) {
+export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = null, offRouteParties = null, quotationByRequest = null, depositNotice = null, remainingInvoice } = {}) {
   if (!deal || deal.lifecycle !== 'ACTIVE') return null;
 
   // 0. Slice 2 — flow A (SLICE-2-FLOW-A.md §E, IA §4): a LIVE direct quotation. Checked BEFORE
@@ -305,7 +316,10 @@ export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = nul
   if (directAction && !confirmRefused) return directAction;
   // PR A: an APPROVED direct quotation the confirm bucket refuses (deal already past 'draft') is
   // revised rather than left to fall through to CREATE_PCR.
-  if (confirmRefused && reviseTarget) return reviseAction(reviseTarget);
+  // Owner rulings 2026-10-28: a confirmed flow-A deal keeps its direct quotation APPROVED + live, so
+  // the deposit notice must outrank this revise.
+  const depositAction = depositNoticeAction(deal, depositNotice);
+  if (confirmRefused && reviseTarget) return depositAction ?? reviseAction(reviseTarget);
 
   // Owner ruling 2026-10-15: ขั้น 1 → 2 → 3 are moved by hand, and the price request starts at ขั้น 3.
   // So on ขั้น 1–2 the one action is moving the stage — nothing below (a due follow-up, an older
@@ -391,6 +405,9 @@ export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = nul
     return { key: SALES_ACTION.CONFIRM_ORDER, label: ACTION_LABEL[SALES_ACTION.CONFIRM_ORDER] };
   }
 
+  // Owner rulings 2026-10-28: ขั้น 10, the customer confirmed the order -> make the deposit notice.
+  if (depositAction) return depositAction;
+
   // A live request's quotation awaiting ผจก.ขาย/CEO: the rep waits.
   const pending = pendingRequestQuotation(deal, ownPrs, quotationByRequest);
   if (pending) {
@@ -469,6 +486,16 @@ export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = nul
   //    below (see the delivery-vs-bucket-1 case in salesActions.test.js) and
   //    already exercised, before this bucket existed, by workState.test.js's
   //    'still offers create_pcr after ... FROM_STOCK' case.
+  // Owner rulings 2026-10-28: ขั้น 13 — the invoice is made at นัดส่งสินค้า, before บันทึกส่งมอบ, until it is
+  // issued. `remainingInvoice` undefined = the caller (dashboard worklist) doesn't know -> never offered.
+  if (remainingInvoice !== undefined && isRemainingInvoiceReady(deal)
+      && (remainingInvoice === null || remainingInvoice.status === 'DRAFT')) {
+    return {
+      key: SALES_ACTION.CREATE_REMAINING_INVOICE,
+      label: remainingInvoice ? 'ออกใบแจ้งหนี้' : ACTION_LABEL[SALES_ACTION.CREATE_REMAINING_INVOICE],
+    };
+  }
+
   if (nextFulfilmentActionCode(deal) === 'recordDelivery') {
     return { key: SALES_ACTION.RECORD_DELIVERY, label: ACTION_LABEL[SALES_ACTION.RECORD_DELIVERY] };
   }
@@ -488,6 +515,15 @@ export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = nul
   }
 
   return null;
+}
+
+/** Gated on paymentStatus only: a direct-quotation deal has no pricing request. */
+function depositNoticeAction(deal, depositNotice) {
+  if (deal.paymentStatus !== 'CUSTOMER_CONFIRMED' || DEPOSIT_NOT_NEEDED.has(deal.depositPolicy)) return null;
+  return {
+    key: SALES_ACTION.CREATE_DEPOSIT_NOTICE,
+    label: depositNotice?.status === 'DRAFT' ? 'ออกใบแจ้งยอดเงินรับมัดจำ' : ACTION_LABEL[SALES_ACTION.CREATE_DEPOSIT_NOTICE],
+  };
 }
 
 export const REVISE_STAGES = new Set(['QUOTE_OWNER', 'QUOTE_BUYER']);
