@@ -577,12 +577,13 @@ class PricingRequestItemDirectDealFieldsIntegrationTest extends AbstractPostgres
 
     // ── helpers ──────────────────────────────────────────────────────────────────────────
 
-    // ── Sales thickness → catalogue write-back (owner ruling 2026-10-15) ───────────────────
+    // ── Sales thickness never writes to the shared catalogue ───────────────────────────────
 
     @Test
-    void submit_writesSalesThicknessBackToCatalogWhenCatalogHasNone() {
-        // A catalogue product whose own thickness_mm is NULL (Bode's whole range is like this) —
-        // the exact case where the CEO's landed-cost calc used to report "no thickness".
+    void submit_neverWritesSalesThicknessToTheSharedCatalog() {
+        // A typed thickness is unreviewed: a typo must not become catalogue truth. Costing reads
+        // it from the request item instead (LandedCostCalculatorFormulaIntegrationTest
+        // #salesEnteredThickness_makesACatalogNullThicknessLineCostable).
         long nullThicknessPrice = insertCatalogProduct("WriteBack Factory", "TH", "WB-NULL-001",
             new BigDecimal("100.00"), "THB", "per_piece", "ACTIVE", null);
         long id = pricingRequestService.createDraft(ticketId,
@@ -594,10 +595,9 @@ class PricingRequestItemDirectDealFieldsIntegrationTest extends AbstractPostgres
         BigDecimal catalogThickness = jdbc.queryForObject(
             "SELECT thickness_mm FROM price_catalog.product_prices WHERE price_id = :id",
             Map.of("id", nullThicknessPrice), BigDecimal.class);
-        assertThat(catalogThickness)
-            .as("Sales-entered thickness is written back to the catalogue product so the CEO and "
-                + "everyone else see it")
-            .isEqualByComparingTo("12");
+        assertThat(catalogThickness).as("submit must leave the catalogue thickness NULL").isNull();
+        assertThat(onlyItem(pricingRequestService.get(id, salesActor)).thicknessMm())
+            .as("the typed value stays on the request item").isEqualByComparingTo("12");
     }
 
     @Test
