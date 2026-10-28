@@ -248,9 +248,9 @@ export function DealDocumentRegister({
   }
 
   async function downloadRemainingInvoice(v) {
-    const key = `remaining-${v.id}-xlsx`;
+    const key = `remaining-${v.id}-pdf`;
     const blob = await handleDownload(key, () => api.storedRemainingInvoices.download(v.id));
-    downloadBlob(blob, v.docNumber || `draft-${v.id}`, 'xlsx');
+    downloadBlob(blob, v.docNumber || `draft-${v.id}`, 'pdf');
   }
 
   async function downloadImportRequest(row) {
@@ -344,7 +344,7 @@ export function DealDocumentRegister({
     amount: v.grandTotal,
     // Same rule as RemainingInvoiceDialog's version history: any stored, non-DRAFT version.
     actions: v.status === 'DRAFT' ? [] : [
-      { label: 'Excel', busy: busyKey === `remaining-${v.id}-xlsx`, onClick: () => downloadRemainingInvoice(v) },
+      { label: 'PDF', busy: busyKey === `remaining-${v.id}-pdf`, onClick: () => downloadRemainingInvoice(v) },
     ],
   });
 

@@ -4041,7 +4041,7 @@ describe('TicketDetailPage', () => {
         options: {
           docNumber: 'GLRI69001', defaultIssueDate: '2026-09-01', defaultReference: null,
           referenceOptions: [], defaultDepositReference: null, depositReferenceOptions: [],
-          noteTemplates: [], itemCount: 1, maxItems: 22, itemsTotal: 100, depositAmount: 0,
+          noteTemplates: [], itemCount: 1, itemsTotal: 100, depositAmount: 0,
           netAmount: 100, vatAmount: 7, totalPayable: 107,
           quotationOptions: [], defaultQuotationId: null, blockingReason: null,
         },

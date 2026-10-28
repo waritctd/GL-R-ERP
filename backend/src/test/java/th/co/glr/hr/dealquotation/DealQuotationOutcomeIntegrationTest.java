@@ -37,10 +37,10 @@ import th.co.glr.hr.dealquotation.DealQuotationRequests.ApproveRequest;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.RecordOutcomeRequest;
 import th.co.glr.hr.deposit.DepositNoticeDraftRequest;
 import th.co.glr.hr.deposit.DepositNoticeDto;
-import th.co.glr.hr.deposit.DepositNoticeRenderer;
+import th.co.glr.hr.deposit.DepositNoticePdfRenderer;
 import th.co.glr.hr.deposit.DepositNoticeRepository;
 import th.co.glr.hr.deposit.DepositNoticeService;
-import th.co.glr.hr.deposit.RemainingInvoiceRenderer;
+import th.co.glr.hr.deposit.RemainingInvoicePdfRenderer;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
@@ -189,7 +189,7 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
 
         DepositNoticeRepository depositNoticeRepository = new DepositNoticeRepository(jdbc);
         depositNoticeService = new DepositNoticeService(depositNoticeRepository, tickets,
-            notifications, new DepositNoticeRenderer(), new RemainingInvoiceRenderer(), customers,
+            notifications, new DepositNoticePdfRenderer(), customers,
             legacyQuotationRepository);
         orderConfirmation = new OrderConfirmationService(
             pricingRequests, tickets, ticketService, legacyQuotationRepository, depositNoticeService, notifications);

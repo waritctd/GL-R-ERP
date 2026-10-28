@@ -32,11 +32,11 @@ import th.co.glr.hr.customerquotation.CustomerQuotationService;
 import th.co.glr.hr.customerquotation.DiscountApprovalRepository;
 import th.co.glr.hr.dealquotation.WastageCalculator;
 import th.co.glr.hr.deposit.DepositNoticeDto;
-import th.co.glr.hr.deposit.DepositNoticeRenderer;
+import th.co.glr.hr.deposit.DepositNoticePdfRenderer;
 import th.co.glr.hr.deposit.DepositNoticeRepository;
 import th.co.glr.hr.deposit.DepositNoticeService;
 import th.co.glr.hr.deposit.RemainingInvoiceDocumentDto;
-import th.co.glr.hr.deposit.RemainingInvoiceRenderer;
+import th.co.glr.hr.deposit.RemainingInvoicePdfRenderer;
 import th.co.glr.hr.deposit.RemainingInvoiceRepository;
 import th.co.glr.hr.deposit.RemainingInvoiceService;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
@@ -164,14 +164,14 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
 
         DepositNoticeRepository depositNoticeRepository = new DepositNoticeRepository(jdbc);
         depositNoticeService = new DepositNoticeService(depositNoticeRepository, tickets, notifications,
-            new DepositNoticeRenderer(), new RemainingInvoiceRenderer(), customersRepo, quotationRepository);
+            new DepositNoticePdfRenderer(), customersRepo, quotationRepository);
 
         orderConfirmation = new OrderConfirmationService(
             pricingRequests, tickets, ticketService, quotationRepository, depositNoticeService, notifications);
 
         RemainingInvoiceRepository remainingInvoiceRepository = new RemainingInvoiceRepository(jdbc);
         remainingInvoiceService = new RemainingInvoiceService(
-            remainingInvoiceRepository, depositNoticeService, tickets, new RemainingInvoiceRenderer());
+            remainingInvoiceRepository, depositNoticeService, tickets, new RemainingInvoicePdfRenderer());
 
         billingNoteRepository = new BillingNoteRepository(jdbc);
         billingNoteService = transactional(new BillingNoteService(

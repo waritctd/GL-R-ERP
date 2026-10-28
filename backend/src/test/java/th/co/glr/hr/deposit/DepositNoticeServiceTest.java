@@ -45,12 +45,11 @@ class DepositNoticeServiceTest {
     private final DepositNoticeRepository docs = mock(DepositNoticeRepository.class);
     private final TicketRepository ticketRepo = mock(TicketRepository.class);
     private final NotificationRepository notifications = mock(NotificationRepository.class);
-    private final DepositNoticeRenderer renderer = mock(DepositNoticeRenderer.class);
-    private final RemainingInvoiceRenderer remainingRenderer = mock(RemainingInvoiceRenderer.class);
+    private final DepositNoticePdfRenderer renderer = mock(DepositNoticePdfRenderer.class);
     private final CustomerRepository customerRepo = mock(CustomerRepository.class);
     private final CustomerQuotationRepository quotationRepo = mock(CustomerQuotationRepository.class);
     private final DepositNoticeService service = new DepositNoticeService(
-        docs, ticketRepo, notifications, renderer, remainingRenderer, customerRepo, quotationRepo);
+        docs, ticketRepo, notifications, renderer, customerRepo, quotationRepo);
     {
         // Default stub so every payment-track write in this file (advancePaymentStatus's
         // compare-and-set) reads as "succeeded" unless a specific test overrides it — Mockito's
@@ -310,6 +309,23 @@ class DepositNoticeServiceTest {
         // No DEPOSIT-kind payment_receipt rows stubbed -> falls back to the issued notice's own
         // doc number as the deposit-reference default.
         assertThat(options.defaultDepositReference()).isEqualTo("GLRD69001");
+        // Legacy path (no accepted quotation): the reference defaults to the ISSUED deposit notice's own
+        // reference (the helper's "REF-1"), not null -- fresh-engine ruling 3.
+        assertThat(options.defaultReference()).isEqualTo("REF-1");
+    }
+
+    @Test
+    void remainingInvoiceLegacyDefaultReference_isTheLATESTIssuedNoticesReference() {
+        stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
+        DepositNoticeItemDto noticeItem = new DepositNoticeItemDto(
+            1L, 1, "จากใบแจ้งยอดมัดจำ", BigDecimal.ONE, "แผ่น",
+            BigDecimal.TEN, null, BigDecimal.TEN, BigDecimal.TEN);
+        // docs.findByTicket is version DESC: v2 is the latest ISSUED one.
+        when(docs.findByTicket(10L)).thenReturn(List.of(
+            issuedNotice(6L, 10L, 2, "GLRD69002", "REF-NEW", new BigDecimal("20"), new BigDecimal("4"), List.of(noticeItem)),
+            issuedNotice(5L, 10L, 1, "GLRD69001", "REF-OLD", new BigDecimal("20"), new BigDecimal("4"), List.of(noticeItem))));
+
+        assertThat(service.getRemainingInvoiceOptions(10L, owner).defaultReference()).isEqualTo("REF-NEW");
     }
 
     @Test
@@ -350,45 +366,10 @@ class DepositNoticeServiceTest {
     // req.notes(), each falling back to a resolved/existing default when omitted) are exercised by
     // RemainingInvoiceServiceIntegrationTest instead.
 
-    @Test
-    void createDraft_overCapacityThrowsConflict_viaRemainingInvoiceServicesOwnGate() {
-        // O1 successor for the deleted remainingInvoiceXlsx_overCapacityThrowsConflictWithoutTruncating:
-        // capacity is no longer enforced by DepositNoticeService#getRemainingInvoiceXlsx (gone) —
-        // it is RemainingInvoiceService#createDraft's own requireCapacity gate now (see that
-        // class), exercised here through the SAME resolveRemainingInvoiceSnapshot content this
-        // file's other fixtures already drive.
-        stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
-        when(quotationRepo.findByTicket(10L)).thenReturn(List.of(quotation(1L, 10L, "ACCEPTED", 1,
-            List.of(quotationItem("A", BigDecimal.ONE, "PER_PIECE", BigDecimal.TEN, BigDecimal.ZERO, BigDecimal.TEN)))));
-        // A deposit row too -> MAX_ITEM_ROWS notice items + 1 deposit row = one over capacity.
-        List<DepositNoticeItemDto> noticeItems = depositNoticeItems(RemainingInvoiceRenderer.MAX_ITEM_ROWS);
-        when(docs.findByTicket(10L)).thenReturn(List.of(
-            issuedNotice(5L, 10L, 1, "GLRD69001", "QT-2026-1", BigDecimal.TEN, new BigDecimal("40"), noticeItems)));
-        RemainingInvoiceRepository storedMock = mock(RemainingInvoiceRepository.class);
-        when(storedMock.findByTicket(10L)).thenReturn(List.of());
-        RemainingInvoiceService remainingInvoiceService =
-            new RemainingInvoiceService(storedMock, service, ticketRepo, remainingRenderer);
-
-        assertConflict(() -> remainingInvoiceService.createDraft(10L, null, owner));
-        verify(storedMock, never()).replaceItems(anyLong(), any());
-    }
-
-    @Test
-    void remainingInvoiceOptions_neverThrowsForOverCapacityOnlyReportsIt() {
-        stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
-        when(quotationRepo.findByTicket(10L)).thenReturn(List.of(quotation(1L, 10L, "ACCEPTED", 1,
-            List.of(quotationItem("A", BigDecimal.ONE, "PER_PIECE", BigDecimal.TEN, BigDecimal.ZERO, BigDecimal.TEN)))));
-        List<DepositNoticeItemDto> noticeItems = depositNoticeItems(RemainingInvoiceRenderer.MAX_ITEM_ROWS);
-        when(docs.findByTicket(10L)).thenReturn(List.of(
-            issuedNotice(5L, 10L, 1, "GLRD69001", "QT-2026-1", BigDecimal.TEN, new BigDecimal("40"), noticeItems)));
-
-        RemainingInvoiceOptionsDto options = service.getRemainingInvoiceOptions(10L, owner); // must not throw
-
-        assertThat(options.blockingReason()).isNull();
-        assertThat(options.itemCount()).isEqualTo(RemainingInvoiceRenderer.MAX_ITEM_ROWS + 1);
-        assertThat(options.maxItems()).isEqualTo(RemainingInvoiceRenderer.MAX_ITEM_ROWS);
-        assertThat(options.itemCount()).isGreaterThan(options.maxItems());
-    }
+    // createDraft_overCapacityThrowsConflict_viaRemainingInvoiceServicesOwnGate and
+    // remainingInvoiceOptions_neverThrowsForOverCapacityOnlyReportsIt were REMOVED (fresh PDF engine,
+    // 2026-10-28): the renderer now flows any number of items onto extra rows/pages, so there is no
+    // item-row capacity to refuse or report. See RemainingInvoicePdfRendererTest (40 items).
 
     @Test
     void remainingInvoiceXlsx_noAcceptedQuotationNoIssuedNoticeNoLegacyThrowsConflict() throws Exception {
@@ -518,8 +499,8 @@ class DepositNoticeServiceTest {
      * identical either way. What actually distinguishes "qualified via the accepted-quotation path"
      * from "fell through to legacy" is {@code defaultReference}/{@code referenceOptions}:
      * resolveFromQuotation sets defaultReference to the quotation's own number and populates
-     * referenceOptions from buildQuotationReferenceOptions, while resolveLegacy hard-codes both to
-     * null/empty (see resolveRemainingInvoice's own Javadoc) — that is what this test pins.
+     * referenceOptions from buildQuotationReferenceOptions, while resolveLegacy hard-codes referenceOptions to
+     * empty (and, since the fresh-engine ruling, defaultReference to the notice's reference) (see resolveRemainingInvoice's own Javadoc) — that is what this test pins.
      * Mutation-checked: widening the ACCEPTED check to `|| QuotationStatus.ISSUED.equals(...)`
      * turns this one test red (defaultReference becomes "QT-2026-1", referenceOptions non-empty)
      * and every other test in this file stays green; reverted after confirming. */
@@ -541,8 +522,10 @@ class DepositNoticeServiceTest {
         assertThat(options.blockingReason()).isNull(); // resolveLegacy still prices it, via the notice
         assertThat(options.itemsTotal()).isEqualByComparingTo("100"); // sourced from the notice regardless
         // The discriminator: an ISSUED (not ACCEPTED) quotation must never be treated as a
-        // "qualifying final quotation" — defaultReference/referenceOptions stay legacy-empty.
-        assertThat(options.defaultReference()).isNull();
+        // "qualifying final quotation" — referenceOptions/defaultQuotationId stay legacy-empty. (Fresh-engine
+        // ruling 3: the legacy path's defaultReference is no longer null -- it is the ISSUED notice's own
+        // reference, which here happens to equal the quotation's number, so it can no longer discriminate.)
+        assertThat(options.defaultReference()).isEqualTo("QT-2026-1");
         assertThat(options.referenceOptions()).isEmpty();
         assertThat(options.defaultQuotationId()).isNull();
     }
@@ -1256,6 +1239,113 @@ class DepositNoticeServiceTest {
         assertThatThrownBy(action)
             .isInstanceOfSatisfying(ApiException.class, e ->
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+    }
+
+    private DepositNoticeDto issuedNoticeWithAddress(String address) {
+        return new DepositNoticeDto(
+            99L, 10L, "DEPOSIT_NOTICE", 1, "GLRD69001", LocalDate.of(2026, 8, 1), "ISSUED",
+            "ACME", "0100000000000", address, "Showroom", "REF-1", "THB",
+            new BigDecimal("0.50"), new BigDecimal("1000.00"), new BigDecimal("500.00"),
+            new BigDecimal("0.07"), new BigDecimal("35.00"), new BigDecimal("535.00"),
+            List.of("stored note"), true, true, "Sales", "Preparer", null, null, List.of());
+    }
+
+    /** Stored-document rule: the printed customer block is the STORED name/tax id/address. The customer master's
+     * branch (which may have changed since issue) is never looked up; createDraft already appended it to the address. */
+    @Test
+    void getXlsx_printsOnlyStoredFields_neverLooksTheBranchUpLive() {
+        when(docs.findById(99L)).thenReturn(Optional.of(issuedNoticeWithAddress("99 Road สำนักงานใหญ่")));
+        stubTicketWithCustomer(10L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_NOTICE_ISSUED", 5L, "Showroom");
+        when(customerRepo.findById(5L)).thenReturn(Optional.of(
+            new th.co.glr.hr.customer.CustomerDto(5L, "ACME", "0100000000000", "99 Road", "สาขา 9 (แก้หลังออกเอกสาร)", "")));
+        when(renderer.toXls(any())).thenReturn(new byte[] {1});
+
+        service.getXlsx(99L, owner);
+
+        org.mockito.ArgumentCaptor<DepositNoticeRenderModel> model =
+            org.mockito.ArgumentCaptor.forClass(DepositNoticeRenderModel.class);
+        verify(renderer).toXls(model.capture());
+        assertThat(model.getValue().customerAddress()).isEqualTo("99 Road สำนักงานใหญ่");
+        assertThat(model.getValue().customerBranch()).isNull();
+        verify(customerRepo, never()).findById(anyLong());
+    }
+
+    /** A DRAFT has no issue date yet: it prints today's date in Bangkok time (header and signature). */
+    @Test
+    void renderModel_aDraftPrintsTodayInBangkokTime_anIssuedNoticeItsOwnDate() {
+        DepositNoticeDto draft = new DepositNoticeDto(
+            98L, 10L, "DEPOSIT_NOTICE", 1, null, null, "DRAFT",
+            "ACME", "0100000000000", "Bangkok", "Showroom", "REF-1", "THB",
+            new BigDecimal("0.50"), new BigDecimal("1000.00"), new BigDecimal("500.00"),
+            new BigDecimal("0.07"), new BigDecimal("35.00"), new BigDecimal("535.00"),
+            List.of(), false, false, "Sales", "Preparer", null, null, List.of());
+        LocalDate today = LocalDate.of(2026, 10, 28);
+
+        assertThat(service.renderModel(draft, today).issueDate()).isEqualTo(today);
+        assertThat(service.renderModel(issuedNoticeWithAddress("Bangkok"), today).issueDate())
+            .isEqualTo(LocalDate.of(2026, 8, 1));
+    }
+
+    /** The negative-net refusal is still a legacy-path result: it carries the issued notice's reference too. */
+    @Test
+    void remainingInvoiceOptions_negativeNetLegacy_stillDefaultsTheReferenceToTheNotices() {
+        stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
+        DepositNoticeItemDto noticeItem = new DepositNoticeItemDto(
+            1L, 1, "จากใบแจ้งยอดมัดจำ", BigDecimal.ONE, "แผ่น",
+            BigDecimal.TEN, null, BigDecimal.TEN, BigDecimal.TEN);
+        // deposit 40 > items 10 -> negative net
+        when(docs.findByTicket(10L)).thenReturn(List.of(
+            issuedNotice(5L, 10L, 1, "GLRD69001", "REF-NEG", new BigDecimal("20"), new BigDecimal("40"), List.of(noticeItem))));
+
+        RemainingInvoiceOptionsDto options = service.getRemainingInvoiceOptions(10L, owner);
+
+        assertThat(options.blockingReason()).contains("ติดลบ");
+        assertThat(options.defaultReference()).isEqualTo("REF-NEG");
+    }
+
+    /** A remaining invoice with no linked deposit notice passes NO preparer: the template's own line prints
+     * (there is deliberately no Java copy of the V12 default name). */
+    @Test
+    void remainingInvoiceFile_withNoDepositNotice_passesNoPreparer() {
+        stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
+        RemainingInvoiceRepository storedMock = mock(RemainingInvoiceRepository.class);
+        RemainingInvoicePdfRenderer remainingRenderer = mock(RemainingInvoicePdfRenderer.class);
+        RemainingInvoiceDocumentDto doc = new RemainingInvoiceDocumentDto(7L, 10L, null, null, "GLR6900001", 1,
+            "GLR6900001-1", "ISSUED", null, "REF", null, LocalDate.of(2026, 10, 28), List.of(),
+            "ACME", null, null, null, null, BigDecimal.TEN, BigDecimal.ZERO, BigDecimal.TEN, BigDecimal.ONE,
+            BigDecimal.TEN, 1L, "Sales", null, null, null, null, null, List.of());
+        when(storedMock.findById(7L)).thenReturn(Optional.of(doc));
+        when(remainingRenderer.toXls(any())).thenReturn(new byte[] {1});
+
+        new RemainingInvoiceService(storedMock, service, ticketRepo, remainingRenderer).file(7L, owner);
+
+        org.mockito.ArgumentCaptor<RemainingInvoiceRenderModel> model =
+            org.mockito.ArgumentCaptor.forClass(RemainingInvoiceRenderModel.class);
+        verify(remainingRenderer).toXls(model.capture());
+        assertThat(model.getValue().preparerName()).isNull();
+    }
+
+    /** "Today" for a draft is the BANGKOK date at the service's clock: 20:00 UTC on the 14th is already the 15th there.
+     * Every render call site (download, preview) must use it; one using the JVM zone would print the 14th. */
+    @Test
+    void draftDates_useTheBangkokDayAtTheServicesClock_onEveryRenderPath() {
+        service.clock = java.time.Clock.fixed(java.time.Instant.parse("2026-03-14T20:00:00Z"), java.time.ZoneOffset.UTC);
+        stubDraft(99L, 10L);
+        stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
+        when(renderer.toXls(any())).thenReturn(new byte[] {1});
+        when(renderer.toPdf(any())).thenReturn(new byte[] {1});
+        when(renderer.toPreviewHtml(any(), any())).thenReturn("");
+
+        service.getXlsx(99L, owner);
+        service.getPdf(99L, owner);
+        service.preview(99L, owner);
+
+        org.mockito.ArgumentCaptor<DepositNoticeRenderModel> model = org.mockito.ArgumentCaptor.forClass(DepositNoticeRenderModel.class);
+        verify(renderer).toXls(model.capture());
+        assertThat(model.getValue().issueDate()).isEqualTo(LocalDate.of(2026, 3, 15));
+        verify(renderer).toPdf(model.capture());
+        assertThat(model.getValue().issueDate()).isEqualTo(LocalDate.of(2026, 3, 15));
+        verify(renderer).toPreviewHtml(any(), org.mockito.ArgumentMatchers.eq(LocalDate.of(2026, 3, 15)));
     }
 
     // SK-07 (owner ruling 2026-10-28, final): each tax invoice's VAT is round2(its own net x 7%). Deal 11

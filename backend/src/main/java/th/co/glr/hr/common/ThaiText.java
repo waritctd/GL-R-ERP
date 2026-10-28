@@ -12,11 +12,8 @@ import java.util.Locale;
  * durations rendered the way a Thai reader expects, not as raw Java {@code toString()} output.
  *
  * <p><b>Duplication this deliberately does NOT clean up:</b> the {@code d MONTH (year+543)} Thai-date
- * algorithm {@link #date(LocalDate)} implements already exists, byte-for-byte identical, in three PDF
- * renderers -- {@code th.co.glr.hr.ticket.QuotationRenderer#thaiDate} (~line 560), {@code
- * th.co.glr.hr.deposit.DepositNoticeRenderer#thaiDate} (~line 214) and {@code
- * th.co.glr.hr.deposit.RemainingInvoiceRenderer#thaiDate} (~line 148). Those three render PDFs/XLS
- * documents and carry their own tests; unifying them with this class is left as a follow-up, not done
+ * algorithm {@link #date(LocalDate)} implements also exists, byte-for-byte identical, in {@code
+ * th.co.glr.hr.ticket.QuotationRenderer#thaiDate}. That renderer carries its own tests; unifying it with this class is left as a follow-up, not done
  * as a side effect of this notification-copy fix. This class's {@link #date(LocalDate)} matches their
  * output exactly.
  *
@@ -35,8 +32,7 @@ public final class ThaiText {
 
     /**
      * {@code d MONTH (year+543)}, e.g. 9 สิงหาคม 2569 -- no leading zero on the day. Matches {@code
-     * QuotationRenderer#thaiDate}/{@code DepositNoticeRenderer#thaiDate}/{@code
-     * RemainingInvoiceRenderer#thaiDate} exactly (see this class's own Javadoc).
+     * QuotationRenderer#thaiDate} exactly, and is what the deposit-notice and remaining-invoice PDFs print.
      *
      * @return {@code ""} for a {@code null} date, mirroring the null-guard the three PDF renderers
      *     above already use ahead of this same formula.

@@ -158,7 +158,7 @@ class DepositNoticeIssueGuardIntegrationTest extends AbstractPostgresIntegration
 
         depositNoticeRepository = new DepositNoticeRepository(jdbc);
         depositNoticeService = new DepositNoticeService(depositNoticeRepository, tickets, notifications,
-            new DepositNoticeRenderer(), new RemainingInvoiceRenderer(), customers, quotationRepository);
+            new DepositNoticePdfRenderer(), customers, quotationRepository);
 
         orderConfirmation = new OrderConfirmationService(
             pricingRequests, tickets, ticketService, quotationRepository, depositNoticeService, notifications);

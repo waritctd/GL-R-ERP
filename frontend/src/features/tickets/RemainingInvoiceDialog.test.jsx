@@ -49,7 +49,6 @@ function baseOptions(overrides = {}) {
       { id: 2, text: 'หมายเหตุ 2', defaultSelected: false, sortOrder: 2 },
     ],
     itemCount: 1,
-    maxItems: 22,
     itemsTotal: 37114.18,
     depositAmount: 18557.09,
     netAmount: 18557.09,
@@ -157,18 +156,19 @@ describe('RemainingInvoiceDialog — no live stored document (create flow)', () 
     }));
   });
 
-  it('over-capacity disables the create-draft button and shows a refusal, without a failed round trip', async () => {
+  it('a large item count never blocks creating a draft (the sheet flows onto extra rows/pages)', async () => {
     api.tickets.remainingInvoiceOptions.mockResolvedValue({
-      options: baseOptions({ itemCount: 23, maxItems: 22 }),
+      options: baseOptions({ itemCount: 120 }),
     });
+    api.storedRemainingInvoices.createDraft.mockResolvedValue({ remainingInvoice: { id: 7, status: 'DRAFT', items: [] } });
     renderDialog();
 
     await screen.findByDisplayValue('QT-2026-0099');
-    expect(screen.getByText(/เกินความจุของแบบฟอร์ม/)).not.toBeNull();
-    expect(screen.getByTestId('remaining-invoice-create-draft').disabled).toBe(true);
+    expect(screen.queryByText(/เกินความจุ/)).toBeNull();
+    expect(screen.getByTestId('remaining-invoice-create-draft').disabled).toBe(false);
 
     fireEvent.click(screen.getByTestId('remaining-invoice-create-draft'));
-    expect(api.storedRemainingInvoices.createDraft).not.toHaveBeenCalled();
+    await waitFor(() => expect(api.storedRemainingInvoices.createDraft).toHaveBeenCalledTimes(1));
   });
 
   it('a non-null blockingReason disables the create-draft button and shows the reason', async () => {

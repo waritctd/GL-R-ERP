@@ -57,7 +57,7 @@ class DepositNoticeControllerTest {
 
     @Test
     void fileWithFormatXlsxParamReturnsHonestXlsContentTypeAndFilename() throws Exception {
-        // DepositNoticeRenderer fills a real BIFF8 (.xls) company template via
+        // DepositNoticePdfRenderer fills a real BIFF8 (.xls) company template via
         // WorkbookFactory/HSSFWorkbook (see its TEMPLATE constant) — wb.write(out) emits OLE2
         // .xls bytes, never OOXML .xlsx. The ?format=xlsx REQUEST param is the existing wire
         // contract and stays as-is (frontend + mockApi both send it); only the RESPONSE
@@ -102,7 +102,7 @@ class DepositNoticeControllerTest {
     private RemainingInvoiceOptionsDto optionsDto() {
         return new RemainingInvoiceOptionsDto(
             "GLRI69001", LocalDate.of(2026, 9, 1), null, List.of(), null, List.of(),
-            List.of(), 0, RemainingInvoiceRenderer.MAX_ITEM_ROWS,
+            List.of(), 0,
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
             List.of(), null, null);
     }

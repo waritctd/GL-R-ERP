@@ -57,7 +57,7 @@ class BillingNoteRendererTest {
 
     @Test
     void xlsxOutputIsRealBiff8OleBytesNotOoxmlZip() throws Exception {
-        // Same byte-format pin RemainingInvoiceRendererTest carries: WorkbookFactory.create over
+        // Same byte-format pin the remaining-invoice renderer test carries: WorkbookFactory.create over
         // the .xls template always returns an HSSFWorkbook, so wb.write emits OLE2/CFB (BIFF8)
         // bytes, never an OOXML ZIP — BillingNoteController serves this as
         // "application/vnd.ms-excel" + ".xls".
