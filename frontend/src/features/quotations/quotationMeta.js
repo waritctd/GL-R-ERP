@@ -155,13 +155,25 @@ export function canCancelDealQuotation(user, quotation) {
  * ONLY by its owning sales rep (mirrors DealQuotationService#createRevision, which reuses the
  * recordOutcome gate there) -- sales_manager / granted employees may NOT, unlike for DEAL_DIRECT.
  * Display-only; the server re-checks. */
-export function canReviseDealQuotation(user, quotation) {
+export function canReviseDealQuotation(user, quotation, order) {
   if (quotation?.origin === 'PRICING_REQUEST') {
     return user?.role === 'sales'
       && quotation.salesRepId != null && Number(quotation.salesRepId) === Number(user.id)
       && (quotation.docStatus === 'ISSUED' || quotation.docStatus === 'REVISION_REQUESTED');
   }
+  // Owner ruling 2026-10-28: once the order is confirmed from a direct quotation it is the agreed order and
+  // cannot be revised (the server's createRevision answers 409). `order` is the deal's confirmation fact from
+  // orderConfirmationOf: omitted = no gate asked for; null = unknown (loading / errored) -> hidden.
+  if (order === null || order?.confirmed) return false;
   return canEditDealQuotation(user, quotation) && quotation?.docStatus === 'APPROVED';
+}
+
+/** The deal's order-confirmation fact from its ticket events: the DEAL_PROMOTED_FROM_QUOTATION event names the
+ * deal's order is confirmed. null when events are not loaded. */
+export function orderConfirmationOf(events) {
+  if (!Array.isArray(events)) return null;
+  const promoted = events.find((e) => e.kind === 'DEAL_PROMOTED_FROM_QUOTATION');
+  return { confirmed: Boolean(promoted) };
 }
 
 /** GLA-136 (owner ruling 2026-09-30) — "สร้างดีลจากใบเสนอราคา": only an APPROVED direct

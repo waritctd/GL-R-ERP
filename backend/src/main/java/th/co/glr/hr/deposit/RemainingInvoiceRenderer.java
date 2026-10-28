@@ -234,8 +234,15 @@ public class RemainingInvoiceRenderer {
 
             // ── Summary rows auto-calculated by existing formulas ─────────────
             // I42 = SUM(I11:I41) includes item amounts and -depositAmount → remainder
-            // I43 = I42 * 0.07 (VAT)
-            // I44 = I42 + I43 (total payable)
+            // I43 / I44 (VAT, total payable): the STORED, already-rounded figures as VALUES when supplied
+            // (owner ruling 2026-10-28, SK-07) -- the template's I42 x 7% formula would print an unrounded
+            // 5,867.505 / 89,689.005 instead of what the issued document and the ledger hold.
+            if (doc.vatAmount() != null) {
+                setNum(sh, 42, 8, doc.vatAmount().doubleValue());
+            }
+            if (doc.grandTotal() != null) {
+                setNum(sh, 43, 8, doc.grandTotal().doubleValue());
+            }
             wb.setForceFormulaRecalculation(true);
             wb.write(out);
             return out.toByteArray();

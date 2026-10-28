@@ -951,9 +951,8 @@ public class TicketService {
     /**
      * Owner ruling 2026-10-22, widened after the #1173 review: while the payment track is at
      * CUSTOMER_CONFIRMED, a deposit policy the SYSTEM owns follows the deal's quotation. ไม่รับมัดจำ
-     * (0%) means NOT_REQUIRED; any deposit means REQUIRED. Called at the first confirmation and
-     * when a DEAL_DIRECT quotation is approved on a confirmed deal ({@code DealQuotationService
-     * #approve}), so a revision that adds or drops the deposit moves the deal with it.
+     * (0%) means NOT_REQUIRED; any deposit means REQUIRED. Called at the first confirmation only (the
+     * confirmed direct quotation can no longer be revised or replaced, owner ruling 2026-10-28).
      *
      * <p>A policy a person chose ({@link #waiveDeposit}: WAIVED, CREDIT_CUSTOMER, or a typed
      * NOT_REQUIRED) is never touched, and nothing moves once a deposit notice is out. Both are
@@ -1029,8 +1028,10 @@ public class TicketService {
             throw new ApiException(HttpStatus.CONFLICT, "ต้องออกใบแจ้งรับมัดจำก่อนจึงจะยืนยันรับชำระมัดจำได้");
         }
         var notice = tickets.latestIssuedDepositNotice(ticketId).orElse(null);
-        BigDecimal amount = notice != null && notice.depositAmount() != null
-            ? notice.depositAmount()
+        // QA-01: the deal payable is VAT-inclusive, so the receipt is the notice's total_payable
+        // (deposit + VAT), not the pre-VAT deposit_amount.
+        BigDecimal amount = notice != null && notice.totalPayable() != null
+            ? notice.totalPayable()
             : payableAmount(ticket).multiply(new BigDecimal("0.50"));
         if (amount.signum() <= 0) {
             throw new ApiException(HttpStatus.CONFLICT,
@@ -2125,6 +2126,13 @@ public class TicketService {
         requireActive(s);
         if (targetStage.equals(s.salesStage())) {
             throw new ApiException(HttpStatus.CONFLICT, "ดีลนี้อยู่ในขั้นตอน " + targetStage + " อยู่แล้ว");
+        }
+        // QA-05 (owner ruling 2026-10-28): once the order is confirmed (the deal is at or past ขั้น 10) a manual
+        // move may not rewind below ORDER_RECEIVED. Keyed on the CURRENT stage only: no repository call here.
+        if (DealStage.indexOf(s.salesStage()) >= DealStage.indexOf(DealStage.ORDER_RECEIVED)
+                && DealStage.indexOf(targetStage) < DealStage.indexOf(DealStage.ORDER_RECEIVED)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ย้อนสถานะกลับก่อนขั้นรับคำสั่งซื้อไม่ได้ — ยืนยันคำสั่งซื้อไปแล้ว");
         }
         // Rung 6 of the precedence ladder (design §12.1): the deal's ENTRY-CHANNEL route. Checked
         // BEFORE the facts because an off-route target's actionable remedy is the channel, not the

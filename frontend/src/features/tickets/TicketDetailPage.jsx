@@ -54,7 +54,7 @@ import { DealMoneyTimeline } from './DealMoneyTimeline.jsx';
 import { DealRemainingInvoiceCard } from './DealRemainingInvoiceCard.jsx';
 import { DealQuotationPanel } from './DealQuotationPanel.jsx';
 import {
-  canReviseDealQuotation, canViewDealQuotation, CONFIRM_ORDER_FROM_QUOTATION_COPY, newestQuotationByRequest,
+  canReviseDealQuotation, orderConfirmationOf, canViewDealQuotation, CONFIRM_ORDER_FROM_QUOTATION_COPY, newestQuotationByRequest,
 } from '../quotations/quotationMeta.js';
 import { DealStagePanel } from './DealStagePanel.jsx';
 import { DealStateHeader } from './DealStateHeader.jsx';
@@ -1251,7 +1251,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // open revision draft already hanging off it. Same query key as DealDocumentRegister, so one fetch.
   const dealQuotationRows = dealQuotationsQuery.data ?? [];
   const reviseCandidate = dealQuotationRows
-    .filter((q) => canReviseDealQuotation(user, q))
+    .filter((q) => canReviseDealQuotation(user, q, orderConfirmationOf(ticket?.events)))
     .reduce((best, q) => (best == null || q.id > best.id ? q : best), null);
   const openRevisionDraft = reviseCandidate
     ? dealQuotationRows.find((q) => q.docStatus === 'DRAFT' && q.parentQuotationId === reviseCandidate.id)

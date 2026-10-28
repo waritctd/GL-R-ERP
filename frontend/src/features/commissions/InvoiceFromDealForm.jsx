@@ -110,10 +110,10 @@ export function InvoiceFromDealForm({
             </FormGrid>
           </Group>
 
-          <Group divided legend="ยอดเงินและรายการหัก" hint="ยอดรวมก่อน VAT ตามด้วยรายการหักหรือปรับปรุง เว้นว่างได้ถ้าไม่มี">
+          <Group divided legend="ยอดเงินและรายการหัก" hint="ยอดรับจริงรวม VAT ตามด้วยรายการหักหรือปรับปรุง เว้นว่างได้ถ้าไม่มี">
             <FormGrid>
               <label className={formGridSpan2}>
-                ยอดรวม (ก่อน VAT) * <small className="text-text-muted">(ค่าเริ่มต้นจากยอดก่อน VAT ของดีล แก้ไขได้)</small>
+                ยอดรับจริง (รวม VAT) * <small className="text-text-muted">(ค่าเริ่มต้นจากยอดรวม VAT ของดีล แก้ไขได้)</small>
                 <input type="number" min="0" step="0.01" inputMode="decimal" {...field('grossAmount')} required />
                 {errorFor('grossAmount')}
               </label>

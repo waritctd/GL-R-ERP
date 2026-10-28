@@ -456,6 +456,57 @@ class StageDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         }
     }
 
+    /**
+     * QA-05 (owner ruling 2026-10-28): once the order is confirmed (payment track reached
+     * CUSTOMER_CONFIRMED -- the deal is at or past ขั้น 10), "แก้ไขสถานะ" must not move the deal
+     * below ขั้น 10. The decision payload the modal renders says blocked, and the write is a 409.
+     */
+    @Test
+    void afterTheOrderIsConfirmed_everyStageBelowOrderReceived_isBlockedAndRefusedWith409() {
+        long ticketId = readyToAdvanceFrom(DealStage.PROCUREMENT);
+        tickets.updatePaymentStatusUnchecked(ticketId, PaymentTrack.CUSTOMER_CONFIRMED);
+
+        for (UserPrincipal actor : List.of(ownerRep, salesManager, ceo)) {
+            List<StageDecisionDto> decisions = decisionsFor(ticketId, actor);
+            for (String target : DealStage.ORDER) {
+                if (DealStage.indexOf(target) >= DealStage.indexOf(DealStage.ORDER_RECEIVED)) continue;
+                assertThat(allowedFor(decisions, target))
+                    .as("%s must not be offered to %s after the order is confirmed", target, actor.role()).isFalse();
+                assertThat(reasonFor(decisions, target)).isNotBlank();
+            }
+        }
+        // The write is refused too (not only hidden), with a conflict, and nothing moved.
+        for (String target : List.of(DealStage.QUOTE_OWNER, DealStage.SPEC_APPROVED, DealStage.NEGOTIATION)) {
+            assertThatThrownBy(() -> ticketService.updateStage(ticketId, target, "ย้อนกลับ", ownerRep))
+                .as(target)
+                .isInstanceOfSatisfying(ApiException.class,
+                    e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        }
+        assertThat(stageOf(ticketId)).isEqualTo(DealStage.PROCUREMENT);
+        assertThat(stageChangedEvents(ticketId)).isZero();
+    }
+
+    /** The other half of the ruling: a move that stays at or above ขั้น 10 is unaffected by the new gate. */
+    @Test
+    void afterTheOrderIsConfirmed_movesWithinTenAndAbove_stillWork() {
+        long ticketId = readyToAdvanceFrom(DealStage.PROCUREMENT);
+        tickets.updatePaymentStatusUnchecked(ticketId, PaymentTrack.CUSTOMER_CONFIRMED);
+
+        assertThat(allowedFor(decisionsFor(ticketId, ownerRep), DealStage.DELIVERY_SCHEDULING)).isTrue();
+        ticketService.updateStage(ticketId, DealStage.DELIVERY_SCHEDULING, "ส่งของ", ownerRep);
+        assertThat(stageOf(ticketId)).isEqualTo(DealStage.DELIVERY_SCHEDULING);
+    }
+
+    /** ...and before the order exists the ordinary rewind (ขั้น 5 -> 3) is still legal, with its reason. */
+    @Test
+    void beforeTheOrderIsConfirmed_aRewindWithinStagesOneToNine_stillWorks() {
+        long ticketId = readyToAdvanceFrom(DealStage.QUOTE_OWNER);
+
+        assertThat(allowedFor(decisionsFor(ticketId, ownerRep), DealStage.SPEC_APPROVED)).isTrue();
+        ticketService.updateStage(ticketId, DealStage.SPEC_APPROVED, "ลูกค้าขอแก้สเปก", ownerRep);
+        assertThat(stageOf(ticketId)).isEqualTo(DealStage.SPEC_APPROVED);
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     // H1 lockdown: account reads its stage decisions through financeActions (same gates, no /tickets view

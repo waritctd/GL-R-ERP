@@ -86,3 +86,23 @@ describe('mockStageDecisions — onRoute mirrors DealRoute', () => {
     }
   });
 });
+
+// QA-05 (owner ruling 2026-10-28): mirror of TicketService's "order confirmed => no rewind below
+// ขั้น 10". Plumbing only; the 409 itself is proved by StageDecisionIntegrationTest on the Java side.
+describe('mockStageDecisions — no rewind below ขั้น 10 once the order is confirmed', () => {
+  it('offers no stage below ORDER_RECEIVED on a deal whose payment track has started', async () => {
+    await api.auth.login({ role: 'ceo' });
+    const { tickets } = await api.tickets.list();
+    const confirmed = tickets.find((t) => (t.lifecycle ?? 'ACTIVE') === 'ACTIVE'
+      && t.paymentStatus && ['CUSTOMER_CONFIRMED', 'DEPOSIT_NOTICE_ISSUED', 'DEPOSIT_PAID'].includes(t.paymentStatus));
+    expect(confirmed, 'the mock must hold an order-confirmed deal').toBeTruthy();
+
+    const { stageDecisions } = await api.tickets.actions(confirmed.id);
+    const below = stageDecisions.filter((d) => d.no < 10 && d.stage !== confirmed.salesStage);
+    expect(below.length).toBeGreaterThan(0);
+    below.forEach((d) => {
+      expect(d.allowed, d.stage).toBe(false);
+      expect(d.blockedReason).toBeTruthy();
+    });
+  });
+});

@@ -22,7 +22,7 @@ import {
   canManageCustomerQuotation, canRecordCustomerQuotationOutcome, canViewCustomerQuotation,
   isCustomerQuotationEditable, pricingRequestRecipientLabel,
 } from '../pricingRequests/pricingRequestMeta.js';
-import { acceptOutcomeConfirmCopy, dealQuotationStatusLabel } from '../quotations/quotationMeta.js';
+import { acceptOutcomeConfirmCopy, CONFIRM_ORDER_FROM_QUOTATION_COPY, dealQuotationStatusLabel } from '../quotations/quotationMeta.js';
 import { buttonVariants } from '../../components/common/Button.jsx';
 
 function generateClientRequestId() {
@@ -99,6 +99,9 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
   const [outcomeNote, setOutcomeNote] = useState('');
   const [downloadingFormat, setDownloadingFormat] = useState(null);
   const [confirmingAccept, setConfirmingAccept] = useState(false);
+  // SK-02: the order confirmation is irreversible (the deal can no longer go below ขั้น 10), so every door to it
+  // (sticky primary, ⋯, this panel) opens this dialog first.
+  const [confirmingOrder, setConfirmingOrder] = useState(false);
 
   const pr = useMemo(() => pickRelevantPricingRequest(pricingRequests), [pricingRequests]);
   const prQuotation = quotationByRequest?.get(pr?.id);
@@ -146,7 +149,7 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
     openConfirmOrder: () => {
       if (confirmOrder.isPending) return;
       if (pr && canConfirmOrder(user, pr)) {
-        confirmOrder.mutate();
+        setConfirmingOrder(true);
       } else {
         showToast?.('error', confirmOrderBlockedReason(pr)
           ?? 'ยังยืนยันคำสั่งซื้อไม่ได้ — ตรวจสอบสถานะคำขอราคาในส่วน "ราคาและใบเสนอราคา" ด้านล่าง');
@@ -308,6 +311,20 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
         ) : null}
       </div>
 
+      <ConfirmDialog
+        open={confirmingOrder}
+        title="ยืนยันคำสั่งซื้อ"
+        message={(
+          <p className="confirm-dialog-message m-0 leading-normal text-text-secondary">
+            {CONFIRM_ORDER_FROM_QUOTATION_COPY.lead(current?.number)} <strong>{CONFIRM_ORDER_FROM_QUOTATION_COPY.stage}</strong>
+            {' '}{CONFIRM_ORDER_FROM_QUOTATION_COPY.tail}
+          </p>
+        )}
+        confirmLabel="ยืนยันคำสั่งซื้อ"
+        busy={confirmOrder.isPending}
+        onCancel={() => setConfirmingOrder(false)}
+        onConfirm={() => { setConfirmingOrder(false); confirmOrder.mutate(); }}
+      />
       <ConfirmDialog
         open={confirmingAccept && Boolean(acceptConfirm)}
         title={acceptConfirm?.title}

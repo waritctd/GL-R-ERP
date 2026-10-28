@@ -3554,10 +3554,19 @@ describe('PricingRequestDetailPage Step 6: Deposit, Payment, and Order Confirmat
     expect(screen.queryByRole('button', { name: 'สร้างใบแจ้งยอดเงินรับมัดจำ' })).toBeNull();
     fireEvent.click(button);
 
-    await waitFor(() => expect(api.pricingRequests.confirmOrder).toHaveBeenCalledWith(
+    // SK-02: the confirm is irreversible -> a dialog first; cancel sends nothing, confirm sends once.
+    const dialog = await screen.findByRole('dialog', { name: 'ยืนยันคำสั่งซื้อ' });
+    expect(api.pricingRequests.confirmOrder).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'ยกเลิก' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'ยืนยันคำสั่งซื้อ' })).toBeNull());
+    expect(api.pricingRequests.confirmOrder).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole('button', { name: 'ยืนยันคำสั่งซื้อ' }));
+    fireEvent.click(within(await screen.findByRole('dialog', { name: 'ยืนยันคำสั่งซื้อ' })).getByRole('button', { name: 'ยืนยันคำสั่งซื้อ' }));
+    await waitFor(() => expect(api.pricingRequests.confirmOrder).toHaveBeenCalledTimes(1));
+    expect(api.pricingRequests.confirmOrder).toHaveBeenCalledWith(
       request.summary.id,
       expect.objectContaining({ clientRequestId: expect.any(String) }),
-    ));
+    );
   });
 
   it('offers "สร้างใบแจ้งยอดเงินรับมัดจำ" (not the confirm button) once the bridge has already run', async () => {

@@ -21,7 +21,7 @@ import { addDaysIso, bangkokTodayIso, dealStageLabel } from '../../utils/format.
 import {
   canApproveDealQuotation, canApproveDealQuotationNow, canCancelDealQuotation, canCopyDealQuotation, canCreateDealQuotation,
   canChangeDealCustomer, canCreateDealQuotationStandalone, canDecideDealQuotation, canEditDealQuotation,
-  canPromoteDealQuotationToDeal, canReviseDealQuotation, canSubmitDealQuotation, DEPOSIT_PERCENT_PRESETS,
+  canPromoteDealQuotationToDeal, canReviseDealQuotation, orderConfirmationOf, canSubmitDealQuotation, DEPOSIT_PERCENT_PRESETS,
   CONFIRM_ORDER_FROM_QUOTATION_COPY, REVISION_RECIPIENT_LOCKED_MESSAGE, quotationRecipientOption, recipientForDealStage, recipientForEntryChannel,
   availablePriceModes, PRICE_MODE_OPTIONS, adjustmentDescriptionPreview, buildQuotationChecklist, currencyForLanguage, DOCUMENT_LANGUAGE_OPTIONS,
   isEffectiveZeroDeposit,
@@ -287,7 +287,8 @@ export function QuotationEditorPage({ user, showToast }) {
   const canPromoteToDeal = canPromoteDealQuotationToDeal(user, quotation);
   const promotionTicketQuery = useQuery({
     queryKey: [...queryKeys.ticketDetail(quotation?.ticketId), 'promotionSummary'],
-    queryFn: () => api.tickets.get(quotation.ticketId).then((r) => r.ticket?.summary ?? null),
+    queryFn: () => api.tickets.get(quotation.ticketId).then((r) => (r.ticket?.summary
+      ? { ...r.ticket.summary, orderConfirmation: orderConfirmationOf(r.ticket.events) } : null)),
     enabled: canPromoteToDeal && quotation?.ticketId != null,
     retry: false,
   });
@@ -2297,7 +2298,7 @@ export function QuotationEditorPage({ user, showToast }) {
                 มีรายการที่เปลี่ยนจากราคา CEO — ต้องให้ CEO อนุมัติ
               </p>
             ) : null}
-            {quotation && canReviseDealQuotation(user, quotation) ? (
+            {quotation && canReviseDealQuotation(user, quotation, promotionTicketQuery.isSuccess ? (promotionTicketQuery.data?.orderConfirmation ?? null) : null) ? (
               <Button variant="secondary" loading={reviseMutation.isPending} onClick={() => reviseMutation.mutate()}>สร้างฉบับแก้ไข</Button>
             ) : null}
             {/* ยืนยันคำสั่งซื้อ (GLA-136's promote, renamed per IA §7/§8 — the same words as the deal

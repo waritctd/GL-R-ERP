@@ -591,12 +591,33 @@ describe('QuotationEditorPage reorder / สร้างจากใบเดิ�
     api.dealQuotations.get.mockResolvedValue({
       quotation: baseQuotation({ docStatus: 'APPROVED', number: 'QT-2026-0005-1' }),
     });
+    api.tickets.get.mockResolvedValue({ ticket: { summary: { id: 1, status: 'draft' }, events: [] } });
     renderEditor('/quotations/5');
     // The control: the sibling action that shared its old gate (canReviseDealQuotation) is there.
     await screen.findByRole('button', { name: 'สร้างฉบับแก้ไข' });
     expect(screen.queryByRole('button', { name: /สร้างจากใบเดิม|สั่งเหมือนเดิม/ })).toBeNull();
     expect(screen.queryByRole('menuitem', { name: /สร้างจากใบเดิม|สั่งเหมือนเดิม/ })).toBeNull();
   });
+
+    // Owner ruling 2026-10-28: revise is keyed on the per-quotation order-confirmation fact (the promotion
+    // event names the confirmed quotation), and an unknown fact (loading / errored) counts as hidden.
+    it('hides สร้างฉบับแก้ไข once the order was confirmed from the quotation, and while that is unknown', async () => {
+      api.dealQuotations.get.mockResolvedValue({
+        quotation: baseQuotation({ docStatus: 'APPROVED', number: 'QT-2026-0005-1' }),
+      });
+      api.tickets.get.mockResolvedValue({ ticket: { summary: { id: 1, status: 'quotation_issued' },
+        events: [{ kind: 'DEAL_PROMOTED_FROM_QUOTATION' }] } });
+      const confirmed = renderEditor('/quotations/5');
+      await waitFor(() => expect(api.tickets.get).toHaveBeenCalled());
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(screen.queryByRole('button', { name: 'สร้างฉบับแก้ไข' })).toBeNull();
+      confirmed.unmount();
+
+      api.tickets.get.mockRejectedValue(new Error('boom'));
+      renderEditor('/quotations/5');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(screen.queryByRole('button', { name: 'สร้างฉบับแก้ไข' })).toBeNull();
+    });
 
     // Opus review (2026-09-19): the note must NOT claim "stays approved" when the source has
     // ALREADY been superseded by something else (a sibling's approval, not necessarily this

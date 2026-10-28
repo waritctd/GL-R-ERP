@@ -73,7 +73,7 @@ import {
 import { useUnitBasisCatalog } from './unitBasisCatalog.js';
 import { buttonVariants } from '../../components/common/Button.jsx';
 import { cn } from '../../utils/cn.js';
-import { acceptOutcomeConfirmCopy, newestQuotationByRequest, PRICE_MODE_OPTIONS } from '../quotations/quotationMeta.js';
+import { acceptOutcomeConfirmCopy, CONFIRM_ORDER_FROM_QUOTATION_COPY, newestQuotationByRequest, PRICE_MODE_OPTIONS } from '../quotations/quotationMeta.js';
 import { SearchableCombobox } from '../../components/common/SearchableCombobox.jsx';
 // B6 (GLA-135): reuses the catalog page's own add-factory dialog rather than a second, drifting
 // copy of the same five fields + validation — see ImportFactoryPicker's own comment below.
@@ -883,6 +883,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const [emailDrafts, setEmailDrafts] = useState({});
   const [receiveClientRequestIds, setReceiveClientRequestIds] = useState({});
   const [confirmAction, setConfirmAction] = useState(null);
+  // SK-02: confirm-order is irreversible -> dialog first.
+  const [confirmingOrder, setConfirmingOrder] = useState(false);
   // Review remediation (COMMIT 5, P1 finding 3): the customer-change revision UI now reuses
   // PricingRequestCreateModal in mode="revision" (seeded from the current request, full item
   // editing, catalog picker, unit select) instead of the old inline reason-only form that copied
@@ -4322,7 +4324,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   ลูกค้ายอมรับใบเสนอราคาแล้ว — ยืนยันคำสั่งซื้อเพื่อเริ่มขั้นตอนรับมัดจำและนำเข้าสินค้า
                 </p>
                 <Button type="button" variant="primary" className="self-start" disabled={confirmOrder.isPending}
-                  onClick={() => confirmOrder.mutate()}>
+                  onClick={() => setConfirmingOrder(true)}>
                   ยืนยันคำสั่งซื้อ
                 </Button>
               </div>
@@ -4363,6 +4365,20 @@ export function PricingRequestDetailPage({ user, showToast }) {
         </Panel>
       ) : null}
 
+      <ConfirmDialog
+        open={confirmingOrder}
+        title="ยืนยันคำสั่งซื้อ"
+        message={(
+          <p className="confirm-dialog-message m-0 leading-normal text-text-secondary">
+            {CONFIRM_ORDER_FROM_QUOTATION_COPY.lead(summary?.requestCode)} <strong>{CONFIRM_ORDER_FROM_QUOTATION_COPY.stage}</strong>
+            {' '}{CONFIRM_ORDER_FROM_QUOTATION_COPY.tail}
+          </p>
+        )}
+        confirmLabel="ยืนยันคำสั่งซื้อ"
+        busy={confirmOrder.isPending}
+        onCancel={() => setConfirmingOrder(false)}
+        onConfirm={() => { setConfirmingOrder(false); confirmOrder.mutate(); }}
+      />
       <ConfirmDialog
         open={Boolean(confirmAction)}
         title={confirmAction?.type === 'approveDecision' ? 'อนุมัติราคาขาย'

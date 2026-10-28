@@ -39,14 +39,8 @@ public class CommissionCalculator {
      * here) and รับเงินเกิน (overpayment received, added back). Both are applied at the same
      * "actualReceived" stage as the existing five deduction columns.
      *
-     * <p><b>Owner confirmation needed:</b> the exact Excel formula for how these two columns
-     * combine with the others could not be extracted — LibreOffice dropped the cell formulas on
-     * conversion, leaving only static values behind. This sign convention (WHT subtracted,
-     * overpayment added, both at this stage, before the VAT strip) is a best-effort mirror of the
-     * columns' evident intent, not a verified transcription of the source formula. The
-     * sales-manager review step ({@link CommissionService#updateDeductions}) is the safety net for
-     * this slice — flag this for the owner to confirm against the Excel/accounting team before
-     * relying on it unreviewed.
+     * <p>Matches the owner's commission workbooks (L = D-E-F-G-H-I-J+K, the amount received incl. VAT;
+     * M = L/1.07).
      *
      * <p>Backward compatible: when {@code withholdingTax} and {@code overpayment} are both zero
      * (or null), the result is identical to the pre-Slice-A1 five-column formula.

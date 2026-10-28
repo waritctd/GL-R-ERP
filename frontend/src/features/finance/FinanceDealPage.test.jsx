@@ -360,7 +360,7 @@ describe('FinanceDealPage', () => {
     });
   });
 
-  describe('RECORD_INVOICE (invoice recording in-page, ex-VAT default)', () => {
+  describe('RECORD_INVOICE (invoice recording in-page, VAT-inclusive amount received default)', () => {
     const recordInvoice = () => action('RECORD_INVOICE', 'บันทึกใบกำกับ');
     const closedDeal = (extra = {}) => {
       const deal = makeFinanceDeal({
@@ -385,13 +385,16 @@ describe('FinanceDealPage', () => {
       expect(screen.queryByText(/ออกค่าคอม/)).toBeNull();
     });
 
-    it('clicking it opens an in-page form (no navigation to /commissions) whose ยอดรวม defaults to the EX-VAT figure', async () => {
+    it('clicking it opens an in-page form (no navigation to /commissions) whose amount received defaults to the VAT-INCLUSIVE payable (QA-02)', async () => {
       api.finance.getDeal.mockResolvedValue({ deal: closedDeal() });
       renderPage();
       fireEvent.click(await screen.findByRole('button', { name: 'บันทึกใบกำกับ' }));
-      const gross = await screen.findByLabelText(/^ยอดรวม/);
-      expect(gross.value).toBe('100000');
-      expect(gross.value).not.toBe('107000');
+      // QA-02 (owner ruling 2026-10-28): CommissionCalculator.calculateInvoice divides by 1.07 itself, so the
+      // field is the amount received INCLUDING VAT; pre-filling the ex-VAT figure strips VAT twice.
+      const gross = await screen.findByLabelText(/ยอดรับจริง \(รวม VAT\)/);
+      expect(gross.value).toBe('107000');
+      expect(gross.value).not.toBe('100000');
+      expect(screen.queryByLabelText(/ก่อน VAT/)).toBeNull();
       expect(screen.queryByText('WORKLIST-PAGE')).toBeNull();
       expect(screen.getByLabelText(/เลขที่ใบกำกับ/)).not.toBeNull();
       expect(screen.getByLabelText(/วันที่ใบกำกับ/)).not.toBeNull();
@@ -428,7 +431,7 @@ describe('FinanceDealPage', () => {
       expect(payload.ticketId).toBe(501);
       expect(payload.invoiceNumber).toBe('INV-0501');
       expect(payload.invoiceDate).toBe('2026-09-20');
-      expect(Number(payload.grossAmount)).toBe(100000);
+      expect(Number(payload.grossAmount)).toBe(107000);
       expect(Number(payload.bankFees)).toBe(50);
       expect(Number(payload.suspenseVat)).toBe(7000);
       expect(Number(payload.transportFee)).toBe(300);
@@ -458,6 +461,8 @@ describe('FinanceDealPage', () => {
       expect(closed.getByText(/INV-0501/)).not.toBeNull();
       expect(closed.getByText(/20 ก\.ย\. 2569|20\/09\/2569|2026-09-20/)).not.toBeNull();
       expect(closed.getByText(/100,000\.00/)).not.toBeNull();
+      expect(closed.getByText(/ยอดรับจริง \(รวม VAT\)/)).not.toBeNull();
+      expect(closed.queryByText(/ก่อน VAT/)).toBeNull();
       for (const v of ['50.00', '7,000.00', '300.00', '200.00', '10.00', '3,000.00', '5.00']) {
         expect(closed.getAllByText(new RegExp(v.replace('.', '\\.'))).length).toBeGreaterThan(0);
       }

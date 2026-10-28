@@ -221,6 +221,64 @@ describe('PricingRequestCreateModal', () => {
     expect(item.factory).toBe('โรงงาน A');
   });
 
+  // QA-04 (owner ruling 2026-10-28): SALES flags stock per line when creating the PCR (the CEO types the
+  // price, sales does not). The deal line's sourcedFromStock seeds the flag; the payload carries
+  // stockSource (backend PricingRequestItemRequest: IN_THAILAND | IN_TRANSIT; null = import).
+  describe('stock flag per line (QA-04)', () => {
+    const stockCheckbox = () => screen.getByRole('checkbox', { name: /จากสต็อก/ });
+    const submitWith = async (overrides) => {
+      const { createFn } = renderModal(overrides);
+      fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
+      fillRequiredFields();
+      return { createFn, send: async () => {
+        fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
+        await waitFor(() => expect(createFn).toHaveBeenCalledTimes(1));
+        return createFn.mock.calls[0][0].items;
+      } };
+    };
+
+    it('seeds the flag from the deal item sourcedFromStock, and the create payload carries stockSource', async () => {
+      const { send } = await submitWith({ ticketItems: [ticketItem({ sourcedFromStock: true })] });
+      expect(stockCheckbox().checked).toBe(true);
+      const [item] = await send();
+      expect(item.stockSource).toBe('IN_THAILAND');
+    });
+
+    it('leaves an ordinary import line unflagged: stockSource is null', async () => {
+      const { send } = await submitWith({ ticketItems: [ticketItem({ sourcedFromStock: false })] });
+      expect(stockCheckbox().checked).toBe(false);
+      const [item] = await send();
+      expect(item.stockSource ?? null).toBeNull();
+    });
+
+    it('lets sales tick the flag on a line the deal did not flag', async () => {
+      const on = await submitWith({ ticketItems: [ticketItem()] });
+      fireEvent.click(stockCheckbox());
+      expect((await on.send())[0].stockSource).toBe('IN_THAILAND');
+    });
+
+    it('a stock line needs no ประเทศต้นทาง (backend exempts it); an import line still does', async () => {
+      const { createFn } = renderModal({ ticketItems: [ticketItem({ sourcedFromStock: true })] });
+      fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
+      fillRequiredFields();
+      fireEvent.change(screen.getByLabelText(/^ประเทศต้นทาง/), { target: { value: '' } });
+      fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
+      await waitFor(() => expect(createFn).toHaveBeenCalledTimes(1));
+      expect(createFn.mock.calls[0][0].items[0].originCountry).toBeNull();
+
+      fireEvent.click(stockCheckbox()); // back to an import line -> origin required again
+      fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
+      expect(await screen.findByText('กรุณาระบุประเทศต้นทาง')).not.toBeNull();
+      expect(createFn).toHaveBeenCalledTimes(1);
+    });
+
+    it('un-ticking a seeded line sends it as an import line', async () => {
+      const off = await submitWith({ ticketItems: [ticketItem({ sourcedFromStock: true })] });
+      fireEvent.click(stockCheckbox());
+      expect((await off.send())[0].stockSource ?? null).toBeNull();
+    });
+  });
+
   it('blocks an item with no model — the identity/completeness gate reuses รุ่น, not a dedicated identity field', async () => {
     const { createFn } = renderModal({ ticketItems: [] }); // no deal items to seed from -> one blank row
     fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
