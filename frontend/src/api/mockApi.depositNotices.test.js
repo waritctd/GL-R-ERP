@@ -1,5 +1,17 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { api } from './mockApi.js';
+import {
+  api, MOCK_DEFAULT_DEPOSIT_PERCENT, MOCK_LEGACY_DEPOSIT_PERCENT, retireLivePricingRequestsForTests,
+} from './mockApi.js';
+import { stripComments } from './apiSurface.js';
+
+// Copy of the canonical ONE_ITEM in mockApi.dealQuotations.test.js.
+const ONE_ITEM = {
+  model: 'Trilogy', color: 'Ash', texture: 'Matt', sizeText: '60x60', thicknessMm: 10, sqmPerPiece: 0.36,
+  quantityMode: 'AREA', areaSqm: 20, wastageMode: 'NONE', wastageValue: 0, piecesPerBox: 3, unitPrice: 850, discountPct: 0,
+  leadTimeMinDays: 30, leadTimeMaxDays: 45,
+};
 
 // Branch fix (deposit-notice autofill): drives the mock's own pricing-request chain end to end
 // — Step 1 create through Step 5 customer-accept, then confirmOrder — against the REAL mock
@@ -184,10 +196,13 @@ describe('mockApi.depositNotices.createDraft autofill (branch fix: deposit-notic
     expect(detail.items.every((it) => it.approvedPrice == null)).toBe(true);
     expect(detail.summary.status).toBe('quotation_issued');
 
+    // A typed percent is ignored: the legacy quotation's PDF prints 50%, so the draft bills 50%.
     const { depositNotice } = await api.depositNotices.createDraft(ticketId, {
       notes: [],
-      depositPercent: 0.5,
+      depositPercent: 0.9,
     });
+    expect(depositNotice.depositPercent).toBe(0.5);
+    expect(depositNotice.reference).toBe(quotation.number);
 
     // Items: sourced from the ACCEPTED quotation, not the (all-null) ticket_item rows.
     expect(depositNotice.items).toHaveLength(1);
@@ -209,9 +224,11 @@ describe('mockApi.depositNotices.createDraft autofill (branch fix: deposit-notic
     // delegates to — this endpoint itself never passes a customer/project explicitly.
     const prId = (await api.pricingRequests.listForTicket(quotation.ticketId)).items
       .find((pr) => pr.status === 'QUOTATION_ACCEPTED').id;
+    // A typed percent is ignored here too: the legacy branch bills its PDF's 50%.
     const { depositNotice } = await api.pricingRequests.createDepositNoticeFromQuotation(prId, {
-      depositPercent: 0.5,
+      depositPercent: 0.9,
     });
+    expect(depositNotice.depositPercent).toBe(0.5);
 
     expect(depositNotice.customerTaxId).toBe(customer.taxId);
     expect(depositNotice.customerAddress).toBe(`${customer.address} ${customer.branch}`);
@@ -222,12 +239,22 @@ describe('mockApi.depositNotices.createDraft autofill (branch fix: deposit-notic
 // Java picks the row with DealQuotationRepository.findAcceptedForPricingRequest.
 describe('mockApi.pricingRequests.createDepositNoticeFromQuotation — new-engine quotation (mirrors OrderConfirmationService fix)', () => {
   it('creates the draft with the accepted quotation number as reference, and items and percent from that quotation', async () => {
-    const { prId, accepted } = await driveTicketToNewEngineAcceptedQuotation({ depositPercent: 30 });
+    // 40, unlike the 30 default, the legacy 50 and the no-quotation 0.5, so only the quotation's own percent fits.
+    const { ticketId, prId, accepted } = await driveTicketToNewEngineAcceptedQuotation({ depositPercent: 40 });
     const { depositNotice } = await api.pricingRequests.createDepositNoticeFromQuotation(prId, {});
     expect(depositNotice.reference).toBe(accepted.number);
     // DepositNoticeService.createDraftFromQuotation: the chosen quotation's own whole-number percent.
-    expect(accepted.depositPercent).toBe(30);
-    expect(depositNotice.depositPercent).toBe(0.3);
+    expect(accepted.depositPercent).toBe(40);
+    expect(depositNotice.depositPercent).toBe(0.4);
+    // The ticket route bills the same quotation (DepositNoticeRepository.findGoverningQuotation).
+    const { depositNotice: fromTicket } = await api.depositNotices.createDraft(ticketId, {});
+    expect(fromTicket.depositPercent).toBe(0.4);
+    expect(fromTicket.reference).toBe(accepted.number);
+    // The caller supplies the lines (even this quotation's own), so the reference is null, as in
+    // Java; the percent still comes from the quotation (DepositNoticeService, linesFromGoverning).
+    const { depositNotice: ownLines } = await api.depositNotices.createDraft(ticketId, { items: fromTicket.items });
+    expect(ownLines.reference).toBeNull();
+    expect(ownLines.depositPercent).toBe(0.4);
     expect(depositNotice.items.length).toBeGreaterThan(0);
     // qty is deliberately not distinguishable here: a mock TILE row sets quantity = piecesFinal.
     const [line] = accepted.items;
@@ -241,15 +268,38 @@ describe('mockApi.pricingRequests.createDepositNoticeFromQuotation — new-engin
     expect(depositNotice.items[0].discountLabel).toBe('ส่วนลด 12 ต่อหน่วย');
   });
 
-  // Covers the ticket-level new-engine fallback (DepositNoticeRepository.findDealQuotationItemsForDeposit):
-  // with no items and empty legacy sources, the route would return no items without it.
-  it('ticket-level createDraft with no items reads the same new-engine lines as the pricing-request route', async () => {
-    const { ticketId, prId } = await driveTicketToNewEngineAcceptedQuotation();
+  // Covers the ticket-level route's governing quotation (DepositNoticeRepository.findGoverningQuotation):
+  // with no items and no legacy quotation, it bills the new-engine quotation's lines, percent and number.
+  it('ticket-level createDraft with no items drafts the same lines, percent and reference as the pricing-request route', async () => {
+    const { ticketId, prId, accepted } = await driveTicketToNewEngineAcceptedQuotation();
+    // The PDF prints a NULL percent as DealQuotationRenderAdapter.DEFAULT_DEPOSIT_PERCENT (30).
+    expect(accepted.depositPercent).toBeNull();
     const { depositNotice: fromTicket } = await api.depositNotices.createDraft(ticketId, {});
     const { depositNotice: fromPr } = await api.pricingRequests.createDepositNoticeFromQuotation(prId, {});
+    expect(fromPr.depositPercent).toBe(0.3);
+    expect(fromTicket.depositPercent).toBe(0.3);
+    expect(fromTicket.reference).toBe(fromPr.reference);
     expect(fromTicket.items.length).toBeGreaterThan(0);
     const pick = (items) => items.map(({ qty, netUnitPrice }) => ({ qty, netUnitPrice }));
     expect(pick(fromTicket.items)).toEqual(pick(fromPr.items));
+  });
+
+  // Mirrors DepositNoticeService.createDraftFromQuotation's owner guard. sales2@glr.co.th is a
+  // second seeded sales rep; the drive above runs as the first one, who owns the deal.
+  it('ticket-level createDraft refuses a sales rep who does not own the deal and creates nothing', async () => {
+    const { ticketId } = await driveTicketToNewEngineAcceptedQuotation();
+    await api.auth.login({ email: 'sales2@glr.co.th', password: 'demo1234' });
+    await expect(api.depositNotices.createDraft(ticketId, {}))
+      .rejects.toMatchObject({ status: 403, message: 'ไม่มีสิทธิ์เข้าถึงรายการนี้' });
+    // Role gate (SALES_ROLES = sales only) runs before the ticket lookup, as in Java: a non-sales
+    // caller gets 403 even for a ticket that does not exist, never the 404.
+    await api.auth.login({ role: 'ceo' });
+    await expect(api.depositNotices.createDraft(999999, {})).rejects.toMatchObject({ status: 403 });
+
+    await api.auth.login({ role: 'sales' });
+    expect((await api.depositNotices.listByTicket(ticketId)).depositNotices).toHaveLength(0);
+    const { depositNotice } = await api.depositNotices.createDraft(ticketId, {});
+    expect(depositNotice.ticketId).toBe(ticketId);
   });
 
   it('still 409s while the new-engine quotation is only ISSUED (customer has not accepted)', async () => {
@@ -260,17 +310,71 @@ describe('mockApi.pricingRequests.createDepositNoticeFromQuotation — new-engin
     expect(depositNotices).toHaveLength(0);
   });
 
-  // A zero-deposit ("ไม่รับมัดจำ", full payment) quotation has nothing to bill: Java refuses rather
-  // than drafting a 0-baht document that nothing downstream would stop from being issued.
-  it('rejects a 0% (full-payment) new-engine quotation with 409 and creates no draft', async () => {
+  // A zero-deposit ("ไม่รับมัดจำ", full payment) quotation has nothing to bill: Java refuses on both
+  // routes rather than drafting a 0-baht document that nothing downstream would stop from being issued.
+  it('rejects a 0% (full-payment) new-engine quotation with 409 on both routes and creates no draft', async () => {
     const { ticketId, prId, accepted } = await driveTicketToNewEngineAcceptedQuotation({
       depositPercent: 0, fullPaymentTerm: 'BEFORE_DELIVERY',
     });
     expect(accepted.depositPercent).toBe(0);
+    // Each route's own guard: the pricing-request route refuses on the quotation, the ticket route on the policy.
     await expect(api.pricingRequests.createDepositNoticeFromQuotation(prId, {}))
-      .rejects.toMatchObject({ status: 409, message: expect.stringContaining('ไม่มีมัดจำ') });
+      .rejects.toMatchObject({ status: 409, message: expect.stringContaining(`ใบเสนอราคา ${accepted.number} ระบุไม่มีมัดจำ`) });
+    await expect(api.depositNotices.createDraft(ticketId, {}))
+      .rejects.toMatchObject({ status: 409, message: expect.stringContaining('ดีลนี้ไม่ต้องเก็บมัดจำ') });
     const { depositNotices } = await api.depositNotices.listByTicket(ticketId);
     expect(depositNotices).toHaveLength(0);
+  });
+
+  // DepositNoticeRepositoryDepositPercentIntegrationTest#mixedTicket_aDealDirectApprovedQuotationBeatsAnOlderAcceptedOne
+  // on the mock: two answers in two mock arrays, so only "newest id" across both arrays can pick.
+  // Cancelling the pricing request stages the pre-lock data that lets a direct quotation sit beside it.
+  it('ticket-level createDraft bills a DEAL_DIRECT approval made after the accepted legacy quotation', async () => {
+    const { ticketId } = await driveTicketToAcceptedQuotation();
+    retireLivePricingRequestsForTests(ticketId);
+    const { quotation: draft } = await api.dealQuotations.create(ticketId, {
+      recipientType: 'DESIGNER', depositPercent: 40, remainderMode: 'ON_DELIVERY',
+      items: [ONE_ITEM],
+    });
+    await api.dealQuotations.submit(draft.id, {});
+    await api.auth.login({ role: 'sales_manager' });
+    const { quotation: approved } = await api.dealQuotations.approve(draft.id, {});
+    await api.auth.login({ role: 'sales' });
+    expect(approved.docStatus).toBe('APPROVED');
+
+    const { depositNotice } = await api.depositNotices.createDraft(ticketId, {});
+    expect(depositNotice.reference).toBe(approved.number);
+    expect(depositNotice.depositPercent).toBe(0.4);
+  });
+
+  // Mirrors TicketService.applyCustomerConfirmation's policy sync (owner ruling 2026-10-22).
+  it('confirmOrder on a 0% quotation sets depositPolicy NOT_REQUIRED, and both draft routes 409', async () => {
+    const { ticketId, prId, accepted } = await driveTicketToNewEngineAcceptedQuotation({
+      depositPercent: 0, fullPaymentTerm: 'BEFORE_DELIVERY',
+    });
+    const { ticket } = await api.tickets.get(ticketId);
+    expect(ticket.summary.depositPolicy).toBe('NOT_REQUIRED');
+    expect(ticket.summary.depositPolicyReason).toContain(accepted.number);
+    expect(ticket.events.filter((e) => e.kind === 'POLICY_CHANGED').map((e) => e.message))
+      .toEqual([expect.stringContaining(accepted.number)]);
+    await expect(api.depositNotices.createDraft(ticketId, {}))
+      .rejects.toMatchObject({ status: 409, message: expect.stringContaining('ไม่ต้องเก็บมัดจำ') });
+    await expect(api.pricingRequests.createDepositNoticeFromQuotation(prId, {}))
+      .rejects.toMatchObject({ status: 409 });
+    expect((await api.depositNotices.listByTicket(ticketId)).depositNotices).toHaveLength(0);
+  });
+
+  it('a 30% quotation leaves REQUIRED; once waived, both draft routes 409 on the policy', async () => {
+    const { ticketId, prId } = await driveTicketToNewEngineAcceptedQuotation({ depositPercent: 30 });
+    const { ticket } = await api.tickets.get(ticketId);
+    expect(ticket.summary.depositPolicy).toBe('REQUIRED');
+    expect(ticket.events.some((e) => e.kind === 'POLICY_CHANGED')).toBe(false);
+
+    await api.tickets.setDepositPolicy(ticketId, { policy: 'WAIVED', reason: 'ลูกค้าโอนเต็มจำนวนล่วงหน้า' });
+    const policyRefusal = { status: 409, message: expect.stringContaining('ไม่ต้องเก็บมัดจำ') };
+    await expect(api.depositNotices.createDraft(ticketId, {})).rejects.toMatchObject(policyRefusal);
+    await expect(api.pricingRequests.createDepositNoticeFromQuotation(prId, {})).rejects.toMatchObject(policyRefusal);
+    expect((await api.depositNotices.listByTicket(ticketId)).depositNotices).toHaveLength(0);
   });
 });
 
@@ -321,6 +425,119 @@ describe('mockApi.depositNotices.issue hasPdf/hasXlsx (issue #752: mock reproduc
   });
 });
 
+// Owner ruling 2026-10-23 (mirrors DepositNoticeService.update): sales may change the deposit %
+// on a DRAFT and the amount follows; 0 is refused; an ISSUED notice refuses every edit.
+describe('mockApi.depositNotices.update deposit percent', () => {
+  it('on a DRAFT takes the new percent and recomputes the amount; 0, over 100% and fractional are refused', async () => {
+    const { ticketId } = await driveTicketToAcceptedQuotation();
+    const { depositNotice: draft } = await api.depositNotices.createDraft(ticketId, { notes: [] });
+    expect(draft.subtotal).toBeGreaterThan(0);
+
+    // Items sent the way DepositNoticePage sends them on save.
+    const { depositNotice: updated } = await api.depositNotices.update(draft.id, { depositPercent: 0.4, items: draft.items });
+    expect(updated.depositPercent).toBe(0.4);
+    expect(updated.depositAmount).toBe(Math.round(draft.subtotal * 0.4 * 100) / 100);
+
+    // DepositNoticeDraftRequest's @DecimalMin/@DecimalMax run before the service (field-prefixed).
+    await expect(api.depositNotices.update(draft.id, { depositPercent: 0 }))
+      .rejects.toMatchObject({ status: 400, message: 'depositPercent เปอร์เซ็นต์มัดจำต้องมากกว่า 0' });
+    await expect(api.depositNotices.update(draft.id, { depositPercent: 1.5 }))
+      .rejects.toMatchObject({ status: 400, message: 'depositPercent เปอร์เซ็นต์มัดจำต้องไม่เกิน 100' });
+    await expect(api.depositNotices.update(draft.id, { depositPercent: 0.405 }))
+      .rejects.toMatchObject({ status: 400, message: 'เปอร์เซ็นต์มัดจำต้องเป็นจำนวนเต็ม' });
+    const { depositNotice: afterRejects } = await api.depositNotices.get(draft.id);
+    expect(afterRejects.depositPercent).toBe(0.4);
+    expect(afterRejects.depositAmount).toBe(updated.depositAmount);
+    // 0.29 * 100 is 28.999999999999996 in floating point; it is still a whole 29%.
+    await api.depositNotices.update(draft.id, { depositPercent: 0.29, items: draft.items });
+    const { depositNotice: reread } = await api.depositNotices.get(draft.id);
+    expect(reread.depositPercent).toBe(0.29);
+  });
+
+  // @Valid runs before DepositNoticeService.update looks anything up, so a bad % is a 400 even
+  // for a notice that does not exist or is already issued.
+  it('validates the % before the 404 and 409 lookups', async () => {
+    await api.auth.login({ role: 'sales' });
+    await expect(api.depositNotices.update(999999, { depositPercent: 1.5 }))
+      .rejects.toMatchObject({ status: 400 });
+    const { ticketId } = await driveTicketToAcceptedQuotation();
+    const { depositNotice: draft } = await api.depositNotices.createDraft(ticketId, { notes: [] });
+    await api.tickets.confirmCustomer(ticketId);
+    await api.depositNotices.issue(draft.id);
+    await expect(api.depositNotices.update(draft.id, { depositPercent: 0 }))
+      .rejects.toMatchObject({ status: 400 });
+  });
+
+  // Mirrors the stale-save check (DepositNoticeRepository#update): a save carrying an older
+  // updatedAt than the stored one is refused; one carrying the current stamp, or none, saves.
+  it('refuses a save whose expectedUpdatedAt is stale', async () => {
+    const { ticketId } = await driveTicketToAcceptedQuotation();
+    const { depositNotice: draft } = await api.depositNotices.createDraft(ticketId, { notes: [] });
+    const { depositNotice: savedByA } = await api.depositNotices.update(draft.id,
+      { depositPercent: 0.4, items: draft.items, expectedUpdatedAt: draft.updatedAt });
+
+    await expect(api.depositNotices.update(draft.id,
+      { depositPercent: 0.3, items: draft.items, expectedUpdatedAt: draft.updatedAt }))
+      .rejects.toMatchObject({ status: 409, message: 'ใบแจ้งรับมัดจำนี้ถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง' });
+    expect((await api.depositNotices.get(draft.id)).depositNotice.depositPercent).toBe(0.4);
+
+    await api.depositNotices.update(draft.id, { depositPercent: 0.3, expectedUpdatedAt: savedByA.updatedAt });
+    expect((await api.depositNotices.get(draft.id)).depositNotice.depositPercent).toBe(0.3);
+  });
+
+  // Mirrors DepositNoticeService.update/issue: sales only (requireRole), then the deal owner.
+  it('refuses update and issue to a sales rep who does not own the deal, and to a non-sales role', async () => {
+    const { ticketId } = await driveTicketToAcceptedQuotation();
+    const { depositNotice: draft } = await api.depositNotices.createDraft(ticketId, { notes: [] });
+    await api.tickets.confirmCustomer(ticketId);
+
+    await api.auth.login({ email: 'sales2@glr.co.th', password: 'demo1234' });
+    await expect(api.depositNotices.update(draft.id, { customerName: 'x' }))
+      .rejects.toMatchObject({ status: 403, message: 'ไม่มีสิทธิ์เข้าถึงรายการนี้' });
+    await expect(api.depositNotices.issue(draft.id)).rejects.toMatchObject({ status: 403 });
+    await api.auth.login({ role: 'sales_manager' });
+    await expect(api.depositNotices.update(draft.id, { customerName: 'x' })).rejects.toMatchObject({ status: 403 });
+    await expect(api.depositNotices.issue(draft.id)).rejects.toMatchObject({ status: 403 });
+
+    await api.auth.login({ role: 'sales' });
+    const { depositNotice: reread } = await api.depositNotices.get(draft.id);
+    expect(reread.status).toBe('DRAFT');
+    expect(reread.customerName).toBe(draft.customerName);
+  });
+
+  it('on an ISSUED notice is refused with 409 and changes nothing; no second draft on either route', async () => {
+    const { ticketId } = await driveTicketToAcceptedQuotation();
+    const { depositNotice: draft } = await api.depositNotices.createDraft(ticketId, { notes: [] });
+    const { depositNotice: secondDraft } = await api.depositNotices.createDraft(ticketId, { notes: [] });
+    await api.tickets.confirmCustomer(ticketId);
+    const { depositNotice: issued } = await api.depositNotices.issue(draft.id);
+
+    // Owner ruling 2026-10-23: a second draft that predates the issue takes no number either.
+    await expect(api.depositNotices.issue(secondDraft.id)).rejects.toMatchObject({
+      status: 409,
+      message: `ดีลนี้ออกใบแจ้งรับมัดจำเลขที่ ${issued.docNumber} แล้ว จึงออกฉบับร่างนี้ไม่ได้`,
+    });
+    const { depositNotice: secondReread } = await api.depositNotices.get(secondDraft.id);
+    expect(secondReread.status).toBe('DRAFT');
+    expect(secondReread.docNumber).toBeNull();
+    expect((await api.depositNotices.get(issued.id)).depositNotice.status).toBe('ISSUED');
+
+    await expect(api.depositNotices.update(issued.id, { depositPercent: 0.4 }))
+      .rejects.toMatchObject({ status: 409 });
+    const { depositNotice: reread } = await api.depositNotices.get(issued.id);
+    expect(reread.depositPercent).toBe(issued.depositPercent);
+    expect(reread.depositAmount).toBe(issued.depositAmount);
+
+    // Owner ruling 2026-10-23 (DepositNoticeService.createDraftFromQuotation): one notice per deal.
+    const message = `ดีลนี้ออกใบแจ้งรับมัดจำเลขที่ ${issued.docNumber} แล้ว จึงสร้างฉบับร่างใหม่ไม่ได้`;
+    await expect(api.depositNotices.createDraft(ticketId, {})).rejects.toMatchObject({ status: 409, message });
+    const prId = (await api.pricingRequests.listForTicket(ticketId)).items
+      .find((pr) => pr.status === 'QUOTATION_ACCEPTED').id;
+    await expect(api.pricingRequests.createDepositNoticeFromQuotation(prId, {})).rejects.toMatchObject({ status: 409, message });
+    expect((await api.depositNotices.listByTicket(ticketId)).depositNotices).toHaveLength(2); // no third
+  });
+});
+
 // GLA-32 (2026-09-19): mirrors DepositNoticeService.issue's account-role notification (backend
 // backend/src/main/java/th/co/glr/hr/deposit/DepositNoticeService.java) — issuing a deposit
 // notice notifies the account role, in-app, so account picks up the deal here rather than
@@ -366,5 +583,52 @@ describe('mockApi.depositNotices.issue account notification (GLA-32)', () => {
 
     expect(own).toBeTruthy();
     expect(own.message).toContain('ไม่ระบุลูกค้า');
+  });
+});
+
+// The mock's blank-percent defaults restate two Java constants; read them out of the source so the
+// copies cannot drift (the dealTrackingMeta.test.js approach). Throws rather than skips when the
+// files move, so the guard cannot quietly disable itself; comments are stripped first, so a
+// commented-out declaration does not count.
+function readBackendSource(relativePath) {
+  for (let dir = process.cwd(), depth = 0; depth < 8; depth += 1, dir = dirname(dir)) {
+    const candidate = resolve(dir, relativePath);
+    if (existsSync(candidate)) return readFileSync(candidate, 'utf8');
+  }
+  throw new Error(`could not find ${relativePath} above ${process.cwd()}`);
+}
+
+function javaIntConstant(relativePath, name) {
+  const match = stripComments(readBackendSource(relativePath)).match(new RegExp(`static final int ${name} = (\\d+);`));
+  if (!match) throw new Error(`could not find int ${name} in ${relativePath}`);
+  return Number(match[1]);
+}
+
+describe('mock deposit-percent defaults match the Java PDFs', () => {
+  it('a blank new-engine percent is DealQuotationRenderAdapter.DEFAULT_DEPOSIT_PERCENT', () => {
+    expect(MOCK_DEFAULT_DEPOSIT_PERCENT).toBe(javaIntConstant(
+      'backend/src/main/java/th/co/glr/hr/dealquotation/DealQuotationRenderAdapter.java', 'DEFAULT_DEPOSIT_PERCENT'));
+  });
+
+  it('a legacy quotation is QuotationRenderer.LEGACY_DEPOSIT_PERCENT', () => {
+    expect(MOCK_LEGACY_DEPOSIT_PERCENT).toBe(javaIntConstant(
+      'backend/src/main/java/th/co/glr/hr/ticket/QuotationRenderer.java', 'LEGACY_DEPOSIT_PERCENT'));
+  });
+});
+
+// Mirrors DepositNoticeService.issue's amount guard: a 0-baht notice must not take a document number.
+describe('mockApi.depositNotices.issue refuses a 0-baht notice', () => {
+  it('409s, and the draft stays DRAFT with no number', async () => {
+    const { ticketId } = await driveTicketToNewEngineAcceptedQuotation({ depositPercent: 30 });
+    // update refuses a 0% now, so a free line (net price 0) stands in for the Java test's jdbc insert.
+    const { depositNotice: created } = await api.depositNotices.createDraft(ticketId, {});
+    const { depositNotice: draft } = await api.depositNotices.update(created.id, {
+      items: [{ seq: 1, description: 'Free item', qty: 2, unit: 'แผ่น', unitPrice: 0, netUnitPrice: 0 }],
+    });
+    expect(draft.depositAmount).toBe(0);
+    await expect(api.depositNotices.issue(draft.id))
+      .rejects.toMatchObject({ status: 409, message: expect.stringContaining('0 บาท') });
+    const { depositNotice } = await api.depositNotices.get(draft.id);
+    expect(depositNotice).toMatchObject({ status: 'DRAFT', docNumber: null });
   });
 });

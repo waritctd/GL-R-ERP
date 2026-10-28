@@ -27,6 +27,7 @@ import th.co.glr.hr.pricingrequest.PricingRequestRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestRepository.OrderConfirmationState;
 import th.co.glr.hr.pricingrequest.PricingRequestStatus;
 import th.co.glr.hr.pricingrequest.UnitBasis;
+import th.co.glr.hr.ticket.QuotationRenderer;
 import th.co.glr.hr.ticket.QuotationStatus;
 import th.co.glr.hr.ticket.TicketDto;
 import th.co.glr.hr.ticket.TicketEventKind;
@@ -216,10 +217,25 @@ public class OrderConfirmationService {
         // customer-confirmed yet; a later revision's own confirmOrder call only needs the
         // reconciliation (already done above) and its own event/notification below.
         TicketSummaryDto currentTicketState = requireTicketSummary(locked.ticketId());
-        TicketDto ticketDto = currentTicketState.paymentStatus() == null
-            ? ticketService.confirmCustomer(locked.ticketId(), actor)
-            : tickets.findById(locked.ticketId())
+        TicketDto ticketDto;
+        if (currentTicketState.paymentStatus() == null) {
+            // The accepted new-engine quotation's percent decides the deposit policy (owner ruling
+            // 2026-10-22, see TicketService#applyCustomerConfirmation; a blank percent means 30, ruling 10-23).
+            // A legacy quotation carries none, so the policy is left alone.
+            th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto confirmed = dealQuotations == null
+                ? null
+                : dealQuotations.findAcceptedForPricingRequest(pricingRequestId)
+                    .flatMap(dealQuotations::findById)
+                    .orElse(null);
+            ticketDto = ticketService.confirmCustomer(locked.ticketId(),
+                confirmed == null ? null : confirmed.number(),
+                confirmed == null ? null
+                    : th.co.glr.hr.dealquotation.DealQuotationRenderAdapter.effectiveDepositPercent(confirmed.depositPercent()),
+                actor);
+        } else {
+            ticketDto = tickets.findById(locked.ticketId())
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
+        }
 
         pricingRequests.addEvent(pricingRequestId, locked.ticketId(), actor.id(), actor.name(),
             PricingRequestEventKind.ORDER_CONFIRMED, locked.status(), locked.status(),
@@ -421,16 +437,12 @@ public class OrderConfirmationService {
      * the ticket's own customer/project, same as the ticket-level route) — see {@code
      * DepositNoticeService.createDraft}'s own comments for what changed and why.
      *
-     * <p><strong>Deposit percent (owner ruling, 2026-09-29):</strong> {@code
-     * request.depositPercent()} below is passed through but {@link
-     * DepositNoticeService#createDraft} now IGNORES it unconditionally and re-derives the percent
-     * itself from {@code accepted}'s own {@code sales.quotation.deposit_percent} (legacy branch;
-     * the new-engine paragraph below covers the other branch) via {@code
-     * DepositNoticeRepository#findDealQuotationDepositPercent(ticketId)} — this call site needs no
-     * separate fix because it already funnels through that one shared method. Left the field on
-     * {@link CreateDepositNoticeFromQuotationRequest} itself unremoved (an older frontend build
-     * may still send it) rather than making it a breaking DTO change for a value that is now a
-     * no-op either way.
+     * <p><strong>Deposit percent (owner rulings 2026-09-29, 2026-10-23):</strong> {@code
+     * request.depositPercent()} is never read: the percent is the one the chosen quotation's PDF
+     * printed, passed as {@code sourceDepositPercent}. For the legacy branch that is always {@link
+     * QuotationRenderer#LEGACY_DEPOSIT_PERCENT}, because the legacy PDF never reads the stored
+     * column. Deleting the field from {@link CreateDepositNoticeFromQuotationRequest} would refuse
+     * no client (unknown JSON fields are ignored); its bounds still 400 an out-of-range value.
      *
      * <p><strong>New-engine quotation:</strong> when the pricing request has no ACCEPTED legacy
      * quotation, this falls back to its ACCEPTED new-engine {@code PRICING_REQUEST}-origin
@@ -440,13 +452,11 @@ public class OrderConfirmationService {
      * the accepted quotation of THIS pricing request ({@link
      * DepositNoticeService#itemsFromDealQuotation}), so a sibling pricing request's quotation on
      * the same ticket can never supply them. The percent also comes from that quotation: its own
-     * {@code deposit_percent} goes to {@link DepositNoticeService#createDraftFromQuotation}, so
-     * when the quotation sets a percent a sibling pricing request's legacy row on the same ticket
-     * cannot supply it either (a new-engine sibling never could: R8 allows one ACCEPTED quotation
-     * per ticket and the lookup prefers ACCEPTED); a null percent still falls back to the
-     * per-ticket lookup. The legacy branch passes no percent, because {@code CustomerQuotationDto}
-     * carries none, so it keeps {@code createDraft}'s per-ticket derivation; the ticket-level
-     * route does the same. The customer must have accepted: an ISSUED-only quotation answers 409.
+     * {@code deposit_percent}, a null one as the PDF's default 30%, goes to {@link
+     * DepositNoticeService#createDraftFromQuotation}. Neither branch consults the
+     * ticket's governing quotation ({@code DepositNoticeRepository#findGoverningQuotation}),
+     * which only the ticket-level route uses. The customer must have accepted: an ISSUED-only
+     * quotation answers 409.
      */
     @Transactional
     public DepositNoticeDto createDepositNoticeFromQuotation(long pricingRequestId,
@@ -466,7 +476,7 @@ public class OrderConfirmationService {
         if (accepted != null) {
             reference = accepted.number();
             items = DepositNoticeService.itemsFromQuotation(accepted.items());
-            sourceDepositPercent = null;
+            sourceDepositPercent = QuotationRenderer.LEGACY_DEPOSIT_PERCENT;
         } else {
             th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto newEngine = dealQuotations == null
                 ? null
@@ -477,23 +487,20 @@ public class OrderConfirmationService {
                 throw new ApiException(HttpStatus.CONFLICT, "ยังไม่มีใบเสนอราคาที่ลูกค้ายอมรับสำหรับคำขอราคานี้");
             }
             // A zero-deposit quotation (DealQuotationService#isZeroDeposit: "ไม่รับมัดจำ", paid in
-            // full under fullPaymentTerm) has nothing to bill. Refuse here rather than draft a
-            // 0-baht notice: DepositNoticeService#issue reads the ticket's deposit_policy, which no
-            // path syncs from the quotation, so nothing downstream would stop that draft.
+            // full under fullPaymentTerm) has nothing to bill. Since #1173 the confirmation above
+            // moves such a deal to NOT_REQUIRED and createDraftFromQuotation refuses a bypass policy;
+            // this check stays for deals confirmed before that sync existed (still REQUIRED).
             if (Integer.valueOf(0).equals(newEngine.depositPercent())) {
-                throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคา " + newEngine.number()
-                    + " ระบุไม่มีมัดจำ (ชำระเต็มจำนวน) จึงออกใบแจ้งยอดเงินรับมัดจำไม่ได้");
+                throw DepositNoticeService.zeroDepositRefusal(newEngine.number());
             }
             reference = newEngine.number();
             items = depositNotices.itemsFromDealQuotation(newEngine.id());
-            sourceDepositPercent = newEngine.depositPercent();
+            sourceDepositPercent = newEngine.depositPercent() != null ? newEngine.depositPercent()
+                : th.co.glr.hr.dealquotation.DealQuotationRenderAdapter.DEFAULT_DEPOSIT_PERCENT;
         }
 
-        // request.depositPercent() is deliberately still passed through here even though
-        // createDraft now ignores it as the source — see this method's own Javadoc above.
         DepositNoticeDraftRequest draftRequest = new DepositNoticeDraftRequest(
-            null, null, null, null, reference,
-            request != null ? request.depositPercent() : null, null, items);
+            null, null, null, null, reference, null, null, items);
         DepositNoticeDto draft = depositNotices.createDraftFromQuotation(summary.ticketId(), draftRequest,
             sourceDepositPercent, actor);
 

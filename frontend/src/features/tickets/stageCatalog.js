@@ -19,6 +19,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
+import { QUOTATION_RECIPIENT_OPTIONS } from '../quotations/quotationMeta.js';
 import { assertStageLabelsComplete } from './stageMeta.js';
 
 /**
@@ -171,6 +172,17 @@ export function routeForChannel(catalog, entryChannel) {
   if (!Array.isArray(served) || served.length === 0) return stages;
   const codes = new Set(served);
   return stages.filter((stage) => codes.has(stage.code));
+}
+
+/**
+ * The quotation parties (DESIGNER/OWNER/BUYER) whose quote stage this channel's served route skips —
+ * the deal page's and the worklist's one source for the sales route choice. null while the
+ * catalog's routes have not loaded: an unknown route is never "every party is on it".
+ */
+export function offRoutePartiesFor(catalog, entryChannel) {
+  if (Object.keys(catalog?.routes ?? {}).length === 0) return null;
+  const onRoute = new Set(routeForChannel(catalog, entryChannel).map((stage) => stage.code));
+  return new Set(QUOTATION_RECIPIENT_OPTIONS.filter((option) => !onRoute.has(option.stage)).map((option) => option.code));
 }
 
 /**

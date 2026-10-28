@@ -65,7 +65,9 @@ export function useDialogFocus({ active, containerRef, onClose, initialFocusRef 
     return () => {
       document.removeEventListener('keydown', onKeyDown);
       if (previouslyFocused.current instanceof HTMLElement) {
-        previouslyFocused.current.focus();
+        // It had focus when the dialog opened, so it is on screen; a scroller that pads its top (the
+        // deal page's sticky header) would otherwise jump to "reveal" it.
+        previouslyFocused.current.focus({ preventScroll: true });
       }
     };
   }, [active, containerRef, initialFocusRef]);

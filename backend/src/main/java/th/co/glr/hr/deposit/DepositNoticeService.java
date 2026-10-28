@@ -96,18 +96,39 @@ public class DepositNoticeService {
     }
 
     /** {@link #createDraft} for a caller that has already chosen the source quotation: a non-null
-     * {@code sourceDepositPercent} (that quotation's own whole-number {@code deposit_percent}) is
-     * the draft's percent, instead of the per-ticket lookup. */
+     * {@code sourceDepositPercent} (the whole-number percent that quotation's PDF printed) is the
+     * draft's percent, and the ticket's governing quotation is not consulted. */
     @Transactional
     public DepositNoticeDto createDraftFromQuotation(long ticketId, DepositNoticeDraftRequest req,
                                                      Integer sourceDepositPercent, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
+        requireTicketOwner(ticketId, actor);
+        // Owner ruling 2026-10-23: one deposit notice per deal. A new draft would re-seed the % from
+        // the quotation and, once issued, silently supersede the customer's document.
+        docs.findByTicket(ticketId).stream().filter(d -> "ISSUED".equals(d.status())).findFirst().ifPresent(d -> {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ดีลนี้ออกใบแจ้งรับมัดจำเลขที่ " + d.docNumber() + " แล้ว จึงสร้างฉบับร่างใหม่ไม่ได้");
+        });
         TicketSummaryDto s = requireApprovedTicket(ticketId, actor);
         requireActiveLifecycle(s);
+        // Both routes: a deal off the deposit path (a ไม่รับมัดจำ quotation, a waiver, a credit
+        // customer) has no deposit to bill, and issue() would refuse the draft anyway.
+        if (DepositPolicy.bypassesDepositNotice(s.depositPolicy())) {
+            throw new ApiException(HttpStatus.CONFLICT, "ดีลนี้ไม่ต้องเก็บมัดจำ (นโยบายมัดจำ "
+                + s.depositPolicy() + ") จึงสร้างใบแจ้งรับมัดจำไม่ได้");
+        }
 
-        // Auto-populate items from approved ticket items (legacy) or, failing that, the
-        // ticket's own customer-quotation chain (new pricing-request flow) if not provided.
+        // Ticket route: the governing quotation (DepositNoticeRepository#findGoverningQuotation)
+        // always supplies the percent. It supplies the lines, and with them the reference, unless
+        // req.items or legacy approved_price rows already supply the lines.
+        DepositNoticeRepository.GoverningQuotation governing = sourceDepositPercent == null
+            ? docs.findGoverningQuotation(ticketId).orElse(null) : null;
+        if (governing != null && governing.depositPercent().signum() == 0) {
+            throw zeroDepositRefusal(governing.number());
+        }
         List<DepositNoticeItemRequest> items = buildItemsFromRequest(req, ticketId);
+        boolean linesFromGoverning = items.isEmpty() && governing != null;
+        if (linesFromGoverning) items = itemsFromGoverning(governing);
         List<String> notes = req.notes() != null ? req.notes()
             : docs.findNoteTemplates().stream()
                 .filter(DocumentNoteTemplateDto::defaultSelected)
@@ -127,25 +148,24 @@ public class DepositNoticeService {
         // address/tax id differently.
         CustomerHeaderInfo header = resolveCustomerHeader(s, req.customerTaxId(), req.customerAddress(), req.projectName());
 
-        // Owner ruling (2026-09-29, sales business-logic change, authorised per CLAUDE.md's
-        // "deposit-notice flow is UNFROZEN"): the deposit PERCENT is LOCKED to the source
-        // quotation's own sales.quotation.deposit_percent — the value sales set when creating the
-        // quotation — and is never editable at the deposit-notice stage. A caller-supplied
-        // req.depositPercent() is deliberately IGNORED as the source here (the quotation always
-        // wins); DepositNoticeDraftRequest still carries the field only because it round-trips
-        // through the DTO the frontend/OrderConfirmationService already send. Falls back to the
-        // document's long-standing 0.50 default only when the ticket has no live quotation to
-        // read a percent from at all (e.g. a manually-approved legacy ticket with no quotation
-        // chain) — see DepositNoticeRepository#findDealQuotationDepositPercent's own Javadoc for
-        // the full pick order.
+        // Owner rulings (2026-09-29, 2026-10-22, 2026-10-23): the deposit percent is the one the
+        // source quotation's PDF printed: a legacy quotation 50% (the constant its PDF prints), a
+        // new-engine one its own deposit_percent, a blank one 30%. The PR route passes it as
+        // sourceDepositPercent; the ticket route takes it from the governing quotation. On create,
+        // req.depositPercent() is never read (DepositNoticeDraftRequest carries it for update's
+        // round trip). 0.50 only when the ticket has no live quotation at all (e.g. a manually
+        // approved legacy ticket with no quotation chain); see
+        // DepositNoticeRepository#findGoverningQuotation for the pick. Sales may change the percent
+        // on the DRAFT afterwards (update, ruling 2026-10-23).
         BigDecimal effectiveDepositPercent = sourceDepositPercent != null
             ? BigDecimal.valueOf(sourceDepositPercent, 2)
-            : docs.findDealQuotationDepositPercent(ticketId).orElse(new BigDecimal("0.50"));
+            : governing != null ? governing.depositPercent() : new BigDecimal("0.50");
+        String reference = req.reference() == null && linesFromGoverning ? governing.number() : req.reference();
 
         var effective = new DepositNoticeDraftRequest(
             req.customerName() != null ? req.customerName() : s.customerName(),
             header.taxId(), header.address(),
-            header.projectName(), req.reference(),
+            header.projectName(), reference,
             effectiveDepositPercent,
             notes, items
         );
@@ -154,22 +174,37 @@ public class DepositNoticeService {
         return docs.findById(docId).orElseThrow();
     }
 
+    /** The 409 both deposit routes give a ไม่รับมัดจำ (0%) quotation: there is no deposit to bill. */
+    public static ApiException zeroDepositRefusal(String quotationNumber) {
+        return new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคา " + quotationNumber
+            + " ระบุไม่มีมัดจำ (ชำระเต็มจำนวน) จึงออกใบแจ้งยอดเงินรับมัดจำไม่ได้");
+    }
+
     @Transactional
     public DepositNoticeDto update(long docId, DepositNoticeDraftRequest req, UserPrincipal actor) {
+        requireRole(actor, SALES_ROLES);
         DepositNoticeDto doc = requireDraft(docId);
         requireTicketOwner(doc.ticketId(), actor);
-        // Same owner ruling as createDraft above: the deposit percent is locked to the quotation
-        // at draft-creation time and must NEVER change on update. The frontend no longer offers a
-        // control for it, but a client (or a stale/forged request) sending a different value must
-        // not be trusted either — override whatever req carries with the draft's own already-
-        // stored depositPercent() before persisting.
+        // Owner ruling 2026-10-23: sales may change the deposit percent on a DRAFT (requireDraft
+        // above 409s an issued notice). docs.update recomputes the amount from it. A request
+        // without a percent keeps the draft's own.
+        BigDecimal depositPercent = req.depositPercent() != null ? req.depositPercent() : doc.depositPercent();
+        if (depositPercent.signum() <= 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "เปอร์เซ็นต์มัดจำต้องมากกว่า 0");
+        }
+        // Whole percents only: the document prints the percent rounded (40.5% shows as "41%"). A
+        // percent stored before that rule (0.3330) still saves while it is sent back unchanged;
+        // issue() refuses it until sales picks a whole one.
+        if (depositPercent.compareTo(doc.depositPercent()) != 0 && !isWholePercent(depositPercent)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "เปอร์เซ็นต์มัดจำต้องเป็นจำนวนเต็ม");
+        }
         var effective = new DepositNoticeDraftRequest(
             req.customerName(), req.customerTaxId(), req.customerAddress(),
             req.projectName(), req.reference(),
-            doc.depositPercent(),
-            req.notes(), req.items()
+            depositPercent,
+            req.notes(), req.items(), req.expectedUpdatedAt()
         );
-        docs.update(docId, effective);
+        docs.update(docId, effective, doc.items());
         return docs.findById(docId).orElseThrow();
     }
 
@@ -184,11 +219,25 @@ public class DepositNoticeService {
     }
 
     // Issue: assign doc number, freeze document, transition ticket to document_issued
+    // Without a stamp. @Transactional here too: a self-call from this overload would bypass the proxy.
     @Transactional
     public DepositNoticeDto issue(long docId, UserPrincipal actor) {
+        return issue(docId, null, actor);
+    }
+
+    @Transactional
+    public DepositNoticeDto issue(long docId, java.time.OffsetDateTime expectedUpdatedAt, UserPrincipal actor) {
         DepositNoticeDto doc = requireDraft(docId);
         requireRole(actor, SALES_ROLES);
         requireTicketOwner(doc.ticketId(), actor);
+        // The stored percent is what the document prints: outside a whole 1-100 (a 0% ticket-route
+        // draft, a 0.3330 typed before whole percents) it takes no number until fixed on the draft.
+        BigDecimal pct = doc.depositPercent();
+        if (pct.signum() <= 0 || pct.compareTo(BigDecimal.ONE) > 0 || !isWholePercent(pct)) {
+            throw new ApiException(HttpStatus.CONFLICT, "ใบแจ้งรับมัดจำนี้มีเปอร์เซ็นต์มัดจำ "
+                + pct.movePointRight(2).stripTrailingZeros().toPlainString()
+                + "% จึงออกเอกสารไม่ได้ (ต้องเป็นจำนวนเต็ม 1–100)");
+        }
 
         // Issuing the deposit-notice DOCUMENT is the payment-track step: it requires a
         // customer-confirmed quotation and advances paymentStatus, leaving the main
@@ -210,8 +259,8 @@ public class DepositNoticeService {
         // not left to fall through to advancePaymentStatus below, which would throw an uncaught
         // IllegalStateException (ApiExceptionHandler has no handler for it, so it would surface as
         // an opaque 500, not a controlled conflict). Found while writing PaymentTrackIntegrationTest's
-        // off-path case; a bypass-policy deal CAN reach a DRAFT deposit notice today (createDraft
-        // does not check deposit_policy), so this is a genuinely reachable path, not hypothetical.
+        // off-path case; a bypass-policy deal CAN still hold a DRAFT deposit notice (one drafted while
+        // the deal was REQUIRED survives a later waiver), so this is a genuinely reachable path.
         // On a bypass policy, issuing a deposit notice now throws — a deliberate behaviour change
         // from rule 4; see the branch report.
         boolean paymentTrackReady = !DepositPolicy.bypassesDepositNotice(s.depositPolicy())
@@ -220,11 +269,26 @@ public class DepositNoticeService {
             throw new ApiException(HttpStatus.CONFLICT,
                 "ออกใบแจ้งรับมัดจำได้เฉพาะเมื่อออกใบเสนอราคาแล้วและลูกค้ายืนยันคำสั่งซื้อแล้วเท่านั้น");
         }
+        // A 0-baht draft (e.g. a ticket-route draft on a deal whose quotation says ไม่รับมัดจำ but
+        // whose policy predates the confirmation sync) must not take a document number.
+        if (doc.depositAmount() == null || doc.depositAmount().signum() <= 0) {
+            throw new ApiException(HttpStatus.CONFLICT, "ใบแจ้งรับมัดจำนี้มียอดมัดจำ 0 บาท จึงออกเอกสารไม่ได้");
+        }
+        // The guard below is check-then-act: lock the deal row first so two drafts issued at once
+        // serialize, and the second one sees the first as ISSUED.
+        tickets.lockTicketForUpdate(doc.ticketId());
+        // Owner ruling 2026-10-23: one deposit notice per deal. A second draft (written before the
+        // first was issued) must not silently supersede the customer's document.
+        docs.findByTicket(doc.ticketId()).stream()
+            .filter(d -> d.id() != docId && "ISSUED".equals(d.status())).findFirst().ifPresent(d -> {
+                throw new ApiException(HttpStatus.CONFLICT,
+                    "ดีลนี้ออกใบแจ้งรับมัดจำเลขที่ " + d.docNumber() + " แล้ว จึงออกฉบับร่างนี้ไม่ได้");
+            });
         // Issuing advances the payment track — a paused/terminal deal must not move
         // (Phase 1 lifecycle gate; mirrors TicketService.requireActive).
         requireActiveLifecycle(s);
 
-        String docNumber = docs.issue(docId, actor.id(), actor.name())
+        String docNumber = docs.issue(docId, actor.id(), actor.name(), expectedUpdatedAt)
             .orElseThrow(() -> new ApiException(HttpStatus.CONFLICT,
                 "ใบแจ้งรับมัดจำนี้ถูกออกไปแล้วโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง"));
 
@@ -838,7 +902,7 @@ public class DepositNoticeService {
 
     /** Latest ACCEPTED revision only — see {@link #resolveRemainingInvoice}'s own Javadoc for why
      * this deliberately does NOT fall back to the latest ISSUED-but-not-yet-accepted one the way
-     * {@link #pickQuotation} does for the deposit notice. */
+     * {@link DepositNoticeRepository#findGoverningQuotation} does for the deposit notice. */
     private CustomerQuotationDto pickAcceptedQuotation(List<CustomerQuotationDto> candidates) {
         CustomerQuotationDto latestAccepted = null;
         for (CustomerQuotationDto q : candidates) {
@@ -1096,7 +1160,7 @@ public class DepositNoticeService {
         DepositNoticeDto doc = docs.findById(docId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบใบแจ้งรับมัดจำนี้"));
         if (!"DRAFT".equals(doc.status())) {
-            throw new ApiException(HttpStatus.CONFLICT, "ใบแจ้งรับมัดจำนี้ไม่ได้อยู่ในสถานะร่าง (DRAFT)");
+            throw new ApiException(HttpStatus.CONFLICT, DepositNoticeRepository.NOT_DRAFT);
         }
         return doc;
     }
@@ -1145,6 +1209,11 @@ public class DepositNoticeService {
         if (!allowed.contains(actor.role())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
+    }
+
+    /** 0.40 is a whole 40%; 0.405 and 0.3330 are not. */
+    private static boolean isWholePercent(BigDecimal fraction) {
+        return fraction.movePointRight(2).stripTrailingZeros().scale() <= 0;
     }
 
     private String blankToNull(String value) {
@@ -1215,24 +1284,16 @@ public class DepositNoticeService {
         // Legacy path: sales.ticket_item.approved_price, written only by the @Deprecated
         // TicketService.approve (no controller route) — kept working for any ticket that still
         // carries it, e.g. one manually approved before the pricing-request chain existed.
-        List<DepositNoticeItemRequest> legacyItems = buildLegacyItems(ticketId);
-        if (!legacyItems.isEmpty()) return legacyItems;
+        return buildLegacyItems(ticketId);
+    }
 
-        // New-chain fallback (this branch's fix): every deal created through the pricing-request
-        // chain has approved_price = NULL on every ticket_item (see this class's own diagnosis in
-        // the branch handoff) — buildLegacyItems above always returns empty for such a deal, which
-        // is exactly the bug. Source items from the ticket's own customer quotation instead.
-        CustomerQuotationDto chosen = pickQuotation(quotations.findByTicket(ticketId));
-        if (chosen != null) {
-            return itemsFromQuotation(chosen.items());
-        }
-
-        // V2 deal-quotation chain (2026-09-29 fix): the pickQuotation/findByTicket source above is
-        // scoped to origin IS NULL, so it never returns a DEAL_DIRECT or PRICING_REQUEST quotation
-        // — every deal issued through the deal-quotation flow fell through to an empty item list.
-        // docs.findDealQuotationItemsForDeposit reads the ticket's live deal quotation (ACCEPTED,
-        // else ISSUED) directly; see that method's Javadoc for the selection and column choices.
-        return docs.findDealQuotationItemsForDeposit(ticketId);
+    /** Every deal created through the pricing-request chain has approved_price = NULL on every
+     * ticket_item, so its lines come from the governing quotation, whichever engine it is. */
+    private List<DepositNoticeItemRequest> itemsFromGoverning(DepositNoticeRepository.GoverningQuotation governing) {
+        if (!governing.legacy()) return docs.findDealQuotationItems(governing.quotationId());
+        return quotations.findById(governing.quotationId())
+            .map(q -> itemsFromQuotation(q.items()))
+            .orElse(List.of());
     }
 
     private List<DepositNoticeItemRequest> buildLegacyItems(long ticketId) {
@@ -1256,31 +1317,6 @@ public class DepositNoticeService {
             .orElse(List.of());
     }
 
-    /**
-     * Picks the quotation to source deposit-notice items from when no explicit items were given
-     * and no legacy {@code approved_price} exists: the LATEST ACCEPTED revision, or — if the
-     * customer has not yet accepted any revision — the latest ISSUED one. {@code
-     * CustomerQuotationRepository#findByTicket} returns rows ordered ASCENDING by {@code
-     * quotation_id} ALONE — deliberately NOT by {@code quotation_revision_no} (see that method's
-     * own Javadoc: the revision counter is scoped to a single pricing request and is not
-     * comparable across the multiple pricing requests one ticket can have) — so a single forward
-     * scan that keeps overwriting "latest seen" for each status is equivalent to sorting
-     * descending by {@code quotation_id} and taking the first match, without a second
-     * list/comparator.
-     */
-    private CustomerQuotationDto pickQuotation(List<CustomerQuotationDto> candidates) {
-        CustomerQuotationDto latestAccepted = null;
-        CustomerQuotationDto latestIssued = null;
-        for (CustomerQuotationDto q : candidates) {
-            if (QuotationStatus.ACCEPTED.equals(q.docStatus())) {
-                latestAccepted = q;
-            } else if (QuotationStatus.ISSUED.equals(q.docStatus())) {
-                latestIssued = q;
-            }
-        }
-        return latestAccepted != null ? latestAccepted : latestIssued;
-    }
-
     /** The pricing-request route's new-engine item source, so the draft's rows come from the
      * quotation its reference names. */
     public List<DepositNoticeItemRequest> itemsFromDealQuotation(long quotationId) {
@@ -1289,7 +1325,7 @@ public class DepositNoticeService {
 
     /**
      * Maps a customer quotation's items to deposit-notice item requests. The single shared mapping
-     * used by both {@link #buildItemsFromRequest} (this class's own ticket-chain fallback above)
+     * used by both {@link #itemsFromGoverning} (a legacy governing quotation's lines, above)
      * and {@code OrderConfirmationService.createDepositNoticeFromQuotation} (the explicit
      * quotation-driven entry point), so the two paths can never drift apart — extracted here
      * (rather than duplicated, as it was before this branch) because both already depend on this

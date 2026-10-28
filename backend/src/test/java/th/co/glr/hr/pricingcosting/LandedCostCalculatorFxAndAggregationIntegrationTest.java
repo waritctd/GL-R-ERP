@@ -172,11 +172,12 @@ class LandedCostCalculatorFxAndAggregationIntegrationTest extends AbstractPostgr
 
     /**
      * Two items, from TWO DIFFERENT factories (so two shipments) — this is what actually
-     * discriminates the fix from a narrower one that only aggregates WITHIN a shipment. Item A is
-     * missing {@code sqmPerUnit} (its factory quote gives none AND its request has no {@code
-     * requestedQtySqm} to fall back to); item B is quoted PER_BOX with no {@code piecesPerBox}.
-     * Both are cluster-2 ({@code missingFactor}) problems, on items from different shipments — the
-     * old, per-shipment {@code resolveItemPhysicals} call would have thrown on item A's shipment
+     * discriminates the fix from a narrower one that only aggregates WITHIN a shipment. Item A is a
+     * PER_LINEAR_M request missing {@code linearMPerUnit}; item B is a PER_BOX request missing
+     * {@code piecesPerBox}. Both are cluster-2 ({@code missingFactor}) THROWS that still aggregate —
+     * deliberately NOT a missing {@code sqmPerUnit}, which #1127 moved to the uncostable set-aside
+     * path (its own test), so it no longer surfaces in this 422. On items from different shipments
+     * the old, per-shipment {@code resolveItemPhysicals} call would have thrown on item A's shipment
      * alone, and the CEO would never learn about item B until fixing A and re-running. This is one
      * of the two tests this task's mutation-check targets: reverting the aggregation must turn
      * THIS test red (specifically: only ONE of the two assertions below still holds) and nothing
@@ -194,8 +195,8 @@ class LandedCostCalculatorFxAndAggregationIntegrationTest extends AbstractPostgr
                 assertThat(e.getMessage())
                     .as("BOTH items' problems, and BOTH factor names in Thai, must appear in the "
                         + "SAME message — proves aggregation across shipments, not first-problem-only")
-                    .contains("Model NoSqm")
-                    .contains("ตร.ม. ต่อหน่วย (sqmPerUnit)")
+                    .contains("Model NoLinear")
+                    .contains("ความยาว (เมตร) ต่อหน่วย (linearMPerUnit)")
                     .contains("Model NoBox")
                     .contains("จำนวนแผ่นต่อกล่อง (piecesPerBox)")
                     // Both bullets present means neither problem shadowed the other.
@@ -300,9 +301,11 @@ class LandedCostCalculatorFxAndAggregationIntegrationTest extends AbstractPostgr
      * (so {@code resolveSources} — cluster 1 — succeeds for both and the request auto-advances to
      * READY_FOR_CEO_REVIEW), but each missing a DIFFERENT physical conversion factor (cluster 2):
      * <ul>
-     *   <li>"Model NoSqm" (factory A): quoted with {@code sqmPerUnit = null}, and its request item's
-     *       {@code requestedQtySqm} is ALSO null — defeats both of {@code resolveSqmPerPiece}'s
-     *       sources, so it throws {@code missingFactor("sqmPerUnit")}.
+     *   <li>"Model NoLinear" (factory A): the REQUEST is expressed PER_LINEAR_M with no {@code
+     *       linearMPerUnit} on the quote (quoted PER_PIECE with {@code sqmPerUnit} supplied, so it is
+     *       NOT set aside as uncostable) — {@code quantityToPieces} throws {@code
+     *       missingFactor("linearMPerUnit")}. Deliberately NOT a missing {@code sqmPerUnit}: #1127
+     *       moved that to the uncostable set-aside path, so it no longer surfaces in this 422.
      *   <li>"Model NoBox" (factory B): the REQUEST is expressed PER_BOX with no {@code
      *       piecesPerBox} on the quote — deliberately NOT the quote's own {@code unitBasis} (quoted
      *       PER_PIECE instead, with {@code sqmPerUnit} supplied so {@code resolveSqmPerPiece} itself
@@ -316,7 +319,7 @@ class LandedCostCalculatorFxAndAggregationIntegrationTest extends AbstractPostgr
      * </ul>
      */
     private long twoItemTwoFactoriesEachMissingADifferentFactor() {
-        String factoryA = "Missing Sqm Factory " + UUID.randomUUID();
+        String factoryA = "Missing Linear Factory " + UUID.randomUUID();
         String factoryB = "Missing Box Factory " + UUID.randomUUID();
         long productA = insertCatalogProduct(factoryA, "IT", "AGG-A-" + UUID.randomUUID(),
             new BigDecimal("100.00"), "THB", "per_piece");
@@ -325,9 +328,13 @@ class LandedCostCalculatorFxAndAggregationIntegrationTest extends AbstractPostgr
 
         long ticketId = createTwoFactoryDeal("ดีล Aggregation " + UUID.randomUUID(), factoryA, factoryB);
 
+        // A PER_LINEAR_M request whose quote supplies no linearMPerUnit — quantityToPieces then
+        // throws missingFactor("linearMPerUnit"). sqm IS resolvable (the quote carries sqmPerUnit),
+        // so this line is NOT set aside as uncostable; its problem is a cluster-2 missing FACTOR,
+        // the aggregated-422 path (NOT the sqm set-aside path, which #1127 moved out of this 422).
         PricingRequestItemRequest itemA = new PricingRequestItemRequest(
-            null, productA, null, "Brand", "Model NoSqm", "Brand Model NoSqm", null, null, "1x1", factoryA,
-            new BigDecimal("100"), null, "piece", UnitBasis.PER_PIECE, QuantityType.CONFIRMED, null, null, null);
+            null, productA, null, "Brand", "Model NoLinear", "Brand Model NoLinear", null, null, "1x1", factoryA,
+            new BigDecimal("100"), null, "m", UnitBasis.PER_LINEAR_M, QuantityType.CONFIRMED, null, null, null);
         PricingRequestItemRequest itemB = new PricingRequestItemRequest(
             null, productB, null, "Brand", "Model NoBox", "Brand Model NoBox", null, null, "1x1", factoryB,
             new BigDecimal("10"), new BigDecimal("100"), "box", UnitBasis.PER_BOX,
@@ -357,12 +364,14 @@ class LandedCostCalculatorFxAndAggregationIntegrationTest extends AbstractPostgr
         FactoryQuoteDto draftA = drafts.stream().filter(q -> factoryA.equals(q.factoryName())).findFirst().orElseThrow();
         FactoryQuoteDto draftB = drafts.stream().filter(q -> factoryB.equals(q.factoryName())).findFirst().orElseThrow();
 
-        // Factory A: PER_PIECE, sqmPerUnit intentionally null.
+        // Factory A: quoted PER_PIECE with sqmPerUnit SUPPLIED (0.36) — so the line resolves sqm and
+        // is not set aside as uncostable — but linearMPerUnit (field 12) left null, which the
+        // REQUEST's own PER_LINEAR_M basis (see itemA above) then needs in quantityToPieces.
         ReceiveFactoryQuoteRequest responseA = new ReceiveFactoryQuoteRequest("REF-AGG-A", "THB", "30 days", "45 days",
             "revision", "note", List.of(new ReceiveFactoryQuoteItemRequest(
                 draftA.items().get(0).pricingRequestItemId(), null, null, new BigDecimal("100"),
                 UnitBasis.PER_PIECE, UnitBasis.PER_PIECE, new BigDecimal("100.00"), "THB", null,
-                null, null, null, "45 days", null, null)),
+                new BigDecimal("0.36"), null, null, "45 days", null, null)),
             UUID.randomUUID().toString());
         factoryQuoteService.markContacted(draftA.id(), new MarkFactoryContactedRequest(
             java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
@@ -447,7 +456,7 @@ class LandedCostCalculatorFxAndAggregationIntegrationTest extends AbstractPostgr
         TicketDto created = ticketService.create(
             new CreateTicketRequest(dealName, "NORMAL", customer.name(), customer.id(), project.id(), null,
                 null, null, List.of(
-                    ticketItem("Brand", "Model NoSqm", factoryA),
+                    ticketItem("Brand", "Model NoLinear", factoryA),
                     ticketItem("Brand", "Model NoBox", factoryB))),
             salesActor);
         return created.summary().id();

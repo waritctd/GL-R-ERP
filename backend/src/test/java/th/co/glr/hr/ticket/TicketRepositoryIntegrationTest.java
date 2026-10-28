@@ -694,8 +694,8 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     // ── B5 fix: findPricingChainFallbackItems — the read-only display fallback for a deal
-    //    whose sales.ticket_item is still empty (pre-order-confirmation), mirroring
-    //    DepositNoticeRepository#findDealQuotationItemsForDeposit's live-quotation pick.
+    //    whose sales.ticket_item is still empty (pre-order-confirmation), picking the deal's
+    //    live new-engine quotation.
     //    Real Postgres only: the priority CASE/ORDER BY and the origin/doc_status filters
     //    cannot be proven against a mocked repository. ─────────────────────────────────────
 
@@ -732,8 +732,7 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         insertQuotationWithItem(ticketId, "PRICING_REQUEST", "ISSUED",
             "Stale", "Issued", null, null, null, new BigDecimal("1"));
         // ...and a newer ACCEPTED DEAL_DIRECT-origin one. ACCEPTED must win regardless of
-        // which origin table it came from or insertion order (mirrors
-        // findDealQuotationItemsForDeposit's own CASE doc_status priority).
+        // which origin it came from or insertion order (the method's own CASE doc_status priority).
         insertQuotationWithItem(ticketId, "DEAL_DIRECT", "ACCEPTED",
             "Live", "Accepted", null, null, null, new BigDecimal("2"));
 
@@ -762,6 +761,112 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         long ticketId = tickets.create(sampleTicket(), tickets.nextTicketCode(), actorId, "พนักงานขาย");
 
         assertThat(tickets.findPricingChainFallbackItems(ticketId)).isEmpty();
+    }
+
+    // ── Deposit policy that follows the quotation (PR #1173 follow-ups F1/F2) ─────────────────
+    // syncDepositPolicyFromQuotation is the only write the system makes to deposit_policy. It is a
+    // compare-and-set: it moves the row only while the policy is still the expected one, nobody
+    // has set it by hand (deposit_policy_set_by IS NULL; waiveDeposit always records its actor),
+    // and the payment track is still at CUSTOMER_CONFIRMED. 0 rows means "leave it alone".
+
+    @Test
+    void syncDepositPolicyFromQuotation_movesASystemOwnedPolicyBothWays_andRecordsNoPerson() {
+        long ticketId = confirmedTicket();
+
+        assertThat(tickets.syncDepositPolicyFromQuotation(ticketId, DepositPolicy.REQUIRED,
+            DepositPolicy.NOT_REQUIRED, "ใบเสนอราคา QT-1 ระบุไม่รับมัดจำ (ชำระเต็มจำนวน)")).isEqualTo(1);
+        assertThat(depositPolicyRow(ticketId))
+            .containsEntry("deposit_policy", DepositPolicy.NOT_REQUIRED)
+            .containsEntry("deposit_policy_reason", "ใบเสนอราคา QT-1 ระบุไม่รับมัดจำ (ชำระเต็มจำนวน)")
+            .containsEntry("deposit_policy_set_by", null);
+
+        assertThat(tickets.syncDepositPolicyFromQuotation(ticketId, DepositPolicy.NOT_REQUIRED,
+            DepositPolicy.REQUIRED, "ใบเสนอราคา QT-1-1 ระบุมัดจำ 50%")).isEqualTo(1);
+        assertThat(depositPolicyRow(ticketId))
+            .containsEntry("deposit_policy", DepositPolicy.REQUIRED)
+            .containsEntry("deposit_policy_reason", "ใบเสนอราคา QT-1-1 ระบุมัดจำ 50%")
+            .containsEntry("deposit_policy_set_by", null);
+    }
+
+    /** F2: a waiver that commits between the service's read and this write must win. */
+    @Test
+    void syncDepositPolicyFromQuotation_writesNothing_whenThePolicyIsNotTheExpectedOne() {
+        long ticketId = confirmedTicket();
+
+        assertThat(tickets.syncDepositPolicyFromQuotation(ticketId, DepositPolicy.NOT_REQUIRED,
+            DepositPolicy.REQUIRED, "ใบเสนอราคา QT-2 ระบุมัดจำ 50%")).isZero();
+        assertThat(depositPolicyRow(ticketId))
+            .containsEntry("deposit_policy", DepositPolicy.REQUIRED)
+            .containsEntry("deposit_policy_reason", null);
+
+        tickets.updateDepositPolicy(ticketId, DepositPolicy.CREDIT_CUSTOMER, "ลูกค้าเครดิต 30 วัน", actorId);
+        assertThat(tickets.syncDepositPolicyFromQuotation(ticketId, DepositPolicy.REQUIRED,
+            DepositPolicy.NOT_REQUIRED, "ใบเสนอราคา QT-2 ระบุไม่รับมัดจำ (ชำระเต็มจำนวน)")).isZero();
+        assertThat(depositPolicyRow(ticketId))
+            .containsEntry("deposit_policy", DepositPolicy.CREDIT_CUSTOMER)
+            .containsEntry("deposit_policy_reason", "ลูกค้าเครดิต 30 วัน");
+    }
+
+    /** A NOT_REQUIRED a person chose (waiveDeposit) is never flipped back by a quotation. */
+    @Test
+    void syncDepositPolicyFromQuotation_writesNothing_onAPolicyAPersonSet() {
+        long ticketId = confirmedTicket();
+        tickets.updateDepositPolicy(ticketId, DepositPolicy.NOT_REQUIRED, "ลูกค้าโอนเต็มจำนวนล่วงหน้า", actorId);
+
+        assertThat(tickets.syncDepositPolicyFromQuotation(ticketId, DepositPolicy.NOT_REQUIRED,
+            DepositPolicy.REQUIRED, "ใบเสนอราคา QT-3 ระบุมัดจำ 50%")).isZero();
+        Map<String, Object> row = depositPolicyRow(ticketId);
+        assertThat(row).containsEntry("deposit_policy", DepositPolicy.NOT_REQUIRED)
+            .containsEntry("deposit_policy_reason", "ลูกค้าโอนเต็มจำนวนล่วงหน้า");
+        assertThat(((Number) row.get("deposit_policy_set_by")).longValue()).isEqualTo(actorId);
+    }
+
+    /** Before the customer confirms there is nothing to follow; once a deposit notice is out
+     * (rule 4) the policy is a money question, not a quotation one. */
+    @Test
+    void syncDepositPolicyFromQuotation_writesNothing_offCustomerConfirmed() {
+        long unconfirmed = tickets.create(sampleTicket(), tickets.nextTicketCode(), actorId, "พนักงานขาย");
+        assertThat(tickets.syncDepositPolicyFromQuotation(unconfirmed, DepositPolicy.REQUIRED,
+            DepositPolicy.NOT_REQUIRED, "ใบเสนอราคา QT-4 ระบุไม่รับมัดจำ (ชำระเต็มจำนวน)")).isZero();
+        assertThat(depositPolicyRow(unconfirmed)).containsEntry("deposit_policy", DepositPolicy.REQUIRED);
+
+        long noticeIssued = confirmedTicket();
+        jdbc.update("UPDATE sales.ticket SET payment_status = 'DEPOSIT_NOTICE_ISSUED' WHERE ticket_id = :id",
+            Map.of("id", noticeIssued));
+        assertThat(tickets.syncDepositPolicyFromQuotation(noticeIssued, DepositPolicy.REQUIRED,
+            DepositPolicy.NOT_REQUIRED, "ใบเสนอราคา QT-4 ระบุไม่รับมัดจำ (ชำระเต็มจำนวน)")).isZero();
+        assertThat(depositPolicyRow(noticeIssued)).containsEntry("deposit_policy", DepositPolicy.REQUIRED);
+    }
+
+    /** A deposit notice already ISSUED pins the policy at REQUIRED even while the payment track is
+     * still CUSTOMER_CONFIRMED: approving a 0% revision must not flip it (0 rows, so the service
+     * records no POLICY_CHANGED event). The no-notice flip is pinned by the first sync test; the
+     * NOT_REQUIRED -> REQUIRED direction is unchanged by a notice. */
+    @Test
+    void syncDepositPolicyFromQuotation_keepsRequired_whileADepositNoticeIsIssued() {
+        long ticket = confirmedTicket();
+        jdbc.update("""
+            INSERT INTO sales.deposit_notice (ticket_id, version, status, customer_name, deposit_percent,
+                subtotal, deposit_amount, vat_percent, vat_amount, total_payable)
+            VALUES (:id, 1, 'ISSUED', 'x', 0.3, 0, 0, 0.07, 0, 0)""", Map.of("id", ticket));
+
+        assertThat(tickets.syncDepositPolicyFromQuotation(ticket, DepositPolicy.REQUIRED,
+            DepositPolicy.NOT_REQUIRED, "ใบเสนอราคา QT-5 ระบุไม่รับมัดจำ (ชำระเต็มจำนวน)")).isZero();
+        assertThat(depositPolicyRow(ticket)).containsEntry("deposit_policy", DepositPolicy.REQUIRED);
+    }
+
+    private long confirmedTicket() {
+        long ticketId = tickets.create(sampleTicket(), tickets.nextTicketCode(), actorId, "พนักงานขาย");
+        jdbc.update("UPDATE sales.ticket SET payment_status = 'CUSTOMER_CONFIRMED' WHERE ticket_id = :id",
+            Map.of("id", ticketId));
+        return ticketId;
+    }
+
+    private Map<String, Object> depositPolicyRow(long ticketId) {
+        return jdbc.queryForMap("""
+            SELECT deposit_policy, deposit_policy_reason, deposit_policy_set_by
+              FROM sales.ticket WHERE ticket_id = :id
+            """, Map.of("id", ticketId));
     }
 
     // sales.quotation.number is VARCHAR(30) NOT NULL UNIQUE. A per-JVM-run counter alone

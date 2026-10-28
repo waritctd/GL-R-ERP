@@ -4,12 +4,15 @@ import { Link, useNavigate } from 'react-router-dom';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
+import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { depositNoticeStatusLabel, depositPolicyLabel } from '../../utils/format.js';
 import { downloadBlob } from '../../utils/download.js';
 import { canCreateDepositNoticeFromQuotation } from '../pricingRequests/pricingRequestMeta.js';
+import { newestQuotationByRequest } from '../quotations/quotationMeta.js';
+import { DepositIssueSummary } from '../deposits/DepositNoticePage.jsx';
 import { buttonVariants } from '../../components/common/Button.jsx';
 import { cn } from '../../utils/cn.js';
 
@@ -86,7 +89,7 @@ function pickAcceptedPricingRequest(pricingRequests = []) {
  * its own "ยืนยันคำสั่งซื้อ..." box. Both panels can show that specific
  * create action at once until a notice exists for this deal.
  */
-export function DealDepositPanel({ user, ticketId, summary, availableActions = [], pricingRequests = [], showToast }) {
+export function DealDepositPanel({ user, ticketId, summary, availableActions = [], pricingRequests = [], dealQuotations = [], showToast }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const role = user?.role;
@@ -100,6 +103,7 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
   const [policyReason, setPolicyReason] = useState('');
   const [downloadingFormat, setDownloadingFormat] = useState(null);
   const [previewHtml, setPreviewHtml] = useState('');
+  const [confirmIssue, setConfirmIssue] = useState(false);
 
   const st = summary?.status;
   const ps = summary?.paymentStatus;
@@ -143,9 +147,10 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
   });
 
   const createNoticeMutation = useMutation({
-    // depositPercent is deliberately NOT sent here (see the create-notice UI's own comment
-    // below) — the backend now always ignores a caller-supplied value and re-sources it from
-    // the accepted quotation itself.
+    // No depositPercent (owner rulings 2026-09-29, 2026-10-23): the pricing-request route
+    // (OrderConfirmationService#createDepositNoticeFromQuotation) bills what the accepted
+    // quotation's PDF printed (legacy 50%, new-engine its own, blank 30%) and never reads a
+    // client value, so the page has no % input.
     mutationFn: () => api.pricingRequests.createDepositNoticeFromQuotation(pr.id, {}),
     onSuccess: () => {
       showToast?.('success', 'สร้างร่างใบแจ้งยอดเงินรับมัดจำแล้ว');
@@ -156,13 +161,18 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
   });
 
   const issueMutation = useMutation({
-    mutationFn: () => api.depositNotices.issue(doc.id),
+    // The dialog shows the amounts as listed; the stamp makes the server refuse if the draft moved on since.
+    mutationFn: () => api.depositNotices.issue(doc.id, { expectedUpdatedAt: doc.updatedAt ?? null }),
     onSuccess: (res) => {
       showToast?.('success', `ออกเอกสาร ${res.depositNotice.docNumber} แล้ว`);
       setPreviewHtml('');
+      setConfirmIssue(false);
       invalidateAfterDepositChange();
     },
-    onError: (err) => showToast?.('error', err.message || 'ออกเอกสารไม่สำเร็จ'),
+    onError: (err) => {
+      setConfirmIssue(false);
+      showToast?.('error', err.message || 'ออกเอกสารไม่สำเร็จ');
+    },
   });
 
   const previewMutation = useMutation({
@@ -206,7 +216,7 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
   // Rule 4's cutoff), but the role/ownership check is kept here too, defense-in-depth, so this
   // control can never render editable off a stale/misconfigured availableActions response.
   const canSetPolicy = hasAction('WAIVE_DEPOSIT') && (role === 'sales_manager' || (isSales && isOwner));
-  const canCreateNotice = pr != null && canCreateDepositNoticeFromQuotation(user, pr);
+  const canCreateNotice = pr != null && canCreateDepositNoticeFromQuotation(user, pr, newestQuotationByRequest(dealQuotations).get(pr.id) ?? null, depositNoticesQuery.data);
   const canManageThisNotice = isSales && isOwner;
   // Legacy dual-track creation path (ticket.confirmCustomer → ISSUE_DEPOSIT_NOTICE),
   // independent of the PricingRequest/CustomerQuotation chain above — mirrors the
@@ -297,11 +307,14 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
                   </>
                 ) : canManageThisNotice ? (
                   <Button type="button" variant="primary" disabled={issueMutation.isPending}
-                    onClick={() => issueMutation.mutate()} data-testid="deal-deposit-issue-notice">
+                    onClick={() => setConfirmIssue(true)} data-testid="deal-deposit-issue-notice">
                     ออกเอกสาร
                   </Button>
                 ) : null}
               </div>
+              {doc.status === 'ISSUED' ? (
+                <p className="text-xs text-text-muted">ดีลนี้ออกใบแจ้งยอดเงินรับมัดจำแล้ว — สร้างฉบับใหม่ไม่ได้</p>
+              ) : null}
               {previewHtml ? (
                 <div className="flex flex-col gap-1">
                   <div className="flex items-center justify-between">
@@ -316,11 +329,9 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
           ) : canCreateNotice ? (
             <div className="flex flex-col gap-2">
               <p className="text-xs text-text-muted">ลูกค้ายืนยันคำสั่งซื้อแล้ว — สร้างใบแจ้งยอดเงินรับมัดจำจากใบเสนอราคาที่ยอมรับได้เลย</p>
-              {/* Owner ruling (2026-09-29): the deposit % is LOCKED to the accepted quotation's
-                  own deposit_percent — createDraft ignores any client-supplied value and always
-                  re-sources it from the quotation (see DepositNoticeService.createDraft /
-                  DepositNoticeRepository#findDealQuotationDepositPercent). The % input that used
-                  to sit here is gone — there is nothing left for it to control. */}
+              {/* The backend picks a new notice's % and ignores a client value
+                  (DepositNoticeService.createDraftFromQuotation; findGoverningQuotation, #1170), so no
+                  % input here. Sales changes the % on the draft (DepositNoticePage, ruling 2026-10-23). */}
               <Button type="button" variant="primary" className="self-start" disabled={createNoticeMutation.isPending}
                 onClick={() => createNoticeMutation.mutate()} data-testid="deal-deposit-create-notice">
                 สร้างใบแจ้งยอดเงินรับมัดจำ
@@ -370,6 +381,21 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
           )}
         </div>
       </div>
+
+      {doc ? (
+        <ConfirmDialog
+          open={confirmIssue}
+          title="ยืนยันการออกเอกสาร"
+          message={(
+            <DepositIssueSummary customerName={doc.customerName} depositPercent={doc.depositPercent}
+              deposit={doc.depositAmount} vatPercent={doc.vatPercent} vat={doc.vatAmount} total={doc.totalPayable} />
+          )}
+          confirmLabel="ออกเอกสาร"
+          busy={issueMutation.isPending}
+          onCancel={() => setConfirmIssue(false)}
+          onConfirm={() => issueMutation.mutate()}
+        />
+      ) : null}
 
       {policyOpen ? (
         <Modal

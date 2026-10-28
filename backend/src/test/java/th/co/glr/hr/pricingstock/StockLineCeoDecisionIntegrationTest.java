@@ -278,8 +278,7 @@ class StockLineCeoDecisionIntegrationTest extends AbstractStockLineIntegrationTe
 
     @Test
     void approve_anImportLineWithoutACost_isStillRefused_PIN() {
-        long id = persistSubmitAndPickUp(importLine("Uncosted", catalogProductUncostable,
-            "Factory Uncostable-StockLine", 10));
+        long id = persistSubmitAndPickUp(importLineUncostable("Uncosted", "Factory Uncostable-StockLine", 10));
         quoteEveryImportLineReady(id);
         PricingDecisionDto decision = decisionService.startReview(id,
             new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()),
@@ -298,7 +297,7 @@ class StockLineCeoDecisionIntegrationTest extends AbstractStockLineIntegrationTe
     @Test
     void approve_aPricedStockLine_doesNotExemptAnUncostedImportLineOnTheSameRequest_viaStartReview() {
         long id = persistSubmitAndPickUp(
-            importLine("Uncosted", catalogProductUncostable, "Factory Uncostable-StockLine", 10),
+            importLineUncostable("Uncosted", "Factory Uncostable-StockLine", 10),
             stockLine("Stock TH", IN_THAILAND, 5));
         quoteEveryImportLineReady(id);
         forceStatus(id, PricingRequestStatus.READY_FOR_CEO_REVIEW);

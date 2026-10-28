@@ -68,6 +68,7 @@ const EVENT_LABEL = {
 export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ ticketId, deal, ticketItems = [], user, showToast }, ref) {
   const queryClient = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
+  const [createRecipientType, setCreateRecipientType] = useState(null);
   const [expandedId, setExpandedId] = useState(null);
   const [editingId, setEditingId] = useState(null); // pricing request id being edited (Fix 2), or null
   const [cancelDraft, setCancelDraft] = useState(null); // { id, reason }
@@ -123,7 +124,18 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
   // ref-exposed openers): a stale or over-eager caller cannot force the
   // create modal open past the real gate.
   useImperativeHandle(ref, () => ({
-    openCreate: () => { if (canCreate) setCreateOpen(true); },
+    openCreate: (opts) => {
+      if (!canCreate) return;
+      setCreateRecipientType(opts?.recipientType ?? null);
+      setCreateOpen(true);
+    },
+    // The deal page's "ส่งคำขอราคาถึง<party>": the draft's own ส่งให้ฝ่ายนำเข้า, under the same gate.
+    submit: (id) => {
+      const pr = requests.find((request) => request.id === id);
+      if (submitMutation.isPending) return;
+      if (pr && canSubmitPricingRequest(user, pr)) submitMutation.mutate(id);
+      else showToast?.('error', 'ส่งคำขอราคานี้ไม่ได้ ดูคำขอราคาในแท็บสินค้าและราคา');
+    },
   }));
 
   return (
@@ -261,8 +273,9 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
           ticketItems={ticketItems}
           deal={deal}
           showToast={showToast}
-          onClose={() => setCreateOpen(false)}
-          onCreated={() => { setCreateOpen(false); invalidate(); }}
+          initialRecipientType={createRecipientType}
+          onClose={() => { setCreateOpen(false); setCreateRecipientType(null); }}
+          onCreated={() => { setCreateOpen(false); setCreateRecipientType(null); invalidate(); }}
           createFn={(payload) => api.pricingRequests.create(ticketId, payload)}
           submitFn={(id) => api.pricingRequests.submit(id)}
           // Wired even in create mode so the modal's duplicate-draft retry

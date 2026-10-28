@@ -577,6 +577,47 @@ class PricingRequestItemDirectDealFieldsIntegrationTest extends AbstractPostgres
 
     // ── helpers ──────────────────────────────────────────────────────────────────────────
 
+    // ── Sales thickness never writes to the shared catalogue ───────────────────────────────
+
+    @Test
+    void submit_neverWritesSalesThicknessToTheSharedCatalog() {
+        // A typed thickness is unreviewed: a typo must not become catalogue truth. Costing reads
+        // it from the request item instead (LandedCostCalculatorFormulaIntegrationTest
+        // #salesEnteredThickness_makesACatalogNullThicknessLineCostable).
+        long nullThicknessPrice = insertCatalogProduct("WriteBack Factory", "TH", "WB-NULL-001",
+            new BigDecimal("100.00"), "THB", "per_piece", "ACTIVE", null);
+        long id = pricingRequestService.createDraft(ticketId,
+            createRequest(List.of(completeItem(b -> b
+                .productId(nullThicknessPrice).thicknessMm(new BigDecimal("12"))))),
+            salesActor).summary().id();
+        pricingRequestService.submit(id, salesActor);
+
+        BigDecimal catalogThickness = jdbc.queryForObject(
+            "SELECT thickness_mm FROM price_catalog.product_prices WHERE price_id = :id",
+            Map.of("id", nullThicknessPrice), BigDecimal.class);
+        assertThat(catalogThickness).as("submit must leave the catalogue thickness NULL").isNull();
+        assertThat(onlyItem(pricingRequestService.get(id, salesActor)).thicknessMm())
+            .as("the typed value stays on the request item").isEqualByComparingTo("12");
+    }
+
+    @Test
+    void submit_doesNotOverwriteAnExistingCatalogThickness_catalogWins() {
+        long existingThicknessPrice = insertCatalogProduct("WriteBack Factory 2", "TH", "WB-HAS-001",
+            new BigDecimal("100.00"), "THB", "per_piece", "ACTIVE", new BigDecimal("8"));
+        long id = pricingRequestService.createDraft(ticketId,
+            createRequest(List.of(completeItem(b -> b
+                .productId(existingThicknessPrice).thicknessMm(new BigDecimal("12"))))),
+            salesActor).summary().id();
+        pricingRequestService.submit(id, salesActor);
+
+        BigDecimal catalogThickness = jdbc.queryForObject(
+            "SELECT thickness_mm FROM price_catalog.product_prices WHERE price_id = :id",
+            Map.of("id", existingThicknessPrice), BigDecimal.class);
+        assertThat(catalogThickness)
+            .as("catalog wins: an existing catalogue thickness is never overwritten by a per-deal entry")
+            .isEqualByComparingTo("8");
+    }
+
     private PricingRequestItemDto onlyItem(PricingRequestDetailDto detail) {
         List<PricingRequestItemDto> items = pricingRequests.findItems(detail.summary().id());
         assertThat(items).hasSize(1);

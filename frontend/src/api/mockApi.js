@@ -1177,7 +1177,9 @@ let mockPricingDecisionItemSeq = 1;
 // Step 4 quotation is keyed by pricingRequestId first — the legacy ticket-item-driven
 // `ticket.quotations` array is untouched by this section.
 const mockCustomerQuotations = [];
-let mockCustomerQuotationSeq = 1;
+// sales.quotation_id: one id sequence for mockCustomerQuotations AND mockDealQuotations, as Java
+// has one table, so "latest" (highest id) compares across both arrays.
+let mockQuotationSeq = 1;
 let mockCustomerQuotationItemSeq = 1;
 // CEO discount-approval workflow, Phase 2 (owner ruling 2026-08-16) — mirrors
 // sales.quotation_item_discount_approval (V155). Starts empty every session like every other
@@ -1214,7 +1216,7 @@ let mockDiscountApprovalSeq = 1;
   mockPricingDecisionSeq = salesSeed.nextSeq.pricingDecision;
   mockPricingDecisionItemSeq = salesSeed.nextSeq.pricingDecisionItem;
   mockCustomerQuotations.push(...salesSeed.customerQuotations);
-  mockCustomerQuotationSeq = salesSeed.nextSeq.customerQuotation;
+  mockQuotationSeq = salesSeed.nextSeq.customerQuotation;
   mockCustomerQuotationItemSeq = salesSeed.nextSeq.customerQuotationItem;
   // Deal-tracking readiness gate (dealIsReadyToAdvance) needs `ticket.nextFollowUpAt` set —
   // not part of the ticket's own literal object in demoSales.js since it's normally written
@@ -1439,38 +1441,64 @@ function mockDepositNoticeItemsFromQuotation(items) {
 // Mirrors DepositNoticeRepository.findDealQuotationItems. Values are read off the stored row,
 // never recomputed (label excepted — see below).
 function mockDepositNoticeItemsFromDealQuotation(row) {
-  return row.items.map((item, idx) => {
+  // DepositNoticeRepository#foldAdjustments: an ADJUSTMENT row (qty -1) is no deposit line; its
+  // amount is spread over the goods lines by amount, each share and each new net price 2 dp (no
+  // remainder on a last line: the notice total is its own 2 dp lines). A line keeps the quotation's
+  // own discount wording and gains the folded discount after it.
+  // ponytail: the mock computes no % adjustment amount (MOCK_NOT_COMPUTED), so that row is only dropped.
+  const goods = row.items.filter((item) => item.lineType !== 'ADJUSTMENT');
+  const adjustment = row.items.filter((item) => item.lineType === 'ADJUSTMENT')
+    .reduce((sum, item) => sum + (Number(item.netUnitPrice) || 0) * Number(item.quantity), 0);
+  const amountOf = (item) => item.netUnitPrice * item.quantity;
+  const total = goods.reduce((sum, item) => sum + amountOf(item), 0);
+  return goods.map((item, idx) => {
+    let netUnitPrice = item.netUnitPrice;
+    if (adjustment && total && amountOf(item)) {
+      const share = round2((adjustment * amountOf(item)) / total);
+      netUnitPrice = round2((amountOf(item) + share) / item.quantity);
+    }
     // Display label only: the mock stores no sales_discount, so this restates the column Java reads
     // (DealQuotationRepository#itemParams writes it as unitPrice − netUnitPrice).
     const salesDiscount = round2(item.unitPrice - item.netUnitPrice);
+    const folded = round2(item.netUnitPrice - netUnitPrice);
+    const own = salesDiscount > 0 ? `ส่วนลด ${salesDiscount} ต่อหน่วย` : null;
+    const extra = folded > 0 ? `ส่วนลดพิเศษ ${folded} ต่อหน่วย` : null;
     return {
       seq: item.seq ?? idx + 1,
       description: item.descriptionLine?.trim() ? item.descriptionLine : 'รายการสินค้า',
       qty: item.quantity,
       unit: item.unit?.trim() ? item.unit : 'หน่วย',
       unitPrice: item.unitPrice,
-      discountLabel: salesDiscount > 0 ? `ส่วนลด ${salesDiscount} ต่อหน่วย` : null,
-      netUnitPrice: item.netUnitPrice,
+      discountLabel: own && extra ? `${own} + ${extra}` : own ?? extra,
+      netUnitPrice,
     };
   });
 }
 
-// Branch fix: mirrors DepositNoticeService.pickQuotation — the latest ACCEPTED revision for
-// this ticket, or (if none has been accepted yet) the latest ISSUED one. mockCustomerQuotations
-// carries no guaranteed ordering, so sort ascending by (quotationRevisionNo, id) first — same
-// contract as CustomerQuotationRepository.findByTicket — then a single forward scan overwriting
-// "latest seen" per status is equivalent to sorting descending and taking the first match.
-function mockPickTicketQuotationForDepositNotice(ticketId) {
-  const candidates = mockCustomerQuotations
-    .filter((q) => q.ticketId === Number(ticketId) && q.pricingRequestId != null)
-    .sort((a, b) => (a.quotationRevisionNo - b.quotationRevisionNo) || (a.id - b.id));
-  let latestAccepted = null;
-  let latestIssued = null;
-  for (const q of candidates) {
-    if (q.docStatus === 'ACCEPTED') latestAccepted = q;
-    else if (q.docStatus === 'ISSUED') latestIssued = q;
+// Mirrors DepositNoticeService.zeroDepositRefusal: both deposit routes refuse a 0% quotation.
+const mockZeroDepositRefusal = (number) =>
+  `ใบเสนอราคา ${number} ระบุไม่มีมัดจำ (ชำระเต็มจำนวน) จึงออกใบแจ้งยอดเงินรับมัดจำไม่ได้`;
+
+// Mirrors DepositNoticeRepository#findGoverningQuotation: the quotation a ticket-level deposit
+// notice bills (lines, percent, reference), across both engines. The latest one the customer
+// answered (ACCEPTED, or a DEAL_DIRECT one APPROVED) wins, else the latest ISSUED one. "Latest"
+// is the highest id, which mockQuotationSeq makes comparable across the two arrays.
+// ponytail: the two literal mockDealQuotations seeds (ids 1-2, ticket 18) repeat legacy seed ids
+// (ticket 5); no pick compares rows of different tickets, so renumber only if they ever share one.
+function mockGoverningQuotationForDepositNotice(ticketId) {
+  const candidates = [];
+  for (const q of mockCustomerQuotations) {
+    if (q.ticketId !== ticketId || q.pricingRequestId == null) continue;
+    const rank = { ACCEPTED: 0, ISSUED: 1 }[q.docStatus];
+    if (rank != null) candidates.push({ rank, quotation: q, legacy: true });
   }
-  return latestAccepted ?? latestIssued ?? null;
+  for (const q of mockDealQuotations) {
+    if (q.ticketId !== ticketId) continue;
+    const rank = isDealDirectOrigin(q) && q.docStatus === 'APPROVED' ? 0 : { ACCEPTED: 0, ISSUED: 1 }[q.docStatus];
+    if (rank != null) candidates.push({ rank, quotation: q, legacy: false });
+  }
+  candidates.sort((a, b) => (a.rank - b.rank) || (b.quotation.id - a.quotation.id));
+  return candidates[0] ?? null;
 }
 
 // B5 fix ("รายการสินค้า shows 0 รายการ while a deal is still in the pricing/quotation phase"):
@@ -1498,7 +1526,7 @@ function mockPickLiveQuotationForItemFallback(ticketId) {
   }
   if (candidates.length === 0) return null;
   // ACCEPTED beats ISSUED beats APPROVED (rank ascending); most recent id wins a tie -- same
-  // priority findDealQuotationItemsForDeposit's CASE doc_status / ORDER BY quotation_id DESC
+  // priority findPricingChainFallbackItems's CASE doc_status / ORDER BY quotation_id DESC
   // encodes server-side.
   candidates.sort((a, b) => (a.rank - b.rank) || (b.id - a.id));
   return candidates[0];
@@ -1680,7 +1708,7 @@ function reconcileTicketItemsFromPricingRequest(ticket, pr, user) {
 function buildMockCustomerQuotationDraft(pr, decision, ticket, user, payload, parentQuotationId, revisionNo, priorDiscounts, number) {
   const customer = ticket?.customerId ? mockCustomers.find((c) => c.id === ticket.customerId) : null;
   const project = ticket?.projectId ? mockProjects.find((p) => p.id === ticket.projectId) : null;
-  const id = mockCustomerQuotationSeq++;
+  const id = mockQuotationSeq++;
   const items = decision.items
     .filter((di) => di.approvedSellingPricePerRequestedUnit != null)
     .map((di, idx) => {
@@ -2405,6 +2433,13 @@ function stripCeoPriceModeFields(decision, user) {
       netUnitPrice: null,
     })),
   };
+}
+
+// Mirrors DepositNoticeService.createDraftFromQuotation (both create routes): one deposit notice
+// per deal, so no new draft while one is ISSUED (owner ruling 2026-10-23).
+function requireNoIssuedDepositNotice(ticketId) {
+  const issued = mockDepositNotices.find((d) => d.ticketId === Number(ticketId) && d.status === 'ISSUED');
+  if (issued) fail(`ดีลนี้ออกใบแจ้งรับมัดจำเลขที่ ${issued.docNumber} แล้ว จึงสร้างฉบับร่างใหม่ไม่ได้`, 409);
 }
 
 function buildMockDoc(doc) {
@@ -3718,6 +3753,34 @@ function requireActive(ticket) {
 
 function depositBypassesNotice(ticket) {
   return ['NOT_REQUIRED', 'WAIVED', 'CREDIT_CUSTOMER'].includes(ticket.depositPolicy);
+}
+
+// Mirrors DepositNoticeService.createDraftFromQuotation's policy refusal, shared by both draft routes.
+function requireDepositNoticePath(ticket) {
+  if (depositBypassesNotice(ticket)) {
+    fail(`ดีลนี้ไม่ต้องเก็บมัดจำ (นโยบายมัดจำ ${ticket.depositPolicy}) จึงสร้างใบแจ้งรับมัดจำไม่ได้`, 409);
+  }
+}
+
+// Mirrors TicketService.followQuotationDepositPolicy and TicketRepository
+// .syncDepositPolicyFromQuotation's compare-and-set: while CUSTOMER_CONFIRMED, a policy the system
+// owns (no person recorded in depositPolicySetBy, which setDepositPolicy writes) follows the
+// quotation: 0% -> NOT_REQUIRED, any deposit -> REQUIRED. Called at confirmation and on a
+// DEAL_DIRECT approval. depositPolicySetBy is internal: buildTicketDetail does not serve it.
+function followQuotationDepositPolicy(ticket, quotation, user) {
+  if (!quotation) return;
+  const percent = quotation.depositPercent ?? MOCK_DEFAULT_DEPOSIT_PERCENT; // blank new-engine % = 30
+  const noDeposit = percent === 0;
+  const expected = noDeposit ? 'REQUIRED' : 'NOT_REQUIRED';
+  if (ticket.paymentStatus !== 'CUSTOMER_CONFIRMED' || ticket.depositPolicySetBy != null
+    || (ticket.depositPolicy ?? 'REQUIRED') !== expected) return;
+  const policy = noDeposit ? 'NOT_REQUIRED' : 'REQUIRED';
+  const reason = `ใบเสนอราคา ${quotation.number} `
+    + (noDeposit ? 'ระบุไม่รับมัดจำ (ชำระเต็มจำนวน)' : `ระบุมัดจำ ${percent}%`);
+  ticket.depositPolicy = policy;
+  ticket.depositPolicyReason = reason;
+  pushEvent(ticket, user, 'POLICY_CHANGED', ticket.salesStage, ticket.salesStage,
+    `deposit_policy → ${policy} — ${reason}`);
 }
 
 function moneyValue(value) {
@@ -6379,19 +6442,19 @@ function nextMockDealQuotationNumber() {
 }
 
 // The pricing-request-chain (customerquotation/) flow's own number-space counter -- kept SEPARATE
-// from mockCustomerQuotationSeq (the id sequence) for the same reason mockDealQuotationNumberSeq
-// is kept separate from mockDealQuotationSeq above: a `number` and an `id` are different concerns
+// from mockQuotationSeq (the id sequence) for the same reason mockDealQuotationNumberSeq
+// is: a `number` and an `id` are different concerns
 // even though the real backend's sales.quotation_code_seq happens to be a global sequence shared
 // by BOTH flows' numbers (a fidelity gap this mock already had before today, pre-existing and out
 // of scope here -- the two flows' *own* number counters were already independent of one another).
-// Seeded from mockCustomerQuotationSeq's OWN already-final value (the state-matrix seed block
+// Seeded from mockQuotationSeq's already-final value (the state-matrix seed block
 // above, top-level code that has already run by the time this line executes, set it to one past
 // every demoSales.js-seeded row's id) -- every seeded row's bare number is literally
 // `QT-2026-{id}` (see demoSales.js#makeQuotation), so starting from the same point can never
 // collide with one of them. Mirrors `mockDealQuotationNumberSeq = 3` right after its own two-row
 // literal seed, just computed instead of hardcoded since this flow's seed count varies with
 // demoSales.js rather than being two fixed literal rows.
-let mockCustomerQuotationNumberSeq = mockCustomerQuotationSeq;
+let mockCustomerQuotationNumberSeq = mockQuotationSeq;
 function nextMockCustomerQuotationNumber() {
   return `QT-${new Date().getFullYear()}-${String(mockCustomerQuotationNumberSeq++).padStart(4, '0')}`;
 }
@@ -6551,7 +6614,7 @@ function mintDealQuotationRevision(parent, user) {
   const revisionNo = nextMockDealQuotationRevisionNo(parent.ticketId, base);
   return {
     ...structuredClone(parent),
-    id: mockDealQuotationSeq++,
+    id: mockQuotationSeq++,
     number: quotationRevisionNumber(base, revisionNo),
     docStatus: 'DRAFT',
     revisionNo,
@@ -6593,7 +6656,7 @@ function mintDealQuotationReorder(source, user) {
   const revisionNo = nextMockDealQuotationRevisionNo(source.ticketId, base);
   return {
     ...structuredClone(source),
-    id: mockDealQuotationSeq++,
+    id: mockQuotationSeq++,
     number: quotationRevisionNumber(base, revisionNo),
     docStatus: 'DRAFT',
     revisionNo,
@@ -7153,6 +7216,13 @@ function resolveDealQuotationV3Header(payload, current = null) {
   return { priceMode, documentLanguage, currency };
 }
 
+// Mirrors DealQuotationRenderAdapter.DEFAULT_DEPOSIT_PERCENT: the percent a quotation's PDF
+// prints, and its deposit notice bills, when its depositPercent is null.
+export const MOCK_DEFAULT_DEPOSIT_PERCENT = 30;
+// Mirrors QuotationRenderer.LEGACY_DEPOSIT_PERCENT: a legacy quotation's PDF always prints 50%,
+// so its deposit notice bills 50% whatever percent was typed.
+export const MOCK_LEGACY_DEPOSIT_PERCENT = 50;
+
 /**
  * Item 4 (V181, "ไม่รับมัดจำ", owner ruling 2026-09-16) — mirrors
  * DealQuotationService#isZeroDeposit/#resolveFullPaymentTerm exactly: `depositPercent === 0` is
@@ -7508,7 +7578,6 @@ function mockDealQuotationDocLines(row) {
 // ticket with 4 catalog-flavoured items already seeded in demoSales.js) -- one DRAFT, one
 // PENDING_APPROVAL, per the implementation brief.
 let mockDealQuotationItemSeq = 1;
-let mockDealQuotationSeq = 3;
 const mockDealQuotations = [
   {
     id: 1,
@@ -7612,6 +7681,8 @@ const mockDealQuotations = [
   },
 ];
 mockDealQuotationNumberSeq = 3;
+// One id sequence across both quotation arrays: start past the highest literal seed id above.
+mockQuotationSeq = Math.max(mockQuotationSeq, Math.max(...mockDealQuotations.map((q) => q.id)) + 1);
 
 
 // §5 WARN_UNPAID_* gates (V164 follow-up, 2026-09-09): `ruleWarnings`/`unpaidByRuleDays` on both
@@ -9162,6 +9233,7 @@ export const api = {
       }
       ticket.depositPolicy = payload.policy;
       ticket.depositPolicyReason = payload.reason.trim();
+      ticket.depositPolicySetBy = user.employeeId ?? user.id; // deposit_policy_set_by: a person chose it
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
       pushEvent(ticket, user, 'POLICY_CHANGED', ticket.salesStage, ticket.salesStage,
         `deposit_policy → ${payload.policy} — ${payload.reason.trim()}`);
@@ -13265,11 +13337,15 @@ export const api = {
     },
 
     async createDraft(ticketId, payload) {
-      requireSession();
+      // Mirrors DepositNoticeService.createDraftFromQuotation: requireRole(SALES_ROLES) + requireTicketOwner.
+      const user = hasRole('sales');
       const ticket = findTicketRaw(Number(ticketId));
+      if (ticket.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      requireNoIssuedDepositNotice(ticket.id);
       // Phase 1 lifecycle gate (mirrors DepositNoticeService.createDraft).
       requireActive(ticket);
       if (!['approved', 'quotation_issued', 'document_issued'].includes(ticket.status)) fail('ดีลต้องได้รับการอนุมัติก่อน', 409);
+      requireDepositNoticePath(ticket);
 
       // Legacy path: auto-build from approved ticket items (sales.ticket_item.approved_price —
       // written only by the @Deprecated, routeless TicketService.approve).
@@ -13279,23 +13355,26 @@ export const api = {
           const desc = [it.brand, it.model, it.color, it.texture, it.size].filter(Boolean).join(' ');
           return { seq: idx + 1, description: desc, qty: Number(it.qty), unit: 'แผ่น', unitPrice: Number(it.approvedPrice), discountLabel: null, netUnitPrice: Number(it.approvedPrice) };
         });
-      // Branch fix (deposit-notice autofill): every deal created through the pricing-request
-      // chain has approved_price = NULL on every ticket_item, so legacyItems above is always
-      // empty for it — mirrors DepositNoticeService.buildItemsFromRequest's own new-chain
-      // fallback to the ticket's own customer quotation (latest ACCEPTED, else latest ISSUED).
-      let items = payload.items?.length ? payload.items : legacyItems;
-      if (!items.length) {
-        const quotation = mockPickTicketQuotationForDepositNotice(ticketId);
-        if (quotation) items = mockDepositNoticeItemsFromQuotation(quotation.items);
+      // Every deal created through the pricing-request chain has approved_price = NULL on every
+      // ticket_item, so legacyItems above is empty for it. The governing quotation always supplies
+      // the percent, and the lines and reference unless the payload or approved prices supply the
+      // lines (DepositNoticeService.createDraftFromQuotation).
+      const governing = mockGoverningQuotationForDepositNotice(Number(ticketId));
+      if (!governing?.legacy && governing?.quotation.depositPercent === 0) {
+        fail(mockZeroDepositRefusal(governing.quotation.number), 409);
       }
-      if (!items.length) {
-        // Then the live new-engine quotation: findDealQuotationItemsForDeposit, ordered as
-        // mockPickLiveQuotationForItemFallback's own comment says. The picker labels legacy rows
-        // 'PRICING_REQUEST' too, so the array tells new-engine apart.
-        const live = mockPickLiveQuotationForItemFallback(Number(ticketId));
-        if (live && mockDealQuotations.includes(live.quotation)) {
-          items = mockDepositNoticeItemsFromDealQuotation(live.quotation);
-        }
+      let items = payload.items?.length ? payload.items : legacyItems;
+      const linesFromGoverning = !items.length && governing != null;
+      if (linesFromGoverning) {
+        items = governing.legacy
+          ? mockDepositNoticeItemsFromQuotation(governing.quotation.items)
+          : mockDepositNoticeItemsFromDealQuotation(governing.quotation);
+      }
+      // A typed percent is ignored, as in Java; 0.5 only when the ticket has no live quotation.
+      let depositPercent = 0.5;
+      if (governing) {
+        depositPercent = (governing.legacy ? MOCK_LEGACY_DEPOSIT_PERCENT
+          : governing.quotation.depositPercent ?? MOCK_DEFAULT_DEPOSIT_PERCENT) / 100;
       }
 
       // Branch fix: header autofill (mirrors DepositNoticeService.createDraft) — a caller-
@@ -13311,8 +13390,8 @@ export const api = {
         version: nextVer, docNumber: null, issueDate: null, status: 'DRAFT',
         customerName: payload.customerName ?? ticket.customerName ?? '',
         customerTaxId: customerTaxId ?? '', customerAddress: customerAddress ?? '',
-        projectName: projectName ?? '', reference: payload.reference ?? '',
-        depositPercent: payload.depositPercent ?? 0.5, vatPercent: 0.07,
+        projectName: projectName ?? '', reference: payload.reference ?? (linesFromGoverning ? governing.quotation.number : null),
+        depositPercent, vatPercent: 0.07,
         notes, items, issuedByName: null, preparerName: 'จินตนา หาญมนตรี',
         hasPdf: false, hasXlsx: false,
         createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
@@ -13338,9 +13417,25 @@ export const api = {
 
     async update(docId, payload) {
       requireSession();
+      // DepositNoticeDraftRequest's @DecimalMin/@DecimalMax: @Valid runs before any lookup.
+      const sent = payload.depositPercent == null ? null : Number(payload.depositPercent) * 100;
+      if (sent != null && sent > 100) fail('depositPercent เปอร์เซ็นต์มัดจำต้องไม่เกิน 100', 400);
+      if (sent != null && !(sent > 0)) fail('depositPercent เปอร์เซ็นต์มัดจำต้องมากกว่า 0', 400);
+      // DepositNoticeService.update: sales only, a DRAFT, the deal owner, then the % rules.
+      const user = hasRole('sales');
       const doc = mockDepositNotices.find((d) => d.id === Number(docId));
       if (!doc) fail('ไม่พบใบแจ้งรับมัดจำนี้', 404);
       if (doc.status !== 'DRAFT') fail('ใบแจ้งรับมัดจำนี้ไม่ได้อยู่ในสถานะร่าง (DRAFT)', 409);
+      if (findTicketRaw(doc.ticketId).createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const stored = Number(doc.depositPercent) * 100;
+      const pct = sent ?? stored;
+      if (!(pct > 0)) fail('เปอร์เซ็นต์มัดจำต้องมากกว่า 0', 400);
+      // A stored legacy fraction sent back unchanged still saves.
+      if (pct !== stored && Math.abs(pct - Math.round(pct)) > 1e-9) fail('เปอร์เซ็นต์มัดจำต้องเป็นจำนวนเต็ม', 400);
+      // DepositNoticeRepository#update: a save over someone else's newer one is refused.
+      if (payload.expectedUpdatedAt != null && payload.expectedUpdatedAt !== doc.updatedAt) {
+        fail('ใบแจ้งรับมัดจำนี้ถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง', 409);
+      }
       Object.assign(doc, {
         customerName:    payload.customerName    ?? doc.customerName,
         customerTaxId:   payload.customerTaxId   ?? doc.customerTaxId,
@@ -13350,7 +13445,8 @@ export const api = {
         depositPercent:  payload.depositPercent  ?? doc.depositPercent,
         notes:           payload.notes           ?? doc.notes,
         items:           payload.items?.length ? payload.items : doc.items,
-        updatedAt:       new Date().toISOString(),
+        // Strictly later than the stored stamp, so two saves in one millisecond still differ.
+        updatedAt:       new Date(Math.max(Date.now(), (Date.parse(doc.updatedAt) || 0) + 1)).toISOString(),
       });
       const updated = buildMockDoc(doc);
       Object.assign(doc, updated);
@@ -13366,12 +13462,23 @@ export const api = {
       return mockPreviewHtml(buildMockDoc(doc));
     },
 
-    async issue(docId) {
+    async issue(docId, payload) {
       const user = requireSession();
       const doc = mockDepositNotices.find((d) => d.id === Number(docId));
       if (!doc) fail('ไม่พบใบแจ้งรับมัดจำนี้', 404);
       if (doc.status !== 'DRAFT') fail('ไม่ได้อยู่ในสถานะร่าง (DRAFT)', 409);
       const ticket = findTicketRaw(doc.ticketId);
+      // DepositNoticeService.issue: sales only, the deal owner, and a stored % the document can print.
+      if (user.role !== 'sales' || ticket.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const pct = Number(doc.depositPercent) * 100;
+      if (!(pct > 0 && pct <= 100) || Math.abs(pct - Math.round(pct)) > 1e-9) {
+        fail(`ใบแจ้งรับมัดจำนี้มีเปอร์เซ็นต์มัดจำ ${+pct.toFixed(4)}% จึงออกเอกสารไม่ได้ (ต้องเป็นจำนวนเต็ม 1–100)`, 409);
+      }
+
+      // Mirrors DepositNoticeService.issue's one-notice-per-deal refusal (owner ruling 2026-10-23).
+      // Checked before the payment-state gate: the mock cannot re-issue from DEPOSIT_NOTICE_ISSUED.
+      const other = mockDepositNotices.find((d) => d.ticketId === doc.ticketId && d.id !== doc.id && d.status === 'ISSUED');
+      if (other) fail(`ดีลนี้ออกใบแจ้งรับมัดจำเลขที่ ${other.docNumber} แล้ว จึงออกฉบับร่างนี้ไม่ได้`, 409);
 
       // Mirrors DepositNoticeService.issue: the document IS the payment-track step.
       // Requires a customer-confirmed quotation; advances paymentStatus and leaves
@@ -13379,11 +13486,14 @@ export const api = {
       if (ticket.status !== 'quotation_issued' || ticket.paymentStatus !== 'CUSTOMER_CONFIRMED') {
         fail('ออกใบแจ้งรับมัดจำได้เฉพาะเมื่อออกใบเสนอราคาแล้วและลูกค้ายืนยันคำสั่งซื้อแล้วเท่านั้น', 409);
       }
+      // Mirrors DepositNoticeService.issue's amount guard: a 0-baht notice takes no number.
+      if (!(Number(doc.depositAmount) > 0)) fail('ใบแจ้งรับมัดจำนี้มียอดมัดจำ 0 บาท จึงออกเอกสารไม่ได้', 409);
       // Phase 1 lifecycle gate (mirrors DepositNoticeService.requireActiveLifecycle).
       requireActive(ticket);
-
-      // Supersede previous issued docs
-      mockDepositNotices.forEach((d) => { if (d.ticketId === doc.ticketId && d.id !== doc.id && d.status === 'ISSUED') d.status = 'SUPERSEDED'; });
+      // DepositNoticeRepository#issue: the draft was saved after the caller read it.
+      if (payload?.expectedUpdatedAt != null && payload.expectedUpdatedAt !== doc.updatedAt) {
+        fail('ใบแจ้งรับมัดจำนี้ถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง', 409);
+      }
 
       const thaiYear = new Date().getFullYear() + 543;
       doc.docNumber = `GLRD${String(thaiYear).slice(-2)}${String(mockDocNumberSeq++).padStart(3,'0')}`;
@@ -16174,6 +16284,8 @@ export const api = {
         ticket.paymentStatus = 'CUSTOMER_CONFIRMED';
         ticket.updatedAt = now;
         pushEvent(ticket, user, 'CUSTOMER_CONFIRMED', ticket.status, ticket.status, null);
+        followQuotationDepositPolicy(ticket, mockDealQuotations.find(
+          (q) => q.pricingRequestId === pr.id && q.origin === 'PRICING_REQUEST' && q.docStatus === 'ACCEPTED'), user);
         autoAdvanceStage(ticket, 'ORDER_RECEIVED', user);
       }
 
@@ -16185,7 +16297,7 @@ export const api = {
       return delay({ result: { ticket: buildTicketDetail(ticket), pricingRequest: buildPricingRequestSummary(pr) } });
     },
 
-    async createDepositNoticeFromQuotation(id, payload = {}) {
+    async createDepositNoticeFromQuotation(id, payload = {}) { // eslint-disable-line no-unused-vars -- hrApi arity; Java ignores the typed percent
       const user = hasRole('sales');
       const pr = findPricingRequestRaw(id);
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
@@ -16200,9 +16312,8 @@ export const api = {
         (q) => q.pricingRequestId === pr.id && q.origin === 'PRICING_REQUEST' && q.docStatus === 'ACCEPTED');
       if (!accepted && !newEngine) fail('ยังไม่มีใบเสนอราคาที่ลูกค้ายอมรับสำหรับคำขอราคานี้', 409);
       // Mirrors the zero-deposit refusal: a 0% ("ไม่รับมัดจำ") quotation has nothing to bill.
-      if (newEngine?.depositPercent === 0) {
-        fail(`ใบเสนอราคา ${newEngine.number} ระบุไม่มีมัดจำ (ชำระเต็มจำนวน) จึงออกใบแจ้งยอดเงินรับมัดจำไม่ได้`, 409);
-      }
+      if (newEngine?.depositPercent === 0) fail(mockZeroDepositRefusal(newEngine.number), 409);
+      requireNoIssuedDepositNotice(ticket.id);
       const reference = (accepted ?? newEngine).number;
       const items = accepted
         ? mockDepositNoticeItemsFromQuotation(accepted.items)
@@ -16215,6 +16326,7 @@ export const api = {
       if (!['approved', 'quotation_issued', 'document_issued'].includes(ticket.status)) {
         fail('สร้างใบแจ้งรับมัดจำได้เฉพาะดีลที่อนุมัติแล้วเท่านั้น', 409);
       }
+      requireDepositNoticePath(ticket);
 
       // Branch fix: header autofill — this entry point never received an explicit customer/
       // project from its caller, so it always sourced the header from the (blank) defaults
@@ -16229,11 +16341,11 @@ export const api = {
         customerName: ticket.customerName ?? '', customerTaxId: customerTaxId ?? '',
         customerAddress: customerAddress ?? '',
         projectName: projectName ?? '', reference,
-        // Mirrors DepositNoticeService.createDraftFromQuotation: the new-engine branch bills the
-        // chosen quotation's own whole-number percent; the legacy branch keeps the old stand-in.
-        depositPercent: newEngine?.depositPercent != null
-          ? newEngine.depositPercent / 100
-          : payload.depositPercent ?? 0.5,
+        // Mirrors OrderConfirmationService.createDepositNoticeFromQuotation: the percent the chosen
+        // quotation's PDF printed; a typed payload.depositPercent is ignored.
+        depositPercent: (newEngine
+          ? newEngine.depositPercent ?? MOCK_DEFAULT_DEPOSIT_PERCENT
+          : MOCK_LEGACY_DEPOSIT_PERCENT) / 100,
         vatPercent: 0.07,
         notes, items, issuedByName: null, preparerName: 'จินตนา หาญมนตรี',
         hasPdf: false, hasXlsx: false,
@@ -16659,7 +16771,7 @@ export const api = {
       const createBaseNumber = mockDealBaseNumberOrMint(ticket.id);
       const createRevisionNo = nextMockDealQuotationRevisionNo(ticket.id, createBaseNumber);
       const row = {
-        id: mockDealQuotationSeq++,
+        id: mockQuotationSeq++,
         // Owner feedback 2026-09-11: the FIRST issued document now carries the revision suffix
         // too -- "QT-2026-0014-1", not a bare "QT-2026-0014". Mirrors
         // DealQuotationService#create's own numbering — which since the 2026-10-17 ruling CONTINUES
@@ -16745,18 +16857,38 @@ export const api = {
       const pr = findPricingRequestRaw(pricingRequestId);
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
       if (ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      if (pr.status !== 'APPROVED_FOR_QUOTATION') {
+      if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') fail('ดีลต้นทางต้องอยู่ในสถานะ ACTIVE', 409);
+      // The service's re-quote: a request already QUOTATION_ISSUED may be quoted again (its quotation was
+      // rejected, expired or sent back for changes; the live-quotation guard below refuses the rest),
+      // but never once a newer quotation on the deal superseded its latest one.
+      if (pr.status !== 'APPROVED_FOR_QUOTATION' && pr.status !== 'QUOTATION_ISSUED') {
         fail(`คำขอราคาต้องอยู่ในสถานะ 'อนุมัติราคาขายแล้ว' ก่อนจึงจะออกใบเสนอราคาลูกค้าได้ (ปัจจุบัน: ${pr.status})`, 409);
+      }
+      const latest = mockDealQuotations
+        .filter((q) => q.pricingRequestId === pr.id && q.origin === 'PRICING_REQUEST')
+        .reduce((newest, q) => (newest == null || q.id > newest.id ? q : newest), null);
+      if (pr.status === 'QUOTATION_ISSUED' && latest?.docStatus === 'SUPERSEDED') {
+        fail('คำขอราคานี้ถูกแทนที่ด้วยใบเสนอราคาฉบับใหม่ของดีลแล้ว — ออกใบเสนอราคาจากคำขอราคาล่าสุด หรือสร้างคำขอราคาใหม่', 409);
       }
       const decision = mockPricingDecisions.find((d) => d.pricingRequestId === pr.id && d.status === 'APPROVED');
       if (!decision) fail('ยังไม่มีราคาขายที่ CEO อนุมัติสำหรับคำขอราคานี้', 409);
       if (!decision.priceMode) {
         fail('คำขอราคานี้ยังใช้รูปแบบราคาเดิม (ก่อน CEO เลือกวิธีกรอกราคา) กรุณาสร้างใบเสนอราคาแบบเดิมจากหน้านี้', 409);
       }
+      // Mutual exclusivity — CustomerQuotationRepository#hasLiveQuotation's set.
+      if (mockCustomerQuotations.some((q) => q.pricingRequestId === pr.id
+          && !['CANCELLED', 'SUPERSEDED', 'EXPIRED', 'REJECTED'].includes(q.docStatus))) {
+        fail('คำขอราคานี้มีใบเสนอราคาลูกค้า (แบบเดิม) อยู่แล้ว ไม่สามารถสร้างใบเสนอราคาแบบใหม่ซ้ำได้', 409);
+      }
       // Idempotent replay guard — same rule as DealQuotationRepository#findOpenDraftForPricingRequest.
       const existingDraft = mockDealQuotations.find(
         (q) => q.pricingRequestId === pr.id && q.origin === 'PRICING_REQUEST' && q.docStatus === 'DRAFT');
       if (existingDraft) return delay({ quotation: buildDealQuotationDto(existingDraft) });
+      // One live quotation per request — DealQuotationRepository#hasLivePricingRequestQuotation's set.
+      if (mockDealQuotations.some((q) => q.pricingRequestId === pr.id && q.origin === 'PRICING_REQUEST'
+          && !['CANCELLED', 'SUPERSEDED', 'EXPIRED', 'REJECTED', 'REVISION_REQUESTED'].includes(q.docStatus))) {
+        fail('คำขอราคานี้มีใบเสนอราคาที่ยังไม่หมดอายุอยู่แล้ว ไม่สามารถสร้างใบเสนอราคาใหม่ซ้ำได้', 409);
+      }
 
       const now = new Date().toISOString();
       const contactSnapshot = resolveDealQuotationContact(ticket, { contactId: pr.recipientContactId });
@@ -16802,7 +16934,7 @@ export const api = {
       const prBaseNumber = mockDealBaseNumberOrMint(ticket.id);
       const prRevisionNo = nextMockDealQuotationRevisionNo(ticket.id, prBaseNumber);
       const row = {
-        id: mockDealQuotationSeq++,
+        id: mockQuotationSeq++,
         number: quotationRevisionNumber(prBaseNumber, prRevisionNo),
         ticketId: ticket.id,
         origin: 'PRICING_REQUEST',
@@ -17247,6 +17379,9 @@ export const api = {
         }
         ancestorId = ancestor.parentQuotationId;
       }
+      // #1173 review F1 (DealQuotationService#approve -> TicketService#followQuotationDepositPolicy).
+      const dealTicket = db.tickets.find((t) => t.id === row.ticketId);
+      if (dealTicket) followQuotationDepositPolicy(dealTicket, row, user);
       return delay({ quotation: buildDealQuotationDto(row) });
     },
 
@@ -17489,6 +17624,7 @@ export const api = {
       if (ticket.paymentStatus == null) {
         ticket.paymentStatus = 'CUSTOMER_CONFIRMED';
         pushEvent(ticket, user, 'CUSTOMER_CONFIRMED', ticket.status, ticket.status, null);
+        followQuotationDepositPolicy(ticket, row, user);
       }
       autoAdvanceStage(ticket, 'ORDER_RECEIVED', user);
       return result();

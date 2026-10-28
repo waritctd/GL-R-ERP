@@ -5,6 +5,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PricingRequestDetailPage } from './PricingRequestDetailPage.jsx';
 import { api } from '../../api/index.js';
+import { queryKeys } from '../../api/queryKeys.js';
 
 // This component (and PricingRequestCreateModal, which it opens in mode="revision"
 // for the customer-change-revision flow) is exercised here against a hand-rolled
@@ -74,6 +75,10 @@ vi.mock('../../api/index.js', () => ({
       confirmOrder: vi.fn(),
       createDepositNoticeFromQuotation: vi.fn(),
     },
+    // Step 6: the deal's deposit notices, so the create action is not offered once one is ISSUED.
+    depositNotices: {
+      listByTicket: vi.fn(),
+    },
     // CR-1 (GLA-167): lead-time change requests (R2 / R10).
     leadTimeChanges: {
       listForPricingRequest: vi.fn(),
@@ -110,6 +115,7 @@ vi.mock('../../api/index.js', () => ({
       // every existing test in this file keeps seeing the SAME legacy-only panel state as before
       // this fix, rather than a leaked override from an earlier test or a thrown TypeError.
       findForPricingRequest: vi.fn(),
+      listForTicket: vi.fn(),
       createFromPricingRequest: vi.fn(),
       // GLA-123 slice S3 — the new engine's own outcome-recording endpoint, mirrors
       // pricingRequests.recordCustomerQuotationOutcome above.
@@ -326,6 +332,7 @@ function setApiDefaults() {
     result: { ticket: { summary: { id: 701 } }, pricingRequest: { id: 501, orderConfirmedAt: '2026-07-21T00:00:00Z' } },
   });
   api.pricingRequests.createDepositNoticeFromQuotation.mockResolvedValue({ depositNotice: { id: 9901, status: 'DRAFT' } });
+  api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [] });
   api.catalog.prices.mockResolvedValue({ items: [] });
   // B6 (GLA-135): a small real-looking factory roster — enough for the picker + duplicate-name
   // tests below without pulling in the full catalog fixture this file doesn't otherwise need.
@@ -1885,6 +1892,182 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     expect(api.pricingRequests.getPricingDecisionSalesView).not.toHaveBeenCalled();
   });
 
+  // Per-line margin (owner request 2026-10-21): the CEO sets อัตรากำไร% PER product line, not one
+  // combined default — each line's price = cost × (1 + its own margin). Reuses PUT
+  // /pricing-decisions/{id} (updatePricingDecision) with a single-item marginPct payload, the same
+  // endpoint applyItemUpdates handles for the selling-price override above. The single
+  // "อัตรากำไรเริ่มต้น" stays the creation-time seed; this is a per-line OVERRIDE of it, on the
+  // legacy formula path only (the NEW-FORM/V187 path prices through the mode picker, not margin).
+  describe('CEO per-line margin ("อัตรากำไรรายรายการ")', () => {
+    it('seeds the per-line margin input from the line proposedMarginPct and saves a single-item marginPct payload', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [buildDecision()] });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      const input = screen.getByTestId('pcr-ceo-margin-input-8001');
+      expect(input.value).toBe('0.2');
+
+      fireEvent.change(input, { target: { value: '0.35' } });
+      fireEvent.click(screen.getByTestId('pcr-ceo-margin-save-8001'));
+
+      await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalledWith(
+        7001,
+        { items: [{ pricingDecisionItemId: 8001, marginPct: 0.35 }] },
+      ));
+    });
+
+    it('lets two lines carry DIFFERENT margins — each save targets only its own line', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({ items: [
+          buildDecisionItem(),
+          buildDecisionItem({ id: 8002, pricingRequestItemId: 2, pricingCostingItemId: 2, model: 'A2', proposedMarginPct: 0.1 }),
+        ] })],
+      });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      expect(screen.getByTestId('pcr-ceo-margin-input-8001').value).toBe('0.2');
+      expect(screen.getByTestId('pcr-ceo-margin-input-8002').value).toBe('0.1');
+
+      fireEvent.change(screen.getByTestId('pcr-ceo-margin-input-8002'), { target: { value: '0.5' } });
+      fireEvent.click(screen.getByTestId('pcr-ceo-margin-save-8002'));
+
+      await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalledWith(
+        7001, { items: [{ pricingDecisionItemId: 8002, marginPct: 0.5 }] },
+      ));
+      // Only one line's save fired, and it carried ONLY its own id.
+      expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not call the API when the margin is unchanged (save stays disabled until edited)', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [buildDecision()] });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      fireEvent.click(screen.getByTestId('pcr-ceo-margin-save-8001'));
+      expect(api.pricingRequests.updatePricingDecision).not.toHaveBeenCalled();
+    });
+
+    it('offers no per-line margin input on a price-overridden line (the formula no longer drives it)', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({ items: [buildDecisionItem({ manualSellingPricePerRequestedUnit: 90 })] })],
+      });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      expect(screen.queryByTestId('pcr-ceo-margin-input-8001')).toBeNull();
+    });
+
+    it('new-form NET: the per-line margin is a LIVE input (no own button) that previews and saves via บันทึกราคา as marginPct', async () => {
+      // The live preview needs the selling buffer; with it = 1: cost 60 → margin 0.5 → list 90, net 90.
+      api.pricingFormulaConfig = { get: vi.fn().mockResolvedValue({ formulaConfig: { sellingBuffer: 1 } }) };
+      try {
+        const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+        api.pricingRequests.listPricingDecisions.mockResolvedValue({
+          items: [buildDecision({ priceMode: 'NET', items: [buildDecisionItem({ sqmPerPiece: 0.36 })] })],
+        });
+        renderDetailPage({ user: ceoUser, request });
+        await waitForLoaded(request);
+        await screen.findByText('PCD-2026-0001');
+        await waitFor(() => expect(api.pricingFormulaConfig.get).toHaveBeenCalled());
+
+        const input = screen.getByTestId('pcr-ceo-margin-input-8001');
+        expect(input.value).toBe('0.2');
+        // No separate margin save button — the realtime model has only the shared บันทึกราคา.
+        expect(screen.queryByTestId('pcr-ceo-margin-save-8001')).toBeNull();
+
+        // Typing updates the realized-margin readout LIVE, before any save (cost 60 → margin 0.5 →
+        // net 90 → profit 30/unit, 50%).
+        fireEvent.change(input, { target: { value: '0.5' } });
+        await waitFor(() => expect(screen.getByTestId('pcr-ceo-margin-readout-8001').textContent).toMatch(/฿30\.00.*50\.0%/));
+        // ราคาตั้ง reflects the margin-derived list (read-only).
+        expect(screen.getByTestId('pcr-ceo-list-price-8001').value).toBe('90');
+        expect(screen.getByTestId('pcr-ceo-list-price-8001').disabled).toBe(true);
+
+        fireEvent.click(screen.getByTestId('pcr-ceo-save-price-8001'));
+        await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalledWith(
+          7001, { items: [expect.objectContaining({ pricingDecisionItemId: 8001, marginPct: 0.5 })] }));
+      } finally {
+        delete api.pricingFormulaConfig;
+      }
+    });
+
+    it('new-form SPECIAL_SQM: no margin input — margin is NET-only (owner ruling 2026-10-23), price set directly', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({ priceMode: 'SPECIAL_SQM', items: [buildDecisionItem({ sqmPerPiece: 0.36 })] })],
+      });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      // Margin would be a no-op on the saved net here (SPECIAL_SQM sets the price directly), so the
+      // input is hidden; the ราคาพิเศษ prefill still comes from the stored formula price (214.17).
+      expect(screen.queryByTestId('pcr-ceo-margin-input-8001')).toBeNull();
+      expect(Number(screen.getByTestId('pcr-ceo-special-sqm-8001').value)).toBeCloseTo(214.17, 1);
+      // The กำไร readout does not mislabel a not-yet-saved SPECIAL_SQM line as "missing cost".
+      expect(screen.getByTestId('pcr-ceo-margin-readout-8001').textContent).not.toMatch(/ยังไม่มีต้นทุน/);
+    });
+
+    it('margin input rejects an out-of-range value (> 999.999999), matching the server bound', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({ priceMode: 'NET', items: [buildDecisionItem({ sqmPerPiece: 0.36 })] })],
+      });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      fireEvent.change(screen.getByTestId('pcr-ceo-margin-input-8001'), { target: { value: '1000' } });
+      expect(screen.getByTestId('pcr-ceo-save-price-8001').disabled).toBe(true);
+    });
+
+    // Owner request 2026-10-21: "ทุกโหมดอยากให้เห็นชัด ๆ ว่ากำไรกี่บาทกี่ %".
+    it('shows the realized margin (฿ + % of cost + total) on a NEW-FORM NET line', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        // cost 60 THB, net 72 THB (fx 1), qty 20 → profit 12/unit, 20% of cost, 240 total.
+        items: [buildDecision({ priceMode: 'NET', items: [buildDecisionItem({ sqmPerPiece: 0.36, netUnitPrice: 72 })] })],
+      });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      const readout = screen.getByTestId('pcr-ceo-margin-readout-8001').textContent;
+      expect(readout).toMatch(/฿12\.00/);
+      expect(readout).toMatch(/20\.0%/);
+      expect(readout).toMatch(/฿240\.00/);
+    });
+
+    it('shows the realized margin on a LEGACY formula line, and dashes it out when the line has no cost', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({ items: [buildDecisionItem()] })], // legacy: cost 60, price 72 → 12/20%
+      });
+      const { unmount } = renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+      expect(screen.getByTestId('pcr-ceo-margin-readout-8001').textContent).toMatch(/฿12\.00.*20\.0%/);
+      unmount();
+
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({ items: [buildDecisionItem({ frozenLandedCostPerRequestedUnitThb: null })] })],
+      });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+      expect(screen.getByTestId('pcr-ceo-margin-readout-8001').textContent).toMatch(/ยังไม่มีต้นทุน/);
+    });
+  });
+
   // P0/P1a fix (2026-09): LandedCostCalculator now aggregates every problem across every item
   // into ONE 422 whose message is a heading line + one bullet per problem (see
   // LandedCostCalculator#aggregateProblems), and FxResolver's own staleness/missing-rate messages
@@ -3050,11 +3233,19 @@ describe('PricingRequestDetailPage GLA-123 slice S3: new-engine (dealQuotationFo
     return { id: 9101, number: 'QT-2026-0101-1', docStatus: 'ISSUED', ...overrides };
   }
 
-  it('ISSUED: offers the outcome-recording controls to the owning sales rep, and records ACCEPTED via dealQuotations.recordOutcome', async () => {
-    const issued = newEngineQuotation({ docStatus: 'ISSUED' });
-    api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: issued });
-    renderDetailPage({ user: salesOwner });
-    await waitForLoaded();
+  // Owner ruling 2026-10-27 (spec B2): a quotation sent to the BUYER is the last party's — accepting
+  // it is the order as before, one click, no question asked. Review V4: a revision draft cancelled
+  // after แก้ใบเสนอราคา is the server's newest row; the page still records on the quotation it revised.
+  it('ISSUED, a buyer request: ลูกค้ายอมรับ records ACCEPTED at once via dealQuotations.recordOutcome (no confirmation step), even behind a cancelled revision draft', async () => {
+    const issued = newEngineQuotation({ docStatus: 'ISSUED', origin: 'PRICING_REQUEST', pricingRequestId: 501 });
+    const cancelledRevision = newEngineQuotation({
+      id: 9102, number: 'QT-2026-0101-2', docStatus: 'CANCELLED', origin: 'PRICING_REQUEST', pricingRequestId: 501, parentQuotationId: 9101,
+    });
+    const request = buildRequest({ summary: { recipientType: 'BUYER', recipientLabel: 'ผู้รับเหมา ก.' } });
+    api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: cancelledRevision });
+    api.dealQuotations.listForTicket.mockResolvedValue({ items: [issued, cancelledRevision] });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
     await screen.findByText(issued.number);
 
     const acceptButton = await screen.findByRole('button', { name: 'ลูกค้ายอมรับ' });
@@ -3064,6 +3255,75 @@ describe('PricingRequestDetailPage GLA-123 slice S3: new-engine (dealQuotationFo
       issued.id,
       expect.objectContaining({ outcome: 'ACCEPTED', clientRequestId: expect.any(String) }),
     ));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  // Spec B2: accepting a DESIGNER/OWNER quotation makes it the order and skips the later parties, so
+  // the click asks first (the page's shared ConfirmDialog). The confirm button keeps ConfirmDialog's
+  // own default label, ยืนยัน (the spec names the title and body only).
+  it('ISSUED, a designer request: ลูกค้ายอมรับ first asks "ยืนยันว่าลูกค้ายอมรับใบเสนอราคานี้" (ส่งถึงผู้ออกแบบ…); confirming records ACCEPTED', async () => {
+    const issued = newEngineQuotation({ docStatus: 'ISSUED' });
+    api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: issued });
+    renderDetailPage({ user: salesOwner }); // buildRequest(): recipientType DESIGNER
+    await waitForLoaded();
+    await screen.findByText(issued.number);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'ลูกค้ายอมรับ' }));
+
+    const dialog = within(await screen.findByRole('dialog', { name: 'ยืนยันว่าลูกค้ายอมรับใบเสนอราคานี้' }));
+    expect(dialog.getByText('ใบเสนอราคานี้ส่งถึงผู้ออกแบบ ถ้าลูกค้ายอมรับ ดีลจะใช้ใบนี้ยืนยันคำสั่งซื้อและข้ามผู้รับรายถัดไป')).not.toBeNull();
+    expect(api.dealQuotations.recordOutcome).not.toHaveBeenCalled();
+    fireEvent.click(dialog.getByRole('button', { name: 'ยืนยัน' }));
+
+    await waitFor(() => expect(api.dealQuotations.recordOutcome).toHaveBeenCalledWith(
+      issued.id,
+      expect.objectContaining({ outcome: 'ACCEPTED', clientRequestId: expect.any(String) }),
+    ));
+  });
+
+  it('ISSUED, an owner request: the same question names เจ้าของโครงการ, and ยกเลิก records nothing', async () => {
+    const issued = newEngineQuotation({ docStatus: 'ISSUED' });
+    const request = buildRequest({ summary: { recipientType: 'OWNER', recipientLabel: 'เจ้าของ ก.' } });
+    api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: issued });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+    await screen.findByText(issued.number);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'ลูกค้ายอมรับ' }));
+
+    const dialog = within(await screen.findByRole('dialog', { name: 'ยืนยันว่าลูกค้ายอมรับใบเสนอราคานี้' }));
+    expect(dialog.getByText('ใบเสนอราคานี้ส่งถึงเจ้าของโครงการ ถ้าลูกค้ายอมรับ ดีลจะใช้ใบนี้ยืนยันคำสั่งซื้อและข้ามผู้รับรายถัดไป')).not.toBeNull();
+    fireEvent.click(dialog.getByRole('button', { name: 'ยกเลิก' }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    // A beat for any mutation the cancel might (wrongly) have started.
+    await act(async () => { await new Promise((resolve) => { setTimeout(resolve, 30); }); });
+    expect(api.dealQuotations.recordOutcome).not.toHaveBeenCalled();
+  });
+
+  // Spec E2: an outcome changes the deal page's sticky bar (route choice / confirm), so the request
+  // page also marks the deal page's own lists stale. Seeded the way the deal page keys them: its
+  // ticketId is the /tickets/:id route param (a string), and its quotation list key takes
+  // Number(ticketId).
+  it('recording an outcome also refreshes the deal page\'s pricing-request and quotation lists', async () => {
+    const issued = newEngineQuotation({ docStatus: 'ISSUED' });
+    api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: issued });
+    api.dealQuotations.recordOutcome.mockResolvedValue({ quotation: newEngineQuotation({ docStatus: 'REJECTED' }) });
+    const { queryClient } = renderDetailPage({ user: salesOwner });
+    const dealRequestsKey = queryKeys.pricingRequestsByTicket('701');
+    const dealQuotationsKey = queryKeys.dealQuotationsByTicket(701);
+    queryClient.setQueryData(dealRequestsKey, []);
+    queryClient.setQueryData(dealQuotationsKey, []);
+    await waitForLoaded();
+    await screen.findByText(issued.number);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'ลูกค้าปฏิเสธ' }));
+    await waitFor(() => expect(api.dealQuotations.recordOutcome).toHaveBeenCalled());
+
+    await waitFor(() => {
+      expect(queryClient.getQueryState(dealRequestsKey)?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryState(dealQuotationsKey)?.isInvalidated).toBe(true);
+    });
   });
 
   it('ISSUED: never shows the outcome-recording controls to CEO or Import — read-only', async () => {
@@ -3198,15 +3458,20 @@ describe('PricingRequestDetailPage GLA-123 slice S3: new-engine (dealQuotationFo
 });
 
 describe('PricingRequestDetailPage Step 5: Customer Decision and Commercial Revisions', () => {
-  it('offers the outcome-recording controls to the owning sales rep only while ISSUED, and records ACCEPTED on click', async () => {
+  // Spec B2 covers both engines' controls: the old engine's ลูกค้ายอมรับ on a DESIGNER request
+  // (buildRequest's default) asks the same question before recording.
+  it('ISSUED (old engine), a designer request: ลูกค้ายอมรับ asks "ยืนยันว่าลูกค้ายอมรับใบเสนอราคานี้" first; confirming records ACCEPTED', async () => {
     const issued = buildCustomerQuotation({ docStatus: 'ISSUED' });
     api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [issued] });
     renderDetailPage({ user: salesOwner });
     await waitForLoaded();
     await screen.findByText(issued.number);
 
-    const acceptButton = await screen.findByRole('button', { name: 'ลูกค้ายอมรับ' });
-    fireEvent.click(acceptButton);
+    fireEvent.click(await screen.findByRole('button', { name: 'ลูกค้ายอมรับ' }));
+
+    const dialog = within(await screen.findByRole('dialog', { name: 'ยืนยันว่าลูกค้ายอมรับใบเสนอราคานี้' }));
+    expect(dialog.getByText('ใบเสนอราคานี้ส่งถึงผู้ออกแบบ ถ้าลูกค้ายอมรับ ดีลจะใช้ใบนี้ยืนยันคำสั่งซื้อและข้ามผู้รับรายถัดไป')).not.toBeNull();
+    fireEvent.click(dialog.getByRole('button', { name: 'ยืนยัน' }));
 
     await waitFor(() => expect(api.pricingRequests.recordCustomerQuotationOutcome).toHaveBeenCalledWith(
       issued.id,
@@ -3263,6 +3528,23 @@ describe('PricingRequestDetailPage Step 5: Customer Decision and Commercial Revi
 });
 
 describe('PricingRequestDetailPage Step 6: Deposit, Payment, and Order Confirmation', () => {
+  // Owner ruling 2026-10-23: one deposit notice per deal. Once one is ISSUED the create action is
+  // gone (the backend 409s it) and the block says which notice exists and where to open it.
+  it('replaces "สร้างใบแจ้งยอดเงินรับมัดจำ" with a pointer to the deal\'s ISSUED notice', async () => {
+    api.depositNotices.listByTicket.mockResolvedValue({
+      depositNotices: [{ id: 77, status: 'ISSUED', docNumber: 'GLRD69001', version: 1 }],
+    });
+    const request = buildRequest({ summary: { status: 'QUOTATION_ACCEPTED', orderConfirmedAt: '2026-07-21T00:00:00Z' } });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+
+    const link = await screen.findByRole('link', { name: /GLRD69001/ });
+    expect(link.getAttribute('href')).toBe(`/tickets/${request.summary.ticketId}/deposit`);
+    expect(screen.getByText(/ออกใบแจ้งยอดเงินรับมัดจำแล้ว/)).not.toBeNull();
+    expect(screen.queryByRole('button', { name: 'สร้างใบแจ้งยอดเงินรับมัดจำ' })).toBeNull();
+    expect(api.depositNotices.listByTicket).toHaveBeenCalledWith(request.summary.ticketId);
+  });
+
   it('offers "ยืนยันคำสั่งซื้อ" to the owning sales rep once QUOTATION_ACCEPTED, before the bridge has run', async () => {
     const request = buildRequest({ summary: { status: 'QUOTATION_ACCEPTED', orderConfirmedAt: null } });
     renderDetailPage({ user: salesOwner, request });
@@ -3285,12 +3567,44 @@ describe('PricingRequestDetailPage Step 6: Deposit, Payment, and Order Confirmat
 
     expect(screen.queryByRole('button', { name: 'ยืนยันคำสั่งซื้อ' })).toBeNull();
     const button = await screen.findByRole('button', { name: 'สร้างใบแจ้งยอดเงินรับมัดจำ' });
+    // No "% มัดจำ" input: the backend bills the accepted quotation's own percent and ignores a typed one.
+    expect(screen.queryByLabelText('% มัดจำ')).toBeNull();
     fireEvent.click(button);
 
     await waitFor(() => expect(api.pricingRequests.createDepositNoticeFromQuotation).toHaveBeenCalledWith(
-      request.summary.id,
-      expect.objectContaining({ depositPercent: expect.any(Number) }),
+      request.summary.id, {},
     ));
+  });
+
+  // PR #1173 review F4: a ไม่รับมัดจำ (0%) accepted quotation has no deposit, and the server 409s
+  // the draft, so the button is not offered. Waits for the quotation itself to render first, so the
+  // absence below is not just "the query has not resolved yet".
+  it('hides "สร้างใบแจ้งยอดเงินรับมัดจำ" when the accepted quotation says ไม่รับมัดจำ (0%)', async () => {
+    const accepted = { id: 9102, number: 'QT-2026-0102-1', docStatus: 'ACCEPTED', depositPercent: 0 };
+    api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: accepted });
+    const request = buildRequest({ summary: { status: 'QUOTATION_ACCEPTED', orderConfirmedAt: '2026-07-21T00:00:00Z' } });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+    await screen.findByText(accepted.number);
+
+    expect(screen.queryByRole('button', { name: 'สร้างใบแจ้งยอดเงินรับมัดจำ' })).toBeNull();
+  });
+
+  // Owner ruling 2026-10-23: one deposit notice per deal. Once one is ISSUED the create action is
+  // gone (the backend 409s it) and the block says which notice exists and where to open it.
+  it('replaces "สร้างใบแจ้งยอดเงินรับมัดจำ" with a pointer to the deal\'s ISSUED notice', async () => {
+    api.depositNotices.listByTicket.mockResolvedValue({
+      depositNotices: [{ id: 77, status: 'ISSUED', docNumber: 'GLRD69001', version: 1 }],
+    });
+    const request = buildRequest({ summary: { status: 'QUOTATION_ACCEPTED', orderConfirmedAt: '2026-07-21T00:00:00Z' } });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+
+    const link = await screen.findByRole('link', { name: /GLRD69001/ });
+    expect(link.getAttribute('href')).toBe(`/tickets/${request.summary.ticketId}/deposit`);
+    expect(screen.getByText(/ออกใบแจ้งยอดเงินรับมัดจำแล้ว/)).not.toBeNull();
+    expect(screen.queryByRole('button', { name: 'สร้างใบแจ้งยอดเงินรับมัดจำ' })).toBeNull();
+    expect(api.depositNotices.listByTicket).toHaveBeenCalledWith(request.summary.ticketId);
   });
 
   it('never shows either Step 6 button to CEO or Import — read-only', async () => {

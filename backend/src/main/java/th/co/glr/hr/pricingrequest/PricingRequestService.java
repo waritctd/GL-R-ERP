@@ -310,6 +310,8 @@ public class PricingRequestService {
                 "ไม่พบสินค้าใน price catalog ที่ active สำหรับรายการ: " + unresolvableCatalogItems);
         }
         requests.snapshotCatalogSelections(id);
+        // A thickness Sales typed stays on the item: the shared catalogue is never written from an
+        // unreviewed entry. LandedCostCalculator#resolveThicknessMm falls back to it.
         items = requests.findItems(id);
         // REMOVED 2026-08-11 (owner request): "Finding A" (financial-integrity review, commit 3)
         // used to require a fully-populated catalog snapshot on EVERY line here, 422-ing with

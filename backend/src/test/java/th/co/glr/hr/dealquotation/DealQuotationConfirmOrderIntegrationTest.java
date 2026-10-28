@@ -34,6 +34,8 @@ import th.co.glr.hr.dealquotation.DealQuotationRequests.ItemInput;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.UpsertDealQuotationRequest;
 import th.co.glr.hr.deposit.DepositNoticeDraftRequest;
 import th.co.glr.hr.deposit.DepositNoticeDto;
+import th.co.glr.hr.deposit.DepositNoticeItemDto;
+import th.co.glr.hr.deposit.DepositNoticeItemRequest;
 import th.co.glr.hr.deposit.DepositNoticeRenderer;
 import th.co.glr.hr.deposit.DepositNoticeRepository;
 import th.co.glr.hr.deposit.DepositNoticeService;
@@ -63,6 +65,7 @@ import th.co.glr.hr.ticket.TicketDto;
 import th.co.glr.hr.ticket.TicketEventKind;
 import th.co.glr.hr.ticket.TicketItemRequest;
 import th.co.glr.hr.ticket.TicketRepository;
+import th.co.glr.hr.ticket.TicketResponses;
 import th.co.glr.hr.ticket.TicketService;
 import th.co.glr.hr.ticket.TicketStatus;
 import th.co.glr.hr.ticket.TicketSummaryDto;
@@ -251,7 +254,30 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
         DepositNoticeDto draft = depositNoticeService.createDraft(ghost,
             new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), salesActor);
         assertThat(draft.ticketId()).isEqualTo(ghost);
-        assertThat(draft.items()).isNotEmpty();
+        // Owner ruling 2026-10-23: the ส่วนลดพิเศษ ADJUSTMENT row (qty -1, -100.00) is folded into the
+        // goods lines by amount: TILE 10 x 100 and PLAIN 2 x 500 take 50.00 each. No negative qty, the
+        // descriptions are the goods lines' own, and the subtotal is the quotation's 1,900.
+        assertThat(draft.items())
+            .extracting(i -> i.qty().stripTrailingZeros().toPlainString(), i -> i.unitPrice().toPlainString(),
+                i -> i.netUnitPrice().toPlainString(), DepositNoticeItemDto::discountLabel)
+            .containsExactly(
+                org.assertj.core.groups.Tuple.tuple("10", "100.00", "95.00", "ส่วนลดพิเศษ 5 ต่อหน่วย"),
+                org.assertj.core.groups.Tuple.tuple("2", "500.00", "475.00", "ส่วนลดพิเศษ 25 ต่อหน่วย"));
+        assertThat(draft.items()).extracting(DepositNoticeItemDto::description).doesNotContain("ส่วนลดพิเศษ")
+            .last().isEqualTo("ค่าขนส่ง");
+        assertThat(draft.subtotal()).isEqualByComparingTo("1900.00");
+
+        // The page sends every line back on save; @PositiveOrZero qty used to refuse the whole PUT.
+        DepositNoticeDraftRequest pagePut = new DepositNoticeDraftRequest(
+            draft.customerName(), draft.customerTaxId(), draft.customerAddress(), draft.projectName(),
+            draft.reference(), draft.depositPercent(), draft.notes(),
+            draft.items().stream().map(i -> new DepositNoticeItemRequest(i.seq(), i.description(), i.qty(),
+                i.unit(), i.unitPrice(), i.discountLabel(), i.netUnitPrice())).toList(),
+            draft.updatedAt());
+        try (var factory = jakarta.validation.Validation.buildDefaultValidatorFactory()) {
+            assertThat(factory.getValidator().validate(pagePut)).isEmpty();
+        }
+        assertThat(depositNoticeService.update(draft.id(), pagePut, salesActor).subtotal()).isEqualByComparingTo("1900.00");
     }
 
     /** The same deposit-notice draft is REFUSED before confirmation — the negative half of "the money
@@ -346,6 +372,135 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
 
         assertNothingPromoted(ghost);
+    }
+
+    /** Owner ruling 2026-10-22: a ไม่รับมัดจำ (0%) direct quotation confirms onto the no-deposit
+     * payment path, so final payment is no longer blocked by a deposit that will never exist. */
+    @Test
+    void zeroDepositDirectQuotation_confirmsOntoTheNoDepositPath_andFinalPaymentIsNoLongerBlocked() {
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto created = quotationService.create(deal, zeroDepositDirectDraft(), salesActor);
+        DealQuotationDto submitted = quotationService.submit(created.id(), salesActor);
+        DealQuotationDto approved = quotationService.approve(submitted.id(), new ApproveRequest(null), salesManagerActor);
+        assertThat(approved.depositPercent()).isZero();
+
+        confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor);
+
+        TicketSummaryDto after = summary(deal);
+        assertThat(after.depositPolicy()).isEqualTo("NOT_REQUIRED");
+        assertThat(after.depositPolicyReason()).contains(approved.number()).contains("ไม่รับมัดจำ");
+        assertThat(eventCount(deal, TicketEventKind.POLICY_CHANGED)).isEqualTo(1);
+        assertThat(after.paymentStatus()).isEqualTo("CUSTOMER_CONFIRMED");
+        assertConflict(() -> depositNoticeService.createDraft(deal,
+            new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), salesActor), "ไม่ต้องเก็บมัดจำ");
+        // The whole 0% walk (owner ruling 2026-10-27: 0% skips the deposit path automatically).
+        assertThat(ticketService.actions(deal, salesActor).availableActions())
+            .extracting(TicketResponses.TicketActionDto::action).doesNotContain("ISSUE_DEPOSIT_NOTICE");
+        ticketService.requireImportRequestIssuable(after); // a REQUIRED deal 409s here with no deposit
+        // canConfirmFinalPaymentNow refuses a REQUIRED deal at CUSTOMER_CONFIRMED.
+        assertThat(ticketService.confirmFinalPayment(deal, accountActor).summary().paymentStatus())
+            .isEqualTo("FULLY_PAID");
+        assertThat(summary(deal).salesStage()).isNotEqualTo(DealStage.DEPOSIT_RECEIVED);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sales.ticket_event WHERE ticket_id = :id"
+            + " AND (to_status = 'DEPOSIT_RECEIVED' OR from_status = 'DEPOSIT_RECEIVED')",
+            Map.of("id", deal), Integer.class)).isZero();
+    }
+
+    /**
+     * PR #1173 review F1: a confirmed 0% deal whose approved revision adds a deposit used to be
+     * stranded (NOT_REQUIRED kept, the draft 409'd, waiveDeposit refuses REQUIRED). While the
+     * payment track is at CUSTOMER_CONFIRMED a policy the system set follows the newly approved
+     * quotation.
+     */
+    @Test
+    void zeroDepositConfirmed_thenARevisionAddsADeposit_policyFollowsBackToRequired_andTheDraftBillsIt() {
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto zero = approvedQuotation(deal, zeroDepositDirectDraft());
+        confirmer.confirmOrderFromDirectQuotation(zero.id(), salesActor);
+        assertThat(summary(deal).depositPolicy()).isEqualTo("NOT_REQUIRED");
+
+        DealQuotationDto revision = approvedRevision(zero, directDraft());
+
+        TicketSummaryDto after = summary(deal);
+        assertThat(after.depositPolicy()).isEqualTo("REQUIRED");
+        assertThat(after.depositPolicyReason()).isEqualTo("ใบเสนอราคา " + revision.number() + " ระบุมัดจำ 50%");
+        assertThat(after.paymentStatus()).isEqualTo("CUSTOMER_CONFIRMED");
+        assertThat(policyChangedMessages(deal)).hasSize(2)
+            .last().asString().contains("REQUIRED").contains(revision.number());
+        DepositNoticeDto draft = depositNoticeService.createDraft(deal,
+            new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), salesActor);
+        assertThat(draft.depositPercent()).isEqualByComparingTo("0.50");
+    }
+
+    /** Owner ruling 2026-10-23: a blank new-engine percent means 30 (DealQuotationRenderAdapter's PDF
+     * default), so a 0% deal whose approved revision leaves the percent blank is back on the deposit path. */
+    @Test
+    void zeroDepositConfirmed_thenARevisionWithABlankPercent_countsAsThirty_andIsRequired() {
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto zero = approvedQuotation(deal, zeroDepositDirectDraft());
+        confirmer.confirmOrderFromDirectQuotation(zero.id(), salesActor);
+        assertThat(summary(deal).depositPolicy()).isEqualTo("NOT_REQUIRED");
+
+        DealQuotationDto revision = approvedRevision(zero, blankDepositDirectDraft());
+
+        assertThat(revision.depositPercent()).isNull();
+        TicketSummaryDto after = summary(deal);
+        assertThat(after.depositPolicy()).isEqualTo("REQUIRED");
+        assertThat(after.depositPolicyReason()).isEqualTo("ใบเสนอราคา " + revision.number() + " ระบุมัดจำ 30%");
+    }
+
+    /** The other direction: a confirmed 50% deal whose approved revision says ไม่รับมัดจำ leaves
+     * the deposit path (this was the PR's "a later revision to 0% does not sync" known risk). */
+    @Test
+    void depositConfirmed_thenARevisionDropsTheDeposit_policyFollowsToNotRequired() {
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto fifty = approvedDirectQuotation(deal, salesActor);
+        confirmer.confirmOrderFromDirectQuotation(fifty.id(), salesActor);
+        assertThat(summary(deal).depositPolicy()).isEqualTo("REQUIRED");
+
+        DealQuotationDto revision = approvedRevision(fifty, zeroDepositDirectDraft());
+
+        TicketSummaryDto after = summary(deal);
+        assertThat(after.depositPolicy()).isEqualTo("NOT_REQUIRED");
+        assertThat(after.depositPolicyReason())
+            .isEqualTo("ใบเสนอราคา " + revision.number() + " ระบุไม่รับมัดจำ (ชำระเต็มจำนวน)");
+        assertThat(policyChangedMessages(deal)).hasSize(1);
+        assertConflict(() -> depositNoticeService.createDraft(deal,
+            new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), salesActor), "ไม่ต้องเก็บมัดจำ");
+    }
+
+    /** Wrong-way-round: a policy a person chose (credit customer, typed reason) is never undone by
+     * a revision, and no POLICY_CHANGED is written for the attempt. */
+    @Test
+    void humanCreditCustomer_isKept_whenARevisionAddsADeposit() {
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto zero = approvedQuotation(deal, zeroDepositDirectDraft());
+        confirmer.confirmOrderFromDirectQuotation(zero.id(), salesActor);
+        ticketService.waiveDeposit(deal, "CREDIT_CUSTOMER", "ลูกค้าเครดิต 30 วัน", salesActor);
+
+        approvedRevision(zero, directDraft());
+
+        TicketSummaryDto after = summary(deal);
+        assertThat(after.depositPolicy()).isEqualTo("CREDIT_CUSTOMER");
+        assertThat(after.depositPolicyReason()).isEqualTo("ลูกค้าเครดิต 30 วัน");
+        assertThat(policyChangedMessages(deal)).hasSize(2); // the sync at confirmation + the waiver
+    }
+
+    /** Wrong-way-round, the case the set_by marker exists for: a NOT_REQUIRED a person typed is
+     * not the system's, so a 50% revision leaves it and writes no event. */
+    @Test
+    void humanNotRequired_isKept_whenARevisionStillCarriesADeposit() {
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto fifty = approvedDirectQuotation(deal, salesActor);
+        confirmer.confirmOrderFromDirectQuotation(fifty.id(), salesActor);
+        ticketService.waiveDeposit(deal, "NOT_REQUIRED", "ลูกค้าโอนเต็มจำนวนล่วงหน้า", salesActor);
+
+        approvedRevision(fifty, directDraft());
+
+        TicketSummaryDto after = summary(deal);
+        assertThat(after.depositPolicy()).isEqualTo("NOT_REQUIRED");
+        assertThat(after.depositPolicyReason()).isEqualTo("ลูกค้าโอนเต็มจำนวนล่วงหน้า");
+        assertThat(policyChangedMessages(deal)).hasSize(1); // the waiver only
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -694,6 +849,28 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
         return approved;
     }
 
+    private DealQuotationDto approvedQuotation(long ticketId, UpsertDealQuotationRequest draft) {
+        DealQuotationDto created = quotationService.create(ticketId, draft, salesActor);
+        quotationService.submit(created.id(), salesActor);
+        return quotationService.approve(created.id(), new ApproveRequest(null), salesManagerActor);
+    }
+
+    /** Revise {@code source} to {@code draft}'s terms, submit, and approve — the reviewer's F1 sequence. */
+    private DealQuotationDto approvedRevision(DealQuotationDto source, UpsertDealQuotationRequest draft) {
+        DealQuotationDto revision = quotationService.createRevision(source.id(), salesActor);
+        quotationService.update(revision.id(), draft, salesActor);
+        quotationService.submit(revision.id(), salesActor);
+        DealQuotationDto approved = quotationService.approve(revision.id(), new ApproveRequest(null), salesManagerActor);
+        assertThat(approved.docStatus()).isEqualTo(QuotationStatus.APPROVED);
+        return approved;
+    }
+
+    private List<String> policyChangedMessages(long ticketId) {
+        return jdbc.queryForList("""
+            SELECT message FROM sales.ticket_event WHERE ticket_id = :id AND kind = :kind ORDER BY event_id
+            """, Map.of("id", ticketId, "kind", TicketEventKind.POLICY_CHANGED), String.class);
+    }
+
     /** One TILE line (10 pcs, loose — roundToFullBox=false), one PLAIN line (2 JOB), one ADJUSTMENT (flat -100). */
     private UpsertDealQuotationRequest directDraft() {
         ItemInput tile = new ItemInput(
@@ -716,6 +893,23 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
             null, null, new BigDecimal("100.00"), null, null, null);
         return new UpsertDealQuotationRequest(null, null, null, null, 50, "CASH_ON_DELIVERY",
             0, 30, null, "NET", "TH", "THB", List.of(tile, plain, adjustment)).withRecipientType("OWNER");
+    }
+
+    /** {@link #directDraft} as a ไม่รับมัดจำ quotation: 0% submits only with a full-payment term. */
+    private UpsertDealQuotationRequest blankDepositDirectDraft() {
+        UpsertDealQuotationRequest d = directDraft();
+        return new UpsertDealQuotationRequest(d.contactId(), d.deptCode(), d.unitCode(), d.offerDate(), null,
+            d.remainderMode(), d.creditDays(), d.validityDays(), d.validityMode(), d.validityUntil(),
+            d.customerNotes(), d.priceMode(), d.documentLanguage(), d.currency(), null, null, null, null,
+            d.fullPaymentTerm(), null, null, null, null, d.recipientType(), d.items());
+    }
+
+    private UpsertDealQuotationRequest zeroDepositDirectDraft() {
+        UpsertDealQuotationRequest d = directDraft();
+        return new UpsertDealQuotationRequest(d.contactId(), d.deptCode(), d.unitCode(), d.offerDate(), 0,
+            d.remainderMode(), d.creditDays(), d.validityDays(), d.validityMode(), d.validityUntil(),
+            d.customerNotes(), d.priceMode(), d.documentLanguage(), d.currency(), null, null, null, null,
+            "BEFORE_DELIVERY", null, null, null, null, d.recipientType(), d.items());
     }
 
     private TicketItemRequest ticketItem() {

@@ -13,14 +13,20 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
+import th.co.glr.hr.dealquotation.DealQuotationRenderAdapter;
+import th.co.glr.hr.ticket.QuotationRenderer;
 
 @Repository
 public class DepositNoticeRepository {
+    static final String NOT_DRAFT = "ใบแจ้งรับมัดจำนี้ไม่ได้อยู่ในสถานะร่าง (DRAFT)";
+    static final String EDITED_ELSEWHERE = "ใบแจ้งรับมัดจำนี้ถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง";
+
     private final NamedParameterJdbcTemplate jdbc;
 
     public DepositNoticeRepository(NamedParameterJdbcTemplate jdbc) {
@@ -89,74 +95,63 @@ public class DepositNoticeRepository {
         );
     }
 
+    /** The quotation a ticket-level deposit notice bills: always its percent (a fraction,
+     * 30 -&gt; 0.30); its lines and its number as the reference unless the caller or legacy
+     * approved_price rows supply the lines. See {@link #findGoverningQuotation}. */
+    public record GoverningQuotation(long quotationId, boolean legacy, String number, BigDecimal depositPercent) {}
+
     /**
-     * Owner ruling (2026-09-29): the deposit PERCENTAGE on a deposit notice is LOCKED to the
-     * source quotation's own {@code sales.quotation.deposit_percent} — the value sales set when
-     * creating the quotation — and is never entered or edited at the deposit-notice stage.
-     * {@code deposit_percent} is a nullable SMALLINT whole-number percent (30/50/100); this
-     * returns it as a fraction (50 -&gt; 0.50) via {@code BigDecimal.valueOf(pct, 2)}, which is
-     * exact for any integer/100 (denominator 100 = 2^2*5^2 always terminates).
+     * The ONE pick of the quotation a ticket-level deposit notice bills, across both engines, so
+     * when it supplies the lines they and the percent come from the same row (owner rulings
+     * 2026-09-29 and 2026-10-23). The PRICING-REQUEST route ({@code OrderConfirmationService
+     * #createDepositNoticeFromQuotation}) already knows its quotation and does not call this.
      *
-     * <p>Pick order deliberately mirrors {@link DepositNoticeService}'s own quotation selection
-     * for deposit-notice ITEMS, so the percent this returns always comes from the same row the
-     * items would be sourced from:
-     * <ul>
-     *   <li>legacy customer-quotation chain ({@code origin IS NULL}, {@code pricing_request_id
-     *       IS NOT NULL} — the exact scope {@code CustomerQuotationRepository#findByTicket} uses):
-     *       ACCEPTED preferred, else ISSUED — the same rule {@code
-     *       DepositNoticeService#pickQuotation} applies for items. Read as raw SQL rather than via
-     *       {@code CustomerQuotationRepository}'s own DTO because {@code CustomerQuotationDto}
-     *       does not carry {@code deposit_percent} at all (it predates that column and nothing
-     *       else on that DTO's surface needed it) — adding a field there would widen every one of
-     *       that repository's other read paths for a value only this one caller needs.</li>
-     *   <li>v2 deal-quotation chain ({@code origin IN ('PRICING_REQUEST','DEAL_DIRECT')}): the
-     *       single live quotation, preferring ACCEPTED, then ISSUED, then APPROVED (DEAL_DIRECT's
-     *       own only live terminal state), newest by id.</li>
-     * </ul>
-     * Engines are exclusive per pricing request, not per ticket ({@code
-     * CustomerQuotationService#create} and {@code DealQuotationService#createFromPricingRequest}
-     * each refuse a pricing request the other engine already quoted), so one ticket can carry a
-     * legacy quotation on one pricing request and an origin-tagged one on another. On such a mixed
-     * ticket both branches below can match, and trying legacy first IS a real preference: the
-     * percent comes from the legacy row. Returns empty when there is no live
-     * (ACCEPTED/ISSUED/APPROVED) quotation for this ticket, or its {@code deposit_percent} is
-     * null — the caller ({@link DepositNoticeService#createDraft}) falls back to 0.50 in that
-     * case, this document's long-standing default.
+     * <p>Live rows: a legacy pricing-chain quotation ({@code origin IS NULL}, {@code
+     * pricing_request_id IS NOT NULL}, the scope {@code CustomerQuotationRepository#findByTicket}
+     * uses) that is ACCEPTED or ISSUED, a {@code PRICING_REQUEST}-origin one that is ACCEPTED or
+     * ISSUED, or a {@code DEAL_DIRECT} one that is ACCEPTED, ISSUED or APPROVED (DEAL_DIRECT
+     * ACCEPTED/ISSUED are admitted but no live route produces them). APPROVED is
+     * DEAL_DIRECT only: a PRICING_REQUEST approval lands on ISSUED ({@code DealQuotationRepository
+     * #approve}). Engines are exclusive per pricing request, not per ticket, so one ticket can hold
+     * both.
+     *
+     * <p>A case needing no pre-lock data: a DEAL_DIRECT quotation stays revisable after its order
+     * is confirmed ({@code DealQuotationService#requireRevisableStatus}), and once that revision
+     * is APPROVED it governs the ticket-route deposit while the deal's ticket_item rows still hold
+     * the confirmed quotation's lines. Ploy 2026-10-27: revisions will lock after confirm
+     * (follow-up PR).
+     *
+     * <p>Ranking: the latest quotation the customer ANSWERED wins: ACCEPTED on either engine, or
+     * APPROVED on a DEAL_DIRECT quotation (its terminal state in practice). Only when
+     * nothing was answered does the newest ISSUED row win. "Latest" is {@code quotation_id DESC}:
+     * one sequence across every engine and pricing request, set at creation. Not {@code
+     * accepted_at}/{@code approved_at}: those time different events (a customer answer against an
+     * internal approval), and either can be NULL on older or imported rows.
+     *
+     * <p>Percent: what that quotation's PDF printed. A legacy row is always {@link
+     * QuotationRenderer#LEGACY_DEPOSIT_PERCENT}: the legacy PDF never reads the stored column, so
+     * this does not either. A new-engine row is its own {@code deposit_percent}, a NULL one {@link
+     * DealQuotationRenderAdapter#DEFAULT_DEPOSIT_PERCENT}. Empty when the ticket has no live
+     * quotation; {@link DepositNoticeService#createDraft} then bills 0.50.
      */
-    public Optional<BigDecimal> findDealQuotationDepositPercent(long ticketId) {
-        Integer legacyPct = firstOrNull(jdbc.query("""
-            SELECT deposit_percent FROM sales.quotation
-             WHERE ticket_id = :ticketId AND pricing_request_id IS NOT NULL AND origin IS NULL
-               AND doc_status IN ('ACCEPTED','ISSUED')
-             ORDER BY CASE doc_status WHEN 'ACCEPTED' THEN 0 ELSE 1 END, quotation_id DESC
+    public Optional<GoverningQuotation> findGoverningQuotation(long ticketId) {
+        return jdbc.query("""
+            SELECT quotation_id, origin IS NULL AS legacy, number, deposit_percent
+              FROM sales.quotation
+             WHERE ticket_id = :ticketId
+               AND ((origin IS NULL AND pricing_request_id IS NOT NULL AND doc_status IN ('ACCEPTED','ISSUED'))
+                 OR (origin = 'PRICING_REQUEST' AND doc_status IN ('ACCEPTED','ISSUED'))
+                 OR (origin = 'DEAL_DIRECT' AND doc_status IN ('ACCEPTED','ISSUED','APPROVED')))
+             ORDER BY CASE WHEN doc_status IN ('ACCEPTED','APPROVED') THEN 0 ELSE 1 END, quotation_id DESC
              LIMIT 1
-            """, Map.of("ticketId", ticketId),
-            (rs, i) -> (Integer) rs.getObject("deposit_percent")
-        ));
-        if (legacyPct != null) {
-            return Optional.of(BigDecimal.valueOf(legacyPct, 2));
-        }
-
-        Integer v2Pct = firstOrNull(jdbc.query("""
-            SELECT deposit_percent FROM sales.quotation
-             WHERE ticket_id = :ticketId AND origin IN ('PRICING_REQUEST','DEAL_DIRECT')
-               AND doc_status IN ('ACCEPTED','ISSUED','APPROVED')
-             ORDER BY CASE doc_status WHEN 'ACCEPTED' THEN 0 WHEN 'ISSUED' THEN 1 ELSE 2 END,
-                      quotation_id DESC
-             LIMIT 1
-            """, Map.of("ticketId", ticketId),
-            (rs, i) -> (Integer) rs.getObject("deposit_percent")
-        ));
-        return v2Pct != null ? Optional.of(BigDecimal.valueOf(v2Pct, 2)) : Optional.empty();
-    }
-
-    /** {@code list.stream().findFirst()} throws NPE the moment the single mapped row's own value
-     * is {@code null} ({@code Stream.findFirst}/{@code Optional.of} both reject a null element
-     * outright) — exactly the case a LIVE quotation with a not-yet-set {@code deposit_percent}
-     * hits. A plain index avoids that without changing what "no row" vs "row, null value" mean to
-     * the caller (both still read as "nothing usable here"). */
-    private static <T> T firstOrNull(List<T> rows) {
-        return rows.isEmpty() ? null : rows.get(0);
+            """, Map.of("ticketId", ticketId), (rs, i) -> {
+                boolean legacy = rs.getBoolean("legacy");
+                Integer stored = (Integer) rs.getObject("deposit_percent");
+                int percent = legacy ? QuotationRenderer.LEGACY_DEPOSIT_PERCENT
+                    : stored != null ? stored : DealQuotationRenderAdapter.DEFAULT_DEPOSIT_PERCENT;
+                return new GoverningQuotation(rs.getLong("quotation_id"), legacy, rs.getString("number"),
+                    BigDecimal.valueOf(percent, 2));
+            }).stream().findFirst();
     }
 
     @Transactional
@@ -208,14 +203,22 @@ public class DepositNoticeRepository {
         return docId;
     }
 
+    /**
+     * Saves a DRAFT. Refuses with 409 before touching the lines when the row is no longer DRAFT
+     * (issued after the service read it) or, given {@code req.expectedUpdatedAt()}, someone else
+     * saved it since that stamp. {@code req.depositPercent()} is always set by the service.
+     */
     @Transactional
-    public void update(long docId, DepositNoticeDraftRequest req) {
-        BigDecimal depositPct = req.depositPercent() != null ? req.depositPercent() : new BigDecimal("0.50");
+    public void update(long docId, DepositNoticeDraftRequest req, List<DepositNoticeItemDto> storedItems) {
+        BigDecimal depositPct = req.depositPercent();
         BigDecimal vatPct = new BigDecimal("0.07");
         List<DepositNoticeItemRequest> items = req.items() != null ? req.items() : List.of();
 
-        BigDecimal subtotal = items.stream()
-            .map(it -> it.netUnitPrice().multiply(it.qty()))
+        // No items in the request (null or empty) keeps the stored lines (they are only replaced
+        // below when items are sent), so the subtotal must come from those same stored lines.
+        BigDecimal subtotal = (items.isEmpty()
+                ? storedItems.stream().map(it -> it.netUnitPrice().multiply(it.qty()))
+                : items.stream().map(it -> it.netUnitPrice().multiply(it.qty())))
             .reduce(BigDecimal.ZERO, BigDecimal::add)
             .setScale(2, RoundingMode.HALF_UP);
         BigDecimal deposit = subtotal.multiply(depositPct).setScale(2, RoundingMode.HALF_UP);
@@ -224,7 +227,7 @@ public class DepositNoticeRepository {
 
         String[] notesArr = req.notes() != null ? req.notes().toArray(String[]::new) : new String[0];
 
-        jdbc.update("""
+        int rows = jdbc.update("""
             UPDATE sales.deposit_notice SET
                 customer_name    = :customerName,
                 customer_tax_id  = :customerTaxId,
@@ -239,9 +242,11 @@ public class DepositNoticeRepository {
                 notes            = :notes,
                 updated_at       = now()
              WHERE deposit_notice_id = :id AND status = 'DRAFT'
+               AND (CAST(:expectedUpdatedAt AS timestamptz) IS NULL OR updated_at = :expectedUpdatedAt)
             """,
             new MapSqlParameterSource()
                 .addValue("id",              docId)
+                .addValue("expectedUpdatedAt", req.expectedUpdatedAt())
                 .addValue("customerName",    req.customerName())
                 .addValue("customerTaxId",   req.customerTaxId())
                 .addValue("customerAddress", req.customerAddress())
@@ -254,6 +259,12 @@ public class DepositNoticeRepository {
                 .addValue("totalPayable",    total)
                 .addValue("notes",           notesArr)
         );
+        if (rows == 0) {
+            boolean stillDraft = req.expectedUpdatedAt() != null && !jdbc.queryForList(
+                "SELECT 1 FROM sales.deposit_notice WHERE deposit_notice_id = :id AND status = 'DRAFT'",
+                Map.of("id", docId), Integer.class).isEmpty();
+            throw new th.co.glr.hr.common.ApiException(HttpStatus.CONFLICT, stillDraft ? EDITED_ELSEWHERE : NOT_DRAFT);
+        }
         if (!items.isEmpty()) {
             jdbc.update("DELETE FROM sales.deposit_notice_item WHERE deposit_notice_id = :id", Map.of("id", docId));
             insertItems(docId, items);
@@ -279,8 +290,12 @@ public class DepositNoticeRepository {
      *
      * @return the new doc number, or {@link Optional#empty()} if the row was not DRAFT.
      */
-    @Transactional
     public Optional<String> issue(long docId, long actorId, String actorName) {
+        return issue(docId, actorId, actorName, null);
+    }
+
+    @Transactional
+    public Optional<String> issue(long docId, long actorId, String actorName, java.time.OffsetDateTime expectedUpdatedAt) {
         int thaiYear = Year.now().getValue() + 543;
         String docNumber = nextDocNumber("DEPOSIT_NOTICE", thaiYear);
 
@@ -294,20 +309,22 @@ public class DepositNoticeRepository {
                 updated_at     = now()
              WHERE deposit_notice_id = :id
                AND status = 'DRAFT'
+               AND (CAST(:expectedUpdatedAt AS timestamptz) IS NULL OR updated_at = :expectedUpdatedAt)
             """,
-            Map.of("num", docNumber, "actorId", actorId, "actorName", actorName, "id", docId));
+            new MapSqlParameterSource()
+                .addValue("num", docNumber).addValue("actorId", actorId).addValue("actorName", actorName)
+                .addValue("id", docId).addValue("expectedUpdatedAt", expectedUpdatedAt));
 
         if (rows == 0) {
+            // Still a draft with a stamp given => it was saved after the caller read it.
+            boolean editedSince = expectedUpdatedAt != null && !jdbc.queryForList(
+                "SELECT 1 FROM sales.deposit_notice WHERE deposit_notice_id = :id AND status = 'DRAFT'",
+                Map.of("id", docId), Integer.class).isEmpty();
+            if (editedSince) {
+                throw new th.co.glr.hr.common.ApiException(HttpStatus.CONFLICT, EDITED_ELSEWHERE);
+            }
             return Optional.empty();
         }
-
-        // Supersede all older versions for same ticket
-        jdbc.update("""
-            UPDATE sales.deposit_notice SET status = 'SUPERSEDED', updated_at = now()
-             WHERE ticket_id = (SELECT ticket_id FROM sales.deposit_notice WHERE deposit_notice_id = :id)
-               AND deposit_notice_id <> :id
-               AND status = 'ISSUED'
-            """, Map.of("id", docId));
 
         return Optional.of(docNumber);
     }
@@ -370,65 +387,27 @@ public class DepositNoticeRepository {
         }
     }
 
-    /**
-     * Deal-quotation (V2) item source for deposit-notice autofill (2026-09-29 fix). The legacy
-     * autofill knew only two sources: {@code sales.ticket_item.approved_price} (never written by
-     * the pricing-request chain) and {@code CustomerQuotationRepository#findByTicket} (scoped to
-     * {@code origin IS NULL}, which excludes BOTH {@code DEAL_DIRECT} and {@code PRICING_REQUEST}
-     * rows). Every deal whose quotation was issued through the V2 deal-quotation flow therefore got
-     * an EMPTY deposit-notice item list — the reported "รายการ not autofilled" bug.
-     *
-     * <p><b>Selection covers BOTH V2 origins, whose live-terminal doc_status differs</b> — the two
-     * never share a {@code ticket_id} (see {@code DealQuotationRepository#nextRevisionNo}), so the
-     * union below is unambiguous per ticket:
-     * <ul>
-     *   <li>{@code PRICING_REQUEST} runs the customer-response lifecycle DRAFT → PENDING_APPROVAL →
-     *       ISSUED → ACCEPTED, so it mirrors {@link DepositNoticeService#pickQuotation} exactly:
-     *       prefer ACCEPTED (the customer-accepted document a deposit is raised against), else the
-     *       latest ISSUED.</li>
-     *   <li>{@code DEAL_DIRECT} has no customer-response lifecycle in the model today — it ends at
-     *       APPROVED (terminal-until-revised; see {@code QuotationStatus.APPROVED}), which is the
-     *       only "live" state it ever reaches. Without APPROVED here, every direct-deal deposit
-     *       would still autofill empty.</li>
-     * </ul>
-     * SUPERSEDED / CANCELLED / REJECTED / EXPIRED / DRAFT / PENDING_APPROVAL / REVISION_REQUESTED
-     * rows are never chosen. Preference ACCEPTED &gt; ISSUED &gt; APPROVED, then newest by id.
-     * <b>Owner-confirmable:</b> that a deposit may autofill from an ISSUED-but-not-yet-ACCEPTED
-     * PRICING_REQUEST quote (legacy parity) and from an APPROVED DEAL_DIRECT quote — this is item
-     * <em>autofill</em> for a draft the user reviews before saving, not the deposit gate itself.
-     * The lines themselves come from {@link #findDealQuotationItems}.
-     */
-    public List<DepositNoticeItemRequest> findDealQuotationItemsForDeposit(long ticketId) {
-        List<Long> ids = jdbc.query("""
-            SELECT quotation_id FROM sales.quotation
-             WHERE ticket_id = :ticketId
-               AND origin IN ('PRICING_REQUEST', 'DEAL_DIRECT')
-               AND doc_status IN ('ACCEPTED', 'ISSUED', 'APPROVED')
-             ORDER BY CASE doc_status
-                          WHEN 'ACCEPTED' THEN 0
-                          WHEN 'ISSUED'   THEN 1
-                          ELSE 2
-                      END, quotation_id DESC
-             LIMIT 1
-            """, Map.of("ticketId", ticketId), (rs, i) -> rs.getLong("quotation_id"));
-        if (ids.isEmpty()) {
-            return List.of();
-        }
-        return findDealQuotationItems(ids.get(0));
-    }
-
     /** One deal quotation's {@code sales.quotation_item} lines, by {@code seq}, as deposit-notice
      * items. Reads the RESOLVED display columns the quotation itself prints
      * ({@code qty}/{@code raw_unit}/{@code unit_price}/{@code final_unit_price}), NOT the legacy
      * {@code requested_*}/{@code approved_unit_price} columns the V2 chain leaves null. The
-     * discount-label wording matches {@link DepositNoticeService#itemsFromQuotation}. */
+     * discount-label wording matches {@link DepositNoticeService#itemsFromQuotation}. An ADJUSTMENT
+     * row is folded into the goods lines, see {@link #foldAdjustments}. */
     public List<DepositNoticeItemRequest> findDealQuotationItems(long quotationId) {
-        return jdbc.query("""
-            SELECT seq, description, qty, raw_unit, unit_price, sales_discount, final_unit_price
+        List<DepositNoticeItemRequest> goods = new java.util.ArrayList<>();
+        BigDecimal[] adjustment = {BigDecimal.ZERO};
+        jdbc.query("""
+            SELECT seq, description, qty, raw_unit, unit_price, sales_discount, final_unit_price, line_type
               FROM sales.quotation_item
              WHERE quotation_id = :quotationId
              ORDER BY seq
-            """, Map.of("quotationId", quotationId), (rs, i) -> {
+            """, Map.of("quotationId", quotationId), rs -> {
+                if ("ADJUSTMENT".equals(rs.getString("line_type"))) {
+                    BigDecimal net = rs.getBigDecimal("final_unit_price");
+                    BigDecimal qty = rs.getBigDecimal("qty");
+                    if (net != null && qty != null) adjustment[0] = adjustment[0].add(net.multiply(qty));
+                    return;
+                }
                 String description = rs.getString("description");
                 if (description == null || description.isBlank()) {
                     description = "รายการสินค้า";
@@ -441,10 +420,49 @@ public class DepositNoticeRepository {
                 String discountLabel = discount != null && discount.signum() > 0
                     ? "ส่วนลด " + discount.stripTrailingZeros().toPlainString() + " ต่อหน่วย"
                     : null;
-                return new DepositNoticeItemRequest(
+                goods.add(new DepositNoticeItemRequest(
                     rs.getInt("seq"), description, rs.getBigDecimal("qty"), unit,
-                    rs.getBigDecimal("unit_price"), discountLabel, rs.getBigDecimal("final_unit_price"));
+                    rs.getBigDecimal("unit_price"), discountLabel, rs.getBigDecimal("final_unit_price")));
             });
+        return foldAdjustments(goods, adjustment[0]);
+    }
+
+    /**
+     * Owner rulings 2026-10-23: a DEAL_DIRECT ส่วนลดพิเศษ row (ADJUSTMENT, qty -1) cannot be a
+     * deposit line (the editor's PUT requires qty &gt;= 0), so its amount is spread over the goods
+     * lines in proportion to their amount. "2 decimals for all": each share is HALF_UP to 2 dp and
+     * each line's new net price is 2 dp, with no remainder pushed onto a last line. The notice
+     * totals are the sum of its own stored 2 dp lines ({@code amount = net x qty}), so they can
+     * differ from the quotation's total by under qty x 0.005 baht per line; that is the ruled
+     * outcome, not a bug. A line keeps the quotation's own discount wording, and gains the folded
+     * discount after it only when the fold lowered its price. A free line stays as it is.
+     */
+    static List<DepositNoticeItemRequest> foldAdjustments(List<DepositNoticeItemRequest> goods,
+                                                          BigDecimal adjustment) {
+        BigDecimal goodsTotal = goods.stream().map(it -> it.netUnitPrice().multiply(it.qty()))
+            .reduce(BigDecimal.ZERO, BigDecimal::add);
+        if (adjustment.signum() == 0 || goodsTotal.signum() == 0) {
+            return goods;
+        }
+        List<DepositNoticeItemRequest> folded = new java.util.ArrayList<>();
+        for (DepositNoticeItemRequest it : goods) {
+            BigDecimal amount = it.netUnitPrice().multiply(it.qty());
+            if (amount.signum() == 0) {
+                folded.add(it);
+                continue;
+            }
+            BigDecimal share = adjustment.multiply(amount).divide(goodsTotal, 2, RoundingMode.HALF_UP);
+            BigDecimal net = amount.add(share).divide(it.qty(), 2, RoundingMode.HALF_UP);
+            BigDecimal foldedPerUnit = it.netUnitPrice().subtract(net);
+            String label = it.discountLabel();
+            if (foldedPerUnit.signum() > 0) {
+                String extra = "ส่วนลดพิเศษ " + foldedPerUnit.stripTrailingZeros().toPlainString() + " ต่อหน่วย";
+                label = label == null || label.isBlank() ? extra : label + " + " + extra;
+            }
+            folded.add(new DepositNoticeItemRequest(it.seq(), it.description(), it.qty(), it.unit(), it.unitPrice(),
+                label, net));
+        }
+        return folded;
     }
 
     private List<DepositNoticeItemDto> findItems(long docId) {

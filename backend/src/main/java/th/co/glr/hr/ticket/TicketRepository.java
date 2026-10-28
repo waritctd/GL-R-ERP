@@ -888,12 +888,20 @@ public class TicketRepository {
      * own Javadoc on why this must not reach {@link #findById}/mutation call sites) falls back to
      * the deal's live quotation's line items, rendered READ-ONLY.
      *
-     * <p>"Live" is picked with the EXACT SAME rule as {@code DepositNoticeRepository
-     * #findDealQuotationItemsForDeposit} (ACCEPTED beats ISSUED beats APPROVED, across both
-     * PRICING_REQUEST and DEAL_DIRECT origins, most recent id wins a tie) -- duplicated here
-     * rather than called cross-package because deposit-notice and ticket-detail are separate
-     * bounded contexts, but it is the SAME business rule and must be changed in lockstep if that
-     * one ever changes.
+     * <p>"Live" is a display pick over new-engine rows only: ACCEPTED beats ISSUED beats APPROVED,
+     * across both PRICING_REQUEST and DEAL_DIRECT origins, most recent id wins a tie. It is NOT the
+     * ticket-route deposit notice's pick ({@code DepositNoticeRepository#findGoverningQuotation}),
+     * which also reads legacy rows and, by owner ruling 2026-10-23, counts a DEAL_DIRECT approval
+     * as the answer, level with ACCEPTED. The two agree on a ticket with one live new-engine
+     * quotation. They differ when the ticket also has a live legacy quotation. Two DEAL_DIRECT
+     * cases exist only on pre-lock data (a DEAL_DIRECT quotation beside a pricing-request one,
+     * which {@code DirectQuotationLocks} now refuses): an ACCEPTED quotation followed by a newer
+     * DEAL_DIRECT APPROVED one ({@code DealQuotationRepository#supersedeOtherLiveOnTicket} never
+     * supersedes an ACCEPTED row), where this shows the ACCEPTED lines and a ticket-route draft
+     * bills the DEAL_DIRECT one; and data from before 2026-10-17 that still holds both a
+     * DEAL_DIRECT APPROVED and a PRICING_REQUEST ISSUED row.
+     * The UI drafts any deal with a QUOTATION_ACCEPTED pricing request through the
+     * pricing-request route, which bills that request's accepted quotation instead.
      *
      * <p>Only brand/model/color/texture/size/qty/qtySqm/unitBasis/rawUnit are mapped -- pricing
      * fields (proposedPrice/approvedPrice/calcedCost/manualPrice/...) are deliberately left at
@@ -1559,6 +1567,36 @@ public class TicketRepository {
                 .addValue("policy", policy)
                 .addValue("reason", reason)
                 .addValue("setBy", setBy)
+                .addValue("id", ticketId));
+    }
+
+    /**
+     * The system's only write to {@code deposit_policy} (see {@code TicketService
+     * #followQuotationDepositPolicy}). A compare-and-set: it moves the row from {@code expected} to
+     * {@code policy} only while no person has set the policy ({@code deposit_policy_set_by IS NULL};
+     * {@link #updateDepositPolicy} always records one) and the payment track is still at
+     * CUSTOMER_CONFIRMED. It leaves {@code deposit_policy_set_by} NULL, so the row stays the
+     * system's. Returns the rowcount; 0 means leave the policy alone, e.g. a waiver committed first.
+     */
+    public int syncDepositPolicyFromQuotation(long ticketId, String expected, String policy, String reason) {
+        // Dropping to NOT_REQUIRED is refused once a deposit notice is ISSUED: money was asked for.
+        String noIssuedNotice = DepositPolicy.NOT_REQUIRED.equals(policy) ? """
+               AND NOT EXISTS (SELECT 1 FROM sales.deposit_notice d
+                                WHERE d.ticket_id = sales.ticket.ticket_id AND d.status = 'ISSUED')
+            """ : "";
+        return jdbc.update("""
+            UPDATE sales.ticket
+               SET deposit_policy = :policy, deposit_policy_reason = :reason,
+                   deposit_policy_set_by = NULL, updated_at = now()
+             WHERE ticket_id = :id
+               AND deposit_policy = :expected
+               AND deposit_policy_set_by IS NULL
+               AND payment_status = 'CUSTOMER_CONFIRMED'
+            """ + noIssuedNotice,
+            new MapSqlParameterSource()
+                .addValue("policy", policy)
+                .addValue("reason", reason)
+                .addValue("expected", expected)
                 .addValue("id", ticketId));
     }
 

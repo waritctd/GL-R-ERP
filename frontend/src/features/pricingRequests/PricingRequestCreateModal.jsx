@@ -452,6 +452,8 @@ export function PricingRequestCreateModal({
   // (a failed contact create/edit-in-place) — optional, so a caller with no toast plumbing of
   // its own (none currently omit it, but the picker itself tolerates an absent one) still works.
   showToast,
+  // Create mode only: ผู้รับ pre-selected from the deal page's เสนอราคา menu.
+  initialRecipientType = null,
 }) {
   const isEdit = mode === 'edit';
   const isRevision = mode === 'revision';
@@ -460,11 +462,14 @@ export function PricingRequestCreateModal({
   // ticket_item rows instead.
   const seedsFromExisting = isEdit || isRevision;
   const initialSummary = initialValue?.summary ?? null;
-  const [recipientType, setRecipientType] = useState(() => initialSummary?.recipientType ?? 'DESIGNER');
+  const seededRecipientType = seedsFromExisting
+    ? (initialSummary?.recipientType ?? 'DESIGNER')
+    : (initialRecipientType ?? initialSummary?.recipientType ?? 'DESIGNER');
+  const [recipientType, setRecipientType] = useState(seededRecipientType);
   const [recipientLabel, setRecipientLabel] = useState(() => (
     seedsFromExisting
       ? (initialSummary?.recipientLabel ?? '')
-      : recipientLabelForDeal(deal, initialSummary?.recipientType ?? 'DESIGNER')
+      : recipientLabelForDeal(deal, seededRecipientType)
   ));
   // Tracks whether the user has hand-edited ผู้รับ's free-text label — once true, switching the
   // ผู้รับ chip must never overwrite what they typed (see the effect below). Stays false forever
