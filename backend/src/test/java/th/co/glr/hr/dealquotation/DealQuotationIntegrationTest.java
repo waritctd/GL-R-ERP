@@ -2031,6 +2031,42 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .hasMessageContaining("กรุณาระบุระยะเวลานำเข้า");
     }
 
+    /** VW-01 (owner ruling 2026-10-28: stock lines skip import). A TILE row that came from a
+     * stock-flagged pricing-request line (quotation_item.stock_source set, V194) has no import
+     * lead time, so the submit gate must not demand one -- while the import row in the same
+     * document (stock_source NULL, still no lead time) is still refused, and only IT is named. */
+    @Test
+    void submit_inThailandStockLineNeedsNoLeadTime_butInTransitAndImportStillDo() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10), sampleItem("100.00", 10))), salesActor);
+        jdbc.update("""
+            UPDATE sales.quotation_item SET lead_time_min_days = NULL, lead_time_max_days = NULL
+             WHERE quotation_id = :id
+            """, java.util.Map.of("id", created.id()));
+        jdbc.update("""
+            UPDATE sales.quotation_item SET stock_source = 'IN_THAILAND'
+             WHERE quotation_id = :id AND seq = 1
+            """, java.util.Map.of("id", created.id()));
+        // Owner ruling 2026-10-29: only IN_THAILAND skips import; an IN_TRANSIT line still needs a lead time.
+        jdbc.update("""
+            UPDATE sales.quotation_item SET stock_source = 'IN_TRANSIT'
+             WHERE quotation_id = :id AND seq = 2
+            """, java.util.Map.of("id", created.id()));
+
+        assertThatThrownBy(() -> quotationService.submit(created.id(), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("กรุณาระบุระยะเวลานำเข้า (วัน) ของรายการที่ 2")
+            .satisfies(e -> assertThat(((ApiException) e).getMessage()).doesNotContain("1"));
+
+        jdbc.update("""
+            UPDATE sales.quotation_item SET stock_source = 'IN_TRANSIT', lead_time_min_days = 30, lead_time_max_days = 45
+             WHERE quotation_id = :id AND seq = 2
+            """, java.util.Map.of("id", created.id()));
+        assertThat(quotationService.submit(created.id(), salesActor).docStatus())
+            .isEqualTo(QuotationStatus.PENDING_APPROVAL);
+    }
+
     // ── Wording-scan fix 3 (2026-09-17): an ENTERED lead-time range must be min>=1, max>=min ────
 
     /** {@code ประมาณ 0-3 วัน} saved on 2 approved quotations, and {@code 90-75}/negatives would too

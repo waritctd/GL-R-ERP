@@ -9,12 +9,14 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
@@ -61,8 +63,8 @@ class DepositNoticeServiceTest {
 
     private final UserPrincipal owner = new UserPrincipal(
         1L, "sales@glr.co.th", "Sales", "sales", 1L, true, LocalDate.of(2026, 1, 1), false, 1L, false);
-    // sales_manager: read-only oversight of deposit notices — never owns a ticket
-    // (no create access), so every owner-gated write is denied by ownership alone.
+    // sales_manager: read-only oversight of deposit notices. It can create (and so own) a deal
+    // since deal entry was widened, so every deposit-notice write is role-gated to sales.
     private final UserPrincipal salesManagerActor = new UserPrincipal(
         8L, "sales_manager@glr.co.th", "Sales Manager", "sales_manager", 8L, true,
         LocalDate.of(2026, 1, 1), false, null, false);
@@ -73,7 +75,7 @@ class DepositNoticeServiceTest {
     void issue_advancesPaymentTrackAndKeepsTicketStatus() {
         stubDraft(99L, 10L);
         stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
-        when(docs.issue(99L, 1L, "Sales")).thenReturn(Optional.of("GLRD69001"));
+        when(docs.issue(eq(99L), eq(1L), eq("Sales"), any())).thenReturn(Optional.of("GLRD69001"));
 
         service.issue(99L, owner);
 
@@ -86,6 +88,24 @@ class DepositNoticeServiceTest {
             eq(TicketStatus.QUOTATION_ISSUED), eq(TicketStatus.QUOTATION_ISSUED), anyString());
         verify(ticketRepo, never()).addEvent(eq(10L), eq(1L), anyString(),
             eq(TicketEventKind.DOCUMENT_ISSUED), anyString(), anyString(), anyString());
+    }
+
+    // One notice per deal: the "another notice is ISSUED" guard is check-then-act, so the ticket
+    // row is locked first — two drafts issued at once serialize and the second sees the first.
+    // (A real two-thread race is not reproducible in this suite; this pins the order.)
+    @Test
+    void issue_locksTheTicketRowBeforeReadingTheOneIssuedGuard_andPassesTheStampOn() {
+        stubDraft(99L, 10L);
+        stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
+        OffsetDateTime stamp = OffsetDateTime.parse("2026-10-23T08:57:19.732123Z");
+        when(docs.issue(eq(99L), eq(1L), eq("Sales"), eq(stamp))).thenReturn(Optional.of("GLRD69001"));
+
+        service.issue(99L, stamp, owner);
+
+        var order = org.mockito.Mockito.inOrder(ticketRepo, docs);
+        order.verify(ticketRepo).lockTicketForUpdate(10L);
+        order.verify(docs).findByTicket(10L);
+        order.verify(docs).issue(99L, 1L, "Sales", stamp);
     }
 
     @Test
@@ -120,7 +140,7 @@ class DepositNoticeServiceTest {
     void issue_fromDepositNoticeIssued_isNowAllowedAsARevision() {
         stubDraft(99L, 10L);
         stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_NOTICE_ISSUED");
-        when(docs.issue(99L, 1L, "Sales")).thenReturn(Optional.of("GLRD69002"));
+        when(docs.issue(eq(99L), eq(1L), eq("Sales"), any())).thenReturn(Optional.of("GLRD69002"));
 
         service.issue(99L, owner); // must not throw
 
@@ -808,14 +828,18 @@ class DepositNoticeServiceTest {
 
     @Test
     void update_rejectsSalesManagerRole() {
-        // update() has NO role gate — only requireTicketOwner. sales_manager can
-        // never own a ticket, so the ownership check alone denies it.
+        // Role-gated (SALES_ROLES) like createDraft and issue: a sales_manager that OWNS the deal
+        // (stubTicket's createdById is 1) passes the owner check, so only the role gate refuses it.
+        UserPrincipal salesManagerOwner = new UserPrincipal(
+            1L, "sales_manager@glr.co.th", "Sales Manager", "sales_manager", 1L, true,
+            LocalDate.of(2026, 1, 1), false, null, false);
         stubDraft(99L, 10L);
         stubTicket(10L, TicketStatus.APPROVED, null);
 
         assertForbidden(() -> service.update(99L,
             new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null),
-            salesManagerActor));
+            salesManagerOwner));
+        verify(docs, never()).update(anyLong(), any(), any());
     }
 
     @Test
@@ -934,7 +958,8 @@ class DepositNoticeServiceTest {
     // 2026-10-23) ────
     // The governing quotation's percent (DepositNoticeRepository#findGoverningQuotation: legacy
     // 50, new-engine its own, blank 30); a caller-supplied percent is never read on create, and
-    // 0.50 applies only when the ticket has no live quotation.
+    // 0.50 applies only when the ticket has no live quotation. update() then lets sales change it
+    // on a DRAFT; an ISSUED notice refuses any edit (requireDraft, 409).
 
     @Test
     void createDraft_sourcesDepositPercentFromQuotation_ignoringCallerSuppliedValue() {
@@ -1003,23 +1028,99 @@ class DepositNoticeServiceTest {
     }
 
     @Test
-    void update_preservesTheDraftsOwnStoredDepositPercent_ignoringCallerSuppliedValue() {
+    void update_onADraft_persistsTheCallersDepositPercent() {
         // stubDraft's fixture stores depositPercent = 0.50 on doc 99 / ticket 10.
         stubDraft(99L, 10L);
         stubTicket(10L, TicketStatus.APPROVED, null);
 
-        // A caller sends 0.99 — must never reach the repository update.
         service.update(99L,
             new DepositNoticeDraftRequest("ACME", null, null, null, "REF-2",
-                new BigDecimal("0.99"), null, null),
+                new BigDecimal("0.40"), null, null),
             owner);
 
         ArgumentCaptor<DepositNoticeDraftRequest> captor = ArgumentCaptor.forClass(DepositNoticeDraftRequest.class);
-        verify(docs).update(eq(99L), captor.capture());
-        assertThat(captor.getValue().depositPercent()).isEqualByComparingTo("0.50");
-        // Every other field still passes through untouched — only depositPercent is overridden.
+        verify(docs).update(eq(99L), captor.capture(), any());
+        assertThat(captor.getValue().depositPercent()).isEqualByComparingTo("0.40");
         assertThat(captor.getValue().customerName()).isEqualTo("ACME");
         assertThat(captor.getValue().reference()).isEqualTo("REF-2");
+    }
+
+    @Test
+    void update_withNoDepositPercent_keepsTheDraftsStoredPercent() {
+        stubDraft(99L, 10L); // stored 0.50
+        stubTicket(10L, TicketStatus.APPROVED, null);
+
+        service.update(99L,
+            new DepositNoticeDraftRequest("ACME", null, null, null, "REF-2", null, null, null),
+            owner);
+
+        ArgumentCaptor<DepositNoticeDraftRequest> captor = ArgumentCaptor.forClass(DepositNoticeDraftRequest.class);
+        verify(docs).update(eq(99L), captor.capture(), any());
+        assertThat(captor.getValue().depositPercent()).isEqualByComparingTo("0.50");
+    }
+
+    @Test
+    void update_refusesZeroAndANewFractionalPercent_butAStoredFractionSentBackUnchangedSaves() {
+        // Stored 0.3330: free input from before the whole-percent rule. The page shows it as 33.
+        stubDraft(99L, 10L, new BigDecimal("0.3330"));
+        stubTicket(10L, TicketStatus.APPROVED, null);
+
+        assertThatThrownBy(() -> service.update(99L,
+                new DepositNoticeDraftRequest("ACME", null, null, null, "REF-2", BigDecimal.ZERO, null, null),
+                owner))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                assertThat(e.getMessage()).isEqualTo("เปอร์เซ็นต์มัดจำต้องมากกว่า 0");
+            });
+        // 40.5% would print as "41%" on the document while billing 40.5%.
+        assertThatThrownBy(() -> service.update(99L,
+                new DepositNoticeDraftRequest("ACME", null, null, null, "REF-2", new BigDecimal("0.405"), null, null),
+                owner))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                assertThat(e.getMessage()).isEqualTo("เปอร์เซ็นต์มัดจำต้องเป็นจำนวนเต็ม");
+            });
+        verify(docs, never()).update(anyLong(), any(), any());
+
+        // The stored value sent back unchanged (0.333 == 0.3330) still saves the rest of the draft;
+        // a whole percent replaces it.
+        service.update(99L,
+            new DepositNoticeDraftRequest("ACME", null, null, null, "REF-2", new BigDecimal("0.333"), null, null),
+            owner);
+        service.update(99L,
+            new DepositNoticeDraftRequest("ACME", null, null, null, "REF-2", new BigDecimal("0.40"), null, null),
+            owner);
+        ArgumentCaptor<DepositNoticeDraftRequest> captor = ArgumentCaptor.forClass(DepositNoticeDraftRequest.class);
+        verify(docs, times(2)).update(eq(99L), captor.capture(), any());
+        assertThat(captor.getAllValues())
+            .extracting(r -> r.depositPercent().stripTrailingZeros().toPlainString())
+            .containsExactly("0.333", "0.4");
+    }
+
+    // DepositNoticeRepository#foldAdjustments (owner rulings 2026-10-23, "2 decimals for all"): the
+    // ส่วนลดพิเศษ amount is spread by line amount, each share HALF_UP to 2 dp, each new net price
+    // 2 dp. There is no remainder trick: the notice total is the sum of its own 2 dp lines (here
+    // 200.01, a cent over the quotation's 200.00). A line keeps the quotation's own discount wording
+    // and gains the folded discount after it; a line the fold did not touch keeps its label as is.
+    @Test
+    void foldAdjustments_keepsEachLinesOwnLabel_appendsTheFoldedDiscount_andTotalsFollowTheTwoDpLines() {
+        List<DepositNoticeItemRequest> folded = DepositNoticeRepository.foldAdjustments(List.of(
+            foldLine(1, "1", "100.00", "ส่วนลด 5 ต่อหน่วย"), foldLine(2, "1", "100.00", null),
+            foldLine(3, "1", "100.00", null), foldLine(4, "2", "0.00", "ส่วนลด 9 ต่อหน่วย")),
+            new BigDecimal("-100.00"));
+
+        assertThat(folded).extracting(it -> it.netUnitPrice().toPlainString())
+            .containsExactly("66.67", "66.67", "66.67", "0.00");
+        assertThat(folded.stream().map(it -> it.netUnitPrice().multiply(it.qty())).reduce(BigDecimal.ZERO, BigDecimal::add))
+            .isEqualByComparingTo("200.01");
+        assertThat(folded).extracting(DepositNoticeItemRequest::discountLabel).containsExactly(
+            "ส่วนลด 5 ต่อหน่วย + ส่วนลดพิเศษ 33.33 ต่อหน่วย", "ส่วนลดพิเศษ 33.33 ต่อหน่วย",
+            "ส่วนลดพิเศษ 33.33 ต่อหน่วย", "ส่วนลด 9 ต่อหน่วย");
+    }
+
+    private static DepositNoticeItemRequest foldLine(int seq, String qty, String net, String label) {
+        return new DepositNoticeItemRequest(seq, "Line " + seq, new BigDecimal(qty), "แผ่น",
+            new BigDecimal(net), label, new BigDecimal(net));
     }
 
     private static void assertForbidden(org.assertj.core.api.ThrowableAssert.ThrowingCallable action) {
@@ -1031,10 +1132,14 @@ class DepositNoticeServiceTest {
     // ── fixtures ─────────────────────────────────────────────────────────────
 
     private void stubDraft(long docId, long ticketId) {
+        stubDraft(docId, ticketId, new BigDecimal("0.50"));
+    }
+
+    private void stubDraft(long docId, long ticketId, BigDecimal depositPercent) {
         DepositNoticeDto draft = new DepositNoticeDto(
             docId, ticketId, "DEPOSIT_NOTICE", 1, null, null, "DRAFT",
             "ACME", "0100000000000", "Bangkok", "Showroom", "REF-1", "THB",
-            new BigDecimal("0.50"), new BigDecimal("1000.00"), new BigDecimal("500.00"),
+            depositPercent, new BigDecimal("1000.00"), new BigDecimal("500.00"),
             new BigDecimal("0.07"), new BigDecimal("35.00"), new BigDecimal("535.00"),
             List.of(), false, false, "Sales", "Preparer", null, null, List.of());
         when(docs.findById(docId)).thenReturn(Optional.of(draft));
@@ -1151,5 +1256,29 @@ class DepositNoticeServiceTest {
         assertThatThrownBy(action)
             .isInstanceOfSatisfying(ApiException.class, e ->
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+    }
+
+    // SK-07 (owner ruling 2026-10-28, final): each tax invoice's VAT is round2(its own net x 7%). Deal 11
+    // (PR-2026-0006): net 119,745.00 - 35,923.50 = 83,821.50 -> VAT 5,867.505 -> 5,867.51 -> grand 89,689.01.
+    // The 1-satang gap against the deal payable (128,127.15 - 38,438.15 = 89,689.00) is normal.
+    @Test
+    void remainingInvoiceMoney_deal11_isPerDocumentRounding() {
+        DepositNoticeService.RemainingInvoiceMoney m = service.computeRemainingInvoiceMoney(
+            new BigDecimal("119745.00"), new BigDecimal("35923.50"));
+
+        assertThat(m.netAmount()).isEqualByComparingTo("83821.50");
+        assertThat(m.vatAmount()).isEqualByComparingTo("5867.51");
+        assertThat(m.grandTotal()).isEqualByComparingTo("89689.01");
+    }
+
+    /** No deposit (bypass): unchanged -- net = items, VAT = round2(items x 7%). */
+    @Test
+    void remainingInvoiceMoney_withNoDeposit_isTheWholeDealInclVat() {
+        DepositNoticeService.RemainingInvoiceMoney m = service.computeRemainingInvoiceMoney(
+            new BigDecimal("33333.33"), BigDecimal.ZERO);
+
+        assertThat(m.netAmount()).isEqualByComparingTo("33333.33");
+        assertThat(m.vatAmount()).isEqualByComparingTo("2333.33");
+        assertThat(m.grandTotal()).isEqualByComparingTo("35666.66");
     }
 }

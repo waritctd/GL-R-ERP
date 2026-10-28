@@ -212,7 +212,7 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
         // site 2: CUSTOMER_CONFIRMED -> DEPOSIT_NOTICE_ISSUED.
         DepositNoticeDto draft = orderConfirmation.createDepositNoticeFromQuotation(
             deal.pricingRequestId(), new CreateDepositNoticeFromQuotationRequest(null), salesActor);
-        depositNoticeService.issue(draft.id(), salesActor);
+        DepositNoticeDto issuedNotice = depositNoticeService.issue(draft.id(), salesActor);
         assertThat(paymentStatusOf(deal.ticketId())).isEqualTo(PaymentTrack.DEPOSIT_NOTICE_ISSUED);
 
         // site 6 (REQUIRED branch, via reconcilePaymentStatus): DEPOSIT_NOTICE_ISSUED -> DEPOSIT_PAID,
@@ -235,6 +235,11 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
         // the remaining ~50% is still outstanding): AWAITING_FINAL_PAYMENT -> FULLY_PAID.
         ticketService.confirmFinalPayment(deal.ticketId(), accountActor);
         assertThat(paymentStatusOf(deal.ticketId())).isEqualTo(PaymentTrack.FULLY_PAID);
+        // QA-01: the DEPOSIT receipt is the notice's VAT-inclusive totalPayable, not pre-VAT.
+        assertThat(jdbc.queryForObject(
+            "SELECT amount FROM sales.payment_receipt WHERE ticket_id = :id AND kind = 'DEPOSIT'",
+            java.util.Map.of("id", deal.ticketId()), BigDecimal.class))
+            .isEqualByComparingTo(issuedNotice.totalPayable());
     }
 
     @Test
@@ -272,7 +277,7 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
-    void depositNoticeRevision_secondIssueSucceeds_mintsNewDocSupersedesFirst_paymentStatusStaysDepositNoticeIssued() {
+    void depositNoticeSecondIssue_isRefused_firstStaysIssued_noNumberConsumed_paymentStatusUnchanged() {
         Deal deal = buildDealToQuotationAccepted("revision");
         orderConfirmation.confirmOrder(
             deal.pricingRequestId(), new ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
@@ -281,18 +286,26 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
         DepositNoticeDto firstIssued = depositNoticeService.issue(firstDraft.id(), salesActor);
         assertThat(paymentStatusOf(deal.ticketId())).isEqualTo(PaymentTrack.DEPOSIT_NOTICE_ISSUED);
 
-        // A revision: a NEW draft on the SAME ticket, issued while payment_status is still
-        // DEPOSIT_NOTICE_ISSUED — PaymentTrack's one legal self-loop (guard e).
-        long secondDraftId = depositNoticeService.createDraft(deal.ticketId(), bareDraftRequest(), salesActor).id();
-        DepositNoticeDto secondIssued = depositNoticeService.issue(secondDraftId, salesActor);
+        // Owner ruling 2026-10-23: one deposit notice per deal. The create routes refuse a draft
+        // while a notice is ISSUED; a second draft that exists anyway (written by the repository,
+        // as a concurrent or pre-ruling draft would be) is refused at issue(), so the
+        // DEPOSIT_NOTICE_ISSUED self-loop is not reachable through this service.
+        assertThatThrownBy(() -> depositNoticeService.createDraft(deal.ticketId(), bareDraftRequest(), salesActor))
+            .isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        long secondDraftId = depositNoticeRepository.createDraft(
+            deal.ticketId(), bareDraftRequest(), bareDraftRequest().items());
+        assertThatThrownBy(() -> depositNoticeService.issue(secondDraftId, salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(e.getMessage()).contains(firstIssued.docNumber());
+            });
 
-        assertThat(secondIssued.docNumber()).isNotEqualTo(firstIssued.docNumber());
-        assertThat(secondIssued.status()).isEqualTo("ISSUED");
-        // PR #698's "AND status = 'DRAFT'" guard on DepositNoticeRepository.issue composes with
-        // this change: the second row really was DRAFT (createDraft never touches payment_status)
-        // when it was issued.
+        DepositNoticeDto second = depositNoticeRepository.findById(secondDraftId).orElseThrow();
+        assertThat(second.status()).isEqualTo("DRAFT");
+        assertThat(second.docNumber()).isNull();
         DepositNoticeDto firstReread = depositNoticeRepository.findById(firstIssued.id()).orElseThrow();
-        assertThat(firstReread.status()).isEqualTo("SUPERSEDED");
+        assertThat(firstReread.status()).isEqualTo("ISSUED");
         assertThat(firstReread.docNumber()).isEqualTo(firstIssued.docNumber());
         assertThat(paymentStatusOf(deal.ticketId())).isEqualTo(PaymentTrack.DEPOSIT_NOTICE_ISSUED);
     }
@@ -567,9 +580,9 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
      * Same off-path fact, proven through the real SERVICE call this time — this is what proves a
      * gap found while writing this test class: {@code DepositNoticeService.issue}'s loosened
      * precondition (site 2) originally checked ONLY {@code paymentStatus}, not {@code
-     * deposit_policy}. {@code createDraft} never checked {@code deposit_policy} either (it only
-     * gates on ticket status), so a WAIVED deal that had reached {@code CUSTOMER_CONFIRMED} could
-     * still acquire a real DRAFT deposit notice and sail past the service-level guard into {@code
+     * deposit_policy}. {@code createDraft} now refuses a bypass-policy deal, but a DRAFT made while
+     * the deal was still REQUIRED survives a later waive, so a WAIVED deal at {@code
+     * CUSTOMER_CONFIRMED} can still hold a real DRAFT deposit notice and sail past the service-level guard into {@code
      * advancePaymentStatus}, which would throw {@link IllegalStateException} UNCAUGHT —
      * {@code ApiExceptionHandler} has no handler for it, so it would have surfaced as an opaque
      * 500 ("เกิดข้อผิดพลาดภายในระบบ"), not a clean conflict. Fixed by adding an explicit {@code
@@ -579,10 +592,10 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void depositNoticeServiceIssue_onWaivedPolicyDeal_isRefusedWithCleanConflict_notAnUncaughtException() {
         long ticketId = createBareTicket();
-        tickets.updateDepositPolicy(ticketId, DepositPolicy.WAIVED, "ทดสอบ", salesRepId);
         tickets.markQuotationIssuedForOrderConfirmation(ticketId);
         tickets.updatePaymentStatusUnchecked(ticketId, PaymentTrack.CUSTOMER_CONFIRMED);
         long docId = depositNoticeService.createDraft(ticketId, bareDraftRequest(), salesActor).id();
+        tickets.updateDepositPolicy(ticketId, DepositPolicy.WAIVED, "ทดสอบ", salesRepId);
 
         assertThatThrownBy(() -> depositNoticeService.issue(docId, salesActor))
             .isInstanceOfSatisfying(ApiException.class,

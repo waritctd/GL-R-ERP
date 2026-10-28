@@ -301,7 +301,7 @@ const COMMISSION_APPROVAL = {
 };
 
 const INVOICE_FIELDS = [
-  ['grossAmount', 'ยอดรวม (ก่อน VAT)'],
+  ['grossAmount', 'ยอดรับจริง (รวม VAT)'],
   ['bankFees', 'ค่าธรรมเนียมธนาคาร'],
   ['suspenseVat', 'ภาษีพัก (Suspense VAT)'],
   ['transportFee', 'ค่าขนส่ง'],

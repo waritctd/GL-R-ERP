@@ -155,13 +155,25 @@ export function canCancelDealQuotation(user, quotation) {
  * ONLY by its owning sales rep (mirrors DealQuotationService#createRevision, which reuses the
  * recordOutcome gate there) -- sales_manager / granted employees may NOT, unlike for DEAL_DIRECT.
  * Display-only; the server re-checks. */
-export function canReviseDealQuotation(user, quotation) {
+export function canReviseDealQuotation(user, quotation, order) {
   if (quotation?.origin === 'PRICING_REQUEST') {
     return user?.role === 'sales'
       && quotation.salesRepId != null && Number(quotation.salesRepId) === Number(user.id)
       && (quotation.docStatus === 'ISSUED' || quotation.docStatus === 'REVISION_REQUESTED');
   }
+  // Owner ruling 2026-10-28: once the order is confirmed from a direct quotation it is the agreed order and
+  // cannot be revised (the server's createRevision answers 409). `order` is the deal's confirmation fact from
+  // orderConfirmationOf: omitted = no gate asked for; null = unknown (loading / errored) -> hidden.
+  if (order === null || order?.confirmed) return false;
   return canEditDealQuotation(user, quotation) && quotation?.docStatus === 'APPROVED';
+}
+
+/** Whether the deal's order has been confirmed, read from its ticket events: true once a DEAL_PROMOTED_FROM_QUOTATION
+ * event exists. Returns null when the events are not loaded (unknown), which callers treat as "hide". */
+export function orderConfirmationOf(events) {
+  if (!Array.isArray(events)) return null;
+  const promoted = events.find((e) => e.kind === 'DEAL_PROMOTED_FROM_QUOTATION');
+  return { confirmed: Boolean(promoted) };
 }
 
 /** GLA-136 (owner ruling 2026-09-30) — "สร้างดีลจากใบเสนอราคา": only an APPROVED direct
@@ -882,7 +894,7 @@ export function usesDirectNetPriceSqm(item, documentLanguage = 'TH') {
 // still always the SERVER's (see itemInputFromRow's own comment on that), and nothing here feeds
 // money math. They exist solely so the input can render/accept "แผ่น/ตร.ม." while the value that
 // actually travels to the server, and back, is still ตร.ม./แผ่น.
-function round2(n) {
+export function round2(n) {
   return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 }
 
@@ -1344,7 +1356,8 @@ export function validateQuotationItem(item, priceMode = 'NET', documentLanguage 
   }
   // Owner feedback #7 (2026-09-14): mirrors DealQuotationService#requireEveryTileItemHasALeadTime
   // — SUBMIT only (see this function's own Javadoc for why the default leaves it off).
-  if (requireLeadTime && (item?.leadTimeMinDays == null || item?.leadTimeMaxDays == null)) {
+  // In-Thailand stock lines (owner ruling 2026-10-28) skip import, so they have no import lead time; IN_TRANSIT still needs one (2026-10-29).
+  if (requireLeadTime && item?.stockSource !== 'IN_THAILAND' && (item?.leadTimeMinDays == null || item?.leadTimeMaxDays == null)) {
     errors.leadTimeMinDays = 'กรุณาระบุระยะเวลานำเข้า (วัน)';
   }
   // GLA-125 (owner ruling 2026-09-18): ประเทศต้นทาง is required on the PCR form only

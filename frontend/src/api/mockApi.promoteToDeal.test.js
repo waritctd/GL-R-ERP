@@ -35,9 +35,9 @@ async function quotationOnlyTicket() {
   return ticket.summary.id;
 }
 
-async function approvedQuotation(ticketId) {
+async function approvedQuotation(ticketId, items = [TILE, PLAIN, ADJUSTMENT]) {
   await asRole('sales');
-  const { quotation: draft } = await api.dealQuotations.create(ticketId, { recipientType: 'DESIGNER', items: [TILE, PLAIN, ADJUSTMENT] });
+  const { quotation: draft } = await api.dealQuotations.create(ticketId, { recipientType: 'DESIGNER', items });
   await api.dealQuotations.submit(draft.id);
   await asRole('sales_manager');
   const { quotation } = await api.dealQuotations.approve(draft.id);
@@ -126,6 +126,60 @@ describe('mock dealQuotations.promoteToDeal (GLA-136)', () => {
     expect(await listIds()).toContain(ghost);
   });
 
+  // Owner ruling 2026-10-28 (mirror of DealQuotationService#createRevision): the quotation an order was
+  // confirmed from is the agreed order and cannot be revised.
+  it('refuses a revision of the confirmed quotation (409), but not before the order is confirmed', async () => {
+    const ghost = await quotationOnlyTicket();
+    const approved = await approvedQuotation(ghost);
+    const { quotation: revision } = await api.dealQuotations.createRevision(approved.id);
+    expect(revision.parentQuotationId).toBe(approved.id);
+    await api.dealQuotations.cancel(revision.id);
+
+    await api.dealQuotations.promoteToDeal(approved.id);
+
+    await expect(api.dealQuotations.createRevision(approved.id)).rejects.toMatchObject({ status: 409 });
+  });
+
+  // Round 3 (mirror of DealQuotationService.submit/approve/createReorder): after confirm-order no OTHER direct
+  // quotation on the deal may be cloned from the confirmed one, submitted or approved, and
+  // are refused with 409.
+  it('after confirm: no clone of the confirmed quotation, and a draft/pending one opened before cannot be submitted/approved', async () => {
+    const ghost = await quotationOnlyTicket();
+    const v1 = await approvedQuotation(ghost);
+    const { quotation: clone } = await api.dealQuotations.createReorder(v1.id);
+    const { quotation: revision } = await api.dealQuotations.createRevision(v1.id);
+    await api.dealQuotations.submit(revision.id);
+    await api.dealQuotations.promoteToDeal(v1.id);
+
+    await expect(api.dealQuotations.createReorder(v1.id)).rejects.toMatchObject({ status: 409 });
+    await expect(api.dealQuotations.submit(clone.id)).rejects.toMatchObject({ status: 409 });
+    await asRole('sales_manager');
+    await expect(api.dealQuotations.approve(revision.id)).rejects.toMatchObject({ status: 409 });
+    const { quotation: still } = await api.dealQuotations.get(v1.id);
+    expect(still.docStatus).toBe('APPROVED');
+  });
+
+  // Owner ruling 2026-10-23 (DepositNoticeRepository#foldAdjustments): the deposit draft carries no
+  // qty -1 ส่วนลดพิเศษ row; a flat 95 is spread by line amount (TILE 8,500 takes 85, PLAIN 1,000
+  // takes 10), so the subtotal is the quotation's 9,405. The mock computes no % adjustment amount
+  // (MOCK_NOT_COMPUTED), so a % row is only dropped.
+  it('the deposit draft folds a flat ส่วนลดพิเศษ into the goods lines and drops a % one', async () => {
+    const ghost = await quotationOnlyTicket();
+    const flat = await approvedQuotation(ghost, [TILE, PLAIN, { lineType: 'ADJUSTMENT', description: 'ส่วนลดพิเศษ', adjustmentAmount: 95 }]);
+    await api.dealQuotations.promoteToDeal(flat.id);
+    const { depositNotice } = await api.depositNotices.createDraft(ghost, {});
+    expect(depositNotice.items.map((i) => [i.qty, i.unitPrice, i.netUnitPrice, i.discountLabel])).toEqual([
+      [10, 850, 841.5, 'ส่วนลดพิเศษ 8.5 ต่อหน่วย'],
+      [2, 500, 495, 'ส่วนลดพิเศษ 5 ต่อหน่วย'],
+    ]);
+    expect(depositNotice.subtotal).toBe(9405);
+
+    const other = await quotationOnlyTicket();
+    await api.dealQuotations.promoteToDeal((await approvedQuotation(other)).id);
+    const { depositNotice: pctDraft } = await api.depositNotices.createDraft(other, {});
+    expect(pctDraft.items.map((i) => i.qty)).toEqual([10, 2]);
+  });
+
   it('a replay is idempotent — same deal, no second event', async () => {
     const ghost = await quotationOnlyTicket();
     const approved = await approvedQuotation(ghost);
@@ -172,5 +226,24 @@ describe('mock dealQuotations.promoteToDeal (GLA-136)', () => {
 
   it('404s an unknown quotation', async () => {
     await expect(api.dealQuotations.promoteToDeal(987654)).rejects.toMatchObject({ status: 404 });
+  });
+
+  // Mirrors TicketService.applyCustomerConfirmation's policy sync (owner ruling 2026-10-22).
+  it('a 0% (ไม่รับมัดจำ) quotation confirms the deal onto depositPolicy NOT_REQUIRED', async () => {
+    const ghost = await quotationOnlyTicket();
+    const { quotation: draft } = await api.dealQuotations.create(ghost, {
+      recipientType: 'DESIGNER', depositPercent: 0, fullPaymentTerm: 'BEFORE_DELIVERY', items: [TILE, PLAIN],
+    });
+    await api.dealQuotations.submit(draft.id);
+    await asRole('sales_manager');
+    const { quotation: approved } = await api.dealQuotations.approve(draft.id);
+    await asRole('sales');
+
+    await api.dealQuotations.promoteToDeal(approved.id);
+
+    const { ticket } = await api.tickets.get(ghost);
+    expect(ticket.summary.depositPolicy).toBe('NOT_REQUIRED');
+    expect(ticket.events.filter((e) => e.kind === 'POLICY_CHANGED').map((e) => e.message))
+      .toEqual([expect.stringContaining(approved.number)]);
   });
 });

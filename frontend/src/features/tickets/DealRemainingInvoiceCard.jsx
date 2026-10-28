@@ -8,6 +8,11 @@ import { formatThaiDate } from '../../utils/format.js';
 const STATUS_LABEL = { DRAFT: 'ร่าง', ISSUED: 'ออกแล้ว' };
 const STATUS_TONE = { DRAFT: 'warning', ISSUED: 'success' };
 
+/** The ticket's ISSUED remaining invoice, else its DRAFT, else null (shared with TicketDetailPage). */
+export function pickRemainingInvoice(rows = []) {
+  return rows.find((r) => r.status === 'ISSUED') ?? rows.find((r) => r.status === 'DRAFT') ?? null;
+}
+
 /**
  * GLA-129: a compact entry point into `RemainingInvoiceDialog` from the money tab — the dialog
  * itself already carries the full generate → edit → issue → version-history → download lifecycle
@@ -33,7 +38,7 @@ export function DealRemainingInvoiceCard({ ticketId, canManage, onManage }) {
     enabled: !!ticketId,
   });
   const rows = listQuery.data ?? [];
-  const live = rows.find((r) => r.status === 'ISSUED') ?? rows.find((r) => r.status === 'DRAFT') ?? null;
+  const live = pickRemainingInvoice(rows);
 
   return (
     <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3">

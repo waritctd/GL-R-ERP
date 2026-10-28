@@ -1,7 +1,7 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { QuotationEditorPage } from './QuotationEditorPage.jsx';
 import { api } from '../../api/index.js';
@@ -403,6 +403,28 @@ describe('lead time required to submit (owner feedback #7, 2026-09-14)', () => {
     fireEvent.change(byId('lead-max-0'), { target: { value: '45' } });
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'ส่งขออนุมัติ' }).disabled).toBe(false));
+  });
+
+  it('VW-01: a stock line (stockSource IN_THAILAND, no lead time) does NOT block ส่งขออนุมัติ, but an IN_TRANSIT row beside it still does (owner 2026-10-29)', async () => {
+    api.dealQuotations.get.mockResolvedValue({
+      quotation: draft({ items: [{ ...TILE_ITEM, stockSource: 'IN_THAILAND', leadTimeMinDays: null, leadTimeMaxDays: null }] }),
+    });
+    renderEditor('/quotations/5');
+    expect((await screen.findByRole('button', { name: 'ส่งขออนุมัติ' })).disabled).toBe(false);
+
+    api.dealQuotations.get.mockResolvedValue({
+      quotation: draft({
+        items: [
+          { ...TILE_ITEM, seq: 1, stockSource: 'IN_THAILAND', leadTimeMinDays: null, leadTimeMaxDays: null },
+          { ...TILE_ITEM, id: 105, seq: 2, stockSource: 'IN_TRANSIT', leadTimeMinDays: null, leadTimeMaxDays: null },
+        ],
+      }),
+    });
+    cleanup();
+    renderEditor('/quotations/5');
+    const blocked = await screen.findByRole('button', { name: 'ส่งขออนุมัติ' });
+    expect(blocked.disabled).toBe(true);
+    expect(blocked.title).toBe('กรุณาระบุระยะเวลานำเข้า (วัน) ของรายการที่ 2');
   });
 
   it('a HALF-filled lead time (only min, or only max) still blocks', async () => {

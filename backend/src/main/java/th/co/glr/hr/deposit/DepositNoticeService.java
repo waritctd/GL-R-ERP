@@ -103,8 +103,20 @@ public class DepositNoticeService {
                                                      Integer sourceDepositPercent, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
         requireTicketOwner(ticketId, actor);
+        // Owner ruling 2026-10-23: one deposit notice per deal. A new draft would re-seed the % from
+        // the quotation and, once issued, silently supersede the customer's document.
+        docs.findByTicket(ticketId).stream().filter(d -> "ISSUED".equals(d.status())).findFirst().ifPresent(d -> {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ดีลนี้ออกใบแจ้งรับมัดจำเลขที่ " + d.docNumber() + " แล้ว จึงสร้างฉบับร่างใหม่ไม่ได้");
+        });
         TicketSummaryDto s = requireApprovedTicket(ticketId, actor);
         requireActiveLifecycle(s);
+        // Both routes: a deal off the deposit path (a ไม่รับมัดจำ quotation, a waiver, a credit
+        // customer) has no deposit to bill, and issue() would refuse the draft anyway.
+        if (DepositPolicy.bypassesDepositNotice(s.depositPolicy())) {
+            throw new ApiException(HttpStatus.CONFLICT, "ดีลนี้ไม่ต้องเก็บมัดจำ (นโยบายมัดจำ "
+                + s.depositPolicy() + ") จึงสร้างใบแจ้งรับมัดจำไม่ได้");
+        }
 
         // Ticket route: the governing quotation (DepositNoticeRepository#findGoverningQuotation)
         // always supplies the percent. It supplies the lines, and with them the reference, unless
@@ -143,7 +155,8 @@ public class DepositNoticeService {
         // req.depositPercent() is never read (DepositNoticeDraftRequest carries it for update's
         // round trip). 0.50 only when the ticket has no live quotation at all (e.g. a manually
         // approved legacy ticket with no quotation chain); see
-        // DepositNoticeRepository#findGoverningQuotation for the pick.
+        // DepositNoticeRepository#findGoverningQuotation for the pick. Sales may change the percent
+        // on the DRAFT afterwards (update, ruling 2026-10-23).
         BigDecimal effectiveDepositPercent = sourceDepositPercent != null
             ? BigDecimal.valueOf(sourceDepositPercent, 2)
             : governing != null ? governing.depositPercent() : new BigDecimal("0.50");
@@ -169,20 +182,29 @@ public class DepositNoticeService {
 
     @Transactional
     public DepositNoticeDto update(long docId, DepositNoticeDraftRequest req, UserPrincipal actor) {
+        requireRole(actor, SALES_ROLES);
         DepositNoticeDto doc = requireDraft(docId);
         requireTicketOwner(doc.ticketId(), actor);
-        // Same owner ruling as createDraft above: the deposit percent is locked to the quotation
-        // at draft-creation time and must NEVER change on update. The frontend no longer offers a
-        // control for it, but a client (or a stale/forged request) sending a different value must
-        // not be trusted either — override whatever req carries with the draft's own already-
-        // stored depositPercent() before persisting.
+        // Owner ruling 2026-10-23: sales may change the deposit percent on a DRAFT (requireDraft
+        // above 409s an issued notice). docs.update recomputes the amount from it. A request
+        // without a percent keeps the draft's own.
+        BigDecimal depositPercent = req.depositPercent() != null ? req.depositPercent() : doc.depositPercent();
+        if (depositPercent.signum() <= 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "เปอร์เซ็นต์มัดจำต้องมากกว่า 0");
+        }
+        // Whole percents only: the document prints the percent rounded (40.5% shows as "41%"). A
+        // percent stored before that rule (0.3330) still saves while it is sent back unchanged;
+        // issue() refuses it until sales picks a whole one.
+        if (depositPercent.compareTo(doc.depositPercent()) != 0 && !isWholePercent(depositPercent)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "เปอร์เซ็นต์มัดจำต้องเป็นจำนวนเต็ม");
+        }
         var effective = new DepositNoticeDraftRequest(
             req.customerName(), req.customerTaxId(), req.customerAddress(),
             req.projectName(), req.reference(),
-            doc.depositPercent(),
-            req.notes(), req.items()
+            depositPercent,
+            req.notes(), req.items(), req.expectedUpdatedAt()
         );
-        docs.update(docId, effective);
+        docs.update(docId, effective, doc.items());
         return docs.findById(docId).orElseThrow();
     }
 
@@ -197,11 +219,25 @@ public class DepositNoticeService {
     }
 
     // Issue: assign doc number, freeze document, transition ticket to document_issued
+    // Without a stamp. @Transactional here too: a self-call from this overload would bypass the proxy.
     @Transactional
     public DepositNoticeDto issue(long docId, UserPrincipal actor) {
+        return issue(docId, null, actor);
+    }
+
+    @Transactional
+    public DepositNoticeDto issue(long docId, java.time.OffsetDateTime expectedUpdatedAt, UserPrincipal actor) {
         DepositNoticeDto doc = requireDraft(docId);
         requireRole(actor, SALES_ROLES);
         requireTicketOwner(doc.ticketId(), actor);
+        // The stored percent is what the document prints: outside a whole 1-100 (a 0% ticket-route
+        // draft, a 0.3330 typed before whole percents) it takes no number until fixed on the draft.
+        BigDecimal pct = doc.depositPercent();
+        if (pct.signum() <= 0 || pct.compareTo(BigDecimal.ONE) > 0 || !isWholePercent(pct)) {
+            throw new ApiException(HttpStatus.CONFLICT, "ใบแจ้งรับมัดจำนี้มีเปอร์เซ็นต์มัดจำ "
+                + pct.movePointRight(2).stripTrailingZeros().toPlainString()
+                + "% จึงออกเอกสารไม่ได้ (ต้องเป็นจำนวนเต็ม 1–100)");
+        }
 
         // Issuing the deposit-notice DOCUMENT is the payment-track step: it requires a
         // customer-confirmed quotation and advances paymentStatus, leaving the main
@@ -223,8 +259,8 @@ public class DepositNoticeService {
         // not left to fall through to advancePaymentStatus below, which would throw an uncaught
         // IllegalStateException (ApiExceptionHandler has no handler for it, so it would surface as
         // an opaque 500, not a controlled conflict). Found while writing PaymentTrackIntegrationTest's
-        // off-path case; a bypass-policy deal CAN reach a DRAFT deposit notice today (createDraft
-        // does not check deposit_policy), so this is a genuinely reachable path, not hypothetical.
+        // off-path case; a bypass-policy deal CAN still hold a DRAFT deposit notice (one drafted while
+        // the deal was REQUIRED survives a later waiver), so this is a genuinely reachable path.
         // On a bypass policy, issuing a deposit notice now throws — a deliberate behaviour change
         // from rule 4; see the branch report.
         boolean paymentTrackReady = !DepositPolicy.bypassesDepositNotice(s.depositPolicy())
@@ -233,11 +269,26 @@ public class DepositNoticeService {
             throw new ApiException(HttpStatus.CONFLICT,
                 "ออกใบแจ้งรับมัดจำได้เฉพาะเมื่อออกใบเสนอราคาแล้วและลูกค้ายืนยันคำสั่งซื้อแล้วเท่านั้น");
         }
+        // A 0-baht draft (e.g. a ticket-route draft on a deal whose quotation says ไม่รับมัดจำ but
+        // whose policy predates the confirmation sync) must not take a document number.
+        if (doc.depositAmount() == null || doc.depositAmount().signum() <= 0) {
+            throw new ApiException(HttpStatus.CONFLICT, "ใบแจ้งรับมัดจำนี้มียอดมัดจำ 0 บาท จึงออกเอกสารไม่ได้");
+        }
+        // The guard below is check-then-act: lock the deal row first so two drafts issued at once
+        // serialize, and the second one sees the first as ISSUED.
+        tickets.lockTicketForUpdate(doc.ticketId());
+        // Owner ruling 2026-10-23: one deposit notice per deal. A second draft (written before the
+        // first was issued) must not silently supersede the customer's document.
+        docs.findByTicket(doc.ticketId()).stream()
+            .filter(d -> d.id() != docId && "ISSUED".equals(d.status())).findFirst().ifPresent(d -> {
+                throw new ApiException(HttpStatus.CONFLICT,
+                    "ดีลนี้ออกใบแจ้งรับมัดจำเลขที่ " + d.docNumber() + " แล้ว จึงออกฉบับร่างนี้ไม่ได้");
+            });
         // Issuing advances the payment track — a paused/terminal deal must not move
         // (Phase 1 lifecycle gate; mirrors TicketService.requireActive).
         requireActiveLifecycle(s);
 
-        String docNumber = docs.issue(docId, actor.id(), actor.name())
+        String docNumber = docs.issue(docId, actor.id(), actor.name(), expectedUpdatedAt)
             .orElseThrow(() -> new ApiException(HttpStatus.CONFLICT,
                 "ใบแจ้งรับมัดจำนี้ถูกออกไปแล้วโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง"));
 
@@ -405,6 +456,8 @@ public class DepositNoticeService {
 
     RemainingInvoiceMoney computeRemainingInvoiceMoney(BigDecimal itemsTotal, BigDecimal depositAmount) {
         BigDecimal netAmount = itemsTotal.subtract(depositAmount).setScale(2, RoundingMode.HALF_UP);
+        // Owner ruling 2026-10-28 (SK-07): each tax invoice's VAT = round2(its own net x 7%) -- usual Thai practice;
+        // a satang gap against the deal's payable is normal and outstanding follows the ISSUED documents.
         BigDecimal vatAmount = netAmount.multiply(VAT_RATE).setScale(2, RoundingMode.HALF_UP);
         BigDecimal grandTotal = netAmount.add(vatAmount).setScale(2, RoundingMode.HALF_UP);
         return new RemainingInvoiceMoney(netAmount, vatAmount, grandTotal);
@@ -1109,7 +1162,7 @@ public class DepositNoticeService {
         DepositNoticeDto doc = docs.findById(docId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบใบแจ้งรับมัดจำนี้"));
         if (!"DRAFT".equals(doc.status())) {
-            throw new ApiException(HttpStatus.CONFLICT, "ใบแจ้งรับมัดจำนี้ไม่ได้อยู่ในสถานะร่าง (DRAFT)");
+            throw new ApiException(HttpStatus.CONFLICT, DepositNoticeRepository.NOT_DRAFT);
         }
         return doc;
     }
@@ -1158,6 +1211,11 @@ public class DepositNoticeService {
         if (!allowed.contains(actor.role())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
+    }
+
+    /** 0.40 is a whole 40%; 0.405 and 0.3330 are not. */
+    private static boolean isWholePercent(BigDecimal fraction) {
+        return fraction.movePointRight(2).stripTrailingZeros().scale() <= 0;
     }
 
     private String blankToNull(String value) {

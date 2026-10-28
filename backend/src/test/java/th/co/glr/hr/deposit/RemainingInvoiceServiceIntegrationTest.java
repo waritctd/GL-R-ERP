@@ -99,6 +99,7 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
     private OrderConfirmationService orderConfirmation;
     private RemainingInvoiceRepository remainingInvoiceRepository;
     private RemainingInvoiceService remainingInvoiceService;
+    private TicketService ticketService;
 
     private long salesRepId;
     private long otherSalesRepId;
@@ -139,7 +140,7 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         decisionService = new PricingDecisionService(decisionRepository, pricingRequests, costingRepository,
             tickets, fxRates, notifications, landedCostCalculator, formulaEngine);
 
-        TicketService ticketService = new TicketService(tickets, notifications,
+        ticketService = new TicketService(tickets, notifications,
             objectMapper, customers, new QuotationRenderer(), pricingRequestService, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc), new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
             new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
 
@@ -175,6 +176,39 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
     // ─────────────────────────────────────────────────────────────────────────────────────
     // Lifecycle + numbering
     // ─────────────────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Owner ruling 2026-10-28 (SK-07): each tax invoice's VAT is rounded on its own net, so deposit + remaining can
+     * differ from the deal's VAT-inclusive payable by a satang -- and outstanding + the final BALANCE receipt then
+     * FOLLOW THE ISSUED DOCUMENTS: once the remaining invoice is issued, payable = deposit notice total + remaining
+     * invoice grand total, the deposit receipt is the notice total, the balance is exactly the invoice grand total
+     * and the deal closes FULLY_PAID with nothing left (no satang overpaid/underpaid).
+     */
+    @Test
+    void issuedRemainingInvoice_outstandingAndFinalPaymentFollowTheIssuedDocuments() {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "FollowDocs");
+        long ticketId = fixture.ticketId();
+        BigDecimal depositNoticeTotal = new DepositNoticeRepository(jdbc).findById(fixture.depositNoticeId()).orElseThrow().totalPayable();
+        ticketService.confirmDepositPaid(ticketId, accountActor);
+
+        BigDecimal payableBeforeInvoice = tickets.payableAmount(ticketId);
+        RemainingInvoiceDocumentDto issued = remainingInvoiceService.issue(
+            remainingInvoiceService.createDraft(ticketId, null, salesActor).id(), salesActor);
+        // fixture precondition: per-document rounding really does drift from the deal payable here
+        assertThat(payableBeforeInvoice.subtract(depositNoticeTotal)).isNotEqualByComparingTo(issued.grandTotal());
+
+        assertThat(tickets.payableAmount(ticketId)).isEqualByComparingTo(depositNoticeTotal.add(issued.grandTotal()));
+        assertThat(tickets.findSummaryById(ticketId).orElseThrow().amountOutstanding()).isEqualByComparingTo(issued.grandTotal());
+
+        ticketService.confirmFinalPayment(ticketId, accountActor);
+
+        assertThat(jdbc.queryForObject(
+            "SELECT amount FROM sales.payment_receipt WHERE ticket_id = :id AND kind = 'BALANCE'",
+            Map.of("id", ticketId), BigDecimal.class)).isEqualByComparingTo(issued.grandTotal());
+        var after = tickets.findSummaryById(ticketId).orElseThrow();
+        assertThat(after.paymentStatus()).isEqualTo("FULLY_PAID");
+        assertThat(after.amountOutstanding()).isEqualByComparingTo("0");
+    }
 
     @Test
     void createDraft_thenIssue_mintsFirstVersionOfANewBase() {
@@ -811,11 +845,11 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
 
     /** A SECOND, wholly separate pricing-request chain on an ALREADY-EXISTING ticket — its own
      * catalog product, pricing request, factory quote, pricing decision and CustomerQuotation,
-     * driven to ACCEPTED + its own issued deposit notice, exactly like {@link #buildAcceptedDeal}
+     * driven to ACCEPTED (no second deposit notice: one ISSUED per deal), exactly like {@link #buildAcceptedDeal}
      * except it reuses the given ticket (and its first ticket item) instead of creating a new one.
      * Used by the O2 (one live remaining invoice per deal) tests to prove superseding/blocking
      * reaches a genuinely different chain, not merely a different id on the same fixture. */
-    private DealFixture buildSecondAcceptedQuotationChain(long ticketId, UserPrincipal owner, String label) {
+    private void buildSecondAcceptedQuotationChain(long ticketId, UserPrincipal owner, String label) {
         long catalogProductId = insertCatalogProduct(FACTORY, "IT",
             "TEST-RI-" + label + "-" + UUID.randomUUID().toString().substring(0, 8),
             new BigDecimal("100.00"), "THB", "per_piece");
@@ -866,11 +900,14 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
 
         orderConfirmation.confirmOrder(pricingRequestId,
             new ConfirmOrderRequest(UUID.randomUUID().toString()), owner);
-        DepositNoticeDto depositDraft = orderConfirmation.createDepositNoticeFromQuotation(pricingRequestId,
-            new CreateDepositNoticeFromQuotationRequest(null), owner);
-        DepositNoticeDto depositIssued = depositNoticeService.issue(depositDraft.id(), owner);
+        // Chain B has no deposit notice of its own, so it qualifies for a remaining invoice only through
+        // the bypass branch: flip the deal to NOT_REQUIRED (chain A's drafts/invoices were made earlier).
+        jdbc.update("UPDATE sales.ticket SET deposit_policy = 'NOT_REQUIRED' WHERE ticket_id = :id",
+            Map.of("id", ticketId));
+        // No deposit notice for chain B: a deal has at most one ISSUED deposit notice (owner ruling
+        // 2026-10-28), so chain A's stays the deal's only one; the remaining-invoice rules under test
+        // key off the accepted quotations, not a second notice.
 
-        return new DealFixture(ticketId, pricingRequestId, depositIssued.id());
     }
 
     private void driveDraftPricingRequestToQuotationAccepted(long pricingRequestId, BigDecimal quantity, UserPrincipal owner) {

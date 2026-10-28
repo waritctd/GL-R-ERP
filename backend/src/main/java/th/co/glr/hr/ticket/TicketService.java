@@ -867,16 +867,25 @@ public class TicketService {
 
     @Transactional
     public TicketDto confirmCustomer(long ticketId, UserPrincipal actor) {
+        return confirmCustomer(ticketId, null, null, actor);
+    }
+
+    /** {@link #confirmCustomer} for a caller that knows the confirmed quotation; see
+     * {@link #applyCustomerConfirmation} for what its number and deposit percent do. */
+    @Transactional
+    public TicketDto confirmCustomer(long ticketId, String quotationNumber, Integer quotationDepositPercent,
+                                     UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
         TicketSummaryDto s = loadAndVerifyStatus(ticketId, TicketStatus.QUOTATION_ISSUED);
         requireActive(s);
         requireOwner(s, actor);
-        return applyCustomerConfirmation(ticketId, s, actor);
+        return applyCustomerConfirmation(ticketId, s, quotationNumber, quotationDepositPercent, actor);
     }
 
     /**
      * GLA-136 — the SAME customer-confirmation effects as {@link #confirmCustomer} (payment track
-     * {@code null -> CUSTOMER_CONFIRMED}, stage auto-advance to {@code ORDER_RECEIVED}), for the
+     * {@code null -> CUSTOMER_CONFIRMED}, the deposit policy following the quotation's percent,
+     * stage auto-advance to {@code ORDER_RECEIVED}), for the
      * ONE caller that has already made its own authorization decision:
      * {@code DealQuotationService#confirmOrderFromDirectQuotation}.
      *
@@ -896,15 +905,25 @@ public class TicketService {
      * gate it relies on.
      */
     @Transactional
-    public TicketDto confirmCustomerForPromotedQuotation(long ticketId, UserPrincipal actor) {
+    public TicketDto confirmCustomerForPromotedQuotation(long ticketId, String quotationNumber,
+                                                         Integer quotationDepositPercent, UserPrincipal actor) {
         TicketSummaryDto s = loadAndVerifyStatus(ticketId, TicketStatus.QUOTATION_ISSUED);
         requireActive(s);
-        return applyCustomerConfirmation(ticketId, s, actor);
+        return applyCustomerConfirmation(ticketId, s, quotationNumber, quotationDepositPercent, actor);
     }
 
-    /** The shared body of {@link #confirmCustomer} and {@link #confirmCustomerForPromotedQuotation}
-     * — moved here verbatim (GLA-136) so the two cannot drift; behaviour is unchanged. */
-    private TicketDto applyCustomerConfirmation(long ticketId, TicketSummaryDto s, UserPrincipal actor) {
+    /**
+     * The shared body of {@link #confirmCustomer} and {@link #confirmCustomerForPromotedQuotation}
+     * (GLA-136), so the two cannot drift.
+     *
+     * <p>Owner ruling 2026-10-22: the first confirmation applies the confirmed quotation's deposit
+     * percent to the policy ({@link #followQuotationDepositPolicy}), so a ไม่รับมัดจำ (0%) deal takes
+     * the no-deposit path through the import-request and final-payment gates without a manual
+     * {@link #waiveDeposit}. It runs after the {@code null -> CUSTOMER_CONFIRMED} advance, an edge
+     * both paths share, so every later advance reads the synced policy.
+     */
+    private TicketDto applyCustomerConfirmation(long ticketId, TicketSummaryDto s, String quotationNumber,
+                                                Integer quotationDepositPercent, UserPrincipal actor) {
         // Never downgrade the payment track: once past CUSTOMER_CONFIRMED, re-confirming
         // would reset paymentStatus and deadlock the later transitions.
         if (s.paymentStatus() != null && !"CUSTOMER_CONFIRMED".equals(s.paymentStatus())) {
@@ -922,10 +941,44 @@ public class TicketService {
             requirePaymentAdvanced(rows);
             tickets.addEvent(ticketId, actor.id(), actor.name(),
                 TicketEventKind.CUSTOMER_CONFIRMED, s.status(), s.status(), null);
+            followQuotationDepositPolicy(ticketId, quotationNumber, quotationDepositPercent, actor);
         }
         // Deal pipeline (V50): a confirmed PO advances the deal — guarded no-op inside.
         autoAdvanceStage(s, DealStage.ORDER_RECEIVED, actor);
         return requireTicket(ticketId);
+    }
+
+    /**
+     * Owner ruling 2026-10-22, widened after the #1173 review: while the payment track is at
+     * CUSTOMER_CONFIRMED, a deposit policy the SYSTEM owns follows the deal's quotation. ไม่รับมัดจำ
+     * (0%) means NOT_REQUIRED; any deposit means REQUIRED. Called at the first confirmation only (the
+     * confirmed direct quotation can no longer be revised or replaced, owner ruling 2026-10-28).
+     *
+     * <p>A policy a person chose ({@link #waiveDeposit}: WAIVED, CREDIT_CUSTOMER, or a typed
+     * NOT_REQUIRED) is never touched, and nothing moves once a deposit notice is out. Both are
+     * enforced by the repository's compare-and-set ({@link TicketRepository
+     * #syncDepositPolicyFromQuotation}), which also loses cleanly to a waiver that commits first:
+     * 0 rows, no event. A null percent (a legacy quotation) changes nothing.
+     *
+     * <p>Performs NO authorization: each caller has already authorized {@code actor}, who is
+     * recorded on the event only (the row's {@code deposit_policy_set_by} stays NULL).
+     */
+    @Transactional
+    public void followQuotationDepositPolicy(long ticketId, String quotationNumber, Integer depositPercent,
+                                             UserPrincipal actor) {
+        if (depositPercent == null) {
+            return;
+        }
+        boolean noDeposit = depositPercent == 0;
+        String policy = noDeposit ? DepositPolicy.NOT_REQUIRED : DepositPolicy.REQUIRED;
+        String reason = "ใบเสนอราคา " + quotationNumber
+            + (noDeposit ? " ระบุไม่รับมัดจำ (ชำระเต็มจำนวน)" : " ระบุมัดจำ " + depositPercent + "%");
+        String expected = noDeposit ? DepositPolicy.REQUIRED : DepositPolicy.NOT_REQUIRED;
+        if (tickets.syncDepositPolicyFromQuotation(ticketId, expected, policy, reason) == 1) {
+            String stage = requireTicket(ticketId).summary().salesStage();
+            tickets.addEvent(ticketId, actor.id(), actor.name(),
+                TicketEventKind.POLICY_CHANGED, stage, stage, "deposit_policy → " + policy + " — " + reason);
+        }
     }
 
     /**
@@ -975,8 +1028,10 @@ public class TicketService {
             throw new ApiException(HttpStatus.CONFLICT, "ต้องออกใบแจ้งรับมัดจำก่อนจึงจะยืนยันรับชำระมัดจำได้");
         }
         var notice = tickets.latestIssuedDepositNotice(ticketId).orElse(null);
-        BigDecimal amount = notice != null && notice.depositAmount() != null
-            ? notice.depositAmount()
+        // QA-01: the deal payable is VAT-inclusive, so the receipt is the notice's total_payable
+        // (deposit + VAT), not the pre-VAT deposit_amount.
+        BigDecimal amount = notice != null && notice.totalPayable() != null
+            ? notice.totalPayable()
             : payableAmount(ticket).multiply(new BigDecimal("0.50"));
         if (amount.signum() <= 0) {
             throw new ApiException(HttpStatus.CONFLICT,
@@ -2071,6 +2126,13 @@ public class TicketService {
         requireActive(s);
         if (targetStage.equals(s.salesStage())) {
             throw new ApiException(HttpStatus.CONFLICT, "ดีลนี้อยู่ในขั้นตอน " + targetStage + " อยู่แล้ว");
+        }
+        // QA-05 (owner ruling 2026-10-28): once the order is confirmed (the deal is at or past ขั้น 10) a manual
+        // move may not rewind below ORDER_RECEIVED. Keyed on the CURRENT stage only: no repository call here.
+        if (DealStage.indexOf(s.salesStage()) >= DealStage.indexOf(DealStage.ORDER_RECEIVED)
+                && DealStage.indexOf(targetStage) < DealStage.indexOf(DealStage.ORDER_RECEIVED)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ย้อนสถานะกลับก่อนขั้นรับคำสั่งซื้อไม่ได้ — ยืนยันคำสั่งซื้อไปแล้ว");
         }
         // Rung 6 of the precedence ladder (design §12.1): the deal's ENTRY-CHANNEL route. Checked
         // BEFORE the facts because an off-route target's actionable remedy is the channel, not the

@@ -444,7 +444,7 @@ function financeDeal(overrides = {}) {
     code: 'TCK-0042',
     customerName: 'บริษัท ทดสอบ จำกัด',
     salesStage: 'CLOSED_PAID',
-    money: { amountPayable: 3210000 },
+    money: { amountPayable: 3210000, amountPayableExVat: 3000000 },
     ...overrides,
   };
 }
@@ -495,7 +495,7 @@ describe('CommissionPage — account create-from-deal tax invoice upload', () =>
     // fields are mapped from the finance view: code, customer, and the amount from `money`
     expect(screen.getByText('TCK-0042')).not.toBeNull();
     expect(screen.getByText(/฿3,210,000.00/)).not.toBeNull();
-    expect((screen.getByLabelText(/ยอดรวม/)).value).toBe('3210000');
+    expect((screen.getByLabelText(/ยอดรับจริง/)).value).toBe('3210000');
   });
 
   it('a finance-view deal that has not reached CLOSED_PAID is refused with the stage in the message', async () => {
@@ -529,7 +529,7 @@ describe('CommissionPage — account create-from-deal tax invoice upload', () =>
     fireEvent.change(screen.getByLabelText(/เลขที่ใบกำกับ/), { target: { value: 'INV-0042' } });
     const original = new File(['x'], 'tax-invoice-0042.jpg', { type: 'image/jpeg' });
     fireEvent.change(document.getElementById('commission-invoice-file'), { target: { files: [original] } });
-    fireEvent.change(screen.getByLabelText(/ยอดรวม/), { target: { value: '3210000' } });
+    fireEvent.change(screen.getByLabelText(/ยอดรับจริง/), { target: { value: '3210000' } });
     fireEvent.submit(screen.getByRole('button', { name: 'บันทึกและสร้างคำขอค่าคอม' }).closest('form'));
     await waitFor(() => expect(api.commissions.createFromDeal).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(spy).toHaveBeenCalledWith({ queryKey: ['finance'] }));
@@ -542,7 +542,7 @@ describe('CommissionPage — account create-from-deal tax invoice upload', () =>
     fireEvent.change(screen.getByLabelText(/เลขที่ใบกำกับ/), { target: { value: 'INV-0042' } });
     const original = new File(['fake-jpeg-bytes'], 'tax-invoice-0042.jpg', { type: 'image/jpeg' });
     fireEvent.change(document.getElementById('commission-invoice-file'), { target: { files: [original] } });
-    fireEvent.change(screen.getByLabelText(/ยอดรวม/), { target: { value: '3210000' } });
+    fireEvent.change(screen.getByLabelText(/ยอดรับจริง/), { target: { value: '3210000' } });
 
     // fireEvent.click on the submit button runs jsdom's native constraint validation first,
     // which (unlike a real browser) does not reliably see the file input as satisfied after a
@@ -569,7 +569,7 @@ describe('CommissionPage — account create-from-deal tax invoice upload', () =>
     fireEvent.change(screen.getByLabelText(/เลขที่ใบกำกับ/), { target: { value: 'INV-0042' } });
     const pdf = new File(['fake-pdf-bytes'], 'tax-invoice-0042.pdf', { type: 'application/pdf' });
     fireEvent.change(document.getElementById('commission-invoice-file'), { target: { files: [pdf] } });
-    fireEvent.change(screen.getByLabelText(/ยอดรวม/), { target: { value: '3210000' } });
+    fireEvent.change(screen.getByLabelText(/ยอดรับจริง/), { target: { value: '3210000' } });
 
     // fireEvent.click on the submit button runs jsdom's native constraint validation first,
     // which (unlike a real browser) does not reliably see the file input as satisfied after a

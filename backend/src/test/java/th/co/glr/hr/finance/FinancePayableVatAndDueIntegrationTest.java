@@ -82,6 +82,129 @@ class FinancePayableVatAndDueIntegrationTest extends FinanceDealTestBase {
         assertThat(tickets.findSummaryById(ticketId).orElseThrow().amountOutstanding()).isEqualByComparingTo("0");
     }
 
+    // ── A2. QA-03 (owner ruling 2026-10-28): a confirmed DEAL_DIRECT quotation stays APPROVED ──
+
+    /** A deal whose only quotation is a DEAL_DIRECT one in its terminal live state, APPROVED (subtotal 100,000). */
+    private long directApprovedDeal(String origin) {
+        long ticketId = unconfirmedDirectApprovedDeal(origin);
+        tickets.updatePaymentStatusUnchecked(ticketId, "CUSTOMER_CONFIRMED"); // confirm-order puts the deal on the payment track
+        // ...and writes the per-quotation fact the payable rule keys on: the promotion event naming the quotation
+        long quotationId = jdbc.queryForObject("SELECT quotation_id FROM sales.quotation WHERE ticket_id = :id",
+            new MapSqlParameterSource("id", ticketId), Long.class);
+        tickets.addEventWithDocument(ticketId, salesRepId, "ทดสอบ", "DEAL_PROMOTED_FROM_QUOTATION", null, null,
+            "ยืนยันคำสั่งซื้อ", "QUOTATION", quotationId);
+        return ticketId;
+    }
+
+    private long unconfirmedDirectApprovedDeal(String origin) {
+        long ticketId = createTicket("PROCUREMENT");
+        long q = insertAcceptedQuotation(ticketId, "QT-DD-" + ticketId, new BigDecimal("100000.00"));
+        jdbc.update("UPDATE sales.quotation SET origin = :o, doc_status = 'APPROVED' WHERE quotation_id = :q",
+            new MapSqlParameterSource("o", origin).addValue("q", q));
+        return ticketId;
+    }
+
+    @Test
+    void confirmedDirectQuotation_approved_countsTowardPayable_andShowsAsTheDealValue() {
+        long ticketId = directApprovedDeal("DEAL_DIRECT");
+
+        assertThat(tickets.payableAmount(ticketId)).isEqualByComparingTo("107000.00");
+        assertThat(tickets.payableAmountExVat(ticketId)).isEqualByComparingTo("100000.00");
+        FinanceDealDto dto = service.get(ticketId, accountUser);
+        assertThat(dto.money().amountPayable()).isEqualByComparingTo("107000.00");
+        assertThat(dto.money().amountOutstanding()).isEqualByComparingTo("107000.00");
+    }
+
+    @Test
+    void confirmedDirectQuotation_approved_isTheDealsPayableQuotationDocument() {
+        long ticketId = directApprovedDeal("DEAL_DIRECT");
+
+        // FinanceDealRepository.findPayableQuotation must agree with TicketRepository's payable SQL.
+        assertThat(service.get(ticketId, accountUser).documents().acceptedQuotation()).isNotNull();
+        assertThat(service.get(ticketId, accountUser).documents().acceptedQuotation().number())
+            .isEqualTo("QT-DD-" + ticketId);
+    }
+
+    @Test
+    void confirmedDirectQuotation_approved_balanceIsNotFullyPaidBeforeTheMoneyArrives() {
+        long ticketId = directApprovedDeal("DEAL_DIRECT");
+        tickets.updatePaymentStatusUnchecked(ticketId, "DEPOSIT_PAID");
+        insertPayment(ticketId, "DEPOSIT", new BigDecimal("53500.00"));
+
+        assertThat(tickets.findSummaryById(ticketId).orElseThrow().amountOutstanding()).isEqualByComparingTo("53500.00");
+    }
+
+    @Test
+    void confirmedDirectQuotation_approved_drivesPaymentTermsAndAccountScope() {
+        long ticketId = directApprovedDeal("DEAL_DIRECT");
+        jdbc.update("UPDATE sales.quotation SET remainder_mode = 'CREDIT', credit_days = 30 WHERE ticket_id = :id",
+            new MapSqlParameterSource("id", ticketId));
+        deliver(ticketId, today().minusDays(45).atTime(12, 0).atZone(BKK).toInstant());
+        // outside account's order-stage scope with a non-pending status: only overdue-with-balance gets it in.
+        tickets.updateSalesStage(ticketId, "NEGOTIATION");
+        tickets.updatePaymentStatusUnchecked(ticketId, "CUSTOMER_CONFIRMED");
+
+        TicketSummaryDto s = summary(ticketId);
+        assertThat(s.paymentDueBasis()).isEqualTo("CREDIT_FROM_DELIVERY");
+        assertThat(s.paymentDueDate()).isEqualTo(today().minusDays(15));
+        assertThat(s.overdue()).isTrue();
+        assertThat(inAccountList(ticketId)).isTrue();
+    }
+
+    @Test
+    void acceptedQuotation_outranksAnApprovedDirectOne_inAllThreeQueries() {
+        long ticketId = createS15Deal("CUSTOMER_CONFIRMED"); // ACCEPTED, 100,000, (recipient default)
+        jdbc.update("UPDATE sales.quotation SET recipient_type = 'OWNER', remainder_mode = 'CREDIT', credit_days = 30 WHERE ticket_id = :id",
+            new MapSqlParameterSource("id", ticketId));
+        long dd = tickets.createQuotation(ticketId, "QT-DD-RANK-" + ticketId, salesRepId, new BigDecimal("200000.00")).id();
+        jdbc.update("UPDATE sales.quotation SET origin = 'DEAL_DIRECT', doc_status = 'APPROVED', recipient_type = 'BUYER' WHERE quotation_id = :q",
+            new MapSqlParameterSource("q", dd));
+        deliver(ticketId, today().minusDays(10).atTime(12, 0).atZone(BKK).toInstant());
+
+        assertThat(tickets.payableAmount(ticketId)).isEqualByComparingTo("107000.00");
+        assertThat(service.get(ticketId, accountUser).documents().acceptedQuotation().number())
+            .isEqualTo("QT-LK-" + ticketId);
+        assertThat(summary(ticketId).paymentDueBasis()).isEqualTo("CREDIT_FROM_DELIVERY");
+    }
+
+    /** Review finding 5+6: the fact is per QUOTATION -- a deal on the payment track whose promotion event names a
+     * DIFFERENT quotation must not count this APPROVED direct one. */
+    @Test
+    void approvedDirectQuotation_isNotPayable_whenThePromotionEventNamesAnotherQuotation() {
+        long ticketId = createTicket("PROCUREMENT");
+        // "other" first (createQuotation supersedes earlier live rows), then the direct one, so the direct stays APPROVED
+        long other = tickets.createQuotation(ticketId, "QT-OTHER-" + ticketId, salesRepId, new BigDecimal("1.00")).id();
+        jdbc.update("UPDATE sales.quotation SET doc_status = 'CANCELLED' WHERE quotation_id = :q",
+            new MapSqlParameterSource("q", other)); // out of the payable set on its own
+        long direct = insertAcceptedQuotation(ticketId, "QT-DD-" + ticketId, new BigDecimal("100000.00"));
+        jdbc.update("UPDATE sales.quotation SET origin = 'DEAL_DIRECT', doc_status = 'APPROVED' WHERE quotation_id = :q",
+            new MapSqlParameterSource("q", direct));
+        tickets.updatePaymentStatusUnchecked(ticketId, "CUSTOMER_CONFIRMED");
+        tickets.addEventWithDocument(ticketId, salesRepId, "ทดสอบ", "DEAL_PROMOTED_FROM_QUOTATION", null, null,
+            "ยืนยันคำสั่งซื้อ", "QUOTATION", other);
+        assertThat(jdbc.queryForObject("SELECT doc_status FROM sales.quotation WHERE quotation_id = :q",
+            new MapSqlParameterSource("q", direct), String.class)).isEqualTo("APPROVED"); // not vacuous: it is still live
+
+        assertThat(tickets.payableAmount(ticketId)).isEqualByComparingTo("0");
+        assertThat(service.get(ticketId, accountUser).documents().acceptedQuotation()).isNull();
+    }
+
+    @Test
+    void approvedDirectQuotation_withNoOrderConfirmation_isNotPayable() {
+        long ticketId = unconfirmedDirectApprovedDeal("DEAL_DIRECT"); // payment_status still NULL
+
+        assertThat(tickets.payableAmount(ticketId)).isEqualByComparingTo("0");
+        assertThat(service.get(ticketId, accountUser).documents().acceptedQuotation()).isNull();
+    }
+
+    @Test
+    void approvedPricingRequestQuotation_isNotPayable_onlyDealDirectApprovedIs() {
+        long ticketId = directApprovedDeal("PRICING_REQUEST"); // a PCR approval lands on ISSUED, never APPROVED
+
+        assertThat(tickets.payableAmount(ticketId)).isEqualByComparingTo("0");
+        assertThat(service.get(ticketId, accountUser).documents().acceptedQuotation()).isNull();
+    }
+
     // ── B. Overdue from the quotation's terms ──────────────────────────────────────────────
 
     private long creditDeal(int creditDays, LocalDate deliveredOn) {

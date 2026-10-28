@@ -37,6 +37,11 @@ public final class DealQuotationRenderAdapter {
      * what the accepted PDF promised. */
     public static final int DEFAULT_DEPOSIT_PERCENT = 30;
 
+    /** The percent a new-engine quotation bills and prints: a blank one means {@link #DEFAULT_DEPOSIT_PERCENT}. */
+    public static int effectiveDepositPercent(Integer stored) {
+        return stored != null ? stored : DEFAULT_DEPOSIT_PERCENT;
+    }
+
     /** Overload for callers with no configured bank block — the English document then prints the
      * proforma-invoice line instead. Kept so tests and any hand-wired caller need not thread a
      * config value they do not care about. */

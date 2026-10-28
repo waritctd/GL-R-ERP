@@ -9,6 +9,7 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { Button } from '../../components/common/Button.jsx';
 import { CollapsibleSection } from '../../components/common/CollapsibleSection.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
+import { ConfirmOrderDialog } from '../quotations/ConfirmOrderDialog.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
 import { InfoTip } from '../../components/common/InfoTip.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
@@ -36,6 +37,7 @@ import {
   canCreateCommercialOnlyRevision,
   canCreateCustomerQuotation,
   canCreateDepositNoticeFromQuotation,
+  issuedDepositNotice,
   canDecideDiscountApproval,
   canManageCustomerQuotation,
   canRecordCustomerQuotationOutcome,
@@ -882,6 +884,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const [emailDrafts, setEmailDrafts] = useState({});
   const [receiveClientRequestIds, setReceiveClientRequestIds] = useState({});
   const [confirmAction, setConfirmAction] = useState(null);
+  // SK-02: confirm-order is irreversible -> dialog first.
+  const [confirmingOrder, setConfirmingOrder] = useState(false);
   // Review remediation (COMMIT 5, P1 finding 3): the customer-change revision UI now reuses
   // PricingRequestCreateModal in mode="revision" (seeded from the current request, full item
   // editing, catalog picker, unit select) instead of the old inline reason-only form that copied
@@ -1721,6 +1725,14 @@ export function PricingRequestDetailPage({ user, showToast }) {
     if (acceptConfirm) setAcceptToConfirm({ engine, quotation });
     else recordAccepted(engine, quotation);
   }
+  // Step 6: one deposit notice per deal (owner ruling 2026-10-23). Read only when the owner could
+  // otherwise be offered "สร้างใบแจ้งยอดเงินรับมัดจำ", so the block can point at an ISSUED one instead.
+  const depositNoticesQuery = useQuery({
+    queryKey: queryKeys.depositNotices(summary?.ticketId),
+    queryFn: () => api.depositNotices.listByTicket(summary.ticketId).then((r) => r.depositNotices ?? []),
+    enabled: summary != null && canCreateDepositNoticeFromQuotation(user, summary),
+  });
+  const issuedNotice = issuedDepositNotice(depositNoticesQuery.data);
   // itemId -> the factoryId Import has picked (as a string, matching SearchableCombobox's own
   // `code` convention) for that line. B6 (GLA-135): this used to hold the free-typed factory
   // NAME; it holds an id now, resolved server-side to the canonical master name on save. Same
@@ -4313,12 +4325,20 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   ลูกค้ายอมรับใบเสนอราคาแล้ว — ยืนยันคำสั่งซื้อเพื่อเริ่มขั้นตอนรับมัดจำและนำเข้าสินค้า
                 </p>
                 <Button type="button" variant="primary" className="self-start" disabled={confirmOrder.isPending}
-                  onClick={() => confirmOrder.mutate()}>
+                  onClick={() => setConfirmingOrder(true)}>
                   ยืนยันคำสั่งซื้อ
                 </Button>
               </div>
             ) : null}
-            {canCreateDepositNoticeFromQuotation(user, summary) ? (
+            {issuedNotice && canCreateDepositNoticeFromQuotation(user, summary) ? (
+              <p className="text-sm text-text-muted">
+                ดีลนี้ออกใบแจ้งยอดเงินรับมัดจำแล้ว —{' '}
+                <Link to={`/tickets/${summary.ticketId}/deposit`} className="text-info underline">
+                  เปิดเลขที่ {issuedNotice.docNumber}
+                </Link>
+              </p>
+            ) : null}
+            {canCreateDepositNoticeFromQuotation(user, summary, dealQuotationForPr, depositNoticesQuery.data) ? (
               <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3">
                 <p className="text-sm text-text-muted">
                   ยืนยันคำสั่งซื้อแล้ว — สร้างใบแจ้งยอดเงินรับมัดจำจากใบเสนอราคาที่ลูกค้ายอมรับ (แก้ไข/ออกเอกสารในหน้าใบแจ้งยอดเงินรับมัดจำ)
@@ -4332,10 +4352,13 @@ export function PricingRequestDetailPage({ user, showToast }) {
             {confirmOrderBlockedReason(summary) ? (
               <p className="text-sm text-danger" role="alert">{confirmOrderBlockedReason(summary)}</p>
             ) : null}
-            {!canConfirmOrder(user, summary) && !canCreateDepositNoticeFromQuotation(user, summary) ? (
+            {!canConfirmOrder(user, summary) && !canCreateDepositNoticeFromQuotation(user, summary, dealQuotationForPr) ? (
               <p className="text-sm text-text-muted">
                 {summary.orderConfirmedAt
-                  ? `ยืนยันคำสั่งซื้อแล้วเมื่อ ${formatThaiDate(summary.orderConfirmedAt)} — ดูใบแจ้งยอดเงินรับมัดจำได้ที่หน้าดีล`
+                  ? `ยืนยันคำสั่งซื้อแล้วเมื่อ ${formatThaiDate(summary.orderConfirmedAt)}${
+                    dealQuotationForPr?.docStatus === 'ACCEPTED' && dealQuotationForPr.depositPercent === 0
+                      ? ' — ใบเสนอราคานี้ไม่รับมัดจำ จึงไม่มีใบแจ้งยอดเงินรับมัดจำ'
+                      : ' — ดูใบแจ้งยอดเงินรับมัดจำได้ที่หน้าดีล'}`
                   : 'ยืนยันคำสั่งซื้อได้เฉพาะเจ้าของดีล (sales)'}
               </p>
             ) : null}
@@ -4343,6 +4366,13 @@ export function PricingRequestDetailPage({ user, showToast }) {
         </Panel>
       ) : null}
 
+      <ConfirmOrderDialog
+        open={confirmingOrder}
+        number={summary?.requestCode}
+        busy={confirmOrder.isPending}
+        onCancel={() => setConfirmingOrder(false)}
+        onConfirm={() => { setConfirmingOrder(false); confirmOrder.mutate(); }}
+      />
       <ConfirmDialog
         open={Boolean(confirmAction)}
         title={confirmAction?.type === 'approveDecision' ? 'อนุมัติราคาขาย'

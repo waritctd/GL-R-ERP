@@ -217,10 +217,25 @@ public class OrderConfirmationService {
         // customer-confirmed yet; a later revision's own confirmOrder call only needs the
         // reconciliation (already done above) and its own event/notification below.
         TicketSummaryDto currentTicketState = requireTicketSummary(locked.ticketId());
-        TicketDto ticketDto = currentTicketState.paymentStatus() == null
-            ? ticketService.confirmCustomer(locked.ticketId(), actor)
-            : tickets.findById(locked.ticketId())
+        TicketDto ticketDto;
+        if (currentTicketState.paymentStatus() == null) {
+            // The accepted new-engine quotation's percent decides the deposit policy (owner ruling
+            // 2026-10-22, see TicketService#applyCustomerConfirmation; a blank percent means 30, ruling 10-23).
+            // A legacy quotation carries none, so the policy is left alone.
+            th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto confirmed = dealQuotations == null
+                ? null
+                : dealQuotations.findAcceptedForPricingRequest(pricingRequestId)
+                    .flatMap(dealQuotations::findById)
+                    .orElse(null);
+            ticketDto = ticketService.confirmCustomer(locked.ticketId(),
+                confirmed == null ? null : confirmed.number(),
+                confirmed == null ? null
+                    : th.co.glr.hr.dealquotation.DealQuotationRenderAdapter.effectiveDepositPercent(confirmed.depositPercent()),
+                actor);
+        } else {
+            ticketDto = tickets.findById(locked.ticketId())
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
+        }
 
         pricingRequests.addEvent(pricingRequestId, locked.ticketId(), actor.id(), actor.name(),
             PricingRequestEventKind.ORDER_CONFIRMED, locked.status(), locked.status(),
@@ -472,9 +487,9 @@ public class OrderConfirmationService {
                 throw new ApiException(HttpStatus.CONFLICT, "ยังไม่มีใบเสนอราคาที่ลูกค้ายอมรับสำหรับคำขอราคานี้");
             }
             // A zero-deposit quotation (DealQuotationService#isZeroDeposit: "ไม่รับมัดจำ", paid in
-            // full under fullPaymentTerm) has nothing to bill. Refuse here rather than draft a
-            // 0-baht notice: DepositNoticeService#issue reads the ticket's deposit_policy, which no
-            // path syncs from the quotation, so nothing downstream would stop that draft.
+            // full under fullPaymentTerm) has nothing to bill. Since #1173 the confirmation above
+            // moves such a deal to NOT_REQUIRED and createDraftFromQuotation refuses a bypass policy;
+            // this check stays for deals confirmed before that sync existed (still REQUIRED).
             if (Integer.valueOf(0).equals(newEngine.depositPercent())) {
                 throw DepositNoticeService.zeroDepositRefusal(newEngine.number());
             }

@@ -4,12 +4,15 @@ import { Link, useNavigate } from 'react-router-dom';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
+import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { depositNoticeStatusLabel, depositPolicyLabel } from '../../utils/format.js';
 import { downloadBlob } from '../../utils/download.js';
 import { canCreateDepositNoticeFromQuotation } from '../pricingRequests/pricingRequestMeta.js';
+import { newestQuotationByRequest } from '../quotations/quotationMeta.js';
+import { DepositIssueSummary } from '../deposits/DepositNoticePage.jsx';
 import { buttonVariants } from '../../components/common/Button.jsx';
 import { cn } from '../../utils/cn.js';
 
@@ -53,6 +56,21 @@ function pickAcceptedPricingRequest(pricingRequests = []) {
     .sort((a, b) => b.id - a.id)[0] ?? null;
 }
 
+/** The ticket's deposit-notice list: one key + fetcher shared by this panel and TicketDetailPage's main button. */
+export const depositNoticesQueryOptions = (ticketId) => ({
+  queryKey: queryKeys.depositNotices(ticketId),
+  queryFn: () => api.depositNotices.listByTicket(ticketId).then((r) => r.depositNotices ?? []),
+});
+
+/** The ticket's DRAFT deposit notice, else its latest ISSUED one, else null (shared with TicketDetailPage's main button). */
+export function pickDepositNotice(docs = []) {
+  const draft = docs.find((d) => d.status === 'DRAFT');
+  const latestIssued = [...docs]
+    .filter((d) => d.status === 'ISSUED')
+    .sort((a, b) => (b.version ?? 0) - (a.version ?? 0))[0];
+  return draft ?? latestIssued ?? null;
+}
+
 /**
  * "มัดจำ" (Phase 3 Slice S3 — see
  * docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md): one
@@ -86,7 +104,9 @@ function pickAcceptedPricingRequest(pricingRequests = []) {
  * its own "ยืนยันคำสั่งซื้อ..." box. Both panels can show that specific
  * create action at once until a notice exists for this deal.
  */
-export function DealDepositPanel({ user, ticketId, summary, availableActions = [], pricingRequests = [], showToast }) {
+// `mainButtonCreatesNotice`: the deal page's main button already offers สร้างใบแจ้งยอดเงินรับมัดจำ
+// (owner rulings 2026-10-28), so this panel carries no second copy of it.
+export function DealDepositPanel({ user, ticketId, summary, availableActions = [], pricingRequests = [], dealQuotations = [], showToast, mainButtonCreatesNotice = false }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const role = user?.role;
@@ -100,6 +120,7 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
   const [policyReason, setPolicyReason] = useState('');
   const [downloadingFormat, setDownloadingFormat] = useState(null);
   const [previewHtml, setPreviewHtml] = useState('');
+  const [confirmIssue, setConfirmIssue] = useState(false);
 
   const st = summary?.status;
   const ps = summary?.paymentStatus;
@@ -109,19 +130,8 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
 
   const pr = useMemo(() => pickAcceptedPricingRequest(pricingRequests), [pricingRequests]);
 
-  const depositNoticesQuery = useQuery({
-    queryKey: queryKeys.depositNotices(ticketId),
-    queryFn: () => api.depositNotices.listByTicket(ticketId).then((r) => r.depositNotices ?? []),
-    enabled: !!ticketId,
-  });
-  const doc = useMemo(() => {
-    const docs = depositNoticesQuery.data ?? [];
-    const draft = docs.find((d) => d.status === 'DRAFT');
-    const latestIssued = [...docs]
-      .filter((d) => d.status === 'ISSUED')
-      .sort((a, b) => (b.version ?? 0) - (a.version ?? 0))[0];
-    return draft ?? latestIssued ?? null;
-  }, [depositNoticesQuery.data]);
+  const depositNoticesQuery = useQuery({ ...depositNoticesQueryOptions(ticketId), enabled: !!ticketId });
+  const doc = useMemo(() => pickDepositNotice(depositNoticesQuery.data), [depositNoticesQuery.data]);
 
   function invalidateAfterDepositChange() {
     queryClient.invalidateQueries({ queryKey: queryKeys.depositNotices(ticketId) });
@@ -157,13 +167,18 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
   });
 
   const issueMutation = useMutation({
-    mutationFn: () => api.depositNotices.issue(doc.id),
+    // The dialog shows the amounts as listed; the stamp makes the server refuse if the draft moved on since.
+    mutationFn: () => api.depositNotices.issue(doc.id, { expectedUpdatedAt: doc.updatedAt ?? null }),
     onSuccess: (res) => {
       showToast?.('success', `ออกเอกสาร ${res.depositNotice.docNumber} แล้ว`);
       setPreviewHtml('');
+      setConfirmIssue(false);
       invalidateAfterDepositChange();
     },
-    onError: (err) => showToast?.('error', err.message || 'ออกเอกสารไม่สำเร็จ'),
+    onError: (err) => {
+      setConfirmIssue(false);
+      showToast?.('error', err.message || 'ออกเอกสารไม่สำเร็จ');
+    },
   });
 
   const previewMutation = useMutation({
@@ -207,7 +222,7 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
   // Rule 4's cutoff), but the role/ownership check is kept here too, defense-in-depth, so this
   // control can never render editable off a stale/misconfigured availableActions response.
   const canSetPolicy = hasAction('WAIVE_DEPOSIT') && (role === 'sales_manager' || (isSales && isOwner));
-  const canCreateNotice = pr != null && canCreateDepositNoticeFromQuotation(user, pr);
+  const canCreateNotice = pr != null && canCreateDepositNoticeFromQuotation(user, pr, newestQuotationByRequest(dealQuotations).get(pr.id) ?? null, depositNoticesQuery.data);
   const canManageThisNotice = isSales && isOwner;
   // Legacy dual-track creation path (ticket.confirmCustomer → ISSUE_DEPOSIT_NOTICE),
   // independent of the PricingRequest/CustomerQuotation chain above — mirrors the
@@ -298,11 +313,14 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
                   </>
                 ) : canManageThisNotice ? (
                   <Button type="button" variant="primary" disabled={issueMutation.isPending}
-                    onClick={() => issueMutation.mutate()} data-testid="deal-deposit-issue-notice">
+                    onClick={() => setConfirmIssue(true)} data-testid="deal-deposit-issue-notice">
                     ออกเอกสาร
                   </Button>
                 ) : null}
               </div>
+              {doc.status === 'ISSUED' ? (
+                <p className="text-xs text-text-muted">ดีลนี้ออกใบแจ้งยอดเงินรับมัดจำแล้ว — สร้างฉบับใหม่ไม่ได้</p>
+              ) : null}
               {previewHtml ? (
                 <div className="flex flex-col gap-1">
                   <div className="flex items-center justify-between">
@@ -314,9 +332,14 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
                 </div>
               ) : null}
             </>
+          ) : mainButtonCreatesNotice ? (
+            <p className="text-xs text-text-muted">ลูกค้ายืนยันคำสั่งซื้อแล้ว — กดปุ่ม &quot;สร้างใบแจ้งยอดเงินรับมัดจำ&quot; ด้านบน</p>
           ) : canCreateNotice ? (
             <div className="flex flex-col gap-2">
               <p className="text-xs text-text-muted">ลูกค้ายืนยันคำสั่งซื้อแล้ว — สร้างใบแจ้งยอดเงินรับมัดจำจากใบเสนอราคาที่ยอมรับได้เลย</p>
+              {/* The backend picks a new notice's % and ignores a client value
+                  (DepositNoticeService.createDraftFromQuotation; findGoverningQuotation, #1170), so no
+                  % input here. Sales changes the % on the draft (DepositNoticePage, ruling 2026-10-23). */}
               <Button type="button" variant="primary" className="self-start" disabled={createNoticeMutation.isPending}
                 onClick={() => createNoticeMutation.mutate()} data-testid="deal-deposit-create-notice">
                 สร้างใบแจ้งยอดเงินรับมัดจำ
@@ -366,6 +389,21 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
           )}
         </div>
       </div>
+
+      {doc ? (
+        <ConfirmDialog
+          open={confirmIssue}
+          title="ยืนยันการออกเอกสาร"
+          message={(
+            <DepositIssueSummary customerName={doc.customerName} depositPercent={doc.depositPercent}
+              deposit={doc.depositAmount} vatPercent={doc.vatPercent} vat={doc.vatAmount} total={doc.totalPayable} />
+          )}
+          confirmLabel="ออกเอกสาร"
+          busy={issueMutation.isPending}
+          onCancel={() => setConfirmIssue(false)}
+          onConfirm={() => issueMutation.mutate()}
+        />
+      ) : null}
 
       {policyOpen ? (
         <Modal

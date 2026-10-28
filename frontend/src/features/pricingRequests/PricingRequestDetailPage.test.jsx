@@ -75,6 +75,10 @@ vi.mock('../../api/index.js', () => ({
       confirmOrder: vi.fn(),
       createDepositNoticeFromQuotation: vi.fn(),
     },
+    // Step 6: the deal's deposit notices, so the create action is not offered once one is ISSUED.
+    depositNotices: {
+      listByTicket: vi.fn(),
+    },
     // CR-1 (GLA-167): lead-time change requests (R2 / R10).
     leadTimeChanges: {
       listForPricingRequest: vi.fn(),
@@ -328,6 +332,7 @@ function setApiDefaults() {
     result: { ticket: { summary: { id: 701 } }, pricingRequest: { id: 501, orderConfirmedAt: '2026-07-21T00:00:00Z' } },
   });
   api.pricingRequests.createDepositNoticeFromQuotation.mockResolvedValue({ depositNotice: { id: 9901, status: 'DRAFT' } });
+  api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [] });
   api.catalog.prices.mockResolvedValue({ items: [] });
   // B6 (GLA-135): a small real-looking factory roster — enough for the picker + duplicate-name
   // tests below without pulling in the full catalog fixture this file doesn't otherwise need.
@@ -3523,6 +3528,23 @@ describe('PricingRequestDetailPage Step 5: Customer Decision and Commercial Revi
 });
 
 describe('PricingRequestDetailPage Step 6: Deposit, Payment, and Order Confirmation', () => {
+  // Owner ruling 2026-10-23: one deposit notice per deal. Once one is ISSUED the create action is
+  // gone (the backend 409s it) and the block says which notice exists and where to open it.
+  it('replaces "สร้างใบแจ้งยอดเงินรับมัดจำ" with a pointer to the deal\'s ISSUED notice', async () => {
+    api.depositNotices.listByTicket.mockResolvedValue({
+      depositNotices: [{ id: 77, status: 'ISSUED', docNumber: 'GLRD69001', version: 1 }],
+    });
+    const request = buildRequest({ summary: { status: 'QUOTATION_ACCEPTED', orderConfirmedAt: '2026-07-21T00:00:00Z' } });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+
+    const link = await screen.findByRole('link', { name: /GLRD69001/ });
+    expect(link.getAttribute('href')).toBe(`/tickets/${request.summary.ticketId}/deposit`);
+    expect(screen.getByText(/ออกใบแจ้งยอดเงินรับมัดจำแล้ว/)).not.toBeNull();
+    expect(screen.queryByRole('button', { name: 'สร้างใบแจ้งยอดเงินรับมัดจำ' })).toBeNull();
+    expect(api.depositNotices.listByTicket).toHaveBeenCalledWith(request.summary.ticketId);
+  });
+
   it('offers "ยืนยันคำสั่งซื้อ" to the owning sales rep once QUOTATION_ACCEPTED, before the bridge has run', async () => {
     const request = buildRequest({ summary: { status: 'QUOTATION_ACCEPTED', orderConfirmedAt: null } });
     renderDetailPage({ user: salesOwner, request });
@@ -3532,10 +3554,19 @@ describe('PricingRequestDetailPage Step 6: Deposit, Payment, and Order Confirmat
     expect(screen.queryByRole('button', { name: 'สร้างใบแจ้งยอดเงินรับมัดจำ' })).toBeNull();
     fireEvent.click(button);
 
-    await waitFor(() => expect(api.pricingRequests.confirmOrder).toHaveBeenCalledWith(
+    // SK-02: the confirm is irreversible -> a dialog first; cancel sends nothing, confirm sends once.
+    const dialog = await screen.findByRole('dialog', { name: 'ยืนยันคำสั่งซื้อ' });
+    expect(api.pricingRequests.confirmOrder).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'ยกเลิก' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'ยืนยันคำสั่งซื้อ' })).toBeNull());
+    expect(api.pricingRequests.confirmOrder).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole('button', { name: 'ยืนยันคำสั่งซื้อ' }));
+    fireEvent.click(within(await screen.findByRole('dialog', { name: 'ยืนยันคำสั่งซื้อ' })).getByRole('button', { name: 'ยืนยันคำสั่งซื้อ' }));
+    await waitFor(() => expect(api.pricingRequests.confirmOrder).toHaveBeenCalledTimes(1));
+    expect(api.pricingRequests.confirmOrder).toHaveBeenCalledWith(
       request.summary.id,
       expect.objectContaining({ clientRequestId: expect.any(String) }),
-    ));
+    );
   });
 
   it('offers "สร้างใบแจ้งยอดเงินรับมัดจำ" (not the confirm button) once the bridge has already run', async () => {
@@ -3552,6 +3583,37 @@ describe('PricingRequestDetailPage Step 6: Deposit, Payment, and Order Confirmat
     await waitFor(() => expect(api.pricingRequests.createDepositNoticeFromQuotation).toHaveBeenCalledWith(
       request.summary.id, {},
     ));
+  });
+
+  // PR #1173 review F4: a ไม่รับมัดจำ (0%) accepted quotation has no deposit, and the server 409s
+  // the draft, so the button is not offered. Waits for the quotation itself to render first, so the
+  // absence below is not just "the query has not resolved yet".
+  it('hides "สร้างใบแจ้งยอดเงินรับมัดจำ" when the accepted quotation says ไม่รับมัดจำ (0%)', async () => {
+    const accepted = { id: 9102, number: 'QT-2026-0102-1', docStatus: 'ACCEPTED', depositPercent: 0 };
+    api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: accepted });
+    const request = buildRequest({ summary: { status: 'QUOTATION_ACCEPTED', orderConfirmedAt: '2026-07-21T00:00:00Z' } });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+    await screen.findByText(accepted.number);
+
+    expect(screen.queryByRole('button', { name: 'สร้างใบแจ้งยอดเงินรับมัดจำ' })).toBeNull();
+  });
+
+  // Owner ruling 2026-10-23: one deposit notice per deal. Once one is ISSUED the create action is
+  // gone (the backend 409s it) and the block says which notice exists and where to open it.
+  it('replaces "สร้างใบแจ้งยอดเงินรับมัดจำ" with a pointer to the deal\'s ISSUED notice', async () => {
+    api.depositNotices.listByTicket.mockResolvedValue({
+      depositNotices: [{ id: 77, status: 'ISSUED', docNumber: 'GLRD69001', version: 1 }],
+    });
+    const request = buildRequest({ summary: { status: 'QUOTATION_ACCEPTED', orderConfirmedAt: '2026-07-21T00:00:00Z' } });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+
+    const link = await screen.findByRole('link', { name: /GLRD69001/ });
+    expect(link.getAttribute('href')).toBe(`/tickets/${request.summary.ticketId}/deposit`);
+    expect(screen.getByText(/ออกใบแจ้งยอดเงินรับมัดจำแล้ว/)).not.toBeNull();
+    expect(screen.queryByRole('button', { name: 'สร้างใบแจ้งยอดเงินรับมัดจำ' })).toBeNull();
+    expect(api.depositNotices.listByTicket).toHaveBeenCalledWith(request.summary.ticketId);
   });
 
   it('never shows either Step 6 button to CEO or Import — read-only', async () => {
