@@ -7,6 +7,7 @@ import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
+import { ConfirmOrderDialog } from '../quotations/ConfirmOrderDialog.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
@@ -22,7 +23,7 @@ import {
   canManageCustomerQuotation, canRecordCustomerQuotationOutcome, canViewCustomerQuotation,
   isCustomerQuotationEditable, pricingRequestRecipientLabel,
 } from '../pricingRequests/pricingRequestMeta.js';
-import { acceptOutcomeConfirmCopy, CONFIRM_ORDER_FROM_QUOTATION_COPY, dealQuotationStatusLabel } from '../quotations/quotationMeta.js';
+import { acceptOutcomeConfirmCopy, dealQuotationStatusLabel } from '../quotations/quotationMeta.js';
 import { buttonVariants } from '../../components/common/Button.jsx';
 
 function generateClientRequestId() {
@@ -311,16 +312,9 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
         ) : null}
       </div>
 
-      <ConfirmDialog
+      <ConfirmOrderDialog
         open={confirmingOrder}
-        title="ยืนยันคำสั่งซื้อ"
-        message={(
-          <p className="confirm-dialog-message m-0 leading-normal text-text-secondary">
-            {CONFIRM_ORDER_FROM_QUOTATION_COPY.lead(current?.number)} <strong>{CONFIRM_ORDER_FROM_QUOTATION_COPY.stage}</strong>
-            {' '}{CONFIRM_ORDER_FROM_QUOTATION_COPY.tail}
-          </p>
-        )}
-        confirmLabel="ยืนยันคำสั่งซื้อ"
+        number={current?.number}
         busy={confirmOrder.isPending}
         onCancel={() => setConfirmingOrder(false)}
         onConfirm={() => { setConfirmingOrder(false); confirmOrder.mutate(); }}

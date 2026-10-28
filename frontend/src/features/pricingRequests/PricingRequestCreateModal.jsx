@@ -319,6 +319,8 @@ function itemFromExisting(item) {
     roundToFullBox: item?.roundToFullBox !== false,
     originCountry: item?.originCountry ?? '',
     stockSource: item?.stockSource ?? null,
+    // remembered so un-ticking then re-ticking จากสต็อก restores the loaded value (IN_TRANSIT) instead of IN_THAILAND
+    loadedStockSource: item?.stockSource ?? null,
     originCountryOther: item?.originCountryOther ?? null,
     leadTimeMinDays: item?.leadTimeMinDays ?? null,
     leadTimeMaxDays: item?.leadTimeMaxDays ?? null,
@@ -1091,7 +1093,7 @@ export function PricingRequestCreateModal({
                       </FormField>
                       <label className="col-span-2 flex items-center gap-2 text-sm font-bold text-text-secondary">
                         <input type="checkbox" checked={Boolean(row.stockSource)}
-                          onChange={(e) => updateItem(rowIndex, { stockSource: e.target.checked ? 'IN_THAILAND' : null })} />
+                          onChange={(e) => updateItem(rowIndex, { stockSource: e.target.checked ? (row.loadedStockSource ?? 'IN_THAILAND') : null })} />
                         จากสต็อก
                       </label>
                     </div>

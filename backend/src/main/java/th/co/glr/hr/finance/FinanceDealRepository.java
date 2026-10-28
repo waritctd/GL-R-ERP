@@ -35,15 +35,13 @@ public class FinanceDealRepository {
             SELECT q.quotation_id, q.number, q.doc_status, q.total_amount, q.currency,
                    q.issued_at, q.accepted_at, q.origin, q.pricing_request_id
               FROM sales.quotation q
-             WHERE q.ticket_id = :id AND (q.doc_status IN ('ACCEPTED', 'ISSUED', 'SENT')
-                   -- QA-03: same rule as TicketRepository.answeredQuotationPredicate (confirmed DEAL_DIRECT stays APPROVED)
-                   OR (q.doc_status = 'APPROVED' AND q.origin = 'DEAL_DIRECT'
-                       AND (SELECT tp.payment_status FROM sales.ticket tp WHERE tp.ticket_id = q.ticket_id) IS NOT NULL))
+             WHERE q.ticket_id = :id AND (ANSWERED OR q.doc_status IN ('ISSUED', 'SENT'))
              ORDER BY CASE q.doc_status WHEN 'ACCEPTED' THEN 0 WHEN 'APPROVED' THEN 1 ELSE 2 END,
                       CASE q.recipient_type WHEN 'BUYER' THEN 0 WHEN 'OWNER' THEN 1 ELSE 2 END,
                       q.accepted_at DESC NULLS LAST, q.issued_at DESC, q.quotation_id DESC
              LIMIT 1
-            """, Map.of("id", ticketId), (rs, n) -> new QuotationHeader(
+            """.replace("ANSWERED", th.co.glr.hr.ticket.TicketRepository.ANSWERED_QUOTATION_SQL),
+            Map.of("id", ticketId), (rs, n) -> new QuotationHeader(
                 rs.getLong("quotation_id"), rs.getString("number"), rs.getString("doc_status"),
                 rs.getBigDecimal("total_amount"), rs.getString("currency"),
                 rs.getTimestamp("issued_at") == null ? null : rs.getTimestamp("issued_at").toInstant(),

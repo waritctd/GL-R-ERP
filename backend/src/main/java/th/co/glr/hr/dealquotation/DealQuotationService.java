@@ -2176,6 +2176,12 @@ public class DealQuotationService {
         tickets.addEventWithDocument(ticketId, actor.id(), actor.name(),
             TicketEventKind.DEAL_PROMOTED_FROM_QUOTATION, TicketStatus.DRAFT, TicketStatus.QUOTATION_ISSUED,
             "ยืนยันคำสั่งซื้อจากใบเสนอราคา " + fresh.number(), RelatedDocumentType.QUOTATION, quotationId);
+        // The agreed order is this quotation: the deal's other open direct quotations can never be submitted or
+        // approved now (see requireNoOtherDirectQuotationAfterConfirm), so cancel them rather than strand them.
+        for (String number : quotations.cancelOtherOpenDirectQuotations(ticketId, quotationId)) {
+            tickets.addEvent(ticketId, actor.id(), actor.name(), TicketEventKind.CANCELLED, null, null,
+                "ยกเลิกใบเสนอราคา " + number + " อัตโนมัติ เพราะยืนยันคำสั่งซื้อจากใบเสนอราคา " + fresh.number());
+        }
         // The quotation is the agreed order, so it REPLACES whatever preliminary lines the deal
         // carried. Safe at this point: the deal is still pre-order (status was draft, so no delivery
         // or stock reservation exists — both key on quotation_issued or later), and the only other

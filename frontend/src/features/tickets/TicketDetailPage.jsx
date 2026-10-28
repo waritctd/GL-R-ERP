@@ -18,6 +18,7 @@ import { queryKeys } from '../../api/queryKeys.js';
 import { Breadcrumbs } from '../../components/common/Breadcrumbs.jsx';
 import { Button, buttonVariants } from '../../components/common/Button.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
+import { ConfirmOrderDialog } from '../quotations/ConfirmOrderDialog.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { fieldErrorId } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
@@ -54,7 +55,7 @@ import { DealMoneyTimeline } from './DealMoneyTimeline.jsx';
 import { DealRemainingInvoiceCard } from './DealRemainingInvoiceCard.jsx';
 import { DealQuotationPanel } from './DealQuotationPanel.jsx';
 import {
-  canReviseDealQuotation, orderConfirmationOf, canViewDealQuotation, CONFIRM_ORDER_FROM_QUOTATION_COPY, newestQuotationByRequest,
+  canReviseDealQuotation, orderConfirmationOf, canViewDealQuotation, newestQuotationByRequest,
 } from '../quotations/quotationMeta.js';
 import { DealStagePanel } from './DealStagePanel.jsx';
 import { DealStateHeader } from './DealStateHeader.jsx';
@@ -3063,16 +3064,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       {/* Slice 2 §E — the sticky "ยืนยันคำสั่งซื้อ" of an APPROVED direct quotation. The copy is the
           quotation editor's own (quotationMeta's CONFIRM_ORDER_FROM_QUOTATION_COPY), so the two
           doors to the same irreversible act say the same thing. */}
-      <ConfirmDialog
+      <ConfirmOrderDialog
         open={confirm?.kind === 'confirmOrderDirect'}
-        title="ยืนยันคำสั่งซื้อ"
-        message={(
-          <p className="confirm-dialog-message m-0 leading-normal text-text-secondary">
-            {CONFIRM_ORDER_FROM_QUOTATION_COPY.lead(confirm?.number)} <strong>{CONFIRM_ORDER_FROM_QUOTATION_COPY.stage}</strong>
-            {' '}{CONFIRM_ORDER_FROM_QUOTATION_COPY.tail}
-          </p>
-        )}
-        confirmLabel="ยืนยันคำสั่งซื้อ"
+        number={confirm?.number}
         cancelLabel="ปิด"
         busy={confirmOrderDirectMutation.isPending}
         onConfirm={() => confirmOrderDirectMutation.mutate(confirm.quotationId)}

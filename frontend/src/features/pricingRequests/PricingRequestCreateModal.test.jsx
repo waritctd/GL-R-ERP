@@ -682,6 +682,27 @@ describe('PricingRequestCreateModal edit mode (Fix 2)', () => {
     expect(onCreated).toHaveBeenCalledTimes(1);
   });
 
+  // Review finding 3: the row remembers the stockSource it was loaded with, so un-ticking and re-ticking จากสต็อก
+  // restores IN_TRANSIT instead of silently turning it into IN_THAILAND. (PricingRequestItemRequest has no
+  // expectedArrivalDate, so the arrival date is not part of the item input and is not carried here.)
+  it('re-ticking จากสต็อก on a line loaded as IN_TRANSIT restores IN_TRANSIT', async () => {
+    const updateFn = vi.fn().mockResolvedValue({});
+    const initial = editInitialValue();
+    initial.items[0].stockSource = 'IN_TRANSIT';
+    render(
+      <PricingRequestCreateModal mode="edit" initialValue={initial} onClose={vi.fn()} onCreated={vi.fn()} updateFn={updateFn} />,
+    );
+    const box = screen.getByRole('checkbox', { name: /จากสต็อก/ });
+    expect(box.checked).toBe(true);
+    fireEvent.click(box);
+    fireEvent.click(box);
+
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
+
+    await waitFor(() => expect(updateFn).toHaveBeenCalledTimes(1));
+    expect(updateFn.mock.calls[0][1].items[0].stockSource).toBe('IN_TRANSIT');
+  });
+
   // Owner request 2026-09-30: the "เงื่อนไขสำหรับใบเสนอราคา" box is gone, but the header terms it
   // used to edit are still persisted on the wire — editing a draft that already carries them must
   // NOT null them just because there is no input anymore.

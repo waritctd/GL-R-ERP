@@ -88,6 +88,11 @@ class FinancePayableVatAndDueIntegrationTest extends FinanceDealTestBase {
     private long directApprovedDeal(String origin) {
         long ticketId = unconfirmedDirectApprovedDeal(origin);
         tickets.updatePaymentStatusUnchecked(ticketId, "CUSTOMER_CONFIRMED"); // confirm-order puts the deal on the payment track
+        // ...and writes the per-quotation fact the payable rule keys on: the promotion event naming the quotation
+        long quotationId = jdbc.queryForObject("SELECT quotation_id FROM sales.quotation WHERE ticket_id = :id",
+            new MapSqlParameterSource("id", ticketId), Long.class);
+        tickets.addEventWithDocument(ticketId, salesRepId, "ทดสอบ", "DEAL_PROMOTED_FROM_QUOTATION", null, null,
+            "ยืนยันคำสั่งซื้อ", "QUOTATION", quotationId);
         return ticketId;
     }
 
@@ -160,6 +165,28 @@ class FinancePayableVatAndDueIntegrationTest extends FinanceDealTestBase {
         assertThat(service.get(ticketId, accountUser).documents().acceptedQuotation().number())
             .isEqualTo("QT-LK-" + ticketId);
         assertThat(summary(ticketId).paymentDueBasis()).isEqualTo("CREDIT_FROM_DELIVERY");
+    }
+
+    /** Review finding 5+6: the fact is per QUOTATION -- a deal on the payment track whose promotion event names a
+     * DIFFERENT quotation must not count this APPROVED direct one. */
+    @Test
+    void approvedDirectQuotation_isNotPayable_whenThePromotionEventNamesAnotherQuotation() {
+        long ticketId = createTicket("PROCUREMENT");
+        // "other" first (createQuotation supersedes earlier live rows), then the direct one, so the direct stays APPROVED
+        long other = tickets.createQuotation(ticketId, "QT-OTHER-" + ticketId, salesRepId, new BigDecimal("1.00")).id();
+        jdbc.update("UPDATE sales.quotation SET doc_status = 'CANCELLED' WHERE quotation_id = :q",
+            new MapSqlParameterSource("q", other)); // out of the payable set on its own
+        long direct = insertAcceptedQuotation(ticketId, "QT-DD-" + ticketId, new BigDecimal("100000.00"));
+        jdbc.update("UPDATE sales.quotation SET origin = 'DEAL_DIRECT', doc_status = 'APPROVED' WHERE quotation_id = :q",
+            new MapSqlParameterSource("q", direct));
+        tickets.updatePaymentStatusUnchecked(ticketId, "CUSTOMER_CONFIRMED");
+        tickets.addEventWithDocument(ticketId, salesRepId, "ทดสอบ", "DEAL_PROMOTED_FROM_QUOTATION", null, null,
+            "ยืนยันคำสั่งซื้อ", "QUOTATION", other);
+        assertThat(jdbc.queryForObject("SELECT doc_status FROM sales.quotation WHERE quotation_id = :q",
+            new MapSqlParameterSource("q", direct), String.class)).isEqualTo("APPROVED"); // not vacuous: it is still live
+
+        assertThat(tickets.payableAmount(ticketId)).isEqualByComparingTo("0");
+        assertThat(service.get(ticketId, accountUser).documents().acceptedQuotation()).isNull();
     }
 
     @Test

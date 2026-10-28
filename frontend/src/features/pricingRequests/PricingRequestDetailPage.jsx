@@ -9,6 +9,7 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { Button } from '../../components/common/Button.jsx';
 import { CollapsibleSection } from '../../components/common/CollapsibleSection.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
+import { ConfirmOrderDialog } from '../quotations/ConfirmOrderDialog.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
 import { InfoTip } from '../../components/common/InfoTip.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
@@ -73,7 +74,7 @@ import {
 import { useUnitBasisCatalog } from './unitBasisCatalog.js';
 import { buttonVariants } from '../../components/common/Button.jsx';
 import { cn } from '../../utils/cn.js';
-import { acceptOutcomeConfirmCopy, CONFIRM_ORDER_FROM_QUOTATION_COPY, newestQuotationByRequest, PRICE_MODE_OPTIONS } from '../quotations/quotationMeta.js';
+import { acceptOutcomeConfirmCopy, newestQuotationByRequest, PRICE_MODE_OPTIONS } from '../quotations/quotationMeta.js';
 import { SearchableCombobox } from '../../components/common/SearchableCombobox.jsx';
 // B6 (GLA-135): reuses the catalog page's own add-factory dialog rather than a second, drifting
 // copy of the same five fields + validation — see ImportFactoryPicker's own comment below.
@@ -4365,16 +4366,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
         </Panel>
       ) : null}
 
-      <ConfirmDialog
+      <ConfirmOrderDialog
         open={confirmingOrder}
-        title="ยืนยันคำสั่งซื้อ"
-        message={(
-          <p className="confirm-dialog-message m-0 leading-normal text-text-secondary">
-            {CONFIRM_ORDER_FROM_QUOTATION_COPY.lead(summary?.requestCode)} <strong>{CONFIRM_ORDER_FROM_QUOTATION_COPY.stage}</strong>
-            {' '}{CONFIRM_ORDER_FROM_QUOTATION_COPY.tail}
-          </p>
-        )}
-        confirmLabel="ยืนยันคำสั่งซื้อ"
+        number={summary?.requestCode}
         busy={confirmOrder.isPending}
         onCancel={() => setConfirmingOrder(false)}
         onConfirm={() => { setConfirmingOrder(false); confirmOrder.mutate(); }}

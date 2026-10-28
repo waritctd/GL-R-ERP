@@ -1418,6 +1418,18 @@ public class DealQuotationRepository {
                 rs.getLong("ticket_id"), rs.getString("number")));
     }
 
+    /** Owner review 2026-10-28: confirming an order from {@code keepId} cancels the deal's OTHER open DEAL_DIRECT
+     * quotations (DRAFT / PENDING_APPROVAL), which could otherwise never be submitted or approved again. Returns the
+     * cancelled numbers so the caller can log them. PRICING_REQUEST-origin rows are never touched. */
+    public List<String> cancelOtherOpenDirectQuotations(long ticketId, long keepId) {
+        return jdbc.queryForList("""
+            UPDATE sales.quotation SET doc_status = 'CANCELLED', updated_at = now()
+             WHERE ticket_id = :ticketId AND quotation_id <> :keepId AND origin = 'DEAL_DIRECT'
+               AND doc_status IN ('DRAFT', 'PENDING_APPROVAL')
+            RETURNING number
+            """, Map.of("ticketId", ticketId, "keepId", keepId), String.class);
+    }
+
     /** Compare-and-set DRAFT -> CANCELLED. */
     public int cancel(long quotationId) {
         return jdbc.update("""

@@ -478,6 +478,26 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
         assertThat(summary(deal).depositPolicy()).isEqualTo("REQUIRED");
     }
 
+    /** Review finding 2: confirming the order must not strand the deal's other open direct quotations. */
+    @Test
+    void confirmOrder_cancelsTheDealsOtherOpenDirectQuotations_andLeavesTheConfirmedOneAlone() {
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto v1 = approvedDirectQuotation(deal, salesActor);
+        DealQuotationDto clone = quotationService.createReorder(v1.id(), salesActor);          // DRAFT clone
+        DealQuotationDto pending = quotationService.createRevision(v1.id(), salesActor);        // revision ...
+        quotationService.update(pending.id(), zeroDepositDirectDraft(), salesActor);
+        quotationService.submit(pending.id(), salesActor);                                      // ... PENDING_APPROVAL
+        assertThat(quotationService.get(pending.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.PENDING_APPROVAL);
+
+        confirmer.confirmOrderFromDirectQuotation(v1.id(), salesActor);
+
+        assertThat(quotationService.get(v1.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.APPROVED);
+        assertThat(quotationService.get(clone.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.CANCELLED);
+        assertThat(quotationService.get(pending.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.CANCELLED);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sales.ticket_event WHERE ticket_id = :id AND kind = :k",
+            Map.of("id", deal, "k", TicketEventKind.CANCELLED), Integer.class)).isEqualTo(2);
+    }
+
     /** ...and before the order is confirmed the same revision still works. */
     @Test
     void unconfirmedApprovedDirectQuotation_canStillBeRevised() {

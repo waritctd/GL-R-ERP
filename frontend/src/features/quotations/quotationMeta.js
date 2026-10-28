@@ -168,8 +168,8 @@ export function canReviseDealQuotation(user, quotation, order) {
   return canEditDealQuotation(user, quotation) && quotation?.docStatus === 'APPROVED';
 }
 
-/** The deal's order-confirmation fact from its ticket events: the DEAL_PROMOTED_FROM_QUOTATION event names the
- * deal's order is confirmed. null when events are not loaded. */
+/** Whether the deal's order has been confirmed, read from its ticket events: true once a DEAL_PROMOTED_FROM_QUOTATION
+ * event exists. Returns null when the events are not loaded (unknown), which callers treat as "hide". */
 export function orderConfirmationOf(events) {
   if (!Array.isArray(events)) return null;
   const promoted = events.find((e) => e.kind === 'DEAL_PROMOTED_FROM_QUOTATION');

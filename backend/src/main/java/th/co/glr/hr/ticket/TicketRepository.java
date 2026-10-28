@@ -1695,15 +1695,17 @@ public class TicketRepository {
     }
 
     /**
-     * QA-03: a DEAL_DIRECT quotation confirmed via confirm-order stays APPROVED (it never reaches ACCEPTED), so
-     * it counts as the "answered" quotation -- but only once the order IS confirmed: confirm-order moves the
-     * ticket onto the payment track (payment_status non-null, CUSTOMER_CONFIRMED). An APPROVED, unconfirmed one
-     * is not payable. ACCEPTED still outranks it.
+     * QA-03, ONE rule for "the answered quotation" (payableAmountSelect, paymentTermsRowSql and
+     * {@code FinanceDealRepository#findPayableQuotation} all use it): ACCEPTED, or an APPROVED DEAL_DIRECT quotation
+     * that a DEAL_PROMOTED_FROM_QUOTATION event names -- confirm-order leaves a DEAL_DIRECT quotation APPROVED, and
+     * the event (related QUOTATION = q.quotation_id) is the per-quotation fact that its order was confirmed. An
+     * APPROVED, unconfirmed one is not payable. Table alias {@code q} must be sales.quotation.
      */
-    private static String answeredQuotationPredicate(String ticketIdRef) {
-        return "(q.doc_status = 'ACCEPTED' OR (q.doc_status = 'APPROVED' AND q.origin = 'DEAL_DIRECT'"
-            + " AND (SELECT tp.payment_status FROM sales.ticket tp WHERE tp.ticket_id = " + ticketIdRef + ") IS NOT NULL))";
-    }
+    public static final String ANSWERED_QUOTATION_SQL =
+        "(q.doc_status = 'ACCEPTED' OR (q.doc_status = 'APPROVED' AND q.origin = 'DEAL_DIRECT'"
+        + " AND EXISTS (SELECT 1 FROM sales.ticket_event pe WHERE pe.ticket_id = q.ticket_id"
+        + " AND pe.kind = '" + TicketEventKind.DEAL_PROMOTED_FROM_QUOTATION + "'"
+        + " AND pe.related_document_type = 'QUOTATION' AND pe.related_document_id = q.quotation_id)))";
 
     /**
      * SK-07 (owner ruling 2026-10-28): once a remaining invoice is ISSUED, what the customer owes follows the ISSUED
@@ -1797,7 +1799,7 @@ public class TicketRepository {
             )
             """.formatted(ticketIdRef)
             .replace("ISSUED_DOCUMENTS", inclVat ? issuedDocumentsPayable(ticketIdRef) : "")
-            .replace("ANSWERED", answeredQuotationPredicate(ticketIdRef))
+            .replace("ANSWERED", ANSWERED_QUOTATION_SQL)
             .replace("QUOTATION_AMOUNT", quotationAmount)
             .replace("ITEMS_AMOUNT", itemsAmount);
     }
@@ -1855,7 +1857,7 @@ public class TicketRepository {
                           WHERE dr.ticket_id = %1$s
                             AND (SELECT t2.fulfillment_status FROM sales.ticket t2 WHERE t2.ticket_id = %1$s)
                                 = 'FULLY_DELIVERED') dv
-            """.formatted(ticketIdRef).replace("ANSWERED", answeredQuotationPredicate(ticketIdRef));
+            """.formatted(ticketIdRef).replace("ANSWERED", ANSWERED_QUOTATION_SQL);
     }
 
     /** The derived due DATE as a scalar subquery (NULL when there is none) -- the list-scope predicate's twin. */
@@ -2274,13 +2276,6 @@ public class TicketRepository {
             """, Map.of("id", ticketId));
     }
 
-    /**
-     * GLA-136 — has this deal's order already been confirmed from a direct quotation
-     * ({@link TicketEventKind#DEAL_PROMOTED_FROM_QUOTATION}, written exactly once per confirmation by
-     * {@code DealQuotationService#confirmOrderFromDirectQuotation})? The discriminator for that
-     * method's idempotent replay: if the event exists, a replay returns the current state and
-     * writes nothing.
-     */
     /** The DEAL_PROMOTED_FROM_QUOTATION event names the quotation whose confirm-order made the deal an order. */
     public boolean isOrderConfirmedFromQuotation(long ticketId, long quotationId) {
         Boolean value = jdbc.queryForObject("""
@@ -2292,6 +2287,13 @@ public class TicketRepository {
         return Boolean.TRUE.equals(value);
     }
 
+    /**
+     * GLA-136 — has this deal's order already been confirmed from a direct quotation
+     * ({@link TicketEventKind#DEAL_PROMOTED_FROM_QUOTATION}, written exactly once per confirmation by
+     * {@code DealQuotationService#confirmOrderFromDirectQuotation})? The discriminator for that
+     * method's idempotent replay: if the event exists, a replay returns the current state and
+     * writes nothing.
+     */
     public boolean hasPromotionFromQuotationEvent(long ticketId) {
         Boolean value = jdbc.queryForObject("""
             SELECT EXISTS(SELECT 1 FROM sales.ticket_event
