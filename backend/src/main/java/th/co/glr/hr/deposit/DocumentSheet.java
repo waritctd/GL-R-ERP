@@ -321,6 +321,10 @@ final class DocumentSheet {
         sh.getFooter().setCenter("หน้า &P/&N");
 
         int zoom = fitZoom(sh);
+        // An explicit zoom, not fit-to-pages: CI's LibreOffice (Ubuntu apt) reads fitHeight=0 as "one page"
+        // and squeezed a 40-item document onto a single page. A fixed scale keeps the row breaks below.
+        sh.setFitToPage(false);
+        ps.setScale((short) zoom);
         int bodyHmm = LibreOfficeMetrics.A4_HEIGHT_HMM
             - LibreOfficeMetrics.inchesToHmm(sh.getMargin(PageMargin.TOP))
             - LibreOfficeMetrics.inchesToHmm(sh.getMargin(PageMargin.BOTTOM));
