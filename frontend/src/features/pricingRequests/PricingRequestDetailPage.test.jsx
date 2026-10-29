@@ -3580,6 +3580,12 @@ describe.each([
       api.dealQuotations.recordOutcome.mockResolvedValue({ quotation: { ...issued, docStatus: 'REJECTED' } });
       return issued;
     },
+    // A different ISSUED quotation (B) becomes the request's current one.
+    later: () => {
+      const other = { id: 9102, number: 'QT-2026-0102-1', docStatus: 'ISSUED' };
+      api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: other });
+      return other;
+    },
   },
   {
     engine: 'legacy engine (pricingRequests.recordCustomerQuotationOutcome)',
@@ -3590,11 +3596,17 @@ describe.each([
       api.pricingRequests.recordCustomerQuotationOutcome.mockResolvedValue({ quotation: { ...issued, docStatus: 'REJECTED' } });
       return issued;
     },
+    later: () => {
+      const other = buildCustomerQuotation({ id: 5502, number: 'QT-2026-0002', docStatus: 'ISSUED' });
+      api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [other] });
+      return other;
+    },
   },
-])('PricingRequestDetailPage W3-06/QA-35: ปฏิเสธ / ขอแก้ไข confirm with a reason — $engine', ({ recordMock, setup }) => {
+])('PricingRequestDetailPage W3-06/QA-35: ปฏิเสธ / ขอแก้ไข confirm with a reason — $engine', ({ recordMock, setup, later }) => {
+  let page;
   async function renderIssued() {
     const issued = setup();
-    renderDetailPage({ user: salesOwner });
+    page = renderDetailPage({ user: salesOwner });
     await waitForLoaded();
     await screen.findByText(issued.number);
     return issued;
@@ -3608,12 +3620,21 @@ describe.each([
     return within(await screen.findByRole('dialog'));
   }
 
-  // A failed call may or may not leave the dialog open; back out of it either way before the next click.
-  async function dismissAnyDialog() {
-    await act(async () => { await new Promise((resolve) => { setTimeout(resolve, 30); }); });
+  // Back out of the dialog if the failed call left it open (it should; the key tests don't depend on that).
+  async function cancelDialog() {
     const open = screen.queryByRole('dialog');
     if (open) fireEvent.click(within(open).getByRole('button', { name: 'ยกเลิก' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  }
+
+  // The failed call has settled (its error toast fired) -- only then is "the dialog is still open" meaningful.
+  async function failureSettled() {
+    await waitFor(() => expect(page.showToast).toHaveBeenCalledWith('error', 'network down'));
+  }
+
+  async function submit(dialog, reason) {
+    fireEvent.change(dialog.getByRole('textbox'), { target: { value: reason } });
+    fireEvent.click(dialog.getByRole('button', { name: 'ยืนยัน' }));
   }
 
   it.each([
@@ -3654,54 +3675,76 @@ describe.each([
     recordMock().mockRejectedValueOnce(new Error('network down'));
 
     let dialog = await openDialog('ลูกค้าปฏิเสธ');
-    fireEvent.change(dialog.getByRole('textbox'), { target: { value: 'เหตุผล ก' } });
-    fireEvent.click(dialog.getByRole('button', { name: 'ยืนยัน' }));
+    await submit(dialog, 'เหตุผล ก');
     await waitFor(() => expect(recordMock()).toHaveBeenCalledTimes(1));
     const rejectKey = recordMock().mock.calls[0][1].clientRequestId;
-    await dismissAnyDialog();
+    await failureSettled();
+    await cancelDialog();
 
     dialog = await openDialog('ลูกค้าขอแก้ไข');
-    fireEvent.change(dialog.getByRole('textbox'), { target: { value: 'เหตุผล ข' } });
-    fireEvent.click(dialog.getByRole('button', { name: 'ยืนยัน' }));
+    await submit(dialog, 'เหตุผล ข');
     await waitFor(() => expect(recordMock()).toHaveBeenCalledTimes(2));
     const [, reviseBody] = recordMock().mock.calls[1];
     expect(reviseBody.outcome).toBe('REVISION_REQUESTED');
     expect(reviseBody.clientRequestId).not.toBe(rejectKey);
   });
 
-  it('retrying the SAME outcome after a failure reuses its key (idempotent retry)', async () => {
+  it('a FAILED outcome keeps the dialog open with the typed reason; ยืนยัน again retries with the SAME key and then closes it', async () => {
     await renderIssued();
     recordMock().mockRejectedValueOnce(new Error('network down'));
 
-    let dialog = await openDialog('ลูกค้าปฏิเสธ');
-    fireEvent.change(dialog.getByRole('textbox'), { target: { value: 'เหตุผล ก' } });
-    fireEvent.click(dialog.getByRole('button', { name: 'ยืนยัน' }));
+    const dialog = await openDialog('ลูกค้าปฏิเสธ');
+    await submit(dialog, 'เหตุผล ก');
     await waitFor(() => expect(recordMock()).toHaveBeenCalledTimes(1));
-    await dismissAnyDialog();
+    await failureSettled();
 
-    dialog = await openDialog('ลูกค้าปฏิเสธ');
-    fireEvent.change(dialog.getByRole('textbox'), { target: { value: 'เหตุผล ก' } });
-    fireEvent.click(dialog.getByRole('button', { name: 'ยืนยัน' }));
+    const still = screen.queryByRole('dialog');
+    expect(still, 'dialog must stay open after a failed record').not.toBeNull();
+    expect(within(still).getByRole('textbox').value).toBe('เหตุผล ก');
+
+    fireEvent.click(within(still).getByRole('button', { name: 'ยืนยัน' }));
     await waitFor(() => expect(recordMock()).toHaveBeenCalledTimes(2));
     const [first, second] = recordMock().mock.calls.map(([, body]) => body.clientRequestId);
     expect(second).toBe(first);
+    expect(recordMock().mock.calls[1][1].customerNote).toBe('เหตุผล ก');
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
 
   it('a SUCCESSFUL outcome rotates the key, so the next recording is never replayed as the old one', async () => {
     await renderIssued();
 
     let dialog = await openDialog('ลูกค้าปฏิเสธ');
-    fireEvent.change(dialog.getByRole('textbox'), { target: { value: 'เหตุผล ก' } });
-    fireEvent.click(dialog.getByRole('button', { name: 'ยืนยัน' }));
+    await submit(dialog, 'เหตุผล ก');
     await waitFor(() => expect(recordMock()).toHaveBeenCalledTimes(1));
-    await dismissAnyDialog();
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
 
     dialog = await openDialog('ลูกค้าปฏิเสธ');
-    fireEvent.change(dialog.getByRole('textbox'), { target: { value: 'เหตุผล ข' } });
-    fireEvent.click(dialog.getByRole('button', { name: 'ยืนยัน' }));
+    await submit(dialog, 'เหตุผล ข');
     await waitFor(() => expect(recordMock()).toHaveBeenCalledTimes(2));
     const [first, second] = recordMock().mock.calls.map(([, body]) => body.clientRequestId);
     expect(second).not.toBe(first);
+  });
+
+  it('the key belongs to the quotation: a failed ปฏิเสธ on A, then a different ISSUED quotation B, sends B a fresh key (never A\'s)', async () => {
+    const quotationA = await renderIssued();
+    recordMock().mockRejectedValueOnce(new Error('network down'));
+
+    let dialog = await openDialog('ลูกค้าปฏิเสธ');
+    await submit(dialog, 'เหตุผล ก');
+    await waitFor(() => expect(recordMock()).toHaveBeenCalledTimes(1));
+    await failureSettled();
+    await cancelDialog();
+
+    const quotationB = later();
+    await act(async () => { await page.queryClient.invalidateQueries(); });
+    await screen.findByText(quotationB.number);
+
+    dialog = await openDialog('ลูกค้าปฏิเสธ');
+    await submit(dialog, 'เหตุผล ก');
+    await waitFor(() => expect(recordMock()).toHaveBeenCalledTimes(2));
+    const [[idA, bodyA], [idB, bodyB]] = recordMock().mock.calls;
+    expect([idA, idB]).toEqual([quotationA.id, quotationB.id]);
+    expect(bodyB.clientRequestId).not.toBe(bodyA.clientRequestId);
   });
 });
 

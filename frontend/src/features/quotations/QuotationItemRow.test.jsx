@@ -967,6 +967,8 @@ describe('sizeTextFromCatalog — ขนาด comes from the catalogue mm, neve
     expect(sizeTextFromCatalog({ sizeRaw: '60x120' })).toBe('60x120');
     expect(sizeTextFromCatalog({ widthMm: 0, heightMm: 0, sizeRaw: 'ตามภาพ' })).toBe('ตามภาพ');
     expect(sizeTextFromCatalog({})).toBe('');
+    // A blank sizeRaw ('' is not nullish) must not shadow a usable size.
+    expect(sizeTextFromCatalog({ sizeRaw: '', size: '60x60' })).toBe('60x60');
   });
 });
 

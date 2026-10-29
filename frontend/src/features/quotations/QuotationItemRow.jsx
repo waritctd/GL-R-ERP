@@ -101,7 +101,7 @@ export function sizeTextFromCatalog(cat) {
     return `${cm(w)}x${cm(h)}`;
   }
   // 3. Only when the row carries no dimensions at all (~49 production rows).
-  return cat?.sizeRaw ?? cat?.size ?? '';
+  return cat?.sizeRaw || cat?.size || '';
 }
 
 /**

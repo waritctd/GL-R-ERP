@@ -75,7 +75,7 @@ import {
 import { useUnitBasisCatalog } from './unitBasisCatalog.js';
 import { buttonVariants } from '../../components/common/Button.jsx';
 import { cn } from '../../utils/cn.js';
-import { acceptOutcomeConfirmCopy, generateClientRequestId, newestQuotationByRequest, newOutcomeKeys, outcomeReasonConfirmCopy, PRICE_MODE_OPTIONS } from '../quotations/quotationMeta.js';
+import { acceptOutcomeConfirmCopy, dropOutcomeKey, generateClientRequestId, newestQuotationByRequest, outcomeKeyFor, outcomeReasonConfirmCopy, PRICE_MODE_OPTIONS } from '../quotations/quotationMeta.js';
 import { SearchableCombobox } from '../../components/common/SearchableCombobox.jsx';
 // B6 (GLA-135): reuses the catalog page's own add-factory dialog rather than a second, drifting
 // copy of the same five fields + validation — see ImportFactoryPicker's own comment below.
@@ -1352,8 +1352,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const [quotationItemDrafts, setQuotationItemDrafts] = useState({});
   const [downloadingQuotationFormat, setDownloadingQuotationFormat] = useState(null);
   // Step 5: Customer Decision and Commercial Revisions.
-  // Per-outcome idempotency keys (newOutcomeKeys, W3-06/QA-35).
-  const [outcomeClientRequestIds, setOutcomeClientRequestIds] = useState(newOutcomeKeys);
+  // Idempotency keys per (engine, quotation, outcome) (outcomeKeyFor, W3-06/QA-35).
+  const outcomeClientRequestIds = useRef({});
   const [outcomeNote, setOutcomeNote] = useState('');
   // B2: the ACCEPTED outcome a DESIGNER/OWNER request asks about first — { engine, quotation }.
   const [acceptToConfirm, setAcceptToConfirm] = useState(null);
@@ -1613,10 +1613,10 @@ export function PricingRequestDetailPage({ user, showToast }) {
     mutationFn: ({ quotation, outcome, note = outcomeNote }) => api.pricingRequests.recordCustomerQuotationOutcome(quotation.id, {
       outcome,
       customerNote: note || null,
-      clientRequestId: outcomeClientRequestIds[outcome],
+      clientRequestId: outcomeKeyFor(outcomeClientRequestIds.current, `legacy:${quotation.id}`, outcome),
     }),
-    onSuccess: () => {
-      setOutcomeClientRequestIds(newOutcomeKeys());
+    onSuccess: (_data, { quotation, outcome }) => {
+      dropOutcomeKey(outcomeClientRequestIds.current, `legacy:${quotation.id}`, outcome);
       setOutcomeNote('');
       showToast?.('success', 'บันทึกผลใบเสนอราคาแล้ว');
       invalidate();
@@ -1633,10 +1633,10 @@ export function PricingRequestDetailPage({ user, showToast }) {
     mutationFn: ({ quotation, outcome, note = outcomeNote }) => api.dealQuotations.recordOutcome(quotation.id, {
       outcome,
       customerNote: note || null,
-      clientRequestId: outcomeClientRequestIds[outcome],
+      clientRequestId: outcomeKeyFor(outcomeClientRequestIds.current, `deal:${quotation.id}`, outcome),
     }),
-    onSuccess: () => {
-      setOutcomeClientRequestIds(newOutcomeKeys());
+    onSuccess: (_data, { quotation, outcome }) => {
+      dropOutcomeKey(outcomeClientRequestIds.current, `deal:${quotation.id}`, outcome);
       setOutcomeNote('');
       showToast?.('success', 'บันทึกผลใบเสนอราคาแล้ว');
       invalidate();
@@ -4454,8 +4454,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
         onCancel={() => setOutcomeToConfirm(null)}
         onConfirm={(reason) => {
           const { engine, quotation, outcome } = outcomeToConfirm;
-          setOutcomeToConfirm(null);
-          (engine === 'deal' ? recordDealQuotationOutcome : recordQuotationOutcome).mutate({ quotation, outcome, note: reason });
+          // Close only on success: a failed call keeps the dialog (and the typed reason) for a same-key retry.
+          (engine === 'deal' ? recordDealQuotationOutcome : recordQuotationOutcome)
+            .mutate({ quotation, outcome, note: reason }, { onSuccess: () => setOutcomeToConfirm(null) });
         }}
       />
 

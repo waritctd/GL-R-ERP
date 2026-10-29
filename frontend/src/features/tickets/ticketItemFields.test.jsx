@@ -162,6 +162,11 @@ describe('applyCatalogPick', () => {
     expect(result.size).toBe('Mosaic 30x30');
   });
 
+  it('QA-28: a blank sizeRaw does not shadow size when the row has no dimensions', () => {
+    const result = applyCatalogPick({ brand: '', qty: '' }, mockCatalogProduct({ sizeRaw: '', size: '60x60' }));
+    expect(result.size).toBe('60x60');
+  });
+
   it('resolves sqmPerPiece from the catalog row and cross-fills qtySqm from an existing qty', () => {
     const result = applyCatalogPick({ brand: '', qty: 10 }, mockCatalogProduct({ sqmPerPiece: 0.72 }));
     expect(result.sqmPerPiece).toBe(0.72);

@@ -2276,11 +2276,9 @@ export function generateClientRequestId() {
     ?? '00000000-0000-4000-8000-' + String(Date.now()).slice(-12).padStart(12, '0');
 }
 
-/** One idempotency key PER customer outcome: the backend replays a reused key as the FIRST outcome's
- * success, so a failed ปฏิเสธ followed by ขอแก้ไข on a shared key would record nothing (W3-06/QA-35).
- * Callers rotate the set only after a successful record. */
-export const newOutcomeKeys = () => ({
-  ACCEPTED: generateClientRequestId(),
-  REJECTED: generateClientRequestId(),
-  REVISION_REQUESTED: generateClientRequestId(),
-});
+/** One idempotency key PER (quotation, outcome): the backend replays a reused key as the FIRST outcome's
+ * success, so a failed ปฏิเสธ followed by ขอแก้ไข on a shared key would record nothing (W3-06/QA-35), and
+ * it 409s a key already used on ANOTHER quotation (code review 10-30). `map` is a useRef object; `scope`
+ * names the quotation (include the engine when ids can collide). Drop the key after a successful record. */
+export const outcomeKeyFor = (map, scope, outcome) => (map[`${scope}:${outcome}`] ??= generateClientRequestId());
+export const dropOutcomeKey = (map, scope, outcome) => { delete map[`${scope}:${outcome}`]; };
