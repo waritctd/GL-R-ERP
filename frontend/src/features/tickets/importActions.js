@@ -35,6 +35,8 @@
 // write CAPABILITY (additive, #818), it just no longer gets PROMPTED by
 // this module. See that function's comment for the full reasoning.
 
+import { depositSettled } from './dealMoneyStatus.js';
+
 export const IMPORT_ACTION_LABELS = {
   pickupPricingRequest: 'รับงาน · ขอราคา',
   markIrSent: 'ส่งคำขอนำเข้าแล้ว',
@@ -72,6 +74,8 @@ export function nextFulfilmentActionCode(ticket) {
   if (fs === 'IR_ISSUED') return 'markIrSent';
   if (fs === 'IR_SENT') return 'markShipping';
   if (fs === 'SHIPPING') return 'markGoodsReceived';
+  // Stock goods leave only once the deposit is settled (the backend refuses a STOCK delivery before it).
+  if (fs === 'FROM_STOCK' && !depositSettled(ticket)) return null;
   if (DELIVERY_READY_FULFILMENT_STATUSES.includes(fs)) return 'recordDelivery';
   return null;
 }

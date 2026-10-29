@@ -43,7 +43,7 @@ import th.co.glr.hr.pricingrequest.PricingRequestRequests.UpdatePricingRequestRe
 public class PricingRequestRepository {
     private static final String SUMMARY_SELECT = """
         SELECT pr.*, t.code AS ticket_code, t.title AS ticket_title, t.created_by AS ticket_created_by,
-               p.name AS project_name, t.customer_name, t.customer_id, t.status AS ticket_status,
+               p.name AS project_name, t.customer_name, t.customer_id, t.status AS ticket_status, t.payment_status AS ticket_payment_status,
                er.first_name_th AS requested_by_first_name_th, er.last_name_th AS requested_by_last_name_th,
                ei.first_name_th AS assigned_import_first_name_th, ei.last_name_th AS assigned_import_last_name_th,
                (SELECT COUNT(*) FROM sales.pricing_request_item i
@@ -724,50 +724,6 @@ public class PricingRequestRepository {
     }
 
     /**
-     * Stock lines (V194): records the วันที่คาดว่าจะถึง of ONE in-transit line, and who/when. The
-     * {@code stock_source = 'IN_TRANSIT'} predicate is in the WHERE so a line that stopped being in
-     * transit between the caller's read and this write matches zero rows (compare-and-set).
-     */
-    public int setItemExpectedArrival(long pricingRequestId, long pricingRequestItemId,
-                                      LocalDate expectedArrivalDate, long setById) {
-        return jdbc.update("""
-            UPDATE sales.pricing_request_item
-               SET expected_arrival_date      = :eta,
-                   expected_arrival_set_by_id = :by,
-                   expected_arrival_set_at    = now()
-             WHERE pricing_request_item_id = :id
-               AND pricing_request_id = :pricingRequestId
-               AND stock_source = 'IN_TRANSIT'
-            """,
-            new MapSqlParameterSource()
-                .addValue("id", pricingRequestItemId)
-                .addValue("pricingRequestId", pricingRequestId)
-                .addValue("eta", expectedArrivalDate)
-                .addValue("by", setById));
-    }
-
-    /**
-     * Stock lines (V194, R13): turns ONE in-transit line back into a normal import line. Source,
-     * ETA and the ETA's who/when are cleared in a SINGLE statement - chk_pricing_request_item_eta_only_in_transit
-     * forbids an ETA on a non-transit line, so clearing them in two updates would trip it.
-     */
-    public int convertItemInTransitToImport(long pricingRequestId, long pricingRequestItemId) {
-        return jdbc.update("""
-            UPDATE sales.pricing_request_item
-               SET stock_source               = NULL,
-                   expected_arrival_date      = NULL,
-                   expected_arrival_set_by_id = NULL,
-                   expected_arrival_set_at    = NULL
-             WHERE pricing_request_item_id = :id
-               AND pricing_request_id = :pricingRequestId
-               AND stock_source = 'IN_TRANSIT'
-            """,
-            new MapSqlParameterSource()
-                .addValue("id", pricingRequestItemId)
-                .addValue("pricingRequestId", pricingRequestId));
-    }
-
-    /**
      * True if {@code factoryName} already has a CURRENT {@code sales.factory_quote} on this
      * pricing request whose status has moved past {@code DRAFT} — i.e. an RFQ that a human has
      * already sent (REQUESTED) or that has progressed further (a factory has answered, etc.).
@@ -1316,7 +1272,8 @@ public class PricingRequestRepository {
             rs.getString("unit_code"),
             rs.getBoolean("omit_contact_honorific"),
             nullableLong(rs, "customer_id"),
-            rs.getString("ticket_status")
+            rs.getString("ticket_status"),
+            rs.getString("ticket_payment_status")
         );
     }
 

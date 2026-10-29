@@ -542,7 +542,11 @@ function depositNoticeAction(deal, depositNotice) {
 
 /** `importRequests` undefined = unknown (still the create label). A DRAFT row -> the issue label. */
 function importRequestAction(deal, importRequests) {
-  if (deal.paymentStatus !== 'DEPOSIT_PAID' || deal.fulfillmentStatus != null) return null;
+  // A no-deposit deal never gets a deposit notice, so its payment status stays CUSTOMER_CONFIRMED (the backend
+  // gate, requireImportRequestIssuable, lets it issue an IR there).
+  const depositReady = deal.paymentStatus === 'DEPOSIT_PAID'
+    || (deal.paymentStatus === 'CUSTOMER_CONFIRMED' && DEPOSIT_NOT_NEEDED.has(deal.depositPolicy));
+  if (!depositReady || deal.fulfillmentStatus != null) return null;
   return {
     key: SALES_ACTION.CREATE_IMPORT_REQUEST,
     label: importRequests?.some((r) => r.status === 'DRAFT') ? 'ออกเลขใบขอซื้อ (IR)' : ACTION_LABEL[SALES_ACTION.CREATE_IMPORT_REQUEST],

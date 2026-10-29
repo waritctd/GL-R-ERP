@@ -280,13 +280,23 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       expect(screen.queryByTestId('ir-line-factory-2')).toBeNull();
     });
 
-    it('asks for no factory on a line fully reserved from stock — import never orders it', async () => {
-      api.storedImportRequests.createDrafts.mockResolvedValue({ importRequests: [draftRow()] });
+    // Walk 4: a stock line is never ordered from a factory, so a deal whose every line is covered from stock has
+    // nothing to create - no ออกใบขอซื้อ (IR) button and no factory picker (the backend 409s it too).
+    it('shows no ออกใบขอซื้อ (IR) button and asks for no factory when every line is covered from stock', async () => {
       const stockLine = { id: 4, brand: 'SCG', model: 'From stock', factory: null, catalogPriceId: null, qty: 5, qtyFromStock: 5 };
       renderPanel(OWNER, [], { summary: directSummary, items: [stockLine] });
-      const button = await screen.findByTestId('deal-fulfilment-create-ir-drafts');
+      await screen.findByTestId('deal-fulfilment-stored-ir');
+      expect(screen.queryByTestId('deal-fulfilment-create-ir-drafts')).toBeNull();
       expect(screen.queryByTestId('ir-line-factory-4')).toBeNull();
+    });
+
+    it('keeps the button when only some lines are covered from stock, and still asks for no factory on the covered one', async () => {
+      const stockLine = { id: 4, brand: 'SCG', model: 'From stock', factory: null, catalogPriceId: null, qty: 5, qtyFromStock: 5 };
+      const ordered = { id: 6, brand: 'SCG', model: 'Ordered', factory: 'Rex Ceramics', catalogPriceId: 90, qty: 8, qtyFromStock: 0 };
+      renderPanel(OWNER, [], { summary: directSummary, items: [stockLine, ordered] });
+      const button = await screen.findByTestId('deal-fulfilment-create-ir-drafts');
       expect(button.disabled).toBe(false);
+      expect(screen.queryByTestId('ir-line-factory-4')).toBeNull();
     });
 
     it('still asks for a factory on a partly-from-stock line (remainder is ordered)', async () => {
@@ -789,7 +799,7 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
     });
   });
 
-  it('before the first IR the commission-weight button stays reachable, below the stored-IR box, and opens its modal; จองสินค้า stays beside it', async () => {
+  it('before the first IR the commission-weight button stays reachable, below the stored-IR box, and opens its modal; no จองสินค้า beside it', async () => {
     renderPanel(CEO, [], {
       summary: { ...summary, fulfillmentStatus: null },
       availableActions: [{ action: 'SET_ITEM_WEIGHT_MULTIPLIER' }, { action: 'RESERVE_STOCK' }],
@@ -797,8 +807,8 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
     const stored = await screen.findByTestId('deal-fulfilment-stored-ir');
     const weight = await screen.findByTestId('deal-fulfilment-set-item-weight');
     expect(Boolean(stored.compareDocumentPosition(weight) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
-    // จองสินค้า is still the only path to FROM_STOCK, so it stays reachable beside it.
-    expect(screen.getByTestId('deal-fulfilment-reserve-stock')).not.toBeNull();
+    // No reserve-from-stock feature (owner ruling 2026-10-29), even if the server still advertised it.
+    expect(screen.queryByTestId('deal-fulfilment-reserve-stock')).toBeNull();
     fireEvent.click(weight);
     expect(await screen.findByTestId('deal-fulfilment-set-item-weight-submit')).not.toBeNull();
   });

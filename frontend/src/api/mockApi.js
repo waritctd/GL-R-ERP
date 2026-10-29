@@ -81,20 +81,6 @@ import {
 
 const db = createDemoDatabase();
 
-// V183 (stock-sourced deal-line pricing): mirrors TicketService.isStorablePositivePrice exactly.
-// sales.ticket_item.stock_sale_price is numeric(14,2), and Postgres rounds HALF_UP to that scale
-// BEFORE chk_ticket_item_stock_sale_price sees the value -- 0.004 stores as 0.00 (the real CHECK
-// rejects it), 0.005 stores as 0.01 (accepted). A plain `Number(price) > 0` would let 0.004 pass
-// here and then have the real backend 400/500 it -- see ticketItemFields.jsx's
-// isStockSalePriceMissing, which this duplicates rather than imports (mockApi.js does not import
-// frontend feature modules).
-function isMockStockSalePriceMissing(sourcedFromStock, stockSalePrice) {
-  if (!sourcedFromStock) return false;
-  if (stockSalePrice === '' || stockSalePrice == null) return true;
-  const n = Number(stockSalePrice);
-  return !(Number.isFinite(n) && Math.round(n * 100) > 0);
-}
-
 function normalizeQuotation(q, ticket, index = 0) {
   return {
     ...q,
@@ -1626,8 +1612,7 @@ function reconcileTicketItemsFromPricingRequest(ticket, pr, user) {
       const ticketItem = ticket.items.find((ti) => ti.id === item.sourceTicketItemId);
       if (!ticketItem) continue;
       const qtyDelivered = Number(ticketItem.qtyDelivered ?? 0);
-      const qtyFromStock = Number(ticketItem.qtyFromStock ?? 0);
-      if (newQty < qtyDelivered || newQty < qtyFromStock) {
+      if (newQty < qtyDelivered) {
         // Mirrors the DB's chk_ticket_item_qty_delivered/chk_ticket_item_qty_from_stock CHECK
         // constraints (V54) that back the real reconcileItemQty call — a downward reconciliation
         // that would drop qty below an already-recorded delivered/reserved amount is refused, not
@@ -1635,9 +1620,12 @@ function reconcileTicketItemsFromPricingRequest(ticket, pr, user) {
         fail(`ไม่สามารถปรับจำนวนสินค้า (item ${item.sourceTicketItemId}) ให้ตรงกับคำขอราคาที่ยืนยันคำสั่งซื้อได้ `
           + 'เนื่องจากมีการส่งมอบหรือจองสต็อกไปแล้วเกินจำนวนใหม่', 409);
       }
-      if (Number(ticketItem.qty) !== newQty) {
+      // A stock line (IN_THAILAND) is covered in full - the one writer of qtyFromStock (no reserve step).
+      const coveredFromStock = item.stockSource === 'IN_THAILAND' ? newQty : 0;
+      if (Number(ticketItem.qty) !== newQty || Number(ticketItem.qtyFromStock ?? 0) !== coveredFromStock) {
         ticketItem.qty = newQty;
         ticketItem.qtySqm = item.requestedQtySqm ?? null;
+        ticketItem.qtyFromStock = coveredFromStock;
         anyChange = true;
       }
     } else {
@@ -1652,7 +1640,7 @@ function reconcileTicketItemsFromPricingRequest(ticket, pr, user) {
         qty: newQty, qtySqm: item.requestedQtySqm ?? null,
         proposedPrice: null, approvedPrice: null,
         currency: 'THB', sortOrder: ticket.items.length,
-        qtyDelivered: 0, qtyFromStock: 0,
+        qtyDelivered: 0, qtyFromStock: item.stockSource === 'IN_THAILAND' ? newQty : 0,
         unitBasis: item.requestedUnitBasis === 'PER_SQM' ? 'SQM' : 'PIECE',
       });
       anyChange = true;
@@ -1981,7 +1969,16 @@ function buildPricingRequestSummary(pr) {
     unitCode: pr.unitCode ?? null,
     omitContactHonorific: pr.omitContactHonorific ?? false,
     customerId: ticket?.customerId ?? null,
+    // null until the customer's order is confirmed; once set no new pricing round can start.
+    ticketPaymentStatus: ticket?.paymentStatus ?? null,
   };
+}
+
+// Mirrors PricingRequestService.requireOrderNotConfirmed.
+function requireMockOrderNotConfirmed(ticket) {
+  if (ticket?.paymentStatus != null) {
+    fail('ยืนยันคำสั่งซื้อของดีลนี้แล้ว จึงเริ่มรอบราคาใหม่ไม่ได้ — การเปลี่ยนแปลงหลังยืนยันต้องทำเป็นการแก้ไขคำสั่งซื้อ', 409);
+  }
 }
 
 function buildPricingRequestDetail(pr) {
@@ -3930,6 +3927,7 @@ function reconcilePaymentStatus(ticket, user) {
       ticket.paymentStatus = 'FULLY_PAID';
       pushEvent(ticket, user, 'FULLY_PAID', ticket.status, ticket.status, null);
       maybeAdvanceClosedPaid(ticket, user);
+      routeAllStockDealToDelivery(ticket, user);
     }
     return;
   }
@@ -3946,6 +3944,7 @@ function reconcilePaymentStatus(ticket, user) {
       ticket.paymentStatus = 'AWAITING_FINAL_PAYMENT';
       pushEvent(ticket, user, 'AWAITING_FINAL_PAYMENT', ticket.status, ticket.status, null);
     }
+    routeAllStockDealToDelivery(ticket, user); // deposit confirmed: an all-stock deal is ready to deliver
   }
 }
 
@@ -4031,9 +4030,16 @@ function warehouseAvailableFor(ticket) {
   return ticket.fulfillmentStatus === 'GOODS_RECEIVED' || hasReceivedGoods(ticket.id);
 }
 
+// Mirrors TicketService.depositSettled: paid (or later), or a no-deposit policy at CUSTOMER_CONFIRMED. Stock goods
+// are delivered only after this (a deposit NOTICE alone is not money).
+function depositSettled(ticket) {
+  return ['DEPOSIT_PAID', 'AWAITING_FINAL_PAYMENT', 'FULLY_PAID'].includes(ticket.paymentStatus)
+    || (depositBypassesNotice(ticket) && ticket.paymentStatus === 'CUSTOMER_CONFIRMED');
+}
+
 function deliveryAvailable(ticket) {
   const stockAvailable = (ticket.items ?? []).some((item) => Number(item.qtyFromStock ?? 0) > Number(item.qtyDelivered ?? 0));
-  return ticket.fulfillmentStatus === 'FROM_STOCK' || stockAvailable || warehouseAvailableFor(ticket);
+  return ((ticket.fulfillmentStatus === 'FROM_STOCK' || stockAvailable) && depositSettled(ticket)) || warehouseAvailableFor(ticket);
 }
 
 function reserveStockForTicket(ticket, user, payload = {}) {
@@ -4050,12 +4056,16 @@ function reserveStockForTicket(ticket, user, payload = {}) {
     total += qty;
   }
   pushEvent(ticket, user, 'STOCK_RESERVED', ticket.status, ticket.status, `qty_from_stock=${total}`);
+  routeAllStockDealToDelivery(ticket, user);
+}
+
+// Mirrors TicketService.routeAllStockDealToDelivery: a deal whose every line is covered from stock (non-empty)
+// has no import journey - FROM_STOCK, straight to DELIVERY_SCHEDULING (S18) rather than PROCUREMENT.
+function routeAllStockDealToDelivery(ticket, user) {
   const allCovered = (ticket.items ?? []).length > 0
     && ticket.items.every((item) => Number(item.qtyFromStock ?? 0) >= Number(item.qty ?? 0));
   if (allCovered && (ticket.fulfillmentStatus == null || ticket.fulfillmentStatus === 'FROM_STOCK')) {
     ticket.fulfillmentStatus = 'FROM_STOCK';
-    // Full stock coverage has no import journey — goods are ready now, so advance
-    // straight to DELIVERY_SCHEDULING (S18) rather than PROCUREMENT.
     autoAdvanceStage(ticket, 'DELIVERY_SCHEDULING', user);
   }
 }
@@ -4080,6 +4090,9 @@ function updateItemWeightMultipliersForTicket(ticket, user, payload = {}) {
 function recordDeliveryForTicket(ticket, user, payload = {}, completing = false) {
   const source = String(payload.source ?? '').trim().toUpperCase();
   if (!['WAREHOUSE', 'STOCK'].includes(source)) fail('source ต้องเป็น WAREHOUSE หรือ STOCK', 400);
+  if (source === 'STOCK' && !depositSettled(ticket)) {
+    fail('ส่งสินค้าจากสต็อกได้หลังรับชำระมัดจำแล้ว (หรือได้รับการยกเว้นมัดจำ) เท่านั้น', 409);
+  }
   const lines = payload.lines ?? [];
   if (!lines.length) fail('ต้องระบุรายการส่งสินค้า', 400);
   const combined = new Map();
@@ -8007,14 +8020,6 @@ function buildTicketActions(user, ticket) {
     if (['import', 'ceo'].includes(user.role) && !irTracked && ticket.fulfillmentStatus === 'IR_ISSUED') add('IR_SENT', 'fulfillment', 'ส่งคำขอนำเข้าแล้ว');
     if (['import', 'ceo'].includes(user.role) && !irTracked && ticket.fulfillmentStatus === 'IR_SENT') add('SHIPPING', 'fulfillment', 'สินค้าเดินทาง');
     if (['import', 'ceo'].includes(user.role) && !irTracked && ticket.fulfillmentStatus === 'SHIPPING') add('GOODS_RECEIVED', 'fulfillment', 'รับสินค้า');
-    // S18 owner decision 2026-09-28: CEO or the deal's owning sales rep -- NOT import (dropped
-    // from `['import', 'ceo']`), mirroring TicketService#canReserveStock -> canDeclareStockCoverage
-    // and the reserveStock mutation gate above. `owner` is the same limb the delivery
-    // advertisement uses just below; advertising it to import would offer a button that 403s.
-    if ((user.role === 'ceo' || owner) && (ticket.items ?? []).length > 0 && hasRemainingDelivery(ticket)
-        && ticket.fulfillmentStatus !== 'FULLY_DELIVERED') {
-      add('RESERVE_STOCK', 'fulfillment', 'จองสินค้าจากสต็อก', { requiredFields: ['lines'] });
-    }
     // V148 (per-item stock-commission weighting): sales_manager/ceo only -- mirrors
     // TicketService#canSetItemWeightMultiplier exactly (ITEM_WEIGHT_ROLES, no ownership/stage
     // nuance beyond the ticket being ACTIVE, which the enclosing `if (active)` already is).
@@ -8757,13 +8762,6 @@ export const api = {
       if (!['DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT'].includes(payload.entryChannel)) {
         fail(`ไม่รองรับช่องทางรับงาน '${payload.entryChannel}'`, 400);
       }
-      // Mirrors TicketService.create's V183 item-validation loop: a stock-sourced line must
-      // carry a real, positive selling price, checked before any write.
-      for (const item of payload.items || []) {
-        if (isMockStockSalePriceMissing(item.sourcedFromStock, item.stockSalePrice)) {
-          fail('ต้องระบุราคาขายเมื่อเลือกสินค้าจากสต็อก', 400);
-        }
-      }
       const nextId = Math.max(...db.tickets.map((t) => t.id)) + 1;
       const code = `DL-2026-${String(nextId).padStart(4, '0')}`;
       const now = new Date().toISOString();
@@ -8815,9 +8813,9 @@ export const api = {
           // emptyItemFromTicketItem can seed productId/catalogProductCode without re-searching.
           catalogPriceId: item.catalogPriceId ?? null,
           catalogProductCode: item.catalogProductCode ?? null,
-          // Stock-sourced pricing (V183) — see this method's own validation above.
+          // The sales-typed stock price is gone (walk 4): only the flag is stored, never a price.
           sourcedFromStock: Boolean(item.sourcedFromStock),
-          stockSalePrice: item.sourcedFromStock ? (item.stockSalePrice ?? null) : null,
+          stockSalePrice: null,
         })),
         events: [{ id: nextId * 1000, ticketId: nextId, actorId: user.id, actorName: user.name, kind: 'CREATED', fromStatus: null, toStatus: 'draft', message: null, createdAt: now }],
         quotation: null,
@@ -8855,30 +8853,14 @@ export const api = {
       const importCanEdit = user.role === 'import'
         && ['in_review', 'price_proposed'].includes(st);
       if (!salesCanEdit && !importCanEdit) fail('ไม่มีสิทธิ์แก้ไขรายการสินค้าในสถานะนี้', 403);
-      // V183 (stock-sourced deal-line pricing): unlike the pricing fields below (guarded to the
-      // prior row) and unlike catalogPriceId/catalogProductCode (request wins outright, even when
-      // omitted), sourcedFromStock/stockSalePrice get a NULL-SAFE FALLBACK to the prior row —
-      // mirrors TicketService.mergeEditedItemsPreservingPricing exactly: a request that omits the
-      // field (undefined/null) inherits the prior row's value instead of resetting the flag.
-      (payload.items || []).forEach((item, i) => {
-        const resolvedSourcedFromStock = item.sourcedFromStock ?? ticket.items[i]?.sourcedFromStock ?? false;
-        const resolvedStockSalePrice = resolvedSourcedFromStock
-          ? (item.sourcedFromStock != null ? item.stockSalePrice : ticket.items[i]?.stockSalePrice) ?? null
-          : null;
-        if (isMockStockSalePriceMissing(resolvedSourcedFromStock, resolvedStockSalePrice)) {
-          fail('ต้องระบุราคาขายเมื่อเลือกสินค้าจากสต็อก', 400);
-        }
-      });
       // Mirrors TicketService.editItems: sales/import editing descriptive fields must
       // never silently overwrite import's proposed price or CEO's approved/manual price —
       // pricing fields always come from the existing item at this position, never the
       // request (2026-07-16 pricing-integrity audit, finding #4). Only proposePrice is
       // allowed to replace proposedPrice wholesale.
       ticket.items = (payload.items || []).map((item, i) => {
+        // sourcedFromStock: a request that omits it inherits the prior row's flag; the price is never stored.
         const resolvedSourcedFromStock = item.sourcedFromStock ?? ticket.items[i]?.sourcedFromStock ?? false;
-        const resolvedStockSalePrice = resolvedSourcedFromStock
-          ? (item.sourcedFromStock != null ? item.stockSalePrice : ticket.items[i]?.stockSalePrice) ?? null
-          : null;
         return {
         ...ticket.items[i],
         brand: item.brand, model: item.model,
@@ -8900,9 +8882,8 @@ export const api = {
         // because you only discover it in prod.
         catalogPriceId: item.catalogPriceId ?? null,
         catalogProductCode: item.catalogProductCode ?? null,
-        // Stock-sourced pricing (V183) — see this method's own validation above.
         sourcedFromStock: resolvedSourcedFromStock,
-        stockSalePrice: resolvedStockSalePrice,
+        stockSalePrice: null,
         };
       });
       ticket.hasEdits = true;
@@ -9304,6 +9285,8 @@ export const api = {
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
       pushEvent(ticket, user, 'POLICY_CHANGED', ticket.salesStage, ticket.salesStage,
         `deposit_policy → ${payload.policy} — ${payload.reason.trim()}`);
+      // Nothing left to wait for: an all-stock deal at CUSTOMER_CONFIRMED goes straight to delivery.
+      if (ticket.paymentStatus === 'CUSTOMER_CONFIRMED') routeAllStockDealToDelivery(ticket, user);
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 
@@ -12578,6 +12561,13 @@ export const api = {
       requireActive(ticket);
       if (row.status !== 'DRAFT') fail('ใบขอซื้อฉบับนี้ออกเลขไปแล้ว', 409);
       if (row.items.length === 0) fail('ใบขอซื้อยังไม่มีรายการสินค้า', 409);
+      // Mirrors ImportRequestService.issue: a draft naming a line that is now covered from stock is refused.
+      if (row.items.some((it) => {
+        const ti = (ticket.items ?? []).find((i) => Number(i.id) === Number(it.ticketItemId));
+        return ti && Number(ti.qty) > 0 && Number(ti.qtyFromStock ?? 0) >= Number(ti.qty);
+      })) {
+        fail('ใบขอซื้อนี้มีรายการที่ครอบคลุมจากสต็อกแล้ว — ไม่ต้องสั่งนำเข้า กรุณาลบฉบับร่างนี้แล้วสร้างใบขอซื้อใหม่', 409);
+      }
       if (row.leadTimeMinDays == null || row.leadTimeMaxDays == null) {
         fail(`กรุณาระบุระยะเวลานำเข้า (วัน) ของโรงงาน ${row.factoryName}`, 409);
       }
@@ -14605,6 +14595,7 @@ export const api = {
       const ticket = db.tickets.find((t) => t.id === Number(ticketId));
       if (!ticket) fail('ไม่พบดีลนี้', 404);
       requirePricingRequestDealActive(ticket);
+      requireMockOrderNotConfirmed(ticket);
       if (ticket.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (!payload.clientRequestId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(payload.clientRequestId)) {
         fail('clientRequestId ต้องเป็น UUID', 400);
@@ -16415,6 +16406,8 @@ export const api = {
         followQuotationDepositPolicy(ticket, mockDealQuotations.find(
           (q) => q.pricingRequestId === pr.id && q.origin === 'PRICING_REQUEST' && q.docStatus === 'ACCEPTED'), user);
         autoAdvanceStage(ticket, 'ORDER_RECEIVED', user);
+        // No deposit to wait for (0% quotation / waived): an all-stock deal goes straight to delivery.
+        if (depositBypassesNotice(ticket)) routeAllStockDealToDelivery(ticket, user);
       }
 
       pushPricingRequestEvent(pr, user, 'ORDER_CONFIRMED', pr.status, pr.status, 'ยืนยันคำสั่งซื้อแล้ว');
@@ -16506,6 +16499,7 @@ export const api = {
       if (ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (pr.status !== 'DRAFT') fail(`ต้องเป็นคำขอราคาที่อยู่ในสถานะ 'DRAFT' เท่านั้น (สถานะปัจจุบัน: '${pr.status}')`, 409);
       requirePricingRequestDealActive(ticket);
+      requireMockOrderNotConfirmed(ticket);
       if (pr.items.length === 0) fail('ต้องมีรายการสินค้าอย่างน้อย 1 รายการก่อนส่งคำขอราคา', 400);
       if (pr.recipientContactId == null && !pr.recipientLabel?.trim()) fail('ต้องระบุผู้รับคำขอราคา', 400);
       if (pr.requiredDate && new Date(pr.requiredDate) < new Date(new Date().toDateString())) {
@@ -16570,6 +16564,7 @@ export const api = {
       if (['DRAFT', 'CANCELLED', 'SUPERSEDED'].includes(parent.status)) {
         fail('สร้างรอบแก้ไขจากการเปลี่ยนแปลงของลูกค้าได้เฉพาะจากคำขอราคาที่ยื่นและยังดำเนินการอยู่เท่านั้น', 409);
       }
+      requireMockOrderNotConfirmed(ticket);
       if (!payload.revisionReason?.trim()) fail('revisionReason ต้องไม่เว้นว่าง', 400);
       if (!payload.clientRequestId) fail('clientRequestId ต้องเป็น UUID', 400);
       // GLA-102: mirrors PricingRequestService.createCustomerChangeRevision's

@@ -309,6 +309,9 @@ class DeliveryAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
                 new BigDecimal("10.00"), null, "PIECE", null, null, null, null, "THB")));
         long ticketId = tickets.create(request, tickets.nextTicketCode(), ownerId, "เจ้าของดีล ส่งมอบ");
         tickets.updateSalesStage(ticketId, DealStage.ORDER_RECEIVED);
+        // Stock goods leave only after the deposit (walk 4): the fixture records it, since this class is about WHO may deliver.
+        jdbc.update("UPDATE sales.ticket SET payment_status = 'DEPOSIT_PAID' WHERE ticket_id = :id",
+            java.util.Map.of("id", ticketId));
         long itemId = onlyItemId(ticketId);
         ticketService.reserveStock(ticketId,
             new StockReservationRequest(List.of(

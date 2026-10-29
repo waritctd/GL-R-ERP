@@ -742,28 +742,24 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     /**
-     * The floor must reach BOTH entry points. {@code reserveStock}'s own gate and
-     * {@code canReserveStock} (which decides whether {@code actions} advertises RESERVE_STOCK) were
-     * unified on one predicate by the 2026-08-13 widening; applying the floor to only one of them
-     * would put the capability back to advertised-then-refused, or live-but-invisible.
+     * Walk 4 (owner ruling 2026-10-29): RESERVE_STOCK is not advertised at any stage, but the
+     * {@code reserveStock} endpoint keeps its stage floor (fixtures and old clients still call it):
+     * refused below ORDER_RECEIVED, accepted at it.
      */
     @Test
-    void actionsDoesNotAdvertiseReserveStockBelowTheFloor_andDoesAboveIt() {
+    void actionsNeverAdvertiseReserveStock_andTheEndpointKeepsItsFloor() {
         long below = createDealWithOneItem();
         tickets.updateSalesStage(below, DealStage.NEGOTIATION);
         assertThat(actionCodes(below, ownerRep)).doesNotContain("RESERVE_STOCK");
         assertThat(actionCodes(below, ceo)).doesNotContain("RESERVE_STOCK");
-        // …and the advertiser agrees with the gate on the very same deal.
         assertThatThrownBy(() ->
             ticketService.reserveStock(below, declare(onlyItemId(below), "100.00"), ownerRep))
             .isInstanceOf(ApiException.class);
 
         long above = createDealWithOneItem();
         tickets.updateSalesStage(above, DealStage.ORDER_RECEIVED);
-        assertThat(actionCodes(above, ownerRep)).contains("RESERVE_STOCK");
-        assertThat(actionCodes(above, ceo)).contains("RESERVE_STOCK");
-        // import lost RESERVE_STOCK entirely on 2026-09-28 (S18 is Sales's) — not offered it even
-        // above the floor.
+        assertThat(actionCodes(above, ownerRep)).doesNotContain("RESERVE_STOCK");
+        assertThat(actionCodes(above, ceo)).doesNotContain("RESERVE_STOCK");
         assertThat(actionCodes(above, importActor)).doesNotContain("RESERVE_STOCK");
         assertThatCode(() ->
             ticketService.reserveStock(above, declare(onlyItemId(above), "100.00"), ownerRep))

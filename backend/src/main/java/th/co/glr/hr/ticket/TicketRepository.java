@@ -523,12 +523,10 @@ public class TicketRepository {
                 // method just persists whatever it was handed, exactly like every other
                 // pricing-adjacent field above (approvedPrice/calcedCost/manualPrice/...).
                 .addValue("weightMultiplier", item.weightMultiplier())
-                // V183: unlike weightMultiplier (guarded, "prior always wins"), sourcedFromStock/
-                // stockSalePrice are sales-writable -- TicketService.mergeEditedItemsPreservingPricing
-                // resolves them from the incoming request with a null-safe fallback to the prior
-                // row (so an edit that says nothing about them does not silently clear a flag set
-                // on a previous save), and validates the pairing before this method ever sees the
-                // TicketItemDto. This method just persists whatever it was handed.
+                // V183: unlike weightMultiplier (guarded, "prior always wins"), sourcedFromStock is
+                // sales-writable -- TicketService.mergeEditedItemsPreservingPricing resolves it from the
+                // request with a null-safe fallback to the prior row. It also resolves stockSalePrice to
+                // NULL (walk 4); this method just persists whatever it was handed.
                 .addValue("sourcedFromStock", item.sourcedFromStock())
                 .addValue("stockSalePrice", item.stockSalePrice());
         }
@@ -1110,25 +1108,10 @@ public class TicketRepository {
                 .addValue("sortOrder", i)
                 .addValue("catalogPriceId", item.catalogPriceId())
                 .addValue("catalogProductCode", item.catalogProductCode())
-                // V183: sourcedFromStock is a Boolean (nullable) on the request record -- a
-                // request that never mentions it (every call site before this feature) means
-                // "not from stock", same as an explicit false. This method persists what it is
-                // given without validating the sourcedFromStock/stockSalePrice pairing -- that
-                // invariant is enforced in TicketService.create before any DB write is attempted
-                // (see its item-validation loop) and backstopped by chk_ticket_item_stock_sale_price.
+                // sourcedFromStock is a nullable Boolean: a request that never mentions it means "not from
+                // stock", same as false. The sales-typed price is gone (walk 4): the column always stays NULL.
                 .addValue("sourcedFromStock", Boolean.TRUE.equals(item.sourcedFromStock()))
-                // Force-null when the flag is false, exactly as
-                // TicketService.mergeEditedItemsPreservingPricing does on the edit path (and as
-                // mockApi.js and TicketCreateModal's submit() already do client-side): never let a
-                // stray price ride along on a line that is not flagged stock-sourced.
-                // TicketService.create validates "flag true => positive price", but it deliberately
-                // does NOT reject the inverse, so without this a malformed request carrying
-                // {sourcedFromStock:false, stockSalePrice:500} reached chk_ticket_item_stock_sale_price
-                // and came back as a 500 (DataIntegrityViolationException -> handleDataAccess) with the
-                // raw driver message, instead of being silently normalised the way every other layer
-                // already normalises it.
-                .addValue("stockSalePrice",
-                    Boolean.TRUE.equals(item.sourcedFromStock()) ? item.stockSalePrice() : null);
+                .addValue("stockSalePrice", null);
         }
         jdbc.batchUpdate("""
             INSERT INTO sales.ticket_item
@@ -2497,18 +2480,22 @@ public class TicketRepository {
      *         that FK does not exist (source_ticket_item_id is a plain nullable BIGINT, not an FK
      *         — see V59's own column definition), so this IS defensive, not merely decorative).
      */
-    public boolean reconcileItemQty(long ticketId, long itemId, BigDecimal qty, BigDecimal qtySqm) {
+    public boolean reconcileItemQty(long ticketId, long itemId, BigDecimal qty, BigDecimal qtySqm,
+                                    BigDecimal qtyFromStock) {
+        // qty_from_stock moves in the same statement as qty so chk_ticket_item_qty_from_stock never
+        // sees a half-written row: the pricing request's stock lines are the only writer (no reserve step).
         return jdbc.update("""
             UPDATE sales.ticket_item
-               SET qty = :qty, qty_sqm = :qtySqm
+               SET qty = :qty, qty_sqm = :qtySqm, qty_from_stock = :qtyFromStock
              WHERE ticket_id = :ticketId AND item_id = :itemId
-               AND qty IS DISTINCT FROM :qty
+               AND (qty IS DISTINCT FROM :qty OR qty_from_stock IS DISTINCT FROM :qtyFromStock)
             """,
             new MapSqlParameterSource()
                 .addValue("ticketId", ticketId)
                 .addValue("itemId", itemId)
                 .addValue("qty", qty)
-                .addValue("qtySqm", qtySqm)) > 0;
+                .addValue("qtySqm", qtySqm)
+                .addValue("qtyFromStock", qtyFromStock)) > 0;
     }
 
     /**
@@ -2582,13 +2569,13 @@ public class TicketRepository {
      */
     public long insertReconciledItem(long ticketId, String brand, String model, String color, String texture,
                                      String size, String factory, BigDecimal qty, BigDecimal qtySqm,
-                                     String unitBasis) {
+                                     String unitBasis, BigDecimal qtyFromStock) {
         return jdbc.queryForObject("""
             INSERT INTO sales.ticket_item
                 (ticket_id, brand, model, color, texture, size, factory, qty, qty_sqm, unit_basis,
-                 currency, sort_order)
+                 qty_from_stock, currency, sort_order)
             VALUES (:ticketId, :brand, :model, :color, :texture, :size, :factory, :qty, :qtySqm,
-                    :unitBasis, 'THB',
+                    :unitBasis, :qtyFromStock, 'THB',
                     (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM sales.ticket_item WHERE ticket_id = :ticketId))
             RETURNING item_id
             """,
@@ -2602,7 +2589,8 @@ public class TicketRepository {
                 .addValue("factory", factory)
                 .addValue("qty", qty)
                 .addValue("qtySqm", qtySqm)
-                .addValue("unitBasis", unitBasis),
+                .addValue("unitBasis", unitBasis)
+                .addValue("qtyFromStock", qtyFromStock),
             Long.class);
     }
 

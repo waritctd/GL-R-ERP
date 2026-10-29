@@ -35,7 +35,7 @@ describe('nextSalesAction — RECORD_DELIVERY (stages 13-14, owner ruling 2026-0
 
   it('returns RECORD_DELIVERY for FROM_STOCK and PARTIALLY_DELIVERED too — every status nextFulfilmentActionCode calls delivery-ready', () => {
     const prs = [orderConfirmedPr()];
-    expect(nextSalesAction(baseDeal({ status: 'quotation_issued', fulfillmentStatus: 'FROM_STOCK' }), prs))
+    expect(nextSalesAction(baseDeal({ status: 'quotation_issued', fulfillmentStatus: 'FROM_STOCK', paymentStatus: 'DEPOSIT_PAID' }), prs))
       .toMatchObject({ key: SALES_ACTION.RECORD_DELIVERY });
     expect(nextSalesAction(baseDeal({ status: 'quotation_issued', fulfillmentStatus: 'PARTIALLY_DELIVERED' }), prs))
       .toMatchObject({ key: SALES_ACTION.RECORD_DELIVERY });
@@ -184,6 +184,23 @@ describe('nextSalesAction — full cascade baseline (buckets 1-3, 6-7)', () => {
   it('null for a non-ACTIVE deal, and null for no deal at all', () => {
     expect(nextSalesAction(baseDeal({ lifecycle: 'ON_HOLD' }), [orderConfirmedPr()])).toBeNull();
     expect(nextSalesAction(null, [])).toBeNull();
+  });
+});
+
+// Review fix 1 (walk 4): stock goods leave only once the deposit is settled (paid, or a no-deposit policy).
+describe('nextSalesAction — RECORD_DELIVERY waits for the deposit on a stock deal', () => {
+  const fromStock = (overrides = {}) => baseDeal({ status: 'quotation_issued', fulfillmentStatus: 'FROM_STOCK', ...overrides });
+  it('FROM_STOCK on a REQUIRED deal still at CUSTOMER_CONFIRMED -> no delivery action', () => {
+    expect(nextSalesAction(fromStock({ paymentStatus: 'CUSTOMER_CONFIRMED', depositPolicy: 'REQUIRED' }), [orderConfirmedPr()])?.key)
+      .not.toBe(SALES_ACTION.RECORD_DELIVERY);
+  });
+  it.each([
+    ['REQUIRED', 'DEPOSIT_PAID'],
+    ['NOT_REQUIRED', 'CUSTOMER_CONFIRMED'],
+    ['REQUIRED', 'FULLY_PAID'],
+  ])('depositPolicy %s at %s -> บันทึกส่งมอบ', (depositPolicy, paymentStatus) => {
+    expect(nextSalesAction(fromStock({ paymentStatus, depositPolicy }), [orderConfirmedPr()]))
+      .toMatchObject({ key: SALES_ACTION.RECORD_DELIVERY });
   });
 });
 
@@ -767,6 +784,32 @@ describe('nextSalesAction — ออกใบขอซื้อ (IR) at ขั�
   it.each(['CUSTOMER_CONFIRMED', 'DEPOSIT_NOTICE_ISSUED', 'AWAITING_FINAL_PAYMENT', null])('paymentStatus %s -> not offered', (paymentStatus) => {
     expect(nextSalesAction(paidDeal({ paymentStatus }), [orderConfirmedPr()], { importRequests: [] })?.key)
       .not.toBe('create_import_request');
+  });
+
+  // Walk 4 (W4-05): a no-deposit deal never gets a deposit notice, so nothing moves its payment status past
+  // CUSTOMER_CONFIRMED - the backend gate (requireImportRequestIssuable) already lets it issue an IR there.
+  // The main button must offer the IR, not fall through to "nothing to do".
+  it.each(['NOT_REQUIRED', 'WAIVED'])(
+    'depositPolicy %s at CUSTOMER_CONFIRMED + no fulfilment yet -> สร้างใบขอซื้อ (IR) (no deposit to wait for)', (depositPolicy) => {
+      const deal = paidDeal({ paymentStatus: 'CUSTOMER_CONFIRMED', depositPolicy });
+      expect(nextSalesAction(deal, [orderConfirmedPr()], { importRequests: [] })).toEqual(CREATE_IR);
+      expect(nextSalesAction(deal, [orderConfirmedPr()], { importRequests: [{ id: 1, status: 'DRAFT' }] }))
+        .toEqual({ key: 'create_import_request', label: 'ออกเลขใบขอซื้อ (IR)' });
+    });
+
+  it('depositPolicy REQUIRED at CUSTOMER_CONFIRMED still gets the deposit notice, never the IR (wrong-way-round)', () => {
+    expect(nextSalesAction(paidDeal({ paymentStatus: 'CUSTOMER_CONFIRMED', depositPolicy: 'REQUIRED' }),
+      [orderConfirmedPr()], { importRequests: [] })).toMatchObject({ key: 'create_deposit_notice' });
+  });
+
+  it('a no-deposit deal that already has fulfilment (IR issued / from stock) is not offered the IR again', () => {
+    expect(nextSalesAction(paidDeal({ paymentStatus: 'CUSTOMER_CONFIRMED', depositPolicy: 'NOT_REQUIRED', fulfillmentStatus: 'IR_ISSUED' }),
+      [orderConfirmedPr()], { importRequests: [] })?.key).not.toBe('create_import_request');
+  });
+
+  it('DEPOSIT_NOTICE_ISSUED stays unoffered on a no-deposit deal too (unchanged)', () => {
+    expect(nextSalesAction(paidDeal({ paymentStatus: 'DEPOSIT_NOTICE_ISSUED', depositPolicy: 'NOT_REQUIRED' }),
+      [orderConfirmedPr()], { importRequests: [] })?.key).not.toBe('create_import_request');
   });
 
   it('CUSTOMER_CONFIRMED: the deposit-notice action still wins (the IR button only follows it)', () => {

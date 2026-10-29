@@ -214,6 +214,11 @@ describe('canCreatePricingRequest', () => {
   it('rejects non-sales roles', () => {
     expect(canCreatePricingRequest(ceo, activeDeal)).toBe(false);
   });
+  // Walk 4 (W4-04): once the deal's order is confirmed (payment track started) no new request may be created.
+  it('rejects the owner once the deal order is confirmed (paymentStatus set)', () => {
+    expect(canCreatePricingRequest(salesOwner, { ...activeDeal, paymentStatus: 'CUSTOMER_CONFIRMED' })).toBe(false);
+    expect(canCreatePricingRequest(salesOwner, { ...activeDeal, paymentStatus: null })).toBe(true);
+  });
 });
 
 describe('canUpdatePricingRequest / canSubmitPricingRequest', () => {
@@ -229,6 +234,10 @@ describe('canUpdatePricingRequest / canSubmitPricingRequest', () => {
   });
   it('reject a non-owner sales rep', () => {
     expect(canSubmitPricingRequest(otherSales, pr({ status: 'DRAFT' }))).toBe(false);
+  });
+  it('reject a DRAFT once the deal order is confirmed (ticketPaymentStatus set)', () => {
+    expect(canSubmitPricingRequest(salesOwner, pr({ status: 'DRAFT', ticketPaymentStatus: 'CUSTOMER_CONFIRMED' }))).toBe(false);
+    expect(canSubmitPricingRequest(salesOwner, pr({ status: 'DRAFT', ticketPaymentStatus: null }))).toBe(true);
   });
 });
 

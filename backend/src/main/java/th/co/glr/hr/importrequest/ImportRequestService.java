@@ -586,6 +586,12 @@ public class ImportRequestService {
         if (draft.items().isEmpty()) {
             throw new ApiException(HttpStatus.CONFLICT, "ใบขอซื้อยังไม่มีรายการสินค้า");
         }
+        // A draft made before the order was confirmed can name a line that is now covered from stock; issuing it
+        // would order stock the customer already has from the factory.
+        if (stored.anyItemCoveredFromStock(id)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ใบขอซื้อนี้มีรายการที่ครอบคลุมจากสต็อกแล้ว — ไม่ต้องสั่งนำเข้า กรุณาลบฉบับร่างนี้แล้วสร้างใบขอซื้อใหม่");
+        }
         // Owner decision 09-18 #2: "อื่นๆ/unknown must be typed by sales" — a form with no estimate
         // at all may not be issued. Both-or-neither is already the DB invariant
         // (chk_import_request_lead_time), so checking one implies the other.

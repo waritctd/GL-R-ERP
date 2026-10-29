@@ -356,11 +356,13 @@ public class OrderConfirmationService {
                 ? th.co.glr.hr.dealquotation.WastageCalculator.sqmQuantityFromPieces(
                     reconciledQty.intValueExact(), accepted.sqmPerPiece())
                 : item.requestedQtySqm();
+            // A stock line (IN_THAILAND) is covered in full and never ordered from a factory; any other line 0.
+            BigDecimal qtyFromStock = "IN_THAILAND".equals(item.stockSource()) ? reconciledQty : BigDecimal.ZERO;
             if (item.sourceTicketItemId() != null) {
                 boolean changed;
                 try {
                     changed = tickets.reconcileItemQty(
-                        ticketId, item.sourceTicketItemId(), reconciledQty, reconciledQtySqm);
+                        ticketId, item.sourceTicketItemId(), reconciledQty, reconciledQtySqm, qtyFromStock);
                 } catch (DataIntegrityViolationException e) {
                     throw new ApiException(HttpStatus.CONFLICT,
                         "ไม่สามารถปรับจำนวนสินค้า (item " + item.sourceTicketItemId()
@@ -373,7 +375,7 @@ public class OrderConfirmationService {
                 // to reserveStock/completeDelivery.
                 tickets.insertReconciledItem(ticketId, resolveBrand(item), item.model(), item.color(),
                     item.texture(), item.size(), item.factory(), reconciledQty, reconciledQtySqm,
-                    unitBasis);
+                    unitBasis, qtyFromStock);
                 anyChange = true;
             }
         }

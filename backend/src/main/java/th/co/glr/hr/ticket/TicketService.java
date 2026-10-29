@@ -3,7 +3,6 @@ package th.co.glr.hr.ticket;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.LocalDate;
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -202,7 +201,7 @@ public class TicketService {
         }
         TicketDto ticket = requireViewAccess(id, actor);
         // B5 fix: display-only fallback, scoped to THIS single read endpoint on purpose. Every
-        // other reader of ticket.items() (actions()'s canReserveStock/canRecordDelivery/
+        // other reader of ticket.items() (actions()'s canRecordDelivery/
         // hasRemainingDelivery, editItems' merge-by-position, commission/delivery calculations,
         // ...) must keep seeing the real (possibly empty) sales.ticket_item rows -- those all
         // read qtyDelivered/qtyFromStock and stage/action gates that a borrowed quotation line
@@ -353,21 +352,6 @@ public class TicketService {
                 && !Priority.isValid(request.priority())) {
             throw new ApiException(HttpStatus.BAD_REQUEST,
                 "ไม่รองรับระดับความสำคัญ '" + request.priority() + "'");
-        }
-        // V183 (stock-sourced deal-line pricing): tickets.create(...) below calls
-        // TicketRepository#insertItems directly off the raw TicketItemRequest list — there is no
-        // DTO merge step (like editItems' mergeEditedItemsPreservingPricing) to hook validation
-        // into before persistence, so the invariant chk_ticket_item_stock_sale_price enforces at
-        // the DB layer is checked here instead, before any DB write, same style as the
-        // priority/entryChannel guards immediately above.
-        if (request.items() != null) {
-            for (TicketItemRequest item : request.items()) {
-                if (Boolean.TRUE.equals(item.sourcedFromStock())
-                        && !isStorablePositivePrice(item.stockSalePrice())) {
-                    throw new ApiException(HttpStatus.BAD_REQUEST,
-                        "ต้องระบุราคาขายเมื่อเลือกสินค้าจากสต็อก");
-                }
-            }
         }
         String code = tickets.nextTicketCode();
         long id = tickets.create(request, code, actor.id(), actor.name());
@@ -945,6 +929,11 @@ public class TicketService {
         }
         // Deal pipeline (V50): a confirmed PO advances the deal — guarded no-op inside.
         autoAdvanceStage(s, DealStage.ORDER_RECEIVED, actor);
+        // No deposit to wait for (0% quotation, or a policy already waived): an all-stock deal goes
+        // straight to delivery. `s` is stale here (the policy may have just changed), so re-read.
+        if (DepositPolicy.bypassesDepositNotice(requireTicket(ticketId).summary().depositPolicy())) {
+            routeAllStockDealToDelivery(ticketId, actor);
+        }
         return requireTicket(ticketId);
     }
 
@@ -1463,18 +1452,7 @@ public class TicketService {
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.STOCK_RESERVED, s.status(), s.status(),
             "qty_from_stock=" + totalDeclared.stripTrailingZeros().toPlainString());
-        boolean allCovered = !ticket.items().isEmpty()
-            && ticket.items().stream()
-                .allMatch(item -> nullToZero(mergedStock.get(item.id())).compareTo(nullToZero(item.qty())) >= 0);
-        boolean leavesTheImportAxis = allCovered
-            && (s.fulfillmentStatus() == null || FulfilmentStatus.FROM_STOCK.equals(s.fulfillmentStatus()));
-        if (leavesTheImportAxis) {
-            tickets.updateFulfillmentStatus(ticketId, FulfilmentStatus.FROM_STOCK);
-            // Fully covered from stock — no import journey, so the goods are ready
-            // now. Advance straight to DELIVERY_SCHEDULING (S18) rather than
-            // PROCUREMENT (an import step this deal never performs).
-            autoAdvanceStage(s, DealStage.DELIVERY_SCHEDULING, actor);
-        }
+        boolean leavesTheImportAxis = routeAllStockDealToDelivery(s, ticket.items(), mergedStock, actor);
         notifySalesManagerOfRepDeclaration(s, actor, mergedStock, ticket.items(), leavesTheImportAxis);
         return requireTicket(ticketId);
     }
@@ -1602,7 +1580,7 @@ public class TicketService {
      * Who may set THIS deal's per-item commission weight -- the single source of truth for {@link
      * #setItemWeightMultipliers}'s gate and for whether {@link #actions} advertises {@code
      * SET_ITEM_WEIGHT_MULTIPLIER}, exactly the same "one predicate, never two copies" discipline
-     * {@link #canReserveStock} documents for {@code RESERVE_STOCK}. No ownership/stage nuance:
+     * {@link #canWriteDelivery} documents. No ownership/stage nuance:
      * {@link #ITEM_WEIGHT_ROLES} are both blanket oversight roles here, the same shape {@code
      * CommissionService#updateDeductions}'s {@code requireManagerOrCeo} already has at the record
      * level.
@@ -1659,6 +1637,9 @@ public class TicketService {
         String source = request.source() == null ? "" : request.source().trim().toUpperCase();
         if (!DELIVERY_SOURCES.contains(source)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "source ต้องเป็น WAREHOUSE หรือ STOCK");
+        }
+        if ("STOCK".equals(source) && !depositSettled(s)) {
+            throw new ApiException(HttpStatus.CONFLICT, "ส่งสินค้าจากสต็อกได้หลังรับชำระมัดจำแล้ว (หรือได้รับการยกเว้นมัดจำ) เท่านั้น");
         }
         Map<Long, TicketItemDto> itemsById = itemMap(ticket.items());
         Map<Long, BigDecimal> combined = new LinkedHashMap<>();
@@ -1828,6 +1809,11 @@ public class TicketService {
                 + (note != null ? " — " + note : ""),
             RelatedDocumentType.PAYMENT_RECEIPT, receiptId);
         reconcilePaymentStatus(ticketId, actor);
+        // Deposit confirmed (the payment track moved past CUSTOMER_CONFIRMED): an all-stock deal is ready to deliver.
+        String paymentAfter = requireTicket(ticketId).summary().paymentStatus();
+        if (paymentAfter != null && !"CUSTOMER_CONFIRMED".equals(paymentAfter)) {
+            routeAllStockDealToDelivery(ticketId, actor);
+        }
         return requireTicket(ticketId);
     }
 
@@ -2576,6 +2562,36 @@ public class TicketService {
     }
 
     /**
+     * A deal whose every line is covered from stock (non-empty, covered >= qty) has no import journey:
+     * fulfilment becomes FROM_STOCK and the stage goes straight to DELIVERY_SCHEDULING (S18), not
+     * PROCUREMENT. Shared by reserveStock, the deposit confirmation and the 0%-deposit order
+     * confirmation. {@code coveredByItemId} is the per-line stock cover to judge.
+     *
+     * @return true when the deal is all-stock and not already on the import axis
+     */
+    private boolean routeAllStockDealToDelivery(TicketSummaryDto s, List<TicketItemDto> items,
+                                                Map<Long, BigDecimal> coveredByItemId, UserPrincipal actor) {
+        boolean allCovered = !items.isEmpty()
+            && items.stream()
+                .allMatch(item -> nullToZero(coveredByItemId.get(item.id())).compareTo(nullToZero(item.qty())) >= 0);
+        boolean leavesTheImportAxis = allCovered
+            && (s.fulfillmentStatus() == null || FulfilmentStatus.FROM_STOCK.equals(s.fulfillmentStatus()));
+        if (leavesTheImportAxis) {
+            tickets.updateFulfillmentStatus(s.id(), FulfilmentStatus.FROM_STOCK);
+            autoAdvanceStage(s, DealStage.DELIVERY_SCHEDULING, actor);
+        }
+        return leavesTheImportAxis;
+    }
+
+    /** {@link #routeAllStockDealToDelivery(TicketSummaryDto, List, Map, UserPrincipal)} on a fresh read of the deal. */
+    private void routeAllStockDealToDelivery(long ticketId, UserPrincipal actor) {
+        TicketDto ticket = requireTicket(ticketId);
+        Map<Long, BigDecimal> covered = new LinkedHashMap<>();
+        ticket.items().forEach(item -> covered.put(item.id(), nullToZero(item.qtyFromStock())));
+        routeAllStockDealToDelivery(ticket.summary(), ticket.items(), covered, actor);
+    }
+
+    /**
      * Same-transaction stage advance from the deal's own operational transitions — and, since the
      * 2026-10-16 ruling, from a quotation being addressed to a recipient. No-throw by construction:
      * a no-op when the deal is not ACTIVE, when the target is not strictly forward (monotonic, so
@@ -2732,6 +2748,10 @@ public class TicketService {
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.POLICY_CHANGED, s.salesStage(), s.salesStage(),
             "deposit_policy → " + policy + " — " + reason.trim());
+        // Nothing left to wait for: an all-stock deal at CUSTOMER_CONFIRMED goes straight to delivery.
+        if (PaymentTrack.CUSTOMER_CONFIRMED.equals(s.paymentStatus())) {
+            routeAllStockDealToDelivery(ticketId, actor);
+        }
         return requireTicket(ticketId);
     }
 
@@ -2891,24 +2911,6 @@ public class TicketService {
         return requireTicket(ticketId);
     }
 
-    /**
-     * V183: is this a stock sale price that will still be positive once Postgres has STORED it?
-     *
-     * <p>{@code sales.ticket_item.stock_sale_price} is {@code numeric(14,2)}, and Postgres rounds
-     * a value to the column's scale BEFORE {@code chk_ticket_item_stock_sale_price} sees it. A
-     * bare {@code signum() > 0} therefore does NOT match the CHECK: {@code 0.004} is positive in
-     * Java, is stored as {@code 0.00}, and the constraint then rejects the row — surfacing as a
-     * {@link org.springframework.dao.DataIntegrityViolationException}, which
-     * {@code ApiExceptionHandler.handleDataAccess} reports as a 500 (with the raw driver message),
-     * not the clean Thai 400 this validation exists to give. Rounding HALF_UP at scale 2 is
-     * exactly Postgres' own numeric rounding, so this predicate agrees with the CHECK for every
-     * input. Verified against real Postgres 17: {@code 0.004} violates the constraint,
-     * {@code 0.005} stores as {@code 0.01}.
-     */
-    private static boolean isStorablePositivePrice(BigDecimal price) {
-        return price != null && price.setScale(2, RoundingMode.HALF_UP).signum() > 0;
-    }
-
     private List<TicketItemDto> mergeEditedItemsPreservingPricing(
             long ticketId, List<TicketItemDto> existingItems, List<TicketItemRequest> requestItems) {
         List<TicketItemDto> merged = new ArrayList<>(requestItems.size());
@@ -2927,33 +2929,14 @@ public class TicketService {
             String currency = prior != null
                 ? prior.currency()
                 : ((r.currency() != null && !r.currency().isBlank()) ? r.currency() : "THB");
-            // V183: unlike proposedPrice/approvedPrice/calcedCost/manualPrice (guarded, "prior
-            // always wins" because only import/CEO may set them), sourcedFromStock/stockSalePrice
-            // are a sales decision made at deal-entry/edit time -- the request WINS, mirroring
-            // unitBasis's own null-safe-fallback treatment just above: a request that says
-            // nothing about these fields (r.sourcedFromStock() == null) inherits the prior row's
-            // value rather than silently resetting the flag to "not from stock" on every
-            // unrelated edit.
+            // sourcedFromStock is a sales decision made at deal-entry/edit time -- the request WINS, with
+            // the same null-safe fallback as unitBasis: a request that says nothing about it inherits the
+            // prior row's flag. The sales-typed stockSalePrice is gone (walk 4): the deal shows the
+            // CEO-approved price, so whatever a client sends is dropped and the column stays NULL.
             boolean sourcedFromStock = r.sourcedFromStock() != null
                 ? r.sourcedFromStock()
                 : (prior != null && prior.sourcedFromStock());
-            BigDecimal stockSalePrice = r.sourcedFromStock() != null
-                ? r.stockSalePrice()
-                : (prior != null ? prior.stockSalePrice() : null);
-            // Same invariant chk_ticket_item_stock_sale_price enforces at the DB layer --
-            // checked here too so a bad request 400s with a clear Thai message instead of
-            // reaching replaceItemsPreservingPricing and failing as an opaque 500 from a
-            // constraint violation.
-            if (sourcedFromStock) {
-                if (!isStorablePositivePrice(stockSalePrice)) {
-                    throw new ApiException(HttpStatus.BAD_REQUEST,
-                        "ต้องระบุราคาขายเมื่อเลือกสินค้าจากสต็อก");
-                }
-            } else {
-                // Force-null regardless of what the request sent — never trust a stray price
-                // through when the item isn't flagged as stock-sourced.
-                stockSalePrice = null;
-            }
+            BigDecimal stockSalePrice = null;
             merged.add(new TicketItemDto(
                 prior != null ? prior.id() : 0L,
                 ticketId,
@@ -3170,10 +3153,6 @@ public class TicketService {
                 && FulfilmentStatus.SHIPPING.equals(s.fulfillmentStatus())) {
             actions.add(new TicketActionDto("GOODS_RECEIVED", "fulfillment", "รับสินค้า"));
         }
-        if (canReserveStock(ticket, actor)) {
-            actions.add(new TicketActionDto("RESERVE_STOCK", "fulfillment", "จองสินค้าจากสต็อก",
-                List.of("lines")));
-        }
         if (canSetItemWeightMultiplier(s, actor)) {
             actions.add(new TicketActionDto("SET_ITEM_WEIGHT_MULTIPLIER", "fulfillment",
                 "ตั้งน้ำหนักคอมมิชชั่นต่อรายการ", List.of("lines")));
@@ -3367,12 +3346,8 @@ public class TicketService {
     }
 
     /**
-     * The stage floor a stock-coverage declaration must clear, and the single source of truth for
-     * it — {@link #reserveStock}'s 409 and {@link #canReserveStock} (which decides whether {@link
-     * #actions} advertises RESERVE_STOCK) both read this one predicate, exactly as they both read
-     * {@link #canDeclareStockCoverage} for the authorisation half. Applying the floor to only one
-     * of them would put the capability back in the state the widening was careful to avoid: live
-     * but invisible, or advertised and then refused on click.
+     * The stage floor a stock-coverage declaration must clear: {@link #reserveStock}'s 409 reads it.
+     * (Walk 4: {@code RESERVE_STOCK} is no longer advertised in {@link #actions}; the endpoint stays.)
      *
      * <p><strong>Why ORDER_RECEIVED (S10), and why a floor is needed at all.</strong> The
      * declaration is uncorroborated (see {@link #reserveStock}), yet a full-coverage one reroutes
@@ -3399,14 +3374,6 @@ public class TicketService {
         return DealStage.indexOf(s.salesStage()) >= DealStage.indexOf(DealStage.ORDER_RECEIVED);
     }
 
-    private boolean canReserveStock(TicketDto ticket, UserPrincipal actor) {
-        return canDeclareStockCoverage(ticket.summary(), actor)
-            && stockCoverageStageReached(ticket.summary())
-            && !ticket.items().isEmpty()
-            && hasRemainingDelivery(ticket)
-            && !FulfilmentStatus.FULLY_DELIVERED.equals(ticket.summary().fulfillmentStatus());
-    }
-
     private boolean canRecordDelivery(TicketDto ticket, UserPrincipal actor) {
         if (!canWriteDelivery(ticket.summary(), actor) || !hasRemainingDelivery(ticket)) {
             return false;
@@ -3415,7 +3382,20 @@ public class TicketService {
         boolean stockAvailable = ticket.items().stream()
             .anyMatch(item -> nullToZero(item.qtyFromStock()).compareTo(nullToZero(item.qtyDelivered())) > 0);
         boolean warehouseAvailable = warehouseDeliveryAvailable(s, s.id());
-        return FulfilmentStatus.FROM_STOCK.equals(s.fulfillmentStatus()) || stockAvailable || warehouseAvailable;
+        return ((FulfilmentStatus.FROM_STOCK.equals(s.fulfillmentStatus()) || stockAvailable) && depositSettled(s))
+            || warehouseAvailable;
+    }
+
+    /**
+     * The deposit is in hand: paid (or later), or a no-deposit policy that has reached CUSTOMER_CONFIRMED.
+     * A deposit NOTICE alone is not money. Stock goods leave the warehouse only after this (walk 4: stock
+     * lines are covered from order confirmation, so without it a deal could deliver before paying).
+     */
+    private static boolean depositSettled(TicketSummaryDto s) {
+        String ps = s.paymentStatus();
+        return PaymentTrack.DEPOSIT_PAID.equals(ps) || PaymentTrack.AWAITING_FINAL_PAYMENT.equals(ps)
+            || PaymentTrack.FULLY_PAID.equals(ps)
+            || (DepositPolicy.bypassesDepositNotice(s.depositPolicy()) && PaymentTrack.CUSTOMER_CONFIRMED.equals(ps));
     }
 
     /** Prerequisites only — the role checks live on each action below. */

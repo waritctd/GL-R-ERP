@@ -1368,6 +1368,7 @@ describe('PricingRequestDetailPage DRAFT — ส่งให้ฝ่ายน�
     ['the sales manager, on a DRAFT', salesManager, { status: 'DRAFT' }],
     ['import, on a DRAFT', importUser, { status: 'DRAFT' }],
     ['the owning rep, once SUBMITTED', salesOwner, { status: 'SUBMITTED' }],
+    ['the owning rep, once the deal order is confirmed', salesOwner, { status: 'DRAFT', ticketPaymentStatus: 'CUSTOMER_CONFIRMED' }],
   ])('no ส่งให้ฝ่ายนำเข้า for %s', async (_label, user, summary) => {
     const request = buildRequest({ summary });
     renderDetailPage({ user, request });
@@ -5677,5 +5678,113 @@ describe('PricingRequestDetailPage ยืนยันราคาเสนอ re
     await act(async () => { await queryClient.invalidateQueries(); });
 
     await waitFor(() => expect(notice()).toBeNull());
+  });
+});
+
+// Walk 4 (owner rulings, Ploy 2026-10-29): a stock line (stockSource IN_THAILAND) is priced by the CEO and
+// then waits for delivery - it is never ordered from a factory, so import is not asked to contact one for
+// it; the request page says which lines are stock; and once the deal's order is confirmed no new pricing
+// round starts from it.
+describe('PricingRequestDetailPage - stock lines and the confirmed order (Walk 4)', () => {
+  const baseItem = buildRequest().items[0];
+  const stockRequestItem = (overrides = {}) => ({
+    ...baseItem, id: 2, model: 'S1', productDescription: 'กระเบื้อง S1 จากสต็อก', stockSource: 'IN_THAILAND',
+    originCountry: null, leadTimeMinDays: null, leadTimeMaxDays: null, resolvedFactoryName: null, ...overrides,
+  });
+  const stockDecisionItem = (overrides = {}) => buildDecisionItem({
+    id: 8002, pricingRequestItemId: 2, pricingCostingItemId: null, stockSource: 'IN_THAILAND',
+    frozenLandedCostPerRequestedUnitThb: null, sqmPerPiece: 0.36, listUnitPrice: 150, netUnitPrice: 150, ...overrides,
+  });
+
+  // W4-03: a return-to-import leaves a RETURNED decision behind; when the request comes back READY, the CEO
+  // starts a fresh review. The page used to show the RETURNED decision instead and no start button.
+  it('W4-03: a READY_FOR_CEO_REVIEW request whose only decision was RETURNED offers เริ่มพิจารณาราคาขาย', async () => {
+    const request = buildRequest({ summary: { status: 'READY_FOR_CEO_REVIEW' } });
+    api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [buildDecision({ status: 'RETURNED' })] });
+    renderDetailPage({ user: ceoUser, request });
+    await waitForLoaded(request);
+    await waitFor(() => expect(api.pricingRequests.listPricingDecisions).toHaveBeenCalled());
+
+    expect(await screen.findByTestId('pcr-ceo-start-review')).not.toBeNull();
+  });
+
+  // W4-06 (default pending Ploy's confirm): with no import line there is no import cost to fix, so the CEO's
+  // ตีกลับให้ฝ่ายนำเข้าแก้ไข is hidden (the backend 409 stays); with any import line it is still there.
+  async function renderCeoReviewing(requestItems, decisionItems) {
+    const request = buildRequest({ summary: { status: 'CEO_REVIEWING' }, items: requestItems });
+    api.pricingRequests.listPricingDecisions.mockResolvedValue({
+      items: [buildDecision({ priceMode: 'NET', items: decisionItems })],
+    });
+    renderDetailPage({ user: ceoUser, request });
+    await waitForLoaded(request);
+    await screen.findByText('PCD-2026-0001');
+    await screen.findByTestId('pcr-ceo-approve');
+  }
+
+  it('W4-06: on a request whose every line is a stock line the CEO is not offered ตีกลับให้ฝ่ายนำเข้าแก้ไข', async () => {
+    await renderCeoReviewing([stockRequestItem({ id: 1 })], [stockDecisionItem({ pricingRequestItemId: 1 })]);
+    expect(screen.queryByRole('button', { name: 'ตีกลับให้ฝ่ายนำเข้าแก้ไข' })).toBeNull();
+  });
+
+  it('W4-06: on a mixed request the CEO still has ตีกลับให้ฝ่ายนำเข้าแก้ไข (wrong-way-round)', async () => {
+    await renderCeoReviewing([baseItem, stockRequestItem()],
+      [buildDecisionItem({ sqmPerPiece: 0.36, listUnitPrice: 100, netUnitPrice: 100 }), stockDecisionItem()]);
+    expect(screen.getByRole('button', { name: 'ตีกลับให้ฝ่ายนำเข้าแก้ไข' })).not.toBeNull();
+  });
+
+  // W4-01: the CEO's line cards say which lines are stock (the badge exists on the deal page already; the
+  // request pages had none).
+  it('W4-01: the CEO pricing panel marks a stock line จากสต็อก and an import line not', async () => {
+    await renderCeoReviewing([baseItem, stockRequestItem()],
+      [buildDecisionItem({ sqmPerPiece: 0.36, listUnitPrice: 100, netUnitPrice: 100 }), stockDecisionItem()]);
+    const panel = screen.getByRole('heading', { level: 2, name: 'รายการสินค้าและราคาตั้งต้น' }).closest('section');
+    expect(within(panel).getAllByText('จากสต็อก')).toHaveLength(1);
+  });
+
+  describe('import view', () => {
+    const importRequest = (items) => buildRequest({ summary: { status: 'IMPORT_REVIEWING' }, items });
+    const importLine = { ...baseItem, resolvedFactoryName: 'Factory A', factory: null };
+
+    it('W4-01: import sees a จากสต็อก badge on a stock line, and no factory mail/contact group for a stock-only factory', async () => {
+      // The stock line resolves to Factory B through its catalog product - the exact case that used to
+      // put a "Factory B - สร้างเมล / ติดต่อโรงงานแล้ว" group on screen for goods nobody orders from B.
+      const request = importRequest([importLine, stockRequestItem({ resolvedFactoryName: 'Factory B' })]);
+      renderDetailPage({ user: importUser, request });
+      await waitForLoaded(request);
+
+      const groups = await screen.findAllByTestId('pcr-price-preview-group');
+      expect(groups).toHaveLength(1);
+      expect(groups[0].textContent).toContain('Factory A');
+      expect(groups[0].textContent).not.toContain('Factory B');
+      expect(screen.getAllByText('จากสต็อก').length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('W4-01: a stock line with no factory is not reported as "ยังไม่ได้ระบุโรงงาน"', async () => {
+      const request = importRequest([importLine, stockRequestItem()]);
+      renderDetailPage({ user: importUser, request });
+      await waitForLoaded(request);
+      await screen.findAllByTestId('pcr-price-preview-group');
+
+      expect(screen.queryByText(/ยังไม่ได้ระบุโรงงาน \d+ รายการ/)).toBeNull();
+    });
+  });
+
+  // W4-04: the PCR summary carries the deal's payment status (null until the order is confirmed); the
+  // backend refuses a new round once it is set, so the page does not offer สร้างรอบแก้ไข.
+  describe('สร้างรอบแก้ไข once the deal order is confirmed', () => {
+    it('is offered to the owner before the order is confirmed', async () => {
+      const request = buildRequest({ summary: { status: 'QUOTATION_ISSUED', ticketPaymentStatus: null } });
+      renderDetailPage({ user: salesOwner, request });
+      await waitForLoaded(request);
+      expect(screen.getByRole('button', { name: 'สร้างรอบแก้ไข' })).not.toBeNull();
+    });
+
+    it('is NOT offered once the deal order is confirmed (ticketPaymentStatus set)', async () => {
+      const request = buildRequest({ summary: { status: 'QUOTATION_ISSUED', ticketPaymentStatus: 'CUSTOMER_CONFIRMED' } });
+      renderDetailPage({ user: salesOwner, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCR-2026-0001');
+      expect(screen.queryByRole('button', { name: 'สร้างรอบแก้ไข' })).toBeNull();
+    });
   });
 });

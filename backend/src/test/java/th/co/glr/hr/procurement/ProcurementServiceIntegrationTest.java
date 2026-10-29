@@ -426,12 +426,12 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
      */
     @Test
     void createPurchaseOrders_ticketAtProcurementButThisPricingRequestNotAccepted_isRejected() {
-        DealFixture deal = driveToProcurement(true);
+        DealFixture deal = driveToProcurement(true, true);
         // The second pricing request is driven all the way to QUOTATION_ISSUED — it DOES have its
         // own APPROVED decision and its own real pricing_costing_item rows, so
         // findApprovedPricingCostingId succeeds and cannot be the thing that blocks this call.
         // Only status != QUOTATION_ACCEPTED (the customer has not yet accepted THIS quotation) can.
-        long otherPricingRequestId = addSecondPricingRequestDrivenToQuotationIssued(deal.ticketId);
+        long otherPricingRequestId = siblingPricingRequestId;
         assertThat(pricingRequestService.get(otherPricingRequestId, importActor).summary().status())
             .isEqualTo(PricingRequestStatus.QUOTATION_ISSUED);
 
@@ -552,7 +552,21 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
      * factories, so downstream tests can assert "2 factories -&gt; 2 POs" without a second
      * fixture. */
     private DealFixture driveToProcurement(boolean issueImportRequest) {
+        return driveToProcurement(issueImportRequest, false);
+    }
+
+    /** The id of the second request {@code driveToProcurement(.., true)} drove to QUOTATION_ISSUED. */
+    private long siblingPricingRequestId;
+
+    /**
+     * {@code withSiblingRequest}: a SECOND request on the ticket is driven to QUOTATION_ISSUED BEFORE the
+     * first one's order is confirmed (walk 4, W4-04: a confirmed deal starts no new pricing round).
+     */
+    private DealFixture driveToProcurement(boolean issueImportRequest, boolean withSiblingRequest) {
         DealFixture deal = driveToQuotationIssuedNotYetAccepted(FACTORY_A, FACTORY_B);
+        if (withSiblingRequest) {
+            siblingPricingRequestId = addSecondPricingRequestDrivenToQuotationIssued(deal.ticketId);
+        }
         CustomerQuotationDto issued = quotationRepository.findByPricingRequest(deal.pricingRequestId).stream()
             .filter(q -> QuotationStatus.ISSUED.equals(q.docStatus()))
             .findFirst().orElseThrow();

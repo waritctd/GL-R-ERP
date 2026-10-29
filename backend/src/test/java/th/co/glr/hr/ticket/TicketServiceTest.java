@@ -1310,27 +1310,23 @@ class TicketServiceTest {
     }
 
     /**
-     * The floor must reach BOTH entry points or the capability goes live-but-invisible (or
-     * advertised-then-refused), which is the failure #706 was careful to avoid when it unified
-     * the gate and the advertiser on canDeclareStockCoverage. Same deal, same roles, one stage
-     * apart.
+     * Walk 4 (owner ruling 2026-10-29): there is no reserve-from-stock feature, so {@code
+     * RESERVE_STOCK} is advertised to nobody at any stage - not the owning rep, not the CEO, not
+     * import - even where it used to be offered (ORDER_RECEIVED and later). The endpoint and
+     * {@code reserveStock} itself stay (suites use them as a fixture); only the advert goes.
      */
     @Test
-    void actions_doesNotAdvertiseReserveStockBelowOrderReceived() {
+    void actions_neverAdvertisesReserveStock_atAnyStage() {
         TicketItemDto item = deliveryItem(1L, "100.00", "0.00", "0.00");
-        stubDeal(41L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item), null, null,
-            DealStage.NEGOTIATION, null);
-        // The floor is checked through the two roles that CAN declare (owning rep + CEO); import is
-        // no longer offered RESERVE_STOCK at all (owner decision 2026-09-28), asserted below the loop.
-        assertThat(actionCodes(41L, salesActor)).doesNotContain("RESERVE_STOCK");
-        assertThat(actionCodes(41L, ceoActor)).doesNotContain("RESERVE_STOCK");
-
-        stubDeal(42L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item), null, null,
-            DealStage.ORDER_RECEIVED, null);
-        assertThat(actionCodes(42L, salesActor)).contains("RESERVE_STOCK");
-        assertThat(actionCodes(42L, ceoActor)).contains("RESERVE_STOCK");
-        // import is above the floor here yet still not offered it — the S18 narrowing, at the advertiser.
-        assertThat(actionCodes(42L, importActor)).doesNotContain("RESERVE_STOCK");
+        long id = 41L;
+        for (String stage : List.of(DealStage.NEGOTIATION, DealStage.ORDER_RECEIVED, DealStage.DEPOSIT_RECEIVED,
+                                    DealStage.PROCUREMENT, DealStage.DELIVERY_SCHEDULING)) {
+            stubDeal(id, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item), null, null, stage, null);
+            assertThat(actionCodes(id, salesActor)).as(stage).doesNotContain("RESERVE_STOCK");
+            assertThat(actionCodes(id, ceoActor)).as(stage).doesNotContain("RESERVE_STOCK");
+            assertThat(actionCodes(id, importActor)).as(stage).doesNotContain("RESERVE_STOCK");
+            id++;
+        }
     }
 
     @Test
@@ -1734,38 +1730,30 @@ class TicketServiceTest {
         verify(ticketRepo).create(request, "PR-2026-0001", 1L, "sales");
     }
 
-    // ── create: V183 stock-sourced deal-line pricing ────────────────────────
-    // tickets.create(...) calls TicketRepository#insertItems directly off the raw
-    // TicketItemRequest list -- no DTO merge step exists on this path, so the
-    // stockSalePrice required+positive-iff-sourcedFromStock invariant is validated up front,
-    // before any DB write is attempted (same style as create_rejectsInvalidPriority above).
+    // ── create: stock-sourced deal lines ─────────────────────────────────────
+    // Walk 4 (W4-09, owner ruling 2026-10-29): the deal line no longer carries a sales-typed price
+    // for stock goods - the deal shows the CEO-approved price. Ticking "from stock" is just a flag;
+    // the price is not required and a price that is sent is stored as NULL (the NULL itself is proved
+    // against real Postgres in TicketRepositoryIntegrationTest).
 
     @Test
-    void create_rejectsStockSourcedItemWithoutPositivePrice() {
+    void create_allowsStockSourcedItemWithoutAPrice() {
         TicketItemRequest missingPrice = new TicketItemRequest(
             "Brand", "Model", "White", "Matte", "60x60", null,
             BigDecimal.ONE, null, "PIECE", null, null, null, null, "THB",
             null, null, true, null);
         var request = createRequest(77L, List.of(missingPrice));
+        when(ticketRepo.nextTicketCode()).thenReturn("PR-2026-0001");
+        when(ticketRepo.create(request, "PR-2026-0001", 1L, "sales")).thenReturn(10L);
+        stubTicket(10L, 1L, TicketStatus.DRAFT);
 
-        assertBadRequest(() -> service.create(request, salesActor));
-        verify(ticketRepo, never()).create(any(), anyString(), org.mockito.ArgumentMatchers.anyLong(), anyString());
+        service.create(request, salesActor); // must not throw
+
+        verify(ticketRepo).create(request, "PR-2026-0001", 1L, "sales");
     }
 
     @Test
-    void create_rejectsStockSourcedItemWithZeroOrNegativePrice() {
-        TicketItemRequest zeroPrice = new TicketItemRequest(
-            "Brand", "Model", "White", "Matte", "60x60", null,
-            BigDecimal.ONE, null, "PIECE", null, null, null, null, "THB",
-            null, null, true, BigDecimal.ZERO);
-        var request = createRequest(77L, List.of(zeroPrice));
-
-        assertBadRequest(() -> service.create(request, salesActor));
-        verify(ticketRepo, never()).create(any(), anyString(), org.mockito.ArgumentMatchers.anyLong(), anyString());
-    }
-
-    @Test
-    void create_allowsStockSourcedItemWithValidPrice() {
+    void create_allowsStockSourcedItemEvenIfAnOldClientStillSendsAPrice() {
         TicketItemRequest fromStock = new TicketItemRequest(
             "Brand", "Model", "White", "Matte", "60x60", null,
             BigDecimal.ONE, null, "PIECE", null, null, null, null, "THB",
@@ -2310,25 +2298,20 @@ class TicketServiceTest {
     }
 
     /**
-     * canReserveStock (the actions() advertiser) and reserveStock's own gate must stay in step —
-     * both now read canDeclareStockCoverage, so the API can never hide an action the caller may
-     * actually perform, nor offer one that would 403 on click (the inverse of the "never advertise
-     * a dead action" rule canIssueImportRequest documents). Without this test the advertiser's
-     * half of the 2026-08-13 widening would be an unmutatable line.
+     * Walk 4: {@code RESERVE_STOCK} is no longer advertised to the deal owner or the CEO (it was the
+     * "never advertise a dead action" pairing with reserveStock's own gate; the owner removed the
+     * จองสินค้าจากสต็อก UI), and still not to anyone else. {@code reserveStock} itself keeps its gate -
+     * see StageFactGateIntegrationTest for the endpoint staying callable.
      */
     @Test
-    void actions_offersReserveStockToTheDealOwner_butNotToAnotherRep() {
+    void actions_neverOffersReserveStock_toAnyRole() {
         TicketItemDto item = deliveryItem(1L, "100.00", "0.00", "0.00");
         stubDeal(40L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item),
             "DEPOSIT_PAID", null, DealStage.ORDER_RECEIVED, null);
 
-        assertThat(actionCodes(40L, salesActor)).contains("RESERVE_STOCK");
-        // CEO keeps it as oversight/override; import lost it on 2026-09-28 (S18 is Sales's).
-        assertThat(actionCodes(40L, ceoActor)).contains("RESERVE_STOCK");
+        assertThat(actionCodes(40L, salesActor)).doesNotContain("RESERVE_STOCK");
+        assertThat(actionCodes(40L, ceoActor)).doesNotContain("RESERVE_STOCK");
         assertThat(actionCodes(40L, importActor)).doesNotContain("RESERVE_STOCK");
-        // otherSales cannot even read this deal (requireViewAccess is owner-scoped for sales),
-        // so the advertiser is exercised through the roles that CAN see it and still must not
-        // be offered it.
         assertThat(actionCodes(40L, accountActor)).doesNotContain("RESERVE_STOCK");
         assertThat(actionCodes(40L, salesManagerActor)).doesNotContain("RESERVE_STOCK");
     }
@@ -2346,7 +2329,7 @@ class TicketServiceTest {
      * Rule 4 — {@link TicketService#waiveDeposit} 409s past that point (see
      * {@code depositPolicy_cannotChangeAfterNoticeIssued_evenForTheOwner} in
      * {@code DepositPolicyAuthzIntegrationTest}), so advertising it here would offer a button that
-     * dies on click, the same discipline {@link #actions_offersReserveStockToTheDealOwner_butNotToAnotherRep}
+     * dies on click, the same discipline {@link #actions_neverOffersReserveStock_toAnyRole}
      * documents for RESERVE_STOCK. This used to be named
      * actions_offersWaiveDepositToOwnerOnly_andDepositPaidToAccountOnly and asserted the OPPOSITE
      * for {@code salesActor} — that assertion was wrong; see canSetDepositPolicy's own Javadoc for
@@ -2761,16 +2744,16 @@ class TicketServiceTest {
         assertForbidden(() -> service.editItems(10L, new EditItemsRequest(List.of(req), null), otherSales));
     }
 
-    // ── editItems: V183 stock-sourced deal-line pricing ─────────────────────
-    // sourcedFromStock/stockSalePrice are LEGITIMATELY sales-writable (unlike proposedPrice/
-    // approvedPrice/calcedCost/manualPrice, which stay guarded to `prior`) — see
-    // mergeEditedItemsPreservingPricing's own comment. These tests cover: (b) an invalid
-    // price is rejected with 400, (c) sourcedFromStock=false forces stockSalePrice to null
-    // even if the request sent one, and (d) a request that omits both fields preserves the
-    // prior row's value instead of resetting it.
+    // ── editItems: stock-sourced deal lines ─────────────────────────────────
+    // sourcedFromStock is LEGITIMATELY sales-writable (unlike proposedPrice/approvedPrice/calcedCost/
+    // manualPrice, which stay guarded to `prior`) - see mergeEditedItemsPreservingPricing's own
+    // comment. Walk 4 (W4-09): stockSalePrice is no longer sales-writable at all - the merged row never
+    // carries one, whatever the request (or the prior row) said. Cases: (a) a flagged line with no price
+    // is accepted, (b) a sent price is dropped, (c) sourcedFromStock=false still clears it, (d) a request
+    // that omits the flag preserves the prior row's FLAG (but not a price).
 
     @Test
-    void editItems_rejectsStockSourcedItemWithoutPositivePrice() {
+    void editItems_acceptsStockSourcedItemWithoutAPrice_andKeepsTheFlag() {
         TicketItemDto existing = new TicketItemDto(
             101L, 10L, "Brand", "Model", null, null, null, "Cotto",
             new BigDecimal("5"), new BigDecimal("10"), null, null, null,
@@ -2782,8 +2765,33 @@ class TicketServiceTest {
             new BigDecimal("5"), new BigDecimal("10"), "PIECE",
             null, null, null, null, "THB", null, null, true, null);
 
-        assertBadRequest(() ->
-            service.editItems(10L, new EditItemsRequest(List.of(edited), null), salesActor));
+        service.editItems(10L, new EditItemsRequest(List.of(edited), null), salesActor); // must not throw
+
+        ArgumentCaptor<List<TicketItemDto>> captor = ArgumentCaptor.forClass(List.class);
+        verify(ticketRepo).replaceItemsPreservingPricing(eq(10L), captor.capture());
+        assertThat(captor.getValue().get(0).sourcedFromStock()).isTrue();
+        assertThat(captor.getValue().get(0).stockSalePrice()).isNull();
+    }
+
+    @Test
+    void editItems_aSentStockSalePrice_isNeverStored() {
+        TicketItemDto existing = new TicketItemDto(
+            101L, 10L, "Brand", "Model", null, null, null, "Cotto",
+            new BigDecimal("5"), new BigDecimal("10"), null, null, null,
+            null, null, "THB", 0, null, null, null, "PIECE", null, null);
+        stubTicketWithItems(10L, 1L, TicketStatus.IN_REVIEW, List.of(existing));
+
+        TicketItemRequest edited = new TicketItemRequest(
+            "Brand", "Model", null, null, null, "Cotto",
+            new BigDecimal("5"), new BigDecimal("10"), "PIECE",
+            null, null, null, null, "THB", null, null, true, new BigDecimal("999.00"));
+
+        service.editItems(10L, new EditItemsRequest(List.of(edited), null), salesActor);
+
+        ArgumentCaptor<List<TicketItemDto>> captor = ArgumentCaptor.forClass(List.class);
+        verify(ticketRepo).replaceItemsPreservingPricing(eq(10L), captor.capture());
+        assertThat(captor.getValue().get(0).sourcedFromStock()).isTrue();
+        assertThat(captor.getValue().get(0).stockSalePrice()).isNull();
     }
 
     @Test
@@ -2814,7 +2822,7 @@ class TicketServiceTest {
     }
 
     @Test
-    void editItems_omittingStockFieldsPreservesPriorValue() {
+    void editItems_omittingStockFieldsPreservesThePriorFlag_butNotAPrice() {
         // A request that says nothing about sourcedFromStock (null, the "not specified" value
         // for this Boolean field, as opposed to an explicit false) must not silently reset a
         // flag a previous save set — same null-safe-fallback treatment unitBasis already gets.
@@ -2844,7 +2852,8 @@ class TicketServiceTest {
         TicketItemDto merged = captor.getValue().get(0);
         assertThat(merged.brand()).isEqualTo("NewBrand"); // descriptive field still follows the request
         assertThat(merged.sourcedFromStock()).isTrue();
-        assertThat(merged.stockSalePrice()).isEqualByComparingTo("500.00");
+        // Walk 4: the flag is preserved, a prior sales-typed price is not carried forward any more.
+        assertThat(merged.stockSalePrice()).isNull();
     }
 
     // ── overrideItemPrice ────────────────────────────────────────────────

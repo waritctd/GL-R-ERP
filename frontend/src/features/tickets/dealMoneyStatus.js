@@ -28,6 +28,16 @@ export function depositReadyForIr(summary) {
     || (depositBypassed(depositPolicy) && paymentStatus === 'CUSTOMER_CONFIRMED');
 }
 
+/**
+ * Is the deposit in hand? Paid (or later), or a no-deposit policy that has reached CUSTOMER_CONFIRMED - a deposit
+ * NOTICE alone is not money. Mirrors TicketService#depositSettled; stock goods are delivered only after this.
+ */
+export function depositSettled(summary) {
+  const { paymentStatus, depositPolicy } = summary ?? {};
+  return DEPOSIT_PAID_STATUSES.includes(paymentStatus)
+    || (depositBypassed(depositPolicy) && paymentStatus === 'CUSTOMER_CONFIRMED');
+}
+
 /** `{ bypassed, paid, noticeIssued }` — the three deposit-status facts both callers key off. */
 export function depositStatus(summary) {
   const bypassed = depositBypassed(summary.depositPolicy);
