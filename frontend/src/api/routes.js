@@ -243,7 +243,7 @@ export const API_ROUTES = {
     get: (id) => `/api/remaining-invoices/${id}`,
     issue: (id) => `/api/remaining-invoices/${id}/issue`,
     revise: (id) => `/api/remaining-invoices/${id}/revise`,
-    file: (id) => `/api/remaining-invoices/${id}/file`,
+    file: (id, fmt = 'pdf') => `/api/remaining-invoices/${id}/file?format=${fmt}`,
   },
   // Mirrors BillingNoteController — the STORED ใบวางบิล aggregate (V189, GLA-99 step 3 / GLA-129
   // step 4). Customer-scoped (many deals bill together), DRAFT -> ISSUED -> {SUPERSEDED (revised) |

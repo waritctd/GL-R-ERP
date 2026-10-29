@@ -13,11 +13,8 @@ import java.util.List;
  * {@code noteTemplates} selection before calling the {@code /file} endpoint with the same values
  * as query params; a bare {@code /file} call with no params reproduces exactly this preview.
  *
- * <p>{@code itemCount}/{@code maxItems} let the dialog show a capacity refusal and disable the
- * download button BEFORE the caller wastes a round trip on the {@code /file} endpoint's 409 —
- * this DTO itself never throws for an over-capacity deal (only the {@code /file} render does),
- * so the dialog can always render a preview and a clear "over capacity" state instead of an
- * opaque failure.
+ * <p>{@code itemCount} is informational only: the printed sheet flows onto extra rows and pages, so there is
+ * no item capacity to refuse.
  *
  * <p>{@code quotationOptions}/{@code defaultQuotationId} (owner ruling, 2026-09-17 — see
  * DepositNoticeService's own "Remaining Invoice" section header comment): a deal can have several
@@ -42,7 +39,6 @@ public record RemainingInvoiceOptionsDto(
     List<ReferenceOption> depositReferenceOptions,
     List<DocumentNoteTemplateDto> noteTemplates,
     int        itemCount,
-    int        maxItems,
     BigDecimal itemsTotal,
     BigDecimal depositAmount,
     BigDecimal netAmount,

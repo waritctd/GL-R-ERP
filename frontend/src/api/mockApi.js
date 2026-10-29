@@ -4127,7 +4127,7 @@ function mockItemDesc(it) {
 }
 
 // Demo-mode placeholder blob. The real xlsx is rendered server-side by Apache POI
-// (QuotationRenderer/RemainingInvoiceRenderer/DepositNoticeRenderer) and streamed to the
+// (QuotationRenderer/RemainingInvoicePdfRenderer/DepositNoticePdfRenderer) and streamed to the
 // client; mock mode only needs to return a valid Blob so download callers stay happy without
 // pulling in the SheetJS (`xlsx`) dependency, which carries an unpatched high-severity advisory.
 function mockDocPlaceholderBlob(lines) {
@@ -4199,7 +4199,7 @@ td{border:1px solid #e2e8f0;padding:8px 10px;font-size:13px}
   return new Blob([html], { type: 'text/html;charset=utf-8' });
 }
 
-// ── Remaining invoice XLSX (demo placeholder) — real file from RemainingInvoiceRenderer.java ─
+// ── Remaining invoice XLSX (demo placeholder) — real file from RemainingInvoicePdfRenderer.java ─
 //
 // Nit fix (Opus review, GLA-99 step 2 review-round-1, 2026-09-20): this used to be
 // `buildMockRemainingInvoiceXlsx(ticketId)`, which RECOMPUTED a placeholder fresh from the
@@ -9002,7 +9002,6 @@ export const api = {
           depositReferenceOptions: [{ value: '', label: '(ไม่ระบุ)' }],
           noteTemplates: mockNoteTemplates,
           itemCount: priceItems.length,
-          maxItems: 22,
           itemsTotal,
           depositAmount,
           netAmount,
@@ -13565,7 +13564,7 @@ export const api = {
       if (backendBlob) return backendBlob;
       const doc = buildMockDoc(rawDoc);
 
-      // Demo placeholder — real xlsx from DepositNoticeRenderer.java (server, Apache POI)
+      // Demo placeholder — real xlsx from DepositNoticePdfRenderer.java (server, Apache POI)
       const items = (doc.items ?? []).map((it, i) => {
         const net = Number(it.netUnitPrice ?? it.unitPrice) || 0;
         const qty = Number(it.qty) || 0;
@@ -13787,7 +13786,7 @@ export const api = {
     async download(id) {
       const row = findStoredRemainingInvoiceRaw(id);
       requireDepositNoticeViewer(row.ticketId);
-      const blob = await tryBackendBlob(`/api/remaining-invoices/${id}/file`);
+      const blob = await tryBackendBlob(`/api/remaining-invoices/${id}/file?format=pdf`);
       return blob ?? buildMockRemainingInvoiceXlsxFromRow(row);
     },
   },

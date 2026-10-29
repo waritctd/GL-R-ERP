@@ -36,10 +36,10 @@ import th.co.glr.hr.deposit.DepositNoticeDraftRequest;
 import th.co.glr.hr.deposit.DepositNoticeDto;
 import th.co.glr.hr.deposit.DepositNoticeItemDto;
 import th.co.glr.hr.deposit.DepositNoticeItemRequest;
-import th.co.glr.hr.deposit.DepositNoticeRenderer;
+import th.co.glr.hr.deposit.DepositNoticePdfRenderer;
 import th.co.glr.hr.deposit.DepositNoticeRepository;
 import th.co.glr.hr.deposit.DepositNoticeService;
-import th.co.glr.hr.deposit.RemainingInvoiceRenderer;
+import th.co.glr.hr.deposit.RemainingInvoicePdfRenderer;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
@@ -161,7 +161,7 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
         confirmer = transactional(quotationService);
 
         depositNoticeService = new DepositNoticeService(new DepositNoticeRepository(jdbc), tickets, notifications,
-            new DepositNoticeRenderer(), new RemainingInvoiceRenderer(), customers, legacyQuotations);
+            new DepositNoticePdfRenderer(), customers, legacyQuotations);
 
         salesActor = actor(createEmployee("พนักงานขาย 136", "sales-136@glr.co.th", "SALES", "แผนกขาย", null), "sales");
         otherSalesActor = actor(createEmployee("พนักงานขาย 136 อื่น", "sales-136-other@glr.co.th", "SALES",

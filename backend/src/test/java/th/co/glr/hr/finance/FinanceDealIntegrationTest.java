@@ -180,6 +180,9 @@ class FinanceDealIntegrationTest extends FinanceDealTestBase {
         assertThat(docs.depositNotices()).hasSize(1);
         assertThat(docs.depositNotices().get(0).id()).isEqualTo(depositId);
         assertThat(docs.remainingInvoices()).extracting(FinanceDealDto.RemainingInvoiceDoc::id).containsExactly(riId);
+        assertThat(docs.remainingInvoices().get(0).downloadPath())
+            .as("the finance page saves it as a .pdf, so it must ask for the PDF")
+            .isEqualTo("/api/remaining-invoices/" + riId + "/file?format=pdf");
         assertThat(docs.taxInvoices()).extracting(FinanceDealDto.FileDoc::id).containsExactly(invoiceAtt);
         assertThat(docs.purchaseOrders()).extracting(FinanceDealDto.FileDoc::id).containsExactly(poAtt);
         assertThat(docs.contracts()).extracting(FinanceDealDto.FileDoc::id).containsExactlyInAnyOrder(signedAtt, otherAtt);

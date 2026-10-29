@@ -52,7 +52,7 @@ import th.co.glr.hr.common.ThaiText;
  *       baht-text words for one that does not); B27 (merged B27:E27) gets this class's own
  *       computed {@link ThaiText#bahtText} literal of that SAME total, replacing the template's
  *       {@code _xlfn.BAHTTEXT(F27)} formula for the identical reason (same discipline {@code
- *       RemainingInvoiceRenderer#thaiDate} already documents for computed display text).</li>
+ *       ThaiText#date} applies to computed display text).</li>
  *   <li>Rows 28-30 (0-based): ผู้วางบิล/ผู้รับวางบิล/วันนัดชำระเงิน signature block with blank
  *       dotted lines — STATIC, never written. The rendered file always ships this block blank for
  *       physical pen signing; {@code sales.billing_note.received_by_name}/{@code
@@ -101,7 +101,7 @@ public class BillingNoteRenderer {
             // The item/deposit-row zone (rows 11-25) is entirely BLANK in the source ค่าขนส่ง
             // sheet — the template extraction (see this class's own Javadoc) never creates a cell
             // for a blank source cell, so these rows carry no borrowed number format to clone the
-            // way RemainingInvoiceRenderer clones its own row 13's style. A plain "#,##0.00"
+            // way the remaining-invoice renderer reuses its item rows' style. A plain "#,##0.00"
             // accounting format applied here, once, is what makes จำนวนเงิน print as money instead
             // of a bare double's "100000"/"26977.2".
             CellStyle moneyStyle = wb.createCellStyle();

@@ -701,7 +701,7 @@ describe('DealDocumentRegister', () => {
     expect(p2).toBeGreaterThanOrEqual(0);
     expect(p2).toBeLessThan(p1);
 
-    fireEvent.click(within(screen.getByTestId('document-version-remaining-41')).getByRole('button', { name: 'Excel' }));
+    fireEvent.click(within(screen.getByTestId('document-version-remaining-41')).getByRole('button', { name: 'PDF' }));
     await waitFor(() => expect(api.storedRemainingInvoices.download).toHaveBeenCalledWith(41));
 
     const draft = within(screen.getByTestId('document-version-remaining-43'));
@@ -909,7 +909,7 @@ describe('DealDocumentRegister', () => {
       options: {
         docNumber: 'GLRI69001', defaultIssueDate: '2026-09-01', defaultReference: null,
         referenceOptions: [], defaultDepositReference: null, depositReferenceOptions: [],
-        noteTemplates: [], itemCount: 1, maxItems: 22, itemsTotal: 100, depositAmount: 0,
+        noteTemplates: [], itemCount: 1, itemsTotal: 100, depositAmount: 0,
         netAmount: 100, vatAmount: 7, totalPayable: 107,
         quotationOptions: [], defaultQuotationId: null, blockingReason: null,
       },

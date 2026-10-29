@@ -55,20 +55,19 @@ public class DepositNoticeService {
     private final DepositNoticeRepository docs;
     private final TicketRepository   tickets;
     private final NotificationRepository notifications;
-    private final DepositNoticeRenderer renderer;
-    private final RemainingInvoiceRenderer remainingRenderer;
+    private final DepositNoticePdfRenderer renderer;
+    java.time.Clock clock = java.time.Clock.systemUTC(); // package-private: tests fix "now"
     private final CustomerRepository customers;
     private final CustomerQuotationRepository quotations;
 
     public DepositNoticeService(DepositNoticeRepository docs, TicketRepository tickets,
-                           NotificationRepository notifications, DepositNoticeRenderer renderer,
-                           RemainingInvoiceRenderer remainingRenderer, CustomerRepository customers,
+                           NotificationRepository notifications, DepositNoticePdfRenderer renderer,
+                           CustomerRepository customers,
                            CustomerQuotationRepository quotations) {
         this.docs              = docs;
         this.tickets           = tickets;
         this.notifications     = notifications;
         this.renderer          = renderer;
-        this.remainingRenderer = remainingRenderer;
         this.customers         = customers;
         this.quotations        = quotations;
     }
@@ -212,7 +211,7 @@ public class DepositNoticeService {
     public String preview(long docId, UserPrincipal actor) {
         DepositNoticeDto doc = getById(docId, actor);
         try {
-            return renderer.toPreviewHtml(doc);
+            return renderer.toPreviewHtml(doc, bangkokToday());
         } catch (Exception e) {
             throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "แสดงตัวอย่างเอกสารไม่สำเร็จ: " + e.getMessage());
         }
@@ -354,7 +353,7 @@ public class DepositNoticeService {
         //     (doc.totalPayable()) -- not the pre-VAT depositAmount alone. Both figures come straight
         //     off the `doc` snapshot fetched by requireDraft() above the precondition checks, which
         //     docs.issue() does not touch (it only writes doc_number/status/issued_by/updated_at), so
-        //     this is exactly what DepositNoticeRenderer prints as "ขอรับเงินมัดจำ"/"รวมเป็นเงินที่
+        //     this is exactly what DepositNoticePdfRenderer prints as "ขอรับเงินมัดจำ"/"รวมเป็นเงินที่
         //     ต้องชำระ" -- no new arithmetic. The title (TICKET_EVENT_TITLES' DEPOSIT_NOTICE_ISSUED
         //     entry) already ends "รอยืนยันรับชำระ", so the message itself does not repeat it.
         String accountCustomerName = blankToNull(doc.customerName()) == null
@@ -367,11 +366,25 @@ public class DepositNoticeService {
         return docs.findById(docId).orElseThrow();
     }
 
+    /** The STORED notice as the renderer prints it: only stored fields (createDraft already appended the customer's
+     * branch to the stored address, so it prints there once). A DRAFT has no issue date yet and prints {@code today}. */
+    DepositNoticeRenderModel renderModel(DepositNoticeDto doc, LocalDate today) {
+        return new DepositNoticeRenderModel(doc.issueDate() != null ? doc.issueDate() : today, doc.docNumber(),
+            doc.customerName(), null, doc.customerTaxId(), doc.customerAddress(), doc.projectName(), doc.reference(),
+            doc.items(), doc.subtotal(), doc.depositPercent(), doc.depositAmount(), doc.vatAmount(), doc.totalPayable(),
+            doc.preparerName());
+    }
+
+    /** The preparer printed on a deposit notice (null when the row is gone). */
+    String preparerNameOf(long depositNoticeId) {
+        return docs.findById(depositNoticeId).map(DepositNoticeDto::preparerName).orElse(null);
+    }
+
     // Download Excel bytes
     public byte[] getXlsx(long docId, UserPrincipal actor) {
         DepositNoticeDto doc = getById(docId, actor);
         try {
-            return renderer.toXlsx(doc);
+            return renderer.toXls(renderModel(doc, bangkokToday()));
         } catch (Exception e) {
             throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "สร้างไฟล์ Excel ไม่สำเร็จ: " + e.getMessage());
         }
@@ -380,7 +393,7 @@ public class DepositNoticeService {
     public byte[] getPdf(long docId, UserPrincipal actor) {
         DepositNoticeDto doc = getById(docId, actor);
         try {
-            return renderer.toPdf(doc);
+            return renderer.toPdf(renderModel(doc, bangkokToday()));
         } catch (Exception e) {
             throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "สร้างไฟล์ PDF ไม่สำเร็จ: " + e.getMessage());
         }
@@ -388,7 +401,7 @@ public class DepositNoticeService {
 
     // ── Remaining Invoice (ข้อ 13.5) ─────────────────────────────────────────
     //
-    // Stateless by owner decision: no table, no migration. Every field on RemainingInvoiceDto is
+    // Stateless by owner decision: no table, no migration. Every field of the remaining-invoice options is
     // recomputed fresh on each call from the ticket's own data — the dialog's "options" preview
     // and the actual "/file" download MUST agree, so both funnel through the same
     // resolveRemainingInvoice pipeline (and its shared helpers: resolveCustomerHeader,
@@ -502,21 +515,7 @@ public class DepositNoticeService {
         BigDecimal vatAmount = money.vatAmount();
         BigDecimal totalPayable = money.grandTotal();
 
-        // Notes-capacity pre-check (finding 2c): only the DEFAULT note selection is knowable here
-        // (this endpoint takes no noteIds — the dialog lets the caller customise notes only right
-        // before download), so this can only warn about the prefill the dialog will start from.
-        // A caller who then picks a different, still-too-long set gets the authoritative 409 from
-        // RemainingInvoiceService's own requireNotesCapacity at create/update/issue time (surfaced
-        // to the user — see hrApi.js's error-message fix). That check used to live in this class's
-        // own getRemainingInvoiceXlsx; it moved to RemainingInvoiceService with O1's removal below.
         String blockingReason = resolved.blockingReason();
-        if (blockingReason == null) {
-            List<String> defaultNotes = resolveNotes(null);
-            if (RemainingInvoiceRenderer.wrapNotes(defaultNotes).size() > RemainingInvoiceRenderer.MAX_NOTE_LINES) {
-                blockingReason = "หมายเหตุเริ่มต้นยาวเกินพื้นที่ในแบบฟอร์ม (สูงสุด "
-                    + RemainingInvoiceRenderer.MAX_NOTE_LINES + " บรรทัด) กรุณาลดจำนวนหรือย่อข้อความหมายเหตุ";
-            }
-        }
 
         return new RemainingInvoiceOptionsDto(
             buildRemainingInvoiceDocNumber(ticketId),
@@ -526,11 +525,8 @@ public class DepositNoticeService {
             resolved.defaultDepositReference(),
             resolved.depositReferenceOptions(),
             getNoteTemplates(),
-            // Counts the deposit-deduction row too (when it will render) — maxItems is the
-            // template's total row capacity, not just the item-line capacity, so the dialog can
-            // compare itemCount > maxItems directly without re-deriving whether a deposit row applies.
+            // Counts the deposit-deduction row too (when it will render).
             items.size() + depositRowCount,
-            RemainingInvoiceRenderer.MAX_ITEM_ROWS,
             itemsTotal.setScale(2, RoundingMode.HALF_UP),
             depositAmount,
             netAmount,
@@ -602,7 +598,7 @@ public class DepositNoticeService {
     }
 
     private LocalDate bangkokToday() {
-        return LocalDate.now(ZoneId.of("Asia/Bangkok"));
+        return LocalDate.now(clock.withZone(ZoneId.of("Asia/Bangkok")));
     }
 
     /**
@@ -800,7 +796,7 @@ public class DepositNoticeService {
             ? latestIssued.depositAmount() : BigDecimal.ZERO;
         BigDecimal itemsTotal = sumAmounts(items);
         if (itemsTotal.subtract(depositAmount).compareTo(BigDecimal.ZERO) < 0) {
-            return new ResolvedRemainingInvoice(items, depositAmount, null, List.of(), null, List.of(),
+            return new ResolvedRemainingInvoice(items, depositAmount, legacyReference(latestIssued), List.of(), null, List.of(),
                 List.of(), null,
                 "ยอดหลังหักมัดจำติดลบ (ยอดสินค้า " + fmt(itemsTotal) + " น้อยกว่ายอดมัดจำ " + fmt(depositAmount) + " บาท)",
                 latestIssued != null ? latestIssued.id() : null);
@@ -812,9 +808,14 @@ public class DepositNoticeService {
             defaultDepositReference = refs.defaultRef();
             depositReferenceOptions = refs.options();
         }
-        return new ResolvedRemainingInvoice(items, depositAmount, null, List.of(),
+        return new ResolvedRemainingInvoice(items, depositAmount, legacyReference(latestIssued), List.of(),
             defaultDepositReference, depositReferenceOptions, List.of(), null, null,
             latestIssued != null ? latestIssued.id() : null);
+    }
+
+    /** Legacy path (no accepted quotation): the reference defaults to the latest ISSUED deposit notice's own. */
+    private String legacyReference(DepositNoticeDto latestIssued) {
+        return latestIssued == null ? null : blankToNull(latestIssued.reference());
     }
 
     private ResolvedRemainingInvoice blocked(String reason) {
@@ -930,8 +931,7 @@ public class DepositNoticeService {
 
     /** Short discount-label form (finding 2b, and D11-finding-1 2026-09-18): {@code "ลด " + amount}
      * — the only form proven to fit the renderer's narrow column G without
-     * {@link RemainingInvoiceRenderer#clampDiscountLabel} truncating it (see that method's own
-     * budget comment). Blank when there is no discount. Shared by BOTH item-sourcing paths below
+     * truncating it. Blank when there is no discount. Shared by BOTH item-sourcing paths below
      * so the format can never drift between them — before this, {@link
      * #itemsFromDepositNoticeForRemainingInvoice} passed the deposit notice's own {@code
      * discountLabel} straight through, which {@code itemsFromQuotation}
@@ -1014,9 +1014,7 @@ public class DepositNoticeService {
      * templates' own sortOrder (never the caller-supplied order — this is a curated official list,
      * not free text). Never truncates — {@code sales.document_note_template} currently seeds
      * THREE rows (V16), not five/six, and the caller may select any subset; whether the selection
-     * FITS the template's 6-line หมายเหตุ block is decided by {@link RemainingInvoiceRenderer#wrapNotes}
-     * at the call site (this class's own getRemainingInvoiceOptions, and RemainingInvoiceService's
-     * requireNotesCapacity for the stored document), which refuses rather than silently clips. */
+     * the printed sheet carries only the template's own หมายเหตุ block, so stored notes are never printed. */
     private List<String> resolveNotes(List<Long> noteIds) {
         List<DocumentNoteTemplateDto> templates = docs.findNoteTemplates();
         if (noteIds == null) {
@@ -1127,8 +1125,9 @@ public class DepositNoticeService {
     private void renderIssuedDocuments(long docId) {
         try {
             DepositNoticeDto issued = docs.findById(docId).orElseThrow();
-            renderer.toPdf(issued);
-            renderer.toXlsx(issued);
+            DepositNoticeRenderModel model = renderModel(issued, bangkokToday());
+            renderer.toPdf(model);
+            renderer.toXls(model);
             docs.setFilePaths(docId, "rendered", "rendered");
         } catch (Exception e) {
             // Non-fatal: files can be regenerated on download.

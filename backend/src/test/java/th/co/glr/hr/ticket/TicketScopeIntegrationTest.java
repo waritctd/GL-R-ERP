@@ -21,10 +21,10 @@ import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.customerquotation.CustomerQuotationRepository;
-import th.co.glr.hr.deposit.DepositNoticeRenderer;
+import th.co.glr.hr.deposit.DepositNoticePdfRenderer;
 import th.co.glr.hr.deposit.DepositNoticeRepository;
 import th.co.glr.hr.deposit.DepositNoticeService;
-import th.co.glr.hr.deposit.RemainingInvoiceRenderer;
+import th.co.glr.hr.deposit.RemainingInvoicePdfRenderer;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
@@ -93,7 +93,7 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
             new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
 
         depositNoticeService = new DepositNoticeService(new DepositNoticeRepository(jdbc), tickets,
-            notifications, new DepositNoticeRenderer(), new RemainingInvoiceRenderer(), customers,
+            notifications, new DepositNoticePdfRenderer(), customers,
             new CustomerQuotationRepository(jdbc));
 
         // V141 ("CEO owns costing"): shared by FactoryQuoteService (markReadyForCosting's

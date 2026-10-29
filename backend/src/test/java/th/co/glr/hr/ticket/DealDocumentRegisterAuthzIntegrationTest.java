@@ -35,10 +35,10 @@ import th.co.glr.hr.customer.ProjectRepository;
 import th.co.glr.hr.customerquotation.CustomerQuotationRepository;
 import th.co.glr.hr.customerquotation.CustomerQuotationService;
 import th.co.glr.hr.dealquotation.WastageCalculator;
-import th.co.glr.hr.deposit.DepositNoticeRenderer;
+import th.co.glr.hr.deposit.DepositNoticePdfRenderer;
 import th.co.glr.hr.deposit.DepositNoticeRepository;
 import th.co.glr.hr.deposit.DepositNoticeService;
-import th.co.glr.hr.deposit.RemainingInvoiceRenderer;
+import th.co.glr.hr.deposit.RemainingInvoicePdfRenderer;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
@@ -137,7 +137,7 @@ class DealDocumentRegisterAuthzIntegrationTest extends AbstractPostgresIntegrati
             new QuotationRenderer(), notifications, new th.co.glr.hr.customerquotation.DiscountApprovalRepository(jdbc));
 
         depositNoticeService = new DepositNoticeService(new DepositNoticeRepository(jdbc), tickets, notifications,
-            new DepositNoticeRenderer(), new RemainingInvoiceRenderer(), customers, quotationRepository);
+            new DepositNoticePdfRenderer(), customers, quotationRepository);
 
         attachmentController = new AttachmentController(new AttachmentRepository(jdbc), new SessionContext(), tickets,
             new AuditService(new AuditLogRepository(jdbc), objectMapper), fileStorage);

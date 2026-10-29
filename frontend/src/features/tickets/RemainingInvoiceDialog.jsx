@@ -60,7 +60,7 @@ export function RemainingInvoiceDialog({ ticketId, canWrite = true, onClose, onD
 
   async function handleDownloadVersion(id, docNumber) {
     const blob = await api.storedRemainingInvoices.download(id);
-    downloadBlob(blob, docNumber || `draft-${id}`, 'xlsx');
+    downloadBlob(blob, docNumber || `draft-${id}`, 'pdf');
     onDownloaded?.();
   }
 
@@ -169,7 +169,7 @@ function IssuedSummary({ issued, canWrite, onRevised, onDownloaded }) {
     setDownloading(true);
     try {
       const blob = await api.storedRemainingInvoices.download(issued.id);
-      downloadBlob(blob, issued.docNumber || `remaining-invoice-${issued.id}`, 'xlsx');
+      downloadBlob(blob, issued.docNumber || `remaining-invoice-${issued.id}`, 'pdf');
       onDownloaded?.();
     } catch (err) {
       setError(err.message || 'ดาวน์โหลดไม่สำเร็จ');
@@ -310,7 +310,7 @@ function DraftEditor({ draft, onSaved, onIssued, onDeleted, onDownloaded }) {
     setDownloading(true);
     try {
       const blob = await api.storedRemainingInvoices.download(draft.id);
-      downloadBlob(blob, draft.docNumber || `draft-${draft.id}`, 'xlsx');
+      downloadBlob(blob, draft.docNumber || `draft-${draft.id}`, 'pdf');
       onDownloaded?.();
     } catch (err) {
       setError(err.message || 'ดาวน์โหลดไม่สำเร็จ');
@@ -431,7 +431,6 @@ function CreateForm({ ticketId, onCreated }) {
     setInitialized(true);
   }, [options]);
 
-  const overCapacity = Boolean(options) && options.itemCount > options.maxItems;
   const blockingReason = options?.blockingReason ?? null;
   const showQuotationPicker = (options?.quotationOptions ?? []).length >= 2;
 
@@ -461,7 +460,7 @@ function CreateForm({ ticketId, onCreated }) {
     }
   }
 
-  const canCreate = initialized && !overCapacity && !blockingReason && !creating;
+  const canCreate = initialized && !blockingReason && !creating;
 
   return (
     <div className="flex flex-col gap-4">
@@ -492,13 +491,6 @@ function CreateForm({ ticketId, onCreated }) {
             <p className="m-0 rounded-md border border-danger bg-danger-bg p-3 text-sm font-bold text-danger" role="alert"
               data-testid="remaining-invoice-blocking-reason">
               {blockingReason} — สร้างร่างไม่ได้จนกว่าจะแก้ไข
-            </p>
-          ) : null}
-
-          {overCapacity ? (
-            <p className="m-0 rounded-md border border-danger bg-danger-bg p-3 text-sm font-bold text-danger" role="alert">
-              {`รายการมี ${options.itemCount} รายการ เกินความจุของแบบฟอร์ม (สูงสุด ${options.maxItems} แถว) `}
-              กรุณารวมรายการหรือติดต่อผู้ดูแลระบบ — สร้างร่างไม่ได้จนกว่าจะแก้ไข
             </p>
           ) : null}
 
