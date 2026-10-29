@@ -10,7 +10,8 @@ import { PageStack, Panel, StatGrid } from '../../components/common/Layout.jsx';
 import { SkeletonCard } from '../../components/common/Skeleton.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { formatMoney, formatThaiDate, bangkokMonthStartIso, greetingName } from '../../utils/format.js';
+import { formatMoney, formatThaiDate, greetingName } from '../../utils/format.js';
+import { financeOutstanding, forecastValue } from './dashboardMoney.js';
 
 /**
  * CEO exec-cockpit landing (plan: docs/agent-handoffs/valiant-watching-map.md
@@ -98,7 +99,6 @@ function WorklistRow({ row }) {
 
 export function CeoOverview({ user, employee, dashboardSummary }) {
   const navigate = useNavigate();
-  const monthStart = bangkokMonthStartIso();
 
   // Shares the same cache entries PricingRequestQueuePage
   // already populate for a CEO session — one company-wide fetch each, no
@@ -190,49 +190,31 @@ export function CeoOverview({ user, employee, dashboardSummary }) {
   // for user.role === 'ceo' (see App.jsx), so there is no other-role case to guard against. ─────
   const leaveRows = leaveSubmitted;
 
-  // ── ผลบริษัทเดือนนี้: no ฿ figure exists on /api/dashboard/summary (it only
-  // returns ticket-status counts), so every ฿ number here is derived from the
+  // ── ผลบริษัทเดือนนี้: เงินรับแล้ว comes from /api/dashboard/summary (cashReceivedThisMonth);
+  // every other ฿ number here is derived from the
   // scoped tickets.list() the CEO already gets in full — amountPayable/
   // amountPaid/amountOutstanding/overdue are the same computed fields
   // TicketDetailPage's money views already trust (derivePaymentFields). ────
-  const closedThisMonthTickets = useMemo(
-    () => tickets.filter((t) => t.status === 'closed' && t.closedAt && t.closedAt >= monthStart),
-    [tickets, monthStart],
-  );
-  const salesClosedThisMonth = useMemo(
-    () => moneySum(closedThisMonthTickets, (t) => t.amountPaid ?? t.amountPayable),
-    [closedThisMonthTickets],
-  );
-  const companyPipelineValue = useMemo(
-    () => moneySum(tickets.filter((t) => (t.lifecycle ?? 'ACTIVE') === 'ACTIVE' && t.status !== 'closed'), (t) => t.amountPayable),
-    [tickets],
-  );
+  const outstanding = useMemo(() => financeOutstanding(tickets), [tickets]);
+  const forecast = useMemo(() => forecastValue(tickets), [tickets]);
+  const cashReceived = dashboardSummary?.cashReceivedThisMonth;
   const overdueReceivables = useMemo(
     () => moneySum(tickets.filter((t) => t.overdue), (t) => t.amountOutstanding),
     [tickets],
   );
-  const closedThisMonthCount = dashboardSummary?.tickets?.closedThisMonth ?? closedThisMonthTickets.length;
   const headcountActive = dashboardSummary?.headcount?.active ?? null;
   const lateToday = dashboardSummary?.attendance?.lateToday ?? null;
 
-  // ── ยอดตามทีม/ฝ่าย: tickets carry no divisionId (and employees.list() is
-  // hr-only — CEO has no server route to a division breakdown here), so this
-  // groups by the deal's owning sales rep (createdByName) instead, the
-  // closest real grouping the CEO's existing endpoints expose. No target/
-  // quota field exists anywhere in this data, so bars are sized relative to
-  // this month's top performer, never against an invented quota — see
-  // docs/role-scoped-views.md "CEO" section for this stated gap.
-  const repBreakdown = useMemo(() => {
-    const byRep = new Map();
-    for (const ticket of closedThisMonthTickets) {
-      const key = ticket.createdByName || 'ไม่ระบุผู้ขาย';
-      const amount = Number(ticket.amountPaid ?? ticket.amountPayable) || 0;
-      byRep.set(key, (byRep.get(key) ?? 0) + amount);
-    }
-    const rows = [...byRep.entries()].map(([name, amount]) => ({ name, amount }));
-    rows.sort((a, b) => b.amount - a.amount);
-    return rows.slice(0, 8);
-  }, [closedThisMonthTickets]);
+  // ── ยอดตามทีม/ฝ่าย: this month's cash received split per sales rep, served by the dashboard
+  // summary (cashReceivedByRep; its rows add up to เงินรับแล้ว). Tickets carry no divisionId and
+  // employees.list() is hr-only, so a division breakdown is not derivable for the CEO. No target/
+  // quota field exists, so bars are sized relative to this month's top rep, never against a quota.
+  const repBreakdown = useMemo(
+    () => [...(dashboardSummary?.cashReceivedByRep ?? [])]
+      .map((row) => ({ name: row.repName, amount: Number(row.amount) || 0 }))
+      .sort((a, b) => b.amount - a.amount),
+    [dashboardSummary?.cashReceivedByRep],
+  );
   const repBreakdownMax = repBreakdown.reduce((max, row) => Math.max(max, row.amount), 0);
 
   // ── the cross-domain worklist, in the exec-pulse's own order ─────────────
@@ -307,7 +289,6 @@ export function CeoOverview({ user, employee, dashboardSummary }) {
             <SkeletonCard lines={1} />
             <SkeletonCard lines={1} />
             <SkeletonCard lines={1} />
-            <SkeletonCard lines={1} />
           </StatGrid>
         </div>
       ) : (
@@ -347,13 +328,6 @@ export function CeoOverview({ user, employee, dashboardSummary }) {
                 ? () => navigate(otRows.length >= leaveRows.length ? '/employee-requests?tab=ot' : '/leave')
                 : undefined}
             />
-            <StatCard
-              icon="badgeDollar"
-              label="ยอดขายเดือนนี้"
-              value={formatMoney(salesClosedThisMonth)}
-              helper="Closed this month"
-              tone="teal"
-            />
           </StatGrid>
 
           <Panel title="รออนุมัติจากคุณ" flush>
@@ -379,7 +353,7 @@ export function CeoOverview({ user, employee, dashboardSummary }) {
                   employees.list() is hr-only, so a real division breakdown is
                   not derivable from any endpoint the CEO can call. */}
               {repBreakdown.length === 0 ? (
-                <p className="m-0 text-sm text-text-muted">ยังไม่มีดีลที่ปิดในเดือนนี้</p>
+                <p className="m-0 text-sm text-text-muted">ยังไม่มีเงินรับเข้าในเดือนนี้</p>
               ) : (
                 <div className="flex flex-col gap-3">
                   {repBreakdown.map((row) => (
@@ -403,9 +377,9 @@ export function CeoOverview({ user, employee, dashboardSummary }) {
             <Panel title="ผลบริษัทเดือนนี้">
               <dl className="m-0 grid gap-3">
                 {[
-                  ['ยอดขายปิดแล้ว', formatMoney(salesClosedThisMonth)],
-                  ['ปิดงานแล้ว', `${closedThisMonthCount} ดีล`],
-                  ['Pipeline บริษัท', formatMoney(companyPipelineValue)],
+                  ['เงินรับแล้ว (เดือนนี้)', cashReceived == null ? '—' : formatMoney(cashReceived)],
+                  ['ค้างรับ', formatMoney(outstanding)],
+                  ['ยอดคาดการณ์', formatMoney(forecast)],
                   ['ลูกหนี้ค้าง/เกินกำหนด', formatMoney(overdueReceivables)],
                   ['กำลังพล', headcountActive != null ? `${headcountActive} คน` : '-'],
                   ['มาสายวันนี้', lateToday != null ? `${lateToday} คน` : '-'],

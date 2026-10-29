@@ -5,16 +5,21 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
+import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import th.co.glr.hr.auth.UserPrincipal;
 
@@ -184,6 +189,50 @@ class DashboardServiceTest {
         verify(repository).tickets(ticketScope.capture(), eq(LocalDate.of(2026, 7, 1)), any());
         assertThat(ticketScope.getValue().isSelf()).isTrue();
         assertThat(ticketScope.getValue().employeeId()).isEqualTo(30L);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"account", "ceo", "sales_manager"})
+    void cashReceivedThisMonthIsServedToTheMoneyRoles(String role) {
+        when(repository.cashReceived(LocalDate.of(2026, 7, 1))).thenReturn(new BigDecimal("125000.50"));
+        when(repository.cashReceivedByRep(LocalDate.of(2026, 7, 1)))
+            .thenReturn(List.of(new CashByRepDto("สมชาย ขายดี", new BigDecimal("125000.50"))));
+
+        DashboardSummaryDto summary = service.summary(user(role, 40L, null, false));
+
+        assertThat(summary.cashReceivedThisMonth()).isEqualByComparingTo("125000.50");
+        assertThat(summary.cashReceivedByRep())
+            .containsExactly(new CashByRepDto("สมชาย ขายดี", new BigDecimal("125000.50")));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"hr", "import", "sales", "employee"})
+    void cashReceivedThisMonthIsNullForEveryOtherRoleAndNeverQueried(String role) {
+        when(repository.cashReceived(any())).thenReturn(new BigDecimal("125000.50"));
+        when(repository.cashReceivedByRep(any()))
+            .thenReturn(List.of(new CashByRepDto("สมชาย ขายดี", new BigDecimal("125000.50"))));
+
+        DashboardSummaryDto summary = service.summary(user(role, 41L, null, false));
+
+        assertThat(summary.cashReceivedThisMonth()).isNull();
+        assertThat(summary.cashReceivedByRep()).isNull();
+        verify(repository, never()).cashReceived(any());
+        verify(repository, never()).cashReceivedByRep(any());
+    }
+
+    @Test
+    void cashReceivedThisMonthUsesTheBangkokMonthEvenWhenUtcIsStillLastMonth() {
+        // 2026-06-30T20:30Z is already 2026-07-01 03:30 in Bangkok.
+        DashboardService boundary = new DashboardService(
+            repository, Clock.fixed(Instant.parse("2026-06-30T20:30:00Z"), BANGKOK));
+        when(repository.cashReceived(LocalDate.of(2026, 7, 1))).thenReturn(new BigDecimal("1.00"));
+        when(repository.cashReceivedByRep(LocalDate.of(2026, 7, 1)))
+            .thenReturn(List.of(new CashByRepDto("สมชาย ขายดี", new BigDecimal("1.00"))));
+
+        DashboardSummaryDto summary = boundary.summary(user("account", 42L, null, false));
+
+        assertThat(summary.cashReceivedThisMonth()).isEqualByComparingTo("1.00");
+        assertThat(summary.cashReceivedByRep()).hasSize(1);
     }
 
     private UserPrincipal user(String role, Long employeeId, Long divisionId, boolean manager) {

@@ -12,6 +12,7 @@ import { SkeletonCard, SkeletonText } from '../../components/common/Skeleton.jsx
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatMoney, formatThaiDate, greetingName } from '../../utils/format.js';
+import { financeOutstanding, forecastValue } from './dashboardMoney.js';
 
 // No server-side status filter exists on GET /api/commissions (mirrors
 // CommissionController#list — payrollMonth is the only query param it
@@ -86,7 +87,7 @@ function dealAmount(ticket) {
  * be fabricating business data (CLAUDE.md). Flagged as a follow-up decision
  * for the plan owner, not fabricated here.
  */
-export function ManagerOverview({ user, employee, showToast }) {
+export function ManagerOverview({ user, employee, dashboardSummary, showToast }) {
   const navigate = useNavigate();
 
   const ticketsQuery = useQuery({
@@ -123,16 +124,10 @@ export function ManagerOverview({ user, employee, showToast }) {
     () => tickets.filter((t) => isDealWon(t) && t.stageUpdatedAt && new Date(t.stageUpdatedAt) >= monthStart),
     [tickets, monthStart],
   );
-  const teamMonthValue = useMemo(
-    () => closedThisMonth.reduce((sum, t) => sum + dealAmount(t), 0),
-    [closedThisMonth],
-  );
-
   const openTickets = useMemo(() => tickets.filter(isDealOpen), [tickets]);
-  const openPipelineValue = useMemo(
-    () => openTickets.reduce((sum, t) => sum + dealAmount(t), 0),
-    [openTickets],
-  );
+  const outstanding = useMemo(() => financeOutstanding(tickets), [tickets]);
+  const forecast = useMemo(() => forecastValue(tickets), [tickets]);
+  const cashReceived = dashboardSummary?.cashReceivedThisMonth;
 
   // "ดีลต้องดูแล": an open deal with no activity in 7 days (`ticket.stale`,
   // mirrors TicketRepository.enrichSummary's own staleness window — see
@@ -189,6 +184,7 @@ export function ManagerOverview({ user, employee, showToast }) {
             <SkeletonCard lines={1} />
             <SkeletonCard lines={1} />
             <SkeletonCard lines={1} />
+            <SkeletonCard lines={1} />
           </StatGrid>
           <Panel style={{ marginTop: 14 }}>
             <SkeletonText lines={5} />
@@ -200,10 +196,17 @@ export function ManagerOverview({ user, employee, showToast }) {
           <StatGrid>
             <StatCard
               icon="badgeDollar"
-              label="ยอดทีมเดือนนี้"
-              value={formatMoney(teamMonthValue)}
-              helper={`ปิดแล้ว ${closedThisMonth.length} ดีล`}
+              label="เงินรับแล้ว (เดือนนี้)"
+              value={cashReceived == null ? '—' : formatMoney(cashReceived)}
+              helper="รับเงินจริงในเดือนนี้"
               tone="teal"
+            />
+            <StatCard
+              icon="clock"
+              label="ค้างรับ"
+              value={formatMoney(outstanding)}
+              helper="ตามหน้าการเงิน"
+              tone="amber"
             />
             <StatCard
               icon="clock"
@@ -223,9 +226,9 @@ export function ManagerOverview({ user, employee, showToast }) {
             />
             <StatCard
               icon="briefcase"
-              label="pipeline ทีม"
-              value={formatMoney(openPipelineValue)}
-              helper={`${openTickets.length} ดีลเปิดอยู่`}
+              label="ยอดคาดการณ์"
+              value={formatMoney(forecast)}
+              helper="ดีลก่อนขั้น 10"
               tone="blue"
               onClick={() => navigate('/tickets')}
             />

@@ -5,6 +5,9 @@ import { render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ManagerOverview } from './ManagerOverview.jsx';
 import { api } from '../../api/index.js';
+import {
+  CASH_RECEIVED_THIS_MONTH, EXPECTED, expectFigure, figureRows, moneyFixtureTickets,
+} from '../../test/fixtures/dashboardMoney.js';
 
 globalThis.React = React;
 
@@ -65,14 +68,14 @@ const managerApprovedCommission = {
   invoiceDetails: { invoiceNumber: 'INV-2026-0302' },
 };
 
-function renderOverview() {
+function renderOverview(dashboardSummary) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   return render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={['/']}>
-        <ManagerOverview user={managerUser} employee={employee} showToast={vi.fn()} />
+        <ManagerOverview user={managerUser} employee={employee} dashboardSummary={dashboardSummary} showToast={vi.fn()} />
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -87,12 +90,9 @@ describe('ManagerOverview', () => {
 
   it('renders the team pulse derived from the team ticket list', async () => {
     renderOverview();
-    await screen.findByText('ยอดทีมเดือนนี้');
-    // ฿300,000.00 also appears in the leaderboard row for the same rep/deal —
-    // both are correct, so assert at least one, not exactly one.
+    await screen.findByText('ดีลต้องดูแล');
+    // The leaderboard row for the same rep/deal carries the won deal's ฿300,000.00.
     expect(screen.getAllByText('฿300,000.00').length).toBeGreaterThan(0);
-    expect(screen.getByText('pipeline ทีม')).not.toBeNull();
-    expect(screen.getByText('ดีลต้องดูแล')).not.toBeNull();
   });
 
   it('renders the ค่าคอมรออนุมัติ worklist with a review/approve CTA, SUBMITTED only', async () => {
@@ -123,5 +123,23 @@ describe('ManagerOverview', () => {
     expect(within(panel).getByText('บริษัท ทู จำกัด')).not.toBeNull();
     expect(within(panel).getByText('ไม่มีความเคลื่อนไหว 7 วัน')).not.toBeNull();
     expect(within(panel).queryByText('บริษัท ทรี จำกัด')).toBeNull();
+  });
+  it('shows the same three money figures as /finance and the CEO dashboard', async () => {
+    api.tickets.list.mockResolvedValue({ tickets: moneyFixtureTickets });
+    renderOverview({ cashReceivedThisMonth: CASH_RECEIVED_THIS_MONTH });
+    await screen.findByText('ดีลต้องดูแล');
+
+    expectFigure('เงินรับแล้ว (เดือนนี้)', EXPECTED.cash);
+    expectFigure('ค้างรับ', EXPECTED.outstanding);
+    expectFigure('ยอดคาดการณ์', EXPECTED.forecast);
+  });
+
+  it('no longer shows the team-sales and team-pipeline tiles', async () => {
+    renderOverview();
+    await screen.findByText('ดีลต้องดูแล');
+
+    ['ยอดทีมเดือนนี้', 'pipeline ทีม'].forEach((label) => {
+      expect(figureRows(label), label).toEqual([]);
+    });
   });
 });

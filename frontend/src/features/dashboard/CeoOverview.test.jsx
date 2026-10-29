@@ -6,6 +6,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CeoOverview } from './CeoOverview.jsx';
 import { api } from '../../api/index.js';
 import { bangkokMonthStartIso } from '../../utils/format.js';
+import {
+  CASH_RECEIVED_THIS_MONTH, EXPECTED, expectFigure, figureRows, moneyFixtureTickets,
+} from '../../test/fixtures/dashboardMoney.js';
 
 globalThis.React = React;
 
@@ -36,6 +39,12 @@ const dashboardSummary = {
   tickets: { closedThisMonth: 4 },
   headcount: { active: 42 },
   attendance: { lateToday: 3 },
+  cashReceivedThisMonth: CASH_RECEIVED_THIS_MONTH,
+  // This month's cash split per sales rep: the two add up to CASH_RECEIVED_THIS_MONTH (125,000.50).
+  cashReceivedByRep: [
+    { repName: 'สมชาย ขายดี', amount: 90000.5 },
+    { repName: 'สมหญิง ขายเก่ง', amount: 35000 },
+  ],
 };
 
 function mockAllData() {
@@ -125,7 +134,7 @@ function LocationProbe() {
   return <div data-testid="location-probe">{location.pathname}{location.search}</div>;
 }
 
-function renderOverview() {
+function renderOverview(summary = dashboardSummary) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -137,7 +146,7 @@ function renderOverview() {
           <Route
             path="/"
             element={(
-              <CeoOverview user={ceoUser} employee={ceoEmployee} dashboardSummary={dashboardSummary} showToast={vi.fn()} />
+              <CeoOverview user={ceoUser} employee={ceoEmployee} dashboardSummary={summary} showToast={vi.fn()} />
             )}
           />
           <Route path="*" element={<LocationProbe />} />
@@ -184,8 +193,6 @@ describe('CeoOverview', () => {
     // OT (MANAGER_APPROVED + manager-less-direct-to-CEO) + ลา (ALL of it, CEO leave-approval reach,
     // 2026-09-01) = 2 + 2.
     expect(statCardValue('OT·ลา รออนุมัติ')).toBe('4');
-    // ยอดขายเดือนนี้: sum of amountPaid for tickets closed this month (only TK-702).
-    expect(statCardValue('ยอดขายเดือนนี้')).toBe('฿50,000.00');
 
     expect(api.pricingRequests.queue).toHaveBeenCalledWith({ activeOnly: true });
     expect(api.tickets.list).toHaveBeenCalledWith({});
@@ -281,25 +288,61 @@ describe('CeoOverview', () => {
 
     await screen.findByText('ผลบริษัทเดือนนี้');
 
-    expect(screen.getByText('ยอดขายปิดแล้ว').nextSibling.textContent).toBe('฿50,000.00');
-    // Prefers the real dashboardSummary.tickets.closedThisMonth (4) over the
-    // client-derived count (1) when the summary provides it.
-    expect(screen.getByText('ปิดงานแล้ว').nextSibling.textContent).toBe('4 ดีล');
-    // Pipeline: active, not-yet-closed tickets only (701 + 703 = 120,000).
-    expect(screen.getByText('Pipeline บริษัท').nextSibling.textContent).toBe('฿120,000.00');
     // Overdue receivables: only the overdue ticket's outstanding balance (703).
     expect(screen.getByText('ลูกหนี้ค้าง/เกินกำหนด').nextSibling.textContent).toBe('฿15,000.00');
     expect(screen.getByText('กำลังพล').nextSibling.textContent).toBe('42 คน');
     expect(screen.getByText('มาสายวันนี้').nextSibling.textContent).toBe('3 คน');
   });
 
-  it('renders a per-rep breakdown for deals closed this month, with no invented target/quota', async () => {
+  it('splits this month\'s cash received per sales rep, adding up to เงินรับแล้ว, with no invented target/quota', async () => {
     renderOverview();
 
-    await screen.findByText('ยอดตามทีม/ฝ่าย');
-    // Only สมหญิง's deal (TK-702) closed this month.
-    expect(screen.getByText('สมหญิง ขายเก่ง')).not.toBeNull();
+    const panel = (await screen.findByText('ยอดตามทีม/ฝ่าย')).closest('section');
+    expect(within(panel).getByText('สมชาย ขายดี').nextSibling.textContent).toBe('฿90,000.50');
+    expect(within(panel).getByText('สมหญิง ขายเก่ง').nextSibling.textContent).toBe('฿35,000.00');
+    // The bars add up to the เงินรับแล้ว (เดือนนี้) figure shown beside them.
+    const barTotal = [...panel.querySelectorAll('code')]
+      .reduce((sum, el) => sum + Number(el.textContent.replace(/[฿,]/g, '')), 0);
+    expect(barTotal).toBeCloseTo(CASH_RECEIVED_THIS_MONTH, 2);
+    expectFigure('เงินรับแล้ว (เดือนนี้)', '฿125,000.50');
+    // The old basis -- deals the CEO closed this month at amountPaid (TK-702, ฿50,000) -- is gone.
+    expect(within(panel).queryByText('฿50,000.00')).toBeNull();
     // No percentage/quota text is rendered anywhere in that panel.
-    expect(screen.queryByText(/%/)).toBeNull();
+    expect(within(panel).queryByText(/%/)).toBeNull();
+  });
+
+  it('lists every rep so the bars still add up to เงินรับแล้ว with more than eight reps', async () => {
+    const reps = Array.from({ length: 9 }, (_, i) => ({ repName: `เซลส์ ${i + 1}`, amount: 1000 }));
+    renderOverview({ ...dashboardSummary, cashReceivedThisMonth: 9000, cashReceivedByRep: reps });
+
+    const panel = (await screen.findByText('ยอดตามทีม/ฝ่าย')).closest('section');
+    expect(panel.querySelectorAll('code')).toHaveLength(9);
+  });
+
+  it('keeps the empty-state text when no cash was received per rep', async () => {
+    renderOverview({ ...dashboardSummary, cashReceivedByRep: [] });
+
+    const panel = (await screen.findByText('ยอดตามทีม/ฝ่าย')).closest('section');
+    expect(within(panel).getByText('ยังไม่มีเงินรับเข้าในเดือนนี้')).not.toBeNull();
+  });
+  it('shows the same three money figures as /finance and the sales-manager dashboard', async () => {
+    api.tickets.list.mockResolvedValue({ tickets: moneyFixtureTickets });
+    renderOverview();
+    await screen.findByText('อนุมัติราคา');
+
+    expectFigure('เงินรับแล้ว (เดือนนี้)', EXPECTED.cash);
+    expectFigure('ค้างรับ', EXPECTED.outstanding);
+    expectFigure('ยอดคาดการณ์', EXPECTED.forecast);
+  });
+
+  it('no longer shows the closed-sales and pipeline figures', async () => {
+    renderOverview();
+    await screen.findByText('ผลบริษัทเดือนนี้');
+
+    ['ยอดขายเดือนนี้', 'ยอดขายปิดแล้ว', 'ปิดงานแล้ว', 'Pipeline บริษัท'].forEach((label) => {
+      expect(figureRows(label), label).toEqual([]);
+    });
+    // The other company-result rows stay.
+    expect(screen.getByText('ลูกหนี้ค้าง/เกินกำหนด')).not.toBeNull();
   });
 });

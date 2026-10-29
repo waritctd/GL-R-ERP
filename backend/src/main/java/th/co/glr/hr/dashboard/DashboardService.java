@@ -1,9 +1,11 @@
 package th.co.glr.hr.dashboard;
 
+import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
+import java.util.List;
 import java.util.Set;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -17,6 +19,7 @@ public class DashboardService {
     private static final Set<String> COMMISSION_APPROVER_ROLES = Set.of("sales_manager", "ceo");
     private static final Set<String> TICKET_VIEW_ALL_ROLES = Set.of("import", "ceo");
     private static final Set<String> TICKET_OWN_ROLES = Set.of("sales");
+    private static final Set<String> CASH_RECEIVED_ROLES = Set.of("account", "ceo", "sales_manager");
 
     private final DashboardRepository dashboardRepository;
     private final Clock clock;
@@ -53,6 +56,10 @@ public class DashboardService {
             ? null
             : dashboardRepository.latestPayrollPeriodId(user.employeeId()).orElse(null);
 
+        boolean seesCash = CASH_RECEIVED_ROLES.contains(user.role());
+        BigDecimal cashReceived = seesCash ? dashboardRepository.cashReceived(monthStart) : null;
+        List<CashByRepDto> cashByRep = seesCash ? dashboardRepository.cashReceivedByRep(monthStart) : null;
+
         return DashboardSummaryDto.of(
             user.role(),
             user.employeeId(),
@@ -64,7 +71,9 @@ public class DashboardService {
             dashboardRepository.attendance(attendanceScope, today, monthStart),
             latestPayrollPeriodId,
             tickets,
-            notifications
+            notifications,
+            cashReceived,
+            cashByRep
         );
     }
 

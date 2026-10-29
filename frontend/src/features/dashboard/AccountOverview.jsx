@@ -15,6 +15,7 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { cn } from '../../utils/cn.js';
 import { formatMoney, formatThaiDate, greetingName, ticketStatusLabel } from '../../utils/format.js';
 import { accountMoneyBucket, nextAccountAction } from '../tickets/accountActions.js';
+import { financeOutstanding } from './dashboardMoney.js';
 
 // Money-pulse bucket meta (Bento Grid). `span` encodes IMPORTANCE, not data: overdue is the 2x2 lead
 // tile, the deposit step is double-wide, the commission step is the slim closing strip.
@@ -27,7 +28,7 @@ import { accountMoneyBucket, nextAccountAction } from '../tickets/accountActions
 // amountOutstanding is 0 by definition.
 const MONEY_BUCKETS = [
   { key: 'overdue', label: 'เกินกำหนด', icon: 'triangleAlert', tone: 'rose', amountField: 'amountOutstanding', span: 'col-span-2 row-span-2 nav-drawer:row-span-1' },
-  { key: 'depositPending', label: 'รอรับมัดจำ', icon: 'clock', tone: 'amber', amountField: 'amountOutstanding', span: 'col-span-2 nav-drawer:col-span-1' },
+  { key: 'depositPending', label: 'รอรับมัดจำ', icon: 'clock', tone: 'amber', amountField: 'depositDue', span: 'col-span-2 nav-drawer:col-span-1' },
   { key: 'finalPaymentPending', label: 'รอชำระส่วนที่เหลือ', icon: 'badgeDollar', tone: 'teal', amountField: 'amountOutstanding', live: true },
   { key: 'closeReady', label: 'รอปิดงาน', icon: 'check', tone: 'indigo', amountField: 'amountPayable', span: 'nav-drawer:col-span-2' },
   { key: 'commissionPending', label: 'บันทึกใบกำกับ', icon: 'fileText', tone: 'blue', amountField: 'amountPayable', span: 'col-span-4 nav-drawer:col-span-2' },
@@ -54,11 +55,6 @@ function rowAmount(ticket) {
   return outstanding > 0 ? outstanding : Number(ticket.amountPayable ?? 0);
 }
 
-function startOfMonth() {
-  const now = new Date();
-  return new Date(now.getFullYear(), now.getMonth(), 1);
-}
-
 /**
  * Account (ฝ่ายบัญชี) role-scoped landing: money pulse + "สิ่งที่ต้องทำ"
  * worklist, mirrors ImportOverview's conveyor-pulse pattern but keyed on
@@ -81,7 +77,7 @@ function startOfMonth() {
  * is ever widened. Flagged in the branch's handoff as a follow-up decision
  * for the plan owner, not fixed here.
  */
-export function AccountOverview({ user, employee, showToast }) {
+export function AccountOverview({ user, employee, dashboardSummary, showToast }) {
   const navigate = useNavigate();
 
   const scopedQuery = useQuery({
@@ -134,24 +130,12 @@ export function AccountOverview({ user, employee, showToast }) {
     });
   }, [allTickets, user?.role]);
 
-  const monthSummary = useMemo(() => {
-    const monthStart = startOfMonth();
-    let receivedThisMonth = 0;
-    let outstandingTotal = 0;
-    let overdueTotal = 0;
-    allTickets.forEach((ticket) => {
-      const outstanding = Number(ticket.amountOutstanding ?? 0);
-      outstandingTotal += outstanding;
-      if (ticket.overdue) overdueTotal += outstanding;
-      // Best-effort "received this month": amountPaid on deals last updated
-      // within the current calendar month — the closest signal available
-      // without a per-ticket payment-receipt fetch for every visible deal.
-      if (ticket.updatedAt && new Date(ticket.updatedAt) >= monthStart) {
-        receivedThisMonth += Number(ticket.amountPaid ?? 0);
-      }
-    });
-    return { receivedThisMonth, outstandingTotal, overdueTotal };
-  }, [allTickets]);
+  // ค้างรับ is /finance's คงค้างรวม (shared helper); รับแล้ว is the server's receipts for this Bangkok month.
+  const monthSummary = useMemo(() => ({
+    receivedThisMonth: dashboardSummary?.cashReceivedThisMonth ?? null,
+    outstandingTotal: financeOutstanding(allTickets),
+    overdueTotal: allTickets.reduce((sum, t) => sum + (t.overdue ? Number(t.amountOutstanding ?? 0) : 0), 0),
+  }), [allTickets, dashboardSummary?.cashReceivedThisMonth]);
 
   const firstName = employee?.nickName || employee?.nameTh || user?.name || '';
   const today = formatThaiDate(new Date().toISOString());
@@ -276,7 +260,7 @@ export function AccountOverview({ user, employee, showToast }) {
                   ].map(([label, value, tone]) => (
                     <div key={label} className="flex items-baseline justify-between gap-3">
                       <dt className="!text-xs !text-text-muted">{label}</dt>
-                      <dd className={`m-0 tabular-nums !text-md !font-extrabold ${tone}`}>{formatMoney(value)}</dd>
+                      <dd className={`m-0 tabular-nums !text-md !font-extrabold ${tone}`}>{value == null ? '—' : formatMoney(value)}</dd>
                     </div>
                   ))}
                 </dl>

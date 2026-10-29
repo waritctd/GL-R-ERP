@@ -35,6 +35,11 @@ function finalPaymentDue(ticket) {
     || depositBypassed(ticket);
 }
 
+// The one predicate behind the รับชำระส่วนที่เหลือ to-do step; accountMoneyBucket reuses it.
+function offersFinalPayment(ticket) {
+  return ticket.status === 'quotation_issued' && finalPaymentDue(ticket);
+}
+
 // Mirrors TicketService#requireClosePrerequisites (the predicate behind
 // closeReady()/canConfirmClose): dual-track deals need FULLY_PAID + a fully
 // delivered fulfilment status + no outstanding balance + the invoice on
@@ -117,7 +122,7 @@ export function nextAccountAction(ticket, viewerRole) {
   if (canRecordPayments && ticket.status === 'quotation_issued' && ticket.paymentStatus === 'DEPOSIT_NOTICE_ISSUED') {
     return { key: 'confirmDeposit', label: 'ยืนยันรับมัดจำ', to: dealPath, urgent: false };
   }
-  if (canRecordPayments && ticket.status === 'quotation_issued' && finalPaymentDue(ticket)) {
+  if (canRecordPayments && offersFinalPayment(ticket)) {
     return { key: 'confirmFinalPayment', label: 'รับชำระส่วนที่เหลือ', to: dealPath, urgent: false };
   }
   if (closeReady(ticket)) {
@@ -140,7 +145,7 @@ export function accountMoneyBucket(ticket) {
   const outstanding = ticket.amountOutstanding != null && Number(ticket.amountOutstanding) > 0;
   if (ticket.overdue && outstanding) return 'overdue';
   if (ticket.paymentStatus === 'DEPOSIT_NOTICE_ISSUED') return 'depositPending';
-  if (ticket.paymentStatus === 'AWAITING_FINAL_PAYMENT') return 'finalPaymentPending';
+  if (offersFinalPayment(ticket)) return 'finalPaymentPending';
   if (closeReady(ticket)) return 'closeReady';
   if (ticket.salesStage === 'CLOSED_PAID' && !ticket.commissionRecorded) return 'commissionPending';
   return null;

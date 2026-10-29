@@ -334,7 +334,7 @@ export function App() {
                   dashboardSummary={dashboardSummary}
                 />
               ) : user.role === 'sales_manager' && SALES_ENABLED ? (
-                <ManagerOverview user={user} employee={currentEmployee} showToast={showToast} />
+                <ManagerOverview user={user} employee={currentEmployee} dashboardSummary={dashboardSummary} showToast={showToast} />
               ) : user.role === 'sales' && SALES_ENABLED ? (
                 <SalesOverview user={user} employee={currentEmployee} />
               ) : user?.role === 'ceo' && SALES_ENABLED ? (
@@ -346,7 +346,7 @@ export function App() {
               ) : user.role === 'import' && SALES_ENABLED ? (
                 <ImportOverview user={user} employee={currentEmployee} />
               ) : user.role === 'account' && SALES_ENABLED ? (
-                <AccountOverview user={user} employee={currentEmployee} showToast={showToast} />
+                <AccountOverview user={user} employee={currentEmployee} dashboardSummary={dashboardSummary} showToast={showToast} />
               ) : isDivisionManager(user) ? (
                 <DivisionManagerOverview
                   user={user}

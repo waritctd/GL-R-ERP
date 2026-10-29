@@ -3832,9 +3832,12 @@ function receiptsForTicket(ticketId) {
     .sort((a, b) => new Date(a.receivedAt) - new Date(b.receivedAt) || a.receiptId - b.receiptId);
 }
 
+// DEPOSIT/BALANCE add, ADJUSTMENT (refund) subtracts — TicketRepository.SIGNED_RECEIPT_SUM's twin.
+const signedReceiptSum = (sum, receipt) =>
+  sum + (receipt.kind === 'ADJUSTMENT' ? -Number(receipt.amount) : Number(receipt.amount));
+
 function sumPaid(ticketId) {
-  return moneyValue(receiptsForTicket(ticketId).reduce((sum, receipt) =>
-    sum + (receipt.kind === 'ADJUSTMENT' ? -Number(receipt.amount) : Number(receipt.amount)), 0));
+  return moneyValue(receiptsForTicket(ticketId).reduce(signedReceiptSum, 0));
 }
 
 function derivePaymentFields(ticket) {
@@ -3866,7 +3869,36 @@ function derivePaymentFields(ticket) {
     amountPaid: paid,
     amountOutstanding: outstanding,
     overdue,
+    // Mirrors TicketSummaryDto#depositDue: newest ISSUED deposit notice's VAT-inclusive total while the
+    // deal waits on that deposit; null otherwise.
+    depositDue: ticket.paymentStatus === 'DEPOSIT_NOTICE_ISSUED'
+      ? (latestIssuedDepositNotice(ticket.id)?.totalPayable ?? null)
+      : null,
   };
+}
+
+function mockReceiptsThisMonth() {
+  const bangkokMonth = (d) => new Date(d).toLocaleDateString('sv-SE', { timeZone: 'Asia/Bangkok' }).slice(0, 7);
+  const thisMonth = bangkokMonth(new Date());
+  return (db.paymentReceipts ?? []).filter((r) => bangkokMonth(r.receivedAt) === thisMonth);
+}
+
+function mockCashReceivedThisMonth() {
+  return moneyValue(mockReceiptsThisMonth().reduce(signedReceiptSum, 0));
+}
+
+// Mirrors DashboardRepository#cashReceivedByRep: this month's receipts grouped by the deal creator's id,
+// labelled with the creator's name (blank -> ไม่ระบุผู้ขาย).
+function mockCashReceivedByRep() {
+  const byCreator = new Map();
+  mockReceiptsThisMonth().forEach((r) => {
+    const ticket = db.tickets.find((t) => t.id === r.ticketId);
+    if (!ticket) return;
+    const row = byCreator.get(ticket.createdById) ?? { repName: ticket.createdByName?.trim() || 'ไม่ระบุผู้ขาย', amount: 0 };
+    row.amount = signedReceiptSum(row.amount, r);
+    byCreator.set(ticket.createdById, row);
+  });
+  return [...byCreator.values()].map((row) => ({ ...row, amount: moneyValue(row.amount) }));
 }
 
 function latestIssuedDepositNotice(ticketId) {
@@ -12243,6 +12275,14 @@ export const api = {
           dormant: tickets.dormant,
           paymentOverdue: tickets.paymentOverdue,
           partiallyDelivered: tickets.partiallyDelivered,
+          // Mirrors DashboardSummaryDto#cashReceivedThisMonth: receipts in the current Bangkok month
+          // (deposit + balance - adjustment), only for the roles that see company money.
+          cashReceivedThisMonth: ['account', 'ceo', 'sales_manager'].includes(user.role)
+            ? mockCashReceivedThisMonth()
+            : null,
+          cashReceivedByRep: ['account', 'ceo', 'sales_manager'].includes(user.role)
+            ? mockCashReceivedByRep()
+            : null,
         },
       });
     },

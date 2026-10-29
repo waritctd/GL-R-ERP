@@ -186,6 +186,44 @@ public class DashboardRepository {
         return summary == null ? TicketSummaryDto.empty(scope.label()) : summary;
     }
 
+    private static final java.time.ZoneId BANGKOK = java.time.ZoneId.of("Asia/Bangkok");
+    /** The Bangkok month window on receipts, shared by every "cash received this month" figure. */
+    private static final String RECEIVED_IN_MONTH = "received_at >= :from AND received_at < :to";
+
+    private static MapSqlParameterSource monthWindow(LocalDate monthStart) {
+        return new MapSqlParameterSource()
+            .addValue("from", monthStart.atStartOfDay(BANGKOK).toOffsetDateTime())
+            .addValue("to", monthStart.plusMonths(1).atStartOfDay(BANGKOK).toOffsetDateTime());
+    }
+
+    /**
+     * Cash received in the Bangkok calendar month starting {@code monthStart}: payment receipts with
+     * {@code received_at} in [monthStart, next month start), signed by {@link TicketRepository#SIGNED_RECEIPT_SUM}.
+     */
+    public java.math.BigDecimal cashReceived(LocalDate monthStart) {
+        return jdbc.queryForObject("SELECT " + TicketRepository.SIGNED_RECEIPT_SUM
+            + " FROM sales.payment_receipt WHERE " + RECEIVED_IN_MONTH,
+            monthWindow(monthStart), java.math.BigDecimal.class);
+    }
+
+    /**
+     * {@link #cashReceived}, split by the creator of the deal each receipt belongs to (same window, same
+     * sign rule), so the rows always add up to it. Grouped by creator id, labelled with the creator's name
+     * ({@code ไม่ระบุผู้ขาย} when blank), so two reps with the same name stay separate.
+     */
+    public java.util.List<CashByRepDto> cashReceivedByRep(LocalDate monthStart) {
+        return jdbc.query(
+            "SELECT COALESCE(NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), ''), 'ไม่ระบุผู้ขาย') AS rep_name, "
+                + "SUM(x.amount) AS amount "
+                + "FROM (SELECT ticket_id, " + TicketRepository.SIGNED_RECEIPT_SUM + " AS amount "
+                + "FROM sales.payment_receipt WHERE " + RECEIVED_IN_MONTH + " GROUP BY ticket_id) x "
+                + "JOIN sales.ticket t ON t.ticket_id = x.ticket_id "
+                + "LEFT JOIN hr.employee e ON e.employee_id = t.created_by "
+                + "GROUP BY t.created_by, e.first_name_th, e.last_name_th",
+            monthWindow(monthStart),
+            (rs, n) -> new CashByRepDto(rs.getString("rep_name"), rs.getBigDecimal("amount")));
+    }
+
     public NotificationSummaryDto notifications(long employeeId) {
         NotificationSummaryDto summary = jdbc.queryForObject("""
             SELECT COUNT(*) FILTER (WHERE is_read = FALSE) AS unread,

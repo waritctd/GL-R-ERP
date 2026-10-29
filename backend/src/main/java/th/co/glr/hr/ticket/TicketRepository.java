@@ -1247,7 +1247,8 @@ public class TicketRepository {
             facts.commissionRecorded(), s.reopenedAt(), s.reopenCount(), s.quotationOnly(),
             due == null ? null : due.date(), due == null ? null : due.basis(),
             due == null ? null : due.creditDays(),
-            facts.liveDirectQuotation(), facts.quotedRecipients());
+            facts.liveDirectQuotation(), facts.quotedRecipients(),
+            "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus()) ? facts.depositDue() : null);
     }
 
     /**
@@ -1286,7 +1287,8 @@ public class TicketRepository {
 
     private record CommissionAndLiveQuotation(boolean commissionRecorded,
                                               LiveDirectQuotationDto liveDirectQuotation,
-                                              Set<String> quotedRecipients) {}
+                                              Set<String> quotedRecipients,
+                                              BigDecimal depositDue) {}
 
     /** A Postgres {@code text[]} as a {@link Set}; empty for SQL NULL, which is what
      * {@code array_agg} returns over no rows. */
@@ -1316,7 +1318,10 @@ public class TicketRepository {
                    (SELECT array_agg(DISTINCT r.recipient_type)
                       FROM sales.quotation r
                      WHERE r.ticket_id = :ticketId
-                       AND r.doc_status <> 'CANCELLED') AS quoted_recipients
+                       AND r.doc_status <> 'CANCELLED') AS quoted_recipients,
+                   (SELECT d.total_payable FROM sales.deposit_notice d
+                     WHERE d.ticket_id = :ticketId AND d.status = 'ISSUED'
+                     ORDER BY d.version DESC, d.deposit_notice_id DESC LIMIT 1) AS deposit_due
               FROM (SELECT 1) AS one
               LEFT JOIN LATERAL (
             """ + LIVE_DIRECT_QUOTATION_SELECT + """
@@ -1328,7 +1333,7 @@ public class TicketRepository {
                     : new LiveDirectQuotationDto(quotationId, rs.getString("number"),
                         rs.getString("doc_status"), rs.getString("recipient_type"));
                 return new CommissionAndLiveQuotation(rs.getBoolean("commission_recorded"), live,
-                    readTextArray(rs, "quoted_recipients"));
+                    readTextArray(rs, "quoted_recipients"), rs.getBigDecimal("deposit_due"));
             });
     }
 
@@ -1908,11 +1913,19 @@ public class TicketRepository {
     /** Full "amount paid" SELECT statement — see {@link #payableAmountSelect} for the correlation contract. */
     private static String paidAmountSelect(String ticketIdRef) {
         return """
-            SELECT COALESCE(SUM(CASE WHEN kind = 'ADJUSTMENT' THEN -amount ELSE amount END), 0)
+            SELECT %2$s
               FROM sales.payment_receipt
              WHERE ticket_id = %1$s
-            """.formatted(ticketIdRef);
+            """.formatted(ticketIdRef, SIGNED_RECEIPT_SUM);
     }
+
+    /**
+     * The one sign rule for money received: DEPOSIT and BALANCE add, ADJUSTMENT (refund / credit note)
+     * subtracts. Shared by the per-deal paid amount and the dashboard's company-wide cash received so
+     * the two can never count a receipt differently.
+     */
+    public static final String SIGNED_RECEIPT_SUM =
+        "COALESCE(SUM(CASE WHEN kind = 'ADJUSTMENT' THEN -amount ELSE amount END), 0)";
 
     public record DepositNoticePaymentInfo(long id, BigDecimal depositAmount, BigDecimal totalPayable) {}
 
