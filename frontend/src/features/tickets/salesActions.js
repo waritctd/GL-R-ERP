@@ -73,6 +73,8 @@ export const SALES_ACTION = {
   // Owner rulings 2026-10-28: the deal page's main button makes the ขั้น 10 deposit notice and the ขั้น 13 invoice.
   CREATE_DEPOSIT_NOTICE: 'create_deposit_notice',
   CREATE_REMAINING_INVOICE: 'create_remaining_invoice',
+  // Owner rulings 2026-10-29 (QA-09): ขั้น 11, deposit paid -> the owning rep creates the import request (IR).
+  CREATE_IMPORT_REQUEST: 'create_import_request',
   RECORD_QUOTATION_OUTCOME: 'record_quotation_outcome',
   RECORD_DELIVERY: 'record_delivery',
   FOLLOW_UP: 'follow_up',
@@ -92,6 +94,7 @@ const ACTION_LABEL = {
   [SALES_ACTION.CONFIRM_ORDER]: 'ยืนยันคำสั่งซื้อ',
   [SALES_ACTION.CREATE_DEPOSIT_NOTICE]: 'สร้างใบแจ้งยอดเงินรับมัดจำ',
   [SALES_ACTION.CREATE_REMAINING_INVOICE]: 'สร้างใบแจ้งหนี้',
+  [SALES_ACTION.CREATE_IMPORT_REQUEST]: 'สร้างใบขอซื้อ (IR)',
   // "Record the quotation outcome" — deliberately not "ติดตามผล"/"ติดตามลูกค้า" (that's
   // FOLLOW_UP's own label, a nudge to go chase the customer): by the time this bucket fires, the
   // quotation is already out and canRecordCustomerQuotationOutcome's own gate is what the button
@@ -129,6 +132,7 @@ const ACTION_RANK = {
   [SALES_ACTION.CONFIRM_ORDER_DIRECT]: 1,
   [SALES_ACTION.CREATE_DEPOSIT_NOTICE]: 1,
   [SALES_ACTION.CREATE_REMAINING_INVOICE]: 1,
+  [SALES_ACTION.CREATE_IMPORT_REQUEST]: 1,
   [SALES_ACTION.ISSUE_QUOTATION]: 2,
   [SALES_ACTION.SUBMIT_DIRECT_QUOTATION]: 2,
   [SALES_ACTION.RECORD_QUOTATION_OUTCOME]: 3,
@@ -297,7 +301,7 @@ function routeChoiceAction(ownPrs, quotationOf, offRouteParties) {
  * while the route is unknown. `quotationByRequest`: a Map, pricingRequestId -> the newest
  * PRICING_REQUEST-origin quotation `{ id, number, docStatus }` — only the deal page has it.
  */
-export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = null, offRouteParties = null, quotationByRequest = null, depositNotice = null, remainingInvoice } = {}) {
+export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = null, offRouteParties = null, quotationByRequest = null, depositNotice = null, remainingInvoice, importRequests } = {}) {
   if (!deal || deal.lifecycle !== 'ACTIVE') return null;
 
   // 0. Slice 2 — flow A (SLICE-2-FLOW-A.md §E, IA §4): a LIVE direct quotation. Checked BEFORE
@@ -319,7 +323,7 @@ export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = nul
   // Owner rulings 2026-10-28: a confirmed flow-A deal keeps its direct quotation APPROVED + live, so
   // the deposit notice must outrank this revise.
   const depositAction = depositNoticeAction(deal, depositNotice);
-  if (confirmRefused && reviseTarget) return depositAction ?? reviseAction(reviseTarget);
+  if (confirmRefused && reviseTarget) return depositAction ?? importRequestAction(deal, importRequests) ?? reviseAction(reviseTarget);
 
   // Owner ruling 2026-10-15: ขั้น 1 → 2 → 3 are moved by hand, and the price request starts at ขั้น 3.
   // So on ขั้น 1–2 the one action is moving the stage — nothing below (a due follow-up, an older
@@ -407,6 +411,10 @@ export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = nul
 
   // Owner rulings 2026-10-28: ขั้น 10, the customer confirmed the order -> make the deposit notice.
   if (depositAction) return depositAction;
+
+  // Owner rulings 2026-10-29 (QA-09): ขั้น 11, deposit paid and nothing ordered yet -> create the IR.
+  const importAction = importRequestAction(deal, importRequests);
+  if (importAction) return importAction;
 
   // A live request's quotation awaiting ผจก.ขาย/CEO: the rep waits.
   const pending = pendingRequestQuotation(deal, ownPrs, quotationByRequest);
@@ -523,6 +531,15 @@ function depositNoticeAction(deal, depositNotice) {
   return {
     key: SALES_ACTION.CREATE_DEPOSIT_NOTICE,
     label: depositNotice?.status === 'DRAFT' ? 'ออกใบแจ้งยอดเงินรับมัดจำ' : ACTION_LABEL[SALES_ACTION.CREATE_DEPOSIT_NOTICE],
+  };
+}
+
+/** `importRequests` undefined = unknown (still the create label). A DRAFT row -> the issue label. */
+function importRequestAction(deal, importRequests) {
+  if (deal.paymentStatus !== 'DEPOSIT_PAID' || deal.fulfillmentStatus != null) return null;
+  return {
+    key: SALES_ACTION.CREATE_IMPORT_REQUEST,
+    label: importRequests?.some((r) => r.status === 'DRAFT') ? 'ออกเลขใบขอซื้อ (IR)' : ACTION_LABEL[SALES_ACTION.CREATE_IMPORT_REQUEST],
   };
 }
 

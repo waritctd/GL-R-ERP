@@ -36,7 +36,7 @@ export const AUTO_STAGE_HINT = {
   // Operational — a transition on the deal itself.
   ORDER_RECEIVED:    'อัปเดตอัตโนมัติเมื่อฝ่ายขายยืนยันใบสั่งซื้อของดีลนี้',
   DEPOSIT_RECEIVED:  'อัปเดตอัตโนมัติเมื่อฝ่ายบัญชียืนยันรับมัดจำของดีลนี้',
-  PROCUREMENT:       'อัปเดตอัตโนมัติเมื่อฝ่ายนำเข้าออกใบขอซื้อ (IR) ของดีลนี้',
+  PROCUREMENT:       'อัปเดตอัตโนมัติเมื่อฝ่ายขายออกเลขใบขอซื้อ (IR) ของดีลนี้',
   CLOSED_PAID:       'อัปเดตอัตโนมัติเมื่อฝ่ายบัญชียืนยันรับเงินครบของดีลนี้',
   // Document-driven (owner ruling 2026-10-16) — a quotation addressed to that party. Each names
   // the DOCUMENT rather than a department, because unlike the four above the way in is something

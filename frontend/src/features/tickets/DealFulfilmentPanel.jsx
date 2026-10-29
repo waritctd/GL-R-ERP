@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
@@ -184,9 +184,9 @@ function SubstepChips({ currentCode, fromStock = null }) {
  * gate for this slice; the `can.*` predicates below are moved out of
  * TicketDetailPage byte-for-byte.
  */
-export function DealFulfilmentPanel({
+export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   user, ticketId, summary, items = [], availableActions = [], showToast,
-}) {
+}, ref) {
   const queryClient = useQueryClient();
   const role = user?.role;
   const isImport = ROLE_PERMISSIONS.canPickupTickets.includes(role);
@@ -583,6 +583,13 @@ export function DealFulfilmentPanel({
     setItemWeightMutation.mutate({ lines });
   }
 
+  // QA-09: the deal page's sticky ขั้น 11 button drives this panel's own create (modal + PDF download stay here).
+  const showIrSection = () => document.getElementById('deal-fulfilment-stored-ir')?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+  useImperativeHandle(ref, () => ({
+    createIrDrafts: () => { showIrSection(); createDraftsMutation.mutate(undefined); },
+    showIrSection,
+  }));
+
   return (
     <Panel flush title="การส่งมอบ / นำเข้า" data-testid="deal-fulfilment-panel">
       <div className="flex flex-col gap-4 p-4 mobile:p-3">
@@ -668,7 +675,7 @@ export function DealFulfilmentPanel({
             ImportRequestService#requireRead exactly (canReadStoredIr above). */}
         {canReadStoredIr ? (
           <div className={cn(STEP_BOX, 'border-border-strong')}
-            data-testid="deal-fulfilment-stored-ir">
+            id="deal-fulfilment-stored-ir" data-testid="deal-fulfilment-stored-ir">
             <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
               <div className="flex min-w-0 flex-wrap items-center gap-2">
                 <strong className={STEP_TITLE}>ใบขอซื้อรายโรงงาน (F-SM-001)</strong>
@@ -1043,4 +1050,4 @@ export function DealFulfilmentPanel({
       ) : null}
     </Panel>
   );
-}
+});

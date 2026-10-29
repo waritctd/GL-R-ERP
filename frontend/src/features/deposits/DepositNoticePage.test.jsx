@@ -386,19 +386,18 @@ describe('DepositNoticePage', () => {
     expect(api.pricingRequests.createDepositNoticeFromQuotation).not.toHaveBeenCalled();
   });
 
-  // A failure anywhere in the resolution step (network error, permission edge case) must
-  // degrade to the fallback path, never break the button or surface an unhandled rejection.
-  it('falls back to the ticket-level route when resolving pricing requests fails', async () => {
+  // A failed pricing-request lookup must NOT silently route the deal to the ticket-level engine
+  // (it could create the wrong kind of deposit notice): the error surfaces and nothing is created.
+  it('surfaces the error and creates nothing when resolving pricing requests fails', async () => {
     api.pricingRequests.listForTicket.mockRejectedValue(new Error('network error'));
-    renderDepositNoticePage();
+    const showToast = vi.fn();
+    renderDepositNoticePage({ showToast });
 
     const createButton = await screen.findByRole('button', { name: /สร้างเอกสารฉบับร่าง/ });
     fireEvent.click(createButton);
 
-    await waitFor(() => expect(api.depositNotices.createDraft).toHaveBeenCalledTimes(1));
-    expect(api.depositNotices.createDraft).toHaveBeenCalledWith('701', {
-      notes: ['หมายเหตุมาตรฐาน'],
-    });
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'network error'));
+    expect(api.depositNotices.createDraft).not.toHaveBeenCalled();
     expect(api.pricingRequests.createDepositNoticeFromQuotation).not.toHaveBeenCalled();
   });
 
