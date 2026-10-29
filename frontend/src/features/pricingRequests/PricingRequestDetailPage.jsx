@@ -350,6 +350,9 @@ function generateClientRequestId() {
 }
 
 const QUOTE_UNIT_SUFFIX = { PER_SQM: '/ตร.ม.', PER_PIECE: '/แผ่น', PER_BOX: '/กล่อง', PER_LINEAR_M: '/เมตร' };
+// A quoted price with its unit, e.g. "12.5 EUR/ตร.ม.". One function, so the item card's current
+// quote and the CEO card's cost basis read identically when nothing has changed between them.
+const formatQuotedPrice = (price, currency, unitBasis) => `${formatCurrency(price, currency)}${QUOTE_UNIT_SUFFIX[unitBasis] ?? ''}`;
 
 /** Quantities shown with up to 2 decimals, no trailing zeros (7.2, 5, 7.25). */
 function formatQty(value) {
@@ -2146,7 +2149,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
     // V141: the bound costing line this decision item was frozen from — may
     // legitimately be undefined (costings never fetched, or not yet loaded), in
     // which case the derivation below renders only the decision item's own
-    // frozen cost, with no cost-override affordance at all.
+    // frozen cost, and the cost override cannot be opened (the new-form card
+    // shows its button disabled; the legacy card shows none).
     const costingItem = decisionCostingItems.get(item.pricingCostingItemId);
     const hasCostOverride = costingItem?.manualLandedCostPerUnitThb != null;
     const hasPriceOverride = item.manualSellingPricePerRequestedUnit != null;
@@ -2541,12 +2545,26 @@ export function PricingRequestDetailPage({ user, showToast }) {
                       type="button"
                       variant="secondary"
                       size="sm"
+                      disabled={!costingItem}
                       onClick={() => setCostOverrideItem({ decision, item, costingItem })}
                       data-testid={`pcr-ceo-cost-override-${item.id}`}
                     >
                       {hasCostOverride ? 'แก้ไขต้นทุนที่ปรับ' : 'ปรับต้นทุนเอง'}
                     </Button>
                   </div>
+                ) : null}
+                {/* What ต้นทุนคำนวณ below was computed FROM: the costing's own frozen price and rate.
+                    The item card's ราคาจากฝ่ายนำเข้า is the CURRENT quote at today's rate, so the two
+                    differ once Import revises a quote or the rate moves. Kept beside the computed
+                    cost, not ต้นทุนรวมนำเข้า above, which shows the manual figure on an overridden line. */}
+                {costingItem?.rawUnitPrice != null ? (
+                  <span className="text-text-muted" data-testid={`pcr-ceo-cost-basis-${item.id}`}>
+                    ราคาที่ใช้คำนวณต้นทุน:{' '}
+                    <code>{formatQuotedPrice(costingItem.rawUnitPrice, costingItem.rawCurrency, costingItem.unitBasis)}</code>
+                    {costingItem.rawCurrency !== 'THB' && costingItem.fxRate != null
+                      ? ` · อัตราแลกเปลี่ยน ${costingItem.fxRate} (${[costingItem.fxSource, costingItem.fxEffectiveDate].filter(Boolean).join(', ')})`
+                      : null}
+                  </span>
                 ) : null}
                 {costingItem ? (
                   <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-md border border-border-subtle bg-surface-subtle p-2">
@@ -3085,7 +3103,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   <span>รหัสสินค้า: {productCode ?? '-'}</span>
                   <span data-testid={`pcr-import-price-${item.id}`}>
                     ราคาจากฝ่ายนำเข้า: {importQuoteItem?.rawUnitPrice != null
-                      ? `${formatCurrency(importQuoteItem.rawUnitPrice, importQuoteItem.currency ?? 'THB')}${QUOTE_UNIT_SUFFIX[importQuoteItem.unitBasis] ?? ''}`
+                      ? formatQuotedPrice(importQuoteItem.rawUnitPrice, importQuoteItem.currency ?? 'THB', importQuoteItem.unitBasis)
                       : 'ยังไม่มี'}
                   </span>
                   {importPriceThb ? (
