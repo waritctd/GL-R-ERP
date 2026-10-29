@@ -2722,12 +2722,15 @@ describe('TicketDetailPage', () => {
       expect(screen.queryByText('รอ CEO ตรวจสอบปิดงาน')).toBeNull();
     });
 
-    it('does not show to a non-CEO viewer once the deal is COMPLETED either', async () => {
-      closeConfirmedDeal('COMPLETED');
-      renderTicketDetailPage(salesManagerUser);
-      await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
-      expect(screen.queryByText('รอ CEO ตรวจสอบปิดงาน')).toBeNull();
-    });
+    it.each(['COMPLETED', 'CANCELLED', 'CLOSED_LOST'])(
+      'does not show to a non-CEO viewer once the deal is %s (the CEO can only verify an ACTIVE deal)',
+      async (lifecycle) => {
+        closeConfirmedDeal(lifecycle);
+        renderTicketDetailPage(salesManagerUser);
+        await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
+        expect(screen.queryByText('รอ CEO ตรวจสอบปิดงาน')).toBeNull();
+      },
+    );
   });
 
   // Deal tracking (V83, Slice B1/B2 "kill the weekly report" — handoff 103).

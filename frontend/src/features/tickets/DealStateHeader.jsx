@@ -6,7 +6,7 @@ import {
   dealLifecycleLabel, dealStageLabel, formatMoney, formatThaiDate, fulfilmentStatusLabel,
   paymentStageLabel, pricingRequestStatusLabel,
 } from '../../utils/format.js';
-import { importChipLabel } from '../importProgress/importSteps.js';
+import { importChipLabel, importStepMeta } from '../importProgress/importSteps.js';
 import { activePricingRequestsSummary } from '../pricingRequests/pricingRequestMeta.js';
 import { visibleSections } from './salesViewScope.js';
 
@@ -162,7 +162,9 @@ export function DealStateHeader({
       key: 'fulfilment',
       label: 'การนำเข้า',
       value: importChip ?? (fulfilment ? fulfilment.label : 'ยังไม่ออกใบขอซื้อ'),
-      tone: fulfilment ? fulfilment.tone : 'neutral',
+      // Every factory at the warehouse reads as done, like the GOODS_RECEIVED rollup it is about to become.
+      tone: importChip === importStepMeta('RECEIVED').label ? 'success' : importChip ? 'info'
+        : fulfilment ? fulfilment.tone : 'neutral',
     },
     sections.payment && {
       key: 'dealValue',

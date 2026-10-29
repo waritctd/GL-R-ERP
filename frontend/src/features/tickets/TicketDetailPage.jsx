@@ -1226,8 +1226,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // recording/confirming a payment is account-only now (see isMoneyRecorder above), so the CEO no
   // longer clears either wait and must see the same read-only status a sales/import viewer does,
   // not silence.
-  // QA-27: once the CEO has verified (COMPLETED) there is nothing left to wait for.
-  const blocker = closeConfirmedAt && !can.verifyClose && summary?.lifecycle !== 'COMPLETED'
+  // QA-27: the CEO can only verify an ACTIVE deal (canVerifyClose), so on any other lifecycle — COMPLETED
+  // after the verify, or cancelled/lost/paused — there is no CEO step left to wait for.
+  const blocker = closeConfirmedAt && !can.verifyClose && (summary?.lifecycle ?? 'ACTIVE') === 'ACTIVE'
     ? 'รอ CEO ตรวจสอบปิดงาน'
     : ps === 'DEPOSIT_NOTICE_ISSUED' && !isMoneyRecorder ? 'รอชำระมัดจำ'
       : ps === 'AWAITING_FINAL_PAYMENT' && !isMoneyRecorder ? 'รอชำระส่วนที่เหลือ'

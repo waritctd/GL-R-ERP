@@ -160,6 +160,13 @@ describe('DealStateHeader — การนำเข้า chip follows the per-f
   it('every tracked factory RECEIVED while the deal rollup is still IR_ISSUED -> ถึงโกดัง alone', () => {
     withIrs([ir('RECEIVED'), ir('RECEIVED')]);
     expect(importChipText()).toBe('ถึงโกดัง');
+    // Arrived reads as done (success), like the GOODS_RECEIVED rollup it is about to become — not in-progress.
+    expect(screen.getByText('ถึงโกดัง', { selector: '.status-badge' }).className).toContain('status-success');
+  });
+
+  it('a factory still on the way keeps the in-progress (info) tone', () => {
+    withIrs([ir('IN_TRANSIT'), ir('RECEIVED')]);
+    expect(screen.getByText('กำลังเดินทาง · ถึงโกดัง 1/2', { selector: '.status-badge' }).className).toContain('status-info');
   });
 
   it('a revised factory counts once: v1 SUPERSEDED at ORDERED + v2 ISSUED at RECEIVED -> ถึงโกดัง', () => {
