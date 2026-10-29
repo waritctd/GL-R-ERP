@@ -12,7 +12,6 @@ import { SkeletonCard, SkeletonText } from '../../components/common/Skeleton.jsx
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatMoney, formatThaiDate, greetingName } from '../../utils/format.js';
-import { financeOutstanding, forecastValue } from './dashboardMoney.js';
 
 // No server-side status filter exists on GET /api/commissions (mirrors
 // CommissionController#list — payrollMonth is the only query param it
@@ -111,8 +110,8 @@ export function ManagerOverview({ user, employee, dashboardSummary, showToast })
   const ticketsById = useMemo(() => new Map(tickets.map((t) => [t.id, t])), [tickets]);
 
   const openTickets = useMemo(() => tickets.filter(isDealOpen), [tickets]);
-  const outstanding = useMemo(() => financeOutstanding(tickets), [tickets]);
-  const forecast = useMemo(() => forecastValue(tickets), [tickets]);
+  const outstanding = dashboardSummary?.financeOutstanding;
+  const forecast = dashboardSummary?.forecastValue;
   const cashReceived = dashboardSummary?.cashReceivedThisMonth;
 
   // "ดีลต้องดูแล": an open deal with no activity in 7 days (`ticket.stale`,
@@ -185,7 +184,7 @@ export function ManagerOverview({ user, employee, dashboardSummary, showToast })
             <StatCard
               icon="clock"
               label="ค้างรับ"
-              value={formatMoney(outstanding)}
+              value={outstanding == null ? '—' : formatMoney(outstanding)}
               helper="ตามหน้าการเงิน"
               tone="amber"
             />
@@ -208,7 +207,7 @@ export function ManagerOverview({ user, employee, dashboardSummary, showToast })
             <StatCard
               icon="briefcase"
               label="ยอดคาดการณ์"
-              value={formatMoney(forecast)}
+              value={forecast == null ? '—' : formatMoney(forecast)}
               helper="ดีลก่อนขั้น 10"
               tone="blue"
               onClick={() => navigate('/tickets')}

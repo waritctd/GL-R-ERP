@@ -74,7 +74,9 @@ public class DashboardService {
             tickets,
             notifications,
             cashReceived,
-            cashByRep
+            cashByRep,
+            seesCash ? dashboardRepository.financeOutstanding() : null,
+            seesCash ? dashboardRepository.forecastValue() : null
         );
     }
 

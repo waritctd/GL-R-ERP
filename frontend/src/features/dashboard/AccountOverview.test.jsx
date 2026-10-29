@@ -18,6 +18,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
     api: {
       tickets: { list: vi.fn() },
       meta: { dealStages: vi.fn() },
+      dashboard: { summary: vi.fn() },
     },
   };
 });
@@ -164,18 +165,28 @@ describe('AccountOverview', () => {
     expect(summaryRow('รับแล้ว (เดือนนี้)')).toBe('฿321,000.50');
   });
 
-  it('ค้างรับ leaves out deals with no account to-do, including the closed DEMO-TKT-05 shape', async () => {
+  it('ค้างรับ is the summary\'s server total, not a sum of the loaded rows', async () => {
+    // rows would add up to ฿150,000.00 (the closed DEMO-TKT-05 deal and the no-to-do deal are not counted either way)
     serve([overdueTicket, depositTicket, noActionTicket], [closedDemoDeal]);
-    renderOverview();
+    renderOverview({ financeOutstanding: 777000.5 });
     await screen.findByText('สรุปเดือนนี้');
-    expect(summaryRow('ค้างรับ')).toBe('฿150,000.00');
+    expect(summaryRow('ค้างรับ')).toBe('฿777,000.50');
   });
 
-  it('ค้างรับ equals the คงค้างรวม on AccountFinancePage for the same tickets', async () => {
+  it('ค้างรับ shows an em dash while the summary has no total', async () => {
     serve([overdueTicket, depositTicket, noActionTicket], [closedDemoDeal]);
-    renderOverview();
+    renderOverview({});
+    await screen.findByText('สรุปเดือนนี้');
+    expect(summaryRow('ค้างรับ')).toBe('—');
+  });
+
+  it('ค้างรับ equals the ค้างรับทั้งหมด on AccountFinancePage: both read the summary\'s total', async () => {
+    serve([overdueTicket, depositTicket, noActionTicket], [closedDemoDeal]);
+    api.dashboard.summary.mockResolvedValue({ summary: { financeOutstanding: 777000.5 } });
+    renderOverview({ financeOutstanding: 777000.5 });
     await screen.findByText('สรุปเดือนนี้');
     const dashboardValue = summaryRow('ค้างรับ');
+    expect(dashboardValue).toBe('฿777,000.50');
     cleanup();
 
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -186,7 +197,7 @@ describe('AccountOverview', () => {
         </MemoryRouter>
       </QueryClientProvider>,
     );
-    const subtitle = await screen.findByText(/คงค้างรวม ฿/);
-    expect(subtitle.textContent).toContain(`คงค้างรวม ${dashboardValue}`);
+    const subtitle = await screen.findByText(/ค้างรับทั้งหมด ฿/);
+    expect(subtitle.textContent).toContain(`ค้างรับทั้งหมด ${dashboardValue}`);
   });
 });

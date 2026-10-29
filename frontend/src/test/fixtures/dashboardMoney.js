@@ -51,10 +51,13 @@ export const CASH_BY_REP = [
   { repName: 'สมหญิง ขายเก่ง', amount: 35000 },
   { repName: 'สมชาย ขายดี', amount: 90000.5 },
 ];
+// The server totals on /api/dashboard/summary. Deliberately NOT what the fixture rows add up to
+// (293,545.25 and 80,000.25): /api/tickets is capped at 500 rows, so a screen that sums rows is wrong.
+export const SERVER_TOTALS = { financeOutstanding: 411111.11, forecastValue: 222222.22 };
 export const EXPECTED = {
   cash: '฿125,000.50',
-  outstanding: '฿293,545.25', // 213,545.25 + 80,000 — not the closed, pre-order or lost deals
-  forecast: '฿80,000.25', // 50,000 + 30,000.25 — pre-ขั้น 10, ACTIVE, not closed
+  outstanding: '฿411,111.11',
+  forecast: '฿222,222.22',
 };
 
 /** Text of every row/tile carrying `label`: a StatCard, or a <dt>/<dd> pair in a <dl>. */

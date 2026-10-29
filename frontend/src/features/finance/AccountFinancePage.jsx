@@ -123,6 +123,16 @@ export function AccountFinancePage({ user, showToast }) {
     if (error) showToast?.('error', error.message || 'โหลดข้อมูลไม่สำเร็จ');
   }, [scopedQuery.error, closedPaidQuery.error, showToast]);
 
+  // The same query (key + shape) as useHrData's, so one cache entry serves the dashboard and this header,
+  // and FinanceDealPage's invalidation of it keeps คงค้างรวม fresh.
+  const summaryQuery = useQuery({
+    queryKey: queryKeys.dashboardSummary(),
+    queryFn: () => api.dashboard.summary()
+      .then((response) => response?.summary ?? response ?? null)
+      .catch(() => null),
+  });
+  const serverOutstanding = summaryQuery.data?.financeOutstanding ?? null;
+
   const loading = scopedQuery.isLoading || closedPaidQuery.isLoading;
   const loadError = scopedQuery.error || closedPaidQuery.error;
 
@@ -151,15 +161,14 @@ export function AccountFinancePage({ user, showToast }) {
 
   // The summary always describes the actionable set, whichever view is showing.
   const stats = useMemo(() => {
-    const total = actionable.reduce((sum, r) => sum + Number(r.ticket.amountOutstanding ?? 0), 0);
     const overdueCount = actionable.filter((r) => r.ticket.overdue).length;
     const dueTimes = actionable
       .map((r) => (r.ticket.paymentDueDate ? new Date(r.ticket.paymentDueDate).getTime() : null))
       .filter((t) => t != null && !Number.isNaN(t));
     const nextDue = dueTimes.length ? new Date(Math.min(...dueTimes)).toISOString() : null;
-    return { total, overdueCount, nextDue };
+    return { overdueCount, nextDue };
   }, [actionable]);
-  const summary = `ต้องดำเนินการ ${actionable.length} ดีล · คงค้างรวม ${actionable.length === 0 ? '—' : formatMoney(stats.total)}`;
+  const summary = `ต้องดำเนินการ ${actionable.length} ดีล · ค้างรับทั้งหมด ${serverOutstanding == null ? '—' : formatMoney(serverOutstanding)}`;
 
   const rows = useMemo(() => {
     const base = view === 'all' ? allRows : actionable;
@@ -199,9 +208,9 @@ export function AccountFinancePage({ user, showToast }) {
           {/* The screen-reader sentence; the visible block below shows the same figures as a lead stat. */}
           <p className="sr-only">{summary}</p>
           <div className="grid min-w-0 gap-1">
-            <p className="m-0 text-sm font-bold text-text-secondary">ยอดคงค้างของดีลที่ต้องดำเนินการ</p>
+            <p className="m-0 text-sm font-bold text-text-secondary">ค้างรับทั้งหมด</p>
             <p className="m-0 text-4xl font-extrabold leading-tight tabular-nums text-text [overflow-wrap:anywhere] mobile:text-3xl">
-              {actionable.length === 0 ? '—' : formatMoney(stats.total)}
+              {serverOutstanding == null ? '—' : formatMoney(serverOutstanding)}
             </p>
           </div>
           <dl className="m-0 grid grid-cols-3 gap-x-4 gap-y-2 mobile:grid-cols-1">

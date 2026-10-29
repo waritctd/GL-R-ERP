@@ -226,18 +226,28 @@ public class TicketRepository {
             params.addValue("prTerminalStatuses", PRICING_REQUEST_TERMINAL_STATUSES);
             params.addValue("importStages", IMPORT_STAGE_SCOPE);
         } else if ("account".equals(actorRole)) {
-            sql.append("""
-                   AND (
-                     (t.lifecycle NOT IN ('CLOSED_LOST', 'CANCELLED')
-                      AND t.status <> 'cancelled'
-                      AND t.sales_stage IN (:accountOrderStages))
-                     OR t.payment_status IN (:accountPendingStatuses)
-                     OR (""")
-               .append(paymentOverduePredicate("t.ticket_id"))
-               .append(")) ");
-            params.addValue("accountOrderStages", ACCOUNT_ORDER_STAGE_SCOPE);
-            params.addValue("accountPendingStatuses", ACCOUNT_PENDING_PAYMENT_STATUSES);
+            sql.append(" AND ").append(accountScopePredicate()).append(' ');
+            addAccountScopeParams(params);
         }
+    }
+
+    /**
+     * Account's list scope as a parenthesised predicate over {@code t} ({@code sales.ticket}): the one text
+     * both the account deal list and the dashboard totals run. Needs {@link #addAccountScopeParams}.
+     */
+    public static String accountScopePredicate() {
+        return """
+            (
+              (t.lifecycle NOT IN ('CLOSED_LOST', 'CANCELLED')
+               AND t.status <> 'cancelled'
+               AND t.sales_stage IN (:accountOrderStages))
+              OR t.payment_status IN (:accountPendingStatuses)
+              OR (""" + paymentOverduePredicate("t.ticket_id") + "))\n";
+    }
+
+    public static void addAccountScopeParams(MapSqlParameterSource params) {
+        params.addValue("accountOrderStages", ACCOUNT_ORDER_STAGE_SCOPE);
+        params.addValue("accountPendingStatuses", ACCOUNT_PENDING_PAYMENT_STATUSES);
     }
 
     /**
@@ -1276,14 +1286,18 @@ public class TicketRepository {
      * .hasActiveCommissionForTicket} always agree. If you change one predicate you MUST change the
      * other, and that test is what catches it if you forget.
      */
-    private static final String HAS_RECORDED_COMMISSION = """
+    public static String hasRecordedCommission(String ticketIdRef) {
+        return """
             EXISTS(
                 SELECT 1 FROM sales.commission_record
-                 WHERE source_ticket_id = :ticketId
+                 WHERE source_ticket_id = %s
                    AND kind = 'SALE'
                    AND status NOT IN ('VOID', 'REJECTED')
             )
-        """;
+        """.formatted(ticketIdRef);
+    }
+
+    private static final String HAS_RECORDED_COMMISSION = hasRecordedCommission(":ticketId");
 
     private record CommissionAndLiveQuotation(boolean commissionRecorded,
                                               LiveDirectQuotationDto liveDirectQuotation,
@@ -1742,7 +1756,7 @@ public class TicketRepository {
      * bigger SQL statement — see {@link #appendRoleScope}). Single source of truth so the two
      * contexts can never drift apart; this is the exact SQL {@link #payableAmount} always ran.
      */
-    private static String payableAmountSelect(String ticketIdRef) {
+    public static String payableAmountSelect(String ticketIdRef) {
         return payableAmountSelect(ticketIdRef, true);
     }
 
@@ -1911,7 +1925,7 @@ public class TicketRepository {
     }
 
     /** Full "amount paid" SELECT statement — see {@link #payableAmountSelect} for the correlation contract. */
-    private static String paidAmountSelect(String ticketIdRef) {
+    public static String paidAmountSelect(String ticketIdRef) {
         return """
             SELECT %2$s
               FROM sales.payment_receipt

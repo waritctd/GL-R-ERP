@@ -1,5 +1,6 @@
 import thaiLocations from '../data/thai-locations.json';
 import { formatThaiAddress } from '../features/locations/thaiAddress.js';
+import { nextAccountAction } from '../features/tickets/accountActions.js';
 // Mock backend for VITE_USE_MOCKS=true — the default verification surface for the
 // `frontend-mock` launch config that devs, QA and coding agents drive.
 //
@@ -3875,6 +3876,24 @@ function derivePaymentFields(ticket) {
       ? (latestIssuedDepositNotice(ticket.id)?.totalPayable ?? null)
       : null,
   };
+}
+
+// Mirrors DashboardRepository#financeOutstanding: outstanding on deals in account's list scope that have an
+// account to-do (nextAccountAction as the account viewer).
+function mockFinanceOutstanding() {
+  return moneyValue(db.tickets
+    .filter(accountListScopeIncludes)
+    .map((t) => ({ ...t, ...derivePaymentFields(t), commissionRecorded: hasRecordedCommission(t) }))
+    .filter((t) => nextAccountAction(t) != null)
+    .reduce((sum, t) => sum + Number(t.amountOutstanding ?? 0), 0));
+}
+
+// Mirrors DashboardRepository#forecastValue: payable of ACTIVE deals before ORDER_RECEIVED.
+function mockForecastValue() {
+  return moneyValue(db.tickets
+    .filter((t) => (t.lifecycle ?? 'ACTIVE') === 'ACTIVE' && dealStageIndex(t.salesStage) < ACCOUNT_ORDER_STAGE_SCOPE_START
+      && t.status !== 'closed' && t.status !== 'cancelled')
+    .reduce((sum, t) => sum + Number(derivePaymentFields(t).amountPayable ?? 0), 0));
 }
 
 function mockReceiptsThisMonth() {
@@ -12277,6 +12296,8 @@ export const api = {
           // The month figure is the sum of the per-rep rows, as DashboardService totals them.
           cashReceivedThisMonth: cashByRep ? moneyValue(cashByRep.reduce((sum, row) => sum + row.amount, 0)) : null,
           cashReceivedByRep: cashByRep,
+          financeOutstanding: cashByRep ? mockFinanceOutstanding() : null,
+          forecastValue: cashByRep ? mockForecastValue() : null,
         },
       });
     },

@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ManagerOverview } from './ManagerOverview.jsx';
 import { api } from '../../api/index.js';
 import {
-  CASH_BY_REP, CASH_RECEIVED_THIS_MONTH, EXPECTED, expectFigure, figureRows, moneyFixtureTickets,
+  CASH_BY_REP, CASH_RECEIVED_THIS_MONTH, EXPECTED, SERVER_TOTALS, expectFigure, figureRows, moneyFixtureTickets,
 } from '../../test/fixtures/dashboardMoney.js';
 
 globalThis.React = React;
@@ -141,12 +141,21 @@ describe('ManagerOverview', () => {
   });
   it('shows the same three money figures as /finance and the CEO dashboard', async () => {
     api.tickets.list.mockResolvedValue({ tickets: moneyFixtureTickets });
-    renderOverview({ cashReceivedThisMonth: CASH_RECEIVED_THIS_MONTH });
+    renderOverview({ cashReceivedThisMonth: CASH_RECEIVED_THIS_MONTH, ...SERVER_TOTALS });
     await screen.findByText('ดีลต้องดูแล');
 
     expectFigure('เงินรับแล้ว (เดือนนี้)', EXPECTED.cash);
     expectFigure('ค้างรับ', EXPECTED.outstanding);
     expectFigure('ยอดคาดการณ์', EXPECTED.forecast);
+  });
+
+  it('shows an em dash for ค้างรับ and ยอดคาดการณ์ when the summary has no totals, never a sum of rows', async () => {
+    api.tickets.list.mockResolvedValue({ tickets: moneyFixtureTickets });
+    renderOverview({ cashReceivedThisMonth: CASH_RECEIVED_THIS_MONTH });
+    await screen.findByText('ดีลต้องดูแล');
+
+    expectFigure('ค้างรับ', '—');
+    expectFigure('ยอดคาดการณ์', '—');
   });
 
   it('no longer shows the team-sales and team-pipeline tiles', async () => {

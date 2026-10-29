@@ -15,7 +15,6 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { cn } from '../../utils/cn.js';
 import { formatMoney, formatThaiDate, greetingName, ticketStatusLabel } from '../../utils/format.js';
 import { accountMoneyBucket, nextAccountAction } from '../tickets/accountActions.js';
-import { financeOutstanding } from './dashboardMoney.js';
 
 // Money-pulse bucket meta (Bento Grid). `span` encodes IMPORTANCE, not data: overdue is the 2x2 lead
 // tile, the deposit step is double-wide, the commission step is the slim closing strip.
@@ -131,12 +130,12 @@ export function AccountOverview({ user, employee, dashboardSummary, showToast })
     });
   }, [allTickets, user?.role]);
 
-  // ค้างรับ is /finance's คงค้างรวม (shared helper); รับแล้ว is the server's receipts for this Bangkok month.
+  // ค้างรับ is /finance's คงค้างรวม (the summary's server total); รับแล้ว is the server's receipts for this Bangkok month.
   const monthSummary = useMemo(() => ({
     receivedThisMonth: dashboardSummary?.cashReceivedThisMonth ?? null,
-    outstandingTotal: financeOutstanding(allTickets),
+    outstandingTotal: dashboardSummary?.financeOutstanding ?? null,
     overdueTotal: allTickets.reduce((sum, t) => sum + (t.overdue ? Number(t.amountOutstanding ?? 0) : 0), 0),
-  }), [allTickets, dashboardSummary?.cashReceivedThisMonth]);
+  }), [allTickets, dashboardSummary?.cashReceivedThisMonth, dashboardSummary?.financeOutstanding]);
 
   const firstName = employee?.nickName || employee?.nameTh || user?.name || '';
   const today = formatThaiDate(new Date().toISOString());

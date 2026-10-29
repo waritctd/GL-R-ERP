@@ -11,7 +11,6 @@ import { SkeletonCard } from '../../components/common/Skeleton.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatMoney, formatThaiDate, greetingName } from '../../utils/format.js';
-import { financeOutstanding, forecastValue } from './dashboardMoney.js';
 
 /**
  * CEO exec-cockpit landing (plan: docs/agent-handoffs/valiant-watching-map.md
@@ -195,8 +194,8 @@ export function CeoOverview({ user, employee, dashboardSummary }) {
   // scoped tickets.list() the CEO already gets in full — amountPayable/
   // amountPaid/amountOutstanding/overdue are the same computed fields
   // TicketDetailPage's money views already trust (derivePaymentFields). ────
-  const outstanding = useMemo(() => financeOutstanding(tickets), [tickets]);
-  const forecast = useMemo(() => forecastValue(tickets), [tickets]);
+  const outstanding = dashboardSummary?.financeOutstanding;
+  const forecast = dashboardSummary?.forecastValue;
   const cashReceived = dashboardSummary?.cashReceivedThisMonth;
   const overdueReceivables = useMemo(
     () => moneySum(tickets.filter((t) => t.overdue), (t) => t.amountOutstanding),
@@ -378,8 +377,8 @@ export function CeoOverview({ user, employee, dashboardSummary }) {
               <dl className="m-0 grid gap-3">
                 {[
                   ['เงินรับแล้ว (เดือนนี้)', cashReceived == null ? '—' : formatMoney(cashReceived)],
-                  ['ค้างรับ', formatMoney(outstanding)],
-                  ['ยอดคาดการณ์', formatMoney(forecast)],
+                  ['ค้างรับ', outstanding == null ? '—' : formatMoney(outstanding)],
+                  ['ยอดคาดการณ์', forecast == null ? '—' : formatMoney(forecast)],
                   ['ลูกหนี้ค้าง/เกินกำหนด', formatMoney(overdueReceivables)],
                   ['กำลังพล', headcountActive != null ? `${headcountActive} คน` : '-'],
                   ['มาสายวันนี้', lateToday != null ? `${lateToday} คน` : '-'],

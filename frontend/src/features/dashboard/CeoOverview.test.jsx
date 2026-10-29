@@ -7,7 +7,7 @@ import { CeoOverview } from './CeoOverview.jsx';
 import { api } from '../../api/index.js';
 import { bangkokMonthStartIso } from '../../utils/format.js';
 import {
-  CASH_BY_REP, CASH_RECEIVED_THIS_MONTH, EXPECTED, expectFigure, figureRows, moneyFixtureTickets,
+  CASH_BY_REP, CASH_RECEIVED_THIS_MONTH, EXPECTED, SERVER_TOTALS, expectFigure, figureRows, moneyFixtureTickets,
 } from '../../test/fixtures/dashboardMoney.js';
 
 globalThis.React = React;
@@ -42,6 +42,7 @@ const dashboardSummary = {
   cashReceivedThisMonth: CASH_RECEIVED_THIS_MONTH,
   // This month's cash split per sales rep: the two add up to CASH_RECEIVED_THIS_MONTH (125,000.50).
   cashReceivedByRep: CASH_BY_REP,
+  ...SERVER_TOTALS,
 };
 
 function mockAllData() {
@@ -338,6 +339,15 @@ describe('CeoOverview', () => {
     expectFigure('เงินรับแล้ว (เดือนนี้)', EXPECTED.cash);
     expectFigure('ค้างรับ', EXPECTED.outstanding);
     expectFigure('ยอดคาดการณ์', EXPECTED.forecast);
+  });
+
+  it('shows an em dash for ค้างรับ and ยอดคาดการณ์ when the summary has no totals, never a sum of rows', async () => {
+    api.tickets.list.mockResolvedValue({ tickets: moneyFixtureTickets });
+    renderOverview({ ...dashboardSummary, financeOutstanding: undefined, forecastValue: undefined });
+    await screen.findByText('อนุมัติราคา');
+
+    expectFigure('ค้างรับ', '—');
+    expectFigure('ยอดคาดการณ์', '—');
   });
 
   it('no longer shows the closed-sales and pipeline figures', async () => {

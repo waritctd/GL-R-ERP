@@ -241,6 +241,32 @@ class DashboardServiceTest {
         assertThat(summary.cashReceivedThisMonth()).isEqualByComparingTo("1.00");
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"account", "ceo", "sales_manager"})
+    void financeOutstandingAndForecastAreServerTotalsForTheMoneyRoles(String role) {
+        when(repository.financeOutstanding()).thenReturn(new BigDecimal("293545.25"));
+        when(repository.forecastValue()).thenReturn(new BigDecimal("80000.25"));
+
+        DashboardSummaryDto summary = service.summary(user(role, 43L, null, false));
+
+        assertThat(summary.financeOutstanding()).isEqualByComparingTo("293545.25");
+        assertThat(summary.forecastValue()).isEqualByComparingTo("80000.25");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"hr", "import", "sales", "employee"})
+    void financeOutstandingAndForecastAreNullForOtherRolesAndNeverQueried(String role) {
+        when(repository.financeOutstanding()).thenReturn(new BigDecimal("1.00"));
+        when(repository.forecastValue()).thenReturn(new BigDecimal("1.00"));
+
+        DashboardSummaryDto summary = service.summary(user(role, 44L, null, false));
+
+        assertThat(summary.financeOutstanding()).isNull();
+        assertThat(summary.forecastValue()).isNull();
+        verify(repository, never()).financeOutstanding();
+        verify(repository, never()).forecastValue();
+    }
+
     private UserPrincipal user(String role, Long employeeId, Long divisionId, boolean manager) {
         return new UserPrincipal(
             employeeId == null ? 99L : employeeId,
