@@ -11,6 +11,7 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { FilterBar, FilterField, PageStack } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { TabPanel, Tabs } from '../../components/common/Tabs.jsx';
+import { fetchDashboardSummary } from '../../hooks/useHrData.js';
 import { cn } from '../../utils/cn.js';
 import { dealStageLabel, formatMoney, formatThaiDate } from '../../utils/format.js';
 import { nextAccountAction } from '../tickets/accountActions.js';
@@ -123,13 +124,11 @@ export function AccountFinancePage({ user, showToast }) {
     if (error) showToast?.('error', error.message || 'โหลดข้อมูลไม่สำเร็จ');
   }, [scopedQuery.error, closedPaidQuery.error, showToast]);
 
-  // The same query (key + shape) as useHrData's, so one cache entry serves the dashboard and this header,
+  // The same query (key + fetch) as useHrData's, so one cache entry serves the dashboard and this header,
   // and FinanceDealPage's invalidation of it keeps คงค้างรวม fresh.
   const summaryQuery = useQuery({
     queryKey: queryKeys.dashboardSummary(),
-    queryFn: () => api.dashboard.summary()
-      .then((response) => response?.summary ?? response ?? null)
-      .catch(() => null),
+    queryFn: fetchDashboardSummary,
   });
   const serverOutstanding = summaryQuery.data?.financeOutstanding ?? null;
 

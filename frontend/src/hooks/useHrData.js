@@ -6,6 +6,12 @@ import { hasPermission } from '../app/permissions.js';
 import { declaredAllowanceTotal } from '../features/taxAllowance/taxAllowanceSchema.js';
 import { selectCurrentDeclaration, taxAllowanceStatusInfo } from '../features/taxAllowance/taxAllowanceStatus.js';
 
+// One fetch for the queryKeys.dashboardSummary() cache entry; every reader of that key uses it so the
+// cached shape can't depend on which screen mounted first.
+export const fetchDashboardSummary = () => api.dashboard.summary()
+  .then((response) => response?.summary ?? response ?? null)
+  .catch(() => null);
+
 export function useHrData({ user, showToast }) {
   const queryClient = useQueryClient();
 
@@ -44,9 +50,7 @@ export function useHrData({ user, showToast }) {
 
   const dashboardSummaryQuery = useQuery({
     queryKey: queryKeys.dashboardSummary(),
-    queryFn: () => api.dashboard.summary()
-      .then((response) => response?.summary ?? response ?? null)
-      .catch(() => null),
+    queryFn: fetchDashboardSummary,
     enabled: !!user && !!api.dashboard?.summary,
   });
   const dashboardSummary = dashboardSummaryQuery.data ?? null;
