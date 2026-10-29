@@ -166,7 +166,7 @@ describe('ImportDealPage', () => {
   it('shows delivery status read-only: the fulfilment label and delivered/ordered per item, no write control', async () => {
     renderPage();
     const panel = await screen.findByTestId('import-deal-delivery');
-    expect(within(panel).getByText('ออกคำขอนำเข้าแล้ว')).not.toBeNull();
+    expect(within(panel).getByText('ออกใบขอซื้อแล้ว')).not.toBeNull();
     expect(within(panel).getByTestId('import-deal-delivery-item-201').textContent).toMatch(/40\s*\/\s*120/);
     expect(within(panel).getByTestId('import-deal-delivery-item-202').textContent).toMatch(/0\s*\/\s*50/);
     // Delivery is Sales's — the section carries no button or input at all.
@@ -236,6 +236,25 @@ describe('ImportDealPage', () => {
     expect(screen.queryByTestId('ir-delete-11')).toBeNull();
     // ...but the order-email action is import's.
     expect(screen.getByTestId('ir-email-open-11')).not.toBeNull();
+  });
+
+  it('the import-side card keeps the order-email button, labelled without the ✉ emoji', async () => {
+    renderPage({ role: 'import' });
+    expect((await screen.findByTestId('ir-email-open-11')).textContent).toBe('อีเมลสั่งซื้อ');
+  });
+
+  // Moved here from the sales deal tab, which no longer shows the order email: the save payload must
+  // use Java's field names (UpdateEmailDraftRequest), not to/subject/body (Jackson silently drops those).
+  it('saving the order-email draft sends emailTo/emailSubject/emailBody', async () => {
+    api.storedImportRequests.updateEmailDraft.mockResolvedValue({ importRequest: irRow() });
+    renderPage({ role: 'import' });
+    fireEvent.click(await screen.findByTestId('ir-email-open-11'));
+    const subject = await screen.findByDisplayValue('Purchase order IR26001 - GL&R');
+    fireEvent.change(subject, { target: { value: 'Revised' } });
+    fireEvent.click(screen.getByTestId('ir-email-save-11'));
+    await waitFor(() => expect(api.storedImportRequests.updateEmailDraft).toHaveBeenCalledWith(11, expect.objectContaining({
+      emailSubject: 'Revised', emailBody: 'Dear Cotto Industry team,...',
+    })));
   });
 
   it('surfaces a per-factory ใบขอซื้อ PDF download on each issued card, and it downloads', async () => {
@@ -478,7 +497,7 @@ describe('ImportDealPage', () => {
       expect(within(strip).getByTestId('import-deal-ir-rollup-chip').textContent).toMatch(/ถึงไทย 1\/2 โรงงาน/);
       // Item bars are 33% (40/120) and 0% (0/50): the strip shows their mean, 17%.
       expect(within(strip).getByTestId('import-deal-delivery-chip').textContent).toMatch(/ส่งมอบ 17%/);
-      expect(within(strip).getByText('ออกคำขอนำเข้าแล้ว')).not.toBeNull();
+      expect(within(strip).getByText('ออกใบขอซื้อแล้ว')).not.toBeNull();
     });
 
     it('omits the factory chip when nothing is issued, and the delivery chip when there are no items', async () => {

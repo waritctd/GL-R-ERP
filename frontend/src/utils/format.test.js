@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  fulfilmentStatusLabel,
   addDaysIso,
   attendanceSourceLabel,
   bangkokMonthStartIso,
@@ -538,5 +539,11 @@ describe('paymentStageLabel — QA-16 chip values', () => {
     for (const code of codes) {
       expect(paymentStageLabel(code).label, code).not.toBe(code);
     }
+  });
+});
+
+describe('fulfilmentStatusLabel — one word for the document: ใบขอซื้อ (owner ruling 2026-10-29)', () => {
+  it('IR_ISSUED reads ออกใบขอซื้อแล้ว, not ออกคำขอนำเข้าแล้ว', () => {
+    expect(fulfilmentStatusLabel('IR_ISSUED').label).toBe('ออกใบขอซื้อแล้ว');
   });
 });

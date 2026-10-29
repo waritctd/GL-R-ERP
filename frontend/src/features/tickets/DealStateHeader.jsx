@@ -161,7 +161,7 @@ export function DealStateHeader({
     {
       key: 'fulfilment',
       label: 'การนำเข้า',
-      value: importChip ?? (fulfilment ? fulfilment.label : 'ยังไม่เริ่ม'),
+      value: importChip ?? (fulfilment ? fulfilment.label : 'ยังไม่ออกใบขอซื้อ'),
       tone: fulfilment ? fulfilment.tone : 'neutral',
     },
     sections.payment && {

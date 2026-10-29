@@ -173,8 +173,8 @@ describe('DealStateHeader — การนำเข้า chip follows the per-f
   });
 
   it.each([
-    ['no importRequests prop and no fulfilment status', undefined, null, 'ยังไม่เริ่ม'],
-    ['an empty list and no fulfilment status', [], null, 'ยังไม่เริ่ม'],
+    ['no importRequests prop and no fulfilment status', undefined, null, 'ยังไม่ออกใบขอซื้อ'],
+    ['an empty list and no fulfilment status', [], null, 'ยังไม่ออกใบขอซื้อ'],
     ['an empty list and IR_ISSUED', [], 'IR_ISSUED', fulfilmentStatusLabel('IR_ISSUED').label],
     ['only superseded / untracked rows and IR_ISSUED', [ir('ORDERED', { status: 'SUPERSEDED' }), ir(null, { status: 'DRAFT' })],
       'IR_ISSUED', fulfilmentStatusLabel('IR_ISSUED').label],
@@ -190,4 +190,13 @@ describe('DealStateHeader — การนำเข้า chip follows the per-f
       expect(importChipText()).toBe(fulfilmentStatusLabel(fulfillmentStatus).label);
     },
   );
+});
+
+describe('DealStateHeader — การนำเข้า chip wording (owner ruling 2026-10-29)', () => {
+  const chipValue = () => screen.getByText('การนำเข้า').nextElementSibling.textContent;
+
+  it('no fulfilment yet reads ยังไม่ออกใบขอซื้อ, not ยังไม่เริ่ม', () => {
+    renderHeader({ fulfillmentStatus: null });
+    expect(chipValue()).toBe('ยังไม่ออกใบขอซื้อ');
+  });
 });

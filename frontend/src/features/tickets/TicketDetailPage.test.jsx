@@ -3840,7 +3840,7 @@ describe('TicketDetailPage', () => {
     it('a non-owner sales rep cannot read stored IRs: the chip keeps the deal-level label and no request is made', async () => {
       dealWithTwoFactories();
       renderTicketDetailPage({ id: 2, employeeId: 2, name: 'พนักงานขายอีกคน', role: 'sales' });
-      expect((await chip()).getByText('ออกคำขอนำเข้าแล้ว')).not.toBeNull();
+      expect((await chip()).getByText('ออกใบขอซื้อแล้ว')).not.toBeNull();
       expect(api.storedImportRequests.listForTicket).not.toHaveBeenCalled();
     });
   });
@@ -4531,7 +4531,8 @@ describe('TicketDetailPage', () => {
       irStageDeal();
       renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
       await waitFor(() => expect(primaryAction()).toBe('create_import_request'));
-      expect(primary().textContent).toContain('สร้างใบขอซื้อ (IR)');
+      expect(primary().textContent).toContain('ออกใบขอซื้อ (IR)');
+      expect(primary().textContent).not.toContain('สร้างใบขอซื้อ');
       await waitFor(() => expect(primary().disabled).toBe(false));
 
       fireEvent.click(primary());
@@ -5070,6 +5071,17 @@ describe('TicketDetailPage', () => {
       const item = await openMenuItem({ channel: 'OWNER_DIRECT', salesStage: 'PRESENTATION' });
       expect(item.textContent).toContain('เลื่อนไป: เจ้าของตกลงตามสเปคแล้ว');
       expect(item.textContent).not.toContain('ผู้ออกแบบอนุมัติสเปค');
+    });
+
+    // W3-09 (owner ruling 2026-10-29): ขั้น 12 advances by itself when the IR is issued; the manual
+    // move is a deliberate skip, so it must not read like the normal next step. Other stages keep เลื่อนไป.
+    it('at PROCUREMENT the manual move reads ข้ามไปขั้น 13 ด้วยตนเอง and still sends DELIVERY_SCHEDULING', async () => {
+      const item = await openMenuItem({ channel: 'DESIGNER_LED', salesStage: 'PROCUREMENT' });
+      expect(item.textContent).toContain('ข้ามไปขั้น 13 ด้วยตนเอง');
+      expect(item.textContent).not.toContain('เลื่อนไป');
+
+      fireEvent.click(item);
+      await waitFor(() => expect(api.tickets.updateStage).toHaveBeenCalledWith(701, { stage: 'DELIVERY_SCHEDULING' }));
     });
   });
 

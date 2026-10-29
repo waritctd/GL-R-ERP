@@ -84,6 +84,7 @@ import {
   searchCatalog,
   stockSalePriceError,
 } from './ticketItemFields.jsx';
+import { manualMoveLabel } from './stageMeta.js';
 import { resolveWorkState, secondaryWorkActions } from './workState.js';
 
 // Ticket-detail IA rebuild Phase 1 (see
@@ -1684,7 +1685,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     // same fix, so the item doesn't invite a click it's about to reject.
     canAdvance && {
       key: 'advanceStage',
-      label: `เลื่อนไป: ${next ? dealStageLabel(next.code, summary.entryChannel).label : ''}`,
+      label: summary.salesStage === 'PROCUREMENT' && next
+        ? manualMoveLabel(summary.salesStage, next, '')
+        : `เลื่อนไป: ${next ? dealStageLabel(next.code, summary.entryChannel).label : ''}`,
       icon: 'chevronRight',
       disabled: !readyToAdvance || actionLoading,
       disabledReason: !readyToAdvance ? STAGE_ADVANCE_GATE_HINT : undefined,

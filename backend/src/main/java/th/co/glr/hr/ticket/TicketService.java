@@ -1096,7 +1096,7 @@ public class TicketService {
         // advance it, and a deal whose deposit is in hand must be able to import.
         if (!depositReady) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ออกใบขอนำเข้า (IR) ได้เฉพาะเมื่อรับชำระมัดจำแล้ว (หรือได้รับการยกเว้นมัดจำ) เท่านั้น");
+                "ออกใบขอซื้อ (IR) ได้เฉพาะเมื่อรับชำระมัดจำแล้ว (หรือได้รับการยกเว้นมัดจำ) เท่านั้น");
         }
     }
 
@@ -1227,7 +1227,7 @@ public class TicketService {
                 "ดีลนี้ติดตามการนำเข้าด้วยใบขอซื้อรายโรงงาน — ต้องบันทึกความคืบหน้าที่ใบขอซื้อของแต่ละโรงงาน");
         }
         if (!FulfilmentStatus.IR_ISSUED.equals(s.fulfillmentStatus())) {
-            throw new ApiException(HttpStatus.CONFLICT, "ต้องออกใบขอนำเข้า (IR) ก่อนจึงจะทำเครื่องหมายว่าส่ง IR แล้วได้");
+            throw new ApiException(HttpStatus.CONFLICT, "ต้องออกใบขอซื้อ (IR) ก่อนจึงจะทำเครื่องหมายว่าส่ง IR แล้วได้");
         }
         tickets.updateFulfillmentStatus(ticketId, FulfilmentStatus.IR_SENT);
         tickets.addEvent(ticketId, actor.id(), actor.name(),

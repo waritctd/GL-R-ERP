@@ -94,7 +94,7 @@ const ACTION_LABEL = {
   [SALES_ACTION.CONFIRM_ORDER]: 'ยืนยันคำสั่งซื้อ',
   [SALES_ACTION.CREATE_DEPOSIT_NOTICE]: 'สร้างใบแจ้งยอดเงินรับมัดจำ',
   [SALES_ACTION.CREATE_REMAINING_INVOICE]: 'สร้างใบแจ้งหนี้',
-  [SALES_ACTION.CREATE_IMPORT_REQUEST]: 'สร้างใบขอซื้อ (IR)',
+  [SALES_ACTION.CREATE_IMPORT_REQUEST]: 'ออกใบขอซื้อ (IR)',
   // "Record the quotation outcome" — deliberately not "ติดตามผล"/"ติดตามลูกค้า" (that's
   // FOLLOW_UP's own label, a nudge to go chase the customer): by the time this bucket fires, the
   // quotation is already out and canRecordCustomerQuotationOutcome's own gate is what the button
