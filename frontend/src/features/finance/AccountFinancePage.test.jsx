@@ -16,6 +16,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
     api: {
       tickets: { list: vi.fn() },
       meta: { dealStages: vi.fn().mockResolvedValue(DEAL_STAGE_CATALOG) },
+      dashboard: { summary: vi.fn() },
     },
   };
 });
@@ -86,6 +87,7 @@ const rowLink = (name) => screen.getByRole('link', { name: new RegExp(name) });
 describe('AccountFinancePage (index-first worklist)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    api.dashboard.summary.mockResolvedValue({ summary: { financeOutstanding: 424242.42 } });
     api.tickets.list.mockImplementation((params = {}) => {
       if (params.salesStage === 'CLOSED_PAID') return Promise.resolve({ tickets: [closedPaidTicket] });
       return Promise.resolve({ tickets: [depositTicket, finalPaymentTicket, idleTicket] });
@@ -201,18 +203,23 @@ describe('AccountFinancePage (index-first worklist)', () => {
     expect(within(link).getByText('ติดตามชำระ')).not.toBeNull();
   });
 
-  it('the summary line is computed from the data: count of actionable deals and total outstanding', async () => {
+  it('the summary line counts the actionable rows but takes ค้างรับทั้งหมด from the server total', async () => {
     renderPage();
-    // deposit 80,000 + final 60,000 + closed-paid 0 = 140,000 across 3 actionable deals
+    // 3 actionable rows; their outstanding adds up to 140,000, but the figure is the summary's (rows are capped at 500)
     expect(await screen.findByText(/ต้องดำเนินการ 3 ดีล/)).not.toBeNull();
-    expect(screen.getByText(/คงค้างรวม ฿140,000.00/)).not.toBeNull();
+    expect(await screen.findByText('ต้องดำเนินการ 3 ดีล · ค้างรับทั้งหมด ฿424,242.42')).not.toBeNull();
+    // the hero is labelled as the whole receivable, not as the listed deals' sum
+    expect(screen.getByText('ค้างรับทั้งหมด')).not.toBeNull();
+    expect(screen.queryByText('ยอดคงค้างของดีลที่ต้องดำเนินการ')).toBeNull();
+    expect(screen.queryByText(/฿140,000.00/)).toBeNull();
   });
 
-  it('with nothing actionable the summary says so and shows an em dash, not a fabricated zero', async () => {
+  it('without a server total the summary shows an em dash, not a fabricated sum or zero', async () => {
+    api.dashboard.summary.mockResolvedValue({ summary: {} });
     api.tickets.list.mockResolvedValue({ tickets: [idleTicket] });
     renderPage();
     expect(await screen.findByText(/ต้องดำเนินการ 0 ดีล/)).not.toBeNull();
-    expect(screen.getByText(/คงค้างรวม —/)).not.toBeNull();
+    expect(screen.getByText(/ค้างรับทั้งหมด —/)).not.toBeNull();
     expect(screen.queryByText(/฿0.00/)).toBeNull();
   });
 

@@ -1,10 +1,13 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
-import { render, screen, within } from '@testing-library/react';
+import { cleanup, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AccountOverview } from './AccountOverview.jsx';
 import { api } from '../../api/index.js';
+import { AccountFinancePage } from '../finance/AccountFinancePage.jsx';
+import { DEAL_STAGE_CATALOG } from '../../data/dealStageCatalog.js';
+import { closedDemoDeal } from '../../test/fixtures/dashboardMoney.js';
 
 globalThis.React = React;
 
@@ -14,6 +17,8 @@ vi.mock('../../api/index.js', async (importOriginal) => {
     ...actual,
     api: {
       tickets: { list: vi.fn() },
+      meta: { dealStages: vi.fn() },
+      dashboard: { summary: vi.fn() },
     },
   };
 });
@@ -52,14 +57,14 @@ const noActionTicket = {
   overdue: false, dueDate: null, updatedAt: '2026-07-05T00:00:00.000Z',
 };
 
-function renderOverview() {
+function renderOverview(dashboardSummary) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   return render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={['/']}>
-        <AccountOverview user={accountUser} employee={employee} showToast={vi.fn()} />
+        <AccountOverview user={accountUser} employee={employee} dashboardSummary={dashboardSummary} showToast={vi.fn()} />
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -68,6 +73,7 @@ function renderOverview() {
 describe('AccountOverview', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    api.meta.dealStages.mockResolvedValue(DEAL_STAGE_CATALOG);
     api.tickets.list.mockImplementation((params = {}) => {
       if (params.salesStage === 'CLOSED_PAID') return Promise.resolve({ tickets: [] });
       return Promise.resolve({ tickets: [overdueTicket, depositTicket, noActionTicket] });
@@ -113,5 +119,85 @@ describe('AccountOverview', () => {
     await screen.findByText('สิ่งที่ต้องทำ');
     expect(screen.queryByLabelText('งานขาย (Sales)')).toBeNull();
     expect(screen.queryByText('ดีลทั้งหมด')).toBeNull();
+  });
+  // Serve `tickets` from the scoped list and `closedPaid` from the CLOSED_PAID query.
+  function serve(tickets, closedPaid = []) {
+    api.tickets.list.mockImplementation((params = {}) => Promise.resolve(
+      { tickets: params.salesStage === 'CLOSED_PAID' ? closedPaid : tickets },
+    ));
+  }
+  const tile = (label) => screen.getByText(label).closest('.rounded-md').textContent;
+  const summaryRow = (label) => screen.getByText(label).nextSibling.textContent;
+
+  it('รอรับมัดจำ shows the issued deposit notice total, not the whole-deal outstanding', async () => {
+    serve([{ ...depositTicket, amountPayable: 213545.25, amountOutstanding: 213545.25, depositDue: 85418.10 }]);
+    renderOverview();
+    await screen.findByText('รอปิดงาน');
+    expect(tile('รอรับมัดจำ')).toContain('฿85,418.10');
+    expect(tile('รอรับมัดจำ')).toContain('1 ดีล');
+    expect(tile('รอรับมัดจำ')).not.toContain('213,545.25');
+  });
+
+  it('รอชำระส่วนที่เหลือ counts a deposit-paid deal the to-do offers รับชำระส่วนที่เหลือ for', async () => {
+    const depositPaid = {
+      ...depositTicket, id: 104, code: 'PR-2026-0104', customerName: 'บริษัท ดี จำกัด',
+      paymentStatus: 'DEPOSIT_PAID', salesStage: 'DELIVERY_SCHEDULING', amountOutstanding: 40000,
+    };
+    // Deposit-bypassed deals are offered the same step.
+    const bypassed = {
+      ...noActionTicket, id: 105, code: 'PR-2026-0105', customerName: 'บริษัท อี จำกัด',
+      depositPolicy: 'CREDIT_CUSTOMER', paymentStatus: null, amountOutstanding: 25000,
+    };
+    serve([depositPaid, bypassed]);
+    renderOverview();
+    await screen.findByText('รอปิดงาน');
+    const todo = screen.getByText('สิ่งที่ต้องทำ').closest('section');
+    const offered = within(todo).getAllByText('รับชำระส่วนที่เหลือ').length;
+    expect(offered).toBe(2);
+    expect(tile('รอชำระส่วนที่เหลือ')).toContain(`${offered} ดีล`);
+  });
+
+  it('สรุปเดือนนี้ รับแล้ว (เดือนนี้) is the summary cashReceivedThisMonth, not a guess from updatedAt', async () => {
+    // amountPaid on a deal updated this month is what the old guess would have summed.
+    serve([{ ...overdueTicket, updatedAt: new Date().toISOString() }]);
+    renderOverview({ cashReceivedThisMonth: 321000.5 });
+    await screen.findByText('สรุปเดือนนี้');
+    expect(summaryRow('รับแล้ว (เดือนนี้)')).toBe('฿321,000.50');
+  });
+
+  it('ค้างรับ is the summary\'s server total, not a sum of the loaded rows', async () => {
+    // rows would add up to ฿150,000.00 (the closed DEMO-TKT-05 deal and the no-to-do deal are not counted either way)
+    serve([overdueTicket, depositTicket, noActionTicket], [closedDemoDeal]);
+    renderOverview({ financeOutstanding: 777000.5 });
+    await screen.findByText('สรุปเดือนนี้');
+    expect(summaryRow('ค้างรับ')).toBe('฿777,000.50');
+  });
+
+  it('ค้างรับ shows an em dash while the summary has no total', async () => {
+    serve([overdueTicket, depositTicket, noActionTicket], [closedDemoDeal]);
+    renderOverview({});
+    await screen.findByText('สรุปเดือนนี้');
+    expect(summaryRow('ค้างรับ')).toBe('—');
+  });
+
+  it('ค้างรับ equals the ค้างรับทั้งหมด on AccountFinancePage: both read the summary\'s total', async () => {
+    serve([overdueTicket, depositTicket, noActionTicket], [closedDemoDeal]);
+    api.dashboard.summary.mockResolvedValue({ summary: { financeOutstanding: 777000.5 } });
+    renderOverview({ financeOutstanding: 777000.5 });
+    await screen.findByText('สรุปเดือนนี้');
+    const dashboardValue = summaryRow('ค้างรับ');
+    expect(dashboardValue).toBe('฿777,000.50');
+    cleanup();
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/finance']}>
+          <AccountFinancePage user={accountUser} showToast={vi.fn()} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    const subtitle = await screen.findByText(/ค้างรับทั้งหมด ฿/);
+    expect(subtitle.textContent).toContain(`ค้างรับทั้งหมด ${dashboardValue}`);
   });
 });

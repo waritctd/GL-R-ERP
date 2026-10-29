@@ -753,7 +753,7 @@ public class TicketService {
             s.winProbabilityOverride(), s.designerName(), s.ownerName(), s.buyerName(), s.stale(),
             s.commissionRecorded(), s.reopenedAt(), s.reopenCount(), s.quotationOnly(),
             s.paymentDueDate(), s.paymentDueBasis(), s.paymentDueCreditDays(),
-            s.liveDirectQuotation(), s.quotedRecipients());
+            s.liveDirectQuotation(), s.quotedRecipients(), s.depositDue());
     }
 
     /**

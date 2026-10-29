@@ -154,8 +154,50 @@ public record TicketSummaryDto(
      * in {@code mockApi.js}'s ticket summary at the same time.
      */
     @JsonIgnore
-    Set<String> quotedRecipients
+    Set<String> quotedRecipients,
+    /**
+     * What the customer is asked to pay NOW as the deposit: the VAT-inclusive {@code total_payable}
+     * of the newest ISSUED deposit notice, while the deal is waiting on it
+     * ({@code paymentStatus = DEPOSIT_NOTICE_ISSUED}); {@code null} otherwise. Account's รอรับมัดจำ
+     * tile shows this rather than the whole-deal {@link #amountOutstanding}. Filled by
+     * {@code TicketRepository#enrichSummary} in the same statement as {@link #commissionRecorded};
+     * nulled by {@link #withoutMoney()} (it is customer pricing).
+     */
+    BigDecimal depositDue
 ) {
+    /** The shape before {@link #depositDue}: it defaults to {@code null}. */
+    public TicketSummaryDto(
+        long id, String code, String type, String title, String status, String priority,
+        long createdById, String createdByName, Long assignedToId, String assignedToName,
+        String customerName, Long customerId, Long projectId, String projectName,
+        Long contactId, String contactName, String note,
+        Instant createdAt, Instant updatedAt, Instant closedAt, int itemCount, boolean hasEdits,
+        String paymentStatus, String fulfillmentStatus,
+        String salesStage, String lostReason, Instant lostAt, Instant stageUpdatedAt,
+        String lifecycle, String tenderRequirement, String depositPolicy, String depositPolicyReason,
+        String entryChannel, LocalDate billingDate, LocalDate dueDate, Integer creditTermDays,
+        LocalDate lastFollowUpAt, LocalDate nextFollowUpAt, String paymentStage,
+        BigDecimal amountPayable, BigDecimal amountPaid, BigDecimal amountOutstanding, boolean overdue,
+        Instant closeConfirmedAt, String closeConfirmedByName, boolean invoiceOnFile,
+        String cancelReason, Instant cancelledAt,
+        Integer winProbabilityOverride, String designerName, String ownerName, String buyerName,
+        boolean stale, boolean commissionRecorded, Instant reopenedAt, int reopenCount,
+        boolean quotationOnly, LocalDate paymentDueDate, String paymentDueBasis,
+        Integer paymentDueCreditDays, LiveDirectQuotationDto liveDirectQuotation,
+        Set<String> quotedRecipients
+    ) {
+        this(id, code, type, title, status, priority, createdById, createdByName, assignedToId,
+            assignedToName, customerName, customerId, projectId, projectName, contactId, contactName,
+            note, createdAt, updatedAt, closedAt, itemCount, hasEdits, paymentStatus, fulfillmentStatus,
+            salesStage, lostReason, lostAt, stageUpdatedAt, lifecycle, tenderRequirement, depositPolicy,
+            depositPolicyReason, entryChannel, billingDate, dueDate, creditTermDays, lastFollowUpAt,
+            nextFollowUpAt, paymentStage, amountPayable, amountPaid, amountOutstanding, overdue,
+            closeConfirmedAt, closeConfirmedByName, invoiceOnFile, cancelReason, cancelledAt,
+            winProbabilityOverride, designerName, ownerName, buyerName, stale, commissionRecorded,
+            reopenedAt, reopenCount, quotationOnly, paymentDueDate, paymentDueBasis,
+            paymentDueCreditDays, liveDirectQuotation, quotedRecipients, null);
+    }
+
     /** The shape before the derived payment-due fields existed: they default to "no structured term". */
     public TicketSummaryDto(
         long id, String code, String type, String title, String status, String priority,
@@ -318,7 +360,7 @@ public record TicketSummaryDto(
             amountOutstanding, overdue, closeConfirmedAt, closeConfirmedByName, invoiceOnFile,
             cancelReason, cancelledAt, winProbabilityOverride, designerName, ownerName, buyerName, stale,
             commissionRecorded, reopenedAt, reopenCount, quotationOnly, paymentDueDate, paymentDueBasis,
-            paymentDueCreditDays, liveDirectQuotation, quotedRecipients);
+            paymentDueCreditDays, liveDirectQuotation, quotedRecipients, depositDue);
     }
 
     /**

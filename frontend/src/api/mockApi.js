@@ -1,5 +1,6 @@
 import thaiLocations from '../data/thai-locations.json';
 import { formatThaiAddress } from '../features/locations/thaiAddress.js';
+import { nextAccountAction } from '../features/tickets/accountActions.js';
 // Mock backend for VITE_USE_MOCKS=true — the default verification surface for the
 // `frontend-mock` launch config that devs, QA and coding agents drive.
 //
@@ -3832,9 +3833,12 @@ function receiptsForTicket(ticketId) {
     .sort((a, b) => new Date(a.receivedAt) - new Date(b.receivedAt) || a.receiptId - b.receiptId);
 }
 
+// DEPOSIT/BALANCE add, ADJUSTMENT (refund) subtracts — TicketRepository.SIGNED_RECEIPT_SUM's twin.
+const signedReceiptSum = (sum, receipt) =>
+  sum + (receipt.kind === 'ADJUSTMENT' ? -Number(receipt.amount) : Number(receipt.amount));
+
 function sumPaid(ticketId) {
-  return moneyValue(receiptsForTicket(ticketId).reduce((sum, receipt) =>
-    sum + (receipt.kind === 'ADJUSTMENT' ? -Number(receipt.amount) : Number(receipt.amount)), 0));
+  return moneyValue(receiptsForTicket(ticketId).reduce(signedReceiptSum, 0));
 }
 
 function derivePaymentFields(ticket) {
@@ -3866,7 +3870,50 @@ function derivePaymentFields(ticket) {
     amountPaid: paid,
     amountOutstanding: outstanding,
     overdue,
+    // Mirrors TicketSummaryDto#depositDue: newest ISSUED deposit notice's VAT-inclusive total while the
+    // deal waits on that deposit; null otherwise.
+    depositDue: ticket.paymentStatus === 'DEPOSIT_NOTICE_ISSUED'
+      ? (latestIssuedDepositNotice(ticket.id)?.totalPayable ?? null)
+      : null,
   };
+}
+
+// Mirrors DashboardRepository#financeOutstanding: outstanding on deals in account's list scope that have an
+// account to-do (nextAccountAction as the account viewer).
+function mockFinanceOutstanding() {
+  return moneyValue(db.tickets
+    .filter(accountListScopeIncludes)
+    .map((t) => ({ ...t, ...derivePaymentFields(t), commissionRecorded: hasRecordedCommission(t) }))
+    .filter((t) => nextAccountAction(t) != null)
+    .reduce((sum, t) => sum + Number(t.amountOutstanding ?? 0), 0));
+}
+
+// Mirrors DashboardRepository#forecastValue: payable of ACTIVE deals before ORDER_RECEIVED.
+function mockForecastValue() {
+  return moneyValue(db.tickets
+    .filter((t) => (t.lifecycle ?? 'ACTIVE') === 'ACTIVE' && dealStageIndex(t.salesStage) < ACCOUNT_ORDER_STAGE_SCOPE_START
+      && t.status !== 'closed' && t.status !== 'cancelled')
+    .reduce((sum, t) => sum + Number(derivePaymentFields(t).amountPayable ?? 0), 0));
+}
+
+function mockReceiptsThisMonth() {
+  const bangkokMonth = (d) => new Date(d).toLocaleDateString('sv-SE', { timeZone: 'Asia/Bangkok' }).slice(0, 7);
+  const thisMonth = bangkokMonth(new Date());
+  return (db.paymentReceipts ?? []).filter((r) => bangkokMonth(r.receivedAt) === thisMonth);
+}
+
+// Mirrors DashboardRepository#cashReceivedByRep: this month's receipts grouped by the deal creator's id,
+// labelled with the creator's name (blank -> ไม่ระบุผู้ขาย).
+function mockCashReceivedByRep() {
+  const byCreator = new Map();
+  mockReceiptsThisMonth().forEach((r) => {
+    const ticket = db.tickets.find((t) => t.id === r.ticketId);
+    if (!ticket) return;
+    const row = byCreator.get(ticket.createdById) ?? { repName: ticket.createdByName?.trim() || 'ไม่ระบุผู้ขาย', amount: 0 };
+    row.amount = signedReceiptSum(row.amount, r);
+    byCreator.set(ticket.createdById, row);
+  });
+  return [...byCreator.values()].map((row) => ({ ...row, amount: moneyValue(row.amount) }));
 }
 
 function latestIssuedDepositNotice(ticketId) {
@@ -12217,6 +12264,7 @@ export const api = {
       const tickets = dashboardTickets(user);
       const pendingApprovals = dashboardPending(user, tickets);
       const notifications = dashboardNotifications(user);
+      const cashByRep = ['account', 'ceo', 'sales_manager'].includes(user.role) ? mockCashReceivedByRep() : null;
       return delay({
         summary: {
           role: user.role,
@@ -12243,6 +12291,13 @@ export const api = {
           dormant: tickets.dormant,
           paymentOverdue: tickets.paymentOverdue,
           partiallyDelivered: tickets.partiallyDelivered,
+          // Mirrors DashboardSummaryDto#cashReceivedThisMonth: receipts in the current Bangkok month
+          // (deposit + balance - adjustment), only for the roles that see company money.
+          // The month figure is the sum of the per-rep rows, as DashboardService totals them.
+          cashReceivedThisMonth: cashByRep ? moneyValue(cashByRep.reduce((sum, row) => sum + row.amount, 0)) : null,
+          cashReceivedByRep: cashByRep,
+          financeOutstanding: cashByRep ? mockFinanceOutstanding() : null,
+          forecastValue: cashByRep ? mockForecastValue() : null,
         },
       });
     },

@@ -226,18 +226,28 @@ public class TicketRepository {
             params.addValue("prTerminalStatuses", PRICING_REQUEST_TERMINAL_STATUSES);
             params.addValue("importStages", IMPORT_STAGE_SCOPE);
         } else if ("account".equals(actorRole)) {
-            sql.append("""
-                   AND (
-                     (t.lifecycle NOT IN ('CLOSED_LOST', 'CANCELLED')
-                      AND t.status <> 'cancelled'
-                      AND t.sales_stage IN (:accountOrderStages))
-                     OR t.payment_status IN (:accountPendingStatuses)
-                     OR (""")
-               .append(paymentOverduePredicate("t.ticket_id"))
-               .append(")) ");
-            params.addValue("accountOrderStages", ACCOUNT_ORDER_STAGE_SCOPE);
-            params.addValue("accountPendingStatuses", ACCOUNT_PENDING_PAYMENT_STATUSES);
+            sql.append(" AND ").append(accountScopePredicate()).append(' ');
+            addAccountScopeParams(params);
         }
+    }
+
+    /**
+     * Account's list scope as a parenthesised predicate over {@code t} ({@code sales.ticket}): the one text
+     * both the account deal list and the dashboard totals run. Needs {@link #addAccountScopeParams}.
+     */
+    public static String accountScopePredicate() {
+        return """
+            (
+              (t.lifecycle NOT IN ('CLOSED_LOST', 'CANCELLED')
+               AND t.status <> 'cancelled'
+               AND t.sales_stage IN (:accountOrderStages))
+              OR t.payment_status IN (:accountPendingStatuses)
+              OR (""" + paymentOverduePredicate("t.ticket_id") + "))\n";
+    }
+
+    public static void addAccountScopeParams(MapSqlParameterSource params) {
+        params.addValue("accountOrderStages", ACCOUNT_ORDER_STAGE_SCOPE);
+        params.addValue("accountPendingStatuses", ACCOUNT_PENDING_PAYMENT_STATUSES);
     }
 
     /**
@@ -1247,7 +1257,8 @@ public class TicketRepository {
             facts.commissionRecorded(), s.reopenedAt(), s.reopenCount(), s.quotationOnly(),
             due == null ? null : due.date(), due == null ? null : due.basis(),
             due == null ? null : due.creditDays(),
-            facts.liveDirectQuotation(), facts.quotedRecipients());
+            facts.liveDirectQuotation(), facts.quotedRecipients(),
+            "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus()) ? facts.depositDue() : null);
     }
 
     /**
@@ -1275,18 +1286,23 @@ public class TicketRepository {
      * .hasActiveCommissionForTicket} always agree. If you change one predicate you MUST change the
      * other, and that test is what catches it if you forget.
      */
-    private static final String HAS_RECORDED_COMMISSION = """
+    public static String hasRecordedCommission(String ticketIdRef) {
+        return """
             EXISTS(
                 SELECT 1 FROM sales.commission_record
-                 WHERE source_ticket_id = :ticketId
+                 WHERE source_ticket_id = %s
                    AND kind = 'SALE'
                    AND status NOT IN ('VOID', 'REJECTED')
             )
-        """;
+        """.formatted(ticketIdRef);
+    }
+
+    private static final String HAS_RECORDED_COMMISSION = hasRecordedCommission(":ticketId");
 
     private record CommissionAndLiveQuotation(boolean commissionRecorded,
                                               LiveDirectQuotationDto liveDirectQuotation,
-                                              Set<String> quotedRecipients) {}
+                                              Set<String> quotedRecipients,
+                                              BigDecimal depositDue) {}
 
     /** A Postgres {@code text[]} as a {@link Set}; empty for SQL NULL, which is what
      * {@code array_agg} returns over no rows. */
@@ -1316,7 +1332,10 @@ public class TicketRepository {
                    (SELECT array_agg(DISTINCT r.recipient_type)
                       FROM sales.quotation r
                      WHERE r.ticket_id = :ticketId
-                       AND r.doc_status <> 'CANCELLED') AS quoted_recipients
+                       AND r.doc_status <> 'CANCELLED') AS quoted_recipients,
+                   (SELECT d.total_payable FROM sales.deposit_notice d
+                     WHERE d.ticket_id = :ticketId AND d.status = 'ISSUED'
+                     ORDER BY d.version DESC, d.deposit_notice_id DESC LIMIT 1) AS deposit_due
               FROM (SELECT 1) AS one
               LEFT JOIN LATERAL (
             """ + LIVE_DIRECT_QUOTATION_SELECT + """
@@ -1328,7 +1347,7 @@ public class TicketRepository {
                     : new LiveDirectQuotationDto(quotationId, rs.getString("number"),
                         rs.getString("doc_status"), rs.getString("recipient_type"));
                 return new CommissionAndLiveQuotation(rs.getBoolean("commission_recorded"), live,
-                    readTextArray(rs, "quoted_recipients"));
+                    readTextArray(rs, "quoted_recipients"), rs.getBigDecimal("deposit_due"));
             });
     }
 
@@ -1737,7 +1756,7 @@ public class TicketRepository {
      * bigger SQL statement — see {@link #appendRoleScope}). Single source of truth so the two
      * contexts can never drift apart; this is the exact SQL {@link #payableAmount} always ran.
      */
-    private static String payableAmountSelect(String ticketIdRef) {
+    public static String payableAmountSelect(String ticketIdRef) {
         return payableAmountSelect(ticketIdRef, true);
     }
 
@@ -1906,13 +1925,21 @@ public class TicketRepository {
     }
 
     /** Full "amount paid" SELECT statement — see {@link #payableAmountSelect} for the correlation contract. */
-    private static String paidAmountSelect(String ticketIdRef) {
+    public static String paidAmountSelect(String ticketIdRef) {
         return """
-            SELECT COALESCE(SUM(CASE WHEN kind = 'ADJUSTMENT' THEN -amount ELSE amount END), 0)
+            SELECT %2$s
               FROM sales.payment_receipt
              WHERE ticket_id = %1$s
-            """.formatted(ticketIdRef);
+            """.formatted(ticketIdRef, SIGNED_RECEIPT_SUM);
     }
+
+    /**
+     * The one sign rule for money received: DEPOSIT and BALANCE add, ADJUSTMENT (refund / credit note)
+     * subtracts. Shared by the per-deal paid amount and the dashboard's company-wide cash received so
+     * the two can never count a receipt differently.
+     */
+    public static final String SIGNED_RECEIPT_SUM =
+        "COALESCE(SUM(CASE WHEN kind = 'ADJUSTMENT' THEN -amount ELSE amount END), 0)";
 
     public record DepositNoticePaymentInfo(long id, BigDecimal depositAmount, BigDecimal totalPayable) {}
 
