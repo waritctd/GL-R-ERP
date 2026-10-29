@@ -19,7 +19,7 @@ import { TaxAllowanceDrilldown } from '../taxAllowance/TaxAllowanceDrilldown.jsx
 import { useDialogFocus } from '../../hooks/useDialogFocus.js';
 import { useIsMobile, useMediaQuery } from '../../hooks/useIsMobile.js';
 import { cn } from '../../utils/cn.js';
-import { formatMoney, formatShortDate, formatThaiMonthYearFromMonthInputValue, payrollStatusLabel as statusInfo } from '../../utils/format.js';
+import { bangkokMonthStartIso, formatMoney, formatShortDate, formatThaiMonthYearFromMonthInputValue, payrollStatusLabel as statusInfo } from '../../utils/format.js';
 
 // Reproduces `.panel` for the detail sidebar, which must stay a real <aside>
 // element (semantic landmark) — Layout.jsx's Panel always renders a <section>
@@ -259,7 +259,6 @@ function buildPayrollReconciliation(rows, period) {
   return { byColumn, mismatches, rowCount: rows.length };
 }
 
-const thisMonth = new Date().toISOString().slice(0, 7);
 const specialPayFields = [
   // Numbering ALIGNED to the accountant's workbook (2026.xlsx) on 2026-07-29 — see
   // PayrollService#specialPayDtos for why the system moved rather than the ledger.
@@ -741,7 +740,7 @@ export function PayrollPage({ user, showToast }) {
   // `hasPermission(undefined, ...)` returns false, so an absent `user` reads as no management
   // access, not full access -- every caller (including tests) must pass a real user explicitly.
   const canManage = hasPermission(user?.role, 'canManagePayroll');
-  const [month, setMonth] = useState(thisMonth);
+  const [month, setMonth] = useState(() => bangkokMonthStartIso().slice(0, 7));
   const [period, setPeriod] = useState(null);
   const [adjustments, setAdjustments] = useState({});
   const [selectedEmployeeId, setSelectedEmployeeId] = useState(null);
@@ -771,7 +770,7 @@ export function PayrollPage({ user, showToast }) {
   // (same suggestedInputs() call, same fresh-PREVIEW-only gate above), defaulting to 0 whenever that
   // call is skipped or fails, so the warning below only ever renders on a real, non-zero count.
   const [pendingSubmittedLeaveCount, setPendingSubmittedLeaveCount] = useState(0);
-  const [payDate, setPayDate] = useState(`${thisMonth}-26`);
+  const [payDate, setPayDate] = useState(() => `${month}-26`);
   const [draftDirty, setDraftDirty] = useState(false);
   const [draftSaving, setDraftSaving] = useState(false);
   // Optimistic concurrency (issue #422 follow-up): 'conflict' is a new terminal status alongside

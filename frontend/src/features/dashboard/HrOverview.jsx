@@ -7,7 +7,7 @@ import { Button } from '../../components/common/Button.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, Panel, StatGrid } from '../../components/common/Layout.jsx';
-import { formatThaiDate, payrollStatusLabel } from '../../utils/format.js';
+import { bangkokMonthStartIso, formatThaiDate, payrollStatusLabel } from '../../utils/format.js';
 import { divisions, findDivision } from '../../data/referenceData.js';
 import { ActionQueue } from './ActionQueue.jsx';
 
@@ -74,9 +74,12 @@ function MonitorRow({ label, value, onClick }) {
 export function HrOverview({ employees, dashboardSummary }) {
   const navigate = useNavigate();
 
+  // PayrollController requires payrollMonth (RC-04); Bangkok month, not UTC. Own key suffix:
+  // PayrollPage caches a different shape under payrollCurrent(month).
+  const payrollMonth = bangkokMonthStartIso().slice(0, 7);
   const payrollQuery = useQuery({
-    queryKey: queryKeys.payrollCurrent(),
-    queryFn: () => api.payroll.current().then((response) => response?.period ?? null).catch(() => null),
+    queryKey: [...queryKeys.payrollCurrent(payrollMonth), 'overview'],
+    queryFn: () => api.payroll.current({ payrollMonth }).then((response) => response?.period ?? null),
     enabled: !!api.payroll?.current,
   });
   const payrollPeriod = payrollQuery.data ?? null;
@@ -152,9 +155,11 @@ export function HrOverview({ employees, dashboardSummary }) {
     { key: 'notifications', label: 'แจ้งเตือนยังไม่อ่าน', value: stats.unreadNotifications },
   ];
 
-  const payrollDetail = payrollPeriod
-    ? `${formatThaiDate(payrollPeriod.payrollMonth)} · ${payrollStatusLabel(payrollPeriod.status).label}`
-    : 'ยังไม่เริ่มรอบเงินเดือนเดือนนี้';
+  const payrollDetail = payrollQuery.isError
+    ? 'โหลดรอบเงินเดือนไม่สำเร็จ'
+    : payrollPeriod
+      ? `${formatThaiDate(payrollPeriod.payrollMonth)} · ${payrollStatusLabel(payrollPeriod.status).label}`
+      : 'ยังไม่เริ่มรอบเงินเดือนเดือนนี้';
 
   return (
     <PageStack>

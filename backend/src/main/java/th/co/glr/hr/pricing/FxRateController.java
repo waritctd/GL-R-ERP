@@ -24,8 +24,9 @@ public class FxRateController {
 
     /**
      * Read gate, owner ruling 2026-08-02 — widened from issue #388's {@code ceo}/{@code import}
-     * gate by exactly one role, to {@code sales}. NOT opened to every authenticated session: the
-     * owner's words were "should only be to sale", and this set is the whole of that ruling.
+     * gate by exactly one role, to {@code sales}, and to {@code sales_manager} by the 2026-10-29
+     * ruling below. NOT opened to every authenticated session: the owner's words were "should
+     * only be to sale", and this set is the whole of those two rulings.
      *
      * <p>The trigger was the deal-create modal's "ราคาตั้ง (ประมาณการ)" estimate (V112): a rep who
      * picks a catalog item needs the FX rate to convert its price to THB, and every catalog row is
@@ -45,6 +46,11 @@ public class FxRateController {
      * number already visible to this caller, so it survives its trigger. Re-narrowing it is a
      * separate owner decision, not a tidy-up that follows from #748.
      *
+     * <p><b>Widened again, owner ruling 2026-10-29 (role check RC-01):</b> {@code sales_manager}
+     * joins the set — the deal page converts SM's foreign-currency prices to THB, which needs this
+     * rate. The "sales_manager cannot create a deal" argument above no longer decides the gate.
+     * Nothing else changes; writes stay CEO-only.
+     *
      * <p>The reasoning is deliberately narrower than #388's: an FX rate only converts a number that
      * is ALREADY visible to this caller — {@code /api/catalog/prices} is open to any authenticated
      * user per the 2026-08-01 ruling that closed #388 — and on its own reveals nothing about landed
@@ -55,7 +61,7 @@ public class FxRateController {
      * <p>If a test pinning this set fails, someone has re-narrowed or re-widened the gate: reopen
      * the ruling with the owner rather than editing the test to match the code.
      */
-    private static final Set<String> READ_ROLES = Set.of("ceo", "import", "sales");
+    private static final Set<String> READ_ROLES = Set.of("ceo", "import", "sales", "sales_manager");
 
     private final FxRateRepository fxRates;
     private final SessionContext sessions;

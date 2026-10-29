@@ -88,7 +88,10 @@ export function CatalogSearchPage({ user, showToast }) {
   const inputRef = useRef(null);
 
   useEffect(() => {
-    api.priceImport.factories().then(setFactories).catch(() => {});
+    // Names-only read (RC-03): /api/price-import/factories is ceo/import and carries supplier emails.
+    api.factoryConfigs.names()
+      .then((res) => setFactories((res.factories ?? []).map((f) => ({ factoryId: f.id, name: f.factoryName }))))
+      .catch(() => {});
     inputRef.current?.focus();
   }, []);
 

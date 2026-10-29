@@ -28,8 +28,9 @@ public class FactoryConfigController {
     private static final String[] READ_ROLES = { "ceo", "import" };
 
     /** Names only (W3-03 follow-up, owner ruling 2026-10-29): the owning sales rep and sales_manager pick a
-     * factory for a factory-less line when creating the IR. No email/currency/unit leaves this route. */
-    private static final String[] NAME_READ_ROLES = { "ceo", "import", "sales", "sales_manager" };
+     * factory for a factory-less line when creating the IR; account opens /catalog, whose factory filter
+     * reads this. No email/currency/unit leaves this route. */
+    private static final String[] NAME_READ_ROLES = { "ceo", "import", "sales", "sales_manager", "account" };
 
     public record FactoryNameDto(long id, String factoryName) {}
 

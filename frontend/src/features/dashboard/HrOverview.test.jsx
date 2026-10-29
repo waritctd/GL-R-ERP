@@ -1,9 +1,11 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { HrOverview } from './HrOverview.jsx';
+import { api } from '../../api/index.js';
+import { queryKeys } from '../../api/queryKeys.js';
 
 globalThis.React = React;
 
@@ -47,10 +49,9 @@ const dashboardSummary = {
   notifications: { unread: 5 },
 };
 
-function renderOverview(summary = dashboardSummary) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
+function renderOverview(summary = dashboardSummary, queryClient = new QueryClient({
+  defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+})) {
   return render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={['/']}>
@@ -79,6 +80,49 @@ describe('HrOverview', () => {
     expect(screen.getByText('รอบเงินเดือน')).not.toBeNull();
     expect(screen.getByText('ยังไม่เริ่มรอบเงินเดือนเดือนนี้')).not.toBeNull();
     expect(screen.getByText('ไปที่หน้าเงินเดือน').closest('button')).not.toBeNull();
+  });
+
+  // RC-04 (role check 2026-10-29): PayrollController#currentOrPreview requires payrollMonth and
+  // 400s without it. 2026-10-31T18:00Z is already 1 Nov in Bangkok, so a UTC month would send
+  // the wrong period on the last evening of every month.
+  it('asks for the current Bangkok payroll month', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-31T18:00:00Z'));
+    try {
+      api.payroll.current.mockClear();
+      renderOverview();
+      await waitFor(() => expect(api.payroll.current).toHaveBeenCalledWith({ payrollMonth: '2026-11' }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Review of RC-04: PayrollPage caches { period, suggestionsByEmployee, ... } under
+  // payrollCurrent(month). The landing must not overwrite that entry with a bare period, or the
+  // payroll page opened within staleTime renders an empty table.
+  it('leaves the payroll page cache entry for the same month untouched', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-15T05:00:00Z'));
+    try {
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const payrollPageEntry = { period: { id: 7, status: 'PROCESSED' }, suggestionsByEmployee: {} };
+      queryClient.setQueryData(queryKeys.payrollCurrent('2026-10'), payrollPageEntry);
+      api.payroll.current.mockClear();
+      renderOverview(dashboardSummary, queryClient);
+      await waitFor(() => expect(api.payroll.current).toHaveBeenCalled());
+      await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+      expect(queryClient.getQueryData(queryKeys.payrollCurrent('2026-10'))).toBe(payrollPageEntry);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // A failed payroll read used to render as "not started", which is how RC-04's 400 hid.
+  it('says the payroll period failed to load instead of claiming it has not started', async () => {
+    api.payroll.current.mockRejectedValueOnce(Object.assign(new Error('bad request'), { status: 400 }));
+    renderOverview();
+    expect(await screen.findByText('โหลดรอบเงินเดือนไม่สำเร็จ')).not.toBeNull();
+    expect(screen.queryByText('ยังไม่เริ่มรอบเงินเดือนเดือนนี้')).toBeNull();
   });
 
   it('shows today attendance counts', () => {

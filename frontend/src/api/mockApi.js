@@ -12927,7 +12927,7 @@ export const api = {
     },
     // Mirrors FactoryConfigController#names: id + name only, for the IR creators too.
     async names() {
-      hasRole('ceo', 'import', 'sales', 'sales_manager');
+      hasRole('ceo', 'import', 'sales', 'sales_manager', 'account');
       return delay({ factories: mockPriceImportFactories.map((f) => ({ id: f.factoryId, factoryName: f.name })) });
     },
     // sendEmail is retired — POST /api/tickets/{id}/factory-emails/send no longer exists (factory
@@ -12938,12 +12938,13 @@ export const api = {
   // Owner ruling 2026-08-02: list() widened from #388's ceo/import gate by exactly one role, to
   // sales, so the deal-create modal's ราคาตั้ง estimate can convert a catalog price to THB for a
   // plain rep. NOT opened to every authenticated session — the ruling was "should only be to sale".
-  // See FxRateController.READ_ROLES for the full reasoning; it does NOT extend to priceCalcConfigs
-  // below, which is the real margin policy. upsert stays CEO-only, unchanged.
+  // sales_manager added 2026-10-29 (RC-01). See FxRateController.READ_ROLES for the full
+  // reasoning; it does NOT extend to priceCalcConfigs below, which is the real margin policy.
+  // upsert stays CEO-only, unchanged.
   // Reminder: this mock's authz is NOT authoritative — the Java service is (see CLAUDE.md).
   fxRates: {
     async list() {
-      hasRole('ceo', 'import', 'sales');
+      hasRole('ceo', 'import', 'sales', 'sales_manager');
       return delay({ fxRates: structuredClone(mockFxRates) });
     },
     async upsert(currency, payload) {

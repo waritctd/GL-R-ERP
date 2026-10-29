@@ -957,7 +957,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
     queryKey: queryKeys.fxRates(),
     queryFn: () => api.fxRates.list().then((r) => r.fxRates ?? []),
     // The CEO needs the same list for the baht conversion of a line's catalogue price (GET
-    // /api/fx-rates is ceo/import only on the server).
+    // /api/fx-rates is ceo/import/sales/sales_manager on the server).
     enabled: Number.isFinite(pricingRequestId) && canSeeRaw(user),
     staleTime: 5 * 60 * 1000,
   });
