@@ -37,10 +37,15 @@ import th.co.glr.hr.dealquotation.DealQuotationRequests.ApproveRequest;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.RecordOutcomeRequest;
 import th.co.glr.hr.deposit.DepositNoticeDraftRequest;
 import th.co.glr.hr.deposit.DepositNoticeDto;
+import th.co.glr.hr.deposit.DepositNoticeItemRequest;
 import th.co.glr.hr.deposit.DepositNoticeRenderer;
 import th.co.glr.hr.deposit.DepositNoticeRepository;
 import th.co.glr.hr.deposit.DepositNoticeService;
+import th.co.glr.hr.deposit.RemainingInvoiceDocumentDto;
+import th.co.glr.hr.deposit.RemainingInvoiceOptionsDto;
 import th.co.glr.hr.deposit.RemainingInvoiceRenderer;
+import th.co.glr.hr.deposit.RemainingInvoiceRepository;
+import th.co.glr.hr.deposit.RemainingInvoiceService;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
@@ -110,6 +115,7 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
     private CustomerQuotationService legacyQuotationService;
     private OrderConfirmationService orderConfirmation;
     private DepositNoticeService depositNoticeService;
+    private RemainingInvoiceService remainingInvoiceService;
     private TicketRepository tickets;
     private TicketService ticketService;
 
@@ -197,6 +203,8 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         // falls back to the PR item's own requestedQty for every test in this file, which would
         // make the "quantity edited on the quotation" regression test below pass vacuously.
         orderConfirmation.wireDealQuotationRepository(quotationRepository);
+        remainingInvoiceService = new RemainingInvoiceService(new RemainingInvoiceRepository(jdbc), depositNoticeService,
+            tickets, new RemainingInvoiceRenderer());
 
         salesRepId = createEmployee(employees, "พนักงานขาย S3", "sales-s3@glr.co.th", "SALES", "แผนกขาย");
         otherSalesId = createEmployee(employees, "พนักงานขาย S3 อื่น", "sales-s3-other@glr.co.th", "SALES", "แผนกขาย");
@@ -608,6 +616,125 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         return jdbc.queryForObject(
             "SELECT COALESCE(SUM(last_seq), 0) FROM sales.document_sequence WHERE doc_type = 'DEPOSIT_NOTICE'",
             Map.of(), Long.class);
+    }
+
+    // ── Remaining invoice (ใบแจ้งหนี้ส่วนที่เหลือ) on a deal whose accepted quotation is NEW-engine ──
+    // The resolver knew only legacy quotations and ticket_item.approved_price (never written by the
+    // new engine), so a deal whose deposit policy skips the notice had no source and 409'd.
+
+    @Test
+    void remainingInvoice_newEngineAcceptedQuotation_depositWaived_sourcesTheQuotationsLines_andIssues() {
+        DealQuotationDto accepted = acceptedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
+        orderConfirmation.confirmOrder(accepted.pricingRequestId(),
+            new OrderConfirmationRequests.ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
+        ticketService.waiveDeposit(ticketId, "CREDIT_CUSTOMER", "ลูกค้าเครดิต", salesActor);
+        List<String> quotationLines = quotationLines(accepted.id());
+        assertThat(quotationLines).isNotEmpty();
+
+        RemainingInvoiceOptionsDto options = depositNoticeService.getRemainingInvoiceOptions(ticketId, salesActor);
+        assertThat(options.blockingReason()).isNull();
+        assertThat(options.itemCount()).isEqualTo(quotationLines.size());
+        assertThat(options.defaultReference()).isEqualTo(accepted.number());
+        assertThat(options.itemsTotal()).isEqualByComparingTo(accepted.subtotalAmount());
+        assertThat(options.depositAmount()).isEqualByComparingTo("0");
+
+        RemainingInvoiceDocumentDto draft = remainingInvoiceService.createDraft(ticketId, null, salesActor);
+        assertThat(draft.items().stream().map(it -> line(it.qty(), it.netUnitPrice())).toList())
+            .isEqualTo(quotationLines);
+        assertThat(draft.reference()).isEqualTo(accepted.number());
+        assertThat(draft.depositDeduction()).isEqualByComparingTo("0");
+        assertThat(draft.itemsTotal()).isEqualByComparingTo(accepted.subtotalAmount());
+        assertThat(draft.netAmount()).isEqualByComparingTo(accepted.subtotalAmount());
+
+        RemainingInvoiceDocumentDto issued = remainingInvoiceService.issue(draft.id(), salesActor);
+        assertThat(issued.status()).isEqualTo("ISSUED");
+        assertThat(issued.itemsTotal()).isEqualByComparingTo(accepted.subtotalAmount());
+        assertThat(issued.grandTotal()).isEqualByComparingTo(accepted.grandTotal());
+    }
+
+    /** Deposit required: refused until the notice is issued; then the ISSUED notice is the source —
+     * its (edited) lines, minus the deposit it billed, never the quotation's own lines — and stays so
+     * once the policy reads as a bypass. */
+    @Test
+    void remainingInvoice_newEngineDeal_issuedNotice_linesAndDeductionStillComeFromTheNotice_alsoUnderABypassPolicy() {
+        DealQuotationDto accepted = acceptedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"), 30);
+        long pricingRequestId = accepted.pricingRequestId();
+        orderConfirmation.confirmOrder(pricingRequestId,
+            new OrderConfirmationRequests.ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
+        // Deposit required and not yet billed: never the quotation's lines with a zero deduction.
+        assertThatThrownBy(() -> depositNoticeService.getRemainingInvoiceOptions(ticketId, salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.CONFLICT)
+            .hasMessageContaining("ไม่พบใบเสนอราคาที่ลูกค้ายอมรับ");
+        DepositNoticeDto noticeDraft = orderConfirmation.createDepositNoticeFromQuotation(pricingRequestId,
+            new OrderConfirmationRequests.CreateDepositNoticeFromQuotationRequest(null), salesActor);
+        List<DepositNoticeItemRequest> editedLines = noticeDraft.items().stream()
+            .map(it -> new DepositNoticeItemRequest(it.seq(), it.description(), it.qty().subtract(new BigDecimal("4")),
+                it.unit(), it.unitPrice(), it.discountLabel(), it.netUnitPrice()))
+            .toList();
+        depositNoticeService.update(noticeDraft.id(), new DepositNoticeDraftRequest(noticeDraft.customerName(),
+            noticeDraft.customerTaxId(), noticeDraft.customerAddress(), noticeDraft.projectName(),
+            noticeDraft.reference(), null, noticeDraft.notes(), editedLines), salesActor);
+        DepositNoticeDto notice = depositNoticeService.issue(noticeDraft.id(), salesActor);
+        List<String> noticeLines = notice.items().stream().map(it -> line(it.qty(), it.netUnitPrice())).toList();
+        // The two sources must differ, or this test cannot tell which one the invoice used.
+        assertThat(noticeLines).isNotEqualTo(quotationLines(accepted.id()));
+        assertThat(notice.depositAmount()).isPositive();
+
+        RemainingInvoiceDocumentDto draft = remainingInvoiceService.createDraft(ticketId, null, salesActor);
+
+        assertThat(draft.items().stream().map(it -> line(it.qty(), it.netUnitPrice())).toList()).isEqualTo(noticeLines);
+        assertThat(draft.depositNoticeId()).isEqualTo(notice.id());
+        assertThat(draft.itemsTotal()).isEqualByComparingTo(notice.subtotal());
+        assertThat(draft.depositDeduction()).isEqualByComparingTo(notice.depositAmount());
+        assertThat(draft.netAmount()).isEqualByComparingTo(notice.subtotal().subtract(notice.depositAmount()));
+
+        // waiveDeposit refuses once a notice is issued (its rule 4), so SQL stands in for a bypass
+        // policy that arrives some other way: the issued notice must still win over the quotation.
+        assertThat(jdbc.update("UPDATE sales.ticket SET deposit_policy = 'WAIVED' WHERE ticket_id = :id",
+            Map.of("id", ticketId))).isEqualTo(1);
+        RemainingInvoiceOptionsDto options = depositNoticeService.getRemainingInvoiceOptions(ticketId, salesActor);
+        assertThat(options.itemsTotal()).isEqualByComparingTo(notice.subtotal());
+        assertThat(options.depositAmount()).isEqualByComparingTo(notice.depositAmount());
+    }
+
+    /** Only a quotation the customer accepted can be billed. No real path un-accepts one, so the row
+     * is set back to ISSUED by SQL after confirm + waive, isolating the status filter: the
+     * deposit-notice item picker does take ISSUED. */
+    @Test
+    void remainingInvoice_newEngineQuotationOnlyIssued_depositWaived_still409() {
+        DealQuotationDto accepted = acceptedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
+        orderConfirmation.confirmOrder(accepted.pricingRequestId(),
+            new OrderConfirmationRequests.ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
+        ticketService.waiveDeposit(ticketId, "CREDIT_CUSTOMER", "ลูกค้าเครดิต", salesActor);
+        assertThat(jdbc.update("UPDATE sales.quotation SET doc_status = 'ISSUED' WHERE quotation_id = :id",
+            Map.of("id", accepted.id()))).isEqualTo(1);
+
+        assertThatThrownBy(() -> depositNoticeService.getRemainingInvoiceOptions(ticketId, salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.CONFLICT)
+            .hasMessageContaining("ไม่พบใบเสนอราคาที่ลูกค้ายอมรับ");
+        assertThatThrownBy(() -> remainingInvoiceService.createDraft(ticketId, null, salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.CONFLICT)
+            .hasMessageContaining("ไม่พบใบเสนอราคาที่ลูกค้ายอมรับ");
+        assertThat(remainingInvoiceCount()).isZero();
+    }
+
+    @Test
+    void remainingInvoice_newEngine_nonOwnerSales_refused_writesNothing() {
+        DealQuotationDto accepted = acceptedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
+        orderConfirmation.confirmOrder(accepted.pricingRequestId(),
+            new OrderConfirmationRequests.ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
+        ticketService.waiveDeposit(ticketId, "CREDIT_CUSTOMER", "ลูกค้าเครดิต", salesActor);
+
+        assertThatThrownBy(() -> depositNoticeService.getRemainingInvoiceOptions(ticketId, otherSalesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.FORBIDDEN);
+        assertThatThrownBy(() -> remainingInvoiceService.createDraft(ticketId, null, otherSalesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.FORBIDDEN);
+        assertThat(remainingInvoiceCount()).isZero();
     }
 
     @Test
@@ -1172,6 +1299,16 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
     private static String line(BigDecimal qty, BigDecimal netUnitPrice) {
         return (qty == null ? "null" : qty.stripTrailingZeros().toPlainString()) + " @ "
             + (netUnitPrice == null ? "null" : netUnitPrice.stripTrailingZeros().toPlainString());
+    }
+
+    private List<String> quotationLines(long quotationId) {
+        return jdbc.query("SELECT qty, final_unit_price FROM sales.quotation_item WHERE quotation_id = :id ORDER BY seq",
+            Map.of("id", quotationId), (rs, i) -> line(rs.getBigDecimal("qty"), rs.getBigDecimal("final_unit_price")));
+    }
+
+    private long remainingInvoiceCount() {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM sales.remaining_invoice WHERE ticket_id = :id",
+            Map.of("id", ticketId), Long.class);
     }
 
     private DealQuotationDto acceptedNewOriginQuotation(String recipient, BigDecimal qty) {

@@ -465,6 +465,39 @@ public class DepositNoticeRepository {
         return folded;
     }
 
+    /** One line of a new-engine quotation, carrying that quotation's number. */
+    public record AcceptedDealQuotationLine(String quotationNumber, int seq, String description, BigDecimal qty,
+                                            String unit, BigDecimal unitPrice, BigDecimal salesDiscount,
+                                            BigDecimal finalUnitPrice, BigDecimal amount) {}
+
+    /** The lines of this ticket's newest customer-ACCEPTED new-engine quotation, by {@code seq};
+     * empty when it has none. Same columns and description/unit fallbacks as
+     * {@link #findDealQuotationItems}, plus the stored line {@code amount} (what the quotation's
+     * own subtotal sums), so a remaining invoice sourced from it totals exactly that subtotal. */
+    public List<AcceptedDealQuotationLine> findAcceptedDealQuotationLines(long ticketId) {
+        return jdbc.query("""
+            SELECT q.number, qi.seq, qi.description, qi.qty, qi.raw_unit, qi.unit_price,
+                   qi.sales_discount, qi.final_unit_price, qi.amount
+              FROM sales.quotation q
+              JOIN sales.quotation_item qi ON qi.quotation_id = q.quotation_id
+             WHERE q.quotation_id = (SELECT quotation_id FROM sales.quotation
+                                      WHERE ticket_id = :ticketId
+                                        AND origin IN ('PRICING_REQUEST', 'DEAL_DIRECT')
+                                        AND doc_status = 'ACCEPTED'
+                                      ORDER BY quotation_id DESC
+                                      LIMIT 1)
+             ORDER BY qi.seq
+            """, Map.of("ticketId", ticketId), (rs, i) -> {
+                String description = rs.getString("description");
+                String unit = rs.getString("raw_unit");
+                return new AcceptedDealQuotationLine(rs.getString("number"), rs.getInt("seq"),
+                    description == null || description.isBlank() ? "รายการสินค้า" : description,
+                    rs.getBigDecimal("qty"), unit == null || unit.isBlank() ? "หน่วย" : unit,
+                    rs.getBigDecimal("unit_price"), rs.getBigDecimal("sales_discount"),
+                    rs.getBigDecimal("final_unit_price"), rs.getBigDecimal("amount"));
+            });
+    }
+
     private List<DepositNoticeItemDto> findItems(long docId) {
         return jdbc.query(
             "SELECT * FROM sales.deposit_notice_item WHERE deposit_notice_id = :id ORDER BY seq",
