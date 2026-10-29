@@ -203,6 +203,33 @@ public class ImportRequestService {
         return withPageCounts(stored.findByTicket(ticketId));
     }
 
+    /**
+     * Read-only twin of {@link #createDrafts}'s coverage check, for the list response: is there a factory
+     * on this deal that still needs an IR? Uses the same {@link ImportRequestQueryRepository
+     * #factoryResolutionCandidates} cascade, but creates no factory. A typed name that matches no
+     * factory (or a line with no factory at all) counts as uncovered; only a LIVE (DRAFT / ISSUED) row
+     * covers a factory — a SUPERSEDED one does not. A deal with nothing left to order is not uncovered.
+     */
+    public boolean hasUncoveredFactories(long ticketId, UserPrincipal actor) {
+        requireTicket(ticketId);
+        requireRead(ticketId, actor);
+        Set<Long> covered = stored.findByTicket(ticketId).stream()
+            .filter(r -> ImportRequestStatus.isLive(r.status()))
+            .map(ImportRequestDto::factoryId)
+            .collect(Collectors.toSet());
+        Map<String, Long> idByNormalizedName = factories.findAll().stream()
+            .collect(Collectors.toMap(f -> normalizeFactoryName(f.factoryName()), FactoryConfigDto::id, (x, y) -> x));
+        for (LineFactoryCandidate c : repository.factoryResolutionCandidates(ticketId)) {
+            Long factoryId = c.directFactoryId() != null ? c.directFactoryId()
+                : c.candidateFactoryName() != null ? idByNormalizedName.get(normalizeFactoryName(c.candidateFactoryName()))
+                : null;
+            if (factoryId == null || !covered.contains(factoryId)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public ImportRequestDto get(long id, UserPrincipal actor) {
         ImportRequestDto row = requireStored(id);
         requireRead(row.ticketId(), actor);

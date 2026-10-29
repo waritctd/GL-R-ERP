@@ -732,15 +732,15 @@ describe('nextSalesAction — สร้างใบแจ้งยอดเง�
 });
 
 // QA-09: ขั้น 11 (DEPOSIT_RECEIVED) — the owning rep's one main button creates the import request.
-describe('nextSalesAction — สร้างใบขอซื้อ (IR) at ขั้น 11 (owner rulings QA-09)', () => {
+describe('nextSalesAction — ออกใบขอซื้อ (IR) at ขั้น 11 (owner rulings QA-09)', () => {
   const paidDeal = (overrides = {}) => baseDeal({ status: 'quotation_issued', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: null, ...overrides });
-  const CREATE_IR = { key: 'create_import_request', label: 'สร้างใบขอซื้อ (IR)' };
+  const CREATE_IR = { key: 'create_import_request', label: 'ออกใบขอซื้อ (IR)' };
 
   it('exposes the action key', () => {
     expect(SALES_ACTION.CREATE_IMPORT_REQUEST).toBe('create_import_request');
   });
 
-  it('DEPOSIT_PAID + no fulfilment yet -> สร้างใบขอซื้อ (IR); importRequests unknown (undefined) or empty -> same', () => {
+  it('DEPOSIT_PAID + no fulfilment yet -> ออกใบขอซื้อ (IR); importRequests unknown (undefined) or empty -> same', () => {
     expect(nextSalesAction(paidDeal(), [orderConfirmedPr()])).toEqual(CREATE_IR);
     expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { importRequests: [] })).toEqual(CREATE_IR);
   });

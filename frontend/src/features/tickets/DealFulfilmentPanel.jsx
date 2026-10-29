@@ -303,6 +303,15 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
     queryFn: () => api.storedImportRequests.listForTicket(ticketId).then((r) => r.importRequests ?? []),
     enabled: !!ticketId && canReadStoredIr,
   });
+  // Read-only server flag from its own endpoint (the list stays rows-only for the import pages). Under the
+  // rows key's prefix, so invalidating the rows refreshes it too. Only an explicit `false` hides the create controls — an older
+  // backend that omits it (undefined) keeps them.
+  const coverageQuery = useQuery({
+    queryKey: [...queryKeys.storedImportRequests(ticketId), 'coverage'],
+    queryFn: () => api.storedImportRequests.coverage(ticketId).then((r) => r.hasUncoveredFactories),
+    enabled: !!ticketId && canReadStoredIr,
+  });
+  const allFactoriesCovered = coverageQuery.data === false;
   const storedIrRows = storedIrQuery.data ?? [];
   const liveStoredIrRows = storedIrRows
     .filter((r) => r.status !== 'SUPERSEDED')
@@ -469,6 +478,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   // any ticket DTO the frontend reads), so this is an uncontrolled note a rep types once rather than
   // an editable display of the current value. Sales (owner) or CEO, from DealStage.ORDER_RECEIVED.
   const [dealRequiredByDraft, setDealRequiredByDraft] = useState('');
+  const [requiredByOpen, setRequiredByOpen] = useState(false);
   // Nit: best-effort READ-BACK — there is still no GET for the deal-level value itself (see above),
   // but once any factory row exists its OWN requiredByNote was snapshotted FROM that deal-level
   // value (ImportRequestService#insertDraft), so it is the closest available proxy for "what is
@@ -478,7 +488,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   useEffect(() => {
     if (requiredByNoteSeeded || liveStoredIrRows.length === 0) return;
     const note = liveStoredIrRows.find((r) => r.requiredByNote)?.requiredByNote;
-    if (note) setDealRequiredByDraft(note);
+    if (note) { setDealRequiredByDraft(note); setRequiredByOpen(true); }
     setRequiredByNoteSeeded(true);
   }, [requiredByNoteSeeded, liveStoredIrRows]);
   const setDealRequiredByMutation = useMutation({
@@ -717,7 +727,9 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   return (
     <Panel flush title="การส่งมอบ / นำเข้า" data-testid="deal-fulfilment-panel">
       <div className="flex flex-col gap-4 p-4 mobile:p-3">
-        {/* Step 1: นำเข้าสินค้า (Import Request → รับสินค้า, or from-stock) */}
+        {/* Step 1: นำเข้าสินค้า (Import Request → รับสินค้า, or from-stock). Owner ruling 2026-10-29:
+            not rendered before the first IR (fulfillmentStatus null) — the stored-IR box below leads. */}
+        {fs ? (
         <div className={STEP_BOX}>
           <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
             <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -767,8 +779,6 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
                     onClick={() => markGoodsReceivedMutation.mutate()} data-testid="deal-fulfilment-mark-goods-received">
                     รับสินค้าแล้ว
                   </Button>
-                ) : fs == null ? (
-                  <p className="text-xs text-text-muted">ยังไม่ออกคำขอนำเข้า</p>
                 ) : null}
               </div>
             </>
@@ -788,6 +798,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
             ) : null}
           </div>
         </div>
+        ) : null}
 
         {/* ใบขอซื้อรายโรงงาน (V184, PR-B) — the STORED aggregate. Visible to CEO/import/
             sales_manager unrestricted, and to sales only for a deal they own — mirrors
@@ -800,7 +811,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
                 <strong className={STEP_TITLE}>ใบขอซื้อรายโรงงาน (F-SM-001)</strong>
                 <StepRoleTag owners={['sales', 'ceo']} viewerRole={role} />
               </div>
-              {canFullWriteStoredIr ? (
+              {canFullWriteStoredIr && !allFactoriesCovered ? (
                 <Button type="button" size="sm" variant="primary" className="whitespace-nowrap" disabled={createDraftsMutation.isPending || !allLinesPicked || !depositReady}
                   onClick={requestCreateIrDrafts} data-testid="deal-fulfilment-create-ir-drafts">
                   {/* Nit: once the deal already has rows, "ออกใบขอซื้อ (IR)" read as though it would
@@ -812,13 +823,19 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
                 </Button>
               ) : null}
             </div>
-            {canFullWriteStoredIr && !depositReady ? (
+            {canFullWriteStoredIr && !allFactoriesCovered && !depositReady ? (
               <p className="m-0 text-xs font-bold text-text-secondary" data-testid="ir-deposit-hint">{DEPOSIT_HINT}</p>
             ) : null}
-            <p className="text-2xs text-text-muted">
-              หนึ่งใบต่อหนึ่งโรงงาน — สร้างอัตโนมัติจากรายการสินค้าที่ต้องสั่งนำเข้า (ไม่รวมส่วนที่จองจากสต็อก)
-            </p>
-            {canFullWriteStoredIr && factorylessLines.length > 0 ? (
+            {allFactoriesCovered ? (
+              <p className="m-0 text-xs font-bold text-text-secondary" data-testid="deal-fulfilment-all-covered">
+                {liveStoredIrRows.length > 0 ? 'ทุกโรงงานออกใบขอซื้อแล้ว' : 'ไม่มีรายการที่ต้องออกใบขอซื้อ'}
+              </p>
+            ) : (
+              <p className="text-2xs text-text-muted">
+                หนึ่งใบต่อหนึ่งโรงงาน — สร้างอัตโนมัติจากรายการสินค้าที่ต้องสั่งนำเข้า (ไม่รวมส่วนที่จองจากสต็อก)
+              </p>
+            )}
+            {canFullWriteStoredIr && !allFactoriesCovered && factorylessLines.length > 0 ? (
               <div className="grid gap-2 rounded-md border border-dashed border-border-muted p-3" data-testid="ir-line-factory-picker">
                 <p className="m-0 text-xs font-bold text-text-secondary">
                   รายการต่อไปนี้ยังไม่มีโรงงาน — เลือกโรงงานก่อนออกใบขอซื้อ (IR)
@@ -845,7 +862,8 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
                 ))}
               </div>
             ) : null}
-            {canFullWriteStoredIr ? (
+            {canFullWriteStoredIr && !allFactoriesCovered ? (
+              requiredByOpen || dealRequiredByDraft ? (
               <label className="flex flex-wrap items-center gap-2 text-xs font-bold text-text-secondary">
                 กำหนดวันที่ต้องการของ (ค่าเริ่มต้นสำหรับใบใหม่)
                 <input
@@ -862,6 +880,12 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
                   บันทึก
                 </Button>
               </label>
+              ) : (
+                <button type="button" className="w-fit border-0 bg-transparent p-0 text-xs font-bold text-info underline"
+                  onClick={() => setRequiredByOpen(true)} data-testid="deal-required-by-toggle">
+                  + กำหนดวันที่ต้องการของ (ไม่บังคับ)
+                </button>
+              )
             ) : null}
             {storedIrQuery.isLoading ? (
               <p className="text-xs text-text-muted">กำลังโหลดใบขอซื้อ…</p>
@@ -882,11 +906,31 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
                     canFooterWrite={canFooterWriteStoredIr}
                     canAdvance={canAdvanceStoredIr}
                     canEmailWrite={canEmailWriteStoredIr}
+                    showOrderEmail={role !== 'sales'}
                     showToast={showToast}
                   />
                 ))}
               </div>
             )}
+          </div>
+        ) : null}
+
+        {/* Before the first IR the นำเข้าสินค้า card above is not rendered, but the commission-weight
+            setter must stay reachable, so it sits just below the stored-IR box. */}
+        {!fs && (can.reserveStock || can.setItemWeight) ? (
+          <div className="flex flex-wrap gap-2">
+            {can.reserveStock ? (
+              <Button type="button" variant="secondary" className="whitespace-nowrap" disabled={reserveStockMutation.isPending}
+                onClick={openStockModal} data-testid="deal-fulfilment-reserve-stock">
+                จองสินค้าจากสต็อก
+              </Button>
+            ) : null}
+            {can.setItemWeight ? (
+            <Button type="button" variant="secondary" className="whitespace-nowrap" disabled={setItemWeightMutation.isPending}
+              onClick={openWeightModal} data-testid="deal-fulfilment-set-item-weight">
+              ตั้งน้ำหนักคอมมิชชั่นต่อรายการ
+            </Button>
+            ) : null}
           </div>
         ) : null}
 

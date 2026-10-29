@@ -276,6 +276,7 @@ export function ImportDealPage({ user, showToast }) {
                 canEmailWrite={canEmailWrite}
                 showToast={showToast}
                 showInlineDownload
+                showOrderEmail
               />
             ))}
           </div>

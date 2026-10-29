@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.importrequest.ImportRequestDtos.ImportRequestCoverageResponse;
 import th.co.glr.hr.importrequest.ImportRequestDtos.ImportRequestDto;
 import th.co.glr.hr.importrequest.ImportRequestRequests.AdvanceImportStepRequest;
 import th.co.glr.hr.importrequest.ImportRequestRequests.CreateImportRequestsRequest;
@@ -101,6 +102,13 @@ public class ImportRequestController {
     Map<String, List<ImportRequestDto>> listForTicket(@PathVariable long ticketId, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return Map.of("importRequests", service.list(ticketId, user));
+    }
+
+    /** Read-only: does any factory on the deal still need an IR? Its own route so the list stays cheap. */
+    @GetMapping("/tickets/{ticketId}/import-requests/coverage")
+    ImportRequestCoverageResponse coverage(@PathVariable long ticketId, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new ImportRequestCoverageResponse(service.hasUncoveredFactories(ticketId, user));
     }
 
     @GetMapping("/import-requests/{id}")

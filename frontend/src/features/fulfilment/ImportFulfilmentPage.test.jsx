@@ -245,6 +245,12 @@ describe('ImportFulfilmentPage (per-factory, stored aggregate)', () => {
     expect(screen.getByText('ส่งอีเมลแล้ว')).not.toBeNull();
   });
 
+  it('the งานนำเข้า order-email button stays, labelled without the ✉ emoji', async () => {
+    renderPage();
+    const card = await screen.findByTestId('fulfilment-deal');
+    expect(within(card).getByTestId('order-email-1').textContent).toBe('อีเมลสั่งซื้อ');
+  });
+
   it('opens the order-email modal and marks it sent — import/CEO can send it', async () => {
     renderPage();
     const card = await screen.findByTestId('fulfilment-deal');
