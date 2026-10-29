@@ -81,7 +81,8 @@ const BACKDATE_ALLOWED_LEAVE_TYPE_CODES = new Set(['SICK']);
 // and not HR-only (an employee filing for themselves is the whole point, e.g. filed on the 28th for
 // leave taken on the 26th). The backend already accepts this shape with no frontend change:
 // LeaveService#autoRejectNote's §5.2 emergency branch treats a backdated PERSONAL request
-// (startDate.isBefore(today + advanceNoticeDays), true for PERSONAL since advance_notice_days=1)
+// (fewer than advanceNoticeDays working days after today up to the leave's first working day, true
+// for PERSONAL since advance_notice_days=1)
 // as an emergency exception when requestedAsEmergency is set and the monthly tolerance (3
 // occurrences) has not been exhausted -- approved with emergencyFilingApplied=true. Once that
 // tolerance is exhausted the outcome becomes EMERGENCY_TOLERANCE_EXHAUSTED, which since V164 is

@@ -7822,7 +7822,7 @@ function leavePreviewWarnings(leaveType, totalDays) {
       params: {
         leaveTypeNameTh: leaveType.nameTh, noticeDays, section: '5', days,
       },
-      messageTh: `การ${leaveType.nameTh}ต้องยื่นล่วงหน้าอย่างน้อย ${noticeDays} วัน (ระเบียบข้อ 5) `
+      messageTh: `การ${leaveType.nameTh}ต้องยื่นล่วงหน้าอย่างน้อย ${noticeDays} วันทำงาน (ระเบียบข้อ 5) `
         + 'คำขอนี้ยื่นไม่ทันกำหนด '
         + `แต่ยังส่งให้หัวหน้างานพิจารณาได้ หากอนุมัติ วันลา ${days} วันจะไม่ได้รับค่าจ้าง`,
     }],
