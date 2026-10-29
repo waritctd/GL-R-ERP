@@ -249,7 +249,7 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
     @Test
     void submit_withGrossAmountWithinThreshold_succeedsWithNoMismatchFlag() {
         long ticketId = driveDealToClosedPaid(new BigDecimal("10"));
-        BigDecimal payable = tickets.payableAmountExVat(ticketId);
+        BigDecimal payable = tickets.payableAmount(ticketId); // QA-02: VAT-inclusive
         assertThat(payable.signum()).isPositive();
         // 2% above payable — within the 5% cross-check threshold.
         BigDecimal grossAmount = payable.multiply(new BigDecimal("1.02")).setScale(2, java.math.RoundingMode.HALF_UP);
@@ -266,6 +266,21 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
         assertThat(reloaded.dealPayableAmountSnapshot()).isEqualByComparingTo(payable);
     }
 
+    /** QA-02: a gross 7% below the VAT-inclusive payable (i.e. the ex-VAT figure) IS a mismatch; equal is not. */
+    @Test
+    void submit_withGrossEqualToVatInclusivePayable_isNoMismatch_andExVatGrossIsFlagged() {
+        long ticketId = driveDealToClosedPaid(new BigDecimal("10"));
+        BigDecimal payable = tickets.payableAmount(ticketId);
+        CommissionRecord equal = commissionService.submit(submitRequestLinkedTo(ticketId, payable), invoiceFile(), accountActor);
+        assertThat(equal.dealAmountMismatch()).isFalse();
+        assertThat(equal.dealPayableAmountSnapshot()).isEqualByComparingTo(payable);
+
+        long other = driveDealToClosedPaid(new BigDecimal("10"));
+        BigDecimal below = tickets.payableAmount(other).multiply(new BigDecimal("0.93")).setScale(2, java.math.RoundingMode.HALF_UP);
+        assertThat(commissionService.submit(submitRequestLinkedTo(other, below), invoiceFile(), accountActor)
+            .dealAmountMismatch()).isTrue();
+    }
+
     // ─────────────────────────────────────────────────────────────────────────────────────
     // (4) Cross-check beyond threshold: NOT blocked, but flagged for reviewers.
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -273,7 +288,7 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
     @Test
     void submit_withGrossAmountBeyondThreshold_succeedsButFlagsMismatch() {
         long ticketId = driveDealToClosedPaid(new BigDecimal("10"));
-        BigDecimal payable = tickets.payableAmountExVat(ticketId);
+        BigDecimal payable = tickets.payableAmount(ticketId); // QA-02: VAT-inclusive
         assertThat(payable.signum()).isPositive();
         // 25% above payable — well beyond the 5% threshold.
         BigDecimal grossAmount = payable.multiply(new BigDecimal("1.25")).setScale(2, java.math.RoundingMode.HALF_UP);

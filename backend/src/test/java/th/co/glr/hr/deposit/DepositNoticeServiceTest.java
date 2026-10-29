@@ -1257,4 +1257,28 @@ class DepositNoticeServiceTest {
             .isInstanceOfSatisfying(ApiException.class, e ->
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
     }
+
+    // SK-07 (owner ruling 2026-10-28, final): each tax invoice's VAT is round2(its own net x 7%). Deal 11
+    // (PR-2026-0006): net 119,745.00 - 35,923.50 = 83,821.50 -> VAT 5,867.505 -> 5,867.51 -> grand 89,689.01.
+    // The 1-satang gap against the deal payable (128,127.15 - 38,438.15 = 89,689.00) is normal.
+    @Test
+    void remainingInvoiceMoney_deal11_isPerDocumentRounding() {
+        DepositNoticeService.RemainingInvoiceMoney m = service.computeRemainingInvoiceMoney(
+            new BigDecimal("119745.00"), new BigDecimal("35923.50"));
+
+        assertThat(m.netAmount()).isEqualByComparingTo("83821.50");
+        assertThat(m.vatAmount()).isEqualByComparingTo("5867.51");
+        assertThat(m.grandTotal()).isEqualByComparingTo("89689.01");
+    }
+
+    /** No deposit (bypass): unchanged -- net = items, VAT = round2(items x 7%). */
+    @Test
+    void remainingInvoiceMoney_withNoDeposit_isTheWholeDealInclVat() {
+        DepositNoticeService.RemainingInvoiceMoney m = service.computeRemainingInvoiceMoney(
+            new BigDecimal("33333.33"), BigDecimal.ZERO);
+
+        assertThat(m.netAmount()).isEqualByComparingTo("33333.33");
+        assertThat(m.vatAmount()).isEqualByComparingTo("2333.33");
+        assertThat(m.grandTotal()).isEqualByComparingTo("35666.66");
+    }
 }

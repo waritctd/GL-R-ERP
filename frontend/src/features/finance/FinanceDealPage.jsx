@@ -291,7 +291,7 @@ export function FinanceDealPage() {
     setFlowError('');
     if (a.action === 'RECORD_INVOICE') {
       // ex-VAT default (the invoice is raised before VAT); fall back to the payable only for an older payload.
-      const gross = deal.money.amountPayableExVat ?? deal.money.amountPayable;
+      const gross = deal.money.amountPayable;
       setInvoiceForm(emptyInvoiceForm(gross != null ? String(gross) : ''));
       setInvoiceFileKey((k) => k + 1);
     }

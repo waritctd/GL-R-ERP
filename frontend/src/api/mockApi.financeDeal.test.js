@@ -164,9 +164,13 @@ describe('mockApi.finance routes -- role gates and scope', () => {
       && (t.lifecycle ?? 'ACTIVE') === 'ACTIVE');
     expect(target).toBeTruthy();
     await login2('account@glr.co.th');
+    const notice = (await api.finance.getDeal(target.id)).deal.documents.depositNotices
+      .filter((d) => d.status === 'ISSUED').at(-1);
     const { deal } = await api.finance.confirmDepositPaid(target.id);
     expect(deal.money.paymentStatus).toBe('DEPOSIT_PAID');
     expect(deal.money.payments.length).toBeGreaterThan(0);
+    // QA-01 (mirror of TicketService.confirmDepositPaid): the receipt is the notice's VAT-inclusive total.
+    if (notice) expect(deal.money.payments.find((p) => p.kind === 'DEPOSIT').amount).toBe(notice.totalPayable);
     const again = (await api.finance.getDeal(target.id)).deal;
     expect(again.money.paymentStatus).toBe('DEPOSIT_PAID');
   });

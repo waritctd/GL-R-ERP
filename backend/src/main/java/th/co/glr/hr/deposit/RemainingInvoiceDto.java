@@ -27,5 +27,18 @@ public record RemainingInvoiceDto(
     String     projectName,
     BigDecimal depositAmount,
     List<String> notes,
-    List<RemainingInvoiceItemDto> items
-) {}
+    List<RemainingInvoiceItemDto> items,
+    // The STORED document totals (owner ruling 2026-10-28, SK-07): the sheet prints these as values, not as
+    // template formulas, so the printed VAT / total are exactly what the issued document and the ledger hold.
+    // null = not supplied: the template's own formulas stay (only a caller that never stored a total).
+    BigDecimal vatAmount,
+    BigDecimal grandTotal
+) {
+    public RemainingInvoiceDto(String docNumber, LocalDate issueDate, String reference, String depositReference,
+                               String customerName, String customerBranch, String customerAddress,
+                               String customerTaxId, String projectName, BigDecimal depositAmount,
+                               List<String> notes, List<RemainingInvoiceItemDto> items) {
+        this(docNumber, issueDate, reference, depositReference, customerName, customerBranch, customerAddress,
+            customerTaxId, projectName, depositAmount, notes, items, null, null);
+    }
+}

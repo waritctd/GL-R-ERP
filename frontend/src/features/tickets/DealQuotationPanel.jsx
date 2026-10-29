@@ -7,6 +7,7 @@ import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
+import { ConfirmOrderDialog } from '../quotations/ConfirmOrderDialog.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
@@ -93,12 +94,15 @@ const DEAD_CUSTOMER_QUOTATION_STATUSES = new Set(['CANCELLED', 'SUPERSEDED', 'EX
  * label were visible on screen simultaneously.
  */
 export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
-  ticketId, pricingRequests = [], quotationByRequest = null, user, showToast,
+  ticketId, pricingRequests = [], quotationByRequest = null, user, showToast, depositMainButtonLabel = null,
 }, ref) {
   const queryClient = useQueryClient();
   const [outcomeNote, setOutcomeNote] = useState('');
   const [downloadingFormat, setDownloadingFormat] = useState(null);
   const [confirmingAccept, setConfirmingAccept] = useState(false);
+  // SK-02: the order confirmation is irreversible (the deal can no longer go below ขั้น 10), so every door to it
+  // (sticky primary, ⋯, this panel) opens this dialog first.
+  const [confirmingOrder, setConfirmingOrder] = useState(false);
 
   const pr = useMemo(() => pickRelevantPricingRequest(pricingRequests), [pricingRequests]);
   const prQuotation = quotationByRequest?.get(pr?.id);
@@ -146,7 +150,7 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
     openConfirmOrder: () => {
       if (confirmOrder.isPending) return;
       if (pr && canConfirmOrder(user, pr)) {
-        confirmOrder.mutate();
+        setConfirmingOrder(true);
       } else {
         showToast?.('error', confirmOrderBlockedReason(pr)
           ?? 'ยังยืนยันคำสั่งซื้อไม่ได้ — ตรวจสอบสถานะคำขอราคาในส่วน "ราคาและใบเสนอราคา" ด้านล่าง');
@@ -296,11 +300,11 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
             ) : (
               <p className="text-sm text-text-muted">
                 {confirmOrderBlockedReason(pr) ?? (pr.orderConfirmedAt
-                  // Deposit-notice creation moved to DealDepositPanel's own
-                  // "ใบแจ้งยอดมัดจำ" step (Phase 3 Slice S4 de-duplication —
-                  // see docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md)
-                  // — pointed at here rather than duplicated.
-                  ? `ยืนยันคำสั่งซื้อแล้วเมื่อ ${formatThaiDate(pr.orderConfirmedAt)} — ออกใบแจ้งยอดเงินรับมัดจำได้ที่ส่วน "มัดจำ" ด้านล่าง`
+                  // Owner rulings 2026-10-28: the main button creates the deposit notice (only while it offers
+                  // it); otherwise the notice lives on the การเงิน tab.
+                  ? `ยืนยันคำสั่งซื้อแล้วเมื่อ ${formatThaiDate(pr.orderConfirmedAt)} — ${depositMainButtonLabel
+                    ? `ขั้นต่อไป: กดปุ่ม "${depositMainButtonLabel}" ด้านบน`
+                    : 'ใบแจ้งยอดเงินรับมัดจำอยู่ที่แท็บ "การเงิน"'}`
                   : 'ยืนยันคำสั่งซื้อได้เฉพาะเจ้าของดีล (sales)')}
               </p>
             )}
@@ -308,6 +312,13 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
         ) : null}
       </div>
 
+      <ConfirmOrderDialog
+        open={confirmingOrder}
+        number={current?.number}
+        busy={confirmOrder.isPending}
+        onCancel={() => setConfirmingOrder(false)}
+        onConfirm={() => { setConfirmingOrder(false); confirmOrder.mutate(); }}
+      />
       <ConfirmDialog
         open={confirmingAccept && Boolean(acceptConfirm)}
         title={acceptConfirm?.title}

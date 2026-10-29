@@ -18,6 +18,7 @@ import { queryKeys } from '../../api/queryKeys.js';
 import { Breadcrumbs } from '../../components/common/Breadcrumbs.jsx';
 import { Button, buttonVariants } from '../../components/common/Button.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
+import { ConfirmOrderDialog } from '../quotations/ConfirmOrderDialog.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { fieldErrorId } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
@@ -42,7 +43,8 @@ import { CancelDealModal } from './CancelDealModal.jsx';
 import { hasActivitySince, isReadyToAdvance, lastStageChangeAt, STAGE_ADVANCE_GATE_HINT, STAGE_ADVANCE_GATE_MESSAGE } from './dealTrackingMeta.js';
 import { ContextSection, FieldRow } from './DealMetaFields.jsx';
 import { DealAttachmentsPanel } from './DealAttachmentsPanel.jsx';
-import { DealDepositPanel } from './DealDepositPanel.jsx';
+import { DealDepositPanel, depositNoticesQueryOptions, pickDepositNotice } from './DealDepositPanel.jsx';
+import { createDepositNoticeDraft } from '../deposits/createDepositNoticeDraft.js';
 import { DealDocumentPipeline } from './DealDocumentPipeline.jsx';
 import { DealDocumentRegister } from './DealDocumentRegister.jsx';
 import { RemainingInvoiceDialog } from './RemainingInvoiceDialog.jsx';
@@ -51,10 +53,10 @@ import { DealHistoryPanel } from './DealHistoryPanel.jsx';
 import { DealLegacyQuotations } from './DealLegacyQuotations.jsx';
 import { DealMoneyStatusStrip } from './DealMoneyStatusStrip.jsx';
 import { DealMoneyTimeline } from './DealMoneyTimeline.jsx';
-import { DealRemainingInvoiceCard } from './DealRemainingInvoiceCard.jsx';
+import { DealRemainingInvoiceCard, pickRemainingInvoice } from './DealRemainingInvoiceCard.jsx';
 import { DealQuotationPanel } from './DealQuotationPanel.jsx';
 import {
-  canReviseDealQuotation, canViewDealQuotation, CONFIRM_ORDER_FROM_QUOTATION_COPY, newestQuotationByRequest,
+  canReviseDealQuotation, orderConfirmationOf, canViewDealQuotation, newestQuotationByRequest,
 } from '../quotations/quotationMeta.js';
 import { DealStagePanel } from './DealStagePanel.jsx';
 import { DealStateHeader } from './DealStateHeader.jsx';
@@ -598,6 +600,34 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   });
   const activities = canViewDealTracking ? (activitiesQuery.data ?? []) : [];
 
+  // Owner rulings 2026-10-28: the main button creates the deposit notice / remaining invoice, so the
+  // sales rep's page reads both. Same keys and shapes as DealDepositPanel / DealRemainingInvoiceCard,
+  // so the cache is shared (one fetch).
+  const readsDocs = role === 'sales' && ticket?.summary?.createdById === user.id && !!ticketId;
+  const depositNoticesQuery = useQuery({ ...depositNoticesQueryOptions(ticketId), enabled: readsDocs });
+  const remainingInvoicesQuery = useQuery({
+    queryKey: queryKeys.storedRemainingInvoices(ticketId),
+    queryFn: () => api.storedRemainingInvoices.listForTicket(ticketId).then((r) => r.remainingInvoices ?? []),
+    enabled: readsDocs,
+  });
+  const depositNotice = pickDepositNotice(depositNoticesQuery.data);
+  // undefined until the list is read: nextSalesAction then never offers the invoice.
+  const remainingInvoice = remainingInvoicesQuery.data === undefined ? undefined : pickRemainingInvoice(remainingInvoicesQuery.data);
+  const createDepositNoticeMutation = useMutation({
+    // Reads the list fresh (another tab may have made a draft): an existing DRAFT is only opened, never doubled.
+    mutationFn: async () => {
+      const docs = await queryClient.fetchQuery({ ...depositNoticesQueryOptions(ticketId), staleTime: 0 });
+      return pickDepositNotice(docs)?.status === 'DRAFT' ? null : createDepositNoticeDraft(ticketId);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.depositNotices(ticketId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(ticketId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.ticketActions(ticketId) });
+      navigate(`/tickets/${ticketId}/deposit`);
+    },
+    onError: (err) => showToast('error', err.message || 'สร้างเอกสารฉบับร่างไม่สำเร็จ'),
+  });
+
   useEffect(() => {
     if (ticketQuery.error) showToast('error', ticketQuery.error.message || 'โหลดข้อมูลไม่สำเร็จ');
   }, [ticketQuery.error, showToast]);
@@ -1113,7 +1143,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     // hidden rather than left to fail server-side.
     editItems: hasAction('EDIT_ITEMS') && EDITABLE_STATUSES.includes(st) && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner && !fromPricingChain,
     // Dual-track (ข้อ 13)
-    confirmCustomer:    hasAction('CONFIRM_CUSTOMER') && st === 'quotation_issued' && (ps == null || ps === 'CUSTOMER_CONFIRMED') && isSales,
+    confirmCustomer:    hasAction('CONFIRM_CUSTOMER') && st === 'quotation_issued' && ps == null && isSales, // not at CUSTOMER_CONFIRMED: a re-confirm moves nothing and would hide สร้างใบแจ้งยอดเงินรับมัดจำ (2026-10-28)
     confirmFinalPayment:hasAction('FINAL_PAYMENT') && st === 'quotation_issued' && isMoneyRecorder,
     recordPayment:      hasAction('RECORD_PAYMENT') && isMoneyRecorder,
     setBilling:         hasAction('SET_BILLING') && isAccount,
@@ -1251,7 +1281,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // open revision draft already hanging off it. Same query key as DealDocumentRegister, so one fetch.
   const dealQuotationRows = dealQuotationsQuery.data ?? [];
   const reviseCandidate = dealQuotationRows
-    .filter((q) => canReviseDealQuotation(user, q))
+    .filter((q) => canReviseDealQuotation(user, q, orderConfirmationOf(ticket?.events)))
     .reduce((best, q) => (best == null || q.id > best.id ? q : best), null);
   const openRevisionDraft = reviseCandidate
     ? dealQuotationRows.find((q) => q.docStatus === 'DRAFT' && q.parentQuotationId === reviseCandidate.id)
@@ -1267,13 +1297,15 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // treated like an unknown route (no route choice; ⋯ still offers its outcome).
   // (Read once is enough: a failed refetch keeps the rows it read.)
   const offRouteParties = dealQuotationsQuery.data !== undefined ? offRoutePartiesFor(stageCatalog, summary.entryChannel) : null;
-  const workState = resolveWorkState(user, summary, pricingRequests, { reviseTarget, offRouteParties, quotationByRequest });
+  const workState = resolveWorkState(user, summary, pricingRequests, { reviseTarget, offRouteParties, quotationByRequest, depositNotice, remainingInvoice });
   // PR A: at the owner/buyer quote stages revise is an ADDITIONAL action (header "⋯" menu), never a
   // replacement for the primary บันทึกผลใบเสนอราคา — the client may simply accept the original.
-  const secondaryActions = secondaryWorkActions(user, summary, pricingRequests, { reviseTarget, offRouteParties, quotationByRequest });
+  const secondaryActions = secondaryWorkActions(user, summary, pricingRequests, { reviseTarget, offRouteParties, quotationByRequest, depositNotice, remainingInvoice });
   const outcomeSecondary = secondaryActions.find((action) => action.key === 'record_quotation_outcome') ?? null;
   const reviseSecondary = secondaryActions.find((action) => action.key === 'revise_quotation') ?? null;
-  const workStateAction = workState.action;
+  // The backend refuses a non-owner for both documents (2026-10-28): no main button for them.
+  const OWNER_ONLY_ACTIONS = ['create_deposit_notice', 'create_remaining_invoice'];
+  const workStateAction = OWNER_ONLY_ACTIONS.includes(workState.action?.key) && !isOwner ? null : workState.action;
   const lost = summary.lifecycle === 'CLOSED_LOST';
   const isActiveLifecycle = (summary.lifecycle ?? 'ACTIVE') === 'ACTIVE';
   // Mirrors DealStagePanel's own `next`/`canAdvance` byte-for-byte, PLUS the
@@ -1412,6 +1444,24 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey}
           disabled={createQuotationFromRequestMutation.isPending}
           onClick={() => createQuotationFromRequest(workStateAction.pricingRequestId)}>
+          {workStateAction.label}
+        </Button>
+      );
+      stickyPrimaryLabel = workStateAction.label;
+    } else if (actionKey === 'create_deposit_notice') {
+      // DRAFT already made: just open it; else make it (same path as DepositNoticePage's สร้าง) and open it.
+      stickyPrimaryAction = (
+        <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey}
+          disabled={createDepositNoticeMutation.isPending}
+          onClick={() => createDepositNoticeMutation.mutate()}>
+          {workStateAction.label}
+        </Button>
+      );
+      stickyPrimaryLabel = workStateAction.label;
+    } else if (actionKey === 'create_remaining_invoice') {
+      stickyPrimaryAction = (
+        <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey}
+          onClick={() => setRemainingInvoiceDialogOpen(true)}>
           {workStateAction.label}
         </Button>
       );
@@ -1878,7 +1928,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             {can.downloadRemainingInvoice && (
               <Button type="button" variant="text" size="sm" className="min-h-0 gap-1.5 text-sm font-bold" onClick={() => setRemainingInvoiceDialogOpen(true)}>
                 <Icon name="fileText" size={14} />
-                ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ
+                {remainingInvoice === undefined || remainingInvoice?.status === 'ISSUED' ? 'ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ' : 'สร้างใบแจ้งหนี้ส่วนที่เหลือ'}
               </Button>
             )}
           </>
@@ -2549,7 +2599,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               want it. */}
           {sections.dealQuotation && canViewPricingRequests ? (
             <div id="deal-quotation-panel" tabIndex={-1} className="scroll-mt-[300px] mobile:scroll-mt-[420px] outline-none">
-              <DealQuotationPanel ref={dealQuotationPanelRef} ticketId={ticketId} pricingRequests={pricingRequests} quotationByRequest={quotationByRequest} user={user} showToast={showToast} />
+              <DealQuotationPanel ref={dealQuotationPanelRef} ticketId={ticketId} pricingRequests={pricingRequests} quotationByRequest={quotationByRequest} user={user} showToast={showToast}
+                depositMainButtonLabel={workStateAction?.key === 'create_deposit_notice' ? workStateAction.label : null} />
             </div>
           ) : null}
           {/* Legacy ticket-native quotation rows (region 12's "docs") join the
@@ -2600,6 +2651,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                 pricingRequests={pricingRequests}
                 dealQuotations={dealQuotationRows}
                 showToast={showToast}
+                mainButtonCreatesNotice={workStateAction?.key === 'create_deposit_notice'}
               />
             ) : null}
           </div>
@@ -3063,19 +3115,13 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       {/* Slice 2 §E — the sticky "ยืนยันคำสั่งซื้อ" of an APPROVED direct quotation. The copy is the
           quotation editor's own (quotationMeta's CONFIRM_ORDER_FROM_QUOTATION_COPY), so the two
           doors to the same irreversible act say the same thing. */}
-      <ConfirmDialog
+      <ConfirmOrderDialog
         open={confirm?.kind === 'confirmOrderDirect'}
-        title="ยืนยันคำสั่งซื้อ"
-        message={(
-          <p className="confirm-dialog-message m-0 leading-normal text-text-secondary">
-            {CONFIRM_ORDER_FROM_QUOTATION_COPY.lead(confirm?.number)} <strong>{CONFIRM_ORDER_FROM_QUOTATION_COPY.stage}</strong>
-            {' '}{CONFIRM_ORDER_FROM_QUOTATION_COPY.tail}
-          </p>
-        )}
-        confirmLabel="ยืนยันคำสั่งซื้อ"
+        number={confirm?.number}
         cancelLabel="ปิด"
         busy={confirmOrderDirectMutation.isPending}
-        onConfirm={() => confirmOrderDirectMutation.mutate(confirm.quotationId)}
+        // Close first (as the pricing-request door does): a second click on the open dialog would send twice.
+        onConfirm={() => { const { quotationId } = confirm; setConfirm(null); confirmOrderDirectMutation.mutate(quotationId); }}
         onCancel={() => setConfirm(null)}
       />
     </div>

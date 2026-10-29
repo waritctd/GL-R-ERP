@@ -179,6 +179,8 @@ function emptyItemFromTicketItem(ticketItem) {
     // rounds up to a full box unless the rep opts out.
     roundToFullBox: true,
     originCountry: seededOrigin,
+    // QA-04: sales flags stock per line; seeded from the deal line. IN_THAILAND is the only value this form sets.
+    stockSource: ticketItem?.sourcedFromStock ? 'IN_THAILAND' : null,
     // GLA-125: typed name when originCountry = "อื่นๆ" — see QuotationItemRow's own comment.
     originCountryOther: null,
     leadTimeMinDays: seededLeadTime.leadTimeMinDays,
@@ -316,6 +318,9 @@ function itemFromExisting(item) {
     piecesPerBox: item?.piecesPerBox ?? '',
     roundToFullBox: item?.roundToFullBox !== false,
     originCountry: item?.originCountry ?? '',
+    stockSource: item?.stockSource ?? null,
+    // remembered so un-ticking then re-ticking จากสต็อก restores the loaded value (IN_TRANSIT) instead of IN_THAILAND
+    loadedStockSource: item?.stockSource ?? null,
     originCountryOther: item?.originCountryOther ?? null,
     leadTimeMinDays: item?.leadTimeMinDays ?? null,
     leadTimeMaxDays: item?.leadTimeMaxDays ?? null,
@@ -390,6 +395,7 @@ function pricingRequestItemInputFromRow(item) {
     sqmPerBox: item.sqmPerBox === '' || item.sqmPerBox == null ? null : Number(item.sqmPerBox),
     roundToFullBox: item.roundToFullBox !== false,
     originCountry: item.originCountry || null,
+    stockSource: item.stockSource ?? null,
     // GLA-125: sent as-typed; the server (PricingRequestService#resolveItem) is what clears this
     // when originCountry is not "อื่นๆ" — this row-level payload builder does no normalization
     // itself, matching how it never normalizes any other field either (server-side derivation
@@ -744,7 +750,7 @@ export function PricingRequestCreateModal({
         // GLA-125: ประเทศต้นทาง is required on THIS form (owner ruling 2026-09-18). ระยะเวลานำเข้า is
         // NOT (owner ruling 2026-10-18: import gives the time) — the origin's default still rides
         // along on the wire, and the field itself is hidden (hideLeadTime below).
-        requireOriginCountry: true,
+        requireOriginCountry: !item.stockSource, // QA-04: a stock line has no import origin (backend exempts it)
       });
       // The lead-time range check still runs inside validateQuotationItem, but its error renders only in
       // the field hideLeadTime removes, so it could block a save with nothing red on screen. The server
@@ -1056,7 +1062,7 @@ export function PricingRequestCreateModal({
                 // GLA-125 (owner ruling 2026-09-18): ประเทศต้นทาง (and its "อื่นๆ" typed name) is
                 // required on THIS form only — direct-deal keeps it optional. ระยะเวลานำเข้า is not
                 // asked here at all (owner ruling 2026-10-18: import gives the time).
-                requireOriginCountry
+                requireOriginCountry={!item.stockSource}
                 hideLeadTime
                 errors={itemFieldErrors[index] ?? {}}
                 onChange={(patch) => updateItem(index, patch)}
@@ -1085,6 +1091,11 @@ export function PricingRequestCreateModal({
                           {UNIT_BASIS_OPTIONS.map((option) => <option key={option.code} value={option.code}>{`ต่อ ${option.label}`}</option>)}
                         </select>
                       </FormField>
+                      <label className="col-span-2 flex items-center gap-2 text-sm font-bold text-text-secondary">
+                        <input type="checkbox" checked={Boolean(row.stockSource)}
+                          onChange={(e) => updateItem(rowIndex, { stockSource: e.target.checked ? (row.loadedStockSource ?? 'IN_THAILAND') : null })} />
+                        จากสต็อก
+                      </label>
                     </div>
                   );
                 }}

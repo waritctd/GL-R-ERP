@@ -404,7 +404,7 @@ public class RemainingInvoiceService {
             doc.docNumber() != null ? doc.docNumber() : "(ร่าง)",
             doc.docDate(), doc.reference(), doc.depositReference(),
             doc.customerName(), doc.customerBranch(), doc.customerAddress(), doc.customerTaxId(),
-            doc.projectName(), nz(doc.depositDeduction()), doc.notes(), items);
+            doc.projectName(), nz(doc.depositDeduction()), doc.notes(), items, doc.vatAmount(), doc.grandTotal());
     }
 
     private List<String> defaultNotes() {

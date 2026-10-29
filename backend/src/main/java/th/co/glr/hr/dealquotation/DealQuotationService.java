@@ -1394,6 +1394,7 @@ public class DealQuotationService {
         // was loaded above may be what the change we just waited for rewrote.
         quotations.lockTicket(found.ticketId());
         DealQuotationDto quotation = requireQuotation(id);
+        requireNoOtherDirectQuotationAfterConfirm(quotation);
         // GLA-123 slice S2: submit is now LIVE for BOTH origins — every validation below (item
         // completeness, payment term, validity date) is origin-agnostic and applies unchanged;
         // only approve/reject/issue diverge (see #approve/#reject's own origin branch).
@@ -1651,6 +1652,7 @@ public class DealQuotationService {
         // directly) -- a transaction here never holds a second ticket's lock at the same time, so
         // this cannot deadlock against either of them.
         quotations.lockTicket(quotation.ticketId());
+        requireNoOtherDirectQuotationAfterConfirm(quotation); // under the lock: confirm-order takes it too
         LocalDate approvalDate = LocalDate.now(BANGKOK);
         // V178: a DATE-mode document WITH special pricing names its OWN validity_date (the rep's
         // ภายในวันที่, verbatim — approval never recomputes it); every other case (DAYS mode, or a
@@ -1710,16 +1712,6 @@ public class DealQuotationService {
             DealQuotationDto ancestor = requireQuotation(ancestorId);
             quotations.supersede(ancestorId);
             ancestorId = ancestor.parentQuotationId();
-        }
-        // #1173 review F1: on a confirmed deal the system-owned deposit policy follows the newly
-        // approved quotation, so a revision that adds or drops the deposit moves the deal with it.
-        // A no-op before confirmation (confirmOrderFromDirectQuotation applies the confirmed
-        // quotation's percent then). Null-tolerant for hand-wired tests, like
-        // #advanceDealToRecipientStage. PRICING_REQUEST origin never reaches this: R8 allows one
-        // accepted quotation per deal, and its percent is applied at OrderConfirmationService#confirmOrder.
-        if (ticketService != null) {
-            ticketService.followQuotationDepositPolicy(approved.ticketId(), approved.number(),
-                DealQuotationRenderAdapter.effectiveDepositPercent(approved.depositPercent()), actor);
         }
         tickets.addEventWithDocument(approved.ticketId(), actor.id(), actor.name(), TicketEventKind.QUOTATION_ISSUED,
             null, null, "อนุมัติใบเสนอราคา " + approved.number(), RelatedDocumentType.QUOTATION, id);
@@ -2184,6 +2176,12 @@ public class DealQuotationService {
         tickets.addEventWithDocument(ticketId, actor.id(), actor.name(),
             TicketEventKind.DEAL_PROMOTED_FROM_QUOTATION, TicketStatus.DRAFT, TicketStatus.QUOTATION_ISSUED,
             "ยืนยันคำสั่งซื้อจากใบเสนอราคา " + fresh.number(), RelatedDocumentType.QUOTATION, quotationId);
+        // The agreed order is this quotation: the deal's other open direct quotations can never be submitted or
+        // approved now (see requireNoOtherDirectQuotationAfterConfirm), so cancel them rather than strand them.
+        for (String number : quotations.cancelOtherOpenDirectQuotations(ticketId, quotationId)) {
+            tickets.addEvent(ticketId, actor.id(), actor.name(), TicketEventKind.CANCELLED, null, null,
+                "ยกเลิกใบเสนอราคา " + number + " อัตโนมัติ เพราะยืนยันคำสั่งซื้อจากใบเสนอราคา " + fresh.number());
+        }
         // The quotation is the agreed order, so it REPLACES whatever preliminary lines the deal
         // carried. Safe at this point: the deal is still pre-order (status was draft, so no delivery
         // or stock reservation exists — both key on quotation_issued or later), and the only other
@@ -2399,6 +2397,9 @@ public class DealQuotationService {
         // GLA-123 slice S1, defence in depth — see #createRevision's identical comment.
         requireReorderAllowedForOrigin(source);
         requireApprovedForClone(source, "สร้างจากใบเดิมได้จากใบเสนอราคาที่ได้รับอนุมัติแล้วเท่านั้น");
+        if (tickets.isOrderConfirmedFromQuotation(source.ticketId(), source.id())) {
+            throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคานี้ยืนยันคำสั่งซื้อแล้ว จึงสร้างจากใบเดิมไม่ได้");
+        }
         // No requireNoOpenRevision here (deliberately) — multiple clones of the same APPROVED
         // source are allowed, and a clone never contends with an in-progress revision for anything.
         // Still locks the ticket, same advisory lock #requireNoOpenRevision/#createRevision use, so
@@ -2572,6 +2573,21 @@ public class DealQuotationService {
         return quotation;
     }
 
+    /**
+     * Owner ruling 2026-10-28: once an order is confirmed from a direct quotation, that quotation is the agreed
+     * order. No OTHER direct quotation on the deal may be submitted or approved (approval would supersede the
+     * confirmed one, move the payable and flip the deposit policy), and the confirmed one may not be cloned.
+     */
+    private void requireNoOtherDirectQuotationAfterConfirm(DealQuotationDto quotation) {
+        if (isPricingRequestOrigin(quotation)
+                || !tickets.hasPromotionFromQuotationEvent(quotation.ticketId())
+                || tickets.isOrderConfirmedFromQuotation(quotation.ticketId(), quotation.id())) {
+            return;
+        }
+        throw new ApiException(HttpStatus.CONFLICT,
+            "ดีลนี้ยืนยันคำสั่งซื้อจากใบเสนอราคาอื่นแล้ว จึงส่ง/อนุมัติใบเสนอราคานี้ไม่ได้");
+    }
+
     private static boolean isPricingRequestOrigin(DealQuotationDto quotation) {
         return "PRICING_REQUEST".equals(quotation.origin());
     }
@@ -2589,6 +2605,11 @@ public class DealQuotationService {
                         + quotation.docStatus() + ")");
             }
             return quotation;
+        }
+        // Owner ruling 2026-10-28: the quotation an order was confirmed from is the agreed order -- not revisable.
+        if (tickets.isOrderConfirmedFromQuotation(quotation.ticketId(), quotation.id())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ใบเสนอราคานี้ยืนยันคำสั่งซื้อแล้ว จึงสร้างฉบับแก้ไขไม่ได้");
         }
         return requireApprovedForClone(quotation, "สร้างฉบับแก้ไขได้จากใบเสนอราคาที่ได้รับอนุมัติแล้วเท่านั้น");
     }
@@ -4047,7 +4068,8 @@ public class DealQuotationService {
         List<String> missingSeqs = new ArrayList<>();
         for (DealQuotationItemDto item : items) {
             boolean tile = item.lineType() == null || WastageCalculator.LINE_TYPE_TILE.equals(item.lineType());
-            if (tile && (item.leadTimeMinDays() == null || item.leadTimeMaxDays() == null)) {
+            // In-Thailand stock lines skip import (owner ruling 2026-10-28); IN_TRANSIT still needs a lead time (2026-10-29).
+            if (tile && !"IN_THAILAND".equals(item.stockSource()) && (item.leadTimeMinDays() == null || item.leadTimeMaxDays() == null)) {
                 missingSeqs.add(String.valueOf(item.seq()));
             }
         }

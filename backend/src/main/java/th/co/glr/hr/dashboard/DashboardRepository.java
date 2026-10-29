@@ -10,6 +10,7 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 import th.co.glr.hr.employee.ManagerApproverRepository;
+import th.co.glr.hr.ticket.TicketRepository;
 
 @Repository
 public class DashboardRepository {
@@ -135,56 +136,6 @@ public class DashboardRepository {
             WITH visible_tickets AS (
                 SELECT t.*
             """ + from + where + """
-            ), enriched_tickets AS (
-                SELECT vt.*,
-                       COALESCE(accepted.total_amount, issued.total_amount, notice.total_payable,
-                                item_total.total_amount, 0) AS payable_amount,
-                       COALESCE(paid.total_paid, 0) AS paid_amount
-                  FROM visible_tickets vt
-                  LEFT JOIN LATERAL (
-                      SELECT q.total_amount
-                        FROM sales.quotation q
-                       WHERE q.ticket_id = vt.ticket_id AND q.doc_status = 'ACCEPTED'
-                       ORDER BY CASE q.recipient_type
-                                    WHEN 'BUYER' THEN 0
-                                    WHEN 'OWNER' THEN 1
-                                    ELSE 2
-                                END,
-                                q.accepted_at DESC NULLS LAST,
-                                q.issued_at DESC,
-                                q.quotation_id DESC
-                       LIMIT 1
-                  ) accepted ON TRUE
-                  LEFT JOIN LATERAL (
-                      SELECT q.total_amount
-                        FROM sales.quotation q
-                       WHERE q.ticket_id = vt.ticket_id AND q.doc_status IN ('ISSUED','SENT')
-                       ORDER BY CASE q.recipient_type
-                                    WHEN 'BUYER' THEN 0
-                                    WHEN 'OWNER' THEN 1
-                                    ELSE 2
-                                END,
-                                q.issued_at DESC,
-                                q.quotation_id DESC
-                       LIMIT 1
-                  ) issued ON TRUE
-                  LEFT JOIN LATERAL (
-                      SELECT d.total_payable
-                        FROM sales.deposit_notice d
-                       WHERE d.ticket_id = vt.ticket_id AND d.status = 'ISSUED'
-                       ORDER BY d.version DESC, d.deposit_notice_id DESC
-                       LIMIT 1
-                  ) notice ON TRUE
-                  LEFT JOIN LATERAL (
-                      SELECT COALESCE(SUM(COALESCE(ti.approved_price, 0) * ti.qty), 0) AS total_amount
-                        FROM sales.ticket_item ti
-                       WHERE ti.ticket_id = vt.ticket_id
-                  ) item_total ON TRUE
-                  LEFT JOIN LATERAL (
-                      SELECT COALESCE(SUM(CASE WHEN pr.kind = 'ADJUSTMENT' THEN -pr.amount ELSE pr.amount END), 0) AS total_paid
-                        FROM sales.payment_receipt pr
-                       WHERE pr.ticket_id = vt.ticket_id
-                  ) paid ON TRUE
             )
             SELECT COUNT(*) FILTER (WHERE status = 'draft') AS draft,
                    COUNT(*) FILTER (WHERE status = 'submitted') AS submitted,
@@ -205,12 +156,10 @@ public class DashboardRepository {
                    ) AS overdue_over_3days,
                    COUNT(*) FILTER (WHERE lifecycle = 'ON_HOLD') AS on_hold,
                    COUNT(*) FILTER (WHERE lifecycle = 'DORMANT') AS dormant,
-                   COUNT(*) FILTER (
-                       WHERE due_date < CURRENT_DATE
-                         AND GREATEST(payable_amount - paid_amount, 0) > 0
+                   COUNT(*) FILTER (WHERE """ + TicketRepository.paymentOverduePredicate("vt.ticket_id") + """
                    ) AS payment_overdue,
                    COUNT(*) FILTER (WHERE fulfillment_status = 'PARTIALLY_DELIVERED') AS partially_delivered
-              FROM enriched_tickets
+              FROM visible_tickets vt
             """,
             params,
             (rs, rowNum) -> new TicketSummaryDto(

@@ -317,7 +317,7 @@ class CommissionAutoCreateIntegrationTest extends AbstractPostgresIntegrationTes
     @Test
     void createFromDeal_omittedGrossAmount_defaultsFromDealPayable() {
         long ticketId = driveDealToClosedPaid(new BigDecimal("10"));
-        BigDecimal payable = tickets.payableAmountExVat(ticketId);
+        BigDecimal payable = tickets.payableAmount(ticketId); // QA-02: VAT-inclusive (the calculator divides by 1.07 itself)
         assertThat(payable.signum()).isPositive();
 
         CommissionRecord created = commissionService.createFromDeal(
@@ -331,13 +331,12 @@ class CommissionAutoCreateIntegrationTest extends AbstractPostgresIntegrationTes
     }
 
     /**
-     * OWNER RULING 2026-09-30: the deal's PAYABLE is now the VAT-inclusive grand total, but commission is
-     * computed on the PRE-VAT figure it always got. This pins the default gross amount: it equals the ex-VAT
-     * quotation total, and is strictly LESS than the (VAT-inclusive) payable the customer is billed.
-     * Mutation check: point CommissionService at tickets.payableAmount(...) and this goes red.
+     * QA-02 (owner ruling 2026-10-28; supersedes the 2026-09-30 pre-VAT default): the commission workbooks take
+     * the amount received INCLUDING VAT and CommissionCalculator.calculateInvoice divides by 1.07, so the
+     * default gross is the VAT-inclusive payable, strictly MORE than the ex-VAT quotation total.
      */
     @Test
-    void createFromDeal_omittedGrossAmount_staysPreVat_whilePayableIsVatInclusive() {
+    void createFromDeal_omittedGrossAmount_isVatInclusive_equalToPayable() {
         long ticketId = driveDealToClosedPaid(new BigDecimal("10"));
         BigDecimal exVat = tickets.payableAmountExVat(ticketId);
         BigDecimal inclVat = tickets.payableAmount(ticketId);
@@ -348,16 +347,15 @@ class CommissionAutoCreateIntegrationTest extends AbstractPostgresIntegrationTes
             invoiceFile(), accountActor);
 
         assertThat(inclVat).isGreaterThan(exVat);
-        assertThat(inclVat).isEqualByComparingTo(exVat.multiply(new BigDecimal("1.07")).setScale(2, java.math.RoundingMode.HALF_UP));
-        assertThat(created.invoiceDetails().grossAmount()).isEqualByComparingTo(exVat);
-        assertThat(created.invoiceDetails().grossAmount()).isNotEqualByComparingTo(inclVat);
+        assertThat(created.invoiceDetails().grossAmount()).isEqualByComparingTo(inclVat);
+        assertThat(created.invoiceDetails().grossAmount()).isNotEqualByComparingTo(exVat);
         assertThat(created.dealAmountMismatch()).isFalse();
     }
 
     @Test
     void createFromDeal_providedGrossAmount_isUsedAsGiven_insteadOfDealPayable() {
         long ticketId = driveDealToClosedPaid(new BigDecimal("10"));
-        BigDecimal payable = tickets.payableAmountExVat(ticketId);
+        BigDecimal payable = tickets.payableAmount(ticketId);
         BigDecimal override = payable.add(new BigDecimal("50000.00")); // deliberately different + beyond threshold
 
         CommissionRecord created = commissionService.createFromDeal(

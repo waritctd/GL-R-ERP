@@ -212,7 +212,7 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
         // site 2: CUSTOMER_CONFIRMED -> DEPOSIT_NOTICE_ISSUED.
         DepositNoticeDto draft = orderConfirmation.createDepositNoticeFromQuotation(
             deal.pricingRequestId(), new CreateDepositNoticeFromQuotationRequest(null), salesActor);
-        depositNoticeService.issue(draft.id(), salesActor);
+        DepositNoticeDto issuedNotice = depositNoticeService.issue(draft.id(), salesActor);
         assertThat(paymentStatusOf(deal.ticketId())).isEqualTo(PaymentTrack.DEPOSIT_NOTICE_ISSUED);
 
         // site 6 (REQUIRED branch, via reconcilePaymentStatus): DEPOSIT_NOTICE_ISSUED -> DEPOSIT_PAID,
@@ -235,6 +235,11 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
         // the remaining ~50% is still outstanding): AWAITING_FINAL_PAYMENT -> FULLY_PAID.
         ticketService.confirmFinalPayment(deal.ticketId(), accountActor);
         assertThat(paymentStatusOf(deal.ticketId())).isEqualTo(PaymentTrack.FULLY_PAID);
+        // QA-01: the DEPOSIT receipt is the notice's VAT-inclusive totalPayable, not pre-VAT.
+        assertThat(jdbc.queryForObject(
+            "SELECT amount FROM sales.payment_receipt WHERE ticket_id = :id AND kind = 'DEPOSIT'",
+            java.util.Map.of("id", deal.ticketId()), BigDecimal.class))
+            .isEqualByComparingTo(issuedNotice.totalPayable());
     }
 
     @Test

@@ -472,3 +472,23 @@ describe('resolveWorkState — the route-choice line and the approval wait (owne
     expect(result.action).toMatchObject({ label: 'อนุมัติใบเสนอราคา', to: '/quotations/9105' });
   });
 });
+
+
+describe('resolveWorkState — forwards depositNotice / remainingInvoice to nextSalesAction (owner rulings 2026-10-28)', () => {
+  const deal = baseDeal({ status: 'quotation_issued', paymentStatus: 'CUSTOMER_CONFIRMED' });
+  const prs = [{ id: 1, ticketId: 1, status: 'QUOTATION_ACCEPTED', orderConfirmedAt: '2026-10-01T00:00:00Z' }];
+
+  it('sales: a DRAFT depositNotice reaches nextSalesAction (ออกใบแจ้งยอดเงินรับมัดจำ); without it, สร้าง...', () => {
+    expect(resolveWorkState({ role: 'sales' }, deal, prs).action).toMatchObject({ key: 'create_deposit_notice', label: 'สร้างใบแจ้งยอดเงินรับมัดจำ' });
+    expect(resolveWorkState({ role: 'sales' }, deal, prs, { depositNotice: { status: 'DRAFT' } }).action)
+      .toMatchObject({ key: 'create_deposit_notice', label: 'ออกใบแจ้งยอดเงินรับมัดจำ' });
+  });
+
+  it('sales: remainingInvoice reaches nextSalesAction (null -> สร้างใบแจ้งหนี้, ISSUED -> not offered)', () => {
+    const ready = baseDeal({ status: 'quotation_issued', fulfillmentStatus: 'FULLY_DELIVERED', paymentStatus: 'DEPOSIT_PAID' });
+    expect(resolveWorkState({ role: 'sales' }, ready, prs, { remainingInvoice: null }).action)
+      .toMatchObject({ key: 'create_remaining_invoice', label: 'สร้างใบแจ้งหนี้' });
+    expect(resolveWorkState({ role: 'sales' }, ready, prs, { remainingInvoice: { status: 'ISSUED' } }).action?.key)
+      .not.toBe('create_remaining_invoice');
+  });
+});

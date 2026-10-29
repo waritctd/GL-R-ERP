@@ -456,6 +456,8 @@ public class DepositNoticeService {
 
     RemainingInvoiceMoney computeRemainingInvoiceMoney(BigDecimal itemsTotal, BigDecimal depositAmount) {
         BigDecimal netAmount = itemsTotal.subtract(depositAmount).setScale(2, RoundingMode.HALF_UP);
+        // Owner ruling 2026-10-28 (SK-07): each tax invoice's VAT = round2(its own net x 7%) -- usual Thai practice;
+        // a satang gap against the deal's payable is normal and outstanding follows the ISSUED documents.
         BigDecimal vatAmount = netAmount.multiply(VAT_RATE).setScale(2, RoundingMode.HALF_UP);
         BigDecimal grandTotal = netAmount.add(vatAmount).setScale(2, RoundingMode.HALF_UP);
         return new RemainingInvoiceMoney(netAmount, vatAmount, grandTotal);
