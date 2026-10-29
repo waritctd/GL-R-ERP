@@ -38,10 +38,10 @@ import th.co.glr.hr.customerquotation.CustomerQuotationService;
 import th.co.glr.hr.dealquotation.WastageCalculator;
 import th.co.glr.hr.deposit.DepositNoticeDraftRequest;
 import th.co.glr.hr.deposit.DepositNoticeDto;
-import th.co.glr.hr.deposit.DepositNoticeRenderer;
+import th.co.glr.hr.deposit.DepositNoticePdfRenderer;
 import th.co.glr.hr.deposit.DepositNoticeRepository;
 import th.co.glr.hr.deposit.DepositNoticeService;
-import th.co.glr.hr.deposit.RemainingInvoiceRenderer;
+import th.co.glr.hr.deposit.RemainingInvoicePdfRenderer;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
@@ -177,7 +177,7 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
 
         depositNoticeRepository = new DepositNoticeRepository(jdbc);
         depositNoticeService = new DepositNoticeService(depositNoticeRepository, tickets, notifications,
-            new DepositNoticeRenderer(), new RemainingInvoiceRenderer(), customers, quotationRepository);
+            new DepositNoticePdfRenderer(), customers, quotationRepository);
 
         orderConfirmation = new OrderConfirmationService(
             pricingRequests, tickets, ticketService, quotationRepository, depositNoticeService, notifications);
@@ -601,7 +601,8 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
             "ลูกค้าเครดิตชั้นดี อนุมัติเทอมเครดิตแทนมัดจำ", salesActor);
         assertThat(waived.summary().depositPolicy()).isEqualTo(DepositPolicy.CREDIT_CUSTOMER);
 
-        TicketDto afterIr = ticketService.issueImportRequest(ticketId, importActor);
+        ticketService.recordFirstImportRequestIssued(ticketId, 0L, importActor); // pre-V184 shape: IR_ISSUED, no rows
+        TicketDto afterIr = tickets.findById(ticketId).orElseThrow();
         assertThat(afterIr.summary().fulfillmentStatus()).isEqualTo(FulfilmentStatus.IR_ISSUED);
         assertThat(afterIr.summary().salesStage()).isEqualTo(DealStage.PROCUREMENT);
         // paymentStatus is untouched — no payment was ever recorded on this deal.

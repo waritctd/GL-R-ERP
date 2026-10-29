@@ -84,27 +84,22 @@ describe('resolveWorkState', () => {
   });
 
   it('import viewer on an import-gated stage falls through to nextImportAction', () => {
-    const deal = { id: 1, lifecycle: 'ACTIVE', salesStage: 'PROCUREMENT', status: 'quotation_issued', fulfillmentStatus: null };
+    const deal = { id: 1, lifecycle: 'ACTIVE', salesStage: 'PROCUREMENT', status: 'quotation_issued', fulfillmentStatus: 'IR_SENT' };
     const result = resolveWorkState({ role: 'import' }, deal, []);
     expect(result).not.toHaveProperty('waitingRoleLabel');
-    expect(result.action).toMatchObject({ code: 'issueImportRequest' });
+    expect(result.action).toMatchObject({ code: 'markShipping' });
   });
 
-  // FIX 1 rewrite (backend-verified scenario 2, TicketService.java:702): the
-  // stage only advances to PROCUREMENT once import issues the IR, so while
-  // fulfillmentStatus is still null, the deal sits at DEPOSIT_RECEIVED
-  // (gate: 'account') even though issuing the IR is squarely import's own
-  // pending action. Before FIX 1 this read as "รอฝ่ายบัญชี" with no primary —
-  // resolveWorkState must now surface nextImportAction's real action instead
-  // of gating on the stage first.
-  it('import viewer at DEPOSIT_RECEIVED (gate: account) with fulfillmentStatus null still gets issueImportRequest, not a waiting banner', () => {
+  // W3-01 (owner ruling 2026-10-29): a confirmed deal with no IR yet is not an import to-do any more
+  // (sales raises the per-factory IR), so import gets no primary action — and still no waiting banner.
+  it('import viewer at DEPOSIT_RECEIVED with fulfillmentStatus null has no action and no waiting banner', () => {
     const deal = {
       id: 1, lifecycle: 'ACTIVE', salesStage: 'DEPOSIT_RECEIVED',
       status: 'quotation_issued', fulfillmentStatus: null,
     };
     const result = resolveWorkState({ role: 'import' }, deal, []);
     expect(result).not.toHaveProperty('waitingRoleLabel');
-    expect(result.action).toMatchObject({ code: 'issueImportRequest' });
+    expect(result.action).toBeNull();
   });
 
   it('import viewer on a sales-gated stage has no action and no waiting banner (nextImportAction runs first, correctly finds nothing — fulfilment hasn\'t started)', () => {
@@ -222,7 +217,8 @@ describe('nextSalesAction — CREATE_PCR gate on legacy/no-PR deals (UAT regress
   // latter. OrderConfirmationService.confirmOrder sets 'quotation_issued' and
   // confirmCustomer sets paymentStatus under the CURRENT flow too, so a deal
   // that IS in the chain can carry both signals.
-  it('still offers create_pcr after a customer-change revision leaves {parent SUPERSEDED, child DRAFT} on an order-confirmed deal — no live PR, but the deal is in the chain', () => {
+  // QA-11 (Ploy 2026-10-29): that draft is sent, not a second request created beside it.
+  it('offers to send the draft after a customer-change revision leaves {parent SUPERSEDED, child DRAFT} on an order-confirmed deal — no live PR, but the deal is in the chain', () => {
     const deal = baseDeal({
       status: 'quotation_issued',
       salesStage: 'ORDER_RECEIVED',
@@ -230,9 +226,33 @@ describe('nextSalesAction — CREATE_PCR gate on legacy/no-PR deals (UAT regress
     });
     const prs = [
       { id: 11, ticketId: deal.id, status: 'SUPERSEDED' },
-      { id: 12, ticketId: deal.id, status: 'DRAFT' },
+      { id: 12, ticketId: deal.id, status: 'DRAFT', recipientType: 'OWNER' },
+    ];
+    expect(nextSalesAction(deal, prs)).toEqual({
+      key: 'submit_pricing_request', label: 'ส่งคำขอราคาถึงเจ้าของโครงการ', pricingRequestId: 12,
+    });
+  });
+
+  // Code review of #1195: an in-chain deal whose requests are all dead still needs a new request.
+  it('still offers create_pcr on an order-confirmed deal whose requests are all dead ({SUPERSEDED, CANCELLED})', () => {
+    const deal = baseDeal({ status: 'quotation_issued', salesStage: 'ORDER_RECEIVED', paymentStatus: 'CUSTOMER_CONFIRMED' });
+    const prs = [
+      { id: 11, ticketId: deal.id, status: 'SUPERSEDED', recipientType: 'OWNER' },
+      { id: 12, ticketId: deal.id, status: 'CANCELLED', recipientType: 'OWNER' },
     ];
     expect(nextSalesAction(deal, prs)).toMatchObject({ key: 'create_pcr' });
+  });
+
+  // Code review of #1195 (finding 3): with a revision draft and a newer blank one (made by the old
+  // สร้างคำขอราคา beside it), the revision — the customer's change — is the one sent.
+  it('sends the customer-change revision draft, not a newer blank draft beside it', () => {
+    const deal = baseDeal({ salesStage: 'SPEC_APPROVED' });
+    const prs = [
+      { id: 11, ticketId: deal.id, status: 'SUPERSEDED', recipientType: 'OWNER' },
+      { id: 12, ticketId: deal.id, status: 'DRAFT', recipientType: 'OWNER', parentPricingRequestId: 11 },
+      { id: 13, ticketId: deal.id, status: 'DRAFT', recipientType: 'OWNER', parentPricingRequestId: null },
+    ];
+    expect(nextSalesAction(deal, prs)).toMatchObject({ key: 'submit_pricing_request', pricingRequestId: 12 });
   });
 
   it('still offers create_pcr for an early-stage deal with no payment status and zero pricing requests (the real case the gate must not break)', () => {

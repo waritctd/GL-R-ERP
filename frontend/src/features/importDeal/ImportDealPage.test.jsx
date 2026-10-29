@@ -310,13 +310,15 @@ describe('ImportDealPage', () => {
       expect(api.tickets.markGoodsReceived).not.toHaveBeenCalled();
     });
 
-    it('fulfillmentStatus null: shows ออกคำขอนำเข้า and calls tickets.issueImportRequest', async () => {
+    // W3-04 (owner ruling 2026-10-29): the one-click IR is gone — it issued an IR with no document
+    // or factory. Sales raises the per-factory IR; import never starts a legacy track here.
+    it('fulfillmentStatus null: shows NO ออกคำขอนำเข้า button and never calls tickets.issueImportRequest', async () => {
       api.importDeals.get.mockResolvedValue({ deal: legacyDeal({ fulfillmentStatus: null }) });
       renderPage();
-      const card = await screen.findByTestId('import-deal-legacy-action');
-      fireEvent.click(within(card).getByRole('button', { name: 'ออกคำขอนำเข้า' }));
-      await waitFor(() => expect(api.tickets.issueImportRequest).toHaveBeenCalledWith('1'));
-      expect(api.tickets.markShipping).not.toHaveBeenCalled();
+      await screen.findByTestId('import-deal-tracking');
+      expect(screen.queryByTestId('import-deal-legacy-action')).toBeNull();
+      expect(legacyButtons()).toHaveLength(0);
+      expect(api.tickets.issueImportRequest).not.toHaveBeenCalled();
     });
 
     it('SHIPPING: shows ยืนยันรับเข้าคลัง and calls tickets.markGoodsReceived', async () => {
@@ -363,7 +365,9 @@ describe('ImportDealPage', () => {
       expect(legacyButtons()).toHaveLength(0);
     });
 
-    it('IR_ISSUED with only a DRAFT per-factory row: the draft card shows AND the legacy ส่งคำขอนำเข้าแล้ว button works (a draft is not tracking — the backend only refuses once a row is ISSUED)', async () => {
+    // W3-04: a DRAFT per-factory row means the deal is on the per-factory flow, so no deal-level
+    // button renders (the backend refuses on a DRAFT row too).
+    it('IR_ISSUED with only a DRAFT per-factory row: the draft card shows and NO legacy ส่งคำขอนำเข้าแล้ว button renders', async () => {
       api.tickets.markIrSent.mockResolvedValue({});
       api.importDeals.get.mockResolvedValue({
         deal: dealFixture({
@@ -373,8 +377,9 @@ describe('ImportDealPage', () => {
       });
       renderPage();
       await screen.findByTestId('ir-factory-card-14');
-      fireEvent.click(await screen.findByRole('button', { name: 'ส่งคำขอนำเข้าแล้ว' }));
-      await waitFor(() => expect(api.tickets.markIrSent).toHaveBeenCalledWith('1'));
+      expect(screen.queryByRole('button', { name: 'ส่งคำขอนำเข้าแล้ว' })).toBeNull();
+      expect(screen.queryByTestId('import-deal-legacy-action')).toBeNull();
+      expect(api.tickets.markIrSent).not.toHaveBeenCalled();
     });
 
     // This page is the only place import meets a DRAFT card (import cannot open /tickets/:id), and
@@ -391,7 +396,7 @@ describe('ImportDealPage', () => {
       expect(hint.textContent).toContain('ยังเป็นร่าง');
       expect(hint.textContent).not.toContain('รอฝ่ายขาย');
       expect(screen.queryByTestId('ir-issue-14')).toBeNull();
-      expect(screen.getByRole('button', { name: 'ส่งคำขอนำเข้าแล้ว' })).not.toBeNull();
+      expect(screen.queryByRole('button', { name: 'ส่งคำขอนำเข้าแล้ว' })).toBeNull();
     });
 
     it('CEO gets ออกเลข beside the same hint on this page, outside the collapsed details', async () => {
@@ -456,7 +461,7 @@ describe('ImportDealPage', () => {
     });
 
     it('renders no price or cost anywhere on a legacy deal', async () => {
-      api.importDeals.get.mockResolvedValue({ deal: legacyDeal({ fulfillmentStatus: null }) });
+      api.importDeals.get.mockResolvedValue({ deal: legacyDeal({ fulfillmentStatus: 'IR_SENT' }) });
       renderPage();
       await screen.findByTestId('import-deal-legacy-action');
       const page = document.body.textContent;

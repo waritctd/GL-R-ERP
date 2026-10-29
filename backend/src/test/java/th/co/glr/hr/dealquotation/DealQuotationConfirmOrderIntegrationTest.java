@@ -36,10 +36,10 @@ import th.co.glr.hr.deposit.DepositNoticeDraftRequest;
 import th.co.glr.hr.deposit.DepositNoticeDto;
 import th.co.glr.hr.deposit.DepositNoticeItemDto;
 import th.co.glr.hr.deposit.DepositNoticeItemRequest;
-import th.co.glr.hr.deposit.DepositNoticeRenderer;
+import th.co.glr.hr.deposit.DepositNoticePdfRenderer;
 import th.co.glr.hr.deposit.DepositNoticeRepository;
 import th.co.glr.hr.deposit.DepositNoticeService;
-import th.co.glr.hr.deposit.RemainingInvoiceRenderer;
+import th.co.glr.hr.deposit.RemainingInvoicePdfRenderer;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
@@ -161,7 +161,7 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
         confirmer = transactional(quotationService);
 
         depositNoticeService = new DepositNoticeService(new DepositNoticeRepository(jdbc), tickets, notifications,
-            new DepositNoticeRenderer(), new RemainingInvoiceRenderer(), customers, legacyQuotations);
+            new DepositNoticePdfRenderer(), customers, legacyQuotations);
 
         salesActor = actor(createEmployee("พนักงานขาย 136", "sales-136@glr.co.th", "SALES", "แผนกขาย", null), "sales");
         otherSalesActor = actor(createEmployee("พนักงานขาย 136 อื่น", "sales-136-other@glr.co.th", "SALES",
@@ -843,6 +843,77 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
 
     /** Exactly what the quotation editor's inline create sends (QuotationEditorPage
      * #handleInlineCreate): no contact, no items, a follow-up date, and quotationOnly=true. */
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // W3-03 (owner ruling 2026-10-29): confirm-order on a DIRECT quotation must hand each
+    // ticket_item the quotation line's catalogue link and factory, as the pricing-request route does —
+    // otherwise สร้างใบ IR 409s "รายการนี้ยังไม่ได้ระบุโรงงาน" and nobody can fix it.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    private UpsertDealQuotationRequest catalogueLineDraft(Long catalogPriceId, String model) {
+        ItemInput line = new ItemInput(
+            null, catalogPriceId, null, "SCG", model, "White", "Matte", "60x60", new BigDecimal("10.00"),
+            new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES, null, 10,
+            WastageCalculator.WASTAGE_MODE_NONE, null, 4, new BigDecimal("100.00"), BigDecimal.ZERO, "ไทย-สต็อก",
+            3, 7, null, WastageCalculator.LINE_TYPE_TILE, null, null, null, null, null, null, null, null,
+            null, null, false);
+        return new UpsertDealQuotationRequest(null, null, null, null, 50, "CASH_ON_DELIVERY",
+            0, 30, null, "NET", "TH", "THB", List.of(line)).withRecipientType("OWNER");
+    }
+
+    private List<Map<String, Object>> ticketItemLinks(long ticketId) {
+        return jdbc.queryForList("""
+            SELECT model, factory, catalog_price_id FROM sales.ticket_item
+             WHERE ticket_id = :id ORDER BY sort_order
+            """, Map.of("id", ticketId));
+    }
+
+    @Test
+    void confirmOrder_onCatalogueLines_copiesCatalogPriceIdAndFactoryToEveryTicketItem() {
+        long priceA = insertCatalogProduct("W3 Factory A", "IT", "W3-A", new BigDecimal("10"), "EUR", "per_sqm");
+        long ticketId = pipelineTicket(salesActor);
+        DealQuotationDto approved = approvedQuotation(ticketId, catalogueLineDraft(priceA, "Line A"));
+
+        confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor);
+
+        List<Map<String, Object>> items = ticketItemLinks(ticketId);
+        assertThat(items).hasSize(1);
+        assertThat(items.get(0).get("catalog_price_id")).isEqualTo(priceA);
+        assertThat(items.get(0).get("factory")).isEqualTo("W3 Factory A");
+    }
+
+    @Test
+    void confirmOrder_onCatalogueLines_letsImportCreateThePerFactoryIrDraft_insteadOf409() {
+        long priceB = insertCatalogProduct("W3 Factory B", "IT", "W3-B", new BigDecimal("10"), "EUR", "per_sqm");
+        long ticketId = pipelineTicket(salesActor);
+        DealQuotationDto approved = approvedQuotation(ticketId, catalogueLineDraft(priceB, "Line B"));
+        confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor);
+        th.co.glr.hr.importrequest.ImportRequestService importRequests =
+            new th.co.glr.hr.importrequest.ImportRequestService(
+                new th.co.glr.hr.importrequest.ImportRequestQueryRepository(jdbc),
+                new th.co.glr.hr.importrequest.ImportRequestRenderer(),
+                new th.co.glr.hr.importrequest.ImportRequestRepository(jdbc),
+                new th.co.glr.hr.factory.FactoryConfigRepository(jdbc), tickets, ticketService);
+
+        List<th.co.glr.hr.importrequest.ImportRequestDtos.ImportRequestDto> drafts =
+            importRequests.createDrafts(ticketId, null, salesActor);
+
+        assertThat(drafts).hasSize(1);
+        assertThat(drafts.get(0).factoryName()).isEqualTo("W3 Factory B");
+    }
+
+    /** Guard (green before and after): a free-text line has no catalogue item, so it keeps factory NULL. */
+    @Test
+    void confirmOrder_onAFreeTextLine_keepsFactoryAndCatalogLinkNull() {
+        long ticketId = pipelineTicket(salesActor);
+        DealQuotationDto approved = approvedQuotation(ticketId, catalogueLineDraft(null, "Free text"));
+
+        confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor);
+
+        Map<String, Object> item = ticketItemLinks(ticketId).get(0);
+        assertThat(item.get("factory")).isNull();
+        assertThat(item.get("catalog_price_id")).isNull();
+    }
+
     private long quotationOnlyTicket(UserPrincipal creator) {
         return ticketService.create(new CreateTicketRequest(customer.name(), "NORMAL", customer.name(), customer.id(),
             projectId, null, null, null, List.of(), LocalDate.now().plusDays(7), true), creator).summary().id();

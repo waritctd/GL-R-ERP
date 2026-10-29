@@ -521,7 +521,7 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
      * that event — there is no shortcut through {@code updateStage} that produces it.
      */
     private void walkImportJourneyToDeliveryScheduling(long ticketId) {
-        ticketService.issueImportRequest(ticketId, importActor);
+        ticketService.recordFirstImportRequestIssued(ticketId, 0L, importActor); // pre-V184 shape: IR_ISSUED, no rows
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.PROCUREMENT);
         assertThat(fulfilmentOf(ticketId)).isEqualTo(FulfilmentStatus.IR_ISSUED);
 

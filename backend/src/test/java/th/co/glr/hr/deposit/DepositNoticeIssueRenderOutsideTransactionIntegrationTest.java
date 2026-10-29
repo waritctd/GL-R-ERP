@@ -82,7 +82,7 @@ class DepositNoticeIssueRenderOutsideTransactionIntegrationTest extends Abstract
 
     private DepositNoticeRepository docs;
     private TicketRepository tickets;
-    private DepositNoticeRenderer renderer;
+    private DepositNoticePdfRenderer renderer;
     private UserPrincipal salesRep;
 
     /**
@@ -106,14 +106,14 @@ class DepositNoticeIssueRenderOutsideTransactionIntegrationTest extends Abstract
         // A stub renderer rather than the real one: this test is about WHEN the render runs, not
         // what it produces, and the real toPdf needs a LibreOffice install that CI may not have.
         // It records whether a transaction was active at the moment issue() called it.
-        renderer = mock(DepositNoticeRenderer.class);
+        renderer = mock(DepositNoticePdfRenderer.class);
         when(renderer.toPdf(any())).thenAnswer(invocation -> {
-            DepositNoticeDto rendering = invocation.getArgument(0);
+            DepositNoticeRenderModel rendering = invocation.getArgument(0);
             renderCalls.incrementAndGet();
-            statusSeenByAnotherSession.set(statusFromAnIndependentSession(rendering.id()));
+            statusSeenByAnotherSession.set(statusFromAnIndependentSession(rendering.docNumber()));
             return new byte[] {1};
         });
-        when(renderer.toXlsx(any())).thenReturn(new byte[] {2});
+        when(renderer.toXls(any())).thenReturn(new byte[] {2});
 
         long repId = new EmployeeRepository(jdbc, new EmployeeReferenceRepository(jdbc),
             new EmployeeCodeGenerator(jdbc))
@@ -228,13 +228,13 @@ class DepositNoticeIssueRenderOutsideTransactionIntegrationTest extends Abstract
      * {@code DRAFT} promptly rather than hanging. The short timeout is belt-and-braces: a wedged
      * build is far more expensive to diagnose than a fast red.
      */
-    private String statusFromAnIndependentSession(long docId) {
+    private String statusFromAnIndependentSession(String docNumber) {
         // try-with-resources: ExecutorService is AutoCloseable on Java 21 (close() awaits termination),
         // so the future is cancelled first on any failure to keep close() from waiting on a running task.
         try (ExecutorService executor = Executors.newSingleThreadExecutor()) {
             Future<String> read = executor.submit(() -> jdbc.queryForObject(
-                "SELECT status FROM sales.deposit_notice WHERE deposit_notice_id = :id",
-                Map.of("id", docId), String.class));
+                "SELECT status FROM sales.deposit_notice WHERE doc_number = :n",
+                Map.of("n", docNumber), String.class));
             try {
                 return read.get(10, TimeUnit.SECONDS);
             } catch (Exception exception) {
@@ -246,7 +246,7 @@ class DepositNoticeIssueRenderOutsideTransactionIntegrationTest extends Abstract
 
     private DepositNoticeService service() {
         return new DepositNoticeService(docs, tickets, new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP),
-            renderer, new RemainingInvoiceRenderer(), new CustomerRepository(jdbc),
+            renderer, new CustomerRepository(jdbc),
             new CustomerQuotationRepository(jdbc));
     }
 

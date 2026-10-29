@@ -1110,23 +1110,22 @@ class TicketServiceTest {
     }
 
     @Test
-    void issueImportRequest_fromDepositNoticeIssued_startsFulfillment() {
+    void issueImportRequest_fromDepositNoticeIssued_isRefused_perFactoryIrOnly() {
+        // W3-04 (owner ruling 2026-10-29): the one-click IR is closed for every deal.
         stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_NOTICE_ISSUED", null);
 
-        service.issueImportRequest(10L, importActor);
+        assertConflict(() -> service.issueImportRequest(10L, importActor));
 
-        verify(ticketRepo).updateFulfillmentStatus(10L, "IR_ISSUED");
+        verify(ticketRepo, never()).updateFulfillmentStatus(anyLong(), anyString());
     }
 
     @Test
-    void issueImportRequest_fromDepositPaid_isAlsoAllowed() {
-        // Deposit-first ordering (deadlock A): the customer often pays before import
-        // gets to the IR — that must not lock the fulfillment track out forever.
+    void issueImportRequest_fromDepositPaid_isRefusedToo() {
         stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_PAID", null);
 
-        service.issueImportRequest(10L, importActor);
+        assertConflict(() -> service.issueImportRequest(10L, importActor));
 
-        verify(ticketRepo).updateFulfillmentStatus(10L, "IR_ISSUED");
+        verify(ticketRepo, never()).updateFulfillmentStatus(anyLong(), anyString());
     }
 
     @Test
@@ -2167,20 +2166,19 @@ class TicketServiceTest {
         // Rule 5 (payment-track state machine): null no longer qualifies as "deposit bypassed" on
         // its own — a bypass-policy deal must have actually reached CUSTOMER_CONFIRMED first (via
         // confirmCustomer). This used to succeed straight from null; it is now refused, and the
-        // CUSTOMER_CONFIRMED case below is what still proves "issueImportRequest can bypass
-        // notice" for a WAIVED/NOT_REQUIRED/CREDIT_CUSTOMER deal.
-        stubDeal(11L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
+        // CUSTOMER_CONFIRMED case below is what still proves the issuable gate (shared with the
+        // per-factory issue) lets a WAIVED/NOT_REQUIRED/CREDIT_CUSTOMER deal bypass the notice.
+        TicketDto nullWaived = stubDeal(11L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
             DealStage.ORDER_RECEIVED, null, DealLifecycle.ACTIVE, DepositPolicy.WAIVED);
-        assertConflict(() -> service.issueImportRequest(11L, importActor));
+        assertConflict(() -> service.requireImportRequestIssuable(nullWaived.summary()));
 
-        stubDeal(13L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), "CUSTOMER_CONFIRMED", null,
+        TicketDto confirmedWaived = stubDeal(13L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), "CUSTOMER_CONFIRMED", null,
             DealStage.ORDER_RECEIVED, null, DealLifecycle.ACTIVE, DepositPolicy.WAIVED);
-        service.issueImportRequest(13L, importActor);
-        verify(ticketRepo).updateFulfillmentStatus(13L, "IR_ISSUED");
+        service.requireImportRequestIssuable(confirmedWaived.summary());
 
-        stubDeal(12L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
+        TicketDto nullRequired = stubDeal(12L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
             DealStage.ORDER_RECEIVED, null, DealLifecycle.ACTIVE, DepositPolicy.REQUIRED);
-        assertConflict(() -> service.issueImportRequest(12L, importActor));
+        assertConflict(() -> service.requireImportRequestIssuable(nullRequired.summary()));
     }
 
     @Test
@@ -2458,11 +2456,11 @@ class TicketServiceTest {
     }
 
     @Test
-    void issueImportRequest_autoAdvancesDealToProcurement() {
+    void issueImportRequest_refused_doesNotAdvanceDealToProcurement() {
         stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(),
             "DEPOSIT_PAID", null, DealStage.DEPOSIT_RECEIVED, null);
-        service.issueImportRequest(10L, importActor);
-        verify(ticketRepo).updateSalesStage(10L, DealStage.PROCUREMENT);
+        assertConflict(() -> service.issueImportRequest(10L, importActor));
+        verify(ticketRepo, never()).updateSalesStage(anyLong(), anyString());
     }
 
     @Test

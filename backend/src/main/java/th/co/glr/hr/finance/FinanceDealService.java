@@ -172,7 +172,7 @@ public class FinanceDealService {
             remainingInvoices.findByTicket(ticketId).stream().filter(r -> !"DRAFT".equals(r.status()))
                 .map(r -> new FinanceDealDto.RemainingInvoiceDoc(r.id(), r.docNumber(), r.version(), r.status(),
                     r.docDate(), r.grandTotal(), FinanceDealDto.INCLUDING_VAT,
-                    "/api/remaining-invoices/" + r.id() + "/file"))
+                    "/api/remaining-invoices/" + r.id() + "/file?format=pdf"))
                 .toList(),
             files.stream().filter(a -> AttachType.INVOICE.equals(a.attachType())).map(FinanceDealService::toFileDoc).toList(),
             finance.findLiveBillingNotesForTicket(ticketId),

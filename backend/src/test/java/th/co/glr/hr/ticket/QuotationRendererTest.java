@@ -82,7 +82,7 @@ class QuotationRendererTest {
         // Originally exercised a multiline CUSTOMER ADDRESS — but QuotationRenderer never
         // writes customer().address() onto the quotation template at all (the quotation
         // template has no address cell; see docs/V4(PDF Generator)/document-generation-fix.md
-        // §A2, contrast with DepositNoticeRenderer's B8 which does). Re-target the same
+        // §A2, contrast with the deposit-notice renderer's B8 which does). Re-target the same
         // "embedded newline must not crash the render, and both lines must survive" property
         // onto projectName (B8), a free-text field the renderer actually writes verbatim.
         TicketDto ticket = ticket(List.of(item(1, "Cotto", "Marble", BigDecimal.ONE, BigDecimal.TEN)),

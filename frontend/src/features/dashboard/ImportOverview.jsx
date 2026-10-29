@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQueries, useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
@@ -178,6 +178,29 @@ export function ImportOverview({ user, employee }) {
   const pricingRequests = useMemo(() => pricingQueueQuery.data ?? [], [pricingQueueQuery.data]);
   const loading = ticketsQuery.isLoading || pricingQueueQuery.isLoading;
 
+  // W3-02: shipments are PER FACTORY (one stored ใบขอซื้อ row each), so the ขนส่ง tile and the
+  // กำลังขนส่ง list read the rows exactly as /fulfilment does — same candidate filter, same query key.
+  const candidateIds = useMemo(() => tickets
+    .filter((t) => t.fulfillmentStatus != null
+      && t.fulfillmentStatus !== 'FROM_STOCK'
+      && t.fulfillmentStatus !== 'FULLY_DELIVERED')
+    .map((t) => t.id), [tickets]);
+  const rowsQueries = useQueries({
+    queries: candidateIds.map((ticketId) => ({
+      queryKey: queryKeys.storedImportRequests(ticketId),
+      queryFn: () => api.storedImportRequests.listForTicket(ticketId).then((r) => r?.importRequests ?? []),
+    })),
+  });
+  const inTransitShipments = useMemo(() => {
+    const byTicket = new Map();
+    candidateIds.forEach((id, i) => {
+      const n = (rowsQueries[i]?.data ?? [])
+        .filter((r) => r.status === 'ISSUED' && r.importStep === 'IN_TRANSIT').length;
+      if (n > 0) byTicket.set(id, n);
+    });
+    return byTicket;
+  }, [candidateIds, rowsQueries]);
+
   const prByTicket = useMemo(() => {
     const map = new Map();
     pricingRequests.forEach((pr) => {
@@ -230,12 +253,13 @@ export function ImportOverview({ user, employee }) {
       const bucket = FULFILMENT_ACTION_TO_BUCKET[code];
       if (bucket) counts[bucket] += 1;
     });
+    inTransitShipments.forEach((n) => { counts.shipping += n; });
     return counts;
-  }, [tickets, pricingRequests]);
+  }, [tickets, pricingRequests, inTransitShipments]);
 
   const inTransit = useMemo(
-    () => tickets.filter((t) => IN_TRANSIT_STATUSES.includes(t.fulfillmentStatus)),
-    [tickets],
+    () => tickets.filter((t) => IN_TRANSIT_STATUSES.includes(t.fulfillmentStatus) || inTransitShipments.has(t.id)),
+    [tickets, inTransitShipments],
   );
 
   const filteredRows = useMemo(() => {

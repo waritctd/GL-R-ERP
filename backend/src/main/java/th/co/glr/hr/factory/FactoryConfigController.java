@@ -27,6 +27,12 @@ public class FactoryConfigController {
      */
     private static final String[] READ_ROLES = { "ceo", "import" };
 
+    /** Names only (W3-03 follow-up, owner ruling 2026-10-29): the owning sales rep and sales_manager pick a
+     * factory for a factory-less line when creating the IR. No email/currency/unit leaves this route. */
+    private static final String[] NAME_READ_ROLES = { "ceo", "import", "sales", "sales_manager" };
+
+    public record FactoryNameDto(long id, String factoryName) {}
+
     private final FactoryConfigRepository repo;
     private final SessionContext sessions;
 
@@ -40,5 +46,13 @@ public class FactoryConfigController {
         UserPrincipal user = sessions.requireUser(session);
         sessions.requireAnyRole(user, READ_ROLES);
         return Map.of("factories", repo.findAll());
+    }
+
+    @GetMapping("/names")
+    Map<String, List<FactoryNameDto>> names(HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        sessions.requireAnyRole(user, NAME_READ_ROLES);
+        return Map.of("factories", repo.findAll().stream()
+            .map(f -> new FactoryNameDto(f.id(), f.factoryName())).toList());
     }
 }

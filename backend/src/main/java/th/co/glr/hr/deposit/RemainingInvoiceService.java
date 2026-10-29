@@ -47,10 +47,10 @@ public class RemainingInvoiceService {
     private final RemainingInvoiceRepository stored;
     private final DepositNoticeService depositNoticeService;
     private final TicketRepository tickets;
-    private final RemainingInvoiceRenderer renderer;
+    private final RemainingInvoicePdfRenderer renderer;
 
     public RemainingInvoiceService(RemainingInvoiceRepository stored, DepositNoticeService depositNoticeService,
-            TicketRepository tickets, RemainingInvoiceRenderer renderer) {
+            TicketRepository tickets, RemainingInvoicePdfRenderer renderer) {
         this.stored = stored;
         this.depositNoticeService = depositNoticeService;
         this.tickets = tickets;
@@ -77,9 +77,20 @@ public class RemainingInvoiceService {
         RemainingInvoiceDocumentDto doc = requireStored(id);
         depositNoticeService.requireTicketViewer(doc.ticketId(), actor);
         try {
-            return renderer.toXlsx(toRenderable(doc));
+            return renderer.toXls(toRenderable(doc));
         } catch (Exception e) {
             throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "สร้างไฟล์ Excel ไม่สำเร็จ: " + e.getMessage());
+        }
+    }
+
+    /** The same frozen snapshot as {@link #file}, as a PDF. */
+    public byte[] getPdf(long id, UserPrincipal actor) {
+        RemainingInvoiceDocumentDto doc = requireStored(id);
+        depositNoticeService.requireTicketViewer(doc.ticketId(), actor);
+        try {
+            return renderer.toPdf(toRenderable(doc));
+        } catch (Exception e) {
+            throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "สร้างไฟล์ PDF ไม่สำเร็จ: " + e.getMessage());
         }
     }
 
@@ -140,9 +151,7 @@ public class RemainingInvoiceService {
 
         List<RemainingInvoiceItemDto> items = resolved.items();
         BigDecimal depositAmount = nz(resolved.depositAmount());
-        requireCapacity(items, depositAmount);
         List<String> notes = req != null && req.notes() != null ? req.notes() : defaultNotes();
-        requireNotesCapacity(notes);
 
         BigDecimal itemsTotal = sumAmounts(items);
         DepositNoticeService.RemainingInvoiceMoney money = depositNoticeService.computeRemainingInvoiceMoney(itemsTotal, depositAmount);
@@ -192,9 +201,7 @@ public class RemainingInvoiceService {
 
         List<RemainingInvoiceItemDto> items = resolved.items();
         BigDecimal depositAmount = nz(resolved.depositAmount());
-        requireCapacity(items, depositAmount);
         List<String> notes = req != null && req.notes() != null ? req.notes() : existing.notes();
-        requireNotesCapacity(notes);
 
         BigDecimal itemsTotal = sumAmounts(items);
         DepositNoticeService.RemainingInvoiceMoney money = depositNoticeService.computeRemainingInvoiceMoney(itemsTotal, depositAmount);
@@ -258,8 +265,6 @@ public class RemainingInvoiceService {
             throw new ApiException(HttpStatus.CONFLICT, "ใบแจ้งหนี้ส่วนที่เหลือยังไม่มีรายการสินค้า");
         }
         BigDecimal depositAmount = nz(resolved.depositAmount());
-        requireCapacity(items, depositAmount);
-        requireNotesCapacity(draft.notes());
 
         BigDecimal itemsTotal = sumAmounts(items);
         DepositNoticeService.RemainingInvoiceMoney money = depositNoticeService.computeRemainingInvoiceMoney(itemsTotal, depositAmount);
@@ -391,20 +396,21 @@ public class RemainingInvoiceService {
 
     // ── helpers ──────────────────────────────────────────────────────────────────────────────
 
-    /** Converts a stored snapshot back into the shape {@link RemainingInvoiceRenderer} already
-     * knows how to render — the ONE conversion point, so the renderer itself never needs to know
-     * whether it is rendering a live preview or a frozen stored snapshot. */
-    private RemainingInvoiceDto toRenderable(RemainingInvoiceDocumentDto doc) {
+    /** The STORED snapshot as the renderer prints it. The preparer is the linked deposit notice's own; a deal with no
+     * notice (deposit bypass) passes none, so the template's own preparer line prints. */
+    private RemainingInvoiceRenderModel toRenderable(RemainingInvoiceDocumentDto doc) {
         List<RemainingInvoiceItemDto> items = (doc.items() != null ? doc.items() : List.<RemainingInvoiceDocumentItemDto>of())
             .stream()
             .map(it -> new RemainingInvoiceItemDto(it.seq(), it.description(), it.qty(), it.unit(),
                 it.unitPrice(), it.discountLabel(), it.netUnitPrice(), it.amount()))
             .toList();
-        return new RemainingInvoiceDto(
-            doc.docNumber() != null ? doc.docNumber() : "(ร่าง)",
-            doc.docDate(), doc.reference(), doc.depositReference(),
-            doc.customerName(), doc.customerBranch(), doc.customerAddress(), doc.customerTaxId(),
-            doc.projectName(), nz(doc.depositDeduction()), doc.notes(), items, doc.vatAmount(), doc.grandTotal());
+        String preparer = doc.depositNoticeId() == null ? null : depositNoticeService.preparerNameOf(doc.depositNoticeId());
+        return new RemainingInvoiceRenderModel(
+            doc.docDate(), doc.docNumber() != null ? doc.docNumber() : "(ร่าง)",
+            doc.customerName(), doc.customerBranch(), doc.customerTaxId(), doc.customerAddress(), doc.projectName(),
+            doc.reference(), doc.depositReference(), items,
+            nz(doc.depositDeduction()), doc.netAmount(), doc.vatAmount(), doc.grandTotal(),
+            preparer);
     }
 
     private List<String> defaultNotes() {
@@ -412,25 +418,6 @@ public class RemainingInvoiceService {
             .filter(DocumentNoteTemplateDto::defaultSelected)
             .map(DocumentNoteTemplateDto::text)
             .toList();
-    }
-
-    private void requireCapacity(List<RemainingInvoiceItemDto> items, BigDecimal depositAmount) {
-        int depositRowCount = depositAmount.compareTo(BigDecimal.ZERO) != 0 ? 1 : 0;
-        if (items.size() + depositRowCount > RemainingInvoiceRenderer.MAX_ITEM_ROWS) {
-            throw new ApiException(HttpStatus.CONFLICT,
-                "ใบแจ้งหนี้ส่วนที่เหลือมีรายการ " + items.size() + " รายการ"
-                + (depositRowCount > 0 ? " บวกแถวหักมัดจำ" : "")
-                + " เกินความจุของแบบฟอร์ม (สูงสุด " + RemainingInvoiceRenderer.MAX_ITEM_ROWS + " แถว)"
-                + " กรุณารวมรายการหรือออกเอกสารหลายฉบับ");
-        }
-    }
-
-    private void requireNotesCapacity(List<String> notes) {
-        if (RemainingInvoiceRenderer.wrapNotes(notes).size() > RemainingInvoiceRenderer.MAX_NOTE_LINES) {
-            throw new ApiException(HttpStatus.CONFLICT,
-                "หมายเหตุที่เลือกยาวเกินพื้นที่ในแบบฟอร์ม (สูงสุด " + RemainingInvoiceRenderer.MAX_NOTE_LINES
-                + " บรรทัด) กรุณาลดจำนวนหรือย่อข้อความหมายเหตุ");
-        }
     }
 
     private BigDecimal sumAmounts(List<RemainingInvoiceItemDto> items) {

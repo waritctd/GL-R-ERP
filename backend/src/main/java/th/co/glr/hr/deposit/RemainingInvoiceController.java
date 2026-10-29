@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
@@ -91,14 +92,23 @@ public class RemainingInvoiceController {
     }
 
     @GetMapping("/remaining-invoices/{id}/file")
-    ResponseEntity<byte[]> file(@PathVariable long id, HttpSession session) {
+    ResponseEntity<byte[]> file(
+        @PathVariable long id,
+        @RequestParam(defaultValue = "xlsx") String format,
+        HttpSession session
+    ) {
         UserPrincipal user = sessions.requireUser(session);
         RemainingInvoiceDocumentDto doc = service.get(id, user);
-        byte[] bytes = service.file(id, user);
-        String filename = (doc.docNumber() != null ? doc.docNumber() : "draft-" + id) + ".xls";
+        String base = doc.docNumber() != null ? doc.docNumber() : "draft-" + id;
+        if ("pdf".equals(format == null ? "" : format.trim().toLowerCase())) {
+            return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + base + ".pdf\"")
+                .contentType(MediaType.APPLICATION_PDF)
+                .body(service.getPdf(id, user));
+        }
         return ResponseEntity.ok()
-            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
+            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + base + ".xls\"")
             .contentType(MediaType.parseMediaType("application/vnd.ms-excel"))
-            .body(bytes);
+            .body(service.file(id, user));
     }
 }

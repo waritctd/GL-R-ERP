@@ -131,6 +131,7 @@ export const queryKeys = {
   // The STORED ใบขอซื้อ aggregate (V184, PR-B) — one entry per deal's whole per-factory list, and
   // one for a single row by its own id (the edit/issue/advance-step screens load this before
   // acting on a specific version).
+  factoryNames: () => ['factoryConfigs', 'names'],
   // PR-B REVIEW ROUND 1, S6 — see ticketDetail's own comment above for why Number() matters here:
   // ImportFulfilmentPage's rowsQueries and DealFulfilmentPanel's own storedIrQuery must land on the
   // SAME cache entry for the same deal regardless of whether their ticketId arrived as a route

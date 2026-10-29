@@ -15,6 +15,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
     api: {
       tickets: { list: vi.fn() },
       pricingRequests: { queue: vi.fn() },
+      storedImportRequests: { listForTicket: vi.fn() },
     },
   };
 });
@@ -62,6 +63,7 @@ describe('ImportOverview', () => {
     vi.clearAllMocks();
     api.tickets.list.mockResolvedValue({ tickets: TICKETS });
     api.pricingRequests.queue.mockResolvedValue({ items: PRICING_REQUESTS });
+    api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: [] });
   });
 
   it('renders without SalesTabs (import no longer browses the deal pipeline)', async () => {
@@ -86,7 +88,9 @@ describe('ImportOverview', () => {
 
     expect(pulseCount('เกินกำหนด')).toBe('1'); // D-002 only
     expect(pulseCount('ตั้งราคา')).toBe('2'); // both pricing-request rows
-    expect(pulseCount('จัดซื้อ/นำเข้า')).toBe('2'); // D-001 (issue) + D-002 (send)
+    // W3-01 (owner ruling 2026-10-29): D-001 (confirmed, no IR yet) is NOT an import to-do — the dashboard
+    // lists what /fulfilment lists (an ISSUED IR onward), so only D-002 counts here.
+    expect(pulseCount('จัดซื้อ/นำเข้า')).toBe('1');
     expect(pulseCount('ขนส่ง')).toBe('1'); // D-003 (markShipping pending)
     expect(pulseCount('รับเข้าคลัง')).toBe('1'); // D-004 (markGoodsReceived pending)
     // Owner ruling 2026-08-17: stage 13-14 (ส่งมอบสินค้า) prompting moved to Sales — the ส่งมอบ tile
@@ -112,8 +116,8 @@ describe('ImportOverview', () => {
     const rows = within(panel).getAllByText(/^บริษัท /).map((el) => el.textContent);
     // D-005 (GOODS_RECEIVED, "บริษัท E") no longer produces a row at all — nextImportAction now
     // returns null for a delivery-ready deal (owner ruling 2026-08-17: that prompt is Sales' now).
-    // 5, not the former 6.
-    expect(rows).toHaveLength(5);
+    // 4: D-001 (no IR yet, W3-01) and D-005 (delivery-ready) produce no row.
+    expect(rows).toHaveLength(4);
     // D-002 is the only overdue deal — it must lead the worklist regardless
     // of its fulfilment stage.
     expect(rows[0]).toBe('บริษัท B');
@@ -125,7 +129,9 @@ describe('ImportOverview', () => {
       return within(row).getByRole('button').textContent;
     }
 
-    expect(ctaFor('บริษัท A')).toBe('ออกคำขอนำเข้า');
+    // W3-01: a confirmed deal with no IR yet shows NO entry and NO ออกคำขอนำเข้า button.
+    expect(within(panel).queryByText('บริษัท A')).toBeNull();
+    expect(within(panel).queryByRole('button', { name: 'ออกคำขอนำเข้า' })).toBeNull();
     // PR-B REVIEW ROUND 1, S8: IR_ISSUED's CTA is now the neutral "อัปเดตสถานะนำเข้า" — the old
     // "ส่งคำขอนำเข้าแล้ว" implied a single legacy click /fulfilment no longer performs for an
     // IR-tracked deal (see importActions.js's nextImportAction, markIrSent branch).
@@ -142,15 +148,15 @@ describe('ImportOverview', () => {
     renderOverview();
     await screen.findAllByText(/^บริษัท /);
 
-    // 5, not the former 6 — D-005 (GOODS_RECEIVED) no longer produces a worklist row at all.
-    expect(within(worklistPanel()).getAllByText(/^บริษัท /)).toHaveLength(5);
+    // 4 — neither D-001 (no IR yet, W3-01) nor D-005 (GOODS_RECEIVED) produces a worklist row.
+    expect(within(worklistPanel()).getAllByText(/^บริษัท /)).toHaveLength(4);
 
     fireEvent.click(screen.getByText('รับเข้าคลัง').closest('button'));
     expect(await within(worklistPanel()).findAllByText(/^บริษัท /)).toHaveLength(1);
     expect(within(worklistPanel()).getByText('บริษัท D')).toBeTruthy();
 
     fireEvent.click(screen.getByText('ล้างตัวกรอง'));
-    expect(await within(worklistPanel()).findAllByText(/^บริษัท /)).toHaveLength(5);
+    expect(await within(worklistPanel()).findAllByText(/^บริษัท /)).toHaveLength(4);
   });
 });
 
@@ -178,15 +184,16 @@ describe('ImportOverview deal links', () => {
     vi.clearAllMocks();
     api.tickets.list.mockResolvedValue({ tickets: TICKETS });
     api.pricingRequests.queue.mockResolvedValue({ items: PRICING_REQUESTS });
+    api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: [] });
   });
 
   it('sends a legacy-action CTA to /import/deals/:id', async () => {
     renderWithProbe();
     await screen.findAllByText(/^บริษัท /);
     const panel = screen.getByText('สิ่งที่ต้องทำ').closest('section');
-    const row = within(panel).getByText('บริษัท A').closest('div').parentElement.parentElement;
+    const row = within(panel).getByText('บริษัท C').closest('div').parentElement.parentElement;
     fireEvent.click(within(row).getByRole('button'));
-    expect(screen.getByTestId('location').textContent).toBe('/import/deals/1');
+    expect(screen.getByTestId('location').textContent).toBe('/import/deals/3');
   });
 
   // BUG B: รับงาน · ขอราคา used to navigate to the queue (/pricing-requests), whose default import
@@ -207,5 +214,44 @@ describe('ImportOverview deal links', () => {
     const transit = screen.getByText('กำลังขนส่ง').closest('section');
     fireEvent.click(within(transit).getByText('บริษัท C').closest('button'));
     expect(screen.getByTestId('location').textContent).toBe('/import/deals/3');
+  });
+});
+
+// W3-02 (owner ruling 2026-10-29): the ขนส่ง tile and the กำลังขนส่ง list count PER-FACTORY shipments, the
+// way /fulfilment does (one stored ใบขอซื้อ row at step IN_TRANSIT = one shipment) — a deal whose
+// deal-level status is still IR_ISSUED can have factories on the water.
+describe('ImportOverview per-factory in-transit', () => {
+  const TRACKED = [
+    { id: 21, code: 'D-021', title: 'ดีล 21', customerName: 'บริษัท รายโรงงาน', status: 'quotation_issued', fulfillmentStatus: 'IR_ISSUED', overdue: false, updatedAt: '2026-07-01T00:00:00Z' },
+  ];
+  const ROWS = [
+    { id: 1, ticketId: 21, status: 'ISSUED', importStep: 'IN_TRANSIT', factoryName: 'โรงงาน ก' },
+    { id: 2, ticketId: 21, status: 'ISSUED', importStep: 'IN_TRANSIT', factoryName: 'โรงงาน ข' },
+    { id: 3, ticketId: 21, status: 'ISSUED', importStep: 'ORDERED', factoryName: 'โรงงาน ค' },
+  ];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.tickets.list.mockResolvedValue({ tickets: TRACKED });
+    api.pricingRequests.queue.mockResolvedValue({ items: [] });
+    api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: ROWS });
+  });
+
+  it('counts each IN_TRANSIT factory shipment on the ขนส่ง tile (2 of 3 rows), not the deal-level status', async () => {
+    renderOverview();
+    await screen.findAllByText(/^บริษัท /);
+    const pulsePanel = screen.getByText('สถานะงานทั้งหมด').closest('section');
+    await vi.waitFor(() => {
+      expect(within(pulsePanel).getByText('ขนส่ง').closest('button').querySelector('span').textContent).toBe('2');
+    });
+  });
+
+  it('lists the deal under กำลังขนส่ง because a factory shipment is in transit', async () => {
+    renderOverview();
+    await screen.findAllByText(/^บริษัท /);
+    const transit = screen.getByText('กำลังขนส่ง').closest('section');
+    await vi.waitFor(() => {
+      expect(within(transit).getByText('บริษัท รายโรงงาน')).toBeTruthy();
+    });
   });
 });

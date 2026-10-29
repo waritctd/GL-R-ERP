@@ -1,8 +1,11 @@
 package th.co.glr.hr.factory;
 
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.not;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.time.LocalDate;
@@ -53,6 +56,29 @@ class FactoryConfigControllerTest {
     @Test
     void listIsUnauthorizedWithoutASession() throws Exception {
         mvc.perform(get("/api/factory-configs")).andExpect(status().isUnauthorized());
+    }
+
+    // W3-03 follow-up (owner ruling 2026-10-29): the owning sales rep picks a factory for a free-text
+    // line when creating the IR, so sales needs the NAMES only — never the emails/currency #388 gated.
+    @Test
+    void namesAreReadableByIrCreators_andExposeOnlyIdAndName() throws Exception {
+        when(repo.findAll()).thenReturn(List.of(
+            new FactoryConfigDto(7L, "Rex Ceramics", "rfq@rex.example", "EUR", "sqm", "IT", null)));
+        for (String role : List.of("ceo", "import", "sales", "sales_manager")) {
+            mvc.perform(get("/api/factory-configs/names").session(session(role)))
+                .andExpect(status().is2xxSuccessful())
+                .andExpect(content().string(containsString("Rex Ceramics")))
+                .andExpect(content().string(not(containsString("rfq@rex.example"))));
+        }
+    }
+
+    @Test
+    void namesAreForbiddenForOtherRoles() throws Exception {
+        when(repo.findAll()).thenReturn(List.of());
+        for (String role : List.of("employee", "warehouse", "qc", "hr", "account")) {
+            mvc.perform(get("/api/factory-configs/names").session(session(role)))
+                .andExpect(status().isForbidden());
+        }
     }
 
     private MockHttpSession session(String role) {

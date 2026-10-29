@@ -35,10 +35,10 @@ import th.co.glr.hr.customerquotation.CustomerQuotationRequests.RecordQuotationO
 import th.co.glr.hr.customerquotation.CustomerQuotationService;
 import th.co.glr.hr.dealquotation.WastageCalculator;
 import th.co.glr.hr.deposit.DepositNoticeDto;
-import th.co.glr.hr.deposit.DepositNoticeRenderer;
+import th.co.glr.hr.deposit.DepositNoticePdfRenderer;
 import th.co.glr.hr.deposit.DepositNoticeRepository;
 import th.co.glr.hr.deposit.DepositNoticeService;
-import th.co.glr.hr.deposit.RemainingInvoiceRenderer;
+import th.co.glr.hr.deposit.RemainingInvoicePdfRenderer;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
@@ -185,7 +185,7 @@ class DerivedFulfilmentRollupIntegrationTest extends AbstractPostgresIntegration
 
         DepositNoticeRepository depositNoticeRepository = new DepositNoticeRepository(jdbc);
         depositNoticeService = new DepositNoticeService(depositNoticeRepository, tickets, notifications,
-            new DepositNoticeRenderer(), new RemainingInvoiceRenderer(), customers, quotationRepository);
+            new DepositNoticePdfRenderer(), customers, quotationRepository);
 
         orderConfirmation = new OrderConfirmationService(
             pricingRequests, tickets, ticketService, quotationRepository, depositNoticeService, notifications);
@@ -503,7 +503,8 @@ class DerivedFulfilmentRollupIntegrationTest extends AbstractPostgresIntegration
         assertThat(afterDeposit.summary().salesStage()).isEqualTo(DealStage.DEPOSIT_RECEIVED);
 
         if (issueImportRequest) {
-            TicketDto afterIr = ticketService.issueImportRequest(deal.ticketId, importActor);
+            ticketService.recordFirstImportRequestIssued(deal.ticketId, 0L, importActor); // pre-V184 shape: IR_ISSUED, no rows
+            TicketDto afterIr = tickets.findById(deal.ticketId).orElseThrow();
             assertThat(afterIr.summary().salesStage()).isEqualTo(DealStage.PROCUREMENT);
             assertThat(afterIr.summary().fulfillmentStatus()).isEqualTo(FulfilmentStatus.IR_ISSUED);
         }

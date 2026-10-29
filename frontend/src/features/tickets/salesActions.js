@@ -351,7 +351,7 @@ export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = nul
   //    - `ownPrs.length === 0` — this deal never entered the chain at all.
   //      Not the same test as `!hasLivePr`: a customer-change revision leaves
   //      {parent SUPERSEDED, child DRAFT}, which is "no LIVE request" but is
-  //      emphatically still in the chain, and its rep does need a CTA.
+  //      emphatically still in the chain; its DRAFT is sent below, not a second request created.
   //    - evidence a customer-facing price already went out: a quoted status,
   //      or any paymentStatus (whose own amount-payable precondition means a
   //      price exists, even though recordPayment itself checks no status).
@@ -377,6 +377,12 @@ export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = nul
     const pricedOutsidePcrChain = ownPrs.length === 0
       && (QUOTED_STATUSES.has(deal.status) || deal.paymentStatus != null);
     if (!pricedOutsidePcrChain) {
+      // Several: the customer-change revision's draft (it has a parent) first, then the newest.
+      const draft = ownPrs.filter((pr) => pr.status === 'DRAFT')
+        .sort((a, b) => (b.parentPricingRequestId != null) - (a.parentPricingRequestId != null) || b.id - a.id)[0];
+      if (draft) {
+        return { key: SALES_ACTION.SUBMIT_PRICING_REQUEST, label: `ส่งคำขอราคาถึง${PARTY_LABEL[draft.recipientType]}`, pricingRequestId: draft.id };
+      }
       return { key: SALES_ACTION.CREATE_PCR, label: ACTION_LABEL[SALES_ACTION.CREATE_PCR] };
     }
   }

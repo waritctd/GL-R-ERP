@@ -150,14 +150,14 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
 
         DepositNoticeRepository depositNoticeRepository = new DepositNoticeRepository(jdbc);
         depositNoticeService = new DepositNoticeService(depositNoticeRepository, tickets, notifications,
-            new DepositNoticeRenderer(), new RemainingInvoiceRenderer(), customers, quotationRepository);
+            new DepositNoticePdfRenderer(), customers, quotationRepository);
 
         orderConfirmation = new OrderConfirmationService(
             pricingRequests, tickets, ticketService, quotationRepository, depositNoticeService, notifications);
 
         remainingInvoiceRepository = new RemainingInvoiceRepository(jdbc);
         remainingInvoiceService = new RemainingInvoiceService(
-            remainingInvoiceRepository, depositNoticeService, tickets, new RemainingInvoiceRenderer());
+            remainingInvoiceRepository, depositNoticeService, tickets, new RemainingInvoicePdfRenderer());
 
         salesRepId = createEmployee(employees, "พนักงานขาย RI", "sales-ri1@glr.co.th", "SALES", "แผนกขาย");
         otherSalesRepId = createEmployee(employees, "พนักงานขาย RI2", "sales-ri2@glr.co.th", "SALES", "แผนกขาย");
@@ -233,6 +233,99 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         assertThat(issued.vatAmount())
             .isEqualByComparingTo(issued.netAmount().multiply(new BigDecimal("0.07")).setScale(2, RoundingMode.HALF_UP));
         assertThat(issued.grandTotal()).isEqualByComparingTo(issued.netAmount().add(issued.vatAmount()));
+    }
+
+    /** Fresh-engine ruling 3: on the LEGACY path (no accepted quotation -> resolveLegacy) the draft's reference
+     * defaults to the latest ISSUED deposit notice's reference (it used to be null -> a blank reference cell). */
+    @Test
+    void createDraft_legacyPath_defaultsTheReferenceToTheIssuedDepositNoticesReference() {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "LegacyRef");
+        String noticeReference = depositNoticeService.getById(fixture.depositNoticeId(), salesActor).reference();
+        assertThat(noticeReference).as("fixture: the issued notice carries a reference").isNotBlank();
+        // No ACCEPTED quotation any more -> resolveRemainingInvoice falls through to resolveLegacy.
+        jdbc.update("UPDATE sales.quotation SET doc_status = 'REJECTED' WHERE ticket_id = :t",
+            Map.of("t", fixture.ticketId()));
+
+        RemainingInvoiceDocumentDto draft = remainingInvoiceService.createDraft(fixture.ticketId(), null, salesActor);
+
+        assertThat(draft.customerQuotationId()).as("really the legacy path: no quotation link").isNull();
+        assertThat(draft.reference()).isEqualTo(noticeReference);
+        // An explicit reference from the dialog still wins over the default.
+        RemainingInvoiceDocumentDto edited = remainingInvoiceService.updateDraft(draft.id(),
+            new RemainingInvoiceDraftRequest(null, "PO-EDITED-2", null, null, null), salesActor);
+        assertThat(edited.reference()).isEqualTo("PO-EDITED-2");
+    }
+
+    /** Fresh-engine ruling 1: stored notes no longer print -- the file carries only the template's own หมายเหตุ block. */
+    @Test
+    void issuedFile_neverPrintsStoredNotes() throws Exception {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "NotesNotPrinted");
+        String sentinel = "SENTINEL-NOTE-MUST-NOT-PRINT";
+        RemainingInvoiceDocumentDto draft = remainingInvoiceService.createDraft(fixture.ticketId(),
+            new RemainingInvoiceDraftRequest(null, null, null, null, List.of(sentinel)), salesActor);
+        RemainingInvoiceDocumentDto issued = remainingInvoiceService.issue(draft.id(), salesActor);
+
+        byte[] xls = remainingInvoiceService.file(issued.id(), salesActor);
+
+        try (org.apache.poi.ss.usermodel.Workbook wb =
+                 org.apache.poi.ss.usermodel.WorkbookFactory.create(new java.io.ByteArrayInputStream(xls))) {
+            assertThat(wb.getNumberOfSheets()).isEqualTo(1);
+            for (org.apache.poi.ss.usermodel.Row row : wb.getSheetAt(0)) {
+                for (org.apache.poi.ss.usermodel.Cell cell : row) {
+                    if (cell.getCellType() == org.apache.poi.ss.usermodel.CellType.STRING) {
+                        assertThat(cell.getStringCellValue()).doesNotContain(sentinel);
+                    }
+                }
+            }
+        }
+    }
+
+    /** The printed preparer is the linked deposit notice's own; with no notice the template's own line stays
+     * (no Java copy of the V12 default name). */
+    @Test
+    void file_printsTheLinkedNoticesPreparer_orTheTemplatesOwnLineWhenThereIsNone() throws Exception {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "Preparer");
+        jdbc.update("UPDATE sales.deposit_notice SET preparer_name = :n WHERE deposit_notice_id = :id",
+            Map.of("n", "ผู้จัดทำ ทดสอบ", "id", fixture.depositNoticeId()));
+        RemainingInvoiceDocumentDto draft = remainingInvoiceService.createDraft(fixture.ticketId(), null, salesActor);
+        RemainingInvoiceDocumentDto issued = remainingInvoiceService.issue(draft.id(), salesActor);
+
+        assertThat(preparerLine(remainingInvoiceService.file(issued.id(), salesActor))).isEqualTo("( ผู้จัดทำ ทดสอบ )");
+
+        jdbc.update("UPDATE sales.remaining_invoice SET deposit_notice_id = NULL WHERE id = :id", Map.of("id", issued.id()));
+        String templateOwn;
+        try (java.io.InputStream in = getClass().getResourceAsStream("/templates/remaining_invoice_template.xls");
+             org.apache.poi.ss.usermodel.Workbook t = org.apache.poi.ss.usermodel.WorkbookFactory.create(in)) {
+            templateOwn = t.getSheet("Update").getRow(44).getCell(1).getStringCellValue().replaceAll("\\s+", " ").trim();
+        }
+        assertThat(preparerLine(remainingInvoiceService.file(issued.id(), salesActor))).isEqualTo(templateOwn);
+    }
+
+    private static String preparerLine(byte[] xls) throws Exception {
+        try (org.apache.poi.ss.usermodel.Workbook wb =
+                 org.apache.poi.ss.usermodel.WorkbookFactory.create(new java.io.ByteArrayInputStream(xls))) {
+            return wb.getSheetAt(0).getRow(44).getCell(1).getStringCellValue().replaceAll("\\s+", " ").trim();
+        }
+    }
+
+    /** There is no item capacity any more: a deal whose deposit notice carries 30 items still gets a draft, an issued
+     * invoice and a rendered file (it used to be refused with a 409 above 22 rows). */
+    @Test
+    void createDraft_with30Items_succeeds_andRenders() throws Exception {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "ThirtyItems");
+        Integer existing = jdbc.queryForObject("SELECT count(*) FROM sales.deposit_notice_item WHERE deposit_notice_id = :id",
+            Map.of("id", fixture.depositNoticeId()), Integer.class);
+        jdbc.update("""
+            INSERT INTO sales.deposit_notice_item
+                (deposit_notice_id, seq, description, qty, unit, unit_price, discount_label, net_unit_price, amount)
+            SELECT :id, s, 'extra ' || s, 1, 'ชิ้น', 10, NULL, 10, 10 FROM generate_series(:from, 30) s
+            """, Map.of("id", fixture.depositNoticeId(), "from", existing + 1));
+
+        RemainingInvoiceDocumentDto draft = remainingInvoiceService.createDraft(fixture.ticketId(), null, salesActor);
+        assertThat(draft.items()).hasSize(30);
+        RemainingInvoiceDocumentDto issued = remainingInvoiceService.issue(draft.id(), salesActor);
+
+        assertThat(remainingInvoiceService.file(issued.id(), salesActor)).isNotEmpty();
     }
 
     @Test
@@ -465,7 +558,7 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
                 org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.any());
         RemainingInvoiceService racingService =
-            new RemainingInvoiceService(racingRepo, depositNoticeService, tickets, new RemainingInvoiceRenderer());
+            new RemainingInvoiceService(racingRepo, depositNoticeService, tickets, new RemainingInvoicePdfRenderer());
 
         assertThatThrownBy(() -> racingService.createDraft(fixture.ticketId(), null, salesActor))
             .as("a DB-level unique-violation race must surface as 409, never an unmapped 500")
@@ -778,7 +871,7 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
                 org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.any());
         RemainingInvoiceService racingService =
-            new RemainingInvoiceService(racingRepo, depositNoticeService, tickets, new RemainingInvoiceRenderer());
+            new RemainingInvoiceService(racingRepo, depositNoticeService, tickets, new RemainingInvoicePdfRenderer());
 
         assertThatThrownBy(() -> racingService.revise(issued.id(), salesActor))
             .as("a DB-level unique-violation race must surface as 409, never an unmapped 500")

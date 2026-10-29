@@ -20,10 +20,10 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.customerquotation.CustomerQuotationRepository;
-import th.co.glr.hr.deposit.DepositNoticeRenderer;
+import th.co.glr.hr.deposit.DepositNoticePdfRenderer;
 import th.co.glr.hr.deposit.DepositNoticeRepository;
 import th.co.glr.hr.deposit.DepositNoticeService;
-import th.co.glr.hr.deposit.RemainingInvoiceRenderer;
+import th.co.glr.hr.deposit.RemainingInvoicePdfRenderer;
 import th.co.glr.hr.deposit.RevisionRequest;
 import th.co.glr.hr.deposit.RevisionScope;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
@@ -91,7 +91,7 @@ class TicketStatusMachineIntegrationTest extends AbstractPostgresIntegrationTest
             new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
 
         depositNoticeService = new DepositNoticeService(new DepositNoticeRepository(jdbc), tickets,
-            notifications, new DepositNoticeRenderer(), new RemainingInvoiceRenderer(), customers,
+            notifications, new DepositNoticePdfRenderer(), customers,
             new CustomerQuotationRepository(jdbc));
 
         EmployeeRepository employees = new EmployeeRepository(

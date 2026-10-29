@@ -540,6 +540,10 @@ describe('controller surface / hrApi.js contract', () => {
  * stale-entry test below deletes the entry for you.
  */
 const UNREACHABLE_FROM_UI = new Set([
+  // W3-04 (owner ruling 2026-10-29): the one-click legacy "issue IR" is closed — the endpoint now
+  // answers 409 for every deal and no screen calls it. Retire the endpoint and hrApi method together
+  // in a follow-up.
+  'POST /api/tickets/{}/import-request',
   // GLA-99 step 3 (ใบวางบิล / billing note, V189): the STORED backend + renderer + hrApi/mockApi
   // wiring landed on GLA-129 step 4 part 1; the /finance ใบวางบิล tab that calls the rest of these
   // eleven methods is step 4 part 3, a separate branch not yet merged. `GET

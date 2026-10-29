@@ -162,17 +162,13 @@ class ImportRequestPaymentGateIntegrationTest extends AbstractPostgresIntegratio
         assertThat(service.issue(id, null, owner).status()).isEqualTo(ImportRequestStatus.ISSUED);
     }
 
-    /** Same rule on the legacy deal-level action behind POST /api/tickets/{id}/import-request. */
+    /** Same rule on the shared issuable gate (the legacy one-shot action that also used it is closed, W3-04). */
     @Test
-    void legacyIssueImportRequest_isAllowed_onADraftTicket_whenTheDepositIsPaid() {
+    void issuableGate_isAllowed_onADraftTicket_whenTheDepositIsPaid() {
         long ticketId = insertTicket("GATE-DRAFT-LEGACY", "DEPOSIT_PAID");
         setTicketStatus(ticketId, "draft");
 
-        ticketService.issueImportRequest(ticketId, principal(insertEmployee("PAYGATE-IMP"), "import"));
-
-        assertThat(jdbc.queryForObject(
-            "SELECT fulfillment_status FROM sales.ticket WHERE ticket_id = :id", Map.of("id", ticketId), String.class))
-            .isEqualTo("IR_ISSUED");
+        ticketService.requireImportRequestIssuable(new TicketRepository(jdbc).findById(ticketId).orElseThrow().summary());
     }
 
     /** Dropping the status requirement must not drop the deposit floor — wrong-way-round cases. */
@@ -188,8 +184,8 @@ class ImportRequestPaymentGateIntegrationTest extends AbstractPostgresIntegratio
             assertThatThrownBy(() -> service.issue(id, null, owner))
                 .isInstanceOfSatisfying(ApiException.class,
                     e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-            assertThatThrownBy(() -> ticketService.issueImportRequest(ticketId,
-                principal(insertEmployee("PAYGATE-IMP-" + (paymentStatus == null ? "N" : "C")), "import")))
+            assertThatThrownBy(() -> ticketService.requireImportRequestIssuable(
+                new TicketRepository(jdbc).findById(ticketId).orElseThrow().summary()))
                 .isInstanceOfSatisfying(ApiException.class,
                     e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
         }

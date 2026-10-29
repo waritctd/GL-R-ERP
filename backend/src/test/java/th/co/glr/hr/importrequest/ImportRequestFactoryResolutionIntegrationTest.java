@@ -22,6 +22,7 @@ import th.co.glr.hr.factory.FactoryConfigRepository;
 import th.co.glr.hr.importrequest.ImportRequestDtos.ImportRequestDto;
 import th.co.glr.hr.importrequest.ImportRequestRequests.AdvanceImportStepRequest;
 import th.co.glr.hr.importrequest.ImportRequestRequests.CreateImportRequestsRequest;
+import th.co.glr.hr.importrequest.ImportRequestRequests.ItemFactoryInput;
 import th.co.glr.hr.importrequest.ImportRequestRequests.NewFactoryCountryInput;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
@@ -485,6 +486,154 @@ class ImportRequestFactoryResolutionIntegrationTest extends AbstractPostgresInte
         assertThatThrownBy(() -> ticketService.issueImportRequest(ticketId, importUser))
             .isInstanceOfSatisfying(ApiException.class,
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+    }
+
+    // ── W3-03 follow-up (owner ruling 2026-10-29): sales picks a factory for a factory-less line ──
+
+    private long onlyItemId(long ticketId) {
+        return jdbc.queryForObject("SELECT item_id FROM sales.ticket_item WHERE ticket_id = :t ORDER BY item_id LIMIT 1",
+            Map.of("t", ticketId), Long.class);
+    }
+
+    private String itemFactory(long itemId) {
+        return jdbc.queryForObject("SELECT factory FROM sales.ticket_item WHERE item_id = :i",
+            Map.of("i", itemId), String.class);
+    }
+
+    @Test
+    void aFactorylessLine_withAChosenFactory_createsTheDraftForThatFactory() {
+        long factoryId = insertFactory("Picked Factory", "IT", null);
+        long ticketId = insertTicket("PICK-1");
+        insertItem(ticketId, "Brand", "Free text line", "60x60", "10", "pcs", 0, null);
+        long itemId = onlyItemId(ticketId);
+
+        List<ImportRequestDto> drafts = service.createDrafts(ticketId,
+            new CreateImportRequestsRequest(null, null, List.of(new ItemFactoryInput(itemId, factoryId))), owner);
+
+        assertThat(drafts).hasSize(1);
+        assertThat(drafts.get(0).factoryId()).isEqualTo(factoryId);
+        assertThat(itemFactory(itemId)).isEqualTo("Picked Factory");
+    }
+
+    @Test
+    void aChosenFactoryThatDoesNotExist_isRefused400_andWritesNothing() {
+        long ticketId = insertTicket("PICK-2");
+        insertItem(ticketId, "Brand", "Free text line", "60x60", "10", "pcs", 0, null);
+        long itemId = onlyItemId(ticketId);
+
+        assertThatThrownBy(() -> service.createDrafts(ticketId,
+                new CreateImportRequestsRequest(null, null, List.of(new ItemFactoryInput(itemId, 987654321L))), owner))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                assertThat(e.getMessage()).contains("โรงงาน");
+            });
+        assertThat(itemFactory(itemId)).isNull();
+        assertThat(service.list(ticketId, owner)).isEmpty();
+    }
+
+    @Test
+    void aChoiceForALineOfAnotherDeal_isRefused400() {
+        long factoryId = insertFactory("Picked Factory 3", "IT", null);
+        long ticketId = insertTicket("PICK-3A");
+        insertItem(ticketId, "Brand", "Mine", "60x60", "10", "pcs", 0, null);
+        long other = insertTicket("PICK-3B");
+        insertItem(other, "Brand", "Theirs", "60x60", "10", "pcs", 0, null);
+        long otherItem = onlyItemId(other);
+
+        assertThatThrownBy(() -> service.createDrafts(ticketId,
+                new CreateImportRequestsRequest(null, null, List.of(new ItemFactoryInput(otherItem, factoryId))), owner))
+            .isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
+        assertThat(itemFactory(otherItem)).isNull();
+    }
+
+    /** A line fully reserved from stock is never ordered, so a pick for it is ignored (not rejected). */
+    @Test
+    void aPickForALineFullyFromStock_isIgnored_andTheRestOfTheDealStillCreatesItsDraft() {
+        long factoryId = insertFactory("Picked Factory 5", "IT", null);
+        long ticketId = insertTicket("PICK-5");
+        insertItem(ticketId, "B", "Ordered line", "60x60", "10", "pcs", 0, null);
+        insertItem(ticketId, "B", "Stock line", "60x60", "4", "pcs", 1, null);
+        List<Long> ids = jdbc.queryForList("SELECT item_id FROM sales.ticket_item WHERE ticket_id = :t ORDER BY sort_order",
+            Map.of("t", ticketId), Long.class);
+        jdbc.update("UPDATE sales.ticket_item SET qty_from_stock = qty WHERE item_id = :i", Map.of("i", ids.get(1)));
+
+        List<ImportRequestDto> drafts = service.createDrafts(ticketId, new CreateImportRequestsRequest(null, null,
+            List.of(new ItemFactoryInput(ids.get(0), factoryId), new ItemFactoryInput(ids.get(1), factoryId))), owner);
+
+        assertThat(drafts).hasSize(1);
+        assertThat(drafts.get(0).factoryId()).isEqualTo(factoryId);
+        assertThat(itemFactory(ids.get(1))).as("stock line untouched").isNull();
+    }
+
+    @Test
+    void aLineThatAlreadyHasAFactory_ignoresAPassedFactory_catalogueAndTyped() {
+        long catalogPriceId = insertCatalogProduct("Catalogue Owner Factory", "IT", "KEEP-1",
+            new BigDecimal("12.50"), "EUR", "per_sqm");
+        insertFactory("Typed Owner Factory", "IT", null);
+        long wrong = insertFactory("Wrong Pick Factory", "IT", null);
+        long ticketId = insertTicket("PICK-4");
+        insertItemWithCatalogAndColor(ticketId, "B", "Cat line", "60x60", "10", "pcs", 0, null, catalogPriceId, null, null);
+        insertItem(ticketId, "B", "Typed line", "60x60", "10", "pcs", 1, "Typed Owner Factory");
+        List<Long> ids = jdbc.queryForList("SELECT item_id FROM sales.ticket_item WHERE ticket_id = :t ORDER BY sort_order",
+            Map.of("t", ticketId), Long.class);
+
+        List<ImportRequestDto> drafts = service.createDrafts(ticketId, new CreateImportRequestsRequest(null, null,
+            List.of(new ItemFactoryInput(ids.get(0), wrong), new ItemFactoryInput(ids.get(1), wrong))), owner);
+
+        assertThat(drafts).extracting(ImportRequestDto::factoryName)
+            .containsExactlyInAnyOrder("Catalogue Owner Factory", "Typed Owner Factory");
+        assertThat(itemFactory(ids.get(1))).isEqualTo("Typed Owner Factory");
+        assertThat(itemFactory(ids.get(0))).isNull();
+    }
+
+    // ── W3-04 (owner ruling 2026-10-29): the one-click legacy chain is closed ────────────────────
+    // Rule chosen: no deal may START a legacy track (issueImportRequest always 409s — a per-factory
+    // draft+issue does the same deal-level writes with a document and a factory); ir-sent/shipping/
+    // goods-received 409 on any deal holding a live (DRAFT or ISSUED) per-factory row; a pre-V184
+    // deal already in flight with NO rows may still finish (guard below).
+
+    @Test
+    void legacyIssueImportRequest_isRefusedEvenOnADealWithNoPerFactoryRows() {
+        long ticketId = insertTicket("W3-04-A");
+        insertItem(ticketId, "Brand", "Line", "60x60", "10", "pcs", 0, "Any Factory");
+
+        assertThatThrownBy(() -> ticketService.issueImportRequest(ticketId, importUser))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(e.getMessage()).contains("ใบขอซื้อรายโรงงาน");
+            });
+        assertThat(fulfillmentStatus(ticketId)).as("nothing written").isNull();
+    }
+
+    @Test
+    void legacyMarkIrSent_isRefusedWhenOnlyADraftPerFactoryRowExists() {
+        insertFactory("W3 Draft Only Factory", "IT", null);
+        long ticketId = insertTicket("W3-04-B");
+        insertItem(ticketId, "Brand", "Line", "60x60", "10", "pcs", 0, "W3 Draft Only Factory");
+        service.createDrafts(ticketId, null, owner);
+        jdbc.update("UPDATE sales.ticket SET fulfillment_status = 'IR_ISSUED' WHERE ticket_id = :id",
+            Map.of("id", ticketId));
+
+        assertThatThrownBy(() -> ticketService.markIrSent(ticketId, importUser))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(e.getMessage()).contains("ใบขอซื้อรายโรงงาน");
+            });
+        assertThat(fulfillmentStatus(ticketId)).isEqualTo(FulfilmentStatus.IR_ISSUED);
+    }
+
+    /** Guard (green before and after): a pre-V184 deal already in flight, with no per-factory rows, can finish. */
+    @Test
+    void legacyShippingAndGoodsReceived_stillWorkOnAnInFlightDealWithNoPerFactoryRows() {
+        long ticketId = insertTicket("W3-04-C");
+        jdbc.update("UPDATE sales.ticket SET fulfillment_status = 'IR_SENT' WHERE ticket_id = :id",
+            Map.of("id", ticketId));
+
+        ticketService.markShipping(ticketId, importUser);
+        assertThat(fulfillmentStatus(ticketId)).isEqualTo(FulfilmentStatus.SHIPPING);
+        ticketService.markGoodsReceived(ticketId, importUser);
+        assertThat(fulfillmentStatus(ticketId)).isEqualTo(FulfilmentStatus.GOODS_RECEIVED);
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────────────────────

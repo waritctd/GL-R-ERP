@@ -31,8 +31,25 @@ public final class ImportRequestRequests {
      */
     public record CreateImportRequestsRequest(
         String clientRequestId,
-        @Valid List<NewFactoryCountryInput> newFactoryCountries
-    ) {}
+        @Valid List<NewFactoryCountryInput> newFactoryCountries,
+        @Valid List<ItemFactoryInput> itemFactories
+    ) {
+        /** Pre-picker shape: no per-line factory choices. */
+        public CreateImportRequestsRequest(String clientRequestId, List<NewFactoryCountryInput> newFactoryCountries) {
+            this(clientRequestId, newFactoryCountries, null);
+        }
+    }
+
+    /**
+     * Sales' factory choice for ONE deal line that has no factory (a free-text line on a direct
+     * quotation — W3-03 follow-up, owner ruling 2026-10-29). Applied only to a line that resolves to
+     * no factory at all; a line that already has one (catalogue link, PCR factory or typed name) keeps
+     * it and the choice is ignored.
+     *
+     * @param ticketItemId a {@code sales.ticket_item} of THIS deal
+     * @param factoryId    an existing {@code price_catalog.factories} row
+     */
+    public record ItemFactoryInput(@NotNull Long ticketItemId, @NotNull Long factoryId) {}
 
     /**
      * One factory NAME's caller-supplied country, for {@code createDrafts}'s auto-create path

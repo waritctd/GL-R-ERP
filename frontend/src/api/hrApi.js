@@ -658,6 +658,7 @@ export const api = {
   },
   factoryConfigs: {
     list: () => apiRequest(API_ROUTES.factoryConfigs.list),
+    names: () => apiRequest(API_ROUTES.factoryConfigs.names),
     // sendEmail is retired — POST /api/tickets/{id}/factory-emails/send no longer exists (factory
     // RFQ email is manual-only). See priceImport.updateFactory / pricingRequests.markFactoryQuoteContacted.
   },
