@@ -2690,6 +2690,46 @@ describe('TicketDetailPage', () => {
     });
   });
 
+  // QA-27 (owner ruling 2026-10-29): "รอ CEO ตรวจสอบปิดงาน" is a WAIT, so it stops once the CEO has
+  // verified (lifecycle COMPLETED) — closeConfirmedAt stays set forever, so it cannot be the only test.
+  describe('blocker line "รอ CEO ตรวจสอบปิดงาน" ends when the CEO has verified (QA-27)', () => {
+    const salesManagerUser = { id: 11, employeeId: 11, name: 'ผจก.ขาย', role: 'sales_manager' };
+    function closeConfirmedDeal(lifecycle) {
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({
+          summary: {
+            lifecycle, salesStage: 'DELIVERED', status: 'quotation_issued', paymentStatus: 'FULLY_PAID',
+            closeConfirmedAt: '2026-07-20T09:00:00.000Z',
+          },
+        }),
+      });
+      api.tickets.actions.mockResolvedValue({
+        currentState: { lifecycle, salesStage: 'DELIVERED', paymentStatus: 'FULLY_PAID', fulfillmentStatus: 'FULLY_DELIVERED', status: 'quotation_issued' },
+        availableActions: [],
+      });
+    }
+
+    it('still shows to a non-CEO viewer while the deal is ACTIVE and awaiting verification', async () => {
+      closeConfirmedDeal('ACTIVE');
+      renderTicketDetailPage(salesManagerUser);
+      expect((await screen.findAllByText('รอ CEO ตรวจสอบปิดงาน')).length).toBeGreaterThan(0);
+    });
+
+    it('does not show to the CEO once the deal is COMPLETED (the CEO has no verify action left)', async () => {
+      closeConfirmedDeal('COMPLETED');
+      renderTicketDetailPage(ceoUser);
+      await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
+      expect(screen.queryByText('รอ CEO ตรวจสอบปิดงาน')).toBeNull();
+    });
+
+    it('does not show to a non-CEO viewer once the deal is COMPLETED either', async () => {
+      closeConfirmedDeal('COMPLETED');
+      renderTicketDetailPage(salesManagerUser);
+      await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
+      expect(screen.queryByText('รอ CEO ตรวจสอบปิดงาน')).toBeNull();
+    });
+  });
+
   // Deal tracking (V83, Slice B1/B2 "kill the weekly report" — handoff 103).
   // Slice C2b moved DealTrackingPanel from the old "activity" tab into "ดีล"
   // (the default tab — see ticketDetailTabs.js's own comment on that tab),
@@ -3758,6 +3798,50 @@ describe('TicketDetailPage', () => {
       expect(within(header).getByText('ขั้นตอนดีล')).not.toBeNull();
       expect(within(header).getByText('คำขอราคา')).not.toBeNull();
       expect(within(header).getByText('การนำเข้า')).not.toBeNull();
+    });
+  });
+
+  // QA-22: the header's การนำเข้า chip follows the per-factory IR steps, so the page itself reads the stored
+  // IRs (not only the fulfilment tab) for every role the backend lets read them — and passes them down.
+  describe('การนำเข้า header chip follows the stored IRs (QA-22)', () => {
+    function dealWithTwoFactories() {
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({ summary: { lifecycle: 'ACTIVE', salesStage: 'PROCUREMENT', fulfillmentStatus: 'IR_ISSUED', createdById: 1 } }),
+      });
+      api.tickets.actions.mockResolvedValue({
+        currentState: { lifecycle: 'ACTIVE', salesStage: 'PROCUREMENT', paymentStatus: null, fulfillmentStatus: 'IR_ISSUED', status: 'price_proposed' },
+        availableActions: [],
+      });
+      api.storedImportRequests.listForTicket.mockResolvedValue({
+        importRequests: [
+          { id: 31, status: 'ISSUED', ticketId: 701, importStep: 'IN_TRANSIT' },
+          { id: 32, status: 'ISSUED', ticketId: 701, importStep: 'RECEIVED' },
+        ],
+      });
+    }
+    afterEach(() => {
+      api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: [] });
+    });
+    const chip = async () => {
+      const header = await screen.findByTestId('deal-state-header');
+      return within(within(header).getByText('การนำเข้า').parentElement);
+    };
+
+    it.each([
+      ['the owning sales rep', salesOwnerUser],
+      ['import (not the owner)', { id: 7, employeeId: 7, name: 'ฝ่ายนำเข้า', role: 'import' }],
+      ['sales_manager (not the owner)', { id: 11, employeeId: 11, name: 'ผจก.ขาย', role: 'sales_manager' }],
+    ])('shows the slowest factory step with the arrival count to %s', async (_name, viewer) => {
+      dealWithTwoFactories();
+      renderTicketDetailPage(viewer);
+      expect(await (await chip()).findByText('กำลังเดินทาง · ถึงโกดัง 1/2')).not.toBeNull();
+    });
+
+    it('a non-owner sales rep cannot read stored IRs: the chip keeps the deal-level label and no request is made', async () => {
+      dealWithTwoFactories();
+      renderTicketDetailPage({ id: 2, employeeId: 2, name: 'พนักงานขายอีกคน', role: 'sales' });
+      expect((await chip()).getByText('ออกคำขอนำเข้าแล้ว')).not.toBeNull();
+      expect(api.storedImportRequests.listForTicket).not.toHaveBeenCalled();
     });
   });
 

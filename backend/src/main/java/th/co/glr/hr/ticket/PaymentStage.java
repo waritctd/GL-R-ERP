@@ -18,6 +18,11 @@ public final class PaymentStage {
     /** Paid amount covers the derived payable amount. */
     public static final String FULLY_PAID = "FULLY_PAID";
 
+    /** The customer has not reached the payment step yet (no payment_status, nothing paid). */
+    public static final String NOT_STARTED = "NOT_STARTED";
+    /** A bypass deposit policy (e.g. a 0% quotation): no deposit is collected, the whole amount is the balance. */
+    public static final String NO_DEPOSIT = "NO_DEPOSIT";
+
     public static final Set<String> VALID = Set.of(
-        NOT_REQUIRED, DEPOSIT_PENDING, DEPOSIT_RECEIVED, PARTIALLY_PAID, BALANCE_PENDING, FULLY_PAID);
+        NOT_STARTED, NO_DEPOSIT, NOT_REQUIRED, DEPOSIT_PENDING, DEPOSIT_RECEIVED, PARTIALLY_PAID, BALANCE_PENDING, FULLY_PAID);
 }

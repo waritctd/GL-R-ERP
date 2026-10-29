@@ -24,6 +24,12 @@ import {
   groupDirectQuotations, groupLegacyQuotations, groupRemainingInvoices, sortGroupsNewestFirst,
 } from './dealDocumentVersions.js';
 
+/** Same read gate as ImportRequestService#requireRead: import / CEO / sales_manager, or the OWNING sales rep. */
+export function canReadStoredImportRequests(user, summary) {
+  return ['import', 'ceo', 'sales_manager'].includes(user?.role)
+    || (user?.role === 'sales' && summary?.createdById != null && summary.createdById === user?.id);
+}
+
 /**
  * Slice D ("the เอกสาร document register"): one read-only roll-up of every document a deal can
  * produce — customer quotations (the PricingRequest/CustomerQuotation chain, the legacy
@@ -174,8 +180,7 @@ export function DealDocumentRegister({
   // CR-1 (R6/R9): the stored ใบขอซื้อ rows — one IR per factory — in a 5th section. Same read gate as
   // ImportRequestService#requireRead (and DealFulfilmentPanel's canReadStoredIr): import / CEO /
   // sales_manager, or the OWNING sales rep. Same query key as that panel, so one fetch feeds both.
-  const canViewImportRequests = ['import', 'ceo', 'sales_manager'].includes(user?.role)
-    || (user?.role === 'sales' && summary?.createdById != null && summary.createdById === user?.id);
+  const canViewImportRequests = canReadStoredImportRequests(user, summary);
   const importRequestsQuery = useQuery({
     queryKey: queryKeys.storedImportRequests(ticketId),
     queryFn: () => api.storedImportRequests.listForTicket(ticketId).then((r) => r.importRequests ?? []),

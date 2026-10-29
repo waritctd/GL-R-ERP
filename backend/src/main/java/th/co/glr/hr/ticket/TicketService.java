@@ -2043,6 +2043,11 @@ public class TicketService {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         requireAccountScope(ticketId, actor);
+        // QA-19 (owner ruling 2026-10-29): account only ever moves a money stage FORWARD.
+        if ("account".equals(actor.role())
+                && DealStage.indexOf(targetStage) < DealStage.indexOf(requireTicket(ticketId).summary().salesStage())) {
+            throw new ApiException(HttpStatus.CONFLICT, "ฝ่ายบัญชีเลื่อนขั้นได้เฉพาะไปข้างหน้า ย้อนขั้นไม่ได้");
+        }
         return updateStageInternal(ticketId, targetStage, note, actor);
     }
 

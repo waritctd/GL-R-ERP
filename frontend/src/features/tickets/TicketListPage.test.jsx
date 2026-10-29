@@ -508,17 +508,16 @@ describe('TicketListPage', () => {
     await waitFor(() => expect(screen.getByTestId('location-display').textContent).toBe('/tickets/502'));
   });
 
-  // Review-remediation plan Commit D: since 03b5ba9 stopped ticket-level
-  // auto-submit, a new deal's legacy `status` is permanently 'draft' and no
-  // longer reflects real workflow — showing it as a secondary label under the
-  // stage badge would read as if nothing had happened. Deals that already
-  // progressed under the old flow (`status: 'submitted'` etc.) still show it.
-  it('suppresses the legacy status sublabel for a deal frozen on draft, but keeps it for others', async () => {
+  // QA-27 / QA-26 (owner ruling 2026-10-29), superseding Review-remediation Commit D (which hid only
+  // 'draft'): the legacy `status` sublabel under the stage badge is gone for EVERY deal — the stage
+  // badge and the payment/fulfilment chips say where the deal is, the old status only misled.
+  it('shows no legacy status sublabel under the stage badge, for any status', async () => {
     renderTicketListPage();
 
     expect(await screen.findByText('บริษัท ดีลใหม่ จำกัด')).not.toBeNull();
     expect(screen.queryByText('แบบร่าง')).toBeNull();
-    expect(screen.getByText('รอฝ่ายนำเข้ารับเรื่อง')).not.toBeNull();
+    expect(screen.queryByText('รอฝ่ายนำเข้ารับเรื่อง')).toBeNull(); // fixture deal with status 'submitted'
+    expect(screen.queryByText('ออกใบเสนอราคาแล้ว')).toBeNull(); // fixture deals with status 'quotation_issued'
   });
 
   it('filters by lifecycle, overdue, and partial delivery chips (after expanding "ตัวกรองเพิ่มเติม")', async () => {

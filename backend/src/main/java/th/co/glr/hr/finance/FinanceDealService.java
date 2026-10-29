@@ -192,11 +192,15 @@ public class FinanceDealService {
     private List<FinanceDealDto.Action> availableActions(long ticketId, UserPrincipal actor, TicketSummaryDto s) {
         // Scope was enforced up front (requireFinanceAccess); an authorised action may have moved the deal out of it.
         var all = ticketService.financeActionsAlreadyScoped(ticketId, actor).availableActions();
+        // QA-19: a manual money-stage move only ever goes FORWARD (a closed deal is not offered "move to S11").
+        int current = DealStage.indexOf(s.salesStage());
         boolean anyMoneyStage = all.stream().anyMatch(a -> "ADVANCE_STAGE".equals(a.action())
-            && DealStage.ACCOUNT_TARGET_STAGES.contains(a.targetStage()));
+            && DealStage.ACCOUNT_TARGET_STAGES.contains(a.targetStage())
+            && DealStage.indexOf(a.targetStage()) > current);
         List<FinanceDealDto.Action> actions = new java.util.ArrayList<>(all.stream()
             .filter(a -> MONEY_ACTIONS.contains(a.action())
-                || ("ADVANCE_STAGE".equals(a.action()) && DealStage.ACCOUNT_TARGET_STAGES.contains(a.targetStage()))
+                || ("ADVANCE_STAGE".equals(a.action()) && DealStage.ACCOUNT_TARGET_STAGES.contains(a.targetStage())
+                    && DealStage.indexOf(a.targetStage()) > current)
                 || ("UPDATE_STAGE".equals(a.action()) && anyMoneyStage))
             .map(FinanceDealService::toAction)
             .toList());

@@ -21,7 +21,6 @@ import {
   formatThaiDate,
   fulfilmentStatusLabel,
   overdueBadgeLabel,
-  ticketStatusLabel,
 } from '../../utils/format.js';
 import { StageProgressBar } from './DealStageStepper.jsx';
 import { dealHref } from '../finance/dealHref.js';
@@ -383,7 +382,6 @@ function DealStageCell({ deal, catalog }) {
   // null (render nothing) for UNSPECIFIED / unknown / absent: a route is never invented.
   const route = routeName(deal.entryChannel);
   const meta = findStage(catalog, deal.salesStage);
-  const operational = ticketStatusLabel(deal.status);
   // FIX F6 (review-remediation): used to badge only ON_HOLD/DORMANT, so a
   // CANCELLED or COMPLETED deal looked indistinguishable from a live one in
   // this column — and specifically in this column, because the 721–1040px
@@ -394,15 +392,6 @@ function DealStageCell({ deal, catalog }) {
   // the two stay in sync.
   const showLifecycleBadge = PAUSED_OR_TERMINAL_LIFECYCLES.has(deal.lifecycle);
   const lifecycle = dealLifecycleLabel(deal.lifecycle);
-  // Since 03b5ba9 stopped ticket-level auto-submit, every newly created deal's
-  // legacy `status` is frozen at 'draft' forever — it no longer advances with
-  // real workflow (that now lives on the deal's PricingRequest(s) and
-  // salesStage instead). Showing "แบบร่าง" under the stage badge for those
-  // deals is not just uninformative, it actively misleads a reader into
-  // thinking nothing has happened. Older deals that already progressed past
-  // draft before that change still have a meaningful legacy status, so keep
-  // showing it for them.
-  const showOperational = deal.status !== 'draft';
   return (
     <span className="flex min-w-0 flex-col gap-0.5">
       <span className="flex flex-wrap items-center gap-1">
@@ -412,9 +401,6 @@ function DealStageCell({ deal, catalog }) {
         {showLifecycleBadge ? <StatusBadge tone={lifecycle.tone}>{lifecycle.label}</StatusBadge> : null}
       </span>
       {route ? <span data-testid="deal-route-marker" className="pl-0.5 text-2xs text-text-muted">{route}</span> : null}
-      {showOperational ? (
-        <span className="pl-0.5 text-2xs text-text-muted">{operational.label}</span>
-      ) : null}
     </span>
   );
 }
@@ -601,10 +587,8 @@ export function TicketListPage({ user, showToast }) {
   const queryClient = useQueryClient();
   // Phase filter + search live in the URL so list → detail → back keeps them.
   // The old operational ?status= chips row was removed as redundant with the
-  // phase cards (user decision) — the stage cell's sublabel shows where the
-  // legacy ticket-status paperwork stands, for deals where that status still
-  // means something (see DealStageCell's showOperational: it is suppressed
-  // for deals frozen at 'draft').
+  // phase cards (user decision), and the stage cell no longer shows the legacy
+  // ticket status either (QA-27, owner ruling 2026-10-29).
   const [searchParams, setSearchParams] = useSearchParams();
   const phaseFilter = searchParams.get('phase') ?? '';
   const lifecycleFilter = searchParams.get('life') ?? '';
