@@ -1,5 +1,6 @@
 package th.co.glr.hr.importrequest;
 
+import th.co.glr.hr.common.SizeUnit;
 import java.io.IOException;
 import java.text.Normalizer;
 import java.time.LocalDate;
@@ -833,7 +834,7 @@ public class ImportRequestService {
             details.add("Surface: " + item.texture());
         }
         if (item.size() != null && !item.size().isBlank()) {
-            details.add("Size: " + item.size());
+            details.add("Size: " + SizeUnit.withCmUnit(item.size())); // cm ruling 2026-10-30
         }
         if (!details.isEmpty()) {
             body.append("   ").append(String.join(" | ", details)).append("\n");

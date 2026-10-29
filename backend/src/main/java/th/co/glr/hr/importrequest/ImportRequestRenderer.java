@@ -1,5 +1,6 @@
 package th.co.glr.hr.importrequest;
 
+import th.co.glr.hr.common.SizeUnit;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -337,7 +338,7 @@ public class ImportRequestRenderer {
             }
             left(cs, font, r.code(), r.codeX(), y, BODY_SIZE,
                  COL_SIZE_L - r.codeX() - CELL_PAD);
-            left(cs, font, r.size(), COL_SIZE_L + CELL_PAD, y, BODY_SIZE,
+            left(cs, font, SizeUnit.withCmUnit(r.size()), COL_SIZE_L + CELL_PAD, y, BODY_SIZE,
                  COL_QTY_L - COL_SIZE_L - 2 * CELL_PAD);
             centred(cs, font, r.qty(), COL_QTY_L, COL_UNIT_L, y, BODY_SIZE);
             centred(cs, font, r.unit(), COL_UNIT_L, COL_FOR_L, y, BODY_SIZE);

@@ -186,7 +186,10 @@ public class ImportRequestQueryRepository {
 
     public List<LineFactoryCandidate> factoryResolutionCandidates(long ticketId) {
         return jdbc.query("""
-            SELECT ti.item_id, ti.brand, ti.model, ti.size, ti.unit,
+            SELECT ti.item_id, ti.brand, ti.model,
+                   -- cm ruling 2026-10-30: the line's own catalogue row (ti.catalog_price_id) wins
+                   COALESCE(pp.size_cm, ti.size)            AS size,
+                   ti.unit,
                    ti.qty - COALESCE(ti.qty_from_stock, 0) AS remaining_qty,
                    pri.resolved_factory_id AS pri_factory_id,
                    NULLIF(BTRIM(pri.factory), '')          AS pri_factory_name,

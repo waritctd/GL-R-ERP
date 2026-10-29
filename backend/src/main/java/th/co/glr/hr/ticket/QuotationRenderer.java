@@ -1,5 +1,6 @@
 package th.co.glr.hr.ticket;
 
+import th.co.glr.hr.common.SizeUnit;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -2968,17 +2969,14 @@ public class QuotationRenderer {
     // the moment V162 started populating these columns -- see
     // QuotationRendererTest#descriptionRendersAllAttributes_andSuppliesTheSizeUnitOnlyWhenItIsMissing.
     // Anchored at the end of the trimmed value, so a bare "600x1200" (ends in a digit) can never
-    // match and still gets its unit.
-    private static final java.util.regex.Pattern SIZE_ALREADY_HAS_UNIT =
-        java.util.regex.Pattern.compile("(?i)(ซม\\.?|มม\\.?|ม\\.?|นิ้ว|cm\\.?|mm\\.?|m\\.?|in\\.?|\")\\s*$");
-
+    // match and still gets its unit. The unit regex lives in SizeUnit, shared with the IR factory copy.
     private String buildDesc(TicketItemDto item) {
         StringBuilder sb = new StringBuilder("กระเบื้อง");
         if (item.model() != null && !item.model().isBlank())   sb.append(" รุ่น ").append(item.model());
         if (item.color() != null && !item.color().isBlank())   sb.append(" สี ").append(item.color());
         if (item.size() != null && !item.size().isBlank()) {
             sb.append(" ขนาด ").append(item.size());
-            if (!SIZE_ALREADY_HAS_UNIT.matcher(item.size().trim()).find()) sb.append(" cm.");
+            if (!SizeUnit.hasUnit(item.size())) sb.append(" cm.");
         }
         if (item.texture() != null && !item.texture().isBlank()) sb.append(" ").append(item.texture());
         return sb.toString();
