@@ -197,18 +197,9 @@ public class DashboardRepository {
     }
 
     /**
-     * Cash received in the Bangkok calendar month starting {@code monthStart}: payment receipts with
-     * {@code received_at} in [monthStart, next month start), signed by {@link TicketRepository#SIGNED_RECEIPT_SUM}.
-     */
-    public java.math.BigDecimal cashReceived(LocalDate monthStart) {
-        return jdbc.queryForObject("SELECT " + TicketRepository.SIGNED_RECEIPT_SUM
-            + " FROM sales.payment_receipt WHERE " + RECEIVED_IN_MONTH,
-            monthWindow(monthStart), java.math.BigDecimal.class);
-    }
-
-    /**
-     * {@link #cashReceived}, split by the creator of the deal each receipt belongs to (same window, same
-     * sign rule), so the rows always add up to it. Grouped by creator id, labelled with the creator's name
+     * Cash received in the Bangkok calendar month starting {@code monthStart} ([start, next month start) on
+     * {@code received_at}, signed by {@link TicketRepository#SIGNED_RECEIPT_SUM}), split by the creator of the
+     * deal each receipt belongs to. The service totals the rows for the month figure. Grouped by creator id, labelled with the creator's name
      * ({@code ไม่ระบุผู้ขาย} when blank), so two reps with the same name stay separate.
      */
     public java.util.List<CashByRepDto> cashReceivedByRep(LocalDate monthStart) {

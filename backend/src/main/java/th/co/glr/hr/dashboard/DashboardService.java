@@ -57,8 +57,9 @@ public class DashboardService {
             : dashboardRepository.latestPayrollPeriodId(user.employeeId()).orElse(null);
 
         boolean seesCash = CASH_RECEIVED_ROLES.contains(user.role());
-        BigDecimal cashReceived = seesCash ? dashboardRepository.cashReceived(monthStart) : null;
         List<CashByRepDto> cashByRep = seesCash ? dashboardRepository.cashReceivedByRep(monthStart) : null;
+        BigDecimal cashReceived = cashByRep == null ? null
+            : cashByRep.stream().map(CashByRepDto::amount).reduce(BigDecimal.ZERO, BigDecimal::add);
 
         return DashboardSummaryDto.of(
             user.role(),

@@ -46,6 +46,11 @@ export const moneyFixtureTickets = [
 ];
 
 export const CASH_RECEIVED_THIS_MONTH = 125000.5;
+// Per-rep split of CASH_RECEIVED_THIS_MONTH, served ascending on purpose: the panels must sort it themselves.
+export const CASH_BY_REP = [
+  { repName: 'สมหญิง ขายเก่ง', amount: 35000 },
+  { repName: 'สมชาย ขายดี', amount: 90000.5 },
+];
 export const EXPECTED = {
   cash: '฿125,000.50',
   outstanding: '฿293,545.25', // 213,545.25 + 80,000 — not the closed, pre-order or lost deals

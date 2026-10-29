@@ -134,27 +134,6 @@ class DashboardRepositoryIntegrationTest extends AbstractPostgresIntegrationTest
     }
 
     @Test
-    void cashReceivedCountsTheBangkokMonthsDepositsAndBalancesLessAdjustments() {
-        long division = insertDivision("SA", "Sales");
-        long rep = insertEmployee("EMP-001", division, true);
-        insertTicket("PR-1", "quotation_issued", rep, LocalDate.of(2026, 6, 1));
-        insertTicket("PR-2", "quotation_issued", rep, LocalDate.of(2026, 6, 1));
-
-        insertReceipt("PR-1", "DEPOSIT", "85418.10", "2026-07-02T10:00:00+07:00", rep);
-        insertReceipt("PR-1", "BALANCE", "40000.40", "2026-07-15T10:00:00+07:00", rep);
-        insertReceipt("PR-1", "ADJUSTMENT", "1000.00", "2026-07-20T10:00:00+07:00", rep);
-        insertReceipt("PR-2", "DEPOSIT", "10000.00", "2026-07-03T09:00:00+07:00", rep);
-        // 00:30 on 1 July in Bangkok although still 30 June in UTC: this month's.
-        insertReceipt("PR-2", "BALANCE", "2000.00", "2026-06-30T17:30:00Z", rep);
-        // Last Bangkok minute of June, and the first of August: neither is July's.
-        insertReceipt("PR-2", "BALANCE", "5000.00", "2026-06-30T23:59:59+07:00", rep);
-        insertReceipt("PR-2", "BALANCE", "700.00", "2026-08-01T00:00:00+07:00", rep);
-
-        assertThat(repository.cashReceived(LocalDate.of(2026, 7, 1))).isEqualByComparingTo("136418.50");
-        assertThat(repository.cashReceived(LocalDate.of(2026, 5, 1))).isEqualByComparingTo("0");
-    }
-
-    @Test
     void cashReceivedByRepSplitsTheSameMonthsCashByTheDealsCreator() {
         long division = insertDivision("SA", "Sales");
         long repA = insertEmployee("EMP-001", division, true);
@@ -194,9 +173,8 @@ class DashboardRepositoryIntegrationTest extends AbstractPostgresIntegrationTest
             .containsExactlyInAnyOrder(new BigDecimal("86418.10"), new BigDecimal("50.00"));
         assertThat(amountOf(rows, "EMP-002")).isEqualByComparingTo("10000.00");
         assertThat(amountOf(rows, "ไม่ระบุผู้ขาย")).isEqualByComparingTo("700.00");
-        // the rows are the company figure, split: they always add up to cashReceived
+        // the rows are the whole month's cash (the service totals them for cashReceivedThisMonth)
         assertThat(rows.stream().map(CashByRepDto::amount).reduce(BigDecimal.ZERO, BigDecimal::add))
-            .isEqualByComparingTo(repository.cashReceived(LocalDate.of(2026, 7, 1)))
             .isEqualByComparingTo("97168.10");
         assertThat(repository.cashReceivedByRep(LocalDate.of(2026, 5, 1))).isEmpty();
     }

@@ -3883,10 +3883,6 @@ function mockReceiptsThisMonth() {
   return (db.paymentReceipts ?? []).filter((r) => bangkokMonth(r.receivedAt) === thisMonth);
 }
 
-function mockCashReceivedThisMonth() {
-  return moneyValue(mockReceiptsThisMonth().reduce(signedReceiptSum, 0));
-}
-
 // Mirrors DashboardRepository#cashReceivedByRep: this month's receipts grouped by the deal creator's id,
 // labelled with the creator's name (blank -> ไม่ระบุผู้ขาย).
 function mockCashReceivedByRep() {
@@ -12249,6 +12245,7 @@ export const api = {
       const tickets = dashboardTickets(user);
       const pendingApprovals = dashboardPending(user, tickets);
       const notifications = dashboardNotifications(user);
+      const cashByRep = ['account', 'ceo', 'sales_manager'].includes(user.role) ? mockCashReceivedByRep() : null;
       return delay({
         summary: {
           role: user.role,
@@ -12277,12 +12274,9 @@ export const api = {
           partiallyDelivered: tickets.partiallyDelivered,
           // Mirrors DashboardSummaryDto#cashReceivedThisMonth: receipts in the current Bangkok month
           // (deposit + balance - adjustment), only for the roles that see company money.
-          cashReceivedThisMonth: ['account', 'ceo', 'sales_manager'].includes(user.role)
-            ? mockCashReceivedThisMonth()
-            : null,
-          cashReceivedByRep: ['account', 'ceo', 'sales_manager'].includes(user.role)
-            ? mockCashReceivedByRep()
-            : null,
+          // The month figure is the sum of the per-rep rows, as DashboardService totals them.
+          cashReceivedThisMonth: cashByRep ? moneyValue(cashByRep.reduce((sum, row) => sum + row.amount, 0)) : null,
+          cashReceivedByRep: cashByRep,
         },
       });
     },

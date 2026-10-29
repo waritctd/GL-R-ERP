@@ -7,7 +7,7 @@ import { CeoOverview } from './CeoOverview.jsx';
 import { api } from '../../api/index.js';
 import { bangkokMonthStartIso } from '../../utils/format.js';
 import {
-  CASH_RECEIVED_THIS_MONTH, EXPECTED, expectFigure, figureRows, moneyFixtureTickets,
+  CASH_BY_REP, CASH_RECEIVED_THIS_MONTH, EXPECTED, expectFigure, figureRows, moneyFixtureTickets,
 } from '../../test/fixtures/dashboardMoney.js';
 
 globalThis.React = React;
@@ -41,10 +41,7 @@ const dashboardSummary = {
   attendance: { lateToday: 3 },
   cashReceivedThisMonth: CASH_RECEIVED_THIS_MONTH,
   // This month's cash split per sales rep: the two add up to CASH_RECEIVED_THIS_MONTH (125,000.50).
-  cashReceivedByRep: [
-    { repName: 'สมชาย ขายดี', amount: 90000.5 },
-    { repName: 'สมหญิง ขายเก่ง', amount: 35000 },
-  ],
+  cashReceivedByRep: CASH_BY_REP,
 };
 
 function mockAllData() {
@@ -309,6 +306,14 @@ describe('CeoOverview', () => {
     expect(within(panel).queryByText('฿50,000.00')).toBeNull();
     // No percentage/quota text is rendered anywhere in that panel.
     expect(within(panel).queryByText(/%/)).toBeNull();
+  });
+
+  it('sorts the rep rows by amount, largest first, whatever order the server sent', async () => {
+    renderOverview();
+
+    const panel = (await screen.findByText('ยอดตามทีม/ฝ่าย')).closest('section');
+    const names = [...panel.querySelectorAll('span.truncate')].map((el) => el.textContent);
+    expect(names).toEqual(['สมชาย ขายดี', 'สมหญิง ขายเก่ง']);
   });
 
   it('lists every rep so the bars still add up to เงินรับแล้ว with more than eight reps', async () => {

@@ -21,11 +21,6 @@ import { financeOutstanding, forecastValue } from './dashboardMoney.js';
 // exactly like CommissionPage's own `totals.submitted` does.
 const TEAM_COMMISSIONS_QUERY_KEY = ['commissions', 'list', 'submitted'];
 
-function startOfMonth() {
-  const now = new Date();
-  return new Date(now.getFullYear(), now.getMonth(), 1);
-}
-
 // A deal is "won" once it reaches the terminal pipeline stage, "lost" once
 // its lifecycle/legacy status marks it lost or cancelled, else "open" —
 // mirrors the same three-way split features/tickets/salesViewScope.js's
@@ -40,10 +35,6 @@ function isDealLost(ticket) {
 }
 function isDealOpen(ticket) {
   return !isDealWon(ticket) && !isDealLost(ticket) && ticket.status !== 'closed';
-}
-
-function dealAmount(ticket) {
-  return Number(ticket.amountPayable ?? 0);
 }
 
 /**
@@ -119,11 +110,6 @@ export function ManagerOverview({ user, employee, dashboardSummary, showToast })
 
   const ticketsById = useMemo(() => new Map(tickets.map((t) => [t.id, t])), [tickets]);
 
-  const monthStart = useMemo(() => startOfMonth(), []);
-  const closedThisMonth = useMemo(
-    () => tickets.filter((t) => isDealWon(t) && t.stageUpdatedAt && new Date(t.stageUpdatedAt) >= monthStart),
-    [tickets, monthStart],
-  );
   const openTickets = useMemo(() => tickets.filter(isDealOpen), [tickets]);
   const outstanding = useMemo(() => financeOutstanding(tickets), [tickets]);
   const forecast = useMemo(() => forecastValue(tickets), [tickets]);
@@ -135,8 +121,7 @@ export function ManagerOverview({ user, employee, dashboardSummary, showToast })
   // overdue (`ticket.overdue`), or a follow-up date already in the past.
   const attentionTickets = useMemo(() => {
     // `new Date()` (not `Date.now()`, which the react-hooks purity rule
-    // flags as a well-known impure call inside render) — same pattern this
-    // file's own `startOfMonth()` already uses above.
+    // flags as a well-known impure call inside render).
     const now = new Date();
     return openTickets
       .filter((t) => t.stale || t.overdue || (t.nextFollowUpAt && new Date(t.nextFollowUpAt) < now))
@@ -153,17 +138,13 @@ export function ManagerOverview({ user, employee, dashboardSummary, showToast })
   const lostCount = useMemo(() => tickets.filter(isDealLost).length, [tickets]);
   const closeRate = wonCount + lostCount > 0 ? (wonCount / (wonCount + lostCount)) * 100 : null;
 
-  const leaderboard = useMemo(() => {
-    const byRep = new Map();
-    closedThisMonth.forEach((t) => {
-      const key = t.createdById ?? t.createdByName ?? 'unknown';
-      const current = byRep.get(key) || { id: key, name: t.createdByName || 'ไม่ระบุ', amount: 0, count: 0 };
-      current.amount += dealAmount(t);
-      current.count += 1;
-      byRep.set(key, current);
-    });
-    return [...byRep.values()].sort((a, b) => b.amount - a.amount).slice(0, 5);
-  }, [closedThisMonth]);
+  // Same rows as the CEO's ยอดตามทีม/ฝ่าย panel: this month's cash received per rep, from the summary.
+  const leaderboard = useMemo(
+    () => [...(dashboardSummary?.cashReceivedByRep ?? [])]
+      .map((row) => ({ name: row.repName, amount: Number(row.amount) || 0 }))
+      .sort((a, b) => b.amount - a.amount),
+    [dashboardSummary?.cashReceivedByRep],
+  );
   const leaderboardMax = leaderboard[0]?.amount || 0;
 
   const firstName = employee?.nickName || employee?.nameTh || user?.name || '';
@@ -329,11 +310,11 @@ export function ManagerOverview({ user, employee, dashboardSummary, showToast })
             <div className="grid gap-[18px]">
               <Panel title="อันดับทีม (เดือนนี้)">
                 {leaderboard.length === 0 ? (
-                  <p className="m-0 text-sm text-text-muted">ยังไม่มีดีลปิดในเดือนนี้</p>
+                  <p className="m-0 text-sm text-text-muted">ยังไม่มีเงินรับเข้าในเดือนนี้</p>
                 ) : (
                   <div className="grid gap-3">
                     {leaderboard.map((rep, index) => (
-                      <div key={rep.id} className="grid gap-1">
+                      <div key={index} className="grid gap-1">
                         <div className="flex items-center justify-between gap-2 text-sm">
                           <span className="min-w-0 truncate font-bold text-text">{index + 1}. {rep.name}</span>
                           <strong className="tabular-nums text-text">{formatMoney(rep.amount)}</strong>

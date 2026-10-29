@@ -22,10 +22,11 @@ import { financeOutstanding } from './dashboardMoney.js';
 // Order matches the plan's original layout:
 // overdue leads (most urgent), then the two payment-confirmation steps, then
 // close-ready, then the folded commission step. `amountField` picks which
-// ticket money field the bucket sums: outstanding balance for the three
-// pending-money buckets, deal value (amountPayable) for the two "money is
-// already secured, just needs admin follow-through" buckets where
-// amountOutstanding is 0 by definition.
+// ticket money field the bucket sums: the deposit notice total (depositDue)
+// for รอรับมัดจำ, outstanding balance for เกินกำหนด and รอชำระส่วนที่เหลือ,
+// deal value (amountPayable) for the two "money is already secured, just
+// needs admin follow-through" buckets where amountOutstanding is 0 by
+// definition.
 const MONEY_BUCKETS = [
   { key: 'overdue', label: 'เกินกำหนด', icon: 'triangleAlert', tone: 'rose', amountField: 'amountOutstanding', span: 'col-span-2 row-span-2 nav-drawer:row-span-1' },
   { key: 'depositPending', label: 'รอรับมัดจำ', icon: 'clock', tone: 'amber', amountField: 'depositDue', span: 'col-span-2 nav-drawer:col-span-1' },

@@ -193,22 +193,31 @@ class DashboardServiceTest {
 
     @ParameterizedTest
     @ValueSource(strings = {"account", "ceo", "sales_manager"})
-    void cashReceivedThisMonthIsServedToTheMoneyRoles(String role) {
-        when(repository.cashReceived(LocalDate.of(2026, 7, 1))).thenReturn(new BigDecimal("125000.50"));
-        when(repository.cashReceivedByRep(LocalDate.of(2026, 7, 1)))
-            .thenReturn(List.of(new CashByRepDto("สมชาย ขายดี", new BigDecimal("125000.50"))));
+    void cashReceivedThisMonthIsTheSumOfThePerRepRowsForTheMoneyRoles(String role) {
+        when(repository.cashReceivedByRep(LocalDate.of(2026, 7, 1))).thenReturn(List.of(
+            new CashByRepDto("สมชาย ขายดี", new BigDecimal("90000.50")),
+            new CashByRepDto("สมหญิง ขายเก่ง", new BigDecimal("35000.00"))));
 
         DashboardSummaryDto summary = service.summary(user(role, 40L, null, false));
 
         assertThat(summary.cashReceivedThisMonth()).isEqualByComparingTo("125000.50");
-        assertThat(summary.cashReceivedByRep())
-            .containsExactly(new CashByRepDto("สมชาย ขายดี", new BigDecimal("125000.50")));
+        assertThat(summary.cashReceivedByRep()).hasSize(2);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"account", "ceo", "sales_manager"})
+    void aMonthWithNoReceiptsIsZeroNotNull(String role) {
+        when(repository.cashReceivedByRep(any())).thenReturn(List.of());
+
+        DashboardSummaryDto summary = service.summary(user(role, 40L, null, false));
+
+        assertThat(summary.cashReceivedThisMonth()).isEqualByComparingTo("0");
+        assertThat(summary.cashReceivedByRep()).isEmpty();
     }
 
     @ParameterizedTest
     @ValueSource(strings = {"hr", "import", "sales", "employee"})
-    void cashReceivedThisMonthIsNullForEveryOtherRoleAndNeverQueried(String role) {
-        when(repository.cashReceived(any())).thenReturn(new BigDecimal("125000.50"));
+    void cashReceivedIsNullForEveryOtherRoleAndNeverQueried(String role) {
         when(repository.cashReceivedByRep(any()))
             .thenReturn(List.of(new CashByRepDto("สมชาย ขายดี", new BigDecimal("125000.50"))));
 
@@ -216,23 +225,20 @@ class DashboardServiceTest {
 
         assertThat(summary.cashReceivedThisMonth()).isNull();
         assertThat(summary.cashReceivedByRep()).isNull();
-        verify(repository, never()).cashReceived(any());
         verify(repository, never()).cashReceivedByRep(any());
     }
 
     @Test
-    void cashReceivedThisMonthUsesTheBangkokMonthEvenWhenUtcIsStillLastMonth() {
+    void cashReceivedUsesTheBangkokMonthEvenWhenUtcIsStillLastMonth() {
         // 2026-06-30T20:30Z is already 2026-07-01 03:30 in Bangkok.
         DashboardService boundary = new DashboardService(
             repository, Clock.fixed(Instant.parse("2026-06-30T20:30:00Z"), BANGKOK));
-        when(repository.cashReceived(LocalDate.of(2026, 7, 1))).thenReturn(new BigDecimal("1.00"));
         when(repository.cashReceivedByRep(LocalDate.of(2026, 7, 1)))
             .thenReturn(List.of(new CashByRepDto("สมชาย ขายดี", new BigDecimal("1.00"))));
 
         DashboardSummaryDto summary = boundary.summary(user("account", 42L, null, false));
 
         assertThat(summary.cashReceivedThisMonth()).isEqualByComparingTo("1.00");
-        assertThat(summary.cashReceivedByRep()).hasSize(1);
     }
 
     private UserPrincipal user(String role, Long employeeId, Long divisionId, boolean manager) {

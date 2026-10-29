@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ManagerOverview } from './ManagerOverview.jsx';
 import { api } from '../../api/index.js';
 import {
-  CASH_RECEIVED_THIS_MONTH, EXPECTED, expectFigure, figureRows, moneyFixtureTickets,
+  CASH_BY_REP, CASH_RECEIVED_THIS_MONTH, EXPECTED, expectFigure, figureRows, moneyFixtureTickets,
 } from '../../test/fixtures/dashboardMoney.js';
 
 globalThis.React = React;
@@ -91,8 +91,6 @@ describe('ManagerOverview', () => {
   it('renders the team pulse derived from the team ticket list', async () => {
     renderOverview();
     await screen.findByText('ดีลต้องดูแล');
-    // The leaderboard row for the same rep/deal carries the won deal's ฿300,000.00.
-    expect(screen.getAllByText('฿300,000.00').length).toBeGreaterThan(0);
   });
 
   it('renders the ค่าคอมรออนุมัติ worklist with a review/approve CTA, SUBMITTED only', async () => {
@@ -109,11 +107,28 @@ describe('ManagerOverview', () => {
     expect(within(panel).queryByText(/INV-2026-0302/)).toBeNull();
   });
 
-  it('renders the leaderboard and close-rate in the right rail', async () => {
-    renderOverview();
+  it('ranks the leaderboard by this month\'s cash per rep, the same rows as the CEO panel', async () => {
+    renderOverview({ cashReceivedThisMonth: CASH_RECEIVED_THIS_MONTH, cashReceivedByRep: CASH_BY_REP });
     const heading = await screen.findByRole('heading', { name: 'อันดับทีม (เดือนนี้)' });
     const panel = heading.closest('section');
-    expect(within(panel).getByText(/เซลส์ เอ/)).not.toBeNull();
+
+    const rows = [...panel.querySelectorAll('strong')].map((el) => el.textContent);
+    expect(rows).toEqual(['฿90,000.50', '฿35,000.00']);
+    expect(within(panel).getByText('1. สมชาย ขายดี')).not.toBeNull();
+    expect(within(panel).getByText('2. สมหญิง ขายเก่ง')).not.toBeNull();
+    // The old basis -- the won deal's amountPayable (฿300,000.00) -- is gone.
+    expect(within(panel).queryByText('฿300,000.00')).toBeNull();
+  });
+
+  it('shows the leaderboard empty state when no cash came in', async () => {
+    renderOverview({ cashReceivedThisMonth: 0, cashReceivedByRep: [] });
+    const heading = await screen.findByRole('heading', { name: 'อันดับทีม (เดือนนี้)' });
+    expect(within(heading.closest('section')).getByText('ยังไม่มีเงินรับเข้าในเดือนนี้')).not.toBeNull();
+  });
+
+  it('renders the close-rate in the right rail', async () => {
+    renderOverview();
+    await screen.findByRole('heading', { name: 'อันดับทีม (เดือนนี้)' });
     expect(screen.getByText('อัตราปิดงาน')).not.toBeNull();
   });
 

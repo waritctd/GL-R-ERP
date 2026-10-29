@@ -65,24 +65,6 @@ public record DashboardSummaryDto(
         Long latestPayrollPeriodId,
         TicketSummaryDto tickets,
         NotificationSummaryDto notifications,
-        BigDecimal cashReceivedThisMonth
-    ) {
-        return of(role, employeeId, divisionId, manager, generatedAt, headcount, pendingApprovals,
-            attendance, latestPayrollPeriodId, tickets, notifications, cashReceivedThisMonth, null);
-    }
-
-    public static DashboardSummaryDto of(
-        String role,
-        Long employeeId,
-        Long divisionId,
-        boolean manager,
-        OffsetDateTime generatedAt,
-        HeadcountSummaryDto headcount,
-        PendingApprovalsSummaryDto pendingApprovals,
-        AttendanceSummaryDto attendance,
-        Long latestPayrollPeriodId,
-        TicketSummaryDto tickets,
-        NotificationSummaryDto notifications,
         BigDecimal cashReceivedThisMonth,
         List<CashByRepDto> cashReceivedByRep
     ) {
