@@ -63,7 +63,7 @@ import { DealStateHeader } from './DealStateHeader.jsx';
 import { DealTrackingPanel } from './DealTrackingPanel.jsx';
 import { visibleSections } from './salesViewScope.js';
 import { nextOnRoute, offRoutePartiesFor, useStageCatalog } from './stageCatalog.js';
-import { PARTY_LABEL } from './salesActions.js';
+import { PARTY_LABEL, firstRouteParty } from './salesActions.js';
 import {
   resolveTicketDetailTab, TICKET_DETAIL_TABS, visibleTicketDetailTabIds,
 } from './ticketDetailTabs.js';
@@ -1402,7 +1402,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       // then calls the ref (see this component's own doc comment on
       // `runOnTab`).
       stickyPrimaryAction = (
-        <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => runOnTab('items', () => pricingRequestPanelRef.current?.openCreate())}>
+        <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => runOnTab('items', () => pricingRequestPanelRef.current?.openCreate({ recipientType: firstRouteParty(offRoutePartiesFor(stageCatalog, summary.entryChannel)) }))}>
           <Icon name="plus" size={14} />
           {workStateAction.label}
         </Button>

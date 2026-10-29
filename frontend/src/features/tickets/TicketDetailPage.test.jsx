@@ -2443,6 +2443,58 @@ describe('TicketDetailPage', () => {
       }
     });
 
+    // QA-11 (Ploy 2026-10-29): a customer-change revision leaves {parent SUPERSEDED, child DRAFT}. The
+    // primary sends that draft; it never opens a blank new-request form beside it (a duplicate).
+    it('a revision draft as the deal\'s only open request: ส่งคำขอราคาถึงเจ้าของโครงการ sends it, and no new-request form opens', async () => {
+      deal({
+        requests: [
+          sentRequest({ status: 'SUPERSEDED', recipientType: 'OWNER' }),
+          sentRequest({ id: 502, requestCode: 'PCR-2026-0502', status: 'DRAFT', recipientType: 'OWNER' }),
+        ],
+        quotations: [], entryChannel: 'OWNER_DIRECT', stage: 'SPEC_APPROVED',
+      });
+      api.pricingRequests.submit.mockResolvedValue({ pricingRequest: {} });
+      renderTicketDetailPage(salesOwnerUser);
+
+      const primary = await primaryWithAction('submit_pricing_request');
+      expect(primary.textContent).toContain('ส่งคำขอราคาถึงเจ้าของโครงการ');
+      fireEvent.click(primary);
+
+      await waitFor(() => expect(api.pricingRequests.submit).toHaveBeenCalledWith(502));
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+
+    // QA-07 (Ploy 2026-10-29): the deal's FIRST สร้างคำขอราคา pre-fills ผู้รับ with the first party on
+    // the deal's route. Sales may still pick another one.
+    it.each([
+      ['DESIGNER_LED', /ผู้ออกแบบ/, /เจ้าของโครงการ/],
+      ['OWNER_DIRECT', /เจ้าของโครงการ/, /ผู้ออกแบบ/],
+      ['BUYER_DIRECT', /ผู้ซื้อ \/ ผู้รับเหมา/, /ผู้ออกแบบ/],
+    ])('first สร้างคำขอราคา on a %s deal: ผู้รับ = the route\'s first party, still changeable', async (entryChannel, party, other) => {
+      deal({ requests: [], quotations: [], entryChannel, stage: 'SPEC_APPROVED' });
+      renderTicketDetailPage(salesOwnerUser);
+
+      fireEvent.click(await primaryWithAction('create_pcr'));
+
+      const recipients = within(within(await screen.findByRole('dialog')).getByRole('radiogroup', { name: 'ผู้รับคำขอราคา' }));
+      const checked = () => recipients.getAllByRole('radio').filter((radio) => radio.getAttribute('aria-checked') === 'true');
+      expect(checked()).toEqual([recipients.getByRole('radio', { name: party })]);
+      fireEvent.click(recipients.getByRole('radio', { name: other }));
+      expect(checked()).toEqual([recipients.getByRole('radio', { name: other })]);
+    });
+
+    // Opus review: the pre-fill follows the served route alone, not the deal's quotation list.
+    it('first สร้างคำขอราคา on an OWNER_DIRECT deal pre-fills เจ้าของโครงการ while the deal\'s quotation list is still loading', async () => {
+      deal({ requests: [], quotations: [], entryChannel: 'OWNER_DIRECT', stage: 'SPEC_APPROVED' });
+      api.dealQuotations.listForTicket.mockReturnValue(new Promise(() => {}));
+      renderTicketDetailPage(salesOwnerUser);
+
+      fireEvent.click(await primaryWithAction('create_pcr'));
+
+      const recipients = within(within(await screen.findByRole('dialog')).getByRole('radiogroup', { name: 'ผู้รับคำขอราคา' }));
+      expect(recipients.getByRole('radio', { name: /เจ้าของโครงการ/ }).getAttribute('aria-checked')).toBe('true');
+    });
+
     // Review V5: an unreadable list is not "no quotation" — the designer's may be being redone.
     it('while the deal\'s quotation list has never been read: no route choice, and ⋯ still offers บันทึกผลใบเสนอราคา; once read, a failed refetch keeps it', async () => {
       deal();

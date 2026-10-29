@@ -235,10 +235,53 @@ class FactoryContactFlowIntegrationTest extends Cr1FixtureSupport {
     /** Reissue carry-forward copies READY_FOR_COSTING quotes onto the revision: contacted fields ride along. */
     @Test
     void carryForwardCopiesTheContactedFields() {
+        FactoryQuoteDto copy = carriedForwardCopy();
+
+        assertThat(copy.contactedOn()).isEqualTo(todayBangkok().minusDays(1));
+        assertThat(copy.contactedNote()).isEqualTo("note");
+        assertThat(copy.contactedBy()).isEqualTo(importUserId);
+        assertThat(copy.contactedAt()).isNotNull();
+    }
+
+    /** QA-06: a carried-forward copy is the root of its own chain, so import can re-price it (no NPE). */
+    @Test
+    void aCarriedForwardQuoteIsItsOwnChainRoot_andImportCanRevisePriceOnIt() {
+        FactoryQuoteDto copy = carriedForwardCopy();
+        assertThat(copy.rootFactoryQuoteId()).isEqualTo(copy.id());
+        awaitingFactoryResponse(copy.pricingRequestId());
+
+        FactoryQuoteDto revised = factoryQuoteService.receive(copy.id(), receiveAll(copy, "THB", "PER_PIECE"), importActor);
+
+        assertThat(revised.id()).isNotEqualTo(copy.id());
+        assertThat(revised.rootFactoryQuoteId()).isEqualTo(copy.id());
+        assertThat(revised.parentFactoryQuoteId()).isEqualTo(copy.id());
+        assertThat(revised.revisionNo()).isEqualTo(2);
+        assertThat(revised.current()).isTrue();
+    }
+
+    /** QA-06, Ploy 2026-10-29 (no backfill): a copy saved before the fix, root NULL, can still be re-priced. */
+    @Test
+    void aLegacyRootlessCarriedForwardQuoteCanStillBeRevised() {
+        FactoryQuoteDto copy = carriedForwardCopy();
+        jdbc.update("UPDATE sales.factory_quote SET root_factory_quote_id = NULL WHERE factory_quote_id = :id",
+            Map.of("id", copy.id()));
+        FactoryQuoteDto legacy = factoryQuoteService.get(copy.id(), importActor);
+        assertThat(legacy.rootFactoryQuoteId()).isNull();
+        awaitingFactoryResponse(legacy.pricingRequestId());
+
+        FactoryQuoteDto revised = factoryQuoteService.receive(legacy.id(), receiveAll(legacy, "THB", "PER_PIECE"), importActor);
+
+        assertThat(revised.rootFactoryQuoteId()).isEqualTo(legacy.id());
+        assertThat(revised.parentFactoryQuoteId()).isEqualTo(legacy.id());
+        assertThat(revised.revisionNo()).isEqualTo(2);
+        assertThat(revised.current()).isTrue();
+    }
+
+    /** A READY_FOR_COSTING quote (contacted yesterday, note "note") copied onto a fresh request. */
+    private FactoryQuoteDto carriedForwardCopy() {
         long fromPr = requestInImportReview(line("Tile A", "Factory A", 10, null, null, null, null));
         FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(fromPr, importActor), "Factory A");
-        LocalDate yesterday = todayBangkok().minusDays(1);
-        factoryQuoteService.markContacted(draft.id(), new MarkFactoryContactedRequest(yesterday, "note"), importActor);
+        factoryQuoteService.markContacted(draft.id(), new MarkFactoryContactedRequest(todayBangkok().minusDays(1), "note"), importActor);
         FactoryQuoteDto received = factoryQuoteService.receive(draft.id(), receiveAll(draft, "THB", "PER_PIECE"), importActor);
         factoryQuoteService.markReadyForCosting(received.id(), importActor);
         long toPr = pricingRequestService.createDraft(ticketId,
@@ -249,11 +292,13 @@ class FactoryContactFlowIntegrationTest extends Cr1FixtureSupport {
         List<Long> copied = factoryQuoteRepository.copyReadyQuotesToRevision(fromPr, toPr, Map.of(fromItem, toItem), importUserId);
 
         assertThat(copied).hasSize(1);
-        FactoryQuoteDto copy = factoryQuoteRepository.find(copied.get(0)).orElseThrow();
-        assertThat(copy.contactedOn()).isEqualTo(yesterday);
-        assertThat(copy.contactedNote()).isEqualTo("note");
-        assertThat(copy.contactedBy()).isEqualTo(importUserId);
-        assertThat(copy.contactedAt()).isNotNull();
+        return factoryQuoteService.get(copied.get(0), importActor);
+    }
+
+    /** Where the revision sits after the CEO's ตีกลับ: back with import, waiting on factory prices. */
+    private void awaitingFactoryResponse(long pricingRequestId) {
+        jdbc.update("UPDATE sales.pricing_request SET status = 'AWAITING_FACTORY_RESPONSE' WHERE pricing_request_id = :id",
+            Map.of("id", pricingRequestId));
     }
 
     /** The CEO who performs the step is not told about their own action; another CEO-role user still is. */

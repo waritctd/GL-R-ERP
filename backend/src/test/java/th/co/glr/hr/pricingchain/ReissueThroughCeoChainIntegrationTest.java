@@ -446,9 +446,10 @@ class ReissueThroughCeoChainIntegrationTest extends AbstractPostgresIntegrationT
      * parent's READY_FOR_COSTING quotes are copied and the child skips straight to the CEO.
      *
      * <p>Also pins the two things that make the copy safe to cost: the copied quote is a fresh root
-     * ({@code revision_no = 1}, no parent/root pointer — the chain key
-     * {@code uq_factory_quote_chain_revision} would otherwise collide with the parent's own
-     * numbering), and its items point at the CHILD's request items, not the parent's.
+     * ({@code revision_no = 1}, its own root and no parent — pointing it into the parent's chain
+     * would collide with the parent's own numbering under {@code uq_factory_quote_chain_revision};
+     * QA-06: a NULL root made import's later re-price NPE), and its items point at the CHILD's
+     * request items, not the parent's.
      */
     @Test
     void commercialOnlyRevision_carriesTheFactoryQuoteForward_andLandsAtReadyForCeoReview() {
@@ -466,7 +467,7 @@ class ReissueThroughCeoChainIntegrationTest extends AbstractPostgresIntegrationT
         assertThat(jdbc.queryForObject("""
             SELECT COUNT(*) FROM sales.factory_quote
              WHERE pricing_request_id = :id AND revision_no = 1
-               AND root_factory_quote_id IS NULL AND parent_factory_quote_id IS NULL
+               AND root_factory_quote_id = factory_quote_id AND parent_factory_quote_id IS NULL
             """, Map.of("id", childId), Long.class)).isEqualTo(1L);
         // Every copied quote item points at one of the CHILD's request items — a dangling or
         // parent-pointing reference is exactly what would make the CEO cost the wrong line.

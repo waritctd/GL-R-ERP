@@ -208,6 +208,8 @@ export const PARTY_LABEL = { DESIGNER: 'ผู้ออกแบบ', OWNER: '�
 const SENT_DOC_STATUSES = new Set(['ISSUED', 'SUPERSEDED', 'REJECTED', 'EXPIRED']);
 const DECLINED_DOC_STATUSES = new Set(['REJECTED', 'EXPIRED']);
 const isDesignerOrOwner = (pr) => pr.recipientType === 'DESIGNER' || pr.recipientType === 'OWNER';
+/** QA-07: the first request's default ผู้รับ — the route's first party (undefined while the route is unknown). */
+export const firstRouteParty = (offRouteParties) => (offRouteParties == null ? undefined : PARTY_ROUTE.find((party) => !offRouteParties.has(party)));
 // Route order, then the newer request: the last one is the furthest along the route.
 const byRoute = (a, b) => PARTY_ROUTE.indexOf(a.recipientType) - PARTY_ROUTE.indexOf(b.recipientType) || a.id - b.id;
 
@@ -351,7 +353,7 @@ export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = nul
   //    - `ownPrs.length === 0` — this deal never entered the chain at all.
   //      Not the same test as `!hasLivePr`: a customer-change revision leaves
   //      {parent SUPERSEDED, child DRAFT}, which is "no LIVE request" but is
-  //      emphatically still in the chain, and its rep does need a CTA.
+  //      emphatically still in the chain; its DRAFT is sent below, not a second request created.
   //    - evidence a customer-facing price already went out: a quoted status,
   //      or any paymentStatus (whose own amount-payable precondition means a
   //      price exists, even though recordPayment itself checks no status).
@@ -377,6 +379,10 @@ export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = nul
     const pricedOutsidePcrChain = ownPrs.length === 0
       && (QUOTED_STATUSES.has(deal.status) || deal.paymentStatus != null);
     if (!pricedOutsidePcrChain) {
+      const draft = ownPrs.filter((pr) => pr.status === 'DRAFT').sort((a, b) => b.id - a.id)[0];
+      if (draft) {
+        return { key: SALES_ACTION.SUBMIT_PRICING_REQUEST, label: `ส่งคำขอราคาถึง${PARTY_LABEL[draft.recipientType]}`, pricingRequestId: draft.id };
+      }
       return { key: SALES_ACTION.CREATE_PCR, label: ACTION_LABEL[SALES_ACTION.CREATE_PCR] };
     }
   }

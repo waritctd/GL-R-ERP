@@ -217,7 +217,8 @@ describe('nextSalesAction — CREATE_PCR gate on legacy/no-PR deals (UAT regress
   // latter. OrderConfirmationService.confirmOrder sets 'quotation_issued' and
   // confirmCustomer sets paymentStatus under the CURRENT flow too, so a deal
   // that IS in the chain can carry both signals.
-  it('still offers create_pcr after a customer-change revision leaves {parent SUPERSEDED, child DRAFT} on an order-confirmed deal — no live PR, but the deal is in the chain', () => {
+  // QA-11 (Ploy 2026-10-29): that draft is sent, not a second request created beside it.
+  it('offers to send the draft after a customer-change revision leaves {parent SUPERSEDED, child DRAFT} on an order-confirmed deal — no live PR, but the deal is in the chain', () => {
     const deal = baseDeal({
       status: 'quotation_issued',
       salesStage: 'ORDER_RECEIVED',
@@ -225,9 +226,11 @@ describe('nextSalesAction — CREATE_PCR gate on legacy/no-PR deals (UAT regress
     });
     const prs = [
       { id: 11, ticketId: deal.id, status: 'SUPERSEDED' },
-      { id: 12, ticketId: deal.id, status: 'DRAFT' },
+      { id: 12, ticketId: deal.id, status: 'DRAFT', recipientType: 'OWNER' },
     ];
-    expect(nextSalesAction(deal, prs)).toMatchObject({ key: 'create_pcr' });
+    expect(nextSalesAction(deal, prs)).toEqual({
+      key: 'submit_pricing_request', label: 'ส่งคำขอราคาถึงเจ้าของโครงการ', pricingRequestId: 12,
+    });
   });
 
   it('still offers create_pcr for an early-stage deal with no payment status and zero pricing requests (the real case the gate must not break)', () => {
