@@ -28,7 +28,7 @@ describe('CatalogSearchPage audit copy', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // Mocked the way Java answers sales/sales_manager: PriceImportController#factories is
-    // ceo/import only; FactoryConfigController#names is open to sales + sales_manager.
+    // ceo/import only; FactoryConfigController#names is open to every role that can open /catalog.
     api.priceImport.factories.mockRejectedValue(Object.assign(new Error('forbidden'), { status: 403 }));
     api.factoryConfigs.names.mockResolvedValue({ factories: [] });
     api.catalog.prices.mockResolvedValue({ items: [] });
@@ -43,9 +43,9 @@ describe('CatalogSearchPage audit copy', () => {
 
   // RC-03 (role check 2026-10-29, owner ruling): the factory filter was silently empty for sales
   // and sales_manager because it read the ceo/import-only /api/price-import/factories.
-  it.each(['sales', 'sales_manager'])('fills the factory filter for %s from the names-only endpoint', async (role) => {
+  it('fills the factory filter from the names-only endpoint', async () => {
     api.factoryConfigs.names.mockResolvedValue({ factories: [{ id: 42, factoryName: 'Mutina' }] });
-    render(<CatalogSearchPage user={{ role }} showToast={vi.fn()} />);
+    render(<CatalogSearchPage user={{ role: 'sales' }} showToast={vi.fn()} />);
 
     const option = await screen.findByRole('option', { name: 'Mutina' });
     expect(option.getAttribute('value')).toBe('42');

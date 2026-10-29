@@ -12927,7 +12927,7 @@ export const api = {
     },
     // Mirrors FactoryConfigController#names: id + name only, for the IR creators too.
     async names() {
-      hasRole('ceo', 'import', 'sales', 'sales_manager');
+      hasRole('ceo', 'import', 'sales', 'sales_manager', 'account');
       return delay({ factories: mockPriceImportFactories.map((f) => ({ id: f.factoryId, factoryName: f.name })) });
     },
     // sendEmail is retired — POST /api/tickets/{id}/factory-emails/send no longer exists (factory

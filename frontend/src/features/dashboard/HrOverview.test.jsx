@@ -117,6 +117,14 @@ describe('HrOverview', () => {
     }
   });
 
+  // A failed payroll read used to render as "not started", which is how RC-04's 400 hid.
+  it('says the payroll period failed to load instead of claiming it has not started', async () => {
+    api.payroll.current.mockRejectedValueOnce(Object.assign(new Error('bad request'), { status: 400 }));
+    renderOverview();
+    expect(await screen.findByText('โหลดรอบเงินเดือนไม่สำเร็จ')).not.toBeNull();
+    expect(screen.queryByText('ยังไม่เริ่มรอบเงินเดือนเดือนนี้')).toBeNull();
+  });
+
   it('shows today attendance counts', () => {
     renderOverview();
     const panel = screen.getByText('การลงเวลาวันนี้').closest('section');

@@ -79,7 +79,7 @@ export function HrOverview({ employees, dashboardSummary }) {
   const payrollMonth = bangkokMonthStartIso().slice(0, 7);
   const payrollQuery = useQuery({
     queryKey: [...queryKeys.payrollCurrent(payrollMonth), 'overview'],
-    queryFn: () => api.payroll.current({ payrollMonth }).then((response) => response?.period ?? null).catch(() => null),
+    queryFn: () => api.payroll.current({ payrollMonth }).then((response) => response?.period ?? null),
     enabled: !!api.payroll?.current,
   });
   const payrollPeriod = payrollQuery.data ?? null;
@@ -155,9 +155,11 @@ export function HrOverview({ employees, dashboardSummary }) {
     { key: 'notifications', label: 'แจ้งเตือนยังไม่อ่าน', value: stats.unreadNotifications },
   ];
 
-  const payrollDetail = payrollPeriod
-    ? `${formatThaiDate(payrollPeriod.payrollMonth)} · ${payrollStatusLabel(payrollPeriod.status).label}`
-    : 'ยังไม่เริ่มรอบเงินเดือนเดือนนี้';
+  const payrollDetail = payrollQuery.isError
+    ? 'โหลดรอบเงินเดือนไม่สำเร็จ'
+    : payrollPeriod
+      ? `${formatThaiDate(payrollPeriod.payrollMonth)} · ${payrollStatusLabel(payrollPeriod.status).label}`
+      : 'ยังไม่เริ่มรอบเงินเดือนเดือนนี้';
 
   return (
     <PageStack>

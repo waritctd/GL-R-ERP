@@ -64,7 +64,8 @@ class FactoryConfigControllerTest {
     void namesAreReadableByIrCreators_andExposeOnlyIdAndName() throws Exception {
         when(repo.findAll()).thenReturn(List.of(
             new FactoryConfigDto(7L, "Rex Ceramics", "rfq@rex.example", "EUR", "sqm", "IT", null)));
-        for (String role : List.of("ceo", "import", "sales", "sales_manager")) {
+        // account added 2026-10-29 (owner ruling): it can open /catalog, whose factory filter reads this.
+        for (String role : List.of("ceo", "import", "sales", "sales_manager", "account")) {
             mvc.perform(get("/api/factory-configs/names").session(session(role)))
                 .andExpect(status().is2xxSuccessful())
                 .andExpect(content().string(containsString("Rex Ceramics")))
@@ -75,7 +76,7 @@ class FactoryConfigControllerTest {
     @Test
     void namesAreForbiddenForOtherRoles() throws Exception {
         when(repo.findAll()).thenReturn(List.of());
-        for (String role : List.of("employee", "warehouse", "qc", "hr", "account")) {
+        for (String role : List.of("employee", "warehouse", "qc", "hr")) {
             mvc.perform(get("/api/factory-configs/names").session(session(role)))
                 .andExpect(status().isForbidden());
         }

@@ -523,15 +523,14 @@ describe('ImportFulfilmentPage (per-factory, stored aggregate)', () => {
 
     it('shows the completion toast for a PARTIALLY_DELIVERED deal once the refetched rows confirm every issued row is RECEIVED', async () => {
       api.tickets.list.mockResolvedValue({ tickets: [ticket({ fulfillmentStatus: 'PARTIALLY_DELIVERED' })] });
-      api.importDeals.get.mockResolvedValue({ deal: { fulfillmentStatus: 'PARTIALLY_DELIVERED' } });
+      // The confirmation read is import's own projection, which carries the post-advance rows;
+      // listForTicket still answers with the pre-advance rows, so a toast decided from it is wrong.
+      api.importDeals.get.mockResolvedValue({ deal: {
+        fulfillmentStatus: 'PARTIALLY_DELIVERED',
+        importRequests: [row({ id: 1, importStep: 'RECEIVED' })],
+      } });
       mockRowsByTicket({ 1: [row({ id: 1, importStep: 'AWAITING_CUSTOMS' })] });
-      api.storedImportRequests.advanceStep.mockImplementationOnce(async () => {
-        // The advance's own refetch (listForTicket, called directly by this page's onSuccess to
-        // decide the toast) must see the POST-advance state, exactly like a real advanceStep call
-        // landing before the follow-up read does — same pattern as the B3 test above.
-        mockRowsByTicket({ 1: [row({ id: 1, importStep: 'RECEIVED' })] });
-        return { importRequest: row({ id: 1, importStep: 'RECEIVED' }) };
-      });
+      api.storedImportRequests.advanceStep.mockResolvedValue({ importRequest: row({ id: 1, importStep: 'RECEIVED' }) });
       const showToast = vi.fn();
       renderPage(showToast);
       const card = await screen.findByTestId('fulfilment-deal');
@@ -542,7 +541,10 @@ describe('ImportFulfilmentPage (per-factory, stored aggregate)', () => {
 
     it('does not claim completion for a PARTIALLY_DELIVERED deal while another issued row is still short of RECEIVED', async () => {
       api.tickets.list.mockResolvedValue({ tickets: [ticket({ fulfillmentStatus: 'PARTIALLY_DELIVERED' })] });
-      api.importDeals.get.mockResolvedValue({ deal: { fulfillmentStatus: 'PARTIALLY_DELIVERED' } });
+      api.importDeals.get.mockResolvedValue({ deal: {
+        fulfillmentStatus: 'PARTIALLY_DELIVERED',
+        importRequests: [row({ id: 1, importStep: 'RECEIVED' }), row({ id: 2, factoryName: 'B', importStep: 'IN_TRANSIT' })],
+      } });
       mockRowsByTicket({
         1: [row({ id: 1, importStep: 'AWAITING_CUSTOMS' }), row({ id: 2, factoryName: 'B', importStep: 'IN_TRANSIT' })],
       });
@@ -558,13 +560,13 @@ describe('ImportFulfilmentPage (per-factory, stored aggregate)', () => {
 
     it('does not claim completion for a PARTIALLY_DELIVERED deal while another factory is still a DRAFT', async () => {
       api.tickets.list.mockResolvedValue({ tickets: [ticket({ fulfillmentStatus: 'PARTIALLY_DELIVERED' })] });
-      api.importDeals.get.mockResolvedValue({ deal: { fulfillmentStatus: 'PARTIALLY_DELIVERED' } });
       const draftB = row({ id: 2, factoryName: 'B', status: 'DRAFT', importStep: null });
+      api.importDeals.get.mockResolvedValue({ deal: {
+        fulfillmentStatus: 'PARTIALLY_DELIVERED',
+        importRequests: [row({ id: 1, importStep: 'RECEIVED' }), draftB],
+      } });
       mockRowsByTicket({ 1: [row({ id: 1, importStep: 'AWAITING_CUSTOMS' }), draftB] });
-      api.storedImportRequests.advanceStep.mockImplementationOnce(async () => {
-        mockRowsByTicket({ 1: [row({ id: 1, importStep: 'RECEIVED' }), draftB] });
-        return { importRequest: row({ id: 1, importStep: 'RECEIVED' }) };
-      });
+      api.storedImportRequests.advanceStep.mockResolvedValue({ importRequest: row({ id: 1, importStep: 'RECEIVED' }) });
       const showToast = vi.fn();
       renderPage(showToast);
       const card = await screen.findByTestId('fulfilment-deal');

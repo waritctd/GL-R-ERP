@@ -5,6 +5,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { PayrollPage } from './PayrollPage.jsx';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
+import { bangkokMonthStartIso } from '../../utils/format.js';
 import { useToast } from '../../hooks/useToast.js';
 import { Toast } from '../../components/common/Toast.jsx';
 
@@ -132,11 +133,11 @@ async function openDocumentsMenu() {
   return screen.findByRole('menu', { name: 'เอกสาร' });
 }
 
-// Computed the same way PayrollPage.jsx's own module-level `thisMonth` const is (`new
-// Date().toISOString().slice(0, 7)`) -- the page defaults its `month` state to this value, and
+// Computed the same way PayrollPage.jsx defaults its `month` state (the Bangkok month, via
+// bangkokMonthStartIso -- a UTC month is one behind for the first 7 hours of each month), and
 // `payload()` submits `` `${month}-01` ``. Used below to pin down that exact "-01" suffix (a
 // mutation-testing survivor: changing it to "-02" left the suite green).
-const thisMonth = new Date().toISOString().slice(0, 7);
+const thisMonth = bangkokMonthStartIso().slice(0, 7);
 const originalMatchMedia = window.matchMedia;
 
 function mockPayrollViewport({ mobile = false, desktopPanel = false } = {}) {
@@ -184,6 +185,19 @@ describe('PayrollPage adjustment inputs', () => {
     expect(gprs.value).toBe('500');
     expect(allowance.value).toBe('');
     expect(costOfLiving.parentElement.querySelector('.currency-input-symbol').textContent).toBe('฿');
+  });
+
+  // Code review of #1196: the HR landing asks for the Bangkok month, so this page must open the
+  // same one. 2026-10-31T18:00Z is already 1 Nov in Bangkok.
+  it('opens on the current Bangkok month, not the UTC month', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-31T18:00:00Z'));
+    try {
+      renderPayrollPage();
+      await waitFor(() => expect(api.payroll.current).toHaveBeenCalledWith({ payrollMonth: '2026-11' }));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('allows clearing zero/default amounts and sends them as zeroes', async () => {
