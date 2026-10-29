@@ -12435,6 +12435,11 @@ export const api = {
     async listForTicket(ticketId) {
       const ticket = findTicketRaw(Number(ticketId));
       requireStoredIrRead(ticket, requireSession());
+      return delay({ importRequests: mockImportRequestsForTicket(ticket.id) });
+    },
+    async coverage(ticketId) {
+      const ticket = findTicketRaw(Number(ticketId));
+      requireStoredIrRead(ticket, requireSession());
       // Mirrors ImportRequestService#hasUncoveredFactories: read-only; an unresolved/unknown factory
       // (the resolver refuses without a country for a new name) counts as uncovered; only a live row covers.
       let hasUncoveredFactories = true;
@@ -12444,7 +12449,7 @@ export const api = {
           .map((r) => r.factoryId));
         hasUncoveredFactories = mockResolveFactoryGroups(ticket, null).some((g) => !live.has(g.factoryId));
       } catch { /* unresolved factory -> uncovered */ }
-      return delay({ importRequests: mockImportRequestsForTicket(ticket.id), hasUncoveredFactories });
+      return delay({ hasUncoveredFactories });
     },
     async get(id) {
       const row = findStoredImportRequestRaw(id);

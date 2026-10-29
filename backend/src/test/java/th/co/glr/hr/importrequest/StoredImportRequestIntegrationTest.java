@@ -184,14 +184,14 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
 
     // ── owner ruling 2026-10-29 (5c): GET /tickets/{id}/import-requests also says whether a factory is uncovered ──
 
-    /** The flag as the frontend reads it: a top-level key of the list response, read-only, no factory is created. */
+    /** The flag as the frontend reads it: its own read-only route, so the shared list stays rows-only. */
     private Object hasUncoveredFactoriesOverHttpShape(long forTicket) {
         SessionContext sessions = mock(SessionContext.class);
         MockHttpSession session = new MockHttpSession();
         when(sessions.requireUser(session)).thenReturn(owner);
-        Map<String, ?> body = new ImportRequestController(service, sessions).listForTicket(forTicket, session);
-        assertThat(body).containsKey("importRequests");
-        return body.get("hasUncoveredFactories");
+        ImportRequestController controller = new ImportRequestController(service, sessions);
+        assertThat(controller.listForTicket(forTicket, session)).containsOnlyKeys("importRequests");
+        return controller.coverage(forTicket, session).hasUncoveredFactories();
     }
 
     @Test

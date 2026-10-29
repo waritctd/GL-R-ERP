@@ -20,6 +20,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       importRequests: { brands: vi.fn().mockResolvedValue({ brands: [] }), pages: vi.fn(), download: vi.fn() },
       storedImportRequests: {
         listForTicket: vi.fn(),
+        coverage: vi.fn(),
         createDrafts: vi.fn(),
         update: vi.fn(),
         issue: vi.fn(),
@@ -85,10 +86,11 @@ function renderPanel(user, rows = [draftRow()], {
 } = {}) {
   if (rows instanceof Error) api.storedImportRequests.listForTicket.mockRejectedValue(rows);
   else {
-    api.storedImportRequests.listForTicket.mockResolvedValue(
-      hasUncoveredFactories === undefined ? { importRequests: rows } : { importRequests: rows, hasUncoveredFactories },
-    );
+    api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: rows });
   }
+  // The flag has its own endpoint; undefined = an older backend (no such route -> the call fails).
+  if (hasUncoveredFactories === undefined) api.storedImportRequests.coverage.mockRejectedValue(new Error('404'));
+  else api.storedImportRequests.coverage.mockResolvedValue({ hasUncoveredFactories });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>

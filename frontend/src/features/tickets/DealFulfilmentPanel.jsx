@@ -303,12 +303,12 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
     queryFn: () => api.storedImportRequests.listForTicket(ticketId).then((r) => r.importRequests ?? []),
     enabled: !!ticketId && canReadStoredIr,
   });
-  // Read-only server flag on the same list endpoint (a separate key: the rows query above is shared
-  // with other screens as a bare array). Only an explicit `false` hides the create controls — an older
+  // Read-only server flag from its own endpoint (the list stays rows-only for the import pages). Under the
+  // rows key's prefix, so invalidating the rows refreshes it too. Only an explicit `false` hides the create controls — an older
   // backend that omits it (undefined) keeps them.
   const coverageQuery = useQuery({
     queryKey: [...queryKeys.storedImportRequests(ticketId), 'coverage'],
-    queryFn: () => api.storedImportRequests.listForTicket(ticketId).then((r) => r.hasUncoveredFactories),
+    queryFn: () => api.storedImportRequests.coverage(ticketId).then((r) => r.hasUncoveredFactories),
     enabled: !!ticketId && canReadStoredIr,
   });
   const allFactoriesCovered = coverageQuery.data === false;
@@ -779,8 +779,6 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
                     onClick={() => markGoodsReceivedMutation.mutate()} data-testid="deal-fulfilment-mark-goods-received">
                     รับสินค้าแล้ว
                   </Button>
-                ) : fs == null ? (
-                  <p className="text-xs text-text-muted">ยังไม่ออกใบขอซื้อ</p>
                 ) : null}
               </div>
             </>
