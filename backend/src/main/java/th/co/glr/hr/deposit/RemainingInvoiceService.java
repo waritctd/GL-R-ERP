@@ -153,8 +153,8 @@ public class RemainingInvoiceService {
         BigDecimal depositAmount = nz(resolved.depositAmount());
         List<String> notes = req != null && req.notes() != null ? req.notes() : defaultNotes();
 
-        BigDecimal itemsTotal = sumAmounts(items);
-        DepositNoticeService.RemainingInvoiceMoney money = depositNoticeService.computeRemainingInvoiceMoney(itemsTotal, depositAmount);
+        BigDecimal itemsTotal = resolved.itemsTotal();
+        DepositNoticeService.RemainingInvoiceMoney money = depositNoticeService.computeRemainingInvoiceMoney(resolved);
 
         DepositNoticeService.CustomerHeaderInfo header = snap.header();
         TicketSummaryDto s = snap.ticketSummary();
@@ -203,8 +203,8 @@ public class RemainingInvoiceService {
         BigDecimal depositAmount = nz(resolved.depositAmount());
         List<String> notes = req != null && req.notes() != null ? req.notes() : existing.notes();
 
-        BigDecimal itemsTotal = sumAmounts(items);
-        DepositNoticeService.RemainingInvoiceMoney money = depositNoticeService.computeRemainingInvoiceMoney(itemsTotal, depositAmount);
+        BigDecimal itemsTotal = resolved.itemsTotal();
+        DepositNoticeService.RemainingInvoiceMoney money = depositNoticeService.computeRemainingInvoiceMoney(resolved);
 
         DepositNoticeService.CustomerHeaderInfo header = snap.header();
         TicketSummaryDto s = snap.ticketSummary();
@@ -266,8 +266,8 @@ public class RemainingInvoiceService {
         }
         BigDecimal depositAmount = nz(resolved.depositAmount());
 
-        BigDecimal itemsTotal = sumAmounts(items);
-        DepositNoticeService.RemainingInvoiceMoney money = depositNoticeService.computeRemainingInvoiceMoney(itemsTotal, depositAmount);
+        BigDecimal itemsTotal = resolved.itemsTotal();
+        DepositNoticeService.RemainingInvoiceMoney money = depositNoticeService.computeRemainingInvoiceMoney(resolved);
         DepositNoticeService.CustomerHeaderInfo header = snap.header();
         TicketSummaryDto snapSummary = snap.ticketSummary();
 

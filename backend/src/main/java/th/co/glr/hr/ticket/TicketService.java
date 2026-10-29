@@ -1073,13 +1073,12 @@ public class TicketService {
         // here — null may only ever advance to CUSTOMER_CONFIRMED, so a bypass-policy deal must
         // have actually reached CUSTOMER_CONFIRMED (via confirmCustomer) before an IR can issue.
         // This is a deliberate behaviour change; see the branch report.
-        boolean depositPolicyBypassesNotice = DepositPolicy.bypassesDepositNotice(s.depositPolicy())
-            && "CUSTOMER_CONFIRMED".equals(s.paymentStatus());
-        boolean depositReady = "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus())
-            || "DEPOSIT_PAID".equals(s.paymentStatus())
-            || depositPolicyBypassesNotice
-            || (allowAdvancedPayment
-                && ("AWAITING_FINAL_PAYMENT".equals(s.paymentStatus()) || "FULLY_PAID".equals(s.paymentStatus())));
+        // One deposit predicate: a notice issued, or depositSettled (paid / no-deposit); the paid-further states
+        // (AWAITING_FINAL_PAYMENT, FULLY_PAID) count only with allowAdvancedPayment.
+        boolean paidFurther = PaymentTrack.AWAITING_FINAL_PAYMENT.equals(s.paymentStatus())
+            || PaymentTrack.FULLY_PAID.equals(s.paymentStatus());
+        boolean depositReady = PaymentTrack.DEPOSIT_NOTICE_ISSUED.equals(s.paymentStatus())
+            || (depositSettled(s) && (allowAdvancedPayment || !paidFurther));
         // Gated on the deposit ALONE (owner ruling 2026-10-01): the ticket's legacy status is no
         // longer required to be quotation_issued — the redesigned pricing chain does not always
         // advance it, and a deal whose deposit is in hand must be able to import.
@@ -1809,9 +1808,8 @@ public class TicketService {
                 + (note != null ? " — " + note : ""),
             RelatedDocumentType.PAYMENT_RECEIPT, receiptId);
         reconcilePaymentStatus(ticketId, actor);
-        // Deposit confirmed (the payment track moved past CUSTOMER_CONFIRMED): an all-stock deal is ready to deliver.
-        String paymentAfter = requireTicket(ticketId).summary().paymentStatus();
-        if (paymentAfter != null && !"CUSTOMER_CONFIRMED".equals(paymentAfter)) {
+        // Deposit settled (a notice alone is not money): an all-stock deal is ready to deliver.
+        if (depositSettled(requireTicket(ticketId).summary())) {
             routeAllStockDealToDelivery(ticketId, actor);
         }
         return requireTicket(ticketId);

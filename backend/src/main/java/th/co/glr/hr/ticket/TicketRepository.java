@@ -2482,13 +2482,15 @@ public class TicketRepository {
      */
     public boolean reconcileItemQty(long ticketId, long itemId, BigDecimal qty, BigDecimal qtySqm,
                                     BigDecimal qtyFromStock) {
-        // qty_from_stock moves in the same statement as qty so chk_ticket_item_qty_from_stock never
-        // sees a half-written row: the pricing request's stock lines are the only writer (no reserve step).
+        // qty_from_stock moves in the same statement as qty so chk_ticket_item_qty_from_stock never sees a
+        // half-written row. A null qtyFromStock leaves the existing value alone (only stock lines are written).
         return jdbc.update("""
             UPDATE sales.ticket_item
-               SET qty = :qty, qty_sqm = :qtySqm, qty_from_stock = :qtyFromStock
+               SET qty = :qty, qty_sqm = :qtySqm, qty_from_stock = COALESCE(CAST(:qtyFromStock AS numeric), qty_from_stock)
              WHERE ticket_id = :ticketId AND item_id = :itemId
-               AND (qty IS DISTINCT FROM :qty OR qty_from_stock IS DISTINCT FROM :qtyFromStock)
+               AND (qty IS DISTINCT FROM :qty
+                    OR (CAST(:qtyFromStock AS numeric) IS NOT NULL
+                        AND qty_from_stock IS DISTINCT FROM CAST(:qtyFromStock AS numeric)))
             """,
             new MapSqlParameterSource()
                 .addValue("ticketId", ticketId)
@@ -2575,7 +2577,7 @@ public class TicketRepository {
                 (ticket_id, brand, model, color, texture, size, factory, qty, qty_sqm, unit_basis,
                  qty_from_stock, currency, sort_order)
             VALUES (:ticketId, :brand, :model, :color, :texture, :size, :factory, :qty, :qtySqm,
-                    :unitBasis, :qtyFromStock, 'THB',
+                    :unitBasis, COALESCE(CAST(:qtyFromStock AS numeric), 0), 'THB',
                     (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM sales.ticket_item WHERE ticket_id = :ticketId))
             RETURNING item_id
             """,

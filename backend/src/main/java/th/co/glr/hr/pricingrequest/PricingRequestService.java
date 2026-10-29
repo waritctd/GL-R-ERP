@@ -60,7 +60,7 @@ public class PricingRequestService {
     private static final Set<String> SALES_ROLES  = Set.of("sales");
     private static final Set<String> IMPORT_ROLES = Set.of("import");
     /** Line sources (V194). null = สั่งนำเข้า. */
-    static final String STOCK_IN_THAILAND = "IN_THAILAND";
+    public static final String STOCK_IN_THAILAND = "IN_THAILAND";
     // Mirrors TicketService.VIEWER_ROLES: who may read a pricing request at all.
     // sales_manager stays read-only oversight here too — never add it to
     // SALES_ROLES/IMPORT_ROLES.

@@ -50,6 +50,7 @@
 
 import { bangkokTodayIso } from '../../utils/format.js';
 import { DEAD_PRICING_REQUEST_STATUSES, QUOTATION_RECIPIENT_OPTIONS } from '../quotations/quotationMeta.js';
+import { depositSettled } from './dealMoneyStatus.js';
 import { nextFulfilmentActionCode } from './importActions.js';
 import { isRemainingInvoiceReady } from './remainingInvoiceReadiness.js';
 
@@ -195,6 +196,8 @@ const BRIDGEABLE_TICKET_STATUSES = new Set(['draft', 'quotation_issued']);
 // No deposit notice is made for these (deposit policy).
 const DEPOSIT_NOT_NEEDED = new Set(['NOT_REQUIRED', 'WAIVED', 'CREDIT_CUSTOMER']);
 
+const PAID_FURTHER = new Set(['AWAITING_FINAL_PAYMENT', 'FULLY_PAID']);
+
 const QUOTED_STATUSES = new Set(['quotation_issued', 'document_issued']);
 
 const PRE_SPEC_STAGES = new Set(['LEAD_APPROACH', 'PRESENTATION']);
@@ -301,7 +304,7 @@ function routeChoiceAction(ownPrs, quotationOf, offRouteParties) {
  * while the route is unknown. `quotationByRequest`: a Map, pricingRequestId -> the newest
  * PRICING_REQUEST-origin quotation `{ id, number, docStatus }` — only the deal page has it.
  */
-export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = null, offRouteParties = null, quotationByRequest = null, depositNotice = null, remainingInvoice, importRequests } = {}) {
+export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = null, offRouteParties = null, quotationByRequest = null, depositNotice = null, remainingInvoice, importRequests, items } = {}) {
   if (!deal || deal.lifecycle !== 'ACTIVE') return null;
 
   // 0. Slice 2 — flow A (SLICE-2-FLOW-A.md §E, IA §4): a LIVE direct quotation. Checked BEFORE
@@ -323,7 +326,7 @@ export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = nul
   // Owner rulings 2026-10-28: a confirmed flow-A deal keeps its direct quotation APPROVED + live, so
   // the deposit notice must outrank this revise.
   const depositAction = depositNoticeAction(deal, depositNotice);
-  if (confirmRefused && reviseTarget) return depositAction ?? importRequestAction(deal, importRequests) ?? reviseAction(reviseTarget);
+  if (confirmRefused && reviseTarget) return depositAction ?? importRequestAction(deal, importRequests, items) ?? reviseAction(reviseTarget);
 
   // Owner ruling 2026-10-15: ขั้น 1 → 2 → 3 are moved by hand, and the price request starts at ขั้น 3.
   // So on ขั้น 1–2 the one action is moving the stage — nothing below (a due follow-up, an older
@@ -419,7 +422,7 @@ export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = nul
   if (depositAction) return depositAction;
 
   // Owner rulings 2026-10-29 (QA-09): ขั้น 11, deposit paid and nothing ordered yet -> create the IR.
-  const importAction = importRequestAction(deal, importRequests);
+  const importAction = importRequestAction(deal, importRequests, items);
   if (importAction) return importAction;
 
   // A live request's quotation awaiting ผจก.ขาย/CEO: the rep waits.
@@ -541,12 +544,13 @@ function depositNoticeAction(deal, depositNotice) {
 }
 
 /** `importRequests` undefined = unknown (still the create label). A DRAFT row -> the issue label. */
-function importRequestAction(deal, importRequests) {
-  // A no-deposit deal never gets a deposit notice, so its payment status stays CUSTOMER_CONFIRMED (the backend
-  // gate, requireImportRequestIssuable, lets it issue an IR there).
-  const depositReady = deal.paymentStatus === 'DEPOSIT_PAID'
-    || (deal.paymentStatus === 'CUSTOMER_CONFIRMED' && DEPOSIT_NOT_NEEDED.has(deal.depositPolicy));
-  if (!depositReady || deal.fulfillmentStatus != null) return null;
+function importRequestAction(deal, importRequests, items) {
+  // Deposit settled (a no-deposit deal stays at CUSTOMER_CONFIRMED and may issue there), but not the paid-further
+  // states: by then the IR is long past (same behaviour as before). `items` is the page's own line list (the deal
+  // summary has none); a non-empty list fully covered from stock orders nothing from a factory.
+  const depositReady = depositSettled(deal) && !PAID_FURTHER.has(deal.paymentStatus);
+  const allFromStock = (items?.length ?? 0) > 0 && items.every((i) => Number(i.qtyFromStock ?? 0) >= Number(i.qty ?? 0));
+  if (!depositReady || allFromStock || deal.fulfillmentStatus != null) return null;
   return {
     key: SALES_ACTION.CREATE_IMPORT_REQUEST,
     label: importRequests?.some((r) => r.status === 'DRAFT') ? 'ออกเลขใบขอซื้อ (IR)' : ACTION_LABEL[SALES_ACTION.CREATE_IMPORT_REQUEST],

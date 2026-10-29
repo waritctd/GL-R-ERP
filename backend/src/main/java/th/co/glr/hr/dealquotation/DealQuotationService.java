@@ -4075,7 +4075,7 @@ public class DealQuotationService {
         for (DealQuotationItemDto item : items) {
             boolean tile = item.lineType() == null || WastageCalculator.LINE_TYPE_TILE.equals(item.lineType());
             // In-Thailand stock lines skip import (owner ruling 2026-10-28); IN_TRANSIT still needs a lead time (2026-10-29).
-            if (tile && !"IN_THAILAND".equals(item.stockSource()) && (item.leadTimeMinDays() == null || item.leadTimeMaxDays() == null)) {
+            if (tile && !th.co.glr.hr.pricingrequest.PricingRequestService.STOCK_IN_THAILAND.equals(item.stockSource()) && (item.leadTimeMinDays() == null || item.leadTimeMaxDays() == null)) {
                 missingSeqs.add(String.valueOf(item.seq()));
             }
         }

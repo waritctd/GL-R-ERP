@@ -689,7 +689,7 @@ public class PricingDecisionService {
         // Stock lines (V194, R4): a request made only of สต็อกในไทย lines never went through Import
         // (no quote, no ETA), so there is nothing to send back to it.
         List<PricingRequestItemDto> returnItems = pricingRequests.findItems(summary.id());
-        if (!returnItems.isEmpty() && returnItems.stream().allMatch(i -> "IN_THAILAND".equals(i.stockSource()))) {
+        if (!returnItems.isEmpty() && returnItems.stream().allMatch(i -> th.co.glr.hr.pricingrequest.PricingRequestService.STOCK_IN_THAILAND.equals(i.stockSource()))) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "คำขอราคานี้เป็นสต็อกในไทยทั้งหมด ไม่ผ่านฝ่ายนำเข้า จึงตีกลับให้ฝ่ายนำเข้าไม่ได้");
         }

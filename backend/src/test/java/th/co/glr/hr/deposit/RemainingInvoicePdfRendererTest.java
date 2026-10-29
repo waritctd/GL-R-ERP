@@ -65,6 +65,29 @@ class RemainingInvoicePdfRendererTest {
         Assumptions.assumeTrue(LibreOfficePdfConverter.isAvailable(), "LibreOffice (soffice) not installed");
     }
 
+    // A document with no VAT (an EN-quotation deal): the template's "ภาษีมูลค่าเพิ่ม 7%" row must not print at all
+    // (the EN quotation form has no VAT row either). With VAT the row is printed as before.
+    @Test
+    void vatRow_isNotPrinted_whenTheDocumentHasNoVat_andIsPrintedOtherwise() throws Exception {
+        RemainingInvoiceRenderModel noVat = new RemainingInvoiceRenderModel(LocalDate.of(2026, 10, 28), "GLR6999999-1",
+            "บริษัท ทดสอบ จำกัด", "สำนักงานใหญ่", "0105599999999", "99 ถนนทดสอบ", "ตึกตัวอย่าง", "QT-TEST-0002", null,
+            twoItems(), BigDecimal.ZERO, new BigDecimal("1000.00"), BigDecimal.ZERO, new BigDecimal("1000.00"), "สมหญิง ทดสอบ");
+        try (Workbook wb = render(noVat)) {
+            Sheet sh = wb.getSheet("Update");
+            int d = 0;
+            while (!"รวมเป็นเงิน".equals(norm(str(sh, NET + d, 7))) && d < 40) d++;
+            assertThat(str(sh, VAT + d, 4)).as("VAT label").isBlank();
+            assertThat(str(sh, VAT + d, 7)).as("7% rate").isBlank();
+            assertThat(str(sh, VAT + d, 8)).as("VAT amount").isBlank();
+        }
+        try (Workbook wb = render(model())) {
+            Sheet sh = wb.getSheet("Update");
+            int d = 0;
+            while (!"รวมเป็นเงิน".equals(norm(str(sh, NET + d, 7))) && d < 40) d++;
+            assertThat(norm(str(sh, VAT + d, 4))).isEqualTo("ภาษีมูลค่าเพิ่ม");
+        }
+    }
+
     @Test
     void headerBlockLandsInTheDesignCellMapAndKeepsTheLabels() throws Exception {
         try (Workbook wb = render(model())) {
@@ -118,6 +141,20 @@ class RemainingInvoicePdfRendererTest {
             for (int r = ITEM0; r <= d; r++)
                 for (int c = 0; c <= 9; c++)
                     assertThat(str(sh, r, c)).as("(%d,%d) no formula", r, c).doesNotStartWith("FORMULA:");
+        }
+    }
+
+    // A quotation's ส่วนลดพิเศษ line (qty -1, negative stored amount) prints as its own line with the stored values.
+    @Test
+    void aNegativeDiscountLine_printsItsStoredNegativeAmount() throws Exception {
+        List<RemainingInvoiceItemDto> items = new ArrayList<>(twoItems());
+        items.add(item(3, "ส่วนลดพิเศษ 10 บาท", "-1", null, "10.00", null, "10.00", "-10.00"));
+        try (Workbook wb = render(model(LocalDate.of(2026, 10, 28), BigDecimal.ZERO, items))) {
+            Sheet sh = wb.getSheetAt(0);
+            int r = ITEM0 + 2;
+            assertThat(norm(str(sh, r, 1))).isEqualTo("ส่วนลดพิเศษ 10 บาท");
+            assertThat(num(sh, r, 2)).isEqualTo(-1.0);
+            assertThat(num(sh, r, 8)).isCloseTo(-10.0, within(0.0001));
         }
     }
 

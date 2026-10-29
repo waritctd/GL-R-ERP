@@ -773,7 +773,7 @@ public final class DealQuotationRenderAdapter {
     /** A stock line (IN_THAILAND) is not imported, so its lead time (if any is stored) is never printed. */
     private static boolean hasImportLeadTime(DealQuotationItemDto item) {
         return item.leadTimeMinDays() != null && item.leadTimeMaxDays() != null
-            && !"IN_THAILAND".equals(item.stockSource());
+            && !th.co.glr.hr.pricingrequest.PricingRequestService.STOCK_IN_THAILAND.equals(item.stockSource());
     }
 
     // Matches the leading "N." numbering convention every OTHER remark line (LINE4/5/6/7/8 and

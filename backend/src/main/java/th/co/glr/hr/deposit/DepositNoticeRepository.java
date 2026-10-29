@@ -387,6 +387,55 @@ public class DepositNoticeRepository {
         }
     }
 
+    /** One stored line of a new-engine quotation, as the remaining invoice prints it: the STORED amount (never
+     * recomputed) and, for an ADJUSTMENT (ส่วนลดพิเศษ), qty -1 with its own negative amount. */
+    public record QuotationInvoiceLine(int seq, String description, BigDecimal qty, String unit, BigDecimal unitPrice,
+                                       BigDecimal salesDiscount, BigDecimal netUnitPrice, BigDecimal amount,
+                                       boolean adjustment) {}
+
+    public List<QuotationInvoiceLine> findQuotationInvoiceLines(long quotationId) {
+        return jdbc.query("""
+            SELECT seq, description, qty, raw_unit, unit_price, sales_discount, final_unit_price, amount, line_type
+              FROM sales.quotation_item
+             WHERE quotation_id = :quotationId
+             ORDER BY seq
+            """, Map.of("quotationId", quotationId), (rs, rowNum) -> {
+                boolean adjustment = "ADJUSTMENT".equals(rs.getString("line_type"));
+                String description = rs.getString("description");
+                String unit = rs.getString("raw_unit");
+                return new QuotationInvoiceLine(rs.getInt("seq"),
+                    description == null || description.isBlank() ? "รายการสินค้า" : description,
+                    rs.getBigDecimal("qty"),
+                    adjustment ? null : (unit == null || unit.isBlank() ? "หน่วย" : unit),
+                    rs.getBigDecimal("unit_price"), rs.getBigDecimal("sales_discount"),
+                    rs.getBigDecimal("final_unit_price"), rs.getBigDecimal("amount"), adjustment);
+            });
+    }
+
+    /** The quotation payable reads: id, number, stored total, document language (null = TH), and whether it is a
+     * new-engine row (origin set) - legacy rows (origin NULL) belong to the legacy resolver. */
+    public record AnsweredQuotation(long id, String number, BigDecimal totalAmount, String documentLanguage,
+                                    boolean newEngine) {}
+
+    /**
+     * Exactly payable's ANSWERED selection ({@link th.co.glr.hr.ticket.TicketRepository#ANSWERED_QUOTATION_SQL}, no
+     * extra origin filter, same pick order: ACCEPTED first, BUYER over OWNER over the rest, newest), so payable and
+     * the invoice can never choose different quotations.
+     */
+    public Optional<AnsweredQuotation> findAnsweredQuotation(long ticketId) {
+        List<AnsweredQuotation> rows = jdbc.query("SELECT q.quotation_id, q.number, q.total_amount, q.document_language,"
+            + " q.origin IS NOT NULL AS new_engine FROM sales.quotation q"
+            + " WHERE q.ticket_id = :ticketId AND "
+            + th.co.glr.hr.ticket.TicketRepository.ANSWERED_QUOTATION_SQL
+            + " ORDER BY CASE WHEN q.doc_status = 'ACCEPTED' THEN 0 ELSE 1 END,"
+            + " CASE q.recipient_type WHEN 'BUYER' THEN 0 WHEN 'OWNER' THEN 1 ELSE 2 END,"
+            + " q.accepted_at DESC NULLS LAST, q.issued_at DESC, q.quotation_id DESC LIMIT 1",
+            Map.of("ticketId", ticketId),
+            (rs, rowNum) -> new AnsweredQuotation(rs.getLong("quotation_id"), rs.getString("number"),
+                rs.getBigDecimal("total_amount"), rs.getString("document_language"), rs.getBoolean("new_engine")));
+        return rows.stream().findFirst();
+    }
+
     /** One deal quotation's {@code sales.quotation_item} lines, by {@code seq}, as deposit-notice
      * items. Reads the RESOLVED display columns the quotation itself prints
      * ({@code qty}/{@code raw_unit}/{@code unit_price}/{@code final_unit_price}), NOT the legacy

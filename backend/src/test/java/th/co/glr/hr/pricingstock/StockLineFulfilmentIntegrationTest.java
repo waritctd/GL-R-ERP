@@ -307,6 +307,39 @@ class StockLineFulfilmentIntegrationTest extends AbstractStockLineIntegrationTes
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
     }
 
+    // Review fix 3: the writer touches ONLY stock lines. An import line with a legacy qty_from_stock (a reserve made
+    // before this feature, via reserveStock) keeps it through order confirmation.
+    @Test
+    void b1_aLegacyReserveOnAnImportLine_survivesOrderConfirmation() {
+        long pcr = acceptedPcr(Set.of(),
+            importLine("Imp A", catalogProductFactoryA, FACTORY_A, 20),
+            stockLine("Stock A", IN_THAILAND, 10));
+        acceptQuotation(pcr, 30);
+        jdbc.update("UPDATE sales.ticket_item SET qty = 20, qty_from_stock = 5 WHERE ticket_id = :t AND model = 'Imp A'",
+            Map.of("t", ticketId));
+
+        orderConfirmation.confirmOrder(pcr, confirmRequest(), salesActor);
+
+        assertThat(qtyFromStock("Imp A")).as("the legacy reserve is kept").isEqualByComparingTo("5");
+        assertThat(qtyFromStock("Stock A")).isEqualByComparingTo("10");
+    }
+
+    // Review fix 4: waiveDeposit is refused once a deposit notice is out (Rule 4), so a waiver can never reach
+    // an all-stock deal sitting at DEPOSIT_NOTICE_ISSUED - there is no route to add there. Pinned, not changed.
+    @Test
+    void b4_waivingTheDeposit_afterTheNoticeIsIssued_isRefused409_andTheDealStaysPut() {
+        long pcr = acceptedPcr(Set.of(), stockLine("Stock A", IN_THAILAND, 10));
+        acceptQuotation(pcr, 30);
+        orderConfirmation.confirmOrder(pcr, confirmRequest(), salesActor);
+        jdbc.update("UPDATE sales.ticket SET payment_status = 'DEPOSIT_NOTICE_ISSUED' WHERE ticket_id = :t",
+            Map.of("t", ticketId));
+
+        assertThatThrownBy(() -> ticketService.waiveDeposit(ticketId, "WAIVED", "ลูกค้าเครดิต", salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        assertThat(summary().salesStage()).isEqualTo(DealStage.ORDER_RECEIVED);
+        assertThat(summary().fulfillmentStatus()).isNull();
+    }
+
     // ── B12 (W4-04): no new pricing round once the order is confirmed ────────────────────
 
     @Test

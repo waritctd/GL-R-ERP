@@ -1612,7 +1612,8 @@ function reconcileTicketItemsFromPricingRequest(ticket, pr, user) {
       const ticketItem = ticket.items.find((ti) => ti.id === item.sourceTicketItemId);
       if (!ticketItem) continue;
       const qtyDelivered = Number(ticketItem.qtyDelivered ?? 0);
-      if (newQty < qtyDelivered) {
+      const stockLine = item.stockSource === 'IN_THAILAND';
+      if (newQty < qtyDelivered || (!stockLine && newQty < Number(ticketItem.qtyFromStock ?? 0))) {
         // Mirrors the DB's chk_ticket_item_qty_delivered/chk_ticket_item_qty_from_stock CHECK
         // constraints (V54) that back the real reconcileItemQty call — a downward reconciliation
         // that would drop qty below an already-recorded delivered/reserved amount is refused, not
@@ -1621,7 +1622,8 @@ function reconcileTicketItemsFromPricingRequest(ticket, pr, user) {
           + 'เนื่องจากมีการส่งมอบหรือจองสต็อกไปแล้วเกินจำนวนใหม่', 409);
       }
       // A stock line (IN_THAILAND) is covered in full - the one writer of qtyFromStock (no reserve step).
-      const coveredFromStock = item.stockSource === 'IN_THAILAND' ? newQty : 0;
+      // Any other line keeps what it had (a legacy reserve survives), as the backend does.
+      const coveredFromStock = stockLine ? newQty : Number(ticketItem.qtyFromStock ?? 0);
       if (Number(ticketItem.qty) !== newQty || Number(ticketItem.qtyFromStock ?? 0) !== coveredFromStock) {
         ticketItem.qty = newQty;
         ticketItem.qtySqm = item.requestedQtySqm ?? null;
@@ -4672,6 +4674,13 @@ export function setPricingRequestStatusForTests(prId, status) {
   const pr = mockPricingRequests.find((row) => row.id === Number(prId));
   if (!pr) throw new Error(`no pricing request ${prId}`);
   pr.status = status;
+}
+
+/** TEST-ONLY seam — not part of `api`. Sets a ticket line's qtyFromStock (a legacy reserve made before walk 4). */
+export function setTicketItemQtyFromStockForTests(ticketId, itemId, qty) {
+  const item = db.tickets.find((t) => t.id === Number(ticketId))?.items.find((i) => i.id === Number(itemId));
+  if (!item) throw new Error(`no ticket item ${itemId}`);
+  item.qtyFromStock = qty;
 }
 
 function mockLiveDirectQuotation(ticketId) {
@@ -14683,6 +14692,8 @@ export const api = {
         // GLA-125: mirrors PricingRequestService#resolveItem's own normalization — only ever
         // persisted under the "อื่นๆ" sentinel, cleared for every other origin_country value.
         originCountryOther: item.originCountry === 'อื่นๆ' ? (item.originCountryOther ?? null) : null,
+        // Stock line (IN_THAILAND) or null = สั่งนำเข้า: the one writer of ticket qtyFromStock reads it on confirmOrder.
+        stockSource: item.stockSource ?? null,
         // Catalog snapshot (Finding A, financial-integrity review commit 3) — populated only
         // by submit()'s snapshotCatalogSelections mirror below, never at create/update time,
         // matching PricingRequestRepository.create/updateDraft/snapshotCatalogSelections.
@@ -14857,6 +14868,7 @@ export const api = {
           leadTimeMinDays: item.leadTimeMinDays ?? null,
           leadTimeMaxDays: item.leadTimeMaxDays ?? null,
           originCountryOther: item.originCountry === 'อื่นๆ' ? (item.originCountryOther ?? null) : null,
+          stockSource: item.stockSource ?? null,
           // See create()'s identical block above for why these start null.
           priceListVersionId: null,
           catalogPriceId: null,

@@ -43,7 +43,15 @@ public class RemainingInvoicePdfRenderer {
         int d = DocumentSheet.fillItems(sh, lines, NOTES_ROW, blocks);
 
         DocumentSheet.num(sh, NET + d, 8, m.netAmount());
-        DocumentSheet.num(sh, VAT + d, 8, m.vatAmount());
+        if (m.vatAmount().signum() == 0 && m.netAmount().signum() != 0) {
+            // No VAT on this document (an EN-quotation deal): the template's "ภาษีมูลค่าเพิ่ม 7%" row is left blank,
+            // as the EN quotation form has no VAT row either.
+            DocumentSheet.str(sh, VAT + d, 4, null);
+            DocumentSheet.str(sh, VAT + d, 7, null);
+            DocumentSheet.str(sh, VAT + d, 8, null);
+        } else {
+            DocumentSheet.num(sh, VAT + d, 8, m.vatAmount());
+        }
         DocumentSheet.num(sh, GRAND + d, 8, m.grandTotal());
         DocumentSheet.preparer(sh, PREPARER + d, m.preparerName());
         DocumentSheet.signatureDate(sh, SIGDATE + d, m.docDate());

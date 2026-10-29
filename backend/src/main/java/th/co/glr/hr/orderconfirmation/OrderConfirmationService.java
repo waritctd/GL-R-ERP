@@ -25,6 +25,7 @@ import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestSummaryDto;
 import th.co.glr.hr.pricingrequest.PricingRequestEventKind;
 import th.co.glr.hr.pricingrequest.PricingRequestRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestRepository.OrderConfirmationState;
+import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.pricingrequest.PricingRequestStatus;
 import th.co.glr.hr.pricingrequest.UnitBasis;
 import th.co.glr.hr.ticket.QuotationRenderer;
@@ -356,8 +357,10 @@ public class OrderConfirmationService {
                 ? th.co.glr.hr.dealquotation.WastageCalculator.sqmQuantityFromPieces(
                     reconciledQty.intValueExact(), accepted.sqmPerPiece())
                 : item.requestedQtySqm();
-            // A stock line (IN_THAILAND) is covered in full and never ordered from a factory; any other line 0.
-            BigDecimal qtyFromStock = "IN_THAILAND".equals(item.stockSource()) ? reconciledQty : BigDecimal.ZERO;
+            // A stock line is covered in full and never ordered from a factory. Any other line is left as it is
+            // (null): a legacy reserve on an import line survives, and a new row defaults to 0.
+            BigDecimal qtyFromStock = PricingRequestService.STOCK_IN_THAILAND.equals(item.stockSource())
+                ? reconciledQty : null;
             if (item.sourceTicketItemId() != null) {
                 boolean changed;
                 try {

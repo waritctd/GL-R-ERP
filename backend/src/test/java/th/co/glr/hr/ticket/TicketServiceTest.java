@@ -1506,6 +1506,24 @@ class TicketServiceTest {
             10L, DepositPolicy.REQUIRED, "DEPOSIT_PAID", PaymentTrack.FULLY_PAID);
     }
 
+    // Review fix 2: an all-stock deal is routed only when the deposit is actually settled. If a payment leaves
+    // the payment track at DEPOSIT_NOTICE_ISSUED (a notice is not money) nothing is routed. The real service
+    // always moves a positive payment to DEPOSIT_PAID, so this state is pinned with a stubbed repository.
+    @Test
+    void recordPayment_leavingTheDealAtDepositNoticeIssued_doesNotRouteAnAllStockDeal() {
+        TicketItemDto allStock = deliveryItem(1L, "100.00", "0.00", "100.00");
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(allStock), "DEPOSIT_NOTICE_ISSUED", null,
+            DealStage.ORDER_RECEIVED, null);
+        when(ticketRepo.payableAmount(10L)).thenReturn(new BigDecimal("1000.00"));
+        when(ticketRepo.sumPaid(10L)).thenReturn(BigDecimal.ZERO);
+
+        service.recordPayment(10L,
+            new RecordPaymentRequest("DEPOSIT", new BigDecimal("100.00"), null, "มัดจำ", null, null, false),
+            accountActor);
+
+        verify(ticketRepo, never()).updateFulfillmentStatus(eq(10L), anyString());
+    }
+
     @Test
     void recordPayment_balanceBringsCumulativePaidToFull() {
         stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_PAID", "SHIPPING");

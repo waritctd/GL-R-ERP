@@ -786,6 +786,18 @@ describe('nextSalesAction — ออกใบขอซื้อ (IR) at ขั�
       .not.toBe('create_import_request');
   });
 
+  // Review fix 5: a deal whose lines are all covered from stock orders nothing from a factory. The page passes its
+  // items (the deal summary has none); a legacy deal not yet routed to FROM_STOCK must still not be told to make an IR.
+  it('items all covered from stock -> no create_import_request; some uncovered, or no items passed -> still offered', () => {
+    const covered = [{ qty: 10, qtyFromStock: 10 }, { qty: 4, qtyFromStock: 4 }];
+    const partly = [{ qty: 10, qtyFromStock: 10 }, { qty: 8, qtyFromStock: 0 }];
+    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { importRequests: [], items: covered })?.key)
+      .not.toBe('create_import_request');
+    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { importRequests: [], items: partly })).toEqual(CREATE_IR);
+    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { importRequests: [], items: [] })).toEqual(CREATE_IR);
+    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { importRequests: [] })).toEqual(CREATE_IR);
+  });
+
   // Walk 4 (W4-05): a no-deposit deal never gets a deposit notice, so nothing moves its payment status past
   // CUSTOMER_CONFIRMED - the backend gate (requireImportRequestIssuable) already lets it issue an IR there.
   // The main button must offer the IR, not fall through to "nothing to do".
