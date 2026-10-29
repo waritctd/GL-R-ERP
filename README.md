@@ -1,15 +1,65 @@
-# GL&R HR Portal
-
-This repository is split into two clear applications:
+# GL&R ERP (HR + Sales/CRM portal)
 
 ```text
-frontend/  React + Vite HR portal
-backend/   Spring Boot API for PostgreSQL/Supabase
+frontend/  React 18 + Vite + Tailwind 4 portal (HR self-service, payroll, sales/CRM pipeline)
+backend/   Spring Boot 4 / Java 21 API, Flyway migrations, PostgreSQL
+docs/      design notes, rulings, API digests
+scripts/   backend image push, font check, Thai address import
 ```
 
-The frontend calls the Spring Boot backend through the existing `/api/*` contract.
+The frontend talks to the backend through the `/api/*` contract. Per-app details live in
+[frontend/README.md](frontend/README.md) and [backend/README.md](backend/README.md).
 
-## Frontend
+**Prerequisites:** Node `^20.19` or `>=22.12`, Java 21 (the `./mvnw` wrapper is included), and
+Docker or a local PostgreSQL 16 for the real-backend path.
+
+## Run a local develop stack
+
+Two ways. Pick **A** to click around in two minutes; pick **B** to test against the real API.
+
+### A. Mock mode (no backend, no database)
+
+The whole API runs in the browser from `frontend/src/api/mockApi.js`, with seeded employees,
+leave, overtime, payroll, customers, deals, quotations and a sample price catalogue.
+
+```bash
+cd frontend
+npm install
+VITE_USE_MOCKS=true npm run dev
+```
+
+Open <http://localhost:5174>. The login page shows one-click role buttons (ฝ่ายบุคคล, พนักงาน,
+ผู้จัดการฝ่าย, ฝ่ายขาย, ผู้จัดการฝ่ายขาย, ฝ่ายนำเข้า, ฝ่ายบัญชี, CEO). No password is needed.
+Changes are held in memory and reset on reload.
+
+The mock catalogue is a small sample (14 products, 25 prices across the 9 real factories). It is
+enough to exercise the quotation item picker, not to test pricing at full scale. Use path B for that.
+
+### B. Real backend with demo data and quick login
+
+**1. Start PostgreSQL.** The repo's compose file gives you the database the backend expects by
+default (`hris`, user `postgres`, password `postgres`, port 5432):
+
+```bash
+docker compose up -d db
+```
+
+**2. Start the backend with the `demo` profile.** The profile adds `db/migration-demo`, which
+seeds one login per role plus sample employees, customers and deals. Flyway creates the whole
+schema on first boot.
+
+```bash
+cd backend
+SPRING_PROFILES_ACTIVE=demo \
+SERVER_SESSION_COOKIE_SECURE=false \
+APP_MAIL_PROVIDER=log \
+./mvnw spring-boot:run
+```
+
+`SERVER_SESSION_COOKIE_SECURE=false` is required over plain HTTP, otherwise the browser drops the
+session cookie and every request after login is a 401. The API listens on `http://localhost:8080`.
+
+**3. Start the frontend** (a second terminal):
 
 ```bash
 cd frontend
@@ -17,67 +67,103 @@ npm install
 npm run dev
 ```
 
-To point the frontend at a local backend:
+`frontend/.env.development` already points the dev server at `http://localhost:8080`, turns mocks
+off, and unlocks the full app. Open **<http://localhost:5174>** and use `localhost`, not
+`127.0.0.1`. The backend cookie is `SameSite=Lax`, and the API is on `localhost`, so a page on
+`127.0.0.1` never sends it.
+
+**4. Quick login.** On the dev server the login page shows an **เดโม (เซิร์ฟเวอร์จริง) — เข้าสู่ระบบด่วน** row with one
+button per seeded account. The row exists only under `npm run dev` with mocks off. It is removed
+from production builds. The accounts are `demo.<key>@demo.invalid`, all with password `Demo@2026`:
+
+| Button | Login | Use it to test |
+| --- | --- | --- |
+| พนักงาน | `demo.employee@demo.invalid` | self-service, leave, OT, profile requests |
+| ฝ่ายบุคคล | `demo.hr@demo.invalid` | employees, approvals, payroll, password reset |
+| ฝ่ายขาย | `demo.sales@demo.invalid` | deals, price requests, quotations |
+| ผู้จัดการฝ่ายขาย | `demo.salesmanager@demo.invalid` | team deals, commission |
+| ฝ่ายนำเข้า | `demo.import@demo.invalid` | import requests, catalogue and price import |
+| ฝ่ายบัญชี | `demo.account@demo.invalid` | deposits, invoices, payments |
+| คลังสินค้า | `demo.warehouse@demo.invalid` | delivery |
+| QC | `demo.qc@demo.invalid` | quality checks |
+| CEO | `demo.ceo@demo.invalid` | price approval, pricing settings, dashboards |
+
+To switch persona, log out and click another button. Restarting the backend also logs you out.
+
+**5. Load the price catalogue.** This is the one thing the demo seed does **not** include.
+The nine factories exist (Panaria, LEA, Padana, CDE, CITY, REFIN, Equipe, Vives, Bode), but
+`price_catalog.product_prices` is empty, so the product picker in a quotation shows no matches
+and no error. The real supplier price lists are not in this repository. Load them one of two ways:
+
+- **Upload through the app.** Log in as **ฝ่ายนำเข้า** or **CEO**, open **นำเข้าราคา**
+  (`/price-import`), and upload each factory's Excel price list. Import rules per factory are in
+  [docs/Catalouge/catalog-import-logic.md](docs/Catalouge/catalog-import-logic.md). Ask a teammate
+  for the files.
+- **Copy it from another database.** If a teammate has a populated database, dump only the
+  catalogue schema and load it into yours. `size_norm` and `price_per_sqm` are generated columns,
+  so use `pg_dump --data-only --column-inserts` and run it after step 2 has created the schema:
+
+  ```bash
+  pg_dump --data-only --column-inserts --schema=price_catalog -h <source-host> -U <user> <source-db> \
+    | psql -h localhost -U postgres hris
+  ```
+
+Only rows whose price list version is `ACTIVE` show up in the sales picker.
+
+**Reset to a fresh demo.** Stop the backend, then recreate the database and start again:
 
 ```bash
-cd frontend
-VITE_API_BASE_URL=http://127.0.0.1:8080 npm run dev
+docker compose down -v        # drops the pgdata volume
+docker compose up -d db
 ```
 
-See [frontend/README.md](frontend/README.md).
+### Pointing the frontend somewhere else
 
-## Backend
+| Variable | Effect |
+| --- | --- |
+| `VITE_USE_MOCKS=true` | use the in-browser mock API |
+| `VITE_API_BASE_URL` | API origin the browser calls (`.env.development` sets `http://localhost:8080`) |
+| `VITE_API_PROXY_TARGET` | backend the Vite `/api` proxy forwards to, when `VITE_API_BASE_URL` is empty |
+| `VITE_SELF_SERVICE_ONLY=true` | show the locked-down production surface (self-service only) to non-HR, non-CEO roles |
+| `VITE_ENABLE_SALES=false` | hide the sales/CRM stack |
 
-The backend uses Spring Boot, Flyway, and PostgreSQL/Supabase. Local database secrets belong in ignored file `backend/.env.local`; commit only `backend/.env.example`.
-
-```bash
-cd backend
-set -a
-source .env.local
-set +a
-./mvnw spring-boot:run
-```
-
-See [backend/README.md](backend/README.md).
+If you run the backend on another port or host, add the frontend origin to
+`APP_CORS_ALLOWED_ORIGINS`. The default allows `localhost` and `127.0.0.1` on ports 5173 and 5174.
 
 ## Tests And Builds
 
-Run the backend unit/controller tests:
+Backend (from `backend/`):
 
 ```bash
-cd backend
-./mvnw test
+./mvnw test                       # unit, controller and, when a database is reachable, integration tests
+./mvnw -DskipTests package        # build the jar
 ```
 
-15 integration tests are skipped unless `TEST_DB_URL`, `TEST_DB_USERNAME`, and `TEST_DB_PASSWORD` point at a real Postgres. `./mvnw test` passes without them but only runs the Mockito unit tests; set them to also exercise the Flyway/repository integration suite (`AbstractPostgresIntegrationTest`).
+The integration suite resolves its database in this order: `TEST_DB_URL`, `TEST_DB_USERNAME` and
+`TEST_DB_PASSWORD` if set; otherwise a Testcontainers `postgres:16-alpine` when Docker is running;
+otherwise those tests skip. With Docker running, a plain `./mvnw test` exercises Flyway and the
+repositories.
 
-Build the backend package:
-
-```bash
-cd backend
-./mvnw -DskipTests package
-```
-
-Build the frontend:
+Frontend (from `frontend/`):
 
 ```bash
-cd frontend
+npm run lint        # ESLint, including jsx-a11y
+npm test            # Vitest; run it from frontend/ or source-guard tests fail
 npm run build
 ```
 
-Run the frontend lint and test scripts:
+Real-backend end-to-end tests (Playwright, no mocks) are described in
+[frontend/e2e-real/README.md](frontend/e2e-real/README.md). Start the database and backend as above,
+then run `npm run test:e2e` from `frontend/`.
 
-```bash
-cd frontend
-npm run lint
-npm test
-```
-
-`npm test` runs the Vitest suite.
+CI runs backend tests, frontend lint/test/build, and the real-backend e2e suite on every pull
+request (`.github/workflows/`).
 
 ## Vercel Frontend Deployment
 
 This repo includes a root-level `vercel.json` for Vercel projects whose Root Directory is the repository root. It installs and builds `frontend/`, publishes `frontend/dist`, proxies `/api/*` to the Render backend, and serves `index.html` for React SPA routes.
+
+Builds are locked to the self-service surface by default (`VITE_SELF_SERVICE_ONLY` is on unless set to `false`). The `develop` branch build sets it to `false`, so the develop preview shows the full app; every other branch, including `main`, ships the locked surface.
 
 If the Vercel project Root Directory is set to `frontend`, the matching `frontend/vercel.json` can be used instead.
 
