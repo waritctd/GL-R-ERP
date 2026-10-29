@@ -59,21 +59,8 @@ public class PricingRequestService {
     // two lists in sync by inspection, not by sharing a mutable reference.
     private static final Set<String> SALES_ROLES  = Set.of("sales");
     private static final Set<String> IMPORT_ROLES = Set.of("import");
-    // Stock lines (V194): who may confirm an in-transit line's ETA (import; the CEO may too).
-    // Converting an in-transit line to สั่งนำเข้า is IMPORT ONLY - the CEO is refused (IA 1.7).
-    private static final Set<String> ETA_ROLES = Set.of("import", "ceo");
     /** Line sources (V194). null = สั่งนำเข้า. */
-    static final String STOCK_IN_THAILAND = "IN_THAILAND";
-    static final String STOCK_IN_TRANSIT = "IN_TRANSIT";
-    /**
-     * Statuses in which an in-transit line's ETA may be saved / the line converted to import.
-     * READY_FOR_CEO_REVIEW is included on purpose: import must be able to correct an ETA (or switch
-     * the line) after the request has already gone to the CEO - convert then pulls it back.
-     */
-    private static final Set<String> STOCK_LINE_EDIT_STATUSES = Set.of(
-        PricingRequestStatus.IMPORT_REVIEWING,
-        PricingRequestStatus.AWAITING_FACTORY_RESPONSE,
-        PricingRequestStatus.READY_FOR_CEO_REVIEW);
+    public static final String STOCK_IN_THAILAND = "IN_THAILAND";
     // Mirrors TicketService.VIEWER_ROLES: who may read a pricing request at all.
     // sales_manager stays read-only oversight here too — never add it to
     // SALES_ROLES/IMPORT_ROLES.
@@ -140,6 +127,7 @@ public class PricingRequestService {
             return detail(requireSameTicket(existing, ticketId).id());
         }
         requireActive(ticket);
+        requireOrderNotConfirmed(ticket);
         // Quotation <-> deal linking slice 1 (IA §7, 2026-09-30): a deal with a LIVE direct
         // (DEAL_DIRECT) quotation is priced by hand on that quotation; a pricing request on top would
         // make it the mixed-origin deal nobody has ever produced. Keyed on the live quotation, not
@@ -299,6 +287,7 @@ public class PricingRequestService {
         }
         TicketSummaryDto ticket = requireTicket(summary.ticketId());
         requireActive(ticket);
+        requireOrderNotConfirmed(ticket);
 
         List<PricingRequestItemDto> items = requests.findItems(id);
         if (items.isEmpty()) {
@@ -577,137 +566,17 @@ public class PricingRequestService {
         return detail(id);
     }
 
-    /**
-     * Stock lines (V194, IA 1.2, R12): import (or the CEO) confirms the วันที่คาดว่าจะถึง of ONE
-     * {@code IN_TRANSIT} line, then re-checks the single readiness predicate so the request advances
-     * the moment the last missing ETA lands.
-     *
-     * <p>Authz (IA 1.7): import + ceo only, 403 for everyone else. Refusals: 400 null date; 409 when
-     * the request is outside IMPORT_REVIEWING / AWAITING_FACTORY_RESPONSE / READY_FOR_CEO_REVIEW or the
-     * line is not in transit. Changing an ETA that is already set is allowed (and keeps a
-     * READY_FOR_CEO_REVIEW request there).
-     */
-    @Transactional
-    public PricingRequestDetailDto setInTransitArrival(long id, long itemId, LocalDate expectedArrivalDate,
-                                                       UserPrincipal actor) {
-        requireRole(actor, ETA_ROLES);
-        if (expectedArrivalDate == null) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุวันที่คาดว่าจะถึง");
-        }
-        requests.lockPricingRequest(id);
-        PricingRequestSummaryDto summary = requireViewable(id, actor);
-        requireStockLineEditableStatus(summary);
-        requireActive(requireTicket(summary.ticketId()));
-        PricingRequestItemDto item = requireItem(id, itemId);
-        if (!STOCK_IN_TRANSIT.equals(item.stockSource())) {
+    /** Once the customer's order is confirmed (payment track started) no new pricing round may start on the deal. */
+    private static void requireOrderNotConfirmed(TicketSummaryDto ticket) {
+        if (ticket.paymentStatus() != null) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ระบุวันที่คาดว่าจะถึงได้เฉพาะรายการสต็อกกำลังเดินทางเท่านั้น");
+                "ยืนยันคำสั่งซื้อของดีลนี้แล้ว จึงเริ่มรอบราคาใหม่ไม่ได้ — การเปลี่ยนแปลงหลังยืนยันต้องทำเป็นการแก้ไขคำสั่งซื้อ");
         }
-        int rows = requests.setItemExpectedArrival(id, itemId, expectedArrivalDate, actor.id());
-        if (rows == 0) {
-            throw new ApiException(HttpStatus.CONFLICT,
-                "คำขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
-        }
-        requests.addEvent(id, summary.ticketId(), actor.id(), actor.name(),
-            PricingRequestEventKind.PRICING_REQUEST_ITEM_ETA_SET, summary.status(), summary.status(),
-            "ระบุวันที่คาดว่าจะถึง " + expectedArrivalDate + " ให้รายการ " + item.displayName(), null);
-        advanceIfReadyForCeo(summary, actor);
-        return detail(id);
-    }
-
-    /**
-     * Stock lines (V194, IA 1.2, R13): import switches an {@code IN_TRANSIT} line to สั่งนำเข้า
-     * because the shipment cannot cover it - clears source + ETA (+ who/when) in ONE update, notifies
-     * the owning rep only, and pulls a READY_FOR_CEO_REVIEW request back to
-     * AWAITING_FACTORY_RESPONSE (the converted line has no factory quote yet).
-     *
-     * <p>Authz (IA 1.7): import ONLY - the CEO is refused too. Same status window as
-     * {@link #setInTransitArrival}; 409 on a line that is not in transit.
-     */
-    @Transactional
-    public PricingRequestDetailDto convertInTransitToImport(long id, long itemId, UserPrincipal actor) {
-        requireRole(actor, IMPORT_ROLES);
-        requests.lockPricingRequest(id);
-        PricingRequestSummaryDto summary = requireViewable(id, actor);
-        requireStockLineEditableStatus(summary);
-        requireActive(requireTicket(summary.ticketId()));
-        PricingRequestItemDto item = requireItem(id, itemId);
-        if (!STOCK_IN_TRANSIT.equals(item.stockSource())) {
-            throw new ApiException(HttpStatus.CONFLICT,
-                "เปลี่ยนเป็นสั่งนำเข้าได้เฉพาะรายการสต็อกกำลังเดินทางเท่านั้น");
-        }
-        int rows = requests.convertItemInTransitToImport(id, itemId);
-        if (rows == 0) {
-            throw new ApiException(HttpStatus.CONFLICT,
-                "คำขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
-        }
-        String toStatus = summary.status();
-        if (PricingRequestStatus.READY_FOR_CEO_REVIEW.equals(summary.status())) {
-            int pulledBack = requests.transition(id, PricingRequestStatus.READY_FOR_CEO_REVIEW,
-                PricingRequestStatus.AWAITING_FACTORY_RESPONSE, null, null);
-            if (pulledBack == 1) {
-                toStatus = PricingRequestStatus.AWAITING_FACTORY_RESPONSE;
-            }
-        }
-        requests.addEvent(id, summary.ticketId(), actor.id(), actor.name(),
-            PricingRequestEventKind.PRICING_REQUEST_ITEM_CONVERTED_TO_IMPORT, summary.status(), toStatus,
-            "เปลี่ยนรายการ " + item.displayName() + " จากสต็อกกำลังเดินทางเป็นสั่งนำเข้า", null);
-        notifications.notifyEmployeeForPricingRequest(summary.requestedById(), summary.id(),
-            "PRICING_REQUEST_ITEM_CONVERTED_TO_IMPORT",
-            "คำขอราคา " + summary.requestCode() + ": รายการ " + item.displayName()
-                + " เปลี่ยนจากสต็อกกำลังเดินทางเป็นสั่งนำเข้า (สต็อกระหว่างทางไม่พอ)");
-        return detail(id);
-    }
-
-    private void requireStockLineEditableStatus(PricingRequestSummaryDto summary) {
-        if (!STOCK_LINE_EDIT_STATUSES.contains(summary.status())) {
-            throw new ApiException(HttpStatus.CONFLICT,
-                "แก้ไขรายการสต็อกได้เฉพาะคำขอราคาที่อยู่ระหว่างการดำเนินการของฝ่ายนำเข้าหรือรอ CEO เท่านั้น (สถานะปัจจุบัน: '"
-                    + summary.status() + "')");
-        }
-    }
-
-    private PricingRequestItemDto requireItem(long id, long itemId) {
-        return requests.findItems(id).stream()
-            .filter(candidate -> candidate.id() == itemId)
-            .findFirst()
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบรายการสินค้านี้ในคำขอราคานี้"));
     }
 
     /** True when the request is non-empty and EVERY line is สต็อกในไทย (R4). */
     private static boolean allInThailand(List<PricingRequestItemDto> items) {
         return !items.isEmpty() && items.stream().allMatch(i -> STOCK_IN_THAILAND.equals(i.stockSource()));
-    }
-
-    /**
-     * Re-checks the ONE readiness predicate after an ETA save (the markReadyForCosting side lives in
-     * FactoryQuoteService) and advances via the right edge: AWAITING_FACTORY_RESPONSE ->
-     * READY_FOR_CEO_REVIEW, or - a request with NO import line, so no factory quote ever moves it
-     * off IMPORT_REVIEWING - IMPORT_REVIEWING -> READY_FOR_CEO_REVIEW (the V194 edge). A request
-     * that is already READY_FOR_CEO_REVIEW simply stays there.
-     */
-    private void advanceIfReadyForCeo(PricingRequestSummaryDto before, UserPrincipal actor) {
-        PricingRequestSummaryDto summary = requests.findSummary(before.id()).orElse(null);
-        if (summary == null) {
-            return;
-        }
-        String from = summary.status();
-        boolean noImportLines = requests.findItems(summary.id()).stream().allMatch(i -> i.stockSource() != null);
-        boolean advanceable = PricingRequestStatus.AWAITING_FACTORY_RESPONSE.equals(from)
-            || (PricingRequestStatus.IMPORT_REVIEWING.equals(from) && noImportLines);
-        if (!advanceable || !factoryQuoteCarryForward.isReadyForCeoReview(summary)) {
-            return;
-        }
-        int transitioned = requests.transition(summary.id(), from,
-            PricingRequestStatus.READY_FOR_CEO_REVIEW, null, null);
-        if (transitioned == 1) {
-            requests.addEvent(summary.id(), summary.ticketId(), actor.id(), actor.name(),
-                PricingRequestEventKind.PRICING_COSTING_SUBMITTED, from,
-                PricingRequestStatus.READY_FOR_CEO_REVIEW,
-                "ราคาโรงงานและวันที่คาดว่าจะถึงครบแล้ว - ส่งต่อให้ CEO", null);
-            notifyCeo(summary, PricingRequestEventKind.PRICING_COSTING_SUBMITTED,
-                "คำขอราคา " + summary.requestCode() + " พร้อมให้ CEO พิจารณาราคาแล้ว");
-        }
     }
 
     @Transactional
@@ -783,6 +652,7 @@ public class PricingRequestService {
         }
         TicketSummaryDto ticket = requireTicket(parent.ticketId());
         requireActive(ticket);
+        requireOrderNotConfirmed(ticket);
         validateClientRequestId(request.clientRequestId());
         PricingRequestSummaryDto existing = existingForClientRequest(actor.id(), request.clientRequestId());
         if (existing != null) {
@@ -1420,7 +1290,7 @@ public class PricingRequestService {
         // Stock lines (V194): an unknown source is a caller-fixable 400, not a CHECK-constraint 500.
         // A blank source normalizes to null (สั่งนำเข้า).
         String stockSource = hasText(rawItem.stockSource()) ? rawItem.stockSource().trim() : null;
-        if (stockSource != null && !STOCK_IN_THAILAND.equals(stockSource) && !STOCK_IN_TRANSIT.equals(stockSource)) {
+        if (stockSource != null && !STOCK_IN_THAILAND.equals(stockSource)) {
             throw new ApiException(HttpStatus.BAD_REQUEST,
                 "รายการที่ " + (rowNumber + 1) + ": ไม่รองรับแหล่งที่มาของสินค้า '" + rawItem.stockSource() + "'");
         }
@@ -1464,6 +1334,15 @@ public class PricingRequestService {
         // country it was not actually typed for.
         String originCountryOther = ORIGIN_COUNTRY_OTHER.equals(item.originCountry())
             ? item.originCountryOther() : null;
+        // A stock line is never imported (walk 4): whatever import-only inputs a client sent are not stored,
+        // or the quotation would print an import lead time for goods already in Thailand.
+        boolean stockLine = stockSource != null;
+        String originCountry = stockLine ? null : item.originCountry();
+        Integer leadTimeMinDays = stockLine ? null : item.leadTimeMinDays();
+        Integer leadTimeMaxDays = stockLine ? null : item.leadTimeMaxDays();
+        if (stockLine) {
+            originCountryOther = null;
+        }
         return new PricingRequestItemRequest(
             item.sourceTicketItemId(), item.productId(), item.variantId(), item.brand(), item.model(),
             item.productDescription(), item.color(), item.texture(), item.size(), item.factory(),
@@ -1471,8 +1350,8 @@ public class PricingRequestService {
             item.targetDeliveryDate(), item.deliveryLocation(), item.specialRequirement(),
             item.productCode(), item.thicknessMm(), item.sqmPerPiece(), quantityMode, item.areaSqm(),
             item.piecesInput(), item.wastageMode(), item.wastageValue(), item.piecesPerBox(),
-            item.sqmPerBox(), roundToFullBox, item.originCountry(), item.leadTimeMinDays(),
-            item.leadTimeMaxDays(), result.piecesBeforeWastage(), result.piecesAfterWastage(),
+            item.sqmPerBox(), roundToFullBox, originCountry, leadTimeMinDays,
+            leadTimeMaxDays, result.piecesBeforeWastage(), result.piecesAfterWastage(),
             result.boxes(), originCountryOther, stockSource,
             requestedCurrency(rowNumber, item.requestedCurrency()),
             requestedPriceUnitBasis(item.requestedPriceUnitBasis()));

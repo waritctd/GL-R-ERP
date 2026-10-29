@@ -1755,7 +1755,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const missingFactoryItems = useMemo(
     () => (request?.items ?? [])
       .map((item, index) => ({ item, position: index + 1 }))
-      .filter((entry) => !itemFactoryName(entry.item)),
+      .filter((entry) => entry.item.stockSource == null && !itemFactoryName(entry.item)),
     [request],
   );
   // Import owns this field, and only while the request is in its hands. NOT an authorization
@@ -1816,7 +1816,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const pricePreviewGroups = useMemo(() => {
     const map = new Map();
     (request?.items ?? [])
-      .filter((item) => !coveredItemIds.has(item.id))
+      .filter((item) => !coveredItemIds.has(item.id) && item.stockSource == null) // stock lines are never quoted by a factory
       .forEach((item) => {
         const name = itemFactoryName(item) || 'ยังไม่ได้ระบุโรงงาน';
         if (!map.has(name)) map.set(name, { key: name, factoryName: name, items: [] });
@@ -1876,6 +1876,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
   // mirrors PricingDecisionService's own DRAFT + CEO_REVIEWING + canActOnPricingDecision guard.
   const decisionEditable = Boolean(currentDecision) && currentDecision.status === 'DRAFT'
     && canActOnPricingDecision(user, summary);
+  // Returned to import and back READY: the RETURNED decision is history, the CEO starts a fresh one.
+  const needsFreshReview = !currentDecision || currentDecision.status === 'RETURNED';
   // V141 ("CEO owns costing"): the bound costing's items, keyed by their OWN id — a decision
   // item's pricingCostingItemId is a FK to that id, never to pricingRequestItemId (the two are
   // easy to conflate since a costing item also carries pricingRequestItemId as its own FK). Every
@@ -1933,6 +1935,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
   // SUPERSEDED edge and the predicate is already false for it.
   const canCreateCustomerRevision = isSales(user)
     && summary?.ticketCreatedById === user?.employeeId
+    && summary?.ticketPaymentStatus == null // order confirmed: no new pricing round (the backend 409s it)
     && canTransition(summary?.status, 'SUPERSEDED');
   const pricingRequestAttachments = attachmentsQuery.data ?? [];
   // Mirrors PricingRequestService.ATTACHMENT_EDITABLE_STATUSES: Sales may only upload/delete its
@@ -2742,6 +2745,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
 
   function renderCeoDecisionActions({ decision, editable, missingBeforeApprove, staleOverrideItems, newForm, missingCeoPrice, missingCost, missingStockListPrice }) {
     if (!editable) return null;
+    // No import line means no import cost to fix, so there is nothing to send back (the server refuses too).
+    const allLinesAreStock = (request.items ?? []).length > 0 && request.items.every((item) => item.stockSource != null);
     return (
       <>
         <div className="mt-3 flex flex-col gap-2 border-t border-border-subtle pt-3">
@@ -2758,14 +2763,16 @@ export function PricingRequestDetailPage({ user, showToast }) {
             >
               อนุมัติราคาขาย
             </Button>
-            <Button
-              type="button"
-              variant="secondary"
-              disabled={returnDecisionToImport.isPending}
-              onClick={() => setConfirmAction({ type: 'returnDecision', decision })}
-            >
-              ตีกลับให้ฝ่ายนำเข้าแก้ไข
-            </Button>
+            {allLinesAreStock ? null : (
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={returnDecisionToImport.isPending}
+                onClick={() => setConfirmAction({ type: 'returnDecision', decision })}
+              >
+                ตีกลับให้ฝ่ายนำเข้าแก้ไข
+              </Button>
+            )}
           </div>
           {missingBeforeApprove.length > 0 ? (
             <span className="text-xs text-danger">ทุกรายการต้องมีอัตรากำไรก่อนอนุมัติ (หรือปรับราคาเอง)</span>
@@ -2842,7 +2849,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
   function renderCeoStartReview() {
     return (
       <>
-        {!currentDecision && canStartCeoReview(user, summary) ? (
+        {needsFreshReview && canStartCeoReview(user, summary) ? (
           <div className="flex flex-wrap items-center gap-2">
             <label className="text-xs text-text-muted">
               อัตรากำไรเริ่มต้น
@@ -3078,18 +3085,19 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 key={item.id}
                 className={cn(
                   'rounded-md border bg-surface p-3',
-                  factoryName ? 'border-border' : 'border-warning-border',
+                  factoryName || item.stockSource != null ? 'border-border' : 'border-warning-border',
                 )}
               >
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-xs font-bold text-text-muted">{`รายการที่ ${position}`}</span>
                   <strong>{itemDisplayName(item)}</strong>
+                  {item.stockSource != null ? <StatusBadge tone="warning">จากสต็อก</StatusBadge> : null}
                   <span className="text-xs text-text-muted">{item.requestedQty} {item.requestedUnit}</span>
                 </div>
                 <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-muted">
                   <span>{`โรงงาน (ที่ฝ่ายขายกรอก): ${salesBrandValue ?? '—'}`}</span>
-                  <span className={factoryName ? undefined : 'font-bold text-warning-dark'}>
-                    {`โรงงานที่กำหนด (Import): ${factoryName ?? 'ยังไม่ได้ระบุ'}`}
+                  <span className={factoryName || item.stockSource != null ? undefined : 'font-bold text-warning-dark'}>
+                    {`โรงงานที่กำหนด (Import): ${factoryName ?? (item.stockSource != null ? '—' : 'ยังไม่ได้ระบุ')}`}
                   </span>
                   <span>รหัสสินค้า: {productCode ?? '-'}</span>
                   <span data-testid={`pcr-import-price-${item.id}`}>
@@ -3191,7 +3199,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
               {renderCeoDecisionItem(ceoState.decision, d, ceoState.editable)}
             </div>
           ))}
-          {ceoWorkspace && !currentDecision ? (
+          {ceoWorkspace && needsFreshReview ? (
             <div className="flex flex-col gap-2 pt-1">{renderCeoStartReview()}</div>
           ) : null}
           {ceoState?.newForm ? (

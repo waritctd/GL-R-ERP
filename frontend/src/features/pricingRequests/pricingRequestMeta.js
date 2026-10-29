@@ -142,11 +142,12 @@ export function unitBasisLabel(value) {
   return UNIT_BASIS_OPTIONS.find((u) => u.code === value)?.label ?? value ?? '-';
 }
 
-/** Mirrors PricingRequestService.createDraft: sales (deal owner), deal must be ACTIVE. */
+/** Mirrors PricingRequestService.createDraft: sales (deal owner), deal ACTIVE, order not yet confirmed. */
 export function canCreatePricingRequest(user, deal) {
   return user?.role === 'sales' && deal?.createdById != null
     && Number(deal.createdById) === Number(user.id)
-    && (deal?.lifecycle ?? 'ACTIVE') === 'ACTIVE';
+    && (deal?.lifecycle ?? 'ACTIVE') === 'ACTIVE'
+    && deal?.paymentStatus == null;
 }
 
 /** Mirrors PricingRequestService.updateDraft: owner sales, DRAFT only. */
@@ -156,11 +157,12 @@ export function canUpdatePricingRequest(user, pr) {
     && pr?.status === 'DRAFT';
 }
 
-/** Mirrors PricingRequestService.submit: owner sales, DRAFT only. */
+/** Mirrors PricingRequestService.submit: owner sales, DRAFT only, deal order not yet confirmed. */
 export function canSubmitPricingRequest(user, pr) {
   return user?.role === 'sales' && pr?.ticketCreatedById != null
     && Number(pr.ticketCreatedById) === Number(user.id)
-    && pr?.status === 'DRAFT';
+    && pr?.status === 'DRAFT'
+    && pr?.ticketPaymentStatus == null;
 }
 
 /** Mirrors PricingRequestService.pickup: any import user, SUBMITTED only. */

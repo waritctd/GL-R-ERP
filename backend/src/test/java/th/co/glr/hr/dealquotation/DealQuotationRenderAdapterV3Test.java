@@ -500,6 +500,26 @@ class DealQuotationRenderAdapterV3Test {
             "3.ระยะเวลานำเข้า : รายการที่ 1 ประมาณ 10-20 วัน  รายการที่ 2 ประมาณ 40-50 วัน");
     }
 
+    /**
+     * Walk 4 (W4-01): a stock line (stockSource IN_THAILAND) is not imported, so even when its lead
+     * time columns carry a value it is left out of the ระยะเวลานำเข้า groups - the import line alone
+     * is printed as "รายการที่ 1", not "รายการที่ 1-2".
+     */
+    @Test
+    void leadTime_aStockLineIsLeftOutOfTheImportGroups() {
+        QuotationRenderModel m = model(WastageCalculator.PRICE_MODE_NET, List.of(
+            tileWithLeadTime(30, 45), tileWithLeadTime(30, 45).withStockSource("IN_THAILAND")));
+        assertThat(m.remarkLines().get(2)).isEqualTo("3.ระยะเวลานำเข้า : รายการที่ 1 ประมาณ 30-45 วัน");
+    }
+
+    /** Every line is stock: nothing is imported, so the ระยะเวลานำเข้า remark is dropped and the rest renumber. */
+    @Test
+    void leadTime_anAllStockQuotation_printsNoImportLeadTimeLine() {
+        QuotationRenderModel m = model(WastageCalculator.PRICE_MODE_NET, List.of(
+            tileWithLeadTime(30, 45).withStockSource("IN_THAILAND")));
+        assertThat(m.remarkLines()).hasSize(7).noneMatch(l -> l.contains("ระยะเวลานำเข้า"));
+    }
+
     /** No item carries a lead time at all -- owner feedback (2026-09-14) supersedes the earlier
      * "print a visible blank" behaviour: the line is now dropped ENTIRELY (not left blank), and
      * every remark after it renumbers down by one -- exactly 7 lines, old line 4 becomes "3.",
@@ -696,7 +716,8 @@ class DealQuotationRenderAdapterV3Test {
             src.piecesPerSqm(), src.piecesBeforeWastage(), src.piecesAfterWastage(), src.piecesFinal(),
             src.boxes(), src.netUnitPrice(), src.lineAmount(), src.descriptionLine(), src.sizeLine(),
             src.calculationLine(), src.lineType(), src.quantity(), src.unit(), src.specialPriceSqm(),
-            src.adjustmentPct(), src.adjustmentDeadline(), src.specialPriceLine(), src.adjustmentAmount());
+            src.adjustmentPct(), src.adjustmentDeadline(), src.specialPriceLine(), src.adjustmentAmount())
+            .withStockSource(src.stockSource());
     }
 
     private DealQuotationItemDto plain() {

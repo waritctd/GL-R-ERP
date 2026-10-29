@@ -269,6 +269,36 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
     }
 
+    /**
+     * Walk 4 (owner ruling 2026-10-29: a stock line is never ordered from a factory). A DRAFT form
+     * left over from before the order was confirmed can name a line that is now covered from stock
+     * ({@code qty_from_stock >= qty}, written by order confirmation): issuing it would order stock
+     * the customer already has. ANY covered line refuses the issue (all covered, or one among several -
+     * a legacy mixed draft); nothing is numbered and the form stays a DRAFT.
+     */
+    @Test
+    void issue_ofADraftWithAnyLineNowCoveredFromStock_isRefused409_andBurnsNoNumber() {
+        List<ImportRequestDto> drafts = DraftSeed.seed(jdbc, ticketId, owner);
+        long leaDraft = byFactory(drafts, leaFactoryId).id();
+        long padanaDraft = byFactory(drafts, padanaFactoryId).id();
+        // LEA's only line fully covered; Padana's FIRST of two lines covered (a mixed draft).
+        jdbc.update("UPDATE sales.ticket_item SET qty_from_stock = qty WHERE ticket_id = :t AND factory = 'LEA Stored Test'",
+            Map.of("t", ticketId));
+        jdbc.update("UPDATE sales.ticket_item SET qty_from_stock = qty WHERE ticket_id = :t AND model = 'Lithos Nero Nat'",
+            Map.of("t", ticketId));
+        int seqBefore = sequenceValue();
+
+        for (long draft : new long[] {leaDraft, padanaDraft}) {
+            assertThatThrownBy(() -> service.issue(draft, null, owner))
+                .isInstanceOfSatisfying(ApiException.class, e -> {
+                    assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                    assertThat(e.getMessage()).contains("สต็อก");
+                });
+            assertThat(service.get(draft, owner).status()).isEqualTo(ImportRequestStatus.DRAFT);
+        }
+        assertThat(sequenceValue()).isEqualTo(seqBefore);
+    }
+
     @Test
     void issue_withAnOverride_doesNotBurnASequenceValue() {
         List<ImportRequestDto> drafts = DraftSeed.seed(jdbc, ticketId, owner);

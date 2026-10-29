@@ -407,8 +407,9 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(pr1Accepted.quotationRevisionNo()).isEqualTo(2); // the HIGHER revision_no
         assertThat(pricingRequestService.get(pr1Id, salesActor).summary().status())
             .isEqualTo(PricingRequestStatus.QUOTATION_ACCEPTED);
-        // confirmOrder gates on QUOTATION_ACCEPTED, so it must run AFTER the outcome above.
-        orderConfirmation.confirmOrder(pr1Id, new OrderConfirmationRequests.ConfirmOrderRequest(null), salesActor);
+        // confirmOrder gates on QUOTATION_ACCEPTED, so it runs AFTER the outcome above - but only after PR#2
+        // below is driven too: once PR#1's order is confirmed (walk 4, W4-04) the deal can start no new
+        // pricing round, so a second request can no longer be submitted.
 
         // PR#2 (created SECOND, raw factory price 250.00 — deliberately different so its line
         // item is distinguishable from PR#1's): its own first-ever quotation, revision 1 — a
@@ -440,6 +441,7 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
             Map.of("id", pr2Id));
         assertThat(pricingRequestService.get(pr2Id, salesActor).summary().status())
             .isEqualTo(PricingRequestStatus.QUOTATION_ACCEPTED);
+        orderConfirmation.confirmOrder(pr1Id, new OrderConfirmationRequests.ConfirmOrderRequest(null), salesActor);
         orderConfirmation.confirmOrder(pr2Id, new OrderConfirmationRequests.ConfirmOrderRequest(null), salesActor);
         CustomerQuotationDto pr2Accepted = quotationRepository.findByPricingRequest(pr2Id).stream()
             .filter(q -> QuotationStatus.ACCEPTED.equals(q.docStatus())).findFirst().orElseThrow();

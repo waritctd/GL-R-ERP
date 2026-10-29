@@ -510,6 +510,16 @@ public class ImportRequestRepository {
         return String.format("IR%02d%03d", yearTh % 100, seq);
     }
 
+    /** True when ANY line of the form is already covered from stock (qty_from_stock >= qty, qty > 0): never ordered. */
+    public boolean anyItemCoveredFromStock(long importRequestId) {
+        Boolean covered = jdbc.queryForObject("""
+            SELECT EXISTS(SELECT 1 FROM sales.import_request_item iri
+                            JOIN sales.ticket_item ti ON ti.item_id = iri.ticket_item_id
+                           WHERE iri.import_request_id = :id AND ti.qty > 0 AND ti.qty_from_stock >= ti.qty)
+            """, Map.of("id", importRequestId), Boolean.class);
+        return Boolean.TRUE.equals(covered);
+    }
+
     public boolean docNumberExists(String docNumber) {
         Boolean found = jdbc.queryForObject(
             "SELECT EXISTS(SELECT 1 FROM sales.import_request WHERE doc_number = :n)",

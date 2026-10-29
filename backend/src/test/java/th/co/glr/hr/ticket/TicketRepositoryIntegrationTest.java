@@ -180,14 +180,27 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
     // would happily "pass" this while the real CHECK constraint / columns did something else.
 
     @Test
-    void createTicket_persistsStockSourcedPriceAndReadsItBack() {
+    void createTicket_stockSourcedLineWithNoPrice_persistsTheFlagAndANullPrice() {
+        // Walk 4 (W4-09): chk_ticket_item_stock_sale_price is relaxed to
+        // `sourced_from_stock OR stock_sale_price IS NULL`, so a flagged line needs no price.
+        long ticketId = tickets.create(sampleTicket(
+            itemFromStock("Cotto", "Stone Series", "White", "Matte", "60x60", null)),
+            tickets.nextTicketCode(), actorId, "พนักงานขาย");
+
+        TicketItemDto persisted = tickets.findById(ticketId).orElseThrow().items().get(0);
+        assertThat(persisted.sourcedFromStock()).isTrue();
+        assertThat(persisted.stockSalePrice()).isNull();
+    }
+
+    @Test
+    void createTicket_aStockSalePriceSentByAnOldClient_isStoredNull() {
         long ticketId = tickets.create(sampleTicket(
             itemFromStock("Cotto", "Stone Series", "White", "Matte", "60x60", new BigDecimal("555.00"))),
             tickets.nextTicketCode(), actorId, "พนักงานขาย");
 
         TicketItemDto persisted = tickets.findById(ticketId).orElseThrow().items().get(0);
         assertThat(persisted.sourcedFromStock()).isTrue();
-        assertThat(persisted.stockSalePrice()).isEqualByComparingTo("555.00");
+        assertThat(persisted.stockSalePrice()).isNull();
     }
 
     @Test
@@ -201,7 +214,7 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
-    void editItems_roundTripsStockSourcedPriceThroughReplaceItemsPreservingPricing() {
+    void editItems_roundTripsTheStockFlagWithNoPriceThroughReplaceItemsPreservingPricing() {
         long ticketId = tickets.create(sampleTicket(
             item("Toyota", "Hilux", "White", "Matte", "L")), tickets.nextTicketCode(), actorId, "พนักงานขาย");
         TicketItemDto existing = tickets.findById(ticketId).orElseThrow().items().get(0);
@@ -217,13 +230,13 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
             existing.qtyDelivered(), existing.qtyFromStock(), existing.stockNote(),
             existing.catalogPriceId(), existing.catalogProductCode(),
             null, null, null, null, null, 1,
-            true, new BigDecimal("620.00"));
+            true, null);
 
         tickets.replaceItemsPreservingPricing(ticketId, List.of(edited));
 
         TicketItemDto persisted = tickets.findById(ticketId).orElseThrow().items().get(0);
         assertThat(persisted.sourcedFromStock()).isTrue();
-        assertThat(persisted.stockSalePrice()).isEqualByComparingTo("620.00");
+        assertThat(persisted.stockSalePrice()).isNull();
     }
 
     @Test

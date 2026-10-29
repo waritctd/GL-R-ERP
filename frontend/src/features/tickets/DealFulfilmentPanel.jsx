@@ -269,8 +269,6 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
 
   const [deliveryOpen, setDeliveryOpen] = useState(false);
   const [deliveryDraft, setDeliveryDraft] = useState({ source: 'WAREHOUSE', note: '', lines: {} });
-  const [stockOpen, setStockOpen] = useState(false);
-  const [stockDraft, setStockDraft] = useState({ note: '', lines: {} });
   // V148 (per-item stock-commission weighting): sales_manager/ceo only -- a separate control from
   // the stock-declaration modal above, matching the backend's separate authorization boundary
   // (TicketService#setItemWeightMultipliers, gated to a DIFFERENT role set than reserveStock).
@@ -287,10 +285,13 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   const deliveryProgress = totalOrdered > 0 ? Math.min(100, Math.round((totalDelivered / totalOrdered) * 100)) : 0;
   // Which journey this deal walked, for SubstepChips (issue #730). Once the deal reaches a
   // DELIVERY state its fulfillmentStatus no longer says, but the declaration itself survives on
-  // the lines: reserveStock writes qtyFromStock, and only FULL coverage sets FROM_STOCK. So full
+  // the lines: confirmOrder writes qtyFromStock for stock lines, and only FULL coverage sets FROM_STOCK. So full
   // coverage => the from-stock branch; anything less => the import sequence really did run for
   // the remainder. `null` (no items loaded yet) means "don't guess", not "import".
   const fromStock = totalOrdered > 0 ? totalFromStock >= totalOrdered : null;
+  // Every line covered from stock (non-empty): nothing is ordered from a factory, so no IR can be created.
+  const allLinesFromStock = items.length > 0
+    && items.every((i) => Number(i.qtyFromStock ?? 0) >= Number(i.qty ?? 0));
 
   // ── ใบขอซื้อรายโรงงาน (V184, PR-B) ────────────────────────────────────────────────────────────
   // The STORED aggregate — one row per (deal, factory). Supersedes the legacy per-brand PREVIEW
@@ -587,11 +588,6 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
     onSuccess: () => { showToast?.('success', 'รับสินค้าแล้ว'); invalidateAfterFulfilmentChange(); },
     onError,
   });
-  const reserveStockMutation = useMutation({
-    mutationFn: (payload) => api.tickets.reserveStock(ticketId, payload),
-    onSuccess: () => { showToast?.('success', 'บันทึกสินค้าจากสต็อกแล้ว'); setStockOpen(false); invalidateAfterFulfilmentChange(); },
-    onError,
-  });
   const setItemWeightMutation = useMutation({
     mutationFn: (payload) => api.tickets.updateItemWeightMultipliers(ticketId, payload),
     onSuccess: () => { showToast?.('success', 'บันทึกน้ำหนักคอมมิชชั่นต่อรายการแล้ว'); setWeightOpen(false); invalidateAfterFulfilmentChange(); },
@@ -630,23 +626,10 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
     markIrSent:         hasAction('IR_SENT') && fulfilmentActionCode === 'markIrSent' && isFulfilment,
     markShipping:       hasAction('SHIPPING') && fulfilmentActionCode === 'markShipping' && isFulfilment,
     markGoodsReceived:  hasAction('GOODS_RECEIVED') && fulfilmentActionCode === 'markGoodsReceived' && isFulfilment,
-    // The ONE entry here with no local role check, deliberately (issue #732). PR #706 widened the
-    // backend gate to the deal owner — TicketService.canDeclareStockCoverage is
-    // FULFILMENT_ROLES ∪ (SALES_ROLES ∧ createdById == actor.id) — and actions() advertises
-    // RESERVE_STOCK off that same predicate. ANDing the server's answer with the pre-#706 role set
-    // meant the server offered the action and the frontend threw it away, so the one role the
-    // workflow was built for could not start it. TicketService's own Javadoc names this failure
-    // mode: gate and advertisement are one predicate so they "cannot drift into offering an action
-    // that immediately 403s", and applying it unevenly leaves a capability "live but invisible".
-    //
-    // hasAction('RESERVE_STOCK') already carries the ownership rule, the S10 stage floor and the
-    // remaining-delivery check, because the server computed all three. Re-deriving any of them
-    // here is what rots. The other six entries KEEP isFulfilment — their backend gates really are
-    // FULFILMENT_ROLES-only, so dropping it there would offer buttons that 403.
-    reserveStock:       hasAction('RESERVE_STOCK'),
+    // (No reserve-from-stock control any more - walk 4: a stock line ends at the CEO's price and waits for delivery.)
     // Stages 13-14 (ส่งมอบสินค้า) belong to Sales — owner ruling 2026-08-17, additive to import/CEO.
     // `isFulfilment` is GONE from these two for exactly the reason issue #732 records for
-    // reserveStock directly above: the backend gate is now ownership-aware
+    // the (since removed) reserve-stock entry: the backend gate is now ownership-aware
     // (TicketService.canWriteDelivery = FULFILMENT_ROLES ∪ (sales ∧ owner)) and `actions()` advertises
     // RECORD_PARTIAL_DELIVERY/COMPLETE_DELIVERY off that same predicate. ANDing the server's answer
     // with the old role set would mean the server offers the action and the frontend throws it away
@@ -675,13 +658,6 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
     setDeliveryOpen(true);
   }
 
-  function openStockModal() {
-    const lines = {};
-    items.forEach((item) => { lines[item.id] = String(item.qtyFromStock ?? 0); });
-    setStockDraft({ note: '', lines });
-    setStockOpen(true);
-  }
-
   function openWeightModal() {
     const lines = {};
     items.forEach((item) => { lines[item.id] = String(item.weightMultiplier ?? 1); });
@@ -698,15 +674,6 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
       return;
     }
     recordDeliveryMutation.mutate({ source: deliveryDraft.source, note: deliveryDraft.note.trim() || null, lines });
-  }
-
-  function handleReserveStock() {
-    const lines = items.map((item) => ({
-      itemId: item.id,
-      qtyFromStock: Number(stockDraft.lines[item.id] || 0),
-      note: stockDraft.note.trim() || null,
-    }));
-    reserveStockMutation.mutate({ lines });
   }
 
   function handleSetItemWeight() {
@@ -784,12 +751,6 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
             </>
           )}
           <div className="flex flex-wrap gap-2">
-            {can.reserveStock ? (
-              <Button type="button" variant="secondary" className="whitespace-nowrap" disabled={reserveStockMutation.isPending}
-                onClick={openStockModal} data-testid="deal-fulfilment-reserve-stock">
-                จองสินค้าจากสต็อก
-              </Button>
-            ) : null}
             {can.setItemWeight ? (
               <Button type="button" variant="secondary" className="whitespace-nowrap" disabled={setItemWeightMutation.isPending}
                 onClick={openWeightModal} data-testid="deal-fulfilment-set-item-weight">
@@ -811,7 +772,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
                 <strong className={STEP_TITLE}>ใบขอซื้อรายโรงงาน (F-SM-001)</strong>
                 <StepRoleTag owners={['sales', 'ceo']} viewerRole={role} />
               </div>
-              {canFullWriteStoredIr && !allFactoriesCovered ? (
+              {canFullWriteStoredIr && !allFactoriesCovered && !allLinesFromStock ? (
                 <Button type="button" size="sm" variant="primary" className="whitespace-nowrap" disabled={createDraftsMutation.isPending || !allLinesPicked || !depositReady}
                   onClick={requestCreateIrDrafts} data-testid="deal-fulfilment-create-ir-drafts">
                   {/* Nit: once the deal already has rows, "ออกใบขอซื้อ (IR)" read as though it would
@@ -823,7 +784,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
                 </Button>
               ) : null}
             </div>
-            {canFullWriteStoredIr && !allFactoriesCovered && !depositReady ? (
+            {canFullWriteStoredIr && !allFactoriesCovered && !allLinesFromStock && !depositReady ? (
               <p className="m-0 text-xs font-bold text-text-secondary" data-testid="ir-deposit-hint">{DEPOSIT_HINT}</p>
             ) : null}
             {allFactoriesCovered ? (
@@ -832,7 +793,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
               </p>
             ) : (
               <p className="text-2xs text-text-muted">
-                หนึ่งใบต่อหนึ่งโรงงาน — สร้างอัตโนมัติจากรายการสินค้าที่ต้องสั่งนำเข้า (ไม่รวมส่วนที่จองจากสต็อก)
+                หนึ่งใบต่อหนึ่งโรงงาน — สร้างอัตโนมัติจากรายการสินค้าที่ต้องสั่งนำเข้า (ไม่รวมรายการจากสต็อก)
               </p>
             )}
             {canFullWriteStoredIr && !allFactoriesCovered && factorylessLines.length > 0 ? (
@@ -917,14 +878,8 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
 
         {/* Before the first IR the นำเข้าสินค้า card above is not rendered, but the commission-weight
             setter must stay reachable, so it sits just below the stored-IR box. */}
-        {!fs && (can.reserveStock || can.setItemWeight) ? (
+        {!fs && can.setItemWeight ? (
           <div className="flex flex-wrap gap-2">
-            {can.reserveStock ? (
-              <Button type="button" variant="secondary" className="whitespace-nowrap" disabled={reserveStockMutation.isPending}
-                onClick={openStockModal} data-testid="deal-fulfilment-reserve-stock">
-                จองสินค้าจากสต็อก
-              </Button>
-            ) : null}
             {can.setItemWeight ? (
             <Button type="button" variant="secondary" className="whitespace-nowrap" disabled={setItemWeightMutation.isPending}
               onClick={openWeightModal} data-testid="deal-fulfilment-set-item-weight">
@@ -1134,48 +1089,6 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
               หมายเหตุ
               <textarea className="min-h-16" value={deliveryDraft.note}
                 onChange={(e) => setDeliveryDraft((draft) => ({ ...draft, note: e.target.value }))} />
-            </label>
-          </div>
-        </Modal>
-      ) : null}
-
-      {stockOpen ? (
-        <Modal
-          title="จองสินค้าจากสต็อก"
-          onClose={() => setStockOpen(false)}
-          footer={(
-            <>
-              <Button type="button" variant="secondary" onClick={() => setStockOpen(false)}>ยกเลิก</Button>
-              <Button type="button" variant="primary" disabled={reserveStockMutation.isPending}
-                onClick={handleReserveStock}>
-                บันทึก
-              </Button>
-            </>
-          )}
-        >
-          <div className="flex flex-col gap-3">
-            {items.map((item) => (
-              <label key={item.id} className="grid grid-cols-[1fr_120px] items-center gap-2.5 text-sm">
-                <span>
-                  <span className="sr-only">จำนวนจากสต็อก</span>
-                  <strong>{item.brand} {item.model || ''}</strong>
-                  <small className="block text-text-muted">
-                    สั่ง {Number(item.qty || 0).toLocaleString('en-US')} · จากสต็อกเดิม {Number(item.qtyFromStock || 0).toLocaleString('en-US')}
-                  </small>
-                </span>
-                <input type="number" min="0" max={Number(item.qty || 0)} step="0.01"
-                  aria-label={`จำนวนจากสต็อก ${item.brand} ${item.model || ''}`}
-                  value={stockDraft.lines[item.id] ?? ''}
-                  onChange={(e) => setStockDraft((draft) => ({
-                    ...draft,
-                    lines: { ...draft.lines, [item.id]: e.target.value },
-                  }))} />
-              </label>
-            ))}
-            <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
-              เหตุผล / หมายเหตุ
-              <textarea className="min-h-16" value={stockDraft.note}
-                onChange={(e) => setStockDraft((draft) => ({ ...draft, note: e.target.value }))} />
             </label>
           </div>
         </Modal>

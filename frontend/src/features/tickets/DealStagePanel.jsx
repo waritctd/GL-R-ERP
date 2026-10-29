@@ -6,6 +6,7 @@ import { Button } from '../../components/common/Button.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { dealLifecycleLabel, dealLostReasonLabel, dealStageLabel, formatThaiDate, tenderRequirementLabel } from '../../utils/format.js';
+import { depositBypassed } from './dealMoneyStatus.js';
 import { ACTIVITY_KINDS, STAGE_ADVANCE_GATE_MESSAGE } from './dealTrackingMeta.js';
 import { DealStageStepper, PhaseSummary, PhaseTracker } from './DealStageStepper.jsx';
 import { MarkLostModal } from './MarkLostModal.jsx';
@@ -109,7 +110,11 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   // this deal's route does not visit. Both are read off the server's answer — `entryChannel` on the
   // summary, `onRoute` on each stage decision — never derived here. Absent => today's behaviour.
   const label = dealStageLabel(summary.salesStage, summary.entryChannel);
-  const next = lost ? null : nextOnRoute(catalog, summary.salesStage, stageDecisions);
+  const nextStage = lost ? null : nextOnRoute(catalog, summary.salesStage, stageDecisions);
+  // A no-deposit deal never passes ขั้น 11 (nothing for the account team to confirm): step over it.
+  const next = nextStage?.code === 'DEPOSIT_RECEIVED' && depositBypassed(summary.depositPolicy)
+    ? nextOnRoute(catalog, nextStage.code, stageDecisions)
+    : nextStage;
   const route = routeName(summary.entryChannel);
   const position = routePosition(catalog, summary.salesStage, stageDecisions);
   const routeStageCount = routePath(catalog, stageDecisions).length;

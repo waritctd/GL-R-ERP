@@ -414,7 +414,7 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
 
     @Test
     void issue_supersedesAnyOtherIssuedRemainingInvoiceOnTheSameDeal_evenADifferentChain() {
-        DealFixture fixtureA = buildAcceptedDeal(salesActor, "MultiChainA");
+        DealFixture fixtureA = buildAcceptedDeal(salesActor, "MultiChainA", "MultiChainB");
         RemainingInvoiceDocumentDto issuedA = remainingInvoiceService.issue(
             remainingInvoiceService.createDraft(fixtureA.ticketId(), null, salesActor).id(), salesActor);
         assertThat(issuedA.status()).isEqualTo("ISSUED");
@@ -422,7 +422,7 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         // A wholly SEPARATE pricing-request chain on the SAME ticket, driven to its own accepted
         // quotation + issued deposit notice — a real shape (a later revision/re-quote on the same
         // deal), not merely a synthetic id swap.
-        buildSecondAcceptedQuotationChain(fixtureA.ticketId(), salesActor, "MultiChainB");
+        acceptPreparedSecondChain(fixtureA.ticketId(), salesActor);
         RemainingInvoiceDocumentDto draftB = remainingInvoiceService.createDraft(fixtureA.ticketId(), null, salesActor);
         // The newest qualifying quotation is chain B's — never chain A's (which already has its
         // own ISSUED remaining invoice), proving this draft is genuinely a different chain.
@@ -448,11 +448,11 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
 
     @Test
     void createDraft_refusesASecondDraftOnTheDealWhileOneAlreadyExists_evenADifferentChain() {
-        DealFixture fixtureA = buildAcceptedDeal(salesActor, "MultiDraftA");
+        DealFixture fixtureA = buildAcceptedDeal(salesActor, "MultiDraftA", "MultiDraftB");
         RemainingInvoiceDocumentDto draftA = remainingInvoiceService.createDraft(fixtureA.ticketId(), null, salesActor);
         assertThat(draftA.status()).isEqualTo("DRAFT");
 
-        buildSecondAcceptedQuotationChain(fixtureA.ticketId(), salesActor, "MultiDraftB");
+        acceptPreparedSecondChain(fixtureA.ticketId(), salesActor);
 
         // A second DRAFT on the SAME deal is refused even though it would be for a DIFFERENT
         // quotation chain than draftA's — O2: at most one live (DRAFT or ISSUED) remaining
@@ -575,11 +575,11 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
      * not per chain — enforceable as a real DB invariant since P1). */
     @Test
     void revise_refusesWhenADraftForADifferentChainAlreadyExistsOnTheDeal() {
-        DealFixture fixtureA = buildAcceptedDeal(salesActor, "ReviseCrossChainA");
+        DealFixture fixtureA = buildAcceptedDeal(salesActor, "ReviseCrossChainA", "ReviseCrossChainB");
         RemainingInvoiceDocumentDto issuedA = remainingInvoiceService.issue(
             remainingInvoiceService.createDraft(fixtureA.ticketId(), null, salesActor).id(), salesActor);
 
-        buildSecondAcceptedQuotationChain(fixtureA.ticketId(), salesActor, "ReviseCrossChainB");
+        acceptPreparedSecondChain(fixtureA.ticketId(), salesActor);
         RemainingInvoiceDocumentDto draftB = remainingInvoiceService.createDraft(fixtureA.ticketId(), null, salesActor);
         assertThat(draftB.customerQuotationId()).isNotEqualTo(issuedA.customerQuotationId());
 
@@ -891,6 +891,16 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
     private record DealFixture(long ticketId, long pricingRequestId, long depositNoticeId) {}
 
     private DealFixture buildAcceptedDeal(UserPrincipal owner, String label) {
+        return buildAcceptedDeal(owner, label, null);
+    }
+
+    /** Chain B's request and ISSUED quotation, prepared BEFORE chain A's order is confirmed (walk 4, W4-04: a
+     * confirmed deal can start no new pricing round); {@link #acceptPreparedSecondChain} accepts and confirms it. */
+    private long preparedSecondPricingRequestId;
+    private long preparedSecondIssuedQuotationId;
+
+    /** {@code secondChainLabel} non-null: a second chain is prepared (driven to ISSUED) before A is confirmed. */
+    private DealFixture buildAcceptedDeal(UserPrincipal owner, String label, String secondChainLabel) {
         long catalogProductId = insertCatalogProduct(FACTORY, "IT",
             "TEST-RI-" + label + "-" + UUID.randomUUID().toString().substring(0, 8),
             new BigDecimal("100.00"), "THB", "per_piece");
@@ -926,6 +936,9 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         long pricingRequestId = pricingRequestService.createDraft(ticketId, request, owner).summary().id();
 
         driveDraftPricingRequestToQuotationAccepted(pricingRequestId, quantity, owner);
+        if (secondChainLabel != null) {
+            prepareSecondQuotationChain(ticketId, owner, secondChainLabel);
+        }
 
         orderConfirmation.confirmOrder(pricingRequestId,
             new ConfirmOrderRequest(UUID.randomUUID().toString()), owner);
@@ -941,8 +954,9 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
      * driven to ACCEPTED (no second deposit notice: one ISSUED per deal), exactly like {@link #buildAcceptedDeal}
      * except it reuses the given ticket (and its first ticket item) instead of creating a new one.
      * Used by the O2 (one live remaining invoice per deal) tests to prove superseding/blocking
-     * reaches a genuinely different chain, not merely a different id on the same fixture. */
-    private void buildSecondAcceptedQuotationChain(long ticketId, UserPrincipal owner, String label) {
+     * reaches a genuinely different chain, not merely a different id on the same fixture. This half builds it
+     * up to an ISSUED quotation; {@link #acceptPreparedSecondChain} finishes it. */
+    private void prepareSecondQuotationChain(long ticketId, UserPrincipal owner, String label) {
         long catalogProductId = insertCatalogProduct(FACTORY, "IT",
             "TEST-RI-" + label + "-" + UUID.randomUUID().toString().substring(0, 8),
             new BigDecimal("100.00"), "THB", "per_piece");
@@ -983,8 +997,15 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         // tests below, which does the identical "go around the service with raw SQL" move for the
         // identical reason). Chain A's own row is left untouched — genuinely still ACCEPTED.
         CustomerQuotationDto issuedB = driveDraftPricingRequestToQuotationIssued(pricingRequestId, quantity, owner);
+        preparedSecondPricingRequestId = pricingRequestId;
+        preparedSecondIssuedQuotationId = issuedB.id();
+    }
+
+    /** Accepts (raw SQL, see the MAJOR 5 note above) and confirms the chain {@link #prepareSecondQuotationChain} built. */
+    private void acceptPreparedSecondChain(long ticketId, UserPrincipal owner) {
+        long pricingRequestId = preparedSecondPricingRequestId;
         jdbc.update("UPDATE sales.quotation SET doc_status = 'ACCEPTED', accepted_at = now() WHERE quotation_id = :id",
-            Map.of("id", issuedB.id()));
+            Map.of("id", preparedSecondIssuedQuotationId));
         // recordOutcome ALSO transitions the pricing request's own status (QUOTATION_ISSUED ->
         // QUOTATION_ACCEPTED) — the confirmOrder call right below gates on THIS column, not
         // sales.quotation.doc_status, so the raw-SQL bypass above must carry that write too.

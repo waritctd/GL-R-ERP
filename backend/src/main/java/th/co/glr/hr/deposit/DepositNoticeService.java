@@ -468,10 +468,20 @@ public class DepositNoticeService {
     record RemainingInvoiceMoney(BigDecimal netAmount, BigDecimal vatAmount, BigDecimal grandTotal) {}
 
     RemainingInvoiceMoney computeRemainingInvoiceMoney(BigDecimal itemsTotal, BigDecimal depositAmount) {
+        return computeRemainingInvoiceMoney(itemsTotal, depositAmount, VAT_RATE);
+    }
+
+    /** The money of a resolved invoice: its own VAT rate (EN = 0) and items total (the quotation's stored total). */
+    RemainingInvoiceMoney computeRemainingInvoiceMoney(ResolvedRemainingInvoice r) {
+        return computeRemainingInvoiceMoney(r.itemsTotal(), r.depositAmount() == null ? BigDecimal.ZERO : r.depositAmount(),
+            r.vatRate() != null ? r.vatRate() : VAT_RATE);
+    }
+
+    RemainingInvoiceMoney computeRemainingInvoiceMoney(BigDecimal itemsTotal, BigDecimal depositAmount, BigDecimal vatRate) {
         BigDecimal netAmount = itemsTotal.subtract(depositAmount).setScale(2, RoundingMode.HALF_UP);
         // Owner ruling 2026-10-28 (SK-07): each tax invoice's VAT = round2(its own net x 7%) -- usual Thai practice;
         // a satang gap against the deal's payable is normal and outstanding follows the ISSUED documents.
-        BigDecimal vatAmount = netAmount.multiply(VAT_RATE).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal vatAmount = netAmount.multiply(vatRate).setScale(2, RoundingMode.HALF_UP);
         BigDecimal grandTotal = netAmount.add(vatAmount).setScale(2, RoundingMode.HALF_UP);
         return new RemainingInvoiceMoney(netAmount, vatAmount, grandTotal);
     }
@@ -509,8 +519,8 @@ public class DepositNoticeService {
         List<RemainingInvoiceItemDto> items = resolved.items();
         BigDecimal depositAmount = resolved.depositAmount();
         int depositRowCount = depositAmount.compareTo(BigDecimal.ZERO) != 0 ? 1 : 0;
-        BigDecimal itemsTotal = sumAmounts(items);
-        RemainingInvoiceMoney money = computeRemainingInvoiceMoney(itemsTotal, depositAmount);
+        BigDecimal itemsTotal = resolved.itemsTotal();
+        RemainingInvoiceMoney money = computeRemainingInvoiceMoney(resolved);
         BigDecimal netAmount = money.netAmount();
         BigDecimal vatAmount = money.vatAmount();
         BigDecimal totalPayable = money.grandTotal();
@@ -630,8 +640,31 @@ public class DepositNoticeService {
         List<RemainingInvoiceOptionsDto.QuotationOption> quotationOptions,
         Long defaultQuotationId,
         String blockingReason,
-        Long matchedDepositNoticeId
-    ) {}
+        Long matchedDepositNoticeId,
+        // Null = the standard 7% and the sum of the item amounts; set by the new-engine path (EN = 0%, and net =
+        // the quotation's stored total_amount).
+        BigDecimal vatRate,
+        BigDecimal itemsTotalOverride
+    ) {
+        ResolvedRemainingInvoice(List<RemainingInvoiceItemDto> items, BigDecimal depositAmount, String defaultReference,
+            List<RemainingInvoiceOptionsDto.ReferenceOption> referenceOptions, String defaultDepositReference,
+            List<RemainingInvoiceOptionsDto.ReferenceOption> depositReferenceOptions,
+            List<RemainingInvoiceOptionsDto.QuotationOption> quotationOptions, Long defaultQuotationId,
+            String blockingReason, Long matchedDepositNoticeId) {
+            this(items, depositAmount, defaultReference, referenceOptions, defaultDepositReference,
+                depositReferenceOptions, quotationOptions, defaultQuotationId, blockingReason, matchedDepositNoticeId,
+                null, null);
+        }
+
+        /** The items total this document bills: the quotation's stored total when set, else the line sum. */
+        BigDecimal itemsTotal() {
+            return itemsTotalOverride != null ? itemsTotalOverride : sumLines(items);
+        }
+
+        private static BigDecimal sumLines(List<RemainingInvoiceItemDto> items) {
+            return items.stream().map(RemainingInvoiceItemDto::amount).reduce(BigDecimal.ZERO, BigDecimal::add);
+        }
+    }
 
     /** One quotation this ticket's remaining invoice COULD be sourced from, paired with the
      * deposit notice it matched to (see this section's header comment for the matching rule) —
@@ -708,7 +741,41 @@ public class DepositNoticeService {
                 return blocked("ยังไม่ได้ออกใบแจ้งยอดมัดจำจากใบเสนอราคา " + latestAccepted.number());
             }
         }
+        // No deposit to wait for and no legacy quotation: a deal quoted on the NEW engine (W5-01) bills the answered
+        // quotation in full. A deal WITH a deposit takes the legacy path below (the issued notice's items).
+        if (bypass) {
+            DepositNoticeRepository.AnsweredQuotation answered = docs.findAnsweredQuotation(ticketId).orElse(null);
+            if (answered != null && answered.newEngine()) {
+                return resolveFromNewEngineQuotation(answered);
+            }
+        }
         return resolveLegacy(ticketId, ticket, notices);
+    }
+
+    /**
+     * W5-01 (owner ruling, Ploy): the whole answered new-engine quotation, no deposit deduction (bypass policy: there
+     * is no notice). It prints the quotation's OWN lines - each line's stored amount, the ส่วนลดพิเศษ row as its own
+     * negative line - and money follows the stored total_amount and the document language (EN = no VAT), exactly as
+     * payable reads them. A row with no stored total is refused (payable skips it too).
+     */
+    private ResolvedRemainingInvoice resolveFromNewEngineQuotation(DepositNoticeRepository.AnsweredQuotation answered) {
+        if (answered.totalAmount() == null) {
+            return blocked("ใบเสนอราคา " + answered.number() + " ยังไม่มียอดรวมที่บันทึกไว้ จึงออกใบแจ้งหนี้ไม่ได้");
+        }
+        List<RemainingInvoiceItemDto> items = new ArrayList<>();
+        for (DepositNoticeRepository.QuotationInvoiceLine line : docs.findQuotationInvoiceLines(answered.id())) {
+            BigDecimal discountPerUnit = line.adjustment() || line.unitPrice() == null || line.netUnitPrice() == null
+                ? null : line.unitPrice().subtract(line.netUnitPrice());
+            items.add(new RemainingInvoiceItemDto(line.seq(), line.description(), line.qty(), line.unit(),
+                line.unitPrice(), shortDiscountLabel(discountPerUnit), line.netUnitPrice(), line.amount()));
+        }
+        if (items.isEmpty()) {
+            return blocked("ใบเสนอราคา " + answered.number() + " ไม่มีรายการสินค้า จึงออกใบแจ้งหนี้ไม่ได้");
+        }
+        return new ResolvedRemainingInvoice(items, BigDecimal.ZERO, answered.number(), List.of(), null, List.of(),
+            List.of(), null, null, null,
+            th.co.glr.hr.dealquotation.WastageCalculator.vatRateFor(answered.documentLanguage()),
+            answered.totalAmount());
     }
 
     /** Item/deduction sourcing (owner ruling D11) and rule C (net must not be negative), applied

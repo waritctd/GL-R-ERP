@@ -93,6 +93,7 @@ public abstract class AbstractStockLineIntegrationTest extends AbstractPostgresI
     protected PricingDecisionService decisionService;
     protected PricingCostingRepository costingRepository;
     protected NotificationRepository notifications;
+    protected TicketService ticketService;
 
     protected long salesRepId;
     protected long otherSalesRepId;
@@ -137,7 +138,7 @@ public abstract class AbstractStockLineIntegrationTest extends AbstractPostgresI
         costingRepository = new PricingCostingRepository(jdbc);
         decisionService = new PricingDecisionService(decisionRepository, pricingRequests,
             costingRepository, tickets, fxRates, notifications, landedCost, formulaEngine);
-        TicketService ticketService = new TicketService(tickets, notifications, objectMapper, customers,
+        ticketService = new TicketService(tickets, notifications, objectMapper, customers,
             new QuotationRenderer(), pricingRequestService, new EmployeeAuthRepository(jdbc), new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
             new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
 

@@ -15,6 +15,8 @@ import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestDetailDto;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestItemDto;
 import th.co.glr.hr.pricingrequest.PricingRequestRecipient;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.CustomerChangeRevisionRequest;
+import th.co.glr.hr.pricingrequest.PricingRequestRequests.PricingRequestItemRequest;
+import th.co.glr.hr.pricingrequest.PricingRequestRequests.SetItemFactoryRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.UpdatePricingRequestRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestStatus;
 
@@ -100,10 +102,9 @@ class StockLineRoutingIntegrationTest extends AbstractStockLineIntegrationTest {
     void factoryQuoteDrafts_containOnlyImportLines_evenWhenStockLinesResolveToAFactory() {
         long id = persistSubmitAndPickUp(
             importLine("Imp A", catalogProductFactoryA, FACTORY_A, 10),
-            // both stock kinds point at a real catalog product of factory B: ONLY the source may
-            // keep them out of factory B's quote, not the absence of a factory.
-            stockLineWithCatalog("Stock TH", IN_THAILAND, catalogProductFactoryB, FACTORY_B, 5),
-            stockLineWithCatalog("Stock TR", IN_TRANSIT, catalogProductFactoryB, FACTORY_B, 4));
+            // the stock line points at a real catalog product of factory B: ONLY the source may
+            // keep it out of factory B's quote, not the absence of a factory.
+            stockLineWithCatalog("Stock TH", IN_THAILAND, catalogProductFactoryB, FACTORY_B, 5));
 
         List<FactoryQuoteDto> drafts = factoryQuoteService.generateDrafts(id, importActor);
 
@@ -126,130 +127,117 @@ class StockLineRoutingIntegrationTest extends AbstractStockLineIntegrationTest {
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // Case 3 - สต็อกกำลังเดินทาง with NO import lines: the new IMPORT_REVIEWING -> READY edge
-    // ─────────────────────────────────────────────────────────────────────────────────────
-
-    @Test
-    void inTransitLines_evenWithInThailand_submitGoesToImport_notStraightToCeo_PIN() {
-        long id = persistDraft(
-            stockLine("Transit 1", IN_TRANSIT, 10),
-            stockLine("Stock TH", IN_THAILAND, 3));
-        long importBefore = notificationCount(importUserId, id);
-
-        pricingRequestService.submit(id, salesActor);
-
-        assertThat(status(id)).isEqualTo(PricingRequestStatus.SUBMITTED);
-        assertThat(notificationCount(importUserId, id)).isGreaterThan(importBefore);
-    }
-
-    @Test
-    void inTransitOnly_oneEtaStillMissing_staysWithImport_butTheSavedEtaIsPersisted() {
-        long id = persistSubmitAndPickUp(
-            stockLine("Transit 1", IN_TRANSIT, 10),
-            stockLine("Transit 2", IN_TRANSIT, 4),
-            stockLine("Stock TH", IN_THAILAND, 3));
-        assertThat(status(id)).isEqualTo(PricingRequestStatus.IMPORT_REVIEWING);
-
-        pricingRequestService.setInTransitArrival(id, itemId(id, "Transit 1"), eta(), importActor);
-
-        assertThat(itemByModel(id, "Transit 1").expectedArrivalDate()).isEqualTo(eta());
-        assertThat(itemByModel(id, "Transit 2").expectedArrivalDate()).isNull();
-        assertThat(status(id))
-            .as("Transit 2 still has no ETA: the request must NOT reach the CEO yet")
-            .isEqualTo(PricingRequestStatus.IMPORT_REVIEWING);
-    }
-
-    @Test
-    void inTransitOnly_lastMissingEta_advancesImportReviewingToReadyForCeoReview_andNotifiesCeo() {
-        long id = persistSubmitAndPickUp(
-            stockLine("Transit 1", IN_TRANSIT, 10),
-            stockLine("Transit 2", IN_TRANSIT, 4),
-            stockLine("Stock TH", IN_THAILAND, 3));
-        pricingRequestService.setInTransitArrival(id, itemId(id, "Transit 1"), eta(), importActor);
-        long ceoBefore = notificationCount(ceoUserId, id);
-
-        PricingRequestDetailDto detail = pricingRequestService.setInTransitArrival(
-            id, itemId(id, "Transit 2"), eta().plusDays(3), importActor);
-
-        assertThat(status(id)).isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
-        assertThat(detail.summary().status()).isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
-        assertThat(notificationCount(ceoUserId, id)).isGreaterThan(ceoBefore);
-        assertThat(detail.events()).extracting(e -> e.toStatus())
-            .as("the IMPORT_REVIEWING -> READY_FOR_CEO_REVIEW edge is on the audit trail")
-            .contains(PricingRequestStatus.READY_FOR_CEO_REVIEW);
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Case 4 - import + สต็อกกำลังเดินทาง, in both orders
-    // ─────────────────────────────────────────────────────────────────────────────────────
-
-    @Test
-    void importAndInTransit_quotesReadyButEtaMissing_isNotReady_thenSavingTheEtaAdvances() {
-        long id = persistSubmitAndPickUp(
-            importLine("Imp A", catalogProductFactoryA, FACTORY_A, 10),
-            stockLine("Transit", IN_TRANSIT, 4));
-
-        quoteEveryImportLineReady(id);
-
-        assertThat(status(id))
-            .as("every quote is ready but the in-transit line has no ETA: NOT ready for the CEO")
-            .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
-
-        pricingRequestService.setInTransitArrival(id, itemId(id, "Transit"), eta(), importActor);
-
-        assertThat(status(id)).isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
-    }
-
-    @Test
-    void importAndInTransit_etaSavedFirst_thenMarkReadyForCostingAdvances() {
-        long id = persistSubmitAndPickUp(
-            importLine("Imp A", catalogProductFactoryA, FACTORY_A, 10),
-            stockLine("Transit", IN_TRANSIT, 4));
-
-        pricingRequestService.setInTransitArrival(id, itemId(id, "Transit"), eta(), importActor);
-
-        assertThat(status(id))
-            .as("ETA saved but the import line is not quoted yet: still with import")
-            .isEqualTo(PricingRequestStatus.IMPORT_REVIEWING);
-
-        quoteEveryImportLineReady(id);
-
-        assertThat(status(id))
-            .as("the LAST of {quotes ready, ETAs set} to arrive must advance the request")
-            .isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
-    }
-
-    @Test
-    void importAndInTransit_changingAnEtaWhileReadyForCeoReview_keepsItThere() {
-        long id = persistSubmitAndPickUp(
-            importLine("Imp A", catalogProductFactoryA, FACTORY_A, 10),
-            stockLine("Transit", IN_TRANSIT, 4));
-        pricingRequestService.setInTransitArrival(id, itemId(id, "Transit"), eta(), importActor);
-        quoteEveryImportLineReady(id);
-        assertThat(status(id)).isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
-
-        pricingRequestService.setInTransitArrival(id, itemId(id, "Transit"), eta().plusDays(10), importActor);
-
-        assertThat(itemByModel(id, "Transit").expectedArrivalDate()).isEqualTo(eta().plusDays(10));
-        assertThat(status(id)).isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Case 5 - submit validation
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
-    void createDraft_stockLinesOfBothKinds_acceptedWithoutFactoryOriginCountryOrLeadTime() {
+    void createDraft_aStockLine_isAcceptedWithoutFactoryOriginCountryOrLeadTime() {
         PricingRequestDetailDto created = pricingRequestService.createDraft(ticketId,
-            requestOf(stockLine("Stock TH", IN_THAILAND, 10), stockLine("Stock TR", IN_TRANSIT, 4)), salesActor);
+            requestOf(stockLine("Stock TH", IN_THAILAND, 10)), salesActor);
 
-        assertThat(created.items()).hasSize(2);
-        for (PricingRequestItemDto item : created.items()) {
+        assertThat(created.items()).singleElement().satisfies(item -> {
             assertThat(item.factory()).isNull();
             assertThat(item.originCountry()).isNull();
             assertThat(item.leadTimeMinDays()).isNull();
             assertThat(item.leadTimeMaxDays()).isNull();
-        }
+        });
+    }
+
+    /**
+     * Walk 4 (W4-01): the import-only inputs are cleared for a stock line even if a client sends
+     * them (the form hides them, but an old draft or a hand-built request can still carry them):
+     * they would otherwise print on the quotation as an import lead time. Read from the stored
+     * columns, not the response, so a response that merely hides them cannot pass.
+     */
+    @Test
+    void b10_createDraft_anInThailandLineSentWithImportOnlyInputs_storesThemNull() {
+        PricingRequestItemRequest full = withOriginAndLead(
+            lineWithFullImportFields("Plumb", IN_THAILAND, 10), "อื่นๆ", 3, 7, "Zanzibar");
+
+        long id = pricingRequestService.createDraft(ticketId, requestOf(full), salesActor).summary().id();
+
+        Map<String, Object> row = jdbc.queryForMap("""
+            SELECT stock_source, origin_country, origin_country_other, lead_time_min_days, lead_time_max_days
+              FROM sales.pricing_request_item WHERE pricing_request_id = :id
+            """, Map.of("id", id));
+        assertThat(row.get("stock_source")).isEqualTo(IN_THAILAND);
+        assertThat(row.get("origin_country")).isNull();
+        assertThat(row.get("origin_country_other")).isNull();
+        assertThat(row.get("lead_time_min_days")).isNull();
+        assertThat(row.get("lead_time_max_days")).isNull();
+    }
+
+    @Test
+    void b10_updateDraft_switchingAnImportLineToStock_clearsItsStoredImportInputs() {
+        long id = pricingRequestService.createDraft(ticketId,
+            requestOf(importLine("Switch", null, null, 10)), salesActor).summary().id();
+        assertThat(itemByModel(id, "Switch").leadTimeMinDays()).as("fixture: the import line carries a lead time")
+            .isNotNull();
+
+        pricingRequestService.updateDraft(id,
+            draftUpdate(lineWithFullImportFields("Switch", IN_THAILAND, 10)), salesActor);
+
+        assertThat(jdbc.queryForObject("""
+            SELECT lead_time_min_days IS NULL AND lead_time_max_days IS NULL AND origin_country IS NULL
+              FROM sales.pricing_request_item WHERE pricing_request_id = :id
+            """, Map.of("id", id), Boolean.class)).isTrue();
+    }
+
+    /** Walk 4 (owner ruling): the สต็อกกำลังเดินทาง option is removed - a new line cannot be created as one. */
+    @Test
+    void b11_createDraft_anInTransitLine_isRefused400WithAThaiMessage() {
+        assertThatThrownBy(() -> pricingRequestService.createDraft(ticketId,
+            requestOf(stockLine("Transit", IN_TRANSIT, 4)), salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                // The generic unknown-source 400: IN_TRANSIT is just not a source any more (no dedicated branch).
+                assertThat(e.getMessage()).contains("รายการที่ 1").contains("ไม่รองรับแหล่งที่มาของสินค้า 'IN_TRANSIT'");
+            });
+    }
+
+    @Test
+    void b11_updateDraft_switchingALineToInTransit_isRefused400() {
+        long id = pricingRequestService.createDraft(ticketId,
+            requestOf(importLine("Switch", null, null, 10)), salesActor).summary().id();
+
+        assertThatThrownBy(() -> pricingRequestService.updateDraft(id,
+            draftUpdate(stockLine("Switch", IN_TRANSIT, 10)), salesActor))
+            .isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
+        assertThat(storedStockSource(id)).as("the refused update changed nothing").isNull();
+    }
+
+    // setItemFactory on a stock line - moved here from the deleted StockLineInTransitIntegrationTest
+    // (the in-transit write paths went with the option; this refusal stayed).
+
+    @Test
+    void setItemFactory_onAStockLine_isRefusedWith409_andTheLineKeepsNoFactory() {
+        long id = persistSubmitAndPickUp(
+            importLine("Imp A", catalogProductFactoryA, FACTORY_A, 10),
+            stockLine("Stock", IN_THAILAND, 5));
+        long stockItemId = itemId(id, "Stock");
+
+        assertThatThrownBy(() -> pricingRequestService.setItemFactory(id, stockItemId,
+            new SetItemFactoryRequest(factoryId(FACTORY_B)), importActor))
+            .isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+
+        PricingRequestItemDto after = itemByModel(id, "Stock");
+        assertThat(after.factory()).isNull();
+        assertThat(after.resolvedFactoryId()).isNull();
+        assertThat(after.stockSource()).isEqualTo(IN_THAILAND);
+    }
+
+    @Test
+    void setItemFactory_onAnImportLineWithoutAFactory_stillWorks_PIN() {
+        long id = persistSubmitAndPickUp(
+            importLineWithoutFactory("Free text", 5),
+            stockLine("Stock TH", IN_THAILAND, 3));
+
+        pricingRequestService.setItemFactory(id, itemId(id, "Free text"),
+            new SetItemFactoryRequest(factoryId(FACTORY_B)), importActor);
+
+        assertThat(itemByModel(id, "Free text").factory()).isEqualTo(FACTORY_B);
     }
 
     @Test
@@ -326,16 +314,10 @@ class StockLineRoutingIntegrationTest extends AbstractStockLineIntegrationTest {
     @Test
     void stockSource_roundTripsThroughCreateUpdateAndRead_inDraft() {
         PricingRequestDetailDto created = pricingRequestService.createDraft(ticketId,
-            requestOf(stockLine("RT", IN_TRANSIT, 5)), salesActor);
+            requestOf(stockLine("RT", IN_THAILAND, 5)), salesActor);
         long id = created.summary().id();
-        assertThat(created.items()).singleElement().satisfies(i -> {
-            assertThat(i.stockSource()).isEqualTo(IN_TRANSIT);
-            assertThat(i.expectedArrivalDate()).as("no ETA can exist in DRAFT").isNull();
-        });
-        assertThat(pricingRequestService.get(id, salesActor).items().get(0).stockSource()).isEqualTo(IN_TRANSIT);
-        assertThat(storedStockSource(id)).isEqualTo(IN_TRANSIT);
-
-        pricingRequestService.updateDraft(id, draftUpdate(stockLine("RT", IN_THAILAND, 5)), salesActor);
+        assertThat(created.items()).singleElement()
+            .satisfies(i -> assertThat(i.stockSource()).isEqualTo(IN_THAILAND));
         assertThat(pricingRequestService.get(id, salesActor).items().get(0).stockSource()).isEqualTo(IN_THAILAND);
         assertThat(storedStockSource(id)).isEqualTo(IN_THAILAND);
 
@@ -353,16 +335,13 @@ class StockLineRoutingIntegrationTest extends AbstractStockLineIntegrationTest {
             new CustomerChangeRevisionRequest("ลูกค้าเปลี่ยน", UUID.randomUUID().toString(),
                 PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
                 null, "THB", null,
-                List.of(stockLine("Rev TH", IN_THAILAND, 5), stockLine("Rev TR", IN_TRANSIT, 4),
+                List.of(stockLine("Rev TH", IN_THAILAND, 5),
                     importLine("Rev Imp", catalogProductFactoryA, FACTORY_A, 10))),
             salesActor);
 
         long childId = revision.summary().id();
         assertThat(itemByModel(childId, "Rev TH").stockSource()).isEqualTo(IN_THAILAND);
-        assertThat(itemByModel(childId, "Rev TR").stockSource()).isEqualTo(IN_TRANSIT);
         assertThat(itemByModel(childId, "Rev Imp").stockSource()).isNull();
-        assertThat(itemByModel(childId, "Rev TR").expectedArrivalDate())
-            .as("a new revision starts without an ETA: import confirms it again").isNull();
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -394,12 +373,12 @@ class StockLineRoutingIntegrationTest extends AbstractStockLineIntegrationTest {
         String model, int pieces
     ) {
         var full = importLine(model, null, null, pieces);
-        return withOriginAndLead(full, null, 3, 7);
+        return withOriginAndLead(full, null, 3, 7, null);
     }
 
     private th.co.glr.hr.pricingrequest.PricingRequestRequests.PricingRequestItemRequest withOriginAndLead(
         th.co.glr.hr.pricingrequest.PricingRequestRequests.PricingRequestItemRequest i,
-        String originCountry, Integer leadMin, Integer leadMax
+        String originCountry, Integer leadMin, Integer leadMax, String originCountryOther
     ) {
         return new th.co.glr.hr.pricingrequest.PricingRequestRequests.PricingRequestItemRequest(
             i.sourceTicketItemId(), i.productId(), i.variantId(), i.brand(), i.model(), i.productDescription(),
@@ -408,7 +387,7 @@ class StockLineRoutingIntegrationTest extends AbstractStockLineIntegrationTest {
             i.deliveryLocation(), i.specialRequirement(), i.productCode(), i.thicknessMm(), i.sqmPerPiece(),
             i.quantityMode(), i.areaSqm(), i.piecesInput(), i.wastageMode(), i.wastageValue(),
             i.piecesPerBox(), i.sqmPerBox(), i.roundToFullBox(), originCountry, leadMin, leadMax,
-            i.piecesBeforeWastage(), i.piecesAfterWastage(), i.boxes(), i.originCountryOther(), i.stockSource());
+            i.piecesBeforeWastage(), i.piecesAfterWastage(), i.boxes(), originCountryOther, i.stockSource());
     }
 
     private String storedStockSource(long pricingRequestId) {

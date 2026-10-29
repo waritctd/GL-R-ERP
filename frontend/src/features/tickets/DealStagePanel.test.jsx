@@ -593,6 +593,27 @@ describe('DealStagePanel route awareness', () => {
   describe('ถัดไป follows the route', () => {
     const nextText = () => screen.getByTestId('deal-stage-next').textContent;
 
+    // Walk 4 (W4-05/W4-02): a deal with no deposit never passes ขั้น 11 - nothing for the account team to
+    // confirm - so ถัดไป must jump from ขั้น 10 to ขั้น 12 and must not promise "ได้รับเงินมัดจำ".
+    it.each(['NOT_REQUIRED', 'WAIVED'])('depositPolicy %s at ORDER_RECEIVED: ถัดไป names 12 (PROCUREMENT), never ขั้น 11 or the account\'s deposit confirmation', (depositPolicy) => {
+      renderPanel({
+        summary: baseSummary({ salesStage: 'ORDER_RECEIVED', paymentStatus: 'CUSTOMER_CONFIRMED', depositPolicy }),
+      });
+      const text = nextText();
+      expect(text).toContain('12.');
+      expect(text).not.toContain('11.');
+      expect(text).not.toContain('ได้รับเงินมัดจำ');
+      expect(text).not.toContain('ฝ่ายบัญชียืนยันรับมัดจำ');
+    });
+
+    it('depositPolicy REQUIRED at ORDER_RECEIVED still names ขั้น 11 and the account\'s confirmation (wrong-way-round)', () => {
+      renderPanel({
+        summary: baseSummary({ salesStage: 'ORDER_RECEIVED', paymentStatus: 'CUSTOMER_CONFIRMED', depositPolicy: 'REQUIRED' }),
+      });
+      expect(nextText()).toContain('11.');
+      expect(nextText()).toContain('ฝ่ายบัญชียืนยันรับมัดจำ');
+    });
+
     it('owner-direct at S3 offers S5 (เสนอราคาเจ้าของโครงการ), not S4', () => {
       renderPanel({
         summary: baseSummary({ salesStage: 'SPEC_APPROVED', entryChannel: 'OWNER_DIRECT' }),

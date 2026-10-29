@@ -74,7 +74,11 @@ public final class PricingRequestDtos {
         // The deal ticket's own legacy status (sales.ticket.status). The frontend gates
         // "ยืนยันคำสั่งซื้อ" on it (OrderConfirmationService.isBridgeableTicketStatus) so a deal the
         // bridge cannot handle never offers a button that can only 409.
-        String ticketStatus
+        String ticketStatus,
+        // The deal ticket's payment track (sales.ticket.payment_status): null until the customer's order
+        // is confirmed. Once set no new pricing round (customer-change revision / submit) can start, so the
+        // frontend hides the create/submit/สร้างรอบแก้ไข controls on it.
+        String ticketPaymentStatus
     ) {
         /** The pre-GLA-125 shape — kept so every existing construction site (tests, mostly)
          * compiles unchanged. Defaults every new field to null/false, exactly what a pre-GLA-125
@@ -93,7 +97,7 @@ public final class PricingRequestDtos {
                 requestedByName, assignedImportId, assignedImportName, requiredDate,
                 customerTargetPrice, targetCurrency, note, itemCount, revisionNo,
                 parentPricingRequestId, submittedAt, pickedUpAt, cancelledAt, createdAt, updatedAt,
-                orderConfirmedAt, null, null, null, null, null, null, null, false, null, null);
+                orderConfirmedAt, null, null, null, null, null, null, null, false, null, null, null);
         }
 
         /** The pre-customerId (but post-GLA-125-header-terms) shape — the 36-field constructor
@@ -115,7 +119,7 @@ public final class PricingRequestDtos {
                 customerTargetPrice, targetCurrency, note, itemCount, revisionNo,
                 parentPricingRequestId, submittedAt, pickedUpAt, cancelledAt, createdAt, updatedAt,
                 orderConfirmedAt, paymentTermMode, creditDays, validityDays, printedByDisplayId,
-                salesRepDisplayId, deptCode, unitCode, omitContactHonorific, null, null);
+                salesRepDisplayId, deptCode, unitCode, omitContactHonorific, null, null, null);
         }
 
         /** The pre-ticketStatus (37-field) shape. Defaults ticketStatus to null. */
@@ -137,7 +141,7 @@ public final class PricingRequestDtos {
                 customerTargetPrice, targetCurrency, note, itemCount, revisionNo,
                 parentPricingRequestId, submittedAt, pickedUpAt, cancelledAt, createdAt, updatedAt,
                 orderConfirmedAt, paymentTermMode, creditDays, validityDays, printedByDisplayId,
-                salesRepDisplayId, deptCode, unitCode, omitContactHonorific, customerId, null);
+                salesRepDisplayId, deptCode, unitCode, omitContactHonorific, customerId, null, null);
         }
     }
 
