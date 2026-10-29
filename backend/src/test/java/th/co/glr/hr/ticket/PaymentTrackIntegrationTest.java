@@ -223,7 +223,7 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
         // Fulfilment track (unrelated to payment_status except for site 3's side effect below) —
         // no live sales.factory_purchase_order rows exist for this deal, so the ticket-level
         // setters are not refused by the PO-tracked guard.
-        ticketService.issueImportRequest(deal.ticketId(), importActor);
+        ticketService.recordFirstImportRequestIssued(deal.ticketId(), 0L, importActor); // pre-V184 shape: IR_ISSUED, no rows
         ticketService.markIrSent(deal.ticketId(), importActor);
         ticketService.markShipping(deal.ticketId(), importActor);
 
@@ -259,7 +259,7 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
 
         // site 8 (no write, rule 5): eligible with no deposit notice at all — CUSTOMER_CONFIRMED
         // plus a bypass policy is sufficient.
-        ticketService.issueImportRequest(deal.ticketId(), importActor);
+        ticketService.recordFirstImportRequestIssued(deal.ticketId(), 0L, importActor); // pre-V184 shape: IR_ISSUED, no rows
         ticketService.markIrSent(deal.ticketId(), importActor);
         ticketService.markShipping(deal.ticketId(), importActor);
         ticketService.markGoodsReceived(deal.ticketId(), importActor);
@@ -548,7 +548,8 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
         tickets.markQuotationIssuedForOrderConfirmation(ticketId); // status draft -> quotation_issued
         assertThat(paymentStatusOf(ticketId)).isNull();
 
-        assertThatThrownBy(() -> ticketService.issueImportRequest(ticketId, importActor))
+        assertThatThrownBy(() -> ticketService.requireImportRequestIssuable(
+                tickets.findById(ticketId).orElseThrow().summary()))
             .isInstanceOfSatisfying(ApiException.class,
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
 

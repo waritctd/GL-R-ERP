@@ -8,20 +8,13 @@ import { nextFulfilmentActionCode, nextImportAction } from './importActions.js';
 // importActions.js header). It named ProcurementFulfilmentPage until ebaf6888
 // deleted that page.
 describe('nextFulfilmentActionCode', () => {
-  it('offers issueImportRequest on a draft ticket once the deposit is in (no quotation_issued needed)', () => {
-    for (const paymentStatus of ['DEPOSIT_NOTICE_ISSUED', 'DEPOSIT_PAID']) {
-      expect(nextFulfilmentActionCode({ status: 'draft', fulfillmentStatus: null, paymentStatus })).toBe('issueImportRequest');
+  // W3-01 (owner ruling 2026-10-29): there is no deal-level "issue the IR" step any more — a deal with
+  // no fulfilment status yields no code at all, whatever its status or deposit.
+  it('never offers issueImportRequest on a deal with no fulfilment status, deposit or not', () => {
+    for (const paymentStatus of ['DEPOSIT_NOTICE_ISSUED', 'DEPOSIT_PAID', null]) {
+      expect(nextFulfilmentActionCode({ status: 'draft', fulfillmentStatus: null, paymentStatus })).toBeNull();
+      expect(nextFulfilmentActionCode({ status: 'quotation_issued', fulfillmentStatus: null, paymentStatus })).toBeNull();
     }
-    expect(nextFulfilmentActionCode({
-      status: 'draft', fulfillmentStatus: null, paymentStatus: 'CUSTOMER_CONFIRMED', depositPolicy: 'CREDIT_CUSTOMER',
-    })).toBe('issueImportRequest');
-  });
-  it('does NOT offer issueImportRequest on a draft ticket without a deposit (deposit floor stays)', () => {
-    expect(nextFulfilmentActionCode({ status: 'draft', fulfillmentStatus: null, paymentStatus: null })).toBeNull();
-    expect(nextFulfilmentActionCode({ status: 'draft', fulfillmentStatus: null, paymentStatus: 'CUSTOMER_CONFIRMED', depositPolicy: 'REQUIRED' })).toBeNull();
-  });
-  it('does not re-offer issueImportRequest once a fulfilment status exists, even on a draft ticket', () => {
-    expect(nextFulfilmentActionCode({ status: 'draft', fulfillmentStatus: 'IR_ISSUED', paymentStatus: 'DEPOSIT_PAID' })).not.toBe('issueImportRequest');
   });
   // The backend's markIrSent/markShipping/markGoodsReceived gate on fulfillmentStatus alone (never
   // on ticket.status), and the redesigned pricing chain does not always reach quotation_issued — a
@@ -36,7 +29,7 @@ describe('nextFulfilmentActionCode', () => {
     }
   });
   it('walks the linear fulfilment chain in order', () => {
-    expect(nextFulfilmentActionCode({ status: 'quotation_issued', fulfillmentStatus: null })).toBe('issueImportRequest');
+    expect(nextFulfilmentActionCode({ status: 'quotation_issued', fulfillmentStatus: null })).toBeNull();
     expect(nextFulfilmentActionCode({ status: 'quotation_issued', fulfillmentStatus: 'IR_ISSUED' })).toBe('markIrSent');
     expect(nextFulfilmentActionCode({ status: 'quotation_issued', fulfillmentStatus: 'IR_SENT' })).toBe('markShipping');
     expect(nextFulfilmentActionCode({ status: 'quotation_issued', fulfillmentStatus: 'SHIPPING' })).toBe('markGoodsReceived');
@@ -98,10 +91,9 @@ describe('nextImportAction', () => {
   it('ignores non-SUBMITTED pricing requests and falls through to the fulfilment chain', () => {
     const ticket = { id: 5, status: 'quotation_issued', fulfillmentStatus: null };
     const action = nextImportAction(ticket, [{ status: 'IMPORT_REVIEWING' }]);
-    // PR-B REVIEW ROUND 2, X1: issueImportRequest now routes to the deal page — the rewritten
-    // /fulfilment (per-factory tracker) can't act on it and doesn't even list a
-    // null-fulfillmentStatus deal. See importActions.js's `to` table doc comment.
-    expect(action).toEqual({ code: 'issueImportRequest', label: 'ออกคำขอนำเข้า', to: '/import/deals/5' });
+    // W3-01 (owner ruling 2026-10-29): a confirmed deal with no IR yet is NOT an import to-do — the
+    // worklist lists what /fulfilment lists (an ISSUED IR onward); sales raises the per-factory IR.
+    expect(action).toBeNull();
   });
 
   // PR-B REVIEW ROUND 2, X1: only markIrSent still routes to /fulfilment (its legacy section
@@ -112,7 +104,6 @@ describe('nextImportAction', () => {
   // performed each as a single deal-level click.
   it('routes markIrSent to /fulfilment and the other three legacy codes to import\'s own deal page (never /tickets/:id, which import can no longer open)', () => {
     const cases = [
-      [null, 'issueImportRequest', 'ออกคำขอนำเข้า', '/import/deals/7'],
       ['IR_ISSUED', 'markIrSent', 'อัปเดตสถานะนำเข้า', '/fulfilment'],
       ['IR_SENT', 'markShipping', 'บันทึกออกเดินทาง', '/import/deals/7'],
       ['SHIPPING', 'markGoodsReceived', 'ยืนยันรับเข้าคลัง', '/import/deals/7'],
@@ -139,6 +130,15 @@ describe('nextImportAction', () => {
 
   it('returns null when there is nothing for Import to do', () => {
     const ticket = { id: 9, status: 'draft', fulfillmentStatus: null };
+    expect(nextImportAction(ticket, [])).toBeNull();
+  });
+});
+
+describe('nextImportAction — W3-01 no IR yet', () => {
+  it.each([
+    [{ id: 3, status: 'quotation_issued', fulfillmentStatus: null }],
+    [{ id: 3, status: 'draft', fulfillmentStatus: null, paymentStatus: 'DEPOSIT_PAID' }],
+  ])('returns null (no ออกคำขอนำเข้า CTA) for %j', (ticket) => {
     expect(nextImportAction(ticket, [])).toBeNull();
   });
 });

@@ -503,7 +503,8 @@ class DerivedFulfilmentRollupIntegrationTest extends AbstractPostgresIntegration
         assertThat(afterDeposit.summary().salesStage()).isEqualTo(DealStage.DEPOSIT_RECEIVED);
 
         if (issueImportRequest) {
-            TicketDto afterIr = ticketService.issueImportRequest(deal.ticketId, importActor);
+            ticketService.recordFirstImportRequestIssued(deal.ticketId, 0L, importActor); // pre-V184 shape: IR_ISSUED, no rows
+            TicketDto afterIr = tickets.findById(deal.ticketId).orElseThrow();
             assertThat(afterIr.summary().salesStage()).isEqualTo(DealStage.PROCUREMENT);
             assertThat(afterIr.summary().fulfillmentStatus()).isEqualTo(FulfilmentStatus.IR_ISSUED);
         }

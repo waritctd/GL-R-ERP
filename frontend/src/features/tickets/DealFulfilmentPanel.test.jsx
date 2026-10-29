@@ -1,7 +1,7 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DealFulfilmentPanel } from './DealFulfilmentPanel.jsx';
 import { api } from '../../api/index.js';
 
@@ -31,6 +31,9 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         markEmailSent: vi.fn(),
         download: vi.fn(),
         setRequiredByNote: vi.fn(),
+      },
+      factoryConfigs: {
+        names: vi.fn().mockResolvedValue({ factories: [{ id: 7, factoryName: 'Rex Ceramics' }, { id: 8, factoryName: 'Cotto' }] }),
       },
       priceImport: {
         countries: vi.fn().mockResolvedValue([
@@ -77,14 +80,14 @@ const summary = { createdById: 42, status: 'quotation_issued', fulfillmentStatus
 
 // `rows` may be an Error, to render the panel with a failed ใบขอซื้อ fetch.
 function renderPanel(user, rows = [draftRow()], {
-  summary: dealSummary = summary, availableActions = [], showToast = vi.fn(),
+  summary: dealSummary = summary, availableActions = [], showToast = vi.fn(), items = [],
 } = {}) {
   if (rows instanceof Error) api.storedImportRequests.listForTicket.mockRejectedValue(rows);
   else api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: rows });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
-      <DealFulfilmentPanel user={user} ticketId={1} summary={dealSummary} items={[]} availableActions={availableActions} showToast={showToast} />
+      <DealFulfilmentPanel user={user} ticketId={1} summary={dealSummary} items={items} availableActions={availableActions} showToast={showToast} />
     </QueryClientProvider>,
   );
 }
@@ -191,20 +194,38 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
     });
   });
 
-  // The deal-level chain (ส่งคำขอนำเข้าแล้ว → ออกเดินทาง → รับสินค้า) is refused by the server only
-  // once a per-factory row is ISSUED (TicketRepository#hasLiveImportRequests), so a draft must not
-  // take a pending step's button away from the viewer who can perform it.
+  // W3-04 (owner ruling 2026-10-29): the deal-level chain (ส่งคำขอนำเข้าแล้ว → ออกเดินทาง → รับสินค้า)
+  // is refused by the server once ANY live per-factory row exists, DRAFT included
+  // (TicketRepository#hasLiveImportRequests), so the buttons are hidden on a draft too.
   describe('deal-level import chain vs per-factory drafts', () => {
     const legacyInFlight = { ...summary, fulfillmentStatus: 'IR_SENT' };
     const shipping = [{ action: 'SHIPPING' }];
 
-    it('CEO keeps a pending deal-level step when the deal\'s only per-factory rows are DRAFT', async () => {
-      api.tickets.markShipping.mockResolvedValue({});
+    it('a deal whose only per-factory rows are DRAFT gets no deal-level step button (the server refuses it)', async () => {
       renderPanel(CEO, [draftRow()], { summary: legacyInFlight, availableActions: shipping });
       await screen.findByTestId('ir-factory-card-10');
-      fireEvent.click(screen.getByTestId('deal-fulfilment-mark-shipping'));
-      await waitFor(() => expect(api.tickets.markShipping).toHaveBeenCalledWith(1));
-      expect(screen.queryByTestId('deal-fulfilment-ir-tracked-note')).toBeNull();
+      expect(screen.queryByTestId('deal-fulfilment-mark-shipping')).toBeNull();
+      expect(screen.getByTestId('deal-fulfilment-ir-tracked-note')).not.toBeNull();
+    });
+
+    it('a DRAFT-only deal at IR_ISSUED gets no ส่งคำขอนำเข้าแล้ว button', async () => {
+      renderPanel(CEO, [draftRow()], {
+        summary: { ...summary, fulfillmentStatus: 'IR_ISSUED' }, availableActions: [{ action: 'IR_SENT' }],
+      });
+      await screen.findByTestId('ir-factory-card-10');
+      expect(screen.queryByTestId('deal-fulfilment-mark-ir-sent')).toBeNull();
+    });
+
+    it('a deal with no rows at all is never offered the one-click ออกคำขอนำเข้า (IR)', async () => {
+      renderPanel(CEO, [], { availableActions: [{ action: 'ISSUE_IMPORT_REQUEST' }] });
+      await screen.findByTestId('deal-fulfilment-create-ir-drafts');
+      expect(screen.queryByTestId('deal-fulfilment-issue-ir')).toBeNull();
+    });
+
+    // Guard: a pre-V184 deal in flight with NO rows can still finish.
+    it('a legacy in-flight deal with no rows keeps its deal-level step', async () => {
+      renderPanel(CEO, [], { summary: legacyInFlight, availableActions: shipping });
+      expect(await screen.findByTestId('deal-fulfilment-mark-shipping')).not.toBeNull();
     });
 
     it('the deal-level step is gone once a row is ISSUED — the server would refuse it', async () => {
@@ -230,6 +251,88 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       renderPanel(CEO, new Error('เครือข่ายขัดข้อง'), { summary: legacyInFlight, availableActions: shipping });
       await screen.findByTestId('deal-fulfilment-stored-ir-error');
       expect(screen.queryByTestId('deal-fulfilment-mark-shipping')).toBeNull();
+    });
+  });
+
+  // W3-03 follow-up (owner ruling 2026-10-29): a free-text line on a direct-quotation deal has no
+  // factory, so sales picks one when creating the IR. ONE handler (requestCreateIrDrafts) serves the
+  // panel button and any external caller.
+  describe('factory picker for factory-less lines', () => {
+    afterEach(() => api.storedImportRequests.createDrafts.mockReset());
+    const directSummary = { ...summary, liveDirectQuotation: { id: 5, docStatus: 'APPROVED' } };
+    const lines = [
+      { id: 1, brand: 'SCG', model: 'Catalogue', factory: 'Rex Ceramics', catalogPriceId: 90, qty: 10 },
+      { id: 2, brand: 'SCG', model: 'Linked', factory: null, catalogPriceId: 91, qty: 10 },
+      { id: 3, brand: 'ค่าติดตั้ง', model: 'Free text', factory: null, catalogPriceId: null, qty: 10, qtyFromStock: 0 },
+    ];
+
+    it('shows a picker only for the line with no factory and no catalogue link', async () => {
+      renderPanel(OWNER, [], { summary: directSummary, items: lines });
+      expect(await screen.findByTestId('ir-line-factory-3')).not.toBeNull();
+      expect(screen.queryByTestId('ir-line-factory-1')).toBeNull();
+      expect(screen.queryByTestId('ir-line-factory-2')).toBeNull();
+    });
+
+    it('asks for no factory on a line fully reserved from stock — import never orders it', async () => {
+      api.storedImportRequests.createDrafts.mockResolvedValue({ importRequests: [draftRow()] });
+      const stockLine = { id: 4, brand: 'SCG', model: 'From stock', factory: null, catalogPriceId: null, qty: 5, qtyFromStock: 5 };
+      renderPanel(OWNER, [], { summary: directSummary, items: [stockLine] });
+      const button = await screen.findByTestId('deal-fulfilment-create-ir-drafts');
+      expect(screen.queryByTestId('ir-line-factory-4')).toBeNull();
+      expect(button.disabled).toBe(false);
+    });
+
+    it('still asks for a factory on a partly-from-stock line (remainder is ordered)', async () => {
+      const partLine = { id: 5, brand: 'SCG', model: 'Part stock', factory: null, catalogPriceId: null, qty: 5, qtyFromStock: 2 };
+      renderPanel(OWNER, [], { summary: directSummary, items: [partLine] });
+      expect(await screen.findByTestId('ir-line-factory-5')).not.toBeNull();
+    });
+
+    it('shows no picker when the deal is not on the direct-quotation route', async () => {
+      renderPanel(OWNER, [], { items: lines });
+      await screen.findByTestId('deal-fulfilment-create-ir-drafts');
+      expect(screen.queryByTestId('ir-line-factory-3')).toBeNull();
+    });
+
+    it('keeps สร้างใบ IR disabled until every factory-less line has a factory, and sends the choice', async () => {
+      api.storedImportRequests.createDrafts.mockResolvedValue({ importRequests: [draftRow()] });
+      renderPanel(OWNER, [], { summary: directSummary, items: lines });
+      const button = await screen.findByTestId('deal-fulfilment-create-ir-drafts');
+      expect(button.disabled).toBe(true);
+
+      const select = await screen.findByTestId('ir-line-factory-3');
+      await waitFor(() => expect(within(select).getByRole('option', { name: 'Rex Ceramics' })).not.toBeNull());
+      fireEvent.change(select, { target: { value: '7' } });
+      await waitFor(() => expect(button.disabled).toBe(false));
+      fireEvent.click(button);
+
+      await waitFor(() => expect(api.storedImportRequests.createDrafts).toHaveBeenCalledWith(1, {
+        itemFactories: [{ ticketItemId: 3, factoryId: 7 }],
+      }));
+    });
+
+    it('sends no payload at all when every line already has a factory (shape unchanged)', async () => {
+      api.storedImportRequests.createDrafts.mockResolvedValue({ importRequests: [draftRow()] });
+      renderPanel(OWNER, [], { summary: directSummary, items: lines.slice(0, 2) });
+      fireEvent.click(await screen.findByTestId('deal-fulfilment-create-ir-drafts'));
+      await waitFor(() => expect(api.storedImportRequests.createDrafts).toHaveBeenCalledWith(1, undefined));
+    });
+
+    it('the country-retry resends the picked factories too', async () => {
+      api.storedImportRequests.createDrafts
+        .mockRejectedValueOnce(Object.assign(new Error('กรุณาระบุประเทศให้กับโรงงานใหม่: New Factory'), { status: 409 }))
+        .mockResolvedValueOnce({ importRequests: [draftRow()] });
+      renderPanel(OWNER, [], { summary: directSummary, items: lines });
+      const select = await screen.findByTestId('ir-line-factory-3');
+      await waitFor(() => expect(within(select).getByRole('option', { name: 'Cotto' })).not.toBeNull());
+      fireEvent.change(select, { target: { value: '8' } });
+      fireEvent.click(await screen.findByTestId('deal-fulfilment-create-ir-drafts'));
+      fireEvent.change(await screen.findByLabelText(/^ประเทศ/), { target: { value: 'CN' } });
+      fireEvent.click(await screen.findByTestId('new-factory-country-submit'));
+      await waitFor(() => expect(api.storedImportRequests.createDrafts).toHaveBeenLastCalledWith(1, {
+        newFactoryCountries: [{ factoryName: 'New Factory', countryCode: 'CN', countryOther: null }],
+        itemFactories: [{ ticketItemId: 3, factoryId: 8 }],
+      }));
     });
   });
 

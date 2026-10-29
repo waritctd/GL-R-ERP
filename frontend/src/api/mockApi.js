@@ -2883,12 +2883,12 @@ function mockColorSurfaceNote(color, texture) {
   return parts.length ? parts.join(' · ') : null;
 }
 
-// Mirrors TicketRepository.hasLiveImportRequests: at least one row for this deal is currently
-// ISSUED (a DRAFT-only or fully-superseded deal does not count). Backs the legacy deal-level
+// Mirrors TicketRepository.hasLiveImportRequests: at least one row for this deal is live —
+// DRAFT or ISSUED, not SUPERSEDED (W3-04, owner ruling 2026-10-29). Backs the legacy deal-level
 // IR_SENT/SHIPPING/GOODS_RECEIVED action-advertisement gate AND the markIrSent/markShipping/
 // markGoodsReceived mutation refusal — see actions() and those three mutations below.
 function mockHasLiveImportRequests(ticketId) {
-  return mockImportRequests.some((r) => r.ticketId === Number(ticketId) && r.status === 'ISSUED');
+  return mockImportRequests.some((r) => r.ticketId === Number(ticketId) && r.status !== 'SUPERSEDED');
 }
 
 function findStoredImportRequestRaw(id) {
@@ -2978,6 +2978,22 @@ function mockBuildImportRequestEmailDraft(row, docNumber, issueDateIso, firstIss
 // ImportRequestQueryRepository#factoryResolutionCandidates's cascade: direct catalog link, then a
 // typed factory name matched (normalized) against an existing factory, then auto-create from
 // `newFactoryCountries`. Never derives a factory from brand.
+// Mirrors ImportRequestService#applyItemFactoryChoices: sales' pick for a line with no factory at all
+// (no resolvedFactoryId, no catalogue factory, no typed name). Validated first; a line that already
+// has a factory is never overwritten.
+function mockApplyItemFactoryChoices(ticket, request) {
+  for (const choice of request?.itemFactories ?? []) {
+    const factory = mockPriceImportFactories.find((f) => f.factoryId === Number(choice.factoryId));
+    if (!factory) fail('ไม่พบโรงงานที่เลือก', 400);
+    const item = (ticket.items ?? []).find((i) => Number(i.id) === Number(choice.ticketItemId));
+    if (!item) fail('รายการที่เลือกไม่ได้อยู่ในดีลนี้', 400);
+    const hasFactory = item.resolvedFactoryId != null
+      || (item.catalogPriceId != null && mockProductPrices.some((p) => p.priceId === Number(item.catalogPriceId)))
+      || (item.factory && String(item.factory).trim());
+    if (!hasFactory) item.factory = factory.name;
+  }
+}
+
 function mockResolveFactoryGroups(ticket, request) {
   const lines = (ticket.items ?? [])
     .map((item) => ({ item, remainingQty: moneyValue(Number(item.qty || 0) - Number(item.qtyFromStock || 0)) }))
@@ -7910,10 +7926,6 @@ function buildTicketActions(user, ticket) {
   const add = (action, kind, label, extra = {}) => availableActions.push({ action, kind, label, ...extra });
   const owner = user.role === 'sales' && ticket.createdById === user.id;
   const dealOwner = owner || user.role === 'sales_manager' || user.role === 'ceo';
-  const canIssueIr = ticket.status === 'quotation_issued'
-    && ticket.fulfillmentStatus == null
-    && (['DEPOSIT_NOTICE_ISSUED', 'DEPOSIT_PAID'].includes(ticket.paymentStatus)
-      || (depositBypassesNotice(ticket) && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED')));
 
   if (active) {
     // Ticket-level SUBMIT/PICKUP/PROPOSE_PRICE/CALCULATE_PRICES/OVERRIDE_ITEM_PRICE/
@@ -7935,7 +7947,6 @@ function buildTicketActions(user, ticket) {
       add('RECORD_PAYMENT', 'payment', 'บันทึกรับชำระเงิน', { requiredFields: ['kind', 'amount'] });
     }
     if (['account', 'ceo'].includes(user.role)) add('SET_BILLING', 'payment', 'ตั้งค่าการวางบิล', { requiredFields: ['dueDate'] });
-    if (['import', 'ceo'].includes(user.role) && canIssueIr) add('ISSUE_IMPORT_REQUEST', 'fulfillment', 'ออกคำขอนำเข้า');
     // V184 (PR-B): once the deal is tracked per-factory (>= 1 ISSUED sales.import_request
     // row), these three deal-level buttons all 409 — mirrors TicketService#addOperationalActions'
     // own `irTracked` guard. canIssueIr already excludes a tracked deal on its own (the first
@@ -9047,24 +9058,12 @@ export const api = {
       return api.finance.confirmDepositPaid(id);
     },
 
+    // W3-04 (owner ruling 2026-10-29): the one-click legacy IR is closed — mirrors
+    // TicketService#issueImportRequest, which now 409s for every deal.
     async issueImportRequest(id) {
-      const user = hasRole('import');
-      const ticket = findTicketRaw(Number(id));
-      requireActive(ticket);
-      // DEPOSIT_PAID also qualifies — the deposit is often confirmed before the IR
-      // (mirrors TicketService.issueImportRequest).
-      const waivedReady = depositBypassesNotice(ticket)
-        && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED');
-      if (ticket.status !== 'quotation_issued'
-          || (!['DEPOSIT_NOTICE_ISSUED', 'DEPOSIT_PAID'].includes(ticket.paymentStatus) && !waivedReady)) {
-        fail('ต้องออกใบเสนอราคาแล้วและรับชำระหรือแจ้งมัดจำแล้วก่อนจึงจะดำเนินการขั้นตอนนี้ได้', 409);
-      }
-      if (ticket.fulfillmentStatus != null) fail('คำขอนำเข้านี้ถูกออกไปแล้ว', 409);
-      ticket.fulfillmentStatus = 'IR_ISSUED';
-      ticket.updatedAt = new Date().toISOString().slice(0, 10);
-      pushEvent(ticket, user, 'IR_ISSUED', ticket.status, ticket.status, null);
-      autoAdvanceStage(ticket, 'PROCUREMENT', user);
-      return delay({ ticket: buildTicketDetail(ticket) });
+      hasRole('import');
+      requireActive(findTicketRaw(Number(id)));
+      fail('ออกคำขอนำเข้าทั้งดีลไม่ได้แล้ว — ให้ฝ่ายขายสร้างและออกเลขใบขอซื้อรายโรงงานแทน', 409);
     },
 
     // V184 (PR-B): the real TicketService#markIrSent/markShipping/markGoodsReceived additionally
@@ -12368,6 +12367,7 @@ export const api = {
       if (dealStageIndex(ticket.salesStage) < dealStageIndex('ORDER_RECEIVED')) {
         fail('สร้างใบขอซื้อได้หลังจากยืนยันคำสั่งซื้อแล้ว (ORDER_RECEIVED) เท่านั้น', 409);
       }
+      mockApplyItemFactoryChoices(ticket, request);
       const groups = mockResolveFactoryGroups(ticket, request);
       if (groups.length === 0) {
         fail('ดีลนี้ไม่มีรายการที่ต้องออกใบขอซื้อ (ยังไม่มีรายการสินค้า หรือครอบคลุมจากสต็อกทั้งหมด)', 409);
@@ -12924,6 +12924,11 @@ export const api = {
     async list() {
       hasRole('ceo', 'import');
       return delay({ factories: mockFactoryConfigs });
+    },
+    // Mirrors FactoryConfigController#names: id + name only, for the IR creators too.
+    async names() {
+      hasRole('ceo', 'import', 'sales', 'sales_manager');
+      return delay({ factories: mockPriceImportFactories.map((f) => ({ id: f.factoryId, factoryName: f.name })) });
     },
     // sendEmail is retired — POST /api/tickets/{id}/factory-emails/send no longer exists (factory
     // RFQ email is manual-only). See priceImport.updateFactory / pricingRequests.markFactoryQuoteContacted.

@@ -360,7 +360,7 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
             new CreateDepositNoticeFromQuotationRequest(null), salesActor);
         depositNoticeService.issue(draftNotice.id(), salesActor);
         ticketService.confirmDepositPaid(deal.ticketId, accountActor);
-        ticketService.issueImportRequest(deal.ticketId, importActor);
+        ticketService.recordFirstImportRequestIssued(deal.ticketId, 0L, importActor); // pre-V184 shape: IR_ISSUED, no rows
         ticketService.reserveStock(deal.ticketId,
             new StockReservationRequest(List.of(
                 new StockReservationRequest.Line(deal.ticketItemId, new BigDecimal("4"), null))),
@@ -403,7 +403,7 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
             new CreateDepositNoticeFromQuotationRequest(null), salesActor);
         DepositNoticeDto issuedNotice = depositNoticeService.issue(draftNotice.id(), salesActor);
         ticketService.confirmDepositPaid(deal.ticketId, accountActor);
-        ticketService.issueImportRequest(deal.ticketId, importActor);
+        ticketService.recordFirstImportRequestIssued(deal.ticketId, 0L, importActor); // pre-V184 shape: IR_ISSUED, no rows
         ticketService.reserveStock(deal.ticketId,
             new StockReservationRequest(List.of(
                 new StockReservationRequest.Line(deal.ticketItemId, new BigDecimal("10"), null))),
@@ -494,7 +494,7 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
             new CreateDepositNoticeFromQuotationRequest(null), salesActor);
         depositNoticeService.issue(draftNotice.id(), salesActor);
         ticketService.confirmDepositPaid(deal.ticketId, accountActor);
-        ticketService.issueImportRequest(deal.ticketId, importActor);
+        ticketService.recordFirstImportRequestIssued(deal.ticketId, 0L, importActor); // pre-V184 shape: IR_ISSUED, no rows
         ticketService.reserveStock(deal.ticketId,
             new StockReservationRequest(List.of(
                 new StockReservationRequest.Line(deal.ticketItemAId, new BigDecimal("10"), null))),
@@ -533,7 +533,7 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
             new CreateDepositNoticeFromQuotationRequest(null), salesActor);
         depositNoticeService.issue(draftNotice.id(), salesActor);
         ticketService.confirmDepositPaid(deal.ticketId, accountActor);
-        ticketService.issueImportRequest(deal.ticketId, importActor);
+        ticketService.recordFirstImportRequestIssued(deal.ticketId, 0L, importActor); // pre-V184 shape: IR_ISSUED, no rows
         ticketService.reserveStock(deal.ticketId,
             new StockReservationRequest(List.of(
                 new StockReservationRequest.Line(deal.ticketItemBId, new BigDecimal("2"), null))),
