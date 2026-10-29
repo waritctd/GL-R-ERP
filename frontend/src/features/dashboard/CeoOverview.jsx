@@ -356,8 +356,8 @@ export function CeoOverview({ user, employee, dashboardSummary }) {
                 <p className="m-0 text-sm text-text-muted">ยังไม่มีเงินรับเข้าในเดือนนี้</p>
               ) : (
                 <div className="flex flex-col gap-3">
-                  {repBreakdown.map((row) => (
-                    <div key={row.name} className="grid gap-1">
+                  {repBreakdown.map((row, index) => (
+                    <div key={`${row.name}-${index}`} className="grid gap-1">
                       <div className="flex items-baseline justify-between gap-3">
                         <span className="min-w-0 truncate text-sm font-bold text-text">{row.name}</span>
                         <code className="shrink-0 font-mono text-xs text-text-muted">{formatMoney(row.amount)}</code>
