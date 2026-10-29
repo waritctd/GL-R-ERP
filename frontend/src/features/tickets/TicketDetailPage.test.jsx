@@ -2307,12 +2307,14 @@ describe('TicketDetailPage', () => {
     // Later describes in this file read listForTicket bare (a rejected query) — keep it that way.
     afterEach(() => { api.dealQuotations.listForTicket.mockReset(); });
 
-    it('a sent designer quotation: the primary เสนอราคาเจ้าของโครงการ is a menu (owner, then ข้ามไปเสนอราคาผู้ซื้อ) beside "ใบเสนอราคาผู้ออกแบบส่งแล้ว…"', async () => {
+    // SK-03 (owner ruling 2026-10-29): the menu's trigger is the neutral เสนอราคา ▾, not the first party.
+    it('a sent designer quotation: the primary เสนอราคา is a menu (owner, then ข้ามไปเสนอราคาผู้ซื้อ) beside "ใบเสนอราคาผู้ออกแบบส่งแล้ว…"', async () => {
       deal();
       renderTicketDetailPage(salesOwnerUser);
 
       const primary = await primaryWithAction('quote_next_party');
-      expect(primary.textContent).toBe('เสนอราคาเจ้าของโครงการ');
+      expect(primary.textContent).toBe('เสนอราคา');
+      expect(primary.getAttribute('aria-label')).toBe('เสนอราคา');
       expect(primary.getAttribute('aria-haspopup')).toBe('menu');
       expect(actionBarOf(primary).textContent).toContain('ใบเสนอราคาผู้ออกแบบส่งแล้ว เลือกเสนอราคาเจ้าของโครงการ หรือข้ามไปผู้ซื้อ');
 
@@ -5086,6 +5088,31 @@ describe('TicketDetailPage', () => {
       fireEvent.click(item);
       await waitFor(() => expect(api.tickets.updateStage).toHaveBeenCalledWith(701, { stage: 'DELIVERY_SCHEDULING' }));
     });
+  });
+
+  // SK-05: the page hands the deal's own events to the stage track, so an owner skip reads ข้าม.
+  it('ดูขั้นตอนทั้งหมด marks the owner stages ข้าม on a deal that skipped from 4 to 8', async () => {
+    api.tickets.get.mockResolvedValue({
+      ticket: buildTicket({
+        summary: { salesStage: 'QUOTE_BUYER', entryChannel: 'DESIGNER_LED', nextFollowUpAt: '2026-07-15' },
+        events: [
+          { id: 1, kind: 'STAGE_CHANGED', fromStatus: 'SPEC_APPROVED', toStatus: 'QUOTE_DESIGN_SIDE', createdAt: '2026-07-01T09:00:00.000Z' },
+          { id: 2, kind: 'STAGE_CHANGED', fromStatus: 'QUOTE_DESIGN_SIDE', toStatus: 'QUOTE_BUYER', createdAt: '2026-07-02T09:00:00.000Z' },
+        ],
+      }),
+    });
+    api.tickets.actions.mockResolvedValue({
+      currentState: { lifecycle: 'ACTIVE', salesStage: 'QUOTE_BUYER', paymentStatus: null, fulfillmentStatus: null, status: 'price_proposed' },
+      availableActions: [{ action: 'UPDATE_STAGE' }],
+      stageDecisions: DEAL_STAGE_CATALOG.stages.map((stage) => ({
+        stage: stage.code, no: stage.no, allowed: true, requiresReason: false, blockedReason: null, onRoute: true,
+      })),
+    });
+    api.tickets.listActivities.mockResolvedValue({ items: [] });
+    renderTicketDetailPage(ceoUser);
+    fireEvent.click(await screen.findByRole('button', { name: /ดูขั้นตอนทั้งหมด/ }));
+    const pip = (await screen.findAllByTestId('route-pip')).find((el) => el.getAttribute('data-stage') === 'QUOTE_OWNER');
+    expect(within(pip).getByText('ขั้นที่ 5 ข้าม')).not.toBeNull();
   });
 
   // The gate refuses an off-route stage with "… — แก้ช่องทางดีลก่อน", and the control that answered it

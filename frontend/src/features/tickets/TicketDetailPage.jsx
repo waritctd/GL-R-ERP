@@ -1418,7 +1418,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     } else if (actionKey === 'quote_next_party') {
       // Owner ruling 2026-10-27: "เสนอราคา<next party>" once a designer/owner quotation is sent. More
       // than one party left: a menu, later parties reading "ข้ามไปเสนอราคา<party>"; one left: a plain
-      // button. Each opens the price-request form with ผู้รับ pre-filled.
+      // button. Each opens the price-request form with ผู้รับ pre-filled. SK-03 (2026-10-29): the menu
+      // trigger reads the neutral "เสนอราคา" (it no longer names just the first party).
       const parties = workStateAction.parties;
       const openFor = (party) => runOnTab('items', () => pricingRequestPanelRef.current?.openCreate({ recipientType: party }));
       stickyPrimaryAction = parties.length > 1 ? (
@@ -1429,8 +1430,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             testId: `quote-party-${party}`,
             onSelect: () => openFor(party),
           }))}
-          label={workStateAction.label}
-          triggerLabel={<>{workStateAction.label}<Icon name="chevronDown" size={14} /></>}
+          label="เสนอราคา"
+          triggerLabel={<>เสนอราคา<Icon name="chevronDown" size={14} /></>}
           triggerIcon={null}
           triggerClassName={buttonVariants({ variant: 'primary' })}
           triggerProps={{ 'data-testid': 'ticket-primary-action', 'data-action': actionKey }}
@@ -1920,6 +1921,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         availableActions={availableActions}
         stageDecisions={stageDecisions}
         catalog={stageCatalog}
+        events={ticket.events}
         quoteParties={workStateAction?.key === 'quote_next_party' ? workStateAction.parties : null}
         // primaryAction now lives solely in DealStateHeader above (Phase 2 Slice S2's
         // "one primary CTA" — see its own doc comment) — not passed here too, to avoid

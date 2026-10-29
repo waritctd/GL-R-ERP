@@ -43,7 +43,7 @@ function phaseName(phaseId) {
  * ("ขั้นที่ 4 จาก 11") is PhaseSummary's job. State is carried by shape AND a Thai word (screen-
  * reader text), never by colour alone: done = tick, current = filled, upcoming = hollow.
  */
-function RouteRibbon({ path, currentIdx, catalog, lost }) {
+function RouteRibbon({ path, currentIdx, catalog, lost, skipped }) {
   if (path.length === 0) return null;
   return (
     <div className="border-b border-border px-4 py-3">
@@ -57,7 +57,8 @@ function RouteRibbon({ path, currentIdx, catalog, lost }) {
           // here the question is "how far along am I", so position wins.
           const ordinal = position + 1;
           const idx = stageIndexIn(catalog, step.code);
-          const done = idx < currentIdx;
+          const skip = skipped.has(step.code);
+          const done = idx < currentIdx && !skip;
           const current = idx === currentIdx && !lost;
           return (
             <li
@@ -66,22 +67,43 @@ function RouteRibbon({ path, currentIdx, catalog, lost }) {
               data-stage={step.code}
               aria-current={current ? 'step' : undefined}
               className={`relative grid h-[22px] min-w-[22px] place-items-center rounded-full px-1 text-2xs font-extrabold ${
-                done
-                  ? 'bg-success-bg text-success-dark'
-                  : current
-                    ? 'bg-info text-surface'
-                    : 'border border-border bg-surface text-text-muted'
+                skip
+                  ? 'border border-border bg-surface-subtle text-text-muted'
+                  : done
+                    ? 'bg-success-bg text-success-dark'
+                    : current
+                      ? 'bg-info text-surface'
+                      : 'border border-border bg-surface text-text-muted'
               }`}
             >
-              <span aria-hidden="true">{done ? <Icon name="check" size={12} /> : ordinal}</span>
+              <span aria-hidden="true">{skip ? '–' : done ? <Icon name="check" size={12} /> : ordinal}</span>
               <span className="sr-only">
-                {`ขั้นที่ ${ordinal} `}{done ? 'เสร็จแล้ว' : current ? 'ขั้นปัจจุบัน' : 'ยังไม่ถึง'}
+                {`ขั้นที่ ${ordinal} `}{skip ? 'ข้าม' : done ? 'เสร็จแล้ว' : current ? 'ขั้นปัจจุบัน' : 'ยังไม่ถึง'}
               </span>
             </li>
           );
         })}
       </ol>
     </div>
+  );
+}
+
+/**
+ * SK-05 (owner ruling 2026-10-29): the codes of the stages BEHIND the deal that it never sat on.
+ * "Sat on" = every STAGE_CHANGED's toStatus (events are oldest first, as the server sends them).
+ * The first change's fromStatus and everything before it are pre-history and count as done; no
+ * STAGE_CHANGED at all, or a first fromStatus outside the catalog, means nothing is skipped.
+ */
+function skippedStageCodes(catalog, currentIdx, events) {
+  const changes = (events ?? []).filter((event) => event.kind === 'STAGE_CHANGED');
+  if (changes.length === 0) return new Set();
+  const visited = new Set(changes.map((event) => event.toStatus));
+  const firstIdx = stageIndexIn(catalog, changes[0].fromStatus);
+  if (firstIdx < 0) return new Set();
+  return new Set(
+    catalog.stages
+      .filter((step, idx) => idx < currentIdx && idx > firstIdx && !visited.has(step.code))
+      .map((step) => step.code),
   );
 }
 
@@ -152,9 +174,10 @@ function OffRouteGroup({
  */
 export function DealStageStepper({
   catalog = EMPTY_STAGE_CATALOG, salesStage, lost = false, stageDecisions = [], entryChannel,
-  entryChannelAction, onSetEntryChannel, actionLoading = false,
+  entryChannelAction, onSetEntryChannel, actionLoading = false, events = [],
 }) {
   const currentIdx = stageIndexIn(catalog, salesStage);
+  const skipped = skippedStageCodes(catalog, currentIdx, events);
   const currentPhase = catalog.stages[currentIdx]?.phase ?? 1;
   const [open, setOpen] = useState(() => ({ [currentPhase]: true }));
   const path = routePath(catalog, stageDecisions);
@@ -168,7 +191,7 @@ export function DealStageStepper({
 
   return (
     <div className="overflow-hidden rounded-xl border border-border bg-surface">
-      <RouteRibbon path={path} currentIdx={currentIdx} catalog={catalog} lost={lost} />
+      <RouteRibbon path={path} currentIdx={currentIdx} catalog={catalog} lost={lost} skipped={skipped} />
       {catalog.phases.map((phaseId) => {
         const phaseStages = stagesInPhase(catalog, phaseId);
         if (phaseStages.length === 0) return null;
@@ -180,7 +203,10 @@ export function DealStageStepper({
         if (steps.length === 0) return null;
         const isDone = currentIdx > lastIdx;
         const isCurrent = currentIdx >= firstIdx && currentIdx <= lastIdx;
-        const doneCount = steps.filter((step) => stageIndexIn(catalog, step.code) <= currentIdx).length;
+        const skipCount = steps.filter((step) => skipped.has(step.code)).length;
+        const doneCount = steps.filter((step) => stageIndexIn(catalog, step.code) <= currentIdx).length - skipCount;
+        const skipNote = skipCount > 0 ? ` · ข้าม ${skipCount}` : '';
+        const allSkipped = isDone && skipCount === steps.length;
         const isOpen = !!open[phaseId];
         return (
           <div key={phaseId} className="border-b border-border last:border-b-0">
@@ -192,14 +218,14 @@ export function DealStageStepper({
             >
               <span
                 className={`grid h-6 w-6 shrink-0 place-items-center rounded-lg text-xs font-extrabold ${
-                  isDone
+                  isDone && !allSkipped
                     ? 'bg-success-bg text-success-dark'
                     : isCurrent && !lost
                       ? 'bg-info-bg text-info'
                       : 'bg-surface-subtle text-text-muted'
                 }`}
               >
-                {isDone ? <Icon name="check" size={13} /> : phaseId}
+                {allSkipped ? '–' : isDone ? <Icon name="check" size={13} /> : phaseId}
               </span>
               <span className="min-w-0 flex-1">
                 {/* WCAG AA fix (fix/ui-contrast-tokens): a PHASE_TEXT map used to apply
@@ -218,7 +244,9 @@ export function DealStageStepper({
                   เฟส {phaseId} · {phaseName(phaseId)}
                 </span>
                 <span className="block text-2xs text-text-muted">
-                  {isDone ? 'เสร็จแล้ว' : isCurrent ? `${doneCount}/${steps.length} ขั้นตอน` : `${steps.length} ขั้นตอน`}
+                  {allSkipped
+                    ? `ข้าม ${skipCount}`
+                    : <>{isDone ? 'เสร็จแล้ว' : isCurrent ? `${doneCount}/${steps.length} ขั้นตอน` : `${steps.length} ขั้นตอน`}{skipNote}</>}
                 </span>
               </span>
               <span className={`shrink-0 text-text-muted transition-transform ${isOpen ? 'rotate-180' : ''}`}>
@@ -229,22 +257,25 @@ export function DealStageStepper({
               <div className="px-4 pb-3">
                 {steps.map((step) => {
                   const idx = stageIndexIn(catalog, step.code);
-                  const stepDone = idx < currentIdx;
+                  const stepSkipped = skipped.has(step.code);
+                  const stepDone = idx < currentIdx && !stepSkipped;
                   const stepCurrent = idx === currentIdx;
                   const label = dealStageLabel(step.code, entryChannel);
                   return (
-                    <div key={step.code} className="grid grid-cols-[26px_1fr] gap-3">
+                    <div key={step.code} data-testid="stage-row" data-stage={step.code} className="grid grid-cols-[26px_1fr] gap-3">
                       <div className="flex flex-col items-center">
                         <span
                           className={`grid h-[22px] w-[22px] shrink-0 place-items-center rounded-full text-2xs font-extrabold ${
-                            stepDone
-                              ? 'bg-success-bg text-success-dark'
-                              : stepCurrent && !lost
-                                ? 'bg-info text-surface'
-                                : 'border border-border bg-surface text-text-muted'
+                            stepSkipped
+                              ? 'border border-border bg-surface-subtle text-text-muted'
+                              : stepDone
+                                ? 'bg-success-bg text-success-dark'
+                                : stepCurrent && !lost
+                                  ? 'bg-info text-surface'
+                                  : 'border border-border bg-surface text-text-muted'
                           }`}
                         >
-                          {stepDone ? <Icon name="check" size={12} /> : step.no}
+                          {stepSkipped ? '–' : stepDone ? <Icon name="check" size={12} /> : step.no}
                         </span>
                         <span className={`w-0.5 flex-1 ${stepDone ? 'bg-success-soft' : 'bg-border'}`} />
                       </div>
@@ -255,6 +286,11 @@ export function DealStageStepper({
                         <span className="mt-1 inline-flex rounded-full bg-surface-subtle px-2 py-0.5 text-2xs font-bold text-text-muted">
                           {GATE_LABEL[step.gate]}
                         </span>
+                        {stepSkipped ? (
+                          <span className="ml-1 mt-1 inline-flex rounded-full bg-surface-subtle px-2 py-0.5 text-2xs font-bold text-text-muted">
+                            ข้าม
+                          </span>
+                        ) : null}
                       </div>
                     </div>
                   );

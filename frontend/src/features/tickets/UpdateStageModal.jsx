@@ -81,7 +81,7 @@ export function UpdateStageModal({
             <select value={stage} onChange={(event) => setStage(event.target.value)}>
               {options.map((decision) => (
                 <option key={decision.stage} value={decision.stage}>
-                  {decision.no}. {dealStageLabel(decision.stage).label}
+                  {decision.no}. {dealStageLabel(decision.stage, deal?.entryChannel).label}
                 </option>
               ))}
             </select>
@@ -132,7 +132,7 @@ export function UpdateStageModal({
                     </span>
                     <span className="min-w-0">
                       <span className="block text-xs font-bold text-text-secondary">
-                        {dealStageLabel(decision.stage).label}
+                        {dealStageLabel(decision.stage, deal?.entryChannel).label}
                       </span>
                       {/* The server's own refusal message, verbatim — so the tooltip a rep reads
                           before clicking is exactly the error they would have got by clicking. */}
