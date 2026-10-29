@@ -23,7 +23,7 @@ import {
   canManageCustomerQuotation, canRecordCustomerQuotationOutcome, canViewCustomerQuotation,
   isCustomerQuotationEditable, pricingRequestRecipientLabel,
 } from '../pricingRequests/pricingRequestMeta.js';
-import { acceptOutcomeConfirmCopy, dealQuotationStatusLabel, generateClientRequestId, newOutcomeKeys } from '../quotations/quotationMeta.js';
+import { acceptOutcomeConfirmCopy, dealQuotationStatusLabel, generateClientRequestId, newOutcomeKeys, outcomeReasonConfirmCopy } from '../quotations/quotationMeta.js';
 import { buttonVariants } from '../../components/common/Button.jsx';
 
 // The customer-quotation tail only ever exists once a PricingRequest reaches
@@ -328,11 +328,8 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
       />
       <ConfirmDialog
         open={Boolean(outcomeToConfirm)}
-        title={outcomeToConfirm === 'REJECTED' ? 'ลูกค้าปฏิเสธใบเสนอราคา' : 'ลูกค้าขอแก้ไขใบเสนอราคา'}
-        message="บันทึกแล้วใบเสนอราคานี้จะไม่อยู่ในสถานะรอลูกค้าตอบรับอีก"
-        tone={outcomeToConfirm === 'REJECTED' ? 'danger' : 'default'}
+        {...outcomeReasonConfirmCopy(outcomeToConfirm)}
         requireReason
-        reasonLabel="เหตุผลจากลูกค้า"
         busy={recordOutcome.isPending}
         onCancel={() => setOutcomeToConfirm(null)}
         onConfirm={(reason) => { const outcome = outcomeToConfirm; setOutcomeToConfirm(null); recordOutcome.mutate({ outcome, note: reason }); }}

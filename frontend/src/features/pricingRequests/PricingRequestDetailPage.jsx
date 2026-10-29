@@ -75,7 +75,7 @@ import {
 import { useUnitBasisCatalog } from './unitBasisCatalog.js';
 import { buttonVariants } from '../../components/common/Button.jsx';
 import { cn } from '../../utils/cn.js';
-import { acceptOutcomeConfirmCopy, generateClientRequestId, newestQuotationByRequest, newOutcomeKeys, PRICE_MODE_OPTIONS } from '../quotations/quotationMeta.js';
+import { acceptOutcomeConfirmCopy, generateClientRequestId, newestQuotationByRequest, newOutcomeKeys, outcomeReasonConfirmCopy, PRICE_MODE_OPTIONS } from '../quotations/quotationMeta.js';
 import { SearchableCombobox } from '../../components/common/SearchableCombobox.jsx';
 // B6 (GLA-135): reuses the catalog page's own add-factory dialog rather than a second, drifting
 // copy of the same five fields + validation — see ImportFactoryPicker's own comment below.
@@ -4448,11 +4448,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
 
       <ConfirmDialog
         open={Boolean(outcomeToConfirm)}
-        title={outcomeToConfirm?.outcome === 'REJECTED' ? 'ลูกค้าปฏิเสธใบเสนอราคา' : 'ลูกค้าขอแก้ไขใบเสนอราคา'}
-        message="บันทึกแล้วใบเสนอราคานี้จะไม่อยู่ในสถานะรอลูกค้าตอบรับอีก"
-        tone={outcomeToConfirm?.outcome === 'REJECTED' ? 'danger' : 'default'}
+        {...outcomeReasonConfirmCopy(outcomeToConfirm?.outcome)}
         requireReason
-        reasonLabel="เหตุผลจากลูกค้า"
         busy={recordQuotationOutcome.isPending || recordDealQuotationOutcome.isPending}
         onCancel={() => setOutcomeToConfirm(null)}
         onConfirm={(reason) => {

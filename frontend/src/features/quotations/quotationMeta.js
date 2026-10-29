@@ -312,6 +312,17 @@ export function acceptOutcomeConfirmCopy(recipientType) {
   };
 }
 
+/** ConfirmDialog copy for ปฏิเสธ / ขอแก้ไข (W3-06/QA-35); both ask for the customer's reason. */
+export function outcomeReasonConfirmCopy(outcome) {
+  const rejected = outcome === 'REJECTED';
+  return {
+    title: rejected ? 'ลูกค้าปฏิเสธใบเสนอราคา' : 'ลูกค้าขอแก้ไขใบเสนอราคา',
+    message: 'บันทึกแล้วใบเสนอราคานี้จะไม่อยู่ในสถานะรอลูกค้าตอบรับอีก',
+    tone: rejected ? 'danger' : 'default',
+    reasonLabel: 'เหตุผลจากลูกค้า',
+  };
+}
+
 /** Mirrors TicketService#stageForQuotationRecipient. null for UNSPECIFIED/unknown. */
 export function stageForQuotationRecipient(code) {
   return quotationRecipientOption(code)?.stage ?? null;
