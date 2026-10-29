@@ -218,7 +218,7 @@ describe('TicketCreateModal validation', () => {
     }
     expect(sectionHeader('details').getAttribute('aria-expanded')).toBe('false');
 
-    const sizeInput = screen.getByPlaceholderText('เช่น 600x1200');
+    const sizeInput = screen.getByPlaceholderText('เช่น 60x120');
     expect(sizeInput.getAttribute('aria-invalid')).toBe('true');
     expect(sizeInput.id).toBe('item-0-size');
     expect(sizeInput.getAttribute('aria-describedby')).toBe('item-0-size-error');
@@ -341,7 +341,7 @@ describe('TicketCreateModal validation', () => {
     chooseEntryChannel();
     submitForm();
 
-    const sizeInput = await screen.findByPlaceholderText('เช่น 600x1200');
+    const sizeInput = await screen.findByPlaceholderText('เช่น 60x120');
     await waitFor(() => expect(sizeInput.getAttribute('aria-invalid')).toBe('true'));
 
     fireEvent.change(sizeInput, { target: { value: '600x1200' } });
@@ -709,7 +709,7 @@ describe('TicketCreateModal implicit submission (Enter-key) safety', () => {
       ['item editor ขนาด', 'Enter', 'swallowed', () => {
         openSection('items');
         fireEvent.click(screen.getByRole('button', { name: /^แก้ไขรายการที่ 1/ }));
-        return screen.getByPlaceholderText('เช่น 600x1200');
+        return screen.getByPlaceholderText('เช่น 60x120');
       }],
     ];
 

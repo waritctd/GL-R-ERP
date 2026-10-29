@@ -2259,3 +2259,17 @@ export function buildQuotationChecklist({
 export function joinPresent(parts, separator = ' · ') {
   return (parts ?? []).filter((part) => !blankValue(part)).map((part) => String(part).trim()).join(separator);
 }
+
+export function generateClientRequestId() {
+  return crypto.randomUUID?.()
+    ?? '00000000-0000-4000-8000-' + String(Date.now()).slice(-12).padStart(12, '0');
+}
+
+/** One idempotency key PER customer outcome: the backend replays a reused key as the FIRST outcome's
+ * success, so a failed ปฏิเสธ followed by ขอแก้ไข on a shared key would record nothing (W3-06/QA-35).
+ * Callers rotate the set only after a successful record. */
+export const newOutcomeKeys = () => ({
+  ACCEPTED: generateClientRequestId(),
+  REJECTED: generateClientRequestId(),
+  REVISION_REQUESTED: generateClientRequestId(),
+});

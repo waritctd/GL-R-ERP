@@ -3060,6 +3060,68 @@ describe('TicketDetailPage', () => {
       ));
     });
 
+    // W3-06/QA-35 (owner rulings 2026-10-29/30): the panel's ลูกค้าปฏิเสธ / ลูกค้าขอแก้ไข ask first with a
+    // required reason (saved as customerNote), and each outcome keeps its own clientRequestId until it
+    // succeeds — the backend replays a reused key as the FIRST outcome's success.
+    describe('W3-06: the panel\'s ปฏิเสธ / ขอแก้ไข confirm with a reason', () => {
+      const record = () => api.pricingRequests.recordCustomerQuotationOutcome;
+      async function renderIssuedPanel() {
+        api.pricingRequests.listForTicket.mockResolvedValue({
+          items: [{ ...approvedPr, ticketId: 701, status: 'QUOTATION_ISSUED', recipientType: 'BUYER' }],
+        });
+        api.pricingRequests.listCustomerQuotations.mockResolvedValue({
+          items: [{ id: 9301, number: 'QT-2026-0301-1', docStatus: 'ISSUED', quotationRevisionNo: 1, grandTotal: 1000 }],
+        });
+        renderTicketDetailPage(salesOwnerUser);
+        await openTab(/เอกสาร/);
+      }
+      async function confirmWithReason(testId, reason) {
+        const callsBefore = record().mock.calls.length;
+        fireEvent.click(await screen.findByTestId(testId));
+        const dialog = within(await screen.findByRole('dialog'));
+        expect(record()).toHaveBeenCalledTimes(callsBefore);
+        const confirm = dialog.getByRole('button', { name: 'ยืนยัน' });
+        expect(confirm.disabled).toBe(true);
+        fireEvent.change(dialog.getByRole('textbox'), { target: { value: reason } });
+        fireEvent.click(confirm);
+        await waitFor(() => expect(record()).toHaveBeenCalledTimes(callsBefore + 1));
+        await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+        return record().mock.calls[callsBefore][1];
+      }
+      afterEach(() => { record().mockReset(); });
+
+      it.each([
+        ['deal-quotation-reject', 'REJECTED'],
+        ['deal-quotation-revision', 'REVISION_REQUESTED'],
+      ])('%s opens a dialog; ยืนยัน needs a reason; it records %s with customerNote = the reason', async (testId, outcome) => {
+        record().mockResolvedValue({ quotation: { id: 9301, docStatus: outcome } });
+        await renderIssuedPanel();
+        const body = await confirmWithReason(testId, 'ราคาสูงกว่างบ');
+        expect(record()).toHaveBeenCalledWith(9301, expect.objectContaining({ outcome, customerNote: 'ราคาสูงกว่างบ' }));
+        expect(body.clientRequestId).toEqual(expect.any(String));
+      });
+
+      it('ยกเลิก records nothing', async () => {
+        await renderIssuedPanel();
+        fireEvent.click(await screen.findByTestId('deal-quotation-reject'));
+        const dialog = within(await screen.findByRole('dialog'));
+        fireEvent.change(dialog.getByRole('textbox'), { target: { value: 'เปลี่ยนใจ' } });
+        fireEvent.click(dialog.getByRole('button', { name: 'ยกเลิก' }));
+        await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+        expect(record()).not.toHaveBeenCalled();
+      });
+
+      it('after a FAILED ปฏิเสธ, retrying ปฏิเสธ reuses its key but ขอแก้ไข gets a different one', async () => {
+        record().mockRejectedValueOnce(new Error('network down')).mockRejectedValueOnce(new Error('network down'));
+        await renderIssuedPanel();
+        const first = await confirmWithReason('deal-quotation-reject', 'เหตุผล ก');
+        const retry = await confirmWithReason('deal-quotation-reject', 'เหตุผล ก');
+        const revise = await confirmWithReason('deal-quotation-revision', 'เหตุผล ข');
+        expect(retry.clientRequestId).toBe(first.clientRequestId);
+        expect(revise.clientRequestId).not.toBe(first.clientRequestId);
+      });
+    });
+
     // Spec F1: the panel sees the quotation the sticky เสนอใบราคา writes (the deal's quotation list,
     // PRICING_REQUEST origin) — number, status, a link to it — and says "no quotation yet" only when
     // neither engine has one.

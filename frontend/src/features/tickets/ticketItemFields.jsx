@@ -8,7 +8,7 @@
 // separate โรงงาน input on edit only, no asterisks on edit at all).
 import { api } from '../../api/index.js';
 import { fieldErrorId } from '../../components/common/FormField.jsx';
-import { resolveTileSqmPerPiece } from '../quotations/QuotationItemRow.jsx';
+import { resolveTileSqmPerPiece, sizeTextFromCatalog } from '../quotations/QuotationItemRow.jsx';
 
 // ── required fields ─────────────────────────────────────────────────────────
 // สี and เนื้อผิว are deliberately NOT here. The live catalog fills `color` on 21% of active rows
@@ -52,7 +52,8 @@ export const ITEM_FIELD_META = {
   model: { label: 'ชื่อรุ่น / Collection', placeholder: 'เช่น Stone Villa, Eco stone' },
   color: { label: 'สี', placeholder: 'เช่น ขาว, เทา, ครีม', hint: '(ไม่บังคับ)' },
   texture: { label: 'เนื้อผิว', placeholder: 'เช่น MATT, GLOSSY, ด้าน', hint: '(ไม่บังคับ)' },
-  size: { label: 'ขนาด', placeholder: 'เช่น 600x1200' },
+  // QA-28 (owner ruling 2026-10-29, extends 2026-09-14): size is centimetres everywhere; existing rows are not rewritten.
+  size: { label: 'ขนาด (ซม.)', placeholder: 'เช่น 60x120' },
 };
 
 // ── quantity requiredness (PIECE vs SQM basis) ──────────────────────────────
@@ -131,7 +132,6 @@ export function applyCatalogPick(item, cat) {
   // no sqm_per_piece of their own (all of factory Bode, plus LEA's trim pieces) resolve to `null`
   // here — nothing is guessed from the free-text size any more, so the แผ่น↔ตร.ม. toggle simply
   // leaves both quantities editable for those rows.
-  const sizeRaw = cat.sizeRaw || cat.size || '';
   const sqmPerPiece = resolveTileSqmPerPiece(cat);
   const newQtySqm = item.qty && sqmPerPiece ? (Number(item.qty) * sqmPerPiece).toFixed(3) : '';
 
@@ -144,7 +144,8 @@ export function applyCatalogPick(item, cat) {
     // Never substitute a product code or factory name for a colour the catalog lacks.
     color: cat.color || '',
     texture: cat.surface || '',
-    size: sizeRaw,
+    // QA-28: cm text via the quotation editor's derivation, not the raw mixed-unit catalogue string.
+    size: sizeTextFromCatalog(cat),
     sqmPerPiece,
     qtySqm: newQtySqm,
     // UI-only provenance.
@@ -254,7 +255,7 @@ export function CatalogOption({ cat }) {
       {' — '}
       {cat.collection || cat.productName || cat.productCode || '—'}
       <span className="ml-1 text-text-muted">
-        {[cat.color, cat.sizeRaw || cat.size].filter(Boolean).join(' · ')}
+        {[cat.color, sizeTextFromCatalog(cat)].filter(Boolean).join(' · ')}
       </span>
       {cat.price && (
         <span className="ml-1.5 text-2xs font-semibold text-link">
