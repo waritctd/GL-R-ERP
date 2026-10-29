@@ -66,15 +66,14 @@ import tools.jackson.databind.json.JsonMapper;
  *       (2026-07-16).</li>
  *   <li>{@code GET /api/catalog/prices} → <b>open</b> to any authenticated user, per the owner's
  *       2026-08-01 ruling closing #388: #205's "browsable" covers the supplier purchase price.</li>
- *   <li>{@code GET /api/fx-rates} → {@code ceo}/{@code import}/<b>{@code sales}</b>, per the
- *       owner's 2026-08-02 ruling (see {@code FxRateController.READ_ROLES}): an FX rate only
+ *   <li>{@code GET /api/fx-rates} → {@code ceo}/{@code import}/<b>{@code sales}</b>/
+ *       <b>{@code sales_manager}</b>, per the owner's 2026-08-02 ruling (sales) and 2026-10-29
+ *       ruling RC-01 (sales_manager) — see {@code FxRateController.READ_ROLES}: an FX rate only
  *       converts a number already visible via the open catalog-prices read, and reveals nothing
- *       about landed cost or margin on its own — but the ruling was "should only be to sale", so
- *       this is one role wider than #388, NOT open to every authenticated session.</li>
+ *       about landed cost or margin on its own. NOT open to every authenticated session.</li>
  *   <li>{@code GET /api/price-calc-configs}, {@code GET /api/factory-configs} → ceo/import
- *       ({@code RAW_COSTING_ROLES}), unchanged. The FX widening is deliberately narrower than
- *       #388's catalog ruling: it does not extend to the margin policy or the supplier
- *       directory.</li>
+ *       ({@code RAW_COSTING_ROLES}), unchanged. The FX widening does not extend to the margin
+ *       policy or this supplier-directory endpoint.</li>
  * </ul>
  */
 class CatalogPricingReadAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
@@ -212,19 +211,28 @@ class CatalogPricingReadAuthzIntegrationTest extends AbstractPostgresIntegration
     }
 
     /**
+     * Owner ruling 2026-10-29 (role check RC-01): the deal page converts SM's foreign-currency
+     * prices to THB, so the FX read widens to {@code sales_manager}. Writes stay CEO-only.
+     */
+    @Test
+    void salesManagerCanReadFxRatesPerOwnerRuling20261029() throws Exception {
+        fxMvc.perform(get("/api/fx-rates").session(sessionFor("sales_manager")))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.fxRates[?(@.currency == 'XTS')].rateToThb").exists());
+    }
+
+    /**
      * THE OTHER HALF OF THE SAME RULING, and the half that actually catches a regression. The
      * ruling was "should only be to sale" — it did NOT open the rate to every authenticated
      * session. Without this case the suite stays green with the gate wide open, which is precisely
      * the failure mode a read-gate widening has: you find out in production.
      *
-     * <p>{@code sales_manager} is in this list on purpose. It browses the deal pipeline but cannot
-     * create a deal ({@code canCreateTickets} is {@code ['sales']}, and {@code TicketService.create}
-     * gates on {@code Set.of("sales")}), so it never reaches the modal that needs the rate. Adding
-     * it here would be widening beyond what the owner authorised.
+     * <p>{@code sales_manager} left this list by the owner's ruling of 2026-10-29 (role check
+     * RC-01) and is pinned by {@link #salesManagerCanReadFxRatesPerOwnerRuling20261029}.
      */
     @Test
     void everyRoleOutsideTheRulingIsStillRefusedTheFxRead() throws Exception {
-        for (String role : List.of("employee", "warehouse", "qc", "hr", "sales_manager", "account")) {
+        for (String role : List.of("employee", "warehouse", "qc", "hr", "account")) {
             fxMvc.perform(get("/api/fx-rates").session(sessionFor(role)))
                 .andExpect(status().isForbidden());
         }

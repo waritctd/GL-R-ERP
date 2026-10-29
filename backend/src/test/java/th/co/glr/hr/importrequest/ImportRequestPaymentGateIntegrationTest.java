@@ -82,7 +82,7 @@ class ImportRequestPaymentGateIntegrationTest extends AbstractPostgresIntegratio
         insertItem(ticketId, "Pay Gate Factory A", "Line A", "60x60", "10", "pcs", 0);
         insertItem(ticketId, "Pay Gate Factory B", "Line B", "60x60", "10", "pcs", 1);
 
-        List<ImportRequestDto> drafts = service.createDrafts(ticketId, null, owner);
+        List<ImportRequestDto> drafts = DraftSeed.seed(jdbc, ticketId, owner);
         long aId = byFactory(drafts, factoryA).id();
         long bId = byFactory(drafts, factoryB).id();
         assertThat(service.issue(aId, null, owner).status()).isEqualTo(ImportRequestStatus.ISSUED);
@@ -99,7 +99,7 @@ class ImportRequestPaymentGateIntegrationTest extends AbstractPostgresIntegratio
         insertFactory("Pay Gate Revise Factory");
         long ticketId = insertTicket("GATE-AWAITING", "DEPOSIT_PAID");
         insertItem(ticketId, "Pay Gate Revise Factory", "Line", "60x60", "10", "pcs", 0);
-        long v1 = service.createDrafts(ticketId, null, owner).get(0).id();
+        long v1 = DraftSeed.seed(jdbc, ticketId, owner).get(0).id();
         assertThat(service.issue(v1, null, owner).status()).isEqualTo(ImportRequestStatus.ISSUED);
 
         setPaymentStatus(ticketId, "AWAITING_FINAL_PAYMENT");
@@ -117,11 +117,51 @@ class ImportRequestPaymentGateIntegrationTest extends AbstractPostgresIntegratio
         insertFactory("Pay Gate No Deposit Factory");
         long ticketId = insertTicket("GATE-NODEPOSIT", null);
         insertItem(ticketId, "Pay Gate No Deposit Factory", "Line", "60x60", "10", "pcs", 0);
-        long id = service.createDrafts(ticketId, null, owner).get(0).id();
+        long id = DraftSeed.seed(jdbc, ticketId, owner).get(0).id();
 
         assertThatThrownBy(() -> service.issue(id, null, owner))
             .isInstanceOfSatisfying(ApiException.class,
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+    }
+
+    /** 10-29: the payment gate now applies at CREATE (create issues). Nothing is written when refused. */
+    @Test
+    void createDrafts_isRefused409_andWritesNothing_onADealWithNoDepositYet() {
+        insertFactory("Pay Gate Create Factory");
+        long ticketId = insertTicket("GATE-CREATE-NODEP", null);
+        insertItem(ticketId, "Pay Gate Create Factory", "Line", "60x60", "10", "pcs", 0);
+
+        assertThatThrownBy(() -> service.createDrafts(ticketId, null, owner))
+            .isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+
+        assertThat(service.list(ticketId, owner)).isEmpty();
+        assertThat(new TicketRepository(jdbc).findById(ticketId).orElseThrow().summary()
+            .fulfillmentStatus()).isNull();
+    }
+
+    /**
+     * Review fix: the payment gate refuses FIRST. A deal with no paid deposit whose line also names a
+     * brand-new factory (no country, no lead time) must get the gate's 409, not the missing-country
+     * 409 that would walk sales through both popups before refusing — and nothing is written (no
+     * auto-created factory either).
+     */
+    @Test
+    void createDrafts_paymentGateRefusesBeforeTheCountryAndLeadTimePrompts() {
+        long ticketId = insertTicket("GATE-FIRST", null);
+        insertItem(ticketId, "Brand New Gate Factory Co", "Line", "60x60", "10", "pcs", 0);
+        Long factoriesBefore = jdbc.queryForObject(
+            "SELECT count(*) FROM price_catalog.factories", Map.of(), Long.class);
+
+        assertThatThrownBy(() -> service.createDrafts(ticketId, null, owner))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(e.getMessage()).contains("รับชำระมัดจำ").doesNotContain("ประเทศ");
+            });
+
+        assertThat(service.list(ticketId, owner)).isEmpty();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM price_catalog.factories", Map.of(), Long.class))
+            .isEqualTo(factoriesBefore);
     }
 
     /**
@@ -139,7 +179,7 @@ class ImportRequestPaymentGateIntegrationTest extends AbstractPostgresIntegratio
         insertFactory("Pay Gate Customer Confirmed Factory");
         long ticketId = insertTicket("GATE-CUSTCONF", "CUSTOMER_CONFIRMED");
         insertItem(ticketId, "Pay Gate Customer Confirmed Factory", "Line", "60x60", "10", "pcs", 0);
-        long id = service.createDrafts(ticketId, null, owner).get(0).id();
+        long id = DraftSeed.seed(jdbc, ticketId, owner).get(0).id();
 
         assertThatThrownBy(() -> service.issue(id, null, owner))
             .isInstanceOfSatisfying(ApiException.class,
@@ -157,7 +197,7 @@ class ImportRequestPaymentGateIntegrationTest extends AbstractPostgresIntegratio
         long ticketId = insertTicket("GATE-DRAFT-PAID", "DEPOSIT_PAID");
         setTicketStatus(ticketId, "draft");
         insertItem(ticketId, "Pay Gate Draft Factory", "Line", "60x60", "10", "pcs", 0);
-        long id = service.createDrafts(ticketId, null, owner).get(0).id();
+        long id = DraftSeed.seed(jdbc, ticketId, owner).get(0).id();
 
         assertThat(service.issue(id, null, owner).status()).isEqualTo(ImportRequestStatus.ISSUED);
     }
@@ -179,7 +219,7 @@ class ImportRequestPaymentGateIntegrationTest extends AbstractPostgresIntegratio
             long ticketId = insertTicket("GATE-DR-" + (paymentStatus == null ? "NULL" : "CC"), paymentStatus);
             setTicketStatus(ticketId, "draft");
             insertItem(ticketId, "Pay Gate Draft Refused Factory", "Line", "60x60", "10", "pcs", 0);
-            long id = service.createDrafts(ticketId, null, owner).get(0).id();
+            long id = DraftSeed.seed(jdbc, ticketId, owner).get(0).id();
 
             assertThatThrownBy(() -> service.issue(id, null, owner))
                 .isInstanceOfSatisfying(ApiException.class,

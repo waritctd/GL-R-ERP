@@ -12367,6 +12367,21 @@ export const api = {
       if (dealStageIndex(ticket.salesStage) < dealStageIndex('ORDER_RECEIVED')) {
         fail('สร้างใบขอซื้อได้หลังจากยืนยันคำสั่งซื้อแล้ว (ORDER_RECEIVED) เท่านั้น', 409);
       }
+      // Payment gate FIRST (same predicate as issue() below), before any prompt-producing check.
+      if (!(['DEPOSIT_NOTICE_ISSUED', 'DEPOSIT_PAID', 'AWAITING_FINAL_PAYMENT', 'FULLY_PAID'].includes(ticket.paymentStatus)
+        || (depositBypassesNotice(ticket) && ticket.paymentStatus === 'CUSTOMER_CONFIRMED'))) {
+        fail('ออกใบขอนำเข้า (IR) ได้เฉพาะเมื่อรับชำระมัดจำแล้ว (หรือได้รับการยกเว้นมัดจำ) เท่านั้น', 409);
+      }
+      // Supplied per-factory lead times (10-29): 400 on a bad value, before anything is written.
+      const suppliedLeadTimes = new Map();
+      for (const lt of request?.leadTimes ?? []) {
+        const okInt = (v) => Number.isInteger(v) && v >= 1 && v <= 365;
+        if (!lt?.factoryName?.trim() || !okInt(lt.minDays) || !okInt(lt.maxDays) || lt.minDays > lt.maxDays) {
+          fail('ระยะเวลานำเข้าต้องเป็น 1–365 วัน และขั้นต่ำต้องไม่เกินขั้นสูง', 400);
+        }
+        suppliedLeadTimes.set(lt.factoryName.trim().replace(/\s+/g, ' ').toLowerCase(), lt);
+      }
+      const suppliedFor = (g) => suppliedLeadTimes.get(String(g.factoryName).trim().replace(/\s+/g, ' ').toLowerCase());
       mockApplyItemFactoryChoices(ticket, request);
       const groups = mockResolveFactoryGroups(ticket, request);
       if (groups.length === 0) {
@@ -12375,11 +12390,22 @@ export const api = {
       const alreadyCovered = new Set(mockImportRequests
         .filter((r) => r.ticketId === ticket.id && (r.status === 'DRAFT' || r.status === 'ISSUED'))
         .map((r) => r.factoryId));
-      let created = 0;
       const now = new Date().toISOString();
-      for (const group of groups) {
-        if (alreadyCovered.has(group.factoryId)) continue;
-        const leadTime = mockLeadTimeDefaults(group.countryCode);
+      // 10-29: create also ISSUES, all-or-nothing -- check every NEW factory before writing any row
+      // (the payment gate itself is re-checked per row by issue() below, same predicate).
+      const newGroups = groups.filter((g) => !alreadyCovered.has(g.factoryId));
+      const missingLeadTime = newGroups
+        .filter((g) => !mockLeadTimeDefaults(g.countryCode) && !suppliedFor(g))
+        .map((g) => g.factoryName);
+      if (missingLeadTime.length > 0) {
+        fail(`กรุณาระบุระยะเวลานำเข้าให้กับโรงงาน: ${missingLeadTime.join(', ')}`, 409);
+      }
+      if (newGroups.length === 0) fail('ทุกโรงงานในดีลนี้มีใบขอซื้อที่ยังใช้งานอยู่แล้ว', 409);
+      const newIds = [];
+      for (const group of newGroups) {
+        const supplied = suppliedFor(group);
+        const leadTime = mockLeadTimeDefaults(group.countryCode)
+          ?? (supplied ? { min: supplied.minDays, max: supplied.maxDays } : null);
         const id = mockImportRequestSeq++;
         mockImportRequests.push({
           id, ticketId: ticket.id, ticketCode: ticket.code,
@@ -12400,9 +12426,10 @@ export const api = {
             id: `${id}-${i + 1}`, importRequestId: id, ticketItemId: it.ticketItemId, seq: i + 1, ...it,
           })),
         });
-        created++;
+        newIds.push(id);
       }
-      if (created === 0) fail('ทุกโรงงานในดีลนี้มีใบขอซื้อที่ยังใช้งานอยู่แล้ว', 409);
+      // Reuse the mock's issue(): doc number, step CONTACTED, IR_ISSUED + PROCUREMENT on the first.
+      for (const id of newIds) await api.storedImportRequests.issue(id);
       return delay({ importRequests: mockImportRequestsForTicket(ticket.id) });
     },
     async listForTicket(ticketId) {
@@ -12927,7 +12954,7 @@ export const api = {
     },
     // Mirrors FactoryConfigController#names: id + name only, for the IR creators too.
     async names() {
-      hasRole('ceo', 'import', 'sales', 'sales_manager');
+      hasRole('ceo', 'import', 'sales', 'sales_manager', 'account');
       return delay({ factories: mockPriceImportFactories.map((f) => ({ id: f.factoryId, factoryName: f.name })) });
     },
     // sendEmail is retired — POST /api/tickets/{id}/factory-emails/send no longer exists (factory
@@ -12938,12 +12965,13 @@ export const api = {
   // Owner ruling 2026-08-02: list() widened from #388's ceo/import gate by exactly one role, to
   // sales, so the deal-create modal's ราคาตั้ง estimate can convert a catalog price to THB for a
   // plain rep. NOT opened to every authenticated session — the ruling was "should only be to sale".
-  // See FxRateController.READ_ROLES for the full reasoning; it does NOT extend to priceCalcConfigs
-  // below, which is the real margin policy. upsert stays CEO-only, unchanged.
+  // sales_manager added 2026-10-29 (RC-01). See FxRateController.READ_ROLES for the full
+  // reasoning; it does NOT extend to priceCalcConfigs below, which is the real margin policy.
+  // upsert stays CEO-only, unchanged.
   // Reminder: this mock's authz is NOT authoritative — the Java service is (see CLAUDE.md).
   fxRates: {
     async list() {
-      hasRole('ceo', 'import', 'sales');
+      hasRole('ceo', 'import', 'sales', 'sales_manager');
       return delay({ fxRates: structuredClone(mockFxRates) });
     },
     async upsert(currency, payload) {

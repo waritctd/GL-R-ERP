@@ -882,11 +882,14 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
     }
 
     @Test
-    void confirmOrder_onCatalogueLines_letsImportCreateThePerFactoryIrDraft_insteadOf409() {
+    void confirmOrder_onCatalogueLines_letsSalesCreateAndIssueThePerFactoryIr_insteadOf409() {
         long priceB = insertCatalogProduct("W3 Factory B", "IT", "W3-B", new BigDecimal("10"), "EUR", "per_sqm");
         long ticketId = pipelineTicket(salesActor);
         DealQuotationDto approved = approvedQuotation(ticketId, catalogueLineDraft(priceB, "Line B"));
         confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor);
+        // create also issues now, so the payment gate applies: the deposit has been received.
+        jdbc.update("UPDATE sales.ticket SET payment_status = 'DEPOSIT_PAID' WHERE ticket_id = :id",
+            Map.of("id", ticketId));
         th.co.glr.hr.importrequest.ImportRequestService importRequests =
             new th.co.glr.hr.importrequest.ImportRequestService(
                 new th.co.glr.hr.importrequest.ImportRequestQueryRepository(jdbc),
@@ -899,6 +902,7 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
 
         assertThat(drafts).hasSize(1);
         assertThat(drafts.get(0).factoryName()).isEqualTo("W3 Factory B");
+        assertThat(drafts.get(0).status()).isEqualTo("ISSUED");
     }
 
     /** Guard (green before and after): a free-text line has no catalogue item, so it keeps factory NULL. */

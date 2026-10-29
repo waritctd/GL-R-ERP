@@ -347,8 +347,8 @@ class ImportDealAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
     // ── fixtures ──────────────────────────────────────────────────────────────────────────────────
 
     private ImportRequestDto issueOneImportRequest() {
-        List<ImportRequestDto> drafts = importRequestService.createDrafts(ticketId, null, ceoUser);
-        return importRequestService.issue(drafts.get(0).id(), null, ceoUser);
+        // createDrafts creates AND issues (10-29), so the created row is already ISSUED.
+        return importRequestService.createDrafts(ticketId, null, ceoUser).get(0);
     }
 
     private long firstItemId() {

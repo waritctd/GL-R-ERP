@@ -202,16 +202,14 @@ export function ImportFulfilmentPage({ user, showToast }) {
       let completesDeal = false;
       if (targetStep === 'RECEIVED') {
         try {
-          const [{ ticket: freshTicket }, { importRequests: freshRows }] = await Promise.all([
-            api.tickets.get(ticketId),
-            api.storedImportRequests.listForTicket(ticketId),
-          ]);
-          const fs = freshTicket?.summary?.fulfillmentStatus;
+          // importDeals.get, not tickets.get: TicketService#get refuses role import (RC-02).
+          const { deal: freshDeal } = await api.importDeals.get(ticketId);
+          const fs = freshDeal?.fulfillmentStatus;
           if (fs === 'GOODS_RECEIVED') {
             completesDeal = true;
           } else if (fs === 'PARTIALLY_DELIVERED') {
             // A factory still in DRAFT means the server's allFactoriesReceived declined the rollup.
-            const all = freshRows ?? [];
+            const all = freshDeal?.importRequests ?? [];
             const issued = all.filter((r) => r.status === 'ISSUED');
             completesDeal = issued.length > 0 && issued.every((r) => r.importStep === 'RECEIVED')
               && !all.some((r) => r.status === 'DRAFT');

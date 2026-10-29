@@ -977,8 +977,8 @@ export async function waiveDeposit(sessions, ticketId, { policy = 'NOT_REQUIRED'
 }
 
 /**
- * POST /api/tickets/{id}/import-requests — ImportRequestController.createDrafts: one DRAFT ใบขอซื้อ
- * per FACTORY (V184). This is how every deal starts its import now: the one-click legacy
+ * POST /api/tickets/{id}/import-requests — ImportRequestController.createDrafts: one ใบขอซื้อ,
+ * created AND ISSUED in the same call (owner ruling 2026-10-29), per FACTORY (V184). This is how every deal starts its import now: the one-click legacy
  * `POST /api/tickets/{id}/import-request` (issueImportRequest) answers 409 for every deal (W3-04,
  * owner ruling 2026-10-29). Needs the deal's OWNING sales rep (or ceo) and DealStage >= ORDER_RECEIVED;
  * each line must resolve to a factory (PCR item factory, catalogue link or typed name), else 409
