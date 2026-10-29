@@ -2461,24 +2461,11 @@ public class LeaveService {
         }
 
         // §5 advance notice, now per-type (hr.leave_type.advance_notice_days) instead of the removed
-        // global app.leave.advance-notice-days property. DECISION: counted in CALENDAR days, not
-        // working days; this is an unchanged behaviour carried over from the original global-property
-        // version, which also compared plain calendar dates. A type with advanceNoticeDays == 0
-        // (SICK, MATERNITY, MILITARY, LEAVE_WITHOUT_PAY as seeded) skips this check entirely, matching
-        // the old code's unconditional SICK exemption.
-        //
-        // RECONFIRMED, not merely carried over (2026-08-03): V116 called this calendar-day counting a
-        // deliberate STOPGAP specifically because working-day counting was not available yet ("§5.2 =
-        // 1 working day, §5.3 = 3 working days" in the source announcement). It is available now --
-        // LeaveDayMath is schedule/holiday-aware (see its javadoc) -- but this branch deliberately does
-        // NOT convert this check, for the opposite reason from the consecutive-days check above: this
-        // is a MINIMUM lead-time requirement, so switching to a true working-day count would TIGHTEN
-        // it whenever the gap between filing and the start date crosses a weekend/holiday (those days
-        // would stop counting toward the required notice, so a request that clears today's calendar-
-        // day check could newly be rejected). That is a real, employee-facing behaviour change with
-        // its own blast radius -- it belongs in its own reviewed change with its own tests, not folded
-        // silently into a branch whose stated purpose is the payroll deduction/day-count fix. Left on
-        // calendar days here; flagged as a separate, explicit follow-up decision.
+        // global app.leave.advance-notice-days property. Counted in the employee's OWN WORKING days
+        // (schedule + hr.holiday aware): the days after today up to the leave's first working day that
+        // the employee would work must number at least noticeDays; today is day 0 and not counted
+        // (owner ruling 2026-10-29). A type with advanceNoticeDays == 0 (SICK, MATERNITY, MILITARY,
+        // LEAVE_WITHOUT_PAY as seeded) skips this check entirely.
         //
         // §5.2 emergency-filing exception (V125), COMBINED notice x emergency decision table:
         //
@@ -2524,8 +2511,15 @@ public class LeaveService {
         // rejection to begin with).
         int noticeDays = Math.max(0, leaveType.advanceNoticeDays());
         if (noticeDays > 0) {
-            LocalDate earliestAllowed = LocalDate.now(clock).plusDays(noticeDays);
-            if (startDate.isBefore(earliestAllowed)) {
+            LocalDate noticeFrom = LocalDate.now(clock).plusDays(1);
+            Predicate<LocalDate> isWorkingDay = leaveRepository.workingDayPredicate(employeeId,
+                startDate.isBefore(noticeFrom) ? startDate : noticeFrom, endDate);
+            LocalDate firstWorkDay = startDate;
+            while (firstWorkDay.isBefore(endDate) && !isWorkingDay.test(firstWorkDay)) {
+                firstWorkDay = firstWorkDay.plusDays(1);
+            }
+            int workingDaysOfNotice = LeaveDayMath.countWorkingDays(noticeFrom, firstWorkDay, isWorkingDay);
+            if (workingDaysOfNotice < noticeDays) {
                 if (leaveType.emergencyMonthlyAllowance() != null && requestedAsEmergency) {
                     int usedThisMonth = leaveRepository.countEmergencyFilings(
                         employeeId, leaveType.code(), startDate, ACTIVE_QUOTA_STATUSES);

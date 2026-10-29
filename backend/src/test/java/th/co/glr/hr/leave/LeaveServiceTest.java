@@ -208,7 +208,7 @@ class LeaveServiceTest {
         assertThat(result.status()).isEqualTo("SUBMITTED");
         verify(leaveRepository).recordRuleWarnings(eq(57L),
             argThat(warnings -> warnings.size() == 1 && warnings.get(0).code() == LeaveRuleCode.ADVANCE_NOTICE
-                && warnings.get(0).messageTh().contains("อย่างน้อย 7 วัน")),
+                && warnings.get(0).messageTh().contains("อย่างน้อย 7 วันทำงาน")),
             org.mockito.ArgumentMatchers.argThat(days -> days.compareTo(new BigDecimal("1.00")) == 0));
     }
 
@@ -2892,6 +2892,55 @@ class LeaveServiceTest {
         assertThat(preview.datesEvaluated()).isTrue();
         assertThat(preview.ruleWarnings()).isEmpty();
         assertThat(preview.unpaidByRuleDays()).isEqualByComparingTo(BigDecimal.ZERO);
+    }
+
+    // §5 advance notice counts the employee's own WORKING days (Ploy, 2026-10-29): weekends and
+    // holidays between filing and the leave no longer count, a six-day employee's Saturday does.
+    // FIXED_NOW = Wed 2026-07-01 (day 0, not counted); the leave's first day the employee would
+    // actually work may itself be the Nth working day.
+    @org.junit.jupiter.params.ParameterizedTest(name = "{0}..{1}, {2}, holiday {3}, notice {4} -> warns {5}")
+    @org.junit.jupiter.params.provider.CsvSource({
+        // Thu 07-09 is the 6th Mon-Fri working day but 8 calendar days out -- the old count let it pass
+        "2026-07-09, 2026-07-09, MON_FRI, , 7, true",
+        "2026-07-10, 2026-07-10, MON_FRI, , 7, false",
+        // a holiday on Thu 07-02 pushes the 7th working day to Mon 07-13
+        "2026-07-10, 2026-07-10, MON_FRI, 2026-07-02, 7, true",
+        // six-day schedule: Sat 07-04 counts, so Thu 07-09 is already the 7th working day
+        "2026-07-09, 2026-07-09, MON_SAT, , 7, false",
+        // Sat-Mon leave, Mon-Fri employee: Sat is not their working day, so the notice runs to Mon (3rd)
+        "2026-07-04, 2026-07-06, MON_FRI, , 3, false",
+        // same leave, six-day employee: Sat IS their working day, so the notice stops at Sat (3rd < 4)
+        "2026-07-04, 2026-07-06, MON_SAT, , 4, true",
+        // leave starting on a holiday: the notice runs to Fri 07-03, the first day they would work
+        "2026-07-02, 2026-07-03, MON_FRI, 2026-07-02, 1, false",
+    })
+    void previewCountsAdvanceNoticeInTheEmployeesWorkingDays(
+            LocalDate startDate, LocalDate endDate, String schedule, LocalDate holiday, int noticeDays,
+            boolean expectWarning) {
+        Predicate<LocalDate> scheduleDay = "MON_SAT".equals(schedule)
+            ? date -> date.getDayOfWeek() != DayOfWeek.SUNDAY
+            : LeaveDayMath::isWorkingDay;
+        // Like LeaveRepository#workingDayPredicate, a holiday is only seen inside the range asked for.
+        when(leaveRepository.workingDayPredicate(anyLong(), any(), any())).thenAnswer(invocation -> {
+            LocalDate from = invocation.getArgument(1);
+            LocalDate to = invocation.getArgument(2);
+            boolean holidayInRange = holiday != null && !holiday.isBefore(from) && !holiday.isAfter(to);
+            return (Predicate<LocalDate>) date -> scheduleDay.test(date) && !(holidayInRange && date.equals(holiday));
+        });
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(
+            new LeaveTypeDto("VACATION", "ลาพักร้อน", "Vacation leave", new BigDecimal("6.00"), false,
+                null, noticeDays, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null, null, 0, null, false)));
+        when(leaveRepository.sumUsedDays(eq(10L), eq("VACATION"), eq(2026), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+
+        LeavePreviewDto preview = leaveService.preview(
+            new LeavePreviewRequest("VACATION", startDate, endDate, null, null, false, false,
+                LeavePreviewDepth.FULL, null),
+            user("employee", 10L));
+
+        List<String> codes = preview.ruleWarnings().stream().map(LeaveRuleWarningDto::code).toList();
+        assertThat(codes.contains("ADVANCE_NOTICE")).as("ADVANCE_NOTICE in %s", codes).isEqualTo(expectWarning);
     }
 
     @Test
